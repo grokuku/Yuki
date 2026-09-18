@@ -1,0 +1,88 @@
+# =============================================================================
+# Yuki — CI GitHub Actions.
+#
+# Principe repris de Docky (/projects/Docky/.github/workflows/) :
+#   - `tests.yml` (historique) : typecheck/tests sur `push` & `pull_request`,
+#     runner standard, cache des dépendances, permissions `contents: read` ;
+#   - `test-build.yml` : construction de l'image Docker.
+#
+# Adaptations Yuki :
+#   - image Node (au lieu de Python) : `npm ci` + cache npm ;
+#   - le build Docker ne PUBLIE RIEN (pas de `packages: write`, pas de ghcr) ;
+#   - le conteneur est réellement DÉMARRÉ avec une fixture `nvidia-smi`
+#     injectée, sur un runner SANS GPU, pour combler l'angle mort : valider le
+#     Dockerfile multi-étage, l'utilisateur non-root, le rootfs read-only,
+#     l'écriture de l'état du SDK dans le volume et l'endpoint /health.
+#
+# Délibérément NON repris de Docky : `release.yml` (incrément + commit + push
+# de `version.txt`, publication d'images `:latest`) et le `push: true` de
+# `test-build.yml` (publication ghcr multi-arch).
+#
+# Aucun secret n'est requis : les tests réseau/modèle sont opt-in et skippés
+# par défaut (`YUKI_TEST_REAL_PI` / `YUKI_TEST_REAL_LLM` non définis).
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Docky déclenche ses builds manuellement (`workflow_dispatch`) : conservé
+  # ici comme porte de rejeu manuel, en plus de l'exécution automatique.
+  workflow_dispatch:
+
+# Permissions minimales : lecture seule. Aucune écriture dépôt ni paquet.
+permissions:
+  contents: read
+
+# Annule les exécutions obsolètes pour la même référence (ajout par rapport à
+# Docky, qui n'en a pas ; demandé par la tâche).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  quality:
+    name: Typecheck, tests & build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests (intégrations réseau opt-in skippées)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Docker image & container smoke test
+    runs-on: ubuntu-latest
+    env:
+      # Fixture nvidia-smi injectée dans le conteneur : le runner n'a pas de GPU.
+      YUKI_CI_GPU_FIXTURE: ${{ github.workspace }}/tests/fixtures/gpu/rtx4070-12g.txt
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: ./scripts/ci-smoke.sh config
+
+      - name: Build image, start container & assert /health
+        run: ./scripts/ci-smoke.sh smoke

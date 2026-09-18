@@ -1,0 +1,43 @@
+# =============================================================================
+# Surcharge Compose — CI GitHub Actions (runner `ubuntu-latest`, SANS GPU).
+#
+# Rôle : rendre le service `gateway` DÉMARRABLE sur un runner sans GPU ni
+# NVIDIA Container Toolkit, tout en conservant TOUT le reste de la définition
+# (rootfs read-only, `tmpfs: /tmp`, utilisateur non-root, bind mounts,
+# healthcheck). La logique GPU est exercée pour de vrai via une fixture
+# `nvidia-smi` injectée (`YUKI_GPU_FIXTURE`), jamais via un GPU physique.
+#
+#   docker compose -f docker-compose.yml -f .github/ci/compose.ci.yml up -d
+#
+# Seule la réservation GPU est retirée : sans pilote NVIDIA, `docker compose
+# up` échouerait à la création du conteneur (« could not select device driver
+# nvidia »). Le fichier est appliqué en surcharge ; le compose de base reste
+# la référence pour la machine réelle.
+# =============================================================================
+services:
+  gateway:
+    deploy:
+      resources:
+        reservations:
+          # `!reset` (tag Compose, Docker Compose >= 2.24) supprime sans
+          # ambiguïté la réservation GPU du compose de base. Une simple liste
+          # vide dépendrait de la sémantique de fusion des séquences ; `!reset`
+          # est l'outil documenté pour retirer une valeur héritée.
+          devices: !reset []
+
+    environment:
+      # Fixture nvidia-smi montée ci-dessous : la porte de compatibilité est
+      # franchie à partir d'une sortie simulée, sans GPU.
+      YUKI_GPU_FIXTURE: /fixtures/gpu.txt
+      # Profil forcé déterministe (la fixture RTX 4070 12 Go satisfait `confort`).
+      YUKI_PROFILE: confort
+      YUKI_COMPAT_MODE: strict
+
+    volumes:
+      # Fixture injectée en lecture seule. Le chemin HÔTE est fourni en absolu
+      # par `YUKI_CI_GPU_FIXTURE` (voir `scripts/ci-smoke.sh`) afin d'éviter
+      # toute ambiguïté de résolution des chemins relatifs entre plusieurs -f.
+      - type: bind
+        source: "${YUKI_CI_GPU_FIXTURE:?YUKI_CI_GPU_FIXTURE doit pointer vers une fixture nvidia-smi}"
+        target: /fixtures/gpu.txt
+        read_only: true
