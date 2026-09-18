@@ -13,6 +13,14 @@ curl -s http://127.0.0.1:8080/health | head
 vers `YUKI_UID:YUKI_GID`, lance `docker compose up -d --build`, puis attend
 `/health/live` (timeout 90 s).
 
+> ⚠️ **Ne lancez pas `docker compose up` seul sur une machine vierge.** Sans
+> préparation préalable, Docker crée les racines de bind mount (`.local/…`) en
+> `root:root` ; le conteneur non-root (uid `YUKI_UID`) ne peut alors pas créer
+> `/data/pi/agent`, et `/health/ready` répond **503**. Passez par
+> `./scripts/up.sh` (ou créez les dossiers et donnez-leur le propriétaire
+> `YUKI_UID:YUKI_GID`). Le gateway journalise alors `pi.start.failed` —
+> « le volume est-il monté inscriptible ? » — message volontairement explicite.
+
 ## 2. Observer
 
 ```bash
