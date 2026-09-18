@@ -1,0 +1,215 @@
+# =============================================================================
+# Yuki — Publication de l'image Docker (GitHub Container Registry, `ghcr.io`).
+#
+# Principe repris de Docky (/projects/Docky/.github/workflows/release.yml) :
+#   checkout → setup buildx → login ghcr.io → build & push de l'image, avec le
+#   tag `:latest`. Aucun secret à configurer : `secrets.GITHUB_TOKEN` suffit.
+#
+# ÉCARTS ASSUMÉS par rapport à Docky (documentés aussi dans docs/release.md) :
+#   * Docky incrémente `version.txt` puis `git commit` + `git push` DEPUIS le
+#     workflow. Yuki NE LE FAIT PAS : l'utilisateur gère ses commits (préférence
+#     permanente), et un workflow qui pousse sur la branche par défaut se
+#     redéclencherait lui-même (boucle). Ici la version provient d'un tag Git
+#     `v*` ou d'une saisie manuelle, et ce workflow n'ÉCRIT JAMAIS dans le
+#     dépôt (permissions `contents: read`, pas de bump).
+#   * Pas de multi-arch : plateforme `linux/amd64` uniquement (usage réel amd64,
+#     GPU/NVIDIA amd64 ; les images CUDA des lots 6/7 seront amd64-only). Pas
+#     besoin de QEMU, contrairement à Docky.
+#   * La publication DÉPEND de la réussite de la qualité (typecheck + tests +
+#     build) — amélioration par rapport à Docky.
+#
+# ⚠️ NE PAS CONFONDRE avec la règle « pas de tag `latest` » du projet :
+#    cette règle vise les IMAGES DE BASE (Node, CUDA) déclarées dans le
+#    Dockerfile/compose, épinglées par digest pour éviter toute dérive.
+#    Publier `:latest` pour l'IMAGE DU PROJET est ici VOULU et légitime :
+#    `:latest` suit le dernier build publié, tandis que le tag immuable
+#    `sha-<court>` (et la version, si fournie) permet d'épingler un artefact
+#    reproductible sans ambiguïté.
+# =============================================================================
+name: Release image
+
+on:
+  # Publication manuelle : entrée de version OPTIONNELLE.
+  # (N'apparaît dans l'onglet Actions qu'une fois ce fichier présent sur la
+  #  branche par défaut.)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version publiée (ex. 0.2.0). Vide = tags `:latest` + `:sha-<court>` seuls."
+        required: false
+        type: string
+        default: ""
+
+  # Push d'un tag `v*` : la version est dérivée du tag → tag immuable naturel.
+  # Volontairement AUCUN déclenchement sur pull_request.
+  push:
+    tags:
+      - "v*"
+
+# Permissions minimales :
+#   - `contents: read`  : lecture seule du dépôt (JAMAIS d'écriture, pas de bump) ;
+#   - `packages: write` : push de l'image sur ghcr.io.
+# Aucun secret à configurer (le jeton éphémère `GITHUB_TOKEN` est fourni par
+# GitHub Actions). Le dépôt doit toutefois AUTORISER l'écriture de packages.
+permissions:
+  contents: read
+  packages: write
+
+# Empêche deux publications simultanées. Le groupe est VOLONTAIREMENT constant
+# (pas par référence) : toutes les publications, quel que soit le déclencheur,
+# sont sérialisées. `cancel-in-progress: false` : une publication en cours n'est
+# jamais tuée à mi-push, la suivante est simplement mise en file d'attente.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  # `github.repository` vaut « grokuku/Yuki » ; il est mis en minuscules à
+  # l'étape « Resolve image reference and tags » (ghcr n'accepte que le
+  # minuscule). Ne pas écrire le nom d'image en dur : il suit le dépôt.
+  IMAGE_REPOSITORY: ${{ github.repository }}
+  NODE_VERSION: "24"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Garde-fou qualité : la publication ne part QUE si ces vérifications passent.
+  #
+  # Solution retenue (la MOINS intrusive) : un job de vérification DANS ce
+  # workflow plutôt que la réutilisation de `.github/workflows/ci.yml`, qui
+  # aurait exigé d'y ajouter le déclencheur `on: workflow_call` (donc de
+  # modifier un fichier existant, ce que la tâche demande d'éviter). Ces étapes
+  # dupliquent le job `quality` de `ci.yml` : à basculer en `uses:` (workflow
+  # réutilisable) si `ci.yml` gagne un jour `on: workflow_call`.
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Typecheck, tests & build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests (intégrations réseau opt-in skippées)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Publication de l'image du gateway sur ghcr.io.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Build & push image
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image reference and tags
+        id: meta
+        env:
+          # Entrées passées via `env` (jamais interpolées directement dans le
+          # script) : évite toute injection shell depuis une saisie manuelle.
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # ghcr.io n'accepte QUE des références en minuscules.
+          IMAGE="${REGISTRY}/$(printf '%s' "${IMAGE_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+
+          # Version : la saisie manuelle est prioritaire, sinon elle est dérivée
+          # du tag Git `v*` (ex. tag `v0.2.0` → version `0.2.0`).
+          VERSION=""
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ -n "${REQUESTED_VERSION:-}" ]; then
+            VERSION="${REQUESTED_VERSION}"
+          elif [ "${REF_TYPE}" = "tag" ]; then
+            VERSION="${REF_NAME}"
+          fi
+          VERSION="${VERSION#v}"  # tolère un préfixe `v`
+
+          # Garde-fou : un tag Docker ne peut contenir ni espace, ni `/`, etc.
+          if [ -n "${VERSION}" ] && ! printf '%s' "${VERSION}" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z._-]*$'; then
+            echo "::error::Version invalide : « ${VERSION} » (attendu : [0-9A-Za-z][0-9A-Za-z._-]*)"
+            exit 1
+          fi
+
+          SHA_SHORT="$(git rev-parse --short HEAD)"
+
+          # Tags : `:latest` (demandé) + tag immuable `sha-<court>` + version
+          # uniquement si une version a été fournie.
+          TAGS="${IMAGE}:latest"$'\n'"${IMAGE}:sha-${SHA_SHORT}"
+          if [ -n "${VERSION}" ]; then
+            TAGS="${TAGS}"$'\n'"${IMAGE}:${VERSION}"
+          fi
+
+          {
+            echo "image=${IMAGE}"
+            echo "version=${VERSION}"
+            echo "sha_short=${SHA_SHORT}"
+            echo "tags<<YUKI_IMAGE_TAGS"
+            printf '%s\n' "${TAGS}"
+            echo "YUKI_IMAGE_TAGS"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "IMAGE=${IMAGE}"
+            echo "VERSION=${VERSION}"
+          } >> "${GITHUB_ENV}"
+
+          echo "Image   : ${IMAGE}"
+          echo "Version : ${VERSION:-<aucune>}"
+          echo "Tags    :"
+          while IFS= read -r tag; do printf '  - %s\n' "${tag}"; done <<< "${TAGS}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/gateway/Dockerfile
+          # `linux/amd64` seul : image Node pure techniquement multi-arch, mais
+          # l'usage réel est amd64 (GPU/NVIDIA amd64 ; lots 6/7 CUDA amd64-only).
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          # Cache de build partagé entre exécutions (accélère les builds suivants).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Image publiée sur ${REGISTRY}"
+            echo
+            echo "| Tag | Référence |"
+            echo "| --- | --- |"
+            echo "| \`latest\` | \`${IMAGE}:latest\` |"
+            echo "| immuable | \`${IMAGE}:sha-${{ steps.meta.outputs.sha_short }}\` |"
+            if [ -n "${VERSION:-}" ]; then
+              echo "| version | \`${IMAGE}:${VERSION}\` |"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
