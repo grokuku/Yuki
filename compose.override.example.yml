@@ -1,0 +1,27 @@
+# Surcharges locales typiques.
+#
+#   cp compose.override.example.yml compose.override.yml
+#
+# `compose.override.yml` est gitignoré et appliqué automatiquement par
+# `docker compose`. Ce fichier d'exemple documente les cas courants.
+
+services:
+  gateway:
+    # Exposer le gateway sur un autre port hôte (le conteneur reste sur 8080).
+    ports:
+      - "9090:8080"
+
+    environment:
+      # Verbeux en développement local.
+      YUKI_LOG_LEVEL: debug
+      # Ne jamais bloquer une machine de dev : dégrade au lieu de refuser.
+      YUKI_COMPAT_MODE: auto-degrade
+
+    # Épingler une carte précise plutôt que toutes.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]

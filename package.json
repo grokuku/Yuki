@@ -1,0 +1,34 @@
+{
+  "name": "yuki",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Yuki — socle d'infrastructure, porte de compatibilité GPU et noyau texte multi-LLM (Lots 0-2).",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": "^22.19.0 || ^24.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:real": "YUKI_TEST_REAL_PI=1 vitest run tests/integration/real-sdk.test.ts",
+    "test:real:llm": "YUKI_TEST_REAL_LLM=1 vitest run tests/integration/real-llm.test.ts",
+    "gpu:report": "tsx src/gpu/cli.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.5",
+    "@types/ws": "8.18.1",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3",
+    "vitest": "5.0.1"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "typebox": "1.3.7",
+    "ws": "8.21.3"
+  }
+}

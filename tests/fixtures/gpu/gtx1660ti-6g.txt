@@ -1,0 +1,20 @@
+# Fixture nvidia-smi — NVIDIA GeForce GTX 1660 Ti (Turing, CC 7.5), 6 144 MiB.
+# Profil `repli` : GPU présent exploitable (CC >= 7.5) mais VRAM totale
+# (6 144 MiB) sous le seuil `compact` (8 000 MiB) et au-dessus de `repli`
+# (6 000 MiB).
+#:section query
+0, NVIDIA GeForce GTX 1660 Ti, 580.65.06, 7.5, 6144, 5900
+
+#:section plain
+Thu Sep 17 13:00:00 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.65.06              Driver Version: 580.65.06      CUDA Version: 13.0     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA GeForce GTX 1660 Ti   Off | 00000000:01:00.0  On |                  N/A |
+| 30%   45C    P8              20W / 120W |    244MiB / 6144MiB |     10%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+

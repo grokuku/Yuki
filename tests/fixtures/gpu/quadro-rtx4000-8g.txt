@@ -1,0 +1,122 @@
+# Fixture nvidia-smi — Quadro RTX 4000 (Turing, CC 7.5), 8 192 MiB — le plancher GPU.
+# `compute_cap` vaut N/A dans la requête CSV : couvre le repli `nvidia-smi -q`.
+#:section query
+0, Quadro RTX 4000, 580.65.06, N/A, 8192, 7900
+
+#:section q
+==============NVSMI LOG==============
+
+Timestamp                                 : Thu Sep 17 13:00:00 2026
+Driver Version                            : 580.65.06
+CUDA Version                              : 13.0
+
+Attached GPUs                             : 1
+GPU 00000000:01:00.0
+    Product Name                          : Quadro RTX 4000
+    Product Brand                         : Quadro
+    Product Architecture                  : Turing
+    Display Mode                          : Enabled
+    Display Active                        : Enabled
+    Persistence Mode                      : Enabled
+    Addressing Mode                       : None
+    MIG Mode
+        Current                           : N/A
+        Pending                           : N/A
+    Accounting Mode                       : Disabled
+    Serial Number                         : 0000000000000
+    GPU UUID                              : GPU-00000000-0000-0000-0000-000000000000
+    Minor Number                          : 0
+    VBIOS Version                         : 90.04.5A.00.05
+    MultiGPU Board                        : No
+    Board ID                              : 0x100
+    GPU Part Number                       : 900-5G160-0000-000
+    Inforom Version
+        Image Version                     : G160.0500.00.04
+        OEM Object                        : 1.1
+        ECC Object                        : 5.0
+        Power Management Object           : N/A
+    GPU Operation Mode
+        Current                           : N/A
+        Pending                           : N/A
+    GPU Virtualization Mode
+        Virtualization Mode               : None
+        Host VGPU Mode                    : N/A
+    IBMNPU
+        Relaxed Ordering Mode             : N/A
+    PCI Bus
+        Bus                               : 0x01
+        Device                            : 0x00
+        Domain                            : 0x0000
+        Device Id                         : 0x1EB110DE
+        Bus Id                            : 00000000:01:00.0
+    Fan Speed                             : 32 %
+    Performance State                     : P8
+    Clocks Throttle Reasons
+        Idle                              : Active
+        Applications Clocks Setting       : Not Active
+    FB Memory Usage
+        Total                             : 8192 MiB
+        Used                              : 292 MiB
+        Free                              : 7900 MiB
+    BAR1 Memory Usage
+        Total                             : 256 MiB
+        Used                              : 1 MiB
+        Free                              : 255 MiB
+    Compute Mode                          : Default
+    Utilization
+        Gpu                               : 0 %
+        Memory                            : 0 %
+        Encoder                           : 0 %
+        Decoder                           : 0 %
+    Encoder Stats
+        Active Sessions                   : 0
+    Ecc Mode
+        Current                           : N/A
+        Pending                           : N/A
+    ECC Errors
+        Volatile
+            SRAM Correctable              : N/A
+    Retired Pages
+        Single Bit ECC                    : N/A
+    Temperature
+        GPU Current Temp                  : 41 C
+        GPU Shutdown Temp                 : 95 C
+        GPU Slowdown Temp                 : 92 C
+        GPU Max Operating Temp            : 88 C
+    Power Readings
+        Power Management                  : Supported
+        Power Draw                        : 12.34 W
+        Power Limit                       : 125.00 W
+        Default Power Limit               : 125.00 W
+        Enforced Power Limit              : 125.00 W
+        Min Power Limit                   : 60.00 W
+        Max Power Limit                   : 125.00 W
+    Clocks
+        Graphics                          : 300 MHz
+        SM                                : 300 MHz
+        Memory                            : 405 MHz
+        Video                             : 540 MHz
+    Applications Clocks
+        Graphics                          : 585 MHz
+        Memory                            : 3500 MHz
+    Default Applications Clocks
+        Graphics                          : 585 MHz
+        Memory                            : 3500 MHz
+    Max Clocks
+        Graphics                          : 2100 MHz
+        SM                                : 2100 MHz
+        Memory                            : 3500 MHz
+        Video                             : 1755 MHz
+    Max Customer Boost Clocks
+        Graphics                          : N/A
+    Clock Policy
+        Auto Boost                        : N/A
+        Auto Boost Default                : N/A
+    Processes
+        GPU instance ID                    : N/A
+        Compute instance ID                : N/A
+        Process ID                        : 1234
+            Type                          : G
+            Name                          : /usr/lib/xorg/Xorg
+            Used memory                   : 292 MiB
+    Compute Capability                    : 7.5

@@ -1,0 +1,12 @@
+{
+  "defaultProjectTrust": "never",
+  "enableInstallTelemetry": false,
+  "compaction": {
+    "enabled": true
+  },
+  "retry": {
+    "enabled": true,
+    "maxRetries": 2
+  },
+  "showCacheMissNotices": false
+}

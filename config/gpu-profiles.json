@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "generatedFor": "Lot 0 — socle & porte de compatibilité",
+  "auditDate": "2026-09-16",
+  "selection": "highest-rank-compatible",
+  "profileCriteria": ["gpu.present", "gpu.computeCapability", "gpu.bf16", "gpu.vram.total"],
+  "informational": {
+    "gpu.vram.free": "mesure instantanée — avertissement journalisé uniquement, jamais un critère de profil",
+    "driver.floor": "exigence de service (asr/tts), jamais un critère de profil"
+  },
+  "profiles": [
+    {
+      "id": "confort",
+      "label": "Confort",
+      "rank": 3,
+      "status": "to-confirm",
+      "requiresGpu": true,
+      "gpuResidence": true,
+      "bf16Required": true,
+      "minComputeCapability": 8.0,
+      "minVramTotalMiB": 12000,
+      "cpuFallback": false,
+      "asr": {
+        "enabled": true,
+        "residence": "gpu",
+        "modelRef": "asr.model.default",
+        "quantizationRef": "asr.quant.default",
+        "status": "to-confirm"
+      },
+      "tts": {
+        "enabled": true,
+        "residence": "gpu",
+        "modelRef": "tts.model.default",
+        "quantizationRef": "tts.quant.default",
+        "status": "to-confirm"
+      },
+      "notes": [
+        "Cible : RTX 4070 12 Go (Ada, CC 8.9) et RTX 3060 12 Go (Ampere, CC 8.6).",
+        "BF16 requis (CC >= 8.0).",
+        "Seuils et références de modèles à confirmer aux lots 6 (ASR) et 7 (TTS)."
+      ]
+    },
+    {
+      "id": "compact",
+      "label": "Compact",
+      "rank": 2,
+      "status": "to-confirm",
+      "requiresGpu": true,
+      "gpuResidence": true,
+      "bf16Required": false,
+      "minComputeCapability": 7.5,
+      "minVramTotalMiB": 8000,
+      "cpuFallback": false,
+      "asr": {
+        "enabled": true,
+        "residence": "gpu",
+        "modelRef": "asr.model.default",
+        "quantizationRef": "asr.quant.default",
+        "status": "to-confirm"
+      },
+      "tts": {
+        "enabled": true,
+        "residence": "gpu",
+        "modelRef": "tts.model.default",
+        "quantizationRef": "tts.quant.default",
+        "status": "to-confirm"
+      },
+      "notes": [
+        "Cible : Quadro RTX 4000 8 Go (Turing, CC 7.5) — le plancher GPU.",
+        "Pas de BF16 : chemins de calcul FP16/FP32.",
+        "Seuils et références de modèles à confirmer aux lots 6 (ASR) et 7 (TTS)."
+      ]
+    },
+    {
+      "id": "repli",
+      "label": "Repli",
+      "rank": 1,
+      "status": "to-confirm",
+      "requiresGpu": true,
+      "gpuResidence": true,
+      "bf16Required": false,
+      "minComputeCapability": 7.5,
+      "minVramTotalMiB": 6000,
+      "cpuFallback": true,
+      "asr": {
+        "enabled": true,
+        "residence": "gpu",
+        "modelRef": "asr.model.low",
+        "quantizationRef": "asr.quant.low",
+        "status": "to-confirm"
+      },
+      "tts": {
+        "enabled": true,
+        "residence": "gpu",
+        "modelRef": "tts.model.low",
+        "quantizationRef": "tts.quant.low",
+        "status": "to-confirm"
+      },
+      "notes": [
+        "GPU présent mais sous les seuils compact : repli CPU autorisé.",
+        "Seuils et références de modèles à confirmer aux lots 6 (ASR) et 7 (TTS)."
+      ]
+    },
+    {
+      "id": "texte-seul",
+      "label": "Texte seul",
+      "rank": 0,
+      "status": "confirmed",
+      "requiresGpu": false,
+      "gpuResidence": false,
+      "bf16Required": false,
+      "minComputeCapability": null,
+      "minVramTotalMiB": 0,
+      "cpuFallback": true,
+      "asr": {
+        "enabled": false,
+        "residence": "cpu",
+        "modelRef": null,
+        "quantizationRef": null,
+        "status": "confirmed"
+      },
+      "tts": {
+        "enabled": false,
+        "residence": "cpu",
+        "modelRef": null,
+        "quantizationRef": null,
+        "status": "confirmed"
+      },
+      "notes": [
+        "Aucun GPU : ASR et TTS désactivés. Accepté par toutes les portes.",
+        "Seul profil confirmé au Lot 0."
+      ]
+    }
+  ]
+}

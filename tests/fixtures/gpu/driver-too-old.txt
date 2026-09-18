@@ -1,0 +1,22 @@
+# Fixture nvidia-smi — driver 560.35.05 (< plancher service 580).
+#
+# RÉAFFECTÉE : le driver ne conditionne PLUS la résolution de profil. Cette
+# carte (RTX 3060, CC 8.6, 12 288 MiB, BF16) résout désormais `confort`.
+# La fixture sert à vérifier l'exigence de SERVICE `driver.floor` (asr/tts,
+# lots 6/7), pas un déclassement de profil.
+#:section query
+0, NVIDIA GeForce RTX 3060, 560.35.05, 8.6, 12288, 11700
+
+#:section plain
+Thu Sep 17 13:00:00 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 560.35.05              Driver Version: 560.35.05      CUDA Version: 12.6     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |             MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA GeForce RTX 3060        Off | 00000000:01:00.0  On |                  N/A |
+| 30%   52C    P2             110W / 170W |    588MiB / 12288MiB |     12%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+

@@ -1,0 +1,6 @@
+{
+  "name": "error-run",
+  "steps": [
+    { "kind": "error", "message": "modèle indisponible", "delayMs": 1 }
+  ]
+}

@@ -1,0 +1,17 @@
+# Local environment (contains no secrets in the repo, ever)
+.env
+
+# Local bind-mount roots
+.local/
+
+# Node / build artifacts
+node_modules/
+dist/
+*.log
+
+# Local compose overrides
+compose.override.yml
+
+# Model weights (never committed)
+*.gguf
+*.bin

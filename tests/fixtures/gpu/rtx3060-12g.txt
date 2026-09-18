@@ -1,0 +1,20 @@
+# Fixture nvidia-smi — NVIDIA GeForce RTX 3060 (Ampere, CC 8.6), 12 288 MiB.
+# Format CSV exact de la requête principale (6 champs, compute_cap inclus) :
+#   nvidia-smi --query-gpu=index,name,driver_version,compute_cap,memory.total,memory.free \
+#              --format=csv,noheader,nounits
+#:section query
+0, NVIDIA GeForce RTX 3060, 580.65.06, 8.6, 12288, 11700
+
+#:section plain
+Thu Sep 17 13:00:00 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.65.06              Driver Version: 580.65.06      CUDA Version: 13.0     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA GeForce RTX 3060        Off | 00000000:01:00.0  On |                  N/A |
+| 30%   52C    P2             110W / 170W |    588MiB / 12288MiB |     12%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+

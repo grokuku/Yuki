@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "generatedFor": "Lot 0 — socle & porte de compatibilité",
+  "auditDate": "2026-09-16",
+
+  "capabilities": [
+    {
+      "id": "gpu.present",
+      "label": "GPU présent",
+      "type": "boolean",
+      "source": "nvidia-smi",
+      "criterion": "au moins un GPU détecté",
+      "status": "confirmed"
+    },
+    {
+      "id": "gpu.computeCapability",
+      "label": "Compute capability",
+      "type": "number",
+      "source": "nvidia-smi --query-gpu=compute_cap",
+      "criterion": "colonne compute_cap, sinon `nvidia-smi -q`, sinon table nom→CC embarquée",
+      "status": "confirmed"
+    },
+    {
+      "id": "gpu.bf16",
+      "label": "BF16 (bfloat16)",
+      "type": "boolean",
+      "source": "compute capability dérivée",
+      "criterion": "compute capability >= 8.0",
+      "status": "confirmed"
+    },
+    {
+      "id": "gpu.vram.total",
+      "label": "VRAM totale",
+      "type": "number",
+      "unit": "MiB",
+      "source": "nvidia-smi --query-gpu=memory.total",
+      "criterion": "maximum observé sur les GPU détectés",
+      "status": "confirmed"
+    },
+    {
+      "id": "gpu.vram.free",
+      "label": "VRAM libre",
+      "type": "number",
+      "unit": "MiB",
+      "source": "nvidia-smi --query-gpu=memory.free",
+      "criterion": "maximum observé sur les GPU détectés — mesure instantanée, AUCUN effet sur le profil (avertissement uniquement)",
+      "status": "confirmed"
+    },
+    {
+      "id": "driver.floor",
+      "label": "Driver NVIDIA minimal",
+      "type": "boolean",
+      "source": "driver_version",
+      "criterion": "majeure du driver >= YUKI_MIN_DRIVER (580) — exigence de service (asr/tts), AUCUN effet sur le profil au Lot 0",
+      "status": "confirmed"
+    }
+  ],
+
+  "profiles": {
+    "confort": {
+      "requires": ["gpu.present", "gpu.computeCapability", "gpu.bf16", "gpu.vram.total"],
+      "thresholds": { "computeCapability": 8.0, "vramTotalMiB": 12000 }
+    },
+    "compact": {
+      "requires": ["gpu.present", "gpu.computeCapability", "gpu.vram.total"],
+      "thresholds": { "computeCapability": 7.5, "vramTotalMiB": 8000 }
+    },
+    "repli": {
+      "requires": ["gpu.present", "gpu.computeCapability", "gpu.vram.total"],
+      "thresholds": { "computeCapability": 7.5, "vramTotalMiB": 6000 }
+    },
+    "texte-seul": {
+      "requires": [],
+      "thresholds": {}
+    }
+  },
+
+  "services": {
+    "gateway": {
+      "requiresGpu": false,
+      "capabilities": [],
+      "status": "confirmed"
+    },
+    "asr": {
+      "requiresGpu": true,
+      "capabilities": ["gpu.present", "driver.floor"],
+      "status": "to-confirm"
+    },
+    "tts": {
+      "requiresGpu": true,
+      "capabilities": ["gpu.present", "gpu.bf16", "driver.floor"],
+      "status": "to-confirm"
+    }
+  },
+
+  "notes": [
+    "Le service `gateway` n'exige aucun GPU ni driver : il démarre même en `texte-seul`.",
+    "`asr` (whisper.cpp, lot 6) et `tts` (audio.cpp, lot 7) sont déclarés en `to-confirm`.",
+    "`driver.floor` (driver NVIDIA >= 580, CUDA 13.x) est une exigence de SERVICE (asr/tts), pas un critère de profil : au Lot 0 aucune image CUDA ne l'applique.",
+    "`gpu.vram.free` est une mesure instantanée : avertissement journalisé uniquement, jamais un critère de résolution de profil.",
+    "La résolution de profil ne dépend que de : gpu.present, gpu.computeCapability, gpu.bf16, gpu.vram.total.",
+    "La résidence des modèles (GPU/CPU) et les quantifications sont des références symboliques, résolues aux lots dédiés."
+  ]
+}

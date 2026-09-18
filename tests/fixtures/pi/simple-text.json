@@ -1,0 +1,8 @@
+{
+  "name": "simple-text",
+  "steps": [
+    { "kind": "delta", "channel": "content", "text": "Bonjour", "delayMs": 1 },
+    { "kind": "delta", "channel": "content", "text": " depuis", "delayMs": 1 },
+    { "kind": "delta", "channel": "content", "text": " Yuki.", "delayMs": 1 }
+  ]
+}

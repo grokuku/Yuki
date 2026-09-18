@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Yuki</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Yuki</div>
+      <div class="status">
+        <span id="connection" class="pill pill--offline">hors ligne</span>
+        <span id="session-state" class="pill">idle</span>
+        <span id="queued" class="pill pill--queued" hidden>en file</span>
+      </div>
+    </header>
+
+    <main id="conversation" class="conversation" aria-live="polite">
+      <p class="empty">Envoyez un message pour commencer.</p>
+    </main>
+
+    <div id="thinking" class="thinking-indicator" hidden>réflexion…</div>
+
+    <footer class="composer">
+      <textarea
+        id="input"
+        class="input"
+        rows="1"
+        placeholder="Écrivez un message… (Entrée pour envoyer, Maj+Entrée pour un retour ligne)"
+        aria-label="Message"
+      ></textarea>
+      <button id="send" class="button" type="button">Envoyer</button>
+      <button id="stop" class="button button--stop" type="button" disabled>
+        Stop
+      </button>
+    </footer>
+
+    <script src="/ui/app.js" type="module"></script>
+  </body>
+</html>

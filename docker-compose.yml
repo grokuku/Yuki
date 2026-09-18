@@ -1,0 +1,152 @@
+# Yuki — Lots 0-1 : socle, porte de compatibilité & noyau texte
+# Un seul service (`gateway`) est déclaré.
+# Pas de clé `version:` (obsolète en Compose v5).
+# Aucun tag flottant : l'image Node est épinglée par digest.
+
+name: yuki
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: infra/gateway/Dockerfile
+      args:
+        YUKI_UID: ${YUKI_UID:-1000}
+        YUKI_GID: ${YUKI_GID:-1000}
+    image: yuki-gateway:${YUKI_VERSION:-0.1.0}
+    container_name: yuki-gateway
+
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      YUKI_VERSION: ${YUKI_VERSION:-0.1.0}
+      YUKI_GATEWAY_PORT: "8080"
+      YUKI_GATEWAY_HOST: 0.0.0.0
+      YUKI_COMPAT_MODE: ${YUKI_COMPAT_MODE:-strict}
+      YUKI_PROFILE: ${YUKI_PROFILE:-}
+      YUKI_MIN_DRIVER: ${YUKI_MIN_DRIVER:-580}
+      # `YUKI_GPU_CMD` n'est PAS défini ici : sinon le code croirait toujours que
+      # la variable a été fournie (`source` = `env-override`). Le défaut
+      # (`nvidia-smi`) est appliqué par le code ; la surcharge reste possible
+      # via `.env` (chargé par `env_file`).
+      YUKI_MOUNT_PI_AGENT: /data/pi
+      YUKI_MOUNT_WORKSPACE: /workspace
+      YUKI_MOUNT_MODELS: /models
+      YUKI_MOUNT_STATE: /data/state
+
+      # --- Pi embarqué (Lot 1) ---
+      # Redirection de l'état du SDK hors du rootfs read-only (volume pi-agent).
+      YUKI_PI_AGENT_DIR: /data/pi/agent
+      YUKI_PI_SESSIONS_DIR: /data/pi/agent/sessions
+      YUKI_PI_HOME: /data/pi/home
+      YUKI_PI_CWD: /workspace
+      YUKI_PI_SYSTEM_PROMPT: /app/config/pi/system-prompt.md
+      YUKI_PI_SETTINGS_SEED: /app/config/pi/settings.json
+      YUKI_PI_MODELS_SEED: /app/config/pi/models.json
+      YUKI_PI_HEAVY_SYSTEM_PROMPT: /app/config/pi/system-prompt-heavy.md
+      YUKI_PI_MODEL: ${YUKI_PI_MODEL:-}
+      YUKI_PI_THINKING: ${YUKI_PI_THINKING:-}
+
+      # --- Multi-LLM & jobs (Lot 2) ---
+      YUKI_LLM_MISSING_KEY_MODE: ${YUKI_LLM_MISSING_KEY_MODE:-degrade}
+      YUKI_JOBS_STORE_PATH: /data/state/jobs.jsonl
+      YUKI_HEAVY_MAX_CONCURRENT: ${YUKI_HEAVY_MAX_CONCURRENT:-3}
+      YUKI_HEAVY_MAX_QUEUE: ${YUKI_HEAVY_MAX_QUEUE:-10}
+      YUKI_HEAVY_IDLE_TIMEOUT_MS: ${YUKI_HEAVY_IDLE_TIMEOUT_MS:-120000}
+      YUKI_HEAVY_TOTAL_TIMEOUT_MS: ${YUKI_HEAVY_TOTAL_TIMEOUT_MS:-1200000}
+      # Clés LLM (nommage NEUTRE par rôle) : injectées depuis l'environnement
+      # (`.env` gitignoré). Aucune valeur en clair dans ce fichier — les défauts
+      # sont vides. `config/pi/models.json` les référence par `$…_API_KEY`.
+      YUKI_LLM_LIGHT_API: ${YUKI_LLM_LIGHT_API:-openai-completions}
+      YUKI_LLM_LIGHT_BASE_URL: ${YUKI_LLM_LIGHT_BASE_URL:-https://ollama.com/v1}
+      YUKI_LLM_LIGHT_API_KEY: ${YUKI_LLM_LIGHT_API_KEY:-}
+      YUKI_LLM_LIGHT_MODEL: ${YUKI_LLM_LIGHT_MODEL:-gemma4:31b}
+      YUKI_LLM_LIGHT_THINKING: ${YUKI_LLM_LIGHT_THINKING:-off}
+      YUKI_LLM_HEAVY_API: ${YUKI_LLM_HEAVY_API:-openai-completions}
+      YUKI_LLM_HEAVY_BASE_URL: ${YUKI_LLM_HEAVY_BASE_URL:-https://ollama.com/v1}
+      YUKI_LLM_HEAVY_API_KEY: ${YUKI_LLM_HEAVY_API_KEY:-}
+      YUKI_LLM_HEAVY_MODEL: ${YUKI_LLM_HEAVY_MODEL:-deepseek-v4.1-flash}
+      YUKI_LLM_HEAVY_THINKING: ${YUKI_LLM_HEAVY_THINKING:-high}
+      # HOME inscriptible (replis du SDK via os.homedir()).
+      HOME: /data/pi/home
+      # Environnement SDK (redondant avec le code, explicite ici).
+      PI_CODING_AGENT_DIR: /data/pi/agent
+      PI_CODING_AGENT_SESSION_DIR: /data/pi/agent/sessions
+      PI_OFFLINE: "1"
+      PI_SKIP_VERSION_CHECK: "1"
+      PI_TELEMETRY: "0"
+
+      # --- Transport temps réel (Lot 1) ---
+      YUKI_WS_REPLAY_BUFFER: ${YUKI_WS_REPLAY_BUFFER:-1000}
+      YUKI_WS_REPLAY_BYTES: ${YUKI_WS_REPLAY_BYTES:-5000000}
+
+      # Injecte `nvidia-smi` dans le conteneur -> preuve du passthrough GPU.
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+
+    # Exécution non-root (l'utilisateur `yuki` est créé avec cet uid/gid dans l'image).
+    user: "${YUKI_UID:-1000}:${YUKI_GID:-1000}"
+
+    ports:
+      - "${YUKI_GATEWAY_PORT:-8080}:8080"
+
+    volumes:
+      - type: bind
+        source: ${YUKI_HOST_PI_AGENT_DIR:-./.local/pi}
+        target: /data/pi
+      - type: bind
+        source: ${YUKI_HOST_WORKSPACE_DIR:-./.local/workspace}
+        target: /workspace
+      - type: bind
+        source: ${YUKI_HOST_MODELS_DIR:-./.local/models}
+        target: /models
+        read_only: true
+      - type: bind
+        source: ${YUKI_HOST_STATE_DIR:-./.local/state}
+        target: /data/state
+
+    networks:
+      - yuki-net
+
+    restart: unless-stopped
+    init: true
+
+    # Rootfs immuable ; seul /tmp est inscriptible (tmpfs).
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+    # Healthcheck sans curl : le binaire Node embarque `fetch`.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    # Réservation GPU (forme requise par le NVIDIA Container Toolkit).
+    # `capabilities` est obligatoire.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  yuki-net:
+    name: yuki-net

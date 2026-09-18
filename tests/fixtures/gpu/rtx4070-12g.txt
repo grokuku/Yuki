@@ -1,0 +1,29 @@
+# Fixture nvidia-smi — NVIDIA GeForce RTX 4070 (Ada, CC 8.9), 12 288 MiB.
+# Format CSV exact de :
+#   nvidia-smi --query-gpu=index,name,driver_version,compute_cap,memory.total,memory.free \
+#              --format=csv,noheader,nounits
+#:section query
+0, NVIDIA GeForce RTX 4070, 615.71.09, 8.9, 12288, 11800
+
+# Sortie brute (sert à lire « CUDA Version » — best effort).
+#:section plain
+Thu Sep 17 13:00:00 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 615.71.09              Driver Version: 615.71.09      CUDA Version: 13.4     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA GeForce RTX 4070        Off | 00000000:01:00.0  On |                  N/A |
+|  4%   45C    P8              22W / 200W |    488MiB / 12288MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A            1234      G   /usr/lib/xorg/Xorg                      340MiB |
++-----------------------------------------------------------------------------------------+

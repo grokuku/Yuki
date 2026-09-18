@@ -1,0 +1,21 @@
+# Build context hygiene for infra/gateway/Dockerfile
+.git
+.gitignore
+.gitattributes
+.editorconfig
+.local
+docs
+tests
+scripts
+node_modules
+dist
+*.log
+
+# Markdown (README kept: useful metadata, harmless)
+*.md
+!README.md
+
+# Local overrides / env
+compose.override.yml
+compose.override.example.yml
+.env

@@ -1,0 +1,8 @@
+{
+  "name": "abort-slow",
+  "steps": [
+    { "kind": "delta", "channel": "content", "text": "Début… ", "delayMs": 5 },
+    { "kind": "delta", "channel": "content", "text": "suite très lente ", "delayMs": 5000 },
+    { "kind": "delta", "channel": "content", "text": "jamais atteint", "delayMs": 5000 }
+  ]
+}

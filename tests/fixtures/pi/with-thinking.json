@@ -1,0 +1,8 @@
+{
+  "name": "with-thinking",
+  "steps": [
+    { "kind": "delta", "channel": "thinking", "text": "je réfléchis… ", "delayMs": 1 },
+    { "kind": "delta", "channel": "thinking", "text": "encore. ", "delayMs": 1 },
+    { "kind": "delta", "channel": "content", "text": "Voici la réponse.", "delayMs": 1 }
+  ]
+}
