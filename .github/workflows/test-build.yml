@@ -1,0 +1,306 @@
+# =============================================================================
+# Yuki — CI « image » : validation, build unique, smoke test et publication
+# de l'image de TEST (`:test`) sur ghcr.io.
+#
+# Ce fichier est le RÉSULTAT de la fusion des deux workflows historiques qui
+# construisaient la MÊME image Docker :
+#   * `.github/workflows/ci.yml` (`name: CI`) — job `quality` + job `docker`
+#     (validation Compose + build SANS publication + smoke test du conteneur) ;
+#   * `.github/workflows/test-build.yml` (`name: Test build (ghcr :test)`) —
+#     job `quality` DUPLIQUÉ + job `publish-test` (build + push `:test`).
+#
+# `ci.yml` est SUPPRIMÉ (entièrement redondant) : ce fichier devient l'UNIQUE
+# workflow du volet image. `release.yml` garde son rôle DISTINCT — publication
+# des tags de release (`:latest` / `:<version>`) — et n'est pas touché.
+#
+# Chaîne de jobs, sans duplication :
+#   quality → typecheck / tests / build ;
+#   docker  → validation Compose + build de l'image (UNE seule fois) + smoke
+#             test conteneur (non-root, rootfs read-only, /health,
+#             /health/ready, 4 bind mounts, état du SDK dans le volume) ;
+#   publish → push `:test` + `:sha-<court>` (JAMAIS sur pull_request).
+#
+# Le smoke test reste AUTOMATIQUE sur `push` et `pull_request` : c'est la seule
+# validation automatique des invariants de sécurité / d'intégration du
+# conteneur. Le rendre manuel serait une régression.
+#
+# Aucun secret à configurer : le jeton éphémère `GITHUB_TOKEN` suffit. Le dépôt
+# doit toutefois AUTORISER l'écriture des packages (voir docs/release.md).
+# =============================================================================
+name: CI image (validate & publish :test)
+
+on:
+  # Validation + smoke test sur chaque push et chaque PR vers la branche par
+  # défaut. La publication, elle, est conditionnée plus bas (voir job
+  # `publish`) : jamais sur PR.
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Porte de rejeu manuel : permet de (re)construire et publier une image
+  # `:test` à la demande.
+  workflow_dispatch:
+  # AUCUN déclenchement sur tag `v*` : c'est le rôle exclusif de `release.yml`.
+
+# Permissions minimales :
+#   - `contents: read`  : lecture seule du dépôt (JAMAIS d'écriture, pas de bump) ;
+#   - `packages: write` : push de l'image `:test` sur ghcr.io (job `publish`).
+permissions:
+  contents: read
+  packages: write
+
+# Annulation des exécutions obsolètes UNIQUEMENT pour les PR (`cancel-in-progress`).
+# Sur `push` vers `main` et sur `workflow_dispatch`, on NE coupe PAS une
+# exécution en cours : elle peut être au milieu d'un `docker push`, et un
+# kill à mi-course laisserait une publication partielle. Les runs de `main`
+# sont donc mis en FILE (sérialisés par référence) plutôt qu'annulés — même
+# politique que `release.yml` (`cancel-in-progress: false`).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  # `github.repository` vaut « grokuku/Yuki » ; il est mis en minuscules au
+  # moment de construire la référence d'image (ghcr n'accepte QUE le minuscule).
+  # Ne pas écrire le nom d'image en dur : il suit le dépôt.
+  IMAGE_REPOSITORY: ${{ github.repository }}
+  NODE_VERSION: "24"
+  # Tag de l'image construite UNE fois par `docker compose build`
+  # (voir `docker-compose.yml` : `image: yuki-gateway:${YUKI_VERSION:-0.1.0}`).
+  # `YUKI_VERSION` est exporté ici pour rendre le tag déterministe quel que soit
+  # le `.env` présent sur le runner (l'environnement shell prime sur `.env`).
+  YUKI_VERSION: "0.1.0"
+  IMAGE_LOCAL_TAG: yuki-gateway:0.1.0
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Garde-fou qualité : les jobs `docker` et `publish` en dépendent.
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Typecheck, tests & build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests (intégrations réseau opt-in skippées)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Validation Compose + build unique de l'image + smoke test du conteneur.
+  #
+  # Le build est fait par `scripts/ci-smoke.sh smoke` (`docker compose build`),
+  # qui démarre aussi le conteneur avec une fixture `nvidia-smi` injectée, sur
+  # un runner SANS GPU. L'image produite est ensuite exportée en artefact pour
+  # être publiée SANS être reconstruite (voir job `publish`).
+  #
+  # Choix de build (justification) : `docker compose build` est le mécanisme le
+  # plus simple et robuste ici car c'est DÉJÀ celui du smoke test — l'image
+  # testée est donc EXACTEMENT l'image publiée, et `ci-smoke.sh` n'a pas besoin
+  # d'être modifié. En contrepartie, on n'utilise pas `docker/build-push-action`
+  # avec `cache-from/to: type=gha` : on renonce donc au cache de build gha
+  # inter-exécutions (le build repart du cache local du runner). C'est le prix
+  # d'un build unique, sans second build pour la publication. `push: true` et
+  # `load: true` sont incompatibles dans `build-push-action`, et un `push`
+  # direct depuis ce job ferait doublon avec le job `publish`.
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Compose validation, build & smoke test
+    runs-on: ubuntu-latest
+    env:
+      # Fixture nvidia-smi injectée dans le conteneur : le runner n'a pas de GPU.
+      YUKI_CI_GPU_FIXTURE: ${{ github.workspace }}/tests/fixtures/gpu/rtx4070-12g.txt
+      # Plateforme épinglée explicitement : `linux/amd64` SEULE (cohérent avec
+      # `release.yml` et l'usage réel GPU/NVIDIA amd64). Le runner est déjà
+      # amd64, mais la variable rend le choix explicite pour `docker compose build`.
+      DOCKER_DEFAULT_PLATFORM: linux/amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: ./scripts/ci-smoke.sh config
+
+      - name: Build image, start container & run smoke test
+        run: ./scripts/ci-smoke.sh smoke
+
+      - name: Export the built image (for the publish job)
+        # Inutile sur PR : `publish` ne s'y exécute jamais (pas d'artefact à
+        # uploader, donc pas de stockage gaspillé).
+        if: github.event_name != 'pull_request'
+        env:
+          LOCAL_TAG: ${{ env.IMAGE_LOCAL_TAG }}
+          ARCHIVE: ${{ runner.temp }}/yuki-image.tar.gz
+        run: |
+          set -euo pipefail
+
+          # Garde-fou : l'image doit exister avec le tag attendu, sinon la
+          # publication porterait sur une référence inexistante.
+          if ! docker image inspect "${LOCAL_TAG}" >/dev/null 2>&1; then
+            echo "::error::image '${LOCAL_TAG}' introuvable après le smoke test — tag de build inattendu ?"
+            exit 1
+          fi
+
+          # `docker save` n'est pas compressé : on gzip pour réduire l'artefact.
+          docker save "${LOCAL_TAG}" | gzip -1 > "${ARCHIVE}"
+          echo "Archive exportée : $(du -h "${ARCHIVE}" | cut -f1)"
+
+      - name: Upload the built image as an artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: yuki-image
+          path: ${{ runner.temp }}/yuki-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Publication de l'image de TEST (`:test` + `:sha-<court>`) sur ghcr.io.
+  #
+  # ⚠️ CONDITIONNÉE : uniquement sur `push` vers `main` et sur `workflow_dispatch`,
+  # JAMAIS sur `pull_request`. Raisons : (1) un `:test` poussé depuis une PR
+  # écraserait le tag avec du code NON fusionné ; (2) l'écriture de packages
+  # n'est pas garantie sur les PR issues de forks (jeton en lecture seule).
+  # Sur PR, on valide (qualité + Compose + build + smoke test) SANS publier.
+  #
+  # L'image est celle construite et testée par le job `docker` (artefact) : elle
+  # n'est PAS reconstruite. `docker tag` + `docker push` sont volontaires.
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish ghcr :test
+    needs: [quality, docker]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download the built image
+        uses: actions/download-artifact@v4
+        with:
+          name: yuki-image
+          path: ${{ runner.temp }}
+
+      - name: Load image & resolve reference and tags
+        id: meta
+        env:
+          # Contexte passé via `env` (jamais interpolé directement dans le
+          # script) : évite toute injection shell et centralise la dérivation.
+          REPOSITORY: ${{ env.IMAGE_REPOSITORY }}
+          REGISTRY: ${{ env.REGISTRY }}
+          LOCAL_TAG: ${{ env.IMAGE_LOCAL_TAG }}
+          ARCHIVE: ${{ runner.temp }}/yuki-image.tar.gz
+        run: |
+          set -euo pipefail
+
+          # Garde-fous explicites : échouer TÔT avec un message clair plutôt
+          # que produire une référence d'image vide, ambiguë, ou un push à vide.
+          if [ -z "${REPOSITORY:-}" ]; then
+            echo "::error::github.repository est vide — impossible de dériver le nom d'image."
+            exit 1
+          fi
+          if [ ! -f "${ARCHIVE}" ]; then
+            echo "::error::archive d'image introuvable : ${ARCHIVE}"
+            exit 1
+          fi
+
+          # Recharge l'image EXACTE construite et testée par le job `docker`.
+          gunzip -c "${ARCHIVE}" | docker load
+          if ! docker image inspect "${LOCAL_TAG}" >/dev/null 2>&1; then
+            echo "::error::image '${LOCAL_TAG}' absente après 'docker load'."
+            exit 1
+          fi
+
+          # ghcr.io n'accepte QUE des références en minuscules.
+          IMAGE="${REGISTRY}/$(printf '%s' "${REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+
+          SHA_SHORT="$(git rev-parse --short HEAD)"
+          if ! printf '%s' "${SHA_SHORT}" | grep -Eq '^[0-9a-f]+$'; then
+            echo "::error::sha court invalide : « ${SHA_SHORT} »"
+            exit 1
+          fi
+
+          # Tags : `:test` (demandé, image jetable) + tag immuable `sha-<court>`
+          # pour la traçabilité. NI `:latest` NI `:<version>` : ces tags restent
+          # réservés à `release.yml` afin qu'un build de test ne puisse JAMAIS
+          # écraser une release.
+          docker tag "${LOCAL_TAG}" "${IMAGE}:test"
+          docker tag "${LOCAL_TAG}" "${IMAGE}:sha-${SHA_SHORT}"
+
+          {
+            echo "image=${IMAGE}"
+            echo "sha_short=${SHA_SHORT}"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "IMAGE=${IMAGE}"
+          } >> "${GITHUB_ENV}"
+
+          echo "Image : ${IMAGE}"
+          echo "Tags  : ${IMAGE}:test, ${IMAGE}:sha-${SHA_SHORT}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push :test and :sha-<short>
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA_SHORT: ${{ steps.meta.outputs.sha_short }}
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE}:test"
+          docker push "${IMAGE}:sha-${SHA_SHORT}"
+
+      - name: Summary
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA_SHORT: ${{ steps.meta.outputs.sha_short }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Image de TEST publiée sur ${REGISTRY}"
+            echo
+            echo "| Tag | Référence |"
+            echo "| --- | --- |"
+            echo "| jetable | \`${IMAGE}:test\` |"
+            echo "| immuable | \`${IMAGE}:sha-${SHA_SHORT}\` |"
+            echo
+            echo "> Les tags de release (\`:latest\`, \`:<version>\`) ne sont PAS touchés."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+# =============================================================================
+# Écarts / choix assumés (rappel)
+# -----------------------------------------------------------------------------
+#   * Plateforme `linux/amd64` SEULE : l'image est construite par
+#     `docker compose build` sur le runner (amd64). Pas de multi-arch, pas de
+#     QEMU — cohérent avec l'usage réel (GPU/NVIDIA amd64) et avec `release.yml`.
+#     Le smoke test tourne donc sur l'architecture de production.
+#   * Pas de `docker/build-push-action` : le build est celui du smoke test
+#     (`docker compose build`), donc UNIQUE et exactement celui qui est publié.
+#     On renonce au cache gha inter-exécutions (voir commentaire du job `docker`).
+#   * AUCUN `version.txt`, AUCUN bump, AUCUNE écriture dans le dépôt (même écart
+#     assumé que `release.yml`) : l'utilisateur gère ses commits.
+#   * Aucune interpolation `${{ }}` directement dans les scripts shell : tout
+#     passe par `env:` (anti-injection), avec `set -euo pipefail` et garde-fous
+#     `::error::` explicites (échec bruyant).
+# =============================================================================
