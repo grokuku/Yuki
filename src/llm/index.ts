@@ -19,14 +19,20 @@ export type { LlmApi, LlmRole, ProviderSpec, RoleEnvNames } from "./providers.js
 
 export {
   buildModelsConfig,
+  buildModelsConfigFrom,
+  DEFAULT_EFFECTIVE_LLM_CONFIG,
   HEAVY_MODEL,
   HEAVY_THINKING_LEVEL_MAP,
   LIGHT_MODEL,
   MODELS,
   modelForRole,
   resolveModels,
+  resolveModelsFrom,
+  resolveProvidersFrom,
 } from "./models.js";
 export type {
+  EffectiveLlmConfig,
+  EffectiveLlmRole,
   ModelSpec,
   ModelsConfig,
   ThinkingLevelMap,

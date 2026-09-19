@@ -128,15 +128,57 @@ run_smoke() {
   assert_jq "$health" '.status == "ok"' "le rapport GPU doit être en mode 'ok'"
   assert_jq "$health" '.gpu.source == "simulated"' "la source GPU doit être 'simulated' (fixture)"
   assert_jq "$health" '.profile == "confort"' "le profil résolu doit être 'confort'"
-  assert_jq "$health" '.gpu.resolution == "override-accepted"' "résolution attendue 'override-accepted'"
+  assert_jq "$health" '.gpu.resolution == "auto-highest-compatible"' "résolution attendue 'auto-highest-compatible'"
   assert_jq "$health" '.gpu.gpus | length == 1' "un GPU simulé attendu"
   assert_jq "$health" '.gpu.gpus[0].name | test("RTX 4070")' "nom du GPU simulé attendu : RTX 4070"
   assert_jq "$health" '.gpu.gpus[0].computeCapability == 8.9' "compute capability attendue : 8.9"
 
-  log "Assertions /health/ready (PiHost prêt & clé LLM légère présente)"
+  # --- Premier démarrage SANS aucune clé (Lot 11) --------------------------
+  log "Assertions Lot 11 — démarrage sans clé : /health/ready=503 et config 200"
   local ready_code
   ready_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/health/ready")"
-  [ "$ready_code" = "200" ] || fail "/health/ready a renvoyé $ready_code (attendu 200) — PiHost non prêt ?"
+  [ "$ready_code" = "503" ] || fail "/health/ready a renvoyé $ready_code (attendu 503 sans clé légère)"
+
+  local config_code config_before
+  config_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/api/config")"
+  [ "$config_code" = "200" ] || fail "GET /api/config a renvoyé $config_code (attendu 200 en mode dégradé)"
+  config_before="$(curl -fsS "http://127.0.0.1:${PORT}/api/config")"
+  assert_jq "$config_before" '.status.lightKey == false' "lightKey doit être false sans clé"
+  assert_jq "$config_before" '.status.heavyKey == false' "heavyKey doit être false sans clé"
+  assert_jq "$config_before" '.fields["llm.light.apiKey"].configured == false' "clé légère non configurée attendue"
+
+  log "Assertions Lot 11 — PUT des clés FICTIVES via l'API puis bascule à chaud"
+  local light_key="fake-light-key-000000000000" heavy_key="fake-heavy-key-111111111111"
+  local put_code
+  put_code="$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+    -H 'content-type: application/json' -H 'X-Yuki-Config: 1' \
+    --data "$(printf '{"llm.light.apiKey":"%s","llm.heavy.apiKey":"%s"}' "$light_key" "$heavy_key")" \
+    "http://127.0.0.1:${PORT}/api/config")"
+  [ "$put_code" = "200" ] || fail "PUT /api/config a renvoyé $put_code (attendu 200)"
+
+  local config_after
+  config_after="$(curl -fsS "http://127.0.0.1:${PORT}/api/config")"
+  assert_jq "$config_after" '.status.lightKey == true' "lightKey doit passer à true après PUT"
+  assert_jq "$config_after" '.status.heavyKey == true' "heavyKey doit passer à true après PUT"
+  assert_jq "$config_after" '.fields["llm.light.apiKey"].configured == true' "clé légère configurée attendue"
+  # Aucune valeur en clair dans le corps brut de la réponse.
+  case "$config_after" in
+    *"$light_key"*|*"$heavy_key"*) fail "GET /api/config expose une clé en clair" ;;
+  esac
+
+  log "Assertions Lot 11 — /health/ready passe à 200 (présence de clé, aucun réseau)"
+  ready_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/health/ready")"
+  [ "$ready_code" = "200" ] || fail "/health/ready a renvoyé $ready_code (attendu 200 après saisie des clés)"
+
+  log "Assertion Lot 11 — page /config servie avec des en-têtes sûrs"
+  local config_headers
+  config_headers="$(curl -s -D - -o /dev/null "http://127.0.0.1:${PORT}/config")"
+  printf '%s' "$config_headers" | grep -qi 'content-type: text/html' \
+    || fail "/config ne sert pas de HTML"
+  printf '%s' "$config_headers" | grep -qi 'x-content-type-options: nosniff' \
+    || fail "/config sans en-tête nosniff"
+  printf '%s' "$config_headers" | grep -qi "content-security-policy" \
+    || fail "/config sans content-security-policy"
 
   log "Assertions volumes (tous montés ; rw inscriptibles ; ro non sondé)"
   assert_jq "$health" '[.volumes[] | select(.exists == false)] | length == 0' "tous les volumes doivent exister"
@@ -162,13 +204,15 @@ run_smoke() {
   "${COMPOSE[@]}" exec -T gateway sh -c 'test -f /data/pi/agent/settings.json' \
     || fail "seed settings.json absent du volume pi"
   "${COMPOSE[@]}" exec -T gateway sh -c 'test -f /data/pi/agent/models.json' \
-    || fail "seed models.json absent du volume pi"
+    || fail "models.json généré absent du volume pi"
+  "${COMPOSE[@]}" exec -T gateway sh -c 'test -f /data/state/config.json' \
+    || fail "store de configuration absent du volume state"
   "${COMPOSE[@]}" exec -T gateway sh -c 'test -d /data/pi/agent/sessions' \
     || fail "répertoire de sessions absent du volume pi"
 
   finish_assertions
 
-  log "SUCCÈS — image construite, conteneur non-root/read-only validé, /health OK"
+  log "SUCCÈS — image construite, conteneur non-root/read-only validé, /health OK, config web OK"
 }
 
 case "$PHASE" in

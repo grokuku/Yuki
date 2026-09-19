@@ -8,7 +8,7 @@
  * `texte-seul` est toujours accepté.
  */
 
-import type { Env } from "../config/env.js";
+import type { CompatMode } from "../config/env.js";
 import type { Logger } from "../observability/logger.js";
 import type { GpuReport, GpuReportMode } from "../types/gpu.js";
 import type { CompatManifest, GpuProfile, ProfilesConfig } from "../types/profile.js";
@@ -25,8 +25,16 @@ import {
 } from "./profiles.js";
 import { buildGpuReport } from "./report.js";
 
+/** Paramètres de porte issus de la configuration (store + env + défauts). */
+export interface GateCompatConfig {
+  compatMode: CompatMode;
+  /** Profil forcé (`null` = résolution automatique). */
+  profile: string | null;
+  minDriver: number;
+}
+
 export interface GateInput {
-  env: Env;
+  config: GateCompatConfig;
   profiles: ProfilesConfig;
   manifest: CompatManifest;
   detection: DetectionResult;
@@ -68,11 +76,11 @@ function failedChecks(
  * Ne démarre rien : l'appelant décide (index.ts, CLI, tests).
  */
 export function runGate(input: GateInput, logger: Logger): GateResult {
-  const { env, profiles, manifest, detection } = input;
-  const { capabilities, best } = summarizeCapabilities(detection.gpus, env.minDriver);
+  const { config, profiles, manifest, detection } = input;
+  const { capabilities, best } = summarizeCapabilities(detection.gpus, config.minDriver);
   const requiredBy = capabilityRequiredBy(profiles, manifest);
   const gpuPresent = capabilities["gpu.present"] === true;
-  const override = env.profile;
+  const override = config.profile;
 
   // Trace honnête du chemin de détection effectivement emprunté.
   logger.info("gpu.detect", {
@@ -102,7 +110,7 @@ export function runGate(input: GateInput, logger: Logger): GateResult {
       const fallback = highestProfile(profiles);
       const report = buildGpuReport({
         detection,
-        minDriver: env.minDriver,
+        minDriver: config.minDriver,
         resolvedProfile: fallback,
         resolution: "override-refused",
         overrideRequested: override,
@@ -125,7 +133,7 @@ export function runGate(input: GateInput, logger: Logger): GateResult {
     if (evaluation.ok) {
       const report = buildGpuReport({
         detection,
-        minDriver: env.minDriver,
+        minDriver: config.minDriver,
         resolvedProfile: target,
         resolution: "override-accepted",
         overrideRequested: override,
@@ -142,10 +150,10 @@ export function runGate(input: GateInput, logger: Logger): GateResult {
       return { passed: true, report, resolvedProfile: target };
     }
 
-    if (env.compatMode === "strict") {
+    if (config.compatMode === "strict") {
       const report = buildGpuReport({
         detection,
-        minDriver: env.minDriver,
+        minDriver: config.minDriver,
         resolvedProfile: target,
         resolution: "override-refused",
         overrideRequested: override,
@@ -172,7 +180,7 @@ export function runGate(input: GateInput, logger: Logger): GateResult {
     const { profile: resolved } = pickHighestCompatible(profiles, capabilities);
     const report = buildGpuReport({
       detection,
-      minDriver: env.minDriver,
+      minDriver: config.minDriver,
       resolvedProfile: resolved,
       resolution: "downgraded",
       overrideRequested: override,
@@ -204,13 +212,13 @@ export function runGate(input: GateInput, logger: Logger): GateResult {
   // --- Pas d'override : résolution automatique ------------------------------
   const { profile: resolved } = pickHighestCompatible(profiles, capabilities);
   const highest = highestProfile(profiles);
-  const downgradedInAuto = env.compatMode === "auto-degrade" && resolved.id !== highest.id;
+  const downgradedInAuto = config.compatMode === "auto-degrade" && resolved.id !== highest.id;
   const resolution = downgradedInAuto ? "downgraded" : "auto-highest-compatible";
   const mode = downgradedInAuto ? "degraded" : resolveMode(resolved, gpuPresent);
 
   const report = buildGpuReport({
     detection,
-    minDriver: env.minDriver,
+    minDriver: config.minDriver,
     resolvedProfile: resolved,
     resolution,
     overrideRequested: null,

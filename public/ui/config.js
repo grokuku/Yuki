@@ -1,0 +1,470 @@
+/**
+ * Page « Configuration » — vanilla, `type="module"`, aucune chaîne de build.
+ *
+ * - lit `GET /api/config` (valeurs effectives, clés masquées) ;
+ * - écrit via `PUT /api/config` (en-tête `X-Yuki-Config: 1`) ;
+ * - teste une connexion LLM via `POST /api/config/llm/test` ;
+ * - affiche l'état réel (`status.lightKey/heavyKey/ready`, poll `/health/ready`).
+ *
+ * La valeur d'une clé saisie n'est JAMAIS réaffichée dans le DOM après
+ * enregistrement (uniquement `configured` + `masked`).
+ */
+
+const WRITE_HEADERS = {
+  "content-type": "application/json",
+  "x-yuki-config": "1",
+};
+
+const OPTIONS = {
+  api: [["openai-completions", "openai-completions"]],
+  thinking: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((v) => [v, v]),
+  profiles: [
+    ["", "∅ (auto)"],
+    ["confort", "confort"],
+    ["compact", "compact"],
+    ["repli", "repli"],
+    ["texte-seul", "texte-seul"],
+  ],
+  compat: [
+    ["strict", "strict"],
+    ["auto-degrade", "auto-degrade"],
+  ],
+  missingKey: [
+    ["degrade", "degrade"],
+    ["refuse", "refuse"],
+  ],
+};
+
+const GROUPS = [
+  {
+    id: "llm-light",
+    title: "LLM léger",
+    role: "light",
+    fields: [
+      { path: "llm.light.baseUrl", label: "URL de base", kind: "text" },
+      { path: "llm.light.apiKey", label: "Clé d'API", kind: "secret" },
+      { path: "llm.light.model", label: "Modèle", kind: "text" },
+      { path: "llm.light.api", label: "Dialecte d'API", kind: "select", options: OPTIONS.api },
+      { path: "llm.light.thinking", label: "Réflexion (thinking)", kind: "select", options: OPTIONS.thinking },
+    ],
+  },
+  {
+    id: "llm-heavy",
+    title: "LLM lourd",
+    role: "heavy",
+    fields: [
+      { path: "llm.heavy.baseUrl", label: "URL de base", kind: "text" },
+      { path: "llm.heavy.apiKey", label: "Clé d'API", kind: "secret" },
+      { path: "llm.heavy.model", label: "Modèle", kind: "text" },
+      { path: "llm.heavy.api", label: "Dialecte d'API", kind: "select", options: OPTIONS.api },
+      { path: "llm.heavy.thinking", label: "Réflexion (thinking)", kind: "select", options: OPTIONS.thinking },
+    ],
+  },
+  {
+    id: "delegation",
+    title: "Délégation",
+    fields: [
+      { path: "llm.missingKeyMode", label: "Politique si clé manquante", kind: "select", options: OPTIONS.missingKey },
+      { path: "delegation.defaultDeadlineMs", label: "Attente inline par défaut (ms)", kind: "number", min: 200, max: 60000 },
+      { path: "delegation.maxConcurrent", label: "Jobs simultanés", kind: "number", min: 1 },
+      { path: "delegation.maxQueue", label: "Taille de la file", kind: "number", min: 0 },
+      { path: "delegation.idleTimeoutMs", label: "Timeout d'inactivité (ms)", kind: "number", min: 1 },
+      { path: "delegation.totalTimeoutMs", label: "Timeout global (ms)", kind: "number", min: 1 },
+    ],
+  },
+  {
+    id: "gpu",
+    title: "GPU",
+    fields: [
+      { path: "gpu.profile", label: "Profil forcé", kind: "select", options: OPTIONS.profiles },
+      { path: "gpu.compatMode", label: "Mode de compatibilité", kind: "select", options: OPTIONS.compat },
+      { path: "gpu.minDriver", label: "Driver NVIDIA minimal (majeure)", kind: "number", min: 1 },
+    ],
+  },
+  {
+    id: "prompts",
+    title: "Prompts système",
+    fields: [
+      { path: "prompts.light", label: "Prompt système — léger", kind: "textarea" },
+      { path: "prompts.heavy", label: "Prompt système — lourd", kind: "textarea" },
+    ],
+  },
+  {
+    id: "transport",
+    title: "Transport temps réel",
+    fields: [
+      { path: "transport.replayBuffer", label: "Buffer de rejeu (trames)", kind: "number", min: 1 },
+      { path: "transport.replayBytes", label: "Buffer de rejeu (octets)", kind: "number", min: 1 },
+    ],
+  },
+];
+
+const ALL_FIELDS = GROUPS.flatMap((group) => group.fields);
+const LABELS = new Map(ALL_FIELDS.map((field) => [field.path, field.label]));
+
+const state = {
+  fields: {},
+  status: { lightKey: false, heavyKey: false, ready: false },
+  initial: new Map(),
+  inputs: new Map(),
+  rows: new Map(),
+  secretState: new Map(),
+  pendingResets: new Set(),
+  healthReady: false,
+};
+
+const groupsEl = document.getElementById("groups");
+const saveButton = document.getElementById("save");
+const saveStatus = document.getElementById("save-status");
+const globalError = document.getElementById("global-error");
+const availabilityEl = document.getElementById("availability");
+const appliedEl = document.getElementById("applied");
+const appliedHot = document.getElementById("applied-hot");
+const appliedRestart = document.getElementById("applied-restart");
+const readyPill = document.getElementById("ready");
+const lightPill = document.getElementById("light-key");
+const heavyPill = document.getElementById("heavy-key");
+
+function h(tag, props = {}, children = []) {
+  const el = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "class") el.className = value;
+    else if (key === "text") el.textContent = value;
+    else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
+    else el.setAttribute(key, value);
+  }
+  for (const child of [].concat(children)) {
+    el.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return el;
+}
+
+function applyBadge(apply) {
+  return h("span", {
+    class: `badge badge--${apply === "hot" ? "hot" : "restart"}`,
+    text: apply === "hot" ? "à chaud" : "redémarrage",
+  });
+}
+
+function lockedBadge(variable) {
+  return h("span", {
+    class: "badge badge--locked",
+    text: `Verrouillé par l'environnement (${variable})`,
+  });
+}
+
+function renderSelect(field, entry) {
+  const select = h("select", { class: "config-select" });
+  for (const [value, label] of field.options) {
+    const option = h("option", { value, text: label });
+    if (String(entry.value) === value) option.selected = true;
+    select.append(option);
+  }
+  return select;
+}
+
+function renderTextLike(field, entry) {
+  if (field.kind === "textarea") {
+    return h("textarea", { class: "config-textarea", spellcheck: "false" }, entry.value);
+  }
+  const props = { class: "config-input" };
+  if (field.kind === "number") {
+    props.type = "number";
+    if (field.min !== undefined) props.min = field.min;
+    if (field.max !== undefined) props.max = field.max;
+    props.value = entry.value;
+  } else {
+    props.type = "text";
+    props.value = entry.value;
+  }
+  return h("input", props);
+}
+
+function renderSecret(field, entry) {
+  const locked = Boolean(entry.lockedByEnv);
+  const secret = { mode: "idle", input: null };
+  state.secretState.set(field.path, secret);
+
+  const container = h("div", { class: "config-secret" });
+  const input = h("input", { class: "config-input", type: "password", autocomplete: "off", placeholder: "Nouvelle valeur" });
+  input.hidden = true;
+  secret.input = input;
+
+  const valueSpan = h("span", {
+    class: "config-secret__value",
+    text: entry.configured ? `Clé configurée (${entry.masked})` : "Aucune clé configurée",
+  });
+  const replaceButton = h("button", { class: "button button--ghost button--small", type: "button", text: "Remplacer" });
+  const clearButton = h("button", { class: "button button--danger button--small", type: "button", text: "Effacer" });
+
+  if (locked) {
+    container.append(valueSpan, lockedBadge(entry.lockedByEnv));
+    input.remove();
+    secret.input = null;
+    return container;
+  }
+
+  if (!entry.configured) {
+    input.hidden = false;
+    secret.mode = "replace";
+    container.append(valueSpan, input);
+    return container;
+  }
+
+  replaceButton.addEventListener("click", () => {
+    secret.mode = "replace";
+    input.hidden = false;
+    input.value = "";
+    input.focus();
+    valueSpan.textContent = "Remplacement en cours…";
+  });
+  clearButton.addEventListener("click", () => {
+    secret.mode = "clear";
+    input.hidden = true;
+    valueSpan.textContent = "La clé sera effacée à l'enregistrement.";
+  });
+
+  container.append(valueSpan, replaceButton, clearButton, input);
+  return container;
+}
+
+function renderField(field) {
+  const entry = state.fields[field.path] ?? { value: "", origin: "default", apply: "restart" };
+  const row = h("div", { class: "config-row" });
+  state.rows.set(field.path, row);
+
+  const label = h("label", { class: "config-label" }, [field.label]);
+  if (field.kind !== "secret") label.append(applyBadge(entry.apply));
+  if (entry.lockedByEnv) label.append(lockedBadge(entry.lockedByEnv));
+  row.append(label);
+
+  if (field.kind === "secret") {
+    row.append(renderSecret(field, entry));
+  } else {
+    const control = field.kind === "select" ? renderSelect(field, entry) : renderTextLike(field, entry);
+    state.inputs.set(field.path, control);
+    state.initial.set(field.path, entry.value);
+    if (entry.lockedByEnv) control.disabled = true;
+    control.addEventListener("input", () => {
+      state.pendingResets.delete(field.path);
+    });
+    row.append(control);
+    if (field.kind === "textarea") {
+      const reset = h("button", { class: "button button--ghost button--small", type: "button", text: "Réinitialiser au défaut" });
+      reset.addEventListener("click", () => {
+        control.value = "";
+        state.pendingResets.add(field.path);
+      });
+      row.append(h("div", { class: "config-helper" }, [reset]));
+    }
+    if (entry.origin === "store") {
+      row.append(h("span", { class: "config-helper", text: "Valeur enregistrée (surcharge le défaut)." }));
+    }
+  }
+  row.append(h("p", { class: "config-error", hidden: "hidden" }));
+  return row;
+}
+
+function render() {
+  groupsEl.textContent = "";
+  for (const group of GROUPS) {
+    const section = h("section", { class: "config-group" });
+    const status = h("span", { class: "config-helper" });
+    const head = h("div", { class: "config-group__head" }, [
+      h("h2", { class: "config-group__title", text: group.title }),
+    ]);
+    if (group.role) {
+      const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
+      test.addEventListener("click", () => testConnection(group.role, status));
+      head.append(h("div", { class: "config-secret" }, [test, status]));
+    }
+    section.append(head);
+    for (const field of group.fields) section.append(renderField(field));
+    groupsEl.append(section);
+  }
+}
+
+function showFieldErrors(fields) {
+  for (const row of state.rows.values()) {
+    const error = row.querySelector(".config-error");
+    if (error) {
+      error.hidden = true;
+      error.textContent = "";
+    }
+  }
+  globalError.hidden = true;
+  globalError.textContent = "";
+  for (const field of fields ?? []) {
+    const row = field.path ? state.rows.get(field.path) : null;
+    if (row) {
+      const error = row.querySelector(".config-error");
+      error.textContent = field.message;
+      error.hidden = false;
+    } else {
+      globalError.textContent = field.message;
+      globalError.hidden = false;
+    }
+  }
+}
+
+function buildPatch() {
+  const patch = {};
+  for (const field of ALL_FIELDS) {
+    const entry = state.fields[field.path];
+    if (entry?.lockedByEnv) continue;
+
+    if (field.kind === "secret") {
+      const secret = state.secretState.get(field.path);
+      if (!secret) continue;
+      if (secret.mode === "clear") {
+        patch[field.path] = null;
+        continue;
+      }
+      const value = secret.input ? secret.input.value.trim() : "";
+      if (value !== "") patch[field.path] = value;
+      continue;
+    }
+
+    if (state.pendingResets.has(field.path)) {
+      patch[field.path] = null;
+      continue;
+    }
+    const control = state.inputs.get(field.path);
+    if (!control) continue;
+    const value = control.value;
+    const initial = state.initial.get(field.path);
+    if (field.path === "gpu.profile" && value === "") {
+      if (initial !== "") patch[field.path] = null;
+      continue;
+    }
+    if (String(value) !== String(initial)) patch[field.path] = value;
+  }
+  return patch;
+}
+
+async function load() {
+  const response = await fetch("/api/config", { headers: { accept: "application/json" } });
+  if (!response.ok) throw new Error(`GET /api/config → ${response.status}`);
+  applySnapshot(await response.json());
+  render();
+}
+
+function applySnapshot(body) {
+  state.fields = body.fields ?? {};
+  state.status = body.status ?? state.status;
+  state.initial.clear();
+  state.inputs.clear();
+  state.rows.clear();
+  state.secretState.clear();
+  state.pendingResets.clear();
+  updateAvailability();
+}
+
+async function save() {
+  saveStatus.textContent = "Enregistrement…";
+  globalError.hidden = true;
+  try {
+    const response = await fetch("/api/config", {
+      method: "PUT",
+      headers: WRITE_HEADERS,
+      body: JSON.stringify(buildPatch()),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      showFieldErrors(body.fields ?? [{ path: "", message: body.message ?? body.error ?? `Erreur ${response.status}` }]);
+      saveStatus.textContent = "Échec de l'enregistrement.";
+      return;
+    }
+    applySnapshot(body);
+    render();
+    showApplied(body.applied ?? { hot: [], restart: [] });
+    saveStatus.textContent = "Enregistré.";
+  } catch (error) {
+    showFieldErrors([{ path: "", message: error instanceof Error ? error.message : String(error) }]);
+    saveStatus.textContent = "Échec de l'enregistrement.";
+  }
+}
+
+function showApplied(applied) {
+  const labelsOf = (paths) => (paths.length > 0 ? paths.map((p) => LABELS.get(p) ?? p).join(", ") : "—");
+  appliedHot.textContent = labelsOf(applied.hot ?? []);
+  appliedRestart.textContent = labelsOf(applied.restart ?? []);
+  appliedEl.hidden = false;
+}
+
+async function testConnection(role, statusEl) {
+  statusEl.textContent = "Test en cours…";
+  try {
+    const secret = state.secretState.get(`llm.${role}.apiKey`);
+    const apiKey = secret?.input && secret.input.value.trim() !== "" ? secret.input.value.trim() : undefined;
+    const response = await fetch("/api/config/llm/test", {
+      method: "POST",
+      headers: WRITE_HEADERS,
+      body: JSON.stringify({ role, ...(apiKey ? { apiKey } : {}) }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (body.ok) {
+      const count = Array.isArray(body.models) ? body.models.length : null;
+      statusEl.textContent = count !== null ? `Connexion OK (${count} modèles).` : "Connexion OK.";
+    } else {
+      statusEl.textContent = `Échec : ${body.error ?? "inconnu"}.`;
+    }
+  } catch (error) {
+    statusEl.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+function setPill(el, ok, onText, offText) {
+  el.textContent = ok ? onText : offText;
+  el.classList.toggle("pill--online", ok);
+  el.classList.toggle("pill--offline", !ok);
+}
+
+function updateAvailability() {
+  const { lightKey, heavyKey } = state.status;
+  setPill(lightPill, lightKey, "clé légère OK", "clé légère manquante");
+  setPill(heavyPill, heavyKey, "clé lourde OK", "clé lourde manquante");
+  const conversationOk = lightKey && state.healthReady;
+  setPill(readyPill, conversationOk, "prêt", "non prêt");
+  if (!lightKey) {
+    availabilityEl.textContent =
+      "La conversation est indisponible — saisissez une clé LLM légère ci-dessous.";
+    availabilityEl.hidden = false;
+    availabilityEl.className = "config-banner config-banner--warn";
+  } else {
+    availabilityEl.hidden = true;
+  }
+}
+
+async function pollHealth() {
+  try {
+    const response = await fetch("/health/ready");
+    state.healthReady = response.status === 200;
+    if (!state.healthReady && state.status.lightKey) {
+      availabilityEl.textContent =
+        "Le service n'est pas encore prêt (profil GPU ou PiHost). Vérifiez /health.";
+      availabilityEl.hidden = false;
+      availabilityEl.className = "config-banner config-banner--warn";
+    } else if (state.healthReady) {
+      availabilityEl.hidden = true;
+    }
+  } catch {
+    state.healthReady = false;
+  }
+  updateAvailability();
+}
+
+saveButton.addEventListener("click", () => void save());
+
+void (async () => {
+  try {
+    await load();
+    await pollHealth();
+    setInterval(() => void pollHealth(), 5000);
+  } catch (error) {
+    globalError.textContent = `Impossible de charger la configuration : ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+    globalError.hidden = false;
+  }
+})();

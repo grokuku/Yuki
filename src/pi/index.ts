@@ -38,8 +38,8 @@ export {
   ensurePiLayout,
   PI_SDK_ENV,
   resolvePiPaths,
-  seedModelsFile,
   seedSettingsFile,
+  writeModelsFile,
 } from "./config.js";
 export type { PiConfigInput, PiPaths } from "./config.js";
 

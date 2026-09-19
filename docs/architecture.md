@@ -87,7 +87,7 @@ neutre (changer de fournisseur ne touche pas au code).
 
 | Domaine | Rôle |
 | --- | --- |
-| `config/` | environnement, chemins/montages |
+| `config/` | câblage env, chemins/montages, **store de configuration** (page web), runtime de précédence (défauts < store < env) |
 | `gpu/` | détection, profils, porte, rapport, CLI |
 | `gateway/` | app HTTP, serveur, routes (dont `/health` enrichi et l'UI statique) |
 | `gateway/ws/` | transport temps réel : protocole, serveur WS, flux par session, abstraction `Transport` |
@@ -114,8 +114,44 @@ neutre (changer de fournisseur ne touche pas au code).
 | 8 | Retour proactif | à venir |
 | 9 | Durcissement | à venir |
 | 10 | Documentation n8n | à venir |
+| **11** | **Paramétrage par l'interface web (clés LLM à chaud, `models.json` généré)** | **implémenté** |
 
 **Chemin critique : 0 → 1 → 2 → 6 → 7.**
+
+## Vue d'ensemble (Lot 11 — paramétrage par l'interface web)
+
+Le paramétrage est **découplé** du fonctionnement applicatif : la page `/config`
+et l'API de configuration sont servies par `node:http` **indépendamment** de la
+porte GPU, du `PiHost` et des clés LLM.
+
+```
+ navigateur                 gateway (node:http)                     domaine src/config
+ ┌────────────┐  GET/PUT   ┌────────────────────────┐            ┌──────────────────┐
+ │ /config    │◄──────────►│ routes/config (API)    │──get/update│ ConfigRuntime    │
+ │ config.js  │ POST test  │ (en-tête X-Yuki-Config)│            │  store + env     │
+ └────────────┘            └───────────┬────────────┘            │  + défauts       │
+                                       │ clés → process.env      └────────┬─────────┘
+                                       ▼                                  │
+                          ┌────────────────────────┐   généré au démarrage │
+                          │ src/index (composition) │◄─────────────────────┘
+                          │  buildModelsConfigFrom  │
+                          └───────────┬────────────┘
+                                      ▼ écrit atomiquement
+                          /data/pi/agent/models.json  ──► SDK Pi (ModelRuntime)
+```
+
+- **Précédence** : `défauts (code) < store (page web) < environnement`. L'env ne
+  participe que s'il est défini ET non vide ; sinon il **verrouille** le champ
+  (`origin: "env"`), visible dans la page et refusé au `PUT` (`locked_by_env`).
+- **`models.json` est GÉNÉRÉ** (`buildModelsConfigFrom`) : plus de seed
+  copie-si-absent. Aucune clé en clair — uniquement `$YUKI_LLM_*_API_KEY`.
+- **À chaud** : les clés LLM (pont vers `process.env`, `/health/ready` bascule
+  immédiatement). **Redémarrage** : fournisseur/modèle/thinking, prompts,
+  timeouts, GPU, transport.
+- **Store** : `/data/state/config.json`, sparse, `0600`, écriture atomique,
+  repli sans écrasement (le démarrage n'échoue jamais à cause du store).
+
+Détails complets : [`docs/lot11.md`](lot11.md).
 
 ### Références établies pour la suite (contexte)
 
@@ -143,7 +179,16 @@ neutre (changer de fournisseur ne touche pas au code).
   `llm/jobs/delegation` ; rien hors `src/pi/**` n'importe depuis `src/pi/sdk/**`).
 - Dépendances runtime **figées exactement** (`@earendil-works/pi-coding-agent@0.85.1`,
   `ws@8.21.3`, `typebox@1.3.7`), sans caret.
-- **Aucune clé LLM en clair** : références d'environnement dans `models.json`,
-  clés via `.env` (gitignoré), redaction des logs.
+- **Aucune clé LLM en clair** : `models.json` **généré** ne contient que des
+  références `$YUKI_LLM_*_API_KEY` ; les clés vivent dans le **store**
+  `/data/state/config.json` (`0600`, volume `state`) et/ou l'environnement ;
+  redaction des logs ; l'API ne renvoie jamais la valeur (masque seul).
+- **Aucun import SDK/`typebox` dans `src/config/**`** (Lot 11) : le domaine de
+  configuration reste testable sans SDK (invariant ajouté au test de frontière).
+- **Précautions de l'API de configuration** (Lot 11) : en-tête personnalisé
+  `X-Yuki-Config` + contrôle `Origin`/`Host` sur les écritures, journal d'audit
+  `config.changed` sans valeur de secret. Le durcissement complet
+  (authentification, chiffrement au repos, TLS) est prévu au **Lot 9** — voir
+  `docs/lot11.md` (« Sécurisation — préparée, PAS implémentée »).
 - **Aucune authentification** au Lot 1 (réseau de confiance) : champ `auth`
   réservé ; durcissement prévu au Lot 9.

@@ -32,9 +32,17 @@
 
 ## Changer de fournisseur (nommage neutre)
 
-Variables d'environnement neutres, un bloc **par rôle** (deux `BASE_URL`
-**distinctes** : le léger et le lourd peuvent être chez deux fournisseurs
-différents) :
+> **⚠️ Mis à jour au Lot 11.** Le changement de fournisseur ne passe **plus** par
+> l'édition d'un fichier dans un volume : `models.json` est désormais **GÉNÉRÉ**
+> au démarrage depuis la configuration effective, et `baseUrl`/`api`/modèle/
+> thinking se règlent dans la page **`/config`** (effet au **redémarrage**).
+> Voir [`docs/lot11.md`](lot11.md). Ce qui suit décrit le nommage neutre et la
+> limite SDK d'interpolation, qui restent valides.
+
+Variables neutres, un bloc **par rôle** (deux `BASE_URL` **distinctes** : le
+léger et le lourd peuvent être chez deux fournisseurs différents). Depuis le
+Lot 11, elles sont **surtout** des surcharges d'environnement qui **verrouillent**
+le champ ; en déploiement normal, préférez `/config` :
 
 ```
 YUKI_LLM_LIGHT_API=openai-completions
@@ -54,21 +62,19 @@ YUKI_LLM_HEAVY_THINKING=high
 > `@earendil-works/pi-coding-agent` et dans son `dist/core/resolve-config-value.*`) :
 > seuls `apiKey` et `headers` acceptent l'interpolation `$VAR` / `${VAR}` /
 > `!command`. `baseUrl`, `api` et l'identifiant de modèle N'ACCEPTENT PAS
-> l'interpolation dans `models.json`.** Ces champs restent donc littéraux dans
-> **`config/pi/models.json`** (seedé sur le volume) :
+> l'interpolation dans `models.json`.** Ces champs sont écrits **littéralement**
+> par le générateur (`buildModelsConfigFrom`) dans `models.json` :
 >
-> - **`config/pi/models.json` est LE seul fichier à éditer pour changer de
->   fournisseur** (`baseUrl`, `api`, identifiant de modèle). Le seed est
->   **copie-si-absent** (jamais écrasé) : après édition du fichier sur le volume,
->   ou suppression + redémarrage pour re-seeder, le nouveau fournisseur prend
->   effet sans rebuild du code.
-> - La **clé** reste **hors du volume** (uniquement en variable d'environnement,
->   référencée par `models.json` via `$YUKI_LLM_<ROLE>_API_KEY`).
-> - `YUKI_LLM_<ROLE>_{API,BASE_URL}` sont malgré tout propagées au domaine
->   `llm/` (surcharge effective — voir `tests/llm/config.test.ts`) ;
->   `YUKI_LLM_<ROLE>_{MODEL,THINKING}` surchargent la référence de modèle et le
->   niveau de thinking utilisés à l'exécution (l'identifiant doit exister dans
->   `models.json`).
+> - **`/config` est LE moyen de changer de fournisseur** (groupe « LLM léger » /
+>   « LLM lourd »). Le fichier `models.json` est **GÉNÉRÉ** à chaque démarrage
+>   (écriture atomique) : l'éditer à la main est inutile.
+> - La **clé** reste **hors du volume** : store `0600` (`/data/state/config.json`)
+>   et/ou variable d'environnement, référencée par `models.json` via
+>   `$YUKI_LLM_<ROLE>_API_KEY` (pont `process.env`, appliqué **à chaud**).
+> - `YUKI_LLM_<ROLE>_{API,BASE_URL,MODEL,THINKING}` restent lues comme **surcharges
+>   d'environnement** (elles verrouillent le champ correspondant).
+> - L'**import unique** au premier démarrage récupère `baseUrl`/`api`/modèle d'un
+>   `models.json` existant si le store est vide (voir `docs/lot11.md`).
 
 ## Domaines (`src/`)
 

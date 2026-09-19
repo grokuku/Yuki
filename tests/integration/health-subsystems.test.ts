@@ -27,7 +27,15 @@ const detection = detectGpus({
   commandFromEnv: env.gpuCmdFromEnv,
   cwd: process.cwd(),
 });
-const gate = runGate({ env, profiles, manifest, detection }, logger);
+const gate = runGate(
+  {
+    config: { compatMode: "strict" as const, profile: null, minDriver: 580 },
+    profiles,
+    manifest,
+    detection,
+  },
+  logger,
+);
 
 const servers: Array<ReturnType<typeof createServer>> = [];
 

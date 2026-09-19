@@ -89,6 +89,15 @@ body {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+a.pill {
+  text-decoration: none;
+}
+
+a.pill:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
 .conversation {
   flex: 1;
   overflow-y: auto;

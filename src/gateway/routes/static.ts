@@ -72,6 +72,8 @@ export function resolveStaticRequest(
   let relative: string;
   if (pathname === "/" || pathname === "/index.html") {
     relative = "index.html";
+  } else if (pathname === "/config" || pathname === "/config.html") {
+    relative = "config.html";
   } else if (pathname.startsWith("/ui/")) {
     relative = pathname.slice("/ui/".length);
   } else {

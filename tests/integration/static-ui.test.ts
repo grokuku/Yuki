@@ -20,7 +20,15 @@ const detection = detectGpus({
   commandFromEnv: env.gpuCmdFromEnv,
   cwd: process.cwd(),
 });
-const gate = runGate({ env, profiles, manifest, detection }, logger);
+const gate = runGate(
+  {
+    config: { compatMode: "strict" as const, profile: null, minDriver: 580 },
+    profiles,
+    manifest,
+    detection,
+  },
+  logger,
+);
 
 const server = createServer({
   env,
@@ -62,6 +70,28 @@ describe("UI statique servie par le gateway", () => {
     expect(app.headers.get("content-type")).toContain("javascript");
 
     const css = await fetch(`${baseUrl}/ui/styles.css`);
+    expect(css.status).toBe(200);
+    expect(css.headers.get("content-type")).toContain("text/css");
+  });
+
+  it("GET /config sert la page de configuration avec des en-têtes sûrs", async () => {
+    const response = await fetch(`${baseUrl}/config`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    const body = await response.text();
+    expect(body).toContain("Configuration");
+    expect(body).toContain("/ui/config.js");
+  });
+
+  it("GET /ui/config.js et /ui/config.css servent les assets de configuration", async () => {
+    const js = await fetch(`${baseUrl}/ui/config.js`);
+    expect(js.status).toBe(200);
+    expect(js.headers.get("content-type")).toContain("javascript");
+
+    const css = await fetch(`${baseUrl}/ui/config.css`);
     expect(css.status).toBe(200);
     expect(css.headers.get("content-type")).toContain("text/css");
   });

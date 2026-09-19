@@ -7,8 +7,10 @@
  *   ACTIVÉ. Sur un endpoint OpenAI, `think:false` est ignoré : c'est
  *   `reasoning_effort: "none"` qui coupe le thinking, d'où le `thinkingLevelMap`.
  *
- * `buildModelsConfig()` est la source unique (testée contre
- * `config/pi/models.json`) : le fichier embarqué ne peut pas dériver du code.
+ * `buildModelsConfigFrom(configEffective)` est la source unique du contenu de
+ * `config/pi/models.json` (testée contre le fichier livré) : le fichier embarqué
+ * ne peut pas dériver du code. Le fichier est désormais GÉNÉRÉ au démarrage
+ * depuis la config effective (Lot 11), plus seedé par copie-si-absent.
  */
 
 import {
@@ -17,6 +19,7 @@ import {
   LLM_ENV,
   PROVIDERS,
   readEnvString,
+  type LlmApi,
   type LlmRole,
   type ProviderSpec,
 } from "./providers.js";
@@ -104,6 +107,64 @@ export function modelForRole(role: LlmRole): ModelSpec {
   return MODELS[role];
 }
 
+/** Valeurs effectives d'un rôle (store + env), sans secret. */
+export interface EffectiveLlmRole {
+  api: string;
+  baseUrl: string;
+  model: string;
+  thinking: ThinkingLevelName;
+}
+
+export type EffectiveLlmConfig = Readonly<Record<LlmRole, EffectiveLlmRole>>;
+
+/** Configuration effective par défaut (alignée sur `config/pi/models.json`). */
+export const DEFAULT_EFFECTIVE_LLM_CONFIG: EffectiveLlmConfig = {
+  light: {
+    api: LIGHT_PROVIDER.api,
+    baseUrl: LIGHT_PROVIDER.baseUrl,
+    model: LIGHT_MODEL.id,
+    thinking: LIGHT_MODEL.defaultThinking,
+  },
+  heavy: {
+    api: HEAVY_PROVIDER.api,
+    baseUrl: HEAVY_PROVIDER.baseUrl,
+    model: HEAVY_MODEL.id,
+    thinking: HEAVY_MODEL.defaultThinking,
+  },
+};
+
+/** Providers effectifs dérivés d'une config effective (données pures). */
+export function resolveProvidersFrom(
+  config: EffectiveLlmConfig,
+): Record<LlmRole, ProviderSpec> {
+  const build = (role: LlmRole, base: ProviderSpec): ProviderSpec => ({
+    ...base,
+    api: config[role].api as LlmApi,
+    baseUrl: config[role].baseUrl,
+  });
+  return {
+    light: build("light", LIGHT_PROVIDER),
+    heavy: build("heavy", HEAVY_PROVIDER),
+  };
+}
+
+/** Modèles effectifs dérivés d'une config effective (données pures). */
+export function resolveModelsFrom(
+  config: EffectiveLlmConfig,
+): Record<LlmRole, ModelSpec> {
+  const build = (role: LlmRole, base: ModelSpec, providerId: string): ModelSpec => ({
+    ...base,
+    providerId,
+    id: config[role].model,
+    defaultThinking: config[role].thinking,
+    reference: `${providerId}/${config[role].model}`,
+  });
+  return {
+    light: build("light", LIGHT_MODEL, LIGHT_PROVIDER.id),
+    heavy: build("heavy", HEAVY_MODEL, HEAVY_PROVIDER.id),
+  };
+}
+
 const THINKING_LEVELS: readonly ThinkingLevelName[] = [
   "off",
   "minimal",
@@ -189,17 +250,19 @@ function toModelConfig(model: ModelSpec): ModelsConfigModel {
 }
 
 /**
- * Construit le contenu de `config/pi/models.json`. Aucune clé en clair : les
- * `apiKey` ne sont que des références d'environnement.
+ * Construit le contenu de `config/pi/models.json` depuis une config effective.
+ * AUCUNE clé en clair : les `apiKey` ne sont que des références d'environnement
+ * (`$YUKI_LLM_<ROLE>_API_KEY`), résolues par le SDK via `process.env`.
  */
-export function buildModelsConfig(): ModelsConfig {
+export function buildModelsConfigFrom(config: EffectiveLlmConfig): ModelsConfig {
   const provider = (
-    spec: typeof LIGHT_PROVIDER,
+    spec: ProviderSpec,
     model: ModelSpec,
+    effective: EffectiveLlmRole,
   ): ModelsConfigProvider => ({
     name: spec.name,
-    baseUrl: spec.baseUrl,
-    api: spec.api,
+    baseUrl: effective.baseUrl,
+    api: effective.api,
     apiKey: `$${spec.keyEnv}`,
     // Le fournisseur compatible OpenAI ne comprend pas toujours le rôle
     // `developer` utilisé par le SDK pour les modèles à raisonnement.
@@ -208,8 +271,21 @@ export function buildModelsConfig(): ModelsConfig {
   });
   return {
     providers: {
-      [LIGHT_PROVIDER.id]: provider(LIGHT_PROVIDER, LIGHT_MODEL),
-      [HEAVY_PROVIDER.id]: provider(HEAVY_PROVIDER, HEAVY_MODEL),
+      [LIGHT_PROVIDER.id]: provider(
+        LIGHT_PROVIDER,
+        resolveModelsFrom(config).light,
+        config.light,
+      ),
+      [HEAVY_PROVIDER.id]: provider(
+        HEAVY_PROVIDER,
+        resolveModelsFrom(config).heavy,
+        config.heavy,
+      ),
     },
   };
+}
+
+/** Contenu par défaut de `config/pi/models.json` (testé contre le fichier livré). */
+export function buildModelsConfig(): ModelsConfig {
+  return buildModelsConfigFrom(DEFAULT_EFFECTIVE_LLM_CONFIG);
 }

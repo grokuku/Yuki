@@ -16,10 +16,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createDelegationService } from "../../src/delegation/index.js";
 import { JobQueue, JobStore } from "../../src/jobs/index.js";
-import { HEAVY_MODEL, LIGHT_MODEL, toolAllowlist } from "../../src/llm/index.js";
+import { HEAVY_MODEL, LIGHT_MODEL, buildModelsConfig, toolAllowlist } from "../../src/llm/index.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { createPiHost, createSdkHeavyWorker } from "../../src/pi/index.js";
-import { resolvePiPaths, seedModelsFile, seedSettingsFile } from "../../src/pi/config.js";
+import { resolvePiPaths, seedSettingsFile, writeModelsFile } from "../../src/pi/config.js";
 
 const ENABLED =
   process.env["YUKI_TEST_REAL_LLM"] === "1" &&
@@ -56,10 +56,9 @@ describe.skipIf(!ENABLED)("LLM réel (opt-in)", () => {
       home: dirs.home,
       sessionsDir: dirs.sessionsDir,
       settingsSeedPath: "config/pi/settings.json",
-      modelsSeedPath: "config/pi/models.json",
     });
     seedSettingsFile(paths, logger);
-    seedModelsFile(paths, logger);
+    writeModelsFile(paths, buildModelsConfig(), logger);
 
     const heavy = createSdkHeavyWorker({
       cwd: paths.cwd,
@@ -125,7 +124,7 @@ describe.skipIf(!ENABLED)("LLM réel (opt-in)", () => {
       sessionsDir: dirs.sessionsDir,
       systemPrompt: readFileSync("config/pi/system-prompt.md", "utf8"),
       settingsSeedPath: "config/pi/settings.json",
-      modelsSeedPath: "config/pi/models.json",
+      modelsConfig: buildModelsConfig(),
       model: LIGHT_MODEL.reference,
       thinking: "off",
       tools: toolAllowlist("light"),

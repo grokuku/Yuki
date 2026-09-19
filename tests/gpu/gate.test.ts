@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { type Env, loadEnv } from "../../src/config/env.js";
+import { type CompatMode, type Env, loadEnv } from "../../src/config/env.js";
 import { detectGpus } from "../../src/gpu/detect.js";
-import { runGate, type GateResult } from "../../src/gpu/gate.js";
+import { runGate, type GateCompatConfig, type GateResult } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
 
@@ -14,6 +14,18 @@ function buildEnv(overrides: Record<string, string>, fixture: string): Env {
     YUKI_GPU_FIXTURE: `tests/fixtures/gpu/${fixture}`,
     ...overrides,
   });
+}
+
+/** Reproduit la résolution env → config de porte (store vide). */
+function gateConfig(overrides: Record<string, string>): GateCompatConfig {
+  const mode = overrides.YUKI_COMPAT_MODE;
+  const profile = overrides.YUKI_PROFILE;
+  const minDriver = overrides.YUKI_MIN_DRIVER;
+  return {
+    compatMode: (mode === "auto-degrade" ? "auto-degrade" : "strict") as CompatMode,
+    profile: profile && profile.trim() !== "" ? profile : null,
+    minDriver: minDriver ? Number.parseInt(minDriver, 10) : 580,
+  };
 }
 
 function run(overrides: Record<string, string>, fixture: string): {
@@ -33,7 +45,13 @@ function run(overrides: Record<string, string>, fixture: string): {
     commandFromEnv: env.gpuCmdFromEnv,
     cwd: process.cwd(),
   });
-  return { result: runGate({ env, profiles, manifest, detection }, logger), lines };
+  return {
+    result: runGate(
+      { config: gateConfig(overrides), profiles, manifest, detection },
+      logger,
+    ),
+    lines,
+  };
 }
 
 function parsed(lines: string[]): Array<Record<string, unknown>> {

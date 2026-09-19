@@ -1,9 +1,10 @@
 /**
  * Application HTTP — `node:http` natif, zéro framework.
  *
- * Sert les routes de santé/version, l'UI statique de `public/ui`, et rien
- * d'autre. Le transport temps réel (WebSocket) n'est PAS géré ici : il est
- * branché via le hook `upgrade` du serveur HTTP.
+ * Sert les routes de santé/version, l'API de configuration (`/api/config`,
+ * Lot 11), l'UI statique de `public/ui`, et rien d'autre. Le transport temps
+ * réel (WebSocket) n'est PAS géré ici : il est branché via le hook `upgrade` du
+ * serveur HTTP.
  */
 
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
@@ -12,6 +13,12 @@ import { resolve } from "node:path";
 import type { Env } from "../config/env.js";
 import type { MountStatus } from "../config/paths.js";
 import type { GpuReport } from "../types/gpu.js";
+import {
+  handleConfigRequest,
+  isConfigPath,
+  MAX_CONFIG_BODY_BYTES,
+  type ConfigApiDeps,
+} from "./routes/config.js";
 import {
   healthFull,
   healthLive,
@@ -31,6 +38,8 @@ export interface AppContext {
   publicDir?: string;
   /** Fournisseur de l'état des sous-systèmes (Pi, transport). */
   getSubsystems?: () => SubsystemsSnapshot;
+  /** API de configuration (Lot 11). Absente ⇒ `/api/config` → 404. */
+  config?: ConfigApiDeps;
 }
 
 interface RouteResponse {
@@ -80,6 +89,52 @@ function writeResponse(
   }
 }
 
+/** Lit le corps d'une requête (borné). Rejette au-delà de la limite. */
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_CONFIG_BODY_BYTES) {
+        reject(new Error("body_too_large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/** Traite une requête de configuration (asynchrone : lecture du corps). */
+async function handleConfigHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: ConfigApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "PUT" || method === "POST") {
+    body = await readBody(req).catch(() => "");
+  }
+  const response = await handleConfigRequest({
+    method,
+    path,
+    headers: req.headers,
+    body,
+    deps,
+  });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Construit l'écouteur HTTP de l'application. */
 export function createApp(context: AppContext): RequestListener {
   const {
@@ -90,12 +145,34 @@ export function createApp(context: AppContext): RequestListener {
     volumes,
     publicDir = resolve(process.cwd(), "public", "ui"),
     getSubsystems,
+    config,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
     const path = normalizePath(req.url);
     const method = (req.method ?? "GET").toUpperCase();
     const headOnly = method === "HEAD";
+
+    if (config && isConfigPath(path)) {
+      void handleConfigHttp(req, res, path, method, headOnly, config).catch(
+        (error: unknown) => {
+          config.logger.error("config.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
 
     if (method !== "GET" && method !== "HEAD") {
       writeResponse(

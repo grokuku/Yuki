@@ -48,9 +48,6 @@ services:
       # Fixture nvidia-smi montée ci-dessous : la porte de compatibilité est
       # franchie à partir d'une sortie simulée, sans GPU.
       YUKI_GPU_FIXTURE: /fixtures/gpu.txt
-      # Profil forcé déterministe (la fixture RTX 4070 12 Go satisfait `confort`).
-      YUKI_PROFILE: confort
-      YUKI_COMPAT_MODE: strict
 
     volumes:
       # Fixture injectée en lecture seule (en plus des 4 volumes nommés hérités

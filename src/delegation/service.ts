@@ -87,7 +87,8 @@ export interface DelegationServiceOptions {
   idleTimeoutMs: number;
   totalTimeoutMs: number;
   inlineMaxBytes?: number;
-  defaultDeadlineMs?: number;
+  /** Valeur (ou fournisseur) de la deadline par défaut. Lue en direct si fonction. */
+  defaultDeadlineMs?: number | (() => number);
   now?: () => number;
   idFactory?: () => string;
 }
@@ -107,7 +108,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   private readonly idleTimeoutMs: number;
   private readonly totalTimeoutMs: number;
   private readonly inlineMaxBytes: number;
-  private readonly defaultDeadlineMs: number;
+  private readonly defaultDeadlineMs: number | (() => number);
   private readonly now: () => number;
   private readonly idFactory: () => string;
 
@@ -163,11 +164,18 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     return this.store.get(jobId);
   }
 
+  /** Résout la deadline par défaut (valeur figée ou fournisseur à chaud). */
+  private resolveDefaultDeadline(): number {
+    return typeof this.defaultDeadlineMs === "function"
+      ? this.defaultDeadlineMs()
+      : this.defaultDeadlineMs;
+  }
+
   async delegate(request: DelegateRequest): Promise<DelegateOutcome> {
     const sessionId = request.lightSessionId;
     const runId = request.parentRunId ?? "";
     const deadlineMs = clampDeadline(
-      request.deadlineMs ?? this.defaultDeadlineMs,
+      request.deadlineMs ?? this.resolveDefaultDeadline(),
     );
     const t0 = this.now();
 

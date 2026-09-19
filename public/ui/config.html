@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Yuki — Configuration</title>
+    <link rel="stylesheet" href="/ui/styles.css" />
+    <link rel="stylesheet" href="/ui/config.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><a class="brand__link" href="/">Yuki</a> — Configuration</div>
+      <div class="status">
+        <span id="ready" class="pill pill--offline">vérification…</span>
+        <span id="light-key" class="pill">clé légère ?</span>
+        <span id="heavy-key" class="pill">clé lourde ?</span>
+      </div>
+    </header>
+
+    <main class="config">
+      <p class="config-intro">
+        Ces valeurs sont enregistrées sur le serveur. Un champ avec
+        <span class="badge badge--hot">à chaud</span> s'applique immédiatement ;
+        un champ <span class="badge badge--restart">redémarrage</span> prend
+        effet au prochain redémarrage du gateway. Les clés ne sont
+        <strong>jamais</strong> réaffichées en clair.
+      </p>
+
+      <p id="availability" class="config-banner config-banner--warn" hidden></p>
+
+      <div id="groups"></div>
+
+      <div class="config-actions">
+        <button id="save" class="button" type="button">Enregistrer</button>
+        <span id="save-status" class="config-save-status" role="status"></span>
+      </div>
+
+      <p id="global-error" class="config-error" hidden></p>
+
+      <section id="applied" class="config-applied" hidden>
+        <h2>Résultat de l'enregistrement</h2>
+        <div>
+          <strong>Appliqué sans redémarrage :</strong>
+          <span id="applied-hot">—</span>
+        </div>
+        <div>
+          <strong>Prendra effet au prochain redémarrage :</strong>
+          <span id="applied-restart">—</span>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/ui/config.js"></script>
+  </body>
+</html>

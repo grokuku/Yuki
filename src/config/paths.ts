@@ -26,6 +26,20 @@ export interface MountStatus extends MountPoint {
   writable: boolean | null;
 }
 
+/**
+ * Résout le chemin du store de configuration.
+ *
+ * Par défaut sur le volume `state` (`/data/state/config.json`), surchargeable
+ * par la variable de CÂBLAGE `YUKI_CONFIG_STORE_PATH`.
+ */
+export function resolveConfigStorePath(
+  stateDir: string,
+  override?: string,
+): string {
+  const trimmed = override?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : `${stateDir}/config.json`;
+}
+
 /** Définit les quatre points de montage (volumes nommés), dans un ordre stable. */
 export function mountPoints(env: Env): MountPoint[] {
   return [

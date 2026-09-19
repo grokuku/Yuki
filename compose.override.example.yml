@@ -14,8 +14,12 @@ services:
     environment:
       # Verbeux en développement local.
       YUKI_LOG_LEVEL: debug
-      # Ne jamais bloquer une machine de dev : dégrade au lieu de refuser.
-      YUKI_COMPAT_MODE: auto-degrade
+      # ⚠️ Depuis le Lot 11, la politique de compatibilité GPU (`compatMode`,
+      # `profile`, `minDriver`) se configure dans la page `/config` et non via
+      # l'environnement. Définir `YUKI_COMPAT_MODE` ici VERROUILLE le champ
+      # (badge « Verrouillé par l'environnement ») et rend le PUT refusé.
+      # Pour dégrader sans bloquer une machine de dev, préférez `/config`.
+      # YUKI_COMPAT_MODE: auto-degrade
 
     # Épingler une carte précise plutôt que toutes.
     deploy:

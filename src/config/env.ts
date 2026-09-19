@@ -1,29 +1,24 @@
 /**
- * Lecture et validation STRICTE de l'environnement.
+ * Lecture et validation STRICTE de l'environnement (CÂBLAGE uniquement).
  *
- * Toute valeur présente mais invalide (entier attendu, énumération inconnue,
- * port hors bornes) lève une `EnvError` explicite AVANT toute autre action.
- * Le catalogue complet des variables est documenté dans `.env.example`.
+ * Depuis le Lot 11, `Env` ne porte QUE le **câblage** (ports, chemins, identité,
+ * montages, sources GPU, chemins Pi/jobs/store). Les champs configurables depuis
+ * la page web (LLM, délégation, GPU, prompts, transport) vivent dans le
+ * **store** (`src/config/store.ts`) et sont exposés par le runtime
+ * (`src/config/runtime.ts`). Leur éventuelle **surcharge par l'environnement**
+ * est lue via `readConfigEnvOverrides` (table unique `schema.ts`).
+ *
+ * Toute valeur présente mais invalide lève une `EnvError` explicite AVANT toute
+ * autre action. Le catalogue complet des variables est documenté dans
+ * `docs/lot11.md`.
  */
 
 import type { LogLevel } from "../observability/logger.js";
+import { resolveConfigStorePath } from "./paths.js";
+import { CONFIG_SCHEMA } from "./schema.js";
 
-export type CompatMode = "strict" | "auto-degrade";
-
-/** Politique en cas de clé LLM manquante (aligné sur `src/llm/availability`). */
-export type LlmMissingKeyMode = "degrade" | "refuse";
-
-/** Niveaux de raisonnement acceptés (alignés sur le SDK Pi). */
-export const THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+export type { CompatMode, LlmMissingKeyMode, ThinkingLevel } from "./schema.js";
+export { THINKING_LEVELS } from "./schema.js";
 
 export interface MountPoints {
   pi: string;
@@ -38,16 +33,18 @@ export interface Env {
   logLevel: LogLevel;
   gatewayHost: string;
   gatewayPort: number;
-  compatMode: CompatMode;
-  profile: string | null;
-  gpuCmd: string;
-  gpuCmdFromEnv: boolean;
-  gpuFixture: string | null;
-  minDriver: number;
   uid: number;
   gid: number;
   configDir: string;
+  /** Fichier JSON du store de configuration (volume `state`). */
+  configStorePath: string;
   mountPoints: MountPoints;
+  // --- Détection GPU (câblage) ---
+  gpuCmd: string;
+  gpuCmdFromEnv: boolean;
+  gpuFixture: string | null;
+  // --- Journal des jobs ---
+  jobsStorePath: string;
   // --- Domaine Pi embarqué (Lot 1) ---
   piAgentDir: string;
   piSessionsDir: string;
@@ -57,20 +54,6 @@ export interface Env {
   piSettingsSeedPath: string;
   /** Prompt système dédié au worker lourd. */
   piHeavySystemPromptPath: string;
-  /** Seed de `models.json` (providers/modèles neutres `llm-light`/`llm-heavy`). */
-  piModelsSeedPath: string;
-  piModel: string | null;
-  piThinking: ThinkingLevel | null;
-  // --- Multi-LLM & jobs (Lot 2) ---
-  llmMissingKeyMode: LlmMissingKeyMode;
-  jobsStorePath: string;
-  heavyMaxConcurrent: number;
-  heavyMaxQueue: number;
-  heavyIdleTimeoutMs: number;
-  heavyTotalTimeoutMs: number;
-  // --- Transport temps réel (Lot 1) ---
-  wsReplayBuffer: number;
-  wsReplayBytes: number;
 }
 
 export class EnvError extends Error {
@@ -90,13 +73,6 @@ function getString(
   fallback: string,
 ): string {
   return readTrimmed(env, name) ?? fallback;
-}
-
-function getOptionalString(
-  env: NodeJS.ProcessEnv,
-  name: string,
-): string | null {
-  return readTrimmed(env, name) ?? null;
 }
 
 function getInt(
@@ -139,45 +115,28 @@ function getLogLevel(env: NodeJS.ProcessEnv): LogLevel {
   return raw as LogLevel;
 }
 
-function getCompatMode(env: NodeJS.ProcessEnv): CompatMode {
-  const raw = readTrimmed(env, "YUKI_COMPAT_MODE");
-  if (raw === undefined) return "strict";
-  if (raw !== "strict" && raw !== "auto-degrade") {
-    throw new EnvError(
-      `Variable YUKI_COMPAT_MODE invalide : attendu "strict" ou "auto-degrade", reçu ${JSON.stringify(raw)}`,
-    );
+/**
+ * Surcharges d'environnement des champs du store : ne retient que les variables
+ * explicitement définies ET non vides (une variable vide n'est pas une
+ * surcharge). La validation des valeurs est faite par le runtime (table unique).
+ */
+export function readConfigEnvOverrides(
+  processEnv: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [path, descriptor] of Object.entries(CONFIG_SCHEMA)) {
+    if (!descriptor.env) continue;
+    const raw = processEnv[descriptor.env];
+    if (typeof raw === "string" && raw.trim() !== "") {
+      out[path] = raw;
+    }
   }
-  return raw;
-}
-
-function getThinkingLevel(env: NodeJS.ProcessEnv): ThinkingLevel | null {
-  const raw = readTrimmed(env, "YUKI_PI_THINKING");
-  if (raw === undefined) return null;
-  if (!(THINKING_LEVELS as readonly string[]).includes(raw)) {
-    throw new EnvError(
-      `Variable YUKI_PI_THINKING invalide : attendu ${THINKING_LEVELS.join(" | ")}, reçu ${JSON.stringify(raw)}`,
-    );
-  }
-  return raw as ThinkingLevel;
-}
-
-function getLlmMissingKeyMode(env: NodeJS.ProcessEnv): LlmMissingKeyMode {
-  const raw = readTrimmed(env, "YUKI_LLM_MISSING_KEY_MODE");
-  if (raw === undefined) return "degrade";
-  if (raw !== "degrade" && raw !== "refuse") {
-    throw new EnvError(
-      `Variable YUKI_LLM_MISSING_KEY_MODE invalide : attendu "degrade" ou "refuse", reçu ${JSON.stringify(raw)}`,
-    );
-  }
-  return raw;
+  return out;
 }
 
 /**
- * Charge et valide l'environnement.
- *
- * Aucune variable n'est *requise* au Lot 0 : toutes disposent d'un défaut
- * sûr. Le mécanisme d'exigence (`required`) est néanmoins prêt pour les lots
- * futurs (clés d'API, etc.).
+ * Charge et valide le câblage. Aucune variable n'est *requise* : toutes
+ * disposent d'un défaut sûr.
  */
 export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
   const configDir = getString(env, "YUKI_CONFIG_DIR", "./config");
@@ -198,16 +157,22 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
     logLevel: getLogLevel(env),
     gatewayHost: getString(env, "YUKI_GATEWAY_HOST", "0.0.0.0"),
     gatewayPort: getInt(env, "YUKI_GATEWAY_PORT", 8080, { min: 1, max: 65535 }),
-    compatMode: getCompatMode(env),
-    profile: getOptionalString(env, "YUKI_PROFILE"),
-    gpuCmd: getString(env, "YUKI_GPU_CMD", "nvidia-smi"),
-    gpuCmdFromEnv: readTrimmed(env, "YUKI_GPU_CMD") !== undefined,
-    gpuFixture: getOptionalString(env, "YUKI_GPU_FIXTURE"),
-    minDriver: getInt(env, "YUKI_MIN_DRIVER", 580, { min: 1 }),
     uid: getInt(env, "YUKI_UID", 1000, { min: 0 }),
     gid: getInt(env, "YUKI_GID", 1000, { min: 0 }),
     configDir,
+    configStorePath: resolveConfigStorePath(
+      mountPoints.state,
+      readTrimmed(env, "YUKI_CONFIG_STORE_PATH"),
+    ),
     mountPoints,
+    gpuCmd: getString(env, "YUKI_GPU_CMD", "nvidia-smi"),
+    gpuCmdFromEnv: readTrimmed(env, "YUKI_GPU_CMD") !== undefined,
+    gpuFixture: readTrimmed(env, "YUKI_GPU_FIXTURE") ?? null,
+    jobsStorePath: getString(
+      env,
+      "YUKI_JOBS_STORE_PATH",
+      `${mountPoints.state}/jobs.jsonl`,
+    ),
     piAgentDir,
     piSessionsDir: getString(
       env,
@@ -226,33 +191,10 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       "YUKI_PI_SETTINGS_SEED",
       `${configDir}/pi/settings.json`,
     ),
-    piModelsSeedPath: getString(
-      env,
-      "YUKI_PI_MODELS_SEED",
-      `${configDir}/pi/models.json`,
-    ),
     piHeavySystemPromptPath: getString(
       env,
       "YUKI_PI_HEAVY_SYSTEM_PROMPT",
       `${configDir}/pi/system-prompt-heavy.md`,
     ),
-    piModel: getOptionalString(env, "YUKI_PI_MODEL"),
-    piThinking: getThinkingLevel(env),
-    llmMissingKeyMode: getLlmMissingKeyMode(env),
-    jobsStorePath: getString(
-      env,
-      "YUKI_JOBS_STORE_PATH",
-      `${mountPoints.state}/jobs.jsonl`,
-    ),
-    heavyMaxConcurrent: getInt(env, "YUKI_HEAVY_MAX_CONCURRENT", 3, { min: 1 }),
-    heavyMaxQueue: getInt(env, "YUKI_HEAVY_MAX_QUEUE", 10, { min: 0 }),
-    heavyIdleTimeoutMs: getInt(env, "YUKI_HEAVY_IDLE_TIMEOUT_MS", 120_000, {
-      min: 1,
-    }),
-    heavyTotalTimeoutMs: getInt(env, "YUKI_HEAVY_TOTAL_TIMEOUT_MS", 1_200_000, {
-      min: 1,
-    }),
-    wsReplayBuffer: getInt(env, "YUKI_WS_REPLAY_BUFFER", 1000, { min: 1 }),
-    wsReplayBytes: getInt(env, "YUKI_WS_REPLAY_BYTES", 5_000_000, { min: 1 }),
   };
 }

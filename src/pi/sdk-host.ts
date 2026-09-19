@@ -28,8 +28,8 @@ import {
   applyPiEnvironment,
   ensurePiLayout,
   resolvePiPaths,
-  seedModelsFile,
   seedSettingsFile,
+  writeModelsFile,
   type PiPaths,
 } from "./config.js";
 import {
@@ -148,7 +148,10 @@ function makeRunItem(
  */
 export function createSdkPiHost(options: PiHostOptions): PiHost {
   const logger = options.logger;
-  const llmAvailable = options.llmAvailable ?? true;
+  const llmAvailable =
+    typeof options.llmAvailable === "function"
+      ? options.llmAvailable
+      : () => options.llmAvailable ?? true;
   const paths: PiPaths = resolvePiPaths({
     agentDir: options.agentDir,
     cwd: options.cwd,
@@ -157,7 +160,6 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     ...(options.settingsSeedPath
       ? { settingsSeedPath: options.settingsSeedPath }
       : {}),
-    ...(options.modelsSeedPath ? { modelsSeedPath: options.modelsSeedPath } : {}),
   });
 
   const sessions = new Map<string, SessionRecord>();
@@ -450,7 +452,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     restoreEnv = applyPiEnvironment(paths);
     ensurePiLayout(paths);
     seedSettingsFile(paths, logger);
-    seedModelsFile(paths, logger);
+    if (options.modelsConfig !== undefined) {
+      writeModelsFile(paths, options.modelsConfig, logger);
+    }
 
     settingsManager = SettingsManager.create(paths.cwd, paths.agentDir);
     modelRuntime = await getSharedModelRuntime({
@@ -519,7 +523,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       model: options.model ?? null,
       tools: options.tools ? [...options.tools] : null,
       delegation: Boolean(options.delegation),
-      llm_available: llmAvailable,
+      llm_available: llmAvailable(),
     });
   }
 
@@ -631,7 +635,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           { sessionId },
         );
       }
-      if (!llmAvailable) {
+      if (!llmAvailable()) {
         throw new PiHostError(
           "LLM_UNAVAILABLE",
           "Aucun LLM léger configuré : la clé correspondante est absente.",

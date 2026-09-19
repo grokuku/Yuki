@@ -9,12 +9,12 @@
  *    tâches d'arrière-plan.
  *
  * Le nommage est NEUTRE : changer de fournisseur ne doit pas toucher au code.
- * Les seuls endroits à éditer sont :
- *  - `config/pi/models.json` (seedé sur le volume) pour `baseUrl`, `api` et
- *    l'identifiant de modèle — le SDK n'interpole PAS `$VAR` pour ces champs
- *    (seuls `apiKey`/`headers` le sont) ;
- *  - les variables d'environnement `YUKI_LLM_LIGHT_*` / `YUKI_LLM_HEAVY_*`,
- *    dont la clé, référencée par `models.json` via `$…_API_KEY`.
+ * Depuis le Lot 11, tout se règle dans la page `/config` :
+ *  - `baseUrl`, `api` et l'identifiant de modèle sont GÉNÉRÉS dans
+ *    `models.json` au démarrage (`buildModelsConfigFrom`, écriture atomique) —
+ *    le SDK n'interpole PAS `$VAR` pour ces champs ;
+ *  - la clé, référencée par `models.json` via `$…_API_KEY`, vit dans le store
+ *    (`0600`) et/ou l'environnement (`YUKI_LLM_<ROLE>_API_KEY`).
  *
  * Les valeurs par défaut restent spécifiques au fournisseur actuel : ce sont des
  * DONNÉES (endpoint, identifiants de modèle), pas des identifiants de code.

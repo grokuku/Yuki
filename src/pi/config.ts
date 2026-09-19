@@ -7,6 +7,8 @@
  *    read-only (garde-fou explicite, échec bruyant) ;
  *  - seeder `settings.json` sur le volume au premier démarrage, puis ne plus
  *    jamais l'écraser ;
+ *  - écrire `models.json` de façon atomique depuis la configuration effective
+ *    (généré au démarrage — plus de seed copie-si-absent depuis le Lot 11) ;
  *  - positionner les variables d'environnement reconnues par le SDK
  *    (`PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_OFFLINE`,
  *    `PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY`) et un `HOME` inscriptible.
@@ -21,7 +23,9 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  renameSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -34,7 +38,6 @@ export interface PiConfigInput {
   home: string;
   sessionsDir?: string;
   settingsSeedPath?: string;
-  modelsSeedPath?: string;
 }
 
 export interface PiPaths {
@@ -48,8 +51,6 @@ export interface PiPaths {
   settingsSeedPath?: string;
   /** Fichier de modèles/config providers (dans agentDir). */
   modelsPath: string;
-  /** Source de seed de `models.json` (dans l'image, lecture seule). */
-  modelsSeedPath?: string;
 }
 
 function absolute(path: string, base: string): string {
@@ -74,9 +75,6 @@ export function resolvePiPaths(
       ? { settingsSeedPath: absolute(input.settingsSeedPath, base) }
       : {}),
     modelsPath: join(agentDir, "models.json"),
-    ...(input.modelsSeedPath
-      ? { modelsSeedPath: absolute(input.modelsSeedPath, base) }
-      : {}),
   };
 }
 
@@ -170,21 +168,31 @@ export function seedSettingsFile(
 }
 
 /**
- * Seed `models.json` (providers/modèles neutres, `llm-light` / `llm-heavy`) si
- * absent. Copie-si-absent, JAMAIS d'écrasement : un `models.json` édité sur le
- * volume fait foi.
+ * Écrit `models.json` de façon **atomique** (`tmp` + `rename`), TOUJOURS
+ * réécrit. Depuis le Lot 11, ce fichier est **généré** depuis la configuration
+ * effective : plus aucun seed copie-si-absent (qui obligeait à éditer un
+ * fichier dans un volume pour changer de fournisseur).
+ *
+ * Les clés n'y figurent JAMAIS : seules des références `$YUKI_LLM_*_API_KEY`.
  */
-export function seedModelsFile(
+export function writeModelsFile(
   paths: PiPaths,
+  modelsConfig: unknown,
   logger?: PiLogger,
-): SeedResult {
-  return seedCopyIfAbsent(
-    paths.modelsPath,
-    paths.modelsSeedPath,
-    "les modèles Pi",
-    "pi.models.seeded",
-    logger,
-  );
+): void {
+  try {
+    mkdirSync(dirname(paths.modelsPath), { recursive: true });
+    const tmp = `${paths.modelsPath}.tmp-${process.pid}`;
+    writeFileSync(tmp, `${JSON.stringify(modelsConfig, null, 2)}\n`, "utf8");
+    renameSync(tmp, paths.modelsPath);
+  } catch (error) {
+    throw new PiHostError(
+      "PI_RESOURCE_ERROR",
+      `Impossible d'écrire models.json vers ${paths.modelsPath}.`,
+      { cause: error },
+    );
+  }
+  logger?.info("pi.models.written", { path: paths.modelsPath });
 }
 
 /**

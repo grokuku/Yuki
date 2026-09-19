@@ -94,6 +94,18 @@ describe("frontière SDK Pi", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("invariant 2 bis — src/config n'importe ni SDK ni typebox", () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      if (!isUnder(file, "config")) continue;
+      const content = readFileSync(file, "utf8");
+      if (SDK_IMPORT.test(content) || TYPEBOX_IMPORT.test(content)) {
+        offenders.push(rel(file));
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it("invariant 3 — rien hors src/pi n'importe depuis src/pi/sdk", () => {
     const offenders: string[] = [];
     for (const file of files) {

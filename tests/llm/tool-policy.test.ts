@@ -7,7 +7,8 @@ import {
   LIGHT_PROVIDER,
   LIGHT_MODEL,
   PROVIDERS,
-  buildModelsConfig,
+  buildModelsConfigFrom,
+  DEFAULT_EFFECTIVE_LLM_CONFIG,
   containsForbiddenTool,
   toolAllowlist,
 } from "../../src/llm/index.js";
@@ -46,13 +47,41 @@ describe("llm — providers & modèles", () => {
     expect(HEAVY_MODEL.defaultThinking).toBe("high");
   });
 
-  it("buildModelsConfig() correspond EXACTEMENT à config/pi/models.json", () => {
+  it("buildModelsConfigFrom(défauts) correspond EXACTEMENT à config/pi/models.json", () => {
     const file = JSON.parse(
       readFileSync("config/pi/models.json", "utf8"),
     ) as unknown;
-    expect(file).toEqual(buildModelsConfig());
+    const config = buildModelsConfigFrom(DEFAULT_EFFECTIVE_LLM_CONFIG);
+    expect(file).toEqual(config);
     // Aucune clé en clair : uniquement des références d'environnement.
-    const config = buildModelsConfig();
+    for (const provider of Object.values(config.providers)) {
+      expect(provider.apiKey.startsWith("$")).toBe(true);
+    }
+  });
+
+  it("buildModelsConfigFrom reflète la config effective (baseUrl/api/modèle)", () => {
+    const config = buildModelsConfigFrom({
+      light: {
+        api: "openai-completions",
+        baseUrl: "https://light.example/v1",
+        model: "small-model",
+        thinking: "low",
+      },
+      heavy: {
+        api: "openai-completions",
+        baseUrl: "https://heavy.example/v1",
+        model: "big-model",
+        thinking: "high",
+      },
+    });
+    expect(config.providers["llm-light"]?.baseUrl).toBe("https://light.example/v1");
+    expect(config.providers["llm-light"]?.models[0]?.id).toBe("small-model");
+    expect(config.providers["llm-heavy"]?.baseUrl).toBe("https://heavy.example/v1");
+    expect(config.providers["llm-heavy"]?.models[0]?.id).toBe("big-model");
+    expect(config.providers["llm-heavy"]?.models[0]?.thinkingLevelMap).toEqual(
+      HEAVY_MODEL.thinkingLevelMap,
+    );
+    // Jamais de clé en clair : uniquement des références d'environnement.
     for (const provider of Object.values(config.providers)) {
       expect(provider.apiKey.startsWith("$")).toBe(true);
     }

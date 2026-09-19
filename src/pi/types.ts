@@ -8,6 +8,7 @@
  */
 
 import type { DelegateServicePort } from "../delegation/ports.js";
+import type { ModelsConfig } from "../llm/models.js";
 
 /** Niveaux de raisonnement acceptés par le SDK (repris tels quels). */
 export type PiThinkingLevel =
@@ -55,8 +56,11 @@ export interface PiHostOptions {
   thinking?: PiThinkingLevel;
   /** Fichier de réglages à seeder sur le volume au premier démarrage. */
   settingsSeedPath?: string;
-  /** Fichier `models.json` à seeder sur le volume au premier démarrage. */
-  modelsSeedPath?: string;
+  /**
+   * Contenu GÉNÉRÉ de `models.json`, écrit sur le volume au démarrage (Lot 11).
+   * Absent ⇒ le host n'écrit pas le fichier (tests, host nu).
+   */
+  modelsConfig?: ModelsConfig;
   /**
    * Allowlist d'outils (builtins + noms d'outils custom) imposée au SDK.
    * Remplace l'ancienne valeur `noTools: "all"` : le léger garde une liste
@@ -72,8 +76,11 @@ export interface PiHostOptions {
    * `delegate`/`job_status`/`cancel_job`. Absent ⇒ aucun outil de délégation.
    */
   delegation?: DelegateServicePort;
-  /** Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère manquante). */
-  llmAvailable?: boolean;
+  /**
+   * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
+   * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).
+   */
+  llmAvailable?: boolean | (() => boolean);
   logger: PiLogger;
 }
 
