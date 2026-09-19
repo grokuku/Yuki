@@ -1,13 +1,18 @@
 # =============================================================================
 # Surcharge Compose — CI GitHub Actions (runner `ubuntu-latest`, SANS GPU).
 #
-# Rôle : rendre le service `gateway` DÉMARRABLE sur un runner sans GPU ni
-# NVIDIA Container Toolkit, tout en conservant TOUT le reste de la définition
-# (rootfs read-only, `tmpfs: /tmp`, utilisateur non-root, bind mounts,
-# healthcheck). La logique GPU est exercée pour de vrai via une fixture
+# Rôle : rendre le service `gateway` DÉMARRABLE et TESTABLE sur un runner sans
+# GPU ni NVIDIA Container Toolkit, tout en conservant TOUT le reste de la
+# définition (rootfs read-only, `tmpfs: /tmp`, utilisateur non-root, 4 volumes
+# nommés, healthcheck). La logique GPU est exercée pour de vrai via une fixture
 # `nvidia-smi` injectée (`YUKI_GPU_FIXTURE`), jamais via un GPU physique.
 #
 #   docker compose -f docker-compose.yml -f .github/ci/compose.ci.yml up -d
+#
+# Le compose de BASE tire désormais l'image publiée (`ghcr.io/grokuku/yuki`). En
+# CI on ne veut PAS dépendre du registre : cette surcharge AJOUTE donc un
+# `build:` local (avec un tag local `yuki-gateway:ci`, jamais poussé) pour
+# construire l'image à partir du Dockerfile du dépôt.
 #
 # Seule la réservation GPU est retirée : sans pilote NVIDIA, `docker compose
 # up` échouerait à la création du conteneur (« could not select device driver
@@ -16,6 +21,20 @@
 # =============================================================================
 services:
   gateway:
+    # Contexte de build fourni en ABSOLU par `scripts/ci-smoke.sh`
+    # (`YUKI_CI_BUILD_CONTEXT=$ROOT`) : évite toute ambiguïté de résolution des
+    # chemins relatifs entre plusieurs `-f`.
+    build:
+      context: "${YUKI_CI_BUILD_CONTEXT:?YUKI_CI_BUILD_CONTEXT doit pointer vers la racine du dépôt}"
+      dockerfile: infra/gateway/Dockerfile
+      args:
+        YUKI_UID: ${YUKI_UID:-1000}
+        YUKI_GID: ${YUKI_GID:-1000}
+    # Tag LOCAL, distinct de l'image publiée : la CI ne touche jamais au
+    # registre. Le nom DOIT rester cohérent avec `IMAGE_LOCAL_TAG` dans
+    # `.github/workflows/test-build.yml`.
+    image: yuki-gateway:ci
+
     deploy:
       resources:
         reservations:
@@ -34,9 +53,11 @@ services:
       YUKI_COMPAT_MODE: strict
 
     volumes:
-      # Fixture injectée en lecture seule. Le chemin HÔTE est fourni en absolu
-      # par `YUKI_CI_GPU_FIXTURE` (voir `scripts/ci-smoke.sh`) afin d'éviter
-      # toute ambiguïté de résolution des chemins relatifs entre plusieurs -f.
+      # Fixture injectée en lecture seule (en plus des 4 volumes nommés hérités
+      # du compose de base : la liste est concaténée). Le chemin HÔTE est fourni
+      # en absolu par `YUKI_CI_GPU_FIXTURE` (voir `scripts/ci-smoke.sh`) afin
+      # d'éviter toute ambiguïté de résolution des chemins relatifs entre
+      # plusieurs -f.
       - type: bind
         source: "${YUKI_CI_GPU_FIXTURE:?YUKI_CI_GPU_FIXTURE doit pointer vers une fixture nvidia-smi}"
         target: /fixtures/gpu.txt

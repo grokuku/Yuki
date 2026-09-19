@@ -12,7 +12,11 @@ exposer l'état via un gateway HTTP sans dépendance runtime.
 2. Service compose unique `gateway`, conteneur `yuki-gateway` (plus tard
    `asr`, `tts`, `exec`).
 3. `src/` organisé **par domaine** ; **package unique** (pas de monorepo).
-4. **Bind mounts** pilotés par `.env` (pas de volumes nommés).
+4. **Volumes nommés Docker** (`yuki-pi`, `yuki-workspace`, `yuki-models`,
+   `yuki-state`) — pas de bind mounts pilotés par `.env`. *(Révision ultérieure :
+   le Lot 0 prévoyait d'abord des bind mounts pilotés par `.env` ; abandonnés car
+   ils imposaient une préparation de permissions sur l'hôte — `docker compose
+   up -d` doit suffire sur une machine vierge.)*
 5. Mode de compatibilité par défaut = **`strict`** (refus explicite et bruyant).
 6. **Aucun ASR/TTS** déclaré dans le compose (digests non résolus, aucun
    modèle monté).

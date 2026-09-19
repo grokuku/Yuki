@@ -1,0 +1,26 @@
+# =============================================================================
+# Yuki — Surcharge Compose d'exemple : CONSTRUIRE l'image en local.
+#
+# Rôle : au lieu de tirer l'image publiée sur ghcr.io (défaut du compose de
+# base), construire l'image à partir du Dockerfile du dépôt. Utile pour le
+# DÉVELOPPEMENT (modifier le code et reconstruire) et pour changer `YUKI_UID`/
+# `YUKI_GID` dans `.env` (l'image est alors construite avec ces valeurs — voir
+# la mise en garde dans `.env.example`).
+#
+# -----------------------------------------------------------------------------
+# Usage
+# -----------------------------------------------------------------------------
+#   docker compose -f docker-compose.yml -f compose.build.example.yml up -d --build
+#
+# (Le tag local `yuki-gateway:dev` remplace l'image tirée ; il n'est jamais
+#  poussé sur le registre.)
+# =============================================================================
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: infra/gateway/Dockerfile
+      args:
+        YUKI_UID: ${YUKI_UID:-1000}
+        YUKI_GID: ${YUKI_GID:-1000}
+    image: yuki-gateway:dev

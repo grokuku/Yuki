@@ -88,29 +88,14 @@ else
   warn "nvidia-smi introuvable : le gateway démarrera en profil 'texte-seul'."
 fi
 
-# --- Dossiers hôtes ----------------------------------------------------------
+# --- Volumes nommés ----------------------------------------------------------
 echo
-echo "Dossiers hôtes (bind mounts)"
-if [ -f .env ]; then
-  # shellcheck disable=SC1091
-  set -a; . ./.env; set +a
-  warn_msg="(.env chargé)"
-else
-  warn_msg="(.env absent, défauts utilisés)"
-fi
-for pair in \
-  "pi:${YUKI_HOST_PI_AGENT_DIR:-./.local/pi}" \
-  "workspace:${YUKI_HOST_WORKSPACE_DIR:-./.local/workspace}" \
-  "models:${YUKI_HOST_MODELS_DIR:-./.local/models}" \
-  "state:${YUKI_HOST_STATE_DIR:-./.local/state}"; do
-  name="${pair%%:*}"
-  path="${pair#*:}"
-  if mkdir -p "$path" 2>/dev/null && [ -w "$path" ]; then
-    ok "hôte ${name} : ${path} ${warn_msg}"
-  else
-    bad "hôte ${name} : ${path} non inscriptible."
-  fi
-done
+echo "Volumes nommés (persistance)"
+# La persistance passe par des volumes Docker (yuki-pi, yuki-workspace,
+# yuki-models, yuki-state). Docker initialise chaque volume avec le propriétaire
+# du répertoire correspondant DANS l'image : aucune préparation de dossier hôte
+# ni `chown` n'est requis. Un simple `docker compose up -d` suffit.
+ok "persistance par volumes Docker — aucune préparation de l'hôte requise"
 
 # --- Bilan -------------------------------------------------------------------
 echo

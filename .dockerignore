@@ -18,4 +18,6 @@ dist
 # Local overrides / env
 compose.override.yml
 compose.override.example.yml
+compose.build.example.yml
+compose.bind.example.yml
 .env

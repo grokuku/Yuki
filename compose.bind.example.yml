@@ -1,0 +1,47 @@
+# =============================================================================
+# Yuki — Surcharge Compose d'exemple : revenir à des BIND MOUNTS.
+#
+# Rôle : monter des dossiers de l'hôte (par défaut `./.local/…`) au lieu des
+# volumes nommés, pour voir/éditer les fichiers directement depuis l'hôte.
+#
+# ⚠️ Les bind mounts obligent à PRÉPARER LES PERMISSIONS sur l'hôte : Docker
+#    crée les dossiers manquants en `root:root`, alors que le conteneur tourne
+#    en non-root (`YUKI_UID:YUKI_GID`). Sans préparation, `/health/ready`
+#    répond 503. Préparez les dossiers À LA MAIN avant de démarrer :
+#
+#      mkdir -p .local/pi .local/workspace .local/models .local/state
+#      chown -R 1000:1000 .local
+#
+#    (`./scripts/up.sh` ne prépare plus rien : il se contente de
+#     `docker compose up -d` + attente du healthcheck.)
+#
+# -----------------------------------------------------------------------------
+# Usage
+# -----------------------------------------------------------------------------
+#   docker compose -f docker-compose.yml -f compose.bind.example.yml up -d
+#
+# Chemins hôte personnalisables via `.env` (comme avant) :
+#   YUKI_HOST_PI_AGENT_DIR=./.local/pi
+#   YUKI_HOST_WORKSPACE_DIR=./.local/workspace
+#   YUKI_HOST_MODELS_DIR=./.local/models
+#   YUKI_HOST_STATE_DIR=./.local/state
+# =============================================================================
+services:
+  gateway:
+    # `!override` (Docker Compose >= 2.24) REMPLACE la liste de volumes héritée
+    # du compose de base (sinon les deux jeux de montages se cumuleraient et
+    # deux montages viseraient les mêmes cibles).
+    volumes: !override
+      - type: bind
+        source: ${YUKI_HOST_PI_AGENT_DIR:-./.local/pi}
+        target: /data/pi
+      - type: bind
+        source: ${YUKI_HOST_WORKSPACE_DIR:-./.local/workspace}
+        target: /workspace
+      - type: bind
+        source: ${YUKI_HOST_MODELS_DIR:-./.local/models}
+        target: /models
+        read_only: true
+      - type: bind
+        source: ${YUKI_HOST_STATE_DIR:-./.local/state}
+        target: /data/state

@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 # Yuki — reset-state.sh : efface l'état persistant local (destructif).
+#
+# La persistance passe par des VOLUMES NOMMÉS Docker : on supprime les volumes
+# `yuki-state` et `yuki-workspace` (recréés vides et correctement propriétaires
+# au prochain `up`, à partir de l'image). Les volumes `yuki-models` et `yuki-pi`
+# (agent Pi, sessions) ne sont PAS touchés.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-if [ -f .env ]; then
-  # shellcheck disable=SC1091
-  set -a; . ./.env; set +a
-fi
-
-STATE_DIR="${YUKI_HOST_STATE_DIR:-./.local/state}"
-WORKSPACE_DIR="${YUKI_HOST_WORKSPACE_DIR:-./.local/workspace}"
+STATE_VOLUME="yuki-state"
+WORKSPACE_VOLUME="yuki-workspace"
 
 echo "Cette opération efface :"
-echo "  - état    : ${STATE_DIR}"
-echo "  - workspace: ${WORKSPACE_DIR}"
-echo "Les modèles (${YUKI_HOST_MODELS_DIR:-./.local/models}) et l'agent Pi (${YUKI_HOST_PI_AGENT_DIR:-./.local/pi}) ne sont PAS touchés."
+echo "  - état     : volume ${STATE_VOLUME}"
+echo "  - workspace: volume ${WORKSPACE_VOLUME}"
+echo "Les volumes yuki-models et yuki-pi ne sont PAS touchés."
 echo
 
 if [ "${1:-}" != "--yes" ]; then
@@ -30,14 +30,12 @@ fi
 echo "[reset-state] arrêt du gateway"
 docker compose down >/dev/null 2>&1 || true
 
-for path in "$STATE_DIR" "$WORKSPACE_DIR"; do
-  if [ -e "$path" ]; then
-    rm -rf "${path:?}"/* 2>/dev/null || true
-    rm -rf "${path:?}"/.[!.]* 2>/dev/null || true
-    echo "[reset-state] ${path} vidé"
+for vol in "$STATE_VOLUME" "$WORKSPACE_VOLUME"; do
+  if docker volume inspect "$vol" >/dev/null 2>&1; then
+    docker volume rm "$vol" >/dev/null && echo "[reset-state] volume ${vol} supprimé"
   else
-    echo "[reset-state] ${path} absent (rien à faire)"
+    echo "[reset-state] volume ${vol} absent (rien à faire)"
   fi
 done
 
-echo "[reset-state] terminé."
+echo "[reset-state] terminé. Relancez 'docker compose up -d'."

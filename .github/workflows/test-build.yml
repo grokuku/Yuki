@@ -15,9 +15,9 @@
 #
 # Chaîne de jobs, sans duplication :
 #   quality → typecheck / tests / build ;
-#   docker  → validation Compose + build de l'image (UNE seule fois) + smoke
-#             test conteneur (non-root, rootfs read-only, /health,
-#             /health/ready, 4 bind mounts, état du SDK dans le volume) ;
+#   docker  → validation Compose + build LOCAL de l'image (UNE seule fois) +
+#             smoke test conteneur (non-root, rootfs read-only, /health,
+#             /health/ready, 4 volumes nommés, état du SDK dans le volume) ;
 #   publish → push `:test` + `:sha-<court>` (JAMAIS sur pull_request).
 #
 # Le smoke test reste AUTOMATIQUE sur `push` et `pull_request` : c'est la seule
@@ -66,12 +66,10 @@ env:
   # Ne pas écrire le nom d'image en dur : il suit le dépôt.
   IMAGE_REPOSITORY: ${{ github.repository }}
   NODE_VERSION: "24"
-  # Tag de l'image construite UNE fois par `docker compose build`
-  # (voir `docker-compose.yml` : `image: yuki-gateway:${YUKI_VERSION:-0.1.0}`).
-  # `YUKI_VERSION` est exporté ici pour rendre le tag déterministe quel que soit
-  # le `.env` présent sur le runner (l'environnement shell prime sur `.env`).
-  YUKI_VERSION: "0.1.0"
-  IMAGE_LOCAL_TAG: yuki-gateway:0.1.0
+  # Tag de l'image construite en local par le build de la surcharge CI
+  # (voir `.github/ci/compose.ci.yml` : `image: yuki-gateway:ci`). Le compose de
+  # BASE, lui, TIRE l'image publiée (`ghcr.io/grokuku/yuki`).
+  IMAGE_LOCAL_TAG: yuki-gateway:ci
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -107,7 +105,9 @@ jobs:
   #
   # Le build est fait par `scripts/ci-smoke.sh smoke` (`docker compose build`),
   # qui démarre aussi le conteneur avec une fixture `nvidia-smi` injectée, sur
-  # un runner SANS GPU. L'image produite est ensuite exportée en artefact pour
+  # un runner SANS GPU. Le compose de base TIRE l'image publiée : c'est la
+  # surcharge `.github/ci/compose.ci.yml` qui AJOUTE le build local (tag
+  # `yuki-gateway:ci`). L'image produite est ensuite exportée en artefact pour
   # être publiée SANS être reconstruite (voir job `publish`).
   #
   # Choix de build (justification) : `docker compose build` est le mécanisme le

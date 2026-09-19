@@ -16,11 +16,18 @@ l'outil `delegate`. En mode `strict`, un profil requis et non satisfait fait
 ## Démarrage rapide
 
 ```bash
-cp .env.example .env          # 1. config locale (valeurs factices)
-npm install                   # 2. dépendances de développement
-npm test                      # 3. tests (parsing, profils, porte, health, jobs, délégation)
-npm run gpu:report            # 4. rapport GPU sans démarrer le serveur
-./scripts/up.sh               # 5. docker compose up + attente de /health
+cp .env.example .env          # 1. config locale (valeurs factices — y coller les clés LLM)
+docker compose up -d          # 2. tire l'image publiée (ghcr) et démarre
+```
+
+**Aucune création de dossier, aucun `chown`, aucun script requis** : la
+persistance passe par des **volumes nommés** (`yuki-pi`, `yuki-workspace`,
+`yuki-models`, `yuki-state`). Pour développer :
+
+```bash
+npm install                   # dépendances de développement
+npm test                      # tests (parsing, profils, porte, health, jobs, délégation)
+npm run gpu:report            # rapport GPU sans démarrer le serveur
 ```
 
 Une fois démarré : `http://127.0.0.1:8080/` (UI de conversation),
@@ -29,7 +36,8 @@ Une fois démarré : `http://127.0.0.1:8080/` (UI de conversation),
 léger prêts), `/version`, `/ws` (WebSocket).
 
 Prérequis hôte : `./scripts/doctor.sh` vérifie Docker Engine, Compose, le
-NVIDIA Container Toolkit, `nvidia-smi` et le driver.
+NVIDIA Container Toolkit, `nvidia-smi` et le driver. `./scripts/up.sh` reste une
+commodité (copie `.env` + attente de `/health/live`).
 
 ## Documentation
 
@@ -48,7 +56,7 @@ NVIDIA Container Toolkit, `nvidia-smi` et le driver.
 config/     manifests (profils GPU, capacités) + config Pi (prompts, settings, models.json)
 infra/      Dockerfile du gateway
 public/ui/  UI de conversation (vanilla, servie telle quelle, sans build)
-scripts/    outillage hôte (doctor, up, down, logs, reset, pin-digests)
+scripts/    commodités hôte optionnelles (doctor, up, down, logs, reset, pin-digests)
 src/        code TypeScript organisé par domaine (gpu, gateway, pi, llm, jobs, delegation, …)
 tests/      tests unitaires (parsing, profils, porte) et d'intégration
 docs/       documentation

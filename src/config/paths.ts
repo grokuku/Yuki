@@ -1,9 +1,9 @@
 /**
  * Résolution et vérification des points de montage.
  *
- * Les chemins hôte sont pilotés par `.env` (bind mounts). Les chemins
- * conteneur servent de cibles et sont sondés à l'exécution pour produire
- * l'état `volumes` du endpoint `/health`.
+ * La persistance passe par des volumes nommés Docker (cibles fixes dans le
+ * conteneur). Les chemins conteneur servent de cibles et sont sondés à
+ * l'exécution pour produire l'état `volumes` du endpoint `/health`.
  */
 
 import { accessSync, constants, statSync } from "node:fs";
@@ -16,7 +16,6 @@ export type MountMode = "rw" | "ro";
 export interface MountPoint {
   id: MountId;
   containerPath: string;
-  hostPath: string;
   mode: MountMode;
 }
 
@@ -27,31 +26,27 @@ export interface MountStatus extends MountPoint {
   writable: boolean | null;
 }
 
-/** Définit les quatre bind mounts, dans un ordre stable. */
+/** Définit les quatre points de montage (volumes nommés), dans un ordre stable. */
 export function mountPoints(env: Env): MountPoint[] {
   return [
     {
       id: "pi",
       containerPath: env.mountPoints.pi,
-      hostPath: env.hostDirs.pi,
       mode: "rw",
     },
     {
       id: "workspace",
       containerPath: env.mountPoints.workspace,
-      hostPath: env.hostDirs.workspace,
       mode: "rw",
     },
     {
       id: "models",
       containerPath: env.mountPoints.models,
-      hostPath: env.hostDirs.models,
       mode: "ro",
     },
     {
       id: "state",
       containerPath: env.mountPoints.state,
-      hostPath: env.hostDirs.state,
       mode: "rw",
     },
   ];

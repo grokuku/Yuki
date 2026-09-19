@@ -4,7 +4,7 @@
 #
 # Valide, DANS UN RUNNER SANS GPU ni NVIDIA Container Toolkit :
 #   1. `docker compose config` : le YAML Compose est réellement valide ;
-#   2. le build de l'image `gateway` (Dockerfile multi-étage) ;
+#   2. le build LOCAL de l'image `gateway` (Dockerfile multi-étage) ;
 #   3. le démarrage du conteneur avec une FIXTURE `nvidia-smi` injectée, puis
 #      l'appel à `/health` et `/health/ready` ;
 #   4. le conteneur non-root, le rootfs read-only et l'écriture de l'état du
@@ -15,8 +15,9 @@
 #   ./scripts/ci-smoke.sh smoke    # build + run + assertions
 #   ./scripts/ci-smoke.sh          # les deux (défaut)
 #
-# La surcharge `.github/ci/compose.ci.yml` retire la réservation GPU (absente
-# sur le runner) et injecte la fixture. Aucun secret n'est requis.
+# La surcharge `.github/ci/compose.ci.yml` ajoute le build local (le compose de
+# base TIRE l'image publiée), retire la réservation GPU (absente sur le runner)
+# et injecte la fixture. Aucun secret n'est requis.
 # =============================================================================
 set -euo pipefail
 
@@ -32,16 +33,14 @@ need() { command -v "$1" >/dev/null 2>&1 || die "outil requis introuvable : $1";
 # Les contrôles d'assertions N'ARRÊTENT PAS le script au premier échec : chacun
 # incrémente `FAILURES`, et `finish_assertions` échoue une seule fois à la fin.
 # But : rapporter TOUS les problèmes en un seul run (les causes sont souvent
-# liées — ex. permissions du bind mount -> /health/ready ET volumes inscriptibles).
+# liées — ex. volume nommé non inscriptible -> /health/ready ET montages).
 FAILURES=0
 fail() { printf '\033[31m[ci-smoke] assertion échouée : %s\033[0m\n' "$*" >&2; FAILURES=$((FAILURES + 1)); }
 finish_assertions() { [ "$FAILURES" -eq 0 ] || die "$FAILURES assertion(s) échouée(s) — voir ci-dessus"; }
 
-# `.env` (gitignoré) pilote les bind mounts ET l'identité du conteneur (`user:`).
-# On le crée depuis `.env.example` s'il est absent, puis on le CHARGE : le chown
-# des dossiers hôtes doit viser EXACTEMENT le uid/gid et les chemins qu'utilise
-# Compose, y compris si l'utilisateur a personnalisé `YUKI_UID`/`YUKI_HOST_*`
-# dans `.env` (même approche que `scripts/up.sh`).
+# `.env` (gitignoré) pilote l'identité du conteneur (`user:`). On le crée depuis
+# `.env.example` s'il est absent, puis on le CHARGE pour connaître le uid/gid
+# attendu du conteneur (assertion non-root ci-dessous).
 if [ ! -f .env ]; then
   log "Création de .env depuis .env.example (valeurs factices, aucun secret)"
   cp .env.example .env
@@ -51,7 +50,10 @@ set -a; . ./.env; set +a
 
 PORT="${YUKI_GATEWAY_PORT:-8080}"
 UID_TARGET="${YUKI_UID:-1000}"
-GID_TARGET="${YUKI_GID:-1000}"
+
+# Contexte de build ABSOLU (voir `.github/ci/compose.ci.yml`) : lève toute
+# ambiguïté de résolution des chemins relatifs entre plusieurs `-f`.
+export YUKI_CI_BUILD_CONTEXT="$ROOT"
 
 # Chemin HÔTE (absolu) de la fixture nvidia-smi montée dans le conteneur.
 export YUKI_CI_GPU_FIXTURE="${YUKI_CI_GPU_FIXTURE:-$ROOT/tests/fixtures/gpu/rtx4070-12g.txt}"
@@ -62,26 +64,6 @@ assert_jq() { # <json> <filtre jq> <message>
   printf '%s' "$1" | jq -e "$2" >/dev/null 2>&1 || fail "$3 (jq: $2)"
 }
 
-# Donne à `path` le propriétaire attendu par le conteneur (`YUKI_UID:YUKI_GID`).
-# Sur un runner GitHub, le checkout appartient à `runner` (uid ≠ 1000) : le
-# `chown` direct échoue, on bascule alors sur `sudo -n` (disponible sans mot de
-# passe). En local où l'on est déjà propriétaire (ou root), le direct suffit.
-# Renvoie non-zéro si AUCUNE voie ne fonctionne -> échec explicite de l'appelant
-# (jamais de succès silencieux : un bind mount non inscriptible casserait le
-# PiHost et /health/ready).
-own_host_dir() { # <chemin>
-  local path="$1"
-  mkdir -p "$path"
-  if chown -R "${UID_TARGET}:${GID_TARGET}" "$path" 2>/dev/null; then
-    return 0
-  fi
-  if command -v sudo >/dev/null 2>&1 &&
-     sudo -n chown -R "${UID_TARGET}:${GID_TARGET}" "$path"; then
-    return 0
-  fi
-  return 1
-}
-
 prepare() {
   need docker
   need curl
@@ -90,17 +72,6 @@ prepare() {
   if [ -z "${YUKI_CI_GPU_FIXTURE:-}" ] || [ ! -f "$YUKI_CI_GPU_FIXTURE" ]; then
     die "fixture nvidia-smi introuvable : ${YUKI_CI_GPU_FIXTURE:-<vide>}"
   fi
-  log "Préparation des dossiers hôtes des bind mounts (propriétaire ${UID_TARGET}:${GID_TARGET})"
-  for path in \
-    "${YUKI_HOST_PI_AGENT_DIR:-./.local/pi}" \
-    "${YUKI_HOST_WORKSPACE_DIR:-./.local/workspace}" \
-    "${YUKI_HOST_MODELS_DIR:-./.local/models}" \
-    "${YUKI_HOST_STATE_DIR:-./.local/state}"; do
-    # `models` est monté `read_only` (voir compose) : son propriétaire importe peu
-    # pour l'écriture, mais on l'inclut pour rester lisible par le conteneur.
-    own_host_dir "$path" ||
-      die "impossible de donner ${UID_TARGET}:${GID_TARGET} à ${path} (chown direct puis 'sudo -n' ont échoué) — le conteneur non-root ne pourrait pas y écrire"
-  done
 }
 
 check_config() {
@@ -132,7 +103,7 @@ run_smoke() {
   prepare
   trap cleanup EXIT
 
-  log "Build de l'image gateway (Dockerfile multi-étage)"
+  log "Build LOCAL de l'image gateway (Dockerfile multi-étage)"
   "${COMPOSE[@]}" build
 
   log "Démarrage du conteneur + attente du healthcheck Compose"
@@ -185,12 +156,15 @@ run_smoke() {
     fail "le rootfs est inscriptible alors qu'il doit être read-only"
   fi
 
-  log "Assertion état du SDK écrit dans le volume (hors rootfs)"
+  log "Assertion état du SDK écrit dans le volume pi (hors rootfs)"
   "${COMPOSE[@]}" exec -T gateway sh -c 'touch /data/state/ci-write-probe' \
     || fail "écriture dans /data/state impossible (volume non inscriptible ?)"
-  [ -f .local/pi/agent/settings.json ] || fail "seed settings.json absent du volume pi"
-  [ -f .local/pi/agent/models.json ]   || fail "seed models.json absent du volume pi"
-  [ -d .local/pi/agent/sessions ]      || fail "répertoire de sessions absent du volume pi"
+  "${COMPOSE[@]}" exec -T gateway sh -c 'test -f /data/pi/agent/settings.json' \
+    || fail "seed settings.json absent du volume pi"
+  "${COMPOSE[@]}" exec -T gateway sh -c 'test -f /data/pi/agent/models.json' \
+    || fail "seed models.json absent du volume pi"
+  "${COMPOSE[@]}" exec -T gateway sh -c 'test -d /data/pi/agent/sessions' \
+    || fail "répertoire de sessions absent du volume pi"
 
   finish_assertions
 

@@ -3,23 +3,76 @@
 ## 1. Démarrer
 
 ```bash
-cp .env.example .env      # 1re fois
-./scripts/doctor.sh       # prérequis hôte
-./scripts/up.sh           # build + up + attente de /health/live
+cp .env.example .env      # 1re fois — puis coller les 2 clés LLM
+docker compose up -d      # tire l'image publiée (ghcr) et démarre
 curl -s http://127.0.0.1:8080/health | head
 ```
 
-`up.sh` crée les dossiers hôtes (`.local/…` par défaut), tente un `chown`
-vers `YUKI_UID:YUKI_GID`, lance `docker compose up -d --build`, puis attend
-`/health/live` (timeout 90 s).
+**C'est tout.** Aucune création de dossier, aucun `chown`, aucun script requis.
+Le compose de base **tire** l'image publiée sur ghcr
+(`ghcr.io/grokuku/yuki:latest`) et la persistance passe par **4 volumes
+nommés** : `yuki-pi`, `yuki-workspace`, `yuki-models`, `yuki-state`.
 
-> ⚠️ **Ne lancez pas `docker compose up` seul sur une machine vierge.** Sans
-> préparation préalable, Docker crée les racines de bind mount (`.local/…`) en
-> `root:root` ; le conteneur non-root (uid `YUKI_UID`) ne peut alors pas créer
-> `/data/pi/agent`, et `/health/ready` répond **503**. Passez par
-> `./scripts/up.sh` (ou créez les dossiers et donnez-leur le propriétaire
-> `YUKI_UID:YUKI_GID`). Le gateway journalise alors `pi.start.failed` —
-> « le volume est-il monté inscriptible ? » — message volontairement explicite.
+Pour un volume nommé monté sur un chemin **qui existe déjà dans l'image**,
+Docker initialise le volume avec le **contenu et le propriétaire** du
+répertoire de l'image (créé en `YUKI_UID:YUKI_GID` par le Dockerfile) : le
+conteneur non-root écrit donc dedans **sans préparation de l'hôte**.
+
+> Si le paquet ghcr est **privé**, connectez-vous d'abord :
+> `docker login ghcr.io -u <utilisateur>` (PAT avec `read:packages`).
+
+`./scripts/up.sh` reste une **commodité** (copie `.env`, `docker compose up -d`,
+attente de `/health/live`, timeout 90 s) — mais il n'est **plus nécessaire**.
+`./scripts/doctor.sh` vérifie Docker/Compose/driver.
+
+### Volumes : sauvegarder, inspecter, éditer `models.json`
+
+```bash
+# Sauvegarder un volume (archive tar dans le répertoire courant)
+docker run --rm -v yuki-state:/data -v "$PWD":/backup alpine:3.20 \
+  tar czf /backup/yuki-state.tgz -C /data .
+
+# Restaurer un volume (par-dessus le contenu existant)
+docker run --rm -v yuki-state:/data -v "$PWD":/backup alpine:3.20 \
+  tar xzf /backup/yuki-state.tgz -C /data
+
+# Lister / inspecter / supprimer
+docker volume ls | grep yuki
+docker volume inspect yuki-state
+docker volume rm yuki-state
+
+# Inspecter un fichier du volume (ex. models.json)
+docker compose exec gateway sh -c 'cat /data/pi/agent/models.json'
+
+# Éditer models.json : il vit sur le volume `yuki-pi`, plus dans `./.local`.
+# Copier sur l'hôte, éditer, recopier :
+docker cp yuki-gateway:/data/pi/agent/models.json ./models.json
+vi ./models.json
+docker cp ./models.json yuki-gateway:/data/pi/agent/models.json
+```
+
+> `models.json` et les réglages vivent sur le volume **`yuki-pi`**
+> (`/data/pi/agent/`). Le seed initial vient de `config/pi/models.json` (dans
+> l'image) : il n'est copié sur le volume qu'à la **première** initialisation.
+
+### Migration depuis `./.local` (tests précédents)
+
+Les anciens bind mounts `./.local/{pi,workspace,models,state}` ne sont plus
+utilisés. Deux options :
+
+- **Repartir de zéro** (recommandé) : `docker compose up -d` crée des volumes
+  neufs ; le gateway re-seede `models.json` / `settings.json`.
+- **Recopier les données existantes** dans les volumes nommés :
+
+```bash
+for pair in pi:yuki-pi workspace:yuki-workspace models:yuki-models state:yuki-state; do
+  src="./.local/${pair%%:*}"; vol="${pair#*:}"
+  [ -d "$src" ] || continue
+  docker run --rm -v "${vol}:/data" -v "$PWD/$src:/src:ro" alpine:3.20 \
+    sh -c 'cp -a /src/. /data/ && chown -R 1000:1000 /data'
+done
+docker compose up -d
+```
 
 ## 2. Observer
 
@@ -58,7 +111,7 @@ YUKI_GPU_FIXTURE=tests/fixtures/gpu/quadro-rtx4000-8g.txt npm run gpu:report
 - **Simuler un GPU** : `YUKI_GPU_FIXTURE=tests/fixtures/gpu/<fixture>.txt`.
 - **Changer la commande** : `YUKI_GPU_CMD=/chemin/vers/nvidia-smi`.
 
-Après modification : `./scripts/up.sh`.
+Après modification : `docker compose up -d` (ou `./scripts/up.sh`).
 
 ## 5. Réinitialiser l'état
 
@@ -67,8 +120,8 @@ Après modification : `./scripts/up.sh`.
 ./scripts/reset-state.sh --yes    # sans prompt
 ```
 
-Efface `/data/state` et `/workspace` (hôtes). **Ne touche pas** aux modèles ni
-à l'agent Pi.
+Efface les volumes `yuki-state` et `yuki-workspace`. **Ne touche pas** aux
+volumes `yuki-models` ni `yuki-pi` (agent Pi, sessions).
 
 ## 6. Dépannage
 
@@ -80,7 +133,7 @@ Efface `/data/state` et `/workspace` (hôtes). **Ne touche pas** aux modèles ni
 | `BF16 : non` | CC < 8.0 (ex. Quadro RTX 4000) | forcer `compact` (ou `repli`) |
 | `/health/ready` = 503 | porte non passée | le serveur ne devrait pas être démarré ; vérifier les logs |
 | Conteneur `Exit 1` immédiat | refus strict | `./scripts/logs.sh` puis corriger le profil |
-| `permission denied` sur un montage | uid/gid du conteneur ≠ propriétaire hôte | `YUKI_UID`/`YUKI_GID` dans `.env`, relancer `up.sh` |
+| `permission denied` sur un montage | uid/gid du conteneur ≠ propriétaire du volume (`YUKI_UID`/`YUKI_GID` modifiés sans reconstruire l'image) | remettre `1000:1000` (défaut) dans `.env`, ou reconstruire l'image avec les mêmes valeurs (`compose.build.example.yml`) |
 | Port déjà utilisé | autre service sur 8080 | `YUKI_GATEWAY_PORT=9090` dans `.env` |
 | `LLM_UNAVAILABLE` dans l'UI | clé légère absente | renseigner `YUKI_LLM_LIGHT_API_KEY` puis redémarrer |
 | `delegate` → `heavy_unavailable` | clé lourde absente | outil normalement absent ; renseigner `YUKI_LLM_HEAVY_API_KEY` |
@@ -184,9 +237,12 @@ arrière-plan. Le léger peut déléguer via l'outil `delegate`. Le nommage est
 
 ### Changer de fournisseur
 
-`config/pi/models.json` (seedé sur le volume) est **le seul fichier à éditer**
-pour changer de fournisseur (`baseUrl`, `api`, identifiant de modèle) : le SDK
-n'interpole pas `$VAR` pour ces champs (seuls `apiKey`/`headers` le sont). Voir
+`models.json` **sur le volume `yuki-pi`** (`/data/pi/agent/models.json`, seedé
+au premier démarrage depuis `config/pi/models.json` de l'image) est **le seul
+fichier à éditer** pour changer de fournisseur (`baseUrl`, `api`, identifiant
+de modèle) : le SDK n'interpole pas `$VAR` pour ces champs (seuls
+`apiKey`/`headers` le sont). Commandes d'édition : voir la section 1
+(« Volumes »). Détails :
 [`docs/lot2.md`](lot2.md#changer-de-fournisseur-nommage-neutre).
 
 ### Clés (jamais en clair)
@@ -231,7 +287,7 @@ rejoué au démarrage. Inspecter :
 
 ```bash
 ./scripts/logs.sh | grep -E 'pi\.phase|job\.'
-grep -c '' .local/state/jobs.jsonl        # nombre d'événements
+docker compose exec gateway sh -c 'wc -l < /data/state/jobs.jsonl'   # nombre d'événements
 ```
 
 `/health` expose `subsystems.llm` et `subsystems.jobs` :

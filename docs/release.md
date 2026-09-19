@@ -97,23 +97,24 @@ Le message ne contient **pas** `[skip ci]` (Docky ne l'utilise pas).
 
 ## Consommer / déployer l'image publiée
 
-Le `docker-compose.yml` de base **construit** l'image localement (`build:`) et
-la nomme `yuki-gateway:${YUKI_VERSION}`. Pour déployer **depuis ghcr.io**, on
-utilise la surcharge fournie en exemple, `compose.ghcr.example.yml`, qui retire
-le `build:` (`!reset`) et pointe sur l'image publiée — sans modifier le compose
-de base.
+Le `docker-compose.yml` de base **tire** l'image publiée : `docker compose up -d`
+suffit, sans construire ni surcharge.
 
 ```bash
 # 1) Si le paquet est privé : se connecter à ghcr.io (PAT avec read:packages).
 docker login ghcr.io -u <utilisateur>
 
 # 2) Tirer puis démarrer l'image publiée.
-docker compose -f docker-compose.yml -f compose.ghcr.example.yml pull
-docker compose -f docker-compose.yml -f compose.ghcr.example.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
-Pour épingler une révision précise, remplacer `:latest` par `:sha-<court>` ou
-`:<version>` dans `compose.ghcr.example.yml`.
+Le tag par défaut est `:latest` (`ghcr.io/grokuku/yuki:${YUKI_VERSION:-latest}`).
+Pour épingler une révision précise, définir `YUKI_VERSION=sha-<court>` (ou la
+version publiée) dans `.env`.
+
+> Pour **construire en local** au lieu de tirer : `compose.build.example.yml`.
+> Pour **revenir à des bind mounts** : `compose.bind.example.yml`.
 
 > Le nom d'image est **dérivé du dépôt** : `github.com/grokuku/Yuki` →
 > `ghcr.io/grokuku/yuki`. Les références ghcr sont **en minuscules**.

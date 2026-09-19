@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Yuki — up.sh : démarre le gateway et attend /health/live.
+#
+# Commodité, PLUS une nécessité : `docker compose up -d` suffit désormais
+# (le compose TIRE l'image publiée et la persistance passe par des volumes
+# nommés, sans préparation de l'hôte). Ce script ajoute seulement la copie de
+# `.env` et l'attente du healthcheck.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,25 +19,9 @@ fi
 set -a; . ./.env; set +a
 
 PORT="${YUKI_GATEWAY_PORT:-8080}"
-UID_TARGET="${YUKI_UID:-1000}"
-GID_TARGET="${YUKI_GID:-1000}"
 
-echo "[up] préparation des dossiers hôtes"
-for path in \
-  "${YUKI_HOST_PI_AGENT_DIR:-./.local/pi}" \
-  "${YUKI_HOST_WORKSPACE_DIR:-./.local/workspace}" \
-  "${YUKI_HOST_MODELS_DIR:-./.local/models}" \
-  "${YUKI_HOST_STATE_DIR:-./.local/state}"; do
-  mkdir -p "$path"
-  if chown -R "${UID_TARGET}:${GID_TARGET}" "$path" 2>/dev/null; then
-    :
-  else
-    echo "[up] chown ${path} ignoré (permissions insuffisantes)"
-  fi
-done
-
-echo "[up] docker compose up -d"
-docker compose up -d --build
+echo "[up] docker compose up -d (tire l'image publiée si nécessaire)"
+docker compose up -d
 
 echo "[up] attente de http://127.0.0.1:${PORT}/health/live"
 deadline=$(( $(date +%s) + 90 ))

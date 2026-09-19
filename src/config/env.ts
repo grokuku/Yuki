@@ -25,13 +25,6 @@ export const THINKING_LEVELS = [
 ] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
-export interface HostDirs {
-  pi: string;
-  workspace: string;
-  models: string;
-  state: string;
-}
-
 export interface MountPoints {
   pi: string;
   workspace: string;
@@ -54,7 +47,6 @@ export interface Env {
   uid: number;
   gid: number;
   configDir: string;
-  hostDirs: HostDirs;
   mountPoints: MountPoints;
   // --- Domaine Pi embarqué (Lot 1) ---
   piAgentDir: string;
@@ -215,12 +207,6 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
     uid: getInt(env, "YUKI_UID", 1000, { min: 0 }),
     gid: getInt(env, "YUKI_GID", 1000, { min: 0 }),
     configDir,
-    hostDirs: {
-      pi: getString(env, "YUKI_HOST_PI_AGENT_DIR", "./.local/pi"),
-      workspace: getString(env, "YUKI_HOST_WORKSPACE_DIR", "./.local/workspace"),
-      models: getString(env, "YUKI_HOST_MODELS_DIR", "./.local/models"),
-      state: getString(env, "YUKI_HOST_STATE_DIR", "./.local/state"),
-    },
     mountPoints,
     piAgentDir,
     piSessionsDir: getString(

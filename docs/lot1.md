@@ -120,7 +120,7 @@ Le « zéro dépendance runtime » du Lot 0 tombe ici.
 1. **Redirection de l'état du SDK vers le volume persistant.** Le SDK écrit
    `settings.json`, `auth.json`, `models.json`, `sessions/` dans un répertoire
    utilisateur — or notre **rootfs est read-only**. Tout est redirigé vers le
-   volume `pi-agent` (monté sur `/data/pi`) via `PI_CODING_AGENT_DIR` et
+   volume `yuki-pi` (volume nommé monté sur `/data/pi`) via `PI_CODING_AGENT_DIR` et
    `PI_CODING_AGENT_SESSION_DIR`, et les opérations réseau du SDK sont coupées
    (`PI_OFFLINE`, `PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY`). *Constat de
    vérification :* `PI_CODING_AGENT_SESSION_DIR` est documenté mais n'est lu que

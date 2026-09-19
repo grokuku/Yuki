@@ -5,7 +5,7 @@
 ```
                  ┌──────────────────────────────────────────────┐
    .env ───────► │ src/config/env.ts   (validation stricte)      │
-                 │ src/config/paths.ts (4 bind mounts)           │
+                 │ src/config/paths.ts (4 volumes nommés)        │
                  └───────────────┬──────────────────────────────┘
                                  │
    nvidia-smi ──► src/gpu/detect.ts ──► DetectionResult
@@ -133,7 +133,7 @@ neutre (changer de fournisseur ne touche pas au code).
 - Conteneur **non-root** (uid/gid `YUKI_UID`/`YUKI_GID`, défaut 1000).
 - Rootfs **read-only**, seul `/tmp` en `tmpfs`. L'état du SDK Pi (`settings.json`,
   `auth.json`, `models.json`, `sessions/`) et `HOME` sont **redirigés** vers le
-  volume `pi-agent` (`/data/pi`) ; le `cwd` reste fixe (`/workspace`).
+  volume `yuki-pi` (`/data/pi`) ; le `cwd` reste fixe (`/workspace`).
 - `/models` monté **en lecture seule** ; `/data/pi`, `/workspace`,
   `/data/state` en lecture-écriture.
 - Logs JSON-lines avec **redaction** des clés/valeurs sensibles.
