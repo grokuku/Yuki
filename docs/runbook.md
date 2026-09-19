@@ -31,6 +31,25 @@ Docker initialise le volume avec le **contenu et le propriétaire** du
 répertoire de l'image (créé en `YUKI_UID:YUKI_GID` par le Dockerfile) : le
 conteneur non-root écrit donc dedans **sans préparation de l'hôte**.
 
+### Bind mounts : permissions requises (piège)
+
+Si vous utilisez des **bind mounts** (`compose.bind.example.yml`) au lieu des
+volumes nommés, Docker crée les dossiers manquants en `root:root`. Le
+conteneur tourne en **non-root** (uid/gid `1000` par défaut) : **chaque**
+dossier monté en écriture (`pi`, `workspace`, **`state`**) doit appartenir à
+cet uid/gid :
+
+```bash
+mkdir -p /chemin/hote/{pi,workspace,models,state}
+chown -R 1000:1000 /chemin/hote
+```
+
+Le volume **`state`** porte le store `/data/state/config.json` (paramétrage et
+clés). S'il n'est **pas inscriptible**, le **premier Enregistrement** de la
+page `/config` échoue (HTTP **500** `config_store_unwritable`). Le gateway
+détecte désormais ce cas **au démarrage** (log `volume.unwritable`) au lieu de
+le laisser apparaître seulement à la première sauvegarde.
+
 > Si le paquet ghcr est **privé**, connectez-vous d'abord :
 > `docker login ghcr.io -u <utilisateur>` (PAT avec `read:packages`).
 
@@ -126,7 +145,10 @@ Depuis le Lot 11, le GPU se règle dans la page **`/config`** (groupe « GPU »)
 - **Driver minimal** : `gpu.minDriver` (défaut 580).
 
 Ces champs sont marqués **redémarrage** : ils sont enregistrés immédiatement mais
-prennent effet au **prochain redémarrage** (`docker compose restart`).
+prennent effet au **prochain redémarrage**. Le plus simple est le bouton
+**Redémarrer** de la page `/config` (voir §4.1), qui relance le programme **dans
+le conteneur** ; l'équivalent terminal reste `docker compose restart` (qui, lui,
+redémarre le conteneur).
 
 - **Épingler une carte** : dans `compose.override.yml` (copie de
   `compose.override.example.yml`), remplacer `count: all` par
@@ -142,6 +164,37 @@ prennent effet au **prochain redémarrage** (`docker compose restart`).
 
 Après une modification par l'environnement : `docker compose up -d` (ou
 `./scripts/up.sh`).
+
+### 4.1 Redémarrer Yuki depuis la page `/config`
+
+Quand un champ marqué **redémarrage** vient d'être enregistré, la page `/config`
+propose un bouton **Redémarrer** (section « Redémarrer Yuki », sous le bloc
+« Résultat de l'enregistrement »). Il évite d'ouvrir un gestionnaire de
+conteneurs :
+
+1. une **confirmation** rappelle que la conversation et les jobs en cours sont
+   interrompus ;
+2. l'application répond **200** (`POST /api/admin/restart`, protégé par le même
+   en-tête `X-Yuki-Config` et le même contrôle `Origin`/`Host` que la config) ;
+3. elle **ferme proprement** ses sockets WebSocket puis son serveur HTTP
+   (`gateway.shutdown` / `gateway.stopped`), sans `process.exit()` brutal ;
+4. l'arrêt gracieux sort alors avec le **code convenu `75`** (`EX_TEMPFAIL`) ;
+   le **superviseur interne** à l'image (`infra/gateway/supervisor.mjs`, qui est
+   l'`ENTRYPOINT`) reconnaît ce code et **relance le programme** — **le
+   conteneur reste en place**, sans redémarrage Docker et sans accès au socket
+   Docker ;
+5. la page **sonde `/health/live`** jusqu'au retour du gateway, puis se
+   **recharge** toute seule.
+
+> **Redémarrage interne, pas redémarrage de conteneur.** Le superviseur ne
+> relance que le code **75**. Tout autre code (crash, refus de démarrage) est
+> **propagé** et le superviseur termine : une vraie panne reste visible. C'est
+> cette distinction qui rend une **politique de redémarrage Docker**
+> (`restart: unless-stopped`) toujours utile — pour les **vrais crashs**, où le
+> conteneur doit revenir — mais **plus nécessaire pour ce bouton**.
+
+> Yuki **n'utilise jamais le socket Docker** ni l'API Docker (invariant du
+> projet) : le redémarrage est entièrement interne à l'image.
 
 ## 5. Réinitialiser l'état
 
@@ -164,13 +217,17 @@ volumes `yuki-models` ni `yuki-pi` (agent Pi, sessions).
 | `/health/ready` = 503 | porte non passée | le serveur ne devrait pas être démarré ; vérifier les logs |
 | Conteneur `Exit 1` immédiat | refus strict | `./scripts/logs.sh` puis corriger le profil |
 | `permission denied` sur un montage | uid/gid du conteneur ≠ propriétaire du volume (`YUKI_UID`/`YUKI_GID` modifiés sans reconstruire l'image) | remettre `1000:1000` (défaut) dans `.env`, ou reconstruire l'image avec les mêmes valeurs (`compose.build.example.yml`) |
+| log `volume.unwritable` au démarrage | bind mount en `root:root` alors que le conteneur est non-root (uid 1000) | `chown -R 1000:1000` du dossier hôte (voir `compose.bind.example.yml`) puis redémarrer |
+| `PUT /api/config` = **500** `config_store_unwritable` | volume **`state`** non inscriptible (bind mount appartenant à un autre uid) | `docker compose exec gateway ls -ln /data/state` puis `chown -R 1000:1000` du dossier hôte ; voir la ligne `volume.unwritable` dans les logs |
 | Port déjà utilisé | autre service sur 8080 | `YUKI_GATEWAY_PORT=9090` dans `.env` |
 | `LLM_UNAVAILABLE` dans l'UI | clé légère absente | ouvrir `/config`, saisir la **clé LLM légère**, Enregistrer (bascule **à chaud**) |
 | `delegate` → `heavy_unavailable` | clé lourde absente | ouvrir `/config`, saisir la **clé LLM lourde** |
 | `delegate` → `queue_full` | file lourde pleine (10) | attendre la fin des jobs ou ajuster `delegation.maxQueue` dans `/config` (redémarrage) |
 | Champ grisé « Verrouillé par l'environnement » | variable d'env définie | retirer la variable du compose/`.env` puis redémarrer, ou faire `PUT` après suppression de la variable |
 | `locked_by_env` au `PUT` | idem | idem |
-| Modification « redémarrage » non appliquée | champ non à chaud | `docker compose restart` |
+| Modification « redémarrage » non appliquée | champ non à chaud | bouton **Redémarrer** dans `/config` (relance le programme dans le conteneur) ou `docker compose restart` |
+| Bouton **Redémarrer** sans effet / Yuki ne revient pas | arrêt au démarrage (mauvaise config) ou superviseur en boucle | `./scripts/logs.sh` : chercher `[supervisor]` (`pas de relance (panne)`, `boucle détectée`) et corriger la cause ; un champ « redémarrage » invalide peut faire échouer le démarrage |
+| log `[supervisor] boucle détectée` | le programme ressort en 75 plusieurs fois de suite (arrêt gracieux immédiat) | vérifier que `POST /api/admin/restart` n'est pas appelé en boucle ; corriger puis redémarrer le conteneur |
 | `models.json` inattendu | il est **généré** à chaque démarrage | ne pas l'éditer : passer par `/config` |
 
 ## 7. Développement
@@ -275,9 +332,10 @@ arrière-plan. Le léger peut déléguer via l'outil `delegate`. Le nommage est
 Depuis le Lot 11, **plus aucun fichier à éditer**. Ouvrez `/config` et réglez,
 pour chaque rôle, `baseUrl`, `api`, `model`, `thinking` (bouton **Tester la
 connexion** disponible). Ces champs sont marqués **redémarrage** : enregistrés
-immédiatement, ils prennent effet au **prochain redémarrage** (`docker compose
-restart`), car ils nécessitent de **régénérer `models.json`** et de recréer le
-runtime de modèles.
+immédiatement, ils prennent effet au **prochain redémarrage** (bouton
+**Redémarrer** de `/config` — le programme est relancé dans le conteneur — ou
+`docker compose restart`), car ils nécessitent de **régénérer `models.json`** et
+de recréer le runtime de modèles.
 
 > `models.json` (`/data/pi/agent/models.json`) est **GÉNÉRÉ** au démarrage depuis
 > la configuration effective. Il n'est plus seedé par copie-si-absent et ne doit

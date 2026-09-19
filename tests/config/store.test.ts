@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ConfigStore, CONFIG_STORE_SCHEMA_VERSION } from "../../src/config/store.js";
+import { ConfigStore, ConfigStoreWriteError, CONFIG_STORE_SCHEMA_VERSION } from "../../src/config/store.js";
 
 const tempDirs: string[] = [];
 
@@ -102,5 +102,29 @@ describe("ConfigStore", () => {
     chmodSync(path, 0o644);
     store.write({ "gpu.minDriver": 600 });
     expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it("écriture impossible → ConfigStoreWriteError exploitable (jamais un échec muet)", () => {
+    const root = mkdtempSync(join(tmpdir(), "yuki-store-ro-"));
+    tempDirs.push(root);
+    // Un FICHIER là où le store attend un répertoire : l'écriture échoue pour
+    // TOUT utilisateur (y compris root), donc le test est reproductible en CI.
+    const blocker = join(root, "state");
+    writeFileSync(blocker, "not-a-directory");
+    const path = join(blocker, "config.json");
+    const store = new ConfigStore(path);
+
+    let thrown: unknown;
+    try {
+      store.write({ "gpu.profile": "compact" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ConfigStoreWriteError);
+    const error = thrown as ConfigStoreWriteError;
+    expect(error.path).toBe(path);
+    expect(error.reason.length).toBeGreaterThan(0);
+    expect(error.message).toContain("Impossible d'écrire la configuration");
+    expect(error.message).toContain(path);
   });
 });

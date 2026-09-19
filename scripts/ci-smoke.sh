@@ -150,11 +150,20 @@ run_smoke() {
   log "Assertions Lot 11 — PUT des clés FICTIVES via l'API puis bascule à chaud"
   local light_key="fake-light-key-000000000000" heavy_key="fake-heavy-key-111111111111"
   local put_code
+  # `Origin` = `Host` : reproduit un envoi depuis le navigateur (accès par IP/hôte).
   put_code="$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
     -H 'content-type: application/json' -H 'X-Yuki-Config: 1' \
+    -H "Origin: http://127.0.0.1:${PORT}" \
     --data "$(printf '{"llm.light.apiKey":"%s","llm.heavy.apiKey":"%s"}' "$light_key" "$heavy_key")" \
     "http://127.0.0.1:${PORT}/api/config")"
   [ "$put_code" = "200" ] || fail "PUT /api/config a renvoyé $put_code (attendu 200)"
+
+  # Une origine étrangère doit rester refusée (403), même avec l'en-tête exigé.
+  local bad_origin_code
+  bad_origin_code="$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+    -H 'content-type: application/json' -H 'X-Yuki-Config: 1' -H 'Origin: http://evil.example' \
+    --data '{}' "http://127.0.0.1:${PORT}/api/config")"
+  [ "$bad_origin_code" = "403" ] || fail "PUT origine étrangère a renvoyé $bad_origin_code (attendu 403)"
 
   local config_after
   config_after="$(curl -fsS "http://127.0.0.1:${PORT}/api/config")"

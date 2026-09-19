@@ -44,7 +44,7 @@ YUKI_LOG_LEVEL=info
 | Fichier | Rôle |
 | --- | --- |
 | `schema.ts` | **Table unique** de descripteurs `{ type, default, enum?, min?, max?, apply, secret?, env? }` + validation (~40 lignes). Source unique des bornes/énumérations, réutilisée par `env.ts` (surcharges) et l'API (patch). |
-| `store.ts` | `ConfigStore` : lecture/écriture **atomique** (`tmp` + `rename`), **`0600`**, JSON **sparse**, `schemaVersion`. Repli **sans jamais écraser** (fichier absent → défauts ; JSON invalide / `schemaVersion` inconnue → défauts + log, fichier conservé). |
+| `store.ts` | `ConfigStore` : lecture/écriture **atomique** (`tmp` + `rename`), **`0600`**, JSON **sparse**, `schemaVersion`. Repli **sans jamais écraser** (fichier absent → défauts ; JSON invalide / `schemaVersion` inconnue → défauts + log, fichier conservé). Une **écriture** impossible lève une `ConfigStoreWriteError` (cause système traduite : `EACCES`, `EROFS`, `ENOSPC`…) → réponse HTTP **exploitable** (`500 config_store_unwritable` + message), jamais un 500 muet. |
 | `runtime.ts` | `ConfigRuntime` : combine store + env + défauts (`get`/`update`/`subscribe`), **pont des clés** vers `process.env`, valeurs à masquer pour le logger, import unique de `models.json`. |
 | `env.ts` | **Câblage** uniquement (ports, chemins, montages, identité, GPU source, chemins Pi/jobs/store) + `readConfigEnvOverrides` (surcharges env des champs du store). |
 | `paths.ts` | `resolveConfigStorePath` (volume `state`, surcharge `YUKI_CONFIG_STORE_PATH`). |
@@ -105,6 +105,20 @@ Sans cet ordre, une clé issue du store **fuiterait dans les logs**.
   natif** sur `GET {baseUrl}/models` (compatible OpenAI), timeout ~5 s, **hors
   SDK**. `{ ok, status?, models?, error? }` — permet de tester **avant**
   d'enregistrer (précieux au premier démarrage).
+- **`POST /api/admin/restart`** (redémarrage) → mêmes garde-fous que les
+  écritures (`X-Yuki-Config` + `Origin`/`Host`). Journalise
+  (`admin.restart_requested`), répond **`200 { ok: true, restarting: true }`**,
+  puis **planifie l'arrêt gracieux** (~300 ms plus tard) via le chemin de
+  `installGracefulShutdown` (fermeture des sockets WS puis `server.close()`) —
+  jamais `process.exit()` brutal, jamais le socket Docker. Ce chemin est le
+  **seul** à sortir avec le code **`75`** (`EX_TEMPFAIL`) : le **superviseur
+  interne à l'image** (`infra/gateway/supervisor.mjs`, `ENTRYPOINT`) relance
+  alors `dist/index.js` **dans le conteneur**, qui **reste en place**. Les
+  autres sorties (erreur fatale, refus de démarrage, `SIGTERM`) gardent leur
+  code — une vraie panne est **propagée**, jamais masquée. La fonction d'arrêt,
+  le planificateur ET la fonction de sortie sont **injectables** : les tests
+  vérifient « 200 + demande d'arrêt » et le code émis sans tuer le processus de
+  test.
 
 Les routes existantes (`/health*`, `/version`, `/ui/**`, `HEAD`, `405`) restent
 inchangées.
@@ -121,6 +135,19 @@ inchangées.
 
 - Route `/config` servie par `static.ts` (mêmes en-têtes de sécurité), lien
   depuis `index.html`. Vanilla, `type="module"`, **aucune chaîne de build**.
+- **Retour explicite** vers la conversation : bouton/lien « **← Retour à la
+  discussion** » (`href="/"`) dans l'en-tête — le lien implicite du titre n'était
+  pas trouvé. Le retour fonctionne dans les deux sens (accueil ⇄ configuration).
+- **Redémarrer** : bouton dans une section dédiée (sous « Résultat de
+  l'enregistrement »), avec avertissement (interruption du travail en cours),
+  confirmation, état de progression (poll `/health/live` puis rechargement) et
+  message d'échec. Le texte annonce un **redémarrage interne** : Yuki relance son
+  programme **dans le conteneur** (superviseur), **le conteneur reste en place**
+  — plus de dépendance à la politique de redémarrage Docker pour ce bouton.
+- **Pleine largeur** : l'interface (`.conversation`, `.thinking-indicator`,
+  `.config`) n'a **plus de colonne centrée** ; les bulles de message restent
+  seulement **plafonnées** (`min(78%, 900px)`) pour la lisibilité. Aucun layout
+  complexe : uniquement du CSS.
 - **Secrets** : champ `type="password"`, **vide même si une clé existe**. Si
   `configured=true` : « Clé configurée (••••c0de) » + boutons **Remplacer** /
   **Effacer**. La valeur saisie n'est **jamais** re-remplie dans le DOM après

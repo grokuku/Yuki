@@ -22,6 +22,7 @@ import {
   LockedByEnvError,
   type ConfigRuntime,
 } from "../../config/runtime.js";
+import { ConfigStoreWriteError } from "../../config/store.js";
 import type { Logger } from "../../observability/logger.js";
 
 export const CONFIG_WRITE_HEADER = "x-yuki-config";
@@ -62,39 +63,68 @@ function json(status: number, body: unknown): ConfigHttpResponse {
   return { status, body, headers: JSON_HEADERS };
 }
 
+/**
+ * Lit un en-tête de façon insensible à la casse. `node:http` minuscule déjà les
+ * noms, mais l'API est aussi appelée avec des en-têtes forgés (tests, proxies).
+ */
 function headerString(
   headers: IncomingHttpHeaders,
   name: string,
 ): string | undefined {
-  const value = headers[name];
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value[0];
+  const target = name.toLowerCase();
+  for (const [key, raw] of Object.entries(headers)) {
+    if (key.toLowerCase() !== target) continue;
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw)) return raw[0];
+  }
   return undefined;
 }
 
-/** Contrôle `Origin`/`Host` : même origine si `Origin` est présent. */
+/**
+ * Normalise un hôte (en-tête `Host` ou URL `Origin`) en `host[:port]` :
+ * minuscules et port par défaut retiré. Le schéma est ignoré (couvre la
+ * terminaison TLS derrière un reverse-proxy). Renvoie `null` si non analysable.
+ */
+function normalizeHost(value: string): string | null {
+  try {
+    const url = new URL(value.includes("://") ? value : `http://${value}`);
+    const host = url.hostname.toLowerCase();
+    return url.port === "" ? host : `${host}:${url.port}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Contrôle `Origin`/`Host` : si un `Origin` est présent, son hôte doit
+ * correspondre à celui de la requête (même origine).
+ *
+ * Couvre un accès légitime par IP LAN (`http://10.10.0.5:8083`), par nom
+ * d'hôte (casse insensible) et derrière un reverse-proxy (port par défaut,
+ * schéma TLS terminé en amont), SANS l'ouvrir à une origine étrangère.
+ */
 function sameOrigin(headers: IncomingHttpHeaders): boolean {
   const origin = headerString(headers, "origin");
   if (origin === undefined) return true; // pas d'Origin (ex. curl) : autorisé
   const host = headerString(headers, "host");
   if (host === undefined) return false;
-  try {
-    return new URL(origin).host === host;
-  } catch {
-    return false;
-  }
+  const originHost = normalizeHost(origin);
+  const requestHost = normalizeHost(host);
+  return originHost !== null && requestHost !== null && originHost === requestHost;
 }
 
 /** Applique les garde-fous des routes d'écriture. Renvoie une erreur ou `null`. */
-function guardWrite(input: ConfigRequestInput): ConfigHttpResponse | null {
-  if (headerString(input.headers, CONFIG_WRITE_HEADER) !== CONFIG_HEADER_VALUE) {
+export function requireWriteGuards(
+  headers: IncomingHttpHeaders,
+): ConfigHttpResponse | null {
+  if (headerString(headers, CONFIG_WRITE_HEADER) !== CONFIG_HEADER_VALUE) {
     return json(403, {
       error: "forbidden",
       code: "missing_config_header",
       message: `En-tête ${CONFIG_WRITE_HEADER}: ${CONFIG_HEADER_VALUE} requis.`,
     });
   }
-  if (!sameOrigin(input.headers)) {
+  if (!sameOrigin(headers)) {
     return json(403, {
       error: "forbidden",
       code: "bad_origin",
@@ -102,6 +132,10 @@ function guardWrite(input: ConfigRequestInput): ConfigHttpResponse | null {
     });
   }
   return null;
+}
+
+function guardWrite(input: ConfigRequestInput): ConfigHttpResponse | null {
+  return requireWriteGuards(input.headers);
 }
 
 function audit(deps: ConfigApiDeps, changes: ReturnType<ConfigRuntime["update"]>["changes"]): void {
@@ -172,6 +206,25 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
     }
     if (error instanceof ConfigValidationError) {
       return json(400, { error: "invalid_config", fields: error.fields });
+    }
+    if (error instanceof ConfigStoreWriteError) {
+      // Cause journalisée ET renvoyée : un 500 muet rendrait le diagnostic
+      // impossible (volume `state` non inscriptible, disque plein…).
+      input.deps.logger.error("config.store.write_failed", {
+        field: "store",
+        path: error.path,
+        code: error.code,
+        reason: error.reason,
+        error: error.cause instanceof Error ? error.cause.message : String(error.cause),
+      });
+      return json(500, {
+        error: "config_store_unwritable",
+        code: "config_store_unwritable",
+        path: error.path,
+        message:
+          `${error.message} Le volume « state » est-il monté ET inscriptible `+
+          `par l'uid/gid du conteneur (bind mount : chown 1000:1000) ?`,
+      });
     }
     throw error;
   }

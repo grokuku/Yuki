@@ -6,7 +6,8 @@
  * l'exécution pour produire l'état `volumes` du endpoint `/health`.
  */
 
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type { Env } from "./env.js";
 
@@ -94,4 +95,40 @@ export function inspectMountPoints(points: MountPoint[]): MountStatus[] {
     }
     return { ...point, exists, isDirectory, writable };
   });
+}
+
+/**
+ * Sonde une **écriture réelle** dans un répertoire (fichier temporaire créé puis
+ * supprimé). Contrairement à `accessSync(W_OK)`, elle reflète vraiment ce que
+ * le processus peut écrire — indispensable pour détecter TÔT un volume `state`
+ * non inscriptible (bind mount appartenant à un autre uid/gid), qui ne se
+ * manifesterait sinon qu'au premier Enregistrement de la page `/config`.
+ */
+export function probeWritable(path: string): {
+  writable: boolean;
+  error?: string;
+} {
+  try {
+    mkdirSync(path, { recursive: true });
+  } catch (error) {
+    return {
+      writable: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  const probe = join(path, `.yuki-write-probe-${process.pid}`);
+  try {
+    writeFileSync(probe, "");
+  } catch (error) {
+    return {
+      writable: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+  try {
+    rmSync(probe, { force: true });
+  } catch {
+    // La sonde a réussi : un échec de nettoyage n'invalide pas le résultat.
+  }
+  return { writable: true };
 }

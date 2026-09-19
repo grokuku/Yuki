@@ -80,8 +80,16 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/config ./config
 COPY public ./public
 
+# Superviseur interne (Node, sans dépendance) : il lance `dist/index.js` en
+# processus enfant et le RELANCE sur le code de sortie 75 (redémarrage demandé)
+# sans redémarrer le conteneur. Tout autre code est propagé (panne visible).
+# Copié depuis le contexte de build : il vit DANS l'image, pas dans un volume.
+COPY infra/gateway/supervisor.mjs ./infra/gateway/supervisor.mjs
+
 USER yuki
 
 EXPOSE 8080
 
-ENTRYPOINT ["node", "dist/index.js"]
+# `init: true` dans les composes reste nécessaire (reaping des zombies) : le
+# superviseur n'est PAS un init complet. Le superviseur relaie SIGTERM/SIGINT.
+ENTRYPOINT ["node", "infra/gateway/supervisor.mjs"]

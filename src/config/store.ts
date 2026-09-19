@@ -10,6 +10,10 @@
  * invalide ou `schemaVersion` inconnue → défauts en mémoire + fichier conservé
  * tel quel. Le démarrage n'échoue JAMAIS à cause du store.
  *
+ * À l'inverse, une **écriture** impossible (volume `state` non inscriptible,
+ * disque plein…) lève une `ConfigStoreWriteError` explicite : la cause système
+ * (`EACCES`, `EROFS`, `ENOSPC`…) est traduite, jamais un échec muet.
+ *
  * Aucun import SDK/typebox.
  */
 
@@ -39,6 +43,42 @@ export interface ConfigStoreLoad {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Erreur d'écriture du store : la cause système est explicite et exploitable. */
+export class ConfigStoreWriteError extends Error {
+  override readonly name = "ConfigStoreWriteError";
+  constructor(
+    /** Chemin complet du fichier de store visé. */
+    readonly path: string,
+    /** Cause lisible (français), ex. « permission refusée ». */
+    readonly reason: string,
+    /** Code système Node (`EACCES`, `EROFS`…), si connu. */
+    readonly code: string | undefined,
+    cause: unknown,
+  ) {
+    super(`Impossible d'écrire la configuration (${reason}) dans ${path}.`, {
+      cause,
+    });
+  }
+}
+
+/** Traduit un code d'erreur système Node en cause lisible (français). */
+function writeReason(error: unknown): { reason: string; code: string | undefined } {
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code)
+      : undefined;
+  const reasons: Record<string, string> = {
+    EACCES: "permission refusée",
+    EPERM: "permission refusée",
+    EROFS: "système de fichiers en lecture seule",
+    ENOSPC: "espace disque insuffisant",
+    EDQUOT: "quota disque dépassé",
+    ENOTDIR: "chemin invalide (un parent n'est pas un répertoire)",
+    EEXIST: "le chemin est occupé par un autre fichier",
+  };
+  return { reason: (code !== undefined ? reasons[code] : undefined) ?? messageOf(error), code };
 }
 
 /** Accès fichier au store de configuration. */
@@ -96,24 +136,29 @@ export class ConfigStore {
    * ne voit jamais un fichier partiel.
    */
   write(values: Record<string, unknown>): void {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const tmp = `${this.path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-    const payload = `${JSON.stringify(
-      { schemaVersion: CONFIG_STORE_SCHEMA_VERSION, values },
-      null,
-      2,
-    )}\n`;
-    writeFileSync(tmp, payload, { mode: 0o600 });
     try {
-      chmodSync(tmp, 0o600);
-    } catch {
-      // Meilleur effort : la création avec `mode` a déjà tenté le 0600.
-    }
-    renameSync(tmp, this.path);
-    try {
-      chmodSync(this.path, 0o600);
-    } catch {
-      // Meilleur effort.
+      mkdirSync(dirname(this.path), { recursive: true });
+      const tmp = `${this.path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+      const payload = `${JSON.stringify(
+        { schemaVersion: CONFIG_STORE_SCHEMA_VERSION, values },
+        null,
+        2,
+      )}\n`;
+      writeFileSync(tmp, payload, { mode: 0o600 });
+      try {
+        chmodSync(tmp, 0o600);
+      } catch {
+        // Meilleur effort : la création avec `mode` a déjà tenté le 0600.
+      }
+      renameSync(tmp, this.path);
+      try {
+        chmodSync(this.path, 0o600);
+      } catch {
+        // Meilleur effort.
+      }
+    } catch (error) {
+      const { reason, code } = writeReason(error);
+      throw new ConfigStoreWriteError(this.path, reason, code, error);
     }
   }
 }

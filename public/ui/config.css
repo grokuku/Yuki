@@ -8,15 +8,33 @@
 .config {
   flex: 1;
   overflow-y: auto;
-  width: 100%;
-  max-width: 920px;
-  margin: 0 auto;
-  padding: 20px 16px 48px;
+  padding: 20px 24px 48px;
 }
 
 .config-intro {
   color: var(--muted);
   margin-top: 0;
+  /* Longueur de ligne bornée à GAUCHE (pas de colonne centrée). */
+  max-width: 100ch;
+}
+
+/* Lien de retour explicite vers la conversation (en-tête). */
+.nav-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nav-back:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--accent);
 }
 
 .config-banner {
@@ -199,4 +217,32 @@
 .config-applied div {
   margin: 4px 0;
   font-size: 13px;
+}
+
+.config-restart {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 14px 16px;
+  margin-top: 20px;
+}
+
+.config-restart h2 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.config-restart__warning {
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 100ch;
+  margin: 0 0 12px;
+}
+
+.config-restart__warning code {
+  font-size: 12px;
+}
+
+.config-status--error {
+  color: var(--danger);
 }

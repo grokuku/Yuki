@@ -3,7 +3,8 @@
  * validation, verrou d'env), test LLM hors SDK.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,6 +93,44 @@ async function startHarness(
 }
 
 const WRITE_HEADERS = { "x-yuki-config": "1", "content-type": "application/json" };
+
+/** Requête `PUT` brute (permet de forger `Host`/`Origin`, interdits par `fetch`). */
+function rawPut(
+  baseUrl: string,
+  headers: Record<string, string>,
+  body: string,
+): Promise<{ status: number; body: string }> {
+  const url = new URL(baseUrl);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      { host: url.hostname, port: url.port, method: "PUT", path: "/api/config", headers },
+      (res) => {
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: data }));
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+/** Garde-fous d'écriture directement (en-têtes forgés, casse d'en-tête comprise). */
+async function putWithHeaders(
+  runtime: ReturnType<typeof createConfigRuntime>,
+  headers: Record<string, string>,
+): Promise<number> {
+  const { handleConfigRequest } = await import("../../src/gateway/routes/config.js");
+  const response = await handleConfigRequest({
+    method: "PUT",
+    path: "/api/config",
+    headers,
+    body: "{}",
+    deps: { runtime, logger: createLogger({ level: "error", sink: () => {}, secretValues: [] }) },
+  });
+  return response.status;
+}
 
 describe("GET /api/config en mode dégradé", () => {
   it("répond 200 SANS aucune clé et n'expose jamais de valeur", async () => {
@@ -239,6 +278,124 @@ describe("PUT /api/config", () => {
     };
     expect(body.status.lightKey).toBe(false);
     expect(body.fields["llm.light.apiKey"]?.configured).toBe(false);
+  });
+
+  it("store NON inscriptible → 500 EXPLOITABLE (cause journalisée, jamais un 500 muet)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yuki-api-ro-"));
+    tempDirs.push(root);
+    // Un FICHIER là où le store attend un répertoire : l'écriture échoue pour
+    // TOUT utilisateur (y compris root), donc reproductible en CI.
+    const blocker = join(root, "state");
+    writeFileSync(blocker, "not-a-directory");
+    const storePath = join(blocker, "config.json");
+    const { baseUrl, lines } = await startHarness({
+      YUKI_MOUNT_STATE: blocker,
+      YUKI_CONFIG_STORE_PATH: storePath,
+    });
+
+    const response = await fetch(`${baseUrl}/api/config`, {
+      method: "PUT",
+      headers: WRITE_HEADERS,
+      body: JSON.stringify({ "gpu.profile": "compact" }),
+    });
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as {
+      error: string;
+      code: string;
+      path: string;
+      message: string;
+    };
+    expect(body.error).toBe("config_store_unwritable");
+    expect(body.code).toBe("config_store_unwritable");
+    expect(body.path).toBe(storePath);
+    // Message utile (chemin + piste), PAS le 500 muet `internal_error`.
+    expect(body.error).not.toBe("internal_error");
+    expect(body.message).toContain("Impossible d'écrire la configuration");
+    expect(body.message).toContain(storePath);
+    // La cause système est journalisée (exploitable dans `docker logs`).
+    expect(lines.join("\n")).toContain("config.store.write_failed");
+  });
+});
+
+describe("PUT /api/config — contrôle Origin/Host (accès réseau local)", () => {
+  it("accepte un accès par IP LAN (Host/Origin = 10.10.0.5:8083), bout en bout", async () => {
+    const { baseUrl } = await startHarness();
+    const response = await rawPut(
+      baseUrl,
+      {
+        host: "10.10.0.5:8083",
+        origin: "http://10.10.0.5:8083",
+        "x-yuki-config": "1",
+        "content-type": "application/json",
+      },
+      JSON.stringify({ "delegation.defaultDeadlineMs": 2000 }),
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("refuse toujours une origine étrangère", async () => {
+    const { baseUrl } = await startHarness();
+    const response = await rawPut(
+      baseUrl,
+      {
+        host: "10.10.0.5:8083",
+        origin: "http://evil.example:8083",
+        "x-yuki-config": "1",
+        "content-type": "application/json",
+      },
+      "{}",
+    );
+    expect(response.status).toBe(403);
+    expect(response.body).toContain("bad_origin");
+  });
+
+  it("refuse un port différent sur le même hôte", async () => {
+    const { runtime } = await startHarness();
+    const status = await putWithHeaders(runtime, {
+      host: "10.10.0.5:8083",
+      origin: "http://10.10.0.5:9090",
+      "x-yuki-config": "1",
+    });
+    expect(status).toBe(403);
+  });
+
+  it("accepte un nom d'hôte, casse insensible et en-tête personnalisé mixte", async () => {
+    const { runtime } = await startHarness();
+    const status = await putWithHeaders(runtime, {
+      Host: "Yuki.Lan:8083",
+      Origin: "http://yuki.lan:8083",
+      "X-Yuki-Config": "1",
+    });
+    expect(status).toBe(200);
+  });
+
+  it("accepte un port par défaut omis d'un côté (reverse-proxy)", async () => {
+    const { runtime } = await startHarness();
+    const status = await putWithHeaders(runtime, {
+      host: "yuki.lan",
+      origin: "http://yuki.lan:80",
+      "x-yuki-config": "1",
+    });
+    expect(status).toBe(200);
+  });
+
+  it("accepte une terminaison TLS en amont (Origin https, Host http)", async () => {
+    const { runtime } = await startHarness();
+    const status = await putWithHeaders(runtime, {
+      host: "yuki.lan:8083",
+      origin: "https://yuki.lan:8083",
+      "x-yuki-config": "1",
+    });
+    expect(status).toBe(200);
+  });
+
+  it("sans Origin (ex. curl) reste autorisé avec l'en-tête personnalisé", async () => {
+    const { runtime } = await startHarness();
+    const status = await putWithHeaders(runtime, {
+      host: "10.10.0.5:8083",
+      "x-yuki-config": "1",
+    });
+    expect(status).toBe(200);
   });
 });
 

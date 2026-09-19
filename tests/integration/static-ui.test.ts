@@ -62,6 +62,8 @@ describe("UI statique servie par le gateway", () => {
     const body = await response.text();
     expect(body).toContain("<title>Yuki</title>");
     expect(body).toContain("/ui/app.js");
+    // Lien vers la configuration (aller) — le retour est testé sur /config.
+    expect(body).toContain('href="/config"');
   });
 
   it("GET /ui/app.js et /ui/styles.css servent les assets", async () => {
@@ -84,12 +86,39 @@ describe("UI statique servie par le gateway", () => {
     const body = await response.text();
     expect(body).toContain("Configuration");
     expect(body).toContain("/ui/config.js");
+    // Retour explicite vers la discussion (demande utilisateur).
+    expect(body).toContain("Retour à la discussion");
+    expect(body).toMatch(/href="\/"[^>]*>[^<]*Retour à la discussion/);
+    // Bouton de redémarrage présent, sans dépendance à la politique Docker.
+    expect(body).toContain('id="restart"');
+    expect(body).toContain("redémarre en interne");
+    expect(body).toContain("le conteneur reste en place");
+  });
+
+  it("la CSP de /config autorise ce dont la page a besoin, sans unsafe-inline", async () => {
+    const response = await fetch(`${baseUrl}/config`);
+    const csp = response.headers.get("content-security-policy") ?? "";
+    // Aucune directive réellement utilisée par la page ne doit manquer.
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).toContain("style-src 'self'");
+    expect(csp).toContain("connect-src 'self'");
+    expect(csp).toContain("img-src 'self'");
+    expect(csp).toContain("base-uri 'none'");
+    expect(csp).toContain("form-action 'none'");
+    // La page n'utilise NI script NI style inline : pas besoin d'échappatoire.
+    expect(csp).not.toContain("unsafe-inline");
+    expect(csp).not.toContain("unsafe-eval");
   });
 
   it("GET /ui/config.js et /ui/config.css servent les assets de configuration", async () => {
     const js = await fetch(`${baseUrl}/ui/config.js`);
     expect(js.status).toBe(200);
     expect(js.headers.get("content-type")).toContain("javascript");
+    // Le script sait demander le redémarrage et sondre `/health/live` au retour.
+    const jsBody = await js.text();
+    expect(jsBody).toContain("/api/admin/restart");
+    expect(jsBody).toContain("/health/live");
 
     const css = await fetch(`${baseUrl}/ui/config.css`);
     expect(css.status).toBe(200);

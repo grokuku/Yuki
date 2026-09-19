@@ -40,6 +40,20 @@ export function startServer(
   });
 }
 
+/**
+ * Motif d'arrêt déclenché par la route `POST /api/admin/restart`.
+ * C'est le SEUL motif qui termine avec `RESTART_EXIT_CODE`.
+ */
+export const RESTART_REASON = "RESTART";
+/**
+ * Code de sortie signifiant « redémarrage demandé » (`EX_TEMPFAIL`). Le
+ * superviseur interne (`infra/gateway/supervisor.mjs`) le reconnait et relance
+ * le programme SANS redémarrer le conteneur. Les autres chemins de sortie
+ * (erreur fatale, `docker compose stop`) gardent leur code : c'est ce qui
+ * distingue un redémarrage demandé d'un échec.
+ */
+export const RESTART_EXIT_CODE = 75;
+
 export interface ShutdownOptions {
   /** Durée avant sortie forcée. */
   timeoutMs?: number;
@@ -48,39 +62,68 @@ export interface ShutdownOptions {
    * puis le PiHost). Chaque hook est isolé : un échec n'empêche pas les autres.
    */
   beforeClose?: () => Promise<void>;
+  /**
+   * Sortie finale du processus. Injectable pour les tests (défaut :
+   * `process.exit`), afin de vérifier le code émis sans tuer le test.
+   */
+  exit?: (code: number) => void;
+  /**
+   * Installe les écouteurs `SIGTERM`/`SIGINT`. `false` dans les tests pour
+   * éviter d'accumuler des écouteurs sur le processus de test.
+   */
+  registerSignals?: boolean;
 }
 
 /**
- * Installe l'arrêt gracieux : SIGTERM/SIGINT ferment d'abord le transport
- * (sockets WS), puis le serveur HTTP, puis forcent la sortie après
- * `timeoutMs` si des connexions traînent.
+ * Déclencheur d'arrêt gracieux. `reason` apparaît dans les journaux (signaux
+ * `SIGTERM`/`SIGINT`, ou `RESTART` pour la route d'administration) et détermine
+ * le code de sortie : `RESTART` ⇒ 75, tout le reste ⇒ 0.
+ */
+export type ShutdownTrigger = (reason: string) => void;
+
+/**
+ * Installe l'arrêt gracieux : SIGTERM/SIGINT (et un déclencheur programmatique,
+ * ex. `POST /api/admin/restart`) ferment d'abord le transport (sockets WS), puis
+ * le serveur HTTP, puis forcent la sortie après `timeoutMs` si des connexions
+ * traînent. Le motif `RESTART` sort avec `RESTART_EXIT_CODE` (75), les autres
+ * avec 0. Renvoie le déclencheur (testable / réutilisable par l'administration).
  */
 export function installGracefulShutdown(
   server: Server,
   logger: Logger,
   options: ShutdownOptions = {},
-): void {
+): ShutdownTrigger {
   const timeoutMs = options.timeoutMs ?? 10_000;
+  const exit =
+    options.exit ??
+    ((code: number): void => {
+      process.exit(code);
+    });
   let shuttingDown = false;
 
-  const shutdown = (signal: NodeJS.Signals): void => {
+  const shutdown = (reason: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
-    logger.info("gateway.shutdown", { signal });
+    logger.info("gateway.shutdown", { signal: reason });
+    // Code de sortie : 75 UNIQUEMENT sur le chemin « redémarrage demandé »
+    // (le superviseur interne relance alors le programme). Tous les autres
+    // motifs (SIGTERM/SIGINT, `docker compose stop`) sortent en 0 : le
+    // conteneur ne doit PAS être relancé après un arrêt volontaire.
+    const code = reason === RESTART_REASON ? RESTART_EXIT_CODE : 0;
     const force = setTimeout(() => {
-      logger.warn("gateway.shutdown forced", { signal, timeoutMs });
-      process.exit(0);
+      logger.warn("gateway.shutdown forced", { signal: reason, timeoutMs });
+      exit(code);
     }, timeoutMs);
     force.unref();
 
     const closeHttp = (): void => {
       server.close((error) => {
         if (error) {
-          logger.error("gateway.shutdown error", { signal, error: error.message });
+          logger.error("gateway.shutdown error", { signal: reason, error: error.message });
         }
         clearTimeout(force);
-        logger.info("gateway.stopped", { signal });
-        process.exit(error ? 1 : 0);
+        logger.info("gateway.stopped", { signal: reason, exitCode: error ? 1 : code });
+        exit(error ? 1 : code);
       });
       server.closeIdleConnections?.();
     };
@@ -93,13 +136,16 @@ export function installGracefulShutdown(
     before()
       .catch((error: unknown) => {
         logger.error("gateway.shutdown hook error", {
-          signal,
+          signal: reason,
           error: error instanceof Error ? error.message : String(error),
         });
       })
       .finally(closeHttp);
   };
 
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  if (options.registerSignals !== false) {
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+  }
+  return shutdown;
 }

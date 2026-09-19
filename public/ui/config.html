@@ -12,6 +12,7 @@
     <header class="topbar">
       <div class="brand"><a class="brand__link" href="/">Yuki</a> — Configuration</div>
       <div class="status">
+        <a class="nav-back" href="/">← Retour à la discussion</a>
         <span id="ready" class="pill pill--offline">vérification…</span>
         <span id="light-key" class="pill">clé légère ?</span>
         <span id="heavy-key" class="pill">clé lourde ?</span>
@@ -47,6 +48,27 @@
         <div>
           <strong>Prendra effet au prochain redémarrage :</strong>
           <span id="applied-restart">—</span>
+        </div>
+      </section>
+
+      <section class="config-restart" aria-labelledby="restart-title">
+        <h2 id="restart-title">Redémarrer Yuki</h2>
+        <p class="config-restart__warning">
+          Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
+          conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
+          proprement ses connexions puis redémarre son programme.
+        </p>
+        <p class="config-restart__warning">
+          Yuki <strong>redémarre en interne</strong> : un superviseur relance le
+          programme dans le conteneur, <strong>le conteneur reste en place</strong>.
+          Aucune politique de redémarrage Docker n'est nécessaire pour ce
+          bouton.
+        </p>
+        <div class="config-actions">
+          <button id="restart" class="button button--danger" type="button">
+            Redémarrer
+          </button>
+          <span id="restart-status" class="config-save-status" role="status"></span>
         </div>
       </section>
     </main>

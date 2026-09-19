@@ -23,10 +23,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
-import { inspectMountPoints, mountPoints } from "./config/paths.js";
+import { inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
 import { createDelegationService, type DelegationService } from "./delegation/index.js";
-import { createServer, installGracefulShutdown, startServer } from "./gateway/server.js";
+import {
+  createServer,
+  installGracefulShutdown,
+  RESTART_REASON,
+  startServer,
+} from "./gateway/server.js";
 import { createWsTransport } from "./gateway/ws/server.js";
 import type { Transport } from "./gateway/ws/transport.js";
 import type { SubsystemsSnapshot } from "./gateway/routes/health.js";
@@ -106,6 +111,23 @@ async function main(): Promise<void> {
     level: env.logLevel,
     secretValues: [...collectSecretValues(), ...config.secretValues()],
   });
+
+  // --- Détection précoce des volumes `rw` non inscriptibles ------------------
+  // Une erreur de permission (bind mount appartenant à un autre uid/gid) ne se
+  // manifesterait sinon qu'à la première écriture — et le store de config n'est
+  // écrit qu'au premier « Enregistrer » de /config. On prévient donc TÔT.
+  // On NE sort PAS : la page /config doit rester joignable (invariant Lot 11).
+  for (const mount of mountPoints(env)) {
+    if (mount.mode !== "rw") continue;
+    const probe = probeWritable(mount.containerPath);
+    if (probe.writable) continue;
+    logger.error("volume.unwritable", {
+      volume: mount.id,
+      path: mount.containerPath,
+      ...(probe.error ? { error: probe.error } : {}),
+      hint: "bind mount : ce répertoire doit appartenir à l'uid/gid du conteneur (chown 1000:1000)",
+    });
+  }
 
   // --- (4) Replis du store + import unique de `models.json` -----------------
   for (const warning of config.warnings) {
@@ -324,6 +346,12 @@ async function main(): Promise<void> {
     };
   };
 
+  // Déclencheur d'arrêt gracieux, alimenté juste après la création du serveur.
+  // La route `POST /api/admin/restart` le rappelle avec le motif `RESTART` :
+  // l'arrêt gracieux sort alors en 75 (`EX_TEMPFAIL`) et le superviseur interne
+  // (`infra/gateway/supervisor.mjs`) relance le programme SANS redémarrer le
+  // conteneur — jamais via le socket Docker.
+  let triggerShutdown: ((reason: string) => void) | undefined;
   const server = createServer(
     {
       env,
@@ -333,11 +361,15 @@ async function main(): Promise<void> {
       volumes,
       getSubsystems,
       config: { runtime: config, logger },
+      admin: {
+        logger,
+        requestShutdown: () => triggerShutdown?.(RESTART_REASON),
+      },
     },
     transport,
   );
 
-  installGracefulShutdown(server, logger, {
+  triggerShutdown = installGracefulShutdown(server, logger, {
     beforeClose: async () => {
       await transport?.close();
       await host?.stop();

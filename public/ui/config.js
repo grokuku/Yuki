@@ -15,6 +15,11 @@ const WRITE_HEADERS = {
   "x-yuki-config": "1",
 };
 
+/** Délai entre deux sondages de `/health/live` pendant un redémarrage. */
+const RESTART_POLL_MS = 1000;
+/** Délai maximal d'attente du retour du gateway avant d'annoncer l'échec. */
+const RESTART_TIMEOUT_MS = 90_000;
+
 const OPTIONS = {
   api: [["openai-completions", "openai-completions"]],
   thinking: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((v) => [v, v]),
@@ -124,6 +129,8 @@ const appliedRestart = document.getElementById("applied-restart");
 const readyPill = document.getElementById("ready");
 const lightPill = document.getElementById("light-key");
 const heavyPill = document.getElementById("heavy-key");
+const restartButton = document.getElementById("restart");
+const restartStatus = document.getElementById("restart-status");
 
 function h(tag, props = {}, children = []) {
   const el = document.createElement(tag);
@@ -414,6 +421,92 @@ async function testConnection(role, statusEl) {
   }
 }
 
+function setRestartStatus(text, isError = false) {
+  restartStatus.textContent = text;
+  restartStatus.classList.toggle("config-status--error", isError);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** `true` si le gateway répond à `/health/live`. */
+async function isGatewayLive() {
+  try {
+    const response = await fetch("/health/live", { cache: "no-store" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Après une demande de redémarrage : attend que le gateway tombe PUIS qu'il
+ * revienne, et recharge la page. Échoue clairement si le programme ne revient
+ * pas (par ex. un crash au démarrage — le superviseur ne relance que le code
+ * de redémarrage demandé).
+ */
+async function waitForGatewayRestart() {
+  const startedAt = Date.now();
+  let sawDown = false;
+  await delay(700); // laisse passer le délai avant l'arrêt côté serveur
+  while (Date.now() - startedAt < RESTART_TIMEOUT_MS) {
+    const alive = await isGatewayLive();
+    if (!alive) {
+      if (!sawDown) setRestartStatus("Redémarrage en cours… Yuki est arrêté.");
+      sawDown = true;
+    } else if (sawDown) {
+      setRestartStatus("Yuki est revenu — rechargement…");
+      await delay(400);
+      location.reload();
+      return;
+    }
+    await delay(RESTART_POLL_MS);
+  }
+  setRestartStatus(
+    "Yuki n'est pas revenu dans le délai imparti. Vérifiez les journaux du " +
+      "conteneur (docker compose logs yuki-gateway) : l'arrêt a peut-être " +
+      "échoué au démarrage.",
+    true,
+  );
+  restartButton.disabled = false;
+  saveButton.disabled = false;
+}
+
+async function restart() {
+  const confirmed = window.confirm(
+    "Redémarrer Yuki ?\n\n" +
+      "Cela interrompt la conversation et les jobs en cours.\n\n" +
+      "Yuki redémarre son programme en interne ; le conteneur reste en place.",
+  );
+  if (!confirmed) return;
+
+  restartButton.disabled = true;
+  saveButton.disabled = true;
+  setRestartStatus("Redémarrage demandé…");
+  try {
+    const response = await fetch("/api/admin/restart", {
+      method: "POST",
+      headers: WRITE_HEADERS,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message ?? body.error ?? `Erreur ${response.status}`);
+    }
+  } catch (error) {
+    setRestartStatus(
+      `Échec de la demande de redémarrage : ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      true,
+    );
+    restartButton.disabled = false;
+    saveButton.disabled = false;
+    return;
+  }
+  await waitForGatewayRestart();
+}
+
 function setPill(el, ok, onText, offText) {
   el.textContent = ok ? onText : offText;
   el.classList.toggle("pill--online", ok);
@@ -455,6 +548,7 @@ async function pollHealth() {
 }
 
 saveButton.addEventListener("click", () => void save());
+restartButton.addEventListener("click", () => void restart());
 
 void (async () => {
   try {

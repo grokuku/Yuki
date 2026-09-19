@@ -20,6 +20,11 @@ import {
   type ConfigApiDeps,
 } from "./routes/config.js";
 import {
+  handleAdminRequest,
+  isAdminPath,
+  type AdminApiDeps,
+} from "./routes/admin.js";
+import {
   healthFull,
   healthLive,
   healthReady,
@@ -40,6 +45,8 @@ export interface AppContext {
   getSubsystems?: () => SubsystemsSnapshot;
   /** API de configuration (Lot 11). Absente ⇒ `/api/config` → 404. */
   config?: ConfigApiDeps;
+  /** API d'administration (redémarrage). Absente ⇒ `/api/admin/**` → 404. */
+  admin?: AdminApiDeps;
 }
 
 interface RouteResponse {
@@ -146,6 +153,7 @@ export function createApp(context: AppContext): RequestListener {
     publicDir = resolve(process.cwd(), "public", "ui"),
     getSubsystems,
     config,
+    admin,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -170,6 +178,15 @@ export function createApp(context: AppContext): RequestListener {
             res.end();
           }
         },
+      );
+      return;
+    }
+
+    if (admin && isAdminPath(path)) {
+      writeResponse(
+        res,
+        handleAdminRequest({ method, path, headers: req.headers, deps: admin }),
+        headOnly,
       );
       return;
     }

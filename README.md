@@ -28,7 +28,9 @@ docker compose up -d          # 2. tire l'image publiée (ghcr) et démarre
 
 **Aucune création de dossier, aucun `chown`, aucun script requis** : la
 persistance passe par des **volumes nommés** (`yuki-pi`, `yuki-workspace`,
-`yuki-models`, `yuki-state`). Au premier démarrage **sans aucune clé**, le
+`yuki-models`, `yuki-state`). *(Avec des **bind mounts**
+— `compose.bind.example.yml` — chaque dossier monté en écriture doit en
+revanche appartenir à l'uid/gid `1000` du conteneur : `chown -R 1000:1000`.)* Au premier démarrage **sans aucune clé**, le
 gateway démarre quand même (`/health/ready` → 503) : ouvrez
 `http://127.0.0.1:<port>/config` et saisissez vos deux clés LLM — la bascule se
 fait **à chaud**, sans redémarrage. Pour développer :
@@ -39,12 +41,23 @@ npm test                      # tests (parsing, profils, porte, health, jobs, d�
 npm run gpu:report            # rapport GPU sans démarrer le serveur
 ```
 
-Une fois démarré : `http://127.0.0.1:8083/` (UI de conversation),
-`http://127.0.0.1:8083/config` (paramétrage — **clés LLM incluses**),
+Une fois démarré : `http://127.0.0.1:8083/` (UI de conversation,
+**pleine largeur**), `http://127.0.0.1:8083/config` (paramétrage — **clés LLM
+incluses**, retour « ← Retour à la discussion », bouton **Redémarrer**),
 `/api/config` (API de configuration, `GET`/`PUT` + `POST /api/config/llm/test`),
+`/api/admin/restart` (redémarrage protégé, `POST`),
 `/health` (état complet, dont `subsystems.llm` et `subsystems.jobs`),
 `/health/live` (vivant), `/health/ready` (porte GPU **et** PiHost **et** LLM
 léger prêts), `/version`, `/ws` (WebSocket).
+
+Depuis `/config`, le bouton **Redémarrer** demande à Yuki de **relancer son
+programme à l'intérieur du conteneur** : un **superviseur interne** à l'image
+(`infra/gateway/supervisor.mjs`) relance `dist/index.js` quand il sort avec le
+code convenu **75** (`EX_TEMPFAIL`). **Le conteneur reste en place** — aucune
+politique de redémarrage Docker n'est requise pour ce bouton, et Yuki n'accède
+jamais au socket Docker. Une politique de redémarrage (`restart: unless-stopped`
+dans les composes du projet) reste utile pour les **vrais crashs** (superviseur
+qui abandonne, sortie du conteneur) — pas pour le bouton.
 
 Prérequis hôte : `./scripts/doctor.sh` vérifie Docker Engine, Compose, le
 NVIDIA Container Toolkit, `nvidia-smi` et le driver. `./scripts/up.sh` reste une
