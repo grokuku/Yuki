@@ -25,8 +25,17 @@ import { HolafFetch } from './vendor/holaf/holaf-fetch.js';
  * `HolafModal.getCss()`). `injectStyles: false` coupe l'injection.
  */
 import { HolafModal } from './vendor/holaf/holaf-modal.js';
+import { initTheme } from './theme.js';
 
 HolafModal.configure({ injectStyles: false });
+
+// Rend la brique visible à `theme.js` (son `setTheme` global ne pilote que les
+// modales/toasts déjà chargés) — un import ESM ne pose rien sur `window`.
+window.HolafModal = HolafModal;
+
+// Thème (dropdown + bascule) : applique le choix persisté ou le réglage
+// système, et câble les contrôles de la topbar.
+initTheme();
 
 const WRITE_HEADERS = {
   "content-type": "application/json",

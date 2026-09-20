@@ -13,7 +13,9 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  /* Un thème explicite (`data-theme` posé par theme.js) doit toujours gagner
+     sur le réglage système : on ne cible donc le clair OS que sans attribut. */
+  :root:not([data-theme]) {
     --bg: #f4f6fb;
     --panel: #ffffff;
     --panel-2: #eef1f7;

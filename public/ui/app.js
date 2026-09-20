@@ -4,6 +4,12 @@
 // curseur `seq` (ni trou ni doublon) et réinitialise son rendu à partir d'un
 // `snapshot` lorsque la fenêtre de rejeu est dépassée ou à la reconnexion.
 
+import { initTheme } from "./theme.js";
+
+// Thème (dropdown + bascule) : applique le choix persisté ou le réglage
+// système, et câble les contrôles de la topbar.
+initTheme();
+
 const CLIENT_VERSION = "1";
 const MAX_RECONNECT_DELAY_MS = 8000;
 

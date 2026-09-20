@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light dark" />
     <title>Yuki — Configuration</title>
     <link rel="stylesheet" href="/ui/styles.css" />
+    <link rel="stylesheet" href="/ui/themes.css" />
     <link rel="stylesheet" href="/ui/config.css" />
     <!-- HolafModal — CSS extrait via getCss(), servi statiquement (CSP style-src 'self'). -->
     <link rel="stylesheet" href="/ui/vendor/holaf/holaf-modal.css" />
@@ -18,6 +19,16 @@
         <span id="ready" class="pill pill--offline">vérification…</span>
         <span id="light-key" class="pill">clé légère ?</span>
         <span id="heavy-key" class="pill">clé lourde ?</span>
+        <div class="theme-control">
+          <select id="theme-select" aria-label="Choisir le thème">
+            <option value="">Système</option>
+            <option value="dark">Sombre</option>
+            <option value="light">Clair</option>
+            <option value="midnight">Nuit</option>
+            <option value="slate">Ardoise</option>
+          </select>
+          <button id="theme-toggle" type="button" aria-label="Basculer mode clair/sombre">◑</button>
+        </div>
       </div>
     </header>
 

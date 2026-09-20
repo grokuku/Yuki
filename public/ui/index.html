@@ -6,6 +6,7 @@
     <meta name="color-scheme" content="light dark" />
     <title>Yuki</title>
     <link rel="stylesheet" href="/ui/styles.css" />
+    <link rel="stylesheet" href="/ui/themes.css" />
   </head>
   <body>
     <header class="topbar">
@@ -15,6 +16,16 @@
         <span id="connection" class="pill pill--offline">hors ligne</span>
         <span id="session-state" class="pill">idle</span>
         <span id="queued" class="pill pill--queued" hidden>en file</span>
+        <div class="theme-control">
+          <select id="theme-select" aria-label="Choisir le thème">
+            <option value="">Système</option>
+            <option value="dark">Sombre</option>
+            <option value="light">Clair</option>
+            <option value="midnight">Nuit</option>
+            <option value="slate">Ardoise</option>
+          </select>
+          <button id="theme-toggle" type="button" aria-label="Basculer mode clair/sombre">◑</button>
+        </div>
       </div>
     </header>
 

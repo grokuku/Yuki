@@ -1,0 +1,133 @@
+/*
+ * Thèmes explicites de l'UI Yuki (dropdown + bascule clair/sombre).
+ *
+ * Complète `styles.css` :
+ * - `styles.css` fournit le thème « système » : sombre par défaut sur `:root`
+ *   et clair via `@media (prefers-color-scheme: light)` sur
+ *   `:root:not([data-theme])` ;
+ * - ce fichier fournit les 4 presets explicites choisis par l'utilisateur,
+ *   portés par `:root[data-theme="..."]`. La spécificité (0,2,0) et le fait que
+ *   le bloc système soit neutralisé par `:not([data-theme])` garantissent qu'un
+ *   choix manuel l'emporte TOUJOURS sur le réglage de l'OS.
+ *
+ * Les valeurs reprennent EXACTEMENT celles de `_preview-themes.html`
+ * (projection des presets `holaf-tokens` dark/light/midnight/slate sur les 11
+ * variables de Yuki ; --user/--assistant/--ok sont les dérivations
+ * `holaf-color`). Un `color-scheme` par thème aligne les contrôles natifs
+ * (scrollbars, `<select>`) sur la palette choisie.
+ *
+ * CSP (`style-src 'self'`) : fichier statique servi sous `/ui/themes.css`,
+ * aucun style n'est injecté dynamiquement.
+ */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1e1e1e;
+  --panel: #1e1e1e;
+  --panel-2: #27272a;
+  --border: #3f3f46;
+  --text: #e4e4e7;
+  --muted: #a1a1aa;
+  --accent: #6366f1;
+  --danger: #ef4444;
+  --user: #2A2B44;
+  --assistant: #22222B;
+  --ok: #4cc38a;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f4f4f5;
+  --border: #d4d4d8;
+  --text: #18181b;
+  --muted: #52525b;
+  --accent: #4f46e5;
+  --danger: #dc2626;
+  --user: #DFDEFA;
+  --assistant: #F4F4FD;
+  --ok: #317F5A;
+}
+
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+  --bg: #10111d;
+  --panel: #10111d;
+  --panel-2: #181a2c;
+  --border: #272a44;
+  --text: #e2e4f0;
+  --muted: #9aa0c3;
+  --accent: #818cf8;
+  --danger: #ef4444;
+  --user: #242744;
+  --assistant: #17182A;
+  --ok: #4cc38a;
+}
+
+:root[data-theme="slate"] {
+  color-scheme: dark;
+  --bg: #1f232b;
+  --panel: #1f232b;
+  --panel-2: #292e38;
+  --border: #3a4150;
+  --text: #e6e9ee;
+  --muted: #9aa3b2;
+  --accent: #94a3b8;
+  --danger: #ef4444;
+  --user: #343A44;
+  --assistant: #262B33;
+  --ok: #4cc38a;
+}
+
+/* ─── Contrôle de thème (topbar) ───────────────────────────────────────── */
+
+.theme-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.theme-control select {
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.theme-control select:hover,
+.theme-control select:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.theme-control select:focus-visible,
+.theme-control button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.theme-control button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.theme-control button:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--accent);
+}

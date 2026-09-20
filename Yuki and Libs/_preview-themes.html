@@ -1,0 +1,1513 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Yuki — Preview comparative des thèmes (Yuki vs holaf-tokens)</title>
+    <!-- Fichier autonome : zéro dépendance, zéro réseau, aucun script. -->
+    <style>
+/* ═══ Styles de la page de preview (chrome) ═══ */
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 24px;
+  background: #0b0d12; color: #e8ebf2;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.pv-head { max-width: 1400px; margin: 0 auto 20px; }
+.pv-head h1 { font-size: 22px; margin: 0 0 6px; }
+.pv-head p { margin: 0; color: #a7afc2; max-width: 90ch; }
+.pv-head code { background: #1b2030; padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+.pv-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+  max-width: 1400px;
+  margin: 0 auto;
+  align-items: start;
+}
+@media (max-width: 1180px) { .pv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px)  { .pv-grid { grid-template-columns: minmax(0, 1fr); } }
+.pv-cell__title {
+  font-size: 15px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px;
+}
+.pv-cell__num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #2a3350; color: #cdd6f0; font-size: 12px; font-weight: 700; flex: none;
+}
+.pv-cell__note { font-size: 12px; color: #98a1b6; margin: 0 0 10px; min-height: 30px; }
+.pv-frame {
+  border: 1px solid #2a3242; border-radius: 12px; overflow: hidden;
+  background: #0f1115; box-shadow: 0 10px 30px rgba(0,0,0,.4);
+}
+/* le corps de page Yuki rendu dans chaque panneau */
+.yp { min-height: 100%; }
+.pv-chat {
+  margin: 4px 24px 0; padding-top: 16px;
+  border-top: 1px dashed var(--border);
+}
+.pv-chat__label { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+.pv-chat code { font-size: 11px; }
+.pv-chat .conversation { flex: none; overflow: visible; padding: 10px 0; }
+.pv-lib {
+  margin: 4px 24px 22px; padding-top: 16px;
+  border-top: 1px dashed var(--border);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.pv-lib__label { font-size: 11.5px; color: var(--muted); }
+.pv-lib code { font-size: 11px; }
+.pv-lib .holaf-modal-root { width: 100%; max-width: 100%; }
+.pv-lib .holaf-toast { width: 100%; max-width: 100%; animation: none; }
+.pv-approx { margin: 0 24px 22px; font-size: 11.5px; color: var(--muted); font-style: italic; }
+
+
+/* ═══ Yuki — styles.css (inliné, scopé .yp) ═══ */
+
+
+* {
+  box-sizing: border-box;
+}
+
+
+.yp {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pill {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.pill--online {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+}
+
+.pill--offline {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.pill--queued {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+a.pill {
+  text-decoration: none;
+}
+
+a.pill:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.conversation {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty {
+  color: var(--muted);
+  text-align: center;
+  margin-top: 40px;
+}
+
+.message {
+  /* Bulle plafonnée pour rester lisible en pleine largeur, SANS colonne
+     centrée : l'alignement gauche (assistant) / droite (utilisateur) est
+     conservé, seule la longueur de ligne est bornée. */
+  max-width: min(78%, 900px);
+  padding: 10px 14px;
+  border-radius: 14px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  border: 1px solid var(--border);
+}
+
+.message--user {
+  align-self: flex-end;
+  background: var(--user);
+}
+
+.message--assistant {
+  align-self: flex-start;
+  background: var(--assistant);
+}
+
+.message--error {
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+  color: var(--danger);
+}
+
+.message__meta {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.thinking-indicator {
+  padding: 0 24px 6px;
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.input {
+  flex: 1;
+  resize: none;
+  min-height: 44px;
+  max-height: 180px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.button {
+  padding: 11px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.button--stop {
+  background: transparent;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+
+/* ═══ Yuki — config.css (inliné) ═══ */
+/* Page « Configuration » — styles dédiés (vanilla, aucune chaîne de build). */
+
+.brand__link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.config {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px 48px;
+}
+
+.config-intro {
+  color: var(--muted);
+  margin-top: 0;
+  /* Longueur de ligne bornée à GAUCHE (pas de colonne centrée). */
+  max-width: 100ch;
+}
+
+/* Lien de retour explicite vers la conversation (en-tête). */
+.nav-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nav-back:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--accent);
+}
+
+.config-banner {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.config-banner--warn {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.config-banner--ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+
+.config-group {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 14px 16px 18px;
+  margin-bottom: 18px;
+}
+
+.config-group__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.config-group__title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.config-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.config-row:first-of-type {
+  border-top: none;
+}
+
+.config-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.config-input,
+.config-select,
+.config-textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.config-textarea {
+  min-height: 140px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.config-input:disabled,
+.config-select:disabled,
+.config-textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.config-helper {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.config-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 2px 0 0;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge--hot {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+}
+
+.badge--restart {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.badge--locked {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.config-secret {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.config-secret__value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.button--ghost {
+  background: transparent;
+  color: var(--text);
+}
+
+.button--danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+
+.button--small {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 20px;
+}
+
+.config-save-status {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.config-applied {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 14px 16px;
+}
+
+.config-applied h2 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.config-applied div {
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.config-restart {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 14px 16px;
+  margin-top: 20px;
+}
+
+.config-restart h2 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.config-restart__warning {
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 100ch;
+  margin: 0 0 12px;
+}
+
+.config-restart__warning code {
+  font-size: 12px;
+}
+
+.config-status--error {
+  color: var(--danger);
+}
+
+/* ═══ holaf-modal — getCss() (inliné) ═══ */
+
+.holaf-modal-overlay, .holaf-modal-root {
+    --hm-bg: #1e1e1e; --hm-bg-secondary: #27272a; --hm-bg-input: #1a1a1a;
+    --hm-text: #e4e4e7; --hm-text-secondary: #a1a1aa; --hm-border: #3f3f46;
+    --hm-accent: #6366f1; --hm-accent-hover: #818cf8; --hm-accent-text: #ffffff;
+    --hm-danger: #ef4444; --hm-danger-hover: #dc2626; --hm-danger-text: #ffffff;
+    --hm-radius: 12px; --hm-overlay-bg: rgba(0, 0, 0, 0.55); --hm-font-size: 14px;
+    --hm-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); --hm-busy-bg: rgba(30, 30, 30, 0.82);
+    --hm-width: 440px;
+}
+.holaf-modal-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--hm-overlay-bg); animation: holaf-modal-fade 0.16s ease-out; box-sizing: border-box; }
+.holaf-modal-overlay--modeless { background: transparent; pointer-events: none; }
+.holaf-modal-overlay--modeless .holaf-modal-root { pointer-events: auto; }
+.holaf-modal-root { position: relative; display: flex; flex-direction: column; width: var(--hm-width); max-width: calc(100vw - 24px); max-height: 88vh; background: var(--hm-bg); color: var(--hm-text); border: 1px solid var(--hm-border); border-radius: var(--hm-radius); box-shadow: var(--hm-shadow); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: var(--hm-font-size); line-height: 1.5; box-sizing: border-box; overflow: hidden; outline: none; animation: holaf-modal-pop 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
+.holaf-modal-sm { --hm-width: 340px; }
+.holaf-modal-md { --hm-width: 440px; }
+.holaf-modal-lg { --hm-width: 640px; }
+.holaf-modal-xl { --hm-width: 860px; }
+.holaf-modal-header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--hm-bg-secondary); border-bottom: 1px solid var(--hm-border); flex-shrink: 0; }
+.holaf-modal-title { flex: 1; font-size: 15px; font-weight: 600; color: var(--hm-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.holaf-modal-close { background: none; border: none; cursor: pointer; color: var(--hm-text-secondary); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; flex-shrink: 0; transition: color 0.15s; touch-action: manipulation; }
+.holaf-modal-close:hover { color: var(--hm-danger); }
+.holaf-modal-body { flex: 1 1 auto; padding: 16px; overflow-y: auto; overflow-x: hidden; color: var(--hm-text); }
+.holaf-modal-message { margin: 0; color: var(--hm-text); overflow-wrap: break-word; }
+.holaf-modal-footer { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding: 12px 16px; background: var(--hm-bg-secondary); border-top: 1px solid var(--hm-border); flex-shrink: 0; }
+.holaf-modal-btn { padding: 7px 16px; border-radius: 8px; border: 1px solid var(--hm-border); background: var(--hm-bg-secondary); color: var(--hm-text); font: inherit; cursor: pointer; transition: background 0.15s, border-color 0.15s; touch-action: manipulation; }
+.holaf-modal-btn:hover { border-color: var(--hm-text-secondary); }
+.holaf-modal-btn-primary { background: var(--hm-accent); border-color: var(--hm-accent); color: var(--hm-accent-text); }
+.holaf-modal-btn-primary:hover { background: var(--hm-accent-hover); border-color: var(--hm-accent-hover); }
+.holaf-modal-btn-danger { background: var(--hm-danger); border-color: var(--hm-danger); color: var(--hm-danger-text); }
+.holaf-modal-btn-danger:hover { background: var(--hm-danger-hover); border-color: var(--hm-danger-hover); }
+.holaf-modal-btn-cancel { background: transparent; color: var(--hm-text-secondary); }
+.holaf-modal-btn-cancel:hover { color: var(--hm-text); border-color: var(--hm-text-secondary); }
+.holaf-modal-input { width: 100%; margin-top: 10px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--hm-border); background: var(--hm-bg-input); color: var(--hm-text); font: inherit; outline: none; box-sizing: border-box; }
+.holaf-modal-input:focus { border-color: var(--hm-accent); }
+.holaf-modal-busy { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--hm-busy-bg); padding: 16px; text-align: center; }
+.holaf-modal-spinner { width: 28px; height: 28px; border: 3px solid var(--hm-border); border-top-color: var(--hm-accent); border-radius: 50%; animation: holaf-modal-spin 0.8s linear infinite; flex-shrink: 0; }
+/* Scroll-lock : classe posée sur <body> tant qu'au moins une modale est ouverte. */
+body.holaf-modal-open { overflow: hidden; }
+/* Mobile : la modale occupe 92 % de la largeur de l'écran. */
+@media (max-width: 767px) { .holaf-modal-root { width: 92vw; max-width: 92vw; } }
+@keyframes holaf-modal-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes holaf-modal-pop { from { opacity: 0; transform: translateY(10px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes holaf-modal-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .holaf-modal-overlay, .holaf-modal-root, .holaf-modal-spinner { animation: none; } }
+/* v0.3.0 — fenêtre (OPT-IN) : poignées de resize + boutons zoom + icône alert.
+ * Ces classes n'apparaissent que si les options correspondantes sont activées
+ * (resizable / zoom / icon) — le markup et le CSS par défaut restent inchangés. */
+.holaf-modal-resize { position: absolute; z-index: 3; }
+.holaf-modal-resize--n { top: 0; left: 8px; right: 8px; height: 8px; cursor: ns-resize; }
+.holaf-modal-resize--s { bottom: 0; left: 8px; right: 8px; height: 8px; cursor: ns-resize; }
+.holaf-modal-resize--e { right: 0; top: 8px; bottom: 8px; width: 8px; cursor: ew-resize; }
+.holaf-modal-resize--w { left: 0; top: 8px; bottom: 8px; width: 8px; cursor: ew-resize; }
+.holaf-modal-resize--ne { top: 0; right: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+.holaf-modal-resize--nw { top: 0; left: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+.holaf-modal-resize--se { bottom: 0; right: 0; width: 12px; height: 12px; cursor: nwse-resize; }
+.holaf-modal-resize--sw { bottom: 0; left: 0; width: 12px; height: 12px; cursor: nesw-resize; }
+.holaf-modal-zoom { background: none; border: 1px solid var(--hm-border); color: var(--hm-text-secondary); font-size: 14px; line-height: 1; width: 24px; height: 24px; border-radius: 6px; cursor: pointer; flex-shrink: 0; }
+.holaf-modal-zoom:hover { color: var(--hm-text); border-color: var(--hm-text-secondary); }
+.holaf-modal-alert-icon { font-size: 28px; text-align: center; margin-bottom: 10px; }
+
+/* ═══ holaf-toast — getCss() (inliné) ═══ */
+
+.holaf-toast-container {
+    position: fixed;
+    z-index: 200000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+    max-width: calc(100vw - 24px);
+    --ht-bg: #2b2b2b;
+    --ht-fg: #f0f0f0;
+    --ht-border: #4a4a4a;
+    --ht-accent-info: #4aa3ff;
+    --ht-accent-success: #4caf6d;
+    --ht-accent-warning: #e0a030;
+    --ht-accent-error: #e05555;
+    --ht-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    --ht-radius: 10px;
+    --ht-width: 340px;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.holaf-toast-container--top-right    { top: 16px; right: 16px; align-items: flex-end; }
+.holaf-toast-container--top-left     { top: 16px; left: 16px; align-items: flex-start; }
+.holaf-toast-container--bottom-right { bottom: 16px; right: 16px; align-items: flex-end; }
+.holaf-toast-container--bottom-left  { bottom: 16px; left: 16px; align-items: flex-start; }
+.holaf-toast-container--top-center   { top: 16px; left: 50%; transform: translateX(-50%); align-items: center; }
+.holaf-toast-container--bottom-center { bottom: 16px; left: 50%; transform: translateX(-50%); align-items: center; }
+
+.holaf-toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: var(--ht-width);
+    max-width: 100%;
+    padding: 12px 14px;
+    background: var(--ht-bg);
+    color: var(--ht-fg);
+    border: 1px solid var(--ht-border);
+    border-left: 4px solid var(--ht-accent, var(--ht-accent-info));
+    border-radius: var(--ht-radius);
+    box-shadow: var(--ht-shadow);
+    position: relative;
+    overflow: hidden;
+    cursor: default;
+    animation: holaf-toast-slide-in 0.25s ease-out;
+}
+/* v0.5.0 : animation d'entrée ADAPTÉE à la position — le slide part du côté
+ * du bord auquel colle le conteneur. La règle de base .holaf-toast garde
+ * holaf-toast-slide-in (glisse DEPUIS le haut, couvre top-center) ; les
+ * variantes ci-dessous ne surchargent que les autres positions (même nom de
+ * keyframe homonyme conservé comme base). PAS de fill-mode d'entrée : la cible
+ * to du keyframe (opacity:1 + transform) garantit l'état final (bug
+ * historique évité — sans fill-mode, un toast interrompu retombait opacity:0). */
+.holaf-toast-container--top-right .holaf-toast,
+.holaf-toast-container--bottom-right .holaf-toast { animation: holaf-toast-slide-in-right 0.25s ease-out; }
+.holaf-toast-container--top-left .holaf-toast,
+.holaf-toast-container--bottom-left .holaf-toast { animation: holaf-toast-slide-in-left 0.25s ease-out; }
+.holaf-toast-container--bottom-center .holaf-toast { animation: holaf-toast-slide-in-up 0.25s ease-out; }
+/* v0.4.0 : fond teinté PAR TYPE avec fallback rétro-compatible. La règle de
+ * base ci-dessus pose background:var(--ht-bg) ; chaque type la raffine avec
+ * SA var optionnelle : si --ht-bg-<type> n'est pas définie (thèmes existants,
+ * hôtes anciens), le fond global --ht-bg s'applique. La substitution des
+ * custom properties se fait sur l'élément lui-même : un --ht-bg posé en
+ * inline (override par toast) l'emporte dans la chaîne de fallback, et un
+ * --ht-bg-<type> en inline (par toast ou via theme.vars) gagne sur tout. */
+.holaf-toast--info    { --ht-accent: var(--ht-accent-info);    background: var(--ht-bg-info, var(--ht-bg)); }
+.holaf-toast--success { --ht-accent: var(--ht-accent-success); background: var(--ht-bg-success, var(--ht-bg)); }
+.holaf-toast--warning { --ht-accent: var(--ht-accent-warning); background: var(--ht-bg-warning, var(--ht-bg)); }
+.holaf-toast--error   { --ht-accent: var(--ht-accent-error);   background: var(--ht-bg-error, var(--ht-bg)); }
+
+.holaf-toast--closing {
+    animation: holaf-toast-fade-out 0.2s ease-in forwards;
+}
+/* v0.5.0 : sortie en fondu ADAPTÉE à la position — le toast part du même côté
+ * que son entrée. Base holaf-toast-fade-out (vers le haut, top-center) ;
+ * variantes pour les autres positions. forwards conservé (état final tenu). */
+.holaf-toast-container--top-right .holaf-toast--closing,
+.holaf-toast-container--bottom-right .holaf-toast--closing { animation: holaf-toast-fade-out-right 0.2s ease-in forwards; }
+.holaf-toast-container--top-left .holaf-toast--closing,
+.holaf-toast-container--bottom-left .holaf-toast--closing { animation: holaf-toast-fade-out-left 0.2s ease-in forwards; }
+.holaf-toast-container--bottom-center .holaf-toast--closing { animation: holaf-toast-fade-out-down 0.2s ease-in forwards; }
+
+.holaf-toast__icon {
+    flex: none;
+    font-weight: 700;
+    color: var(--ht-accent);
+    line-height: 1.4;
+}
+.holaf-toast__body { flex: 1 1 auto; min-width: 0; }
+.holaf-toast__title {
+    font-weight: 650;
+    margin-bottom: 2px;
+    font-size: 14px;
+}
+.holaf-toast__message {
+    font-size: 13px;
+    line-height: 1.45;
+    overflow-wrap: break-word;
+}
+.holaf-toast__actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+.holaf-toast__action {
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--ht-border);
+    background: transparent;
+    color: var(--ht-fg);
+    cursor: pointer;
+}
+.holaf-toast__action:hover { border-color: var(--ht-accent); color: var(--ht-accent); }
+
+.holaf-toast__close {
+    flex: none;
+    border: none;
+    background: transparent;
+    color: var(--ht-fg);
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 4px;
+    cursor: pointer;
+    opacity: 0.7;
+}
+.holaf-toast__close:hover { opacity: 1; }
+
+.holaf-toast__progress {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 3px;
+    width: 100%;
+    background: var(--ht-accent);
+    transform-origin: left center;
+    transform: scaleX(1);
+    opacity: 0.85;
+    /* Barre ANIMÉE en temps réel : la durée est posée inline (ms) par le JS,
+     * la barre part pleine (scaleX(1)) et se vide (scaleX(0)) en duration.
+     * animation gère le nom + la courbe temporelle ; la durée vient du style
+     * inline (prioritaire) pour rester synchro avec le timer d'auto-dismiss. */
+    animation: holaf-toast-progress linear;
+}
+/* Au survol, on gèle la barre à sa position courante via play-state:paused
+ * (l'animation CSS se met naturellement en pause, contrairement à l'ancien
+ * scaleX inline figé — temps de barre et timer restant restent synchrones). */
+.holaf-toast__progress--paused {
+    animation-play-state: paused;
+}
+/* Progression MANUELLE (v0.3.0) : show({ progress: 'manual' }) → barre visible
+ * (largeur 0) pilotée par update({ progress: 0-100 }) ; pas d'animation, pas
+ * de timer de fermeture auto. La largeur est posée inline (N%). */
+.holaf-toast__progress--manual {
+    animation: none;
+    transform: none;
+    width: 0%;
+}
+@keyframes holaf-toast-progress {
+    from { transform: scaleX(1); }
+    to   { transform: scaleX(0); }
+}
+
+/* Animations (désactivées si prefers-reduced-motion). */
+/* prefers-reduced-motion : la barre reste VISIBLE mais statique (pleine, sans
+ * animation) — le timer en JS ferme toujours le toast ; seule l'illusion de
+ * mouvements est supprimée. On garde un repère visuel stable et non animé. */
+@keyframes holaf-toast-slide-in {
+    from { opacity: 0; transform: translateY(-10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+/* v0.5.0 : variantes d'entrée par position (homonyme de base conservé). */
+@keyframes holaf-toast-slide-in-right {
+    from { opacity: 0; transform: translateX(24px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes holaf-toast-slide-in-left {
+    from { opacity: 0; transform: translateX(-24px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes holaf-toast-slide-in-up {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes holaf-toast-fade-out {
+    from { opacity: 1; }
+    to   { opacity: 0; transform: translateY(-6px); }
+}
+/* v0.5.0 : variantes de sortie par position (homonyme de base conservé). */
+@keyframes holaf-toast-fade-out-right {
+    from { opacity: 1; }
+    to   { opacity: 0; transform: translateX(24px); }
+}
+@keyframes holaf-toast-fade-out-left {
+    from { opacity: 1; }
+    to   { opacity: 0; transform: translateX(-24px); }
+}
+@keyframes holaf-toast-fade-out-down {
+    from { opacity: 1; }
+    to   { opacity: 0; transform: translateY(8px); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .holaf-toast, .holaf-toast--closing { animation: none; }
+    .holaf-toast__progress { animation: none; }
+}
+
+/* Mobile : pleine largeur en bas (les 6 positions convergent). */
+@media (max-width: 600px) {
+    .holaf-toast-container {
+        left: 8px !important;
+        right: 8px !important;
+        top: auto !important;
+        bottom: 8px !important;
+        transform: none !important;
+        align-items: stretch;
+        --ht-width: 100%;
+    }
+}
+
+    </style>
+  </head>
+  <body>
+    <header class="pv-head">
+      <h1>Preview comparative des thèmes — Yuki vs holaf-tokens</h1>
+      <p>
+        Les six panneaux ci-dessous montrent <strong>le même écran de configuration de Yuki</strong>
+        re-looké avec six jeux de variables : les <strong>2 thèmes maison de Yuki</strong>
+        (sombre par défaut, clair via <code>prefers-color-scheme</code>) et les
+        <strong>4 presets de <code>holaf-tokens</code></strong> (<code>dark</code>,
+        <code>light</code>, <code>midnight</code>, <code>slate</code>) projetés sur les
+        11 variables de Yuki. Les valeurs d'holaf sont lues telles quelles dans
+        <code>holaf-tokens.js</code> ; les variables sans équivalent (<code>--user</code>,
+        <code>--assistant</code>, <code>--ok</code>) sont dérivées avec
+        <code>holaf-color.js</code> (formules dans le rapport). Chaque panneau inclut
+        un aperçu d'une modale <code>holaf-modal</code> et d'un toast
+        <code>holaf-toast</code> aux variables <code>--hm-*</code>/<code>--ht-*</code>
+        correspondantes. Aucune ressource externe : tout est inliné.
+      </p>
+    </header>
+    <main class="pv-grid">
+      <section class="pv-cell">
+        <h2 class="pv-cell__title"><span class="pv-cell__num">1</span> Yuki actuel — sombre</h2>
+        <p class="pv-cell__note">Palette actuelle de Yuki (styles.css:1-12), telle quelle.</p>
+        <div class="pv-frame">
+          <div class="yp" style="--bg:#0f1115;--panel:#171a21;--panel-2:#1e2230;--text:#e8ebf2;--muted:#8b93a7;--accent:#5b8cff;--user:#26324d;--assistant:#1a1f2b;--danger:#ff6b6b;--ok:#4cc38a;--border:#262b38">
+            
+      <header class="topbar">
+        <div class="brand"><a class="brand__link" href="#">Yuki</a> — Configuration</div>
+        <div class="status">
+          <a class="nav-back" href="#">← Retour à la discussion</a>
+          <span class="pill pill--online">prêt</span>
+          <span class="pill pill--online">clé légère OK</span>
+          <span class="pill pill--online">clé lourde OK</span>
+        </div>
+      </header>
+      <main class="config">
+        <p class="config-intro">
+          Ces valeurs sont enregistrées sur le serveur. Un champ avec
+          <span class="badge badge--hot">à chaud</span> s'applique immédiatement ;
+          un champ <span class="badge badge--restart">redémarrage</span> prend
+          effet au prochain redémarrage du gateway. Les clés ne sont
+          <strong>jamais</strong> réaffichées en clair.
+        </p>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM léger</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="http://localhost:11434/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Clé configurée (sk-…1a2b)</span><button class="button button--ghost button--small" type="button">Remplacer</button><button class="button button--danger button--small" type="button">Effacer</button><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur" hidden></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="qwen2.5:14b-instruct"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM lourd</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="https://api.openai.com/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Aucune clé configurée</span><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur"></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="gpt-4o"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option>medium</option><option selected>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Délégation</h2>
+          
+        </div><div class="config-row"><label class="config-label">Politique si clé manquante <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option selected>degrade</option><option>refuse</option></select></div><div class="config-row"><label class="config-label">Attente inline par défaut (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="30000"></div><div class="config-row"><label class="config-label">Jobs simultanés <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="2"></div><div class="config-row"><label class="config-label">Taille de la file <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="8"></div><div class="config-row"><label class="config-label">Timeout d'inactivité (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="120000"></div><div class="config-row"><label class="config-label">Timeout global (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="600000"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">GPU</h2>
+          
+        </div><div class="config-row"><label class="config-label">Profil forcé <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>∅ (auto)</option><option selected>confort</option><option>compact</option><option>repli</option><option>texte-seul</option></select></div><div class="config-row"><label class="config-label">Mode de compatibilité <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>strict</option><option selected>auto-degrade</option></select></div><div class="config-row"><label class="config-label">Driver NVIDIA minimal (majeure) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="535"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Prompts système</h2>
+          
+        </div><div class="config-row"><label class="config-label">Prompt système — léger <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki, un assistant concis. Réponds en français.</textarea></div><div class="config-row"><label class="config-label">Prompt système — lourd <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki en mode analyse. Décompose le raisonnement…</textarea></div><div class="config-helper"><button class="button button--ghost button--small" type="button">Réinitialiser au défaut</button></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Transport temps réel</h2>
+          
+        </div><div class="config-row"><label class="config-label">Buffer de rejeu (trames) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="512"></div><div class="config-row"><label class="config-label">Buffer de rejeu (octets) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="1048576"></div></section>
+        <div class="config-actions">
+          <button id="save" class="button" type="button">Enregistrer</button>
+          <span id="save-status" class="config-save-status" role="status"></span>
+        </div>
+        <section class="config-restart" aria-labelledby="restart-title">
+          <h2 id="restart-title">Redémarrer Yuki</h2>
+          <p class="config-restart__warning">
+            Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
+            conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
+            proprement ses connexions puis redémarre son programme.
+          </p>
+          <p class="config-restart__warning">
+            Yuki <strong>redémarre en interne</strong> : un superviseur relance le
+            programme dans le conteneur, <strong>le conteneur reste en place</strong>.
+            Aucune politique de redémarrage Docker n'est nécessaire pour ce bouton.
+          </p>
+          <div class="config-actions">
+            <button id="restart" class="button button--danger" type="button">Redémarrer</button>
+            <span id="restart-status" class="config-save-status" role="status"></span>
+          </div>
+        </section>
+      </main>
+            
+      <div class="pv-chat">
+        <div class="pv-chat__label">Aperçu conversation — bulles <code>--user</code>/<code>--assistant</code> + pastille <code>--ok</code></div>
+        <div class="conversation">
+          <div class="message message--assistant">Bonjour ! La configuration est chargée.<span class="message__meta">Yuki · 12:04</span></div>
+          <div class="message message--user">Parfait, applique le preset et vérifie le rendu.<span class="message__meta">vous · 12:05</span></div>
+          <div class="message message--assistant">C'est appliqué. La conversation est prête.<span class="message__meta">Yuki · 12:05</span></div>
+        </div>
+      </div>
+            
+      <div class="pv-lib">
+        <div class="pv-lib__label">Composants holaf — modale <code>holaf-modal</code> (theme:&nbsp;"dark") + toast <code>holaf-toast</code></div>
+        <div class="holaf-modal-root" style="--hm-bg:#1e1e1e;--hm-bg-secondary:#27272a;--hm-bg-input:#1a1a1a;--hm-text:#e4e4e7;--hm-text-secondary:#a1a1aa;--hm-border:#3f3f46;--hm-accent:#6366f1;--hm-accent-hover:#818cf8;--hm-accent-text:#ffffff;--hm-danger:#ef4444;--hm-danger-hover:#dc2626;--hm-danger-text:#ffffff;--hm-radius:12px;--hm-overlay-bg:rgba(0, 0, 0, 0.55);--hm-font-size:14px;--hm-shadow:0 18px 50px rgba(0, 0, 0, 0.55);--hm-busy-bg:rgba(30, 30, 30, 0.82)">
+          <div class="holaf-modal-header">
+            <span class="holaf-modal-title">Redémarrer Yuki ?</span>
+            <button class="holaf-modal-close" type="button" aria-label="Fermer">✕</button>
+          </div>
+          <div class="holaf-modal-body">
+            <p class="holaf-modal-message">Cela interrompt la conversation et les jobs en cours. Yuki redémarre son programme en interne ; le conteneur reste en place.</p>
+          </div>
+          <div class="holaf-modal-footer">
+            <button class="holaf-modal-btn holaf-modal-btn-cancel" type="button">Annuler</button>
+            <button class="holaf-modal-btn holaf-modal-btn-primary" type="button">Redémarrer</button>
+          </div>
+        </div>
+        <div class="holaf-toast holaf-toast--success" style="--ht-bg:#2b2b2b;--ht-bg-success:#303f35;--ht-bg-warning:#463d2c;--ht-bg-error:#463131;--ht-fg:#f0f0f0;--ht-border:#4a4a4a;--ht-accent-info:#4aa3ff;--ht-accent-success:#4caf6d;--ht-accent-warning:#e0a030;--ht-accent-error:#e05555;--ht-shadow:0 6px 24px rgba(0, 0, 0, 0.35);--ht-radius:10px" role="status">
+          <span class="holaf-toast__icon" aria-hidden="true">✓</span>
+          <div class="holaf-toast__body">
+            <div class="holaf-toast__title">Configuration enregistrée</div>
+            <div class="holaf-toast__message">3 champs appliqués à chaud.</div>
+          </div>
+          <button class="holaf-toast__close" type="button" aria-label="Fermer">✕</button>
+        </div>
+      </div>
+            
+          </div>
+        </div>
+      </section>
+      <section class="pv-cell">
+        <h2 class="pv-cell__title"><span class="pv-cell__num">2</span> Yuki actuel — clair</h2>
+        <p class="pv-cell__note">Palette claire de Yuki (styles.css:15-24). --accent, --danger et --ok ne sont pas surchargés en mode clair : ils restent ceux du :root (styles.css:7,10,11).</p>
+        <div class="pv-frame">
+          <div class="yp" style="--bg:#f4f6fb;--panel:#ffffff;--panel-2:#eef1f7;--text:#171a21;--muted:#5d6577;--accent:#5b8cff;--user:#dbe6ff;--assistant:#ffffff;--danger:#ff6b6b;--ok:#4cc38a;--border:#d9dee9">
+            
+      <header class="topbar">
+        <div class="brand"><a class="brand__link" href="#">Yuki</a> — Configuration</div>
+        <div class="status">
+          <a class="nav-back" href="#">← Retour à la discussion</a>
+          <span class="pill pill--online">prêt</span>
+          <span class="pill pill--online">clé légère OK</span>
+          <span class="pill pill--online">clé lourde OK</span>
+        </div>
+      </header>
+      <main class="config">
+        <p class="config-intro">
+          Ces valeurs sont enregistrées sur le serveur. Un champ avec
+          <span class="badge badge--hot">à chaud</span> s'applique immédiatement ;
+          un champ <span class="badge badge--restart">redémarrage</span> prend
+          effet au prochain redémarrage du gateway. Les clés ne sont
+          <strong>jamais</strong> réaffichées en clair.
+        </p>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM léger</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="http://localhost:11434/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Clé configurée (sk-…1a2b)</span><button class="button button--ghost button--small" type="button">Remplacer</button><button class="button button--danger button--small" type="button">Effacer</button><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur" hidden></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="qwen2.5:14b-instruct"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM lourd</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="https://api.openai.com/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Aucune clé configurée</span><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur"></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="gpt-4o"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option>medium</option><option selected>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Délégation</h2>
+          
+        </div><div class="config-row"><label class="config-label">Politique si clé manquante <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option selected>degrade</option><option>refuse</option></select></div><div class="config-row"><label class="config-label">Attente inline par défaut (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="30000"></div><div class="config-row"><label class="config-label">Jobs simultanés <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="2"></div><div class="config-row"><label class="config-label">Taille de la file <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="8"></div><div class="config-row"><label class="config-label">Timeout d'inactivité (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="120000"></div><div class="config-row"><label class="config-label">Timeout global (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="600000"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">GPU</h2>
+          
+        </div><div class="config-row"><label class="config-label">Profil forcé <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>∅ (auto)</option><option selected>confort</option><option>compact</option><option>repli</option><option>texte-seul</option></select></div><div class="config-row"><label class="config-label">Mode de compatibilité <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>strict</option><option selected>auto-degrade</option></select></div><div class="config-row"><label class="config-label">Driver NVIDIA minimal (majeure) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="535"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Prompts système</h2>
+          
+        </div><div class="config-row"><label class="config-label">Prompt système — léger <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki, un assistant concis. Réponds en français.</textarea></div><div class="config-row"><label class="config-label">Prompt système — lourd <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki en mode analyse. Décompose le raisonnement…</textarea></div><div class="config-helper"><button class="button button--ghost button--small" type="button">Réinitialiser au défaut</button></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Transport temps réel</h2>
+          
+        </div><div class="config-row"><label class="config-label">Buffer de rejeu (trames) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="512"></div><div class="config-row"><label class="config-label">Buffer de rejeu (octets) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="1048576"></div></section>
+        <div class="config-actions">
+          <button id="save" class="button" type="button">Enregistrer</button>
+          <span id="save-status" class="config-save-status" role="status"></span>
+        </div>
+        <section class="config-restart" aria-labelledby="restart-title">
+          <h2 id="restart-title">Redémarrer Yuki</h2>
+          <p class="config-restart__warning">
+            Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
+            conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
+            proprement ses connexions puis redémarre son programme.
+          </p>
+          <p class="config-restart__warning">
+            Yuki <strong>redémarre en interne</strong> : un superviseur relance le
+            programme dans le conteneur, <strong>le conteneur reste en place</strong>.
+            Aucune politique de redémarrage Docker n'est nécessaire pour ce bouton.
+          </p>
+          <div class="config-actions">
+            <button id="restart" class="button button--danger" type="button">Redémarrer</button>
+            <span id="restart-status" class="config-save-status" role="status"></span>
+          </div>
+        </section>
+      </main>
+            
+      <div class="pv-chat">
+        <div class="pv-chat__label">Aperçu conversation — bulles <code>--user</code>/<code>--assistant</code> + pastille <code>--ok</code></div>
+        <div class="conversation">
+          <div class="message message--assistant">Bonjour ! La configuration est chargée.<span class="message__meta">Yuki · 12:04</span></div>
+          <div class="message message--user">Parfait, applique le preset et vérifie le rendu.<span class="message__meta">vous · 12:05</span></div>
+          <div class="message message--assistant">C'est appliqué. La conversation est prête.<span class="message__meta">Yuki · 12:05</span></div>
+        </div>
+      </div>
+            
+      <div class="pv-lib">
+        <div class="pv-lib__label">Composants holaf — modale <code>holaf-modal</code> (theme:&nbsp;"light") + toast <code>holaf-toast</code></div>
+        <div class="holaf-modal-root" style="--hm-bg:#ffffff;--hm-bg-secondary:#f4f4f5;--hm-bg-input:#fafafa;--hm-text:#18181b;--hm-text-secondary:#52525b;--hm-border:#d4d4d8;--hm-accent:#4f46e5;--hm-accent-hover:#6366f1;--hm-accent-text:#ffffff;--hm-danger:#dc2626;--hm-danger-hover:#b91c1c;--hm-danger-text:#ffffff;--hm-radius:12px;--hm-overlay-bg:rgba(24, 24, 27, 0.35);--hm-font-size:14px;--hm-shadow:0 18px 50px rgba(24, 24, 27, 0.18);--hm-busy-bg:rgba(255, 255, 255, 0.82)">
+          <div class="holaf-modal-header">
+            <span class="holaf-modal-title">Redémarrer Yuki ?</span>
+            <button class="holaf-modal-close" type="button" aria-label="Fermer">✕</button>
+          </div>
+          <div class="holaf-modal-body">
+            <p class="holaf-modal-message">Cela interrompt la conversation et les jobs en cours. Yuki redémarre son programme en interne ; le conteneur reste en place.</p>
+          </div>
+          <div class="holaf-modal-footer">
+            <button class="holaf-modal-btn holaf-modal-btn-cancel" type="button">Annuler</button>
+            <button class="holaf-modal-btn holaf-modal-btn-primary" type="button">Redémarrer</button>
+          </div>
+        </div>
+        <div class="holaf-toast holaf-toast--success" style="--ht-bg:#ffffff;--ht-bg-success:#dcece2;--ht-bg-warning:#f4e5da;--ht-bg-error:#fadede;--ht-fg:#18181b;--ht-border:#d4d4d8;--ht-accent-info:#2563eb;--ht-accent-success:#15803d;--ht-accent-warning:#b45309;--ht-accent-error:#dc2626;--ht-shadow:0 6px 24px rgba(24, 24, 27, 0.18);--ht-radius:10px" role="status">
+          <span class="holaf-toast__icon" aria-hidden="true">✓</span>
+          <div class="holaf-toast__body">
+            <div class="holaf-toast__title">Configuration enregistrée</div>
+            <div class="holaf-toast__message">3 champs appliqués à chaud.</div>
+          </div>
+          <button class="holaf-toast__close" type="button" aria-label="Fermer">✕</button>
+        </div>
+      </div>
+            
+          </div>
+        </div>
+      </section>
+      <section class="pv-cell">
+        <h2 class="pv-cell__title"><span class="pv-cell__num">3</span> holaf — dark</h2>
+        <p class="pv-cell__note">preset holaf-tokens « dark » projeté sur les 11 variables de Yuki.</p>
+        <div class="pv-frame">
+          <div class="yp" style="--bg:#1e1e1e;--panel:#1e1e1e;--panel-2:#27272a;--border:#3f3f46;--text:#e4e4e7;--muted:#a1a1aa;--accent:#6366f1;--danger:#ef4444;--user:#2A2B44;--assistant:#22222B;--ok:#4cc38a">
+            
+      <header class="topbar">
+        <div class="brand"><a class="brand__link" href="#">Yuki</a> — Configuration</div>
+        <div class="status">
+          <a class="nav-back" href="#">← Retour à la discussion</a>
+          <span class="pill pill--online">prêt</span>
+          <span class="pill pill--online">clé légère OK</span>
+          <span class="pill pill--online">clé lourde OK</span>
+        </div>
+      </header>
+      <main class="config">
+        <p class="config-intro">
+          Ces valeurs sont enregistrées sur le serveur. Un champ avec
+          <span class="badge badge--hot">à chaud</span> s'applique immédiatement ;
+          un champ <span class="badge badge--restart">redémarrage</span> prend
+          effet au prochain redémarrage du gateway. Les clés ne sont
+          <strong>jamais</strong> réaffichées en clair.
+        </p>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM léger</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="http://localhost:11434/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Clé configurée (sk-…1a2b)</span><button class="button button--ghost button--small" type="button">Remplacer</button><button class="button button--danger button--small" type="button">Effacer</button><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur" hidden></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="qwen2.5:14b-instruct"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM lourd</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="https://api.openai.com/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Aucune clé configurée</span><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur"></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="gpt-4o"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option>medium</option><option selected>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Délégation</h2>
+          
+        </div><div class="config-row"><label class="config-label">Politique si clé manquante <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option selected>degrade</option><option>refuse</option></select></div><div class="config-row"><label class="config-label">Attente inline par défaut (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="30000"></div><div class="config-row"><label class="config-label">Jobs simultanés <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="2"></div><div class="config-row"><label class="config-label">Taille de la file <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="8"></div><div class="config-row"><label class="config-label">Timeout d'inactivité (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="120000"></div><div class="config-row"><label class="config-label">Timeout global (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="600000"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">GPU</h2>
+          
+        </div><div class="config-row"><label class="config-label">Profil forcé <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>∅ (auto)</option><option selected>confort</option><option>compact</option><option>repli</option><option>texte-seul</option></select></div><div class="config-row"><label class="config-label">Mode de compatibilité <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>strict</option><option selected>auto-degrade</option></select></div><div class="config-row"><label class="config-label">Driver NVIDIA minimal (majeure) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="535"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Prompts système</h2>
+          
+        </div><div class="config-row"><label class="config-label">Prompt système — léger <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki, un assistant concis. Réponds en français.</textarea></div><div class="config-row"><label class="config-label">Prompt système — lourd <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki en mode analyse. Décompose le raisonnement…</textarea></div><div class="config-helper"><button class="button button--ghost button--small" type="button">Réinitialiser au défaut</button></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Transport temps réel</h2>
+          
+        </div><div class="config-row"><label class="config-label">Buffer de rejeu (trames) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="512"></div><div class="config-row"><label class="config-label">Buffer de rejeu (octets) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="1048576"></div></section>
+        <div class="config-actions">
+          <button id="save" class="button" type="button">Enregistrer</button>
+          <span id="save-status" class="config-save-status" role="status"></span>
+        </div>
+        <section class="config-restart" aria-labelledby="restart-title">
+          <h2 id="restart-title">Redémarrer Yuki</h2>
+          <p class="config-restart__warning">
+            Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
+            conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
+            proprement ses connexions puis redémarre son programme.
+          </p>
+          <p class="config-restart__warning">
+            Yuki <strong>redémarre en interne</strong> : un superviseur relance le
+            programme dans le conteneur, <strong>le conteneur reste en place</strong>.
+            Aucune politique de redémarrage Docker n'est nécessaire pour ce bouton.
+          </p>
+          <div class="config-actions">
+            <button id="restart" class="button button--danger" type="button">Redémarrer</button>
+            <span id="restart-status" class="config-save-status" role="status"></span>
+          </div>
+        </section>
+      </main>
+            
+      <div class="pv-chat">
+        <div class="pv-chat__label">Aperçu conversation — bulles <code>--user</code>/<code>--assistant</code> + pastille <code>--ok</code></div>
+        <div class="conversation">
+          <div class="message message--assistant">Bonjour ! La configuration est chargée.<span class="message__meta">Yuki · 12:04</span></div>
+          <div class="message message--user">Parfait, applique le preset et vérifie le rendu.<span class="message__meta">vous · 12:05</span></div>
+          <div class="message message--assistant">C'est appliqué. La conversation est prête.<span class="message__meta">Yuki · 12:05</span></div>
+        </div>
+      </div>
+            
+      <div class="pv-lib">
+        <div class="pv-lib__label">Composants holaf — modale <code>holaf-modal</code> (theme:&nbsp;"dark") + toast <code>holaf-toast</code></div>
+        <div class="holaf-modal-root" style="--hm-bg:#1e1e1e;--hm-bg-secondary:#27272a;--hm-bg-input:#1a1a1a;--hm-text:#e4e4e7;--hm-text-secondary:#a1a1aa;--hm-border:#3f3f46;--hm-accent:#6366f1;--hm-accent-hover:#818cf8;--hm-accent-text:#ffffff;--hm-danger:#ef4444;--hm-danger-hover:#dc2626;--hm-danger-text:#ffffff;--hm-radius:12px;--hm-overlay-bg:rgba(0, 0, 0, 0.55);--hm-font-size:14px;--hm-shadow:0 18px 50px rgba(0, 0, 0, 0.55);--hm-busy-bg:rgba(30, 30, 30, 0.82)">
+          <div class="holaf-modal-header">
+            <span class="holaf-modal-title">Redémarrer Yuki ?</span>
+            <button class="holaf-modal-close" type="button" aria-label="Fermer">✕</button>
+          </div>
+          <div class="holaf-modal-body">
+            <p class="holaf-modal-message">Cela interrompt la conversation et les jobs en cours. Yuki redémarre son programme en interne ; le conteneur reste en place.</p>
+          </div>
+          <div class="holaf-modal-footer">
+            <button class="holaf-modal-btn holaf-modal-btn-cancel" type="button">Annuler</button>
+            <button class="holaf-modal-btn holaf-modal-btn-primary" type="button">Redémarrer</button>
+          </div>
+        </div>
+        <div class="holaf-toast holaf-toast--success" style="--ht-bg:#2b2b2b;--ht-bg-success:#303f35;--ht-bg-warning:#463d2c;--ht-bg-error:#463131;--ht-fg:#f0f0f0;--ht-border:#4a4a4a;--ht-accent-info:#4aa3ff;--ht-accent-success:#4caf6d;--ht-accent-warning:#e0a030;--ht-accent-error:#e05555;--ht-shadow:0 6px 24px rgba(0, 0, 0, 0.35);--ht-radius:10px" role="status">
+          <span class="holaf-toast__icon" aria-hidden="true">✓</span>
+          <div class="holaf-toast__body">
+            <div class="holaf-toast__title">Configuration enregistrée</div>
+            <div class="holaf-toast__message">3 champs appliqués à chaud.</div>
+          </div>
+          <button class="holaf-toast__close" type="button" aria-label="Fermer">✕</button>
+        </div>
+      </div>
+            <p class="pv-approx">⚠ Approximation : Yuki code en dur le texte des boutons (#fff) et ses rayons : --holaf-accent-text n'est pas restitué dans la page.</p>
+          </div>
+        </div>
+      </section>
+      <section class="pv-cell">
+        <h2 class="pv-cell__title"><span class="pv-cell__num">4</span> holaf — light</h2>
+        <p class="pv-cell__note">preset holaf-tokens « light » projeté sur les 11 variables de Yuki.</p>
+        <div class="pv-frame">
+          <div class="yp" style="--bg:#ffffff;--panel:#ffffff;--panel-2:#f4f4f5;--border:#d4d4d8;--text:#18181b;--muted:#52525b;--accent:#4f46e5;--danger:#dc2626;--user:#DFDEFA;--assistant:#F4F4FD;--ok:#317F5A">
+            
+      <header class="topbar">
+        <div class="brand"><a class="brand__link" href="#">Yuki</a> — Configuration</div>
+        <div class="status">
+          <a class="nav-back" href="#">← Retour à la discussion</a>
+          <span class="pill pill--online">prêt</span>
+          <span class="pill pill--online">clé légère OK</span>
+          <span class="pill pill--online">clé lourde OK</span>
+        </div>
+      </header>
+      <main class="config">
+        <p class="config-intro">
+          Ces valeurs sont enregistrées sur le serveur. Un champ avec
+          <span class="badge badge--hot">à chaud</span> s'applique immédiatement ;
+          un champ <span class="badge badge--restart">redémarrage</span> prend
+          effet au prochain redémarrage du gateway. Les clés ne sont
+          <strong>jamais</strong> réaffichées en clair.
+        </p>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM léger</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="http://localhost:11434/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Clé configurée (sk-…1a2b)</span><button class="button button--ghost button--small" type="button">Remplacer</button><button class="button button--danger button--small" type="button">Effacer</button><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur" hidden></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="qwen2.5:14b-instruct"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM lourd</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="https://api.openai.com/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Aucune clé configurée</span><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur"></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="gpt-4o"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option>medium</option><option selected>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Délégation</h2>
+          
+        </div><div class="config-row"><label class="config-label">Politique si clé manquante <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option selected>degrade</option><option>refuse</option></select></div><div class="config-row"><label class="config-label">Attente inline par défaut (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="30000"></div><div class="config-row"><label class="config-label">Jobs simultanés <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="2"></div><div class="config-row"><label class="config-label">Taille de la file <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="8"></div><div class="config-row"><label class="config-label">Timeout d'inactivité (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="120000"></div><div class="config-row"><label class="config-label">Timeout global (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="600000"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">GPU</h2>
+          
+        </div><div class="config-row"><label class="config-label">Profil forcé <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>∅ (auto)</option><option selected>confort</option><option>compact</option><option>repli</option><option>texte-seul</option></select></div><div class="config-row"><label class="config-label">Mode de compatibilité <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>strict</option><option selected>auto-degrade</option></select></div><div class="config-row"><label class="config-label">Driver NVIDIA minimal (majeure) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="535"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Prompts système</h2>
+          
+        </div><div class="config-row"><label class="config-label">Prompt système — léger <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki, un assistant concis. Réponds en français.</textarea></div><div class="config-row"><label class="config-label">Prompt système — lourd <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki en mode analyse. Décompose le raisonnement…</textarea></div><div class="config-helper"><button class="button button--ghost button--small" type="button">Réinitialiser au défaut</button></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Transport temps réel</h2>
+          
+        </div><div class="config-row"><label class="config-label">Buffer de rejeu (trames) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="512"></div><div class="config-row"><label class="config-label">Buffer de rejeu (octets) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="1048576"></div></section>
+        <div class="config-actions">
+          <button id="save" class="button" type="button">Enregistrer</button>
+          <span id="save-status" class="config-save-status" role="status"></span>
+        </div>
+        <section class="config-restart" aria-labelledby="restart-title">
+          <h2 id="restart-title">Redémarrer Yuki</h2>
+          <p class="config-restart__warning">
+            Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
+            conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
+            proprement ses connexions puis redémarre son programme.
+          </p>
+          <p class="config-restart__warning">
+            Yuki <strong>redémarre en interne</strong> : un superviseur relance le
+            programme dans le conteneur, <strong>le conteneur reste en place</strong>.
+            Aucune politique de redémarrage Docker n'est nécessaire pour ce bouton.
+          </p>
+          <div class="config-actions">
+            <button id="restart" class="button button--danger" type="button">Redémarrer</button>
+            <span id="restart-status" class="config-save-status" role="status"></span>
+          </div>
+        </section>
+      </main>
+            
+      <div class="pv-chat">
+        <div class="pv-chat__label">Aperçu conversation — bulles <code>--user</code>/<code>--assistant</code> + pastille <code>--ok</code></div>
+        <div class="conversation">
+          <div class="message message--assistant">Bonjour ! La configuration est chargée.<span class="message__meta">Yuki · 12:04</span></div>
+          <div class="message message--user">Parfait, applique le preset et vérifie le rendu.<span class="message__meta">vous · 12:05</span></div>
+          <div class="message message--assistant">C'est appliqué. La conversation est prête.<span class="message__meta">Yuki · 12:05</span></div>
+        </div>
+      </div>
+            
+      <div class="pv-lib">
+        <div class="pv-lib__label">Composants holaf — modale <code>holaf-modal</code> (theme:&nbsp;"light") + toast <code>holaf-toast</code></div>
+        <div class="holaf-modal-root" style="--hm-bg:#ffffff;--hm-bg-secondary:#f4f4f5;--hm-bg-input:#fafafa;--hm-text:#18181b;--hm-text-secondary:#52525b;--hm-border:#d4d4d8;--hm-accent:#4f46e5;--hm-accent-hover:#6366f1;--hm-accent-text:#ffffff;--hm-danger:#dc2626;--hm-danger-hover:#b91c1c;--hm-danger-text:#ffffff;--hm-radius:12px;--hm-overlay-bg:rgba(24, 24, 27, 0.35);--hm-font-size:14px;--hm-shadow:0 18px 50px rgba(24, 24, 27, 0.18);--hm-busy-bg:rgba(255, 255, 255, 0.82)">
+          <div class="holaf-modal-header">
+            <span class="holaf-modal-title">Redémarrer Yuki ?</span>
+            <button class="holaf-modal-close" type="button" aria-label="Fermer">✕</button>
+          </div>
+          <div class="holaf-modal-body">
+            <p class="holaf-modal-message">Cela interrompt la conversation et les jobs en cours. Yuki redémarre son programme en interne ; le conteneur reste en place.</p>
+          </div>
+          <div class="holaf-modal-footer">
+            <button class="holaf-modal-btn holaf-modal-btn-cancel" type="button">Annuler</button>
+            <button class="holaf-modal-btn holaf-modal-btn-primary" type="button">Redémarrer</button>
+          </div>
+        </div>
+        <div class="holaf-toast holaf-toast--success" style="--ht-bg:#ffffff;--ht-bg-success:#dcece2;--ht-bg-warning:#f4e5da;--ht-bg-error:#fadede;--ht-fg:#18181b;--ht-border:#d4d4d8;--ht-accent-info:#2563eb;--ht-accent-success:#15803d;--ht-accent-warning:#b45309;--ht-accent-error:#dc2626;--ht-shadow:0 6px 24px rgba(24, 24, 27, 0.18);--ht-radius:10px" role="status">
+          <span class="holaf-toast__icon" aria-hidden="true">✓</span>
+          <div class="holaf-toast__body">
+            <div class="holaf-toast__title">Configuration enregistrée</div>
+            <div class="holaf-toast__message">3 champs appliqués à chaud.</div>
+          </div>
+          <button class="holaf-toast__close" type="button" aria-label="Fermer">✕</button>
+        </div>
+      </div>
+            <p class="pv-approx">⚠ Approximation : Idem : texte de bouton et rayons codés en dur par Yuki.</p>
+          </div>
+        </div>
+      </section>
+      <section class="pv-cell">
+        <h2 class="pv-cell__title"><span class="pv-cell__num">5</span> holaf — midnight</h2>
+        <p class="pv-cell__note">preset holaf-tokens « midnight ». L'accent-text holaf est sombre (#10111d) — non restitué car Yuki force #fff.</p>
+        <div class="pv-frame">
+          <div class="yp" style="--bg:#10111d;--panel:#10111d;--panel-2:#181a2c;--border:#272a44;--text:#e2e4f0;--muted:#9aa0c3;--accent:#818cf8;--danger:#ef4444;--user:#242744;--assistant:#17182A;--ok:#4cc38a">
+            
+      <header class="topbar">
+        <div class="brand"><a class="brand__link" href="#">Yuki</a> — Configuration</div>
+        <div class="status">
+          <a class="nav-back" href="#">← Retour à la discussion</a>
+          <span class="pill pill--online">prêt</span>
+          <span class="pill pill--online">clé légère OK</span>
+          <span class="pill pill--online">clé lourde OK</span>
+        </div>
+      </header>
+      <main class="config">
+        <p class="config-intro">
+          Ces valeurs sont enregistrées sur le serveur. Un champ avec
+          <span class="badge badge--hot">à chaud</span> s'applique immédiatement ;
+          un champ <span class="badge badge--restart">redémarrage</span> prend
+          effet au prochain redémarrage du gateway. Les clés ne sont
+          <strong>jamais</strong> réaffichées en clair.
+        </p>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM léger</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="http://localhost:11434/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Clé configurée (sk-…1a2b)</span><button class="button button--ghost button--small" type="button">Remplacer</button><button class="button button--danger button--small" type="button">Effacer</button><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur" hidden></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="qwen2.5:14b-instruct"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM lourd</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="https://api.openai.com/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Aucune clé configurée</span><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur"></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="gpt-4o"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option>medium</option><option selected>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Délégation</h2>
+          
+        </div><div class="config-row"><label class="config-label">Politique si clé manquante <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option selected>degrade</option><option>refuse</option></select></div><div class="config-row"><label class="config-label">Attente inline par défaut (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="30000"></div><div class="config-row"><label class="config-label">Jobs simultanés <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="2"></div><div class="config-row"><label class="config-label">Taille de la file <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="8"></div><div class="config-row"><label class="config-label">Timeout d'inactivité (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="120000"></div><div class="config-row"><label class="config-label">Timeout global (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="600000"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">GPU</h2>
+          
+        </div><div class="config-row"><label class="config-label">Profil forcé <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>∅ (auto)</option><option selected>confort</option><option>compact</option><option>repli</option><option>texte-seul</option></select></div><div class="config-row"><label class="config-label">Mode de compatibilité <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>strict</option><option selected>auto-degrade</option></select></div><div class="config-row"><label class="config-label">Driver NVIDIA minimal (majeure) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="535"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Prompts système</h2>
+          
+        </div><div class="config-row"><label class="config-label">Prompt système — léger <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki, un assistant concis. Réponds en français.</textarea></div><div class="config-row"><label class="config-label">Prompt système — lourd <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki en mode analyse. Décompose le raisonnement…</textarea></div><div class="config-helper"><button class="button button--ghost button--small" type="button">Réinitialiser au défaut</button></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Transport temps réel</h2>
+          
+        </div><div class="config-row"><label class="config-label">Buffer de rejeu (trames) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="512"></div><div class="config-row"><label class="config-label">Buffer de rejeu (octets) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="1048576"></div></section>
+        <div class="config-actions">
+          <button id="save" class="button" type="button">Enregistrer</button>
+          <span id="save-status" class="config-save-status" role="status"></span>
+        </div>
+        <section class="config-restart" aria-labelledby="restart-title">
+          <h2 id="restart-title">Redémarrer Yuki</h2>
+          <p class="config-restart__warning">
+            Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
+            conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
+            proprement ses connexions puis redémarre son programme.
+          </p>
+          <p class="config-restart__warning">
+            Yuki <strong>redémarre en interne</strong> : un superviseur relance le
+            programme dans le conteneur, <strong>le conteneur reste en place</strong>.
+            Aucune politique de redémarrage Docker n'est nécessaire pour ce bouton.
+          </p>
+          <div class="config-actions">
+            <button id="restart" class="button button--danger" type="button">Redémarrer</button>
+            <span id="restart-status" class="config-save-status" role="status"></span>
+          </div>
+        </section>
+      </main>
+            
+      <div class="pv-chat">
+        <div class="pv-chat__label">Aperçu conversation — bulles <code>--user</code>/<code>--assistant</code> + pastille <code>--ok</code></div>
+        <div class="conversation">
+          <div class="message message--assistant">Bonjour ! La configuration est chargée.<span class="message__meta">Yuki · 12:04</span></div>
+          <div class="message message--user">Parfait, applique le preset et vérifie le rendu.<span class="message__meta">vous · 12:05</span></div>
+          <div class="message message--assistant">C'est appliqué. La conversation est prête.<span class="message__meta">Yuki · 12:05</span></div>
+        </div>
+      </div>
+            
+      <div class="pv-lib">
+        <div class="pv-lib__label">Composants holaf — modale <code>holaf-modal</code> (theme:&nbsp;"midnight") + toast <code>holaf-toast</code></div>
+        <div class="holaf-modal-root" style="--hm-bg:#10111d;--hm-bg-secondary:#181a2c;--hm-bg-input:#0c0d17;--hm-text:#e2e4f0;--hm-text-secondary:#9aa0c3;--hm-border:#272a44;--hm-accent:#818cf8;--hm-accent-hover:#a5b4fc;--hm-accent-text:#10111d;--hm-danger:#ef4444;--hm-danger-hover:#dc2626;--hm-danger-text:#ffffff;--hm-radius:12px;--hm-overlay-bg:rgba(4, 5, 12, 0.65);--hm-font-size:14px;--hm-shadow:0 18px 50px rgba(0, 0, 0, 0.6);--hm-busy-bg:rgba(16, 17, 29, 0.85)">
+          <div class="holaf-modal-header">
+            <span class="holaf-modal-title">Redémarrer Yuki ?</span>
+            <button class="holaf-modal-close" type="button" aria-label="Fermer">✕</button>
+          </div>
+          <div class="holaf-modal-body">
+            <p class="holaf-modal-message">Cela interrompt la conversation et les jobs en cours. Yuki redémarre son programme en interne ; le conteneur reste en place.</p>
+          </div>
+          <div class="holaf-modal-footer">
+            <button class="holaf-modal-btn holaf-modal-btn-cancel" type="button">Annuler</button>
+            <button class="holaf-modal-btn holaf-modal-btn-primary" type="button">Redémarrer</button>
+          </div>
+        </div>
+        <div class="holaf-toast holaf-toast--success" style="--ht-bg:#10111d;--ht-bg-success:#152e30;--ht-bg-warning:#332b1e;--ht-bg-error:#331f2a;--ht-fg:#e2e4f0;--ht-border:#272a44;--ht-accent-info:#60a5fa;--ht-accent-success:#34d399;--ht-accent-warning:#fbbf24;--ht-accent-error:#f87171;--ht-shadow:0 6px 24px rgba(0, 0, 0, 0.6);--ht-radius:10px" role="status">
+          <span class="holaf-toast__icon" aria-hidden="true">✓</span>
+          <div class="holaf-toast__body">
+            <div class="holaf-toast__title">Configuration enregistrée</div>
+            <div class="holaf-toast__message">3 champs appliqués à chaud.</div>
+          </div>
+          <button class="holaf-toast__close" type="button" aria-label="Fermer">✕</button>
+        </div>
+      </div>
+            <p class="pv-approx">⚠ Approximation : Boutons de la page : texte blanc de Yuki, alors qu'holaf recommande un texte sombre sur l'accent.</p>
+          </div>
+        </div>
+      </section>
+      <section class="pv-cell">
+        <h2 class="pv-cell__title"><span class="pv-cell__num">6</span> holaf — slate</h2>
+        <p class="pv-cell__note">preset holaf-tokens « slate » (gris ardoise neutre).</p>
+        <div class="pv-frame">
+          <div class="yp" style="--bg:#1f232b;--panel:#1f232b;--panel-2:#292e38;--border:#3a4150;--text:#e6e9ee;--muted:#9aa3b2;--accent:#94a3b8;--danger:#ef4444;--user:#343A44;--assistant:#262B33;--ok:#4cc38a">
+            
+      <header class="topbar">
+        <div class="brand"><a class="brand__link" href="#">Yuki</a> — Configuration</div>
+        <div class="status">
+          <a class="nav-back" href="#">← Retour à la discussion</a>
+          <span class="pill pill--online">prêt</span>
+          <span class="pill pill--online">clé légère OK</span>
+          <span class="pill pill--online">clé lourde OK</span>
+        </div>
+      </header>
+      <main class="config">
+        <p class="config-intro">
+          Ces valeurs sont enregistrées sur le serveur. Un champ avec
+          <span class="badge badge--hot">à chaud</span> s'applique immédiatement ;
+          un champ <span class="badge badge--restart">redémarrage</span> prend
+          effet au prochain redémarrage du gateway. Les clés ne sont
+          <strong>jamais</strong> réaffichées en clair.
+        </p>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM léger</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="http://localhost:11434/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Clé configurée (sk-…1a2b)</span><button class="button button--ghost button--small" type="button">Remplacer</button><button class="button button--danger button--small" type="button">Effacer</button><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur" hidden></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="qwen2.5:14b-instruct"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">LLM lourd</h2>
+          <div class="config-secret"><button class="button button--ghost button--small" type="button">Tester la connexion</button><span class="config-helper"></span></div>
+        </div><div class="config-row"><label class="config-label">URL de base <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="text" value="https://api.openai.com/v1"></div><div class="config-row"><label class="config-label">Clé d'API</label><div class="config-secret"><span class="config-secret__value">Aucune clé configurée</span><input class="config-input" type="password" autocomplete="off" placeholder="Nouvelle valeur"></div></div><div class="config-row"><label class="config-label">Modèle <span class="badge badge--hot">à chaud</span></label><input class="config-input" type="text" value="gpt-4o"></div><div class="config-row"><label class="config-label">Dialecte d'API <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option selected>openai-completions</option></select></div><div class="config-row"><label class="config-label">Réflexion (thinking) <span class="badge badge--hot">à chaud</span></label><select class="config-select"><option>off</option><option>minimal</option><option>low</option><option>medium</option><option selected>high</option><option>xhigh</option><option>max</option></select></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Délégation</h2>
+          
+        </div><div class="config-row"><label class="config-label">Politique si clé manquante <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option selected>degrade</option><option>refuse</option></select></div><div class="config-row"><label class="config-label">Attente inline par défaut (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="30000"></div><div class="config-row"><label class="config-label">Jobs simultanés <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="2"></div><div class="config-row"><label class="config-label">Taille de la file <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="8"></div><div class="config-row"><label class="config-label">Timeout d'inactivité (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="120000"></div><div class="config-row"><label class="config-label">Timeout global (ms) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="600000"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">GPU</h2>
+          
+        </div><div class="config-row"><label class="config-label">Profil forcé <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>∅ (auto)</option><option selected>confort</option><option>compact</option><option>repli</option><option>texte-seul</option></select></div><div class="config-row"><label class="config-label">Mode de compatibilité <span class="badge badge--restart">redémarrage</span></label><select class="config-select"><option>strict</option><option selected>auto-degrade</option></select></div><div class="config-row"><label class="config-label">Driver NVIDIA minimal (majeure) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="535"></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Prompts système</h2>
+          
+        </div><div class="config-row"><label class="config-label">Prompt système — léger <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki, un assistant concis. Réponds en français.</textarea></div><div class="config-row"><label class="config-label">Prompt système — lourd <span class="badge badge--restart">redémarrage</span></label><textarea class="config-textarea" spellcheck="false">Tu es Yuki en mode analyse. Décompose le raisonnement…</textarea></div><div class="config-helper"><button class="button button--ghost button--small" type="button">Réinitialiser au défaut</button></div></section>
+        
+      <section class="config-group">
+        <div class="config-group__head">
+          <h2 class="config-group__title">Transport temps réel</h2>
+          
+        </div><div class="config-row"><label class="config-label">Buffer de rejeu (trames) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="512"></div><div class="config-row"><label class="config-label">Buffer de rejeu (octets) <span class="badge badge--restart">redémarrage</span></label><input class="config-input" type="number" value="1048576"></div></section>
+        <div class="config-actions">
+          <button id="save" class="button" type="button">Enregistrer</button>
+          <span id="save-status" class="config-save-status" role="status"></span>
+        </div>
+        <section class="config-restart" aria-labelledby="restart-title">
+          <h2 id="restart-title">Redémarrer Yuki</h2>
+          <p class="config-restart__warning">
+            Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
+            conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
+            proprement ses connexions puis redémarre son programme.
+          </p>
+          <p class="config-restart__warning">
+            Yuki <strong>redémarre en interne</strong> : un superviseur relance le
+            programme dans le conteneur, <strong>le conteneur reste en place</strong>.
+            Aucune politique de redémarrage Docker n'est nécessaire pour ce bouton.
+          </p>
+          <div class="config-actions">
+            <button id="restart" class="button button--danger" type="button">Redémarrer</button>
+            <span id="restart-status" class="config-save-status" role="status"></span>
+          </div>
+        </section>
+      </main>
+            
+      <div class="pv-chat">
+        <div class="pv-chat__label">Aperçu conversation — bulles <code>--user</code>/<code>--assistant</code> + pastille <code>--ok</code></div>
+        <div class="conversation">
+          <div class="message message--assistant">Bonjour ! La configuration est chargée.<span class="message__meta">Yuki · 12:04</span></div>
+          <div class="message message--user">Parfait, applique le preset et vérifie le rendu.<span class="message__meta">vous · 12:05</span></div>
+          <div class="message message--assistant">C'est appliqué. La conversation est prête.<span class="message__meta">Yuki · 12:05</span></div>
+        </div>
+      </div>
+            
+      <div class="pv-lib">
+        <div class="pv-lib__label">Composants holaf — modale <code>holaf-modal</code> (theme:&nbsp;"slate") + toast <code>holaf-toast</code></div>
+        <div class="holaf-modal-root" style="--hm-bg:#1f232b;--hm-bg-secondary:#292e38;--hm-bg-input:#191d24;--hm-text:#e6e9ee;--hm-text-secondary:#9aa3b2;--hm-border:#3a4150;--hm-accent:#94a3b8;--hm-accent-hover:#b6c2d4;--hm-accent-text:#1f232b;--hm-danger:#ef4444;--hm-danger-hover:#dc2626;--hm-danger-text:#ffffff;--hm-radius:12px;--hm-overlay-bg:rgba(8, 10, 14, 0.55);--hm-font-size:14px;--hm-shadow:0 18px 50px rgba(0, 0, 0, 0.5);--hm-busy-bg:rgba(31, 35, 43, 0.85)">
+          <div class="holaf-modal-header">
+            <span class="holaf-modal-title">Redémarrer Yuki ?</span>
+            <button class="holaf-modal-close" type="button" aria-label="Fermer">✕</button>
+          </div>
+          <div class="holaf-modal-body">
+            <p class="holaf-modal-message">Cela interrompt la conversation et les jobs en cours. Yuki redémarre son programme en interne ; le conteneur reste en place.</p>
+          </div>
+          <div class="holaf-modal-footer">
+            <button class="holaf-modal-btn holaf-modal-btn-cancel" type="button">Annuler</button>
+            <button class="holaf-modal-btn holaf-modal-btn-primary" type="button">Redémarrer</button>
+          </div>
+        </div>
+        <div class="holaf-toast holaf-toast--success" style="--ht-bg:#1f232b;--ht-bg-success:#2b4040;--ht-bg-warning:#403d30;--ht-bg-error:#40373d;--ht-fg:#e6e9ee;--ht-border:#3a4150;--ht-accent-info:#93c5fd;--ht-accent-success:#6ee7b7;--ht-accent-warning:#fcd34d;--ht-accent-error:#fca5a5;--ht-shadow:0 6px 24px rgba(0, 0, 0, 0.5);--ht-radius:10px" role="status">
+          <span class="holaf-toast__icon" aria-hidden="true">✓</span>
+          <div class="holaf-toast__body">
+            <div class="holaf-toast__title">Configuration enregistrée</div>
+            <div class="holaf-toast__message">3 champs appliqués à chaud.</div>
+          </div>
+          <button class="holaf-toast__close" type="button" aria-label="Fermer">✕</button>
+        </div>
+      </div>
+            <p class="pv-approx">⚠ Approximation : Idem : texte de bouton et rayons codés en dur par Yuki.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
