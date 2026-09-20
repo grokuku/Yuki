@@ -7,6 +7,8 @@
     <title>Yuki — Configuration</title>
     <link rel="stylesheet" href="/ui/styles.css" />
     <link rel="stylesheet" href="/ui/config.css" />
+    <!-- HolafModal — CSS extrait via getCss(), servi statiquement (CSP style-src 'self'). -->
+    <link rel="stylesheet" href="/ui/vendor/holaf/holaf-modal.css" />
   </head>
   <body>
     <header class="topbar">
@@ -73,6 +75,7 @@
       </section>
     </main>
 
+    <!-- config.js importe holaf-fetch (copie pinnée) via le graphe ESM. -->
     <script type="module" src="/ui/config.js"></script>
   </body>
 </html>

@@ -10,6 +10,24 @@
  * enregistrement (uniquement `configured` + `masked`).
  */
 
+/**
+ * Brique holaf-fetch — copie pinnée servie sous `/ui/vendor/holaf/holaf-fetch.js`.
+ * Import ESM explicite : le chargement est géré par le graphe de modules
+ * (`config.html` n'a plus besoin de charger la brique séparément).
+ */
+import { HolafFetch } from './vendor/holaf/holaf-fetch.js';
+
+/**
+ * Brique holaf-modal — copie pinnée sous `/ui/vendor/holaf/holaf-modal.js`.
+ * Le CSS n'est PAS injecté par JS (CSP `style-src 'self'` interdit les
+ * `<style>` posés dynamiquement) : il est servi en fichier statique, référencé
+ * par `config.html` via `/ui/vendor/holaf/holaf-modal.css` (extrait de
+ * `HolafModal.getCss()`). `injectStyles: false` coupe l'injection.
+ */
+import { HolafModal } from './vendor/holaf/holaf-modal.js';
+
+HolafModal.configure({ injectStyles: false });
+
 const WRITE_HEADERS = {
   "content-type": "application/json",
   "x-yuki-config": "1",
@@ -350,9 +368,10 @@ function buildPatch() {
 }
 
 async function load() {
-  const response = await fetch("/api/config", { headers: { accept: "application/json" } });
-  if (!response.ok) throw new Error(`GET /api/config → ${response.status}`);
-  applySnapshot(await response.json());
+  const body = await HolafFetch.get("/api/config", {
+    headers: { accept: "application/json" },
+  });
+  applySnapshot(body);
   render();
 }
 
@@ -371,23 +390,31 @@ async function save() {
   saveStatus.textContent = "Enregistrement…";
   globalError.hidden = true;
   try {
-    const response = await fetch("/api/config", {
-      method: "PUT",
+    // Corps JSON envoyé en objet : la brique le sérialise et pose le
+    // Content-Type ; les en-têtes maison (WRITE_HEADERS) sont préservés.
+    const body = await HolafFetch.put("/api/config", {
       headers: WRITE_HEADERS,
-      body: JSON.stringify(buildPatch()),
+      body: buildPatch(),
     });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      showFieldErrors(body.fields ?? [{ path: "", message: body.message ?? body.error ?? `Erreur ${response.status}` }]);
-      saveStatus.textContent = "Échec de l'enregistrement.";
-      return;
-    }
     applySnapshot(body);
     render();
     showApplied(body.applied ?? { hot: [], restart: [] });
     saveStatus.textContent = "Enregistré.";
   } catch (error) {
-    showFieldErrors([{ path: "", message: error instanceof Error ? error.message : String(error) }]);
+    // Erreurs métier : HolafFetch expose le corps JSON parsé dans `error.data`
+    // (fields/message/error), sinon le message typé de la brique.
+    const data = error?.data ?? {};
+    showFieldErrors(
+      data.fields ?? [
+        {
+          path: "",
+          message:
+            data.message ??
+            data.error ??
+            (error instanceof Error ? error.message : String(error)),
+        },
+      ],
+    );
     saveStatus.textContent = "Échec de l'enregistrement.";
   }
 }
@@ -404,12 +431,10 @@ async function testConnection(role, statusEl) {
   try {
     const secret = state.secretState.get(`llm.${role}.apiKey`);
     const apiKey = secret?.input && secret.input.value.trim() !== "" ? secret.input.value.trim() : undefined;
-    const response = await fetch("/api/config/llm/test", {
-      method: "POST",
+    const body = await HolafFetch.post("/api/config/llm/test", {
       headers: WRITE_HEADERS,
-      body: JSON.stringify({ role, ...(apiKey ? { apiKey } : {}) }),
+      body: { role, ...(apiKey ? { apiKey } : {}) },
     });
-    const body = await response.json().catch(() => ({}));
     if (body.ok) {
       const count = Array.isArray(body.models) ? body.models.length : null;
       statusEl.textContent = count !== null ? `Connexion OK (${count} modèles).` : "Connexion OK.";
@@ -433,8 +458,9 @@ function delay(ms) {
 /** `true` si le gateway répond à `/health/live`. */
 async function isGatewayLive() {
   try {
-    const response = await fetch("/health/live", { cache: "no-store" });
-    return response.ok;
+    // `cache: "no-store"` est une option native forwardée par la brique.
+    await HolafFetch.get("/health/live", { cache: "no-store" });
+    return true;
   } catch {
     return false;
   }
@@ -474,9 +500,9 @@ async function waitForGatewayRestart() {
 }
 
 async function restart() {
-  const confirmed = window.confirm(
-    "Redémarrer Yuki ?\n\n" +
-      "Cela interrompt la conversation et les jobs en cours.\n\n" +
+  const confirmed = await HolafModal.confirm(
+    "Redémarrer Yuki ?",
+    "Cela interrompt la conversation et les jobs en cours.\n\n" +
       "Yuki redémarre son programme en interne ; le conteneur reste en place.",
   );
   if (!confirmed) return;
@@ -485,19 +511,17 @@ async function restart() {
   saveButton.disabled = true;
   setRestartStatus("Redémarrage demandé…");
   try {
-    const response = await fetch("/api/admin/restart", {
-      method: "POST",
-      headers: WRITE_HEADERS,
-    });
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new Error(body.message ?? body.error ?? `Erreur ${response.status}`);
-    }
+    await HolafFetch.post("/api/admin/restart", { headers: WRITE_HEADERS });
   } catch (error) {
+    // Corps JSON d'erreur exposé par la brique : `message` d'abord
+    // (convention du gateway), sinon `error`, sinon le message typé.
+    const data = error?.data ?? {};
+    const message =
+      data.message ??
+      data.error ??
+      (error instanceof Error ? error.message : String(error));
     setRestartStatus(
-      `Échec de la demande de redémarrage : ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `Échec de la demande de redémarrage : ${message}`,
       true,
     );
     restartButton.disabled = false;
@@ -531,18 +555,19 @@ function updateAvailability() {
 
 async function pollHealth() {
   try {
-    const response = await fetch("/health/ready");
-    state.healthReady = response.status === 200;
-    if (!state.healthReady && state.status.lightKey) {
-      availabilityEl.textContent =
-        "Le service n'est pas encore prêt (profil GPU ou PiHost). Vérifiez /health.";
-      availabilityEl.hidden = false;
-      availabilityEl.className = "config-banner config-banner--warn";
-    } else if (state.healthReady) {
-      availabilityEl.hidden = true;
-    }
+    // 200 = prêt ; tout autre statut (503 « non prêt », réseau) lève une erreur.
+    await HolafFetch.get("/health/ready");
+    state.healthReady = true;
   } catch {
     state.healthReady = false;
+  }
+  if (!state.healthReady && state.status.lightKey) {
+    availabilityEl.textContent =
+      "Le service n'est pas encore prêt (profil GPU ou PiHost). Vérifiez /health.";
+    availabilityEl.hidden = false;
+    availabilityEl.className = "config-banner config-banner--warn";
+  } else if (state.healthReady) {
+    availabilityEl.hidden = true;
   }
   updateAvailability();
 }
