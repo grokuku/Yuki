@@ -20,6 +20,7 @@ export type ClientMessage =
   | { type: "resume"; sessionId: string; fromSeq: number }
   | { type: "message"; clientMsgId: string; text: string }
   | { type: "abort"; runId?: string }
+  | { type: "playback"; runId: string; event: "started" | "aborted" }
   | { type: "ping"; t: number };
 
 /** Corps d'une trame serveur → client. */
@@ -66,6 +67,12 @@ export type ServerMessage =
       totalMs: number;
       tokensIn?: number;
       tokensOut?: number;
+      /** Lot 7 : t0 → premier octet PCM du 1er segment. */
+      ttfaMs?: number;
+      /** Lot 7 : cumul synthèse TTS du run. */
+      ttsSynthMs?: number;
+      /** Lot 7 : nombre de segments TTS synthétisés. */
+      ttsSegments?: number;
     }
   | {
       type: "snapshot";
@@ -159,6 +166,17 @@ export function parseClientMessage(raw: string): ParseResult {
         ok: true,
         message: { type: "abort", ...(runId !== undefined ? { runId } : {}) },
       };
+    }
+    case "playback": {
+      const runId = optionalString(parsed, "runId");
+      const event = parsed.event;
+      if (runId === undefined) {
+        return { ok: false, error: "playback_missing_run_id" };
+      }
+      if (event !== "started" && event !== "aborted") {
+        return { ok: false, error: "playback_invalid_event" };
+      }
+      return { ok: true, message: { type: "playback", runId, event } };
     }
     case "ping": {
       const t = parsed.t;

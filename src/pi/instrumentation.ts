@@ -40,6 +40,16 @@ export const PHASE = {
   jobInterrupted: "job_interrupted",
   reportRequested: "report_requested",
   reportEmitted: "report_emitted",
+  // Lot 7 — TTS / barge-in (définis ici ; émis par le pipeline du lot suivant)
+  sentenceSegmented: "sentence_segmented",
+  ttsQueued: "tts_queued",
+  ttsRequested: "tts_requested",
+  ttsFirstByte: "tts_first_byte",
+  ttsSegmentDone: "tts_segment_done",
+  ttsRetry: "tts_retry",
+  ttsCancel: "tts_cancel",
+  playbackStarted: "playback_started",
+  playbackAborted: "playback_aborted",
 } as const;
 
 /** Construit un événement `phase` (chaîne ouverte, corrélation `jobId` optionnelle). */
@@ -69,6 +79,19 @@ export interface RunSummary {
   totalMs: number;
   tokensIn?: number;
   tokensOut?: number;
+  /** Lot 7 (optionnel, rétro-compatible) : t0 → premier octet PCM du 1er segment. */
+  ttfaMs?: number;
+  /** Lot 7 (optionnel) : cumul `tts_requested` → `tts_segment_done`. */
+  ttsSynthMs?: number;
+  /** Lot 7 (optionnel) : nombre de segments synthétisés. */
+  ttsSegments?: number;
+}
+
+/** Métriques TTS cumulées d'un run (Lot 7). */
+export interface RunTtsMetrics {
+  ttfaMs?: number;
+  ttsSynthMs?: number;
+  ttsSegments?: number;
 }
 
 export interface RunInstrumentationParams {
@@ -95,6 +118,7 @@ export class RunInstrumentation {
 
   private firstTokenAt: number | undefined;
   private usage: PiUsage | undefined;
+  private tts: RunTtsMetrics | undefined;
   private completed = false;
 
   constructor(params: RunInstrumentationParams) {
@@ -140,6 +164,15 @@ export class RunInstrumentation {
     if (usage) this.usage = usage;
   }
 
+  /**
+   * Enregistre les métriques TTS du run (Lot 7). Aucun point d'appel n'existe
+   * encore : le pipeline (lot suivant) les produira ; la synthèse les expose
+   * dès qu'elles sont posées. Un appel postérieur écrase (dernier état gagne).
+   */
+  recordTtsMetrics(metrics: RunTtsMetrics): void {
+    this.tts = metrics;
+  }
+
   /** Émet les étages terminaux : abort/error le cas échéant, puis run_finished. */
   complete(reason: RunFinishReason): void {
     if (this.completed) return;
@@ -160,6 +193,11 @@ export class RunInstrumentation {
       summary.tokensIn = this.usage.input;
       summary.tokensOut = this.usage.output;
     }
+    if (this.tts) {
+      if (this.tts.ttfaMs !== undefined) summary.ttfaMs = this.tts.ttfaMs;
+      if (this.tts.ttsSynthMs !== undefined) summary.ttsSynthMs = this.tts.ttsSynthMs;
+      if (this.tts.ttsSegments !== undefined) summary.ttsSegments = this.tts.ttsSegments;
+    }
     return summary;
   }
 
@@ -174,6 +212,9 @@ export class RunInstrumentation {
       totalMs: summary.totalMs,
       ...(summary.tokensIn !== undefined ? { tokensIn: summary.tokensIn } : {}),
       ...(summary.tokensOut !== undefined ? { tokensOut: summary.tokensOut } : {}),
+      ...(summary.ttfaMs !== undefined ? { ttfaMs: summary.ttfaMs } : {}),
+      ...(summary.ttsSynthMs !== undefined ? { ttsSynthMs: summary.ttsSynthMs } : {}),
+      ...(summary.ttsSegments !== undefined ? { ttsSegments: summary.ttsSegments } : {}),
     });
     this.logger.info("pi.run_summary", {
       session_id: this.sessionId,
@@ -182,6 +223,9 @@ export class RunInstrumentation {
       total_ms: summary.totalMs,
       usage_in: summary.tokensIn,
       usage_out: summary.tokensOut,
+      ttfa_ms: summary.ttfaMs,
+      tts_synth_ms: summary.ttsSynthMs,
+      tts_segments: summary.ttsSegments,
     });
     return summary;
   }

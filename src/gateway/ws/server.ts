@@ -16,8 +16,9 @@ import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { toPiHostError } from "../../pi/errors.js";
-import type { PiEvent, PiHost } from "../../pi/index.js";
+import { PHASE, type PiEvent, type PiHost } from "../../pi/index.js";
 import type { Logger } from "../../observability/logger.js";
+import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
 import {
   parseClientMessage,
   type ClientMessage,
@@ -37,6 +38,11 @@ export interface WsTransportOptions {
   replayBufferSize: number;
   replayBufferBytes: number;
   now?: () => number;
+  /**
+   * Lot 7 : dépendances du pipeline TTS. Absent ⇒ aucune trame audio (comportement
+   * strictement identique aux lots précédents).
+   */
+  tts?: TtsPipelineDeps;
 }
 
 interface ClientState {
@@ -109,6 +115,9 @@ export function toServerMessage(event: PiEvent): ServerMessage {
         totalMs: event.totalMs,
         ...(event.tokensIn !== undefined ? { tokensIn: event.tokensIn } : {}),
         ...(event.tokensOut !== undefined ? { tokensOut: event.tokensOut } : {}),
+        ...(event.ttfaMs !== undefined ? { ttfaMs: event.ttfaMs } : {}),
+        ...(event.ttsSynthMs !== undefined ? { ttsSynthMs: event.ttsSynthMs } : {}),
+        ...(event.ttsSegments !== undefined ? { ttsSegments: event.ttsSegments } : {}),
       };
     case "state":
       return {
@@ -134,8 +143,10 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   });
   const clients = new Set<ClientState>();
 
+  const runT0 = new Map<string, number>();
   const unsubscribeHost = host.subscribeAll((event) => {
     streams.get(event.sessionId).append(toServerMessage(event));
+    routeTtsEvent(event);
   });
 
   let wss: WebSocketServer | undefined;
@@ -176,6 +187,66 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       logger.warn("ws.send.failed", {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /** Diffuse une trame binaire `YTA1` aux clients de la session (§4.5). */
+  function broadcastBinary(sessionId: string, frame: Buffer): void {
+    for (const client of clients) {
+      if (client.ws.readyState !== WebSocket.OPEN) continue;
+      if (sessionIdFor(client) !== sessionId) continue;
+      try {
+        client.ws.send(frame, { binary: true });
+      } catch (error) {
+        logger.warn("ws.send.binary.failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  const tts = options.tts
+    ? new TtsPipeline(options.tts, {
+        emitAudio: (sessionId, frame) => broadcastBinary(sessionId, frame),
+        emitControl: (sessionId, frame) => broadcastBinary(sessionId, frame),
+        onStage: (sessionId, runId, stage) => {
+          host.recordRunStage?.(sessionId, runId, stage);
+        },
+        onMetrics: (sessionId, runId, metrics) => {
+          host.recordRunTtsMetrics?.(sessionId, runId, metrics);
+        },
+      })
+    : undefined;
+
+  /**
+   * Achemine un événement Pi vers le pipeline TTS (hors chemin critique).
+   * `t0` est reconstruit depuis le premier `phase` corrélé du run.
+   */
+  function routeTtsEvent(event: PiEvent): void {
+    if (!tts) return;
+    switch (event.type) {
+      case "phase":
+        if (!runT0.has(event.runId)) {
+          runT0.set(
+            event.runId,
+            (options.now?.() ?? Date.now()) - event.sinceT0Ms,
+          );
+        }
+        return;
+      case "run_started":
+        tts.onRunStarted(event.sessionId, event.runId, runT0.get(event.runId));
+        return;
+      case "delta":
+        if (event.channel === "content") {
+          tts.onContent(event.sessionId, event.runId, event.text);
+        }
+        return;
+      case "run_finished":
+        tts.onRunFinished(event.sessionId, event.runId, event.reason);
+        runT0.delete(event.runId);
+        return;
+      default:
+        return;
     }
   }
 
@@ -297,6 +368,10 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         return;
       case "abort":
         if (!client.greeted) client.sessionId = host.currentSessionId();
+        tts?.cancel(
+          client.sessionId ?? host.currentSessionId() ?? "",
+          message.runId,
+        );
         void host
           .abort(client.sessionId ?? host.currentSessionId() ?? "", message.runId)
           .catch((error: unknown) => {
@@ -305,6 +380,19 @@ export function createWsTransport(options: WsTransportOptions): Transport {
             });
           });
         return;
+      case "playback": {
+        const sessionId = client.sessionId ?? host.currentSessionId();
+        if (sessionId) {
+          host.recordRunStage?.(
+            sessionId,
+            message.runId,
+            message.event === "started"
+              ? PHASE.playbackStarted
+              : PHASE.playbackAborted,
+          );
+        }
+        return;
+      }
       case "ping":
         sendDirect(client, { type: "pong", t: message.t });
         return;
@@ -382,6 +470,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       if (closed) return;
       closed = true;
       unsubscribeHost();
+      tts?.cancelAll();
       if (httpServer) {
         httpServer.off("upgrade", onUpgrade);
         httpServer = undefined;

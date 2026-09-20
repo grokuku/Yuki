@@ -52,21 +52,22 @@ ARG YUKI_GID=1000
 # L'image `node` fournit déjà un utilisateur `node` (uid/gid 1000) : on le
 # remplace par `yuki` afin que le nom et l'identité non-root coïncident.
 #
-# Les répertoires des 4 volumes nommés sont créés AVEC LE PROPRIÉTAIRE du
+# Les répertoires des volumes nommés sont créés AVEC LE PROPRIÉTAIRE du
 # conteneur (`YUKI_UID:YUKI_GID`). C'est ESSENTIEL : pour un volume nommé monté
 # sur un chemin qui EXISTE déjà dans l'image, Docker initialise le volume en
 # recopiant le CONTENU **et le PROPRIÉTAIRE** du répertoire de l'image. Le
 # conteneur non-root peut donc écrire dans le volume sans aucune préparation
 # sur l'hôte. Sans ce `chown`, le volume serait initialisé en `root:root` et le
 # non-root échouerait à écrire (`/health/ready` → 503).
+# `/voices` (Lot 7) est le volume `yuki-voices` (registre + échantillons TTS).
 RUN set -eux; \
     if getent passwd node >/dev/null 2>&1; then userdel -r node || true; fi; \
     if getent group node >/dev/null 2>&1; then groupdel node || true; fi; \
     groupadd --gid "${YUKI_GID}" yuki; \
     useradd --uid "${YUKI_UID}" --gid "${YUKI_GID}" \
       --home-dir /app --shell /usr/sbin/nologin yuki; \
-    mkdir -p /data/pi /data/state /workspace /models; \
-    chown -R "${YUKI_UID}:${YUKI_GID}" /data/pi /data/state /workspace /models
+    mkdir -p /data/pi /data/state /workspace /models /voices; \
+    chown -R "${YUKI_UID}:${YUKI_GID}" /data/pi /data/state /workspace /models /voices
 
 # Dépendances de production uniquement (SDK Pi + `ws`, versions figées sans
 # caret). `NODE_ENV=production` est confiné à cet étage et n'affecte donc pas

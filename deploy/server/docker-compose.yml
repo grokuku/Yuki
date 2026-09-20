@@ -7,7 +7,7 @@
 # aucune préparation de l'hôte, aucun clone du dépôt n'est nécessaire. Seuls ce
 # fichier et un `.env` (dérivé de `.env.example`) sont requis.
 #
-# La persistance passe par 4 VOLUMES NOMMÉS, préfixés `yuki-server-*` pour ne
+# La persistance passe par 5 VOLUMES NOMMÉS, préfixés `yuki-server-*` pour ne
 # pas entrer en collision avec un autre déploiement Yuki sur la même machine.
 # Pour un volume nommé monté sur un chemin qui EXISTE déjà dans l'image, Docker
 # initialise le volume avec le CONTENU et le PROPRIÉTAIRE du répertoire de
@@ -52,6 +52,8 @@ services:
       YUKI_MOUNT_WORKSPACE: /workspace
       YUKI_MOUNT_MODELS: /models
       YUKI_MOUNT_STATE: /data/state
+      # Volume des voix TTS (Lot 7) — registre + échantillons (rw gateway).
+      YUKI_MOUNT_VOICES: /voices
 
       # --- Pi embarqué : état du SDK redirigé hors du rootfs read-only ---
       YUKI_PI_AGENT_DIR: /data/pi/agent
@@ -80,7 +82,7 @@ services:
     ports:
       - "${YUKI_GATEWAY_PORT:-8080}:8080"
 
-    # 4 volumes nommés (RW sauf `models`, monté en lecture seule `:ro`).
+    # 5 volumes nommés (RW sauf `models`, monté en lecture seule `:ro`).
     volumes:
       - type: volume
         source: yuki-server-pi
@@ -95,6 +97,10 @@ services:
       - type: volume
         source: yuki-server-state
         target: /data/state
+      # Lot 7 : voix TTS (rw pour le gateway, ro pour le service `tts`).
+      - type: volume
+        source: yuki-server-voices
+        target: /voices
 
     networks:
       - yuki-server-net
@@ -135,6 +141,45 @@ services:
               count: all
               capabilities: [gpu]
 
+  # ===========================================================================
+  # Service TTS (Lot 7) — OPT-IN via le profil Compose `tts` :
+  #
+  #     docker compose --profile tts up -d
+  #
+  # audio.cpp (Chatterbox Multilingual V3, CUDA NVIDIA uniquement). L'image se
+  # choisit via `YUKI_TTS_IMAGE` dans `.env` (`full-cuda13` par défaut).
+  #
+  # ⚠️ POINTS À VÉRIFIER EN RÉEL (spec §13/C14) : CLI exact du serveur audio.cpp
+  # et emplacement de son fichier de config. La commande est celle de la spec.
+  # ===========================================================================
+  tts:
+    image: ${YUKI_TTS_IMAGE:-ghcr.io/0xshug0/audio.cpp:full-cuda13}
+    container_name: yuki-server-tts
+    profiles: ["tts"]
+    command: ["--server", "--host", "0.0.0.0", "--port", "8081"]
+    networks:
+      - yuki-server-net
+    volumes:
+      - type: volume
+        source: yuki-server-models
+        target: /models
+        read_only: true
+      - type: volume
+        source: yuki-server-voices
+        target: /voices
+        read_only: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+
 networks:
   yuki-server-net:
     name: yuki-server-net
@@ -148,3 +193,6 @@ volumes:
     name: yuki-server-models
   yuki-server-state:
     name: yuki-server-state
+  # Lot 7 : médias de voix (registre + WAV).
+  yuki-server-voices:
+    name: yuki-server-voices

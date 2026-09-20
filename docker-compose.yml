@@ -1,9 +1,11 @@
 # Yuki — Lots 0-1 : socle, porte de compatibilité & noyau texte
-# Un seul service (`gateway`) est déclaré.
+# Le service `gateway` est déclaré ici ; le service `tts` (Lot 7, audio.cpp
+# CUDA) est OPT-IN derrière le profil Compose `tts`
+# (`docker compose --profile tts up -d`) et n'est donc pas démarré par défaut.
 # Pas de clé `version:` (obsolète en Compose v5).
 #
 # Ce compose TIRE l'image publiée (`ghcr.io/grokuku/yuki`) : `docker compose up -d`
-# suffit, sans construire ni préparer l'hôte. La persistance passe par 4 VOLUMES
+# suffit, sans construire ni préparer l'hôte. La persistance passe par 5 VOLUMES
 # NOMMÉS (plus de bind mounts) — voir la section `volumes:` du service.
 #
 # Pour construire en local : `compose.build.example.yml`.
@@ -36,6 +38,8 @@ services:
       YUKI_MOUNT_WORKSPACE: /workspace
       YUKI_MOUNT_MODELS: /models
       YUKI_MOUNT_STATE: /data/state
+      # Volume des voix TTS (Lot 7) — le gateway l'écrit (registre + WAV).
+      YUKI_MOUNT_VOICES: /voices
 
       # --- Pi embarqué (Lot 1) — câblage uniquement ---
       # Redirection de l'état du SDK hors du rootfs read-only (volume yuki-pi).
@@ -71,7 +75,7 @@ services:
     ports:
       - "${YUKI_GATEWAY_PORT:-8080}:8080"
 
-    # 4 VOLUMES NOMMÉS (et non des bind mounts). Pour un volume nommé monté sur
+    # 5 VOLUMES NOMMÉS (et non des bind mounts). Pour un volume nommé monté sur
     # un chemin qui EXISTE déjà dans l'image, Docker initialise le volume en
     # recopiant le CONTENU et le PROPRIÉTAIRE du répertoire de l'image (créé en
     # `YUKI_UID:YUKI_GID` par le Dockerfile). Le conteneur non-root écrit donc
@@ -90,6 +94,10 @@ services:
       - type: volume
         source: yuki-state
         target: /data/state
+      # Lot 7 : registre + échantillons de voix (rw pour le gateway, ro pour `tts`).
+      - type: volume
+        source: yuki-voices
+        target: /voices
 
     networks:
       - yuki-net
@@ -132,6 +140,61 @@ services:
               count: all
               capabilities: [gpu]
 
+  # ===========================================================================
+  # Service TTS (Lot 7) — audio.cpp (Chatterbox Multilingual V3, CUDA NVIDIA).
+  #
+  # OPT-IN : derrière le profil Compose `tts`, il n'est PAS démarré par
+  # `docker compose up -d` (image CUDA volumineuse, GPU requis). Pour l'activer :
+  #
+  #     docker compose --profile tts up -d
+  #
+  # Variante CUDA : l'image se choisit via `YUKI_TTS_IMAGE` dans `.env`
+  # (`full-cuda13` par défaut, `full-cuda12` si le driver l'impose).
+  #
+  # ⚠️ POINTS À VÉRIFIER EN RÉEL (spec §13/C14) : le CLI exact du serveur
+  # audio.cpp et l'emplacement de son fichier de config (voice_presets / 
+  # voice_dir) ne sont pas documentés dans les archives. La commande ci-dessous
+  # est celle de la spec §11.2, à ajuster si le binaire diffère.
+  # ===========================================================================
+  tts:
+    image: ${YUKI_TTS_IMAGE:-ghcr.io/0xshug0/audio.cpp:full-cuda13}
+    container_name: yuki-tts
+    profiles: ["tts"]
+    # CLI supposé : serveur HTTP sur le port interne 8081 (aligné sur le défaut
+    # `tts.baseUrl` = http://tts:8081). À confirmer (C14).
+    command: ["--server", "--host", "0.0.0.0", "--port", "8081"]
+    networks:
+      - yuki-net
+    volumes:
+      # Modèle GGUF pré-déposé (ro) — jamais écrit par le service (§11.6).
+      - type: volume
+        source: yuki-models
+        target: /models
+        read_only: true
+      # Voix : le service ne fait que LIRE les échantillons du registre Yuki.
+      - type: volume
+        source: yuki-voices
+        target: /voices
+        read_only: true
+    # Réservation GPU (même forme que le gateway).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    # Rootfs immuable ; /tmp inscriptible (tmpfs).
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
 networks:
   yuki-net:
     name: yuki-net
@@ -147,3 +210,6 @@ volumes:
     name: yuki-models
   yuki-state:
     name: yuki-state
+  # Lot 7 : médias de voix (registre `voices.json` + WAV) — volume dédié.
+  yuki-voices:
+    name: yuki-voices

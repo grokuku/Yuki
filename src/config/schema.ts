@@ -45,6 +45,13 @@ export interface FieldDescriptor {
   readonly min?: number;
   readonly max?: number;
   readonly apply: ApplyKind;
+  /**
+   * Autorise la chaîne vide (`""`) comme valeur VALIDE (type `string`).
+   * Sans ce drapeau, `""` est refusé (`empty_value`) et seul `null` restaure le
+   * défaut. Utilisé par `tts.voice`, dont la valeur par défaut est précisément
+   * la chaîne vide (« voix par défaut », spec Lot 7 §9.1).
+   */
+  readonly allowEmpty?: true;
   /** Champ secret : jamais sérialisé en clair, masqué dans l'API. */
   readonly secret?: true;
   /** Variable d'environnement qui surcharge ce champ (si définie et non vide). */
@@ -200,6 +207,118 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   "prompts.light": { type: "string", default: "", apply: "restart" },
   "prompts.heavy": { type: "string", default: "", apply: "restart" },
 
+  // --- TTS / voix (Lot 7) --------------------------------------------------
+  // ⚠️ `FieldType` = `string | int | enum` : AUCUN booléen. L'activation est
+  // donc un enum `off|on` (spec §9.1). Les grandeurs réelles (`exaggeration`,
+  // `cfg`, défauts 0.5) sont des ENTIERS EN POUR-MILLE (0–1500).
+  "tts.enabled": {
+    type: "enum",
+    enum: ["off", "on"],
+    default: "off",
+    apply: "restart",
+    env: "YUKI_TTS_ENABLED",
+  },
+  "tts.engine": {
+    type: "enum",
+    enum: ["chatterbox", "qwen3-tts", "cosyvoice3", "kokoro", "sanotts"],
+    default: "chatterbox",
+    apply: "restart",
+    env: "YUKI_TTS_ENGINE",
+  },
+  "tts.baseUrl": {
+    type: "string",
+    default: "http://tts:8081",
+    apply: "restart",
+    env: "YUKI_TTS_BASE_URL",
+  },
+  "tts.language": {
+    type: "enum",
+    enum: ["fr"],
+    default: "fr",
+    apply: "restart",
+    env: "YUKI_TTS_LANGUAGE",
+  },
+  // Id de voix du registre (§10.1). Liste DYNAMIQUE ⇒ `string` (jamais un enum
+  // statique). La chaîne vide = voix par défaut (preset « factory »).
+  "tts.voice": {
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    apply: "hot",
+    env: "YUKI_TTS_VOICE",
+  },
+  "tts.emotion": {
+    type: "enum",
+    enum: ["neutre", "expressive", "dramatique", "personnalisee"],
+    default: "neutre",
+    apply: "hot",
+    env: "YUKI_TTS_EMOTION",
+  },
+  "tts.speed": {
+    type: "int",
+    default: 100,
+    min: 50,
+    max: 200,
+    apply: "hot",
+    env: "YUKI_TTS_SPEED",
+  },
+  "tts.exaggeration": {
+    type: "int",
+    default: 500,
+    min: 0,
+    max: 1500,
+    apply: "hot",
+    env: "YUKI_TTS_EXAGGERATION",
+  },
+  "tts.cfg": {
+    type: "int",
+    default: 500,
+    min: 0,
+    max: 1500,
+    apply: "hot",
+    env: "YUKI_TTS_CFG",
+  },
+  "tts.prefetchDepth": {
+    type: "int",
+    default: 2,
+    min: 0,
+    max: 2,
+    apply: "hot",
+    env: "YUKI_TTS_PREFETCH",
+  },
+  "tts.minSentenceChars": {
+    type: "int",
+    default: 24,
+    min: 8,
+    max: 500,
+    apply: "hot",
+    env: "YUKI_TTS_MIN_SENTENCE",
+  },
+  "tts.maxSentenceChars": {
+    type: "int",
+    default: 240,
+    min: 40,
+    max: 2000,
+    apply: "hot",
+    env: "YUKI_TTS_MAX_SENTENCE",
+  },
+  "tts.timeoutMs": {
+    type: "int",
+    default: 15_000,
+    min: 1_000,
+    max: 120_000,
+    apply: "hot",
+    env: "YUKI_TTS_TIMEOUT_MS",
+  },
+  "tts.volume": {
+    type: "int",
+    default: 100,
+    min: 0,
+    max: 100,
+    apply: "hot",
+    env: "YUKI_TTS_VOLUME",
+  },
+
   // --- Transport temps réel ------------------------------------------------
   "transport.replayBuffer": {
     type: "int",
@@ -295,6 +414,9 @@ export function validateDescriptor(
 
   // type "string"
   if (trimmed === "") {
+    if (descriptor.allowEmpty) {
+      return { ok: true, value: "" };
+    }
     if (descriptor.secret) {
       return {
         ok: false,

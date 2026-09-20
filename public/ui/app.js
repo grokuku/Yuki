@@ -5,6 +5,9 @@
 // `snapshot` lorsque la fenêtre de rejeu est dépassée ou à la reconnexion.
 
 import { initTheme } from "./theme.js";
+import { decodeTtsFrame } from "./tts-frames.js";
+import { createTtsPlayer } from "./tts-player.js";
+import { createTtsPreference, resolveSpeechState } from "./tts-preference.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
@@ -22,6 +25,8 @@ const els = {
   sessionState: document.getElementById("session-state"),
   queued: document.getElementById("queued"),
   thinking: document.getElementById("thinking"),
+  ttsToggle: document.getElementById("tts-toggle"),
+  ttsStatus: document.getElementById("tts-status"),
 };
 
 let socket = null;
@@ -32,6 +37,110 @@ let resumePending = false;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let clientMsgCounter = 0;
+
+/* ─── Voix / TTS (Lot 7, Lot C) ───────────────────────────────────────────
+ * Articulation (voir docs/lot7.md §9.3) :
+ *   - l'activation SERVEUR (`tts.enabled`) est décidée sur la page /config ;
+ *   - le bouton de topbar = SOURDINE locale (localStorage), instantanée ;
+ *   - l'affichage du bouton reflète l'état EFFECTIF (serveur ∧ non sourd) et
+ *     ne ment donc jamais.
+ */
+const ttsPreference = createTtsPreference();
+let ttsServerEnabled = false;
+let ttsServerKnown = false;
+let ttsStatusTimer = null;
+/* Diagnostic « moteur absent » : requête TTS émise sans jamais de premier
+ * octet PCM → on signale au lieu de prétendre que tout va bien. */
+let ttsRequestedRun = null;
+let ttsActivityRun = null;
+
+const ttsPlayer = createTtsPlayer({
+  onEvent: (event) => {
+    // Alimente les étages serveur `playback_started` / `playback_aborted`.
+    if (event.runId) {
+      sendRaw({ type: "playback", runId: event.runId, event: event.type });
+    }
+  },
+});
+
+/** `true` si les trames reçues doivent être lues (serveur on + non sourd). */
+function ttsAudible() {
+  return ttsServerEnabled && !ttsPreference.muted;
+}
+
+function setTtsStatus(text, autoHideMs = 6000) {
+  if (!els.ttsStatus) return;
+  if (ttsStatusTimer) {
+    clearTimeout(ttsStatusTimer);
+    ttsStatusTimer = null;
+  }
+  els.ttsStatus.textContent = text ?? "";
+  els.ttsStatus.hidden = !text;
+  if (text && autoHideMs > 0) {
+    ttsStatusTimer = setTimeout(() => {
+      els.ttsStatus.hidden = true;
+      els.ttsStatus.textContent = "";
+    }, autoHideMs);
+  }
+}
+
+/** Reflète l'état effectif de la voix dans le bouton de topbar. */
+function refreshTtsToggle() {
+  if (!els.ttsToggle) return;
+  const state = resolveSpeechState({
+    serverEnabled: ttsServerEnabled,
+    muted: ttsPreference.muted,
+  });
+  els.ttsToggle.textContent = state.icon;
+  els.ttsToggle.setAttribute("aria-pressed", String(state.pressed));
+  els.ttsToggle.setAttribute("aria-label", state.label);
+  els.ttsToggle.title = state.hint;
+  els.ttsToggle.classList.toggle("tts-toggle--off", state.state === "off");
+  els.ttsToggle.classList.toggle("tts-toggle--muted", state.state === "muted");
+}
+
+/** Lit l'état serveur (`tts.enabled`, `tts.volume`) — pas de mensonge sinon. */
+async function loadTtsServerState() {
+  try {
+    const response = await fetch("/api/config", {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const body = await response.json();
+    const enabled = body?.fields?.["tts.enabled"]?.value;
+    ttsServerEnabled = enabled === "on";
+    ttsServerKnown = true;
+    const volume = Number(body?.fields?.["tts.volume"]?.value);
+    if (Number.isFinite(volume)) ttsPlayer.setVolume(volume);
+  } catch {
+    // Config illisible : état INCONNU → on n'affirme pas que la voix est active.
+    ttsServerKnown = false;
+    ttsServerEnabled = false;
+  }
+  refreshTtsToggle();
+}
+
+/** Geste utilisateur : débloque le contexte audio (autoplay) et bascule la sourdine. */
+function onTtsToggleClick() {
+  void ttsPlayer.unlock();
+  if (!ttsServerEnabled) {
+    setTtsStatus(
+      ttsServerKnown
+        ? "La voix est désactivée côté serveur : activez-la dans « Voix / TTS » (Configuration), puis redémarrez Yuki."
+        : "État de la voix inconnu (configuration illisible).",
+      9000,
+    );
+    return;
+  }
+  const muted = ttsPreference.toggle();
+  if (muted) {
+    // Coupe INSTANTANÉMENT la lecture en cours (sans aller-retour réseau).
+    ttsPlayer.stopAll();
+  }
+  refreshTtsToggle();
+  setTtsStatus(muted ? "Voix en sourdine sur ce navigateur." : "Voix active.");
+}
 
 function setConnection(online) {
   els.connection.textContent = online ? "connecté" : "hors ligne";
@@ -159,6 +268,9 @@ function applyEvent(frame) {
       els.queued.hidden = true;
       els.thinking.hidden = true;
       currentAssistant = appendMessage("assistant", "");
+      // Nouveau run : réinitialise le diagnostic TTS.
+      ttsRequestedRun = frame.runId ?? null;
+      ttsActivityRun = null;
       // Un prompt de report (`origin: "job_report"`) est SYNTHÉTIQUE : l'UI ne
       // doit jamais afficher de bulle utilisateur pour lui. Le serveur exclut
       // déjà ce prompt du transcript ; ici on ne crée que la bulle assistant.
@@ -178,10 +290,28 @@ function applyEvent(frame) {
       return;
     case "phase":
       if (frame.stage === "first_token") els.thinking.hidden = true;
+      if (typeof frame.stage === "string" && frame.stage.startsWith("tts_")) {
+        onTtsPhase(frame);
+      } else if (frame.stage === "sentence_segmented") {
+        onTtsPhase(frame);
+      }
       return;
     case "run_finished":
       els.thinking.hidden = true;
       els.queued.hidden = true;
+      if (
+        ttsAudible() &&
+        typeof frame.runId === "string" &&
+        frame.runId === ttsRequestedRun &&
+        frame.runId !== ttsActivityRun
+      ) {
+        // Une requête TTS a été émise mais AUCUN octet n'est revenu : moteur
+        // probablement indisponible. On le signale sans le taire.
+        setTtsStatus(
+          "Aucun son reçu alors que la voix est active : le moteur TTS semble indisponible.",
+          9000,
+        );
+      }
       if (currentAssistant) {
         if (frame.reason === "abort" && currentAssistant.textContent.length === 0) {
           currentAssistant.textContent = "(interrompu)";
@@ -226,9 +356,35 @@ function requestResume() {
   }
 }
 
+/** Traite une trame binaire `YTA1` (audio) — décodage défensif puis lecture. */
+function handleBinaryFrame(data) {
+  const decoded = decodeTtsFrame(data);
+  if (!decoded) {
+    console.warn("[tts] trame binaire illisible ignorée");
+    return;
+  }
+  ttsActivityRun = decoded.header.runId ?? ttsActivityRun;
+  // Sourdine locale ou serveur off : la trame est jetée (pas de lecture).
+  if (!ttsAudible()) return;
+  ttsPlayer.handleFrame(decoded);
+}
+
+/** Suit les étages TTS pour détecter un moteur absent (requête sans octet). */
+function onTtsPhase(frame) {
+  if (typeof frame.runId !== "string") return;
+  if (frame.stage === "tts_requested") ttsRequestedRun = frame.runId;
+  else if (frame.stage === "tts_first_byte" || frame.stage === "tts_segment_done") {
+    ttsActivityRun = frame.runId;
+  }
+}
+
 function sendMessage() {
   const text = els.input.value.trim();
   if (text.length === 0) return;
+  // Nouveau message = barge-in local : la voix en cours s'arrête net.
+  ttsPlayer.stopAll();
+  // Geste utilisateur : débloque l'AudioContext pour la lecture à venir.
+  if (ttsAudible()) void ttsPlayer.unlock();
   const clientMsgId = `m${++clientMsgCounter}`;
   clearEmpty();
   appendMessage("user", text);
@@ -241,6 +397,9 @@ function sendMessage() {
 }
 
 function abort() {
+  // Stop = arrêt IMMÉDIAT de la lecture locale + purge du buffer, cohérent
+  // avec le barge-in serveur (l'abort purge aussi la file TTS côté serveur).
+  ttsPlayer.stopAll();
   sendRaw({ type: "abort" });
 }
 
@@ -260,6 +419,8 @@ function scheduleReconnect() {
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   socket = new WebSocket(`${proto}//${location.host}/ws`);
+  // L'audio arrive en trames BINAIRES : on les reçoit en `ArrayBuffer`.
+  socket.binaryType = "arraybuffer";
 
   socket.addEventListener("open", () => {
     reconnectAttempts = 0;
@@ -283,7 +444,10 @@ function connect() {
   });
 
   socket.addEventListener("message", (event) => {
-    if (typeof event.data !== "string") return; // trames binaires ignorées
+    if (typeof event.data !== "string") {
+      handleBinaryFrame(event.data); // trame binaire `YTA1` (audio)
+      return;
+    }
     let frame;
     try {
       frame = JSON.parse(event.data);
@@ -310,6 +474,7 @@ function connect() {
 
 els.send.addEventListener("click", sendMessage);
 els.stop.addEventListener("click", abort);
+if (els.ttsToggle) els.ttsToggle.addEventListener("click", onTtsToggleClick);
 els.input.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -323,4 +488,6 @@ els.input.addEventListener("input", () => {
 
 setConnection(false);
 setSessionState("idle");
+refreshTtsToggle();
+void loadTtsServerState();
 connect();

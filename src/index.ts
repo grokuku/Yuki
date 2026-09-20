@@ -35,6 +35,7 @@ import {
 import { createWsTransport } from "./gateway/ws/server.js";
 import type { Transport } from "./gateway/ws/transport.js";
 import type { SubsystemsSnapshot } from "./gateway/routes/health.js";
+import type { VoiceApiDeps } from "./gateway/routes/voices.js";
 import { detectGpus } from "./gpu/detect.js";
 import { runGate, type GateCompatConfig } from "./gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "./gpu/profiles.js";
@@ -54,6 +55,13 @@ import {
 } from "./llm/index.js";
 import { collectSecretValues, createLogger } from "./observability/logger.js";
 import { createPiHost, createSdkHeavyWorker, type PiHost } from "./pi/index.js";
+import {
+  AudioCppClient,
+  VoiceStore,
+  createAudioCppSynthesizer,
+  isTtsEnabled,
+  readTtsOptions,
+} from "./tts/index.js";
 import type { ModelAvailability } from "./delegation/index.js";
 
 const FALLBACK_SYSTEM_PROMPT =
@@ -216,6 +224,43 @@ async function main(): Promise<void> {
   const volumes = inspectMountPoints(mountPoints(env));
   const startedAt = Date.now();
 
+  // --- Voix TTS (Lot 7) : registre + client du moteur `audio.cpp` -----------
+  // Le registre vit sur le volume dédié `yuki-voices` ; il ne dépend PAS du
+  // service `tts` (la liste reste disponible même si le moteur est absent).
+  // Le client n'est PAS câblé dans le flux de conversation (lot suivant).
+  const voiceStore = new VoiceStore({ dir: env.voicesDir });
+  const audioCpp = new AudioCppClient({
+    baseUrl: config.getString("tts.baseUrl"),
+    timeoutMs: config.getNumber("tts.timeoutMs"),
+    logger,
+  });
+  const voicesDeps: VoiceApiDeps = {
+    store: voiceStore,
+    logger,
+    config: {
+      getString: (path) => config.getString(path),
+      update: (patch) => config.update(patch),
+    },
+    tts: {
+      synthesizePreview: async (voice) => {
+        const result = await audioCpp.synthesizeBuffer({
+          voice,
+          text: "Bonjour, voici un aperçu de la voix.",
+          options: readTtsOptions(config),
+          engine: config.getString("tts.engine"),
+        });
+        return { contentType: result.contentType ?? "audio/wav", bytes: result.bytes };
+      },
+    },
+  };
+  logger.info("tts.voices.ready", {
+    enabled: isTtsEnabled(config),
+    engine: config.getString("tts.engine"),
+    baseUrl: config.getString("tts.baseUrl"),
+    voicesDir: env.voicesDir,
+    voices: voiceStore.list().length,
+  });
+
   // --- Jobs, délégation, PiHost (uniquement si la porte est passée) ---------
   let piStatus: "starting" | "ready" | "error" = "starting";
   let sessionsCount = 0;
@@ -296,6 +341,16 @@ async function main(): Promise<void> {
       serverVersion: env.version,
       replayBufferSize: config.getNumber("transport.replayBuffer"),
       replayBufferBytes: config.getNumber("transport.replayBytes"),
+      tts: {
+        enabled: isTtsEnabled(config),
+        config: {
+          getString: (path) => config.getString(path),
+          getNumber: (path) => config.getNumber(path),
+        },
+        synthesizer: createAudioCppSynthesizer(audioCpp),
+        resolveVoice: (id) => voiceStore.get(id) ?? null,
+        logger,
+      },
     });
   }
 
@@ -361,6 +416,7 @@ async function main(): Promise<void> {
       volumes,
       getSubsystems,
       config: { runtime: config, logger },
+      voices: voicesDeps,
       admin: {
         logger,
         requestShutdown: () => triggerShutdown?.(RESTART_REASON),

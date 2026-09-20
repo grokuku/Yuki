@@ -10,6 +10,7 @@
  */
 
 import { createSdkPiHost } from "./sdk-host.js";
+import type { RunTtsMetrics } from "./instrumentation.js";
 import type {
   EnsureSessionOptions,
   PiEventListener,
@@ -46,6 +47,23 @@ export interface PiHost {
   subscribe(sessionId: string, listener: PiEventListener): () => void;
   /** S'abonne à tous les événements, toutes sessions confondues (transport). */
   subscribeAll(listener: PiEventListener): () => void;
+
+  /**
+   * Lot 7 : marque un étage d'instrumentation TTS sur un run en vol. Émet un
+   * `phase` corrélé (mêmes logging/corrélation que les étages texte). Optionnel
+   * pour rester rétro-compatible avec les doubles de test.
+   */
+  recordRunStage?(sessionId: string, runId: string, stage: string): void;
+
+  /**
+   * Lot 7 : enregistre les métriques TTS cumulées d'un run — alimente les
+   * champs `ttfaMs`/`ttsSynthMs`/`ttsSegments` de `run_summary`.
+   */
+  recordRunTtsMetrics?(
+    sessionId: string,
+    runId: string,
+    metrics: RunTtsMetrics,
+  ): void;
 
   /** État sérialisable d'une session (courante si omise). */
   getState(sessionId?: string): SessionState | undefined;

@@ -43,7 +43,7 @@ import {
 } from "./events.js";
 import { PiHostError, toPiHostError } from "./errors.js";
 import type { PiHost } from "./host.js";
-import { PHASE, RunInstrumentation } from "./instrumentation.js";
+import { PHASE, RunInstrumentation, type RunTtsMetrics } from "./instrumentation.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
 import {
   getSharedModelRuntime,
@@ -726,6 +726,26 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       return () => {
         globalListeners.delete(listener);
       };
+    },
+
+    recordRunStage(sessionId: string, runId: string, stage: string): void {
+      const record = recordFor(sessionId);
+      const run = record?.currentRun;
+      if (run && run.runId === runId) {
+        run.instrumentation.markStage(stage);
+      }
+    },
+
+    recordRunTtsMetrics(
+      sessionId: string,
+      runId: string,
+      metrics: RunTtsMetrics,
+    ): void {
+      const record = recordFor(sessionId);
+      const run = record?.currentRun;
+      if (run && run.runId === runId) {
+        run.instrumentation.recordTtsMetrics(metrics);
+      }
     },
 
     getState(sessionId?: string): SessionState | undefined {

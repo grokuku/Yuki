@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import type { Env } from "./env.js";
 
-export type MountId = "pi" | "workspace" | "models" | "state";
+export type MountId = "pi" | "workspace" | "models" | "state" | "voices";
 export type MountMode = "rw" | "ro";
 
 export interface MountPoint {
@@ -41,7 +41,7 @@ export function resolveConfigStorePath(
   return trimmed && trimmed.length > 0 ? trimmed : `${stateDir}/config.json`;
 }
 
-/** Définit les quatre points de montage (volumes nommés), dans un ordre stable. */
+/** Définit les cinq points de montage (volumes nommés), dans un ordre stable. */
 export function mountPoints(env: Env): MountPoint[] {
   return [
     {
@@ -62,6 +62,13 @@ export function mountPoints(env: Env): MountPoint[] {
     {
       id: "state",
       containerPath: env.mountPoints.state,
+      mode: "rw",
+    },
+    // Lot 7 : les voix TTS (médias) sont isolées du store de configuration ;
+    // le gateway les écrit, le service `tts` ne les lit qu'en ro.
+    {
+      id: "voices",
+      containerPath: env.mountPoints.voices,
       mode: "rw",
     },
   ];

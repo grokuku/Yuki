@@ -225,6 +225,12 @@ export type PiEvent =
       totalMs: number;
       tokensIn?: number;
       tokensOut?: number;
+      /** Lot 7 (optionnel) : t0 → premier octet PCM du 1er segment. */
+      ttfaMs?: number;
+      /** Lot 7 (optionnel) : cumul synthèse TTS du run. */
+      ttsSynthMs?: number;
+      /** Lot 7 (optionnel) : nombre de segments TTS synthétisés. */
+      ttsSegments?: number;
     }
   | {
       type: "state";

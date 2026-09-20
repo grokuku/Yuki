@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import type { PiHost } from "../../src/pi/host.js";
-import { PHASE, RunInstrumentation } from "../../src/pi/instrumentation.js";
+import { PHASE, RunInstrumentation, type RunTtsMetrics } from "../../src/pi/instrumentation.js";
 import type {
   EnsureSessionOptions,
   PiEvent,
@@ -236,6 +236,22 @@ export class FakePiHost implements PiHost {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  recordRunStage(sessionId: string, runId: string, stage: string): void {
+    void sessionId;
+    const run = this.currentRun;
+    if (run && run.runId === runId) run.instrumentation.markStage(stage);
+  }
+
+  recordRunTtsMetrics(
+    sessionId: string,
+    runId: string,
+    metrics: RunTtsMetrics,
+  ): void {
+    void sessionId;
+    const run = this.currentRun;
+    if (run && run.runId === runId) run.instrumentation.recordTtsMetrics(metrics);
   }
 
   getState(sessionId?: string): SessionState | undefined {

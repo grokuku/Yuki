@@ -110,7 +110,7 @@ neutre (changer de fournisseur ne touche pas au code).
 | 4 | Sidecar d'exécution | à venir |
 | 5 | Pont MCP + skills | à venir |
 | 6 | ASR / PTT | à venir |
-| 7 | TTS / barge-in | à venir |
+| 7 | TTS / barge-in (spec : [`docs/lot7.md`](lot7.md)) | à venir |
 | 8 | Retour proactif | à venir |
 | 9 | Durcissement | à venir |
 | 10 | Documentation n8n | à venir |

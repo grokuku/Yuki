@@ -198,3 +198,20 @@ a.pill:hover {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
 }
+
+/* ─── Bouton voix (topbar) — partage la forme des contrôles de thème ─────── */
+/* Le bouton est porté par un conteneur `.theme-control` : il hérite de la
+ * taille, du focus visible et de la teinte accent « pressée » (thèmes.css). */
+#tts-toggle.tts-toggle--off {
+  opacity: 0.5;
+}
+
+#tts-toggle.tts-toggle--muted {
+  color: var(--muted);
+}
+
+.tts-status {
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 44ch;
+}

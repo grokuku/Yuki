@@ -226,3 +226,52 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
     expect(css).toContain(".holaf-modal-overlay");
   });
 });
+
+describe("UI TTS (Lot C) — assets, contrôle topbar et panneau des voix", () => {
+  it("sert les modules ES audio/voix", async () => {
+    for (const path of [
+      "/ui/tts-frames.js",
+      "/ui/tts-player.js",
+      "/ui/tts-preference.js",
+      "/ui/voices-panel.js",
+    ]) {
+      const response = await fetch(`${baseUrl}${path}`);
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get("content-type"), path).toContain("javascript");
+      expect(response.headers.get("content-security-policy"), path).not.toContain(
+        "unsafe-inline",
+      );
+    }
+  });
+
+  it("pose le contrôle voix dans la topbar (aria pressé, aucun style inline)", async () => {
+    const body = await (await fetch(`${baseUrl}/`)).text();
+    expect(body).toContain('id="tts-toggle"');
+    expect(body).toMatch(/id="tts-toggle"[^>]*aria-pressed=/);
+    expect(body).toContain('id="tts-status"');
+    // CSP : pas de balise <audio> ni de style inline dans le markup.
+    expect(body).not.toMatch(/<audio\b/);
+    expect(body).not.toMatch(/\sstyle=/);
+  });
+
+  it("app.js reçoit les trames binaires et les décode (binaryType arraybuffer)", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/app.js`)).text();
+    expect(js).toContain('socket.binaryType = "arraybuffer"');
+    expect(js).toContain("decodeTtsFrame");
+    expect(js).toContain("createTtsPlayer");
+    // Aucune balise audio (la lecture passe par Web Audio).
+    expect(js).not.toMatch(/new Audio\(|<audio/);
+  });
+
+  it("monte le panneau des voix sur /config (racine + appel /api/voices)", async () => {
+    const body = await (await fetch(`${baseUrl}/config`)).text();
+    expect(body).toContain('id="voices-root"');
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).toContain("initVoicesPanel");
+    const panel = await (await fetch(`${baseUrl}/ui/voices-panel.js`)).text();
+    expect(panel).toContain("/api/voices");
+    expect(panel).toContain("/api/voices/clone");
+    // Aucune `window.confirm` : confirmations par HolafModal.
+    expect(panel).not.toContain("window.confirm");
+  });
+});

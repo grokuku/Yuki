@@ -26,6 +26,8 @@ import { HolafFetch } from './vendor/holaf/holaf-fetch.js';
  */
 import { HolafModal } from './vendor/holaf/holaf-modal.js';
 import { initTheme } from './theme.js';
+import { createTtsPlayer } from './tts-player.js';
+import { initVoicesPanel } from './voices-panel.js';
 
 HolafModal.configure({ injectStyles: false });
 
@@ -66,6 +68,25 @@ const OPTIONS = {
   missingKey: [
     ["degrade", "degrade"],
     ["refuse", "refuse"],
+  ],
+  // Lot 7 — TTS / voix.
+  ttsEnabled: [
+    ["off", "désactivé"],
+    ["on", "activé"],
+  ],
+  ttsEngine: [
+    ["chatterbox", "chatterbox"],
+    ["qwen3-tts", "qwen3-tts"],
+    ["cosyvoice3", "cosyvoice3"],
+    ["kokoro", "kokoro"],
+    ["sanotts", "sanotts"],
+  ],
+  ttsLanguage: [["fr", "français (fr)"]],
+  ttsEmotion: [
+    ["neutre", "neutre"],
+    ["expressive", "expressive"],
+    ["dramatique", "dramatique"],
+    ["personnalisee", "personnalisée"],
   ],
 };
 
@@ -124,6 +145,42 @@ const GROUPS = [
     ],
   },
   {
+    id: "tts",
+    title: "Voix / TTS",
+    fields: [
+      { path: "tts.enabled", label: "Activation", kind: "select", options: OPTIONS.ttsEnabled },
+      { path: "tts.engine", label: "Moteur", kind: "select", options: OPTIONS.ttsEngine },
+      { path: "tts.baseUrl", label: "URL du service TTS", kind: "text" },
+      { path: "tts.language", label: "Langue", kind: "select", options: OPTIONS.ttsLanguage },
+      { path: "tts.voice", label: "Voix (identifiant du registre)", kind: "text" },
+      { path: "tts.emotion", label: "Émotion", kind: "select", options: OPTIONS.ttsEmotion },
+      { path: "tts.speed", label: "Débit (%)", kind: "number", min: 50, max: 200 },
+      {
+        path: "tts.exaggeration",
+        label: "Exagération (pour-mille)",
+        kind: "range",
+        min: 0,
+        max: 1500,
+        step: 10,
+        revealWhen: { path: "tts.emotion", equals: "personnalisee" },
+      },
+      {
+        path: "tts.cfg",
+        label: "CFG (pour-mille)",
+        kind: "range",
+        min: 0,
+        max: 1500,
+        step: 10,
+        revealWhen: { path: "tts.emotion", equals: "personnalisee" },
+      },
+      { path: "tts.prefetchDepth", label: "Prefetch (phrases d'avance)", kind: "number", min: 0, max: 2 },
+      { path: "tts.minSentenceChars", label: "Longueur minimale de phrase", kind: "number", min: 8, max: 500 },
+      { path: "tts.maxSentenceChars", label: "Longueur maximale de phrase", kind: "number", min: 40, max: 2000 },
+      { path: "tts.timeoutMs", label: "Timeout de synthèse (ms)", kind: "number", min: 1000, max: 120000 },
+      { path: "tts.volume", label: "Volume de lecture (%)", kind: "number", min: 0, max: 100 },
+    ],
+  },
+  {
     id: "transport",
     title: "Transport temps réel",
     fields: [
@@ -160,6 +217,9 @@ const lightPill = document.getElementById("light-key");
 const heavyPill = document.getElementById("heavy-key");
 const restartButton = document.getElementById("restart");
 const restartStatus = document.getElementById("restart-status");
+const voicesRoot = document.getElementById("voices-root");
+/** Panneau des voix (Lot 7) — instancié après le premier chargement. */
+let voicesPanel = null;
 
 function h(tag, props = {}, children = []) {
   const el = document.createElement(tag);
@@ -214,6 +274,25 @@ function renderTextLike(field, entry) {
     props.value = entry.value;
   }
   return h("input", props);
+}
+
+/** Curseur (`<input type="range">`) avec valeur affichée — pour-mille, etc. */
+function renderRange(field, entry) {
+  const input = h("input", {
+    class: "config-range",
+    type: "range",
+    min: field.min !== undefined ? field.min : 0,
+    max: field.max !== undefined ? field.max : 100,
+    step: field.step !== undefined ? field.step : 1,
+    value: entry.value,
+    "aria-label": field.label,
+  });
+  const out = h("output", { class: "config-range__value", text: String(entry.value) });
+  input.addEventListener("input", () => {
+    out.textContent = input.value;
+  });
+  const wrap = h("div", { class: "config-range-wrap" }, [input, out]);
+  return { input, wrap };
 }
 
 function renderSecret(field, entry) {
@@ -277,14 +356,27 @@ function renderField(field) {
   if (field.kind === "secret") {
     row.append(renderSecret(field, entry));
   } else {
-    const control = field.kind === "select" ? renderSelect(field, entry) : renderTextLike(field, entry);
+    let control;
+    let node;
+    if (field.kind === "select") {
+      control = renderSelect(field, entry);
+      node = control;
+    } else if (field.kind === "range") {
+      const range = renderRange(field, entry);
+      control = range.input;
+      node = range.wrap;
+    } else {
+      control = renderTextLike(field, entry);
+      node = control;
+    }
     state.inputs.set(field.path, control);
     state.initial.set(field.path, entry.value);
     if (entry.lockedByEnv) control.disabled = true;
     control.addEventListener("input", () => {
       state.pendingResets.delete(field.path);
+      refreshVisibility();
     });
-    row.append(control);
+    row.append(node);
     if (field.kind === "textarea") {
       const reset = h("button", { class: "button button--ghost button--small", type: "button", text: "Réinitialiser au défaut" });
       reset.addEventListener("click", () => {
@@ -317,6 +409,24 @@ function render() {
     section.append(head);
     for (const field of group.fields) section.append(renderField(field));
     groupsEl.append(section);
+  }
+  refreshVisibility();
+}
+
+/**
+ * (Dé)masque les champs conditionnels (`revealWhen`) : le cran `personnalisee`
+ * de `tts.emotion` révèle par exemple les curseurs `exaggeration` / `cfg`.
+ */
+function refreshVisibility() {
+  for (const field of ALL_FIELDS) {
+    if (!field.revealWhen) continue;
+    const row = state.rows.get(field.path);
+    if (!row) continue;
+    const control = state.inputs.get(field.revealWhen.path);
+    const value = control
+      ? control.value
+      : state.fields[field.revealWhen.path]?.value;
+    row.hidden = String(value) !== String(field.revealWhen.equals);
   }
 }
 
@@ -411,6 +521,8 @@ async function save() {
     render();
     showApplied(body.applied ?? { hot: [], restart: [] });
     saveStatus.textContent = "Enregistré.";
+    // La voix active a pu changer côté formulaire : resynchronise le panneau.
+    void voicesPanel?.refresh();
   } catch (error) {
     // Erreurs métier : HolafFetch expose le corps JSON parsé dans `error.data`
     // (fields/message/error), sinon le message typé de la brique.
@@ -590,6 +702,22 @@ void (async () => {
   try {
     await load();
     await pollHealth();
+    if (voicesRoot) {
+      voicesPanel = initVoicesPanel({
+        root: voicesRoot,
+        HolafFetch,
+        HolafModal,
+        player: createTtsPlayer(),
+        getActiveVoice: () => String(state.fields["tts.voice"]?.value ?? ""),
+        onVoiceSelected: (id) => {
+          const entry = state.fields["tts.voice"];
+          if (entry) entry.value = id;
+          const input = state.inputs.get("tts.voice");
+          if (input) input.value = id;
+          state.initial.set("tts.voice", id);
+        },
+      });
+    }
     setInterval(() => void pollHealth(), 5000);
   } catch (error) {
     globalError.textContent = `Impossible de charger la configuration : ${

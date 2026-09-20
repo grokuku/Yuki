@@ -25,6 +25,12 @@ import {
   type AdminApiDeps,
 } from "./routes/admin.js";
 import {
+  handleVoicesRequest,
+  isVoicesPath,
+  MAX_VOICE_BODY_BYTES,
+  type VoiceApiDeps,
+} from "./routes/voices.js";
+import {
   healthFull,
   healthLive,
   healthReady,
@@ -47,6 +53,8 @@ export interface AppContext {
   config?: ConfigApiDeps;
   /** API d'administration (redémarrage). Absente ⇒ `/api/admin/**` → 404. */
   admin?: AdminApiDeps;
+  /** API de gestion des voix TTS (Lot 7). Absente ⇒ `/api/voices*` → 404. */
+  voices?: VoiceApiDeps;
 }
 
 interface RouteResponse {
@@ -96,23 +104,39 @@ function writeResponse(
   }
 }
 
-/** Lit le corps d'une requête (borné). Rejette au-delà de la limite. */
-function readBody(req: IncomingMessage): Promise<string> {
+/** Message d'erreur interne signalant un corps de requête au-delà de la limite. */
+const BODY_TOO_LARGE = "body_too_large";
+
+/** Lit le corps d'une requête en `Buffer` (borné). Rejette au-delà de la limite. */
+function readBodyBinary(req: IncomingMessage, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let tooLarge = false;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_CONFIG_BODY_BYTES) {
-        reject(new Error("body_too_large"));
-        req.destroy();
+      if (size > limit) {
+        // On cesse d'accumuler mais on DRAINE la suite : la socket reste
+        // vivante, ce qui permet de renvoyer un 413 explicite (un
+        // `req.destroy()` immédiat empêcherait toute réponse).
+        tooLarge = true;
         return;
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("end", () => {
+      if (tooLarge) reject(new Error(BODY_TOO_LARGE));
+      else resolve(Buffer.concat(chunks));
+    });
     req.on("error", reject);
   });
+}
+
+/** Lit le corps d'une requête (borné à `MAX_CONFIG_BODY_BYTES`), en UTF-8. */
+function readBody(req: IncomingMessage): Promise<string> {
+  return readBodyBinary(req, MAX_CONFIG_BODY_BYTES).then((buffer) =>
+    buffer.toString("utf8"),
+  );
 }
 
 /** Traite une requête de configuration (asynchrone : lecture du corps). */
@@ -142,6 +166,57 @@ async function handleConfigHttp(
   );
 }
 
+/** Traite une requête de l'API des voix (corps binaire borné). */
+async function handleVoicesHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: VoiceApiDeps,
+): Promise<void> {
+  const needsBody = method === "POST" || method === "PATCH" || method === "PUT";
+  let body: Buffer = Buffer.alloc(0);
+  if (needsBody) {
+    // L'upload de clonage reçoit un WAV binaire jusqu'à `MAX_VOICE_BODY_BYTES`
+    // (D20) ; les autres corps (PATCH JSON) restent bornés à la limite config.
+    const limit =
+      path === "/api/voices/clone" ? MAX_VOICE_BODY_BYTES : MAX_CONFIG_BODY_BYTES;
+    try {
+      body = await readBodyBinary(req, limit);
+    } catch (error) {
+      const tooLarge = error instanceof Error && error.message === BODY_TOO_LARGE;
+      writeResponse(
+        res,
+        {
+          status: tooLarge ? 413 : 400,
+          body: {
+            error: tooLarge ? "body_too_large" : "invalid_body",
+            code: tooLarge ? "body_too_large" : "invalid_body",
+            message: tooLarge
+              ? `Corps trop volumineux (maximum ${limit} octets).`
+              : "Corps de requête illisible.",
+          },
+        },
+        headOnly,
+      );
+      return;
+    }
+  }
+  const response = await handleVoicesRequest({
+    method,
+    path,
+    headers: req.headers,
+    body,
+    deps,
+  });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Construit l'écouteur HTTP de l'application. */
 export function createApp(context: AppContext): RequestListener {
   const {
@@ -154,6 +229,7 @@ export function createApp(context: AppContext): RequestListener {
     getSubsystems,
     config,
     admin,
+    voices,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -165,6 +241,27 @@ export function createApp(context: AppContext): RequestListener {
       void handleConfigHttp(req, res, path, method, headOnly, config).catch(
         (error: unknown) => {
           config.logger.error("config.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (voices && isVoicesPath(path)) {
+      void handleVoicesHttp(req, res, path, method, headOnly, voices).catch(
+        (error: unknown) => {
+          voices.logger.error("voices.request.failed", {
             error: error instanceof Error ? error.message : String(error),
             path,
           });

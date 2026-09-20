@@ -30,14 +30,16 @@
       "tts": {
         "enabled": true,
         "residence": "gpu",
-        "modelRef": "tts.model.default",
-        "quantizationRef": "tts.quant.default",
+        "modelRef": "chatterbox",
+        "quantizationRef": "q8",
         "status": "to-confirm"
       },
       "notes": [
         "Cible : RTX 4070 12 Go (Ada, CC 8.9) et RTX 3060 12 Go (Ampere, CC 8.6).",
         "BF16 requis (CC >= 8.0).",
-        "Seuils et références de modèles à confirmer aux lots 6 (ASR) et 7 (TTS)."
+        "Moteur TTS retenu (Lot 7) : Chatterbox Multilingual V3 (MIT), GGUF Q8.",
+        "Reste à confirmer en réel : le seuil `gpu.bf16` pour le TTS (C11 — Q8 est",
+        "une quantification entière qui n'exige pas BF16) et la tenue réelle."
       ]
     },
     {
@@ -61,14 +63,15 @@
       "tts": {
         "enabled": true,
         "residence": "gpu",
-        "modelRef": "tts.model.default",
-        "quantizationRef": "tts.quant.default",
+        "modelRef": "chatterbox",
+        "quantizationRef": "q8",
         "status": "to-confirm"
       },
       "notes": [
         "Cible : Quadro RTX 4000 8 Go (Turing, CC 7.5) — le plancher GPU.",
         "Pas de BF16 : chemins de calcul FP16/FP32.",
-        "Seuils et références de modèles à confirmer aux lots 6 (ASR) et 7 (TTS)."
+        "Moteur TTS retenu (Lot 7) : Chatterbox Multilingual V3, GGUF Q8 (~4–8 Go).",
+        "Seuils et références à confirmer aux lots 6 (ASR) et 7 (TTS)."
       ]
     },
     {
@@ -92,13 +95,15 @@
       "tts": {
         "enabled": true,
         "residence": "gpu",
-        "modelRef": "tts.model.low",
-        "quantizationRef": "tts.quant.low",
+        "modelRef": "kokoro",
+        "quantizationRef": "q8",
         "status": "to-confirm"
       },
       "notes": [
         "GPU présent mais sous les seuils compact : repli CPU autorisé.",
-        "Seuils et références de modèles à confirmer aux lots 6 (ASR) et 7 (TTS)."
+        "Repli TTS léger (Lot 7) : Kokoro 82 M (presets, faible VRAM) si Chatterbox",
+        "Q8 ne tient pas — repli sans émotion pilotée.",
+        "Seuils et références à confirmer aux lots 6 (ASR) et 7 (TTS)."
       ]
     },
     {

@@ -69,6 +69,22 @@ describe("protocol — client → serveur", () => {
     });
   });
 
+  it("accepte une trame playback valide et rejette les formes invalides", () => {
+    expect(
+      parseClientMessage(JSON.stringify({ type: "playback", runId: "r1", event: "started" })),
+    ).toEqual({ ok: true, message: { type: "playback", runId: "r1", event: "started" } });
+    expect(
+      parseClientMessage(JSON.stringify({ type: "playback", runId: "r1", event: "aborted" })),
+    ).toEqual({ ok: true, message: { type: "playback", runId: "r1", event: "aborted" } });
+    expect(parseClientMessage(JSON.stringify({ type: "playback", event: "started" }))).toEqual({
+      ok: false,
+      error: "playback_missing_run_id",
+    });
+    expect(
+      parseClientMessage(JSON.stringify({ type: "playback", runId: "r1", event: "nope" })),
+    ).toEqual({ ok: false, error: "playback_invalid_event" });
+  });
+
   it("rejette le JSON invalide et les types inconnus", () => {
     expect(parseClientMessage("{oops")).toEqual({ ok: false, error: "invalid_json" });
     expect(parseClientMessage("[]")).toEqual({ ok: false, error: "not_an_object" });
@@ -136,5 +152,25 @@ describe("protocol — mapping événement → trame serveur", () => {
         totalMs: 40,
       }),
     ).toEqual({ type: "run_summary", runId: "r1", ttftMs: 12, totalMs: 40 });
+    expect(
+      toServerMessage({
+        type: "run_summary",
+        sessionId: "s1",
+        runId: "r1",
+        ttftMs: 12,
+        totalMs: 40,
+        ttfaMs: 5,
+        ttsSynthMs: 20,
+        ttsSegments: 3,
+      }),
+    ).toEqual({
+      type: "run_summary",
+      runId: "r1",
+      ttftMs: 12,
+      totalMs: 40,
+      ttfaMs: 5,
+      ttsSynthMs: 20,
+      ttsSegments: 3,
+    });
   });
 });

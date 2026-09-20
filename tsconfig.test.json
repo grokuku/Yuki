@@ -3,7 +3,11 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
-    "outDir": "dist"
+    "outDir": "dist",
+    // Les tests importent directement les modules ESM de l'UI vanilla
+    // (`public/ui/*.js`) : `allowJs` les résout et infère leurs types depuis la
+    // JSDoc. `checkJs` reste désactivé : aucun diagnostic n'est émis SUR le JS.
+    "allowJs": true
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "dist"]

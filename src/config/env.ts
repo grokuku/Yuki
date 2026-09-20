@@ -25,6 +25,8 @@ export interface MountPoints {
   workspace: string;
   models: string;
   state: string;
+  /** Volume dédié aux voix TTS (`yuki-voices`, Lot 7). */
+  voices: string;
 }
 
 export interface Env {
@@ -38,6 +40,8 @@ export interface Env {
   configDir: string;
   /** Fichier JSON du store de configuration (volume `state`). */
   configStorePath: string;
+  /** Répertoire du registre des voix TTS (volume `yuki-voices`, Lot 7). */
+  voicesDir: string;
   mountPoints: MountPoints;
   // --- Détection GPU (câblage) ---
   gpuCmd: string;
@@ -145,6 +149,7 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
     workspace: getString(env, "YUKI_MOUNT_WORKSPACE", "/workspace"),
     models: getString(env, "YUKI_MOUNT_MODELS", "/models"),
     state: getString(env, "YUKI_MOUNT_STATE", "/data/state"),
+    voices: getString(env, "YUKI_MOUNT_VOICES", "/voices"),
   };
   const piAgentDir = getString(
     env,
@@ -164,6 +169,7 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       mountPoints.state,
       readTrimmed(env, "YUKI_CONFIG_STORE_PATH"),
     ),
+    voicesDir: getString(env, "YUKI_VOICES_DIR", mountPoints.voices),
     mountPoints,
     gpuCmd: getString(env, "YUKI_GPU_CMD", "nvidia-smi"),
     gpuCmdFromEnv: readTrimmed(env, "YUKI_GPU_CMD") !== undefined,

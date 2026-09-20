@@ -98,15 +98,19 @@ describe("gateway HTTP (fixture RTX 4070)", () => {
     expect(capabilities["gpu.present"]).toBe(true);
     expect(capabilities["gpu.bf16"]).toBe(true);
 
-    expect(body.volumes).toHaveLength(4);
+    expect(body.volumes).toHaveLength(5);
     expect(body.volumes.map((volume) => volume.id)).toEqual([
       "pi",
       "workspace",
       "models",
       "state",
+      "voices",
     ]);
     const models = body.volumes.find((volume) => volume.id === "models");
     expect(models?.mode).toBe("ro");
+    // Lot 7 : le volume des voix est inscriptible par le gateway.
+    const voices = body.volumes.find((volume) => volume.id === "voices");
+    expect(voices?.mode).toBe("rw");
   });
 
   it("GET /version -> 200 avec les versions verrouillées", async () => {

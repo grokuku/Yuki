@@ -11,6 +11,7 @@ import { WebSocket } from "ws";
 import { createWsTransport } from "../../../src/gateway/ws/server.js";
 import type { ServerFrame } from "../../../src/gateway/ws/protocol.js";
 import type { Transport } from "../../../src/gateway/ws/transport.js";
+import type { TtsPipelineDeps } from "../../../src/tts/index.js";
 import { createLogger } from "../../../src/observability/logger.js";
 import { FakePiHost, type FakePiHostOptions } from "../../pi/host-double.js";
 
@@ -18,6 +19,7 @@ export interface HarnessOptions extends FakePiHostOptions {
   replayBufferSize?: number;
   replayBufferBytes?: number;
   serverVersion?: string;
+  tts?: TtsPipelineDeps;
 }
 
 export interface Harness {
@@ -38,6 +40,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     serverVersion: options.serverVersion ?? "test-0.1.0",
     replayBufferSize: options.replayBufferSize ?? 1000,
     replayBufferBytes: options.replayBufferBytes ?? 1_000_000,
+    ...(options.tts ? { tts: options.tts } : {}),
   });
   const server = createHttpServer((_req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });
@@ -64,6 +67,8 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
 
 export class TestClient {
   readonly frames: ServerFrame[] = [];
+  /** Trames binaires reçues (Lot 7) — non décodées ici. */
+  readonly binaryFrames: Buffer[] = [];
   private readonly waiters: Array<{
     predicate: (frame: ServerFrame) => boolean;
     resolve: (frame: ServerFrame) => void;
@@ -72,7 +77,13 @@ export class TestClient {
   }> = [];
 
   private constructor(private readonly ws: WebSocket) {
-    ws.on("message", (data: Buffer) => {
+    ws.on("message", (data: Buffer, isBinary: boolean) => {
+      if (isBinary) {
+        this.binaryFrames.push(
+          Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data),
+        );
+        return;
+      }
       let frame: ServerFrame;
       try {
         frame = JSON.parse(data.toString("utf8")) as ServerFrame;

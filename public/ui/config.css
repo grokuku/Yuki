@@ -246,3 +246,88 @@
 .config-status--error {
   color: var(--danger);
 }
+
+/* ─── Panneau des voix (Lot 7 §10.5) ─────────────────────────────────────── */
+
+.voices-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.voices-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.voices-row__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.voices-row__label {
+  font-weight: 600;
+}
+
+.voices-row__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.voices-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.voices-field-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.voices-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.voices-form__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.voices-status {
+  margin-top: 6px;
+}
+
+/* Curseurs pour-mille (émotion « personnalisée »). */
+.config-range-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.config-range {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.config-range__value {
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
