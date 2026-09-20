@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-theme="indigo-dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -20,14 +20,14 @@
         <span id="light-key" class="pill">clé légère ?</span>
         <span id="heavy-key" class="pill">clé lourde ?</span>
         <div class="theme-control">
-          <select id="theme-select" aria-label="Choisir le thème">
-            <option value="">Système</option>
-            <option value="dark">Sombre</option>
-            <option value="light">Clair</option>
+          <select id="theme-family" name="theme-family" aria-label="Choisir la famille de thème">
+            <option value="indigo">Indigo</option>
             <option value="midnight">Nuit</option>
             <option value="slate">Ardoise</option>
+            <option value="emerald">Émeraude</option>
+            <option value="amber">Ambre</option>
           </select>
-          <button id="theme-toggle" type="button" aria-label="Basculer mode clair/sombre">◑</button>
+          <button id="theme-toggle" type="button" aria-label="Passer en mode clair" aria-pressed="true">☾</button>
         </div>
       </div>
     </header>

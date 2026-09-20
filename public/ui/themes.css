@@ -1,41 +1,31 @@
 /*
- * Thèmes explicites de l'UI Yuki (dropdown + bascule clair/sombre).
+ * Thèmes de l'UI Yuki — FICHIER GÉNÉRÉ, ne pas éditer à la main.
  *
- * Complète `styles.css` :
- * - `styles.css` fournit le thème « système » : sombre par défaut sur `:root`
- *   et clair via `@media (prefers-color-scheme: light)` sur
- *   `:root:not([data-theme])` ;
- * - ce fichier fournit les 4 presets explicites choisis par l'utilisateur,
- *   portés par `:root[data-theme="..."]`. La spécificité (0,2,0) et le fait que
- *   le bloc système soit neutralisé par `:not([data-theme])` garantissent qu'un
- *   choix manuel l'emporte TOUJOURS sur le réglage de l'OS.
+ * Modèle à DEUX AXES : famille (indigo, midnight, slate, emerald, amber) ×
+ * mode (light, dark) = 10 presets « <famille>-<mode> ». Les valeurs sont la
+ * projection EXACTE du catalogue holaf-lib sur les 11 variables de Yuki :
+ *   - surfaces/bordures/textes/accent/danger : HolafTokens.PRESETS
+ *     (holaf-lib js/holaf-tokens.js v0.2.0, presets miroirs de
+ *     la brique modale HolafModal v0.5.0) ;
+ *   - graines des familles : indigo #6366f1, midnight #818cf8,
+ *     slate #94a3b8, emerald #10b981, amber #f59e0b ;
+ *   - --user      = HolafColor.mix(surface, accent, 0.18)
+ *     --assistant = HolafColor.mix(surface, accent, 0.06)
+ *     --ok        = graine Yuki #4cc38a ajustée par paliers de 5 %
+ *                   (darken en clair / lighten en sombre) jusqu'à
+ *                   contrastRatio(ok, surface) >= 4.5 (WCAG AA).
  *
- * Les valeurs reprennent EXACTEMENT celles de `_preview-themes.html`
- * (projection des presets `holaf-tokens` dark/light/midnight/slate sur les 11
- * variables de Yuki ; --user/--assistant/--ok sont les dérivations
- * `holaf-color`). Un `color-scheme` par thème aligne les contrôles natifs
- * (scrollbars, `<select>`) sur la palette choisie.
+ * Provenance / régénération :
+ *   script : _tools/generate-yuki-themes.mjs (racine du workspace composite,
+ *   HORS des dépôts git — l'artefact, lui, reste commité dans Yuki) ;
+ *   commande (depuis le dépôt Yuki) : node ../_tools/generate-yuki-themes.mjs
+ *   (régénération idempotente : aucune donnée datée dans la sortie).
  *
- * CSP (`style-src 'self'`) : fichier statique servi sous `/ui/themes.css`,
- * aucun style n'est injecté dynamiquement.
+ * CSP (style-src 'self') : fichier statique servi sous /ui/themes.css —
+ * aucun style n'est injecté dynamiquement par la page.
  */
 
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #1e1e1e;
-  --panel: #1e1e1e;
-  --panel-2: #27272a;
-  --border: #3f3f46;
-  --text: #e4e4e7;
-  --muted: #a1a1aa;
-  --accent: #6366f1;
-  --danger: #ef4444;
-  --user: #2A2B44;
-  --assistant: #22222B;
-  --ok: #4cc38a;
-}
-
-:root[data-theme="light"] {
+:root[data-theme="indigo-light"] {
   color-scheme: light;
   --bg: #ffffff;
   --panel: #ffffff;
@@ -45,12 +35,42 @@
   --muted: #52525b;
   --accent: #4f46e5;
   --danger: #dc2626;
-  --user: #DFDEFA;
-  --assistant: #F4F4FD;
-  --ok: #317F5A;
+  --user: #dfdefa;
+  --assistant: #f4f4fd;
+  --ok: #317f5a;
 }
 
-:root[data-theme="midnight"] {
+:root[data-theme="indigo-dark"] {
+  color-scheme: dark;
+  --bg: #1e1e1e;
+  --panel: #1e1e1e;
+  --panel-2: #27272a;
+  --border: #3f3f46;
+  --text: #e4e4e7;
+  --muted: #a1a1aa;
+  --accent: #6366f1;
+  --danger: #ef4444;
+  --user: #2a2b44;
+  --assistant: #22222b;
+  --ok: #4cc38a;
+}
+
+:root[data-theme="midnight-light"] {
+  color-scheme: light;
+  --bg: #f6f7fc;
+  --panel: #f6f7fc;
+  --panel-2: #ffffff;
+  --border: #d4d6f3;
+  --text: #18181b;
+  --muted: #75767a;
+  --accent: #5b63d3;
+  --danger: #dc2626;
+  --user: #dadcf5;
+  --assistant: #edeefa;
+  --ok: #317f5a;
+}
+
+:root[data-theme="midnight-dark"] {
   color-scheme: dark;
   --bg: #10111d;
   --panel: #10111d;
@@ -61,11 +81,26 @@
   --accent: #818cf8;
   --danger: #ef4444;
   --user: #242744;
-  --assistant: #17182A;
+  --assistant: #17182a;
   --ok: #4cc38a;
 }
 
-:root[data-theme="slate"] {
+:root[data-theme="slate-light"] {
+  color-scheme: light;
+  --bg: #f4f6f8;
+  --panel: #f4f6f8;
+  --panel-2: #ffffff;
+  --border: #ced3d9;
+  --text: #18181b;
+  --muted: #747578;
+  --accent: #475569;
+  --danger: #dc2626;
+  --user: #d5d9de;
+  --assistant: #eaecef;
+  --ok: #2e7553;
+}
+
+:root[data-theme="slate-dark"] {
   color-scheme: dark;
   --bg: #1f232b;
   --panel: #1f232b;
@@ -75,12 +110,78 @@
   --muted: #9aa3b2;
   --accent: #94a3b8;
   --danger: #ef4444;
-  --user: #343A44;
-  --assistant: #262B33;
+  --user: #343a44;
+  --assistant: #262b33;
   --ok: #4cc38a;
 }
 
-/* ─── Contrôle de thème (topbar) ───────────────────────────────────────── */
+:root[data-theme="emerald-light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #f0fdf4;
+  --border: #c8e1da;
+  --text: #18181b;
+  --muted: #79797b;
+  --accent: #047857;
+  --danger: #dc2626;
+  --user: #d2e7e1;
+  --assistant: #f0f7f5;
+  --ok: #317f5a;
+}
+
+:root[data-theme="emerald-dark"] {
+  color-scheme: dark;
+  --bg: #0b1512;
+  --panel: #0b1512;
+  --panel-2: #12201a;
+  --border: #143f30;
+  --text: #f4f4f5;
+  --muted: #929696;
+  --accent: #34d399;
+  --danger: #ef4444;
+  --user: #12372a;
+  --assistant: #0d201a;
+  --ok: #4cc38a;
+}
+
+:root[data-theme="amber-light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #fffbeb;
+  --border: #efd9c9;
+  --text: #18181b;
+  --muted: #79797b;
+  --accent: #b45309;
+  --danger: #dc2626;
+  --user: #f2e0d3;
+  --assistant: #fbf5f0;
+  --ok: #317f5a;
+}
+
+:root[data-theme="amber-dark"] {
+  color-scheme: dark;
+  --bg: #1a1408;
+  --panel: #1a1408;
+  --panel-2: #241c0d;
+  --border: #4c3a0e;
+  --text: #f4f4f5;
+  --muted: #989691;
+  --accent: #fbbf24;
+  --danger: #ef4444;
+  --user: #43330d;
+  --assistant: #281e0a;
+  --ok: #4cc38a;
+}
+
+/* ─── Contrôle de thème (topbar) ─────────────────────────────────────────
+ * Deux contrôles aux rôles distincts :
+ *   select#theme-family : la FAMILLE (Indigo, Nuit, Ardoise, Émeraude, Ambre) ;
+ *   button#theme-toggle : le MODE clair/sombre (conserve la famille).
+ * Compact, cohérent avec la topbar ; focus visible (clavier) ; l'état
+ * « pressé » du bouton (mode sombre actif) reçoit une teinte accent.
+ */
 
 .theme-control {
   display: inline-flex;
@@ -131,3 +232,10 @@
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   color: var(--accent);
 }
+
+/* Mode sombre actif (aria-pressed="true") : teinte accent discrète. */
+.theme-control button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--accent);
+}
+

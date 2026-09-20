@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * Holaf UI — Brique HolafModal · version 0.4.2
+ * Holaf UI — Brique HolafModal · version 0.5.0
  * ─────────────────────────────────────────────────────────────────────────────
  * Modale autonome (zéro dépendance runtime) : overlay, pile d'overlays
  * document-level, helpers Promise (alert / confirm / prompt / busy), focus
@@ -35,6 +35,19 @@
  * { injectStyles } ou champ `injectStyles` de opts), l'appel primant sur le
  * global. Avec injectStyles:false, AUCUNE balise <style> n'est créée ni
  * insérée (l'hôte charge le CSS via son propre fichier). Défaut inchangé.
+ * v0.5.0 — CATALOGUE DE THÈMES À 2 AXES (additif, STRICTEMENT rétrocompatible) :
+ * le registre passe des 4 presets plats historiques (dark / light / midnight /
+ * slate) aux 10 combinaisons `<famille>-<mode>` : indigo-light, indigo-dark,
+ * midnight-light, midnight-dark, slate-light, slate-dark, emerald-light,
+ * emerald-dark, amber-light, amber-dark. Les 4 noms historiques RESTENT
+ * disponibles et deviennent des ALIAS EXACTS des palettes correspondantes
+ * (dark ≡ indigo-dark, light ≡ indigo-light, midnight ≡ midnight-dark,
+ * slate ≡ slate-dark) — valeurs rigoureusement identiques. Les 10 presets sont
+ * les MIROIRS des presets homonymes de HolafTokens 0.2.0 (mêmes surfaces,
+ * même texte, même accent), embarqués en DONNÉES LITTÉRALES pour que la brique
+ * reste autonome (zéro dépendance runtime) : aucune logique de génération
+ * dupliquée. Objectif : aligner modale ↔ page ↔ toast quelle que soit la
+ * famille/mode choisi. Aucune API existante ne change.
  * Fichier DUAL : module ES (export) + global window.HolafModal — se
  * charge via <script type="module"> ou `import { HolafModal }`.
  *
@@ -51,7 +64,7 @@
 const HolafModal = (function () {
     "use strict";
 
-    const VERSION = "0.4.2";
+    const VERSION = "0.5.0";
 
     // ─── État global du module (partagé par toutes les modales) ──────────────
     // Pile des modales ouvertes : la DERNIÈRE entrée est le « sommet », la
@@ -224,92 +237,240 @@ const HolafModal = (function () {
     }
 
     // ─── Préréglages génériques (enregistrés au chargement de la brique) ────
-    // Contraste des textes ≥ 4.5:1. PAS de --hm-width dans un preset : la
-    // largeur est gouvernée par size/width (un thème ne doit pas pouvoir
-    // casser les classes sm/md/lg/xl).
-    // dark : STRICTEMENT les valeurs par défaut du CSS injecté ci-dessous —
-    // theme:"dark" ≡ aucune option theme (rétrocompatibilité à l'identique).
-    themesRegister("dark", {
-        "--hm-bg": "#1e1e1e",
-        "--hm-bg-secondary": "#27272a",
-        "--hm-bg-input": "#1a1a1a",
-        "--hm-text": "#e4e4e7",
-        "--hm-text-secondary": "#a1a1aa",
-        "--hm-border": "#3f3f46",
-        "--hm-accent": "#6366f1",
-        "--hm-accent-hover": "#818cf8",
-        "--hm-accent-text": "#ffffff",
-        "--hm-danger": "#ef4444",
-        "--hm-danger-hover": "#dc2626",
-        "--hm-danger-text": "#ffffff",
-        "--hm-radius": "12px",
-        "--hm-overlay-bg": "rgba(0, 0, 0, 0.55)",
-        "--hm-font-size": "14px",
-        "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-        "--hm-busy-bg": "rgba(30, 30, 30, 0.82)",
-    });
-    // light : clair zinc, ombre adoucie, overlay allégé.
-    themesRegister("light", {
-        "--hm-bg": "#ffffff",
-        "--hm-bg-secondary": "#f4f4f5",
-        "--hm-bg-input": "#fafafa",
-        "--hm-text": "#18181b",
-        "--hm-text-secondary": "#52525b",
-        "--hm-border": "#d4d4d8",
-        "--hm-accent": "#4f46e5",
-        "--hm-accent-hover": "#6366f1",
-        "--hm-accent-text": "#ffffff",
-        "--hm-danger": "#dc2626",
-        "--hm-danger-hover": "#b91c1c",
-        "--hm-danger-text": "#ffffff",
-        "--hm-radius": "12px",
-        "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
-        "--hm-font-size": "14px",
-        "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-        "--hm-busy-bg": "rgba(255, 255, 255, 0.82)",
-    });
-    // midnight : bleu nuit profond « layered », accent indigo doux (texte
-    // sombre sur le bouton primaire → contraste ~7:1).
-    themesRegister("midnight", {
-        "--hm-bg": "#10111d",
-        "--hm-bg-secondary": "#181a2c",
-        "--hm-bg-input": "#0c0d17",
-        "--hm-text": "#e2e4f0",
-        "--hm-text-secondary": "#9aa0c3",
-        "--hm-border": "#272a44",
-        "--hm-accent": "#818cf8",
-        "--hm-accent-hover": "#a5b4fc",
-        "--hm-accent-text": "#10111d",
-        "--hm-danger": "#ef4444",
-        "--hm-danger-hover": "#dc2626",
-        "--hm-danger-text": "#ffffff",
-        "--hm-radius": "12px",
-        "--hm-overlay-bg": "rgba(4, 5, 12, 0.65)",
-        "--hm-font-size": "14px",
-        "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.6)",
-        "--hm-busy-bg": "rgba(16, 17, 29, 0.85)",
-    });
-    // slate : gris ardoise neutre, accent gris neutre (bouton primaire « soft »)
-    // — le plus polyvalent, lisible sur fond de page de n'importe quelle teinte.
-    themesRegister("slate", {
-        "--hm-bg": "#1f232b",
-        "--hm-bg-secondary": "#292e38",
-        "--hm-bg-input": "#191d24",
-        "--hm-text": "#e6e9ee",
-        "--hm-text-secondary": "#9aa3b2",
-        "--hm-border": "#3a4150",
-        "--hm-accent": "#94a3b8",
-        "--hm-accent-hover": "#b6c2d4",
-        "--hm-accent-text": "#1f232b",
-        "--hm-danger": "#ef4444",
-        "--hm-danger-hover": "#dc2626",
-        "--hm-danger-text": "#ffffff",
-        "--hm-radius": "12px",
-        "--hm-overlay-bg": "rgba(8, 10, 14, 0.55)",
-        "--hm-font-size": "14px",
-        "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.5)",
-        "--hm-busy-bg": "rgba(31, 35, 43, 0.85)",
-    });
+    // CATALOGUE À 2 AXES (v0.5.0) : 5 familles (indigo, midnight, slate,
+    // emerald, amber) × 2 modes (light, dark) = 10 presets `<famille>-<mode>`,
+    // puis 4 ALIAS historiques (dark / light / midnight / slate). Contraste des
+    // textes ≥ 4.5:1. PAS de --hm-width dans un preset : la largeur est
+    // gouvernée par size/width (un thème ne doit pas pouvoir casser sm/md/lg/xl).
+    //
+    // PROVENANCE DES VALEURS (DONNÉES LITTÉRALES, aucun calcul runtime) : les
+    // 10 presets sont les MIROIRS des presets homonymes de HolafTokens 0.2.0
+    // (brique fondation, js/holaf-tokens.js), figés ici une fois pour que la
+    // brique reste AUTONOME (zéro dépendance runtime). Mapping :
+    //     --hm-bg             ← surface            --hm-accent        ← accent
+    //     --hm-bg-secondary   ← surface-elev       --hm-accent-hover  ← accent-hover
+    //     --hm-bg-input       ← surface-raised     --hm-accent-text   ← accent-text
+    //     --hm-text           ← text               --hm-danger        ← danger
+    //     --hm-text-secondary ← text-muted         --hm-danger-text   ← danger-text
+    //     --hm-border         ← border             --hm-danger-hover  ← danger-hover
+    //     --hm-danger-hover : présent uniquement dans les presets GÉNÉRÉS de
+    //     HolafTokens ; pour les 4 palettes historiques figées (qui n'ont pas
+    //     de danger-hover côté tokens) on CONSERVE la valeur historique.
+    // --hm-radius / --hm-font-size / --hm-shadow sont propres à la MODALE
+    // (radius 12px, 14px, ombres 0 18px 50px) et non les valeurs de PAGE de
+    // HolafTokens. --hm-overlay-bg / --hm-busy-bg sont DÉRIVÉS du mode : clair
+    // → scrim zinc `rgba(24, 24, 27, 0.35)` + busy 0.82 ; sombre → scrim teinté
+    // du fond à 0.55 + busy 0.85. Les 4 palettes HISTORIQUES conservent leur
+    // overlay/busy d'origine (voir alias ci-dessous).
+    // Les hex GÉNÉRÉS sont repris À L'IDENTIQUE (casse comprise) de
+    // HolafTokens.PRESETS pour que le test de cohérence inter-briques passe.
+    const THEME_PRESETS = {
+        "indigo-light": {
+            "--hm-bg": "#ffffff",
+            "--hm-bg-secondary": "#f4f4f5",
+            "--hm-bg-input": "#fafafa",
+            "--hm-text": "#18181b",
+            "--hm-text-secondary": "#52525b",
+            "--hm-border": "#d4d4d8",
+            "--hm-accent": "#4f46e5",
+            "--hm-accent-hover": "#6366f1",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#dc2626",
+            "--hm-danger-hover": "#b91c1c",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(255, 255, 255, 0.82)",
+        },
+        "indigo-dark": {
+            "--hm-bg": "#1e1e1e",
+            "--hm-bg-secondary": "#27272a",
+            "--hm-bg-input": "#1a1a1a",
+            "--hm-text": "#e4e4e7",
+            "--hm-text-secondary": "#a1a1aa",
+            "--hm-border": "#3f3f46",
+            "--hm-accent": "#6366f1",
+            "--hm-accent-hover": "#818cf8",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#ef4444",
+            "--hm-danger-hover": "#dc2626",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(0, 0, 0, 0.55)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+            "--hm-busy-bg": "rgba(30, 30, 30, 0.82)",
+        },
+        "midnight-light": {
+            "--hm-bg": "#F6F7FC",
+            "--hm-bg-secondary": "#FFFFFF",
+            "--hm-bg-input": "#E6E8F8",
+            "--hm-text": "#18181B",
+            "--hm-text-secondary": "#75767A",
+            "--hm-border": "#D4D6F3",
+            "--hm-accent": "#5B63D3",
+            "--hm-accent-hover": "#747ADA",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#DC2626",
+            "--hm-danger-hover": "#E14747",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(246, 247, 252, 0.82)",
+        },
+        "midnight-dark": {
+            "--hm-bg": "#10111d",
+            "--hm-bg-secondary": "#181a2c",
+            "--hm-bg-input": "#0c0d17",
+            "--hm-text": "#e2e4f0",
+            "--hm-text-secondary": "#9aa0c3",
+            "--hm-border": "#272a44",
+            "--hm-accent": "#818cf8",
+            "--hm-accent-hover": "#a5b4fc",
+            "--hm-accent-text": "#10111d",
+            "--hm-danger": "#ef4444",
+            "--hm-danger-hover": "#dc2626",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(4, 5, 12, 0.65)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.6)",
+            "--hm-busy-bg": "rgba(16, 17, 29, 0.85)",
+        },
+        "slate-light": {
+            "--hm-bg": "#F4F6F8",
+            "--hm-bg-secondary": "#FFFFFF",
+            "--hm-bg-input": "#E3E6E9",
+            "--hm-text": "#18181B",
+            "--hm-text-secondary": "#747578",
+            "--hm-border": "#CED3D9",
+            "--hm-accent": "#475569",
+            "--hm-accent-hover": "#636F80",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#DC2626",
+            "--hm-danger-hover": "#E14747",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(244, 246, 248, 0.82)",
+        },
+        "slate-dark": {
+            "--hm-bg": "#1f232b",
+            "--hm-bg-secondary": "#292e38",
+            "--hm-bg-input": "#191d24",
+            "--hm-text": "#e6e9ee",
+            "--hm-text-secondary": "#9aa3b2",
+            "--hm-border": "#3a4150",
+            "--hm-accent": "#94a3b8",
+            "--hm-accent-hover": "#b6c2d4",
+            "--hm-accent-text": "#1f232b",
+            "--hm-danger": "#ef4444",
+            "--hm-danger-hover": "#dc2626",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(8, 10, 14, 0.55)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.5)",
+            "--hm-busy-bg": "rgba(31, 35, 43, 0.85)",
+        },
+        "emerald-light": {
+            "--hm-bg": "#FFFFFF",
+            "--hm-bg-secondary": "#F0FDF4",
+            "--hm-bg-input": "#CDE9DC",
+            "--hm-text": "#18181B",
+            "--hm-text-secondary": "#79797B",
+            "--hm-border": "#C8E1DA",
+            "--hm-accent": "#047857",
+            "--hm-accent-hover": "#278C6F",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#DC2626",
+            "--hm-danger-hover": "#DF4645",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(255, 255, 255, 0.82)",
+        },
+        "emerald-dark": {
+            "--hm-bg": "#0B1512",
+            "--hm-bg-secondary": "#12201A",
+            "--hm-bg-input": "#173B2D",
+            "--hm-text": "#F4F4F5",
+            "--hm-text-secondary": "#929696",
+            "--hm-border": "#143F30",
+            "--hm-accent": "#34D399",
+            "--hm-accent-hover": "#2FB886",
+            "--hm-accent-text": "#000000",
+            "--hm-danger": "#EF4444",
+            "--hm-danger-hover": "#CE3F3E",
+            "--hm-danger-text": "#000000",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(11, 21, 18, 0.55)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+            "--hm-busy-bg": "rgba(11, 21, 18, 0.85)",
+        },
+        "amber-light": {
+            "--hm-bg": "#FFFFFF",
+            "--hm-bg-secondary": "#FFFBEB",
+            "--hm-bg-input": "#F4E2C9",
+            "--hm-text": "#18181B",
+            "--hm-text-secondary": "#79797B",
+            "--hm-border": "#EFD9C9",
+            "--hm-accent": "#B45309",
+            "--hm-accent-hover": "#BF6C2B",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#DC2626",
+            "--hm-danger-hover": "#E14644",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(255, 255, 255, 0.82)",
+        },
+        "amber-dark": {
+            "--hm-bg": "#1A1408",
+            "--hm-bg-secondary": "#241C0D",
+            "--hm-bg-input": "#443410",
+            "--hm-text": "#F4F4F5",
+            "--hm-text-secondary": "#989691",
+            "--hm-border": "#4C3A0E",
+            "--hm-accent": "#FBBF24",
+            "--hm-accent-hover": "#DBA721",
+            "--hm-accent-text": "#000000",
+            "--hm-danger": "#EF4444",
+            "--hm-danger-hover": "#D13E3C",
+            "--hm-danger-text": "#000000",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(26, 20, 8, 0.55)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+            "--hm-busy-bg": "rgba(26, 20, 8, 0.85)",
+        },
+    };
+    Object.keys(THEME_PRESETS).forEach((name) => themesRegister(name, THEME_PRESETS[name]));
+
+    // ─── Alias historiques (valeurs RIGOUREUSEMENT identiques) ───────────────
+    // `indigo` a été FIGÉ DEPUIS les palettes historiques (HolafTokens réutilise
+    // HISTORICAL.dark / HISTORICAL.light telles quelles pour indigo-dark /
+    // indigo-light, et midnight / slate conservent leur mode sombre historique) :
+    // les 4 noms historiques deviennent donc des ALIAS EXACTS.
+    //   dark ≡ indigo-dark · light ≡ indigo-light · midnight ≡ midnight-dark ·
+    //   slate ≡ slate-dark.
+    // `dark` reste STRICTEMENT les valeurs par défaut du CSS injecté ci-dessous
+    // → theme:"dark" ≡ aucune option theme (rétrocompatibilité à l'identique).
+    themesRegister("dark", THEME_PRESETS["indigo-dark"]);
+    themesRegister("light", THEME_PRESETS["indigo-light"]);
+    themesRegister("midnight", THEME_PRESETS["midnight-dark"]);
+    themesRegister("slate", THEME_PRESETS["slate-dark"]);
 
     // ─── Thème global par défaut (VOLATIL — aucune persistance) ─────────────
     // HolafModal.setTheme(...) s'applique à toutes les modales qui ne passent

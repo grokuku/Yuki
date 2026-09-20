@@ -33,8 +33,10 @@ HolafModal.configure({ injectStyles: false });
 // modales/toasts déjà chargés) — un import ESM ne pose rien sur `window`.
 window.HolafModal = HolafModal;
 
-// Thème (dropdown + bascule) : applique le choix persisté ou le réglage
-// système, et câble les contrôles de la topbar.
+// Thème (famille + mode clair/sombre) : applique le choix persisté (migration
+// silencieuse des anciennes valeurs plates) et câble les contrôles de la
+// topbar. Le pont `window.HolafModal` ci-dessus permet à theme.js de piloter
+// la brique avec le nom exact du preset (holaf-modal 0.5.0).
 initTheme();
 
 const WRITE_HEADERS = {

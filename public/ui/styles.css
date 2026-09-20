@@ -12,20 +12,15 @@
   --border: #262b38;
 }
 
-@media (prefers-color-scheme: light) {
-  /* Un thème explicite (`data-theme` posé par theme.js) doit toujours gagner
-     sur le réglage système : on ne cible donc le clair OS que sans attribut. */
-  :root:not([data-theme]) {
-    --bg: #f4f6fb;
-    --panel: #ffffff;
-    --panel-2: #eef1f7;
-    --text: #171a21;
-    --muted: #5d6577;
-    --user: #dbe6ff;
-    --assistant: #ffffff;
-    --border: #d9dee9;
-  }
-}
+/* NOTE — plus AUCUN mode « Système » : l'ancien bloc
+   `@media (prefers-color-scheme: light) { :root:not([data-theme]) { … } }` est
+   retiré. `data-theme` est désormais TOUJOURS posé — en dur dans le markup
+   (`<html data-theme="indigo-dark">`), puis écrasé par theme.js depuis
+   `localStorage` — et les palettes vivent exclusivement dans `themes.css`
+   (10 presets <famille>-<mode>, catalogue holaf-lib). Le bloc `:root`
+   ci-dessus reste comme filet de sécurité : si `themes.css` échouait à
+   charger, la page garde une palette sombre lisible au lieu d'un rendu nu.
+   Aucun utilisateur ne peut se retrouver sans thème. */
 
 * {
   box-sizing: border-box;

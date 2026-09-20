@@ -142,3 +142,87 @@ describe("UI statique servie par le gateway", () => {
     expect(response.status).toBe(405);
   });
 });
+
+describe("Thème à deux axes (famille × mode) — assets et markup", () => {
+  it("sert /ui/themes.css, /ui/theme.js et la brique modale vendorisée, CSP inchangée", async () => {
+    for (const path of ["/ui/themes.css", "/ui/theme.js", "/ui/vendor/holaf/holaf-modal.css"]) {
+      const response = await fetch(`${baseUrl}${path}`);
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get("content-type"), path).toContain(path.endsWith(".css") ? "text/css" : "javascript");
+      // La CSP des assets statiques est identique à celle des pages.
+      expect(response.headers.get("content-security-policy"), path).toContain("style-src 'self'");
+      expect(response.headers.get("content-security-policy"), path).not.toContain("unsafe-inline");
+    }
+  });
+
+  it("pose le thème par défaut en dur dans le markup des deux pages (anti-flash)", async () => {
+    for (const path of ["/", "/config"]) {
+      const body = await (await fetch(`${baseUrl}${path}`)).text();
+      // Premier paint correct sans script inline (CSP script-src 'self') :
+      // data-theme est écrit dans la balise <html> elle-même.
+      expect(body, path).toMatch(/<html lang="fr" data-theme="indigo-dark">/);
+    }
+  });
+
+  it("propose les 5 familles, sans option « Système », sur les deux pages", async () => {
+    for (const path of ["/", "/config"]) {
+      const body = await (await fetch(`${baseUrl}${path}`)).text();
+      // Le select devient le sélecteur de FAMILLE (id + name explicites).
+      expect(body, path).toContain('id="theme-family" name="theme-family"');
+      for (const slug of ["indigo", "midnight", "slate", "emerald", "amber"]) {
+        expect(body, path).toContain(`<option value="${slug}">`);
+      }
+      // Plus de mode « Système », plus d'ancien id de select.
+      expect(body, path).not.toContain("Système");
+      expect(body, path).not.toContain('id="theme-select"');
+      // Le bouton garde son id et expose son état de bascule.
+      expect(body, path).toContain('id="theme-toggle"');
+      expect(body, path).toMatch(/id="theme-toggle"[^>]*aria-pressed="true"/);
+    }
+  });
+
+  it("themes.css décrit exactement les 10 presets <famille>-<mode>", async () => {
+    const css = await (await fetch(`${baseUrl}/ui/themes.css`)).text();
+    const names = [
+      "indigo-light", "indigo-dark",
+      "midnight-light", "midnight-dark",
+      "slate-light", "slate-dark",
+      "emerald-light", "emerald-dark",
+      "amber-light", "amber-dark",
+    ];
+    for (const name of names) {
+      expect(css).toContain(`:root[data-theme="${name}"]`);
+    }
+    // Plus aucun nom de l'ancien modèle plat comme sélecteur.
+    for (const legacy of ["dark", "light", "midnight", "slate"]) {
+      expect(css).not.toContain(`:root[data-theme="${legacy}"]`);
+    }
+    // Le mode « système » n'existe plus : aucun @media prefers-color-scheme.
+    expect(css).not.toContain("prefers-color-scheme");
+    // Chaque preset pose son color-scheme (contrôles natifs cohérents).
+    expect(css.match(/color-scheme: (light|dark);/g)?.length).toBe(10);
+  });
+
+  it("theme.js ne suit plus l'OS et migre les anciennes valeurs sur la même clé", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/theme.js`)).text();
+    // Suppression du suivi système.
+    expect(js).not.toContain("matchMedia");
+    expect(js).not.toContain("prefers-color-scheme");
+    // Même clé de stockage + migration silencieuse des anciens noms plats.
+    expect(js).toContain('"yuki-theme"');
+    expect(js).toContain('["dark", "indigo-dark"]');
+    expect(js).toContain('["light", "indigo-light"]');
+    expect(js).toContain('["midnight", "midnight-dark"]');
+    expect(js).toContain('["slate", "slate-dark"]');
+    // Le défaut est aligné sur le markup.
+    expect(js).toContain('DEFAULT_PRESET = "indigo-dark"');
+  });
+
+  it("la copie vendorisée d'HolafModal est bien la 0.5.0 (catalogue 2 axes)", async () => {
+    const manifest = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-manifest.json`)).json();
+    expect(manifest).toEqual({ fetch: "0.2.0", modal: "0.5.0" });
+    const css = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-modal.css`)).text();
+    // Le CSS externe de la brique (extrait de getCss()) est bien servi.
+    expect(css).toContain(".holaf-modal-overlay");
+  });
+});

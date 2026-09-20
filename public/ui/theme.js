@@ -1,125 +1,168 @@
 /**
- * Thème de l'UI Yuki (vanilla ESM, aucune chaîne de build).
+ * Thème de l'UI Yuki (vanilla ESM, aucune chaîne de build) — modèle à DEUX AXES.
  *
- * Deux contrôles, synchronisés en permanence :
- * - `#theme-select` : « Système » (valeur `""`), `dark`, `light`, `midnight`,
- *   `slate` ;
- * - `#theme-toggle` : bascule clair↔sombre sur le thème résolu courant.
+ * Deux contrôles, deux rôles distincts :
+ * - `#theme-family` (select) : la FAMILLE — indigo, midnight, slate, emerald,
+ *   amber (libellés FR : Indigo, Nuit, Ardoise, Émeraude, Ambre) ;
+ * - `#theme-toggle` (bouton) : le MODE clair↔sombre, en conservant la famille.
  *
- * Application : l'attribut `data-theme` sur `<html>` est lu par `themes.css`.
- * Le mode « système » retire l'attribut ; `styles.css` suit alors
- * `prefers-color-scheme` (bloc `:root:not([data-theme])`).
+ * Il n'existe PAS de mode « Système » : ni le select ni le moteur ne suivent
+ * le réglage de l'OS (aucune écoute du thème système). Le mode clair/sombre
+ * est toujours explicite.
+ *
+ * État = couple { famille, mode }, sérialisé sous la forme
+ * `<famille>-<mode>` dans `localStorage["yuki-theme"]` — la même chaîne sert
+ * de valeur `data-theme`, de nom de preset holaf et de donnée stockée
+ * (une seule source de vérité).
+ *
+ * Application : l'attribut `data-theme` sur `<html>` est lu par `themes.css`
+ * (10 presets, exactement ceux du catalogue holaf-lib). Anti-flash : le
+ * markup pose déjà `data-theme="indigo-dark"` en dur ; ce fichier l'écrase
+ * ensuite depuis `localStorage`.
+ *
+ * Migration (même clé, silencieuse) : les anciennes valeurs plates sont
+ * mappées à la lecture — `dark` → `indigo-dark`, `light` → `indigo-light`,
+ * `midnight` → `midnight-dark`, `slate` → `slate-dark` ; chaîne vide ou
+ * inconnue → `indigo-dark` (nouveau défaut, aligné sur le markup). La valeur
+ * migrée est réécrite dans la clé.
+ *
+ * Pont holaf : `window.HolafModal?.setTheme(preset)` reçoit le nom EXACT du
+ * preset (indigo-dark, emerald-light, …) — connus de holaf-modal 0.5.0.
  *
  * CSP (`style-src 'self'`) : AUCUN `<style>` n'est injecté — seul
- * `Element.setAttribute` / `removeAttribute` est utilisé.
+ * `Element.setAttribute` est utilisé.
  *
- * Persistance : `localStorage["yuki-theme"]` (clé absente ou vide = système).
+ * Persistance : `localStorage["yuki-theme"]` protégée (mode privé, quota) :
+ * toute erreur est non bloquante.
  */
 
-/** Clé de persistance du choix de l'utilisateur. */
+/** Clé de persistance du choix de l'utilisateur (inchangée — migration incluse). */
 const STORAGE_KEY = "yuki-theme";
 
-/** Presets explicites connus (doivent exister dans `themes.css`). */
-const THEMES = ["dark", "light", "midnight", "slate"];
-const THEME_SET = new Set(THEMES);
+/** Familles du catalogue holaf-lib (axe 1) et modes (axe 2). */
+export const FAMILIES = ["indigo", "midnight", "slate", "emerald", "amber"];
+const MODES = ["light", "dark"];
 
-/** Thème courant : `""` (système) ou un des presets explicites. */
-let current = "";
+/** Presets valides : les 10 combinaisons <famille>-<mode> (catalogue holaf). */
+const PRESETS = new Set(FAMILIES.flatMap((f) => MODES.map((m) => `${f}-${m}`)));
+
+/** Défaut : posé en dur dans le markup des deux pages (`data-theme`). */
+const DEFAULT_PRESET = "indigo-dark";
+
+/** Migration silencieuse : anciennes valeurs plates → <famille>-<mode>. */
+const LEGACY_MAP = new Map([
+  ["dark", "indigo-dark"],
+  ["light", "indigo-light"],
+  ["midnight", "midnight-dark"],
+  ["slate", "slate-dark"],
+]);
+
+/** Preset courant : toujours une des 10 chaînes « <famille>-<mode> ». */
+let current = DEFAULT_PRESET;
 
 /** Garde d'idempotence : `initTheme()` peut être appelé plusieurs fois. */
 let initialized = false;
 
-/** Lit le choix persisté, en le validant contre les presets connus. */
+/** Décompose « famille-mode » (les slugs ne contiennent pas de « - »). */
+function parsePreset(preset) {
+  const i = preset.indexOf("-");
+  return { family: preset.slice(0, i), mode: preset.slice(i + 1) };
+}
+
+/**
+ * Normalise la valeur stockée lue. Retourne le preset à appliquer et
+ * `migrated` (la valeur d'origine doit être RÉÉCRITE : ancien nom plat,
+ * chaîne vide ou valeur inconnue trouvée dans le stockage).
+ */
+function normalizeStored(raw) {
+  if (typeof raw === "string") {
+    if (PRESETS.has(raw)) return { preset: raw, migrated: false };
+    if (LEGACY_MAP.has(raw)) return { preset: LEGACY_MAP.get(raw), migrated: true };
+    // Ancien « système » (chaîne vide) ou valeur inconnue : défaut explicite.
+    return { preset: DEFAULT_PRESET, migrated: true };
+  }
+  // Clé absente : on applique le défaut sans rien écrire (première visite).
+  return { preset: DEFAULT_PRESET, migrated: false };
+}
+
+/** Lit le choix persisté (protégé : mode privé, quota, origine opaque). */
 function readStored() {
   try {
-    const value = window.localStorage.getItem(STORAGE_KEY);
-    return value && THEME_SET.has(value) ? value : "";
+    return normalizeStored(window.localStorage.getItem(STORAGE_KEY));
   } catch {
-    // localStorage indisponible (mode privé, quota, origine opaque) : système.
-    return "";
+    return { preset: DEFAULT_PRESET, migrated: false };
   }
 }
 
-/** Écrit (ou efface, en mode système) le choix persisté. */
-function writeStored(theme) {
+/** Écrit le choix persisté (best-effort : l'absence de stockage ne bloque pas). */
+function writeStored(preset) {
   try {
-    if (theme && THEME_SET.has(theme)) {
-      window.localStorage.setItem(STORAGE_KEY, theme);
-    } else {
-      window.localStorage.removeItem(STORAGE_KEY);
+    if (PRESETS.has(preset)) {
+      window.localStorage.setItem(STORAGE_KEY, preset);
     }
   } catch {
-    // Persistance best-effort : l'absence de stockage ne doit jamais bloquer.
+    // Persistance best-effort.
   }
 }
 
-/** Thème résolu quand l'utilisateur suit le réglage de l'OS. */
-function systemTheme() {
-  return window.matchMedia &&
-    window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
-}
-
-/** Applique le thème au document et à la brique holaf (si présente). */
-function applyTheme(theme) {
+/** Applique le preset au document et à la brique holaf (si présente). */
+function applyTheme(preset) {
   const root = document.documentElement;
-  if (theme && THEME_SET.has(theme)) {
-    root.setAttribute("data-theme", theme);
-  } else {
-    root.removeAttribute("data-theme");
-  }
+  root.setAttribute("data-theme", preset);
 
-  // Bonus : pilote la modale/le toast holaf si la brique est chargée. En mode
-  // système, on lui transmet le preset équivalent au réglage de l'OS.
+  // Pont holaf : la modale (et tout autre brique pilotée par nom de preset)
+  // reçoit le nom EXACT du catalogue (holaf-modal 0.5.0 connaît les 10).
   try {
-    const holaf = window.HolafModal;
-    if (holaf && typeof holaf.setTheme === "function") {
-      holaf.setTheme(theme && THEME_SET.has(theme) ? theme : systemTheme());
-    }
+    window.HolafModal?.setTheme(preset);
   } catch {
     // Brique optionnelle : toute erreur est non bloquante.
   }
 }
 
-/** Reflète le thème courant dans le `<select>` et le `<button>`. */
+/** Reflète l'état courant dans le `<select>` (famille) et le bouton (mode). */
 function syncControls() {
-  const select = document.getElementById("theme-select");
+  const { family, mode } = parsePreset(current);
+
+  const select = document.getElementById("theme-family");
   if (select) {
-    select.value = THEME_SET.has(current) ? current : "";
+    select.value = family;
   }
 
   const toggle = document.getElementById("theme-toggle");
   if (toggle) {
-    const resolved = THEME_SET.has(current) ? current : systemTheme();
-    const isLight = resolved === "light";
-    // ◑ = bascule disponible (vers le sombre si clair, vers le clair si sombre).
-    toggle.textContent = isLight ? "☀" : "◑";
-    toggle.setAttribute("aria-pressed", String(isLight));
-    toggle.title = isLight
-      ? "Passer en mode sombre"
-      : "Passer en mode clair";
+    // Icône = mode courant (☀ clair, ☾ sombre) ; pressé = mode sombre actif ;
+    // libellé = l'action résultante (ce que fera le prochain clic).
+    toggle.textContent = mode === "light" ? "☀" : "☾";
+    toggle.setAttribute("aria-pressed", String(mode === "dark"));
+    const label = mode === "light" ? "Passer en mode sombre" : "Passer en mode clair";
+    toggle.setAttribute("aria-label", label);
+    toggle.title = label;
   }
 }
 
 /**
- * Applique un thème (`""` pour système) et synchronise l'UI + le stockage.
- * @param {string} theme
+ * Applique un preset `<famille>-<mode>` et synchronise l'UI + le stockage.
+ * Une valeur invalide retombe sur le défaut (jamais d'état sans thème).
+ * @param {string} preset
  * @param {{ persist?: boolean }} [opts]
  */
-export function setTheme(theme, opts = {}) {
-  current = THEME_SET.has(theme) ? theme : "";
+export function setTheme(preset, opts = {}) {
+  current = PRESETS.has(preset) ? preset : DEFAULT_PRESET;
   applyTheme(current);
   if (opts.persist !== false) writeStored(current);
   syncControls();
   return current;
 }
 
+/** Preset courant (chaîne « <famille>-<mode> »). */
+export function getTheme() {
+  return current;
+}
+
 /**
- * Initialise le thème : applique le choix persisté, câble les contrôles et
- * suit les changements de préférence système tant qu'aucun preset explicite
- * n'est sélectionné.
- * @returns {{ theme: string, setTheme: (theme: string) => string }}
+ * Initialise le thème : applique le choix persisté (migration silencieuse le
+ * cas échéant), câble le select (famille) et le bouton (mode).
+ * @returns {{ theme: string, setTheme: (preset: string, opts?: object) => string }}
  */
 export function initTheme() {
   if (initialized) {
@@ -127,41 +170,27 @@ export function initTheme() {
   }
   initialized = true;
 
-  // 1) Applique le thème persisté avant tout rendu utile (pas de re-persist).
-  setTheme(readStored(), { persist: false });
+  // 1) Applique le choix persisté avant tout rendu utile. On ne réécrit le
+  //    stockage QUE si une valeur ancienne/inconnue a été migrée.
+  const stored = readStored();
+  setTheme(stored.preset, { persist: stored.migrated });
 
-  // 2) Câble le menu déroulant.
-  const select = document.getElementById("theme-select");
+  // 2) Câble le menu déroulant : changer de FAMILLE en conservant le mode.
+  const select = document.getElementById("theme-family");
   if (select) {
-    select.addEventListener("change", () => setTheme(select.value));
-  }
-
-  // 3) Câble la bascule clair↔sombre sur le thème résolu courant. Depuis le
-  //    mode système, la bascule fige un preset explicite (comportement voulu).
-  const toggle = document.getElementById("theme-toggle");
-  if (toggle) {
-    toggle.addEventListener("click", () => {
-      const resolved = THEME_SET.has(current) ? current : systemTheme();
-      setTheme(resolved === "light" ? "dark" : "light");
+    select.addEventListener("change", () => {
+      const { mode } = parsePreset(current);
+      setTheme(`${select.value}-${mode}`);
     });
   }
 
-  // 4) Tant qu'aucun choix explicite n'est fait, suivre l'OS (couleurs gérées
-  //    par le CSS ; ici on resynchronise seulement la brique holaf et le bouton).
-  const media =
-    window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
-  if (media) {
-    const onSystemChange = () => {
-      if (current) return;
-      applyTheme("");
-      syncControls();
-    };
-    if (typeof media.addEventListener === "function") {
-      media.addEventListener("change", onSystemChange);
-    } else if (typeof media.addListener === "function") {
-      // Safari/anciens WebKit.
-      media.addListener(onSystemChange);
-    }
+  // 3) Câble la bascule : changer de MODE en conservant la famille.
+  const toggle = document.getElementById("theme-toggle");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      const { family, mode } = parsePreset(current);
+      setTheme(`${family}-${mode === "light" ? "dark" : "light"}`);
+    });
   }
 
   return { get theme() { return current; }, setTheme };
