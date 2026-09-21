@@ -125,6 +125,59 @@ describe("UI statique servie par le gateway", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
+  it("organise /config en 5 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
+    const body = await (await fetch(`${baseUrl}/config`)).text();
+
+    // Barre d'onglets accessible.
+    expect(body).toContain('role="tablist"');
+    expect(body).toMatch(/role="tablist"[^>]*aria-label="/);
+
+    // Les 5 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
+    const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
+    expect(tabLabels).toEqual(["Modèles", "Conversation", "Voix", "Système", "Maintenance"]);
+
+    // Appariement : chaque role="tab" (id + aria-controls + aria-selected +
+    // tabindex) référence un role="tabpanel" qui le référence en retour
+    // (aria-labelledby).
+    const tabTags = [...body.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
+    const panelTags = [...body.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((m) => m[0]);
+    expect(tabTags.length).toBe(5);
+    expect(panelTags.length).toBe(5);
+    for (const tag of tabTags) {
+      const id = tag.match(/id="([^"]+)"/)?.[1];
+      const controls = tag.match(/aria-controls="([^"]+)"/)?.[1];
+      expect(id, tag).toBeTruthy();
+      expect(controls, tag).toBeTruthy();
+      expect(tag).toContain('aria-selected=');
+      expect(tag).toMatch(/tabindex="(-1|0)"/);
+      const panel = panelTags.find((p) => p.includes(`id="${controls}"`));
+      expect(panel, `panneau ${controls}`).toBeTruthy();
+      expect(panel).toContain(`aria-labelledby="${id}"`);
+      expect(panel).toContain('tabindex="0"');
+    }
+
+    // Rendu EAGER : les conteneurs de groupes des 5 onglets existent dans le
+    // markup (les lignes sont construites côté JS au chargement).
+    for (const id of ["group-modeles", "group-conversation", "group-voix", "group-systeme"]) {
+      expect(body).toContain(`id="${id}"`);
+    }
+
+    // Un SEUL enregistrement global, dans une barre persistante (sticky), avec
+    // un indicateur « modifications non enregistrées ».
+    expect(body.match(/id="save"/g)?.length).toBe(1);
+    expect(body).toContain("config-actions--sticky");
+    expect(body).toContain('id="save-dirty"');
+    expect(body).toContain("Modifications non enregistrées");
+
+    // Les ids historiques restent présents (tests/E2E s'y appuient).
+    for (const id of ["groups", "voices-root", "applied", "restart", "availability", "global-error"]) {
+      expect(body).toContain(`id="${id}"`);
+    }
+
+    // CSP : toujours aucun style inline dans le markup des onglets.
+    expect(body).not.toMatch(/\sstyle=/);
+  });
+
   it("HEAD / répond sans corps", async () => {
     const response = await fetch(`${baseUrl}/`, { method: "HEAD" });
     expect(response.status).toBe(200);
@@ -172,8 +225,10 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
       for (const slug of ["indigo", "midnight", "slate", "emerald", "amber"]) {
         expect(body, path).toContain(`<option value="${slug}">`);
       }
-      // Plus de mode « Système », plus d'ancien id de select.
-      expect(body, path).not.toContain("Système");
+      // Plus de mode « Système » DANS LE SÉLECTEUR DE THÈME — le mot est
+      // désormais un ONGLET légitime de /config : on isole le <select>.
+      const familySelect = body.match(/<select[^>]*id="theme-family"[\s\S]*?<\/select>/)?.[0] ?? "";
+      expect(familySelect, path).not.toContain("Système");
       expect(body, path).not.toContain('id="theme-select"');
       // Le bouton garde son id et expose son état de bascule.
       expect(body, path).toContain('id="theme-toggle"');
@@ -273,5 +328,53 @@ describe("UI TTS (Lot C) — assets, contrôle topbar et panneau des voix", () =
     expect(panel).toContain("/api/voices/clone");
     // Aucune `window.confirm` : confirmations par HolafModal.
     expect(panel).not.toContain("window.confirm");
+  });
+});
+
+describe("Assistant de mise en route du TTS (Lot 8)", () => {
+  it("sert les assets de l'assistant et les référence depuis /config", async () => {
+    const js = await fetch(`${baseUrl}/ui/tts-assistant.js`);
+    expect(js.status).toBe(200);
+    expect(js.headers.get("content-type")).toContain("javascript");
+    expect(js.headers.get("content-security-policy")).not.toContain("unsafe-inline");
+
+    const css = await fetch(`${baseUrl}/ui/tts-assistant.css`);
+    expect(css.status).toBe(200);
+    expect(css.headers.get("content-type")).toContain("text/css");
+
+    const body = await (await fetch(`${baseUrl}/config`)).text();
+    // Conteneur de montage (composant autonome monté par id) + feuille de style.
+    expect(body).toContain('id="tts-assistant-root"');
+    expect(body).toContain("/ui/tts-assistant.css");
+    // La structure d'onglets et les ids existants restent intacts.
+    expect(body).toContain('id="voices-root"');
+    expect(body).toContain('id="panel-voix"');
+    // CSP : toujours aucun style inline dans le markup.
+    expect(body).not.toMatch(/\sstyle=/);
+  });
+
+  it("config.js monte l'assistant (id) et lui délègue le redémarrage existant", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).toContain("initTtsAssistant");
+    expect(js).toContain('getElementById("tts-assistant-root")');
+    // Le redémarrage reste centralisé côté config.js (logique existante).
+    expect(js).toContain("requestGatewayRestart");
+  });
+
+  it("l'assistant ne parle au moteur QUE via les routes du gateway", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
+    for (const route of ["/api/tts/status", "/api/tts/models", "/api/tts/test"]) {
+      expect(js).toContain(route);
+    }
+    expect(js).toContain("/api/config");
+    // Aucun accès direct au moteur (port 8081) ni au socket Docker.
+    expect(js).not.toContain("8081");
+    expect(js).not.toContain("docker.sock");
+    // Aucune `window.confirm` (HolafModal) ni `innerHTML` (XSS/CSP).
+    expect(js).not.toContain("window.confirm");
+    expect(js).not.toContain("innerHTML");
+    // La lecture audio reste Web Audio (jamais de balise <audio> créée).
+    expect(js).not.toContain("new Audio(");
+    expect(js).not.toMatch(/createElement\(["']audio/);
   });
 });

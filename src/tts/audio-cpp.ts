@@ -169,13 +169,24 @@ export type AudioCppErrorCode =
   | "aborted"
   | "network_error";
 
-/** Erreur du moteur TTS : code stable + statut HTTP éventuel. */
+/**
+ * Erreur du moteur TTS : code stable + statut HTTP éventuel + corps d'erreur
+ * brut (borné), pour le diagnostic.
+ *
+ * ⚠️ Le moteur renvoie **503** pour PLUSIEURS causes : `BusyGuard` (« server
+ * busy ») MAIS AUSSI « Insufficient Memory » (`min_free_memory_mb`). Le contrat
+ * HTTP attesté ne fournit pas de code machine fiable pour les distinguer : on
+ * conserve donc le corps brut (`body`) et on NE prétend PAS distinguer la
+ * cause (voir `docs/lot7.md` §10.8 et le rapport de lot).
+ */
 export class AudioCppError extends Error {
   override readonly name: string = "AudioCppError";
   constructor(
     readonly code: AudioCppErrorCode,
     message: string,
     readonly status?: number,
+    /** Début du corps de la réponse d'erreur du moteur (borné), si lisible. */
+    readonly body?: string,
   ) {
     super(message);
   }
@@ -184,8 +195,28 @@ export class AudioCppError extends Error {
 /** `503 server busy` : le `BusyGuard` du moteur sérialise déjà par modèle. */
 export class AudioCppBusyError extends AudioCppError {
   override readonly name = "AudioCppBusyError";
-  constructor(message = "Le service TTS est occupé (503).") {
-    super("server_busy", message, 503);
+  constructor(message = "Le service TTS est occupé (503).", body?: string) {
+    super("server_busy", message, 503, body);
+  }
+}
+
+/** Taille maximale conservée du corps d'erreur du moteur (diagnostic). */
+export const AUDIO_CPP_ERROR_BODY_LIMIT = 1_000;
+
+/**
+ * Lit le corps d'une réponse d'erreur, borné et jamais bloquant : une lecture
+ * impossible renvoie `undefined` (le diagnostic est un bonus, pas un prérequis).
+ */
+async function readErrorBody(
+  response: Response,
+  limit = AUDIO_CPP_ERROR_BODY_LIMIT,
+): Promise<string | undefined> {
+  try {
+    const text = (await response.text()).trim();
+    if (text.length === 0) return undefined;
+    return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  } catch {
+    return undefined;
   }
 }
 
@@ -280,12 +311,17 @@ export class AudioCppClient {
         body: request.body,
         signal: controller.signal,
       });
-      if (response.status === 503) throw new AudioCppBusyError();
+      if (response.status === 503) {
+        // 503 ≠ forcément « busy » (aussi « mémoire insuffisante ») : on
+        // conserve le corps brut sans prétendre trancher la cause.
+        throw new AudioCppBusyError(undefined, await readErrorBody(response));
+      }
       if (!response.ok) {
         throw new AudioCppError(
           "http_error",
           `Le service TTS a répondu ${response.status}.`,
           response.status,
+          await readErrorBody(response),
         );
       }
       return { response, request };

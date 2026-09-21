@@ -62,7 +62,10 @@ async function start(subsystems: SubsystemsSnapshot): Promise<string> {
   return `http://127.0.0.1:${(address as AddressInfo).port}`;
 }
 
-function snapshot(status: "ready" | "starting" | "error"): SubsystemsSnapshot {
+function snapshot(
+  status: "ready" | "starting" | "error",
+  ttsStatus: "off" | "unreachable" | "starting" | "ready" | "error" = "off",
+): SubsystemsSnapshot {
   return {
     pi: {
       status,
@@ -94,6 +97,11 @@ function snapshot(status: "ready" | "starting" | "error"): SubsystemsSnapshot {
       failed: 0,
       interrupted: 0,
       maxConcurrent: 3,
+    },
+    tts: {
+      status: ttsStatus,
+      modelCount: ttsStatus === "ready" ? 1 : null,
+      engine: "chatterbox",
     },
   };
 }
@@ -150,5 +158,36 @@ describe("sous-systèmes exposés par /health", () => {
     };
     expect(body.status).toBe("not-ready");
     expect(body.llm.status).toBe("unavailable");
+  });
+
+  it("expose subsystems.tts sans modifier les entrées existantes", async () => {
+    const baseUrl = await start(snapshot("ready", "ready"));
+    const health = (await (await fetch(`${baseUrl}/health`)).json()) as {
+      subsystems: SubsystemsSnapshot;
+    };
+    // Forme existante préservée (la bannière #availability lit ces champs).
+    expect(health.subsystems.pi.status).toBe("ready");
+    expect(health.subsystems.transport.ws.clients).toBe(1);
+    expect(health.subsystems.transport.sse).toBe(false);
+    expect(health.subsystems.llm.light.status).toBe("ready");
+    expect(health.subsystems.jobs.maxConcurrent).toBe(3);
+    // Nouveau bloc TTS informatif.
+    expect(health.subsystems.tts).toEqual({
+      status: "ready",
+      modelCount: 1,
+      engine: "chatterbox",
+    });
+  });
+
+  it("/health/ready ne dépend PAS du TTS (absent/en erreur ⇒ ready 200)", async () => {
+    const baseUrl = await start(snapshot("ready", "error"));
+    const ready = await fetch(`${baseUrl}/health/ready`);
+    expect(ready.status).toBe(200);
+    const body = (await ready.json()) as { status: string };
+    expect(body.status).toBe("ready");
+
+    const unreachable = await start(snapshot("ready", "unreachable"));
+    const readyUnreachable = await fetch(`${unreachable}/health/ready`);
+    expect(readyUnreachable.status).toBe(200);
   });
 });

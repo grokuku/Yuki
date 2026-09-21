@@ -55,6 +55,7 @@ export {
   toAudioCppRequest,
   AUDIO_CPP_KEYS,
   AUDIO_CPP_SPEECH_PATH,
+  AUDIO_CPP_ERROR_BODY_LIMIT,
   type AudioCppClientOptions,
   type AudioCppRequest,
   type SynthesizeParams,

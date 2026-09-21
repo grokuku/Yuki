@@ -36,6 +36,13 @@ import { createWsTransport } from "./gateway/ws/server.js";
 import type { Transport } from "./gateway/ws/transport.js";
 import type { SubsystemsSnapshot } from "./gateway/routes/health.js";
 import type { VoiceApiDeps } from "./gateway/routes/voices.js";
+import {
+  DEFAULT_TTS_TEST_TEXT,
+  TtsDiagnostics,
+  TTS_PROBE_CACHE_TTL_MS,
+  TTS_PROBE_TIMEOUT_MS,
+  type TtsApiDeps,
+} from "./gateway/routes/tts.js";
 import { detectGpus } from "./gpu/detect.js";
 import { runGate, type GateCompatConfig } from "./gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "./gpu/profiles.js";
@@ -61,6 +68,7 @@ import {
   createAudioCppSynthesizer,
   isTtsEnabled,
   readTtsOptions,
+  type Voice,
 } from "./tts/index.js";
 import type { ModelAvailability } from "./delegation/index.js";
 
@@ -234,6 +242,38 @@ async function main(): Promise<void> {
     timeoutMs: config.getNumber("tts.timeoutMs"),
     logger,
   });
+
+  /**
+   * Sonde d'état du moteur (Lot 8). Cache court + rafraîchissement en tâche de
+   * fond : `/health` n'attend JAMAIS la sonde (voir `TtsDiagnostics`).
+   */
+  const ttsDiagnostics = new TtsDiagnostics(
+    {
+      enabled: () => isTtsEnabled(config),
+      engine: () => config.getString("tts.engine"),
+      baseUrl: () => config.getString("tts.baseUrl"),
+    },
+    {
+      timeoutMs: TTS_PROBE_TIMEOUT_MS,
+      ttlMs: TTS_PROBE_CACHE_TTL_MS,
+      logger,
+    },
+  );
+
+  /** Point UNIQUE d'appel du moteur pour la synthèse (aperçu + test). */
+  const synthesize = async (
+    text: string,
+    voice: Voice | null,
+  ): Promise<{ contentType: string; bytes: Buffer }> => {
+    const result = await audioCpp.synthesizeBuffer({
+      voice,
+      text,
+      options: readTtsOptions(config),
+      engine: config.getString("tts.engine"),
+    });
+    return { contentType: result.contentType ?? "audio/wav", bytes: result.bytes };
+  };
+
   const voicesDeps: VoiceApiDeps = {
     store: voiceStore,
     logger,
@@ -242,17 +282,22 @@ async function main(): Promise<void> {
       update: (patch) => config.update(patch),
     },
     tts: {
-      synthesizePreview: async (voice) => {
-        const result = await audioCpp.synthesizeBuffer({
-          voice,
-          text: "Bonjour, voici un aperçu de la voix.",
-          options: readTtsOptions(config),
-          engine: config.getString("tts.engine"),
-        });
-        return { contentType: result.contentType ?? "audio/wav", bytes: result.bytes };
-      },
+      synthesizePreview: (voice) => synthesize(DEFAULT_TTS_TEST_TEXT, voice),
     },
   };
+
+  const ttsDeps: TtsApiDeps = {
+    config: {
+      getString: (path) => config.getString(path),
+      getNumber: (path) => config.getNumber(path),
+    },
+    logger,
+    voices: { get: (id) => voiceStore.get(id) ?? null },
+    diagnostics: ttsDiagnostics,
+    modelsDir: env.mountPoints.models,
+    synth: { synthesize: ({ text, voice }) => synthesize(text, voice) },
+  };
+
   logger.info("tts.voices.ready", {
     enabled: isTtsEnabled(config),
     engine: config.getString("tts.engine"),
@@ -398,6 +443,15 @@ async function main(): Promise<void> {
         interrupted: counts.interrupted,
         maxConcurrent: config.getNumber("delegation.maxConcurrent"),
       },
+      // Lot 8 : état informatif du moteur TTS (jamais bloquant pour /health).
+      tts: (() => {
+        const report = ttsDiagnostics.cachedStatus();
+        return {
+          status: report.state,
+          modelCount: report.modelCount,
+          engine: report.engine,
+        };
+      })(),
     };
   };
 
@@ -417,6 +471,7 @@ async function main(): Promise<void> {
       getSubsystems,
       config: { runtime: config, logger },
       voices: voicesDeps,
+      tts: ttsDeps,
       admin: {
         logger,
         requestShutdown: () => triggerShutdown?.(RESTART_REASON),

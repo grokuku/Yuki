@@ -31,6 +31,11 @@ import {
   type VoiceApiDeps,
 } from "./routes/voices.js";
 import {
+  handleTtsRequest,
+  isTtsPath,
+  type TtsApiDeps,
+} from "./routes/tts.js";
+import {
   healthFull,
   healthLive,
   healthReady,
@@ -55,6 +60,8 @@ export interface AppContext {
   admin?: AdminApiDeps;
   /** API de gestion des voix TTS (Lot 7). Absente ⇒ `/api/voices*` → 404. */
   voices?: VoiceApiDeps;
+  /** Diagnostic TTS (Lot 8). Absent ⇒ `/api/tts/**` → 404. */
+  tts?: TtsApiDeps;
 }
 
 interface RouteResponse {
@@ -217,6 +224,52 @@ async function handleVoicesHttp(
   );
 }
 
+/** Traite une requête de diagnostic TTS (GET sans corps, POST texte borné). */
+async function handleTtsHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: TtsApiDeps,
+): Promise<void> {
+  let body: Buffer = Buffer.alloc(0);
+  if (method === "POST") {
+    try {
+      body = await readBodyBinary(req, MAX_CONFIG_BODY_BYTES);
+    } catch (error) {
+      const tooLarge = error instanceof Error && error.message === BODY_TOO_LARGE;
+      writeResponse(
+        res,
+        {
+          status: tooLarge ? 413 : 400,
+          body: {
+            error: tooLarge ? "body_too_large" : "invalid_body",
+            code: tooLarge ? "body_too_large" : "invalid_body",
+            message: tooLarge
+              ? `Corps trop volumineux (maximum ${MAX_CONFIG_BODY_BYTES} octets).`
+              : "Corps de requête illisible.",
+          },
+        },
+        headOnly,
+      );
+      return;
+    }
+  }
+  const response = await handleTtsRequest({
+    method,
+    path,
+    headers: req.headers,
+    body,
+    deps,
+  });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Construit l'écouteur HTTP de l'application. */
 export function createApp(context: AppContext): RequestListener {
   const {
@@ -230,6 +283,7 @@ export function createApp(context: AppContext): RequestListener {
     config,
     admin,
     voices,
+    tts,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -262,6 +316,27 @@ export function createApp(context: AppContext): RequestListener {
       void handleVoicesHttp(req, res, path, method, headOnly, voices).catch(
         (error: unknown) => {
           voices.logger.error("voices.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (tts && isTtsPath(path)) {
+      void handleTtsHttp(req, res, path, method, headOnly, tts).catch(
+        (error: unknown) => {
+          tts.logger.error("tts.request.failed", {
             error: error instanceof Error ? error.message : String(error),
             path,
           });

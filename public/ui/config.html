@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="/ui/styles.css" />
     <link rel="stylesheet" href="/ui/themes.css" />
     <link rel="stylesheet" href="/ui/config.css" />
+    <!-- Assistant de mise en route du TTS (Lot 8) — styles dédiés (CSP : fichier servi, pas de <style>). -->
+    <link rel="stylesheet" href="/ui/tts-assistant.css" />
     <!-- HolafModal — CSS extrait via getCss(), servi statiquement (CSP style-src 'self'). -->
     <link rel="stylesheet" href="/ui/vendor/holaf/holaf-modal.css" />
   </head>
@@ -43,13 +45,153 @@
 
       <p id="availability" class="config-banner config-banner--warn" hidden></p>
 
-      <div id="voices-root"></div>
+      <!--
+        Barre d'onglets + panneaux (rendu EAGER : chaque panneau contient ses
+        lignes dans le DOM dès le chargement, masquées par l'attribut `hidden`).
+        `#groups` reste le conteneur des panneaux (des tests/E2E s'y appuient).
+        Aucun style inline : l'onglet actif est piloté par `aria-selected`.
+      -->
+      <div class="config-tabs">
+        <div class="config-tablist" role="tablist" aria-label="Sections de configuration">
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
+            id="tab-modeles"
+            aria-selected="true"
+            aria-controls="panel-modeles"
+            tabindex="0"
+          >
+            Modèles<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
+            id="tab-conversation"
+            aria-selected="false"
+            aria-controls="panel-conversation"
+            tabindex="-1"
+          >
+            Conversation<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
+            id="tab-voix"
+            aria-selected="false"
+            aria-controls="panel-voix"
+            tabindex="-1"
+          >
+            Voix<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
+            id="tab-systeme"
+            aria-selected="false"
+            aria-controls="panel-systeme"
+            tabindex="-1"
+          >
+            Système<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
+            id="tab-maintenance"
+            aria-selected="false"
+            aria-controls="panel-maintenance"
+            tabindex="-1"
+          >
+            Maintenance<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+        </div>
 
-      <div id="groups"></div>
+        <div id="groups" class="config-panels">
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-modeles"
+            aria-labelledby="tab-modeles"
+            tabindex="0"
+          >
+            <div id="group-modeles" class="config-groups"></div>
+          </section>
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-conversation"
+            aria-labelledby="tab-conversation"
+            tabindex="0"
+            hidden
+          >
+            <div id="group-conversation" class="config-groups"></div>
+          </section>
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-voix"
+            aria-labelledby="tab-voix"
+            tabindex="0"
+            hidden
+          >
+            <!-- Assistant de mise en route (Lot 8) : composant autonome monté par id. -->
+            <div id="tts-assistant-root"></div>
+            <div id="voices-root"></div>
+            <div id="group-voix" class="config-groups"></div>
+          </section>
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-systeme"
+            aria-labelledby="tab-systeme"
+            tabindex="0"
+            hidden
+          >
+            <div id="group-systeme" class="config-groups"></div>
+          </section>
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-maintenance"
+            aria-labelledby="tab-maintenance"
+            tabindex="0"
+            hidden
+          >
+            <section class="config-restart" aria-labelledby="restart-title">
+              <h2 id="restart-title">Redémarrer Yuki</h2>
+              <p class="config-restart__warning">
+                Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
+                conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
+                proprement ses connexions puis redémarre son programme.
+              </p>
+              <p class="config-restart__warning">
+                Yuki <strong>redémarre en interne</strong> : un superviseur relance le
+                programme dans le conteneur, <strong>le conteneur reste en place</strong>.
+                Aucune politique de redémarrage Docker n'est nécessaire pour ce
+                bouton.
+              </p>
+              <div class="config-actions">
+                <button id="restart" class="button button--danger" type="button">
+                  Redémarrer
+                </button>
+                <span id="restart-status" class="config-save-status" role="status"></span>
+              </div>
+            </section>
+          </section>
+        </div>
+      </div>
 
-      <div class="config-actions">
+      <!-- Barre d'action persistante : un SEUL enregistrement global. -->
+      <div class="config-actions config-actions--sticky">
         <button id="save" class="button" type="button">Enregistrer</button>
         <span id="save-status" class="config-save-status" role="status"></span>
+        <span id="save-dirty" class="config-dirty" role="status" hidden>
+          Modifications non enregistrées
+        </span>
       </div>
 
       <p id="global-error" class="config-error" hidden></p>
@@ -63,27 +205,6 @@
         <div>
           <strong>Prendra effet au prochain redémarrage :</strong>
           <span id="applied-restart">—</span>
-        </div>
-      </section>
-
-      <section class="config-restart" aria-labelledby="restart-title">
-        <h2 id="restart-title">Redémarrer Yuki</h2>
-        <p class="config-restart__warning">
-          Le redémarrage <strong>interrompt ce qui est en cours</strong> : la
-          conversation en cours et les jobs lourds sont arrêtés. Yuki ferme
-          proprement ses connexions puis redémarre son programme.
-        </p>
-        <p class="config-restart__warning">
-          Yuki <strong>redémarre en interne</strong> : un superviseur relance le
-          programme dans le conteneur, <strong>le conteneur reste en place</strong>.
-          Aucune politique de redémarrage Docker n'est nécessaire pour ce
-          bouton.
-        </p>
-        <div class="config-actions">
-          <button id="restart" class="button button--danger" type="button">
-            Redémarrer
-          </button>
-          <span id="restart-status" class="config-save-status" role="status"></span>
         </div>
       </section>
     </main>

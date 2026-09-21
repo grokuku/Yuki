@@ -27,6 +27,7 @@ import { HolafFetch } from './vendor/holaf/holaf-fetch.js';
 import { HolafModal } from './vendor/holaf/holaf-modal.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
+import { initTtsAssistant } from './tts-assistant.js';
 import { initVoicesPanel } from './voices-panel.js';
 
 HolafModal.configure({ injectStyles: false });
@@ -193,6 +194,25 @@ const GROUPS = [
 const ALL_FIELDS = GROUPS.flatMap((group) => group.fields);
 const LABELS = new Map(ALL_FIELDS.map((field) => [field.path, field.label]));
 
+/**
+ * Onglets de la page (5 sections) et répartition des groupes de champs.
+ * Le rendu reste EAGER : le contenu de chaque onglet est construit dans le DOM
+ * dès le chargement ; l'onglet actif n'est qu'une question de `hidden`.
+ */
+const TABS = [
+  { id: "modeles", groups: ["llm-light", "llm-heavy"] },
+  { id: "conversation", groups: ["delegation", "prompts"] },
+  { id: "voix", groups: ["tts"] },
+  { id: "systeme", groups: ["gpu", "transport"] },
+  { id: "maintenance", groups: [] },
+];
+
+/** Groupe de champs → identifiant d'onglet qui le contient. */
+const TAB_BY_GROUP = new Map();
+for (const tab of TABS) {
+  for (const groupId of tab.groups) TAB_BY_GROUP.set(groupId, tab.id);
+}
+
 const state = {
   fields: {},
   status: { lightKey: false, heavyKey: false, ready: false },
@@ -204,9 +224,12 @@ const state = {
   healthReady: false,
 };
 
-const groupsEl = document.getElementById("groups");
+const tablistEl = document.querySelector('.config-tablist[role="tablist"]');
+const tabButtons = [...document.querySelectorAll('[role="tab"]')];
+const panels = [...document.querySelectorAll('[role="tabpanel"]')];
 const saveButton = document.getElementById("save");
 const saveStatus = document.getElementById("save-status");
+const saveDirty = document.getElementById("save-dirty");
 const globalError = document.getElementById("global-error");
 const availabilityEl = document.getElementById("availability");
 const appliedEl = document.getElementById("applied");
@@ -218,6 +241,7 @@ const heavyPill = document.getElementById("heavy-key");
 const restartButton = document.getElementById("restart");
 const restartStatus = document.getElementById("restart-status");
 const voicesRoot = document.getElementById("voices-root");
+const ttsAssistantRoot = document.getElementById("tts-assistant-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
 let voicesPanel = null;
 
@@ -304,6 +328,7 @@ function renderSecret(field, entry) {
   const input = h("input", { class: "config-input", type: "password", autocomplete: "off", placeholder: "Nouvelle valeur" });
   input.hidden = true;
   secret.input = input;
+  input.addEventListener("input", () => updateDirtyIndicators());
 
   const valueSpan = h("span", {
     class: "config-secret__value",
@@ -332,11 +357,13 @@ function renderSecret(field, entry) {
     input.value = "";
     input.focus();
     valueSpan.textContent = "Remplacement en cours…";
+    updateDirtyIndicators();
   });
   clearButton.addEventListener("click", () => {
     secret.mode = "clear";
     input.hidden = true;
     valueSpan.textContent = "La clé sera effacée à l'enregistrement.";
+    updateDirtyIndicators();
   });
 
   container.append(valueSpan, replaceButton, clearButton, input);
@@ -375,6 +402,7 @@ function renderField(field) {
     control.addEventListener("input", () => {
       state.pendingResets.delete(field.path);
       refreshVisibility();
+      updateDirtyIndicators();
     });
     row.append(node);
     if (field.kind === "textarea") {
@@ -382,6 +410,7 @@ function renderField(field) {
       reset.addEventListener("click", () => {
         control.value = "";
         state.pendingResets.add(field.path);
+        updateDirtyIndicators();
       });
       row.append(h("div", { class: "config-helper" }, [reset]));
     }
@@ -394,8 +423,18 @@ function renderField(field) {
 }
 
 function render() {
-  groupsEl.textContent = "";
+  const containers = new Map();
+  for (const tab of TABS) {
+    const container = document.getElementById(`group-${tab.id}`);
+    if (container) {
+      container.textContent = "";
+      containers.set(tab.id, container);
+    }
+  }
   for (const group of GROUPS) {
+    const tabId = TAB_BY_GROUP.get(group.id);
+    const container = containers.get(tabId) ?? containers.get("modeles");
+    if (!container) continue;
     const section = h("section", { class: "config-group" });
     const status = h("span", { class: "config-helper" });
     const head = h("div", { class: "config-group__head" }, [
@@ -408,9 +447,10 @@ function render() {
     }
     section.append(head);
     for (const field of group.fields) section.append(renderField(field));
-    groupsEl.append(section);
+    container.append(section);
   }
   refreshVisibility();
+  updateDirtyIndicators();
 }
 
 /**
@@ -427,6 +467,86 @@ function refreshVisibility() {
       ? control.value
       : state.fields[field.revealWhen.path]?.value;
     row.hidden = String(value) !== String(field.revealWhen.equals);
+  }
+}
+
+/** Identifiant d'onglet valide déduit du hash courant, sinon `null`. */
+function tabFromHash() {
+  const raw = location.hash.replace(/^#/, "");
+  return TABS.some((tab) => tab.id === raw) ? raw : null;
+}
+
+/**
+ * Active un onglet : état `aria-selected`/`tabindex` sur les onglets et
+ * `hidden` sur les panneaux. Le DOM reste EAGER (aucun panneau n'est vidé).
+ * `refreshVisibility()` est rappelé car les champs conditionnels d'un onglet
+ * peuvent dépendre d'un champ d'un autre onglet.
+ */
+function activateTab(tabId, { focus = false } = {}) {
+  if (!TABS.some((tab) => tab.id === tabId)) return;
+  for (const button of tabButtons) {
+    const active = button.getAttribute("aria-controls") === `panel-${tabId}`;
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.tabIndex = active ? 0 : -1;
+    if (active && focus) button.focus();
+  }
+  for (const panel of panels) panel.hidden = panel.id !== `panel-${tabId}`;
+  refreshVisibility();
+}
+
+/**
+ * Sélectionne un onglet ; met à jour le hash sans empiler d'historique
+ * (`replaceState`, donc pas d'entrée de navigation par onglet).
+ */
+function selectTab(tabId, { focus = false, updateHash = false } = {}) {
+  if (!TABS.some((tab) => tab.id === tabId)) return;
+  activateTab(tabId, { focus });
+  if (updateHash && location.hash !== `#${tabId}`) {
+    history.replaceState(null, "", `#${tabId}`);
+  }
+}
+
+/** Un champ diffère-t-il de sa valeur initiale (ou sera-t-il modifié) ? */
+function isFieldDirty(field) {
+  const entry = state.fields[field.path];
+  if (entry?.lockedByEnv) return false;
+  if (field.kind === "secret") {
+    const secret = state.secretState.get(field.path);
+    if (!secret) return false;
+    if (secret.mode === "clear") return true;
+    return Boolean(secret.input && secret.input.value.trim() !== "");
+  }
+  if (state.pendingResets.has(field.path)) return true;
+  const control = state.inputs.get(field.path);
+  if (!control) return false;
+  return String(control.value) !== String(state.initial.get(field.path));
+}
+
+/**
+ * Recalcule l'indicateur global « modifications non enregistrées » et les
+ * pastilles par onglet. Le calcul porte sur TOUS les champs du DOM, y compris
+ * ceux des onglets masqués (pas seulement l'onglet actif).
+ */
+function updateDirtyIndicators() {
+  const dirtyTabs = new Set();
+  let anyDirty = false;
+  for (const group of GROUPS) {
+    const tabId = TAB_BY_GROUP.get(group.id);
+    for (const field of group.fields) {
+      if (isFieldDirty(field)) {
+        anyDirty = true;
+        if (tabId) dirtyTabs.add(tabId);
+      }
+    }
+  }
+  if (saveDirty) saveDirty.hidden = !anyDirty;
+  for (const button of tabButtons) {
+    const tabId = button.getAttribute("aria-controls").replace(/^panel-/, "");
+    const dirty = dirtyTabs.has(tabId);
+    button.classList.toggle("config-tab--dirty", dirty);
+    const label = button.textContent.trim();
+    if (dirty) button.setAttribute("aria-label", `${label} — modifications non enregistrées`);
+    else button.removeAttribute("aria-label");
   }
 }
 
@@ -622,14 +742,7 @@ async function waitForGatewayRestart() {
   saveButton.disabled = false;
 }
 
-async function restart() {
-  const confirmed = await HolafModal.confirm(
-    "Redémarrer Yuki ?",
-    "Cela interrompt la conversation et les jobs en cours.\n\n" +
-      "Yuki redémarre son programme en interne ; le conteneur reste en place.",
-  );
-  if (!confirmed) return;
-
+async function requestGatewayRestart() {
   restartButton.disabled = true;
   saveButton.disabled = true;
   setRestartStatus("Redémarrage demandé…");
@@ -649,9 +762,20 @@ async function restart() {
     );
     restartButton.disabled = false;
     saveButton.disabled = false;
-    return;
+    return false;
   }
   await waitForGatewayRestart();
+  return true;
+}
+
+async function restart() {
+  const confirmed = await HolafModal.confirm(
+    "Redémarrer Yuki ?",
+    "Cela interrompt la conversation et les jobs en cours.\n\n" +
+      "Yuki redémarre son programme en interne ; le conteneur reste en place.",
+  );
+  if (!confirmed) return;
+  await requestGatewayRestart();
 }
 
 function setPill(el, ok, onText, offText) {
@@ -698,16 +822,59 @@ async function pollHealth() {
 saveButton.addEventListener("click", () => void save());
 restartButton.addEventListener("click", () => void restart());
 
+// Navigation par onglets : clic, clavier (flèches + Home/End, activation au
+// focus), et hash (`#voix`, etc.) pour les liens directs et back/forward.
+for (const button of tabButtons) {
+  button.addEventListener("click", () => {
+    selectTab(button.getAttribute("aria-controls").replace(/^panel-/, ""), {
+      updateHash: true,
+    });
+  });
+}
+if (tablistEl) {
+  tablistEl.addEventListener("keydown", (event) => {
+    const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"];
+    if (!keys.includes(event.key)) return;
+    const index = tabButtons.indexOf(document.activeElement);
+    if (index === -1) return;
+    event.preventDefault();
+    let next = index;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      next = (index + 1) % tabButtons.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      next = (index - 1 + tabButtons.length) % tabButtons.length;
+    } else if (event.key === "Home") {
+      next = 0;
+    } else if (event.key === "End") {
+      next = tabButtons.length - 1;
+    }
+    selectTab(
+      tabButtons[next].getAttribute("aria-controls").replace(/^panel-/, ""),
+      { updateHash: true, focus: true },
+    );
+  });
+}
+window.addEventListener("hashchange", () => {
+  selectTab(tabFromHash() ?? "modeles");
+});
+
+// Onglet initial : celui du hash, sinon « Modèles ». Appliqué avant le
+// chargement des données pour que le bon panneau soit visible sans latence.
+selectTab(tabFromHash() ?? "modeles");
+
 void (async () => {
   try {
     await load();
     await pollHealth();
+    // Un seul lecteur Web Audio est partagé (voix + assistant) : la lecture
+    // nécessite un geste utilisateur, on `resume()` le contexte au clic.
+    const player = createTtsPlayer();
     if (voicesRoot) {
       voicesPanel = initVoicesPanel({
         root: voicesRoot,
         HolafFetch,
         HolafModal,
-        player: createTtsPlayer(),
+        player,
         getActiveVoice: () => String(state.fields["tts.voice"]?.value ?? ""),
         onVoiceSelected: (id) => {
           const entry = state.fields["tts.voice"];
@@ -715,7 +882,21 @@ void (async () => {
           const input = state.inputs.get("tts.voice");
           if (input) input.value = id;
           state.initial.set("tts.voice", id);
+          updateDirtyIndicators();
         },
+      });
+    }
+    // Assistant de mise en route du TTS (Lot 8) : composant autonome monté par
+    // id. Changer son emplacement ne tient qu'à la ligne ci-dessous.
+    if (ttsAssistantRoot) {
+      initTtsAssistant(ttsAssistantRoot, {
+        HolafFetch,
+        HolafModal,
+        player,
+        getActiveVoice: () => String(state.fields["tts.voice"]?.value ?? ""),
+        onConfigChanged: () => void load(),
+        requestRestart: requestGatewayRestart,
+        openMaintenance: () => selectTab("maintenance", { updateHash: true }),
       });
     }
     setInterval(() => void pollHealth(), 5000);

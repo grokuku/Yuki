@@ -45,6 +45,22 @@ export interface JobsSubsystemSnapshot {
   maxConcurrent: number;
 }
 
+/**
+ * État informatif du service TTS (`audio.cpp`). **Jamais bloquant** :
+ * `/health/ready` ne dépend PAS de ce bloc (le TTS n'est pas requis pour la
+ * conversation). Valeurs :
+ *   - `off`         : désactivé par la config (`tts.enabled !== "on"`) ;
+ *   - `unreachable` : activé mais moteur injoignable ;
+ *   - `starting`    : joignable mais pas prêt (`ready:false`) ;
+ *   - `ready`       : joignable et prêt ;
+ *   - `error`       : joignable mais réponse en erreur / illisible.
+ */
+export interface TtsSubsystemSnapshot {
+  status: "off" | "unreachable" | "starting" | "ready" | "error";
+  modelCount: number | null;
+  engine: string;
+}
+
 export interface SubsystemsSnapshot {
   pi: PiSubsystemSnapshot;
   transport: {
@@ -53,6 +69,7 @@ export interface SubsystemsSnapshot {
   };
   llm: LlmSubsystemSnapshot;
   jobs: JobsSubsystemSnapshot;
+  tts: TtsSubsystemSnapshot;
 }
 
 export interface HealthDeps {
@@ -97,6 +114,11 @@ export function emptySubsystems(): SubsystemsSnapshot {
       failed: 0,
       interrupted: 0,
       maxConcurrent: 0,
+    },
+    tts: {
+      status: "off",
+      modelCount: null,
+      engine: "",
     },
   };
 }

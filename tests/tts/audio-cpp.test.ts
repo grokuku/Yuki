@@ -150,6 +150,36 @@ describe("AudioCppClient", () => {
     });
   });
 
+  it("capture le corps d'erreur du moteur (503 et 500)", async () => {
+    const busy = (async () =>
+      new Response('{"error":"Insufficient Memory"}', {
+        status: 503,
+      })) as unknown as typeof fetch;
+    const busyClient = new AudioCppClient({
+      baseUrl: "http://tts:8081",
+      timeoutMs: 1_000,
+      fetchImpl: busy,
+    });
+    await expect(busyClient.synthesizeBuffer(synthParams)).rejects.toMatchObject({
+      code: "server_busy",
+      status: 503,
+      body: '{"error":"Insufficient Memory"}',
+    });
+
+    const failure = (async () =>
+      new Response("boom", { status: 500 })) as unknown as typeof fetch;
+    const failureClient = new AudioCppClient({
+      baseUrl: "http://tts:8081",
+      timeoutMs: 1_000,
+      fetchImpl: failure,
+    });
+    await expect(failureClient.synthesizeBuffer(synthParams)).rejects.toMatchObject({
+      code: "http_error",
+      status: 500,
+      body: "boom",
+    });
+  });
+
   it("timeout → code timeout", async () => {
     const hanging = ((_url: string, init: RequestInit) =>
       new Promise((_resolve, reject) => {

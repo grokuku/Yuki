@@ -302,10 +302,21 @@ async function handlePreview(
     if (error instanceof AudioCppError) {
       const status =
         error.code === "server_busy" ? 503 : error.code === "timeout" ? 504 : 502;
+      // ⚠️ Un 503 du moteur ne signifie pas forcément « occupé » (il couvre
+      // aussi la mémoire insuffisante) : on remonte le corps brut pour que
+      // l'utilisateur puisse lire la vraie raison, sans prétendre trancher.
+      input.deps.logger.warn("voices.preview.engine_error", {
+        id,
+        code: error.code,
+        status: error.status,
+        ...(error.body ? { engine_body: error.body } : {}),
+      });
       return json(status, {
         error: error.code,
         code: error.code,
         message: error.message,
+        ...(error.status !== undefined ? { engineStatus: error.status } : {}),
+        ...(error.body ? { engineBody: error.body } : {}),
       });
     }
     input.deps.logger.error("voices.preview.failed", {

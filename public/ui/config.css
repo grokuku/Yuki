@@ -331,3 +331,120 @@
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
+
+/* ─── Onglets de configuration (5 sections) ─────────────────────────────── */
+
+.config-tabs {
+  margin-top: 8px;
+}
+
+/*
+ * Barre d'onglets : défilement horizontal sur petit écran (sans wrap),
+ * scrollbar masquée. L'onglet actif est piloté par `aria-selected` — aucun
+ * style inline (CSP `style-src 'self'`).
+ */
+.config-tablist {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 4px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.config-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+.config-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.config-tab:hover {
+  color: var(--text);
+}
+
+.config-tab:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -2px;
+}
+
+.config-tab[aria-selected="true"] {
+  color: var(--text);
+  border-color: var(--border);
+  border-bottom-color: var(--panel);
+  background: var(--panel);
+}
+
+/* Pastille « modifications non enregistrées » sur l'onglet concerné. */
+.config-tab__dot {
+  display: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.config-tab--dirty .config-tab__dot {
+  display: inline-block;
+}
+
+.config-panels {
+  padding-top: 16px;
+}
+
+.config-panel[hidden] {
+  display: none;
+}
+
+.config-groups > .config-group:last-child {
+  margin-bottom: 0;
+}
+
+/* Barre d'action persistante (sticky) : visible depuis tous les onglets. */
+.config-actions--sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: 8px 0 0;
+  padding: 12px 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+/* Indicateur « modifications non enregistrées » (global). */
+.config-dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.config-dirty[hidden] {
+  display: none;
+}
+
+.config-dirty::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
