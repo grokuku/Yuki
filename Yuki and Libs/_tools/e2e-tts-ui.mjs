@@ -345,6 +345,52 @@ check(
   JSON.stringify(emotionReveal),
 );
 
+/* — Honnêteté : « Débit (%) » suit la capacité réelle du moteur choisi — */
+const speedByEngine = await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#groups .config-row")];
+  const byLabel = (label) => rows.find((r) => r.querySelector('.config-label')?.textContent?.includes(label));
+  const engine = byLabel("Moteur")?.querySelector("select");
+  const speedRow = byLabel("Débit");
+  const speedInput = speedRow?.querySelector("input");
+  const noteText = () => {
+    const note = speedRow?.querySelector(".config-engine-note");
+    return note && !note.hidden ? note.textContent : "";
+  };
+  const setEngine = (value) => {
+    engine.value = value;
+    engine.dispatchEvent(new Event("input"));
+    engine.dispatchEvent(new Event("change"));
+  };
+  const initial = engine.value;
+  setEngine("chatterbox");
+  const chatterbox = { disabled: speedInput.disabled, note: noteText() };
+  setEngine("kokoro");
+  const kokoro = { disabled: speedInput.disabled, note: noteText() };
+  setEngine("qwen3-tts");
+  const qwen = { disabled: speedInput.disabled, note: noteText() };
+  setEngine(initial);
+  return {
+    initial,
+    chatterbox,
+    kokoro,
+    qwen,
+    restoredEngine: engine.value,
+    restoredDisabled: speedInput.disabled,
+  };
+})()`);
+check(
+  "[/config] « Débit » grisé + note pour chatterbox/qwen3-tts, actif pour kokoro (suit le moteur)",
+  speedByEngine.chatterbox.disabled === true &&
+    /Sans effet/.test(speedByEngine.chatterbox.note) &&
+    speedByEngine.kokoro.disabled === false &&
+    speedByEngine.kokoro.note === "" &&
+    speedByEngine.qwen.disabled === true &&
+    /Sans effet/.test(speedByEngine.qwen.note) &&
+    speedByEngine.restoredEngine === speedByEngine.initial &&
+    speedByEngine.restoredDisabled === true,
+  JSON.stringify(speedByEngine),
+);
+
 /* — Onglets : bascule au clic, navigation clavier, routage par hash — */
 const tabClick = await evaluate(`(() => {
   const tabs = [...document.querySelectorAll('[role=tab]')];
@@ -428,6 +474,32 @@ check(
     dirtyCheck.after.dot === true && dirtyCheck.after.indicator === true &&
     dirtyCheck.reverted.dot === false && dirtyCheck.reverted.indicator === false,
   JSON.stringify(dirtyCheck),
+);
+
+/* — Enregistrement d'un champ NUMÉRIQUE via le bouton « Enregistrer » — */
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll('#groups .config-row')];
+  const row = rows.find((r) => r.querySelector('.config-label')?.textContent?.includes('Débit'));
+  const input = row.querySelector('input');
+  input.value = '133';
+  input.dispatchEvent(new Event('input'));
+  document.getElementById('save').click();
+  return true;
+})()`);
+await sleep(900);
+const numericSave = await evaluate(
+  `fetch("/api/config").then((r) => r.json()).then((b) => ({
+    speed: b.fields["tts.speed"].value,
+    status: document.getElementById("save-status").textContent,
+    globalError: document.getElementById("global-error").hidden
+      ? "" : document.getElementById("global-error").textContent,
+  }))`,
+  true,
+);
+check(
+  "[/config] « Enregistrer » d'un champ numérique (Débit) → persistance, aucun message d'erreur",
+  numericSave.speed === 133 && /Enregistré/.test(numericSave.status) && numericSave.globalError === "",
+  JSON.stringify(numericSave),
 );
 
 await shot("config-tabs-voix");
@@ -548,9 +620,14 @@ check(
   JSON.stringify(a.engineSummary),
 );
 check(
-  "[/config] bloc « à la main » présent avec les 2 actions",
-  a.hasManual && /--profile tts up -d/.test(a.manualText) && /yuki-models/.test(a.manualText),
-  JSON.stringify(a.manualText.slice(0, 160)),
+  "[/config] bloc « à la main » présent, exact (bind mount, sans profil obsolète)",
+  a.hasManual &&
+    /Vérifier que le service/.test(a.manualText) &&
+    /docker compose logs tts/.test(a.manualText) &&
+    /\/models/.test(a.manualText) &&
+    !/--profile/.test(a.manualText) &&
+    !/yuki-models/.test(a.manualText),
+  JSON.stringify(a.manualText.slice(0, 200)),
 );
 check("[/config] boutons « Tester la voix » + « Vérifier le moteur » présents", a.hasTest && a.hasRefresh);
 check(
@@ -650,9 +727,12 @@ const testResult = await evaluate(`(() => ({
   error: !!document.querySelector("#tts-assistant-root .tts-test__error"),
 }))()`);
 check(
-  "[/config] « Tester la voix » → WAV reçu, voix et moteur réellement utilisés affichés",
-  !testResult.error && /voix réellement utilisée/i.test(testResult.text) && /chatterbox/.test(testResult.text),
-  JSON.stringify(testResult.text.slice(0, 200)),
+  "[/config] « Tester la voix » → WAV reçu, voix/moteur/référence réellement utilisés affichés",
+  !testResult.error &&
+    /voix réellement utilisée/i.test(testResult.text) &&
+    /chatterbox/.test(testResult.text) &&
+    /\/voices\/presets\/camille\.wav/.test(testResult.text),
+  JSON.stringify(testResult.text.slice(0, 240)),
 );
 await shot("config-assistant-test");
 

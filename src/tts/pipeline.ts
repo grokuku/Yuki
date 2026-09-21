@@ -105,7 +105,12 @@ export interface TtsPipelineDeps {
   enabled: boolean;
   config: TtsPipelineConfig;
   synthesizer: SegmentSynthesizer;
-  /** Résout un id de voix du registre ; `null` = voix par défaut. */
+  /**
+   * Résout l'id de voix configuré (`tts.voice`) en voix à utiliser : un id
+   * **vide ou inconnu** retombe sur la voix **par défaut** du registre (premier
+   * preset), `null` = aucune voix disponible. C'est le MÊME résolveur que
+   * l'aperçu et le test (câblage `src/index.ts` via `VoiceStore.resolveVoice`).
+   */
   resolveVoice: (id: string) => Voice | null;
   logger: TtsLogger;
   now?: () => number;
@@ -400,12 +405,14 @@ export class TtsPipeline {
   }
 
   private resolveVoice(): Voice | null {
+    // On DÉLÈGUE toujours, y compris pour un id vide : le résolveur applique la
+    // voix par défaut du registre (premier preset). Auparavant, un `tts.voice`
+    // vide court-circuitait en `null` → aucun `voice_ref` envoyé au moteur
+    // (Chatterbox refusait alors « requires speaker reference audio »).
     const id = this.deps.config.getString("tts.voice").trim();
-    if (id.length === 0) return null;
     const voice = this.deps.resolveVoice(id);
     if (!voice) {
-      this.deps.logger.warn("tts.voice.unknown", { id });
-      return null;
+      this.deps.logger.warn("tts.voice.unresolved", { id });
     }
     return voice;
   }

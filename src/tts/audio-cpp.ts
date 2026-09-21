@@ -16,15 +16,24 @@
  *   - côté lib Python Chatterbox : `language_id="fr"`, `exaggeration=0.5`,
  *     `cfg=0.5` (défauts).
  *
+ * ATTESTÉ par le **code source du runtime** (`/tmp/audiocpp`, commit local) :
+ *   - l'émotion se passe **dans `options`** : `exaggeration` (float, défaut 0.5)
+ *     et **`guidance_scale`** (float, défaut 0.5 — c'est le « cfg » de Yuki, =
+ *     le `cfg_weight` Python/T3 CFG) — `src/models/chatterbox/session.cpp:42-60`,
+ *     `include/engine/models/chatterbox/tts.h:19-32` ;
+ *   - le moteur lit AUSSI `s3gen_cfg_rate` (CFG du **flux S3Gen**, défaut 0.7),
+ *     mais c'est un **autre étage** que Yuki ne pilote pas ;
+ *   - seul `options_from_object(body.options)` alimente `request.options`
+ *     (`app/server/runtime.cpp:1994-2006`) ;
+ *   - le **débit** est **top-level** mais **par-modèle** (`runtime.cpp:2107-2127`).
+ *
  * NON ATTESTÉ (à vérifier en réel — C1/C17) :
  *   - le **nom d'option de requête** pour choisir une voix (`voice` ? `speaker`
  *     ? `voice_ref` ? un preset ?) — on tente `voice` + `voice_ref` ;
  *   - l'acceptation d'une **référence par requête** (par opposition à un
  *     chargement au démarrage) ;
- *   - l'**exposition d'`exaggeration`/`cfg`** par le serveur HTTP (documentés
- *     seulement côté lib Python) ;
  *   - la **clé de langue** HTTP (`language` vs `language_id`) ;
- *   - la clé exacte du texte (`input` vs `text`) et du débit.
+ *   - la clé exacte du texte (`input` vs `text`).
  *
  * Aucun câblage dans le flux de conversation dans ce lot : le client est livré
  * avec ses tests, prêt à être appelé par le pipeline (lot suivant).
@@ -57,12 +66,48 @@ export const AUDIO_CPP_KEYS = {
   referenceText: { key: "reference_text", attested: true },
   /** Langue (la lib Python utilise `language_id` ; clé HTTP non prouvée). */
   language: { key: "language", attested: false },
-  /** Expressivité (lib Python attestée, surface HTTP NON prouvée). */
-  exaggeration: { key: "exaggeration", attested: false },
-  /** Guidance CFG (lib Python attestée, surface HTTP NON prouvée). */
-  cfg: { key: "cfg", attested: false },
-  /** Débit (hypothèse ; le format attendu n'est pas prouvé). */
-  speed: { key: "speed", attested: false },
+  /**
+   * **Objet d'options par requête** — les réglages d'émotion NE SONT PAS lus au
+   * top-level. `build_speech_request` ne copie au top-level qu'une **liste
+   * fixe** (`seed`, `temperature`, `top_k`, `top_p`, `max_tokens`, `max_steps`,
+   * `repetition_penalty`, `guidance_scale`, `num_inference_steps`,
+   * `instructions`) puis affecte `request.options = options_from_object(body.options)`
+   * (`app/server/runtime.cpp:1994-2006`). Une clé top-level inconnue n'est ni
+   * lue ni rejetée : elle part « dans le vide ».
+   */
+  options: { key: "options", attested: true },
+  /**
+   * Expressivité — lue par la session Chatterbox **DANS `options`**
+   * (`src/models/chatterbox/session.cpp:45-46`), type `float`, défaut moteur
+   * `0.5` (`include/engine/models/chatterbox/tts.h:20`). Aucune borne côté
+   * moteur (`parse_float_option`, pas de clamp).
+   */
+  exaggeration: { key: "exaggeration", attested: true },
+  /**
+   * « CFG » de Yuki (`tts.cfg`, défaut 0.5) — lu **DANS `options`**
+   * (`src/models/chatterbox/session.cpp:47-48`). Nom **réel** côté moteur :
+   * **`guidance_scale`**, le CFG du **T3** (`src/models/chatterbox/t3_component.cpp:615`
+   * `logits = cond + guidance_scale·(cond−uncond)`). C'est l'équivalent du
+   * **`cfg_weight`** de l'API Python (même défaut **0.5**,
+   * `include/engine/models/chatterbox/tts.h:21`) — donc le « cfg » de la spec
+   * `docs/lot7.md` (§10.7).
+   *
+   * ⚠️ Le moteur lit AUSSI `s3gen_cfg_rate` (CFG du **flux S3Gen**, défaut
+   * **0.7**, `src/models/chatterbox/session.cpp:57-60`), mais c'est un **autre
+   * étage** — l'équivalent de `model.s3gen.flow.inference_cfg_rate` côté Python
+   * (réglé séparément, cf. `tests/chatterbox/chatterbox_python_warm_bench.py:109`),
+   * **pas** de `cfg_weight`. Yuki ne le pilote pas (il reste au défaut moteur).
+   */
+  guidanceScale: { key: "guidance_scale", attested: true },
+  /**
+   * Débit — clé **top-level attestée** (`app/server/README.md:5`,
+   * `app/server/runtime.cpp:2112-2124`), MAIS **par-modèle** : le serveur
+   * n'applique le multiplicateur que si le modèle supporte la vitesse, sinon il
+   * **rejette** (HTTP 500 « speed is not supported by this model ») pour un
+   * modèle à contrat schema-v1, ou l'**ignore** (spec legacy sans contrat).
+   * Voir `engineSupportsSpeed` / `SPEED_CAPABLE_ENGINES`.
+   */
+  speed: { key: "speed", attested: true },
   /** Format de sortie (`wav` demandé pour l'aperçu). */
   responseFormat: { key: "response_format", attested: false },
   /** Mode streaming (`sse` ou `audio`). */
@@ -98,6 +143,62 @@ function joinVoiceRef(baseDir: string, relative: string): string {
 }
 
 /**
+ * Moteurs de Yuki dont le modèle **applique réellement** un champ de débit au
+ * niveau requête. Source de vérité : les `model_specs/*.json` du runtime
+ * `audio.cpp` (`options.request[].name`) croisés avec
+ * `app/server/runtime.cpp:2112-2124`.
+ *
+ * | Moteur (enum `tts.engine`) | Spec (`request_option_keys`) | Effet d'un `speed` top-level |
+ * | --- | --- | --- |
+ * | `kokoro` | `kokoro_tts.json` : `speed` | **appliqué** (`runtime.cpp:2119`) |
+ * | `sanotts` | `sanotts.json` : `speaking_rate` | **appliqué** comme `speaking_rate` (`runtime.cpp:2121-2123`) |
+ * | `chatterbox` | `chatterbox.json` : **aucun** champ de débit | **ignoré** (spec legacy ⇒ `accepts_speed=true`, mais la session ne lit pas `speed`) |
+ * | `qwen3-tts` | `qwen3_tts.json` : **aucun** champ de débit | **rejeté** (HTTP 500, `runtime.cpp:2116-2118`) |
+ * | `cosyvoice3` | `cosyvoice3.json` : **aucun** champ de débit | **rejeté** (HTTP 500) |
+ *
+ * On **omet** donc la clé pour tout moteur non listé : cela évite le rejet dur
+ * (qwen3-tts, cosyvoice3) et n'enlève rien à ceux qui l'ignorent (chatterbox).
+ * Un moteur inconnu est traité comme non supporté (omission prudente).
+ */
+const SPEED_CAPABLE_ENGINES: ReadonlySet<string> = new Set([
+  "kokoro",
+  // Nom de famille du runtime (au cas où `tts.engine` porterait la famille).
+  "kokoro_tts",
+  "sanotts",
+]);
+
+/** `true` si un `speed` top-level a un effet réel pour ce moteur. */
+export function engineSupportsSpeed(engine: string): boolean {
+  return SPEED_CAPABLE_ENGINES.has(engine.trim().toLowerCase());
+}
+
+/**
+ * Moteurs dont le modèle **lit réellement** les réglages d'émotion portés par
+ * l'objet `options` (`exaggeration`, `guidance_scale`).
+ *
+ * | Moteur (`tts.engine`) | Lecture d'émotion | Preuve |
+ * | --- | --- | --- |
+ * | `chatterbox` | **oui** (`exaggeration`, `guidance_scale`) | `src/models/chatterbox/session.cpp:42-60` |
+ * | `qwen3-tts`, `cosyvoice3`, `kokoro`, `sanotts`, inconnu | **non** | aucun `make_voice_clone_config`/lecture d'`exaggeration` dans ces familles |
+ *
+ * On n'émet donc l'objet `options` d'émotion que pour **Chatterbox** : envoyer
+ * ces clés à une famille qui ne les lit pas est inutile (au mieux) et risqué
+ * pour un moteur à contrat strict (au pire). Le mode Turbo de Chatterbox
+ * (`chatterbox_turbo`) est une **famille séparée** qui **ignore** ces champs
+ * (`include/engine/community_models/chatterbox_turbo/tts.h:24`) et n'est pas un
+ * choix de l'enum `tts.engine`.
+ */
+const EMOTION_CAPABLE_ENGINES: ReadonlySet<string> = new Set(["chatterbox"]);
+
+/**
+ * `true` si `exaggeration` / `guidance_scale` (dans `options`) ont un effet réel
+ * pour ce moteur. L'émotion est **spécifique à Chatterbox**.
+ */
+export function engineSupportsEmotion(engine: string): boolean {
+  return EMOTION_CAPABLE_ENGINES.has(engine.trim().toLowerCase());
+}
+
+/**
  * ADAPTATEUR UNIQUE : construit la requête `POST /v1/audio/speech` à partir
  * d'une **voix Yuki** (ou `null` = voix par défaut du service), d'un **texte**
  * et des **options d'émotion**. Voir `AUDIO_CPP_KEYS` pour l'incertitude.
@@ -118,10 +219,22 @@ export function toAudioCppRequest(
     [AUDIO_CPP_KEYS.text.key]: text,
     [AUDIO_CPP_KEYS.language.key]: options.language,
     [AUDIO_CPP_KEYS.responseFormat.key]: "wav",
-    // Pour-mille → réel (spec §9.1).
-    [AUDIO_CPP_KEYS.exaggeration.key]: emotion.exaggeration / 1000,
-    [AUDIO_CPP_KEYS.cfg.key]: emotion.cfg / 1000,
   };
+
+  // Émotion : les réglages voyagent DANS `options` (le top-level n'est PAS lu
+  // par le serveur, cf. `AUDIO_CPP_KEYS.options`). Noms et échelle réels :
+  //   - `exaggeration`    : float, défaut moteur 0.5 ;
+  //   - `guidance_scale`  : float, défaut moteur 0.5 — le « cfg » de Yuki
+  //                         (`tts.cfg`) = `cfg_weight` Python (T3 CFG).
+  // (`s3gen_cfg_rate` est un AUTRE étage, non piloté par Yuki.)
+  // Pour-mille → réel (`/1000`, spec §9.1). Émis UNIQUEMENT pour Chatterbox
+  // (`engineSupportsEmotion`) : c'est la seule famille qui lit ces clés.
+  if (engineSupportsEmotion(options.engine)) {
+    payload[AUDIO_CPP_KEYS.options.key] = {
+      [AUDIO_CPP_KEYS.exaggeration.key]: emotion.exaggeration / 1000,
+      [AUDIO_CPP_KEYS.guidanceScale.key]: emotion.cfg / 1000,
+    };
+  }
 
   if (voice) {
     payload[AUDIO_CPP_KEYS.voice.key] = voice.id;
@@ -136,7 +249,11 @@ export function toAudioCppRequest(
     }
   }
 
-  if (options.speed !== 100) {
+  // Débit : multiplicateur `speed/100` (UI en % ; 100 = 1.0). Envoyé
+  // UNIQUEMENT aux moteurs qui l'appliquent — les autres le rejettent (HTTP 500)
+  // ou l'ignorent, donc l'envoyer n'aurait aucun effet (au mieux) ou casserait
+  // la synthèse (au pire). Cf. `engineSupportsSpeed`.
+  if (options.speed !== 100 && engineSupportsSpeed(options.engine)) {
     payload[AUDIO_CPP_KEYS.speed.key] = options.speed / 100;
   }
   if (options.stream) {
@@ -152,6 +269,22 @@ export function toAudioCppRequest(
     },
     body: JSON.stringify(payload),
   };
+}
+
+/**
+ * Chemin `voice_ref` **réellement présent** dans un corps de requête sérialisé
+ * (diagnostic `x-yuki-tts-voice-ref`), ou `null` s'il est absent/illisible.
+ * On lit le corps SÉRIALISÉ : aucune divergence possible avec ce qui a été
+ * réellement envoyé au moteur.
+ */
+export function voiceRefOf(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const value = parsed[AUDIO_CPP_KEYS.voiceRef.key];
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Sous-ensemble du logger d'observabilité requis par le client. */

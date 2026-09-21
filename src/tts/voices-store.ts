@@ -44,13 +44,34 @@ export const VOICES_REGISTRY_SCHEMA_VERSION = 1;
 
 /** Erreur métier du magasin de voix : porte un statut HTTP exploitable. */
 export class VoiceStoreError extends Error {
-  override readonly name = "VoiceStoreError";
+  override readonly name: string = "VoiceStoreError";
   constructor(
     readonly code: string,
     readonly status: number,
     message: string,
   ) {
     super(message);
+  }
+}
+
+/**
+ * La voix déclare une référence audio (`refAudio`) dont le fichier est **absent**
+ * du volume. Sans cette vérification, l'appel au moteur partirait avec un
+ * `voice_ref` fantôme et échouerait **opaque** (« requires speaker reference
+ * audio ») au lieu de nommer le fichier manquant.
+ */
+export class VoiceReferenceError extends VoiceStoreError {
+  override readonly name = "VoiceReferenceError";
+  constructor(
+    readonly voiceId: string,
+    /** Chemin attendu du WAV côté gateway (volume des voix). */
+    readonly samplePath: string,
+  ) {
+    super(
+      "voice_ref_missing",
+      422,
+      `Fichier de référence introuvable pour la voix « ${voiceId} » : ${samplePath}.`,
+    );
   }
 }
 
@@ -180,8 +201,11 @@ export class VoiceStore {
   }
 
   /**
-   * Voix par défaut : premier **preset** « factory » du registre, sinon `null`
-   * (dans ce cas le service `tts` applique son propre `default_voice_preset`).
+   * Voix par défaut : premier **preset** du registre, sinon `null`. C'est la
+   * voix appliquée quand `tts.voice` est vide *ou* inconnu (cf. `resolveVoice`).
+   * `null` ⇒ aucune voix : l'adaptateur n'envoie alors **aucun** champ de voix
+   * et le moteur (Chatterbox) refusera faute de référence — d'où l'intérêt
+   * d'avoir toujours au moins un preset dans le registre.
    */
   defaultVoice(): Voice | null {
     return this.read().find((voice) => voice.kind === "preset") ?? null;
@@ -204,13 +228,34 @@ export class VoiceStore {
     return { voice: this.defaultVoice(), fellBack: false };
   }
 
-  /** Chemin absolu (côté gateway) du WAV de référence, ou `null`. */
-  samplePath(id: string): string | null {
-    const voice = this.get(id);
-    if (!voice?.refAudio) return null;
+  /**
+   * Chemin absolu (côté gateway) du WAV de référence d'une voix **déjà résolue**,
+   * ou `null` si elle n'en déclare pas OU si le fichier est absent du volume.
+   * Ne relit PAS le registre : bon marché, sûre sur un chemin chaud.
+   */
+  samplePathOf(voice: Voice): string | null {
+    if (!voice.refAudio) return null;
     const path = resolveWithin(this.dir, voice.refAudio);
     if (!path || !existsSync(path)) return null;
     return path;
+  }
+
+  /** Chemin absolu (côté gateway) du WAV de référence, ou `null`. */
+  samplePath(id: string): string | null {
+    const voice = this.get(id);
+    return voice ? this.samplePathOf(voice) : null;
+  }
+
+  /**
+   * Vérifie que la référence audio d'une voix est **présente** dans le volume.
+   * Lève `VoiceReferenceError` sinon (cf. cette classe). Un `null` ou une voix
+   * sans `refAudio` ne lève pas : seul un `refAudio` déclaré mais introuvable
+   * est une erreur (le registre est censé ne jamais pointer dans le vide).
+   */
+  assertSample(voice: Voice | null | undefined): void {
+    if (voice?.refAudio && this.samplePathOf(voice) === null) {
+      throw new VoiceReferenceError(voice.id, join(this.dir, voice.refAudio));
+    }
   }
 
   /**

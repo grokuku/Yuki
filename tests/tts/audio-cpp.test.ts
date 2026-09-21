@@ -39,12 +39,17 @@ function bodyOf(request: { body: string }): Record<string, unknown> {
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
+/** Objet `options` du corps (émotion), ou `null` s'il est absent. */
+function optionsOf(request: { body: string }): Record<string, unknown> | null {
+  const value = bodyOf(request).options;
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
 describe("toAudioCppRequest", () => {
   it("construit l'URL et les clés attestées/hypothétiques", () => {
     const request = toAudioCppRequest(voice, "Bonjour.", {
       ...baseOptions,
       emotion: "expressive",
-      speed: 120,
     });
     expect(request.url).toBe(`http://tts:8081${AUDIO_CPP_SPEECH_PATH}`);
     expect(request.method).toBe("POST");
@@ -56,31 +61,36 @@ describe("toAudioCppRequest", () => {
     expect(body.reference_text).toBe("bonjour");
     expect(body.language).toBe("fr");
     expect(body.response_format).toBe("wav");
-    // expressive → (700, 400) pour-mille → réels.
-    expect(body.exaggeration).toBeCloseTo(0.7, 5);
-    expect(body.cfg).toBeCloseTo(0.4, 5);
-    expect(body.speed).toBeCloseTo(1.2, 5);
+    // L'émotion n'est JAMAIS au top-level : elle vit dans `options`.
+    expect(body.exaggeration).toBeUndefined();
+    expect(body.cfg).toBeUndefined();
+    // expressive → (700, 400) pour-mille → réels, dans `options`.
+    const options = optionsOf(request)!;
+    expect(options.exaggeration).toBeCloseTo(0.7, 5);
+    expect(options.guidance_scale).toBeCloseTo(0.4, 5);
   });
 
   it("honore le cran personnalisee (valeurs fines)", () => {
-    const body = bodyOf(
+    const options = optionsOf(
       toAudioCppRequest(voice, "x", {
         ...baseOptions,
         emotion: "personnalisee",
         exaggeration: 900,
         cfg: 100,
       }),
-    );
-    expect(body.exaggeration).toBeCloseTo(0.9, 5);
-    expect(body.cfg).toBeCloseTo(0.1, 5);
+    )!;
+    expect(options.exaggeration).toBeCloseTo(0.9, 5);
+    expect(options.guidance_scale).toBeCloseTo(0.1, 5);
   });
 
   it("sans voix, n'envoie ni voice ni voice_ref (défaut du service)", () => {
-    const body = bodyOf(toAudioCppRequest(null, "x", baseOptions));
+    const request = toAudioCppRequest(null, "x", baseOptions);
+    const body = bodyOf(request);
     expect(body.voice).toBeUndefined();
     expect(body.voice_ref).toBeUndefined();
-    expect(body.exaggeration).toBeCloseTo(0.5, 5);
-    expect(body.cfg).toBeCloseTo(0.5, 5);
+    const options = optionsOf(request)!;
+    expect(options.exaggeration).toBeCloseTo(0.5, 5);
+    expect(options.guidance_scale).toBeCloseTo(0.5, 5);
   });
 
   it("au débit par défaut, omet la clé speed", () => {
@@ -108,6 +118,110 @@ describe("toAudioCppRequest", () => {
     expect(body.voice).toBe("camille");
     expect(body.voice_ref).toBeUndefined();
     expect(body.reference_text).toBeUndefined();
+  });
+});
+
+/**
+ * Émotion : le serveur ne lit `exaggeration` / `guidance_scale` que dans
+ * l'objet `options` (jamais au top-level), et **seule la famille Chatterbox**
+ * les lit (`src/models/chatterbox/session.cpp:42-60`,
+ * `app/server/runtime.cpp:1994-2006`). Preuve : nom exact de la clé (le « cfg »
+ * de Yuki = `guidance_scale` = `cfg_weight` Python/T3 CFG ; `s3gen_cfg_rate`
+ * est un AUTRE étage), niveau (`options`) et échelle (pour-mille → réel).
+ */
+describe("toAudioCppRequest — émotion (`options`) par moteur", () => {
+  const at = (engine: string, exaggeration: number, cfg: number) =>
+    optionsOf(
+      toAudioCppRequest(voice, "x", {
+        ...baseOptions,
+        engine,
+        emotion: "personnalisee",
+        exaggeration,
+        cfg,
+      }),
+    );
+
+  it("chatterbox : émotion dans `options` avec les noms réels", () => {
+    const options = at("chatterbox", 700, 400)!;
+    expect(options).not.toBeNull();
+    expect(options.exaggeration).toBeCloseTo(0.7, 5);
+    expect(options.guidance_scale).toBeCloseTo(0.4, 5);
+    // `s3gen_cfg_rate` (CFG du flux S3Gen, défaut moteur 0.7) n'est PAS piloté.
+    expect(options.s3gen_cfg_rate).toBeUndefined();
+    // Le faux nom top-level `cfg` n'existe nulle part.
+    expect(options.cfg).toBeUndefined();
+  });
+
+  it("échelle : 0 / 500 / 1000 / 1500 ‰ → 0.0 / 0.5 / 1.0 / 1.5", () => {
+    for (const [permille, real] of [
+      [0, 0],
+      [500, 0.5],
+      [1000, 1],
+      [1500, 1.5],
+    ] as const) {
+      const options = at("chatterbox", permille, permille)!;
+      expect(options.exaggeration, `exaggeration ${permille}‰`).toBeCloseTo(real, 5);
+      expect(options.guidance_scale, `guidance_scale ${permille}‰`).toBeCloseTo(real, 5);
+    }
+  });
+
+  it("aucune autre famille ne reçoit l'émotion (ni top-level, ni `options`)", () => {
+    for (const engine of ["qwen3-tts", "cosyvoice3", "kokoro", "sanotts", "inconnu"]) {
+      const request = toAudioCppRequest(voice, "x", {
+        ...baseOptions,
+        engine,
+        emotion: "expressive",
+      });
+      expect(optionsOf(request), engine).toBeNull();
+      expect(bodyOf(request).exaggeration, engine).toBeUndefined();
+      expect(bodyOf(request).cfg, engine).toBeUndefined();
+    }
+  });
+});
+
+/**
+ * Débit : le serveur n'honore `speed` que si le modèle le supporte ; sinon il
+ * **rejette** (HTTP 500) ou l'**ignore**. Yuki ne doit donc l'envoyer qu'aux
+ * moteurs qui l'appliquent réellement (`engineSupportsSpeed`). Preuve moteur :
+ * `app/server/runtime.cpp:2112-2124`, `model_specs/*.json` (`options.request`).
+ */
+describe("toAudioCppRequest — débit (`speed`) par moteur", () => {
+  it("kokoro : 50/200 → 0.5/2.0 (multiplicateur), 100 → clé omise", () => {
+    const at = (speed: number, engine: string) =>
+      bodyOf(toAudioCppRequest(voice, "x", { ...baseOptions, engine, speed }));
+    expect(at(50, "kokoro").speed).toBeCloseTo(0.5, 5);
+    expect(at(200, "kokoro").speed).toBeCloseTo(2.0, 5);
+    expect(at(100, "kokoro").speed).toBeUndefined();
+  });
+
+  it("sanotts : `speed` envoyé (le serveur l'applique comme `speaking_rate`)", () => {
+    const body = bodyOf(
+      toAudioCppRequest(voice, "x", { ...baseOptions, engine: "sanotts", speed: 150 }),
+    );
+    expect(body.speed).toBeCloseTo(1.5, 5);
+  });
+
+  it("chatterbox : aucun `speed` (ignoré/rejeté par le modèle → sans effet)", () => {
+    const body = bodyOf(
+      toAudioCppRequest(voice, "x", { ...baseOptions, engine: "chatterbox", speed: 200 }),
+    );
+    expect(body.speed).toBeUndefined();
+  });
+
+  it("qwen3-tts / cosyvoice3 : aucun `speed` (sinon HTTP 500 côté moteur)", () => {
+    for (const engine of ["qwen3-tts", "cosyvoice3"]) {
+      const body = bodyOf(
+        toAudioCppRequest(voice, "x", { ...baseOptions, engine, speed: 50 }),
+      );
+      expect(body.speed, engine).toBeUndefined();
+    }
+  });
+
+  it("moteur inconnu : omission prudente (jamais de rejet dur)", () => {
+    const body = bodyOf(
+      toAudioCppRequest(voice, "x", { ...baseOptions, engine: "inconnu", speed: 150 }),
+    );
+    expect(body.speed).toBeUndefined();
   });
 });
 

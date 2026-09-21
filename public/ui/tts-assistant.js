@@ -368,9 +368,9 @@ export function describeModelsDir(modelsDir) {
       files: [],
       truncated: false,
       message:
-        "Aucun modèle de voix n'est installé. Déposez le fichier du modèle dans le volume " +
-        "« yuki-models » (c'est une action HORS Yuki : le gateway n'écrit jamais dans ce volume, " +
-        "monté en lecture seule).",
+        "Aucun modèle de voix n'est installé. Déposez le fichier du modèle dans le dossier " +
+        "des modèles monté sur ce conteneur (c'est une action HORS Yuki : le gateway n'écrit " +
+        "jamais dans ce dossier, monté en lecture seule).",
     };
   }
   return {
@@ -867,6 +867,9 @@ export function initTtsAssistant(root, deps = {}) {
       const voice = response.headers.get("x-yuki-tts-voice") || "default";
       const engine =
         response.headers.get("x-yuki-tts-engine") || lastStatus?.engine || "?";
+      // Chemin du WAV de référence RÉELLEMENT envoyé au moteur (`voice_ref`) :
+      // c'est l'information qui manque pour diagnostiquer une voix non prise.
+      const voiceRef = response.headers.get("x-yuki-tts-voice-ref");
       let played = false;
       if (player && typeof player.playWav === "function") {
         const buffer = await response.arrayBuffer();
@@ -888,6 +891,15 @@ export function initTtsAssistant(root, deps = {}) {
             : " (lecture indisponible : la synthèse a réussi, mais le navigateur n'a pas pu jouer le son).",
         ]),
       );
+      if (voiceRef) {
+        testFeedback.append(
+          h("p", { class: "config-helper" }, [
+            "Fichier de référence envoyé au moteur : ",
+            code(voiceRef),
+            ".",
+          ]),
+        );
+      }
       testFeedback.append(
         h("p", {
           class: "config-helper",
@@ -955,48 +967,48 @@ export function initTtsAssistant(root, deps = {}) {
 
   /* — Bloc « à la main » (les 2 actions hors UI) — */
   function buildManualSection() {
-    const startCommand = "docker compose --profile tts up -d";
-    const depositCommand =
-      "docker run --rm -v yuki-models:/models -v \"$PWD\":/src alpine \\\n" +
-      "  cp /src/mon-modele.gguf /models/";
     return h("section", { class: "tts-assistant__block tts-assistant__manual", "aria-labelledby": "tts-manual-title" }, [
       h("h3", { class: "tts-assistant__title", id: "tts-manual-title", text: "Ce qui reste à faire à la main" }),
       h("p", {
         class: "config-helper",
         text:
           "Deux actions ne peuvent PAS être faites depuis l'interface. Le gateway n'a aucun " +
-          "accès à Docker (pas de socket monté) et le volume des modèles est en lecture seule. " +
+          "accès à Docker (pas de socket monté) et le dossier des modèles n'est que lu. " +
           "C'est le seul moment où vous devez quitter l'interface.",
       }),
       h("ol", { class: "tts-manual__list" }, [
         h("li", { class: "tts-manual__item" }, [
           h("p", { class: "tts-manual__lead" }, [
-            h("strong", { text: "Démarrer le conteneur « tts »" }),
-            " (s'il n'est pas déjà démarré par la stack ; le `--profile` couvre la " +
-              "variante du dépôt racine, où le service est opt-in) :",
+            h("strong", { text: "Vérifier que le service « tts » est démarré" }),
+            " : il fait partie de la pile (il doit apparaître dans « ",
+            h("code", { text: "docker compose ps" }),
+            " »). S'il manque, ses journaux l'expliquent :",
           ]),
-          h("pre", { class: "tts-assistant__command", text: startCommand }),
+          h("pre", { class: "tts-assistant__command", text: "docker compose logs tts" }),
           h("p", {
             class: "config-helper",
-            text: "À exécuter sur l'hôte, à la racine du dépôt Yuki. Un GPU NVIDIA doit être disponible.",
+            text:
+              "À exécuter sur l'hôte, à la racine de votre déploiement Compose, et seulement si « tts » " +
+              "n'est pas déjà dans la pile (il doit être déclaré dans le même fichier Compose que le " +
+              "gateway et démarré avec lui). Un GPU NVIDIA doit être disponible.",
           }),
         ]),
         h("li", { class: "tts-manual__item" }, [
           h("p", { class: "tts-manual__lead" }, [
             h("strong", { text: "Déposer le fichier du modèle" }),
-            " dans le volume ",
-            code("yuki-models"),
-            " (monté en lecture seule sur ",
+            " dans le dossier de l'hôte monté sur ",
             code("/models"),
-            ", chemin visible ci-dessus) :",
+            " (bind mount) :",
           ]),
-          h("pre", { class: "tts-assistant__command", text: depositCommand }),
-          h("p", {
-            class: "config-helper",
-            text:
-              "Remplacez « mon-modele.gguf » par le fichier du modèle attendu par le moteur. " +
-              "Ne déposez PAS les voix ici : elles vivent dans le volume yuki-voices (gérable depuis cette page).",
-          }),
+          h("p", { class: "config-helper" }, [
+            "Ce dossier est en LECTURE SEULE pour le conteneur et son chemin dépend de VOTRE " +
+              "déploiement (variable d'environnement ou fichier Compose — vérifiez la section " +
+              "`volumes:` du service `tts`). Déposez-y le fichier .gguf attendu par le moteur, puis " +
+              "vérifiez qu'il apparaît dans la liste des modèles ci-dessus. Ne déposez PAS les voix " +
+              "ici : elles vivent dans le dossier monté sur ",
+            code("/voices"),
+            " (gérable depuis cette page).",
+          ]),
         ]),
       ]),
     ]);

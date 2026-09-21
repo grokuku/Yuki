@@ -584,13 +584,13 @@ confirmation d'activation (annulée), et **0 violation CSP**.
 
 ### Chiffres réels
 
-| Mesure | Avant ce lot | Après ce lot |
-| --- | --- | --- |
-| `npm test` | **437 passed / 4 skipped** (46 fichiers) | **466 passed / 4 skipped** (46 fichiers) |
-| E2E assistant | **37/37** vérifications OK, CSP=0 | **40/40** vérifications OK, CSP=0 |
-| `npm run typecheck` | OK | OK |
-| `npm run build` | OK | OK |
-| `node --check` (JS UI) | OK | OK |
+| Mesure | Avant ce lot | Après ce lot | Après correctif (D39, §11.13) | Après correctif débit (D40, §11.14) | Après correctif émotion + UI (D42, §11.16) |
+| --- | --- | --- | --- | --- | --- |
+| `npm test` | **437 passed / 4 skipped** (46 fichiers) | **466 passed / 4 skipped** (46 fichiers) | **483 passed / 4 skipped** (47 fichiers) | **488 passed / 4 skipped** (47 fichiers) | **514 passed / 4 skipped** (48 fichiers) |
+| E2E assistant | **37/37** vérifications OK, CSP=0 | **40/40** vérifications OK, CSP=0 | **40/40** vérifications OK, CSP=0 | **40/40** vérifications OK, CSP=0 | **42/42** vérifications OK, CSP=0 |
+| `npm run typecheck` | OK | OK | OK | OK | OK |
+| `npm run build` | OK | OK | OK | OK | OK |
+| `node --check` (JS UI) | OK | OK | OK | OK | OK |
 
 ### Captures (thèmes variés, `_tools/shots/`)
 
@@ -627,12 +627,16 @@ confirmation d'activation (annulée), et **0 violation CSP**.
 | **D36** | **`task` de Chatterbox = `clon` (pas `tts`)** : le runtime n'accepte pour cette famille que `clon`/`vc` (`loader.cpp:131-133`) ; les exemples de config du dépôt sont corrigés en conséquence (`config/audiocpp-server.json.example`, `deploy/server/audiocpp-server.json.example`). `mode: "offline"` conservé (seul mode supporté, et défaut). **Une voix de référence reste obligatoire** (`session.cpp:410-412`) : `task=clon` ne suffit pas, il faut **créer une voix** dans Yuki ou un `default_voice_preset`. | §11.11, `deploy/server/README.md` |
 | **D37** | **Échantillons de référence : `audio.cpp` en fournit** (licence du dépôt **Apache-2.0**), **mais uniquement en anglais/chinois** — `assets/resources/b.wav`(= `sample.wav`), `a.wav`, `c.wav`, `webui/native/demo_voices/demo_1_man.wav` (EN) + `demo_2..4` (ZH). **Aucun WAV français** dans `audio.cpp`, `resemble-ai/chatterbox` (MIT) ni `ResembleAI/chatterbox` (HF) ; le dossier GGUF `Chatterbox-GGUF` **ne contient aucun WAV**. Chatterbox **n'expose aucune voix par défaut** (« Built-in voices: Not exposed », `docs/tts.md`) ⇒ une **référence est toujours requise**. Voies **permissives** pour une voix FR : **CC0** (Common Voice, VoxPopuli) ou **CC-BY-4.0** (FLEURS, Piper mls/siwis). Intégration en preset = `presets/<id>.wav` + entrée `voices.json` (non implémenté, décision à proposer). | §7 « Sources de voix permissives », `docs/tts.md`, README `audio.cpp:638`, API GitHub/HF |
 | **D38** | **Référence française WAV « sans conversion » trouvée** : **SIWIS** (French Speech Synthesis Database, Idiap/Univ. Edinburgh, **CC-BY-4.0**) — miroir HF public (`Aviv-anthonnyolime/SIWIS_French_Speech_Synthesis_Database`). Fichier **`wavs/part1/neut_parl_s02_0343.wav`** : vérifié **HTTP 200** + en-tête lu ⇒ **RIFF/WAVE PCM (format 1), mono, 44 100 Hz, 16 bits, 5,05 s, 445 536 o** ⇒ dans **toutes** les bornes Yuki (≤ 10 s, ≤ 3 Mo, ≤ 192 kHz ; `src/tts/wav.ts`, `src/tts/voices-store.ts`) ⇒ **aucune conversion** (`ffmpeg` inutile). Voix **humaine**, **attribution CC-BY obligatoire**. Les échantillons Piper FR restent en **MP3** ⇒ conversion + **synthétiques**. Commande `curl` + bloc `voices.json` complets en **§11.12**. | §11.12, API HF, `src/tts/wav.ts` |
+| **D39** | **La voix par défaut est TOUJOURS appliquée quand `tts.voice` est vide ou inconnu** : le premier preset du registre (`defaultVoice()`) est utilisé **par le pipeline, le test et l'aperçu**, via un résolveur **unique** (`VoiceStore.resolveVoice`). Le chemin d'échec (aucun `voice_ref` envoyé alors qu'un preset existe ⇒ moteur « requires speaker reference audio ») est **corrigé**. Un `refAudio` déclaré mais **absent** du volume échoue **avant** le moteur (`voice_ref_missing`, 422). Diagnostic exposé dans l'en-tête `x-yuki-tts-voice-ref` et affiché par l'assistant. | §11.13, `src/index.ts`, `src/tts/pipeline.ts`, `src/gateway/routes/tts.ts`, `src/tts/voices-store.ts` |
+| **D40** | **Le débit n'est PAS appliqué par Chatterbox** : sa spec (`model_specs/chatterbox.json`) est **legacy** (ni `schema_version` ni `options`) ⇒ `model_contract()` renvoie `nullopt` ⇒ `accepts_speed=true` ⇒ le serveur range la valeur dans `options["speed"]`… que la **session Chatterbox ne lit jamais** (`make_voice_clone_config`) ⇒ **ignoré silencieusement**. « Aucun effet » est donc **attendu**. Correctif : `toAudioCppRequest` **n'émet `speed` que pour les moteurs qui l'appliquent** (`kokoro`, `sanotts`) ; il l'omet pour `chatterbox`/`qwen3-tts`/`cosyvoice3` (ces deux derniers le **rejettent** en HTTP 500). Champ de schéma inchangé. | §11.14, `src/tts/audio-cpp.ts` (`engineSupportsSpeed`), `app/server/runtime.cpp:2112-2124`, `src/models/chatterbox/session.cpp:43-76` |
+| **D41** | **Le patch de `/config` est typé correctement et l'UI montre la VRAIE cause d'échec** : `buildPatch` (extrait dans `public/ui/config-patch.js`) envoie les champs `number`/`range` en **entiers** ; `save()` affiche le **code + message réels** de l'API (`presentConfigSaveError`) avec le nom du champ, au lieu d'un texte générique. Le soupçon « chaîne ⇒ 400 » est **écarté** : le schéma coerce les chaînes numériques (`validateDescriptor`), prouvé par test (`{"tts.speed":"150"}` → 200). | §11.15, `public/ui/config-patch.js`, `public/ui/config.js`, `src/config/schema.ts:370-379`, `tests/ui/config-patch.test.ts`, `tests/gateway/config-api.test.ts` |
+| **D42** | **① L'émotion est réellement appliquée + ② l'UI est honnête sur le débit.** L'adaptateur `toAudioCppRequest` envoie **`exaggeration`** et **`guidance_scale`** **DANS l'objet `"options"`** (jamais au top-level), **uniquement** pour **Chatterbox** (`engineSupportsEmotion` ; les autres familles ne les lisent pas) ; conversion **pour-mille → réel** (`/1000`). ⚠️ Le « cfg » de Yuki (`tts.cfg`, défaut 0.5) = **`guidance_scale`** (T3 CFG = `cfg_weight` Python, défaut **0.5**) ; **`s3gen_cfg_rate`** (CFG du **flux S3Gen**, défaut **0.7**) est un **autre étage**, **non piloté** par Yuki (la doc antérieure l'identifiait à tort comme le « cfg »). Preuve moteur : `src/models/chatterbox/session.cpp:42-60`, `src/models/chatterbox/t3_component.cpp:615`, `include/engine/models/chatterbox/tts.h:19-32`, `app/server/runtime.cpp:1994-2006`. Côté UI (`public/ui/config-patch.js` `engineFieldState` + `public/ui/config.js` `refreshEngineFields`), le champ **« Débit (%) »** est **grisé + noté « Sans effet avec ce moteur. »** quand `tts.engine` ne l'applique pas (`kokoro`/`sanotts` sinon), et **suit le changement de moteur** ; les réglages d'**émotion** sont grisés pour tout moteur ≠ `chatterbox`. Un champ grisé **ne bloque PAS** l'enregistrement (le patch est inchangé). | §11.16, `src/tts/audio-cpp.ts` (`engineSupportsEmotion`, `AUDIO_CPP_KEYS.options`), `public/ui/config-patch.js`, `public/ui/config.js`, `tests/tts/audio-cpp.test.ts`, `tests/ui/config-patch.test.ts` |
 
 ### À confirmer (non vérifiable sans GPU / Docker / moteur)
 
 | # | Point ouvert | Impact |
 | --- | --- | --- |
-| **C18** | ✅ **LEVÉ (2026-09-21, source runtime)** — **Contrat HTTP réel d'`audio.cpp`** : `voice`/`voice_ref`/`reference_text` **et** `language` (top-level) sont **attestés** par le code du serveur ; `exaggeration` se passe dans `options` (le « cfg » de Chatterbox est `s3gen_cfg_rate`). Reste : la **valeur** d'émotion à utiliser (C27). | §11.5, §11.11, `docs/lot7.md` |
+| **C18** | ✅ **LEVÉ (2026-09-21, source runtime)** — **Contrat HTTP réel d'`audio.cpp`** : `voice`/`voice_ref`/`reference_text` **et** `language` (top-level) sont **attestés** par le code du serveur ; `exaggeration` se passe dans `options` (le « cfg » de Chatterbox est **`guidance_scale`**, pas `s3gen_cfg_rate`). ✅ **Valeur et clés tranchées** par le correctif **D42** (§11.16), point **C27** clos. | §11.5, §11.11, §11.16, `docs/lot7.md` |
 | **C19** | ✅ **LEVÉ (2026-09-21, source amont + constat réel)** — **`default_voice_preset` pour Chatterbox : inexistant par défaut.** L'intégration `audio.cpp` documente « Built-in voices: Not exposed by this integration » et exige un `--voice-ref` (`docs/tts.md`). Une requête **sans voix** échoue au `prepare` : `Chatterbox prepare requires speaker reference audio` (constat réel utilisateur). Un `default_voice_preset` (ou une voix Yuki) **doit donc être fourni explicitement** — il n'y a **pas** de voix « factory » côté moteur. | §7, §11.11, `docs/tts.md` |
 | **C20** | **Heuristique `modelMatchesEngine`** (id de `/v1/models` ↔ nom de moteur) : à valider sur la vraie liste | `src/gateway/routes/tts.ts:316-323` |
 | **C21** | ✅ **LEVÉ (2026-09-21, par EXÉCUTION RÉELLE)** — **CLI/port exacts** du service `tts` : l'ENTRYPOINT de l'image est un **dispatcher à sous-commandes** (`cli`/`server`/`model-manager`/`perf`) → `server --config /app/server.json` ; hôte/port sont des **clés de config** (`host`/`port`), pas des flags. Voir §11.4 | §11, `docs/lot7.md` C14 |
@@ -640,8 +644,9 @@ confirmation d'activation (annulée), et **0 violation CSP**.
 | **C23** | ✅ **LEVÉ (2026-09-21, API HF)** — **Noms exacts du GGUF** : `Chatterbox-GGUF/chatterbox-q8_0.gguf` (2 088 393 668 o) et `Chatterbox-GGUF/chatterbox-f16.gguf` (3 744 360 386 o). Preuve : `https://huggingface.co/api/models/audio-cpp/audio.cpp-gguf/tree/main/Chatterbox-GGUF` (le dossier ne contient **que** ces deux fichiers — **aucun WAV**). | §11.7, API HF |
 | **C24** | **Divergence éventuelle entre le point de montage des voix du GATEWAY et celui du MOTEUR** : les deux variantes Compose montent le volume sur `/voices` (`docker-compose.yml:100,193`, `deploy/server/docker-compose.yml:103,194`), donc `YUKI_MOUNT_VOICES` est réutilisé comme base absolue. Si un opérateur les fait diverger (ex. changer `YUKI_MOUNT_VOICES` côté gateway seulement), le chemin envoyé deviendrait faux. **Proposition** (non implémentée) : champ `tts.voiceBaseDir` (`string`, défaut `/voices`, `apply: restart`) pour découpler les deux. | §11.9 |
 | **C25** | **FORME EXACTE de `GET /health`** : la forme `{ ready, model_count }` issue de l'**archive est DÉMENTIE par l'exécution réelle** (moteur joignable, `/v1/models` = `chatterbox — tts`, mais `/health` ne renvoie pas de champ booléen `ready`). La forme réelle est **EN ATTENTE DE RELEVÉ** ; en attendant, la sonde est **tolérante** (jamais « erreur » sur un champ absent/incompris), conserve le **corps brut borné** (`status.payload`) et **journalise une fois** par forme les clés observées (`tts.health.shape`). Dès que le relevé réel sera fourni : **figer le schéma**, le documenter ici, et retirer l'heuristique de déduction si elle devient inutile. | §2.6, §11.10 |
-| **C26** | **Chatterbox en `task=clon` avec une voix réelle** : confirmer par un redémarrage + `curl` (§11.11) que le message disparaît et que l'audio est produit. L'auteur a **observé** le message `VoiceCloning and VoiceConversion` (registre vide, `task: tts`) ; la correction `task: clon` **n'est pas encore validée en réel**. | §11.11 |
-| **C27** | **`exaggeration`/`cfg` envoyés par Yuki sont ignorés** : le serveur ne lit ces clés qu'**dans l'objet `options`** (et le « cfg » de Chatterbox s'appelle **`s3gen_cfg_rate`**). **Proposition** (non implémentée, choix structurant) : faire porter `exaggeration`/`s3gen_cfg_rate` par `"options": {…}` dans `toAudioCppRequest` plutôt qu'au top-level — à valider (défaut de `s3gen_cfg_rate`, effet réel) avant de changer le contrat de l'adaptateur. | §11.5, §11.11, `src/tts/audio-cpp.ts:105-155` |
+| **C26** | ✅ **LEVÉ (2026-09-22, par l'utilisateur)** — **Chatterbox en `task=clon` + voix réelle : VALIDÉ en réel** — « le TTS fonctionne (la voix parle) ». Le message « requires speaker reference audio » a disparu et l'audio est produit (correction D39 + `task: "clon"`, D36). | §11.13, §11.16, D36, D39 |
+| **C27** | ✅ **LEVÉ (2026-09-22) — correctif D42** : `exaggeration` (float, défaut moteur **0.5**) et **`guidance_scale`** (float, défaut moteur **0.5** — c'est le « cfg » de Yuki = `cfg_weight` Python/T3 CFG) sont désormais portés par **`"options": {…}`** dans `toAudioCppRequest`, **uniquement** pour `chatterbox`, à l'échelle **pour-mille → réel** (`/1000`). ⚠️ **Correction de la conclusion antérieure** : `s3gen_cfg_rate` (défaut 0.7) est le CFG du **flux S3Gen**, un **autre étage** — ce n'est **pas** le `cfg` de Yuki ; il n'est pas piloté. Les modèles qui ne lisent pas ces clés ne les reçoivent **jamais** (`engineSupportsEmotion`), et l'UI les grise pour eux. | §11.16, `src/tts/audio-cpp.ts`, `tests/tts/audio-cpp.test.ts` |
+| **C28** | ✅ **LEVÉ (2026-09-22, par l'utilisateur)** — **cause de l'échec d'enregistrement identifiée** : une **valeur sous le minimum `50`** de `tts.speed` (bornes **50–200**, `src/config/schema.ts`) ⇒ `400 invalid_config`. Le patch est correctement typé (D41) et l'UI affiche désormais la **cause réelle** ; **aucun défaut de code côté Yuki**. | §11.15, D41, `src/config/schema.ts` |
 
 ---
 
@@ -829,7 +834,7 @@ loader ne fait que le lire (`min_free_memory_mb` le « reads »). Aucun besoin d
 | `model` | **attestée** | tous les exemples `curl` l'utilisent |
 | `input` | **attestée** | `"input": "audio.cpp is serving this request …"` |
 | `response_format` | **attestée** | défaut `audio/wav` ; `"json"`, `"mp3"` (frontend) |
-| `speed` / `speaking_rate` | **attestée** | « top-level `speed` (or `speaking_rate`) » |
+| `speed` / `speaking_rate` | **attestée (top-level), PAR MODÈLE** | « top-level `speed` (or `speaking_rate`) … **when the selected model supports speed control. Models without speed control reject the field.** » (`app/server/README.md:5`). Le code n'applique le multiplicateur que si le modèle le supporte ; sinon **rejet HTTP 500** (`app/server/runtime.cpp:2116-2118`, `app/server/http.cpp:824-829`) **ou ignorance silencieuse** si le modèle est en spec *legacy* sans contrat (cas de **Chatterbox** — verdict §11.14). |
 | `voice_ref` | **attestée** | chemin (`"voices/alice.wav"`) **ou** `{ "type": "path", "path": … }` **ou** `{ "type": "base64", "data": … }` (≤ 5 MiB) |
 | `voice` | **attestée** | preset configuré, sinon basename `voice_dir/<name>.wav`, sinon id de voix natif |
 | `reference_text` | **attestée** | transcrit fourni avec `voice_ref` |
@@ -839,7 +844,7 @@ loader ne fait que le lire (`min_free_memory_mb` le « reads »). Aucun besoin d
 | `busy_timeout_ms` | **attestée** | borne d'attente par requête |
 | **`language`** (top-level) | ✅ **attestée (source runtime)** | lue **à chaque requête** par `build_speech_request` : `engine::io::json::optional_string(body, "language", "")` → `request.text_input.language` (`app/server/runtime.cpp:1990-1991`). La valeur est donc **honorée** (ex. `"language": "fr"`). |
 | **`language_id`** | **non attestée côté HTTP** | attestée **uniquement** dans la lib Python (`generate(..., language_id="fr")`). Le serveur ne lit **que** `language` — `language_id` est **ignoré** (clé top-level inconnue ⇒ silencieusement ignorée). |
-| **`exaggeration`** / **`cfg`** (top-level) | ❌ **ignorées** | `build_speech_request` ne lit **qu'une liste fixe** de clés top-level (`seed`, `temperature`, `top_k`, `top_p`, `max_tokens`, `max_steps`, `repetition_penalty`, `guidance_scale`, `num_inference_steps`, `instructions`) + l'objet `options` (`app/server/runtime.cpp:1994-2004`). Une clé top-level inconnue n'est **pas rejetée**, mais **pas lue** ⇒ Yuki les envoie « dans le vide ». Pour Chatterbox, `exaggeration` se passe **dans `options`** (`src/models/chatterbox/session.cpp:45-46`), et le « cfg » de génération s'appelle **`s3gen_cfg_rate`** (`session.cpp:57-60`), pas `cfg` — point ouvert **C27**. |
+| **`exaggeration`** / **`cfg`** (top-level) | ❌ **ignorées** | `build_speech_request` ne lit **qu'une liste fixe** de clés top-level (`seed`, `temperature`, `top_k`, `top_p`, `max_tokens`, `max_steps`, `repetition_penalty`, `guidance_scale`, `num_inference_steps`, `instructions`) + l'objet `options` (`app/server/runtime.cpp:1994-2004`). Une clé top-level inconnue n'est **pas rejetée**, mais **pas lue** ⇒ Yuki les envoie « dans le vide ». Pour Chatterbox, `exaggeration` se passe **dans `options`** (`src/models/chatterbox/session.cpp:45-46`), et le « cfg » de génération est **`guidance_scale`** (`session.cpp:47-48`, T3 CFG = `cfg_weight`), **pas** `cfg` ni `s3gen_cfg_rate` (autre étage) — **résolu** (C27/D42, §11.16). |
 
 **Sélection de voix — mode par requête (Voie B) est donc attesté** : on peut
 passer `voice_ref` (chemin ou base64) + `reference_text` **à chaque requête**,
@@ -901,7 +906,7 @@ ajouter dans l'entrée `models[]` : `"default_request_options": { "language": "f
 > Le test prouve la **chaîne**, pas que la langue est honorée (§6) — seul
 > l'écoute tranche. Depuis l'UI, le même test passe par `POST /api/tts/test`.
 
-**Débit** : `"speed": 1.1` (ou `"speaking_rate": 1.1`) — **attesté top-level**.
+**Débit** : `"speed": 1.1` (ou `"speaking_rate": 1.1`) — **clé attestée top-level, mais sans effet pour Chatterbox** (spec legacy ⇒ champ ignoré ; rejet HTTP 500 pour les modèles à contrat v1 sans débit, ex. `qwen3-tts`/`cosyvoice3`) — verdict **§11.14**.
 **Émotion** : `exaggeration` / `cfg` — **non attestés côté HTTP** (§11.5).
 
 ### 11.7 Ce qui reste NON attesté
@@ -909,7 +914,7 @@ ajouter dans l'entrée `models[]` : `"default_request_options": { "language": "f
 | Point | Pourquoi |
 | --- | --- |
 | **Clé de langue HTTP** | ✅ **tranché (source)** : le serveur lit **`language`** top-level (`app/server/runtime.cpp:1990-1991`). `language_id` n'existe pas côté HTTP. |
-| **Passage de `exaggeration` / `cfg`** | ✅ **tranché (source)** : `exaggeration` se passe **dans `options`** pour Chatterbox (`src/models/chatterbox/session.cpp:45-46`) ; le « cfg » de génération est **`s3gen_cfg_rate`** (`session.cpp:57-60`), pas `cfg`. Le `cfg` **top-level** envoyé par Yuki est **ignoré** (C27). La **valeur par défaut** de `s3gen_cfg_rate` pour Chatterbox n'est pas relevée. |
+| **Passage de `exaggeration` / `cfg`** | ✅ **tranché (source)** : `exaggeration` se passe **dans `options`** pour Chatterbox (`src/models/chatterbox/session.cpp:45-46`) ; le « cfg » de génération est **`guidance_scale`** (`session.cpp:47-48`, T3 CFG = `cfg_weight` Python), **pas** `cfg` ni `s3gen_cfg_rate`. Le `cfg` **top-level** envoyé par Yuki est **ignoré** — **résolu** (C27/D42, §11.16). Défauts : `exaggeration = 0.5`, `guidance_scale = 0.5`, `s3gen_cfg_rate = 0.7` (non piloté) — `include/engine/models/chatterbox/tts.h:19-32`. |
 | **Nom exact du fichier GGUF** dans `Chatterbox-GGUF` | l'archive donne le **dossier** + variantes **F16 + Q8**, pas les noms de fichiers |
 | **Chemin du fichier de config DANS le conteneur** (`/app/server.json` ?) | **non attesté** : ni le WORKDIR ni le `CMD`/les chemins de l'image ne sont documentés. À confirmer en réel (C14). |
 | **Sous-commandes du dispatcher** (`server`/`cli`/`model-manager`/`perf`) | **non documentées par les archives** : connues **uniquement** par l'**exécution réelle** (logs `Unknown command: --config`). |
@@ -922,11 +927,11 @@ ajouter dans l'entrée `models[]` : `"default_request_options": { "language": "f
 
 ### 11.8 Impact sur les points ouverts
 
-- **C1 — levé pour les voix** : `voice`, `voice_ref` (chemin **ou** base64), `reference_text`, `voice_presets`, `default_voice_preset`, `voice_dir` sont **attestés** ; le mode **par requête** est donc viable (l'hypothèse A↔B se tranche en faveur de **B disponible**). ✅ **Levé aussi pour la langue** : `language` top-level est lu par le serveur (§11.5, source). Reste **ouvert** : le **nom exact** de l'option d'émotion (C27).
+- **C1 — levé pour les voix** : `voice`, `voice_ref` (chemin **ou** base64), `reference_text`, `voice_presets`, `default_voice_preset`, `voice_dir` sont **attestés** ; le mode **par requête** est donc viable (l'hypothèse A↔B se tranche en faveur de **B disponible**). ✅ **Levé aussi pour la langue** : `language` top-level est lu par le serveur (§11.5, source). ✅ **Levé aussi pour l'émotion** : clés **`exaggeration` / `guidance_scale`** dans `options` (C27 clos, D42, §11.16).
 - **C2 — partiellement levé** : `fr` est listé comme langue de la famille `chatterbox` (`audio-cpp`). La **version V3** du checkpoint n'est **pas** attestée dans les archives (la variante s'appelle `Chatterbox-GGUF`, sans « V3 »).
 - **C14 — levé (par EXÉCUTION RÉELLE)** : `command: ["server", "--config", "/app/server.json"]`. L'ENTRYPOINT est un **dispatcher à sous-commandes** (`Unknown command: --config`) : c'est une **preuve d'exécution**, pas une déduction d'archive. L'hypothèse `--server --host 0.0.0.0 --port 8081` est **invalidée** : `--host`/`--port`/`--server` n'apparaissent **ni** dans les archives **ni** dans les logs ; hôte/port sont des **clés de config**. ⚠️ Le **chemin** `/app/server.json` **reste à confirmer** (WORKDIR de l'image non attesté).
 - **C21 (lot 8)** — levé (hérite C14).
-- **C18 (lot 8)** — ✅ **levé (source runtime)** : clé de voix (`voice`/`voice_ref`/`reference_text`) **et** clé de langue (`language`, top-level) **attestées** par le code ; `exaggeration` passe par `options` (`s3gen_cfg_rate` pour le cfg) — reste une question de **valeur** (C27), pas de clé.
+- **C18 (lot 8)** — ✅ **levé (source runtime)** : clé de voix (`voice`/`voice_ref`/`reference_text`) **et** clé de langue (`language`, top-level) **attestées** par le code ; `exaggeration`/`guidance_scale` passent par `options` — clés **et** valeurs tranchées (C27 clos, D42, §11.16).
 - **C23 (lot 8)** — reste ouvert : nom exact du GGUF.
 
 ### 11.9 Résolution de voix — précédence attestée et décision Yuki
@@ -951,8 +956,11 @@ ne lui dit rien : Yuki envoie donc un chemin **absolu**
 `YUKI_MOUNT_VOICES` (défaut `/voices`, `src/config/env.ts:152`). Preuves :
 `src/tts/audio-cpp.ts:128-132` (jointure), `src/index.ts:255,284-285,408`
 (threading explicite). Aucune voix résolue (registre vide, `tts.voice` vide) ⇒
-**aucun champ de voix** n'est envoyé : le moteur applique son propre
-`default_voice_preset`.
+**aucun champ de voix** n'est envoyé : le moteur n'a alors **aucune voix par
+défaut** (C19) et refuse faute de référence (`session.cpp:410-412`). C'est
+pourquoi, **dès qu'un preset existe**, Yuki applique désormais ce preset quand
+`tts.voice` est vide ou inconnu (cf. **D39** et §11.13). Avant ce correctif, le
+résolveur de production n'appliquait **jamais** `defaultVoice()`.
 
 **Décision explicite, plus implicite.** Auparavant, l'adaptateur retombait sur la
 constante `"/voices"` (`src/tts/audio-cpp.ts:130`) sans qu'aucun appelant ne
@@ -1118,7 +1126,7 @@ Aucun champ ne demande de tâche : **Yuki n'envoie rien que le moteur
 interprète comme une tâche non supportée** — l'erreur vient **uniquement** de
 `"task": "tts"` dans `server.json`. (`exaggeration`/`cfg` top-level sont
 **ignorés** par le serveur, cf. §11.5 : ils ne causent pas l'erreur, mais
-n'ont pas d'effet — **C27**.)
+n'ont pas d'effet au top-level — **résolu** : désormais portés par `options` (C27/D42, §11.16).)
 
 **Verdict : H2 retenue, H1 écartée *comme cause de CE message*.**
 
@@ -1279,6 +1287,298 @@ en-tête PCM lu) :
 > `https://datashare.is.ed.ac.uk/handle/10283/2353` (archive `.tar.gz`, pas un
 > WAV unitaire). Vérifier le **SHA-256** ci-dessus après téléchargement ; en cas
 > de disparition du miroir, tout WAV SIWIS `neut_*` de ce dossier convient.
+
+### 11.13 Défaut corrigé — la voix par défaut n'était JAMAIS appliquée (D39)
+
+> **Ajout du 2026-09-21 (soir, correctif).** Moteur opérationnel (`task: clon`
+> accepté), registre contenant **un preset** (`voix-fr`), mais **toute**
+> synthèse échoue avec `Chatterbox prepare requires speaker reference audio`.
+
+**Constat.** Le moteur exige un locuteur (`session.cpp:410-412`). Yuki
+n'envoyait **aucun** `voice_ref` : `toAudioCppRequest` omet les clés de voix
+quand `voice === null` (`src/tts/audio-cpp.ts`, bloc `if (voice) { … }`). Or le
+`voice` transmis était **toujours `null`** avec un `tts.voice` vide (le défaut),
+de **trois** façons cumulées :
+
+| # | Point fautif (avant correctif) | Effet |
+| --- | --- | --- |
+| 1 | `src/tts/pipeline.ts` (`resolveVoice`) : `if (id.length === 0) return null;` **avant** l'appel au résolveur | un `tts.voice` vide court-circuite **avant** toute résolution |
+| 2 | `src/gateway/routes/tts.ts` (`handleTest`) : `const voice = id.length === 0 ? null : input.deps.voices.get(id);` | même court-circuit sur `POST /api/tts/test` |
+| 3 | `src/index.ts` : résolveurs injectés = `(id) => voiceStore.get(id) ?? null` (pipeline **et** test) | `defaultVoice()` n'est **jamais** appliqué ; un id inconnu ne retombe pas non plus |
+
+**Le bon comportement existait déjà, mais n'était pas câblé.**
+`VoiceStore.resolveVoice` applique `defaultVoice()` pour un id vide **ou**
+inconnu (`src/tts/voices-store.ts`, méthode `resolveVoice`), et `defaultVoice()`
+retourne le premier preset. Ce résolveur n'était utilisé **que par les tests**
+(`tests/tts/voices-store.test.ts`, `voiceRefOf` via `store.resolveVoice`), jamais
+par le chemin de production — d'où des tests verts et un moteur qui refuse.
+
+**Hypothèses écartées (avec la raison).**
+
+| Hypothèse | Verdict | Raison (preuve) |
+| --- | --- | --- |
+| Le registre est **mis en cache** au démarrage (`voices:0` initial) | **FAUSSE** | `VoiceStore.read()` relit `voices.json` **à chaque appel** (`existsSync` + `readFileSync`, `src/tts/voices-store.ts`) ; aucun cache. Le `voices:0` est un **log ponctuel** de démarrage. Test : « aucun cache : un registre ajouté APRÈS l'init est vu » (`tests/tts/voices-store.test.ts`). |
+| Le fichier `presets/<id>.wav` **manque** sur le volume | **Cas distinct, désormais explicite** | Possible, mais ce n'était pas la cause du registre non utilisé. Un `refAudio` absent produit maintenant `voice_ref_missing` (422) **sans** appeler le moteur. |
+| `voiceBaseDir`/montage divergent (C24) | **Écartée ici** | Les deux variantes Compose montent `/voices` ; le chemin `/voices/presets/voix-fr.wav` est bien formé. |
+
+**Correctif.**
+
+- `src/index.ts` : les deux résolveurs deviennent `(id) => voiceStore.resolveVoice(id).voice`.
+- `src/tts/pipeline.ts` : `resolveVoice()` **délègue toujours** (id vide inclus) ;
+  journalise `tts.voice.unresolved` seulement quand **aucune** voix n'existe.
+- `src/gateway/routes/tts.ts` : l'id brut (même vide) est transmis au résolveur ;
+  en-tête `x-yuki-tts-voice-ref` ajouté (chemin `voice_ref` réellement envoyé).
+- `src/tts/voices-store.ts` : `samplePathOf` (test d'existence sans relire le
+  registre) + `assertSample` → `VoiceReferenceError` (`voice_ref_missing`, 422),
+  appelé avant l'appel moteur (aperçu, test, pipeline).
+- `public/ui/tts-assistant.js` : affiche « Fichier de référence envoyé au
+  moteur : `<chemin>` » quand l'en-tête est présent.
+
+**Corps JSON exacts envoyés à `POST /v1/audio/speech`** (mêmes clés que
+`AUDIO_CPP_KEYS`) :
+
+| Cas | Clés de voix |
+| --- | --- |
+| registre **vide** (`tts.voice` vide) | *aucune* : `{model,input,language,response_format,exaggeration,cfg}` |
+| **preset** + `tts.voice` vide | `"voice":"voix-fr"`, `"voice_ref":"/voices/presets/voix-fr.wav"`, `"reference_text":"…"` |
+| voix **explicite** connue | idem, avec l'id et le chemin de **cette** voix |
+| id **inconnu** + preset existe | idem « preset » (repli sur la voix par défaut) |
+| `refAudio` **absent** du volume | **aucun appel** : `422 voice_ref_missing` côté Yuki |
+
+**Tests.** `tests/integration/tts-voice-resolution.test.ts` (chaîne
+config→store→pipeline→adaptateur, cas vide/connu/inconnu/absent/ajout
+post-init, cohérence pipeline↔test), plus des cas ajoutés dans
+`tests/tts/voices-store.test.ts`, `tests/integration/tts-diagnostics.test.ts` et
+`tests/integration/voices-api.test.ts`. L'E2E headless affiche et vérifie le
+chemin de référence (`_tools/e2e-tts-ui.mjs`).
+
+> ⚠️ **Reste non vérifiable ici** : la disparition **réelle** du message moteur
+> et la qualité acoustique. ✅ **Validé en réel par l'utilisateur (2026-09-22)** :
+> le TTS fonctionne (la voix parle) ⇒ **C26 clos**.
+
+---
+
+### 11.14 Débit (`tts.speed`) — verdict : sans effet pour Chatterbox ; échec d'enregistrement à préciser
+
+> **Ajout du 2026-09-21 (soir, tranché sur le code du runtime — commit `f7f5dd1`).**
+> L'utilisateur observe « échec de l'enregistrement » en changeant `tts.speed`
+> dans `/config`, **et** « aucun effet » sur la synthèse.
+
+**1. Chatterbox applique-t-il le débit ? NON.** Chaîne de preuves :
+
+| Maillon | Fait | Preuve |
+| --- | --- | --- |
+| Spec `chatterbox` | **legacy** : `model_specs/chatterbox.json` n'a **ni `schema_version` ni bloc `options`** | `model_specs/chatterbox.json` |
+| `request_option_keys` | **inexistant** ⇒ `model_contract()` renvoie `nullopt` (spec sans `schema_version`) | `src/framework/model_spec/metadata.cpp:299-310` |
+| `accepts_speed` | **`true`** : contrat absent ⇒ `model_accepts_request_option` **suppose** le support | `app/server/runtime.cpp:95-115`, `:1303-1320` |
+| Traitement du champ | la valeur est rangée dans `options["speed"]` (`runtime.cpp:2119`) — **sans rejet** | `app/server/runtime.cpp:2112-2124` |
+| Lecture par Chatterbox | **AUCUNE**, sur les **deux** chemins : `make_voice_clone_config` lit `exaggeration`, `guidance_scale`, `s3gen_cfg_rate`, `temperature`, … **jamais `speed`** ; et la session ne lit que `request.voice->speaker` — **pas `request.voice->style->speaking_rate`** (pourtant posé par le serveur, `runtime.cpp:2123`) ⇒ **ignoré** | `src/models/chatterbox/session.cpp:43-76`, `:410-535` (grep `style` : aucun) |
+| Modèles à **contrat v1** sans débit (`qwen3-tts`, `cosyvoice3`) | **rejet** HTTP 500 « speed is not supported by this model » | `app/server/runtime.cpp:2116-2118` + `app/server/http.cpp:824-829` |
+
+⇒ **« Aucun effet » est ATTENDU pour Chatterbox : ce n'est PAS un bug de Yuki.**
+Le contrat public le dit (« Models without speed control **reject the field** »,
+`app/server/README.md:5`), mais le **code** ne rejette que les modèles à contrat
+schema-v1 ; pour un modèle **legacy** (Chatterbox), il suppose le support puis la
+session ignore le champ. L'une ou l'autre branche rend le réglage **sans effet**
+(cas legacy) ou **cassant** (cas contrat v1).
+
+**2. Correctif (adaptateur, `src/tts/audio-cpp.ts`).** `toAudioCppRequest`
+n'émet `speed` (`speed/100`, UI en %) **que** pour les moteurs qui l'appliquent,
+vía `engineSupportsSpeed` / `SPEED_CAPABLE_ENGINES` :
+
+| Moteur (`tts.engine`) | `speed` envoyé ? | Effet moteur |
+| --- | --- | --- |
+| `kokoro` | **oui** | appliqué (`runtime.cpp:2119`) |
+| `sanotts` | **oui** | appliqué comme `speaking_rate` (`runtime.cpp:2121-2123`) |
+| `chatterbox` | **non** | (aurait été **ignoré**) |
+| `qwen3-tts`, `cosyvoice3` | **non** | évite le **rejet HTTP 500** |
+| inconnu | **non** | omission prudente (jamais de rejet dur) |
+
+Le **schéma de config est inchangé** (`tts.speed` reste `int` 50–200 ; ni
+booléen ni flottant) ; seule l'émission côté adaptateur change.
+
+**3. Décision structurante — UI — IMPLÉMENTÉE (D42, §11.16).** Pour Chatterbox
+(moteur **par défaut**), le contrôle « Débit (%) » **n'agit pas**. Le choix retenu
+combine (a) **désactiver** le contrôle **et** (c) afficher une note explicite
+« **Sans effet avec ce moteur.** » ; il **suit le changement de moteur** (voir
+§11.16). Les réglages d'émotion sont grisés pour tout moteur ≠ `chatterbox`.
+
+**4. Échec de l'enregistrement — ✅ cause identifiée (C28 clos) : valeur sous le minimum.**
+Mécanismes **vérifiés** :
+
+- **Verrou d'environnement** (`YUKI_TTS_SPEED` défini **et non vide**) : le champ
+  passe en `origin: "env"` et un `PUT` le visant échoue **400 `locked_by_env`**
+  → « Champ verrouillé par l'environnement (YUKI_TTS_SPEED). »
+  (`src/config/env.ts:127`, `src/config/runtime.ts:307-342`,
+  `src/gateway/routes/config.ts:194-206`). **MAIS** l'UI **saute** déjà les champs
+  verrouillés dans le patch (`public/ui/config.js:580`) et les **désactive** avec
+  un badge (`:269`, `:401`). ⇒ un verrou d'env produit « **aucun effet** » (la
+  valeur d'env gagne), **pas** un échec d'enregistrement (avec l'UI actuelle).
+- **Patch global** : l'UI n'envoie **que les champs modifiés** — mais **tous**.
+  Si **un** champ modifié est invalide (nombre vidé, hors bornes…), le `PUT`
+  entier échoue **400 `invalid_config`** et l'UI affiche « Échec de
+  l'enregistrement. » (`public/ui/config.js:633-661`). Un `tts.speed` hors
+  `[50,200]` donne « Valeur trop grande (maximum 200). ».
+- **Store non inscriptible** (volume `state` ro / disque plein) ⇒ **500
+  `config_store_unwritable`** (`src/gateway/routes/config.ts:210-227`).
+- **Origine refusée** derrière un proxy mal configuré ⇒ **403 `bad_origin`**
+  (`src/gateway/routes/config.ts:117-135`).
+
+**Établi en environnement propre** : `PUT /api/config { "tts.speed": 150 }` →
+**200**, valeur persistée, `applied.hot=["tts.speed"]` (harnais
+`tests/gateway/config-api.test.ts`). ⇒ **le chemin de code d'enregistrement de
+`tts.speed` fonctionne** ; l'échec observé dépend de l'environnement/UI réels.
+
+**À demander à l'utilisateur (2-3 questions) :**
+
+1. le **message exact** affiché (sous le champ « Débit » et/ou près du bouton
+   « Enregistrer ») — c'est lui qui tranche entre `locked_by_env`,
+   `invalid_config`, `bad_origin`, `config_store_unwritable` ou un simple
+   échec réseau ;
+2. la **valeur saisie** (ex. `150`) et si le champ était **grisé** (badge
+   « verrouillé ») ;
+3. les variables **`YUKI_TTS_*`** (surtout `YUKI_TTS_SPEED`) et
+   `YUKI_COMPAT_MODE` présentes dans le `.env` du gateway
+   (`docker compose config | grep YUKI_` ou `docker exec yuki-gateway env | grep YUKI_`).
+
+**MAJ (2026-09-22, par l'utilisateur)** : **cause trouvée** ⇒ la valeur saisie
+était **sous le minimum `50`** de `tts.speed` (bornes **50–200**,
+`src/config/schema.ts`) ⇒ `400 invalid_config`. Le chemin de code est sain
+(D41) ; **C28 est clos**.
+
+---
+
+### 11.15 Soupçon « patch mal typé » → **FAUX** ; l'UI affiche désormais la cause réelle (D41)
+
+> **Ajout du 2026-09-22.** Vérification ciblée du soupçon principal : le bouton
+> « Enregistrer » enverrait les champs numériques en **chaîne** (un `<input>`
+> renvoie toujours du texte), ce qui ferait rejeter tout le `PUT` en 400.
+
+**1. Le soupçon est FAUX.** Le schéma **coerce les chaînes numériques** :
+`validateDescriptor` accepte `typeof raw === "string"` dès que la valeur matche
+`/^-?\d+$/` pour un champ `int` (`src/config/schema.ts:370-379`). Preuve
+
+d'exécution :
+
+| Corps du `PUT /api/config` | Statut | Résultat |
+| --- | --- | --- |
+| `{ "tts.speed": "150" }` (chaîne, ancien `buildPatch`) | **200** | persisté, `origin:"store"`, `value:150` |
+| `{ "tts.speed": 150 }` (nombre) | **200** | idem |
+
+⇒ Une valeur **numérique en chaîne n'échoue pas**. Ce n'est donc pas la cause du
+« échec de l'enregistrement » observé (cause exacte toujours **indéterminée**
+sans le message réel ni le `.env`).
+
+**2. Correctif de robustesse (`buildPatch`)** — `public/ui/config-patch.js`,
+`coerceFieldValue` : les champs `number`/`range` sont désormais envoyés en
+**entiers** (`speed/100` reste calculé côté adaptateur, schéma inchangé) ; un
+contenu vide ou non entier est laissé tel quel pour que le serveur rende l'erreur
+précise (`invalid_int`, bornes). Les `text`/`select`/`textarea` restent des
+chaînes, les resets `null`, les secrets chaîne ou `null`.
+
+**3. Correctif du message d'erreur (le vrai défaut).** `save()` affichait un
+statut générique « Échec de l'enregistrement. ». Il affiche maintenant
+`presentConfigSaveError()` : **code + message réels** du serveur, **nom du champ**
+fautif (via `LABELS`) et explication française par code
+(`locked_by_env`, `invalid_config`, `bad_origin`, `config_store_unwritable`,
+`missing_config_header`, `invalid_json`/`invalid_body`, `internal_error`) — sans
+jamais inventer de cause : le message brut du serveur reste prioritaire.
+
+Fichiers : `public/ui/config-patch.js` (module pur, testable), `public/ui/config.js`
+(import + `save()`). Tests : `tests/ui/config-patch.test.ts`,
+`tests/gateway/config-api.test.ts`. E2E : `_tools/e2e-tts-ui.mjs` enregistre un
+« Débit » numérique par le **vrai bouton** et vérifie la persistance sans erreur.
+
+**Chiffres réels** : `npm test` = **505 passed / 4 skipped** (48 fichiers) ;
+`npm run typecheck` OK ; `npm run build` OK ; `node --check` OK ; E2E =
+**41/41**, **CSP = 0**.
+
+**Reste à confirmer (2-3 questions) :**
+
+1. le **message exact** affiché près du bouton (ou sous « Débit ») lors de
+   l'échec — il tranche entre `locked_by_env`, `invalid_config`, `bad_origin`,
+   `config_store_unwritable` ou un échec réseau ;
+2. le champ était-il **grisé** (badge « verrouillé ») et quelle **valeur** a été
+   saisie ?
+3. `docker exec yuki-gateway env | grep YUKI_` (variables réellement vues par le
+   gateway, au-delà du seul `.env`).
+
+**MAJ (2026-09-22, par l'utilisateur)** : cause identifiée ⇒ la valeur saisie
+était **sous le minimum `50`** de `tts.speed` (bornes 50–200) ⇒ `400
+invalid_config`. **C28 est clos** ; aucun défaut de code côté Yuki.
+
+---
+
+### 11.16 Émotion réellement appliquée (`options`) + honnêteté UI sur le débit (D42)
+
+> **Ajout du 2026-09-22.** Preuve dans la **copie locale du code source d'`audio.cpp`**
+> (`/tmp/audiocpp`, `src/models/chatterbox/session.cpp`). Deux correctifs validés :
+> ① brancher les réglages d'émotion là où le moteur les lit réellement ;
+> ② ne plus laisser croire que le débit agit pour un moteur qui ne l'applique pas.
+
+**1. Noms de clés et échelle — PROUVÉS (pas de supposition).**
+
+| Fait | Valeur | Preuve (`audio.cpp`) |
+| --- | --- | --- |
+| Lecture de l'émotion | `make_voice_clone_config(options)` lit **`exaggeration`**, **`guidance_scale`**, `s3gen_cfg_rate`, `temperature`, `repetition_penalty`, `min_p`, `top_p`, `max_tokens`, `seed`, `do_sample`, `stop_on_eos`, `greedy` | `src/models/chatterbox/session.cpp:42-79` |
+| Clé « cfg » de Chatterbox (le `tts.cfg` de Yuki) | **`guidance_scale`** (le CFG du **T3** = `cfg_weight` de l'API Python ; **PAS** `cfg`, **PAS** `s3gen_cfg_rate`) | `src/models/chatterbox/session.cpp:47-48`, `src/models/chatterbox/t3_component.cpp:615` (`logits = cond + guidance_scale·(cond−uncond)`) |
+| Clé `s3gen_cfg_rate` | CFG du **flux S3Gen** (`(1+cfg_rate)·cond − cfg_rate·uncond`), **autre étage** — équivalent de `model.s3gen.flow.inference_cfg_rate` côté Python ; **non piloté par Yuki** | `src/models/chatterbox/s3gen_flow.cpp:2026-2027`, `tests/chatterbox/chatterbox_python_warm_bench.py:109` |
+| Type / échelle | `float` ; **aucune borne** (`parse_float_option` ne clampe pas) ; usage réel | `include/engine/framework/runtime/options.h:36`, `src/models/chatterbox/conditionals.cpp:149` (`emotion_adv = {exaggeration}`) |
+| Défauts moteur | `exaggeration = 0.5`, **`guidance_scale = 0.5`**, `s3gen_cfg_rate = 0.7` | `include/engine/models/chatterbox/tts.h:19-32` |
+| Clé absente | la valeur par défaut de la struct est conservée (`value_or(config.…)`) | `src/models/chatterbox/session.cpp:45-60` |
+| Niveau d'envoi | **OBLIGATOIREMENT dans `options`** : le serveur ne copie au top-level qu'une liste fixe (`seed`, `temperature`, `top_k`, `top_p`, `max_tokens`, `max_steps`, `repetition_penalty`, `guidance_scale`, `num_inference_steps`, `instructions`) puis `request.options = options_from_object(body.options)` | `app/server/runtime.cpp:1994-2006` |
+
+⇒ **Yuki envoie `exaggeration` + `guidance_scale` DANS `options`** (pour-mille →
+réel, `/1000`). Le `cfg` top-level (ancien code) était **ignoré** (absent de la
+liste fixe). **L'émotion est spécifique à Chatterbox** : aucune autre famille
+`tts.engine` (`qwen3-tts`, `cosyvoice3`, `kokoro`, `sanotts`) ne lit ces clés ;
+le mode **Turbo** (`chatterbox_turbo`) est une famille **séparée** qui les
+**ignore** (`include/engine/community_models/chatterbox_turbo/tts.h:24`).
+
+**2. Traitement du défaut.** Le moteur n'oppose **aucun rejet** à une valeur
+(parse float, pas de clamp) : envoyer `exaggeration=0.5` **et**
+`guidance_scale=0.5` (les défauts de Yuki = ceux du moteur) est un **no-op** —
+le comportement par défaut est **préservé**. (`s3gen_cfg_rate`, non émis, reste au
+défaut moteur **0.7**.) Le choix de mapper `tts.cfg` sur `guidance_scale` est ce
+qui garantit cette **égalité de défauts** ; le mapper sur `s3gen_cfg_rate`
+(défaut 0.7) aurait, lui, **changé** le son par défaut — c'est un argument
+décisif du choix.
+
+**3. Comportement par moteur (émis / non émis).**
+
+| Moteur (`tts.engine`) | Débit (`speed`) | Émotion (`options.exaggeration`/`guidance_scale`) | Pourquoi |
+| --- | --- | --- | --- |
+| `kokoro` | **émis** (`speed`, `runtime.cpp:2119`) | **non émis** | applique la vitesse ; ne lit pas l'émotion |
+| `sanotts` | **émis** (appliqué comme `speaking_rate`, `runtime.cpp:2121-2123`) | **non émis** | idem |
+| `chatterbox` | **non émis** | **émis (dans `options`)** | ignore `speed` ; **lit** l'émotion |
+| `qwen3-tts` | **non émis** | **non émis** | rejetterait `speed` (HTTP 500) ; ne lit pas l'émotion |
+| `cosyvoice3` | **non émis** | **non émis** | idem |
+| inconnu | **non émis** | **non émis** | omission prudente |
+
+**4. Ce qui est corrigé.**
+
+- **Adaptateur** (`src/tts/audio-cpp.ts`) : `AUDIO_CPP_KEYS.options` (=`"options"`),
+  `exaggeration`, `guidanceScale` (=`"guidance_scale"`) ; `engineSupportsEmotion` /
+  `EMOTION_CAPABLE_ENGINES` ; l'objet `options` d'émotion n'est posé que pour
+  Chatterbox. Export dans `src/tts/index.ts`.
+- **UI** (`public/ui/config-patch.js`) : `engineFieldState(path, engine)` (pur) +
+  `engineSupportsSpeed` / `engineSupportsEmotion` (miroir de l'adaptateur) ; note
+  `ENGINE_UNSUPPORTED_NOTE = "Sans effet avec ce moteur."`.
+- **UI** (`public/ui/config.js`) : `refreshEngineFields()` (désactive + note,
+  **suit** `tts.engine`, **respecte** `lockedByEnv`) appelé au rendu et à chaque
+  `input`. Le champ grisé **n'est PAS retiré** du patch : l'enregistrement reste
+  possible (testé).
+- **Assistant** (`public/ui/tts-assistant.js`) : bloc « Ce qui reste à faire à la
+  main » **corrigé** (service démarré avec la pile ; commande de copie de volume
+  nommé remplacée par un dépôt **par bind mount** dans le dossier monté sur
+  `/models`, **sans** affirmer de chemin hôte).
+
+**5. Tests.** `tests/tts/audio-cpp.test.ts` (présence/absence par moteur, nom
+`options`/`guidance_scale` et absence de `s3gen_cfg_rate`, échelle
+`0/500/1000/1500`‰) ;
+`tests/ui/config-patch.test.ts` (`engineFieldState`, patch non bloqué, **table UI
+synchronisée avec l'adaptateur**) ; E2E `_tools/e2e-tts-ui.mjs` (état du champ
+selon le moteur + 0 violation CSP).
 
 ---
 

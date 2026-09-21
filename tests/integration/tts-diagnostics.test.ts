@@ -33,6 +33,7 @@ import { runGate } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { AudioCppBusyError, AudioCppError } from "../../src/tts/audio-cpp.js";
+import { VoiceReferenceError, VoiceStore } from "../../src/tts/voices-store.js";
 import type { Voice } from "../../src/tts/types.js";
 import { makeWav } from "../tts/wav-fixture.js";
 
@@ -878,7 +879,7 @@ describe("POST /api/tts/test", () => {
     expect(response.headers.get("x-yuki-tts-voice")).toBe("camille");
   });
 
-  it("voix inconnue ⇒ null (voix par défaut du service)", async () => {
+  it("résolveur qui renvoie null pour l'id configuré ⇒ null transmis (contrat)", async () => {
     const seen: Array<Voice | null> = [];
     const synth: TtsSynthesizer = {
       synthesize: async (input) => {
@@ -886,13 +887,107 @@ describe("POST /api/tts/test", () => {
         return { contentType: "audio/wav", bytes: makeWav() };
       },
     };
+    // Doublure : le résolveur ne connaît que « camille ». L'id « inconnue » lui
+    // est bien transmis, il renvoie `null` → la route transmet `null` au moteur.
+    const voices: TtsVoiceResolver = {
+      get: (id) => (id === "camille" ? voiceFixture : null),
+    };
     const { baseUrl } = await startHarness({
       enabled: true,
       synth,
+      voices,
       selectedVoice: "inconnue",
     });
     await fetch(`${baseUrl}/api/tts/test`, { method: "POST", headers: WRITE });
     expect(seen[0]).toBeNull();
+  });
+
+  it("`tts.voice` VIDE ⇒ l'id vide est transmis au résolveur (pas court-circuité)", async () => {
+    const seenIds: string[] = [];
+    const seenVoices: Array<Voice | null> = [];
+    const synth: TtsSynthesizer = {
+      synthesize: async (input) => {
+        seenVoices.push(input.voice);
+        return { contentType: "audio/wav", bytes: makeWav() };
+      },
+    };
+    // Le résolveur réel (`VoiceStore.resolveVoice`) applique le défaut ; on le
+    // simule ici tout en vérifiant que la route l'appelle bien avec "".
+    const voices: TtsVoiceResolver = {
+      get: (id) => {
+        seenIds.push(id);
+        return id === "" ? voiceFixture : null;
+      },
+    };
+    const { baseUrl } = await startHarness({ enabled: true, synth, voices });
+    await fetch(`${baseUrl}/api/tts/test`, { method: "POST", headers: WRITE });
+    expect(seenIds).toEqual([""]);
+    expect(seenVoices[0]?.id).toBe("camille");
+  });
+
+  it("registre avec un preset + `tts.voice` vide ⇒ la voix par défaut est transmise", async () => {
+    // Chaîne RÉELLE : résolveur câblé sur un `VoiceStore` (comme `src/index.ts`).
+    const voicesDir = tempDir("yuki-voices-res-");
+    mkdirSync(join(voicesDir, "presets"), { recursive: true });
+    writeFileSync(join(voicesDir, "presets", "voix-fr.wav"), makeWav());
+    writeFileSync(
+      join(voicesDir, "voices.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        voices: [
+          {
+            id: "voix-fr",
+            label: "Voix FR",
+            kind: "preset",
+            lang: "fr",
+            refAudio: "presets/voix-fr.wav",
+            refText: null,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            createdBy: "factory",
+          },
+        ],
+      })}\n`,
+    );
+    const store = new VoiceStore({ dir: voicesDir });
+    const seen: Array<Voice | null> = [];
+    const synth: TtsSynthesizer = {
+      synthesize: async (input) => {
+        seen.push(input.voice);
+        return { contentType: "audio/wav", bytes: makeWav(), voiceRef: "/voices/presets/voix-fr.wav" };
+      },
+    };
+    const { baseUrl } = await startHarness({
+      enabled: true,
+      synth,
+      voices: { get: (id) => store.resolveVoice(id).voice },
+    });
+    const response = await fetch(`${baseUrl}/api/tts/test`, {
+      method: "POST",
+      headers: WRITE,
+    });
+    expect(seen[0]?.id).toBe("voix-fr");
+    expect(response.headers.get("x-yuki-tts-voice")).toBe("voix-fr");
+    expect(response.headers.get("x-yuki-tts-voice-ref")).toBe(
+      "/voices/presets/voix-fr.wav",
+    );
+  });
+
+  it("échec propre (422) si la référence audio de la voix est absente", async () => {
+    const synth: TtsSynthesizer = {
+      synthesize: async () => {
+        throw new VoiceReferenceError("voix-fr", "/voices/presets/voix-fr.wav");
+      },
+    };
+    const voices: TtsVoiceResolver = { get: () => voiceFixture };
+    const { baseUrl } = await startHarness({ enabled: true, synth, voices });
+    const response = await fetch(`${baseUrl}/api/tts/test`, {
+      method: "POST",
+      headers: WRITE,
+    });
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { code: string; message: string };
+    expect(body.code).toBe("voice_ref_missing");
+    expect(body.message).toContain("voix-fr.wav");
   });
 
   it("borne la taille du texte (400) et valide le type", async () => {

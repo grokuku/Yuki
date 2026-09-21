@@ -41,7 +41,12 @@ export const VOICE_REF_TEXT_HEADER = "x-voice-ref-text";
 
 /** Fournisseur d'aperçu (appel du moteur `tts`) — injectable pour les tests. */
 export interface TtsPreviewProvider {
-  synthesizePreview(voice: Voice | null): Promise<{ contentType: string; bytes: Buffer }>;
+  synthesizePreview(voice: Voice | null): Promise<{
+    contentType: string;
+    bytes: Buffer;
+    /** Chemin `voice_ref` réellement envoyé au moteur (diagnostic), ou `null`. */
+    voiceRef?: string | null;
+  }>;
 }
 
 /**
@@ -84,11 +89,16 @@ function binary(
   status: number,
   body: Buffer,
   contentType: string,
+  extra?: Record<string, string>,
 ): ConfigHttpResponse {
   return {
     status,
     body,
-    headers: { "content-type": contentType, "cache-control": "no-store" },
+    headers: {
+      "content-type": contentType,
+      "cache-control": "no-store",
+      ...(extra ?? {}),
+    },
   };
 }
 
@@ -296,9 +306,26 @@ async function handlePreview(
     });
   }
   try {
-    const { contentType, bytes } = await input.deps.tts.synthesizePreview(voice);
-    return binary(200, bytes, contentType || "audio/wav");
+    const { contentType, bytes, voiceRef } = await input.deps.tts.synthesizePreview(voice);
+    return binary(200, bytes, contentType || "audio/wav", {
+      // Même diagnostic que `POST /api/tts/test` : quelle voix, et quel WAV de
+      // référence a réellement été envoyé au moteur (`voice_ref`).
+      "x-yuki-tts-voice": voice.id,
+      ...(voiceRef ? { "x-yuki-tts-voice-ref": voiceRef } : {}),
+    });
   } catch (error) {
+    if (error instanceof VoiceStoreError) {
+      input.deps.logger.warn("voices.preview.voice_error", {
+        id,
+        code: error.code,
+        status: error.status,
+      });
+      return json(error.status, {
+        error: error.code,
+        code: error.code,
+        message: error.message,
+      });
+    }
     if (error instanceof AudioCppError) {
       const status =
         error.code === "server_busy" ? 503 : error.code === "timeout" ? 504 : 502;

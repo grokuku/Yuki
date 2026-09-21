@@ -31,6 +31,7 @@ export {
 export {
   VoiceStore,
   VoiceStoreError,
+  VoiceReferenceError,
   slugifyVoiceId,
   isValidVoiceId,
   MAX_VOICE_BODY_BYTES,
@@ -53,6 +54,9 @@ export {
   AudioCppError,
   AudioCppBusyError,
   toAudioCppRequest,
+  voiceRefOf,
+  engineSupportsSpeed,
+  engineSupportsEmotion,
   AUDIO_CPP_KEYS,
   AUDIO_CPP_SPEECH_PATH,
   AUDIO_CPP_ERROR_BODY_LIMIT,

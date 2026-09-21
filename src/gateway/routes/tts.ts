@@ -39,6 +39,7 @@ import { readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
 import { AudioCppError } from "../../tts/audio-cpp.js";
+import { VoiceStoreError } from "../../tts/voices-store.js";
 import type { Voice } from "../../tts/types.js";
 import type { Logger } from "../../observability/logger.js";
 import { requireWriteGuards, type ConfigHttpResponse } from "./config.js";
@@ -136,10 +137,22 @@ export interface TtsSynthesizer {
   synthesize(input: {
     text: string;
     voice: Voice | null;
-  }): Promise<{ contentType: string; bytes: Buffer }>;
+  }): Promise<{
+    contentType: string;
+    bytes: Buffer;
+    /**
+     * Chemin `voice_ref` réellement envoyé au moteur (diagnostic), ou `null`.
+     * Optionnel : les doublures de test peuvent l'omettre.
+     */
+    voiceRef?: string | null;
+  }>;
 }
 
-/** Résolution d'un id de voix du registre (même chemin que le pipeline). */
+/**
+ * Résolution de l'id configuré (`tts.voice`) en voix à utiliser — MÊME chemin
+ * que le pipeline (`VoiceStore.resolveVoice`) : un id **vide ou inconnu**
+ * retombe sur la voix **par défaut** du registre, `null` = aucune voix.
+ */
 export interface TtsVoiceResolver {
   get(id: string): Voice | null;
 }
@@ -941,6 +954,16 @@ function synthesisError(
   deps: TtsApiDeps,
   event: string,
 ): ConfigHttpResponse {
+  if (error instanceof VoiceStoreError) {
+    // Voix résolue mais référence absente (ou autre erreur métier du registre) :
+    // on échoue AVANT le moteur, avec le statut/code portés par l'erreur.
+    deps.logger.warn(event, { code: error.code, status: error.status });
+    return json(error.status, {
+      error: error.code,
+      code: error.code,
+      message: error.message,
+    });
+  }
   if (error instanceof AudioCppError) {
     const status =
       error.code === "server_busy" ? 503 : error.code === "timeout" ? 504 : 502;
@@ -992,20 +1015,22 @@ async function handleTest(input: TtsRequestInput): Promise<ConfigHttpResponse> {
     });
   }
 
-  // Voix active, résolue par le MÊME chemin que le pipeline
-  // (`src/tts/pipeline.ts:402-410` + `src/index.ts` : `get(id) ?? null`).
+  // Voix active, résolue par le MÊME chemin que le pipeline : le résolveur
+  // injecté (`src/index.ts`) est `VoiceStore.resolveVoice` — un id vide ou
+  // inconnu retombe sur la voix par défaut du registre (cf. `src/tts/pipeline.ts`).
   const id = input.deps.config.getString("tts.voice").trim();
-  const voice = id.length === 0 ? null : input.deps.voices.get(id);
+  const voice = input.deps.voices.get(id);
   try {
-    const { contentType, bytes } = await input.deps.synth.synthesize({
+    const { contentType, bytes, voiceRef } = await input.deps.synth.synthesize({
       text: outcome,
       voice,
     });
     return binary(200, bytes, contentType || "audio/wav", {
       // Diagnostic honnête : quelle voix et quel moteur ont réellement produit
-      // cet échantillon (une voix inconnue retombe sur le défaut du service).
+      // cet échantillon, et quel WAV de référence a été envoyé (`voice_ref`).
       "x-yuki-tts-voice": voice?.id ?? "default",
       "x-yuki-tts-engine": input.deps.config.getString("tts.engine"),
+      ...(voiceRef ? { "x-yuki-tts-voice-ref": voiceRef } : {}),
     });
   } catch (error) {
     return synthesisError(error, input.deps, "tts.test.failed");

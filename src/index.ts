@@ -68,6 +68,8 @@ import {
   createAudioCppSynthesizer,
   isTtsEnabled,
   readTtsOptions,
+  voiceRefOf,
+  type SegmentSynthesizer,
   type Voice,
 } from "./tts/index.js";
 import type { ModelAvailability } from "./delegation/index.js";
@@ -275,7 +277,11 @@ async function main(): Promise<void> {
   const synthesize = async (
     text: string,
     voice: Voice | null,
-  ): Promise<{ contentType: string; bytes: Buffer }> => {
+  ): Promise<{ contentType: string; bytes: Buffer; voiceRef: string | null }> => {
+    // Garde-fou AVANT l'appel : un `refAudio` absent du volume produirait côté
+    // moteur une erreur opaque (« requires speaker reference audio ») ; on
+    // échoue ici, avec un message qui nomme le fichier manquant.
+    voiceStore.assertSample(voice);
     const result = await audioCpp.synthesizeBuffer({
       voice,
       text,
@@ -284,7 +290,22 @@ async function main(): Promise<void> {
       // `voice_ref` = `<montage moteur>/<refAudio>` (absolu, cf. ci-dessus).
       voiceBaseDir,
     });
-    return { contentType: result.contentType ?? "audio/wav", bytes: result.bytes };
+    return {
+      contentType: result.contentType ?? "audio/wav",
+      bytes: result.bytes,
+      // Lu dans le corps RÉELLEMENT envoyé : le diagnostic ne peut pas mentir.
+      voiceRef: voiceRefOf(result.request.body),
+    };
+  };
+
+  /**
+   * Synthétiseur du pipeline : même garde-fou de référence que `synthesize`
+   * (aperçu + test), appliqué une fois par segment, avant tout appel moteur.
+   */
+  const segmentSynthesizerRaw = createAudioCppSynthesizer(audioCpp, { voiceBaseDir });
+  const segmentSynthesizer: SegmentSynthesizer = async (request) => {
+    voiceStore.assertSample(request.voice);
+    return segmentSynthesizerRaw(request);
   };
 
   const voicesDeps: VoiceApiDeps = {
@@ -305,7 +326,7 @@ async function main(): Promise<void> {
       getNumber: (path) => config.getNumber(path),
     },
     logger,
-    voices: { get: (id) => voiceStore.get(id) ?? null },
+    voices: { get: (id) => voiceStore.resolveVoice(id).voice },
     diagnostics: ttsDiagnostics,
     modelsDir: env.mountPoints.models,
     synth: { synthesize: ({ text, voice }) => synthesize(text, voice) },
@@ -405,8 +426,8 @@ async function main(): Promise<void> {
           getString: (path) => config.getString(path),
           getNumber: (path) => config.getNumber(path),
         },
-        synthesizer: createAudioCppSynthesizer(audioCpp, { voiceBaseDir }),
-        resolveVoice: (id) => voiceStore.get(id) ?? null,
+        synthesizer: segmentSynthesizer,
+        resolveVoice: (id) => voiceStore.resolveVoice(id).voice,
         logger,
       },
     });

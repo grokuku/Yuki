@@ -120,9 +120,10 @@ const voices: VoiceApiDeps = {
     update: (patch) => config.update(patch),
   },
   tts: {
-    synthesizePreview: async () => ({
+    synthesizePreview: async (voice) => ({
       contentType: "audio/wav",
       bytes: makeWav(16000, 0.3),
+      voiceRef: voice?.refAudio ? `/voices/${voice.refAudio}` : null,
     }),
   },
 };
@@ -207,11 +208,17 @@ const tts: TtsApiDeps = {
     getNumber: (path) => config.getNumber(path),
   },
   logger,
-  voices: { get: (id) => voiceStore.get(id) ?? null },
+  // Même câblage que `src/index.ts` : un id vide/inconnu retombe sur la voix
+  // par défaut du registre (`VoiceStore.resolveVoice`).
+  voices: { get: (id) => voiceStore.resolveVoice(id).voice },
   diagnostics: ttsDiagnostics,
   modelsDir,
   synth: {
-    synthesize: async () => ({ contentType: "audio/wav", bytes: makeWav(16000, 0.3) }),
+    synthesize: async ({ voice }) => ({
+      contentType: "audio/wav",
+      bytes: makeWav(16000, 0.3),
+      voiceRef: voice?.refAudio ? `/voices/${voice.refAudio}` : null,
+    }),
   },
 };
 

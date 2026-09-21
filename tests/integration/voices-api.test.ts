@@ -21,7 +21,8 @@ import { detectGpus } from "../../src/gpu/detect.js";
 import { runGate } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
-import { VoiceStore } from "../../src/tts/voices-store.js";
+import { VoiceStore, VoiceReferenceError } from "../../src/tts/voices-store.js";
+import type { Voice } from "../../src/tts/types.js";
 import { makeWav } from "../tts/wav-fixture.js";
 
 const profiles = loadProfiles();
@@ -56,6 +57,11 @@ async function startHarness(
     ttsEnabled?: boolean;
     seedPreset?: boolean;
     maxVoices?: number;
+    preview?: (voice: Voice | null) => Promise<{
+      contentType: string;
+      bytes: Buffer;
+      voiceRef?: string | null;
+    }>;
   } = {},
 ): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), "yuki-voices-api-"));
@@ -116,7 +122,13 @@ async function startHarness(
       update: (patch) => runtime.update(patch),
     },
     ...(options.withTts !== false
-      ? { tts: { synthesizePreview: async () => ({ contentType: "audio/wav", bytes: makeWav() }) } }
+      ? {
+          tts: {
+            synthesizePreview:
+              options.preview ??
+              (async () => ({ contentType: "audio/wav", bytes: makeWav() })),
+          },
+        }
       : {}),
   };
 
@@ -381,6 +393,45 @@ describe("POST /api/voices/{id}/preview", () => {
       headers: WRITE,
     });
     expect(response.status).toBe(404);
+  });
+
+  it("expose le chemin de référence envoyé (`x-yuki-tts-voice-ref`)", async () => {
+    const { baseUrl } = await startHarness({
+      ttsEnabled: true,
+      seedPreset: true,
+      preview: async () => ({
+        contentType: "audio/wav",
+        bytes: makeWav(),
+        voiceRef: "/voices/presets/camille.wav",
+      }),
+    });
+    const response = await fetch(`${baseUrl}/api/voices/camille/preview`, {
+      method: "POST",
+      headers: WRITE,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-yuki-tts-voice")).toBe("camille");
+    expect(response.headers.get("x-yuki-tts-voice-ref")).toBe(
+      "/voices/presets/camille.wav",
+    );
+  });
+
+  it("422 propre si la référence audio de la voix est absente", async () => {
+    const { baseUrl } = await startHarness({
+      ttsEnabled: true,
+      seedPreset: true,
+      preview: async (voice: Voice | null) => {
+        throw new VoiceReferenceError(voice?.id ?? "?", "/voices/presets/camille.wav");
+      },
+    });
+    const response = await fetch(`${baseUrl}/api/voices/camille/preview`, {
+      method: "POST",
+      headers: WRITE,
+    });
+    expect(response.status).toBe(422);
+    const body = (await response.json()) as { code: string; message: string };
+    expect(body.code).toBe("voice_ref_missing");
+    expect(body.message).toContain("camille.wav");
   });
 });
 

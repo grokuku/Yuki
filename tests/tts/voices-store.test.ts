@@ -267,4 +267,81 @@ describe("chemin `voice_ref` envoyé au moteur (store + adaptateur)", () => {
     const body = voiceRefOf(store, created.id);
     expect(body.voice_ref).toBe("/voices/cloned/ma-voix.wav");
   });
+
+  it("`tts.voice` VIDE (défaut) → preset par défaut → voice_ref absolu", () => {
+    // C'est le cas qui échouait : sans résolution par défaut, aucun `voice_ref`
+    // n'était envoyé (moteur : « requires speaker reference audio »).
+    const dir = tempDir();
+    seedPreset(dir);
+    const store = new VoiceStore({ dir });
+    const body = voiceRefOf(store, "");
+    expect(body.voice).toBe("camille");
+    expect(body.voice_ref).toBe("/voices/presets/camille.wav");
+  });
 });
+
+describe("VoiceStore — garde-fou de référence (`assertSample`)", () => {
+  it("fichier présent → aucune erreur et chemin absolu retourné", () => {
+    const dir = tempDir();
+    seedPreset(dir);
+    const store = new VoiceStore({ dir });
+    const voice = store.get("camille")!;
+    expect(store.samplePathOf(voice)).toBe(join(dir, "presets", "camille.wav"));
+    expect(() => store.assertSample(voice)).not.toThrow();
+  });
+
+  it("fichier ABSENT → VoiceReferenceError explicite (nomme le fichier)", () => {
+    const dir = tempDir();
+    seedPreset(dir);
+    rmSync(join(dir, "presets", "camille.wav")); // entrée conservée, WAV disparu
+    const store = new VoiceStore({ dir });
+    const voice = store.get("camille")!;
+    expect(store.samplePathOf(voice)).toBeNull();
+    let thrown: unknown;
+    try {
+      store.assertSample(voice);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(VoiceStoreError);
+    const error = thrown as VoiceStoreError;
+    expect(error.code).toBe("voice_ref_missing");
+    expect(error.status).toBe(422);
+    expect(error.message).toContain("camille");
+    expect(error.message).toContain(join(dir, "presets", "camille.wav"));
+  });
+
+  it("`null` / voix sans `refAudio` → aucune erreur (rien à vérifier)", () => {
+    const store = new VoiceStore({ dir: tempDir() });
+    expect(() => store.assertSample(null)).not.toThrow();
+    expect(store.samplePathOf({ ...sampleVoiceWithoutRef })).toBeNull();
+    expect(() => store.assertSample(sampleVoiceWithoutRef)).not.toThrow();
+  });
+});
+
+describe("VoiceStore — aucun cache : un registre ajouté APRÈS l'init est vu", () => {
+  it("le registre est relu à chaque appel (pas de cache au démarrage)", () => {
+    const dir = tempDir();
+    const store = new VoiceStore({ dir });
+    // Registre absent au démarrage : vide.
+    expect(store.list()).toEqual([]);
+    expect(store.defaultVoice()).toBeNull();
+    // Registre créé APRÈS l'instanciation du store (sans redémarrage).
+    seedPreset(dir);
+    expect(store.list().map((v) => v.id)).toEqual(["camille"]);
+    expect(store.defaultVoice()?.id).toBe("camille");
+    // Et la résolution de voix par défaut le voit immédiatement.
+    expect(store.resolveVoice("").voice?.id).toBe("camille");
+  });
+});
+
+const sampleVoiceWithoutRef = {
+  id: "sans-ref",
+  label: "Sans référence",
+  kind: "preset" as const,
+  lang: "fr",
+  refAudio: null,
+  refText: null,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  createdBy: "factory" as const,
+};

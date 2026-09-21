@@ -25,6 +25,7 @@ import { HolafFetch } from './vendor/holaf/holaf-fetch.js';
  * `HolafModal.getCss()`). `injectStyles: false` coupe l'injection.
  */
 import { HolafModal } from './vendor/holaf/holaf-modal.js';
+import { buildConfigPatch, engineFieldState, presentConfigSaveError } from './config-patch.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
 import { initTtsAssistant } from './tts-assistant.js';
@@ -221,6 +222,8 @@ const state = {
   rows: new Map(),
   secretState: new Map(),
   pendingResets: new Set(),
+  /** Note « sans effet avec ce moteur » par champ (voir `refreshEngineFields`). */
+  engineNotes: new Map(),
   healthReady: false,
 };
 
@@ -402,9 +405,17 @@ function renderField(field) {
     control.addEventListener("input", () => {
       state.pendingResets.delete(field.path);
       refreshVisibility();
+      refreshEngineFields();
       updateDirtyIndicators();
     });
     row.append(node);
+    // Note « sans effet avec ce moteur » (masquée jusqu'à `refreshEngineFields`).
+    const engineNote = h("p", {
+      class: "config-helper config-engine-note",
+      hidden: "hidden",
+    });
+    state.engineNotes.set(field.path, engineNote);
+    row.append(engineNote);
     if (field.kind === "textarea") {
       const reset = h("button", { class: "button button--ghost button--small", type: "button", text: "Réinitialiser au défaut" });
       reset.addEventListener("click", () => {
@@ -450,7 +461,39 @@ function render() {
     container.append(section);
   }
   refreshVisibility();
+  refreshEngineFields();
   updateDirtyIndicators();
+}
+
+/**
+ * (Dé)active les champs **sans effet pour le moteur** `tts.engine` et affiche
+ * une note explicite en français. Réagit au changement de moteur (l'écouteur
+ * `input` de chaque contrôle — dont `tts.engine` — appelle cette fonction).
+ *
+ * ⚠️ Ne touche QUE les champs à dépendance moteur (`engineFieldState`) et
+ * **respecte** le verrou d'environnement (`lockedByEnv`). Un contrôle désactivé
+ * garde sa valeur et n'est PAS retiré du patch d'enregistrement : griser ne
+ * bloque jamais le `PUT /api/config` (voir `buildConfigPatch`).
+ */
+function refreshEngineFields() {
+  const engineControl = state.inputs.get("tts.engine");
+  const engine = engineControl
+    ? engineControl.value
+    : state.fields["tts.engine"]?.value;
+  for (const field of ALL_FIELDS) {
+    const engineState = engineFieldState(field.path, engine);
+    if (!engineState) continue;
+    const control = state.inputs.get(field.path);
+    const note = state.engineNotes.get(field.path);
+    if (control) {
+      const locked = Boolean(state.fields[field.path]?.lockedByEnv);
+      control.disabled = locked || engineState.disabled;
+    }
+    if (note) {
+      note.textContent = engineState.note;
+      note.hidden = engineState.note === "";
+    }
+  }
 }
 
 /**
@@ -574,38 +617,7 @@ function showFieldErrors(fields) {
 }
 
 function buildPatch() {
-  const patch = {};
-  for (const field of ALL_FIELDS) {
-    const entry = state.fields[field.path];
-    if (entry?.lockedByEnv) continue;
-
-    if (field.kind === "secret") {
-      const secret = state.secretState.get(field.path);
-      if (!secret) continue;
-      if (secret.mode === "clear") {
-        patch[field.path] = null;
-        continue;
-      }
-      const value = secret.input ? secret.input.value.trim() : "";
-      if (value !== "") patch[field.path] = value;
-      continue;
-    }
-
-    if (state.pendingResets.has(field.path)) {
-      patch[field.path] = null;
-      continue;
-    }
-    const control = state.inputs.get(field.path);
-    if (!control) continue;
-    const value = control.value;
-    const initial = state.initial.get(field.path);
-    if (field.path === "gpu.profile" && value === "") {
-      if (initial !== "") patch[field.path] = null;
-      continue;
-    }
-    if (String(value) !== String(initial)) patch[field.path] = value;
-  }
-  return patch;
+  return buildConfigPatch({ allFields: ALL_FIELDS, state });
 }
 
 async function load() {
@@ -644,21 +656,12 @@ async function save() {
     // La voix active a pu changer côté formulaire : resynchronise le panneau.
     void voicesPanel?.refresh();
   } catch (error) {
-    // Erreurs métier : HolafFetch expose le corps JSON parsé dans `error.data`
-    // (fields/message/error), sinon le message typé de la brique.
-    const data = error?.data ?? {};
-    showFieldErrors(
-      data.fields ?? [
-        {
-          path: "",
-          message:
-            data.message ??
-            data.error ??
-            (error instanceof Error ? error.message : String(error)),
-        },
-      ],
-    );
-    saveStatus.textContent = "Échec de l'enregistrement.";
+    // Erreurs métier : HolafFetch expose le corps JSON parsé dans `error.data`.
+    // La cause RÉELLE (code + message + champ) est affichée, jamais un texte
+    // générique : `presentConfigSaveError` (module pur `config-patch.js`).
+    const presented = presentConfigSaveError(error, LABELS);
+    showFieldErrors(presented.fields);
+    saveStatus.textContent = presented.summary;
   }
 }
 

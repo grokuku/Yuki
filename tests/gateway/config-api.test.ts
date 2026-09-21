@@ -21,6 +21,11 @@ import { runGate } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
 
+// Le patch est produit par la VRAIE fonction de l'UI (`buildConfigPatch`),
+// pas reconstruit à la main : on reproduit exactement ce qu'envoie le bouton
+// « Enregistrer » de `/config`.
+import { buildConfigPatch } from "../../public/ui/config-patch.js";
+
 const profiles = loadProfiles();
 const manifest = loadCompatManifest();
 
@@ -443,5 +448,78 @@ describe("POST /api/config/llm/test", () => {
       },
     });
     expect(response.body).toMatchObject({ ok: false });
+  });
+});
+
+describe("PUT /api/config — patch produit par l'UI (`buildConfigPatch`)", () => {
+  it("un débit modifié (n° correctement typé) → 200 et persisté", async () => {
+    const { baseUrl } = await startHarness();
+    const patch = buildConfigPatch({
+      allFields: [{ path: "tts.speed", kind: "number" }],
+      state: {
+        fields: {},
+        secretState: new Map(),
+        pendingResets: new Set(),
+        inputs: new Map([["tts.speed", { value: "150" }]]),
+        initial: new Map([["tts.speed", 100]]),
+      },
+    });
+    expect(patch).toEqual({ "tts.speed": 150 });
+    const response = await fetch(`${baseUrl}/api/config`, {
+      method: "PUT",
+      headers: WRITE_HEADERS,
+      body: JSON.stringify(patch),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      fields: Record<string, { value: unknown; origin: string }>;
+      applied: { hot: string[] };
+    };
+    expect(body.fields["tts.speed"]).toMatchObject({ value: 150, origin: "store" });
+    expect(body.applied.hot).toContain("tts.speed");
+  });
+
+  it("un débit envoyé en CHAÎNE est aussi accepté (coercition serveur) → 200", async () => {
+    // Établit que le soupçon « le patch en chaîne fait échouer l'enregistrement »
+    // est FAUX : le schéma coerce les chaînes numériques (`validateDescriptor`).
+    const { baseUrl } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/config`, {
+      method: "PUT",
+      headers: WRITE_HEADERS,
+      body: JSON.stringify({ "tts.speed": "150" }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      fields: Record<string, { value: unknown; origin: string }>;
+    };
+    expect(body.fields["tts.speed"]).toMatchObject({ value: 150, origin: "store" });
+  });
+
+  it("un débit hors bornes fait échouer tout le patch (400 invalid_config, champ cité)", async () => {
+    const { baseUrl } = await startHarness();
+    const patch = buildConfigPatch({
+      allFields: [{ path: "tts.speed", kind: "number" }],
+      state: {
+        fields: {},
+        secretState: new Map(),
+        pendingResets: new Set(),
+        inputs: new Map([["tts.speed", { value: "250" }]]),
+        initial: new Map([["tts.speed", 100]]),
+      },
+    });
+    const response = await fetch(`${baseUrl}/api/config`, {
+      method: "PUT",
+      headers: WRITE_HEADERS,
+      body: JSON.stringify(patch),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      error: string;
+      fields: Array<{ path: string; code: string; message: string }>;
+    };
+    expect(body.error).toBe("invalid_config");
+    expect(body.fields[0]?.path).toBe("tts.speed");
+    expect(body.fields[0]?.code).toBe("above_max");
+    expect(body.fields[0]?.message).toContain("maximum 200");
   });
 });
