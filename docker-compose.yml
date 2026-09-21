@@ -151,21 +151,37 @@ services:
   # Variante CUDA : l'image se choisit via `YUKI_TTS_IMAGE` dans `.env`
   # (`full-cuda13` par défaut, `full-cuda12` si le driver l'impose).
   #
-  # ⚠️ POINTS À VÉRIFIER EN RÉEL (spec §13/C14) : le CLI exact du serveur
-  # audio.cpp et l'emplacement de son fichier de config (voice_presets / 
-  # voice_dir) ne sont pas documentés dans les archives. La commande ci-dessous
-  # est celle de la spec §11.2, à ajuster si le binaire diffère.
+  # ⚠️ COMMANDE (spec §13/C14) — corrigée d'après une EXÉCUTION RÉELLE :
+  # l'ENTRYPOINT de l'image est un DISPATCHER à sous-commandes
+  # (`cli`, `server`, `model-manager`, `perf`). Passer `--config` en 1er argument
+  # échoue avec « Unknown command: --config » (voir `docs/lot8.md` §11.4).
+  # Le 1er argument doit donc être la sous-commande `server`.
+  #
+  # Hôte/port ne sont PAS des flags : ce sont des CLÉS DU FICHIER DE CONFIG
+  # (`host`/`port`), d'où l'absence de `--host`/`--port` ci-dessous.
+  #
+  # ⚠️ RESTE À CONFIRMER EN RÉEL : le chemin du fichier de config DANS le
+  # conteneur (`/app/server.json` ci-dessous suppose le WORKDIR `/app`).
   # ===========================================================================
   tts:
     image: ${YUKI_TTS_IMAGE:-ghcr.io/0xshug0/audio.cpp:full-cuda13}
     container_name: yuki-tts
     profiles: ["tts"]
-    # CLI supposé : serveur HTTP sur le port interne 8081 (aligné sur le défaut
-    # `tts.baseUrl` = http://tts:8081). À confirmer (C14).
-    command: ["--server", "--host", "0.0.0.0", "--port", "8081"]
+    # Dispatcher audio.cpp → sous-commande `server`, puis `--config <fichier>`.
+    # Le serveur écoute sur `host:port` du fichier de config (0.0.0.0:8081),
+    # aligné sur le défaut `tts.baseUrl` = http://tts:8081.
+    command: ["server", "--config", "/app/server.json"]
     networks:
       - yuki-net
     volumes:
+      # Fichier de configuration du serveur audio.cpp (fourni par l'opérateur).
+      # Copier `config/audiocpp-server.json.example` vers ce chemin, puis
+      # renseigner le chemin RÉEL du GGUF (clé `models[].path`).
+      # ⚠️ Chemin cible non attesté — à confirmer en réel (C14).
+      - type: bind
+        source: ${YUKI_HOST_TTS_CONFIG:-./config/audiocpp-server.json}
+        target: /app/server.json
+        read_only: true
       # Modèle GGUF pré-déposé (ro) — jamais écrit par le service (§11.6).
       - type: volume
         source: yuki-models

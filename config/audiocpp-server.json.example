@@ -1,0 +1,19 @@
+{
+  "host": "0.0.0.0",
+  "port": 8081,
+  "backend": "cuda",
+  "device": 0,
+  "threads": 1,
+  "lazy_load": true,
+  "ui_enabled": false,
+  "voice_dir": "/voices",
+  "models": [
+    {
+      "id": "chatterbox",
+      "family": "chatterbox",
+      "path": "/models/Chatterbox-GGUF/<fichier-exact>.gguf",
+      "task": "tts",
+      "mode": "offline"
+    }
+  ]
+}

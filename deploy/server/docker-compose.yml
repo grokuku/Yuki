@@ -142,24 +142,49 @@ services:
               capabilities: [gpu]
 
   # ===========================================================================
-  # Service TTS (Lot 7) — OPT-IN via le profil Compose `tts` :
+  # Service TTS (Lot 7) — DÉMARRÉ AVEC LA STACK (plus de profil Compose).
   #
-  #     docker compose --profile tts up -d
+  # Ce compose est fait pour un déploiement SERVEUR piloté par
+  # `docker compose up -d` (sans option). Un service derrière
+  # `profiles: ["tts"]` ne serait donc JAMAIS démarré par cette commande —
+  # ni par une UI type Docky qui lance `up -d` sans profil. Le moteur démarre
+  # donc avec la stack. Pour l'exclure : `docker compose up -d gateway`.
+  #
+  # CONTREPARTIE : le conteneur `tts` tourne en permanence et son image CUDA
+  # (lourde) est tirée au premier déploiement. La VRAM n'est consommée qu'à
+  # l'usage (`lazy_load`) — à vérifier en réel avec l'image (non attesté).
   #
   # audio.cpp (Chatterbox Multilingual V3, CUDA NVIDIA uniquement). L'image se
   # choisit via `YUKI_TTS_IMAGE` dans `.env` (`full-cuda13` par défaut).
   #
-  # ⚠️ POINTS À VÉRIFIER EN RÉEL (spec §13/C14) : CLI exact du serveur audio.cpp
-  # et emplacement de son fichier de config. La commande est celle de la spec.
+  # ⚠️ COMMANDE (spec §13/C14) — corrigée d'après une EXÉCUTION RÉELLE :
+  # l'ENTRYPOINT de l'image est un DISPATCHER à sous-commandes
+  # (`cli`, `server`, `model-manager`, `perf`). Passer `--config` en 1er argument
+  # échoue avec « Unknown command: --config » (voir `docs/lot8.md` §11.4).
+  # Le 1er argument doit donc être la sous-commande `server`.
+  #
+  # Hôte/port ne sont PAS des flags : ce sont des CLÉS DU FICHIER DE CONFIG
+  # (`host`/`port`). Le fichier est monté ci-dessous (bind, ro) :
+  # copier `audiocpp-server.json.example` → `audiocpp-server.json`, puis
+  # renseigner le chemin RÉEL du GGUF (clé `models[].path`).
+  #
+  # ⚠️ RESTE À CONFIRMER EN RÉEL : le chemin du fichier de config DANS le
+  # conteneur (`/app/server.json` suppose le WORKDIR `/app`).
   # ===========================================================================
   tts:
     image: ${YUKI_TTS_IMAGE:-ghcr.io/0xshug0/audio.cpp:full-cuda13}
     container_name: yuki-server-tts
-    profiles: ["tts"]
-    command: ["--server", "--host", "0.0.0.0", "--port", "8081"]
+    # Dispatcher audio.cpp → sous-commande `server`, puis `--config <fichier>`.
+    command: ["server", "--config", "/app/server.json"]
     networks:
       - yuki-server-net
     volumes:
+      # Configuration du serveur (fournie par l'opérateur) — lecture seule.
+      # Copier `audiocpp-server.json.example` vers `./audiocpp-server.json`.
+      - type: bind
+        source: ./audiocpp-server.json
+        target: /app/server.json
+        read_only: true
       - type: volume
         source: yuki-server-models
         target: /models

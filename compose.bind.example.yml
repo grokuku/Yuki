@@ -26,6 +26,7 @@
 #   YUKI_HOST_MODELS_DIR=./.local/models
 #   YUKI_HOST_STATE_DIR=./.local/state
 #   YUKI_HOST_VOICES_DIR=./.local/voices
+#   YUKI_HOST_TTS_CONFIG=./config/audiocpp-server.json
 # =============================================================================
 services:
   gateway:
@@ -49,3 +50,22 @@ services:
       - type: bind
         source: ${YUKI_HOST_VOICES_DIR:-./.local/voices}
         target: /voices
+
+  # Le service `tts` (profil `tts`) est aussi converti en bind mounts. Sa
+  # commande et son fichier de config sont, eux, inchangés (déjà un bind, ro).
+  tts:
+    volumes: !override
+      # Configuration du serveur audio.cpp (copiée depuis
+      # `config/audiocpp-server.json.example`). ⚠️ Chemin cible à confirmer (C14).
+      - type: bind
+        source: ${YUKI_HOST_TTS_CONFIG:-./config/audiocpp-server.json}
+        target: /app/server.json
+        read_only: true
+      - type: bind
+        source: ${YUKI_HOST_MODELS_DIR:-./.local/models}
+        target: /models
+        read_only: true
+      - type: bind
+        source: ${YUKI_HOST_VOICES_DIR:-./.local/voices}
+        target: /voices
+        read_only: true

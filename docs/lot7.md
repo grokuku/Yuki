@@ -1409,14 +1409,14 @@ comportement acoustique du barge-in.
 
 | # | Point ouvert | Impact |
 | --- | --- | --- |
-| C1 | **Contrat d'API `audio.cpp`** pour les voix : clé d'option exacte (`voice`/`speaker`/`voice_ref`/preset ?), mode d'injection (**config + rechargement** vs **par requête**), exposition d'`exaggeration`/`cfg`, clé de langue HTTP | **bloquant §13 (étape 2) + §10.2** |
-| C2 | **`audio.cpp` charge-t-il le V3 et honore-t-il `fr` ?** (écart 18/23) | bloquant §13 (étape 1) |
+| C1 | ✅ **CONFIRMÉ (2026-09-21) pour les voix** : clés `voice` / `voice_ref` (chemin **ou** base64) / `reference_text`, presets `voice_presets`, `default_voice_preset`, `voice_dir` — et le **mode par requête est attesté** (pas seulement la config). ⚠️ **Restent à confirmer** : clé de **langue HTTP** (nom d'option non attesté ; seule la lib Python montre `language_id`) et exposition d'`exaggeration`/`cfg` (non attestée côté serveur). Preuve : `docs/lot8.md` §11 | **bloquant §13 (étape 2) + §10.2** (voix levé) |
+| C2 | ⚠️ **PARTIELLEMENT CONFIRMÉ (2026-09-21)** : `fr` est listé comme langue de la famille `chatterbox` (`audio-cpp`) ; la **version V3** du checkpoint n'est **pas** attestée dans les archives (variante `Chatterbox-GGUF`, sans « V3 »). Preuve : `docs/lot8.md` §11.8 | bloquant §13 (étape 1) |
 | C3 | **Fréquence native** de sortie Chatterbox (valeur de l'en-tête WS) | transport |
 | C10 | **Prompt** : modifier `system-prompt.md` en dur, ou passer par `prompts.light` ? | intégration |
 | C11 | **`gpu.bf16`** pour `tts` : **maintenu** (chemin CUDA BF16) ou **réduit** à `gpu.present`+`driver.floor` (Q8 n'exige pas BF16, plancher CC 7.5 sans BF16) ? | porte GPU/§11.5 |
 | C12 | **Approvisionnement modèle** : pré-dépôt dans `yuki-models` (ro) vs volume rw dédié | déploiement/§11.6 |
 | C13 | **Licences** Kokoro / sanotts / Sopro (non documentées) | juridique (plans B/C) |
-| C14 | **CLI/nom exacts** du service `audio.cpp` **+ emplacement de son fichier de config** dans l'image Docker | déploiement/§11.2 |
+| C14 | ✅ **CONFIRMÉ (2026-09-21, par EXÉCUTION RÉELLE)** : l'ENTRYPOINT de l'image est un **dispatcher à sous-commandes** (`cli`, `server`, `model-manager`, `perf`) — preuve : le conteneur lancé avec `command: ["--config", …]` boucle sur « `Unknown command: --config` ». La forme correcte est donc **`server --config /app/server.json`** (1er argument = sous-commande `server`). L'hypothèse `--server --host 0.0.0.0 --port 8081` (bloc §11.2) est **invalidée** : `--host`/`--port`/`--server` n'apparaissent **ni** dans les archives **ni** dans les logs ; hôte/port sont des **clés de config** (`host`/`port`). ⚠️ **Reste à confirmer en réel** : le **chemin** du fichier de config **dans le conteneur** (`/app/server.json` vs autre — WORKDIR de l'image non attesté). Preuve : logs d'exécution utilisateur + `docs/lot8.md` §11.1/§11.4 | déploiement/§11.2 |
 | C17 | **Découverte des voix par l'API `audio.cpp`** : endpoint de listing (`GET /v1/voices` ?) et contrat de `/v1/ui/upload` | backend/§10.2 |
 
 ---
