@@ -18,6 +18,7 @@ import {
   describeTestError,
   describeTtsState,
   formatBytes,
+  isTestAvailable,
   statusTechnicalDetails,
   validateTestText,
 } from "../../public/ui/tts-assistant.js";
@@ -74,6 +75,11 @@ describe("describeTtsState — les 5 états honnêtes + inconnu", () => {
     // Aucune affirmation « prêt », et cause GPU mentionnée comme POSSIBLE.
     expect(view.message).not.toMatch(/\bprêt\b/i);
     expect(view.message).toMatch(/GPU/);
+    // Un échec au démarrage renvoie vers les LOGS (actionnable), pas vers un
+    // « profil Compose » qui n'existe plus dans les variantes de déploiement.
+    expect(view.message).toMatch(/logs/);
+    expect(view.message).not.toMatch(/profil/i);
+    expect(view.message).not.toMatch(/--profile/);
   });
 
   it("starting → démarrage en cours + relance discrète", () => {
@@ -96,6 +102,26 @@ describe("describeTtsState — les 5 états honnêtes + inconnu", () => {
   it("ready sans compte → « Moteur prêt. » sans inventer de nombre", () => {
     const view = describeTtsState({ state: "ready", enabled: true, modelCount: null });
     expect(view.message).toBe("Moteur prêt.");
+  });
+
+  it("ready DÉDUIT (readinessInferred) → détails techniques exposés (honnêteté)", () => {
+    const view = describeTtsState({
+      state: "ready",
+      enabled: true,
+      ready: null,
+      modelCount: 1,
+      readinessInferred: true,
+      readinessNote: "Préparation déduite : /health ne l'expose pas explicitement (1 modèle listé).",
+    });
+    expect(view.key).toBe("ready");
+    expect(view.label).toBe("Prêt");
+    // La déduction est visible dans les détails (pas cachée).
+    expect(view.showDetails).toBe(true);
+  });
+
+  it("ready prouvé (ready:true) → pas de détails imposés", () => {
+    const view = describeTtsState({ state: "ready", enabled: true, ready: true, modelCount: 1 });
+    expect(view.showDetails).toBe(false);
   });
 
   it("error → message + détails techniques repliables", () => {
@@ -132,6 +158,61 @@ describe("statusTechnicalDetails", () => {
     expect(text).toContain("Insufficient Memory");
     expect(text).toContain("chatterbox");
   });
+
+  it("expose le corps brut de /health et la note de déduction", () => {
+    const text = statusTechnicalDetails({
+      state: "ready",
+      enabled: true,
+      baseUrl: "http://tts:8081",
+      engine: "chatterbox",
+      reachable: true,
+      ready: null,
+      modelCount: 1,
+      modelCountSource: "models",
+      readinessInferred: true,
+      readinessNote: "Préparation déduite : /health ne l'expose pas explicitement.",
+      latencyMs: 3,
+      measuredAt: "2026-09-20T12:00:00.000Z",
+      error: null,
+      payload: '{"statusText":"running"}',
+    });
+    expect(text).toContain("corps /health (brut, borné)");
+    expect(text).toContain("statusText");
+    expect(text).toMatch(/déduite/i);
+    expect(text).toContain("models");
+  });
+});
+
+/* ─── Bouton de test : utilisable dès que le moteur est joignable ────────── */
+
+describe("isTestAvailable — le test ne se verrouille pas sur une sonde imparfaite", () => {
+  it("moteur joignable + TTS activé → disponible, même si l'état est INCERTAIN", () => {
+    for (const state of ["starting", "error", "ready"]) {
+      expect(
+        isTestAvailable({ state, enabled: true, reachable: true }),
+        state,
+      ).toBe(true);
+    }
+  });
+
+  it("préparation indéterminée (ready:null) mais joignable → disponible", () => {
+    expect(
+      isTestAvailable({ state: "starting", enabled: true, reachable: true, ready: null }),
+    ).toBe(true);
+  });
+
+  it("TTS désactivé → indisponible (le message 503 guidera via l'activation)", () => {
+    expect(isTestAvailable({ state: "off", enabled: false, reachable: false })).toBe(false);
+  });
+
+  it("moteur injoignable → indisponible", () => {
+    expect(isTestAvailable({ state: "unreachable", enabled: true, reachable: false })).toBe(false);
+  });
+
+  it("rapport absent → NON bloqué (on laisse obtenir le message réel du gateway)", () => {
+    expect(isTestAvailable(null)).toBe(true);
+    expect(isTestAvailable(undefined)).toBe(true);
+  });
 });
 
 /* ─── Erreur de test → message lisible ──────────────────────────────────── */
@@ -162,6 +243,16 @@ describe("describeTestError — messages lisibles + réessai", () => {
     const view = describeTestError({ status: 502, code: "http_error", engineStatus: 500, engineBody: "boom" });
     expect(view.message).toMatch(/502|500/);
     expect(view.detail).toBe("boom");
+  });
+
+  it("échec avec corps moteur : le message BRUT est remonté (pas un générique)", () => {
+    const view = describeTestError({
+      status: 502,
+      code: "synthesis_failed",
+      engineStatus: 500,
+      engineBody: '{"detail":"model exploded"}',
+    });
+    expect(view.detail).toContain("model exploded");
   });
 
   it("503 tts_disabled et tts_unavailable", () => {

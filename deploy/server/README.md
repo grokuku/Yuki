@@ -49,7 +49,7 @@ Le service `tts` (moteur `audio.cpp`, image CUDA) **démarre avec la stack** :
 docker compose up -d gateway
 ```
 
-Deux points restent **à faire à la main** avant que la voix fonctionne :
+Trois points restent **à faire à la main** avant que la voix fonctionne :
 
 > Note : ces étapes supposent le fichier `audiocpp-server.json` **déjà** fourni
 > (voir l'encadré plus bas) ; c'est le fichier de configuration du serveur, monté
@@ -68,6 +68,11 @@ Deux points restent **à faire à la main** avant que la voix fonctionne :
    Renseigner ensuite ce nom dans `models[].path` de `audiocpp-server.json`.
 2. **Activer la voix** dans l'interface : page `/config`, onglet **Voix**,
    bouton « Activer la voix » (champ `tts.enabled`, appliqué au redémarrage).
+3. **Créer une voix** (upload d'un WAV de référence) : Chatterbox est un modèle
+   de **clonage** (`task: "clon"`), il **exige une référence audio** à chaque
+   requête. Registre vide ⇒ Yuki n'envoie pas de `voice_ref` et le moteur
+   répond `Chatterbox prepare requires speaker reference audio` (500). Voir
+   `docs/lot8.md` §11.11.
 
 Le moteur est **non bloquant** : s'il est absent ou en erreur, la conversation
 texte continue. État visible sur `GET /api/tts/status` et dans `/health`
@@ -93,6 +98,11 @@ Les clés de l'exemple (`host`, `port`, `backend`, `device`, `lazy_load`,
 `ui_enabled`, `voice_dir`, `models[]` avec `id`/`family`/`path`/`task`/`mode`)
 sont celles **attestées** par les archives `audio-cpp-*` (`docs/lot8.md` §11.2).
 `id` **doit** valoir `chatterbox` (c'est le nom que Yuki envoie au moteur).
+`task` **doit** valoir **`clon`** (clonage de voix) : la famille `chatterbox` du
+runtime n'accepte **que** `clon` et `vc` — `tts` déclenche
+`Chatterbox supports VoiceCloning and VoiceConversion` (preuve :
+`src/models/chatterbox/loader.cpp:131-133`, runtime audio.cpp). `mode` reste
+`offline` (seul mode supporté par Chatterbox). Voir `docs/lot8.md` §11.11.
 
 > ⚠️ **Commande corrigée d'après une EXÉCUTION RÉELLE** : l'ENTRYPOINT de
 > l'image est un **dispatcher à sous-commandes** (`cli`, `server`,

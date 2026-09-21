@@ -243,6 +243,17 @@ async function main(): Promise<void> {
     logger,
   });
 
+  // Chemin du volume des voix TEL QUE VU PAR LE CONTENEUR DU MOTEUR.
+  // Le moteur `audio.cpp` est un processus SÉPARÉ qui monte `yuki-voices` en
+  // lecture seule : le `refAudio` du registre est RELATIF (`presets/<id>.wav`,
+  // `cloned/<id>.wav`) et n'a donc aucun sens pour lui. On construit un chemin
+  // ABSOLU à partir du montage configuré (`YUKI_MOUNT_VOICES`, défaut
+  // `/voices`) — chemin explicite, et non la constante implicite de l'adaptateur.
+  // ⚠️ Les variantes Compose livrées montent le volume sur `/voices` côté
+  // gateway COMME côté moteur ; si ces deux points de montage divergent, il faut
+  // un champ de config dédié (voir `docs/lot8.md`, décision à confirmer).
+  const voiceBaseDir = env.mountPoints.voices;
+
   /**
    * Sonde d'état du moteur (Lot 8). Cache court + rafraîchissement en tâche de
    * fond : `/health` n'attend JAMAIS la sonde (voir `TtsDiagnostics`).
@@ -270,6 +281,8 @@ async function main(): Promise<void> {
       text,
       options: readTtsOptions(config),
       engine: config.getString("tts.engine"),
+      // `voice_ref` = `<montage moteur>/<refAudio>` (absolu, cf. ci-dessus).
+      voiceBaseDir,
     });
     return { contentType: result.contentType ?? "audio/wav", bytes: result.bytes };
   };
@@ -392,7 +405,7 @@ async function main(): Promise<void> {
           getString: (path) => config.getString(path),
           getNumber: (path) => config.getNumber(path),
         },
-        synthesizer: createAudioCppSynthesizer(audioCpp),
+        synthesizer: createAudioCppSynthesizer(audioCpp, { voiceBaseDir }),
         resolveVoice: (id) => voiceStore.get(id) ?? null,
         logger,
       },

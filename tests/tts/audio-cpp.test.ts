@@ -92,6 +92,23 @@ describe("toAudioCppRequest", () => {
     const request = toAudioCppRequest(voice, "x", { ...baseOptions, stream: true });
     expect(bodyOf(request).stream_format).toBe("sse");
   });
+
+  it("respecte un montage moteur configuré différemment (voiceBaseDir)", () => {
+    const body = bodyOf(
+      toAudioCppRequest(voice, "x", { ...baseOptions, voiceBaseDir: "/moteur/voices/" }),
+    );
+    // `refAudio` est RELATIF (`cloned/camille.wav`) : le chemin envoyé est
+    // TOUJOURS absolu, sous le point de montage du moteur (slashs en trop rognés).
+    expect(body.voice_ref).toBe("/moteur/voices/cloned/camille.wav");
+  });
+
+  it("voix sans refAudio : `voice` envoyée, aucun `voice_ref`", () => {
+    const preset: Voice = { ...voice, kind: "preset", refAudio: null, refText: null };
+    const body = bodyOf(toAudioCppRequest(preset, "x", baseOptions));
+    expect(body.voice).toBe("camille");
+    expect(body.voice_ref).toBeUndefined();
+    expect(body.reference_text).toBeUndefined();
+  });
 });
 
 const synthParams = {

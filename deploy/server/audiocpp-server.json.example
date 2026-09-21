@@ -12,7 +12,7 @@
       "id": "chatterbox",
       "family": "chatterbox",
       "path": "/models/Chatterbox-GGUF/<fichier-exact>.gguf",
-      "task": "tts",
+      "task": "clon",
       "mode": "offline"
     }
   ]

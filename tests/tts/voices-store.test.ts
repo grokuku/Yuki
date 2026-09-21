@@ -15,6 +15,7 @@ import {
   isValidVoiceId,
   slugifyVoiceId,
 } from "../../src/tts/voices-store.js";
+import { toAudioCppRequest, type ToAudioCppOptions } from "../../src/tts/audio-cpp.js";
 import { makeWav } from "./wav-fixture.js";
 
 const tempDirs: string[] = [];
@@ -223,5 +224,47 @@ describe("anti-traversée de chemin", () => {
     const store = new VoiceStore({ dir });
     expect(store.get("../voices")).toBeUndefined();
     expect(store.samplePath("../../etc/passwd")).toBeNull();
+  });
+});
+
+describe("chemin `voice_ref` envoyé au moteur (store + adaptateur)", () => {
+  const options: ToAudioCppOptions = {
+    language: "fr",
+    emotion: "neutre",
+    exaggeration: 500,
+    cfg: 500,
+    speed: 100,
+    baseUrl: "http://tts:8081",
+    engine: "chatterbox",
+    voiceBaseDir: "/voices",
+  };
+
+  function voiceRefOf(store: VoiceStore, id: string): Record<string, unknown> {
+    const { voice } = store.resolveVoice(id);
+    return JSON.parse(toAudioCppRequest(voice, "x", options).body) as Record<string, unknown>;
+  }
+
+  it("id inconnu → voix par défaut (preset) → voice_ref du preset, absolu", () => {
+    const dir = tempDir();
+    seedPreset(dir);
+    const store = new VoiceStore({ dir });
+    const body = voiceRefOf(store, "disparue");
+    expect(body.voice).toBe("camille");
+    expect(body.voice_ref).toBe("/voices/presets/camille.wav");
+  });
+
+  it("registre vide → aucune voix → AUCUN champ de voix envoyé", () => {
+    const store = new VoiceStore({ dir: tempDir() });
+    const body = voiceRefOf(store, "x");
+    expect(body.voice).toBeUndefined();
+    expect(body.voice_ref).toBeUndefined();
+  });
+
+  it("clonée → voice_ref absolu sous le montage configuré", () => {
+    const dir = tempDir();
+    const store = new VoiceStore({ dir });
+    const created = store.createFromUpload({ bytes: makeWav(), label: "Ma Voix" });
+    const body = voiceRefOf(store, created.id);
+    expect(body.voice_ref).toBe("/voices/cloned/ma-voix.wav");
   });
 });

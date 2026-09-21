@@ -11,9 +11,15 @@
  *   GET  /api/tts/models  → proxy de `{baseUrl}/v1/models` + présence du moteur.
  *   POST /api/tts/test    → synthèse d'un TEXTE LIBRE avec la voix active (WAV).
  *
- * Contrat moteur ATTESTÉ par l'archive locale `audio-cpp-http-server` :
- *   - `GET /health` → `{ ready, model_count }` (toujours 200) ;
- *   - `GET /v1/models` → liste OpenAI-compatible `{ id, task }` ;
+ * Contrat moteur — état de la connaissance (⚠️ mis à jour par l'EXÉCUTION) :
+ *   - `GET /v1/models` → liste OpenAI-compatible `{ id, task }` (observée en
+ *     réel : `chatterbox — tts`) ;
+ *   - `GET /health` → la forme `{ ready, model_count }` provenait d'une ARCHIVE
+ *     documentaire, elle est **démentie par l'exécution réelle** : le moteur
+ *     répond 200 **sans** champ `ready`. La forme exacte reste **INCONNUE** :
+ *     la sonde est donc **TOLÉRANTE** (jamais « erreur » sur un champ absent ou
+ *     incompris) et conserve le **corps brut borné** pour figer la forme dès
+ *     qu'un relevé réel sera disponible (voir `docs/lot8.md`, point `C25`) ;
  *   - `503` renvoyé par le `BusyGuard` … ET par le garde-mémoire
  *     (`min_free_memory_mb`, « Insufficient Memory »). Le contrat n'expose PAS
  *     de discriminant fiable : on conserve le corps brut sans trancher.
@@ -54,12 +60,18 @@ export type TtsState = "off" | "unreachable" | "starting" | "ready" | "error";
 /** Résultat BRUT d'une sonde `/health` (avant composition avec la config). */
 export interface TtsProbeRaw {
   reachable: boolean;
+  /** `true`/`false` = préparation explicite ; `null` = indéterminable. */
   ready: boolean | null;
   modelCount: number | null;
   latencyMs: number | null;
+  /** Uniquement une VRAIE erreur (HTTP ≠ 2xx ou champ d'erreur explicite). */
   error: string | null;
   /** Horodatage de la mesure (`0` = jamais mesuré). */
   at: number;
+  /** Corps brut borné de `/health` (pour figer la forme réelle plus tard). */
+  payload: string | null;
+  /** Clés de premier niveau du JSON (bornées), journalisées une fois par forme. */
+  shapeKeys: string[];
 }
 
 /** Rapport public de `GET /api/tts/status`. */
@@ -75,6 +87,14 @@ export interface TtsEngineReport {
   state: TtsState;
   /** Horodatage ISO de la mesure, ou `null` si jamais mesuré. */
   measuredAt: string | null;
+  /** Corps brut borné de `/health` (transparence : jamais interprété à tort). */
+  payload: string | null;
+  /** `true` si « prêt » a été DÉDUIT (modèles listés) faute de préparation explicite. */
+  readinessInferred: boolean;
+  /** Origine du nombre de modèles exposé (`health` ou `models`), sinon `null`. */
+  modelCountSource: "health" | "models" | null;
+  /** Explication honnête de la décision d'état (déduction / indétermination). */
+  readinessNote: string | null;
 }
 
 export interface TtsModelEntry {
@@ -198,6 +218,143 @@ async function readBounded(
   }
 }
 
+/* ─── Lecture TOLÉRANTE de `/health` ─────────────────────────────────────────
+ * La forme réelle de `/health` est INCONNUE (l'archive qui donnait
+ * `{ ready, model_count }` est démentie par l'exécution). Ces helpers acceptent
+ * les variantes raisonnables SANS jamais inventer : un champ absent, d'un type
+ * inattendu ou incompris reste « indéterminé » — JAMAIS « erreur ».
+ */
+
+/** Tokens de préparation reconnus comme POSITIFS (moteur prêt). */
+const TTS_READY_POSITIVE = new Set([
+  "true", "1", "yes", "y", "on", "up", "ready", "ok", "available",
+  "healthy", "live", "loaded", "done", "complete", "completed",
+  "success", "succeeded", "initialized", "initialised",
+]);
+
+/** Tokens de préparation reconnus comme NÉGATIFS (pas encore prêt). */
+const TTS_READY_NEGATIVE = new Set([
+  "false", "0", "no", "n", "off", "down", "starting", "start", "loading",
+  "load", "initializing", "initialising", "pending", "warming", "warmup",
+  "not_ready", "unavailable", "offline", "disabled", "idle", "booting",
+  "queued",
+]);
+
+/** Tokens signalant une VRAIE erreur moteur (preuve d'échec explicite). */
+const TTS_READY_ERROR = new Set([
+  "error", "errored", "failed", "failure", "fatal", "unhealthy", "broken",
+  "crash", "crashed",
+]);
+
+function normalizeToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+/** Convertit une valeur en compteur entier ≥ 0 (sinon `null`, jamais d'exception). */
+function toCountValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const n = Number(value.trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** Interprète un champ de préparation : `true`/`false`, ou `null` si inconnu. */
+function readReadinessValue(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value !== 0;
+  if (typeof value === "string") {
+    const token = normalizeToken(value);
+    if (token.length === 0) return null;
+    if (TTS_READY_POSITIVE.has(token)) return true;
+    if (TTS_READY_NEGATIVE.has(token)) return false;
+  }
+  return null;
+}
+
+/**
+ * Lit l'état de préparation d'une réponse `/health` en acceptant les variantes
+ * (`ready` booléen/chaîne/nombre, `ok`, `success`, `status`, `state`).
+ * `null` = indéterminable (jamais une erreur).
+ */
+function readReadiness(record: Record<string, unknown>): boolean | null {
+  for (const key of ["ready", "readyState", "ok", "success"]) {
+    if (key in record) {
+      const value = readReadinessValue(record[key]);
+      if (value !== null) return value;
+    }
+  }
+  for (const key of ["status", "state"]) {
+    if (key in record) {
+      const value = readReadinessValue(record[key]);
+      if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
+/** Lit le nombre de modèles depuis `/health` (variantes tolérées). */
+function readModelCount(record: Record<string, unknown>): number | null {
+  for (const key of [
+    "model_count",
+    "modelCount",
+    "models_total",
+    "modelsTotal",
+    "models_loaded",
+    "loaded_models",
+    "loadedModels",
+    "count",
+  ]) {
+    if (key in record) {
+      const value = toCountValue(record[key]);
+      if (value !== null) return value;
+    }
+  }
+  if ("models" in record) {
+    const value = record.models;
+    if (Array.isArray(value)) return value.length;
+    const count = toCountValue(value);
+    if (count !== null) return count;
+  }
+  return null;
+}
+
+/** Tronque un texte borné (jamais de payload illisible en entier). */
+function bounded(value: string, limit = 200): string {
+  const trimmed = value.trim();
+  return trimmed.length > limit ? `${trimmed.slice(0, limit)}…` : trimmed;
+}
+
+/**
+ * Détecte une VRAIE erreur signalée par le moteur dans une réponse 2xx.
+ * **Strict** : seul un champ d'erreur explicite, ou un `status`/`state`
+ * d'échec, déclenche l'erreur — un champ absent ou incompris n'en est JAMAIS
+ * une. C'est la 2ᵉ source de preuve après « HTTP ≠ 2xx ».
+ */
+function readEngineError(record: Record<string, unknown>): string | null {
+  for (const key of ["error", "error_message", "errorMessage", "last_error"]) {
+    if (!(key in record)) continue;
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return `Le moteur signale une erreur : ${bounded(value)}`;
+    }
+    if (value && typeof value === "object") {
+      return `Le moteur signale une erreur : ${bounded(JSON.stringify(value))}`;
+    }
+    if (value === true) return "Le moteur signale une erreur.";
+  }
+  for (const key of ["status", "state"]) {
+    const value = record[key];
+    if (typeof value === "string" && TTS_READY_ERROR.has(normalizeToken(value))) {
+      return `Le moteur signale un état « ${bounded(value, 60)} ».`;
+    }
+  }
+  return null;
+}
+
 export interface TtsProbeOptions {
   baseUrl: string;
   timeoutMs: number;
@@ -226,6 +383,7 @@ export async function probeTtsHealth(options: TtsProbeOptions): Promise<TtsProbe
     const latencyMs = Math.max(0, options.now() - t0);
     const body = await readBounded(response, 1_000);
     if (!response.ok) {
+      // Preuve d'erreur n°1 : HTTP ≠ 2xx.
       return {
         reachable: true,
         ready: null,
@@ -233,6 +391,8 @@ export async function probeTtsHealth(options: TtsProbeOptions): Promise<TtsProbe
         latencyMs,
         error: `Le moteur a répondu ${response.status}${body ? ` : ${body}` : ""}`,
         at: options.now(),
+        payload: body.length > 0 ? body : null,
+        shapeKeys: [],
       };
     }
     let parsed: unknown = null;
@@ -245,16 +405,33 @@ export async function probeTtsHealth(options: TtsProbeOptions): Promise<TtsProbe
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : null;
-    const ready = typeof record?.ready === "boolean" ? record.ready : null;
-    const modelCount =
-      typeof record?.model_count === "number" ? record.model_count : null;
-    const error =
-      record === null
-        ? `Réponse /health illisible${body ? ` : ${body}` : ""}`
-        : ready === null
-          ? "Réponse /health sans champ booléen `ready`."
-          : null;
-    return { reachable: true, ready, modelCount, latencyMs, error, at: options.now() };
+    if (record === null) {
+      // 2xx mais corps vide / non-JSON / HTML : ce n'est PAS une erreur, c'est
+      // une forme INCONNUE. On reste honnête : préparation indéterminée, et on
+      // conserve le corps brut pour l'analyser plus tard.
+      return {
+        reachable: true,
+        ready: null,
+        modelCount: null,
+        latencyMs,
+        error: null,
+        at: options.now(),
+        payload: body.length > 0 ? body : null,
+        shapeKeys: [],
+      };
+    }
+    const shapeKeys = Object.keys(record).slice(0, 64);
+    const engineError = readEngineError(record);
+    return {
+      reachable: true,
+      ready: engineError ? null : readReadiness(record),
+      modelCount: readModelCount(record),
+      latencyMs,
+      error: engineError,
+      at: options.now(),
+      payload: body.length > 0 ? body : null,
+      shapeKeys,
+    };
   } catch (error) {
     const latencyMs = Math.max(0, options.now() - t0);
     if (controller.signal.aborted) {
@@ -265,6 +442,8 @@ export async function probeTtsHealth(options: TtsProbeOptions): Promise<TtsProbe
         latencyMs,
         error: `Délai dépassé (${options.timeoutMs} ms) vers ${url}.`,
         at: options.now(),
+        payload: null,
+        shapeKeys: [],
       };
     }
     options.logger?.debug("tts.probe.failed", { url, error: messageOf(error) });
@@ -275,6 +454,8 @@ export async function probeTtsHealth(options: TtsProbeOptions): Promise<TtsProbe
       latencyMs,
       error: messageOf(error),
       at: options.now(),
+      payload: null,
+      shapeKeys: [],
     };
   } finally {
     clearTimeout(timer);
@@ -289,17 +470,67 @@ function emptyProbe(): TtsProbeRaw {
     latencyMs: null,
     error: null,
     at: 0,
+    payload: null,
+    shapeKeys: [],
   };
 }
 
-/** Dérive l'état synthétique à partir d'une sonde brute et de `tts.enabled`. */
-export function deriveTtsState(probe: TtsProbeRaw, enabled: boolean): TtsState {
+/**
+ * Dérive l'état synthétique.
+ *
+ * Règle : **jamais d'« erreur » sur un champ absent ou incompris** ; jamais de
+ * « prêt » sans preuve. Priorité :
+ *   1. désactivé → `off` ;
+ *   2. injoignable → `unreachable` ;
+ *   3. erreur Prouvée (HTTP ≠ 2xx, champ d'erreur explicite) → `error` ;
+ *   4. préparation explicitement négative (`ready:false`, `"starting"`) → `starting` ;
+ *   5. aucun modèle lisible (`0` côté `/health` ou `/v1/models`) → `error` ;
+ *   6. préparation explicite positive, OU indéterminable mais avec des modèles
+ *      listés → `ready` (déduction signalée par `readinessInferred`) ;
+ *   7. joignable mais tout est indéterminé → `starting` (jamais « erreur », et
+ *      jamais « prêt » sans preuve).
+ */
+export function deriveTtsState(
+  probe: TtsProbeRaw,
+  enabled: boolean,
+  engineModels: number | null = null,
+): TtsState {
   if (!enabled) return "off";
   if (!probe.reachable) return "unreachable";
   if (probe.error) return "error";
-  if (probe.ready === true) return "ready";
+  const modelCount = probe.modelCount !== null ? probe.modelCount : engineModels;
   if (probe.ready === false) return "starting";
-  return "error";
+  if (modelCount === 0) return "error";
+  if (probe.ready === true) return "ready";
+  if (modelCount !== null && modelCount > 0) return "ready";
+  return "starting";
+}
+
+/** Explication honnête d'une décision d'état (déduction ou indétermination). */
+function composeReadinessNote(
+  state: TtsState,
+  probe: TtsProbeRaw,
+  modelCount: number | null,
+  readinessInferred: boolean,
+): string | null {
+  if (state === "ready" && readinessInferred) {
+    const plural = modelCount !== null && modelCount > 1 ? "modèles" : "modèle";
+    const detail = modelCount !== null ? ` (${modelCount} ${plural} listé)` : "";
+    return `Préparation déduite : /health ne l'expose pas explicitement${detail}.`;
+  }
+  if (state === "error" && probe.error === null) {
+    return (
+      "Aucun modèle lisible (ni /health, ni /v1/models) : la synthèse ne peut " +
+      "pas aboutir."
+    );
+  }
+  if (state === "starting" && probe.ready === null && probe.error === null) {
+    return (
+      "Préparation non exposée par /health et aucun modèle lisible : par " +
+      "prudence, l'état reste « démarrage » — jamais « erreur » sur un champ absent."
+    );
+  }
+  return null;
 }
 
 /** Normalise un nom de moteur/modèle pour la comparaison (heuristique). */
@@ -386,8 +617,12 @@ export class TtsDiagnostics {
   private readonly now: () => number;
   private readonly logger?: Logger;
   private last: TtsProbeRaw | null = null;
+  /** Dernière liste `/v1/models` connue (sert à DÉDUIRE « prêt » sans preuve /health). */
+  private lastModels: TtsModelsReport | null = null;
   private lastAt = 0;
   private inflight: Promise<TtsProbeRaw> | null = null;
+  /** Signatures de formes `/health` déjà journalisées (log UNE fois par forme). */
+  private readonly loggedShapes = new Set<string>();
 
   constructor(
     private readonly config: TtsDiagnosticsConfig,
@@ -410,14 +645,21 @@ export class TtsDiagnostics {
     });
   }
 
-  /** Sonde FRAÎCHE (attendue, bornée par `timeoutMs`). */
+  /**
+   * Sonde FRAÎCHE (attendue, bornée par `timeoutMs`). Interroge `/health` ET
+   * `/v1/models` (en parallèle) : la liste des modèles permet de DÉDUIRE « prêt »
+   * quand `/health` n'expose pas explicitement sa préparation. Aucune des deux
+   * sondes ne lève.
+   */
   refresh(): Promise<TtsProbeRaw> {
     if (this.inflight) return this.inflight;
-    const pending = this.probe().then(
-      (raw) => {
+    const pending = Promise.all([this.probe(), this.models()]).then(
+      ([raw, models]) => {
         this.last = raw;
+        this.lastModels = models;
         this.lastAt = this.now();
         this.inflight = null;
+        this.logHealthShape(raw);
         return raw;
       },
       (error: unknown) => {
@@ -429,20 +671,49 @@ export class TtsDiagnostics {
     return pending;
   }
 
+  /**
+   * Journalise UNE FOIS par forme le corps brut borné de `/health` et la liste
+   * de ses clés de premier niveau. Objectif : **figer la forme exacte** dès
+   * qu'un relevé réel sera disponible, sans spammer (dédup par signature) et
+   * sans jamais prétendre connaître le schéma. Jamais d'état, jamais de secret
+   * (le corps de `/health` ne contient pas de clé d'API).
+   */
+  private logHealthShape(probe: TtsProbeRaw): void {
+    if (!this.logger || !probe.reachable || probe.shapeKeys.length === 0) return;
+    const signature = probe.shapeKeys.join(",");
+    if (this.loggedShapes.has(signature)) return;
+    if (this.loggedShapes.size >= 20) return;
+    this.loggedShapes.add(signature);
+    this.logger.debug("tts.health.shape", {
+      keys: probe.shapeKeys,
+      payload: probe.payload ? bounded(probe.payload, 500) : null,
+    });
+  }
+
   /** Compose un rapport public à partir d'une sonde brute. */
   private compose(probe: TtsProbeRaw): TtsEngineReport {
     const enabled = this.config.enabled();
+    const engineModels =
+      this.lastModels && this.lastModels.reachable ? this.lastModels.count : null;
+    const modelCount = probe.modelCount !== null ? probe.modelCount : engineModels;
+    const state = deriveTtsState(probe, enabled, engineModels);
+    const readinessInferred = state === "ready" && probe.ready === null;
     return {
       enabled,
       reachable: probe.reachable,
       ready: probe.ready,
-      modelCount: probe.modelCount,
+      modelCount,
       engine: this.config.engine(),
       baseUrl: this.config.baseUrl(),
       latencyMs: probe.latencyMs,
       error: probe.error,
-      state: deriveTtsState(probe, enabled),
+      state,
       measuredAt: probe.at > 0 ? new Date(probe.at).toISOString() : null,
+      payload: probe.payload,
+      readinessInferred,
+      modelCountSource:
+        probe.modelCount !== null ? "health" : engineModels !== null ? "models" : null,
+      readinessNote: composeReadinessNote(state, probe, modelCount, readinessInferred),
     };
   }
 
@@ -600,8 +871,32 @@ export function inspectModelsDir(dir: string): TtsDiskReport {
 }
 
 async function handleStatus(deps: TtsApiDeps): Promise<ConfigHttpResponse> {
-  const report = await deps.diagnostics.status();
-  return json(200, { ...report, modelsDir: inspectModelsDir(deps.modelsDir) });
+  // 200 GARANTI : la route de diagnostic n'échoue jamais et n'est jamais
+  // bloquante (sondes bornées par timeout, cache court).
+  try {
+    const report = await deps.diagnostics.status();
+    return json(200, { ...report, modelsDir: inspectModelsDir(deps.modelsDir) });
+  } catch (error) {
+    deps.logger.warn("tts.status.failed", { error: messageOf(error) });
+    const enabled = deps.config.getString("tts.enabled") === "on";
+    return json(200, {
+      enabled,
+      reachable: false,
+      ready: null,
+      modelCount: null,
+      engine: deps.config.getString("tts.engine"),
+      baseUrl: deps.config.getString("tts.baseUrl"),
+      latencyMs: null,
+      error: null,
+      state: enabled ? "unreachable" : "off",
+      measuredAt: null,
+      payload: null,
+      readinessInferred: false,
+      modelCountSource: null,
+      readinessNote: null,
+      modelsDir: inspectModelsDir(deps.modelsDir),
+    });
+  }
 }
 
 async function handleModels(deps: TtsApiDeps): Promise<ConfigHttpResponse> {

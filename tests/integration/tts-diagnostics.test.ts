@@ -362,7 +362,7 @@ describe("GET /api/tts/status", () => {
     expect(body.error).toContain("Insufficient Memory");
   });
 
-  it("réponse illisible : state error", async () => {
+  it("réponse NON-JSON (2xx) : jamais « erreur », corps brut conservé", async () => {
     const { baseUrl } = await startHarness({
       enabled: true,
       fetchImpl: engineFetch({
@@ -371,10 +371,12 @@ describe("GET /api/tts/status", () => {
     });
     const body = (await (await fetch(`${baseUrl}/api/tts/status`)).json()) as {
       state: string;
-      error: string;
+      error: unknown;
+      payload: string;
     };
-    expect(body.state).toBe("error");
-    expect(body.error).toContain("illisible");
+    expect(body.state).not.toBe("error");
+    expect(body.error).toBeNull();
+    expect(body.payload).toContain("pas du json");
   });
 
   it("délai dépassé : reachable:false + message de timeout", async () => {
@@ -417,6 +419,270 @@ describe("GET /api/tts/status", () => {
     expect(body.modelsDir.files).toEqual([
       { name: "chatterbox-q8.gguf", size: 1234 },
     ]);
+  });
+});
+
+/**
+ * Cœur du lot : la sonde `/health` doit être TOLÉRANTE à la forme réelle
+ * (inconnue) et ne JAMAIS produire un faux « erreur » sur un champ absent ou
+ * incompris. Une vraie erreur reste `error` (HTTP ≠ 2xx, champ d'erreur
+ * explicite).
+ */
+describe("sonde /health tolérante (formes variées)", () => {
+  async function statusFor(
+    options: HarnessOptions,
+  ): Promise<Record<string, unknown>> {
+    const { baseUrl } = await startHarness({ enabled: true, ...options });
+    return (await (await fetch(`${baseUrl}/api/tts/status`)).json()) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it("/api/tts/status reste TOUJOURS 200, quelle que soit la forme", async () => {
+    const payloads = [
+      "{\"ready\":true}",
+      "pas du json",
+      "",
+      "<html></html>",
+      '{"weird":1}',
+    ];
+    for (const payload of payloads) {
+      const { baseUrl } = await startHarness({
+        enabled: true,
+        fetchImpl: engineFetch({
+          health: () => new Response(payload, { status: 200 }),
+        }),
+      });
+      const response = await fetch(`${baseUrl}/api/tts/status`);
+      expect(response.status, payload).toBe(200);
+    }
+  });
+
+  it("ready booléen true → ready (prouvé, non déduit)", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({
+        health: () => jsonResponse(200, '{"ready":true,"model_count":1}'),
+      }),
+    });
+    expect(body.state).toBe("ready");
+    expect(body.readinessInferred).toBe(false);
+  });
+
+  it("ready booléen false → starting", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({ health: () => jsonResponse(200, '{"ready":false}') }),
+    });
+    expect(body.state).toBe("starting");
+    expect(body.ready).toBe(false);
+  });
+
+  it('ready en chaîne "true"/"ready"/"ok" → ready', async () => {
+    for (const value of ["true", "ready", "ok"]) {
+      const body = await statusFor({
+        fetchImpl: engineFetch({
+          health: () =>
+            jsonResponse(200, JSON.stringify({ ready: value, model_count: 1 })),
+        }),
+      });
+      expect(body.state, `ready=${value}`).toBe("ready");
+      expect(body.ready).toBe(true);
+    }
+  });
+
+  it('ready en chaîne "starting"/"loading" → starting', async () => {
+    for (const value of ["starting", "loading"]) {
+      const body = await statusFor({
+        fetchImpl: engineFetch({
+          health: () => jsonResponse(200, JSON.stringify({ ready: value })),
+        }),
+      });
+      expect(body.state, `ready=${value}`).toBe("starting");
+      expect(body.ready).toBe(false);
+    }
+  });
+
+  it("ready en nombre 1 → ready ; 0 → starting", async () => {
+    const one = await statusFor({
+      fetchImpl: engineFetch({
+        health: () => jsonResponse(200, '{"ready":1,"model_count":1}'),
+      }),
+    });
+    expect(one.state).toBe("ready");
+    const zero = await statusFor({
+      fetchImpl: engineFetch({ health: () => jsonResponse(200, '{"ready":0}') }),
+    });
+    expect(zero.state).toBe("starting");
+  });
+
+  it("ready absent mais modèles listés → ready DÉDUIT + note honnête", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({ health: () => jsonResponse(200, '{"model_count":1}') }),
+    });
+    expect(body.state).toBe("ready");
+    expect(body.readinessInferred).toBe(true);
+    expect(String(body.readinessNote)).toMatch(/déduite/i);
+    expect(body.modelCountSource).toBe("health");
+  });
+
+  it("ready ET model_count absents, mais /v1/models liste → ready déduit (cas réel)", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({
+        health: () => jsonResponse(200, '{"statusText":"running","uptime_s":12}'),
+        models: () =>
+          jsonResponse(200, '{"data":[{"id":"chatterbox","task":"tts"}]}'),
+      }),
+    });
+    expect(body.state).toBe("ready");
+    expect(body.readinessInferred).toBe(true);
+    expect(body.modelCountSource).toBe("models");
+    expect(body.state).not.toBe("error");
+  });
+
+  it("model_count via clés/variantes (models_total, models_loaded, models[])", async () => {
+    for (const payload of [
+      '{"ready":true,"models_total":3}',
+      '{"ready":true,"models_loaded":"2"}',
+      '{"ready":true,"models":[{"id":"a"},{"id":"b"}]}',
+    ]) {
+      const body = await statusFor({
+        fetchImpl: engineFetch({ health: () => jsonResponse(200, payload) }),
+      });
+      expect(body.state, payload).toBe("ready");
+      expect(typeof body.modelCount).toBe("number");
+    }
+  });
+
+  it("model_count absent → modelCount null, sans erreur", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({ health: () => jsonResponse(200, '{"ready":true}') }),
+    });
+    expect(body.state).toBe("ready");
+    expect(body.modelCount).toBeNull();
+  });
+
+  it("réponse VIDE (2xx) → pas d'erreur, jamais crash", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({ health: () => new Response("", { status: 200 }) }),
+    });
+    expect(body.state).not.toBe("error");
+    expect(body.error).toBeNull();
+  });
+
+  it("réponse HTML (2xx) → pas d'erreur, corps conservé", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({
+        health: () =>
+          new Response("<html><body>hi</body></html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+      }),
+    });
+    expect(body.state).not.toBe("error");
+    expect(body.payload).toContain("<html>");
+  });
+
+  it("/health en 500 → VRAIE erreur (preuve HTTP)", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({ health: () => jsonResponse(500, '{"error":"boom"}') }),
+    });
+    expect(body.state).toBe("error");
+    expect(String(body.error)).toContain("500");
+  });
+
+  it("/health OK sans modèles + /v1/models vide → error « aucun modèle »", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({
+        health: () => jsonResponse(200, '{"status":"ok","model_count":0}'),
+        models: () => jsonResponse(200, '{"data":[]}'),
+      }),
+    });
+    expect(body.state).toBe("error");
+    expect(String(body.readinessNote)).toMatch(/Aucun modèle/i);
+  });
+
+  it("/v1/models vide alors que /health OK (sans compte) → error", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({
+        health: () => jsonResponse(200, '{"status":"ok"}'),
+        models: () => jsonResponse(200, '{"data":[]}'),
+      }),
+    });
+    expect(body.state).toBe("error");
+  });
+
+  it("champ d'erreur explicite (2xx) → error", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({
+        health: () => jsonResponse(200, '{"error":"model load failed"}'),
+      }),
+    });
+    expect(body.state).toBe("error");
+    expect(String(body.error)).toContain("model load failed");
+  });
+
+  it('état d\'échec explicite (`state:"failed"`, 2xx) → error', async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({ health: () => jsonResponse(200, '{"state":"failed"}') }),
+    });
+    expect(body.state).toBe("error");
+  });
+
+  it("conservée : le corps brut borné de /health est exposé", async () => {
+    const body = await statusFor({
+      fetchImpl: engineFetch({
+        health: () => jsonResponse(200, '{"ready":true,"extra":"x"}'),
+      }),
+    });
+    expect(body.payload).toContain("extra");
+  });
+
+  it("journalise UNE fois la forme de /health (clés inconnues)", async () => {
+    const lines: string[] = [];
+    const logger = createLogger({
+      level: "debug",
+      sink: (line) => lines.push(line),
+      secretValues: [],
+    });
+    const diagnostics = new TtsDiagnostics(
+      { enabled: () => true, engine: () => "chatterbox", baseUrl: () => TTS_BASE },
+      {
+        timeoutMs: 50,
+        ttlMs: 0,
+        fetchImpl: engineFetch({
+          health: () => jsonResponse(200, '{"ready":true,"weird_key":1}'),
+        }),
+        logger,
+      },
+    );
+    await diagnostics.status();
+    await diagnostics.status();
+    const shapes = lines
+      .map((line) => JSON.parse(line) as { msg?: string; keys?: unknown })
+      .filter((entry) => entry.msg === "tts.health.shape");
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0]?.keys).toContain("weird_key");
+  });
+
+  it("le test de synthèse reste utilisable quand /health n'expose pas `ready`", async () => {
+    const { baseUrl } = await startHarness({
+      enabled: true,
+      synth: okSynth,
+      fetchImpl: engineFetch({
+        health: () => jsonResponse(200, '{"statusText":"running"}'),
+      }),
+    });
+    const status = (await (await fetch(`${baseUrl}/api/tts/status`)).json()) as {
+      state: string;
+    };
+    expect(status.state).not.toBe("error");
+    const response = await fetch(`${baseUrl}/api/tts/test`, {
+      method: "POST",
+      headers: WRITE,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("audio/wav");
   });
 });
 

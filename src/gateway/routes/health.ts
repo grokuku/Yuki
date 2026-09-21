@@ -51,9 +51,13 @@ export interface JobsSubsystemSnapshot {
  * conversation). Valeurs :
  *   - `off`         : désactivé par la config (`tts.enabled !== "on"`) ;
  *   - `unreachable` : activé mais moteur injoignable ;
- *   - `starting`    : joignable mais pas prêt (`ready:false`) ;
- *   - `ready`       : joignable et prêt ;
- *   - `error`       : joignable mais réponse en erreur / illisible.
+ *   - `starting`    : joignable mais pas prêt (préparation négative **ou**
+ *                     indéterminable sans modèle) ;
+ *   - `ready`       : joignable et prêt (prouvé, ou DÉDUIT de modèles listés) ;
+ *   - `error`       : joignable mais erreur PROUVÉE (HTTP ≠ 2xx, champ d'erreur
+ *                     explicite) ou aucun modèle lisible.
+ * ⚠️ Une réponse illisible (non-JSON, vide) n'est PAS une erreur : elle reste
+ * `starting` (indéterminée).
  */
 export interface TtsSubsystemSnapshot {
   status: "off" | "unreachable" | "starting" | "ready" | "error";

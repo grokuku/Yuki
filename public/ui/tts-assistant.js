@@ -123,9 +123,10 @@ export function describeTtsState(status) {
         badgeClass: "tts-badge--warn",
         message:
           `Yuki ne joint pas le moteur à l'adresse ${baseUrl}. Le conteneur « tts » n'est ` +
-          "probablement pas démarré. Le gateway n'a AUCUN accès à Docker : cette action se fait " +
-          "à la main (voir « Ce qui reste à faire à la main »). Autres causes possibles : profil " +
-          "Compose « tts » non activé, ou GPU non réservé au conteneur (pas de GPU disponible).",
+          "probablement pas démarré : le gateway n'a AUCUN accès à Docker, ce démarrage se fait " +
+          "à la main sur l'hôte (voir « Ce qui reste à faire à la main »). S'il démarre mais " +
+          "échoue (commande invalide, fichier de configuration introuvable, modèle absent), ses " +
+          "logs le disent (docker compose logs tts). Autre cause possible : aucun GPU réservé.",
         tone: "warn",
         showEnable: false,
         showRetry: true,
@@ -148,6 +149,7 @@ export function describeTtsState(status) {
       };
     case "ready": {
       const count = typeof status.modelCount === "number" ? status.modelCount : null;
+      const inferred = status.readinessInferred === true;
       return {
         key: "ready",
         label: "Prêt",
@@ -159,7 +161,9 @@ export function describeTtsState(status) {
         tone: "ok",
         showEnable: false,
         showRetry: false,
-        showDetails: false,
+        // Quand « prêt » a été DÉDUIT (modèles listés sans préparation explicite
+        // dans /health), on expose les détails pour rester honnête sur la preuve.
+        showDetails: inferred,
         retrySoon: false,
       };
     }
@@ -196,12 +200,34 @@ export function statusTechnicalDetails(status) {
   lines.push(
     `modèles (moteur) : ${typeof status.modelCount === "number" ? status.modelCount : "?"}`,
   );
+  if (status.modelCountSource) lines.push(`source des modèles : ${status.modelCountSource}`);
   lines.push(
     `latence : ${typeof status.latencyMs === "number" ? `${status.latencyMs} ms` : "?"}`,
   );
   lines.push(`mesuré à : ${status.measuredAt ?? "jamais"}`);
+  if (status.readinessNote) lines.push(`note : ${status.readinessNote}`);
   if (status.error) lines.push(`erreur : ${status.error}`);
+  if (status.payload) {
+    // Forme réelle de /health : conservée brute et bornée pour la figer plus tard.
+    lines.push("corps /health (brut, borné) :");
+    lines.push(String(status.payload));
+  }
   return lines.join("\n");
+}
+
+/**
+ * Le test de synthèse est-il utilisable ? **Oui dès que le moteur est joignable
+ * et le TTS activé**, MÊME si la préparation est indéterminée : le test est la
+ * PREUVE RÉELLE du bon fonctionnement, une sonde imparfaite ne doit pas le
+ * verrouiller. On ne le désactive que sur un constat sûr d'inutilisabilité
+ * (`off` ou `unreachable`). Un rapport absent (`null`) ne bloque rien : on laisse
+ * l'utilisateur cliquer et obtenir un message réel du gateway.
+ */
+export function isTestAvailable(status) {
+  if (!status || typeof status !== "object") return true;
+  if (status.enabled === false) return false;
+  if (status.reachable === false) return false;
+  return true;
 }
 
 /**
@@ -595,6 +621,9 @@ export function initTtsAssistant(root, deps = {}) {
       maintenance.addEventListener("click", () => openMaintenance());
       cardActions.append(maintenance);
     }
+    // Le test reste possible dès que le moteur est joignable (et le TTS activé),
+    // même si la préparation est indéterminée : c'est la preuve réelle.
+    testButton.disabled = busy || !isTestAvailable(lastStatus);
   }
 
   function setCardStatus(text, isError = false) {
@@ -876,7 +905,7 @@ export function initTtsAssistant(root, deps = {}) {
       );
     } finally {
       busy = false;
-      testButton.disabled = false;
+      testButton.disabled = !isTestAvailable(lastStatus);
     }
   }
 
@@ -943,7 +972,8 @@ export function initTtsAssistant(root, deps = {}) {
         h("li", { class: "tts-manual__item" }, [
           h("p", { class: "tts-manual__lead" }, [
             h("strong", { text: "Démarrer le conteneur « tts »" }),
-            " (il est derrière un profil Compose opt-in, il n'est pas démarré par défaut) :",
+            " (s'il n'est pas déjà démarré par la stack ; le `--profile` couvre la " +
+              "variante du dépôt racine, où le service est opt-in) :",
           ]),
           h("pre", { class: "tts-assistant__command", text: startCommand }),
           h("p", {

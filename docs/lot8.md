@@ -89,9 +89,15 @@ docker-compose.yml:82-100  # aucun bind du socket Docker
 ```
 
 **Conséquence.** L'UI ne peut ni démarrer, ni arrêter, ni recréer un conteneur.
-Le service `tts` est de surcroît derrière un **profil Compose opt-in**
-(`docker-compose.yml:161-162` : `container_name: yuki-tts`, `profiles: ["tts"]`)
-— il n'est donc **pas** démarré par un `docker compose up -d` nu.
+Le service `tts` n'est **pas** démarré par un `docker compose up -d` nu **dans
+la variante du dépôt racine** : `docker-compose.yml:169` déclare encore
+`profiles: ["tts"]` (`container_name: yuki-tts`, `:168`). En revanche, la
+variante **serveur** `deploy/server/docker-compose.yml` a **retiré** ce profil
+(commentaires `:145-152`) : le moteur y démarre **avec la stack**. La cause
+« profil Compose non activé » n'est donc **exacte que pour la variante racine**,
+et **fausse** pour la variante serveur — d'où son retrait des messages de
+l'assistant (§3.5) : le message ne doit pas envoyer l'utilisateur sur une fausse
+piste.
 
 ### 2.2 `/health` n'avait pas d'état TTS
 
@@ -142,6 +148,34 @@ l'existence et la valeur ne sont **pas attestées**). L'UI affiche pour cela
 précisément parce que Chatterbox est un moteur de **clonage** que le parcours
 recommandé passe par le **clonage par upload** (§6, §8).
 
+### 2.6 La forme de `/health` était une HYPOTHÈSE — démentie par l'exécution
+
+**Fait (exécution réelle, 2026-09-21).** L'assistant a affiché, moteur
+**joignable**, avec un faux état d'erreur :
+
+```
+état : error   /   joignable : oui   /   moteur : chatterbox   /   latence : 3 ms
+erreur : Réponse /health sans champ booléen `ready`.
+Modèles du moteur (1) : chatterbox — tts
+Modèle de voix sur le disque : 1 fichier (/models) — chatterbox-q8_0.gguf
+```
+
+Autrement dit : le moteur **répond**, `GET /v1/models` liste bien
+`chatterbox — tts`, le GGUF est sur le disque. Le **seul** défaut était **notre
+sonde**, qui exigeait un champ booléen `ready`. Or la forme
+`{ ready, model_count }` provenait d'une **archive documentaire**
+(`audio-cpp-http-server`), **pas d'un test réel** : c'était une **hypothèse**.
+
+**Conséquence.** La forme exacte de `GET /health` est **INCONNUE** et **en
+attente de relevé** : la présenter comme le contrat serait une **affirmation non
+prouvée**. La sonde est désormais **TOLÉRANTE** — elle ne déclare **jamais**
+« erreur » sur un champ **absent ou incompris** —, **conserve le corps brut
+borné** dans les détails techniques, et **journalise une fois** par forme
+(`tts.health.shape`) les clés observées, pour **figer la forme** dès que le
+relevé réel sera disponible. La règle « aucun `prêt` sans preuve » reste
+valable, **son inverse aussi** : on ne déclare pas « erreur » sur un champ qu'on
+ne comprend pas. Cf. **C25**.
+
 ---
 
 ## 3. Design retenu
@@ -151,8 +185,8 @@ recommandé passe par le **clonage par upload** (§6, §8).
 L'assistant est un module ES isolé, **jamais dupliqué** :
 
 ```
-public/ui/tts-assistant.js:443   # initTtsAssistant(root, deps)
-public/ui/tts-assistant.js:444   # root = élément OU id
+public/ui/tts-assistant.js:444   # initTtsAssistant(root, deps)
+public/ui/tts-assistant.js:445   # root = élément OU id
 public/ui/config.js:892-900      # montage dans l'onglet Voix (UNE ligne d'emplacement)
 public/ui/config.html:142        # <div id="tts-assistant-root"></div>
 public/ui/config.html:12         # <link rel="stylesheet" href="/ui/tts-assistant.css">
@@ -211,24 +245,48 @@ des libellés. Elle **n'invente jamais** un état : sans rapport, elle retombe s
 | `state` | Libellé | Badge | Action principale |
 | --- | --- | --- | --- |
 | `off` | Désactivé | neutre | Activer la voix |
-| `unreachable` | Non démarré | accent | Réessayer + action manuelle n°1 |
+| `unreachable` | Non démarré | accent | Réessayer + action manuelle n°1 (sinon **logs** du conteneur `tts`) |
 | `starting` | Démarrage en cours | accent | relance auto discrète |
 | `ready` | Prêt | OK | — (« Moteur prêt (N modèles) ») |
 | `error` | Erreur | danger | Réessayer + détails techniques |
 | *(absence)* | État inconnu | neutre | Réessayer |
 
-Preuves : `public/ui/tts-assistant.js:89-185` ; tests
-`tests/tts/ui-assistant.test.ts:51-115`.
+Preuves : `public/ui/tts-assistant.js:89-186` ; tests
+`tests/tts/ui-assistant.test.ts:51-120`.
+
+**Règle de décision d'état (implémentée).** Elle est **tolérante à la forme**
+de `/health` et ne produit **jamais** de faux « erreur ». `probe.ready` vaut
+`true`/`false` quand la préparation est **explicite**, `null` quand elle est
+**indéterminable** (`src/gateway/routes/tts.ts`, `deriveTtsState`).
+
+| Condition (dans l'ordre) | État | Nature de la preuve |
+| --- | --- | --- |
+| `tts.enabled !== "on"` | `off` | config |
+| moteur injoignable | `unreachable` | sonde (échec réseau/timeout) |
+| HTTP ≠ 2xx, ou champ d'erreur explicite (`error`, `status:"failed"`) | `error` | **prouvé** |
+| préparation explicitement négative (`ready:false`, `"starting"`, `"loading"`, `0`) | `starting` | prouvé |
+| aucun modèle lisible (`0` dans `/health` **ou** `/v1/models`) | `error` | prouvé (aucun modèle) |
+| préparation explicitement positive (`ready:true`, `"ok"`, `"ready"`, `1`) | `ready` | **prouvé** |
+| préparation indéterminable **mais** modèles listés (> 0) | `ready` | **DÉDUIT** (`readinessInferred`, note dans les détails) |
+| joignable mais tout est indéterminé | `starting` | ni prouvé ni déduit → jamais « erreur » |
+
+Les variantes suivantes sont lues **sans être présumées** : `ready` booléen,
+chaîne (`"true"`/`"false"`/`"ready"`/`"ok"`/`"starting"`/`"loading"`), nombre
+(`1`/`0`) ; le compte de modèles via `model_count`, `modelCount`, `models_total`,
+`models_loaded`, `loaded_models`, `models` (tableau **ou** nombre), `count`.
+Absent, `null`, vide, non-JSON ou HTML ⇒ **indéterminé** (jamais une erreur).
+Preuves : `tests/integration/tts-diagnostics.test.ts` (« sonde /health tolérante
+(formes variées) »).
 
 ### 3.5 Messages d'erreur
 
-`describeTestError()` (`public/ui/tts-assistant.js:213`) mappe le corps d'erreur
+`describeTestError()` (`public/ui/tts-assistant.js:214`) mappe le corps d'erreur
 du test vers : **message + que faire + détail technique + Réessayer**.
 
 | Cas | Message clé |
 | --- | --- |
 | moteur absent (`tts_unavailable`) | « Le moteur TTS n'est pas disponible côté gateway. » |
-| pas de GPU / injoignable (`unreachable`) | causes **possibles** : conteneur non démarré, profil Compose non activé, **GPU non réservé** (§3.4) |
+| pas de GPU / injoignable (`unreachable`) | causes **possibles, actionnables** : conteneur non démarré (action hôte), conteneur démarré mais **échoué** (voir **logs** : `docker compose logs tts`), **GPU non réservé** (§3.4) |
 | aucun modèle installé (`modelsDir.fileCount = 0`) | « Aucun modèle de voix n'est installé. » + chemin + action **hors Yuki** |
 | `503 server_busy` | « occupé **OU** manque de mémoire » (jamais tranché) |
 | `504 timeout` | « n'a pas répondu dans le délai imparti (tts.timeoutMs). » |
@@ -236,8 +294,8 @@ du test vers : **message + que faire + détail technique + Réessayer**.
 | `400 text_too_long` | « 500 caractères maximum. » |
 | réseau (statut 0) | « La requête n'a pas abouti. » |
 
-Preuves : `public/ui/tts-assistant.js:213-299` ; tests
-`tests/tts/ui-assistant.test.ts:139-184`.
+Preuves : `public/ui/tts-assistant.js:214-300` ; tests
+`tests/tts/ui-assistant.test.ts:144-187`.
 
 ---
 
@@ -246,9 +304,13 @@ Preuves : `public/ui/tts-assistant.js:213-299` ; tests
 ### 4.1 Démarrer le conteneur `tts`
 
 - **Pourquoi hors UI** : le gateway n'a **aucun** accès Docker (§2.1).
-- **Action hôte** : `docker compose --profile tts up -d` (à la racine du dépôt
-  Yuki, GPU NVIDIA disponible). Le profil est `["tts"]`
-  (`docker-compose.yml:162`).
+- **Action hôte** : `docker compose up -d` (variante **serveur**,
+  `deploy/server/docker-compose.yml`, où le service démarre avec la stack) ou
+  `docker compose --profile tts up -d` (variante **racine**, où le profil `tts`
+  subsiste — `docker-compose.yml:169`). GPU NVIDIA disponible.
+- **En cas d'échec** : si le conteneur tourne mais que le moteur ne répond pas,
+  lire ses **logs** (`docker compose logs tts`) — commande de démarrage
+  invalide, fichier de configuration introuvable ou modèle absent y figurent.
 
 **Options écartées.**
 
@@ -287,8 +349,9 @@ Preuves : `public/ui/tts-assistant.js:213-299` ; tests
 
 ### 5.1 Une seule fois, à la main (les 2 actions du §4)
 
-1. **Démarrer le moteur** (sur l'hôte, racine du dépôt) :
-   `docker compose --profile tts up -d`.
+1. **Démarrer le moteur** (sur l'hôte) : `docker compose up -d` (variante
+   serveur) ou `docker compose --profile tts up -d` (variante du dépôt racine,
+   §4.1). En cas d'échec, lire ses **logs** (`docker compose logs tts`).
 2. **Déposer le modèle** : copier le GGUF attendu dans le volume `yuki-models`
    (voir commande §4.2).
 
@@ -333,7 +396,7 @@ Tant que ces deux actions ne sont pas faites, l'assistant le **dira** (sans
 
 | Symptôme | Cause probable | Action |
 | --- | --- | --- |
-| Badge « Non démarré » | conteneur `tts` non démarré / profil non activé | action manuelle n°1, puis « Vérifier le moteur » |
+| Badge « Non démarré » | conteneur `tts` non démarré, **ou** démarré mais échoué | action manuelle n°1 ; s'il tourne, lire **`docker compose logs tts`**, puis « Vérifier le moteur » |
 | Badge « Erreur », corps `503` | occupé **ou** mémoire GPU insuffisante | attendre et « Réessayer » ; sinon libérer de la mémoire GPU |
 | « Aucun modèle de voix n'est installé » | volume `yuki-models` vide | action manuelle n°2 |
 | Test → `504` | modèle en cours de chargement / moteur bloqué | attendre « Prêt » puis « Réessayer » |
@@ -397,6 +460,70 @@ descriptions, sans clonage.
 côté modèle** (plan B du Lot 7 §2.6/§12). À n'envisager qu'**après** avoir levé
 `C18`/`C19` ci-dessous.
 
+### Sources de voix permissives — enquête du 2026-09-21 (sourcée)
+
+Question posée : « le projet `audio.cpp` fournit-il un échantillon audio de
+référence utilisable ? ». Réponse **factuelle** :
+
+- **Oui, `audio.cpp` fournit des WAV de référence**, sous la **licence du dépôt
+  — Apache-2.0** (`LICENSE` : « Copyright 2026 ShugoAI LLC — Licensed under the
+  Apache License, Version 2.0 »), et ils sont **utilisés dans les exemples
+  officiels de clonage Chatterbox** (`docs/tts.md` :
+  `--voice-ref assets/resources/b.wav` ; `README.md:638` :
+  `--voice-ref assets/resources/sample.wav`). Liste exacte (API GitHub Trees,
+  dépôt `0xShug0/audio.cpp`, branche `main`) :
+  - `assets/resources/b.wav` **=** `assets/resources/sample.wav` — **mono
+    24 kHz, 16 bits PCM, 14,07 s, 675 496 o**, **anglais** ;
+  - `assets/resources/a.wav` — mono 24 kHz PCM, 5,95 s, 285 644 o (source VC) ;
+  - `assets/resources/c.wav` — stéréo 24 kHz PCM, 7,53 s ;
+  - `webui/native/demo_voices/demo_1_man.wav` — stéréo 48 kHz PCM, 4,71 s
+    (**anglais**) ; `demo_2_man` (7,62 s), `demo_3_woman` (9,88 s),
+    `demo_4_woman` (4,78 s) — **chinois** ; transcrits dans
+    `webui/native/demo_voices/prompt_text`.
+- **Aucun WAV français** n'existe dans `audio.cpp`, ni dans le dépôt amont
+  `resemble-ai/chatterbox` (**MIT**, arbre `main` sans `.wav`), ni dans le dépôt
+  HF `ResembleAI/chatterbox` (aucun fichier audio). Les `demo_voices` sont
+  **EN/ZH**.
+- **Chatterbox n'expose aucune voix par défaut** : `audio.cpp` documente
+  « Built-in voices: Not exposed by this integration » et exige un `--voice-ref`
+  (`docs/tts.md`, section Chatterbox). C'est la cause exacte du message
+  `Chatterbox prepare requires speaker reference audio` (cf. **D36**).
+- **Paquets GGUF** : le dossier `Chatterbox-GGUF` du dépôt
+  `audio-cpp/audio.cpp-gguf` **ne contient que deux GGUF, aucun WAV** (API HF
+  `…/tree/main/Chatterbox-GGUF`).
+
+**Sources françaises sous licence permissive** (matière première d'un preset
+livrable) :
+
+| Source | Licence | Format | Remarque |
+| --- | --- | --- | --- |
+| Common Voice (p. ex. `fixie-ai/common_voice_17_0`, config `fr`) | **CC0-1.0** | MP3 → WAV (`ffmpeg`) | voix humaines réelles, redistribution libre |
+| VoxPopuli (`facebook/voxpopuli`, config `fr`) | **CC0-1.0** (carte : « The dataset is distributed under CC0 license ») | parquet | discours du Parlement européen |
+| FLEURS (`google/fleurs`, config `fr_fr`) | **CC-BY-4.0** | WAV 16 kHz, mais URLs **signées/expirantes** | attribution requise ; clips parfois > 10 s |
+| **SIWIS** (miroir HF `Aviv-anthonnyolime/SIWIS_French_Speech_Synthesis_Database`) | **CC-BY-4.0** | **WAV 44,1 kHz PCM — direct** | **✅ source retenue (D38)** ; voix **humaine**, attribution requise ; **aucune conversion** (`ffmpeg` inutile) |
+| Piper `fr_FR-gilles-low` (sample) | dataset **CC0** | MP3 (**synthétique**) | timbre du modèle Piper, pas d'une voix humaine |
+| Piper `fr_FR-mls-medium` / `fr_FR-siwis-medium` (samples) | dataset **CC-BY-4.0** | MP3 (**synthétique**) | idem |
+
+> ⚠️ **Provenance des WAV `audio.cpp`** : le dépôt est Apache-2.0 dans son
+> ensemble, mais **aucune attribution séparée** n'est fournie pour
+> `assets/resources/*.wav` ni `webui/native/demo_voices/*.wav` (contrairement
+> aux fixtures LibriSpeech, explicitement créditées CC-BY-4.0). La
+> **redistribution** de ces voix précises reste donc **à confirmer** auprès de
+> l'amont — les sources **CC0** ci-dessus sont, elles, sans réserve.
+>
+> ⚠️ **Langue de la référence** : « Ensure that the reference clip matches the
+> specified language tag. Otherwise, language transfer outputs may inherit the
+> accent of the reference clip's language. » (carte `ResembleAI/chatterbox`).
+> Une référence **anglaise** fait donc « parler français avec un accent ».
+
+**Ce qu'il resterait à faire pour en faire un preset Yuki** (non implémenté) :
+1. déposer le WAV converti en `presets/<id>.wav` dans le volume voix ;
+2. ajouter une entrée `kind: "preset"`, `createdBy: "factory"` dans
+   `voices.json` — le registre est lu **exclusivement** depuis ce fichier, un
+   WAV seul est invisible (`src/tts/voices-store.ts:1-13,183-206`) ;
+3. (optionnel) une route d'amorçage, ou livrer fichier + registre à
+   l'installation.
+
 ---
 
 ## 8. Configuration UI et CSP
@@ -425,32 +552,42 @@ E2E Chromium headless avec la **CSP réelle**, captures. Aucun moteur réel requ
 
 ### Tests unitaires
 
-`tests/tts/ui-assistant.test.ts` (26 tests) : bornes du texte, mapping des 5
+`tests/tts/ui-assistant.test.ts` (35 tests) : bornes du texte, mapping des 5
 états + inconnu, mapping des erreurs (dont le `503` ambigu), diagnostic disque et
-moteur, format des tailles.
+moteur, format des tailles, **déduction honnête de « prêt »** et
+**disponibilité du bouton de test** (`isTestAvailable`) quand la préparation est
+indéterminée.
 
-### Test d'intégration
+### Tests d'intégration
 
 `tests/integration/static-ui.test.ts` — bloc « Assistant de mise en route du TTS
 (Lot 8) » (`:334`) : assets servis, conteneur de montage, lien CSS, absence de
 style inline, routeur du gateway uniquement, pas de `window.confirm`/`innerHTML`.
+
+`tests/integration/tts-diagnostics.test.ts` — bloc
+« sonde /health tolérante (formes variées) » : `ready` booléen vrai/faux, en
+chaîne, en nombre, absent ; `model_count` absent ou via clés variées ; réponse
+non-JSON, vide, HTML ; `/health` en 500 ; `/v1/models` vide alors que `/health`
+est OK ; `/health` OK sans modèles ; champ d'erreur explicite. **Aucun cas ne
+lève ni ne produit de faux « erreur »**, et `GET /api/tts/status` reste **200**.
 
 ### E2E headless
 
 `_tools/e2e-tts-ui.mjs` (+ `_tools/e2e-tts-serve.ts`), **hors du dossier du
 dépôt mais suivis par git**. Le moteur est **simulé** via un fichier d'état
 (`_tools/e2e-tts-serve.ts:134`, `:155`), ce qui exerce les **5 états** de la
-carte. Le parcours assistant (`_tools/e2e-tts-ui.mjs:484`) vérifie : les 5
+carte **et** un 6ᵉ cas « `/health` **sans** champ `ready` » (forme réelle
+observée). Le parcours assistant (`_tools/e2e-tts-ui.mjs:484`) vérifie : les
 badges, le modèle disque, la liste moteur, le bloc manuel, les boutons, le test
-de synthèse, le refus > 500 caractères, la confirmation d'activation (annulée),
-et **0 violation CSP**.
+de synthèse **jusque dans le cas sans `ready`**, le refus > 500 caractères, la
+confirmation d'activation (annulée), et **0 violation CSP**.
 
 ### Chiffres réels
 
-| Mesure | Avant | Après |
+| Mesure | Avant ce lot | Après ce lot |
 | --- | --- | --- |
-| `npm test` | **403 passed / 4 skipped** (45 fichiers) | **432 passed / 4 skipped** (46 fichiers) |
-| E2E assistant | — | **37/37 vérifications OK, violations CSP = 0** |
+| `npm test` | **437 passed / 4 skipped** (46 fichiers) | **466 passed / 4 skipped** (46 fichiers) |
+| E2E assistant | **37/37** vérifications OK, CSP=0 | **40/40** vérifications OK, CSP=0 |
 | `npm run typecheck` | OK | OK |
 | `npm run build` | OK | OK |
 | `node --check` (JS UI) | OK | OK |
@@ -460,6 +597,7 @@ et **0 violation CSP**.
 `config-assistant-ready.png`, `config-assistant-starting.png`,
 `config-assistant-error.png`, `config-assistant-unreachable.png`,
 `config-assistant-off.png`, `config-assistant-test.png`,
+`config-assistant-health-unknown.png`,
 `config-assistant-indigo-dark.png`, `config-assistant-emerald-light.png`.
 
 ### Non vérifiable ici (à faire en réel, avec GPU + Docker)
@@ -476,25 +614,34 @@ et **0 violation CSP**.
 
 | # | Décision | Preuve |
 | --- | --- | --- |
-| **D26** | **L'assistant TTS est un composant autonome monté par `id`** (`initTtsAssistant(root, deps)`), **jamais dupliqué** ; son emplacement ne tient qu'à une ligne | `public/ui/tts-assistant.js:443`, `public/ui/config.js:892`, `public/ui/config.html:142` |
+| **D26** | **L'assistant TTS est un composant autonome monté par `id`** (`initTtsAssistant(root, deps)`), **jamais dupliqué** ; son emplacement ne tient qu'à une ligne | `public/ui/tts-assistant.js:444`, `public/ui/config.js:892`, `public/ui/config.html:142` |
 | **D27** | **Tout passe par les routes du gateway** (`/api/tts/*`, `/api/config`, `/api/admin/restart`) — **aucun** accès direct au moteur, **aucun** socket Docker | `src/gateway/routes/tts.ts:721-747`, `tests/integration/static-ui.test.ts:364-376` |
-| **D28** | **Carte d'état dérivée de la sonde** ; « prêt » **seulement** sur preuve positive ; état inconnu si pas de rapport | `src/gateway/routes/tts.ts:296-303`, `public/ui/tts-assistant.js:89-185` |
+| **D28** | **Carte d'état dérivée de la sonde** ; « prêt » **seulement** sur preuve positive, et **jamais d'« erreur » sur un champ absent ou incompris** (vraie erreur seulement sur preuve : HTTP ≠ 2xx ou champ d'erreur explicite) | `src/gateway/routes/tts.ts` (`deriveTtsState`), `public/ui/tts-assistant.js:89-186` |
 | **D29** | **Test par texte libre** (≤ 500 caractères, phrase par défaut en placeholder) ; lecture **Web Audio** (`<audio>` interdit) | `src/gateway/routes/tts.ts:47`, `:673`, `public/ui/tts-assistant.js:29-31` |
-| **D30** | **« Activer la voix » = `PUT /api/config` (`tts.enabled=on`) + redémarrage délégué** à la logique existante de `config.js`, avec confirmation HolafModal | `src/config/schema.ts:217-218`, `public/ui/config.js:745`, `public/ui/tts-assistant.js:884` |
-| **D31** | **`503` honnête : « occupé OU mémoire insuffisante »** — jamais tranché (contrat non discriminant) | `public/ui/tts-assistant.js:213-299`, `src/tts/audio-cpp.ts:24-27` |
-| **D32** | **Les 2 actions hors UI sont documentées dans l'assistant** (démarrage conteneur, dépôt modèle) avec commandes exactes | `public/ui/tts-assistant.js:928-983` |
+| **D30** | **« Activer la voix » = `PUT /api/config` (`tts.enabled=on`) + redémarrage délégué** à la logique existante de `config.js`, avec confirmation HolafModal | `src/config/schema.ts:217-218`, `public/ui/config.js:745`, `public/ui/tts-assistant.js:885` |
+| **D31** | **`503` honnête : « occupé OU mémoire insuffisante »** — jamais tranché (contrat non discriminant) | `public/ui/tts-assistant.js:214-300`, `src/tts/audio-cpp.ts:24-27` |
+| **D32** | **Les 2 actions hors UI sont documentées dans l'assistant** (démarrage conteneur, dépôt modèle) avec commandes exactes | `public/ui/tts-assistant.js:929-984` |
 | **D33** | **Option C (presets générés) écartée en v1** ; le **clonage par upload** est le chemin praticable | §7, `docs/lot7.md` §10 |
+| **D34** | **Le chemin `voice_ref` envoyé au moteur est ABSOLU, fondé sur le montage configuré** `YUKI_MOUNT_VOICES` (défaut `/voices`) : l'adaptateur joint `<voiceBaseDir>/<refAudio>` (`refAudio` est relatif au registre) | `src/tts/audio-cpp.ts:128-132`, `src/tts/voices-store.ts:278`, `src/index.ts:255,284-285,408`, `src/config/env.ts:152` |
+| **D35** | **La sonde `/health` est TOLÉRANTE à la forme réelle (inconnue)** : lit `ready` booléen/chaîne/nombre/absent et le compte de modèles via plusieurs clés ; « prêt » peut être **DÉDUIT** des modèles listés (`readinessInferred`, noté dans les détails) ; jamais de faux « erreur » (non-JSON/vide/HTML/champ `null` ⇒ indéterminé) ; le **corps brut borné** est conservé (`status.payload`) et la **forme est journalisée une fois** (`tts.health.shape`). Le **test de synthèse reste utilisable** dès que le moteur est joignable, même préparation indéterminée (`isTestAvailable`) | `src/gateway/routes/tts.ts` (`probeTtsHealth`, `readReadiness`, `readModelCount`, `deriveTtsState`, `logHealthShape`), `public/ui/tts-assistant.js` (`isTestAvailable`, `statusTechnicalDetails`), `tests/integration/tts-diagnostics.test.ts`, `tests/tts/ui-assistant.test.ts` |
+| **D36** | **`task` de Chatterbox = `clon` (pas `tts`)** : le runtime n'accepte pour cette famille que `clon`/`vc` (`loader.cpp:131-133`) ; les exemples de config du dépôt sont corrigés en conséquence (`config/audiocpp-server.json.example`, `deploy/server/audiocpp-server.json.example`). `mode: "offline"` conservé (seul mode supporté, et défaut). **Une voix de référence reste obligatoire** (`session.cpp:410-412`) : `task=clon` ne suffit pas, il faut **créer une voix** dans Yuki ou un `default_voice_preset`. | §11.11, `deploy/server/README.md` |
+| **D37** | **Échantillons de référence : `audio.cpp` en fournit** (licence du dépôt **Apache-2.0**), **mais uniquement en anglais/chinois** — `assets/resources/b.wav`(= `sample.wav`), `a.wav`, `c.wav`, `webui/native/demo_voices/demo_1_man.wav` (EN) + `demo_2..4` (ZH). **Aucun WAV français** dans `audio.cpp`, `resemble-ai/chatterbox` (MIT) ni `ResembleAI/chatterbox` (HF) ; le dossier GGUF `Chatterbox-GGUF` **ne contient aucun WAV**. Chatterbox **n'expose aucune voix par défaut** (« Built-in voices: Not exposed », `docs/tts.md`) ⇒ une **référence est toujours requise**. Voies **permissives** pour une voix FR : **CC0** (Common Voice, VoxPopuli) ou **CC-BY-4.0** (FLEURS, Piper mls/siwis). Intégration en preset = `presets/<id>.wav` + entrée `voices.json` (non implémenté, décision à proposer). | §7 « Sources de voix permissives », `docs/tts.md`, README `audio.cpp:638`, API GitHub/HF |
+| **D38** | **Référence française WAV « sans conversion » trouvée** : **SIWIS** (French Speech Synthesis Database, Idiap/Univ. Edinburgh, **CC-BY-4.0**) — miroir HF public (`Aviv-anthonnyolime/SIWIS_French_Speech_Synthesis_Database`). Fichier **`wavs/part1/neut_parl_s02_0343.wav`** : vérifié **HTTP 200** + en-tête lu ⇒ **RIFF/WAVE PCM (format 1), mono, 44 100 Hz, 16 bits, 5,05 s, 445 536 o** ⇒ dans **toutes** les bornes Yuki (≤ 10 s, ≤ 3 Mo, ≤ 192 kHz ; `src/tts/wav.ts`, `src/tts/voices-store.ts`) ⇒ **aucune conversion** (`ffmpeg` inutile). Voix **humaine**, **attribution CC-BY obligatoire**. Les échantillons Piper FR restent en **MP3** ⇒ conversion + **synthétiques**. Commande `curl` + bloc `voices.json` complets en **§11.12**. | §11.12, API HF, `src/tts/wav.ts` |
 
 ### À confirmer (non vérifiable sans GPU / Docker / moteur)
 
 | # | Point ouvert | Impact |
 | --- | --- | --- |
-| **C18** | **Contrat HTTP réel d'`audio.cpp`** : clé de sélection de voix ✅ **levée** (`voice`/`voice_ref`/`reference_text`, §11.5) ; ⚠️ **restent non attestés** : clé de langue HTTP et exposition d'`exaggeration`/`cfg` ; **si le moteur ignore ces clés, l'UI ne peut pas le détecter** | §11, test réel §6, `src/tts/audio-cpp.ts:1-35` |
-| **C19** | **`default_voice_preset`** du moteur : existe-t-il, et quelle voix produit-il avec un registre vide ? | §2.5, §6 |
+| **C18** | ✅ **LEVÉ (2026-09-21, source runtime)** — **Contrat HTTP réel d'`audio.cpp`** : `voice`/`voice_ref`/`reference_text` **et** `language` (top-level) sont **attestés** par le code du serveur ; `exaggeration` se passe dans `options` (le « cfg » de Chatterbox est `s3gen_cfg_rate`). Reste : la **valeur** d'émotion à utiliser (C27). | §11.5, §11.11, `docs/lot7.md` |
+| **C19** | ✅ **LEVÉ (2026-09-21, source amont + constat réel)** — **`default_voice_preset` pour Chatterbox : inexistant par défaut.** L'intégration `audio.cpp` documente « Built-in voices: Not exposed by this integration » et exige un `--voice-ref` (`docs/tts.md`). Une requête **sans voix** échoue au `prepare` : `Chatterbox prepare requires speaker reference audio` (constat réel utilisateur). Un `default_voice_preset` (ou une voix Yuki) **doit donc être fourni explicitement** — il n'y a **pas** de voix « factory » côté moteur. | §7, §11.11, `docs/tts.md` |
 | **C20** | **Heuristique `modelMatchesEngine`** (id de `/v1/models` ↔ nom de moteur) : à valider sur la vraie liste | `src/gateway/routes/tts.ts:316-323` |
 | **C21** | ✅ **LEVÉ (2026-09-21, par EXÉCUTION RÉELLE)** — **CLI/port exacts** du service `tts` : l'ENTRYPOINT de l'image est un **dispatcher à sous-commandes** (`cli`/`server`/`model-manager`/`perf`) → `server --config /app/server.json` ; hôte/port sont des **clés de config** (`host`/`port`), pas des flags. Voir §11.4 | §11, `docs/lot7.md` C14 |
 | **C22** | **`503` « Insufficient Memory » indiscernable du `BusyGuard`** : confirmer qu'aucun champ ne les distingue | §3.5, `docs/lot7.md` |
-| **C23** | **Fichier de modèle requis** : nom exact du GGUF et variante (Q8/…) selon la cible — ⚠️ **non attesté** (l'archive donne `Chatterbox-GGUF` F16+Q8 et la licence MIT, pas les noms de fichiers). Voir §11.7 | §4.2, `docs/lot7.md` §11.6 |
+| **C23** | ✅ **LEVÉ (2026-09-21, API HF)** — **Noms exacts du GGUF** : `Chatterbox-GGUF/chatterbox-q8_0.gguf` (2 088 393 668 o) et `Chatterbox-GGUF/chatterbox-f16.gguf` (3 744 360 386 o). Preuve : `https://huggingface.co/api/models/audio-cpp/audio.cpp-gguf/tree/main/Chatterbox-GGUF` (le dossier ne contient **que** ces deux fichiers — **aucun WAV**). | §11.7, API HF |
+| **C24** | **Divergence éventuelle entre le point de montage des voix du GATEWAY et celui du MOTEUR** : les deux variantes Compose montent le volume sur `/voices` (`docker-compose.yml:100,193`, `deploy/server/docker-compose.yml:103,194`), donc `YUKI_MOUNT_VOICES` est réutilisé comme base absolue. Si un opérateur les fait diverger (ex. changer `YUKI_MOUNT_VOICES` côté gateway seulement), le chemin envoyé deviendrait faux. **Proposition** (non implémentée) : champ `tts.voiceBaseDir` (`string`, défaut `/voices`, `apply: restart`) pour découpler les deux. | §11.9 |
+| **C25** | **FORME EXACTE de `GET /health`** : la forme `{ ready, model_count }` issue de l'**archive est DÉMENTIE par l'exécution réelle** (moteur joignable, `/v1/models` = `chatterbox — tts`, mais `/health` ne renvoie pas de champ booléen `ready`). La forme réelle est **EN ATTENTE DE RELEVÉ** ; en attendant, la sonde est **tolérante** (jamais « erreur » sur un champ absent/incompris), conserve le **corps brut borné** (`status.payload`) et **journalise une fois** par forme les clés observées (`tts.health.shape`). Dès que le relevé réel sera fourni : **figer le schéma**, le documenter ici, et retirer l'heuristique de déduction si elle devient inutile. | §2.6, §11.10 |
+| **C26** | **Chatterbox en `task=clon` avec une voix réelle** : confirmer par un redémarrage + `curl` (§11.11) que le message disparaît et que l'audio est produit. L'auteur a **observé** le message `VoiceCloning and VoiceConversion` (registre vide, `task: tts`) ; la correction `task: clon` **n'est pas encore validée en réel**. | §11.11 |
+| **C27** | **`exaggeration`/`cfg` envoyés par Yuki sont ignorés** : le serveur ne lit ces clés qu'**dans l'objet `options`** (et le « cfg » de Chatterbox s'appelle **`s3gen_cfg_rate`**). **Proposition** (non implémentée, choix structurant) : faire porter `exaggeration`/`s3gen_cfg_rate` par `"options": {…}` dans `toAudioCppRequest` plutôt qu'au top-level — à valider (défaut de `s3gen_cfg_rate`, effet réel) avant de changer le contrat de l'adaptateur. | §11.5, §11.11, `src/tts/audio-cpp.ts:105-155` |
 
 ---
 
@@ -526,6 +673,13 @@ et **0 violation CSP**.
 > documenté par les archives), et le premier argument doit être **`server`**.
 > C'est **la** preuve qui fait foi ci-dessous ; les archives ne la fournissent
 > **pas** (voir §11.7).
+>
+> **Mise à jour du 2026-09-21 (nuit) — preuve par le CODE SOURCE du runtime.**
+> Le message d'erreur `Chatterbox supports VoiceCloning and VoiceConversion`
+> **n'existe dans aucune archive** ; sa cause a été établie en lisant le dépôt
+> amont `github.com/0xShug0/audio.cpp` (commit `f7f5dd1`). Section **§11.11**
+> (cause, rôle de `task`/`mode`, config corrigée, deuxième blocage = voix
+> obligatoire).
 
 ### 11.1 Sources et extraits d'appui
 
@@ -538,7 +692,7 @@ et **0 violation CSP**.
 | `audio-cpp-http-server` | table `ServerModelConfig` : `id`, `family`, `path`, `task`, `mode`, `lazy`, `load_options`, `session_options`, `default_request_options`, `voice_presets`, `default_voice_preset`, … | **clés d'une entrée `models[]`** |
 | `audio-cpp-server` | « a single-file model's weights, the one GGUF a model directory selects (`model.gguf` or the sole `*.gguf`) » | **`path` = fichier `.gguf` OU dossier** (dossier à un seul `*.gguf`, sinon ambigu) |
 | `audio-cpp-gguf-packages` | « \| `Chatterbox-GGUF` \| `chatterbox` \| F16 + Q8 \| MIT \| » + « *Pass a GGUF file directly as `--model`:* » | **famille `chatterbox`, licence MIT**, fichier GGUF utilisable directement |
-| `audio-cpp` | « \| **chatterbox** \| TTS, Clone, VC \| ar, da, de, el, en, es, fi, fr, hi, it, ko, ms, nl, no, pl, pt, sv, sw, tr \| » | **`fr` est une langue supportée** par la famille `chatterbox` |
+| `audio-cpp` | « \| **chatterbox** \| TTS, Clone, VC \| ar, da, de, el, en, es, fi, fr, hi, it, ko, ms, nl, no, pl, pt, sv, sw, tr \| » | **`fr` est une langue supportée** par la famille `chatterbox`. ⚠️ Le « TTS » de cette table d'archive **contredit le loader** (qui rejette `tts`, cf. §11.11) : c'est **`clon`** qu'il faut déclarer. |
 | `audio-cpp-server` | « Resolution precedence for a TTS request's voice fields: 1. `voice_ref` — always wins. 2. `voice` matching a configured model preset … 3. `voice` matching a wav basename in `voice_dir` … 4. Otherwise — `voice` is used as the model-native cached voice id » | **clés de voix attestées** : `voice_ref`, `voice`, presets, `voice_dir` |
 | `audio-cpp-server` | « `voice_ref` accepts either a plain path string (server-side file) or an object with a `type` » + `"type": "base64"` (≤ 5 MiB) | **`voice_ref` = chemin OU référence inline base64** |
 | `audio-cpp-server` | « `POST /v1/audio/speech` accepts top-level `speed` (or `speaking_rate`) as a positive speech-rate multiplier » | **`speed`/`speaking_rate` attestés (top-level)** |
@@ -590,7 +744,7 @@ et **0 violation CSP**.
       "id": "chatterbox",
       "family": "chatterbox",
       "path": "/models/Chatterbox-GGUF/<fichier-exact>.gguf",
-      "task": "tts",
+      "task": "clon",
       "mode": "offline"
     }
   ]
@@ -598,10 +752,14 @@ et **0 violation CSP**.
 ```
 
 - **`id` = `chatterbox`** est **impératif** : c'est le nom que Yuki envoie (`model: "chatterbox"`) et que `GET /v1/models` renverra.
+- **`task` = `clon`** est **impératif** : la famille `chatterbox` du runtime n'accepte **que** `clon` (clonage) et `vc` (conversion). `tts` déclenche `Chatterbox supports VoiceCloning and VoiceConversion`. Preuve `fichier:ligne` : `src/models/chatterbox/loader.cpp:131-133` (cf. **§11.11**). ⚠️ Écrire `clon`, **pas** `clone` : `parse_voice_task_kind` n'accepte que le **token** (`src/framework/runtime/task_vocabulary.cpp:21`, `session.cpp:136`).
+- **`mode` = `offline`** : **seul** mode supporté par Chatterbox (`loader.cpp:134-136`). C'est aussi la **valeur par défaut** (`app/server/config.h:47`) ⇒ clé **valide**. `streaming` serait **refusé**.
 - **`host: "0.0.0.0"`** pour que le gateway joigne `http://tts:8081` sur `yuki-net` ; `port: 8081` aligné sur le défaut `tts.baseUrl`.
 - **`ui_enabled: false`** : pas de WebUI ⇒ aucune écriture liée à l'UI (compatible `read_only: true`).
 - **`<fichier-exact>`** : **non attesté** (§11.7) — voir le nom réel dans l'arbre HF `audio.cpp-gguf/Chatterbox-GGUF`.
-- **Clé de langue** : **non attestée** comme clé de requête (§11.6). Si l'on veut forcer `fr` au chargement, le **nom de champ** `load_options` / `session_options` / `default_request_options` est attesté, mais la **valeur `language` pour `chatterbox`** ne l'est pas. À défaut, partir du défaut du modèle.
+- **Clé de langue** : désormais **attestée** côté requête (`language`, top-level — `app/server/runtime.cpp:1990-1991`), voir **§11.5**.
+
+> ⚠️ **Une voix de référence est OBLIGATOIRE** pour `clon` : sans `voice_ref` (ni preset, ni `voice_dir`), la requête échoue au `prepare` avec `Chatterbox prepare requires speaker reference audio` (preuve : `src/models/chatterbox/session.cpp:410-412`). Corriger `task` **ne suffit donc pas** — il faut aussi **créer une voix** dans Yuki (cf. **§11.11**).
 
 ### 11.4 Service `tts` (compose, bind mounts Unraid) + volumes
 
@@ -679,9 +837,9 @@ loader ne fait que le lire (`min_free_memory_mb` le « reads »). Aucun besoin d
 | `stream_format` | **attestée** | `sse` / `audio` (modèles `streaming`) |
 | `seed`, `max_tokens` | **attestées** | exemples README |
 | `busy_timeout_ms` | **attestée** | borne d'attente par requête |
-| **`language`** (top-level) | **non attestée** | le nom de champ existe pour `load_options`/`session_options` (ex. `"language": "english"`), **pas** démontré top-level de `/v1/audio/speech` |
-| **`language_id`** | **non attestée côté HTTP** | attestée **uniquement** dans la lib Python (`generate(..., language_id="fr")`) |
-| **`exaggeration`** / **`cfg`** | **non attestées côté HTTP** | documentées **uniquement** pour `chatterbox-tts` (Python) ; **aucune** occurrence dans `audio-cpp-server`/`audio-cpp-http-server`. Indice : la ligne `chatterbox` d'`audio-cpp` **n'a pas** le tag `Ctrl` (contrôle émotion) |
+| **`language`** (top-level) | ✅ **attestée (source runtime)** | lue **à chaque requête** par `build_speech_request` : `engine::io::json::optional_string(body, "language", "")` → `request.text_input.language` (`app/server/runtime.cpp:1990-1991`). La valeur est donc **honorée** (ex. `"language": "fr"`). |
+| **`language_id`** | **non attestée côté HTTP** | attestée **uniquement** dans la lib Python (`generate(..., language_id="fr")`). Le serveur ne lit **que** `language` — `language_id` est **ignoré** (clé top-level inconnue ⇒ silencieusement ignorée). |
+| **`exaggeration`** / **`cfg`** (top-level) | ❌ **ignorées** | `build_speech_request` ne lit **qu'une liste fixe** de clés top-level (`seed`, `temperature`, `top_k`, `top_p`, `max_tokens`, `max_steps`, `repetition_penalty`, `guidance_scale`, `num_inference_steps`, `instructions`) + l'objet `options` (`app/server/runtime.cpp:1994-2004`). Une clé top-level inconnue n'est **pas rejetée**, mais **pas lue** ⇒ Yuki les envoie « dans le vide ». Pour Chatterbox, `exaggeration` se passe **dans `options`** (`src/models/chatterbox/session.cpp:45-46`), et le « cfg » de génération s'appelle **`s3gen_cfg_rate`** (`session.cpp:57-60`), pas `cfg` — point ouvert **C27**. |
 
 **Sélection de voix — mode par requête (Voie B) est donc attesté** : on peut
 passer `voice_ref` (chemin ou base64) + `reference_text` **à chaque requête**,
@@ -750,22 +908,377 @@ ajouter dans l'entrée `models[]` : `"default_request_options": { "language": "f
 
 | Point | Pourquoi |
 | --- | --- |
-| **Clé de langue HTTP** (`language` vs `language_id`, top-level vs `options`) | seule la lib Python montre `language_id` ; le serveur ne documente `language` que comme `load_options`/`session_options` |
-| **Exposition `exaggeration` / `cfg`** par le serveur | aucune occurrence dans les archives serveur ; tag `Ctrl` absent pour `chatterbox` |
+| **Clé de langue HTTP** | ✅ **tranché (source)** : le serveur lit **`language`** top-level (`app/server/runtime.cpp:1990-1991`). `language_id` n'existe pas côté HTTP. |
+| **Passage de `exaggeration` / `cfg`** | ✅ **tranché (source)** : `exaggeration` se passe **dans `options`** pour Chatterbox (`src/models/chatterbox/session.cpp:45-46`) ; le « cfg » de génération est **`s3gen_cfg_rate`** (`session.cpp:57-60`), pas `cfg`. Le `cfg` **top-level** envoyé par Yuki est **ignoré** (C27). La **valeur par défaut** de `s3gen_cfg_rate` pour Chatterbox n'est pas relevée. |
 | **Nom exact du fichier GGUF** dans `Chatterbox-GGUF` | l'archive donne le **dossier** + variantes **F16 + Q8**, pas les noms de fichiers |
 | **Chemin du fichier de config DANS le conteneur** (`/app/server.json` ?) | **non attesté** : ni le WORKDIR ni le `CMD`/les chemins de l'image ne sont documentés. À confirmer en réel (C14). |
 | **Sous-commandes du dispatcher** (`server`/`cli`/`model-manager`/`perf`) | **non documentées par les archives** : connues **uniquement** par l'**exécution réelle** (logs `Unknown command: --config`). |
 | **Tags `full-cuda13`/`full-cuda12`** | non présents dans les archives (lien vers `docs/docker.md` seulement) |
 | **Écritures éventuelles au démarrage** | aucune mentionnée ⇒ `read_only` + `tmpfs /tmp` raisonnable, non garanti par un extrait |
 
+> La liste ci-dessus vient des **archives**. Les points **tranchés** l'ont été par
+> lecture du **code source du runtime** (`github.com/0xShug0/audio.cpp`, commit
+> `f7f5dd1`, 2026-09-21) — cf. **§11.11**.
+
 ### 11.8 Impact sur les points ouverts
 
-- **C1 — levé pour les voix** : `voice`, `voice_ref` (chemin **ou** base64), `reference_text`, `voice_presets`, `default_voice_preset`, `voice_dir` sont **attestés** ; le mode **par requête** est donc viable (l'hypothèse A↔B se tranche en faveur de **B disponible**). Reste **ouvert** : clé de langue HTTP et émotion (§11.7).
+- **C1 — levé pour les voix** : `voice`, `voice_ref` (chemin **ou** base64), `reference_text`, `voice_presets`, `default_voice_preset`, `voice_dir` sont **attestés** ; le mode **par requête** est donc viable (l'hypothèse A↔B se tranche en faveur de **B disponible**). ✅ **Levé aussi pour la langue** : `language` top-level est lu par le serveur (§11.5, source). Reste **ouvert** : le **nom exact** de l'option d'émotion (C27).
 - **C2 — partiellement levé** : `fr` est listé comme langue de la famille `chatterbox` (`audio-cpp`). La **version V3** du checkpoint n'est **pas** attestée dans les archives (la variante s'appelle `Chatterbox-GGUF`, sans « V3 »).
 - **C14 — levé (par EXÉCUTION RÉELLE)** : `command: ["server", "--config", "/app/server.json"]`. L'ENTRYPOINT est un **dispatcher à sous-commandes** (`Unknown command: --config`) : c'est une **preuve d'exécution**, pas une déduction d'archive. L'hypothèse `--server --host 0.0.0.0 --port 8081` est **invalidée** : `--host`/`--port`/`--server` n'apparaissent **ni** dans les archives **ni** dans les logs ; hôte/port sont des **clés de config**. ⚠️ Le **chemin** `/app/server.json` **reste à confirmer** (WORKDIR de l'image non attesté).
 - **C21 (lot 8)** — levé (hérite C14).
-- **C18 (lot 8)** — partiellement levé : clés de voix attestées ; langue/émotion restent à confirmer.
+- **C18 (lot 8)** — ✅ **levé (source runtime)** : clé de voix (`voice`/`voice_ref`/`reference_text`) **et** clé de langue (`language`, top-level) **attestées** par le code ; `exaggeration` passe par `options` (`s3gen_cfg_rate` pour le cfg) — reste une question de **valeur** (C27), pas de clé.
 - **C23 (lot 8)** — reste ouvert : nom exact du GGUF.
+
+### 11.9 Résolution de voix — précédence attestée et décision Yuki
+
+**Attesté** (`audio-cpp-server`, §11.1) : la résolution d'une voix de requête
+suit cette précédence :
+
+1. **`voice_ref`** — gagne toujours ; accepte **soit une chaîne de chemin**
+   (fichier côté serveur), **soit un objet** avec un `type` (dont
+   `{ "type": "base64", "data": … }`, ≤ 5 MiB).
+2. `voice` correspondant à un **preset configuré** du modèle (`voice_presets`).
+3. `voice` correspondant à un **nom de fichier `.wav` dans `voice_dir`** (le
+   répertoire partagé, monté ici sur `/voices`).
+4. sinon `voice` est traité comme un **id de voix natif** du modèle.
+
+**État Yuki (décision retenue).** Le registre stocke des chemins **relatifs**
+dans `Voice.refAudio` (`presets/<id>.wav`, `cloned/<id>.wav`,
+`src/tts/voices-store.ts:278`). Le moteur étant un **processus séparé** qui monte
+le volume en **lecture seule** (`docker-compose.yml:192-193`), un chemin relatif
+ne lui dit rien : Yuki envoie donc un chemin **absolu**
+`<voiceBaseDir>/<refAudio>`, avec `voiceBaseDir` = **le montage configuré**
+`YUKI_MOUNT_VOICES` (défaut `/voices`, `src/config/env.ts:152`). Preuves :
+`src/tts/audio-cpp.ts:128-132` (jointure), `src/index.ts:255,284-285,408`
+(threading explicite). Aucune voix résolue (registre vide, `tts.voice` vide) ⇒
+**aucun champ de voix** n'est envoyé : le moteur applique son propre
+`default_voice_preset`.
+
+**Décision explicite, plus implicite.** Auparavant, l'adaptateur retombait sur la
+constante `"/voices"` (`src/tts/audio-cpp.ts:130`) sans qu'aucun appelant ne
+fournisse `voiceBaseDir` : le chemin était correct **par coïncidence** (le
+montage du gateway valait `/voices`). `src/index.ts` passe désormais
+explicitement `voiceBaseDir: env.mountPoints.voices` (résolu depuis
+`YUKI_MOUNT_VOICES`). Cf. **D34** et le point ouvert **C24** (divergence
+possible gateway/moteur).
+
+**Alternative évaluée — `voice_ref` en objet/base64.** Le gateway pourrait lire
+le WAV et l'inliner (`{ "type": "base64", "data": … }`, ≤ 5 MiB).
+
+| Critère | Chemin absolu (retenu) | Base64 inline |
+| --- | --- | --- |
+| Immunité à une divergence de montage | ❌ (dépend du chemin vu par le moteur) | ✅ |
+| Coût par requête | nul (juste une chaîne) | lecture + encodage du WAV à chaque appel |
+| Taille | illimitée | **≤ 5 MiB** (un échantillon plus gros est refusé) |
+| Simplicité | ✅ (aucun I/O supplémentaire) | plus de code, plus de surface d'erreur |
+| Attestation | ✅ `voice_ref` chaîne attestée | ✅ `voice_ref` base64 attestée |
+
+**Recommandation : conserver le chemin absolu** (implémenté). Il est correct dès
+lors que le moteur voit le volume au même point que le gateway — garanti par les
+deux variantes Compose. Le base64 n'est à envisager **que** si une divergence de
+montage (C24) rendait le chemin inexploitable ; il serait alors un correctif
+ciblé, au prix d'un I/O par requête et d'un plafond de 5 MiB.
+
+### 11.10 Forme de `GET /health` — EN ATTENTE DE RELEVÉ (C25)
+
+> **Aucune forme n'est affirmée ici.** Ce qui suit est un **constat d'exécution**,
+pas une lecture d'archive.
+
+**Observé en réel (2026-09-21).** Moteur **joignable** (`http://tts:8081`, latence
+3 ms), `GET /v1/models` renvoyant `chatterbox — tts`, GGUF sur le disque.
+L'ancienne sonde exigeait un champ **booléen** `ready` dans `/health` et
+concluait `state: error` — **à tort**. La forme `{ ready, model_count }` venait
+d'une **archive documentaire** (`audio-cpp-http-server`), **démentie par
+l'exécution** : `/health` **ne renvoie pas** ce champ sous cette forme.
+
+**Statut.** La forme exacte est **INCONNUE** ; le relevé destiné à la figer n'est
+**pas encore arrivé**. La sonde est donc **tolérante en attendant** :
+
+| Aspect | Comportement retenu (sans présumer la forme) |
+| --- | --- |
+| Préparation | `ready` booléen / chaîne / nombre / absent ; aussi `ok`, `success`, `status`, `state` |
+| Compte de modèles | `model_count`, `modelCount`, `models_total`, `models_loaded`, `loaded_models`, `models` (tableau/nombre), `count` |
+| Corps inattendu (non-JSON, vide, HTML, `null`) | **indéterminé** — jamais `error`, jamais d'exception |
+| Erreur | **seulement** sur preuve : HTTP ≠ 2xx, ou champ `error` explicite, ou `status`/`state` d'échec |
+| Traçabilité | corps brut borné dans `status.payload` ; clés journalisées une fois (`tts.health.shape`) |
+
+**À faire dès réception du relevé.** Figer le schéma réel ici, remplacer la
+déduction (`readinessInferred`) par une lecture directe si possible, et clore
+**C25**.
+
+---
+
+### 11.11 Cause réelle de `Chatterbox supports VoiceCloning and VoiceConversion`
+
+> **Ajout du 2026-09-21 (soir) — preuve par le CODE SOURCE du runtime.**
+> Contrairement aux sections précédentes, cette cause **n'est PAS dans les
+> archives** : le message n'apparaît **dans aucune** d'elles (vérifié par
+> `grep` sur `/app/.data/docs/tools/`). Elle a été établie en lisant le dépôt
+> amont `github.com/0xShug0/audio.cpp` (commit `f7f5dd1`, 2026-09-21,
+> `rawContent` recoupé). C'est une preuve **`fichier:ligne`**, plus forte qu'un
+> extrait d'archive, mais elle décrit le **runtime installé** — à confirmer par
+> un redémarrage réel de l'utilisateur.
+
+**Origine exacte du message.** La famille `chatterbox` du runtime **n'implémente
+que deux tâches** — le clonage et la conversion — et **rejette `tts`** au
+moment de **créer la session** :
+
+```cpp
+// src/models/chatterbox/loader.cpp:131-136
+if (task.task != runtime::VoiceTaskKind::VoiceCloning &&
+    task.task != runtime::VoiceTaskKind::VoiceConversion) {
+    throw std::runtime_error("Chatterbox supports VoiceCloning and VoiceConversion");
+}
+if (task.mode != runtime::RunMode::Offline) {
+    throw std::runtime_error("Chatterbox only supports offline mode");
+}
+```
+
+La même garde existe dans la session (`src/models/chatterbox/session.cpp:371-374`,
+message `Chatterbox session supports --task clon or --task vc`). Le message est
+sérialisé en 500 par le socket handler :
+
+```cpp
+// app/server/http.cpp:829
+send_all(socket.get(), serialize_response(error_response(500, ex.what(), "server_error")));
+```
+
+⇒ la réponse observée `{"error":{"message":"Chatterbox supports VoiceCloning and VoiceConversion","type":"server_error"}}`
+**vient bien de là**.
+
+**Pourquoi notre config la déclenche.** Le serveur construit le `TaskSpec` du
+modèle **uniquement depuis la config** (`app/server/runtime.cpp:1287-1290`) :
+
+```cpp
+loaded->task = engine::runtime::TaskSpec{
+    engine::runtime::parse_voice_task_kind(loaded->config.task),
+    engine::runtime::parse_run_mode(loaded->config.mode),
+};
+```
+
+avec `parse_voice_task_kind("tts")` → `VoiceTaskKind::Tts`, puis
+`create_task_session(Tts, …)` → **exception**. Notre `"task": "tts"` est donc
+la cause. Comme `lazy_load: true`, la session n'est créée qu'à la **première
+requête** : d'où l'erreur au moment de la synthèse, pas au démarrage.
+
+**Rôle et valeurs valides de `task` / `mode` (attestés dans la source).**
+
+- `parse_voice_task_kind` n'accepte **que les tokens** de
+  `task_vocabulary.cpp`. Liste exhaustive (`src/framework/runtime/task_vocabulary.cpp:12-28`) :
+  `vad`, `asr`, `diar`, `sep`, `gen`, `tts`, **`clon`**, `vc`, `s2s`, `align`,
+  `vdes`, `spk`, `svc`, `midi`. Toute autre valeur ⇒
+  `unsupported task: X (expected …)`.
+  ⚠️ **`clone` (alias de spec) n'est PAS accepté** : seul le **token `clon`**
+  l'est (`parse_voice_task_kind` compare `entries[i].token`, `session.cpp:136-158`).
+- `parse_run_mode` n'accepte que **`offline`** ou **`streaming`**
+  (`session.cpp:160-168`). Chatterbox **exige `offline`**.
+- **Défauts** de `ServerModelConfig` : `task = "tts"`, `mode = "offline"`
+  (`app/server/config.h:46-47`). Notre `"mode": "offline"` est donc **valide
+  et redondant** (c'est le défaut) ; notre `"task": "tts"` est **le défaut — et
+  précisément ce que Chatterbox refuse**.
+
+**Incohérence amont à connaître.** Le **spec** `model_specs/chatterbox.json`
+déclare `"tasks": ["tts", "clone", "vc"]`, mais le **loader** (autorité au
+moment de créer la session) n'advertise et n'accepte que `VoiceCloning` +
+`VoiceConversion`. `GET /v1/models` **reprend la tâche de la config**
+(`runtime.cpp:3224`), donc il affiche `chatterbox — tts` même quand `tts` ne
+marche pas : **voir `task: tts` dans `/v1/models` n'est pas une preuve que `tts`
+fonctionne**.
+
+**Lien avec l'avertissement « legacy model spec ».** L'avertissement est émis
+par `warn_legacy_embedded_contract` quand le GGUF embarque un spec **sans
+`schema_version`** (`src/framework/model_spec/package.cpp:133-140`) : le runtime
+**ignore ce spec embarqué** et utilise **son** contrat schema-v1 (ici
+`model_specs/chatterbox.json` ou le catalogue compilé). Conséquences
+**concrètes**, et **limitées** : ce contrat ne sert qu'à valider les **options
+de requête** (`model_accepts_request_option`, `runtime.cpp:95-115`), c.-à-d.
+`reference_text`, `language`, `speed`, `speaking_rate`
+(`refresh_model_option_flags`, `runtime.cpp:1303-1320`). Il **ne régit ni
+`task`, ni `mode`, ni `voice_presets`** :
+
+- `task`/`mode` viennent de **notre `server.json`** (jamais du spec) ;
+- `voice_presets` / `default_voice_preset` / `voice_dir` sont **purement
+  config** ;
+- les options non reconnues sont **ignorées** (jamais rejetées), sauf `speed`
+  qui est **rejeté** si le modèle ne le déclare pas (`runtime.cpp:2116-2118`).
+
+⇒ l'avertissement est **bénin pour l'installation actuelle** : il n'explique
+**pas** l'erreur, et il n'oblige **pas** à régénérer le GGUF.
+
+**Ce que Yuki envoie réellement (registre vide).** `toAudioCppRequest(nullptr, …)`
+produit (`src/tts/audio-cpp.ts:105-155`, émotion « neutre » par défaut
+`src/tts/options.ts:42-44`) :
+
+```json
+{"model":"chatterbox","input":"<texte>","language":"fr",
+ "response_format":"wav","exaggeration":0.5,"cfg":0.5}
+```
+
+Aucun champ ne demande de tâche : **Yuki n'envoie rien que le moteur
+interprète comme une tâche non supportée** — l'erreur vient **uniquement** de
+`"task": "tts"` dans `server.json`. (`exaggeration`/`cfg` top-level sont
+**ignorés** par le serveur, cf. §11.5 : ils ne causent pas l'erreur, mais
+n'ont pas d'effet — **C27**.)
+
+**Verdict : H2 retenue, H1 écartée *comme cause de CE message*.**
+
+| Hypothèse | Verdict | Preuve |
+| --- | --- | --- |
+| **H1** — il manque une voix de référence | **Écartée pour ce message** (mais **vraie** ensuite !) | le rejet a lieu **avant** toute lecture de voix, à la création de session (`loader.cpp:131-133`) ; le manque de voix produirait un **autre** message (`session.cpp:410-412`, cf. infra) |
+| **H2** — `task`/`mode` ne correspond pas | ✅ **Retenue** | `runtime.cpp:1287` + `loader.cpp:131-133` |
+| **H3** — `voice_dir`/preset mal configurés | Écartée | `voice_dir` n'est lu qu'**après** la session, dans `build_speech_request` |
+
+**⚠️ Deuxième blocage, réel : une référence audio est obligatoire.** Avec
+`task: clon`, `ChatterboxSession::prepare` exige un locuteur :
+
+```cpp
+// src/models/chatterbox/session.cpp:410-412
+if (!request.voice.has_value() || !request.voice->speaker.has_value() ||
+    !request.voice->speaker->audio.has_value()) {
+    throw std::runtime_error("Chatterbox prepare requires speaker reference audio");
+}
+```
+
+Registre Yuki vide ⇒ aucun `voice_ref` envoyé ⇒ **ce message** suivrait le
+premier. **Corriger `task` seul ne suffit donc pas** : il faut **aussi** une
+voix (upload WAV côté Yuki, qui enverra `voice_ref=/voices/cloned/<id>.wav`,
+preuve `tests/tts/audio-cpp.test.ts:43-56`), **ou** un `default_voice_preset`
+dans `server.json` (chemin d'un WAV présent dans `/voices`). Le chemin Yuki est
+le plus simple, car `/voices` est monté **lecture seule** côté moteur.
+
+**Config corrigée, prête à coller** (le chemin GGUF est celui **réel** de
+l'utilisateur) :
+
+```json
+{"host":"0.0.0.0","port":8081,"backend":"cuda","device":0,"lazy_load":true,"ui_enabled":false,
+ "voice_dir":"/voices",
+ "models":[{"id":"chatterbox","family":"chatterbox","path":"/models/Chatterbox-GGUF/chatterbox-q8_0.gguf","task":"clon","mode":"offline"}]}
+```
+
+Seule différence avec l'actuelle : **`"task":"clon"` au lieu de `"tts"`**.
+
+**Manip de diagnostic (si le message persiste).** Vérifier ce que le moteur a
+réellement chargé et reproduire hors Yuki (depuis le réseau compose) :
+
+```bash
+docker exec -it yuki-tts cat /app/server.json          # "task":"clon" ?
+docker run --rm --network yuki-net curlimages/curl:latest -sS \
+  http://tts:8081/v1/audio/speech -H 'Content-Type: application/json' \
+  -d '{"model":"chatterbox","input":"Bonjour.","voice_ref":"/voices/cloned/<id>.wav","reference_text":"<transcription>","response_format":"wav"}'
+```
+
+Si ce `curl` renvoie `Chatterbox supports VoiceCloning and VoiceConversion`,
+le `server.json` **chargé** porte encore `tts` ou le conteneur n'a pas été
+recréé. Si le message devient `Chatterbox prepare requires speaker reference
+audio`, c'est que le WAV de référence est absent/illisible.
+
+### 11.12 Échantillon de référence français WAV directement utilisable — SIWIS (CC-BY-4.0)
+
+> **Ajout du 2026-09-21 (soir).** Vérifié par **téléchargement réel** (HTTP 200
+> + en-tête lu) : répond à **D37** (« trouver une référence française en WAV
+> direct, sans `ffmpeg` »).
+
+**Besoin.** Chatterbox exige une référence **française** — l'accent/prosodie de
+la référence se transfèrent à la voix générée (carte `ResembleAI/chatterbox` :
+« Ensure that the reference clip matches the specified language tag… »). Yuki
+n'accepte qu'un WAV **RIFF/WAVE PCM 16/24/32 bits, mono/stéréo, ≤ 192 kHz,
+≤ 10 s, ≤ 3 Mo** (`src/tts/wav.ts`, `src/tts/voices-store.ts`). Or aucun WAV
+français n'existe dans `audio.cpp`/`chatterbox` (**D37**), et les échantillons
+Piper FR sont des **MP3** (⇒ `ffmpeg`).
+
+**Source retenue — SIWIS** (French Speech Synthesis Database, Idiap/Univ.
+Edinburgh), **CC-BY-4.0**, miroir HF **public** (non *gated*) :
+`Aviv-anthonnyolime/SIWIS_French_Speech_Synthesis_Database`. C'est la **même
+base** que la voix Piper `fr_FR-siwis-medium` (MODEL_CARD Piper :
+`URL: https://datashare.is.ed.ac.uk/handle/10283/2353`, `License: CC-BY 4.0`).
+
+URL vérifiée (HTTP 200, `content-type: audio/wave`) :
+
+```
+https://huggingface.co/datasets/Aviv-anthonnyolime/SIWIS_French_Speech_Synthesis_Database/resolve/main/wavs/part1/neut_parl_s02_0343.wav
+```
+
+Fiche du fichier (en-tête lu avec le **parseur de Yuki**) :
+
+| Champ | Valeur |
+| --- | --- |
+| Conteneur / codec | **RIFF/WAVE**, `audioFormat = 1` (PCM entier) |
+| Canaux | **1 (mono)** |
+| Fréquence | **44 100 Hz** (≤ 192 000) |
+| Profondeur | **16 bits** |
+| Durée | **5,05 s** (≤ 10 s) |
+| Taille | **445 536 octets** (≤ 3 000 000) |
+| SHA-256 | `61a007aecab8c9ec19962fd276fb61b3b52421013733e57c2f741fbcee44154c` |
+| Langue | **français** (locuteur humain de la base SIWIS) |
+| Licence | **CC-BY-4.0** (attribution obligatoire) |
+| Nature | **humain** (locuteur principal de SIWIS) — **pas** synthétique |
+
+Transcription officielle (`other/all_prompts_part1.txt`, 1re ligne du fichier) :
+« La parole est à Monsieur Philippe Gosselin, pour soutenir l’amendement numéro
+quatre-vingt un. »
+
+**Commande unique (aucune conversion) :**
+
+```bash
+mkdir -p /mnt/user/appdata-ssd/yuki-server/voices/presets
+curl -L -f -o /mnt/user/appdata-ssd/yuki-server/voices/presets/voix-fr.wav \
+  "https://huggingface.co/datasets/Aviv-anthonnyolime/SIWIS_French_Speech_Synthesis_Database/resolve/main/wavs/part1/neut_parl_s02_0343.wav"
+```
+
+**`voices.json`** (registre Yuki ; si le fichier **existe déjà**, **ajouter**
+l'entrée à `voices[]` au lieu de l'écraser) :
+
+```json
+{
+  "schemaVersion": 1,
+  "voices": [
+    {
+      "id": "voix-fr",
+      "label": "Voix française (SIWIS)",
+      "kind": "preset",
+      "lang": "fr",
+      "refAudio": "presets/voix-fr.wav",
+      "refText": "La parole est à Monsieur Philippe Gosselin, pour soutenir l’amendement numéro quatre-vingt un.",
+      "createdAt": "2026-09-21T00:00:00.000Z",
+      "createdBy": "factory"
+    }
+  ]
+}
+```
+
+**Cohérence avec Yuki.** `refAudio` est **relatif** (`presets/voix-fr.wav`) et
+résolu côté serveur en `join(voiceBaseDir, refAudio)` =
+`/voices/presets/voix-fr.wav` (`src/tts/voices-store.ts` `serviceSamplePath`,
+`src/tts/audio-cpp.ts` `joinVoiceRef`) ; le registre est lu **exclusivement**
+depuis `voices.json` (`src/tts/voices-store.ts`). Ce preset devient
+automatiquement la **voix par défaut** (`defaultVoice()` = premier preset).
+
+**Alternatives vérifiées** (même serveur / licence / format ; toutes HTTP 200 +
+en-tête PCM lu) :
+
+| URL (sous `…/resolve/main/`) | Durée | Taille |
+| --- | --- | --- |
+| `wavs/part1/neut_parl_s05_0468.wav` | 5,11 s | 450 828 o |
+| `wavs/part1/neut_parl_s02_0586.wav` | 5,30 s | 467 586 o |
+
+**Candidats écartés :**
+
+| Candidat | Motif (vérifié) |
+| --- | --- |
+| Piper `fr_FR-gilles-low` — `…/fr/fr_FR/gilles/low/samples/speaker_0.mp3` | **HTTP 200**, 60 381 o, **MP3** 16 kHz ~4,2 s ⇒ conversion `ffmpeg` **et** synthétique (dataset **CC0**) |
+| Piper `fr_FR-mls-medium` / `fr_FR-siwis-medium` (samples) | **HTTP 200**, **MP3** ~3,9 / ~4,0 s ⇒ conversion ; **CC-BY-4.0** ; synthétiques |
+| FLEURS `google/fleurs` (`fr_fr`) | audio WAV **16 kHz** mais servi par des URLs **signées/expirantes** (`datasets-server.huggingface.co/cached-assets/…?Expires=…`) ; clips parfois > 10 s ⇒ URL **non stable** |
+| Common Voice (`fixie-ai/common_voice_17_0`, `fr`) | **MP3** ⇒ conversion |
+| VoxPopuli (`facebook/voxpopuli`, `fr`) | parquet (FLAC) ⇒ décodage ⇒ conversion |
+| `psdn-ai/french-speech-samples` | dataset **gated** (accès restreint) ; licence « other » |
+| WAV `audio.cpp` (`b.wav`, `a.wav`, `c.wav`, `demo_*`) | **anglais/chinois** ⇒ accent transféré |
+| `rhasspy/piper-voices` — dossier `samples/` | **0 `.wav`** (288 `.mp3`), vérifié par l'API HF `…/tree/main?recursive=true` |
+
+> ⚠️ **Miroir communautaire.** Le miroir HF SIWIS n'est **pas** la source
+> officielle. La référence canonique est
+> `https://datashare.is.ed.ac.uk/handle/10283/2353` (archive `.tar.gz`, pas un
+> WAV unitaire). Vérifier le **SHA-256** ci-dessus après téléchargement ; en cas
+> de disparition du miroir, tout WAV SIWIS `neut_*` de ce dossier convient.
 
 ---
 

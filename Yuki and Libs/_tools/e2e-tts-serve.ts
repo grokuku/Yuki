@@ -134,7 +134,7 @@ const voices: VoiceApiDeps = {
 const ttsStateFile = process.env.YUKI_E2E_TTS_STATE_FILE ?? "";
 
 interface E2ETtsState {
-  kind: "ready" | "starting" | "error" | "unreachable";
+  kind: "ready" | "starting" | "error" | "unreachable" | "health_unknown";
   modelCount?: number;
   httpStatus?: number;
   body?: string;
@@ -165,6 +165,15 @@ const engineFetch = (async (input: Parameters<typeof fetch>[0]) => {
     if (state.kind === "error") {
       return new Response(state.body ?? '{"error":"Insufficient Memory"}', {
         status: state.httpStatus ?? 503,
+        headers,
+      });
+    }
+    if (state.kind === "health_unknown") {
+      // Forme RÉELLE observée : 200 SANS champ `ready` (l'archive qui donnait
+      // `{ready, model_count}` est DÉMENTIE par l'exécution). La sonde doit
+      // rester tolérante et déduire « prêt » via /v1/models, jamais « erreur ».
+      return new Response(state.body ?? '{"statusText":"running","uptime_s":12}', {
+        status: 200,
         headers,
       });
     }

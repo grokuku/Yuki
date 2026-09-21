@@ -495,6 +495,11 @@ const READ_ASSISTANT = `(() => {
     message: root.querySelector(".tts-card__message")?.textContent ?? "",
     hasEnable: [...root.querySelectorAll("button")].some((b) => b.textContent === "Activer la voix"),
     hasTest: [...root.querySelectorAll("button")].some((b) => b.textContent === "Tester la voix"),
+    testDisabled: (() => {
+      const b = [...root.querySelectorAll("button")].find((x) => x.textContent === "Tester la voix");
+      return b ? b.disabled : null;
+    })(),
+    detailsBody: root.querySelector(".tts-details__body")?.textContent ?? "",
     hasRefresh: [...root.querySelectorAll("button")].some((b) => b.textContent === "Vérifier le moteur"),
     hasManual: !!root.querySelector(".tts-assistant__manual"),
     manualText: root.querySelector(".tts-assistant__manual")?.textContent ?? "",
@@ -582,9 +587,13 @@ writeTtsState({ kind: "unreachable" });
 await gotoAssistant();
 a = await evaluate(READ_ASSISTANT);
 check(
-  "[/config] état injoignable → badge « Non démarré » + action manuelle expliquée",
-  a.badge === "Non démarré" && /Docker/.test(a.message) && /main/.test(a.message),
-  `badge=${a.badge} message=${JSON.stringify(a.message.slice(0, 160))}`,
+  "[/config] état injoignable → badge « Non démarré » + causes actionnables (logs, plus de « profil Compose »)",
+  a.badge === "Non démarré" &&
+    /Docker/.test(a.message) &&
+    /main/.test(a.message) &&
+    /logs/.test(a.message) &&
+    !/profil/i.test(a.message),
+  `badge=${a.badge} message=${JSON.stringify(a.message.slice(0, 200))}`,
 );
 await shot("config-assistant-unreachable");
 
@@ -663,6 +672,39 @@ check(
   /500/.test(tooLongMessage),
   JSON.stringify(tooLongMessage),
 );
+
+/* — État 6/6 : `/health` SANS champ `ready` (forme RÉELLE observée) — */
+await setEnabled("on");
+writeTtsState({ kind: "health_unknown" });
+await gotoAssistant();
+a = await evaluate(READ_ASSISTANT);
+check(
+  "[/config] /health SANS `ready` → état utilisable, JAMAIS « Erreur », bouton de test actif",
+  a.badge !== "Erreur" && a.testDisabled === false,
+  `badge=${a.badge} testDisabled=${a.testDisabled}`,
+);
+check(
+  "[/config] /health SANS `ready` → déduction honnête exposée dans les détails",
+  /déduite/i.test(a.detailsBody),
+  JSON.stringify(a.detailsBody.slice(0, 200)),
+);
+await evaluate(
+  `(() => { const t = document.getElementById("tts-test-text"); t.value = "Bonjour."; t.dispatchEvent(new Event("input")); })()`,
+);
+await evaluate(
+  `(() => { const b = [...document.querySelectorAll("#tts-assistant-root button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
+);
+await sleep(1500);
+const unknownShapeTest = await evaluate(`(() => ({
+  text: document.querySelector("#tts-assistant-root .tts-test__feedback")?.textContent ?? "",
+  error: !!document.querySelector("#tts-assistant-root .tts-test__error"),
+}))()`);
+check(
+  "[/config] /health SANS `ready` → le test de synthèse reste UTILISABLE (preuve réelle)",
+  !unknownShapeTest.error && /voix réellement utilisée/i.test(unknownShapeTest.text),
+  JSON.stringify(unknownShapeTest.text.slice(0, 200)),
+);
+await shot("config-assistant-health-unknown");
 
 /* — Captures de lisibilité de l'assistant (2 familles × 2 modes, état prêt) — */
 writeTtsState({ kind: "ready", modelCount: 2 });
