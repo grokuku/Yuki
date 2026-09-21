@@ -1427,3 +1427,164 @@ comportement acoustique du barge-in.
 - [`docs/lot11.md`](lot11.md) — table `CONFIG_SCHEMA`, page `/config`, invalidation.
 - [`docs/architecture.md`](architecture.md) — vue d'ensemble, carte des lots.
 - [`docs/runbook.md`](runbook.md) — exploitation, dépannage GPU.
+
+---
+
+## 16. Diagnostic — pourquoi le son ne démarrait qu'à la fin (2026-09-21)
+
+> **Symptôme rapporté (exécution réelle).** « Le TTS ne commence que quand le LLM
+> a fini de générer », alors que la promesse est de **parler dès la fin de la
+> première phrase**. Diagnostic mené de bout en bout, **avec preuves** et
+> **mesure** ; conclusion : l'architecture **n'attend pas** la fin du stream, et
+> le maillon réellement retardant est le **moteur** (plus un défaut client,
+> corrigé).
+
+### 16.1 Ce qui est prouvé (chaîne remontée maillon par maillon)
+
+| Maillon | Verdict | Preuve |
+| --- | --- | --- |
+| **Alimentation** | branché sur l'événement **`delta`** au fil de l'eau, **canal `content` uniquement** (jamais `message_end`/fin de message) | `src/gateway/ws/server.ts:239-242` (`case "delta"` → `tts.onContent` si `channel === "content"`), `:245` (`run_finished` ne sert qu'au `flush`/métriques) |
+| **Segmenteur** | émet dès une **ponctuation forte suivie d'un blanc** (ou fin de flux), longueur ∈ `[min, max]` ; le **premier** segment part **pendant** le stream | `src/tts/segmenter.ts:92-124` (`findSentenceEnd`), `:206-214` (`drain`) |
+| **Pipeline** | `onContent` met en file puis `kick` : le producteur démarre **sans attendre** le segment suivant ni la fin du run | `src/tts/pipeline.ts:229-237`, `:286-303` ; `tts_requested` émis **avant** l'`await` moteur (`:329`) |
+| **Synthétiseur** | chemin **STREAMING** (`client.synthesize`), **pas** le bufferisé (réservé à l'aperçu) | `src/tts/synthesizer.ts:140-175` ; `synthesizeBuffer` n'est utilisé que par l'aperçu (`src/index.ts:285`) |
+| **Transport** | relaie **chaque morceau** PCM dès réception (un `emitAudioFrame` par `data`), aucun accumulateur | `src/tts/pipeline.ts:380-395` (`pump`), `src/gateway/ws/server.ts:188-201` (`broadcastBinary`) |
+| **Client (AVANT)** | ❌ **attendait le `final` du segment** avant de planifier le moindre son | ancien `collectSegment` : `if (segment.finalIndex === null) return null;` (`public/ui/tts-player.js`) |
+| **Client (APRÈS)** | ✅ planifie le **préfixe contigu** dès qu'il arrive (coussin borné 150 ms) | `public/ui/tts-player.js:199` (`takeContiguousPcm`), `:334` (`drain`), `:25` (`DEFAULT_STARTUP_CUSHION_MS = 150`) |
+
+### 16.2 Mesure — l'appel moteur part AVANT la fin des deltas
+
+Test `tests/integration/ws-tts.test.ts` — « *le premier appel moteur part AVANT
+la fin des deltas (première phrase)* » : un faux flux lent (delta 1 = première
+phrase complète, deltas 2-3 à `delayMs: 200`) + un moteur qui **horodate** son
+premier appel. Assertions (toutes vertes) :
+
+- `premier tts_requested < timestamp du DERNIER delta content` ;
+- `tts_first_byte` **et** `tts_segment_done` du 1er segment `< dernier delta` ;
+- le 1er texte synthétisé contient la **première phrase** (`"Bonjour…"`).
+
+Mesure de la chaîne complète (test de pipeline, deltas mot à mot à 40 ms,
+longueur cible par défaut) :
+
+```text
+928 ms  sentence_segmented        ("Bonjour je m'appelle Yuki et je suis ravie de vous aider.")
+929 ms  tts_queued
+929 ms  tts_requested             ← appel moteur ALORS QUE des deltas restent à venir
+930 ms  tts_first_byte
+930 ms  tts_segment_done
+1372 ms sentence_segmented        (2ᵉ phrase — le LLM générait encore)
+1372 ms tts_queued / tts_requested
+```
+
+→ L'architecture **ne bloque pas** la synthèse jusqu'à la fin : la 1re requête
+part **443 ms avant** le dernier delta. La chaîne texte n'est pas ralentie (test
+anti-régression TTFT conservé : `tests/integration/ws-tts.test.ts`, « *la synthèse
+ne bloque pas le chemin des deltas* »).
+
+### 16.3 La vraie cause du retard : le moteur ne streame pas la phrase
+
+`tts_first_byte` est mesuré **au premier `data` réellement relayé**
+(`src/tts/pipeline.ts:383-386`). Or le moteur cible **Chatterbox** tourne en
+**`mode: "offline"`** — **seul mode supporté**, `streaming` serait **refusé**
+(`docs/lot8.md` §11.3 : `loader.cpp:134-136`). Le serveur `audio.cpp` ne rend donc
+le WAV qu'**après** avoir synthétisé **tout le segment** : `tts_first_byte` ≈
+fin de synthèse du **premier segment**, pas un début de flux. À cela s'ajoute que
+Chatterbox est **lent** (essai utilisateur > 15 s sur un segment).
+
+Autrement dit, si le LLM a fini de générer avant que le moteur n'ait rendu le
+1er segment, **le son semble n'arriver qu'à la fin** — sans qu'aucun maillon
+Yuki ne l'ait attendu. Ce point était **déjà documenté** (`mode: offline`) mais
+l'impact sur la latence perçue n'était pas explicité : il l'est ici.
+
+### 16.4 Correction apportée (client)
+
+Le seul maillon que Yuki pouvait réellement améliorer était le **client** : il
+exigeait le bloc `final` d'un segment avant de planifier le **premier** son, ce
+qui contredit la promesse « lecture immédiate dès qu'un morceau est disponible ».
+
+- `public/ui/tts-player.js` planifie désormais le **préfixe contigu** d'un
+  segment **dès son arrivée** (`takeContiguousPcm`/`drain`), sans attendre
+  `final` ni `tts_end`. Un éventuel **octet impair** (coupe au milieu d'une trame
+  `s16le`) est **reporté** au morceau suivant — la trame n'est jamais décalée.
+- **Coussin de démarrage conservé et borné** : `DEFAULT_STARTUP_CUSHION_MS = 150`
+  (`public/ui/tts-player.js:25`), appliqué **une seule fois** au premier morceau.
+- Tests : `tests/tts/ui-audio.test.ts` — « *démarre la lecture dès le PREMIER
+  morceau (sans attendre `final` ni la fin du run)* », « *le coussin … borné et
+  petit (défaut 150 ms, appliqué une seule fois)* », « *reporte un octet impair…* ».
+
+> Note : avec un moteur **non streaming** (Chatterbox `offline`), cette
+> correction ne change **rien** en pratique (tous les morceaux d'un segment
+> arrivent ensemble) ; elle est **nécessaire** dès qu'un moteur **streaming**
+> (kokoro/qwen3-tts) est utilisé, et elle supprime une attente contraire au
+> contrat.
+
+### 16.5 TTFA attendue et leviers (proposés, non imposés)
+
+- **TTFA attendue (mesurable)** : `t0 → tts_first_byte` ≈ **latence de synthèse
+du 1er segment** + (réseau + coussin client 150 ms). Les étages
+`ttfaMs`/`ttsSynthMs`/`ttsSegments` du `run_summary` (§8) donnent ces valeurs
+**par run**, et `playback_started` (remonté par le client, D23) donne `t0 →`
+premier son réel. **Non mesurable ici** sans GPU/moteur réel.
+- **Levier 1 (✅ implémenté — D44, §16.6)** : viser une **première phrase courte**
+en **abaissant ponctuellement** la longueur cible du **premier** segment (le
+1er segment part dès la 1re ponctuation, même < `tts.minSentenceChars`), pour
+réduire le temps de synthèse du tout premier appel. Le segmenteur fusionnait
+une première phrase < 24 caractères (`src/tts/segmenter.ts`), ce qui **allongeait**
+le 1er segment. Compromis assumé : une amorce orale plus brève peut paraître
+hachée (bornée par le plancher anti-fragment de D44).
+- **Levier 2** : `tts.maxSentenceChars` plus petit (bornes plus serrées) réduit
+la taille du 1er segment mais augmente le nombre d'appels moteur.
+- **Levier 3** : changer de moteur pour un modèle **streaming** (kokoro/qwen3-tts)
+ou vérifier si une variante de Chatterbox exposant du streaming existe — hors
+périmètre ici (`docs/lot8.md` §11).
+- Le **prefetch** (`tts.prefetchDepth`, max 2) améliore la **continuité** entre
+phrases, **pas** le TTFA du 1er son.
+
+### 16.6 Règle du PREMIER segment — implémentée (D44)
+
+**Décision.** Le **premier** segment d'un flux est émis **dès la première
+ponctuation forte**, même plus court que `tts.minSentenceChars`. Les segments
+**suivants** conservent la règle min/max (sinon toute la parole serait hachée).
+
+- **Seuil / plancher anti-fragment** : `FIRST_SEGMENT_FLOOR_CHARS = 8`
+  (`src/tts/segmenter.ts`) = **borne basse du schéma** `tts.minSentenceChars`
+  (`min 8`, `src/config/schema.ts:289-295`). En dessous de 8 caractères, le
+  « segment » est plus probablement une interjection/un fragment (`M.`, `!`)
+  qu'une amorce utile. Le plancher est **borné par la config** :
+  `effMin = min(8, tts.minSentenceChars)` ⇒ un `tts.minSentenceChars ≤ 8` garde
+  l'ancien comportement à l'identique.
+- **Portée** : **premier segment du run uniquement**, réarmé par `reset()`
+  (`emittedFirst`, `src/tts/segmenter.ts`). Un nouveau run (nouvelle instance dans
+  `src/tts/pipeline.ts`) réapplique la règle.
+- **Garde-fou de contenu** : un « segment » qui ne contiendrait **que** de la
+  ponctuation/blancs est **ignoré** (`requireWordChars` : au moins une lettre ou
+  un chiffre) — jamais de segment vide/punctuation envoyé au moteur. Les
+  abréviations (`M.`, `Dr.`), guillemets et blocs de code restent gérés comme
+  avant.
+- **Pourquoi (raison)** : Chatterbox tourne en `mode: "offline"` (seul mode
+  supporté, §16.3) et ne rend le WAV qu'après avoir synthétisé le segment
+  **entier**. Raccourcir le premier segment est le **seul** levier côté Yuki.
+- **Compromis assumé** : l'amorce peut être **brève** (« Bonjour ! »). On ne
+  descend pas sous le plancher pour éviter une onction hachée.
+
+**Gain mesuré** (flux lent simulé, `tts.minSentenceChars = 24` ; deltas à
+`t ≈ 5 ms` / `305 ms` / `605 ms`) :
+
+```text
+AVANT (fusion) : 1er tts_requested ≈ 305 ms  (« Bonjour ! … qui prend du temps. », 79 car.)
+APRÈS (D44)    : 1er tts_requested ≈   7 ms  (« Bonjour ! », 9 car.)
+```
+
+⇒ ≈ **298 ms** d'avance sur le premier appel moteur et un premier segment
+**8,8×** plus court. Le test d'intégration « *un PREMIER segment court part à la
+première ponctuation (D44) — gain de TTFA* » (`tests/integration/ws-tts.test.ts`)
+mesure `secondDeltaAt − firstCallAt > 150 ms` ; le test « *le premier appel
+moteur part AVANT la fin des deltas* » reste **vert**.
+
+**Pas de nouveau champ de config.** Le comportement est le **défaut** du premier
+segment : aucun réglage requis. Un champ `string|int|enum` (seuls types
+acceptés, D11) n'apporterait qu'un knob de plus pour un gain déjà acquis ; le
+plancher dérive de la borne basse existante.
+
+| # | Décision | Preuve |
+| --- | --- | --- |
+| **D44** | ✅ **Le PREMIER segment d'un flux part dès la 1re ponctuation forte**, même < `tts.minSentenceChars`, sous plancher anti-fragment `min(8, minSentenceChars)` et garde de contenu ; les segments **suivants** gardent min/max ; règle par run, réarmée par `reset()` ; **aucun** champ de config | `src/tts/segmenter.ts` (`FIRST_SEGMENT_FLOOR_CHARS`, `SentenceEndOptions`, `emittedFirst`, `drain`), `tests/tts/segmenter.test.ts`, `tests/integration/ws-tts.test.ts` |

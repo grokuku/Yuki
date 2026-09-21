@@ -185,25 +185,46 @@ export function createTtsPlayer(deps = {}) {
   }
 
   /**
-   * Concatène les chunks d'un segment si — et seulement si — ils forment une
-   * suite contiguë `0..finalIndex`. Renvoie le PCM complet ou `null`.
+   * Concatène le **préfixe contigu** disponible d'un segment (à partir de
+   * `scheduledUpTo`) et avance le curseur. Ne requiert PAS le bloc de clôture
+   * `final` : c'est ce qui permet de **démarrer la lecture dès le premier
+   * morceau** reçu, sans attendre la fin du segment ni celle du run.
+   *
+   * Un échantillon `s16le` fait 2 octets : un chunk impair peut se terminer au
+   * milieu d'un échantillon, on reporte alors l'octet restant (`carry`) au
+   * prochain chunk pour ne jamais décaler la trame.
+   *
+   * @returns le PCM contigu (longueur paire) ou `null` si rien n'est prêt.
    */
-  function collectSegment(segment) {
-    if (segment.finalIndex === null) return null;
-    const total = segment.finalIndex + 1;
-    for (let i = 0; i < total; i += 1) {
-      if (!segment.chunks.has(i)) return null;
+  function takeContiguousPcm(segment) {
+    const parts = [];
+    while (segment.chunks.has(segment.scheduledUpTo)) {
+      const chunk = segment.chunks.get(segment.scheduledUpTo);
+      segment.chunks.delete(segment.scheduledUpTo);
+      segment.scheduledUpTo += 1;
+      if (chunk.byteLength > 0) parts.push(chunk);
     }
-    let byteLength = 0;
-    for (let i = 0; i < total; i += 1) {
-      byteLength += segment.chunks.get(i).byteLength;
-    }
+
+    const carry = segment.carry;
+    if (!carry && parts.length === 0) return null;
+
+    let byteLength = carry ? carry.byteLength : 0;
+    for (const part of parts) byteLength += part.byteLength;
     const merged = new Uint8Array(byteLength);
     let offset = 0;
-    for (let i = 0; i < total; i += 1) {
-      const chunk = segment.chunks.get(i);
-      merged.set(chunk, offset);
-      offset += chunk.byteLength;
+    if (carry) {
+      merged.set(carry, 0);
+      offset = carry.byteLength;
+    }
+    for (const part of parts) {
+      merged.set(part, offset);
+      offset += part.byteLength;
+    }
+    segment.carry = null;
+
+    if (merged.byteLength % 2 === 1) {
+      segment.carry = merged.subarray(merged.byteLength - 1);
+      return merged.subarray(0, merged.byteLength - 1);
     }
     return merged;
   }
@@ -305,19 +326,36 @@ export function createTtsPlayer(deps = {}) {
     }
   }
 
-  /** Vide la file d'un segment : concatène et planifie tout ce qui est prêt. */
+  /**
+   * Planifie tout ce qui est **prêt maintenant** : le préfixe contigu de chaque
+   * segment disponible, **sans attendre `final`**. Dès qu'un morceau est là, il
+   * est joué (sous réserve du coussin de démarrage).
+   */
   function drain(run) {
     let progressed = true;
     while (progressed) {
       progressed = skipLostSegments(run);
       const segment = run.segments.get(run.nextSegment);
       if (!segment) break;
-      const pcm = collectSegment(segment);
-      if (!pcm) break;
-      run.segments.delete(run.nextSegment);
-      run.nextSegment += 1;
-      scheduleSegment(run, pcm);
-      progressed = true;
+
+      const pcm = takeContiguousPcm(segment);
+      if (pcm && pcm.byteLength >= 2) {
+        scheduleSegment(run, pcm);
+        progressed = true;
+      }
+
+      // Le segment n'est clos qu'une fois le bloc `final` **schedulé**
+      // (`scheduledUpTo` dépasse son index). Avant cela, on attend la suite.
+      const complete =
+        segment.finalIndex !== null &&
+        segment.scheduledUpTo > segment.finalIndex;
+      if (complete) {
+        run.segments.delete(run.nextSegment);
+        run.nextSegment += 1;
+        progressed = true;
+        continue;
+      }
+      break;
     }
   }
 
@@ -348,7 +386,7 @@ export function createTtsPlayer(deps = {}) {
 
     let segment = run.segments.get(segmentIndex);
     if (!segment) {
-      segment = { chunks: new Map(), finalIndex: null };
+      segment = { chunks: new Map(), finalIndex: null, scheduledUpTo: 0, carry: null };
       run.segments.set(segmentIndex, segment);
     }
     segment.chunks.set(chunkIndex, payload);

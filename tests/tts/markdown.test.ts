@@ -4,11 +4,16 @@
  * Vérifie le retrait des marqueurs, la résolution des marqueurs coupés entre
  * deux deltas, l'ignorance des blocs de code (y compris non clôturés) et la
  * réécriture des liens.
+ *
+ * Depuis le Lot 8, le filtre retire aussi les **emojis, symboles décoratifs et
+ * caractères invisibles** et normalise les espaces (second étage
+ * `SpeechSanitizer`). Les tests correspondants sont plus bas.
  */
 
 import { describe, expect, it } from "vitest";
 
 import { MarkdownSpeechFilter } from "../../src/tts/markdown.js";
+import { SentenceSegmenter } from "../../src/tts/segmenter.js";
 
 function filterAll(fragments: string[], options = {}): string {
   const filter = new MarkdownSpeechFilter(options);
@@ -108,5 +113,70 @@ describe("MarkdownSpeechFilter — robustesse", () => {
   it("conserve un texte déjà propre", () => {
     const text = "Bonjour, ceci est une phrase normale.";
     expect(filterAll([text])).toBe(text);
+  });
+});
+
+describe("MarkdownSpeechFilter — nettoyage non parlé (Lot 8)", () => {
+  it("retire les emojis (emphase, lien, titre)", () => {
+    expect(filterAll(["Bonjour **le** monde 😊 !"])).toBe("Bonjour le monde !");
+    expect(filterAll(["[la 😊 doc](http://x) à lire"])).toBe("la doc à lire");
+    expect(filterAll(["# Titre 🎉"])).toBe("Titre ");
+  });
+
+  it("préserve toute la ponctuation de fin de phrase autour de l'emoji", () => {
+    expect(filterAll(["Bonjour ! 😊 Ensuite, ça continue."])).toBe(
+      "Bonjour ! Ensuite, ça continue.",
+    );
+    expect(filterAll(["Vraiment ? 🤔 Oui. 🎉"])).toBe("Vraiment ? Oui. ");
+  });
+
+  it("traite un emoji coupé entre deux deltas (jamais de demi-emoji émis)", () => {
+    const filter = new MarkdownSpeechFilter();
+    const first = filter.push("Bonjour \uD83D"); // high surrogate retenu
+    expect(first).toBe("Bonjour ");
+    expect(first).not.toMatch(/[\uD800-\uDBFF\uDC00-\uDFFF]/);
+    const second = filter.push("\uDE0A !"); // low surrogate : l'emoji est supprimé
+    expect(second).toBe("!");
+    expect(second).not.toMatch(/[\uD800-\uDBFF\uDC00-\uDFFF]/);
+    expect(second + filter.flush()).toBe("!");
+    // Résultat complet, ponctuation intacte.
+    expect(filterAll(["Bonjour \uD83D", "\uDE0A !"])).toBe("Bonjour !");
+  });
+
+  it("normalise les espaces et supprime les invisibles", () => {
+    expect(filterAll(["un  mot\u00a0coupé\u200d!"])).toBe("un mot coupé!");
+  });
+
+  it("est idempotent à travers le filtre", () => {
+    const once = filterAll(["Un 😊 test 🎉 avec des accents éàç et 3,14 € !"]);
+    expect(filterAll([once])).toBe(once);
+  });
+});
+
+describe("MarkdownSpeechFilter — interaction avec le segmenteur", () => {
+  function segmentAll(text: string): string[] {
+    const segmenter = new SentenceSegmenter({ minChars: 1, maxChars: 500 });
+    return [...segmenter.push(text), ...segmenter.flush()];
+  }
+
+  it("le filtrage ne casse pas le découpage en phrases", () => {
+    expect(segmentAll("Bonjour ! 😊 Ensuite, ça continue.")).toEqual([
+      "Bonjour !",
+      "Ensuite, ça continue.",
+    ]);
+    expect(segmentAll("Il fait beau ☀️ aujourd'hui. On sort ? 🎉")).toEqual([
+      "Il fait beau aujourd'hui.",
+      "On sort ?",
+    ]);
+  });
+
+  it("produit le même découpage que le texte nettoyé manuellement", () => {
+    const dirty = "Un 😊 test. Deux 🎉 points ! Trois ⭐ enfin ?";
+    const clean = "Un test. Deux points ! Trois enfin ?";
+    expect(segmentAll(dirty)).toEqual(segmentAll(clean));
+  });
+
+  it("un texte 100 % emoji ne produit aucun segment vocalisé", () => {
+    expect(segmentAll("😀😃😄🎉")).toEqual([]);
   });
 });

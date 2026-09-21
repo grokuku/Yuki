@@ -76,11 +76,14 @@ export {
   type MarkdownFilterOptions,
 } from "./markdown.js";
 
+export { SpeechSanitizer } from "./sanitize.js";
+
 export {
   SentenceSegmenter,
   findSentenceEnd,
   forcedCutIndex,
   type SegmenterOptions,
+  type SentenceEndOptions,
 } from "./segmenter.js";
 
 export {

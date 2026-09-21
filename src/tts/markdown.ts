@@ -10,6 +10,11 @@
  * (`"**gr"` puis `"as**"`). L'état est conservé entre les appels `push`, et la
  * résolution est confirmée dès que la totalité du marqueur est disponible.
  *
+ * Depuis le Lot 8, il compose aussi le nettoyage « non parlé » (`SpeechSanitizer`) :
+ * emojis, symboles décoratifs et caractères invisibles sont retirés **après** le
+ * markdown, et les espaces normalisées. Le filtre reste donc le **point unique**
+ * de préparation du texte parlé.
+ *
  * Limites documentées (fais au mieux) :
  *   - un bloc de code **non clôturé** est entièrement ignoré (jusqu'au `flush`) ;
  *   - un `*`/`_` isolé est retiré même s'il est une multiplication ;
@@ -21,6 +26,8 @@
  * (blocs de code **ignorés**) ; `codeAnnouncement` permet d'insérer une annonce
  * (« Bloc de code omis ») si l'on tranche autrement.
  */
+
+import { SpeechSanitizer } from "./sanitize.js";
 
 /** Longueur maximale d'un `[...` retenu en attente d'un `]` (anti-blocage). */
 const MAX_LINK_HOLD = 256;
@@ -55,6 +62,8 @@ export class MarkdownSpeechFilter {
   private inFence = false;
   private fenceChar = "`";
   private readonly codeAnnouncement: string | null;
+  /** Second étage : nettoyage des emojis/symboles/invisibles (Lot 8). */
+  private readonly sanitizer = new SpeechSanitizer();
 
   constructor(options: MarkdownFilterOptions = {}) {
     this.codeAnnouncement = options.codeAnnouncement ?? null;
@@ -64,15 +73,19 @@ export class MarkdownSpeechFilter {
   push(fragment: string): string {
     if (fragment.length === 0) return "";
     this.raw += fragment;
-    return this.scan(false);
+    return this.sanitizer.push(this.scan(false));
   }
 
   /** Vide le flux : renvoie tout le texte restant (résolu en fin de flux). */
   flush(): string {
-    const out = this.scan(true);
-    const rest = this.raw;
+    const resolved = this.scan(true);
+    this.sanitizer.push(resolved);
+    // Sécurité : en fin de flux `scan(true)` consomme tout, mais on ne perdrait
+    // pas un éventuel résidu s'il en restait.
+    const leftover = this.raw;
     this.raw = "";
-    return out + rest;
+    if (leftover.length > 0) this.sanitizer.push(leftover);
+    return this.sanitizer.flush();
   }
 
   /** Réinitialise l'état (nouveau run). */
@@ -81,6 +94,7 @@ export class MarkdownSpeechFilter {
     this.atLineStart = true;
     this.inFence = false;
     this.fenceChar = "`";
+    this.sanitizer.reset();
   }
 
   private scan(final: boolean): string {

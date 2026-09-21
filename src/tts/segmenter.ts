@@ -10,6 +10,15 @@
  *   - **longueur maximale** `tts.maxSentenceChars` : coupe forcée (à la virgule
  *     la plus proche, sinon à l'espace) pour ne jamais bloquer le pipeline.
  *
+ * **Exception au minimum : le PREMIER segment d'un flux** (D44). Pour réduire
+ * le TTFA, le premier segment part **dès la première ponctuation forte**, même
+ * plus court que `tts.minSentenceChars`, sous réserve d'un **plancher**
+ * anti-fragment (`FIRST_SEGMENT_FLOOR_CHARS`) : un moteur `offline` (Chatterbox)
+ * ne rend le WAV qu'après avoir synthétisé le segment **entier**, donc plus le
+ * premier segment est court, plus le premier son arrive tôt. La règle ne vaut
+ * que pour le **premier** segment du run (les suivants gardent min/max, sinon la
+ * parole deviendrait hachée) et se réarme à chaque `reset()`.
+ *
  * Le `flush` final restitue le résidu sans ponctuation terminale. Le filtrage
  * markdown (blocs de code, emphases, liens…) est délégué à
  * `MarkdownSpeechFilter` ; ce module reste **pur** (aucune I/O, aucun timer) et
@@ -58,6 +67,22 @@ const ABBREVIATIONS = new Set([
 /** Caractères de fermeture admis entre la ponctuation et le blanc. */
 const CLOSERS = "»\"')]”’";
 
+/**
+ * Plancher anti-fragment du **premier** segment d'un flux (D44).
+ *
+ * Le premier segment peut être plus court que `tts.minSentenceChars`, mais pas
+ * au point d'envoyer une onction dérisoire au moteur. `8` est la **borne basse
+ * du schéma** (`tts.minSentenceChars` : `min 8`, `src/config/schema.ts`) : en
+ * dessous, il s'agit plus probablement d'une interjection ou d'un fragment
+ * (« M. », « ! ») que d'une amorce utile. Le plancher n'est **jamais** plus
+ * restrictif que la config : `effMin = min(8, tts.minSentenceChars)`, donc un
+ * `tts.minSentenceChars ≤ 8` conserve exactement l'ancien comportement.
+ */
+const FIRST_SEGMENT_FLOOR_CHARS = 8;
+
+/** Au moins un caractère prononçable (lettre ou chiffre). */
+const WORD_CHAR_RE = /[0-9A-Za-zÀ-ÿ]/;
+
 export interface SegmenterOptions {
   /** Longueur minimale d'un segment émis (`tts.minSentenceChars`). */
   minChars?: number;
@@ -83,6 +108,16 @@ function isAbbreviationDot(text: string, dotIndex: number): boolean {
   return false;
 }
 
+/** Options de `findSentenceEnd` (pour le cas « premier segment », D44). */
+export interface SentenceEndOptions {
+  /**
+   * N'accepte qu'un segment contenant au moins un caractère prononçable
+   * (lettre/chiffre). Garde-fou du premier segment : empêche d'émettre une
+   * suite de ponctuation (« ........ ») qui atteindrait le plancher de longueur.
+   */
+  requireWordChars?: boolean;
+}
+
 /**
  * Cherche la première fin de phrase acceptable : ponctuation forte suivie d'un
  * blanc (ou fin de flux), d'une longueur (trimée) ≥ `min` et ≤ `max`.
@@ -93,7 +128,9 @@ export function findSentenceEnd(
   text: string,
   min: number,
   max: number,
+  options: SentenceEndOptions = {},
 ): number {
+  const requireWordChars = options.requireWordChars === true;
   let openQuote = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i]!;
@@ -119,6 +156,8 @@ export function findSentenceEnd(
     const length = text.slice(0, j).trim().length;
     if (length < min) continue;
     if (j > max) continue;
+    // Garde-fou du premier segment : une ponctuation seule n'est jamais parlée.
+    if (requireWordChars && !WORD_CHAR_RE.test(text.slice(0, j))) continue;
     return j;
   }
   return -1;
@@ -146,13 +185,18 @@ export class SentenceSegmenter {
   private readonly filter: MarkdownSpeechFilter | null;
   private readonly min: number;
   private readonly max: number;
+  /** Plancher effectif du premier segment : `min(FIRST_SEGMENT_FLOOR_CHARS, min)`. */
+  private readonly firstFloor: number;
   private buffer = "";
+  /** `true` dès le premier segment émis du run (règle D44 réarmée par `reset`). */
+  private emittedFirst = false;
 
   constructor(options: SegmenterOptions = {}) {
     const maxChars = Math.max(1, Math.floor(options.maxChars ?? 240));
     const minChars = Math.max(1, Math.floor(options.minChars ?? 24));
     this.max = maxChars;
     this.min = Math.min(minChars, maxChars);
+    this.firstFloor = Math.min(FIRST_SEGMENT_FLOOR_CHARS, this.min);
     this.filter =
       options.filterMarkdown === false
         ? null
@@ -184,6 +228,7 @@ export class SentenceSegmenter {
   /** Réinitialise l'état (abandon de run). */
   reset(): void {
     this.buffer = "";
+    this.emittedFirst = false;
     this.filter?.reset();
   }
 
@@ -203,11 +248,21 @@ export class SentenceSegmenter {
       }
       this.buffer = trimmed;
 
-      const boundary = findSentenceEnd(this.buffer, this.min, this.max);
+      // Le PREMIER segment du run accepte le plancher (D44) et exige un mot ;
+      // dès qu'il est émis, on revient à la règle min/max historique.
+      const useFirstRule = !this.emittedFirst && this.firstFloor < this.min;
+      const boundary = useFirstRule
+        ? findSentenceEnd(this.buffer, this.firstFloor, this.max, {
+            requireWordChars: true,
+          })
+        : findSentenceEnd(this.buffer, this.min, this.max);
       if (boundary > 0) {
         const segment = this.buffer.slice(0, boundary).trim();
         this.buffer = this.buffer.slice(boundary);
-        if (segment.length > 0) out.push(segment);
+        if (segment.length > 0) {
+          out.push(segment);
+          this.emittedFirst = true;
+        }
         continue;
       }
 
@@ -215,7 +270,10 @@ export class SentenceSegmenter {
         const cut = forcedCutIndex(this.buffer, this.max);
         const segment = this.buffer.slice(0, cut).trim();
         this.buffer = this.buffer.slice(cut);
-        if (segment.length > 0) out.push(segment);
+        if (segment.length > 0) {
+          out.push(segment);
+          this.emittedFirst = true;
+        }
         continue;
       }
 

@@ -365,3 +365,37 @@ describe("TtsPipeline — purge / barge-in", () => {
     expect(pipeline.runCount).toBe(0);
   });
 });
+
+describe("TtsPipeline — texte parlé nettoyé (Lot 8)", () => {
+  it("transmet au synthétiseur un texte débarrassé des emojis et symboles", async () => {
+    const requested: string[] = [];
+    const synthesizer: SegmentSynthesizer = async (request) => {
+      requested.push(request.text);
+      return (async function* () {
+        yield { type: "format" as const, sampleRate: 16_000, channels: 1 };
+        yield { type: "data" as const, bytes: Buffer.from([1, 2]) };
+      })();
+    };
+    const { pipeline, cap } = buildPipeline({ synthesizer });
+
+    pipeline.onRunStarted("sess", "run", 0);
+    pipeline.onContent("sess", "run", "Bonjour ! 😊 Ensuite, 🎉 ça continue → fin.");
+    pipeline.onRunFinished("sess", "run", "done");
+
+    await until(() =>
+      decoded(cap.raw).some((frame) => frame.header.type === "tts_end"),
+    );
+
+    const spoken = requested.join(" ");
+    expect(spoken).toContain("Bonjour !");
+    expect(spoken).toContain("ça continue");
+    expect(spoken).not.toContain("😊");
+    expect(spoken).not.toContain("🎉");
+    expect(spoken).not.toContain("→");
+    // La ponctuation de fin de phrase est préservée : deux segments.
+    expect(requested).toEqual([
+      "Bonjour !",
+      "Ensuite, ça continue fin.",
+    ]);
+  });
+});

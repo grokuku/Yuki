@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import { decodeTtsFrame } from "../../public/ui/tts-frames.js";
-import { createTtsPlayer } from "../../public/ui/tts-player.js";
+import { createTtsPlayer, DEFAULT_STARTUP_CUSHION_MS } from "../../public/ui/tts-player.js";
 import {
   createTtsPreference,
   readMuted,
@@ -245,26 +245,26 @@ function makePlayer(options: PlayerOptions = {}) {
 describe("lecteur TTS — ordonnancement et coussin", () => {
   it("respecte l'ordre des segments et enchaîne sans trou", () => {
     const { player, ctx } = makePlayer({ cushionMs: 100 });
-    // Segment 0 : 2 chunks (2 + 2 octets = 2 frames de 16 bits) puis clôture.
+    // Segment 0 : 2 chunks (1 frame de 16 bits chacun) puis clôture.
     player.handleFrame(decodeOk(audioFrame({ segmentIndex: 0, chunkIndex: 0 }, [0, 0])));
     player.handleFrame(decodeOk(audioFrame({ segmentIndex: 0, chunkIndex: 1 }, [0, 0])));
     player.handleFrame(
       decodeOk(audioFrame({ segmentIndex: 0, chunkIndex: 2, final: true }, [])),
     );
-    // Segment 1 : clôture directe, 2 octets = 1 frame.
+    // Segment 1 : clôture directe, 1 frame.
     player.handleFrame(decodeOk(audioFrame({ segmentIndex: 1, chunkIndex: 0 }, [0, 0])));
     player.handleFrame(
       decodeOk(audioFrame({ segmentIndex: 1, chunkIndex: 1, final: true }, [])),
     );
 
-    expect(ctx.sources).toHaveLength(2);
-    // 2 frames pour le segment 0, 1 frame pour le segment 1.
-    expect(ctx.buffers[0]?.length).toBe(2);
-    expect(ctx.buffers[1]?.length).toBe(1);
-    // Coussin appliqué au premier segment : 0 + 100 ms.
+    // Lecture IMMÉDIATE : chaque morceau contigu est planifié dès réception.
+    expect(ctx.sources).toHaveLength(3);
+    expect(ctx.buffers.map((b) => b.length)).toEqual([1, 1, 1]);
+    // Coussin appliqué au premier morceau : 0 + 100 ms.
     expect(ctx.sources[0]?.startTime).toBeCloseTo(0.1, 6);
-    // Second segment enchaîné EXACTEMENT après le premier (2/16000 s).
-    expect(ctx.sources[1]?.startTime).toBeCloseTo(0.1 + 2 / 16000, 6);
+    // Enchaînement EXACT sans trou : chaque morceau suit le précédent.
+    expect(ctx.sources[1]?.startTime).toBeCloseTo(0.1 + 1 / 16000, 6);
+    expect(ctx.sources[2]?.startTime).toBeCloseTo(0.1 + 2 / 16000, 6);
   });
 
   it("concatène les chunks quel que soit leur ordre d'arrivée", () => {
@@ -284,7 +284,54 @@ describe("lecteur TTS — ordonnancement et coussin", () => {
     player.handleFrame(
       decodeOk(audioFrame({ segmentIndex: 5, chunkIndex: 1, final: true }, [0, 0])),
     );
+    // Les deux morceaux sont joués sans attendre le segment 0 manquant.
+    expect(ctx.sources).toHaveLength(2);
+  });
+
+  it("le coussin de démarrage est borné et petit (défaut 150 ms, appliqué une seule fois)", () => {
+    expect(DEFAULT_STARTUP_CUSHION_MS).toBe(150);
+    const ctx = new FakeAudioContext({});
+    const logger = {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+    };
+    const player = createTtsPlayer({ audioContextFactory: () => ctx, logger });
+    // Deux morceaux du premier segment, puis un morceau du suivant.
+    player.handleFrame(decodeOk(audioFrame({ chunkIndex: 0 }, [0, 0])));
+    player.handleFrame(decodeOk(audioFrame({ chunkIndex: 1, final: true }, [0, 0])));
+    player.handleFrame(decodeOk(audioFrame({ segmentIndex: 1, chunkIndex: 0 }, [0, 0])));
+    // Coussin appliqué au PREMIER morceau uniquement.
+    expect(ctx.sources[0]?.startTime).toBeCloseTo(DEFAULT_STARTUP_CUSHION_MS / 1000, 6);
+    // Le morceau suivant enchaîne sans ré-appliquer le coussin.
+    expect(ctx.sources[1]?.startTime).toBeCloseTo(
+      DEFAULT_STARTUP_CUSHION_MS / 1000 + 1 / 16000,
+      6,
+    );
+  });
+
+  it("démarre la lecture dès le PREMIER morceau (sans attendre `final` ni la fin du run)", () => {
+    const { player, ctx, events } = makePlayer({ cushionMs: 80 });
+    // Un seul chunk, PAS encore de bloc de clôture `final` :
+    player.handleFrame(decodeOk(audioFrame({ segmentIndex: 0, chunkIndex: 0 }, [0, 0])));
+    // → le son est DÉJÀ planifié (2 octets = 1 frame).
     expect(ctx.sources).toHaveLength(1);
+    expect(ctx.buffers[0]?.length).toBe(1);
+    // Coussin borné et petit : 80 ms après `currentTime` (0).
+    expect(ctx.sources[0]?.startTime).toBeCloseTo(0.08, 6);
+    expect(events).toEqual([{ type: "started", runId: "r1" }]);
+  });
+
+  it("reporte un octet impair entre deux morceaux (trame s16le jamais décalée)", () => {
+    const { player, ctx } = makePlayer({ cushionMs: 0 });
+    // Chunk 0 = 3 octets (1 frame + 1 octet orphelin), chunk 1 = 1 octet.
+    player.handleFrame(decodeOk(audioFrame({ chunkIndex: 0 }, [0, 0, 0])));
+    player.handleFrame(decodeOk(audioFrame({ chunkIndex: 1 }, [0])));
+    // L'octet reporté complète le second morceau : 2 frames au total, jamais
+    // de buffer de longueur impaire.
+    expect(ctx.buffers.map((b) => b.length)).toEqual([1, 1]);
+    expect(ctx.buffers.reduce((sum, b) => sum + b.length, 0)).toBe(2);
   });
 
   it("émet `started` une seule fois, avec le bon runId", () => {

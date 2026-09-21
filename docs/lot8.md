@@ -592,6 +592,17 @@ confirmation d'activation (annulée), et **0 violation CSP**.
 | `npm run build` | OK | OK | OK | OK | OK |
 | `node --check` (JS UI) | OK | OK | OK | OK | OK |
 
+> **Correctif emojis (D43, §12), même session.** Ajout de **32 tests**, tous
+> verts : `tests/tts/sanitize.test.ts` (+23), `tests/tts/markdown.test.ts` (+8),
+> `tests/tts/pipeline.test.ts` (+1). `npm run typecheck` **OK**, `npm run build`
+> **OK**. ⚠️ Le worktree contenait **aussi** un changeset **non lié** à ce
+> correctif (`public/ui/tts-player.js`, `tests/tts/ui-audio.test.ts`,
+> `tests/integration/ws-tts.test.ts`), qui ajoute d'autres tests : le total
+> `npm test` observé sur le worktree est **550 passed / 4 skipped** (49 fichiers),
+> **sans aucun échec**. Le correctif emojis n'est **pas** visible dans le parcours
+> UI simulé (il agit côté serveur, avant la segmentation) : l'E2E headless n'est
+> **pas** rejoué, et `tests/integration/static-ui.test.ts` (CSP=0) reste vert.
+
 ### Captures (thèmes variés, `_tools/shots/`)
 
 `config-assistant-ready.png`, `config-assistant-starting.png`,
@@ -1582,7 +1593,122 @@ selon le moteur + 0 violation CSP).
 
 ---
 
-## 12. Renvois
+## 12. Nettoyage du texte parlé — emojis, symboles, invisibles
+
+> **Ajout (Lot 8, correctif « emojis »).** Demande utilisateur : « est-ce que
+> c'est possible d'enlever les emojis et autres trucs du genre de ce qui est
+> envoyé au TTS ? (pour éviter les mots bizarres) ». Le filtre markdown ne les
+> retirait pas : ce lot ajoute un **second étage** de nettoyage.
+
+### 12.1 Où le nettoyage a lieu
+
+Le texte vocalisé provient **exclusivement** du canal `content` :
+`src/gateway/ws/server.ts:239-242` n'appelle `tts.onContent` que pour
+`event.channel === "content"` ; le canal `thinking` n'atteint **jamais** le
+pipeline. La chaîne est :
+
+delta `content` → `SentenceSegmenter.push` (`src/tts/segmenter.ts:165`) →
+`MarkdownSpeechFilter.push` (`src/tts/markdown.ts:73`) → second étage
+`SpeechSanitizer` (`src/tts/sanitize.ts:149`) → phrase segmentée → moteur.
+
+Le nettoyage est donc appliqué **avant** la segmentation (`markdown.ts:76`,
+`:82`) : les phrases envoyées au moteur sont déjà propres.
+
+### 12.2 Déjà filtré (Lot 7) vs ce qui passait encore
+
+| Élément | Avant (Lot 7) | Après (ce lot) |
+| --- | --- | --- |
+| Emphases `**`/`__`/`*`/`~~`, backticks | retirés (`markdown.ts:178`, `:184`) | idem |
+| Titres, puces, citations, listes | retirés (`markdown.ts:144`, `:205`) | idem |
+| Blocs de code | ignorés (`markdown.ts:108`, `:127`) | idem |
+| Liens/images `[t](u)` | réécrits en `t` (`markdown.ts:154`, `:256`) | idem + texte nettoyé |
+| **Emojis / pictogrammes** | **passaient** | **retirés** (`sanitize.ts:99-147`) |
+| **Drapeaux, tons de peau, ZWJ, variation selectors** | **passaient** | **retirés** |
+| **Symboles décoratifs** (flèches, coches, étoiles, cœurs, puces, dingbats) | **passaient** | **retirés** |
+| **Invisibles / contrôle** (ZWSP, ZWJ, BOM, soft hyphen, bidi, tags) | **passaient** | **retirés** (`sanitize.ts:64-90`) |
+| **Espaces insécables / multiples** | **passaient** | **normalisés** (`sanitize.ts:39-53`) |
+
+### 12.3 Catégories supprimées (plages Unicode explicites)
+
+Aucune dépendance externe, aucune table téléchargée : uniquement des plages
+`U+xxxx` commentées (`sanitize.ts`).
+
+- **Emojis / pictogrammes** : `isEmojiOrSymbol` (`sanitize.ts:99-147`).
+  - Bloc `U+1F000–U+1FAFF` (Mahjong, dominos, cartes, symboles et pictogrammes,
+    émoticônes, transport, supplémentaires, Extended-A) ; inclut les
+    **indicateurs régionaux** (drapeaux, `U+1F1E6–U+1F1FF`) et les
+    **modificateurs de peau** (`U+1F3FB–U+1F3FF`).
+  - Symboles : flèches `U+2190–U+21FF`, technique `U+2300–U+23FF`,
+    alphanumériques cerclés `U+2460–U+24FF`, formes `U+25A0–U+25FF`, symboles
+    divers `U+2600–U+26FF`, dingbats `U+2700–U+27BF`, flèches suppl. `U+2900–U+297F`,
+    symboles/flèches `U+2B00–U+2BFF`, puces `U+2022`/`U+2023`, emoji CJK
+    `U+3030`/`U+303D`/`U+3297`/`U+3299`, `©` `®` `™` `ℹ`.
+- **Invisibles / format** (`isInvisible`, `sanitize.ts:64-84`) : ZWSP `U+200B`,
+  ZWNJ `U+200C`, ZWJ `U+200D`, LRM/RLM, bidi `U+202A–U+202E`/`U+2066–U+2069`,
+  word joiner `U+2060`, **sélecteurs de variation** `U+FE00–U+FE0F`/`U+E0100–U+E01EF`,
+  BOM `U+FEFF`, trait d'union conditionnel `U+00AD`, diacritiques pour symboles
+  `U+20D0–U+20FF` (dont le keycap `U+20E3`), **tags** `U+E0000–U+E007F`
+  (drapeaux `🏴…`).
+- **Contrôle** C0/C1 (`isControl`, `sanitize.ts:86-90`) hors tabulation et saut de ligne.
+- **Espaces** : tous les blancs exotiques (`U+00A0`, `U+2000–U+200A`, `U+202F`,
+  `U+205F`, `U+3000`, `U+1680`, séparateurs `U+2028`/`U+2029`) → espace normale ;
+  espaces consécutives écrasées (`sanitize.ts:39-53`, `:233-241`).
+
+### 12.4 Volontairement conservé (et pourquoi)
+
+- **Ponctuation de fin de phrase** `. ! ? …` (`U+002E`/`U+0021`/`U+003F`/`U+2026`) :
+  le segmenteur s'en sert comme frontière (`src/tts/segmenter.ts:108`) — la
+  supprimer casserait **tout** le découpage. Aucune plage ne la couvre.
+- **Ponctuation française** `« » “ ” ‘ ’` et apostrophes, tirets `– —`, virgules,
+  deux-points : conservés.
+- **Accents** (Latin-1 / Latin étendu) : conservés.
+- **Chiffres**, **nombres à virgule** `3,14` : conservés.
+- **Unités** `%`, devises `€ £ ¥ $ ¢`, degrés `°` `℃` `℉` : conservés (hors plages).
+- **Opérateurs mathématiques** `± × ÷ ≤ ≥ ≠ ≈ ∞ √` et signes `µ` : conservés.
+- **URL brutes, tableaux markdown (`|`, lignes `---`), `#hashtags`, HTML** :
+  **non traités** ici. Raison : détection **incrémentale** ambiguë (une URL, un
+  tableau ou une ligne `---` peut être coupé entre deux deltas) et risque de
+  casser le sens ou la ponctuation sans preuve suffisante. Les **liens markdown**
+  et **blocs de code**, eux, sont déjà réglés par le Lot 7. À traiter dans un
+  lot dédié si le besoin est confirmé.
+
+### 12.5 Cas à cheval (demi-emoji)
+
+Un emoji non-BMP est une **paire de substitution** (2 unités UTF-16) ; un ZWJ,
+un modificateur de peau ou un sélecteur de variation peut aussi tomber à la
+frontière de deux fragments. `SpeechSanitizer` :
+
+- **retient** un `high surrogate` en fin de fragment (`sanitize.ts:191-196`) et
+  le résout au fragment suivant (`:197-203`) ;
+- en fin de flux (`flush`), un demi-surrogate **isolé** est ignoré (`:192-193`) :
+  aucun demi-emoji n'est émis, aucun texte adjacent perdu.
+- Les autres éléments d'une séquence (ZWJ, sélecteurs, tons) étant **chacun**
+  supprimable isolément, ils n'exigent aucune rétention.
+- Si un symbole supprimé **collait deux mots** (« `Bonjour😊Ensuite` »), une
+  espace de séparation est insérée (`sanitize.ts:244-253`) ; sinon la suppression
+  ne laisse rien.
+
+### 12.6 Preuves par test
+
+`tests/tts/sanitize.test.ts` (unitaire, 23 tests) : emojis simples / peaux /
+ZWJ / drapeaux / variation selectors, symboles, invisibles, espaces,
+**préservation** (accents, unités, ponctuation, `3,14`), **demi-emoji coupé**,
+**idempotence**, **texte 100 % emoji**, **texte long** (≈ 96 000 car.).
+`tests/tts/markdown.test.ts` (intégration, +8 tests) : nettoyage à travers le
+filtre, ponctuation préservée, demi-emoji coupé via le filtre, **interaction
+avec le segmenteur** (« le filtrage ne casse pas le découpage »).
+`tests/tts/pipeline.test.ts` (+1) : le synthétiseur reçoit un texte nettoyé et
+segmenté de la même façon.
+
+### 12.7 Décision
+
+| # | Décision | Preuve |
+| --- | --- | --- |
+| **D43** | ✅ **Le texte parlé est nettoyé des emojis, symboles décoratifs et caractères invisibles ; les espaces sont normalisés.** Second étage `SpeechSanitizer` composé par `MarkdownSpeechFilter`, appliqué **avant** la segmentation ; rétention explicite des demi-surrogates ; **rien** de la ponctuation (surtout de fin de phrase) n'est retiré. Les URL brutes, tableaux et `#hashtags` sont **hors périmètre** (détection incrémentale ambiguë). | `src/tts/sanitize.ts`, `src/tts/markdown.ts:66`, `:76`, `:82`, `tests/tts/sanitize.test.ts`, `tests/tts/markdown.test.ts`, `tests/tts/pipeline.test.ts` |
+
+---
+
+## 13. Renvois
 
 - [`docs/lot7.md`](lot7.md) — spécification TTS de référence (moteur, pipeline, voix, licences).
 - [`docs/runbook.md`](runbook.md) — exploitation, GPU, volumes, dépannage hôte.
