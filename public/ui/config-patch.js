@@ -32,7 +32,7 @@ export const CONFIG_ERROR_HELP = {
     "L'en-tête d'écriture X-Yuki-Config est absent : rechargez la page puis réessayez.",
   forbidden: "Le gateway a refusé l'écriture.",
   config_store_unwritable:
-    "Le gateway n'a pas pu écrire le fichier de configuration : vérifiez le volume « state » (monté ET inscriptible par l'uid du conteneur).",
+    "Le gateway n'a pas pu écrire le fichier de configuration : la cause exacte (montage en lecture seule, permissions, dossier absent) est indiquée dans le message du serveur ci-dessus ; vérifiez le montage du volume « state ».",
   invalid_json: "Le corps de la requête n'est pas un JSON valide (bug client).",
   invalid_body: "Le corps de la requête n'est pas un objet JSON (patch de champs attendu).",
   internal_error: "Le gateway a rencontré une erreur interne : consultez ses journaux.",

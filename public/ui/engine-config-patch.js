@@ -266,7 +266,8 @@ export function describeEngineConfigError(error) {
     case "config_dir_unwritable":
       return withFields(
         serverMessage ||
-          "Le dossier de configuration n'est pas inscriptible (bind mount : chown 1000:1000).",
+          "Le dossier de configuration n'est pas inscriptible par le gateway (voir le détail " +
+            "et la cause exacte renvoyés par le serveur).",
       );
     case "invalid_engine_config":
       return withFields(
@@ -343,6 +344,8 @@ export function describeEngineConfig(report) {
     engineConfigPath:
       typeof report.engineConfigPath === "string" ? report.engineConfigPath : null,
     writeError: typeof report.writeError === "string" ? report.writeError : null,
+    writeCode: typeof report.writeCode === "string" ? report.writeCode : null,
+    writeHint: typeof report.writeHint === "string" ? report.writeHint : null,
     note: typeof report.note === "string" ? report.note : null,
   };
 
@@ -362,10 +365,16 @@ export function describeEngineConfig(report) {
     return {
       ...view,
       kind: "read-only",
+      // Le conseil vient du SERVEUR (`writeHint`, calculé à partir du code
+      // système) : l'UI n'invente JAMAIS de cause. Sans lui, message honnête.
       message:
         "Le dossier de configuration est monté mais n'est PAS inscriptible par le gateway" +
-        (view.writeError ? ` (${view.writeError})` : "") +
-        ". Sur un bind mount, donnez-le à l'uid/gid du conteneur (chown 1000:1000).",
+        (view.writeCode ? ` (code : ${view.writeCode})` : "") +
+        ". " +
+        (view.writeHint ||
+          "La cause exacte n'est pas fournie par le gateway : vérifiez le montage et " +
+            "les permissions du service « gateway » du compose.") +
+        (view.writeError ? ` Détail brut : ${view.writeError}.` : ""),
     };
   }
   if (!view.fileExists) {

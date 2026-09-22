@@ -23,6 +23,7 @@ import {
   type ConfigRuntime,
 } from "../../config/runtime.js";
 import { ConfigStoreWriteError } from "../../config/store.js";
+import { describeWriteFailure } from "../../config/paths.js";
 import type { Logger } from "../../observability/logger.js";
 
 export const CONFIG_WRITE_HEADER = "x-yuki-config";
@@ -221,9 +222,15 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
         error: "config_store_unwritable",
         code: "config_store_unwritable",
         path: error.path,
-        message:
-          `${error.message} Le volume « state » est-il monté ET inscriptible `+
-          `par l'uid/gid du conteneur (bind mount : chown 1000:1000) ?`,
+        // Le conseil dépend de la CAUSE RÉELLE (code système) : « :ro » pour
+        // EROFS, permissions pour EACCES/EPERM, absent pour ENOENT, honnête
+        // (avec le code brut) sinon. Jamais de `chown` quand le montage est ro.
+        message: `${error.message} ${describeWriteFailure({
+          volume: "state",
+          path: error.path,
+          code: error.code,
+          service: "gateway",
+        })}`,
       });
     }
     throw error;

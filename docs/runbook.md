@@ -217,8 +217,11 @@ volumes `yuki-models` ni `yuki-pi` (agent Pi, sessions).
 | `/health/ready` = 503 | porte non passée | le serveur ne devrait pas être démarré ; vérifier les logs |
 | Conteneur `Exit 1` immédiat | refus strict | `./scripts/logs.sh` puis corriger le profil |
 | `permission denied` sur un montage | uid/gid du conteneur ≠ propriétaire du volume (`YUKI_UID`/`YUKI_GID` modifiés sans reconstruire l'image) | remettre `1000:1000` (défaut) dans `.env`, ou reconstruire l'image avec les mêmes valeurs (`compose.build.example.yml`) |
-| log `volume.unwritable` au démarrage | bind mount en `root:root` alors que le conteneur est non-root (uid 1000) | `chown -R 1000:1000` du dossier hôte (voir `compose.bind.example.yml`) puis redémarrer |
-| `PUT /api/config` = **500** `config_store_unwritable` | volume **`state`** non inscriptible (bind mount appartenant à un autre uid) | `docker compose exec gateway ls -ln /data/state` puis `chown -R 1000:1000` du dossier hôte ; voir la ligne `volume.unwritable` dans les logs |
+| log `volume.unwritable` au démarrage — `hint` « **lecture seule** » (code `EROFS`) | le montage du volume est en **lecture seule** (`:ro`, rootfs) — le `chown` n'y changerait rien | retirer `:ro` du volume concerné dans le service `gateway` du compose (variante bind), ou le passer en lecture-écriture, puis redémarrer |
+| log `volume.unwritable` au démarrage — `hint` « **permissions** » (codes `EACCES`/`EPERM`) | bind mount en `root:root` alors que le conteneur est non-root (uid 1000) | `chown -R 1000:1000` du dossier hôte (voir `compose.bind.example.yml`) puis redémarrer |
+| log `volume.unwritable` au démarrage — `hint` « **absent** » (code `ENOENT`) | volume non déclaré / dossier hôte manquant | déclarer le volume dans le compose (ou créer le dossier hôte du bind mount) puis redémarrer |
+| log `volume.unwritable` au démarrage — **autre code** (`hint` cite le code brut) | cause non déterminable à partir du code | lire le `hint` (il cite `error` et `code`) puis inspecter montage **et** permissions |
+| `PUT /api/config` = **500** `config_store_unwritable` | volume **`state`** non inscriptible — le message du serveur donne la cause **exacte** (lecture seule `EROFS`, permissions `EACCES`, dossier absent `ENOENT`…) | suivre le message : `:ro` → retirer `:ro` ; permissions → `chown -R 1000:1000` ; sinon `docker compose exec gateway ls -ln /data/state` — voir la ligne `volume.unwritable` dans les logs |
 | Port déjà utilisé | autre service sur 8080 | `YUKI_GATEWAY_PORT=9090` dans `.env` |
 | `LLM_UNAVAILABLE` dans l'UI | clé légère absente | ouvrir `/config`, saisir la **clé LLM légère**, Enregistrer (bascule **à chaud**) |
 | `delegate` → `heavy_unavailable` | clé lourde absente | ouvrir `/config`, saisir la **clé LLM lourde** |

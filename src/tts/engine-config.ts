@@ -51,7 +51,7 @@ import {
 import { dirname, join, resolve, sep } from "node:path";
 
 import { MODELS_DOWNLOADS_SUBDIR } from "../config/container-paths.js";
-import { probeWritable } from "../config/paths.js";
+import { describeWriteFailure, probeWritable } from "../config/paths.js";
 
 /** Nom du fichier de configuration du moteur dans le dossier monté. */
 export const ENGINE_CONFIG_FILENAME = "server.json";
@@ -191,6 +191,8 @@ export interface MountState {
   isDirectory: boolean;
   writable: boolean;
   error: string | null;
+  /** Code système Node (`EROFS`, `EACCES`…) de la sonde, si elle a échoué. */
+  code: string | null;
 }
 
 /** Modèle présent sur le disque (tel que vu par le gateway ET par le moteur). */
@@ -236,6 +238,13 @@ export interface EngineConfigReport {
   mounted: boolean;
   writable: boolean;
   writeError: string | null;
+  /** Code système Node (`EROFS`, `EACCES`…) de l'échec d'écriture, si connu. */
+  writeCode: string | null;
+  /**
+   * Conseil EXACT selon la cause réelle (code système), calculé côté serveur
+   * (`describeWriteFailure`). `null` quand le dossier est inscriptible.
+   */
+  writeHint: string | null;
   globals: Record<string, unknown>;
   models: EngineModelView[];
   unknownTopLevelKeys: string[];
@@ -660,12 +669,14 @@ export class EngineConfigStore {
     }
     let writable = false;
     let error: string | null = null;
+    let code: string | null = null;
     if (exists && isDirectory) {
       const probe = probeWritable(dir);
       writable = probe.writable;
       error = probe.error ?? null;
+      code = probe.code ?? null;
     }
-    return { dir, exists, isDirectory, writable, error };
+    return { dir, exists, isDirectory, writable, error, code };
   }
 
   mountState(): { config: MountState; modelsWrite: MountState; modelsRead: MountState } {
@@ -797,6 +808,15 @@ export class EngineConfigStore {
       mounted: mounts.config.exists && mounts.config.isDirectory,
       writable: mounts.config.writable,
       writeError: mounts.config.error,
+      writeCode: mounts.config.code,
+      writeHint: mounts.config.writable
+        ? null
+        : describeWriteFailure({
+            volume: "tts-config",
+            path: mounts.config.dir,
+            code: mounts.config.code ?? undefined,
+            service: "gateway",
+          }),
       globals,
       models,
       unknownTopLevelKeys: read.raw ? unknownTopLevel(read.raw) : [],
@@ -829,9 +849,14 @@ export class EngineConfigStore {
       throw new EngineConfigError(
         "config_dir_unwritable",
         503,
-        "Le dossier de configuration du moteur n'est pas inscriptible par le gateway. " +
-          "Sur un bind mount, donnez-le à l'uid/gid du conteneur (chown 1000:1000)." +
-          (mounts.config.error ? ` Détail : ${mounts.config.error}.` : ""),
+        "Le dossier de configuration du moteur n'est pas inscriptible par le gateway : " +
+          describeWriteFailure({
+            volume: "tts-config",
+            path: mounts.config.dir,
+            code: mounts.config.code ?? undefined,
+            service: "gateway",
+          }) +
+          (mounts.config.error ? ` Détail brut : ${mounts.config.error}.` : ""),
       );
     }
     if (!isRecord(patch)) {

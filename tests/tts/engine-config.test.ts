@@ -324,6 +324,10 @@ describe("état des montages et scan disque", () => {
     const mounts = fx.store.mountState();
     expect(mounts.config.exists).toBe(true);
     expect(mounts.config.writable).toBe(true);
+    // Inscriptible → aucune cause d'échec exposée (ni code ni hint).
+    expect(mounts.config.code).toBeNull();
+    expect(fx.store.report().writeCode).toBeNull();
+    expect(fx.store.report().writeHint).toBeNull();
     expect(mounts.modelsWrite.exists).toBe(false);
   });
 

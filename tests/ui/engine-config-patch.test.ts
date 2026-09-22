@@ -148,6 +148,43 @@ describe("describeEngineConfig — état de montage honnête", () => {
     expect(view.message).toMatch(/inscriptible/);
   });
 
+  it("read-only EROFS → reprend le hint serveur (lecture seule), jamais « chown »", () => {
+    const view = describeEngineConfig({
+      mounted: true,
+      writable: false,
+      writeCode: "EROFS",
+      writeHint:
+        "Le volume « tts-config » (chemin « /data/tts-config ») est monté en " +
+        "LECTURE SEULE. Retirez « :ro » du volume correspondant dans le service « gateway ».",
+    });
+    expect(view.kind).toBe("read-only");
+    expect(view.message).toContain("EROFS");
+    expect(view.message).toMatch(/LECTURE SEULE/);
+    expect(view.message).not.toContain("chown");
+  });
+
+  it("read-only EACCES → reprend le hint serveur (permissions), chown attendu", () => {
+    const view = describeEngineConfig({
+      mounted: true,
+      writable: false,
+      writeCode: "EACCES",
+      writeHint:
+        "Permissions insuffisantes sur le volume « tts-config » (chemin « /data/tts-config ») : " +
+        "sur un bind mount, donnez-le à l'uid/gid du conteneur (« chown 1000:1000 »).",
+    });
+    expect(view.message).toContain("EACCES");
+    expect(view.message).toContain("chown 1000:1000");
+    expect(view.message).not.toMatch(/LECTURE SEULE/);
+  });
+
+  it("read-only sans hint serveur → message honnête, aucune cause inventée", () => {
+    const view = describeEngineConfig({ mounted: true, writable: false });
+    expect(view.kind).toBe("read-only");
+    expect(view.message).toMatch(/cause exacte/);
+    expect(view.message).not.toContain("chown");
+    expect(view.message).not.toMatch(/LECTURE SEULE/);
+  });
+
   it("monté, inscriptible, sans fichier → no-file (création à l'enregistrement)", () => {
     const view = describeEngineConfig({ mounted: true, writable: true, fileExists: false });
     expect(view.kind).toBe("no-file");

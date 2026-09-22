@@ -23,7 +23,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
-import { inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
+import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
 import { createDelegationService, type DelegationService } from "./delegation/index.js";
 import {
@@ -134,9 +134,10 @@ async function main(): Promise<void> {
   });
 
   // --- Détection précoce des volumes `rw` non inscriptibles ------------------
-  // Une erreur de permission (bind mount appartenant à un autre uid/gid) ne se
+  // Une cause système (montage `ro`, permissions, volume absent) ne se
   // manifesterait sinon qu'à la première écriture — et le store de config n'est
-  // écrit qu'au premier « Enregistrer » de /config. On prévient donc TÔT.
+  // écrit qu'au premier « Enregistrer » de /config. On prévient donc TÔT, en
+  // traduisant le CODE d'erreur réel en conseil EXACT (jamais une cause inventée).
   // On NE sort PAS : la page /config doit rester joignable (invariant Lot 11).
   for (const mount of mountPoints(env)) {
     if (mount.mode !== "rw") continue;
@@ -145,8 +146,14 @@ async function main(): Promise<void> {
     logger.error("volume.unwritable", {
       volume: mount.id,
       path: mount.containerPath,
+      ...(probe.code ? { code: probe.code } : {}),
       ...(probe.error ? { error: probe.error } : {}),
-      hint: "bind mount : ce répertoire doit appartenir à l'uid/gid du conteneur (chown 1000:1000)",
+      hint: describeWriteFailure({
+        volume: mount.id,
+        path: mount.containerPath,
+        code: probe.code,
+        service: "gateway",
+      }),
     });
   }
 
