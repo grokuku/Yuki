@@ -363,7 +363,14 @@ describe("Assistant de mise en route du TTS (Lot 8)", () => {
 
   it("l'assistant ne parle au moteur QUE via les routes du gateway", async () => {
     const js = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
-    for (const route of ["/api/tts/status", "/api/tts/models", "/api/tts/test"]) {
+    for (const route of [
+      "/api/tts/status",
+      "/api/tts/models",
+      "/api/tts/test",
+      "/api/tts/engine-config",
+      "/api/tts/engine-config/revert",
+      "/api/tts/capabilities",
+    ]) {
       expect(js).toContain(route);
     }
     expect(js).toContain("/api/config");
@@ -376,5 +383,46 @@ describe("Assistant de mise en route du TTS (Lot 8)", () => {
     // La lecture audio reste Web Audio (jamais de balise <audio> créée).
     expect(js).not.toContain("new Audio(");
     expect(js).not.toMatch(/createElement\(["']audio/);
+  });
+});
+
+describe("Configuration du moteur — éditeur structuré (Lot 9)", () => {
+  it("sert la logique pure et l'importe depuis l'assistant", async () => {
+    const patch = await fetch(`${baseUrl}/ui/engine-config-patch.js`);
+    expect(patch.status).toBe(200);
+    expect(patch.headers.get("content-type")).toContain("javascript");
+    expect(patch.headers.get("content-security-policy")).not.toContain("unsafe-inline");
+
+    const assistant = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
+    expect(assistant).toContain('from "./engine-config-patch.js"');
+    // Le navigateur n'envoie JAMAIS le fichier complet : on envoie un patch.
+    expect(assistant).toContain("buildEnginePatch");
+    expect(assistant).toContain('fetchApi.put("/api/tts/engine-config"');
+  });
+
+  it("le bloc manuel ne prétend plus deux actions ni un dossier en lecture seule", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
+    expect(js).not.toContain("Deux actions ne peuvent PAS");
+    expect(js).not.toContain("LECTURE SEULE pour le conteneur");
+    // L'honnêteté sur l'étape suivante (téléchargement) est explicite.
+    expect(js).toMatch(/étapes suivante|étape suivante/);
+    expect(js).toContain("Annuler la dernière modification");
+    expect(js).toContain("Configuration du moteur");
+  });
+
+  it("aucun style inline dans l'assistant enrichi (CSP stricte)", async () => {
+    const css = await (await fetch(`${baseUrl}/ui/tts-assistant.css`)).text();
+    // Les classes du nouvel éditeur sont bien servies par la feuille dédiée.
+    for (const cls of [
+      ".tts-engine-config__input",
+      ".tts-engine-config__model",
+      ".tts-engine-config__badge--warn",
+    ]) {
+      expect(css).toContain(cls);
+    }
+    const assistant = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
+    // Aucun style inline posé depuis le JS (le seul CSS vit dans la feuille servie).
+    expect(assistant).not.toContain(".style.");
+    expect(assistant).not.toContain('setAttribute("style"');
   });
 });

@@ -9,7 +9,7 @@
 #    en non-root (`YUKI_UID:YUKI_GID`). Sans préparation, `/health/ready`
 #    répond 503. Préparez les dossiers À LA MAIN avant de démarrer :
 #
-#      mkdir -p .local/pi .local/workspace .local/models .local/state .local/voices
+#      mkdir -p .local/pi .local/workspace .local/models .local/state .local/voices .local/tts-config
 #      chown -R 1000:1000 .local
 #
 #    (`./scripts/up.sh` ne prépare plus rien : il se contente de
@@ -26,7 +26,7 @@
 #   YUKI_HOST_MODELS_DIR=./.local/models
 #   YUKI_HOST_STATE_DIR=./.local/state
 #   YUKI_HOST_VOICES_DIR=./.local/voices
-#   YUKI_HOST_TTS_CONFIG=./config/audiocpp-server.json
+#   YUKI_HOST_TTS_CONFIG_DIR=./.local/tts-config
 # =============================================================================
 services:
   gateway:
@@ -44,6 +44,15 @@ services:
         source: ${YUKI_HOST_MODELS_DIR:-./.local/models}
         target: /models
         read_only: true
+      # Lot 9 (M1) : SECOND montage du MÊME dossier hôte, en `rw`, réservé aux
+      # téléchargements (`/models-dl/downloads/`). `/models` RESTE `ro`.
+      - type: bind
+        source: ${YUKI_HOST_MODELS_DIR:-./.local/models}
+        target: /models-dl
+      # Lot 9 (M2) : dossier de config du moteur, en `rw` côté gateway.
+      - type: bind
+        source: ${YUKI_HOST_TTS_CONFIG_DIR:-./.local/tts-config}
+        target: /data/tts-config
       - type: bind
         source: ${YUKI_HOST_STATE_DIR:-./.local/state}
         target: /data/state
@@ -52,14 +61,14 @@ services:
         target: /voices
 
   # Le service `tts` (profil `tts`) est aussi converti en bind mounts. Sa
-  # commande et son fichier de config sont, eux, inchangés (déjà un bind, ro).
+  # commande est inchangée : `server --config /config/server.json` (M3).
   tts:
     volumes: !override
-      # Configuration du serveur audio.cpp (copiée depuis
-      # `config/audiocpp-server.json.example`). ⚠️ Chemin cible à confirmer (C14).
+      # Lot 9 (M3) : le DOSSIER de config (monté en `rw` côté gateway, M2) est
+      # monté ici en `ro` sur `/config`. Le MÊME dossier hôte est partagé.
       - type: bind
-        source: ${YUKI_HOST_TTS_CONFIG:-./config/audiocpp-server.json}
-        target: /app/server.json
+        source: ${YUKI_HOST_TTS_CONFIG_DIR:-./.local/tts-config}
+        target: /config
         read_only: true
       - type: bind
         source: ${YUKI_HOST_MODELS_DIR:-./.local/models}

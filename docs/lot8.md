@@ -642,6 +642,7 @@ confirmation d'activation (annulée), et **0 violation CSP**.
 | **D40** | **Le débit n'est PAS appliqué par Chatterbox** : sa spec (`model_specs/chatterbox.json`) est **legacy** (ni `schema_version` ni `options`) ⇒ `model_contract()` renvoie `nullopt` ⇒ `accepts_speed=true` ⇒ le serveur range la valeur dans `options["speed"]`… que la **session Chatterbox ne lit jamais** (`make_voice_clone_config`) ⇒ **ignoré silencieusement**. « Aucun effet » est donc **attendu**. Correctif : `toAudioCppRequest` **n'émet `speed` que pour les moteurs qui l'appliquent** (`kokoro`, `sanotts`) ; il l'omet pour `chatterbox`/`qwen3-tts`/`cosyvoice3` (ces deux derniers le **rejettent** en HTTP 500). Champ de schéma inchangé. | §11.14, `src/tts/audio-cpp.ts` (`engineSupportsSpeed`), `app/server/runtime.cpp:2112-2124`, `src/models/chatterbox/session.cpp:43-76` |
 | **D41** | **Le patch de `/config` est typé correctement et l'UI montre la VRAIE cause d'échec** : `buildPatch` (extrait dans `public/ui/config-patch.js`) envoie les champs `number`/`range` en **entiers** ; `save()` affiche le **code + message réels** de l'API (`presentConfigSaveError`) avec le nom du champ, au lieu d'un texte générique. Le soupçon « chaîne ⇒ 400 » est **écarté** : le schéma coerce les chaînes numériques (`validateDescriptor`), prouvé par test (`{"tts.speed":"150"}` → 200). | §11.15, `public/ui/config-patch.js`, `public/ui/config.js`, `src/config/schema.ts:370-379`, `tests/ui/config-patch.test.ts`, `tests/gateway/config-api.test.ts` |
 | **D42** | **① L'émotion est réellement appliquée + ② l'UI est honnête sur le débit.** L'adaptateur `toAudioCppRequest` envoie **`exaggeration`** et **`guidance_scale`** **DANS l'objet `"options"`** (jamais au top-level), **uniquement** pour **Chatterbox** (`engineSupportsEmotion` ; les autres familles ne les lisent pas) ; conversion **pour-mille → réel** (`/1000`). ⚠️ Le « cfg » de Yuki (`tts.cfg`, défaut 0.5) = **`guidance_scale`** (T3 CFG = `cfg_weight` Python, défaut **0.5**) ; **`s3gen_cfg_rate`** (CFG du **flux S3Gen**, défaut **0.7**) est un **autre étage**, **non piloté** par Yuki (la doc antérieure l'identifiait à tort comme le « cfg »). Preuve moteur : `src/models/chatterbox/session.cpp:42-60`, `src/models/chatterbox/t3_component.cpp:615`, `include/engine/models/chatterbox/tts.h:19-32`, `app/server/runtime.cpp:1994-2006`. Côté UI (`public/ui/config-patch.js` `engineFieldState` + `public/ui/config.js` `refreshEngineFields`), le champ **« Débit (%) »** est **grisé + noté « Sans effet avec ce moteur. »** quand `tts.engine` ne l'applique pas (`kokoro`/`sanotts` sinon), et **suit le changement de moteur** ; les réglages d'**émotion** sont grisés pour tout moteur ≠ `chatterbox`. Un champ grisé **ne bloque PAS** l'enregistrement (le patch est inchangé). | §11.16, `src/tts/audio-cpp.ts` (`engineSupportsEmotion`, `AUDIO_CPP_KEYS.options`), `public/ui/config-patch.js`, `public/ui/config.js`, `tests/tts/audio-cpp.test.ts`, `tests/ui/config-patch.test.ts` |
+| **D45** | **CosyVoice 3 supporté en bi-modèle avec Chatterbox, SANS changement de code Yuki.** Le moteur `audio.cpp` **charge plusieurs modèles** (`max_loaded_models`, défaut `0` = illimité ; éviction LRU sinon) ⇒ `server.json` déclare une **2e entrée** `id: "cosyvoice3"` (famille `cosyvoice3`, `task: "clon"`, `mode: "offline"`) à côté de `chatterbox` ; le basculement se fait par le champ Yuki `tts.engine` (envoyé comme clé `model`). Faits **prouvés** par le code amont `0xShug0/audio.cpp` (branche `main`) : paquet `CosyVoice3-GGUF/cosyvoice3-q8_0.gguf` (2 257 658 080 o, **Apache-2.0**) et `cosyvoice3-f32.gguf` (6 995 036 608 o) ; **aucun asset externe** (spec/YAML/tokenizer embarqués en sidecar) ; **`task` canonique = `"clon"`** (spec `tasks: ["tts","clone"]`, mais `parse_voice_task_kind` n'accepte que le jeton `clon`) ; **`mode` = `offline` seul** ; voix de référence **rééchantillonnée en interne** (24 k/16 k ⇒ aucune contrainte de fréquence) ; template défaut **`zero_shot`** (transcription `reference_text` recommandée) ; contrat **schema-v1 strict** rejetant `speed` (**HTTP 500**) et toute option hors spec ; **`language` top-level accepté ET ignoré** (rangé dans `text_input`, jamais dans `options`). **Le français est déclaré** (`languages` inclut `fr`). | §13, `model_specs/cosyvoice3.json`, `src/models/cosyvoice3/session.cpp`, `src/models/cosyvoice3/frontend.cpp`, `src/models/cosyvoice3/tokenizer_text.cpp`, `src/framework/runtime/session.cpp:136-158`, `src/framework/runtime/task_vocabulary.cpp`, `app/server/runtime.cpp:1991-2118`, `app/server/model_memory.cpp`, API HF |
 
 ### À confirmer (non vérifiable sans GPU / Docker / moteur)
 
@@ -658,6 +659,7 @@ confirmation d'activation (annulée), et **0 violation CSP**.
 | **C26** | ✅ **LEVÉ (2026-09-22, par l'utilisateur)** — **Chatterbox en `task=clon` + voix réelle : VALIDÉ en réel** — « le TTS fonctionne (la voix parle) ». Le message « requires speaker reference audio » a disparu et l'audio est produit (correction D39 + `task: "clon"`, D36). | §11.13, §11.16, D36, D39 |
 | **C27** | ✅ **LEVÉ (2026-09-22) — correctif D42** : `exaggeration` (float, défaut moteur **0.5**) et **`guidance_scale`** (float, défaut moteur **0.5** — c'est le « cfg » de Yuki = `cfg_weight` Python/T3 CFG) sont désormais portés par **`"options": {…}`** dans `toAudioCppRequest`, **uniquement** pour `chatterbox`, à l'échelle **pour-mille → réel** (`/1000`). ⚠️ **Correction de la conclusion antérieure** : `s3gen_cfg_rate` (défaut 0.7) est le CFG du **flux S3Gen**, un **autre étage** — ce n'est **pas** le `cfg` de Yuki ; il n'est pas piloté. Les modèles qui ne lisent pas ces clés ne les reçoivent **jamais** (`engineSupportsEmotion`), et l'UI les grise pour eux. | §11.16, `src/tts/audio-cpp.ts`, `tests/tts/audio-cpp.test.ts` |
 | **C28** | ✅ **LEVÉ (2026-09-22, par l'utilisateur)** — **cause de l'échec d'enregistrement identifiée** : une **valeur sous le minimum `50`** de `tts.speed` (bornes **50–200**, `src/config/schema.ts`) ⇒ `400 invalid_config`. Le patch est correctement typé (D41) et l'UI affiche désormais la **cause réelle** ; **aucun défaut de code côté Yuki**. | §11.15, D41, `src/config/schema.ts` |
+| **C29** | **À confirmer en réel (CosyVoice 3, §13)** : (1) le preset `voix-fr` du registre Yuki a-t-il un `refText` ? S'il est `null`, le template `zero_shot` tourne avec un prompt **vide** (le clonage se **dégrade**, mais **ne plante pas**) — vérifier `voices.json` (§13.4) ; (2) **VRAM réelle** sur la carte : Q8 ≈ 2,10 Gio de poids (estimation serveur `poids×1,5 + 128 Mio` ≈ 3,3 Gio) et coût du **chargement simultané** avec Chatterbox (§13.11) ; (3) **qualité perçue** du français CosyVoice 3 vs Chatterbox. | §13.4, §13.11, `src/tts/voices-store.ts` |
 
 ---
 
@@ -1708,7 +1710,264 @@ segmenté de la même façon.
 
 ---
 
-## 13. Renvois
+## 13. Faire tourner CosyVoice 3
+
+> **Ajout du 2026-09-22.** Établi depuis le **code source amont** `0xShug0/audio.cpp`
+> (branche `main`, fichiers téléchargés le 2026-09-22), l'**API Hugging Face**
+> réellement interrogée, et l'archive locale `audio-cpp-gguf-packages`. **Aucune
+> valeur n'est extrapolée de Chatterbox** : là où un nom de fichier ou une valeur
+> de config n'est pas prouvable, c'est dit explicitement.
+
+### 13.1 Fichiers GGUF (preuve : API HF)
+
+`GET https://huggingface.co/api/models/audio-cpp/audio.cpp-gguf/tree/main/CosyVoice3-GGUF`
+(**HTTP 200**) renvoie **exactement deux fichiers** :
+
+| Fichier | Taille (octets) | Taille | Licence |
+| --- | ---: | ---: | --- |
+| `CosyVoice3-GGUF/cosyvoice3-q8_0.gguf` | `2257658080` | ≈ **2,10 Gio** (2,26 Go) | Apache-2.0 |
+| `CosyVoice3-GGUF/cosyvoice3-f32.gguf` | `6995036608` | ≈ **6,52 Gio** (7,00 Go) | Apache-2.0 |
+
+Licence **par paquet** : ligne du README HF (`.../raw/main/README.md`, HTTP 200) :
+« `CosyVoice3-GGUF` | `cosyvoice3` | F32 + Q8 | **Apache-2.0** ».
+⚠️ Le **tag global** du dépôt agrégé est `license: other` (`GET /api/models/audio-cpp/audio.cpp-gguf`,
+`cardData.license = "other"`) — c'est un dépôt **multi-modèles** : la licence
+applicable est **celle du dossier**, **Apache-2.0** pour CosyVoice3.
+Les deux URL `resolve/main/...` répondent **HTTP 200** (redirection CDN Xet).
+
+**Recommandation : Q8** (`cosyvoice3-q8_0.gguf`). Justification : c'est le paquet
+**par défaut** du paquet (`packages[].default = true`, `ui.recommended_package =
+"cosyvoice3_q8_0"`) ; **3× plus léger** que F32 (2,10 vs 6,52 Gio) pour une qualité
+que la doc amont présente comme testée ; le F32 n'a d'intérêt que sur une carte
+avec beaucoup de VRAM libre.
+
+### 13.2 Aucun fichier d'accompagnement requis (sidecars embarqués)
+
+Le `.gguf` est **auto-contenu** : la spec de paquet (`cosyvoice3.yaml`), la config
+Qwen (`CosyVoice-BlankEN/config.json`) et le tokenizer (`tokenizer_config.json`,
+`vocab.json`, `merges.txt`) sont **embarqués en sidecar**. Preuves :
+
+- le dossier HF ne contient **que** les deux `.gguf` (API ci-dessus) ;
+- `docs/gguf.md` (amont) : tableau de compatibilité « **New standalone GGUF** →
+  *Embedded in GGUF* → **None** » ;
+- le quick-start `docs/models/cosyvoice3.md` installe **un seul** fichier
+  (`model_manager_v2.py install cosyvoice3_q8_0`) puis passe **le fichier** en
+  `--model`.
+
+→ **Rien à placer à côté** du `.gguf` (contrairement à un GGUF `--no-sidecars`).
+
+### 13.3 `task` et `mode` (valeurs prouvées)
+
+`model_specs/cosyvoice3.json` (HTTP 200) :
+
+```json
+"tasks": ["tts", "clone"],
+"modes": ["offline"],
+```
+
+⚠️ Le `task` de `server.json` n'est **pas** la valeur de la spec : il est lu par
+`parse_voice_task_kind` (`src/framework/runtime/session.cpp:136-158`) qui ne
+reconnaît que le **jeton canonique** de `task_vocabulary.cpp` :
+
+```cpp
+{VoiceTaskKind::VoiceCloning, "clon", {"clone"}, 1},
+```
+
+⇒ **`task: "clon"`** (`"clone"` n'est qu'un **alias côté spec**). `task: "tts"`
+fonctionne aussi (la session accepte `Tts` et `VoiceCloning`), mais `"clon"` est
+cohérent avec l'entrée Chatterbox existante.
+
+**`mode: "offline"`** : seul mode de la spec ; la session **rejette** tout autre
+mode avec `CosyVoice3 supports offline sessions` (`src/models/cosyvoice3/session.cpp`).
+
+### 13.4 Voix de référence : `voice_ref` (chemin), rééchantillonnée, transcription recommandée
+
+- **`voice_ref` chemin de fichier : OUI**, comme Chatterbox. Le serveur accepte une
+  **chaîne** (chemin) ou un objet `{"type":"path"|"base64"}` (`app/server/runtime.cpp:2066-2095`).
+- **Aucune contrainte de fréquence/format** au-delà d'un WAV **décodable**
+  (lecteur `read_wav_f32`, RIFF/PCM). La référence est **rééchantillonnée en
+  interne** : **24 000 Hz** pour le *prompt mel*, **16 000 Hz** pour le tokenizer
+  S3 et CAM++ (`src/models/cosyvoice3/frontend.cpp:44-61,80,136-137,207-217`).
+  Elle doit seulement être **non vide** et **assez longue** (quelques dizaines de
+  ms ; la voix `voix-fr` de 5,05 s est largement suffisante).
+- **`reference_text` (transcription) : FORTEMENT recommandé** pour le template
+  `zero_shot` (défaut). Il est **optionnel** : sans lui, le prompt est réduit au
+  préfixe interne + `<|endofprompt|>` (`tokenizer_text.cpp:312-318`) — ce qui **ne
+  plante pas** (`require_end_of_prompt` passe), mais **dégrade le clonage**.
+  ⚠️ **Point à vérifier** : le preset `voix-fr` doit avoir un `refText` non nul
+  pour un bon résultat (voir §13.10 et C29).
+- **Templates** (`template_name`, défaut **`zero_shot`**) : `zero_shot` (audio +
+  transcription), `cross_lingual` (audio seul), `instruct` (instruction).
+
+### 13.5 Contrat schema-v1 : options acceptées / rejetées
+
+Contrat **strict** (`schema_version: 1` ⇒ `model_contract()` non nul ;
+`validate_spec_backed_request_options`, `include/engine/framework/runtime/spec_backed_model.h:60-69`)
+**rejette toute option hors spec** : `unknown CosyVoice3 request option: <clé>`
+→ **HTTP 500** (`app/server/http.cpp:824-830`).
+
+**Accepté** (`options.request[].name`) : `template_name`, `reference_text`,
+`instruction`, `text_chunk_size`, `text_chunk_mode`, `max_tokens`, `min_tokens`,
+`top_k`, `num_inference_steps`, `seed`.
+
+**Rejeté (et ce que Yuki fait aujourd'hui)** :
+
+| Option | Résultat moteur | Yuki |
+| --- | --- | --- |
+| `speed` / `speaking_rate` | **HTTP 500** `speed is not supported by this model` (`runtime.cpp:2116-2118`) | ✅ **non envoyé** pour `cosyvoice3` (`engineSupportsSpeed`, D40) |
+| `temperature`, `top_p`, `max_steps`, `repetition_penalty`, `guidance_scale`, `exaggeration` | **HTTP 500** `unknown CosyVoice3 request option: …` | ✅ envoyés **uniquement** pour Chatterbox (`engineSupportsEmotion`, D42) |
+| `stream_format` | **HTTP 500** `speech streaming requires a model configured with mode=streaming` (`runtime.cpp:2281-2283`) | ✅ Yuki **n'utilise pas** le streaming (`src/tts/synthesizer.ts:13-14`) |
+
+**`language` top-level (`"language":"fr"`)** : ✅ **accepté, SANS effet ni rejet**.
+`build_speech_request` le range dans `request.text_input.language`
+(`app/server/runtime.cpp:1991-1996`) — **jamais** dans `request.options` — donc
+**jamais validé** contre le contrat. La session CosyVoice 3 ne lit que
+`text_input->text`. **Aucun changement de code Yuki nécessaire.**
+
+### 13.6 Le français est supporté
+
+`model_specs/cosyvoice3.json` :
+
+```json
+"languages": ["zh", "en", "ja", "ko", "de", "es", "fr", "it", "ru", "yue"],
+```
+
+Le **français** est déclaré (spec amont **et** `docs/models/cosyvoice3.md`).
+**Aucune déclaration de langue n'est requise à la requête** : le champ `language`
+est ignoré (§13.5) ; le texte cible est tokenisé par le BPE Qwen2 embarqué.
+
+### 13.7 `server.json` complet (bi-modèle) — prêt à coller
+
+Le moteur garde **Chatterbox ET CosyVoice 3** : deux entrées `models[]`, chacune
+avec son `id` (envoyé par Yuki comme clé `model`). Le multi-modèle est **attesté**
+(`max_loaded_models`, `lazy_load`, déchargement LRU : `app/server/config.h`,
+`app/server/runtime.cpp:1827-1888`, `app/server/README.md:121-130`).
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 8081,
+  "backend": "cuda",
+  "device": 0,
+  "lazy_load": true,
+  "ui_enabled": false,
+  "voice_dir": "/voices",
+  "models": [
+    {
+      "id": "chatterbox",
+      "family": "chatterbox",
+      "path": "/models/Chatterbox-GGUF/chatterbox-q8_0.gguf",
+      "task": "clon",
+      "mode": "offline"
+    },
+    {
+      "id": "cosyvoice3",
+      "family": "cosyvoice3",
+      "path": "/models/CosyVoice3-GGUF/cosyvoice3-q8_0.gguf",
+      "task": "clon",
+      "mode": "offline"
+    }
+  ]
+}
+```
+
+Options de confort (facultatives) :
+
+- `"max_loaded_models": 1` → **un seul** modèle résident à la fois (l'autre est
+  déchargé en LRU au premier appel) : **plafond de VRAM** = un modèle. À ajouter
+  si la carte est juste (§13.11). Défaut `0` = les deux restent chauds.
+- `"idle_unload_ms": 600000` → libère la VRAM après 10 min sans usage.
+- `"min_free_memory_mb": 1024` → refuse un chargement qui ne laisse pas 1 Gio
+  libre (rend **503 `insufficient_memory`** au lieu d'un OOM CUDA dur).
+- Par entrée, `"session_options": { "cosyvoice3.mem_saver": "true" }` → libère
+  les graphes runtime après chaque requête (pic VRAM réduit ; option de session
+  **famille-préfixée**, `metadata.cpp:169-178`).
+
+### 13.8 Téléchargement (URL vérifiée HTTP 200)
+
+```bash
+curl -L --fail --create-dirs \
+  -o /mnt/user/appdata-ssd/yuki-server/models/CosyVoice3-GGUF/cosyvoice3-q8_0.gguf \
+  https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/CosyVoice3-GGUF/cosyvoice3-q8_0.gguf
+```
+
+URL `resolve/main/...` vérifiée **HTTP 200** (redirection CDN). Le chemin
+**dans le conteneur** devient `/models/CosyVoice3-GGUF/cosyvoice3-q8_0.gguf`
+(volume modèles monté en `ro` sur `/models`). Le paquet peut aussi être installé
+par l'outil amont (`model_manager_v2.py install cosyvoice3_q8_0`), mais la
+commande `curl` ci-dessus est la voie **vérifiée** ici.
+
+### 13.9 Recréer ou redémarrer le conteneur ?
+
+`server.json` est un **bind mount `ro`** lu **au démarrage du processus moteur**
+(`load_server_config`) ⇒ après l'édition, il faut **relancer le service `tts`**
+pour qu'il relise le fichier :
+
+```bash
+docker restart yuki-tts            # suffit : le fichier est relu au redémarrage
+# ou, via Compose :
+docker compose --profile tts restart tts
+```
+
+**`--force-recreate` n'est nécessaire que si le COMPOSE change** (chemin du bind,
+image, variables d'environnement, ports) — pas pour une simple édition de
+`server.json`. Le conteneur `gateway` (Yuki) n'a **pas** besoin d'être recréé.
+
+### 13.10 Suite côté Yuki
+
+1. **Vérifier que le preset `voix-fr` a bien un `refText`** (transcription) — un
+   prompt vide dégrade le clonage `zero_shot`. Le registre est le fichier
+   `voices.json` du volume `yuki-voices` (`{ schemaVersion, voices: [{ id, label,
+   kind, lang, refAudio, refText, … }] }`, `src/tts/voices-store.ts:137-145`) :
+   ```bash
+   docker run --rm -v yuki-voices:/voices alpine cat /voices/voices.json
+   ```
+   Si `refText` est `null`, recréer la voix **avec** l'en-tête
+   `x-yuki-voice-ref-text` (`src/gateway/routes/voices.ts:184`).
+2. Dans `/config`, changer **`tts.engine`** = **`cosyvoice3`** (enum
+   `chatterbox | qwen3-tts | cosyvoice3 | kokoro | sanotts`, `src/config/schema.ts`).
+3. **`tts.engine` est en `apply: restart`** ⇒ cliquer **Redémarrer** (onglet
+   **Maintenance**) pour que la valeur prenne effet.
+4. **Aucun autre champ à ajuster** : `tts.language` (`fr`) est ignoré par
+   CosyVoice 3 (§13.5) ; `tts.speed` **n'est pas envoyé** (rejeté) ; les réglages
+   d'**émotion** (`tts.emotion`/`tts.exaggeration`/`tts.cfg`) ne s'appliquent
+   **qu'à Chatterbox** (D42) et sont **déjà grisés** par l'UI pour ce moteur.
+   `tts.voice` (vide = premier preset = `voix-fr`) reste valable.
+
+### 13.11 Pièges à annoncer d'avance
+
+**VRAM.** Poids **Q8** ≈ **2,10 Gio** ; l'estimation interne du serveur est
+`poids × 1,5 + 128 Mio` ≈ **3,3 Gio** (`app/server/model_memory.cpp`). Le **F32**
+≈ 6,52 Gio de poids (≈ 9,9 Gio estimés) : à éviter sauf grande carte. **Charger
+les deux modèles** (Chatterbox Q8 ≈ 3,0 Gio estimés + CosyVoice 3 Q8 ≈ 3,3 Gio)
+coûte ≈ **6,3 Gio de poids** + arènes runtime — confortable sur 16–24 Gio, tendu
+sur 8 Gio.
+
+> **Réflexe si le chargement échoue** par `failed to allocate backend tensors`
+> (OOM CUDA — déjà vu avec ComfyUI qui occupe la carte) : `nvidia-smi` pour
+> identifier le consommateur GPU, **libérer la VRAM** (arrêter ComfyUI / tout
+> autre conteneur GPU), puis **relancer la requête**. Palliatifs durables :
+> `"max_loaded_models": 1` (un seul modèle résident, l'autre est déchargé en
+> LRU), `"idle_unload_ms"`, `"min_free_memory_mb"` (503 propre au lieu d'un OOM).
+
+**Streaming / TTFA.** CosyVoice 3 est **offline uniquement** (`modes: ["offline"]`,
+`session.cpp` rejette `mode != Offline`) ⇒ **pas** de TTFA court : le premier son
+n'arrive qu'après la synthèse du **premier segment**. Yuki **n'utilise pas** le
+chemin streaming de toute façon (le synthétiseur n'envoie pas `stream_format`,
+`src/tts/synthesizer.ts:13-14`) — le comportement est **le même** qu'avec
+Chatterbox offline. Le gain de TTFA reste celui de **D44** (premier segment
+court) côté Yuki.
+
+**Champ `language`.** Cf. §13.5 : **accepté et ignoré**, aucun risque.
+
+**Retour arrière en 30 secondes.** Remettre `tts.engine` = **`chatterbox`** dans
+`/config`, cliquer **Redémarrer**. `server.json` garde les deux modèles : **rien
+à démonter**. (Optionnel : supprimer le `.gguf` de CosyVoice 3 pour récupérer le
+disque.)
+
+---
+
+## 14. Renvois
 
 - [`docs/lot7.md`](lot7.md) — spécification TTS de référence (moteur, pipeline, voix, licences).
 - [`docs/runbook.md`](runbook.md) — exploitation, GPU, volumes, dépannage hôte.

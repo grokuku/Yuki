@@ -115,3 +115,36 @@ export {
   type TtsPipelineDeps,
   type TtsPipelineCallbacks,
 } from "./pipeline.js";
+
+// --- Lot 9 : configuration STRUCTURÉE du moteur (`server.json`) -------------
+
+export {
+  EngineConfigStore,
+  EngineConfigError,
+  EngineCapabilitiesProbe,
+  ENGINE_CONFIG_FILENAME,
+  MODELS_DOWNLOADS_SUBDIR,
+  ENGINE_TASK_TOKENS,
+  ENGINE_MODES,
+  ENGINE_FAMILIES,
+  ENGINE_IDS,
+  ENGINE_FORCE_OFFLINE_FAMILIES,
+  ENGINE_GLOBAL_SCHEMA,
+  ENGINE_UNLOAD_ROUTE,
+  DISK_SCAN_MAX_DEPTH,
+  DISK_SCAN_MAX_FILES,
+  validateEngineConfig,
+  type EngineConfigReport,
+  type EngineConfigStoreOptions,
+  type EngineConfigRaw,
+  type EngineModelEntry,
+  type EngineModelView,
+  type EngineGlobalDescriptor,
+  type EngineGlobalType,
+  type EngineCapabilitiesReport,
+  type EngineCapabilitiesOptions,
+  type DiskModel,
+  type MountState,
+  type PathStatus,
+  type FieldError,
+} from "./engine-config.js";

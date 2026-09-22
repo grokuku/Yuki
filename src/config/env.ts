@@ -49,6 +49,23 @@ export interface Env {
   gpuFixture: string | null;
   // --- Journal des jobs ---
   jobsStorePath: string;
+  // --- Configuration du moteur TTS `audio.cpp` (Lot 9) ---
+  /**
+   * Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw`).
+   * Le fichier `<dir>/server.json` y est lu ET écrit (atomicité). Il est monté
+   * en `ro` sur `ttsEngineConfigMountDir` côté service `tts`.
+   */
+  ttsEngineConfigDir: string;
+  /** Chemin du dossier de configuration tel que VU PAR LE MOTEUR (défaut `/config`). */
+  ttsEngineConfigMountDir: string;
+  /**
+   * Second montage INSCRIPTIBLE du dossier hôte des modèles, VU PAR LE GATEWAY
+   * (défaut `/models-dl`). Le gateway n'écrit QUE sous `<dir>/downloads/` ; le
+   * premier montage `mountPoints.models` reste `ro`.
+   */
+  ttsModelsWriteDir: string;
+  /** Chemin du dossier des modèles tel que VU PAR LE MOTEUR (défaut `mountPoints.models`). */
+  ttsEngineModelsDir: string;
   // --- Domaine Pi embarqué (Lot 1) ---
   piAgentDir: string;
   piSessionsDir: string;
@@ -165,6 +182,22 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
     uid: getInt(env, "YUKI_UID", 1000, { min: 0 }),
     gid: getInt(env, "YUKI_GID", 1000, { min: 0 }),
     configDir,
+    ttsEngineConfigDir: getString(
+      env,
+      "YUKI_TTS_CONFIG_DIR",
+      "/data/tts-config",
+    ),
+    ttsEngineConfigMountDir: getString(
+      env,
+      "YUKI_TTS_ENGINE_CONFIG_DIR",
+      "/config",
+    ),
+    ttsModelsWriteDir: getString(env, "YUKI_TTS_MODELS_WRITE_DIR", "/models-dl"),
+    ttsEngineModelsDir: getString(
+      env,
+      "YUKI_TTS_ENGINE_MODELS_DIR",
+      mountPoints.models,
+    ),
     configStorePath: resolveConfigStorePath(
       mountPoints.state,
       readTrimmed(env, "YUKI_CONFIG_STORE_PATH"),

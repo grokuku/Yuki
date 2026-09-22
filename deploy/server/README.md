@@ -20,9 +20,10 @@ cd ~/yuki
 cp .env.example .env
 vi .env        # renseigner YUKI_LLM_LIGHT_API_KEY et YUKI_LLM_HEAVY_API_KEY
 
-# 3) Config du moteur TTS : copier l'exemple, renseigner le chemin RÉEL du .gguf
-cp audiocpp-server.json.example audiocpp-server.json
-vi audiocpp-server.json   # clé models[].path (chemin DANS le conteneur)
+# 3) Config du moteur TTS : créer le dossier monté et y placer server.json
+mkdir -p tts-config
+cp audiocpp-server.json.example tts-config/server.json
+vi tts-config/server.json   # clé models[].path (chemin vu par le MOTEUR : /models/…)
 
 # 4) Uniquement si le paquet ghcr.io est PRIVÉ : s'authentifier
 #    (PAT avec le scope `read:packages`). À ignorer si le paquet est public.
@@ -37,8 +38,19 @@ curl -s http://127.0.0.1:8080/health | head
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/health/ready   # 200 attendu
 ```
 
-Aucune création de dossier ni `chown` n'est nécessaire : Docker initialise les
-volumes nommés avec le propriétaire du répertoire correspondant dans l'image.
+Aucune création de dossier ni `chown` n'est nécessaire **pour les volumes
+nommés** : Docker les initialise avec le propriétaire du répertoire
+correspondant dans l'image. ⚠️ **Exception : le dossier `tts-config` est un bind
+mount** (M2/M3 du Lot 9) : créez-le vous-même et donnez-le à `1000:1000` :
+
+```bash
+mkdir -p ~/yuki/tts-config
+chown -R 1000:1000 ~/yuki/tts-config
+```
+
+Le gateway y **écrit** `server.json` (et sa sauvegarde `server.json.bak`) ; le
+moteur `tts` y **lit** `/config/server.json`. Les deux conteneurs tournent en
+`1000:1000`.
 
 ## Service TTS (voix)
 
@@ -51,9 +63,9 @@ docker compose up -d gateway
 
 Trois points restent **à faire à la main** avant que la voix fonctionne :
 
-> Note : ces étapes supposent le fichier `audiocpp-server.json` **déjà** fourni
-> (voir l'encadré plus bas) ; c'est le fichier de configuration du serveur, monté
-> en `ro` sur `/app/server.json`.
+> Note : ces étapes supposent `tts-config/server.json` **déjà** fourni (voir
+> l'encadré plus bas) ; c'est le dossier de configuration du serveur, monté en
+> `ro` sur `/config` côté moteur et en `rw` sur `/data/tts-config` côté gateway.
 
 1. **Déposer le modèle GGUF** dans le volume `yuki-server-models` (monté `ro`,
    donc le moteur ne peut pas l'installer lui-même) :
@@ -78,20 +90,32 @@ Le moteur est **non bloquant** : s'il est absent ou en erreur, la conversation
 texte continue. État visible sur `GET /api/tts/status` et dans `/health`
 (`subsystems.tts`).
 
-### Fichier de configuration du moteur (`audiocpp-server.json`)
+### Fichier de configuration du moteur (`tts-config/server.json`)
 
-Le service `tts` monte `./audiocpp-server.json` (bind, **`ro`**) sur
-`/app/server.json` et démarre par :
+Le service `tts` monte le dossier `./tts-config` (bind, **`ro`**) sur `/config`
+et démarre par :
 
 ```yaml
-command: ["server", "--config", "/app/server.json"]
+command: ["server", "--config", "/config/server.json"]
+```
+
+Le gateway monte **le même dossier** en `rw` sur `/data/tts-config` : c'est ce
+qui permet à la page `/config` (onglet **Voix**) de modifier `server.json` de
+façon **structurée** — listes fermées pour `task`/`mode`/`family`/`id`/`path`,
+jamais de JSON brut envoyé par le navigateur. Chaque enregistrement écrit
+`server.json.bak` puis `server.json` **atomiquement**. Le moteur ne relit le
+fichier qu'à son **redémarrage** :
+
+```bash
+docker compose restart tts        # relit server.json (le conteneur reste en place)
 ```
 
 Créer le fichier depuis l'exemple fourni :
 
 ```bash
-cp audiocpp-server.json.example audiocpp-server.json
-vi audiocpp-server.json   # renseigner models[].path (chemin RÉEL du .gguf)
+mkdir -p tts-config
+cp audiocpp-server.json.example tts-config/server.json
+vi tts-config/server.json   # renseigner models[].path (chemin vu par le moteur : /models/…)
 ```
 
 Les clés de l'exemple (`host`, `port`, `backend`, `device`, `lazy_load`,
@@ -112,8 +136,9 @@ runtime n'accepte **que** `clon` et `vc` — `tts` déclenche
 > fichier de config** (`host`/`port`). Preuve : logs d'exécution de l'utilisateur
 > (voir `docs/lot8.md` §11.4).
 >
-> ⚠️ **RESTE À CONFIRMER EN RÉEL** : le chemin `/app/server.json` dans le
-> conteneur (WORKDIR de l'image non attesté) et le nom exact du `.gguf`.
+> ⚠️ Le chemin `/config/server.json` est un choix **Yuki** (le WORKDIR de
+> l'image n'est pas attesté) : il est cohérent entre le compose, le gateway et
+> l'interface. Le nom exact du `.gguf` reste, lui, à confirmer.
 
 ### Variables obligatoires et dégradation
 

@@ -41,6 +41,17 @@ services:
       # Volume des voix TTS (Lot 7) — le gateway l'écrit (registre + WAV).
       YUKI_MOUNT_VOICES: /voices
 
+      # --- Configuration du moteur TTS `audio.cpp` (Lot 9, étape 1) ---
+      # Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw` en
+      # M2 ci-dessous). Le moteur le voit en `ro` sur `/config` (M3).
+      YUKI_TTS_CONFIG_DIR: /data/tts-config
+      # SECOND montage du dossier modèles, en `rw`, réservé aux téléchargements
+      # (`/models-dl/downloads/`). Le premier montage `/models` reste `ro` (M1).
+      YUKI_TTS_MODELS_WRITE_DIR: /models-dl
+      # Point de vue du MOTEUR (sert à traduire `models[].path`).
+      YUKI_TTS_ENGINE_MODELS_DIR: /models
+      YUKI_TTS_ENGINE_CONFIG_DIR: /config
+
       # --- Pi embarqué (Lot 1) — câblage uniquement ---
       # Redirection de l'état du SDK hors du rootfs read-only (volume yuki-pi).
       YUKI_PI_AGENT_DIR: /data/pi/agent
@@ -91,6 +102,20 @@ services:
         source: yuki-models
         target: /models
         read_only: true
+      # Lot 9 (M1) : SECOND montage du MÊME volume modèles, en `rw`, sur un
+      # chemin DISTINCT (`/models-dl`). Le premier (`/models`) RESTE `ro`
+      # (invariant). Le gateway n'écrit QUE sous `/models-dl/downloads/`
+      # (téléchargements — étape suivante). ⚠️ Le montage du MOTEUR reste `ro`.
+      - type: volume
+        source: yuki-models
+        target: /models-dl
+      # Lot 9 (M2) : dossier de configuration du moteur, monté en `rw` pour que
+      # le gateway écrive `server.json` ATOMIQUEMENT (un `rename` est impossible
+      # sur un fichier bind-monté, d'où le dossier). Le moteur le monte en `ro`
+      # (M3), et la commande du moteur reste `server --config /config/server.json`.
+      - type: volume
+        source: yuki-tts-config
+        target: /data/tts-config
       - type: volume
         source: yuki-state
         target: /data/state
@@ -160,8 +185,10 @@ services:
   # Hôte/port ne sont PAS des flags : ce sont des CLÉS DU FICHIER DE CONFIG
   # (`host`/`port`), d'où l'absence de `--host`/`--port` ci-dessous.
   #
-  # ⚠️ RESTE À CONFIRMER EN RÉEL : le chemin du fichier de config DANS le
-  # conteneur (`/app/server.json` ci-dessous suppose le WORKDIR `/app`).
+  # ⚠️ Le chemin `/config/server.json` est un choix Yuki (le WORKDIR de l'image
+  # n'est pas attesté) ; il est cohérent entre le compose (M3), le gateway et
+  # l'interface. Le chemin `/app/server.json` d'origine reste possible via
+  # `YUKI_TTS_ENGINE_CONFIG_DIR` si vous montez le dossier ailleurs.
   # ===========================================================================
   tts:
     image: ${YUKI_TTS_IMAGE:-ghcr.io/0xshug0/audio.cpp:full-cuda13}
@@ -170,19 +197,22 @@ services:
     # Dispatcher audio.cpp → sous-commande `server`, puis `--config <fichier>`.
     # Le serveur écoute sur `host:port` du fichier de config (0.0.0.0:8081),
     # aligné sur le défaut `tts.baseUrl` = http://tts:8081.
-    command: ["server", "--config", "/app/server.json"]
+    # Lot 9 (M3) : le DOSSIER de config est monté en `ro` sur `/config` ; la
+    # commande NE change plus (`server --config /config/server.json`).
+    command: ["server", "--config", "/config/server.json"]
     networks:
       - yuki-net
     volumes:
-      # Fichier de configuration du serveur audio.cpp (fourni par l'opérateur).
-      # Copier `config/audiocpp-server.json.example` vers ce chemin, puis
-      # renseigner le chemin RÉEL du GGUF (clé `models[].path`).
-      # ⚠️ Chemin cible non attesté — à confirmer en réel (C14).
-      - type: bind
-        source: ${YUKI_HOST_TTS_CONFIG:-./config/audiocpp-server.json}
-        target: /app/server.json
+      # Lot 9 (M3) : dossier de configuration du serveur audio.cpp, monté en
+      # `ro`. Le MÊME dossier est monté en `rw` côté gateway (M2) → l'édition
+      # structurée depuis l'interface Yuki écrit `server.json` ici.
+      # ⚠️ Le moteur ne reçoit JAMAIS de montage `rw` : il relit le fichier à
+      # son redémarrage.
+      - type: volume
+        source: yuki-tts-config
+        target: /config
         read_only: true
-      # Modèle GGUF pré-déposé (ro) — jamais écrit par le service (§11.6).
+      # Modèle GGUF (ro) — jamais écrit par le service (§11.6).
       - type: volume
         source: yuki-models
         target: /models
@@ -229,3 +259,7 @@ volumes:
   # Lot 7 : médias de voix (registre `voices.json` + WAV) — volume dédié.
   yuki-voices:
     name: yuki-voices
+  # Lot 9 : dossier de configuration du moteur `audio.cpp` (`server.json` +
+  # `server.json.bak`). Monté `rw` côté gateway, `ro` côté moteur.
+  yuki-tts-config:
+    name: yuki-tts-config

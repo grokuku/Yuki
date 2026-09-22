@@ -41,6 +41,7 @@ import {
   TtsDiagnostics,
   TTS_PROBE_CACHE_TTL_MS,
   TTS_PROBE_TIMEOUT_MS,
+  type EngineConfigPort,
   type TtsApiDeps,
 } from "./gateway/routes/tts.js";
 import { detectGpus } from "./gpu/detect.js";
@@ -64,6 +65,8 @@ import { collectSecretValues, createLogger } from "./observability/logger.js";
 import { createPiHost, createSdkHeavyWorker, type PiHost } from "./pi/index.js";
 import {
   AudioCppClient,
+  EngineCapabilitiesProbe,
+  EngineConfigStore,
   VoiceStore,
   createAudioCppSynthesizer,
   isTtsEnabled,
@@ -320,6 +323,29 @@ async function main(): Promise<void> {
     },
   };
 
+  // --- Configuration STRUCTURÉE du moteur `audio.cpp` (Lot 9, étape 1) -------
+  // Le gateway monte le dossier de configuration du moteur en `rw`
+  // (`YUKI_TTS_CONFIG_DIR`, défaut `/data/tts-config`) et un SECOND montage du
+  // dossier hôte des modèles en `rw` (`YUKI_TTS_MODELS_WRITE_DIR`, défaut
+  // `/models-dl`, écriture réservée à `<dir>/downloads/`). Le premier montage
+  // `/models` reste `ro`. Le moteur, lui, lit `/config/server.json`.
+  const engineConfigStore = new EngineConfigStore({
+    configDir: env.ttsEngineConfigDir,
+    engineConfigDir: env.ttsEngineConfigMountDir,
+    modelsDir: env.mountPoints.models,
+    modelsWriteDir: env.ttsModelsWriteDir,
+    engineModelsDir: env.ttsEngineModelsDir,
+  });
+  const engineCapabilities = new EngineCapabilitiesProbe(() =>
+    config.getString("tts.baseUrl"),
+  );
+  const engineConfigPort: EngineConfigPort = {
+    report: () => engineConfigStore.report(),
+    applyPatch: (patch) => engineConfigStore.applyPatch(patch),
+    revert: () => engineConfigStore.revert(),
+    capabilities: () => engineCapabilities.probe(),
+  };
+
   const ttsDeps: TtsApiDeps = {
     config: {
       getString: (path) => config.getString(path),
@@ -330,6 +356,7 @@ async function main(): Promise<void> {
     diagnostics: ttsDiagnostics,
     modelsDir: env.mountPoints.models,
     synth: { synthesize: ({ text, voice }) => synthesize(text, voice) },
+    engineConfig: engineConfigPort,
   };
 
   logger.info("tts.voices.ready", {

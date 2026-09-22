@@ -115,6 +115,13 @@ let seq = 0;
 const pending = new Map();
 const consoleMessages = [];
 const logEntries = [];
+/**
+ * Exceptions JS NON capturées côté page (erreur de chargement de module,
+ * symbole utilisé mais non défini, exception dans un listener…). Ces erreurs
+ * n'apparaissent NI dans `consoleAPICalled` NI dans `Log.entryAdded` : sans ce
+ * canal `Runtime.exceptionThrown`, elles passeraient inaperçues.
+ */
+const pageExceptions = [];
 ws.on("message", (raw) => {
   const msg = JSON.parse(raw.toString());
   if (msg.id && pending.has(msg.id)) {
@@ -126,6 +133,13 @@ ws.on("message", (raw) => {
       .map((a) => a.value ?? a.description ?? "")
       .join(" ");
     consoleMessages.push({ type: msg.params.type, text });
+  } else if (msg.method === "Runtime.exceptionThrown") {
+    const d = msg.params.exceptionDetails || {};
+    pageExceptions.push({
+      text: d.exception?.description ?? d.text ?? "exception",
+      url: d.url ?? "",
+      line: d.lineNumber ?? null,
+    });
   } else if (msg.method === "Log.entryAdded") {
     logEntries.push({
       source: msg.params.entry.source,
@@ -798,6 +812,66 @@ for (const preset of ["indigo-dark", "indigo-light", "emerald-dark", "emerald-li
   await shotAssistantPreset(preset);
 }
 
+/* ═══════════════ Éditeur STRUCTURÉ du moteur (Lot 9) ═════════════════════
+ * Exerce réellement le formulaire : ajout d'un modèle, bascule de famille et
+ * auto-correction du mode. C'est exactement le code qui plantait quand
+ * `ENGINE_FORCE_OFFLINE_FAMILIES` n'était pas importé : une famille « forcée
+ * offline » (chatterbox/cosyvoice3) qui repasse en `offline` prouve que le
+ * listener s'exécute sans lever d'exception. */
+writeTtsState({ kind: "ready", modelCount: 2 });
+await gotoAssistant();
+const engineEditor = await evaluate(`(() => {
+  const body = document.querySelector("#tts-assistant-root .tts-engine-config");
+  if (!body) return { hasSection: false };
+  const add = [...body.querySelectorAll("button")].find((b) => b.textContent === "Ajouter un modèle");
+  if (!add) return { hasSection: true, hasAdd: false };
+  add.click();
+  const card = body.querySelector(".tts-engine-config__model");
+  if (!card) return { hasSection: true, hasAdd: true, hasCard: false };
+  const selectsOf = () => [...body.querySelector(".tts-engine-config__model").querySelectorAll("select")];
+  // 1) famille NON forcée (kokoro) → autoriser un mode streaming
+  selectsOf()[0].value = "kokoro";
+  selectsOf()[0].dispatchEvent(new Event("change", { bubbles: true }));
+  selectsOf()[2].value = "streaming";
+  selectsOf()[2].dispatchEvent(new Event("change", { bubbles: true }));
+  const streamingMode = selectsOf()[2].value;
+  // 2) famille forcée (chatterbox) → le mode DOIT redevenir offline
+  selectsOf()[0].value = "chatterbox";
+  selectsOf()[0].dispatchEvent(new Event("change", { bubbles: true }));
+  const after = selectsOf();
+  return {
+    hasSection: true,
+    hasAdd: true,
+    hasCard: true,
+    streamingMode,
+    family: after[0].value,
+    task: after[1].value,
+    mode: after[2].value,
+    hasSave: [...body.querySelectorAll("button")].some((b) =>
+      b.textContent.includes("Enregistrer la configuration du moteur")),
+  };
+})()`);
+check(
+  "[/config] éditeur moteur (Lot 9) : ajout d'un modèle + listes fermées présentes",
+  engineEditor.hasSection &&
+    engineEditor.hasAdd &&
+    engineEditor.hasCard &&
+    engineEditor.hasSave &&
+    engineEditor.task === "clon",
+  JSON.stringify(engineEditor),
+);
+check(
+  "[/config] éditeur moteur : chatterbox force le mode « offline » (code du bug historique)",
+  engineEditor.streamingMode === "streaming" &&
+    engineEditor.family === "chatterbox" &&
+    engineEditor.mode === "offline",
+  JSON.stringify({
+    streamingMode: engineEditor.streamingMode,
+    family: engineEditor.family,
+    mode: engineEditor.mode,
+  }),
+);
+
 /* — Responsive : barre d'onglets en défilement horizontal (petit écran). — */
 await send("Emulation.setDeviceMetricsOverride", {
   width: 360,
@@ -846,14 +920,20 @@ check(
   cspViolations.map((v) => v.text).join(" | "),
 );
 
+check(
+  "ZÉRO exception JS non capturée (erreur de module, symbole non défini, listener)",
+  pageExceptions.length === 0,
+  pageExceptions.map((e) => `${e.text} (${e.url}:${e.line})`).join(" | ").slice(0, 400),
+);
+
 const failed = results.filter((r) => !r.ok);
 console.log(
   `\n═══ BILAN : ${results.length - failed.length}/${results.length} vérifications OK ; ` +
-    `violations CSP = ${cspViolations.length} ═══`,
+    `violations CSP = ${cspViolations.length} ; exceptions JS = ${pageExceptions.length} ═══`,
 );
 
 chrome.kill("SIGKILL");
 server.kill("SIGTERM");
 process.exit(
-  failed.length === 0 && cspViolations.length === 0 ? 0 : 1,
+  failed.length === 0 && cspViolations.length === 0 && pageExceptions.length === 0 ? 0 : 1,
 );

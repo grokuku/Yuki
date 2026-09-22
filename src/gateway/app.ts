@@ -234,7 +234,7 @@ async function handleTtsHttp(
   deps: TtsApiDeps,
 ): Promise<void> {
   let body: Buffer = Buffer.alloc(0);
-  if (method === "POST") {
+  if (method === "POST" || method === "PUT") {
     try {
       body = await readBodyBinary(req, MAX_CONFIG_BODY_BYTES);
     } catch (error) {

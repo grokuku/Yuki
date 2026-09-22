@@ -39,6 +39,11 @@ import { readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 
 import { AudioCppError } from "../../tts/audio-cpp.js";
+import {
+  EngineConfigError,
+  type EngineCapabilitiesReport,
+  type EngineConfigReport,
+} from "../../tts/engine-config.js";
 import { VoiceStoreError } from "../../tts/voices-store.js";
 import type { Voice } from "../../tts/types.js";
 import type { Logger } from "../../observability/logger.js";
@@ -163,6 +168,18 @@ export interface TtsConfigPort {
   getNumber(path: string): number;
 }
 
+/**
+ * Port de la configuration STRUCTURÉE du moteur (Lot 9). L'implémentation
+ * concrète (`EngineConfigStore` + `EngineCapabilitiesProbe`) est câblée dans
+ * `src/index.ts` ; les tests peuvent injecter une doublure.
+ */
+export interface EngineConfigPort {
+  report(): EngineConfigReport;
+  applyPatch(patch: unknown): EngineConfigReport;
+  revert(): EngineConfigReport;
+  capabilities(): Promise<EngineCapabilitiesReport>;
+}
+
 export interface TtsApiDeps {
   config: TtsConfigPort;
   logger: Logger;
@@ -173,6 +190,8 @@ export interface TtsApiDeps {
   modelsDir: string;
   /** Optionnel : sans lui, `POST /api/tts/test` répond 503. */
   synth?: TtsSynthesizer;
+  /** Optionnel : sans lui, les routes `engine-config`/`capabilities` répondent 503. */
+  engineConfig?: EngineConfigPort;
 }
 
 export interface TtsRequestInput {
@@ -916,6 +935,98 @@ async function handleModels(deps: TtsApiDeps): Promise<ConfigHttpResponse> {
   return json(200, await deps.diagnostics.models());
 }
 
+/* ─── Configuration structurée du moteur (Lot 9) ─────────────────────────────
+ * Le navigateur envoie un PATCH STRUCTURÉ ({ globals?, models? }) ; jamais un
+ * `server.json` complet. Toute écriture passe par les garde-fous existants
+ * (`X-Yuki-Config: 1` + même origine).
+ */
+
+function engineConfigUnavailable(): ConfigHttpResponse {
+  return json(503, {
+    error: "engine_config_unavailable",
+    code: "engine_config_unavailable",
+    message: "La configuration du moteur n'est pas câblée dans ce gateway.",
+  });
+}
+
+function handleEngineConfigGet(deps: TtsApiDeps): ConfigHttpResponse {
+  if (!deps.engineConfig) return engineConfigUnavailable();
+  // 200 GARANTI : un état « non monté » est un cas normal, pas une erreur.
+  return json(200, deps.engineConfig.report());
+}
+
+/** Mappe une erreur de configuration du moteur vers une réponse HTTP précise. */
+function engineConfigErrorResponse(error: unknown, deps: TtsApiDeps): ConfigHttpResponse {
+  if (error instanceof EngineConfigError) {
+    deps.logger.warn("tts.engine_config.refused", { code: error.code, status: error.status });
+    return json(error.status, {
+      error: error.code,
+      code: error.code,
+      message: error.message,
+      ...(error.fields.length > 0 ? { fields: error.fields } : {}),
+    });
+  }
+  deps.logger.error("tts.engine_config.failed", { error: messageOf(error) });
+  return json(500, {
+    error: "engine_config_failed",
+    code: "engine_config_failed",
+    message: "L'opération sur la configuration du moteur a échoué.",
+  });
+}
+
+function handleEngineConfigPut(input: TtsRequestInput): ConfigHttpResponse {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return guard;
+  if (!input.deps.engineConfig) return engineConfigUnavailable();
+  let patch: unknown;
+  try {
+    patch = input.body.length === 0 ? {} : JSON.parse(input.body.toString("utf8"));
+  } catch {
+    return json(400, {
+      error: "invalid_json",
+      code: "invalid_json",
+      message: "Corps JSON invalide (objet { globals?, models? } attendu).",
+      fields: [{ path: "", code: "invalid_json", message: "Corps JSON invalide." }],
+    });
+  }
+  try {
+    return json(200, input.deps.engineConfig.applyPatch(patch));
+  } catch (error) {
+    return engineConfigErrorResponse(error, input.deps);
+  }
+}
+
+function handleEngineConfigRevert(input: TtsRequestInput): ConfigHttpResponse {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return guard;
+  if (!input.deps.engineConfig) return engineConfigUnavailable();
+  try {
+    return json(200, input.deps.engineConfig.revert());
+  } catch (error) {
+    return engineConfigErrorResponse(error, input.deps);
+  }
+}
+
+async function handleCapabilities(deps: TtsApiDeps): Promise<ConfigHttpResponse> {
+  if (!deps.engineConfig) return engineConfigUnavailable();
+  try {
+    return json(200, await deps.engineConfig.capabilities());
+  } catch (error) {
+    deps.logger.warn("tts.capabilities.failed", { error: messageOf(error) });
+    return json(200, {
+      reachable: false,
+      baseUrl: deps.config.getString("tts.baseUrl"),
+      route: "/v1/tasks/unload_models",
+      method: "POST",
+      unloadModels: null,
+      probeStatus: null,
+      probeBody: null,
+      detail: null,
+      measuredAt: null,
+    });
+  }
+}
+
 function parseTestText(body: Buffer): string | ConfigHttpResponse {
   if (body.length === 0) return DEFAULT_TTS_TEST_TEXT;
   let parsed: unknown;
@@ -1042,7 +1153,10 @@ export function isTtsPath(path: string): boolean {
   return (
     path === "/api/tts/status" ||
     path === "/api/tts/models" ||
-    path === "/api/tts/test"
+    path === "/api/tts/test" ||
+    path === "/api/tts/engine-config" ||
+    path === "/api/tts/engine-config/revert" ||
+    path === "/api/tts/capabilities"
   );
 }
 
@@ -1061,6 +1175,19 @@ export async function handleTtsRequest(
   }
   if (path === "/api/tts/test") {
     if (method === "POST") return handleTest(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path === "/api/tts/engine-config") {
+    if (method === "GET" || method === "HEAD") return handleEngineConfigGet(input.deps);
+    if (method === "PUT") return handleEngineConfigPut(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path === "/api/tts/engine-config/revert") {
+    if (method === "POST") return handleEngineConfigRevert(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path === "/api/tts/capabilities") {
+    if (method === "GET" || method === "HEAD") return handleCapabilities(input.deps);
     return json(405, { error: "method_not_allowed", method });
   }
   return json(404, { error: "not_found", path });

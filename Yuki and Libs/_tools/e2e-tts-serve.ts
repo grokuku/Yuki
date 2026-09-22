@@ -23,6 +23,7 @@ import { detectGpus } from "../../src/gpu/detect.js";
 import { runGate } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
+import { EngineCapabilitiesProbe, EngineConfigStore } from "../../src/tts/engine-config.js";
 import { VoiceStore } from "../../src/tts/voices-store.js";
 
 /** WAV PCM16 mono (silence) minimal et valide. */
@@ -50,9 +51,16 @@ const root = mkdtempSync(join(tmpdir(), "yuki-e2e-tts-"));
 const voicesDir = join(root, "voices");
 const stateDir = join(root, "state");
 const modelsDir = join(root, "models");
+const ttsConfigDir = join(root, "tts-config");
+const modelsWriteDir = join(root, "models-dl");
 mkdirSync(join(voicesDir, "presets"), { recursive: true });
 mkdirSync(stateDir, { recursive: true });
 mkdirSync(modelsDir, { recursive: true });
+// Lot 9 : dossier de configuration du moteur monté `rw` côté gateway (M2) ET
+// second montage `rw` du dossier des modèles (M1). Volontairement SANS
+// `server.json` : l'E2E exerce la création depuis l'interface.
+mkdirSync(ttsConfigDir, { recursive: true });
+mkdirSync(modelsWriteDir, { recursive: true });
 
 // Un modèle « installé » sur le disque (exercice de l'affichage nom + taille).
 writeFileSync(join(modelsDir, "chatterbox-q8.gguf"), Buffer.alloc(2_048_000));
@@ -103,6 +111,10 @@ const env = loadEnv({
   YUKI_MOUNT_VOICES: voicesDir,
   YUKI_MOUNT_STATE: stateDir,
   YUKI_MOUNT_MODELS: modelsDir,
+  YUKI_TTS_CONFIG_DIR: ttsConfigDir,
+  YUKI_TTS_MODELS_WRITE_DIR: modelsWriteDir,
+  YUKI_TTS_ENGINE_MODELS_DIR: "/models",
+  YUKI_TTS_ENGINE_CONFIG_DIR: "/config",
 });
 
 const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
@@ -202,6 +214,21 @@ const ttsDiagnostics = new TtsDiagnostics(
   { timeoutMs: 1500, ttlMs: 0, fetchImpl: engineFetch, logger },
 );
 
+// Lot 9 : magasin de configuration du moteur (dossier `rw` côté gateway) et
+// sonde de capacités — même câblage que `src/index.ts`. Le moteur simulé ne
+// connaît pas `/v1/tasks/unload_models` → la sonde doit rendre « absente ».
+const engineConfigStore = new EngineConfigStore({
+  configDir: ttsConfigDir,
+  engineConfigDir: "/config",
+  modelsDir,
+  modelsWriteDir,
+  engineModelsDir: "/models",
+});
+const engineCapabilitiesProbe = new EngineCapabilitiesProbe(
+  () => config.getString("tts.baseUrl"),
+  { fetchImpl: engineFetch, timeoutMs: 1500, ttlMs: 0 },
+);
+
 const tts: TtsApiDeps = {
   config: {
     getString: (path) => config.getString(path),
@@ -219,6 +246,13 @@ const tts: TtsApiDeps = {
       bytes: makeWav(16000, 0.3),
       voiceRef: voice?.refAudio ? `/voices/${voice.refAudio}` : null,
     }),
+  },
+  // Lot 9 : édition STRUCTURÉE de `server.json` (même câblage que src/index.ts).
+  engineConfig: {
+    report: () => engineConfigStore.report(),
+    applyPatch: (patch) => engineConfigStore.applyPatch(patch),
+    revert: () => engineConfigStore.revert(),
+    capabilities: () => engineCapabilitiesProbe.probe(),
   },
 };
 
