@@ -199,6 +199,61 @@ export function engineSupportsEmotion(engine: string): boolean {
 }
 
 /**
+ * Moteurs dont le modèle attend un **NOM de langue** (`French`, `English`,
+ * `Auto`) plutôt qu'un **code ISO** (`fr`). Qwen3-TTS est le seul dans ce cas.
+ *
+ * ⚠️ Preuve moteur. Le talker normalise `ascii_lower(language)` puis cherche
+ * dans `codec_language_id`, dont les **clés sont des noms**
+ * (`src/models/qwen3_tts/talker.cpp`, `build_prompt_state`) : un code `fr`
+ * lève `Qwen3 talker unsupported language: fr` ⇒ **HTTP 500**. La config
+ * embarquée du GGUF (`config.json`, clé `talker_config.codec_language_id`)
+ * liste exactement `chinese, english, german, italian, portuguese, spanish,
+ * japanese, korean, french, russian`. Le README du modèle
+ * (`Qwen/Qwen3-TTS-12Hz-1.7B-Base`) documente aussi `language="French"`.
+ */
+const LANGUAGE_NAME_ENGINES: ReadonlySet<string> = new Set([
+  "qwen3-tts",
+  // Nom de famille du runtime (au cas où `tts.engine` porterait la famille).
+  "qwen3_tts",
+]);
+
+/** Code ISO (Yuki) → nom attendu par Qwen3-TTS (les 10 langues du modèle). */
+const QWEN3_TTS_LANGUAGE_NAMES: Readonly<Record<string, string>> = {
+  zh: "Chinese",
+  en: "English",
+  ja: "Japanese",
+  ko: "Korean",
+  de: "German",
+  fr: "French",
+  ru: "Russian",
+  pt: "Portuguese",
+  es: "Spanish",
+  it: "Italian",
+  // `yue` (cantonais) n'a pas de jeton dédié : couvert par `chinese`.
+  yue: "Chinese",
+};
+
+/**
+ * Valeur de la clé top-level `language` **réellement utile** pour ce moteur.
+ *
+ * - Moteurs « à nom » (Qwen3-TTS) : le code Yuki est **traduit** en nom ; un
+ *   code inconnu tombe sur `"Auto"` (toujours accepté par le talker).
+ * - Autres moteurs : la valeur est **inchangée** — Chatterbox et CosyVoice 3 ne
+ *   lisent pas `language` (il vit dans `text_input`, jamais validé contre un
+ *   contrat), donc `fr` y est sans effet.
+ */
+export function engineLanguageValue(engine: string, code: string): string {
+  if (!LANGUAGE_NAME_ENGINES.has(engine.trim().toLowerCase())) return code;
+  const key = code.trim().toLowerCase();
+  const mapped = QWEN3_TTS_LANGUAGE_NAMES[key];
+  if (mapped) return mapped;
+  const canonical = Object.values(QWEN3_TTS_LANGUAGE_NAMES).find(
+    (name) => name.toLowerCase() === key,
+  );
+  return canonical ?? "Auto";
+}
+
+/**
  * ADAPTATEUR UNIQUE : construit la requête `POST /v1/audio/speech` à partir
  * d'une **voix Yuki** (ou `null` = voix par défaut du service), d'un **texte**
  * et des **options d'émotion**. Voir `AUDIO_CPP_KEYS` pour l'incertitude.
@@ -217,7 +272,13 @@ export function toAudioCppRequest(
   const payload: Record<string, unknown> = {
     [AUDIO_CPP_KEYS.model.key]: options.engine,
     [AUDIO_CPP_KEYS.text.key]: text,
-    [AUDIO_CPP_KEYS.language.key]: options.language,
+    // Qwen3-TTS attend un NOM de langue (`French`), pas le code ISO `fr` :
+    // envoyer `fr` lève `Qwen3 talker unsupported language` (HTTP 500).
+    // Cf. `engineLanguageValue`.
+    [AUDIO_CPP_KEYS.language.key]: engineLanguageValue(
+      options.engine,
+      options.language,
+    ),
     [AUDIO_CPP_KEYS.responseFormat.key]: "wav",
   };
 

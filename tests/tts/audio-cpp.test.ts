@@ -10,6 +10,7 @@ import {
   AUDIO_CPP_SPEECH_PATH,
   AudioCppBusyError,
   AudioCppClient,
+  engineLanguageValue,
   toAudioCppRequest,
 } from "../../src/tts/audio-cpp.js";
 import type { TtsOptions, Voice } from "../../src/tts/types.js";
@@ -222,6 +223,38 @@ describe("toAudioCppRequest — débit (`speed`) par moteur", () => {
       toAudioCppRequest(voice, "x", { ...baseOptions, engine: "inconnu", speed: 150 }),
     );
     expect(body.speed).toBeUndefined();
+  });
+});
+
+/**
+ * Langue : Qwen3-TTS attend un **NOM** (`French`), pas le code ISO `fr` que
+ * Yuki stocke (`tts.language`). Le talker cherche `ascii_lower(language)` dans
+ * `codec_language_id` (clés = noms) et **rejette** un code inconnu avec
+ * `Qwen3 talker unsupported language` (HTTP 500). Preuve :
+ * `src/models/qwen3_tts/talker.cpp` (`build_prompt_state`), `config.json`
+ * embarqué dans le GGUF, README `Qwen/Qwen3-TTS-12Hz-1.7B-Base`.
+ */
+describe("toAudioCppRequest — langue par moteur", () => {
+  it("chatterbox : `language` inchangée (le moteur ne la lit pas)", () => {
+    const body = bodyOf(toAudioCppRequest(voice, "x", baseOptions));
+    expect(body.language).toBe("fr");
+  });
+
+  it("qwen3-tts : le code ISO `fr` devient le nom `French`", () => {
+    const body = bodyOf(
+      toAudioCppRequest(voice, "x", { ...baseOptions, engine: "qwen3-tts" }),
+    );
+    expect(body.language).toBe("French");
+  });
+
+  it("engineLanguageValue : codes connus, noms déjà valides, inconnu → Auto", () => {
+    expect(engineLanguageValue("qwen3-tts", "fr")).toBe("French");
+    expect(engineLanguageValue("qwen3-tts", "en")).toBe("English");
+    expect(engineLanguageValue("qwen3-tts", "French")).toBe("French");
+    expect(engineLanguageValue("qwen3-tts", "xx")).toBe("Auto");
+    // Moteurs sans contrainte de nom : valeur inchangée.
+    expect(engineLanguageValue("chatterbox", "fr")).toBe("fr");
+    expect(engineLanguageValue("cosyvoice3", "fr")).toBe("fr");
   });
 });
 

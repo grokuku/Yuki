@@ -13,8 +13,8 @@
 > **Style.** Sections numérotées ; tableaux de décisions **« Acté »** (`D##`) et
 > **« À confirmer »** (`C##`) ; chaque affirmation est adossée à une preuve
 > `fichier:ligne` ou explicitement marquée **non attestée**. La numérotation
-> **poursuit** celle des lots précédents : décisions **D46 → D61**, points
-> ouverts **C30 → C36** (dernier `D45` : `docs/lot8.md:645` ; dernier `C29` :
+> **poursuit** celle des lots précédents : décisions **D46 → D65**, points
+> ouverts **C30 → C40** (dernier `D45` : `docs/lot8.md:645` ; dernier `C29` :
 > `docs/lot8.md:662`). ⚠️ Un travail intermédiaire (montage **imbriqué** du
 > sous-dossier, via l'option Compose de **sous-chemin de volume**) a créé puis
 > **retiré** les identifiants **D59** et **C37** : ils ne sont **PAS
@@ -454,6 +454,10 @@ symboles (`tests/ui/ui-modules-defined.test.ts`), et **E2E qui rejoue le bug**
 | **D58** | **UI vanilla sans build, CSP stricte, thèmes 5×2, réutilisation de l'existant**, plus un **garde-fou statique anti-symbole-non-défini** (auto-testé). | `public/ui/tts-assistant.js:28-41`, `tests/ui/ui-modules-defined.test.ts` |
 | **D60** | **Décision opérateur : simplifier M1 — un SEUL montage `/models`, en `rw`.** Écriture sur **tout** `/models` **assumée** (composant de confiance, sur la machine de l'opérateur, modèles ~2 Go) ; `downloads/` = **convention**, pas **barrière**. **Retrait** de l'option de **sous-chemin de volume**, du montage **imbriqué**, du **prérequis Compose** et de la **migration** de volume. Les identifiants **D59**/**C37** (travail intermédiaire) sont **retirés** et **non réattribués**. | `docker-compose.yml:106-107`, `compose.bind.example.yml:48-49`, `deploy/server/docker-compose.yml:107-108`, `src/tts/engine-config.ts:63` |
 | **D61** | **Chemins internes = défauts du code, compose muet.** Les cibles de montage (`/models`, `/data/tts-config`, `/config`, `/voices`, `/data/pi`, `/workspace`, `/data/state`) sont une **source unique** (`CONTAINER_PATHS`, `src/config/container-paths.ts`) consommée par `env.ts`. Les composes ne définissent **aucune** variable de chemin interne ; la **surcharge par variable** (`YUKI_MOUNT_*`, `YUKI_TTS_CONFIG_DIR`, `YUKI_TTS_ENGINE_CONFIG_DIR`, `YUKI_TTS_ENGINE_MODELS_DIR`, `YUKI_PI_*`, `YUKI_CONFIG_DIR`) **reste lue** (rétro-compatibilité). Un test garde-fou compare défauts ↔ `target:` des composes. | `src/config/container-paths.ts:20-35`, `src/config/env.ts:158-195`, `tests/config/container-paths.test.ts`, `docker-compose.yml:28-53` |
+| **D62** | **Qwen3-TTS (paquet `Base`) retenu** : `id: "qwen3-tts"`, `family: "qwen3_tts"`, **`task: "tts"`**, **`mode: "offline"`**. Paquet `Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf` (**2 695 175 104 o**, ≈ 2,51 Gio, **Apache-2.0**), `ui.recommended_package` de la spec. **La tâche dépend de la VARIANTE du paquet** (Base→`tts`, VoiceDesign→`vdes`, CustomVoice→`tts`), pas de la liste `tasks` de la famille. | §14.1, §14.2 ; `model_specs/qwen3_tts.json` (`ui.recommended_package`), `src/models/qwen3_tts/loader.cpp` (`capabilities`, `create_task_session`), `src/framework/runtime/task_vocabulary.cpp`, API HF |
+| **D63** | **`language` : Qwen3-TTS attend un NOM, pas un code ISO.** Yuki envoyait `language: "fr"` (enum `tts.language`) ⇒ `Qwen3 talker unsupported language: fr` (**HTTP 500**). Correctif : `engineLanguageValue` traduit le code Yuki en nom pour `qwen3-tts` (`fr`→`French` ; inconnu→`Auto`) ; les autres moteurs sont **inchangés** (`fr`). | §14.5 ; `src/tts/audio-cpp.ts` (`engineLanguageValue`), `src/models/qwen3_tts/talker.cpp` (`build_prompt_state`), `config.json` embarqué (`talker_config.codec_language_id`), README `Qwen/Qwen3-TTS-12Hz-1.7B-Base` |
+| **D64** | **`id` d'une entrée `models[]` = étiquette LIBRE** (pas le nom de famille) : `id: "qwen3-tts"` + `family: "qwen3_tts"` coexistent dans l'exemple amont ; le serveur indexe par `id` et Yuki envoie `tts.engine` **tel quel** comme clé `model`. | §14.7 ; `examples/docker/server/qwen3-tts-server.json`, `app/server/runtime.cpp` (`require_model`, `model_config_from_json`) |
+| **D65** | **Voice design / CustomVoice : possibles sans référence, mais NON pilotables depuis Yuki.** `VoiceDesign` (`task: "vdes"`) génère depuis une `instruction`/`instruct` que Yuki n'envoie pas (rendu par défaut, sans crash) ; `CustomVoice` (`task: "tts"`) **exige** un `speaker` (préréglage) et **échoue** sans (`unsupported speaker: `). **Recommandation : paquet `Base` + voix de référence (comme CosyVoice 3).** | §14.4 ; `src/models/qwen3_tts/session.cpp` (`make_request`), `src/models/qwen3_tts/prompt_tts_voice_design.cpp` |
 
 ### À confirmer
 
@@ -466,10 +470,227 @@ symboles (`tests/ui/ui-modules-defined.test.ts`), et **E2E qui rejoue le bug**
 | **C34** | **Ordre et format** du JSON après aller-retour : les clés inconnues sont **conservées**, mais l'ordre/indentation sont **réécrits** par `JSON.stringify(…, 2)`. Acceptable ? | §6 |
 | **C35** | **Téléchargement (étape 2)** : source des URLs, vérification d'intégrité (hash), reprise après interruption, garde de taille. | §10.1 |
 | **C36** | **`max_loaded_models` / éviction LRU** : le comportement réel du moteur (défaut `0` = illimité) n'est **pas re-vérifié ici**. | §5 / `docs/lot8.md` D45 |
+| **C38** | **Contrat d'options RÉEL de `qwen3_tts`** : la spec amont (`main`) **n'a ni `schema_version` ni `options`** (legacy, comme Chatterbox), et le GGUF publié **embarque une spec legacy** (métadonnée `audiocpp.model_spec.json` lue par Range HTTP) ⇒ `model_contract()` = `nullopt` ⇒ **aucun rejet strict d'option**. La spec **installée dans l'image** peut différer (build différent) : à confirmer. **Sans effet sur Yuki** (elle n'envoie ni `options` ni `speed`). Manip : `docker exec yuki-tts curl -s -X POST localhost:8081/v1/audio/speech -H 'content-type: application/json' -d '{"model":"qwen3-tts","input":"x","options":{"__bogus__":1}}'` (500 ⇒ contrat strict ; 200/other ⇒ legacy). | §14.6 |
+| **C39** | **`mode: streaming` proposé par l'UI pour `qwen3-tts`** : `qwen3-tts` n'est **pas** dans `ENGINE_FORCE_OFFLINE_FAMILIES` (`src/tts/engine-config.ts:117`) alors que le moteur n'accepte **que** `offline`. Envisager de l'y ajouter (correctif UI, non fait ici). | §14.3, §14.10 |
+| **C40** | **Qualité française perçue** Qwen3-TTS (Base, voix `voix-fr`) vs Chatterbox/CosyVoice 3, et **VRAM réelle** du chargement à trois (poids Q8). | §14.10 |
 
 ---
 
-## 14. Renvois
+## 14. Faire tourner Qwen (famille `qwen3_tts`)
+
+> **Ajout du 2026-09-22.** Établi depuis le **code source amont** `0xShug0/audio.cpp`
+> (branche `main`), l'**API Hugging Face** réellement interrogée, la **spec
+> embarquée du GGUF** lue par **requête HTTP Range**, et le README du modèle
+> `Qwen/Qwen3-TTS-12Hz-1.7B-Base`. **Aucune valeur n'est extrapolée de
+> Chatterbox ni de CosyVoice 3.**
+>
+> **Pourquoi ici et pas dans `docs/lot8.md` (`§13` CosyVoice 3) ?** Le Qwen
+> n'introduit **pas** de nouveau montage ni de nouveau protocole : il s'ajoute
+> comme **entrée `models[]`** dans `server.json` (listes fermées `family`/`task`/
+> `mode`/`id` = lot 9) et se sélectionne par **`tts.engine`**. Les tableaux
+> **D##/C##** étant ici (dernier **D61**/**C36**), la continuité imposée par la
+> note d'en-tête s'y poursuit (**D62 → D65**, **C38 → C40**).
+
+### 14.1 Fichiers GGUF (preuve : API HF)
+
+`GET https://huggingface.co/api/models/audio-cpp/audio.cpp-gguf/tree/main/<dossier>`
+(**HTTP 200**) — **9 fichiers** répartis en **4 dossiers** :
+
+| Dossier | Fichier | Octets | Taille |
+| --- | --- | ---: | ---: |
+| `Qwen3-TTS-12Hz-0.6B-Base-GGUF` | `qwen3-tts-12hz-0.6b-base-q8_0.gguf` | `1991211136` | ≈ 1,85 Gio |
+| `Qwen3-TTS-12Hz-0.6B-Base-GGUF` | `qwen3-tts-12hz-0.6b-base-bf16.gguf` | `2516154496` | ≈ 2,34 Gio |
+| `Qwen3-TTS-12Hz-1.7B-Base-GGUF` | `qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf` | `2695175104` | ≈ **2,51 Gio** |
+| `Qwen3-TTS-12Hz-1.7B-Base-GGUF` | `qwen3-tts-12hz-1.7b-base-bf16.gguf` | `4203158464` | ≈ 3,91 Gio |
+| `Qwen3-TTS-12Hz-1.7B-Base-GGUF` | `qwen3-tts-12hz-1.7b-base-orig.gguf` | `4544273280` | ≈ 4,23 Gio |
+| `Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF` | `qwen3-tts-12hz-1.7b-customvoice-q8_0.gguf` | `2817044064` | ≈ 2,62 Gio |
+| `Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF` | `qwen3-tts-12hz-1.7b-customvoice-bf16.gguf` | `4179144352` | ≈ 3,89 Gio |
+| `Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF` | `qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf` | `2816988960` | ≈ 2,62 Gio |
+| `Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF` | `qwen3-tts-12hz-1.7b-voicedesign-bf16.gguf` | `4179089248` | ≈ 3,89 Gio |
+
+**Licence** — lignes du README du dépôt HF (`.../raw/main/README.md`, HTTP 200) :
+« `Qwen3-TTS-12Hz-1.7B-Base-GGUF` | `qwen3_tts` | original + BF16 + Q8 |
+**Apache-2.0** » (idem pour les 3 autres dossiers). ⚠️ Le **tag global** du dépôt
+agrégé reste `license: other` : c'est la licence **du dossier** qui compte
+(**Apache-2.0**).
+
+**Recommandation : `Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf`**
+(≈ 2,51 Gio). Justification : c'est le **paquet recommandé par la spec amont**
+(`ui.recommended_package = "qwen3_tts_1_7b_base_q8_0"`, `model_specs/qwen3_tts.json`),
+taille **1,7 B** (meilleure qualité que 0,6 B), quantification **Q8_0** (≈ 40 % plus
+léger que BF16 et 2× moins que `orig`), et c'est la **variante `Base`** = clonage
+(le cas d'usage de la voix `voix-fr`). Les variantes `VoiceDesign`/`CustomVoice`
+ne sont **pas** retenues ici (cf. D65, §14.4).
+
+### 14.2 Tâches acceptées (prouvées par le loader)
+
+`model_specs/qwen3_tts.json` (famille) : `"tasks": ["tts", "clone", "design"]`.
+Mais **le loader décide par VARIANTE** (`src/models/qwen3_tts/loader.cpp`,
+`capabilities()` + `create_task_session()`) :
+
+| Variante du paquet | Tâche runtime | Mode | Référence |
+| --- | --- | --- | --- |
+| `Base` | **`Tts`** (⇒ `task: "tts"`) | `offline` | **obligatoire** (`supports_speaker_reference`) |
+| `VoiceDesign` | **`VoiceDesign`** (⇒ `task: "vdes"`) | `offline` | aucune (instruction) |
+| `CustomVoice` | **`Tts`** (⇒ `task: "tts"`) | `offline` | aucune (`speaker`) |
+
+⚠️ Le jeton écrit dans `server.json` suit `parse_voice_task_kind`
+(`task_vocabulary.cpp`) : la spec écrit `clone`/`design`, le **jeton canonique**
+est **`clon`**/**`vdes`**. Pour le paquet `Base` retenu, c'est **`tts`** (le loader
+refuse `clon` sur `Base` : `Qwen3 base TTS model only supports the Tts task`).
+
+### 14.3 Modes : `offline` UNIQUEMENT (pas de streaming)
+
+`model_specs/qwen3_tts.json` : `"modes": ["offline"]`. Le loader n'annonce que
+`RunMode::Offline`, et `create_task_session` **lève** `Qwen3 TTS only supports
+offline sessions` pour tout autre mode. ⇒ **pas de streaming**, donc **pas de
+gain de TTFA** (le premier son attend la synthèse du premier segment, comme
+ailleurs). Yuki **n'envoie de toute façon pas** `stream_format`
+(`src/tts/synthesizer.ts`).
+
+### 14.4 Voix de référence : OBLIGATOIRE pour `Base` ; sans référence = `VoiceDesign`/`CustomVoice` (non pilotables depuis Yuki)
+
+- **`Base` — référence obligatoire.** Sans audio, `session.cpp` lève
+  `Qwen3 base TTS requires voice clone reference audio`. L'audio provient de
+  `request.voice.speaker.audio` OU `request.audio_input` (i.e. la clé top-level
+  **`voice_ref`**, chemin) — **Yuki l'envoie déjà** (`voice_ref` =
+  `/voices/presets/voix-fr.wav`). `reference_text` est **optionnel** (lu dans
+  `options`), recommandé comme pour CosyVoice 3.
+- **`VoiceDesign` — sans référence.** Génère depuis une **`instruction`/
+  `instruct`** (naturelle). Yuki **ne l'envoie pas** ⇒ rendu **sans description**
+  (le prompt builder tolère une instruction vide : pas de crash, voix générique).
+- **`CustomVoice` — sans référence, mais ÉCHOUE via Yuki.** Il exige un
+  **`speaker`** (préréglage, ex. `Vivian`) ; sans lui, `talker.cpp` lève
+  `Qwen3 custom voice unsupported speaker: `. Yuki n'envoie pas `speaker`.
+
+**Conclusion nette : oui, Qwen peut générer SANS référence** (`VoiceDesign`,
+`task: "vdes"`), **mais Yuki n'expose ni `instruct` ni `speaker`** → la seule
+variante **réellement pilotable depuis Yuki est `Base` + voix de référence**
+(comme CosyVoice 3). C'est le choix recommandé.
+
+### 14.5 ⚠️ Le piège `language` (échec immédiat corrigé)
+
+Yuki envoie **toujours** `language` au niveau supérieur (= `tts.language`, enum
+**`["fr"]`**). Or le talker Qwen3-TTS fait `ascii_lower(language)` puis
+`codec_language_id.find(...)`, dont les **clés sont des NOMS** (`chinese`,
+`english`, …, **`french`**) — `src/models/qwen3_tts/talker.cpp`,
+`build_prompt_state`. Un code `fr` **lève** `Qwen3 talker unsupported language: fr`
+⇒ **HTTP 500**. Le README du modèle documente d'ailleurs `language="French"`.
+
+**Correctif (D63) :** `engineLanguageValue` (`src/tts/audio-cpp.ts`) traduit le
+code Yuki en **nom** pour `qwen3-tts` (`fr` → `French` ; code inconnu → `Auto`,
+toujours accepté) ; les **autres moteurs sont inchangés** (`fr`). ⚠️ C'est une
+modification **du code**, donc de l'**image Yuki** (`ghcr.io/grokuku/yuki`) :
+elle doit être **reconstruite/publiée** (ou `compose.build.example.yml`) — pas
+seulement changer `tts.language` (impossible : l'enum n'a que `fr`).
+
+### 14.6 Options acceptées / rejetées
+
+⚠️ **« Contrat schema-v1 strict » NON prouvé pour `qwen3_tts`.** La spec amont
+(`model_specs/qwen3_tts.json`, `main`) n'a **ni `schema_version` ni `options`**
+(contrairement à `cosyvoice3.json`), et le **GGUF publié embarque une spec
+legacy** (métadonnée `audiocpp.model_spec.json`, 937 o : uniquement `family` +
+`sources`) ⇒ `model_contract()` renvoie `nullopt` ⇒ `model_accepts_request_option()`
+renvoie **`true`** partout (`metadata.cpp:299-309`, `runtime.cpp:95-115`). Le
+moteur **n'a donc pas de liste d'options à rejeter** (comme Chatterbox). C'est
+**C38** s'il faut le figer pour l'image déployée.
+
+Quoi qu'il en soit, **Yuki n'envoie à ce moteur que des clés sûres** : `model`,
+`input`, `language` (traduite), `response_format`, `voice`, `voice_ref`,
+`reference_text`. Elle **n'envoie ni `options`, ni `speed`/`speaking_rate`, ni
+`stream_format`** (`engineSupportsEmotion`/`engineSupportsSpeed` ; D40/D42).
+Aucune de ces clés n'est validée à l'arrivée (le `language` vit dans
+`text_input`, jamais dans `options`).
+
+### 14.7 `server.json` (tri-modèle) — prêt à coller
+
+Le moteur garde **Chatterbox + CosyVoice 3**, on **ajoute** Qwen (`lazy_load`,
+chargement multiple attestés : `docs/lot8.md` D45). Multi-ligne, indenté :
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 8081,
+  "backend": "cuda",
+  "device": 0,
+  "lazy_load": true,
+  "ui_enabled": false,
+  "voice_dir": "/voices",
+  "models": [
+    {
+      "id": "chatterbox",
+      "family": "chatterbox",
+      "path": "/models/Chatterbox-GGUF/chatterbox-q8_0.gguf",
+      "task": "clon",
+      "mode": "offline"
+    },
+    {
+      "id": "cosyvoice3",
+      "family": "cosyvoice3",
+      "path": "/models/CosyVoice3-GGUF/cosyvoice3-q8_0.gguf",
+      "task": "clon",
+      "mode": "offline"
+    },
+    {
+      "id": "qwen3-tts",
+      "family": "qwen3_tts",
+      "path": "/models/Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      "task": "tts",
+      "mode": "offline"
+    }
+  ]
+}
+```
+
+⚠️ **`id` = `"qwen3-tts"` (tiret)**, **pas** `qwen3_tts` (la **famille**, underscore) :
+Yuki envoie `tts.engine` **tel quel** comme clé `model`, et le serveur indexe par
+**`id`** (`examples/docker/server/qwen3-tts-server.json` : `id` et `family`
+diffèrent). C'est une **étiquette libre** (D64).
+
+Options de confort inchangées (`max_loaded_models`, `idle_unload_ms`,
+`min_free_memory_mb`) — voir `docs/lot8.md` §13.7.
+
+### 14.8 Téléchargement (URL vérifiée HTTP 200)
+
+```bash
+curl -L --fail --create-dirs \
+  -o /mnt/user/appdata-ssd/yuki-server/models/Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf \
+  https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf
+```
+
+URL `resolve/main/...` vérifiée **HTTP 200** (redirection CDN Xet, `x-linked-size:
+2695175104`). Chemin **dans le conteneur** :
+`/models/Qwen3-TTS-12Hz-1.7B-Base-GGUF/qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf`.
+
+### 14.9 Suite côté Yuki
+
+1. Déployer l'image Yuki **avec le correctif `language`** (D63) — sans lui, chaque
+   requête Qwen renvoie **500** (§14.5).
+2. `server.json` (§14.7) → **redémarrer** le service `tts` (bind `ro` relu au
+   démarrage) : `docker restart yuki-tts`.
+3. Dans `/config`, onglet **Voix** → **Configuration du moteur**, ajouter/valider
+   l'entrée `qwen3-tts` (listes fermées) si elle n'est pas déjà dans le fichier.
+4. Dans `/config`, changer **`tts.engine`** = **`qwen3-tts`** (`src/config/schema.ts`),
+   **`apply: restart`** ⇒ cliquer **Redémarrer** (onglet **Maintenance**).
+5. **Aucun autre champ** : `tts.voice` (vide = `voix-fr`) reste valable ;
+   `tts.speed` **n'est pas envoyé** ; émotion (`tts.emotion`/`exaggeration`/`cfg`)
+   ne s'applique **qu'à Chatterbox** (déjà grisée par l'UI).
+
+### 14.10 Pièges
+
+- **VRAM.** Poids Q8 ≈ **2,51 Gio** ; estimation serveur (`poids × 1,5 + 128 Mio`)
+  ≈ **3,9 Gio**. Les **trois** modèles chauds (Chatterbox ≈ 3,0 + CosyVoice 3
+  ≈ 3,3 + Qwen ≈ 3,9 Gio est.) ≈ **10 Gio** + arènes : confortable sur 16–24 Gio,
+  tendu sur 8 Gio. Sinon `"max_loaded_models": 1` (un seul résident, LRU).
+- **Erreur d'allocation** (`failed to allocate backend tensors`, déjà vu avec
+  ComfyUI) : `nvidia-smi` → libérer la VRAM (arrêter le conteneur GPU) → relancer.
+- **Streaming / TTFA** : §14.3 — **offline only**, pas de flux incrémental.
+- **Retour arrière en 30 s** : `tts.engine` = `chatterbox` (ou `cosyvoice3`) dans
+  `/config`, **Redémarrer**. `server.json` garde les trois modèles : rien à démonter.
+
+---
+
+## 15. Renvois
 
 - [`docs/lot7.md`](lot7.md) — spécification de référence du TTS (transport, voix, émotion).
 - [`docs/lot8.md`](lot8.md) — assistant de mise en route, `server.json` attesté (`§11`), CosyVoice 3 (`§13`).
