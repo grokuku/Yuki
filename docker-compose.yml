@@ -34,39 +34,16 @@ services:
       # la variable a été fournie (`source` = `env-override`). Le défaut
       # (`nvidia-smi`) est appliqué par le code ; la surcharge reste possible
       # via `.env` (chargé par `env_file`).
-      YUKI_MOUNT_PI_AGENT: /data/pi
-      YUKI_MOUNT_WORKSPACE: /workspace
-      YUKI_MOUNT_MODELS: /models
-      YUKI_MOUNT_STATE: /data/state
-      # Volume des voix TTS (Lot 7) — le gateway l'écrit (registre + WAV).
-      YUKI_MOUNT_VOICES: /voices
+      #
+      # ⚠️ AUCUN chemin INTERNE au conteneur n'est défini ici (cibles `/models`,
+      # `/data/tts-config`, `/config`, `/voices`, `/data/pi`, `/workspace`,
+      # `/data/state` et chemins Pi dérivés). Ce sont des DÉFAUTS DU CODE
+      # (`src/config/container-paths.ts`), EXACTEMENT égaux aux cibles des
+      # `volumes:` ci-dessous. Le compose reste muet à leur sujet ; la surcharge
+      # par variable reste lue (rétro-compatibilité). Voir `docs/lot9.md` (D61).
 
-      # --- Configuration du moteur TTS `audio.cpp` (Lot 9, étape 1) ---
-      # Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw` en
-      # M2 ci-dessous). Le moteur le voit en `ro` sur `/config` (M3).
-      YUKI_TTS_CONFIG_DIR: /data/tts-config
-      # SECOND montage du dossier modèles, en `rw`, réservé aux téléchargements
-      # (`/models-dl/downloads/`). Le premier montage `/models` reste `ro` (M1).
-      YUKI_TTS_MODELS_WRITE_DIR: /models-dl
-      # Point de vue du MOTEUR (sert à traduire `models[].path`).
-      YUKI_TTS_ENGINE_MODELS_DIR: /models
-      YUKI_TTS_ENGINE_CONFIG_DIR: /config
-
-      # --- Pi embarqué (Lot 1) — câblage uniquement ---
-      # Redirection de l'état du SDK hors du rootfs read-only (volume yuki-pi).
-      YUKI_PI_AGENT_DIR: /data/pi/agent
-      YUKI_PI_SESSIONS_DIR: /data/pi/agent/sessions
-      YUKI_PI_HOME: /data/pi/home
-      YUKI_PI_CWD: /workspace
-      YUKI_PI_SYSTEM_PROMPT: /app/config/pi/system-prompt.md
-      YUKI_PI_SETTINGS_SEED: /app/config/pi/settings.json
-      YUKI_PI_HEAVY_SYSTEM_PROMPT: /app/config/pi/system-prompt-heavy.md
-
-      # HOME inscriptible (replis du SDK via os.homedir()).
-      HOME: /data/pi/home
-      # Environnement SDK (redondant avec le code, explicite ici).
-      PI_CODING_AGENT_DIR: /data/pi/agent
-      PI_CODING_AGENT_SESSION_DIR: /data/pi/agent/sessions
+      # --- Environnement SDK Pi (coupure des opérations réseau au démarrage) ---
+      # Non-chemin, redondant avec `applyPiEnvironment` (`src/pi/config.ts`).
       PI_OFFLINE: "1"
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
@@ -98,17 +75,14 @@ services:
       - type: volume
         source: yuki-workspace
         target: /workspace
+      # Lot 9 (M1) : UN SEUL montage `/models`, en `rw` côté gateway (lecture +
+      # écriture FUTURE des téléchargements). Le sous-dossier `downloads/` est
+      # une CONVENTION d'organisation (les GGUF téléchargés y sont rangés), pas
+      # une barrière : le gateway peut écrire partout sous `/models`.
+      # ⚠️ Le montage du MOTEUR (service `tts`, plus bas) reste `ro`.
       - type: volume
         source: yuki-models
         target: /models
-        read_only: true
-      # Lot 9 (M1) : SECOND montage du MÊME volume modèles, en `rw`, sur un
-      # chemin DISTINCT (`/models-dl`). Le premier (`/models`) RESTE `ro`
-      # (invariant). Le gateway n'écrit QUE sous `/models-dl/downloads/`
-      # (téléchargements — étape suivante). ⚠️ Le montage du MOTEUR reste `ro`.
-      - type: volume
-        source: yuki-models
-        target: /models-dl
       # Lot 9 (M2) : dossier de configuration du moteur, monté en `rw` pour que
       # le gateway écrive `server.json` ATOMIQUEMENT (un `rename` est impossible
       # sur un fichier bind-monté, d'où le dossier). Le moteur le monte en `ro`
@@ -187,8 +161,9 @@ services:
   #
   # ⚠️ Le chemin `/config/server.json` est un choix Yuki (le WORKDIR de l'image
   # n'est pas attesté) ; il est cohérent entre le compose (M3), le gateway et
-  # l'interface. Le chemin `/app/server.json` d'origine reste possible via
-  # `YUKI_TTS_ENGINE_CONFIG_DIR` si vous montez le dossier ailleurs.
+  # l'interface. C'est un DÉFAUT DU CODE : ne définissez PAS
+  # `YUKI_TTS_ENGINE_CONFIG_DIR` ici. La surcharge reste possible (relocalisation
+  # avancée) mais n'est PAS un réglage du compose (voir `docs/lot9.md` D61).
   # ===========================================================================
   tts:
     image: ${YUKI_TTS_IMAGE:-ghcr.io/0xshug0/audio.cpp:full-cuda13}

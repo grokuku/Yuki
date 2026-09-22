@@ -335,9 +335,9 @@ export function describeTestError(error) {
 }
 
 /**
- * Mappe `status.modelsDir` (diagnostic du volume `yuki-models`, monté `ro`) vers
- * un affichage honnête. Le répertoire absent/illisible est un cas normal, pas
- * une exception.
+ * Mappe `status.modelsDir` (diagnostic du volume `yuki-models`, monté `rw` côté
+ * gateway, `ro` côté moteur) vers un affichage honnête. Le répertoire
+ * absent/illisible est un cas normal, pas une exception.
  */
 export function describeModelsDir(modelsDir) {
   if (!modelsDir || typeof modelsDir !== "object") {
@@ -736,7 +736,7 @@ export function initTtsAssistant(root, deps = {}) {
           text:
             "Le fichier du modèle doit être présent sur le disque (déposez-le sur l'hôte pour " +
             "l'instant) ; déclarez-le ensuite dans « Configuration du moteur » ci-dessus. Le " +
-            "dossier `/models` reste en lecture seule pour le gateway et le service tts.",
+            "service tts lit `/models` en lecture seule ; le gateway y a accès en écriture (Lot 9).",
         }),
       );
     }
@@ -1568,18 +1568,19 @@ export function initTtsAssistant(root, deps = {}) {
             h("strong", { text: "Déposer le fichier du modèle" }),
             " dans le dossier partagé monté sur ",
             code("/models"),
-            " (le gateway le voit aussi sous ",
-            code("/models-dl"),
-            " en écriture) :",
+            " (lu par le moteur ; le gateway y a aussi accès en écriture, pour ses " +
+              "futurs téléchargements rangés dans le sous-dossier ",
+            code("/models/downloads"),
+            ") :",
           ]),
           h("p", { class: "config-helper" }, [
             "Le chemin du dossier dépend de VOTRE déploiement (variable d'environnement ou " +
               "fichier Compose — vérifiez la section `volumes:` des services). Déposez-y le " +
               "fichier .gguf attendu par le moteur, puis déclarez-le dans « Configuration du " +
               "moteur » ci-dessus (le sélecteur de chemin ne propose que les .gguf présents). " +
-              "Le gateway prépare déjà un dossier d'écriture (",
-            code("/models-dl/downloads"),
-            ") pour le téléchargement depuis l'interface, mais ne télécharge encore rien. " +
+              "Le gateway réserve déjà le sous-dossier ",
+            code("/models/downloads"),
+            " pour les futurs téléchargements depuis l'interface, mais ne télécharge encore rien. " +
               "Ne déposez PAS les voix ici : elles vivent dans le dossier monté sur ",
             code("/voices"),
             " (gérable depuis cette page).",

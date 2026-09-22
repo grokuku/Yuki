@@ -78,7 +78,6 @@ async function startHarness(options: { mountConfig?: boolean; noEngineConfig?: b
     YUKI_VOICES_DIR: join(root, "voices"),
     YUKI_MOUNT_MODELS: modelsDir,
     YUKI_TTS_CONFIG_DIR: configDir,
-    YUKI_TTS_MODELS_WRITE_DIR: join(root, "models-dl"),
     YUKI_TTS_ENGINE_MODELS_DIR: "/models",
     YUKI_TTS_ENGINE_CONFIG_DIR: "/config",
   });
@@ -87,7 +86,6 @@ async function startHarness(options: { mountConfig?: boolean; noEngineConfig?: b
     configDir,
     engineConfigDir: "/config",
     modelsDir,
-    modelsWriteDir: join(root, "models-dl"),
     engineModelsDir: "/models",
   });
   const probe = new EngineCapabilitiesProbe(() => "http://tts:8081", {

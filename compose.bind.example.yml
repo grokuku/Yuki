@@ -9,7 +9,7 @@
 #    en non-root (`YUKI_UID:YUKI_GID`). Sans préparation, `/health/ready`
 #    répond 503. Préparez les dossiers À LA MAIN avant de démarrer :
 #
-#      mkdir -p .local/pi .local/workspace .local/models .local/state .local/voices .local/tts-config
+#      mkdir -p .local/pi .local/workspace .local/models .local/models/downloads .local/state .local/voices .local/tts-config
 #      chown -R 1000:1000 .local
 #
 #    (`./scripts/up.sh` ne prépare plus rien : il se contente de
@@ -27,6 +27,12 @@
 #   YUKI_HOST_STATE_DIR=./.local/state
 #   YUKI_HOST_VOICES_DIR=./.local/voices
 #   YUKI_HOST_TTS_CONFIG_DIR=./.local/tts-config
+#
+# ⚠️ Seuls les chemins HÔTE (ci-dessus) sont paramétrables : les CIBLES
+# (`/models`, `/data/tts-config`, `/config`, `/voices`, …) sont des chemins
+# INTERNES FIXES, défauts du code (`src/config/container-paths.ts`). Aucune
+# variable d'environnement ne les définit dans ce compose (voir `docs/lot9.md`,
+# D61).
 # =============================================================================
 services:
   gateway:
@@ -40,15 +46,13 @@ services:
       - type: bind
         source: ${YUKI_HOST_WORKSPACE_DIR:-./.local/workspace}
         target: /workspace
+      # Lot 9 (M1) : UN SEUL montage `/models`, en `rw` côté gateway (lecture +
+      # écriture FUTURE des téléchargements). `downloads/` est une CONVENTION
+      # d'organisation (pas une barrière) : préparez `<hôte>/models/downloads`
+      # en `1000:1000` (voir en-tête). Le moteur `tts` garde son montage `ro`.
       - type: bind
         source: ${YUKI_HOST_MODELS_DIR:-./.local/models}
         target: /models
-        read_only: true
-      # Lot 9 (M1) : SECOND montage du MÊME dossier hôte, en `rw`, réservé aux
-      # téléchargements (`/models-dl/downloads/`). `/models` RESTE `ro`.
-      - type: bind
-        source: ${YUKI_HOST_MODELS_DIR:-./.local/models}
-        target: /models-dl
       # Lot 9 (M2) : dossier de config du moteur, en `rw` côté gateway.
       - type: bind
         source: ${YUKI_HOST_TTS_CONFIG_DIR:-./.local/tts-config}

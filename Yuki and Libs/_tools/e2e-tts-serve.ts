@@ -52,13 +52,15 @@ const voicesDir = join(root, "voices");
 const stateDir = join(root, "state");
 const modelsDir = join(root, "models");
 const ttsConfigDir = join(root, "tts-config");
-const modelsWriteDir = join(root, "models-dl");
+// Lot 9 (M1) : le sous-dossier `downloads/` du dossier des modèles est une
+// convention d'organisation (le montage `/models` est `rw` côté gateway).
+const modelsWriteDir = join(modelsDir, "downloads");
 mkdirSync(join(voicesDir, "presets"), { recursive: true });
 mkdirSync(stateDir, { recursive: true });
 mkdirSync(modelsDir, { recursive: true });
 // Lot 9 : dossier de configuration du moteur monté `rw` côté gateway (M2) ET
-// second montage `rw` du dossier des modèles (M1). Volontairement SANS
-// `server.json` : l'E2E exerce la création depuis l'interface.
+// sous-dossier d'écriture des modèles (M1). Volontairement SANS `server.json` :
+// l'E2E exerce la création depuis l'interface.
 mkdirSync(ttsConfigDir, { recursive: true });
 mkdirSync(modelsWriteDir, { recursive: true });
 
@@ -112,7 +114,6 @@ const env = loadEnv({
   YUKI_MOUNT_STATE: stateDir,
   YUKI_MOUNT_MODELS: modelsDir,
   YUKI_TTS_CONFIG_DIR: ttsConfigDir,
-  YUKI_TTS_MODELS_WRITE_DIR: modelsWriteDir,
   YUKI_TTS_ENGINE_MODELS_DIR: "/models",
   YUKI_TTS_ENGINE_CONFIG_DIR: "/config",
 });
@@ -221,7 +222,6 @@ const engineConfigStore = new EngineConfigStore({
   configDir: ttsConfigDir,
   engineConfigDir: "/config",
   modelsDir,
-  modelsWriteDir,
   engineModelsDir: "/models",
 });
 const engineCapabilitiesProbe = new EngineCapabilitiesProbe(

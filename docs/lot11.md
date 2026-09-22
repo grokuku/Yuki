@@ -74,6 +74,14 @@ test de frontière (`tests/pi/boundary.test.ts`).
 `YUKI_JOBS_STORE_PATH`, `YUKI_CONFIG_STORE_PATH`, `YUKI_GPU_CMD`,
 `YUKI_GPU_FIXTURE`.
 
+> ⚠️ Parmi ces variables, celles qui ne définissent qu'un **chemin INTERNE au
+> conteneur** (`YUKI_MOUNT_*`, `YUKI_TTS_CONFIG_DIR`/`YUKI_TTS_ENGINE_*_DIR`,
+> `YUKI_PI_*`, `YUKI_CONFIG_DIR`, `HOME`, `PI_CODING_AGENT_*`, `YUKI_VOICES_DIR`,
+> `YUKI_*_STORE_PATH`) sont des **défauts du code**
+> (`src/config/container-paths.ts`), **jamais** renseignées dans les composes : le
+> compose n'explicite que ses montages (`volumes: … target:`). La surcharge reste
+> **lue** (rétro-compatibilité) — voir `docs/lot9.md` (**D61**).
+
 > **Catalogue complet = la page `/config`.** Le `.env` ne documente que le
 > câblage. Les variables de surcharge d'environnement (`YUKI_LLM_*`,
 > `YUKI_HEAVY_*`, `YUKI_COMPAT_MODE`, `YUKI_PROFILE`, `YUKI_MIN_DRIVER`,

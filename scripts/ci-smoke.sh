@@ -193,7 +193,9 @@ run_smoke() {
   assert_jq "$health" '[.volumes[] | select(.exists == false)] | length == 0' "tous les volumes doivent exister"
   assert_jq "$health" '(.volumes[] | select(.id=="pi")     | .writable) == true' "volume pi inscriptible attendu"
   assert_jq "$health" '(.volumes[] | select(.id=="state")  | .writable) == true' "volume state inscriptible attendu"
-  assert_jq "$health" '(.volumes[] | select(.id=="models") | .writable) == null' "volume models en lecture seule attendu"
+  # Lot 9 (M1) : le gateway monte `/models` en `rw` (écriture des futurs
+  # téléchargements) ; le moteur `tts`, lui, le monte en `ro`.
+  assert_jq "$health" '(.volumes[] | select(.id=="models") | .writable) == true' "volume models inscriptible attendu (M1)"
 
   log "Assertion conteneur non-root"
   local uid name

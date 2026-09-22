@@ -57,7 +57,11 @@ export function mountPoints(env: Env): MountPoint[] {
     {
       id: "models",
       containerPath: env.mountPoints.models,
-      mode: "ro",
+      // Lot 9 (M1) : le gateway monte `/models` en `rw` (lecture des GGUF +
+      // écriture FUTURE des téléchargements, rangés sous `<models>/downloads/`).
+      // ⚠️ Le moteur `tts` monte, lui, le MÊME dossier en `ro` : seul le
+      // gateway peut écrire. Voir `docs/lot9.md` (D46/D60).
+      mode: "rw",
     },
     {
       id: "state",

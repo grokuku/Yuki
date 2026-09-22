@@ -325,15 +325,14 @@ async function main(): Promise<void> {
 
   // --- Configuration STRUCTURÉE du moteur `audio.cpp` (Lot 9, étape 1) -------
   // Le gateway monte le dossier de configuration du moteur en `rw`
-  // (`YUKI_TTS_CONFIG_DIR`, défaut `/data/tts-config`) et un SECOND montage du
-  // dossier hôte des modèles en `rw` (`YUKI_TTS_MODELS_WRITE_DIR`, défaut
-  // `/models-dl`, écriture réservée à `<dir>/downloads/`). Le premier montage
-  // `/models` reste `ro`. Le moteur, lui, lit `/config/server.json`.
+  // (`YUKI_TTS_CONFIG_DIR`, défaut `/data/tts-config`) et le dossier des modèles
+  // en `rw` (`/models`, lecture + écriture des futurs téléchargements, rangés par
+  // convention dans `<models>/downloads`). Le moteur, lui, lit `/config/server.json`
+  // et les modèles sous `/models` (monté `ro`).
   const engineConfigStore = new EngineConfigStore({
     configDir: env.ttsEngineConfigDir,
     engineConfigDir: env.ttsEngineConfigMountDir,
     modelsDir: env.mountPoints.models,
-    modelsWriteDir: env.ttsModelsWriteDir,
     engineModelsDir: env.ttsEngineModelsDir,
   });
   const engineCapabilities = new EngineCapabilitiesProbe(() =>

@@ -14,6 +14,7 @@
  */
 
 import type { LogLevel } from "../observability/logger.js";
+import { CONTAINER_PATHS } from "./container-paths.js";
 import { resolveConfigStorePath } from "./paths.js";
 import { CONFIG_SCHEMA } from "./schema.js";
 
@@ -58,12 +59,6 @@ export interface Env {
   ttsEngineConfigDir: string;
   /** Chemin du dossier de configuration tel que VU PAR LE MOTEUR (défaut `/config`). */
   ttsEngineConfigMountDir: string;
-  /**
-   * Second montage INSCRIPTIBLE du dossier hôte des modèles, VU PAR LE GATEWAY
-   * (défaut `/models-dl`). Le gateway n'écrit QUE sous `<dir>/downloads/` ; le
-   * premier montage `mountPoints.models` reste `ro`.
-   */
-  ttsModelsWriteDir: string;
   /** Chemin du dossier des modèles tel que VU PAR LE MOTEUR (défaut `mountPoints.models`). */
   ttsEngineModelsDir: string;
   // --- Domaine Pi embarqué (Lot 1) ---
@@ -161,12 +156,15 @@ export function readConfigEnvOverrides(
  */
 export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
   const configDir = getString(env, "YUKI_CONFIG_DIR", "./config");
+  // ⚠️ Cibles de montage = défauts du code (`CONTAINER_PATHS`), surchargeables
+  // par variable pour les déploiements existants, mais JAMAIS définies dans les
+  // composes (voir `src/config/container-paths.ts`, `docs/lot9.md` D61).
   const mountPoints: MountPoints = {
-    pi: getString(env, "YUKI_MOUNT_PI_AGENT", "/data/pi"),
-    workspace: getString(env, "YUKI_MOUNT_WORKSPACE", "/workspace"),
-    models: getString(env, "YUKI_MOUNT_MODELS", "/models"),
-    state: getString(env, "YUKI_MOUNT_STATE", "/data/state"),
-    voices: getString(env, "YUKI_MOUNT_VOICES", "/voices"),
+    pi: getString(env, "YUKI_MOUNT_PI_AGENT", CONTAINER_PATHS.pi),
+    workspace: getString(env, "YUKI_MOUNT_WORKSPACE", CONTAINER_PATHS.workspace),
+    models: getString(env, "YUKI_MOUNT_MODELS", CONTAINER_PATHS.models),
+    state: getString(env, "YUKI_MOUNT_STATE", CONTAINER_PATHS.state),
+    voices: getString(env, "YUKI_MOUNT_VOICES", CONTAINER_PATHS.voices),
   };
   const piAgentDir = getString(
     env,
@@ -185,14 +183,13 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
     ttsEngineConfigDir: getString(
       env,
       "YUKI_TTS_CONFIG_DIR",
-      "/data/tts-config",
+      CONTAINER_PATHS.ttsConfigDir,
     ),
     ttsEngineConfigMountDir: getString(
       env,
       "YUKI_TTS_ENGINE_CONFIG_DIR",
-      "/config",
+      CONTAINER_PATHS.ttsEngineConfigDir,
     ),
-    ttsModelsWriteDir: getString(env, "YUKI_TTS_MODELS_WRITE_DIR", "/models-dl"),
     ttsEngineModelsDir: getString(
       env,
       "YUKI_TTS_ENGINE_MODELS_DIR",

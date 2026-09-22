@@ -51,14 +51,15 @@ function fixture(): Fixture {
   tempDirs.push(root);
   const configDir = join(root, "tts-config");
   const modelsDir = join(root, "models");
-  const modelsWriteDir = join(root, "models-dl");
+  // Le chemin d'écriture est un SOUS-DOSSIER du montage des modèles (dérivé par
+  // le store, jamais configurable) : ici il n'est PAS créé (sous-dossier absent).
+  const modelsWriteDir = join(modelsDir, "downloads");
   mkdirSync(configDir, { recursive: true });
   mkdirSync(modelsDir, { recursive: true });
   const store = new EngineConfigStore({
     configDir,
     engineConfigDir: "/config",
     modelsDir,
-    modelsWriteDir,
     engineModelsDir: "/models",
   });
   return { root, configDir, modelsDir, modelsWriteDir, store };
@@ -226,10 +227,10 @@ describe("patch structuré — aller-retour fidèle", () => {
     expect(written.models[0].path).toBe("/models/chatterbox.gguf");
   });
 
-  it("traduit aussi le second montage inscriptible (/models-dl → /models)", () => {
+  it("traduit le sous-dossier d'écriture (/models/downloads → vue moteur)", () => {
     const fx = fixture();
     const report = fx.store.applyPatch({
-      models: [validModel({ path: join(fx.modelsWriteDir, "downloads", "x.gguf") })],
+      models: [validModel({ path: join(fx.modelsWriteDir, "x.gguf") })],
     });
     expect(report.models[0]?.path).toBe("/models/downloads/x.gguf");
   });
@@ -318,12 +319,36 @@ describe("sauvegarde et restauration", () => {
 });
 
 describe("état des montages et scan disque", () => {
-  it("signale le dossier config monté/inscriptible, et l'absence du montage rw modèles", () => {
+  it("signale le dossier config monté/inscriptible, et l'absence du sous-dossier de téléchargement", () => {
     const fx = fixture();
     const mounts = fx.store.mountState();
     expect(mounts.config.exists).toBe(true);
     expect(mounts.config.writable).toBe(true);
     expect(mounts.modelsWrite.exists).toBe(false);
+  });
+
+  it("dérive le chemin d'écriture en SOUS-DOSSIER du montage modèles (convention)", () => {
+    const fx = fixture();
+    // Non configurable : toujours `<models>/downloads` (convention d'organisation).
+    expect(fx.store.modelsWriteDir).toBe(join(fx.modelsDir, "downloads"));
+    expect(fx.store.mountState().modelsWrite.dir).toBe(join(fx.modelsDir, "downloads"));
+    // Le sous-dossier est traduit vers la vue moteur (même préfixe `/models`).
+    expect(fx.store.toEnginePath(join(fx.modelsDir, "downloads", "id", "model.gguf"))).toBe(
+      "/models/downloads/id/model.gguf",
+    );
+    // Hors du montage modèles : jamais traduisible.
+    expect(fx.store.toEnginePath("/ailleurs/x.gguf")).toBeNull();
+  });
+
+  it("ne liste pas deux fois les .gguf sous le sous-dossier d'écriture", () => {
+    const fx = fixture();
+    mkdirSync(join(fx.modelsDir, "downloads", "id"), { recursive: true });
+    writeFileSync(join(fx.modelsDir, "downloads", "id", "model.gguf"), "gguf");
+    writeFileSync(join(fx.modelsDir, "installe.gguf"), "gguf");
+    const paths = fx.store.report().diskModels.map((m) => m.enginePath);
+    expect(paths).toEqual([...new Set(paths)]);
+    expect(paths).toContain("/models/downloads/id/model.gguf");
+    expect(paths).toContain("/models/installe.gguf");
   });
 
   it("refuse l'écriture quand le dossier de config n'est pas monté", () => {
@@ -333,7 +358,6 @@ describe("état des montages et scan disque", () => {
       configDir: join(root, "absent"),
       engineConfigDir: "/config",
       modelsDir: join(root, "models"),
-      modelsWriteDir: join(root, "models-dl"),
       engineModelsDir: "/models",
     });
     try {
@@ -384,7 +408,6 @@ describe("état des montages et scan disque", () => {
       configDir: absent,
       engineConfigDir: "/config",
       modelsDir: join(root, "models"),
-      modelsWriteDir: join(root, "models-dl"),
       engineModelsDir: "/models",
     });
     store.report();

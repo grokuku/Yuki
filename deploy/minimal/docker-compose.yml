@@ -13,11 +13,12 @@ services:
       YUKI_GATEWAY_PORT: "8080"
     ports:
       - "${YUKI_GATEWAY_PORT:-8080}:8080"
-    # 5 volumes nommés ; `models` est monté en lecture seule.
+    # 5 volumes nommés ; le gateway monte `models` en `rw` (Lot 9, M1 : le
+    # moteur `tts`, s'il est ajouté, le monterait en `ro`).
     volumes:
       - pi:/data/pi
       - workspace:/workspace
-      - models:/models:ro
+      - models:/models
       - state:/data/state
       - voices:/voices
     restart: unless-stopped

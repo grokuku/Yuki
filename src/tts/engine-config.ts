@@ -25,11 +25,16 @@
  *     saisi librement.
  *
  * Correspondance des chemins (⚠️ honnêteté) : le gateway voit le dossier hôte
- * des modèles sous DEUX points de montage (`/models` en `ro`, `/models-dl` en
- * `rw`, ce second n'écrivant que sous `downloads/`) ; le moteur ne le voit que
- * sous `/models`. Un `models[].path` stocké est TOUJOURS le chemin **vu par le
- * moteur** ; la conversion dans les deux sens est explicite, et un chemin hors
- * de ces montages est « non vérifiable » (jamais prétendu existant).
+ * des modèles sous `/models`, monté `rw` (lecture + écriture des futurs
+ * téléchargements) ; le moteur ne le voit que sous `/models`, monté `ro`. Un
+ * `models[].path` stocké est TOUJOURS le chemin **vu par le moteur** ; la
+ * conversion dans les deux sens est explicite, et un chemin hors de ces
+ * montages est « non vérifiable » (jamais prétendu existant).
+ *
+ * ⚠️ Les téléchargements sont rangés par CONVENTION dans le sous-dossier
+ * `downloads/` (voir `MODELS_DOWNLOADS_SUBDIR`). Ce n'est PAS une barrière :
+ * comme le montage `/models` est `rw`, le gateway peut écrire partout sous
+ * `/models` — choix assumé (voir `docs/lot9.md`, D60).
  */
 
 import { randomBytes } from "node:crypto";
@@ -45,12 +50,18 @@ import {
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
+import { MODELS_DOWNLOADS_SUBDIR } from "../config/container-paths.js";
 import { probeWritable } from "../config/paths.js";
 
 /** Nom du fichier de configuration du moteur dans le dossier monté. */
 export const ENGINE_CONFIG_FILENAME = "server.json";
-/** Sous-dossier du montage inscriptible où le gateway écrira les téléchargements. */
-export const MODELS_DOWNLOADS_SUBDIR = "downloads";
+/**
+ * Sous-dossier (`/models/downloads`) où le gateway range les téléchargements.
+ * CONVENTION d'organisation DÉRIVÉE du montage `/models` (jamais configurable) :
+ * elle ne restreint pas l'écriture, le montage `/models` étant lui-même `rw`
+ * côté gateway. Source unique : `src/config/container-paths.ts`.
+ */
+export { MODELS_DOWNLOADS_SUBDIR };
 /** Profondeur maximale d'exploration des modèles sur le disque. */
 export const DISK_SCAN_MAX_DEPTH = 4;
 /** Nombre maximal de fichiers `.gguf` listés. */
@@ -243,8 +254,6 @@ export interface EngineConfigStoreOptions {
   fileName?: string;
   /** Premier montage des modèles, en `ro` côté gateway. */
   modelsDir: string;
-  /** Second montage du MÊME dossier hôte, en `rw`, pour les téléchargements. */
-  modelsWriteDir: string;
   /** Dossier des modèles tel que vu par le moteur. */
   engineModelsDir: string;
 }
@@ -530,6 +539,7 @@ export class EngineConfigStore {
   readonly engineConfigDir: string;
   readonly engineModelsDir: string;
   readonly modelsDir: string;
+  /** Toujours un SOUS-DOSSIER de `modelsDir` : DÉRIVÉ, jamais configurable. */
   readonly modelsWriteDir: string;
 
   constructor(options: EngineConfigStoreOptions) {
@@ -538,7 +548,10 @@ export class EngineConfigStore {
     this.configPath = join(this.configDir, options.fileName ?? ENGINE_CONFIG_FILENAME);
     this.backupPath = join(this.configDir, `${options.fileName ?? ENGINE_CONFIG_FILENAME}.bak`);
     this.modelsDir = resolve(options.modelsDir);
-    this.modelsWriteDir = resolve(options.modelsWriteDir);
+    // Le chemin d'écriture est DÉRIVÉ du montage des modèles (`/models` en
+    // `rw` côté gateway) : il en est TOUJOURS un sous-dossier (`downloads/`).
+    // C'est une convention d'organisation, pas une barrière de sécurité.
+    this.modelsWriteDir = join(this.modelsDir, MODELS_DOWNLOADS_SUBDIR);
     this.engineModelsDir = resolve(options.engineModelsDir);
   }
 
@@ -606,12 +619,11 @@ export class EngineConfigStore {
    */
   toEnginePath(gatewayOrEnginePath: string): string | null {
     const abs = resolve(gatewayOrEnginePath);
-    for (const [from, to] of [
-      [this.modelsDir, this.engineModelsDir],
-      [this.modelsWriteDir, this.engineModelsDir],
-    ] as const) {
-      if (abs === from) return to;
-      if (abs.startsWith(from + sep)) return join(to, abs.slice(from.length + 1));
+    // `modelsWriteDir` est un sous-dossier de `modelsDir` : la racine `modelsDir`
+    // couvre donc aussi les chemins de téléchargement.
+    if (abs === this.modelsDir) return this.engineModelsDir;
+    if (abs.startsWith(this.modelsDir + sep)) {
+      return join(this.engineModelsDir, abs.slice(this.modelsDir.length + 1));
     }
     if (abs === this.engineModelsDir) return abs;
     if (abs.startsWith(this.engineModelsDir + sep)) return abs;
@@ -668,9 +680,12 @@ export class EngineConfigStore {
 
   /** Liste (bornée) des fichiers `.gguf` présents sous les montages modèles. */
   listDiskModels(): { models: DiskModel[]; truncated: boolean } {
+    // `modelsWriteDir` est un sous-dossier de `modelsDir` : n'ajouter que les
+    // racines NON déjà couvertes, pour ne pas lister deux fois le même fichier.
     const roots: string[] = [];
     for (const root of [this.modelsDir, this.modelsWriteDir]) {
-      if (!roots.includes(root)) roots.push(root);
+      if (roots.some((known) => root === known || root.startsWith(known + sep))) continue;
+      roots.push(root);
     }
     const models: DiskModel[] = [];
     let truncated = false;

@@ -60,18 +60,22 @@ ARG YUKI_GID=1000
 # sur l'hôte. Sans ce `chown`, le volume serait initialisé en `root:root` et le
 # non-root échouerait à écrire (`/health/ready` → 503).
 # `/voices` (Lot 7) est le volume `yuki-voices` (registre + échantillons TTS).
-# `/models-dl` (Lot 9, M1) est le SECOND montage `rw` du volume modèles (écriture
-# réservée à `/models-dl/downloads/`) ; `/data/tts-config` (Lot 9, M2) est le
-# dossier de configuration du moteur écrit par le gateway. Les deux DOIVENT être
-# préparés ici pour que les volumes nommés soient initialisés en `1000:1000`.
+# `/models` (Lot 9, M1) est le volume modèles, monté `rw` côté gateway (lecture
+# + écriture des futurs téléchargements) ; `/models/downloads` est le
+# sous-dossier où le gateway range les téléchargements (convention, pas une
+# barrière — le montage `/models` lui-même est déjà `rw`) ; il est créé/`chown`
+# ici pour exister et appartenir à 1000:1000 dès l'initialisation du volume.
+# `/data/tts-config` (Lot 9, M2) est le dossier de configuration du moteur écrit
+# par le gateway. Les deux DOIVENT être préparés ici pour que les volumes nommés
+# soient initialisés en `1000:1000`.
 RUN set -eux; \
     if getent passwd node >/dev/null 2>&1; then userdel -r node || true; fi; \
     if getent group node >/dev/null 2>&1; then groupdel node || true; fi; \
     groupadd --gid "${YUKI_GID}" yuki; \
     useradd --uid "${YUKI_UID}" --gid "${YUKI_GID}" \
       --home-dir /app --shell /usr/sbin/nologin yuki; \
-    mkdir -p /data/pi /data/state /workspace /models /models-dl /voices /data/tts-config; \
-    chown -R "${YUKI_UID}:${YUKI_GID}" /data/pi /data/state /workspace /models /models-dl /voices /data/tts-config
+    mkdir -p /data/pi /data/state /workspace /models /models/downloads /voices /data/tts-config; \
+    chown -R "${YUKI_UID}:${YUKI_GID}" /data/pi /data/state /workspace /models /models/downloads /voices /data/tts-config
 
 # Dépendances de production uniquement (SDK Pi + `ws`, versions figées sans
 # caret). `NODE_ENV=production` est confiné à cet étage et n'affecte donc pas

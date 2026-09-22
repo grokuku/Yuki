@@ -21,8 +21,10 @@
 # ⚠️  C'est le VRAI GPU qui doit être détecté : aucune variable de simulation
 #     (`YUKI_GPU_FIXTURE`) ni de CI n'est définie ici.
 #
-# Les chemins de montage (`/data/pi`, `/workspace`, `/models`, `/data/state`)
-# sont EXACTEMENT ceux attendus par le code (`src/config/env.ts`).
+# Les chemins de montage (`/data/pi`, `/workspace`, `/models`, `/data/state`,
+# `/voices`, `/data/tts-config`, `/config`) sont EXACTEMENT les défauts du code
+# (`src/config/container-paths.ts`) : le compose n'explicite que les `target:`
+# des volumes et reste MUET sur les variables d'environnement de chemin interne.
 # =============================================================================
 
 name: yuki-server
@@ -45,39 +47,16 @@ services:
       # Port CONTENEUR fixe (8080) ; seul le port HÔTE est paramétrable.
       YUKI_GATEWAY_PORT: "8080"
       YUKI_GATEWAY_HOST: 0.0.0.0
-      YUKI_CONFIG_DIR: ${YUKI_CONFIG_DIR:-./config}
+      #
+      # ⚠️ AUCUN chemin INTERNE au conteneur n'est défini ici (cibles `/models`,
+      # `/data/tts-config`, `/config`, `/voices`, `/data/pi`, `/workspace`,
+      # `/data/state`, `/app/config/…`). Ce sont des DÉFAUTS DU CODE
+      # (`src/config/container-paths.ts`), EXACTEMENT égaux aux cibles des
+      # `volumes:` ci-dessous. Le compose reste muet à leur sujet ; la surcharge
+      # par variable reste lue (rétro-compatibilité). Voir `docs/lot9.md` (D61).
 
-      # --- Chemins conteneur des volumes nommés ---
-      YUKI_MOUNT_PI_AGENT: /data/pi
-      YUKI_MOUNT_WORKSPACE: /workspace
-      YUKI_MOUNT_MODELS: /models
-      YUKI_MOUNT_STATE: /data/state
-      # Volume des voix TTS (Lot 7) — registre + échantillons (rw gateway).
-      YUKI_MOUNT_VOICES: /voices
-
-      # --- Configuration du moteur TTS `audio.cpp` (Lot 9, étape 1) ---
-      # Dossier de config du moteur, VU PAR LE GATEWAY (bind `rw`, M2 ci-dessous).
-      YUKI_TTS_CONFIG_DIR: /data/tts-config
-      # SECOND montage du dossier modèles, en `rw`, réservé aux téléchargements
-      # (`/models-dl/downloads/`). `/models` reste `ro` (M1).
-      YUKI_TTS_MODELS_WRITE_DIR: /models-dl
-      # Point de vue du MOTEUR (traduction des `models[].path`).
-      YUKI_TTS_ENGINE_MODELS_DIR: /models
-      YUKI_TTS_ENGINE_CONFIG_DIR: /config
-
-      # --- Pi embarqué : état du SDK redirigé hors du rootfs read-only ---
-      YUKI_PI_AGENT_DIR: /data/pi/agent
-      YUKI_PI_SESSIONS_DIR: /data/pi/agent/sessions
-      YUKI_PI_HOME: /data/pi/home
-      YUKI_PI_CWD: /workspace
-      YUKI_PI_SYSTEM_PROMPT: /app/config/pi/system-prompt.md
-      YUKI_PI_SETTINGS_SEED: /app/config/pi/settings.json
-      YUKI_PI_HEAVY_SYSTEM_PROMPT: /app/config/pi/system-prompt-heavy.md
-
-      # --- Environnement SDK Pi (HOME inscriptible sur le volume pi) ---
-      HOME: /data/pi/home
-      PI_CODING_AGENT_DIR: /data/pi/agent
-      PI_CODING_AGENT_SESSION_DIR: /data/pi/agent/sessions
+      # --- Environnement SDK Pi (coupure des opérations réseau au démarrage) ---
+      # Non-chemin, redondant avec `applyPiEnvironment` (`src/pi/config.ts`).
       PI_OFFLINE: "1"
       PI_SKIP_VERSION_CHECK: "1"
       PI_TELEMETRY: "0"
@@ -92,7 +71,8 @@ services:
     ports:
       - "${YUKI_GATEWAY_PORT:-8080}:8080"
 
-    # 5 volumes nommés (RW sauf `models`, monté en lecture seule `:ro`).
+    # 5 volumes nommés (tous RW ; le volume modèles est partagé : `rw` côté
+    # gateway, `ro` côté moteur `tts`).
     volumes:
       - type: volume
         source: yuki-server-pi
@@ -100,16 +80,13 @@ services:
       - type: volume
         source: yuki-server-workspace
         target: /workspace
+      # Lot 9 (M1) : UN SEUL montage `/models`, en `rw` côté gateway (lecture +
+      # écriture des futurs téléchargements ; `downloads/` = convention
+      # d'organisation, pas une barrière). ⚠️ Le moteur `tts` garde son montage
+      # `/models` en `ro` (plus bas).
       - type: volume
         source: yuki-server-models
         target: /models
-        read_only: true
-      # Lot 9 (M1) : SECOND montage du MÊME volume modèles, en `rw`, sur un
-      # chemin DISTINCT (`/models-dl`). Le gateway n'écrit QUE sous
-      # `/models-dl/downloads/` (téléchargements — étape suivante).
-      - type: volume
-        source: yuki-server-models
-        target: /models-dl
       # Lot 9 (M2) : dossier de config du moteur, bind `rw` côté gateway (le
       # moteur le monte en `ro` sur `/config`, M3). Créer `./tts-config` sur
       # l'hôte AVANT `docker compose up` (voir README de déploiement).
@@ -193,8 +170,9 @@ services:
   #
   # ⚠️ Le chemin `/config/server.json` est un choix Yuki (le WORKDIR de l'image
   # n'est pas attesté) : il est cohérent entre le compose (M3), le gateway et
-  # l'interface. Le chemin d'origine `/app/server.json` reste possible si vous
-  # préférez monter le dossier ailleurs (variable `YUKI_TTS_ENGINE_CONFIG_DIR`).
+  # l'interface. C'est un DÉFAUT DU CODE ; ne définissez PAS
+  # `YUKI_TTS_ENGINE_CONFIG_DIR` ici (surcharge possible, mais réservée aux
+  # relocalisations avancées — voir `docs/lot9.md` D61).
   # ===========================================================================
   tts:
     image: ${YUKI_TTS_IMAGE:-ghcr.io/0xshug0/audio.cpp:full-cuda13}

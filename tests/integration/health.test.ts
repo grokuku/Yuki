@@ -107,7 +107,9 @@ describe("gateway HTTP (fixture RTX 4070)", () => {
       "voices",
     ]);
     const models = body.volumes.find((volume) => volume.id === "models");
-    expect(models?.mode).toBe("ro");
+    // Lot 9 (M1) : le gateway monte désormais `/models` en `rw` (écriture des
+    // futurs téléchargements) ; le moteur, lui, le monte en `ro`.
+    expect(models?.mode).toBe("rw");
     // Lot 7 : le volume des voix est inscriptible par le gateway.
     const voices = body.volumes.find((volume) => volume.id === "voices");
     expect(voices?.mode).toBe("rw");

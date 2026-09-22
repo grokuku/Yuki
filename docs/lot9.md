@@ -13,9 +13,13 @@
 > **Style.** Sections numérotées ; tableaux de décisions **« Acté »** (`D##`) et
 > **« À confirmer »** (`C##`) ; chaque affirmation est adossée à une preuve
 > `fichier:ligne` ou explicitement marquée **non attestée**. La numérotation
-> **poursuit** celle des lots précédents : décisions **D46 → D58**, points
+> **poursuit** celle des lots précédents : décisions **D46 → D61**, points
 > ouverts **C30 → C36** (dernier `D45` : `docs/lot8.md:645` ; dernier `C29` :
-> `docs/lot8.md:662`).
+> `docs/lot8.md:662`). ⚠️ Un travail intermédiaire (montage **imbriqué** du
+> sous-dossier, via l'option Compose de **sous-chemin de volume**) a créé puis
+> **retiré** les identifiants **D59** et **C37** : ils ne sont **PAS
+> réattribués** ; la forme simple de M1 est actée en **D60** (§13), et la
+> **simplification des variables de chemin** en **D61** (§3.1).
 
 ## Contexte
 
@@ -29,7 +33,7 @@ Le Lot 9, étape 1 **ferme ce trou** en exposant `server.json` sous forme d'un
 **patch structuré** (listes fermées), écrit **atomiquement** dans un **dossier**
 monté `rw`. Le **téléchargement des modèles depuis l'interface N'EST PAS dans ce
 lot** (c'est l'étape 2) — mais les **montages `M1`** et les chemins sont déjà
-conçus pour s'y brancher (`/models-dl/downloads/`).
+conçus pour s'y brancher (`/models/downloads/`).
 
 **Décisions produit intégrées** : le TTS doit rester testable/réglable **sans
 terminal** ; toute action impossible depuis l'UI est **documentée honnêtement** ;
@@ -41,10 +45,12 @@ le **socket Docker reste refusé**.
 
 ### Ce que fait le Lot 9, étape 1
 
-1. **Montages** (M1/M2/M3, §3) : le gateway reçoit un **2ᵉ montage `rw`** du
-   dossier des modèles (`/models-dl`, réservé aux téléchargements futurs) et le
-   dossier de config du moteur (`/data/tts-config`) ; le moteur garde son
-   dossier de config en **`ro`** (`/config`) et sa commande **inchangée**.
+1. **Montages** (M1/M2/M3, §3) : le gateway reçoit le dossier des modèles en
+   **`rw`** (`/models`, lecture + écriture future des téléchargements, rangés
+   par convention dans `downloads/`) et le dossier de config du moteur
+   (`/data/tts-config`) ; le moteur garde son dossier des modèles en **`ro`**
+   (`/models`) et son dossier de config en **`ro`** (`/config`), commande
+   **inchangée** (`server --config /config/server.json`).
 2. **Routes structurées** (§4) : `GET`/`PUT /api/tts/engine-config`, `POST
    /api/tts/engine-config/revert`, `GET /api/tts/capabilities`.
 3. **Listes fermées** (§5) qui **empêchent les erreurs connues** : `task`
@@ -73,13 +79,13 @@ le **socket Docker reste refusé**.
 
 | Fait | Preuve |
 | --- | --- |
-| Le moteur lit **un fichier** `server.json` **à son démarrage** | `command: ["server", "--config", "/config/server.json"]` (`docker-compose.yml:202`) |
+| Le moteur lit **un fichier** `server.json` **à son démarrage** | `command: ["server", "--config", "/config/server.json"]` (`docker-compose.yml:198`) |
 | Un `rename` est **impossible** sur un fichier **bind-monté** ⇒ il faut monter un **dossier** | `docs/lot7.md` (approvisionnement) ; conception M2 §3 |
 | Le gateway **n'a aucun accès Docker** (pas de socket) | `docker-compose.yml` (aucun `/var/run/docker.sock`), `docs/lot8.md` §2.1 |
-| Le gateway tourne **non-root** (uid/gid `1000`) | `docker-compose.yml:84` (`user: "${YUKI_UID:-1000}:${YUKI_GID:-1000}"`), `infra/gateway/Dockerfile:49-50` |
-| Le vocabulaire de tâche canonique est **`clon`** (jamais `clone`) | `src/tts/engine-config.ts:63-78`, `docs/lot8.md` §11.11 (`parse_voice_task_kind`) |
-| `chatterbox`/`cosyvoice3` n'acceptent que **`offline`** | `src/tts/engine-config.ts:106`, `docs/lot8.md` §13.3 |
-| Les 5 moteurs connus de Yuki | `src/tts/engine-config.ts:97-103` |
+| Le gateway tourne **non-root** (uid/gid `1000`) | `docker-compose.yml:83` (`user: "${YUKI_UID:-1000}:${YUKI_GID:-1000}"`), `infra/gateway/Dockerfile:49-50` |
+| Le vocabulaire de tâche canonique est **`clon`** (jamais `clone`) | `src/tts/engine-config.ts:73-88`, `docs/lot8.md` §11.11 (`parse_voice_task_kind`) |
+| `chatterbox`/`cosyvoice3` n'acceptent que **`offline`** | `src/tts/engine-config.ts:116`, `docs/lot8.md` §13.3 |
+| Les 5 moteurs connus de Yuki | `src/tts/engine-config.ts:107-113` |
 
 ---
 
@@ -90,26 +96,32 @@ moteur n'est `rw`** (le moteur ne fait que **lire** son environnement).
 
 | # | Service | Hôte / volume | Cible conteneur | Mode | Rôle |
 | --- | --- | --- | --- | --- | --- |
-| **M1** | `gateway` | **même** dossier/volume modèles | `/models-dl` | **`rw`** | écriture **future** des téléchargements (`/models-dl/downloads/`) |
-| — | `gateway` | dossier/volume modèles | `/models` | **`ro`** | lecture (invariant **conservé**) |
+| **M1** | `gateway` | dossier/volume modèles | `/models` | **`rw`** | lecture + écriture **future** des téléchargements (`/models/downloads/`) |
 | **M2** | `gateway` | dossier de config du moteur | `/data/tts-config` | **`rw`** | écriture **atomique** de `server.json` |
 | **M3** | `tts` | **même** dossier de config | `/config` | **`ro`** | lecture par le moteur à son démarrage |
 | — | `tts` | dossier/volume modèles | `/models` | **`ro`** | lecture des GGUF (invariant **conservé**) |
 
-**Preuves.** Compose de base (volumes nommés) : `docker-compose.yml:108-118`
-(M1/M2), `:212-214` (M3, `read_only: true`), `:264-266` (volume
-`yuki-tts-config`). Surcharge bind : `compose.bind.example.yml:48-56` (M1/M2),
-`:69-72` (M3). Variante serveur autonome : `deploy/server/docker-compose.yml:60-63,117-118`
-(gateway), `:205,212-214` (moteur).
+**Preuves.** Compose de base (volumes nommés) : `docker-compose.yml:106-107`
+(M1), `:113-114` (M2), `:208-210` (M3, `read_only: true`), `:213-215` (modèles du
+moteur, `ro`), `:260-261` (volume `yuki-tts-config`). Surcharge bind :
+`compose.bind.example.yml:48-49` (M1), `:52-53` (M2), `:68-70` (M3),
+`:72-74` (modèles du moteur, `ro`). Variante serveur autonome :
+`deploy/server/docker-compose.yml:107-108` (M1), `:113-114` (M2), `:208-210`
+(M3), `:212-214` (modèles du moteur, `ro`).
 
 **Justifications.**
 
-- **M1** — le **même** dossier est monté **deux fois** dans le gateway : une fois
-  `ro` (`/models`) pour la lecture/diagnostic, une fois `rw` (`/models-dl`) pour
-  l'écriture **cloisonnée** au sous-dossier `downloads/` (`src/tts/engine-config.ts:31`
-  `MODELS_DOWNLOADS_SUBDIR`). Le montage du **moteur** reste `ro`.
+- **M1** — le dossier des modèles est monté **une seule fois**, en **`rw`**, sur
+  `/models` côté gateway : le gateway peut **lire** (diagnostic) **et écrire** les
+  futurs téléchargements (`src/tts/engine-config.ts:63` `MODELS_DOWNLOADS_SUBDIR`,
+  joint à `/models` → `<models>/downloads`). ⚠️ **Honnêteté** : ce choix donne au
+  gateway un accès en **écriture à TOUT `/models`** ; le sous-dossier `downloads/`
+  n'est qu'une **CONVENTION d'organisation**, **PAS** une barrière de sécurité.
+  C'est un choix **assumé** par l'opérateur (composant de confiance, sur sa
+  propre machine, modèles de ~2 Go) — voir **D60**. Le montage du **moteur** reste
+  `ro`.
 - **M2** — on monte un **dossier**, pas un fichier : l'écriture atomique
-  (`tmp` + `rename`, `src/tts/engine-config.ts:257-263`) est **impossible** sur un
+  (`tmp` + `rename`, `src/tts/engine-config.ts:265-270`) est **impossible** sur un
   fichier bind-monté. C'est la raison d'être de M2.
 - **M3** — le moteur monte le **même dossier hôte** en `ro` sur `/config` ; la
   commande reste `server --config /config/server.json`. **Aucun** montage `rw`
@@ -119,16 +131,46 @@ moteur n'est `rw`** (le moteur ne fait que **lire** son environnement).
 `root:root` ; le conteneur (uid 1000) ne pourrait pas écrire. Sur l'hôte :
 
 ```bash
-mkdir -p .local/tts-config .local/models
-chown -R 1000:1000 .local/tts-config .local/models
+mkdir -p .local/tts-config .local/models/downloads
+chown -R 1000:1000 .local/tts-config .local/models/downloads
 ```
 
+(`.local/models` est monté `rw` côté gateway ; le sous-dossier `downloads/` est
+créé et donné à `1000:1000` pour que l'étape 2 puisse y ranger ses fichiers.)
+
 **Volumes nommés.** Aucune préparation n'est nécessaire **si** le répertoire
-existe déjà **dans l'image** avec le bon propriétaire : `infra/gateway/Dockerfile:73-74`
-crée **et** `chown` `/models-dl` et `/data/tts-config` (patron de `/voices`).
-Sans cela, Docker initialise le volume en `root:root` et le gateway **ne peut pas
-écrire**. Preuve : `infra/gateway/Dockerfile:73` (`mkdir -p … /models-dl … /data/tts-config`),
-`:74` (`chown -R "${YUKI_UID}:${YUKI_GID}" …`).
+existe déjà **dans l'image** avec le bon propriétaire : `infra/gateway/Dockerfile:74-75`
+crée **et** `chown` `/models` (dont `/models/downloads`) et `/data/tts-config`
+(patron de `/voices`). Sans cela, Docker initialise le volume en `root:root` et le
+gateway **ne peut pas écrire**. Preuve : `infra/gateway/Dockerfile:74` (`mkdir -p
+… /models /models/downloads … /data/tts-config`), `:75` (`chown -R
+"${YUKI_UID}:${YUKI_GID}" …`).
+
+ℹ️ Il n'y a **plus** de prérequis de version Compose (l'option de **sous-chemin
+de volume** a été retirée, voir **D60**) et **plus aucune migration** de volume
+existant : le montage porte sur le dossier `/models` déjà présent.
+
+### 3.1 Chemins internes = défauts du code, compose muet (D61)
+
+Décision **D61** : les **cibles de montage** internes (`/models`,
+`/data/tts-config`, `/config`, `/voices`, `/data/pi`, `/workspace`,
+`/data/state`, et les chemins Pi dérivés `…/agent`, `…/agent/sessions`,
+`…/home`) sont des **défauts du code**. Ils vivent dans une **source unique**,
+`CONTAINER_PATHS` (`src/config/container-paths.ts:20-35`), consommée par
+`src/config/env.ts:158-195`. Les composes ne définissent **AUCUNE** variable
+d'environnement de chemin interne : ils restent **explicites** sur leurs montages
+(`volumes: … target: /models`, …) et **muets** sur les variables.
+
+La **surcharge par variable** (`YUKI_MOUNT_*`, `YUKI_TTS_CONFIG_DIR`,
+`YUKI_TTS_ENGINE_CONFIG_DIR`, `YUKI_TTS_ENGINE_MODELS_DIR`, `YUKI_PI_*`,
+`YUKI_CONFIG_DIR`) **reste lue** — capacité conservée pour les déploiements
+existants, `deploy/minimal` et la CI, PAS un réglage à renseigner.
+
+**Garde-fou.** `tests/config/container-paths.test.ts` vérifie, dans les deux
+sens : (a) sans variable, les défauts **égalent EXACTEMENT** les `target:` des
+composes ; (b) avec variable, la surcharge fonctionne ; (c) aucun compose ne
+définit de variable de chemin interne. Une désynchronisation code ↔ compose est
+donc **impossible par accident**.
 
 ---
 
@@ -144,7 +186,7 @@ engine_config_unavailable`** (`src/gateway/routes/tts.ts:944-950`).
 - **Garde-fous** : aucun (lecture).
 - **Réponse** : **toujours `200`** — un état « non monté » est un **cas normal**,
   pas une erreur (`src/gateway/routes/tts.ts:952-956`).
-- **Corps** : `EngineConfigReport` (`src/tts/engine-config.ts:211-240`) —
+- **Corps** : `EngineConfigReport` (`src/tts/engine-config.ts:221-246`) —
   notamment `mounted`, `writable`, `available`, `fileExists`, `valid`,
   `parseError`, `backupExists`, `globals`, `models` (avec `pathStatus`
   `exists|missing|unverifiable`), `unknownTopLevelKeys`, `diagnostics`,
@@ -167,29 +209,30 @@ engine_config_unavailable`** (`src/gateway/routes/tts.ts:944-950`).
   | `422` | `config_invalid` | `server.json` existant illisible (jamais écrasé) |
   | `503` | `config_dir_not_mounted` / `config_dir_unwritable` / `engine_config_unavailable` | montage/wiring |
   | `500` | `backup_failed` / `config_write_failed` / `engine_config_failed` | E/S |
-  Erreurs portées par `EngineConfigError` (`src/tts/engine-config.ts:144-152`),
+  Erreurs portées par `EngineConfigError` (`src/tts/engine-config.ts:154-164`),
   mappées par `engineConfigErrorResponse` (`src/gateway/routes/tts.ts:959-975`).
 
 ### 4.3 `POST /api/tts/engine-config/revert`
 
 - **Garde-fous** : `requireWriteGuards` (**requis**, y compris en l'absence de
-  `.bak`). Preuve : test `tests/integration/tts-engine-config.test.ts:280-303`.
+  `.bak`). Preuve : test `tests/integration/tts-engine-config.test.ts:278-302`.
 - **Réponses** : `200` (restauré), `404 no_backup`, `422 backup_invalid`,
   `500 backup_unreadable`/`config_write_failed`, `503` non câblé.
 - **Sémantique** : `server.json.bak` → `server.json`, **atomiquement** ;
-  le `.bak` **n'est pas** supprimé (`src/tts/engine-config.ts:975-1018`).
+  le `.bak` **n'est pas** supprimé (`src/tts/engine-config.ts:989-1037`).
 
 ### 4.4 `GET /api/tts/capabilities`
 
 - **Garde-fous** : aucun (lecture) ; ne fait qu'une **sonde** (§8).
 - **Réponse** : **`200` toujours**, même moteur injoignable
   (`unloadModels: null`). Preuve : test
-  `tests/integration/tts-engine-config.test.ts:334-346`.
+  `tests/integration/tts-engine-config.test.ts:332-346`.
 
 **Traduction des chemins.** Le `path` **stocké** est **toujours** le chemin **vu
-par le moteur** (`/models/…`). Le gateway accepte en écriture un chemin vu par
-lui (`/models` **ou** `/models-dl`) et le **traduit**
-(`EngineConfigStore.toEnginePath`, `src/tts/engine-config.ts:607-629`).
+par le moteur** (`/models/…`). Le gateway accepte en écriture tout chemin vu par
+lui sous `/models` (y compris le sous-dossier de téléchargement
+`/models/downloads`) et le **traduit** (`EngineConfigStore.toEnginePath`,
+`src/tts/engine-config.ts:619-631`).
 
 ---
 
@@ -197,11 +240,11 @@ lui (`/models` **ou** `/models-dl`) et le **traduit**
 
 | Champ | Valeurs autorisées | Comportement | Preuve |
 | --- | --- | --- | --- |
-| `task` | jetons canoniques `vad\|asr\|diar\|sep\|gen\|tts\|clon\|vc\|s2s\|align\|vdes\|spk\|svc\|midi` | `clone` **refusé** avec un message nommant `clon` | `src/tts/engine-config.ts:63-78`, `:384-394` ; `public/ui/engine-config-patch.js:16-32` |
-| `mode` | `offline\|streaming` | `offline` **obligatoire** pour `chatterbox`/`cosyvoice3` | `src/tts/engine-config.ts:81`, `:106`, `:396-411` |
-| `family` | `chatterbox\|qwen3-tts\|cosyvoice3\|kokoro\|sanotts` | hors liste ⇒ `400` | `src/tts/engine-config.ts:84-90` |
-| `id` | les **5** valeurs de `tts.engine` | hors liste ⇒ **accepté mais signalé** (`report.warnings`) | `src/tts/engine-config.ts:97-103`, `:730-734` |
-| `path` | un `.gguf` **présent** dans les montages | hors montages ⇒ refusé ; `..` interdit ; absolu requis | `src/tts/engine-config.ts:414-438`, `:909-917` |
+| `task` | jetons canoniques `vad\|asr\|diar\|sep\|gen\|tts\|clon\|vc\|s2s\|align\|vdes\|spk\|svc\|midi` | `clone` **refusé** avec un message nommant `clon` | `src/tts/engine-config.ts:73-88`, `:391-402` ; `public/ui/engine-config-patch.js:16-32` |
+| `mode` | `offline\|streaming` | `offline` **obligatoire** pour `chatterbox`/`cosyvoice3` | `src/tts/engine-config.ts:91`, `:116`, `:403-420` |
+| `family` | `chatterbox\|qwen3-tts\|cosyvoice3\|kokoro\|sanotts` | hors liste ⇒ `400` | `src/tts/engine-config.ts:94-100` |
+| `id` | les **5** valeurs de `tts.engine` | hors liste ⇒ **accepté mais signalé** (`report.warnings`) | `src/tts/engine-config.ts:107-113`, `:744-747` |
+| `path` | un `.gguf` **présent** dans les montages | hors montages ⇒ refusé ; `..` interdit ; absolu requis | `src/tts/engine-config.ts:421-448`, `:923-930` |
 
 **Idempotence UI** : les mêmes listes sont appliquées **côté navigateur** (avant
 envoi) pour un retour immédiat (`validateModelDraft`,
@@ -211,7 +254,7 @@ ne fait pas confiance au client.
 **`clone` au lieu de `clon`** : la saisie est impossible via l'UI (le `task` est
 un `<select>` alimenté par la liste), et un envoi direct est refusé **`400`**
 avec `models[0].task` dans `fields[]` (test
-`tests/integration/tts-engine-config.test.ts:242-254`).
+`tests/integration/tts-engine-config.test.ts:240-253`).
 
 **`mode` invalide** : refusé `400` ; un `streaming` sur une famille forcée est
 refusé avec `mode_not_supported`. Preuve :
@@ -226,15 +269,15 @@ refusé avec `mode_not_supported`. Preuve :
   clés de premier niveau **inconnues** (`cors_origins`, `live_ingest`,
   `load_options`, …) et les clés **inconnues par entrée** (même `id`) sont
   conservées telles quelles. Preuve :
-  `src/tts/engine-config.ts:840-945`, tests
+  `src/tts/engine-config.ts:817-959`, tests
   `tests/tts/engine-config.test.ts` (« préserve les clés inconnues… »,
   « conserve les clés inconnues d'une entrée réécrite »).
 - **Écriture atomique.** `tmp` + `rename` dans le **même** dossier (M2), mode
   `0o644`, aucun fichier `.tmp-*` résiduel. Preuve :
-  `src/tts/engine-config.ts:257-263`, test « écrit de façon ATOMIQUE ».
+  `src/tts/engine-config.ts:265-270`, test « écrit de façon ATOMIQUE ».
 - **Sauvegarde unique.** Avant chaque écriture, l'ancien contenu devient
   `server.json.bak` (**une** version précédente). Preuve :
-  `src/tts/engine-config.ts:947-973`, test « conserve UNE sauvegarde ».
+  `src/tts/engine-config.ts:961-987`, test « conserve UNE sauvegarde ».
 - **Restauration.** `POST …/revert` réécrit `server.json` depuis le `.bak`
   (**atomiquement**), sans supprimer le `.bak`.
 
@@ -249,12 +292,12 @@ Une installation **déjà déployée** (fichier de config seul, sans M2) doit
 - **Lecture** : `GET` répond `200` avec `mounted:false`, `available:false`, et un
   message qui **dit** que le dossier n'est pas monté
   (`public/ui/engine-config-patch.js:349-362`). Preuve : test
-  `tests/integration/tts-engine-config.test.ts:179-186`.
+  `tests/integration/tts-engine-config.test.ts:177-184`.
 - **Écriture** : `PUT` répond `503 config_dir_not_mounted` — **jamais** `500`.
-  Preuve : test `tests/integration/tts-engine-config.test.ts:256-265`.
+  Preuve : test `tests/integration/tts-engine-config.test.ts:254-263`.
 - **Lecture disque** : `report()` n'appelle `probeWritable` que si le dossier
   **existe** ⇒ aucune création de dossier par une lecture (rootfs gateway
-  `read_only: true`). Preuves : `src/tts/engine-config.ts:638-666`, test « ne crée
+  `read_only: true`). Preuves : `src/tts/engine-config.ts:649-679`, test « ne crée
   jamais le dossier de config lors d'une lecture ».
 
 ---
@@ -264,7 +307,7 @@ Une installation **déjà déployée** (fichier de config seul, sans M2) doit
 On ne veut **jamais** décharger un modèle réellement utilisé en « testant » une
 route. La sonde envoie donc un **id sentinelle** qui ne peut correspondre à
 aucun modèle : `__yuki_capability_probe__`
-(`src/tts/engine-config.ts:1049`, `:1119`).
+(`src/tts/engine-config.ts:1063`, `:1133`).
 
 | Statut moteur | Lecture | `unloadModels` |
 | --- | --- | --- |
@@ -307,12 +350,13 @@ son **existence réelle n'est pas re-vérifiée ici** (C33).
 
 ### 10.1 Étape 2 — téléchargement des modèles (hors de ce lot)
 
-Les montages et chemins sont **prêts** : `M1` (`/models-dl`, `rw`) et le
-sous-dossier `downloads/` (`MODELS_DOWNLOADS_SUBDIR`,
-`src/tts/engine-config.ts:31`). Le **code de téléchargement est absent** :
+Les montages et chemins sont **prêts** : `M1` (`/models`, `rw`) et
+`MODELS_DOWNLOADS_SUBDIR` (`src/tts/engine-config.ts:63`), à partir duquel le code
+**dérive** le chemin d'écriture `<models>/downloads` (plus de variable dédiée).
+Le **code de téléchargement est absent** :
 aujourd'hui, le bloc « Ce qui reste à faire à la main » de l'assistant **conserve**
 donc l'action « déposer le fichier du modèle »
-(`public/ui/tts-assistant.js:1535-1590`) — elle est **encore nécessaire**, et le
+(`public/ui/tts-assistant.js:1535-1591`) — elle est **encore nécessaire**, et le
 message le dit explicitement. Quand l'étape 2 sera livrée, cette action
 **disparaîtra** (au moins pour la variante qui télécharge).
 
@@ -333,15 +377,15 @@ les chemins (liste fermée) mais **ne devine pas** les entrées. À trancher (§
 1. **Préparer l'hôte.** Pour un **bind mount** (dossier visible sur l'hôte) :
 
    ```bash
-   mkdir -p <hôte>/tts-config <hôte>/models
-   chown -R 1000:1000 <hôte>/tts-config          # le conteneur écrit ici
-   # <hôte>/models : lecture seule côté moteur, mais le gateway écrit dans
-   # /models-dl (mêmes permissions 1000:1000 nécessaires pour l'étape 2).
+   mkdir -p <hôte>/tts-config <hôte>/models/downloads
+   chown -R 1000:1000 <hôte>/tts-config <hôte>/models
    ```
 
-   Pour des **volumes nommés**, cette étape est inutile : le Dockerfile crée et
-   `chown` déjà `/models-dl` et `/data/tts-config`
-   (`infra/gateway/Dockerfile:73-74`).
+   Le gateway monte `<hôte>/models` en `rw` (il peut y écrire) ; le sous-dossier
+   `downloads/` est une **convention** de rangement pour l'étape 2, **pas** une
+   barrière. Pour des **volumes nommés**, cette étape est inutile : le Dockerfile
+   crée et `chown` déjà `/models` (dont `/models/downloads`) et `/data/tts-config`
+   (`infra/gateway/Dockerfile:74-75`).
 
 2. **Appliquer le compose.** Dans l'UI Docker de l'utilisateur (Unraid :
    *Edit* → *Apply*), ou en CLI :
@@ -375,7 +419,7 @@ les chemins (liste fermée) mais **ne devine pas** les entrées. À trancher (§
 
 | Vérification | Résultat |
 | --- | --- |
-| `npm test` | **626 passed / 4 skipped** (dont +2 : `tests/ui/ui-modules-defined.test.ts`) — avant ce lot : `624 passed / 4 skipped` |
+| `npm test` | **636 passed / 4 skipped** (avant la simplification des variables : 628 passed / 4 skipped ; +8 : `tests/config/container-paths.test.ts`, garde-fou des chemins internes) |
 | `npm run typecheck` | vert |
 | `npm run build` | vert |
 | `node --check` (JS UI + harnais E2E) | vert |
@@ -395,26 +439,28 @@ symboles (`tests/ui/ui-modules-defined.test.ts`), et **E2E qui rejoue le bug**
 
 | # | Décision | Preuve |
 | --- | --- | --- |
-| **D46** | **M1 — second montage `rw` du dossier modèles** sur un chemin **distinct** (`/models-dl`), `/models` **reste `ro`** ; écriture future **cloisonnée** à `/models-dl/downloads/`. | `docker-compose.yml:108-111`, `compose.bind.example.yml:44-49`, `src/tts/engine-config.ts:31` |
-| **D47** | **M2 — le gateway monte le DOSSIER de config du moteur en `rw`** (`/data/tts-config`) : nécessaire à l'écriture **atomique** (`rename` impossible sur un fichier bind-monté). | `docker-compose.yml:112-118`, `src/tts/engine-config.ts:257-263` |
-| **D48** | **M3 — le moteur monte le dossier de config en `ro`** sur `/config` ; **commande inchangée** (`server --config /config/server.json`) ; **aucun** montage moteur `rw`. | `docker-compose.yml:202,212-214`, `deploy/server/docker-compose.yml:205,212-214` |
-| **D49** | **Listes fermées** : `task` canonique (`clon`, **jamais** `clone`), `mode` `offline\|streaming`, `family` fermée — validation **client ET serveur**. | `src/tts/engine-config.ts:63-90`, `public/ui/engine-config-patch.js:16-59` |
-| **D50** | **`offline` obligatoire** pour `chatterbox`/`cosyvoice3` (tout autre mode refusé, `mode_not_supported`). | `src/tts/engine-config.ts:106,396-411` |
-| **D51** | **`id` = les 5 valeurs de `tts.engine`** ; un id hors liste est **accepté mais signalé** (le moteur le charge, Yuki ne saura pas le sélectionner). | `src/tts/engine-config.ts:97-103,730-734` |
-| **D52** | **`path` choisi parmi les `.gguf` présents** ; chemin **stocké = vue moteur** ; traduction gateway↔moteur explicite ; hors montages refusé. | `src/tts/engine-config.ts:607-629,909-917` |
-| **D53** | **Préservation fidèle** des clés inconnues (top-level et par entrée de même `id`) lors du patch. | `src/tts/engine-config.ts:840-945` |
-| **D54** | **Écriture atomique** (`tmp`+`rename`) + **`server.json.bak`** (une version) + **route de restauration**. | `src/tts/engine-config.ts:257-263,947-1018`, `src/gateway/routes/tts.ts:999-1008` |
-| **D55** | **Rétro-compatibilité** : sans M2, `GET` `200` avec `mounted:false` et `PUT` `503 config_dir_not_mounted` ; **rien ne casse**. | `src/gateway/routes/tts.ts:952-956`, `tests/integration/tts-engine-config.test.ts:179-186,256-265` |
-| **D56** | **Sonde de capacités sans effet de bord** (id sentinelle) ; la fonction n'est montrée que si la route est **confirmée**. | `src/tts/engine-config.ts:1047-1161`, `public/ui/engine-config-patch.js:394-405` |
+| **D46** | **M1 — le gateway monte le dossier des modèles en `rw`** (`/models`) : lecture + écriture **future** des téléchargements. Le sous-dossier `downloads/` est une **CONVENTION** d'organisation (`MODELS_DOWNLOADS_SUBDIR` **dérivé**), **pas** une barrière. Le montage du **moteur** reste `ro`. | `docker-compose.yml:106-107,213-215`, `compose.bind.example.yml:48-49,72-74`, `src/tts/engine-config.ts:63,553` |
+| **D47** | **M2 — le gateway monte le DOSSIER de config du moteur en `rw`** (`/data/tts-config`) : nécessaire à l'écriture **atomique** (`rename` impossible sur un fichier bind-monté). | `docker-compose.yml:113-114`, `src/tts/engine-config.ts:265-270` |
+| **D48** | **M3 — le moteur monte le dossier de config en `ro`** sur `/config` ; **commande inchangée** (`server --config /config/server.json`) ; **aucun** montage moteur `rw`. | `docker-compose.yml:198,208-210,213-215`, `deploy/server/docker-compose.yml:201,208-210,212-214` |
+| **D49** | **Listes fermées** : `task` canonique (`clon`, **jamais** `clone`), `mode` `offline\|streaming`, `family` fermée — validation **client ET serveur**. | `src/tts/engine-config.ts:73-100`, `public/ui/engine-config-patch.js:16-59` |
+| **D50** | **`offline` obligatoire** pour `chatterbox`/`cosyvoice3` (tout autre mode refusé, `mode_not_supported`). | `src/tts/engine-config.ts:116,403-420` |
+| **D51** | **`id` = les 5 valeurs de `tts.engine`** ; un id hors liste est **accepté mais signalé** (le moteur le charge, Yuki ne saura pas le sélectionner). | `src/tts/engine-config.ts:107-113,744-747` |
+| **D52** | **`path` choisi parmi les `.gguf` présents** ; chemin **stocké = vue moteur** ; traduction gateway↔moteur explicite ; hors montages refusé. | `src/tts/engine-config.ts:619-631,923-930` |
+| **D53** | **Préservation fidèle** des clés inconnues (top-level et par entrée de même `id`) lors du patch. | `src/tts/engine-config.ts:817-959` |
+| **D54** | **Écriture atomique** (`tmp`+`rename`) + **`server.json.bak`** (une version) + **route de restauration**. | `src/tts/engine-config.ts:265-270,961-1037`, `src/gateway/routes/tts.ts:999-1008` |
+| **D55** | **Rétro-compatibilité** : sans M2, `GET` `200` avec `mounted:false` et `PUT` `503 config_dir_not_mounted` ; **rien ne casse**. | `src/gateway/routes/tts.ts:952-956`, `tests/integration/tts-engine-config.test.ts:177-184,254-263` |
+| **D56** | **Sonde de capacités sans effet de bord** (id sentinelle) ; la fonction n'est montrée que si la route est **confirmée**. | `src/tts/engine-config.ts:1082-1175`, `public/ui/engine-config-patch.js:394-405` |
 | **D57** | **Socket Docker refusé** ; l'UI ne prétend jamais redémarrer un conteneur : elle décrit le chemin « redémarrer `tts` depuis votre UI Docker ». | `public/ui/engine-config-patch.js:235-248`, `docs/lot8.md` §2.1 |
 | **D58** | **UI vanilla sans build, CSP stricte, thèmes 5×2, réutilisation de l'existant**, plus un **garde-fou statique anti-symbole-non-défini** (auto-testé). | `public/ui/tts-assistant.js:28-41`, `tests/ui/ui-modules-defined.test.ts` |
+| **D60** | **Décision opérateur : simplifier M1 — un SEUL montage `/models`, en `rw`.** Écriture sur **tout** `/models` **assumée** (composant de confiance, sur la machine de l'opérateur, modèles ~2 Go) ; `downloads/` = **convention**, pas **barrière**. **Retrait** de l'option de **sous-chemin de volume**, du montage **imbriqué**, du **prérequis Compose** et de la **migration** de volume. Les identifiants **D59**/**C37** (travail intermédiaire) sont **retirés** et **non réattribués**. | `docker-compose.yml:106-107`, `compose.bind.example.yml:48-49`, `deploy/server/docker-compose.yml:107-108`, `src/tts/engine-config.ts:63` |
+| **D61** | **Chemins internes = défauts du code, compose muet.** Les cibles de montage (`/models`, `/data/tts-config`, `/config`, `/voices`, `/data/pi`, `/workspace`, `/data/state`) sont une **source unique** (`CONTAINER_PATHS`, `src/config/container-paths.ts`) consommée par `env.ts`. Les composes ne définissent **aucune** variable de chemin interne ; la **surcharge par variable** (`YUKI_MOUNT_*`, `YUKI_TTS_CONFIG_DIR`, `YUKI_TTS_ENGINE_CONFIG_DIR`, `YUKI_TTS_ENGINE_MODELS_DIR`, `YUKI_PI_*`, `YUKI_CONFIG_DIR`) **reste lue** (rétro-compatibilité). Un test garde-fou compare défauts ↔ `target:` des composes. | `src/config/container-paths.ts:20-35`, `src/config/env.ts:158-195`, `tests/config/container-paths.test.ts`, `docker-compose.yml:28-53` |
 
 ### À confirmer
 
 | # | Point ouvert | Impact |
 | --- | --- | --- |
-| **C30** | Le **chemin `/config/server.json`** est un **choix Yuki** (le WORKDIR de l'image `audio.cpp` n'est **pas attesté**) ; le chemin d'origine `/app/server.json` reste possible via `YUKI_TTS_ENGINE_CONFIG_DIR`. **À confirmer** en réel sur le conteneur. | M3 / déploiement |
-| **C31** | **Écriture réelle** du gateway dans le dossier monté `rw` : confirmer les permissions bind (`chown 1000:1000`) sur l'hôte Unraid (et non seulement les volumes nommés, préparés par l'image). | M2 / runbook §11 |
+| **C30** | Le **chemin `/config/server.json`** est un **choix Yuki** (le WORKDIR de l'image `audio.cpp` n'est **pas attesté**) ; c'est un **défaut du code** (D61), surchargeable par `YUKI_TTS_ENGINE_CONFIG_DIR` pour une relocalisation avancée (hors compose). **À confirmer** en réel sur le conteneur. | M3 / déploiement |
+| **C31** | **Écriture réelle** du gateway dans le dossier monté `rw` : confirmer les permissions bind (`chown 1000:1000`) sur l'hôte Unraid (et non seulement les volumes nommés, préparés par l'image) — vaut pour M2 (`tts-config`) ET pour M1 (`models`, où l'étape 2 rangera `downloads/`). | M2 / M1 / runbook §11 |
 | **C32** | **Pré-déclaration des modèles** : pré-remplir `models[]` depuis les `.gguf` présents (`report.diskModels`) ? Aujourd'hui, non. | UX §10.2 |
 | **C33** | **Existence réelle de `POST /v1/tasks/unload_models`** : la sonde la **teste** sans effet de bord, mais le lot ne **re-vérifie pas** son contrat (corps/statuts exacts). | §8 |
 | **C34** | **Ordre et format** du JSON après aller-retour : les clés inconnues sont **conservées**, mais l'ordre/indentation sont **réécrits** par `JSON.stringify(…, 2)`. Acceptable ? | §6 |

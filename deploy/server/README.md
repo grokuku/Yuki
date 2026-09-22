@@ -52,6 +52,28 @@ Le gateway y **écrit** `server.json` (et sa sauvegarde `server.json.bak`) ; le
 moteur `tts` y **lit** `/config/server.json`. Les deux conteneurs tournent en
 `1000:1000`.
 
+### Montage M1 — dossier des modèles (écriture côté gateway)
+
+Le gateway monte le volume des modèles en **`rw`** sur `/models` : il peut y
+**écrire** les futurs téléchargements depuis l'interface. Le moteur `tts` monte
+le **même** volume en **`ro`** : il ne fait que **lire** les GGUF.
+
+Les modèles téléchargés sont rangés par convention dans le sous-dossier
+`downloads/` (`/models/downloads/<engineId>/`). Ce n'est **pas** une barrière de
+sécurité : le gateway a un accès en écriture à **tout** `/models`. Choix assumé
+(composant de confiance, sur votre machine, modèles de ~2 Go).
+
+- **Volume nommé `yuki-server-models`** (ce compose) : aucune préparation hôte.
+  Le Dockerfile crée et `chown` déjà `/models` (et `/models/downloads`) ; le
+  volume est initialisé en `1000:1000`.
+- **Bind mount des modèles** (déploiement alternatif) : créez le dossier et
+donnez-le au conteneur :
+
+  ```bash
+  mkdir -p ~/yuki/models/downloads
+  chown -R 1000:1000 ~/yuki/models
+  ```
+
 ## Service TTS (voix)
 
 Le service `tts` (moteur `audio.cpp`, image CUDA) **démarre avec la stack** :
@@ -67,8 +89,8 @@ Trois points restent **à faire à la main** avant que la voix fonctionne :
 > l'encadré plus bas) ; c'est le dossier de configuration du serveur, monté en
 > `ro` sur `/config` côté moteur et en `rw` sur `/data/tts-config` côté gateway.
 
-1. **Déposer le modèle GGUF** dans le volume `yuki-server-models` (monté `ro`,
-   donc le moteur ne peut pas l'installer lui-même) :
+1. **Déposer le modèle GGUF** dans le volume `yuki-server-models` (monté `ro`
+   **côté moteur**, donc il ne peut pas s'installer lui-même) :
 
    ```bash
    docker run --rm -v yuki-server-models:/models -v "$PWD":/src alpine:3.20 \
@@ -209,6 +231,10 @@ déploiement (image tirée), laisser **1000:1000**.
 ## Éditer le compose ?
 
 - Changer le port publié : `YUKI_GATEWAY_PORT` dans `.env`.
+- Les **chemins internes** (`/models`, `/data/tts-config`, `/config`, `/voices`,
+  `/data/pi`, `/workspace`, `/data/state`) sont des **défauts du code**
+  (`src/config/container-paths.ts`) : **inutile** de les définir dans `.env` ou
+  dans le compose. Seuls les `volumes:` (`source:` / `target:`) sont explicites.
 - Épingler une carte précise : remplacer `count: all` par `device_ids: ["0"]`
   sous `deploy.resources.reservations.devices`.
 - Le fichier `models.json` reste **le seul** à éditer pour changer de

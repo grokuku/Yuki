@@ -27,8 +27,10 @@
  * ⚠️ Le réseau n'est pas exposé au client : le service `tts` vit sur
  * `yuki-net` ; tout passe par le gateway (seul à pouvoir joindre `tts:8081`).
  *
- * Aucune écriture n'est faite dans `/models` (volume monté `ro`) : on ne fait
- * que **lire** le répertoire pour dire à l'utilisateur où déposer un modèle.
+ * Aucune écriture n'est faite dans `/models` par ces routes de diagnostic : on
+ * ne fait que **lire** le répertoire pour dire à l'utilisateur où déposer un
+ * modèle. (Le gateway a, depuis le Lot 9 M1, un accès en ÉCRITURE à `/models`,
+ * mais il n'en a pas besoin ici ; le moteur `tts`, lui, le monte en `ro`.)
  *
  * Le choix de performance de `/health` est documenté sur `TtsDiagnostics` :
  * sonde en tâche de fond + cache court (5 s), jamais d'attente bloquante.
@@ -126,7 +128,7 @@ export interface TtsDiskModelFile {
   size: number;
 }
 
-/** Diagnostic du répertoire des modèles (volume `yuki-models`, monté `ro`). */
+/** Diagnostic du répertoire des modèles (volume `yuki-models`, `rw` gateway / `ro` moteur). */
 export interface TtsDiskReport {
   dir: string;
   present: boolean;

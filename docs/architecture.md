@@ -170,8 +170,17 @@ Détails complets : [`docs/lot11.md`](lot11.md).
 - Rootfs **read-only**, seul `/tmp` en `tmpfs`. L'état du SDK Pi (`settings.json`,
   `auth.json`, `models.json`, `sessions/`) et `HOME` sont **redirigés** vers le
   volume `yuki-pi` (`/data/pi`) ; le `cwd` reste fixe (`/workspace`).
-- `/models` monté **en lecture seule** ; `/data/pi`, `/workspace`,
+- `/models` monté **en écriture** côté gateway depuis le Lot 9 (M1) : lecture des
+  GGUF + écriture des futurs téléchargements, rangés par convention dans le
+  sous-dossier `downloads/` (convention, **pas** une barrière). Le moteur `tts`
+  monte, lui, `/models` en **lecture seule**. `/data/pi`, `/workspace`,
   `/data/state` en lecture-écriture.
+- Les **chemins internes** de ces volumes (`/models`, `/data/tts-config`,
+  `/config`, `/voices`, `/data/pi`, `/workspace`, `/data/state`) sont des
+  **défauts du code** (`src/config/container-paths.ts`), alignés sur les cibles de
+  montage des composes : le compose est **muet** sur les variables de chemin
+  (surchargeables pour les déploiements existants, mais **pas** un réglage) —
+  voir `docs/lot9.md` (**D61**).
 - Logs JSON-lines avec **redaction** des clés/valeurs sensibles.
 - **Aucun type du SDK Pi ne franchit `src/pi/sdk-host.ts`** (test de frontière
   automatisé sur `src/**`). Lot 2 : le confinement s'étend à `src/pi/sdk/**`, avec
