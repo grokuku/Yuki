@@ -382,13 +382,13 @@ describe("état des montages et scan disque", () => {
         validModel({ path: "/models/Chatterbox-GGUF/chatterbox.gguf" }),
         validModel({
           id: "absent",
-          family: "kokoro",
+          family: "kokoro_tts",
           mode: "streaming",
           path: "/models/manquant.gguf",
         }),
         validModel({
           id: "hors-montage",
-          family: "kokoro",
+          family: "kokoro_tts",
           mode: "streaming",
           path: "/autre/modele.gguf",
         }),

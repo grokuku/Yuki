@@ -138,10 +138,27 @@
             tabindex="0"
             hidden
           >
-            <!-- Assistant de mise en route (Lot 8) : composant autonome monté par id. -->
+            <!--
+              Onglet « Voix » — 5 zones (refonte UX, lot de simplification) :
+                ① État de la voix         → #tts-assistant-root (bandeau compact)
+                ② Ma voix                 → #voices-root (bibliothèque des voix)
+                ③ Réglages de la voix     → #group-voix (6 réglages essentiels)
+                ④ ▸ Avancé                → replié DANS #group-voix (voir config.js)
+                ⑤ ▸ Moteur TTS et modèles → #tts-engine-root (zone technique repliée)
+
+              ⚠️ Le rendu reste EAGER : toutes les lignes sont dans le DOM dès le
+              chargement et un <details> masque SANS retirer. L'assistant (zone ①
+              et zone ⑤) est un composant autonome monté par id, jamais dupliqué.
+              Aucun style inline (CSP `style-src 'self'`).
+            -->
+            <!-- ① État de la voix : assistant monté par id (bandeau + carte d'état). -->
             <div id="tts-assistant-root"></div>
+            <!-- ② Ma voix : sélecteur de voix active + bibliothèque + clonage. -->
             <div id="voices-root"></div>
+            <!-- ③ Réglages de la voix (essentiels) + ④ « Avancé » (replié). -->
             <div id="group-voix" class="config-groups"></div>
+            <!-- ⑤ Moteur TTS et modèles : zone technique repliée, montée par l'assistant. -->
+            <div id="tts-engine-root"></div>
           </section>
           <section
             class="config-panel"

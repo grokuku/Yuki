@@ -91,12 +91,21 @@ export const ENGINE_TASK_TOKENS = [
 /** Modes d'exécution d'un modèle. */
 export const ENGINE_MODES = ["offline", "streaming"] as const;
 
-/** Familles du catalogue GGUF amont (liste fermée). */
+/**
+ * Familles du catalogue GGUF amont (liste fermée). ⚠️ Ce sont les noms
+ * reconnus par le MOTEUR (`ModelRegistry::supports_family`, `family()` des
+ * loaders), PAS les ids de `tts.engine` : `qwen3_tts` (underscore) et
+ * `kokoro_tts` diffèrent de `qwen3-tts`/`kokoro`. Preuves : `model_specs/*.json`
+ * (`family`), `README.md` du dépôt HF (tableau « audio.cpp family »),
+ * `app/server/runtime.cpp:2116` (`family != "kokoro_tts"`), et l'exemple amont
+ * `examples/docker/server/qwen3-tts-server.json` (`id: qwen3-tts`,
+ * `family: qwen3_tts`). Voir `docs/lot9.md` D62/D64/D66.
+ */
 export const ENGINE_FAMILIES = [
   "chatterbox",
-  "qwen3-tts",
+  "qwen3_tts",
   "cosyvoice3",
-  "kokoro",
+  "kokoro_tts",
   "sanotts",
 ] as const;
 

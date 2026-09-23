@@ -214,3 +214,30 @@ export function presentConfigSaveError(error, labels = new Map()) {
 
   return { summary, fields };
 }
+
+/**
+ * Présente le résultat d'un `POST /api/admin/restart` refusé. Le cas NOTABLE est
+ * le `409 download_in_progress` (Lot 9, étape 2) : le refus n'est **pas une
+ * panne** mais une protection (le redémarrage tuerait le transfert). Il est donc
+ * affiché comme une **information** (sans préfixe « Échec »), avec le message
+ * exact du serveur. Tout autre code garde le préfixe d'échec historique.
+ *
+ * @returns {{ code: string|null, info: boolean, message: string }}
+ */
+export function presentRestartRefusal(error) {
+  const data = (error && error.data) || {};
+  const code = firstString(data.code, data.error);
+  const serverMessage = firstString(data.message);
+  if (code === "download_in_progress") {
+    return {
+      code,
+      info: true,
+      message:
+        serverMessage ??
+        "Un téléchargement de modèle est en cours : redémarrer maintenant l'interromprait. " +
+          "Attendez la fin du téléchargement ou annulez-le, puis redémarrez.",
+    };
+  }
+  const raw = serverMessage ?? (error instanceof Error ? error.message : String(error));
+  return { code, info: false, message: `Échec de la demande de redémarrage : ${raw}` };
+}

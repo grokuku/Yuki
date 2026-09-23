@@ -46,6 +46,13 @@ import {
   type EngineCapabilitiesReport,
   type EngineConfigReport,
 } from "../../tts/engine-config.js";
+import { TtsDownloadError } from "../../tts/downloads.js";
+import type {
+  CatalogEntry,
+  CatalogRejection,
+} from "../../tts/catalog-data.js";
+import { CATALOG_SCHEMA_VERSION, isAllowedLicense } from "../../tts/catalog-data.js";
+import type { DownloadTask } from "../../tts/downloads.js";
 import { VoiceStoreError } from "../../tts/voices-store.js";
 import type { Voice } from "../../tts/types.js";
 import type { Logger } from "../../observability/logger.js";
@@ -182,6 +189,54 @@ export interface EngineConfigPort {
   capabilities(): Promise<EngineCapabilitiesReport>;
 }
 
+/**
+ * Port du TÉLÉCHARGEMENT des modèles (Lot 9, étape 2). L'implémentation
+ * concrète (`TtsDownloadManager`) est câblée dans `src/index.ts` ; les tests
+ * peuvent injecter une doublure.
+ */
+export interface TtsDownloadsPort {
+  /** Catalogue FERMÉ (données serveur ; jamais fourni par le client). */
+  catalogEntries(): readonly CatalogEntry[];
+  /** Moteurs écartés et pourquoi (jamais retirés silencieusement). */
+  notIncluded(): readonly CatalogRejection[];
+  list(): DownloadTask[];
+  get(catalogId: string): DownloadTask | undefined;
+  hasActive(): boolean;
+  activeId(): string | null;
+  start(catalogId: string): Promise<DownloadTask>;
+  cancel(catalogId: string): DownloadTask;
+  gatewayPathFor(catalogId: string): string;
+  enginePathFor(catalogId: string): string;
+}
+
+/** Vue publique d'une entrée de catalogue, enrichie de l'état LOCAL. */
+export interface TtsCatalogItemView {
+  id: string;
+  label: string;
+  repo: string;
+  dir: string;
+  variant: string;
+  family: string;
+  task: string;
+  mode: string;
+  license: string;
+  licenseAllowed: boolean;
+  expectedFile: string;
+  expectedBytes: number;
+  expectedSha256: string | null;
+  /** Chemin de destination VU PAR LE MOTEUR. */
+  enginePath: string;
+  /** Chemin de destination VU PAR LE GATEWAY. */
+  gatewayPath: string;
+  installed: boolean;
+  installedBytes: number | null;
+  declared: boolean;
+  declaredPath: string | null;
+  /** Champs EXACTS à envoyer à `PUT /api/tts/engine-config` (pré-remplissage). */
+  prefill: { id: string; family: string; task: string; mode: string; path: string };
+  download: DownloadTask | null;
+}
+
 export interface TtsApiDeps {
   config: TtsConfigPort;
   logger: Logger;
@@ -194,6 +249,8 @@ export interface TtsApiDeps {
   synth?: TtsSynthesizer;
   /** Optionnel : sans lui, les routes `engine-config`/`capabilities` répondent 503. */
   engineConfig?: EngineConfigPort;
+  /** Optionnel : sans lui, les routes `catalog`/`downloads` répondent 503. */
+  downloads?: TtsDownloadsPort;
 }
 
 export interface TtsRequestInput {
@@ -1029,6 +1086,204 @@ async function handleCapabilities(deps: TtsApiDeps): Promise<ConfigHttpResponse>
   }
 }
 
+/* ─── Catalogue + téléchargement des modèles (Lot 9, étape 2) ───────────────
+ * Backend SEUL : aucune UI. Le client n'envoie jamais d'URL, seulement un
+ * identifiant de catalogue. Toute écriture passe par les mêmes garde-fous que
+ * le reste (`X-Yuki-Config: 1` + même origine).
+ */
+
+function downloadsUnavailable(): ConfigHttpResponse {
+  return json(503, {
+    error: "downloads_unavailable",
+    code: "downloads_unavailable",
+    message: "Le téléchargement des modèles n'est pas câblé dans ce gateway.",
+  });
+}
+
+/** Mappe une erreur de téléchargement vers une réponse HTTP précise. */
+function downloadErrorResponse(error: unknown, deps: TtsApiDeps): ConfigHttpResponse {
+  if (error instanceof TtsDownloadError) {
+    deps.logger.warn("tts.download.refused", { code: error.code, status: error.status });
+    return json(error.status, {
+      error: error.code,
+      code: error.code,
+      message: error.message,
+    });
+  }
+  deps.logger.error("tts.download.failed", { error: messageOf(error) });
+  return json(500, {
+    error: "download_failed",
+    code: "download_failed",
+    message: "L'opération de téléchargement a échoué.",
+  });
+}
+
+/**
+ * Compose l'état LOCAL d'une entrée de catalogue : déjà téléchargée ? présente
+ * sur le disque ? déjà déclarée dans `server.json` ? + de quoi PRÉ-REMPLIR
+ * l'éditeur de configuration existant.
+ */
+function catalogItemView(
+  entry: CatalogEntry,
+  downloads: TtsDownloadsPort,
+  declaredById: Map<string, string>,
+): TtsCatalogItemView {
+  const enginePath = downloads.enginePathFor(entry.id);
+  const gatewayPath = downloads.gatewayPathFor(entry.id);
+  let installed = false;
+  let installedBytes: number | null = null;
+  try {
+    const info = statSync(gatewayPath);
+    if (info.isFile()) {
+      installed = true;
+      installedBytes = info.size;
+    }
+  } catch {
+    installed = false;
+  }
+  const declaredPath = declaredById.get(entry.id) ?? null;
+  return {
+    id: entry.id,
+    label: entry.label,
+    repo: entry.repo,
+    dir: entry.dir,
+    variant: entry.variant,
+    family: entry.family,
+    task: entry.task,
+    mode: entry.mode,
+    license: entry.license,
+    licenseAllowed: isAllowedLicense(entry.license),
+    expectedFile: entry.recommendedFile,
+    expectedBytes: entry.approxBytes,
+    expectedSha256: entry.sha256,
+    enginePath,
+    gatewayPath,
+    installed,
+    installedBytes,
+    declared: declaredPath !== null,
+    declaredPath,
+    // Champs EXACTS attendus par `PUT /api/tts/engine-config` (pré-remplissage).
+    prefill: { id: entry.id, family: entry.family, task: entry.task, mode: entry.mode, path: enginePath },
+    download: downloads.get(entry.id) ?? null,
+  };
+}
+
+function handleCatalog(deps: TtsApiDeps): ConfigHttpResponse {
+  const downloads = deps.downloads;
+  if (!downloads) return downloadsUnavailable();
+  let declaredById = new Map<string, string>();
+  let engineConfigAvailable = false;
+  if (deps.engineConfig) {
+    try {
+      const report = deps.engineConfig.report();
+      engineConfigAvailable = true;
+      declaredById = new Map(report.models.map((model) => [model.id, model.path]));
+    } catch (error) {
+      deps.logger.warn("tts.catalog.engine_config_failed", { error: messageOf(error) });
+    }
+  }
+  const entries = downloads
+    .catalogEntries()
+    .map((entry) => catalogItemView(entry, downloads, declaredById));
+  return json(200, {
+    schemaVersion: CATALOG_SCHEMA_VERSION,
+    entries,
+    notIncluded: downloads.notIncluded(),
+    engineConfigAvailable,
+    note:
+      "Catalogue fermé côté serveur : l'URL n'est jamais fournie par le client. " +
+      "`prefill` contient les champs exacts à envoyer à l'éditeur de configuration.",
+  });
+}
+
+function handleDownloadsList(deps: TtsApiDeps): ConfigHttpResponse {
+  const downloads = deps.downloads;
+  if (!downloads) return downloadsUnavailable();
+  return json(200, {
+    schemaVersion: CATALOG_SCHEMA_VERSION,
+    active: downloads.activeId(),
+    tasks: downloads.list(),
+  });
+}
+
+/** Extrait `{catalogId}` du corps JSON (objet strict). */
+function parseCatalogId(
+  body: Buffer,
+): { ok: true; catalogId: string } | { ok: false; response: ConfigHttpResponse } {
+  let parsed: unknown;
+  try {
+    parsed = body.length === 0 ? {} : JSON.parse(body.toString("utf8"));
+  } catch {
+    return {
+      ok: false,
+      response: json(400, {
+        error: "invalid_json",
+        code: "invalid_json",
+        message: "Corps JSON invalide (objet { catalogId } attendu).",
+      }),
+    };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      response: json(400, {
+        error: "invalid_body",
+        code: "invalid_body",
+        message: "Objet JSON attendu (champ `catalogId`).",
+      }),
+    };
+  }
+  const raw = (parsed as { catalogId?: unknown }).catalogId;
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    return {
+      ok: false,
+      response: json(400, {
+        error: "invalid_catalog_id",
+        code: "invalid_catalog_id",
+        message: "Champ `catalogId` requis (chaîne non vide).",
+      }),
+    };
+  }
+  return { ok: true, catalogId: raw.trim() };
+}
+
+async function handleDownloadsStart(input: TtsRequestInput): Promise<ConfigHttpResponse> {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return guard;
+  if (!input.deps.downloads) return downloadsUnavailable();
+  const parsed = parseCatalogId(input.body);
+  if (!parsed.ok) return parsed.response;
+  try {
+    const task = await input.deps.downloads.start(parsed.catalogId);
+    // 202 : la tâche est ACCEPTÉE et suivie ; le téléchargement est asynchrone.
+    return json(202, { ok: true, accepted: true, task });
+  } catch (error) {
+    return downloadErrorResponse(error, input.deps);
+  }
+}
+
+/** Extrait l'identifiant de `/api/tts/downloads/{id}/cancel`. */
+export function downloadCancelId(path: string): string | null {
+  const prefix = "/api/tts/downloads/";
+  const suffix = "/cancel";
+  if (!path.startsWith(prefix) || !path.endsWith(suffix)) return null;
+  const id = path.slice(prefix.length, path.length - suffix.length);
+  return id.length > 0 && !id.includes("/") ? id : null;
+}
+
+function handleDownloadsCancel(input: TtsRequestInput): ConfigHttpResponse {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return guard;
+  if (!input.deps.downloads) return downloadsUnavailable();
+  const catalogId = downloadCancelId(input.path);
+  if (catalogId === null) return json(404, { error: "not_found", path: input.path });
+  try {
+    return json(200, { ok: true, task: input.deps.downloads.cancel(catalogId) });
+  } catch (error) {
+    return downloadErrorResponse(error, input.deps);
+  }
+}
+
 function parseTestText(body: Buffer): string | ConfigHttpResponse {
   if (body.length === 0) return DEFAULT_TTS_TEST_TEXT;
   let parsed: unknown;
@@ -1152,14 +1407,20 @@ async function handleTest(input: TtsRequestInput): Promise<ConfigHttpResponse> {
 
 /** Vrai si le chemin relève du diagnostic TTS. */
 export function isTtsPath(path: string): boolean {
-  return (
+  if (
     path === "/api/tts/status" ||
     path === "/api/tts/models" ||
     path === "/api/tts/test" ||
     path === "/api/tts/engine-config" ||
     path === "/api/tts/engine-config/revert" ||
-    path === "/api/tts/capabilities"
-  );
+    path === "/api/tts/capabilities" ||
+    path === "/api/tts/catalog" ||
+    path === "/api/tts/downloads"
+  ) {
+    return true;
+  }
+  // `/api/tts/downloads/{catalogId}/cancel` : identifiant borné (jamais un chemin).
+  return downloadCancelId(path) !== null;
 }
 
 /** Traite une requête de diagnostic TTS et renvoie la réponse HTTP. */
@@ -1190,6 +1451,19 @@ export async function handleTtsRequest(
   }
   if (path === "/api/tts/capabilities") {
     if (method === "GET" || method === "HEAD") return handleCapabilities(input.deps);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path === "/api/tts/catalog") {
+    if (method === "GET" || method === "HEAD") return handleCatalog(input.deps);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path === "/api/tts/downloads") {
+    if (method === "GET" || method === "HEAD") return handleDownloadsList(input.deps);
+    if (method === "POST") return handleDownloadsStart(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (downloadCancelId(path) !== null) {
+    if (method === "POST") return handleDownloadsCancel(input);
     return json(405, { error: "method_not_allowed", method });
   }
   return json(404, { error: "not_found", path });

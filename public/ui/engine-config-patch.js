@@ -33,12 +33,16 @@ export const ENGINE_TASK_TOKENS = [
 /** Modes d'exécution acceptés. */
 export const ENGINE_MODES = ["offline", "streaming"];
 
-/** Familles du catalogue GGUF amont (liste fermée). */
+/**
+ * Familles du catalogue GGUF amont (liste fermée, MIROIR de
+ * `src/tts/engine-config.ts`). ⚠️ Noms reconnus par le MOTEUR, distincts des
+ * ids de `tts.engine` : `qwen3_tts` et `kokoro_tts` (underscore).
+ */
 export const ENGINE_FAMILIES = [
   "chatterbox",
-  "qwen3-tts",
+  "qwen3_tts",
   "cosyvoice3",
-  "kokoro",
+  "kokoro_tts",
   "sanotts",
 ];
 

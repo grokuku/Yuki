@@ -17,6 +17,7 @@ import {
   engineSupportsEmotion,
   engineSupportsSpeed,
   presentConfigSaveError,
+  presentRestartRefusal,
 } from "../../public/ui/config-patch.js";
 import {
   engineSupportsEmotion as adapterSupportsEmotion,
@@ -253,6 +254,58 @@ describe("presentConfigSaveError — cause réelle, jamais générique", () => {
     );
     expect(summary).toContain("teapot");
     expect(summary).toContain("Je suis une théière.");
+  });
+});
+
+/**
+ * `POST /api/admin/restart` refuse (409 `download_in_progress`) tant qu'un
+ * téléchargement est actif (Lot 9, étape 2). Ce refus n'est PAS une panne : il
+ * doit être présenté comme une information, avec le message exact du serveur.
+ */
+describe("presentRestartRefusal — le 409 download_in_progress n'est pas une panne", () => {
+  function httpError(status: number, data: AnyRecord) {
+    const error = new Error("erreur") as Error & { status: number; data: AnyRecord };
+    error.status = status;
+    error.data = data;
+    return error;
+  }
+
+  it("409 download_in_progress → information, sans préfixe « Échec », message serveur repris", () => {
+    const described = presentRestartRefusal(
+      httpError(409, {
+        code: "download_in_progress",
+        message:
+          "Un téléchargement de modèle est en cours : redémarrer maintenant l'interromprait. " +
+          "Attendez la fin du téléchargement ou annulez-le, puis redémarrez.",
+        activeDownload: "chatterbox",
+      }),
+    );
+    expect(described.code).toBe("download_in_progress");
+    expect(described.info).toBe(true);
+    expect(described.message).not.toMatch(/Échec/);
+    expect(described.message).toMatch(/annulez-le/);
+  });
+
+  it("409 sans message serveur → repli explicite, toujours informatif", () => {
+    const described = presentRestartRefusal(httpError(409, { code: "download_in_progress" }));
+    expect(described.info).toBe(true);
+    expect(described.message).toMatch(/téléchargement/i);
+    expect(described.message).not.toMatch(/Échec/);
+  });
+
+  it("autre erreur → échec classique avec le message brut", () => {
+    const described = presentRestartRefusal(
+      httpError(500, { code: "internal_error", message: "Boom." }),
+    );
+    expect(described.info).toBe(false);
+    expect(described.message).toContain("Échec de la demande de redémarrage");
+    expect(described.message).toContain("Boom.");
+  });
+
+  it("erreur réseau : échec classique, message typé", () => {
+    const described = presentRestartRefusal(new Error("Failed to fetch"));
+    expect(described.info).toBe(false);
+    expect(described.message).toContain("Failed to fetch");
   });
 });
 

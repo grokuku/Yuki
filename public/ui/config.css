@@ -91,6 +91,13 @@
   border-top: none;
 }
 
+/* `hidden` DOIT gagner sur `display: flex` : sans cette règle, la révélation
+   conditionnelle (`exaggeration`/`cfg` uniquement pour l'émotion
+   « personnalisée ») resterait sans effet VISUEL. */
+.config-row[hidden] {
+  display: none;
+}
+
 .config-label {
   display: flex;
   align-items: center;
@@ -330,6 +337,45 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--text);
+}
+
+/* Repli « Avancé » des champs techniques — classe DISTINCTE de `tts-details`
+   (les sélecteurs E2E s'appuient sur les deux classes séparément). */
+.config-advanced {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 8px 12px;
+  margin-top: 12px;
+}
+
+.config-advanced__summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.config-advanced__summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.config-advanced__body {
+  margin-top: 4px;
+}
+
+/* Aide « valeur par défaut / surcharge » + « Réinitialiser au défaut ». */
+.config-reset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.config-reset .config-helper {
+  margin: 0;
 }
 
 /* ─── Onglets de configuration (5 sections) ─────────────────────────────── */

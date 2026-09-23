@@ -373,7 +373,10 @@ describe("Assistant de mise en route du TTS (Lot 8)", () => {
     ]) {
       expect(js).toContain(route);
     }
-    expect(js).toContain("/api/config");
+    // L'activation de la voix (`tts.enabled`) n'est PLUS un `PUT` propre de
+    // l'assistant : elle passe par l'enregistrement GLOBAL de `config.js`
+    // (chemin d'écriture UNIQUE, plus de redémarrage silencieux déclenché ici).
+    expect(js).not.toContain('put("/api/config"');
     // Aucun accès direct au moteur (port 8081) ni au socket Docker.
     expect(js).not.toContain("8081");
     expect(js).not.toContain("docker.sock");
@@ -383,6 +386,112 @@ describe("Assistant de mise en route du TTS (Lot 8)", () => {
     // La lecture audio reste Web Audio (jamais de balise <audio> créée).
     expect(js).not.toContain("new Audio(");
     expect(js).not.toMatch(/createElement\(["']audio/);
+  });
+});
+
+describe("Onglet Voix simplifié — structure, doublons et place réservée (refonte UX)", () => {
+  it("regroupe les champs techniques dans un repli `config-advanced` distinct (zone ④)", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    // Repli « Avancé » avec une classe DISTINCTE de `tts-details`.
+    expect(js).toContain("config-advanced");
+    expect(js).toContain('text: "Avancé"');
+    expect(js).not.toContain('class: "tts-details"');
+    // Titre de la zone ③.
+    expect(js).toContain("Réglages de la voix");
+    // Les libellés validés (les mots-clés des sélecteurs E2E restent présents).
+    for (const label of [
+      "Activer la voix",
+      "Moteur de synthèse",
+      "Débit de parole (%)",
+      "Délai maximal de synthèse (ms)",
+      "Préchargement (phrases d'avance)",
+      "Découpe — longueur",
+      "Contrôle de guidage (CFG)",
+      "Adresse du moteur (avancé)",
+    ]) {
+      expect(js, label).toContain(label);
+    }
+  });
+
+  it("`tts.voice` n'est plus un champ texte (le select de la bibliothèque est l'unique contrôle)", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).not.toContain("Voix (identifiant du registre)");
+    // Le libellé reste connu pour les messages (pastille/erreurs).
+    expect(js).toContain('LABELS.set("tts.voice"');
+    // Le panneau des voix reste l'unique écrivain immédiat de `tts.voice`.
+    const panel = await (await fetch(`${baseUrl}/ui/voices-panel.js`)).text();
+    expect(panel).toContain('body: { "tts.voice": id ?? "" }');
+  });
+
+  it("le bandeau « Activer la voix » passe par l'enregistrement global (aucun PUT propre)", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).toContain("enableVoiceShortcut");
+    expect(js).toContain("requestEnableVoice: enableVoiceShortcut");
+    const assistant = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
+    expect(assistant).not.toContain('put("/api/config"');
+    // Plus de redémarrage silencieux déclenché par l'assistant.
+    expect(assistant).not.toContain("requestRestart");
+  });
+
+  it("livre l'UI de téléchargement dans la zone technique repliée (zone ⑤)", async () => {
+    const body = await (await fetch(`${baseUrl}/config`)).text();
+    expect(body).toContain('id="tts-engine-root"');
+    const assistant = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
+    expect(assistant).toContain('id: "tts-downloads-root"');
+    expect(assistant).toContain('text: "Moteur TTS et modèles"');
+    // UI LIVRÉE (Lot 9, étape 3) : catalogue + téléchargement + déclaration,
+    // montés dans le conteneur réservé à cet effet.
+    expect(assistant).toContain('/api/tts/catalog');
+    expect(assistant).toContain('/api/tts/downloads');
+    expect(assistant).toContain('class: "tts-dl__catalog"');
+    expect(assistant).toContain('"Déclarer ce modèle"');
+    // Route d'annulation : `/api/tts/downloads/{id}/cancel`.
+    expect(assistant).toContain("/cancel");
+  });
+
+  it("l'UI de téléchargement n'ajoute aucun style inline ni `innerHTML` (CSP stricte)", async () => {
+    const assistant = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
+    expect(assistant).toContain('class: "tts-dl__progress-bar"');
+    // Barre de progression NATIVE (role=progressbar implicite via <progress>),
+    // sans jamais poser de `style` : la largeur vient de `value`/`max`.
+    expect(assistant).toContain('h("progress"');
+    expect(assistant).not.toContain(".style.");
+    expect(assistant).not.toContain('setAttribute("style"');
+    expect(assistant).not.toContain("innerHTML");
+    expect(assistant).not.toContain("window.confirm");
+    // Les classes de l'UI sont bien servies par la feuille dédiée.
+    const css = await (await fetch(`${baseUrl}/ui/tts-assistant.css`)).text();
+    for (const cls of [
+      ".tts-dl__catalog",
+      ".tts-dl__item",
+      ".tts-dl__state--ok",
+      ".tts-dl__progress-bar",
+      ".tts-dl__excluded-details",
+    ]) {
+      expect(css, cls).toContain(cls);
+    }
+  });
+
+  it("l'UI de téléchargement n'emploie QUE les routes du gateway, jamais le moteur", async () => {
+    const assistant = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
+    for (const route of ["/api/tts/catalog", "/api/tts/downloads"]) {
+      expect(assistant, route).toContain(route);
+    }
+    // Aucun accès direct au moteur, aucune URL Hugging Face (source fermée).
+    expect(assistant).not.toContain("8081");
+    expect(assistant).not.toContain("huggingface.co");
+  });
+
+  it("généralise « Réinitialiser au défaut » et affiche la valeur par défaut", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).toContain("FIELD_DEFAULTS");
+    expect(js).toContain('text: "Réinitialiser au défaut"');
+    expect(js).toContain("Valeur par défaut :");
+    expect(js).toContain("surcharge le défaut :");
+    // Généralisé à TOUS les groupes (plus seulement les textarea).
+    expect(js).toContain("function resetField(");
+    expect(js).toContain('"gpu.minDriver": 580');
+    expect(js).toContain('"tts.speed": 100');
   });
 });
 
@@ -400,12 +509,17 @@ describe("Configuration du moteur — éditeur structuré (Lot 9)", () => {
     expect(assistant).toContain('fetchApi.put("/api/tts/engine-config"');
   });
 
-  it("le bloc manuel ne prétend plus deux actions ni un dossier en lecture seule", async () => {
+  it("le bloc manuel est exact : le dépôt du fichier n'est plus requis pour le catalogue", async () => {
     const js = await (await fetch(`${baseUrl}/ui/tts-assistant.js`)).text();
     expect(js).not.toContain("Deux actions ne peuvent PAS");
     expect(js).not.toContain("LECTURE SEULE pour le conteneur");
-    // L'honnêteté sur l'étape suivante (téléchargement) est explicite.
-    expect(js).toMatch(/étapes suivante|étape suivante/);
+    // Le téléchargement est LIVRÉ : le bloc ne dit plus « pas encore livré »
+    // ni « étape suivante » pour les variantes du catalogue, et il distingue
+    // explicitement ce qui reste vrai (moteurs HORS catalogue).
+    expect(js).not.toMatch(/n'est PAS encore livré/);
+    expect(js).not.toMatch(/étape suivante/);
+    expect(js).toContain("Seulement pour un moteur HORS catalogue");
+    expect(js).toContain("n'est PLUS nécessaire pour les variantes du catalogue");
     expect(js).toContain("Annuler la dernière modification");
     expect(js).toContain("Configuration du moteur");
   });
@@ -424,5 +538,15 @@ describe("Configuration du moteur — éditeur structuré (Lot 9)", () => {
     // Aucun style inline posé depuis le JS (le seul CSS vit dans la feuille servie).
     expect(assistant).not.toContain(".style.");
     expect(assistant).not.toContain('setAttribute("style"');
+  });
+
+  it("traite le refus 409 du redémarrage (téléchargement en cours) comme une information", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    // Le refus n'est PAS présenté comme une panne : la logique pure décide.
+    expect(js).toContain("presentRestartRefusal");
+    expect(js).toContain("requestActivateEngine: activateEngineShortcut");
+    const patch = await (await fetch(`${baseUrl}/ui/config-patch.js`)).text();
+    expect(patch).toContain("download_in_progress");
+    expect(patch).toContain("presentRestartRefusal");
   });
 });

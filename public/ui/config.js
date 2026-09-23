@@ -25,7 +25,7 @@ import { HolafFetch } from './vendor/holaf/holaf-fetch.js';
  * `HolafModal.getCss()`). `injectStyles: false` coupe l'injection.
  */
 import { HolafModal } from './vendor/holaf/holaf-modal.js';
-import { buildConfigPatch, engineFieldState, presentConfigSaveError } from './config-patch.js';
+import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
 import { initTtsAssistant } from './tts-assistant.js';
@@ -148,15 +148,63 @@ const GROUPS = [
   },
   {
     id: "tts",
-    title: "Voix / TTS",
+    title: "Réglages de la voix",
     fields: [
-      { path: "tts.enabled", label: "Activation", kind: "select", options: OPTIONS.ttsEnabled },
-      { path: "tts.engine", label: "Moteur", kind: "select", options: OPTIONS.ttsEngine },
-      { path: "tts.baseUrl", label: "URL du service TTS", kind: "text" },
-      { path: "tts.language", label: "Langue", kind: "select", options: OPTIONS.ttsLanguage },
-      { path: "tts.voice", label: "Voix (identifiant du registre)", kind: "text" },
-      { path: "tts.emotion", label: "Émotion", kind: "select", options: OPTIONS.ttsEmotion },
-      { path: "tts.speed", label: "Débit (%)", kind: "number", min: 50, max: 200 },
+      // — Zone ③ : les 6 réglages ESSENTIELS (visibles sans clic) —
+      {
+        path: "tts.enabled",
+        label: "Activer la voix",
+        kind: "select",
+        options: OPTIONS.ttsEnabled,
+        helper: "Active la synthèse vocale. Prise en compte après un redémarrage de Yuki.",
+      },
+      {
+        path: "tts.engine",
+        label: "Moteur de synthèse",
+        kind: "select",
+        options: OPTIONS.ttsEngine,
+        helper: "Moteur qui prononce le texte. Certains réglages ne s'appliquent qu'à certains moteurs.",
+      },
+      {
+        path: "tts.language",
+        label: "Langue",
+        kind: "select",
+        options: OPTIONS.ttsLanguage,
+        helper: "Langue de la voix.",
+      },
+      {
+        path: "tts.emotion",
+        label: "Émotion",
+        kind: "select",
+        options: OPTIONS.ttsEmotion,
+        helper: "Intonation générale. « personnalisée » active les curseurs d'exagération et de guidage (zone « Avancé »).",
+      },
+      {
+        path: "tts.speed",
+        label: "Débit de parole (%)",
+        kind: "number",
+        min: 50,
+        max: 200,
+        helper: "Vitesse de la parole en pourcentage (100 = normal).",
+      },
+      {
+        path: "tts.volume",
+        label: "Volume de lecture (%)",
+        kind: "number",
+        min: 0,
+        max: 100,
+        helper: "Volume de lecture côté navigateur (100 = maximum).",
+      },
+      // ⚠️ `tts.voice` n'est PLUS un champ texte ici : la bibliothèque de voix
+      // (zone ②, `voices-panel.js`) en est l'unique contrôle et l'écrit tout de suite.
+      // — Zone ④ : le technique, replié sous « Avancé » —
+      {
+        path: "tts.baseUrl",
+        label: "Adresse du moteur (avancé)",
+        kind: "text",
+        advanced: true,
+        helper: "Adresse du service TTS dans le réseau Docker. À ne changer que si vous relocalisez le moteur.",
+      },
       {
         path: "tts.exaggeration",
         label: "Exagération (pour-mille)",
@@ -164,22 +212,57 @@ const GROUPS = [
         min: 0,
         max: 1500,
         step: 10,
+        advanced: true,
         revealWhen: { path: "tts.emotion", equals: "personnalisee" },
+        helper: "Force d'expression (500 = neutre). N'agit qu'avec une émotion « personnalisée » et un moteur compatible.",
       },
       {
         path: "tts.cfg",
-        label: "CFG (pour-mille)",
+        label: "Contrôle de guidage (CFG)",
         kind: "range",
         min: 0,
         max: 1500,
         step: 10,
+        advanced: true,
         revealWhen: { path: "tts.emotion", equals: "personnalisee" },
+        helper: "Fidélité au style demandé (500 = neutre). N'agit qu'avec une émotion « personnalisée » et un moteur compatible.",
       },
-      { path: "tts.prefetchDepth", label: "Prefetch (phrases d'avance)", kind: "number", min: 0, max: 2 },
-      { path: "tts.minSentenceChars", label: "Longueur minimale de phrase", kind: "number", min: 8, max: 500 },
-      { path: "tts.maxSentenceChars", label: "Longueur maximale de phrase", kind: "number", min: 40, max: 2000 },
-      { path: "tts.timeoutMs", label: "Timeout de synthèse (ms)", kind: "number", min: 1000, max: 120000 },
-      { path: "tts.volume", label: "Volume de lecture (%)", kind: "number", min: 0, max: 100 },
+      {
+        path: "tts.prefetchDepth",
+        label: "Préchargement (phrases d'avance)",
+        kind: "number",
+        min: 0,
+        max: 2,
+        advanced: true,
+        helper: "Nombre de phrases synthétisées à l'avance pour réduire l'attente entre les phrases.",
+      },
+      {
+        path: "tts.minSentenceChars",
+        label: "Découpe — longueur minimale d'une phrase",
+        kind: "number",
+        min: 8,
+        max: 500,
+        advanced: true,
+        helper: "En deçà, un fragment n'est pas découpé seul.",
+      },
+      {
+        path: "tts.maxSentenceChars",
+        label: "Découpe — longueur maximale d'une phrase",
+        kind: "number",
+        min: 40,
+        max: 2000,
+        advanced: true,
+        helper: "Au-delà, la phrase est coupée pour être synthétisée par morceaux.",
+      },
+      {
+        path: "tts.timeoutMs",
+        label: "Délai maximal de synthèse (ms)",
+        kind: "number",
+        min: 1000,
+        max: 120000,
+        advanced: true,
+        helper: "Au-delà, la synthèse est abandonnée (le moteur est peut-être bloqué).",
+      },
     ],
   },
   {
@@ -194,6 +277,54 @@ const GROUPS = [
 
 const ALL_FIELDS = GROUPS.flatMap((group) => group.fields);
 const LABELS = new Map(ALL_FIELDS.map((field) => [field.path, field.label]));
+// `tts.voice` n'est plus un champ du groupe (la bibliothèque de la zone ② en est
+// l'unique contrôle), mais son libellé reste utile pour les messages d'erreur.
+LABELS.set("tts.voice", "Voix active");
+
+/**
+ * Valeurs par défaut des champs — **miroir UI** de `src/config/schema.ts`.
+ * Sert UNIQUEMENT à l'aide « Valeur par défaut : X. » et au bouton
+ * « Réinitialiser au défaut ». Le reset lui-même envoie `null` au serveur (qui
+ * applique SON défaut) : cette table ne fige donc rien côté serveur, elle rend
+ * seulement le contrôle cohérent immédiatement. Tenir synchronisée avec le
+ * schéma (aucun accès au schéma depuis le navigateur).
+ */
+const FIELD_DEFAULTS = {
+  "llm.light.baseUrl": "https://ollama.com/v1",
+  "llm.light.model": "gemma4:31b",
+  "llm.light.api": "openai-completions",
+  "llm.light.thinking": "off",
+  "llm.heavy.baseUrl": "https://ollama.com/v1",
+  "llm.heavy.model": "deepseek-v4.1-flash",
+  "llm.heavy.api": "openai-completions",
+  "llm.heavy.thinking": "high",
+  "llm.missingKeyMode": "degrade",
+  "delegation.defaultDeadlineMs": 1500,
+  "delegation.maxConcurrent": 3,
+  "delegation.maxQueue": 10,
+  "delegation.idleTimeoutMs": 120000,
+  "delegation.totalTimeoutMs": 1200000,
+  "gpu.profile": "",
+  "gpu.compatMode": "strict",
+  "gpu.minDriver": 580,
+  "prompts.light": "",
+  "prompts.heavy": "",
+  "tts.enabled": "off",
+  "tts.engine": "chatterbox",
+  "tts.baseUrl": "http://tts:8081",
+  "tts.language": "fr",
+  "tts.emotion": "neutre",
+  "tts.speed": 100,
+  "tts.exaggeration": 500,
+  "tts.cfg": 500,
+  "tts.prefetchDepth": 2,
+  "tts.minSentenceChars": 24,
+  "tts.maxSentenceChars": 240,
+  "tts.timeoutMs": 15000,
+  "tts.volume": 100,
+  "transport.replayBuffer": 1000,
+  "transport.replayBytes": 5000000,
+};
 
 /**
  * Onglets de la page (5 sections) et répartition des groupes de champs.
@@ -245,6 +376,8 @@ const restartButton = document.getElementById("restart");
 const restartStatus = document.getElementById("restart-status");
 const voicesRoot = document.getElementById("voices-root");
 const ttsAssistantRoot = document.getElementById("tts-assistant-root");
+/** Zone ⑤ (technique repliée) — second point de montage du MÊME assistant. */
+const ttsEngineRoot = document.getElementById("tts-engine-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
 let voicesPanel = null;
 
@@ -373,6 +506,47 @@ function renderSecret(field, entry) {
   return container;
 }
 
+/** Libellé lisible d'une valeur (mappe les options des `<select>`). */
+function valueLabel(field, value) {
+  if (field.kind === "select" && Array.isArray(field.options)) {
+    const found = field.options.find(([v]) => String(v) === String(value));
+    if (found) return found[1];
+  }
+  const text = String(value ?? "");
+  return text === "" ? "∅ (vide)" : text;
+}
+
+/**
+ * Valeur par défaut d'un champ (via `FIELD_DEFAULTS`), affichée en clair et
+ * injectable dans le contrôle. `undefined` si le champ n'a pas de défaut connu
+ * (les champs secrets n'en ont jamais).
+ */
+function fieldDefault(field) {
+  return Object.prototype.hasOwnProperty.call(FIELD_DEFAULTS, field.path)
+    ? FIELD_DEFAULTS[field.path]
+    : undefined;
+}
+
+/**
+ * « Réinitialiser au défaut » : restaure la valeur PAR DÉFAUT dans le contrôle
+ * et, si une surcharge existe (`origin === "store"`), demande au serveur de
+ * l'effacer (`null` dans le patch via `pendingResets`). Si le champ est déjà au
+ * défaut, la remise à zéro reste purement locale (aucun envoi inutile).
+ */
+function resetField(field, control, entry) {
+  const fallback = fieldDefault(field);
+  if (fallback !== undefined) {
+    control.value = String(fallback);
+    const out = control.parentElement?.querySelector?.(".config-range__value");
+    if (out) out.textContent = control.value;
+  }
+  if (entry.origin === "store") state.pendingResets.add(field.path);
+  else state.pendingResets.delete(field.path);
+  refreshVisibility();
+  refreshEngineFields();
+  updateDirtyIndicators();
+}
+
 function renderField(field) {
   const entry = state.fields[field.path] ?? { value: "", origin: "default", apply: "restart" };
   const row = h("div", { class: "config-row" });
@@ -409,6 +583,12 @@ function renderField(field) {
       updateDirtyIndicators();
     });
     row.append(node);
+
+    // Aide contextuelle courte (classe existante `config-helper`).
+    if (field.helper) {
+      row.append(h("p", { class: "config-helper", text: field.helper }));
+    }
+
     // Note « sans effet avec ce moteur » (masquée jusqu'à `refreshEngineFields`).
     const engineNote = h("p", {
       class: "config-helper config-engine-note",
@@ -416,18 +596,40 @@ function renderField(field) {
     });
     state.engineNotes.set(field.path, engineNote);
     row.append(engineNote);
-    if (field.kind === "textarea") {
-      const reset = h("button", { class: "button button--ghost button--small", type: "button", text: "Réinitialiser au défaut" });
-      reset.addEventListener("click", () => {
-        control.value = "";
-        state.pendingResets.add(field.path);
-        updateDirtyIndicators();
+
+    // Défaut / surcharge + « Réinitialiser au défaut » — désormais pour TOUS les
+    // champs qui ont un défaut (auparavant réservé aux textarea).
+    const defaults = h("div", { class: "config-reset" });
+    const fallback = fieldDefault(field);
+    if (!entry.lockedByEnv && fallback !== undefined) {
+      if (entry.origin === "store") {
+        defaults.append(
+          h("p", {
+            class: "config-helper",
+            text: `Valeur enregistrée (surcharge le défaut : ${valueLabel(field, fallback)}).`,
+          }),
+        );
+      } else if (entry.origin === "default") {
+        defaults.append(
+          h("p", {
+            class: "config-helper",
+            text: `Valeur par défaut : ${valueLabel(field, fallback)}.`,
+          }),
+        );
+      }
+      const reset = h("button", {
+        class: "button button--ghost button--small",
+        type: "button",
+        text: "Réinitialiser au défaut",
       });
-      row.append(h("div", { class: "config-helper" }, [reset]));
+      reset.addEventListener("click", () => resetField(field, control, entry));
+      defaults.append(reset);
+    } else if (entry.origin === "store") {
+      defaults.append(
+        h("p", { class: "config-helper", text: "Valeur enregistrée (surcharge le défaut)." }),
+      );
     }
-    if (entry.origin === "store") {
-      row.append(h("span", { class: "config-helper", text: "Valeur enregistrée (surcharge le défaut)." }));
-    }
+    if (defaults.childElementCount > 0) row.append(defaults);
   }
   row.append(h("p", { class: "config-error", hidden: "hidden" }));
   return row;
@@ -457,7 +659,22 @@ function render() {
       head.append(h("div", { class: "config-secret" }, [test, status]));
     }
     section.append(head);
-    for (const field of group.fields) section.append(renderField(field));
+    // Rendu EAGER : les champs « essentiels » sont directement dans la section ;
+    // les champs `advanced` sont regroupés dans un repli `<details>` DISTINCT
+    // (classe `config-advanced`, jamais `tts-details`) — masqué, jamais retiré.
+    const advanced = [];
+    for (const field of group.fields) {
+      if (field.advanced) advanced.push(renderField(field));
+      else section.append(renderField(field));
+    }
+    if (advanced.length > 0) {
+      section.append(
+        h("details", { class: "config-advanced" }, [
+          h("summary", { class: "config-advanced__summary", text: "Avancé" }),
+          h("div", { class: "config-advanced__body" }, advanced),
+        ]),
+      );
+    }
     container.append(section);
   }
   refreshVisibility();
@@ -510,6 +727,13 @@ function refreshVisibility() {
       ? control.value
       : state.fields[field.revealWhen.path]?.value;
     row.hidden = String(value) !== String(field.revealWhen.equals);
+    // Un champ révélé mais enfermé dans un repli fermé resterait invisible :
+    // on OUVRE le repli « Avancé » qui le contient (on ne le referme jamais :
+    // l'utilisateur reste maître de la fermeture).
+    if (!row.hidden) {
+      const details = row.closest("details.config-advanced");
+      if (details && !details.open) details.open = true;
+    }
   }
 }
 
@@ -655,6 +879,7 @@ async function save() {
     saveStatus.textContent = "Enregistré.";
     // La voix active a pu changer côté formulaire : resynchronise le panneau.
     void voicesPanel?.refresh();
+    return true;
   } catch (error) {
     // Erreurs métier : HolafFetch expose le corps JSON parsé dans `error.data`.
     // La cause RÉELLE (code + message + champ) est affichée, jamais un texte
@@ -662,7 +887,47 @@ async function save() {
     const presented = presentConfigSaveError(error, LABELS);
     showFieldErrors(presented.fields);
     saveStatus.textContent = presented.summary;
+    return false;
   }
+}
+
+/**
+ * Raccourci du bandeau « Activer la voix » (zone ①) : **un seul chemin
+ * d'écriture** pour `tts.enabled`. Le bouton ne fait AUCUN `PUT` propre et ne
+ * redémarre RIEN en silence : il règle le select « Activer la voix » (zone ③)
+ * puis passe par l'**enregistrement global** (barre sticky), comme tout le
+ * reste ; c'est ensuite à l'utilisateur de redémarrer Yuki (onglet Maintenance).
+ *
+ * @returns {Promise<boolean>} `true` si l'enregistrement a réussi.
+ */
+async function enableVoiceShortcut() {
+  const control = state.inputs.get("tts.enabled");
+  if (control && control.value !== "on") {
+    control.value = "on";
+    state.pendingResets.delete("tts.enabled");
+    updateDirtyIndicators();
+  }
+  return save();
+}
+
+/**
+ * Raccourci « Choisir comme moteur » (UI de téléchargement, zone ⑤) : **un seul
+ * chemin d'écriture** pour `tts.engine`. Il règle le select « Moteur de
+ * synthèse » (zone ③) puis passe par l'**enregistrement global** — aucun `PUT`
+ * propre, aucun redémarrage silencieux.
+ *
+ * @param {string} id Identifiant de catalogue (= valeur de `tts.engine`).
+ * @returns {Promise<boolean>} `true` si l'enregistrement a réussi.
+ */
+async function activateEngineShortcut(id) {
+  if (typeof id !== "string" || id.length === 0) return false;
+  const control = state.inputs.get("tts.engine");
+  if (control && control.value !== id) {
+    control.value = id;
+    state.pendingResets.delete("tts.engine");
+    updateDirtyIndicators();
+  }
+  return save();
 }
 
 function showApplied(applied) {
@@ -754,15 +1019,11 @@ async function requestGatewayRestart() {
   } catch (error) {
     // Corps JSON d'erreur exposé par la brique : `message` d'abord
     // (convention du gateway), sinon `error`, sinon le message typé.
-    const data = error?.data ?? {};
-    const message =
-      data.message ??
-      data.error ??
-      (error instanceof Error ? error.message : String(error));
-    setRestartStatus(
-      `Échec de la demande de redémarrage : ${message}`,
-      true,
-    );
+    // Un refus pour téléchargement en cours (409) n'est PAS une panne : il est
+    // présenté comme une information, pas comme un échec (voir
+    // `presentRestartRefusal`).
+    const described = presentRestartRefusal(error);
+    setRestartStatus(described.message, !described.info);
     restartButton.disabled = false;
     saveButton.disabled = false;
     return false;
@@ -880,25 +1141,33 @@ void (async () => {
         player,
         getActiveVoice: () => String(state.fields["tts.voice"]?.value ?? ""),
         onVoiceSelected: (id) => {
+          // `tts.voice` n'est plus un champ du formulaire : le select de la
+          // bibliothèque (zone ②) l'écrit immédiatement (`PUT` `tts.voice`).
+          // On ne tient à jour que `state.fields` (lu par `getActiveVoice`).
           const entry = state.fields["tts.voice"];
           if (entry) entry.value = id;
-          const input = state.inputs.get("tts.voice");
-          if (input) input.value = id;
-          state.initial.set("tts.voice", id);
           updateDirtyIndicators();
         },
       });
     }
     // Assistant de mise en route du TTS (Lot 8) : composant autonome monté par
-    // id. Changer son emplacement ne tient qu'à la ligne ci-dessous.
+    // id. La zone ① (bandeau d'état) vit dans `#tts-assistant-root` et la zone
+    // ⑤ (technique repliée) dans `#tts-engine-root` : deux emplacements, UN
+    // SEUL composant, jamais dupliqué.
     if (ttsAssistantRoot) {
       initTtsAssistant(ttsAssistantRoot, {
         HolafFetch,
         HolafModal,
         player,
+        engineRoot: ttsEngineRoot,
         getActiveVoice: () => String(state.fields["tts.voice"]?.value ?? ""),
         onConfigChanged: () => void load(),
-        requestRestart: requestGatewayRestart,
+        // Chemin d'écriture UNIQUE de `tts.enabled` : le bandeau passe par
+        // l'enregistrement global (plus de redémarrage silencieux du bouton).
+        requestEnableVoice: enableVoiceShortcut,
+        // Chemin d'écriture UNIQUE de `tts.engine` (raccourci « Choisir comme
+        // moteur » de l'UI de téléchargement, zone ⑤).
+        requestActivateEngine: activateEngineShortcut,
         openMaintenance: () => selectTab("maintenance", { updateHash: true }),
       });
     }

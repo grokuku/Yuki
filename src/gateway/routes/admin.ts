@@ -39,6 +39,18 @@ export interface AdminApiDeps {
   /** Injectable pour les tests. Défaut : `setTimeout`. */
   schedule?: (callback: () => void, delayMs: number) => void;
   now?: () => number;
+  /**
+   * Garde-fou de cohérence (Lot 9, étape 2) : refuse le redémarrage tant qu'un
+   * téléchargement de modèle est en cours, sinon la tâche serait tuée sans
+   * explication. Absent ⇒ comportement historique (redémarrage immédiat).
+   */
+  downloads?: AdminDownloadsGuard;
+}
+
+/** Garde-fou minimal exposé par le téléchargeur de modèles. */
+export interface AdminDownloadsGuard {
+  hasActive(): boolean;
+  activeId(): string | null;
 }
 
 export interface AdminRequestInput {
@@ -65,6 +77,28 @@ export function isAdminPath(path: string): boolean {
 function handleRestart(input: AdminRequestInput): ConfigHttpResponse {
   const guard = requireWriteGuards(input.headers);
   if (guard) return guard;
+
+  // Cohérence avec le téléchargement des modèles (Lot 9, étape 2) : le
+  // redémarrage TUE le processus (exit 75, relance par le superviseur). Tuer un
+  // téléchargement en cours le laisserait en `downloading` sans explication ⇒
+  // on REFUSE tant qu'une tâche est active. Aucun téléchargement actif ⇒
+  // comportement INCHANGÉ.
+  const downloads = input.deps.downloads;
+  if (downloads?.hasActive()) {
+    const activeDownload = downloads.activeId();
+    input.deps.logger.warn("admin.restart_refused", {
+      reason: "download_in_progress",
+      active_download: activeDownload,
+    });
+    return json(409, {
+      error: "download_in_progress",
+      code: "download_in_progress",
+      message:
+        "Un téléchargement de modèle est en cours : redémarrer maintenant l'interromprait. " +
+        "Attendez la fin du téléchargement ou annulez-le, puis redémarrez.",
+      ...(activeDownload ? { activeDownload } : {}),
+    });
+  }
 
   const at = new Date((input.deps.now ?? Date.now)()).toISOString();
   input.deps.logger.info("admin.restart_requested", { at });

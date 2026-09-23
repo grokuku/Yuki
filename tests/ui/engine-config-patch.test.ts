@@ -72,11 +72,11 @@ describe("validateModelDraft — l'éditeur empêche les erreurs connues", () =>
         .errors.family,
     ).toBeTruthy();
     expect(
-      validateModelDraft({ id: "x", family: "kokoro", task: "clon", mode: "offline", path: "/models/x.bin" })
+      validateModelDraft({ id: "x", family: "kokoro_tts", task: "clon", mode: "offline", path: "/models/x.bin" })
         .errors.path,
     ).toBeTruthy();
     expect(
-      validateModelDraft({ id: "", family: "kokoro", task: "clon", mode: "offline", path: "/models/x.gguf" })
+      validateModelDraft({ id: "", family: "kokoro_tts", task: "clon", mode: "offline", path: "/models/x.gguf" })
         .errors.id,
     ).toBeTruthy();
   });

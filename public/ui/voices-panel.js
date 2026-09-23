@@ -115,7 +115,7 @@ export function initVoicesPanel(deps) {
   });
 
   const head = h("div", { class: "config-group__head" }, [
-    h("h2", { class: "config-group__title", text: "Voix" }),
+    h("h2", { class: "config-group__title", text: "Ma voix" }),
     h("div", { class: "config-secret" }, [cloneButton]),
   ]);
 
@@ -125,9 +125,10 @@ export function initVoicesPanel(deps) {
       class: "config-intro",
       text:
         "Les voix prédéfinies viennent avec Yuki ; les voix clonées sont créées " +
-        "par upload d'un échantillon. La voix active est enregistrée côté serveur " +
-        "(champ tts.voice). La lecture nécessite que le TTS serveur soit activé " +
-        "(groupe « Voix / TTS » ci-dessous).",
+        "par upload d'un échantillon. Le sélecteur ci-dessous est l'UNIQUE " +
+        "contrôle de la voix active : il l'enregistre immédiatement côté serveur " +
+        "(champ tts.voice). La lecture nécessite que la voix soit activée " +
+        "(réglage « Activer la voix », zone « Réglages de la voix » ci-dessous).",
     }),
     field("Voix active", select),
     list,

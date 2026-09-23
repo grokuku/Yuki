@@ -67,6 +67,7 @@ import {
   AudioCppClient,
   EngineCapabilitiesProbe,
   EngineConfigStore,
+  TtsDownloadManager,
   VoiceStore,
   createAudioCppSynthesizer,
   isTtsEnabled,
@@ -352,6 +353,17 @@ async function main(): Promise<void> {
     capabilities: () => engineCapabilities.probe(),
   };
 
+  // --- Téléchargement des modèles (Lot 9, étape 2) ---------------------------
+  // Registre DURABLE (volume `state`) : survit au redémarrage du gateway ; au
+  // démarrage, une tâche non terminale devient `interrupted`. Le catalogue est
+  // FERMÉ côté serveur (`src/tts/catalog-data.ts`) : aucune URL du client.
+  const ttsDownloads = new TtsDownloadManager({
+    registryPath: join(env.mountPoints.state, "tts-downloads.json"),
+    modelsDir: env.mountPoints.models,
+    engineModelsDir: env.ttsEngineModelsDir,
+    logger,
+  });
+
   const ttsDeps: TtsApiDeps = {
     config: {
       getString: (path) => config.getString(path),
@@ -363,6 +375,7 @@ async function main(): Promise<void> {
     modelsDir: env.mountPoints.models,
     synth: { synthesize: ({ text, voice }) => synthesize(text, voice) },
     engineConfig: engineConfigPort,
+    downloads: ttsDownloads,
   };
 
   logger.info("tts.voices.ready", {
@@ -542,6 +555,12 @@ async function main(): Promise<void> {
       admin: {
         logger,
         requestShutdown: () => triggerShutdown?.(RESTART_REASON),
+        // Refuse le redémarrage tant qu'un téléchargement est actif (le process
+        // serait tué sans explication). Aucun téléchargement actif ⇒ inchangé.
+        downloads: {
+          hasActive: () => ttsDownloads.hasActive(),
+          activeId: () => ttsDownloads.activeId(),
+        },
       },
     },
     transport,

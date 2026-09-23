@@ -148,3 +148,47 @@ export {
   type PathStatus,
   type FieldError,
 } from "./engine-config.js";
+
+// --- Lot 9, étape 2 : catalogue + téléchargement des modèles ----------------
+
+export {
+  CATALOG_SCHEMA_VERSION,
+  CATALOG_ALLOWED_LICENSES,
+  CATALOG_ENTRIES,
+  CATALOG_REJECTIONS,
+  DOWNLOAD_FILE_NAME,
+  DOWNLOAD_PART_SUFFIX,
+  HF_RESOLVE_BASE,
+  HF_API_BASE,
+  CatalogResolveError,
+  findCatalogEntry,
+  hfResolveUrl,
+  hfTreeUrl,
+  isAllowedLicense,
+  resolveCatalogPackage,
+  downloadEngineDir,
+  downloadEnginePath,
+  type CatalogEntry,
+  type CatalogRejection,
+  type ResolvedPackage,
+  type ResolvedCatalogPackage,
+  type ResolveCatalogOptions,
+  type ResolveSource,
+} from "./catalog-data.js";
+
+export {
+  DOWNLOAD_SCHEMA_VERSION,
+  DOWNLOAD_TERMINAL_STATUSES,
+  DEFAULT_DISK_MARGIN_BYTES,
+  DEFAULT_PROGRESS_INTERVAL_MS,
+  DEFAULT_RESOLVE_TIMEOUT_MS,
+  TtsDownloadManager,
+  TtsDownloadError,
+  contentRangeTotal,
+  hashFileInto,
+  isDownloadTerminal,
+  type DownloadLogger,
+  type DownloadStatus,
+  type DownloadTask,
+  type TtsDownloadManagerOptions,
+} from "./downloads.js";

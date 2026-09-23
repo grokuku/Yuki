@@ -135,6 +135,43 @@ describe("handleAdminRequest — POST /api/admin/restart", () => {
   });
 });
 
+describe("handleAdminRequest — redémarrage et téléchargement de modèle", () => {
+  it("REFUSE (409) tant qu'un téléchargement est actif — aucune demande d'arrêt", () => {
+    const spy = makeSpy();
+    const deps: AdminApiDeps = {
+      ...spy.deps,
+      downloads: { hasActive: () => true, activeId: () => "chatterbox" },
+    };
+    const response = handleAdminRequest({
+      method: "POST",
+      path: "/api/admin/restart",
+      headers: { "x-yuki-config": "1" },
+      deps,
+    });
+    expect(response.status).toBe(409);
+    expect((response.body as { code: string }).code).toBe("download_in_progress");
+    expect((response.body as { activeDownload?: string }).activeDownload).toBe("chatterbox");
+    expect(spy.scheduled).toHaveLength(0);
+    expect(spy.lines.join("\n")).toContain("admin.restart_refused");
+  });
+
+  it("redémarre normalement (200) quand aucun téléchargement n'est actif", () => {
+    const spy = makeSpy();
+    const deps: AdminApiDeps = {
+      ...spy.deps,
+      downloads: { hasActive: () => false, activeId: () => null },
+    };
+    const response = handleAdminRequest({
+      method: "POST",
+      path: "/api/admin/restart",
+      headers: { "x-yuki-config": "1" },
+      deps,
+    });
+    expect(response.status).toBe(200);
+    expect(spy.scheduled).toHaveLength(1);
+  });
+});
+
 describe("gateway HTTP — POST /api/admin/restart (bout en bout)", () => {
   it("répond 200 et déclenche l'arrêt injecté (le serveur de test survit)", async () => {
     const spy = makeSpy();

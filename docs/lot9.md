@@ -1,20 +1,23 @@
 # Lot 9 — Configuration structurée du moteur TTS + montages `rw`
 
-> **Spécification du Lot 9, étape 1 :** permettre d'**éditer la configuration du
-> moteur `audio.cpp` (`server.json`) depuis l'interface Yuki**, sans terminal et
-> **sans jamais envoyer de JSON brut** au navigateur. Ce document **complète**
+> **Spécification du Lot 9 — étapes 1 ET 2.** L'**étape 1** permet d'**éditer la
+> configuration du moteur `audio.cpp` (`server.json`) depuis l'interface Yuki**,
+> sans terminal et **sans jamais envoyer de JSON brut** au navigateur. L'**étape 2**
+> (§16) ajoute le **téléchargement des modèles depuis l'interface** — **backend
+> seul** (catalogue fermé, job durable, routes) ; l'UI viendra dans un lot séparé
+> (refonte de `/config`). Ce document **complète**
 > [`docs/lot7.md`](lot7.md) (spécification de référence du TTS) et
 > [`docs/lot8.md`](lot8.md) (assistant de mise en route). Il **ne refait pas**
-> les lots précédents : il ajoute les **montages `rw`** nécessaires et un
-> **contrat de routes** structuré.
+> les lots précédents.
 >
-> **Date.** 2026-09-22. Écrit après livraison de l'étape 1.
+> **Date.** 2026-09-22 (étape 1) ; **2026-09-23** (étape 2, backend) ;
+> **2026-09-23** (refonte UX de l'onglet Voix de `/config`, §17).
 >
 > **Style.** Sections numérotées ; tableaux de décisions **« Acté »** (`D##`) et
 > **« À confirmer »** (`C##`) ; chaque affirmation est adossée à une preuve
 > `fichier:ligne` ou explicitement marquée **non attestée**. La numérotation
-> **poursuit** celle des lots précédents : décisions **D46 → D65**, points
-> ouverts **C30 → C40** (dernier `D45` : `docs/lot8.md:645` ; dernier `C29` :
+> **poursuit** celle des lots précédents : décisions **D46 → D76**, points
+> ouverts **C30 → C48** (dernier `D45` : `docs/lot8.md:645` ; dernier `C29` :
 > `docs/lot8.md:662`). ⚠️ Un travail intermédiaire (montage **imbriqué** du
 > sous-dossier, via l'option Compose de **sous-chemin de volume**) a créé puis
 > **retiré** les identifiants **D59** et **C37** : ils ne sont **PAS
@@ -68,7 +71,7 @@ le **socket Docker reste refusé**.
 
 ### Hors périmètre (étape 1)
 
-- **Télécharger** un modèle depuis l'interface (montages prêts, **code absent**).
+- **Télécharger** un modèle depuis l'interface (livré à l'**étape 2**, §16 — backend seul, **UI hors périmètre**).
 - **Démarrer/redémarrer** un conteneur depuis l'UI (socket Docker **refusé**).
 - **Pré-déclarer** automatiquement des entrées `models[]` (§10, C32).
 - Vérifier en réel le **timbre/la langue** produits (non vérifiable ici).
@@ -242,7 +245,7 @@ lui sous `/models` (y compris le sous-dossier de téléchargement
 | --- | --- | --- | --- |
 | `task` | jetons canoniques `vad\|asr\|diar\|sep\|gen\|tts\|clon\|vc\|s2s\|align\|vdes\|spk\|svc\|midi` | `clone` **refusé** avec un message nommant `clon` | `src/tts/engine-config.ts:73-88`, `:391-402` ; `public/ui/engine-config-patch.js:16-32` |
 | `mode` | `offline\|streaming` | `offline` **obligatoire** pour `chatterbox`/`cosyvoice3` | `src/tts/engine-config.ts:91`, `:116`, `:403-420` |
-| `family` | `chatterbox\|qwen3-tts\|cosyvoice3\|kokoro\|sanotts` | hors liste ⇒ `400` | `src/tts/engine-config.ts:94-100` |
+| `family` | noms **MOTEUR** `chatterbox\|qwen3_tts\|cosyvoice3\|kokoro_tts\|sanotts` | hors liste ⇒ `400` ; ⚠️ **corrigé** à l'étape 2 (D66) : ce sont les `family()` des loaders (`qwen3_tts`/`kokoro_tts`, underscores), pas les ids `tts.engine` | `src/tts/engine-config.ts:104-112`, `:402-407` |
 | `id` | les **5** valeurs de `tts.engine` | hors liste ⇒ **accepté mais signalé** (`report.warnings`) | `src/tts/engine-config.ts:107-113`, `:744-747` |
 | `path` | un `.gguf` **présent** dans les montages | hors montages ⇒ refusé ; `..` interdit ; absolu requis | `src/tts/engine-config.ts:421-448`, `:923-930` |
 
@@ -348,17 +351,20 @@ son **existence réelle n'est pas re-vérifiée ici** (C33).
 
 ## 10. Ce qui reste à faire
 
-### 10.1 Étape 2 — téléchargement des modèles (hors de ce lot)
+### 10.1 Étape 2 — téléchargement des modèles (**LIVRÉE, backend seul**)
 
 Les montages et chemins sont **prêts** : `M1` (`/models`, `rw`) et
 `MODELS_DOWNLOADS_SUBDIR` (`src/tts/engine-config.ts:63`), à partir duquel le code
-**dérive** le chemin d'écriture `<models>/downloads` (plus de variable dédiée).
-Le **code de téléchargement est absent** :
-aujourd'hui, le bloc « Ce qui reste à faire à la main » de l'assistant **conserve**
-donc l'action « déposer le fichier du modèle »
-(`public/ui/tts-assistant.js:1535-1591`) — elle est **encore nécessaire**, et le
-message le dit explicitement. Quand l'étape 2 sera livrée, cette action
-**disparaîtra** (au moins pour la variante qui télécharge).
+**dérive** le chemin d'écriture `<models>/downloads`.
+
+Le **backend** du téléchargement est **livré** à l'étape 2 : catalogue fermé
+(`src/tts/catalog-data.ts`), job durable (`src/tts/downloads.ts`), routes
+`/api/tts/catalog` et `/api/tts/downloads*` (§16). **L'UI est désormais livrée**
+(§19) : catalogue, téléchargement, progression, annulation et déclaration sont
+montés dans `#tts-downloads-root`. Le bloc « Ce qui reste à faire à la main » de
+l'assistant a été **corrigé en conséquence** : déposer le fichier n'est **plus**
+requis pour les 4 variantes du catalogue, mais **reste vrai** pour un moteur hors
+catalogue (p. ex. `sanotts`, GPL-3.0).
 
 ### 10.2 Pré-déclaration des modèles (point ouvert C32)
 
@@ -458,6 +464,11 @@ symboles (`tests/ui/ui-modules-defined.test.ts`), et **E2E qui rejoue le bug**
 | **D63** | **`language` : Qwen3-TTS attend un NOM, pas un code ISO.** Yuki envoyait `language: "fr"` (enum `tts.language`) ⇒ `Qwen3 talker unsupported language: fr` (**HTTP 500**). Correctif : `engineLanguageValue` traduit le code Yuki en nom pour `qwen3-tts` (`fr`→`French` ; inconnu→`Auto`) ; les autres moteurs sont **inchangés** (`fr`). | §14.5 ; `src/tts/audio-cpp.ts` (`engineLanguageValue`), `src/models/qwen3_tts/talker.cpp` (`build_prompt_state`), `config.json` embarqué (`talker_config.codec_language_id`), README `Qwen/Qwen3-TTS-12Hz-1.7B-Base` |
 | **D64** | **`id` d'une entrée `models[]` = étiquette LIBRE** (pas le nom de famille) : `id: "qwen3-tts"` + `family: "qwen3_tts"` coexistent dans l'exemple amont ; le serveur indexe par `id` et Yuki envoie `tts.engine` **tel quel** comme clé `model`. | §14.7 ; `examples/docker/server/qwen3-tts-server.json`, `app/server/runtime.cpp` (`require_model`, `model_config_from_json`) |
 | **D65** | **Voice design / CustomVoice : possibles sans référence, mais NON pilotables depuis Yuki.** `VoiceDesign` (`task: "vdes"`) génère depuis une `instruction`/`instruct` que Yuki n'envoie pas (rendu par défaut, sans crash) ; `CustomVoice` (`task: "tts"`) **exige** un `speaker` (préréglage) et **échoue** sans (`unsupported speaker: `). **Recommandation : paquet `Base` + voix de référence (comme CosyVoice 3).** | §14.4 ; `src/models/qwen3_tts/session.cpp` (`make_request`), `src/models/qwen3_tts/prompt_tts_voice_design.cpp` |
+| **D66** | **Correction de la liste fermée `family`** (défaut de l'étape 1) : les valeurs sont les **noms MOTEUR** — `chatterbox`, `qwen3_tts`, `cosyvoice3`, `kokoro_tts`, `sanotts` — et **non** les ids `tts.engine` (`qwen3-tts`, `kokoro`). Sans ce correctif, déclarer Qwen/Kokoro via l'éditeur aurait produit un `family` que le moteur REFUSE (`unsupported model family hint`). Miroir UI mis à jour. | preuves : `model_specs/*.json` (`family`), README HF (tableau « audio.cpp family »), `app/server/runtime.cpp:2116` (`family != "kokoro_tts"`), `examples/docker/server/qwen3-tts-server.json` (`id: qwen3-tts`, `family: qwen3_tts`), `src/models/chatterbox/loader.cpp:27`, `src/models/qwen3_tts/loader.cpp:27` ; `src/tts/engine-config.ts:104-112`, `public/ui/engine-config-patch.js:37-46`, tests `tests/tts/engine-config.test.ts`, `tests/ui/engine-config-patch.test.ts` |
+| **D67** | **Catalogue FERMÉ côté serveur, destination imposée.** Le client n'envoie qu'un `catalogId` (jamais d'URL) ; les URL `resolve` HF sont construites par le serveur. Destination `/models/downloads/<id>/model.gguf` (nom IMPOSÉ, sélectionnable par le moteur). Le **nom exact et la taille** sont **résolus à la demande** via l'API HF (`tree`), avec un **repli documenté** (nom/taille annoncés, `sha256` non prétendu) si l'API est injoignable. | `src/tts/catalog-data.ts` (`CATALOG_ENTRIES`, `resolveCatalogPackage`), `tests/tts/catalog.test.ts` |
+| **D68** | **Job DURABLE à garanties** : écriture `.part` puis **`rename` atomique** ; contrôle de **taille** et d'**intégrité** SHA-256 (si HF expose `lfs.oid`) ; **reprise `Range`** conditionnelle (`206` + taille inchangée) ; **contrôle d'espace disque** avant démarrage ; **1 téléchargement à la fois** ; **annulation** `AbortController` ; registre persistant qui passe toute tâche non terminale en **`interrupted`** (jamais `done`) après un redémarrage du gateway. | `src/tts/downloads.ts`, `tests/tts/downloads.test.ts`, `tests/integration/tts-downloads.test.ts` |
+| **D69** | **Cohérence avec le redémarrage : `POST /api/admin/restart` REFUSE (`409 download_in_progress`)** tant qu'un téléchargement est `queued`/`downloading`/`verifying` (le process serait sinon tué sans explication). Aucun téléchargement actif ⇒ **comportement inchangé** (`200` + arrêt planifié). | `src/gateway/routes/admin.ts` (`handleRestart`), câblage `src/index.ts`, tests `tests/gateway/restart-api.test.ts`, `tests/integration/tts-downloads.test.ts` |
+| **D70** | **`sanotts` ÉCARTÉ du catalogue, mais SIGNALÉ.** Seul paquet amont identifié (`ampixa/sanoTTS`, `model_specs/sanotts.json`), sous **GPL-3.0** : hors politique MIT/Apache-2.0. Exposé dans `GET /api/tts/catalog` (`notIncluded`), jamais retiré silencieusement ; sa famille reste autorisée par l'éditeur (un GGUF déposé à la main reste déclarable). | `src/tts/catalog-data.ts` (`CATALOG_REJECTIONS`), API/README HF `ampixa/sanoTTS` (`license: gpl-3.0`), `tests/tts/catalog.test.ts` |
 
 ### À confirmer
 
@@ -473,6 +484,11 @@ symboles (`tests/ui/ui-modules-defined.test.ts`), et **E2E qui rejoue le bug**
 | **C38** | **Contrat d'options RÉEL de `qwen3_tts`** : la spec amont (`main`) **n'a ni `schema_version` ni `options`** (legacy, comme Chatterbox), et le GGUF publié **embarque une spec legacy** (métadonnée `audiocpp.model_spec.json` lue par Range HTTP) ⇒ `model_contract()` = `nullopt` ⇒ **aucun rejet strict d'option**. La spec **installée dans l'image** peut différer (build différent) : à confirmer. **Sans effet sur Yuki** (elle n'envoie ni `options` ni `speed`). Manip : `docker exec yuki-tts curl -s -X POST localhost:8081/v1/audio/speech -H 'content-type: application/json' -d '{"model":"qwen3-tts","input":"x","options":{"__bogus__":1}}'` (500 ⇒ contrat strict ; 200/other ⇒ legacy). | §14.6 |
 | **C39** | **`mode: streaming` proposé par l'UI pour `qwen3-tts`** : `qwen3-tts` n'est **pas** dans `ENGINE_FORCE_OFFLINE_FAMILIES` (`src/tts/engine-config.ts:117`) alors que le moteur n'accepte **que** `offline`. Envisager de l'y ajouter (correctif UI, non fait ici). | §14.3, §14.10 |
 | **C40** | **Qualité française perçue** Qwen3-TTS (Base, voix `voix-fr`) vs Chatterbox/CosyVoice 3, et **VRAM réelle** du chargement à trois (poids Q8). | §14.10 |
+| **C41** | **Téléchargement RÉEL de plusieurs Go** : les tests utilisent un serveur simulé (quelques Ko). À confirmer en réel : débit du CDN Xet, `Accept-Ranges`/`If-Range`, et que le `.part` est bien repris après un `POST /api/admin/restart`. Manip : `curl -s -X POST .../api/tts/downloads -H 'X-Yuki-Config: 1' -H 'content-type: application/json' -d '{"catalogId":"kokoro"}'` (plus léger, ≈ 181 Mio). | §16.6 |
+| **C42** | **`family` de `sanotts` / licences hors politique** : l'utilisateur peut vouloir un modèle GPL-3.0 pour un usage strictement privé — politique à trancher (refus ferme vs avertissement). Aujourd'hui : refus au téléchargement, déclaration manuelle possible. | D70, §16.2 |
+| **C43** | **Coût de la reprise** : après un `.part`, le SHA-256 complet exige de **relire le préfixe** (le contexte de hachage n'est pas persisté). Acceptable pour ~2 Go, à mesurer en réel. Alternative : vérifier par tranche (Merkle) — non implémenté. | §16.4 |
+| **C44** | **Profondeur de file** : un seul téléchargement à la fois, **sans borne** du nombre de tâches en attente (contrairement à `JobQueue`). À borner si besoin. | §16.4 |
+| **C45** | **Paquets à fichiers MULTIPLES** : le nom `model.gguf` imposé suppose un GGUF **seul**. Les 4 paquets retenus le sont ; `sanotts` (écarté) embarque un `config.json` sidecar — à gérer si un jour on l'accepte. | §16.2 |
 
 ---
 
@@ -690,9 +706,564 @@ URL `resolve/main/...` vérifiée **HTTP 200** (redirection CDN Xet, `x-linked-s
 
 ---
 
-## 15. Renvois
+## 16. Téléchargement des modèles (Lot 9, étape 2 — backend seul)
+
+> **Ajout du 2026-09-23.** Le **backend** du téléchargement est livré : catalogue
+> fermé, job durable, routes et tests. ⚠️ **Aucune UI** dans ce lot (la page
+> `/config` est en refonte) : l'API est complète et documentée, prête à être
+> consommée. Décisions **D66 → D70**, points ouverts **C41 → C45**.
+
+### 16.1 Fichiers livrés
+
+| Fichier | Rôle |
+| --- | --- |
+| `src/tts/catalog-data.ts` | Catalogue **fermé** + résolution HF **à la demande** + `CATALOG_REJECTIONS` |
+| `src/tts/downloads.ts` | `TtsDownloadManager` : job durable, registre persistant, reprise, annulation |
+| `src/gateway/routes/tts.ts` | Routes `catalog` / `downloads` / `downloads/{id}/cancel` |
+| `src/gateway/routes/admin.ts` | Refus `409` du redémarrage pendant un téléchargement (D69) |
+| `src/index.ts` | Câblage (registre dans le volume `state`, garde-fou admin) |
+| `tests/tts/catalog.test.ts`, `tests/tts/downloads.test.ts`, `tests/integration/tts-downloads.test.ts`, `tests/gateway/restart-api.test.ts` | Tests |
+
+### 16.2 Catalogue FERMÉ (preuves)
+
+Toutes les valeurs sont **établies depuis la source amont** : API Hugging Face
+(`GET /api/models/<repo>/tree/main/<dir>`, HTTP 200), tableau du README du dépôt
+(licence par dossier), `model_specs/*.json` (family/tasks/modes) et le code des
+loaders/sessions. **Aucune valeur inventée.**
+
+| `tts.engine` | dépôt / dossier HF | fichier retenu | taille (o) | licence | `family` | `task` | `mode` |
+| --- | --- | --- | ---: | --- | --- | --- | --- |
+| `chatterbox` | `audio-cpp/audio.cpp-gguf` / `Chatterbox-GGUF` | `chatterbox-q8_0.gguf` | 2 088 393 668 | MIT | `chatterbox` | `clon` | `offline` |
+| `cosyvoice3` | `audio-cpp/audio.cpp-gguf` / `CosyVoice3-GGUF` | `cosyvoice3-q8_0.gguf` | 2 257 658 080 | Apache-2.0 | `cosyvoice3` | `clon` | `offline` |
+| `qwen3-tts` | `audio-cpp/audio.cpp-gguf` / `Qwen3-TTS-12Hz-1.7B-Base-GGUF` | `qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf` | 2 695 175 104 | Apache-2.0 | `qwen3_tts` | `tts` | `offline` |
+| `kokoro` | `audio-cpp/audio.cpp-gguf` / `Kokoro-82M-GGUF` | `kokoro-82m-q8_0.gguf` | 189 549 408 | Apache-2.0 | `kokoro_tts` | `tts` | `offline` |
+| `sanotts` | `ampixa/sanoTTS` / `gguf` | (`heart-nano-f32.gguf`) | 1 197 376 | **GPL-3.0 → ÉCARTÉ** | `sanotts` | `tts` | `offline` |
+
+**Preuves par ligne :**
+
+- **chatterbox** — README HF (« `Chatterbox-GGUF` … **MIT** ») ;
+  `model_specs/chatterbox.json` (`family: chatterbox`, `tasks: [tts, clone, vc]`,
+  `modes: [offline]`) ; loader `src/models/chatterbox/loader.cpp:27`
+  (`out.family = "chatterbox"`), `:17-18` (VoiceCloning/VoiceConversion),
+  `:131-138` (offline). Tâche **`clon`** : le loader ne supporte QUE le clonage et
+  la conversion de voix.
+- **cosyvoice3** — README HF (**Apache-2.0**) ; `model_specs/cosyvoice3.json`
+  (`family: cosyvoice3`, `tasks: [tts, clone]`, `modes: [offline]`) ;
+  `src/models/cosyvoice3/session.cpp:88-92` (« supports tts and clone », offline).
+- **qwen3-tts** — README HF (**Apache-2.0**) ; `model_specs/qwen3_tts.json`
+  (`family: qwen3_tts`, `ui.recommended_package = qwen3_tts_1_7b_base_q8_0`) ;
+  loader `src/models/qwen3_tts/loader.cpp:140` (« **Qwen3 base TTS model only
+  supports the Tts task** ») ⇒ `task: tts` ; `:137-138` offline only. Exemple amont
+  `examples/docker/server/qwen3-tts-server.json` (`id: qwen3-tts`,
+  `family: qwen3_tts`, `task: tts`, `mode: offline`).
+- **kokoro** — README HF (**Apache-2.0**) ; `model_specs/kokoro_tts.json`
+  (`family: kokoro_tts`, `tasks: [tts]`, `modes: [offline]`) ; `app/server/runtime.cpp:2116`
+  compare bien `family != "kokoro_tts"`.
+- **sanotts** — `model_specs/sanotts.json` : `family: sanotts`, `tasks: [tts]`,
+  `modes: [offline]`, `package_defaults.download.repo = ampxa/sanoTTS` ; fiche HF
+  `ampixa/sanoTTS` : `license: gpl-3.0`. **Hors politique (MIT/Apache-2.0) ⇒ écarté**
+  (D70), mais **signalé** dans `notIncluded`.
+
+⚠️ Les URL `resolve/main/...` ont été **vérifiées HTTP 200** (redirection CDN Xet,
+`x-linked-size` = taille ci-dessus, `x-linked-etag` = SHA-256 LFS). Le `lfs.oid`
+de l'API `tree` **est** ce SHA-256 : il sert d'attendu d'intégrité (D68).
+
+### 16.3 Contrat des routes
+
+Toutes sous `/api/tts/**` (gateway), **présentes seulement si le port `downloads`
+est câblé** ; sinon **`503 downloads_unavailable`**.
+
+#### `GET /api/tts/catalog`
+
+- **Garde-fous** : aucun (lecture).
+- **Réponse** : `200` (état local) ou `503 downloads_unavailable`.
+- **Corps** : `{ schemaVersion, entries[], notIncluded[], engineConfigAvailable, note }`.
+  Chaque `entries[]` porte : `id, label, repo, dir, variant, family, task, mode,
+  license, licenseAllowed, expectedFile, expectedBytes, expectedSha256, enginePath,
+  gatewayPath, installed, installedBytes, declared, declaredPath, download` et
+  **`prefill: { id, family, task, mode, path }`** — les champs EXACTS à envoyer à
+  `PUT /api/tts/engine-config` (pré-remplissage, testé de bout en bout).
+- **`notIncluded`** : moteurs écartés (`sanotts`) avec `reason`, `license`, `detail`.
+
+#### `GET /api/tts/downloads`
+
+- **Garde-fous** : aucun. **Réponse** : `200 { schemaVersion, active, tasks[] }`
+  (`active` = id de la tâche `downloading`/`verifying`, sinon `null`).
+
+#### `POST /api/tts/downloads`
+
+- **Garde-fous** : `requireWriteGuards` (`X-Yuki-Config: 1` **et** même origine).
+- **Corps** : `{ catalogId }` — **jamais d'URL**.
+- **Réponses** :
+
+| Code | `code` | Cause |
+| --- | --- | --- |
+| `202` | — | tâche acceptée : `{ ok, accepted, task }` |
+| `400` | `invalid_json` / `invalid_body` / `invalid_catalog_id` | corps |
+| `400` | `unknown_catalog_id` | id hors catalogue |
+| `403` | `missing_config_header` / `bad_origin` | garde-fous |
+| `409` | `download_in_progress` | téléchargement déjà non terminal pour ce modèle |
+| `502` | `catalog_resolve_failed` | résolution HF impossible (paquet introuvable/changé) |
+| `503` | `models_dir_unwritable` / `downloads_unavailable` | dossier non inscriptible (message exact via `describeWriteFailure`) / câblage |
+| `507` | `insufficient_disk_space` | espace disque insuffisant (message avec tailles) |
+| `500` | `download_failed` | E/S inattendue |
+
+#### `POST /api/tts/downloads/{catalogId}/cancel`
+
+- **Garde-fous** : `requireWriteGuards`. **Réponses** : `200 { ok, task }` ;
+  `403` garde-fous ; `404 unknown_download` ; `409 download_not_active` (déjà
+  terminale) ; `503` non câblé. L'id est borné (jamais un chemin).
+
+#### `POST /api/admin/restart` (modifié)
+
+- **Garde-fous** : inchangés. **Nouveau** : si un téléchargement est
+  `queued`/`downloading`/`verifying` ⇒ **`409 download_in_progress`**
+  (`activeDownload` fourni), **aucun arrêt demandé**. Sinon ⇒ `200` + arrêt
+  planifié, **comportement strictement inchangé** (D69).
+
+### 16.4 Garanties du job (telles qu'implémentées)
+
+- **Source fermée** : le client ne fournit qu'un `catalogId` ; l'URL est
+  construite côté serveur (anti-SSRF par construction).
+- **Destination imposée** : `/models/downloads/<id>/model.gguf`.
+- **Atomicité** : écriture dans `model.gguf.part`, puis `rename` **atomique** dans
+  le même dossier ; aucun fichier final tronqué.
+- **Taille** : le fichier final doit égaler la taille annoncée, sinon `failed`
+  (`size_mismatch`) et `.part` supprimé.
+- **Intégrité** : SHA-256 calculé en flux ; **vérifié seulement si HF expose
+  `lfs.oid`** ; sinon **enregistré** (`sha256`) avec `sha256Verified: false`.
+  En cas d'écart ⇒ `failed` (`integrity_mismatch`) et fichier supprimé.
+- **Reprise `Range`** : uniquement si un `.part` existe et que le serveur répond
+  **`206`** avec une taille `Content-Range` **inchangée** ; sinon on repart de
+  zéro. `If-Range` envoyé si un ETag a été mémorisé.
+- **Espace disque** : `statfs` du dossier `models` avant démarrage, marge par
+  défaut **64 Mio** ; refus `507` avec le détail des tailles.
+- **Un seul à la fois** : les autres tâches restent `queued` (file en mémoire).
+- **Annulation** : `AbortController` ; la tâche passe `cancelled`, **jamais** `done`.
+- **Registre persistant** : `tts-downloads.json` (volume `state`), écriture
+  atomique, écrit à chaque transition et **périodiquement** pendant le transfert
+  (défaut 1 s). Au démarrage, toute tâche non terminale devient **`interrupted`**
+  (le `.part` est conservé pour reprise) — **jamais** `done`.
+- **Erreurs honnêtes** : dossier non inscriptible ⇒ `describeWriteFailure`
+  (jamais « chown » quand le montage est en lecture seule, etc.).
+
+**Simplifications assumées** :
+
+- **Catalogue `GET` statique** : le nom/taille affichés sont le **repli annoncé à
+  la rédaction** ; la **résolution HF vivante** a lieu au **démarrage du
+  téléchargement** (source de vérité). Repli documenté si HF est injoignable
+  (`sha256` alors **non** prétendu).
+- **Pas de SSE** : la progression se lit par `GET /api/tts/downloads` (l'UI
+  pollera).
+- **Reprise** : le préfixe est **relu** pour un SHA complet (le contexte de
+  hachage n'est pas persisté) — coût I/O en plus, jamais un faux positif.
+- **Un seul worker, file non bornée** (pas de limite de profondeur type `JobQueue`).
+- **Pas de dépendance npm** : `fetch`, `fs`, `crypto` suffisent.
+
+### 16.5 Arbitrage sur le redémarrage
+
+**Décision : REFUS (`409 download_in_progress`)** quand un téléchargement est
+actif (y compris seulement `queued`). **Justification** : `POST /api/admin/restart`
+tue le processus (exit 75) ; un redémarrage pendant un transfert ferait passer la
+tâche en `interrupted` **sans que l'utilisateur l'ait explicitement demandé**, ce
+qui est exactement l'ambiguïté que le registre durable sert à éviter. Un refus
+explicite et actionnable (« attendez la fin ou annulez ») est plus honnête qu'un
+redémarrage silencieux. **Aucun téléchargement actif ⇒ le bouton Redémarrer garde
+son comportement d'origine** (test `tests/gateway/restart-api.test.ts`).
+
+### 16.6 Vérifications
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **687 passed / 4 skipped** (avant : 648 passed / 4 skipped ; **+39** : catalogue, job, routes, garde-fou redémarrage) |
+| `npm run typecheck` | vert |
+| `npm run build` | vert |
+| URL `resolve/main/...` (4 paquets) | **HTTP 200**, `x-linked-etag` = SHA-256 LFS |
+
+### 16.7 Non vérifiable sans moteur réel
+
+- **Téléchargement RÉEL** de plusieurs Go (débit Xet, `206`/`If-Range`, reprise
+  après `POST /api/admin/restart`). Test court : télécharger **kokoro** (≈ 181 Mio)
+  via `POST /api/tts/downloads {"catalogId":"kokoro"}` puis couper/relancer, ou
+  `curl -L -o /dev/null --range 0-1048575 <url resolve>`.
+- **Chargement effectif** par le moteur du fichier déclaré :
+  `docker exec yuki-tts ls -l /models/downloads/<id>/model.gguf`, puis déclarer
+  (`prefill`), `docker restart yuki-tts`, puis
+  `curl -s http://tts:8081/v1/models`. Non exécuté ici (pas de moteur).
+
+### 16.8 À faire au lot suivant (UI) — **LIVRÉE en §19**
+
+> **Livrée** (Lot 9, étape 3) : la structure de l'onglet Voix en 5 zones, le
+> conteneur **`#tts-downloads-root`** (place RÉSERVÉE) **et l'UI complète**
+> (catalogue, téléchargement, progression, annulation, déclaration) sont en
+> place — voir **§19**. Les points ci-dessous, initialement « à faire », sont
+> désormais **implémentés et vérifiés** :
+
+- **Section catalogue** dans `/config` : liste des 4 entrées + `notIncluded`
+  (`sanotts`, GPL-3.0), badges « à télécharger » / « téléchargé » / « déclaré »,
+  licence et taille (§19.2).
+- **Bouton « Télécharger »** (`POST /api/tts/downloads`, en-tête `X-Yuki-Config: 1`).
+- **Progression** : poll de `GET /api/tts/downloads` (états, octets, `active`) —
+  **uniquement tant qu'une tâche est non terminale** (§19.3).
+- **Annulation** (`POST …/{id}/cancel`, confirmation `HolafModal`).
+- **« Déclarer ce modèle »** : `prefill` tel quel → éditeur existant
+  (`PUT /api/tts/engine-config`), **aucune ressaisie** (§19.4).
+- **Redémarrage** : `409 download_in_progress` traité comme une **information**
+  (`presentRestartRefusal`, §19.5).
+- **Assistant** : l'action manuelle « déposer le fichier » a été **corrigée** pour
+  les variantes téléchargeables (§19.6).
+- **Cohérence des listes** : la liste `ENGINE_FAMILIES` UI a été corrigée (D66) ;
+  vérifier l'affichage `family` ≠ `id` (`qwen3_tts` vs `qwen3-tts`).
+
+### 16.9 `git status --short` (à la fin du lot)
+
+```
+ M public/ui/engine-config-patch.js
+ M src/gateway/routes/admin.ts
+ M src/gateway/routes/tts.ts
+ M src/index.ts
+ M src/tts/engine-config.ts
+ M src/tts/index.ts
+ M tests/gateway/restart-api.test.ts
+ M tests/tts/engine-config.test.ts
+ M tests/ui/engine-config-patch.test.ts
+?? src/tts/catalog-data.ts
+?? src/tts/downloads.ts
+?? tests/integration/tts-downloads.test.ts
+?? tests/tts/catalog.test.ts
+?? tests/tts/downloads.test.ts
+```
+
+---
+
+## 17. Refonte de l'onglet Voix de `/config` (simplification UX)
+
+> **Ajout du 2026-09-23.** Suite directe de §16.8 (« À faire au lot suivant (UI) »).
+> Diagnostic validé par l'utilisateur : l'onglet **Voix** contenait **8 zones**,
+> **9 boutons fixes** et faisait **≈ 3,5–4 écrans** ; **quatre listes de
+> « modèles »** y cohabitaient et **trois choses** s'appelaient « Voix ». Ce lot
+> **réorganise l'onglet en 5 zones**, **supprime deux doublons réels** et
+> **réserve la place** de l'UI de téléchargement (§16). Les autres onglets
+> (Modèles, Conversation, Système, Maintenance) sont **inchangés**.
+
+### 17.1 Structure cible — telle qu'implémentée
+
+Arbre de `#panel-voix` (`public/ui/config.html:139-162`) :
+
+```text
+#panel-voix
+├── #tts-assistant-root            ← ① VISIBLE  « État de la voix » (bandeau compact)
+├── #voices-root                   ← ② VISIBLE  « Ma voix » (sélecteur + liste + cloner)
+├── #group-voix                    ← ③ VISIBLE  « Réglages de la voix » (6 essentiels)
+│   └── details.config-advanced    ← ④ REPLIÉ   « Avancé » (adresse, exag., CFG, préchargement, découpe, délai)
+└── #tts-engine-root               ← ⑤ REPLIÉ   « Moteur TTS et modèles » (zone technique)
+```
+
+- **①** = la carte d'état existante de l'assistant, **compactée** (titre « État de
+  la voix », bouton « Vérifier le moteur » toujours accessible) — logique
+  `describeTtsState`/`statusTechnicalDetails` **inchangée**
+  (`public/ui/tts-assistant.js:640-650`).
+- **②** = panneau des voix, titre renommé « Ma voix » (`public/ui/voices-panel.js:118`).
+- **③** = 6 réglages visibles **sans clic** (`public/ui/config.js:151-197`) :
+  `tts.enabled`, `tts.engine`, `tts.language`, `tts.emotion`, `tts.speed`, `tts.volume`.
+- **④** = `tts.baseUrl`, `tts.exaggeration`, `tts.cfg`, `tts.prefetchDepth`,
+  `tts.minSentenceChars`, `tts.maxSentenceChars`, `tts.timeoutMs`
+  (`public/ui/config.js:203-269`, tous marqués `advanced: true`).
+- **⑤** = zone **technique/diagnostic** (disque, modèles du moteur, configuration
+  du moteur, test, manuel et **[PLACE RÉSERVÉE]** au téléchargement), repliée sous
+  un `<details>` (`public/ui/tts-assistant.js:652-691`).
+
+⚠️ **Le rendu reste EAGER** : tous les champs sont construits dans le DOM au
+chargement ; les replis sont des `<details class="config-advanced">` qui
+**masquent sans retirer**. Aucune sous-navigation ARIA : le contrat des
+**5 `role="tab"` / 5 `role="tabpanel"`** est **intact**.
+
+### 17.2 Doublons supprimés / déplacés / renommés
+
+| Élément | Avant | Après | Preuve |
+| --- | --- | --- | --- |
+| `tts.voice` **champ texte** | champ du groupe « Voix / TTS » | **supprimé** ; le **select** de la bibliothèque est l'unique contrôle | `public/ui/config.js:198-199` (le champ n'est plus dans `fields`) |
+| `tts.enabled` **écriture** | select + bouton qui `PUT` **puis redémarre** | **un seul chemin** : l'enregistrement global | `public/ui/config.js:895-910`, `public/ui/tts-assistant.js:1557-1585` |
+| Titre du groupe | « Voix / TTS » | « Réglages de la voix » | `public/ui/config.js:151` |
+| Panneau voix | « Voix » | « Ma voix » | `public/ui/voices-panel.js:118` |
+| Assistant | « Assistant de mise en route de la voix » (tout déplié en tête) | « État de la voix » (①) + « Moteur TTS et modèles » replié (⑤) | `public/ui/tts-assistant.js:645,659` |
+| Libellés | « Activation », « Moteur », « Débit (%) », « URL du service TTS », « Prefetch… », « Timeout… », « CFG (pour-mille) » | « Activer la voix », « Moteur de synthèse », « Débit de parole (%) », « Adresse du moteur (avancé) », « Préchargement (phrases d'avance) », « Délai maximal de synthèse (ms) », « Contrôle de guidage (CFG) » | `public/ui/config.js:156-269` |
+| « Réinitialiser au défaut » | textarea seulement | **tous** les champs ayant un défaut | `public/ui/config.js:600-625` |
+
+### 17.3 Chemin d'écriture unifié
+
+**`tts.enabled` — UN SEUL écrivain : l'enregistrement global.**
+
+- Le **select** « Activer la voix » (③) est un champ normal : enregistré par le
+  bouton **« Enregistrer »** (barre sticky) comme tout le reste.
+- Le **bouton du bandeau** (①) n'appelle **plus** `PUT /api/config` ni
+  `POST /api/admin/restart`. C'est un **raccourci** : `enableVoiceShortcut()`
+  règle le select puis déclenche le **même** `save()`
+  (`public/ui/config.js:895-910`, transmis via `requestEnableVoice`,
+  `public/ui/config.js:1151`).
+- Après enregistrement, l'assistant **guide explicitement** vers le redémarrage
+  manuel : « Voix activée et enregistrée. Redémarrez Yuki (onglet Maintenance)
+  pour l'appliquer. » (`public/ui/tts-assistant.js:1577-1584`).
+  **Plus de redémarrage silencieux déclenché par un bouton.**
+
+**`tts.voice` — UN SEUL contrôle : le select de la bibliothèque.**
+
+- Le champ texte a été retiré ; `voices-panel.js` écrit `tts.voice`
+  **immédiatement** (`PUT /api/config`), comme avant, et `onVoiceSelected` ne met
+  à jour que l'état local (`public/ui/config.js:1128-1133`). L'ancien libellé
+  reste connu pour les messages (`public/ui/config.js:280-282`).
+- **Conséquence assumée** : choisir une voix n'apparaît **pas** dans l'indicateur
+  global « modifications non enregistrées » — l'écriture est **déjà faite**.
+
+### 17.4 Place réservée au téléchargement (§16) — **LIVRÉE en §19**
+
+Dans la zone **⑤** : un conteneur **`#tts-downloads-root`** (classe
+`.tts-downloads`) qui **contient désormais l'UI de téléchargement** (catalogue,
+progression, annulation, déclaration) — voir **§19**. Au moment de la refonte, il
+était **vide** et commenté « PLACE RÉSERVÉE » ; ce commentaire a été **retiré**
+devenu faux (le contenu est livré).
+
+### 17.5 Correctif lié : `[hidden]` désormais effectif
+
+`.config-row { display: flex }` (origine **auteur**) écrasait l'attribut `hidden`
+(origine **UA** sans `!important`) : la révélation conditionnelle des curseurs
+`exaggeration`/`cfg` (émotion « personnalisée ») était donc **sans effet**
+**visuel**, alors que la propriété DOM `hidden` valait bien `true`. Ajout de
+`.config-row[hidden] { display: none }` (`public/ui/config.css:93-97`).
+
+### 17.6 Décidé / À confirmer (suite)
+
+#### Acté
+
+| # | Décision | Preuve |
+| --- | --- | --- |
+| **D71** | **`tts.voice` : suppression du champ texte** du groupe ; le **select de la bibliothèque** (zone ②) est l'**unique contrôle**, écriture **immédiate** (`PUT /api/config`). Le libellé reste connu pour les messages. | `public/ui/config.js:198-199,280-282` ; `public/ui/voices-panel.js` (`setActiveVoice`) |
+| **D72** | **`tts.enabled` : un SEUL chemin d'écriture** = l'**enregistrement global**. Le bouton du bandeau est un **raccourci** (aucun `PUT` propre, **aucun redémarrage silencieux**) et **guide** vers l'onglet Maintenance. | `public/ui/config.js:895-910,1151` ; `public/ui/tts-assistant.js:1557-1585` |
+| **D73** | **Onglet Voix en 5 zones**, replis par `<details class="config-advanced">` (**classe DISTINCTE** de `tts-details`), **rendu EAGER conservé**, **5 onglets ARIA inchangés**. | `public/ui/config.html:139-162` ; `public/ui/config.js:660-676` ; `public/ui/tts-assistant.js:652-691` |
+| **D74** | **« Réinitialiser au défaut » généralisé** à **tous** les champs ayant un défaut (plus seulement les textarea) + affichage « Valeur par défaut : X. » quand `origin === "default"`. Table `FIELD_DEFAULTS` **miroir UI** ; le reset envoie **`null`** au serveur (qui applique son propre défaut). | `public/ui/config.js:284-322,600-625` |
+| **D75** | **Place RÉSERVÉE** au téléchargement : conteneur **vide** `#tts-downloads-root`, commenté, **dans la zone ⑤ repliée**. | `public/ui/tts-assistant.js:615-630` |
+| **D76** | **Correctif** : `.config-row[hidden] { display: none }` rend **visuellement** effectif le masquage des champs conditionnels (déjà effectif dans le DOM). | `public/ui/config.css:93-97` |
+
+#### À confirmer
+
+| # | Point ouvert | Impact |
+| --- | --- | --- |
+| **C46** | **`FIELD_DEFAULTS` est un miroir MANUEL** de `src/config/schema.ts` (le navigateur n'a pas accès au schéma). Toute évolution d'un défaut backend doit être répercutée côté UI, sinon « Réinitialiser au défaut » montre une valeur périmée. Alternative non retenue (hors périmètre) : exposer `default` dans `GET /api/config`. | UI / maintenance |
+| **C47** | **Deux points de montage pour UN seul assistant** (`#tts-assistant-root` + `#tts-engine-root`) — une seule instance `initTtsAssistant`. À confirmer : acceptable, ou préférer un portail/`display: contents` ? L'E2E interroge désormais `#panel-voix` (portée des deux zones). | UI / E2E |
+| **C48** | **Le repli « Avancé » s'ouvre automatiquement** quand une émotion « personnalisée » rend visibles `exaggeration`/`cfg` ; il n'est **jamais refermé** automatiquement (l'utilisateur reste maître). Comportement à confirmer. | UX |
+
+### 17.7 Vérifications
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **692 passed / 4 skipped** (avant ce lot : **687 passed / 4 skipped** ; **+5** : tests de structure UI dans `tests/integration/static-ui.test.ts:392-453`) |
+| `npm run typecheck` | vert |
+| `npm run build` | vert |
+| `node --check` (`config.js`, `tts-assistant.js`, `voices-panel.js`) | OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **54/54** ; **0 violation CSP** ; **0 exception JS** |
+| Vérifs E2E ajoutées | zones (① ② ③④ ⑤), 6 essentiels **visibles sans clic**, replis ④/⑤ **repliés par défaut** et **dépliés** avec contenu, `tts.voice` texte **absent**, `#tts-downloads-root` **présent et vide**, `[hidden]` **effectif** |
+| Captures | `_tools/shots/config-voix-zones-visible.png` (replié), `config-voix-reglages-essentiels.png` (6 essentiels), `config-voix-zones-avance.png` (④ déplié), `config-voix-zones-technique.png` (⑤ déplié) |
+
+### 17.8 Suite (lot suivant) — **LIVRÉE en §19**
+
+> Les trois points ci-dessous sont désormais **implémentés** (§19) :
+
+- **Boutons de téléchargement** : catalogue (`GET /api/tts/catalog`), `POST /api/tts/downloads`,
+  progression par poll (`GET /api/tts/downloads`), annulation, et « Déclarer ce modèle »
+  (réutilise la config moteur de ⑤) — montés dans `#tts-downloads-root`.
+- **`409 download_in_progress`** au redémarrage (§16.5) : présenté comme une
+  **protection**, pas une panne.
+- L'action manuelle « déposer le fichier » a été **corrigée** pour les variantes
+  du catalogue.
+
+---
+
+## 18. Renvois
 
 - [`docs/lot7.md`](lot7.md) — spécification de référence du TTS (transport, voix, émotion).
 - [`docs/lot8.md`](lot8.md) — assistant de mise en route, `server.json` attesté (`§11`), CosyVoice 3 (`§13`).
 - [`docs/architecture.md`](architecture.md) — vue d'ensemble, carte des lots.
 - [`deploy/server/README.md`](../deploy/server/README.md) — runbook de déploiement (bind `tts-config`).
+
+---
+
+## 19. UI du téléchargement des modèles (Lot 9, étape 3)
+
+> **Ajout du 2026-09-23.** Suite directe de §16 (« backend seul ») et §17
+> (« place réservée »). Ce lot **n'ajoute aucun comportement backend** : il
+> **consomme** le contrat déjà livré et testé (`GET /api/tts/catalog`,
+> `GET/POST /api/tts/downloads`, `POST …/{id}/cancel`, `PUT /api/tts/engine-config`).
+> Décisions **D77 → D83**, points ouverts **C49 → C50**.
+
+### 19.1 Fichiers livrés
+
+| Fichier | Rôle |
+| --- | --- |
+| `public/ui/tts-assistant.js` | Fonctions **pures** (mapping) + UI montée dans `#tts-downloads-root` |
+| `public/ui/tts-assistant.css` | Styles `.tts-dl__*` (CSP stricte, variables de thème) |
+| `public/ui/config-patch.js` | `presentRestartRefusal` (le `409` n'est pas une panne) |
+| `public/ui/config.js` | `activateEngineShortcut` (raccourci « Choisir comme moteur ») + `409` au redémarrage |
+| `tests/ui/tts-downloads.test.ts` | **37 tests** de logique pure |
+| `tests/ui/config-patch.test.ts` | **+4 tests** pour `presentRestartRefusal` |
+| `tests/integration/static-ui.test.ts` | présence de l'UI + garde CSP |
+| `Yuki and Libs/_tools/e2e-tts-serve.ts` | téléchargement **simulé** (~2 Ko, jamais de Go) |
+| `Yuki and Libs/_tools/e2e-tts-ui.mjs` | parcours E2E complet |
+
+### 19.2 Catalogue et états affichés
+
+Le contenu est **monté dans le conteneur réservé** `#tts-downloads-root`
+(`public/ui/tts-assistant.js:878`), dans la zone ⑤ **repliée** — **rien** n'est
+remonté au-dessus de la ligne de flottaison.
+
+- **Une ligne par modèle** : libellé, **taille** (`formatBytes`), **licence**,
+  variante, et un **badge d'état** (`describeCatalogEntry`, `:176`) :
+  `à télécharger` (neutre) / `téléchargé` (avertissement) / `déclaré` (succès).
+- **Modèles écartés** (`notIncluded`, ex. `sanotts` GPL-3.0) : affichés dans un
+  repli « Moteurs écartés (n) » **avec leur raison**, **sans aucun bouton**
+  (`describeNotIncluded`, `:261` ; `renderExcluded`).
+- **Boutons contextuels** (`catalogAction`, `:216`) :
+  `Télécharger` / `Réessayer` → `Déclarer ce modèle` → `Choisir comme moteur`,
+  ou `Annuler` pendant un transfert. Un téléchargement en cours **désactive** les
+  boutons des autres lignes (« Un téléchargement est déjà en cours. »).
+- **États d'une tâche** (`describeDownloadStatus`, `:126`), tels qu'affichés :
+  `queued`→« En attente », `downloading`→« Téléchargement… », `verifying`→« Vérification… »,
+  `done`→« Téléchargé », `failed`→« Échec », `cancelled`→« Annulé »,
+  **`interrupted`→« Interrompu »** (tonalité **erreur**, jamais un succès, avec
+  « Réessayer »).
+
+### 19.3 Progression et poll
+
+- **Barre native `<progress>`** (`buildProgress`, `:1680`) : `role="progressbar"`
+  **implicite**, `aria-label` + `aria-valuetext` en français, **aucun `style=`**
+  (la largeur vient de `value`/`max`). Sans total connu, barre **indéterminée**
+  (aucun pourcentage inventé).
+- **Octets/total + pourcentage** (`downloadProgress`, `:151`) ; **pas d'ETA promise**.
+- **Poll `GET /api/tts/downloads` seulement tant qu'une tâche est non terminale**
+  (`shouldPollDownloads`, `:279` ; intervalle `TTS_DOWNLOAD_POLL_MS = 1000`, `:58`).
+  Le `POST` répond en millisecondes (il **démarre** la tâche) : **aucune requête
+  longue**. À l'arrêt du transfert, le poll **s'arrête** et le catalogue est
+  rechargé **une fois** (badge → « Téléchargé »).
+- **Survie au rechargement** : `refresh()` (`:2040`) recharge catalogue + tâches ;
+  la tâche la plus **fraîche** vient de `GET /api/tts/downloads`
+  (`renderCatalog`, `:1804`) — l'UI **reprend l'affichage** au lieu de croire
+  qu'il ne se passe rien.
+
+### 19.4 Parcours clic par clic (télécharger → déclarer → activer)
+
+1. Ouvrir `/config` → onglet **Voix** → déplier **« Moteur TTS et modèles »** (zone ⑤).
+2. Dans **« Télécharger un modèle »**, chaque ligne affiche taille + licence + badge.
+   Cliquer **« Télécharger »** → `POST /api/tts/downloads` (`X-Yuki-Config: 1`).
+   Le poll prend le relais : **progression** (barre + « 847 o / 2.1 Ko — 38 % »).
+   On peut **« Annuler »** (confirmation `HolafModal`) ; l'annulation **conserve le
+   fichier partiel** pour reprise.
+3. À `done`, le badge passe à **« Téléchargé »** et le bouton devient
+   **« Déclarer ce modèle »** : il pousse **le `prefill` du catalogue** dans le
+   **brouillon de l'éditeur existant** puis appelle `saveEngineConfig()`
+   (`declareCatalogEntry`, `:1951`) — **la validation n'est pas réimplémentée**,
+   aucune ressaisie. La confirmation est `HolafModal`.
+4. Après déclaration, le badge passe à **« Déclaré »** et le bouton devient
+   **« Choisir comme moteur »** : `activateCatalogEntry` (`:1991`) →
+   `requestActivateEngine` → `activateEngineShortcut` (`public/ui/config.js:922`)
+   règle `tts.engine` puis passe par **l'enregistrement global** (même patron que
+   `requestEnableVoice`). Le message rappelle qu'il faut **redémarrer le conteneur
+   `tts`** (le gateway n'a pas accès à Docker).
+
+### 19.5 `409 download_in_progress` au redémarrage
+
+`POST /api/admin/restart` répond `409` tant qu'un téléchargement est actif
+(§16.5). L'UI ne le présente **pas** comme un bug : `presentRestartRefusal`
+(`public/ui/config-patch.js:227`) renvoie une **information** (sans préfixe
+« Échec »), reprise par `requestGatewayRestart` (`public/ui/config.js:1025`).
+Message affiché (exact, du serveur) :
+
+> « Un téléchargement de modèle est en cours : redémarrer maintenant l'interromprait.
+> Attendez la fin du téléchargement ou annulez-le, puis redémarrez. »
+
+Le **raccourci de l'assistant** (bouton « Onglet Maintenance ») mène au **même**
+flux : le redémarrage reste centralisé dans `config.js`.
+
+### 19.6 Bloc « Ce qui reste à faire à la main » — corrigé
+
+Le bloc (`public/ui/tts-assistant.js`, `buildManualSection`) dit désormais
+**exactement** :
+
+- **Nouveau/faux** : « déposer le fichier du modèle » n'est **plus** nécessaire
+  pour les **4 variantes du catalogue** (téléchargeables ici).
+- **Toujours vrai** : (1) **démarrer/redémarrer** le conteneur `tts` (hors Yuki,
+  pas d'accès Docker) ; (2) le dépôt manuel reste la **seule** voie pour un
+  **moteur hors catalogue** (p. ex. `sanotts`, GPL-3.0) ou un GGUF personnel.
+
+Messages corrigés en cohérence : `describeModelsDir` (« vide ») et
+`appendDiskModels` plus le paragraphe « Le fichier du modèle doit être présent… »
+ne disent plus « déposez-le pour l'instant » / « arrivera à l'étape suivante ».
+
+### 19.7 Décidé / À confirmer (suite)
+
+#### Acté
+
+| # | Décision | Preuve |
+| --- | --- | --- |
+| **D77** | UI livrée **dans le conteneur réservé** `#tts-downloads-root` (zone ⑤), classes **dédiées** `.tts-dl__*`, barre `<progress>` **native** (aucun `style=`). | `public/ui/tts-assistant.js:878,1680` ; `public/ui/tts-assistant.css` |
+| **D78** | **Poll `GET /api/tts/downloads` seulement tant qu'une tâche est non terminale**, intervalle 1 s ; arrêt net sinon. | `shouldPollDownloads` `:279` ; `TTS_DOWNLOAD_POLL_MS` `:58` ; `loadDownloads` `:1869` |
+| **D79** | **« Déclarer ce modèle »** pousse le **`prefill`** dans le brouillon de l'éditeur **existant** puis `saveEngineConfig()` — validation **non réimplémentée**. | `declareCatalogEntry` `:1951` |
+| **D80** | **« Choisir comme moteur »** = raccourci `requestActivateEngine` → `tts.engine` écrit par **l'enregistrement global**. | `activateCatalogEntry` `:1991` ; `public/ui/config.js:922,1170` |
+| **D81** | **`409 download_in_progress`** au redémarrage présenté comme une **information** (pas une panne), message serveur repris. | `presentRestartRefusal` `public/ui/config-patch.js:227` ; `public/ui/config.js:1025` |
+| **D82** | **`interrupted` n'est jamais un succès** : badge « Interrompu » (erreur) + « Réessayer ». | `describeDownloadStatus` `:126` |
+| **D83** | Bloc « à la main » **corrigé** : dépôt manuel **plus** requis pour les variantes du catalogue, **reste vrai** hors catalogue. | `buildManualSection` (tts-assistant.js) ; `describeModelsDir` |
+
+#### À confirmer
+
+| # | Point ouvert | Impact |
+| --- | --- | --- |
+| **C49** | Le **catalogue `GET` est statique** (taille/licence au repli documentaire) : l'écart éventuel avec Hugging Face n'est connu qu'à la **résolution** (démarrage du transfert) et n'est pas réaffiché dans la ligne. | UI / honnêteté |
+| **C50** | **« Choisir comme moteur » n'exige pas de redémarrer le gateway** (écriture à chaud) mais **exige** de redémarrer le conteneur `tts` ; le message le dit sans le **forcer** (pas de blocage). À confirmer : faut-il proposer un rappel persistant tant que `tts.engine` a changé ? | UX |
+
+### 19.8 Vérifications
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **736 passed / 4 skipped** (avant ce lot : **692 passed / 4 skipped** ; **+44** : 37 logique pure, 4 `presentRestartRefusal`, 3 structure UI) |
+| `npm run typecheck` | vert |
+| `npm run build` | vert |
+| `node --check` (`tts-assistant.js`, `config.js`, `config-patch.js`, `e2e-tts-ui.mjs`) | OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **68/68** ; **0 violation CSP** ; **0 exception JS** |
+| Vérifs E2E ajoutées | catalogue (4 modèles + taille/licence), badges « à télécharger », écartés sans bouton, démarrage, **progression** (barre native + octets/total), **reprise après rechargement**, `done` → « Déclarer », modale puis **déclaré**, « Choisir comme moteur » (`tts.engine = kokoro`), **`409` au redémarrage**, annulation + « Réessayer » |
+| Captures | `_tools/shots/config-voix-zones-technique.png` (zone ⑤ dépliée **avec le catalogue**), `config-voix-downloads-progress.png` (progression), `config-voix-downloads-declare.png` (déclaré) |
+
+### 19.9 Non vérifiable sans un VRAI téléchargement de plusieurs Go
+
+- **Débit Xet, `206`/`If-Range`, reprise après `POST /api/admin/restart`** sur un
+  **vrai** paquet (`kokoro` ≈ 181 Mio). L'E2E ne sert que ~2 Ko **simulés** : il
+  prouve le CÂBLAGE UI, pas le transfert réel (déjà couvert côté backend par
+  `tests/tts/downloads.test.ts`).
+- **Chargement effectif** par le moteur du fichier déclaré.
+
+Commande de vérification courte à faire jouer à l'utilisateur (dans le conteneur
+**gateway**, une fois `tts` démarré) :
+
+```bash
+# 1) télécharger un petit modèle (kokoro, ~181 Mio) puis suivre l'état
+curl -s -X POST http://localhost:8080/api/tts/downloads \
+  -H 'content-type: application/json' -H 'x-yuki-config: 1' \
+  -d '{"catalogId":"kokoro"}'
+watch -n1 'curl -s http://localhost:8080/api/tts/downloads | head -c 400'
+# 2) déclarer puis redémarrer le moteur et vérifier sa liste de modèles
+docker restart yuki-tts
+curl -s http://tts:8081/v1/models
+```
+
+### 19.10 `git status --short` (UI, à la fin du lot)
+
+```
+ M public/ui/config-patch.js
+ M public/ui/config.js
+ M public/ui/tts-assistant.css
+ M public/ui/tts-assistant.js
+ M tests/integration/static-ui.test.ts
+ M tests/ui/config-patch.test.ts
+?? tests/ui/tts-downloads.test.ts
+ M "Yuki and Libs/_tools/e2e-tts-serve.ts"
+ M "Yuki and Libs/_tools/e2e-tts-ui.mjs"
+?? "Yuki and Libs/_tools/shots/config-voix-downloads-declare.png"
+?? "Yuki and Libs/_tools/shots/config-voix-downloads-progress.png"
+```

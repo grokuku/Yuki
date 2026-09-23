@@ -13,9 +13,11 @@
  *   - `GET  /api/tts/models` → liste des modèles du moteur (repliable) ;
  *   - `POST /api/tts/test`   → synthèse d'un TEXTE LIBRE (≤ 500 caractères),
  *     WAV lu **par Web Audio** (`tts-player.js`, `<audio src>` interdit) ;
- *   - `PUT  /api/config`     → `tts.enabled = "on"` (garde-fou
- *     `X-Yuki-Config: 1`) puis redémarrage (`POST /api/admin/restart`) délégué
- *     au code existant de `config.js`.
+ *   - l'activation de la voix (`tts.enabled`) NE passe PAS par un `PUT`
+ *     propre : le bouton du bandeau est un **raccourci** vers
+ *     l'**enregistrement global** de `config.js` (chemin d'écriture unique).
+ *     L'assistant ne redémarre RIEN en silence ; il guide vers l'onglet
+ *     Maintenance.
  *
  * CSP stricte (`style-src 'self'`) : AUCUN `<style>` injecté, AUCUN `style=` —
  * tout le CSS vit dans `tts-assistant.css` (servi par `<link>`).
@@ -51,6 +53,16 @@ const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-config": "1"
 export const TTS_STARTING_RETRY_MS = 3_000;
 /** Nombre maximal de relances automatiques tant que l'état reste `starting`. */
 export const TTS_STARTING_MAX_RETRIES = 5;
+
+/** Intervalle de sondage de `GET /api/tts/downloads` **tant qu'un transfert est actif**. */
+export const TTS_DOWNLOAD_POLL_MS = 1_000;
+
+/**
+ * Statuts TERMINAUX d'une tâche de téléchargement — miroir de
+ * `src/tts/downloads.ts` (`DOWNLOAD_TERMINAL_STATUSES`). `done` est le SEUL
+ * succès ; `interrupted` n'est **jamais** un succès.
+ */
+export const DOWNLOAD_TERMINAL_STATUSES = ["done", "failed", "cancelled", "interrupted"];
 
 /* ─── Helpers purs (testés sans DOM) ────────────────────────────────────── */
 
@@ -94,6 +106,230 @@ export function formatBytes(size) {
 
 function plural(count, singular, pluralForm) {
   return count > 1 ? pluralForm : singular;
+}
+
+/* ─── Téléchargement des modèles (Lot 9, étape 3 — UI) ───────────────────
+ * Mapping PUR de l'état du catalogue et des tâches vers l'affichage. Aucun
+ * DOM, aucun réseau : testable en Node (comme le reste du module).
+ */
+
+/** Vrai si un statut de tâche est terminal (plus aucune évolution possible). */
+export function isDownloadTerminal(status) {
+  return DOWNLOAD_TERMINAL_STATUSES.includes(status);
+}
+
+/**
+ * Statut d'une tâche → libellé français + tonalité (`ok`/`warn`/`error`/`muted`).
+ * `interrupted` (gateway tué pendant le transfert) est présenté en **erreur**,
+ * jamais comme un succès : seul `done` est « Téléchargé ».
+ */
+export function describeDownloadStatus(status) {
+  switch (status) {
+    case "queued":
+      return { key: "queued", label: "En attente", tone: "muted", terminal: false };
+    case "downloading":
+      return { key: "downloading", label: "Téléchargement…", tone: "warn", terminal: false };
+    case "verifying":
+      return { key: "verifying", label: "Vérification…", tone: "warn", terminal: false };
+    case "done":
+      return { key: "done", label: "Téléchargé", tone: "ok", terminal: true };
+    case "failed":
+      return { key: "failed", label: "Échec", tone: "error", terminal: true };
+    case "cancelled":
+      return { key: "cancelled", label: "Annulé", tone: "muted", terminal: true };
+    case "interrupted":
+      return { key: "interrupted", label: "Interrompu", tone: "error", terminal: true };
+    default:
+      return { key: "unknown", label: "État inconnu", tone: "muted", terminal: true };
+  }
+}
+
+/**
+ * Progression d'une tâche : `{ determinate, percent, percentText, bytesText }`.
+ * Sans total connu, la barre est **indéterminée** (aucun pourcentage inventé).
+ */
+export function downloadProgress(task) {
+  const bytesRaw = Number(task?.bytesDownloaded);
+  const totalRaw = Number(task?.totalBytes);
+  const bytes = Number.isFinite(bytesRaw) && bytesRaw > 0 ? bytesRaw : 0;
+  if (Number.isFinite(totalRaw) && totalRaw > 0) {
+    const percent = Math.max(0, Math.min(100, Math.floor((bytes / totalRaw) * 100)));
+    return {
+      determinate: true,
+      percent,
+      percentText: `${percent} %`,
+      bytesText: `${formatBytes(bytes)} / ${formatBytes(totalRaw)}`,
+    };
+  }
+  return {
+    determinate: false,
+    percent: null,
+    percentText: null,
+    bytesText: formatBytes(bytes),
+  };
+}
+
+/**
+ * Vue d'une entrée du catalogue (`GET /api/tts/catalog`) : taille, licence,
+ * badge d'état (`à télécharger` / `téléchargé` / `déclaré`) et tâche locale.
+ */
+export function describeCatalogEntry(entry) {
+  const e = entry && typeof entry === "object" ? entry : {};
+  const declared = e.declared === true;
+  const installed = e.installed === true;
+  const licenseAllowed = e.licenseAllowed !== false;
+  const task = e.download && typeof e.download === "object" ? e.download : null;
+  let stateKey = "missing";
+  let badgeLabel = "À télécharger";
+  let tone = "muted";
+  if (declared) {
+    stateKey = "declared";
+    badgeLabel = "Déclaré";
+    tone = "ok";
+  } else if (installed) {
+    stateKey = "installed";
+    badgeLabel = "Téléchargé";
+    tone = "warn";
+  }
+  return {
+    id: typeof e.id === "string" ? e.id : "",
+    label: typeof e.label === "string" && e.label.length > 0 ? e.label : String(e.id ?? "?"),
+    variant: typeof e.variant === "string" ? e.variant : null,
+    installed,
+    declared,
+    licenseAllowed,
+    license: typeof e.license === "string" && e.license.length > 0 ? e.license : "?",
+    sizeText: formatBytes(e.expectedBytes),
+    stateKey,
+    badgeLabel,
+    tone,
+    task,
+    active: Boolean(task && !isDownloadTerminal(task.status)),
+  };
+}
+
+/**
+ * Décision d'action PURE pour une entrée : télécharger → déclarer → activer
+ * (ou annuler pendant un transfert actif). Tient compte d'un téléchargement
+ * DÉJÀ en cours (`activeId`) et de la disponibilité de l'éditeur de config.
+ */
+export function catalogAction(view, options = {}) {
+  const activeId = typeof options.activeId === "string" ? options.activeId : null;
+  const engineConfigAvailable = options.engineConfigAvailable !== false;
+  const busy = activeId !== null;
+  if (view.active) {
+    return { kind: "cancel", label: "Annuler", disabled: false, reason: null };
+  }
+  if (view.installed && !view.declared) {
+    return engineConfigAvailable
+      ? { kind: "declare", label: "Déclarer ce modèle", disabled: false, reason: null }
+      : {
+          kind: "declare",
+          label: "Déclarer ce modèle",
+          disabled: true,
+          reason: "La configuration du moteur n'est pas disponible dans ce gateway.",
+        };
+  }
+  if (view.declared) {
+    return engineConfigAvailable
+      ? { kind: "activate", label: "Choisir comme moteur", disabled: false, reason: null }
+      : {
+          kind: "activate",
+          label: "Choisir comme moteur",
+          disabled: true,
+          reason: "La configuration du moteur n'est pas disponible dans ce gateway.",
+        };
+  }
+  const failedTask = view.task && !view.installed
+    ? ["failed", "interrupted", "cancelled"].includes(view.task.status)
+    : false;
+  if (!view.licenseAllowed) {
+    return { kind: "download", label: "Télécharger", disabled: true, reason: "Licence hors politique." };
+  }
+  return {
+    kind: "download",
+    label: failedTask ? "Réessayer" : "Télécharger",
+    disabled: busy,
+    reason: busy ? "Un téléchargement est déjà en cours." : null,
+  };
+}
+
+/**
+ * Vue d'une entrée ÉCARTÉE (`notIncluded`, ex. `sanotts` GPL-3.0) : affichée
+ * avec sa raison, **sans bouton** (transparence, jamais retirée en silence).
+ */
+export function describeNotIncluded(rejection) {
+  const r = rejection && typeof rejection === "object" ? rejection : {};
+  return {
+    id: typeof r.id === "string" ? r.id : "",
+    label: typeof r.label === "string" && r.label.length > 0 ? r.label : String(r.id ?? "?"),
+    license: typeof r.license === "string" && r.license.length > 0 ? r.license : "?",
+    reason: typeof r.reason === "string" ? r.reason : null,
+    detail:
+      typeof r.detail === "string" && r.detail.length > 0
+        ? r.detail
+        : "Moteur écarté du catalogue fermé.",
+  };
+}
+
+/**
+ * Faut-il sonder `GET /api/tts/downloads` ? **Oui uniquement** tant qu'une
+ * tâche est non terminale (y compris `queued`) : sinon, aucune requête.
+ */
+export function shouldPollDownloads(report) {
+  if (!report || typeof report !== "object") return false;
+  if (typeof report.active === "string" && report.active.length > 0) return true;
+  const tasks = Array.isArray(report.tasks) ? report.tasks : [];
+  return tasks.some((task) => task && !isDownloadTerminal(task.status));
+}
+
+/**
+ * Erreur d'une action de téléchargement → message affiché. **Le message EXACT
+ * du serveur est la source de vérité** (lecture seule, permissions, espace
+ * disque…) : on n'invente aucune cause. Un repli n'existe que si le serveur
+ * n'a rien fourni.
+ */
+export function describeDownloadError(error) {
+  const input = error && typeof error === "object" ? error : {};
+  const data = input.data && typeof input.data === "object" ? input.data : input;
+  const code =
+    typeof data.code === "string" && data.code.length > 0
+      ? data.code
+      : typeof data.error === "string" && data.error.length > 0
+        ? data.error
+        : null;
+  const status = Number(data.status ?? input.status) || 0;
+  const serverMessage =
+    typeof data.message === "string" && data.message.length > 0 ? data.message : null;
+  const fallback = (() => {
+    switch (code) {
+      case "download_in_progress":
+        return "Un téléchargement est déjà en cours pour ce modèle.";
+      case "models_dir_unwritable":
+        return "Le dossier des modèles n'est pas inscriptible par le gateway.";
+      case "insufficient_disk_space":
+        return "Espace disque insuffisant pour ce modèle.";
+      case "catalog_resolve_failed":
+        return "Résolution du paquet impossible (dépôt Hugging Face).";
+      case "unknown_catalog_id":
+      case "invalid_json":
+      case "invalid_body":
+      case "invalid_catalog_id":
+        return "Modèle inconnu du catalogue fermé.";
+      case "downloads_unavailable":
+        return "Le téléchargement des modèles n'est pas disponible dans ce gateway.";
+      default:
+        return status === 0
+          ? "La requête n'a pas abouti (gateway injoignable)."
+          : "Le téléchargement a échoué.";
+    }
+  })();
+  return {
+    code,
+    status,
+    message: serverMessage ?? fallback,
+    retry: status === 0 || status >= 500,
+  };
 }
 
 /**
@@ -383,10 +619,9 @@ export function describeModelsDir(modelsDir) {
       files: [],
       truncated: false,
       message:
-        "Aucun modèle de voix n'est installé. Déposez le fichier du modèle dans le dossier " +
-        "des modèles monté sur ce conteneur (c'est une action HORS Yuki : le téléchargement " +
-        "depuis l'interface arrivera à l'étape suivante ; d'ici là, le gateway n'écrit rien " +
-        "dans ce dossier, monté en lecture seule pour lui comme pour le service tts).",
+        "Aucun modèle de voix n'est installé. Téléchargez-en un depuis « Télécharger " +
+        "un modèle » ci-dessous, ou déposez un fichier .gguf dans le dossier des modèles " +
+        "monté sur ce conteneur (action HORS Yuki, réservée aux moteurs hors catalogue).",
     };
   }
   return {
@@ -476,9 +711,15 @@ function apiErrorMessage(error) {
  * @param {object} deps.HolafFetch Brique HTTP (`GET`/`POST`/`PUT`, `raw:true`).
  * @param {object} deps.HolafModal Brique modale (`confirm`).
  * @param {object} [deps.player] Lecteur Web Audio (`createTtsPlayer()`).
+ * @param {HTMLElement|string} [deps.engineRoot] Conteneur de la zone ⑤
+ *   (« Moteur TTS et modèles »). Absent ⇒ la zone reste dans `root`.
  * @param {() => string} [deps.getActiveVoice] Valeur courante de `tts.voice`.
  * @param {() => void} [deps.onConfigChanged] Notifie `config.js` (relecture).
- * @param {() => Promise<boolean>} [deps.requestRestart] Redémarrage + attente.
+ * @param {() => Promise<boolean>} [deps.requestEnableVoice] Raccourci vers le
+ *   chemin d'écriture UNIQUE : règle `tts.enabled` puis enregistre (config.js).
+ * @param {(id: string) => Promise<boolean>} [deps.requestActivateEngine]
+ *   Raccourci vers le même chemin d'écriture : règle `tts.engine` puis
+ *   enregistre (config.js). Utilisé par « Choisir comme moteur ».
  * @param {() => void} [deps.openMaintenance] Bascule vers l'onglet Maintenance.
  * @param {string} [deps.ttsContainerName] Nom du conteneur moteur (procédure).
  * @returns {{ refresh: () => Promise<void>, destroy: () => void }}
@@ -487,13 +728,21 @@ export function initTtsAssistant(root, deps = {}) {
   const el = typeof root === "string" ? document.getElementById(root) : root;
   if (!el) return { refresh: async () => {}, destroy() {} };
 
+  // Zone ⑤ : second point de montage du MÊME composant (jamais dupliqué).
+  const engineEl =
+    typeof deps.engineRoot === "string"
+      ? document.getElementById(deps.engineRoot)
+      : deps.engineRoot ?? null;
+
   const fetchApi = deps.HolafFetch;
   const modal = deps.HolafModal;
   const player = deps.player ?? null;
   const onConfigChanged =
     typeof deps.onConfigChanged === "function" ? deps.onConfigChanged : null;
-  const requestRestart =
-    typeof deps.requestRestart === "function" ? deps.requestRestart : null;
+  const requestEnableVoice =
+    typeof deps.requestEnableVoice === "function" ? deps.requestEnableVoice : null;
+  const requestActivateEngine =
+    typeof deps.requestActivateEngine === "function" ? deps.requestActivateEngine : null;
   const openMaintenance =
     typeof deps.openMaintenance === "function" ? deps.openMaintenance : null;
   const ttsContainerName =
@@ -515,6 +764,14 @@ export function initTtsAssistant(root, deps = {}) {
   let engineConfigStatusEl = null;
   let modelRowRefs = [];
   let globalRefs = new Map();
+  // Téléchargement des modèles (Lot 9, étape 3).
+  let catalogReport = null;
+  let downloadsReport = null;
+  let downloadsBusy = false;
+  let downloadsPollTimer = null;
+  // Un transfert a-t-il été actif lors du dernier sondage ? Sert à recharger le
+  // catalogue (installé/déclaré) UNE fois à l'arrêt du transfert.
+  let downloadsHadActive = false;
 
   /* — Structure statique (construite une fois) — */
   const badge = h("span", { class: "tts-badge tts-badge--muted", text: "…" });
@@ -600,42 +857,104 @@ export function initTtsAssistant(root, deps = {}) {
 
   const manualSection = buildManualSection();
 
-  const section = h("section", { class: "config-group tts-assistant", id: "tts-assistant" }, [
-    h("div", { class: "config-group__head" }, [
-      h("h2", { class: "config-group__title", text: "Assistant de mise en route de la voix" }),
-      h("div", { class: "config-secret" }, [refreshButton]),
-    ]),
-    h("p", {
-      class: "config-intro tts-assistant__intro",
-      text:
-        "Cet assistant vérifie que la synthèse vocale fonctionne, pas à pas. Il interroge " +
-        "uniquement le gateway : il n'a jamais accès au moteur ni à Docker. Aucun état « prêt » " +
-        "n'est affiché sans preuve positive de la sonde.",
-    }),
-    card,
-    h("section", { class: "tts-assistant__block", "aria-labelledby": "tts-models-dir-title" }, [
-      h("h3", { class: "tts-assistant__title", id: "tts-models-dir-title", text: "Modèle de voix sur le disque" }),
-      modelsDirBody,
-    ]),
-    engineDetails,
-    engineConfigSection,
-    h("section", { class: "tts-assistant__block", "aria-labelledby": "tts-test-title" }, [
-      h("h3", { class: "tts-assistant__title", id: "tts-test-title", text: "Tester la voix" }),
-      h("label", { class: "tts-assistant__label", for: "tts-test-text", text: "Texte (optionnel, 500 caractères maximum)" }),
-      testInput,
-      h("p", {
-        class: "config-helper",
-        text: `Laissez vide pour utiliser la phrase par défaut : « ${DEFAULT_TTS_TEST_TEXT} »`,
-      }),
-      h("div", { class: "tts-card__actions" }, [testButton]),
-      testFeedback,
-    ]),
-    manualSection,
+  // Zone ⑤ — UI de téléchargement des modèles (Lot 9, étape 3) : catalogue
+  // fermé, progression, annulation puis déclaration. Le conteneur `#tts-downloads-root`
+  // reçoit la liste, l'état du transfert actif et les modèles écartés.
+  const downloadsIntro = h("p", {
+    class: "config-helper",
+    text:
+      "Catalogue fermé (l'URL des paquets est construite par le serveur, jamais par le " +
+      "navigateur). Téléchargez un modèle, puis déclarez-le : le gateway y accède en " +
+      "écriture dans `/models/downloads`.",
+  });
+  const downloadsStatus = h("p", {
+    class: "config-helper tts-dl__status",
+    role: "status",
+    "aria-live": "polite",
+  });
+  const downloadsError = h("div", { class: "tts-dl__error" });
+  const downloadsCatalog = h("ul", { class: "tts-dl__catalog" });
+  const downloadsExcluded = h("div", { class: "tts-dl__excluded" });
+  const downloadsRoot = h("div", { class: "tts-downloads", id: "tts-downloads-root" }, [
+    downloadsIntro,
+    downloadsStatus,
+    downloadsError,
+    downloadsCatalog,
+    downloadsExcluded,
   ]);
+  const downloadsBlock = h(
+    "section",
+    { class: "tts-assistant__block tts-assistant__downloads", "aria-labelledby": "tts-downloads-title" },
+    [
+      h("h3", { class: "tts-assistant__title", id: "tts-downloads-title", text: "Télécharger un modèle" }),
+      downloadsRoot,
+    ],
+  );
+
+  // Zone ① — bandeau d'état COMPACT : badge + une phrase + boutons contextuels.
+  // La logique de la carte (`describeTtsState`, `statusTechnicalDetails`) est
+  // INCHANGÉE ; seul l'emballage change.
+  const stateSection = h(
+    "section",
+    { class: "config-group tts-assistant tts-assistant--state", id: "tts-assistant" },
+    [
+      h("div", { class: "config-group__head" }, [
+        h("h2", { class: "config-group__title", text: "État de la voix" }),
+        h("div", { class: "config-secret" }, [refreshButton]),
+      ]),
+      card,
+    ],
+  );
+
+  // Zone ⑤ — « Moteur TTS et modèles » : tout le technique/diagnostic REPLIÉ.
+  // Rendu EAGER conservé : chaque bloc reste dans le DOM, le `<details>` masque
+  // sans retirer (classe DISTINCTE `config-advanced`, jamais `tts-details`).
+  const engineSection = h(
+    "details",
+    { class: "config-advanced tts-assistant__engine-zone" },
+    [
+      h("summary", { class: "config-advanced__summary", text: "Moteur TTS et modèles" }),
+      h("div", { class: "config-advanced__body tts-assistant" }, [
+        h("p", {
+          class: "config-intro tts-assistant__intro",
+          text:
+            "Diagnostic et réglages techniques de la voix. Cet assistant interroge " +
+            "uniquement le gateway : il n'a jamais accès au moteur ni à Docker. " +
+            "Aucun état « prêt » n'est affiché sans preuve positive de la sonde.",
+        }),
+        h("section", { class: "tts-assistant__block", "aria-labelledby": "tts-models-dir-title" }, [
+          h("h3", { class: "tts-assistant__title", id: "tts-models-dir-title", text: "Modèle de voix sur le disque" }),
+          modelsDirBody,
+        ]),
+        engineDetails,
+        downloadsBlock,
+        engineConfigSection,
+        h("section", { class: "tts-assistant__block", "aria-labelledby": "tts-test-title" }, [
+          h("h3", { class: "tts-assistant__title", id: "tts-test-title", text: "Tester la voix" }),
+          h("label", { class: "tts-assistant__label", for: "tts-test-text", text: "Texte (optionnel, 500 caractères maximum)" }),
+          testInput,
+          h("p", {
+            class: "config-helper",
+            text: `Laissez vide pour utiliser la phrase par défaut : « ${DEFAULT_TTS_TEST_TEXT} »`,
+          }),
+          h("div", { class: "tts-card__actions" }, [testButton]),
+          testFeedback,
+        ]),
+        manualSection,
+      ]),
+    ],
+  );
   testInput.id = "tts-test-text";
 
   el.textContent = "";
-  el.append(section);
+  el.append(stateSection);
+  if (engineEl) {
+    engineEl.textContent = "";
+    engineEl.append(engineSection);
+  } else {
+    // Sans conteneur dédié : la zone ⑤ reste dans le même root (compatibilité).
+    el.append(engineSection);
+  }
 
   /* — Rendu de la carte d'état — */
   function renderCard() {
@@ -651,7 +970,7 @@ export function initTtsAssistant(root, deps = {}) {
         class: "button",
         type: "button",
         text: "Activer la voix",
-        "aria-label": "Activer la synthèse vocale et proposer un redémarrage",
+        "aria-label": "Activer la synthèse vocale (enregistre la configuration)",
       });
       enable.addEventListener("click", () => void enableVoice());
       cardActions.append(enable);
@@ -734,9 +1053,10 @@ export function initTtsAssistant(root, deps = {}) {
         h("p", {
           class: "config-helper",
           text:
-            "Le fichier du modèle doit être présent sur le disque (déposez-le sur l'hôte pour " +
-            "l'instant) ; déclarez-le ensuite dans « Configuration du moteur » ci-dessus. Le " +
-            "service tts lit `/models` en lecture seule ; le gateway y a accès en écriture (Lot 9).",
+            "Le fichier du modèle doit être présent sur le disque ; téléchargez-le depuis " +
+            "« Télécharger un modèle » ci-dessus, puis déclarez-le dans « Configuration du " +
+            "moteur ». Le service tts lit `/models` en lecture seule ; le gateway y a accès " +
+            "en écriture dans le sous-dossier `downloads`.",
         }),
       );
     }
@@ -1066,9 +1386,8 @@ export function initTtsAssistant(root, deps = {}) {
         h("p", {
           class: "tts-assistant__note tts-assistant__note--warn",
           text:
-            "Aucun fichier .gguf détecté sous les dossiers de modèles. Déposez le fichier " +
-            "du modèle avant de le déclarer (le téléchargement depuis l'interface arrivera à " +
-            "l'étape suivante).",
+            "Aucun fichier .gguf détecté sous les dossiers de modèles. Téléchargez un modèle " +
+            "dans « Télécharger un modèle » ci-dessus, puis déclarez-le ici.",
         }),
       );
       return;
@@ -1315,6 +1634,387 @@ export function initTtsAssistant(root, deps = {}) {
     }
   }
 
+  /* — Téléchargement des modèles (Lot 9, étape 3) —
+   * Consomme UNIQUEMENT les routes du gateway : `GET /api/tts/catalog`,
+   * `GET /api/tts/downloads`, `POST /api/tts/downloads` et
+   * `POST /api/tts/downloads/{id}/cancel`. La progression vient du poll de
+   * `GET /api/tts/downloads` — jamais d'une requête longue.
+   */
+
+  function setDownloadsStatus(text, tone = null) {
+    downloadsStatus.textContent = text ?? "";
+    downloadsStatus.className =
+      "config-helper tts-dl__status" + (tone ? ` tts-dl__status--${tone}` : "");
+  }
+
+  function renderDownloadError(error, retryFn) {
+    const described = describeDownloadError(error);
+    downloadsError.textContent = "";
+    downloadsError.append(
+      h("p", {
+        class: "config-error tts-dl__error-message",
+        role: "status",
+        "aria-live": "polite",
+        text: described.message,
+      }),
+    );
+    if (described.retry && typeof retryFn === "function") {
+      const retry = h("button", {
+        class: "button button--ghost button--small",
+        type: "button",
+        text: "Réessayer",
+        "aria-label": `Réessayer : ${described.message}`,
+      });
+      retry.addEventListener("click", () => {
+        downloadsError.textContent = "";
+        retryFn();
+      });
+      downloadsError.append(h("div", { class: "tts-card__actions" }, [retry]));
+    }
+  }
+
+  function clearDownloadsError() {
+    downloadsError.textContent = "";
+  }
+
+  function buildProgress(task) {
+    const progress = downloadProgress(task);
+    const statusView = describeDownloadStatus(task.status);
+    const label = task.label ?? task.catalogId ?? "modèle";
+    const wrap = h("div", { class: "tts-dl__progress" }, [
+      h("p", { class: "tts-dl__task-note", text: `${statusView.label} ${label}`.trim() }),
+    ]);
+    const bar = h("progress", {
+      class: "tts-dl__progress-bar",
+      max: "100",
+      "aria-label": `Progression du téléchargement de ${label}`,
+    });
+    if (progress.determinate) {
+      bar.value = progress.percent;
+      bar.setAttribute("aria-valuetext", `${progress.percentText}, ${progress.bytesText}`);
+    } else {
+      // Barre indéterminée : aucun pourcentage inventé. On retire l'attribut
+      // `value` (présence ⇒ barre déterminée) plutôt que de poser un `style`.
+      bar.removeAttribute("value");
+      bar.setAttribute("aria-valuetext", progress.bytesText);
+    }
+    wrap.append(
+      bar,
+      h("p", {
+        class: "tts-dl__progress-meta",
+        text: progress.determinate
+          ? `${progress.bytesText} — ${progress.percentText}`
+          : progress.bytesText,
+      }),
+    );
+    return wrap;
+  }
+
+  function buildCatalogRow(entry, view, action) {
+    const row = h("li", {
+      class: "tts-dl__item" + (view.active ? " tts-dl__item--active" : ""),
+    });
+    row.append(
+      h("div", { class: "tts-dl__head" }, [
+        h("span", { class: "tts-dl__label", text: view.label }),
+        h("span", {
+          class: `tts-dl__state tts-dl__state--${view.tone}`,
+          text: view.badgeLabel,
+        }),
+      ]),
+      h("p", {
+        class: "tts-dl__meta",
+        text: `${view.sizeText} · licence ${view.license}${
+          view.variant ? ` · ${view.variant}` : ""
+        }`,
+      }),
+    );
+    if (view.active && view.task) {
+      row.append(buildProgress(view.task));
+    } else if (view.task) {
+      const statusView = describeDownloadStatus(view.task.status);
+      const note =
+        view.task.status === "failed"
+          ? view.task.error ?? "Le téléchargement a échoué."
+          : view.task.status === "interrupted"
+            ? view.task.error ??
+              "Téléchargement interrompu par un redémarrage du gateway : relancez-le."
+            : view.task.status === "cancelled"
+              ? "Téléchargement annulé."
+              : null;
+      if (note) {
+        row.append(
+          h("p", {
+            class: `tts-dl__task-note${
+              statusView.tone === "error" ? " tts-dl__task-note--error" : ""
+            }`,
+            text: note,
+          }),
+        );
+      }
+    }
+
+    const actions = h("div", { class: "tts-dl__actions" });
+    const button = h("button", {
+      class: "button button--small",
+      type: "button",
+      text: action.label,
+      "aria-label": `${action.label} — ${view.label}`,
+    });
+    button.disabled = action.disabled;
+    button.addEventListener("click", () => void runCatalogAction(action.kind, entry));
+    actions.append(button);
+    if (action.disabled && action.reason) {
+      actions.append(h("span", { class: "tts-dl__hint", text: action.reason }));
+    }
+    row.append(actions);
+    return row;
+  }
+
+  function renderExcluded(notIncluded) {
+    downloadsExcluded.textContent = "";
+    if (!Array.isArray(notIncluded) || notIncluded.length === 0) return;
+    const list = h("ul", { class: "tts-dl__excluded-list" });
+    for (const raw of notIncluded) {
+      const view = describeNotIncluded(raw);
+      list.append(
+        h("li", { class: "tts-dl__excluded-item" }, [
+          h("span", { class: "tts-dl__label", text: `${view.label} — licence ${view.license}` }),
+          h("p", { class: "tts-dl__meta", text: view.detail }),
+        ]),
+      );
+    }
+    downloadsExcluded.append(
+      h("details", { class: "tts-dl__excluded-details" }, [
+        h("summary", {
+          class: "tts-details__summary",
+          text: `Moteurs écartés (${notIncluded.length})`,
+        }),
+        h("p", {
+          class: "config-helper",
+          text:
+            "Ces moteurs ne sont pas téléchargeables depuis Yuki (licence hors politique " +
+            "MIT/Apache-2.0). Ils restent déclarables à la main dans « Configuration du moteur ».",
+        }),
+        list,
+      ]),
+    );
+  }
+
+  function renderCatalog() {
+    const entries = Array.isArray(catalogReport?.entries) ? catalogReport.entries : [];
+    const notIncluded = Array.isArray(catalogReport?.notIncluded) ? catalogReport.notIncluded : [];
+    const engineConfigAvailable = catalogReport?.engineConfigAvailable !== false;
+    const activeId =
+      typeof downloadsReport?.active === "string" && downloadsReport.active.length > 0
+        ? downloadsReport.active
+        : null;
+    // La tâche la plus FRAÎCHE vient de `GET /api/tts/downloads` (le catalogue
+    // n'est rechargé qu'à l'arrêt du transfert) : on la préfère à `entry.download`.
+    const taskById = new Map(
+      (Array.isArray(downloadsReport?.tasks) ? downloadsReport.tasks : [])
+        .filter((task) => task && typeof task.catalogId === "string")
+        .map((task) => [task.catalogId, task]),
+    );
+    downloadsCatalog.textContent = "";
+    if (!catalogReport) {
+      downloadsCatalog.append(
+        h("li", { class: "tts-dl__empty", text: "Catalogue indisponible." }),
+      );
+      return;
+    }
+    if (entries.length === 0) {
+      downloadsCatalog.append(
+        h("li", { class: "tts-dl__empty", text: "Aucun modèle téléchargeable." }),
+      );
+    }
+    for (const entry of entries) {
+      const task = taskById.get(entry.id) ?? entry.download ?? null;
+      const merged = { ...entry, download: task };
+      const view = describeCatalogEntry(merged);
+      const action = catalogAction(view, { activeId, engineConfigAvailable });
+      downloadsCatalog.append(buildCatalogRow(merged, view, action));
+    }
+    renderExcluded(notIncluded);
+  }
+
+  async function loadCatalog() {
+    if (!fetchApi) return;
+    try {
+      catalogReport = await fetchApi.get("/api/tts/catalog", {
+        headers: { accept: "application/json" },
+      });
+    } catch (error) {
+      catalogReport = null;
+      renderDownloadError(error);
+    }
+    renderCatalog();
+  }
+
+  function scheduleDownloadsPoll() {
+    if (downloadsPollTimer !== null) return;
+    downloadsPollTimer = setTimeout(() => {
+      downloadsPollTimer = null;
+      void loadDownloads();
+    }, TTS_DOWNLOAD_POLL_MS);
+  }
+
+  function clearDownloadsPoll() {
+    if (downloadsPollTimer !== null) {
+      clearTimeout(downloadsPollTimer);
+      downloadsPollTimer = null;
+    }
+  }
+
+  async function loadDownloads() {
+    if (!fetchApi) return;
+    try {
+      downloadsReport = await fetchApi.get("/api/tts/downloads", {
+        headers: { accept: "application/json" },
+      });
+    } catch {
+      // Échec transient : on conserve le dernier état connu et on continue à
+      // sonder tant qu'un transfert était actif (aucun message trompeur).
+    }
+    renderCatalog();
+    if (shouldPollDownloads(downloadsReport)) {
+      downloadsHadActive = true;
+      scheduleDownloadsPoll();
+    } else {
+      clearDownloadsPoll();
+      if (downloadsHadActive) {
+        downloadsHadActive = false;
+        await loadCatalog();
+      }
+    }
+  }
+
+  async function runCatalogAction(kind, entry) {
+    if (kind === "download") return startDownload(entry);
+    if (kind === "cancel") return cancelDownload(entry);
+    if (kind === "declare") return declareCatalogEntry(entry);
+    if (kind === "activate") return activateCatalogEntry(entry);
+  }
+
+  async function startDownload(entry) {
+    if (!fetchApi || downloadsBusy) return;
+    const catalogId = entry?.id;
+    const label = entry?.label ?? catalogId ?? "modèle";
+    if (typeof catalogId !== "string" || catalogId.length === 0) return;
+    downloadsBusy = true;
+    clearDownloadsError();
+    setDownloadsStatus(`Démarrage du téléchargement de « ${label} »…`);
+    try {
+      await fetchApi.post("/api/tts/downloads", {
+        headers: WRITE_HEADERS,
+        body: { catalogId },
+      });
+      await loadDownloads();
+    } catch (error) {
+      renderDownloadError(error, () => void startDownload(entry));
+    } finally {
+      downloadsBusy = false;
+      renderCatalog();
+    }
+  }
+
+  async function cancelDownload(entry) {
+    if (!fetchApi || downloadsBusy) return;
+    const catalogId = entry?.id;
+    const label = entry?.label ?? catalogId ?? "modèle";
+    if (typeof catalogId !== "string" || catalogId.length === 0) return;
+    const confirmed = modal
+      ? await modal.confirm(
+          "Annuler ce téléchargement ?",
+          `Le téléchargement de « ${label} » sera arrêté. Le fichier partiel est conservé : ` +
+            "vous pourrez le reprendre plus tard.",
+        )
+      : true;
+    if (!confirmed) return;
+    downloadsBusy = true;
+    clearDownloadsError();
+    try {
+      await fetchApi.post(
+        `/api/tts/downloads/${encodeURIComponent(catalogId)}/cancel`,
+        { headers: WRITE_HEADERS },
+      );
+      await loadDownloads();
+    } catch (error) {
+      renderDownloadError(error, () => void cancelDownload(entry));
+    } finally {
+      downloadsBusy = false;
+      renderCatalog();
+    }
+  }
+
+  /** Ajoute le `prefill` à l'éditeur EXISTANT puis passe par son enregistrement. */
+  async function declareCatalogEntry(entry) {
+    const prefill =
+      entry && entry.prefill && typeof entry.prefill === "object" ? entry.prefill : null;
+    const label = entry?.label ?? entry?.id ?? "modèle";
+    if (!prefill) {
+      renderDownloadError({
+        code: "invalid_catalog_id",
+        message: `Aucun pré-remplissage fourni pour « ${label} » : déclarez-le dans « Configuration du moteur ».`,
+      });
+      return;
+    }
+    const view = describeEngineConfig(engineReport);
+    if (view.kind !== "ready" && view.kind !== "no-file") {
+      renderDownloadError({
+        status: 503,
+        code: "engine_config_unavailable",
+        message:
+          "La configuration du moteur n'est pas modifiable depuis cette page " +
+          "(voir « Configuration du moteur »).",
+      });
+      return;
+    }
+    clearDownloadsError();
+    captureEngineDraft();
+    if (!engineDraft.models.some((model) => model.id === prefill.id)) {
+      engineDraft.models.push({
+        id: prefill.id,
+        family: prefill.family,
+        task: prefill.task,
+        mode: prefill.mode,
+        path: prefill.path,
+      });
+    }
+    engineFieldErrors = [];
+    renderEngineConfig();
+    setDownloadsStatus(`Déclaration de « ${label} » dans la configuration du moteur…`);
+    await saveEngineConfig();
+    await loadCatalog();
+  }
+
+  async function activateCatalogEntry(entry) {
+    const label = entry?.label ?? entry?.id ?? "modèle";
+    const catalogId = entry?.id;
+    if (typeof requestActivateEngine !== "function") {
+      setDownloadsStatus(
+        "Activez ce moteur dans « Réglages de la voix » (champ « Moteur de synthèse »).",
+        "warn",
+      );
+      return;
+    }
+    if (downloadsBusy || typeof catalogId !== "string" || catalogId.length === 0) return;
+    downloadsBusy = true;
+    setDownloadsStatus(`Activation du moteur « ${label} »…`);
+    try {
+      const ok = await requestActivateEngine(catalogId);
+      setDownloadsStatus(
+        ok
+          ? `Moteur « ${label} » enregistré — redémarrez le conteneur « tts » s'il ne l'a pas encore chargé.`
+          : "L'activation n'a pas pu être enregistrée : voir le message de la page.",
+        ok ? null : "error",
+      );
+      await loadCatalog();
+    } finally {
+      downloadsBusy = false;
+    }
+  }
+
   /* — Rafraîchissement de l'état — */
   function clearStartingTimer() {
     if (startingTimer !== null) {
@@ -1358,6 +2058,8 @@ export function initTtsAssistant(root, deps = {}) {
     scheduleStartingRetry(describeTtsState(lastStatus));
     await loadModels();
     await loadEngineConfig();
+    await loadCatalog();
+    await loadDownloads();
     refreshButton.disabled = false;
   }
 
@@ -1487,48 +2189,42 @@ export function initTtsAssistant(root, deps = {}) {
     }
   }
 
-  /* — Activation de la voix — */
+  /* — Activation de la voix : chemin d'écriture UNIQUE —
+   * Le bouton est un RACCOURCI : il règle `tts.enabled` puis passe par
+   * l'enregistrement GLOBAL de `config.js` (barre sticky) — plus aucun `PUT`
+   * propre à l'assistant, plus aucun redémarrage silencieux. Il guide ensuite
+   * vers l'onglet Maintenance (le champ reste en `apply: restart`). */
   async function enableVoice() {
     if (busy || !fetchApi) return;
-    const confirmed = modal
-      ? await modal.confirm(
-          "Activer la voix et redémarrer ?",
-          "Le champ tts.enabled est en « apply: restart » : Yuki doit redémarrer pour que la " +
-            "synthèse vocale s'active.\n\n" +
-            "Yuki redémarre en interne (le conteneur reste en place). Cela interrompt la " +
-            "conversation et les jobs en cours.",
-        )
-      : true;
-    if (!confirmed) return;
-
     busy = true;
     cardActions.querySelectorAll("button").forEach((button) => {
       button.disabled = true;
     });
-    setCardStatus("Enregistrement de tts.enabled = on…");
-    try {
-      await fetchApi.put("/api/config", {
-        headers: WRITE_HEADERS,
-        body: { "tts.enabled": "on" },
-      });
-    } catch (error) {
-      setCardStatus(`Échec de l'activation : ${apiErrorMessage(error)}`, true);
+    if (typeof requestEnableVoice !== "function") {
+      setCardStatus(
+        "Activez la voix avec le champ « Activer la voix », puis « Enregistrer ».",
+        true,
+      );
       busy = false;
       renderCard();
       return;
     }
-    onConfigChanged?.();
-    if (requestRestart) {
-      setCardStatus("Voix activée. Redémarrage de Yuki…");
-      await requestRestart();
-      busy = false;
+    setCardStatus("Activation de la voix — enregistrement global…");
+    const ok = await requestEnableVoice();
+    busy = false;
+    if (!ok) {
+      setCardStatus(
+        "L'activation n'a pas pu être enregistrée : voir le message de la page.",
+        true,
+      );
       return;
     }
-    setCardStatus(
-      "Voix activée. Redémarrez Yuki depuis l'onglet Maintenance pour l'appliquer.",
-    );
-    busy = false;
+    // Rafraîchit la carte (badge/boutons) PUIS repose le guide de redémarrage
+    // (le rafraîchissement vide le statut par conception).
     await refresh();
+    setCardStatus(
+      "Voix activée et enregistrée. Redémarrez Yuki (onglet Maintenance) pour l'appliquer.",
+    );
   }
 
   /* — Bloc « à la main » (les actions hors UI) — */
@@ -1538,13 +2234,12 @@ export function initTtsAssistant(root, deps = {}) {
       h("p", {
         class: "config-helper",
         text:
-          "Aujourd'hui (Lot 9, étape 1), deux actions restent à la main : (1) démarrer ou " +
-          "redémarrer le conteneur `tts` — le gateway n'a aucun accès au démon Docker (pas de " +
-          "socket monté) ; (2) déposer le FICHIER du modèle, car le téléchargement depuis " +
-          "l'interface n'est PAS encore livré (c'est l'étape suivante). Quand il le sera, " +
-          "l'action (2) disparaîtra. Les RÉGLAGES du moteur se font ci-dessus (section " +
-          "« Configuration du moteur ») ; les montages M1/M2/M3 à appliquer une fois sur " +
-          "l'hôte y sont décrits.",
+          "Le téléchargement depuis l'interface est livré : pour les quatre variantes du " +
+          "catalogue (Chatterbox, CosyVoice 3, Qwen3-TTS, Kokoro), il n'y a plus de fichier à " +
+          "déposer à la main (voir « Télécharger un modèle » ci-dessus). Il reste une action " +
+          "hors Yuki : démarrer ou redémarrer le conteneur `tts` — le gateway n'a aucun accès " +
+          "au démon Docker. Les RÉGLAGES du moteur se font ci-dessus (section « Configuration " +
+          "du moteur ») ; les montages M1/M2/M3 à appliquer une fois sur l'hôte y sont décrits.",
       }),
       h("ol", { class: "tts-manual__list" }, [
         h("li", { class: "tts-manual__item" }, [
@@ -1560,28 +2255,30 @@ export function initTtsAssistant(root, deps = {}) {
             text:
               "À exécuter sur l'hôte, à la racine de votre déploiement Compose, et seulement si « tts » " +
               "n'est pas déjà dans la pile (il doit être déclaré dans le même fichier Compose que le " +
-              "gateway et démarré avec lui). Un GPU NVIDIA doit être disponible.",
+              "gateway et démarré avec lui). Un GPU NVIDIA doit être disponible. Le moteur relit " +
+              "server.json uniquement à son démarrage : redémarrez-le après un changement de modèle.",
           }),
         ]),
         h("li", { class: "tts-manual__item" }, [
           h("p", { class: "tts-manual__lead" }, [
-            h("strong", { text: "Déposer le fichier du modèle" }),
-            " dans le dossier partagé monté sur ",
+            h("strong", { text: "Seulement pour un moteur HORS catalogue" }),
+            " : déposer un fichier .gguf dans le dossier partagé monté sur ",
             code("/models"),
             " (lu par le moteur ; le gateway y a aussi accès en écriture, pour ses " +
-              "futurs téléchargements rangés dans le sous-dossier ",
+              "téléchargements rangés dans le sous-dossier ",
             code("/models/downloads"),
-            ") :",
+            "), puis le déclarer dans « Configuration du moteur » :",
           ]),
           h("p", { class: "config-helper" }, [
-            "Le chemin du dossier dépend de VOTRE déploiement (variable d'environnement ou " +
-              "fichier Compose — vérifiez la section `volumes:` des services). Déposez-y le " +
-              "fichier .gguf attendu par le moteur, puis déclarez-le dans « Configuration du " +
-              "moteur » ci-dessus (le sélecteur de chemin ne propose que les .gguf présents). " +
-              "Le gateway réserve déjà le sous-dossier ",
-            code("/models/downloads"),
-            " pour les futurs téléchargements depuis l'interface, mais ne télécharge encore rien. " +
-              "Ne déposez PAS les voix ici : elles vivent dans le dossier monté sur ",
+            "Cette action n'est PLUS nécessaire pour les variantes du catalogue (elles se " +
+              "téléchargent depuis l'interface). Elle reste vraie uniquement pour un moteur " +
+              "écarté du catalogue (p. ex. ",
+            code("sanotts"),
+            ", licence GPL-3.0 hors politique) ou un GGUF personnel. Le chemin du dossier " +
+              "dépend de VOTRE déploiement (variable d'environnement ou fichier Compose — " +
+              "vérifiez la section `volumes:` des services). Le sélecteur de chemin de l'éditeur " +
+              "ne propose que les .gguf présents sur le disque. Ne déposez PAS les voix ici : " +
+              "elles vivent dans le dossier monté sur ",
             code("/voices"),
             " (gérable depuis cette page).",
           ]),
@@ -1597,7 +2294,9 @@ export function initTtsAssistant(root, deps = {}) {
     refresh,
     destroy() {
       clearStartingTimer();
+      clearDownloadsPoll();
       el.textContent = "";
+      if (engineEl) engineEl.textContent = "";
     },
   };
 }

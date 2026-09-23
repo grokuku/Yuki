@@ -566,12 +566,350 @@ await sleep(200);
 const closed = await evaluate(`!document.querySelector(".holaf-modal-root")`);
 check("[/config] la modale se ferme (Annuler)", closed === true);
 
-/* ═══════════════════════ Assistant de mise en route (Lot 8) ══════════════ */
+/* ══════════════════ Onglet Voix simplifié — 5 zones (refonte UX) ═══════════ */
+console.log("\n═══ ONGLET VOIX SIMPLIFIÉ ═══");
+await gotoAssistant();
+
+const VOICE_ZONES = `(() => {
+  const panel = document.getElementById("panel-voix");
+  const rows = [...document.querySelectorAll("#group-voix .config-row")];
+  const rowByLabel = (label) => rows.find((r) => r.querySelector(".config-label")?.textContent?.includes(label));
+  const visibleWithoutClick = (label) => {
+    const row = rowByLabel(label);
+    if (!row || row.hidden) return false;
+    const wrap = row.closest("details.config-advanced");
+    return !wrap || wrap.open;
+  };
+  const engineZone = panel.querySelector(":scope > #tts-engine-root > details.config-advanced");
+  const advanced = panel.querySelector("#group-voix details.config-advanced");
+  return {
+    hasMounts: !!document.getElementById("tts-assistant-root") &&
+      !!document.getElementById("voices-root") &&
+      !!document.getElementById("group-voix") &&
+      !!document.getElementById("tts-engine-root"),
+    engineClosed: engineZone ? engineZone.open === false : null,
+    advancedClosed: advanced ? advanced.open === false : null,
+    advancedSummary: advanced?.querySelector("summary")?.textContent ?? "",
+    essentials: ["Activer la voix", "Moteur de synthèse", "Langue", "Émotion", "Débit de parole", "Volume de lecture"]
+      .map((label) => ({ label, visible: visibleWithoutClick(label) })),
+    voiceTextField: !!rowByLabel("Voix (identifiant du registre)"),
+    voiceSelect: !!document.getElementById("voices-select"),
+    downloads: (() => {
+      const el = document.getElementById("tts-downloads-root");
+      return el
+        ? { present: true, empty: el.childNodes.length === 0, rows: el.querySelectorAll(".tts-dl__item").length }
+        : { present: false, empty: false, rows: 0 };
+    })(),
+    styleElems: panel.querySelectorAll("style").length,
+    styleAttrs: panel.querySelectorAll("[style]").length,
+  };
+})()`;
+
+const z = await evaluate(VOICE_ZONES);
+check("[/config] zone Voix : les 4 points de montage existent (① ② ③④ ⑤)", z.hasMounts, JSON.stringify({ hasMounts: z.hasMounts }));
+check(
+  "[/config] zone ③ : les 6 réglages essentiels sont VISIBLES sans clic",
+  z.essentials.every((e) => e.visible),
+  JSON.stringify(z.essentials),
+);
+check(
+  "[/config] zone ④ : repli « Avancé » replié par défaut (classe DISTINCTE `config-advanced`)",
+  z.advancedClosed === true && /Avancé/.test(z.advancedSummary),
+  JSON.stringify({ closed: z.advancedClosed, summary: z.advancedSummary }),
+);
+check(
+  "[/config] zone ⑤ : « Moteur TTS et modèles » est replié par défaut",
+  z.engineClosed === true,
+  JSON.stringify({ engineClosed: z.engineClosed }),
+);
+check(
+  "[/config] doublon supprimé : plus de champ texte `tts.voice`, le select de la bibliothèque subsiste",
+  z.voiceTextField === false && z.voiceSelect === true,
+  JSON.stringify({ voiceTextField: z.voiceTextField, voiceSelect: z.voiceSelect }),
+);
+check(
+  "[/config] UI de téléchargement LIVRÉE : #tts-downloads-root présent et peuplé (catalogue)",
+  z.downloads.present === true && z.downloads.empty === false && z.downloads.rows === 4,
+  JSON.stringify(z.downloads),
+);
+check(
+  "[/config] onglet Voix : zéro <style> / attribut style",
+  z.styleElems === 0 && z.styleAttrs === 0,
+  `style=${z.styleElems} attrs=${z.styleAttrs}`,
+);
+await shot("config-voix-zones-visible");
+await evaluate(`document.getElementById("group-voix").scrollIntoView({ block: "start" })`);
+await sleep(150);
+await shot("config-voix-reglages-essentiels");
+
+/* — Le repli ④ « Avancé » ouvert révèle les champs techniques (zone ④). — */
+const openedAdvanced = await evaluate(`(() => {
+  const details = document.querySelector("#group-voix details.config-advanced");
+  details.open = true;
+  const rows = [...details.querySelectorAll(".config-row")];
+  return {
+    open: details.open,
+    rowCount: rows.length,
+    labels: rows.map((r) => r.querySelector(".config-label")?.textContent ?? ""),
+  };
+})()`);
+check(
+  "[/config] zone ④ dépliée → champs techniques présents (adresse, préchargement, découpe, délai)",
+  openedAdvanced.open &&
+    openedAdvanced.rowCount >= 5 &&
+    openedAdvanced.labels.some((l) => /Adresse du moteur/.test(l)) &&
+    openedAdvanced.labels.some((l) => /Préchargement/.test(l)) &&
+    openedAdvanced.labels.some((l) => /Découpe/.test(l)) &&
+    openedAdvanced.labels.some((l) => /Délai maximal/.test(l)),
+  JSON.stringify(openedAdvanced),
+);
+await sleep(150);
+await evaluate(`document.querySelector("#group-voix details.config-advanced").scrollIntoView({ block: "start" })`);
+await sleep(150);
+await shot("config-voix-zones-avance");
+await evaluate(`document.querySelector("#group-voix details.config-advanced").open = false`);
+
+/* — Le repli ⑤ ouvert révèle bien son contenu (masqué, jamais retiré). — */
+const openedEngine = await evaluate(`(() => {
+  const details = document.querySelector("#tts-engine-root > details.config-advanced");
+  details.open = true;
+  return {
+    open: details.open,
+    hasDownloads: !!document.getElementById("tts-downloads-root"),
+    hasEngineConfig: !!document.querySelector("#panel-voix .tts-engine-config"),
+    hasManual: !!document.querySelector("#panel-voix .tts-assistant__manual"),
+    hasModelsDir: !!document.querySelector("#panel-voix .tts-models-dir"),
+  };
+})()`);
+check(
+  "[/config] zone ⑤ dépliée → disque + config moteur + manuel + place téléchargement présents",
+  openedEngine.open && openedEngine.hasDownloads && openedEngine.hasEngineConfig && openedEngine.hasManual && openedEngine.hasModelsDir,
+  JSON.stringify(openedEngine),
+);
+await sleep(150);
+await evaluate(`document.querySelector("#tts-engine-root > details.config-advanced").scrollIntoView({ block: "start" })`);
+await sleep(150);
+await shot("config-voix-zones-technique");
+
+/* ═══════════════ Téléchargement des modèles (Lot 9, étape 3) ══════════════ */
+console.log("\n═══ TÉLÉCHARGEMENT DES MODÈLES ═══");
+writeTtsState({ kind: "ready", modelCount: 2 });
+await setEnabled("on");
+await gotoAssistant();
+await sleep(400);
+
+const READ_DOWNLOADS = `(() => {
+  const root = document.getElementById("tts-downloads-root");
+  if (!root) return { present: false };
+  const rows = [...root.querySelectorAll(".tts-dl__item")];
+  const rowOf = (label) => rows.find((r) => new RegExp(label).test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  return {
+    present: true,
+    rows: rows.length,
+    labels: rows.map((r) => r.querySelector(".tts-dl__label")?.textContent ?? ""),
+    states: rows.map((r) => r.querySelector(".tts-dl__state")?.textContent ?? ""),
+    metas: rows.map((r) => r.querySelector(".tts-dl__meta")?.textContent ?? ""),
+    buttons: rows.map((r) => [...r.querySelectorAll("button")].map((b) => ({ text: b.textContent, disabled: b.disabled }))),
+    hasProgress: !!root.querySelector(".tts-dl__progress-bar"),
+    progressTag: root.querySelector(".tts-dl__progress-bar")?.tagName ?? null,
+    progressMeta: root.querySelector(".tts-dl__progress-meta")?.textContent ?? "",
+    excludedText: root.querySelector(".tts-dl__excluded")?.textContent ?? "",
+    excludedButtons: root.querySelectorAll(".tts-dl__excluded button").length,
+    kokoroButton: rowOf("Kokoro") ? [...rowOf("Kokoro").querySelectorAll("button")].map((b) => b.textContent) : [],
+    styleAttrs: root.querySelectorAll("[style]").length,
+    styleElems: root.querySelectorAll("style").length,
+  };
+})()`;
+
+let dl = await evaluate(READ_DOWNLOADS);
+check(
+  "[/config] téléchargement : catalogue affiché (4 modèles + taille/licence)",
+  dl.present && dl.rows === 4 && dl.labels.some((l) => /Chatterbox/.test(l)) && dl.metas.some((m) => /licence MIT/.test(m)),
+  JSON.stringify({ rows: dl.rows, labels: dl.labels }),
+);
+check(
+  "[/config] téléchargement : badge « À télécharger » avant tout transfert",
+  dl.states.every((s) => s === "À télécharger") && dl.buttons.every((bs) => bs.some((b) => b.text === "Télécharger")),
+  JSON.stringify({ states: dl.states, buttons: dl.buttons }),
+);
+check(
+  "[/config] téléchargement : modèles écartés visibles AVEC leur raison, SANS bouton",
+  /sanoTTS/.test(dl.excludedText) && /GPL-3\.0/.test(dl.excludedText) && dl.excludedButtons === 0,
+  JSON.stringify({ excluded: dl.excludedText.slice(0, 160), buttons: dl.excludedButtons }),
+);
+check(
+  "[/config] téléchargement : zéro <style> / attribut style dans le bloc",
+  dl.styleAttrs === 0 && dl.styleElems === 0,
+  `style=${dl.styleElems} attrs=${dl.styleAttrs}`,
+);
+
+/* — Démarrer le téléchargement SIMULÉ (≈ 2 s) depuis le bouton de la ligne. — */
+const startClicked = await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Kokoro/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  const btn = row?.querySelector("button");
+  if (!btn) return { clicked: false };
+  btn.click();
+  return { clicked: true, text: btn.textContent };
+})()`);
+check(
+  "[/config] téléchargement : le bouton « Télécharger » démarre le transfert (202)",
+  startClicked.clicked === true && startClicked.text === "Télécharger",
+  JSON.stringify(startClicked),
+);
+
+await sleep(700);
+dl = await evaluate(READ_DOWNLOADS);
+check(
+  "[/config] téléchargement : progression affichée (barre native + octets/total)",
+  dl.hasProgress && dl.progressTag === "PROGRESS" && /o \/ /.test(dl.progressMeta),
+  JSON.stringify({ hasProgress: dl.hasProgress, tag: dl.progressTag, meta: dl.progressMeta }),
+);
+check(
+  "[/config] téléchargement : pendant le transfert, les autres sont désactivés",
+  dl.buttons.some((bs) => bs.some((b) => b.text === "Télécharger" && b.disabled === true)),
+  JSON.stringify(dl.buttons),
+);
+
+/* — Survie au rechargement : la progression se REPREND depuis l'état serveur. — */
+await gotoAssistant();
+dl = await evaluate(READ_DOWNLOADS);
+check(
+  "[/config] téléchargement : progression REPRISE après rechargement de page",
+  dl.hasProgress === true,
+  JSON.stringify({ hasProgress: dl.hasProgress, meta: dl.progressMeta }),
+);
+await evaluate(`document.getElementById("tts-engine-root").querySelector("details.config-advanced").open = true`);
+await evaluate(`document.getElementById("tts-downloads-root").scrollIntoView({ block: "start" })`);
+await sleep(200);
+await shot("config-voix-downloads-progress");
+
+/* — Attendre la fin, puis « Déclarer ce modèle ». — */
+let declared = null;
+for (let i = 0; i < 40; i += 1) {
+  await sleep(300);
+  dl = await evaluate(READ_DOWNLOADS);
+  if (dl.kokoroButton.includes("Déclarer ce modèle")) {
+    declared = dl;
+    break;
+  }
+}
+check(
+  "[/config] téléchargement : état `done` → badge « Téléchargé » + bouton « Déclarer ce modèle »",
+  declared !== null && declared.states.includes("Téléchargé"),
+  JSON.stringify({ states: dl.states, kokoroButton: dl.kokoroButton }),
+);
+
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Kokoro/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Déclarer ce modèle")?.click();
+})()`);
+await sleep(250);
+const declareModal = await evaluate(`(() => ({
+  open: !!document.querySelector(".holaf-modal-root"),
+  hasPrimary: !!document.querySelector(".holaf-modal-btn-primary"),
+}))()`);
+check(
+  "[/config] téléchargement : « Déclarer ce modèle » ouvre la confirmation HolafModal (pas window.confirm)",
+  declareModal.open && declareModal.hasPrimary,
+  JSON.stringify(declareModal),
+);
+await evaluate(`document.querySelector(".holaf-modal-btn-primary")?.click()`);
+await sleep(900);
+check(
+  "[/config] téléchargement : confirmation → modèle DÉCLARÉ (badge + bouton « Choisir comme moteur »)",
+  await evaluate(`(() => {
+    const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+    const row = rows.find((r) => /Kokoro/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+    return (row?.querySelector(".tts-dl__state")?.textContent ?? "") === "Déclaré" &&
+      [...(row?.querySelectorAll("button") ?? [])].some((b) => b.textContent === "Choisir comme moteur");
+  })()`),
+);
+
+/* — « Choisir comme moteur » : écrit `tts.engine` via l'enregistrement global. — */
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Kokoro/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Choisir comme moteur")?.click();
+})()`);
+await sleep(1000);
+const engineAfterActivate = await evaluate(
+  `fetch("/api/config").then((r) => r.json()).then((b) => b.fields["tts.engine"].value)`,
+  true,
+);
+check(
+  "[/config] téléchargement : « Choisir comme moteur » écrit tts.engine (chemin d'écriture global)",
+  engineAfterActivate === "kokoro",
+  `engine=${engineAfterActivate}`,
+);
+await evaluate(`document.getElementById("tts-downloads-root").scrollIntoView({ block: "start" })`);
+await sleep(200);
+await shot("config-voix-downloads-declare");
+
+/* — Cohérence : un téléchargement actif REFUSE le redémarrage (409, pas une panne). — */
+await gotoAssistant();
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Qwen3/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Télécharger")?.click();
+})()`);
+await sleep(600);
+const restartRefused = await evaluate(
+  `fetch("/api/admin/restart", { method: "POST", headers: { "x-yuki-config": "1" } })
+     .then((r) => r.json().then((b) => ({ status: r.status, code: b.code })))`,
+  true,
+);
+check(
+  "[/config] redémarrage pendant un téléchargement → 409 download_in_progress (protection, pas panne)",
+  restartRefused.status === 409 && restartRefused.code === "download_in_progress",
+  JSON.stringify(restartRefused),
+);
+
+/* — Propre : annuler le transfert en cours. — */
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Qwen3/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Annuler")?.click();
+})()`);
+await sleep(250);
+await evaluate(`document.querySelector(".holaf-modal-btn-primary")?.click()`);
+await sleep(600);
+const cancelled = await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Qwen3/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  return {
+    state: row?.querySelector(".tts-dl__state")?.textContent ?? "",
+    button: [...(row?.querySelectorAll("button") ?? [])].map((b) => b.textContent),
+    note: row?.querySelector(".tts-dl__task-note")?.textContent ?? "",
+  };
+})()`);
+check(
+  "[/config] téléchargement : « Annuler » (confirmation) → état annulé + proposition de reprise",
+  /annul/i.test(cancelled.note) && cancelled.button.includes("Réessayer"),
+  JSON.stringify(cancelled),
+);
+
+/* — Nettoyage : l'état serveur persiste. On retire le modèle déclaré et on
+ *   remet `tts.engine` par défaut pour ne pas polluer les vérifications
+ *   suivantes (l'activation a déjà été PROUVÉE ci-dessus). — */
+await evaluate(
+  `fetch("/api/tts/engine-config", { method: "PUT", headers: { "content-type": "application/json", "x-yuki-config": "1" }, body: JSON.stringify({ models: [] }) }).then((r) => r.status)`,
+  true,
+);
+await evaluate(
+  `fetch("/api/config", { method: "PUT", headers: { "content-type": "application/json", "x-yuki-config": "1" }, body: JSON.stringify({ "tts.engine": "chatterbox" }) }).then((r) => r.status)`,
+  true,
+);
+
 console.log("\n═══ ASSISTANT TTS (Lot 8) ═══");
 
 const READ_ASSISTANT = `(() => {
-  const root = document.getElementById("tts-assistant-root");
-  if (!root) return { hasRoot: false };
+  const mount = document.getElementById("tts-assistant-root");
+  // La zone ⑤ (technique) vit dans #tts-engine-root, dans le même #panel-voix :
+  // on interroge le panneau ENTIER pour couvrir les deux points de montage.
+  const root = document.getElementById("panel-voix");
+  if (!mount || !root) return { hasRoot: false };
   const details = [...root.querySelectorAll(".tts-details")].find(
     (d) => !d.classList.contains("tts-details--engine"),
   );
@@ -700,29 +1038,44 @@ check(
 );
 await shot("config-assistant-off");
 
-/* — « Activer la voix » : confirmation HolafModal, puis ANNULATION (pas de redémarrage) — */
+/* — « Activer la voix » : chemin d'écriture UNIQUE (enregistrement global),
+ *   AUCUN redémarrage silencieux, guidage explicite vers Maintenance. — */
 await evaluate(
-  `(() => { const b = [...document.querySelectorAll("#tts-assistant-root button")].find((x) => x.textContent === "Activer la voix"); b?.click(); })()`,
+  `(() => { const b = [...document.querySelectorAll("#panel-voix button")].find((x) => x.textContent === "Activer la voix"); b?.click(); })()`,
 );
-await sleep(300);
-const enableModal = await evaluate(`(() => ({
-  open: !!document.querySelector(".holaf-modal-root"),
-  title: document.querySelector(".holaf-modal-title")?.textContent ?? "",
+await sleep(1200);
+const enableResult = await evaluate(`(() => ({
+  modal: !!document.querySelector(".holaf-modal-root"),
+  cardStatus: document.querySelector("#panel-voix .tts-card__action-status")?.textContent ?? "",
+  selectValue: (() => {
+    const rows = [...document.querySelectorAll("#group-voix .config-row")];
+    const row = rows.find((r) => r.querySelector(".config-label")?.textContent?.includes("Activer la voix"));
+    return row?.querySelector("select")?.value ?? null;
+  })(),
+  saveStatus: document.getElementById("save-status")?.textContent ?? "",
 }))()`);
-check(
-  "[/config] « Activer la voix » ouvre une confirmation HolafModal",
-  enableModal.open && /redémarrer/i.test(enableModal.title),
-  JSON.stringify(enableModal),
+const enabledServer = await evaluate(
+  `fetch("/api/config").then((r) => r.json()).then((b) => b.fields["tts.enabled"].value)`,
+  true,
 );
-await evaluate(`document.querySelector(".holaf-modal-btn-cancel")?.click()`);
-await sleep(200);
-const aliveAfterCancel = await evaluate(
+const aliveAfterEnable = await evaluate(
   `fetch("/health/live").then((r) => r.ok).catch(() => false)`,
   true,
 );
 check(
-  "[/config] annulation → aucun redémarrage enclenché (gateway vivant)",
-  aliveAfterCancel === true,
+  "[/config] « Activer la voix » : AUCUNE modale, écrit via l'enregistrement global (tts.enabled=on)",
+  enableResult.modal === false &&
+    enableResult.selectValue === "on" &&
+    enabledServer === "on" &&
+    /Enregistré/.test(enableResult.saveStatus),
+  JSON.stringify({ ...enableResult, enabledServer }),
+);
+check(
+  "[/config] « Activer la voix » : aucun redémarrage silencieux + guide explicite vers Maintenance",
+  aliveAfterEnable === true &&
+    /Maintenance/.test(enableResult.cardStatus) &&
+    /[Rr]ed[ée]marr/.test(enableResult.cardStatus),
+  `alive=${aliveAfterEnable} cardStatus=${JSON.stringify(enableResult.cardStatus)}`,
 );
 
 /* — « Tester la voix » : texte libre → WAV lu par Web Audio, voix/moteur affichés — */
@@ -733,12 +1086,12 @@ await evaluate(
   `(() => { const t = document.getElementById("tts-test-text"); t.value = "Bonjour, ceci est un test."; t.dispatchEvent(new Event("input")); })()`,
 );
 await evaluate(
-  `(() => { const b = [...document.querySelectorAll("#tts-assistant-root button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
+  `(() => { const b = [...document.querySelectorAll("#panel-voix button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
 );
 await sleep(1500);
 const testResult = await evaluate(`(() => ({
-  text: document.querySelector("#tts-assistant-root .tts-test__feedback")?.textContent ?? "",
-  error: !!document.querySelector("#tts-assistant-root .tts-test__error"),
+  text: document.querySelector("#panel-voix .tts-test__feedback")?.textContent ?? "",
+  error: !!document.querySelector("#panel-voix .tts-test__error"),
 }))()`);
 check(
   "[/config] « Tester la voix » → WAV reçu, voix/moteur/référence réellement utilisés affichés",
@@ -755,11 +1108,11 @@ await evaluate(
   `(() => { const t = document.getElementById("tts-test-text"); t.value = "x".repeat(600); t.dispatchEvent(new Event("input")); })()`,
 );
 await evaluate(
-  `(() => { const b = [...document.querySelectorAll("#tts-assistant-root button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
+  `(() => { const b = [...document.querySelectorAll("#panel-voix button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
 );
 await sleep(300);
 const tooLongMessage = await evaluate(
-  `document.querySelector("#tts-assistant-root .tts-test__error")?.textContent ?? ""`,
+  `document.querySelector("#panel-voix .tts-test__error")?.textContent ?? ""`,
 );
 check(
   "[/config] texte > 500 caractères → refus explicite côté client",
@@ -786,12 +1139,12 @@ await evaluate(
   `(() => { const t = document.getElementById("tts-test-text"); t.value = "Bonjour."; t.dispatchEvent(new Event("input")); })()`,
 );
 await evaluate(
-  `(() => { const b = [...document.querySelectorAll("#tts-assistant-root button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
+  `(() => { const b = [...document.querySelectorAll("#panel-voix button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
 );
 await sleep(1500);
 const unknownShapeTest = await evaluate(`(() => ({
-  text: document.querySelector("#tts-assistant-root .tts-test__feedback")?.textContent ?? "",
-  error: !!document.querySelector("#tts-assistant-root .tts-test__error"),
+  text: document.querySelector("#panel-voix .tts-test__feedback")?.textContent ?? "",
+  error: !!document.querySelector("#panel-voix .tts-test__error"),
 }))()`);
 check(
   "[/config] /health SANS `ready` → le test de synthèse reste UTILISABLE (preuve réelle)",
@@ -821,7 +1174,7 @@ for (const preset of ["indigo-dark", "indigo-light", "emerald-dark", "emerald-li
 writeTtsState({ kind: "ready", modelCount: 2 });
 await gotoAssistant();
 const engineEditor = await evaluate(`(() => {
-  const body = document.querySelector("#tts-assistant-root .tts-engine-config");
+  const body = document.querySelector("#panel-voix .tts-engine-config");
   if (!body) return { hasSection: false };
   const add = [...body.querySelectorAll("button")].find((b) => b.textContent === "Ajouter un modèle");
   if (!add) return { hasSection: true, hasAdd: false };

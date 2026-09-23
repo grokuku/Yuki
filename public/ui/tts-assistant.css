@@ -78,6 +78,11 @@
 
 /* ─── Carte d'état ──────────────────────────────────────────────────────── */
 
+/* Zone ① : bandeau d'état compact (badge + une phrase + boutons). */
+.tts-assistant--state .tts-card {
+  margin-top: 6px;
+}
+
 .tts-card {
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -328,6 +333,181 @@
 
 .tts-engine-config__badge strong {
   font-size: 13px;
+}
+
+/* ─── Téléchargement des modèles : conteneur (zone ⑤) ──────────────────── */
+
+.tts-assistant__downloads .tts-downloads {
+  margin-top: 6px;
+}
+
+/* ─── Téléchargement des modèles (Lot 9, étape 3) ───────────────────────── */
+
+.tts-dl__status {
+  margin: 6px 0;
+}
+
+.tts-dl__status--error {
+  color: var(--danger);
+}
+
+.tts-dl__status--warn {
+  color: var(--accent);
+}
+
+.tts-dl__error {
+  margin: 6px 0;
+}
+
+.tts-dl__error-message {
+  font-size: 13px;
+  color: var(--danger);
+  margin: 4px 0;
+  max-width: 100ch;
+}
+
+.tts-dl__catalog {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tts-dl__empty {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.tts-dl__item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 10px 12px;
+}
+
+.tts-dl__item--active {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.tts-dl__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tts-dl__label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tts-dl__meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0;
+  max-width: 100ch;
+}
+
+.tts-dl__state {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.tts-dl__state--muted {
+  color: var(--muted);
+}
+
+.tts-dl__state--warn {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.tts-dl__state--ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+
+.tts-dl__state--error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.tts-dl__progress {
+  margin: 8px 0 4px;
+}
+
+.tts-dl__task-note {
+  font-size: 12px;
+  color: var(--text);
+  margin: 4px 0;
+  max-width: 100ch;
+}
+
+.tts-dl__task-note--error {
+  color: var(--danger);
+}
+
+.tts-dl__progress-bar {
+  display: block;
+  width: 100%;
+  height: 8px;
+  margin: 6px 0 2px;
+  accent-color: var(--accent);
+}
+
+.tts-dl__progress-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 2px;
+}
+
+.tts-dl__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.tts-dl__hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tts-dl__excluded {
+  margin-top: 10px;
+}
+
+.tts-dl__excluded-details {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+  padding: 6px 10px;
+}
+
+.tts-dl__excluded-list {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tts-dl__excluded-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 6px 10px;
 }
 
 /* ─── Focus visible (clavier) ───────────────────────────────────────────── */

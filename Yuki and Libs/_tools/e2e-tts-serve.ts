@@ -9,6 +9,7 @@
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +25,11 @@ import { runGate } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { EngineCapabilitiesProbe, EngineConfigStore } from "../../src/tts/engine-config.js";
+import {
+  TtsDownloadManager,
+  type CatalogEntry,
+  type ResolvedCatalogPackage,
+} from "../../src/tts/index.js";
 import { VoiceStore } from "../../src/tts/voices-store.js";
 
 /** WAV PCM16 mono (silence) minimal et valide. */
@@ -256,6 +262,68 @@ const tts: TtsApiDeps = {
   },
 };
 
+/* ─── Téléchargement SIMULÉ (Lot 9, étape 3) ────────────────────────────────
+ * Un PETIT corps d'environ 2,2 Ko, servi en plusieurs morceaux espacés : le
+ * transfert dure ~2 s, ce qui laisse le temps à l'UI d'afficher sa PROGRESSION
+ * (jamais un vrai fichier de plusieurs Go). Le catalogue reste le VRAI (4
+ * entrées + `notIncluded`), seule la source HF est remplacée.
+ */
+const downloadBody = Buffer.from("GGUF-MODEL-BYTES-".repeat(128));
+const downloadSha = createHash("sha256").update(downloadBody).digest("hex");
+
+const downloadFetch = (async (input: Parameters<typeof fetch>[0]) => {
+  const url =
+    typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (url.startsWith("http://hf.local/")) {
+    const chunkSize = Math.max(1, Math.ceil(downloadBody.length / 18));
+    let offset = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (offset >= downloadBody.length) {
+          controller.close();
+          return;
+        }
+        const end = Math.min(offset + chunkSize, downloadBody.length);
+        controller.enqueue(new Uint8Array(downloadBody.subarray(offset, end)));
+        offset = end;
+        await new Promise((resolve) => setTimeout(resolve, 120));
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/octet-stream" },
+    });
+  }
+  return new Response("not found", { status: 404 });
+}) as unknown as typeof fetch;
+
+const ttsDownloads = new TtsDownloadManager({
+  registryPath: join(stateDir, "tts-downloads.json"),
+  modelsDir,
+  engineModelsDir: "/models",
+  logger,
+  // Résolution SIMULÉE : le catalogue réel ne touche jamais Hugging Face en E2E.
+  resolve: async (entry: CatalogEntry): Promise<ResolvedCatalogPackage> => ({
+    resolved: {
+      catalogId: entry.id,
+      repo: entry.repo,
+      path: `${entry.dir}/${entry.recommendedFile}`,
+      fileName: entry.recommendedFile,
+      url: `http://hf.local/${entry.repo}/${entry.dir}/${entry.recommendedFile}`,
+      bytes: downloadBody.length,
+      sha256: downloadSha,
+    },
+    source: "hf",
+    warning: null,
+  }),
+  fetchImpl: downloadFetch,
+  freeBytes: () => 1_000_000_000_000,
+  progressIntervalMs: 0,
+});
+
+// Le catalogue/routes consomment ce port (même câblage que `src/index.ts`).
+tts.downloads = ttsDownloads;
+
 const profiles = loadProfiles();
 const manifest = loadCompatManifest();
 const detection = detectGpus({
@@ -283,6 +351,16 @@ const server = createServer({
   config: { runtime: config, logger },
   voices,
   tts,
+  // Lot 9 : le redémarrage refuse (409) tant qu'un téléchargement est actif.
+  // `requestShutdown` reste un no-op : l'E2E n'exécute jamais un vrai arrêt.
+  admin: {
+    logger,
+    requestShutdown: () => {},
+    downloads: {
+      hasActive: () => ttsDownloads.hasActive(),
+      activeId: () => ttsDownloads.activeId(),
+    },
+  },
 });
 
 const address = await startServer(server, "127.0.0.1", 4174);
