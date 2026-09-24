@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyCatalogPrefill,
   applicationState,
   buildEnginePatch,
   describeCapabilities,
@@ -17,6 +18,7 @@ import {
   describeEngineConfigError,
   hasEngineChanges,
   restartProcedure,
+  setModelField,
   validateModelDraft,
 } from "../../public/ui/engine-config-patch.js";
 
@@ -112,6 +114,86 @@ describe("buildEnginePatch — patch structuré, jamais le JSON complet", () => 
     expect(hasEngineChanges({ globals: { host: "0.0.0.0" }, originalGlobals: { host: "0.0.0.0" } })).toBe(
       false,
     );
+  });
+});
+
+/* — Brouillon par ENTRÉE : aucune propagation d'une ligne à l'autre — */
+
+describe("setModelField — édition d'UNE entrée, jamais des autres", () => {
+  const draft = () => [
+    { id: "chatterbox", family: "chatterbox", task: "clon", mode: "offline", path: "/models/a.gguf" },
+    { id: "cosyvoice3", family: "cosyvoice3", task: "clon", mode: "offline", path: "/models/b.gguf" },
+  ];
+
+  it("modifie uniquement l'entrée ciblée et renvoie un NOUVEAU tableau", () => {
+    const base = draft();
+    const next = setModelField(base, 1, "family", "sanotts");
+    expect(next).not.toBe(base);
+    expect(next[1].family).toBe("sanotts");
+    // L'autre entrée est INCHANGÉE (contenu ET référence non partagée).
+    expect(next[0]).not.toBe(base[0]);
+    expect(next[0]).toEqual(base[0]);
+    // Le brouillon d'origine n'est jamais muté.
+    expect(base[1].family).toBe("cosyvoice3");
+  });
+
+  it("index invalide → copie inchangée (jamais d'écriture ailleurs)", () => {
+    const base = draft();
+    expect(setModelField(base, 9, "family", "sanotts")[0].family).toBe("chatterbox");
+    expect(setModelField(base, -1, "family", "sanotts")[1].family).toBe("cosyvoice3");
+    expect(setModelField(base, 1.5, "family", "sanotts")[0].family).toBe("chatterbox");
+  });
+});
+
+describe("applyCatalogPrefill — cible par `id`, pas par index", () => {
+  const draft = () => [
+    { id: "chatterbox", family: "chatterbox", task: "clon", mode: "offline", path: "/models/a.gguf" },
+    { id: "cosyvoice3", family: "cosyvoice3", task: "clon", mode: "offline", path: "/models/b.gguf" },
+  ];
+  const qwen = {
+    id: "qwen3-tts",
+    family: "qwen3_tts",
+    task: "tts",
+    mode: "offline",
+    path: "/models/downloads/qwen3-tts/model.gguf",
+  };
+
+  it("régression : déclarer Qwen n'altère PAS chatterbox/cosyvoice3", () => {
+    const base = draft();
+    const next = applyCatalogPrefill(base, qwen);
+    expect(next).toHaveLength(3);
+    expect(next[0]).toEqual(base[0]);
+    expect(next[1]).toEqual(base[1]);
+    expect(next[2]).toEqual(qwen);
+    // Aucune entrée existante ne porte la famille du nouveau modèle.
+    expect(next.filter((m) => m.family === "qwen3_tts")).toHaveLength(1);
+  });
+
+  it("cible l'entrée de MÊME id, même si elle n'est pas en tête", () => {
+    const base = [
+      { id: "chatterbox", family: "chatterbox", task: "clon", mode: "offline", path: "/models/a.gguf" },
+      { id: "qwen3-tts", family: "chatterbox", task: "clon", mode: "offline", path: "/models/stale.gguf" },
+    ];
+    const next = applyCatalogPrefill(base, qwen);
+    expect(next).toHaveLength(2);
+    // Seule l'entrée `qwen3-tts` est corrigée.
+    expect(next[1]).toEqual(qwen);
+    expect(next[0]).toEqual(base[0]);
+  });
+
+  it("préserve les clés inconnues de l'entrée ciblée", () => {
+    const base = [
+      { id: "qwen3-tts", family: "chatterbox", task: "clon", mode: "offline", path: "/x.gguf", options: { a: 1 } },
+    ];
+    const next = applyCatalogPrefill(base, qwen);
+    expect(next[0].family).toBe("qwen3_tts");
+    expect((next[0] as Record<string, unknown>).options).toEqual({ a: 1 });
+  });
+
+  it("prefill sans `id` exploitable → brouillon inchangé", () => {
+    const base = draft();
+    expect(applyCatalogPrefill(base, { family: "qwen3_tts" })).toEqual(base);
+    expect(applyCatalogPrefill(base, null)).toEqual(base);
   });
 });
 

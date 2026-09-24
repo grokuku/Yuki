@@ -1210,6 +1210,7 @@ ne disent plus « déposez-le pour l'instant » / « arrivera à l'étape suivan
 | **D81** | **`409 download_in_progress`** au redémarrage présenté comme une **information** (pas une panne), message serveur repris. | `presentRestartRefusal` `public/ui/config-patch.js:227` ; `public/ui/config.js:1025` |
 | **D82** | **`interrupted` n'est jamais un succès** : badge « Interrompu » (erreur) + « Réessayer ». | `describeDownloadStatus` `:126` |
 | **D83** | Bloc « à la main » **corrigé** : dépôt manuel **plus** requis pour les variantes du catalogue, **reste vrai** hors catalogue. | `buildManualSection` (tts-assistant.js) ; `describeModelsDir` |
+| **D84** | **Correctif du bug « Déclarer » (famille écrasée) + garde-fou famille ↔ fichier.** La déclaration part d'une base **AUTORITAIRE côté serveur** (`draftFromReport`) et applique le `prefill` **par `id`** (`applyCatalogPrefill`) ; l'enregistrement écrit CE brouillon **sans relecture DOM** (`saveEngineConfig({capture:false})`). Édition par entrée via `setModelField` (nouveau tableau, **aucune référence partagée**). Garde-fou serveur : un `path` **du catalogue** impose sa `family`/`task`/`mode` (400 sinon) ; un chemin **inconnu** reste libre. | `declareCatalogEntry` `public/ui/tts-assistant.js` ; `applyCatalogPrefill`/`setModelField` `public/ui/engine-config-patch.js` ; `checkCatalogCoherence` `src/tts/engine-config.ts` |
 
 #### À confirmer
 
@@ -1217,6 +1218,7 @@ ne disent plus « déposez-le pour l'instant » / « arrivera à l'étape suivan
 | --- | --- | --- |
 | **C49** | Le **catalogue `GET` est statique** (taille/licence au repli documentaire) : l'écart éventuel avec Hugging Face n'est connu qu'à la **résolution** (démarrage du transfert) et n'est pas réaffiché dans la ligne. | UI / honnêteté |
 | **C50** | **« Choisir comme moteur » n'exige pas de redémarrer le gateway** (écriture à chaud) mais **exige** de redémarrer le conteneur `tts` ; le message le dit sans le **forcer** (pas de blocage). À confirmer : faut-il proposer un rappel persistant tant que `tts.engine` a changé ? | UX |
+| **C51** | **Strictness du garde-fou pour les VARIANTES** : depuis D84, remplacer le fichier d'un chemin de catalogue par une variante à `task` différent (ex. Qwen `VoiceDesign` → `vdes`) est REFUSÉ tant que l'entrée ne suit pas le catalogue. À confirmer : assouplir `task` (garder `family`/`mode` stricts, la famille étant embarquée dans le GGUF) ? | UI / honnêteté |
 
 ### 19.8 Vérifications
 
@@ -1229,6 +1231,10 @@ ne disent plus « déposez-le pour l'instant » / « arrivera à l'étape suivan
 | E2E `_tools/e2e-tts-ui.mjs` | **68/68** ; **0 violation CSP** ; **0 exception JS** |
 | Vérifs E2E ajoutées | catalogue (4 modèles + taille/licence), badges « à télécharger », écartés sans bouton, démarrage, **progression** (barre native + octets/total), **reprise après rechargement**, `done` → « Déclarer », modale puis **déclaré**, « Choisir comme moteur » (`tts.engine = kokoro`), **`409` au redémarrage**, annulation + « Réessayer » |
 | Captures | `_tools/shots/config-voix-zones-technique.png` (zone ⑤ dépliée **avec le catalogue**), `config-voix-downloads-progress.png` (progression), `config-voix-downloads-declare.png` (déclaré) |
+
+> **Mise à jour après le correctif D84 (§20)** : `npm test` = **751 passed / 4
+> skipped** (+15) ; E2E = **71/71** ; **0 violation CSP** ; **0 exception JS** ;
+> `typecheck`/`build` verts ; `node --check` OK.
 
 ### 19.9 Non vérifiable sans un VRAI téléchargement de plusieurs Go
 
@@ -1267,3 +1273,100 @@ curl -s http://tts:8081/v1/models
 ?? "Yuki and Libs/_tools/shots/config-voix-downloads-declare.png"
 ?? "Yuki and Libs/_tools/shots/config-voix-downloads-progress.png"
 ```
+
+## 20. Correctif — bug « Déclarer » (famille écrasée) et garde-fou famille ↔ fichier
+
+> **Signalement production.** Après avoir téléchargé Qwen via la nouvelle UI et
+> cliqué « Déclarer ce modèle », `models[]` contenait un `chatterbox` dont la
+> `family` valait `qwen3_tts` (faux), si bien que le moteur refusait de démarrer :
+> `audiocpp_server failed: GGUF embeds model spec for family 'chatterbox', not
+> 'qwen3_tts'`. C'est le premier défaut de l'UI qui casse le démarrage du moteur.
+
+### 20.1 Cause et hypothèses écartées
+
+`declareCatalogEntry` cible déjà la bonne entrée **par `id`**
+(`engineDraft.models.some((m) => m.id === prefill.id)`) ; les trois pistes du
+signalement ont été vérifiées par reproduction (Chromium headless + gateway
+RÉEL `_tools/e2e-tts-serve.ts`) :
+
+- **Flux « Déclarer »** : le `prefill` du catalogue est correct
+  (`catalogItemView`, `src/gateway/routes/tts.ts:1166`) et vise l'`id` du
+  catalogue — **écarté** comme cause directe.
+- **Rendu de la liste** : chaque rangée a SES `<select>` (`selectInput`), aucune
+  référence partagée ; modifier la famille d'une ligne ne touche pas les autres
+  (vérifié en navigateur) — **écarté**.
+- **Sérialisation** : `buildEnginePatch` construit **par entrée** (`id`, `family`,
+  `task`, `mode`, `path`) — **écarté** comme régression.
+
+Le seul chemin par lequel une déclaration pouvait écrire une valeur d'une AUTRE
+entrée était le fait que `declareCatalogEntry` repartait d'un
+`captureEngineDraft()` (relecture du DOM de TOUTES les rangées) avant de
+`saveEngineConfig()` : le patch persistait alors l'état DOM de **toutes** les
+entrées. Le correctif supprime cette dépendance : la déclaration ne peut plus
+propager la valeur d'une ligne à l'autre.
+
+### 20.2 Correctif (UI)
+
+| Changement | Fichier |
+| --- | --- |
+| `applyCatalogPrefill(models, prefill)` : cible l'entrée de **même `id`** (mise à jour, sinon ajout), renvoie un **nouveau tableau**, préserve les clés inconnues | `public/ui/engine-config-patch.js` |
+| `setModelField(models, index, field, value)` : édite **UNE** entrée (nouveau tableau, aucune référence partagée) | `public/ui/engine-config-patch.js` |
+| `declareCatalogEntry` : base **autoritaire serveur** (`draftFromReport`) + `applyCatalogPrefill`, puis `saveEngineConfig({capture:false})` (aucune relecture DOM) | `public/ui/tts-assistant.js` |
+| Changement de famille → correction du mode via `setModelField` (par entrée) | `public/ui/tts-assistant.js` |
+
+### 20.3 Garde-fou serveur (défense en profondeur)
+
+`EngineConfigStore` indexe désormais le catalogue par **chemin de
+téléchargement moteur** (`downloadEnginePath(id)`) et, à chaque `PUT
+/api/tts/engine-config`, croise le `path` de chaque entrée :
+
+- **chemin reconnu dans le catalogue** ⇒ `family`, `task` et `mode` doivent
+  correspondre à ceux du catalogue, sinon **`400 invalid_engine_config`** ;
+- **chemin inconnu** (GGUF personnel, moteur hors catalogue) ⇒ **LIBRE**, aucune
+  contrainte (cas légitime, prouvé par test).
+
+Portée EXACTE : **seuls** les chemins `/models/downloads/<id>/model.gguf` du
+catalogue fermé sont contraints. Le contrôle est appliqué au **patch entrant**
+(`applyPatch`), **pas** à la lecture (`validateEngineConfig`) : un `server.json`
+déjà incohérent reste **corrigeable** depuis l'éditeur (aucun `422
+config_invalid`).
+
+Message exact (exemple du cas production, `models[0]`) :
+
+> L'entrée models[0] « chatterbox » pointe le chemin
+> « /models/downloads/qwen3-tts/model.gguf », qui est celui du modèle de
+> catalogue « qwen3-tts » : sa famille doit être « qwen3_tts », or elle est
+> déclarée « chatterbox ». Corrigez la famille (choisissez « qwen3_tts ») ou le
+> chemin (ce fichier ne correspond pas à cette famille).
+
+Preuve : `checkCatalogCoherence` `src/tts/engine-config.ts` ; tests
+`tests/tts/engine-config.test.ts` (unitaire),
+`tests/integration/tts-engine-config.test.ts` (HTTP réel : refus chemin du
+catalogue, acceptation chemin inconnu, correction d'un fichier cassé).
+
+### 20.4 Tests
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **751 passed / 4 skipped** (avant : **736 / 4** ; **+15** : 6 `engine-config-patch` par entrée, 6 intégration garde-fou, 3 `EngineConfigStore`) |
+| `npm run typecheck` / `npm run build` | verts |
+| `node --check` (`tts-assistant.js`, `engine-config-patch.js`, `e2e-tts-ui.mjs`) | OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **71/71** ; **0 violation CSP** ; **0 exception JS** |
+| Vérif E2E ajoutée | déclarer Chatterbox (téléchargé) avec `cosyvoice3` + `kokoro` pré-déclarés : les deux entrées restent **inchangées** ; le garde-fou refuse `family = qwen3_tts` sur le chemin catalogue de chatterbox (`400` clair) |
+
+### 20.5 Réparer une config cassée (consigne utilisateur)
+
+Dans `/config`, onglet **Voix** → zone ⑤ → **Configuration du moteur** :
+
+1. repérer l'entrée dont la **Famille** ne correspond PAS au fichier (celle qui a
+   déclenché `GGUF embeds model spec for family '…', not '…'`) ;
+2. remettre la famille **du fichier** — ex. pour `/models/chatterbox-q8_0.gguf`,
+   **Famille = `chatterbox`** (et non `qwen3_tts`) ; garder `task = clon`,
+   `mode = offline` ;
+3. laisser l'entrée Qwen (`id = qwen3-tts`, `family = qwen3_tts`, `task = tts`,
+   `path = /models/downloads/qwen3-tts/model.gguf`) telle quelle ;
+4. **Enregistrer la configuration du moteur**, puis **redémarrer le conteneur
+   `tts`** (seul le moteur relit `server.json`, à son démarrage).
+
+En CLI (hôte) : éditer `server.json` (sauvegarde `server.json.bak` déjà présente)
+et corriger le `family` de l'entrée fautive, puis `docker restart yuki-tts`.

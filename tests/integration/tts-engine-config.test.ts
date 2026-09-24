@@ -274,6 +274,139 @@ describe("PUT /api/tts/engine-config — patch valide / invalide", () => {
   });
 });
 
+describe("PUT /api/tts/engine-config — garde-fou famille ↔ fichier du catalogue", () => {
+  const QWEN_PATH = "/models/downloads/qwen3-tts/model.gguf";
+  const qwenEntry = (overrides: Record<string, unknown> = {}) => ({
+    id: "qwen3-tts",
+    family: "qwen3_tts",
+    task: "tts",
+    mode: "offline",
+    path: QWEN_PATH,
+    ...overrides,
+  });
+
+  it("refuse une famille incohérente pour un chemin du catalogue (400 + message nommant tout)", async () => {
+    const { baseUrl, configDir } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      // Cas RÉEL : le chemin du fichier Qwen déclaré avec la famille « chatterbox ».
+      body: JSON.stringify({ models: [qwenEntry({ id: "chatterbox", family: "chatterbox" })] }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      code: string;
+      message: string;
+      fields: Array<{ path: string; code: string; message: string }>;
+    };
+    expect(body.code).toBe("invalid_engine_config");
+    const field = body.fields.find((f) => f.path === "models[0].family");
+    expect(field).toBeTruthy();
+    // Nomme l'entrée, le chemin, la valeur ATTENDUE et la valeur REÇUE.
+    expect(body.message).toContain("chatterbox");
+    expect(body.message).toContain("qwen3_tts");
+    expect(body.message).toContain(QWEN_PATH);
+    expect(body.message).toMatch(/Corrigez la famille/);
+    // Rien n'a été écrit (le fichier n'existe pas encore).
+    expect(existsSync(join(configDir, "server.json"))).toBe(false);
+  });
+
+  it("accepte la famille cohérente du catalogue (200 + fichier écrit)", async () => {
+    const { baseUrl, configDir } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({ models: [qwenEntry()] }),
+    });
+    expect(response.status).toBe(200);
+    const written = JSON.parse(readFileSync(join(configDir, "server.json"), "utf8"));
+    expect(written.models[0]).toEqual({
+      id: "qwen3-tts",
+      family: "qwen3_tts",
+      path: QWEN_PATH,
+      task: "tts",
+      mode: "offline",
+    });
+  });
+
+  it("refuse une tâche incohérente pour un chemin du catalogue", async () => {
+    const { baseUrl } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({ models: [qwenEntry({ task: "clon" })] }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { fields: Array<{ path: string; code: string }> };
+    expect(body.fields.some((f) => f.path === "models[0].task" && f.code === "catalog_task_mismatch")).toBe(
+      true,
+    );
+  });
+
+  it("refuse un mode incohérent pour un chemin du catalogue", async () => {
+    const { baseUrl } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({ models: [qwenEntry({ mode: "streaming" })] }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { fields: Array<{ path: string; code: string }> };
+    expect(body.fields.some((f) => f.path === "models[0].mode" && f.code === "catalog_mode_mismatch")).toBe(
+      true,
+    );
+  });
+
+  it("accepte un chemin INCONNU du catalogue (GGUF personnel ou moteur hors catalogue)", async () => {
+    const { baseUrl, configDir } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({
+        models: [
+          { id: "perso", family: "kokoro_tts", task: "tts", mode: "streaming", path: "/models/perso.gguf" },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const written = JSON.parse(readFileSync(join(configDir, "server.json"), "utf8"));
+    expect(written.models[0].family).toBe("kokoro_tts");
+  });
+
+  it("le fichier EXISTANT incohérent reste éditable (le garde-fou ne l'invalide pas)", async () => {
+    const { baseUrl, configDir } = await startHarness();
+    // 1) on écrit un chemin catalogue avec une famille VOLONTAIREMENT fausse via
+    //    le catalogue mocké d'un AUTRE id (aucun garde-fou) : on simule l'état cassé.
+    writeFileSync(
+      join(configDir, "server.json"),
+      `${JSON.stringify(
+        {
+          models: [
+            { id: "chatterbox", family: "chatterbox", path: "/models/chatterbox-q8_0.gguf", task: "clon", mode: "offline" },
+            { id: "qwen3-tts", family: "chatterbox", path: QWEN_PATH, task: "clon", mode: "offline" },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    // 2) l'éditeur peut CORRIGER la famille : la lecture ne bloque pas (pas de 422).
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({
+        models: [
+          { id: "chatterbox", family: "chatterbox", path: "/models/chatterbox-q8_0.gguf", task: "clon", mode: "offline" },
+          qwenEntry(),
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const written = JSON.parse(readFileSync(join(configDir, "server.json"), "utf8"));
+    expect(written.models[1].family).toBe("qwen3_tts");
+  });
+});
+
 describe("POST /api/tts/engine-config/revert", () => {
   it("restaure la sauvegarde (garde-fou requis)", async () => {
     const { baseUrl, configDir } = await startHarness();

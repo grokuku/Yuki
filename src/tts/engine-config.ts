@@ -52,6 +52,10 @@ import { dirname, join, resolve, sep } from "node:path";
 
 import { MODELS_DOWNLOADS_SUBDIR } from "../config/container-paths.js";
 import { describeWriteFailure, probeWritable } from "../config/paths.js";
+import {
+  CATALOG_ENTRIES,
+  downloadEnginePath,
+} from "./catalog-data.js";
 
 /** Nom du fichier de configuration du moteur dans le dossier monté. */
 export const ENGINE_CONFIG_FILENAME = "server.json";
@@ -274,6 +278,24 @@ export interface EngineConfigStoreOptions {
   modelsDir: string;
   /** Dossier des modèles tel que vu par le moteur. */
   engineModelsDir: string;
+  /**
+   * Catalogue fermé utilisé par le garde-fou famille ↔ fichier : un `path`
+   * égal au chemin de téléchargement d'une entrée doit porter sa famille
+   * (et la tâche/le mode fixés par le catalogue). Défaut : le catalogue réel.
+   */
+  catalogModels?: readonly CatalogModelSpec[];
+}
+
+/**
+ * Spécification minimale d'un modèle du catalogue, utile au garde-fou
+ * `path` ↔ `family`/`task`/`mode`. Le catalogue réel (`CATALOG_ENTRIES`)
+ * satisfait structurellement ce type.
+ */
+export interface CatalogModelSpec {
+  readonly id: string;
+  readonly family: string;
+  readonly task: string;
+  readonly mode: string;
 }
 
 function messageOf(error: unknown): string {
@@ -559,6 +581,8 @@ export class EngineConfigStore {
   readonly modelsDir: string;
   /** Toujours un SOUS-DOSSIER de `modelsDir` : DÉRIVÉ, jamais configurable. */
   readonly modelsWriteDir: string;
+  /** Catalogue indexé par chemin de téléchargement MOTEUR (garde-fou). */
+  private readonly catalogByEnginePath: Map<string, CatalogModelSpec>;
 
   constructor(options: EngineConfigStoreOptions) {
     this.configDir = resolve(options.configDir);
@@ -571,6 +595,13 @@ export class EngineConfigStore {
     // C'est une convention d'organisation, pas une barrière de sécurité.
     this.modelsWriteDir = join(this.modelsDir, MODELS_DOWNLOADS_SUBDIR);
     this.engineModelsDir = resolve(options.engineModelsDir);
+    // Garde-fou famille ↔ fichier : index par chemin de téléchargement moteur.
+    this.catalogByEnginePath = new Map(
+      (options.catalogModels ?? CATALOG_ENTRIES).map((entry) => [
+        downloadEnginePath(entry.id),
+        entry,
+      ]),
+    );
   }
 
   /** Chemin du fichier tel que VU PAR LE MOTEUR. */
@@ -972,6 +1003,9 @@ export class EngineConfigStore {
           if (["id", "family", "path", "task", "mode"].includes(key)) continue;
           extras[key] = value;
         }
+        // Garde-fou famille ↔ fichier : le catalogue CONNAÎT la famille/la
+        // tâche/le mode d'un chemin qu'il a fourni.
+        errors.push(...this.checkCatalogCoherence(entry, enginePath, index));
         next.push({
           id: entry.id,
           family: entry.family,
@@ -985,11 +1019,76 @@ export class EngineConfigStore {
     }
 
     if (errors.length > 0) {
-      throw new EngineConfigError("invalid_engine_config", 400, "Configuration refusée.", errors);
+      // Le message de premier niveau reprend la cause la PLUS actionnable
+      // (garde-fou catalogue) ; les champs portent le détail exact.
+      const actionable = errors.find(
+        (error) => error.code.startsWith("catalog_") || error.code === "path_outside_mounts",
+      );
+      throw new EngineConfigError(
+        "invalid_engine_config",
+        400,
+        actionable ? actionable.message : "Configuration refusée.",
+        errors,
+      );
     }
 
     this.writeConfig(doc);
     return this.report();
+  }
+
+  /**
+   * Garde-fou « famille ↔ fichier » (défense en profondeur, côté serveur).
+   *
+   * ⚠️ Portée EXACTE : il ne s'applique QUE quand le chemin déclaré est celui
+   * d'un modèle du CATALOGUE fermé (`/models/downloads/<id>/model.gguf`). Un
+   * GGUF personnel ou un moteur hors catalogue reste LIBRE (aucun blocage).
+   *
+   * Un fichier GGUF porte sa famille : si le catalogue a fourni ce chemin, sa
+   * famille (et la tâche/le mode qu'il fixe) est la SEULE cohérente. Sans ce
+   * contrôle, une `family` erronée ne serait détectée qu'au DÉMARRAGE du moteur
+   * (« GGUF embeds model spec for family '…', not '…' »).
+   */
+  private checkCatalogCoherence(
+    entry: { id: string; family: string; task: string; mode: string },
+    enginePath: string,
+    index: number,
+  ): FieldError[] {
+    const spec = this.catalogByEnginePath.get(enginePath);
+    if (!spec) return [];
+    const label = entry.id.length > 0 ? `« ${entry.id} »` : "(sans identifiant)";
+    const errors: FieldError[] = [];
+    if (entry.family !== spec.family) {
+      errors.push({
+        path: `models[${index}].family`,
+        code: "catalog_family_mismatch",
+        message:
+          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », qui est celui ` +
+          `du modèle de catalogue « ${spec.id} » : sa famille doit être « ${spec.family} », ` +
+          `or elle est déclarée « ${entry.family} ». Corrigez la famille (choisissez ` +
+          `« ${spec.family} ») ou le chemin (ce fichier ne correspond pas à cette famille).`,
+      });
+    }
+    if (entry.task !== spec.task) {
+      errors.push({
+        path: `models[${index}].task`,
+        code: "catalog_task_mismatch",
+        message:
+          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », qui est celui ` +
+          `du modèle de catalogue « ${spec.id} » : sa tâche doit être « ${spec.task} », or elle ` +
+          `est déclarée « ${entry.task} ». Corrigez la tâche (choisissez « ${spec.task} ») ou le chemin.`,
+      });
+    }
+    if (entry.mode !== spec.mode) {
+      errors.push({
+        path: `models[${index}].mode`,
+        code: "catalog_mode_mismatch",
+        message:
+          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », qui est celui ` +
+          `du modèle de catalogue « ${spec.id} » : son mode doit être « ${spec.mode} », or il ` +
+          `est déclaré « ${entry.mode} ». Corrigez le mode (choisissez « ${spec.mode} ») ou le chemin.`,
+      });
+    }
+    return errors;
   }
 
   /** Écrit le document : sauvegarde de l'ancien, puis écriture atomique. */

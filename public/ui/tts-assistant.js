@@ -33,12 +33,14 @@ import {
   ENGINE_GLOBAL_FIELDS,
   ENGINE_MODES,
   ENGINE_TASK_TOKENS,
+  applyCatalogPrefill,
   applicationState,
   buildEnginePatch,
   describeCapabilities,
   describeEngineConfig,
   describeEngineConfigError,
   restartProcedure,
+  setModelField,
   validateModelDraft,
 } from "./engine-config-patch.js";
 
@@ -1306,8 +1308,13 @@ export function initTtsAssistant(root, deps = {}) {
       familySelect.addEventListener("change", () => {
         captureEngineDraft();
         const current = engineDraft.models[index];
-        if (current && ENGINE_MODES.includes(current.mode)) {
-          if (ENGINE_FORCE_OFFLINE_FAMILIES.includes(current.family)) current.mode = "offline";
+        if (
+          current &&
+          ENGINE_MODES.includes(current.mode) &&
+          ENGINE_FORCE_OFFLINE_FAMILIES.includes(current.family)
+        ) {
+          // Édition PAR ENTRÉE (nouveau tableau, aucune référence partagée).
+          engineDraft.models = setModelField(engineDraft.models, index, "mode", "offline");
         }
         renderEngineConfig();
       });
@@ -1543,9 +1550,12 @@ export function initTtsAssistant(root, deps = {}) {
     renderEngineConfig();
   }
 
-  async function saveEngineConfig() {
+  async function saveEngineConfig(options = {}) {
     if (engineConfigBusy || !fetchApi) return;
-    captureEngineDraft();
+    // `capture` vaut `true` par défaut (bouton « Enregistrer » : on relit
+    // l'éditeur). « Déclarer ce modèle » passe `capture: false` pour écrire le
+    // brouillon ciblé SANS relecture DOM.
+    if (options.capture !== false) captureEngineDraft();
     const errors = [];
     engineDraft.models.forEach((model, index) => {
       const check = validateModelDraft(model);
@@ -1971,20 +1981,17 @@ export function initTtsAssistant(root, deps = {}) {
       return;
     }
     clearDownloadsError();
-    captureEngineDraft();
-    if (!engineDraft.models.some((model) => model.id === prefill.id)) {
-      engineDraft.models.push({
-        id: prefill.id,
-        family: prefill.family,
-        task: prefill.task,
-        mode: prefill.mode,
-        path: prefill.path,
-      });
-    }
+    // Déclaration CIBLÉE, base AUTORITAIRE côté serveur : le `prefill` est
+    // appliqué par `id` sur les entrées RÉELLEMENT persistées. On ne repart
+    // jamais d'une capture DOM (qui pourrait propager la valeur d'une autre
+    // ligne) ; les autres entrées restent telles qu'enregistrées.
+    engineDraft.models = applyCatalogPrefill(draftFromReport(view).models, prefill);
     engineFieldErrors = [];
     renderEngineConfig();
     setDownloadsStatus(`Déclaration de « ${label} » dans la configuration du moteur…`);
-    await saveEngineConfig();
+    // `capture: false` : l'enregistrement écrit EXACTEMENT le brouillon ciblé
+    // ci-dessus (aucune relecture DOM susceptible de le corrompre).
+    await saveEngineConfig({ capture: false });
     await loadCatalog();
   }
 

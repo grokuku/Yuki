@@ -890,6 +890,87 @@ check(
   JSON.stringify(cancelled),
 );
 
+/* ═══ RÉGRESSION : « Déclarer » n'altère pas les entrées existantes ══════
+ * Rapport production : une entrée existante a vu sa `family` écrasée par celle
+ * du modèle déclaré (« chatterbox » → `qwen3_tts`). On fige ici deux entrées
+ * (cosyvoice3 + kokoro), on télécharge + déclare CHATTERBOX via l'UI, puis on
+ * prouve que les deux entrées existantes sont INCHANGÉES côté serveur. */
+console.log("\n═══ RÉGRESSION : isolation des entrées models[] ═══");
+const BASE_MODELS = [
+  { id: "cosyvoice3", family: "cosyvoice3", task: "clon", mode: "offline", path: "/models/cosyvoice3.gguf" },
+  { id: "kokoro", family: "kokoro_tts", task: "tts", mode: "offline", path: "/models/kokoro.gguf" },
+];
+const baseStatus = await evaluate(
+  `fetch("/api/tts/engine-config", { method: "PUT", headers: { "content-type": "application/json", "x-yuki-config": "1" }, body: JSON.stringify({ models: ${JSON.stringify(BASE_MODELS)} }) }).then((r) => r.status)`,
+  true,
+);
+await gotoAssistant();
+const editorBefore = await evaluate(`(() => {
+  const cards = [...document.querySelectorAll("#panel-voix .tts-engine-config .tts-engine-config__model")];
+  return cards.map((c) => {
+    const s = [...c.querySelectorAll("select")];
+    return { id: c.querySelector("input")?.value, family: s[0]?.value, task: s[1]?.value, mode: s[2]?.value, path: s[3]?.value };
+  });
+})()`);
+check(
+  "[/config] RÉGRESSION : les 2 entrées existantes sont rendues fidèlement avant de déclarer",
+  baseStatus === 200 && editorBefore.length === 2 && editorBefore[0].family === "cosyvoice3" &&
+    editorBefore[1].family === "kokoro_tts",
+  JSON.stringify({ baseStatus, editorBefore }),
+);
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Chatterbox/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Télécharger")?.click();
+})()`);
+let chatterDeclarable = false;
+for (let i = 0; i < 40; i += 1) {
+  await sleep(300);
+  chatterDeclarable = await evaluate(`(() => {
+    const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+    const row = rows.find((r) => /Chatterbox/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+    return [...(row?.querySelectorAll("button") ?? [])].some((b) => b.textContent === "Déclarer ce modèle");
+  })()`);
+  if (chatterDeclarable) break;
+}
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Chatterbox/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Déclarer ce modèle")?.click();
+})()`);
+await sleep(250);
+await evaluate(`document.querySelector(".holaf-modal-btn-primary")?.click()`);
+await sleep(1200);
+const afterRegression = await evaluate(
+  `fetch("/api/tts/engine-config").then((r) => r.json()).then((b) => b.models.map((m) => ({ id: m.id, family: m.family, task: m.task, mode: m.mode, path: m.path })))`,
+  true,
+);
+const byId = (id) => afterRegression.find((m) => m.id === id);
+const chatterEntry = byId("chatterbox");
+check(
+  "[/config] RÉGRESSION : déclarer Chatterbox n'altère PAS cosyvoice3/kokoro (family/task/mode/path)",
+  chatterDeclarable &&
+    JSON.stringify(byId("cosyvoice3")) === JSON.stringify(BASE_MODELS[0]) &&
+    JSON.stringify(byId("kokoro")) === JSON.stringify(BASE_MODELS[1]) &&
+    chatterEntry?.family === "chatterbox" &&
+    chatterEntry?.task === "clon" &&
+    chatterEntry?.mode === "offline" &&
+    chatterEntry?.path === "/models/downloads/chatterbox/model.gguf",
+  JSON.stringify(afterRegression),
+);
+const guardRejected = await evaluate(
+  `fetch("/api/tts/engine-config", { method: "PUT", headers: { "content-type": "application/json", "x-yuki-config": "1" }, body: JSON.stringify({ models: [{ id: "chatterbox", family: "qwen3_tts", task: "clon", mode: "offline", path: "/models/downloads/chatterbox/model.gguf" }] }) }).then(async (r) => ({ status: r.status, body: await r.json() }))`,
+  true,
+);
+check(
+  "[/config] garde-fou serveur : famille incohérente pour un chemin du catalogue → 400 nommant chemin/attendue/reçue",
+  guardRejected.status === 400 &&
+    /chatterbox/.test(guardRejected.body?.message ?? "") &&
+    /qwen3_tts/.test(guardRejected.body?.message ?? "") &&
+    /downloads\/chatterbox\/model\.gguf/.test(guardRejected.body?.message ?? ""),
+  JSON.stringify(guardRejected).slice(0, 320),
+);
+
 /* — Nettoyage : l'état serveur persiste. On retire le modèle déclaré et on
  *   remet `tts.engine` par défaut pour ne pas polluer les vérifications
  *   suivantes (l'activation a déjà été PROUVÉE ci-dessus). — */

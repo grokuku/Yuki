@@ -277,6 +277,64 @@ describe("patch structuré — aller-retour fidèle", () => {
   });
 });
 
+describe("garde-fou famille ↔ fichier du catalogue (défense en profondeur)", () => {
+  const CATALOG = [{ id: "qwen3-tts", family: "qwen3_tts", task: "tts", mode: "offline" }];
+  const CATALOG_PATH = "/models/downloads/qwen3-tts/model.gguf";
+
+  function guardedFixture(): Fixture {
+    const root = mkdtempSync(join(tmpdir(), "yuki-engine-config-guard-"));
+    tempDirs.push(root);
+    const configDir = join(root, "tts-config");
+    const modelsDir = join(root, "models");
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(modelsDir, { recursive: true });
+    const store = new EngineConfigStore({
+      configDir,
+      engineConfigDir: "/config",
+      modelsDir,
+      engineModelsDir: "/models",
+      catalogModels: CATALOG,
+    });
+    return { root, configDir, modelsDir, modelsWriteDir: join(modelsDir, "downloads"), store };
+  }
+
+  it("refuse une famille incohérente pour un chemin du catalogue (400 + message nommant tout)", () => {
+    const fx = guardedFixture();
+    try {
+      fx.store.applyPatch({ models: [validModel({ path: CATALOG_PATH })] });
+      throw new Error("aurait dû lever");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EngineConfigError);
+      const e = error as EngineConfigError;
+      expect(e.code).toBe("invalid_engine_config");
+      expect(e.status).toBe(400);
+      const field = e.fields.find((f) => f.code === "catalog_family_mismatch");
+      expect(field?.path).toBe("models[0].family");
+      expect(field?.message).toContain("qwen3_tts");
+      expect(field?.message).toContain("chatterbox");
+      expect(field?.message).toContain(CATALOG_PATH);
+      // Le message de premier niveau est le message actionnable.
+      expect(e.message).toContain("qwen3_tts");
+    }
+  });
+
+  it("accepte les champs fixés par le catalogue", () => {
+    const fx = guardedFixture();
+    const report = fx.store.applyPatch({
+      models: [validModel({ id: "qwen3-tts", family: "qwen3_tts", task: "tts", path: CATALOG_PATH })],
+    });
+    expect(report.models[0]?.family).toBe("qwen3_tts");
+  });
+
+  it("N'APPLIQUE PAS le garde-fou à un chemin INCONNU du catalogue", () => {
+    const fx = guardedFixture();
+    const report = fx.store.applyPatch({
+      models: [validModel({ family: "kokoro_tts", task: "tts", mode: "streaming", path: "/models/mon-modele-perso.gguf" })],
+    });
+    expect(report.models[0]?.family).toBe("kokoro_tts");
+  });
+});
+
 describe("sauvegarde et restauration", () => {
   it("conserve UNE sauvegarde = version précédente, et la restaure", () => {
     const fx = fixture();

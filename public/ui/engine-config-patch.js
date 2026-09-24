@@ -197,6 +197,50 @@ export function hasEngineChanges(input = {}) {
 }
 
 /**
+ * Modifie UN SEUL champ d'UNE entrée `models[]`, **par index**, et renvoie un
+ * NOUVEAU tableau. Aucune autre entrée n'est modifiée, aucune référence n'est
+ * partagée : c'est la primitive d'édition « par entrée » de l'éditeur (le
+ * changement de famille ne peut PAS toucher une autre ligne). Un index invalide
+ * renvoie une copie inchangée (jamais d'exception, jamais d'écriture ailleurs).
+ */
+export function setModelField(models, index, field, value) {
+  const list = Array.isArray(models) ? models : [];
+  const next = list.map((model) => ({ ...(isRecord(model) ? model : {}) }));
+  if (!Number.isInteger(index) || index < 0 || index >= next.length) return next;
+  next[index] = { ...next[index], [field]: value };
+  return next;
+}
+
+/**
+ * Applique le `prefill` d'une entrée de catalogue au brouillon `models[]`,
+ * **en ciblant l'entrée de MÊME `id`** (jamais la première, jamais l'index
+ * courant) : l'entrée existante est mise à jour avec les champs du catalogue
+ * (ses clés inconnues sont conservées), sinon une nouvelle entrée est ajoutée.
+ * Renvoie un NOUVEAU tableau : les autres entrées sont copiées telles quelles.
+ *
+ * Un `prefill` sans `id` exploitable laisse le brouillon inchangé (on ne devine
+ * jamais la cible).
+ */
+export function applyCatalogPrefill(models, prefill) {
+  const list = Array.isArray(models) ? models : [];
+  const next = list.map((model) => ({ ...(isRecord(model) ? model : {}) }));
+  const p = isRecord(prefill) ? prefill : {};
+  const id = str(p.id);
+  if (id.length === 0) return next;
+  const fromCatalog = {
+    id,
+    family: str(p.family),
+    task: str(p.task),
+    mode: str(p.mode),
+    path: str(p.path),
+  };
+  const index = next.findIndex((model) => str(model.id) === id);
+  if (index === -1) next.push(fromCatalog);
+  else next[index] = { ...next[index], ...fromCatalog };
+  return next;
+}
+
+/**
  * État d'application honnête pour le moteur configuré (`engine` = `tts.engine`).
  * Le gateway ne sait que ce qui est DÉCLARÉ dans `server.json` — on ne prétend
  * jamais que le moteur l'a déjà chargé.
