@@ -335,6 +335,163 @@ describe("garde-fou famille ↔ fichier du catalogue (défense en profondeur)", 
   });
 });
 
+describe("garde-fou famille ↔ fichier — chemins MANUELS (basename / dossier)", () => {
+  const CATALOG = [
+    {
+      id: "chatterbox",
+      family: "chatterbox",
+      task: "clon",
+      mode: "offline",
+      recommendedFile: "chatterbox-q8_0.gguf",
+      dir: "Chatterbox-GGUF",
+    },
+    {
+      id: "qwen3-tts",
+      family: "qwen3_tts",
+      task: "tts",
+      mode: "offline",
+      recommendedFile: "qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      dir: "Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+    },
+  ];
+
+  function fixture(): Fixture {
+    const root = mkdtempSync(join(tmpdir(), "yuki-engine-config-manual-"));
+    tempDirs.push(root);
+    const configDir = join(root, "tts-config");
+    const modelsDir = join(root, "models");
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(modelsDir, { recursive: true });
+    const store = new EngineConfigStore({
+      configDir,
+      engineConfigDir: "/config",
+      modelsDir,
+      engineModelsDir: "/models",
+      catalogModels: CATALOG,
+    });
+    return { root, configDir, modelsDir, modelsWriteDir: join(modelsDir, "downloads"), store };
+  }
+
+  /** Chemin MANUEL reconnu par le basename du catalogue. */
+  const MANUAL = "/models/chatterbox-q8_0.gguf";
+
+  it("refuse une famille incohérente pour un chemin manuel reconnu par le basename", () => {
+    const fx = fixture();
+    try {
+      fx.store.applyPatch({
+        models: [validModel({ family: "qwen3_tts", task: "tts", path: MANUAL })],
+      });
+      throw new Error("aurait dû lever");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EngineConfigError);
+      const e = error as EngineConfigError;
+      expect(e.status).toBe(400);
+      const field = e.fields.find((f) => f.code === "catalog_family_mismatch");
+      expect(field?.path).toBe("models[0].family");
+      // Nomme le fichier reconnu, la valeur attendue ET la valeur reçue.
+      expect(field?.message).toContain("chatterbox-q8_0.gguf");
+      expect(field?.message).toContain("chatterbox");
+      expect(field?.message).toContain("qwen3_tts");
+      expect(field?.message).toContain(MANUAL);
+      expect(e.message).toContain("qwen3_tts");
+    }
+  });
+
+  it("reconnaît le basename SANS tenir compte de la casse", () => {
+    const fx = fixture();
+    expect(() =>
+      fx.store.applyPatch({
+        models: [
+          validModel({ family: "qwen3_tts", task: "tts", path: "/models/Chatterbox-Q8_0.GGUF" }),
+        ],
+      }),
+    ).toThrowError(EngineConfigError);
+  });
+
+  it("accepte une famille cohérente pour un chemin manuel reconnu", () => {
+    const fx = fixture();
+    const report = fx.store.applyPatch({ models: [validModel({ path: MANUAL })] });
+    expect(report.models[0]?.family).toBe("chatterbox");
+  });
+
+  it("reconnaît un DOSSIER de téléchargement (/models/downloads/<id>)", () => {
+    const fx = fixture();
+    try {
+      fx.store.applyPatch({
+        models: [validModel({ family: "qwen3_tts", task: "tts", path: "/models/downloads/chatterbox" })],
+      });
+      throw new Error("aurait dû lever");
+    } catch (error) {
+      expect((error as EngineConfigError).code).toBe("invalid_engine_config");
+      expect(
+        (error as EngineConfigError).fields.some((f) => f.code === "catalog_family_mismatch"),
+      ).toBe(true);
+    }
+  });
+
+  it("reconnaît un dossier par le nom du paquet (dir amont)", () => {
+    const fx = fixture();
+    try {
+      fx.store.applyPatch({
+        models: [
+          validModel({ family: "chatterbox", task: "clon", path: "/models/Qwen3-TTS-12Hz-1.7B-Base-GGUF" }),
+        ],
+      });
+      throw new Error("aurait dû lever");
+    } catch (error) {
+      expect((error as EngineConfigError).fields.some((f) => f.code === "catalog_family_mismatch")).toBe(
+        true,
+      );
+    }
+  });
+
+  it("N'APPLIQUE PAS le garde-fou à un chemin manuel INCONNU (GGUF personnel)", () => {
+    const fx = fixture();
+    const report = fx.store.applyPatch({
+      models: [
+        validModel({ family: "kokoro_tts", task: "tts", mode: "streaming", path: "/models/mon-gguf-perso.gguf" }),
+      ],
+    });
+    expect(report.models[0]?.family).toBe("kokoro_tts");
+  });
+
+  it("accepte un DOSSIER inconnu (moteur hors catalogue)", () => {
+    const fx = fixture();
+    const report = fx.store.applyPatch({
+      models: [
+        validModel({ family: "kokoro_tts", task: "tts", mode: "streaming", path: "/models/mon-dossier-maison" }),
+      ],
+    });
+    expect(report.models[0]?.path).toBe("/models/mon-dossier-maison");
+  });
+
+  it("SIGNALE une entrée existante incohérente dans le rapport (lecture, sans blocage)", () => {
+    const fx = fixture();
+    writeConfig(fx, {
+      models: [validModel({ family: "qwen3_tts", task: "clon", path: MANUAL })],
+    });
+    const report = fx.store.report();
+    // La lecture ne lève pas : l'entrée reste éditable.
+    expect(report.valid).toBe(true);
+    expect(report.models[0]?.coherenceIssues).toHaveLength(1);
+    expect(report.models[0]?.coherenceIssues[0]?.code).toBe("catalog_family_mismatch");
+    expect(report.models[0]?.coherenceIssues[0]?.message).toContain("chatterbox");
+  });
+
+  it("une entrée cohérente ou inconnue ne porte AUCUN signalement", () => {
+    const fx = fixture();
+    writeConfig(fx, {
+      models: [
+        validModel({ path: MANUAL }),
+        validModel({ id: "perso", family: "kokoro_tts", task: "tts", mode: "streaming", path: "/models/perso.gguf" }),
+      ],
+    });
+    const report = fx.store.report();
+    expect(report.models[0]?.coherenceIssues).toEqual([]);
+    expect(report.models[1]?.coherenceIssues).toEqual([]);
+  });
+});
+
 describe("sauvegarde et restauration", () => {
   it("conserve UNE sauvegarde = version précédente, et la restaure", () => {
     const fx = fixture();

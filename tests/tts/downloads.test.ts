@@ -461,6 +461,28 @@ describe("TtsDownloadManager — annulation et un-seul-à-la-fois", () => {
     fx.manager.cancel("kokoro");
     await waitForStatus(fx.manager, "kokoro", ["cancelled"]);
   });
+
+  it("un NOUVEAU téléchargement après annulation repart et aboutit (l'annulation est transitoire)", async () => {
+    const body = Buffer.from("q".repeat(120_000));
+    const server = await startFileServer(body);
+    server.state.chunkSize = 4_096;
+    server.state.chunkDelayMs = 2;
+    const fx = makeManager({
+      root: tempDir("yuki-dl-"),
+      url: server.url,
+      bytes: body.length,
+      expectedSha256: null,
+    });
+    await fx.manager.start("chatterbox");
+    await waitForStatus(fx.manager, "chatterbox", ["downloading"]);
+    fx.manager.cancel("chatterbox");
+    await waitForStatus(fx.manager, "chatterbox", ["cancelled"]);
+    // Sans le nettoyage de `cancelRequested` au démarrage, la nouvelle tâche
+    // resterait `queued` à jamais (elle est abandonnée au premier tour de boucle).
+    await fx.manager.start("chatterbox");
+    await waitForStatus(fx.manager, "chatterbox", ["done"]);
+    expect(existsSync(destPath(fx, "chatterbox"))).toBe(true);
+  });
 });
 
 describe("TtsDownloadManager — registre persistant", () => {

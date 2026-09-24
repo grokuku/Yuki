@@ -39,6 +39,7 @@ import {
   describeCapabilities,
   describeEngineConfig,
   describeEngineConfigError,
+  findCatalogFamilyIncoherence,
   restartProcedure,
   setModelField,
   validateModelDraft,
@@ -50,6 +51,16 @@ export const TTS_TEST_MAX_CHARS = 500;
 export const DEFAULT_TTS_TEST_TEXT = "Bonjour, voici un aperçu de la voix.";
 
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-config": "1" };
+
+/**
+ * En-têtes d'écriture enrichis de l'IDENTIFIANT DE FLUX (diagnostic en
+ * production) : le serveur journalise QUELLE action de l'UI a demandé chaque
+ * écriture (`engine-editor-save`, `declare-model`, `revert-engine-config`…).
+ * Valeur par défaut côté serveur si l'en-tête est absent (compatibilité).
+ */
+function writeHeaders(flow) {
+  return { ...WRITE_HEADERS, "x-yuki-config-flow": flow };
+}
 
 /** Délai d'une relance discrète quand l'état est « démarrage en cours ». */
 export const TTS_STARTING_RETRY_MS = 3_000;
@@ -335,6 +346,35 @@ export function describeDownloadError(error) {
 }
 
 /**
+ * Message de l'état « injoignable ». La base explique l'action manuelle ; si
+ * des modèles sont DÉCLARÉS dans server.json, on ajoute une piste SANS jamais
+ * affirmer une cause (le gateway n'a pas accès aux logs du conteneur ni à
+ * Docker). `null`/absent = aucun ajout.
+ */
+function unreachableMessage(status, baseUrl) {
+  const base =
+    `Yuki ne joint pas le moteur à l'adresse ${baseUrl}. Le conteneur « tts » n'est ` +
+    "probablement pas démarré : le gateway n'a AUCUN accès à Docker, ce démarrage se fait " +
+    "à la main sur l'hôte (voir « Ce qui reste à faire à la main »). S'il démarre mais " +
+    "échoue (commande invalide, fichier de configuration introuvable, modèle absent), ses " +
+    "logs le disent (docker compose logs tts). Autre cause possible : aucun GPU réservé.";
+  const count =
+    typeof status.declaredModelCount === "number" ? status.declaredModelCount : null;
+  if (count === null || count === 0) return base;
+  const incoherent =
+    typeof status.declaredModelsIncoherent === "number" ? status.declaredModelsIncoherent : null;
+  const plural = count > 1 ? "modèles sont déclarés" : "modèle est déclaré";
+  const extra =
+    incoherent !== null && incoherent > 0
+      ? ` Par ailleurs, ${count} ${plural} dans server.json et ${incoherent} a une famille ` +
+        "incohérente avec le fichier déclaré : vérifiez la « Configuration du moteur » (zone ⑤) " +
+        "— c'est une cause connue d'échec au démarrage."
+      : ` ${count} ${plural} dans server.json : s'il échoue au démarrage, vérifiez dans ` +
+        "« Configuration du moteur » (zone ⑤) que chaque famille correspond bien à son fichier.";
+  return base + extra;
+}
+
+/**
  * Mappe un rapport `GET /api/tts/status` vers la vue de la carte d'état.
  * **Aucune affirmation** : `ready` n'est renvoyé que sur preuve positive de la
  * sonde. Les valeurs inconnues retombent sur un état « inconnu » honnête.
@@ -374,12 +414,7 @@ export function describeTtsState(status) {
         key: "unreachable",
         label: "Non démarré",
         badgeClass: "tts-badge--warn",
-        message:
-          `Yuki ne joint pas le moteur à l'adresse ${baseUrl}. Le conteneur « tts » n'est ` +
-          "probablement pas démarré : le gateway n'a AUCUN accès à Docker, ce démarrage se fait " +
-          "à la main sur l'hôte (voir « Ce qui reste à faire à la main »). S'il démarre mais " +
-          "échoue (commande invalide, fichier de configuration introuvable, modèle absent), ses " +
-          "logs le disent (docker compose logs tts). Autre cause possible : aucun GPU réservé.",
+        message: unreachableMessage(status, baseUrl),
         tone: "warn",
         showEnable: false,
         showRetry: true,
@@ -764,7 +799,6 @@ export function initTtsAssistant(root, deps = {}) {
   let engineConfigBusy = false;
   let engineFieldErrors = [];
   let engineConfigStatusEl = null;
-  let modelRowRefs = [];
   let globalRefs = new Map();
   // Téléchargement des modèles (Lot 9, étape 3).
   let catalogReport = null;
@@ -1134,7 +1168,14 @@ export function initTtsAssistant(root, deps = {}) {
     return values.map((value) => ({ value, label: value }));
   }
 
-  function selectInput(value, options) {
+  /**
+   * Construit un `<select>` et branche son `change` sur le brouillon de SA
+   * ligne via `onChange` (valeur courante). Sans `onChange`, la modification
+   * ne touche QUE les globales (`captureGlobals`) : jamais une relecture DOM
+   * GLOBALE des `models[]` (une édition ne peut pas écrire dans une autre
+   * entrée).
+   */
+  function selectInput(value, options, onChange) {
     const select = h("select", { class: "tts-engine-config__select" });
     for (const option of options) {
       select.append(
@@ -1145,7 +1186,8 @@ export function initTtsAssistant(root, deps = {}) {
       );
     }
     if (value !== undefined && value !== null) select.value = String(value);
-    select.addEventListener("change", captureEngineDraft);
+    const listener = typeof onChange === "function" ? onChange : captureGlobals;
+    select.addEventListener("change", () => listener(select.value));
     return select;
   }
 
@@ -1162,14 +1204,14 @@ export function initTtsAssistant(root, deps = {}) {
     };
   }
 
-  function captureEngineDraft() {
-    engineDraft.models = modelRowRefs.map((refs) => ({
-      id: refs.id.value,
-      family: refs.family.value,
-      task: refs.task.value,
-      mode: refs.mode.value,
-      path: refs.path.value,
-    }));
+  /**
+   * Relit UNIQUEMENT les globales (objets de premier niveau indépendants). Les
+   * `models[]` ne sont JAMAIS relus depuis le DOM : chaque ligne édite SON
+   * entrée via `setModelField` (aucune référence/état partagé, aucun index
+   * croisé). C'est ce qui rend impossible toute écriture d'une valeur d'une
+   * ligne dans une autre.
+   */
+  function captureGlobals() {
     for (const [path, el] of globalRefs.entries()) {
       engineDraft.globals[path] = el.type === "checkbox" ? el.checked : el.value;
     }
@@ -1227,6 +1269,7 @@ export function initTtsAssistant(root, deps = {}) {
       if (descriptor.kind === "checkbox") {
         el = h("input", { class: "tts-engine-config__checkbox", type: "checkbox", id: inputId });
         el.checked = Boolean(value);
+        el.addEventListener("change", captureGlobals);
       } else if (descriptor.kind === "select") {
         el = selectInput(value, optionList(descriptor.options));
         el.id = inputId;
@@ -1237,7 +1280,7 @@ export function initTtsAssistant(root, deps = {}) {
           id: inputId,
           value: value === undefined || value === null ? "" : String(value),
         });
-        el.addEventListener("change", captureEngineDraft);
+        el.addEventListener("change", captureGlobals);
       } else {
         el = h("input", {
           class: "tts-engine-config__input",
@@ -1245,7 +1288,7 @@ export function initTtsAssistant(root, deps = {}) {
           id: inputId,
           value: value === undefined || value === null ? "" : String(value),
         });
-        el.addEventListener("change", captureEngineDraft);
+        el.addEventListener("change", captureGlobals);
       }
       globalRefs.set(descriptor.path, el);
       const wrapper = h("label", { class: "tts-engine-config__field", for: inputId }, [
@@ -1275,7 +1318,6 @@ export function initTtsAssistant(root, deps = {}) {
   }
 
   function renderModelRows(view) {
-    modelRowRefs = [];
     const engine = lastStatus?.engine ?? null;
     engineConfigBody.append(
       h("h4", { class: "tts-assistant__subtitle", text: "Modèles déclarés (models[])" }),
@@ -1297,37 +1339,41 @@ export function initTtsAssistant(root, deps = {}) {
           h("span", { class: "tts-badge tts-badge--ok", text: "Moteur actif (tts.engine)" }),
         );
       }
+      // Édition PAR ENTRÉE : chaque contrôle écrit UNIQUEMENT le champ de SON
+      // entrée (nouveau tableau via `setModelField`), jamais une relecture DOM
+      // globale. Une ligne ne peut donc pas altérer une autre entrée.
+      const setField = (field, value) => {
+        engineDraft.models = setModelField(engineDraft.models, index, field, value);
+      };
       const idInput = h("input", {
         class: "tts-engine-config__input",
         type: "text",
         value: model.id,
         "aria-label": `Identifiant du modèle ${index + 1}`,
       });
-      idInput.addEventListener("change", captureEngineDraft);
-      const familySelect = selectInput(model.family, optionList(ENGINE_FAMILIES));
-      familySelect.addEventListener("change", () => {
-        captureEngineDraft();
+      idInput.addEventListener("change", () => setField("id", idInput.value));
+      const familySelect = selectInput(model.family, optionList(ENGINE_FAMILIES), (value) => {
+        setField("family", value);
         const current = engineDraft.models[index];
         if (
           current &&
+          current.mode !== "offline" &&
           ENGINE_MODES.includes(current.mode) &&
           ENGINE_FORCE_OFFLINE_FAMILIES.includes(current.family)
         ) {
-          // Édition PAR ENTRÉE (nouveau tableau, aucune référence partagée).
           engineDraft.models = setModelField(engineDraft.models, index, "mode", "offline");
         }
         renderEngineConfig();
       });
-      const taskSelect = selectInput(model.task, optionList(ENGINE_TASK_TOKENS));
-      const modeSelect = selectInput(model.mode, optionList(ENGINE_MODES));
-      const pathSelect = selectInput(model.path, diskPathOptions(model.path));
-      modelRowRefs.push({
-        id: idInput,
-        family: familySelect,
-        task: taskSelect,
-        mode: modeSelect,
-        path: pathSelect,
-      });
+      const taskSelect = selectInput(model.task, optionList(ENGINE_TASK_TOKENS), (value) =>
+        setField("task", value),
+      );
+      const modeSelect = selectInput(model.mode, optionList(ENGINE_MODES), (value) =>
+        setField("mode", value),
+      );
+      const pathSelect = selectInput(model.path, diskPathOptions(model.path), (value) =>
+        setField("path", value),
+      );
       card.append(
         field(`Identifiant ${index + 1} (id)`, idInput, `models[${index}].id`),
         field("Famille", familySelect, `models[${index}].family`),
@@ -1335,6 +1381,23 @@ export function initTtsAssistant(root, deps = {}) {
         field("Mode", modeSelect, `models[${index}].mode`),
         field("Chemin (vu moteur)", pathSelect, `models[${index}].path`),
       );
+      // Signalement EN LECTURE (état ENREGISTRÉ) : une famille incohérente avec
+      // le fichier reconnu empêche le moteur de démarrer. Affiché AVANT tout
+      // enregistrement, sans jamais bloquer la réparation.
+      const storedIssues = Array.isArray(view.models[index]?.coherenceIssues)
+        ? view.models[index].coherenceIssues
+        : [];
+      if (storedIssues.length > 0) {
+        card.append(
+          h("p", {
+            class: "config-error tts-engine-config__coherence",
+            role: "status",
+            text:
+              "Configuration enregistrée incohérente — " +
+              storedIssues.map((issue) => issue.message).join(" "),
+          }),
+        );
+      }
       const remove = h("button", {
         class: "button button--ghost button--small",
         type: "button",
@@ -1342,8 +1405,7 @@ export function initTtsAssistant(root, deps = {}) {
         "aria-label": `Retirer le modèle ${index + 1}`,
       });
       remove.addEventListener("click", () => {
-        captureEngineDraft();
-        engineDraft.models.splice(index, 1);
+        engineDraft.models = engineDraft.models.filter((_, row) => row !== index);
         engineFieldErrors = [];
         renderEngineConfig();
       });
@@ -1454,6 +1516,25 @@ export function initTtsAssistant(root, deps = {}) {
         h("p", { class: "tts-assistant__note tts-assistant__note--warn", text: warning }),
       );
     }
+    // Raison CONNUE d'un échec de démarrage : une entrée enregistrée dont la
+    // famille ne correspond pas au fichier reconnu par le catalogue. On la
+    // signale sans inventer de cause et sans bloquer l'enregistrement (elle
+    // reste réparable ci-dessous).
+    const incoherentCount = view.models.filter(
+      (model) => Array.isArray(model.coherenceIssues) && model.coherenceIssues.length > 0,
+    ).length;
+    if (incoherentCount > 0) {
+      engineConfigBody.append(
+        h("p", {
+          class: "tts-assistant__note tts-assistant__note--warn",
+          text:
+            `${incoherentCount} entrée${incoherentCount > 1 ? "s" : ""} enregistrée${
+              incoherentCount > 1 ? "s" : ""
+            } a une famille incohérente avec le fichier déclaré : c'est une cause ` +
+            "connue d'échec de démarrage du moteur. Corrigez la ligne signalée puis enregistrez.",
+        }),
+      );
+    }
     const caps = describeCapabilities(capabilitiesReport);
     if (caps.show) {
       engineConfigBody.append(h("p", { class: "tts-assistant__note", text: caps.message }));
@@ -1475,15 +1556,17 @@ export function initTtsAssistant(root, deps = {}) {
       "aria-label": "Ajouter un modèle à déclarer",
     });
     added.addEventListener("click", () => {
-      captureEngineDraft();
       const first = diskPathOptions("")[0];
-      engineDraft.models.push({
-        id: "",
-        family: ENGINE_FAMILIES[0],
-        task: "clon",
-        mode: "offline",
-        path: first ? first.value : "",
-      });
+      engineDraft.models = [
+        ...engineDraft.models,
+        {
+          id: "",
+          family: ENGINE_FAMILIES[0],
+          task: "clon",
+          mode: "offline",
+          path: first ? first.value : "",
+        },
+      ];
       engineFieldErrors = [];
       renderEngineConfig();
     });
@@ -1550,12 +1633,12 @@ export function initTtsAssistant(root, deps = {}) {
     renderEngineConfig();
   }
 
-  async function saveEngineConfig(options = {}) {
+  async function saveEngineConfig(flow = "engine-editor-save") {
     if (engineConfigBusy || !fetchApi) return;
-    // `capture` vaut `true` par défaut (bouton « Enregistrer » : on relit
-    // l'éditeur). « Déclarer ce modèle » passe `capture: false` pour écrire le
-    // brouillon ciblé SANS relecture DOM.
-    if (options.capture !== false) captureEngineDraft();
+    // Source de vérité = le BROUILLON (`engineDraft`), alimenté PAR ENTRÉE par
+    // les contrôles. On ne relit JAMAIS le DOM global des `models[]` au moment
+    // d'enregistrer : une anomalie d'affichage d'une ligne ne peut donc pas
+    // être persistée sur une autre.
     const errors = [];
     engineDraft.models.forEach((model, index) => {
       const check = validateModelDraft(model);
@@ -1567,6 +1650,26 @@ export function initTtsAssistant(root, deps = {}) {
     if (errors.length > 0) {
       renderEngineConfig();
       setEngineConfigStatus("Correction requise : voir les erreurs ci-dessous.", true);
+      return;
+    }
+    // REFUS côté client : une famille incohérente avec un chemin reconnu du
+    // catalogue serait refusée par le serveur (400). On l'explique AVANT
+    // l'aller-retour, sans envoyer la requête. Les chemins INCONNUS (GGUF
+    // personnel / moteur hors catalogue) restent libres, comme côté serveur.
+    const catalogEntries =
+      catalogReport && Array.isArray(catalogReport.entries) ? catalogReport.entries : [];
+    const incoherences = findCatalogFamilyIncoherence(engineDraft.models, catalogEntries);
+    if (incoherences.length > 0) {
+      engineFieldErrors = incoherences.map((issue) => ({
+        path: issue.path,
+        message: issue.message,
+      }));
+      renderEngineConfig();
+      setEngineConfigStatus(
+        "Enregistrement refusé : une entrée a une famille incohérente avec son fichier. " +
+          "Corrigez la famille (ou le chemin) de la ligne signalée, puis enregistrez.",
+        true,
+      );
       return;
     }
     const patch = buildEnginePatch({
@@ -1592,7 +1695,7 @@ export function initTtsAssistant(root, deps = {}) {
     setEngineConfigStatus("Enregistrement…");
     try {
       const report = await fetchApi.put("/api/tts/engine-config", {
-        headers: WRITE_HEADERS,
+        headers: writeHeaders(flow),
         body: patch,
       });
       engineReport = report;
@@ -1628,7 +1731,7 @@ export function initTtsAssistant(root, deps = {}) {
     setEngineConfigStatus("Restauration…");
     try {
       const report = await fetchApi.post("/api/tts/engine-config/revert", {
-        headers: WRITE_HEADERS,
+        headers: writeHeaders("revert-engine-config"),
       });
       engineReport = report;
       engineFieldErrors = [];
@@ -1989,9 +2092,10 @@ export function initTtsAssistant(root, deps = {}) {
     engineFieldErrors = [];
     renderEngineConfig();
     setDownloadsStatus(`Déclaration de « ${label} » dans la configuration du moteur…`);
-    // `capture: false` : l'enregistrement écrit EXACTEMENT le brouillon ciblé
-    // ci-dessus (aucune relecture DOM susceptible de le corrompre).
-    await saveEngineConfig({ capture: false });
+    // Le brouillon est alimenté PAR ENTRÉE (aucune relecture DOM globale) :
+    // l'enregistrement écrit EXACTEMENT ce brouillon ciblé. L'identifiant de
+    // flux `declare-model` permet de tracer cette action précise dans les logs.
+    await saveEngineConfig("declare-model");
     await loadCatalog();
   }
 

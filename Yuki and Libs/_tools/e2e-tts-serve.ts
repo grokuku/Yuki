@@ -57,7 +57,11 @@ const root = mkdtempSync(join(tmpdir(), "yuki-e2e-tts-"));
 const voicesDir = join(root, "voices");
 const stateDir = join(root, "state");
 const modelsDir = join(root, "models");
-const ttsConfigDir = join(root, "tts-config");
+// Dossier de configuration du moteur. Surchargeable par l'E2E
+// (`YUKI_E2E_TTS_CONFIG_DIR`) pour pouvoir SIMULER une config déjà cassée
+// (écriture directe de `server.json`, comme un état hérité d'avant le garde-fou)
+// et vérifier que l'éditeur la SIGNALE puis la RÉPARE.
+const ttsConfigDir = process.env.YUKI_E2E_TTS_CONFIG_DIR?.trim() || join(root, "tts-config");
 // Lot 9 (M1) : le sous-dossier `downloads/` du dossier des modèles est une
 // convention d'organisation (le montage `/models` est `rw` côté gateway).
 const modelsWriteDir = join(modelsDir, "downloads");

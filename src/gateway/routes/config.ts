@@ -28,6 +28,17 @@ import type { Logger } from "../../observability/logger.js";
 
 export const CONFIG_WRITE_HEADER = "x-yuki-config";
 export const CONFIG_HEADER_VALUE = "1";
+/**
+ * En-tête OPTIONNEL : identifiant du FLUX UI à l'origine d'une écriture
+ * (`engine-editor-save`, `declare-model`, `activate-engine`, `revert-…`).
+ * Sert au DIAGNOSTIC en production (« quelle action a écrit cette
+ * configuration ? »). Absent ⇒ `"unspecified"` : jamais exigé.
+ */
+export const CONFIG_FLOW_HEADER = "x-yuki-config-flow";
+/** Jeton de flux accepté : borné, jamais un texte libre recopié tel quel. */
+const FLOW_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
+/** Valeur de repli quand l'en-tête de flux est absent ou invalide. */
+export const UNSPECIFIED_FLOW = "unspecified";
 /** Délai du test de connexion LLM. */
 export const LLM_TEST_TIMEOUT_MS = 5_000;
 /** Taille maximale acceptée pour un corps de requête. */
@@ -114,6 +125,16 @@ function sameOrigin(headers: IncomingHttpHeaders): boolean {
   return originHost !== null && requestHost !== null && originHost === requestHost;
 }
 
+/**
+ * Lit l'identifiant de flux UI déclaré dans l'en-tête, assaini et borné.
+ * Valeur de repli (`"unspecified"`) : l'instrumentation n'exige JAMAIS sa
+ * présence (compatibilité avec les clients qui ne l'envoient pas).
+ */
+export function configWriteFlow(headers: IncomingHttpHeaders): string {
+  const raw = (headerString(headers, CONFIG_FLOW_HEADER) ?? "").trim();
+  return FLOW_PATTERN.test(raw) ? raw : UNSPECIFIED_FLOW;
+}
+
 /** Applique les garde-fous des routes d'écriture. Renvoie une erreur ou `null`. */
 export function requireWriteGuards(
   headers: IncomingHttpHeaders,
@@ -139,16 +160,25 @@ function guardWrite(input: ConfigRequestInput): ConfigHttpResponse | null {
   return requireWriteGuards(input.headers);
 }
 
-function audit(deps: ConfigApiDeps, changes: ReturnType<ConfigRuntime["update"]>["changes"]): void {
+function audit(
+  deps: ConfigApiDeps,
+  changes: ReturnType<ConfigRuntime["update"]>["changes"],
+  flow: string,
+): void {
   const at = new Date((deps.now ?? Date.now)()).toISOString();
   for (const change of changes) {
     deps.logger.info("config.changed", {
       at,
+      // Quelle action de l'UI a demandé l'écriture (diagnostic en production).
+      flow,
       field: change.path,
       kind: change.secret ? "secret" : "value",
       from: change.from,
       to: change.to,
     });
+  }
+  if (changes.length === 0) {
+    deps.logger.info("config.unchanged", { at, flow });
   }
 }
 
@@ -160,6 +190,7 @@ function handleGet(deps: ConfigApiDeps): ConfigHttpResponse {
 function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
   const guard = guardWrite(input);
   if (guard) return guard;
+  const flow = configWriteFlow(input.headers);
 
   let patch: unknown;
   try {
@@ -185,7 +216,7 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
 
   try {
     const result = input.deps.runtime.update(patch as Record<string, unknown>);
-    audit(input.deps, result.changes);
+    audit(input.deps, result.changes, flow);
     return json(200, {
       fields: result.fields,
       status: result.status,

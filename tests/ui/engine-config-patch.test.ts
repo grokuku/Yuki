@@ -16,6 +16,7 @@ import {
   describeCapabilities,
   describeEngineConfig,
   describeEngineConfigError,
+  findCatalogFamilyIncoherence,
   hasEngineChanges,
   restartProcedure,
   setModelField,
@@ -299,6 +300,118 @@ describe("describeEngineConfig — état de montage honnête", () => {
     expect(view.globals.port).toBe(8081);
     expect(view.backupExists).toBe(true);
     expect(view.unknownTopLevelKeys).toContain("cors_origins");
+  });
+
+  it("prêt → conserve le signalement de cohérence par entrée (affiché par l'éditeur)", () => {
+    const view = describeEngineConfig({
+      mounted: true,
+      writable: true,
+      fileExists: true,
+      valid: true,
+      models: [
+        {
+          id: "chatterbox",
+          family: "qwen3_tts",
+          path: "/models/chatterbox-q8_0.gguf",
+          coherenceIssues: [{ path: "models[0].family", code: "catalog_family_mismatch", message: "…" }],
+        },
+      ],
+    });
+    expect(view.kind).toBe("ready");
+    expect(view.models[0].coherenceIssues).toHaveLength(1);
+  });
+});
+
+describe("findCatalogFamilyIncoherence — refus côté client AVANT l'aller-retour", () => {
+  const CATALOG = [
+    {
+      id: "chatterbox",
+      family: "chatterbox",
+      task: "clon",
+      mode: "offline",
+      enginePath: "/models/downloads/chatterbox/model.gguf",
+      expectedFile: "chatterbox-q8_0.gguf",
+      dir: "Chatterbox-GGUF",
+    },
+    {
+      id: "qwen3-tts",
+      family: "qwen3_tts",
+      task: "tts",
+      mode: "offline",
+      enginePath: "/models/downloads/qwen3-tts/model.gguf",
+      expectedFile: "qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf",
+      dir: "Qwen3-TTS-12Hz-1.7B-Base-GGUF",
+    },
+  ];
+
+  it("signale une famille incohérente sur un chemin manuel reconnu par le basename", () => {
+    const issues = findCatalogFamilyIncoherence(
+      [
+        {
+          id: "chatterbox",
+          family: "qwen3_tts",
+          task: "clon",
+          mode: "offline",
+          path: "/models/chatterbox-q8_0.gguf",
+        },
+      ],
+      CATALOG,
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.path).toBe("models[0].family");
+    expect(issues[0]?.code).toBe("catalog_family_mismatch");
+    expect(issues[0]?.message).toContain("chatterbox-q8_0.gguf");
+    expect(issues[0]?.message).toContain("chatterbox");
+    expect(issues[0]?.message).toContain("qwen3_tts");
+  });
+
+  it("reconnaît le basename SANS tenir compte de la casse", () => {
+    const issues = findCatalogFamilyIncoherence(
+      [{ id: "x", family: "chatterbox", path: "/models/Chatterbox-Q8_0.GGUF" }],
+      CATALOG,
+    );
+    expect(issues).toHaveLength(0);
+  });
+
+  it("reconnaît le DOSSIER de téléchargement du catalogue", () => {
+    const issues = findCatalogFamilyIncoherence(
+      [{ id: "chatterbox", family: "qwen3_tts", path: "/models/downloads/chatterbox" }],
+      CATALOG,
+    );
+    expect(issues).toHaveLength(1);
+  });
+
+  it("reconnaît le nom de dossier amont (dir)", () => {
+    const issues = findCatalogFamilyIncoherence(
+      [{ id: "x", family: "qwen3_tts", path: "/models/Chatterbox-GGUF" }],
+      CATALOG,
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toContain("chatterbox");
+  });
+
+  it("N'APPLIQUE PAS le refus à un chemin INCONNU (GGUF personnel)", () => {
+    const issues = findCatalogFamilyIncoherence(
+      [{ id: "perso", family: "kokoro_tts", path: "/models/mon-perso.gguf" }],
+      CATALOG,
+    );
+    expect(issues).toHaveLength(0);
+  });
+
+  it("ne signale RIEN quand la famille correspond au catalogue", () => {
+    const issues = findCatalogFamilyIncoherence(
+      [{ id: "chatterbox", family: "chatterbox", path: "/models/chatterbox-q8_0.gguf" }],
+      CATALOG,
+    );
+    expect(issues).toHaveLength(0);
+  });
+
+  it("sans catalogue chargé (liste vide) : aucun refus (le serveur garde la main)", () => {
+    const issues = findCatalogFamilyIncoherence(
+      [{ id: "chatterbox", family: "qwen3_tts", path: "/models/chatterbox-q8_0.gguf" }],
+      [],
+    );
+    expect(issues).toHaveLength(0);
   });
 });
 

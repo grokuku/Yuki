@@ -31,6 +31,11 @@ mkdirSync(SHOTS, { recursive: true });
 /* ─── Fichier d'état du moteur TTS SIMULÉ (piloté entre les navigations) ─── */
 const STATE_DIR = mkdtempSync(join(tmpdir(), "yuki-e2e-tts-state-"));
 const TTS_STATE_FILE = join(STATE_DIR, "engine.json");
+// Dossier de configuration du moteur (contrôlé par l'E2E) : on y écrit
+// directement `server.json` pour simuler un état DÉJÀ incohérent (hérité, comme
+// celui de l'utilisateur) et prouver que l'éditeur le signale puis le répare.
+const ENGINE_CONFIG_DIR = mkdtempSync(join(tmpdir(), "yuki-e2e-tts-config-"));
+const ENGINE_SERVER_JSON = join(ENGINE_CONFIG_DIR, "server.json");
 function writeTtsState(state) {
   writeFileSync(TTS_STATE_FILE, JSON.stringify(state));
 }
@@ -47,7 +52,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const serverLog = [];
 const server = spawn(TSX, [join(TOOLS, "e2e-tts-serve.ts")], {
   cwd: YUKI_DIR,
-  env: { ...process.env, YUKI_E2E_TTS_STATE_FILE: TTS_STATE_FILE },
+  env: {
+    ...process.env,
+    YUKI_E2E_TTS_STATE_FILE: TTS_STATE_FILE,
+    YUKI_E2E_TTS_CONFIG_DIR: ENGINE_CONFIG_DIR,
+  },
   stdio: ["ignore", "pipe", "pipe"],
 });
 server.stdout.on("data", (d) => serverLog.push(d.toString()));
@@ -969,6 +978,217 @@ check(
     /qwen3_tts/.test(guardRejected.body?.message ?? "") &&
     /downloads\/chatterbox\/model\.gguf/.test(guardRejected.body?.message ?? ""),
   JSON.stringify(guardRejected).slice(0, 320),
+);
+
+/* ═══ RÉGRESSION D86 : PARCOURS COMPLET — AUCUNE famille croisée ══════════
+ * Parcours exact du rapport : 3 entrées déclarées (dont `chatterbox`), on
+ * TÉLÉCHARGE Qwen, on le DÉCLARE, on le CHOISIT COMME MOTEUR, puis on
+ * ENREGISTRE la configuration du moteur. Après CHAQUE étape, la famille, la
+ * tâche, le mode et le chemin de CHAQUE entrée sont vérifiés (écran ET serveur) :
+ * aucun geste de l'UI ne peut écrire la valeur d'une ligne dans une autre. */
+console.log("\n═══ RÉGRESSION D86 : parcours complet (aucune famille croisée) ═══");
+const THREE_MODELS = [
+  { id: "chatterbox", family: "chatterbox", task: "clon", mode: "offline", path: "/models/chatterbox-q8_0.gguf" },
+  { id: "cosyvoice3", family: "cosyvoice3", task: "clon", mode: "offline", path: "/models/cosyvoice3-q8_0.gguf" },
+  { id: "kokoro", family: "kokoro_tts", task: "tts", mode: "offline", path: "/models/kokoro-82m-q8_0.gguf" },
+];
+await evaluate(
+  `fetch("/api/tts/engine-config", { method: "PUT", headers: { "content-type": "application/json", "x-yuki-config": "1" }, body: JSON.stringify({ models: ${JSON.stringify(THREE_MODELS)} }) }).then((r) => r.status)`,
+  true,
+);
+await gotoAssistant();
+const READ_EDITOR_MODELS = `(() => {
+  const cards = [...document.querySelectorAll("#panel-voix .tts-engine-config .tts-engine-config__model")];
+  return cards.map((c) => {
+    const s = [...c.querySelectorAll("select")];
+    return { id: c.querySelector("input")?.value, family: s[0]?.value, task: s[1]?.value, mode: s[2]?.value, path: s[3]?.value };
+  });
+})()`;
+const READ_SERVER_MODELS = `fetch("/api/tts/engine-config").then((r) => r.json()).then((b) => b.models.map((m) => ({ id: m.id, family: m.family, task: m.task, mode: m.mode, path: m.path })))`;
+/** Les 3 entrées NON concernées sont-elles EXACTEMENT intactes ? */
+const threeUntouched = (entries) =>
+  entries.length >= 3 &&
+  THREE_MODELS.every(
+    (expected) => JSON.stringify(entries.find((e) => e.id === expected.id)) === JSON.stringify(expected),
+  );
+const qwenEntryOf = (entries) => entries.find((e) => e.id === "qwen3-tts") ?? null;
+
+let editorModels = await evaluate(READ_EDITOR_MODELS);
+let serverModels = await evaluate(READ_SERVER_MODELS, true);
+check(
+  "[/config] D86.0 : 3 entrées déclarées rendues fidèlement (écran + serveur)",
+  threeUntouched(editorModels) && threeUntouched(serverModels),
+  JSON.stringify({ editorModels, serverModels }),
+);
+
+/* — 1) TÉLÉCHARGER Qwen (ou reprendre un transfert déjà terminé). — */
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Qwen3/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  if ([...(row?.querySelectorAll("button") ?? [])].some((b) => b.textContent === "Déclarer ce modèle")) return;
+  const start = [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Télécharger" || b.textContent === "Réessayer");
+  start?.click();
+})()`);
+for (let i = 0; i < 60; i += 1) {
+  await sleep(300);
+  const ready = await evaluate(`(() => {
+    const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+    const row = rows.find((r) => /Qwen3/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+    return [...(row?.querySelectorAll("button") ?? [])].some((b) => b.textContent === "Déclarer ce modèle");
+  })()`);
+  if (ready) break;
+}
+editorModels = await evaluate(READ_EDITOR_MODELS);
+serverModels = await evaluate(READ_SERVER_MODELS, true);
+check(
+  "[/config] D86.1 : après TÉLÉCHARGEMENT de Qwen, les 3 entrées restent intactes",
+  threeUntouched(editorModels) && threeUntouched(serverModels),
+  JSON.stringify({ editorModels, serverModels }),
+);
+
+/* — 2) DÉCLARER Qwen. — */
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Qwen3/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Déclarer ce modèle")?.click();
+})()`);
+await sleep(250);
+await evaluate(`document.querySelector(".holaf-modal-btn-primary")?.click()`);
+await sleep(1400);
+editorModels = await evaluate(READ_EDITOR_MODELS);
+serverModels = await evaluate(READ_SERVER_MODELS, true);
+check(
+  "[/config] D86.2 : après DÉCLARATION de Qwen, les 3 entrées restent intactes (écran + serveur)",
+  threeUntouched(editorModels) &&
+    threeUntouched(serverModels) &&
+    qwenEntryOf(serverModels)?.family === "qwen3_tts" &&
+    qwenEntryOf(serverModels)?.task === "tts",
+  JSON.stringify({ editorModels, serverModels }),
+);
+
+/* — 3) CHOISIR Qwen comme moteur actif. — */
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#tts-downloads-root .tts-dl__item")];
+  const row = rows.find((r) => /Qwen3/.test(r.querySelector(".tts-dl__label")?.textContent ?? ""));
+  [...(row?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Choisir comme moteur")?.click();
+})()`);
+await sleep(1400);
+editorModels = await evaluate(READ_EDITOR_MODELS);
+serverModels = await evaluate(READ_SERVER_MODELS, true);
+check(
+  "[/config] D86.3 : après « Choisir comme moteur » (Qwen), les 3 entrées restent intactes",
+  threeUntouched(editorModels) && threeUntouched(serverModels),
+  JSON.stringify({ editorModels, serverModels }),
+);
+
+/* — 4) ENREGISTRER la configuration du moteur. — */
+await evaluate(`(() => {
+  const save = [...document.querySelectorAll("#panel-voix .tts-engine-config button")].find((b) => b.textContent.includes("Enregistrer la configuration du moteur"));
+  save?.click();
+})()`);
+await sleep(250);
+await evaluate(`document.querySelector(".holaf-modal-btn-primary")?.click()`);
+await sleep(1200);
+editorModels = await evaluate(READ_EDITOR_MODELS);
+serverModels = await evaluate(READ_SERVER_MODELS, true);
+check(
+  "[/config] D86.4 : après ENREGISTREMENT, les 3 entrées restent intactes (aucune famille croisée persistée)",
+  threeUntouched(editorModels) && threeUntouched(serverModels),
+  JSON.stringify({ editorModels, serverModels }),
+);
+
+/* — Garde-fou ÉLARGI : chemin MANUEL reconnu par le BASENAME du catalogue — */
+const manualRejected = await evaluate(
+  `fetch("/api/tts/engine-config", { method: "PUT", headers: { "content-type": "application/json", "x-yuki-config": "1" }, body: JSON.stringify({ models: [{ id: "chatterbox", family: "qwen3_tts", task: "tts", mode: "offline", path: "/models/chatterbox-q8_0.gguf" }] }) }).then(async (r) => ({ status: r.status, body: await r.json() }))`,
+  true,
+);
+check(
+  "[/config] garde-fou ÉLARGI : chemin MANUEL reconnu (basename) + famille incohérente → 400 nommant fichier/attendue/reçue",
+  manualRejected.status === 400 &&
+    /chatterbox-q8_0\.gguf/.test(manualRejected.body?.message ?? "") &&
+    /qwen3_tts/.test(manualRejected.body?.message ?? "") &&
+    /Corrigez la famille/.test(manualRejected.body?.message ?? ""),
+  JSON.stringify(manualRejected).slice(0, 320),
+);
+const unknownAccepted = await evaluate(
+  `fetch("/api/tts/engine-config", { method: "PUT", headers: { "content-type": "application/json", "x-yuki-config": "1" }, body: JSON.stringify({ models: [{ id: "perso", family: "kokoro_tts", task: "tts", mode: "streaming", path: "/models/mon-gguf-inconnu.gguf" }] }) }).then(async (r) => ({ status: r.status }))`,
+  true,
+);
+check(
+  "[/config] garde-fou ÉLARGI : chemin INCONNU (GGUF personnel) → accepté (200)",
+  unknownAccepted.status === 200,
+  JSON.stringify(unknownAccepted),
+);
+
+/* — Config DÉJÀ incohérente (héritée) : SIGNALÉE dans l'éditeur ET RÉPARABLE —
+ * On écrit `server.json` DIRECTEMENT (état hérité d'avant le garde-fou, comme
+ * chez l'utilisateur), puis on vérifie que l'éditeur l'affiche AVANT tout
+ * enregistrement et que la correction est acceptée. */
+writeFileSync(
+  ENGINE_SERVER_JSON,
+  `${JSON.stringify(
+    {
+      models: [
+        {
+          id: "chatterbox",
+          family: "qwen3_tts",
+          task: "clon",
+          mode: "offline",
+          path: "/models/chatterbox-q8_0.gguf",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n`,
+);
+await gotoAssistant();
+const incoherentView = await evaluate(`(() => {
+  const warn = document.querySelector("#panel-voix .tts-engine-config__coherence");
+  const card = document.querySelector("#panel-voix .tts-engine-config__model");
+  const selects = card ? [...card.querySelectorAll("select")] : [];
+  return {
+    hasWarn: !!warn,
+    warnText: warn?.textContent ?? "",
+    family: selects[0]?.value ?? null,
+    path: selects[3]?.value ?? null,
+  };
+})()`);
+check(
+  "[/config] config DÉJÀ incohérente → SIGNALÉE dans l'éditeur avant enregistrement (famille incohérente affichée)",
+  incoherentView.hasWarn &&
+    /chatterbox/.test(incoherentView.warnText) &&
+    incoherentView.family === "qwen3_tts",
+  JSON.stringify(incoherentView).slice(0, 320),
+);
+await shot("config-engine-incoherent");
+// Réparation : on corrige la famille dans l'éditeur puis on enregistre.
+await evaluate(`(() => {
+  const card = document.querySelector("#panel-voix .tts-engine-config__model");
+  const select = card?.querySelectorAll("select")[0];
+  if (select) {
+    select.value = "chatterbox";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+})()`);
+await sleep(150);
+await evaluate(`(() => {
+  const save = [...document.querySelectorAll("#panel-voix .tts-engine-config button")].find(
+    (b) => b.textContent.includes("Enregistrer la configuration du moteur"),
+  );
+  save?.click();
+})()`);
+await sleep(200);
+await evaluate(`document.querySelector(".holaf-modal-btn-primary")?.click()`);
+await sleep(900);
+const repaired = await evaluate(
+  `fetch("/api/tts/engine-config").then((r) => r.json()).then((b) => ({ family: b.models[0]?.family, issues: b.models[0]?.coherenceIssues?.length ?? 0 }))`,
+  true,
+);
+check(
+  "[/config] config DÉJÀ incohérente → RÉPARABLE (enregistrement accepté, famille corrigée)",
+  repaired.family === "chatterbox" && repaired.issues === 0,
+  JSON.stringify(repaired),
 );
 
 /* — Nettoyage : l'état serveur persiste. On retire le modèle déclaré et on

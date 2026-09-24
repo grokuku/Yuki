@@ -132,6 +132,47 @@ describe("describeTtsState — les 5 états honnêtes + inconnu", () => {
     expect(view.showRetry).toBe(true);
   });
 
+  it("injoignable AVEC modèles déclarés incohérents → piste concrète, cause jamais affirmée", () => {
+    const view = describeTtsState({
+      state: "unreachable",
+      enabled: true,
+      baseUrl: "http://tts:8081",
+      declaredModelCount: 2,
+      declaredModelsIncoherent: 1,
+    });
+    expect(view.key).toBe("unreachable");
+    expect(view.message).toMatch(/Configuration du moteur/);
+    // Nombre réel, pas inventé.
+    expect(view.message).toContain("2");
+    expect(view.message).toMatch(/incoh\u00e9rente/i);
+    // Aucune affirmation de certitude.
+    expect(view.message).not.toMatch(/\bcertain\b/i);
+  });
+
+  it("injoignable AVEC modèles déclarés cohérents → suggestion conditionnelle, pas de cause inventée", () => {
+    const view = describeTtsState({
+      state: "unreachable",
+      enabled: true,
+      baseUrl: "http://tts:8081",
+      declaredModelCount: 3,
+      declaredModelsIncoherent: 0,
+    });
+    expect(view.message).toMatch(/Configuration du moteur/);
+    expect(view.message).toMatch(/s'il \u00e9choue au d\u00e9marrage/i);
+  });
+
+  it("injoignable SANS modèle déclaré → message de base inchangé (aucune piste inventée)", () => {
+    const withNone = describeTtsState({
+      state: "unreachable",
+      enabled: true,
+      baseUrl: "http://tts:8081",
+      declaredModelCount: 0,
+    });
+    const noField = describeTtsState({ state: "unreachable", enabled: true, baseUrl: "http://tts:8081" });
+    expect(withNone.message).toBe(noField.message);
+    expect(withNone.message).not.toMatch(/Configuration du moteur/);
+  });
+
   it("rapport absent → état inconnu, jamais « prêt »", () => {
     const view = describeTtsState(null);
     expect(view.key).toBe("unknown");

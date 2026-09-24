@@ -54,6 +54,7 @@ import { MODELS_DOWNLOADS_SUBDIR } from "../config/container-paths.js";
 import { describeWriteFailure, probeWritable } from "../config/paths.js";
 import {
   CATALOG_ENTRIES,
+  downloadEngineDir,
   downloadEnginePath,
 } from "./catalog-data.js";
 
@@ -231,6 +232,13 @@ export interface EngineModelView {
   gatewayPath: string | null;
   pathStatus: PathStatus;
   pathNote: string | null;
+  /**
+   * Incohérences de cohérence famille ↔ fichier pour CETTE entrée (catalogue
+   * reconnu par le basename de fichier ou le dossier du `path`). Vide = rien à
+   * signaler (chemin inconnu, ou champs cohérents). C'est un **signalement** en
+   * lecture : une entrée déjà incohérente reste éditable (jamais de blocage).
+   */
+  coherenceIssues: FieldError[];
 }
 
 /** Rapport complet de `GET /api/tts/engine-config`. */
@@ -280,8 +288,9 @@ export interface EngineConfigStoreOptions {
   engineModelsDir: string;
   /**
    * Catalogue fermé utilisé par le garde-fou famille ↔ fichier : un `path`
-   * égal au chemin de téléchargement d'une entrée doit porter sa famille
-   * (et la tâche/le mode fixés par le catalogue). Défaut : le catalogue réel.
+   * RECONNU (chemin de téléchargement exact, dossier, basename de fichier ou
+   * dossier amont) doit porter sa famille (et la tâche/le mode fixés par le
+   * catalogue). Défaut : le catalogue réel.
    */
   catalogModels?: readonly CatalogModelSpec[];
 }
@@ -290,12 +299,23 @@ export interface EngineConfigStoreOptions {
  * Spécification minimale d'un modèle du catalogue, utile au garde-fou
  * `path` ↔ `family`/`task`/`mode`. Le catalogue réel (`CATALOG_ENTRIES`)
  * satisfait structurellement ce type.
+ *
+ * `recommendedFile`/`dir` sont OPTIONNELS : ils permettent au garde-fou de
+ * reconnaître un **chemin manuel** (basename de fichier, ou dossier du paquet)
+ * déposé hors de l'arborescence de téléchargement. Sans eux, seul le chemin
+ * exact `downloadEnginePath(id)` est contraint.
  */
 export interface CatalogModelSpec {
   readonly id: string;
   readonly family: string;
   readonly task: string;
   readonly mode: string;
+  /** Nom de fichier recommandé du catalogue (basename), si connu. */
+  readonly recommendedFile?: string;
+  /** Alias accepté : les vues d'API exposent ce champ (`expectedFile`). */
+  readonly expectedFile?: string;
+  /** Nom du dossier du paquet (dépôt amont), si connu. */
+  readonly dir?: string;
 }
 
 function messageOf(error: unknown): string {
@@ -312,6 +332,28 @@ function writeAtomic(path: string, data: Buffer | string, mode: number): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Dernier segment d'un chemin (`\` et `/` acceptés), sans l'index de racine. */
+function pathBasename(value: string): string {
+  const segments = value.split(/[\\/]+/).filter((segment) => segment.length > 0);
+  return segments.length > 0 ? (segments[segments.length - 1] as string) : "";
+}
+
+/**
+ * Forme acceptée d'un `path` de modèle. Le moteur accepte :
+ *   - un FICHIER `*.gguf` (casse libre, `.GGUF` inclus) ;
+ *   - un DOSSIER (nom sans extension de fichier, y compris un dossier versionné
+ *     à points comme `Qwen3-…-1.7B-…`) qui contient `model.gguf` ou l'unique
+ *     `*.gguf`.
+ * Un nom qui ressemble à un FICHIER d'une autre extension (`.bin`, `.txt`…) est
+ * refusé — jamais un modèle. Un dossier inconnu reste accepté (jamais bloquant).
+ */
+export function isModelPathShape(value: string): boolean {
+  const base = pathBasename(value);
+  if (base.length === 0) return false;
+  if (base.toLowerCase().endsWith(".gguf")) return true;
+  return !/\.[A-Za-z0-9]{1,8}$/.test(base);
 }
 
 /** Un `id` de modèle est un jeton sûr (jamais un chemin). */
@@ -468,11 +510,12 @@ function validateModelInput(
       code: "unsafe_path",
       message: "Chemin non sûr : la composante « .. » est interdite.",
     });
-  } else if (!rawPath.endsWith(".gguf")) {
+  } else if (!isModelPathShape(rawPath)) {
     errors.push({
       path: at("path"),
       code: "invalid_path",
-      message: "Le fichier de modèle doit être un « .gguf ».",
+      message:
+        "Le fichier de modèle doit être un « .gguf » ou un dossier contenant le modèle.",
     });
   }
 
@@ -583,6 +626,12 @@ export class EngineConfigStore {
   readonly modelsWriteDir: string;
   /** Catalogue indexé par chemin de téléchargement MOTEUR (garde-fou). */
   private readonly catalogByEnginePath: Map<string, CatalogModelSpec>;
+  /** Catalogue indexé par DOSSIER de téléchargement moteur (`/models/downloads/<id>`). */
+  private readonly catalogByEngineDir: Map<string, CatalogModelSpec>;
+  /** Catalogue indexé par BASENAME de fichier (`chatterbox-q8_0.gguf`), en minuscules. */
+  private readonly catalogByBasename: Map<string, CatalogModelSpec>;
+  /** Catalogue indexé par nom de DOSSIER amont (`dir`), en minuscules. */
+  private readonly catalogByDirName: Map<string, CatalogModelSpec>;
 
   constructor(options: EngineConfigStoreOptions) {
     this.configDir = resolve(options.configDir);
@@ -595,13 +644,42 @@ export class EngineConfigStore {
     // C'est une convention d'organisation, pas une barrière de sécurité.
     this.modelsWriteDir = join(this.modelsDir, MODELS_DOWNLOADS_SUBDIR);
     this.engineModelsDir = resolve(options.engineModelsDir);
-    // Garde-fou famille ↔ fichier : index par chemin de téléchargement moteur.
-    this.catalogByEnginePath = new Map(
-      (options.catalogModels ?? CATALOG_ENTRIES).map((entry) => [
-        downloadEnginePath(entry.id),
-        entry,
-      ]),
-    );
+    // Garde-fou famille ↔ fichier : le catalogue est indexé de QUATRE façons
+    // pour reconnaître aussi les chemins MANUELS déposés hors des
+    // téléchargements : chemin exact, dossier de téléchargement, basename de
+    // fichier (casse libre) et nom de dossier amont (`dir`). Un nom de DOSSIER
+    // quelconque reste INCONNU (jamais contraint) pour ne pas bloquer un
+    // dossier personnel.
+    this.catalogByEnginePath = new Map();
+    this.catalogByEngineDir = new Map();
+    this.catalogByBasename = new Map();
+    this.catalogByDirName = new Map();
+    for (const raw of options.catalogModels ?? CATALOG_ENTRIES) {
+      const entry = raw as CatalogModelSpec;
+      this.catalogByEnginePath.set(downloadEnginePath(entry.id), entry);
+      this.catalogByEngineDir.set(downloadEngineDir(entry.id), entry);
+      const file = (entry.expectedFile ?? entry.recommendedFile ?? "").trim();
+      if (file.length > 0) this.catalogByBasename.set(file.toLowerCase(), entry);
+      const dir = (entry.dir ?? "").trim();
+      if (dir.length > 0) this.catalogByDirName.set(dir.toLowerCase(), entry);
+    }
+  }
+
+  /**
+   * Résout la spécification de catalogue d'un `path` déclaré (vue moteur).
+   * Priorité : chemin exact > dossier de téléchargement > basename de fichier >
+   * nom de dossier. `null` = chemin INCONNU (GGUF personnel / moteur hors
+   * catalogue) : il reste LIBRE.
+   */
+  private catalogSpecForPath(enginePath: string): CatalogModelSpec | null {
+    const normalized = enginePath.replace(/\\/g, "/");
+    const exact = this.catalogByEnginePath.get(normalized);
+    if (exact) return exact;
+    const dir = this.catalogByEngineDir.get(normalized);
+    if (dir) return dir;
+    const base = pathBasename(normalized).toLowerCase();
+    if (base.length === 0) return null;
+    return this.catalogByBasename.get(base) ?? this.catalogByDirName.get(base) ?? null;
   }
 
   /** Chemin du fichier tel que VU PAR LE MOTEUR. */
@@ -791,7 +869,7 @@ export class EngineConfigStore {
     const disk = this.listDiskModels();
 
     const warnings: string[] = [];
-    const models: EngineModelView[] = entries.map((entry) => {
+    const models: EngineModelView[] = entries.map((entry, index) => {
       if (entry.id.length > 0 && !(ENGINE_IDS as readonly string[]).includes(entry.id)) {
         warnings.push(
           `L'identifiant « ${entry.id} » n'est pas connu de Yuki : le moteur le chargera, ` +
@@ -812,6 +890,10 @@ export class EngineConfigStore {
         pathStatus = "missing";
         pathNote = `Introuvable côté gateway : ${gatewayPath}.`;
       }
+      // Signalement EN LECTURE des incohérences famille ↔ fichier : l'éditeur
+      // peut ainsi expliquer POURQUOI le moteur refuse de démarrer. Aucun
+      // blocage : la config reste éditable et réparable.
+      const coherenceIssues = this.checkCatalogCoherence(entry, entry.path, index);
       return {
         id: entry.id,
         family: entry.family,
@@ -821,6 +903,7 @@ export class EngineConfigStore {
         gatewayPath,
         pathStatus,
         pathNote,
+        coherenceIssues,
       };
     });
 
@@ -1039,11 +1122,15 @@ export class EngineConfigStore {
   /**
    * Garde-fou « famille ↔ fichier » (défense en profondeur, côté serveur).
    *
-   * ⚠️ Portée EXACTE : il ne s'applique QUE quand le chemin déclaré est celui
-   * d'un modèle du CATALOGUE fermé (`/models/downloads/<id>/model.gguf`). Un
-   * GGUF personnel ou un moteur hors catalogue reste LIBRE (aucun blocage).
+   * ⚠️ Portée : il s'applique quand le `path` déclaré est RECONNU comme un
+   * modèle du catalogue fermé — soit par son chemin de téléchargement EXACT
+   * (`/models/downloads/<id>/model.gguf`), soit par le **basename** de son
+   * fichier (`chatterbox-q8_0.gguf`, casse libre) ou le nom de son dossier
+   * (`/models/downloads/<id>`, `Chatterbox-GGUF`…), ce qui couvre les fichiers
+   * déposés À LA MAIN. Un chemin INCONNU (GGUF personnel, moteur hors catalogue)
+   * reste LIBRE (aucun blocage).
    *
-   * Un fichier GGUF porte sa famille : si le catalogue a fourni ce chemin, sa
+   * Un fichier GGUF porte sa famille : quand le catalogue le reconnaît, sa
    * famille (et la tâche/le mode qu'il fixe) est la SEULE cohérente. Sans ce
    * contrôle, une `family` erronée ne serait détectée qu'au DÉMARRAGE du moteur
    * (« GGUF embeds model spec for family '…', not '…' »).
@@ -1053,19 +1140,24 @@ export class EngineConfigStore {
     enginePath: string,
     index: number,
   ): FieldError[] {
-    const spec = this.catalogByEnginePath.get(enginePath);
+    const spec = this.catalogSpecForPath(enginePath);
     if (!spec) return [];
     const label = entry.id.length > 0 ? `« ${entry.id} »` : "(sans identifiant)";
+    const file = (spec.recommendedFile ?? spec.expectedFile ?? "").trim();
+    const origin =
+      file.length > 0 && file.toLowerCase() !== spec.id.toLowerCase()
+        ? `reconnu comme le fichier « ${file} » du modèle de catalogue « ${spec.id} »`
+        : `reconnu comme le modèle de catalogue « ${spec.id} »`;
     const errors: FieldError[] = [];
     if (entry.family !== spec.family) {
       errors.push({
         path: `models[${index}].family`,
         code: "catalog_family_mismatch",
         message:
-          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », qui est celui ` +
-          `du modèle de catalogue « ${spec.id} » : sa famille doit être « ${spec.family} », ` +
-          `or elle est déclarée « ${entry.family} ». Corrigez la famille (choisissez ` +
-          `« ${spec.family} ») ou le chemin (ce fichier ne correspond pas à cette famille).`,
+          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », ${origin} : ` +
+          `sa famille doit être « ${spec.family} », or elle est déclarée « ${entry.family} ». ` +
+          `Corrigez la famille (choisissez « ${spec.family} ») ou le chemin (ce fichier ne ` +
+          `correspond pas à cette famille).`,
       });
     }
     if (entry.task !== spec.task) {
@@ -1073,9 +1165,9 @@ export class EngineConfigStore {
         path: `models[${index}].task`,
         code: "catalog_task_mismatch",
         message:
-          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », qui est celui ` +
-          `du modèle de catalogue « ${spec.id} » : sa tâche doit être « ${spec.task} », or elle ` +
-          `est déclarée « ${entry.task} ». Corrigez la tâche (choisissez « ${spec.task} ») ou le chemin.`,
+          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », ${origin} : ` +
+          `sa tâche doit être « ${spec.task} », or elle est déclarée « ${entry.task} ». ` +
+          `Corrigez la tâche (choisissez « ${spec.task} ») ou le chemin.`,
       });
     }
     if (entry.mode !== spec.mode) {
@@ -1083,9 +1175,9 @@ export class EngineConfigStore {
         path: `models[${index}].mode`,
         code: "catalog_mode_mismatch",
         message:
-          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », qui est celui ` +
-          `du modèle de catalogue « ${spec.id} » : son mode doit être « ${spec.mode} », or il ` +
-          `est déclaré « ${entry.mode} ». Corrigez le mode (choisissez « ${spec.mode} ») ou le chemin.`,
+          `L'entrée models[${index}] ${label} pointe le chemin « ${enginePath} », ${origin} : ` +
+          `son mode doit être « ${spec.mode} », or il est déclaré « ${entry.mode} ». ` +
+          `Corrigez le mode (choisissez « ${spec.mode} ») ou le chemin.`,
       });
     }
     return errors;

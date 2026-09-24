@@ -92,6 +92,27 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Dernier segment d'un chemin (`\\` et `/` acceptés). */
+function pathBasename(value) {
+  const segments = String(value)
+    .split(/[\\/]+/)
+    .filter((segment) => segment.length > 0);
+  return segments.length > 0 ? segments[segments.length - 1] : "";
+}
+
+/**
+ * Forme acceptée d'un `path` de modèle (MIROIR de `isModelPathShape` côté
+ * gateway) : un fichier `*.gguf` (casse libre) OU un dossier (nom sans
+ * extension de fichier, y compris un dossier versionné à points). Un nom qui
+ * ressemble à un FICHIER d'une autre extension est refusé.
+ */
+export function isModelPathShape(value) {
+  const base = pathBasename(value);
+  if (base.length === 0) return false;
+  if (base.toLowerCase().endsWith(".gguf")) return true;
+  return !/\.[A-Za-z0-9]{1,8}$/.test(base);
+}
+
 /**
  * Valide un brouillon de modèle. Renvoie `{ ok, errors }` où `errors` associe
  * chaque champ fautif à un message FRANÇAIS. Empêche précisément les erreurs
@@ -126,8 +147,8 @@ export function validateModelDraft(model) {
   const path = str(m.path);
   if (path.length === 0) {
     errors.path = "Chemin requis (choisissez un fichier présent sur le disque).";
-  } else if (!path.endsWith(".gguf")) {
-    errors.path = "Le fichier de modèle doit être un « .gguf ».";
+  } else if (!isModelPathShape(path)) {
+    errors.path = "Le fichier de modèle doit être un « .gguf » ou un dossier contenant le modèle.";
   }
   return { ok: Object.keys(errors).length === 0, errors };
 }
@@ -238,6 +259,89 @@ export function applyCatalogPrefill(models, prefill) {
   if (index === -1) next.push(fromCatalog);
   else next[index] = { ...next[index], ...fromCatalog };
   return next;
+}
+
+/**
+ * Index des `path` reconnus du catalogue, MIROIR de `catalogSpecForPath` côté
+ * gateway : chemin moteur exact, dossier de téléchargement, basename de fichier
+ * (casse libre) et nom de dossier amont (`dir`). Un chemin NON reconnu (GGUF
+ * personnel / moteur hors catalogue) n'est jamais indexé : il reste libre.
+ */
+function catalogPathIndex(catalogItems) {
+  const items = Array.isArray(catalogItems) ? catalogItems : [];
+  const byEnginePath = new Map();
+  const byEngineDir = new Map();
+  const byBasename = new Map();
+  const byDirName = new Map();
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    const enginePath = str(item.enginePath).replace(/\\/g, "/");
+    if (enginePath.length > 0) {
+      byEnginePath.set(enginePath, item);
+      // Dossier de téléchargement = chemin sans son dernier segment
+      // (`/models/downloads/<id>/model.gguf` → `/models/downloads/<id>`).
+      const slash = enginePath.lastIndexOf("/");
+      if (slash > 0) byEngineDir.set(enginePath.slice(0, slash), item);
+    }
+    const file = str(item.expectedFile).toLowerCase();
+    if (file.length > 0) byBasename.set(file, item);
+    const dir = str(item.dir).toLowerCase();
+    if (dir.length > 0) byDirName.set(dir, item);
+  }
+  return { byEnginePath, byEngineDir, byBasename, byDirName };
+}
+
+/** Résout la spécification de catalogue d'un `path` (priorité = gateway). */
+function resolveCatalogSpec(index, path) {
+  const normalized = str(path).replace(/\\/g, "/");
+  if (normalized.length === 0) return null;
+  const exact = index.byEnginePath.get(normalized);
+  if (exact) return exact;
+  const dir = index.byEngineDir.get(normalized);
+  if (dir) return dir;
+  const base = pathBasename(normalized).toLowerCase();
+  if (base.length === 0) return null;
+  return index.byBasename.get(base) ?? index.byDirName.get(base) ?? null;
+}
+
+/**
+ * REFUS côté client (avant tout aller-retour) : repère les entrées du brouillon
+ * dont la `family` est INCOHÉRENTE avec un `path` reconnu comme un modèle du
+ * catalogue (basename, dossier, chemin de téléchargement). Le serveur
+ * refuserait ce patch (400) — on l'explique AVANT la requête. Renvoie une liste
+ * vide quand tout est cohérent ou que les chemins sont inconnus.
+ *
+ * @param {Array} models brouillon `models[]`
+ * @param {Array} catalogItems entrées de `GET /api/tts/catalog`
+ */
+export function findCatalogFamilyIncoherence(models, catalogItems) {
+  const index = catalogPathIndex(catalogItems);
+  const list = Array.isArray(models) ? models : [];
+  const issues = [];
+  list.forEach((model, position) => {
+    const m = isRecord(model) ? model : {};
+    const path = str(m.path);
+    const family = str(m.family);
+    const spec = resolveCatalogSpec(index, path);
+    if (!spec) return;
+    const expected = str(spec.family);
+    if (expected.length === 0 || expected === family) return;
+    const id = str(spec.id);
+    const file = str(spec.expectedFile);
+    const origin =
+      file.length > 0 && file.toLowerCase() !== id.toLowerCase()
+        ? `reconnu comme le fichier « ${file} » du modèle de catalogue « ${id} »`
+        : `reconnu comme le modèle de catalogue « ${id} »`;
+    issues.push({
+      path: `models[${position}].family`,
+      code: "catalog_family_mismatch",
+      message:
+        `L'entrée models[${position}] pointe le chemin « ${path} », ${origin} : sa famille doit ` +
+        `être « ${expected} », or elle est déclarée « ${family} ». Corrigez la famille (choisissez ` +
+        `« ${expected} ») ou le chemin avant d'enregistrer.`,
+    });
+  });
+  return issues;
 }
 
 /**

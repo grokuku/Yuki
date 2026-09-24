@@ -1211,6 +1211,9 @@ ne disent plus « déposez-le pour l'instant » / « arrivera à l'étape suivan
 | **D82** | **`interrupted` n'est jamais un succès** : badge « Interrompu » (erreur) + « Réessayer ». | `describeDownloadStatus` `:126` |
 | **D83** | Bloc « à la main » **corrigé** : dépôt manuel **plus** requis pour les variantes du catalogue, **reste vrai** hors catalogue. | `buildManualSection` (tts-assistant.js) ; `describeModelsDir` |
 | **D84** | **Correctif du bug « Déclarer » (famille écrasée) + garde-fou famille ↔ fichier.** La déclaration part d'une base **AUTORITAIRE côté serveur** (`draftFromReport`) et applique le `prefill` **par `id`** (`applyCatalogPrefill`) ; l'enregistrement écrit CE brouillon **sans relecture DOM** (`saveEngineConfig({capture:false})`). Édition par entrée via `setModelField` (nouveau tableau, **aucune référence partagée**). Garde-fou serveur : un `path` **du catalogue** impose sa `family`/`task`/`mode` (400 sinon) ; un chemin **inconnu** reste libre. | `declareCatalogEntry` `public/ui/tts-assistant.js` ; `applyCatalogPrefill`/`setModelField` `public/ui/engine-config-patch.js` ; `checkCatalogCoherence` `src/tts/engine-config.ts` |
+| **D85** | **Élargissement du garde-fou D84 aux chemins MANUELS + signalement dans l'éditeur.** Le catalogue est indexé par chemin exact, dossier de téléchargement, **basename** de fichier (casse libre) et nom de dossier : un `path` reconnu impose sa `family`/`task`/`mode` (`400` sinon). Chemin/dossier **inconnu** libre. `GET /api/tts/engine-config` expose `coherenceIssues` par entrée (affiché sur la ligne, **avant** enregistrement) ; le garde-fou ne porte que sur le **patch entrant**, une config **déjà** cassée reste réparable. La cause d'origine de l'écriture fautive reste **non reproduite** (constat honnête). | `checkCatalogCoherence`/`catalogSpecForPath`/`isModelPathShape` `src/tts/engine-config.ts` ; `coherenceIssues` `report()` ; `renderModelRows` `public/ui/tts-assistant.js` ; §21 |
+| **D86** | **Piste « index dérivé du DOM » TRANCHÉE (fausse) + durcissement structurel + refus côté client + instrumentation.** L'éditeur n'utilise **AUCUN** index de position DOM : « Moteur actif (tts.engine) » est un **badge** `h("span")` **dans** la carte du modèle dont `id === engine`, pas une carte en plus ; `modelRowRefs`/`captureEngineDraft` sont **supprimés** (édition par entrée via `setModelField`, globales via `captureGlobals`) ; la déclaration cible par `id` (`applyCatalogPrefill`). **Refus côté client** (`findCatalogFamilyIncoherence`, miroir du garde-fou serveur) : un patch dont une `family` ne correspond pas au `path` reconnu n'est **pas envoyé**. Instrumentation : en-tête `x-yuki-config-flow` + journal `tts.engine_config.write`. | `renderModelRows`/`saveEngineConfig` `public/ui/tts-assistant.js` ; `findCatalogFamilyIncoherence` `public/ui/engine-config-patch.js` ; `configWriteFlow` `src/gateway/routes/config.ts` ; `handleEngineConfigPut`/`handleEngineConfigRevert` `src/gateway/routes/tts.ts` ; §22 |
+| **D87** | **`cancelRequested` est un état TRANSITOIRE.** Après une annulation, l'identifiant restait dans l'ensemble `cancelRequested` : un **nouveau** téléchargement du même modèle était mis en file puis abandonné au premier tour de `runTask` → la tâche restait `queued` **indéfiniment**. `start()` nettoie désormais l'entrée. | `TtsDownloadManager.start` `src/tts/downloads.ts:425` ; `runTask` `:595` ; test `tests/tts/downloads.test.ts` |
 
 #### À confirmer
 
@@ -1219,6 +1222,8 @@ ne disent plus « déposez-le pour l'instant » / « arrivera à l'étape suivan
 | **C49** | Le **catalogue `GET` est statique** (taille/licence au repli documentaire) : l'écart éventuel avec Hugging Face n'est connu qu'à la **résolution** (démarrage du transfert) et n'est pas réaffiché dans la ligne. | UI / honnêteté |
 | **C50** | **« Choisir comme moteur » n'exige pas de redémarrer le gateway** (écriture à chaud) mais **exige** de redémarrer le conteneur `tts` ; le message le dit sans le **forcer** (pas de blocage). À confirmer : faut-il proposer un rappel persistant tant que `tts.engine` a changé ? | UX |
 | **C51** | **Strictness du garde-fou pour les VARIANTES** : depuis D84, remplacer le fichier d'un chemin de catalogue par une variante à `task` différent (ex. Qwen `VoiceDesign` → `vdes`) est REFUSÉ tant que l'entrée ne suit pas le catalogue. À confirmer : assouplir `task` (garder `family`/`mode` stricts, la famille étant embarquée dans le GGUF) ? | UI / honnêteté |
+| **C52** | **Cause d'origine de l'entrée famille-écrasée NON reproduite** avec le code HEAD (D84 avait écarté la propagation inter-lignes ; D85 refuse et signale désormais l'état). Reste incertain : identifier l'écrivain historique fautif (état hérité d'une version antérieure au garde-fou). | Honnêteté / diagnostic |
+| **C53** | **L'écrivain historique exact reste inconnu** : la piste « index de position DOM » est **écartée** (§22.2, preuve par lecture) et deux reproductions du parcours réel ont échoué. La prochaine occurrence est désormais **capturable** par le journal `tts.engine_config.write` (flux + patch) — sans quoi on ne pourra trancher entre « ancienne version » et un chemin non encore envisagé. | Honnêteté / diagnostic |
 
 ### 19.8 Vérifications
 
@@ -1370,3 +1375,230 @@ Dans `/config`, onglet **Voix** → zone ⑤ → **Configuration du moteur** :
 
 En CLI (hôte) : éditer `server.json` (sauvegarde `server.json.bak` déjà présente)
 et corriger le `family` de l'entrée fautive, puis `docker restart yuki-tts`.
+
+## 21. Lacune du garde-fou D84 (chemins du catalogue seulement) — élargissement aux chemins manuels
+
+> **Signalement production PERSISTANT.** Malgré D84, le moteur refuse toujours de
+> démarrer :
+> `audiocpp_server failed: GGUF embeds model spec for family 'chatterbox', not
+> 'qwen3_tts'`.
+> Une entrée `models[]` déclare `family: "qwen3_tts"` alors que son `path`
+> (`/models/chatterbox-q8_0.gguf`) pointe un GGUF de **Chatterbox** déposé **à la
+> main**. Le fichier existe, la famille est fausse.
+
+### 21.1 Pourquoi D84 ne l'a pas détectée
+
+Le garde-fou `checkCatalogCoherence` (`src/tts/engine-config.ts`) n'indexait le
+catalogue QUE par **chemin de téléchargement exact**
+(`downloadEnginePath(id)` = `/models/downloads/<id>/model.gguf`). Un `path`
+**manuel** (`/models/chatterbox-q8_0.gguf`) n'était donc **jamais** reconnu ⇒
+aucun contrôle ⇒ la config invalide passait, et l'échec n'apparaissait qu'au
+**démarrage du moteur**. **Lacune confirmée par lecture** : la portée de D84 était
+volontairement limitée aux chemins de téléchargement (voir §20.3).
+
+### 21.2 Élargissement (D85)
+
+Le catalogue est désormais indexé de QUATRE façons (`EngineConfigStore`) :
+
+1. **chemin de téléchargement exact** (`/models/downloads/<id>/model.gguf`) — D84 ;
+2. **dossier de téléchargement** (`/models/downloads/<id>`) ;
+3. **basename de fichier** (`chatterbox-q8_0.gguf`, `cosyvoice3-q8_0.gguf`,
+   `qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf`, `kokoro-82m-q8_0.gguf`), **casse
+   libre** (`Chatterbox-Q8_0.GGUF`) ;
+4. **nom de dossier** (`<id>` ou dossier amont, p. ex. `Chatterbox-GGUF`).
+
+Dès qu'un `path` est reconnu, `family`/`task`/`mode` doivent correspondre au
+catalogue, sinon **`400 invalid_engine_config`**. Un chemin **inconnu** (GGUF
+personnel, moteur hors catalogue) et un **dossier inconnu** restent **LIBRES**.
+
+La validité de forme du `path` accepte aussi un **dossier** (nom sans extension
+de fichier, y compris versionné à points `Qwen3-…-1.7B-…`) en plus du fichier
+`*.gguf` (casse libre) — miroir UI `isModelPathShape`.
+
+Message exact FR (exemple du cas production, `models[0]`) :
+
+> L'entrée models[0] « chatterbox » pointe le chemin
+> « /models/chatterbox-q8_0.gguf », reconnu comme le fichier
+> « chatterbox-q8_0.gguf » du modèle de catalogue « chatterbox » : sa famille doit
+> être « chatterbox », or elle est déclarée « qwen3_tts ». Corrigez la famille
+> (choisissez « chatterbox ») ou le chemin (ce fichier ne correspond pas à cette
+> famille).
+
+### 21.3 Signalement dans l'éditeur (zone ⑤) et réparation
+
+`GET /api/tts/engine-config` expose, **par entrée**, `coherenceIssues` (vide =
+rien à signaler). L'éditeur affiche, **sur la ligne concernée** (`.tts-engine-config__coherence`)
+et **avant tout enregistrement**, « Configuration enregistrée incohérente — … »,
+plus un bandeau de synthèse. Le garde-fou porte sur le **patch ENTRANT**
+uniquement : une config **déjà** incohérente reste **éditable et réparable**
+(prouvé par test unitaire, intégration HTTP et E2E).
+
+`GET /api/tts/status` expose `declaredModelCount` / `declaredModelsIncoherent` :
+la zone ① (moteur injoignable) ajoute alors une **piste** (« N modèles sont
+déclarés… vérifiez la Configuration du moteur ») — **jamais** une cause affirmée.
+
+### 21.4 Audit des écrivains de `family` (honnêteté)
+
+Recensement et verdict (aucune écriture incohérente **silencieuse** trouvée) :
+
+| Écrivain | Fichier | Verdict |
+| --- | --- | --- |
+| `draftFromReport` | `tts-assistant.js` | copie la valeur **serveur** (lecture seule) |
+| `captureEngineDraft` | `tts-assistant.js` | relit les `<select>` (valeurs de la liste fermée) |
+| `<select>` famille | `tts-assistant.js` | options = `ENGINE_FAMILIES` (jamais hors liste) |
+| changement de famille → mode | `tts-assistant.js` (`setModelField`) | édite **une** entrée (nouveau tableau) |
+| `applyCatalogPrefill` | `engine-config-patch.js` | `family` = **celle du catalogue** (pré-remplissage serveur) |
+| `declareCatalogEntry` | `tts-assistant.js` | base serveur + `prefill` par `id`, `saveEngineConfig({capture:false})` |
+| `buildEnginePatch` | `engine-config-patch.js` | sérialise le brouillon tel quel (par entrée) |
+| `validateModelDraft` | `engine-config-patch.js` | refuse hors liste ; le serveur re-vérifie |
+| `applyPatch` | `engine-config.ts` | validation + garde-fou catalogue : une incohérence ⇒ `400` |
+| `validateEngineConfig` / `checkCatalogCoherence` | `engine-config.ts` | **lecture** seule |
+
+**Cause d'origine (honnêteté)** : la reproduction du chemin d'écriture exact qui a
+produit l'entrée cassée de l'utilisateur **n'a toujours pas été obtenue** avec le
+code HEAD (D84 avait écarté la propagation inter-lignes). Ce lot **constate** que
+la config fautive (chemin manuel) était **acceptée sans contrôle** — c'est
+désormais **refusé** et **signalé**. On ne prétend pas avoir identifié l'écrivain
+fautif d'origine.
+
+### 21.5 Tests
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **768 passed / 4 skipped** (avant : **751 / 4** ; **+17** : 9 `EngineConfigStore` chemins manuels, 4 intégration, 3 `describeTtsState`, 1 `describeEngineConfig`) |
+| `npm run typecheck` / `npm run build` | verts |
+| `node --check` (`tts-assistant.js`, `engine-config-patch.js`, `e2e-tts-ui.mjs`) | OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **75/75** ; **0 violation CSP** ; **0 exception JS** |
+| Vérifs E2E ajoutées | chemin **manuel** reconnu (basename) incohérent ⇒ `400` ; chemin **inconnu** ⇒ `200` ; config **déjà** incohérente ⇒ **signalée** dans l'éditeur **et** **réparée** |
+
+### 21.6 Correctif à appliquer par l'utilisateur
+
+Dans `/config`, onglet **Voix** → zone ⑤ → **Configuration du moteur**, l'entrée
+fautive est désormais **surlignée** (« Configuration enregistrée incohérente —
+… »). Corriger l'entrée :
+
+```json
+{
+  "id": "chatterbox",
+  "family": "chatterbox",
+  "task": "clon",
+  "mode": "offline",
+  "path": "/models/chatterbox-q8_0.gguf"
+}
+```
+
+Puis **Enregistrer la configuration du moteur** et **redémarrer le conteneur
+`tts`**. Le `family` doit être `chatterbox` (le fichier `chatterbox-q8_0.gguf`
+embarque la famille `chatterbox`), **jamais** `qwen3_tts`.
+
+## 22. Stabilisation après session interrompue — piste DOM tranchée, durcissement, instrumentation
+
+> Une session précédente a été **interrompue (timeout)** et son rapport n'est
+> jamais arrivé. Le bug de production **persiste** (une entrée `chatterbox` a
+> hérité de la famille `qwen3_tts` du moteur actif). Ce lot **établit l'état**,
+> **tranche la piste principale** et **pose un piège de diagnostic**.
+
+### 22.1 État de l'arbre (reprise)
+
+La session interrompue avait produit un travail **complet et vert**, conservé
+tel quel :
+
+- **D85** (garde-fou famille ↔ fichier étendu aux chemins manuels, `coherenceIssues`) ;
+- le **durcissement du brouillon par entrée** (`captureEngineDraft`/`modelRowRefs` supprimés) ;
+- le **correctif `cancelRequested`** (D87) ;
+- la **régression E2E D86** (parcours complet vérifié à chaque étape).
+
+Chiffres réels : `npm test` = **781 passed / 4 skipped** (baseline 768) ;
+`npm run typecheck` et `npm run build` **verts** ; `node --check` OK ; E2E
+`_tools/e2e-tts-ui.mjs` = **80/80**, **0 violation CSP**, **0 exception JS**.
+Les scripts de repro temporaires (`_tools/_repro*-tts-tmp.mjs`) et les PNG
+régénérés ont été retirés/restaurés (tree propre).
+
+### 22.2 Piste principale TRANCHÉE : l'index dérivé du DOM est FAUSSE
+
+**Verdict : faux.** Il n'existe **aucun** index de position DOM dans l'éditeur.
+
+Preuves par lecture (`fichier:ligne`) :
+
+1. La « carte supplémentaire » évoquée n'existe pas : « Moteur actif
+   (tts.engine) » est un **badge** (`h("span", …)`) **dans** la carte du modèle
+   dont `id === engine` — une seule carte est rendue par entrée
+   (`public/ui/tts-assistant.js:1339`, dans la boucle `forEach((model, index)`).
+2. Dans la version historique, `modelRowRefs` n'était poussé qu'**une fois par
+   ligne de modèle**, dans l'ordre du `forEach` ; `captureEngineDraft` le
+   `map`-ait ⇒ l'index DOM **égalait** l'index du tableau (aucun décalage). Le
+   badge ne pousse rien.
+3. Recherche exhaustive : **aucun** `data-index`, `indexOf`, `childNodes`,
+   `children[...]`, `selectedIndex`, `parentNode`/`closest` servant à dériver un
+   index vers `models[]`.
+
+Le durcissement D86 **supprime même** cette relecture DOM (voir §22.3) : le
+chemin d'écriture croisée est désormais **structurellement impossible**.
+
+### 22.3 Durcissement structurel (D86)
+
+- **Édition par entrée** : chaque contrôle écrit UNIQUEMENT le champ de SON
+  entrée (`setField` → `setModelField`, nouveau tableau, aucune référence
+  partagée) ; `selectInput` reçoit un `onChange` **par ligne**
+  (`public/ui/tts-assistant.js:1339,1345,1178`). Les **globales** passent par
+  `captureGlobals` (`:1214`) — plus **aucune** relecture DOM des `models[]`.
+- **Enregistrement fidèle au brouillon** : `saveEngineConfig` lit `engineDraft`
+  (`:1636`) ; la déclaration cible par `id` (`applyCatalogPrefill`).
+- **Refus côté client** (avant l'aller-retour) : `findCatalogFamilyIncoherence`
+  (`public/ui/engine-config-patch.js:317`) indexe le catalogue comme le serveur
+  (chemin exact, dossier de téléchargement, basename casse libre, nom de dossier
+  amont) et, dans `saveEngineConfig` (`:1661`), **n'envoie pas** un patch dont
+  une entrée a une `family` incohérente avec un `path` reconnu. Message exact
+  affiché (statut d'erreur de l'éditeur, section « Erreurs de validation ») :
+
+  > **Enregistrement refusé : une entrée a une famille incohérente avec son
+  > fichier. Corrigez la famille (ou le chemin) de la ligne signalée, puis
+  > enregistrez.**
+
+  Un chemin **inconnu** (GGUF personnel / moteur hors catalogue) reste **libre**,
+  comme côté serveur. Sans catalogue chargé, le serveur garde la main.
+
+### 22.4 Instrumentation (piège de diagnostic en production)
+
+Objectif : si l'entrée famille-écrasée se reproduit, les logs diront **quelle
+action** l'a écrite et **avec quel contenu**.
+
+- **En-tête de flux** : `x-yuki-config-flow` (assaini, borné ; valeur de repli
+  `unspecified` si absent → **compatibilité** préservée). Côté client, chaque
+  écriture le transmet explicitement :
+  `engine-editor-save`, `declare-model`, `revert-engine-config` (éditeur du
+  moteur), `activate-engine`, `enable-voice`, `config-save` (enregistrement
+  global `/api/config`).
+- **Journal serveur** : chaque écriture de `server.json` émet
+  `tts.engine_config.write` avec `flow`, `action` (`put`/`revert`), `result`
+  (`accepted`/`refused`/`invalid_json`), le `code` de refus, et le **patch borné**
+  (`modelCount`, jusqu'à 32 entrées `{id, family, task, mode, path}`, `globalKeys`)
+  — `src/gateway/routes/tts.ts:1094,1123,1162`. `/api/config` ajoute `flow` à
+  `config.changed` (`src/gateway/routes/config.ts`).
+- **Où lire les logs** : `docker compose logs gateway` (une ligne JSON par
+  écriture). Exemple :
+  ```json
+  {"ts":"…","level":"info","msg":"tts.engine_config.write","flow":"declare-model","action":"put","result":"accepted","modelCount":4,"models":[{"id":"chatterbox","family":"qwen3_tts","path":"/models/chatterbox-q8_0.gguf"}, …]}
+  ```
+- **Ce que l'utilisateur doit nous envoyer** si le bug se reproduit : la (les)
+  ligne(s) `tts.engine_config.write` (et `config.changed`) autour de l'incident,
+  avec le champ `flow` et le tableau `models` — c'est la **trace de l'écrivain**.
+
+### 22.5 Bug prérequis `cancelRequested` (D87)
+
+`cancel()` ajoutait l'identifiant à `cancelRequested` **sans jamais le retirer**.
+Un **nouveau** téléchargement du même modèle était mis en file puis abandonné dès
+la première ligne de `runTask` (`src/tts/downloads.ts:595`) → tâche bloquée
+`queued` **indéfiniment**. `start()` nettoie désormais l'entrée
+(`src/tts/downloads.ts:431`). Test de non-régression : annuler puis relancer
+aboutit à `done` (`tests/tts/downloads.test.ts`).
+
+### 22.6 Vérifications
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **781 passed / 4 skipped** (baseline : 768 / 4) |
+| `npm run typecheck` / `npm run build` | verts |
+| `node --check` (`tts-assistant.js`, `engine-config-patch.js`, `config.js`, `e2e-tts-ui.mjs`) | OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **80/80** ; **0 violation CSP** ; **0 exception JS** |
+| Vérifs ajoutées | **D86** parcours complet (3 entrées → télécharger → déclarer → **choisir le moteur** → enregistrer, familles vérifiées **écran + serveur à chaque étape**) ; refus client unitaire (8 cas) ; journalisation `tts.engine_config.write` (5 cas) ; `cancelRequested` (1 cas) |

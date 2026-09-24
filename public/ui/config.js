@@ -48,6 +48,15 @@ const WRITE_HEADERS = {
   "x-yuki-config": "1",
 };
 
+/**
+ * Identifiant de FLUX (diagnostic en production) transmis au serveur pour
+ * chaque écriture : le gateway journalise QUELLE action a demandé la
+ * modification (`activate-engine`, `enable-voice`, `config-save`…).
+ */
+function writeHeaders(flow) {
+  return { ...WRITE_HEADERS, "x-yuki-config-flow": flow };
+}
+
 /** Délai entre deux sondages de `/health/live` pendant un redémarrage. */
 const RESTART_POLL_MS = 1000;
 /** Délai maximal d'attente du retour du gateway avant d'annoncer l'échec. */
@@ -863,14 +872,14 @@ function applySnapshot(body) {
   updateAvailability();
 }
 
-async function save() {
+async function save(flow = "config-save") {
   saveStatus.textContent = "Enregistrement…";
   globalError.hidden = true;
   try {
     // Corps JSON envoyé en objet : la brique le sérialise et pose le
     // Content-Type ; les en-têtes maison (WRITE_HEADERS) sont préservés.
     const body = await HolafFetch.put("/api/config", {
-      headers: WRITE_HEADERS,
+      headers: writeHeaders(flow),
       body: buildPatch(),
     });
     applySnapshot(body);
@@ -907,7 +916,7 @@ async function enableVoiceShortcut() {
     state.pendingResets.delete("tts.enabled");
     updateDirtyIndicators();
   }
-  return save();
+  return save("enable-voice");
 }
 
 /**
@@ -927,7 +936,7 @@ async function activateEngineShortcut(id) {
     state.pendingResets.delete("tts.engine");
     updateDirtyIndicators();
   }
-  return save();
+  return save("activate-engine");
 }
 
 function showApplied(applied) {

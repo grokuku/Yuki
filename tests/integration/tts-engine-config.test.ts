@@ -59,9 +59,18 @@ interface Harness {
   configDir: string;
   modelsDir: string;
   store: EngineConfigStore;
+  /** Lignes de log capturées (uniquement si `options.logs` est fourni). */
+  logs: string[];
 }
 
-async function startHarness(options: { mountConfig?: boolean; noEngineConfig?: boolean; capabilityFetch?: typeof fetch } = {}): Promise<Harness> {
+async function startHarness(
+  options: {
+    mountConfig?: boolean;
+    noEngineConfig?: boolean;
+    capabilityFetch?: typeof fetch;
+    logs?: string[];
+  } = {},
+): Promise<Harness> {
   const root = tempDir("yuki-engine-config-int-");
   const configDir = join(root, "tts-config");
   const modelsDir = join(root, "models");
@@ -81,7 +90,12 @@ async function startHarness(options: { mountConfig?: boolean; noEngineConfig?: b
     YUKI_TTS_ENGINE_MODELS_DIR: "/models",
     YUKI_TTS_ENGINE_CONFIG_DIR: "/config",
   });
-  const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
+  const logger = createLogger({
+    // Niveau `info` seulement quand on CAPTURE les lignes (instrumentation).
+    level: options.logs ? "info" : "error",
+    sink: options.logs ? (line) => options.logs?.push(line) : () => {},
+    secretValues: [],
+  });
   const store = new EngineConfigStore({
     configDir,
     engineConfigDir: "/config",
@@ -151,6 +165,7 @@ async function startHarness(options: { mountConfig?: boolean; noEngineConfig?: b
     configDir,
     modelsDir,
     store,
+    logs: options.logs ?? [],
   };
 }
 
@@ -404,6 +419,210 @@ describe("PUT /api/tts/engine-config — garde-fou famille ↔ fichier du catalo
     expect(response.status).toBe(200);
     const written = JSON.parse(readFileSync(join(configDir, "server.json"), "utf8"));
     expect(written.models[1].family).toBe("qwen3_tts");
+  });
+});
+
+describe("PUT /api/tts/engine-config — garde-fou sur les chemins MANUELS", () => {
+  const MANUAL = "/models/chatterbox-q8_0.gguf";
+
+  function manualEntry(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "chatterbox",
+      family: "chatterbox",
+      task: "clon",
+      mode: "offline",
+      path: MANUAL,
+      ...overrides,
+    };
+  }
+
+  it("refuse une famille incohérente sur un chemin manuel reconnu (basename)", async () => {
+    const { baseUrl, configDir } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({ models: [manualEntry({ family: "qwen3_tts", task: "tts" })] }),
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as {
+      code: string;
+      message: string;
+      fields: Array<{ path: string; code: string; message: string }>;
+    };
+    expect(body.code).toBe("invalid_engine_config");
+    const field = body.fields.find((f) => f.code === "catalog_family_mismatch");
+    expect(field?.path).toBe("models[0].family");
+    // Nomme le fichier reconnu, la valeur attendue et la valeur reçue.
+    expect(field?.message).toContain("chatterbox-q8_0.gguf");
+    expect(field?.message).toContain("chatterbox");
+    expect(field?.message).toContain("qwen3_tts");
+    expect(field?.message).toContain(MANUAL);
+    expect(existsSync(join(configDir, "server.json"))).toBe(false);
+  });
+
+  it("accepte un chemin INCONNU (GGUF personnel / moteur hors catalogue)", async () => {
+    const { baseUrl, configDir } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({
+        models: [
+          { id: "perso", family: "kokoro_tts", task: "tts", mode: "streaming", path: "/models/mon-perso.gguf" },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const written = JSON.parse(readFileSync(join(configDir, "server.json"), "utf8"));
+    expect(written.models[0].family).toBe("kokoro_tts");
+  });
+
+  it("accepte la famille cohérente sur un chemin manuel reconnu", async () => {
+    const { baseUrl, configDir } = await startHarness();
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({ models: [manualEntry()] }),
+    });
+    expect(response.status).toBe(200);
+    const written = JSON.parse(readFileSync(join(configDir, "server.json"), "utf8"));
+    expect(written.models[0].family).toBe("chatterbox");
+  });
+
+  it("SIGNALE une config déjà incohérente SANS la bloquer, puis la RÉPARE", async () => {
+    const { baseUrl, configDir } = await startHarness();
+    // État cassé PERSISTÉ à la main (comme chez l'utilisateur) : un chemin
+    // chatterbox déclaré avec la famille « qwen3_tts ».
+    writeFileSync(
+      join(configDir, "server.json"),
+      `${JSON.stringify(
+        { models: [manualEntry({ family: "qwen3_tts", task: "tts" })] },
+        null,
+        2,
+      )}\n`,
+    );
+    // 1) La LECTURE signale l'incohérence (même si elle n'est pas bloquante).
+    const getResponse = await fetch(`${baseUrl}/api/tts/engine-config`);
+    expect(getResponse.status).toBe(200);
+    const report = (await getResponse.json()) as {
+      valid: boolean;
+      models: Array<{ id: string; coherenceIssues: Array<{ code: string; message: string }> }>;
+    };
+    expect(report.valid).toBe(true);
+    expect(report.models[0]?.coherenceIssues.length).toBeGreaterThan(0);
+    expect(report.models[0]?.coherenceIssues[0]?.code).toBe("catalog_family_mismatch");
+    // 2) L'enregistrement n'est PAS bloqué par l'état cassé : on répare.
+    const putResponse = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({ models: [manualEntry()] }),
+    });
+    expect(putResponse.status).toBe(200);
+    const written = JSON.parse(readFileSync(join(configDir, "server.json"), "utf8"));
+    expect(written.models[0].family).toBe("chatterbox");
+  });
+});
+
+describe("Instrumentation — chaque écriture du moteur journalise le FLUX + le patch", () => {
+  function writeLines(logs: string[]): Array<Record<string, unknown>> {
+    return logs
+      .map((line) => {
+        try {
+          return JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is Record<string, unknown> => entry !== null)
+      .filter((entry) => entry.msg === "tts.engine_config.write");
+  }
+
+  it("un PUT accepté journalise le flux, le résultat et le contenu borné du patch", async () => {
+    const logs: string[] = [];
+    const { baseUrl } = await startHarness({ logs });
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: { ...WRITE, "x-yuki-config-flow": "declare-model" },
+      body: JSON.stringify({ models: [VALID_MODEL] }),
+    });
+    expect(response.status).toBe(200);
+    const writes = writeLines(logs);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.flow).toBe("declare-model");
+    expect(writes[0]?.result).toBe("accepted");
+    expect(writes[0]?.action).toBe("put");
+    const models = writes[0]?.models as Array<Record<string, unknown>>;
+    expect(models[0]?.family).toBe("chatterbox");
+    expect(models[0]?.path).toBe("/models/chatterbox.gguf");
+    expect(writes[0]?.modelCount).toBe(1);
+  });
+
+  it("un refus journalise le flux, la raison et le patch (niveau warn)", async () => {
+    const logs: string[] = [];
+    const { baseUrl } = await startHarness({ logs });
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: { ...WRITE, "x-yuki-config-flow": "engine-editor-save" },
+      body: JSON.stringify({
+        models: [{ ...VALID_MODEL, family: "qwen3_tts", path: "/models/chatterbox-q8_0.gguf" }],
+      }),
+    });
+    expect(response.status).toBe(400);
+    const writes = writeLines(logs);
+    const refusal = writes.find((entry) => entry.result === "refused");
+    expect(refusal?.flow).toBe("engine-editor-save");
+    expect(refusal?.level).toBe("warn");
+    expect(refusal?.code).toBe("invalid_engine_config");
+    expect((refusal?.models as Array<Record<string, unknown>>)[0]?.path).toBe(
+      "/models/chatterbox-q8_0.gguf",
+    );
+  });
+
+  it("sans en-tête de flux, la valeur de repli est `unspecified` (compatibilité)", async () => {
+    const logs: string[] = [];
+    const { baseUrl } = await startHarness({ logs });
+    const response = await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: WRITE,
+      body: JSON.stringify({ models: [VALID_MODEL] }),
+    });
+    expect(response.status).toBe(200);
+    expect(writeLines(logs)[0]?.flow).toBe("unspecified");
+  });
+
+  it("un flux mal formé n'est jamais recopié tel quel (jeton borné)", async () => {
+    const logs: string[] = [];
+    const { baseUrl } = await startHarness({ logs });
+    await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: { ...WRITE, "x-yuki-config-flow": "bad flow with spaces!" },
+      body: JSON.stringify({ models: [VALID_MODEL] }),
+    });
+    expect(writeLines(logs)[0]?.flow).toBe("unspecified");
+  });
+
+  it("la restauration journalise aussi le flux", async () => {
+    const logs: string[] = [];
+    const { baseUrl } = await startHarness({ logs });
+    // Crée une sauvegarde via une première écriture, puis restaure.
+    await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: { ...WRITE, "x-yuki-config-flow": "engine-editor-save" },
+      body: JSON.stringify({ models: [VALID_MODEL] }),
+    });
+    await fetch(`${baseUrl}/api/tts/engine-config`, {
+      method: "PUT",
+      headers: { ...WRITE, "x-yuki-config-flow": "engine-editor-save" },
+      body: JSON.stringify({ models: [{ ...VALID_MODEL, id: "kokoro", family: "kokoro_tts", task: "tts", path: "/models/kokoro.gguf" }] }),
+    });
+    const response = await fetch(`${baseUrl}/api/tts/engine-config/revert`, {
+      method: "POST",
+      headers: { ...WRITE, "x-yuki-config-flow": "revert-engine-config" },
+    });
+    expect(response.status).toBe(200);
+    const reverts = writeLines(logs).filter((entry) => entry.action === "revert");
+    expect(reverts).toHaveLength(1);
+    expect(reverts[0]?.flow).toBe("revert-engine-config");
+    expect(reverts[0]?.result).toBe("accepted");
   });
 });
 

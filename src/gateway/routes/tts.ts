@@ -56,7 +56,7 @@ import type { DownloadTask } from "../../tts/downloads.js";
 import { VoiceStoreError } from "../../tts/voices-store.js";
 import type { Voice } from "../../tts/types.js";
 import type { Logger } from "../../observability/logger.js";
-import { requireWriteGuards, type ConfigHttpResponse } from "./config.js";
+import { configWriteFlow, requireWriteGuards, type ConfigHttpResponse } from "./config.js";
 
 /** Délai maximal de la sonde `/health` et de `/v1/models` (court, non bloquant). */
 export const TTS_PROBE_TIMEOUT_MS = 1_500;
@@ -110,6 +110,17 @@ export interface TtsEngineReport {
   modelCountSource: "health" | "models" | null;
   /** Explication honnête de la décision d'état (déduction / indétermination). */
   readinessNote: string | null;
+  /**
+   * Nombre d'entrées DÉCLARÉES dans `server.json` (lecture seule, `null` si la
+   * configuration du moteur n'est pas câblée). Sert à l'assistant pour orienter
+   * le diagnostic quand le moteur est injoignable — jamais une cause inventée.
+   */
+  declaredModelCount?: number | null;
+  /**
+   * Nombre d'entrées déclarées dont la famille ne correspond PAS au fichier
+   * reconnu par le catalogue (`null` si non calculable).
+   */
+  declaredModelsIncoherent?: number | null;
 }
 
 export interface TtsModelEntry {
@@ -961,12 +972,44 @@ export function inspectModelsDir(dir: string): TtsDiskReport {
   };
 }
 
+/**
+ * Résumé de la configuration DÉCLARÉE (lecture seule) pour l'assistant :
+ * nombre d'entrées et combien ont une famille incohérente avec leur fichier
+ * reconnu. `null` si la configuration du moteur n'est pas câblée ou illisible —
+ * jamais une cause inventée : ces nombres ne servent qu'à ORIENTER l'utilisateur.
+ */
+function declaredModelsSummary(deps: TtsApiDeps): {
+  declaredModelCount: number | null;
+  declaredModelsIncoherent: number | null;
+} {
+  if (!deps.engineConfig) {
+    return { declaredModelCount: null, declaredModelsIncoherent: null };
+  }
+  try {
+    const models = deps.engineConfig.report().models;
+    return {
+      declaredModelCount: models.length,
+      declaredModelsIncoherent: models.filter(
+        (model) => model.coherenceIssues.length > 0,
+      ).length,
+    };
+  } catch (error) {
+    deps.logger.warn("tts.status.declared_failed", { error: messageOf(error) });
+    return { declaredModelCount: null, declaredModelsIncoherent: null };
+  }
+}
+
 async function handleStatus(deps: TtsApiDeps): Promise<ConfigHttpResponse> {
   // 200 GARANTI : la route de diagnostic n'échoue jamais et n'est jamais
   // bloquante (sondes bornées par timeout, cache court).
+  const declared = declaredModelsSummary(deps);
   try {
     const report = await deps.diagnostics.status();
-    return json(200, { ...report, modelsDir: inspectModelsDir(deps.modelsDir) });
+    return json(200, {
+      ...report,
+      ...declared,
+      modelsDir: inspectModelsDir(deps.modelsDir),
+    });
   } catch (error) {
     deps.logger.warn("tts.status.failed", { error: messageOf(error) });
     const enabled = deps.config.getString("tts.enabled") === "on";
@@ -985,6 +1028,7 @@ async function handleStatus(deps: TtsApiDeps): Promise<ConfigHttpResponse> {
       readinessInferred: false,
       modelCountSource: null,
       readinessNote: null,
+      ...declared,
       modelsDir: inspectModelsDir(deps.modelsDir),
     });
   }
@@ -1033,14 +1077,59 @@ function engineConfigErrorResponse(error: unknown, deps: TtsApiDeps): ConfigHttp
   });
 }
 
+/** Nombre maximal d'entrées `models[]` journalisées (contenu BORNÉ). */
+const ENGINE_CONFIG_LOG_LIMIT = 32;
+
+/** Vrai pour un objet JSON simple (jamais un tableau ni `null`). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Résumé BORNÉ du patch d'écriture du moteur, pour le journal de diagnostic.
+ * Objectif : si l'entrée famille-écrasée se reproduit, savoir QUELLE action l'a
+ * écrite ET avec quel contenu (id/family/task/mode/path par entrée). Aucune
+ * donnée sensible ; jamais le document complet.
+ */
+function summarizeEngineConfigPatch(patch: unknown): Record<string, unknown> {
+  if (!isPlainObject(patch)) return { patchKind: typeof patch };
+  const summary: Record<string, unknown> = {};
+  if (Array.isArray(patch.models)) {
+    const models = patch.models;
+    summary.modelCount = models.length;
+    summary.models = models.slice(0, ENGINE_CONFIG_LOG_LIMIT).map((entry) =>
+      isPlainObject(entry)
+        ? {
+            id: typeof entry.id === "string" ? entry.id : null,
+            family: typeof entry.family === "string" ? entry.family : null,
+            task: typeof entry.task === "string" ? entry.task : null,
+            mode: typeof entry.mode === "string" ? entry.mode : null,
+            path: typeof entry.path === "string" ? entry.path : null,
+          }
+        : { invalid: true },
+    );
+    if (models.length > ENGINE_CONFIG_LOG_LIMIT) summary.modelsTruncated = true;
+  } else if (patch.models !== undefined) {
+    summary.models = "invalid";
+  }
+  if (isPlainObject(patch.globals)) {
+    summary.globalKeys = Object.keys(patch.globals).slice(0, ENGINE_CONFIG_LOG_LIMIT);
+  } else if (patch.globals !== undefined) {
+    summary.globals = "invalid";
+  }
+  return summary;
+}
+
 function handleEngineConfigPut(input: TtsRequestInput): ConfigHttpResponse {
   const guard = requireWriteGuards(input.headers);
   if (guard) return guard;
   if (!input.deps.engineConfig) return engineConfigUnavailable();
+  const flow = configWriteFlow(input.headers);
   let patch: unknown;
   try {
     patch = input.body.length === 0 ? {} : JSON.parse(input.body.toString("utf8"));
   } catch {
+    input.deps.logger.warn("tts.engine_config.write", { flow, action: "put", result: "invalid_json" });
     return json(400, {
       error: "invalid_json",
       code: "invalid_json",
@@ -1049,8 +1138,23 @@ function handleEngineConfigPut(input: TtsRequestInput): ConfigHttpResponse {
     });
   }
   try {
-    return json(200, input.deps.engineConfig.applyPatch(patch));
+    const report = input.deps.engineConfig.applyPatch(patch);
+    input.deps.logger.info("tts.engine_config.write", {
+      flow,
+      action: "put",
+      result: "accepted",
+      ...summarizeEngineConfigPatch(patch),
+    });
+    return json(200, report);
   } catch (error) {
+    input.deps.logger.warn("tts.engine_config.write", {
+      flow,
+      action: "put",
+      result: "refused",
+      code: error instanceof EngineConfigError ? error.code : "engine_config_failed",
+      error: messageOf(error),
+      ...summarizeEngineConfigPatch(patch),
+    });
     return engineConfigErrorResponse(error, input.deps);
   }
 }
@@ -1059,9 +1163,23 @@ function handleEngineConfigRevert(input: TtsRequestInput): ConfigHttpResponse {
   const guard = requireWriteGuards(input.headers);
   if (guard) return guard;
   if (!input.deps.engineConfig) return engineConfigUnavailable();
+  const flow = configWriteFlow(input.headers);
   try {
-    return json(200, input.deps.engineConfig.revert());
+    const report = input.deps.engineConfig.revert();
+    input.deps.logger.info("tts.engine_config.write", {
+      flow,
+      action: "revert",
+      result: "accepted",
+    });
+    return json(200, report);
   } catch (error) {
+    input.deps.logger.warn("tts.engine_config.write", {
+      flow,
+      action: "revert",
+      result: "refused",
+      code: error instanceof EngineConfigError ? error.code : "engine_config_failed",
+      error: messageOf(error),
+    });
     return engineConfigErrorResponse(error, input.deps);
   }
 }

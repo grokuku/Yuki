@@ -425,6 +425,10 @@ export class TtsDownloadManager {
           `(état : ${existing.status}).`,
       );
     }
+    // Une annulation PRÉCÉDENTE est un état TRANSITOIRE : sans ce nettoyage, un
+    // nouveau téléchargement du même modèle resterait `queued` à jamais (le
+    // `runTask` l'abandonnerait dès la première ligne, cf. `cancelRequested`).
+    this.cancelRequested.delete(catalogId);
 
     // Résolution HF AVANT toute écriture (source de vérité : nom, taille, SHA).
     let resolved: ResolvedPackage;
