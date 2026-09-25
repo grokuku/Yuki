@@ -32,8 +32,16 @@ import { dirname, join, resolve, sep } from "node:path";
 import { validateVoiceSample } from "./wav.js";
 import type { Voice } from "./types.js";
 
-/** Taille maximale d'un corps d'upload de voix (D20, spec §10.4). */
-export const MAX_VOICE_BODY_BYTES = 3_000_000;
+/**
+ * Taille maximale d'un corps d'upload de voix (D20/D88, spec §10.4).
+ *
+ * **Cohérent avec `MAX_VOICE_DURATION_SECONDS = 30`** (`./wav.js`) : 30 s en
+ * mono 16 bits 48 kHz ≈ 2,88 Mo, et en **stéréo** 16 bits 48 kHz ≈ 5,76 Mo —
+ * les deux tiennent sous 6 Mo. Une limite plus basse rendrait la durée annoncée
+ * **inatteignable** pour un WAV stéréo (d'où D88). Formats non couverts au-delà
+ * (stéréo 24/32 bits, fréquence > 48 kHz) : convertir en mono 24 kHz.
+ */
+export const MAX_VOICE_BODY_BYTES = 6_000_000;
 /** Nombre maximal de voix CLONÉES (quota, spec §10.3). */
 export const DEFAULT_MAX_VOICES = 20;
 /** Somme maximale des octets des voix CLONÉES (quota, spec §10.3). */

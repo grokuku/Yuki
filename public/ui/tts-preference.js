@@ -79,7 +79,10 @@ export function createTtsPreference(storage = defaultStorage()) {
  *
  * @param {{ serverEnabled: boolean, muted: boolean }} input
  * @returns {{ state: "off"|"muted"|"on", audible: boolean, pressed: boolean,
- *   icon: string, label: string, hint: string }}
+ *   label: string, hint: string }}
+ *   L'ICÔNE n'est plus une chaîne ici : le bouton porte deux SVG inline
+ *   (haut-parleur / barré) et son état (`off`/`muted`/`on`) choisit lequel est
+ *   visible (classes `tts-toggle--off`/`--muted`, voir app.js + styles.css).
  */
 export function resolveSpeechState({ serverEnabled, muted }) {
   if (!serverEnabled) {
@@ -87,7 +90,6 @@ export function resolveSpeechState({ serverEnabled, muted }) {
       state: "off",
       audible: false,
       pressed: false,
-      icon: "🔇",
       label: "Voix désactivée (TTS serveur inactif)",
       hint: "Le TTS est désactivé côté serveur : activez-le dans la configuration, puis redémarrez Yuki.",
     };
@@ -97,7 +99,6 @@ export function resolveSpeechState({ serverEnabled, muted }) {
       state: "muted",
       audible: false,
       pressed: false,
-      icon: "🔇",
       label: "Réactiver la voix",
       hint: "Voix en sourdine sur ce navigateur.",
     };
@@ -106,7 +107,6 @@ export function resolveSpeechState({ serverEnabled, muted }) {
     state: "on",
     audible: true,
     pressed: true,
-    icon: "🔊",
     label: "Couper la voix",
     hint: "Voix active : la réponse est lue à voix haute.",
   };

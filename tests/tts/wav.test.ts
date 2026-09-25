@@ -11,9 +11,11 @@ import {
   readWavInfo,
   validateVoiceSample,
 } from "../../src/tts/wav.js";
+import { MAX_VOICE_BODY_BYTES } from "../../src/tts/voices-store.js";
 import { makeWav } from "./wav-fixture.js";
 
-const MAX = 3_000_000;
+/** Limite de taille RÉELLE (celle du store) : la cohérence est ainsi testée. */
+const MAX = MAX_VOICE_BODY_BYTES;
 
 describe("readWavInfo", () => {
   it("lit l'en-tête d'un WAV PCM mono 16 bits", () => {
@@ -72,17 +74,57 @@ describe("validateVoiceSample", () => {
     expect(result).toMatchObject({ ok: false, code: "not_wav" });
   });
 
-  it("refuse une durée supérieure à la borne", () => {
+  it("refuse une durée juste au-dessus de la borne (message exact)", () => {
     const result = validateVoiceSample(
-      makeWav({ seconds: MAX_VOICE_DURATION_SECONDS + 2 }),
+      makeWav({ seconds: MAX_VOICE_DURATION_SECONDS + 0.5 }),
       { maxBytes: MAX },
     );
     expect(result).toMatchObject({ ok: false, code: "too_long" });
+    if (result.ok) throw new Error("aurait dû échouer");
+    expect(result.message).toBe(
+      `Durée trop longue : ${(MAX_VOICE_DURATION_SECONDS + 0.5).toFixed(1)} s reçues, ` +
+        `maximum ${MAX_VOICE_DURATION_SECONDS} s. ` +
+        `Coupez l'échantillon à ${MAX_VOICE_DURATION_SECONDS} s ou moins, ` +
+        `ou convertissez-le en mono 24 kHz.`,
+    );
   });
 
-  it("refuse au-delà de la taille maximale", () => {
-    const result = validateVoiceSample(makeWav({ seconds: 1 }), { maxBytes: 10 });
+  it("accepte une durée juste sous la borne", () => {
+    const result = validateVoiceSample(
+      makeWav({ seconds: MAX_VOICE_DURATION_SECONDS - 0.5 }),
+      { maxBytes: MAX },
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuse au-delà de la taille maximale (message exact)", () => {
+    const result = validateVoiceSample(Buffer.alloc(MAX + 1), { maxBytes: MAX });
     expect(result).toMatchObject({ ok: false, code: "too_large" });
+    if (result.ok) throw new Error("aurait dû échouer");
+    expect(result.message).toContain(`6.0 Mo (${MAX + 1} octets) reçus`);
+    expect(result.message).toContain(`maximum 6 Mo (${MAX} octets)`);
+  });
+
+  it("cohérence durée↔taille : 30 s stéréo 48 kHz 16 bits tient sous la limite", () => {
+    const wav = makeWav({
+      seconds: MAX_VOICE_DURATION_SECONDS,
+      sampleRate: 48_000,
+      channels: 2,
+      bitsPerSample: 16,
+    });
+    expect(wav.byteLength).toBeLessThanOrEqual(MAX);
+    expect(validateVoiceSample(wav, { maxBytes: MAX }).ok).toBe(true);
+  });
+
+  it("cohérence durée↔taille : 30 s mono 24 kHz 16 bits tient largement", () => {
+    const wav = makeWav({
+      seconds: MAX_VOICE_DURATION_SECONDS,
+      sampleRate: 24_000,
+      channels: 1,
+      bitsPerSample: 16,
+    });
+    expect(wav.byteLength).toBeLessThanOrEqual(MAX);
+    expect(validateVoiceSample(wav, { maxBytes: MAX }).ok).toBe(true);
   });
 
   it("refuse un format compressé (non PCM)", () => {

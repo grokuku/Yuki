@@ -21,7 +21,7 @@ import { detectGpus } from "../../src/gpu/detect.js";
 import { runGate } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
-import { VoiceStore, VoiceReferenceError } from "../../src/tts/voices-store.js";
+import { VoiceStore, VoiceReferenceError, MAX_VOICE_BODY_BYTES } from "../../src/tts/voices-store.js";
 import type { Voice } from "../../src/tts/types.js";
 import { makeWav } from "../tts/wav-fixture.js";
 
@@ -232,28 +232,49 @@ describe("POST /api/voices/clone", () => {
     expect((await response.json()) as { code: string }).toMatchObject({ code: "not_wav" });
   });
 
-  it("refuse un WAV de plus de 10 s (422)", async () => {
+  it("refuse un WAV de plus de 30 s (422, message exact)", async () => {
     const { baseUrl } = await startHarness();
     const response = await fetch(`${baseUrl}/api/voices/clone`, {
       method: "POST",
       headers: { ...WRITE, "x-voice-label": "X", "content-type": "audio/wav" },
-      body: makeWav({ seconds: 11 }),
+      body: makeWav({ seconds: 31 }),
     });
     expect(response.status).toBe(422);
-    expect((await response.json()) as { code: string }).toMatchObject({ code: "too_long" });
+    const body = (await response.json()) as { code: string; message: string };
+    expect(body).toMatchObject({ code: "too_long" });
+    expect(body.message).toContain("31.0 s reçues");
+    expect(body.message).toContain("maximum 30 s");
   });
 
-  it("refuse un corps au-delà de MAX_VOICE_BODY_BYTES (413)", async () => {
+  it("accepte un WAV de 30 s stéréo 48 kHz 16 bits (durée atteignable, 201)", async () => {
+    const { baseUrl } = await startHarness();
+    const wav = makeWav({
+      seconds: 30,
+      sampleRate: 48_000,
+      channels: 2,
+      bitsPerSample: 16,
+    });
+    expect(wav.byteLength).toBeLessThanOrEqual(MAX_VOICE_BODY_BYTES);
+    const response = await fetch(`${baseUrl}/api/voices/clone`, {
+      method: "POST",
+      headers: { ...WRITE, "x-voice-label": "Longue", "content-type": "audio/wav" },
+      body: wav,
+    });
+    expect(response.status).toBe(201);
+  });
+
+  it("refuse un corps au-delà de MAX_VOICE_BODY_BYTES (413, message exact)", async () => {
     const { baseUrl } = await startHarness();
     const response = await fetch(`${baseUrl}/api/voices/clone`, {
       method: "POST",
       headers: { ...WRITE, "x-voice-label": "X", "content-type": "audio/wav" },
-      body: Buffer.alloc(3_000_001),
+      body: Buffer.alloc(MAX_VOICE_BODY_BYTES + 1),
     });
     expect(response.status).toBe(413);
-    expect((await response.json()) as { code: string }).toMatchObject({
-      code: "body_too_large",
-    });
+    const body = (await response.json()) as { code: string; message: string };
+    expect(body).toMatchObject({ code: "body_too_large" });
+    expect(body.message).toContain(`${MAX_VOICE_BODY_BYTES + 1} octets reçus`);
+    expect(body.message).toContain(`maximum ${MAX_VOICE_BODY_BYTES} octets (6 Mo)`);
   });
 
   it("applique le quota de voix clonées (429)", async () => {

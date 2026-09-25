@@ -14,7 +14,7 @@
  * (`requireWriteGuards`, réutilisé de `config.ts` comme `admin.ts`).
  *
  * L'upload est un **corps binaire** (`audio/wav`) ; les métadonnées passent par
- * des en-têtes. La limite de corps dédiée `MAX_VOICE_BODY_BYTES` (3 Mo) est
+ * des en-têtes. La limite de corps dédiée `MAX_VOICE_BODY_BYTES` (6 Mo) est
  * appliquée en amont par `src/gateway/app.ts`.
  */
 

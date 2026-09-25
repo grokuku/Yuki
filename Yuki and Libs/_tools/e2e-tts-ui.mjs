@@ -221,6 +221,13 @@ async function shot(name) {
   console.log(`📷 capture : _tools/shots/${name}.png`);
 }
 
+/** Capture RECADRÉE (zoom sur une zone) — utile pour illustrer une icône. */
+async function shotClip(name, clip) {
+  const res = await send("Page.captureScreenshot", { format: "png", clip });
+  writeFileSync(join(SHOTS, name + ".png"), Buffer.from(res.data, "base64"));
+  console.log(`📷 capture : _tools/shots/${name}.png`);
+}
+
 /* ═══════════════════════ Page chat `/` ═══════════════════════════════════ */
 console.log("\n═══ PAGE / (chat) ═══");
 await navigate(BASE + "/");
@@ -236,7 +243,16 @@ const READ_CHAT = `(() => {
     hasToggle: !!t,
     pressed: t ? t.getAttribute("aria-pressed") : null,
     label: t ? t.getAttribute("aria-label") : null,
-    icon: t ? t.textContent : null,
+    iconSvg: t ? !!t.querySelector("svg.icon") : false,
+    iconStroke: t ? t.querySelector("svg.icon")?.getAttribute("stroke") ?? null : null,
+    iconOn: (() => {
+      const el = t?.querySelector(".icon--volume");
+      return el ? getComputedStyle(el).display !== "none" : null;
+    })(),
+    iconOff: (() => {
+      const el = t?.querySelector(".icon--volume-off");
+      return el ? getComputedStyle(el).display !== "none" : null;
+    })(),
     title: t ? t.title : null,
     className: t ? t.className : null,
     statusHidden: s ? s.hidden : null,
@@ -251,9 +267,10 @@ const READ_CHAT = `(() => {
 let s = await evaluate(READ_CHAT);
 check("[/] contrôle voix présent dans la topbar", s.hasToggle);
 check(
-  "[/] serveur TTS on + non sourd → bouton pressé, icône 🔊, libellé « couper »",
-  s.pressed === "true" && s.icon === "🔊" && /couper/i.test(s.label),
-  `pressed=${s.pressed} icon=${s.icon} label=${s.label}`,
+  "[/] serveur TTS on + non sourd → bouton pressé, icône haut-parleur SVG, libellé « couper »",
+  s.pressed === "true" && s.iconSvg && s.iconStroke === "currentColor" &&
+    s.iconOn === true && s.iconOff === false && /couper/i.test(s.label),
+  `pressed=${s.pressed} svg=${s.iconSvg} stroke=${s.iconStroke} on=${s.iconOn} off=${s.iconOff} label=${s.label}`,
 );
 
 await evaluate(`document.getElementById("tts-toggle").click()`);
@@ -455,6 +472,35 @@ check(
   JSON.stringify(tabKey),
 );
 
+/* — Couleur des icônes : `currentColor` + `--icon-color` par élément — */
+const iconColor = await evaluate(`(() => {
+  const back = document.querySelector('.nav-back');
+  const icon = back?.querySelector('.icon');
+  const cs = (el) => (el ? getComputedStyle(el).color : null);
+  document.documentElement.setAttribute('data-theme', 'indigo-dark');
+  const dark = { icon: cs(icon), text: cs(back) };
+  document.documentElement.setAttribute('data-theme', 'emerald-light');
+  const light = { icon: cs(icon), text: cs(back) };
+  document.documentElement.setAttribute('data-theme', 'indigo-dark');
+  return {
+    dark, light,
+    stroke: icon?.getAttribute('stroke') ?? null,
+    styleAttrs: document.querySelectorAll('[style]').length,
+  };
+})()`);
+check(
+  "[/config] icône : `--icon-color` (accent) distincte du texte + `stroke=currentColor`, 0 style inline",
+  iconColor.stroke === "currentColor" && iconColor.dark.icon !== iconColor.dark.text &&
+    iconColor.styleAttrs === 0,
+  JSON.stringify(iconColor),
+);
+check(
+  "[/config] icônes : couleur pilotée par le thème (data-theme), sans style inline",
+  iconColor.dark.icon !== iconColor.light.icon && iconColor.dark.text !== iconColor.light.text &&
+    iconColor.styleAttrs === 0,
+  JSON.stringify({ dark: iconColor.dark, light: iconColor.light }),
+);
+
 /* — Routage par hash : ouverture directe de /config#voix. — */
 // Passe par un autre document d'abord : /config → /config#voix serait une
 // navigation même-document (pas de rechargement, donc pas de test du hash
@@ -535,6 +581,18 @@ async function shotPreset(preset) {
 }
 for (const preset of ["indigo-dark", "indigo-light", "emerald-dark", "emerald-light"]) {
   await shotPreset(preset);
+}
+
+/* — Captures RAPPROCHÉES des icônes (topbar) dans plusieurs thèmes :
+ *   flèche de retour (SVG, `--icon-color: var(--accent)`) et bascule de mode
+ *   (soleil/lune SVG en `currentColor`). */
+async function shotIcons(preset) {
+  await evaluate(`document.documentElement.setAttribute("data-theme", ${JSON.stringify(preset)})`);
+  await sleep(120);
+  await shotClip(`config-icons-${preset}`, { x: 0, y: 0, width: 1280, height: 58, scale: 2 });
+}
+for (const preset of ["indigo-dark", "indigo-light", "emerald-dark", "emerald-light"]) {
+  await shotIcons(preset);
 }
 
 /* — Modale de clonage (HolafModal) — */

@@ -18,8 +18,16 @@
 
 const JSON_HEADERS = { accept: "application/json" };
 const WRITE_HEADERS = { "x-yuki-config": "1" };
-/** Limite serveur de l'échantillon (D20, §10.4) : 3 Mo. */
-export const MAX_VOICE_BODY_BYTES = 3_000_000;
+/**
+ * Limites serveur de l'échantillon de clonage (D20/D88, §10.3/§10.4).
+ * Doivent rester alignées sur `MAX_VOICE_DURATION_SECONDS` (`src/tts/wav.ts`) et
+ * `MAX_VOICE_BODY_BYTES` (`src/tts/voices-store.ts`).
+ */
+export const MAX_VOICE_BODY_BYTES = 6_000_000;
+export const MAX_VOICE_DURATION_SECONDS = 30;
+
+/** Libellé court des limites, pour les textes d'aide et d'erreur. */
+const LIMITS_LABEL = `durée ≤ ${MAX_VOICE_DURATION_SECONDS} s, taille ≤ ${MAX_VOICE_BODY_BYTES / 1_000_000} Mo`;
 
 /** Petit helper DOM (aucun `style=` : uniquement des attributs). */
 function h(tag, props = {}, children = []) {
@@ -53,9 +61,9 @@ function apiErrorMessage(error) {
   const serverMessage = data.message ?? data.error;
   switch (status) {
     case 413:
-      return "Fichier trop volumineux (maximum 3 Mo).";
+      return `Fichier trop volumineux (maximum ${MAX_VOICE_BODY_BYTES / 1_000_000} Mo).`;
     case 422:
-      return serverMessage || "Format invalide : WAV PCM de 10 s maximum requis.";
+      return serverMessage || `Format invalide : WAV PCM de ${MAX_VOICE_DURATION_SECONDS} s maximum requis.`;
     case 429:
       return serverMessage || "Quota de voix clonées atteint.";
     case 409:
@@ -416,7 +424,9 @@ export function initVoicesPanel(deps) {
         class: "config-helper",
         text:
           "Upload de fichier uniquement (pas d'enregistrement micro). " +
-          "WAV PCM, durée ≤ 10 s, taille ≤ 3 Mo.",
+          `WAV PCM, ${LIMITS_LABEL}. ` +
+          "Le moteur n'exploite que le début (~10 s) pour le timbre fin : " +
+          "un extrait plus court suffit.",
       }),
       h("div", { class: "voices-form__actions" }, [localPreview]),
       modalStatus,
@@ -481,7 +491,7 @@ export function initVoicesPanel(deps) {
       return false;
     }
     if (file.size > MAX_VOICE_BODY_BYTES) {
-      modalStatus.textContent = "Fichier trop volumineux (maximum 3 Mo).";
+      modalStatus.textContent = `Fichier trop volumineux (maximum ${MAX_VOICE_BODY_BYTES / 1_000_000} Mo).`;
       return false;
     }
     modalStatus.textContent = "Clonage en cours…";

@@ -25,16 +25,49 @@
             <option value="emerald">Émeraude</option>
             <option value="amber">Ambre</option>
           </select>
-          <button id="theme-toggle" type="button" aria-label="Passer en mode clair" aria-pressed="true">☾</button>
+          <!--
+            Icônes MONOCHROMES en SVG inline (`stroke="currentColor"`) : leur
+            couleur suit celle du texte et reste réglable par élément via
+            `--icon-color` (CSP : markup, aucun style inline, aucun `<img>`).
+            Les deux (soleil/lune) sont présents ; le mode (`data-theme`) décide
+            lequel est visible (voir styles.css).
+
+            Tracés SOURCÉS sur https://icons0.dev/ via son API
+            `GET /api/icons?q=lucide:<nom>` (collection « Lucide »).
+            Licence Lucide : ISC — Copyright (c) 2026 Lucide Icons and
+            Contributors ; certains tracés (ex. lune) dérivent de Feather,
+            (c) 2013-present Cole Bemis (MIT). Attribution complète des notices
+            et du texte de licence : docs/lot9.md §24.7.
+          -->
+          <button id="theme-toggle" type="button" aria-label="Passer en mode clair" aria-pressed="true">
+            <svg class="icon icon--sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+            </svg>
+            <svg class="icon icon--moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path>
+            </svg>
+          </button>
         </div>
         <span class="theme-control">
+          <!-- Voix : haut-parleur / haut-parleur barré selon l'état effectif
+               (`tts-toggle--off`/`--muted` posés par app.js). Tracés sourcés
+               sur https://icons0.dev/ (`lucide:volume-2` / `lucide:volume-x`,
+               collection « Lucide », licence ISC — voir docs/lot9.md §24.7). -->
           <button
             id="tts-toggle"
             type="button"
             aria-label="Couper la voix"
             aria-pressed="false"
             title="Voix"
-          >🔇</button>
+          >
+            <svg class="icon icon--volume" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM16 9a5 5 0 0 1 0 6m3.364 3.364a9 9 0 0 0 0-12.728"></path>
+            </svg>
+            <svg class="icon icon--volume-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+              <path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM22 9l-6 6m0-6l6 6"></path>
+            </svg>
+          </button>
         </span>
         <span id="tts-status" class="tts-status" role="status" aria-live="polite" hidden></span>
       </div>

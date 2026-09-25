@@ -30,6 +30,10 @@
   background: var(--panel-2);
   color: var(--text);
   text-decoration: none;
+  /* Couleur de l'icône (flèche SVG) réglée PAR ÉLÉMENT : accent, tandis que
+     le texte reste `--text`. La variable `--icon-color` est héritée (voir
+     `.icon` dans styles.css) et ne touche pas le libellé. */
+  --icon-color: var(--accent);
 }
 
 .nav-back:hover {

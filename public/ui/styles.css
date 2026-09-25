@@ -210,6 +210,72 @@ a.pill:hover {
   color: var(--muted);
 }
 
+/* ─── Icônes SVG monochromes (système de couleur) ────────────────────────
+ * Toutes les icônes de l'UI sont des SVG inline `stroke="currentColor"` :
+ * elles n'ont AUCUNE couleur codée en dur, elles héritent de `color` du
+ * contexte. Pour régler la couleur PAR ÉLÉMENT, on pose la variable
+ * `--icon-color` sur n'importe quel conteneur (elle est HÉRITÉE) :
+ *
+ *   .mon-bouton { --icon-color: var(--accent); }   → toutes ses icônes
+ *   .mon-icone  { --icon-color: var(--danger); }    → une icône précise
+ *
+ * Sans `--icon-color`, le repli `currentColor` fait que l'icône suit le texte
+ * (donc `--text`, `--muted`, `--danger`… selon l'élément). Aucun `style=`,
+ * aucune couleur dans le SVG lui-même (CSP `style-src 'self'`).
+ */
+.icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  vertical-align: -0.125em;
+  fill: none;
+  stroke: currentColor;
+  color: var(--icon-color, currentColor);
+  pointer-events: none;
+}
+
+.icon--accent {
+  --icon-color: var(--accent);
+}
+
+.icon--muted {
+  --icon-color: var(--muted);
+}
+
+.icon--danger {
+  --icon-color: var(--danger);
+}
+
+/* Bascule soleil ↔ lune selon le mode porté par `data-theme="<fam>-<mode>"`.
+ * Défaut = sombre (lune). Aucun JS nécessaire : le CSS suit l'attribut. */
+#theme-toggle .icon--sun {
+  display: none;
+}
+
+:root[data-theme$="-light"] #theme-toggle .icon--sun {
+  display: inline-block;
+}
+
+:root[data-theme$="-light"] #theme-toggle .icon--moon {
+  display: none;
+}
+
+/* Bascule haut-parleur ↔ barré selon l'état effectif posé par app.js. */
+#tts-toggle .icon--volume-off {
+  display: none;
+}
+
+#tts-toggle.tts-toggle--off .icon--volume,
+#tts-toggle.tts-toggle--muted .icon--volume {
+  display: none;
+}
+
+#tts-toggle.tts-toggle--off .icon--volume-off,
+#tts-toggle.tts-toggle--muted .icon--volume-off {
+  display: inline-block;
+}
+
 .tts-status {
   font-size: 12px;
   color: var(--muted);

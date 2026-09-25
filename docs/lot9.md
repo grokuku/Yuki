@@ -1214,6 +1214,7 @@ ne disent plus « déposez-le pour l'instant » / « arrivera à l'étape suivan
 | **D85** | **Élargissement du garde-fou D84 aux chemins MANUELS + signalement dans l'éditeur.** Le catalogue est indexé par chemin exact, dossier de téléchargement, **basename** de fichier (casse libre) et nom de dossier : un `path` reconnu impose sa `family`/`task`/`mode` (`400` sinon). Chemin/dossier **inconnu** libre. `GET /api/tts/engine-config` expose `coherenceIssues` par entrée (affiché sur la ligne, **avant** enregistrement) ; le garde-fou ne porte que sur le **patch entrant**, une config **déjà** cassée reste réparable. La cause d'origine de l'écriture fautive reste **non reproduite** (constat honnête). | `checkCatalogCoherence`/`catalogSpecForPath`/`isModelPathShape` `src/tts/engine-config.ts` ; `coherenceIssues` `report()` ; `renderModelRows` `public/ui/tts-assistant.js` ; §21 |
 | **D86** | **Piste « index dérivé du DOM » TRANCHÉE (fausse) + durcissement structurel + refus côté client + instrumentation.** L'éditeur n'utilise **AUCUN** index de position DOM : « Moteur actif (tts.engine) » est un **badge** `h("span")` **dans** la carte du modèle dont `id === engine`, pas une carte en plus ; `modelRowRefs`/`captureEngineDraft` sont **supprimés** (édition par entrée via `setModelField`, globales via `captureGlobals`) ; la déclaration cible par `id` (`applyCatalogPrefill`). **Refus côté client** (`findCatalogFamilyIncoherence`, miroir du garde-fou serveur) : un patch dont une `family` ne correspond pas au `path` reconnu n'est **pas envoyé**. Instrumentation : en-tête `x-yuki-config-flow` + journal `tts.engine_config.write`. | `renderModelRows`/`saveEngineConfig` `public/ui/tts-assistant.js` ; `findCatalogFamilyIncoherence` `public/ui/engine-config-patch.js` ; `configWriteFlow` `src/gateway/routes/config.ts` ; `handleEngineConfigPut`/`handleEngineConfigRevert` `src/gateway/routes/tts.ts` ; §22 |
 | **D87** | **`cancelRequested` est un état TRANSITOIRE.** Après une annulation, l'identifiant restait dans l'ensemble `cancelRequested` : un **nouveau** téléchargement du même modèle était mis en file puis abandonné au premier tour de `runTask` → la tâche restait `queued` **indéfiniment**. `start()` nettoie désormais l'entrée. | `TtsDownloadManager.start` `src/tts/downloads.ts:425` ; `runTask` `:595` ; test `tests/tts/downloads.test.ts` |
+| **D88** | **Durée de clonage élargie à 30 s, taille à 6 Mo (couple cohérent).** Le moteur **ne rejette pas** les références longues : il **tronque** le prompt fin à **10 s** (prompt mel S3Gen, `DEC_COND_LEN`) et **6 s** (tokens de prompt T3, `ENC_COND_LEN`), mais calcule l'embedding d'identité (VoiceEncoder) sur **toute** la référence. 30 s est donc un choix de **confort** (au-dessus de 20 s), et `MAX_VOICE_BODY_BYTES` passe à **6 Mo** pour que 30 s **stéréo** 48 kHz 16 bits (≈ 5,76 Mo) reste atteignable. Messages de refus nomment **limite**, **valeur reçue**, **valeur autorisée** + sortie. §23. | `MAX_VOICE_DURATION_SECONDS` `src/tts/wav.ts` ; `MAX_VOICE_BODY_BYTES` `src/tts/voices-store.ts` ; `conditionals.h:13-14`/`conditionals.cpp` (amont) ; `src/chatterbox/tts.py:107-194` ; tests `tests/tts/wav.test.ts`/`tests/integration/voices-api.test.ts` ; UI `public/ui/voices-panel.js` ; §23 |
 
 #### À confirmer
 
@@ -1224,6 +1225,7 @@ ne disent plus « déposez-le pour l'instant » / « arrivera à l'étape suivan
 | **C51** | **Strictness du garde-fou pour les VARIANTES** : depuis D84, remplacer le fichier d'un chemin de catalogue par une variante à `task` différent (ex. Qwen `VoiceDesign` → `vdes`) est REFUSÉ tant que l'entrée ne suit pas le catalogue. À confirmer : assouplir `task` (garder `family`/`mode` stricts, la famille étant embarquée dans le GGUF) ? | UI / honnêteté |
 | **C52** | **Cause d'origine de l'entrée famille-écrasée NON reproduite** avec le code HEAD (D84 avait écarté la propagation inter-lignes ; D85 refuse et signale désormais l'état). Reste incertain : identifier l'écrivain historique fautif (état hérité d'une version antérieure au garde-fou). | Honnêteté / diagnostic |
 | **C53** | **L'écrivain historique exact reste inconnu** : la piste « index de position DOM » est **écartée** (§22.2, preuve par lecture) et deux reproductions du parcours réel ont échoué. La prochaine occurrence est désormais **capturable** par le journal `tts.engine_config.write` (flux + patch) — sans quoi on ne pourra trancher entre « ancienne version » et un chemin non encore envisagé. | Honnêteté / diagnostic |
+| **C54** | **Gain QUALITATIF d'une référence > 10 s non mesuré.** Au-delà de 10 s, le prompt fin est **tronqué** ; seule la passe VoiceEncoder voit la référence complète. On ne peut donc pas affirmer ici qu'un clip de 20 s rend un meilleur clonage qu'un clip de 10 s (ni l'inverse) : non vérifiable **sans le moteur réel** (GPU). | Honnêteté / qualité |
 
 ### 19.8 Vérifications
 
@@ -1602,3 +1604,368 @@ aboutit à `done` (`tests/tts/downloads.test.ts`).
 | `node --check` (`tts-assistant.js`, `engine-config-patch.js`, `config.js`, `e2e-tts-ui.mjs`) | OK |
 | E2E `_tools/e2e-tts-ui.mjs` | **80/80** ; **0 violation CSP** ; **0 exception JS** |
 | Vérifs ajoutées | **D86** parcours complet (3 entrées → télécharger → déclarer → **choisir le moteur** → enregistrer, familles vérifiées **écran + serveur à chaque étape**) ; refus client unitaire (8 cas) ; journalisation `tts.engine_config.write` (5 cas) ; `cancelRequested` (1 cas) |
+
+## 23. Durée des échantillons de clonage — élargissement cohérent (D88)
+
+> **Demande utilisateur** : cloner une voix depuis un échantillon de **19,8 s**,
+> refusé par « Durée maximale : 10 s (reçu 19.8 s) » ; « est-ce gênant
+> d'augmenter la durée d'échantillonnage ? ».
+
+### 23.1 Le moteur a-t-il une limite dure ? — **NON** (troncature, pas rejet)
+
+Le code source amont le prouve, **en Python** (référence) **et** dans le portage
+C++ `audio.cpp` (moteur effectivement exécuté) :
+
+- **Python** — `src/chatterbox/tts.py` (et `mtl_tts.py`) :
+  ```python
+  ENC_COND_LEN = 6 * S3_SR        #  6 s @ 16 kHz =  96 000 échantillons
+  DEC_COND_LEN = 10 * S3GEN_SR    # 10 s @ 24 kHz = 240 000 échantillons
+  ...
+  s3gen_ref_wav = s3gen_ref_wav[:self.DEC_COND_LEN]        # prompt mel S3Gen
+  t3_cond_prompt_tokens, _ = s3_tokzr.forward([ref_16k_wav[:self.ENC_COND_LEN]], max_len=plen)  # tokens T3
+  ve_embed = self.ve.embeds_from_wavs([ref_16k_wav], sample_rate=S3_SR)   # VoiceEncoder = RÉFÉRENCE ENTIÈRE
+  ```
+- **C++ (`audio.cpp`)** — `include/engine/models/chatterbox/conditionals.h:13-14` :
+  ```cpp
+  int64_t encoder_condition_samples = 6 * 16000;
+  int64_t decoder_condition_samples = 10 * 24000;
+  ```
+  et `src/models/chatterbox/conditionals.cpp:79-95` :
+  ```cpp
+  auto generator_audio  = trim_audio(reference_audio_24k, config_.decoder_condition_samples); // 10 s
+  auto tokenizer_audio  = trim_audio(reference_audio_16k, config_.encoder_condition_samples); //  6 s
+  const auto & voice_encoder_audio = reference_audio_16k;                                     // entier
+  ```
+- Le commentaire du portage le confirme : *« Use the full 16 kHz reference for
+  VoiceEncoder speaker embedding. Use only the first ENC_COND_LEN samples for T3
+  prompt speech tokens. »* (`conditionals.cpp:71-75`).
+- `s3gen.py:136` n'émet qu'un **avertissement** (`print("WARNING: s3gen received
+  ref longer than 10s")`) si la référence dépasse 10 s **avant** la troncature —
+  **jamais** une erreur.
+
+**Conclusion attestée** : aucune borne dure. La référence **au-delà de 10 s** est
+**acceptée** par le moteur ; seuls le **prompt fin** (timbre/prosodie local, 10 s)
+et les **tokens de prompt T3** (6 s, plafonnés à `speech_cond_prompt_len = 150`)
+sont **tronqués**, tandis que l'**embedding d'identité** (VoiceEncoder) voit
+**toute** la référence. **La limite « 10 s » de Yuki était un choix de Yuki**
+(estimation documentaire « 3–10 s »), pas une contrainte du moteur. On peut donc
+autoriser davantage.
+
+### 23.2 Effets d'une référence plus longue — prouvé vs plausible
+
+| Effet | Statut | Détail |
+| --- | --- | --- |
+| **Préparation** : une fois par (voix, `exaggeration`, langue), puis **cache** | **Prouvé** | `audio.cpp` `ChatterboxSession::prepare` met en cache les conditionals (clé = référence + exaggeration + langue ; `conditionals_cache_slots` défaut **1**, `session.cpp:327-454`). Un **changement de voix** provoque un retraitement. |
+| **Temps de préparation au-delà de 10 s** : seule la passe **VoiceEncoder** grandit | **Prouvé** | `conditionals.cpp` : mel/tokenizer bornés à 10 s/6 s ; le VoiceEncoder travaille sur `reference_audio_16k` **entier**. |
+| **VRAM** : les conditionals restent **bornés** (≤ 10 s) | **Prouvé** (par le code) | `prompt_mel`/`prompt_tokens` sont issus du signal **tronqué** ; l'embedding d'identité est de taille **fixe**. Le surcoût d'un clip long n'est qu'un **tampon transitoire** de rééchantillonnage. |
+| **Qualité** : un clip de 20 s fait **mieux** qu'un clip de 10 s | **Plausible, NON prouvé** | Le prompt fin ne voit que les 10 premières s ; seule la moyenne VoiceEncoder change. Non mesurable ici (GPU absent) — voir **C54**. |
+| **Qualité** : un clip de 24 kHz mono suffit au moteur | **Prouvé** | Le moteur rééchantillonne (24 kHz pour le mel, 16 kHz pour le tokenizer). |
+
+### 23.3 Nouvelles limites (couple cohérent)
+
+- `MAX_VOICE_DURATION_SECONDS = 10` → **30** (`src/tts/wav.ts`).
+  **Justification** : au-dessus des 19,8 s de l'utilisateur, avec marge pour un
+  enregistrement réel ; le moteur n'impose aucune borne, et la troncature interne
+  à 10 s/6 s n'est pas une raison de refuser.
+- `MAX_VOICE_BODY_BYTES = 3_000_000` → **6_000_000** (`src/tts/voices-store.ts`).
+  **Justification** : rendre la durée annoncée **atteignable** (sinon l'utilisateur
+  lirait « ≤ 30 s » puis serait bloqué par la taille).
+
+**Preuve de cohérence (calcul)** — `dataSize = floor(sr × s) × canaux × (bits/8)` :
+
+| Format (30 s) | Taille | Sous 6 Mo ? |
+| --- | --- | --- |
+| mono 16 bits 48 kHz | 2 880 044 o | ✅ |
+| mono 16 bits 24 kHz | 1 440 044 o | ✅ |
+| **stéréo 16 bits 48 kHz** | **5 760 044 o** | ✅ |
+| stéréo 16 bits 44,1 kHz | 5 292 044 o | ✅ |
+| stéréo 24 bits 48 kHz | 8 640 044 o | ❌ → convertir en **mono 24 kHz** |
+
+**Preuve par test** : `tests/tts/wav.test.ts` accepte **30 s stéréo 48 kHz 16 bits**
+et **30 s mono 24 kHz** ; `tests/integration/voices-api.test.ts` crée une voix de
+**30 s stéréo 48 kHz** (HTTP **201**). Les deux limites restent **indépendantes** :
+un dépassement de **durée** seule ⇒ `too_long` ; de **taille** seule ⇒ `too_large`.
+
+### 23.4 Messages de refus (avant → après)
+
+- **422 `too_long`**
+  - avant : `Durée maximale : 10 s (reçu 19.8 s).`
+  - après : `Durée trop longue : 19.8 s reçues, maximum 30 s. Coupez l'échantillon à 30 s ou moins, ou convertissez-le en mono 24 kHz.`
+- **422 `too_large`** (store / appels directs)
+  - avant : `Échantillon trop volumineux (maximum 3000000 octets).`
+  - après : `Échantillon trop volumineux : 6.0 Mo (6000001 octets) reçus, maximum 6 Mo (6000000 octets). Convertissez-le en WAV mono 24 kHz 16 bits (bien plus léger).`
+- **413 `body_too_large`** (limite HTTP de l'upload)
+  - avant : `Corps trop volumineux (maximum 3000000 octets).`
+  - après : `Échantillon trop volumineux : 6000001 octets reçus, maximum 6000000 octets (6 Mo). Réduisez la durée (≤ 30 s) ou convertissez-le en mono 24 kHz 16 bits.`
+
+Chaque message nomme la **limite**, la **valeur reçue**, la **valeur autorisée**
+et la **sortie** — sans inventer de cause.
+
+### 23.5 UI
+
+`public/ui/voices-panel.js` : constantes `MAX_VOICE_BODY_BYTES = 6_000_000` /
+`MAX_VOICE_DURATION_SECONDS = 30` ; texte d'aide de la modale
+(`WAV PCM, durée ≤ 30 s, taille ≤ 6 Mo. Le moteur n'exploite que le début (~10 s)
+pour le timbre fin : un extrait plus court suffit.`) ; repli 413/422 et
+pré-contrôle de taille alignés. Aucun `style=` (CSP stricte respectée).
+
+### 23.6 Vérifications
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **785 passed / 4 skipped** (baseline **781 / 4** ; **+4** : 3 validation WAV, 1 API) |
+| `npm run typecheck` / `npm run build` | verts |
+| `node --check public/ui/voices-panel.js` | OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **80/80** ; **0 violation CSP** ; **0 exception JS** (captures restaurées) |
+| Tests ajoutés | bornes **basse et haute** de durée, message exact `too_long` ; message exact `too_large` ; 2 tests de **cohérence durée↔taille** ; API : 30 s stéréo 48 kHz accepté (201), 31 s refusé (422), corps > 6 Mo refusé (413) |
+
+### 23.7 Non vérifiable sans le moteur réel
+
+Le **gain qualitatif** d'une référence > 10 s (C54) et le **temps de préparation**
+réel sur GPU : `tests/chatterbox/*_bench.py` et l'E2E n'exécutent pas le moteur
+(la qualité acoustique n'est pas testable en headless — spec §13). Les faits de
+troncature et de cache sont, eux, **prouvés par le code**.
+
+## 24. UI — icônes SVG `currentColor` / `--icon-color` (source icons0.dev) ; **navigation clavier et transitions RETIRÉES**
+
+> **Demandes utilisateur** (lot d'interface) : ① « avec les flèches on navigue
+> entre les onglets » ; ② transitions distinctes (glissement au clavier, fondu
+> au clic) ; ③ « les icônes … sont affichées en blanc … régler la couleur de
+> l'icône par élément ».
+>
+> **Résultat final** : ② et le durcissement de ① sont **RETIRÉS** (hors périmètre
+> Yuki, D92) ; ③ est **conservé** et ses SVG sont désormais **sourcés sur
+> `https://icons0.dev/`** (D93). La navigation clavier **d'origine** de ① est
+> restaurée et fonctionne.
+
+### 24.1 État réel AVANT modification (prouvé)
+
+**① Navigation clavier : ELLE EXISTAIT DÉJÀ.** Le gestionnaire vivait sur le
+`tablist` (`public/ui/config.js`, ancien
+`tablistEl.addEventListener("keydown", …)`) et gérait `←`/`→`/`↑`/`↓` +
+`Home`/`End`. Il ne s'activait QUE si `document.activeElement` était un
+`[role=tab]` (`tabButtons.indexOf(...) === -1` ⇒ `return`). L'E2E le prouvait
+déjà (check « flèche gauche change d'onglet », **80/80** avant ce lot).
+
+**Pourquoi l'utilisateur ne le constatait pas** : le focus doit d'abord être
+SUR un onglet (touche `Tab` pour atteindre la barre). Si le focus est ailleurs
+(corps de page, panneau, champ), les flèches ne font rien (ou défilent / changent
+la valeur d'un `<select>`). La barre n'annonce pas ce comportement.
+
+**② Icônes : il n'y a AUCUN `<svg>` dans l'UI** (`grep -rn "<svg" public/` → 0).
+Les « icônes » perçues sont des **glyphes Unicode/emoji** :
+
+| Icône | Emplacement | Couleur actuelle |
+| --- | --- | --- |
+| `☾`/`☀` (mode) | `public/ui/index.html`, `config.html`, `theme.js:syncControls` | glyphe, suivait `color` (`--text`/`--accent`) |
+| `🔇`/`🔊` (voix) | `public/ui/index.html`, `tts-preference.js:resolveSpeechState`, `app.js:refreshTtsToggle` | **emoji** posé par `textContent` — NON recolorable |
+| `←` (retour) | `public/ui/config.html` | glyphe, `color` |
+| `✕` (fermer) | `public/ui/vendor/holaf/holaf-modal.js` | glyphe (brique vendorisée, non modifiée) |
+
+En l'absence de police emoji couleur (cas de Chromium headless, et de
+l'utilisateur), ces glyphes se rendent en **monochrome** et, sur un thème sombre
+(`--text` quasi blanc), **en blanc** : c'est exactement ce que décrit
+l'utilisateur. Le seul moyen de rendre les emoji **réglables** est de les
+remplacer par du SVG `currentColor`.
+
+### 24.2 Navigation clavier — durcissement RETIRÉ (demande ①)
+
+> ⛔ **RETIRÉ — hors périmètre Yuki.** Ce durcissement (D89) a été livré sur
+> Yuki **par erreur**, en même temps qu'un lot destiné à **un autre projet**
+> (l'utilisateur a demandé : « ne touche pas aux autres projets, et ici ne garde
+> que les SVG »). Il est **intégralement retiré** ; le gestionnaire **d'origine**
+> est restauré — la navigation clavier **existait avant** et **fonctionne
+> toujours** (vérifié E2E, §24.5).
+
+- **D89 — ~~Délégation clavier élargie à `.config-tabs`~~ (RETIRÉ).** Le
+  gestionnaire d'origine — écoute `keydown` sur `.config-tablist[role="tablist"]`,
+  verrou `tabButtons.indexOf(document.activeElement) === -1` — est **restauré**
+  (`public/ui/config.js`). Sont supprimés : `holdsArrowKeys`, `tabIndexOfActive`,
+  l'écoute déléguée sur `.config-tabs`, le garde `defaultPrevented` et la gestion
+  `Alt`/`Ctrl`/`Meta`. `aria-selected`, roving `tabindex`, focus visible,
+  `Home`/`End` et mise à jour du `hash` (`replaceState`) restent en place
+  (comportement **d'origine**, prouvé E2E).
+
+- **D92 — Retrait acté (navigation clavier + transitions).** Décision : le
+  durcissement clavier (D89) **et** les transitions d'onglets (D90) sont
+  **hors périmètre Yuki** et retirés. Seul le **système d'icônes SVG** (D91/D93)
+  de ce lot est conservé. Aucun autre projet n'a été touché.
+
+### 24.3 Transitions d'onglets — RETIRÉES (demande ②)
+
+> ⛔ **RETIRÉ — hors périmètre Yuki** (même lot que D89, livré par erreur).
+> Retour à une **bascule simple par `hidden`**.
+
+- **D90 — ~~Clavier = glissement directionnel, clic = fondu enchaîné~~ (RETIRÉ).**
+  Supprimés : `playTabTransition`/`clearTabTransition` (`public/ui/config.js`),
+  l'option `transition` de `selectTab`, les classes `config-panels--animating`/
+  `--forward`/`--backward`/`--fade`, les attributs `data-transition` et les
+  `@keyframes yuki-tab-*` + `@media (prefers-reduced-motion)` associé
+  (`public/ui/config.css`), ainsi que la gestion `inert`/`aria-hidden` liée.
+  `activateTab` ne pose plus que `aria-selected`/`tabindex`/`hidden` → **bascule
+  simple par `hidden`**. `git grep` sur ces symboles : **aucun résidu** (§24.5).
+
+### 24.4 Couleur des icônes (demande ③)
+
+- **D91 — Icônes monochromes en SVG inline `stroke="currentColor"`, couleur
+  réglable PAR ÉLÉMENT via `--icon-color` (héritée).** Les emoji `🔇`/`🔊` et les
+  glyphes `☾`/`☀`/`←` sont remplacés par des SVG (haut-parleur/barré, soleil/lune,
+  flèche). `.icon { color: var(--icon-color, currentColor) }` (+ utilitaires
+  `--accent`/`--muted`/`--danger`) : sans `--icon-color`, l'icône suit `color` du
+  contexte ; avec, n'importe quel conteneur la surcharge (ex.
+  `.nav-back { --icon-color: var(--accent) }`). L'état visuel suit le thème
+  (`:root[data-theme$="-light"]`) ou l'état du bouton (`.tts-toggle--off`/`--muted`),
+  **sans JS** et sans `style=`. Preuve : `public/ui/styles.css` (`.icon`) ;
+  `public/ui/index.html`/`config.html` (SVG) ; `public/ui/config.css`
+  (`--icon-color`) ; `public/ui/theme.js`/`app.js` (plus de `textContent`) ;
+  `public/ui/tts-preference.js` (champ `icon` retiré).
+
+- **D93 — Tracés SVG SOURCÉS sur `https://icons0.dev/` (collection « Lucide », ISC).**
+  Les SVG ne sont plus « dessinés à la main » : ils viennent de l'**API**
+  `GET https://icons0.dev/api/icons?q=lucide:<nom>` — `lucide:sun`, `lucide:moon`,
+  `lucide:volume-2`, `lucide:volume-x`, `lucide:arrow-left` (HTTP 200, `body` SVG
+  récupéré le 2026-09-25) — qui interroge 200k+ icônes de 150+ collections
+  open-source (backend **Iconify**). Intégration **inchangée** : `currentColor`,
+  `.icon`, `--icon-color`, bascules CSS par thème/état, **aucun `style=`**, CSP
+  stricte. **Attribution** (licence **ISC** de Lucide) : notice de copyright en
+  **commentaire HTML** dans `public/ui/index.html`/`config.html` + **texte
+  complet du ISC et provenance en §24.7**.
+
+**Ce que « couleur par élément » permet concrètement** :
+
+1. **Par contexte (héritage `currentColor`)** : une icône dans un libellé
+   `--muted` prend la couleur du libellé ; dans un bouton accent, elle prend
+   l'accent — sans rien écrire.
+2. **Par conteneur (`--icon-color`)** : poser `--icon-color: var(--danger)` sur
+   une carte colore TOUTES ses icônes (variable CSS héritée).
+3. **Par icône** : les utilitaires `.icon--accent`/`.icon--muted`/`.icon--danger`
+   posent `--icon-color` sur un seul SVG.
+
+**Ce qu'il faudrait pour un réglage PAR L'UTILISATEUR** (proposé, NON ajouté) :
+un **champ de configuration** ne peut PAS convenir tel quel — le schéma n'accepte
+que `string|int|enum` (pas de booléen/flottant/couleur). Deux voies réalistes :
+
+- **enum de couleurs sémantiques** (`ui.iconColor` : `auto|accent|muted|text`)
+  mappé côté CSS sur `--icon-color` (le plus simple, cohérent avec les 10 thèmes) ;
+- **chaîne de couleur libre** (`ui.iconColor: "#rrggbb"`) imposerait de POSER une
+  variable CSS par élément via le CSSOM/`style=`, incompatible avec la CSP stricte
+  (sauf `<style>` généré, refusé). La voie enum est retenue comme la seule propre
+  sous CSP ; aucun champ n'est ajouté sans besoin explicite.
+
+### 24.5 Vérifications
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **788 passed / 4 skipped** (baseline **790 / 4** ; **+5** au lot icônes/transitions, **−2** tests de transitions retirés) |
+| `npm run typecheck` / `npm run build` | verts |
+| `node --check` (`config.js`, `theme.js`, `app.js`, `tts-preference.js`, `e2e-tts-ui.mjs`) | OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **82/82** (avant retrait : **89/89** ; avant le lot : **80/80**) ; **0 violation CSP** ; **0 exception JS** |
+| Vérifs E2E **conservées** | navigation clavier **d'origine** (flèche gauche → onglet précédent, focus + `hash`), couleur d'icône (`--icon-color` accent ≠ texte, `stroke=currentColor`, pilotée par `data-theme`, 0 `style`), et **toutes** les autres gardes (téléchargement, config moteur, CSP…) |
+| Vérifs E2E **retirées** | glissement `forward`/`backward`, `Home`/`End` ajoutés, non-interception d'un champ, `hidden`=vérité pendant l'animation, clic=fondu, `prefers-reduced-motion` |
+| Résidus (`git grep`) | `playTabTransition`, `clearTabTransition`, `config-panels--animating`, `data-transition`, `yuki-tab-`, `holdsArrowKeys`, `tabIndexOfActive` ⇒ **aucun** (hors historique docs et CSS vendorisé Holaf préexistant) |
+| Captures | `_tools/shots/config-icons-*.png` (topbar recadrée : flèche accent + soleil/lune) ; PNG trackés régénérés restaurés (`git checkout --`) |
+
+### 24.6 Non vérifié / incertain
+
+- **Rendu des glyphes vs SVG selon la police** : le remplacement emoji→SVG est
+  prouvé par l'E2E (l'icône est un `<svg>` avec `stroke="currentColor"`), mais
+  l'aspect visuel exact (épaisseur) n'est pas comparable pixel à pixel.
+- **C55 — `✕` de fermeture HolafModal** : reste un glyphe dans la brique
+  VENDORISÉE (`public/ui/vendor/holaf/holaf-modal.js`), non modifiée (copie pinnée
+  d'une version amont) ; elle suit `color` mais ne participe pas à `--icon-color`.
+  À confirmer : aligner la brique amont (ou un correctif au prochain bump) sur le
+  même système d'icônes.
+- **C56 — `icons0.dev` agrège des licences HÉTÉROGÈNES.** Le site est un moteur
+  de recherche sur 150+ collections open-source (backend Iconify) : à côté de
+  collections **permissives** (MIT/Apache-2.0/CC0/ISC/Unlicense) cohabitent des
+  licences **hors politique** — **GPL** (exception déjà assumée par l'utilisateur),
+  **CC BY-NC 4.0 / CC BY-NC-SA 4.0** (**non commercial**) et **CC BY-SA**
+  (**partage à l'identique**). Le code du site lui-même (`github.com/marcoripa96/i0`)
+  est **MIT**, mais **la licence des icônes est celle de leur collection**. Toute
+  icône future DOIT être tirée d'une collection permissive ; **retenue ici :
+  Lucide (ISC)**. **À demander à l'utilisateur** avant toute icône issue d'une
+  collection NC/SA/GPL.
+- **Réglage utilisateur de la couleur** : proposé (enum), **non implémenté**
+  (aucun besoin explicite).
+
+### 24.7 Provenance et attribution des icônes (source `icons0.dev`)
+
+**Nature du site** — `https://icons0.dev/` (HTTP **200**, `server: Vercel`)
+se décrit comme *« the fastest icon search for you and your AI agent »* et
+*« Search 200k+ icons from 150+ open-source collections »* : c'est un **moteur de
+recherche d'icônes** (front Next.js) adossé au backend **Iconify** (mention
+« powered by iconify » dans son pied de page), avec un **serveur MCP** (`/mcp`,
+HTTP **401** ⇒ authentification) et un registre **shadcn** (`/r/<collection>.json`).
+
+**Mode de récupération** — API JSON publique (aucune clé pour la recherche) :
+
+| Requête | Résultat |
+| --- | --- |
+| `GET https://icons0.dev/api/icons?q=lucide:sun` | **200** — `{"results":[… "body":"<circle …/><path …/>" …]}` |
+| `GET https://icons0.dev/api/icons?q=lucide:moon` | **200** |
+| `GET https://icons0.dev/api/icons?q=lucide:volume-2` | **200** |
+| `GET https://icons0.dev/api/icons?q=lucide:volume-x` | **200** |
+| `GET https://icons0.dev/api/icons?q=lucide:arrow-left` | **200** |
+
+Chaque résultat porte `fullName`, `name`, `prefix`, `collection`, `body` (SVG
+**déjà en `currentColor`**), `width`/`height` (24×24). Les 5 icônes nécessaires
+(soleil, lune, haut-parleur, haut-parleur barré, flèche gauche) sont **toutes
+disponibles** — dans la collection **Lucide** notamment.
+
+**Licence de la collection retenue** — **Lucide**, spdx **ISC** (permissive,
+politique respectée ; source `https://api.iconify.design/collections` →
+`lucide.license = {title: "ISC", spdx: "ISC"}`, LICENSE amont
+`github.com/lucide-icons/lucide/blob/main/LICENSE`, HTTP 200).
+
+**Où l'attribution est portée** :
+1. **Commentaire HTML** dans `public/ui/index.html` et `public/ui/config.html`,
+   au-dessus des SVG (notice de copyright) — la notice accompagne donc les copies.
+2. **Le présent §24.7** (provenance + textes intégraux ci-dessous).
+
+**Copyright** — Lucide : `Copyright (c) 2026 Lucide Icons and Contributors`
+(ISC). Icônes dérivées de **Feather** (dont `moon`, `arrow-left`) :
+`Copyright (c) 2013-present Cole Bemis` (MIT).
+
+```
+ISC License (Lucide)
+
+Copyright (c) 2026 Lucide Icons and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
+The MIT License (MIT) (pour les icônes dérivées de Feather, dont `moon` et
+`arrow-left`) :
+
+```
+Copyright (c) 2013-present Cole Bemis
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+

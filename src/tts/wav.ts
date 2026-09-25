@@ -10,8 +10,24 @@
  * chunks de taille impaire, et ne lève jamais.
  */
 
-/** Durée maximale d'un échantillon de référence (secondes). */
-export const MAX_VOICE_DURATION_SECONDS = 10;
+/**
+ * Durée maximale d'un échantillon de référence (secondes).
+ *
+ * **Ce n'est PAS une borne du moteur** : Chatterbox n'a **aucune durée dure**
+ * côté entrée — il **tronque** silencieusement la référence pour le prompt fin
+ * (10 s du prompt mel S3Gen, 6 s des tokens de prompt T3) tout en utilisant
+ * **toute** la référence pour l'embedding d'identité (VoiceEncoder). Cf.
+ * `conditionals.cpp`/`conditionals.h` (portage C++ `audio.cpp`) et
+ * `src/chatterbox/tts.py` (amont Python) : `DEC_COND_LEN = 10 * S3GEN_SR`,
+ * `ENC_COND_LEN = 6 * S3_SR`. Au-delà de 10 s, l'audio n'est donc **pas** rejeté :
+ * il n'améliore au mieux que l'identité de voix (plausible, non mesuré ici).
+ *
+ * Yuki fixe une limite de **confort** (upload/stockage) volontairement au-dessus
+ * de 20 s : 30 s couvre un paragraphe lu, avec marge pour un enregistrement réel.
+ * La **cohérence** avec `MAX_VOICE_BODY_BYTES` est vérifiée par les tests :
+ * 30 s en mono/stéréo 16 bits jusqu'à 48 kHz tient dans la limite de taille.
+ */
+export const MAX_VOICE_DURATION_SECONDS = 30;
 /** Fréquence d'échantillonnage maximale plausible (garde-fou anti-abus). */
 export const MAX_VOICE_SAMPLE_RATE = 192_000;
 /** Formats PCM acceptés : PCM entier (1) et WAVE_FORMAT_EXTENSIBLE (0xFFFE). */
@@ -139,6 +155,15 @@ export function readWavDataInfo(
   return { info, dataOffset };
 }
 
+/** Rend une taille lisible : « 6 Mo (6000000 octets) » ou « 800 octets ». */
+function describeBytes(bytes: number): string {
+  if (bytes >= 1_000_000) {
+    const mo = bytes / 1_000_000;
+    return `${Number.isInteger(mo) ? mo : mo.toFixed(1)} Mo (${bytes} octets)`;
+  }
+  return `${bytes} octets`;
+}
+
 /**
  * Valide un échantillon de référence destiné au clonage.
  *
@@ -158,7 +183,10 @@ export function validateVoiceSample(
     return {
       ok: false,
       code: "too_large",
-      message: `Échantillon trop volumineux (maximum ${options.maxBytes} octets).`,
+      message:
+        `Échantillon trop volumineux : ${describeBytes(buffer.length)} reçus, ` +
+        `maximum ${describeBytes(options.maxBytes)}. ` +
+        `Convertissez-le en WAV mono 24 kHz 16 bits (bien plus léger).`,
     };
   }
   if (
@@ -217,7 +245,11 @@ export function validateVoiceSample(
     return {
       ok: false,
       code: "too_long",
-      message: `Durée maximale : ${MAX_VOICE_DURATION_SECONDS} s (reçu ${info.durationSeconds.toFixed(1)} s).`,
+      message:
+        `Durée trop longue : ${info.durationSeconds.toFixed(1)} s reçues, ` +
+        `maximum ${MAX_VOICE_DURATION_SECONDS} s. ` +
+        `Coupez l'échantillon à ${MAX_VOICE_DURATION_SECONDS} s ou moins, ` +
+        `ou convertissez-le en mono 24 kHz.`,
     };
   }
   return { ok: true, info };

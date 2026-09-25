@@ -91,7 +91,8 @@ function refreshTtsToggle() {
     serverEnabled: ttsServerEnabled,
     muted: ttsPreference.muted,
   });
-  els.ttsToggle.textContent = state.icon;
+  // L'icône (haut-parleur / barré) est un SVG inline présent dans le markup :
+  // les classes d'état ci-dessous décident lequel est visible (styles.css).
   els.ttsToggle.setAttribute("aria-pressed", String(state.pressed));
   els.ttsToggle.setAttribute("aria-label", state.label);
   els.ttsToggle.title = state.hint;

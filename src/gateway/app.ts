@@ -114,6 +114,14 @@ function writeResponse(
 /** Message d'erreur interne signalant un corps de requête au-delà de la limite. */
 const BODY_TOO_LARGE = "body_too_large";
 
+/** Erreur interne d'un corps dépassant la limite (porte la taille reçue). */
+class BodyTooLargeError extends Error {
+  override readonly name = "BodyTooLargeError";
+  constructor(readonly receivedBytes: number) {
+    super(BODY_TOO_LARGE);
+  }
+}
+
 /** Lit le corps d'une requête en `Buffer` (borné). Rejette au-delà de la limite. */
 function readBodyBinary(req: IncomingMessage, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -132,7 +140,7 @@ function readBodyBinary(req: IncomingMessage, limit: number): Promise<Buffer> {
       chunks.push(chunk);
     });
     req.on("end", () => {
-      if (tooLarge) reject(new Error(BODY_TOO_LARGE));
+      if (tooLarge) reject(new BodyTooLargeError(size));
       else resolve(Buffer.concat(chunks));
     });
     req.on("error", reject);
@@ -192,7 +200,9 @@ async function handleVoicesHttp(
     try {
       body = await readBodyBinary(req, limit);
     } catch (error) {
-      const tooLarge = error instanceof Error && error.message === BODY_TOO_LARGE;
+      const tooLarge = error instanceof BodyTooLargeError;
+      const isCloneUpload = path === "/api/voices/clone";
+      const limitMo = `${Number.isInteger(limit / 1_000_000) ? limit / 1_000_000 : (limit / 1_000_000).toFixed(1)} Mo`;
       writeResponse(
         res,
         {
@@ -201,7 +211,9 @@ async function handleVoicesHttp(
             error: tooLarge ? "body_too_large" : "invalid_body",
             code: tooLarge ? "body_too_large" : "invalid_body",
             message: tooLarge
-              ? `Corps trop volumineux (maximum ${limit} octets).`
+              ? isCloneUpload
+                ? `Échantillon trop volumineux : ${error.receivedBytes} octets reçus, maximum ${limit} octets (${limitMo}). Réduisez la durée (≤ 30 s) ou convertissez-le en mono 24 kHz 16 bits.`
+                : `Corps trop volumineux : ${error.receivedBytes} octets reçus, maximum ${limit} octets.`
               : "Corps de requête illisible.",
           },
         },
@@ -238,7 +250,7 @@ async function handleTtsHttp(
     try {
       body = await readBodyBinary(req, MAX_CONFIG_BODY_BYTES);
     } catch (error) {
-      const tooLarge = error instanceof Error && error.message === BODY_TOO_LARGE;
+      const tooLarge = error instanceof BodyTooLargeError;
       writeResponse(
         res,
         {
@@ -247,7 +259,7 @@ async function handleTtsHttp(
             error: tooLarge ? "body_too_large" : "invalid_body",
             code: tooLarge ? "body_too_large" : "invalid_body",
             message: tooLarge
-              ? `Corps trop volumineux (maximum ${MAX_CONFIG_BODY_BYTES} octets).`
+              ? `Corps trop volumineux : ${error.receivedBytes} octets reçus, maximum ${MAX_CONFIG_BODY_BYTES} octets.`
               : "Corps de requête illisible.",
           },
         },

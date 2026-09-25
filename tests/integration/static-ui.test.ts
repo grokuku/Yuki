@@ -88,7 +88,7 @@ describe("UI statique servie par le gateway", () => {
     expect(body).toContain("/ui/config.js");
     // Retour explicite vers la discussion (demande utilisateur).
     expect(body).toContain("Retour à la discussion");
-    expect(body).toMatch(/href="\/"[^>]*>[^<]*Retour à la discussion/);
+    expect(body).toMatch(/href="\/"[^>]*>[\s\S]*?Retour à la discussion/);
     // Bouton de redémarrage présent, sans dépendance à la politique Docker.
     expect(body).toContain('id="restart"');
     expect(body).toContain("redémarre en interne");
@@ -548,5 +548,43 @@ describe("Configuration du moteur — éditeur structuré (Lot 9)", () => {
     const patch = await (await fetch(`${baseUrl}/ui/config-patch.js`)).text();
     expect(patch).toContain("download_in_progress");
     expect(patch).toContain("presentRestartRefusal");
+  });
+});
+
+describe("Icônes SVG colorables (currentColor / --icon-color)", () => {
+  it("les deux pages portent des icônes SVG monochromes en currentColor (aucune couleur en dur)", async () => {
+    for (const path of ["/", "/config"]) {
+      const body = await (await fetch(`${baseUrl}${path}`)).text();
+      // Bascule de thème : les DEUX icônes (soleil + lune) sont présentes.
+      expect(body, path).toContain('class="icon icon--sun"');
+      expect(body, path).toContain('class="icon icon--moon"');
+      // La couleur vient de currentColor, jamais d'un blanc codé en dur.
+      expect(body, path).toContain('stroke="currentColor"');
+      expect(body, path).not.toMatch(/fill="#fff/i);
+      expect(body, path).not.toMatch(/fill="white"/i);
+      // CSP : toujours aucun style inline.
+      expect(body, path).not.toMatch(/\sstyle=/);
+    }
+    // Contrôle voix : haut-parleur + haut-parleur barré.
+    const chat = await (await fetch(`${baseUrl}/`)).text();
+    expect(chat).toContain('class="icon icon--volume"');
+    expect(chat).toContain('class="icon icon--volume-off"');
+    // Flèche de retour : elle aussi un SVG coloré par élément.
+    const config = await (await fetch(`${baseUrl}/config`)).text();
+    expect(config).toContain('class="icon icon--arrow-left"');
+  });
+
+  it("styles.css définit le socle `.icon` et la variable `--icon-color` héritée", async () => {
+    const css = await (await fetch(`${baseUrl}/ui/styles.css`)).text();
+    expect(css).toContain(".icon {");
+    expect(css).toContain("var(--icon-color, currentColor)");
+    expect(css).toContain("stroke: currentColor");
+    // Le mode (data-theme="<fam>-<mode>") sélectionne soleil/lune sans JS.
+    expect(css).toContain(':root[data-theme$="-light"] #theme-toggle .icon--sun');
+  });
+
+  it("config.css colore l'icône du lien retour PAR ÉLÉMENT (`--icon-color`)", async () => {
+    const css = await (await fetch(`${baseUrl}/ui/config.css`)).text();
+    expect(css).toContain("--icon-color: var(--accent)");
   });
 });

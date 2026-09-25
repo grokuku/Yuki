@@ -889,8 +889,16 @@ volumes:
 - **Conteneur** : en-tête **RIFF/WAVE** (`RIFF`…`WAVE`), `fmt ` PCM.
 - **Format** : PCM signé 16 bits (ou 24/32 rééchantillonnable côté service),
   mono **ou** stéréo ; échantillonnage cohérent avec le champ `fmt `.
-- **Durée** : **≤ 10 s** (calculée `dataSize / (blockAlign × sampleRate)`).
-- **Taille** : **≤ `MAX_VOICE_BODY_BYTES`** (voir §10.4).
+- **Durée** : **≤ 30 s** (calculée `dataSize / (blockAlign × sampleRate)`).
+  ⚠️ **Ce n'est PAS une borne du moteur** : Chatterbox n'impose aucune durée dure
+  — il **tronque** la référence pour le prompt fin (**10 s** du prompt mel S3Gen,
+  **6 s** des tokens de prompt T3) tout en utilisant **toute** la référence pour
+  l'embedding d'identité (VoiceEncoder). Cf. `DEC_COND_LEN`/`ENC_COND_LEN`
+  (`src/chatterbox/tts.py` amont ; portage C++ `conditionals.h:13-14` +
+  `conditionals.cpp:79-95`). 30 s est donc une limite de **confort Yuki** (D88),
+  volontairement au-dessus de 20 s (marge pour un enregistrement réel).
+- **Taille** : **≤ `MAX_VOICE_BODY_BYTES = 6_000_000`** (voir §10.4) — la durée
+  annoncée doit être **réellement atteignable** (cohérence durée↔taille, D88).
 - **Langue** : `lang` déclarée par l'utilisateur ; la référence **devrait**
   être dans cette langue (avertissement `chatterbox` : un clip d'une autre
   langue **transfère son accent** ; remède documenté : `cfg = 0`, archive
@@ -933,11 +941,22 @@ dédiée**). L'option JSON + base64 (~33 % de gonflement, encodage client) est
 **Limites de taille.** `MAX_CONFIG_BODY_BYTES = 1_000_000`
 (`src/gateway/routes/config.ts:33`), appliquée par `readBody`
 (`src/gateway/app.ts:106`). Un échantillon de **10 s en 24 kHz mono 16 bits
-≈ 480 Ko** (≈ 640 Ko en base64) **passe** ; mais **10 s en 44,1 kHz mono 16 bits
-≈ 882 Ko** (≈ 1,18 Mo en base64) **dépasse**. ⇒ **DÉCIDÉ (D20, 2026-09-20) :
-limite dédiée `MAX_VOICE_BODY_BYTES = 3_000_000`** (couvre 10 s jusqu'à
-~48 kHz **stéréo** avec marge), **sans** relever `MAX_CONFIG_BODY_BYTES` (la
-config n'a pas besoin d'autant).
+≈ 480 Ko** **passe** ; mais **10 s en 44,1 kHz mono 16 bits ≈ 882 Ko**
+**dépasserait** cette limite de config. ⇒ **DÉCIDÉ (D20, 2026-09-20) :
+limite dédiée `MAX_VOICE_BODY_BYTES`** (sans relever `MAX_CONFIG_BODY_BYTES` :
+la config n'a pas besoin d'autant).
+
+> **Révision D88 (2026-09-24) : `MAX_VOICE_BODY_BYTES = 6_000_000`.** La durée
+> maximale d'un échantillon passe à **30 s** (`MAX_VOICE_DURATION_SECONDS`, D88)
+> et la limite de taille est **relevée à 6 Mo** pour rester **cohérente** :
+> - 30 s **mono** 16 bits 48 kHz ≈ **2,88 Mo** ;
+> - 30 s **stéréo** 16 bits 48 kHz ≈ **5,76 Mo** ;
+> - 19,8 s stéréo 16 bits 48 kHz ≈ **3,8 Mo**.
+>
+> Une limite à 3 Mo aurait rendu la durée annoncée **inatteignable** pour un WAV
+> stéréo (l'utilisateur aurait été bloqué par la taille **après** avoir lu
+> « ≤ 30 s »). Formats non couverts à 30 s (stéréo 24/32 bits, > 48 kHz) :
+> convertir en **mono 24 kHz** (le moteur rééchantillonne de toute façon).
 
 **Sécurité des routes** (voir aussi §10.8) :
 - Garde-fous d'écriture **systématiques** sur `POST`/`PATCH`/`DELETE`
@@ -1083,8 +1102,10 @@ simplicité pour l'usage courant et la finesse pour l'exploration.
 
 ### 10.8 Sécurité et robustesse
 
-- **Validation des uploads** : voir §10.3 (RIFF/WAVE, PCM, ≤ 10 s, ≤ limite,
-  quota). Tout refus renvoie un **message explicite** (jamais un 500 muet).
+- **Validation des uploads** : voir §10.3 (RIFF/WAVE, PCM, ≤ 30 s, ≤ limite,
+  quota). Tout refus renvoie un **message explicite** (jamais un 500 muet)
+  nommant la **limite** atteinte, la **valeur reçue** et la **valeur autorisée**
+  (avec la sortie simple : « couper à 30 s » / « convertir en mono 24 kHz »).
 - **Quotas** : nombre de voix clonées et **somme des octets** bornés (§10.3) ;
   au-delà → refus `429`/`400` avec la cause.
 - **Chemins** : `id` en **slug** (jamais un chemin utilisateur) ; résolution
@@ -1398,7 +1419,7 @@ comportement acoustique du barge-in.
 | **D17** | **Une voix = une abstraction unique** (`preset`/`cloned`), le service `tts` n'en voit qu'une projection | conception §10.1 (découle de D16) |
 | **D18** | ✅ **Clonage = upload de fichier audio uniquement** (PAS d'enregistrement micro / `getUserMedia`) | **décision utilisateur 2026-09-20** (§10.5, ex-C6) |
 | **D19** | ✅ **Stockage des voix = volume dédié `yuki-voices`** (rw gateway, ro `tts`) — et non `yuki-state` partagé | **décision utilisateur 2026-09-20** (§10.3, ex-C4) |
-| **D20** | ✅ **`MAX_VOICE_BODY_BYTES = 3_000_000`** et upload en **corps binaire** (`audio/wav` + métadonnées en en-têtes) — pas de base64 | **décision utilisateur 2026-09-20** (§10.4, ex-C5) |
+| **D20** | ✅ **`MAX_VOICE_BODY_BYTES`** et upload en **corps binaire** (`audio/wav` + métadonnées en en-têtes) — pas de base64. *(Montant révisé à **6_000_000** par **D88** (2026-09-24), pour rester cohérent avec la durée ≤ 30 s.)* | **décision utilisateur 2026-09-20** (§10.4, ex-C5) ; révision D88 (`docs/lot9.md`) |
 | **D21** | ✅ **Toggle topbar = sourdine locale** (`localStorage`, instantanée) ; l'**activation serveur** `tts.enabled` reste sur `/config` (il est `apply: "restart"`). L'affichage reflète l'état **effectif** (`serveur ∧ non sourd`) → aucun mensonge | **décision utilisateur Lot C** (§9.3, ex-C15) |
 | **D22** | ✅ **Émotion = enum simple** (`neutre`/`expressive`/`dramatique`/`personnalisee`) ; le cran `personnalisee` **révèle** les curseurs `tts.exaggeration`/`tts.cfg` | **décision utilisateur Lot C** (§10.7, ex-C7) |
 | **D23** | ✅ **`playback_started`/`playback_aborted` remontés par le CLIENT** (`ClientMessage.playback`) au démarrage/interruption de la lecture | **décision utilisateur Lot C** (§8, ex-C9) |

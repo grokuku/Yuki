@@ -130,9 +130,11 @@ function syncControls() {
 
   const toggle = document.getElementById("theme-toggle");
   if (toggle) {
-    // Icône = mode courant (☀ clair, ☾ sombre) ; pressé = mode sombre actif ;
-    // libellé = l'action résultante (ce que fera le prochain clic).
-    toggle.textContent = mode === "light" ? "☀" : "☾";
+    // L'icône visuelle (soleil/lune) est un SVG inline PRÉSENT dans le markup :
+    // le mode (`data-theme` sur <html>) décide lequel est visible via CSS
+    // (styles.css) — on ne remplace donc PAS `textContent` ici, sinon on
+    // effacerait les deux SVG. L'état reste porté par `aria-pressed` ; le
+    // libellé décrit l'action résultante (ce que fera le prochain clic).
     toggle.setAttribute("aria-pressed", String(mode === "dark"));
     const label = mode === "light" ? "Passer en mode sombre" : "Passer en mode clair";
     toggle.setAttribute("aria-label", label);
