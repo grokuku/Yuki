@@ -5,6 +5,7 @@
 // `snapshot` lorsque la fenêtre de rejeu est dépassée ou à la reconnexion.
 
 import { initTheme } from "./theme.js";
+import { createMarkdownRenderer } from "./markdown.js";
 import { decodeTtsFrame } from "./tts-frames.js";
 import { createTtsPlayer } from "./tts-player.js";
 import { createTtsPreference, resolveSpeechState } from "./tts-preference.js";
@@ -33,6 +34,7 @@ let socket = null;
 let lastSeq = 0;
 let sessionId = null;
 let currentAssistant = null;
+let currentRenderer = null;
 let resumePending = false;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
@@ -169,30 +171,71 @@ function clearEmpty() {
   if (empty) empty.remove();
 }
 
-function appendMessage(role, text) {
+/* ─── Défilement ─────────────────────────────────────────────────────────
+ * On ne colle en bas QUE si l'utilisateur y était DÉJÀ avant la mutation.
+ * Sinon, remonter dans l'historique devient impossible : chaque delta le
+ * ramènerait de force en bas. Le seuil tolère un léger décalage (arrondis).
+ */
+const SCROLL_PIN_THRESHOLD_PX = 24;
+
+function isConversationPinned() {
+  const el = els.conversation;
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_PIN_THRESHOLD_PX;
+}
+
+function pinIfNeeded(pinned) {
+  if (pinned) els.conversation.scrollTop = els.conversation.scrollHeight;
+}
+
+function appendMessage(role, text, pinned = isConversationPinned()) {
   clearEmpty();
   const div = document.createElement("div");
   div.className = `message message--${role}`;
   div.textContent = text ?? "";
   els.conversation.appendChild(div);
-  els.conversation.scrollTop = els.conversation.scrollHeight;
+  pinIfNeeded(pinned);
+  return div;
+}
+
+/**
+ * Bulle assistant : le texte y est rendu en markdown (blocs stabilisés). Le
+ * balisage est construit PROGRAMMATIQUEMENT (voir `markdown.js`) — jamais par
+ * `innerHTML`, donc aucune injection possible et aucun style en ligne (CSP).
+ *
+ * @param {string|null} [text] — texte initial (rejeu de snapshot) ; `null` en flux.
+ * @param {boolean} [pinned]
+ */
+function appendAssistantMessage(text = null, pinned = isConversationPinned()) {
+  clearEmpty();
+  const div = document.createElement("div");
+  div.className = "message message--assistant";
+  const renderer = createMarkdownRenderer();
+  if (typeof text === "string" && text.length > 0) renderer.setText(text);
+  div.appendChild(renderer.element);
+  els.conversation.appendChild(div);
+  currentRenderer = renderer;
+  pinIfNeeded(pinned);
   return div;
 }
 
 function applyTranscript(transcript) {
+  const pinned = isConversationPinned();
   els.conversation.innerHTML = "";
+  currentRenderer = null;
   if (!Array.isArray(transcript) || transcript.length === 0) {
     const p = document.createElement("p");
     p.className = "empty";
     p.textContent = "Envoyez un message pour commencer.";
     els.conversation.appendChild(p);
+    pinIfNeeded(pinned);
     return;
   }
   for (const entry of transcript) {
-    const role = entry.role === "user" ? "user" : "assistant";
-    appendMessage(role, entry.text ?? "");
+    if (entry.role === "user") appendMessage("user", entry.text ?? "", pinned);
+    else appendAssistantMessage(entry.text ?? "", pinned);
   }
-  els.conversation.scrollTop = els.conversation.scrollHeight;
+  currentRenderer = null;
+  pinIfNeeded(pinned);
 }
 
 function setMeta(element, text) {
@@ -251,6 +294,7 @@ function applySnapshot(frame) {
   lastSeq = typeof frame.seq === "number" ? frame.seq : 0;
   resumePending = false;
   currentAssistant = null;
+  currentRenderer = null;
   applyTranscript(frame.transcript);
   setSessionState(frame.state || "idle");
 }
@@ -263,12 +307,15 @@ function applyEvent(frame) {
     case "state":
       setSessionState(frame.state);
       if (frame.state === "idle") els.queued.hidden = true;
-      if (frame.state === "idle" || frame.state === "error") currentAssistant = null;
+      if (frame.state === "idle" || frame.state === "error") {
+        currentAssistant = null;
+        currentRenderer = null;
+      }
       return;
     case "run_started":
       els.queued.hidden = true;
       els.thinking.hidden = true;
-      currentAssistant = appendMessage("assistant", "");
+      currentAssistant = appendAssistantMessage();
       // Nouveau run : réinitialise le diagnostic TTS.
       ttsRequestedRun = frame.runId ?? null;
       ttsActivityRun = null;
@@ -285,9 +332,16 @@ function applyEvent(frame) {
         els.thinking.hidden = false;
         return;
       }
-      if (!currentAssistant) currentAssistant = appendMessage("assistant", "");
-      currentAssistant.textContent += frame.text ?? "";
-      els.conversation.scrollTop = els.conversation.scrollHeight;
+      {
+        // `pinned` est mesuré AVANT d'ajouter le moindre contenu : on ne colle
+        // en bas que si l'utilisateur y était déjà.
+        const pinned = isConversationPinned();
+        if (!currentAssistant) {
+          currentAssistant = appendAssistantMessage(null, pinned);
+        }
+        if (currentRenderer) currentRenderer.push(frame.text ?? "");
+        pinIfNeeded(pinned);
+      }
       return;
     case "phase":
       if (frame.stage === "first_token") els.thinking.hidden = true;
@@ -297,9 +351,14 @@ function applyEvent(frame) {
         onTtsPhase(frame);
       }
       return;
-    case "run_finished":
+    case "run_finished": {
       els.thinking.hidden = true;
       els.queued.hidden = true;
+      const pinned = isConversationPinned();
+      // Dernier bloc (souvent resté en texte brut) : on le rend maintenant que
+      // le flux est terminé, avant toute décision d'affichage. Le flush change
+      // la hauteur : `pinned` a été mesuré AVANT.
+      if (currentRenderer) currentRenderer.flush();
       if (
         ttsAudible() &&
         typeof frame.runId === "string" &&
@@ -322,11 +381,14 @@ function applyEvent(frame) {
           currentAssistant.textContent =
             frame.errorMessage || "Une erreur est survenue.";
         }
+        pinIfNeeded(pinned);
       } else if (frame.reason === "error") {
         appendMessage("assistant error", frame.errorMessage || "Une erreur est survenue.");
       }
       currentAssistant = null;
+      currentRenderer = null;
       return;
+    }
     case "run_summary": {
       const target = els.conversation.lastElementChild;
       if (target && target.classList.contains("message--assistant")) {
@@ -390,6 +452,7 @@ function sendMessage() {
   clearEmpty();
   appendMessage("user", text);
   currentAssistant = null;
+  currentRenderer = null;
   els.input.value = "";
   els.input.style.height = "auto";
   if (!sendRaw({ type: "message", clientMsgId, text })) {

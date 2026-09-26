@@ -281,3 +281,153 @@ a.pill:hover {
   color: var(--muted);
   max-width: 44ch;
 }
+
+/* ─── Rendu markdown du chat (volet 3 — chat oral) ────────────────────────
+ * Le texte de l'assistant est construit en nœuds DOM (`public/ui/markdown.js`).
+ * Couleurs : UNIQUEMENT les variables de thème (`--text`, `--muted`, `--accent`,
+ * `--panel-2`, `--border`) — donc les 5 familles × 2 modes suivent
+ * automatiquement. Aucun style en ligne n'est posé par le JS (CSP `style-src`).
+ * La bulle `.message` portait `white-space: pre-wrap` pour l'ancien rendu texte :
+ * on le réinitialise dans le corps markdown, sauf pour le résidu `.md-tail`
+ * (texte brut temporaire, qui doit garder ses sauts de ligne).
+ */
+.message__body.markdown {
+  white-space: normal;
+}
+
+.md-tail {
+  white-space: pre-wrap;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.md-paragraph {
+  margin: 0 0 8px;
+}
+
+.md-heading {
+  margin: 12px 0 6px;
+  line-height: 1.25;
+}
+
+h1.md-heading {
+  font-size: 1.35em;
+}
+
+h2.md-heading {
+  font-size: 1.2em;
+}
+
+h3.md-heading {
+  font-size: 1.08em;
+}
+
+h4.md-heading,
+h5.md-heading,
+h6.md-heading {
+  font-size: 1em;
+}
+
+.md-list {
+  margin: 0 0 8px;
+  padding-left: 1.5em;
+}
+
+.md-list li {
+  margin: 2px 0;
+}
+
+.md-quote {
+  margin: 0 0 8px;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+
+.md-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.md-code-block {
+  margin: 0 0 8px;
+}
+
+.md-code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.md-code-block pre code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+/* Bloc muet : affiché, mais marqué « non lu » (discrètement). */
+.md-code-block--mute {
+  border-left: 3px solid var(--border);
+  padding-left: 8px;
+}
+
+.md-mute-badge {
+  display: inline-block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.md-table {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+  font-size: 0.95em;
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.md-table th {
+  background: var(--panel-2);
+}
+
+.md-link {
+  color: var(--accent);
+}
+
+.md-image {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.md-image--placeholder {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.92em;
+  font-style: italic;
+}

@@ -141,6 +141,29 @@
   color: var(--muted);
 }
 
+/* Bloc LECTURE SEULE : instruction vocale réellement injectée (volet 1).
+   Le texte est affiché tel que le serveur l'injecte ; aucun style inline. */
+.config-voice-instruction {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+
+.config-voice-instruction__text {
+  margin: 6px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
 .config-error {
   font-size: 12px;
   color: var(--danger);

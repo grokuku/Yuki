@@ -51,6 +51,7 @@ import { formatReportConsole } from "./gpu/report.js";
 import { JobQueue, JobStore } from "./jobs/index.js";
 import {
   HEAVY_SYSTEM_PROMPT_FALLBACK,
+  appendVoiceInstruction,
   buildModelsConfigFrom,
   evaluateMissingKeyPolicy,
   resolveAvailability,
@@ -432,7 +433,10 @@ async function main(): Promise<void> {
       cwd: env.piCwd,
       home: env.piHome,
       sessionsDir: env.piSessionsDir,
-      systemPrompt: config.getString("prompts.light"),
+      systemPrompt: appendVoiceInstruction(
+        config.getString("prompts.light"),
+        isTtsEnabled(config),
+      ),
       settingsSeedPath: env.piSettingsSeedPath,
       modelsConfig: buildModelsConfigFrom(effective),
       model: lightRef,

@@ -22,6 +22,7 @@ import {
   LockedByEnvError,
   type ConfigRuntime,
 } from "../../config/runtime.js";
+import { VOICE_SPEECH_INSTRUCTION } from "../../llm/prompts.js";
 import { ConfigStoreWriteError } from "../../config/store.js";
 import { describeWriteFailure } from "../../config/paths.js";
 import type { Logger } from "../../observability/logger.js";
@@ -184,7 +185,16 @@ function audit(
 
 function handleGet(deps: ConfigApiDeps): ConfigHttpResponse {
   const snapshot = deps.runtime.snapshot();
-  return json(200, { fields: snapshot.fields, status: snapshot.status });
+  return json(200, {
+    fields: snapshot.fields,
+    status: snapshot.status,
+    // Texte d'instruction ajouté au prompt système quand la voix est active
+    // (`tts.enabled === "on"`). Exposé pour que `/config` le montre en LECTURE
+    // SEULE : l'utilisateur voit le texte réellement injecté, jamais une magie
+    // invisible. Le texte est identique quelle que soit la valeur courante du
+    // champ — c'est son APPLICATION qui est conditionnelle.
+    voiceInstruction: VOICE_SPEECH_INSTRUCTION,
+  });
 }
 
 function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
@@ -221,6 +231,7 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
       fields: result.fields,
       status: result.status,
       applied: result.applied,
+      voiceInstruction: VOICE_SPEECH_INSTRUCTION,
     });
   } catch (error) {
     if (error instanceof LockedByEnvError) {

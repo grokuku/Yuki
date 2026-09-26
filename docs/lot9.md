@@ -1969,3 +1969,326 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+
+## 25. Interface de chat — volets 1 & 2 : convention du texte muet + filtrage
+
+> **Périmètre du lot** : les **volets 1 (la convention)** et **2 (le filtrage
+> serveur)** du chantier « interface de chat ». Les volets 3 (« rendu
+> navigateur ») et 4 (« images ») viendront dans des lots suivants. Ce document
+> est le plus pertinent (continuité `D##`/`C##` du chantier UI/TTS) : la section
+> s'y ajoute après §24 (`D93`/`C56`), sans réutiliser de numéro.
+
+### 25.1 La règle fondatrice
+
+**Ce qui est dit doit se suffire à lui-même. Le visuel est muet mais affiché.**
+Le TTS n'est **pas** un outil d'accessibilité : c'est une **conversation
+naturelle**. Un humain qui montre un tableau ou une image **ne lit pas** le
+contenu ni le texte alternatif — mais il **dit** ce qui compte.
+
+### 25.2 La convention — deux niveaux de « muet »
+
+| Construct | Lu ? | Traitement |
+| --- | --- | --- |
+| Paragraphes, **titres**, **listes**, **citations** | ✅ **lu** | marqueur retiré, texte conservé (déjà bon, inchangé) |
+| **Blocs de code** (``` / ~~~) | ❌ muet | déjà ignorés par le filtre (`inFence`) — inchangé |
+| **Tableaux** | ❌ muet | **nouveau** : ligne `|` + séparatrice `---` ignorées |
+| **Images** `![alt](url)` | ❌ muet | **nouveau** : ignorées **entièrement** (plus d'`alt` lu) |
+| **Bloc étiqueté ` ```muet `** | ❌ muet | **nouveau** : construct explicite de la convention |
+
+**Repli défensif** : si le modèle ne respecte **pas** la convention, le
+comportement reste celui d'avant — **on lit**. Jamais de silence surprise.
+
+### 25.3 La constante unique (source unique) et la passe multilingue
+
+- **`MUTE_BLOCK_LABELS`** — liste des étiquettes reconnues (`src/tts/mute.ts`),
+  aujourd'hui `["muet"]`.
+- **`MUTE_BLOCK_LABEL`** — étiquette canonique (premier élément).
+- **`isMuteInfoString(info)`** — reconnaît le **premier mot** de l'info-string
+  d'un bloc (casse ignorée).
+
+**D1 — qui l'utilise** : le **filtre** (`src/tts/markdown.ts`, via
+`isMuteInfoString`) **et** le **texte du prompt** (`src/llm/prompts.ts`, via
+`MUTE_BLOCK_LABEL`). Un test de garde
+(`tests/tts/markdown.test.ts`) vérifie que les deux lisent la **même** constante
+et qu'aucune chaîne littérale `"muet"` n'est recopiée dans ces deux fichiers.
+
+**Passe multilingue (préparée)** : `MUTE_BLOCK_LABELS` est une **liste**.
+Ajouter une langue = ajouter son étiquette (ex. `"silent"`, `"mute"`) **ici** ;
+le filtre et le prompt la reconnaissent automatiquement, aucun littéral à
+répercuter ailleurs.
+
+### 25.4 L'instruction du prompt (volet 1, partie « modèle »)
+
+**État réel vérifié** : `appendSystemPromptOverride` renvoie `[]`
+(`src/pi/sdk/session-factory.ts:38`) — aucun ajout automatique. Les prompts
+viennent des fichiers `config/pi/system-prompt.md` / `-heavy.md` chargés dans
+`prompts.light` / `prompts.heavy`.
+
+**Mécanisme** : `appendVoiceInstruction(systemPrompt, voiceEnabled)`
+(`src/llm/prompts.ts`), appelé **uniquement** pour le prompt **léger**
+(`src/index.ts`, `createPiHost({ systemPrompt: … })`) avec
+`voiceEnabled = isTtsEnabled(config)`.
+- `tts.enabled === "on"` ⇒ le bloc est ajouté **après** le prompt utilisateur ;
+- `tts.enabled !== "on"` ⇒ **aucun ajout**, le prompt est **inchangé à
+  l'identité** (prouvé `tests/llm/prompts.test.ts`).
+
+**Texte EXACT injecté** (`VOICE_SPEECH_INSTRUCTION`), mot pour mot :
+
+```
+## Réponse parlée
+
+Ta réponse sera lue à voix haute : l'utilisateur l'écoute.
+- Écris des phrases naturelles, comme à l'oral.
+- Tout ce qui compte doit être dit avec des mots : un tableau ou une image est affiché mais jamais lu, alors commente-le naturellement.
+- Ce qui ne doit pas être entendu (tableau, données brutes, code) va dans un bloc étiqueté « muet » : ouvre-le par ```muet.
+```
+
+La dernière ligne **interpole `MUTE_BLOCK_LABEL`** : le prompt ne peut pas
+diverger du filtre.
+
+### 25.5 Les trois ajouts au filtre (`src/tts/markdown.ts`)
+
+1. **Tableaux ignorés** — `scanTableLine` (`src/tts/markdown.ts:320`) détecte une
+   ligne contenant `|` suivie d'une **séparatrice** (`isTableSeparator`,
+   `src/tts/markdown.ts:73`) et ignore toutes les lignes suivantes contenant
+   `|`. Les **fragments à cheval** sont gérés : la séparatrice incomplète est
+   **retenue** tant que son `\n` n'est pas arrivé (sinon il clôturerait le
+   tableau à tort), et une ligne sans `|` clôt le tableau puis est **relue**.
+   Titres/citations (`#`, `>`) ne sont jamais pris pour des en-têtes.
+2. **Images ignorées entièrement** — `readLink` (`src/tts/markdown.ts:371`)
+   renvoie un texte **vide** pour `![alt](url)` (l'`alt` n'est plus lu), quel que
+   soit le découpage en deltas.
+3. **Blocs ` ```muet ` ignorés** — l'info-string de la ligne d'ouverture est
+   testée par `isMuteInfoString` ; le champ `fenceMuted` supprime l'annonce
+   éventuelle (`codeAnnouncement` reste inchangé pour les **vrais** blocs de
+   code, défaut `null`).
+
+**Repli défensif prouvé** : `Vrai | Faux` (pas de séparatrice) est **lu tel
+quel** ; un bloc de code ` ```js ` ordinaire est toujours ignoré comme avant.
+
+**Correction nécessaire** — `flush()` renvoyait uniquement la sortie du
+nettoyeur **final** et **perdait** la sortie du `push` résolu au flush
+(`un [lien` → `"un "`). Elle est désormais recomposée
+(`src/tts/markdown.ts:114`) : sans quoi la dernière ligne d'un tableau (ou un
+lien non fermé) disparaîtrait en fin de flux.
+
+### 25.6 Ce qui reste inchangé (prouvé par test)
+
+- Lecture des **titres**, **listes**, **citations**, paragraphes
+  (`tests/tts/markdown.test.ts`, garde anti-divergence) ;
+- **ponctuation** de fin de phrase (le segmenteur en dépend) ;
+- **incrémentalité** (marqueurs/fences/tableaux coupés entre deltas) ;
+- **no-op** quand le TTS est désactivé (filtre non construit / prompt identité) ;
+- `codeAnnouncement` (défaut `null`) ; le filtre reste le **point unique**.
+
+### 25.7 Vérifications
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **814 passed / 4 skipped** (baseline **788 / 4** ; **+26**) |
+| `npm run typecheck` / `npm run build` | verts |
+| `node --check public/ui/config.js` | OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **82/82** ; **0 violation CSP** ; **0 exception JS** |
+| Captures PNG régénérées | restaurées (`git checkout -- "Yuki and Libs/_tools/shots"`) + PNG non suivi supprimé |
+
+### 25.8 Non vérifié / incertain
+
+- **Rendu visuel exact** du bloc en lecture seule dans l'onglet Conversation :
+  présence/classes/absence de `style=` prouvées par test statique et E2E (0
+  violation CSP), pas de comparaison pixel.
+- **Comportement du modèle réel** face à l'instruction : on ne peut pas prouver
+  ici qu'un LLM respectera la convention `muet` — d'où le **repli défensif**
+  (lecture) qui garantit l'absence de silence surprise.
+
+### Décisions et points ouverts
+
+- **D94 — Convention du texte muet en source unique + application au filtre.**
+  L'étiquette `muet` vit dans `src/tts/mute.ts` (`MUTE_BLOCK_LABELS` /
+  `MUTE_BLOCK_LABEL` / `isMuteInfoString`) et est consommée par le **filtre** et
+  par le **prompt**. Le filtre ignore désormais tableaux, images (entièrement) et
+  blocs `muet`, avec repli défensif (lecture). L'instruction n'est injectée dans
+  le prompt **léger** que si `tts.enabled === "on"`, et reste **visible en
+  lecture seule** dans l'onglet Conversation de `/config` (texte servi par
+  `GET /api/config → voiceInstruction`).
+- **C57 — Passe multilingue de l'étiquette muette.** `MUTE_BLOCK_LABELS` est
+  prête (liste) mais ne contient que `"muet"`. À trancher plus tard : quelles
+  étiquettes ajouter par langue (`"silent"`, `"mute"`, `"quiet"`…) et si le
+  choix doit suivre `tts.language`. Non implémenté (aucun besoin explicite).
+
+## 26. Interface de chat — volet 3 : rendu markdown incrémental (navigateur)
+
+> **Périmètre du lot** : le **volet 3** du chantier « interface de chat » — le
+> **rendu markdown dans le navigateur**. Le **volet 4** (« images ») viendra
+> ensuite. Ce document est le plus pertinent (continuité `D##`/`C##`) : la
+> section s'ajoute après §25 (`D94`/`C57`), **sans réutiliser de numéro**.
+
+### 26.1 Objectif et règle fondatrice (rappel)
+
+**Ce qui est dit doit se suffire à lui-même ; le visuel est muet mais affiché.**
+Le rendu navigateur **affiche** tout (code, tableaux, images, blocs `muet`) ;
+seul le TTS les ignore (volet 2, `src/tts/markdown.ts`). Le `muet` et les
+constructs muets **ne changent donc pas l'affichage** : un tableau reste un
+tableau, une image reste une image (ou son placeholder — voir §26.4).
+
+### 26.2 Le filet de sécurité D'ABORD (E2E)
+
+Avant d'injecter le moindre balisage, l'E2E devait savoir **envoyer un vrai
+message** et **asserter ce qui est affiché** : jusqu'ici il ouvrait `/` sans
+jamais écrire. Le serveur de test `_tools/e2e-tts-serve.ts` a été **étendu** :
+
+- il câble le **même double** que les tests (`tests/pi/host-double.ts`,
+  `FakePiHost`) sur un transport WebSocket **RÉEL** (`createWsTransport`) ;
+- il rejoue, en deltas espacés (~1 400 caractères), une réponse markdown
+  couvrant **tous** les constructs (titres, listes, citation, code, tableau,
+  image `data:`, bloc `muet`, ~24 puces pour dépasser la hauteur visible).
+
+L'E2E `_tools/e2e-tts-ui.mjs` envoie alors un message, laisse le flux arriver,
+puis vérifie : structure rendue (`h1..h3`, `p`, `ul`/`ol`, `blockquote`,
+`pre>code`, `code` inline, `a[href^=https]`, `table`+cellules, `img` avec `alt`),
+**bloc muet marqué**, **aucun résidu** `.md-tail`, **0 style inline**,
+**0 violation CSP** et **0 exception JS** (bilans globaux). Preuve réelle
+(bilan E2E) : **92/92**, `0 CSP`, `0 exception` — dont
+`{"headings":3,"paragraphs":3,"bullets":27,"ordered":2,"quote":1,"strong":1,"em":1}`,
+`{"codeBlocks":2,"inlineCode":1}`, `{"tables":1,"tableCells":6}`,
+`{"images":1,"imageAlt":"un chat","imageSrcPrefix":"data:image/"}`,
+`{"muteBlocks":1,"muteBadge":"muet — non lu"}`.
+
+### 26.3 Stratégie de rendu — blocs stabilisés, aucune injection
+
+**Un bloc n'est rendu que lorsqu'il est COMPLET.** Tant qu'il est incomplet, il
+reste affiché en **texte brut temporaire** (`.md-tail`) :
+
+| Bloc | Devient « stable » quand… |
+| --- | --- |
+| Paragraphe / citation / liste | terminé par une ligne vide ou un autre bloc ; en flux, un résidu reste brut |
+| Titre, règle `---` | sa ligne est terminée (`\n`) |
+| Bloc de code / `muet` | la fence de clôture est présente **et** terminée |
+| Tableau | confirmé par une séparatrice **et** terminé par une ligne non-`|` |
+| Lien/image incomplet | reste brut : le paragraphe porteur attend d'être terminé |
+
+**Fin incomplète** : au `run_finished`, un **flush** (`parseBlocks(text, true)`)
+résout le dernier bloc — le résidu brut devient le bloc rendu. C'est ce que
+prouve l'E2E (`.md-tail` = 0 après le run).
+
+**Aucune injection HTML n'est possible** : le rendu construites nœuds
+**programmatiquement** (`document.createElement` + `createTextNode` +
+`textContent`). `public/ui/markdown.js` **ne contient AUCUN** `innerHTML` /
+`insertAdjacentHTML` / `outerHTML` (garde de test statique). C'est la garantie
+anti-injection **et** la seule voie compatible avec la CSP : `script-src 'self'`
+interdit les gestionnaires en ligne, `style-src 'self'` interdit les styles en
+ligne. Un construct impossible à rendre sans casser la CSP n'est **pas** forcé
+(cas des images distantes : §26.4).
+
+**Performance** : le flux delta n'exécute **aucun `await`** ; le rendu
+incrémental ne ré-analyse **que le résidu** (`parseBlocks(text, false, from)`),
+jamais la réponse entière — donc pas de O(n²) (test unitaire de non-régression
+`tests/ui/chat-markdown.test.ts`). Le TTFT est inchangé (le premier delta suit
+le même chemin `textContent`/ajout de nœud).
+
+### 26.4 Constructs supportés et marque du bloc muet
+
+| Construct | Rendu |
+| --- | --- |
+| Paragraphe, **titres** `#…######` | `p` / `h1`…`h6` (classe `md-heading`) |
+| **Listes** à puces / numérotées | `ul.md-list` / `ol.md-list` + `li` |
+| **Citations** | `blockquote.md-quote` |
+| **Bloc de code** | `pre > code` (classe `language-x`), dans `.md-code-block` |
+| **Code en ligne** | `code.md-code` |
+| **Gras / italique / barré** | `strong` / `em` / `del` (imbricables) |
+| **Liens** `[t](href)` | `a.md-link` — `href` seulement si `http(s)/mailto/relatif` (sinon texte) et `rel="noopener noreferrer"` |
+| **Tableaux** | `table.md-table` (`thead`/`th`, `tbody`/`td`) |
+| **Images** `![alt](src)` | `img.md-image` si `src` est `data:image/` ou de même origine ; **sinon placeholder** `span.md-image--placeholder` (rôle `img`, `aria-label`, alt affiché) |
+| **Bloc ` ```muet `** | `.md-code-block--mute` : `pre>code` **affiché**, surmonté d'une marque discrète `.md-mute-badge` (« muet — non lu ») |
+
+**Marque du bloc muet** : un simple libellé en majuscules discrètes (`--muted`),
+**non replié** (décision validée : blocs affichés). Un tableau **muet** reste un
+tableau ; une image **muette** reste une image : seul le TTS les ignore.
+
+**Couleurs** : uniquement les **variables de thème** (`--text`, `--muted`,
+`--accent`, `--panel-2`, `--border`) — les 5 familles × 2 modes suivent sans JS.
+**Aucun style en ligne** n'est posé (CSP + test statique).
+
+### 26.5 Cohérence affiché / parlé — cas PARTAGÉS
+
+Deux parseurs coexistent désormais : le **client** (afficher) et le **filtre
+serveur** (parler). Pour éviter la divergence, un corpus de **cas partagés**
+(`tests/ui/chat-markdown.test.ts`) épingle, pour chaque message, la **structure
+affichée** (blocs client) **et le texte parlé** (filtre serveur), et vérifie que
+tout construct muet est **présent à l'écran** mais **absent du parlé** :
+
+| Cas | Affiché (blocs) | Parlé |
+| --- | --- | --- |
+| `# Résumé` + gras/italique/code/lien | `heading, paragraph` | `Résumé\n\nUn point clé et de l'italique, du code et un lien.\n` |
+| listes puces + numérotée | `list, list` | `un\ndeux\n\npremier\nsecond\n` |
+| citation + ` ```js ` | `quote, code` | `Une citation\n\n` — `const secret = 1;` **absent** |
+| tableau entre paragraphes | `paragraph, table, paragraph` | `Valeurs :\n\n\nFin.\n` — cellules **absentes** |
+| image + ` ```muet ` | `paragraph, paragraph, mute, paragraph` | alt `un chat` **absent**, `secret brut 42` **absent** |
+
+### 26.6 Miroir client ↔ serveur de la convention `muet`
+
+Le client (JS vanilla) **ne peut pas importer du TS** : `public/ui/markdown.js`
+**mirroite** `src/tts/mute.ts` (`MUTE_BLOCK_LABELS`, `MUTE_BLOCK_LABEL`,
+`isMuteInfoString`), exactement comme `public/ui/tts-frames.js` miroite
+`src/tts/framing.ts`. Un **test de non-divergence** importe les deux et vérifie
+l'**égalité** de `MUTE_BLOCK_LABELS` **et** l'identité de comportement de
+`isMuteInfoString` sur un corpus (`muet`, `MUET`, `muet json`, `json`, `…`).
+Ajouter une langue au serveur sans la répercuter côté client **fait échouer** le
+test.
+
+### 26.7 Autoscroll — coller en bas SEULEMENT si on y est déjà
+
+**Avant** : `els.conversation.scrollTop = els.conversation.scrollHeight` à
+CHAQUE ajout/delta (`app.js`) — remonter dans l'historique était impossible.
+**Après** : `isConversationPinned()` mesure (`scrollHeight - scrollTop -
+clientHeight <= 24 px`) **AVANT** la mutation ; on ne colle en bas que si
+l'utilisateur y était déjà. Chaque site (message, delta, transcript, fin de run)
+capture son `pinned` **avant** d'ajouter du contenu. **Preuve E2E** : l'E2E
+remonte (`scrollTop = 0`) pendant le flux et vérifie que le bas **n'est pas
+recollé** (`stayedUp=true`, `streamingAfterScroll=true`).
+
+### 26.8 Vérifications
+
+| Vérification | Résultat |
+| --- | --- |
+| `npm test` | **847 passed / 4 skipped** (baseline **814 / 4** ; **+33**) |
+| `npm run typecheck` | vert |
+| `npm run build` | vert |
+| `node --check` | `public/ui/app.js`, `public/ui/markdown.js`, `_tools/e2e-tts-ui.mjs` OK |
+| E2E `_tools/e2e-tts-ui.mjs` | **92/92** (baseline **82/82**) ; **0 violation CSP** ; **0 exception JS** |
+| Chat : remontée pendant le flux | bas **non recollé** (`stayedUp=true`) |
+| Captures | `chat-markdown.png`, `chat-markdown-bas.png` **ajoutées** ; PNG trackés régénérés **restaurés** (`git checkout -- "Yuki and Libs/_tools/shots"`), `config-engine-incoherent.png` non suivi supprimé |
+
+### 26.9 Non vérifié / incertain
+
+- **Comportement d'un LLM réel** : on ne peut pas prouver ici qu'un modèle
+  produira exactement ces constructs — d'où le **repli défensif** partout
+  (marqueur non fermé = texte littéral ; construct non reconnu = texte).
+- **Images distantes** : la CSP `img-src 'self' data:` **interdit** les images
+  d'un domaine externe. Elles sont rendues en **placeholder** (alt affiché),
+  **jamais** chargées — donc **aucune** violation CSP. Le **volet 4** tranchera
+  (allowlist de domaines, `media-src`, etc.) — voir **C58**.
+- **Comparaison pixel** : les captures prouvent la lisibilité, pas une
+  conformité pixel à pixel.
+- **TTS réel dans l'E2E** : le transport de test n'a **pas** de pipeline TTS
+  (pas de son) ; l'E2E chat prouve le **rendu**, pas la synthèse (déjà couverte
+  ailleurs). C'est pourquoi l'UI y affiche honnêtement « Aucun son reçu… ».
+
+### Décisions et points ouverts
+
+- **D95 — Rendu markdown par blocs STABILISÉS, nœuds DOM exclusivement.**
+  Le chrome navigateur (`public/ui/markdown.js`) découpe le flux en blocs, ne
+  rend qu'un bloc complet, garde le résidu en texte brut temporaire et le
+  **flush** à la fin du run. Tout le balisage vient de `document.createElement` /
+  `textContent` — **jamais** `innerHTML` (anti-injection + compatibilité CSP
+  `script-src`/`style-src 'self'`). Le rendu incrémental ne ré-analyse que le
+  résidu (pas de O(n²)). Couleurs **uniquement** par variables de thème.
+- **D96 — Miroir client de la convention `muet` + autoscroll conditionnel +
+  filet E2E d'abord.** Le client mirroite `src/tts/mute.ts` avec un **test de
+  non-divergence**. L'autoscroll ne colle en bas que si l'utilisateur y était
+  déjà. Le harnais E2E sait désormais **envoyer un message** et asserter le
+  rendu (structure + 0 CSP + 0 exception) avant toute évolution du rendu.
+- **C58 — Images : domaine externe et CSP.** `img-src 'self' data:` rend
+  aujourd'hui toute image distante en **placeholder** (alt affiché, non chargée).
+  À trancher au **volet 4** : ouvrir `img-src` à une **allowlist** de domaines ?
+  un proxy d'image côté gateway ? que faire du texte alternatif (lu/affiché) ?
+  Non implémenté (le placeholder est sûr et honnête).

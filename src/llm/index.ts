@@ -69,8 +69,10 @@ export type {
 } from "./availability.js";
 
 export {
+  appendVoiceInstruction,
   DELEGATION_INSTRUCTION,
   DELEGATION_MARKER,
   HEAVY_NO_USER_MARKER,
   HEAVY_SYSTEM_PROMPT_FALLBACK,
+  VOICE_SPEECH_INSTRUCTION,
 } from "./prompts.js";

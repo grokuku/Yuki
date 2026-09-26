@@ -10,9 +10,14 @@
  * `SpeechSanitizer`). Les tests correspondants sont plus bas.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
+import { VOICE_SPEECH_INSTRUCTION } from "../../src/llm/prompts.js";
 import { MarkdownSpeechFilter } from "../../src/tts/markdown.js";
+import { MUTE_BLOCK_LABEL, isMuteInfoString } from "../../src/tts/mute.js";
 import { SentenceSegmenter } from "../../src/tts/segmenter.js";
 
 function filterAll(fragments: string[], options = {}): string {
@@ -92,16 +97,124 @@ describe("MarkdownSpeechFilter — liens", () => {
     );
   });
 
-  it("réécrit une image ![alt](url) en alt", () => {
-    expect(filterAll(["![un chat](http://x/y.png)"])).toBe("un chat");
+  it("réécrit une image ![alt](url) en vide (le texte alternatif n'est plus lu)", () => {
+    expect(filterAll(["![un chat](http://x/y.png)"])).toBe("");
+    expect(filterAll(["Voir ![chat](x.png) ici"])).toBe("Voir ici");
   });
 
   it("gère un lien coupé entre deltas", () => {
     expect(filterAll(["[la ", "doc](http", "://x)"])).toBe("la doc");
   });
 
+  it("gère une image coupée entre deux deltas (jamais d'alt émis)", () => {
+    const filter = new MarkdownSpeechFilter();
+    expect(filter.push("Voir ![cha")).toBe("Voir ");
+    // L'espace de tête est absorbé (le filtre est incrémental sur un seul flux).
+    expect(filter.push("t](x.png) ici")).toBe("ici");
+    expect(filter.flush()).toBe("");
+    expect(filterAll(["Voir ![cha", "t](x.png) ici"])).toBe("Voir ici");
+  });
+
   it("laisse un crochet non-lien en place", () => {
     expect(filterAll(["un tableau [1] ici"])).toBe("un tableau [1] ici");
+  });
+});
+
+describe("MarkdownSpeechFilter — tableaux muets", () => {
+  it("ignore un tableau simple (avec pipes de bord)", () => {
+    expect(filterAll(["| a | b |\n|---|---|\n| 1 | 2 |\nFin."])).toBe("Fin.");
+  });
+
+  it("ignore un tableau sans pipes de bord", () => {
+    expect(filterAll(["a | b\n--- | ---\n1 | 2\n"])).toBe("");
+  });
+
+  it("conserve le texte autour d'un tableau", () => {
+    expect(filterAll(["Avant\n| a | b |\n|---|---|\n| 1 | 2 |\nAprès"])).toBe(
+      "Avant\nAprès",
+    );
+  });
+
+  it("gère un tableau coupé entre deux deltas", () => {
+    const filter = new MarkdownSpeechFilter();
+    expect(filter.push("| a | b |\n")).toBe("");
+    expect(filter.push("|---|")).toBe("");
+    expect(filter.push("\n| 1 | 2 |\n")).toBe("");
+    expect(filter.flush()).toBe("");
+    expect(filterAll(["| a | b |\n", "|---|", "\n| 1 | 2 |\nFin."])).toBe("Fin.");
+  });
+
+  it("ne lit PAS un tableau une ligne `|` sans séparatrice (repli défensif)", () => {
+    expect(filterAll(["Vrai | Faux"])).toBe("Vrai | Faux");
+    expect(filterAll(["a | b\nligne suivante.\n"])).toBe("a | b\nligne suivante.\n");
+  });
+});
+
+describe("MarkdownSpeechFilter — blocs muets (convention unique)", () => {
+  const fence = "```" + MUTE_BLOCK_LABEL;
+
+  it("ignore un bloc muet clôturé", () => {
+    expect(filterAll([fence + "\nsecret\n```\nFin."])).toBe("Fin.");
+  });
+
+  it("ignore un bloc muet NON clôturé (y compris au flush)", () => {
+    const out = filterAll(["Début.\n" + fence + "\nsecret\n", "encore secret"]);
+    expect(out).toBe("Début.\n");
+    expect(out).not.toContain("secret");
+  });
+
+  it("gère un bloc muet coupé entre deux deltas", () => {
+    const filter = new MarkdownSpeechFilter();
+    expect(filter.push("Avant.\n```")).toBe("Avant.\n");
+    expect(filter.push(MUTE_BLOCK_LABEL + "\n")).toBe("");
+    expect(filter.push("secret\n")).toBe("");
+    expect(filter.push("```\nAprès.")).toBe("Après.");
+  });
+
+  it("n'annonce PAS un bloc muet, mais annonce encore un bloc de code", () => {
+    expect(
+      filterAll([fence + "\ncode\n```\n"], { codeAnnouncement: "Bloc de code omis." }),
+    ).toBe("");
+    expect(
+      filterAll(["```js\ncode\n```\n"], { codeAnnouncement: "Bloc de code omis." }),
+    ).toContain("Bloc de code omis.");
+  });
+
+  it("isMuteInfoString : premier mot, casse ignorée, sinon faux", () => {
+    expect(isMuteInfoString(MUTE_BLOCK_LABEL)).toBe(true);
+    expect(isMuteInfoString("MUET")).toBe(true);
+    expect(isMuteInfoString("muet json")).toBe(true);
+    expect(isMuteInfoString("json")).toBe(false);
+    expect(isMuteInfoString("")).toBe(false);
+  });
+});
+
+describe("MarkdownSpeechFilter — garde anti-divergence de la convention", () => {
+  it("le filtre et le texte du prompt lisent la MÊME constante", () => {
+    // Le filtre reconnaît l'étiquette canonique…
+    const filter = new MarkdownSpeechFilter();
+    const out = filter.push("```" + MUTE_BLOCK_LABEL + "\nsecret\n```\nFin.");
+    expect(out + filter.flush()).toBe("Fin.");
+    // …et le prompt la référence par interpolation (pas de littéral recopié).
+    expect(VOICE_SPEECH_INSTRUCTION).toContain(MUTE_BLOCK_LABEL);
+    expect(isMuteInfoString(MUTE_BLOCK_LABEL)).toBe(true);
+  });
+
+  it("aucun littéral d'étiquette en dur dans le filtre ni dans le prompt", () => {
+    const markdown = readFileSync(join(process.cwd(), "src/tts/markdown.ts"), "utf8");
+    const prompts = readFileSync(join(process.cwd(), "src/llm/prompts.ts"), "utf8");
+    // Aucune chaîne littérale `"muet"`/`'muet'` : l'étiquette vient de `mute.ts`.
+    expect(markdown).not.toMatch(/["']muet["']/);
+    expect(prompts).not.toMatch(/["']muet["']/);
+    // Les deux consommateurs importent bien la source unique.
+    expect(markdown).toContain("./mute.js");
+    expect(prompts).toContain("../tts/mute.js");
+  });
+
+  it("non-régression : titres, listes, citations et liens sont toujours lus", () => {
+    expect(
+      filterAll(["# Titre\n- un\n- deux\n> citation\n[la doc](http://x)"]),
+    ).toBe("Titre\nun\ndeux\ncitation\nla doc");
   });
 });
 
@@ -113,6 +226,11 @@ describe("MarkdownSpeechFilter — robustesse", () => {
   it("conserve un texte déjà propre", () => {
     const text = "Bonjour, ceci est une phrase normale.";
     expect(filterAll([text])).toBe(text);
+  });
+
+  it("flush restitue un fragment retenu (lien non fermé)", () => {
+    // Le `[` retenu n'est résolu qu'au `flush` : il ne doit pas être perdu.
+    expect(filterAll(["un [lien"])).toBe("un [lien");
   });
 });
 
@@ -178,5 +296,13 @@ describe("MarkdownSpeechFilter — interaction avec le segmenteur", () => {
 
   it("un texte 100 % emoji ne produit aucun segment vocalisé", () => {
     expect(segmentAll("😀😃😄🎉")).toEqual([]);
+  });
+
+  it("un tableau ne produit aucun segment vocalisé (texte autour préservé)", () => {
+    expect(segmentAll("| a | b |\n|---|---|\n| 1 | 2 |\n")).toEqual([]);
+    expect(segmentAll("Avant.\n| a | b |\n|---|---|\n| 1 | 2 |\nAprès.")).toEqual([
+      "Avant.",
+      "Après.",
+    ]);
   });
 });

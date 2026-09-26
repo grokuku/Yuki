@@ -17,6 +17,7 @@ import { loadEnv } from "../../src/config/env.js";
 import { inspectMountPoints, mountPoints } from "../../src/config/paths.js";
 import { createConfigRuntime } from "../../src/config/runtime.js";
 import { createServer, startServer } from "../../src/gateway/server.js";
+import { createWsTransport } from "../../src/gateway/ws/server.js";
 import type { TtsApiDeps } from "../../src/gateway/routes/tts.js";
 import { TtsDiagnostics } from "../../src/gateway/routes/tts.js";
 import type { VoiceApiDeps } from "../../src/gateway/routes/voices.js";
@@ -31,6 +32,7 @@ import {
   type ResolvedCatalogPackage,
 } from "../../src/tts/index.js";
 import { VoiceStore } from "../../src/tts/voices-store.js";
+import { FakePiHost, type FakeStep } from "../../tests/pi/host-double.js";
 
 /** WAV PCM16 mono (silence) minimal et valide. */
 function makeWav(sampleRate = 16000, seconds = 0.2): Buffer {
@@ -328,6 +330,75 @@ const ttsDownloads = new TtsDownloadManager({
 // Le catalogue/routes consomment ce port (même câblage que `src/index.ts`).
 tts.downloads = ttsDownloads;
 
+/* ─── Host Pi SIMULÉ (chat) ─────────────────────────────────────────────────
+ * L'UI de chat ne fait rien sans PiHost : on câble le MÊME double déterministe
+ * que les tests (`FakePiHost`) sur le transport WebSocket RÉEL. Il rejoue, en
+ * deltas espacés, une réponse markdown couvrant TOUS les constructs (titres,
+ * listes, citation, code, tableau, image, bloc `muet`) — de quoi prouver le
+ * rendu incrémental ET le défilement dans un vrai navigateur.
+ */
+const CHAT_MARKDOWN = [
+  "# Rapport de test",
+  "",
+  "Voici un paragraphe avec du **gras**, de l'*italique*, du `code` et un [lien](https://exemple.fr).",
+  "",
+  "## Points clés",
+  "",
+  "- premier point",
+  "- second point",
+  "- troisième point",
+  "",
+  "1. étape une",
+  "2. étape deux",
+  "",
+  "> Une citation mémorable sur la simplicité.",
+  "",
+  "```js",
+  "const valeur = 42;",
+  "console.log(valeur);",
+  "```",
+  "",
+  "| Nom | Valeur |",
+  "| --- | --- |",
+  "| alpha | 1 |",
+  "| beta | 2 |",
+  "",
+  "![un chat](data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7)",
+  "",
+  "```muet",
+  "donnees brutes: 42",
+  "```",
+  "",
+  "## Détails",
+  "",
+  ...Array.from({ length: 24 }, (_, i) => `- détail ${String(i + 1).padStart(2, "0")} pour allonger la réponse`),
+  "",
+  "Fin de la réponse.",
+].join("\n");
+
+/** Découpe la réponse en petits deltas espacés (flux réaliste). */
+function chatSteps(text: string, size = 14, delayMs = 20): FakeStep[] {
+  const steps: FakeStep[] = [];
+  for (let i = 0; i < text.length; i += size) {
+    steps.push({ kind: "delta", channel: "content", text: text.slice(i, i + size), delayMs });
+  }
+  return steps;
+}
+
+const chatHost = new FakePiHost({
+  sessionId: "e2e-chat-session",
+  scripts: [{ name: "chat-markdown", steps: chatSteps(CHAT_MARKDOWN) }],
+});
+await chatHost.start();
+
+const transport = createWsTransport({
+  host: chatHost,
+  logger,
+  serverVersion: env.version,
+  replayBufferSize: 1000,
+  replayBufferBytes: 1_000_000,
+});
+
 const profiles = loadProfiles();
 const manifest = loadCompatManifest();
 const detection = detectGpus({
@@ -346,26 +417,29 @@ const gate = runGate(
   logger,
 );
 
-const server = createServer({
-  env,
-  report: gate.report,
-  gatePassed: gate.passed,
-  startedAt: Date.now(),
-  volumes: inspectMountPoints(mountPoints(env)),
-  config: { runtime: config, logger },
-  voices,
-  tts,
-  // Lot 9 : le redémarrage refuse (409) tant qu'un téléchargement est actif.
-  // `requestShutdown` reste un no-op : l'E2E n'exécute jamais un vrai arrêt.
-  admin: {
-    logger,
-    requestShutdown: () => {},
-    downloads: {
-      hasActive: () => ttsDownloads.hasActive(),
-      activeId: () => ttsDownloads.activeId(),
+const server = createServer(
+  {
+    env,
+    report: gate.report,
+    gatePassed: gate.passed,
+    startedAt: Date.now(),
+    volumes: inspectMountPoints(mountPoints(env)),
+    config: { runtime: config, logger },
+    voices,
+    tts,
+    // Lot 9 : le redémarrage refuse (409) tant qu'un téléchargement est actif.
+    // `requestShutdown` reste un no-op : l'E2E n'exécute jamais un vrai arrêt.
+    admin: {
+      logger,
+      requestShutdown: () => {},
+      downloads: {
+        hasActive: () => ttsDownloads.hasActive(),
+        activeId: () => ttsDownloads.activeId(),
+      },
     },
   },
-});
+  transport,
+);
 
 const address = await startServer(server, "127.0.0.1", 4174);
 console.log(

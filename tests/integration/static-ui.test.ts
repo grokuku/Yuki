@@ -588,3 +588,68 @@ describe("Icônes SVG colorables (currentColor / --icon-color)", () => {
     expect(css).toContain("--icon-color: var(--accent)");
   });
 });
+
+describe("Instruction de voix visible dans /config (volet 1 — chat oral)", () => {
+  it("config.js affiche le bloc LECTURE SEULE dans l'onglet Conversation", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    // Rendu du bloc + alimentation par le serveur (texte réellement injecté).
+    expect(js).toContain("renderVoiceInstruction");
+    expect(js).toContain("voiceInstruction");
+    expect(js).toContain("config-voice-instruction__text");
+    // Placé dans le groupe des prompts (onglet Conversation).
+    expect(js).toContain('id: "prompts"');
+    expect(js).toContain("conversation");
+    // Explicitement conditionné à la voix active.
+    expect(js).toContain("tts.enabled = on");
+  });
+
+  it("aucun style inline dans le nouveau bloc (CSP stricte)", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).not.toContain(".style.");
+    expect(js).not.toContain('setAttribute("style"');
+    const css = await (await fetch(`${baseUrl}/ui/config.css`)).text();
+    for (const cls of [".config-voice-instruction", ".config-voice-instruction__text"]) {
+      expect(css, cls).toContain(cls);
+    }
+  });
+
+  it("l'instruction vient du serveur (aucune copie UI divergente)", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).toContain("body.voiceInstruction");
+  });
+});
+
+describe("Rendu markdown du chat (volet 3) — assets et anti-injection", () => {
+  it("sert /ui/markdown.js et app.js l'importe (CSP inchangée)", async () => {
+    const response = await fetch(`${baseUrl}/ui/markdown.js`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("javascript");
+    expect(response.headers.get("content-security-policy")).toContain("style-src 'self'");
+    expect(response.headers.get("content-security-policy")).not.toContain("unsafe-inline");
+
+    const app = await (await fetch(`${baseUrl}/ui/app.js`)).text();
+    expect(app).toContain('from "./markdown.js"');
+    expect(app).toContain("createMarkdownRenderer");
+  });
+
+  it("le module de rendu ne construit que des nœuds (jamais d'innerHTML)", async () => {
+    const source = await (await fetch(`${baseUrl}/ui/markdown.js`)).text();
+    expect(source).not.toContain(".innerHTML");
+    expect(source).toContain("createElement");
+    // La convention muette est mirorée depuis la source serveur (étiquette).
+    expect(source).toContain("MUTE_BLOCK_LABELS");
+  });
+
+  it("styles.css porte les classes markdown (couleurs via variables de thème)", async () => {
+    const css = await (await fetch(`${baseUrl}/ui/styles.css`)).text();
+    for (const cls of [
+      ".message__body.markdown",
+      ".md-code-block",
+      ".md-mute-badge",
+      ".md-table",
+      ".md-tail",
+    ]) {
+      expect(css, cls).toContain(cls);
+    }
+  });
+});

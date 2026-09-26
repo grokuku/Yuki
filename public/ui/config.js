@@ -150,6 +150,8 @@ const GROUPS = [
   {
     id: "prompts",
     title: "Prompts système",
+    // Bloc LECTURE SEULE : l'instruction vocale réellement injectée (volet 1).
+    voiceInstruction: true,
     fields: [
       { path: "prompts.light", label: "Prompt système — léger", kind: "textarea" },
       { path: "prompts.heavy", label: "Prompt système — lourd", kind: "textarea" },
@@ -357,6 +359,11 @@ for (const tab of TABS) {
 const state = {
   fields: {},
   status: { lightKey: false, heavyKey: false, ready: false },
+  /**
+   * Instruction vocale RÉELLE servie par `GET /api/config` (`voiceInstruction`).
+   * Jamais recopiée dans l'UI : le bloc affiché est bien celui injecté.
+   */
+  voiceInstruction: "",
   initial: new Map(),
   inputs: new Map(),
   rows: new Map(),
@@ -644,6 +651,37 @@ function renderField(field) {
   return row;
 }
 
+/**
+ * Bloc LECTURE SEULE — l'instruction vocale **réellement injectée** dans le
+ * prompt système léger (volet 1 du chantier interface de chat). Le texte vient
+ * du serveur (`voiceInstruction`), donc l'UI montre bien CELUI injecté, jamais
+ * une copie susceptible de diverger. Aucun style inline (CSP stricte).
+ */
+function renderVoiceInstruction() {
+  const block = h("div", { class: "config-voice-instruction" });
+  block.append(
+    h("p", {
+      class: "config-helper",
+      text: "Instruction de voix (lecture seule)",
+    }),
+  );
+  block.append(
+    h("pre", {
+      class: "config-voice-instruction__text",
+      text: state.voiceInstruction || "",
+    }),
+  );
+  block.append(
+    h("p", {
+      class: "config-helper",
+      text:
+        "Ce bloc n'est ajouté au prompt système léger que lorsque la voix est " +
+        "active (tts.enabled = on) ; sinon le prompt reste exactement celui ci-dessus.",
+    }),
+  );
+  return block;
+}
+
 function render() {
   const containers = new Map();
   for (const tab of TABS) {
@@ -683,6 +721,9 @@ function render() {
           h("div", { class: "config-advanced__body" }, advanced),
         ]),
       );
+    }
+    if (group.voiceInstruction) {
+      section.append(renderVoiceInstruction());
     }
     container.append(section);
   }
@@ -864,6 +905,11 @@ async function load() {
 function applySnapshot(body) {
   state.fields = body.fields ?? {};
   state.status = body.status ?? state.status;
+  // Le champ n'est présent qu'en réponse à `GET/PUT /api/config` : on ne
+  // l'efface pas si une réponse ne le porte pas (robustesse).
+  if (typeof body.voiceInstruction === "string") {
+    state.voiceInstruction = body.voiceInstruction;
+  }
   state.initial.clear();
   state.inputs.clear();
   state.rows.clear();

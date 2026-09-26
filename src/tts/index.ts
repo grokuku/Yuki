@@ -76,6 +76,12 @@ export {
   type MarkdownFilterOptions,
 } from "./markdown.js";
 
+export {
+  MUTE_BLOCK_LABEL,
+  MUTE_BLOCK_LABELS,
+  isMuteInfoString,
+} from "./mute.js";
+
 export { SpeechSanitizer } from "./sanitize.js";
 
 export {

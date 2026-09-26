@@ -20,6 +20,8 @@ import { detectGpus } from "../../src/gpu/detect.js";
 import { runGate } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
+import { VOICE_SPEECH_INSTRUCTION } from "../../src/llm/prompts.js";
+import { MUTE_BLOCK_LABEL } from "../../src/tts/mute.js";
 
 // Le patch est produit par la VRAIE fonction de l'UI (`buildConfigPatch`),
 // pas reconstruit à la main : on reproduit exactement ce qu'envoie le bouton
@@ -146,10 +148,15 @@ describe("GET /api/config en mode dégradé", () => {
     const body = JSON.parse(raw) as {
       fields: Record<string, { value?: unknown; configured?: boolean }>;
       status: { lightKey: boolean; heavyKey: boolean; ready: boolean };
+      voiceInstruction: string;
     };
     expect(body.status.lightKey).toBe(false);
     expect(body.status.heavyKey).toBe(false);
     expect(body.status.ready).toBe(false);
+    // L'instruction vocale est exposée en lecture seule (texte réellement
+    // injecté quand la voix est active), et référence la convention unique.
+    expect(body.voiceInstruction).toBe(VOICE_SPEECH_INSTRUCTION);
+    expect(body.voiceInstruction).toContain(MUTE_BLOCK_LABEL);
     expect(body.fields["llm.light.apiKey"]).toMatchObject({
       configured: false,
       masked: null,

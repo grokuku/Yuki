@@ -296,6 +296,145 @@ check("[/] zéro <style> injecté et zéro attribut style", s.styleElems === 0 &
   `style=${s.styleElems} attrs=${s.styleAttrs}`);
 await shot("chat-tts-toggle");
 
+/* ═══════════════ Page / — RENDU MARKDOWN du chat (volet 3) ═══════════════
+ * Première injection de balisage DÉRIVÉ du contenu dans cette interface : on
+ * envoie un VRAI message, on laisse le flux markdown arriver, puis on vérifie
+ * la structure rendue ET l'absence de violation CSP / d'exception JS (bilans
+ * globaux plus bas). On prouve aussi que remonter ne recolle pas en bas.
+ */
+console.log("\n═══ PAGE / (rendu markdown) ═══");
+await navigate(BASE + "/");
+for (let i = 0; i < 60; i += 1) {
+  const online = await evaluate(`document.getElementById("connection")?.textContent`);
+  if (online === "connecté") break;
+  await sleep(100);
+}
+check(
+  "[/] WebSocket connecté avant l'envoi (connection = connecté)",
+  (await evaluate(`document.getElementById("connection")?.textContent`)) === "connecté",
+);
+
+await evaluate(`(() => {
+  const input = document.getElementById("input");
+  input.value = "Montre-moi un exemple complet en markdown.";
+  input.dispatchEvent(new Event("input"));
+  document.getElementById("send").click();
+})()`);
+
+// Attendre que la réponse streamée dépasse la hauteur visible.
+let overflowed = false;
+for (let i = 0; i < 120; i += 1) {
+  await sleep(100);
+  const st = await evaluate(`(() => {
+    const c = document.getElementById("conversation");
+    return { over: c.scrollHeight > c.clientHeight + 80, state: document.getElementById("session-state")?.textContent };
+  })()`);
+  if (st.over) { overflowed = true; break; }
+  if (st.state === "idle") break;
+}
+check("[/] la réponse streamée dépasse la hauteur visible (historique défilable)", overflowed === true);
+
+// L'utilisateur REMONTE : le défilement ne doit PAS être collé de force.
+await evaluate(`(() => { const c = document.getElementById("conversation"); c.scrollTop = 0; })()`);
+let stayedUp = true;
+let sawStreamingAfterScroll = false;
+for (let i = 0; i < 40; i += 1) {
+  await sleep(120);
+  const st = await evaluate(`(() => {
+    const c = document.getElementById("conversation");
+    return { top: c.scrollTop, state: document.getElementById("session-state")?.textContent };
+  })()`);
+  if (st.state === "streaming") sawStreamingAfterScroll = true;
+  if (st.top > 60) { stayedUp = false; break; }
+  if (st.state === "idle") break;
+}
+check(
+  "[/] utilisateur remonté : le bas n'est PAS collé de force pendant le flux",
+  stayedUp === true && sawStreamingAfterScroll === true,
+  `stayedUp=${stayedUp} streamingAfterScroll=${sawStreamingAfterScroll}`,
+);
+
+// Attendre la fin du run.
+for (let i = 0; i < 120; i += 1) {
+  const state = await evaluate(`document.getElementById("session-state")?.textContent`);
+  if (state === "idle") break;
+  await sleep(100);
+}
+
+const READ_RENDER = `(() => {
+  const root = [...document.querySelectorAll(".message--assistant")].pop();
+  const q = (sel) => (root ? root.querySelectorAll(sel).length : 0);
+  const hrefs = [...(root?.querySelectorAll("a.md-link") ?? [])].map((a) => a.getAttribute("href"));
+  return {
+    present: !!root,
+    headings: q("h1, h2, h3"),
+    paragraphs: q("p.md-paragraph"),
+    bullets: q("ul.md-list li"),
+    ordered: q("ol.md-list li"),
+    quote: q("blockquote.md-quote"),
+    codeBlocks: q(".md-code-block pre code"),
+    inlineCode: q("code.md-code"),
+    strong: q("strong"),
+    em: q("em"),
+    hrefs,
+    tables: q("table.md-table"),
+    tableCells: q("table.md-table th, table.md-table td"),
+    images: q("img.md-image"),
+    imageAlt: root?.querySelector("img.md-image")?.getAttribute("alt") ?? null,
+    imageSrcPrefix: (root?.querySelector("img.md-image")?.getAttribute("src") ?? "").slice(0, 11),
+    muteBlocks: q(".md-code-block--mute"),
+    muteBadge: root?.querySelector(".md-code-block--mute .md-mute-badge")?.textContent ?? "",
+    muteText: root?.querySelector(".md-code-block--mute pre code")?.textContent ?? "",
+    tails: q(".md-tail"),
+    styleAttrs: root ? root.querySelectorAll("[style]").length : -1,
+    styleElems: root ? root.querySelectorAll("style").length : -1,
+  };
+})()`;
+
+const r = await evaluate(READ_RENDER);
+check(
+  "[/] structure rendue : titres, paragraphes, listes, citation, gras/italique",
+  r.present && r.headings >= 3 && r.paragraphs >= 3 && r.bullets >= 3 && r.ordered >= 2 &&
+    r.quote >= 1 && r.strong >= 1 && r.em >= 1,
+  JSON.stringify({ headings: r.headings, paragraphs: r.paragraphs, bullets: r.bullets, ordered: r.ordered, quote: r.quote, strong: r.strong, em: r.em }),
+);
+check(
+  "[/] bloc de code rendu en <pre><code> + code inline",
+  r.codeBlocks >= 1 && r.inlineCode >= 1,
+  JSON.stringify({ codeBlocks: r.codeBlocks, inlineCode: r.inlineCode }),
+);
+check(
+  "[/] liens rendus (href https) et tableaux en <table> avec cellules",
+  r.hrefs.some((h) => /^https:\/\//.test(h ?? "")) && r.tables >= 1 && r.tableCells >= 6,
+  JSON.stringify({ hrefs: r.hrefs, tables: r.tables, tableCells: r.tableCells }),
+);
+check(
+  "[/] image rendue (data: auto-autorisée par la CSP) avec son texte alternatif",
+  r.images >= 1 && r.imageAlt === "un chat" && r.imageSrcPrefix === "data:image/",
+  JSON.stringify({ images: r.images, imageAlt: r.imageAlt, imageSrcPrefix: r.imageSrcPrefix }),
+);
+check(
+  "[/] bloc muet AFFICHÉ (non replié) + marque discrète « non lu »",
+  r.muteBlocks >= 1 && /non lu/.test(r.muteBadge) && /donnees brutes/.test(r.muteText),
+  JSON.stringify({ muteBlocks: r.muteBlocks, muteBadge: r.muteBadge, muteText: r.muteText }),
+);
+check(
+  "[/] plus aucun résidu brut (.md-tail vidé par le flush de fin de run)",
+  r.tails === 0,
+  JSON.stringify({ tails: r.tails }),
+);
+check(
+  "[/] rendu markdown : zéro <style> et zéro attribut style (CSP stricte)",
+  r.styleAttrs === 0 && r.styleElems === 0,
+  `style=${r.styleElems} attrs=${r.styleAttrs}`,
+);
+await evaluate(`document.getElementById("conversation").scrollTop = 0`);
+await sleep(150);
+await shot("chat-markdown");
+await evaluate(`document.getElementById("conversation").scrollTop = document.getElementById("conversation").scrollHeight`);
+await sleep(150);
+await shot("chat-markdown-bas");
+
 /* ═══════════════════════ Page /config ════════════════════════════════════ */
 console.log("\n═══ PAGE /config ═══");
 await navigate(BASE + "/config");
