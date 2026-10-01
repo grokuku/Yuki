@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>HolafIcons 0.1.5 — comparatif Feather (brique) vs Lucide (Yuki)</title>
+<style>
+  :root { --gap: 28px; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: #0b1020; color: #e5e7eb; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .intro { color: #9aa4b2; max-width: 900px; margin: 0 0 28px; }
+  .intro code { color: #cbd5e1; }
+  .panel { border-radius: 14px; padding: 20px 24px 24px; margin-bottom: 28px; border: 1px solid #1f2937; }
+  .panel.dark  { background: #111827; color: #e5e7eb; }
+  .panel.light { background: #f8fafc; color: #1f2937; border-color: #e2e8f0; }
+  .panel h2 { font-size: 15px; margin: 0 0 18px; letter-spacing: .04em; text-transform: uppercase; opacity: .75; }
+  .grid { display: grid; grid-template-columns: 150px 1fr 1fr; align-items: center; }
+  .row { display: contents; }
+  .head .rowhead, .head .colhead { font-size: 12px; letter-spacing: .05em; text-transform: uppercase; opacity: .6; padding-bottom: 10px; }
+  .rowhead { padding: 22px 0; font-weight: 600; }
+  .cell { margin: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px 0; }
+  .glyph { display: flex; align-items: center; justify-content: flex-start; }
+  .cell svg { color: currentColor; }
+  figcaption { font-size: 12px; opacity: .65; }
+  .panel.dark  .cell svg { color: #e5e7eb; }
+  .panel.light .cell svg { color: #111827; }
+  .row { border-top: 1px solid rgba(148,163,184,.18); }
+  .grid > .head { border-top: 0; }
+</style>
+</head>
+<body>
+  <h1>HolafIcons v0.1.5 — comparatif de tracé</h1>
+  <p class="intro">
+    Pour chaque icône : colonne gauche = tracé <strong>de la brique</strong>
+    (<code>HolafIcons.render()</code>, style Feather), colonne droite = tracé
+    <strong>actuellement inline dans Yuki</strong> (collection Lucide, extrait de
+    <code>public/ui/*.html</code>). Même taille (96 px) et même épaisseur
+    (<code>stroke-width="2"</code>, viewBox 24×24). Les tracés des deux colonnes
+    sont extraits des sources réelles, jamais redessinés.
+  </p>
+  
+  <section class="panel dark">
+    <h2>Fond sombre</h2>
+    <div class="grid">
+      <div class="row head">
+        <div class="rowhead">icône</div>
+        <div class="colhead">Brique holaf-lib (Feather)</div>
+        <div class="colhead">Yuki inline actuel (Lucide)</div>
+      </div>
+      
+    <div class="row">
+      <div class="rowhead"><code>arrow-left</code></div>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></div><figcaption>brique · Feather</figcaption></figure>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19l-7-7l7-7m7 7H5"></path></svg></div><figcaption>Yuki actuel · Lucide</figcaption></figure>
+    </div>
+
+    <div class="row">
+      <div class="rowhead"><code>volume</code></div>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg></div><figcaption>brique · Feather</figcaption></figure>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM16 9a5 5 0 0 1 0 6m3.364 3.364a9 9 0 0 0 0-12.728"></path></svg></div><figcaption>Yuki actuel · Lucide</figcaption></figure>
+    </div>
+
+    <div class="row">
+      <div class="rowhead"><code>volume-off</code></div>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg></div><figcaption>brique · Feather</figcaption></figure>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM22 9l-6 6m0-6l6 6"></path></svg></div><figcaption>Yuki actuel · Lucide</figcaption></figure>
+    </div>
+    </div>
+  </section>
+  
+  <section class="panel light">
+    <h2>Fond clair</h2>
+    <div class="grid">
+      <div class="row head">
+        <div class="rowhead">icône</div>
+        <div class="colhead">Brique holaf-lib (Feather)</div>
+        <div class="colhead">Yuki inline actuel (Lucide)</div>
+      </div>
+      
+    <div class="row">
+      <div class="rowhead"><code>arrow-left</code></div>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></div><figcaption>brique · Feather</figcaption></figure>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19l-7-7l7-7m7 7H5"></path></svg></div><figcaption>Yuki actuel · Lucide</figcaption></figure>
+    </div>
+
+    <div class="row">
+      <div class="rowhead"><code>volume</code></div>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg></div><figcaption>brique · Feather</figcaption></figure>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM16 9a5 5 0 0 1 0 6m3.364 3.364a9 9 0 0 0 0-12.728"></path></svg></div><figcaption>Yuki actuel · Lucide</figcaption></figure>
+    </div>
+
+    <div class="row">
+      <div class="rowhead"><code>volume-off</code></div>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg></div><figcaption>brique · Feather</figcaption></figure>
+      <figure class="cell"><div class="glyph"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="96" height="96" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298zM22 9l-6 6m0-6l6 6"></path></svg></div><figcaption>Yuki actuel · Lucide</figcaption></figure>
+    </div>
+    </div>
+  </section>
+</body>
+</html>

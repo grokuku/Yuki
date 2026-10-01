@@ -36,6 +36,13 @@
   --icon-color: var(--accent);
 }
 
+/* Emplacement de la flèche, rendue par theme.js (`HolafIcons.render`).
+ * `inline-flex` : la boîte épouse exactement le SVG (1em) et reste un élément
+ * flex du lien, sans introduire de hauteur de ligne parasite. */
+.nav-back__icon {
+  display: inline-flex;
+}
+
 .nav-back:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   color: var(--accent);

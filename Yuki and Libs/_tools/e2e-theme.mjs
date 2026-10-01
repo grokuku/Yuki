@@ -47,6 +47,7 @@ function check(label, ok, detail = "") {
 }
 const consoleMessages = [];
 const logEntries = [];
+const jsExceptions = [];
 
 /* ─── Lancement de Chromium (headless, débogage CDP) ────────────────────── */
 const profileDir = mkdtempSync(join(tmpdir(), "yuki-e2e-chrome-"));
@@ -96,6 +97,8 @@ ws.on("message", (raw) => {
       consoleMessages.push({ type: msg.params.type, text });
     } else if (msg.method === "Log.entryAdded") {
       logEntries.push({ source: msg.params.entry.source, level: msg.params.entry.level, text: msg.params.entry.text });
+    } else if (msg.method === "Runtime.exceptionThrown") {
+      jsExceptions.push(msg.params.exceptionDetails?.exception?.description || msg.params.exceptionDetails?.text || "(exception)");
     }
   }
 });
@@ -152,12 +155,21 @@ const READ_STATE = `(() => {
     ok: cs.getPropertyValue("--ok").trim().toLowerCase(),
     colorScheme: cs.getPropertyValue("color-scheme").trim(),
     selectValue: select ? select.value : null,
-    toggleIcon: toggle ? toggle.textContent : null,
+    toggleHasSun: !!toggle && !!toggle.querySelector(".icon--sun"),
+    toggleHasMoon: !!toggle && !!toggle.querySelector(".icon--moon"),
     togglePressed: toggle ? toggle.getAttribute("aria-pressed") : null,
     toggleLabel: toggle ? toggle.getAttribute("aria-label") : null,
     stored,
     styleElems: document.querySelectorAll("style").length,
     styleAttrs: document.querySelectorAll("[style]").length,
+    holafVersion: window.HolafTokens && window.HolafTokens.VERSION,
+    holafPacks: window.HolafTokens
+      ? window.HolafTokens.listPresets().filter((n) => n.startsWith("yuki-")).length
+      : 0,
+    holafCurrent: window.HolafTokens && window.HolafTokens.getTheme()
+      ? window.HolafTokens.getTheme().name
+      : null,
+    holafSurface: cs.getPropertyValue("--holaf-surface").trim().toLowerCase(),
   };
 })()`;
 
@@ -221,14 +233,14 @@ for (const path of ["/", "/config"]) {
   }
 
   // — Icône / aria du bouton selon le mode (état final de la boucle : amber-dark).
-  check(`[${page}] bouton en mode sombre : ☾ + aria-pressed=true + libellé`,
-    s.toggleIcon === "☾" && s.togglePressed === "true" && s.toggleLabel === "Passer en mode clair",
-    `icon=${s.toggleIcon} pressed=${s.togglePressed} label=${s.toggleLabel}`);
+  check(`[${page}] bouton en mode sombre : icône lune + aria-pressed=true + libellé`,
+    s.toggleHasMoon && s.togglePressed === "true" && s.toggleLabel === "Passer en mode clair",
+    `moon=${s.toggleHasMoon} pressed=${s.togglePressed} label=${s.toggleLabel}`);
   await clickToggle();
   s = await evaluate(READ_STATE);
-  check(`[${page}] bouton en mode clair : ☀ + aria-pressed=false + libellé`,
-    s.toggleIcon === "☀" && s.togglePressed === "false" && s.toggleLabel === "Passer en mode sombre",
-    `icon=${s.toggleIcon} pressed=${s.togglePressed} label=${s.toggleLabel}`);
+  check(`[${page}] bouton en mode clair : icône soleil + aria-pressed=false + libellé`,
+    s.toggleHasSun && s.togglePressed === "false" && s.toggleLabel === "Passer en mode sombre",
+    `sun=${s.toggleHasSun} pressed=${s.togglePressed} label=${s.toggleLabel}`);
 
   // — Persistance : slate-light puis rechargement.
   await setFamily(page, "slate"); // mode courant = light après le clic ci-dessus
@@ -257,12 +269,17 @@ for (const path of ["/", "/config"]) {
       `dataTheme=${s.dataTheme} stored=${JSON.stringify(s.stored)} --bg=${s.bg}`);
   }
 
-  // — DOM : aucun <style> injecté, aucun attribut style (CSP style-src 'self').
+  // — DOM : aucun <style> injecté (CSP style-src 'self') ; les tokens sont
+  //   posés par CSSOM sur <html> (autorisé par CSP, non régi par style-src).
   await evaluate("localStorage.clear()");
   await navigate(url);
   s = await evaluate(READ_STATE);
-  check(`[${page}] zéro <style> injecté et zéro attribut style`, s.styleElems === 0 && s.styleAttrs === 0,
-    `style=${s.styleElems} attrs=${s.styleAttrs}`);
+  check(`[${page}] zéro <style> injecté (marqueur neutralisé), CSSOM --holaf-* actif`,
+    s.styleElems === 0 && s.styleAttrs === 1 && s.holafSurface !== "",
+    `style=${s.styleElems} attrs=${s.styleAttrs} holaf-surface=${s.holafSurface}`);
+  check(`[${page}] brique tokens active (v0.3.0) + 10 packs hôte yuki-*`,
+    s.holafVersion === "0.3.0" && s.holafPacks === 10 && (s.holafCurrent || "").startsWith("yuki-"),
+    `version=${s.holafVersion} packs=${s.holafPacks} courant=${s.holafCurrent}`);
 
   // — Pont holaf (page /config seulement) : le nom EXACT est transmis.
   if (page === "config") {
@@ -304,6 +321,7 @@ for (const m of consoleMessages.slice(0, 10)) console.log("  console:", m.type, 
 for (const e of logEntries.slice(0, 10)) console.log("  log:", e.source, e.level, JSON.stringify(e.text.slice(0, 200)));
 check("ZÉRO violation CSP (aucun « Refused… » ni entrée security)", cspViolations.length === 0,
   cspViolations.map((v) => v.text).join(" | "));
+check("ZÉRO exception JavaScript", jsExceptions.length === 0, jsExceptions.join(" | "));
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n═══ BILAN : ${results.length - failed.length}/${results.length} vérifications OK ═══`);

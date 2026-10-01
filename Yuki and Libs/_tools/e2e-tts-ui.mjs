@@ -260,7 +260,7 @@ const READ_CHAT = `(() => {
     stored,
     audioTags: document.querySelectorAll("audio").length,
     styleElems: document.querySelectorAll("style").length,
-    styleAttrs: document.querySelectorAll("[style]").length,
+    styleAttrs: document.body.querySelectorAll("[style]").length,
   };
 })()`;
 
@@ -292,7 +292,7 @@ check(
 );
 
 check("[/] aucune balise <audio> (Web Audio obligatoire)", s.audioTags === 0, `audio=${s.audioTags}`);
-check("[/] zéro <style> injecté et zéro attribut style", s.styleElems === 0 && s.styleAttrs === 0,
+check("[/] zéro <style> injecté et zéro style inline dans le corps (tokens CSSOM sur :root)", s.styleElems === 0 && s.styleAttrs === 0,
   `style=${s.styleElems} attrs=${s.styleAttrs}`);
 await shot("chat-tts-toggle");
 
@@ -455,7 +455,7 @@ const READ_CONFIG = `(() => {
     rows,
     audioTags: document.querySelectorAll("audio").length,
     styleElems: document.querySelectorAll("style").length,
-    styleAttrs: document.querySelectorAll("[style]").length,
+    styleAttrs: document.body.querySelectorAll("[style]").length,
   };
 })()`;
 
@@ -475,7 +475,7 @@ check(
   JSON.stringify(s.rows),
 );
 check("[/config] aucune balise <audio> (Web Audio obligatoire)", s.audioTags === 0);
-check("[/config] zéro <style> injecté et zéro attribut style (avant modale)",
+check("[/config] zéro <style> injecté et zéro style inline dans le corps (avant modale)",
   s.styleElems === 0 && s.styleAttrs === 0, `style=${s.styleElems} attrs=${s.styleAttrs}`);
 
 /* — Sélection de la voix active → PUT /api/config { tts.voice } — */
@@ -616,15 +616,22 @@ const iconColor = await evaluate(`(() => {
   const back = document.querySelector('.nav-back');
   const icon = back?.querySelector('.icon');
   const cs = (el) => (el ? getComputedStyle(el).color : null);
-  document.documentElement.setAttribute('data-theme', 'indigo-dark');
+  // Doctrine « alias + repli » : les variables de Yuki pointent sur les tokens
+  // --holaf-* posés par la brique. Changer de thème = appliquer le PACK HÔTE
+  // (source unique) PUIS l'attribut qui sélectionne les alias (comme theme.js).
+  const set = (preset) => {
+    document.documentElement.setAttribute('data-theme', preset);
+    window.HolafTokens.setTheme('yuki-' + preset);
+  };
+  set('indigo-dark');
   const dark = { icon: cs(icon), text: cs(back) };
-  document.documentElement.setAttribute('data-theme', 'emerald-light');
+  set('emerald-light');
   const light = { icon: cs(icon), text: cs(back) };
-  document.documentElement.setAttribute('data-theme', 'indigo-dark');
+  set('indigo-dark');
   return {
     dark, light,
     stroke: icon?.getAttribute('stroke') ?? null,
-    styleAttrs: document.querySelectorAll('[style]').length,
+    styleAttrs: document.body.querySelectorAll('[style]').length,
   };
 })()`);
 check(

@@ -2,18 +2,30 @@
  * Thèmes de l'UI Yuki — FICHIER GÉNÉRÉ, ne pas éditer à la main.
  *
  * Modèle à DEUX AXES : famille (indigo, midnight, slate, emerald, amber) ×
- * mode (light, dark) = 10 presets « <famille>-<mode> ». Les valeurs sont la
- * projection EXACTE du catalogue holaf-lib sur les 11 variables de Yuki :
- *   - surfaces/bordures/textes/accent/danger : HolafTokens.PRESETS
- *     (holaf-lib js/holaf-tokens.js v0.2.0, presets miroirs de
- *     la brique modale HolafModal v0.5.0) ;
- *   - graines des familles : indigo #6366f1, midnight #818cf8,
- *     slate #94a3b8, emerald #10b981, amber #f59e0b ;
- *   - --user      = HolafColor.mix(surface, accent, 0.18)
- *     --assistant = HolafColor.mix(surface, accent, 0.06)
- *     --ok        = graine Yuki #4cc38a ajustée par paliers de 5 %
- *                   (darken en clair / lighten en sombre) jusqu'à
- *                   contrastRatio(ok, surface) >= 4.5 (WCAG AA).
+ * mode (light, dark) = 10 presets « <famille>-<mode> ».
+ *
+ * DOCTRINE « ALIAS + REPLI » (comme Pi-Web) : ces variables ne portent plus
+ * de couleur littérale, elles POINTENT sur les tokens --holaf-* posés au
+ * runtime par la brique holaf-tokens v0.3.0 (via le pack hôte
+ * « yuki-<famille>-<mode> », voir public/ui/theme.js et themes-data.js) :
+ *   - surfaces/bordures/textes/accent/danger : preset INTÉGRÉ <famille>-<mode>
+ *     de la brique (HolafTokens) ;
+ *   - --user / --assistant / --ok : dérivés propres à Yuki, portés par le pack
+ *     hôte (themes-data.js) ;
+ *   - le 2e argument de var() est le REPLI : la valeur d'avant l'unification,
+ *     calculée ci-dessous. Si la brique ne se charge pas, le rendu reste
+ *     STRICTEMENT identique.
+ *
+ * Rapport de projection (valeurs de repli) :
+ *   --bg / --panel  ← surface        --panel-2 ← surface-elev
+ *   --border        ← border
+ *   --text          ← text           --muted   ← text-muted
+ *   --accent        ← accent         --danger  ← danger
+ *   --user      = HolafColor.mix(surface, accent, 0.18)
+ *   --assistant = HolafColor.mix(surface, accent, 0.06)
+ *   --ok        = graine Yuki #4cc38a ajustée par paliers de 5 %
+ *                 (darken en clair / lighten en sombre) jusqu'à
+ *                 contrastRatio(ok, surface) >= 4.5 (WCAG AA).
  *
  * Provenance / régénération :
  *   script : _tools/generate-yuki-themes.mjs (racine du workspace composite,
@@ -27,152 +39,152 @@
 
 :root[data-theme="indigo-light"] {
   color-scheme: light;
-  --bg: #ffffff;
-  --panel: #ffffff;
-  --panel-2: #f4f4f5;
-  --border: #d4d4d8;
-  --text: #18181b;
-  --muted: #52525b;
-  --accent: #4f46e5;
-  --danger: #dc2626;
-  --user: #dfdefa;
-  --assistant: #f4f4fd;
-  --ok: #317f5a;
+  --bg: var(--holaf-surface, #ffffff);
+  --panel: var(--holaf-surface, #ffffff);
+  --panel-2: var(--holaf-surface-elev, #f4f4f5);
+  --border: var(--holaf-border, #d4d4d8);
+  --text: var(--holaf-text, #18181b);
+  --muted: var(--holaf-text-muted, #52525b);
+  --accent: var(--holaf-accent, #4f46e5);
+  --danger: var(--holaf-danger, #dc2626);
+  --user: var(--holaf-user, #dfdefa);
+  --assistant: var(--holaf-assistant, #f4f4fd);
+  --ok: var(--holaf-ok, #317f5a);
 }
 
 :root[data-theme="indigo-dark"] {
   color-scheme: dark;
-  --bg: #1e1e1e;
-  --panel: #1e1e1e;
-  --panel-2: #27272a;
-  --border: #3f3f46;
-  --text: #e4e4e7;
-  --muted: #a1a1aa;
-  --accent: #6366f1;
-  --danger: #ef4444;
-  --user: #2a2b44;
-  --assistant: #22222b;
-  --ok: #4cc38a;
+  --bg: var(--holaf-surface, #1e1e1e);
+  --panel: var(--holaf-surface, #1e1e1e);
+  --panel-2: var(--holaf-surface-elev, #27272a);
+  --border: var(--holaf-border, #3f3f46);
+  --text: var(--holaf-text, #e4e4e7);
+  --muted: var(--holaf-text-muted, #a1a1aa);
+  --accent: var(--holaf-accent, #6366f1);
+  --danger: var(--holaf-danger, #ef4444);
+  --user: var(--holaf-user, #2a2b44);
+  --assistant: var(--holaf-assistant, #22222b);
+  --ok: var(--holaf-ok, #4cc38a);
 }
 
 :root[data-theme="midnight-light"] {
   color-scheme: light;
-  --bg: #f6f7fc;
-  --panel: #f6f7fc;
-  --panel-2: #ffffff;
-  --border: #d4d6f3;
-  --text: #18181b;
-  --muted: #75767a;
-  --accent: #5b63d3;
-  --danger: #dc2626;
-  --user: #dadcf5;
-  --assistant: #edeefa;
-  --ok: #317f5a;
+  --bg: var(--holaf-surface, #f6f7fc);
+  --panel: var(--holaf-surface, #f6f7fc);
+  --panel-2: var(--holaf-surface-elev, #ffffff);
+  --border: var(--holaf-border, #d4d6f3);
+  --text: var(--holaf-text, #18181b);
+  --muted: var(--holaf-text-muted, #75767a);
+  --accent: var(--holaf-accent, #5b63d3);
+  --danger: var(--holaf-danger, #dc2626);
+  --user: var(--holaf-user, #dadcf5);
+  --assistant: var(--holaf-assistant, #edeefa);
+  --ok: var(--holaf-ok, #317f5a);
 }
 
 :root[data-theme="midnight-dark"] {
   color-scheme: dark;
-  --bg: #10111d;
-  --panel: #10111d;
-  --panel-2: #181a2c;
-  --border: #272a44;
-  --text: #e2e4f0;
-  --muted: #9aa0c3;
-  --accent: #818cf8;
-  --danger: #ef4444;
-  --user: #242744;
-  --assistant: #17182a;
-  --ok: #4cc38a;
+  --bg: var(--holaf-surface, #10111d);
+  --panel: var(--holaf-surface, #10111d);
+  --panel-2: var(--holaf-surface-elev, #181a2c);
+  --border: var(--holaf-border, #272a44);
+  --text: var(--holaf-text, #e2e4f0);
+  --muted: var(--holaf-text-muted, #9aa0c3);
+  --accent: var(--holaf-accent, #818cf8);
+  --danger: var(--holaf-danger, #ef4444);
+  --user: var(--holaf-user, #242744);
+  --assistant: var(--holaf-assistant, #17182a);
+  --ok: var(--holaf-ok, #4cc38a);
 }
 
 :root[data-theme="slate-light"] {
   color-scheme: light;
-  --bg: #f4f6f8;
-  --panel: #f4f6f8;
-  --panel-2: #ffffff;
-  --border: #ced3d9;
-  --text: #18181b;
-  --muted: #747578;
-  --accent: #475569;
-  --danger: #dc2626;
-  --user: #d5d9de;
-  --assistant: #eaecef;
-  --ok: #2e7553;
+  --bg: var(--holaf-surface, #f4f6f8);
+  --panel: var(--holaf-surface, #f4f6f8);
+  --panel-2: var(--holaf-surface-elev, #ffffff);
+  --border: var(--holaf-border, #ced3d9);
+  --text: var(--holaf-text, #18181b);
+  --muted: var(--holaf-text-muted, #747578);
+  --accent: var(--holaf-accent, #475569);
+  --danger: var(--holaf-danger, #dc2626);
+  --user: var(--holaf-user, #d5d9de);
+  --assistant: var(--holaf-assistant, #eaecef);
+  --ok: var(--holaf-ok, #2e7553);
 }
 
 :root[data-theme="slate-dark"] {
   color-scheme: dark;
-  --bg: #1f232b;
-  --panel: #1f232b;
-  --panel-2: #292e38;
-  --border: #3a4150;
-  --text: #e6e9ee;
-  --muted: #9aa3b2;
-  --accent: #94a3b8;
-  --danger: #ef4444;
-  --user: #343a44;
-  --assistant: #262b33;
-  --ok: #4cc38a;
+  --bg: var(--holaf-surface, #1f232b);
+  --panel: var(--holaf-surface, #1f232b);
+  --panel-2: var(--holaf-surface-elev, #292e38);
+  --border: var(--holaf-border, #3a4150);
+  --text: var(--holaf-text, #e6e9ee);
+  --muted: var(--holaf-text-muted, #9aa3b2);
+  --accent: var(--holaf-accent, #94a3b8);
+  --danger: var(--holaf-danger, #ef4444);
+  --user: var(--holaf-user, #343a44);
+  --assistant: var(--holaf-assistant, #262b33);
+  --ok: var(--holaf-ok, #4cc38a);
 }
 
 :root[data-theme="emerald-light"] {
   color-scheme: light;
-  --bg: #ffffff;
-  --panel: #ffffff;
-  --panel-2: #f0fdf4;
-  --border: #c8e1da;
-  --text: #18181b;
-  --muted: #79797b;
-  --accent: #047857;
-  --danger: #dc2626;
-  --user: #d2e7e1;
-  --assistant: #f0f7f5;
-  --ok: #317f5a;
+  --bg: var(--holaf-surface, #ffffff);
+  --panel: var(--holaf-surface, #ffffff);
+  --panel-2: var(--holaf-surface-elev, #f0fdf4);
+  --border: var(--holaf-border, #c8e1da);
+  --text: var(--holaf-text, #18181b);
+  --muted: var(--holaf-text-muted, #79797b);
+  --accent: var(--holaf-accent, #047857);
+  --danger: var(--holaf-danger, #dc2626);
+  --user: var(--holaf-user, #d2e7e1);
+  --assistant: var(--holaf-assistant, #f0f7f5);
+  --ok: var(--holaf-ok, #317f5a);
 }
 
 :root[data-theme="emerald-dark"] {
   color-scheme: dark;
-  --bg: #0b1512;
-  --panel: #0b1512;
-  --panel-2: #12201a;
-  --border: #143f30;
-  --text: #f4f4f5;
-  --muted: #929696;
-  --accent: #34d399;
-  --danger: #ef4444;
-  --user: #12372a;
-  --assistant: #0d201a;
-  --ok: #4cc38a;
+  --bg: var(--holaf-surface, #0b1512);
+  --panel: var(--holaf-surface, #0b1512);
+  --panel-2: var(--holaf-surface-elev, #12201a);
+  --border: var(--holaf-border, #143f30);
+  --text: var(--holaf-text, #f4f4f5);
+  --muted: var(--holaf-text-muted, #929696);
+  --accent: var(--holaf-accent, #34d399);
+  --danger: var(--holaf-danger, #ef4444);
+  --user: var(--holaf-user, #12372a);
+  --assistant: var(--holaf-assistant, #0d201a);
+  --ok: var(--holaf-ok, #4cc38a);
 }
 
 :root[data-theme="amber-light"] {
   color-scheme: light;
-  --bg: #ffffff;
-  --panel: #ffffff;
-  --panel-2: #fffbeb;
-  --border: #efd9c9;
-  --text: #18181b;
-  --muted: #79797b;
-  --accent: #b45309;
-  --danger: #dc2626;
-  --user: #f2e0d3;
-  --assistant: #fbf5f0;
-  --ok: #317f5a;
+  --bg: var(--holaf-surface, #ffffff);
+  --panel: var(--holaf-surface, #ffffff);
+  --panel-2: var(--holaf-surface-elev, #fffbeb);
+  --border: var(--holaf-border, #efd9c9);
+  --text: var(--holaf-text, #18181b);
+  --muted: var(--holaf-text-muted, #79797b);
+  --accent: var(--holaf-accent, #b45309);
+  --danger: var(--holaf-danger, #dc2626);
+  --user: var(--holaf-user, #f2e0d3);
+  --assistant: var(--holaf-assistant, #fbf5f0);
+  --ok: var(--holaf-ok, #317f5a);
 }
 
 :root[data-theme="amber-dark"] {
   color-scheme: dark;
-  --bg: #1a1408;
-  --panel: #1a1408;
-  --panel-2: #241c0d;
-  --border: #4c3a0e;
-  --text: #f4f4f5;
-  --muted: #989691;
-  --accent: #fbbf24;
-  --danger: #ef4444;
-  --user: #43330d;
-  --assistant: #281e0a;
-  --ok: #4cc38a;
+  --bg: var(--holaf-surface, #1a1408);
+  --panel: var(--holaf-surface, #1a1408);
+  --panel-2: var(--holaf-surface-elev, #241c0d);
+  --border: var(--holaf-border, #4c3a0e);
+  --text: var(--holaf-text, #f4f4f5);
+  --muted: var(--holaf-text-muted, #989691);
+  --accent: var(--holaf-accent, #fbbf24);
+  --danger: var(--holaf-danger, #ef4444);
+  --user: var(--holaf-user, #43330d);
+  --assistant: var(--holaf-assistant, #281e0a);
+  --ok: var(--holaf-ok, #4cc38a);
 }
 
 /* ─── Contrôle de thème (topbar) ─────────────────────────────────────────

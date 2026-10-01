@@ -197,8 +197,16 @@ describe("UI statique servie par le gateway", () => {
 });
 
 describe("Thème à deux axes (famille × mode) — assets et markup", () => {
-  it("sert /ui/themes.css, /ui/theme.js et la brique modale vendorisée, CSP inchangée", async () => {
-    for (const path of ["/ui/themes.css", "/ui/theme.js", "/ui/vendor/holaf/holaf-modal.css"]) {
+  it("sert /ui/themes.css, /ui/theme.js et les briques vendorisées, CSP inchangée", async () => {
+    for (const path of [
+      "/ui/themes.css",
+      "/ui/theme.js",
+      "/ui/themes-data.js",
+      "/ui/holaf-tokens-boot.js",
+      "/ui/vendor/holaf/holaf-modal.css",
+      "/ui/vendor/holaf/holaf-tokens.js",
+      "/ui/vendor/holaf/holaf-icons.js",
+    ]) {
       const response = await fetch(`${baseUrl}${path}`);
       expect(response.status, path).toBe(200);
       expect(response.headers.get("content-type"), path).toContain(path.endsWith(".css") ? "text/css" : "javascript");
@@ -256,9 +264,28 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
     expect(css).not.toContain("prefers-color-scheme");
     // Chaque preset pose son color-scheme (contrôles natifs cohérents).
     expect(css.match(/color-scheme: (light|dark);/g)?.length).toBe(10);
+
+    // DOCTRINE « alias + repli » : chaque variable de Yuki POINTE sur un token
+    // --holaf-* posé au runtime par la brique, avec la valeur d'avant en 2e
+    // argument de var() (repli → apparence identique si la brique manque).
+    for (const [cssVar, token] of [
+      ["--bg", "--holaf-surface"],
+      ["--panel", "--holaf-surface"],
+      ["--panel-2", "--holaf-surface-elev"],
+      ["--border", "--holaf-border"],
+      ["--text", "--holaf-text"],
+      ["--muted", "--holaf-text-muted"],
+      ["--accent", "--holaf-accent"],
+      ["--danger", "--holaf-danger"],
+      ["--user", "--holaf-user"],
+      ["--assistant", "--holaf-assistant"],
+      ["--ok", "--holaf-ok"],
+    ]) {
+      expect(css, `${cssVar} → ${token}`).toContain(`${cssVar}: var(${token}, `);
+    }
   });
 
-  it("theme.js ne suit plus l'OS et migre les anciennes valeurs sur la même clé", async () => {
+  it("theme.js charge la brique `tokens` au runtime et migre les anciennes valeurs", async () => {
     const js = await (await fetch(`${baseUrl}/ui/theme.js`)).text();
     // Suppression du suivi système.
     expect(js).not.toContain("matchMedia");
@@ -271,14 +298,33 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
     expect(js).toContain('["slate", "slate-dark"]');
     // Le défaut est aligné sur le markup.
     expect(js).toContain('DEFAULT_PRESET = "indigo-dark"');
+
+    // Source unique runtime : import PAR EFFET DE BORDÉ de la brique `tokens`
+    // (0.3.0 n'a AUCUN export ESM nommé — un import nommé échouerait).
+    expect(js).toContain("./vendor/holaf/holaf-tokens.js");
+    expect(js).not.toContain("import { HolafTokens }");
+    // Packs hôte Yuki + dérivés générés (user / assistant / ok).
+    expect(js).toContain("registerPreset");
+    expect(js).toContain("themes-data.js");
+    // Marqueur <style> de la brique neutralisé AVANT son chargement (CSP).
+    expect(js).toContain("./holaf-tokens-boot.js");
+    // Icônes du bouton de mode rendues par la brique `icons`.
+    expect(js).toContain("./vendor/holaf/holaf-icons.js");
+    expect(js).toContain("HolafIcons.render");
   });
 
-  it("la copie vendorisée d'HolafModal est bien la 0.5.0 (catalogue 2 axes)", async () => {
+  it("la copie vendorisée des briques `tokens`, `icons` et `modal` est bien la version pinnée", async () => {
     const manifest = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-manifest.json`)).json();
-    expect(manifest).toEqual({ fetch: "0.2.0", modal: "0.5.0" });
+    expect(manifest).toEqual({ fetch: "0.2.0", modal: "0.5.0", tokens: "0.3.0", icons: "0.1.5" });
     const css = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-modal.css`)).text();
     // Le CSS externe de la brique (extrait de getCss()) est bien servi.
     expect(css).toContain(".holaf-modal-overlay");
+    // La brique `tokens` est classic-compatible (aucun export nommé).
+    const tokens = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-tokens.js`)).text();
+    expect(tokens).toContain("HolafTokens");
+    // La brique `icons` expose bien son API (export nommé + global).
+    const icons = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-icons.js`)).text();
+    expect(icons).toContain("export { HolafIcons }");
   });
 });
 
@@ -552,26 +598,41 @@ describe("Configuration du moteur — éditeur structuré (Lot 9)", () => {
 });
 
 describe("Icônes SVG colorables (currentColor / --icon-color)", () => {
-  it("les deux pages portent des icônes SVG monochromes en currentColor (aucune couleur en dur)", async () => {
-    for (const path of ["/", "/config"]) {
-      const body = await (await fetch(`${baseUrl}${path}`)).text();
-      // Bascule de thème : les DEUX icônes (soleil + lune) sont présentes.
-      expect(body, path).toContain('class="icon icon--sun"');
-      expect(body, path).toContain('class="icon icon--moon"');
-      // La couleur vient de currentColor, jamais d'un blanc codé en dur.
-      expect(body, path).toContain('stroke="currentColor"');
-      expect(body, path).not.toMatch(/fill="#fff/i);
-      expect(body, path).not.toMatch(/fill="white"/i);
-      // CSP : toujours aucun style inline.
-      expect(body, path).not.toMatch(/\sstyle=/);
+  it("les 5 icônes sont rendues par la brique `icons` (via theme.js), monochromes", async () => {
+    // Soleil/lune (bouton de mode), haut-parleur/barré (contrôle voix) et
+    // flèche retour (/config) : TOUTES rendues par la brique holaf-lib `icons`
+    // via `theme.js` — même pipeline monochrome que le reste
+    // (`stroke="currentColor"`, classes `.icon` / `.icon--<nom>`, coloration
+    // par `--icon-color`, CSP : aucun style inline). Le markup ne contient
+    // plus AUCUN SVG inline : la brique fournit désormais les 5 tracés.
+    const js = await (await fetch(`${baseUrl}/ui/theme.js`)).text();
+    for (const name of ["sun", "moon", "volume", "volume-off", "arrow-left"]) {
+      expect(js, name).toContain(`HolafIcons.render("${name}"`);
     }
-    // Contrôle voix : haut-parleur + haut-parleur barré.
-    const chat = await (await fetch(`${baseUrl}/`)).text();
-    expect(chat).toContain('class="icon icon--volume"');
-    expect(chat).toContain('class="icon icon--volume-off"');
-    // Flèche de retour : elle aussi un SVG coloré par élément.
-    const config = await (await fetch(`${baseUrl}/config`)).text();
-    expect(config).toContain('class="icon icon--arrow-left"');
+    for (const cls of [
+      "icon icon--sun",
+      "icon icon--moon",
+      "icon icon--volume",
+      "icon icon--volume-off",
+      "icon icon--arrow-left",
+    ]) {
+      expect(js, cls).toContain(`class: "${cls}"`);
+    }
+    const iconsBrick = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-icons.js`)).text();
+    expect(iconsBrick).toContain('stroke="currentColor"');
+
+    // Le markup des deux pages est vidé de ses SVG inline : aucun `fill` en
+    // dur, aucun style inline (CSP). Les emplacements de rendu subsistent.
+    for (const path of ["/", "/config"]) {
+      const html = await (await fetch(`${baseUrl}${path}`)).text();
+      expect(html, path).not.toContain("<svg");
+      expect(html, path).not.toMatch(/fill="#fff/i);
+      expect(html, path).not.toMatch(/fill="white"/i);
+      expect(html, path).not.toMatch(/\sstyle=/);
+    }
+    // Points d'ancrage remplis par `renderBrickIcons()` (theme.js).
+    expect(await (await fetch(`${baseUrl}/`)).text()).toContain('id="tts-toggle"');
+    expect(await (await fetch(`${baseUrl}/config`)).text()).toContain('class="nav-back__icon"');
   });
 
   it("styles.css définit le socle `.icon` et la variable `--icon-color` héritée", async () => {
@@ -581,11 +642,16 @@ describe("Icônes SVG colorables (currentColor / --icon-color)", () => {
     expect(css).toContain("stroke: currentColor");
     // Le mode (data-theme="<fam>-<mode>") sélectionne soleil/lune sans JS.
     expect(css).toContain(':root[data-theme$="-light"] #theme-toggle .icon--sun');
+    // Les classes d'état posées par app.js sélectionnent haut-parleur/barré.
+    expect(css).toContain("#tts-toggle.tts-toggle--off .icon--volume-off");
   });
 
   it("config.css colore l'icône du lien retour PAR ÉLÉMENT (`--icon-color`)", async () => {
     const css = await (await fetch(`${baseUrl}/ui/config.css`)).text();
     expect(css).toContain("--icon-color: var(--accent)");
+    // L'emplacement de la flèche reste une boîte flex neutre (rendue par theme.js) :
+    // la flèche n'est plus un SVG inline du markup.
+    expect(css).toContain(".nav-back__icon {");
   });
 });
 
