@@ -19,6 +19,7 @@ import {
   type CreateAgentSessionRuntimeFactory,
   type CreateAgentSessionRuntimeResult,
   type CreateAgentSessionServicesOptions,
+  type InlineExtension,
   type ModelRuntime,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -32,12 +33,17 @@ type ResourceLoaderOptions = NonNullable<
 
 function buildResourceLoaderOptions(
   systemPrompt: string,
+  extensionFactories?: readonly InlineExtension[],
 ): ResourceLoaderOptions {
   return {
     systemPromptOverride: () => systemPrompt,
     appendSystemPromptOverride: () => [],
     // Aucun fichier AGENTS.md ne doit s'inviter dans le prompt système.
     agentsFilesOverride: () => ({ agentsFiles: [] }),
+    // Lot 12 : extensions INLINE (mémoire durable). Aucune dépendance, aucun build.
+    ...(extensionFactories && extensionFactories.length > 0
+      ? { extensionFactories: [...extensionFactories] }
+      : {}),
   };
 }
 
@@ -78,6 +84,12 @@ export interface LightRuntimeOptions {
   thinkingLevel?: SdkThinkingLevel;
   tools?: readonly string[];
   customTools?: readonly ToolDefinition[];
+  /**
+   * Lot 12 : extensions INLINE enregistrées sur la session légère (mémoire
+   * durable : rappel avant tour + déclencheurs d'écriture). Absentes ⇒ aucune
+   * extension (comportement inchangé, tests existants).
+   */
+  extensionFactories?: readonly InlineExtension[];
 }
 
 /** Construit le runtime de la session légère (runtime remplaçable par le SDK). */
@@ -93,7 +105,10 @@ export async function createLightRuntime(
       agentDir: options.agentDir,
       settingsManager: options.settingsManager,
       modelRuntime: options.modelRuntime,
-      resourceLoaderOptions: buildResourceLoaderOptions(options.systemPrompt),
+      resourceLoaderOptions: buildResourceLoaderOptions(
+        options.systemPrompt,
+        options.extensionFactories,
+      ),
     });
     const result = await createAgentSessionFromServices({
       services,

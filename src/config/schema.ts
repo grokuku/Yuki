@@ -319,6 +319,58 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_TTS_VOLUME",
   },
 
+  // --- Mémoire durable (Lot 12) ---------------------------------------------
+  // ⚠️ `FieldType` = `string | int | enum` : l'activation est un enum `off|on`.
+  // Les bornes du rappel sont des entiers ; le budget en caractères et le
+  // timeout bornent le coût SUR LE CHEMIN CRITIQUE (TTFT).
+  "memory.enabled": {
+    type: "enum",
+    enum: ["off", "on"],
+    default: "on",
+    apply: "hot",
+    env: "YUKI_MEMORY_ENABLED",
+  },
+  "memory.recall.topK": {
+    type: "int",
+    default: 5,
+    min: 0,
+    max: 20,
+    apply: "hot",
+    env: "YUKI_MEMORY_TOP_K",
+  },
+  "memory.recall.budgetChars": {
+    type: "int",
+    default: 8_000,
+    min: 0,
+    max: 40_000,
+    apply: "hot",
+    env: "YUKI_MEMORY_BUDGET_CHARS",
+  },
+  "memory.recall.timeoutMs": {
+    type: "int",
+    default: 400,
+    min: 20,
+    max: 5_000,
+    apply: "hot",
+    env: "YUKI_MEMORY_TIMEOUT_MS",
+  },
+  "memory.extract.maxItems": {
+    type: "int",
+    default: 3,
+    min: 0,
+    max: 10,
+    apply: "hot",
+    env: "YUKI_MEMORY_MAX_ITEMS",
+  },
+  "memory.extract.timeoutMs": {
+    type: "int",
+    default: 30_000,
+    min: 1_000,
+    max: 300_000,
+    apply: "hot",
+    env: "YUKI_MEMORY_EXTRACT_TIMEOUT_MS",
+  },
+
   // --- Transport temps réel ------------------------------------------------
   "transport.replayBuffer": {
     type: "int",

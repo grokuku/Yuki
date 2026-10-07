@@ -8,6 +8,7 @@
  */
 
 import type { DelegateServicePort } from "../delegation/ports.js";
+import type { MemoryPort } from "../memory/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
 /** Niveaux de raisonnement acceptés par le SDK (repris tels quels). */
@@ -81,6 +82,12 @@ export interface PiHostOptions {
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).
    */
   llmAvailable?: boolean | (() => boolean);
+  /**
+   * Lot 12 : mémoire durable. Présent ⇒ une extension SDK est enregistrée sur la
+   * session légère (rappel borné avant tour, écriture automatique en fin de tour
+   * et à la compaction). Absent ⇒ aucune mémoire (host nu, tests).
+   */
+  memory?: MemoryPort;
   logger: PiLogger;
 }
 

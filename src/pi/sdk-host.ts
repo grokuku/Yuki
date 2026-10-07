@@ -56,6 +56,7 @@ import {
   type SdkModel,
 } from "./sdk/model-runtime.js";
 import { createLightRuntime } from "./sdk/session-factory.js";
+import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
 import type {
   PiEvent,
   PiEventListener,
@@ -547,6 +548,14 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       );
     }
 
+    const extensionFactories = options.memory
+      ? [
+          createMemoryExtensionFactory(options.memory, {
+            syntheticUserPrefixes: SYNTHETIC_USER_PREFIXES,
+          }),
+        ]
+      : undefined;
+
     runtime = await createLightRuntime({
       cwd: paths.cwd,
       agentDir: paths.agentDir,
@@ -558,6 +567,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       ...(resolvedThinking ? { thinkingLevel: resolvedThinking } : {}),
       ...(options.tools ? { tools: options.tools } : {}),
       ...(customTools.length > 0 ? { customTools } : {}),
+      ...(extensionFactories ? { extensionFactories } : {}),
     });
 
     // Abonnement posé IMMÉDIATEMENT, avant tout prompt.

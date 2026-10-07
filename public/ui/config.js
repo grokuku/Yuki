@@ -158,6 +158,70 @@ const GROUPS = [
     ],
   },
   {
+    id: "memoire",
+    title: "Mémoire durable",
+    fields: [
+      {
+        path: "memory.enabled",
+        label: "Activer la mémoire",
+        kind: "select",
+        options: [
+          ["on", "activée"],
+          ["off", "désactivée"],
+        ],
+        helper:
+          "Yuki retient automatiquement vos préférences et faits durables, et les rappelle avant chaque réponse. Aucun bouton : tout est automatique.",
+      },
+      {
+        path: "memory.recall.topK",
+        label: "Souvenirs rappelés (top-k)",
+        kind: "number",
+        min: 0,
+        max: 20,
+        helper:
+          "Nombre maximal de souvenirs pertinents injectés avant une réponse. Petit par construction (coût sur le temps de première réponse).",
+      },
+      {
+        path: "memory.recall.budgetChars",
+        label: "Budget de rappel (caractères)",
+        kind: "number",
+        min: 0,
+        max: 40000,
+        advanced: true,
+        helper: "Taille maximale du bloc de souvenirs injecté (0 = aucun rappel).",
+      },
+      {
+        path: "memory.recall.timeoutMs",
+        label: "Délai maximal du rappel (ms)",
+        kind: "number",
+        min: 20,
+        max: 5000,
+        advanced: true,
+        helper:
+          "Au-delà, la réponse part SANS mémoire (dégradation gracieuse). N'allonge jamais l'attente.",
+      },
+      {
+        path: "memory.extract.maxItems",
+        label: "Souvenirs extraits par tour",
+        kind: "number",
+        min: 0,
+        max: 10,
+        advanced: true,
+        helper:
+          "Nombre maximal de souvenirs durables extraits d'un échange (0 = écriture désactivée).",
+      },
+      {
+        path: "memory.extract.timeoutMs",
+        label: "Délai maximal d'extraction (ms)",
+        kind: "number",
+        min: 1000,
+        max: 300000,
+        advanced: true,
+        helper: "Hors chemin de réponse : n'affecte jamais le temps de réponse visible.",
+      },
+    ],
+  },
+  {
     id: "tts",
     title: "Réglages de la voix",
     fields: [
@@ -320,6 +384,12 @@ const FIELD_DEFAULTS = {
   "gpu.minDriver": 580,
   "prompts.light": "",
   "prompts.heavy": "",
+  "memory.enabled": "on",
+  "memory.recall.topK": 5,
+  "memory.recall.budgetChars": 8000,
+  "memory.recall.timeoutMs": 400,
+  "memory.extract.maxItems": 3,
+  "memory.extract.timeoutMs": 30000,
   "tts.enabled": "off",
   "tts.engine": "chatterbox",
   "tts.baseUrl": "http://tts:8081",
@@ -344,7 +414,7 @@ const FIELD_DEFAULTS = {
  */
 const TABS = [
   { id: "modeles", groups: ["llm-light", "llm-heavy"] },
-  { id: "conversation", groups: ["delegation", "prompts"] },
+  { id: "conversation", groups: ["delegation", "prompts", "memoire"] },
   { id: "voix", groups: ["tts"] },
   { id: "systeme", groups: ["gpu", "transport"] },
   { id: "maintenance", groups: [] },

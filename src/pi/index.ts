@@ -69,4 +69,9 @@ export type {
   RunContextTracker,
 } from "./sdk/delegate-tools.js";
 
+// Lot 12 — mémoire durable : extracteur SDK (session éphémère isolée). Le port
+// renvoyé (`MemoryExtractor`) est PUR : aucun type du SDK ne traverse la façade.
+export { createSdkMemoryExtractor } from "./sdk/memory-extractor.js";
+export type { SdkMemoryExtractorConfig } from "./sdk/memory-extractor.js";
+
 export { sanitizeErrorText } from "./events.js";

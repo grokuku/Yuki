@@ -63,7 +63,12 @@ import {
   type ThinkingLevelName,
 } from "./llm/index.js";
 import { collectSecretValues, createLogger } from "./observability/logger.js";
-import { createPiHost, createSdkHeavyWorker, type PiHost } from "./pi/index.js";
+import {
+  MemoryIndex,
+  MemoryService,
+  MemoryStore,
+} from "./memory/index.js";
+import { createPiHost, createSdkHeavyWorker, createSdkMemoryExtractor, type PiHost } from "./pi/index.js";
 import {
   AudioCppClient,
   EngineCapabilitiesProbe,
@@ -392,6 +397,7 @@ async function main(): Promise<void> {
   let sessionsCount = 0;
   let activeRuns = 0;
   let host: PiHost | undefined;
+  let memoryService: MemoryService | undefined;
   let transport: Transport | undefined;
   let delegation: DelegationService | undefined;
 
@@ -428,6 +434,38 @@ async function main(): Promise<void> {
       logger,
     });
 
+    const memoryStore = MemoryStore.open({ path: env.memoryStorePath, logger });
+    const memoryIndex = new MemoryIndex({ path: env.memoryIndexPath, logger });
+    memoryService = new MemoryService({
+      store: memoryStore,
+      index: memoryIndex,
+      logger,
+      enabled: () => config.getString("memory.enabled") === "on",
+      bounds: () => ({
+        topK: config.getNumber("memory.recall.topK"),
+        budgetChars: config.getNumber("memory.recall.budgetChars"),
+        timeoutMs: config.getNumber("memory.recall.timeoutMs"),
+      }),
+      extractor: createSdkMemoryExtractor({
+        cwd: env.piCwd,
+        agentDir: env.piAgentDir,
+        authPath: join(env.piAgentDir, "auth.json"),
+        modelsPath,
+        modelReference: lightRef,
+        thinking: "off",
+        timeoutMs: () => config.getNumber("memory.extract.timeoutMs"),
+        logger,
+      }),
+      maxItemsPerPass: () => config.getNumber("memory.extract.maxItems"),
+    });
+    memoryService.start();
+    logger.info("memory.ready", {
+      enabled: config.getString("memory.enabled") === "on",
+      entries: memoryStore.size,
+      store: env.memoryStorePath,
+      index: env.memoryIndexPath,
+    });
+
     host = createPiHost({
       agentDir: env.piAgentDir,
       cwd: env.piCwd,
@@ -445,6 +483,7 @@ async function main(): Promise<void> {
       ...(heavyAvailableAtStart ? { delegation } : {}),
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
+      memory: memoryService,
       logger,
     });
     delegation.setWaker(host);
@@ -574,6 +613,11 @@ async function main(): Promise<void> {
     beforeClose: async () => {
       await transport?.close();
       await host?.stop();
+      if (memoryService) {
+        await memoryService.drain();
+        memoryService.close();
+        memoryService = undefined;
+      }
     },
   });
 

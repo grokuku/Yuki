@@ -33,3 +33,14 @@ export type {
   RunContext,
   RunContextTracker,
 } from "./delegate-tools.js";
+
+// Lot 12 — mémoire durable : extension SDK (rappel + déclencheurs) et extracteur.
+export {
+  createMemoryExtensionFactory,
+  type MemoryExtensionOptions,
+} from "./memory-extension.js";
+export {
+  MEMORY_EXTRACTOR_SYSTEM_PROMPT,
+  createSdkMemoryExtractor,
+  type SdkMemoryExtractorConfig,
+} from "./memory-extractor.js";

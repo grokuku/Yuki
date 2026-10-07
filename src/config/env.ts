@@ -50,6 +50,11 @@ export interface Env {
   gpuFixture: string | null;
   // --- Journal des jobs ---
   jobsStorePath: string;
+  // --- Mémoire durable (Lot 12) ---
+  /** Fichier JSONL de mémoire (journal append-only, lisible à la main). */
+  memoryStorePath: string;
+  /** Fichier SQLite de l'index FTS5 (DÉRIVÉ, reconstructible). */
+  memoryIndexPath: string;
   // --- Configuration du moteur TTS `audio.cpp` (Lot 9) ---
   /**
    * Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw`).
@@ -208,6 +213,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_JOBS_STORE_PATH",
       `${mountPoints.state}/jobs.jsonl`,
+    ),
+    memoryStorePath: getString(
+      env,
+      "YUKI_MEMORY_STORE_PATH",
+      `${mountPoints.state}/memory.jsonl`,
+    ),
+    memoryIndexPath: getString(
+      env,
+      "YUKI_MEMORY_INDEX_PATH",
+      `${mountPoints.state}/memory-index.sqlite`,
     ),
     piAgentDir,
     piSessionsDir: getString(

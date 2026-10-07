@@ -21,6 +21,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/session-factory.ts",
   "src/pi/sdk/heavy-worker.ts",
   "src/pi/sdk/delegate-tools.ts",
+  "src/pi/sdk/memory-extension.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =
