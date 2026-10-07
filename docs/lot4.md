@@ -470,7 +470,19 @@ Ce design est **caduc** du fait de **D121** ; il n'est conservé ici qu'à titre
 
 ## 14. A6 — binaire `yuki-agent` (note d'implémentation)
 
-Le lot **A6** livre le programme posable sur une machine :
+> **Note d'implémentation — hors décisions de conception.** Ajoutée **après la
+> validation**, le **2026-10-07**, pour consigner du **code livré**. Elle **ne
+> modifie aucune décision** `D109`–`D128`, ne rouvre **aucun** point `C##` et
+> n'ajoute **aucune** décision de conception : ce n'est ni **ACTÉ** ni
+> **PROPOSÉ** au sens du présent document.
+
+**« A6 »** n'est pas un lot de la spécification : c'est un **sous-lot du plan
+d'implémentation interne** de l'agent (découpage de développement sans
+correspondance avec la numérotation « Lot 4 / 5 / 9 / 12 » d'ici) : **A1–A7**
+côté agent Go (appairage, transport, proto, exécution, garde-fous, binaire,
+service) et **B1–B6** côté Yuki/TypeScript.
+
+Le sous-lot **A6** livre le programme posable sur une machine :
 
 - `agent/cmd/yuki-agent` : CLI (`pair`/`run`/`install`/`uninstall`/`status`/`version`) ;
 - `agent/internal/agent` : configuration locale, `hello` OS, boucle `cmd → ack → classification → exécution → result`, journal JSON-lines, arrêt propre ;
@@ -482,4 +494,4 @@ Le lot **A6** livre le programme posable sur une machine :
 - **`golang.org/x/sys` v0.35.0** — licence **BSD-3-Clause**.
 - **Windows uniquement** (import sous `//go:build windows`) : service Windows (`windows/svc`, `windows/svc/mgr`) et **job object** (`windows.CreateJobObject`, `AssignProcessToJobObject`, `TerminateJobObject`).
 - Les binaires **Linux n'embarquent pas** ce code (vérifié : 0 symbole `golang.org/x/sys/windows` dans le binaire Linux ; 122 dans le binaire Windows).
-- `proto.Cmd` gagne un champ optionnel **`destructive`** (`*bool`) : l'annonce de Yuki sert uniquement à **journaliser une divergence** avec le matcher local — **sans bloquer** (D118/D126, D124).
+- `proto.Cmd` gagne un champ optionnel **`destructive`** (`*bool`, `agent/internal/proto/types.go`) : c'est une **décision d'IMPLÉMENTATION** — **arbitrée pendant le développement, non validée par l'utilisateur**. Elle **ne contredit pas** `D118`/`D126`/`D124` (**l'agent ne bloque pas**, Yuki décide) : l'annonce de Yuki sert uniquement à **journaliser une divergence** avec le matcher local — **sans bloquer**.

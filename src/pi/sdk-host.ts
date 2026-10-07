@@ -49,6 +49,7 @@ import { PiHostError, toPiHostError } from "./errors.js";
 import type { PiHost } from "./host.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "./instrumentation.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
+import { createExecutionTools } from "./sdk/execution-tools.js";
 import {
   getSharedModelRuntime,
   resolveSdkModel,
@@ -546,6 +547,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           tracker: runContext,
         }),
       );
+    }
+    if (options.execution) {
+      // Lot 4, B6bis : outil d'exécution déléguée (`run_command`). Le garde-fou
+      // par agent (D118) est appliqué côté Yuki AVANT l'envoi.
+      customTools.push(...createExecutionTools(options.execution));
     }
 
     const extensionFactories = options.memory

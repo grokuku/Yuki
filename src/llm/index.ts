@@ -42,6 +42,7 @@ export type {
 export {
   containsForbiddenTool,
   DELEGATE_TOOLS,
+  EXECUTION_TOOLS,
   FORBIDDEN_TOOLS,
   READ_ONLY_TOOLS,
   toolAllowlist,
@@ -50,6 +51,7 @@ export {
 export type {
   BuiltinToolName,
   DelegateToolName,
+  ExecutionToolName,
   ToolAllowlistOptions,
   ToolPolicyEntry,
 } from "./tool-policy.js";

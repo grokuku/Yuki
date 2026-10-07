@@ -11,7 +11,10 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
 import {
+  AgentExecutionService,
+  AgentHub,
   AgentStore,
+  ApprovalRegistry,
   AuditLog,
   caDirectoryIn,
   CertificateAuthority,
@@ -44,6 +47,9 @@ export interface TestStack {
   audit: AuditLog;
   ca: CertificateAuthority;
   pairing: PairingManager;
+  hub: AgentHub;
+  approvals: ApprovalRegistry;
+  execution: AgentExecutionService;
   server: HttpsServer;
   port: number;
   url: string;
@@ -86,6 +92,9 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
     dnsNames: ["localhost"],
     ipAddresses: ["127.0.0.1"],
   });
+  const hub = new AgentHub({ logger });
+  const approvals = new ApprovalRegistry({ logger });
+  const execution = new AgentExecutionService({ store, hub, audit, approvals, logger });
   const server = createAgentsServer({
     certPem: serverCert.certPem,
     keyPem: serverCert.keyPem,
@@ -94,6 +103,7 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
     store,
     audit,
     ca,
+    hub,
     logger,
   });
   const address = await startAgentsServer(server, "127.0.0.1", 0);
@@ -104,6 +114,9 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
     audit,
     ca,
     pairing,
+    hub,
+    approvals,
+    execution,
     server,
     port: address.port,
     url: `https://127.0.0.1:${address.port}`,
@@ -113,6 +126,8 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
     async close() {
       if (closed) return;
       closed = true;
+      hub.closeAll();
+      server.closeAllConnections?.();
       await closeAgentsServer(server);
     },
     cleanup() {

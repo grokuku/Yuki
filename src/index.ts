@@ -23,7 +23,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
+  AgentExecutionService,
+  AgentHub,
   AgentStore,
+  ApprovalRegistry,
   AuditLog,
   caDirectoryIn,
   CertificateAuthority,
@@ -285,6 +288,7 @@ async function main(): Promise<void> {
   const agentsPort = config.getNumber("agents.port");
   let agentsServer: ReturnType<typeof createAgentsServer> | undefined;
   let agentsDeps: AgentsApiDeps | undefined;
+  let agentExecution: AgentExecutionService | undefined;
   try {
     const agentStore = AgentStore.open({
       path: env.agentsStorePath,
@@ -311,6 +315,17 @@ async function main(): Promise<void> {
       audit: auditLog,
       logger,
     });
+    // Canal d'exécution (B6) : registre des connexions vivantes + validations
+    // humaines (B6bis) + service d'exécution (garde-fous D118).
+    const agentHub = new AgentHub({ logger });
+    const approvals = new ApprovalRegistry({ logger });
+    agentExecution = new AgentExecutionService({
+      store: agentStore,
+      hub: agentHub,
+      audit: auditLog,
+      approvals,
+      logger,
+    });
     if (agentsBindHost === "0.0.0.0") {
       // ⚠️ `0.0.0.0` écoute sur TOUTES les interfaces (y compris une interface
       // publique éventuelle). Le port machines n'étant protégé que par mTLS, il
@@ -335,9 +350,10 @@ async function main(): Promise<void> {
       store: agentStore,
       audit: auditLog,
       ca: agentCa,
+      hub: agentHub,
       logger,
     });
-    agentsDeps = { pairing: pairingManager, store: agentStore, logger };
+    agentsDeps = { pairing: pairingManager, store: agentStore, logger, hub: agentHub, audit: auditLog, approvals };
     logger.info("agents.ready", {
       ca_fingerprint: agentCa.fingerprint,
       store: env.agentsStorePath,
@@ -575,8 +591,12 @@ async function main(): Promise<void> {
       modelsConfig: buildModelsConfigFrom(effective),
       model: lightRef,
       thinking: lightThinking,
-      tools: toolAllowlist("light", { delegationEnabled: heavyAvailableAtStart }),
+      tools: toolAllowlist("light", {
+        delegationEnabled: heavyAvailableAtStart,
+        executionEnabled: agentExecution !== undefined,
+      }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
+      ...(agentExecution ? { execution: agentExecution } : {}),
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,

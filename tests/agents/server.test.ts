@@ -238,12 +238,12 @@ describe("port machines — WebSocket (agents authentifiés seulement)", () => {
     expect(outcome).not.toBe("open");
   });
 
-  it("accepte un agent authentifié et envoie un welcome", async () => {
+  it("accepte un agent authentifié et l'enregistre dans le hub", async () => {
     const s = await stack();
     const agentId = "44444444-5555-6666-7777-888888888888";
     s.register(agentId);
     const cert = s.ca.signClientCertificate(agentId);
-    const welcome = await new Promise<{ type: string; agent_id: string }>((resolve, reject) => {
+    const opened = await new Promise<boolean>((resolve, reject) => {
       const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws`, {
         cert: cert.certPem,
         key: cert.keyPem,
@@ -251,18 +251,21 @@ describe("port machines — WebSocket (agents authentifiés seulement)", () => {
         rejectUnauthorized: true,
       });
       const timer = setTimeout(() => reject(new Error("délai")), 5_000);
-      ws.on("message", (data: Buffer) => {
-        clearTimeout(timer);
-        resolve(JSON.parse(data.toString()) as { type: string; agent_id: string });
-        ws.close();
+      ws.on("open", () => {
+        // L'agent se présente (`hello`) : le canal ne doit pas se fermer.
+        ws.send(JSON.stringify({ type: "hello", proto_version: 1, euid: 1000, caps: ["exec"] }));
+        setTimeout(() => {
+          clearTimeout(timer);
+          resolve(ws.readyState === WebSocket.OPEN);
+          ws.close();
+        }, 100);
       });
       ws.on("error", (error: Error) => {
         clearTimeout(timer);
         reject(error);
       });
     });
-    expect(welcome.type).toBe("welcome");
-    expect(welcome.agent_id).toBe(agentId);
+    expect(opened).toBe(true);
     expect(s.store.get(agentId)?.lastSeen).not.toBeNull();
   });
 });

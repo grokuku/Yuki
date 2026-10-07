@@ -35,6 +35,7 @@ import { WebSocket, WebSocketServer } from "ws";
 
 import type { AuditLog } from "./audit.js";
 import type { CertificateAuthority } from "./ca.js";
+import { AgentConnection, AgentHub } from "./connection.js";
 import { PairError } from "./errors.js";
 import { parsePairBegin } from "./pair-protocol.js";
 import { pairOkJson, type PairingManager, type PairingOutcome } from "./pairing.js";
@@ -71,6 +72,12 @@ export interface AgentsServerOptions {
   store: AgentStore;
   audit: AuditLog;
   ca: CertificateAuthority;
+  /**
+   * Registre des connexions d'exécution (B6). Fourni par le câblage pour que
+   * l'outil du modèle et les routes partagent les mêmes canaux ; sinon, un hub
+   * local est créé (tests, usages isolés).
+   */
+  hub?: AgentHub;
   logger: AgentsServerLogger;
   now?: () => number;
   maxBodyBytes?: number;
@@ -179,6 +186,7 @@ export function createAgentsServer(options: AgentsServerOptions): HttpsServer {
   const { pairing, store, audit, ca, logger } = options;
   const maxBody = options.maxBodyBytes ?? MAX_AGENTS_BODY_BYTES;
   const wss = new WebSocketServer({ noServer: true });
+  const hub = options.hub ?? new AgentHub({ logger });
 
   /** L'agent est-il authentifié (chaîne CA + SAN connue + non révoqué) ? */
   function authorizedAgent(identity: PeerIdentity): string | null {
@@ -389,23 +397,23 @@ export function createAgentsServer(options: AgentsServerOptions): HttpsServer {
       });
     }
     audit.append({ event: "connection", agentId, meta: { transport: "ws" } });
-    // Accusé de présentation minimal ; le protocole d'exécution complet (cmd/
-    // result) est un lot ultérieur — cette écoute est déjà en place.
-    ws.send(
-      JSON.stringify({
-        type: "welcome",
-        proto_version: 1,
-        agent_id: agentId,
-        server_version: "yuki",
-        capabilities: [] as string[],
-      }),
-    );
-    ws.on("close", () => {
-      logger.debug("agents.ws.closed", { agent_id: agentId });
+
+    // Canal d'exécution RÉEL (B6) : Yuki peut désormais envoyer `cmd` et
+    // corréler `ack`/`result`/`error` ; l'agent, lui, envoie `hello`.
+    const connection = new AgentConnection({
+      ws,
+      agentId,
+      logger,
+      onClose: (closed) => {
+        hub.unregister(closed);
+        logger.debug("agents.ws.closed", { agent_id: closed.agentId });
+      },
     });
-    ws.on("error", (error: Error) => {
-      logger.warn("agents.ws.error", { agent_id: agentId, error: error.message });
-    });
+    hub.register(connection);
+    // Pousse la configuration courante de l'agent (niveau D118 + privilège
+    // D120). L'agent la journalise ; la décision reste dans Yuki.
+    const record = store.get(agentId);
+    if (record) connection.pushConfig(record.level, record.privilege);
   }
 
   server.on("tlsClientError", (error: Error) => {
@@ -413,6 +421,7 @@ export function createAgentsServer(options: AgentsServerOptions): HttpsServer {
   });
 
   server.on("close", () => {
+    hub.closeAll();
     wss.close();
   });
 

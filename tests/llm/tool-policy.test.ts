@@ -121,4 +121,15 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     expect(containsForbiddenTool(["read", "write"])).toBe(true);
     expect(containsForbiddenTool(["read", "bash"])).toBe(true);
   });
+
+  it("l'outil d'exécution déléguée n'est exposé que s'il est activé (Lot 4)", () => {
+    // Par défaut : jamais d'outil d'exécution.
+    expect(toolAllowlist("light")).not.toContain("run_command");
+    const withExec = toolAllowlist("light", { executionEnabled: true });
+    expect(withExec).toContain("run_command");
+    // `run_command` n'est PAS un outil interdit : c'est le chemin sanctionné.
+    expect(containsForbiddenTool(withExec)).toBe(false);
+    // Le lourd n'a JAMAIS d'outil d'exécution.
+    expect(toolAllowlist("heavy", { executionEnabled: true })).not.toContain("run_command");
+  });
 });

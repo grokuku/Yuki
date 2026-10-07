@@ -8,6 +8,7 @@
  */
 
 import type { DelegateServicePort } from "../delegation/ports.js";
+import type { ExecutionServicePort } from "../agents/execution.js";
 import type { MemoryPort } from "../memory/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
@@ -77,6 +78,12 @@ export interface PiHostOptions {
    * `delegate`/`job_status`/`cancel_job`. Absent ⇒ aucun outil de délégation.
    */
   delegation?: DelegateServicePort;
+  /**
+   * Port d'exécution déléguée (Lot 4). Présent ⇒ la façade construit et expose
+   * l'outil `run_command` (garde-fou par agent appliqué côté Yuki). Absent ⇒
+   * aucun outil d'exécution.
+   */
+  execution?: ExecutionServicePort;
   /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).

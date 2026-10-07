@@ -1,0 +1,253 @@
+# =============================================================================
+# Yuki — CI de l'« agent d'exécution » (Lot 4) : compilation et publication des
+# binaires TÉLÉCHARGEABLES.
+#
+# ⚠️ Workflow SÉPARÉ de `test-build.yml` / `release.yml` (volet image Docker) :
+#   * il ne se déclenche QUE si des fichiers sous `agent/**` (ou ce workflow)
+#     changent — un push qui ne touche que le gateway Node ne le lance jamais, et
+#     réciproquement (le filtre `paths` de `test-build.yml` n'est PAS modifié) ;
+#   * il ne touche NI `version.txt` (version DE Yuki, volet image) NI
+#     `agent/VERSION` (version DE l'agent, source unique de vérité ici). Aucun
+#     bump automatique : la version de l'agent est découplée et gérée à la main.
+#
+# Chaîne de jobs :
+#   agent-quality → gofmt / go vet / go test (module Go dans `agent/`) ;
+#   agent-build   → compilation CROISÉE des 4 cibles (matrice) + artefacts
+#                   (binaire nommé explicitement + empreinte SHA-256) ;
+#   agent-release → (workflow_dispatch UNIQUEMENT) GitHub Release `agent-v<version>`
+#                   portant les 4 binaires + `SHA256SUMS`.
+#
+# Publication des binaires :
+#   * `push` vers `main`  → artefacts téléchargeables à chaque push (rétention 7 j) ;
+#   * `pull_request`      → compilation VALIDÉE, aucun artefact publié ;
+#   * `workflow_dispatch` → artefacts + GitHub Release (jamais sur push).
+#
+# Aucun secret à configurer : le jeton éphémère `GITHUB_TOKEN` suffit (lecture
+# des artefacts implicite ; `contents: write` seulement pour créer la release).
+# Versions d'actions et de Go ÉPINGLÉES (règle maison : pas de `latest`/`main`).
+# =============================================================================
+name: Agent (binaires)
+
+on:
+  push:
+    branches: [main]
+    # Filtre ESSENTIEL : ne rien lancer quand seul le gateway Node change.
+    paths:
+      - 'agent/**'
+      - '.github/workflows/agent.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - '.github/workflows/agent.yml'
+  # Porte de rejeu manuel : (re)compile et PUBLIE une release `agent-v<version>`.
+  workflow_dispatch:
+
+# Permissions minimales par défaut : lecture seule. Le job `agent-release`
+# relève `contents` à `write` (création de la release) et RIEN d'autre.
+permissions:
+  contents: read
+
+# Annulation des exécutions obsolètes UNIQUEMENT pour les PR. Sur `push` vers
+# `main` et sur `workflow_dispatch`, on sérialise (jamais de release à mi-course).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Version de Go ÉPINGLÉE, cohérente avec la directive `go 1.27` de `agent/go.mod`.
+  GO_VERSION: '1.27.1'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Garde-fou qualité du module Go : les jobs `agent-build` / `agent-release`
+  # en dépendent. Commandes strictement identiques à la vérification locale.
+  # ---------------------------------------------------------------------------
+  agent-quality:
+    name: Qualité Go (gofmt, vet, tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: agent/go.sum
+
+      - name: gofmt (échec si un fichier n'est pas formaté)
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "::error::fichiers Go non formatés (gofmt -l) :"
+            printf '%s\n' "${unformatted}"
+            exit 1
+          fi
+          echo "gofmt : aucun fichier à reformater."
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+  # ---------------------------------------------------------------------------
+  # Compilation croisée des 4 cibles vérifiées (CGO_ENABLED=0, binaires
+  # statiques). Une entrée de matrice PAR cible : nom de binaire EXPLICITE
+  # (`yuki-agent-<goos>-<goarch>[.exe]`), artefact par cible.
+  # ---------------------------------------------------------------------------
+  agent-build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: agent-quality
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, ext: '' }
+          - { goos: linux, goarch: arm64, ext: '' }
+          - { goos: windows, goarch: amd64, ext: '.exe' }
+          - { goos: windows, goarch: arm64, ext: '.exe' }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: agent/go.sum
+
+      # La version de l'agent est INJECTÉE à la compilation depuis
+      # `agent/VERSION` (via `buildinfo.Version`) : le binaire publié porte la
+      # version de la source, indépendamment du défaut codé en dur.
+      - name: Compiler le binaire
+        id: build
+        working-directory: agent
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          EXT: ${{ matrix.ext }}
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ -z "${VERSION}" ]; then
+            echo "::error::agent/VERSION est vide."
+            exit 1
+          fi
+          NAME="yuki-agent-${GOOS}-${GOARCH}${EXT}"
+          mkdir -p ../dist
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/grokuku/yuki/agent/internal/buildinfo.Version=${VERSION}" \
+            -o "../dist/${NAME}" ./cmd/yuki-agent
+          echo "name=${NAME}" >> "${GITHUB_OUTPUT}"
+          ls -l "../dist/${NAME}"
+
+      - name: Empreinte SHA-256
+        working-directory: dist
+        env:
+          NAME: ${{ steps.build.outputs.name }}
+        run: |
+          set -euo pipefail
+          sha256sum "${NAME}" > SHA256SUMS
+          cat SHA256SUMS
+
+      # Jamais de binaire téléchargeable pour une PR : on VALIDE la compilation
+      # (étapes ci-dessus), on ne publie rien.
+      - name: Publier l'artefact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: yuki-agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/${{ steps.build.outputs.name }}
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # GitHub Release, UNIQUEMENT sur `workflow_dispatch` (déclenchement manuel).
+  #
+  # Choix : PAS de déclencheur sur tag `agent-v*`. Le projet a acté que la
+  # version est lue dans un FICHIER (`version.txt` pour l'image, `agent/VERSION`
+  # pour l'agent) et que la publication est manuelle (voir `release.yml`) — « plus
+  # aucun tag Git ». On reste cohérent : le tag `agent-v<version>` est CRÉÉ par ce
+  # job au moment de la release, jamais poussé à la main.
+  # ---------------------------------------------------------------------------
+  agent-release:
+    name: Release des binaires de l'agent
+    needs: [agent-quality, agent-build]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # création de la GitHub Release + du tag `agent-v<version>`
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lire la version de l'agent
+        id: version
+        working-directory: agent
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ -z "${VERSION}" ]; then
+            echo "::error::agent/VERSION est vide."
+            exit 1
+          fi
+          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version invalide « ${VERSION} » dans agent/VERSION (attendu MAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Version de l'agent : ${VERSION}"
+
+      # `download-artifact` sans `merge-multiple` : chaque artefact est extrait
+      # dans son propre sous-dossier `dist/<nom-d-artefact>/`.
+      - name: Télécharger les artefacts de build
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Rassembler les binaires et recalculer l'empreinte
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # On ne récupère QUE les binaires (motif `yuki-agent-*`) : on ignore les
+          # `SHA256SUMS` intermédiaires, propres à un artefact, qui entreraient en
+          # collision une fois rassemblés.
+          find dist -type f -name 'yuki-agent-*' -exec cp -t release {} +
+          # Empreintes recalculées sur l'ENSEMBLE final : ce sont elles qui
+          # accompagnent la release.
+          ( cd release && sha256sum yuki-agent-* > SHA256SUMS )
+          echo "Fichiers attachés à la release :"
+          ls -l release
+          cat release/SHA256SUMS
+
+      - name: Créer la GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          TAG="agent-v${VERSION}"
+          # Idempotence : une release ne se réécrit pas silencieusement.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::la release ${TAG} existe déjà — incrémentez agent/VERSION avant de republier."
+            exit 1
+          fi
+          gh release create "${TAG}" release/* \
+            --target "${SHA}" \
+            --title "Agent Yuki v${VERSION}" \
+            --notes "Binaires statiques de l'agent d'exécution Yuki v${VERSION} (linux/amd64, linux/arm64, windows/amd64, windows/arm64 ; CGO_ENABLED=0). Vérifier les empreintes avec SHA256SUMS." \
+            --latest=false
+          echo "Release ${TAG} créée."

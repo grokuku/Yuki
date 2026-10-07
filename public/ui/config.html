@@ -102,6 +102,17 @@
             class="config-tab"
             type="button"
             role="tab"
+            id="tab-agents"
+            aria-selected="false"
+            aria-controls="panel-agents"
+            tabindex="-1"
+          >
+            Agents<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
             id="tab-systeme"
             aria-selected="false"
             aria-controls="panel-systeme"
@@ -171,6 +182,22 @@
             <div id="group-voix" class="config-groups"></div>
             <!-- ⑤ Moteur TTS et modèles : zone technique repliée, montée par l'assistant. -->
             <div id="tts-engine-root"></div>
+          </section>
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-agents"
+            aria-labelledby="tab-agents"
+            tabindex="0"
+            hidden
+          >
+            <!--
+              Onglet « Agents » (Lot 4, B5 — D125) : liste des machines
+              appairées (état, dernière connexion, historique, niveau, privilège,
+              suppression) + validations en attente. Composant autonome monté par
+              id (`agents-panel.js`), aucun style inline (CSP `style-src 'self'`).
+            -->
+            <div id="agents-root"></div>
           </section>
           <section
             class="config-panel"

@@ -25,6 +25,7 @@ import { HolafFetch } from './vendor/holaf/holaf-fetch.js';
  * `HolafModal.getCss()`). `injectStyles: false` coupe l'injection.
  */
 import { HolafModal } from './vendor/holaf/holaf-modal.js';
+import { initAgentsPanel } from './agents-panel.js';
 import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
@@ -416,6 +417,7 @@ const TABS = [
   { id: "modeles", groups: ["llm-light", "llm-heavy"] },
   { id: "conversation", groups: ["delegation", "prompts", "memoire"] },
   { id: "voix", groups: ["tts"] },
+  { id: "agents", groups: [] },
   { id: "systeme", groups: ["gpu", "transport"] },
   { id: "maintenance", groups: [] },
 ];
@@ -464,6 +466,8 @@ const voicesRoot = document.getElementById("voices-root");
 const ttsAssistantRoot = document.getElementById("tts-assistant-root");
 /** Zone ⑤ (technique repliée) — second point de montage du MÊME assistant. */
 const ttsEngineRoot = document.getElementById("tts-engine-root");
+/** Panneau des agents d'exécution (Lot 4, B5) — monté par id. */
+const agentsRoot = document.getElementById("agents-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
 let voicesPanel = null;
 
@@ -1295,6 +1299,11 @@ void (async () => {
         requestActivateEngine: activateEngineShortcut,
         openMaintenance: () => selectTab("maintenance", { updateHash: true }),
       });
+    }
+    // Panneau des agents d'exécution (Lot 4, B5) : liste, état, niveau,
+    // privilège, suppression (HolafModal) et validations en attente.
+    if (agentsRoot) {
+      initAgentsPanel({ root: agentsRoot, HolafFetch, HolafModal });
     }
     setInterval(() => void pollHealth(), 5000);
   } catch (error) {

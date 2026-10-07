@@ -16,7 +16,10 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
+  readSync,
+  closeSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -67,6 +70,9 @@ export function maxSizeBytesFromMb(mb: number): number {
 const FORBIDDEN_KEYS = /^(stdout|stderr|output|result|sortie)$/i;
 
 const DAY_MS = 86_400_000;
+
+/** Taille maximale relue depuis la fin du journal (historique UI). */
+const AUDIT_TAIL_BYTES = 512 * 1_024;
 
 /** Retire récursivement les champs de sortie de commande. */
 function stripOutput(value: unknown): unknown {
@@ -153,6 +159,60 @@ export class AuditLog {
   /** Archives présentes (chemins), triées. */
   archives(): string[] {
     return this.listArchives().sort();
+  }
+
+  /**
+   * Entrées d'audit RÉCENTES lues depuis le fichier actif (lecture bornée de
+   * la FIN du fichier). Sert à l'historique de la page Agents : **commande +
+   * horodatage + code de sortie**, jamais la sortie (elle n'est de toute façon
+   * jamais écrite, D127).
+   */
+  recent(
+    options: { agentId?: string; event?: string; limit?: number } = {},
+  ): Record<string, unknown>[] {
+    if (!existsSync(this.path)) return [];
+    const limit = Math.max(1, Math.trunc(options.limit ?? 20));
+    let raw: string;
+    let startedMidFile = false;
+    try {
+      const size = statSync(this.path).size;
+      const length = Math.min(size, AUDIT_TAIL_BYTES);
+      if (length <= 0) return [];
+      startedMidFile = size > length;
+      const fd = openSync(this.path, "r");
+      try {
+        const buffer = Buffer.alloc(length);
+        readSync(fd, buffer, 0, length, size - length);
+        raw = buffer.toString("utf8");
+      } finally {
+        closeSync(fd);
+      }
+    } catch (error) {
+      this.logger?.warn("audit.read.failed", {
+        path: this.path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+
+    // La lecture peut commencer au milieu d'une ligne : on l'ignore.
+    const lines = raw.split("\n");
+    if (startedMidFile && lines.length > 1) lines.shift();
+    const out: Record<string, unknown>[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed === "") continue;
+      let record: Record<string, unknown>;
+      try {
+        record = JSON.parse(trimmed) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (options.event !== undefined && record["event"] !== options.event) continue;
+      if (options.agentId !== undefined && record["agent_id"] !== options.agentId) continue;
+      out.push(record);
+    }
+    return out.slice(-limit);
   }
 
   private listArchives(): string[] {

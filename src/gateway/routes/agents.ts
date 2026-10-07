@@ -1,21 +1,28 @@
 /**
- * API des agents d'exécution (Lot 4, B3) — routes HUMAINES servies par le
+ * API des agents d'exécution (Lot 4, B3/B4) — routes HUMAINES servies par le
  * gateway (derrière Caddy + authentik, D113), séparées du port « machines ».
  *
  * Routes :
- *   GET  /api/agents                 → liste des agents appairés (jamais de secret)
- *   POST /api/agents/pair            → soumission du code d'appairage (D119)
- *   POST /api/agents/<id>/revoke     → dé-appairage (révocation, D118)
- *   POST /api/agents/<id>/restore    → annulation d'une révocation
- *   PATCH /api/agents/<id>           → niveau (D118) + privilège (D120)
+ *   GET    /api/agents                       → liste des agents (+ état en ligne)
+ *   GET    /api/agents/<id>                  → fiche d'un agent + historique
+ *   POST   /api/agents/pair                  → soumission du code d'appairage (D119)
+ *   PATCH  /api/agents/<id>                  → niveau (D118) + privilège (D120)
+ *   POST   /api/agents/<id>/revoke           → dé-appairage (révocation, D118)
+ *   POST   /api/agents/<id>/restore          → annulation d'une révocation
+ *   DELETE /api/agents/<id>                  → révocation (alias REST de `revoke`)
+ *   GET    /api/agents/approvals             → validations en attente (niveaux 2/3)
+ *   POST   /api/agents/approvals/<id>/approve|deny → décision humaine
  *
  * Précautions minimales : en-tête `X-Yuki-Agents: 1` + contrôle `Origin`/`Host`
  * sur les écritures (même logique que `routes/config.ts`). Le code d'appairage
- * n'est JAMAIS journalisé.
+ * n'est JAMAIS journalisé ; l'historique ne contient JAMAIS la sortie (D127).
  */
 
 import type { IncomingHttpHeaders } from "node:http";
 
+import type { ApprovalRegistry } from "../../agents/approvals.js";
+import type { AuditLog } from "../../agents/audit.js";
+import type { AgentHub } from "../../agents/connection.js";
 import { AgentError } from "../../agents/errors.js";
 import type { PairingManager } from "../../agents/pairing.js";
 import type { AgentStore } from "../../agents/store.js";
@@ -34,6 +41,12 @@ export interface AgentsApiDeps {
   pairing: PairingManager;
   store: AgentStore;
   logger: Logger;
+  /** Registre des canaux (B6) : état de connexion par agent. */
+  hub?: AgentHub;
+  /** Journal d'audit (B6) : historique des commandes (jamais la sortie). */
+  audit?: AuditLog;
+  /** Validations humaines en attente (B6bis). */
+  approvals?: ApprovalRegistry;
   now?: () => number;
 }
 
@@ -109,23 +122,49 @@ function requireWriteGuards(headers: IncomingHttpHeaders): AgentsHttpResponse | 
   return null;
 }
 
-function serialize(record: ReturnType<AgentStore["list"]>[number]): Record<string, unknown> {
+function serialize(
+  record: ReturnType<AgentStore["list"]>[number],
+  deps: AgentsApiDeps,
+): Record<string, unknown> {
   return {
     agentId: record.agentId,
     level: record.level,
     privilege: record.privilege,
     lastSeen: record.lastSeen,
     revoked: record.revoked,
+    online: deps.hub?.isOnline(record.agentId) ?? false,
   };
 }
 
 function handleList(deps: AgentsApiDeps): AgentsHttpResponse {
-  const agents = deps.store.list().map(serialize);
+  const agents = deps.store.list().map((record) => serialize(record, deps));
   return json(200, {
     agents,
     count: agents.length,
     pendingCodes: deps.pairing.activeSessionCount(),
   });
+}
+
+/** Historique récent d'un agent : commande + horodatage + code de sortie. */
+function historyOf(deps: AgentsApiDeps, agentId: string, limit = 20): Record<string, unknown>[] {
+  return (deps.audit?.recent({ agentId, event: "command", limit }) ?? []).map((entry) => ({
+    ts: entry["ts"] ?? null,
+    command: entry["command"] ?? null,
+    exitCode: entry["exit_code"] ?? null,
+    status: (entry["meta"] as Record<string, unknown> | undefined)?.["status"] ?? null,
+  }));
+}
+
+function handleGet(deps: AgentsApiDeps, agentId: string): AgentsHttpResponse {
+  const record = deps.store.get(agentId);
+  if (!record) {
+    return json(404, {
+      error: "agent_not_found",
+      code: "agent_not_found",
+      message: `Agent inconnu : ${agentId}.`,
+    });
+  }
+  return json(200, { agent: serialize(record, deps), history: historyOf(deps, agentId) });
 }
 
 function parseJsonBody(body: string): { ok: true; value: Record<string, unknown> } | AgentsHttpResponse {
@@ -177,8 +216,11 @@ function handleRevoke(input: AgentsRequestInput, agentId: string): AgentsHttpRes
   if (guard) return guard;
   try {
     const record = input.deps.store.revoke(agentId);
+    // Révocation = le canal vivant est coupé (le certificat sera refusé à la
+    // reconnexion par `authorizedAgent`).
+    input.deps.hub?.disconnect(agentId);
     input.deps.logger.info("agents.revoked", { agent_id: agentId });
-    return json(200, { ok: true, agent: serialize(record) });
+    return json(200, { ok: true, agent: serialize(record, input.deps) });
   } catch (error) {
     if (error instanceof AgentError) {
       return json(404, { error: error.code, code: error.code, message: error.message });
@@ -193,7 +235,7 @@ function handleRestore(input: AgentsRequestInput, agentId: string): AgentsHttpRe
   try {
     const record = input.deps.store.restore(agentId);
     input.deps.logger.info("agents.restored", { agent_id: agentId });
-    return json(200, { ok: true, agent: serialize(record) });
+    return json(200, { ok: true, agent: serialize(record, input.deps) });
   } catch (error) {
     if (error instanceof AgentError) {
       return json(404, { error: error.code, code: error.code, message: error.message });
@@ -233,12 +275,59 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
       level: record.level,
       privilege: record.privilege,
     });
-    return json(200, { ok: true, agent: serialize(record) });
+    return json(200, { ok: true, agent: serialize(record, input.deps) });
   } catch (error) {
     if (error instanceof AgentError) {
       return json(404, { error: error.code, code: error.code, message: error.message });
     }
     throw error;
+  }
+}
+
+function handleApprovalList(deps: AgentsApiDeps): AgentsHttpResponse {
+  if (!deps.approvals) return json(200, { approvals: [], count: 0 });
+  const approvals = deps.approvals.list().map((entry) => ({
+    id: entry.id,
+    agentId: entry.agentId,
+    command: entry.command,
+    destructive: entry.destructive,
+    status: entry.status,
+    createdAt: entry.createdAt,
+    expiresAt: entry.expiresAt,
+  }));
+  return json(200, { approvals, count: approvals.length });
+}
+
+function handleApprovalDecision(
+  input: AgentsRequestInput,
+  id: string,
+  decision: "approve" | "deny",
+): AgentsHttpResponse {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return guard;
+  if (!input.deps.approvals) {
+    return json(404, { error: "not_found", code: "not_found", message: "Aucune validation." });
+  }
+  try {
+    const entry =
+      decision === "approve"
+        ? input.deps.approvals.approve(id)
+        : input.deps.approvals.deny(id);
+    input.deps.logger.info("agents.approval.decided", {
+      approval_id: entry.id,
+      agent_id: entry.agentId,
+      decision,
+    });
+    return json(200, {
+      ok: true,
+      approval: { id: entry.id, status: entry.status, agentId: entry.agentId },
+    });
+  } catch (error) {
+    return json(404, {
+      error: "approval_not_found",
+      code: "approval_not_found",
+      message: error instanceof Error ? error.message : "Validation inconnue.",
+    });
   }
 }
 
@@ -255,11 +344,23 @@ export function handleAgentsRequest(input: AgentsRequestInput): AgentsHttpRespon
     if (method !== "POST") return json(405, { error: "method_not_allowed", method });
     return handlePair(input);
   }
+  if (path === "/api/agents/approvals") {
+    if (method === "GET" || method === "HEAD") return handleApprovalList(input.deps);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  const approval = /^\/api\/agents\/approvals\/([^/]+)\/(approve|deny)$/.exec(path);
+  if (approval) {
+    if (method !== "POST") return json(405, { error: "method_not_allowed", method });
+    const id = decodeURIComponent(approval[1] as string);
+    return handleApprovalDecision(input, id, approval[2] as "approve" | "deny");
+  }
 
   const match = /^\/api\/agents\/([^/]+)$/.exec(path);
   if (match) {
     const agentId = decodeURIComponent(match[1] as string);
+    if (method === "GET" || method === "HEAD") return handleGet(input.deps, agentId);
     if (method === "PATCH") return handlePatch(input, agentId);
+    if (method === "DELETE") return handleRevoke(input, agentId);
     return json(405, { error: "method_not_allowed", method });
   }
   const action = /^\/api\/agents\/([^/]+)\/(revoke|restore)$/.exec(path);

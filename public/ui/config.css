@@ -530,3 +530,152 @@
   border-radius: 50%;
   background: var(--accent);
 }
+
+/* ─── Panneau « Agents » (Lot 4, B5) ──────────────────────────────────────
+   Aucun style inline (CSP `style-src 'self'`) : tout passe par ces classes. */
+.agents-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+}
+
+.agent-card,
+.agent-approvals,
+.agent-help {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-card__head,
+.agent-approval__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-card__title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.agent-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.agent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.agent-badge--online {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.agent-badge--offline {
+  color: var(--muted);
+}
+
+.agent-badge--revoked,
+.agent-badge--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.agent-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.agent-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-field__label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.agent-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-history__item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.agent-history__time {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.agent-history__cmd {
+  word-break: break-all;
+}
+
+.agent-history__code {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.agent-approval {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--panel-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.agent-approval__cmd {
+  word-break: break-all;
+}
+
+.agent-help__steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 13px;
+}

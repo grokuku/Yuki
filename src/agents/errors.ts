@@ -68,3 +68,42 @@ export class PairError extends Error {
 export function pairCodeOf(error: unknown): PairErrorCode | null {
   return error instanceof PairError ? error.code : null;
 }
+
+/**
+ * Codes d'erreur du CANAL d'exécution (Lot 4, B6).
+ *
+ * ⚠️ `result_lost` : la commande va à son terme côté agent (D124) mais la
+ * connexion s'est fermée avant que le résultat ne revienne — il est PERDU.
+ * `agent_offline` : rejet immédiat (aucune mise en file, D124).
+ */
+export type ChannelErrorCode =
+  | "agent_offline"
+  | "send_failed"
+  | "result_lost"
+  | "agent_error"
+  | "command_timeout";
+
+/** Erreur du canal d'exécution (transport WebSocket ↔ agent). */
+export class AgentChannelError extends Error {
+  override readonly name = "AgentChannelError";
+  readonly code: ChannelErrorCode;
+  readonly agentId: string;
+  /** Code applicatif renvoyé par l'agent (`error`), si applicable. */
+  readonly agentCode?: string;
+
+  constructor(
+    code: ChannelErrorCode,
+    message: string,
+    options: { agentId: string; agentCode?: string } = { agentId: "" },
+  ) {
+    super(message);
+    this.code = code;
+    this.agentId = options.agentId;
+    this.agentCode = options.agentCode;
+  }
+}
+
+/** `true` si l'erreur est une erreur de canal. */
+export function isChannelError(error: unknown): error is AgentChannelError {
+  return error instanceof AgentChannelError;
+}

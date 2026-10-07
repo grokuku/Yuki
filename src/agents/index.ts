@@ -153,3 +153,77 @@ export type {
   DestructivePatternsSource,
   DestructiveVerdict,
 } from "./destructive.js";
+
+// --- B6 : protocole d'exécution, canal, balisage de sortie --------------
+export {
+  AGENT_PROTO_VERSION,
+  encodeCancelFrame,
+  encodeCommandFrame,
+  encodeConfigFrame,
+  encodePingFrame,
+  encodePongFrame,
+  parseAgentFrame,
+} from "./protocol.js";
+export type {
+  AckFrame,
+  AgentFrame,
+  AgentFrameParse,
+  AgentFrameType,
+  ErrorFrame,
+  FrameErrorCode,
+  HelloFrame,
+  OutboundCommand,
+  PingFrame,
+  PongFrame,
+  ResultFrame,
+  StateFrame,
+} from "./protocol.js";
+
+export {
+  escapeOutputAttribute,
+  escapeOutputText,
+  frameCommandOutput,
+  OUTPUT_DATA_REMINDER,
+  SORTIE_TAG,
+} from "./output.js";
+export type { OutputFrameInput } from "./output.js";
+
+export {
+  AgentConnection,
+  AgentHub,
+  COMMAND_SAFETY_MARGIN_MS,
+} from "./connection.js";
+export type {
+  AgentConnectionOptions,
+  AgentHello,
+  AgentHubOptions,
+  ChannelLogger,
+} from "./connection.js";
+
+export { AgentChannelError, isChannelError } from "./errors.js";
+export type { ChannelErrorCode } from "./errors.js";
+
+export {
+  APPROVAL_MAX_ENTRIES,
+  APPROVAL_TTL_MS,
+  ApprovalRegistry,
+} from "./approvals.js";
+export type {
+  ApprovalLogger,
+  ApprovalRegistryOptions,
+  ApprovalStatus,
+  PendingApproval,
+} from "./approvals.js";
+
+export {
+  AgentExecutionService,
+  DEFAULT_COMMAND_TIMEOUT_MS,
+} from "./execution.js";
+export type {
+  ExecutionLogger,
+  ExecutionOutcome,
+  ExecutionRequest,
+  ExecutionServiceOptions,
+  ExecutionServicePort,
+  ExecutionStatus,
+} from "./execution.js";
