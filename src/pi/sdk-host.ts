@@ -24,6 +24,8 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
+import { REPORT_HEADER } from "../delegation/report.js";
+
 import {
   applyPiEnvironment,
   ensurePiLayout,
@@ -37,6 +39,7 @@ import {
   contentTextFromMessage,
   deltaText,
   finishReasonForMessage,
+  transcriptFromEntries,
   unstreamedContentSuffix,
   usageFromMessage,
   type RawAgentMessage,
@@ -73,6 +76,13 @@ const ABORT_SERIALIZE_TIMEOUT_MS = 2_000;
 
 /** Origine d'un prompt synthétique de report (pas de bulle utilisateur). */
 const ORIGIN_JOB_REPORT = "job_report";
+
+/**
+ * Préfixes des prompts SYNTHÉTIQUES (prompt de report d'un job). Ils ne sont
+ * jamais affichés comme messages utilisateur — ni sur le flux temps réel (via
+ * `ORIGIN_JOB_REPORT`), ni à la restauration du transcript (via ce filtre).
+ */
+const SYNTHETIC_USER_PREFIXES: readonly string[] = [REPORT_HEADER];
 
 interface RunItem {
   runId: string;
@@ -335,13 +345,37 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     }
   }
 
+  /**
+   * Reconstruit le transcript de l'UI depuis la session reprise. Le SDK a déjà
+   * hydraté le contexte du modèle (`agent.state.messages`) : sans cela, l'UI
+   * repartirait VIDE alors que le modèle a gardé l'historique (bug corrigé ici).
+   *
+   * Source : la branche ACTIVE du `SessionManager` (racine → feuille), qui
+   * contient tout l'historique — y compris les messages résumés par une
+   * compaction, comme le scrollback live qui n'est jamais tronqué. Un échec de
+   * lecture ne doit pas empêcher le démarrage : on journalise et on repart vide.
+   */
+  function restoreTranscript(session: AgentSession): TranscriptEntry[] {
+    try {
+      return transcriptFromEntries(session.sessionManager.getBranch(), {
+        syntheticUserPrefixes: SYNTHETIC_USER_PREFIXES,
+      });
+    } catch (error) {
+      logger.warn("pi.transcript.restore.failed", {
+        session_id: session.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
   function attachRecord(session: AgentSession): SessionRecord {
     const record: SessionRecord = {
       sessionId: session.sessionId,
       session,
       unsubscribe: () => undefined,
       state: "idle",
-      transcript: [],
+      transcript: restoreTranscript(session),
       partial: "",
       listeners: new Set(),
       queue: [],

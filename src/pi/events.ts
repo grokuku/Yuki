@@ -9,7 +9,7 @@
  * assimilable à une réponse.
  */
 
-import type { DeltaChannel, PiUsage } from "./types.js";
+import type { DeltaChannel, PiUsage, TranscriptEntry } from "./types.js";
 
 /** Forme minimale d'un `assistantMessageEvent` du SDK. */
 export interface RawAssistantMessageEvent {
@@ -106,6 +106,65 @@ export function contentTextFromMessage(message: RawAgentMessage): string {
     }
   }
   return parts.join("");
+}
+
+/** Options de reconstruction du transcript depuis une session reprise. */
+export interface TranscriptRestoreOptions {
+  /**
+   * Préfixes de texte désignant un message `user` SYNTHÉTIQUE — ex. le prompt de
+   * report d'un job d'arrière-plan. Ces messages ne figurent jamais dans le
+   * transcript, exactement comme sur le flux temps réel (qui les exclut).
+   */
+  syntheticUserPrefixes?: readonly string[];
+}
+
+/** `true` si le texte d'un message utilisateur est un prompt synthétique. */
+function isSyntheticUserText(
+  text: string,
+  prefixes: readonly string[],
+): boolean {
+  return prefixes.some(
+    (prefix) => prefix.length > 0 && text.startsWith(prefix),
+  );
+}
+
+/**
+ * Reconstruit le transcript de l'UI depuis les entrées d'une session reprise.
+ *
+ * Miroir EXACT du transcript temps réel (`SessionRecord.transcript`) :
+ *   - seules les entrées `type:"message"` de rôle `user`/`assistant` comptent ;
+ *   - le texte est le CONTENU seul (les blocs `thinking` sont exclus) ;
+ *   - les entrées d'outils, les résumés de compaction/branche, les entrées
+ *     `custom` et les changements de modèle/niveau sont IGNORÉS (ils ne sont
+ *     jamais dans le transcript live) ;
+ *   - une entrée vide est ignorée (jamais de bulle muette) ;
+ *   - un prompt utilisateur synthétique (report de job) est ignoré.
+ *
+ * Les entrées sont fournies dans l'ordre racine → feuille : l'ordre du retour
+ * est donc l'ordre chronologique d'affichage. Mapping PUR et SANS état :
+ * l'appliquer deux fois donne le même résultat (aucun doublon possible, le
+ * transcript restauré n'est servi que par le snapshot — cf. `buildState`).
+ */
+export function transcriptFromEntries(
+  entries: readonly unknown[],
+  options: TranscriptRestoreOptions = {},
+): TranscriptEntry[] {
+  const prefixes = options.syntheticUserPrefixes ?? [];
+  const transcript: TranscriptEntry[] = [];
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as { type?: unknown; message?: unknown };
+    if (entry.type !== "message") continue;
+    const message = entry.message;
+    if (!message || typeof message !== "object") continue;
+    const role = (message as RawAgentMessage).role;
+    if (role !== "user" && role !== "assistant") continue;
+    const text = contentTextFromMessage(message as RawAgentMessage);
+    if (text.length === 0) continue;
+    if (role === "user" && isSyntheticUserText(text, prefixes)) continue;
+    transcript.push({ role, text });
+  }
+  return transcript;
 }
 
 /**

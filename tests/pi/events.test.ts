@@ -9,6 +9,7 @@ import {
   channelForAssistantEvent,
   contentTextFromMessage,
   sanitizeErrorText,
+  transcriptFromEntries,
   unstreamedContentSuffix,
 } from "../../src/pi/events.js";
 
@@ -44,6 +45,120 @@ describe("pi.events — contenu vs thinking", () => {
     expect(
       sanitizeErrorText("token=AAAABBBBCCCCDDDDEEEEFFFF0000111122223333"),
     ).not.toContain("AAAABBBBCCCCDDDDEEEEFFFF0000111122223333");
+  });
+});
+
+describe("pi.events — restauration du transcript depuis une session", () => {
+  const userEntry = (text: string): unknown => ({
+    type: "message",
+    id: "u",
+    parentId: null,
+    timestamp: "2024-12-03T14:00:01.000Z",
+    message: { role: "user", content: text },
+  });
+  const assistantEntry = (content: unknown): unknown => ({
+    type: "message",
+    id: "a",
+    parentId: "u",
+    timestamp: "2024-12-03T14:00:02.000Z",
+    message: { role: "assistant", content },
+  });
+
+  it("ne conserve que user/assistant, en contenu seul et dans l'ordre", () => {
+    const entries = [
+      userEntry("Bonjour"),
+      assistantEntry([
+        { type: "thinking", thinking: "raisonnement secret" },
+        { type: "text", text: "Salut !" },
+      ]),
+      userEntry("Ça va ?"),
+      assistantEntry([{ type: "text", text: "Très bien." }]),
+    ];
+    const transcript = transcriptFromEntries(entries);
+    expect(transcript).toEqual([
+      { role: "user", text: "Bonjour" },
+      { role: "assistant", text: "Salut !" },
+      { role: "user", text: "Ça va ?" },
+      { role: "assistant", text: "Très bien." },
+    ]);
+    expect(JSON.stringify(transcript)).not.toContain("raisonnement secret");
+  });
+
+  it("ignore les entrées non-message et les rôles hors transcript", () => {
+    const entries = [
+      { type: "session", version: 3, id: "h" },
+      { type: "model_change", id: "m", provider: "p", modelId: "x" },
+      { type: "compaction", id: "c", summary: "résumé", tokensBefore: 10 },
+      userEntry("seul message retenu"),
+      {
+        type: "message",
+        id: "t",
+        parentId: "u",
+        message: {
+          role: "toolResult",
+          toolCallId: "x",
+          toolName: "read",
+          content: [{ type: "text", text: "sortie outil" }],
+          isError: false,
+        },
+      },
+      {
+        type: "message",
+        id: "b",
+        parentId: "t",
+        message: { role: "bashExecution", command: "ls", output: "a\nb" },
+      },
+    ];
+    expect(transcriptFromEntries(entries)).toEqual([
+      { role: "user", text: "seul message retenu" },
+    ]);
+  });
+
+  it("ignore une entrée sans texte (jamais de bulle muette)", () => {
+    const entries = [
+      assistantEntry([]),
+      assistantEntry([{ type: "thinking", thinking: "seulement du raisonnement" }]),
+      assistantEntry([{ type: "toolCall", id: "t", name: "read", arguments: {} }]),
+      userEntry(""),
+      assistantEntry([{ type: "text", text: "réelle réponse" }]),
+    ];
+    expect(transcriptFromEntries(entries)).toEqual([
+      { role: "assistant", text: "réelle réponse" },
+    ]);
+  });
+
+  it("filtre les prompts utilisateur synthétiques (report de job)", () => {
+    const entries = [
+      userEntry("vraie question"),
+      assistantEntry([{ type: "text", text: "vraie réponse" }]),
+      userEntry("[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]\njob_id: abc"),
+      assistantEntry([{ type: "text", text: "Résumé du job." }]),
+    ];
+    const transcript = transcriptFromEntries(entries, {
+      syntheticUserPrefixes: ["[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]"],
+    });
+    // Le prompt synthétique est masqué ; sa réponse reste (comme en direct).
+    expect(transcript).toEqual([
+      { role: "user", text: "vraie question" },
+      { role: "assistant", text: "vraie réponse" },
+      { role: "assistant", text: "Résumé du job." },
+    ]);
+  });
+
+  it("est un mapping PUR (même entrée ⇒ même sortie, aucun doublon)", () => {
+    const entries = [
+      userEntry("un"),
+      assistantEntry([{ type: "text", text: "deux" }]),
+    ];
+    const first = transcriptFromEntries(entries);
+    const second = transcriptFromEntries(entries);
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+  });
+
+  it("tolère des entrées malformées sans lever", () => {
+    const entries = [null, 42, "texte", {}, { type: "message" }, userEntry("ok")];
+    expect(transcriptFromEntries(entries)).toEqual([{ role: "user", text: "ok" }]);
   });
 });
 
