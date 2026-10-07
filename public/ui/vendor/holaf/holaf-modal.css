@@ -1,11 +1,11 @@
 
 .holaf-modal-overlay, .holaf-modal-root {
-    --hm-bg: #1e1f2e; --hm-bg-secondary: #292a3a; --hm-bg-input: #343547;
-    --hm-text: #eff0f4; --hm-text-secondary: #abadc4; --hm-border: #52536b;
-    --hm-accent: #a1a3ff; --hm-accent-hover: #8d8fe0; --hm-accent-text: #0b0b12;
-    --hm-danger: #f87171; --hm-danger-hover: #d76567; --hm-danger-text: #000000;
-    --hm-radius: 12px; --hm-overlay-bg: rgba(30, 31, 46, 0.55); --hm-font-size: 14px;
-    --hm-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); --hm-busy-bg: rgba(30, 31, 46, 0.85);
+    --hm-bg: #171717; --hm-bg-secondary: #262626; --hm-bg-input: #313133;
+    --hm-text: #f1f1f6; --hm-text-secondary: #bcbdc4; --hm-border: #4a4a4d;
+    --hm-accent: #a1a3ff; --hm-accent-hover: #8a8cd8; --hm-accent-text: #0b0b12;
+    --hm-danger: #f87171; --hm-danger-hover: #d26362; --hm-danger-text: #000000;
+    --hm-radius: 12px; --hm-overlay-bg: rgba(23, 23, 23, 0.55); --hm-font-size: 14px;
+    --hm-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); --hm-busy-bg: rgba(23, 23, 23, 0.85);
     --hm-width: 440px;
 }
 .holaf-modal-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--hm-overlay-bg); animation: holaf-modal-fade 0.16s ease-out; box-sizing: border-box; }

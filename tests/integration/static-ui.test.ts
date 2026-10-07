@@ -290,6 +290,7 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
       ["--text", "--holaf-text"],
       ["--muted", "--holaf-text-muted"],
       ["--accent", "--holaf-accent"],
+      ["--accent-text", "--holaf-accent-text"],
       ["--danger", "--holaf-danger"],
       ["--user", "--holaf-user"],
       ["--assistant", "--holaf-assistant"],
@@ -335,7 +336,7 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
 
   it("la copie vendorisée des briques `tokens`, `icons` et `modal` est bien la version pinnée", async () => {
     const manifest = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-manifest.json`)).json();
-    expect(manifest).toEqual({ fetch: "0.2.0", modal: "0.6.1", tokens: "0.4.1", icons: "0.1.5" });
+    expect(manifest).toEqual({ fetch: "0.2.0", modal: "0.7.0", tokens: "0.6.0", icons: "0.1.5" });
     const css = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-modal.css`)).text();
     // Le CSS externe de la brique (extrait de getCss()) est bien servi.
     expect(css).toContain(".holaf-modal-overlay");

@@ -1,7 +1,45 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * Holaf UI — Brique HolafTokens · version 0.4.1
+ * Holaf UI — Brique HolafTokens · version 0.6.0
  * ─────────────────────────────────────────────────────────────────────────────
  * BRIQUE « FONDATION » — les tokens CSS de PAGE.
+ *
+ * ▸ RUPTURE 0.6.0 (variante de surfaces « C — Neutres purs + accent ») ───────
+ *   Les 6 familles « couleur » (corail, ambre, emeraude, turquoise, amethyste,
+ *   neutre) adoptent la variante C VALIDÉE par l'utilisateur : surfaces GRIS
+ *   NEUTRE (chroma OKLCH 0) sur une rampe de profondeur UNIQUE PARTAGÉE, et
+ *   l'ACCENT (inchangé) porte seul l'identité de la famille. Conséquence : les
+ *   fonds des 6 familles d'un même mode sont désormais IDENTIQUES (ΔEok = 0) ;
+ *   la distinction entre familles repose UNIQUEMENT sur l'accent (ΔEok ≥ 0,071
+ *   en clair, ≥ 0,125 en sombre, seuil de la garde 0,040).
+ *   Les valeurs de surface (surface / surface-elev / surface-raised /
+ *   surface-hover / border), de texte (text / text-muted — légèrement teintés
+ *   vers la teinte de l'accent, chroma ≤ 0,018) et de danger (recalculé sur la
+ *   nouvelle surface) sont recopiées EXACTEMENT de la maquette de décision
+ *   `Yuki and Libs/_tools/theme-variants.mjs` (PARAMS.C + variantPalette,
+ *   primitives de `_tools/theme-lib.mjs`) : la profondeur mesurée vaut
+ *   0,062 · 0,048 · 0,030 (sombre) / 0,046 · 0,038 (clair). Les accents des 6
+ *   familles sont INCHANGÉS.
+ *   ⚠️ La famille d'IDENTITÉ `matrix` est EXPLICITEMENT HORS de cette règle :
+ *   ses surfaces sont déjà monochromes mais FIGÉES (identité Pi-Web), elle n'a
+ *   ni rampe partagée ni teinte d'accent à suivre — ses valeurs sont
+ *   strictement INCHANGÉES.
+ *   La garde V2 (tests/helpers/theme-guard.js) est REPENSÉE en conséquence :
+ *   le contrôle « écart de FOND ≥ 0,040 entre familles » (faux par construction
+ *   quand les familles partagent la surface) est REMPLACÉ par deux invariants
+ *   positifs — surfaces NEUTRES (chroma ≈ 0) et RAMPE PARTAGÉE (écart entre
+ *   familles ≈ 0) — le contrôle « écart d'ACCENT ≥ 0,040 » étant conservé et
+ *   devenant le porteur de la distinction (voir tests/helpers/theme-guard.js).
+ *
+ * ▸ AJOUT 0.5.0 (famille d'IDENTITÉ `matrix`) ───────────────────────────────
+ *   Nouvelle famille `matrix` (identité Pi-Web, monochrome à accent néon vert)
+ *   fournissant les presets `matrix-dark` et `matrix-light`. Contrairement aux
+ *   6 familles « couleur » du catalogue V2, `matrix` n'appartient PAS à la roue
+ *   chromatique : sa garde de distinction/profondeur ne s'y applique donc pas
+ *   (voir tests). Elle est en REVANCHE le thème d'identité historique de Pi-Web
+ *   et ses valeurs y sont FIGÉES (zéro changement visuel) ; elle porte EN PLUS
+ *   les clés hôtes non standard nécessaires à Pi-Web (`border-bright`,
+ *   `text-bright`, `info`, `warn`, `code-inline-bg`, `code-block-bg`,
+ *   `tool-output-bg`). Aucun changement d'API.
  *
  * ▸ PATCH 0.4.1 (contraste du texte atténué) ────────────────────────────────
  *   Correction de VALEUR (aucun changement d'API, aucune clé nouvelle) :
@@ -80,18 +118,21 @@
  *     --shadow     → var(--holaf-shadow)
  *   Voir js/README-holaf-tokens.md pour le mapping complet.
  *
- * ▸ FAMILLES × MODES (catalogue à 2 axes — V2) ─────────────────────────────
- *   6 familles (corail, ambre, emeraude, turquoise, amethyste, neutre) ×
- *   2 modes (light, dark) = 12 presets `<famille>-<mode>`, PLUS 4 alias
+ * ▸ FAMILLES × MODES (catalogue à 2 axes — V2 + identité) ──────────────────
+ *   La famille d'IDENTITÉ `matrix` ouvre le catalogue (Pi-Web), puis les
+ *   6 familles « couleur » (corail, ambre, emeraude, turquoise, amethyste,
+ *   neutre) × 2 modes (light, dark) = 12 presets `<famille>-<mode>` (soit 14
+ *   presets `<famille>-<mode>` au total), PLUS 4 alias
  *   historiques (dark / light / midnight / slate) REMAPPÉS vers les nouvelles
- *   familles (valeurs RIGOUREUSEMENT identiques à leur jumeau). Chaque famille
- *   a sa propre clarté de fond (les fonds restent distincts malgré un chroma
- *   faible) et son accent d'identité. Contraste des textes (`text` ET
- *   `text-muted`) ≥ 4.5:1 sur les 4 paliers de surface. Si l'hôte n'a fait
+ *   familles (valeurs RIGOUREUSEMENT identiques à leur jumeau). Depuis 0.6.0,
+ *   les 6 familles « couleur » PARTAGENT la même rampe de surfaces neutres
+ *   (chroma 0) : c'est l'ACCENT, propre à chaque famille, qui les distingue
+ *   (variante C). Contraste des textes (`text` ET `text-muted`) ≥ 4.5:1 sur les
+ *   4 paliers de surface. Si l'hôte n'a fait
  *   AUCUN choix, la brique applique au chargement
  *   le preset initial issu de `prefers-color-scheme` (dark/light).
  *
- * ▸ API 0.4.0 ────────────────────────────────────────────────────────────────
+ * ▸ API 0.5.0 ────────────────────────────────────────────────────────────────
  *   setTokens / setTheme / setFamily / getTheme / getFamily / getMode /
  *   applyPalette / reset / listPresets / listFamilies / FAMILIES / PRESETS /
  *   ALIASES / PREFIX / VERSION                    — INCHANGÉS (0.2.0)
@@ -101,19 +142,19 @@
  *   getPreset(name)                          → copie | null (intégré/alias/pack)
  *   alpha(color, a)                          → hex → rgba (non-hex inchangé)
  *   MIGRATIONS                               → table ancien→nouveau (hôtes)
- *   listPresets() = 16 intégrés (12 presets + 4 alias) PUIS packs dans l'ordre.
+ *   listPresets() = 18 intégrés (14 presets + 4 alias) PUIS packs dans l'ordre.
  *   Événement : à CHAQUE changement de palette appliquée (setTokens / setTheme /
  *   applyPalette / reset / initial). register / update / unregister n'émettent
  *   PAS ; setTheme("<pack>") émet comme les autres.
  *
  * ▸ REGISTRE DE PACKS (0.3.0) ───────────────────────────────────────────────
  *   Un PACK hôte est un preset nommé enregistré via registerPreset, sans
- *   toucher aux 16 intégrés. options.extends : nom d'un intégré / alias / pack
+ *   toucher aux 18 intégrés. options.extends : nom d'un intégré / alias / pack
  *   (base = copie complète). options.derive : true (défaut = groupe A+B moins
  *   danger-gradient/txt-glow) | false | tableau de clés. Priorité de fusion :
  *   spec explicite > extends > dérivé. Une dérivation dont la source est
  *   absente ou non-hex est SAUTÉE silencieusement (clé non posée, pas d'erreur).
- *   Noms réservés : les 12 <famille>-<mode> + 4 alias + 6 familles → throw.
+ *   Noms réservés : les 14 <famille>-<mode> + 4 alias + 7 familles → throw.
  *   Registre VOLATILE : les packs sont perdus au rechargement, l'hôte les
  *   ré-enregistre au boot. getFamily() / getMode() renvoient null pour un pack.
  *
@@ -137,7 +178,7 @@
 const HolafTokens = (function () {
     "use strict";
 
-    const VERSION = "0.4.1";
+    const VERSION = "0.6.0";
 
     // Préfixe RÉSERVÉ : toutes les variables posées sont sous --holaf-*.
     const PREFIX = "--holaf-";
@@ -214,10 +255,14 @@ const HolafTokens = (function () {
     }
 
     // ─── Catalogue V2 — 6 familles × 2 modes, valeurs FIGÉES en hex ───────
-    // Valeurs calculées UNE FOIS depuis la maquette V2 validée
-    // (`Yuki and Libs/_tools/theme-accents.mjs` : FAMILIES_WHEEL + ACCENTS_V2),
-    // puis FIGÉES ici : AUCUN moteur OKLCH n'est embarqué (précédent accepté :
-    // modal / toast figent déjà leurs palettes littérales). Chaque mode porte
+    // Depuis 0.6.0 (variante C), les valeurs de surface/texte/danger des 6
+    // familles « couleur » sont recopiées UNE FOIS depuis la maquette de
+    // décision validée `Yuki and Libs/_tools/theme-variants.mjs` (PARAMS.C +
+    // variantPalette, primitives `_tools/theme-lib.mjs`) : surfaces GRIS NEUTRE
+    // (chroma 0) sur une rampe UNIQUE PARTAGÉE, accent INCHANGÉ (0.4.0). AUCUN
+    // moteur OKLCH n'est embarqué (précédent accepté : modal / toast figent
+    // déjà leurs palettes littérales). La famille `matrix` (0.5.0) reste FIGÉE,
+    // hors règle. Chaque mode porte
     // 16 clés : les 15 clés standard + `surface-hover` (4ᵉ palier de profondeur
     // surface → surface-elev → surface-raised → surface-hover). Les clés NON
     // produites par la maquette suivent des règles documentées (README) :
@@ -228,39 +273,97 @@ const HolafTokens = (function () {
     //   danger-text  = readableText(danger) (#ffffff ou #000000)
     //   radius = "12px" ; font-size = "14px" ; shadow = ombre par mode.
     const FAMILIES = {
+        // Famille d'IDENTITÉ (Pi-Web) : monochrome à accent néon vert. Valeurs
+        // FIGÉES (= ex-thème « Matrix » de Pi-Web, zéro changement visuel). Elle
+        // porte 7 clés hôte EN PLUS des 16 clés standard (border-bright,
+        // text-bright, info, warn, code-inline-bg, code-block-bg, tool-output-bg).
+        // Hors roue chromatique : non soumise à la garde de distinction/profondeur.
+        matrix: {
+            label: "Matrix", hue: 135,
+            light: {
+                "surface": "#eeece6",
+                "surface-elev": "#f8f7f4",
+                "surface-raised": "#ffffff",
+                "surface-hover": "#f1f0ea",
+                "border": "#d0d0c8",
+                "border-bright": "#b8b8b0",
+                "text": "#3d3d3a",
+                "text-bright": "#1a1a18",
+                "text-muted": "#777770",
+                "info": "#0070cc",
+                "warn": "#cc8800",
+                "accent": "#166534",
+                "accent-hover": "#15803d",
+                "accent-text": "#ffffff",
+                "danger": "#cc2222",
+                "danger-hover": "#D1403F",
+                "danger-text": "#ffffff",
+                "code-inline-bg": "rgba(0, 0, 0, 0.06)",
+                "code-block-bg": "rgba(0, 0, 0, 0.08)",
+                "tool-output-bg": "rgba(0, 0, 0, 0.05)",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+                "font-size": "14px",
+            },
+            dark: {
+                "surface": "#0a0a0a",
+                "surface-elev": "#161616",
+                "surface-raised": "#1e1e1e",
+                "surface-hover": "#262626",
+                "border": "#2a2a2a",
+                "border-bright": "#3a3a3a",
+                "text": "#c0c0c0",
+                "text-bright": "#e0e0e0",
+                "text-muted": "#888888",
+                "info": "#00aaff",
+                "warn": "#ffaa00",
+                "accent": "#00ff41",
+                "accent-hover": "#00cc34",
+                "accent-text": "#000000",
+                "danger": "#ff4444",
+                "danger-hover": "#DA3B3B",
+                "danger-text": "#000000",
+                "code-inline-bg": "rgba(0, 0, 0, 0.3)",
+                "code-block-bg": "rgba(0, 0, 0, 0.4)",
+                "tool-output-bg": "rgba(0, 0, 0, 0.3)",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+                "font-size": "14px",
+            },
+        },
         corail: {
             label: "Corail", hue: 354,
             light: {
-                "surface": "#ffe3ed",
-                "surface-elev": "#fefefe",
-                "surface-raised": "#f5d9e3",
-                "surface-hover": "#ebcfd9",
-                "border": "#d9b9c4",
-                "text": "#2f2227",
-                "text-muted": "#665159",
+                "surface": "#eeeeee",
+                "surface-elev": "#ffffff",
+                "surface-raised": "#e0dfdf",
+                "surface-hover": "#d4d2d3",
+                "border": "#c4c0c1",
+                "text": "#2b2226",
+                "text-muted": "#4b3f43",
                 "accent": "#9c045e",
-                "accent-hover": "#ab2573",
+                "accent-hover": "#ac3b72",
                 "accent-text": "#ffffff",
-                "danger": "#c62222",
-                "danger-hover": "#cf3f40",
+                "danger": "#cd2323",
+                "danger-hover": "#d74e45",
                 "danger-text": "#ffffff",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
                 "font-size": "14px",
             },
             dark: {
-                "surface": "#36252c",
-                "surface-elev": "#433037",
-                "surface-raised": "#503b43",
-                "surface-hover": "#5d464f",
-                "border": "#735963",
-                "text": "#f4eef0",
-                "text-muted": "#ccb7bf",
+                "surface": "#171717",
+                "surface-elev": "#262526",
+                "surface-raised": "#323132",
+                "surface-hover": "#3b3939",
+                "border": "#4d494a",
+                "text": "#f5f0f2",
+                "text-muted": "#c3bbbe",
                 "accent": "#fa7fb5",
-                "accent-hover": "#dd72a0",
+                "accent-hover": "#d46e9b",
                 "accent-text": "#0b0b12",
                 "danger": "#f87171",
-                "danger-hover": "#db6667",
+                "danger-hover": "#d26362",
                 "danger-text": "#000000",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
@@ -270,36 +373,36 @@ const HolafTokens = (function () {
         ambre: {
             label: "Ambre", hue: 66,
             light: {
-                "surface": "#dcc8b5",
-                "surface-elev": "#fefefe",
-                "surface-raised": "#d2bfac",
-                "surface-hover": "#c9b5a3",
-                "border": "#b6a08b",
-                "text": "#2d251c",
-                "text-muted": "#54473b",
+                "surface": "#eeeeee",
+                "surface-elev": "#ffffff",
+                "surface-raised": "#e0dfde",
+                "surface-hover": "#d4d3d1",
+                "border": "#c3c1be",
+                "text": "#2a241e",
+                "text-muted": "#494138",
                 "accent": "#7a4800",
-                "accent-hover": "#895b1b",
+                "accent-hover": "#8c6031",
                 "accent-text": "#ffffff",
-                "danger": "#a51d1d",
-                "danger-hover": "#ad3734",
+                "danger": "#cd2323",
+                "danger-hover": "#d74e45",
                 "danger-text": "#ffffff",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
                 "font-size": "14px",
             },
             dark: {
-                "surface": "#0c0400",
-                "surface-elev": "#170b02",
-                "surface-raised": "#221508",
-                "surface-hover": "#2e1f10",
-                "border": "#42301f",
-                "text": "#f3efec",
-                "text-muted": "#b9a593",
+                "surface": "#171717",
+                "surface-elev": "#262625",
+                "surface-raised": "#323130",
+                "surface-hover": "#3a3938",
+                "border": "#4c4a48",
+                "text": "#f5f1ee",
+                "text-muted": "#c2bdb7",
                 "accent": "#f29a2d",
-                "accent-hover": "#d08426",
+                "accent-hover": "#cd852f",
                 "accent-text": "#0b0b12",
                 "danger": "#f87171",
-                "danger-hover": "#d56160",
+                "danger-hover": "#d26362",
                 "danger-text": "#000000",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
@@ -309,36 +412,36 @@ const HolafTokens = (function () {
         emeraude: {
             label: "Émeraude", hue: 138,
             light: {
-                "surface": "#c9dac4",
-                "surface-elev": "#fdfffc",
-                "surface-raised": "#c0d0bb",
-                "surface-hover": "#b6c6b1",
-                "border": "#a0b29a",
-                "text": "#22291f",
-                "text-muted": "#465143",
+                "surface": "#eeeeee",
+                "surface-elev": "#ffffff",
+                "surface-raised": "#dfdfdf",
+                "surface-hover": "#d2d3d2",
+                "border": "#c0c2bf",
+                "text": "#222720",
+                "text-muted": "#3e453c",
                 "accent": "#276701",
-                "accent-hover": "#3f781e",
+                "accent-hover": "#467b32",
                 "accent-text": "#ffffff",
-                "danger": "#b01e1e",
-                "danger-hover": "#b43a37",
+                "danger": "#cd2323",
+                "danger-hover": "#d74e45",
                 "danger-text": "#ffffff",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
                 "font-size": "14px",
             },
             dark: {
-                "surface": "#081005",
-                "surface-elev": "#111b0d",
-                "surface-raised": "#1a2617",
-                "surface-hover": "#253120",
-                "border": "#354430",
-                "text": "#eef1ed",
-                "text-muted": "#9faf9a",
+                "surface": "#171717",
+                "surface-elev": "#252625",
+                "surface-raised": "#313231",
+                "surface-hover": "#383a38",
+                "border": "#494b48",
+                "text": "#f0f3ef",
+                "text-muted": "#bbbfb9",
                 "accent": "#7fc765",
-                "accent-hover": "#6dac57",
+                "accent-hover": "#6ea959",
                 "accent-text": "#0b0b12",
                 "danger": "#f87171",
-                "danger-hover": "#d46261",
+                "danger-hover": "#d26362",
                 "danger-text": "#000000",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
@@ -348,36 +451,36 @@ const HolafTokens = (function () {
         turquoise: {
             label: "Turquoise", hue: 210,
             light: {
-                "surface": "#c3e2e8",
-                "surface-elev": "#fdffff",
-                "surface-raised": "#b9d9de",
-                "surface-hover": "#b0cfd5",
-                "border": "#97bbc2",
-                "text": "#1b292c",
-                "text-muted": "#42585c",
+                "surface": "#eeeeee",
+                "surface-elev": "#ffffff",
+                "surface-raised": "#dedfdf",
+                "surface-hover": "#d1d3d3",
+                "border": "#bec2c3",
+                "text": "#1d2729",
+                "text-muted": "#384548",
                 "accent": "#07606c",
-                "accent-hover": "#23747f",
+                "accent-hover": "#38747f",
                 "accent-text": "#ffffff",
-                "danger": "#bb2020",
-                "danger-hover": "#bc3d3e",
+                "danger": "#cd2323",
+                "danger-hover": "#d74e45",
                 "danger-text": "#ffffff",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
                 "font-size": "14px",
             },
             dark: {
-                "surface": "#051a1e",
-                "surface-elev": "#0e2529",
-                "surface-raised": "#183135",
-                "surface-hover": "#223d41",
-                "border": "#315056",
-                "text": "#ecf1f2",
-                "text-muted": "#91b0b5",
+                "surface": "#171717",
+                "surface-elev": "#252626",
+                "surface-raised": "#303232",
+                "surface-hover": "#373a3a",
+                "border": "#474b4c",
+                "text": "#edf3f4",
+                "text-muted": "#b7c0c1",
                 "accent": "#0ec7de",
-                "accent-hover": "#0dadc1",
+                "accent-hover": "#22aabc",
                 "accent-text": "#0b0b12",
                 "danger": "#f87171",
-                "danger-hover": "#d46465",
+                "danger-hover": "#d26362",
                 "danger-text": "#000000",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
@@ -387,36 +490,36 @@ const HolafTokens = (function () {
         amethyste: {
             label: "Améthyste", hue: 282,
             light: {
-                "surface": "#dfe1fa",
-                "surface-elev": "#fefefe",
-                "surface-raised": "#d6d8f0",
-                "surface-hover": "#cccee6",
-                "border": "#b6b9d5",
-                "text": "#252530",
-                "text-muted": "#555669",
+                "surface": "#eeeeee",
+                "surface-elev": "#ffffff",
+                "surface-raised": "#dfdfe0",
+                "surface-hover": "#d2d3d4",
+                "border": "#c0c1c4",
+                "text": "#24242c",
+                "text-muted": "#41414c",
                 "accent": "#4d41b0",
-                "accent-hover": "#6359bb",
+                "accent-hover": "#615dbb",
                 "accent-text": "#ffffff",
-                "danger": "#bb2020",
-                "danger-hover": "#c03d41",
+                "danger": "#cd2323",
+                "danger-hover": "#d74e45",
                 "danger-text": "#ffffff",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
                 "font-size": "14px",
             },
             dark: {
-                "surface": "#1e1f2e",
-                "surface-elev": "#292a3a",
-                "surface-raised": "#343547",
-                "surface-hover": "#3f4155",
-                "border": "#52536b",
-                "text": "#eff0f4",
-                "text-muted": "#abadc4",
+                "surface": "#171717",
+                "surface-elev": "#262626",
+                "surface-raised": "#313133",
+                "surface-hover": "#39393b",
+                "border": "#4a4a4d",
+                "text": "#f1f1f6",
+                "text-muted": "#bcbdc4",
                 "accent": "#a1a3ff",
-                "accent-hover": "#8d8fe0",
+                "accent-hover": "#8a8cd8",
                 "accent-text": "#0b0b12",
                 "danger": "#f87171",
-                "danger-hover": "#d76567",
+                "danger-hover": "#d26362",
                 "danger-text": "#000000",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
@@ -426,36 +529,36 @@ const HolafTokens = (function () {
         neutre: {
             label: "Neutre", hue: 250,
             light: {
-                "surface": "#f2f4f5",
-                "surface-elev": "#fefeff",
-                "surface-raised": "#e8eaeb",
-                "surface-hover": "#dee0e1",
-                "border": "#c6cbd0",
-                "text": "#1f2730",
-                "text-muted": "#4c5a69",
+                "surface": "#eeeeee",
+                "surface-elev": "#ffffff",
+                "surface-raised": "#dfdfe0",
+                "surface-hover": "#d2d3d4",
+                "border": "#bfc1c4",
+                "text": "#20262c",
+                "text-muted": "#3b434c",
                 "accent": "#515457",
-                "accent-hover": "#696c6f",
+                "accent-hover": "#67696c",
                 "accent-text": "#ffffff",
-                "danger": "#d12424",
-                "danger-hover": "#d64343",
+                "danger": "#cd2323",
+                "danger-hover": "#d74e45",
                 "danger-text": "#ffffff",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
                 "font-size": "14px",
             },
             dark: {
-                "surface": "#343537",
-                "surface-elev": "#3f4144",
-                "surface-raised": "#4a4d51",
-                "surface-hover": "#565a5e",
-                "border": "#686e75",
-                "text": "#edf0f4",
-                "text-muted": "#ced1d4",
+                "surface": "#171717",
+                "surface-elev": "#252626",
+                "surface-raised": "#313233",
+                "surface-hover": "#38393b",
+                "border": "#494a4d",
+                "text": "#eff2f6",
+                "text-muted": "#babec4",
                 "accent": "#aeb1b5",
-                "accent-hover": "#9c9ea2",
+                "accent-hover": "#95979a",
                 "accent-text": "#0b0b12",
-                "danger": "#f87878",
-                "danger-hover": "#db6e6e",
+                "danger": "#f87171",
+                "danger-hover": "#d26362",
                 "danger-text": "#000000",
                 "radius": "12px",
                 "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
@@ -464,9 +567,11 @@ const HolafTokens = (function () {
         },
     };
 
-    // Ordre d'affichage stable (par teinte, le Neutre en dernier).
+    // Ordre d'affichage stable : la famille d'IDENTITÉ `matrix` d'abord
+    // (thème de référence Pi-Web), puis les 6 familles « couleur » par teinte
+    // (le Neutre en dernier).
     const MODES = ["light", "dark"];
-    const FAMILY_NAMES = ["corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"];
+    const FAMILY_NAMES = ["matrix", "corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"];
 
     // ─── Catalogue des presets (12 familles×modes + 4 alias REMAPPÉS) ──────
     const PRESETS = {};

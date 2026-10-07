@@ -27,7 +27,7 @@
  *      `extends` le preset intégré `<famille>-<mode>` et ajoute les 3 dérivés
  *      propres à Yuki (`user`, `assistant`, `ok`, cf. `themes-data.js`) ;
  *   3. `HolafModal.setTheme("<famille>-<mode>")` — nom EXACT connu de la
- *      modale (holaf-modal 0.6.1, catalogue V2 à 12 presets).
+ *      modale (holaf-modal 0.7.0, catalogue à 12 presets — variante C).
  *
  * ⚠️ Anti-flash : `data-theme` est déjà posé en dur dans le markup et les
  * alias portent leur repli → le PREMIER rendu est correct même avant que les
@@ -38,7 +38,7 @@
  * la refonte V2 (presets à 5 familles `indigo`/`midnight`/`slate`/`emerald`/
  * `amber`, alias courts `dark`/`light`/`midnight`/`slate`) sont converties à
  * la lecture via `HolafTokens.MIGRATIONS` (table exportée par la brique
- * tokens 0.4.1), avec une table de repli statique si la brique n'a pas
+ * tokens 0.6.0), avec une table de repli statique si la brique n'a pas
  * chargé ; chaîne vide ou valeur inconnue → `neutre-dark` (défaut, aligné sur
  * le markup). La valeur migrée est réécrite dans la clé. Un utilisateur ne
  * perd donc JAMAIS son thème et ne voit jamais de thème cassé.
@@ -88,7 +88,7 @@ const PACK_PREFIX = "yuki-";
  * Migration silencieuse : anciennes valeurs (V1) → <famille>-<mode> (V2).
  *
  * Source de vérité = `HolafTokens.MIGRATIONS` (table exportée par la brique
- * tokens 0.4.1) : on la lit À LA LECTURE (jamais figée ici). Repli statique
+ * tokens 0.6.0) : on la lit À LA LECTURE (jamais figée ici). Repli statique
  * STRICTEMENT identique, utilisé seulement si la brique n'a pas chargé : on
  * couvre les 10 anciens presets et les 4 alias courts. `emerald`/`amber`
  * (alias courts jamais produits par l'UI) sont ajoutés par symétrie.

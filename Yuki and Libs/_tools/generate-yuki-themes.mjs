@@ -8,10 +8,10 @@
  * `Yuki/public/ui/themes.css` et `Yuki/public/ui/themes-data.js` (qui restent
  * commités dans Yuki).
  *
- * Source de vérité des palettes : `HolafTokens.PRESETS` (holaf-tokens 0.4.1),
- * c'est-à-dire EXACTEMENT le catalogue V2 holaf-lib. Aucune palette n'est
- * réinventée ici : les 12 presets <famille>-<mode> (6 familles × 2 modes) sont
- * projetés tels quels.
+ * Source de vérité des palettes : `HolafTokens.PRESETS` (holaf-tokens 0.6.0,
+ * variante C), c'est-à-dire EXACTEMENT le catalogue holaf-lib. Aucune palette
+ * n'est réinventée ici : les 12 presets <famille>-<mode> (6 familles × 2 modes)
+ * sont projetés tels quels.
  *
  * Trois niveaux de profondeur + un état de survol (règle V2) : chaque preset
  * porte surface → surface-elev → surface-raised → surface-hover, projetés sur
@@ -29,7 +29,8 @@
  *   --panel-hover   ← --holaf-surface-hover  (survol)
  *   --border        ← --holaf-border
  *   --text          ← --holaf-text           --muted ← --holaf-text-muted
- *   --accent        ← --holaf-accent         --danger ← --holaf-danger
+ *   --accent        ← --holaf-accent         --accent-text ← --holaf-accent-text
+ *   --danger        ← --holaf-danger
  *   --user          ← --holaf-user      (pack hôte Yuki, dérivé non standard)
  *   --assistant     ← --holaf-assistant (pack hôte Yuki, dérivé non standard)
  *   --ok            ← --holaf-ok        (pack hôte Yuki, dérivé non standard)
@@ -105,6 +106,7 @@ function project(preset) {
     text: p(preset, "text"),
     muted: p(preset, "text-muted"),
     accent,
+    accentText: p(preset, "accent-text"),
     danger: p(preset, "danger"),
     user: HolafColor.mix(surface, accent, 0.18).toLowerCase(),
     assistant: HolafColor.mix(surface, accent, 0.06).toLowerCase(),
@@ -184,6 +186,7 @@ const ALIAS = [
   ["--text", "holaf-text", "text"],
   ["--muted", "holaf-text-muted", "muted"],
   ["--accent", "holaf-accent", "accent"],
+  ["--accent-text", "holaf-accent-text", "accentText"],
   ["--danger", "holaf-danger", "danger"],
   ["--user", "holaf-user", "user"],
   ["--assistant", "holaf-assistant", "assistant"],
@@ -223,7 +226,8 @@ const header = `/*
  *   --panel-3       ← surface-raised --panel-hover ← surface-hover
  *   --border        ← border
  *   --text          ← text           --muted   ← text-muted
- *   --accent        ← accent         --danger  ← danger
+ *   --accent        ← accent         --accent-text ← accent-text
+ *   --danger        ← danger
  *   --user      = HolafColor.mix(surface, accent, 0.18)
  *   --assistant = HolafColor.mix(surface, accent, 0.06)
  *   --ok        = graine Yuki ${OK_SEED} ajustée par paliers de 5 %

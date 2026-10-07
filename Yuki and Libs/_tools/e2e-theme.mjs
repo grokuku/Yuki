@@ -20,14 +20,16 @@ const BASE = process.argv[2] || "http://127.0.0.1:4173";
 const SHOTS = join(import.meta.dirname, "shots");
 mkdirSync(SHOTS, { recursive: true });
 
-/* ─── Valeurs attendues (issues de _tools/generate-yuki-themes.mjs) ────── */
+/* ─── Valeurs attendues (issues de _tools/generate-yuki-themes.mjs) ──────
+ * VARIANTE C : les 6 familles couleur PARTAGENT la même surface par mode
+ * (#eeeeee clair / #171717 sombre) — c'est l'ACCENT qui distingue les familles. */
 const EXPECT_BG = {
-  "corail-light": "#ffe3ed", "corail-dark": "#36252c",
-  "ambre-light": "#dcc8b5", "ambre-dark": "#0c0400",
-  "emeraude-light": "#c9dac4", "emeraude-dark": "#081005",
-  "turquoise-light": "#c3e2e8", "turquoise-dark": "#051a1e",
-  "amethyste-light": "#dfe1fa", "amethyste-dark": "#1e1f2e",
-  "neutre-light": "#f2f4f5", "neutre-dark": "#343537",
+  "corail-light": "#eeeeee", "corail-dark": "#171717",
+  "ambre-light": "#eeeeee", "ambre-dark": "#171717",
+  "emeraude-light": "#eeeeee", "emeraude-dark": "#171717",
+  "turquoise-light": "#eeeeee", "turquoise-dark": "#171717",
+  "amethyste-light": "#eeeeee", "amethyste-dark": "#171717",
+  "neutre-light": "#eeeeee", "neutre-dark": "#171717",
 };
 const FAMILIES = ["corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"];
 const MODES = ["light", "dark"];
@@ -209,7 +211,7 @@ for (const path of ["/", "/config"]) {
 
   let s = await evaluate(READ_STATE);
   check(`[${page}] défaut sans stockage : data-theme=neutre-dark`, s.dataTheme === "neutre-dark" && s.stored === null, `dataTheme=${s.dataTheme} stored=${s.stored}`);
-  check(`[${page}] défaut : --bg calculé = #343537`, s.bg === "#343537", s.bg);
+  check(`[${page}] défaut : --bg calculé = #171717`, s.bg === "#171717", s.bg);
 
   // — Les 6 familles × les 2 modes, VIA LES CONTRÔLES.
   // Départ : neutre-dark (mode courant « dark »).
@@ -241,21 +243,24 @@ for (const path of ["/", "/config"]) {
     check(`[${page}] aller-retour bouton → toujours ${family}-${mode}`,
       s.dataTheme === `${family}-${mode}` && s.stored === `${family}-${mode}`, s.dataTheme);
   }
-  // Distinction VISIBLE : les fonds ET les accents des 12 combinaisons sont
-  // deux à deux différents (aucune famille ne se confond, dans aucun mode).
+  // Distinction VISIBLE : en VARIANTE C, les 6 FONDS d'un même mode sont
+  // PARTAGÉS (surfaces gris neutre, rampe unique) — la distinction entre
+  // familles est portée par l'ACCENT. L'ancien contrôle « 6 fonds deux à deux
+  // distincts » (faux par construction) est REMPLACÉ (pas supprimé) par :
+  // fonds PARTAGÉS + accents deux à deux distincts.
   const bgs = [...seen.values()].map((v) => v.bg);
   const accents = [...seen.values()].map((v) => v.accent);
   for (const m of MODES) {
     const famBgs = FAMILIES.map((f) => seen.get(`${f}-${m}`)?.bg);
     const famAccents = FAMILIES.map((f) => seen.get(`${f}-${m}`)?.accent);
-    check(`[${page}] mode ${m} : 6 fonds de famille deux à deux distincts`,
-      new Set(famBgs).size === FAMILIES.length, famBgs.join(" "));
+    check(`[${page}] mode ${m} : les 6 fonds de famille sont PARTAGÉS (variante C)`,
+      new Set(famBgs).size === 1, famBgs.join(" "));
     check(`[${page}] mode ${m} : 6 accents de famille deux à deux distincts`,
       new Set(famAccents).size === FAMILIES.length, famAccents.join(" "));
   }
-  check(`[${page}] les 12 combinaisons sont deux à deux distinctes (bg + accent)`,
-    seen.size === 12 && new Set(bgs).size === 12 && new Set(accents).size === 12,
-    `presets=${seen.size} bgs=${new Set(bgs).size} accents=${new Set(accents).size}`);
+  check(`[${page}] distinction portée par les ACCENTS : les 12 accents sont deux à deux distincts`,
+    seen.size === 12 && new Set(accents).size === 12,
+    `presets=${seen.size} accents=${new Set(accents).size}`);
 
   // — Icône / aria du bouton selon le mode (état final de la boucle : neutre-dark).
   check(`[${page}] bouton en mode sombre : icône lune + aria-pressed=true + libellé`,
@@ -274,7 +279,7 @@ for (const path of ["/", "/config"]) {
   await navigate(url);
   s = await evaluate(READ_STATE);
   check(`[${page}] PERSISTANCE : après rechargement data-theme=turquoise-light`,
-    s.dataTheme === "turquoise-light" && s.stored === "turquoise-light" && s.bg === "#c3e2e8",
+    s.dataTheme === "turquoise-light" && s.stored === "turquoise-light" && s.bg === "#eeeeee",
     `dataTheme=${s.dataTheme} stored=${s.stored} --bg=${s.bg}`);
 
   // — color-scheme effectif par mode.
@@ -302,8 +307,8 @@ for (const path of ["/", "/config"]) {
   check(`[${page}] zéro <style> injecté (marqueur neutralisé), CSSOM --holaf-* actif`,
     s.styleElems === 0 && s.styleAttrs === 1 && s.holafSurface !== "",
     `style=${s.styleElems} attrs=${s.styleAttrs} holaf-surface=${s.holafSurface}`);
-  check(`[${page}] brique tokens active (v0.4.1) + 12 packs hôte yuki-*`,
-    s.holafVersion === "0.4.1" && s.holafPacks === 12 && (s.holafCurrent || "").startsWith("yuki-"),
+  check(`[${page}] brique tokens active (v0.6.0) + 12 packs hôte yuki-*`,
+    s.holafVersion === "0.6.0" && s.holafPacks === 12 && (s.holafCurrent || "").startsWith("yuki-"),
     `version=${s.holafVersion} packs=${s.holafPacks} courant=${s.holafCurrent}`);
 
   // — Pont holaf (page /config seulement) : le nom EXACT est transmis.

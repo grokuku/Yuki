@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * Holaf UI — Brique HolafModal · version 0.6.1
+ * Holaf UI — Brique HolafModal · version 0.7.0
  * ─────────────────────────────────────────────────────────────────────────────
  * Modale autonome (zéro dépendance runtime) : overlay, pile d'overlays
  * document-level, helpers Promise (alert / confirm / prompt / busy), focus
@@ -64,6 +64,15 @@
  * l'identique de HolafTokens 0.4.1 ; le défaut du CSS injecté (amethyste-dark)
  * suit. Aucune API ne change, aucune clé nouvelle : seules 6 valeurs littérales
  * du miroir sont retouchées.
+ * v0.7.0 — MIROIR DE LA VARIANTE C (RUPTURE de valeurs, alignée sur HolafTokens
+ * 0.6.0) : les 12 presets sont recopiés EXACTEMENT du catalogue HolafTokens
+ * 0.6.0 (surfaces GRIS NEUTRE chroma 0, rampe UNIQUE PARTAGÉE par les 6
+ * familles, accent inchangé). Le mapping des clés est inchangé ; `--hm-bg-secondary`
+ * suit `surface-elev`, `--hm-bg-input` suit `surface-raised`, `--hm-text-secondary`
+ * suit `text-muted`, `--hm-overlay-bg` / `--hm-busy-bg` restent dérivés de la
+ * surface par mode. Le défaut du CSS injecté (amethyste-dark) suit à
+ * l'identique. Aucune API ne change : seules les valeurs littérales du miroir
+ * changent — d'où le bump MINOR (0.x : rupture de valeurs de palette).
  * Fichier DUAL : module ES (export) + global window.HolafModal — se
  * charge via <script type="module"> ou `import { HolafModal }`.
  *
@@ -80,7 +89,7 @@
 const HolafModal = (function () {
     "use strict";
 
-    const VERSION = "0.6.1";
+    const VERSION = "0.7.0";
 
     // ─── État global du module (partagé par toutes les modales) ──────────────
     // Pile des modales ouvertes : la DERNIÈRE entrée est le « sommet », la
@@ -261,8 +270,9 @@ const HolafModal = (function () {
     // thème ne doit pas pouvoir casser sm/md/lg/xl).
     //
     // PROVENANCE DES VALEURS (DONNÉES LITTÉRALES, aucun calcul runtime) : les
-    // 12 presets sont les MIROIRS des presets homonymes de HolafTokens 0.4.1
-    // (brique fondation, js/holaf-tokens.js — catalogue V2), figés ici une fois
+    // 12 presets sont les MIROIRS des presets homonymes de HolafTokens 0.6.0
+    // (brique fondation, js/holaf-tokens.js — variante C : surfaces gris neutre
+    // chroma 0, rampe unique partagée, accent inchangé), figés ici une fois
     // pour que la brique reste AUTONOME (zéro dépendance runtime). Mapping :
     //     --hm-bg             ← surface            --hm-accent        ← accent
     //     --hm-bg-secondary   ← surface-elev       --hm-accent-hover  ← accent-hover
@@ -276,235 +286,235 @@ const HolafModal = (function () {
     // `rgba(24, 24, 27, 0.35)` + busy `rgba(bg, 0.82)` ; sombre → scrim teinté
     // du fond à 0.55 + busy `rgba(bg, 0.85)`.
     // Les hex sont repris À L'IDENTIQUE (casse comprise) de HolafTokens.PRESETS
-    // (0.4.1) pour que le test de cohérence inter-briques passe.
+    // (0.6.0) pour que le test de cohérence inter-briques passe.
     const THEME_PRESETS = {
         "corail-light": {
-            "--hm-bg": "#ffe3ed",
-            "--hm-bg-secondary": "#fefefe",
-            "--hm-bg-input": "#f5d9e3",
-            "--hm-text": "#2f2227",
-            "--hm-text-secondary": "#665159",
-            "--hm-border": "#d9b9c4",
+            "--hm-bg": "#eeeeee",
+            "--hm-bg-secondary": "#ffffff",
+            "--hm-bg-input": "#e0dfdf",
+            "--hm-text": "#2b2226",
+            "--hm-text-secondary": "#4b3f43",
+            "--hm-border": "#c4c0c1",
             "--hm-accent": "#9c045e",
-            "--hm-accent-hover": "#ab2573",
+            "--hm-accent-hover": "#ac3b72",
             "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#c62222",
-            "--hm-danger-hover": "#cf3f40",
+            "--hm-danger": "#cd2323",
+            "--hm-danger-hover": "#d74e45",
             "--hm-danger-text": "#ffffff",
             "--hm-radius": "12px",
             "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(255, 227, 237, 0.82)",
+            "--hm-busy-bg": "rgba(238, 238, 238, 0.82)",
         },
         "corail-dark": {
-            "--hm-bg": "#36252c",
-            "--hm-bg-secondary": "#433037",
-            "--hm-bg-input": "#503b43",
-            "--hm-text": "#f4eef0",
-            "--hm-text-secondary": "#ccb7bf",
-            "--hm-border": "#735963",
+            "--hm-bg": "#171717",
+            "--hm-bg-secondary": "#262526",
+            "--hm-bg-input": "#323132",
+            "--hm-text": "#f5f0f2",
+            "--hm-text-secondary": "#c3bbbe",
+            "--hm-border": "#4d494a",
             "--hm-accent": "#fa7fb5",
-            "--hm-accent-hover": "#dd72a0",
+            "--hm-accent-hover": "#d46e9b",
             "--hm-accent-text": "#0b0b12",
             "--hm-danger": "#f87171",
-            "--hm-danger-hover": "#db6667",
+            "--hm-danger-hover": "#d26362",
             "--hm-danger-text": "#000000",
             "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(54, 37, 44, 0.55)",
+            "--hm-overlay-bg": "rgba(23, 23, 23, 0.55)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(54, 37, 44, 0.85)",
+            "--hm-busy-bg": "rgba(23, 23, 23, 0.85)",
         },
         "ambre-light": {
-            "--hm-bg": "#dcc8b5",
-            "--hm-bg-secondary": "#fefefe",
-            "--hm-bg-input": "#d2bfac",
-            "--hm-text": "#2d251c",
-            "--hm-text-secondary": "#54473b",
-            "--hm-border": "#b6a08b",
+            "--hm-bg": "#eeeeee",
+            "--hm-bg-secondary": "#ffffff",
+            "--hm-bg-input": "#e0dfde",
+            "--hm-text": "#2a241e",
+            "--hm-text-secondary": "#494138",
+            "--hm-border": "#c3c1be",
             "--hm-accent": "#7a4800",
-            "--hm-accent-hover": "#895b1b",
+            "--hm-accent-hover": "#8c6031",
             "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#a51d1d",
-            "--hm-danger-hover": "#ad3734",
+            "--hm-danger": "#cd2323",
+            "--hm-danger-hover": "#d74e45",
             "--hm-danger-text": "#ffffff",
             "--hm-radius": "12px",
             "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(220, 200, 181, 0.82)",
+            "--hm-busy-bg": "rgba(238, 238, 238, 0.82)",
         },
         "ambre-dark": {
-            "--hm-bg": "#0c0400",
-            "--hm-bg-secondary": "#170b02",
-            "--hm-bg-input": "#221508",
-            "--hm-text": "#f3efec",
-            "--hm-text-secondary": "#b9a593",
-            "--hm-border": "#42301f",
+            "--hm-bg": "#171717",
+            "--hm-bg-secondary": "#262625",
+            "--hm-bg-input": "#323130",
+            "--hm-text": "#f5f1ee",
+            "--hm-text-secondary": "#c2bdb7",
+            "--hm-border": "#4c4a48",
             "--hm-accent": "#f29a2d",
-            "--hm-accent-hover": "#d08426",
+            "--hm-accent-hover": "#cd852f",
             "--hm-accent-text": "#0b0b12",
             "--hm-danger": "#f87171",
-            "--hm-danger-hover": "#d56160",
+            "--hm-danger-hover": "#d26362",
             "--hm-danger-text": "#000000",
             "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(12, 4, 0, 0.55)",
+            "--hm-overlay-bg": "rgba(23, 23, 23, 0.55)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(12, 4, 0, 0.85)",
+            "--hm-busy-bg": "rgba(23, 23, 23, 0.85)",
         },
         "emeraude-light": {
-            "--hm-bg": "#c9dac4",
-            "--hm-bg-secondary": "#fdfffc",
-            "--hm-bg-input": "#c0d0bb",
-            "--hm-text": "#22291f",
-            "--hm-text-secondary": "#465143",
-            "--hm-border": "#a0b29a",
+            "--hm-bg": "#eeeeee",
+            "--hm-bg-secondary": "#ffffff",
+            "--hm-bg-input": "#dfdfdf",
+            "--hm-text": "#222720",
+            "--hm-text-secondary": "#3e453c",
+            "--hm-border": "#c0c2bf",
             "--hm-accent": "#276701",
-            "--hm-accent-hover": "#3f781e",
+            "--hm-accent-hover": "#467b32",
             "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#b01e1e",
-            "--hm-danger-hover": "#b43a37",
+            "--hm-danger": "#cd2323",
+            "--hm-danger-hover": "#d74e45",
             "--hm-danger-text": "#ffffff",
             "--hm-radius": "12px",
             "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(201, 218, 196, 0.82)",
+            "--hm-busy-bg": "rgba(238, 238, 238, 0.82)",
         },
         "emeraude-dark": {
-            "--hm-bg": "#081005",
-            "--hm-bg-secondary": "#111b0d",
-            "--hm-bg-input": "#1a2617",
-            "--hm-text": "#eef1ed",
-            "--hm-text-secondary": "#9faf9a",
-            "--hm-border": "#354430",
+            "--hm-bg": "#171717",
+            "--hm-bg-secondary": "#252625",
+            "--hm-bg-input": "#313231",
+            "--hm-text": "#f0f3ef",
+            "--hm-text-secondary": "#bbbfb9",
+            "--hm-border": "#494b48",
             "--hm-accent": "#7fc765",
-            "--hm-accent-hover": "#6dac57",
+            "--hm-accent-hover": "#6ea959",
             "--hm-accent-text": "#0b0b12",
             "--hm-danger": "#f87171",
-            "--hm-danger-hover": "#d46261",
+            "--hm-danger-hover": "#d26362",
             "--hm-danger-text": "#000000",
             "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(8, 16, 5, 0.55)",
+            "--hm-overlay-bg": "rgba(23, 23, 23, 0.55)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(8, 16, 5, 0.85)",
+            "--hm-busy-bg": "rgba(23, 23, 23, 0.85)",
         },
         "turquoise-light": {
-            "--hm-bg": "#c3e2e8",
-            "--hm-bg-secondary": "#fdffff",
-            "--hm-bg-input": "#b9d9de",
-            "--hm-text": "#1b292c",
-            "--hm-text-secondary": "#42585c",
-            "--hm-border": "#97bbc2",
+            "--hm-bg": "#eeeeee",
+            "--hm-bg-secondary": "#ffffff",
+            "--hm-bg-input": "#dedfdf",
+            "--hm-text": "#1d2729",
+            "--hm-text-secondary": "#384548",
+            "--hm-border": "#bec2c3",
             "--hm-accent": "#07606c",
-            "--hm-accent-hover": "#23747f",
+            "--hm-accent-hover": "#38747f",
             "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#bb2020",
-            "--hm-danger-hover": "#bc3d3e",
+            "--hm-danger": "#cd2323",
+            "--hm-danger-hover": "#d74e45",
             "--hm-danger-text": "#ffffff",
             "--hm-radius": "12px",
             "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(195, 226, 232, 0.82)",
+            "--hm-busy-bg": "rgba(238, 238, 238, 0.82)",
         },
         "turquoise-dark": {
-            "--hm-bg": "#051a1e",
-            "--hm-bg-secondary": "#0e2529",
-            "--hm-bg-input": "#183135",
-            "--hm-text": "#ecf1f2",
-            "--hm-text-secondary": "#91b0b5",
-            "--hm-border": "#315056",
+            "--hm-bg": "#171717",
+            "--hm-bg-secondary": "#252626",
+            "--hm-bg-input": "#303232",
+            "--hm-text": "#edf3f4",
+            "--hm-text-secondary": "#b7c0c1",
+            "--hm-border": "#474b4c",
             "--hm-accent": "#0ec7de",
-            "--hm-accent-hover": "#0dadc1",
+            "--hm-accent-hover": "#22aabc",
             "--hm-accent-text": "#0b0b12",
             "--hm-danger": "#f87171",
-            "--hm-danger-hover": "#d46465",
+            "--hm-danger-hover": "#d26362",
             "--hm-danger-text": "#000000",
             "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(5, 26, 30, 0.55)",
+            "--hm-overlay-bg": "rgba(23, 23, 23, 0.55)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(5, 26, 30, 0.85)",
+            "--hm-busy-bg": "rgba(23, 23, 23, 0.85)",
         },
         "amethyste-light": {
-            "--hm-bg": "#dfe1fa",
-            "--hm-bg-secondary": "#fefefe",
-            "--hm-bg-input": "#d6d8f0",
-            "--hm-text": "#252530",
-            "--hm-text-secondary": "#555669",
-            "--hm-border": "#b6b9d5",
+            "--hm-bg": "#eeeeee",
+            "--hm-bg-secondary": "#ffffff",
+            "--hm-bg-input": "#dfdfe0",
+            "--hm-text": "#24242c",
+            "--hm-text-secondary": "#41414c",
+            "--hm-border": "#c0c1c4",
             "--hm-accent": "#4d41b0",
-            "--hm-accent-hover": "#6359bb",
+            "--hm-accent-hover": "#615dbb",
             "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#bb2020",
-            "--hm-danger-hover": "#c03d41",
+            "--hm-danger": "#cd2323",
+            "--hm-danger-hover": "#d74e45",
             "--hm-danger-text": "#ffffff",
             "--hm-radius": "12px",
             "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(223, 225, 250, 0.82)",
+            "--hm-busy-bg": "rgba(238, 238, 238, 0.82)",
         },
         "amethyste-dark": {
-            "--hm-bg": "#1e1f2e",
-            "--hm-bg-secondary": "#292a3a",
-            "--hm-bg-input": "#343547",
-            "--hm-text": "#eff0f4",
-            "--hm-text-secondary": "#abadc4",
-            "--hm-border": "#52536b",
+            "--hm-bg": "#171717",
+            "--hm-bg-secondary": "#262626",
+            "--hm-bg-input": "#313133",
+            "--hm-text": "#f1f1f6",
+            "--hm-text-secondary": "#bcbdc4",
+            "--hm-border": "#4a4a4d",
             "--hm-accent": "#a1a3ff",
-            "--hm-accent-hover": "#8d8fe0",
+            "--hm-accent-hover": "#8a8cd8",
             "--hm-accent-text": "#0b0b12",
             "--hm-danger": "#f87171",
-            "--hm-danger-hover": "#d76567",
+            "--hm-danger-hover": "#d26362",
             "--hm-danger-text": "#000000",
             "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(30, 31, 46, 0.55)",
+            "--hm-overlay-bg": "rgba(23, 23, 23, 0.55)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(30, 31, 46, 0.85)",
+            "--hm-busy-bg": "rgba(23, 23, 23, 0.85)",
         },
         "neutre-light": {
-            "--hm-bg": "#f2f4f5",
-            "--hm-bg-secondary": "#fefeff",
-            "--hm-bg-input": "#e8eaeb",
-            "--hm-text": "#1f2730",
-            "--hm-text-secondary": "#4c5a69",
-            "--hm-border": "#c6cbd0",
+            "--hm-bg": "#eeeeee",
+            "--hm-bg-secondary": "#ffffff",
+            "--hm-bg-input": "#dfdfe0",
+            "--hm-text": "#20262c",
+            "--hm-text-secondary": "#3b434c",
+            "--hm-border": "#bfc1c4",
             "--hm-accent": "#515457",
-            "--hm-accent-hover": "#696c6f",
+            "--hm-accent-hover": "#67696c",
             "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#d12424",
-            "--hm-danger-hover": "#d64343",
+            "--hm-danger": "#cd2323",
+            "--hm-danger-hover": "#d74e45",
             "--hm-danger-text": "#ffffff",
             "--hm-radius": "12px",
             "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(242, 244, 245, 0.82)",
+            "--hm-busy-bg": "rgba(238, 238, 238, 0.82)",
         },
         "neutre-dark": {
-            "--hm-bg": "#343537",
-            "--hm-bg-secondary": "#3f4144",
-            "--hm-bg-input": "#4a4d51",
-            "--hm-text": "#edf0f4",
-            "--hm-text-secondary": "#ced1d4",
-            "--hm-border": "#686e75",
+            "--hm-bg": "#171717",
+            "--hm-bg-secondary": "#252626",
+            "--hm-bg-input": "#313233",
+            "--hm-text": "#eff2f6",
+            "--hm-text-secondary": "#babec4",
+            "--hm-border": "#494a4d",
             "--hm-accent": "#aeb1b5",
-            "--hm-accent-hover": "#9c9ea2",
+            "--hm-accent-hover": "#95979a",
             "--hm-accent-text": "#0b0b12",
-            "--hm-danger": "#f87878",
-            "--hm-danger-hover": "#db6e6e",
+            "--hm-danger": "#f87171",
+            "--hm-danger-hover": "#d26362",
             "--hm-danger-text": "#000000",
             "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(52, 53, 55, 0.55)",
+            "--hm-overlay-bg": "rgba(23, 23, 23, 0.55)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(52, 53, 55, 0.85)",
+            "--hm-busy-bg": "rgba(23, 23, 23, 0.85)",
         },
     };
     Object.keys(THEME_PRESETS).forEach((name) => themesRegister(name, THEME_PRESETS[name]));
@@ -570,12 +580,12 @@ const HolafModal = (function () {
     // être re-thémée indépendamment via l'option `theme`.
     const HOLAF_MODAL_CSS = `
 .holaf-modal-overlay, .holaf-modal-root {
-    --hm-bg: #1e1f2e; --hm-bg-secondary: #292a3a; --hm-bg-input: #343547;
-    --hm-text: #eff0f4; --hm-text-secondary: #abadc4; --hm-border: #52536b;
-    --hm-accent: #a1a3ff; --hm-accent-hover: #8d8fe0; --hm-accent-text: #0b0b12;
-    --hm-danger: #f87171; --hm-danger-hover: #d76567; --hm-danger-text: #000000;
-    --hm-radius: 12px; --hm-overlay-bg: rgba(30, 31, 46, 0.55); --hm-font-size: 14px;
-    --hm-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); --hm-busy-bg: rgba(30, 31, 46, 0.85);
+    --hm-bg: #171717; --hm-bg-secondary: #262626; --hm-bg-input: #313133;
+    --hm-text: #f1f1f6; --hm-text-secondary: #bcbdc4; --hm-border: #4a4a4d;
+    --hm-accent: #a1a3ff; --hm-accent-hover: #8a8cd8; --hm-accent-text: #0b0b12;
+    --hm-danger: #f87171; --hm-danger-hover: #d26362; --hm-danger-text: #000000;
+    --hm-radius: 12px; --hm-overlay-bg: rgba(23, 23, 23, 0.55); --hm-font-size: 14px;
+    --hm-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); --hm-busy-bg: rgba(23, 23, 23, 0.85);
     --hm-width: 440px;
 }
 .holaf-modal-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--hm-overlay-bg); animation: holaf-modal-fade 0.16s ease-out; box-sizing: border-box; }

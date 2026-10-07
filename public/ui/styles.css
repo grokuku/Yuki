@@ -186,7 +186,10 @@ a.pill:hover {
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--accent);
-  color: #fff;
+  /* Encre lisible sur l'accent (≥ 4,5:1, WCAG AA) : --accent-text est projeté
+   * depuis le token --holaf-accent-text du catalogue (thèmes.css). L'ancien
+   * #fff en dur tombait à 2,05–2,40:1 sur les accents sombres. */
+  color: var(--accent-text, #fff);
   font: inherit;
   cursor: pointer;
 }

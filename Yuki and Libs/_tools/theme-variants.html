@@ -1,0 +1,3823 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Yuki — variantes de surfaces contre la monotonie (maquette hors production)</title>
+<style>
+/* ═══ Page de la maquette (neutre, sans couleur de marque) ═════════════════ */
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 28px 30px 90px; max-width: 2340px;
+  background: #101216; color: #e7eaf0;
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+h1 { font-size: 23px; margin: 0 0 8px; }
+h2 { font-size: 18px; margin: 44px 0 12px; border-top: 1px solid #2b2f36; padding-top: 22px; }
+h4.mode-title { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: #8b93a1; margin: 16px 0 8px; }
+p.lead { color: #a4acba; max-width: 120ch; margin: 8px 0 0; }
+p.lead b { color: #e7eaf0; }
+code { background: #22262d; border: 1px solid #2f3540; border-radius: 4px; padding: 0 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85em; }
+.note { color: #8b93a1; font-size: 12.5px; }
+
+/* Sommaire. */
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+nav.toc a { color: #cfd6e2; text-decoration: none; border: 1px solid #2f3540; border-radius: 999px;
+  padding: 5px 12px; font-size: 12.5px; background: #191c21; }
+nav.toc a:hover { border-color: #4a5364; }
+
+/* Bandeau « principe ». */
+.principe { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 16px; }
+.principe > div { border: 1px solid #2b2f36; border-radius: 12px; padding: 13px 15px; background: #191c21; }
+.principe h3 { margin: 0 0 6px; font-size: 14px; }
+.principe p { margin: 6px 0 0; color: #a4acba; }
+.principe b { color: #e7eaf0; }
+
+/* ═══ Variables de thème par data-theme — aucun style inline ═════════════ */
+[data-theme="vA-turquoise-dark"] {
+  color-scheme: dark;
+  --surface: #141718;
+  --elev: #1f2324;
+  --raised: #282d2e;
+  --hover: #2f3536;
+  --border: #3e4647;
+  --text: #edf3f4;
+  --muted: #b7c0c1;
+  --accent: #0ec7de;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #1d3236;
+  --assistant: #1c2425;
+}
+[data-theme="vA-turquoise-light"] {
+  color-scheme: light;
+  --surface: #d7dcdd;
+  --elev: #ffffff;
+  --raised: #cad0d1;
+  --hover: #c0c7c8;
+  --border: #acb6b8;
+  --text: #1d2729;
+  --muted: #384548;
+  --accent: #07606c;
+  --on-accent: #ffffff;
+  --danger: #b11c1c;
+  --ok: #256547;
+  --user: #b5c5c8;
+  --assistant: #fbfdfd;
+}
+[data-theme="vA-corail-dark"] {
+  color-scheme: dark;
+  --surface: #2d2a2b;
+  --elev: #3a3637;
+  --raised: #454042;
+  --hover: #4d484a;
+  --border: #60595c;
+  --text: #f5f0f2;
+  --muted: #c3bbbe;
+  --accent: #fa7fb5;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #4e3941;
+  --assistant: #3c3538;
+}
+[data-theme="vA-corail-light"] {
+  color-scheme: light;
+  --surface: #efeaec;
+  --elev: #ffffff;
+  --raised: #e3dddf;
+  --hover: #dad3d6;
+  --border: #cac1c4;
+  --text: #2b2226;
+  --muted: #4b3f43;
+  --accent: #9c045e;
+  --on-accent: #ffffff;
+  --danger: #cd2323;
+  --ok: #2d7654;
+  --user: #e4c5d1;
+  --assistant: #fefcfc;
+}
+[data-theme="vA-ambre-dark"] {
+  color-scheme: dark;
+  --surface: #070504;
+  --elev: #110f0d;
+  --raised: #1b1815;
+  --hover: #221f1b;
+  --border: #332e2a;
+  --text: #f5f1ee;
+  --muted: #c2bdb7;
+  --accent: #f29a2d;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #291a0d;
+  --assistant: #130e0a;
+}
+[data-theme="vA-ambre-light"] {
+  color-scheme: light;
+  --surface: #cfcbc8;
+  --elev: #ffffff;
+  --raised: #c3bfbb;
+  --hover: #bab5b1;
+  --border: #aaa49e;
+  --text: #2a241e;
+  --muted: #494138;
+  --accent: #7a4800;
+  --on-accent: #ffffff;
+  --danger: #a31919;
+  --ok: #225d41;
+  --user: #c0b3a6;
+  --assistant: #fefcfb;
+}
+[data-theme="vB-turquoise-dark"] {
+  color-scheme: dark;
+  --surface: #0f181a;
+  --elev: #1c2628;
+  --raised: #263234;
+  --hover: #2d393b;
+  --border: #3c4b4d;
+  --text: #edf3f4;
+  --muted: #b7c0c1;
+  --accent: #0ec7de;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #173338;
+  --assistant: #192729;
+}
+[data-theme="vB-turquoise-light"] {
+  color-scheme: light;
+  --surface: #d0dfe1;
+  --elev: #ffffff;
+  --raised: #bfced1;
+  --hover: #b1c1c4;
+  --border: #9eb0b4;
+  --text: #1d2729;
+  --muted: #384548;
+  --accent: #07606c;
+  --on-accent: #ffffff;
+  --danger: #b11c1c;
+  --ok: #256547;
+  --user: #afc7cb;
+  --assistant: #f8feff;
+}
+[data-theme="vB-corail-dark"] {
+  color-scheme: dark;
+  --surface: #31282b;
+  --elev: #40363a;
+  --raised: #4d4246;
+  --hover: #55494d;
+  --border: #685b60;
+  --text: #f5f0f2;
+  --muted: #c3bbbe;
+  --accent: #fa7fb5;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #523741;
+  --assistant: #42353a;
+}
+[data-theme="vB-corail-light"] {
+  color-scheme: light;
+  --surface: #f5e7ec;
+  --elev: #ffffff;
+  --raised: #e4d6db;
+  --hover: #d8c9ce;
+  --border: #c8b7bd;
+  --text: #2b2226;
+  --muted: #4b3f43;
+  --accent: #9c045e;
+  --on-accent: #ffffff;
+  --danger: #cd2323;
+  --ok: #2d7654;
+  --user: #e9c3d1;
+  --assistant: #fffbfd;
+}
+[data-theme="vB-ambre-dark"] {
+  color-scheme: dark;
+  --surface: #090502;
+  --elev: #16100a;
+  --raised: #201a13;
+  --hover: #282119;
+  --border: #393028;
+  --text: #f5f1ee;
+  --muted: #c2bdb7;
+  --accent: #f29a2d;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #2b1a07;
+  --assistant: #170f08;
+}
+[data-theme="vB-ambre-light"] {
+  color-scheme: light;
+  --surface: #d3cac1;
+  --elev: #ffffff;
+  --raised: #c3b9b0;
+  --hover: #b7ada3;
+  --border: #a79b90;
+  --text: #2a241e;
+  --muted: #494138;
+  --accent: #7a4800;
+  --on-accent: #ffffff;
+  --danger: #a31919;
+  --ok: #225d41;
+  --user: #c3b2a1;
+  --assistant: #fffcf9;
+}
+[data-theme="vC-turquoise-dark"] {
+  color-scheme: dark;
+  --surface: #171717;
+  --elev: #252626;
+  --raised: #303232;
+  --hover: #373a3a;
+  --border: #474b4c;
+  --text: #edf3f4;
+  --muted: #b7c0c1;
+  --accent: #0ec7de;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #213235;
+  --assistant: #222727;
+}
+[data-theme="vC-turquoise-light"] {
+  color-scheme: light;
+  --surface: #eeeeee;
+  --elev: #ffffff;
+  --raised: #dedfdf;
+  --hover: #d1d3d3;
+  --border: #bec2c3;
+  --text: #1d2729;
+  --muted: #384548;
+  --accent: #07606c;
+  --on-accent: #ffffff;
+  --danger: #cd2323;
+  --ok: #2d7654;
+  --user: #c7d3d6;
+  --assistant: #fcfcfc;
+}
+[data-theme="vC-corail-dark"] {
+  color-scheme: dark;
+  --surface: #171717;
+  --elev: #262526;
+  --raised: #323132;
+  --hover: #3b3939;
+  --border: #4d494a;
+  --text: #f5f0f2;
+  --muted: #c3bbbe;
+  --accent: #fa7fb5;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #3a292f;
+  --assistant: #282526;
+}
+[data-theme="vC-corail-light"] {
+  color-scheme: light;
+  --surface: #eeeeee;
+  --elev: #ffffff;
+  --raised: #e0dfdf;
+  --hover: #d4d2d3;
+  --border: #c4c0c1;
+  --text: #2b2226;
+  --muted: #4b3f43;
+  --accent: #9c045e;
+  --on-accent: #ffffff;
+  --danger: #cd2323;
+  --ok: #2d7654;
+  --user: #e4c9d3;
+  --assistant: #fcfcfc;
+}
+[data-theme="vC-ambre-dark"] {
+  color-scheme: dark;
+  --surface: #171717;
+  --elev: #262625;
+  --raised: #323130;
+  --hover: #3a3938;
+  --border: #4c4a48;
+  --text: #f5f1ee;
+  --muted: #c2bdb7;
+  --accent: #f29a2d;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #392c20;
+  --assistant: #282523;
+}
+[data-theme="vC-ambre-light"] {
+  color-scheme: light;
+  --surface: #eeeeee;
+  --elev: #ffffff;
+  --raised: #e0dfde;
+  --hover: #d4d3d1;
+  --border: #c3c1be;
+  --text: #2a241e;
+  --muted: #494138;
+  --accent: #7a4800;
+  --on-accent: #ffffff;
+  --danger: #cd2323;
+  --ok: #2d7654;
+  --user: #d9cfc5;
+  --assistant: #fcfcfc;
+}
+[data-theme="p-turquoise-dark"] {
+  color-scheme: dark;
+  --surface: #051a1e;
+  --elev: #0e2529;
+  --raised: #183135;
+  --hover: #223d41;
+  --border: #315056;
+  --text: #ecf1f2;
+  --muted: #91b0b5;
+  --accent: #0ec7de;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #073941;
+  --assistant: #06242a;
+}
+[data-theme="p-turquoise-light"] {
+  color-scheme: light;
+  --surface: #c3e2e8;
+  --elev: #fdffff;
+  --raised: #b9d9de;
+  --hover: #b0cfd5;
+  --border: #97bbc2;
+  --text: #1b292c;
+  --muted: #42585c;
+  --accent: #07606c;
+  --on-accent: #ffffff;
+  --danger: #bb2020;
+  --ok: #2a6b4c;
+  --user: #a1cbd2;
+  --assistant: #b8dae1;
+}
+[data-theme="p-corail-dark"] {
+  color-scheme: dark;
+  --surface: #36252c;
+  --elev: #433037;
+  --raised: #503b43;
+  --hover: #5d464f;
+  --border: #735963;
+  --text: #f4eef0;
+  --muted: #ccb7bf;
+  --accent: #fa7fb5;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #593545;
+  --assistant: #422a34;
+}
+[data-theme="p-corail-light"] {
+  color-scheme: light;
+  --surface: #ffe3ed;
+  --elev: #fefefe;
+  --raised: #f5d9e3;
+  --hover: #ebcfd9;
+  --border: #d9b9c4;
+  --text: #2f2227;
+  --muted: #665159;
+  --accent: #9c045e;
+  --on-accent: #ffffff;
+  --danger: #c62222;
+  --ok: #2e7553;
+  --user: #edbbd3;
+  --assistant: #f9d6e4;
+}
+[data-theme="p-ambre-dark"] {
+  color-scheme: dark;
+  --surface: #0c0400;
+  --elev: #170b02;
+  --raised: #221508;
+  --hover: #2e1f10;
+  --border: #42301f;
+  --text: #f3efec;
+  --muted: #b9a593;
+  --accent: #f29a2d;
+  --on-accent: #101014;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #351f08;
+  --assistant: #1a0d03;
+}
+[data-theme="p-ambre-light"] {
+  color-scheme: light;
+  --surface: #dcc8b5;
+  --elev: #fefefe;
+  --raised: #d2bfac;
+  --hover: #c9b5a3;
+  --border: #b6a08b;
+  --text: #2d251c;
+  --muted: #54473b;
+  --accent: #7a4800;
+  --on-accent: #ffffff;
+  --danger: #a51d1d;
+  --ok: #22583e;
+  --user: #cab194;
+  --assistant: #d6c0aa;
+}
+
+/* ═══ L'écran — mêmes règles pour TOUS les thèmes ═════════════════════════ */
+.fig { margin: 0; border: 1px solid #2b2f36; border-radius: 14px; padding: 11px; background: #191c21; }
+.fig__cap { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 9px; }
+.fig__name { font-weight: 700; font-size: 13.5px; }
+.fig__hex { color: #7f8794; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; margin-left: auto; }
+
+.screen { border-radius: 11px; overflow: hidden; border: 1px solid var(--border); }
+.app { display: flex; flex-direction: column; background: var(--surface); color: var(--text); font-size: 13px; }
+
+/* Barre du haut : marque · onglets (dont actif) · état · sélecteur · bascule. */
+.topbar { display: flex; align-items: center; gap: 12px; padding: 9px 13px;
+  background: var(--surface); border-bottom: 1px solid var(--border); }
+.brand { font-weight: 800; letter-spacing: .02em; }
+.tabs { display: flex; gap: 4px; }
+.tab { font-size: 12px; padding: 4px 10px; border-radius: 7px; color: var(--muted); }
+.tab--active { color: var(--accent); background: var(--elev); border-bottom: 2px solid var(--accent); border-radius: 7px 7px 0 0; }
+.status { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--elev); color: var(--muted); }
+.select { font-size: 11.5px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--elev); color: var(--text); }
+.iconbtn { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid var(--border); background: var(--elev); color: var(--accent); font-size: 12px; }
+
+/* Conversation. */
+.conversation { display: flex; flex-direction: column; gap: 10px; padding: 13px; background: var(--surface); }
+.msg { max-width: 90%; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--border); }
+.msg p { margin: 0 0 6px; }
+.msg--user { align-self: flex-end; background: var(--user); }
+.msg--assistant { align-self: flex-start; background: var(--assistant); }
+
+.code { margin: 8px 0; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--raised); color: var(--text); overflow: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.5; }
+.code code { background: transparent; border: none; padding: 0; font-size: inherit; }
+
+.md-table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 12px; }
+.md-table th, .md-table td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; }
+.md-table thead th { background: var(--raised); color: var(--muted); font-weight: 600; }
+
+.md-list { margin: 8px 0; padding-left: 18px; color: var(--muted); }
+.md-list li { margin: 2px 0; }
+
+.msg-actions { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin-top: 8px; }
+.link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.chip { font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border); }
+.chip--hover { background: var(--hover); }
+.chip--sel { background: color-mix(in srgb, var(--accent) 22%, var(--elev)); border-color: var(--accent); color: var(--accent); }
+.button { padding: 8px 15px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+.button--stop { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+
+/* Carte de réglages (niveau carte) avec rangées sélectionnée / survolée. */
+.card { background: var(--elev); border: 1px solid var(--border); border-radius: 11px; padding: 11px 13px; }
+.card__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.badge { font-size: 10.5px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); }
+.badge--ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+.kv { display: flex; flex-direction: column; gap: 4px; }
+.row { display: flex; justify-content: space-between; padding: 5px 9px; border-radius: 7px;
+  border: 1px solid transparent; color: var(--muted); }
+.row b { color: var(--text); }
+.row--sel { background: color-mix(in srgb, var(--accent) 20%, var(--elev)); border-color: var(--accent); }
+.row--sel b { color: var(--accent); }
+.row--hover { background: var(--hover); }
+
+/* Zone de saisie. */
+.composer { display: flex; gap: 8px; align-items: center; padding: 11px 13px;
+  background: var(--surface); border-top: 1px solid var(--border); }
+.field { flex: 1; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--elev); color: var(--muted); }
+
+/* Audit sous chaque écran. */
+.audit { display: flex; flex-wrap: wrap; gap: 5px 13px; margin-top: 9px; font-size: 11px; color: #9aa2af; }
+.audit b.ok { color: #7fd6a3; }
+.audit b.ko { color: #ff9d9d; }
+
+/* Grilles. */
+.screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 18px; margin-top: 8px; align-items: start; }
+.mode-block { margin-top: 8px; }
+
+/* Bloc de variante. */
+.vblock { border: 1px solid #2b2f36; border-radius: 14px; padding: 15px 17px; margin-top: 18px; background: #16191e; }
+.vblock--before { border-color: #4a3a2b; background: #1b1712; }
+.vhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.vhead h3 { margin: 0; font-size: 17px; }
+.vtag { color: #8b93a1; font-size: 12.5px; }
+.badge-pass { font-size: 11px; font-weight: 700; color: #0b0b12; background: #7fd6a3; border-radius: 999px; padding: 1px 9px; }
+.badge-fail { font-size: 11px; font-weight: 700; color: #101014; background: #ffb4b4; border-radius: 999px; padding: 1px 9px; }
+.vnote { color: #a4acba; margin: 9px 0 6px; max-width: 160ch; }
+.vnote b { color: #e7eaf0; }
+.fail-list { color: #ffb4b4; font-size: 12.5px; margin: 8px 0 0; }
+
+/* Tableaux de mesure. */
+.mt { border-collapse: collapse; margin: 8px 0 4px; font-size: 12px; width: 100%; }
+.mt th, .mt td { border: 1px solid #2f3540; padding: 4px 9px; text-align: left; }
+.mt thead th { color: #8b93a1; font-weight: 600; background: #191c21; }
+.mt tbody th { color: #c3cad6; font-weight: 500; }
+.mt td.ok { color: #7fd6a3; }
+.mt td.ko { color: #ff9d9d; }
+.sw { display: inline-block; width: 30px; height: 16px; border-radius: 5px; border: 1px solid #3a4150;
+  background: var(--surface); vertical-align: middle; box-shadow: inset 0 0 0 8px var(--elev); }
+
+footer { margin-top: 46px; border-top: 1px solid #2b2f36; padding-top: 16px; color: #8b93a1; font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <h1>Yuki — variantes de surfaces contre l'effet « monotone »</h1>
+  <p class="lead">
+    Maquette <b>hors production</b>, pour <b>choisir sur le visuel</b>. Trois variantes de
+    <b>surfaces</b> (chroma + profondeur de clarté) sont déclinées pour les <b>3 familles</b>
+    montrées dans les captures (<b>Turquoise, Corail, Ambre</b>) × <b>2 modes</b>, sur le
+    <b>même écran réaliste</b>. Les <b>accents</b> restent les graines <b>V2 validées</b> lues
+    dans <code>themes.css</code> : le sujet est la <b>surface</b> et la <b>profondeur</b>, pas
+    la couleur d'accent. HTML <b>autonome</b> (ni image, ni script, ni ressource externe).
+  </p>
+
+  <nav class="toc">
+    <a href="#avant">1 · Mesure de la monotonie (AVANT)</a>
+    <a href="#variante-A">2 · Variante A</a>
+    <a href="#variante-B">3 · Variante B</a>
+    <a href="#variante-C">4 · Variante C</a>
+    <a href="#comparaison">5 · Comparaison côte à côte</a>
+  </nav>
+
+  <div class="principe">
+    <div>
+      <h3>Le diagnostic, chiffré</h3>
+      <p>Deux causes : <b>lavis d'une teinte</b> (le chroma des surfaces reste quasi constant
+      d'un palier à l'autre — l'écart de chroma interne est minuscule) et <b>profondeur</b>
+      (écarts de clarté entre paliers et entre la page et la bulle d'assistant).</p>
+    </div>
+    <div>
+      <h3>Ce que les variantes changent</h3>
+      <p><b>A</b> : surfaces quasi neutres (trace de teinte), accent fort.
+      <b>B</b> : teinte plus discrète + profondeur nettement accrue.
+      <b>C</b> : surfaces totalement grises, l'accent fait tout. La <b>clarté de fond propre à
+      chaque famille</b> est conservée en A et B ; C partage une rampe neutre unique.</p>
+    </div>
+    <div>
+      <h3>Seuils de lecture</h3>
+      <p>Texte et texte atténué ≥ <b>4.5:1</b> ; texte sur accent ≥ <b>4.5:1</b> ;
+      élément non textuel ≥ <b>3:1</b> ; écart de profondeur ≥ <b>0.02</b> (ΔEok,
+      seuil juste-perceptible). Vert = conforme, rouge = sous le seuil.</p>
+    </div>
+    <div>
+      <h3>Hors périmètre — famille « Matrix »</h3>
+      <p>La famille d'identité <code>matrix</code> (accent néon vert, surfaces <b>monochromes</b>) n'est
+      <b>pas</b> traitée dans ces variantes : ses surfaces ne sont pas teintées vers l'accent, elle
+      échappe donc à la doctrine V2. Aucune de ses valeurs n'est ni dérivée ni modifiée ici.</p>
+    </div>
+  </div>
+
+  <h2 id="avant">1 · Mesure de la monotonie — thèmes EN PRODUCTION (AVANT)</h2>
+  <p class="lead">
+    Valeurs <b>réelles</b> de <code>Yuki/public/ui/themes.css</code> (mode sombre), lues sans
+    aucune modification. Le <b>chroma OKLCH du fond</b> et sa <b>variation entre paliers</b>
+    quantifient le lavis ; le <b>ΔL</b> entre paliers et l'<b>écart bulle/fond</b> quantifient
+    la profondeur.
+  </p>
+  <table class="mt" id="monotonie">
+    <thead><tr>
+      <th>Famille (sombre)</th><th>Fond</th><th>chroma OKLCH du fond</th>
+      <th>chroma paliers (fond → survol)</th><th>écart de chroma</th>
+      <th>ΔL des paliers (fond→carte→imbriqué→survol)</th>
+      <th>écart bulle assistant / fond</th>
+    </tr></thead>
+    <tbody><tr>
+      <th scope="row">Turquoise</th>
+      <td><span class="sw" data-theme="p-turquoise-dark"></span> #051a1e</td>
+      <td>0.028</td>
+      <td>0.028 / 0.034</td>
+      <td>0.005</td>
+      <td>0.045 (ΔEok 0.045) · 0.047 (ΔEok 0.047) · 0.045 (ΔEok 0.045)</td>
+      <td class="ok">Δ 0.040</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td><span class="sw" data-theme="p-corail-dark"></span> #36252c</td>
+      <td>0.028</td>
+      <td>0.028 / 0.034</td>
+      <td>0.006</td>
+      <td>0.046 (ΔEok 0.046) · 0.045 (ΔEok 0.045) · 0.044 (ΔEok 0.044)</td>
+      <td class="ok">Δ 0.032</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td><span class="sw" data-theme="p-ambre-dark"></span> #0c0400</td>
+      <td>0.027</td>
+      <td>0.027 / 0.034</td>
+      <td>0.008</td>
+      <td>0.044 (ΔEok 0.044) · 0.045 (ΔEok 0.045) · 0.044 (ΔEok 0.045)</td>
+      <td class="ok">Δ 0.055</td>
+    </tr></tbody>
+  </table>
+  
+  <section class="vblock vblock--before" id="avant-prod">
+    <div class="vhead">
+      <h3>Référence — thèmes EN PRODUCTION (V2)</h3>
+      <span class="badge-fail">monotone (signalé)</span>
+      <span class="vtag">ce que l'utilisateur voit aujourd'hui</span>
+    </div>
+    <p class="vnote">
+      Valeurs lues dans <code>Yuki/public/ui/themes.css</code> (jamais modifiées). Les accents
+      sont les graines V2 validées, conservées telles quelles dans toutes les variantes.
+    </p>
+    <div class="mode-block">
+      <h4 class="mode-title">Mode sombre</h4>
+      <div class="screens">
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise · sombre — PRODUCTION</span>
+      <span class="fig__hex">fond #051a1e · carte #0e2529 · accent #0ec7de</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-turquoise-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">15.71:1</b></span>
+    <span>atténué/fond <b class="ok">7.74:1</b></span>
+    <span>texte/accent <b class="ok">9.26:1</b></span>
+    <span>accent/fond <b class="ok">8.73:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.045</b></span>
+    <span>chroma fond <b>0.028</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail · sombre — PRODUCTION</span>
+      <span class="fig__hex">fond #36252c · carte #433037 · accent #fa7fb5</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-corail-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.58:1</b></span>
+    <span>atténué/fond <b class="ok">7.61:1</b></span>
+    <span>texte/accent <b class="ok">7.93:1</b></span>
+    <span>accent/fond <b class="ok">6.01:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.044</b></span>
+    <span>chroma fond <b>0.028</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre · sombre — PRODUCTION</span>
+      <span class="fig__hex">fond #0c0400 · carte #170b02 · accent #f29a2d</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-ambre-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">17.78:1</b></span>
+    <span>atténué/fond <b class="ok">8.58:1</b></span>
+    <span>texte/accent <b class="ok">8.53:1</b></span>
+    <span>accent/fond <b class="ok">9.13:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.044</b></span>
+    <span>chroma fond <b>0.027</b></span>
+  </div>
+  </figure></div>
+    </div>
+    <div class="mode-block">
+      <h4 class="mode-title">Mode clair</h4>
+      <div class="screens">
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise · clair — PRODUCTION</span>
+      <span class="fig__hex">fond #c3e2e8 · carte #fdffff · accent #07606c</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-turquoise-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">10.97:1</b></span>
+    <span>atténué/fond <b class="ok">5.52:1</b></span>
+    <span>texte/accent <b class="ok">7.24:1</b></span>
+    <span>accent/fond <b class="ok">5.30:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.034</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail · clair — PRODUCTION</span>
+      <span class="fig__hex">fond #ffe3ed · carte #fefefe · accent #9c045e</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-corail-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.66:1</b></span>
+    <span>atténué/fond <b class="ok">6.05:1</b></span>
+    <span>texte/accent <b class="ok">8.10:1</b></span>
+    <span>accent/fond <b class="ok">6.74:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.031</b></span>
+    <span>chroma fond <b>0.033</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre · clair — PRODUCTION</span>
+      <span class="fig__hex">fond #dcc8b5 · carte #fefefe · accent #7a4800</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-ambre-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">9.31:1</b></span>
+    <span>atténué/fond <b class="ok">5.54:1</b></span>
+    <span>texte/accent <b class="ok">7.62:1</b></span>
+    <span>accent/fond <b class="ok">4.71:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.034</b></span>
+  </div>
+  </figure></div>
+    </div>
+    <h4 class="mode-title">Mesure par famille × mode</h4>
+    <table class="mt">
+    <thead><tr>
+      <th>Famille</th><th>Mode</th><th>Fond</th>
+      <th>texte/fond</th><th>atténué/fond</th><th>texte/accent</th><th>accent/fond</th>
+      <th>profondeur min</th><th>chroma fond</th><th>écart chroma</th>
+    </tr></thead>
+    <tbody><tr>
+      <th scope="row">Turquoise</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="p-turquoise-dark"></span></td>
+      <td class="ok">15.71:1</td>
+      <td class="ok">7.74:1</td>
+      <td class="ok">9.26:1</td>
+      <td class="ok">8.73:1</td>
+      <td class="ok">Δ 0.045</td>
+      <td>0.028</td>
+      <td>0.005</td>
+    </tr><tr>
+      <th scope="row">Turquoise</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="p-turquoise-light"></span></td>
+      <td class="ok">10.97:1</td>
+      <td class="ok">5.52:1</td>
+      <td class="ok">7.24:1</td>
+      <td class="ok">5.30:1</td>
+      <td class="ok">Δ 0.030</td>
+      <td>0.034</td>
+      <td>0.032</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="p-corail-dark"></span></td>
+      <td class="ok">12.58:1</td>
+      <td class="ok">7.61:1</td>
+      <td class="ok">7.93:1</td>
+      <td class="ok">6.01:1</td>
+      <td class="ok">Δ 0.044</td>
+      <td>0.028</td>
+      <td>0.006</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="p-corail-light"></span></td>
+      <td class="ok">12.66:1</td>
+      <td class="ok">6.05:1</td>
+      <td class="ok">8.10:1</td>
+      <td class="ok">6.74:1</td>
+      <td class="ok">Δ 0.031</td>
+      <td>0.033</td>
+      <td>0.034</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="p-ambre-dark"></span></td>
+      <td class="ok">17.78:1</td>
+      <td class="ok">8.58:1</td>
+      <td class="ok">8.53:1</td>
+      <td class="ok">9.13:1</td>
+      <td class="ok">Δ 0.044</td>
+      <td>0.027</td>
+      <td>0.008</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="p-ambre-light"></span></td>
+      <td class="ok">9.31:1</td>
+      <td class="ok">5.54:1</td>
+      <td class="ok">7.62:1</td>
+      <td class="ok">4.71:1</td>
+      <td class="ok">Δ 0.030</td>
+      <td>0.034</td>
+      <td>0.034</td>
+    </tr></tbody>
+  </table>
+  </section>
+
+  <h2>2 · Variante A — Neutres désaturés + accent fort</h2>
+  
+  <section class="vblock" id="variante-A">
+    <div class="vhead">
+      <h3>Variante A — Neutres désaturés + accent fort</h3>
+      <span class="badge-pass">lisibilité OK</span>
+      <span class="vtag">surfaces quasi neutres (trace de teinte) · accent franc · identité par l'accent</span>
+    </div>
+    <p class="vnote">
+      Paramètres mesurés — surfaces : chroma 0.005 (sombre) /
+      0.006 (clair) ; pas de profondeur
+      0.050 · 0.040 · 0.030 (sombre) /
+      0.038 · 0.030 (clair). Écart d'accent entre familles : min
+      <b>0.185</b> (sombre, Corail↔Ambre) · <b>0.167</b> (clair).
+    </p>
+    
+    <div class="mode-block">
+      <h4 class="mode-title">Mode sombre</h4>
+      <div class="screens">
+        
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise</span>
+      <span class="fig__hex">fond #141718 · carte #1f2324 · accent #0ec7de</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-turquoise-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">16.07:1</b></span>
+    <span>atténué/fond <b class="ok">9.72:1</b></span>
+    <span>texte/accent <b class="ok">9.26:1</b></span>
+    <span>accent/fond <b class="ok">8.79:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.031</b></span>
+    <span>chroma fond <b>0.005</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail</span>
+      <span class="fig__hex">fond #2d2a2b · carte #3a3637 · accent #fa7fb5</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-corail-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.61:1</b></span>
+    <span>atténué/fond <b class="ok">7.56:1</b></span>
+    <span>texte/accent <b class="ok">7.93:1</b></span>
+    <span>accent/fond <b class="ok">5.93:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.005</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre</span>
+      <span class="fig__hex">fond #070504 · carte #110f0d · accent #f29a2d</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-ambre-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">18.11:1</b></span>
+    <span>atténué/fond <b class="ok">10.90:1</b></span>
+    <span>texte/accent <b class="ok">8.53:1</b></span>
+    <span>accent/fond <b class="ok">9.14:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.006</b></span>
+  </div>
+  </figure>
+      </div>
+    </div>
+    
+    <div class="mode-block">
+      <h4 class="mode-title">Mode clair</h4>
+      <div class="screens">
+        
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise</span>
+      <span class="fig__hex">fond #d7dcdd · carte #ffffff · accent #07606c</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-turquoise-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">11.04:1</b></span>
+    <span>atténué/fond <b class="ok">7.18:1</b></span>
+    <span>texte/accent <b class="ok">7.24:1</b></span>
+    <span>accent/fond <b class="ok">5.23:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.029</b></span>
+    <span>chroma fond <b>0.006</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail</span>
+      <span class="fig__hex">fond #efeaec · carte #ffffff · accent #9c045e</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-corail-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.98:1</b></span>
+    <span>atténué/fond <b class="ok">8.44:1</b></span>
+    <span>texte/accent <b class="ok">8.10:1</b></span>
+    <span>accent/fond <b class="ok">6.81:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.006</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre</span>
+      <span class="fig__hex">fond #cfcbc8 · carte #ffffff · accent #7a4800</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-ambre-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">9.51:1</b></span>
+    <span>atténué/fond <b class="ok">6.21:1</b></span>
+    <span>texte/accent <b class="ok">7.62:1</b></span>
+    <span>accent/fond <b class="ok">4.73:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.031</b></span>
+    <span>chroma fond <b>0.006</b></span>
+  </div>
+  </figure>
+      </div>
+    </div>
+    <h4 class="mode-title">Mesure par famille × mode</h4>
+    <table class="mt">
+    <thead><tr>
+      <th>Famille</th><th>Mode</th><th>Fond</th>
+      <th>texte/fond</th><th>atténué/fond</th><th>texte/accent</th><th>accent/fond</th>
+      <th>profondeur min</th><th>chroma fond</th><th>écart chroma</th>
+    </tr></thead>
+    <tbody><tr>
+      <th scope="row">Turquoise</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vA-turquoise-dark"></span></td>
+      <td class="ok">16.07:1</td>
+      <td class="ok">9.72:1</td>
+      <td class="ok">9.26:1</td>
+      <td class="ok">8.79:1</td>
+      <td class="ok">Δ 0.031</td>
+      <td>0.005</td>
+      <td>0.003</td>
+    </tr><tr>
+      <th scope="row">Turquoise</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vA-turquoise-light"></span></td>
+      <td class="ok">11.04:1</td>
+      <td class="ok">7.18:1</td>
+      <td class="ok">7.24:1</td>
+      <td class="ok">5.23:1</td>
+      <td class="ok">Δ 0.029</td>
+      <td>0.006</td>
+      <td>0.008</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vA-corail-dark"></span></td>
+      <td class="ok">12.61:1</td>
+      <td class="ok">7.56:1</td>
+      <td class="ok">7.93:1</td>
+      <td class="ok">5.93:1</td>
+      <td class="ok">Δ 0.030</td>
+      <td>0.005</td>
+      <td>0.003</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vA-corail-light"></span></td>
+      <td class="ok">12.98:1</td>
+      <td class="ok">8.44:1</td>
+      <td class="ok">8.10:1</td>
+      <td class="ok">6.81:1</td>
+      <td class="ok">Δ 0.030</td>
+      <td>0.006</td>
+      <td>0.009</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vA-ambre-dark"></span></td>
+      <td class="ok">18.11:1</td>
+      <td class="ok">10.90:1</td>
+      <td class="ok">8.53:1</td>
+      <td class="ok">9.14:1</td>
+      <td class="ok">Δ 0.030</td>
+      <td>0.006</td>
+      <td>0.003</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vA-ambre-light"></span></td>
+      <td class="ok">9.51:1</td>
+      <td class="ok">6.21:1</td>
+      <td class="ok">7.62:1</td>
+      <td class="ok">4.73:1</td>
+      <td class="ok">Δ 0.031</td>
+      <td>0.006</td>
+      <td>0.008</td>
+    </tr></tbody>
+  </table>
+    
+  </section>
+
+  <h2>3 · Variante B — Teinte réduite + profondeur accrue</h2>
+  
+  <section class="vblock" id="variante-B">
+    <div class="vhead">
+      <h3>Variante B — Teinte réduite + profondeur accrue</h3>
+      <span class="badge-pass">lisibilité OK</span>
+      <span class="vtag">teinte visible mais 2× plus discrète · écarts de profondeur augmentés</span>
+    </div>
+    <p class="vnote">
+      Paramètres mesurés — surfaces : chroma 0.014 (sombre) /
+      0.016 (clair) ; pas de profondeur
+      0.058 · 0.045 · 0.029 (sombre) /
+      0.052 · 0.040 (clair). Écart d'accent entre familles : min
+      <b>0.185</b> (sombre, Corail↔Ambre) · <b>0.167</b> (clair).
+    </p>
+    
+    <div class="mode-block">
+      <h4 class="mode-title">Mode sombre</h4>
+      <div class="screens">
+        
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise</span>
+      <span class="fig__hex">fond #0f181a · carte #1c2628 · accent #0ec7de</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-turquoise-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">16.06:1</b></span>
+    <span>atténué/fond <b class="ok">9.71:1</b></span>
+    <span>texte/accent <b class="ok">9.26:1</b></span>
+    <span>accent/fond <b class="ok">8.79:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.028</b></span>
+    <span>chroma fond <b>0.014</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail</span>
+      <span class="fig__hex">fond #31282b · carte #40363a · accent #fa7fb5</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-corail-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.68:1</b></span>
+    <span>atténué/fond <b class="ok">7.61:1</b></span>
+    <span>texte/accent <b class="ok">7.93:1</b></span>
+    <span>accent/fond <b class="ok">5.97:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.027</b></span>
+    <span>chroma fond <b>0.014</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre</span>
+      <span class="fig__hex">fond #090502 · carte #16100a · accent #f29a2d</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-ambre-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">18.08:1</b></span>
+    <span>atténué/fond <b class="ok">10.88:1</b></span>
+    <span>texte/accent <b class="ok">8.53:1</b></span>
+    <span>accent/fond <b class="ok">9.12:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.031</b></span>
+    <span>chroma fond <b>0.015</b></span>
+  </div>
+  </figure>
+      </div>
+    </div>
+    
+    <div class="mode-block">
+      <h4 class="mode-title">Mode clair</h4>
+      <div class="screens">
+        
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise</span>
+      <span class="fig__hex">fond #d0dfe1 · carte #ffffff · accent #07606c</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-turquoise-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">11.15:1</b></span>
+    <span>atténué/fond <b class="ok">7.25:1</b></span>
+    <span>texte/accent <b class="ok">7.24:1</b></span>
+    <span>accent/fond <b class="ok">5.29:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.041</b></span>
+    <span>chroma fond <b>0.016</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail</span>
+      <span class="fig__hex">fond #f5e7ec · carte #ffffff · accent #9c045e</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-corail-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.89:1</b></span>
+    <span>atténué/fond <b class="ok">8.38:1</b></span>
+    <span>texte/accent <b class="ok">8.10:1</b></span>
+    <span>accent/fond <b class="ok">6.76:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.039</b></span>
+    <span>chroma fond <b>0.017</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre</span>
+      <span class="fig__hex">fond #d3cac1 · carte #ffffff · accent #7a4800</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-ambre-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">9.48:1</b></span>
+    <span>atténué/fond <b class="ok">6.20:1</b></span>
+    <span>texte/accent <b class="ok">7.62:1</b></span>
+    <span>accent/fond <b class="ok">4.72:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.038</b></span>
+    <span>chroma fond <b>0.016</b></span>
+  </div>
+  </figure>
+      </div>
+    </div>
+    <h4 class="mode-title">Mesure par famille × mode</h4>
+    <table class="mt">
+    <thead><tr>
+      <th>Famille</th><th>Mode</th><th>Fond</th>
+      <th>texte/fond</th><th>atténué/fond</th><th>texte/accent</th><th>accent/fond</th>
+      <th>profondeur min</th><th>chroma fond</th><th>écart chroma</th>
+    </tr></thead>
+    <tbody><tr>
+      <th scope="row">Turquoise</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vB-turquoise-dark"></span></td>
+      <td class="ok">16.06:1</td>
+      <td class="ok">9.71:1</td>
+      <td class="ok">9.26:1</td>
+      <td class="ok">8.79:1</td>
+      <td class="ok">Δ 0.028</td>
+      <td>0.014</td>
+      <td>0.003</td>
+    </tr><tr>
+      <th scope="row">Turquoise</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vB-turquoise-light"></span></td>
+      <td class="ok">11.15:1</td>
+      <td class="ok">7.25:1</td>
+      <td class="ok">7.24:1</td>
+      <td class="ok">5.29:1</td>
+      <td class="ok">Δ 0.041</td>
+      <td>0.016</td>
+      <td>0.018</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vB-corail-dark"></span></td>
+      <td class="ok">12.68:1</td>
+      <td class="ok">7.61:1</td>
+      <td class="ok">7.93:1</td>
+      <td class="ok">5.97:1</td>
+      <td class="ok">Δ 0.027</td>
+      <td>0.014</td>
+      <td>0.003</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vB-corail-light"></span></td>
+      <td class="ok">12.89:1</td>
+      <td class="ok">8.38:1</td>
+      <td class="ok">8.10:1</td>
+      <td class="ok">6.76:1</td>
+      <td class="ok">Δ 0.039</td>
+      <td>0.017</td>
+      <td>0.018</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vB-ambre-dark"></span></td>
+      <td class="ok">18.08:1</td>
+      <td class="ok">10.88:1</td>
+      <td class="ok">8.53:1</td>
+      <td class="ok">9.12:1</td>
+      <td class="ok">Δ 0.031</td>
+      <td>0.015</td>
+      <td>0.003</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vB-ambre-light"></span></td>
+      <td class="ok">9.48:1</td>
+      <td class="ok">6.20:1</td>
+      <td class="ok">7.62:1</td>
+      <td class="ok">4.72:1</td>
+      <td class="ok">Δ 0.038</td>
+      <td>0.016</td>
+      <td>0.018</td>
+    </tr></tbody>
+  </table>
+    
+  </section>
+
+  <h2>4 · Variante C — Neutres purs + accent</h2>
+  
+  <section class="vblock" id="variante-C">
+    <div class="vhead">
+      <h3>Variante C — Neutres purs + accent</h3>
+      <span class="badge-pass">lisibilité OK</span>
+      <span class="vtag">surfaces totalement grises (chroma 0) · rampe neutre unique · l'accent fait tout</span>
+    </div>
+    <p class="vnote">
+      Paramètres mesurés — surfaces : chroma 0.000 (sombre) /
+      0.000 (clair) ; pas de profondeur
+      0.062 · 0.048 · 0.030 (sombre) /
+      0.046 · 0.038 (clair). Écart d'accent entre familles : min
+      <b>0.185</b> (sombre, Corail↔Ambre) · <b>0.167</b> (clair).
+    </p>
+    
+    <div class="mode-block">
+      <h4 class="mode-title">Mode sombre</h4>
+      <div class="screens">
+        
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise</span>
+      <span class="fig__hex">fond #171717 · carte #252626 · accent #0ec7de</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-turquoise-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">15.99:1</b></span>
+    <span>atténué/fond <b class="ok">9.67:1</b></span>
+    <span>texte/accent <b class="ok">9.26:1</b></span>
+    <span>accent/fond <b class="ok">8.74:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail</span>
+      <span class="fig__hex">fond #171717 · carte #262526 · accent #fa7fb5</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-corail-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">15.90:1</b></span>
+    <span>atténué/fond <b class="ok">9.54:1</b></span>
+    <span>texte/accent <b class="ok">7.93:1</b></span>
+    <span>accent/fond <b class="ok">7.49:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.032</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre</span>
+      <span class="fig__hex">fond #171717 · carte #262625 · accent #f29a2d</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-ambre-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">15.96:1</b></span>
+    <span>atténué/fond <b class="ok">9.61:1</b></span>
+    <span>texte/accent <b class="ok">8.53:1</b></span>
+    <span>accent/fond <b class="ok">8.06:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.031</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+      </div>
+    </div>
+    
+    <div class="mode-block">
+      <h4 class="mode-title">Mode clair</h4>
+      <div class="screens">
+        
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise</span>
+      <span class="fig__hex">fond #eeeeee · carte #ffffff · accent #07606c</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-turquoise-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">13.17:1</b></span>
+    <span>atténué/fond <b class="ok">8.57:1</b></span>
+    <span>texte/accent <b class="ok">7.24:1</b></span>
+    <span>accent/fond <b class="ok">6.24:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.038</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail</span>
+      <span class="fig__hex">fond #eeeeee · carte #ffffff · accent #9c045e</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-corail-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">13.31:1</b></span>
+    <span>atténué/fond <b class="ok">8.66:1</b></span>
+    <span>texte/accent <b class="ok">8.10:1</b></span>
+    <span>accent/fond <b class="ok">6.98:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.039</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre</span>
+      <span class="fig__hex">fond #eeeeee · carte #ffffff · accent #7a4800</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-ambre-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">13.22:1</b></span>
+    <span>atténué/fond <b class="ok">8.63:1</b></span>
+    <span>texte/accent <b class="ok">7.62:1</b></span>
+    <span>accent/fond <b class="ok">6.57:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.037</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+      </div>
+    </div>
+    <h4 class="mode-title">Mesure par famille × mode</h4>
+    <table class="mt">
+    <thead><tr>
+      <th>Famille</th><th>Mode</th><th>Fond</th>
+      <th>texte/fond</th><th>atténué/fond</th><th>texte/accent</th><th>accent/fond</th>
+      <th>profondeur min</th><th>chroma fond</th><th>écart chroma</th>
+    </tr></thead>
+    <tbody><tr>
+      <th scope="row">Turquoise</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vC-turquoise-dark"></span></td>
+      <td class="ok">15.99:1</td>
+      <td class="ok">9.67:1</td>
+      <td class="ok">9.26:1</td>
+      <td class="ok">8.74:1</td>
+      <td class="ok">Δ 0.030</td>
+      <td>0.000</td>
+      <td>0.004</td>
+    </tr><tr>
+      <th scope="row">Turquoise</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vC-turquoise-light"></span></td>
+      <td class="ok">13.17:1</td>
+      <td class="ok">8.57:1</td>
+      <td class="ok">7.24:1</td>
+      <td class="ok">6.24:1</td>
+      <td class="ok">Δ 0.038</td>
+      <td>0.000</td>
+      <td>0.002</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vC-corail-dark"></span></td>
+      <td class="ok">15.90:1</td>
+      <td class="ok">9.54:1</td>
+      <td class="ok">7.93:1</td>
+      <td class="ok">7.49:1</td>
+      <td class="ok">Δ 0.032</td>
+      <td>0.000</td>
+      <td>0.003</td>
+    </tr><tr>
+      <th scope="row">Corail</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vC-corail-light"></span></td>
+      <td class="ok">13.31:1</td>
+      <td class="ok">8.66:1</td>
+      <td class="ok">8.10:1</td>
+      <td class="ok">6.98:1</td>
+      <td class="ok">Δ 0.039</td>
+      <td>0.000</td>
+      <td>0.003</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td>sombre</td>
+      <td><span class="sw" data-theme="vC-ambre-dark"></span></td>
+      <td class="ok">15.96:1</td>
+      <td class="ok">9.61:1</td>
+      <td class="ok">8.53:1</td>
+      <td class="ok">8.06:1</td>
+      <td class="ok">Δ 0.031</td>
+      <td>0.000</td>
+      <td>0.002</td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td>clair</td>
+      <td><span class="sw" data-theme="vC-ambre-light"></span></td>
+      <td class="ok">13.22:1</td>
+      <td class="ok">8.63:1</td>
+      <td class="ok">7.62:1</td>
+      <td class="ok">6.57:1</td>
+      <td class="ok">Δ 0.037</td>
+      <td>0.000</td>
+      <td>0.003</td>
+    </tr></tbody>
+  </table>
+    
+  </section>
+
+  <h2 id="comparaison">5 · Comparaison côte à côte — Turquoise, mode sombre</h2>
+  <p class="lead">Même écran, mêmes accents : seule la <b>surface</b> change. De gauche à droite :
+  production, puis A, B, C.</p>
+  <div class="screens" id="comparaison-turquoise-dark">
+    
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise · sombre — PRODUCTION</span>
+      <span class="fig__hex">fond #051a1e · carte #0e2529 · accent #0ec7de</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-turquoise-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">15.71:1</b></span>
+    <span>atténué/fond <b class="ok">7.74:1</b></span>
+    <span>texte/accent <b class="ok">9.26:1</b></span>
+    <span>accent/fond <b class="ok">8.73:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.045</b></span>
+    <span>chroma fond <b>0.028</b></span>
+  </div>
+  </figure>
+    
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante A</span>
+      <span class="fig__hex">fond #141718 · carte #1f2324 · accent #0ec7de</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-turquoise-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">16.07:1</b></span>
+    <span>atténué/fond <b class="ok">9.72:1</b></span>
+    <span>texte/accent <b class="ok">9.26:1</b></span>
+    <span>accent/fond <b class="ok">8.79:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.031</b></span>
+    <span>chroma fond <b>0.005</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante B</span>
+      <span class="fig__hex">fond #0f181a · carte #1c2628 · accent #0ec7de</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-turquoise-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">16.06:1</b></span>
+    <span>atténué/fond <b class="ok">9.71:1</b></span>
+    <span>texte/accent <b class="ok">9.26:1</b></span>
+    <span>accent/fond <b class="ok">8.79:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.028</b></span>
+    <span>chroma fond <b>0.014</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante C</span>
+      <span class="fig__hex">fond #171717 · carte #252626 · accent #0ec7de</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-turquoise-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">15.99:1</b></span>
+    <span>atténué/fond <b class="ok">9.67:1</b></span>
+    <span>texte/accent <b class="ok">9.26:1</b></span>
+    <span>accent/fond <b class="ok">8.74:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+  </div>
+  <h2>5bis · Comparaison côte à côte — Corail et Ambre, mode sombre</h2>
+  <div class="screens" id="comparaison-corail-dark">
+    
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Corail · sombre — PRODUCTION</span>
+      <span class="fig__hex">fond #36252c · carte #433037 · accent #fa7fb5</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-corail-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.58:1</b></span>
+    <span>atténué/fond <b class="ok">7.61:1</b></span>
+    <span>texte/accent <b class="ok">7.93:1</b></span>
+    <span>accent/fond <b class="ok">6.01:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.044</b></span>
+    <span>chroma fond <b>0.028</b></span>
+  </div>
+  </figure>
+    
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante A</span>
+      <span class="fig__hex">fond #2d2a2b · carte #3a3637 · accent #fa7fb5</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-corail-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.61:1</b></span>
+    <span>atténué/fond <b class="ok">7.56:1</b></span>
+    <span>texte/accent <b class="ok">7.93:1</b></span>
+    <span>accent/fond <b class="ok">5.93:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.005</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante B</span>
+      <span class="fig__hex">fond #31282b · carte #40363a · accent #fa7fb5</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-corail-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">12.68:1</b></span>
+    <span>atténué/fond <b class="ok">7.61:1</b></span>
+    <span>texte/accent <b class="ok">7.93:1</b></span>
+    <span>accent/fond <b class="ok">5.97:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.027</b></span>
+    <span>chroma fond <b>0.014</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante C</span>
+      <span class="fig__hex">fond #171717 · carte #262526 · accent #fa7fb5</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-corail-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Corail ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">15.90:1</b></span>
+    <span>atténué/fond <b class="ok">9.54:1</b></span>
+    <span>texte/accent <b class="ok">7.93:1</b></span>
+    <span>accent/fond <b class="ok">7.49:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.032</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+  </div>
+  <div class="screens" id="comparaison-ambre-dark">
+    
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Ambre · sombre — PRODUCTION</span>
+      <span class="fig__hex">fond #0c0400 · carte #170b02 · accent #f29a2d</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-ambre-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">17.78:1</b></span>
+    <span>atténué/fond <b class="ok">8.58:1</b></span>
+    <span>texte/accent <b class="ok">8.53:1</b></span>
+    <span>accent/fond <b class="ok">9.13:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.044</b></span>
+    <span>chroma fond <b>0.027</b></span>
+  </div>
+  </figure>
+    
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante A</span>
+      <span class="fig__hex">fond #070504 · carte #110f0d · accent #f29a2d</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-ambre-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">18.11:1</b></span>
+    <span>atténué/fond <b class="ok">10.90:1</b></span>
+    <span>texte/accent <b class="ok">8.53:1</b></span>
+    <span>accent/fond <b class="ok">9.14:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.006</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante B</span>
+      <span class="fig__hex">fond #090502 · carte #16100a · accent #f29a2d</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-ambre-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">18.08:1</b></span>
+    <span>atténué/fond <b class="ok">10.88:1</b></span>
+    <span>texte/accent <b class="ok">8.53:1</b></span>
+    <span>accent/fond <b class="ok">9.12:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.031</b></span>
+    <span>chroma fond <b>0.015</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante C</span>
+      <span class="fig__hex">fond #171717 · carte #262625 · accent #f29a2d</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-ambre-dark">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Ambre ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">15.96:1</b></span>
+    <span>atténué/fond <b class="ok">9.61:1</b></span>
+    <span>texte/accent <b class="ok">8.53:1</b></span>
+    <span>accent/fond <b class="ok">8.06:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.031</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+  </div>
+  <h2>5ter · Comparaison côte à côte — Turquoise, mode clair</h2>
+  <div class="screens" id="comparaison-turquoise-light">
+    
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Turquoise · clair — PRODUCTION</span>
+      <span class="fig__hex">fond #c3e2e8 · carte #fdffff · accent #07606c</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="p-turquoise-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">10.97:1</b></span>
+    <span>atténué/fond <b class="ok">5.52:1</b></span>
+    <span>texte/accent <b class="ok">7.24:1</b></span>
+    <span>accent/fond <b class="ok">5.30:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.030</b></span>
+    <span>chroma fond <b>0.034</b></span>
+  </div>
+  </figure>
+    
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante A</span>
+      <span class="fig__hex">fond #d7dcdd · carte #ffffff · accent #07606c</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vA-turquoise-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">11.04:1</b></span>
+    <span>atténué/fond <b class="ok">7.18:1</b></span>
+    <span>texte/accent <b class="ok">7.24:1</b></span>
+    <span>accent/fond <b class="ok">5.23:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.029</b></span>
+    <span>chroma fond <b>0.006</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante B</span>
+      <span class="fig__hex">fond #d0dfe1 · carte #ffffff · accent #07606c</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vB-turquoise-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">11.15:1</b></span>
+    <span>atténué/fond <b class="ok">7.25:1</b></span>
+    <span>texte/accent <b class="ok">7.24:1</b></span>
+    <span>accent/fond <b class="ok">5.29:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.041</b></span>
+    <span>chroma fond <b>0.016</b></span>
+  </div>
+  </figure>
+  <figure class="fig">
+    <figcaption class="fig__cap">
+      <span class="fig__name">Variante C</span>
+      <span class="fig__hex">fond #eeeeee · carte #ffffff · accent #07606c</span>
+    </figcaption>
+    
+    <div class="screen" data-theme="vC-turquoise-light">
+      <div class="app">
+        <header class="topbar">
+          <span class="brand">Yuki</span>
+          <nav class="tabs">
+            <span class="tab tab--active">Chat</span>
+            <span class="tab">Configuration</span>
+            <span class="tab">Voix</span>
+          </nav>
+          <span class="status">
+            <span class="pill">connecté</span>
+            <span class="pill">idle</span>
+            <span class="select">Turquoise ▾</span>
+            <span class="iconbtn" title="mode">☾</span>
+          </span>
+        </header>
+        <main class="conversation">
+          <div class="msg msg--user"><p>Explique-moi le calcul des paliers de profondeur.</p></div>
+          <div class="msg msg--assistant">
+            <p>Chaque palier est une clarté OKLCH distincte ; on mesure l'écart en ΔEok.</p>
+            <pre class="code"><code>const d = deltaEok(surface, elev);
+// seuil juste-perceptible : 0.020</code></pre>
+            <table class="md-table">
+              <thead><tr><th>Palier</th><th>Rôle</th></tr></thead>
+              <tbody>
+                <tr><td>surface</td><td>fond de page</td></tr>
+                <tr><td>elev</td><td>carte</td></tr>
+                <tr><td>raised</td><td>bloc imbriqué</td></tr>
+              </tbody>
+            </table>
+            <ul class="md-list"><li>Réduire le chroma des surfaces</li><li>Augmenter les écarts de clarté</li></ul>
+            <div class="msg-actions">
+              <span class="link">copier</span>
+              <span class="chip chip--hover">survol</span>
+              <span class="chip chip--sel">sélection</span>
+              <button class="button" type="button">Continuer</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card__head"><b>Réglages rapides</b><span class="badge badge--ok">à jour</span></div>
+            <div class="kv">
+              <span class="row row--sel">Modèle <b>mistral</b></span>
+              <span class="row">Voix <b>fr-FR</b></span>
+              <span class="row row--hover">Langue <b>Français</b></span>
+            </div>
+          </div>
+        </main>
+        <footer class="composer">
+          <span class="field">Écrivez un message…</span>
+          <button class="button" type="button">Envoyer</button>
+          <button class="button button--stop" type="button">Stop</button>
+        </footer>
+      </div>
+    </div>
+    <div class="audit">
+    <span>texte/fond <b class="ok">13.17:1</b></span>
+    <span>atténué/fond <b class="ok">8.57:1</b></span>
+    <span>texte/accent <b class="ok">7.24:1</b></span>
+    <span>accent/fond <b class="ok">6.24:1</b></span>
+    <span>profondeur min <b class="ok">Δ 0.038</b></span>
+    <span>chroma fond <b>0.000</b></span>
+  </div>
+  </figure>
+  </div>
+
+  <footer>
+    Maquette de décision — <b>aucune</b> modification de production (ni <code>themes.css</code>,
+    ni <code>generate-yuki-themes.mjs</code>, ni <code>theme.js</code>, ni <code>holaf-lib</code>).
+    Générée par <code>_tools/theme-variants.mjs</code> ; primitives de
+    <code>_tools/theme-lib.mjs</code>. Fichier autonome : ni image, ni
+    <code>&lt;link&gt;</code>, ni <code>&lt;script&gt;</code>, ni URL réseau.
+    Les valeurs de production sont <b>lues</b> dans <code>themes.css</code>, jamais écrites.
+  </footer>
+</body>
+</html>
