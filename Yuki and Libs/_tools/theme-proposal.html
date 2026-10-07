@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Yuki — proposition de thèmes (maquette, hors production)</title>
+<style>
+/* ═══ Page de la maquette (neutre, volontairement SANS couleur) ═══════════ */
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 28px 32px 60px;
+  background: #14161a; color: #e7eaf0;
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+h1 { font-size: 22px; margin: 0 0 6px; }
+h2 { font-size: 16px; margin: 34px 0 4px; border-top: 1px solid #2b2f36; padding-top: 18px; }
+p.lead { color: #a4acba; max-width: 110ch; margin: 6px 0 0; }
+p.lead b { color: #e7eaf0; }
+code { background: #22262d; border: 1px solid #2f3540; border-radius: 4px; padding: 0 4px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 20px; margin-top: 16px; }
+.grid--pair { grid-template-columns: repeat(auto-fill, minmax(430px, 1fr)); }
+
+.tile { margin: 0; border: 1px solid #2b2f36; border-radius: 12px; padding: 12px; background: #191c21; }
+.tile__cap { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+.tile__title { font-weight: 700; font-size: 13px; }
+.tile__note { color: #9aa2af; font-size: 11.5px; }
+.swatches { display: flex; gap: 4px; margin-top: 5px; }
+.sw { display: inline-block; width: 16px; height: 16px; border-radius: 3px; border: 1px solid rgba(255,255,255,.18); }
+.sw--bg { background: var(--s-bg); } .sw--elev { background: var(--s-elev); }
+.sw--raised { background: var(--s-raised); } .sw--hover { background: var(--s-hover); }
+.sw--border { background: var(--s-border); } .sw--accent { background: var(--s-accent); }
+.sw--user { background: var(--s-user); } .sw--assistant { background: var(--s-assistant); }
+.sw--ok { background: var(--s-ok); } .sw--danger { background: var(--s-danger); }
+.tile[data-theme] {
+  --s-bg: var(--bg); --s-elev: var(--elev); --s-raised: var(--raised); --s-hover: var(--hover);
+  --s-border: var(--border); --s-accent: var(--accent); --s-user: var(--user); --s-assistant: var(--assistant);
+  --s-ok: var(--ok); --s-danger: var(--danger);
+}
+.tile[data-mode] .sw { border-color: rgba(0,0,0,.25); }
+
+/* ═══ Thèmes : variables CSS par variante (data-theme) — AUCUN style inline ═══ */
+.tile[data-theme="actuel-emerald-dark"] {
+  --bg: #0b1512; --panel: #0b1512;
+  --elev: #12201a; --raised: #12201a; --hover: #12201a;
+  --border: #143f30; --text: #f4f4f5; --muted: #929696;
+  --accent: #34d399; --on-accent: #ffffff; --danger: #ef4444; --ok: #4cc38a;
+  --user: #12372a; --assistant: #0d201a;
+}
+.tile[data-theme="actuel-indigo-dark"] {
+  --bg: #1e1e1e; --panel: #1e1e1e;
+  --elev: #27272a; --raised: #27272a; --hover: #27272a;
+  --border: #3f3f46; --text: #e4e4e7; --muted: #a1a1aa;
+  --accent: #6366f1; --on-accent: #ffffff; --danger: #ef4444; --ok: #4cc38a;
+  --user: #2a2b44; --assistant: #22222b;
+}
+.tile[data-theme="A-gris-indigo"] {
+  --bg: #171717; --panel: #171717;
+  --elev: #222222; --raised: #2c2c2c; --hover: #393939;
+  --border: #454545; --text: #f0f0f0; --muted: #a4a4a4;
+  --accent: #6366f1; --on-accent: #101014; --danger: #f87171; --ok: #4cc38a;
+  --user: #232639; --assistant: #1b1c22;
+}
+.tile[data-theme="A-gris-emerald"] {
+  --bg: #171717; --panel: #171717;
+  --elev: #222222; --raised: #2c2c2c; --hover: #393939;
+  --border: #454545; --text: #f0f0f0; --muted: #a4a4a4;
+  --accent: #10b981; --on-accent: #101014; --danger: #f87171; --ok: #4cc38a;
+  --user: #203028; --assistant: #1a1f1d;
+}
+.tile[data-theme="A-gris-indigo-light"] {
+  --bg: #ffffff; --panel: #ffffff;
+  --elev: #f6f6f6; --raised: #ededed; --hover: #e3e3e3;
+  --border: #d1d1d1; --text: #1b1b1b; --muted: #5b5b5b;
+  --accent: #6366f1; --on-accent: #101014; --danger: #dc2626; --ok: #317f5a;
+  --user: #e7ebff; --assistant: #f6f8ff;
+}
+.tile[data-theme="B-nord-dark"] {
+  --bg: #2e3440; --panel: #2e3440;
+  --elev: #3b4252; --raised: #434c5e; --hover: #4c566a;
+  --border: #4c566a; --text: #eceff4; --muted: #81a1c1;
+  --accent: #88c0d0; --on-accent: #101014; --danger: #bf616a; --ok: #a3be8c;
+  --user: #434c5e; --assistant: #3b4252;
+}
+.tile[data-theme="B-gruvbox-dark"] {
+  --bg: #282828; --panel: #282828;
+  --elev: #3c3836; --raised: #504945; --hover: #665c54;
+  --border: #665c54; --text: #ebdbb2; --muted: #a89984;
+  --accent: #fabd2f; --on-accent: #101014; --danger: #fb4934; --ok: #b8bb26;
+  --user: #504945; --assistant: #32302f;
+}
+.tile[data-theme="B-catppuccin-dark"] {
+  --bg: #1e1e2e; --panel: #181825;
+  --elev: #313244; --raised: #45475a; --hover: #585b70;
+  --border: #45475a; --text: #cdd6f4; --muted: #a6adc8;
+  --accent: #89b4fa; --on-accent: #101014; --danger: #f38ba8; --ok: #a6e3a1;
+  --user: #45475a; --assistant: #313244;
+}
+.tile[data-theme="B-rosepine-dawn-light"] {
+  --bg: #faf4ed; --panel: #faf4ed;
+  --elev: #fffaf3; --raised: #f2e9e1; --hover: #dfdad9;
+  --border: #dfdad9; --text: #464261; --muted: #797593;
+  --accent: #286983; --on-accent: #ffffff; --danger: #b4637a; --ok: #56949f;
+  --user: #f2e9e1; --assistant: #fffaf3;
+}
+.tile[data-theme="C-emerald-dark"] {
+  --bg: #121715; --panel: #121715;
+  --elev: #1b221f; --raised: #252e29; --hover: #303934;
+  --border: #3a4740; --text: #edf1ef; --muted: #9ea7a2;
+  --accent: #10b981; --on-accent: #101014; --danger: #ef4444; --ok: #4cc38a;
+  --user: #16392a; --assistant: #16231c;
+}
+.tile[data-theme="C-indigo-dark"] {
+  --bg: #1a1b20; --panel: #1a1b20;
+  --elev: #25262c; --raised: #303139; --hover: #3b3d45;
+  --border: #474a55; --text: #eff0f4; --muted: #a2a4ac;
+  --accent: #6366f1; --on-accent: #101014; --danger: #ef4444; --ok: #4cc38a;
+  --user: #313552; --assistant: #222430;
+}
+.tile[data-theme="C-amber-dark"] {
+  --bg: #13100c; --panel: #13100c;
+  --elev: #1e1a15; --raised: #2a241e; --hover: #352f29;
+  --border: #443b32; --text: #f3efec; --muted: #aaa39d;
+  --accent: #f59e0b; --on-accent: #101014; --danger: #ef4444; --ok: #4cc38a;
+  --user: #3b270c; --assistant: #20180e;
+}
+.tile[data-theme="C-slate-light"] {
+  --bg: #f8fafd; --panel: #f8fafd;
+  --elev: #ffffff; --raised: #eef0f4; --hover: #e4e8ee;
+  --border: #ccd3dd; --text: #222934; --muted: #5c646f;
+  --accent: #475569; --on-accent: #ffffff; --danger: #dc2626; --ok: #317f5a;
+  --user: #d0dff6; --assistant: #eef4fc;
+}
+
+/* ═══ Mini-écran — STRICTEMENT les mêmes règles pour TOUTES les variantes ;
+ *    seules les variables CSS changent (via .mini[data-theme="…"]). ═══════ */
+.mini { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+.app { display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-size: 12.5px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.brand { font-weight: 700; letter-spacing: .02em; }
+.status { display: flex; gap: 6px; align-items: center; }
+.pill { font-size: 10.5px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--elev); color: var(--muted); text-decoration: none; }
+.pill--accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.badge { font-size: 10px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); }
+.badge--ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+.badge--warn { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.conversation { display: flex; flex-direction: column; gap: 9px; padding: 13px; background: var(--bg); }
+.card { background: var(--elev); border: 1px solid var(--border); border-radius: 10px; padding: 11px 12px; }
+.card__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card__title { margin: 0 0 4px; font-size: 13px; }
+.normal { margin: 6px 0 2px; }
+.muted { margin: 2px 0 8px; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.chip { font-size: 10.5px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border); }
+.chip--raised { background: var(--raised); }
+.chip--hover { background: var(--hover); }
+.chip--border { background: transparent; }
+.link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.msg { max-width: 82%; padding: 8px 11px; border-radius: 12px; border: 1px solid var(--border); }
+.msg p { margin: 3px 0 0; }
+.msg__who { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.msg--assistant { align-self: flex-start; background: var(--assistant); }
+.msg--user { align-self: flex-end; background: var(--user); }
+.composer { display: flex; gap: 8px; align-items: center; padding: 10px 12px; background: var(--panel); border-top: 1px solid var(--border); }
+.field { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--elev); color: var(--muted); }
+.button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+
+/* Audit WCAG sous chaque tuile */
+.audit { display: flex; flex-wrap: wrap; gap: 5px 10px; margin-top: 8px; font-size: 10.5px; color: #9aa2af; }
+.audit .ok { color: #7fd6a3; }
+.audit .ko { color: #ff9d9d; }
+.audit .hexes { color: #7f8794; font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+  <h1>Yuki — proposition de thèmes (maquette hors production)</h1>
+  <p class="lead">
+    Un <b>seul mini-écran factice</b> (barre supérieure, carte + 3 niveaux de surface, bulles
+    utilisateur/assistant, bouton d'accent, champ, badges, lien, texte normal/atténué), répété
+    <b>à l'identique</b>. Seules les couleurs changent, par variables CSS et <code>data-theme</code>
+    (aucun style en ligne). Les valeurs des variantes <b>B</b> sont reprises <b>telles quelles</b>
+    des palettes sources (Nord, Gruvbox, Catppuccin, Rosé Pine).
+  </p>
+
+  <h2>Démonstration ciblée — « neutre trop teinté » (actuel) vs « neutre légèrement teinté »</h2>
+  <p class="lead">
+    À gauche, la surface actuelle est fortement dérivée de l'accent : <b>toute la page prend la
+    teinte de l'accent</b>. À droite, correction <b>C</b> : <b>même accent</b>, mais surface à
+    chroma OKLCH très faible ⇒ le fond redevient quasi neutre et l'accent <b>ressort</b>.
+  </p>
+  <div class="grid grid--pair">
+    
+<figure class="tile" data-theme="actuel-emerald-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">0 · ACTUEL — Émeraude sombre</span>
+    <span class="tile__note">surface teintée par l'accent, 2 niveaux de surface (panel-2 = surface-elev ; raised/hover absents).</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #0b1512 · accent #34d399 · surface #12201a</span>
+    <span class="ok">texte/fond 16.90:1</span>
+    <span class="ok">texte/carte 15.32:1</span>
+    <span class="ok">atténué/fond 6.22:1</span>
+    <span class="ko">bordure/fond 1.58:1</span>
+    <span class="ok">ok/fond 8.39:1</span>
+    <span class="ko">⚠ texte bouton/accent 1.92</span>
+  </div>
+</figure>
+
+<figure class="tile" data-theme="C-emerald-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">C · NEUTRE TEINTÉ MAÎTRISÉ — Émeraude sombre</span>
+    <span class="tile__note">même accent que 0, mais surface chroma OKLCH 0,010–0,018 (≪ actuel) et 3 niveaux de surface.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #121715 · accent #10b981 · surface #1b221f</span>
+    <span class="ok">texte/fond 15.90:1</span>
+    <span class="ok">texte/carte 14.23:1</span>
+    <span class="ok">atténué/fond 7.34:1</span>
+    <span class="ko">bordure/fond 1.86:1</span>
+    <span class="ok">ok/fond 8.18:1</span>
+    
+  </div>
+</figure>
+  </div>
+
+  <h2>Toutes les variantes</h2>
+  <div class="grid">
+    
+<figure class="tile" data-theme="actuel-emerald-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">0 · ACTUEL — Émeraude sombre</span>
+    <span class="tile__note">surface teintée par l'accent, 2 niveaux de surface (panel-2 = surface-elev ; raised/hover absents).</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #0b1512 · accent #34d399 · surface #12201a</span>
+    <span class="ok">texte/fond 16.90:1</span>
+    <span class="ok">texte/carte 15.32:1</span>
+    <span class="ok">atténué/fond 6.22:1</span>
+    <span class="ko">bordure/fond 1.58:1</span>
+    <span class="ok">ok/fond 8.39:1</span>
+    <span class="ko">⚠ texte bouton/accent 1.92</span>
+  </div>
+</figure>
+
+<figure class="tile" data-theme="actuel-indigo-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">0 · ACTUEL — Indigo sombre</span>
+    <span class="tile__note">même modèle, accent différent : le fond reste « neutre chaud » (≈ slate-dark, Δ≈1,5,13).</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #1e1e1e · accent #6366f1 · surface #27272a</span>
+    <span class="ok">texte/fond 13.14:1</span>
+    <span class="ok">texte/carte 11.74:1</span>
+    <span class="ok">atténué/fond 6.50:1</span>
+    <span class="ko">bordure/fond 1.60:1</span>
+    <span class="ok">ok/fond 7.53:1</span>
+    <span class="ko">⚠ texte bouton/accent 4.47</span>
+  </div>
+</figure>
+
+<figure class="tile" data-theme="A-gris-indigo" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">A · GRIS + ACCENT — Indigo</span>
+    <span class="tile__note">surfaces 100 % achromatiques ; l'accent est la SEULE couleur. Fonds identiques entre familles.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #171717 · accent #6366f1 · surface #222222</span>
+    <span class="ok">texte/fond 15.73:1</span>
+    <span class="ok">texte/carte 13.96:1</span>
+    <span class="ok">atténué/fond 7.19:1</span>
+    <span class="ko">bordure/fond 1.87:1</span>
+    <span class="ok">ok/fond 8.09:1</span>
+    <span class="ko">⚠ texte bouton/accent 4.25</span>
+  </div>
+</figure>
+
+<figure class="tile" data-theme="A-gris-emerald" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">A · GRIS + ACCENT — Émeraude</span>
+    <span class="tile__note">même base grise que A-indigo : fond STRICTEMENT identique, seul l'accent diffère.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #171717 · accent #10b981 · surface #222222</span>
+    <span class="ok">texte/fond 15.73:1</span>
+    <span class="ok">texte/carte 13.96:1</span>
+    <span class="ok">atténué/fond 7.19:1</span>
+    <span class="ko">bordure/fond 1.87:1</span>
+    <span class="ok">ok/fond 8.09:1</span>
+    
+  </div>
+</figure>
+
+<figure class="tile" data-theme="A-gris-indigo-light" data-mode="light">
+  <figcaption class="tile__cap">
+    <span class="tile__title">A · GRIS + ACCENT — Indigo clair</span>
+    <span class="tile__note">version claire de A : gris purs + accent.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #ffffff · accent #6366f1 · surface #f6f6f6</span>
+    <span class="ok">texte/fond 17.22:1</span>
+    <span class="ok">texte/carte 15.94:1</span>
+    <span class="ok">atténué/fond 6.79:1</span>
+    <span class="ko">bordure/fond 1.53:1</span>
+    <span class="ok">ok/fond 4.87:1</span>
+    <span class="ko">⚠ texte bouton/accent 4.25</span>
+  </div>
+</figure>
+
+<figure class="tile" data-theme="B-nord-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">B · NORD (sombre)</span>
+    <span class="tile__note">valeurs officielles Nord : bg=#2e3440, surfaces #3b4252/#434c5e/#4c566a, accent #88c0d0.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #2e3440 · accent #88c0d0 · surface #3b4252</span>
+    <span class="ok">texte/fond 10.84:1</span>
+    <span class="ok">texte/carte 8.73:1</span>
+    <span class="ok">atténué/fond 4.64:1</span>
+    <span class="ko">bordure/fond 1.69:1</span>
+    <span class="ok">ok/fond 6.13:1</span>
+    
+  </div>
+</figure>
+
+<figure class="tile" data-theme="B-gruvbox-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">B · GRUVBOX (sombre, chaude)</span>
+    <span class="tile__note">valeurs officielles Gruvbox : bg=#282828, surfaces #3c3836/#504945/#665c54, accent #fabd2f.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #282828 · accent #fabd2f · surface #3c3836</span>
+    <span class="ok">texte/fond 10.75:1</span>
+    <span class="ok">texte/carte 8.45:1</span>
+    <span class="ok">atténué/fond 5.30:1</span>
+    <span class="ko">bordure/fond 2.26:1</span>
+    <span class="ok">ok/fond 7.14:1</span>
+    
+  </div>
+</figure>
+
+<figure class="tile" data-theme="B-catppuccin-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">B · CATPPUCCIN Mocha (pastel multi-teintes)</span>
+    <span class="tile__note">valeurs officielles Catppuccin : base #1e1e2e, surfaces #313244/#45475a/#585b70, accents pastel.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #1e1e2e · accent #89b4fa · surface #313244</span>
+    <span class="ok">texte/fond 11.34:1</span>
+    <span class="ok">texte/carte 8.69:1</span>
+    <span class="ok">atténué/fond 7.37:1</span>
+    <span class="ko">bordure/fond 1.80:1</span>
+    <span class="ok">ok/fond 11.03:1</span>
+    
+  </div>
+</figure>
+
+<figure class="tile" data-theme="B-rosepine-dawn-light" data-mode="light">
+  <figcaption class="tile__cap">
+    <span class="tile__title">B · ROSÉ PINE Dawn (claire)</span>
+    <span class="tile__note">valeurs officielles Rosé Pine Dawn : base #faf4ed, surface #fffaf3, accent #286983.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #faf4ed · accent #286983 · surface #fffaf3</span>
+    <span class="ok">texte/fond 8.69:1</span>
+    <span class="ok">texte/carte 9.14:1</span>
+    <span class="ko">atténué/fond 4.02:1</span>
+    <span class="ko">bordure/fond 1.27:1</span>
+    <span class="ko">ok/fond 3.14:1</span>
+    <span class="ko">⚠ atténué/fond 4.02 · badge ok/fond 3.14</span>
+  </div>
+</figure>
+
+<figure class="tile" data-theme="C-emerald-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">C · NEUTRE TEINTÉ MAÎTRISÉ — Émeraude sombre</span>
+    <span class="tile__note">même accent que 0, mais surface chroma OKLCH 0,010–0,018 (≪ actuel) et 3 niveaux de surface.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #121715 · accent #10b981 · surface #1b221f</span>
+    <span class="ok">texte/fond 15.90:1</span>
+    <span class="ok">texte/carte 14.23:1</span>
+    <span class="ok">atténué/fond 7.34:1</span>
+    <span class="ko">bordure/fond 1.86:1</span>
+    <span class="ok">ok/fond 8.18:1</span>
+    
+  </div>
+</figure>
+
+<figure class="tile" data-theme="C-indigo-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">C · NEUTRE TEINTÉ MAÎTRISÉ — Indigo sombre</span>
+    <span class="tile__note">surface très légèrement teintée (teinte de l'accent), clarté/hauteur distinctes de C-émeraude.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #1a1b20 · accent #6366f1 · surface #25262c</span>
+    <span class="ok">texte/fond 15.10:1</span>
+    <span class="ok">texte/carte 13.24:1</span>
+    <span class="ok">atténué/fond 6.91:1</span>
+    <span class="ko">bordure/fond 1.95:1</span>
+    <span class="ok">ok/fond 7.76:1</span>
+    <span class="ko">⚠ texte bouton/accent 4.25</span>
+  </div>
+</figure>
+
+<figure class="tile" data-theme="C-amber-dark" data-mode="dark">
+  <figcaption class="tile__cap">
+    <span class="tile__title">C · NEUTRE TEINTÉ MAÎTRISÉ — Ambre sombre</span>
+    <span class="tile__note">surface très légèrement teintée (chaude), clarté distincte ⇒ famille immédiatement reconnaissable.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #13100c · accent #f59e0b · surface #1e1a15</span>
+    <span class="ok">texte/fond 16.59:1</span>
+    <span class="ok">texte/carte 15.13:1</span>
+    <span class="ok">atténué/fond 7.62:1</span>
+    <span class="ko">bordure/fond 1.73:1</span>
+    <span class="ok">ok/fond 8.56:1</span>
+    
+  </div>
+</figure>
+
+<figure class="tile" data-theme="C-slate-light" data-mode="light">
+  <figcaption class="tile__cap">
+    <span class="tile__title">C · NEUTRE TEINTÉ MAÎTRISÉ — Ardoise claire</span>
+    <span class="tile__note">mode clair : surface quasi neutre, léger décalage de teinte, 3 niveaux de surface.</span>
+    <span class="swatches"><i class="sw sw--bg"></i><i class="sw sw--elev"></i><i class="sw sw--raised"></i><i class="sw sw--hover"></i><i class="sw sw--border"></i><i class="sw sw--accent"></i><i class="sw sw--user"></i><i class="sw sw--assistant"></i><i class="sw sw--ok"></i><i class="sw sw--danger"></i></span>
+  </figcaption>
+  <div class="mini">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <a class="pill">Configuration</a>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="normal">Texte normal lisible sur la carte.</p>
+          <p class="muted">Texte atténué (secondaire).</p>
+          <div class="chips">
+            <span class="chip chip--raised">surélevé</span>
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+          </div>
+          <p><a class="link">Voir la configuration →</a></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Voici la réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+  <div class="audit">
+    <span class="hexes">fond #f8fafd · accent #475569 · surface #ffffff</span>
+    <span class="ok">texte/fond 14.00:1</span>
+    <span class="ok">texte/carte 14.64:1</span>
+    <span class="ok">atténué/fond 5.73:1</span>
+    <span class="ko">bordure/fond 1.44:1</span>
+    <span class="ok">ok/fond 4.66:1</span>
+    
+  </div>
+</figure>
+  </div>
+</body>
+</html>

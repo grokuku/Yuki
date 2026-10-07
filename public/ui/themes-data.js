@@ -2,7 +2,7 @@
  * Dérivés de thème de l'UI Yuki — FICHIER GÉNÉRÉ, ne pas éditer à la main.
  *
  * Généré en même temps que themes.css par _tools/generate-yuki-themes.mjs
- * (holaf-lib js/holaf-tokens.js v0.3.0).
+ * (holaf-lib js/holaf-tokens.js v0.4.1).
  *
  * Yuki enregistre un PACK HÔTE `yuki-<famille>-<mode>` par preset (voir
  * public/ui/theme.js) : ce pack `extends` le preset INTÉGRÉ homonyme de la
@@ -17,14 +17,16 @@
  */
 
 export const YUKI_THEME_DERIVED = Object.freeze({
-  "indigo-light": { user: "#dfdefa", assistant: "#f4f4fd", ok: "#317f5a" },
-  "indigo-dark": { user: "#2a2b44", assistant: "#22222b", ok: "#4cc38a" },
-  "midnight-light": { user: "#dadcf5", assistant: "#edeefa", ok: "#317f5a" },
-  "midnight-dark": { user: "#242744", assistant: "#17182a", ok: "#4cc38a" },
-  "slate-light": { user: "#d5d9de", assistant: "#eaecef", ok: "#2e7553" },
-  "slate-dark": { user: "#343a44", assistant: "#262b33", ok: "#4cc38a" },
-  "emerald-light": { user: "#d2e7e1", assistant: "#f0f7f5", ok: "#317f5a" },
-  "emerald-dark": { user: "#12372a", assistant: "#0d201a", ok: "#4cc38a" },
-  "amber-light": { user: "#f2e0d3", assistant: "#fbf5f0", ok: "#317f5a" },
-  "amber-dark": { user: "#43330d", assistant: "#281e0a", ok: "#4cc38a" },
+  "corail-light": { user: "#edbbd3", assistant: "#f9d6e4", ok: "#2e7553" },
+  "corail-dark": { user: "#593545", assistant: "#422a34", ok: "#4cc38a" },
+  "ambre-light": { user: "#cab194", assistant: "#d6c0aa", ok: "#22583e" },
+  "ambre-dark": { user: "#351f08", assistant: "#1a0d03", ok: "#4cc38a" },
+  "emeraude-light": { user: "#acc5a1", assistant: "#bfd3b8", ok: "#266245" },
+  "emeraude-dark": { user: "#1d3116", assistant: "#0f1b0b", ok: "#4cc38a" },
+  "turquoise-light": { user: "#a1cbd2", assistant: "#b8dae1", ok: "#2a6b4c" },
+  "turquoise-dark": { user: "#073941", assistant: "#06242a", ok: "#4cc38a" },
+  "amethyste-light": { user: "#c5c4ed", assistant: "#d6d7f6", ok: "#2a6b4c" },
+  "amethyste-dark": { user: "#363754", assistant: "#26273b", ok: "#4cc38a" },
+  "neutre-light": { user: "#d5d7d9", assistant: "#e8eaec", ok: "#2e7553" },
+  "neutre-dark": { user: "#4a4b4e", assistant: "#3b3c3f", ok: "#4cc38a" },
 });

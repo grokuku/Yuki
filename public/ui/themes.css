@@ -1,12 +1,12 @@
 /*
  * Thèmes de l'UI Yuki — FICHIER GÉNÉRÉ, ne pas éditer à la main.
  *
- * Modèle à DEUX AXES : famille (indigo, midnight, slate, emerald, amber) ×
- * mode (light, dark) = 10 presets « <famille>-<mode> ».
+ * Modèle à DEUX AXES : famille (corail, ambre, emeraude, turquoise, amethyste, neutre) ×
+ * mode (light, dark) = 12 presets « <famille>-<mode> ».
  *
  * DOCTRINE « ALIAS + REPLI » (comme Pi-Web) : ces variables ne portent plus
  * de couleur littérale, elles POINTENT sur les tokens --holaf-* posés au
- * runtime par la brique holaf-tokens v0.3.0 (via le pack hôte
+ * runtime par la brique holaf-tokens v0.4.1 (via le pack hôte
  * « yuki-<famille>-<mode> », voir public/ui/theme.js et themes-data.js) :
  *   - surfaces/bordures/textes/accent/danger : preset INTÉGRÉ <famille>-<mode>
  *     de la brique (HolafTokens) ;
@@ -16,8 +16,9 @@
  *     calculée ci-dessous. Si la brique ne se charge pas, le rendu reste
  *     STRICTEMENT identique.
  *
- * Rapport de projection (valeurs de repli) :
+ * Rapport de projection (valeurs de repli) — 3 niveaux de profondeur + survol :
  *   --bg / --panel  ← surface        --panel-2 ← surface-elev
+ *   --panel-3       ← surface-raised --panel-hover ← surface-hover
  *   --border        ← border
  *   --text          ← text           --muted   ← text-muted
  *   --accent        ← accent         --danger  ← danger
@@ -37,162 +38,218 @@
  * aucun style n'est injecté dynamiquement par la page.
  */
 
-:root[data-theme="indigo-light"] {
+:root[data-theme="corail-light"] {
   color-scheme: light;
-  --bg: var(--holaf-surface, #ffffff);
-  --panel: var(--holaf-surface, #ffffff);
-  --panel-2: var(--holaf-surface-elev, #f4f4f5);
-  --border: var(--holaf-border, #d4d4d8);
-  --text: var(--holaf-text, #18181b);
-  --muted: var(--holaf-text-muted, #52525b);
-  --accent: var(--holaf-accent, #4f46e5);
-  --danger: var(--holaf-danger, #dc2626);
-  --user: var(--holaf-user, #dfdefa);
-  --assistant: var(--holaf-assistant, #f4f4fd);
-  --ok: var(--holaf-ok, #317f5a);
-}
-
-:root[data-theme="indigo-dark"] {
-  color-scheme: dark;
-  --bg: var(--holaf-surface, #1e1e1e);
-  --panel: var(--holaf-surface, #1e1e1e);
-  --panel-2: var(--holaf-surface-elev, #27272a);
-  --border: var(--holaf-border, #3f3f46);
-  --text: var(--holaf-text, #e4e4e7);
-  --muted: var(--holaf-text-muted, #a1a1aa);
-  --accent: var(--holaf-accent, #6366f1);
-  --danger: var(--holaf-danger, #ef4444);
-  --user: var(--holaf-user, #2a2b44);
-  --assistant: var(--holaf-assistant, #22222b);
-  --ok: var(--holaf-ok, #4cc38a);
-}
-
-:root[data-theme="midnight-light"] {
-  color-scheme: light;
-  --bg: var(--holaf-surface, #f6f7fc);
-  --panel: var(--holaf-surface, #f6f7fc);
-  --panel-2: var(--holaf-surface-elev, #ffffff);
-  --border: var(--holaf-border, #d4d6f3);
-  --text: var(--holaf-text, #18181b);
-  --muted: var(--holaf-text-muted, #75767a);
-  --accent: var(--holaf-accent, #5b63d3);
-  --danger: var(--holaf-danger, #dc2626);
-  --user: var(--holaf-user, #dadcf5);
-  --assistant: var(--holaf-assistant, #edeefa);
-  --ok: var(--holaf-ok, #317f5a);
-}
-
-:root[data-theme="midnight-dark"] {
-  color-scheme: dark;
-  --bg: var(--holaf-surface, #10111d);
-  --panel: var(--holaf-surface, #10111d);
-  --panel-2: var(--holaf-surface-elev, #181a2c);
-  --border: var(--holaf-border, #272a44);
-  --text: var(--holaf-text, #e2e4f0);
-  --muted: var(--holaf-text-muted, #9aa0c3);
-  --accent: var(--holaf-accent, #818cf8);
-  --danger: var(--holaf-danger, #ef4444);
-  --user: var(--holaf-user, #242744);
-  --assistant: var(--holaf-assistant, #17182a);
-  --ok: var(--holaf-ok, #4cc38a);
-}
-
-:root[data-theme="slate-light"] {
-  color-scheme: light;
-  --bg: var(--holaf-surface, #f4f6f8);
-  --panel: var(--holaf-surface, #f4f6f8);
-  --panel-2: var(--holaf-surface-elev, #ffffff);
-  --border: var(--holaf-border, #ced3d9);
-  --text: var(--holaf-text, #18181b);
-  --muted: var(--holaf-text-muted, #747578);
-  --accent: var(--holaf-accent, #475569);
-  --danger: var(--holaf-danger, #dc2626);
-  --user: var(--holaf-user, #d5d9de);
-  --assistant: var(--holaf-assistant, #eaecef);
+  --bg: var(--holaf-surface, #ffe3ed);
+  --panel: var(--holaf-surface, #ffe3ed);
+  --panel-2: var(--holaf-surface-elev, #fefefe);
+  --panel-3: var(--holaf-surface-raised, #f5d9e3);
+  --panel-hover: var(--holaf-surface-hover, #ebcfd9);
+  --border: var(--holaf-border, #d9b9c4);
+  --text: var(--holaf-text, #2f2227);
+  --muted: var(--holaf-text-muted, #665159);
+  --accent: var(--holaf-accent, #9c045e);
+  --danger: var(--holaf-danger, #c62222);
+  --user: var(--holaf-user, #edbbd3);
+  --assistant: var(--holaf-assistant, #f9d6e4);
   --ok: var(--holaf-ok, #2e7553);
 }
 
-:root[data-theme="slate-dark"] {
+:root[data-theme="corail-dark"] {
   color-scheme: dark;
-  --bg: var(--holaf-surface, #1f232b);
-  --panel: var(--holaf-surface, #1f232b);
-  --panel-2: var(--holaf-surface-elev, #292e38);
-  --border: var(--holaf-border, #3a4150);
-  --text: var(--holaf-text, #e6e9ee);
-  --muted: var(--holaf-text-muted, #9aa3b2);
-  --accent: var(--holaf-accent, #94a3b8);
-  --danger: var(--holaf-danger, #ef4444);
-  --user: var(--holaf-user, #343a44);
-  --assistant: var(--holaf-assistant, #262b33);
+  --bg: var(--holaf-surface, #36252c);
+  --panel: var(--holaf-surface, #36252c);
+  --panel-2: var(--holaf-surface-elev, #433037);
+  --panel-3: var(--holaf-surface-raised, #503b43);
+  --panel-hover: var(--holaf-surface-hover, #5d464f);
+  --border: var(--holaf-border, #735963);
+  --text: var(--holaf-text, #f4eef0);
+  --muted: var(--holaf-text-muted, #ccb7bf);
+  --accent: var(--holaf-accent, #fa7fb5);
+  --danger: var(--holaf-danger, #f87171);
+  --user: var(--holaf-user, #593545);
+  --assistant: var(--holaf-assistant, #422a34);
   --ok: var(--holaf-ok, #4cc38a);
 }
 
-:root[data-theme="emerald-light"] {
+:root[data-theme="ambre-light"] {
   color-scheme: light;
-  --bg: var(--holaf-surface, #ffffff);
-  --panel: var(--holaf-surface, #ffffff);
-  --panel-2: var(--holaf-surface-elev, #f0fdf4);
-  --border: var(--holaf-border, #c8e1da);
-  --text: var(--holaf-text, #18181b);
-  --muted: var(--holaf-text-muted, #79797b);
-  --accent: var(--holaf-accent, #047857);
-  --danger: var(--holaf-danger, #dc2626);
-  --user: var(--holaf-user, #d2e7e1);
-  --assistant: var(--holaf-assistant, #f0f7f5);
-  --ok: var(--holaf-ok, #317f5a);
+  --bg: var(--holaf-surface, #dcc8b5);
+  --panel: var(--holaf-surface, #dcc8b5);
+  --panel-2: var(--holaf-surface-elev, #fefefe);
+  --panel-3: var(--holaf-surface-raised, #d2bfac);
+  --panel-hover: var(--holaf-surface-hover, #c9b5a3);
+  --border: var(--holaf-border, #b6a08b);
+  --text: var(--holaf-text, #2d251c);
+  --muted: var(--holaf-text-muted, #54473b);
+  --accent: var(--holaf-accent, #7a4800);
+  --danger: var(--holaf-danger, #a51d1d);
+  --user: var(--holaf-user, #cab194);
+  --assistant: var(--holaf-assistant, #d6c0aa);
+  --ok: var(--holaf-ok, #22583e);
 }
 
-:root[data-theme="emerald-dark"] {
+:root[data-theme="ambre-dark"] {
   color-scheme: dark;
-  --bg: var(--holaf-surface, #0b1512);
-  --panel: var(--holaf-surface, #0b1512);
-  --panel-2: var(--holaf-surface-elev, #12201a);
-  --border: var(--holaf-border, #143f30);
-  --text: var(--holaf-text, #f4f4f5);
-  --muted: var(--holaf-text-muted, #929696);
-  --accent: var(--holaf-accent, #34d399);
-  --danger: var(--holaf-danger, #ef4444);
-  --user: var(--holaf-user, #12372a);
-  --assistant: var(--holaf-assistant, #0d201a);
+  --bg: var(--holaf-surface, #0c0400);
+  --panel: var(--holaf-surface, #0c0400);
+  --panel-2: var(--holaf-surface-elev, #170b02);
+  --panel-3: var(--holaf-surface-raised, #221508);
+  --panel-hover: var(--holaf-surface-hover, #2e1f10);
+  --border: var(--holaf-border, #42301f);
+  --text: var(--holaf-text, #f3efec);
+  --muted: var(--holaf-text-muted, #b9a593);
+  --accent: var(--holaf-accent, #f29a2d);
+  --danger: var(--holaf-danger, #f87171);
+  --user: var(--holaf-user, #351f08);
+  --assistant: var(--holaf-assistant, #1a0d03);
   --ok: var(--holaf-ok, #4cc38a);
 }
 
-:root[data-theme="amber-light"] {
+:root[data-theme="emeraude-light"] {
   color-scheme: light;
-  --bg: var(--holaf-surface, #ffffff);
-  --panel: var(--holaf-surface, #ffffff);
-  --panel-2: var(--holaf-surface-elev, #fffbeb);
-  --border: var(--holaf-border, #efd9c9);
-  --text: var(--holaf-text, #18181b);
-  --muted: var(--holaf-text-muted, #79797b);
-  --accent: var(--holaf-accent, #b45309);
-  --danger: var(--holaf-danger, #dc2626);
-  --user: var(--holaf-user, #f2e0d3);
-  --assistant: var(--holaf-assistant, #fbf5f0);
-  --ok: var(--holaf-ok, #317f5a);
+  --bg: var(--holaf-surface, #c9dac4);
+  --panel: var(--holaf-surface, #c9dac4);
+  --panel-2: var(--holaf-surface-elev, #fdfffc);
+  --panel-3: var(--holaf-surface-raised, #c0d0bb);
+  --panel-hover: var(--holaf-surface-hover, #b6c6b1);
+  --border: var(--holaf-border, #a0b29a);
+  --text: var(--holaf-text, #22291f);
+  --muted: var(--holaf-text-muted, #465143);
+  --accent: var(--holaf-accent, #276701);
+  --danger: var(--holaf-danger, #b01e1e);
+  --user: var(--holaf-user, #acc5a1);
+  --assistant: var(--holaf-assistant, #bfd3b8);
+  --ok: var(--holaf-ok, #266245);
 }
 
-:root[data-theme="amber-dark"] {
+:root[data-theme="emeraude-dark"] {
   color-scheme: dark;
-  --bg: var(--holaf-surface, #1a1408);
-  --panel: var(--holaf-surface, #1a1408);
-  --panel-2: var(--holaf-surface-elev, #241c0d);
-  --border: var(--holaf-border, #4c3a0e);
-  --text: var(--holaf-text, #f4f4f5);
-  --muted: var(--holaf-text-muted, #989691);
-  --accent: var(--holaf-accent, #fbbf24);
-  --danger: var(--holaf-danger, #ef4444);
-  --user: var(--holaf-user, #43330d);
-  --assistant: var(--holaf-assistant, #281e0a);
+  --bg: var(--holaf-surface, #081005);
+  --panel: var(--holaf-surface, #081005);
+  --panel-2: var(--holaf-surface-elev, #111b0d);
+  --panel-3: var(--holaf-surface-raised, #1a2617);
+  --panel-hover: var(--holaf-surface-hover, #253120);
+  --border: var(--holaf-border, #354430);
+  --text: var(--holaf-text, #eef1ed);
+  --muted: var(--holaf-text-muted, #9faf9a);
+  --accent: var(--holaf-accent, #7fc765);
+  --danger: var(--holaf-danger, #f87171);
+  --user: var(--holaf-user, #1d3116);
+  --assistant: var(--holaf-assistant, #0f1b0b);
+  --ok: var(--holaf-ok, #4cc38a);
+}
+
+:root[data-theme="turquoise-light"] {
+  color-scheme: light;
+  --bg: var(--holaf-surface, #c3e2e8);
+  --panel: var(--holaf-surface, #c3e2e8);
+  --panel-2: var(--holaf-surface-elev, #fdffff);
+  --panel-3: var(--holaf-surface-raised, #b9d9de);
+  --panel-hover: var(--holaf-surface-hover, #b0cfd5);
+  --border: var(--holaf-border, #97bbc2);
+  --text: var(--holaf-text, #1b292c);
+  --muted: var(--holaf-text-muted, #42585c);
+  --accent: var(--holaf-accent, #07606c);
+  --danger: var(--holaf-danger, #bb2020);
+  --user: var(--holaf-user, #a1cbd2);
+  --assistant: var(--holaf-assistant, #b8dae1);
+  --ok: var(--holaf-ok, #2a6b4c);
+}
+
+:root[data-theme="turquoise-dark"] {
+  color-scheme: dark;
+  --bg: var(--holaf-surface, #051a1e);
+  --panel: var(--holaf-surface, #051a1e);
+  --panel-2: var(--holaf-surface-elev, #0e2529);
+  --panel-3: var(--holaf-surface-raised, #183135);
+  --panel-hover: var(--holaf-surface-hover, #223d41);
+  --border: var(--holaf-border, #315056);
+  --text: var(--holaf-text, #ecf1f2);
+  --muted: var(--holaf-text-muted, #91b0b5);
+  --accent: var(--holaf-accent, #0ec7de);
+  --danger: var(--holaf-danger, #f87171);
+  --user: var(--holaf-user, #073941);
+  --assistant: var(--holaf-assistant, #06242a);
+  --ok: var(--holaf-ok, #4cc38a);
+}
+
+:root[data-theme="amethyste-light"] {
+  color-scheme: light;
+  --bg: var(--holaf-surface, #dfe1fa);
+  --panel: var(--holaf-surface, #dfe1fa);
+  --panel-2: var(--holaf-surface-elev, #fefefe);
+  --panel-3: var(--holaf-surface-raised, #d6d8f0);
+  --panel-hover: var(--holaf-surface-hover, #cccee6);
+  --border: var(--holaf-border, #b6b9d5);
+  --text: var(--holaf-text, #252530);
+  --muted: var(--holaf-text-muted, #555669);
+  --accent: var(--holaf-accent, #4d41b0);
+  --danger: var(--holaf-danger, #bb2020);
+  --user: var(--holaf-user, #c5c4ed);
+  --assistant: var(--holaf-assistant, #d6d7f6);
+  --ok: var(--holaf-ok, #2a6b4c);
+}
+
+:root[data-theme="amethyste-dark"] {
+  color-scheme: dark;
+  --bg: var(--holaf-surface, #1e1f2e);
+  --panel: var(--holaf-surface, #1e1f2e);
+  --panel-2: var(--holaf-surface-elev, #292a3a);
+  --panel-3: var(--holaf-surface-raised, #343547);
+  --panel-hover: var(--holaf-surface-hover, #3f4155);
+  --border: var(--holaf-border, #52536b);
+  --text: var(--holaf-text, #eff0f4);
+  --muted: var(--holaf-text-muted, #abadc4);
+  --accent: var(--holaf-accent, #a1a3ff);
+  --danger: var(--holaf-danger, #f87171);
+  --user: var(--holaf-user, #363754);
+  --assistant: var(--holaf-assistant, #26273b);
+  --ok: var(--holaf-ok, #4cc38a);
+}
+
+:root[data-theme="neutre-light"] {
+  color-scheme: light;
+  --bg: var(--holaf-surface, #f2f4f5);
+  --panel: var(--holaf-surface, #f2f4f5);
+  --panel-2: var(--holaf-surface-elev, #fefeff);
+  --panel-3: var(--holaf-surface-raised, #e8eaeb);
+  --panel-hover: var(--holaf-surface-hover, #dee0e1);
+  --border: var(--holaf-border, #c6cbd0);
+  --text: var(--holaf-text, #1f2730);
+  --muted: var(--holaf-text-muted, #4c5a69);
+  --accent: var(--holaf-accent, #515457);
+  --danger: var(--holaf-danger, #d12424);
+  --user: var(--holaf-user, #d5d7d9);
+  --assistant: var(--holaf-assistant, #e8eaec);
+  --ok: var(--holaf-ok, #2e7553);
+}
+
+:root[data-theme="neutre-dark"] {
+  color-scheme: dark;
+  --bg: var(--holaf-surface, #343537);
+  --panel: var(--holaf-surface, #343537);
+  --panel-2: var(--holaf-surface-elev, #3f4144);
+  --panel-3: var(--holaf-surface-raised, #4a4d51);
+  --panel-hover: var(--holaf-surface-hover, #565a5e);
+  --border: var(--holaf-border, #686e75);
+  --text: var(--holaf-text, #edf0f4);
+  --muted: var(--holaf-text-muted, #ced1d4);
+  --accent: var(--holaf-accent, #aeb1b5);
+  --danger: var(--holaf-danger, #f87878);
+  --user: var(--holaf-user, #4a4b4e);
+  --assistant: var(--holaf-assistant, #3b3c3f);
   --ok: var(--holaf-ok, #4cc38a);
 }
 
 /* ─── Contrôle de thème (topbar) ─────────────────────────────────────────
  * Deux contrôles aux rôles distincts :
- *   select#theme-family : la FAMILLE (Indigo, Nuit, Ardoise, Émeraude, Ambre) ;
+ *   select#theme-family : la FAMILLE (Corail, Ambre, Émeraude, Turquoise,
+ *                         Améthyste, Neutre) ;
  *   button#theme-toggle : le MODE clair/sombre (conserve la famille).
  * Compact, cohérent avec la topbar ; focus visible (clavier) ; l'état
  * « pressé » du bouton (mode sombre actif) reçoit une teinte accent.
+ * Le survol s'appuie sur le 4e palier de profondeur (--panel-hover).
  */
 
 .theme-control {
@@ -216,6 +273,7 @@
 .theme-control select:hover,
 .theme-control select:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--panel-hover);
 }
 
 .theme-control select:focus-visible,
@@ -242,6 +300,7 @@
 
 .theme-control button:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--panel-hover);
   color: var(--accent);
 }
 

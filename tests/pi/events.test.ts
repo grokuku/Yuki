@@ -9,6 +9,7 @@ import {
   channelForAssistantEvent,
   contentTextFromMessage,
   sanitizeErrorText,
+  unstreamedContentSuffix,
 } from "../../src/pi/events.js";
 
 describe("pi.events — contenu vs thinking", () => {
@@ -43,5 +44,27 @@ describe("pi.events — contenu vs thinking", () => {
     expect(
       sanitizeErrorText("token=AAAABBBBCCCCDDDDEEEEFFFF0000111122223333"),
     ).not.toContain("AAAABBBBCCCCDDDDEEEEFFFF0000111122223333");
+  });
+});
+
+describe("pi.events — rattrapage du contenu non streamé", () => {
+  it("content vide → aucun delta", () => {
+    expect(unstreamedContentSuffix("", "")).toBe("");
+    expect(unstreamedContentSuffix("déjà là", "")).toBe("");
+  });
+
+  it("streamed vide → tout le contenu (fournisseur sans text_delta)", () => {
+    expect(unstreamedContentSuffix("", "Réponse complète.")).toBe(
+      "Réponse complète.",
+    );
+  });
+
+  it("streamed préfixe → uniquement le suffixe manquant (pas de doublon)", () => {
+    expect(unstreamedContentSuffix("Bon", "Bonjour")).toBe("jour");
+    expect(unstreamedContentSuffix("Bonjour", "Bonjour")).toBe("");
+  });
+
+  it("divergence → rien (le transcript reste la source de vérité)", () => {
+    expect(unstreamedContentSuffix("Bonjour", "Bonsoir")).toBe("");
   });
 });

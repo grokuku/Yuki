@@ -23,7 +23,7 @@ import WebSocket from "ws";
 const BASE = process.argv[2] || "http://127.0.0.1:4173";
 const OUT = process.argv[3] || join(import.meta.dirname, "theme-snapshot.json");
 
-const FAMILIES = ["indigo", "midnight", "slate", "emerald", "amber"];
+const FAMILIES = ["corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"];
 const MODES = ["light", "dark"];
 const PRESETS = FAMILIES.flatMap((f) => MODES.map((m) => `${f}-${m}`));
 

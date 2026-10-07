@@ -435,6 +435,216 @@ await evaluate(`document.getElementById("conversation").scrollTop = document.get
 await sleep(150);
 await shot("chat-markdown-bas");
 
+/* ═══════ RÉGRESSION « LA RÉPONSE NE S'AFFICHE PAS » (canal `content`) ══════
+ * Le harnais passait 92/92 avec un contenu SIMPLE : il n'exerçait ni les
+ * constructs non fermés, ni le cas où le modèle ne produit AUCUN `content`
+ * (tout en `thinking`). Or ce dernier explique le rapport : le texte est vide
+ * ET l'audio aussi (le TTS est produit côté serveur à partir des `content`).
+ *
+ * On streame donc 8 réponses piégeuses (une par `send`), puis on prouve :
+ *   1. tout contenu NON VIDE finit AFFICHÉ (jamais avalé, même non fermé) ;
+ *   2. une réponse VIDE n'est plus une bulle muette inexplicable ;
+ *   3. le message TTS ne ment plus (« moteur indisponible » alors qu'il est prêt).
+ */
+console.log("\n═══ PAGE / (contenus piégeux + réponse vide) ═══");
+await navigate(BASE + "/");
+for (let i = 0; i < 60; i += 1) {
+  if ((await evaluate(`document.getElementById("connection")?.textContent`)) === "connecté") break;
+  await sleep(100);
+}
+
+const READ_TTS_STATUS = `(() => {
+  const s = document.getElementById("tts-status");
+  return s ? { hidden: s.hidden, text: s.textContent } : null;
+})()`;
+
+const LAST_ASSISTANT = `(() => {
+  const root = [...document.querySelectorAll(".message--assistant")].pop();
+  if (!root) return { present: false };
+  const body = root.querySelector(".message__body.markdown");
+  const rect = body ? body.getBoundingClientRect() : null;
+  return {
+    present: true,
+    messageText: root.textContent,
+    bodyPresent: !!body,
+    bodyText: body ? body.textContent : null,
+    bodyDisplay: body ? getComputedStyle(body).display : null,
+    bodyVisibility: body ? getComputedStyle(body).visibility : null,
+    bodyWidth: rect ? rect.width : 0,
+    bodyHeight: rect ? rect.height : 0,
+    codeBlocks: root.querySelectorAll(".md-code-block pre code").length,
+    codeText: [...root.querySelectorAll(".md-code-block pre code")].map((c) => c.textContent).join("\\n"),
+    muteBlocks: root.querySelectorAll(".md-code-block--mute").length,
+    muteText: root.querySelector(".md-code-block--mute pre code")?.textContent ?? "",
+    muteBadge: root.querySelector(".md-code-block--mute .md-mute-badge")?.textContent ?? "",
+    tables: root.querySelectorAll("table.md-table").length,
+    tableCells: [...root.querySelectorAll("table.md-table th, table.md-table td")].map((c) => c.textContent),
+    paragraphs: [...root.querySelectorAll("p.md-paragraph")].map((p) => p.textContent),
+    headings: [...root.querySelectorAll("h1.md-heading, h2.md-heading, h3.md-heading")].map((h) => h.textContent),
+    links: [...root.querySelectorAll("a.md-link")].map((a) => a.getAttribute("href")),
+    listItems: [...root.querySelectorAll(".md-list li")].map((li) => li.textContent),
+    tails: root.querySelectorAll(".md-tail").length,
+    metaText: root.querySelector(".message__meta")?.textContent ?? "",
+    styleAttrs: root.querySelectorAll("[style]").length,
+  };
+})()`;
+
+async function sendAndWait(text) {
+  const before = await evaluate(`document.querySelectorAll(".message--assistant").length`);
+  await evaluate(`(() => {
+    const input = document.getElementById("input");
+    input.value = ${JSON.stringify(text)};
+    input.dispatchEvent(new Event("input"));
+    document.getElementById("send").click();
+  })()`);
+  for (let i = 0; i < 100; i += 1) {
+    await sleep(100);
+    const n = await evaluate(`document.querySelectorAll(".message--assistant").length`);
+    if (n > before) break;
+  }
+  let sawThinking = false;
+  for (let i = 0; i < 300; i += 1) {
+    await sleep(100);
+    const st = await evaluate(`(() => ({
+      state: document.getElementById("session-state")?.textContent,
+      thinking: !document.getElementById("thinking")?.hidden,
+    }))()`);
+    if (st.thinking) sawThinking = true;
+    if (st.state === "idle") break;
+  }
+  // Fenêtre du diagnostic TTS différé (~600 ms) avant de lire l'état.
+  await sleep(900);
+  return { sawThinking };
+}
+
+/* — 1) fence ``` jamais fermée : le texte doit s'afficher (code block). — */
+await sendAndWait("montre-moi un exemple de code");
+let c = await evaluate(LAST_ASSISTANT);
+check(
+  "[/] fence ``` NON FERMÉE : le contenu est AFFICHÉ (jamais avalé)",
+  c.bodyPresent && /print\('bonjour'\)/.test(c.bodyText ?? "") && c.codeBlocks >= 1,
+  JSON.stringify({ bodyText: c.bodyText, codeBlocks: c.codeBlocks, tails: c.tails }),
+);
+check(
+  "[/] fence non fermée : flush de fin de run → plus aucun résidu brut (.md-tail)",
+  c.tails === 0,
+  JSON.stringify({ tails: c.tails }),
+);
+// TTS actif + `content` ⇒ du SON est émis (le diagnostic « aucun son » ne doit
+// PAS apparaẬtre). Prouve que la chaîne content→TTS fonctionne bout en bout.
+const contentAudioStatus = await evaluate(READ_TTS_STATUS);
+check(
+  "[/] TTS actif + contenu ⇒ aucun message « aucun son » (du son a été émis)",
+  !contentAudioStatus || contentAudioStatus.hidden === true ||
+    !/Aucun son reçu|Aucune réponse texte/.test(contentAudioStatus.text),
+  JSON.stringify(contentAudioStatus),
+);
+
+/* — 2) fence ~~~ jamais fermée. — */
+await sendAndWait("un autre exemple ?");
+c = await evaluate(LAST_ASSISTANT);
+check(
+  "[/] fence ~~~ NON FERMÉE : le contenu est AFFICHÉ",
+  c.bodyPresent && /ligne de code sans clôture/.test(c.bodyText ?? "") && c.codeBlocks >= 1,
+  JSON.stringify({ bodyText: c.bodyText, codeBlocks: c.codeBlocks }),
+);
+
+/* — 3) fence avec espaces de fin + info-string. — */
+await sendAndWait("encore un exemple");
+c = await evaluate(LAST_ASSISTANT);
+check(
+  "[/] fence avec espaces de fin : code ET paragraphe suivant affichés",
+  c.bodyPresent && /const x = 1;/.test(c.bodyText ?? "") && /Et voilà la fin\./.test(c.bodyText ?? ""),
+  JSON.stringify({ bodyText: c.bodyText, codeText: c.codeText }),
+);
+await evaluate(`document.getElementById("conversation").scrollTop = document.getElementById("conversation").scrollHeight`);
+await sleep(150);
+await shot("chat-fence-unclosed");
+
+/* — 4) bloc `muet` non fermé : affiché (marqué muet). — */
+await sendAndWait("et avec un bloc muet ?");
+c = await evaluate(LAST_ASSISTANT);
+check(
+  "[/] bloc MUET NON FERMÉ : affiché avec sa marque « non lu » (jamais invisible)",
+  c.bodyPresent && c.muteBlocks >= 1 && /données brutes 42/.test(c.muteText) && /non lu/.test(c.muteBadge),
+  JSON.stringify({ muteBlocks: c.muteBlocks, muteText: c.muteText, muteBadge: c.muteBadge }),
+);
+
+/* — 5) tableau incomplet. — */
+await sendAndWait("un tableau de valeurs");
+c = await evaluate(LAST_ASSISTANT);
+check(
+  "[/] TABLEAU INCOMPLET : rendu en <table> avec ses cellules",
+  c.bodyPresent && c.tables >= 1 && c.tableCells.includes("alpha") && c.tableCells.includes("beta"),
+  JSON.stringify({ tables: c.tables, tableCells: c.tableCells }),
+);
+// Contenu entièrement muet (tableau non lu) : le TTS n'a rien à prononcer →
+// message honnête, jamais une accusation du moteur.
+const muetOnlyStatus = await evaluate(READ_TTS_STATUS);
+check(
+  "[/] contenu ENTIÈREMENT MUET (tableau) : message honnête, pas d'accusation du moteur",
+  muetOnlyStatus && muetOnlyStatus.hidden === false &&
+    /Aucun son reçu/.test(muetOnlyStatus.text) &&
+    !/moteur TTS semble indisponible/.test(muetOnlyStatus.text),
+  JSON.stringify(muetOnlyStatus),
+);
+
+/* — 6) `\n` initiaux. — */
+await sendAndWait("bonjour");
+c = await evaluate(LAST_ASSISTANT);
+check(
+  "[/] réponse avec `\\n` initiaux : le paragraphe est affiché",
+  c.bodyPresent && (c.bodyText ?? "").includes("sauts de ligne"),
+  JSON.stringify({ bodyText: c.bodyText, paragraphs: c.paragraphs }),
+);
+
+/* — 7) un SEUL gros delta. — */
+await sendAndWait("un seul bloc");
+c = await evaluate(LAST_ASSISTANT);
+check(
+  "[/] réponse en UN SEUL GROS DELTA : titre, liste et lien affichés",
+  c.bodyPresent && c.headings.includes("Gros delta") && c.listItems.includes("un") &&
+    c.links.some((h) => /^https:\/\//.test(h ?? "")),
+  JSON.stringify({ headings: c.headings, listItems: c.listItems, links: c.links }),
+);
+
+/* — 8) RÉPONSE VIDE : tout en `thinking`, AUCUN `content` (scénario du rapport).
+ * Discriminants : la bulle existe (métadonnées présentes), le corps est vide,
+ * le TTS n'a rien à lire — et le message ne doit PAS accuser le moteur. */
+const emptyRun = await sendAndWait("réfléchis à ma question");
+c = await evaluate(LAST_ASSISTANT);
+const emptyStatus = await evaluate(READ_TTS_STATUS);
+check(
+  "[/] RÉPONSE VIDE (tout en `thinking`) : la bulle assistant + ses métadonnées existent",
+  c.present && /TTFT/.test(c.metaText) && /tok/.test(c.metaText),
+  JSON.stringify({ messageText: c.messageText, metaText: c.metaText }),
+);
+check(
+  "[/] RÉPONSE VIDE : l'UI le DIT (placeholder) au lieu d'une bulle muette inexplicable",
+  /aucune réponse texte reçue/.test(c.messageText),
+  JSON.stringify({ messageText: c.messageText }),
+);
+check(
+  "[/] RÉPONSE VIDE : aucun résidu brut, zéro style inline (CSP stricte)",
+  c.tails === 0 && c.styleAttrs === 0,
+  JSON.stringify({ tails: c.tails, styleAttrs: c.styleAttrs }),
+);
+check(
+  "[/] RÉPONSE VIDE : message TTS HONNÊTE (aucun contenu à lire), le moteur n'est plus accusé",
+  emptyStatus && emptyStatus.hidden === false &&
+    /Aucune réponse texte à lire/.test(emptyStatus.text) &&
+    !/moteur TTS semble indisponible/.test(emptyStatus.text),
+  JSON.stringify(emptyStatus),
+);
+check(
+  "[/] RÉPONSE VIDE : l'indicateur de réflexion a bien été montré pendant le run",
+  emptyRun.sawThinking === true,
+  JSON.stringify(emptyRun),
+);
+await evaluate(`document.getElementById("conversation").scrollTop = document.getElementById("conversation").scrollHeight`);
+await sleep(200);
+await shot("chat-empty-reply");
+
 /* ═══════════════════════ Page /config ════════════════════════════════════ */
 console.log("\n═══ PAGE /config ═══");
 await navigate(BASE + "/config");
@@ -623,11 +833,11 @@ const iconColor = await evaluate(`(() => {
     document.documentElement.setAttribute('data-theme', preset);
     window.HolafTokens.setTheme('yuki-' + preset);
   };
-  set('indigo-dark');
+  set('amethyste-dark');
   const dark = { icon: cs(icon), text: cs(back) };
-  set('emerald-light');
+  set('emeraude-light');
   const light = { icon: cs(icon), text: cs(back) };
-  set('indigo-dark');
+  set('amethyste-dark');
   return {
     dark, light,
     stroke: icon?.getAttribute('stroke') ?? null,
@@ -725,7 +935,7 @@ async function shotPreset(preset) {
   await sleep(120);
   await shot(`config-tabs-${preset}`);
 }
-for (const preset of ["indigo-dark", "indigo-light", "emerald-dark", "emerald-light"]) {
+for (const preset of ["amethyste-dark", "amethyste-light", "emeraude-dark", "emeraude-light"]) {
   await shotPreset(preset);
 }
 
@@ -737,7 +947,7 @@ async function shotIcons(preset) {
   await sleep(120);
   await shotClip(`config-icons-${preset}`, { x: 0, y: 0, width: 1280, height: 58, scale: 2 });
 }
-for (const preset of ["indigo-dark", "indigo-light", "emerald-dark", "emerald-light"]) {
+for (const preset of ["amethyste-dark", "amethyste-light", "emeraude-dark", "emeraude-light"]) {
   await shotIcons(preset);
 }
 
@@ -1666,7 +1876,7 @@ async function shotAssistantPreset(preset) {
   await sleep(120);
   await shot(`config-assistant-${preset}`);
 }
-for (const preset of ["indigo-dark", "indigo-light", "emerald-dark", "emerald-light"]) {
+for (const preset of ["amethyste-dark", "amethyste-light", "emeraude-dark", "emeraude-light"]) {
   await shotAssistantPreset(preset);
 }
 

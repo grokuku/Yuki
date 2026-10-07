@@ -2,6 +2,8 @@
   --bg: #0f1115;
   --panel: #171a21;
   --panel-2: #1e2230;
+  --panel-3: #262b38;
+  --panel-hover: #2e3544;
   --text: #e8ebf2;
   --muted: #8b93a7;
   --accent: #5b8cff;
@@ -15,9 +17,9 @@
 /* NOTE — plus AUCUN mode « Système » : l'ancien bloc
    `@media (prefers-color-scheme: light) { :root:not([data-theme]) { … } }` est
    retiré. `data-theme` est désormais TOUJOURS posé — en dur dans le markup
-   (`<html data-theme="indigo-dark">`), puis écrasé par theme.js depuis
+   (`<html data-theme="neutre-dark">`), puis écrasé par theme.js depuis
    `localStorage` — et les palettes vivent exclusivement dans `themes.css`
-   (10 presets <famille>-<mode>, catalogue holaf-lib). Le bloc `:root`
+   (12 presets <famille>-<mode>, catalogue holaf-lib). Le bloc `:root`
    ci-dessus reste comme filet de sécurité : si `themes.css` échouait à
    charger, la page garde une palette sombre lisible au lieu d'un rendu nu.
    Aucun utilisateur ne peut se retrouver sans thème. */
@@ -91,6 +93,7 @@ a.pill {
 }
 
 a.pill:hover {
+  background: var(--panel-hover);
   color: var(--text);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
@@ -287,7 +290,7 @@ a.pill:hover {
 /* ─── Rendu markdown du chat (volet 3 — chat oral) ────────────────────────
  * Le texte de l'assistant est construit en nœuds DOM (`public/ui/markdown.js`).
  * Couleurs : UNIQUEMENT les variables de thème (`--text`, `--muted`, `--accent`,
- * `--panel-2`, `--border`) — donc les 5 familles × 2 modes suivent
+ * `--panel-2`, `--border`) — donc les 6 familles × 2 modes suivent
  * automatiquement. Aucun style en ligne n'est posé par le JS (CSP `style-src`).
  * La bulle `.message` portait `white-space: pre-wrap` pour l'ancien rendu texte :
  * on le réinitialise dans le corps markdown, sauf pour le résidu `.md-tail`
@@ -368,7 +371,7 @@ h6.md-heading {
 .md-code-block pre {
   margin: 0;
   padding: 10px 12px;
-  background: var(--panel-2);
+  background: var(--panel-3);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow-x: auto;
@@ -412,7 +415,7 @@ h6.md-heading {
 }
 
 .md-table th {
-  background: var(--panel-2);
+  background: var(--panel-3);
 }
 
 .md-link {

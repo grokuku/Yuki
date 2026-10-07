@@ -359,22 +359,44 @@ function applyEvent(frame) {
       // le flux est terminé, avant toute décision d'affichage. Le flush change
       // la hauteur : `pinned` a été mesuré AVANT.
       if (currentRenderer) currentRenderer.flush();
+      // Le contenu RÉELLEMENT reçu (canal `content`). Sert à ne pas accuser le
+      // moteur TTS à tort : une réponse vide n'a rien à prononcer.
+      const producedContent = currentRenderer
+        ? currentRenderer.text().trim().length > 0
+        : false;
       if (
         ttsAudible() &&
         typeof frame.runId === "string" &&
-        frame.runId === ttsRequestedRun &&
-        frame.runId !== ttsActivityRun
+        frame.runId === ttsRequestedRun
       ) {
-        // Une requête TTS a été émise mais AUCUN octet n'est revenu : moteur
-        // probablement indisponible. On le signale sans le taire.
-        setTtsStatus(
-          "Aucun son reçu alors que la voix est active : le moteur TTS semble indisponible.",
-          9000,
-        );
+        // Aucune trame audio encore reçue. DEUX causes très différentes :
+        //  - aucune réponse texte : rien n'a été envoyé au moteur (réponse vide
+        //    ou entièrement muette) — le moteur n'est PAS en cause ;
+        //  - du texte existait mais aucun son n'est (encore) revenu.
+        // Le diagnostic est DIFFÉRÉ : la synthèse du dernier segment démarre au
+        // `run_finished`, ses premières trames arrivent juste après. Conclure
+        // immédiatement accuserait à tort un run pourtant sonore. On laisse une
+        // courte fenêtre, puis on distingue les deux causes sans jamais
+        // affirmer que le moteur est mort alors qu'il est prêt.
+        const finishedRunId = frame.runId;
+        setTimeout(() => {
+          if (finishedRunId === ttsActivityRun) return; // du son est arrivé
+          setTtsStatus(
+            producedContent
+              ? "Aucun son reçu pour cette réponse : le texte n'a pas été prononcé."
+              : "Aucune réponse texte à lire : le modèle n'a produit aucun contenu à prononcer.",
+            9000,
+          );
+        }, 600);
       }
       if (currentAssistant) {
-        if (frame.reason === "abort" && currentAssistant.textContent.length === 0) {
+        const hasText = currentAssistant.textContent.trim().length > 0;
+        if (frame.reason === "abort" && !hasText) {
           currentAssistant.textContent = "(interrompu)";
+        } else if (frame.reason === "done" && !hasText) {
+          // Rien à afficher : on le DIT (bulle muette + métadonnées sinon
+          // incompréhensibles), au lieu de laisser une bulle vide.
+          currentAssistant.textContent = "(aucune réponse texte reçue)";
         }
         if (frame.reason === "error") {
           currentAssistant.classList.add("message--error");
@@ -426,7 +448,12 @@ function handleBinaryFrame(data) {
     console.warn("[tts] trame binaire illisible ignorée");
     return;
   }
-  ttsActivityRun = decoded.header.runId ?? ttsActivityRun;
+  // Seules les trames AUDIO comptent comme « du son a été émis » : les trames de
+  // contrôle (`tts_end`/`tts_cancel`) sont émises même sans contenu. Compter ces
+  // dernières comme de l'activité masquerait un vrai « aucun son ».
+  if (decoded.header.type === "tts_audio") {
+    ttsActivityRun = decoded.header.runId ?? ttsActivityRun;
+  }
   // Sourdine locale ou serveur off : la trame est jetée (pas de lecture).
   if (!ttsAudible()) return;
   ttsPlayer.handleFrame(decoded);

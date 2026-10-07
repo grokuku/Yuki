@@ -44,6 +44,7 @@
 }
 
 .nav-back:hover {
+  background: var(--panel-hover);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
   color: var(--accent);
 }
@@ -457,6 +458,7 @@
 }
 
 .config-tab:hover {
+  background: var(--panel-hover);
   color: var(--text);
 }
 

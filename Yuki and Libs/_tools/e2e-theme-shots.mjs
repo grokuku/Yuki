@@ -20,10 +20,12 @@ const SHOTS = join(import.meta.dirname, "shots");
 mkdirSync(SHOTS, { recursive: true });
 
 const COMBOS = [
-  "indigo-dark", "indigo-light",
-  "midnight-light",
-  "emerald-dark", "emerald-light",
-  "amber-dark",
+  "corail-dark", "corail-light",
+  "ambre-dark", "ambre-light",
+  "emeraude-dark", "emeraude-light",
+  "turquoise-dark", "turquoise-light",
+  "amethyste-dark", "amethyste-light",
+  "neutre-dark", "neutre-light",
 ];
 const PAGES = ["/", "/config"];
 

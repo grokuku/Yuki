@@ -2,9 +2,9 @@
 /**
  * Harnais E2E JETABLE (hors dépôts) — rendu headless Chromium via CDP.
  * Vérifie le comportement RÉEL du thème à deux axes sur les deux pages du
- * gateway : application des 10 combinaisons, indépendance famille/mode des
- * deux contrôles, persistance, migration de l'ancienne clé, zéro violation
- * CSP. Produit aussi des captures d'écran.
+ * gateway : application des 12 combinaisons (6 familles × 2 modes),
+ * indépendance famille/mode des deux contrôles, persistance, migration des
+ * anciennes préférences V1, zéro violation CSP. Produit aussi des captures.
  *
  * Usage : node "../Yuki and Libs/_tools/e2e-theme.mjs" <baseUrl>
  * Prérequis : gateway lancé par _tools/e2e-serve.ts.
@@ -22,21 +22,26 @@ mkdirSync(SHOTS, { recursive: true });
 
 /* ─── Valeurs attendues (issues de _tools/generate-yuki-themes.mjs) ────── */
 const EXPECT_BG = {
-  "indigo-light": "#ffffff", "indigo-dark": "#1e1e1e",
-  "midnight-light": "#f6f7fc", "midnight-dark": "#10111d",
-  "slate-light": "#f4f6f8", "slate-dark": "#1f232b",
-  "emerald-light": "#ffffff", "emerald-dark": "#0b1512",
-  "amber-light": "#ffffff", "amber-dark": "#1a1408",
+  "corail-light": "#ffe3ed", "corail-dark": "#36252c",
+  "ambre-light": "#dcc8b5", "ambre-dark": "#0c0400",
+  "emeraude-light": "#c9dac4", "emeraude-dark": "#081005",
+  "turquoise-light": "#c3e2e8", "turquoise-dark": "#051a1e",
+  "amethyste-light": "#dfe1fa", "amethyste-dark": "#1e1f2e",
+  "neutre-light": "#f2f4f5", "neutre-dark": "#343537",
 };
-const FAMILIES = ["indigo", "midnight", "slate", "emerald", "amber"];
-/** Migration : valeur stockée brute → preset attendu. */
+const FAMILIES = ["corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"];
+const MODES = ["light", "dark"];
+/** Migration : valeur stockée brute (V1 ou inconnue) → preset V2 attendu. */
 const MIGRATIONS = [
-  ["midnight", "midnight-dark"],
-  ["dark", "indigo-dark"],
-  ["light", "indigo-light"],
-  ["slate", "slate-dark"],
-  ["", "indigo-dark"],
-  ["valeur-inconnue", "indigo-dark"],
+  ["indigo-dark", "amethyste-dark"],
+  ["midnight", "amethyste-dark"],
+  ["emerald-light", "emeraude-light"],
+  ["dark", "amethyste-dark"],
+  ["light", "amethyste-light"],
+  ["slate", "neutre-dark"],
+  ["slate-dark", "neutre-dark"],
+  ["", "neutre-dark"],
+  ["valeur-inconnue", "neutre-dark"],
 ];
 
 /* ─── Résultats ─────────────────────────────────────────────────────────── */
@@ -203,24 +208,29 @@ for (const path of ["/", "/config"]) {
   await navigate(url);
 
   let s = await evaluate(READ_STATE);
-  check(`[${page}] défaut sans stockage : data-theme=indigo-dark`, s.dataTheme === "indigo-dark" && s.stored === null, `dataTheme=${s.dataTheme} stored=${s.stored}`);
-  check(`[${page}] défaut : --bg calculé = #1e1e1e`, s.bg === "#1e1e1e", s.bg);
+  check(`[${page}] défaut sans stockage : data-theme=neutre-dark`, s.dataTheme === "neutre-dark" && s.stored === null, `dataTheme=${s.dataTheme} stored=${s.stored}`);
+  check(`[${page}] défaut : --bg calculé = #343537`, s.bg === "#343537", s.bg);
 
-  // — Les 5 familles × les 2 modes, VIA LES CONTRÔLES.
-  // Départ : indigo-dark (mode courant « dark »).
+  // — Les 6 familles × les 2 modes, VIA LES CONTRÔLES.
+  // Départ : neutre-dark (mode courant « dark »).
+  // On relève aussi (bg, accent) pour PROUVER la distinction entre familles
+  // dans les DEUX modes (pas seulement la conformité aux valeurs attendues).
+  const seen = new Map();
   let mode = "dark";
   for (const family of FAMILIES) {
     await setFamily(page, family);
     s = await evaluate(READ_STATE);
     const expected = `${family}-${mode}`;
+    seen.set(expected, { bg: s.bg, accent: s.accent });
     check(`[${page}] select famille=${family} (mode conservé ${mode}) → ${expected}`,
       s.dataTheme === expected && s.stored === expected && s.bg === EXPECT_BG[expected] && s.selectValue === family,
       `dataTheme=${s.dataTheme} stored=${s.stored} --bg=${s.bg} select=${s.selectValue}`);
-    // Bascule du mode (famille conservée) — visite ainsi les 10 combinaisons.
+    // Bascule du mode (famille conservée) — visite ainsi les 12 combinaisons.
     await clickToggle();
     mode = mode === "dark" ? "light" : "dark";
     s = await evaluate(READ_STATE);
     const expected2 = `${family}-${mode}`;
+    seen.set(expected2, { bg: s.bg, accent: s.accent });
     check(`[${page}] bouton → mode ${mode} (famille conservée ${family}) → ${expected2}`,
       s.dataTheme === expected2 && s.stored === expected2 && s.bg === EXPECT_BG[expected2],
       `dataTheme=${s.dataTheme} stored=${s.stored} --bg=${s.bg}`);
@@ -231,8 +241,23 @@ for (const path of ["/", "/config"]) {
     check(`[${page}] aller-retour bouton → toujours ${family}-${mode}`,
       s.dataTheme === `${family}-${mode}` && s.stored === `${family}-${mode}`, s.dataTheme);
   }
+  // Distinction VISIBLE : les fonds ET les accents des 12 combinaisons sont
+  // deux à deux différents (aucune famille ne se confond, dans aucun mode).
+  const bgs = [...seen.values()].map((v) => v.bg);
+  const accents = [...seen.values()].map((v) => v.accent);
+  for (const m of MODES) {
+    const famBgs = FAMILIES.map((f) => seen.get(`${f}-${m}`)?.bg);
+    const famAccents = FAMILIES.map((f) => seen.get(`${f}-${m}`)?.accent);
+    check(`[${page}] mode ${m} : 6 fonds de famille deux à deux distincts`,
+      new Set(famBgs).size === FAMILIES.length, famBgs.join(" "));
+    check(`[${page}] mode ${m} : 6 accents de famille deux à deux distincts`,
+      new Set(famAccents).size === FAMILIES.length, famAccents.join(" "));
+  }
+  check(`[${page}] les 12 combinaisons sont deux à deux distinctes (bg + accent)`,
+    seen.size === 12 && new Set(bgs).size === 12 && new Set(accents).size === 12,
+    `presets=${seen.size} bgs=${new Set(bgs).size} accents=${new Set(accents).size}`);
 
-  // — Icône / aria du bouton selon le mode (état final de la boucle : amber-dark).
+  // — Icône / aria du bouton selon le mode (état final de la boucle : neutre-dark).
   check(`[${page}] bouton en mode sombre : icône lune + aria-pressed=true + libellé`,
     s.toggleHasMoon && s.togglePressed === "true" && s.toggleLabel === "Passer en mode clair",
     `moon=${s.toggleHasMoon} pressed=${s.togglePressed} label=${s.toggleLabel}`);
@@ -242,14 +267,14 @@ for (const path of ["/", "/config"]) {
     s.toggleHasSun && s.togglePressed === "false" && s.toggleLabel === "Passer en mode sombre",
     `sun=${s.toggleHasSun} pressed=${s.togglePressed} label=${s.toggleLabel}`);
 
-  // — Persistance : slate-light puis rechargement.
-  await setFamily(page, "slate"); // mode courant = light après le clic ci-dessus
+  // — Persistance : turquoise-light puis rechargement.
+  await setFamily(page, "turquoise"); // mode courant = light après le clic ci-dessus
   s = await evaluate(READ_STATE);
-  check(`[${page}] préparation persistance : slate-light`, s.dataTheme === "slate-light", s.dataTheme);
+  check(`[${page}] préparation persistance : turquoise-light`, s.dataTheme === "turquoise-light", s.dataTheme);
   await navigate(url);
   s = await evaluate(READ_STATE);
-  check(`[${page}] PERSISTANCE : après rechargement data-theme=slate-light`,
-    s.dataTheme === "slate-light" && s.stored === "slate-light" && s.bg === "#f4f6f8",
+  check(`[${page}] PERSISTANCE : après rechargement data-theme=turquoise-light`,
+    s.dataTheme === "turquoise-light" && s.stored === "turquoise-light" && s.bg === "#c3e2e8",
     `dataTheme=${s.dataTheme} stored=${s.stored} --bg=${s.bg}`);
 
   // — color-scheme effectif par mode.
@@ -257,7 +282,7 @@ for (const path of ["/", "/config"]) {
   await clickToggle();
   s = await evaluate(READ_STATE);
   check(`[${page}] color-scheme calculé = dark en mode sombre`, s.colorScheme.includes("dark"), s.colorScheme);
-  check(`[${page}] --ok = #4cc38a (slate-dark)`, s.ok === "#4cc38a", s.ok);
+  check(`[${page}] --ok = #4cc38a (turquoise-dark)`, s.ok === "#4cc38a", s.ok);
 
   // — Migration de l'ancienne préférence (même clé, réécriture).
   for (const [raw, expected] of MIGRATIONS) {
@@ -277,8 +302,8 @@ for (const path of ["/", "/config"]) {
   check(`[${page}] zéro <style> injecté (marqueur neutralisé), CSSOM --holaf-* actif`,
     s.styleElems === 0 && s.styleAttrs === 1 && s.holafSurface !== "",
     `style=${s.styleElems} attrs=${s.styleAttrs} holaf-surface=${s.holafSurface}`);
-  check(`[${page}] brique tokens active (v0.3.0) + 10 packs hôte yuki-*`,
-    s.holafVersion === "0.3.0" && s.holafPacks === 10 && (s.holafCurrent || "").startsWith("yuki-"),
+  check(`[${page}] brique tokens active (v0.4.1) + 12 packs hôte yuki-*`,
+    s.holafVersion === "0.4.1" && s.holafPacks === 12 && (s.holafCurrent || "").startsWith("yuki-"),
     `version=${s.holafVersion} packs=${s.holafPacks} courant=${s.holafCurrent}`);
 
   // — Pont holaf (page /config seulement) : le nom EXACT est transmis.
@@ -288,27 +313,27 @@ for (const path of ["/", "/config"]) {
       const original = window.HolafModal.setTheme.bind(window.HolafModal);
       window.HolafModal.setTheme = (p) => { calls.push(String(p)); return original(p); };
       const sel = document.getElementById("theme-family");
-      sel.value = "emerald";
+      sel.value = "emeraude";
       sel.dispatchEvent(new Event("change"));
       document.getElementById("theme-toggle").click();
       window.HolafModal.setTheme = original;
       return calls;
     })()`);
     check(`[config] pont HolafModal.setTheme appelé avec les noms exacts`,
-      Array.isArray(bridge) && bridge.includes("emerald-dark") && bridge.includes("emerald-light"),
+      Array.isArray(bridge) && bridge.includes("emeraude-dark") && bridge.includes("emeraude-light"),
       JSON.stringify(bridge));
   }
 
   // — Captures (état courant de la page, laissé par le scénario).
-  // Reset d'abord vers indigo-dark pour que les étiquettes soient exactes.
+  // Reset d'abord vers neutre-dark pour que les étiquettes soient exactes.
   await evaluate("localStorage.clear()");
   await navigate(url);
-  await shot(`${page}-indigo-dark`);
-  await setFamily(page, "emerald");
-  if ((await evaluate(READ_STATE)).dataTheme !== "emerald-light") await clickToggle();
+  await shot(`${page}-neutre-dark`);
+  await setFamily(page, "amethyste");
+  if ((await evaluate(READ_STATE)).dataTheme !== "amethyste-light") await clickToggle();
   s = await evaluate(READ_STATE);
-  check(`[${page}] capture emerald-light prête`, s.dataTheme === "emerald-light", s.dataTheme);
-  await shot(`${page}-emerald-light`);
+  check(`[${page}] capture amethyste-light prête`, s.dataTheme === "amethyste-light", s.dataTheme);
+  await shot(`${page}-amethyste-light`);
 }
 
 /* ═══════════════════════ Bilan CSP ═══════════════════════════════════════ */

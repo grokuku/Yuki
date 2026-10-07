@@ -2,8 +2,9 @@
  * Thème de l'UI Yuki (vanilla ESM, aucune chaîne de build) — modèle à DEUX AXES.
  *
  * Deux contrôles, deux rôles distincts :
- * - `#theme-family` (select) : la FAMILLE — indigo, midnight, slate, emerald,
- *   amber (libellés FR : Indigo, Nuit, Ardoise, Émeraude, Ambre) ;
+ * - `#theme-family` (select) : la FAMILLE — corail, ambre, emeraude,
+ *   turquoise, amethyste, neutre (libellés FR IDENTIQUES aux identifiants :
+ *   Corail, Ambre, Émeraude, Turquoise, Améthyste, Neutre) ;
  * - `#theme-toggle` (bouton) : le MODE clair↔sombre, en conservant la famille.
  *
  * Il n'existe PAS de mode « Système » : ni le select ni le moteur ne suivent
@@ -26,18 +27,21 @@
  *      `extends` le preset intégré `<famille>-<mode>` et ajoute les 3 dérivés
  *      propres à Yuki (`user`, `assistant`, `ok`, cf. `themes-data.js`) ;
  *   3. `HolafModal.setTheme("<famille>-<mode>")` — nom EXACT connu de la
- *      modale (holaf-modal 0.5.0).
+ *      modale (holaf-modal 0.6.1, catalogue V2 à 12 presets).
  *
  * ⚠️ Anti-flash : `data-theme` est déjà posé en dur dans le markup et les
  * alias portent leur repli → le PREMIER rendu est correct même avant que les
  * modules JS ne s'exécutent ; la brique ne fait ensuite que confirmer les
  * mêmes valeurs (aucun flash, aucune bascule visible).
  *
- * Migration (même clé, silencieuse) : les anciennes valeurs plates sont
- * mappées à la lecture — `dark` → `indigo-dark`, `light` → `indigo-light`,
- * `midnight` → `midnight-dark`, `slate` → `slate-dark` ; chaîne vide ou
- * inconnue → `indigo-dark` (défaut, aligné sur le markup). La valeur migrée
- * est réécrite dans la clé.
+ * Migration (même clé, silencieuse) : les anciennes valeurs mémorisées AVANT
+ * la refonte V2 (presets à 5 familles `indigo`/`midnight`/`slate`/`emerald`/
+ * `amber`, alias courts `dark`/`light`/`midnight`/`slate`) sont converties à
+ * la lecture via `HolafTokens.MIGRATIONS` (table exportée par la brique
+ * tokens 0.4.1), avec une table de repli statique si la brique n'a pas
+ * chargé ; chaîne vide ou valeur inconnue → `neutre-dark` (défaut, aligné sur
+ * le markup). La valeur migrée est réécrite dans la clé. Un utilisateur ne
+ * perd donc JAMAIS son thème et ne voit jamais de thème cassé.
  *
  * CSP (`style-src 'self'`) : AUCUN `<style>` n'est injecté — seul
  * `Element.setAttribute` / CSSOM (`setProperty` de la brique) est utilisé.
@@ -68,27 +72,59 @@ import { YUKI_THEME_DERIVED } from "./themes-data.js";
 const STORAGE_KEY = "yuki-theme";
 
 /** Familles du catalogue holaf-lib (axe 1) et modes (axe 2). */
-export const FAMILIES = ["indigo", "midnight", "slate", "emerald", "amber"];
+export const FAMILIES = ["corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"];
 const MODES = ["light", "dark"];
 
-/** Presets valides : les 10 combinaisons <famille>-<mode> (catalogue holaf). */
+/** Presets valides : les 12 combinaisons <famille>-<mode> (catalogue holaf). */
 const PRESETS = new Set(FAMILIES.flatMap((f) => MODES.map((m) => `${f}-${m}`)));
 
 /** Défaut : posé en dur dans le markup des deux pages (`data-theme`). */
-const DEFAULT_PRESET = "indigo-dark";
+const DEFAULT_PRESET = "neutre-dark";
 
-/** Préfixe des packs hôte Yuki (les 10 noms <fam>-<mode> sont RÉSERVÉS par la brique). */
+/** Préfixe des packs hôte Yuki (les 12 noms <fam>-<mode> sont RÉSERVÉS par la brique). */
 const PACK_PREFIX = "yuki-";
 
-/** Migration silencieuse : anciennes valeurs plates → <famille>-<mode>. */
-const LEGACY_MAP = new Map([
-  ["dark", "indigo-dark"],
-  ["light", "indigo-light"],
-  ["midnight", "midnight-dark"],
-  ["slate", "slate-dark"],
+/**
+ * Migration silencieuse : anciennes valeurs (V1) → <famille>-<mode> (V2).
+ *
+ * Source de vérité = `HolafTokens.MIGRATIONS` (table exportée par la brique
+ * tokens 0.4.1) : on la lit À LA LECTURE (jamais figée ici). Repli statique
+ * STRICTEMENT identique, utilisé seulement si la brique n'a pas chargé : on
+ * couvre les 10 anciens presets et les 4 alias courts. `emerald`/`amber`
+ * (alias courts jamais produits par l'UI) sont ajoutés par symétrie.
+ */
+const LEGACY_FALLBACK = new Map([
+  ["indigo-light", "amethyste-light"],
+  ["indigo-dark", "amethyste-dark"],
+  ["midnight-light", "amethyste-light"],
+  ["midnight-dark", "amethyste-dark"],
+  ["slate-light", "neutre-light"],
+  ["slate-dark", "neutre-dark"],
+  ["emerald-light", "emeraude-light"],
+  ["emerald-dark", "emeraude-dark"],
+  ["amber-light", "ambre-light"],
+  ["amber-dark", "ambre-dark"],
+  ["dark", "amethyste-dark"],
+  ["light", "amethyste-light"],
+  ["midnight", "amethyste-dark"],
+  ["slate", "neutre-dark"],
+  ["emerald", "emeraude-dark"],
+  ["amber", "ambre-dark"],
 ]);
 
-/** Preset courant : toujours une des 10 chaînes « <famille>-<mode> ». */
+/**
+ * Cible de migration d'une valeur stockée, ou `null`. Priorité à la table
+ * portée par la brique (`HolafTokens.MIGRATIONS`) ; repli statique sinon.
+ */
+export function legacyTarget(raw) {
+  if (typeof raw !== "string") return null;
+  const HT = tokensApi();
+  const table = HT && HT.MIGRATIONS;
+  if (table && typeof table[raw] === "string") return table[raw];
+  return LEGACY_FALLBACK.get(raw) ?? null;
+}
+
+/** Preset courant : toujours une des 12 chaînes « <famille>-<mode> ». */
 let current = DEFAULT_PRESET;
 
 /** Garde d'idempotence : `initTheme()` peut être appelé plusieurs fois. */
@@ -111,7 +147,7 @@ function packName(preset) {
 }
 
 /**
- * Enregistre (une fois) les 10 packs hôte Yuki dans la brique `tokens`.
+ * Enregistre (une fois) les 12 packs hôte Yuki dans la brique `tokens`.
  * Chaque pack `yuki-<fam>-<mode>` HÉRITE du preset intégré homonyme (toute la
  * palette standard) et n'ajoute QUE les 3 dérivés propres à Yuki (`user`,
  * `assistant`, `ok`). Registre VOLATILE de la brique : on (re)enregistre à
@@ -136,10 +172,11 @@ function registerYukiPacks() {
  * `migrated` (la valeur d'origine doit être RÉÉCRITE : ancien nom plat,
  * chaîne vide ou valeur inconnue trouvée dans le stockage).
  */
-function normalizeStored(raw) {
+export function normalizeStored(raw) {
   if (typeof raw === "string") {
     if (PRESETS.has(raw)) return { preset: raw, migrated: false };
-    if (LEGACY_MAP.has(raw)) return { preset: LEGACY_MAP.get(raw), migrated: true };
+    const target = legacyTarget(raw);
+    if (target && PRESETS.has(target)) return { preset: target, migrated: true };
     // Ancien « système » (chaîne vide) ou valeur inconnue : défaut explicite.
     return { preset: DEFAULT_PRESET, migrated: true };
   }
@@ -255,7 +292,9 @@ function syncControls() {
  * @param {{ persist?: boolean }} [opts]
  */
 export function setTheme(preset, opts = {}) {
-  current = PRESETS.has(preset) ? preset : DEFAULT_PRESET;
+  // Un ancien nom (V1) est migré au passage ; une valeur inconnue → défaut.
+  const migrated = PRESETS.has(preset) ? preset : legacyTarget(preset);
+  current = migrated && PRESETS.has(migrated) ? migrated : DEFAULT_PRESET;
   applyTheme(current);
   if (opts.persist !== false) writeStored(current);
   syncControls();

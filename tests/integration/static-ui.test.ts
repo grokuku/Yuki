@@ -221,17 +221,26 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
       const body = await (await fetch(`${baseUrl}${path}`)).text();
       // Premier paint correct sans script inline (CSP script-src 'self') :
       // data-theme est écrit dans la balise <html> elle-même.
-      expect(body, path).toMatch(/<html lang="fr" data-theme="indigo-dark">/);
+      expect(body, path).toMatch(/<html lang="fr" data-theme="neutre-dark">/);
     }
   });
 
-  it("propose les 5 familles, sans option « Système », sur les deux pages", async () => {
+  it("propose les 6 familles, sans option « Système », sur les deux pages", async () => {
     for (const path of ["/", "/config"]) {
       const body = await (await fetch(`${baseUrl}${path}`)).text();
       // Le select devient le sélecteur de FAMILLE (id + name explicites).
       expect(body, path).toContain('id="theme-family" name="theme-family"');
-      for (const slug of ["indigo", "midnight", "slate", "emerald", "amber"]) {
-        expect(body, path).toContain(`<option value="${slug}">`);
+      // 6 familles V2 ; libellés FR IDENTIQUES aux identifiants (le piège
+      // historique `slate`/« Ardoise » ne doit pas se reproduire).
+      for (const [slug, label] of [
+        ["corail", "Corail"],
+        ["ambre", "Ambre"],
+        ["emeraude", "Émeraude"],
+        ["turquoise", "Turquoise"],
+        ["amethyste", "Améthyste"],
+        ["neutre", "Neutre"],
+      ]) {
+        expect(body, path).toContain(`<option value="${slug}">${label}</option>`);
       }
       // Plus de mode « Système » DANS LE SÉLECTEUR DE THÈME — le mot est
       // désormais un ONGLET légitime de /config : on isole le <select>.
@@ -244,34 +253,39 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
     }
   });
 
-  it("themes.css décrit exactement les 10 presets <famille>-<mode>", async () => {
+  it("themes.css décrit exactement les 12 presets <famille>-<mode>", async () => {
     const css = await (await fetch(`${baseUrl}/ui/themes.css`)).text();
     const names = [
-      "indigo-light", "indigo-dark",
-      "midnight-light", "midnight-dark",
-      "slate-light", "slate-dark",
-      "emerald-light", "emerald-dark",
-      "amber-light", "amber-dark",
+      "corail-light", "corail-dark",
+      "ambre-light", "ambre-dark",
+      "emeraude-light", "emeraude-dark",
+      "turquoise-light", "turquoise-dark",
+      "amethyste-light", "amethyste-dark",
+      "neutre-light", "neutre-dark",
     ];
     for (const name of names) {
       expect(css).toContain(`:root[data-theme="${name}"]`);
     }
-    // Plus aucun nom de l'ancien modèle plat comme sélecteur.
-    for (const legacy of ["dark", "light", "midnight", "slate"]) {
+    // Plus aucun nom de l'ancien modèle (V1) comme sélecteur : ni les 5
+    // anciennes familles, ni les alias courts plats.
+    for (const legacy of ["dark", "light", "midnight", "slate", "indigo", "emerald", "amber"]) {
       expect(css).not.toContain(`:root[data-theme="${legacy}"]`);
     }
     // Le mode « système » n'existe plus : aucun @media prefers-color-scheme.
     expect(css).not.toContain("prefers-color-scheme");
     // Chaque preset pose son color-scheme (contrôles natifs cohérents).
-    expect(css.match(/color-scheme: (light|dark);/g)?.length).toBe(10);
+    expect(css.match(/color-scheme: (light|dark);/g)?.length).toBe(12);
 
     // DOCTRINE « alias + repli » : chaque variable de Yuki POINTE sur un token
     // --holaf-* posé au runtime par la brique, avec la valeur d'avant en 2e
     // argument de var() (repli → apparence identique si la brique manque).
+    // Les 4 paliers de profondeur sont explicitement aliasés (règle V2).
     for (const [cssVar, token] of [
       ["--bg", "--holaf-surface"],
       ["--panel", "--holaf-surface"],
       ["--panel-2", "--holaf-surface-elev"],
+      ["--panel-3", "--holaf-surface-raised"],
+      ["--panel-hover", "--holaf-surface-hover"],
       ["--border", "--holaf-border"],
       ["--text", "--holaf-text"],
       ["--muted", "--holaf-text-muted"],
@@ -292,12 +306,18 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
     expect(js).not.toContain("prefers-color-scheme");
     // Même clé de stockage + migration silencieuse des anciens noms plats.
     expect(js).toContain('"yuki-theme"');
-    expect(js).toContain('["dark", "indigo-dark"]');
-    expect(js).toContain('["light", "indigo-light"]');
-    expect(js).toContain('["midnight", "midnight-dark"]');
-    expect(js).toContain('["slate", "slate-dark"]');
+    // Migration portée par la brique V2 (table exportée) avec repli statique.
+    expect(js).toContain("HolafTokens.MIGRATIONS");
+    expect(js).toContain('["dark", "amethyste-dark"]');
+    expect(js).toContain('["light", "amethyste-light"]');
+    expect(js).toContain('["midnight", "amethyste-dark"]');
+    expect(js).toContain('["slate", "neutre-dark"]');
+    expect(js).toContain('["indigo-dark", "amethyste-dark"]');
+    expect(js).toContain('["emerald-light", "emeraude-light"]');
     // Le défaut est aligné sur le markup.
-    expect(js).toContain('DEFAULT_PRESET = "indigo-dark"');
+    expect(js).toContain('DEFAULT_PRESET = "neutre-dark"');
+    // Les 6 familles V2 (libellés = identifiants côté markup).
+    expect(js).toContain('["corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"]');
 
     // Source unique runtime : import PAR EFFET DE BORDÉ de la brique `tokens`
     // (0.3.0 n'a AUCUN export ESM nommé — un import nommé échouerait).
@@ -315,7 +335,7 @@ describe("Thème à deux axes (famille × mode) — assets et markup", () => {
 
   it("la copie vendorisée des briques `tokens`, `icons` et `modal` est bien la version pinnée", async () => {
     const manifest = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-manifest.json`)).json();
-    expect(manifest).toEqual({ fetch: "0.2.0", modal: "0.5.0", tokens: "0.3.0", icons: "0.1.5" });
+    expect(manifest).toEqual({ fetch: "0.2.0", modal: "0.6.1", tokens: "0.4.1", icons: "0.1.5" });
     const css = await (await fetch(`${baseUrl}/ui/vendor/holaf/holaf-modal.css`)).text();
     // Le CSS externe de la brique (extrait de getCss()) est bien servi.
     expect(css).toContain(".holaf-modal-overlay");

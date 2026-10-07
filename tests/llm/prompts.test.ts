@@ -50,6 +50,14 @@ describe("VOICE_SPEECH_INSTRUCTION — convention du bloc muet", () => {
     // Le texte décrit bien la convention à l'oral.
     expect(VOICE_SPEECH_INSTRUCTION).toMatch(/lue à voix haute/);
   });
+
+  it("pose un invariant NON AMBIGU : la réponse est toujours un texte visible", () => {
+    // Régression production : l'instruction ne doit plus pouvoir laisser croire
+    // que le bloc muet remplace la réponse.
+    expect(VOICE_SPEECH_INSTRUCTION).toMatch(/TOUJOURS par un texte visible/);
+    expect(VOICE_SPEECH_INSTRUCTION).toMatch(/ne remplace JAMAIS la r[ée]ponse/);
+    expect(VOICE_SPEECH_INSTRUCTION).toMatch(/ne renvoie jamais une r[ée]ponse sans texte/);
+  });
 });
 
 describe("condition réelle : `tts.enabled === \"on\"`", () => {

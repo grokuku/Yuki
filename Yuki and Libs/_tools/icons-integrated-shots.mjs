@@ -22,7 +22,7 @@ const BASE = process.argv[2] || "http://127.0.0.1:4173";
 const SHOTS = join(import.meta.dirname, "shots");
 mkdirSync(SHOTS, { recursive: true });
 
-const COMBOS = ["indigo-dark", "indigo-light", "emerald-dark", "emerald-light"];
+const COMBOS = ["amethyste-dark", "amethyste-light", "emeraude-dark", "emeraude-light"];
 
 const profileDir = mkdtempSync(join(tmpdir(), "yuki-e2e-icons-"));
 const chrome = spawn("/usr/bin/chromium", [

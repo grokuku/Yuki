@@ -1,0 +1,2805 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Yuki — direction C « neutre teinté maîtrisé + profondeur » (maquette hors production)</title>
+<style>
+/* ═══ Page de la maquette (neutre, SANS couleur de marque) ═══════════════ */
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 30px 34px 80px; max-width: 1720px;
+  background: #14161a; color: #e7eaf0;
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+h1 { font-size: 23px; margin: 0 0 8px; }
+h2 { font-size: 17px; margin: 40px 0 12px; border-top: 1px solid #2b2f36; padding-top: 22px; }
+p.lead { color: #a4acba; max-width: 120ch; margin: 8px 0 0; }
+p.lead b { color: #e7eaf0; }
+code { background: #22262d; border: 1px solid #2f3540; border-radius: 4px; padding: 0 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85em; }
+.note { color: #8b93a1; font-size: 12.5px; }
+
+/* Bandeau d'explication des deux correctifs. */
+.fixes { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-top: 18px; }
+.fix { border: 1px solid #2b2f36; border-radius: 12px; padding: 14px 16px; background: #191c21; }
+.fix h3 { margin: 0 0 6px; font-size: 14px; }
+.fix p { margin: 6px 0 0; color: #a4acba; }
+.fix b { color: #e7eaf0; }
+
+/* ═══ Thèmes : variables CSS par variante (data-theme) — aucun style inline ═══ */
+[data-theme="c-indigo-dark"] {
+  color-scheme: dark;
+  --on-accent: #101014;
+  --surface: #16171c;
+  --elev: #202127;
+  --raised: #2b2c34;
+  --hover: #363740;
+  --border: #474a55;
+  --text: #eff0f4;
+  --muted: #a6a9b4;
+  --accent: #6366f1;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #232741;
+  --assistant: #1a1c27;
+}
+[data-theme="c-indigo-light"] {
+  color-scheme: light;
+  --on-accent: #ffffff;
+  --surface: #e1e5fb;
+  --elev: #fefeff;
+  --raised: #d7dbf1;
+  --hover: #cdd1e7;
+  --border: #b7bcd5;
+  --text: #242630;
+  --muted: #535769;
+  --accent: #4f46e5;
+  --danger: #bf2020;
+  --ok: #276c4b;
+  --user: #c6cefa;
+  --assistant: #d8defb;
+}
+[data-theme="c-midnight-dark"] {
+  color-scheme: dark;
+  --on-accent: #101014;
+  --surface: #07080e;
+  --elev: #101119;
+  --raised: #191b24;
+  --hover: #242630;
+  --border: #353745;
+  --text: #eff0f4;
+  --muted: #a6a8b6;
+  --accent: #818cf8;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #1b1e35;
+  --assistant: #0d0e19;
+}
+[data-theme="c-midnight-light"] {
+  color-scheme: light;
+  --on-accent: #ffffff;
+  --surface: #c9cdde;
+  --elev: #fefeff;
+  --raised: #c0c3d4;
+  --hover: #b6baca;
+  --border: #a1a5b9;
+  --text: #242630;
+  --muted: #535769;
+  --accent: #5b63d3;
+  --danger: #a31919;
+  --ok: #226042;
+  --user: #b6bdde;
+  --assistant: #c3c8de;
+}
+[data-theme="c-slate-dark"] {
+  color-scheme: dark;
+  --on-accent: #101014;
+  --surface: #292b2f;
+  --elev: #34373b;
+  --raised: #3f4348;
+  --hover: #4a4f56;
+  --border: #5c626c;
+  --text: #eef0f4;
+  --muted: #a4aab2;
+  --accent: #94a3b8;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #3d4148;
+  --assistant: #2f3136;
+}
+[data-theme="c-slate-light"] {
+  color-scheme: light;
+  --on-accent: #ffffff;
+  --surface: #f0f3f6;
+  --elev: #fefefe;
+  --raised: #e6e9ec;
+  --hover: #dcdfe2;
+  --border: #c5cad1;
+  --text: #202730;
+  --muted: #4e5969;
+  --accent: #475569;
+  --danger: #cd2323;
+  --ok: #2c7853;
+  --user: #d3d8de;
+  --assistant: #e7eaef;
+}
+[data-theme="c-emerald-dark"] {
+  color-scheme: dark;
+  --on-accent: #101014;
+  --surface: #1b221f;
+  --elev: #252e29;
+  --raised: #2f3a34;
+  --hover: #39463f;
+  --border: #4a5952;
+  --text: #edf1ef;
+  --muted: #9fada6;
+  --accent: #34d399;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #264135;
+  --assistant: #1f2b25;
+}
+[data-theme="c-emerald-light"] {
+  color-scheme: light;
+  --on-accent: #ffffff;
+  --surface: #cce5d9;
+  --elev: #fdfffe;
+  --raised: #c3dbd0;
+  --hover: #b9d1c6;
+  --border: #a1beb0;
+  --text: #1d2a24;
+  --muted: #495e54;
+  --accent: #047857;
+  --danger: #bf2020;
+  --ok: #276c4b;
+  --user: #b1d3c3;
+  --assistant: #c3dfd2;
+}
+[data-theme="c-amber-dark"] {
+  color-scheme: dark;
+  --on-accent: #101014;
+  --surface: #120e06;
+  --elev: #1c180e;
+  --raised: #282217;
+  --hover: #332d21;
+  --border: #463f2f;
+  --text: #f2f0ec;
+  --muted: #b0a899;
+  --accent: #fbbf24;
+  --danger: #f87171;
+  --ok: #4cc38a;
+  --user: #392c0f;
+  --assistant: #1d1609;
+}
+[data-theme="c-amber-light"] {
+  color-scheme: light;
+  --on-accent: #ffffff;
+  --surface: #ead2c5;
+  --elev: #fefefe;
+  --raised: #e0c8bc;
+  --hover: #d6bfb2;
+  --border: #c5a99b;
+  --text: #2f241e;
+  --muted: #665349;
+  --accent: #b45309;
+  --danger: #b11c1c;
+  --ok: #226042;
+  --user: #e3beaa;
+  --assistant: #e8ccbd;
+}
+
+/* ═══ Accents : variables CSS par (variante × famille × mode) — data-accent ═══ */
+[data-accent="v0-indigo-dark"] {
+  color-scheme: dark;
+  --surface: #16171c;
+  --elev: #202127;
+  --raised: #2b2c34;
+  --border: #474a55;
+  --text: #eff0f4;
+  --muted: #a6a9b4;
+  --accent: #6366f1;
+  --on-accent: #ffffff;
+}
+[data-accent="v0-midnight-dark"] {
+  color-scheme: dark;
+  --surface: #07080e;
+  --elev: #101119;
+  --raised: #191b24;
+  --border: #353745;
+  --text: #eff0f4;
+  --muted: #a6a8b6;
+  --accent: #818cf8;
+  --on-accent: #0b0b12;
+}
+[data-accent="v0-slate-dark"] {
+  color-scheme: dark;
+  --surface: #292b2f;
+  --elev: #34373b;
+  --raised: #3f4348;
+  --border: #5c626c;
+  --text: #eef0f4;
+  --muted: #a4aab2;
+  --accent: #94a3b8;
+  --on-accent: #0b0b12;
+}
+[data-accent="v0-emerald-dark"] {
+  color-scheme: dark;
+  --surface: #1b221f;
+  --elev: #252e29;
+  --raised: #2f3a34;
+  --border: #4a5952;
+  --text: #edf1ef;
+  --muted: #9fada6;
+  --accent: #34d399;
+  --on-accent: #0b0b12;
+}
+[data-accent="v0-amber-dark"] {
+  color-scheme: dark;
+  --surface: #120e06;
+  --elev: #1c180e;
+  --raised: #282217;
+  --border: #463f2f;
+  --text: #f2f0ec;
+  --muted: #b0a899;
+  --accent: #fbbf24;
+  --on-accent: #0b0b12;
+}
+[data-accent="v0-indigo-light"] {
+  color-scheme: light;
+  --surface: #e1e5fb;
+  --elev: #fefeff;
+  --raised: #d7dbf1;
+  --border: #b7bcd5;
+  --text: #242630;
+  --muted: #535769;
+  --accent: #4f46e5;
+  --on-accent: #ffffff;
+}
+[data-accent="v0-midnight-light"] {
+  color-scheme: light;
+  --surface: #c9cdde;
+  --elev: #fefeff;
+  --raised: #c0c3d4;
+  --border: #a1a5b9;
+  --text: #242630;
+  --muted: #535769;
+  --accent: #5b63d3;
+  --on-accent: #ffffff;
+}
+[data-accent="v0-slate-light"] {
+  color-scheme: light;
+  --surface: #f0f3f6;
+  --elev: #fefefe;
+  --raised: #e6e9ec;
+  --border: #c5cad1;
+  --text: #202730;
+  --muted: #4e5969;
+  --accent: #475569;
+  --on-accent: #ffffff;
+}
+[data-accent="v0-emerald-light"] {
+  color-scheme: light;
+  --surface: #cce5d9;
+  --elev: #fdfffe;
+  --raised: #c3dbd0;
+  --border: #a1beb0;
+  --text: #1d2a24;
+  --muted: #495e54;
+  --accent: #047857;
+  --on-accent: #ffffff;
+}
+[data-accent="v0-amber-light"] {
+  color-scheme: light;
+  --surface: #ead2c5;
+  --elev: #fefefe;
+  --raised: #e0c8bc;
+  --border: #c5a99b;
+  --text: #2f241e;
+  --muted: #665349;
+  --accent: #b45309;
+  --on-accent: #ffffff;
+}
+[data-accent="v1-indigo-dark"] {
+  color-scheme: dark;
+  --surface: #16171c;
+  --elev: #202127;
+  --raised: #2b2c34;
+  --border: #474a55;
+  --text: #eff0f4;
+  --muted: #a6a9b4;
+  --accent: #a890fe;
+  --on-accent: #0b0b12;
+}
+[data-accent="v1-midnight-dark"] {
+  color-scheme: dark;
+  --surface: #07080e;
+  --elev: #101119;
+  --raised: #191b24;
+  --border: #353745;
+  --text: #eff0f4;
+  --muted: #a6a8b6;
+  --accent: #5ea8f9;
+  --on-accent: #0b0b12;
+}
+[data-accent="v1-slate-dark"] {
+  color-scheme: dark;
+  --surface: #292b2f;
+  --elev: #34373b;
+  --raised: #3f4348;
+  --border: #5c626c;
+  --text: #eef0f4;
+  --muted: #a4aab2;
+  --accent: #8fb0c8;
+  --on-accent: #0b0b12;
+}
+[data-accent="v1-emerald-dark"] {
+  color-scheme: dark;
+  --surface: #1b221f;
+  --elev: #252e29;
+  --raised: #2f3a34;
+  --border: #4a5952;
+  --text: #edf1ef;
+  --muted: #9fada6;
+  --accent: #4fcc92;
+  --on-accent: #0b0b12;
+}
+[data-accent="v1-amber-dark"] {
+  color-scheme: dark;
+  --surface: #120e06;
+  --elev: #1c180e;
+  --raised: #282217;
+  --border: #463f2f;
+  --text: #f2f0ec;
+  --muted: #b0a899;
+  --accent: #f1ab34;
+  --on-accent: #0b0b12;
+}
+[data-accent="v1-indigo-light"] {
+  color-scheme: light;
+  --surface: #e1e5fb;
+  --elev: #fefeff;
+  --raised: #d7dbf1;
+  --border: #b7bcd5;
+  --text: #242630;
+  --muted: #535769;
+  --accent: #642cc8;
+  --on-accent: #ffffff;
+}
+[data-accent="v1-midnight-light"] {
+  color-scheme: light;
+  --surface: #c9cdde;
+  --elev: #fefeff;
+  --raised: #c0c3d4;
+  --border: #a1a5b9;
+  --text: #242630;
+  --muted: #535769;
+  --accent: #015093;
+  --on-accent: #ffffff;
+}
+[data-accent="v1-slate-light"] {
+  color-scheme: light;
+  --surface: #f0f3f6;
+  --elev: #fefefe;
+  --raised: #e6e9ec;
+  --border: #c5cad1;
+  --text: #202730;
+  --muted: #4e5969;
+  --accent: #345a73;
+  --on-accent: #ffffff;
+}
+[data-accent="v1-emerald-light"] {
+  color-scheme: light;
+  --surface: #cce5d9;
+  --elev: #fdfffe;
+  --raised: #c3dbd0;
+  --border: #a1beb0;
+  --text: #1d2a24;
+  --muted: #495e54;
+  --accent: #056641;
+  --on-accent: #ffffff;
+}
+[data-accent="v1-amber-light"] {
+  color-scheme: light;
+  --surface: #ead2c5;
+  --elev: #fefefe;
+  --raised: #e0c8bc;
+  --border: #c5a99b;
+  --text: #2f241e;
+  --muted: #665349;
+  --accent: #764f01;
+  --on-accent: #ffffff;
+}
+[data-accent="v2-corail-dark"] {
+  color-scheme: dark;
+  --surface: #36252c;
+  --elev: #433037;
+  --raised: #503b43;
+  --border: #735963;
+  --text: #f4eef0;
+  --muted: #bca1ab;
+  --accent: #fa7fb5;
+  --on-accent: #0b0b12;
+}
+[data-accent="v2-ambre-dark"] {
+  color-scheme: dark;
+  --surface: #0c0400;
+  --elev: #170b02;
+  --raised: #221508;
+  --border: #42301f;
+  --text: #f3efec;
+  --muted: #b9a593;
+  --accent: #f29a2d;
+  --on-accent: #0b0b12;
+}
+[data-accent="v2-emeraude-dark"] {
+  color-scheme: dark;
+  --surface: #081005;
+  --elev: #111b0d;
+  --raised: #1a2617;
+  --border: #354430;
+  --text: #eef1ed;
+  --muted: #9faf9a;
+  --accent: #7fc765;
+  --on-accent: #0b0b12;
+}
+[data-accent="v2-turquoise-dark"] {
+  color-scheme: dark;
+  --surface: #051a1e;
+  --elev: #0e2529;
+  --raised: #183135;
+  --border: #315056;
+  --text: #ecf1f2;
+  --muted: #91b0b5;
+  --accent: #0ec7de;
+  --on-accent: #0b0b12;
+}
+[data-accent="v2-amethyste-dark"] {
+  color-scheme: dark;
+  --surface: #1e1f2e;
+  --elev: #292a3a;
+  --raised: #343547;
+  --border: #52536b;
+  --text: #eff0f4;
+  --muted: #a5a7bf;
+  --accent: #a1a3ff;
+  --on-accent: #0b0b12;
+}
+[data-accent="v2-neutre-dark"] {
+  color-scheme: dark;
+  --surface: #343537;
+  --elev: #3f4144;
+  --raised: #4a4d51;
+  --border: #686e75;
+  --text: #edf0f4;
+  --muted: #a5aaaf;
+  --accent: #aeb1b5;
+  --on-accent: #0b0b12;
+}
+[data-accent="v2-corail-light"] {
+  color-scheme: light;
+  --surface: #ffe3ed;
+  --elev: #fefefe;
+  --raised: #f5d9e3;
+  --border: #d9b9c4;
+  --text: #2f2227;
+  --muted: #665159;
+  --accent: #9c045e;
+  --on-accent: #ffffff;
+}
+[data-accent="v2-ambre-light"] {
+  color-scheme: light;
+  --surface: #dcc8b5;
+  --elev: #fefefe;
+  --raised: #d2bfac;
+  --border: #b6a08b;
+  --text: #2d251c;
+  --muted: #645547;
+  --accent: #7a4800;
+  --on-accent: #ffffff;
+}
+[data-accent="v2-emeraude-light"] {
+  color-scheme: light;
+  --surface: #c9dac4;
+  --elev: #fdfffc;
+  --raised: #c0d0bb;
+  --border: #a0b29a;
+  --text: #22291f;
+  --muted: #505c4c;
+  --accent: #276701;
+  --on-accent: #ffffff;
+}
+[data-accent="v2-turquoise-light"] {
+  color-scheme: light;
+  --surface: #c3e2e8;
+  --elev: #fdffff;
+  --raised: #b9d9de;
+  --border: #97bbc2;
+  --text: #1b292c;
+  --muted: #455d61;
+  --accent: #07606c;
+  --on-accent: #ffffff;
+}
+[data-accent="v2-amethyste-light"] {
+  color-scheme: light;
+  --surface: #dfe1fa;
+  --elev: #fefefe;
+  --raised: #d6d8f0;
+  --border: #b6b9d5;
+  --text: #252530;
+  --muted: #555669;
+  --accent: #4d41b0;
+  --on-accent: #ffffff;
+}
+[data-accent="v2-neutre-light"] {
+  color-scheme: light;
+  --surface: #f2f4f5;
+  --elev: #fefeff;
+  --raised: #e8eaeb;
+  --border: #c6cbd0;
+  --text: #1f2730;
+  --muted: #4c5a69;
+  --accent: #515457;
+  --on-accent: #ffffff;
+}
+[data-accent="v3-corail-dark"] {
+  color-scheme: dark;
+  --surface: #36252c;
+  --elev: #433037;
+  --raised: #503b43;
+  --border: #735963;
+  --text: #f4eef0;
+  --muted: #bca1ab;
+  --accent: #f38ba8;
+  --on-accent: #0b0b12;
+}
+[data-accent="v3-ambre-dark"] {
+  color-scheme: dark;
+  --surface: #0c0400;
+  --elev: #170b02;
+  --raised: #221508;
+  --border: #42301f;
+  --text: #f3efec;
+  --muted: #b9a593;
+  --accent: #f9e2af;
+  --on-accent: #0b0b12;
+}
+[data-accent="v3-emeraude-dark"] {
+  color-scheme: dark;
+  --surface: #081005;
+  --elev: #111b0d;
+  --raised: #1a2617;
+  --border: #354430;
+  --text: #eef1ed;
+  --muted: #9faf9a;
+  --accent: #a6e3a1;
+  --on-accent: #0b0b12;
+}
+[data-accent="v3-turquoise-dark"] {
+  color-scheme: dark;
+  --surface: #051a1e;
+  --elev: #0e2529;
+  --raised: #183135;
+  --border: #315056;
+  --text: #ecf1f2;
+  --muted: #91b0b5;
+  --accent: #74c7ec;
+  --on-accent: #0b0b12;
+}
+[data-accent="v3-amethyste-dark"] {
+  color-scheme: dark;
+  --surface: #1e1f2e;
+  --elev: #292a3a;
+  --raised: #343547;
+  --border: #52536b;
+  --text: #eff0f4;
+  --muted: #a5a7bf;
+  --accent: #cba6f7;
+  --on-accent: #0b0b12;
+}
+[data-accent="v3-neutre-dark"] {
+  color-scheme: dark;
+  --surface: #343537;
+  --elev: #3f4144;
+  --raised: #4a4d51;
+  --border: #686e75;
+  --text: #edf0f4;
+  --muted: #a5aaaf;
+  --accent: #9a9eb2;
+  --on-accent: #0b0b12;
+}
+[data-accent="v3-corail-light"] {
+  color-scheme: light;
+  --surface: #ffe3ed;
+  --elev: #fefefe;
+  --raised: #f5d9e3;
+  --border: #d9b9c4;
+  --text: #2f2227;
+  --muted: #665159;
+  --accent: #d20f39;
+  --on-accent: #ffffff;
+}
+[data-accent="v3-ambre-light"] {
+  color-scheme: light;
+  --surface: #dcc8b5;
+  --elev: #fefefe;
+  --raised: #d2bfac;
+  --border: #b6a08b;
+  --text: #2d251c;
+  --muted: #645547;
+  --accent: #76490a;
+  --on-accent: #ffffff;
+}
+[data-accent="v3-emeraude-light"] {
+  color-scheme: light;
+  --surface: #c9dac4;
+  --elev: #fdfffc;
+  --raised: #c0d0bb;
+  --border: #a0b29a;
+  --text: #22291f;
+  --muted: #505c4c;
+  --accent: #266618;
+  --on-accent: #ffffff;
+}
+[data-accent="v3-turquoise-light"] {
+  color-scheme: light;
+  --surface: #c3e2e8;
+  --elev: #fdffff;
+  --raised: #b9d9de;
+  --border: #97bbc2;
+  --text: #1b292c;
+  --muted: #455d61;
+  --accent: #126b7a;
+  --on-accent: #ffffff;
+}
+[data-accent="v3-amethyste-light"] {
+  color-scheme: light;
+  --surface: #dfe1fa;
+  --elev: #fefefe;
+  --raised: #d6d8f0;
+  --border: #b6b9d5;
+  --text: #252530;
+  --muted: #555669;
+  --accent: #7f35df;
+  --on-accent: #ffffff;
+}
+[data-accent="v3-neutre-light"] {
+  color-scheme: light;
+  --surface: #f2f4f5;
+  --elev: #fefeff;
+  --raised: #e8eaeb;
+  --border: #c6cbd0;
+  --text: #1f2730;
+  --muted: #4c5a69;
+  --accent: #6b6d7c;
+  --on-accent: #ffffff;
+}
+
+/* ═══ Mini-écran — mêmes règles pour TOUS les thèmes ; seuls les var changent ═══ */
+.family { margin: 0; border: 1px solid #2b2f36; border-radius: 14px; padding: 12px; background: #191c21; }
+.family__cap { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.family__name { font-weight: 700; font-size: 15px; }
+.family__mode { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8b93a1;
+  border: 1px solid #2f3540; border-radius: 999px; padding: 1px 8px; }
+.family__hex { color: #7f8794; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; margin-left: auto; }
+
+.screen { border-radius: 11px; overflow: hidden; border: 1px solid var(--border); }
+.app { display: flex; flex-direction: column; background: var(--surface); color: var(--text); font-size: 13px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 14px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.brand { font-weight: 700; letter-spacing: .02em; }
+.status { display: flex; gap: 6px; align-items: center; }
+.pill { font-size: 11px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--elev); color: var(--muted); }
+.pill--accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.badge { font-size: 10.5px; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); }
+.badge--ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+.badge--warn { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.conversation { display: flex; flex-direction: column; gap: 10px; padding: 14px; background: var(--surface); }
+
+/* La CARTE porte le 2ᵉ niveau (surface-elev) posé sur le fond (surface). */
+.card { background: var(--elev); border: 1px solid var(--border); border-radius: 11px; padding: 12px 14px; }
+.card__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.card__title { margin: 0; font-size: 14px; }
+.normal { margin: 7px 0 2px; }
+.muted { margin: 2px 0 8px; color: var(--muted); }
+/* Le BLOC IMBRIQUÉ porte le 3ᵉ niveau (surface-raised) posé sur la carte. */
+.raised { background: var(--raised); border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; margin: 8px 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 4px; }
+.chip { font-size: 11px; padding: 3px 10px; border-radius: 6px; border: 1px solid var(--border); }
+.chip--hover { background: var(--hover); }
+.chip--border { background: transparent; }
+.link-line { margin: 6px 0 0; }
+.link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.msg { max-width: 84%; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--border); }
+.msg p { margin: 3px 0 0; }
+.msg__who { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.msg--assistant { align-self: flex-start; background: var(--assistant); }
+.msg--user { align-self: flex-end; background: var(--user); }
+.composer { display: flex; gap: 8px; align-items: center; padding: 11px 14px;
+  background: var(--surface); border-top: 1px solid var(--border); }
+.field { flex: 1; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--elev); color: var(--muted); }
+.button { padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+
+/* Petite étiquette monospace qui ANNOTE le niveau de surface en place. */
+.lvl-tag { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10px;
+  color: var(--muted); border: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 5px; padding: 1px 6px; }
+
+/* Audit WCAG sous chaque écran. */
+.audit { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 11.5px; color: #9aa2af; }
+.audit .ok { color: #7fd6a3; }
+.audit .ko { color: #ff9d9d; }
+.audit .info { color: #9aa2af; }
+
+/* Grille des écrans : GRAND (2 colonnes sur large). */
+.screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 20px; margin-top: 16px; }
+
+/* Échelle de profondeur. */
+.ladders { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 14px; }
+.ladder { border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--surface); color: var(--text); }
+.ladder__head { font-weight: 700; margin-bottom: 8px; }
+.step { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 8px; margin: 5px 0; }
+.step__sw { width: 40px; height: 26px; border-radius: 6px; border: 1px solid var(--border); flex: none; }
+.step__sw--surface { background: var(--surface); }
+.step__sw--elev { background: var(--elev); }
+.step__sw--raised { background: var(--raised); }
+.step__sw--hover { background: var(--hover); }
+.step__txt { display: flex; align-items: baseline; gap: 8px; flex: 1; }
+.step__txt code { background: transparent; border: none; color: var(--muted); }
+.step__d { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+/* Bandeau de distinction entre familles. */
+.ds-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 12px; }
+.ds { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--surface);
+  color: var(--text);
+  display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.ds__sw--bg { width: 100%; height: 72px; border-radius: 8px; background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.ds__lab { font-weight: 700; }
+.ds code { background: transparent; border: none; color: var(--muted); }
+.ds__acc { width: 100%; height: 10px; border-radius: 5px; background: var(--accent); }
+
+/* ═══ Basculeur clair/sombre CSS PUR (checkbox + :checked), SANS JS ═════════ */
+.toggle-bar { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  border: 1px solid #2f3540; border-radius: 999px; padding: 7px 14px; background: #22262d; color: #e7eaf0;
+  font-weight: 600; }
+.toggle__knob { width: 30px; height: 16px; border-radius: 999px; background: #3a4150; position: relative; }
+.toggle__knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+  border-radius: 50%; background: #e7eaf0; transition: left .15s ease; }
+.toggle-bar .on-light { display: none; }
+#mode-toggle:checked ~ .toggle-bar .on-dark { display: none; }
+#mode-toggle:checked ~ .toggle-bar .on-light { display: inline; }
+#mode-toggle:checked ~ .toggle-bar .toggle__knob::after { left: 16px; background: var(--accent, #e7eaf0); }
+.screen-tog--light { display: none; }
+#mode-toggle:checked ~ .toggle-demo .screen-tog--dark { display: none; }
+#mode-toggle:checked ~ .toggle-demo .screen-tog--light { display: block; }
+.toggle-demo { display: block; margin-top: 10px; max-width: 760px; }
+
+/* ═══ Section ACCENTS : comparaison côte à côte des jeux d'accents ═════════ */
+.av-block { border: 1px solid #2b2f36; border-radius: 14px; padding: 14px 16px; margin-top: 16px; background: #191c21; }
+.av-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.av-title h3 { margin: 0; font-size: 16px; }
+.rec { font-size: 11px; font-weight: 700; color: #0b0b12; background: #7fd6a3; border-radius: 999px; padding: 1px 9px; }
+.nonconf { font-size: 11px; font-weight: 700; color: #101014; background: #ffb4b4; border-radius: 999px; padding: 1px 9px; }
+.av-tag { color: #8b93a1; font-size: 12.5px; }
+.av-idea { color: #a4acba; margin: 8px 0 10px; max-width: 150ch; }
+.av-idea b { color: #e7eaf0; }
+.av-notes { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: #9aa2af; margin-bottom: 10px; }
+.av-notes b { color: #e7eaf0; }
+.av-table { border-collapse: collapse; margin: 4px 0 12px; font-size: 12px; }
+.av-table th, .av-table td { border: 1px solid #2f3540; padding: 3px 9px; text-align: left; }
+.av-table thead th { color: #8b93a1; font-weight: 600; }
+.av-table tbody th { color: #c3cad6; font-weight: 500; }
+.av-table .ok { color: #7fd6a3; } .av-table .ko { color: #ff9d9d; }
+.av-sw { display: inline-block; width: 34px; height: 18px; border-radius: 5px; border: 1px solid #3a4150; background: var(--accent); vertical-align: middle; }
+.av-mode { margin-top: 12px; }
+.av-mode__head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8b93a1; margin-bottom: 6px; }
+.av-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.av-card { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--surface); color: var(--text); }
+.av-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.av-head code { background: transparent; border: none; color: var(--muted); }
+.av-rep { font-size: 10.5px; color: #ffbf7a; border: 1px dashed #6b5a3a; border-radius: 5px; padding: 0 5px; }
+.av-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.av-btn { padding: 7px 13px; border-radius: 8px; border: 1px solid var(--border); background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; cursor: pointer; }
+.av-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.av-badge { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); }
+.av-focus { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--elev);
+  outline: 2px solid var(--accent); outline-offset: 2px; }
+.av-tab { padding: 5px 11px; border-radius: 6px 6px 0 0; border-bottom: 2px solid var(--accent); color: var(--accent); background: var(--elev); }
+.av-ro { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; color: var(--muted); }
+.av-ro .ok { color: #7fd6a3; }
+.av-ro .ko { color: #ff9d9d; }
+
+footer { margin-top: 46px; border-top: 1px solid #2b2f36; padding-top: 16px; color: #8b93a1; font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <h1>Yuki — direction C « neutre teinté maîtrisé + profondeur »</h1>
+  <p class="lead">
+    Maquette <b>hors production</b>, focalisée sur la direction <b>C</b> seule, pour la juger
+    <b>en grand</b>. Cinq familles (<b>Indigo, Nuit, Ardoise, Émeraude, Ambre</b>) × deux modes
+    (sombre dominant / clair), un <b>écran complet</b> par famille. Le HTML est <b>autonome</b> :
+    aucune image, aucun script, aucune ressource externe — thème par <code>data-theme</code> +
+    variables CSS, aucun style en ligne.
+  </p>
+
+  <div class="fixes">
+    <div class="fix">
+      <h3>Correctif 1 — neutre teinté maîtrisé</h3>
+      <p>L'accent est conservé <b>à l'identique</b> (graines de <code>themes.css</code>), mais les
+      surfaces passent à un <b>chroma OKLCH très faible</b> (sombre : 0,007–0,017 ; clair : ≤ 0,032) :
+      le fond redevient quasi neutre et l'accent ressort. Résultat : <b>plus d'effet « même teinte sur
+      toute la page »</b>.</p>
+    </div>
+    <div class="fix">
+      <h3>Correctif 2 — profondeur (3 niveaux + survol)</h3>
+      <p>Là où Yuki n'utilise que 2 niveaux, la direction C en pose <b>3 réels</b> + le survol :
+      <code>surface</code> (fond) → <code>surface-elev</code> (carte) → <code>surface-raised</code>
+      (bloc imbriqué) → <code>hover</code>. Chaque palier est <b>annoté et mesuré</b> (ΔEok).</p>
+    </div>
+    <div class="fix">
+      <h3>Correctif 3 — familles distinctes DANS LES DEUX modes</h3>
+      <p>Chaque famille a sa <b>propre clarté de fond</b> : mêmes teintes ou presque (Indigo/Nuit),
+      mais des <code>--surface</code> visiblement différents. Mesure ΔEok fond min —
+      <b>sombre 0.042</b> (Indigo↔Émeraude, OK),
+      <b>clair 0.045</b> (Indigo↔Ardoise, OK) —
+      seuil 0.040 = 2× le juste-perceptible 0,020.</p>
+    </div>
+    <div class="fix">
+      <h3>Correctif 4 — garde automatique (build cassé si redondance)</h3>
+      <p>La <b>règle de non-redondance</b> (fond ΔEok ≥ 0.04, accent ≥ 0.02,
+      profondeur ≥ 0.02) est <b>vérifiée séparément par mode</b> et le générateur
+      <b>échoue (exit 1)</b> sinon. Preuve de non-vacuité : <code>--selftest-redundant</code>.
+      Accents <b>inchangés</b>.</p>
+    </div>
+  </div>
+
+  <h2>1 · Les 5 familles en grand — mode sombre (dominant)</h2>
+  <p class="lead">Un écran complet par famille. Comparer les fonds et les accents d'un écran à l'autre :
+  Ardoise (plus clair, gris-bleu) ≠ Indigo ≠ Nuit (le plus sombre) ≠ Émeraude ≠ Ambre.</p>
+  <div class="screens">
+    
+  <figure class="family" data-theme="c-indigo-dark" data-mode="dark">
+    <figcaption class="family__cap">
+      <span class="family__name">Indigo</span>
+      <span class="family__mode">sombre</span>
+      <span class="family__hex">fond #16171c · carte #202127 · accent #6366f1</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-indigo-dark" data-mode="dark">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">15.71:1</span></span>
+      <span>texte/carte <span class="ok">14.10:1</span></span>
+      <span>atténué/fond <span class="ok">7.63:1</span></span>
+      <span>bouton/accent <span class="ko">4.25:1</span></span>
+      <span>ok/fond <span class="ok">8.08:1</span></span>
+      <span>bordure/fond <span class="info">2.03:1</span></span>
+      <span>danger/fond <span class="ok">6.47:1</span></span>
+    </div>
+  </figure>
+
+  <figure class="family" data-theme="c-midnight-dark" data-mode="dark">
+    <figcaption class="family__cap">
+      <span class="family__name">Nuit</span>
+      <span class="family__mode">sombre</span>
+      <span class="family__hex">fond #07080e · carte #101119 · accent #818cf8</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-midnight-dark" data-mode="dark">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">17.56:1</span></span>
+      <span>texte/carte <span class="ok">16.52:1</span></span>
+      <span>atténué/fond <span class="ok">8.47:1</span></span>
+      <span>bouton/accent <span class="ok">6.36:1</span></span>
+      <span>ok/fond <span class="ok">9.03:1</span></span>
+      <span>bordure/fond <span class="info">1.70:1</span></span>
+      <span>danger/fond <span class="ok">7.23:1</span></span>
+    </div>
+  </figure>
+
+  <figure class="family" data-theme="c-slate-dark" data-mode="dark">
+    <figcaption class="family__cap">
+      <span class="family__name">Ardoise</span>
+      <span class="family__mode">sombre</span>
+      <span class="family__hex">fond #292b2f · carte #34373b · accent #94a3b8</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-slate-dark" data-mode="dark">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">12.43:1</span></span>
+      <span>texte/carte <span class="ok">10.48:1</span></span>
+      <span>atténué/fond <span class="ok">6.06:1</span></span>
+      <span>bouton/accent <span class="ok">7.40:1</span></span>
+      <span>ok/fond <span class="ok">6.40:1</span></span>
+      <span>bordure/fond <span class="info">2.31:1</span></span>
+      <span>danger/fond <span class="ok">5.13:1</span></span>
+    </div>
+  </figure>
+
+  <figure class="family" data-theme="c-emerald-dark" data-mode="dark">
+    <figcaption class="family__cap">
+      <span class="family__name">Émeraude</span>
+      <span class="family__mode">sombre</span>
+      <span class="family__hex">fond #1b221f · carte #252e29 · accent #34d399</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-emerald-dark" data-mode="dark">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">14.23:1</span></span>
+      <span>texte/carte <span class="ok">12.27:1</span></span>
+      <span>atténué/fond <span class="ok">6.95:1</span></span>
+      <span>bouton/accent <span class="ok">9.87:1</span></span>
+      <span>ok/fond <span class="ok">7.32:1</span></span>
+      <span>bordure/fond <span class="info">2.19:1</span></span>
+      <span>danger/fond <span class="ok">5.86:1</span></span>
+    </div>
+  </figure>
+
+  <figure class="family" data-theme="c-amber-dark" data-mode="dark">
+    <figcaption class="family__cap">
+      <span class="family__name">Ambre</span>
+      <span class="family__mode">sombre</span>
+      <span class="family__hex">fond #120e06 · carte #1c180e · accent #fbbf24</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-amber-dark" data-mode="dark">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">16.91:1</span></span>
+      <span>texte/carte <span class="ok">15.55:1</span></span>
+      <span>atténué/fond <span class="ok">8.16:1</span></span>
+      <span>bouton/accent <span class="ok">11.37:1</span></span>
+      <span>ok/fond <span class="ok">8.69:1</span></span>
+      <span>bordure/fond <span class="info">1.84:1</span></span>
+      <span>danger/fond <span class="ok">6.96:1</span></span>
+    </div>
+  </figure>
+  </div>
+
+  <h2>2 · Profondeur rendue visible — les 4 niveaux de surface</h2>
+  <p class="lead">Empilement réel : chaque palier est mesuré par sa distance perceptuelle (ΔEok) au
+  palier inférieur. Un Δ ≈ 0,02 est déjà <b>juste perceptible</b> ; ici les paliers visent nettement plus.</p>
+  <div class="ladders">
+    
+  <div class="ladder" data-theme="c-indigo-dark" data-mode="dark">
+    <div class="ladder__head">Indigo · sombre</div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--surface"></span>
+      <span class="step__txt"><b>surface</b><code>#16171c</code></span>
+      
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--elev"></span>
+      <span class="step__txt"><b>surface-elev</b><code>#202127</code></span>
+      <span class="step__d">Δ 0.044</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--raised"></span>
+      <span class="step__txt"><b>surface-raised</b><code>#2b2c34</code></span>
+      <span class="step__d">Δ 0.046</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--hover"></span>
+      <span class="step__txt"><b>hover</b><code>#363740</code></span>
+      <span class="step__d">Δ 0.044</span>
+    </div>
+  </div>
+
+  <div class="ladder" data-theme="c-midnight-dark" data-mode="dark">
+    <div class="ladder__head">Nuit · sombre</div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--surface"></span>
+      <span class="step__txt"><b>surface</b><code>#07080e</code></span>
+      
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--elev"></span>
+      <span class="step__txt"><b>surface-elev</b><code>#101119</code></span>
+      <span class="step__d">Δ 0.044</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--raised"></span>
+      <span class="step__txt"><b>surface-raised</b><code>#191b24</code></span>
+      <span class="step__d">Δ 0.044</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--hover"></span>
+      <span class="step__txt"><b>hover</b><code>#242630</code></span>
+      <span class="step__d">Δ 0.047</span>
+    </div>
+  </div>
+
+  <div class="ladder" data-theme="c-slate-dark" data-mode="dark">
+    <div class="ladder__head">Ardoise · sombre</div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--surface"></span>
+      <span class="step__txt"><b>surface</b><code>#292b2f</code></span>
+      
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--elev"></span>
+      <span class="step__txt"><b>surface-elev</b><code>#34373b</code></span>
+      <span class="step__d">Δ 0.047</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--raised"></span>
+      <span class="step__txt"><b>surface-raised</b><code>#3f4348</code></span>
+      <span class="step__d">Δ 0.046</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--hover"></span>
+      <span class="step__txt"><b>hover</b><code>#4a4f56</code></span>
+      <span class="step__d">Δ 0.045</span>
+    </div>
+  </div>
+
+  <div class="ladder" data-theme="c-emerald-dark" data-mode="dark">
+    <div class="ladder__head">Émeraude · sombre</div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--surface"></span>
+      <span class="step__txt"><b>surface</b><code>#1b221f</code></span>
+      
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--elev"></span>
+      <span class="step__txt"><b>surface-elev</b><code>#252e29</code></span>
+      <span class="step__d">Δ 0.047</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--raised"></span>
+      <span class="step__txt"><b>surface-raised</b><code>#2f3a34</code></span>
+      <span class="step__d">Δ 0.046</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--hover"></span>
+      <span class="step__txt"><b>hover</b><code>#39463f</code></span>
+      <span class="step__d">Δ 0.044</span>
+    </div>
+  </div>
+
+  <div class="ladder" data-theme="c-amber-dark" data-mode="dark">
+    <div class="ladder__head">Ambre · sombre</div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--surface"></span>
+      <span class="step__txt"><b>surface</b><code>#120e06</code></span>
+      
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--elev"></span>
+      <span class="step__txt"><b>surface-elev</b><code>#1c180e</code></span>
+      <span class="step__d">Δ 0.045</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--raised"></span>
+      <span class="step__txt"><b>surface-raised</b><code>#282217</code></span>
+      <span class="step__d">Δ 0.045</span>
+    </div>
+    
+    <div class="step">
+      <span class="step__sw step__sw--hover"></span>
+      <span class="step__txt"><b>hover</b><code>#332d21</code></span>
+      <span class="step__d">Δ 0.045</span>
+    </div>
+  </div>
+  </div>
+
+  <h2>3 · Distinction entre familles — preuve visuelle</h2>
+  <p class="lead">À gauche le <b>fond</b> de chaque famille (mode sombre), à droite l'<b>accent</b>.
+  Les aplats de fond doivent être visiblement différents d'une pastille à l'autre.</p>
+  <div class="ds-strip" data-strip="dark">
+      <div class="ds" data-theme="c-indigo-dark">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Indigo</span>
+        <code>#16171c</code>
+        <span class="ds__acc"></span>
+      </div>
+      <div class="ds" data-theme="c-midnight-dark">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Nuit</span>
+        <code>#07080e</code>
+        <span class="ds__acc"></span>
+      </div>
+      <div class="ds" data-theme="c-slate-dark">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Ardoise</span>
+        <code>#292b2f</code>
+        <span class="ds__acc"></span>
+      </div>
+      <div class="ds" data-theme="c-emerald-dark">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Émeraude</span>
+        <code>#1b221f</code>
+        <span class="ds__acc"></span>
+      </div>
+      <div class="ds" data-theme="c-amber-dark">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Ambre</span>
+        <code>#120e06</code>
+        <span class="ds__acc"></span>
+      </div></div>
+  <p class="lead note">La distinction repose sur le <b>fond</b> (<code>--surface</code>), pas sur
+  le seul accent. Mode clair : page <b>teintée et descendue en clarté</b> (L 0,850→0,962) + carte
+  quasi blanche pour la profondeur — ΔEok fond min = <b>0.045</b>
+  (Indigo↔Ardoise), accent min = 0.074 (Indigo↔Nuit).</p>
+  <div class="ds-strip" data-strip="light">
+      <div class="ds" data-theme="c-indigo-light">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Indigo</span>
+        <code>#e1e5fb</code>
+        <span class="ds__acc"></span>
+      </div>
+      <div class="ds" data-theme="c-midnight-light">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Nuit</span>
+        <code>#c9cdde</code>
+        <span class="ds__acc"></span>
+      </div>
+      <div class="ds" data-theme="c-slate-light">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Ardoise</span>
+        <code>#f0f3f6</code>
+        <span class="ds__acc"></span>
+      </div>
+      <div class="ds" data-theme="c-emerald-light">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Émeraude</span>
+        <code>#cce5d9</code>
+        <span class="ds__acc"></span>
+      </div>
+      <div class="ds" data-theme="c-amber-light">
+        <span class="ds__sw ds__sw--bg"></span>
+        <span class="ds__lab">Ambre</span>
+        <code>#ead2c5</code>
+        <span class="ds__acc"></span>
+      </div></div>
+
+  <h2>4 · Bascule clair / sombre — CSS pur, sans JS</h2>
+  <p class="lead">Cochez : bascule d'<b>Indigo</b> sombre ↔ clair, réalisée par <code>:checked</code>
+  (aucun script — sûr dans le sandbox de la Preview).</p>
+  <input type="checkbox" id="mode-toggle" class="sr-only" />
+  <div class="toggle-bar">
+    <label class="toggle" for="mode-toggle">
+      <span class="toggle__knob"></span>
+      <span class="on-dark">Mode sombre</span>
+      <span class="on-light">Mode clair</span>
+    </label>
+    <span class="note">Démonstration — cliquez l'interrupteur.</span>
+  </div>
+  <div class="toggle-demo">
+    <div class="screen-tog screen-tog--dark">
+  <div class="screen" data-theme="c-indigo-dark" data-mode="dark">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div></div>
+    <div class="screen-tog screen-tog--light">
+  <div class="screen" data-theme="c-indigo-light" data-mode="light">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div></div>
+  </div>
+
+  <h2>5 · Les 5 familles — mode clair</h2>
+  <p class="lead">Mêmes familles, mode clair : la <b>page est teintée</b> (et plus basse en clarté),
+  la carte quasi blanche « pop » dessus. Les 5 fonds se distinguent <b>à l'œil</b> : Ardoise (presque
+  blanche) ≠ Indigo ≠ Ambre ≠ Émeraude ≠ <b>Nuit</b> (le gris le plus profond).</p>
+  <div class="screens">
+    
+  <figure class="family" data-theme="c-indigo-light" data-mode="light">
+    <figcaption class="family__cap">
+      <span class="family__name">Indigo</span>
+      <span class="family__mode">clair</span>
+      <span class="family__hex">fond #e1e5fb · carte #fefeff · accent #4f46e5</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-indigo-light" data-mode="light">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">12.05:1</span></span>
+      <span>texte/carte <span class="ok">14.94:1</span></span>
+      <span>atténué/fond <span class="ok">5.72:1</span></span>
+      <span>bouton/accent <span class="ok">6.29:1</span></span>
+      <span>ok/fond <span class="ok">5.04:1</span></span>
+      <span>bordure/fond <span class="info">1.50:1</span></span>
+      <span>danger/fond <span class="ok">4.88:1</span></span>
+    </div>
+  </figure>
+
+  <figure class="family" data-theme="c-midnight-light" data-mode="light">
+    <figcaption class="family__cap">
+      <span class="family__name">Nuit</span>
+      <span class="family__mode">clair</span>
+      <span class="family__hex">fond #c9cdde · carte #fefeff · accent #5b63d3</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-midnight-light" data-mode="light">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">9.51:1</span></span>
+      <span>texte/carte <span class="ok">14.94:1</span></span>
+      <span>atténué/fond <span class="ok">4.52:1</span></span>
+      <span>bouton/accent <span class="ok">5.04:1</span></span>
+      <span>ok/fond <span class="ok">4.71:1</span></span>
+      <span>bordure/fond <span class="info">1.54:1</span></span>
+      <span>danger/fond <span class="ok">4.90:1</span></span>
+    </div>
+  </figure>
+
+  <figure class="family" data-theme="c-slate-light" data-mode="light">
+    <figcaption class="family__cap">
+      <span class="family__name">Ardoise</span>
+      <span class="family__mode">clair</span>
+      <span class="family__hex">fond #f0f3f6 · carte #fefefe · accent #475569</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-slate-light" data-mode="light">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">13.52:1</span></span>
+      <span>texte/carte <span class="ok">14.93:1</span></span>
+      <span>atténué/fond <span class="ok">6.38:1</span></span>
+      <span>bouton/accent <span class="ok">7.58:1</span></span>
+      <span>ok/fond <span class="ok">4.81:1</span></span>
+      <span>bordure/fond <span class="info">1.48:1</span></span>
+      <span>danger/fond <span class="ok">4.88:1</span></span>
+    </div>
+  </figure>
+
+  <figure class="family" data-theme="c-emerald-light" data-mode="light">
+    <figcaption class="family__cap">
+      <span class="family__name">Émeraude</span>
+      <span class="family__mode">clair</span>
+      <span class="family__hex">fond #cce5d9 · carte #fdfffe · accent #047857</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-emerald-light" data-mode="light">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">11.20:1</span></span>
+      <span>texte/carte <span class="ok">14.84:1</span></span>
+      <span>atténué/fond <span class="ok">5.24:1</span></span>
+      <span>bouton/accent <span class="ok">5.48:1</span></span>
+      <span>ok/fond <span class="ok">4.73:1</span></span>
+      <span>bordure/fond <span class="info">1.50:1</span></span>
+      <span>danger/fond <span class="ok">4.58:1</span></span>
+    </div>
+  </figure>
+
+  <figure class="family" data-theme="c-amber-light" data-mode="light">
+    <figcaption class="family__cap">
+      <span class="family__name">Ambre</span>
+      <span class="family__mode">clair</span>
+      <span class="family__hex">fond #ead2c5 · carte #fefefe · accent #b45309</span>
+    </figcaption>
+    
+  <div class="screen" data-theme="c-amber-light" data-mode="light">
+    <div class="app">
+      <header class="topbar">
+        <span class="brand">Yuki</span>
+        <span class="status">
+          <span class="pill">Configuration</span>
+          <span class="pill pill--accent">En ligne</span>
+          <span class="badge badge--ok">ok</span>
+        </span>
+      </header>
+      <main class="conversation">
+        <div class="card">
+          <div class="card__head">
+            <h3 class="card__title">Panneau</h3>
+            <span class="lvl-tag">surface-elev</span>
+          </div>
+          <p class="normal">Texte normal sur la carte (surface-elev).</p>
+          <p class="muted">Texte atténué (secondaire) sur la carte.</p>
+          <div class="raised">
+            <span class="lvl-tag">surface-raised</span>
+            <p class="normal">Bloc imbriqué sur la carte : 3ᵉ niveau de surface.</p>
+          </div>
+          <div class="chips">
+            <span class="chip chip--hover">survol</span>
+            <span class="chip chip--border">bordure</span>
+            <span class="badge badge--warn">en file</span>
+          </div>
+          <p class="link-line"><span class="link">Voir la configuration →</span></p>
+        </div>
+        <div class="msg msg--assistant">
+          <span class="msg__who">Assistant</span>
+          <p>Réponse du modèle, sur la surface assistant.</p>
+        </div>
+        <div class="msg msg--user">
+          <span class="msg__who">Vous</span>
+          <p>Message de l'utilisateur, sur la surface user.</p>
+        </div>
+      </main>
+      <footer class="composer">
+        <div class="field">Écrivez un message…</div>
+        <button class="button" type="button">Envoyer</button>
+      </footer>
+    </div>
+  </div>
+    <div class="audit">
+      <span>texte/fond <span class="ok">10.43:1</span></span>
+      <span>texte/carte <span class="ok">14.96:1</span></span>
+      <span>atténué/fond <span class="ok">5.01:1</span></span>
+      <span>bouton/accent <span class="ok">5.02:1</span></span>
+      <span>ok/fond <span class="ok">5.15:1</span></span>
+      <span>bordure/fond <span class="info">1.53:1</span></span>
+      <span>danger/fond <span class="ok">4.76:1</span></span>
+    </div>
+  </figure>
+  </div>
+
+  <h2>6 · Accents — quatre jeux, comparés en contexte (bouton, lien, badge, anneau, onglet)</h2>
+  <p class="lead">
+    Ici on ne parle plus de FOND mais d'<b>ACCENT</b>. Chaque jeu est montré avec les <b>mêmes
+    widgets</b>, dans les <b>deux modes</b>, sur <b>chaque famille</b> : bouton (texte posé sur
+    l'accent), lien, badge, <b>anneau de focus</b> et onglet actif. Sous chaque famille, le contraste
+    <b>mesuré</b> (vert = conforme, rouge = sous le seuil). Seuils : texte/accent ≥ 4,5:1 ;
+    élément non textuel porteur de sens (anneau) ≥ 3:1 ; écart d'accent ≥ 0.04 ;
+    écart de fond ≥ 0.04. Les <b>propositions</b> V1/V2/V3 passent sans violation ;
+    V0 (accents actuels) est la <b>référence non conforme</b> : ses défauts sont mesurés.
+  </p>
+  
+  <section class="av-block" id="accents-v0">
+    <div class="av-title"><h3>V0 — accents ACTUELS</h3><span class="nonconf">non conforme</span><span class="av-tag">Référence (thèmes en production) — NON conforme</span></div>
+    <p class="av-idea"><b>Idée :</b> Les graines exactes de themes.css, posées sur les surfaces direction C. <b>Règle :</b> Rien : sert d'étalon de comparaison et de preuve des défauts. <b>Coût :</b> Indigo↔Nuit quasi confondus ; Ardoise sans identité ; texte sur l'accent Indigo sombre à 4,25:1 (< 4,5:1).</p>
+    <div class="av-notes">
+      <span>écart accent min — sombre <b>0.105</b> · clair <b>0.074</b></span>
+      <span>écart fond min — sombre <b>0.042</b> · clair <b>0.045</b></span>
+      <span>texte/accent min — sombre <b>4.47:1</b> · clair <b>5.02:1</b></span>
+    </div>
+    <table class="av-table">
+      <thead><tr><th>Famille</th><th>Accent sombre</th><th>txt/accent</th><th>Accent clair</th><th>txt/accent</th></tr></thead>
+      <tbody><tr>
+      <th scope="row">Indigo</th>
+      <td><span class="av-sw" data-accent="v0-indigo-dark"></span></td>
+      <td><span class="ko">4.47:1</span></td>
+      <td><span class="av-sw" data-accent="v0-indigo-light"></span></td>
+      <td><span class="ok">6.29:1</span></td>
+    </tr><tr>
+      <th scope="row">Nuit</th>
+      <td><span class="av-sw" data-accent="v0-midnight-dark"></span></td>
+      <td><span class="ok">6.57:1</span></td>
+      <td><span class="av-sw" data-accent="v0-midnight-light"></span></td>
+      <td><span class="ok">5.04:1</span></td>
+    </tr><tr>
+      <th scope="row">Ardoise</th>
+      <td><span class="av-sw" data-accent="v0-slate-dark"></span></td>
+      <td><span class="ok">7.65:1</span></td>
+      <td><span class="av-sw" data-accent="v0-slate-light"></span></td>
+      <td><span class="ok">7.58:1</span></td>
+    </tr><tr>
+      <th scope="row">Émeraude</th>
+      <td><span class="av-sw" data-accent="v0-emerald-dark"></span></td>
+      <td><span class="ok">10.20:1</span></td>
+      <td><span class="av-sw" data-accent="v0-emerald-light"></span></td>
+      <td><span class="ok">5.48:1</span></td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td><span class="av-sw" data-accent="v0-amber-dark"></span></td>
+      <td><span class="ok">11.75:1</span></td>
+      <td><span class="av-sw" data-accent="v0-amber-light"></span></td>
+      <td><span class="ok">5.02:1</span></td>
+    </tr></tbody>
+    </table>
+    <div class="av-mode">
+      <div class="av-mode__head">Mode sombre — bouton · lien · badge · anneau de focus · onglet actif</div>
+      <div class="av-grid">
+    <div class="av-card" data-accent="v0-indigo-dark">
+      <div class="av-head"><b>Indigo</b> <code>#6366f1</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ko">4.47:1</span></span>
+        <span>accent/fond (lien) <span class="ko">4.01:1</span></span>
+        <span>anneau/fond <span class="ok">4.01:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v0-midnight-dark">
+      <div class="av-head"><b>Nuit</b> <code>#818cf8</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">6.57:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.70:1</span></span>
+        <span>anneau/fond <span class="ok">6.70:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v0-slate-dark">
+      <div class="av-head"><b>Ardoise</b> <code>#94a3b8</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.65:1</span></span>
+        <span>accent/fond (lien) <span class="ok">5.53:1</span></span>
+        <span>anneau/fond <span class="ok">5.53:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v0-emerald-dark">
+      <div class="av-head"><b>Émeraude</b> <code>#34d399</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">10.20:1</span></span>
+        <span>accent/fond (lien) <span class="ok">8.43:1</span></span>
+        <span>anneau/fond <span class="ok">8.43:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v0-amber-dark">
+      <div class="av-head"><b>Ambre</b> <code>#fbbf24</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">11.75:1</span></span>
+        <span>accent/fond (lien) <span class="ok">11.53:1</span></span>
+        <span>anneau/fond <span class="ok">11.53:1</span></span>
+      </div>
+    </div></div>
+    </div>
+    <div class="av-mode">
+      <div class="av-mode__head">Mode clair — bouton · lien · badge · anneau de focus · onglet actif</div>
+      <div class="av-grid">
+    <div class="av-card" data-accent="v0-indigo-light">
+      <div class="av-head"><b>Indigo</b> <code>#4f46e5</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">6.29:1</span></span>
+        <span>accent/fond (lien) <span class="ok">5.03:1</span></span>
+        <span>anneau/fond <span class="ok">5.03:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v0-midnight-light">
+      <div class="av-head"><b>Nuit</b> <code>#5b63d3</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">5.04:1</span></span>
+        <span>accent/fond (lien) <span class="ko">3.18:1</span></span>
+        <span>anneau/fond <span class="ok">3.18:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v0-slate-light">
+      <div class="av-head"><b>Ardoise</b> <code>#475569</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.58:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.80:1</span></span>
+        <span>anneau/fond <span class="ok">6.80:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v0-emerald-light">
+      <div class="av-head"><b>Émeraude</b> <code>#047857</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">5.48:1</span></span>
+        <span>accent/fond (lien) <span class="ko">4.12:1</span></span>
+        <span>anneau/fond <span class="ok">4.12:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v0-amber-light">
+      <div class="av-head"><b>Ambre</b> <code>#b45309</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">5.02:1</span></span>
+        <span>accent/fond (lien) <span class="ko">3.47:1</span></span>
+        <span>anneau/fond <span class="ok">3.47:1</span></span>
+      </div>
+    </div></div>
+    </div>
+  </section>
+
+  <section class="av-block" id="accents-v1">
+    <div class="av-title"><h3>V1 — mêmes teintes, séparées + lisibles</h3><span class="rec">recommandé</span><span class="av-tag">Conservateur : on répare, on ne change pas d'identité</span></div>
+    <p class="av-idea"><b>Idée :</b> Garder les 5 familles actuelles ; écarter Indigo (violet 292°) et Nuit (bleu 252°), et caler la clarté de chaque accent par mode. <b>Règle :</b> Sépare Indigo/Nuit (~40° de teinte) ; ≥ 4,5:1 partout ; Ardoise légèrement plus chromatique. <b>Coût :</b> Renonce à la roue régulière : deux familles restent bleutées ; Ardoise reste un gris.</p>
+    <div class="av-notes">
+      <span>écart accent min — sombre <b>0.094</b> · clair <b>0.075</b></span>
+      <span>écart fond min — sombre <b>0.042</b> · clair <b>0.045</b></span>
+      <span>texte/accent min — sombre <b>7.55:1</b> · clair <b>7.04:1</b></span>
+    </div>
+    <table class="av-table">
+      <thead><tr><th>Famille</th><th>Accent sombre</th><th>txt/accent</th><th>Accent clair</th><th>txt/accent</th></tr></thead>
+      <tbody><tr>
+      <th scope="row">Indigo</th>
+      <td><span class="av-sw" data-accent="v1-indigo-dark"></span></td>
+      <td><span class="ok">7.55:1</span></td>
+      <td><span class="av-sw" data-accent="v1-indigo-light"></span></td>
+      <td><span class="ok">7.67:1</span></td>
+    </tr><tr>
+      <th scope="row">Nuit</th>
+      <td><span class="av-sw" data-accent="v1-midnight-dark"></span></td>
+      <td><span class="ok">7.89:1</span></td>
+      <td><span class="av-sw" data-accent="v1-midnight-light"></span></td>
+      <td><span class="ok">8.17:1</span></td>
+    </tr><tr>
+      <th scope="row">Ardoise</th>
+      <td><span class="av-sw" data-accent="v1-slate-dark"></span></td>
+      <td><span class="ok">8.60:1</span></td>
+      <td><span class="av-sw" data-accent="v1-slate-light"></span></td>
+      <td><span class="ok">7.35:1</span></td>
+    </tr><tr>
+      <th scope="row">Émeraude</th>
+      <td><span class="av-sw" data-accent="v1-emerald-dark"></span></td>
+      <td><span class="ok">9.70:1</span></td>
+      <td><span class="av-sw" data-accent="v1-emerald-light"></span></td>
+      <td><span class="ok">7.04:1</span></td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td><span class="av-sw" data-accent="v1-amber-dark"></span></td>
+      <td><span class="ok">9.91:1</span></td>
+      <td><span class="av-sw" data-accent="v1-amber-light"></span></td>
+      <td><span class="ok">7.27:1</span></td>
+    </tr></tbody>
+    </table>
+    <div class="av-mode">
+      <div class="av-mode__head">Mode sombre — bouton · lien · badge · anneau de focus · onglet actif</div>
+      <div class="av-grid">
+    <div class="av-card" data-accent="v1-indigo-dark">
+      <div class="av-head"><b>Indigo</b> <code>#a890fe</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.55:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.89:1</span></span>
+        <span>anneau/fond <span class="ok">6.89:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v1-midnight-dark">
+      <div class="av-head"><b>Nuit</b> <code>#5ea8f9</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.89:1</span></span>
+        <span>accent/fond (lien) <span class="ok">8.04:1</span></span>
+        <span>anneau/fond <span class="ok">8.04:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v1-slate-dark">
+      <div class="av-head"><b>Ardoise</b> <code>#8fb0c8</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">8.60:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.22:1</span></span>
+        <span>anneau/fond <span class="ok">6.22:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v1-emerald-dark">
+      <div class="av-head"><b>Émeraude</b> <code>#4fcc92</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">9.70:1</span></span>
+        <span>accent/fond (lien) <span class="ok">8.02:1</span></span>
+        <span>anneau/fond <span class="ok">8.02:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v1-amber-dark">
+      <div class="av-head"><b>Ambre</b> <code>#f1ab34</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">9.91:1</span></span>
+        <span>accent/fond (lien) <span class="ok">9.73:1</span></span>
+        <span>anneau/fond <span class="ok">9.73:1</span></span>
+      </div>
+    </div></div>
+    </div>
+    <div class="av-mode">
+      <div class="av-mode__head">Mode clair — bouton · lien · badge · anneau de focus · onglet actif</div>
+      <div class="av-grid">
+    <div class="av-card" data-accent="v1-indigo-light">
+      <div class="av-head"><b>Indigo</b> <code>#642cc8</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.67:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.14:1</span></span>
+        <span>anneau/fond <span class="ok">6.14:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v1-midnight-light">
+      <div class="av-head"><b>Nuit</b> <code>#015093</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">8.17:1</span></span>
+        <span>accent/fond (lien) <span class="ok">5.16:1</span></span>
+        <span>anneau/fond <span class="ok">5.16:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v1-slate-light">
+      <div class="av-head"><b>Ardoise</b> <code>#345a73</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.35:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.60:1</span></span>
+        <span>anneau/fond <span class="ok">6.60:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v1-emerald-light">
+      <div class="av-head"><b>Émeraude</b> <code>#056641</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.04:1</span></span>
+        <span>accent/fond (lien) <span class="ok">5.29:1</span></span>
+        <span>anneau/fond <span class="ok">5.29:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v1-amber-light">
+      <div class="av-head"><b>Ambre</b> <code>#764f01</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.27:1</span></span>
+        <span>accent/fond (lien) <span class="ok">5.03:1</span></span>
+        <span>anneau/fond <span class="ok">5.03:1</span></span>
+      </div>
+    </div></div>
+    </div>
+  </section>
+
+  <section class="av-block" id="accents-v2">
+    <div class="av-title"><h3>V2 — roue régulière (piste principale)</h3><span class="rec">recommandé</span><span class="av-tag">5 teintes à 72° + 1 Neutre — distinction par construction</span></div>
+    <p class="av-idea"><b>Idée :</b> Cinq teintes régulièrement espacées sur la roue (Corail, Ambre, Émeraude, Turquoise, Améthyste) + une famille Neutre assumée. <b>Règle :</b> Aucune famille ne peut être confondue (écart garanti par la géométrie) ; accents d'identité franche ; Neutre nommé. <b>Coût :</b> Change les NOMS et les TEINTES : les presets actuels (indigo/nuit/ardoise…) deviennent obsolètes ; 6 familles au lieu de 5.</p>
+    <div class="av-notes">
+      <span>écart accent min — sombre <b>0.125</b> · clair <b>0.071</b></span>
+      <span>écart fond min — sombre <b>0.050</b> · clair <b>0.043</b></span>
+      <span>texte/accent min — sombre <b>8.19:1</b> · clair <b>6.94:1</b></span>
+    </div>
+    <table class="av-table">
+      <thead><tr><th>Famille</th><th>Accent sombre</th><th>txt/accent</th><th>Accent clair</th><th>txt/accent</th></tr></thead>
+      <tbody><tr>
+      <th scope="row">Corail</th>
+      <td><span class="av-sw" data-accent="v2-corail-dark"></span></td>
+      <td><span class="ok">8.19:1</span></td>
+      <td><span class="av-sw" data-accent="v2-corail-light"></span></td>
+      <td><span class="ok">8.10:1</span></td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td><span class="av-sw" data-accent="v2-ambre-dark"></span></td>
+      <td><span class="ok">8.81:1</span></td>
+      <td><span class="av-sw" data-accent="v2-ambre-light"></span></td>
+      <td><span class="ok">7.62:1</span></td>
+    </tr><tr>
+      <th scope="row">Émeraude</th>
+      <td><span class="av-sw" data-accent="v2-emeraude-dark"></span></td>
+      <td><span class="ok">9.58:1</span></td>
+      <td><span class="av-sw" data-accent="v2-emeraude-light"></span></td>
+      <td><span class="ok">6.94:1</span></td>
+    </tr><tr>
+      <th scope="row">Turquoise</th>
+      <td><span class="av-sw" data-accent="v2-turquoise-dark"></span></td>
+      <td><span class="ok">9.57:1</span></td>
+      <td><span class="av-sw" data-accent="v2-turquoise-light"></span></td>
+      <td><span class="ok">7.24:1</span></td>
+    </tr><tr>
+      <th scope="row">Améthyste</th>
+      <td><span class="av-sw" data-accent="v2-amethyste-dark"></span></td>
+      <td><span class="ok">8.59:1</span></td>
+      <td><span class="av-sw" data-accent="v2-amethyste-light"></span></td>
+      <td><span class="ok">7.78:1</span></td>
+    </tr><tr>
+      <th scope="row">Neutre</th>
+      <td><span class="av-sw" data-accent="v2-neutre-dark"></span></td>
+      <td><span class="ok">9.11:1</span></td>
+      <td><span class="av-sw" data-accent="v2-neutre-light"></span></td>
+      <td><span class="ok">7.62:1</span></td>
+    </tr></tbody>
+    </table>
+    <div class="av-mode">
+      <div class="av-mode__head">Mode sombre — bouton · lien · badge · anneau de focus · onglet actif</div>
+      <div class="av-grid">
+    <div class="av-card" data-accent="v2-corail-dark">
+      <div class="av-head"><b>Corail</b> <code>#fa7fb5</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">8.19:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.01:1</span></span>
+        <span>anneau/fond <span class="ok">6.01:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-ambre-dark">
+      <div class="av-head"><b>Ambre</b> <code>#f29a2d</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">8.81:1</span></span>
+        <span>accent/fond (lien) <span class="ok">9.13:1</span></span>
+        <span>anneau/fond <span class="ok">9.13:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-emeraude-dark">
+      <div class="av-head"><b>Émeraude</b> <code>#7fc765</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">9.58:1</span></span>
+        <span>accent/fond (lien) <span class="ok">9.44:1</span></span>
+        <span>anneau/fond <span class="ok">9.44:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-turquoise-dark">
+      <div class="av-head"><b>Turquoise</b> <code>#0ec7de</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">9.57:1</span></span>
+        <span>accent/fond (lien) <span class="ok">8.73:1</span></span>
+        <span>anneau/fond <span class="ok">8.73:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-amethyste-dark">
+      <div class="av-head"><b>Améthyste</b> <code>#a1a3ff</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">8.59:1</span></span>
+        <span>accent/fond (lien) <span class="ok">7.13:1</span></span>
+        <span>anneau/fond <span class="ok">7.13:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-neutre-dark">
+      <div class="av-head"><b>Neutre</b> <code>#aeb1b5</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">9.11:1</span></span>
+        <span>accent/fond (lien) <span class="ok">5.70:1</span></span>
+        <span>anneau/fond <span class="ok">5.70:1</span></span>
+      </div>
+    </div></div>
+    </div>
+    <div class="av-mode">
+      <div class="av-mode__head">Mode clair — bouton · lien · badge · anneau de focus · onglet actif</div>
+      <div class="av-grid">
+    <div class="av-card" data-accent="v2-corail-light">
+      <div class="av-head"><b>Corail</b> <code>#9c045e</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">8.10:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.74:1</span></span>
+        <span>anneau/fond <span class="ok">6.74:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-ambre-light">
+      <div class="av-head"><b>Ambre</b> <code>#7a4800</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.62:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.71:1</span></span>
+        <span>anneau/fond <span class="ok">4.71:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-emeraude-light">
+      <div class="av-head"><b>Émeraude</b> <code>#276701</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">6.94:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.73:1</span></span>
+        <span>anneau/fond <span class="ok">4.73:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-turquoise-light">
+      <div class="av-head"><b>Turquoise</b> <code>#07606c</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.24:1</span></span>
+        <span>accent/fond (lien) <span class="ok">5.30:1</span></span>
+        <span>anneau/fond <span class="ok">5.30:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-amethyste-light">
+      <div class="av-head"><b>Améthyste</b> <code>#4d41b0</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.78:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.04:1</span></span>
+        <span>anneau/fond <span class="ok">6.04:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v2-neutre-light">
+      <div class="av-head"><b>Neutre</b> <code>#515457</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.62:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.91:1</span></span>
+        <span>anneau/fond <span class="ok">6.91:1</span></span>
+      </div>
+    </div></div>
+    </div>
+  </section>
+
+  <section class="av-block" id="accents-v3">
+    <div class="av-title"><h3>V3 — jeu emprunté (Catppuccin, MIT)</h3><span class="av-tag">Source permissive éprouvée, réparée au minimum</span></div>
+    <p class="av-idea"><b>Idée :</b> Accents Catppuccin (Latte clair / Mocha sombre) plaqués sur les familles V2, puis réparés au strict nécessaire pour tenir 4,5:1. <b>Règle :</b> Qualité éprouvée de la source ; cohérence clair/sombre fournie par les 2 saveurs. <b>Coût :</b> La source n'est PAS une roue régulière (écarts d'accent inégaux) et plusieurs valeurs échouent telles quelles → réparation requise.</p>
+    <div class="av-notes">
+      <span>écart accent min — sombre <b>0.110</b> · clair <b>0.091</b></span>
+      <span>écart fond min — sombre <b>0.050</b> · clair <b>0.043</b></span>
+      <span>texte/accent min — sombre <b>7.38:1</b> · clair <b>5.12:1</b></span>
+    </div>
+    <table class="av-table">
+      <thead><tr><th>Famille</th><th>Accent sombre</th><th>txt/accent</th><th>Accent clair</th><th>txt/accent</th></tr></thead>
+      <tbody><tr>
+      <th scope="row">Corail</th>
+      <td><span class="av-sw" data-accent="v3-corail-dark"></span></td>
+      <td><span class="ok">8.47:1</span></td>
+      <td><span class="av-sw" data-accent="v3-corail-light"></span></td>
+      <td><span class="ok">5.43:1</span></td>
+    </tr><tr>
+      <th scope="row">Ambre</th>
+      <td><span class="av-sw" data-accent="v3-ambre-dark"></span></td>
+      <td><span class="ok">15.43:1</span></td>
+      <td><span class="av-sw" data-accent="v3-ambre-light"></span></td>
+      <td><span class="ok">7.70:1</span></td>
+    </tr><tr>
+      <th scope="row">Émeraude</th>
+      <td><span class="av-sw" data-accent="v3-emeraude-dark"></span></td>
+      <td><span class="ok">13.19:1</span></td>
+      <td><span class="av-sw" data-accent="v3-emeraude-light"></span></td>
+      <td><span class="ok">7.01:1</span></td>
+    </tr><tr>
+      <th scope="row">Turquoise</th>
+      <td><span class="av-sw" data-accent="v3-turquoise-dark"></span></td>
+      <td><span class="ok">10.39:1</span></td>
+      <td><span class="av-sw" data-accent="v3-turquoise-light"></span></td>
+      <td><span class="ok">6.16:1</span></td>
+    </tr><tr>
+      <th scope="row">Améthyste</th>
+      <td><span class="av-sw" data-accent="v3-amethyste-dark"></span></td>
+      <td><span class="ok">9.65:1</span></td>
+      <td><span class="av-sw" data-accent="v3-amethyste-light"></span></td>
+      <td><span class="ok">6.04:1</span></td>
+    </tr><tr>
+      <th scope="row">Neutre</th>
+      <td><span class="av-sw" data-accent="v3-neutre-dark"></span></td>
+      <td><span class="ok">7.38:1</span></td>
+      <td><span class="av-sw" data-accent="v3-neutre-light"></span></td>
+      <td><span class="ok">5.12:1</span></td>
+    </tr></tbody>
+    </table>
+    <div class="av-mode">
+      <div class="av-mode__head">Mode sombre — bouton · lien · badge · anneau de focus · onglet actif</div>
+      <div class="av-grid">
+    <div class="av-card" data-accent="v3-corail-dark">
+      <div class="av-head"><b>Corail</b> <code>#f38ba8</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">8.47:1</span></span>
+        <span>accent/fond (lien) <span class="ok">6.22:1</span></span>
+        <span>anneau/fond <span class="ok">6.22:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-ambre-dark">
+      <div class="av-head"><b>Ambre</b> <code>#f9e2af</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">15.43:1</span></span>
+        <span>accent/fond (lien) <span class="ok">16.00:1</span></span>
+        <span>anneau/fond <span class="ok">16.00:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-emeraude-dark">
+      <div class="av-head"><b>Émeraude</b> <code>#a6e3a1</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">13.19:1</span></span>
+        <span>accent/fond (lien) <span class="ok">13.00:1</span></span>
+        <span>anneau/fond <span class="ok">13.00:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-turquoise-dark">
+      <div class="av-head"><b>Turquoise</b> <code>#74c7ec</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">10.39:1</span></span>
+        <span>accent/fond (lien) <span class="ok">9.48:1</span></span>
+        <span>anneau/fond <span class="ok">9.48:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-amethyste-dark">
+      <div class="av-head"><b>Améthyste</b> <code>#cba6f7</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">9.65:1</span></span>
+        <span>accent/fond (lien) <span class="ok">8.01:1</span></span>
+        <span>anneau/fond <span class="ok">8.01:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-neutre-dark">
+      <div class="av-head"><b>Neutre</b> <code>#9a9eb2</code><span class="av-rep">réparé de #7f849c</span></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.38:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.62:1</span></span>
+        <span>anneau/fond <span class="ok">4.62:1</span></span>
+      </div>
+    </div></div>
+    </div>
+    <div class="av-mode">
+      <div class="av-mode__head">Mode clair — bouton · lien · badge · anneau de focus · onglet actif</div>
+      <div class="av-grid">
+    <div class="av-card" data-accent="v3-corail-light">
+      <div class="av-head"><b>Corail</b> <code>#d20f39</code></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">5.43:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.51:1</span></span>
+        <span>anneau/fond <span class="ok">4.51:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-ambre-light">
+      <div class="av-head"><b>Ambre</b> <code>#76490a</code><span class="av-rep">réparé de #df8e1d</span></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.70:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.76:1</span></span>
+        <span>anneau/fond <span class="ok">4.76:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-emeraude-light">
+      <div class="av-head"><b>Émeraude</b> <code>#266618</code><span class="av-rep">réparé de #40a02b</span></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">7.01:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.78:1</span></span>
+        <span>anneau/fond <span class="ok">4.78:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-turquoise-light">
+      <div class="av-head"><b>Turquoise</b> <code>#126b7a</code><span class="av-rep">réparé de #209fb5</span></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">6.16:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.51:1</span></span>
+        <span>anneau/fond <span class="ok">4.51:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-amethyste-light">
+      <div class="av-head"><b>Améthyste</b> <code>#7f35df</code><span class="av-rep">réparé de #8839ef</span></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">6.04:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.68:1</span></span>
+        <span>anneau/fond <span class="ok">4.68:1</span></span>
+      </div>
+    </div>
+    <div class="av-card" data-accent="v3-neutre-light">
+      <div class="av-head"><b>Neutre</b> <code>#6b6d7c</code><span class="av-rep">réparé de #8c8fa1</span></div>
+      <div class="av-row">
+        <button class="av-btn" type="button">Envoyer</button>
+        <span class="av-link">Voir la configuration →</span>
+        <span class="av-badge">Nouveau</span>
+      </div>
+      <div class="av-row">
+        <span class="av-focus">anneau de focus</span>
+        <span class="av-tab">Onglet actif</span>
+      </div>
+      <div class="av-ro">
+        <span>texte/accent <span class="ok">5.12:1</span></span>
+        <span>accent/fond (lien) <span class="ok">4.64:1</span></span>
+        <span>anneau/fond <span class="ok">4.64:1</span></span>
+      </div>
+    </div></div>
+    </div>
+  </section>
+
+  <footer>
+    Maquette de décision — <b>aucune</b> modification de production (ni <code>themes.css</code>, ni
+    <code>generate-yuki-themes.mjs</code>, ni <code>theme.js</code>, ni <code>holaf-lib</code>).
+    Générée par <code>_tools/theme-proposal-c.mjs</code> (réutilise les primitives de
+    <code>_tools/theme-lib.mjs</code> et les jeux d'accents de <code>_tools/theme-accents.mjs</code>).
+    Fichier autonome : ni image, ni <code>&lt;link&gt;</code>,
+    ni <code>&lt;script&gt;</code>, ni URL réseau.
+  </footer>
+</body>
+</html>

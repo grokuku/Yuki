@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * Holaf UI — Brique HolafModal · version 0.5.0
+ * Holaf UI — Brique HolafModal · version 0.6.1
  * ─────────────────────────────────────────────────────────────────────────────
  * Modale autonome (zéro dépendance runtime) : overlay, pile d'overlays
  * document-level, helpers Promise (alert / confirm / prompt / busy), focus
@@ -48,6 +48,22 @@
  * reste autonome (zéro dépendance runtime) : aucune logique de génération
  * dupliquée. Objectif : aligner modale ↔ page ↔ toast quelle que soit la
  * famille/mode choisi. Aucune API existante ne change.
+ * v0.6.0 — CATALOGUE V2 (RUPTURE alignée sur HolafTokens 0.4.0) : le registre
+ * passe aux 12 combinaisons `<famille>-<mode>` du catalogue V2 (corail, ambre,
+ * emeraude, turquoise, amethyste, neutre × light, dark). Les 4 presets plats
+ * historiques (dark / light / midnight / slate) RESTENT disponibles mais sont
+ * REMAPPÉS en alias exacts (dark ≡ amethyste-dark, light ≡ amethyste-light,
+ * midnight ≡ amethyste-dark, slate ≡ neutre-dark ; mêmes règles que la table
+ * HolafTokens.MIGRATIONS). Les presets sont les MIROIRS des presets homonymes
+ * de HolafTokens 0.4.0 (catalogue V2, 16 clés). Les API (themes.register / get /
+ * list, setTheme, option theme) sont strictement inchangées ; seules les
+ * valeurs des presets changent — d'où le bump MINOR (0.x : rupture de valeurs).
+ * v0.6.1 — MIROIR DU PATCH HolafTokens 0.4.1 (correction de VALEUR, additif
+ * pour l'API) : les 6 `--hm-text-secondary` mirorant un `text-muted` corrigé
+ * (contraste AA 4,5:1 sur les 4 paliers de surface) sont mis à jour à
+ * l'identique de HolafTokens 0.4.1 ; le défaut du CSS injecté (amethyste-dark)
+ * suit. Aucune API ne change, aucune clé nouvelle : seules 6 valeurs littérales
+ * du miroir sont retouchées.
  * Fichier DUAL : module ES (export) + global window.HolafModal — se
  * charge via <script type="module"> ou `import { HolafModal }`.
  *
@@ -64,7 +80,7 @@
 const HolafModal = (function () {
     "use strict";
 
-    const VERSION = "0.5.0";
+    const VERSION = "0.6.1";
 
     // ─── État global du module (partagé par toutes les modales) ──────────────
     // Pile des modales ouvertes : la DERNIÈRE entrée est le « sommet », la
@@ -237,240 +253,273 @@ const HolafModal = (function () {
     }
 
     // ─── Préréglages génériques (enregistrés au chargement de la brique) ────
-    // CATALOGUE À 2 AXES (v0.5.0) : 5 familles (indigo, midnight, slate,
-    // emerald, amber) × 2 modes (light, dark) = 10 presets `<famille>-<mode>`,
-    // puis 4 ALIAS historiques (dark / light / midnight / slate). Contraste des
-    // textes ≥ 4.5:1. PAS de --hm-width dans un preset : la largeur est
-    // gouvernée par size/width (un thème ne doit pas pouvoir casser sm/md/lg/xl).
+    // CATALOGUE À 2 AXES (v0.6.0) : 6 familles (corail, ambre, emeraude,
+    // turquoise, amethyste, neutre) × 2 modes (light, dark) = 12 presets
+    // `<famille>-<mode>`, puis 4 ALIAS historiques (dark / light / midnight /
+    // slate) REMAPPÉS (voir plus bas). Contraste des textes ≥ 4.5:1. PAS de
+    // --hm-width dans un preset : la largeur est gouvernée par size/width (un
+    // thème ne doit pas pouvoir casser sm/md/lg/xl).
     //
     // PROVENANCE DES VALEURS (DONNÉES LITTÉRALES, aucun calcul runtime) : les
-    // 10 presets sont les MIROIRS des presets homonymes de HolafTokens 0.2.0
-    // (brique fondation, js/holaf-tokens.js), figés ici une fois pour que la
-    // brique reste AUTONOME (zéro dépendance runtime). Mapping :
+    // 12 presets sont les MIROIRS des presets homonymes de HolafTokens 0.4.1
+    // (brique fondation, js/holaf-tokens.js — catalogue V2), figés ici une fois
+    // pour que la brique reste AUTONOME (zéro dépendance runtime). Mapping :
     //     --hm-bg             ← surface            --hm-accent        ← accent
     //     --hm-bg-secondary   ← surface-elev       --hm-accent-hover  ← accent-hover
     //     --hm-bg-input       ← surface-raised     --hm-accent-text   ← accent-text
     //     --hm-text           ← text               --hm-danger        ← danger
-    //     --hm-text-secondary ← text-muted         --hm-danger-text   ← danger-text
-    //     --hm-border         ← border             --hm-danger-hover  ← danger-hover
-    //     --hm-danger-hover : présent uniquement dans les presets GÉNÉRÉS de
-    //     HolafTokens ; pour les 4 palettes historiques figées (qui n'ont pas
-    //     de danger-hover côté tokens) on CONSERVE la valeur historique.
-    // --hm-radius / --hm-font-size / --hm-shadow sont propres à la MODALE
-    // (radius 12px, 14px, ombres 0 18px 50px) et non les valeurs de PAGE de
-    // HolafTokens. --hm-overlay-bg / --hm-busy-bg sont DÉRIVÉS du mode : clair
-    // → scrim zinc `rgba(24, 24, 27, 0.35)` + busy 0.82 ; sombre → scrim teinté
-    // du fond à 0.55 + busy 0.85. Les 4 palettes HISTORIQUES conservent leur
-    // overlay/busy d'origine (voir alias ci-dessous).
-    // Les hex GÉNÉRÉS sont repris À L'IDENTIQUE (casse comprise) de
-    // HolafTokens.PRESETS pour que le test de cohérence inter-briques passe.
+    //     --hm-text-secondary ← text-muted         --hm-danger-hover  ← danger-hover
+    //     --hm-border         ← border             --hm-danger-text   ← danger-text
+    // --hm-radius / --hm-font-size / --hm-shadow reprennent les valeurs de PAGE
+    // de HolafTokens (radius 12px, font-size 14px, ombre par mode).
+    // --hm-overlay-bg / --hm-busy-bg sont DÉRIVÉS du mode : clair → scrim zinc
+    // `rgba(24, 24, 27, 0.35)` + busy `rgba(bg, 0.82)` ; sombre → scrim teinté
+    // du fond à 0.55 + busy `rgba(bg, 0.85)`.
+    // Les hex sont repris À L'IDENTIQUE (casse comprise) de HolafTokens.PRESETS
+    // (0.4.1) pour que le test de cohérence inter-briques passe.
     const THEME_PRESETS = {
-        "indigo-light": {
-            "--hm-bg": "#ffffff",
-            "--hm-bg-secondary": "#f4f4f5",
-            "--hm-bg-input": "#fafafa",
-            "--hm-text": "#18181b",
-            "--hm-text-secondary": "#52525b",
-            "--hm-border": "#d4d4d8",
-            "--hm-accent": "#4f46e5",
-            "--hm-accent-hover": "#6366f1",
+        "corail-light": {
+            "--hm-bg": "#ffe3ed",
+            "--hm-bg-secondary": "#fefefe",
+            "--hm-bg-input": "#f5d9e3",
+            "--hm-text": "#2f2227",
+            "--hm-text-secondary": "#665159",
+            "--hm-border": "#d9b9c4",
+            "--hm-accent": "#9c045e",
+            "--hm-accent-hover": "#ab2573",
             "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#dc2626",
-            "--hm-danger-hover": "#b91c1c",
+            "--hm-danger": "#c62222",
+            "--hm-danger-hover": "#cf3f40",
             "--hm-danger-text": "#ffffff",
             "--hm-radius": "12px",
             "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(255, 255, 255, 0.82)",
+            "--hm-busy-bg": "rgba(255, 227, 237, 0.82)",
         },
-        "indigo-dark": {
-            "--hm-bg": "#1e1e1e",
-            "--hm-bg-secondary": "#27272a",
-            "--hm-bg-input": "#1a1a1a",
-            "--hm-text": "#e4e4e7",
-            "--hm-text-secondary": "#a1a1aa",
-            "--hm-border": "#3f3f46",
-            "--hm-accent": "#6366f1",
-            "--hm-accent-hover": "#818cf8",
-            "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#ef4444",
-            "--hm-danger-hover": "#dc2626",
-            "--hm-danger-text": "#ffffff",
-            "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(0, 0, 0, 0.55)",
-            "--hm-font-size": "14px",
-            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(30, 30, 30, 0.82)",
-        },
-        "midnight-light": {
-            "--hm-bg": "#F6F7FC",
-            "--hm-bg-secondary": "#FFFFFF",
-            "--hm-bg-input": "#E6E8F8",
-            "--hm-text": "#18181B",
-            "--hm-text-secondary": "#75767A",
-            "--hm-border": "#D4D6F3",
-            "--hm-accent": "#5B63D3",
-            "--hm-accent-hover": "#747ADA",
-            "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#DC2626",
-            "--hm-danger-hover": "#E14747",
-            "--hm-danger-text": "#ffffff",
-            "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
-            "--hm-font-size": "14px",
-            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(246, 247, 252, 0.82)",
-        },
-        "midnight-dark": {
-            "--hm-bg": "#10111d",
-            "--hm-bg-secondary": "#181a2c",
-            "--hm-bg-input": "#0c0d17",
-            "--hm-text": "#e2e4f0",
-            "--hm-text-secondary": "#9aa0c3",
-            "--hm-border": "#272a44",
-            "--hm-accent": "#818cf8",
-            "--hm-accent-hover": "#a5b4fc",
-            "--hm-accent-text": "#10111d",
-            "--hm-danger": "#ef4444",
-            "--hm-danger-hover": "#dc2626",
-            "--hm-danger-text": "#ffffff",
-            "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(4, 5, 12, 0.65)",
-            "--hm-font-size": "14px",
-            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.6)",
-            "--hm-busy-bg": "rgba(16, 17, 29, 0.85)",
-        },
-        "slate-light": {
-            "--hm-bg": "#F4F6F8",
-            "--hm-bg-secondary": "#FFFFFF",
-            "--hm-bg-input": "#E3E6E9",
-            "--hm-text": "#18181B",
-            "--hm-text-secondary": "#747578",
-            "--hm-border": "#CED3D9",
-            "--hm-accent": "#475569",
-            "--hm-accent-hover": "#636F80",
-            "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#DC2626",
-            "--hm-danger-hover": "#E14747",
-            "--hm-danger-text": "#ffffff",
-            "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
-            "--hm-font-size": "14px",
-            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(244, 246, 248, 0.82)",
-        },
-        "slate-dark": {
-            "--hm-bg": "#1f232b",
-            "--hm-bg-secondary": "#292e38",
-            "--hm-bg-input": "#191d24",
-            "--hm-text": "#e6e9ee",
-            "--hm-text-secondary": "#9aa3b2",
-            "--hm-border": "#3a4150",
-            "--hm-accent": "#94a3b8",
-            "--hm-accent-hover": "#b6c2d4",
-            "--hm-accent-text": "#1f232b",
-            "--hm-danger": "#ef4444",
-            "--hm-danger-hover": "#dc2626",
-            "--hm-danger-text": "#ffffff",
-            "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(8, 10, 14, 0.55)",
-            "--hm-font-size": "14px",
-            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.5)",
-            "--hm-busy-bg": "rgba(31, 35, 43, 0.85)",
-        },
-        "emerald-light": {
-            "--hm-bg": "#FFFFFF",
-            "--hm-bg-secondary": "#F0FDF4",
-            "--hm-bg-input": "#CDE9DC",
-            "--hm-text": "#18181B",
-            "--hm-text-secondary": "#79797B",
-            "--hm-border": "#C8E1DA",
-            "--hm-accent": "#047857",
-            "--hm-accent-hover": "#278C6F",
-            "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#DC2626",
-            "--hm-danger-hover": "#DF4645",
-            "--hm-danger-text": "#ffffff",
-            "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
-            "--hm-font-size": "14px",
-            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(255, 255, 255, 0.82)",
-        },
-        "emerald-dark": {
-            "--hm-bg": "#0B1512",
-            "--hm-bg-secondary": "#12201A",
-            "--hm-bg-input": "#173B2D",
-            "--hm-text": "#F4F4F5",
-            "--hm-text-secondary": "#929696",
-            "--hm-border": "#143F30",
-            "--hm-accent": "#34D399",
-            "--hm-accent-hover": "#2FB886",
-            "--hm-accent-text": "#000000",
-            "--hm-danger": "#EF4444",
-            "--hm-danger-hover": "#CE3F3E",
+        "corail-dark": {
+            "--hm-bg": "#36252c",
+            "--hm-bg-secondary": "#433037",
+            "--hm-bg-input": "#503b43",
+            "--hm-text": "#f4eef0",
+            "--hm-text-secondary": "#ccb7bf",
+            "--hm-border": "#735963",
+            "--hm-accent": "#fa7fb5",
+            "--hm-accent-hover": "#dd72a0",
+            "--hm-accent-text": "#0b0b12",
+            "--hm-danger": "#f87171",
+            "--hm-danger-hover": "#db6667",
             "--hm-danger-text": "#000000",
             "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(11, 21, 18, 0.55)",
+            "--hm-overlay-bg": "rgba(54, 37, 44, 0.55)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(11, 21, 18, 0.85)",
+            "--hm-busy-bg": "rgba(54, 37, 44, 0.85)",
         },
-        "amber-light": {
-            "--hm-bg": "#FFFFFF",
-            "--hm-bg-secondary": "#FFFBEB",
-            "--hm-bg-input": "#F4E2C9",
-            "--hm-text": "#18181B",
-            "--hm-text-secondary": "#79797B",
-            "--hm-border": "#EFD9C9",
-            "--hm-accent": "#B45309",
-            "--hm-accent-hover": "#BF6C2B",
+        "ambre-light": {
+            "--hm-bg": "#dcc8b5",
+            "--hm-bg-secondary": "#fefefe",
+            "--hm-bg-input": "#d2bfac",
+            "--hm-text": "#2d251c",
+            "--hm-text-secondary": "#54473b",
+            "--hm-border": "#b6a08b",
+            "--hm-accent": "#7a4800",
+            "--hm-accent-hover": "#895b1b",
             "--hm-accent-text": "#ffffff",
-            "--hm-danger": "#DC2626",
-            "--hm-danger-hover": "#E14644",
+            "--hm-danger": "#a51d1d",
+            "--hm-danger-hover": "#ad3734",
             "--hm-danger-text": "#ffffff",
             "--hm-radius": "12px",
             "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
-            "--hm-busy-bg": "rgba(255, 255, 255, 0.82)",
+            "--hm-busy-bg": "rgba(220, 200, 181, 0.82)",
         },
-        "amber-dark": {
-            "--hm-bg": "#1A1408",
-            "--hm-bg-secondary": "#241C0D",
-            "--hm-bg-input": "#443410",
-            "--hm-text": "#F4F4F5",
-            "--hm-text-secondary": "#989691",
-            "--hm-border": "#4C3A0E",
-            "--hm-accent": "#FBBF24",
-            "--hm-accent-hover": "#DBA721",
-            "--hm-accent-text": "#000000",
-            "--hm-danger": "#EF4444",
-            "--hm-danger-hover": "#D13E3C",
+        "ambre-dark": {
+            "--hm-bg": "#0c0400",
+            "--hm-bg-secondary": "#170b02",
+            "--hm-bg-input": "#221508",
+            "--hm-text": "#f3efec",
+            "--hm-text-secondary": "#b9a593",
+            "--hm-border": "#42301f",
+            "--hm-accent": "#f29a2d",
+            "--hm-accent-hover": "#d08426",
+            "--hm-accent-text": "#0b0b12",
+            "--hm-danger": "#f87171",
+            "--hm-danger-hover": "#d56160",
             "--hm-danger-text": "#000000",
             "--hm-radius": "12px",
-            "--hm-overlay-bg": "rgba(26, 20, 8, 0.55)",
+            "--hm-overlay-bg": "rgba(12, 4, 0, 0.55)",
             "--hm-font-size": "14px",
             "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
-            "--hm-busy-bg": "rgba(26, 20, 8, 0.85)",
+            "--hm-busy-bg": "rgba(12, 4, 0, 0.85)",
+        },
+        "emeraude-light": {
+            "--hm-bg": "#c9dac4",
+            "--hm-bg-secondary": "#fdfffc",
+            "--hm-bg-input": "#c0d0bb",
+            "--hm-text": "#22291f",
+            "--hm-text-secondary": "#465143",
+            "--hm-border": "#a0b29a",
+            "--hm-accent": "#276701",
+            "--hm-accent-hover": "#3f781e",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#b01e1e",
+            "--hm-danger-hover": "#b43a37",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(201, 218, 196, 0.82)",
+        },
+        "emeraude-dark": {
+            "--hm-bg": "#081005",
+            "--hm-bg-secondary": "#111b0d",
+            "--hm-bg-input": "#1a2617",
+            "--hm-text": "#eef1ed",
+            "--hm-text-secondary": "#9faf9a",
+            "--hm-border": "#354430",
+            "--hm-accent": "#7fc765",
+            "--hm-accent-hover": "#6dac57",
+            "--hm-accent-text": "#0b0b12",
+            "--hm-danger": "#f87171",
+            "--hm-danger-hover": "#d46261",
+            "--hm-danger-text": "#000000",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(8, 16, 5, 0.55)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+            "--hm-busy-bg": "rgba(8, 16, 5, 0.85)",
+        },
+        "turquoise-light": {
+            "--hm-bg": "#c3e2e8",
+            "--hm-bg-secondary": "#fdffff",
+            "--hm-bg-input": "#b9d9de",
+            "--hm-text": "#1b292c",
+            "--hm-text-secondary": "#42585c",
+            "--hm-border": "#97bbc2",
+            "--hm-accent": "#07606c",
+            "--hm-accent-hover": "#23747f",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#bb2020",
+            "--hm-danger-hover": "#bc3d3e",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(195, 226, 232, 0.82)",
+        },
+        "turquoise-dark": {
+            "--hm-bg": "#051a1e",
+            "--hm-bg-secondary": "#0e2529",
+            "--hm-bg-input": "#183135",
+            "--hm-text": "#ecf1f2",
+            "--hm-text-secondary": "#91b0b5",
+            "--hm-border": "#315056",
+            "--hm-accent": "#0ec7de",
+            "--hm-accent-hover": "#0dadc1",
+            "--hm-accent-text": "#0b0b12",
+            "--hm-danger": "#f87171",
+            "--hm-danger-hover": "#d46465",
+            "--hm-danger-text": "#000000",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(5, 26, 30, 0.55)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+            "--hm-busy-bg": "rgba(5, 26, 30, 0.85)",
+        },
+        "amethyste-light": {
+            "--hm-bg": "#dfe1fa",
+            "--hm-bg-secondary": "#fefefe",
+            "--hm-bg-input": "#d6d8f0",
+            "--hm-text": "#252530",
+            "--hm-text-secondary": "#555669",
+            "--hm-border": "#b6b9d5",
+            "--hm-accent": "#4d41b0",
+            "--hm-accent-hover": "#6359bb",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#bb2020",
+            "--hm-danger-hover": "#c03d41",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(223, 225, 250, 0.82)",
+        },
+        "amethyste-dark": {
+            "--hm-bg": "#1e1f2e",
+            "--hm-bg-secondary": "#292a3a",
+            "--hm-bg-input": "#343547",
+            "--hm-text": "#eff0f4",
+            "--hm-text-secondary": "#abadc4",
+            "--hm-border": "#52536b",
+            "--hm-accent": "#a1a3ff",
+            "--hm-accent-hover": "#8d8fe0",
+            "--hm-accent-text": "#0b0b12",
+            "--hm-danger": "#f87171",
+            "--hm-danger-hover": "#d76567",
+            "--hm-danger-text": "#000000",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(30, 31, 46, 0.55)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+            "--hm-busy-bg": "rgba(30, 31, 46, 0.85)",
+        },
+        "neutre-light": {
+            "--hm-bg": "#f2f4f5",
+            "--hm-bg-secondary": "#fefeff",
+            "--hm-bg-input": "#e8eaeb",
+            "--hm-text": "#1f2730",
+            "--hm-text-secondary": "#4c5a69",
+            "--hm-border": "#c6cbd0",
+            "--hm-accent": "#515457",
+            "--hm-accent-hover": "#696c6f",
+            "--hm-accent-text": "#ffffff",
+            "--hm-danger": "#d12424",
+            "--hm-danger-hover": "#d64343",
+            "--hm-danger-text": "#ffffff",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(24, 24, 27, 0.35)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+            "--hm-busy-bg": "rgba(242, 244, 245, 0.82)",
+        },
+        "neutre-dark": {
+            "--hm-bg": "#343537",
+            "--hm-bg-secondary": "#3f4144",
+            "--hm-bg-input": "#4a4d51",
+            "--hm-text": "#edf0f4",
+            "--hm-text-secondary": "#ced1d4",
+            "--hm-border": "#686e75",
+            "--hm-accent": "#aeb1b5",
+            "--hm-accent-hover": "#9c9ea2",
+            "--hm-accent-text": "#0b0b12",
+            "--hm-danger": "#f87878",
+            "--hm-danger-hover": "#db6e6e",
+            "--hm-danger-text": "#000000",
+            "--hm-radius": "12px",
+            "--hm-overlay-bg": "rgba(52, 53, 55, 0.55)",
+            "--hm-font-size": "14px",
+            "--hm-shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+            "--hm-busy-bg": "rgba(52, 53, 55, 0.85)",
         },
     };
     Object.keys(THEME_PRESETS).forEach((name) => themesRegister(name, THEME_PRESETS[name]));
 
     // ─── Alias historiques (valeurs RIGOUREUSEMENT identiques) ───────────────
-    // `indigo` a été FIGÉ DEPUIS les palettes historiques (HolafTokens réutilise
-    // HISTORICAL.dark / HISTORICAL.light telles quelles pour indigo-dark /
-    // indigo-light, et midnight / slate conservent leur mode sombre historique) :
-    // les 4 noms historiques deviennent donc des ALIAS EXACTS.
-    //   dark ≡ indigo-dark · light ≡ indigo-light · midnight ≡ midnight-dark ·
-    //   slate ≡ slate-dark.
+    // Les 4 noms historiques sont REMAPPÉS sur les nouvelles familles (mêmes
+    // règles que la table HolafTokens.MIGRATIONS 0.4.0) :
+    //   dark ≡ amethyste-dark · light ≡ amethyste-light ·
+    //   midnight ≡ amethyste-dark · slate ≡ neutre-dark.
     // `dark` reste STRICTEMENT les valeurs par défaut du CSS injecté ci-dessous
-    // → theme:"dark" ≡ aucune option theme (rétrocompatibilité à l'identique).
-    themesRegister("dark", THEME_PRESETS["indigo-dark"]);
-    themesRegister("light", THEME_PRESETS["indigo-light"]);
-    themesRegister("midnight", THEME_PRESETS["midnight-dark"]);
-    themesRegister("slate", THEME_PRESETS["slate-dark"]);
+    // → theme:"dark" ≡ aucune option theme (rétrocompatibilité visuelle).
+    themesRegister("dark", THEME_PRESETS["amethyste-dark"]);
+    themesRegister("light", THEME_PRESETS["amethyste-light"]);
+    themesRegister("midnight", THEME_PRESETS["amethyste-dark"]);
+    themesRegister("slate", THEME_PRESETS["neutre-dark"]);
 
     // ─── Thème global par défaut (VOLATIL — aucune persistance) ─────────────
     // HolafModal.setTheme(...) s'applique à toutes les modales qui ne passent
@@ -521,12 +570,12 @@ const HolafModal = (function () {
     // être re-thémée indépendamment via l'option `theme`.
     const HOLAF_MODAL_CSS = `
 .holaf-modal-overlay, .holaf-modal-root {
-    --hm-bg: #1e1e1e; --hm-bg-secondary: #27272a; --hm-bg-input: #1a1a1a;
-    --hm-text: #e4e4e7; --hm-text-secondary: #a1a1aa; --hm-border: #3f3f46;
-    --hm-accent: #6366f1; --hm-accent-hover: #818cf8; --hm-accent-text: #ffffff;
-    --hm-danger: #ef4444; --hm-danger-hover: #dc2626; --hm-danger-text: #ffffff;
-    --hm-radius: 12px; --hm-overlay-bg: rgba(0, 0, 0, 0.55); --hm-font-size: 14px;
-    --hm-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); --hm-busy-bg: rgba(30, 30, 30, 0.82);
+    --hm-bg: #1e1f2e; --hm-bg-secondary: #292a3a; --hm-bg-input: #343547;
+    --hm-text: #eff0f4; --hm-text-secondary: #abadc4; --hm-border: #52536b;
+    --hm-accent: #a1a3ff; --hm-accent-hover: #8d8fe0; --hm-accent-text: #0b0b12;
+    --hm-danger: #f87171; --hm-danger-hover: #d76567; --hm-danger-text: #000000;
+    --hm-radius: 12px; --hm-overlay-bg: rgba(30, 31, 46, 0.55); --hm-font-size: 14px;
+    --hm-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); --hm-busy-bg: rgba(30, 31, 46, 0.85);
     --hm-width: 440px;
 }
 .holaf-modal-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--hm-overlay-bg); animation: holaf-modal-fade 0.16s ease-out; box-sizing: border-box; }

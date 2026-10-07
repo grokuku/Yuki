@@ -30,6 +30,8 @@ import {
   TtsDownloadManager,
   type CatalogEntry,
   type ResolvedCatalogPackage,
+  type SegmentSynthesizer,
+  type TtsPipelineDeps,
 } from "../../src/tts/index.js";
 import { VoiceStore } from "../../src/tts/voices-store.js";
 import { FakePiHost, type FakeStep } from "../../tests/pi/host-double.js";
@@ -385,11 +387,98 @@ function chatSteps(text: string, size = 14, delayMs = 20): FakeStep[] {
   return steps;
 }
 
+/** Réponse intégralement dans le canal `thinking` (AUCUN `content`). */
+function thinkingOnlySteps(texts: string[], delayMs = 150): FakeStep[] {
+  return texts.map((text) => ({
+    kind: "delta" as const,
+    channel: "thinking" as const,
+    text,
+    delayMs,
+  }));
+}
+
+/* ─── Corpus PIÉGEUX (le bug prod passait à travers un contenu trop simple) ──
+ * Chaque entrée alimente un script streamé dans l'ordre où l'E2E envoie ses
+ * messages. Ces contenus exercent : fence jamais fermée (``` et ~~~), fence
+ * avec espaces de fin/info-string inattendue, bloc `muet` non fermé, tableau
+ * incomplet, `\n` initiaux, un SEUL gros delta, et enfin une réponse **vide**
+ * (tout en `thinking`) — le scénario réel du rapport.
+ */
+export const CHAT_FENCE_UNCLOSED = [
+  "Voici un petit exemple :",
+  "",
+  "```python",
+  "print('bonjour')",
+  "print('monde')",
+].join("\n");
+export const CHAT_TILDE_UNCLOSED = ["Autre exemple :", "", "~~~", "ligne de code sans clôture"].join("\n");
+export const CHAT_FENCE_SPACES = ["```js   ", "const x = 1;", "```   ", "Et voilà la fin."].join("\n");
+export const CHAT_MUTE_UNCLOSED = ["Introduction courte.", "", "```muet", "données brutes 42"].join("\n");
+export const CHAT_TABLE_INCOMPLETE = [
+  "| Nom | Valeur |",
+  "| --- | --- |",
+  "| alpha | 1 |",
+  "| beta | 2 |",
+].join("\n");
+export const CHAT_LEADING_NEWLINES = ["", "", "", "Bonjour, voici une réponse qui commence par des sauts de ligne."].join("\n");
+export const CHAT_BIG_DELTA = [
+  "# Gros delta",
+  "",
+  "Un **paragraphe** complet avec du `code` et un [lien](https://exemple.fr).",
+  "",
+  "- un",
+  "- deux",
+  "",
+  "Fin.",
+].join("\n");
+
+const CHAT_SCRIPTS = [
+  { name: "chat-markdown", steps: chatSteps(CHAT_MARKDOWN) },
+  { name: "chat-fence-unclosed", steps: chatSteps(CHAT_FENCE_UNCLOSED) },
+  { name: "chat-tilde-unclosed", steps: chatSteps(CHAT_TILDE_UNCLOSED) },
+  { name: "chat-fence-spaces", steps: chatSteps(CHAT_FENCE_SPACES) },
+  { name: "chat-mute-unclosed", steps: chatSteps(CHAT_MUTE_UNCLOSED) },
+  { name: "chat-table-incomplete", steps: chatSteps(CHAT_TABLE_INCOMPLETE) },
+  { name: "chat-leading-newlines", steps: chatSteps(CHAT_LEADING_NEWLINES) },
+  { name: "chat-big-delta", steps: chatSteps(CHAT_BIG_DELTA, CHAT_BIG_DELTA.length + 1, 25) },
+  {
+    name: "chat-thinking-only",
+    steps: thinkingOnlySteps([
+      "L'utilisateur pose une question. ",
+      "Je réfléchis longuement à la meilleure façon d'y répondre. ",
+      "Je pèse les options, puis je conclus.",
+    ]),
+  },
+];
+
 const chatHost = new FakePiHost({
   sessionId: "e2e-chat-session",
-  scripts: [{ name: "chat-markdown", steps: chatSteps(CHAT_MARKDOWN) }],
+  scripts: CHAT_SCRIPTS,
 });
 await chatHost.start();
+
+/* ─── Pipeline TTS RÉEL (synthétiseur simulé) ──────────────────────────────
+ * Câblé comme en production : le TTS est produit côté SERVEUR à partir des
+ * deltas du canal `content`. C'est indispensable pour reproduire le rapport :
+ * une réponse sans `content` ne produit AUCUNE trame audio (d'où le message
+ * client), indépendamment du rendu de l'UI.
+ */
+const fakeSynthesizer: SegmentSynthesizer = async () =>
+  (async function* () {
+    yield { type: "format", sampleRate: 16_000, channels: 1 };
+    yield { type: "data", bytes: Buffer.alloc(3_200) };
+  })();
+
+const ttsPipeline: TtsPipelineDeps = {
+  enabled: true,
+  config: {
+    getString: (path) => config.getString(path),
+    getNumber: (path) => config.getNumber(path),
+  },
+  synthesizer: fakeSynthesizer,
+  resolveVoice: (id) => voiceStore.resolveVoice(id).voice,
+  logger,
+};
 
 const transport = createWsTransport({
   host: chatHost,
@@ -397,6 +486,7 @@ const transport = createWsTransport({
   serverVersion: env.version,
   replayBufferSize: 1000,
   replayBufferBytes: 1_000_000,
+  tts: ttsPipeline,
 });
 
 const profiles = loadProfiles();

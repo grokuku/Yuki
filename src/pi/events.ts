@@ -108,6 +108,33 @@ export function contentTextFromMessage(message: RawAgentMessage): string {
   return parts.join("");
 }
 
+/**
+ * Suffixe de CONTENU non encore streamé, à émettre comme delta de rattrapage.
+ *
+ * Certains fournisseurs n'émettent pas de `text_delta` pour tout le contenu :
+ * le texte n'est alors complet que dans l'événement `text_end` / `message_end`.
+ * Or le chemin **live** (affichage incrémental de l'UI ET synthèse TTS, qui lit
+ * uniquement les deltas du canal `content`) ne verrait jamais ce texte : la
+ * réponse resterait **vide à l'écran** et **muette**, alors que le moteur TTS
+ * et le transport fonctionnent.
+ *
+ * On ne renvoie QUE le suffixe manquant :
+ *   - `content` vide → rien ;
+ *   - `streamed` vide → tout `content` ;
+ *   - `streamed` préfixe de `content` → le suffixe ;
+ *   - divergence (contenu réécrit) → rien (on ne duplique jamais, le transcript
+ *     reste la source de vérité).
+ */
+export function unstreamedContentSuffix(
+  streamed: string,
+  content: string,
+): string {
+  if (content.length === 0) return "";
+  if (streamed.length === 0) return content;
+  if (content.startsWith(streamed)) return content.slice(streamed.length);
+  return "";
+}
+
 const REDACTED = "[REDACTED]";
 
 /**

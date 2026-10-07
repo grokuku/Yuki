@@ -2037,14 +2037,23 @@ viennent des fichiers `config/pi/system-prompt.md` / `-heavy.md` chargés dans
 ```
 ## Réponse parlée
 
-Ta réponse sera lue à voix haute : l'utilisateur l'écoute.
+Ta réponse est lue à voix haute : l'utilisateur l'écoute. Cela ne change pas ce que tu dois dire.
+- Réponds TOUJOURS par un texte visible, complet et utile — c'est le cœur de ta réponse, à l'écran comme à l'oreille.
 - Écris des phrases naturelles, comme à l'oral.
-- Tout ce qui compte doit être dit avec des mots : un tableau ou une image est affiché mais jamais lu, alors commente-le naturellement.
-- Ce qui ne doit pas être entendu (tableau, données brutes, code) va dans un bloc étiqueté « muet » : ouvre-le par ```muet.
+- Tout ce qui compte doit être dit avec des mots : commente naturellement ce que montre un tableau ou une image.
+- Le bloc « muet » (```muet) est un COMPLÉMENT facultatif, réservé aux annexes mal lues (tableau, données brutes, code) : il ne remplace JAMAIS la réponse.
+- Ne place jamais la réponse entière dans un bloc muet, et ne renvoie jamais une réponse sans texte : elle serait vide à l'écran comme à l'oreille.
 ```
 
 La dernière ligne **interpole `MUTE_BLOCK_LABEL`** : le prompt ne peut pas
 diverger du filtre.
+
+> **Révision (bug production).** La première rédaction (« Ta réponse sera lue à
+> voix haute » + description du seul bloc `muet`) laissait certains modèles
+> placer **toute** leur réponse dans un bloc muet, ou n'en produire **aucune** :
+> le texte était vide à l'écran ET la voix muette, alors que `TTFT`/tokens et la
+> réflexion fonctionnaient. Le texte ci-dessus pose donc l'invariant « la réponse
+> est d'abord un texte visible ; le bloc muet est un complément ».
 
 ### 25.5 Les trois ajouts au filtre (`src/tts/markdown.ts`)
 

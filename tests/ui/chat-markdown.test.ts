@@ -295,6 +295,75 @@ describe("miroir client ↔ serveur — convention du bloc muet", () => {
   });
 });
 
+describe("constructs NON FERMÉS / malformés — jamais de contenu avalé", () => {
+  const CASES: Array<{ name: string; markdown: string; type: string; payload: string }> = [
+    {
+      name: "fence ``` non fermée",
+      markdown: "Voici :\n```python\nprint('bonjour')\n",
+      type: "code",
+      payload: "print('bonjour')",
+    },
+    {
+      name: "fence ~~~ non fermée",
+      markdown: "~~~\ndu code ici\n",
+      type: "code",
+      payload: "du code ici",
+    },
+    {
+      name: "bloc muet non fermé",
+      markdown: "Intro.\n```muet\ndonnees brutes 42\n",
+      type: "mute",
+      payload: "donnees brutes 42",
+    },
+    {
+      name: "fence avec espaces en fin de ligne",
+      markdown: "```js   \nconst y = 2;\n```   \nFin.",
+      type: "code",
+      payload: "const y = 2;",
+    },
+    {
+      name: "info-string inattendue",
+      markdown: "```weird-info x y\npayload spécial\n```\n",
+      type: "code",
+      payload: "payload spécial",
+    },
+    {
+      name: "tableau incomplet (touche la fin du flux)",
+      markdown: "| A | B |\n| --- | --- |\n| 1 | 2 |",
+      type: "table",
+      payload: "1",
+    },
+  ];
+
+  for (const testCase of CASES) {
+    it(`${testCase.name} : résolu en fin de flux, contenu présent (jamais avalé)`, () => {
+      const blocks = finalBlocks(testCase.markdown);
+      expect(blocks.some((b) => b.type === testCase.type)).toBe(true);
+      expect(displayModelText(blocks)).toContain(testCase.payload);
+    });
+  }
+
+  it("un flux incrémental ne perd AUCUN caractère (fence non fermée comprise)", () => {
+    const markdown = "Début.\n\n```python\nprint('x')\nconsole.log('y')\n";
+    let source = "";
+    let from = 0;
+    const rendered: string[] = [];
+    for (let i = 0; i < markdown.length; i += 5) {
+      source += markdown.slice(i, i + 5);
+      const { blocks, tail } = parseBlocks(source, false, from);
+      for (const b of blocks as UiBlock[]) rendered.push(displayModelText([b]));
+      rendered.push(tail);
+      from = tail.length > 0 ? source.length - tail.length : source.length;
+    }
+    const { blocks } = parseBlocks(source, true, from);
+    for (const b of blocks as UiBlock[]) rendered.push(displayModelText([b]));
+    const joined = rendered.join("\n");
+    expect(joined).toContain("Début.");
+    expect(joined).toContain("print('x')");
+    expect(joined).toContain("console.log('y')");
+  });
+});
+
 /* ─────────────── 5. Garde anti-injection (aucun HTML dérivé) ─────────────── */
 
 describe("garde anti-injection — le rendu n'emploie jamais innerHTML", () => {

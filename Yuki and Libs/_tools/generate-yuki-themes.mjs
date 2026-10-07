@@ -1,23 +1,32 @@
 #!/usr/bin/env node
 /**
- * GÉNÉRATEUR JETABLE — palettes Yuki (LOT B, modèle à deux axes).
+ * GÉNÉRATEUR JETABLE — palettes Yuki (LOT 3, modèle à deux axes V2).
  *
  * Situation : ce script vit à la racine du workspace composite
  * (« /projects/Yuki/Yuki and Libs »), HORS des deux dépôts git (Yuki et
- * holaf-lib). Il importe le catalogue holaf-lib et écrit l'artefact généré
- * `Yuki/public/ui/themes.css` (qui reste commité dans Yuki).
+ * holaf-lib). Il importe le catalogue holaf-lib et écrit les artefacts générés
+ * `Yuki/public/ui/themes.css` et `Yuki/public/ui/themes-data.js` (qui restent
+ * commités dans Yuki).
  *
- * Source de vérité des palettes : `HolafTokens.PRESETS` (holaf-tokens 0.3.0),
- * c'est-à-dire EXACTEMENT le catalogue holaf-lib (5 familles × 2 modes). Les
- * 4 palettes historiques (indigo/midnight/slate × dark + indigo-light) y sont
- * figées à l'identique ; midnight-light, slate-light, emerald-* et amber-*
- * sont générées par le catalogue. Aucune palette n'est réinventée ici.
+ * Source de vérité des palettes : `HolafTokens.PRESETS` (holaf-tokens 0.4.1),
+ * c'est-à-dire EXACTEMENT le catalogue V2 holaf-lib. Aucune palette n'est
+ * réinventée ici : les 12 presets <famille>-<mode> (6 familles × 2 modes) sont
+ * projetés tels quels.
+ *
+ * Trois niveaux de profondeur + un état de survol (règle V2) : chaque preset
+ * porte surface → surface-elev → surface-raised → surface-hover, projetés sur
+ *   --bg / --panel  ← surface        (fond de page / chrome)
+ *   --panel-2       ← surface-elev   (cartes, contrôles)
+ *   --panel-3       ← surface-raised (blocs imbriqués : code, en-têtes)
+ *   --panel-hover   ← surface-hover  (état de survol)
  *
  * Doctrine « ALIAS + REPLI » (identique à l'unification Pi-Web) : chaque
  * variable de Yuki POINTE sur un token `--holaf-*` posé au runtime par la
  * brique, avec la valeur d'avant l'unification en 2e argument de `var()` :
  *   --bg / --panel  ← --holaf-surface        (fond de page du catalogue)
  *   --panel-2       ← --holaf-surface-elev   (surface surélevée)
+ *   --panel-3       ← --holaf-surface-raised (surface imbriquée)
+ *   --panel-hover   ← --holaf-surface-hover  (survol)
  *   --border        ← --holaf-border
  *   --text          ← --holaf-text           --muted ← --holaf-text-muted
  *   --accent        ← --holaf-accent         --danger ← --holaf-danger
@@ -36,23 +45,23 @@
  *                mode clair) jusqu'à contrastRatio(ok, surface) >= 4.5 (WCAG AA).
  *
  * Deux artefacts sont écrits (tous deux commités dans Yuki) :
- *   - public/ui/themes.css      : les 10 presets en ALIAS + repli + contrôle ;
+ *   - public/ui/themes.css      : les 12 presets en ALIAS + repli + contrôle ;
  *   - public/ui/themes-data.js  : les seuls dérivés à fournir au pack hôte
  *                                 ({ user, assistant, ok } par preset).
  *
  * Usage :  node _tools/generate-yuki-themes.mjs
  * Sortie : table de rapport sur stdout + écriture des deux artefacts.
  *
- * Idempotent : aucune date ni valeur volatille n'est écoute, deux exécutions
+ * Idempotent : aucune date ni valeur volatile n'est écrite, deux exécutions
  * successives produisent des fichiers identiques octet pour octet.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { HolafColor } from "../holaf-lib/js/holaf-color.js";
-// holaf-tokens 0.3.0 : plus d'export ESM nommé — l'import par effet de bord
+// holaf-tokens 0.4.0+ : plus d'export ESM nommé — l'import par effet de bord
 // exécute la brique, qui s'expose sur window (navigateur) ou globalThis (Node).
 import "../holaf-lib/js/holaf-tokens.js";
 const HolafTokens = globalThis.HolafTokens || window.HolafTokens;
@@ -62,19 +71,12 @@ const UI_DIR = join(HERE, "..", "Yuki", "public", "ui");
 const OUT = join(UI_DIR, "themes.css");
 const DATA_OUT = join(UI_DIR, "themes-data.js");
 
-const FAMILIES = ["indigo", "midnight", "slate", "emerald", "amber"];
+// 6 familles V2 (ordre d'affichage du catalogue : par teinte, Neutre en dernier).
+const FAMILIES = ["corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"];
 const MODES = ["light", "dark"];
 const OK_SEED = "#4cc38a";
 const OK_STEP = 0.05; // palier additif (part de noir/blanc mélangée à la graine)
 const OK_MIN_CONTRAST = 4.5;
-
-const SEEDS = {
-  indigo: "#6366f1",
-  midnight: "#818cf8",
-  slate: "#94a3b8",
-  emerald: "#10b981",
-  amber: "#f59e0b",
-};
 
 /** --ok : premier palier additif (5 %) atteignant contrastRatio >= 4.5. */
 function okColor(surface, mode) {
@@ -97,6 +99,8 @@ function project(preset) {
     bg: surface,
     panel: surface,
     panel2: p(preset, "surface-elev"),
+    panel3: p(preset, "surface-raised"),
+    panelHover: p(preset, "surface-hover"),
     border: p(preset, "border"),
     text: p(preset, "text"),
     muted: p(preset, "text-muted"),
@@ -145,22 +149,23 @@ for (const t of themes) {
 
 const ratio = (v) => v.toFixed(2).padStart(6);
 console.log(`Palettes Yuki — projetées depuis HolafTokens.PRESETS (holaf-lib ${HolafTokens.VERSION})`);
+console.log(`Familles (${FAMILIES.length}) : ${FAMILIES.join(", ")} — presets : ${themes.length}`);
 console.log("Contrastes WCAG (min. exigé : text et muted >= 4.5 ; ok >= 4.5 ; danger info) :");
 console.log(
-  "preset".padEnd(15),
+  "preset".padEnd(16),
   "text/bg", "muted/bg", "ok/bg", "danger/bg",
-  "| bg", "panel-2", "border", "text", "muted", "accent", "danger", "user", "assistant", "ok",
+  "| bg", "elev", "raised", "hover",
 );
 for (const t of themes) {
   const v = t.vars;
   console.log(
-    t.name.padEnd(15),
+    t.name.padEnd(16),
     ratio(t.ratios["text/bg"]),
     ratio(t.ratios["muted/bg"]),
     ratio(t.ratios["ok/bg"]),
     ratio(t.ratios["danger/bg"]),
     "|",
-    v.bg, v.panel2, v.border, v.text, v.muted, v.accent, v.danger, v.user, v.assistant, v.ok,
+    v.bg, v.panel2, v.panel3, v.panelHover,
   );
 }
 
@@ -173,6 +178,8 @@ const ALIAS = [
   ["--bg", "holaf-surface", "bg"],
   ["--panel", "holaf-surface", "panel"],
   ["--panel-2", "holaf-surface-elev", "panel2"],
+  ["--panel-3", "holaf-surface-raised", "panel3"],
+  ["--panel-hover", "holaf-surface-hover", "panelHover"],
   ["--border", "holaf-border", "border"],
   ["--text", "holaf-text", "text"],
   ["--muted", "holaf-text-muted", "muted"],
@@ -196,8 +203,8 @@ function block(t) {
 const header = `/*
  * Thèmes de l'UI Yuki — FICHIER GÉNÉRÉ, ne pas éditer à la main.
  *
- * Modèle à DEUX AXES : famille (indigo, midnight, slate, emerald, amber) ×
- * mode (light, dark) = 10 presets « <famille>-<mode> ».
+ * Modèle à DEUX AXES : famille (${FAMILIES.join(", ")}) ×
+ * mode (light, dark) = ${themes.length} presets « <famille>-<mode> ».
  *
  * DOCTRINE « ALIAS + REPLI » (comme Pi-Web) : ces variables ne portent plus
  * de couleur littérale, elles POINTENT sur les tokens --holaf-* posés au
@@ -211,8 +218,9 @@ const header = `/*
  *     calculée ci-dessous. Si la brique ne se charge pas, le rendu reste
  *     STRICTEMENT identique.
  *
- * Rapport de projection (valeurs de repli) :
+ * Rapport de projection (valeurs de repli) — 3 niveaux de profondeur + survol :
  *   --bg / --panel  ← surface        --panel-2 ← surface-elev
+ *   --panel-3       ← surface-raised --panel-hover ← surface-hover
  *   --border        ← border
  *   --text          ← text           --muted   ← text-muted
  *   --accent        ← accent         --danger  ← danger
@@ -236,10 +244,12 @@ const header = `/*
 const controls = `
 /* ─── Contrôle de thème (topbar) ─────────────────────────────────────────
  * Deux contrôles aux rôles distincts :
- *   select#theme-family : la FAMILLE (Indigo, Nuit, Ardoise, Émeraude, Ambre) ;
+ *   select#theme-family : la FAMILLE (Corail, Ambre, Émeraude, Turquoise,
+ *                         Améthyste, Neutre) ;
  *   button#theme-toggle : le MODE clair/sombre (conserve la famille).
  * Compact, cohérent avec la topbar ; focus visible (clavier) ; l'état
  * « pressé » du bouton (mode sombre actif) reçoit une teinte accent.
+ * Le survol s'appuie sur le 4e palier de profondeur (--panel-hover).
  */
 
 .theme-control {
@@ -263,6 +273,7 @@ const controls = `
 .theme-control select:hover,
 .theme-control select:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--panel-hover);
 }
 
 .theme-control select:focus-visible,
@@ -289,6 +300,7 @@ const controls = `
 
 .theme-control button:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--panel-hover);
   color: var(--accent);
 }
 

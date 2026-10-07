@@ -37,6 +37,7 @@ import {
   contentTextFromMessage,
   deltaText,
   finishReasonForMessage,
+  unstreamedContentSuffix,
   usageFromMessage,
   type RawAgentMessage,
   type RawAssistantMessageEvent,
@@ -305,6 +306,23 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         }
         // Transcript = CONTENU SEUL : les blocs `thinking` sont exclus.
         const content = contentTextFromMessage(message);
+        // Rattrapage : le contenu autoritatif du message peut contenir un
+        // suffixe JAMAIS streamé (`text_delta` absent chez certains
+        // fournisseurs). Sans ce delta, l'UI **live** resterait vide et le TTS
+        // muet, alors que la réponse existe. On ne réémet que le suffixe
+        // manquant (aucun doublon dans le cas normal où `partial === content`).
+        const suffix = unstreamedContentSuffix(record.partial, content);
+        if (suffix.length > 0) {
+          run.instrumentation.markFirstToken();
+          record.partial += suffix;
+          emitEvent({
+            type: "delta",
+            sessionId: record.sessionId,
+            runId: run.runId,
+            channel: "content",
+            text: suffix,
+          });
+        }
         const text = content.length > 0 ? content : record.partial;
         if (text.length > 0) {
           record.transcript.push({ role: "assistant", text });

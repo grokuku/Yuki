@@ -53,9 +53,17 @@ directement à l'utilisateur : il te rend un rapport que tu résumes. Utilise
 /**
  * Bloc d'instruction ajouté au prompt système **léger** quand la voix est
  * active (`tts.enabled === "on"`). Il rappelle la convention du chat oral :
- * la réponse est **entendue**, donc tout ce qui compte doit être **dit avec des
- * mots**, et ce qui est affiché mais muet (tableau, image, données, code) va
- * dans un bloc étiqueté `muet` (source unique : `src/tts/mute.ts`).
+ * la réponse est **entendue**, mais elle doit **d'abord être écrite** — un
+ * texte visible et complet, que l'on peut aussi lire à l'écran.
+ *
+ * ⚠️ **Historique (bug production)** : la version initiale se contentait de
+ * « Ta réponse sera lue à voix haute » et décrivait surtout ce qui va dans le
+ * bloc `muet`. Certains modèles en ont déduit qu'ils devaient **tout** mettre
+ * dans le bloc muet (ou ne produire aucun texte) : la réponse devenait alors
+ * **vide à l'écran** ET **muette**, alors que `TTFT`/tokens et la réflexion
+ * fonctionnaient. Le texte ci-dessous pose donc UN invariant non ambigu : la
+ * réponse est un texte visible ; le bloc muet est un **complément facultatif**,
+ * jamais un substitut.
  *
  * ⚠️ Le filtre (`src/tts/markdown.ts`) et ce texte lisent la **même**
  * constante `MUTE_BLOCK_LABEL` : ils ne peuvent pas diverger.
@@ -65,10 +73,12 @@ directement à l'utilisateur : il te rend un rapport que tu résumes. Utilise
 export const VOICE_SPEECH_INSTRUCTION = [
   "## Réponse parlée",
   "",
-  "Ta réponse sera lue à voix haute : l'utilisateur l'écoute.",
+  "Ta réponse est lue à voix haute : l'utilisateur l'écoute. Cela ne change pas ce que tu dois dire.",
+  "- Réponds TOUJOURS par un texte visible, complet et utile — c'est le cœur de ta réponse, à l'écran comme à l'oreille.",
   "- Écris des phrases naturelles, comme à l'oral.",
-  "- Tout ce qui compte doit être dit avec des mots : un tableau ou une image est affiché mais jamais lu, alors commente-le naturellement.",
-  `- Ce qui ne doit pas être entendu (tableau, données brutes, code) va dans un bloc étiqueté « ${MUTE_BLOCK_LABEL} » : ouvre-le par \`\`\`${MUTE_BLOCK_LABEL}.`,
+  "- Tout ce qui compte doit être dit avec des mots : commente naturellement ce que montre un tableau ou une image.",
+  `- Le bloc « ${MUTE_BLOCK_LABEL} » (\`\`\`${MUTE_BLOCK_LABEL}) est un COMPLÉMENT facultatif, réservé aux annexes mal lues (tableau, données brutes, code) : il ne remplace JAMAIS la réponse.`,
+  "- Ne place jamais la réponse entière dans un bloc muet, et ne renvoie jamais une réponse sans texte : elle serait vide à l'écran comme à l'oreille.",
 ].join("\n");
 
 /**

@@ -1,15 +1,42 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * Holaf UI — Brique HolafTokens · version 0.3.0
+ * Holaf UI — Brique HolafTokens · version 0.4.1
  * ─────────────────────────────────────────────────────────────────────────────
  * BRIQUE « FONDATION » — les tokens CSS de PAGE.
  *
- * ▸ ÉVOLUTION 0.3.0 (additive + 2 correctifs) ────────────────────────────────
+ * ▸ PATCH 0.4.1 (contraste du texte atténué) ────────────────────────────────
+ *   Correction de VALEUR (aucun changement d'API, aucune clé nouvelle) :
+ *   6 `text-muted` du catalogue V2 passaient sous le seuil AA 4,5:1 sur un
+ *   palier de fond (le pire étant `ambre-light` sur `surface` = 4,42:1, et
+ *   `neutre-dark` sur `surface-hover` = 2,97:1). Chacun est retouché A MINIMA
+ *   (luminosité ajustée, teinte/saturation de la famille PRÉSERVÉES) jusqu'à
+ *   ≥ 4,5:1 sur LES QUATRE paliers de profondeur. Aucune autre valeur n'est
+ *   touchée. La garde V2 (tests/helpers/theme-guard.js) contrôle désormais
+ *   AUSSI `text-muted` sur les 4 paliers (lacune comblée : elle ne vérifiait
+ *   que `text` et l'accent).
+ *
+ * ▸ RUPTURE 0.4.0 (catalogue V2) ─────────────────────────────────────────────
+ *   Le catalogue à 2 axes est REMPLACÉ : 6 familles × 2 modes = 12 presets
+ *   `<famille>-<mode>` (corail, ambre, emeraude, turquoise, amethyste, neutre),
+ *   valeurs FIGÉES en hex, calculées une fois depuis la maquette V2 validée
+ *   (`Yuki and Libs/_tools/theme-accents.mjs` : FAMILIES_WHEEL + ACCENTS_V2).
+ *   Les 10 presets de la 0.2/0.3 (indigo/midnight/slate/emerald/amber ×
+ *   light/dark) DISPARAISSENT. Les 4 alias historiques (dark/light/midnight/
+ *   slate) sont CONSERVÉS mais REMAPPÉS (table MIGRATIONS exportée) pour ne
+ *   pas casser les préférences « plates ».
+ *   Chaque preset porte 16 clés : les 15 clés standard + `surface-hover`, le 4ᵉ
+ *   palier de profondeur (surface → surface-elev → surface-raised →
+ *   surface-hover). La règle V2 (fonds/accents distincts par mode, texte — y
+ *   compris le texte ATTÉNUÉ — /fond ≥ 4,5:1, non-textuel ≥ 3:1, profondeur ≥
+ *   seuil) est REJOUÉE en test (tests/holaf-tokens.test.js), sans coût runtime.
+ *
+ * ▸ HÉRITAGE 0.3.0 (conservé) ────────────────────────────────────────────────
  *   23 clés optionnelles (13 dérivables + 5 d'état + 5 d'identité), registre
  *   de PACKS hôte (registerPreset / updatePreset / unregisterPreset /
- *   getPreset / alpha), PURGE PAR POSSESSION D'ENSEMBLE, et fichier désormais
- *   chargeable en <script> classique (file:// ET HTTP) : AUCUN export
- *   top-level (l'`export { HolafTokens }` de la 0.2.0 est retiré).
- *   Rétrocompatibilité 0.2.0 totale : mêmes valeurs, même API, même événement.
+ *   getPreset / alpha), PURGE PAR POSSESSION D'ENSEMBLE, et fichier chargeable
+ *   en <script> classique (file:// ET HTTP) : AUCUN export top-level (l'`export
+ *   { HolafTokens }` de la 0.2.0 est retiré).
+ *   ⚠️ Les VALEURS du catalogue changent (rupture) mais l'API, l'événement et
+ *   le mécanisme de packs de la 0.3.0 sont inchangés.
  *
  * ▸ PRIVILÈGE (par CONTRAT EXPLICITE) ───────────────────────────────────────
  *   HolafTokens est la SEULE brique du kit autorisée à poser des variables
@@ -29,7 +56,8 @@
  *     surface, surface-elev, surface-raised, border, text, text-muted,
  *     accent, accent-hover, accent-text, danger, danger-hover, danger-text,
  *     radius, shadow, font-size.
- *   Clés OPTIONNELLES 0.3.0 (23 — jamais posées par les 14 intégrés) :
+ *   Clés OPTIONNELLES 0.3.0 (23 — jamais posées par les presets intégrés,
+ *     EXCEPTÉ surface-hover, désormais porté par les 12 presets V2) :
  *     groupe A (dérivables) : accent-soft, accent-glow, accent-gradient,
  *       accent-gradient-hover, accent-shadow, danger-soft, danger-shadow,
  *       danger-gradient*, border-muted, text-faint, surface-hover,
@@ -52,18 +80,18 @@
  *     --shadow     → var(--holaf-shadow)
  *   Voir js/README-holaf-tokens.md pour le mapping complet.
  *
- * ▸ FAMILLES × MODES (catalogue à 2 axes) ──────────────────────────────────
- *   5 familles (indigo, midnight, slate, emerald, amber) × 2 modes (light,
- *   dark) = 10 presets `<famille>-<mode>`, PLUS 4 alias historiques
- *   (dark / light / midnight / slate) aux valeurs RIGOUREUSEMENT identiques.
- *   `indigo` réutilise les deux palettes historiques ; `midnight` et `slate`
- *   conservent leur mode SOMBRE historique et reçoivent un mode CLAIR GÉNÉRÉ ;
- *   `emerald` et `amber` sont GÉNÉRÉES dans les deux modes. Contraste des
- *   textes ≥ 4.5:1 sur les surfaces. Si l'hôte n'a fait AUCUN choix, la brique
- *   applique au chargement le preset initial issu de `prefers-color-scheme`
- *   (dark/light).
+ * ▸ FAMILLES × MODES (catalogue à 2 axes — V2) ─────────────────────────────
+ *   6 familles (corail, ambre, emeraude, turquoise, amethyste, neutre) ×
+ *   2 modes (light, dark) = 12 presets `<famille>-<mode>`, PLUS 4 alias
+ *   historiques (dark / light / midnight / slate) REMAPPÉS vers les nouvelles
+ *   familles (valeurs RIGOUREUSEMENT identiques à leur jumeau). Chaque famille
+ *   a sa propre clarté de fond (les fonds restent distincts malgré un chroma
+ *   faible) et son accent d'identité. Contraste des textes (`text` ET
+ *   `text-muted`) ≥ 4.5:1 sur les 4 paliers de surface. Si l'hôte n'a fait
+ *   AUCUN choix, la brique applique au chargement
+ *   le preset initial issu de `prefers-color-scheme` (dark/light).
  *
- * ▸ API 0.3.0 ────────────────────────────────────────────────────────────────
+ * ▸ API 0.4.0 ────────────────────────────────────────────────────────────────
  *   setTokens / setTheme / setFamily / getTheme / getFamily / getMode /
  *   applyPalette / reset / listPresets / listFamilies / FAMILIES / PRESETS /
  *   ALIASES / PREFIX / VERSION                    — INCHANGÉS (0.2.0)
@@ -72,19 +100,20 @@
  *   unregisterPreset(name)                   → boolean (false si intégré/inconnu)
  *   getPreset(name)                          → copie | null (intégré/alias/pack)
  *   alpha(color, a)                          → hex → rgba (non-hex inchangé)
- *   listPresets() = 14 intégrés PUIS packs dans l'ordre d'enregistrement.
+ *   MIGRATIONS                               → table ancien→nouveau (hôtes)
+ *   listPresets() = 16 intégrés (12 presets + 4 alias) PUIS packs dans l'ordre.
  *   Événement : à CHAQUE changement de palette appliquée (setTokens / setTheme /
  *   applyPalette / reset / initial). register / update / unregister n'émettent
  *   PAS ; setTheme("<pack>") émet comme les autres.
  *
  * ▸ REGISTRE DE PACKS (0.3.0) ───────────────────────────────────────────────
  *   Un PACK hôte est un preset nommé enregistré via registerPreset, sans
- *   toucher aux 14 intégrés. options.extends : nom d'un intégré / alias / pack
+ *   toucher aux 16 intégrés. options.extends : nom d'un intégré / alias / pack
  *   (base = copie complète). options.derive : true (défaut = groupe A+B moins
  *   danger-gradient/txt-glow) | false | tableau de clés. Priorité de fusion :
  *   spec explicite > extends > dérivé. Une dérivation dont la source est
  *   absente ou non-hex est SAUTÉE silencieusement (clé non posée, pas d'erreur).
- *   Noms réservés : les 10 <famille>-<mode> + 4 alias + 5 familles → throw.
+ *   Noms réservés : les 12 <famille>-<mode> + 4 alias + 6 familles → throw.
  *   Registre VOLATILE : les packs sont perdus au rechargement, l'hôte les
  *   ré-enregistre au boot. getFamily() / getMode() renvoient null pour un pack.
  *
@@ -93,7 +122,8 @@
  *   elle retire d'abord les clés possédées ABSENTES du nouveau lot puis pose le
  *   nouveau lot (même tâche JS → aucun flash). reset() retire tout le set. Les
  *   variables posées HORS brique ne sont jamais touchées. Corrige le résidu
- *   constaté en 0.2.0 (ex. --holaf-danger-hover restant après emerald-dark → dark).
+ *   constaté en 0.2.0 (ex. une clé posée par un setTokens riche puis absente
+ *   d'un setTokens minimal reste purgée).
  *
  * Autonome : la brique RÉIMPLÉMENTE une version minimale de mix/contrast (pas
  * de dépendance inter-briques vers HolafColor).
@@ -107,7 +137,7 @@
 const HolafTokens = (function () {
     "use strict";
 
-    const VERSION = "0.3.0";
+    const VERSION = "0.4.1";
 
     // Préfixe RÉSERVÉ : toutes les variables posées sont sous --holaf-*.
     const PREFIX = "--holaf-";
@@ -167,46 +197,10 @@ const HolafTokens = (function () {
         return (hi + 0.05) / (lo + 0.05);
     }
 
-    // ─── Palettes HISTORIQUES (figées — alias rétrocompatibles) ───────────
-    // Les 4 presets livrés jusqu'ici. Ils sont conservés À L'IDENTIQUE et
-    // deviennent les alias `dark` / `light` / `midnight` / `slate`. Les clés
-    // internes sont « surface / surface-elev / surface-raised / … » (sans
-    // préfixe) ; elles sont préfixées au moment de la pose.
-    const HISTORICAL = {
-        dark: {
-            surface: "#1e1e1e", "surface-elev": "#27272a", "surface-raised": "#1a1a1a",
-            border: "#3f3f46", text: "#e4e4e7", "text-muted": "#a1a1aa",
-            accent: "#6366f1", "accent-hover": "#818cf8", "accent-text": "#ffffff",
-            danger: "#ef4444", "danger-text": "#ffffff",
-            radius: "12px", shadow: "0 18px 50px rgba(0, 0, 0, 0.55)", "font-size": "14px",
-        },
-        light: {
-            surface: "#ffffff", "surface-elev": "#f4f4f5", "surface-raised": "#fafafa",
-            border: "#d4d4d8", text: "#18181b", "text-muted": "#52525b",
-            accent: "#4f46e5", "accent-hover": "#6366f1", "accent-text": "#ffffff",
-            danger: "#dc2626", "danger-text": "#ffffff",
-            radius: "12px", shadow: "0 18px 50px rgba(24, 24, 27, 0.18)", "font-size": "14px",
-        },
-        midnight: {
-            surface: "#10111d", "surface-elev": "#181a2c", "surface-raised": "#0c0d17",
-            border: "#272a44", text: "#e2e4f0", "text-muted": "#9aa0c3",
-            accent: "#818cf8", "accent-hover": "#a5b4fc", "accent-text": "#10111d",
-            danger: "#ef4444", "danger-text": "#ffffff",
-            radius: "12px", shadow: "0 18px 50px rgba(0, 0, 0, 0.6)", "font-size": "14px",
-        },
-        slate: {
-            surface: "#1f232b", "surface-elev": "#292e38", "surface-raised": "#191d24",
-            border: "#3a4150", text: "#e6e9ee", "text-muted": "#9aa3b2",
-            accent: "#94a3b8", "accent-hover": "#b6c2d4", "accent-text": "#1f232b",
-            danger: "#ef4444", "danger-text": "#ffffff",
-            radius: "12px", shadow: "0 18px 50px rgba(0, 0, 0, 0.5)", "font-size": "14px",
-        },
-    };
-
-    // ─── Génération de palette (MIROIR minimal de HolafColor.generateTheme) ─
+    // ─── Choix du texte lisible (dérivations ok-text / warn-text) ─────────
     // La brique reste AUTONOME (pas de dépendance inter-briques vers HolafColor) :
-    // on reproduit ici la MÊME projection qu'HolafColor.generateTheme, mêmes
-    // ratios, afin que la sortie soit identique sans rien importer.
+    // on retient la plus lisible des deux couleurs (sombre / claire), ≥ 4.5:1
+    // quand c'est possible.
     function readableText(bg, dark, light) {
         const d = dark || "#000000";
         const l = light || "#ffffff";
@@ -219,157 +213,306 @@ const HolafTokens = (function () {
         return rDark >= rLight ? d : l;
     }
 
-    // genTheme(accent, options?) → palette `generateTheme` (clés camelCase).
-    function genTheme(accent, options) {
-        const opts = options || {};
-        const background = opts.background || "#ffffff";
-        const surface = opts.surface || mix(background, accent, 0.04);
-        const hoverRatio = typeof opts.hoverRatio === "number" ? opts.hoverRatio : 0.15;
-        const borderRatio = typeof opts.borderRatio === "number" ? opts.borderRatio : 0.22;
-        const danger = opts.danger || "#dc2626";
-        const baseText = opts.text || readableText(background, "#18181b", "#f4f4f5");
-        return {
-            accent: toHex.apply(null, parseHex(accent)),
-            accentHover: mix(accent, surface, hoverRatio),
-            accentText: opts.accentText || readableText(accent, "#000000", "#ffffff"),
-            border: opts.border || mix(background, accent, borderRatio),
-            borderSubtle: mix(background, accent, borderRatio * 0.5),
-            surface: toHex.apply(null, parseHex(surface)),
-            surfaceHover: mix(surface, accent, hoverRatio),
-            background: toHex.apply(null, parseHex(background)),
-            text: toHex.apply(null, parseHex(baseText)),
-            textMuted: mix(baseText, background, 0.42),
-            danger: toHex.apply(null, parseHex(danger)),
-            dangerHover: mix(danger, surface, hoverRatio),
-            dangerText: opts.dangerText || readableText(danger, "#000000", "#ffffff"),
-            radius: opts.radius || "12px",
-            shadow: opts.shadow || "0 4px 16px rgba(0, 0, 0, 0.12)",
-        };
-    }
-
-    // ─── Projection palette `generateTheme` → clés de tokens ──────────────
-    // (voir js/README-holaf-tokens.md § « Projection »).
-    //   surface        ← p.background   (le fond de base devient la surface de page)
-    //   surface-elev   ← p.surface      (surface légèrement teintée)     [dérivée]
-    //   surface-raised ← p.surfaceHover (surface + teinte accent)        [dérivée]
-    //   border         ← p.border
-    //   text           ← p.text
-    //   text-muted     ← p.textMuted
-    //   accent         ← p.accent
-    //   accent-hover   ← p.accentHover
-    //   accent-text    ← p.accentText
-    //   danger         ← p.danger
-    //   danger-hover   ← p.dangerHover                                    [dérivée]
-    //   danger-text    ← p.dangerText
-    //   radius         ← p.radius
-    //   shadow         ← p.shadow
-    //   font-size      ← constante "14px" (ou meta.fontSize)
-    function projectTokens(p, meta) {
-        const m = meta || {};
-        return {
-            surface: p.background,
-            "surface-elev": p.surface,
-            "surface-raised": p.surfaceHover,
-            border: p.border,
-            text: p.text,
-            "text-muted": p.textMuted,
-            accent: p.accent,
-            "accent-hover": p.accentHover,
-            "accent-text": p.accentText,
-            danger: p.danger,
-            "danger-hover": p.dangerHover,
-            "danger-text": p.dangerText,
-            radius: p.radius,
-            shadow: p.shadow,
-            "font-size": m.fontSize || "14px",
-        };
-    }
-
-    // ─── FAMILLES (modèle à 2 axes : famille × mode) ─────────────────────
-    // Chaque famille possède une GRAINE d'accent, plus un descripteur par mode
-    // (light / dark). Un descripteur avec `fixed` reprend une palette
-    // HISTORIQUE FIGÉE (valeurs inchangées) ; sinon la palette est GÉNÉRÉE via
-    // genTheme (le texte s'adapte au fond, ≥ 4.5:1). Les clés `accent`,
-    // `background`, `surface`, `text`, `danger`, `accentText`, `dangerText`,
-    // `hoverRatio`, `borderRatio`, `radius`, `shadow`, `fontSize` du descripteur
-    // sont transmises à la génération ; `accent` surcharge la graine du mode.
+    // ─── Catalogue V2 — 6 familles × 2 modes, valeurs FIGÉES en hex ───────
+    // Valeurs calculées UNE FOIS depuis la maquette V2 validée
+    // (`Yuki and Libs/_tools/theme-accents.mjs` : FAMILIES_WHEEL + ACCENTS_V2),
+    // puis FIGÉES ici : AUCUN moteur OKLCH n'est embarqué (précédent accepté :
+    // modal / toast figent déjà leurs palettes littérales). Chaque mode porte
+    // 16 clés : les 15 clés standard + `surface-hover` (4ᵉ palier de profondeur
+    // surface → surface-elev → surface-raised → surface-hover). Les clés NON
+    // produites par la maquette suivent des règles documentées (README) :
+    //   accent-hover = mix(accent, surface, 15 %)    (comme applyPalette)
+    //   danger       = graine #dc2626 (clair) / #f87171 (sombre), assombrie par
+    //                  pas de 5 % jusqu'à ≥ 4.5:1 sur la surface de la famille
+    //   danger-hover = mix(danger, surface, 15 %)
+    //   danger-text  = readableText(danger) (#ffffff ou #000000)
+    //   radius = "12px" ; font-size = "14px" ; shadow = ombre par mode.
     const FAMILIES = {
-        // Famille déjà complète : les DEUX modes sont les palettes historiques.
-        indigo: {
-            accent: "#6366f1",
-            light: { fixed: HISTORICAL.light },
-            dark: { fixed: HISTORICAL.dark },
+        corail: {
+            label: "Corail", hue: 354,
+            light: {
+                "surface": "#ffe3ed",
+                "surface-elev": "#fefefe",
+                "surface-raised": "#f5d9e3",
+                "surface-hover": "#ebcfd9",
+                "border": "#d9b9c4",
+                "text": "#2f2227",
+                "text-muted": "#665159",
+                "accent": "#9c045e",
+                "accent-hover": "#ab2573",
+                "accent-text": "#ffffff",
+                "danger": "#c62222",
+                "danger-hover": "#cf3f40",
+                "danger-text": "#ffffff",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+                "font-size": "14px",
+            },
+            dark: {
+                "surface": "#36252c",
+                "surface-elev": "#433037",
+                "surface-raised": "#503b43",
+                "surface-hover": "#5d464f",
+                "border": "#735963",
+                "text": "#f4eef0",
+                "text-muted": "#ccb7bf",
+                "accent": "#fa7fb5",
+                "accent-hover": "#dd72a0",
+                "accent-text": "#0b0b12",
+                "danger": "#f87171",
+                "danger-hover": "#db6667",
+                "danger-text": "#000000",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+                "font-size": "14px",
+            },
         },
-        // Mode sombre historique figé ; mode clair GÉNÉRÉ (accent assombri).
-        midnight: {
-            accent: "#818cf8",
-            dark: { fixed: HISTORICAL.midnight },
-            light: { accent: "#5b63d3", background: "#f6f7fc", surface: "#ffffff", danger: "#dc2626" },
+        ambre: {
+            label: "Ambre", hue: 66,
+            light: {
+                "surface": "#dcc8b5",
+                "surface-elev": "#fefefe",
+                "surface-raised": "#d2bfac",
+                "surface-hover": "#c9b5a3",
+                "border": "#b6a08b",
+                "text": "#2d251c",
+                "text-muted": "#54473b",
+                "accent": "#7a4800",
+                "accent-hover": "#895b1b",
+                "accent-text": "#ffffff",
+                "danger": "#a51d1d",
+                "danger-hover": "#ad3734",
+                "danger-text": "#ffffff",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+                "font-size": "14px",
+            },
+            dark: {
+                "surface": "#0c0400",
+                "surface-elev": "#170b02",
+                "surface-raised": "#221508",
+                "surface-hover": "#2e1f10",
+                "border": "#42301f",
+                "text": "#f3efec",
+                "text-muted": "#b9a593",
+                "accent": "#f29a2d",
+                "accent-hover": "#d08426",
+                "accent-text": "#0b0b12",
+                "danger": "#f87171",
+                "danger-hover": "#d56160",
+                "danger-text": "#000000",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+                "font-size": "14px",
+            },
         },
-        // Mode sombre historique figé ; mode clair GÉNÉRÉ (accent assombri).
-        slate: {
-            accent: "#94a3b8",
-            dark: { fixed: HISTORICAL.slate },
-            light: { accent: "#475569", background: "#f4f6f8", surface: "#ffffff", danger: "#dc2626" },
+        emeraude: {
+            label: "Émeraude", hue: 138,
+            light: {
+                "surface": "#c9dac4",
+                "surface-elev": "#fdfffc",
+                "surface-raised": "#c0d0bb",
+                "surface-hover": "#b6c6b1",
+                "border": "#a0b29a",
+                "text": "#22291f",
+                "text-muted": "#465143",
+                "accent": "#276701",
+                "accent-hover": "#3f781e",
+                "accent-text": "#ffffff",
+                "danger": "#b01e1e",
+                "danger-hover": "#b43a37",
+                "danger-text": "#ffffff",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+                "font-size": "14px",
+            },
+            dark: {
+                "surface": "#081005",
+                "surface-elev": "#111b0d",
+                "surface-raised": "#1a2617",
+                "surface-hover": "#253120",
+                "border": "#354430",
+                "text": "#eef1ed",
+                "text-muted": "#9faf9a",
+                "accent": "#7fc765",
+                "accent-hover": "#6dac57",
+                "accent-text": "#0b0b12",
+                "danger": "#f87171",
+                "danger-hover": "#d46261",
+                "danger-text": "#000000",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+                "font-size": "14px",
+            },
         },
-        // Famille nouvelle : GÉNÉRÉE dans les deux modes.
-        emerald: {
-            accent: "#10b981",
-            light: { accent: "#047857", background: "#ffffff", surface: "#f0fdf4", danger: "#dc2626" },
-            dark: { accent: "#34d399", background: "#0b1512", surface: "#12201a", danger: "#ef4444" },
+        turquoise: {
+            label: "Turquoise", hue: 210,
+            light: {
+                "surface": "#c3e2e8",
+                "surface-elev": "#fdffff",
+                "surface-raised": "#b9d9de",
+                "surface-hover": "#b0cfd5",
+                "border": "#97bbc2",
+                "text": "#1b292c",
+                "text-muted": "#42585c",
+                "accent": "#07606c",
+                "accent-hover": "#23747f",
+                "accent-text": "#ffffff",
+                "danger": "#bb2020",
+                "danger-hover": "#bc3d3e",
+                "danger-text": "#ffffff",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+                "font-size": "14px",
+            },
+            dark: {
+                "surface": "#051a1e",
+                "surface-elev": "#0e2529",
+                "surface-raised": "#183135",
+                "surface-hover": "#223d41",
+                "border": "#315056",
+                "text": "#ecf1f2",
+                "text-muted": "#91b0b5",
+                "accent": "#0ec7de",
+                "accent-hover": "#0dadc1",
+                "accent-text": "#0b0b12",
+                "danger": "#f87171",
+                "danger-hover": "#d46465",
+                "danger-text": "#000000",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+                "font-size": "14px",
+            },
         },
-        // Famille nouvelle : GÉNÉRÉE dans les deux modes.
-        amber: {
-            accent: "#f59e0b",
-            light: { accent: "#b45309", background: "#ffffff", surface: "#fffbeb", danger: "#dc2626" },
-            dark: { accent: "#fbbf24", background: "#1a1408", surface: "#241c0d", danger: "#ef4444" },
+        amethyste: {
+            label: "Améthyste", hue: 282,
+            light: {
+                "surface": "#dfe1fa",
+                "surface-elev": "#fefefe",
+                "surface-raised": "#d6d8f0",
+                "surface-hover": "#cccee6",
+                "border": "#b6b9d5",
+                "text": "#252530",
+                "text-muted": "#555669",
+                "accent": "#4d41b0",
+                "accent-hover": "#6359bb",
+                "accent-text": "#ffffff",
+                "danger": "#bb2020",
+                "danger-hover": "#c03d41",
+                "danger-text": "#ffffff",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+                "font-size": "14px",
+            },
+            dark: {
+                "surface": "#1e1f2e",
+                "surface-elev": "#292a3a",
+                "surface-raised": "#343547",
+                "surface-hover": "#3f4155",
+                "border": "#52536b",
+                "text": "#eff0f4",
+                "text-muted": "#abadc4",
+                "accent": "#a1a3ff",
+                "accent-hover": "#8d8fe0",
+                "accent-text": "#0b0b12",
+                "danger": "#f87171",
+                "danger-hover": "#d76567",
+                "danger-text": "#000000",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+                "font-size": "14px",
+            },
+        },
+        neutre: {
+            label: "Neutre", hue: 250,
+            light: {
+                "surface": "#f2f4f5",
+                "surface-elev": "#fefeff",
+                "surface-raised": "#e8eaeb",
+                "surface-hover": "#dee0e1",
+                "border": "#c6cbd0",
+                "text": "#1f2730",
+                "text-muted": "#4c5a69",
+                "accent": "#515457",
+                "accent-hover": "#696c6f",
+                "accent-text": "#ffffff",
+                "danger": "#d12424",
+                "danger-hover": "#d64343",
+                "danger-text": "#ffffff",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(24, 24, 27, 0.18)",
+                "font-size": "14px",
+            },
+            dark: {
+                "surface": "#343537",
+                "surface-elev": "#3f4144",
+                "surface-raised": "#4a4d51",
+                "surface-hover": "#565a5e",
+                "border": "#686e75",
+                "text": "#edf0f4",
+                "text-muted": "#ced1d4",
+                "accent": "#aeb1b5",
+                "accent-hover": "#9c9ea2",
+                "accent-text": "#0b0b12",
+                "danger": "#f87878",
+                "danger-hover": "#db6e6e",
+                "danger-text": "#000000",
+                "radius": "12px",
+                "shadow": "0 18px 50px rgba(0, 0, 0, 0.55)",
+                "font-size": "14px",
+            },
         },
     };
 
+    // Ordre d'affichage stable (par teinte, le Neutre en dernier).
     const MODES = ["light", "dark"];
-    const FAMILY_NAMES = Object.keys(FAMILIES);
+    const FAMILY_NAMES = ["corail", "ambre", "emeraude", "turquoise", "amethyste", "neutre"];
 
-    // Construit le preset <famille>-<mode> (fixe→copie, sinon généré+projeté).
-    function buildPreset(family, mode) {
-        const spec = FAMILIES[family][mode] || {};
-        if (spec.fixed) return Object.assign({}, spec.fixed);
-        const accent = spec.accent || FAMILIES[family].accent;
-        const palette = genTheme(accent, {
-            background: spec.background,
-            surface: spec.surface,
-            text: spec.text,
-            danger: spec.danger,
-            accentText: spec.accentText,
-            dangerText: spec.dangerText,
-            hoverRatio: spec.hoverRatio,
-            borderRatio: spec.borderRatio,
-            radius: spec.radius,
-            shadow: spec.shadow,
-        });
-        return projectTokens(palette, { fontSize: spec.fontSize });
-    }
-
-    // ─── Catalogue des presets (10 familles×modes + 4 alias historiques) ──
+    // ─── Catalogue des presets (12 familles×modes + 4 alias REMAPPÉS) ──────
     const PRESETS = {};
     FAMILY_NAMES.forEach((family) => {
         MODES.forEach((mode) => {
-            PRESETS[family + "-" + mode] = buildPreset(family, mode);
+            PRESETS[family + "-" + mode] = Object.assign({}, FAMILIES[family][mode]);
         });
     });
 
     // Alias historiques → valeurs RIGOUREUSEMENT identiques (copies des jumeaux).
+    // REMAPPÉS : les anciennes familles (indigo/midnight/slate/emerald/amber)
+    // n'existent plus (voir MIGRATIONS). `midnight` était violet → amethyste ;
+    // `slate` était gris → neutre.
     const ALIASES = {
-        dark: "indigo-dark",
-        light: "indigo-light",
-        midnight: "midnight-dark",
-        slate: "slate-dark",
+        dark: "amethyste-dark",
+        light: "amethyste-light",
+        midnight: "amethyste-dark",
+        slate: "neutre-dark",
     };
     Object.keys(ALIASES).forEach((alias) => {
         PRESETS[alias] = Object.assign({}, PRESETS[ALIASES[alias]]);
     });
 
-    // ─── Noms réservés (0.3.0) ──────────────────────────────────────────────
-    // Les 10 <famille>-<mode>, les 4 alias et les 5 noms de familles sont
+    // ─── Table de MIGRATION (0.4.0) — fournie AUX HÔTES ────────────────────
+    // Les hôtes l'appliquent EUX-MÊMES à leur préférence stockée : <ancien nom>
+    // (10 anciens presets + 4 alias) → <nouveau nom>. La brique n'effectue
+    // AUCUNE migration automatique (elle ne stocke aucune préférence).
+    const MIGRATIONS = {
+        "indigo-light": "amethyste-light",
+        "indigo-dark": "amethyste-dark",
+        "midnight-light": "amethyste-light",
+        "midnight-dark": "amethyste-dark",
+        "slate-light": "neutre-light",
+        "slate-dark": "neutre-dark",
+        "emerald-light": "emeraude-light",
+        "emerald-dark": "emeraude-dark",
+        "amber-light": "ambre-light",
+        "amber-dark": "ambre-dark",
+        dark: "amethyste-dark",
+        light: "amethyste-light",
+        midnight: "amethyste-dark",
+        slate: "neutre-dark",
+    };
+
+    // ─── Noms réservés (0.4.0) ──────────────────────────────────────────────
+    // Les 12 <famille>-<mode>, les 4 alias et les 6 noms de familles sont
     // RÉSERVÉS : un pack hôte ne peut pas les reprendre (throw clair).
     const RESERVED_NAMES = new Set(Object.keys(PRESETS).concat(FAMILY_NAMES));
 
@@ -575,7 +718,7 @@ const HolafTokens = (function () {
     }
 
     // setTheme(presetName) — applique un preset par son nom. Accepte les
-    // <famille>-<mode> (ex. "slate-light") ET les alias (dark/light/midnight/slate).
+    // <famille>-<mode> (ex. "turquoise-light") ET les alias (dark/light/midnight/slate).
     function setTheme(presetName) {
         const preset = findPreset(presetName);
         if (!preset) {
@@ -588,9 +731,8 @@ const HolafTokens = (function () {
         return getTheme();
     }
 
-    // listPresets() → TOUS les noms valides : 10 familles×modes + 4 alias
-    // (intégrés, ordre historique) PUIS les packs hôte dans leur ordre
-    // d'enregistrement (0.3.0).
+    // listPresets() → TOUS les noms valides : 12 familles×modes + 4 alias
+    // (intégrés) PUIS les packs hôte dans leur ordre d'enregistrement (0.3.0).
     function listPresets() {
         return Object.keys(PRESETS).concat(Array.from(PACKS.keys()));
     }
@@ -720,7 +862,7 @@ const HolafTokens = (function () {
     }
 
     // ─── API 0.3.0 — registre de packs hôte (additive) ─────────────────────
-    // Les 14 presets INTÉGRÉS sont figés : registerPreset ne les touche jamais.
+    // Les 16 presets INTÉGRÉS sont figés : registerPreset ne les touche jamais.
     // Le registre est VOLATILE (perdu au rechargement) : l'hôte ré-enregistre
     // ses packs au boot, avant de rejouer setTheme.
     function isPlainObject(v) {
@@ -859,12 +1001,13 @@ const HolafTokens = (function () {
         FAMILIES: (function () {
             const c = {};
             FAMILY_NAMES.forEach((f) => {
-                c[f] = { accent: FAMILIES[f].accent };
+                c[f] = { label: FAMILIES[f].label, hue: FAMILIES[f].hue };
                 MODES.forEach((m) => { c[f][m] = Object.assign({}, FAMILIES[f][m]); });
             });
             return c;
         })(),
         ALIASES: Object.assign({}, ALIASES),
+        MIGRATIONS: Object.assign({}, MIGRATIONS),
     };
 })();
 
