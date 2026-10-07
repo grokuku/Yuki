@@ -20,7 +20,21 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+
+import {
+  AgentStore,
+  AuditLog,
+  caDirectoryIn,
+  CertificateAuthority,
+  closeAgentsServer,
+  createAgentsServer,
+  maxSizeBytesFromMb,
+  PairingManager,
+  startAgentsServer,
+  type AgentLevel,
+} from "./agents/index.js";
+import type { AgentsApiDeps } from "./gateway/routes/agents.js";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
@@ -98,6 +112,16 @@ function loadTextFile(path: string, fallback: string): string {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** `true` si la chaîne est une adresse IPv4 pointée. */
+function isIpv4(value: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(value);
+}
+
+/** `true` si la chaîne est un nom d'hôte utilisable comme SAN DNS. */
+function isHostname(value: string): boolean {
+  return value.length > 0 && !isIpv4(value) && value !== "0.0.0.0" && value !== "::" && value !== "::1";
 }
 
 /** Lit la config effective des deux rôles LLM (store + env + défauts). */
@@ -250,6 +274,78 @@ async function main(): Promise<void> {
 
   const volumes = inspectMountPoints(mountPoints(env));
   const startedAt = Date.now();
+
+  // --- Agents d'exécution (Lot 4) : store, audit, autorité interne, port machines --
+  // Ces briques sont INDÉPENDANTES de la porte GPU et du PiHost : elles
+  // démarrent même en mode dégradé. ⚠️ Comme le reste du câblage, leur
+  // initialisation est BEST-EFFORT : une panne du volume `state` (CA
+  // inscriptible) ou du port machines ne doit PAS empêcher le gateway humain
+  // de fonctionner.
+  const agentsBindHost = config.getString("agents.bindHost");
+  const agentsPort = config.getNumber("agents.port");
+  let agentsServer: ReturnType<typeof createAgentsServer> | undefined;
+  let agentsDeps: AgentsApiDeps | undefined;
+  try {
+    const agentStore = AgentStore.open({
+      path: env.agentsStorePath,
+      defaults: {
+        level: config.getString("agents.defaultLevel") as AgentLevel,
+        // Privilège par défaut : compte normal (limite le mouvement latéral, D120).
+        privilege: "normal",
+      },
+      logger,
+    });
+    const auditLog = AuditLog.open({
+      path: env.auditLogPath,
+      maxSizeBytes: maxSizeBytesFromMb(config.getNumber("audit.maxSizeMb")),
+      retentionDays: config.getNumber("audit.retentionDays"),
+      logger,
+    });
+    const agentCa = CertificateAuthority.open({
+      dir: caDirectoryIn(dirname(env.agentsStorePath)),
+      logger,
+    });
+    const pairingManager = new PairingManager({
+      ca: agentCa,
+      store: agentStore,
+      audit: auditLog,
+      logger,
+    });
+    if (agentsBindHost === "0.0.0.0") {
+      // ⚠️ `0.0.0.0` écoute sur TOUTES les interfaces (y compris une interface
+      // publique éventuelle). Le port machines n'étant protégé que par mTLS, il
+      // est préférable de le restreindre à l'interface LAN (`agents.bindHost`).
+      logger.warn("agents.bind.broad", {
+        bindHost: agentsBindHost,
+        hint: "Restreindre `agents.bindHost` à l'adresse de l'interface LAN (ex. 10.10.1.10).",
+      });
+    }
+    const agentsServerCert = agentCa.ensureServerCertificate({
+      dnsNames: ["localhost", ...(isHostname(agentsBindHost) ? [agentsBindHost] : [])],
+      ipAddresses: [
+        "127.0.0.1",
+        ...(isIpv4(agentsBindHost) && agentsBindHost !== "0.0.0.0" ? [agentsBindHost] : []),
+      ],
+    });
+    agentsServer = createAgentsServer({
+      certPem: agentsServerCert.certPem,
+      keyPem: agentsServerCert.keyPem,
+      caCertPem: agentCa.certificatePem,
+      pairing: pairingManager,
+      store: agentStore,
+      audit: auditLog,
+      ca: agentCa,
+      logger,
+    });
+    agentsDeps = { pairing: pairingManager, store: agentStore, logger };
+    logger.info("agents.ready", {
+      ca_fingerprint: agentCa.fingerprint,
+      store: env.agentsStorePath,
+      audit: env.auditLogPath,
+    });
+  } catch (error) {
+    logger.error("agents.init.failed", { error: messageOf(error) });
+  }
 
   // --- Voix TTS (Lot 7) : registre + client du moteur `audio.cpp` -----------
   // Le registre vit sur le volume dédié `yuki-voices` ; il ne dépend PAS du
@@ -595,6 +691,7 @@ async function main(): Promise<void> {
       config: { runtime: config, logger },
       voices: voicesDeps,
       tts: ttsDeps,
+      ...(agentsDeps ? { agents: agentsDeps } : {}),
       admin: {
         logger,
         requestShutdown: () => triggerShutdown?.(RESTART_REASON),
@@ -611,6 +708,7 @@ async function main(): Promise<void> {
 
   triggerShutdown = installGracefulShutdown(server, logger, {
     beforeClose: async () => {
+      if (agentsServer) await closeAgentsServer(agentsServer);
       await transport?.close();
       await host?.stop();
       if (memoryService) {
@@ -632,6 +730,24 @@ async function main(): Promise<void> {
     light: availabilityAtStart.light.status,
     heavy: availabilityAtStart.heavy.status,
   });
+
+  // Port machines (Lot 4) : écoute LAN mTLS. Un échec d'écoute est journalisé
+  // mais NE fait PAS tomber le gateway humain.
+  if (agentsServer) {
+    try {
+      const agentsAddress = await startAgentsServer(agentsServer, agentsBindHost, agentsPort);
+      logger.info("agents.listening", {
+        host: agentsAddress.address,
+        port: agentsAddress.port,
+      });
+    } catch (error) {
+      logger.error("agents.listen.failed", {
+        host: agentsBindHost,
+        port: agentsPort,
+        error: messageOf(error),
+      });
+    }
+  }
 }
 
 main().catch((error: unknown) => {

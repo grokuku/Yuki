@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "description": "Motifs de classification des commandes DESTRUCTRICES (décision D126). SOURCE UNIQUE partagée : embarquée côté Go (//go:embed dans internal/exec) et lue À L'EXÉCUTION côté TypeScript (src/agents/destructive.ts). Chaque motif est une expression régulière volontairement limitée au sous-ensemble COMMUN à RE2 (Go) et RegExp (JavaScript) : classes de caractères, alternance, groupes, ancres, quantificateurs, \\b. AUCUN lookaround, AUCUNE backreference (RE2 les refuse) — sinon les deux moteurs divergeraient.",
+  "limites": [
+    "Une liste de motifs se CONTOURNE : obfuscation, variables, encodage, scripts, alias…",
+    "Une commande anodine peut être destructrice SELON LE CONTEXTE (ex. rm sur un chemin critique, redirection vers un montage système).",
+    "Ce classement n'INTERDIT rien : il alimente le niveau 3 de garde-fou (D118). L'AUTORITÉ de décision reste Yuki ; l'agent recompare et journalise les divergences (défense en profondeur, sans blocage, D126).",
+    "Le classement porte sur la CHAÎNE de commande telle que reçue, sans analyse syntaxique du shell."
+  ],
+  "patterns": [
+    {
+      "id": "rm",
+      "label": "suppression (rm)",
+      "flags": "i",
+      "regex": "(^|[;&|(\\n])[ \\t]*(sudo[ \\t]+|doas[ \\t]+)?rm\\b"
+    },
+    {
+      "id": "dd",
+      "label": "écriture brute (dd)",
+      "flags": "i",
+      "regex": "(^|[;&|(\\n])[ \\t]*(sudo[ \\t]+)?dd\\b"
+    },
+    {
+      "id": "mkfs",
+      "label": "formatage de système de fichiers (mkfs)",
+      "flags": "i",
+      "regex": "(^|[;&|(\\n])[ \\t]*(sudo[ \\t]+)?mkfs(\\.[a-z0-9]+)?\\b"
+    },
+    {
+      "id": "shutdown",
+      "label": "extinction / redémarrage",
+      "flags": "i",
+      "regex": "(^|[;&|(\\n])[ \\t]*(sudo[ \\t]+)?(shutdown|reboot|halt|poweroff)\\b"
+    },
+    {
+      "id": "systemctl",
+      "label": "arrêt / désactivation de service (systemctl)",
+      "flags": "i",
+      "regex": "\\bsystemctl[ \\t]+(stop|disable|mask|kill)\\b"
+    },
+    {
+      "id": "redirect-system",
+      "label": "redirection vers un chemin système",
+      "flags": "i",
+      "regex": ">>?[ \\t]*/(etc|boot|usr|bin|sbin|lib|var/lib)\\b"
+    },
+    {
+      "id": "chmod-system",
+      "label": "chmod / chown sur un chemin système",
+      "flags": "i",
+      "regex": "\\bch(mod|own)\\b[^\\n]*/(etc|boot|usr|bin|sbin|lib)\\b"
+    },
+    {
+      "id": "docker",
+      "label": "opération Docker destructive",
+      "flags": "i",
+      "regex": "\\bdocker[ \\t]+(compose[ \\t]+(down|rm)|(rm|rmi|kill)|volume[ \\t]+rm|system[ \\t]+prune)\\b"
+    },
+    {
+      "id": "fork-bomb",
+      "label": "bombe à fork",
+      "flags": "i",
+      "regex": ":[ \\t]*\\([ \\t]*\\)[ \\t]*\\{[ \\t]*:[ \\t]*\\|[ \\t]*:[ \\t]*&[ \\t]*\\}[ \\t]*;?[ \\t]*:"
+    },
+    {
+      "id": "wipe",
+      "label": "effacement de disque (shred / wipefs / blkdiscard)",
+      "flags": "i",
+      "regex": "(^|[;&|(\\n])[ \\t]*(sudo[ \\t]+)?(shred|wipefs|blkdiscard)\\b"
+    },
+    {
+      "id": "raw-device",
+      "label": "écriture vers un périphérique bloc",
+      "flags": "i",
+      "regex": ">+[ \\t]*/dev/(sd|nvme|hd|vd|mmcblk)[a-z0-9]*\\b"
+    },
+    {
+      "id": "git-destructive",
+      "label": "git destructeur (reset --hard, clean -f, push --force)",
+      "flags": "i",
+      "regex": "\\bgit[ \\t]+(reset[ \\t]+--hard|clean[ \\t]+-[a-z]*f|push[ \\t]+[^\\n]*--force(-with-lease)?)\\b"
+    },
+    {
+      "id": "swap",
+      "label": "gestion du swap (mkswap / swapoff)",
+      "flags": "i",
+      "regex": "(^|[;&|(\\n])[ \\t]*(sudo[ \\t]+)?(mkswap|swapoff)\\b"
+    }
+  ]
+}

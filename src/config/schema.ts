@@ -386,6 +386,55 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "restart",
     env: "YUKI_WS_REPLAY_BYTES",
   },
+
+  // --- Agents d'exécution (Lot 4) -----------------------------------------
+  // ⚠️ `FieldType` = `string | int | enum` : AUCUN booléen, aucun tableau. Le
+  // niveau de garde-fou est donc un ENUM (D118) et le privilège un ENUM (D120).
+  // Le canal « machines » est LAN uniquement (D116) ; le port et l'hôte sont
+  // des valeurs de DÉPLOIEMENT, sans fait d'infra fiable (docs/lot4.md §13).
+  "agents.bindHost": {
+    type: "string",
+    default: "0.0.0.0",
+    apply: "restart",
+    env: "YUKI_AGENTS_BIND_HOST",
+  },
+  "agents.port": {
+    type: "int",
+    default: 9443,
+    min: 1,
+    max: 65535,
+    apply: "restart",
+    env: "YUKI_AGENTS_PORT",
+  },
+  // Niveau de confirmation PAR AGENT (D118). Défaut = validation des
+  // commandes destructrices (niveau 3), le plus raisonnable en LAN.
+  "agents.defaultLevel": {
+    type: "enum",
+    enum: ["disabled", "always", "destructive", "never"],
+    default: "destructive",
+    apply: "hot",
+    env: "YUKI_AGENTS_DEFAULT_LEVEL",
+  },
+
+  // --- Journal d'audit des exécutions (Lot 4, D127) ------------------------
+  // Commande + machine + horodatage + code de sortie ; JAMAIS la sortie
+  // complète. Rétention en jours, rotation par taille (Mo).
+  "audit.retentionDays": {
+    type: "int",
+    default: 30,
+    min: 1,
+    max: 3_650,
+    apply: "hot",
+    env: "YUKI_AUDIT_RETENTION_DAYS",
+  },
+  "audit.maxSizeMb": {
+    type: "int",
+    default: 16,
+    min: 1,
+    max: 4_096,
+    apply: "hot",
+    env: "YUKI_AUDIT_MAX_SIZE_MB",
+  },
 };
 
 /** Ordre stable des chemins (déterminisme des réponses / journaux). */

@@ -1,0 +1,7 @@
+# Binaires et artefacts de compilation (ne jamais committer).
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+*.prof

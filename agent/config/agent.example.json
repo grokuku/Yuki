@@ -1,0 +1,15 @@
+{
+  "yuki_url": "wss://yuki.example.org:8765/ws",
+  "pair_url": "https://yuki.example.org:8765",
+  "agent_id": "",
+  "state_dir": "/etc/yuki-agent",
+  "ca_file": "/etc/yuki-agent/ca.pem",
+  "cert_file": "/etc/yuki-agent/client.pem",
+  "key_file": "/etc/yuki-agent/client.key",
+  "shell": "",
+  "default_timeout_ms": 300000,
+  "output_cap_bytes": 262144,
+  "ping_interval_ms": 15000,
+  "offline_after_ms": 45000,
+  "log_level": "info"
+}

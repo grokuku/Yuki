@@ -89,6 +89,13 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/config ./config
 COPY public ./public
 
+# Lot 4 (A5) — fichier de motifs destructeurs, SOURCE UNIQUE partagée avec
+# l'agent Go (embarquée là-bas via `//go:embed`). Yuki (TS) le lit À L'EXÉCUTION
+# (`src/agents/destructive.ts` ; compilé en `dist/agents/destructive.js`, il
+# résout `../../agent/…` ⇒ `/app/agent/…`). Sans ce COPY, le fichier serait
+# absent de l'image et le classement échouerait au démarrage.
+COPY agent/internal/exec/destructive_patterns.json ./agent/internal/exec/destructive_patterns.json
+
 # Superviseur interne (Node, sans dépendance) : il lance `dist/index.js` en
 # processus enfant et le RELANCE sur le code de sortie 75 (redémarrage demandé)
 # sans redémarrer le conteneur. Tout autre code est propagé (panne visible).

@@ -58,7 +58,15 @@ function redactValue(value: unknown, secretValues: string[]): unknown {
   return value;
 }
 
-function redactObject(
+/**
+ * Masque récursivement les valeurs secrètes d'un objet : les clés ressemblant à
+ * un secret (`isSecretKey`) sont remplacées par `[REDACTED]`, et toute
+ * occurrence d'une valeur secrète dans une chaîne est masquée.
+ *
+ * Exposé pour être RÉUTILISÉ par le journal d'audit (`src/agents/audit.ts`),
+ * qui doit appliquer la même redaction à ses entrées.
+ */
+export function redactObject(
   source: Record<string, unknown>,
   secretValues: string[],
 ): Record<string, unknown> {

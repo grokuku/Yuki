@@ -20,6 +20,11 @@ import {
   type ConfigApiDeps,
 } from "./routes/config.js";
 import {
+  handleAgentsRequest,
+  isAgentsPath,
+  type AgentsApiDeps,
+} from "./routes/agents.js";
+import {
   handleAdminRequest,
   isAdminPath,
   type AdminApiDeps,
@@ -62,6 +67,8 @@ export interface AppContext {
   voices?: VoiceApiDeps;
   /** Diagnostic TTS (Lot 8). Absent ⇒ `/api/tts/**` → 404. */
   tts?: TtsApiDeps;
+  /** API des agents d'exécution (Lot 4). Absente ⇒ `/api/agents*` → 404. */
+  agents?: AgentsApiDeps;
 }
 
 interface RouteResponse {
@@ -282,6 +289,28 @@ async function handleTtsHttp(
   );
 }
 
+/** Traite une requête de l'API des agents (corps JSON borné). */
+async function handleAgentsHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: AgentsApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "POST" || method === "PATCH" || method === "PUT") {
+    body = await readBody(req).catch(() => "");
+  }
+  const ip = req.socket.remoteAddress ?? "unknown";
+  const response = handleAgentsRequest({ method, path, headers: req.headers, body, ip, deps });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Construit l'écouteur HTTP de l'application. */
 export function createApp(context: AppContext): RequestListener {
   const {
@@ -296,6 +325,7 @@ export function createApp(context: AppContext): RequestListener {
     admin,
     voices,
     tts,
+    agents,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -307,6 +337,27 @@ export function createApp(context: AppContext): RequestListener {
       void handleConfigHttp(req, res, path, method, headOnly, config).catch(
         (error: unknown) => {
           config.logger.error("config.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (agents && isAgentsPath(path)) {
+      void handleAgentsHttp(req, res, path, method, headOnly, agents).catch(
+        (error: unknown) => {
+          agents.logger.error("agents.request.failed", {
             error: error instanceof Error ? error.message : String(error),
             path,
           });

@@ -55,6 +55,11 @@ export interface Env {
   memoryStorePath: string;
   /** Fichier SQLite de l'index FTS5 (DÉRIVÉ, reconstructible). */
   memoryIndexPath: string;
+  // --- Agents d'exécution (Lot 4) ---
+  /** Fichier JSONL du store des agents (journal append-only, volume `state`). */
+  agentsStorePath: string;
+  /** Fichier JSONL du journal d'audit des exécutions (volume `state`). */
+  auditLogPath: string;
   // --- Configuration du moteur TTS `audio.cpp` (Lot 9) ---
   /**
    * Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw`).
@@ -223,6 +228,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_MEMORY_INDEX_PATH",
       `${mountPoints.state}/memory-index.sqlite`,
+    ),
+    agentsStorePath: getString(
+      env,
+      "YUKI_AGENTS_STORE_PATH",
+      `${mountPoints.state}/agents.jsonl`,
+    ),
+    auditLogPath: getString(
+      env,
+      "YUKI_AUDIT_LOG_PATH",
+      `${mountPoints.state}/audit.jsonl`,
     ),
     piAgentDir,
     piSessionsDir: getString(

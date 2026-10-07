@@ -1,0 +1,39 @@
+# =============================================================================
+# Unité systemd de l'agent d'exécution Yuki (Lot 4, A6).
+#
+# ⚠️ `User=`/`Group=` NE SONT PAS des détails : c'est CE réglage qui porte le
+# PRIVILÈGE de l'agent (D120). Un processus ne s'élève pas à chaud ; pour que
+# l'agent puisse exécuter des commandes privilégiées, il faut l'installer avec
+# `User=root`. Par défaut, `deploy/install.sh` utilise le compte ayant lancé
+# l'installation (jamais root silencieusement).
+#
+# `deploy/install.sh` remplace les valeurs ci-dessous (User, ExecStart, config).
+# =============================================================================
+[Unit]
+Description=Yuki — agent d'exécution
+Documentation=https://github.com/grokuku/yuki
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yuki-agent
+Group=yuki-agent
+ExecStart=/usr/local/bin/yuki-agent run --config /etc/yuki-agent/agent.json
+
+# Relance permanente (alignée sur la reconnexion sans fin de l'agent).
+Restart=always
+RestartSec=5
+
+# Journal structuré JSON-lines sur stderr → journald (`journalctl -u yuki-agent`).
+StandardError=journal
+# L'agent n'écrit rien sur stdout en mode `run` : on le neutralise.
+StandardOutput=null
+
+# Durcissement MINIMAL : l'agent exécute des commandes arbitraires (D123), un
+# confinement dur casserait des commandes légitimes. On se limite à empêcher
+# toute élévation de privilège par bit setuid.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
