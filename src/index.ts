@@ -32,8 +32,10 @@ import {
   CertificateAuthority,
   closeAgentsServer,
   createAgentsServer,
+  installServerCertificateReload,
   maxSizeBytesFromMb,
   PairingManager,
+  serverCertificateNames,
   startAgentsServer,
   type AgentLevel,
 } from "./agents/index.js";
@@ -113,18 +115,9 @@ function loadTextFile(path: string, fallback: string): string {
   }
 }
 
+/** Extrait le message d'une erreur inconnue (jamais un `[object Object]`). */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** `true` si la chaîne est une adresse IPv4 pointée. */
-function isIpv4(value: string): boolean {
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(value);
-}
-
-/** `true` si la chaîne est un nom d'hôte utilisable comme SAN DNS. */
-function isHostname(value: string): boolean {
-  return value.length > 0 && !isIpv4(value) && value !== "0.0.0.0" && value !== "::" && value !== "::1";
 }
 
 /** Lit la config effective des deux rôles LLM (store + env + défauts). */
@@ -286,7 +279,11 @@ async function main(): Promise<void> {
   // de fonctionner.
   const agentsBindHost = config.getString("agents.bindHost");
   const agentsPort = config.getNumber("agents.port");
+  // CA + serveur machines déclarés HORS du `try` : le rechargement À CHAUD du
+  // certificat serveur (voir `config.subscribe` plus bas) doit pouvoir les voir.
+  let agentCa: CertificateAuthority | undefined;
   let agentsServer: ReturnType<typeof createAgentsServer> | undefined;
+  let stopAgentsCertReload: (() => void) | undefined;
   let agentsDeps: AgentsApiDeps | undefined;
   let agentExecution: AgentExecutionService | undefined;
   try {
@@ -305,7 +302,7 @@ async function main(): Promise<void> {
       retentionDays: config.getNumber("audit.retentionDays"),
       logger,
     });
-    const agentCa = CertificateAuthority.open({
+    agentCa = CertificateAuthority.open({
       dir: caDirectoryIn(dirname(env.agentsStorePath)),
       logger,
     });
@@ -335,13 +332,44 @@ async function main(): Promise<void> {
         hint: "Restreindre `agents.bindHost` à l'adresse de l'interface LAN (ex. 10.10.1.10).",
       });
     }
-    const agentsServerCert = agentCa.ensureServerCertificate({
-      dnsNames: ["localhost", ...(isHostname(agentsBindHost) ? [agentsBindHost] : [])],
-      ipAddresses: [
-        "127.0.0.1",
-        ...(isIpv4(agentsBindHost) && agentsBindHost !== "0.0.0.0" ? [agentsBindHost] : []),
-      ],
+    // Certificat SERVEUR : le SAN doit couvrir TOUTES les adresses par
+    // lesquelles un agent peut joindre Yuki (boucle locale + `agents.bindHost`
+    // concret + chaque `agents.serverName` déclaré), sinon la vérification du
+    // nom d'hôte côté agent refuse la poignée de main (« certificate is valid
+    // for 127.0.0.1, not 10.10.0.5 »). ⚠️ AUCUNE détection automatique : Yuki
+    // tourne en conteneur, `os.networkInterfaces()` ne voit pas l'IP de l'hôte
+    // — l'adresse vient de `agents.serverName`. Le certificat est régénéré si
+    // le SAN en place ne couvre pas l'ensemble attendu, ⚠️ sans jamais changer
+    // la clé du CA (les agents déjà appairés restent valables).
+    const currentServerNames = (): ReturnType<typeof serverCertificateNames> =>
+      serverCertificateNames({
+        bindHost: agentsBindHost,
+        serverName: config.getString("agents.serverName"),
+      });
+    const agentsServerNames = currentServerNames();
+    const agentsServerCert = agentCa.ensureServerCertificate(agentsServerNames);
+    logger.info("agents.server_cert", {
+      dns_names: agentsServerNames.dnsNames.join(","),
+      ip_addresses: agentsServerNames.ipAddresses.join(","),
     });
+    if (
+      agentsBindHost === "0.0.0.0" &&
+      config.getString("agents.serverName").trim() === ""
+    ) {
+      // Message HONNÊTE : sans `serverName`, le SAN ne couvre que la boucle
+      // locale. Un agent qui joint Yuki par une autre adresse (IP LAN, nom DNS)
+      // échouera la vérification TLS — la cause est l'absence de déclaration,
+      // aucune détection automatique n'est possible depuis le conteneur.
+      logger.warn("agents.server_cert.loopback_only", {
+        bindHost: agentsBindHost,
+        hint:
+          "`agents.serverName` est vide : le certificat serveur ne couvre que la " +
+          "boucle locale (localhost, 127.0.0.1, ::1). Renseignez « agents.serverName » " +
+          "(onglet Agents de /config) avec l'adresse ou le nom que vos agents utilisent " +
+          "pour joindre Yuki (ex. 10.10.0.5 ou yuki.lan) ; sinon ils ne pourront " +
+          "valider le certificat qu'en boucle locale.",
+      });
+    }
     agentsServer = createAgentsServer({
       certPem: agentsServerCert.certPem,
       keyPem: agentsServerCert.keyPem,
@@ -351,6 +379,18 @@ async function main(): Promise<void> {
       audit: auditLog,
       ca: agentCa,
       hub: agentHub,
+      logger,
+    });
+
+    // Rechargement À CHAUD du certificat serveur : modifier `agents.serverName`
+    // depuis /config régénère le SAN si nécessaire puis recharge le contexte TLS
+    // du port machines (`server.setSecureContext`) SANS redémarrer le gateway.
+    // ⚠️ La clé du CA n'est jamais touchée ⇒ aucun ré-appairage nécessaire.
+    stopAgentsCertReload = installServerCertificateReload({
+      server: agentsServer,
+      bindHost: agentsBindHost,
+      ca: agentCa,
+      config,
       logger,
     });
     agentsDeps = { pairing: pairingManager, store: agentStore, logger, hub: agentHub, audit: auditLog, approvals };
@@ -728,6 +768,8 @@ async function main(): Promise<void> {
 
   triggerShutdown = installGracefulShutdown(server, logger, {
     beforeClose: async () => {
+      stopAgentsCertReload?.();
+      stopAgentsCertReload = undefined;
       if (agentsServer) await closeAgentsServer(agentsServer);
       await transport?.close();
       await host?.stop();

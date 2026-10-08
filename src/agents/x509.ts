@@ -217,7 +217,9 @@ function generalNames(spec: CertificateSpec): Buffer {
     names.push(tlv(0x82, Buffer.from(dns, "ascii")));
   }
   for (const ip of spec.ipAddresses ?? []) {
-    names.push(tlv(0x87, ipv4ToBytes(ip)));
+    // `iPAddress` : OCTET STRING de 4 octets (IPv4) ou 16 octets (IPv6),
+    // MÊME tag 0x87 dans les deux cas (RFC 5280 §4.2.1.6).
+    names.push(tlv(0x87, ipToBytes(ip)));
   }
   return sequence(...names);
 }
@@ -229,6 +231,80 @@ export function ipv4ToBytes(ip: string): Buffer {
     throw new Error(`adresse IPv4 invalide : ${ip}`);
   }
   return Buffer.from(parts as number[]);
+}
+
+/**
+ * Convertit une adresse IP (v4 **ou** v6) en octets de SAN, ou `null` si la
+ * chaîne n'est pas une adresse utilisable. Une zone de portée
+ * (`fe80::1%eth0`) est ignorée : un SAN ne porte jamais de zone.
+ */
+export function parseIpBytes(ip: string): Buffer | null {
+  const raw = ip.trim();
+  if (raw.length === 0) return null;
+  const value = raw.includes("%") ? (raw.split("%")[0] as string) : raw;
+  if (value.length === 0) return null;
+  if (!value.includes(":")) {
+    const parts = value.split(".");
+    if (parts.length !== 4) return null;
+    if (!parts.every((p) => /^\d{1,3}$/.test(p))) return null;
+    const bytes = parts.map((p) => Number.parseInt(p, 10));
+    if (bytes.some((n) => n < 0 || n > 255)) return null;
+    return Buffer.from(bytes);
+  }
+  return ipv6ToBytes(value);
+}
+
+/** Convertit une adresse IP (v4/v6) en octets de SAN ; lève si invalide. */
+export function ipToBytes(ip: string): Buffer {
+  const bytes = parseIpBytes(ip);
+  if (!bytes) throw new Error(`adresse IP invalide : ${ip}`);
+  return bytes;
+}
+
+/**
+ * Convertit une adresse IPv6 (forme compressée `::` et IPv4 embarquée
+ * acceptées) en 16 octets, ou `null` si la chaîne n'est pas valide.
+ */
+export function ipv6ToBytes(ip: string): Buffer | null {
+  const first = ip.indexOf("::");
+  if (first >= 0 && first !== ip.lastIndexOf("::")) return null;
+  const head = first >= 0 ? ip.slice(0, first) : ip;
+  const tail = first >= 0 ? ip.slice(first + 2) : "";
+
+  const parseGroups = (segment: string, allowIpv4: boolean): number[] | null => {
+    if (segment.length === 0) return [];
+    const parts = segment.split(":");
+    const groups: number[] = [];
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i] as string;
+      if (part.includes(".")) {
+        if (!allowIpv4 || i !== parts.length - 1) return null;
+        const v4 = parseIpBytes(part);
+        if (!v4 || v4.length !== 4) return null;
+        groups.push(v4.readUInt16BE(0), v4.readUInt16BE(2));
+        continue;
+      }
+      if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return null;
+      groups.push(Number.parseInt(part, 16));
+    }
+    return groups;
+  };
+
+  const headGroups = parseGroups(head, first < 0);
+  const tailGroups = first >= 0 ? parseGroups(tail, true) : [];
+  if (!headGroups || !tailGroups) return null;
+  const total = headGroups.length + tailGroups.length;
+  let groups: number[];
+  if (first < 0) {
+    if (total !== 8) return null;
+    groups = headGroups;
+  } else {
+    if (total > 7) return null;
+    groups = [...headGroups, ...new Array<number>(8 - total).fill(0), ...tailGroups];
+  }
+  const out = Buffer.alloc(16);
+  for (let i = 0; i < 8; i++) out.writeUInt16BE(groups[i] as number, i * 2);
+  return out;
 }
 
 function extensionsFor(spec: CertificateSpec): Buffer {

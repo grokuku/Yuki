@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { loadEnv } from "../../src/config/env.js";
+import { loadEnv, readConfigEnvOverrides } from "../../src/config/env.js";
 import {
   CONFIG_SCHEMA,
   validateField,
@@ -20,6 +20,7 @@ const AGENT_FIELDS: Record<
   { type: string; def: string | number; min?: number; max?: number; apply: string }
 > = {
   "agents.bindHost": { type: "string", def: "0.0.0.0", apply: "restart" },
+  "agents.serverName": { type: "string", def: "", apply: "hot" },
   "agents.port": { type: "int", def: 9443, min: 1, max: 65535, apply: "restart" },
   "agents.defaultLevel": { type: "enum", def: "destructive", apply: "hot" },
   "audit.retentionDays": { type: "int", def: 30, min: 1, max: 3650, apply: "hot" },
@@ -65,6 +66,35 @@ describe("schéma agents.* / audit.*", () => {
       value: "127.0.0.1",
     });
     expect(validateField("agents.bindHost", "").ok).toBe(false);
+  });
+
+  it("`agents.serverName` : chaîne VIDE admise (défaut), multi-valeurs par virgules", () => {
+    // Défaut = vide, et `allowEmpty` le rend VALIDE (sinon un enregistrement
+    // « vide » serait refusé alors que c'est l'état par défaut).
+    expect(CONFIG_SCHEMA["agents.serverName"]?.allowEmpty).toBe(true);
+    expect(validateField("agents.serverName", "")).toEqual({ ok: true, value: "" });
+    expect(validateField("agents.serverName", "   ")).toEqual({ ok: true, value: "" });
+    // Plusieurs valeurs séparées par des virgules : la validation n'impose RIEN
+    // au-delà du type chaîne (le découpage/épuration est fait par le module SAN).
+    expect(validateField("agents.serverName", "10.10.0.5, yuki.lan")).toEqual({
+      ok: true,
+      value: "10.10.0.5, yuki.lan",
+    });
+    expect(validateField("agents.serverName", 42).ok).toBe(false);
+  });
+
+  it("`agents.serverName` : surcharge par `YUKI_AGENTS_SERVER_NAME`", () => {
+    // Chemin normal depuis un `docker-compose` : l'opérateur passe l'IP de l'hôte.
+    expect(
+      readConfigEnvOverrides({ YUKI_AGENTS_SERVER_NAME: "10.10.0.5" })[
+        "agents.serverName"
+      ],
+    ).toBe("10.10.0.5");
+    // Une variable vide n'est PAS une surcharge.
+    expect(
+      readConfigEnvOverrides({ YUKI_AGENTS_SERVER_NAME: "  " })["agents.serverName"],
+    ).toBeUndefined();
+    expect(readConfigEnvOverrides({})["agents.serverName"]).toBeUndefined();
   });
 });
 

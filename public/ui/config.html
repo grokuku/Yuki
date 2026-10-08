@@ -196,7 +196,12 @@
               appairées (état, dernière connexion, historique, niveau, privilège,
               suppression) + validations en attente. Composant autonome monté par
               id (`agents-panel.js`), aucun style inline (CSP `style-src 'self'`).
+
+              Le groupe de champs `#group-agents` porte la configuration de
+              l'ACCÈS des agents (adresse/nom déclarés dans le certificat
+              serveur) ; il est rendu par la mécanique de configuration commune.
             -->
+            <div id="group-agents" class="config-groups"></div>
             <div id="agents-root"></div>
           </section>
           <section

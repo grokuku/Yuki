@@ -18,6 +18,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { createServer as createNetServer } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -44,6 +45,17 @@ async function goAvailable(): Promise<boolean> {
 }
 
 const GO = await goAvailable();
+
+/** `true` si `127.0.0.2` est joignable (tout `127.0.0.0/8` local : Linux). */
+async function canBindExtraLoopback(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createNetServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(0, "127.0.0.2", () => probe.close(() => resolve(true)));
+  });
+}
+
+const EXTRA_LOOPBACK = await canBindExtraLoopback();
 
 /**
  * Exécute `paircheck` en ASYNCHRONE.
@@ -163,6 +175,28 @@ describe.skipIf(!GO)("interopérabilité Go ↔ TS", () => {
     // L'agent a bien été enregistré dans le store Yuki par l'appairage.
     expect(s.store.has(go["agent_id"] as string)).toBe(true);
   }, 120_000);
+
+  it.skipIf(!EXTRA_LOOPBACK)(
+    "SAN déclaré : l'agent qui VÉRIFIE 127.0.0.2 (adresse déclarée) réussit",
+    async () => {
+      // Yuki écoute sur toutes les interfaces ; l'opérateur DÉCLARE que ses
+      // agents la joignent par `127.0.0.2` (substitut de l'IP LAN `10.10.0.5`).
+      const s = await startTestStack({ bindHost: "0.0.0.0", serverName: "127.0.0.2" });
+      stacks.push(s);
+      const code = "ABCD-2345-6789";
+      s.pairing.submitCode(code, { ip: "127.0.0.2" });
+
+      // Le client Go fixe `ServerName` = hôte de l'URL et VÉRIFIE le certificat.
+      // Sans le SAN déclaré, la poignée de main mTLS échouerait (bug réel).
+      const baseURL = `https://127.0.0.2:${s.port}`;
+      const go = await runGo(["pair", baseURL, code], 120_000);
+
+      expect(go["ok"]).toBe(true);
+      expect(go["whoami_agent_matches"]).toBe(true);
+      expect(go["ca_fingerprint"]).toBe(s.ca.fingerprint);
+    },
+    120_000,
+  );
 
   it("appairage D119 : l'agent GÉNÈRE le code, Yuki le valide (ordre réel)", async () => {
     const s = await startTestStack();

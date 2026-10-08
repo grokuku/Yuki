@@ -26,6 +26,7 @@ import {
   normalizeCode,
   PAIR_NONCE_SIZE,
   PairingManager,
+  serverCertificateNames,
   startAgentsServer,
   type PairBeginFrame,
 } from "../../src/agents/index.js";
@@ -39,6 +40,18 @@ export interface StackOptions {
   maxPending?: number;
   perIp?: { max: number; windowMs: number };
   now?: () => number;
+  /**
+   * Hôte d'écoute. Par défaut `127.0.0.1`. Une adresse locale concrète permet
+   * de tester une poignée de main TLS qui VÉRIFIE le nom d'hôte contre une IP
+   * du SAN (cas réel du correctif SAN).
+   */
+  bindHost?: string;
+  /**
+   * Valeur de `agents.serverName` : adresse(s)/nom(s) que l'agent utilise pour
+   * joindre Yuki, inscrits dans le SAN. Par défaut : `bindHost` (comme le fait
+   * la production quand `agents.bindHost` est concret).
+   */
+  serverName?: string;
 }
 
 export interface TestStack {
@@ -59,8 +72,9 @@ export interface TestStack {
   cleanup(): void;
 }
 
-/** Démarre la pile sur 127.0.0.1:0 et renvoie l'URL. */
+/** Démarre la pile sur `127.0.0.1:0` (ou `bindHost`) et renvoie l'URL. */
 export async function startTestStack(options: StackOptions = {}): Promise<TestStack> {
+  const bindHost = options.bindHost ?? "127.0.0.1";
   const dir = mkdtempSync(join(tmpdir(), "yuki-agents-stack-"));
   const store = AgentStore.open({
     path: join(dir, "agents.jsonl"),
@@ -88,10 +102,14 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
     ...(options.maxPending !== undefined ? { maxPending: options.maxPending } : {}),
     ...(options.perIp ? { perIp: options.perIp } : {}),
   });
-  const serverCert = ca.ensureServerCertificate({
-    dnsNames: ["localhost"],
-    ipAddresses: ["127.0.0.1"],
-  });
+  // SAN calculés comme en production (boucle locale + `bindHost` concret +
+  // `agents.serverName`) : indispensable pour tester une connexion par IP LAN.
+  const serverCert = ca.ensureServerCertificate(
+    serverCertificateNames({
+      ...(bindHost === "0.0.0.0" ? {} : { bindHost }),
+      serverName: options.serverName ?? "",
+    }),
+  );
   const hub = new AgentHub({ logger });
   const approvals = new ApprovalRegistry({ logger });
   const execution = new AgentExecutionService({ store, hub, audit, approvals, logger });
@@ -106,7 +124,7 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
     hub,
     logger,
   });
-  const address = await startAgentsServer(server, "127.0.0.1", 0);
+  const address = await startAgentsServer(server, bindHost, 0);
   let closed = false;
   return {
     dir,
@@ -119,7 +137,7 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
     execution,
     server,
     port: address.port,
-    url: `https://127.0.0.1:${address.port}`,
+    url: `https://${bindHost}:${address.port}`,
     register(agentId: string) {
       store.markSeen(agentId);
     },

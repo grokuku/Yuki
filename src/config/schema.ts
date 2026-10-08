@@ -398,6 +398,22 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "restart",
     env: "YUKI_AGENTS_BIND_HOST",
   },
+  // Adresse(s) ou nom(s) que les AGENTS utilisent pour joindre Yuki — inscrits
+  // dans le SAN du certificat serveur (en plus de la boucle locale). `FieldType`
+  // ne connaît pas les tableaux : plusieurs valeurs se déclarent donc séparées
+  // par des VIRGULES dans cette chaîne unique (compromis assumé, voir
+  // `src/agents/server-names.ts`). Une IP littérale va dans `IPAddress`, un nom
+  // dans `DNSName`. Vide = le certificat ne couvre que la boucle locale (et
+  // `agents.bindHost` s'il est concret). `apply: hot` : la modification
+  // régénère le certificat serveur et recharge le contexte TLS du port machines
+  // à chaud (`server.setSecureContext`), sans redémarrer le gateway.
+  "agents.serverName": {
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    apply: "hot",
+    env: "YUKI_AGENTS_SERVER_NAME",
+  },
   "agents.port": {
     type: "int",
     default: 9443,

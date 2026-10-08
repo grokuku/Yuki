@@ -30,6 +30,7 @@ import {
   fingerprintHex,
   generateEcKeyPair,
   parseCertificate,
+  parseIpBytes,
   privateKeyPkcs8Pem,
   publicKeySpkiDer,
   type CertificateSpec,
@@ -239,7 +240,13 @@ export class CertificateAuthority {
    * Certificat SERVEUR du port machines, signé par le CA et persisté.
    *
    * Les SAN demandés (`dnsNames` + `ipAddresses`) doivent tous être présents :
-   * à défaut, le couple est régénéré (cas d'un changement d'hôte d'écoute).
+   * à défaut, le couple est régénéré (cas d'un changement d'hôte d'écoute ou de
+   * `agents.serverName`, voir `serverCertificateNames`).
+   *
+   * ⚠️ La RÉGÉNÉRATION ne touche QUE `agents-server.crt` / `agents-server.key` :
+   * la clé du CA (`agents-ca.key`) n'est JAMAIS réécrite ici. Les agents déjà
+   * appairés ont épinglé le CA ⇒ leur confiance reste valable après une
+   * régénération (aucun ré-appairage nécessaire).
    */
   ensureServerCertificate(serverNames: {
     dnsNames: readonly string[];
@@ -306,11 +313,23 @@ export class CertificateAuthority {
 
 /** `true` si l'adresse IP apparaît dans le `subjectAltName` du certificat. */
 function isCoveredIp(cert: X509Certificate, ip: string): boolean {
+  // Comparaison par OCTETS, pas par chaîne : Node rend les IP du SAN sous une
+  // forme canonique (`IP Address:2001:db8::1`) qui peut différer de l'écriture
+  // demandée (`2001:0db8:0:0:0:0:0:1`) sans que l'adresse soit différente.
+  const wanted = parseIpBytes(ip);
+  if (!wanted) return false;
   const alt = cert.subjectAltName ?? "";
-  return alt
-    .split(",")
-    .map((part) => part.trim())
-    .some((part) => part === `IP Address:${ip}` || part === `IP:${ip}`);
+  return alt.split(",").some((part) => {
+    const trimmed = part.trim();
+    const value = trimmed.startsWith("IP Address:")
+      ? trimmed.slice("IP Address:".length)
+      : trimmed.startsWith("IP:")
+        ? trimmed.slice("IP:".length)
+        : null;
+    if (value === null) return false;
+    const found = parseIpBytes(value);
+    return found !== null && found.equals(wanted);
+  });
 }
 
 /** Nom de dossier par défaut du CA dans un volume `state`. */

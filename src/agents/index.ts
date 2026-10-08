@@ -48,9 +48,12 @@ export {
   fingerprintHex,
   generateEcKeyPair,
   ipv4ToBytes,
+  ipToBytes,
+  ipv6ToBytes,
   KEY_USAGE,
   EKU_OID,
   parseCertificate,
+  parseIpBytes,
   pemFromDer,
   privateKeyPkcs8Pem,
   publicKeySpkiDer,
@@ -65,6 +68,25 @@ export type {
   ClientCertificate,
   ServerCertificate,
 } from "./ca.js";
+
+// Correctif SAN : SAN du certificat serveur = boucle locale + `agents.bindHost`
+// concret + `agents.serverName` déclaré (aucune détection automatique : Yuki
+// tourne en conteneur, `os.networkInterfaces()` ne voit pas l'IP de l'hôte).
+export {
+  LOOPBACK_DNS_NAMES,
+  LOOPBACK_IP_ADDRESSES,
+  serverCertificateNames,
+  splitServerNames,
+} from "./server-names.js";
+export type { ServerCertificateNames } from "./server-names.js";
+
+// Rechargement À CHAUD du certificat serveur (changement de `agents.serverName`).
+export { installServerCertificateReload, sanSignatureOf } from "./cert-reload.js";
+export type {
+  CertReloadLogger,
+  ServerCertificateReloadOptions,
+  ServerNameConfigReader,
+} from "./cert-reload.js";
 
 export {
   CodeKey,

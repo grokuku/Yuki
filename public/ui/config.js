@@ -349,6 +349,25 @@ const GROUPS = [
       { path: "transport.replayBytes", label: "Buffer de rejeu (octets)", kind: "number", min: 1 },
     ],
   },
+  {
+    id: "agents-acces",
+    title: "Accès des agents",
+    fields: [
+      {
+        path: "agents.serverName",
+        label: "Adresse ou nom que vos agents utilisent",
+        kind: "text",
+        helper:
+          "Adresse ou nom que vos agents utilisent pour joindre Yuki " +
+          "(ex. 10.10.0.5 ou yuki.lan). Cette valeur est inscrite dans le " +
+          "certificat serveur de Yuki, sinon vos agents ne peuvent pas vérifier " +
+          "le certificat par l'adresse réseau. Plusieurs valeurs possibles, " +
+          "séparées par des virgules. ⚠️ Yuki tourne dans un conteneur : elle ne " +
+          "peut pas deviner l'adresse de l'hôte, il faut la déclarer ici. " +
+          "Modification appliquée à chaud (certificat régénéré sans redémarrage).",
+      },
+    ],
+  },
 ];
 
 const ALL_FIELDS = GROUPS.flatMap((group) => group.fields);
@@ -406,6 +425,7 @@ const FIELD_DEFAULTS = {
   "tts.volume": 100,
   "transport.replayBuffer": 1000,
   "transport.replayBytes": 5000000,
+  "agents.serverName": "",
 };
 
 /**
@@ -417,7 +437,7 @@ const TABS = [
   { id: "modeles", groups: ["llm-light", "llm-heavy"] },
   { id: "conversation", groups: ["delegation", "prompts", "memoire"] },
   { id: "voix", groups: ["tts"] },
-  { id: "agents", groups: [] },
+  { id: "agents", groups: ["agents-acces"] },
   { id: "systeme", groups: ["gpu", "transport"] },
   { id: "maintenance", groups: [] },
 ];
