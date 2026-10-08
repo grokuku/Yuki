@@ -67,6 +67,11 @@ export interface AgentConnectionOptions {
   now?: () => number;
   /** Appelé à la fermeture (une seule fois). */
   onClose?: (connection: AgentConnection) => void;
+  /**
+   * Appelé après réception d'un `hello` (présentation de la machine). Sert au
+   * pré-remplissage du nom à partir du nom d'hôte (`host`).
+   */
+  onHello?: (connection: AgentConnection, hello: AgentHello) => void;
 }
 
 let socketSeq = 0;
@@ -77,6 +82,7 @@ export class AgentConnection {
   private readonly logger: ChannelLogger;
   private readonly now: () => number;
   private readonly onCloseCallback?: (connection: AgentConnection) => void;
+  private readonly onHelloCallback?: (connection: AgentConnection, hello: AgentHello) => void;
   private readonly pending = new Map<string, PendingCommand>();
 
   private hello: AgentHello | null = null;
@@ -90,6 +96,7 @@ export class AgentConnection {
     this.logger = options.logger;
     this.now = options.now ?? Date.now;
     this.onCloseCallback = options.onClose;
+    this.onHelloCallback = options.onHello;
     socketSeq += 1;
     this.socketId = socketSeq;
 
@@ -150,6 +157,16 @@ export class AgentConnection {
           arch: parsed.frame.arch ?? null,
           euid: parsed.frame.euid,
         });
+        // Le `hello` peut porter le nom d'hôte : c'est le signal pour proposer
+        // un alias lisible (jamais obligatoire, jamais écrasant).
+        try {
+          this.onHelloCallback?.(this, this.hello);
+        } catch (error) {
+          this.logger.warn("agents.ws.hello_callback_failed", {
+            agent_id: this.agentId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return;
       case "ack": {
         const pending = this.pending.get(parsed.frame.cmdId);

@@ -7,6 +7,7 @@ import {
   LIGHT_PROVIDER,
   LIGHT_MODEL,
   PROVIDERS,
+  AGENT_DIRECTORY_TOOLS,
   buildModelsConfigFrom,
   DEFAULT_EFFECTIVE_LLM_CONFIG,
   containsForbiddenTool,
@@ -131,5 +132,29 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     expect(containsForbiddenTool(withExec)).toBe(false);
     // Le lourd n'a JAMAIS d'outil d'exécution.
     expect(toolAllowlist("heavy", { executionEnabled: true })).not.toContain("run_command");
+  });
+
+  it("les outils de consultation sont activables INDÉPENDAMMENT de l'exécution", () => {
+    expect(AGENT_DIRECTORY_TOOLS).toEqual(["lister_agents", "etat_agent"]);
+    // Par défaut : non exposés.
+    expect(toolAllowlist("light")).not.toContain("lister_agents");
+    expect(toolAllowlist("light")).not.toContain("etat_agent");
+    // Activés seuls : consultation sans exécution (consulter n'est pas exécuter).
+    const withDir = toolAllowlist("light", { directoryEnabled: true });
+    expect(withDir).toContain("lister_agents");
+    expect(withDir).toContain("etat_agent");
+    expect(withDir).not.toContain("run_command");
+    // Réciproque : l'exécution seule n'expose pas la consultation.
+    const withExec = toolAllowlist("light", { executionEnabled: true });
+    expect(withExec).not.toContain("lister_agents");
+    expect(withExec).not.toContain("etat_agent");
+    // Les deux ensemble.
+    const both = toolAllowlist("light", { executionEnabled: true, directoryEnabled: true });
+    expect(both).toEqual(expect.arrayContaining(["run_command", "lister_agents", "etat_agent"]));
+    expect(containsForbiddenTool(both)).toBe(false);
+    // Le lourd n'a JAMAIS d'outil de consultation.
+    const heavyDir = toolAllowlist("heavy", { directoryEnabled: true });
+    expect(heavyDir).not.toContain("lister_agents");
+    expect(heavyDir).not.toContain("etat_agent");
   });
 });

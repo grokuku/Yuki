@@ -5,6 +5,7 @@
  * Usage : cd Yuki && npx tsx "../Yuki and Libs/_tools/e2e-agents-serve.ts"
  * Env :
  *   YUKI_E2E_AGENTS       identifiants d'agents à pré-enregistrer (séparés par ,)
+ *   YUKI_E2E_NAMES        noms correspondant aux agents (même ordre, optionnel)
  *   YUKI_E2E_APPROVALS    "1" ⇒ ajoute une validation en attente (niveaux 2/3)
  *   YUKI_E2E_PENDING_CODE code d'appairage pour lequel déposer une `pair_begin`
  *                         EN ATTENTE (test du formulaire d'appairage, D119)
@@ -69,8 +70,14 @@ const seed = (process.env.YUKI_E2E_AGENTS ?? "")
   .split(",")
   .map((id) => id.trim())
   .filter(Boolean);
-for (const id of seed) {
+const seedNames = (process.env.YUKI_E2E_NAMES ?? "")
+  .split(",")
+  .map((name) => name.trim());
+for (let i = 0; i < seed.length; i += 1) {
+  const id = seed[i] as string;
   store.markSeen(id);
+  const name = seedNames[i];
+  if (name) store.setName(id, name);
   audit.append({
     event: "command",
     agentId: id,

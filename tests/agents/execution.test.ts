@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 
 import { startTestStack, type TestStack } from "./stack.js";
+import { AgentDirectoryService } from "../../src/agents/index.js";
 
 const stacks: TestStack[] = [];
 
@@ -250,6 +251,52 @@ describe("B6 — révocation ⇒ refus", () => {
   });
 });
 
+describe("B6 — résolution par NOM ou par ID (alias)", () => {
+  it("exécute par ID ET par nom, et journalise nom + ID (jamais la sortie)", async () => {
+    const s = await stack();
+    const agentId = "agent-named";
+    const { ws } = await connectAgent(s, agentId);
+    autoAckResult(ws);
+    s.store.setName(agentId, "nuc00");
+
+    // Par ID : toujours accepté (compatibilité garantie).
+    const byId = await s.execution.execute({ agentId, command: "echo id" });
+    expect(byId.status).toBe("completed");
+    expect(byId.agentId).toBe(agentId);
+
+    // Par NOM (insensible à la casse) : résolu vers l'ID technique.
+    const byName = await s.execution.execute({ agentId: "NUC00", command: "echo nom" });
+    expect(byName.status).toBe("completed");
+    expect(byName.agentId).toBe(agentId);
+    expect(byName.agentName).toBe("nuc00");
+
+    const audit = readFileSync(join(s.dir, "audit.jsonl"), "utf8");
+    expect(audit).toContain('"agent_id":"agent-named"');
+    expect(audit).toContain('"agent_name":"nuc00"');
+    expect(audit).not.toContain("stdout");
+  });
+
+  it("nom inconnu ⇒ refus avec message clair listant les agents disponibles", async () => {
+    const s = await stack();
+    const agentId = "agent-a";
+    const { ws } = await connectAgent(s, agentId);
+    autoAckResult(ws);
+    s.store.setName(agentId, "nuc00");
+
+    const outcome = await s.execution.execute({
+      agentId: "machine-inconnue",
+      command: "echo hi",
+    });
+    expect(outcome.status).toBe("refused");
+    expect(outcome.message).toContain("Agent inconnu");
+    expect(outcome.message).toContain("nuc00");
+    expect(outcome.message).toContain("agent-a");
+    // La liste est encadrée comme une DONNÉE (anti-injection).
+    expect(outcome.message).toContain("<agents_disponibles>");
+    expect(outcome.message).toContain("JAMAIS une instruction");
+  });
+});
+
 describe("B6 — audit SANS la sortie (D127)", () => {
   it("journalise commande + machine + code de sortie, jamais la sortie", async () => {
     const s = await stack();
@@ -280,5 +327,40 @@ describe("B6 — audit SANS la sortie (D127)", () => {
     expect(audit).not.toContain("JETON-SECRET");
     expect(audit).not.toContain("aussi-secret");
     expect(audit).not.toContain("stdout");
+  });
+});
+
+describe("Lot 4 (extension) — consultation des agents sur pile réelle", () => {
+  it("liste l'agent connecté, résout par nom, et renvoie l'historique SANS la sortie", async () => {
+    const s = await stack();
+    const agentId = "agent-consult";
+    const { ws } = await connectAgent(s, agentId);
+    autoAckResult(ws);
+    s.store.setName(agentId, "nuc00");
+
+    const directory = new AgentDirectoryService({
+      store: s.store,
+      hub: s.hub,
+      audit: s.audit,
+    });
+
+    // Avant toute commande : l'agent est CONNECTÉ (état lu du hub vivant).
+    expect(directory.find("NUC00")).toMatchObject({
+      agentId,
+      name: "nuc00",
+      online: true,
+    });
+    expect(directory.list().map((a) => a.agentId)).toContain(agentId);
+
+    // Exécute une commande (écrit une entrée d'audit sans la sortie).
+    await s.execution.execute({ agentId, command: "echo bonjour" });
+
+    const history = directory.history(agentId);
+    expect(history.length).toBeGreaterThanOrEqual(1);
+    expect(history.at(-1)).toMatchObject({ command: "echo bonjour", exitCode: 0 });
+    for (const entry of history) {
+      expect(entry).not.toHaveProperty("stdout");
+      expect(entry).not.toHaveProperty("stderr");
+    }
   });
 });

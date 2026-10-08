@@ -7,8 +7,9 @@
  * `src/pi/sdk-host.ts`, qui est le seul module autorisé à importer le SDK.
  */
 
-import type { DelegateServicePort } from "../delegation/ports.js";
+import type { AgentDirectoryPort } from "../agents/directory.js";
 import type { ExecutionServicePort } from "../agents/execution.js";
+import type { DelegateServicePort } from "../delegation/ports.js";
 import type { MemoryPort } from "../memory/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
@@ -84,6 +85,12 @@ export interface PiHostOptions {
    * aucun outil d'exécution.
    */
   execution?: ExecutionServicePort;
+  /**
+   * Port de CONSULTATION des agents appairés (Lot 4, extension). Présent ⇒ la
+   * façade expose les outils `lister_agents` et `etat_agent` (LECTURE SEULE).
+   * Indépendant de `execution` : consulter n'est pas exécuter.
+   */
+  directory?: AgentDirectoryPort;
   /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).

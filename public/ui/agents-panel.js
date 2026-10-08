@@ -80,8 +80,32 @@ function apiMessage(error, fallback) {
   return data.message ?? data.error ?? error?.message ?? fallback;
 }
 
+/**
+ * Nom affichable d'un agent : son NOM s'il existe, sinon son ID technique — on
+ * n'affiche JAMAIS un vide (ni pour l'humain, ni pour le modèle).
+ */
+function displayName(agent) {
+  const name = typeof agent?.name === "string" ? agent.name.trim() : "";
+  return name !== "" ? name : String(agent?.agentId ?? "");
+}
+
+/** Identité affichable : le nom (ou l'ID en repli) + l'ID en note s'il diffère. */
+function identityNode(agentId, label) {
+  const nodes = [h("span", { class: "agent-id", text: label })];
+  if (label !== agentId) {
+    nodes.push(h("span", { class: "agent-id-sub", text: `id ${agentId}` }));
+  }
+  return h("span", { class: "agent-identity" }, nodes);
+}
+
 export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
   const state = { agents: [], approvals: [], history: new Map(), error: "", pairStatus: "" };
+
+  /** Nom affichable d'un agent à partir de son ID (repli : l'ID lui-même). */
+  function nameOf(agentId) {
+    const agent = state.agents.find((a) => a.agentId === agentId);
+    return agent ? displayName(agent) : String(agentId);
+  }
 
   async function load() {
     state.error = "";
@@ -154,9 +178,11 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
   }
 
   async function removeAgent(agent) {
+    const label = displayName(agent);
+    const idNote = label === agent.agentId ? "" : ` (identifiant ${agent.agentId})`;
     const confirmed = await HolafModal.confirm(
       "Supprimer cet agent ?",
-      `L'agent « ${agent.agentId} » sera révoqué : son certificat cessera d'être ` +
+      `L'agent « ${label} »${idNote} sera révoqué : son certificat cessera d'être ` +
         "accepté et son canal sera coupé. Cette action peut être annulée en le restaurant.",
       { danger: true, confirmText: "Révoquer" },
     );
@@ -214,7 +240,7 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
       section.append(
         h("div", { class: "agent-approval" }, [
           h("div", { class: "agent-approval__head" }, [
-            h("span", { class: "agent-id", text: approval.agentId }),
+            identityNode(approval.agentId, nameOf(approval.agentId)),
             approval.destructive
               ? h("span", { class: "agent-badge agent-badge--danger", text: "Destructrice" })
               : h("span", { class: "agent-badge", text: "Ordinaire" }),
@@ -244,7 +270,7 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
   function renderAgent(agent) {
     const card = h("article", { class: "agent-card" });
     const head = h("div", { class: "agent-card__head" }, [
-      h("span", { class: "agent-id", text: agent.agentId }),
+      identityNode(agent.agentId, displayName(agent)),
       stateBadge(agent),
     ]);
     card.append(head);
@@ -253,6 +279,37 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
     );
 
     const status = h("span", { class: "config-save-status" });
+
+    // Nom (alias lisible) — champ `hot` : enregistré SANS redémarrage. La
+    // validation (bornes, espaces) et l'unicité sont faites CÔTÉ SERVEUR ; on
+    // affiche tel quel le message renvoyé (jamais une cause inventée).
+    const nameInput = h("input", {
+      class: "agent-name__input",
+      type: "text",
+      autocomplete: "off",
+      spellcheck: "false",
+      maxlength: "64",
+      value: agent.name ?? "",
+      placeholder: "ex. nuc00 (nom d'hôte)",
+      "aria-label": "Nom de l'agent",
+    });
+    const nameStatus = h("span", { class: "config-save-status" });
+    const saveName = () => {
+      const value = nameInput.value.trim();
+      if (value === (agent.name ?? "")) return;
+      if (value === "") {
+        nameStatus.textContent = "Le nom ne peut pas être vide.";
+        return;
+      }
+      void patchAgent(agent.agentId, { name: value }, nameStatus);
+    };
+    nameInput.addEventListener("change", saveName);
+    nameInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveName();
+      }
+    });
 
     // Niveau (D118).
     const levelSelect = h("select", { class: "config-select" });
@@ -276,6 +333,13 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
 
     card.append(
       h("div", { class: "agent-fields" }, [
+        h("label", { class: "agent-field agent-field--wide" }, [
+          h("span", { class: "agent-field__label" }, [
+            "Nom (alias lisible) ",
+            h("span", { class: "badge badge--hot", text: "à chaud" }),
+          ]),
+          nameInput,
+        ]),
         h("label", { class: "agent-field" }, [
           h("span", { class: "agent-field__label", text: "Niveau de validation" }),
           levelSelect,
@@ -285,6 +349,15 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
           privSelect,
         ]),
       ]),
+    );
+    card.append(nameStatus);
+    card.append(
+      h("p", {
+        class: "config-helper",
+        text:
+          "Le nom est un alias lisible pour vous et pour le modèle (ex. « nuc00 »). " +
+          "L'identifiant technique reste la référence : il fonctionne toujours.",
+      }),
     );
     card.append(status);
 

@@ -17,7 +17,7 @@ import type { ApprovalRegistry } from "./approvals.js";
 import type { AgentHub } from "./connection.js";
 import { isChannelError } from "./errors.js";
 import { evaluateDestructive } from "./destructive.js";
-import { frameCommandOutput } from "./output.js";
+import { escapeOutputText, frameAgentDirectory, frameCommandOutput } from "./output.js";
 import type { AuditLog } from "./audit.js";
 import type { AgentStore } from "./store.js";
 
@@ -51,7 +51,10 @@ export interface ExecutionRequest {
 /** Résultat d'exécution rendu à l'appelant (jamais la sortie brute non encadrée). */
 export interface ExecutionOutcome {
   status: ExecutionStatus;
+  /** Identifiant technique de l'agent (toujours renseigné si résolu). */
   agentId: string;
+  /** Nom (alias) de l'agent résolu, `""` si aucun. */
+  agentName?: string;
   command: string;
   destructive: boolean;
   destructiveIds: string[];
@@ -114,21 +117,33 @@ export class AgentExecutionService implements ExecutionServicePort {
   }
 
   async execute(request: ExecutionRequest): Promise<ExecutionOutcome> {
-    const agentId = request.agentId;
+    const requested = request.agentId;
     const command = request.command;
     const verdict = evaluateDestructive(command);
 
-    // 1. Garde-fous de configuration (agent inconnu / révoqué / désactivé).
-    const record = this.store.get(agentId);
+    // 0. Résolution : le modèle peut désigner l'agent par son ID OU par son NOM
+    // (alias lisible). ⚠️ L'ID reste PRIORITAIRE et toujours accepté.
+    const record = this.store.resolve(requested);
     if (!record) {
-      return this.refuse(agentId, command, verdict, "Agent inconnu.");
+      return this.refuse(
+        requested,
+        undefined,
+        command,
+        verdict,
+        this.unknownAgentMessage(requested),
+      );
     }
+    const agentId = record.agentId;
+    const agentName = record.name;
+
+    // 1. Garde-fous de configuration (agent révoqué / désactivé).
     if (record.revoked) {
-      return this.refuse(agentId, command, verdict, "Agent révoqué : exécution refusée.");
+      return this.refuse(agentId, agentName, command, verdict, "Agent révoqué : exécution refusée.");
     }
     if (record.level === "disabled") {
       return this.refuse(
         agentId,
+        agentName,
         command,
         verdict,
         "Agent désactivé (niveau 1) : exécution refusée.",
@@ -146,6 +161,7 @@ export class AgentExecutionService implements ExecutionServicePort {
       });
       this.logger.info("agents.exec.awaiting_validation", {
         agent_id: agentId,
+        agent_name: agentName || null,
         approval_id: pending.id,
         destructive: verdict.destructive,
         level: record.level,
@@ -153,6 +169,7 @@ export class AgentExecutionService implements ExecutionServicePort {
       return {
         status: "awaiting_validation",
         agentId,
+        agentName,
         command,
         destructive: verdict.destructive,
         destructiveIds: verdict.ids,
@@ -170,6 +187,7 @@ export class AgentExecutionService implements ExecutionServicePort {
       return {
         status: "offline",
         agentId,
+        agentName,
         command,
         destructive: verdict.destructive,
         destructiveIds: verdict.ids,
@@ -183,6 +201,7 @@ export class AgentExecutionService implements ExecutionServicePort {
     const timeoutMs = request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     this.logger.info("agents.exec.sent", {
       agent_id: agentId,
+      agent_name: agentName || null,
       cmd_id: cmdId,
       destructive: verdict.destructive,
       origin: request.origin ?? null,
@@ -206,6 +225,8 @@ export class AgentExecutionService implements ExecutionServicePort {
         exitCode: result.exitCode,
         meta: {
           status: "completed",
+          // Le NOM pour l'humain, l'ID (champ `agent_id`) pour la traçabilité.
+          agent_name: agentName || null,
           destructive: verdict.destructive,
           destructive_ids: verdict.ids,
           duration_ms: result.durationMs,
@@ -230,6 +251,7 @@ export class AgentExecutionService implements ExecutionServicePort {
       return {
         status: "completed",
         agentId,
+        agentName,
         command,
         destructive: verdict.destructive,
         destructiveIds: verdict.ids,
@@ -241,13 +263,30 @@ export class AgentExecutionService implements ExecutionServicePort {
         timedOut: result.timedOut,
       };
     } catch (error) {
-      return this.onChannelFailure(agentId, command, verdict, error);
+      return this.onChannelFailure(agentId, agentName, command, verdict, error);
     }
+  }
+
+  /**
+   * Message rendu au modèle quand NI l'ID ni le nom ne correspondent : liste
+   * les agents disponibles dans un bloc DONNÉE (balisage anti-injection).
+   */
+  private unknownAgentMessage(requested: string): string {
+    const entries = this.store
+      .list()
+      .filter((record) => !record.revoked)
+      .map((record) => ({ name: record.name, agentId: record.agentId }));
+    return (
+      `Agent inconnu : « ${escapeOutputText(requested)} ». ` +
+      "Désignez l'agent par son identifiant technique ou par son nom.\n" +
+      frameAgentDirectory(entries)
+    );
   }
 
   /** Traduit un échec de canal en résultat terminal audité (jamais la sortie). */
   private onChannelFailure(
     agentId: string,
+    agentName: string,
     command: string,
     verdict: { destructive: boolean; ids: string[] },
     error: unknown,
@@ -270,12 +309,14 @@ export class AgentExecutionService implements ExecutionServicePort {
       exitCode: null,
       meta: {
         status,
+        agent_name: agentName || null,
         destructive: verdict.destructive,
         destructive_ids: verdict.ids,
       },
     });
     this.logger.warn("agents.exec.failed", {
       agent_id: agentId,
+      agent_name: agentName || null,
       status,
       code,
       error: message,
@@ -284,6 +325,7 @@ export class AgentExecutionService implements ExecutionServicePort {
     return {
       status,
       agentId,
+      agentName,
       command,
       destructive: verdict.destructive,
       destructiveIds: verdict.ids,
@@ -295,14 +337,20 @@ export class AgentExecutionService implements ExecutionServicePort {
 
   private refuse(
     agentId: string,
+    agentName: string | undefined,
     command: string,
     verdict: { destructive: boolean; ids: string[] },
     message: string,
   ): ExecutionOutcome {
-    this.logger.info("agents.exec.refused", { agent_id: agentId, reason: message });
+    this.logger.info("agents.exec.refused", {
+      agent_id: agentId,
+      ...(agentName ? { agent_name: agentName } : {}),
+      reason: message,
+    });
     return {
       status: "refused",
       agentId,
+      ...(agentName ? { agentName } : {}),
       command,
       destructive: verdict.destructive,
       destructiveIds: verdict.ids,

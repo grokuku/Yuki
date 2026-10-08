@@ -18,10 +18,12 @@ export type { AgentErrorCode, PairErrorCode } from "./errors.js";
 
 export {
   AGENT_LEVELS,
+  AGENT_NAME_MAX_LENGTH,
   AGENT_PRIVILEGES,
   AGENT_SCHEMA_VERSION,
   isAgentLevel,
   isAgentPrivilege,
+  isValidAgentName,
 } from "./types.js";
 export type {
   AgentDefaults,
@@ -33,7 +35,7 @@ export type {
   AgentRecord,
 } from "./types.js";
 
-export { AgentStore, applyAgentEvent } from "./store.js";
+export { AgentStore, applyAgentEvent, normalizeAgentName } from "./store.js";
 export type { AgentLogger, AgentStoreOptions } from "./store.js";
 
 export { AuditLog, maxSizeBytesFromMb } from "./audit.js";
@@ -204,11 +206,40 @@ export type {
 export {
   escapeOutputAttribute,
   escapeOutputText,
+  frameAgentDirectory,
+  frameAgentRoster,
+  frameAgentStatus,
   frameCommandOutput,
+  AGENT_LIST_REMINDER,
+  AGENT_LIST_TAG,
+  AGENT_ROSTER_REMINDER,
+  MAX_INLINE_AGENT_ROSTER,
   OUTPUT_DATA_REMINDER,
   SORTIE_TAG,
 } from "./output.js";
-export type { OutputFrameInput } from "./output.js";
+export type {
+  AgentDirectoryEntry,
+  AgentHistoryEntry,
+  AgentRosterEntry,
+  AgentStatusFrameInput,
+  OutputFrameInput,
+} from "./output.js";
+
+// Extension « consultation des agents » (LECTURE SEULE) : liste + état d'un
+// agent pour le modèle, avec balisage anti-injection réutilisé.
+export {
+  AGENT_LEVEL_LABELS,
+  AGENT_PRIVILEGE_LABELS,
+  AgentDirectoryService,
+  DEFAULT_AGENT_HISTORY_LIMIT,
+  MAX_AGENT_HISTORY,
+} from "./directory.js";
+export type {
+  AgentDirectoryPort,
+  AgentDirectoryServiceOptions,
+  AgentSummary,
+  DirectoryLogger,
+} from "./directory.js";
 
 export {
   AgentConnection,

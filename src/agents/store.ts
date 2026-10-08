@@ -14,9 +14,11 @@ import { dirname } from "node:path";
 
 import { AgentError } from "./errors.js";
 import {
+  AGENT_NAME_MAX_LENGTH,
   AGENT_SCHEMA_VERSION,
   isAgentLevel,
   isAgentPrivilege,
+  isValidAgentName,
   type AgentDefaults,
   type AgentEvent,
   type AgentEventKind,
@@ -59,6 +61,7 @@ function defaultIdFactory(): string {
 function newRecord(agentId: string, defaults: AgentDefaults): AgentRecord {
   return {
     agentId,
+    name: "",
     level: defaults.level,
     privilege: defaults.privilege,
     lastSeen: null,
@@ -86,6 +89,44 @@ function assertPrivilege(privilege: AgentPrivilege): void {
       `Privilège d'agent invalide : ${String(privilege)}.`,
     );
   }
+}
+
+/**
+ * Normalise un nom fourni par l'utilisateur : espaces de bord retirés, bornes
+ * 1..`AGENT_NAME_MAX_LENGTH`, sans caractère de contrôle. Lève
+ * `INVALID_AGENT_NAME` sinon.
+ */
+export function normalizeAgentName(raw: string): string {
+  if (typeof raw !== "string") {
+    throw new AgentError("INVALID_AGENT_NAME", "Nom d'agent : texte attendu.");
+  }
+  const name = raw.trim();
+  if (name.length === 0) {
+    throw new AgentError("INVALID_AGENT_NAME", "Nom d'agent vide.");
+  }
+  if (name.length > AGENT_NAME_MAX_LENGTH) {
+    throw new AgentError(
+      "INVALID_AGENT_NAME",
+      `Nom d'agent trop long (${name.length} caractères, maximum ${AGENT_NAME_MAX_LENGTH}).`,
+    );
+  }
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(name)) {
+    throw new AgentError(
+      "INVALID_AGENT_NAME",
+      "Nom d'agent : caractère de contrôle interdit.",
+    );
+  }
+  return name;
+}
+
+/** `true` si `name` est déjà porté par un AUTRE agent (comparaison insensible à la casse). */
+function nameTaken(records: Iterable<AgentRecord>, selfId: string, name: string): boolean {
+  const needle = name.toLowerCase();
+  for (const record of records) {
+    if (record.agentId === selfId) continue;
+    if (record.name !== "" && record.name.toLowerCase() === needle) return true;
+  }
+  return false;
 }
 
 /**
@@ -119,6 +160,9 @@ export function applyAgentEvent(
   const existing = state.byId.get(event.agentId);
   const patch = event.patch ?? {};
 
+  if (patch.name !== undefined && !isValidAgentName(patch.name)) {
+    return skip(`nom invalide ${String(patch.name)}`);
+  }
   if (patch.level !== undefined && !isAgentLevel(patch.level)) {
     return skip(`niveau invalide ${String(patch.level)}`);
   }
@@ -130,6 +174,7 @@ export function applyAgentEvent(
     case "upsert": {
       const base = existing ?? newRecord(event.agentId, defaults);
       const next: AgentRecord = { ...base };
+      if (patch.name !== undefined) next.name = patch.name;
       if (patch.level !== undefined) next.level = patch.level;
       if (patch.privilege !== undefined) next.privilege = patch.privilege;
       if (patch.lastSeen !== undefined) next.lastSeen = patch.lastSeen;
@@ -222,6 +267,36 @@ export class AgentStore {
     return [...this.byId.values()];
   }
 
+  /**
+   * Résout un identifiant fourni par le modèle ou l'humain : d'abord l'ID
+   * exact (compatibilité garantie), puis, à défaut, le NOM (insensible à la
+   * casse). Renvoie `undefined` si ni l'un ni l'autre ne correspond.
+   */
+  resolve(identifier: string): AgentRecord | undefined {
+    if (typeof identifier !== "string") return undefined;
+    const exact = this.byId.get(identifier);
+    if (exact) return exact;
+    const trimmed = identifier.trim();
+    if (trimmed === "") return undefined;
+    const byId = this.byId.get(trimmed);
+    if (byId) return byId;
+    return this.findByName(trimmed);
+  }
+
+  /**
+   * Recherche un agent par son NOM (insensible à la casse). L'unicité étant
+   * imposée à l'écriture, au plus un agent correspond dans un store sain.
+   */
+  findByName(name: string): AgentRecord | undefined {
+    if (typeof name !== "string") return undefined;
+    const needle = name.trim().toLowerCase();
+    if (needle === "") return undefined;
+    for (const record of this.byId.values()) {
+      if (record.name !== "" && record.name.toLowerCase() === needle) return record;
+    }
+    return undefined;
+  }
+
   /** Enregistre/actualise la vue d'un agent (créé avec les défauts si inconnu). */
   markSeen(agentId: string, patch: AgentPatch = {}): AgentRecord {
     assertAgentId(agentId);
@@ -234,18 +309,68 @@ export class AgentStore {
     return this.byId.get(agentId) as AgentRecord;
   }
 
-  /** Modifie la configuration d'un agent EXISTANT. */
-  configure(agentId: string, patch: { level?: AgentLevel; privilege?: AgentPrivilege }): AgentRecord {
+  /** Modifie la configuration d'un agent EXISTANT (niveau, privilège, nom). */
+  configure(
+    agentId: string,
+    patch: { level?: AgentLevel; privilege?: AgentPrivilege; name?: string },
+  ): AgentRecord {
     assertAgentId(agentId);
     if (!this.byId.has(agentId)) {
       throw new AgentError("AGENT_NOT_FOUND", `Agent inconnu : ${agentId}.`, { agentId });
     }
-    if (patch.level === undefined && patch.privilege === undefined) {
+    const next: { level?: AgentLevel; privilege?: AgentPrivilege; name?: string } = {};
+    if (patch.level !== undefined) {
+      assertLevel(patch.level);
+      next.level = patch.level;
+    }
+    if (patch.privilege !== undefined) {
+      assertPrivilege(patch.privilege);
+      next.privilege = patch.privilege;
+    }
+    if (patch.name !== undefined) {
+      const name = normalizeAgentName(patch.name);
+      if (nameTaken(this.byId.values(), agentId, name)) {
+        throw new AgentError(
+          "AGENT_NAME_TAKEN",
+          `Le nom « ${name} » est déjà utilisé par un autre agent.`,
+          { agentId },
+        );
+      }
+      next.name = name;
+    }
+    if (Object.keys(next).length === 0) {
       return this.byId.get(agentId) as AgentRecord;
     }
-    if (patch.level !== undefined) assertLevel(patch.level);
-    if (patch.privilege !== undefined) assertPrivilege(patch.privilege);
-    this.appendEvent(agentId, "upsert", patch);
+    this.appendEvent(agentId, "upsert", next);
+    return this.byId.get(agentId) as AgentRecord;
+  }
+
+  /** Renomme un agent EXISTANT (alias lisible ; l'ID reste la clé de stockage). */
+  setName(agentId: string, name: string): AgentRecord {
+    return this.configure(agentId, { name });
+  }
+
+  /**
+   * Pré-remplit le nom d'un agent avec `candidate` (ex. son nom d'hôte) SI et
+   * seulement s'il n'a PAS encore de nom. N'écrase jamais un nom choisi par
+   * l'utilisateur ; ignore silencieusement une valeur invalide ou déjà prise
+   * (l'unicité prime). Renvoie l'enregistrement (inchangé si non pré-rempli),
+   * ou `undefined` si l'agent est inconnu.
+   */
+  prefillName(agentId: string, candidate: string | null | undefined): AgentRecord | undefined {
+    assertAgentId(agentId);
+    const record = this.byId.get(agentId);
+    if (!record) return undefined;
+    if (record.name !== "") return record;
+    if (typeof candidate !== "string") return record;
+    let name: string;
+    try {
+      name = normalizeAgentName(candidate);
+    } catch {
+      return record;
+    }
+    if (nameTaken(this.byId.values(), agentId, name)) return record;
+    this.appendEvent(agentId, "upsert", { name });
     return this.byId.get(agentId) as AgentRecord;
   }
 

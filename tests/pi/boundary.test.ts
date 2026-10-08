@@ -23,6 +23,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/delegate-tools.ts",
   "src/pi/sdk/execution-tools.ts",
   "src/pi/sdk/memory-extension.ts",
+  "src/pi/sdk/agent-roster-extension.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =

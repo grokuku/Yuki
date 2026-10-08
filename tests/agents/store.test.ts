@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,6 +95,82 @@ describe("AgentStore — CRUD & révocation", () => {
   it("refuse un identifiant vide", () => {
     const store = open(tempStorePath());
     expect(() => store.markSeen("  ")).toThrowError(/vide/);
+  });
+});
+
+describe("AgentStore — nom personnalisé (alias)", () => {
+  it("rétrocompatibilité : un enregistrement SANS `name` charge sans erreur (nom vide)", () => {
+    const path = tempStorePath();
+    // Journal écrit par une version ANTÉRIEURE : pas de champ `name`.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        seq: 1,
+        ts: "2026-01-01T00:00:00.000Z",
+        eventId: "legacy-1",
+        agentId: "agent-old",
+        kind: "upsert",
+        patch: { lastSeen: "2026-01-01T00:00:00.000Z" },
+      }) + "\n",
+    );
+    const store = open(path);
+    const rec = store.get("agent-old");
+    expect(rec?.name).toBe("");
+    expect(rec?.lastSeen).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("renomme un agent (espaces retirés) et impose l'UNICITÉ (insensible à la casse)", () => {
+    const store = open(tempStorePath());
+    store.markSeen("agent-1");
+    store.markSeen("agent-2");
+    expect(store.setName("agent-1", "  nuc00  ").name).toBe("nuc00");
+    expect(() => store.setName("agent-2", "NUC00")).toThrowError(/déjà utilisé/);
+    // Le premier agent garde son nom ; le second reste sans nom.
+    expect(store.get("agent-1")?.name).toBe("nuc00");
+    expect(store.get("agent-2")?.name).toBe("");
+  });
+
+  it("refuse un nom vide ou trop long (bornes 1..64)", () => {
+    const store = open(tempStorePath());
+    store.markSeen("agent-1");
+    expect(() => store.setName("agent-1", "   ")).toThrowError(/vide/);
+    expect(() => store.setName("agent-1", "x".repeat(65))).toThrowError(/trop long/);
+    expect(store.setName("agent-1", "x".repeat(64)).name).toHaveLength(64);
+  });
+
+  it("configure exige un agent existant aussi pour le nom", () => {
+    const store = open(tempStorePath());
+    expect(() => store.setName("inconnu", "nuc00")).toThrowError(AgentError);
+  });
+
+  it("resolve : l'ID exact D'ABORD, puis le nom (insensible à la casse)", () => {
+    const store = open(tempStorePath());
+    store.markSeen("agent-1");
+    store.setName("agent-1", "nuc00");
+    expect(store.resolve("agent-1")?.agentId).toBe("agent-1");
+    expect(store.resolve("nuc00")?.agentId).toBe("agent-1");
+    expect(store.resolve("NUC00")?.agentId).toBe("agent-1");
+    expect(store.resolve("inconnu")).toBeUndefined();
+  });
+
+  it("prefillName : ne remplit que si vide, n'écrase jamais, ignore doublon et valeur invalide", () => {
+    const store = open(tempStorePath());
+    store.markSeen("agent-1");
+    store.markSeen("agent-2");
+    expect(store.prefillName("agent-1", "nuc00")?.name).toBe("nuc00");
+    expect(store.prefillName("agent-1", "autre")?.name).toBe("nuc00");
+    expect(store.prefillName("agent-2", "nuc00")?.name).toBe("");
+    expect(store.prefillName("agent-2", "   ")?.name).toBe("");
+    expect(store.prefillName("inconnu", "x")).toBeUndefined();
+  });
+
+  it("le nom survit à un redémarrage (rejeu du journal)", () => {
+    const path = tempStorePath();
+    const store = open(path);
+    store.markSeen("agent-1");
+    store.setName("agent-1", "nuc00");
+    const reopened = open(path);
+    expect(reopened.get("agent-1")?.name).toBe("nuc00");
   });
 });
 

@@ -128,6 +128,7 @@ function serialize(
 ): Record<string, unknown> {
   return {
     agentId: record.agentId,
+    name: record.name,
     level: record.level,
     privilege: record.privilege,
     lastSeen: record.lastSeen,
@@ -257,9 +258,10 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
   if (guard) return guard;
   const body = parseJsonBody(input.body);
   if ("status" in body) return body;
-  const patch: { level?: AgentLevel; privilege?: AgentPrivilege } = {};
+  const patch: { level?: AgentLevel; privilege?: AgentPrivilege; name?: string } = {};
   const level = body.value["level"];
   const privilege = body.value["privilege"];
+  const name = body.value["name"];
   if (level !== undefined) {
     if (!isAgentLevel(level)) {
       return json(400, { error: "invalid_level", code: "invalid_level", message: "Niveau invalide." });
@@ -276,16 +278,35 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
     }
     patch.privilege = privilege;
   }
+  if (name !== undefined) {
+    if (typeof name !== "string") {
+      return json(400, {
+        error: "invalid_name",
+        code: "invalid_name",
+        message: "Nom d'agent : texte attendu.",
+      });
+    }
+    // La normalisation (espaces) et l'unicité sont imposées par le store, qui
+    // lève `INVALID_AGENT_NAME` ou `AGENT_NAME_TAKEN` (message honnête).
+    patch.name = name;
+  }
   try {
     const record = input.deps.store.configure(agentId, patch);
     input.deps.logger.info("agents.configured", {
       agent_id: agentId,
+      name: record.name,
       level: record.level,
       privilege: record.privilege,
     });
     return json(200, { ok: true, agent: serialize(record, input.deps) });
   } catch (error) {
     if (error instanceof AgentError) {
+      if (error.code === "AGENT_NAME_TAKEN") {
+        return json(409, { error: error.code, code: error.code, message: error.message });
+      }
+      if (error.code === "INVALID_AGENT_NAME") {
+        return json(400, { error: error.code, code: error.code, message: error.message });
+      }
       return json(404, { error: error.code, code: error.code, message: error.message });
     }
     throw error;

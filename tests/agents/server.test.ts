@@ -268,4 +268,75 @@ describe("port machines — WebSocket (agents authentifiés seulement)", () => {
     expect(opened).toBe(true);
     expect(s.store.get(agentId)?.lastSeen).not.toBeNull();
   });
+
+  it("pré-remplit le nom avec le nom d'hôte annoncé dans `hello` (sans écraser)", async () => {
+    const s = await stack();
+    const agentId = "55555555-6666-7777-8888-999999999999";
+    s.register(agentId);
+    const cert = s.ca.signClientCertificate(agentId);
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws`, {
+        cert: cert.certPem,
+        key: cert.keyPem,
+        ca: s.ca.certificatePem,
+        rejectUnauthorized: true,
+      });
+      const timer = setTimeout(() => reject(new Error("délai")), 5_000);
+      ws.on("open", () => {
+        ws.send(
+          JSON.stringify({
+            type: "hello",
+            proto_version: 1,
+            host: "nuc00",
+            euid: 1000,
+            caps: ["exec"],
+          }),
+        );
+        setTimeout(() => {
+          clearTimeout(timer);
+          ws.close();
+          resolve();
+        }, 150);
+      });
+      ws.on("error", (error: Error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    expect(s.store.get(agentId)?.name).toBe("nuc00");
+
+    // Un nom choisi par l'utilisateur n'est JAMAIS écrasé par le `hello`.
+    s.store.setName(agentId, "mon-nom");
+    const cert2 = s.ca.signClientCertificate(agentId);
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws`, {
+        cert: cert2.certPem,
+        key: cert2.keyPem,
+        ca: s.ca.certificatePem,
+        rejectUnauthorized: true,
+      });
+      const timer = setTimeout(() => reject(new Error("délai")), 5_000);
+      ws.on("open", () => {
+        ws.send(
+          JSON.stringify({
+            type: "hello",
+            proto_version: 1,
+            host: "autre-hote",
+            euid: 1000,
+            caps: ["exec"],
+          }),
+        );
+        setTimeout(() => {
+          clearTimeout(timer);
+          ws.close();
+          resolve();
+        }, 150);
+      });
+      ws.on("error", (error: Error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    expect(s.store.get(agentId)?.name).toBe("mon-nom");
+  });
 });

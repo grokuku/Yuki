@@ -40,6 +40,7 @@ export type {
 } from "./models.js";
 
 export {
+  AGENT_DIRECTORY_TOOLS,
   containsForbiddenTool,
   DELEGATE_TOOLS,
   EXECUTION_TOOLS,
@@ -49,7 +50,9 @@ export {
   TOOL_POLICY,
 } from "./tool-policy.js";
 export type {
+  AgentDirectoryToolName,
   BuiltinToolName,
+  CustomToolName,
   DelegateToolName,
   ExecutionToolName,
   ToolAllowlistOptions,

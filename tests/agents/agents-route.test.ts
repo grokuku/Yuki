@@ -195,6 +195,30 @@ describe("API des agents — révocation & configuration", () => {
     expect(res.status).toBe(400);
     expect((res.body as { code: string }).code).toBe("invalid_level");
   });
+
+  it("renomme un agent via PATCH `name` et expose le nom dans la liste", () => {
+    const f = fixture();
+    f.store.markSeen("agent-1");
+    const res = handleAgentsRequest({ method: "PATCH", path: "/api/agents/agent-1", headers: writeHeaders, body: '{"name":"  nuc00  "}', ip: "1.1.1.1", deps: f.deps });
+    expect(res.status).toBe(200);
+    expect((res.body as { agent: { name: string } }).agent.name).toBe("nuc00");
+    const list = handleAgentsRequest({ method: "GET", path: "/api/agents", headers: HEADERS, body: "", ip: "1.1.1.1", deps: f.deps });
+    expect((list.body as { agents: Array<{ name: string }> }).agents[0]?.name).toBe("nuc00");
+  });
+
+  it("refuse un nom vide (400) et un doublon (409), message honnête", () => {
+    const f = fixture();
+    f.store.markSeen("agent-1");
+    f.store.markSeen("agent-2");
+    f.store.setName("agent-1", "nuc00");
+    const empty = handleAgentsRequest({ method: "PATCH", path: "/api/agents/agent-2", headers: writeHeaders, body: '{"name":"   "}', ip: "1.1.1.1", deps: f.deps });
+    expect(empty.status).toBe(400);
+    expect((empty.body as { code: string }).code).toBe("INVALID_AGENT_NAME");
+    const dup = handleAgentsRequest({ method: "PATCH", path: "/api/agents/agent-2", headers: writeHeaders, body: '{"name":"nuc00"}', ip: "1.1.1.1", deps: f.deps });
+    expect(dup.status).toBe(409);
+    expect((dup.body as { code: string }).code).toBe("AGENT_NAME_TAKEN");
+    expect((dup.body as { message: string }).message).toContain("déjà utilisé");
+  });
 });
 
 describe("gateway humain — /api/agents (bout en bout, gateway non cassé)", () => {

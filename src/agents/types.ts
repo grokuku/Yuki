@@ -26,10 +26,21 @@ export type AgentPrivilege = (typeof AGENT_PRIVILEGES)[number];
 /** Version de schéma des enregistrements d'agents. */
 export const AGENT_SCHEMA_VERSION = 1 as const;
 
+/**
+ * Longueur maximale d'un nom personnalisé d'agent (alias lisible par l'humain).
+ * Choisi volontairement court : un alias doit tenir sur une ligne d'interface.
+ */
+export const AGENT_NAME_MAX_LENGTH = 64;
+
 /** Enregistrement d'un agent appairé. */
 export interface AgentRecord {
   /** Identifiant stable (UUID fourni par Yuki au moment de l'appairage). */
   agentId: string;
+  /**
+   * Nom personnalisé (alias LISIBLE par l'humain), `""` si aucun. Ce n'est
+   * JAMAIS la clé technique : `agentId` reste la référence de stockage.
+   */
+  name: string;
   /** Niveau de garde-fou (D118). */
   level: AgentLevel;
   /** Privilège du processus (D120). */
@@ -44,6 +55,8 @@ export interface AgentRecord {
 
 /** Champs modifiables par un événement. */
 export interface AgentPatch {
+  /** Nouveau nom (déjà normalisé : espaces retirés, 1..64 caractères). */
+  name?: string;
   level?: AgentLevel;
   privilege?: AgentPrivilege;
   lastSeen?: string;
@@ -76,4 +89,18 @@ export function isAgentPrivilege(value: unknown): value is AgentPrivilege {
   return (
     typeof value === "string" && (AGENT_PRIVILEGES as readonly string[]).includes(value)
   );
+}
+
+/**
+ * `true` si `value` peut être stocké comme nom d'agent : chaîne, espaces de
+ * bord retirés non vides, ≤ `AGENT_NAME_MAX_LENGTH`, sans caractère de
+ * contrôle (nouveaux traits, etc.). La normalisation (trim) est faite par
+ * `normalizeAgentName` (`store.ts`) ; ici on ne teste que la FORME.
+ */
+export function isValidAgentName(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > AGENT_NAME_MAX_LENGTH) return false;
+  // Caractères de contrôle interdits (C0 + DEL + C1).
+  return !/[\u0000-\u001f\u007f-\u009f]/.test(trimmed);
 }

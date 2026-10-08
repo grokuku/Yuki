@@ -210,6 +210,7 @@ await sleep(300);
 /* ═══════════════════ 2) Un agent appairé + validation ═════════════════ */
 const seeded = await startServer({
   YUKI_E2E_AGENTS: "agent-demo-01",
+  YUKI_E2E_NAMES: "nuc00",
   YUKI_E2E_APPROVALS: "1",
 });
 await navigate(`${seeded.base}/config?t=${Date.now()}#agents`);
@@ -218,9 +219,14 @@ const withAgent = await evaluate(`(() => {
   const card = root?.querySelector('.agent-card');
   const selects = [...(card?.querySelectorAll('select') ?? [])];
   const approve = [...root.querySelectorAll('button')].find((b) => b.textContent === 'Approuver');
+  const nameInput = card?.querySelector('.agent-name__input');
+  const approval = root?.querySelector('.agent-approval .agent-identity .agent-id');
   return {
     hasCard: !!card,
-    agentId: root?.querySelector('.agent-id')?.textContent ?? '',
+    agentId: card?.querySelector('.agent-identity .agent-id')?.textContent ?? '',
+    idNote: card?.querySelector('.agent-id-sub')?.textContent ?? '',
+    nameValue: nameInput?.value ?? '',
+    approvalName: approval?.textContent ?? '',
     badge: card?.querySelector('.agent-badge')?.textContent ?? '',
     lastSeen: [...root.querySelectorAll('.config-helper')].map((p) => p.textContent).find((t) => t.startsWith('Dernière connexion')) ?? '',
     levelOptions: selects[0]?.querySelectorAll('option').length ?? 0,
@@ -231,13 +237,35 @@ const withAgent = await evaluate(`(() => {
     help: root?.textContent.includes('Comment appairer un agent') ?? false,
   };
 })()`);
-check("[/config#agents] une carte agent s'affiche", withAgent.hasCard && withAgent.agentId === "agent-demo-01", JSON.stringify(withAgent));
+check("[/config#agents] une carte agent s'affiche", withAgent.hasCard && withAgent.agentId === "nuc00", JSON.stringify(withAgent));
+check("[/config#agents] nom personnalisé affiché (alias), ID technique en repli", withAgent.agentId === "nuc00" && withAgent.idNote.includes("agent-demo-01"), JSON.stringify(withAgent));
+check("[/config#agents] champ de nom pré-rempli", withAgent.nameValue === "nuc00");
+check("[/config#agents] validations en attente : nom affiché", withAgent.approvalName === "nuc00", withAgent.approvalName);
 check("[/config#agents] état « Hors ligne »", withAgent.badge.includes("Hors ligne"));
 check("[/config#agents] dernière connexion affichée", withAgent.lastSeen.includes("Dernière connexion"), withAgent.lastSeen);
 check("[/config#agents] niveau : 4 choix ; privilège : 2 choix", withAgent.levelOptions === 4 && withAgent.privOptions === 2, `level=${withAgent.levelOptions} priv=${withAgent.privOptions}`);
 check("[/config#agents] historique visible (jamais la sortie)", withAgent.history);
 check("[/config#agents] validation en attente + bouton Approuver", withAgent.approvals);
 await shot("agents-e2e-agent");
+
+/* Renommage : saisie puis sauvegarde `hot` par la mécanique existante. */
+await evaluate(`(() => {
+  const input = document.querySelector('#agents-root .agent-name__input');
+  input.value = 'nas-01';
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+})()`);
+await sleep(900);
+const renamed = await evaluate(`(() => ({
+  label: document.querySelector('#agents-root .agent-card .agent-identity .agent-id')?.textContent ?? '',
+  value: document.querySelector('#agents-root .agent-name__input')?.value ?? '',
+  styleAttrs: document.body.querySelectorAll('[style]').length,
+}))()`);
+check(
+  "[/config#agents] renommage effectif (affiché et enregistré à chaud)",
+  renamed.label === "nas-01" && renamed.value === "nas-01",
+  JSON.stringify(renamed),
+);
+check("[/config#agents] toujours aucun style= inline après renommage", renamed.styleAttrs === 0, String(renamed.styleAttrs));
 
 /* Modale HolafModal de suppression. */
 await evaluate(`(() => {

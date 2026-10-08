@@ -21,6 +21,7 @@ import {
   SettingsManager,
   type AgentSession,
   type AgentSessionRuntime,
+  type InlineExtension,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
@@ -49,7 +50,10 @@ import { PiHostError, toPiHostError } from "./errors.js";
 import type { PiHost } from "./host.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "./instrumentation.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
-import { createExecutionTools } from "./sdk/execution-tools.js";
+import {
+  createAgentDirectoryTools,
+  createExecutionTools,
+} from "./sdk/execution-tools.js";
 import {
   getSharedModelRuntime,
   resolveSdkModel,
@@ -57,6 +61,7 @@ import {
   type SdkModel,
 } from "./sdk/model-runtime.js";
 import { createLightRuntime } from "./sdk/session-factory.js";
+import { createAgentRosterExtensionFactory } from "./sdk/agent-roster-extension.js";
 import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
 import type {
   PiEvent,
@@ -553,14 +558,33 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // par agent (D118) est appliqué côté Yuki AVANT l'envoi.
       customTools.push(...createExecutionTools(options.execution));
     }
+    if (options.directory) {
+      // Lot 4 (extension) : outils de CONSULTATION des agents (`lister_agents`,
+      // `etat_agent`), en LECTURE SEULE. Actifs même quand l'exécution est
+      // désactivée : consulter n'est pas exécuter.
+      customTools.push(...createAgentDirectoryTools(options.directory));
+    }
 
-    const extensionFactories = options.memory
-      ? [
-          createMemoryExtensionFactory(options.memory, {
-            syntheticUserPrefixes: SYNTHETIC_USER_PREFIXES,
-          }),
-        ]
-      : undefined;
+    // Extensions INLINE : mémoire durable (rappel + écriture) et annuaire
+    // minimal des agents (Lot 4, extension — injecté à CHAQUE tour dans le
+    // prompt système, jamais persisté).
+    const extensionFactories: InlineExtension[] = [];
+    if (options.memory) {
+      extensionFactories.push(
+        createMemoryExtensionFactory(options.memory, {
+          syntheticUserPrefixes: SYNTHETIC_USER_PREFIXES,
+        }),
+      );
+    }
+    if (options.directory) {
+      // La liste des machines pilotables est visible dès le départ ; l'état
+      // (connecté/hors ligne), trop changeant, reste dans les outils.
+      extensionFactories.push(
+        createAgentRosterExtensionFactory(options.directory, {
+          logger: options.logger,
+        }),
+      );
+    }
 
     runtime = await createLightRuntime({
       cwd: paths.cwd,
@@ -573,7 +597,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       ...(resolvedThinking ? { thinkingLevel: resolvedThinking } : {}),
       ...(options.tools ? { tools: options.tools } : {}),
       ...(customTools.length > 0 ? { customTools } : {}),
-      ...(extensionFactories ? { extensionFactories } : {}),
+      ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
     });
 
     // Abonnement posé IMMÉDIATEMENT, avant tout prompt.

@@ -8,6 +8,8 @@ export type AgentErrorCode =
   | "INVALID_LEVEL"
   | "INVALID_PRIVILEGE"
   | "INVALID_AGENT_ID"
+  | "INVALID_AGENT_NAME"
+  | "AGENT_NAME_TAKEN"
   | "STORE_IO";
 
 /**

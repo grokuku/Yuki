@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
+  AgentDirectoryService,
   AgentExecutionService,
   AgentHub,
   AgentStore,
@@ -286,6 +287,7 @@ async function main(): Promise<void> {
   let stopAgentsCertReload: (() => void) | undefined;
   let agentsDeps: AgentsApiDeps | undefined;
   let agentExecution: AgentExecutionService | undefined;
+  let agentDirectory: AgentDirectoryService | undefined;
   try {
     const agentStore = AgentStore.open({
       path: env.agentsStorePath,
@@ -321,6 +323,15 @@ async function main(): Promise<void> {
       hub: agentHub,
       audit: auditLog,
       approvals,
+      logger,
+    });
+    // Consultation des agents (extension) : LECTURE SEULE. Réutilise le même
+    // store/hub/audit ; les outils sont exposés même quand l'exécution est
+    // désactivée (consulter n'est pas exécuter).
+    agentDirectory = new AgentDirectoryService({
+      store: agentStore,
+      hub: agentHub,
+      audit: auditLog,
       logger,
     });
     if (agentsBindHost === "0.0.0.0") {
@@ -634,9 +645,13 @@ async function main(): Promise<void> {
       tools: toolAllowlist("light", {
         delegationEnabled: heavyAvailableAtStart,
         executionEnabled: agentExecution !== undefined,
+        // ⚠️ Indépendant de `executionEnabled` : consulter les agents n'est pas
+        // exécuter. Actif dès que le registre d'agents existe.
+        directoryEnabled: agentDirectory !== undefined,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentExecution ? { execution: agentExecution } : {}),
+      ...(agentDirectory ? { directory: agentDirectory } : {}),
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,

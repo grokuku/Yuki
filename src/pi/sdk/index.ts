@@ -39,6 +39,12 @@ export {
   createMemoryExtensionFactory,
   type MemoryExtensionOptions,
 } from "./memory-extension.js";
+
+// Lot 4 (extension) — annuaire minimal des agents injecté à chaque tour.
+export {
+  createAgentRosterExtensionFactory,
+  type AgentRosterExtensionOptions,
+} from "./agent-roster-extension.js";
 export {
   MEMORY_EXTRACTOR_SYSTEM_PROMPT,
   createSdkMemoryExtractor,

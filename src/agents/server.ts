@@ -404,6 +404,20 @@ export function createAgentsServer(options: AgentsServerOptions): HttpsServer {
       ws,
       agentId,
       logger,
+      // Pré-remplissage du nom par le nom d'hôte annoncé dans `hello` : seulement
+      // si l'agent n'a pas encore de nom (jamais écraser un choix de l'humain) et
+      // si ce nom d'hôte est disponible (unicité). Voir `AgentStore.prefillName`.
+      onHello: (conn, hello) => {
+        const before = store.get(conn.agentId);
+        if (!before || before.name !== "") return;
+        const updated = store.prefillName(conn.agentId, hello.host);
+        if (updated && updated.name !== "" && updated.name !== before.name) {
+          logger.info("agents.name.prefilled", {
+            agent_id: conn.agentId,
+            name: updated.name,
+          });
+        }
+      },
       onClose: (closed) => {
         hub.unregister(closed);
         logger.debug("agents.ws.closed", { agent_id: closed.agentId });
