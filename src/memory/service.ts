@@ -20,6 +20,8 @@ import type { MemoryStore } from "./store.js";
 import type {
   BeforeCompactInput,
   ConsolidateMessage,
+  MemoryAdminInfo,
+  MemoryAdminPort,
   MemoryBounds,
   MemoryEntry,
   MemoryLogger,
@@ -27,6 +29,7 @@ import type {
   MemoryExtractor,
   MemoryPort,
   MemoryRecallResult,
+  MemoryResetResult,
   TurnEndInput,
 } from "./types.js";
 
@@ -92,7 +95,7 @@ export function formatMemoryBlock(
   return lines.join("\n");
 }
 
-export class MemoryService implements MemoryPort {
+export class MemoryService implements MemoryPort, MemoryAdminPort {
   private readonly store: MemoryStore;
   private readonly index: MemoryIndex;
   private readonly logger: MemoryLogger;
@@ -120,6 +123,8 @@ export class MemoryService implements MemoryPort {
     // Synchronise l'index à chaque édition étroite du store.
     this.unsubscribe = this.store.subscribe((change) => {
       if (change.type === "removed") this.index.remove(change.id);
+      // Remise à zéro : l'index DÉRIVÉ repart VIDE (jamais partiel).
+      else if (change.type === "reset") this.index.clear();
       else this.index.upsert(change.entry);
     });
   }
@@ -361,5 +366,22 @@ export class MemoryService implements MemoryPort {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.index.close();
+  }
+
+  // --- Administration (`/api/memory`) — archivage récupérable ----------------
+
+  /**
+   * Archive la mémoire courante puis repart d'une mémoire vide.
+   * ⚠️ L'index DÉRIVÉ est vidé par le changement `reset` émis par le store ; la
+   * projection en RAM est vidée par le store : plus AUCUN ancien souvenir n'est
+   * servi (ni par l'index, ni par la copie mémoire).
+   */
+  resetMemory(): MemoryResetResult {
+    return this.store.archiveAndReset();
+  }
+
+  /** État lisible (nombre d'entrées courantes + dossier d'archive). */
+  info(): MemoryAdminInfo {
+    return { entries: this.store.size, archiveDir: this.store.archiveDir };
   }
 }

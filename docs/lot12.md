@@ -147,6 +147,41 @@ lente (au-delà du timeout) ou la mémoire désactivée, `recall` renvoie un blo
 Le coût réel sur le TTFT en production **n'a pas été mesuré** (aucun modèle/appel
 réseau dans l'environnement de dev) ; les bornes ci-dessus garantissent un plafond.
 
+## Réinitialisation (archivage récupérable)
+
+Le panneau **Personnalité** de `/config` expose un bloc distinct, « Mémoire
+durable », avec un texte d'avertissement franc et une confirmation `HolafModal`
+(jamais `window.confirm`). L'action est **côté interface** : aucune exposition au
+modèle.
+
+| Élément | Valeur |
+| --- | --- |
+| Route | `GET /api/memory` (état) ; `POST /api/memory/reset` (archive + reset) |
+| Garde-fous | `requireWriteGuards` (`X-Yuki-Config: 1` + `Origin`/`Host`), comme `/api/config` |
+| Archive | `<dir(memory.jsonl)>/memory-archive/memory-<ISO>-<rand>.jsonl` (nom horodaté) |
+| Index | Vidé (`MemoryIndex.clear`) ; **reconstructible** depuis le JSONL |
+| Journal | `memory.reset` (horodatage, taille `bytes`, destination) — **sans contenu de souvenir** |
+
+**« Mettre de côté », pas effacer.** Le journal est **renommé**, jamais supprimé :
+rien n'est perdu, l'utilisateur peut le restaurer à la main. Un fichier propre
+(en-tête recréé) prend sa place.
+
+**Mémoire vide ⇒ aucune archive vide n'est créée** : l'API renvoie
+`archived:false` avec un message honnête (« Aucune mémoire à réinitialiser ») ;
+l'UI désactive le bouton. Justification : une archive vide n'a aucune valeur de
+récupération et polluerait le dossier.
+
+**Cohérence du runtime après reset** (le piège du cache en RAM) : `MemoryChange`
+gagne la variante `reset` ; `MemoryStore.archiveAndReset` **vide `byId`/
+`fingerprints`** puis émet `reset`, et `MemoryService` **vide l'index** sur cet
+événement. Le rappel suivant (`recall`) ne peut donc plus servir d'ancien
+souvenir (ni depuis l'index, ni depuis la copie mémoire), et les écritures
+suivantes visent le nouveau fichier.
+
+**Non touchés** : la personnalité (`personality.md`, son historique et son
+journal) et l'archive « vie antérieure » (`memory-heritage/`). Vérifié par
+`tests/memory/reset.test.ts` et le harnais E2E `_tools/e2e-memory.mjs`.
+
 ## Composition
 
 | Fichier | Rôle |
@@ -156,7 +191,8 @@ réseau dans l'environnement de dev) ; les bornes ci-dessus garantissent un plaf
 | `src/memory/store.ts` | `MemoryStore` (JSONL append-only, projection, dédup). |
 | `src/memory/index-db.ts` | `MemoryIndex` (FTS5, rebuild, recherche). |
 | `src/memory/extract.ts` | Prompts d'extraction/consolidation + lecture robuste. |
-| `src/memory/service.ts` | `MemoryService` (`recall` borné, `onTurnEnd`, `onBeforeCompact`). |
+| `src/memory/service.ts` | `MemoryService` (`recall` borné, `onTurnEnd`, `onBeforeCompact`, admin `resetMemory`/`info`). |
+| `src/gateway/routes/memory.ts` | API `/api/memory` (état) et `POST /api/memory/reset` (archivage récupérable). |
 | `src/pi/sdk/memory-extension.ts` | Extension SDK : rappel (`systemPrompt`) + déclencheurs. |
 | `src/pi/sdk/memory-extractor.ts` | Extracteur LLM via session éphémère isolée. |
 

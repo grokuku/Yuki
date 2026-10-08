@@ -123,4 +123,19 @@ describe("frontière SDK Pi", () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it("invariant 4 — l'administration de l'archive n'est JAMAIS exposée au modèle (src/pi)", () => {
+    // L'écriture de l'archive « vie antérieure » est réservée à l'INTERFACE
+    // (`/api/self/heritage` + `HeritageAdminService`). AUCUN fichier de src/pi ne
+    // doit y référer : le modèle ne voit que le port de LECTURE SEULE.
+    const offenders: string[] = [];
+    for (const file of files) {
+      const relativePath = rel(file);
+      if (!relativePath.startsWith("src/pi/")) continue;
+      if (/HeritageAdmin|heritage-admin|\/api\/self\/heritage/.test(readFileSync(file, "utf8"))) {
+        offenders.push(relativePath);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });

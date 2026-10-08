@@ -85,7 +85,12 @@ export type MemoryEvent =
 export type MemoryChange =
   | { type: "added"; entry: MemoryEntry }
   | { type: "updated"; entry: MemoryEntry }
-  | { type: "removed"; id: string };
+  | { type: "removed"; id: string }
+  /**
+   * Remise à zéro : toute la projection a été archivée puis vidée. L'index
+   * DÉRIVÉ doit repartir VIDE (jamais de purge partielle entrée par entrée).
+   */
+  | { type: "reset" };
 
 // ---------------------------------------------------------------------------
 // Extraction (écriture automatique) — ports PURS.
@@ -163,4 +168,51 @@ export interface MemoryPort {
   onTurnEnd(input: TurnEndInput): void;
   /** Déclenche la consolidation avant compaction (jamais bloquante). */
   onBeforeCompact(input: BeforeCompactInput): void;
+}
+
+// ---------------------------------------------------------------------------
+// Administration (API `/api/memory*`) — archivage récupérable, JAMAIS outil
+// exposé au modèle (aucune politique de tool, aucun `run_command`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Résultat d'une remise à zéro de la mémoire.
+ *
+ * ⚠️ « Réinitialiser » = METTRE DE CÔTÉ, pas effacer : le journal de mémoire est
+ * RENOMMÉ (horodaté) dans un dossier d'archive, l'index dérivé repart vide. Une
+ * mémoire déjà vide n'entraîne AUCUNE création d'archive.
+ */
+export interface MemoryResetResult {
+  /** `true` si un fichier de mémoire non vide a été archivé. */
+  archived: boolean;
+  /** Nombre d'entrées archivées (0 si rien à archiver). */
+  entries: number;
+  /**
+   * Chemin ABSOLU de l'archive (fichier renommé), ou `null` si rien n'a été
+   * archivé. Lisible par l'utilisateur pour retrouver ou restaurer sa mémoire.
+   */
+  archivePath: string | null;
+  /** Taille en octets de l'archive (0 si rien). */
+  bytes: number;
+  /** Horodatage ISO-8601 de l'opération. */
+  at: string;
+}
+
+/** État lisible de la mémoire (affiché dans `/config`, onglet Personnalité). */
+export interface MemoryAdminInfo {
+  /** Nombre d'entrées courantes. */
+  entries: number;
+  /** Dossier où seront déposées les archives (chemin absolu). */
+  archiveDir: string;
+}
+
+/**
+ * Port d'administration de la mémoire consommé par la route `/api/memory`.
+ * ⚠️ Réservé à l'INTERFACE (jamais exposé au modèle).
+ */
+export interface MemoryAdminPort {
+  /** Archive la mémoire courante puis repart d'une mémoire vide. */
+  resetMemory(): MemoryResetResult;
+  /** État lisible (nombre d'entrées + dossier d'archive). */
+  info(): MemoryAdminInfo;
 }

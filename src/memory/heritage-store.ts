@@ -41,8 +41,13 @@ import {
 import { foldText } from "./normalize.js";
 import type { MemoryLogger } from "./types.js";
 
-/** Extensions de fichiers lues comme entrées d'archive. */
-const ENTRY_EXTENSIONS = new Set([".json", ".md", ".markdown", ".txt"]);
+/** Extensions de fichiers lues comme entrées d'archive (source unique). */
+export const HERITAGE_ENTRY_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".json",
+  ".md",
+  ".markdown",
+  ".txt",
+]);
 
 export interface HeritageStoreOptions {
   /** Chemin du dossier d'archive (ex. `/data/state/memory-heritage`). */
@@ -192,7 +197,7 @@ export class HeritageStore implements HeritagePort {
         if (directory === this.dir && (name === HERITAGE_MANIFEST_FILE || name === HERITAGE_README_FILE)) {
           continue;
         }
-        if (!ENTRY_EXTENSIONS.has(extname(name).toLowerCase())) continue;
+        if (!HERITAGE_ENTRY_EXTENSIONS.has(extname(name).toLowerCase())) continue;
         files.push(join(directory, name));
       }
     }

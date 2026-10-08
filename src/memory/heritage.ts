@@ -52,6 +52,26 @@ export const HERITAGE_DEFAULT_PERIODE =
 /** Borne de lecture d'une entrée (garde-fou ; le stockage n'est pas tronqué). */
 export const HERITAGE_TEXT_MAX_CHARS = 20_000;
 
+/**
+ * Borne d'ÉCRITURE d'une entrée déposée via l'interface. Alignée sur la borne de
+ * LECTURE (20 000 caractères) : ce qui est écrit reste toujours intégralement
+ * relisible par l'outil de consultation. Au-delà, le contenu est TRONQUÉ avec un
+ * avertissement VISIBLE (jamais en silence, comme la personnalité).
+ */
+export const HERITAGE_WRITE_TEXT_MAX_CHARS = HERITAGE_TEXT_MAX_CHARS;
+/** Longueur maximale d'un titre d'entrée (écriture via l'interface). */
+export const HERITAGE_TITRE_MAX_CHARS = 200;
+/** Longueur maximale d'une catégorie d'entrée (écriture via l'interface). */
+export const HERITAGE_CATEGORIE_MAX_CHARS = 64;
+/**
+ * Sous-dossier où une entrée SUPPRIMÉE est MISE DE CÔTÉ (récupérable à la main),
+ * jamais effacée. Même esprit que l'archivage de la mémoire (Lot 12) :
+ * « supprimer » = sortir de l'archive active, pas détruire.
+ */
+export const HERITAGE_DELETED_DIR = "deleted";
+/** Journal des modifications de l'archive : MÉTADONNÉES SEULES, jamais le contenu. */
+export const HERITAGE_JOURNAL_FILE = "heritage-journal.jsonl";
+
 /** Provenance : la machine d'origine et l'ère logicielle. */
 export interface HeritageProvenance {
   /** Machine d'origine (ex. `Yuki-old`). */
@@ -115,6 +135,89 @@ export interface HeritagePort {
   list(): HeritageEntry[];
   /** Résout une entrée par identifiant OU titre (insensible casse/accents). */
   read(identifier: string): HeritageEntry | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Administration de l'archive (API `/api/self/heritage*`) — RÉSERVÉE à
+// l'INTERFACE utilisateur. ⚠️ JAMAIS exposée au modèle : l'outil de
+// consultation (`archive_vie_anterieure`) reste en LECTURE SEULE (Lot 13).
+// ---------------------------------------------------------------------------
+
+/** Résumé d'une entrée pour la LISTE d'administration. */
+export interface HeritageAdminEntry {
+  id: string;
+  /** Chemin relatif au dossier d'archive — clé STABLE d'édition/suppression. */
+  cle: string;
+  titre: string;
+  categorie: string;
+  /** Taille en octets du fichier source. */
+  bytes: number;
+  /** Date d'import (ISO 8601), ou date de dernière modification si absente. */
+  importe_le: string | null;
+}
+
+/** Entrée COMPLÈTE (contenu) renvoyée à l'administration. */
+export interface HeritageAdminDetail extends HeritageAdminEntry {
+  texte: string;
+  label: string;
+  provenance: HeritageProvenance;
+  periode: string;
+}
+
+/** Vue de synthèse de l'archive pour l'interface. */
+export interface HeritageAdminInfo {
+  present: boolean;
+  entries: number;
+  /** Dossier de l'archive (chemin absolu). */
+  dir: string;
+  /** Borne d'écriture du contenu (caractères). */
+  maxChars: number;
+  titreMaxChars: number;
+  manifest: HeritageManifest | null;
+}
+
+/** Corps d'une écriture (création ou modification) d'entrée. */
+export interface HeritageWriteInput {
+  titre: string;
+  categorie?: string;
+  texte: string;
+}
+
+/** Résultat d'une écriture. */
+export interface HeritageWriteResult {
+  changed: boolean;
+  entry: HeritageAdminDetail;
+  bytes: number;
+  /** `true` si le contenu a été tronqué à la borne d'écriture. */
+  truncated: boolean;
+}
+
+/** Résultat d'une suppression (MISE DE CÔTÉ, récupérable). */
+export interface HeritageDeleteResult {
+  id: string;
+  cle: string;
+  /** `true` si l'entrée a été déplacée vers le sous-dossier `deleted/`. */
+  moved: boolean;
+  /** Chemin ABSOLU de l'entrée mise de côté, ou `null`. */
+  deletedPath: string | null;
+  at: string;
+}
+
+/**
+ * Port d'administration de l'archive consommé par `/api/self/heritage`.
+ * ⚠️ Réservé à l'INTERFACE : il n'est branché sur AUCUN outil du modèle.
+ */
+export interface HeritageAdminPort {
+  info(): HeritageAdminInfo;
+  list(): HeritageAdminEntry[];
+  /** Lit une entrée par sa clé (chemin relatif) ; `undefined` si inconnue. */
+  read(cle: string): HeritageAdminDetail | undefined;
+  /** Crée une entrée (étiquette + provenance réappliquées automatiquement). */
+  create(input: HeritageWriteInput): HeritageWriteResult;
+  /** Modifie une entrée ; `undefined` si la clé est inconnue. */
+  update(cle: string, input: HeritageWriteInput): HeritageWriteResult | undefined;
+  /** Met de côté une entrée ; `undefined` si la clé est inconnue. */
+  remove(cle: string): HeritageDeleteResult | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +310,7 @@ export function parseHeritageManifest(content: string): HeritageManifest | null 
 }
 
 /** Identifiant dérivé d'un nom de fichier (sans extension, replié). */
-function idFromFilename(filename: string): string {
+export function idFromFilename(filename: string): string {
   const base = filename.replace(/\.[^.]+$/, "");
   const folded = foldText(base).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return folded.length > 0 ? `heritage-${folded}` : "heritage-entree";
@@ -273,6 +376,96 @@ export function parseHeritageEntry(
     texte: clampText(rawText),
     importe_le: (record !== null ? asString(record["importe_le"]) : undefined) ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Règles PURES d'ÉCRITURE (interface) — réutilisées par `HeritageAdminService`.
+// ---------------------------------------------------------------------------
+
+/** Réduit un texte à une « clé » ASCII minuscule (slug) pour nommer un fichier. */
+export function heritageSlug(text: string): string {
+  const folded = foldText(text)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return folded.slice(0, 48).replace(/-+$/g, "") || "entree";
+}
+
+/**
+ * Titre normalisé : espaces comprimés, borné à `HERITAGE_TITRE_MAX_CHARS`.
+ * Renvoie `undefined` si le titre est vide (un titre est REQUIS).
+ */
+export function normalizeHeritageTitre(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (trimmed.length === 0) return undefined;
+  return trimmed.length > HERITAGE_TITRE_MAX_CHARS
+    ? trimmed.slice(0, HERITAGE_TITRE_MAX_CHARS)
+    : trimmed;
+}
+
+/** Catégorie normalisée ; vide ⇒ `"autre"` (jamais vide). */
+export function normalizeHeritageCategorie(value: unknown): string {
+  if (typeof value !== "string") return "autre";
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  if (trimmed.length === 0) return "autre";
+  return trimmed.length > HERITAGE_CATEGORIE_MAX_CHARS
+    ? trimmed.slice(0, HERITAGE_CATEGORIE_MAX_CHARS)
+    : trimmed;
+}
+
+/** Résultat du bornage d'un texte d'écriture. */
+export interface HeritageTextClamp {
+  text: string;
+  chars: number;
+  truncated: boolean;
+}
+
+/**
+ * Borne un texte à `HERITAGE_WRITE_TEXT_MAX_CHARS` points de code. Troncature
+ * SIGNALÉE (`truncated`) : l'appelant la remonte à l'utilisateur, jamais en
+ * silence (même règle que la personnalité).
+ */
+export function clampHeritageWriteText(
+  text: string,
+  maxChars: number = HERITAGE_WRITE_TEXT_MAX_CHARS,
+): HeritageTextClamp {
+  const points = Array.from(text);
+  if (points.length <= maxChars) return { text, chars: points.length, truncated: false };
+  return { text: points.slice(0, maxChars).join(""), chars: maxChars, truncated: true };
+}
+
+/** Contenu d'une entrée tel qu'écrit sur disque (JSON lisible, étiqueté). */
+export interface HeritageEntryContent {
+  id: string;
+  titre: string;
+  categorie: string;
+  texte: string;
+  provenance: HeritageProvenance;
+  periode: string;
+  importe_le: string | null;
+}
+
+/**
+ * Sérialise une entrée au format JSON du dossier d'archive. ⚠️ L'ÉTIQUETTE
+ * (`HERITAGE_LABEL`) est TOUJOURS posée ici : l'utilisateur ne peut PAS l'oublier
+ * (elle n'est jamais un champ du formulaire).
+ */
+export function serializeHeritageEntry(entry: HeritageEntryContent): string {
+  return `${JSON.stringify(
+    {
+      v: 1,
+      id: entry.id,
+      titre: entry.titre,
+      categorie: entry.categorie,
+      periode: entry.periode,
+      provenance: { machine: entry.provenance.machine, ere: entry.provenance.ere },
+      label: HERITAGE_LABEL,
+      texte: entry.texte,
+      importe_le: entry.importe_le,
+    },
+    null,
+    2,
+  )}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +606,20 @@ export function buildHeritageReadme(): string {
     `   \`${HERITAGE_ENTRIES_DIR}/\`.`,
     "2. Aucune commande n'est nécessaire : la lecture est faite à la demande.",
     "3. Pour retirer une entrée : supprimez son fichier.",
+    "",
+    "## Édition depuis l'interface (onglet Personnalité de /config)",
+    "",
+    "La section « Vie antérieure » du panneau Personnalité permet d'ÉDITER,",
+    "AJOUTER et SUPPRIMER les entrées SANS passer par la conversation :",
+    "",
+    "- l'étiquette et la provenance sont RÉAPPLIQUÉES automatiquement à chaque",
+    "  écriture (vous ne pouvez pas les oublier) ;",
+    `- « supprimer » = METTRE DE CÔTÉ : l'entrée est déplacée dans \`${HERITAGE_DELETED_DIR}/\``,
+    "  (récupérable à la main), jamais détruite ;",
+    `- chaque modification est journalisée (\`${HERITAGE_JOURNAL_FILE}\`, métadonnées seules).`,
+    "",
+    "⚠️ Cette édition est RÉSERVÉE à l'utilisateur : le modèle ne peut que CONSULTER",
+    "l'archive (lecture seule).",
     "",
     "## ⚠️ Secrets — ne RIEN déposer de brut",
     "",

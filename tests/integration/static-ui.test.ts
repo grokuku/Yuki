@@ -749,3 +749,39 @@ describe("Rendu markdown du chat (volet 3) — assets et anti-injection", () => 
     }
   });
 });
+
+describe("Panneau Personnalité — section « Vie antérieure » (édition de l'archive)", () => {
+  it("le panneau édite l'archive via son API et rappelle qu'elle n'est jamais fusionnée", async () => {
+    const panel = await (await fetch(`${baseUrl}/ui/personality-panel.js`)).text();
+    // Section DISTINCTE + rappel visible de ce qu'est l'archive.
+    expect(panel).toContain("renderHeritageSection");
+    expect(panel).toContain("Vie antérieure");
+    expect(panel).toContain("JAMAIS fusionnée");
+    expect(panel).toContain("vie antérieure — ne pas fusionner");
+    // Édition / ajout / suppression par l'API d'administration (jamais le moteur).
+    expect(panel).toContain("/api/self/heritage");
+    expect(panel).toContain("/api/self/heritage/entry");
+    expect(panel).toContain("HolafModal.confirm");
+    // Le bloc mémoire existant est préservé (non-régression).
+    expect(panel).toContain("renderMemoryBlock");
+  });
+
+  it("pas de style inline, pas de window.confirm, pas d'innerHTML (CSP stricte)", async () => {
+    const panel = await (await fetch(`${baseUrl}/ui/personality-panel.js`)).text();
+    // Aucun APPEL à window.confirm ni innerHTML (les commentaires peuvent
+    // nommer la règle « jamais window.confirm »).
+    expect(panel).not.toContain("window.confirm(");
+    expect(panel).not.toContain("innerHTML");
+    expect(panel).not.toContain(".style.");
+    expect(panel).not.toContain('setAttribute("style"');
+    const css = await (await fetch(`${baseUrl}/ui/config.css`)).text();
+    for (const cls of [
+      ".personality-heritage",
+      ".personality-heritage__list",
+      ".personality-heritage__editor",
+      ".personality-heritage__item",
+    ]) {
+      expect(css, cls).toContain(cls);
+    }
+  });
+});

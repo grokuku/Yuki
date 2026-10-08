@@ -19,8 +19,17 @@
  * Aucun import SDK/typebox.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { randomBytes } from "node:crypto";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 
 import { fingerprint } from "./normalize.js";
 import {
@@ -30,6 +39,7 @@ import {
   type MemoryEntry,
   type MemoryEvent,
   type MemoryLogger,
+  type MemoryResetResult,
 } from "./types.js";
 
 /** Longueur maximale d'un souvenir (garde-fou anti-emballement). */
@@ -51,12 +61,20 @@ export const MEMORY_FILE_HEADER = [
   "# N'écrivez jamais de ligne vide ou d'instruction exécutable : c'est une DONNÉE.",
 ].join("\n");
 
+/** Nom du dossier d'archivage (voisin du fichier de mémoire, volume `state`). */
+export const MEMORY_ARCHIVE_DIR_NAME = "memory-archive";
+
 export interface MemoryStoreOptions {
   path: string;
   logger?: MemoryLogger;
   now?: () => number;
   /** Fabrique d'identifiants (injectable pour des tests déterministes). */
   idFactory?: () => string;
+  /**
+   * Dossier où déposer les archives (défaut : `<dir(path)>/memory-archive`).
+   * ⚠️ Distinct de l'archive « vie antérieure » (`memory-heritage`).
+   */
+  archiveDir?: string;
 }
 
 export interface MemoryDraft {
@@ -82,6 +100,11 @@ let fallbackCounter = 0;
 function defaultIdFactory(): string {
   fallbackCounter += 1;
   return `mem-${Date.now().toString(36)}-${fallbackCounter.toString(36)}`;
+}
+
+/** Horodatage compact et portable pour nommer une archive (`:`/`.` remplacés). */
+function isoCompact(at: number): string {
+  return new Date(at).toISOString().replace(/[:.]/g, "-");
 }
 
 /** Ramène une catégorie arbitraire à une catégorie reconnue. */
@@ -164,6 +187,7 @@ export class MemoryStore {
   private readonly logger?: MemoryLogger;
   private readonly now: () => number;
   private readonly idFactory: () => string;
+  private readonly archiveDirPath: string;
   private readonly byId = new Map<string, MemoryEntry>();
   private readonly fingerprints = new Map<string, string>();
   private readonly listeners = new Set<(change: MemoryChange) => void>();
@@ -173,6 +197,8 @@ export class MemoryStore {
     this.logger = options.logger;
     this.now = options.now ?? Date.now;
     this.idFactory = options.idFactory ?? defaultIdFactory;
+    this.archiveDirPath =
+      options.archiveDir ?? join(dirname(options.path), MEMORY_ARCHIVE_DIR_NAME);
   }
 
   /** Ouvre (ou crée) le journal et reconstruit la projection en le rejouant. */
@@ -206,6 +232,11 @@ export class MemoryStore {
 
   get filePath(): string {
     return this.path;
+  }
+
+  /** Dossier où seront déposées les archives (jamais l'archive « vie antérieure »). */
+  get archiveDir(): string {
+    return this.archiveDirPath;
   }
 
   get entries(): readonly MemoryEntry[] {
@@ -375,6 +406,77 @@ export class MemoryStore {
     applyEvent({ byId: this.byId, fingerprints: this.fingerprints }, event, {});
     this.emit({ type: "removed", id });
     return true;
+  }
+
+  /**
+   * ⚠️ Réinitialisation = ARCHIVAGE RÉCUPÉRABLE (jamais une destruction).
+   *
+   * Le journal de mémoire est RENOMMÉ (nom horodaté) dans un dossier d'archive
+   * DÉDIÉ, puis un fichier propre (avec son en-tête) est recréé. La projection en
+   * mémoire est vidée et un changement `reset` est diffusé (l'index DÉRIVÉ repart
+   * vide).
+   *
+   * Mémoire DÉJÀ VIDE ⇒ aucune archive vide n'est créée, `archived:false` est
+   * renvoyé (message honnête côté UI). Une erreur de renommage ne détruit RIEN :
+   * elle remonte à l'appelant et laisse le fichier d'origine intact.
+   */
+  archiveAndReset(options: { archiveDir?: string } = {}): MemoryResetResult {
+    const nowMs = this.now();
+    const at = new Date(nowMs).toISOString();
+    const entries = this.byId.size;
+    if (entries === 0 || this.path === ":memory:") {
+      // Rien à archiver : on ne crée PAS de fichier vide inutilement.
+      this.ensureFile();
+      return { archived: false, entries: 0, archivePath: null, bytes: 0, at };
+    }
+
+    let bytes = 0;
+    try {
+      bytes = statSync(this.path).size;
+    } catch {
+      // Fichier disparu du disque : on archive ce qu'on peut (projection vide).
+      bytes = 0;
+    }
+
+    const archiveDir = options.archiveDir ?? this.archiveDirPath;
+    const name = `memory-${isoCompact(nowMs)}-${randomBytes(3).toString("hex")}.jsonl`;
+    const archivePath = join(archiveDir, name);
+    try {
+      mkdirSync(archiveDir, { recursive: true });
+      renameSync(this.path, archivePath);
+    } catch (error) {
+      // Le renommage a échoué : RIEN n'est perdu (le fichier reste en place).
+      this.logger?.error("memory.store.archive.failed", {
+        path: this.path,
+        archive: archivePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+
+    // Purge de la projection : plus aucun souvenir servi depuis la RAM.
+    this.byId.clear();
+    this.fingerprints.clear();
+
+    // Nouveau fichier propre et auto-documenté (en-tête recréé).
+    try {
+      writeFileSync(this.path, `${MEMORY_FILE_HEADER}\n`, { mode: 0o600 });
+    } catch (error) {
+      this.logger?.warn("memory.store.reset.header.failed", {
+        path: this.path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    this.emit({ type: "reset" });
+    this.logger?.info("memory.store.archived", {
+      at,
+      entries,
+      bytes,
+      archive: archivePath,
+      dir: archiveDir,
+    });
+    return { archived: true, entries, archivePath, bytes, at };
   }
 }
 

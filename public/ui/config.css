@@ -837,3 +837,147 @@
   max-height: 80px;
   overflow: auto;
 }
+
+/* Bloc « Mémoire durable » : VISUELLEMENT DISTINCT du formulaire de personnalité
+   (encadré dédié + liseré de danger), pour éviter tout clic accidentel. */
+.personality-memory {
+  margin-top: 20px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+
+.personality-memory__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.personality-memory__warning {
+  margin: 0;
+  color: var(--muted);
+}
+
+.personality-memory__path {
+  word-break: break-all;
+}
+
+.personality-memory__path code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+/* Bloc « Vie antérieure » : édition de l'archive, VISUELLEMENT DISTINCT du
+   formulaire de personnalité ET du bloc « Mémoire durable ». Aucun style inline
+   (CSP `style-src 'self'`). */
+.personality-heritage {
+  margin-top: 20px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.personality-heritage__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.personality-heritage__help {
+  margin: 0;
+  color: var(--muted);
+}
+
+.personality-heritage__empty {
+  font-style: italic;
+}
+
+.personality-heritage__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.personality-heritage__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.personality-heritage__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.personality-heritage__titre {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.personality-heritage__cat {
+  flex: none;
+}
+
+.personality-heritage__date {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.personality-heritage__actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.personality-heritage__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.personality-heritage__editor-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.personality-heritage__textarea {
+  width: 100%;
+  min-height: 200px;
+  resize: vertical;
+}
+
+.personality-heritage__path {
+  word-break: break-all;
+}
+
+.personality-heritage__path code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}

@@ -30,6 +30,16 @@ import {
   type PersonalityApiDeps,
 } from "./routes/personality.js";
 import {
+  handleMemoryRequest,
+  isMemoryPath,
+  type MemoryApiDeps,
+} from "./routes/memory.js";
+import {
+  handleHeritageRequest,
+  isHeritagePath,
+  type HeritageApiDeps,
+} from "./routes/heritage.js";
+import {
   handleAdminRequest,
   isAdminPath,
   type AdminApiDeps,
@@ -76,6 +86,13 @@ export interface AppContext {
   agents?: AgentsApiDeps;
   /** API de la personnalité. Absente ⇒ `/api/self/personality*` → 404. */
   personality?: PersonalityApiDeps;
+  /** API d'administration de la mémoire. Absente ⇒ `/api/memory*` → 404. */
+  memory?: MemoryApiDeps;
+  /**
+   * API d'administration de l'archive « vie antérieure ». Absente ⇒
+   * `/api/self/heritage*` → 404. ⚠️ Interface uniquement (jamais le modèle).
+   */
+  heritage?: HeritageApiDeps;
 }
 
 interface RouteResponse {
@@ -345,6 +362,48 @@ async function handlePersonalityHttp(
   );
 }
 
+/** Traite une requête d'administration de la mémoire (corps JSON borné). */
+async function handleMemoryHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: MemoryApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "POST" || method === "PUT") {
+    body = await readBody(req).catch(() => "");
+  }
+  const response = handleMemoryRequest({ method, path, headers: req.headers, body, deps });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
+/** Traite une requête d'administration de l'archive (corps JSON borné). */
+async function handleHeritageHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: HeritageApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "POST" || method === "PUT") {
+    body = await readBody(req).catch(() => "");
+  }
+  const response = handleHeritageRequest({ method, path, headers: req.headers, body, deps });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Construit l'écouteur HTTP de l'application. */
 export function createApp(context: AppContext): RequestListener {
   const {
@@ -361,6 +420,8 @@ export function createApp(context: AppContext): RequestListener {
     tts,
     agents,
     personality,
+    memory,
+    heritage,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -414,6 +475,48 @@ export function createApp(context: AppContext): RequestListener {
       void handlePersonalityHttp(req, res, path, method, headOnly, personality).catch(
         (error: unknown) => {
           personality.logger.error("personality.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (memory && isMemoryPath(path)) {
+      void handleMemoryHttp(req, res, path, method, headOnly, memory).catch(
+        (error: unknown) => {
+          memory.logger.error("memory.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (heritage && isHeritagePath(path)) {
+      void handleHeritageHttp(req, res, path, method, headOnly, heritage).catch(
+        (error: unknown) => {
+          heritage.logger.error("heritage.request.failed", {
             error: error instanceof Error ? error.message : String(error),
             path,
           });

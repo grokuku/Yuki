@@ -171,4 +171,28 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
       "archive_vie_anterieure",
     );
   });
+
+  it("l'archive « vie antérieure » n'a AUCUN outil d'ÉCRITURE exposé au modèle", () => {
+    // Le SEUL outil lié à l'archive est la consultation (lecture). L'édition
+    // (interface) passe par `/api/self/heritage`, jamais par un outil.
+    expect(HERITAGE_TOOLS).toEqual(["archive_vie_anterieure"]);
+    const allTools = [
+      ...toolAllowlist("light", { heritageEnabled: true, executionEnabled: true, directoryEnabled: true }),
+      ...toolAllowlist("heavy", { heritageEnabled: true, executionEnabled: true, directoryEnabled: true }),
+    ];
+    for (const forbidden of [
+      "write",
+      "edit",
+      "bash",
+      "powershell",
+      "ecrire_archive",
+      "modifier_archive",
+      "supprimer_archive",
+      "heritage_write",
+      "archive_write",
+    ]) {
+      expect(allTools, forbidden).not.toContain(forbidden);
+    }
+    expect(containsForbiddenTool(allTools)).toBe(false);
+  });
 });

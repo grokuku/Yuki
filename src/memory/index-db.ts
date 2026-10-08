@@ -155,6 +155,20 @@ export class MemoryIndex {
     }
   }
 
+  /** Vide entièrement l'index (l'index DÉRIVÉ repart de zéro après un reset). */
+  clear(): void {
+    if (!this.db || !this.statements) return;
+    try {
+      this.statements.clear.run();
+      this.logger?.debug("memory.index.cleared", { path: this.path });
+    } catch (error) {
+      this.logger?.warn("memory.index.clear.failed", {
+        path: this.path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /** Nombre de documents indexés (0 si l'index est indisponible). */
   count(): number {
     if (!this.db || !this.statements) return 0;

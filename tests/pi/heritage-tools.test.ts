@@ -6,14 +6,14 @@
  * provenance présentes, et balisage anti-injection non forgeable.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createHeritageTools } from "../../src/pi/sdk/heritage-tools.js";
-import { HERITAGE_LABEL, HERITAGE_TAG, HeritageStore } from "../../src/memory/index.js";
+import { HERITAGE_LABEL, HERITAGE_TAG, HeritageAdminService, HeritageStore } from "../../src/memory/index.js";
 import { createLogger } from "../../src/observability/logger.js";
 
 const tempDirs: string[] = [];
@@ -135,5 +135,23 @@ describe("outil archive_vie_anterieure", () => {
     const { text } = await call(tools[0]!, { entree: "heritage-piege" });
     expect(countClosings(text)).toBe(1);
     expect(text).toContain(`&lt;/${HERITAGE_TAG}&gt;`);
+  });
+
+  it("reste en LECTURE SEULE : une entrée créée par l'ADMIN est consultable, la consultation ne modifie rien", async () => {
+    const dir = tempDir();
+    const store = new HeritageStore({ dir, logger: logger() });
+    store.ensureLayout();
+    const admin = new HeritageAdminService(store, { logger: logger(), secretValues: [] });
+    const created = admin.create({ titre: "Fait nouveau", categorie: "projet", texte: "Contenu admin." });
+
+    const tools = createHeritageTools(store);
+    const { text } = await call(tools[0]!, { entree: "Fait nouveau" });
+    expect(text).toContain("Contenu admin.");
+    expect(text).toContain(HERITAGE_LABEL);
+    // La consultation ne réécrit RIEN (fichier identique avant/après).
+    const before = readFileSync(join(dir, created.entry.cle), "utf8");
+    await call(tools[0]!, { entree: created.entry.id });
+    const after = readFileSync(join(dir, created.entry.cle), "utf8");
+    expect(after).toBe(before);
   });
 });

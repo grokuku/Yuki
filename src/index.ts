@@ -84,6 +84,7 @@ import {
 } from "./llm/index.js";
 import { collectSecretValues, createLogger } from "./observability/logger.js";
 import {
+  HeritageAdminService,
   HeritageStore,
   MemoryIndex,
   MemoryService,
@@ -578,6 +579,7 @@ async function main(): Promise<void> {
   let activeRuns = 0;
   let host: PiHost | undefined;
   let memoryService: MemoryService | undefined;
+  let heritageStore: HeritageStore | undefined;
   let transport: Transport | undefined;
   let delegation: DelegationService | undefined;
 
@@ -649,7 +651,7 @@ async function main(): Promise<void> {
     // Lot 13 : archive « vie antérieure » — dossier SÉPARÉ du store de mémoire,
     // jamais fusionné. On met en place la structure (notice + manifeste) si elle
     // manque, puis on la rend consultable à la demande (outil + signal).
-    const heritageStore = new HeritageStore({ dir: env.heritageDir, logger });
+    heritageStore = new HeritageStore({ dir: env.heritageDir, logger });
     heritageStore.ensureLayout();
     logger.info("memory.heritage.ready", {
       dir: heritageStore.dirPath,
@@ -796,6 +798,15 @@ async function main(): Promise<void> {
       getSubsystems,
       config: { runtime: config, logger },
       personality: { store: personalityStore, logger },
+      // Administration de la mémoire (archivage récupérable) : disponible
+      // uniquement quand le service mémoire existe (porte passée).
+      ...(memoryService ? { memory: { admin: memoryService, logger } } : {}),
+      // Administration de l'archive « vie antérieure » : INTERFACE uniquement.
+      // RÉUTILISE le HeritageStore de LECTURE SEULE (l'outil du modèle reste
+      // inchangé) ; disponible quand l'archive a été mise en place (porte passée).
+      ...(heritageStore
+        ? { heritage: { admin: new HeritageAdminService(heritageStore, { logger }), logger } }
+        : {}),
       voices: voicesDeps,
       tts: ttsDeps,
       ...(agentsDeps ? { agents: agentsDeps } : {}),
