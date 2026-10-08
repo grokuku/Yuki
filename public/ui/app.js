@@ -218,12 +218,107 @@ function pinIfNeeded(pinned) {
   if (pinned) els.conversation.scrollTop = els.conversation.scrollHeight;
 }
 
-function appendMessage(role, text, pinned = isConversationPinned()) {
+/* ─── Horodatage de l'interface ───────────────────────────────────────────
+ * L'heure « juste HH:mm » est affichée PETITE et discrète sur la ligne de
+ * métadonnées de chaque message ; la date complète n'apparaît QUE dans le
+ * séparateur de jour (`Intl.DateTimeFormat("fr-FR")`). Rendu fidèle à la
+ * maquette validée (chat-layout) : trait interrompu autour d'un libellé centré.
+ *
+ * Le fuseau utilisé est celui du NAVIGATEUR : on le transmet au serveur (trame
+ * `message`, champ `tz`) pour que le préfixe STOCKÉ soit, lui aussi, daté dans
+ * l'heure locale de l'utilisateur (même si le conteneur tourne en UTC). */
+const hourFormatter = new Intl.DateTimeFormat("fr-FR", {
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const dayFormatter = new Intl.DateTimeFormat("fr-FR", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
+const CLIENT_TIME_ZONE = (() => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+})();
+
+/** Instant exploitable (ms Unix positif), sinon `false`. */
+function isTimestamp(ts) {
+  return typeof ts === "number" && Number.isFinite(ts) && ts > 0;
+}
+
+/** Clé de jour LOCALE (comparaison des séparateurs), ou `null` si pas d'heure. */
+function dayKeyOf(ts) {
+  if (!isTimestamp(ts)) return null;
+  const date = new Date(ts);
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+/* Dernière clé de jour rendue (le séparateur ne se répète pas dans un même
+ * jour). Réinitialisée à chaque rendu complet (`applyTranscript`). */
+let lastDayKey = null;
+
+/** Séparateur de jour : deux demi-traits (`::before`/`::after`) autour du libellé. */
+function appendDaySeparator(label) {
+  const separator = document.createElement("div");
+  separator.className = "daysep";
+  separator.setAttribute("role", "separator");
+  separator.setAttribute("aria-label", label);
+  const span = document.createElement("span");
+  span.className = "daysep__label";
+  span.textContent = label;
+  separator.appendChild(span);
+  els.conversation.appendChild(separator);
+  return separator;
+}
+
+/** Insère un séparateur SI le jour change (le premier jour du fil est conservé). */
+function ensureDaySeparator(ts) {
+  const key = dayKeyOf(ts);
+  if (key === null || key === lastDayKey) return;
+  lastDayKey = key;
+  appendDaySeparator(dayFormatter.format(new Date(ts)));
+}
+
+/** Ligne de métadonnées `.message__meta` d'un message (créée à la demande). */
+function ensureMeta(element) {
+  let meta = element.querySelector(".message__meta");
+  if (!meta) {
+    meta = document.createElement("span");
+    meta.className = "message__meta";
+    element.appendChild(meta);
+  }
+  return meta;
+}
+
+/**
+ * Pose l'heure « juste HH:mm » sur un message. `alignEnd` = bord extérieur à
+ * droite (messages utilisateur). Un message SANS horodatage n'affiche rien.
+ */
+function setMessageTime(element, ts, alignEnd) {
+  if (!element || !isTimestamp(ts)) return;
+  const meta = ensureMeta(element);
+  if (alignEnd) meta.classList.add("message__meta--end");
+  let time = meta.querySelector(".message__meta__time");
+  if (!time) {
+    time = document.createElement("span");
+    time.className = "message__meta__time";
+    meta.insertBefore(time, meta.firstChild);
+  }
+  time.textContent = hourFormatter.format(new Date(ts));
+}
+
+function appendMessage(role, text, pinned = isConversationPinned(), ts = null) {
   clearEmpty();
+  ensureDaySeparator(ts);
   const div = document.createElement("div");
   div.className = `message message--${role}`;
   div.textContent = text ?? "";
   els.conversation.appendChild(div);
+  if (role === "user") setMessageTime(div, ts, true);
   pinIfNeeded(pinned);
   return div;
 }
@@ -235,15 +330,18 @@ function appendMessage(role, text, pinned = isConversationPinned()) {
  *
  * @param {string|null} [text] — texte initial (rejeu de snapshot) ; `null` en flux.
  * @param {boolean} [pinned]
+ * @param {number|null} [ts] — instant du message (ms Unix) ; `null` si inconnu.
  */
-function appendAssistantMessage(text = null, pinned = isConversationPinned()) {
+function appendAssistantMessage(text = null, pinned = isConversationPinned(), ts = null) {
   clearEmpty();
+  ensureDaySeparator(ts);
   const div = document.createElement("div");
   div.className = "message message--assistant";
   const renderer = createMarkdownRenderer();
   if (typeof text === "string" && text.length > 0) renderer.setText(text);
   div.appendChild(renderer.element);
   els.conversation.appendChild(div);
+  setMessageTime(div, ts, false);
   currentRenderer = renderer;
   pinIfNeeded(pinned);
   return div;
@@ -253,6 +351,7 @@ function applyTranscript(transcript) {
   const pinned = isConversationPinned();
   els.conversation.innerHTML = "";
   currentRenderer = null;
+  lastDayKey = null;
   if (!Array.isArray(transcript) || transcript.length === 0) {
     const p = document.createElement("p");
     p.className = "empty";
@@ -262,22 +361,35 @@ function applyTranscript(transcript) {
     return;
   }
   for (const entry of transcript) {
-    if (entry.role === "user") appendMessage("user", entry.text ?? "", pinned);
-    else appendAssistantMessage(entry.text ?? "", pinned);
+    const ts = entry.timestamp;
+    if (entry.role === "user") appendMessage("user", entry.text ?? "", pinned, ts);
+    else appendAssistantMessage(entry.text ?? "", pinned, ts);
   }
   currentRenderer = null;
   pinIfNeeded(pinned);
 }
 
+/** Statistiques du message assistant (ligne « TTFT … · total … · N tok »).
+ * L'heure éventuelle est CONSERVÉE : les stats s'ajoutent APRÈS elle. */
 function setMeta(element, text) {
   if (!element) return;
-  let meta = element.querySelector(".message__meta");
-  if (!meta) {
-    meta = document.createElement("span");
-    meta.className = "message__meta";
-    element.appendChild(meta);
+  const meta = ensureMeta(element);
+  let stats = meta.querySelector(".message__meta__stats");
+  if (!stats) {
+    if (
+      meta.querySelector(".message__meta__time") &&
+      !meta.querySelector(".message__meta__sep")
+    ) {
+      const sep = document.createElement("span");
+      sep.className = "message__meta__sep";
+      sep.textContent = "·";
+      meta.appendChild(sep);
+    }
+    stats = document.createElement("span");
+    stats.className = "message__meta__stats";
+    meta.appendChild(stats);
   }
-  meta.textContent = text;
+  stats.textContent = text;
 }
 
 function sendRaw(payload) {
@@ -364,7 +476,7 @@ function applyEvent(frame) {
     case "run_started":
       els.queued.hidden = true;
       els.thinking.hidden = true;
-      currentAssistant = appendAssistantMessage();
+      currentAssistant = appendAssistantMessage(null, undefined, Date.now());
       // Nouveau run : réinitialise le diagnostic TTS.
       ttsRequestedRun = frame.runId ?? null;
       ttsActivityRun = null;
@@ -386,7 +498,7 @@ function applyEvent(frame) {
         // en bas que si l'utilisateur y était déjà.
         const pinned = isConversationPinned();
         if (!currentAssistant) {
-          currentAssistant = appendAssistantMessage(null, pinned);
+          currentAssistant = appendAssistantMessage(null, pinned, Date.now());
         }
         if (currentRenderer) currentRenderer.push(frame.text ?? "");
         pinIfNeeded(pinned);
@@ -439,18 +551,23 @@ function applyEvent(frame) {
         }, 600);
       }
       if (currentAssistant) {
-        const hasText = currentAssistant.textContent.trim().length > 0;
+        // `hasText` doit porter sur le CONTENU seul : la ligne de métadonnées
+        // (heure) fait partie du texte de la bulle mais n'est PAS une réponse.
+        const hasText = producedContent;
         if (frame.reason === "abort" && !hasText) {
-          currentAssistant.textContent = "(interrompu)";
+          // On écrit dans le CORPS markdown (jamais `textContent` de la bulle :
+          // cela effacerait la ligne d'heure).
+          if (currentRenderer) currentRenderer.setText("(interrompu)");
         } else if (frame.reason === "done" && !hasText) {
           // Rien à afficher : on le DIT (bulle muette + métadonnées sinon
           // incompréhensibles), au lieu de laisser une bulle vide.
-          currentAssistant.textContent = "(aucune réponse texte reçue)";
+          if (currentRenderer) currentRenderer.setText("(aucune réponse texte reçue)");
         }
         if (frame.reason === "error") {
           currentAssistant.classList.add("message--error");
-          currentAssistant.textContent =
-            frame.errorMessage || "Une erreur est survenue.";
+          if (currentRenderer) {
+            currentRenderer.setText(frame.errorMessage || "Une erreur est survenue.");
+          }
         }
         pinIfNeeded(pinned);
       } else if (frame.reason === "error") {
@@ -527,13 +644,23 @@ function sendMessage() {
   // Geste utilisateur : débloque l'AudioContext pour la lecture à venir.
   if (ttsAudible()) void ttsPlayer.unlock();
   const clientMsgId = `m${++clientMsgCounter}`;
+  const sentAt = Date.now();
   clearEmpty();
-  appendMessage("user", text);
+  appendMessage("user", text, undefined, sentAt);
   currentAssistant = null;
   currentRenderer = null;
   els.input.value = "";
   els.input.style.height = "auto";
-  if (!sendRaw({ type: "message", clientMsgId, text })) {
+  // Le fuseau du navigateur part avec le message : le préfixe STOCKÉ est ainsi
+  // daté dans l'heure locale de l'utilisateur (le conteneur peut être en UTC).
+  if (
+    !sendRaw({
+      type: "message",
+      clientMsgId,
+      text,
+      ...(CLIENT_TIME_ZONE ? { tz: CLIENT_TIME_ZONE } : {}),
+    })
+  ) {
     appendMessage("assistant error", "Non connecté au gateway.");
   }
 }

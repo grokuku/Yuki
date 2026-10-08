@@ -313,4 +313,28 @@ describe("formatMemoryBlock", () => {
     expect(formatMemoryBlock(entries, 5)).toBeNull();
     expect(formatMemoryBlock([], 8000)).toBeNull();
   });
+
+  it("préfixe chaque souvenir de sa DATE (`at` ISO) et tolère une date illisible", () => {
+    const entries: MemoryEntry[] = [
+      {
+        id: "1",
+        at: "2026-10-05T09:12:00.000Z",
+        text: "Préfère le tutoiement",
+        source: "s",
+        cat: "preference",
+      },
+      {
+        // Date absente/illisible : AUCUN segment de date, jamais `[undefined]`.
+        id: "2",
+        at: "pas-une-date",
+        text: "Souvenir ancien",
+        source: "s",
+        cat: "fait",
+      },
+    ];
+    const block = formatMemoryBlock(entries, 8000);
+    expect(block).toContain("- [2026-10-05] [preference] Préfère le tutoiement");
+    expect(block).toContain("- [fait] Souvenir ancien");
+    expect(block).not.toContain("undefined");
+  });
 });

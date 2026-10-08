@@ -75,6 +75,13 @@ function withTimeout<T>(
   ]);
 }
 
+/** Date `YYYY-MM-DD` d'un souvenir (champ `at` ISO), ou `null` si illisible. */
+function memoryDate(at: string | undefined): string | null {
+  if (typeof at !== "string") return null;
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(at);
+  return match ? match[1] : null;
+}
+
 /** Met en forme le bloc injecté, borné en caractères. `null` si rien à injecter. */
 export function formatMemoryBlock(
   entries: readonly MemoryEntry[],
@@ -86,7 +93,14 @@ export function formatMemoryBlock(
   const lines: string[] = [header];
   let used = header.length;
   for (const entry of entries) {
-    const line = `- [${entry.cat}] ${entry.text}`;
+    const date = memoryDate(entry.at);
+    // Le souvenir porte sa DATE (champ `at`, ISO) : `YYYY-MM-DD` est triable
+    // naturellement, sans ambiguïté, et le modèle sait en calculer les écarts.
+    // Un souvenir SANS date valide n'affiche AUCUN segment de date (jamais de
+    // `[undefined]`) et ne casse pas le bloc.
+    const line = date
+      ? `- [${date}] [${entry.cat}] ${entry.text}`
+      : `- [${entry.cat}] ${entry.text}`;
     if (used + 1 + line.length > budgetChars) break;
     lines.push(line);
     used += 1 + line.length;

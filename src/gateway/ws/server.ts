@@ -515,7 +515,11 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     ensureSubscribed(client);
     let handle;
     try {
-      handle = host.send(sessionId, message.text);
+      handle = host.send(
+        sessionId,
+        message.text,
+        message.tz !== undefined ? { timezone: message.tz } : undefined,
+      );
     } catch (error) {
       const piError = toPiHostError(error, { sessionId, logger });
       sendDirect(client, {

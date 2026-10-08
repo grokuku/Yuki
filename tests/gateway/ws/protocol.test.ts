@@ -50,6 +50,21 @@ describe("protocol — client → serveur", () => {
     ).toEqual({ ok: false, error: "message_missing_client_msg_id" });
   });
 
+  it("accepte un fuseau (tz) optionnel sur un message, sinon l'omet", () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "message", clientMsgId: "m1", text: "salut", tz: "Europe/Paris" }),
+      ),
+    ).toEqual({
+      ok: true,
+      message: { type: "message", clientMsgId: "m1", text: "salut", tz: "Europe/Paris" },
+    });
+    // Absent ou vide ⇒ champ omis (le serveur utilisera le fuseau du process).
+    expect(
+      parseClientMessage(JSON.stringify({ type: "message", clientMsgId: "m2", text: "salut", tz: "  " })),
+    ).toEqual({ ok: true, message: { type: "message", clientMsgId: "m2", text: "salut" } });
+  });
+
   it("accepte abort et ping", () => {
     expect(parseClientMessage(JSON.stringify({ type: "abort" }))).toEqual({
       ok: true,

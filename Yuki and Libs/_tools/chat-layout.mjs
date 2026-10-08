@@ -12,7 +12,11 @@
  *   (3) actions de conversation : menu contextuel au CLIC DROIT + un « ⋯ » discret
  *       (alternative visible / accessible au doigt) ;
  *   (4) état « aucune conversation ouverte » (logo ❄️ + « Yuki » + invitation),
- *       affiché dans le MÊME shell (barre du haut + barre latérale visibles).
+ *       affiché dans le MÊME shell (barre du haut + barre latérale visibles) ;
+ *   (5) HORODATAGE : l'heure « juste HH:mm », petite et discrète, sous CHAQUE
+ *       message (utilisateur ET assistant) et un SÉPARATEUR DE JOUR (ligne
+ *       interrompue portant la date complète en français au milieu, sans
+ *       heure) quand le fil change de jour — au moins deux séparateurs.
  *
  * ⚠️ C'EST UNE MAQUETTE, PAS DE LA PRODUCTION. AUCUN fichier de production
  *    n'est écrit : le script LIT `Yuki/public/ui/themes.css` (preset `neutre-dark`)
@@ -196,42 +200,67 @@ ${items}
           </aside>`;
 }
 
-const THREAD = `            <div class="msg msg--user">Peux-tu me préparer une version 16/9 où le fil remplit l'espace, sans colonne bornée ?</div>
+/* ─── Heure des messages + séparateurs de jour ──────────────────────────────
+ * L'heure est affichée PETITE et discrète, « juste l'heure » (HH:mm), sur la
+ * ligne de métadonnées de CHAQUE message : alignée à droite de la bulle pour
+ * l'utilisateur, en TÊTE de la ligne « TTFT … » pour l'assistant. La date
+ * complète n'apparaît QUE dans le séparateur de jour (jamais sur les bulles).
+ *
+ * En production, le préfixe réel transmis au modèle et stocké sera
+ * `[horodatage] YYYY-MM-DD HH:mm (heure locale)` ; l'heure ci-dessous n'en est
+ * que la forme compacte affichée. */
 
-            <div class="msg msg--assistant">
+function daySeparator(fullDate) {
+  return `            <div class="daysep"><span class="daysep__label">${fullDate}</span></div>`;
+}
+
+function userMessage(text, time) {
+  return `            <div class="msg msg--user">
               <div class="body">
-                <p class="p">J'ai supprimé la borne à 720 px : le fil occupe maintenant toute la largeur utile. La conséquence, volontaire, est que les lignes redeviennent longues — d'autant plus que la barre latérale se replie au repos. Le repère gradué, plus haut, affiche en direct le nombre de caractères par ligne atteint sur ce cadre ; il bouge quand la barre se déplie et quand on change la largeur de lecture.</p>
-                <p class="p">Pour garder la main, la largeur reste <b>réglable</b> via une variable unique, <code>--read-max</code>, par défaut <code>none</code> (aucune borne). Le rail replié libère 224 px ; une borne plus basse rapproche la longueur de ligne d'une plage confortable.</p>
+                <p class="p">${text}</p>
+              </div>
+              <span class="meta meta--end">${time}</span>
+            </div>`;
+}
+
+function assistantMessage(time, metaTail, bodyHtml) {
+  return `            <div class="msg msg--assistant">
+              <div class="body">
+${bodyHtml}
+              </div>
+              <span class="meta"><span class="meta__time">${time}</span><span class="meta__dot">·</span>${metaTail}</span>
+            </div>`;
+}
+
+const THREAD = [
+  daySeparator("mercredi 7 octobre 2026"),
+  userMessage("Est-ce que le fil pourrait afficher l'heure de chaque message ?", "21:14"),
+  assistantMessage(
+    "21:14",
+    "TTFT 268 ms · total 1 940 ms · 142 tok",
+    `                <p class="p">Oui. Je la poserai en petit sous chaque bulle, <b>juste l'heure</b> — la date complète reste dans le séparateur de jour, pour ne pas surcharger le fil.</p>`,
+  ),
+  daySeparator("jeudi 8 octobre 2026"),
+  userMessage("Peux-tu me préparer une version 16/9 où le fil remplit l'espace, sans colonne bornée ?", "15:39"),
+  assistantMessage(
+    "15:41",
+    "TTFT 312 ms · total 4 210 ms · 386 tok",
+    `                <p class="p">J'ai supprimé la borne à 720 px : le fil occupe maintenant toute la largeur utile. La conséquence, volontaire, est que les lignes redeviennent longues — d'autant plus que la barre latérale se replie au repos.</p>
                 <div class="code-block">
                   <span class="mute-badge">muet — non lu</span>
                   <pre><code>const LAYOUT = {
   sidebar: { open: 280, rail: 56 }, // dépliée au survol, repliée par défaut
   readMax: 'none',   // largeur de lecture réglable (px ou none)
-  gutter: 24,        // marge latérale de la zone de contenu
-  userBubble: 0.85,  // part de la largeur occupée par la bulle utilisateur
-  // NB : une ligne de code volontairement longue pour vérifier que le débordement reste CONFINÉ dans la bulle et n'élargit jamais le fil.
+  // NB : une ligne volontairement longue pour vérifier que le débordement reste CONFINÉ dans la bulle.
 };</code></pre>
-                </div>
-                <div class="tbl-wrap">
-                  <table class="tbl">
-                    <thead>
-                      <tr><th>Repère</th><th>Avant</th><th>Ici</th></tr>
-                    </thead>
-                    <tbody>
-                      <tr><td>Largeur de lecture</td><td>720 px centrée</td><td>pleine largeur (réglable)</td></tr>
-                      <tr><td>Caractères par ligne</td><td>60 – 90</td><td>à mesurer en direct</td></tr>
-                      <tr><td>Barre latérale</td><td>figée 280 px</td><td>repliée 56 px, survol → 280 px</td></tr>
-                    </tbody>
-                  </table>
                 </div>
                 <ul class="list">
                   <li>le fil remplit désormais l'espace, y compris barre repliée ;</li>
                   <li>la largeur maximale est paramétrable (<code>--read-max</code>) ;</li>
                   <li>la zone de saisie suit exactement la même largeur de lecture.</li>
-                </ul>
-              </div>
-              <span class="meta">TTFT 312 ms · total 4 210 ms · 386 tok</span>
-            </div>`;
+                </ul>`,
+  ),
+].join("\n\n");
 
 function emptyState() {
   return `          <section class="main main--empty">
@@ -297,12 +326,13 @@ const FIG_A = figure({
   id: "etat-a", screenClass: "screen--wide",
   opts: { activeId: "c1" },
   title: "(a) REPLIÉE par défaut — 56 px · fenêtre 1600 × 900",
-  hint: "Survolez la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Cliquez la punaise pour la bloquer dépliée. Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer.",
+  hint: "Survolez la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Cliquez la punaise pour la bloquer dépliée. Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer. Le fil est horodaté : l'heure discrète sous chaque bulle, la date complète au milieu des séparateurs de jour.",
   list: [
     ["barre latérale", "repliée · <b data-live=\"sbstate\">au survol</b> · 56 px → 280 px au survol"],
     ["largeur de lecture", "pleine largeur (réglable · <code>--read-max</code>) = <b data-live=\"rmax\">none</b>"],
     ["caractères par ligne", "≈ <b data-live=\"cpl\">—</b> (largeur de texte <b data-live=\"px\">—</b>)"],
     ["bulle utilisateur", "85 % de la largeur de lecture"],
+    ["horodatage", "heure « juste HH:mm » sous chaque bulle · séparateur de jour daté (mercredi 7 / jeudi 8 octobre 2026)"],
   ],
 });
 
@@ -623,7 +653,19 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .list { margin: 0; padding-left: 1.5em; }
 .list li { margin: 2px 0; }
 
-.meta { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
+.meta { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Heure des messages : « juste l'heure », alignée sur le bord extérieur de la
+ * bulle (à droite pour l'utilisateur, en tête de la ligne TTFT pour l'assistant). */
+.meta--end { text-align: right; }
+.meta__dot { margin: 0 5px; color: color-mix(in srgb, var(--muted) 60%, transparent); }
+
+/* ─── Séparateur de jour : ligne interrompue, date complète au milieu ──── */
+.daysep { display: flex; align-items: center; gap: 12px; margin: 16px 0 4px; }
+.daysep::before, .daysep::after {
+  content: ""; flex: 1 1 0; height: 1px;
+  background: color-mix(in srgb, var(--border) 72%, transparent);
+}
+.daysep__label { flex: 0 0 auto; font-size: 11.5px; color: var(--muted); letter-spacing: 0.02em; white-space: nowrap; }
 
 .composer { border-top: 1px solid var(--border); background: var(--panel); padding: 12px var(--m-gutter) 16px; }
 .composer__col { display: flex; gap: 8px; align-items: flex-end; }
@@ -710,7 +752,8 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
     Maquette <b>hors production</b>, pour <b>décider sur le visuel</b>. Couleurs lues dans
     <code>Yuki/public/ui/themes.css</code> (preset <b>${PRESET}</b>), <b>aucun</b> fichier de production modifié.
     Aucune ressource externe, aucun style en ligne. <b>Le survol, la punaise et le clic droit fonctionnent vraiment</b> :
-    essayez-les dans la Preview.
+    essayez-les dans la Preview. <b>Nouveau :</b> l'<b>heure discrète</b> sous chaque bulle et un <b>séparateur de jour</b>
+    (ligne + date complète au milieu) quand la conversation change de jour.
   </p>
 
   <section class="witness">
@@ -761,6 +804,7 @@ ${FIG_D}
   <footer class="note">
     <b>Compromis signalés</b> :
     <ul>
+      <li><b>Horodatage (à implémenter plus tard)</b> — en production, un préfixe <code>[horodatage] YYYY-MM-DD HH:mm (heure locale)</code> sera <b>transmis au modèle</b> et <b>stocké</b> en tête de chaque message (Yuki sait enfin « quand » nous sommes) ; il sera aussi <b>visible dans le fil</b>, sous forme compacte « juste l'heure ». Les <b>souvenirs</b> porteront eux aussi leur date (champ <code>at</code>), pour que le rappel mémoire dise « quand ». La maquette n'affiche QUE l'heure sous les bulles et la date complète dans le séparateur de jour.</li>
       <li><b>Clic droit vs « ⋯ »</b> — le menu contextuel (clic droit) est le geste le plus rapide à la souris, mais il est <b>invisible</b> (rien n'indique qu'il existe) et <b>inaccessible au doigt</b> (pas de clic droit tactile). Le <b>« ⋯ »</b> discret, révélé au survol (et toujours visible sur la conversation active), rend l'action <b>découvrable et accessible</b>. Les deux ouvrent le <b>même</b> menu (renommer / supprimer).</li>
       <li><b>Largeur réglable</b> — le fil remplit l'espace par défaut (<code>--read-max: none</code>). La largeur maximale de lecture est <b>paramétrable</b> : utilisez les boutons du témoin de mesure pour voir l'effet sur la longueur de ligne.</li>
       <li><b>Barre latérale</b> — <b>repliée par défaut</b> (56 px), dépliée à 280 px <b>au survol</b>, avec une <b>punaise</b> pour la bloquer dépliée. La conversation se redimensionne <b>en même temps</b> (animation ${M.animMs} ms sur la largeur).</li>

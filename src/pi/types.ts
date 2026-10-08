@@ -142,6 +142,12 @@ export interface SendOptions {
   origin?: string;
   /** Job d'arrière-plan à l'origine du message (corrélation). */
   jobId?: string;
+  /**
+   * Fuseau horaire IANA du CLIENT (ex. `Europe/Paris`). Sert à horodater le
+   * message dans l'heure LOCALE de l'utilisateur quand le conteneur tourne en
+   * UTC. Absent/invalide ⇒ fuseau du process Node.
+   */
+  timezone?: string;
 }
 
 /** Poignée renvoyée immédiatement par `send`. */
@@ -155,10 +161,16 @@ export interface RunHandle {
 /** États observables d'une session. */
 export type PiSessionStateName = "idle" | "streaming" | "error";
 
-/** Entrée de transcript : CONTENU SEUL (jamais de réflexion). */
+/**
+ * Entrée de transcript : CONTENU SEUL (jamais de réflexion).
+ * `timestamp` = instant du message en ms Unix, quand il est connu (message
+ * restauré depuis une session, ou message live). Absent pour un ancien message
+ * SANS horodatage : l'UI n'affiche alors AUCUNE heure (jamais d'erreur).
+ */
 export interface TranscriptEntry {
   role: "user" | "assistant";
   text: string;
+  timestamp?: number;
 }
 
 /** État d'une session, sérialisable tel quel. */

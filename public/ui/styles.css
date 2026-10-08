@@ -493,6 +493,46 @@ a.pill:hover {
   margin-top: 6px;
   font-size: 11px;
   color: var(--muted);
+  /* Chiffres à largeur FIXE : l'heure et les durées ne « sautent » pas. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Heure des messages utilisateur : alignée sur le bord EXTÉRIEUR (à droite). */
+.message__meta--end {
+  text-align: right;
+}
+
+/* Séparateur « · » entre l'heure (en tête) et les statistiques de l'assistant. */
+.message__meta__sep {
+  margin: 0 5px;
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+
+/* ─── Séparateur de jour : trait INTERROMPU, date complète au milieu ───────
+ * `::before`/`::after` portent les DEUX demi-traits (un vrai trou de 12 px au
+ * milieu, pas un trait masqué par un fond) ; le libellé est centré, en français,
+ * SANS heure. Plus d'air au-dessus (16 px) qu'en dessous (4 px). */
+.daysep {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 4px;
+}
+
+.daysep::before,
+.daysep::after {
+  content: "";
+  flex: 1 1 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.daysep__label {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .thinking-indicator {

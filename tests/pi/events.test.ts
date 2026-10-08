@@ -160,6 +160,49 @@ describe("pi.events — restauration du transcript depuis une session", () => {
     const entries = [null, 42, "texte", {}, { type: "message" }, userEntry("ok")];
     expect(transcriptFromEntries(entries)).toEqual([{ role: "user", text: "ok" }]);
   });
+
+  it("masque le préfixe d'horodatage et remonte le timestamp du message", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "u",
+        parentId: null,
+        message: {
+          role: "user",
+          content:
+            "[horodatage] 2026-10-07 15:39 (heure locale) Bonjour",
+          timestamp: 1_700_000_000_000,
+        },
+      },
+    ];
+    expect(transcriptFromEntries(entries)).toEqual([
+      { role: "user", text: "Bonjour", timestamp: 1_700_000_000_000 },
+    ]);
+  });
+
+  it("un ancien message SANS timestamp : pas d'heure, pas d'erreur", () => {
+    const entries = [
+      { type: "message", id: "u", message: { role: "user", content: "vieux" } },
+      { type: "message", id: "a", message: { role: "assistant", content: "ok" } },
+      // Timestamp illisible / sentinelle 0 : ignoré aussi (aucune heure).
+      {
+        type: "message",
+        id: "b",
+        message: { role: "user", content: "zéro", timestamp: 0 },
+      },
+      {
+        type: "message",
+        id: "c",
+        message: { role: "assistant", content: "nan", timestamp: Number.NaN },
+      },
+    ];
+    expect(transcriptFromEntries(entries)).toEqual([
+      { role: "user", text: "vieux" },
+      { role: "assistant", text: "ok" },
+      { role: "user", text: "zéro" },
+      { role: "assistant", text: "nan" },
+    ]);
+  });
 });
 
 describe("pi.events — rattrapage du contenu non streamé", () => {

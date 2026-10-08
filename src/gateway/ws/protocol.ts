@@ -18,7 +18,7 @@ import type {
 export type ClientMessage =
   | { type: "hello"; clientVersion?: string; sessionId?: string }
   | { type: "resume"; sessionId: string; fromSeq: number }
-  | { type: "message"; clientMsgId: string; text: string }
+  | { type: "message"; clientMsgId: string; text: string; tz?: string }
   | { type: "abort"; runId?: string }
   | { type: "playback"; runId: string; event: "started" | "aborted" }
   | { type: "switch"; sessionId: string }
@@ -180,7 +180,18 @@ export function parseClientMessage(raw: string): ParseResult {
       if (text === undefined || text.trim().length === 0) {
         return { ok: false, error: "message_empty_text" };
       }
-      return { ok: true, message: { type: "message", clientMsgId, text } };
+      // Fuseau IANA du navigateur (facultatif) : permet d'horodater le message
+      // dans l'heure LOCALE de l'utilisateur, même si le conteneur est en UTC.
+      const tz = optionalString(parsed, "tz");
+      return {
+        ok: true,
+        message: {
+          type: "message",
+          clientMsgId,
+          text,
+          ...(tz !== undefined && tz.trim().length > 0 ? { tz } : {}),
+        },
+      };
     }
     case "abort": {
       const runId = optionalString(parsed, "runId");

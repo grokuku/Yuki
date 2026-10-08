@@ -143,6 +143,7 @@ export class SessionStream {
       transcript: source.transcript.map((entry) => ({
         role: entry.role,
         text: entry.text,
+        ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
       })),
     };
   }

@@ -219,6 +219,13 @@ describe("intégration — conversations multiples et bascule", () => {
     expect(
       host.getState()?.transcript.some((entry) => entry.text === "Suite du fil"),
     ).toBe(true);
+    // Message LIVE horodaté : l'entrée porte un instant (ms Unix) pour l'heure.
+    const liveUser = host
+      .getState()
+      ?.transcript.find((entry) => entry.text === "Suite du fil");
+    expect(typeof liveUser?.timestamp).toBe("number");
+    // Le texte du transcript reste PROPRE : le préfixe d'horodatage n'y figure pas.
+    expect(liveUser?.text ?? "").not.toContain("horodatage");
     // Le fil d'origine reste intact (aucune contamination croisée).
     await sleep(50);
   });

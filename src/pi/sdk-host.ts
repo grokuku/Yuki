@@ -41,6 +41,7 @@ import {
   contentTextFromMessage,
   deltaText,
   finishReasonForMessage,
+  messageTimestamp,
   transcriptFromEntries,
   unstreamedContentSuffix,
   usageFromMessage,
@@ -48,6 +49,7 @@ import {
   type RawAssistantMessageEvent,
 } from "./events.js";
 import { PiHostError, toPiHostError } from "./errors.js";
+import { buildStoredUserText } from "./timestamp.js";
 import type { PiHost } from "./host.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "./instrumentation.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
@@ -139,7 +141,12 @@ const SYNTHETIC_USER_PREFIXES: readonly string[] = [REPORT_HEADER];
 
 interface RunItem {
   runId: string;
+  /** Texte AFFICHÉ (transcript de l'UI) : sans le préfixe d'horodatage. */
   text: string;
+  /** Texte réellement TRANSMIS au SDK (donc STOCKÉ) : horodaté pour un message utilisateur. */
+  storedText: string;
+  /** Instant de l'envoi (ms Unix) — horodate l'entrée de transcript. */
+  sentAt: number;
   origin?: string;
   jobId?: string;
   instrumentation: RunInstrumentation;
@@ -184,9 +191,21 @@ function makeRunItem(
   const startPromise = new Promise<void>((resolve) => {
     resolveStart = resolve;
   });
+  // Horodatage du message UTILISATEUR : posé AVANT stockage (le préfixe part
+  // dans le prompt transmis au SDK, donc dans le JSONL de session et dans la
+  // mémoire qui en dérive). Un prompt SYNTHÉTIQUE (report de job) n'est jamais
+  // horodaté : ce n'est pas un message de l'utilisateur.
+  const sentAt = Date.now();
+  const storedText = buildStoredUserText(text, {
+    at: new Date(sentAt),
+    ...(opts.timezone !== undefined ? { timeZone: opts.timezone } : {}),
+    ...(opts.origin === ORIGIN_JOB_REPORT ? { synthetic: true } : {}),
+  });
   return {
     runId,
     text,
+    storedText,
+    sentAt,
     ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
     ...(opts.jobId !== undefined ? { jobId: opts.jobId } : {}),
     abortController: new AbortController(),
@@ -327,6 +346,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     const transcript: TranscriptEntry[] = record.transcript.map((entry) => ({
       role: entry.role,
       text: entry.text,
+      ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
     }));
     if (record.partial.length > 0) {
       transcript.push({ role: "assistant", text: record.partial });
@@ -438,7 +458,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         }
         const text = content.length > 0 ? content : record.partial;
         if (text.length > 0) {
-          record.transcript.push({ role: "assistant", text });
+          record.transcript.push({
+            role: "assistant",
+            text,
+            timestamp: messageTimestamp(message) ?? Date.now(),
+          });
         }
         record.partial = "";
         return;
@@ -540,7 +564,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     // Un prompt de report est SYNTHÉTIQUE : il ne doit pas produire de bulle
     // utilisateur dans le transcript de l'UI.
     if (run.origin !== ORIGIN_JOB_REPORT) {
-      record.transcript.push({ role: "user", text: run.text });
+      record.transcript.push({
+        role: "user",
+        text: run.text,
+        timestamp: run.sentAt,
+      });
     }
     runContext.set({ sessionId: record.sessionId, runId: run.runId });
     emitEvent({
@@ -551,7 +579,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     });
 
     try {
-      await record.session.prompt(run.text, {
+      await record.session.prompt(run.storedText, {
         expandPromptTemplates: false,
         preflightResult: (accepted: boolean) => {
           if (accepted) {

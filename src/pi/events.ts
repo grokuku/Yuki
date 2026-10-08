@@ -10,6 +10,7 @@
  */
 
 import type { DeltaChannel, PiUsage, TranscriptEntry } from "./types.js";
+import { stripTimestampPrefix } from "./timestamp.js";
 
 /** Forme minimale d'un `assistantMessageEvent` du SDK. */
 export interface RawAssistantMessageEvent {
@@ -24,6 +25,8 @@ export interface RawAgentMessage {
   errorMessage?: unknown;
   usage?: unknown;
   content?: unknown;
+  /** Instant du message (ms Unix), posé par le SDK. */
+  timestamp?: unknown;
 }
 
 /** Extrait le canal d'un événement de streaming, ou `null` s'il est ignoré. */
@@ -63,6 +66,16 @@ export function finishReasonForMessage(
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Instant d'un message (ms Unix) posé par le SDK, ou `undefined` s'il est
+ * absent/illisible. Tolérant : un ancien message sans `timestamp` est accepté
+ * (aucune heure ne sera affichée pour lui).
+ */
+export function messageTimestamp(message: RawAgentMessage): number | undefined {
+  const value = finiteNumber(message.timestamp);
+  return value !== undefined && value > 0 ? value : undefined;
 }
 
 /** Convertit une `usage` du SDK en `PiUsage` sérialisable. */
@@ -134,6 +147,10 @@ function isSyntheticUserText(
  * Miroir EXACT du transcript temps réel (`SessionRecord.transcript`) :
  *   - seules les entrées `type:"message"` de rôle `user`/`assistant` comptent ;
  *   - le texte est le CONTENU seul (les blocs `thinking` sont exclus) ;
+ *   - le préfixe d'horodatage `[horodatage] … (heure locale)` d'un message
+ *     utilisateur est MASQUÉ (en stockage il est conservé ; voir timestamp.ts) ;
+ *   - `timestamp` (ms Unix) est repris du message quand il est présent, afin
+ *     que l'UI puisse afficher l'heure — y compris après restauration ;
  *   - les entrées d'outils, les résumés de compaction/branche, les entrées
  *     `custom` et les changements de modèle/niveau sont IGNORÉS (ils ne sont
  *     jamais dans le transcript live) ;
@@ -159,10 +176,18 @@ export function transcriptFromEntries(
     if (!message || typeof message !== "object") continue;
     const role = (message as RawAgentMessage).role;
     if (role !== "user" && role !== "assistant") continue;
-    const text = contentTextFromMessage(message as RawAgentMessage);
+    const rawText = contentTextFromMessage(message as RawAgentMessage);
+    if (rawText.length === 0) continue;
+    // Le repère temporel d'un message utilisateur est retiré AVANT le filtre
+    // synthétique : un report de job n'est jamais horodaté, mais l'ordre reste
+    // correct quel que soit l'ordre de pose des préfixes.
+    const text = role === "user" ? stripTimestampPrefix(rawText) : rawText;
     if (text.length === 0) continue;
     if (role === "user" && isSyntheticUserText(text, prefixes)) continue;
-    transcript.push({ role, text });
+    const timestamp = messageTimestamp(message as RawAgentMessage);
+    transcript.push(
+      timestamp !== undefined ? { role, text, timestamp } : { role, text },
+    );
   }
   return transcript;
 }

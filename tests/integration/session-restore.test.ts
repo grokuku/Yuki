@@ -58,12 +58,15 @@ function emptyWorld(): World {
 }
 
 /** Écrit une session JSONL persistée (comme après un véritable échange). */
+const T0 = Date.parse("2026-10-07T15:39:00.000Z");
 function seedSession(world: World): void {
   const manager = SessionManager.create(world.cwd, world.sessionsDir);
   manager.appendMessage({
     role: "user",
-    content: "Bonjour, qui es-tu ?",
-    timestamp: Date.now(),
+    // Message utilisateur STOCKÉ avec son préfixe d'horodatage (comme le fait
+    // désormais le host) : la restauration doit le MASQUER et conserver l'heure.
+    content: "[horodatage] 2026-10-07 15:39 (heure locale) Bonjour, qui es-tu ?",
+    timestamp: T0,
   });
   manager.appendMessage({
     role: "assistant",
@@ -83,13 +86,13 @@ function seedSession(world: World): void {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
-    timestamp: Date.now(),
+    timestamp: T0 + 1000,
   });
   // Prompt SYNTHÉTIQUE de report de job : masqué du transcript (comme en direct).
   manager.appendMessage({
     role: "user",
     content: `${REPORT_HEADER}\njob_id: abc\n--- résultat brut ---\nok`,
-    timestamp: Date.now(),
+    timestamp: T0 + 2000,
   });
   manager.appendMessage({
     role: "assistant",
@@ -106,7 +109,7 @@ function seedSession(world: World): void {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
-    timestamp: Date.now(),
+    timestamp: T0 + 3000,
   });
 }
 
@@ -194,14 +197,16 @@ describe("intégration — reprise de session restaure le transcript", () => {
 
     const state = host.getState();
     expect(state).toBeDefined();
-    // Le prompt synthétique de report est masqué ; « thinking » est exclu.
+    // Le prompt synthétique de report est masqué ; « thinking » est exclu ; le
+    // préfixe d'horodatage n'est PAS visible ; l'instant du message est conservé.
     expect(state?.transcript).toEqual([
-      { role: "user", text: "Bonjour, qui es-tu ?" },
-      { role: "assistant", text: "Je suis Yuki." },
-      { role: "assistant", text: "Le job est terminé." },
+      { role: "user", text: "Bonjour, qui es-tu ?", timestamp: T0 },
+      { role: "assistant", text: "Je suis Yuki.", timestamp: T0 + 1000 },
+      { role: "assistant", text: "Le job est terminé.", timestamp: T0 + 3000 },
     ]);
     expect(JSON.stringify(state?.transcript)).not.toContain("raisonnement secret");
     expect(JSON.stringify(state?.transcript)).not.toContain(REPORT_HEADER);
+    expect(JSON.stringify(state?.transcript)).not.toContain("horodatage");
   });
 
   it("sert le transcript restauré via le snapshot WS, sans rejeu temps réel (idempotence)", async () => {
