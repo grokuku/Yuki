@@ -125,9 +125,38 @@ func (c *Config) ApplyDefaults() {
 	if strings.TrimSpace(c.LogLevel) == "" {
 		c.LogLevel = DefaultLogLevel
 	}
+	// Le serveur d'exécution n'écoute QUE le chemin `/ws` : on complète une
+	// adresse saisie sans suffixe (`wss://hôte:port`) plutôt que d'échouer.
+	if normalized, _ := NormalizeYukiURL(c.YukiURL); normalized != "" {
+		c.YukiURL = normalized
+	}
 	if strings.TrimSpace(c.PairURL) == "" && strings.TrimSpace(c.YukiURL) != "" {
 		c.PairURL = DerivePairURL(c.YukiURL)
 	}
+}
+
+// NormalizeYukiURL complète une URL WebSocket de Yuki. Le port « machines »
+// n'accepte la connexion d'exécution que sur le chemin `/ws`
+// (`src/agents/server.ts`) : si le chemin est absent ou vaut `/`, il est
+// remplacé par `/ws`. Renvoie l'URL normalisée et `true` si un suffixe a été
+// ajouté (afin que la CLI puisse le signaler à l'utilisateur).
+//
+// Une URL illisible ou sans hôte est renvoyée inchangée (`added` = false) : le
+// diagnostic précis reste le rôle de `Validate`.
+func NormalizeYukiURL(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return trimmed, false
+	}
+	if parsed.Path == "" || parsed.Path == "/" {
+		parsed.Path = "/ws"
+		return parsed.String(), true
+	}
+	return trimmed, false
 }
 
 // DerivePairURL transforme une URL WebSocket de Yuki en base HTTPS d'appairage.

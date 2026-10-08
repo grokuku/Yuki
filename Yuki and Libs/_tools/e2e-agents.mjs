@@ -4,9 +4,11 @@
  *
  * Lance le gateway RÉEL avec l'API agents (`_tools/e2e-agents-serve.ts`) et rend
  * `/config#agents` en Chromium headless via CDP, avec la CSP RÉELLE. Vérifie :
- * onglet Agents, état vide, affichage d'un agent appairé (état, dernière
- * connexion, historique, niveau, privilège), validations en attente, modale
- * HolafModal de suppression, et **zéro violation CSP / exception JS**.
+ * onglet Agents, état vide, champ de saisie + bouton « Appairer » (D119 : le code
+ * vient de la console de l'agent), appairage réussi (l'agent apparaît), message
+ * d'erreur véridique sur code invalide, affichage d'un agent appairé (état,
+ * dernière connexion, historique, niveau, privilège), validations en attente,
+ * modale HolafModal de suppression, et **zéro violation CSP / exception JS**.
  *
  * Usage : node "/projects/Yuki/Yuki and Libs/_tools/e2e-agents.mjs"
  */
@@ -179,11 +181,14 @@ await navigate(`${empty.base}/config#agents`);
 const emptyState = await evaluate(`(() => {
   const active = [...document.querySelectorAll('[role=tab]')].find((t) => t.getAttribute('aria-selected') === 'true')?.id;
   const panel = document.getElementById('panel-agents');
+  const root = document.getElementById('agents-root');
   return {
     active,
     visible: panel ? !panel.hidden : false,
-    text: document.getElementById('agents-root')?.textContent ?? '',
+    text: root?.textContent ?? '',
     styleAttrs: document.body.querySelectorAll('[style]').length,
+    hasInput: !!document.getElementById('agent-pair-code'),
+    hasButton: [...(root?.querySelectorAll('button') ?? [])].some((b) => b.textContent === 'Appairer'),
   };
 })()`);
 check(
@@ -195,6 +200,8 @@ check(
   "[/config#agents] état vide : « Aucun agent appairé »",
   emptyState.text.includes("Aucun agent appairé"),
 );
+check("[/config#agents] champ de saisie du code présent", emptyState.hasInput === true);
+check("[/config#agents] bouton « Appairer » présent", emptyState.hasButton === true);
 check("[/config#agents] aucun style= inline (CSP)", emptyState.styleAttrs === 0);
 await shot("agents-e2e-empty");
 empty.proc.kill("SIGTERM");
@@ -255,6 +262,43 @@ const afterApprove = await evaluate(`(() => ({
 }))()`);
 check("[/config#agents] après approbation, la demande disparaît", afterApprove.approvals === false);
 seeded.proc.kill("SIGTERM");
+await sleep(300);
+
+/* ═══════════ 3) Formulaire d'appairage (D119) ═════════════════════ */
+const PENDING_CODE = "ABCD-2345-6789";
+const pairing = await startServer({ YUKI_E2E_PENDING_CODE: PENDING_CODE });
+await navigate(`${pairing.base}/config?t=${Date.now()}#agents`);
+
+// 3a) Code invalide : le message EXACT du serveur est affiché (véridique).
+await evaluate(`(() => {
+  const input = document.getElementById('agent-pair-code');
+  input.value = 'nope';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  [...document.querySelectorAll('#agents-root button')].find((b) => b.textContent === 'Appairer')?.click();
+})()`);
+await sleep(600);
+const invalidMsg = await evaluate(`document.getElementById('agent-pair-status')?.textContent ?? ''`);
+check("[/config#agents] code invalide ⇒ message du serveur", /invalide|attendu 12/.test(invalidMsg), invalidMsg);
+
+// 3b) Code en attente : l'agent est apparié et apparaît dans la liste.
+await evaluate(`(() => {
+  const input = document.getElementById('agent-pair-code');
+  input.value = '${PENDING_CODE}';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  [...document.querySelectorAll('#agents-root button')].find((b) => b.textContent === 'Appairer')?.click();
+})()`);
+await sleep(700);
+const accepted = await evaluate(`document.getElementById('agent-pair-status')?.textContent ?? ''`);
+check("[/config#agents] code en attente ⇒ « Code accepté »", accepted.includes('Code accepté'), accepted);
+await sleep(1900); // rafraîchissement différé : l'agent doit apparaître
+const afterPair = await evaluate(`(() => ({
+  cards: document.querySelectorAll('#agents-root .agent-card').length,
+  styleAttrs: document.body.querySelectorAll('[style]').length,
+}))()`);
+check("[/config#agents] l'agent apparié apparaît dans la liste", afterPair.cards >= 1, JSON.stringify(afterPair));
+check("[/config#agents] toujours aucun style= inline après appairage", afterPair.styleAttrs === 0, String(afterPair.styleAttrs));
+await shot("agents-e2e-pairing");
+pairing.proc.kill("SIGTERM");
 
 /* ═══════════════════════ Bilan CSP / exceptions ═══════════════════════ */
 const cspViolations = [

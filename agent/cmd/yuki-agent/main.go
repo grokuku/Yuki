@@ -31,7 +31,7 @@ Usage :
   yuki-agent <commande> [options]
 
 Commandes :
-  pair        Appaire cette machine auprès de Yuki et enregistre les certificats
+  pair        Appaire cette machine auprès de Yuki (génère et affiche un code)
   run         Se connecte à Yuki et exécute les commandes reçues (mode service)
   install     Installe l'agent comme service système (systemd / SCM Windows)
   uninstall   Retire le service système
@@ -44,7 +44,7 @@ Options communes :
                       YUKI_AGENT_CONFIG, sinon /etc/yuki-agent/agent.json)
 
 Exemples :
-  yuki-agent pair --yuki-url wss://yuki.example.org:8765/ws
+  yuki-agent pair --yuki-url wss://yuki.example.org:9443/ws
   yuki-agent run --config /etc/yuki-agent/agent.json
   yuki-agent install --account 'NT AUTHORITY\LocalService'
 `

@@ -1,6 +1,6 @@
 {
-  "yuki_url": "wss://yuki.example.org:8765/ws",
-  "pair_url": "https://yuki.example.org:8765",
+  "yuki_url": "wss://yuki.example.org:9443/ws",
+  "pair_url": "https://yuki.example.org:9443",
   "agent_id": "",
   "state_dir": "/etc/yuki-agent",
   "ca_file": "/etc/yuki-agent/ca.pem",

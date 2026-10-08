@@ -12,12 +12,18 @@
 //	    effectue une requête mTLS authentifiée (`/api/agent/whoami`) avec le
 //	    certificat client signé par l'autorité interne TS.
 //
+//	paircheck pairflow <baseURL> <codeFile> [yukiFp]
+//	    même chose, mais dans l'ORDRE RÉEL de D119 : c'est l'AGENT qui GÉNÈRE le
+//	    code, l'écrit dans <codeFile> (l'utilisateur le recopie dans Yuki) et
+//	    scrute jusqu'à validation. Aucun code n'est fourni en entrée.
+//
 // ⚠️ Ce programme n'est PAS embarqué dans l'agent de production : c'est un
 // outil de vérification, isolé du reste du module.
 package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -31,6 +37,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/grokuku/yuki/agent/internal/agent"
 	"github.com/grokuku/yuki/agent/internal/pair"
 	"github.com/grokuku/yuki/agent/internal/proto"
 )
@@ -44,6 +51,8 @@ func main() {
 		runVectors(os.Args[2:])
 	case "pair":
 		runPair(os.Args[2:])
+	case "pairflow":
+		runPairFlow(os.Args[2:])
 	default:
 		fail("mode inconnu : " + os.Args[1])
 	}
@@ -140,6 +149,44 @@ func runPair(args []string) {
 		fail("Accept(pair_ok) : " + err.Error())
 	}
 
+	reportPairing(baseURL, payload)
+}
+
+// runPairFlow joue l'appairage dans l'ORDRE RÉEL de D119 : c'est l'AGENT qui
+// GÉNÈRE le code, l'écrit dans `codeFile` (l'utilisateur, ici le harnais, le
+// recopie dans Yuki), envoie `pair_begin` puis scrute jusqu'à validation.
+//
+//	paircheck pairflow <baseURL> <codeFile> [yukiFp]
+func runPairFlow(args []string) {
+	if len(args) < 2 {
+		fail("usage : pairflow <baseURL> <codeFile> [yukiFp]")
+	}
+	baseURL := strings.TrimRight(args[0], "/")
+	codeFile := args[1]
+	yukiFp := ""
+	if len(args) >= 3 {
+		yukiFp = args[2]
+	}
+
+	payload, err := agent.PairWithCodes(context.Background(), baseURL, yukiFp,
+		agent.PairingPolicy{}, agent.PairingCallbacks{
+			OnCode: func(code string, _ time.Time, _ int) {
+				if err := os.WriteFile(codeFile, []byte(code), 0o600); err != nil {
+					fail("écriture du code affiché : " + err.Error())
+				}
+				fmt.Fprintln(os.Stderr, "code affiché : "+code)
+			},
+		})
+	if err != nil {
+		fail("appairage D119 : " + err.Error())
+	}
+
+	reportPairing(baseURL, payload)
+}
+
+// reportPairing vérifie le certificat client (x509 Go strict), interroge
+// l'identité en mTLS et imprime le bilan JSON commun aux modes `pair`/`pairflow`.
+func reportPairing(baseURL string, payload *pair.Payload) {
 	// Le certificat client émis par TS DOIT être accepté par le vérificateur
 	// x509 STRICT de Go (chaîne, EKU clientAuth, SAN = agent_id).
 	if err := verifyClientCert(payload); err != nil {

@@ -679,3 +679,40 @@
   color: var(--muted);
   font-size: 13px;
 }
+
+/* Formulaire d'appairage (D119) : champ de saisie du code AFFICHÉ PAR L'AGENT +
+   bouton « Appairer ». Le code s'affiche en majuscules (l'alphabet est
+   majuscule) sans transformer la valeur envoyée au serveur. Aucun style inline
+   (CSP `style-src 'self'`). */
+.agent-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-pair__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.agent-pair__input {
+  flex: 1 1 200px;
+  min-width: 160px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.agent-pair__input::placeholder {
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--muted);
+}

@@ -40,7 +40,7 @@ func TestApplyDefaultsRenseigneTout(t *testing.T) {
 
 func TestDerivePairURL(t *testing.T) {
 	cases := map[string]string{
-		"wss://yuki.example.org:8765/ws": "https://yuki.example.org:8765",
+		"wss://yuki.example.org:9443/ws": "https://yuki.example.org:9443",
 		"ws://127.0.0.1:9000/ws":         "http://127.0.0.1:9000",
 		"https://yuki.example.org":       "https://yuki.example.org",
 		"pas une url":                    "",
@@ -53,14 +53,47 @@ func TestDerivePairURL(t *testing.T) {
 	}
 }
 
+// TestNormalizeYukiURL : une adresse sans suffixe `/ws` est complétée (le port
+// machines n'écoute que ce chemin).
+func TestNormalizeYukiURL(t *testing.T) {
+	cases := []struct {
+		in    string
+		want  string
+		added bool
+	}{
+		{"wss://10.10.0.5:19443", "wss://10.10.0.5:19443/ws", true},
+		{"wss://10.10.0.5:19443/", "wss://10.10.0.5:19443/ws", true},
+		{"  wss://yuki:9443/ws  ", "wss://yuki:9443/ws", false},
+		{"ws://127.0.0.1:9000", "ws://127.0.0.1:9000/ws", true},
+		{"", "", false},
+		{"pas une url", "pas une url", false},
+	}
+	for _, tc := range cases {
+		got, added := NormalizeYukiURL(tc.in)
+		if got != tc.want || added != tc.added {
+			t.Errorf("NormalizeYukiURL(%q) = (%q, %v), attendu (%q, %v)", tc.in, got, added, tc.want, tc.added)
+		}
+	}
+}
+
 func TestValidate(t *testing.T) {
-	valid := &Config{YukiURL: "wss://yuki:8765/ws"}
+	valid := &Config{YukiURL: "wss://yuki:9443/ws"}
 	valid.ApplyDefaults()
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("configuration valide refusée : %v", err)
 	}
-	if valid.PairURL != "https://yuki:8765" {
+	if valid.PairURL != "https://yuki:9443" {
 		t.Fatalf("PairURL dérivée = %q", valid.PairURL)
+	}
+
+	// Une adresse sans `/ws` est tolérée : `ApplyDefaults` la complète.
+	tolerated := &Config{YukiURL: "wss://10.10.0.5:19443"}
+	tolerated.ApplyDefaults()
+	if tolerated.YukiURL != "wss://10.10.0.5:19443/ws" {
+		t.Fatalf("YukiURL complétée = %q", tolerated.YukiURL)
+	}
+	if err := tolerated.Validate(); err != nil {
+		t.Fatalf("adresse sans /ws refusée : %v", err)
 	}
 
 	invalid := []*Config{
@@ -79,7 +112,7 @@ func TestValidate(t *testing.T) {
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.json")
-	cfg := &Config{YukiURL: "wss://yuki:8765/ws", AgentID: "agent-42", Shell: "bash"}
+	cfg := &Config{YukiURL: "wss://yuki:9443/ws", AgentID: "agent-42", Shell: "bash"}
 	cfg.ApplyDefaults()
 	if err := cfg.Save(path); err != nil {
 		t.Fatalf("Save : %v", err)

@@ -1,6 +1,12 @@
 /**
  * Panneau « Agents » de la page `/config` (Lot 4, B5 — décision D125).
  *
+ * Appaire un nouvel agent (D119) : l'agent affiche un code sur la console de la
+ * MACHINE ; l'utilisateur le recopie dans le champ ci-dessous et clique sur
+ * « Appairer » (`POST /api/agents/pair`). La validation/normalisation du code
+ * est faite CÔTÉ SERVEUR (`PairingManager.submitCode` → `normalizeCode`) : l'UI
+ * envoie la saisie telle quelle et affiche le message exact renvoyé.
+ *
  * Par agent appairé : état (en ligne / hors ligne / révoqué), dernière
  * connexion, petit historique (heure + commande + code de sortie — ⚠️ JAMAIS
  * la sortie complète, D127), niveau de garde-fou (4 choix, D118), privilège
@@ -15,6 +21,9 @@
 
 const JSON_HEADERS = { accept: "application/json" };
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-agents": "1" };
+
+/** Délai après un appairage réussi avant de rafraîchir la liste (l'agent apparaît en ~1 s). */
+const PAIR_REFRESH_MS = 1500;
 
 /** Niveaux de garde-fou PAR AGENT (D118) — libellés français. */
 const LEVELS = [
@@ -33,8 +42,8 @@ const PRIVILEGES = [
 /** Aide à l'appairage (là où trouver le code, quoi faire). */
 const PAIRING_HELP = [
   "Installez l'agent d'exécution sur la machine cible et indiquez-lui l'adresse de Yuki.",
-  "L'agent affiche un CODE dans sa console (preuve de possession).",
-  "Recopiez ce code ci-dessous, puis cliquez sur « Appairer ».",
+  "Lancez-y « yuki-agent pair » : l'agent GÉNÈRE un code et l'AFFICHE dans sa console (preuve de possession).",
+  "Recopiez ce code dans le champ ci-dessous, puis cliquez sur « Appairer ».",
 ];
 
 function h(tag, props = {}, children = []) {
@@ -72,7 +81,7 @@ function apiMessage(error, fallback) {
 }
 
 export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
-  const state = { agents: [], approvals: [], history: new Map(), error: "" };
+  const state = { agents: [], approvals: [], history: new Map(), error: "", pairStatus: "" };
 
   async function load() {
     state.error = "";
@@ -309,13 +318,100 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
     return card;
   }
 
-  function renderPairingHelp() {
+  /** Section d'appairage : mode d'emploi + champ de saisie du code (D119). */
+  function renderPairingSection() {
     const section = h("section", { class: "agent-help" });
     section.append(h("h3", { class: "agent-card__title", text: "Comment appairer un agent ?" }));
     const steps = h("ol", { class: "agent-help__steps" });
     for (const step of PAIRING_HELP) steps.append(h("li", { text: step }));
     section.append(steps);
+
+    // Formulaire d'appairage (D119) : le code vient de la console de l'agent.
+    const inputId = "agent-pair-code";
+    const statusId = "agent-pair-status";
+    const input = h("input", {
+      id: inputId,
+      class: "agent-pair__input",
+      type: "text",
+      autocomplete: "off",
+      autocapitalize: "characters",
+      spellcheck: "false",
+      maxlength: "32",
+      placeholder: "XXXX-XXXX-XXXX",
+      "aria-describedby": statusId,
+    });
+    const button = h("button", { class: "button", type: "button", text: "Appairer" });
+    const status = h("span", { id: statusId, class: "config-save-status", role: "status" });
+    // Le message d'appairage survit aux re-rendus (chaque `load()` reconstruit
+    // le formulaire : sans cet état, « Code accepté » disparaîtrait aussitôt).
+    status.textContent = state.pairStatus;
+
+    const submit = () => void submitPair(input, button, status);
+    button.addEventListener("click", submit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      }
+    });
+
+    const field = h("div", { class: "agent-pair" }, [
+      h("label", { class: "agent-field__label", for: inputId, text: "Code affiché par l'agent" }),
+      h("div", { class: "agent-pair__row" }, [input, button]),
+      status,
+    ]);
+    section.append(field);
     return section;
+  }
+
+  /**
+   * Soumet le code d'appairage. La normalisation/validation est faite par le
+   * SERVEUR (`normalizeCode`, TS) : on envoie la saisie brute (casse, tirets et
+   * espaces tolérés côté serveur) et on affiche le message EXACT renvoyé (jamais
+   * une cause inventée).
+   */
+  async function submitPair(input, button, status) {
+    const setStatus = (text) => {
+      state.pairStatus = text;
+      status.textContent = text;
+    };
+    const value = input.value.trim();
+    if (value === "") {
+      setStatus("Saisissez le code affiché dans la console de l'agent.");
+      input.focus();
+      return;
+    }
+    button.disabled = true;
+    setStatus("Appairage en cours…");
+    try {
+      const result = await HolafFetch.post("/api/agents/pair", {
+        headers: WRITE_HEADERS,
+        body: { code: value },
+      });
+      if (result?.matched) {
+        setStatus(
+          `Code accepté (${result.code}). L'agent s'appaire : il apparaîtra ci-dessous ` +
+            "d'ici quelques secondes.",
+        );
+        input.value = "";
+        // `load()` reconstruit le panneau : le message est relu depuis l'état.
+        await load();
+        // L'agent finalise en ~1 s : un second rafraîchissement le fait apparaître.
+        setTimeout(() => void load(), PAIR_REFRESH_MS);
+      } else {
+        setStatus(
+          `Code enregistré (${result?.code ?? ""}), mais aucun agent n'attend avec ce code. ` +
+            "Vérifiez que « yuki-agent pair » tourne toujours sur la machine et que le " +
+            "code saisi est exactement celui affiché sur sa console.",
+        );
+      }
+    } catch (error) {
+      // Code invalide/expiré/déjà utilisé ou trop de tentatives : on montre le
+      // message du serveur tel quel (véridique).
+      setStatus(apiMessage(error, "Appairage impossible."));
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function render() {
@@ -342,11 +438,14 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
     const approvals = renderApprovals();
     if (approvals) wrap.append(approvals);
 
+    // Le formulaire d'appairage est TOUJOURS proposé (même quand des agents sont
+    // déjà appairés : on peut en ajouter d'autres).
+    wrap.append(renderPairingSection());
+
     if (state.agents.length === 0) {
       wrap.append(
         h("p", { class: "config-helper", text: "Aucun agent appairé pour le moment." }),
       );
-      wrap.append(renderPairingHelp());
       root.append(wrap);
       return;
     }

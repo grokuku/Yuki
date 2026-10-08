@@ -196,7 +196,15 @@ function handlePair(input: AgentsRequestInput): AgentsHttpResponse {
   }
   try {
     const result = input.deps.pairing.submitCode(code, { ip: input.ip });
-    return json(200, { ok: true, code: result.code, expiresAt: result.expiresAt });
+    // `matched` : une trame d'agent EN ATTENTE a-t-elle été appariée à ce code ?
+    // L'interface s'en sert pour dire la vérité (« aucun agent en attente »
+    // plutôt qu'un succès trompeur).
+    return json(200, {
+      ok: true,
+      code: result.code,
+      expiresAt: result.expiresAt,
+      matched: result.matched,
+    });
   } catch (error) {
     if (error instanceof AgentError) {
       return json(400, { error: error.code, code: error.code, message: error.message });

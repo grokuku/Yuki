@@ -7,13 +7,18 @@
  *      preuve HMAC et la MÊME clé HKDF pour des entrées fixées ;
  *   2. `pair` : un VRAI client Go s'appaire contre le serveur TS, déchiffre le
  *      `pair_ok`, puis ouvre une connexion mTLS authentifiée avec le certificat
- *      client signé par l'autorité interne TS.
+ *      client signé par l'autorité interne TS ;
+ *   3. `pairflow` : le VRAI flux D119 — l'agent GÉNÈRE le code et l'écrit dans un
+ *      fichier ; le harnais (jouant l'utilisateur) le recopie via `submitCode` ;
+ *      l'agent récupère son `pair_ok` et se connecte en mTLS.
  *
  * ⚠️ Ces tests nécessitent Go dans l'environnement. Absent ⇒ ils sont SAUTÉS
  * (`describe.skipIf`) — l'aveu est explicite plutôt que masqué.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
@@ -56,6 +61,59 @@ async function runGo(args: string[], timeoutMs: number): Promise<Record<string, 
   });
   const last = stdout.trim().split("\n").pop() as string;
   return JSON.parse(last) as Record<string, unknown>;
+}
+
+/**
+ * Lance `paircheck pairflow` en ARRIÈRE-PLAN : il génère un code, l'écrit dans
+ * `codeFile`, envoie `pair_begin` puis scrute — sans que l'appelant connaisse le
+ * code (c'est justement le sens de D119).
+ */
+function startGoPairFlow(args: string[]): {
+  done: Promise<Record<string, unknown>>;
+  kill(): void;
+} {
+  const proc = spawn("go", ["run", "./cmd/paircheck", "pairflow", ...args], {
+    cwd: AGENT_DIR,
+    env: { ...process.env, GOFLAGS: "-mod=mod" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  proc.stdout.on("data", (d: Buffer) => {
+    stdout += d.toString();
+  });
+  proc.stderr.on("data", (d: Buffer) => {
+    stderr += d.toString();
+  });
+  const done = new Promise<Record<string, unknown>>((resolve, reject) => {
+    proc.on("error", reject);
+    proc.on("exit", (code) => {
+      if (code !== 0) {
+        reject(new Error(`paircheck pairflow a quitté (${code}) : ${stderr}`));
+        return;
+      }
+      const last = stdout.trim().split("\n").pop() ?? "";
+      try {
+        resolve(JSON.parse(last) as Record<string, unknown>);
+      } catch {
+        reject(new Error(`sortie paircheck illisible : ${stdout} / ${stderr}`));
+      }
+    });
+  });
+  return { done, kill: () => proc.kill("SIGKILL") };
+}
+
+/** Attend l'apparition d'un fichier non vide (le code généré par l'agent). */
+async function waitForFile(path: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (existsSync(path)) {
+      const value = readFileSync(path, "utf8").trim();
+      if (value !== "") return value;
+    }
+    if (Date.now() > deadline) throw new Error(`fichier non écrit à temps : ${path}`);
+    await new Promise((r) => setTimeout(r, 200));
+  }
 }
 
 const stacks: TestStack[] = [];
@@ -103,6 +161,34 @@ describe.skipIf(!GO)("interopérabilité Go ↔ TS", () => {
     // Le vérificateur x509 STRICT de Go a validé le certificat client TS.
     expect(go["client_cert_verified"]).toBe(true);
     // L'agent a bien été enregistré dans le store Yuki par l'appairage.
+    expect(s.store.has(go["agent_id"] as string)).toBe(true);
+  }, 120_000);
+
+  it("appairage D119 : l'agent GÉNÈRE le code, Yuki le valide (ordre réel)", async () => {
+    const s = await startTestStack();
+    stacks.push(s);
+    const codeFile = join(s.dir, "pending-code.txt");
+
+    // L'agent démarre SANS code : il en génère un, l'écrit puis attend.
+    const flow = startGoPairFlow([s.url, codeFile]);
+    let go: Record<string, unknown>;
+    try {
+      const code = await waitForFile(codeFile, 90_000);
+      // Le code est conforme (XXXX-XXXX-XXXX, alphabet Crockford 30 symboles).
+      expect(code).toMatch(/^[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}$/);
+      // L'utilisateur le recopie dans Yuki : la trame en attente est appariée.
+      const submitted = s.pairing.submitCode(code, { ip: "127.0.0.1" });
+      expect(submitted.matched).toBe(true);
+      go = await flow.done;
+    } finally {
+      flow.kill();
+    }
+
+    expect(go["ok"]).toBe(true);
+    expect(go["client_cert_verified"]).toBe(true);
+    expect(go["whoami_agent_matches"]).toBe(true);
+    expect(go["ca_fingerprint"]).toBe(s.ca.fingerprint);
+    // L'agent apparaît dans le store après l'appairage.
     expect(s.store.has(go["agent_id"] as string)).toBe(true);
   }, 120_000);
 });

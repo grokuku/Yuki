@@ -30,6 +30,7 @@ import {
 } from "../../src/gateway/routes/agents.js";
 import { createLogger } from "../../src/observability/logger.js";
 import type { GpuReport } from "../../src/types/gpu.js";
+import { agentBegin } from "./stack.js";
 
 const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
 const dirs: string[] = [];
@@ -139,6 +140,23 @@ describe("API des agents — appairage", () => {
     const res = handleAgentsRequest({ method: "POST", path: "/api/agents/pair", headers: writeHeaders, body: '{"code":"nope"}', ip: "1.1.1.1", deps: f.deps });
     expect(res.status).toBe(400);
     expect((res.body as { code: string }).code).toBe("pair_code_invalid");
+  });
+
+  it("signale matched=false quand aucun agent n'attend", () => {
+    const f = fixture();
+    const res = handleAgentsRequest({ method: "POST", path: "/api/agents/pair", headers: writeHeaders, body: '{"code":"ABCD-2345-6789"}', ip: "1.1.1.1", deps: f.deps });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, matched: false });
+  });
+
+  it("signale matched=true quand une trame d'agent attend ce code", () => {
+    const f = fixture();
+    const begin = agentBegin("ABCD-2345-6789");
+    const begun = f.pairing.beginPairing(begin.frame, { ip: "1.1.1.1" });
+    expect(begun.status).toBe("pending");
+    const res = handleAgentsRequest({ method: "POST", path: "/api/agents/pair", headers: writeHeaders, body: '{"code":"abcd 2345 6789"}', ip: "1.1.1.1", deps: f.deps });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, matched: true });
   });
 });
 

@@ -226,6 +226,12 @@ export interface PairingManagerOptions {
 export interface SubmitCodeResult {
   code: string;
   expiresAt: string;
+  /**
+   * `true` si une trame d'agent EN ATTENTE a été appariée à ce code : son
+   * `pair_ok` est prêt et l'agent le récupérera à sa prochaine scrutation.
+   * `false` ⇒ aucun agent n'attendait avec ce code (l'interface le dit).
+   */
+  matched: boolean;
 }
 
 export type BeginPairingResult =
@@ -321,8 +327,8 @@ export class PairingManager {
     }
 
     const session = this.sessions.get(display) as PairingSession;
-    this.resolvePending(session);
-    return { code: display, expiresAt: session.expiresAtIso };
+    const matched = this.resolvePending(session);
+    return { code: display, expiresAt: session.expiresAtIso, matched };
   }
 
   /**
@@ -414,8 +420,12 @@ export class PairingManager {
     }
   }
 
-  /** Résout, sans comptabiliser d'échec, les trames en attente compatibles. */
-  private resolvePending(session: PairingSession): void {
+  /**
+   * Résout, sans comptabiliser d'échec, les trames en attente compatibles.
+   * Renvoie `true` si une trame a effectivement été appariée (sinon aucun agent
+   * n'attendait avec ce code).
+   */
+  private resolvePending(session: PairingSession): boolean {
     for (const entry of this.pending.values()) {
       if (entry.outcome) continue;
       if (!session.probe(entry.begin)) continue;
@@ -425,7 +435,7 @@ export class PairingManager {
         this.recordSuccess(outcome.agentId, entry.ip);
         this.logger?.info("agents.pair.pending_resolved", { pair_id: entry.pairId });
         // Le code est à usage unique : une seule trame peut être résolue.
-        return;
+        return true;
       } catch (error) {
         this.logger?.warn("agents.pair.pending_resolve_failed", {
           pair_id: entry.pairId,
@@ -433,6 +443,7 @@ export class PairingManager {
         });
       }
     }
+    return false;
   }
 
   /** Génère un certificat client neuf et son identité. */

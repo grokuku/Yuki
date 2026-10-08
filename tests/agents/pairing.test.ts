@@ -215,6 +215,7 @@ describe("PairingManager", () => {
 
     const submitted = m.submitCode(CODE, { ip: "1.2.3.4" });
     expect(submitted.code).toBe(CODE);
+    expect(submitted.matched).toBe(true); // une trame d'agent attendait ce code
     expect(m.activeSessionCount()).toBe(0); // consommée par la résolution
 
     const polled = m.pollPairing(result.pairId);
@@ -243,6 +244,13 @@ describe("PairingManager", () => {
     } catch (error) {
       expect(pairCodeOf(error)).toBe("proof_invalid");
     }
+  });
+
+  it("sans trame en attente, submitCode signale matched=false", () => {
+    const m = manager();
+    const submitted = m.submitCode(CODE, { ip: "1.2.3.4" });
+    expect(submitted.matched).toBe(false);
+    expect(m.activeSessionCount()).toBe(1); // session créée, non consommée
   });
 
   it("scrutation d'un identifiant inconnu ⇒ pair_code_expired", () => {
