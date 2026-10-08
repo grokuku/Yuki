@@ -31,11 +31,20 @@ export type ExecutionToolName = "run_command";
  */
 export type AgentDirectoryToolName = "lister_agents" | "etat_agent";
 
+/**
+ * Outils custom de CONSULTATION de l'archive « vie antérieure » (Lot 13).
+ * `archive_vie_anterieure` est en **LECTURE SEULE** : l'archive est séparée de la
+ * mémoire courante et n'est jamais fusionnée. Activée indépendamment de tout le
+ * reste (consulter n'est pas exécuter ni mémoriser).
+ */
+export type HeritageToolName = "archive_vie_anterieure";
+
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
 export type CustomToolName =
   | DelegateToolName
   | ExecutionToolName
-  | AgentDirectoryToolName;
+  | AgentDirectoryToolName
+  | HeritageToolName;
 
 export interface ToolPolicyEntry {
   readonly role: LlmRole;
@@ -47,6 +56,8 @@ export interface ToolPolicyEntry {
   readonly execution: readonly ExecutionToolName[];
   /** Outils de consultation des agents (Lot 4, lecture seule). */
   readonly directory: readonly AgentDirectoryToolName[];
+  /** Outils de consultation de l'archive « vie antérieure » (Lot 13). */
+  readonly heritage: readonly HeritageToolName[];
   /** Le rôle peut-il déléguer à un worker lourd ? */
   readonly canDelegate: boolean;
 }
@@ -83,6 +94,15 @@ export const AGENT_DIRECTORY_TOOLS: readonly AgentDirectoryToolName[] = [
   "etat_agent",
 ];
 
+/**
+ * Outils de consultation de l'archive « vie antérieure » (Lot 13). Comme les
+ * outils de consultation d'agents, ils ne sont exposés que si le câblage les
+ * active (un port d'archive existe). **LECTURE SEULE.**
+ */
+export const HERITAGE_TOOLS: readonly HeritageToolName[] = [
+  "archive_vie_anterieure",
+];
+
 export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
   light: {
     role: "light",
@@ -90,6 +110,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     custom: DELEGATE_TOOLS,
     execution: EXECUTION_TOOLS,
     directory: AGENT_DIRECTORY_TOOLS,
+    heritage: HERITAGE_TOOLS,
     canDelegate: true,
   },
   heavy: {
@@ -98,6 +119,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     custom: [],
     execution: [],
     directory: [],
+    heritage: [],
     canDelegate: false,
   },
 };
@@ -121,6 +143,12 @@ export interface ToolAllowlistOptions {
    * les deux peuvent être activés séparément (consulter n'est pas exécuter).
    */
   directoryEnabled?: boolean;
+  /**
+   * Active l'outil de consultation de l'archive « vie antérieure »
+   * `archive_vie_anterieure` (Lot 13). DÉSACTIVÉ par défaut : seul le câblage
+   * l'active, quand un port d'archive existe.
+   */
+  heritageEnabled?: boolean;
 }
 
 /**
@@ -136,6 +164,7 @@ export function toolAllowlist(
     options.delegationEnabled ?? entry.canDelegate;
   const executionEnabled = (options.executionEnabled ?? false) && entry.execution.length > 0;
   const directoryEnabled = (options.directoryEnabled ?? false) && entry.directory.length > 0;
+  const heritageEnabled = (options.heritageEnabled ?? false) && entry.heritage.length > 0;
   const tools: string[] = [...entry.builtins];
   if (entry.canDelegate && delegationEnabled) {
     tools.push(...entry.custom);
@@ -145,6 +174,9 @@ export function toolAllowlist(
   }
   if (directoryEnabled) {
     tools.push(...entry.directory);
+  }
+  if (heritageEnabled) {
+    tools.push(...entry.heritage);
   }
   return tools;
 }

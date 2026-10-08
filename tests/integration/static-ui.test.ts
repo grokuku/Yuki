@@ -125,24 +125,32 @@ describe("UI statique servie par le gateway", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
-  it("organise /config en 6 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
+  it("organise /config en 7 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
 
     // Barre d'onglets accessible.
     expect(body).toContain('role="tablist"');
     expect(body).toMatch(/role="tablist"[^>]*aria-label="/);
 
-    // Les 6 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
+    // Les 7 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
     const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
-    expect(tabLabels).toEqual(["Modèles", "Conversation", "Voix", "Agents", "Système", "Maintenance"]);
+    expect(tabLabels).toEqual([
+      "Modèles",
+      "Conversation",
+      "Personnalité",
+      "Voix",
+      "Agents",
+      "Système",
+      "Maintenance",
+    ]);
 
     // Appariement : chaque role="tab" (id + aria-controls + aria-selected +
     // tabindex) référence un role="tabpanel" qui le référence en retour
     // (aria-labelledby).
     const tabTags = [...body.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
     const panelTags = [...body.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((m) => m[0]);
-    expect(tabTags.length).toBe(6);
-    expect(panelTags.length).toBe(6);
+    expect(tabTags.length).toBe(7);
+    expect(panelTags.length).toBe(7);
     for (const tag of tabTags) {
       const id = tag.match(/id="([^"]+)"/)?.[1];
       const controls = tag.match(/aria-controls="([^"]+)"/)?.[1];
@@ -159,7 +167,7 @@ describe("UI statique servie par le gateway", () => {
     // Rendu EAGER : les conteneurs de groupes des onglets existent dans le
     // markup (les lignes sont construites côté JS au chargement). Le panneau
     // Agents monte son composant dans `agents-root`.
-    for (const id of ["group-modeles", "group-conversation", "group-voix", "group-systeme", "agents-root"]) {
+    for (const id of ["group-modeles", "group-conversation", "group-voix", "group-systeme", "agents-root", "personality-root"]) {
       expect(body).toContain(`id="${id}"`);
     }
 

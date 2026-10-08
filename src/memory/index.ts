@@ -41,8 +41,41 @@ export { MemoryIndex, type MemoryIndexOptions } from "./index-db.js";
 export {
   buildConsolidationPrompt,
   buildTurnExtractionPrompt,
+  HERITAGE_EXTRACTION_INSTRUCTION,
   parseMemoryOps,
 } from "./extract.js";
+
+export {
+  HERITAGE_DATA_REMINDER,
+  HERITAGE_DEFAULT_PERIODE,
+  HERITAGE_DEFAULT_PROVENANCE,
+  HERITAGE_DIR_NAME,
+  HERITAGE_ENTRIES_DIR,
+  HERITAGE_LABEL,
+  HERITAGE_MANIFEST_FILE,
+  HERITAGE_README_FILE,
+  HERITAGE_TAG,
+  HERITAGE_TEXT_MAX_CHARS,
+  buildHeritageReadme,
+  defaultManifest,
+  escapeHeritageText,
+  frameHeritageEntry,
+  frameHeritageInfo,
+  looksLikeHeritage,
+  parseHeritageEntry,
+  parseHeritageManifest,
+  type HeritageDefaults,
+  type HeritageEntry,
+  type HeritageInfo,
+  type HeritageManifest,
+  type HeritagePort,
+  type HeritageProvenance,
+} from "./heritage.js";
+
+export {
+  HeritageStore,
+  type HeritageStoreOptions,
+} from "./heritage-store.js";
 
 export {
   MEMORY_BLOCK_HEADER,

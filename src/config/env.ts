@@ -55,11 +55,23 @@ export interface Env {
   memoryStorePath: string;
   /** Fichier SQLite de l'index FTS5 (DÉRIVÉ, reconstructible). */
   memoryIndexPath: string;
+  /**
+   * Dossier de l'archive « vie antérieure » (volume `state`, Lot 13) : séparé du
+   * store de mémoire, jamais fusionné. Surcharge : `YUKI_HERITAGE_DIR`.
+   */
+  heritageDir: string;
   // --- Agents d'exécution (Lot 4) ---
   /** Fichier JSONL du store des agents (journal append-only, volume `state`). */
   agentsStorePath: string;
   /** Fichier JSONL du journal d'audit des exécutions (volume `state`). */
   auditLogPath: string;
+  // --- Personnalité de Yuki ---
+  /**
+   * Fichier Markdown de la personnalité (volume `state`), SÉPARÉ du prompt
+   * système de sûreté. Historique et journal sont dérivés de son dossier.
+   * Surcharge : `YUKI_PERSONALITY_PATH`.
+   */
+  personalityPath: string;
   // --- Configuration du moteur TTS `audio.cpp` (Lot 9) ---
   /**
    * Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw`).
@@ -229,6 +241,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       "YUKI_MEMORY_INDEX_PATH",
       `${mountPoints.state}/memory-index.sqlite`,
     ),
+    heritageDir: getString(
+      env,
+      "YUKI_HERITAGE_DIR",
+      `${mountPoints.state}/memory-heritage`,
+    ),
     agentsStorePath: getString(
       env,
       "YUKI_AGENTS_STORE_PATH",
@@ -238,6 +255,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_AUDIT_LOG_PATH",
       `${mountPoints.state}/audit.jsonl`,
+    ),
+    personalityPath: getString(
+      env,
+      "YUKI_PERSONALITY_PATH",
+      `${mountPoints.state}/personality.md`,
     ),
     piAgentDir,
     piSessionsDir: getString(

@@ -91,6 +91,17 @@
             class="config-tab"
             type="button"
             role="tab"
+            id="tab-personnalite"
+            aria-selected="false"
+            aria-controls="panel-personnalite"
+            tabindex="-1"
+          >
+            Personnalité<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
             id="tab-voix"
             aria-selected="false"
             aria-controls="panel-voix"
@@ -152,6 +163,21 @@
             hidden
           >
             <div id="group-conversation" class="config-groups"></div>
+          </section>
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-personnalite"
+            aria-labelledby="tab-personnalite"
+            tabindex="0"
+            hidden
+          >
+            <!--
+              Onglet « Personnalité » : texte Markdown éditable, versionné.
+              Composant autonome monté par id (`personality-panel.js`), aucun
+              style inline (CSP `style-src 'self'`).
+            -->
+            <div id="personality-root"></div>
           </section>
           <section
             class="config-panel"

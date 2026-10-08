@@ -750,3 +750,90 @@
   letter-spacing: normal;
   color: var(--muted);
 }
+
+/* --- Panneau « Personnalité » (fichier Markdown éditable, versionné) --------
+   Aucun style inline (CSP `style-src 'self'`). La taille est affichée et la
+   couleur d'alerte est portée par des classes dédiées. */
+.personality-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.personality-help {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.personality-editor {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.5;
+}
+
+.personality-counter {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.personality-counter--warn {
+  color: var(--warn, #d08a00);
+  font-weight: 600;
+}
+
+.personality-counter--over {
+  color: var(--danger, #d33);
+  font-weight: 600;
+}
+
+.personality-history {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--panel-2);
+}
+
+.personality-history__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.personality-history__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.personality-history__date {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.personality-history__chars {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.personality-history__preview {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 80px;
+  overflow: auto;
+}

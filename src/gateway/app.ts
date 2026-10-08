@@ -25,6 +25,11 @@ import {
   type AgentsApiDeps,
 } from "./routes/agents.js";
 import {
+  handlePersonalityRequest,
+  isPersonalityPath,
+  type PersonalityApiDeps,
+} from "./routes/personality.js";
+import {
   handleAdminRequest,
   isAdminPath,
   type AdminApiDeps,
@@ -69,6 +74,8 @@ export interface AppContext {
   tts?: TtsApiDeps;
   /** API des agents d'exécution (Lot 4). Absente ⇒ `/api/agents*` → 404. */
   agents?: AgentsApiDeps;
+  /** API de la personnalité. Absente ⇒ `/api/self/personality*` → 404. */
+  personality?: PersonalityApiDeps;
 }
 
 interface RouteResponse {
@@ -311,6 +318,33 @@ async function handleAgentsHttp(
   );
 }
 
+/** Traite une requête de l'API de personnalité (corps JSON borné). */
+async function handlePersonalityHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: PersonalityApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "PUT" || method === "POST") {
+    body = await readBody(req).catch(() => "");
+  }
+  const response = handlePersonalityRequest({
+    method,
+    path,
+    headers: req.headers,
+    body,
+    deps,
+  });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Construit l'écouteur HTTP de l'application. */
 export function createApp(context: AppContext): RequestListener {
   const {
@@ -326,6 +360,7 @@ export function createApp(context: AppContext): RequestListener {
     voices,
     tts,
     agents,
+    personality,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -358,6 +393,27 @@ export function createApp(context: AppContext): RequestListener {
       void handleAgentsHttp(req, res, path, method, headOnly, agents).catch(
         (error: unknown) => {
           agents.logger.error("agents.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (personality && isPersonalityPath(path)) {
+      void handlePersonalityHttp(req, res, path, method, headOnly, personality).catch(
+        (error: unknown) => {
+          personality.logger.error("personality.request.failed", {
             error: error instanceof Error ? error.message : String(error),
             path,
           });

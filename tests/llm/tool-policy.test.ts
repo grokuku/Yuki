@@ -8,6 +8,7 @@ import {
   LIGHT_MODEL,
   PROVIDERS,
   AGENT_DIRECTORY_TOOLS,
+  HERITAGE_TOOLS,
   buildModelsConfigFrom,
   DEFAULT_EFFECTIVE_LLM_CONFIG,
   containsForbiddenTool,
@@ -156,5 +157,18 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     const heavyDir = toolAllowlist("heavy", { directoryEnabled: true });
     expect(heavyDir).not.toContain("lister_agents");
     expect(heavyDir).not.toContain("etat_agent");
+  });
+
+  it("l'outil de consultation de l'archive « vie antérieure » (Lot 13) est en LECTURE SEULE", () => {
+    expect(HERITAGE_TOOLS).toEqual(["archive_vie_anterieure"]);
+    // Par défaut : non exposé.
+    expect(toolAllowlist("light")).not.toContain("archive_vie_anterieure");
+    const withHeritage = toolAllowlist("light", { heritageEnabled: true });
+    expect(withHeritage).toContain("archive_vie_anterieure");
+    expect(containsForbiddenTool(withHeritage)).toBe(false);
+    // Le lourd n'a JAMAIS d'outil de consultation d'archive.
+    expect(toolAllowlist("heavy", { heritageEnabled: true })).not.toContain(
+      "archive_vie_anterieure",
+    );
   });
 });

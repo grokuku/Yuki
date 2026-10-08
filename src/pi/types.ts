@@ -10,7 +10,9 @@
 import type { AgentDirectoryPort } from "../agents/directory.js";
 import type { ExecutionServicePort } from "../agents/execution.js";
 import type { DelegateServicePort } from "../delegation/ports.js";
+import type { HeritagePort } from "../memory/heritage.js";
 import type { MemoryPort } from "../memory/types.js";
+import type { PersonalityPort } from "../personality/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
 /** Niveaux de raisonnement acceptés par le SDK (repris tels quels). */
@@ -92,10 +94,24 @@ export interface PiHostOptions {
    */
   directory?: AgentDirectoryPort;
   /**
+   * Lot 13 : archive « vie antérieure ». Présent ⇒ la façade expose l'outil de
+   * consultation `archive_vie_anterieure` (LECTURE SEULE) et enregistre
+   * l'extension qui signale son EXISTENCE (une ligne, jamais son contenu).
+   * Absent ⇒ ni outil ni signal (host nu, tests).
+   */
+  heritage?: HeritagePort;
+  /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).
    */
   llmAvailable?: boolean | (() => boolean);
+  /**
+   * Personnalité de Yuki (base du prompt de chaque tour). Présent ⇒ une
+   * extension SDK est enregistrée EN PREMIER sur la session légère : le bloc de
+   * personnalité est concaténé au prompt AVANT la mémoire, l'annuaire des agents
+   * et le signal d'archive. Absent ⇒ aucune personnalité (host nu, tests).
+   */
+  personality?: PersonalityPort;
   /**
    * Lot 12 : mémoire durable. Présent ⇒ une extension SDK est enregistrée sur la
    * session légère (rappel borné avant tour, écriture automatique en fin de tour

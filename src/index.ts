@@ -84,10 +84,12 @@ import {
 } from "./llm/index.js";
 import { collectSecretValues, createLogger } from "./observability/logger.js";
 import {
+  HeritageStore,
   MemoryIndex,
   MemoryService,
   MemoryStore,
 } from "./memory/index.js";
+import { PersonalityStore } from "./personality/index.js";
 import { createPiHost, createSdkHeavyWorker, createSdkMemoryExtractor, type PiHost } from "./pi/index.js";
 import {
   AudioCppClient,
@@ -555,6 +557,21 @@ async function main(): Promise<void> {
     voices: voiceStore.list().length,
   });
 
+  // --- Personnalité de Yuki (base du prompt, éditable/versionnée) -----------
+  // Fichier SÉPARÉ du prompt système de sûreté, sur le volume `state`. Le store
+  // est créé AVANT la porte GPU : l'API `GET/PUT /api/self/personality` reste
+  // disponible en mode dégradé, comme la configuration.
+  const personalityStore = new PersonalityStore({
+    path: env.personalityPath,
+    logger,
+  });
+  logger.info("personality.ready", {
+    path: personalityStore.filePath,
+    history: personalityStore.historyPath,
+    journal: personalityStore.journalFilePath,
+    chars: personalityStore.read().chars,
+  });
+
   // --- Jobs, délégation, PiHost (uniquement si la porte est passée) ---------
   let piStatus: "starting" | "ready" | "error" = "starting";
   let sessionsCount = 0;
@@ -629,6 +646,16 @@ async function main(): Promise<void> {
       index: env.memoryIndexPath,
     });
 
+    // Lot 13 : archive « vie antérieure » — dossier SÉPARÉ du store de mémoire,
+    // jamais fusionné. On met en place la structure (notice + manifeste) si elle
+    // manque, puis on la rend consultable à la demande (outil + signal).
+    const heritageStore = new HeritageStore({ dir: env.heritageDir, logger });
+    heritageStore.ensureLayout();
+    logger.info("memory.heritage.ready", {
+      dir: heritageStore.dirPath,
+      entries: heritageStore.info().entries,
+    });
+
     host = createPiHost({
       agentDir: env.piAgentDir,
       cwd: env.piCwd,
@@ -648,10 +675,14 @@ async function main(): Promise<void> {
         // ⚠️ Indépendant de `executionEnabled` : consulter les agents n'est pas
         // exécuter. Actif dès que le registre d'agents existe.
         directoryEnabled: agentDirectory !== undefined,
+        // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
+        heritageEnabled: true,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentExecution ? { execution: agentExecution } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
+      heritage: heritageStore,
+      personality: personalityStore,
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,
@@ -764,6 +795,7 @@ async function main(): Promise<void> {
       volumes,
       getSubsystems,
       config: { runtime: config, logger },
+      personality: { store: personalityStore, logger },
       voices: voicesDeps,
       tts: ttsDeps,
       ...(agentsDeps ? { agents: agentsDeps } : {}),

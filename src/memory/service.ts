@@ -14,6 +14,7 @@
  */
 
 import { buildConsolidationPrompt, buildTurnExtractionPrompt, parseMemoryOps } from "./extract.js";
+import { looksLikeHeritage } from "./heritage.js";
 import type { MemoryIndex } from "./index-db.js";
 import type { MemoryStore } from "./store.js";
 import type {
@@ -215,6 +216,13 @@ export class MemoryService implements MemoryPort {
     ) {
       return;
     }
+    // Lot 13 — garde STRUCTURELLE-LOCALE : un échange qui se présente comme une
+    // archive « vie antérieure » (marqueur explicite) n'est JAMAIS extrait. Un
+    // faux positif est sans danger (au pire, une extraction manquée).
+    if (looksLikeHeritage(input.userText) || looksLikeHeritage(input.assistantText)) {
+      this.logger.info("memory.extract.skipped_heritage", { source: input.source });
+      return;
+    }
     void this.enqueue(() => this.extractTurn(input));
   }
 
@@ -250,8 +258,10 @@ export class MemoryService implements MemoryPort {
   /** Consolidation avant compaction — capture immédiate, travail asynchrone. */
   onBeforeCompact(input: BeforeCompactInput): void {
     if (!this.enabled() || !this.extractor) return;
+    // Lot 13 — un message qui se présente comme une archive « vie antérieure »
+    // est ÉCARTÉ de la consolidation : il ne doit jamais entrer dans la mémoire.
     const messages = input.messages.filter(
-      (message) => message.text.trim().length > 0,
+      (message) => message.text.trim().length > 0 && !looksLikeHeritage(message.text),
     );
     if (messages.length === 0) return;
     const previousSummary = input.previousSummary;

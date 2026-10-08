@@ -45,6 +45,7 @@ export {
   DELEGATE_TOOLS,
   EXECUTION_TOOLS,
   FORBIDDEN_TOOLS,
+  HERITAGE_TOOLS,
   READ_ONLY_TOOLS,
   toolAllowlist,
   TOOL_POLICY,
@@ -55,6 +56,7 @@ export type {
   CustomToolName,
   DelegateToolName,
   ExecutionToolName,
+  HeritageToolName,
   ToolAllowlistOptions,
   ToolPolicyEntry,
 } from "./tool-policy.js";

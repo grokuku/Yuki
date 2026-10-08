@@ -45,8 +45,23 @@ export {
   createAgentRosterExtensionFactory,
   type AgentRosterExtensionOptions,
 } from "./agent-roster-extension.js";
+
+// Personnalité de Yuki — base du prompt injectée à chaque tour (enregistrée EN PREMIER).
+export {
+  PERSONALITY_EXTENSION_NAME,
+  createPersonalityExtensionFactory,
+  type PersonalityExtensionOptions,
+} from "./personality-extension.js";
 export {
   MEMORY_EXTRACTOR_SYSTEM_PROMPT,
   createSdkMemoryExtractor,
   type SdkMemoryExtractorConfig,
 } from "./memory-extractor.js";
+
+// Lot 13 — archive « vie antérieure » : outil de consultation + signal d'existence.
+export { createHeritageTools } from "./heritage-tools.js";
+export {
+  HERITAGE_NOTICE,
+  createHeritageExtensionFactory,
+  type HeritageExtensionOptions,
+} from "./heritage-extension.js";

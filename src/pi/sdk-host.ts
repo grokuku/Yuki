@@ -63,6 +63,9 @@ import {
 import { createLightRuntime } from "./sdk/session-factory.js";
 import { createAgentRosterExtensionFactory } from "./sdk/agent-roster-extension.js";
 import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
+import { createPersonalityExtensionFactory } from "./sdk/personality-extension.js";
+import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
+import { createHeritageTools } from "./sdk/heritage-tools.js";
 import type {
   PiEvent,
   PiEventListener,
@@ -159,6 +162,56 @@ function makeRunItem(
       logger,
     }),
   };
+}
+
+/**
+ * Construit la liste ORDONNÉE des extensions INLINE injectées à chaque tour.
+ *
+ * L'ORDRE est le contrat : **personnalité (base) → mémoire → annuaire des
+ * agents → heritage**. Le SDK chaîne les extensions qui renvoient
+ * `systemPrompt` ; chacune CONCATÈNE au prompt courant, donc un ordre inversé
+ * ferait passer un bloc APRÈS un autre sans l'écraser (mais changerait le sens
+ * donné au modèle). Cette fonction est extraite pour être VERROUILLÉE par un
+ * test d'ordre (voir `tests/pi/personality-extension.test.ts`).
+ */
+export function buildInlineExtensions(
+  options: Pick<
+    PiHostOptions,
+    "personality" | "memory" | "directory" | "heritage" | "logger"
+  >,
+): InlineExtension[] {
+  const extensionFactories: InlineExtension[] = [];
+  if (options.personality) {
+    extensionFactories.push(
+      createPersonalityExtensionFactory(options.personality, {
+        logger: options.logger,
+      }),
+    );
+  }
+  if (options.memory) {
+    extensionFactories.push(
+      createMemoryExtensionFactory(options.memory, {
+        syntheticUserPrefixes: SYNTHETIC_USER_PREFIXES,
+      }),
+    );
+  }
+  if (options.directory) {
+    // La liste des machines pilotables est visible dès le départ ; l'état
+    // (connecté/hors ligne), trop changeant, reste dans les outils.
+    extensionFactories.push(
+      createAgentRosterExtensionFactory(options.directory, {
+        logger: options.logger,
+      }),
+    );
+  }
+  if (options.heritage) {
+    // Signale l'EXISTENCE de l'archive (une ligne, jamais le contenu)
+    // uniquement quand elle contient au moins une entrée.
+    extensionFactories.push(
+      createHeritageExtensionFactory(options.heritage, { logger: options.logger }),
+    );
+  }
+  return extensionFactories;
 }
 
 /**
@@ -564,27 +617,16 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // désactivée : consulter n'est pas exécuter.
       customTools.push(...createAgentDirectoryTools(options.directory));
     }
+    if (options.heritage) {
+      // Lot 13 : outil de CONSULTATION de l'archive « vie antérieure » (LECTURE
+      // SEULE). L'archive n'est jamais injectée ; on la consulte à la demande.
+      customTools.push(...createHeritageTools(options.heritage));
+    }
 
-    // Extensions INLINE : mémoire durable (rappel + écriture) et annuaire
-    // minimal des agents (Lot 4, extension — injecté à CHAQUE tour dans le
-    // prompt système, jamais persisté).
-    const extensionFactories: InlineExtension[] = [];
-    if (options.memory) {
-      extensionFactories.push(
-        createMemoryExtensionFactory(options.memory, {
-          syntheticUserPrefixes: SYNTHETIC_USER_PREFIXES,
-        }),
-      );
-    }
-    if (options.directory) {
-      // La liste des machines pilotables est visible dès le départ ; l'état
-      // (connecté/hors ligne), trop changeant, reste dans les outils.
-      extensionFactories.push(
-        createAgentRosterExtensionFactory(options.directory, {
-          logger: options.logger,
-        }),
-      );
-    }
+    // Extensions INLINE, dans l'ORDRE D'APPLICATION voulu du prompt du tour :
+    // PERSONNALITÉ (base) → MÉMOIRE → ANNUAIRE des agents → HERITAGE (voir
+    // `buildInlineExtensions`, verrouillé par un test d'ordre).
+    const extensionFactories = buildInlineExtensions(options);
 
     runtime = await createLightRuntime({
       cwd: paths.cwd,
