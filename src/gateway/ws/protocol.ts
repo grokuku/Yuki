@@ -21,7 +21,23 @@ export type ClientMessage =
   | { type: "message"; clientMsgId: string; text: string }
   | { type: "abort"; runId?: string }
   | { type: "playback"; runId: string; event: "started" | "aborted" }
+  | { type: "switch"; sessionId: string }
+  | { type: "new" }
+  | { type: "rename"; sessionId: string; title: string }
+  | { type: "setAside"; sessionId: string }
   | { type: "ping"; t: number };
+
+/** Session exposée au client (liste des conversations de la barre latérale). */
+export interface WireSession {
+  id: string;
+  /** Titre PRÊT À L'EMPLOI (jamais vide : repli géré côté serveur). */
+  title: string;
+  /** Date de dernière activité (ISO), si connue. */
+  updatedAt?: string;
+  messageCount: number;
+  /** Extrait (premiers mots du premier message), si connu. */
+  excerpt?: string;
+}
 
 /** Corps d'une trame serveur → client. */
 export type ServerMessage =
@@ -81,6 +97,12 @@ export type ServerMessage =
       transcript: TranscriptEntry[];
     }
   | { type: "error"; code: string; message: string; runId?: string }
+  | {
+      /** Liste des conversations + conversation active (null = aucune). */
+      type: "sessions";
+      sessions: WireSession[];
+      activeId: string | null;
+    }
   | { type: "pong"; t: number }
   | { type: "bye"; reason: string };
 
@@ -177,6 +199,35 @@ export function parseClientMessage(raw: string): ParseResult {
         return { ok: false, error: "playback_invalid_event" };
       }
       return { ok: true, message: { type: "playback", runId, event } };
+    }
+    case "switch": {
+      const sessionId = optionalString(parsed, "sessionId");
+      if (sessionId === undefined) {
+        return { ok: false, error: "switch_missing_session_id" };
+      }
+      return { ok: true, message: { type: "switch", sessionId } };
+    }
+    case "new": {
+      return { ok: true, message: { type: "new" } };
+    }
+    case "rename": {
+      const sessionId = optionalString(parsed, "sessionId");
+      if (sessionId === undefined) {
+        return { ok: false, error: "rename_missing_session_id" };
+      }
+      // Le titre peut être VIDE (effacer le nom natif → repli automatique).
+      const title = parsed.title;
+      if (typeof title !== "string") {
+        return { ok: false, error: "rename_invalid_title" };
+      }
+      return { ok: true, message: { type: "rename", sessionId, title } };
+    }
+    case "setAside": {
+      const sessionId = optionalString(parsed, "sessionId");
+      if (sessionId === undefined) {
+        return { ok: false, error: "set_aside_missing_session_id" };
+      }
+      return { ok: true, message: { type: "setAside", sessionId } };
     }
     case "ping": {
       const t = parsed.t;

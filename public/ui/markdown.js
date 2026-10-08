@@ -607,7 +607,12 @@ export function renderBlock(block, doc = document) {
         tbody.appendChild(tr);
       }
       table.appendChild(tbody);
-      return table;
+      // Enveloppe à défilement horizontal INTERNE : un tableau large défile
+      // dans la bulle au lieu d'élargir le fil (CSP : aucune ressource).
+      const wrap = doc.createElement("div");
+      wrap.className = "md-table-wrap";
+      wrap.appendChild(table);
+      return wrap;
     }
     case "hr":
       return doc.createElement("hr");

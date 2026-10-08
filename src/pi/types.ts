@@ -174,6 +174,10 @@ export interface SessionInfo {
   sessionId: string;
   sessionFile?: string;
   name?: string;
+  /** Titre d'affichage PRÊT À L'EMPLOI : nom natif, sinon les premiers mots du
+   * premier message, sinon un repli honnête (« Conversation sans titre »).
+   * Jamais vide, jamais « (no messages) ». */
+  title?: string;
   cwd?: string;
   createdAt?: string;
   updatedAt?: string;

@@ -67,8 +67,24 @@ export interface PiHost {
 
   /** État sérialisable d'une session (courante si omise). */
   getState(sessionId?: string): SessionState | undefined;
-  /** Liste les sessions persistées. */
+  /**
+   * Liste les sessions persistées (les plus récentes d'abord, plafonnée).
+   * La session courante est FUSIONNÉE même si son fichier n'est pas encore
+   * écrit (fil neuf sans réponse).
+   */
   listSessions(): Promise<SessionInfo[]>;
+
+  /** Renomme une session (titre natif du SDK). Refuse un titre déjà utilisé. */
+  renameSession(id: string, title: string): Promise<void>;
+  /**
+   * Met une session de côté : déplacement HORODATÉ dans un sous-dossier voisin
+   * (`conversations-supprimees/`), invisible à la liste et jamais repris — donc
+   * RÉCUPÉRABLE à la main. Si la session est la session OUVERTE, le host la
+   * détache d'abord (état « aucune conversation ouverte »).
+   */
+  setAsideSession(id: string): Promise<void>;
+  /** Chemin du fichier JSONL d'une session (courante ou persistée). */
+  sessionFileFor(id: string): Promise<string | undefined>;
 
   /** Libère le runtime et les abonnements. */
   stop(): Promise<void>;

@@ -1,0 +1,1070 @@
+<!doctype html>
+<html lang="fr" data-theme="neutre-dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Yuki — barre repliable + fil plein (maquette)</title>
+<style>
+:root {
+  --bg: #171717;
+  --panel: #171717;
+  --panel-2: #252626;
+  --panel-3: #313233;
+  --panel-hover: #38393b;
+  --border: #494a4d;
+  --text: #eff2f6;
+  --muted: #babec4;
+  --accent: #aeb1b5;
+  --accent-text: #0b0b12;
+  --danger: #f87171;
+  --user: #323333;
+  --assistant: #202020;
+  --ok: #4cc38a;
+
+  --m-sidebar: 280px;
+  --m-rail: 56px;
+  --m-gutter: 24px;
+  --m-topbar: 56px;
+  --read-max: none;
+  --anim: 280ms cubic-bezier(.4, 0, .2, 1);
+  --doc-bg: color-mix(in srgb, var(--bg) 55%, #000);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 28px 28px 64px;
+  background: var(--doc-bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow-x: auto;
+}
+
+h1 { font-size: 20px; margin: 0 0 6px; }
+h2 { font-size: 13px; margin: 26px 0 10px; color: var(--muted); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.lead { color: var(--muted); max-width: 108ch; margin: 0 0 8px; }
+.lead b { color: var(--text); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--text); }
+
+/* ─── Sonde de mesure : hors écran, jamais visible ─────────────────────── */
+.sonde {
+  position: absolute; left: -10000px; top: 0;
+  white-space: nowrap; visibility: hidden;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ─── Témoin typographique (90 caractères) ─────────────────────────────── */
+.witness { margin: 20px 0 4px; }
+.witness__box {
+  width: 90ch; max-width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.witness__line { font-size: 15px; line-height: 1.5; color: var(--text); }
+.witness__label { margin: 8px 0 0; font-size: 12px; color: var(--muted); max-width: 90ch; }
+.witness__label b { color: var(--text); }
+
+/* ─── Mesure EN DIRECT : jauge graduée 60 / 90 / 120 / 150 ──────────────── */
+.mesure { margin: 4px 0 0; }
+.gauge {
+  position: relative;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.gauge__band {
+  position: absolute; top: 0; bottom: 0; left: 30%; width: 15%;
+  background: color-mix(in srgb, var(--ok) 20%, transparent);
+  border-left: 1px dashed color-mix(in srgb, var(--ok) 55%, var(--border));
+  border-right: 1px dashed color-mix(in srgb, var(--ok) 55%, var(--border));
+}
+.gauge__fill {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 0;
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+.gauge__mark { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--accent); }
+.gauge__tick { position: absolute; top: 0; height: 11px; width: 0; border-left: 1px solid var(--border); }
+.gauge__tick span { position: absolute; top: 12px; left: 4px; font-size: 10.5px; color: var(--muted); }
+.gauge__tick--60 { left: 30%; }
+.gauge__tick--90 { left: 45%; }
+.gauge__tick--120 { left: 60%; }
+.gauge__tick--150 { left: 75%; }
+.mesure__read { margin: 12px 0 0; font-size: 13.5px; color: var(--muted); }
+.mesure__read b { color: var(--accent); }
+.mesure__ctrl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 0; font-size: 12.5px; color: var(--muted); }
+.chip {
+  font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer;
+}
+.chip:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.chip--on { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+.mesure__legend { margin: 10px 0 0; font-size: 12px; color: var(--muted); max-width: 108ch; }
+.mesure__legend b { color: var(--text); }
+
+/* ─── Cadres (fenêtres) ────────────────────────────────────────────────── */
+.frame { margin: 0 0 34px; padding: 0; }
+.frame__cap { margin: 0 0 6px; }
+.frame__hint { margin: 0 0 10px; font-size: 12.5px; color: var(--muted); max-width: 120ch; }
+.frame .tag {
+  display: inline-block;
+  font-size: 12.5px; font-weight: 700; color: var(--accent);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px;
+  background: var(--panel);
+}
+
+.screen {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.screen--wide { width: 1600px; height: 900px; }
+.screen--narrow { width: 720px; height: 640px; }
+
+/* ─── Application (flex : barre du haut + corps) ───────────────────────── */
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.tb {
+  flex: 0 0 var(--m-topbar);
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 0 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.tb__brand { font-weight: 700; letter-spacing: 0.02em; }
+.tb__status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tb__btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+}
+.pill {
+  font-size: 12px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted);
+}
+.pill--online { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+.pill--sel { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+
+.app__body { flex: 1 1 auto; min-height: 0; display: flex; }
+
+/* ─── Barre latérale : repliée 56 px, dépliée 280 px (animation) ───────── */
+.sb {
+  flex: 0 0 auto;
+  width: var(--m-rail);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  background: var(--panel-2);
+  border-right: 1px solid var(--border);
+  transition: width var(--anim);
+}
+.app.is-open .sb { width: var(--m-sidebar); }
+
+.sb__top { flex: 0 0 auto; min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 7px 8px; }
+.sb__title {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+  white-space: nowrap; overflow: hidden;
+  opacity: 0; transition: opacity 0.18s ease 0.06s;
+}
+.app.is-open .sb__title { opacity: 1; }
+.sb__pin {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer;
+}
+.sb__pin:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.app--pinned .sb__pin { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+
+.sb__new {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 9px;
+  margin: 8px; padding: 9px 11px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel-3); color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
+}
+.sb__new:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.sb__plus { flex: 0 0 auto; display: inline-flex; color: var(--accent); }
+.sb__newlabel { opacity: 0; transition: opacity 0.18s ease 0.06s; }
+.app.is-open .sb__newlabel { opacity: 1; }
+
+.sb__list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 3px; padding: 0 8px 10px; overflow: hidden; }
+
+.conv {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px;
+  border: 1px solid transparent; border-radius: 10px; cursor: pointer;
+}
+.conv:hover { background: var(--panel-hover); }
+.conv--active {
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.conv__av {
+  flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--accent-text); background: var(--accent);
+}
+.conv__main { flex: 1 1 auto; min-width: 0; opacity: 0; transition: opacity 0.18s ease 0.06s; }
+.app.is-open .sb .conv__main { opacity: 1; }
+.conv__title { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv--active .conv__title { font-weight: 600; }
+.conv__excerpt { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv__count { display: block; margin-top: 1px; font-size: 10.5px; color: var(--muted); }
+.conv__dots {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+  cursor: pointer; opacity: 0; transition: opacity 0.15s;
+}
+.conv:hover .conv__dots, .conv--active .conv__dots { opacity: 0.95; }
+.conv__dots:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.app:not(.is-open) .conv__dots { opacity: 0; }
+
+/* ─── Zone principale : fil + saisie ───────────────────────────────────── */
+.main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.thread { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: var(--m-gutter); }
+.col { width: 100%; max-width: var(--read-max); }
+.thread .col { display: flex; flex-direction: column; gap: 12px; }
+
+.msg {
+  min-width: 0; max-width: 100%; overflow: hidden;
+  padding: 10px 14px;
+  border: 1px solid var(--border); border-radius: 14px;
+}
+.msg--user { align-self: flex-end; width: 85%; background: var(--user); }
+.msg--assistant { align-self: flex-start; width: 100%; background: var(--assistant); }
+
+.body { white-space: normal; }
+.p { margin: 0 0 8px; }
+.p:last-child { margin-bottom: 0; }
+
+.code-block { margin: 0 0 8px; padding-left: 8px; border-left: 3px solid var(--border); overflow: hidden; }
+.mute-badge { display: inline-block; margin-bottom: 4px; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.code-block pre {
+  margin: 0; padding: 10px 12px; max-width: 100%;
+  background: var(--panel-3); border: 1px solid var(--border); border-radius: 8px;
+  overflow-x: auto;
+}
+.code-block code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; white-space: pre; color: var(--text); }
+
+.tbl-wrap { margin: 0 0 8px; max-width: 100%; overflow-x: auto; }
+.tbl { border-collapse: collapse; font-size: 0.95em; color: var(--text); }
+.tbl th, .tbl td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; white-space: nowrap; }
+.tbl th { background: var(--panel-3); color: var(--muted); font-weight: 600; }
+
+.list { margin: 0; padding-left: 1.5em; }
+.list li { margin: 2px 0; }
+
+.meta { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
+
+.composer { border-top: 1px solid var(--border); background: var(--panel); padding: 12px var(--m-gutter) 16px; }
+.composer__col { display: flex; gap: 8px; align-items: flex-end; }
+.input {
+  flex: 1; min-width: 0; min-height: 44px;
+  padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel-2); color: var(--muted);
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px;
+  border: 1px solid var(--border); border-radius: 10px; font: inherit; font-weight: 600;
+}
+.btn--send { background: var(--accent); color: var(--accent-text); }
+.btn--stop { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+
+/* ─── État vide (aucune conversation ouverte) ──────────────────────────── */
+.main--empty { align-items: center; justify-content: center; }
+.empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 24px; max-width: 56ch; }
+.empty__logo {
+  display: flex; align-items: center; justify-content: center;
+  width: 76px; height: 76px; border-radius: 50%;
+  font-size: 40px; line-height: 1;
+  background: var(--panel-2); border: 1px solid var(--border);
+}
+.empty__name { font-size: 22px; font-weight: 700; letter-spacing: 0.01em; }
+.empty__hint { margin: 0; color: var(--muted); }
+.empty__honest { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
+.empty__honest b { color: var(--text); }
+.btn--new { background: var(--accent); color: var(--accent-text); border-color: var(--accent); cursor: pointer; }
+
+/* ─── Menu contextuel + retour visuel (toast) ──────────────────────────── */
+.menu {
+  position: fixed; z-index: 50; min-width: 190px; padding: 5px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+.menu[hidden] { display: none; }
+.menu__title {
+  max-width: 230px; padding: 5px 9px; margin-bottom: 4px;
+  font-size: 11px; color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.menu__item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 9px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.menu__item:hover { background: var(--panel-hover); }
+.menu__item--danger { color: var(--danger); }
+
+.toast {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+  max-width: 70%; padding: 9px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 10px;
+  background: var(--panel); color: var(--text); font-size: 12.5px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+}
+
+/* ─── Mesures sous chaque cadre ────────────────────────────────────────── */
+.measures {
+  display: flex; flex-wrap: wrap; gap: 6px 22px;
+  margin: 10px 0 0; padding: 0; list-style: none;
+  font-size: 12.5px; color: var(--muted);
+}
+.measures b { color: var(--text); font-weight: 600; }
+
+footer.note {
+  margin-top: 10px; border-top: 1px solid var(--border); padding-top: 14px;
+  color: var(--muted); font-size: 12.5px; max-width: 120ch;
+}
+footer.note b { color: var(--text); }
+footer.note ul { margin: 8px 0 0; padding-left: 1.4em; }
+footer.note li { margin: 4px 0; }
+footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+.ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ic--dots { fill: currentColor; stroke: none; }
+</style>
+</head>
+<body>
+  <h1>Yuki — barre latérale repliable + fil plein largeur</h1>
+  <p class="lead">
+    Maquette <b>hors production</b>, pour <b>décider sur le visuel</b>. Couleurs lues dans
+    <code>Yuki/public/ui/themes.css</code> (preset <b>neutre-dark</b>), <b>aucun</b> fichier de production modifié.
+    Aucune ressource externe, aucun style en ligne. <b>Le survol, la punaise et le clic droit fonctionnent vraiment</b> :
+    essayez-les dans la Preview.
+  </p>
+
+  <section class="witness">
+    <h2>Témoin typographique — 90 caractères</h2>
+    <div class="witness__box">
+      <div class="witness__line">La colonne de lecture borne la longueur de ligne pour rester confortable à lire sur un écr</div>
+    </div>
+    <p class="witness__label">
+      Cette ligne compte <b>exactement 90 caractères</b> ; la boîte a la largeur de 90 « ch ».
+      Cible confortable usuelle : <b>60 – 90 caractères par ligne</b>.
+    </p>
+  </section>
+
+  <section class="mesure">
+    <h2>Mesure EN DIRECT — caractères par ligne</h2>
+    <div class="gauge" id="gauge">
+      <div class="gauge__band"></div>
+      <div class="gauge__fill" id="gauge-fill"></div>
+      <span class="gauge__tick gauge__tick--60"><span>60</span></span>
+      <span class="gauge__tick gauge__tick--90"><span>90</span></span>
+      <span class="gauge__tick gauge__tick--120"><span>120</span></span>
+      <span class="gauge__tick gauge__tick--150"><span>150</span></span>
+      <div class="gauge__mark" id="gauge-mark"></div>
+    </div>
+    <p class="mesure__read">
+      Cadre (a), fenêtre 1600 px — valeur actuelle : <b id="cpl-value">—</b> caractères par ligne,
+      largeur de texte <b id="cpl-px">—</b>.
+    </p>
+    <div class="mesure__ctrl">
+      <span>Largeur de lecture réglable (<code>--read-max</code>) :</span>
+      <button class="chip chip--on" type="button" data-max="none" aria-pressed="true">aucune (remplir)</button>
+      <button class="chip" type="button" data-max="1400px" aria-pressed="false">1400 px</button>
+      <button class="chip" type="button" data-max="1200px" aria-pressed="false">1200 px</button>
+      <button class="chip" type="button" data-max="1000px" aria-pressed="false">1000 px</button>
+      <button class="chip" type="button" data-max="900px" aria-pressed="false">900 px</button>
+    </div>
+    <p class="mesure__legend">
+      La valeur se met à jour <b>en direct</b> : survolez la barre latérale d'un cadre (elle se déplie à 280 px) ou
+      changez la largeur ci-dessus. Le repère vert marque la plage confortable <b>60 – 90</b>.
+    </p>
+  </section>
+
+  <h2>États à valider</h2>
+
+      <figure class="frame" id="etat-a">
+        <figcaption class="frame__cap"><span class="tag">(a) REPLIÉE par défaut — 56 px · fenêtre 1600 × 900</span></figcaption>
+        <p class="frame__hint">Survolez la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Cliquez la punaise pour la bloquer dépliée. Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer.</p>
+        <div class="screen screen--wide">        <div class="app">
+          <header class="tb">
+            <div class="tb__brand">Yuki</div>
+            <div class="tb__status">
+              <span class="pill">Configuration</span>
+              <span class="pill">Voix</span>
+              <span class="pill pill--online">en ligne</span>
+              <span class="pill">idle</span>
+              <span class="pill pill--sel">Neutre ▾</span>
+              <span class="tb__btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg></span>
+            </div>
+          </header>
+          <div class="app__body">
+          <aside class="sb">
+            <div class="sb__top">
+              <span class="sb__title">Conversations</span>
+              <button class="sb__pin" type="button" aria-pressed="false" title="Épingler la barre (rester dépliée)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></button>
+            </div>
+            <button class="sb__new" type="button" title="Nouvelle conversation">
+              <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
+              <span class="sb__newlabel">Nouvelle conversation</span>
+            </button>
+            <nav class="sb__list">
+            <div class="conv conv--active" data-conv="c1">
+              <span class="conv__av">EL</span>
+              <span class="conv__main">
+                <span class="conv__title">Espace de lecture 16/9</span>
+                <span class="conv__excerpt">Rends la colonne plus large et non centrée…</span>
+                <span class="conv__count">8 oct. · 24 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c2">
+              <span class="conv__av">TH</span>
+              <span class="conv__main">
+                <span class="conv__title">Générer les thèmes V2</span>
+                <span class="conv__excerpt">Projette les 12 presets depuis le catalogue…</span>
+                <span class="conv__count">7 oct. · 41 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c3">
+              <span class="conv__av">VO</span>
+              <span class="conv__main">
+                <span class="conv__title">Latence de la voix TTS</span>
+                <span class="conv__excerpt">La première phrase met trop longtemps à démarrer…</span>
+                <span class="conv__count">6 oct. · 12 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c4">
+              <span class="conv__av">MU</span>
+              <span class="conv__main">
+                <span class="conv__title">Badge « muet » des blocs</span>
+                <span class="conv__excerpt">Le bloc muet reste affiché mais n'est pas lu…</span>
+                <span class="conv__count">4 oct. · 9 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c5">
+              <span class="conv__av">NO</span>
+              <span class="conv__main">
+                <span class="conv__title">Notes de la réunion produit</span>
+                <span class="conv__excerpt">On garde deux niveaux de surface, pas plus…</span>
+                <span class="conv__count">1er oct. · 33 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            </nav>
+          </aside>
+            <section class="main">
+              <div class="thread"><div class="col">            <div class="msg msg--user">Peux-tu me préparer une version 16/9 où le fil remplit l'espace, sans colonne bornée ?</div>
+
+            <div class="msg msg--assistant">
+              <div class="body">
+                <p class="p">J'ai supprimé la borne à 720 px : le fil occupe maintenant toute la largeur utile. La conséquence, volontaire, est que les lignes redeviennent longues — d'autant plus que la barre latérale se replie au repos. Le repère gradué, plus haut, affiche en direct le nombre de caractères par ligne atteint sur ce cadre ; il bouge quand la barre se déplie et quand on change la largeur de lecture.</p>
+                <p class="p">Pour garder la main, la largeur reste <b>réglable</b> via une variable unique, <code>--read-max</code>, par défaut <code>none</code> (aucune borne). Le rail replié libère 224 px ; une borne plus basse rapproche la longueur de ligne d'une plage confortable.</p>
+                <div class="code-block">
+                  <span class="mute-badge">muet — non lu</span>
+                  <pre><code>const LAYOUT = {
+  sidebar: { open: 280, rail: 56 }, // dépliée au survol, repliée par défaut
+  readMax: 'none',   // largeur de lecture réglable (px ou none)
+  gutter: 24,        // marge latérale de la zone de contenu
+  userBubble: 0.85,  // part de la largeur occupée par la bulle utilisateur
+  // NB : une ligne de code volontairement longue pour vérifier que le débordement reste CONFINÉ dans la bulle et n'élargit jamais le fil.
+};</code></pre>
+                </div>
+                <div class="tbl-wrap">
+                  <table class="tbl">
+                    <thead>
+                      <tr><th>Repère</th><th>Avant</th><th>Ici</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Largeur de lecture</td><td>720 px centrée</td><td>pleine largeur (réglable)</td></tr>
+                      <tr><td>Caractères par ligne</td><td>60 – 90</td><td>à mesurer en direct</td></tr>
+                      <tr><td>Barre latérale</td><td>figée 280 px</td><td>repliée 56 px, survol → 280 px</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <ul class="list">
+                  <li>le fil remplit désormais l'espace, y compris barre repliée ;</li>
+                  <li>la largeur maximale est paramétrable (<code>--read-max</code>) ;</li>
+                  <li>la zone de saisie suit exactement la même largeur de lecture.</li>
+                </ul>
+              </div>
+              <span class="meta">TTFT 312 ms · total 4 210 ms · 386 tok</span>
+            </div>
+              </div></div>
+              <footer class="composer">
+                <div class="col composer__col">
+                  <span class="input">Écrivez un message… (Entrée pour envoyer, Maj+Entrée pour un retour ligne)</span>
+                  <span class="btn btn--send">Envoyer</span>
+                  <span class="btn btn--stop">Stop</span>
+                </div>
+              </footer>
+            </section>
+          </div>
+        </div></div>
+          <ul class="measures">
+            <li><b>barre latérale</b> repliée · <b data-live="sbstate">au survol</b> · 56 px → 280 px au survol</li>
+            <li><b>largeur de lecture</b> pleine largeur (réglable · <code>--read-max</code>) = <b data-live="rmax">none</b></li>
+            <li><b>caractères par ligne</b> ≈ <b data-live="cpl">—</b> (largeur de texte <b data-live="px">—</b>)</li>
+            <li><b>bulle utilisateur</b> 85 % de la largeur de lecture</li>
+          </ul>
+      </figure>
+
+      <figure class="frame" id="etat-b">
+        <figcaption class="frame__cap"><span class="tag">(b) DÉPLIÉE & ÉPINGLÉE — 280 px · fenêtre 1600 × 900</span></figcaption>
+        <p class="frame__hint">La punaise est active : la barre reste dépliée même quand la souris s'éloigne. Un second clic la désépingle et elle repasse au comportement « survol ».</p>
+        <div class="screen screen--wide">        <div class="app is-open app--pinned">
+          <header class="tb">
+            <div class="tb__brand">Yuki</div>
+            <div class="tb__status">
+              <span class="pill">Configuration</span>
+              <span class="pill">Voix</span>
+              <span class="pill pill--online">en ligne</span>
+              <span class="pill">idle</span>
+              <span class="pill pill--sel">Neutre ▾</span>
+              <span class="tb__btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg></span>
+            </div>
+          </header>
+          <div class="app__body">
+          <aside class="sb">
+            <div class="sb__top">
+              <span class="sb__title">Conversations</span>
+              <button class="sb__pin" type="button" aria-pressed="false" title="Épingler la barre (rester dépliée)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></button>
+            </div>
+            <button class="sb__new" type="button" title="Nouvelle conversation">
+              <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
+              <span class="sb__newlabel">Nouvelle conversation</span>
+            </button>
+            <nav class="sb__list">
+            <div class="conv conv--active" data-conv="c1">
+              <span class="conv__av">EL</span>
+              <span class="conv__main">
+                <span class="conv__title">Espace de lecture 16/9</span>
+                <span class="conv__excerpt">Rends la colonne plus large et non centrée…</span>
+                <span class="conv__count">8 oct. · 24 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c2">
+              <span class="conv__av">TH</span>
+              <span class="conv__main">
+                <span class="conv__title">Générer les thèmes V2</span>
+                <span class="conv__excerpt">Projette les 12 presets depuis le catalogue…</span>
+                <span class="conv__count">7 oct. · 41 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c3">
+              <span class="conv__av">VO</span>
+              <span class="conv__main">
+                <span class="conv__title">Latence de la voix TTS</span>
+                <span class="conv__excerpt">La première phrase met trop longtemps à démarrer…</span>
+                <span class="conv__count">6 oct. · 12 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c4">
+              <span class="conv__av">MU</span>
+              <span class="conv__main">
+                <span class="conv__title">Badge « muet » des blocs</span>
+                <span class="conv__excerpt">Le bloc muet reste affiché mais n'est pas lu…</span>
+                <span class="conv__count">4 oct. · 9 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c5">
+              <span class="conv__av">NO</span>
+              <span class="conv__main">
+                <span class="conv__title">Notes de la réunion produit</span>
+                <span class="conv__excerpt">On garde deux niveaux de surface, pas plus…</span>
+                <span class="conv__count">1er oct. · 33 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            </nav>
+          </aside>
+            <section class="main">
+              <div class="thread"><div class="col">            <div class="msg msg--user">Peux-tu me préparer une version 16/9 où le fil remplit l'espace, sans colonne bornée ?</div>
+
+            <div class="msg msg--assistant">
+              <div class="body">
+                <p class="p">J'ai supprimé la borne à 720 px : le fil occupe maintenant toute la largeur utile. La conséquence, volontaire, est que les lignes redeviennent longues — d'autant plus que la barre latérale se replie au repos. Le repère gradué, plus haut, affiche en direct le nombre de caractères par ligne atteint sur ce cadre ; il bouge quand la barre se déplie et quand on change la largeur de lecture.</p>
+                <p class="p">Pour garder la main, la largeur reste <b>réglable</b> via une variable unique, <code>--read-max</code>, par défaut <code>none</code> (aucune borne). Le rail replié libère 224 px ; une borne plus basse rapproche la longueur de ligne d'une plage confortable.</p>
+                <div class="code-block">
+                  <span class="mute-badge">muet — non lu</span>
+                  <pre><code>const LAYOUT = {
+  sidebar: { open: 280, rail: 56 }, // dépliée au survol, repliée par défaut
+  readMax: 'none',   // largeur de lecture réglable (px ou none)
+  gutter: 24,        // marge latérale de la zone de contenu
+  userBubble: 0.85,  // part de la largeur occupée par la bulle utilisateur
+  // NB : une ligne de code volontairement longue pour vérifier que le débordement reste CONFINÉ dans la bulle et n'élargit jamais le fil.
+};</code></pre>
+                </div>
+                <div class="tbl-wrap">
+                  <table class="tbl">
+                    <thead>
+                      <tr><th>Repère</th><th>Avant</th><th>Ici</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Largeur de lecture</td><td>720 px centrée</td><td>pleine largeur (réglable)</td></tr>
+                      <tr><td>Caractères par ligne</td><td>60 – 90</td><td>à mesurer en direct</td></tr>
+                      <tr><td>Barre latérale</td><td>figée 280 px</td><td>repliée 56 px, survol → 280 px</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <ul class="list">
+                  <li>le fil remplit désormais l'espace, y compris barre repliée ;</li>
+                  <li>la largeur maximale est paramétrable (<code>--read-max</code>) ;</li>
+                  <li>la zone de saisie suit exactement la même largeur de lecture.</li>
+                </ul>
+              </div>
+              <span class="meta">TTFT 312 ms · total 4 210 ms · 386 tok</span>
+            </div>
+              </div></div>
+              <footer class="composer">
+                <div class="col composer__col">
+                  <span class="input">Écrivez un message… (Entrée pour envoyer, Maj+Entrée pour un retour ligne)</span>
+                  <span class="btn btn--send">Envoyer</span>
+                  <span class="btn btn--stop">Stop</span>
+                </div>
+              </footer>
+            </section>
+          </div>
+        </div></div>
+          <ul class="measures">
+            <li><b>barre latérale</b> dépliée & épinglée · 280 px</li>
+            <li><b>état de la punaise</b> <b data-live="pin">épinglée (reste dépliée)</b></li>
+            <li><b>caractères par ligne</b> ≈ <b data-live="cpl">—</b> (largeur de texte <b data-live="px">—</b>)</li>
+            <li><b>actions</b> clic droit ou « ⋯ » → menu renommer / supprimer</li>
+          </ul>
+      </figure>
+
+      <figure class="frame" id="etat-c">
+        <figcaption class="frame__cap"><span class="tag">(c) Fenêtre ÉTROITE — 720 × 640 (repliée)</span></figcaption>
+        <p class="frame__hint">Même règle : le fil remplit la largeur. Sous cette taille, le survol de la barre continue de déplier par-dessus.</p>
+        <div class="screen screen--narrow">        <div class="app">
+          <header class="tb">
+            <div class="tb__brand">Yuki</div>
+            <div class="tb__status">
+              <span class="pill">Configuration</span>
+              <span class="pill">Voix</span>
+              <span class="pill pill--online">en ligne</span>
+              <span class="pill">idle</span>
+              <span class="pill pill--sel">Neutre ▾</span>
+              <span class="tb__btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg></span>
+            </div>
+          </header>
+          <div class="app__body">
+          <aside class="sb">
+            <div class="sb__top">
+              <span class="sb__title">Conversations</span>
+              <button class="sb__pin" type="button" aria-pressed="false" title="Épingler la barre (rester dépliée)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></button>
+            </div>
+            <button class="sb__new" type="button" title="Nouvelle conversation">
+              <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
+              <span class="sb__newlabel">Nouvelle conversation</span>
+            </button>
+            <nav class="sb__list">
+            <div class="conv" data-conv="c1">
+              <span class="conv__av">EL</span>
+              <span class="conv__main">
+                <span class="conv__title">Espace de lecture 16/9</span>
+                <span class="conv__excerpt">Rends la colonne plus large et non centrée…</span>
+                <span class="conv__count">8 oct. · 24 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv conv--active" data-conv="c2">
+              <span class="conv__av">TH</span>
+              <span class="conv__main">
+                <span class="conv__title">Générer les thèmes V2</span>
+                <span class="conv__excerpt">Projette les 12 presets depuis le catalogue…</span>
+                <span class="conv__count">7 oct. · 41 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c3">
+              <span class="conv__av">VO</span>
+              <span class="conv__main">
+                <span class="conv__title">Latence de la voix TTS</span>
+                <span class="conv__excerpt">La première phrase met trop longtemps à démarrer…</span>
+                <span class="conv__count">6 oct. · 12 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c4">
+              <span class="conv__av">MU</span>
+              <span class="conv__main">
+                <span class="conv__title">Badge « muet » des blocs</span>
+                <span class="conv__excerpt">Le bloc muet reste affiché mais n'est pas lu…</span>
+                <span class="conv__count">4 oct. · 9 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c5">
+              <span class="conv__av">NO</span>
+              <span class="conv__main">
+                <span class="conv__title">Notes de la réunion produit</span>
+                <span class="conv__excerpt">On garde deux niveaux de surface, pas plus…</span>
+                <span class="conv__count">1er oct. · 33 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            </nav>
+          </aside>
+            <section class="main">
+              <div class="thread"><div class="col">            <div class="msg msg--user">Peux-tu me préparer une version 16/9 où le fil remplit l'espace, sans colonne bornée ?</div>
+
+            <div class="msg msg--assistant">
+              <div class="body">
+                <p class="p">J'ai supprimé la borne à 720 px : le fil occupe maintenant toute la largeur utile. La conséquence, volontaire, est que les lignes redeviennent longues — d'autant plus que la barre latérale se replie au repos. Le repère gradué, plus haut, affiche en direct le nombre de caractères par ligne atteint sur ce cadre ; il bouge quand la barre se déplie et quand on change la largeur de lecture.</p>
+                <p class="p">Pour garder la main, la largeur reste <b>réglable</b> via une variable unique, <code>--read-max</code>, par défaut <code>none</code> (aucune borne). Le rail replié libère 224 px ; une borne plus basse rapproche la longueur de ligne d'une plage confortable.</p>
+                <div class="code-block">
+                  <span class="mute-badge">muet — non lu</span>
+                  <pre><code>const LAYOUT = {
+  sidebar: { open: 280, rail: 56 }, // dépliée au survol, repliée par défaut
+  readMax: 'none',   // largeur de lecture réglable (px ou none)
+  gutter: 24,        // marge latérale de la zone de contenu
+  userBubble: 0.85,  // part de la largeur occupée par la bulle utilisateur
+  // NB : une ligne de code volontairement longue pour vérifier que le débordement reste CONFINÉ dans la bulle et n'élargit jamais le fil.
+};</code></pre>
+                </div>
+                <div class="tbl-wrap">
+                  <table class="tbl">
+                    <thead>
+                      <tr><th>Repère</th><th>Avant</th><th>Ici</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Largeur de lecture</td><td>720 px centrée</td><td>pleine largeur (réglable)</td></tr>
+                      <tr><td>Caractères par ligne</td><td>60 – 90</td><td>à mesurer en direct</td></tr>
+                      <tr><td>Barre latérale</td><td>figée 280 px</td><td>repliée 56 px, survol → 280 px</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <ul class="list">
+                  <li>le fil remplit désormais l'espace, y compris barre repliée ;</li>
+                  <li>la largeur maximale est paramétrable (<code>--read-max</code>) ;</li>
+                  <li>la zone de saisie suit exactement la même largeur de lecture.</li>
+                </ul>
+              </div>
+              <span class="meta">TTFT 312 ms · total 4 210 ms · 386 tok</span>
+            </div>
+              </div></div>
+              <footer class="composer">
+                <div class="col composer__col">
+                  <span class="input">Écrivez un message… (Entrée pour envoyer, Maj+Entrée pour un retour ligne)</span>
+                  <span class="btn btn--send">Envoyer</span>
+                  <span class="btn btn--stop">Stop</span>
+                </div>
+              </footer>
+            </section>
+          </div>
+        </div></div>
+          <ul class="measures">
+            <li><b>barre latérale</b> repliée · 56 px</li>
+            <li><b>zone de contenu</b> 664 px</li>
+            <li><b>caractères par ligne</b> ≈ <b data-live="cpl">—</b> (largeur de texte <b data-live="px">—</b>)</li>
+          </ul>
+      </figure>
+
+      <figure class="frame" id="etat-d">
+        <figcaption class="frame__cap"><span class="tag">(d) AUCUNE conversation ouverte — 1600 × 900</span></figcaption>
+        <p class="frame__hint">État affiché après avoir supprimé la conversation ouverte. Même shell (barre du haut + barre latérale visibles) : aucune conversation n'est active à gauche, le panneau invite à en reprendre ou créer une.</p>
+        <div class="screen screen--wide">        <div class="app is-open app--pinned">
+          <header class="tb">
+            <div class="tb__brand">Yuki</div>
+            <div class="tb__status">
+              <span class="pill">Configuration</span>
+              <span class="pill">Voix</span>
+              <span class="pill pill--online">en ligne</span>
+              <span class="pill">idle</span>
+              <span class="pill pill--sel">Neutre ▾</span>
+              <span class="tb__btn"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M17 8.5a5 5 0 0 1 0 7"/></svg></span>
+            </div>
+          </header>
+          <div class="app__body">
+          <aside class="sb">
+            <div class="sb__top">
+              <span class="sb__title">Conversations</span>
+              <button class="sb__pin" type="button" aria-pressed="false" title="Épingler la barre (rester dépliée)"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></button>
+            </div>
+            <button class="sb__new" type="button" title="Nouvelle conversation">
+              <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
+              <span class="sb__newlabel">Nouvelle conversation</span>
+            </button>
+            <nav class="sb__list">
+            <div class="conv" data-conv="c1">
+              <span class="conv__av">EL</span>
+              <span class="conv__main">
+                <span class="conv__title">Espace de lecture 16/9</span>
+                <span class="conv__excerpt">Rends la colonne plus large et non centrée…</span>
+                <span class="conv__count">8 oct. · 24 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c2">
+              <span class="conv__av">TH</span>
+              <span class="conv__main">
+                <span class="conv__title">Générer les thèmes V2</span>
+                <span class="conv__excerpt">Projette les 12 presets depuis le catalogue…</span>
+                <span class="conv__count">7 oct. · 41 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c3">
+              <span class="conv__av">VO</span>
+              <span class="conv__main">
+                <span class="conv__title">Latence de la voix TTS</span>
+                <span class="conv__excerpt">La première phrase met trop longtemps à démarrer…</span>
+                <span class="conv__count">6 oct. · 12 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c4">
+              <span class="conv__av">MU</span>
+              <span class="conv__main">
+                <span class="conv__title">Badge « muet » des blocs</span>
+                <span class="conv__excerpt">Le bloc muet reste affiché mais n'est pas lu…</span>
+                <span class="conv__count">4 oct. · 9 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            <div class="conv" data-conv="c5">
+              <span class="conv__av">NO</span>
+              <span class="conv__main">
+                <span class="conv__title">Notes de la réunion produit</span>
+                <span class="conv__excerpt">On garde deux niveaux de surface, pas plus…</span>
+                <span class="conv__count">1er oct. · 33 messages</span>
+              </span>
+              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+            </div>
+            </nav>
+          </aside>
+            <section class="main main--empty">
+          <section class="main main--empty">
+            <div class="empty">
+              <div class="empty__logo">❄️</div>
+              <div class="empty__name">Yuki</div>
+              <p class="empty__hint">Sélectionnez une conversation ou créez-en une.</p>
+              <button class="btn btn--new" type="button"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg><span>Nouvelle conversation</span></button>
+              <p class="empty__honest">Aucune conversation n'est ouverte. <b>Ce n'est pas une erreur</b> : reprenez un fil à gauche, ou démarrez-en un nouveau.</p>
+            </div>
+          </section>
+            </section>
+          </div>
+        </div></div>
+          <ul class="measures">
+            <li><b>panneau</b> vide — logo ❄️ + « Yuki » + invitation</li>
+            <li><b>barre latérale</b> dépliée & épinglée · 280 px</li>
+            <li><b>conversation active</b> <b>aucune</b> (message honnête : ce n'est pas une erreur)</li>
+          </ul>
+      </figure>
+  <footer class="note">
+    <b>Compromis signalés</b> :
+    <ul>
+      <li><b>Clic droit vs « ⋯ »</b> — le menu contextuel (clic droit) est le geste le plus rapide à la souris, mais il est <b>invisible</b> (rien n'indique qu'il existe) et <b>inaccessible au doigt</b> (pas de clic droit tactile). Le <b>« ⋯ »</b> discret, révélé au survol (et toujours visible sur la conversation active), rend l'action <b>découvrable et accessible</b>. Les deux ouvrent le <b>même</b> menu (renommer / supprimer).</li>
+      <li><b>Largeur réglable</b> — le fil remplit l'espace par défaut (<code>--read-max: none</code>). La largeur maximale de lecture est <b>paramétrable</b> : utilisez les boutons du témoin de mesure pour voir l'effet sur la longueur de ligne.</li>
+      <li><b>Barre latérale</b> — <b>repliée par défaut</b> (56 px), dépliée à 280 px <b>au survol</b>, avec une <b>punaise</b> pour la bloquer dépliée. La conversation se redimensionne <b>en même temps</b> (animation 280 ms sur la largeur).</li>
+      <li><b>Script INLINE (maquette uniquement)</b> — cette page embarque un <code>&lt;script&gt;</code> inline pour rendre le survol, la punaise, le clic droit et la mesure <b>réellement utilisables</b>. C'est <b>propre à la maquette (hors production)</b> : le code de production respecte la CSP stricte, sans script inline.</li>
+    </ul>
+  </footer>
+
+  <span class="sonde" id="sonde" aria-hidden="true">La colonne de lecture borne la longueur de ligne pour rester confortable à lire sur un écr</span>
+
+  <div class="menu" id="menu" role="menu" hidden>
+    <div class="menu__title" id="menu-title">Conversation</div>
+    <button class="menu__item" type="button" role="menuitem" data-act="rename"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16v4z"/><path d="M13.6 6.4l4 4"/></svg><span>Renommer</span></button>
+    <button class="menu__item menu__item--danger" type="button" role="menuitem" data-act="delete"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M9.5 7V4h5v3"/><path d="M6.5 7l1 13h9l1-13"/></svg><span>Supprimer</span></button>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    /* Échelle de la jauge (0 → 200 caractères). Doit rester cohérente avec
+     * les positions CSS .gauge__tick--60/90/120/150 (30/45/60/75 %). */
+    var SCALE_MAX = 200;
+
+    var sonde = document.getElementById("sonde");
+    function avgCharPx() {
+      var w = sonde.getBoundingClientRect().width;
+      var n = sonde.textContent.length;
+      return n ? w / n : 0;
+    }
+
+    /* ── Barre latérale : ouverture au survol + épinglage ──────────────── */
+    var apps = Array.prototype.slice.call(document.querySelectorAll(".app"));
+    apps.forEach(function (app) {
+      var sb = app.querySelector(".sb");
+      var pin = app.querySelector(".sb__pin");
+      if (!sb) return;
+      sb.addEventListener("mouseenter", function () {
+        if (!app.classList.contains("app--pinned")) app.classList.add("is-open");
+      });
+      sb.addEventListener("mouseleave", function () {
+        if (!app.classList.contains("app--pinned")) app.classList.remove("is-open");
+      });
+      if (pin) {
+        pin.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var on = app.classList.toggle("app--pinned");
+          pin.setAttribute("aria-pressed", on ? "true" : "false");
+          pin.setAttribute("title", on ? "Désépingler (revenir au survol)" : "Épingler la barre (rester dépliée)");
+          if (on) app.classList.add("is-open");
+          else if (!sb.matches(":hover")) app.classList.remove("is-open");
+          var lab = app.querySelector("[data-live='pin']");
+          if (lab) lab.textContent = on ? "épinglée (reste dépliée)" : "au survol";
+        });
+      }
+    });
+
+    /* ── Mesure en direct des caractères par ligne ─────────────────────── */
+    var frames = Array.prototype.slice.call(document.querySelectorAll(".frame"));
+    function measureFrame(frame) {
+      var p = frame.querySelector(".msg--assistant .p");
+      var cplEl = frame.querySelector("[data-live='cpl']");
+      var pxEl = frame.querySelector("[data-live='px']");
+      if (!p) { if (cplEl) cplEl.textContent = "—"; if (pxEl) pxEl.textContent = "—"; return null; }
+      var w = p.clientWidth;
+      var cp = avgCharPx();
+      var cpl = cp ? Math.round(w / cp) : 0;
+      if (cplEl) cplEl.textContent = String(cpl);
+      if (pxEl) pxEl.textContent = Math.round(w) + " px";
+      return { cpl: cpl, px: Math.round(w) };
+    }
+    function updateAll() {
+      var ref = null;
+      for (var i = 0; i < frames.length; i++) {
+        var m = measureFrame(frames[i]);
+        if (m && !ref) ref = m;
+      }
+      var val = document.getElementById("cpl-value");
+      var pxEl = document.getElementById("cpl-px");
+      var fill = document.getElementById("gauge-fill");
+      var mark = document.getElementById("gauge-mark");
+      if (!ref) { if (val) val.textContent = "—"; if (pxEl) pxEl.textContent = "—"; return; }
+      var pct = Math.max(0, Math.min(100, (ref.cpl / SCALE_MAX) * 100));
+      if (fill) fill.style.width = pct.toFixed(2) + "%";
+      if (mark) mark.style.left = pct.toFixed(2) + "%";
+      if (val) val.textContent = String(ref.cpl);
+      if (pxEl) pxEl.textContent = ref.px + " px";
+    }
+
+    /* ── Largeur de lecture réglable (--read-max) ──────────────────────── */
+    var chips = Array.prototype.slice.call(document.querySelectorAll(".chip[data-max]"));
+    chips.forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        var v = chip.getAttribute("data-max");
+        document.documentElement.style.setProperty("--read-max", v);
+        chips.forEach(function (c) {
+          var on = c === chip;
+          c.classList.toggle("chip--on", on);
+          c.setAttribute("aria-pressed", on ? "true" : "false");
+        });
+        var rmax = document.querySelector("[data-live='rmax']");
+        if (rmax) rmax.textContent = v;
+        updateAll();
+      });
+    });
+
+    /* ── Menu contextuel (clic droit) + « ⋯ » ──────────────────────────── */
+    var menu = document.getElementById("menu");
+    var menuConv = null;
+    function openMenu(conv, x, y) {
+      menuConv = conv;
+      var t = conv.querySelector(".conv__title");
+      var titleEl = document.getElementById("menu-title");
+      if (titleEl) titleEl.textContent = t ? t.textContent : "Conversation";
+      menu.hidden = false;
+      var mw = menu.offsetWidth;
+      var mh = menu.offsetHeight;
+      var left = Math.max(8, Math.min(x, window.innerWidth - mw - 8));
+      var top = Math.max(8, Math.min(y, window.innerHeight - mh - 8));
+      menu.style.left = left + "px";
+      menu.style.top = top + "px";
+    }
+    function closeMenu() { menu.hidden = true; menuConv = null; }
+
+    function toast(conv, act) {
+      var screen = conv.closest(".screen");
+      if (!screen) return;
+      var old = screen.querySelector(".toast");
+      if (old) old.parentNode.removeChild(old);
+      var t = conv.querySelector(".conv__title");
+      var name = t ? t.textContent : "cette conversation";
+      var el = document.createElement("div");
+      el.className = "toast";
+      if (act === "rename") {
+        el.textContent = "Démo — « Renommer » : le titre de « " + name + " » deviendrait modifiable.";
+      } else {
+        el.textContent = "Démo — « Supprimer » : « " + name + " » serait mise de côté et le panneau afficherait l'état vide (cadre d).";
+      }
+      screen.appendChild(el);
+      window.setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 3800);
+    }
+
+    document.addEventListener("contextmenu", function (e) {
+      var conv = e.target && e.target.closest ? e.target.closest(".conv") : null;
+      if (!conv) { closeMenu(); return; }
+      e.preventDefault();
+      openMenu(conv, e.clientX, e.clientY);
+    });
+    document.addEventListener("click", function (e) {
+      var t = e.target;
+      var dots = t && t.closest ? t.closest(".conv__dots") : null;
+      if (dots) {
+        e.preventDefault();
+        e.stopPropagation();
+        var r = dots.getBoundingClientRect();
+        openMenu(dots.closest(".conv"), r.right - 4, r.bottom + 4);
+        return;
+      }
+      if (!(t && t.closest && t.closest(".menu"))) closeMenu();
+    });
+    menu.addEventListener("click", function (e) {
+      var item = e.target && e.target.closest ? e.target.closest("[data-act]") : null;
+      if (!item) return;
+      e.stopPropagation();
+      if (menuConv) toast(menuConv, item.getAttribute("data-act"));
+      closeMenu();
+    });
+
+    /* ── Mise à jour continue (animation, redimensionnement, réglage) ──── */
+    if (typeof ResizeObserver === "function") {
+      var ro = new ResizeObserver(function () { updateAll(); });
+      frames.forEach(function (f) {
+        var p = f.querySelector(".msg--assistant .p");
+        if (p) ro.observe(p);
+      });
+    }
+    window.addEventListener("resize", updateAll);
+    updateAll();
+  })();
+  </script>
+</body>
+</html>

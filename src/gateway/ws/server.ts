@@ -25,6 +25,7 @@ import {
   type ServerEnvelope,
   type ServerFrame,
   type ServerMessage,
+  type WireSession,
 } from "./protocol.js";
 import { SessionStreamStore } from "./session-stream.js";
 import type { Transport, TransportStats } from "./transport.js";
@@ -260,34 +261,113 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     return frame;
   }
 
-  function handleHello(client: ClientState, message: ClientMessage): void {
+  /** Liste des conversations + conversation active, envoyée au client. */
+  async function sendSessions(client: ClientState): Promise<void> {
+    let sessions: WireSession[] = [];
+    try {
+      const list = await host.listSessions();
+      sessions = list.map((info) => ({
+        id: info.sessionId,
+        title: info.title ?? info.name ?? "Conversation sans titre",
+        ...(info.updatedAt ? { updatedAt: info.updatedAt } : {}),
+        messageCount: info.messageCount ?? 0,
+        ...(info.firstMessage && info.firstMessage !== "(no messages)"
+          ? { excerpt: info.firstMessage }
+          : {}),
+      }));
+    } catch (error) {
+      logger.warn("ws.sessions.list_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    sendDirect(client, {
+      type: "sessions",
+      sessions,
+      activeId: host.currentSessionId() ?? null,
+    });
+  }
+
+  /**
+   * Snapshot autoritatif de la session courante du client. Sans session
+   * courante (état « aucune conversation ouverte »), envoie un snapshot VIDE :
+   * le client réinitialise son rendu, aucun message ne part dans le vide.
+   */
+  function sendSnapshotForCurrent(client: ClientState): void {
+    const sessionId = sessionIdFor(client);
+    if (!sessionId) {
+      sendDirect(client, { type: "snapshot", state: "idle", transcript: [] });
+      return;
+    }
+    const snapshot = streams.get(sessionId).snapshot();
+    const frame = sendDirect(client, {
+      type: "snapshot",
+      state: snapshot.state,
+      ...(snapshot.activeRunId ? { activeRunId: snapshot.activeRunId } : {}),
+      transcript: snapshot.transcript,
+    });
+    client.lastSeq = frame.seq;
+  }
+
+  async function handleHello(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "hello") return;
     const current = host.currentSessionId();
     const resumed = Boolean(
       message.sessionId && current && message.sessionId === current,
     );
-    client.sessionId = current ?? message.sessionId;
+    // ⚠️ TROU #1 CORRIGÉ : on n'impose plus un fil choisi par le client à la
+    // connexion. `hello` renvoie l'ÉTAT AUTORITATIF (liste + active), et le
+    // client adopte un autre fil par la trame dédiée `switch`.
+    client.sessionId = current;
     client.greeted = true;
     ensureSubscribed(client);
     sendDirect(client, { type: "welcome", serverVersion, resumed });
+    await sendSessions(client);
     // État initial autoritatif : le client initialise son rendu depuis le snapshot.
-    if (client.sessionId) {
-      const snapshot = streams.get(client.sessionId).snapshot();
-      const frame = sendDirect(client, {
-        type: "snapshot",
-        state: snapshot.state,
-        ...(snapshot.activeRunId ? { activeRunId: snapshot.activeRunId } : {}),
-        transcript: snapshot.transcript,
-      });
-      client.lastSeq = frame.seq;
-    }
+    sendSnapshotForCurrent(client);
   }
 
-  function handleResume(client: ClientState, message: ClientMessage): void {
+  async function handleResume(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "resume") return;
-    client.sessionId = message.sessionId || host.currentSessionId();
+    const target = message.sessionId || host.currentSessionId();
+    if (!target) {
+      sendDirect(client, {
+        type: "error",
+        code: "session_inconnue",
+        message: "Aucune conversation à reprendre.",
+      });
+      return;
+    }
+    // ⚠️ TROU #2 CORRIGÉ : la bascule doit RÉELLEMENT changer la session HÔTE
+    // (`host.resume`), pas seulement l'abonnement au flux — sinon le 1er
+    // message échouerait « Session inconnue ». On ne le fait que si la session
+    // demandée n'est pas déjà la courante (reconnexion = no-op).
+    let switched = false;
+    if (host.currentSessionId() !== target) {
+      const file = await host.sessionFileFor(target);
+      if (!file) {
+        sendDirect(client, {
+          type: "error",
+          code: "session_inconnue",
+          message: "Conversation introuvable.",
+        });
+        return;
+      }
+      try {
+        await host.resume(file);
+        switched = true;
+      } catch (error) {
+        const piError = toPiHostError(error, { sessionId: target, logger });
+        sendDirect(client, {
+          type: "error",
+          code: piError.code,
+          message: piError.message,
+        });
+        return;
+      }
+    }
+    client.sessionId = host.currentSessionId() ?? target;
     ensureSubscribed(client);
-    const stream = streams.get(message.sessionId);
+    const stream = streams.get(client.sessionId);
     const result = stream.replay(message.fromSeq);
     sendDirect(client, {
       type: "welcome",
@@ -305,11 +385,119 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         transcript: result.snapshot.transcript,
       });
       client.lastSeq = frame.seq;
+    } else {
+      for (const frame of result.frames) {
+        sendFrame(client, frame);
+        client.lastSeq = frame.seq;
+      }
+    }
+    // Uniquement si la session hôte a CHANGÉ : rafraîchit la barre latérale.
+    if (switched) await sendSessions(client);
+  }
+
+  /** Bascule vers une autre conversation (abort du run en cours par construction). */
+  async function handleSwitch(client: ClientState, message: ClientMessage): Promise<void> {
+    if (message.type !== "switch") return;
+    const file = await host.sessionFileFor(message.sessionId);
+    if (!file) {
+      sendDirect(client, {
+        type: "error",
+        code: "session_inconnue",
+        message: "Conversation introuvable.",
+      });
       return;
     }
-    for (const frame of result.frames) {
-      sendFrame(client, frame);
-      client.lastSeq = frame.seq;
+    try {
+      await host.resume(file);
+    } catch (error) {
+      const piError = toPiHostError(error, {
+        sessionId: message.sessionId,
+        logger,
+      });
+      sendDirect(client, {
+        type: "error",
+        code: piError.code,
+        message: piError.message,
+      });
+      return;
+    }
+    client.sessionId = host.currentSessionId() ?? message.sessionId;
+    ensureSubscribed(client);
+    await sendSessions(client);
+    // ⚠️ Un `snapshot` à CHAQUE bascule : le client reconstruit TOUT son rendu
+    // depuis le transcript du nouveau fil → aucun doublon possible.
+    sendSnapshotForCurrent(client);
+  }
+
+  /** Crée une nouvelle conversation et la rend active. */
+  async function handleNew(client: ClientState): Promise<void> {
+    try {
+      await host.newSession();
+    } catch (error) {
+      const piError = toPiHostError(error, { logger });
+      sendDirect(client, {
+        type: "error",
+        code: piError.code,
+        message: piError.message,
+      });
+      return;
+    }
+    client.sessionId = host.currentSessionId();
+    ensureSubscribed(client);
+    await sendSessions(client);
+    sendSnapshotForCurrent(client);
+  }
+
+  /** Renomme une conversation (doublons refusés côté hôte). */
+  async function handleRename(client: ClientState, message: ClientMessage): Promise<void> {
+    if (message.type !== "rename") return;
+    try {
+      await host.renameSession(message.sessionId, message.title);
+    } catch (error) {
+      const piError = toPiHostError(error, {
+        sessionId: message.sessionId,
+        logger,
+      });
+      sendDirect(client, {
+        type: "error",
+        code: piError.code,
+        message: piError.message,
+      });
+      return;
+    }
+    await sendSessions(client);
+  }
+
+  /** Met une conversation de côté (déplacement horodaté, récupérable). */
+  async function handleSetAside(client: ClientState, message: ClientMessage): Promise<void> {
+    if (message.type !== "setAside") return;
+    const wasCurrent = host.currentSessionId() === message.sessionId;
+    try {
+      await host.setAsideSession(message.sessionId);
+    } catch (error) {
+      const piError = toPiHostError(error, {
+        sessionId: message.sessionId,
+        logger,
+      });
+      sendDirect(client, {
+        type: "error",
+        code: piError.code,
+        message: piError.message,
+      });
+      return;
+    }
+    // Mono-utilisateur : on suit la suppression côté client. Si la conversation
+    // supprimée était la conversation OUVERTE, le client retombe sur l'état vide.
+    if (wasCurrent) {
+      client.sessionId = undefined;
+      client.unsubscribeStream?.();
+      client.unsubscribeStream = undefined;
+      client.subscribedSession = undefined;
+    }
+    await sendSessions(client);
+    if (wasCurrent) {
+      // Snapshot VIDE : le rendu du fil est réinitialisé, plus rien à l'écran.
+      sendDirect(client, { type: "snapshot", state: "idle", transcript: [] });
     }
   }
 
@@ -345,7 +533,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     });
   }
 
-  function handleClientMessage(client: ClientState, text: string): void {
+  async function handleClientMessage(client: ClientState, text: string): Promise<void> {
     const parsed = parseClientMessage(text);
     if (!parsed.ok) {
       sendDirect(client, {
@@ -358,10 +546,22 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     const message = parsed.message;
     switch (message.type) {
       case "hello":
-        handleHello(client, message);
+        await handleHello(client, message);
         return;
       case "resume":
-        handleResume(client, message);
+        await handleResume(client, message);
+        return;
+      case "switch":
+        await handleSwitch(client, message);
+        return;
+      case "new":
+        await handleNew(client);
+        return;
+      case "rename":
+        await handleRename(client, message);
+        return;
+      case "setAside":
+        await handleSetAside(client, message);
         return;
       case "message":
         handleMessage(client, message);
@@ -415,7 +615,11 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         return;
       }
       const text = Array.isArray(data) ? Buffer.concat(data).toString("utf8") : data.toString();
-      handleClientMessage(client, text);
+      void handleClientMessage(client, text).catch((error: unknown) => {
+        logger.warn("ws.message.handler_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     });
     ws.on("close", () => {
       client.unsubscribeStream?.();

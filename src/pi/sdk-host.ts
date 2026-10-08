@@ -14,7 +14,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { basename, join } from "node:path";
 
 import {
   SessionManager,
@@ -86,6 +87,48 @@ const ABORT_SERIALIZE_TIMEOUT_MS = 2_000;
 
 /** Origine d'un prompt synthétique de report (pas de bulle utilisateur). */
 const ORIGIN_JOB_REPORT = "job_report";
+
+/**
+ * Sous-dossier de MISE DE CÔTÉ d'une conversation supprimée. `SessionManager.list`
+ * et `findMostRecentSession` font un `readdir` NON récursif : ce dossier est donc
+ * invisible à la liste ET jamais repris au démarrage — un fil écarté ne peut pas
+ * réapparaître, et reste récupérable à la main (chemin horodaté).
+ */
+const ASIDE_DIR = "conversations-supprimees";
+
+/** Plafond de `listSessions()` : les N sessions les plus récentes suffisent à l'UI. */
+const MAX_SESSIONS = 50;
+
+/** Longueur maximale d'un titre dérivé des premiers mots du premier message. */
+const MAX_TITLE_CHARS = 60;
+
+/** Repli d'affichage quand aucune conversation n'a de titre exploitable. */
+const UNTITLED = "Conversation sans titre";
+
+/** Sentinelle du SDK pour un fil sans message (anglais) : jamais affichée telle quelle. */
+const NO_MESSAGES = "(no messages)";
+
+/**
+ * Titre d'affichage PRÊT À L'EMPLOI (jamais vide, jamais « (no messages) ») :
+ * nom natif explicite, sinon les premiers mots du premier message utilisateur,
+ * sinon « Conversation sans titre ».
+ */
+function titleFrom(name: string | undefined, firstMessage: string | undefined): string {
+  const explicit = name?.replace(/\s+/g, " ").trim();
+  if (explicit) return explicit;
+  const first = firstMessage?.replace(/\s+/g, " ").trim();
+  if (first && first !== NO_MESSAGES) {
+    return first.length <= MAX_TITLE_CHARS
+      ? first
+      : `${first.slice(0, MAX_TITLE_CHARS - 1).trimEnd()}…`;
+  }
+  return UNTITLED;
+}
+
+/** Horodatage sûr pour un nom de dossier (`:` et `.` remplacés). */
+function timestampSlug(now: Date = new Date()): string {
+  return now.toISOString().replace(/[:.]/g, "-");
+}
 
 /**
  * Préfixes des prompts SYNTHÉTIQUES (prompt de report d'un job). Ils ne sont
@@ -560,6 +603,28 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     return currentRecord;
   }
 
+  /** Résumé de la session COURANTE (même si son fichier n'est pas encore écrit). */
+  function currentSessionSummary(record: SessionRecord): SessionInfo {
+    let name: string | undefined;
+    try {
+      name = record.session.sessionManager.getSessionName();
+    } catch {
+      name = undefined;
+    }
+    const firstUser = record.transcript.find((entry) => entry.role === "user")?.text;
+    const sessionFile = record.session.sessionManager.getSessionFile();
+    return {
+      sessionId: record.sessionId,
+      ...(sessionFile ? { sessionFile } : {}),
+      ...(name ? { name } : {}),
+      title: titleFrom(name, firstUser),
+      cwd: paths.cwd,
+      updatedAt: new Date().toISOString(),
+      messageCount: record.transcript.length,
+      ...(firstUser ? { firstMessage: firstUser } : {}),
+    };
+  }
+
   async function doStart(): Promise<void> {
     restoreEnv = applyPiEnvironment(paths);
     ensurePiLayout(paths);
@@ -782,6 +847,13 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           sessionId,
         });
       }
+      // Une session PÉRIMÉE (l'utilisateur a basculé ailleurs) ne doit JAMAIS
+      // être ré-acheminée silencieusement vers la session courante : on refuse.
+      if (record.sessionId !== sessionId) {
+        throw new PiHostError("PI_SESSION_ERROR", "Session inconnue.", {
+          sessionId,
+        });
+      }
       const runId = newRunId();
       const run = makeRunItem(
         runId,
@@ -893,16 +965,126 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         paths.cwd,
         paths.sessionsDir,
       ).catch(() => []);
-      return list.map((info) => ({
+      const mapped: SessionInfo[] = list.map((info) => ({
         sessionId: info.id,
         sessionFile: info.path,
         ...(info.name ? { name: info.name } : {}),
+        title: titleFrom(info.name, info.firstMessage),
         cwd: info.cwd,
         createdAt: info.created.toISOString(),
         updatedAt: info.modified.toISOString(),
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
       }));
+      // Fusionne la session COURANTE si son fichier n'est pas encore persisté
+      // (un fil neuf ne s'écrit qu'à la première réponse assistant) : sinon
+      // « Nouvelle conversation » n'apparaîtrait pas dans la liste.
+      const current = currentRecord;
+      if (current && !mapped.some((info) => info.sessionId === current.sessionId)) {
+        mapped.unshift(currentSessionSummary(current));
+      }
+      return mapped.slice(0, MAX_SESSIONS);
+    },
+
+    async renameSession(id: string, title: string): Promise<void> {
+      if (!ready) {
+        throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
+      }
+      // Titre normalisé sur UNE ligne : le SDK refuse déjà les sauts de ligne.
+      const normalized = title.replace(/\s+/g, " ").trim();
+      if (normalized.length > 0) {
+        // Doublons REFUSÉS (insensible à la casse/aux espaces) : message honnête.
+        const existing = await host.listSessions();
+        const needle = normalized.toLowerCase();
+        const clash = existing.find(
+          (info) =>
+            info.sessionId !== id &&
+            (info.title ?? "").trim().toLowerCase() === needle,
+        );
+        if (clash) {
+          throw new PiHostError(
+            "PI_SESSION_ERROR",
+            `Le titre « ${normalized} » est déjà utilisé par une autre conversation.`,
+            { sessionId: id },
+          );
+        }
+      }
+      // Session courante attachée : renommage NATIF sur le SessionManager vivant
+      // (persisté dès que le fil a un premier message assistant).
+      const live =
+        sessions.get(id) ?? (currentRecord?.sessionId === id ? currentRecord : undefined);
+      if (live) {
+        live.session.sessionManager.appendSessionInfo(normalized);
+        return;
+      }
+      // Sinon : ouverture du JSONL et ajout d'une entrée `session_info`.
+      const file = await host.sessionFileFor(id);
+      if (!file || !existsSync(file)) {
+        throw new PiHostError("PI_SESSION_ERROR", "Conversation introuvable.", {
+          sessionId: id,
+        });
+      }
+      const manager = SessionManager.open(file, paths.sessionsDir, paths.cwd);
+      manager.appendSessionInfo(normalized);
+    },
+
+    async setAsideSession(id: string): Promise<void> {
+      if (!ready) {
+        throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
+      }
+      const isCurrent = currentRecord?.sessionId === id;
+      const file = await host.sessionFileFor(id);
+      if (!isCurrent && (!file || !existsSync(file))) {
+        throw new PiHostError("PI_SESSION_ERROR", "Conversation introuvable.", {
+          sessionId: id,
+        });
+      }
+      // ⚠️ ORDRE OBLIGATOIRE quand c'est la session OUVERTE : on détache la
+      // session vivante AVANT de déplacer son fichier, sinon le prochain
+      // `_persist` du SDK recréerait le JSONL au chemin déplacé (fil fantôme).
+      if (isCurrent) {
+        if (currentRecord) {
+          await host.abort(id).catch(() => undefined);
+          detachRecord(currentRecord);
+          currentRecord = undefined;
+        }
+        // Session de remplacement FRÂCHE, en mémoire : son fichier ne s'écrit
+        // qu'à la première réponse — l'UI affiche donc l'état vide jusque-là.
+        const activeRuntime = runtime;
+        if (activeRuntime) {
+          try {
+            await activeRuntime.newSession();
+          } catch (error) {
+            throw toPiHostError(error, { logger, sessionId: id });
+          }
+        }
+      }
+      // Déplacement horodaté : récupérable à la main, invisible à la liste.
+      if (file && existsSync(file)) {
+        const asideDir = join(paths.sessionsDir, ASIDE_DIR, timestampSlug());
+        try {
+          mkdirSync(asideDir, { recursive: true });
+          renameSync(file, join(asideDir, basename(file)));
+        } catch (error) {
+          throw toPiHostError(error, { logger, sessionId: id });
+        }
+      }
+      logger.info("pi.session.set_aside", {
+        session_id: id,
+        was_current: isCurrent,
+        aside_dir: file ? join(paths.sessionsDir, ASIDE_DIR) : null,
+      });
+    },
+
+    async sessionFileFor(id: string): Promise<string | undefined> {
+      if (currentRecord?.sessionId === id) {
+        return currentRecord.session.sessionManager.getSessionFile();
+      }
+      const list = await SessionManager.list(
+        paths.cwd,
+        paths.sessionsDir,
+      ).catch(() => []);
+      return list.find((info) => info.id === id)?.path;
     },
 
     async stop(): Promise<void> {

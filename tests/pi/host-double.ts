@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import type { PiHost } from "../../src/pi/host.js";
+import { PiHostError } from "../../src/pi/errors.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "../../src/pi/instrumentation.js";
 import type {
   EnsureSessionOptions,
@@ -92,6 +93,23 @@ export interface FakePiHostOptions {
   logger?: PiLogger;
   /** Multiplicateur des délais de script (0 = instantané). */
   latencyScale?: number;
+  /** Sessions SUPPLÉMENTAIRES connues (bascule multi-fils), sans SDK. */
+  sessions?: FakeSessionSeed[];
+}
+
+/** Session pré-remplie d'un double de host (id + fichier + titre + transcript). */
+export interface FakeSessionSeed {
+  id: string;
+  file?: string;
+  title?: string;
+  transcript?: TranscriptEntry[];
+}
+
+interface FakeKnownSession {
+  id: string;
+  file: string;
+  title?: string;
+  transcript: TranscriptEntry[];
 }
 
 export class FakePiHost implements PiHost {
@@ -100,6 +118,9 @@ export class FakePiHost implements PiHost {
   private readonly scripts: FakeScript[];
   private readonly logger: PiLogger;
   private readonly latencyScale: number;
+  private readonly knownSessions: FakeKnownSession[];
+  private readonly titles = new Map<string, string>();
+  private readonly setAsideIds = new Set<string>();
 
   private sessionId: string;
   private ready = false;
@@ -115,6 +136,12 @@ export class FakePiHost implements PiHost {
     this.scripts = options.scripts ?? [];
     this.logger = options.logger ?? noopLogger;
     this.latencyScale = options.latencyScale ?? 1;
+    this.knownSessions = (options.sessions ?? []).map((seed) => ({
+      id: seed.id,
+      file: seed.file ?? `/fake/${seed.id}.jsonl`,
+      ...(seed.title ? { title: seed.title } : {}),
+      transcript: (seed.transcript ?? []).map((entry) => ({ ...entry })),
+    }));
   }
 
   /** Ajoute un script à rejouer au prochain `send`. */
@@ -155,8 +182,16 @@ export class FakePiHost implements PiHost {
     return this.buildState();
   }
 
-  async resume(): Promise<SessionState> {
-    return this.newSession();
+  async resume(sessionFile: string): Promise<SessionState> {
+    const known = this.knownSessions.find((session) => session.file === sessionFile);
+    if (!known) return this.newSession();
+    this.sessionId = known.id;
+    this.transcript = known.transcript.map((entry) => ({ ...entry }));
+    this.partial = "";
+    this.state = "idle";
+    this.activeRunId = undefined;
+    this.emit({ type: "state", sessionId: this.sessionId, state: "idle" });
+    return this.buildState();
   }
 
   send(sessionId: string, text: string, _opts?: SendOptions): RunHandle {
@@ -260,13 +295,67 @@ export class FakePiHost implements PiHost {
   }
 
   async listSessions(): Promise<SessionInfo[]> {
-    return [
-      {
-        sessionId: this.sessionId,
-        sessionFile: `/fake/${this.sessionId}.jsonl`,
-        messageCount: this.transcript.length,
-      },
-    ];
+    const summaries: SessionInfo[] = this.knownSessions
+      .filter((session) => !this.setAsideIds.has(session.id))
+      .map((session) => this.summaryFor(session.id, session.file, session.transcript));
+    if (!summaries.some((info) => info.sessionId === this.sessionId)) {
+      summaries.unshift(
+        this.summaryFor(this.sessionId, `/fake/${this.sessionId}.jsonl`, this.transcript),
+      );
+    }
+    return summaries;
+  }
+
+  async renameSession(id: string, title: string): Promise<void> {
+    const normalized = title.replace(/\s+/g, " ").trim();
+    if (normalized.length > 0) {
+      const needle = normalized.toLowerCase();
+      const clash = (await this.listSessions()).find(
+        (info) =>
+          info.sessionId !== id &&
+          (info.title ?? "").toLowerCase() === needle,
+      );
+      if (clash) {
+        throw new PiHostError(
+          "PI_SESSION_ERROR",
+          `Le titre « ${normalized} » est déjà utilisé par une autre conversation.`,
+          { sessionId: id },
+        );
+      }
+    }
+    this.titles.set(id, normalized);
+  }
+
+  async setAsideSession(id: string): Promise<void> {
+    this.setAsideIds.add(id);
+    const index = this.knownSessions.findIndex((session) => session.id === id);
+    if (index >= 0) this.knownSessions.splice(index, 1);
+    if (this.sessionId === id) {
+      await this.newSession();
+    }
+  }
+
+  async sessionFileFor(id: string): Promise<string | undefined> {
+    if (this.sessionId === id) return `/fake/${id}.jsonl`;
+    return this.knownSessions.find((session) => session.id === id)?.file;
+  }
+
+  private summaryFor(
+    id: string,
+    file: string,
+    transcript: TranscriptEntry[],
+  ): SessionInfo {
+    const explicit = this.titles.get(id);
+    const seed = this.knownSessions.find((session) => session.id === id)?.title;
+    const firstUser = transcript.find((entry) => entry.role === "user")?.text;
+    return {
+      sessionId: id,
+      sessionFile: file,
+      ...(explicit || seed ? { name: explicit ?? seed } : {}),
+      title: explicit ?? seed ?? "Conversation sans titre",
+      messageCount: transcript.length,
+      ...(firstUser ? { firstMessage: firstUser } : {}),
+    };
   }
 
   async stop(): Promise<void> {

@@ -9,6 +9,8 @@ import { createMarkdownRenderer } from "./markdown.js";
 import { decodeTtsFrame } from "./tts-frames.js";
 import { createTtsPlayer } from "./tts-player.js";
 import { createTtsPreference, resolveSpeechState } from "./tts-preference.js";
+import { HolafModal } from "./vendor/holaf/holaf-modal.js";
+import { initSessionsPanel } from "./sessions-panel.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
@@ -18,10 +20,12 @@ const CLIENT_VERSION = "1";
 const MAX_RECONNECT_DELAY_MS = 8000;
 
 const els = {
+  chat: document.getElementById("chat"),
   conversation: document.getElementById("conversation"),
   input: document.getElementById("input"),
   send: document.getElementById("send"),
   stop: document.getElementById("stop"),
+  emptyNew: document.getElementById("empty-new"),
   connection: document.getElementById("connection"),
   sessionState: document.getElementById("session-state"),
   queued: document.getElementById("queued"),
@@ -39,6 +43,33 @@ let resumePending = false;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let clientMsgCounter = 0;
+
+/* ─── Conversations multiples (barre latérale) ─────────────────────────────
+ * Le panneau est un composant autonome monté par id. Chaque action envoie une
+ * trame au gateway, qui reste la SOURCE DE VÉRITÉ (liste + conversation
+ * active) : le client ne fait que refléter les trames `sessions` reçues.
+ */
+const sessionsPanel = initSessionsPanel({
+  root: document.getElementById("sessions-sidebar"),
+  HolafModal,
+  onSwitch: (id) => {
+    if (id !== sessionId) sendRaw({ type: "switch", sessionId: id });
+  },
+  onNew: () => {
+    sendRaw({ type: "new" });
+  },
+  onRename: (id, title) => {
+    sendRaw({ type: "rename", sessionId: id, title });
+  },
+  onSetAside: (id) => {
+    sendRaw({ type: "setAside", sessionId: id });
+  },
+});
+
+/** Bascule l'état « aucune conversation ouverte » (le fil est masqué). */
+function setEmptyState(empty) {
+  if (els.chat) els.chat.classList.toggle("chat--empty", Boolean(empty));
+}
 
 /* ─── Voix / TTS (Lot 7, Lot C) ───────────────────────────────────────────
  * Articulation (voir docs/lot7.md §9.3) :
@@ -268,7 +299,25 @@ function handleFrame(frame) {
   }
   if (type === "pong" || type === "bye") return;
   if (type === "error") {
+    // Les erreurs de GESTION des conversations (doublon refusé, conversation
+    // introuvable) ne sont pas des réponses de modèle : on les montre dans une
+    // modale explicite, jamais comme une bulle d'assistant.
+    if (frame.code === "session_inconnue" || frame.code === "PI_SESSION_ERROR") {
+      void HolafModal.alert(
+        "Action impossible",
+        frame.message || "Une erreur est survenue.",
+        { okText: "Compris" },
+      );
+      return;
+    }
     appendMessage("assistant error", frame.message || "erreur");
+    return;
+  }
+  if (type === "sessions") {
+    const activeId = typeof frame.activeId === "string" ? frame.activeId : null;
+    sessionsPanel.update(frame.sessions, activeId);
+    sessionId = activeId;
+    setEmptyState(activeId === null);
     return;
   }
   if (type === "snapshot") {
@@ -471,6 +520,8 @@ function onTtsPhase(frame) {
 function sendMessage() {
   const text = els.input.value.trim();
   if (text.length === 0) return;
+  // Aucune conversation ouverte (état vide) : on n'envoie RIEN dans le vide.
+  if (!sessionId) return;
   // Nouveau message = barge-in local : la voix en cours s'arrête net.
   ttsPlayer.stopAll();
   // Geste utilisateur : débloque l'AudioContext pour la lecture à venir.
@@ -565,6 +616,11 @@ function connect() {
 
 els.send.addEventListener("click", sendMessage);
 els.stop.addEventListener("click", abort);
+if (els.emptyNew) {
+  els.emptyNew.addEventListener("click", () => {
+    sendRaw({ type: "new" });
+  });
+}
 if (els.ttsToggle) els.ttsToggle.addEventListener("click", onTtsToggleClick);
 els.input.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {

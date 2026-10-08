@@ -100,11 +100,357 @@ a.pill:hover {
 
 .conversation {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 20px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* ─── Coquille à deux colonnes : barre latérale + discussion ────────────
+ * Le fil REMPLIT la largeur disponible (plus de colonne bornée ni centrage) :
+ * la barre latérale pousse la zone de contenu, qui se redimensionne en
+ * continu pendant l'animation d'ouverture/fermeture. */
+.shell {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.chat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar {
+  flex: 0 0 auto;
+  width: 56px;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+  transition: width 280ms ease;
+}
+
+/* Dépliage au SURVOL (ou épinglé) : 56 px → 280 px, animation fluide. */
+.sidebar:hover,
+.sidebar:focus-within,
+.sidebar[data-pinned="true"] {
+  width: 280px;
+}
+
+/* Largeur interne FIXE : le contenu ne se recompose pas pendant l'animation
+ * (pas de clignotement ni de saut de mise en page). */
+.sidebar__inner {
+  width: 280px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 12px 6px;
+}
+
+.sidebar__title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.sidebar__pin {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.sidebar__pin:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.sidebar[data-pinned="true"] .sidebar__pin {
+  color: var(--accent-text);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.sidebar__new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 8px;
+  padding: 9px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.sidebar__new:hover {
+  background: var(--panel-hover);
+  border-style: solid;
+}
+
+.sidebar__newplus {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.sidebar__newlabel {
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.sidebar:hover .sidebar__title,
+.sidebar:focus-within .sidebar__title,
+.sidebar:hover .sidebar__newlabel,
+.sidebar:focus-within .sidebar__newlabel,
+.sidebar:hover .conv__main,
+.sidebar:focus-within .conv__main,
+.sidebar[data-pinned="true"] .sidebar__title,
+.sidebar[data-pinned="true"] .sidebar__newlabel,
+.sidebar[data-pinned="true"] .conv__main {
+  opacity: 1;
+}
+
+.sidebar__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+}
+
+.conv {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.conv:hover {
+  background: var(--panel-hover);
+}
+
+.conv--active {
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.conv:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.conv__av {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.conv__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.conv__title {
+  display: block;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conv--active .conv__title {
+  font-weight: 600;
+}
+
+.conv__meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Menu contextuel (clic droit) ─────────────────────────────────────── */
+.ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  box-shadow: 0 10px 30px color-mix(in srgb, #000 40%, transparent);
+}
+
+.ctx-menu[hidden] {
+  display: none;
+}
+
+.ctx-menu__item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ctx-menu__item:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+
+.ctx-menu__item--danger {
+  color: var(--danger);
+}
+
+.ctx-menu__item:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.ctx-menu__sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* ─── État « aucune conversation ouverte » ─────────────────────────────── */
+.empty-state {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 24px;
+}
+
+.chat--empty .empty-state {
+  display: flex;
+}
+
+.chat--empty .conversation,
+.chat--empty .composer,
+.chat--empty .thinking-indicator {
+  display: none;
+}
+
+.empty-state__logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  font-size: 40px;
+  line-height: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.empty-state__name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.empty-state__hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+.empty-state__honest {
+  margin: 2px 0 0;
+  max-width: 60ch;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.empty-state__honest strong {
+  color: var(--text);
+}
+
+/* ─── Fenêtre ÉTROITE : la barre reste un rail de 56 px et se déplie
+ * PAR-DESSUS le fil (au lieu de l'écraser). Au plus simple, et documenté. */
+@media (max-width: 640px) {
+  .shell {
+    position: relative;
+  }
+
+  .sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+  }
+
+  .chat {
+    padding-left: 56px;
+  }
 }
 
 .empty {
@@ -114,10 +460,10 @@ a.pill:hover {
 }
 
 .message {
-  /* Bulle plafonnée pour rester lisible en pleine largeur, SANS colonne
-     centrée : l'alignement gauche (assistant) / droite (utilisateur) est
-     conservé, seule la longueur de ligne est bornée. */
-  max-width: min(78%, 900px);
+  /* BULLE PLEINE LARGEUR (assistant) ou ~85 % alignée à droite (utilisateur),
+     SANS colonne bornée ni centrage : le fil REMPLIT l'espace disponible. */
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 14px;
   border-radius: 14px;
   white-space: pre-wrap;
@@ -127,11 +473,13 @@ a.pill:hover {
 
 .message--user {
   align-self: flex-end;
+  width: 85%;
   background: var(--user);
 }
 
 .message--assistant {
   align-self: flex-start;
+  width: 100%;
   background: var(--assistant);
 }
 
@@ -408,6 +756,18 @@ h6.md-heading {
   border-collapse: collapse;
   margin: 0 0 8px;
   font-size: 0.95em;
+}
+
+/* Tableau large : défilement horizontal INTERNE à la bulle, jamais de
+ * débordement du fil (l'enveloppe est ajoutée par `markdown.js`). */
+.md-table-wrap {
+  max-width: 100%;
+  margin: 0 0 8px;
+  overflow-x: auto;
+}
+
+.md-table-wrap .md-table {
+  margin: 0;
 }
 
 .md-table th,
