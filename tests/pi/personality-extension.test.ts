@@ -55,6 +55,7 @@ function fakeMemory(block: string | null): MemoryPort {
   return {
     recall: async (): Promise<MemoryRecallResult> => ({
       block,
+      enabled: true,
       entries: block ? 1 : 0,
       chars: block ? block.length : 0,
       durationMs: 0,

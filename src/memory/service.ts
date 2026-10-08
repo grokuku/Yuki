@@ -185,14 +185,18 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
    */
   async recall(query: string): Promise<MemoryRecallResult> {
     const started = this.now();
+    // Capacité évaluée UNE fois : elle pilote la mention honnête côté extension
+    // (« mémoire activée ») même quand aucun souvenir ne remonte.
+    const enabled = this.enabled();
     const empty = (): MemoryRecallResult => ({
       block: null,
+      enabled,
       entries: 0,
       chars: 0,
       durationMs: this.now() - started,
     });
     try {
-      if (!this.enabled()) return empty();
+      if (!enabled) return empty();
       const bounds = this.bounds();
       if (bounds.topK <= 0 || bounds.budgetChars <= 0) return empty();
       const ready = await this.waitReady(bounds.timeoutMs);
@@ -206,6 +210,7 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
       const block = formatMemoryBlock(entries, bounds.budgetChars);
       const result: MemoryRecallResult = {
         block,
+        enabled,
         entries: block ? entries.length : 0,
         chars: block ? block.length : 0,
         durationMs: this.now() - started,

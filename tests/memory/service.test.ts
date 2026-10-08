@@ -218,6 +218,18 @@ describe("MemoryService — rappel borné et dégradation gracieuse", () => {
     const result = await h.service.recall("souvenir");
     expect(result.block).toBeNull();
     expect(result.chars).toBe(0);
+    // Mémoire ACTIVÉE même sans bloc : la capacité est annoncée honnêtement.
+    expect(result.enabled).toBe(true);
+    h.close();
+  });
+
+  it("mémoire ACTIVÉE mais aucun hit ⇒ enabled=true (capacité annoncée, bloc null)", async () => {
+    const h = harness();
+    h.service.start();
+    h.store.add({ text: "Un souvenir sur les crêpes", source: "s", cat: "fait" });
+    const result = await h.service.recall("sujet totalement différent sans mot-clé commun");
+    expect(result.block).toBeNull();
+    expect(result.enabled).toBe(true);
     h.close();
   });
 
@@ -230,12 +242,14 @@ describe("MemoryService — rappel borné et dégradation gracieuse", () => {
     h.close();
   });
 
-  it("mémoire désactivée ⇒ aucun rappel", async () => {
+  it("mémoire désactivée ⇒ aucun rappel et enabled=false", async () => {
     const h = harness();
     h.service.start();
     h.store.add({ text: "Souvenir présent", source: "s", cat: "fait" });
     h.setEnabled(false);
-    expect((await h.service.recall("souvenir")).block).toBeNull();
+    const result = await h.service.recall("souvenir");
+    expect(result.block).toBeNull();
+    expect(result.enabled).toBe(false);
     h.close();
   });
 

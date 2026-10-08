@@ -29,6 +29,23 @@ export interface MemoryExtensionOptions {
   syntheticUserPrefixes?: readonly string[];
 }
 
+/**
+ * Mention COURTE injectée quand la mémoire est ACTIVÉE mais qu'aucun souvenir
+ * n'est pertinent pour le message.
+ *
+ * ⚠️ Défaut de conception corrigé : sans elle, un tour sans hit n'injectait RIEN
+ * (`recall.block === null`) ⇒ le modèle, ne voyant aucune trace de la mémoire,
+ * en concluait avoir été construit SANS mémoire automatique — et le niait avec
+ * assurance. La condition d'injection porte donc sur la CAPACITÉ (`enabled`),
+ * JAMAIS sur les hits : un tour sans hit doit annoncer la capacité, pas la
+ * taire (sinon le bogue revient de façon intermittente).
+ *
+ * ⚠️ La plus courte des formulations : le prompt système est réémis à CHAQUE
+ * tour, le budget est payé à chaque tour.
+ */
+export const MEMORY_IDLE_NOTICE =
+  "Mémoire durable activée ; rien de pertinent pour ce message.";
+
 function isSynthetic(text: string, prefixes: readonly string[]): boolean {
   return prefixes.some((prefix) => prefix.length > 0 && text.startsWith(prefix));
 }
@@ -96,8 +113,13 @@ export function createMemoryExtensionFactory(
     factory: (pi: ExtensionAPI) => {
       pi.on("before_agent_start", async (event) => {
         const recall = await memory.recall(event.prompt);
-        if (!recall.block) return undefined;
-        return { systemPrompt: `${event.systemPrompt}\n\n${recall.block}` };
+        if (recall.block) {
+          return { systemPrompt: `${event.systemPrompt}\n\n${recall.block}` };
+        }
+        // Aucun souvenir pertinent : si la CAPACITÉ est active, on se présente
+        // quand même (une ligne), sinon le modèle renie une mémoire qu'il a.
+        if (!recall.enabled) return undefined;
+        return { systemPrompt: `${event.systemPrompt}\n\n${MEMORY_IDLE_NOTICE}` };
       });
 
       pi.on("agent_end", async (_event, ctx) => {

@@ -117,6 +117,13 @@ export type MemoryExtractor = (prompt: string) => Promise<string>;
 export interface MemoryRecallResult {
   /** Bloc à injecter (français), ou `null` si rien de pertinent / indisponible. */
   block: string | null;
+  /**
+   * La mémoire est-elle ACTIVE (capacité) au moment du rappel ? ⚠️ Distinct de
+   * `block` : vaut `true` même quand aucun souvenir ne remonte. Permet à
+   * l'appelant d'annoncer HONNÊTEMENT la capacité (« mémoire activée, rien de
+   * pertinent ») au lieu de laisser le modèle conclure à son absence.
+   */
+  enabled: boolean;
   /** Nombre d'entrées retenues. */
   entries: number;
   /** Longueur en caractères du bloc (0 si `null`). */

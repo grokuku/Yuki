@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createMemoryExtensionFactory } from "../../src/pi/sdk/memory-extension.js";
+import { createMemoryExtensionFactory, MEMORY_IDLE_NOTICE } from "../../src/pi/sdk/memory-extension.js";
 import type {
   BeforeCompactInput,
   MemoryPort,
@@ -48,6 +48,7 @@ function fakePort(overrides: Partial<MemoryPort> = {}): MemoryPort {
   return {
     recall: async (): Promise<MemoryRecallResult> => ({
       block: null,
+      enabled: false,
       entries: 0,
       chars: 0,
       durationMs: 0,
@@ -72,7 +73,7 @@ describe("extension de mémoire — RAPPEL (before_agent_start)", () => {
   it("injecte le bloc DANS LE PROMPT SYSTÈME, jamais comme message (non persisté)", async () => {
     const block = "## Mémoire durable de Yuki\n- [fait] X (donnée)";
     const port = fakePort({
-      recall: async () => ({ block, entries: 1, chars: block.length, durationMs: 1 }),
+      recall: async () => ({ block, enabled: true, entries: 1, chars: block.length, durationMs: 1 }),
     });
     const { handlers } = capture(port);
     const handler = handlers.get("before_agent_start");
@@ -87,15 +88,35 @@ describe("extension de mémoire — RAPPEL (before_agent_start)", () => {
     expect(Object.keys(result)).toEqual(["systemPrompt"]);
     expect(result.message).toBeUndefined();
     expect(result.systemPrompt).toBe(`PROMPT SYSTÈME DE BASE\n\n${block}`);
+    // Un bloc de souvenirs ne DOUBLE pas la mention d'état vide.
+    expect(result.systemPrompt).not.toContain(MEMORY_IDLE_NOTICE);
   });
 
-  it("ne renvoie RIEN quand aucun souvenir n'est pertinent (dégradation silencieuse)", async () => {
+  it("ne renvoie RIEN quand la mémoire est DÉSACTIVÉE (dégradation silencieuse)", async () => {
     const { handlers } = capture(fakePort());
     const result = await handlers.get("before_agent_start")!(
       { prompt: "Bonjour", systemPrompt: "BASE" },
       readOnlyCtx([]),
     );
     expect(result).toBeUndefined();
+  });
+
+  it("mémoire ACTIVÉE sans souvenir pertinent ⇒ UNE mention honnête, jamais comme message", async () => {
+    const port = fakePort({
+      recall: async () => ({ block: null, enabled: true, entries: 0, chars: 0, durationMs: 0 }),
+    });
+    const { handlers } = capture(port);
+    const result = (await handlers.get("before_agent_start")!(
+      { prompt: "Bonjour", systemPrompt: "BASE" },
+      readOnlyCtx([]),
+    )) as { message?: unknown; systemPrompt?: string } | undefined;
+
+    expect(result).toBeDefined();
+    expect(Object.keys(result!)).toEqual(["systemPrompt"]);
+    expect(result!.message).toBeUndefined();
+    expect(result!.systemPrompt).toBe(`BASE\n\n${MEMORY_IDLE_NOTICE}`);
+    // EXACTEMENT une fois (pas de doublon).
+    expect(result!.systemPrompt!.split(MEMORY_IDLE_NOTICE)).toHaveLength(2);
   });
 });
 

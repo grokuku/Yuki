@@ -408,10 +408,15 @@ async function main(): Promise<void> {
       logger,
     });
     agentsDeps = { pairing: pairingManager, store: agentStore, logger, hub: agentHub, audit: auditLog, approvals };
+    // Taille RÉELLE de l'annuaire au démarrage (observabilité d'exploitation) :
+    // permet de retrouver dans les logs combien d'agents Yuki connaît — utile
+    // pour diagnostiquer PLUS TARD un écart éventuel store ↔ runtime.
     logger.info("agents.ready", {
       ca_fingerprint: agentCa.fingerprint,
       store: env.agentsStorePath,
       audit: env.auditLogPath,
+      store_agents: agentStore.size,
+      store_agents_active: agentStore.list().filter((record) => !record.revoked).length,
     });
   } catch (error) {
     logger.error("agents.init.failed", { error: messageOf(error) });
