@@ -128,6 +128,30 @@ async function waitForFile(path: string, timeoutMs: number): Promise<string> {
   }
 }
 
+/**
+ * Attend que Yuki ait REÇU la `pair_begin` de l'agent, c'est-à-dire qu'une trame
+ * soit effectivement EN ATTENTE de validation (D119).
+ *
+ * ⚠️ Course de démarrage réelle, PAS un défaut d'interopérabilité :
+ * `agent.PairWithCodes` appelle `OnCode` (qui écrit le fichier du code) AVANT
+ * d'envoyer `pair_begin`. Soumettre le code dès l'apparition du fichier peut donc
+ * tomber dans la fenêtre où l'agent n'a pas encore contacté Yuki : aucune trame
+ * n'est en attente et `submitCode` renvoie `matched=false`. On sonde l'état RÉEL
+ * du serveur (`pendingCount`) au lieu de dormir un délai arbitraire.
+ */
+async function waitForPendingFrame(s: TestStack, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (s.pairing.pendingCount() > 0) return;
+    if (Date.now() > deadline) {
+      throw new Error(
+        "l'agent n'a pas envoyé sa `pair_begin` à temps (aucune trame en attente)",
+      );
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 const stacks: TestStack[] = [];
 afterEach(async () => {
   for (const s of stacks.splice(0)) {
@@ -210,6 +234,9 @@ describe.skipIf(!GO)("interopérabilité Go ↔ TS", () => {
       const code = await waitForFile(codeFile, 90_000);
       // Le code est conforme (XXXX-XXXX-XXXX, alphabet Crockford 30 symboles).
       expect(code).toMatch(/^[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}$/);
+      // L'agent a AFFICHÉ le code ; on attend qu'il l'ait aussi ENVOYÉ à Yuki
+      // (`pair_begin`) pour qu'une trame soit en attente de validation.
+      await waitForPendingFrame(s, 30_000);
       // L'utilisateur le recopie dans Yuki : la trame en attente est appariée.
       const submitted = s.pairing.submitCode(code, { ip: "127.0.0.1" });
       expect(submitted.matched).toBe(true);
