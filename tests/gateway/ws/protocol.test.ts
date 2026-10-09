@@ -108,6 +108,31 @@ describe("protocol — client → serveur", () => {
       error: "unknown_type",
     });
   });
+
+  it("accepte une décision de validation (approve/deny) et rejette les formes invalides", () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "approval_decision", id: "ap-1", decision: "approve" }),
+      ),
+    ).toEqual({
+      ok: true,
+      message: { type: "approval_decision", id: "ap-1", decision: "approve" },
+    });
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "approval_decision", id: "ap-1", decision: "deny" }),
+      ),
+    ).toEqual({
+      ok: true,
+      message: { type: "approval_decision", id: "ap-1", decision: "deny" },
+    });
+    expect(
+      parseClientMessage(JSON.stringify({ type: "approval_decision", decision: "approve" })),
+    ).toEqual({ ok: false, error: "approval_decision_missing_id" });
+    expect(
+      parseClientMessage(JSON.stringify({ type: "approval_decision", id: "ap-1", decision: "peut-etre" })),
+    ).toEqual({ ok: false, error: "approval_decision_invalid" });
+  });
 });
 
 describe("protocol — mapping événement → trame serveur", () => {

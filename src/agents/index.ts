@@ -262,8 +262,11 @@ export {
   ApprovalRegistry,
 } from "./approvals.js";
 export type {
+  ApprovalEvent,
+  ApprovalEventListener,
   ApprovalLogger,
   ApprovalRegistryOptions,
+  ApprovalRequestInput,
   ApprovalStatus,
   PendingApproval,
 } from "./approvals.js";
@@ -273,10 +276,14 @@ export {
   DEFAULT_COMMAND_TIMEOUT_MS,
 } from "./execution.js";
 export type {
+  ApprovalDecisionOutcome,
+  ApprovalGatewayPort,
+  ApprovalViewEvent,
   ExecutionLogger,
   ExecutionOutcome,
   ExecutionRequest,
   ExecutionServiceOptions,
   ExecutionServicePort,
   ExecutionStatus,
+  PendingApprovalView,
 } from "./execution.js";

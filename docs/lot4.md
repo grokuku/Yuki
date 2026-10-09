@@ -495,3 +495,46 @@ Le sous-lot **A6** livre le programme posable sur une machine :
 - **Windows uniquement** (import sous `//go:build windows`) : service Windows (`windows/svc`, `windows/svc/mgr`) et **job object** (`windows.CreateJobObject`, `AssignProcessToJobObject`, `TerminateJobObject`).
 - Les binaires **Linux n'embarquent pas** ce code (vérifié : 0 symbole `golang.org/x/sys/windows` dans le binaire Linux ; 122 dans le binaire Windows).
 - `proto.Cmd` gagne un champ optionnel **`destructive`** (`*bool`, `agent/internal/proto/types.go`) : c'est une **décision d'IMPLÉMENTATION** — **arbitrée pendant le développement, non validée par l'utilisateur**. Elle **ne contredit pas** `D118`/`D126`/`D124` (**l'agent ne bloque pas**, Yuki décide) : l'annonce de Yuki sert uniquement à **journaliser une divergence** avec le matcher local — **sans bloquer**.
+
+---
+
+## 15. Validation humaine DANS la conversation (note d'implémentation)
+
+> **Note d'implémentation — hors décisions de conception.** Ajoutée **après la
+> validation**, à la demande d'usage réel : une demande de validation (`D118`
+> niveaux **2**/**3**) **doit apparaître dans la conversation** où la commande a
+> été demandée, et non plus seulement dans l'onglet **Agents** de `/config`. Elle
+> **ne modifie aucune décision** `D109`–`D128`.
+
+**Principe.** La demande de validation n'est **PAS un message** : c'est un
+**état temporaire de l'interface**. Elle apparaît **dans le fil** de la bonne
+conversation, offre **Valider** / **Refuser** sur place, puis **disparaît** une
+fois décidée ou expirée. Elle **n'entre jamais** dans le transcript, ni dans le
+snapshot, ni dans la mémoire : elle circule par des **trames de contrôle**
+WebSocket (`approval`, `approval_cleared`, `approval_result`) envoyées via
+`sendDirect` (aucun `seq` consommé, **jamais bufferisées**), et **jamais** par
+`SessionStream.append` (le buffer de rejeu).
+
+**Routage.** Chaque demande porte le `sessionId` de la conversation d'où
+`run_command` a été appelé (`ctx.sessionManager.getSessionId()`), et n'est
+diffusée qu'aux **clients de cette session**. Le « consume-once » reste, lui,
+lié à **(agent, commande)** : inchangé.
+
+**Ré-affichage.** À la connexion, à la bascule et à la reconnexion, le serveur
+renvoie les demandes **encore en attente** de la conversation (état **vivant**).
+Une fois décidée ou expirée, elle ne réapparaît **plus**.
+
+**⚠️ Après validation (comportement à VALIDER par l'utilisateur).** Le choix
+retenu est l'**exécution IMMÉDIATE** : approuver déclenche la commande tout de
+suite (au lieu d'attendre que le modèle la redemande), et le **résultat**
+s'affiche dans la conversation **de façon éphémère** (même mécanisme que la
+demande : trame `approval_result`, jamais dans l'historique). Ce comportement
+est **isolé** dans `AgentExecutionService.decideApproval`
+(`src/agents/execution.ts`) et dans `public/ui/approval-block.js` : il peut être
+changé sans toucher au reste (par ex. ne plus exécuter et laisser le modèle
+relancer, ou persister le résultat dans le transcript).
+
+**Panneau Agents.** Conservé, **en repli** (utile hors conversation). Sa route
+HTTP (`POST /api/agents/approvals/<id>/approve|deny`) **enregistre** la décision
+et fait disparaître le bloc de la conversation (via l'événement `decided`), mais
+n'exécute pas immédiatement : le lieu **principal** est la conversation.

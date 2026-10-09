@@ -13,6 +13,7 @@ import type {
   RunFinishReason,
   TranscriptEntry,
 } from "../../pi/types.js";
+import type { ExecutionStatus, PendingApprovalView } from "../../agents/execution.js";
 
 /** Trame client → serveur. */
 export type ClientMessage =
@@ -25,6 +26,7 @@ export type ClientMessage =
   | { type: "new" }
   | { type: "rename"; sessionId: string; title: string }
   | { type: "setAside"; sessionId: string }
+  | { type: "approval_decision"; id: string; decision: "approve" | "deny" }
   | { type: "ping"; t: number };
 
 /** Session exposée au client (liste des conversations de la barre latérale). */
@@ -103,8 +105,48 @@ export type ServerMessage =
       sessions: WireSession[];
       activeId: string | null;
     }
+  | {
+      /**
+       * Demande de VALIDATION HUMAINE à afficher DANS la conversation. C'est un
+       * ÉTAT TEMPORAIRE de l'interface : trame de contrôle (aucun `seq`
+       * consommé), JAMAIS bufferisée, JAMAIS dans le transcript ni le snapshot.
+       */
+      type: "approval";
+      approval: PendingApprovalView;
+    }
+  | {
+      /** Retire le bloc de validation (décidée/expirée) — idempotent. */
+      type: "approval_cleared";
+      id: string;
+    }
+  | {
+      /**
+       * Résultat d'une commande exécutée IMMÉDIATEMENT après approbation. ÉTAT
+       * TEMPORAIRE (même épisémérité que le bloc) : jamais dans l'historique.
+       */
+      type: "approval_result";
+      result: ApprovalResultFrame;
+    }
   | { type: "pong"; t: number }
   | { type: "bye"; reason: string };
+
+/** Résultat éphémère d'une commande approuvée, rendu à l'interface. */
+export interface ApprovalResultFrame {
+  id: string;
+  agentId: string;
+  agentName?: string;
+  command: string;
+  status: ExecutionStatus;
+  /** `true` si la commande a réellement été exécutée (statut terminal de succès/échec). */
+  ok: boolean;
+  exitCode: number | null;
+  message: string;
+  /** Sortie encadrée (`<sortie …>`, DONNÉE) si la commande a été exécutée. */
+  output?: string;
+  durationMs?: number;
+  truncated?: boolean;
+  timedOut?: boolean;
+}
 
 /** Enveloppe commune à toute trame serveur → client. */
 export interface ServerEnvelope {
@@ -239,6 +281,17 @@ export function parseClientMessage(raw: string): ParseResult {
         return { ok: false, error: "set_aside_missing_session_id" };
       }
       return { ok: true, message: { type: "setAside", sessionId } };
+    }
+    case "approval_decision": {
+      const id = optionalString(parsed, "id");
+      if (id === undefined || id.length === 0) {
+        return { ok: false, error: "approval_decision_missing_id" };
+      }
+      const decision = parsed.decision;
+      if (decision !== "approve" && decision !== "deny") {
+        return { ok: false, error: "approval_decision_invalid" };
+      }
+      return { ok: true, message: { type: "approval_decision", id, decision } };
     }
     case "ping": {
       const t = parsed.t;

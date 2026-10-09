@@ -330,6 +330,129 @@ describe("B6 — audit SANS la sortie (D127)", () => {
   });
 });
 
+describe("B6bis — validation rattachée à la conversation + exécution immédiate", () => {
+  it("rattache la demande à la session et ne l'expose qu'à elle", async () => {
+    const s = await stack();
+    const { ws } = await connectAgent(s, "agent-sess");
+    autoAckResult(ws);
+    s.store.configure("agent-sess", { level: "always" });
+
+    const first = await s.execution.execute({
+      agentId: "agent-sess",
+      command: "echo routage",
+      sessionId: "sess-1",
+    });
+    expect(first.status).toBe("awaiting_validation");
+
+    const mine = s.execution.pendingApprovals("sess-1");
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({
+      agentId: "agent-sess",
+      command: "echo routage",
+      sessionId: "sess-1",
+    });
+    // Une AUTRE conversation ne voit RIEN de cette demande.
+    expect(s.execution.pendingApprovals("sess-2")).toHaveLength(0);
+  });
+
+  it("approuver exécute la commande IMMÉDIATEMENT (une seule fois)", async () => {
+    const s = await stack();
+    const { ws, received } = await connectAgent(s, "agent-imm");
+    autoAckResult(ws);
+    s.store.configure("agent-imm", { level: "always" });
+
+    const pending = await s.execution.execute({
+      agentId: "agent-imm",
+      command: "echo imm",
+      sessionId: "sess-1",
+    });
+    const approved = await s.execution.decideApproval(
+      pending.approvalId as string,
+      "approve",
+    );
+    expect(approved.ok).toBe(true);
+    if (!approved.ok || approved.decision !== "approve") throw new Error("approve attendu");
+    expect(approved.outcome.status).toBe("completed");
+    expect(approved.outcome.framed).toContain("echo imm");
+    // Une SEULE commande a été émise vers l'agent.
+    expect(received.filter((f) => f["type"] === "cmd")).toHaveLength(1);
+    // La demande n'est plus en attente : elle ne réapparaîtra plus.
+    expect(s.execution.pendingApprovals("sess-1")).toHaveLength(0);
+  });
+
+  it("refuser n'exécute RIEN", async () => {
+    const s = await stack();
+    const { ws, received } = await connectAgent(s, "agent-deny");
+    autoAckResult(ws);
+    s.store.configure("agent-deny", { level: "always" });
+
+    const pending = await s.execution.execute({
+      agentId: "agent-deny",
+      command: "echo refus",
+      sessionId: "sess-1",
+    });
+    const denied = await s.execution.decideApproval(
+      pending.approvalId as string,
+      "deny",
+    );
+    expect(denied.ok).toBe(true);
+    if (!denied.ok) throw new Error("ok attendu");
+    expect(denied.decision).toBe("deny");
+    expect(received.filter((f) => f["type"] === "cmd")).toHaveLength(0);
+    expect(s.execution.pendingApprovals("sess-1")).toHaveLength(0);
+  });
+
+  it("décider une demande inconnue/expirée échoue proprement", async () => {
+    const s = await stack();
+    const result = await s.execution.decideApproval("inexistante", "approve");
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("échec attendu");
+    expect(result.code).toBe("approval_not_found");
+    expect(result.message.length).toBeGreaterThan(0);
+  });
+
+  it("expose les motifs destructeurs avec des libellés lisibles", async () => {
+    const s = await stack();
+    const { ws } = await connectAgent(s, "agent-motifs");
+    autoAckResult(ws);
+    s.store.configure("agent-motifs", { level: "destructive" });
+
+    const pending = await s.execution.execute({
+      agentId: "agent-motifs",
+      command: "rm -rf /",
+      sessionId: "sess-1",
+    });
+    expect(pending.status).toBe("awaiting_validation");
+    const view = s.execution.pendingApprovals("sess-1")[0];
+    expect(view?.destructive).toBe(true);
+    expect(view?.destructiveIds.length).toBeGreaterThan(0);
+    expect(view?.destructiveReasons.length).toBe(view?.destructiveIds.length);
+    // Les libellés sont lisibles (français), pas des identifiants techniques.
+    expect(view?.destructiveReasons[0]).not.toBe(view?.destructiveIds[0]);
+  });
+
+  it("diffuse un événement `requested` en vue PUBLIQUE (nom résolu)", async () => {
+    const s = await stack();
+    const { ws } = await connectAgent(s, "agent-event");
+    autoAckResult(ws);
+    s.store.setName("agent-event", "nuc00");
+    s.store.configure("agent-event", { level: "always" });
+    const events: Array<{ kind: string; approval: { agentName?: string } }> = [];
+    const off = s.execution.subscribeApprovals((event) => {
+      events.push(event as unknown as { kind: string; approval: { agentName?: string } });
+    });
+    await s.execution.execute({
+      agentId: "agent-event",
+      command: "echo evt",
+      sessionId: "sess-1",
+    });
+    off();
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("requested");
+    expect(events[0]?.approval.agentName).toBe("nuc00");
+  });
+});
+
 describe("Lot 4 (extension) — consultation des agents sur pile réelle", () => {
   it("liste l'agent connecté, résout par nom, et renvoie l'historique SANS la sortie", async () => {
     const s = await stack();

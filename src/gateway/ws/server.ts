@@ -17,10 +17,16 @@ import { WebSocket, WebSocketServer } from "ws";
 
 import { toPiHostError } from "../../pi/errors.js";
 import { PHASE, type PiEvent, type PiHost } from "../../pi/index.js";
+import type {
+  ApprovalGatewayPort,
+  ExecutionOutcome,
+  PendingApprovalView,
+} from "../../agents/execution.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
 import {
   parseClientMessage,
+  type ApprovalResultFrame,
   type ClientMessage,
   type ServerEnvelope,
   type ServerFrame,
@@ -44,6 +50,11 @@ export interface WsTransportOptions {
    * strictement identique aux lots précédents).
    */
   tts?: TtsPipelineDeps;
+  /**
+   * Demandes de validation humaine (D118) affichées DANS la conversation.
+   * Absent ⇒ aucun bloc de validation (comportement inchangé).
+   */
+  approvals?: ApprovalGatewayPort;
 }
 
 interface ClientState {
@@ -133,6 +144,28 @@ export function toServerMessage(event: PiEvent): ServerMessage {
   }
 }
 
+/** Résultat d'exécution converti en trame éphémère pour la conversation. */
+export function toApprovalResultFrame(
+  approval: PendingApprovalView,
+  outcome: ExecutionOutcome,
+): ApprovalResultFrame {
+  return {
+    id: approval.id,
+    agentId: outcome.agentId,
+    ...(outcome.agentName ? { agentName: outcome.agentName } : {}),
+    command: outcome.command,
+    status: outcome.status,
+    // « ok » = la commande a réellement été exécutée (statut terminal normal).
+    ok: outcome.status === "completed",
+    exitCode: outcome.exitCode,
+    message: outcome.message,
+    ...(outcome.framed ? { output: outcome.framed } : {}),
+    ...(outcome.durationMs !== undefined ? { durationMs: outcome.durationMs } : {}),
+    ...(outcome.truncated !== undefined ? { truncated: outcome.truncated } : {}),
+    ...(outcome.timedOut !== undefined ? { timedOut: outcome.timedOut } : {}),
+  };
+}
+
 /** Crée le transport WebSocket et l'abonne au PiHost. */
 export function createWsTransport(options: WsTransportOptions): Transport {
   const { host, logger, serverVersion } = options;
@@ -143,6 +176,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     snapshotSource: (sessionId) => host.getState(sessionId),
   });
   const clients = new Set<ClientState>();
+  const approvals = options.approvals;
 
   const runT0 = new Map<string, number>();
   const unsubscribeHost = host.subscribeAll((event) => {
@@ -251,6 +285,69 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   }
 
+  // ── Validations humaines dans la conversation (D118) ────────────────────
+  // Le registre diffuse `requested`/`decided` ; on route vers les clients de
+  // la SEULE conversation concernée. Les décisions prises AILLEURS (page
+  // /config, route HTTP) font aussi disparaître le bloc ici, via `decided`.
+  const unsubscribeApprovals = approvals?.subscribeApprovals((event) => {
+    const sessionId = event.approval.sessionId;
+    if (!sessionId) return;
+    if (event.kind === "requested") {
+      broadcastControl(sessionId, { type: "approval", approval: event.approval });
+    } else {
+      broadcastControl(sessionId, { type: "approval_cleared", id: event.approval.id });
+    }
+  });
+
+  /** Décision humaine (Valider / Refuser) reçue depuis la conversation. */
+  async function handleApprovalDecision(
+    client: ClientState,
+    message: ClientMessage,
+  ): Promise<void> {
+    if (message.type !== "approval_decision") return;
+    if (!approvals) {
+      sendDirect(client, {
+        type: "error",
+        code: "approval_unavailable",
+        message: "Les validations ne sont pas disponibles.",
+      });
+      return;
+    }
+    let result;
+    try {
+      result = await approvals.decideApproval(message.id, message.decision);
+    } catch (error) {
+      sendDirect(client, {
+        type: "error",
+        code: "approval_failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (!result.ok) {
+      // Clic tardif (déjà décidée/expirée) : on retire le bloc devenu obsolète
+      // puis on renvoie un message HONNÊTE, aucun mensonge.
+      sendDirect(client, { type: "approval_cleared", id: message.id });
+      sendDirect(client, {
+        type: "error",
+        code: result.code,
+        message: result.message,
+      });
+      return;
+    }
+    const sessionId = result.approval.sessionId ?? sessionIdFor(client);
+    if (!sessionId) return;
+    // Idempotent : `decided` a pu déjà diffuser le retrait. On le refait pour le
+    // chemin local (et pour un port sans diffusion d'événement).
+    broadcastControl(sessionId, { type: "approval_cleared", id: result.approval.id });
+    if (result.decision === "approve") {
+      broadcastControl(sessionId, {
+        type: "approval_result",
+        result: toApprovalResultFrame(result.approval, result.outcome),
+      });
+    }
+  }
+
   /** Trame de contrôle : réutilise le `seq` courant sans le consommer. */
   function sendDirect(client: ClientState, message: ServerMessage): ServerFrame {
     const frame = {
@@ -259,6 +356,33 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     } as ServerFrame;
     sendFrame(client, frame);
     return frame;
+  }
+
+  /**
+   * Diffuse une trame de CONTRÔLE aux clients d'UNE session (jamais aux
+   * autres). Sert aux états éphémères (validation humaine) : envoyés via
+   * `sendDirect`, ils ne consomment aucun `seq`, ne sont jamais bufferisés et
+   * donc n'entrent NI dans le rejeu NI dans un snapshot.
+   */
+  function broadcastControl(sessionId: string, message: ServerMessage): void {
+    for (const client of clients) {
+      if (sessionIdFor(client) !== sessionId) continue;
+      sendDirect(client, message);
+    }
+  }
+
+  /**
+   * Ré-affiche les demandes de validation EN ATTENTE de la conversation du
+   * client (état VIVANT : reconnexion, bascule, création). Une demande décidée
+   * ou expirée n'est plus dans le registre ⇒ elle ne réapparaît pas.
+   */
+  function sendPendingApprovals(client: ClientState): void {
+    if (!approvals) return;
+    const sessionId = sessionIdFor(client);
+    if (!sessionId) return;
+    for (const approval of approvals.pendingApprovals(sessionId)) {
+      sendDirect(client, { type: "approval", approval });
+    }
   }
 
   /** Liste des conversations + conversation active, envoyée au client. */
@@ -324,6 +448,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     await sendSessions(client);
     // État initial autoritatif : le client initialise son rendu depuis le snapshot.
     sendSnapshotForCurrent(client);
+    // État VIVANT : les validations en attente de ce fil sont ré-affichées.
+    sendPendingApprovals(client);
   }
 
   async function handleResume(client: ClientState, message: ClientMessage): Promise<void> {
@@ -393,6 +519,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
     // Uniquement si la session hôte a CHANGÉ : rafraîchit la barre latérale.
     if (switched) await sendSessions(client);
+    // Ré-affichage des validations en attente (état vivant, jamais l'historique).
+    sendPendingApprovals(client);
   }
 
   /** Bascule vers une autre conversation (abort du run en cours par construction). */
@@ -427,6 +555,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // ⚠️ Un `snapshot` à CHAQUE bascule : le client reconstruit TOUT son rendu
     // depuis le transcript du nouveau fil → aucun doublon possible.
     sendSnapshotForCurrent(client);
+    sendPendingApprovals(client);
   }
 
   /** Crée une nouvelle conversation et la rend active. */
@@ -446,6 +575,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     ensureSubscribed(client);
     await sendSessions(client);
     sendSnapshotForCurrent(client);
+    sendPendingApprovals(client);
   }
 
   /** Renomme une conversation (doublons refusés côté hôte). */
@@ -567,6 +697,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       case "setAside":
         await handleSetAside(client, message);
         return;
+      case "approval_decision":
+        await handleApprovalDecision(client, message);
+        return;
       case "message":
         handleMessage(client, message);
         return;
@@ -678,6 +811,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       if (closed) return;
       closed = true;
       unsubscribeHost();
+      unsubscribeApprovals?.();
       tts?.cancelAll();
       if (httpServer) {
         httpServer.off("upgrade", onUpgrade);

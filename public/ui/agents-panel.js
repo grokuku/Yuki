@@ -219,7 +219,11 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
         class: "config-helper",
         text:
           "Ces commandes attendent votre approbation (niveaux 2 et 3). Le modèle ne peut " +
-          "pas les autoriser lui-même : approuvez-les ici, puis relancez la demande.",
+          "pas les autoriser lui-même. Le lieu PRINCIPAL pour décider est la conversation " +
+          "où la commande a été demandée (le bloc de validation y apparaît et disparaît " +
+          "une fois décidé) ; ce panneau reste un REPLI quand on n'est pas dans la " +
+          "conversation — il enregistre la décision, puis le modèle peut relancer la " +
+          "demande.",
       }),
     );
     for (const approval of state.approvals) {

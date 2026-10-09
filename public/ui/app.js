@@ -11,6 +11,7 @@ import { createTtsPlayer } from "./tts-player.js";
 import { createTtsPreference, resolveSpeechState } from "./tts-preference.js";
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { initSessionsPanel } from "./sessions-panel.js";
+import { createApprovalBlocks } from "./approval-block.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
@@ -63,6 +64,26 @@ const sessionsPanel = initSessionsPanel({
   },
   onSetAside: (id) => {
     sendRaw({ type: "setAside", sessionId: id });
+  },
+});
+
+/* ─── Validation humaine DANS la conversation (D118) ─────────────────────
+ * État TEMPORAIRE de l'interface (jamais un message) : un bloc apparaît dans le
+ * fil OÙ la commande a été demandée, on valide / refuse sur place, il disparaît
+ * une fois décidé ou expiré. Il n'entre JAMAIS dans l'historique : le serveur ne
+ * l'envoie que par trames de contrôle (jamais dans le transcript ni le rejeu).
+ * La décision part par le WebSocket (trame `approval_decision`). */
+const approvalBlocks = createApprovalBlocks({
+  container: els.conversation,
+  onDecide: (id, decision) => {
+    if (sendRaw({ type: "approval_decision", id, decision })) return;
+    approvalBlocks.resetBusy();
+    void HolafModal.alert(
+      "Hors ligne",
+      "Impossible d'envoyer votre décision : la connexion au gateway est perdue. " +
+        "Réessayez une fois reconnecté.",
+      { okText: "Compris" },
+    );
   },
 });
 
@@ -349,6 +370,9 @@ function appendAssistantMessage(text = null, pinned = isConversationPinned(), ts
 
 function applyTranscript(transcript) {
   const pinned = isConversationPinned();
+  // Le fil est reconstruit : on purge les blocs de validation (timers inclus).
+  // Ils seront ré-affichés par le serveur s'ils sont ENCORE en attente.
+  approvalBlocks.reset();
   els.conversation.innerHTML = "";
   currentRenderer = null;
   lastDayKey = null;
@@ -407,6 +431,10 @@ function handleFrame(frame) {
     // Un `welcome { resumed: true }` acquitte notre `resume` : le rejeu (ou le
     // snapshot) suit, on autorise une nouvelle demande si un trou apparaissait.
     if (frame.resumed) resumePending = false;
+    // Reconnexion : on purge les blocs de validation AVANT que le serveur ne
+    // ré-émette les demandes ENCORE en attente. Un bloc décidé PENDANT la
+    // coupure ne doit PAS rester affiché (état vivant, pas d'historique).
+    approvalBlocks.reset();
     return;
   }
   if (type === "pong" || type === "bye") return;
@@ -422,6 +450,19 @@ function handleFrame(frame) {
       );
       return;
     }
+    // Validation tardive (déjà décidée ou expirée) : message HONNÊTE, jamais un
+    // succès trompeur. Le bloc correspondant a été retiré par `approval_cleared`.
+    if (frame.code === "approval_not_found" || frame.code === "approval_unavailable") {
+      approvalBlocks.resetBusy();
+      void HolafModal.alert(
+        "Validation impossible",
+        frame.message || "Cette demande de validation n'existe plus.",
+        { okText: "Compris" },
+      );
+      return;
+    }
+    // Autre échec (réseau, erreur serveur) : on réactive les boutons du bloc.
+    approvalBlocks.resetBusy();
     appendMessage("assistant error", frame.message || "erreur");
     return;
   }
@@ -434,6 +475,22 @@ function handleFrame(frame) {
   }
   if (type === "snapshot") {
     applySnapshot(frame);
+    return;
+  }
+
+  // Validation humaine : ÉTAT TEMPORAIRE, trame de CONTRÔLE (aucun `seq`
+  // consommé). Traitée AVANT la logique de curseur `seq`, sinon elle serait
+  // prise pour un doublon. Jamais rejouée, jamais conservée.
+  if (type === "approval") {
+    approvalBlocks.show(frame.approval);
+    return;
+  }
+  if (type === "approval_cleared") {
+    approvalBlocks.clear(String(frame.id));
+    return;
+  }
+  if (type === "approval_result") {
+    approvalBlocks.showResult(frame.result);
     return;
   }
 

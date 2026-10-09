@@ -11,12 +11,17 @@
  * ⚠️ **Hors ligne = rejet immédiat** (D124) : aucune mise en file.
  * ⚠️ **Déconnexion pendant une commande ⇒ `result_lost`** (D124) : la commande
  * va à son terme côté agent, mais son résultat est perdu.
+ *
+ * ⚠️ La demande de validation est RATTACHÉE à la conversation (`sessionId`) et
+ * affichée dans la conversation ; `decideApproval` applique la décision et, en
+ * cas d'approbation, **exécute la commande IMMÉDIATEMENT** (comportement isolé,
+ * documenté dans `docs/lot4.md` §15).
  */
 
-import type { ApprovalRegistry } from "./approvals.js";
+import type { ApprovalRegistry, PendingApproval } from "./approvals.js";
 import type { AgentHub } from "./connection.js";
 import { isChannelError } from "./errors.js";
-import { evaluateDestructive } from "./destructive.js";
+import { destructiveLabels, evaluateDestructive } from "./destructive.js";
 import { escapeOutputText, frameAgentDirectory, frameCommandOutput } from "./output.js";
 import type { AuditLog } from "./audit.js";
 import type { AgentStore } from "./store.js";
@@ -46,6 +51,12 @@ export interface ExecutionRequest {
   cwd?: string;
   timeoutMs?: number;
   origin?: string;
+  /**
+   * Conversation d'où la demande est émise (session PiHost). Sert au ROUTAGE de
+   * la demande de validation vers la bonne conversation. Optionnel : un appel
+   * hors conversation (ex. test) reste accepté.
+   */
+  sessionId?: string;
 }
 
 /** Résultat d'exécution rendu à l'appelant (jamais la sortie brute non encadrée). */
@@ -78,6 +89,66 @@ export interface ExecutionOutcome {
 /** Port consommé par l'outil `run_command`. */
 export interface ExecutionServicePort {
   execute(request: ExecutionRequest): Promise<ExecutionOutcome>;
+}
+
+/**
+ * Vue PUBLIQUE d'une demande de validation, destinée à l'interface (dans la
+ * conversation). Jamais la sortie d'une commande ici : seulement de quoi
+ * afficher la demande (machine, commande, motifs, échéance).
+ */
+export interface PendingApprovalView {
+  id: string;
+  sessionId?: string;
+  agentId: string;
+  agentName?: string;
+  command: string;
+  destructive: boolean;
+  destructiveIds: string[];
+  /** Libellés français des motifs destructeurs (explication à l'humain). */
+  destructiveReasons: string[];
+  createdAt: string;
+  expiresAt: string;
+}
+
+/** Issue d'une décision humaine. */
+export type ApprovalDecisionOutcome =
+  | {
+      ok: true;
+      decision: "approve";
+      approval: PendingApprovalView;
+      /** Résultat de l'exécution IMMÉDIATE déclenchée par l'approbation. */
+      outcome: ExecutionOutcome;
+    }
+  | { ok: true; decision: "deny"; approval: PendingApprovalView }
+  | { ok: false; code: string; message: string };
+
+/**
+ * Événement d'approbation VU par l'interface (l'agent a déjà été résolu en vue
+ * PUBLIQUE : nom, motifs lisibles). Diffusé par le transport WebSocket.
+ */
+export type ApprovalViewEvent =
+  | { kind: "requested"; approval: PendingApprovalView }
+  | {
+      kind: "decided";
+      approval: PendingApprovalView;
+      decision: "approve" | "deny";
+    };
+
+/**
+ * Port consommé par le transport WebSocket pour afficher/traiter les demandes
+ * de validation DANS la conversation. "AgentExecutionService" l'implémente ;
+ * le transport n'en connaît que cette surface (aucun import de classe).
+ */
+export interface ApprovalGatewayPort {
+  /** S'abonne aux changements (demande / décision) — renvoie le désabonnement. */
+  subscribeApprovals(listener: (event: ApprovalViewEvent) => void): () => void;
+  /** Demandes EN ATTENTE rattachées à une conversation (ré-affichage). */
+  pendingApprovals(sessionId: string): PendingApprovalView[];
+  /** Décide une demande ; une approbation exécute la commande IMMÉDIATEMENT. */
+  decideApproval(
+    id: string,
+    decision: "approve" | "deny",
+  ): Promise<ApprovalDecisionOutcome>;
 }
 
 export interface ExecutionServiceOptions {
@@ -158,11 +229,18 @@ export class AgentExecutionService implements ExecutionServicePort {
         agentId,
         command,
         destructive: verdict.destructive,
+        destructiveIds: verdict.ids,
+        ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+        ...(request.shell !== undefined ? { shell: request.shell } : {}),
+        ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
+        ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+        ...(request.origin !== undefined ? { origin: request.origin } : {}),
       });
       this.logger.info("agents.exec.awaiting_validation", {
         agent_id: agentId,
         agent_name: agentName || null,
         approval_id: pending.id,
+        session_id: pending.sessionId ?? null,
         destructive: verdict.destructive,
         level: record.level,
       });
@@ -177,8 +255,8 @@ export class AgentExecutionService implements ExecutionServicePort {
         approvalId: pending.id,
         message:
           "Validation humaine requise : la commande n'a PAS été exécutée. " +
-          "Un humain doit l'approuver depuis la page « Agents » (onglet Agents de /config), " +
-          "puis la commande pourra être relancée telle quelle.",
+          "Une demande d'approbation s'affiche dans la conversation : un humain doit " +
+          "valider ou refuser. Une fois validée, la commande s'exécute automatiquement.",
       };
     }
 
@@ -265,6 +343,95 @@ export class AgentExecutionService implements ExecutionServicePort {
     } catch (error) {
       return this.onChannelFailure(agentId, agentName, command, verdict, error);
     }
+  }
+
+  // ── Demandes de validation (affichage/traitement dans la conversation) ──
+
+  /** S'abonne aux événements d'approbation (délègue au registre). */
+  subscribeApprovals(listener: (event: ApprovalViewEvent) => void): () => void {
+    return this.approvals.subscribe((event) => {
+      if (event.kind === "requested") {
+        listener({ kind: "requested", approval: this.viewApproval(event.approval) });
+      } else {
+        listener({
+          kind: "decided",
+          approval: this.viewApproval(event.approval),
+          decision: event.decision,
+        });
+      }
+    });
+  }
+
+  /** Demandes EN ATTENTE rattachées à une conversation (ré-affichage). */
+  pendingApprovals(sessionId: string): PendingApprovalView[] {
+    return this.approvals
+      .list()
+      .filter((entry) => entry.sessionId === sessionId)
+      .map((entry) => this.viewApproval(entry));
+  }
+
+  /**
+   * Décide une demande de validation. **Approuver exécute la commande
+   * IMMÉDIATEMENT** (au lieu d'attendre que le modèle la redemande) : le
+   * résultat est renvoyé à l'appelant pour affichage dans la conversation.
+   * Refuser ne déclenche AUCUNE exécution.
+   *
+   * ⚠️ Ne lève jamais : une demande inconnue/expirée/déjà décidée renvoie
+   * `{ ok: false }` avec un message honnête (clic tardif).
+   */
+  async decideApproval(
+    id: string,
+    decision: "approve" | "deny",
+  ): Promise<ApprovalDecisionOutcome> {
+    const entry = this.approvals.get(id);
+    if (!entry || entry.status !== "pending") {
+      return {
+        ok: false,
+        code: "approval_not_found",
+        message:
+          "Cette demande de validation n'existe plus (déjà décidée ou expirée).",
+      };
+    }
+    if (decision === "deny") {
+      const denied = this.approvals.deny(id);
+      return { ok: true, decision: "deny", approval: this.viewApproval(denied) };
+    }
+    // Approbation : la validation devient consommable UNE fois ; l'exécution
+    // la consomme aussitôt (même agent, même commande).
+    const approved = this.approvals.approve(id);
+    const outcome = await this.execute({
+      agentId: approved.agentId,
+      command: approved.command,
+      ...(approved.shell !== undefined ? { shell: approved.shell } : {}),
+      ...(approved.cwd !== undefined ? { cwd: approved.cwd } : {}),
+      ...(approved.timeoutMs !== undefined ? { timeoutMs: approved.timeoutMs } : {}),
+      ...(approved.origin !== undefined ? { origin: approved.origin } : {}),
+      ...(approved.sessionId !== undefined ? { sessionId: approved.sessionId } : {}),
+    });
+    return {
+      ok: true,
+      decision: "approve",
+      approval: this.viewApproval(approved),
+      outcome,
+    };
+  }
+
+  /** Convertit une demande mémorisée en vue publique (pour l'interface). */
+  private viewApproval(entry: PendingApproval): PendingApprovalView {
+    const record = this.store.get(entry.agentId);
+    const name = record?.name;
+    return {
+      id: entry.id,
+      ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
+      agentId: entry.agentId,
+      ...(name ? { agentName: name } : {}),
+      command: entry.command,
+      destructive: entry.destructive,
+      destructiveIds: [...entry.destructiveIds],
+      destructiveReasons: destructiveLabels(entry.destructiveIds),
+      createdAt: entry.createdAt,
+      expiresAt: entry.expiresAt,
+    };
   }
 
   /**

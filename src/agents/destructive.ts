@@ -207,6 +207,18 @@ export function destructivePatternIds(): string[] {
   return loadDestructivePatterns().patterns.map((pattern) => pattern.id);
 }
 
+/**
+ * Libellés lisibles (français) des motifs désignés par leurs identifiants,
+ * dans l'ordre fourni. Un identifiant inconnu est rendu tel quel (jamais
+ * silencieusement perdu). Sert à EXPLIQUER à l'humain pourquoi une commande est
+ * classée « destructrice ».
+ */
+export function destructiveLabels(ids: readonly string[]): string[] {
+  const doc = loadDestructivePatterns();
+  const byId = new Map(doc.patterns.map((pattern) => [pattern.id, pattern.label]));
+  return ids.map((id) => byId.get(id) ?? id);
+}
+
 /** Empreinte SHA-256 (hex) du fichier de motifs lu. */
 export function destructivePatternsSha256(): string {
   return loadDestructivePatternsSourceCached().sha256;

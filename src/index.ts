@@ -718,6 +718,10 @@ async function main(): Promise<void> {
       serverVersion: env.version,
       replayBufferSize: config.getNumber("transport.replayBuffer"),
       replayBufferBytes: config.getNumber("transport.replayBytes"),
+      // Validations humaines (D118) DANS la conversation : le transport route la
+      // demande vers les clients de la SEULE conversation concernée. Le panneau
+      // /config garde son affichage (routes HTTP) pour les cas hors conversation.
+      ...(agentExecution ? { approvals: agentExecution } : {}),
       tts: {
         enabled: isTtsEnabled(config),
         config: {

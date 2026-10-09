@@ -24,6 +24,7 @@
 
 import {
   defineTool,
+  type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -50,6 +51,21 @@ function coerceInt(value: unknown): number | undefined {
     return Number.parseInt(value.trim(), 10);
   }
   return undefined;
+}
+
+/**
+ * Identifiant de la session (conversation) courante, lu depuis le contexte de
+ * l'outil. Sert à RATTACHER une demande de validation à la bonne conversation.
+ * Renvoie `undefined` si le contexte est indisponible (jamais une exception).
+ */
+function sessionIdFromContext(ctx: ExtensionContext | undefined): string | undefined {
+  if (!ctx) return undefined;
+  try {
+    const id = ctx.sessionManager.getSessionId();
+    return id && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Résumé JSON d'un résultat NON exécuté (refus, hors ligne, validation requise). */
@@ -116,7 +132,7 @@ export function createExecutionTools(service: ExecutionServicePort): ToolDefinit
         }),
       ),
     }),
-    execute: async (_toolCallId, params) => {
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       const input = params as {
         agent_id: string;
         command: string;
@@ -125,12 +141,14 @@ export function createExecutionTools(service: ExecutionServicePort): ToolDefinit
         timeout_ms?: unknown;
       };
       const timeoutMs = coerceInt(input.timeout_ms);
+      const sessionId = sessionIdFromContext(ctx);
       const outcome = await service.execute({
         agentId: input.agent_id,
         command: input.command,
         ...(input.shell !== undefined ? { shell: input.shell } : {}),
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(sessionId !== undefined ? { sessionId } : {}),
         origin: "run_command",
       });
       const text =
