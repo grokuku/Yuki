@@ -7,12 +7,16 @@ changement explicite, jamais une dérive de tag.
 
 | Élément | Version | Note |
 | --- | --- | --- |
-| Image gateway | `node:24.21.0-bookworm-slim` | **épinglée par digest `@sha256:…`** |
-| Digest (index multi-arch) | `sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553` | résolu le 17/09/2026 via l'API Docker Hub |
+| Image gateway | `public.ecr.aws/docker/library/node:24.21.0-bookworm-slim` | **épinglée par digest `@sha256:…`** (miroir AWS ECR Public) |
+| Digest (index multi-arch) | `sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20` | résolu le 09/10/2026 via l'API d'ECR Public |
 | Node runtime | 24.21.0 (LTS) | `node:latest` = Node 26 Current → **interdit** |
 
-> Le digest ci-dessus est l'index multi-arch officiel de
-> `library/node:24.21.0-bookworm-slim`. Régénérer avec `scripts/pin-digests.sh`.
+> Le digest ci-dessus est l'index multi-arch de
+> `public.ecr.aws/docker/library/node:24.21.0-bookworm-slim` — le **miroir AWS
+> ECR Public** des images officielles Docker (octets identiques à Docker Hub,
+> vérifiés par sha256 du manifeste). Ce miroir remplace Docker Hub comme registre
+> de base : il supprime le rate limit « non authentifié » (100 pulls / 6 h / IP)
+> subi par les runners CI à IP partagées. Régénérer avec `scripts/pin-digests.sh`.
 
 ## Outillage de développement (devDependencies)
 

@@ -3,11 +3,15 @@
 # =============================================================================
 # Yuki gateway — image runtime (Lots 0-1)
 #
-# Base épinglée par digest (index multi-arch officiel `node:24.21.0-bookworm-slim`).
+# Base épinglée par digest, tirée du MIROIR AWS ECR Public
+# (`public.ecr.aws/docker/library/node:24.21.0-bookworm-slim`) : même index
+# multi-arch que l'image officielle Docker Hub, SANS le rate limit « non
+# authentifié » (100 pulls / 6 h / IP) qui frappe les runners GitHub à IP
+# partagées.
 # Aucun tag flottant. Node 26 (Current) est explicitement interdit.
 # =============================================================================
 
-FROM node:24.21.0-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS base
+FROM public.ecr.aws/docker/library/node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS base
 
 # IMPORTANT : `NODE_ENV=production` n'est PAS déclaré ici, sinon il serait hérité
 # par les étages `deps` et `builder` : `npm ci` appliquerait alors `omit=dev` et
