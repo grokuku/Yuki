@@ -471,6 +471,133 @@ await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Esca
 await sleep(150);
 check("menu agent : Échap referme le menu", (await agentMenuState()) === null);
 
+/* ═══════ 2ter) Menu agent : interaction RÉELLE (souris CDP) ═══════════════
+ * ⚠️ Les contrôles ci-dessus dispatchent un `contextmenu` SYNTHÉTIQUE : ils
+ * prouvent que le menu s'OUVRE, pas qu'il RESTE utilisable. On reproduit ici
+ * l'usage réel (clic droit + sélection à la SOURIS via CDP) et on vérifie la
+ * PERSISTANCE : le menu ne doit être refermé NI par le défilement du fil (qui
+ * défile en CONTINU pendant une réponse) NI par un rafraîchissement du registre
+ * d'agents (trame `agents`). */
+const agentMenuVisible = () =>
+  evaluate(`(() => {
+    const m = document.querySelector('.ctx-menu--levels');
+    if (!m || m.hidden) return false;
+    const r = m.getBoundingClientRect();
+    return m.isConnected && r.width > 0 && r.height > 0 && getComputedStyle(m).display !== 'none';
+  })()`);
+
+const agentBadgeCenter = () =>
+  evaluate(`(() => {
+    const b = [...document.querySelectorAll('.side-agent')].find((r) => r.querySelector('.side-agent__name')?.textContent === 'nuc00')?.querySelector('.side-agent__badge');
+    const r = b.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`);
+
+async function realRightClick(x, y) {
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+  const common = { x, y, button: "right", buttons: 2, clickCount: 1 };
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", ...common });
+  await sleep(40);
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...common });
+}
+
+async function realLeftClick(x, y) {
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+  await sleep(20);
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+  await sleep(20);
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 1, clickCount: 1 });
+}
+
+/** Centre (client) d'un item du menu agent, par son libellé. */
+const agentLevelItemCenter = (label) =>
+  evaluate(`(() => {
+    const m = document.querySelector('.ctx-menu--levels');
+    const b = [...m.querySelectorAll('.ctx-menu__item--radio')].find((x) => x.querySelector('.ctx-menu__text')?.textContent === ${JSON.stringify(label)});
+    if (!b) throw new Error('niveau absent : ' + ${JSON.stringify(label)});
+    const r = b.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`);
+
+// 1) clic droit RÉEL sur la pastille (rail) → menu ouvert, TOUJOURS là après attente.
+let badgePos = await agentBadgeCenter();
+await realRightClick(badgePos.x, badgePos.y);
+await sleep(400);
+check("menu agent (clic droit RÉEL) : ouvert ET encore là après attente", await agentMenuVisible());
+
+// 2) le FIL de discussion défile (cas réel : une réponse est en cours) → le menu RESTE.
+await evaluate(`(() => {
+  const el = document.querySelector('#conversation');
+  el.scrollTop = 0;
+  el.scrollTop = 1;
+  el.dispatchEvent(new Event('scroll'));
+})()`);
+await sleep(250);
+check("menu agent : reste affiché quand le FIL défile (réponse en cours)", await agentMenuVisible());
+
+// 3) rafraîchissement du registre : une 2e connexion WS pousse une trame `agents`.
+const helper = new WebSocket(`${server.base.replace("http", "ws")}/ws`);
+await new Promise((res, rej) => {
+  helper.on("open", res);
+  helper.on("error", rej);
+});
+helper.send(JSON.stringify({ type: "hello" }));
+await sleep(400);
+helper.send(JSON.stringify({ type: "agent_enabled", agentId: "agent-nuc01", enabled: true }));
+await sleep(500);
+check("menu agent : reste affiché après une trame `agents` (re-rendu du panneau)", await agentMenuVisible());
+helper.close();
+
+// 4) sélection RÉELLE d'un niveau à la souris → réglage appliqué + menu refermé.
+const neverPos = await agentLevelItemCenter("Pas de validation");
+await realLeftClick(neverPos.x, neverPos.y);
+check(
+  "menu agent (clic réel) : le niveau choisi est APPLIQUÉ (`never`)",
+  await waitFor(`(async () => {
+    const r = await fetch('/api/agents');
+    const b = await r.json();
+    return b.agents.find((a) => a.agentId === 'agent-nuc00')?.level === 'never';
+  })()`),
+);
+check("menu agent (clic réel) : le menu se referme après sélection", !(await agentMenuVisible()));
+
+// 5) Échap puis clic ailleurs referment le menu (après ouverture réelle).
+badgePos = await agentBadgeCenter();
+await realRightClick(badgePos.x, badgePos.y);
+await sleep(300);
+await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+await sleep(150);
+check("menu agent : Échap referme (ouverture réelle)", !(await agentMenuVisible()));
+badgePos = await agentBadgeCenter();
+await realRightClick(badgePos.x, badgePos.y);
+await sleep(300);
+await realLeftClick(760, 380);
+await sleep(200);
+check("menu agent : clic ailleurs referme (ouverture réelle)", !(await agentMenuVisible()));
+
+// 6) défilement de la BARRE LATÉRALE → referme (parité avec les conversations).
+badgePos = await agentBadgeCenter();
+await realRightClick(badgePos.x, badgePos.y);
+await sleep(300);
+await evaluate(`document.querySelector('.sidebar__list').dispatchEvent(new Event('scroll'))`);
+await sleep(200);
+check("menu agent : un défilement de la BARRE referme (parité conversations)", !(await agentMenuVisible()));
+
+// Rétablir `destructive` (via le menu, clic réel) pour la suite.
+badgePos = await agentBadgeCenter();
+await realRightClick(badgePos.x, badgePos.y);
+await sleep(300);
+const restorePos = await agentLevelItemCenter("Validation des commandes destructrices");
+await realLeftClick(restorePos.x, restorePos.y);
+check(
+  "menu agent (clic réel) : rétablissement de `destructive`",
+  await waitFor(`(async () => {
+    const r = await fetch('/api/agents');
+    const b = await r.json();
+    return b.agents.find((a) => a.agentId === 'agent-nuc00')?.level === 'destructive';
+  })()`),
+);
+
 /* ═══════════════════════ 3) /config : agents révoqués ═══════════════════ */
 await navigate(`${server.base}/config#agents`);
 check(

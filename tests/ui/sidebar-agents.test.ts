@@ -126,4 +126,13 @@ describe("garde-fous statiques de sidebar-agents.js (CSP, sémantique)", () => {
     expect(source).toContain("ctx-menu__hint");
     expect(source).toContain("ctx-menu__col");
   });
+
+  it("ne referme pas le menu sur un défilement ÉTRANGER au panneau", () => {
+    // ⚠️ Régression : un closer de défilement GLOBAL (`window`) se déclenchait
+    // sur le défilement du FIL de discussion — qui défile en CONTINU pendant
+    // une réponse — et refermait le menu aussitôt ouvert. Le closer doit être
+    // SCOPÉ à la barre latérale (parité avec le menu des conversations).
+    expect(source).not.toContain('window.addEventListener("scroll", closeMenu, true)');
+    expect(source).toContain('closest(".sidebar")');
+  });
 });

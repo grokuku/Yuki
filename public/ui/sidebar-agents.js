@@ -243,10 +243,26 @@ export function initSidebarAgents(deps = {}) {
     if (event.key === "Escape") closeMenu();
   });
   window.addEventListener("resize", closeMenu);
-  // Capture sur `window` : les événements `scroll` ne remontent pas, mais un
-  // écouteur en phase de CAPTURE les intercepte quel que soit le conteneur qui
-  // défile (liste des conversations ou encart agents).
-  window.addEventListener("scroll", closeMenu, true);
+  // Défilement : on ne referme QUE si c'est la BARRE LATÉRALE (qui porte
+  // l'entrée) qui défile. ⚠️ Un écouteur GLOBAL sur `window` (phase de capture)
+  // se déclenchait sur TOUT `scroll` — y compris le FIL de discussion, qui
+  // défile EN CONTINU pendant une réponse — et refermait le menu aussitôt
+  // ouvert (l'utilisateur ne pouvait rien sélectionner). Les événements `scroll`
+  // ne remontent pas : on garde la phase de CAPTURE, mais on FILTRE la cible,
+  // exactement comme le menu des conversations (scopé à la barre).
+  window.addEventListener(
+    "scroll",
+    (event) => {
+      if (menu.hidden) return;
+      const sidebar = section.closest(".sidebar");
+      if (!sidebar) return;
+      const target = event.target;
+      if (target === sidebar || (target instanceof Node && sidebar.contains(target))) {
+        closeMenu();
+      }
+    },
+    true,
+  );
 
   /** Rendu d'un agent (hors révoqués, filtrés en amont). */
   function renderAgent(agent) {
@@ -315,8 +331,24 @@ export function initSidebarAgents(deps = {}) {
     // Les agents RÉVOQUÉS ne se pilotent pas ici (ils ne peuvent plus se
     // connecter) : leur gestion (restaurer / supprimer) vit dans /config.
     const visible = list0.filter((agent) => agent && !agent.revoked);
-    closeMenu();
     updateAgentState(visible);
+    // ⚠️ Un rafraîchissement du registre (trame `agents` : un agent se connecte,
+    // passe en ligne/hors ligne, change de niveau…) ne doit PAS détruire un menu
+    // contextuel OUVERT : le nœud re-créé/retiré sous le curseur faisait
+    // disparaître le menu (impossible de sélectionner un niveau). On le referme
+    // SEULEMENT si l'agent ciblé a disparu (déconnecté/révoqué) ; sinon on
+    // rafraîchit uniquement la coche du niveau courant.
+    if (!menu.hidden) {
+      const stillThere = menuAgentId !== null && visible.some((agent) => agent.agentId === menuAgentId);
+      if (!stillThere) {
+        closeMenu();
+      } else {
+        const current = levels.get(menuAgentId);
+        for (const [level, item] of levelItems) {
+          item.setAttribute("aria-checked", level === current ? "true" : "false");
+        }
+      }
+    }
     list.replaceChildren();
     for (const agent of visible) list.append(renderAgent(agent));
 
