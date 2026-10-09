@@ -114,6 +114,15 @@ export interface PendingApprovalView {
   destructiveReasons: string[];
   createdAt: string;
   expiresAt: string;
+  /**
+   * DURÉE restante de validité (secondes entières, ≥ 0), calculée au moment de
+   * l'ÉMISSION de la vue. C'est ce champ — et NON l'horodatage absolu
+   * `expiresAt` — que l'interface utilise pour son compte à rebours : le client
+   * compte à partir de la RÉCEPTION, sans jamais comparer une heure serveur à
+   * l'horloge (potentiellement décalée) du navigateur. À la ré-affichage
+   * (reconnexion/bascule), la durée est recalculée ⇒ toujours à jour.
+   */
+  ttlSeconds: number;
 }
 
 /** Issue d'une décision humaine. */
@@ -254,6 +263,11 @@ export interface ExecutionServiceOptions {
   approvals: ApprovalRegistry;
   logger: ExecutionLogger;
   idFactory?: () => string;
+  /**
+   * Horloge (injectable pour les tests) servant à calculer la durée restante
+   * (`ttlSeconds`) exposée dans les vues. Défaut : `Date.now`.
+   */
+  now?: () => number;
 }
 
 /** Timeout par défaut d'une commande (ms). */
@@ -285,6 +299,7 @@ export class AgentExecutionService implements ExecutionServicePort {
   private readonly approvals: ApprovalRegistry;
   private readonly logger: ExecutionLogger;
   private readonly idFactory: () => string;
+  private readonly now: () => number;
 
   constructor(options: ExecutionServiceOptions) {
     this.store = options.store;
@@ -293,6 +308,7 @@ export class AgentExecutionService implements ExecutionServicePort {
     this.approvals = options.approvals;
     this.logger = options.logger;
     this.idFactory = options.idFactory ?? defaultCommandId;
+    this.now = options.now ?? Date.now;
   }
 
   async execute(request: ExecutionRequest): Promise<ExecutionOutcome> {
@@ -863,6 +879,7 @@ export class AgentExecutionService implements ExecutionServicePort {
       destructiveReasons: destructiveLabels(entry.destructiveIds),
       createdAt: entry.createdAt,
       expiresAt: entry.expiresAt,
+      ttlSeconds: Math.max(0, Math.round((Date.parse(entry.expiresAt) - this.now()) / 1000)),
     };
   }
 

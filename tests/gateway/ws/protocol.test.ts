@@ -214,3 +214,25 @@ describe("protocol — mapping événement → trame serveur", () => {
     });
   });
 });
+
+describe("agent_level — réglage du niveau depuis le menu contextuel", () => {
+  it("accepte les 4 niveaux D118", () => {
+    for (const level of ["disabled", "always", "destructive", "never"]) {
+      expect(
+        parseClientMessage(JSON.stringify({ type: "agent_level", agentId: "a1", level })),
+      ).toEqual({ ok: true, message: { type: "agent_level", agentId: "a1", level } });
+    }
+  });
+
+  it("refuse un niveau inconnu, un agentId vide ou absent", () => {
+    expect(
+      parseClientMessage(JSON.stringify({ type: "agent_level", agentId: "a1", level: "oui" })),
+    ).toEqual({ ok: false, error: "agent_level_invalid_level" });
+    expect(
+      parseClientMessage(JSON.stringify({ type: "agent_level", agentId: "", level: "never" })),
+    ).toEqual({ ok: false, error: "agent_level_missing_agent_id" });
+    expect(
+      parseClientMessage(JSON.stringify({ type: "agent_level", level: "never" })),
+    ).toEqual({ ok: false, error: "agent_level_missing_agent_id" });
+  });
+});

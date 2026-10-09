@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { orderSessions, type AgentsGatewayPort } from "../../../src/gateway/ws/server.js";
 import type { ServerFrame, WireAgent, WireSession } from "../../../src/gateway/ws/protocol.js";
+import type { AgentLevel } from "../../../src/agents/types.js";
 import { SessionPinStore } from "../../../src/pi/session-pins.js";
 import { createLogger } from "../../../src/observability/logger.js";
 import { startHarness, TestClient, type Harness } from "./harness.js";
@@ -66,6 +67,7 @@ async function nextSessions(c: TestClient, afterCount: number): Promise<Sessions
 class FakeAgentPort implements AgentsGatewayPort {
   agents: WireAgent[] = [];
   readonly setEnabledCalls: Array<[string, boolean]> = [];
+  readonly setLevelCalls: Array<[string, string]> = [];
   private readonly listeners = new Set<() => void>();
 
   list(): WireAgent[] {
@@ -78,6 +80,14 @@ class FakeAgentPort implements AgentsGatewayPort {
       agent.agentId === agentId
         ? { ...agent, level: enabled ? "destructive" : "disabled" }
         : agent,
+    );
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  setLevel(agentId: string, level: AgentLevel): void {
+    this.setLevelCalls.push([agentId, level]);
+    this.agents = this.agents.map((agent) =>
+      agent.agentId === agentId ? { ...agent, level } : agent,
     );
     for (const listener of [...this.listeners]) listener();
   }
@@ -209,5 +219,71 @@ describe("WS — encart agents", () => {
     expect(off2.agents[0]?.level).toBe("disabled");
     await c1.close();
     await c2.close();
+  });
+
+  it("règle DIRECTEMENT le niveau (menu contextuel) et rediffuse la trame `agents`", async () => {
+    const port = new FakeAgentPort();
+    port.agents = [
+      { agentId: "a1", name: "nuc00", level: "disabled", revoked: false, online: true },
+    ];
+    const h = await startHarness({ agents: port });
+    harnesses.push(h);
+    const c1 = await TestClient.connect(h.url);
+    const c2 = await TestClient.connect(h.url);
+    c1.send({ type: "hello" });
+    c2.send({ type: "hello" });
+    await c1.waitFor("agents");
+    await c2.waitFor("agents");
+
+    // « Validation des commandes destructrices » depuis le menu contextuel.
+    c1.send({ type: "agent_level", agentId: "a1", level: "destructive" });
+    await c1.waitFor(
+      (f) => f.type === "agents" && asAgents(f).agents[0]?.level === "destructive",
+    );
+    await c2.waitFor(
+      (f) => f.type === "agents" && asAgents(f).agents[0]?.level === "destructive",
+    );
+    expect(port.setLevelCalls).toEqual([["a1", "destructive"]]);
+    // Aucune bascule on/off n'a été déclenchée : un seul chemin.
+    expect(port.setEnabledCalls).toEqual([]);
+    await c1.close();
+    await c2.close();
+  });
+
+  it("« Désactivé » depuis le menu EST l'état off (aucun second état)", async () => {
+    const port = new FakeAgentPort();
+    port.agents = [
+      { agentId: "a1", name: "nuc00", level: "always", revoked: false, online: true },
+    ];
+    const h = await startHarness({ agents: port });
+    harnesses.push(h);
+    const c = await TestClient.connect(h.url);
+    c.send({ type: "hello" });
+    await c.waitFor("agents");
+
+    c.send({ type: "agent_level", agentId: "a1", level: "disabled" });
+    const off = asAgents(
+      await c.waitFor((f) => f.type === "agents" && asAgents(f).agents[0]?.level === "disabled"),
+    );
+    expect(off.agents[0]?.level).toBe("disabled");
+    await c.close();
+  });
+
+  it("niveau invalide ⇒ erreur `agent_level_invalid_level`, aucune mutation", async () => {
+    const port = new FakeAgentPort();
+    port.agents = [
+      { agentId: "a1", name: "nuc00", level: "never", revoked: false, online: true },
+    ];
+    const h = await startHarness({ agents: port });
+    harnesses.push(h);
+    const c = await TestClient.connect(h.url);
+    c.send({ type: "hello" });
+    await c.waitFor("agents");
+
+    c.send({ type: "agent_level", agentId: "a1", level: "parfois" });
+    const err = await c.waitFor((f) => f.type === "error" && f.code === "bad_request");
+    expect(err.type === "error" && err.message).toContain("agent_level_invalid_level");
+    expect(port.setLevelCalls).toEqual([]);
+    await c.close();
   });
 });

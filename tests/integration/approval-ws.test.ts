@@ -31,6 +31,7 @@ function view(overrides: Partial<PendingApprovalView> = {}): PendingApprovalView
     destructiveReasons: ["suppression (rm)"],
     createdAt: new Date(0).toISOString(),
     expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    ttlSeconds: 300,
     ...overrides,
   };
 }

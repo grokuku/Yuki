@@ -16,6 +16,7 @@ import {
   agentLabel,
   agentLevelLabel,
   isAgentEnabled,
+  LEVEL_MENU_ITEMS,
 } from "../../public/ui/sidebar-agents.js";
 
 describe("libellé d'agent — jamais vide", () => {
@@ -50,6 +51,23 @@ describe("on/off — état lu depuis le NIVEAU (aucun second drapeau)", () => {
   });
 });
 
+describe("menu contextuel — les 4 niveaux (D118), libellés explicites", () => {
+  it("expose exactement les 4 niveaux, dans l'ordre, en français", () => {
+    expect(LEVEL_MENU_ITEMS.map((item) => item.level)).toEqual([
+      "disabled",
+      "always",
+      "destructive",
+      "never",
+    ]);
+    expect(LEVEL_MENU_ITEMS.map((item) => item.label)).toEqual([
+      "Désactivé",
+      "Validation à chaque commande",
+      "Validation des commandes destructrices",
+      "Pas de validation",
+    ]);
+  });
+});
+
 describe("garde-fous statiques de sidebar-agents.js (CSP, sémantique)", () => {
   const source = readFileSync(join(process.cwd(), "public", "ui", "sidebar-agents.js"), "utf8");
 
@@ -68,5 +86,19 @@ describe("garde-fous statiques de sidebar-agents.js (CSP, sémantique)", () => {
   it("masque les agents révoqués et affiche un message honnête quand la liste est vide", () => {
     expect(source).toContain("agent.revoked");
     expect(source).toContain('"Aucun agent appairé."');
+  });
+
+  it("câble le clic droit (contextmenu) vers le menu de niveau, accessible au clavier", () => {
+    expect(source).toContain('"contextmenu"');
+    expect(source).toContain("onSetLevel");
+    // Sémantique « menu radio » : le niveau courant est marqué `aria-checked`.
+    expect(source).toContain('role: "menuitemradio"');
+    // Accessibilité clavier (touche Menu contextuel / Maj+F10), comme les conversations.
+    expect(source).toContain("ContextMenu");
+    expect(source).toContain("F10");
+    // Position au CURSEUR via le CSSOM (aucun `style=` dans le markup).
+    expect(source).toContain("clientX");
+    expect(source).toContain("clientY");
+    expect(source).toContain("menu.style.left");
   });
 });

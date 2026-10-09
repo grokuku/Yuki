@@ -32,6 +32,7 @@ const els = {
   connection: document.getElementById("connection"),
   sessionState: document.getElementById("session-state"),
   queued: document.getElementById("queued"),
+  pendingValidation: document.getElementById("pending-validation"),
   thinking: document.getElementById("thinking"),
   ttsToggle: document.getElementById("tts-toggle"),
   ttsStatus: document.getElementById("tts-status"),
@@ -61,6 +62,16 @@ const sidebarAgents = initSidebarAgents({
     void HolafModal.alert(
       "Hors ligne",
       "Impossible de changer l'état de l'agent : la connexion au gateway est perdue.",
+      { okText: "Compris" },
+    );
+  },
+  // Menu contextuel de l'agent : choix du niveau de confirmation (D118).
+  // ⚠️ MÊME état que le on/off : « Désactivé » = off ; un autre niveau = on.
+  onSetLevel: (agentId, level) => {
+    if (sendRaw({ type: "agent_level", agentId, level })) return;
+    void HolafModal.alert(
+      "Hors ligne",
+      "Impossible de régler le niveau de l'agent : la connexion au gateway est perdue.",
       { okText: "Compris" },
     );
   },
@@ -95,6 +106,12 @@ const sessionsPanel = initSessionsPanel({
  * La décision part par le WebSocket (trame `approval_decision`). */
 const approvalBlocks = createApprovalBlocks({
   container: els.conversation,
+  // ⚠️ Défilement au MÊME mécanisme que l'auto-scroll des messages : on ne
+  // colle en bas que si l'utilisateur y était DÉJÀ (mesuré avant insertion).
+  isPinned: isConversationPinned,
+  scrollToEnd: () => pinIfNeeded(true),
+  // Sinon, un indicateur visible signale la demande sans déplacer la vue.
+  onAttention: (active) => setPendingValidation(active),
   onDecide: (id, decision) => {
     if (sendRaw({ type: "approval_decision", id, decision })) return;
     approvalBlocks.resetBusy();
@@ -105,6 +122,23 @@ const approvalBlocks = createApprovalBlocks({
       { okText: "Compris" },
     );
   },
+});
+
+/* ─── Indicateur « une validation est en attente » ──────────────────────
+ * Affiché SEULEMENT quand une demande de validation arrive alors que
+ * l'utilisateur a remonté le fil : on ne le déplace pas de force (ce serait
+ * désagréable pendant une lecture), mais il ne peut pas rater la demande — le
+ * bouton ramène la vue sur le bloc. */
+function setPendingValidation(active) {
+  if (els.pendingValidation) els.pendingValidation.hidden = !active;
+}
+
+if (els.pendingValidation) {
+  els.pendingValidation.addEventListener("click", () => approvalBlocks.reveal());
+}
+// Revenu près du bas : l'indicateur n'a plus lieu d'être.
+els.conversation.addEventListener("scroll", () => {
+  if (isConversationPinned()) approvalBlocks.acknowledge();
 });
 
 /* ─── Capture d'écran DANS la conversation ────────────────────────────────

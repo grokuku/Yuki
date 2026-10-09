@@ -576,6 +576,21 @@ changement — **aucun polling**. La même trame est renvoyée à la connexion
 (`hello`) et à la reconnexion (`resume`), ce qui couvre aussi les modifications
 faites depuis `/config`.
 
+**Menu contextuel de l'agent (clic droit).** Ajouté **après la validation**, à
+la demande d'usage réel (2026-10-09) : un **clic droit sur l'entrée d'un agent**
+(ou la touche `Menu contextuel` / **Maj+F10**) ouvre un menu de **réglage du
+niveau de confirmation** (les **4 niveaux** `D118`, en français : *Désactivé* /
+*Validation à chaque commande* / *Validation des commandes destructrices* /
+*Pas de validation*). Le niveau **courant est marqué** (`role="menuitemradio"` +
+`aria-checked` + ✓). ⚠️ **Cohérence d'état** : « Désactivé » EST l'« off » du
+on/off, et un niveau ≠ `disabled` remet l'agent **en marche** en renseignant le
+niveau mémorisé pour la bascule on/off — **un seul état**, jamais deux. Le
+choix part par la trame **`agent_level`** (`src/gateway/ws/protocol.ts`) ; le
+serveur applique `AgentStore.setLevel` et rediffuse `agents`. En **rail
+(56 px)**, l'entrée EST la pastille : le clic droit dessus fonctionne de la même
+façon. Le menu est **positionné au curseur** via le CSSOM (comme celui des
+conversations) et **détaché du DOM** à la fermeture (aucun nœud résiduel, CSP).
+
 **Suppression DÉFINITIVE d'un agent.** Les agents **révoqués** ne restent plus
 mêlés aux actifs : ils sont regroupés dans une **section distincte, grisée**
 (« Agents révoqués »). La révocation (`DELETE /api/agents/<id>`, réversible)

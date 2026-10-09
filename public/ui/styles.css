@@ -544,6 +544,37 @@ a.pill:hover {
   background: var(--border);
 }
 
+/* Menu de NIVEAU de l'agent : libellé de groupe + items radio (niveau courant
+ * coché). Le ✓ n'apparaît QUE sur l'élément marqué `aria-checked="true"`. */
+.ctx-menu__label {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.ctx-menu__item--radio {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ctx-menu__check {
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--accent-text);
+  opacity: 0;
+}
+
+.ctx-menu__item--radio[aria-checked="true"] .ctx-menu__check {
+  opacity: 1;
+}
+
+.ctx-menu__item--radio[aria-checked="true"] .ctx-menu__text {
+  font-weight: 600;
+}
+
 /* ─── État « aucune conversation ouverte » ─────────────────────────────── */
 .empty-state {
   flex: 1;
@@ -708,6 +739,45 @@ a.pill:hover {
   font-size: 12px;
   color: var(--muted);
   font-style: italic;
+}
+
+/* ─── Indicateur « une validation est en attente » (D118) ────────────────
+ * Affiché quand une demande de validation arrive alors que l'utilisateur a
+ * remonté le fil : la vue n'est pas déplacée de force, mais la demande est
+ * SIGNALÉE (et le bouton y ramène). Rendu sans style en ligne (CSP). */
+.pending-validation {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 24px 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.22);
+}
+
+/* `display` explicite ⇒ l'attribut `hidden` doit être réaffirmé. */
+.pending-validation[hidden] {
+  display: none;
+}
+
+.pending-validation:hover,
+.pending-validation:focus-visible {
+  background: var(--panel-hover);
+}
+
+.pending-validation__dot {
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
 }
 
 .composer {
@@ -989,8 +1059,17 @@ h6.md-heading {
   background: var(--panel-3);
 }
 
+/* Lien : reconnaissable SANS survol (souligné + couleur d'accent), destination
+ * consultable au survol/focus (`title`), cible externe en nouvel onglet. */
 .md-link {
   color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.md-link:hover {
+  text-decoration-thickness: 2px;
 }
 
 .md-image {

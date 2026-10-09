@@ -57,6 +57,7 @@ class StubApprovalPort implements ApprovalGatewayPort {
       destructiveReasons: ["suppression (rm)"],
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + 300_000).toISOString(),
+      ttlSeconds: 300,
     };
   }
 

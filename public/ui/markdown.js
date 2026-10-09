@@ -337,13 +337,60 @@ function matchLink(text, open) {
   return { label, href, next: closeParen + 1 };
 }
 
+/** URL nue : `http(s)://` puis un hôte, jusqu'au prochain blanc/délimiteur. */
+const AUTOLINK_PATTERN = /^https?:\/\/[^\s<>"'`]+/i;
+
+/** Ponctuation de fin de phrase retirée d'une URL nue (jamais de l'intérieur). */
+const URL_TAIL_PUNCTUATION = /^[.,;:!?*'"]$/;
+
+/**
+ * Retire de `url` la ponctuation de fin de phrase (`https://x.fr/a).`) et les
+ * parenthèses/crochets FERMANTS non appariés (`(voir https://x.fr/a(b))`).
+ */
+function trimUrlTail(url) {
+  let out = url;
+  for (;;) {
+    if (out.length === 0) break;
+    const last = out[out.length - 1];
+    if (last === ")" && (out.split(")").length - 1) > (out.split("(").length - 1)) {
+      out = out.slice(0, -1);
+      continue;
+    }
+    if (last === "]" && (out.split("]").length - 1) > (out.split("[").length - 1)) {
+      out = out.slice(0, -1);
+      continue;
+    }
+    if (URL_TAIL_PUNCTUATION.test(last)) {
+      out = out.slice(0, -1);
+      continue;
+    }
+    break;
+  }
+  return out;
+}
+
+/**
+ * Lit une URL nue `http(s)://…` à partir de l'index `open`. `null` si absente.
+ * Une URL qui prolonge un mot (`xhTTps://…`) n'est PAS reconnue.
+ */
+function matchAutolink(text, open) {
+  if (open > 0 && isWordChar(text[open - 1])) return null;
+  const match = AUTOLINK_PATTERN.exec(text.slice(open));
+  if (!match) return null;
+  const href = trimUrlTail(match[0]);
+  const host = href.slice(href.indexOf("://") + 3);
+  if (host.length === 0) return null; // `http://` sans hôte : pas un lien
+  return { href, next: open + href.length };
+}
+
 /**
  * Découpe un fragment inline en jetons typés (pur, testable sans DOM).
  *
  * Jetons : `{type:"text", value}` · `{type:"code", value}` ·
- * `{type:"strong"|"em"|"del", children}` · `{type:"link", children, href}` ·
- * `{type:"image", alt, src}`. Un marqueur non fermé reste du texte littéral
- * (repli défensif : jamais de balise cassée).
+ * `{type:"strong"|"em"|"del", children}` · `{type:"link", children, href}`
+ * (autolink d'une URL nue `http(s)://…` : même jeton, `autolink:true`, enfants =
+ * l'URL elle-même) · `{type:"image", alt, src}`. Un marqueur non fermé reste
+ * du texte littéral (repli défensif : jamais de balise cassée).
  *
  * @param {string} text
  * @returns {Array<object>}
@@ -396,6 +443,24 @@ export function tokenizeInline(text) {
       }
     }
 
+    // URL NUE (autolink) : `http(s)://…` devient un lien cliquable, sans
+    // syntaxe markdown. Le TEXTE affiché reste l'URL (donc lisible) et le
+    // texte parlé ne change pas : la cohérence affiché/parlé est préservée.
+    if (ch === "h" || ch === "H") {
+      const parsed = matchAutolink(source, i);
+      if (parsed) {
+        flush();
+        tokens.push({
+          type: "link",
+          children: [{ type: "text", value: parsed.href }],
+          href: parsed.href,
+          autolink: true,
+        });
+        i = parsed.next;
+        continue;
+      }
+    }
+
     // Gras (** / __) puis barré (~~).
     if ((ch === "*" || ch === "_") && source[i + 1] === ch) {
       const end = source.indexOf(ch + ch, i + 2);
@@ -439,12 +504,66 @@ export function tokenizeInline(text) {
 
 /* ─────────────────────────── Rendu DOM ───────────────────────────────────── */
 
-/** `true` si `href` est une destination sûre (jamais `javascript:`…). */
+/**
+ * Normalise une URL comme le fait l'analyseur du navigateur AVANT de lire le
+ * schéma : il retire les tabulations et sauts de ligne (où qu'ils soient) puis
+ * les caractères de contrôle et espaces de BORD. Sans ce nettoyage,
+ * `java\tscript:alert(1)` passerait pour un simple chemin relatif alors que le
+ * navigateur y lit `javascript:alert(1)` — un lien piégé indétectable.
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function normalizeUrlInput(value) {
+  return String(value ?? "")
+    .replace(/[\t\n\r]/g, "")
+    .replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "");
+}
+
+/** `true` s'il subsiste un caractère de contrôle C0/DEL dans l'URL nettoyée. */
+function hasControlChars(value) {
+  return /[\u0000-\u001f\u007f]/.test(value);
+}
+
+/** Schéma d'une URL nettoyée (`http`, `javascript`…), ou `null` si relatif. */
+function schemeOf(url) {
+  const match = /^([a-z][a-z0-9+.-]*):/i.exec(url);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/**
+ * `true` si `href` est une destination SÛRE (jamais `javascript:`…).
+ *
+ * Politique : **schémas `http`/`https` UNIQUEMENT** (casse ignorée ; les
+ * tabulations/sauts de ligne internes sont neutralisés AVANT la lecture du
+ * schéma, comme le fait le navigateur). Tout autre schéma (`javascript:`,
+ * `data:`, `file:`, `blob:`, `mailto:`…) est refusé : le lien restera du TEXTE.
+ * Une cible SANS schéma relève de la même origine (`#ancre`, `/chemin`) et
+ * reste autorisée ; `//hôte` (protocol-relatif, donc distant) est refusé.
+ *
+ * @param {unknown} href
+ * @returns {boolean}
+ */
 export function isSafeLink(href) {
-  const h = String(href ?? "").trim();
-  if (h.length === 0) return false;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(h)) return /^(https?|mailto):/i.test(h);
-  return true; // relatif / ancre : même origine
+  const h = normalizeUrlInput(href);
+  if (h.length === 0 || hasControlChars(h)) return false;
+  const scheme = schemeOf(h);
+  if (scheme !== null) return scheme === "http" || scheme === "https";
+  // Sans schéma : même origine. `//hôte` (et son équivalent `\\hôte` que le
+  // navigateur normalise en `//hôte`) vise un domaine distant → refusé.
+  return !h.replace(/\\/g, "/").startsWith("//");
+}
+
+/**
+ * `true` si `href` ouvre un site EXTERNE (`http(s)://…`) : ces liens partent
+ * dans un NOUVEL onglet, contrairement aux cibles de même origine.
+ *
+ * @param {unknown} href
+ * @returns {boolean}
+ */
+export function isExternalLink(href) {
+  const scheme = schemeOf(normalizeUrlInput(href));
+  return scheme === "http" || scheme === "https";
 }
 
 /**
@@ -452,13 +571,28 @@ export function isSafeLink(href) {
  * (`img-src 'self' data:`). Une URL distante (`http(s)://`, `//hôte`) est
  * refusée : elle déclencherait une violation CSP (et une requête réseau non
  * désirée). Ces images sont alors rendues en **placeholder**.
+ *
+ * Le nettoyage est le MÊME que pour les liens (tabulations/sauts de ligne
+ * retirés, caractères de contrôle refusés) afin qu'aucune variante encodée ne
+ * contourne la garde `img-src`.
  */
 export function isSafeImageSrc(src) {
-  const s = String(src ?? "").trim();
-  if (s.length === 0) return false;
-  if (s.startsWith("//")) return false; // protocol-relatif = distant
-  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return /^data:image\//i.test(s);
+  const s = normalizeUrlInput(src);
+  if (s.length === 0 || hasControlChars(s)) return false;
+  if (s.replace(/\\/g, "/").startsWith("//")) return false; // protocol-relatif = distant
+  const scheme = schemeOf(s);
+  if (scheme !== null) return scheme === "data" && /^data:image\//i.test(s);
   return true; // chemin relatif / absolu de même origine
+}
+
+/** `true` si un nœud DOM contient au moins un caractère non blanc. */
+function fragmentHasVisibleText(node) {
+  if (!node) return false;
+  if (node.nodeType === 3) return String(node.textContent ?? "").trim().length > 0;
+  for (const child of node.childNodes ?? []) {
+    if (fragmentHasVisibleText(child)) return true;
+  }
+  return false;
 }
 
 /** Construit les nœuds DOM d'une liste de jetons inline. */
@@ -495,12 +629,28 @@ function renderInline(tokens, doc) {
         break;
       }
       case "link": {
-        if (isSafeLink(token.href)) {
+        // `normalizeUrlInput` retire tabulations/sauts de ligne : ce que le
+        // navigateur interprétera est ce que l'on valide (`isSafeLink`).
+        const href = normalizeUrlInput(token.href);
+        if (isSafeLink(href)) {
           const a = doc.createElement("a");
           a.className = "md-link";
-          a.href = token.href;
-          a.rel = "noopener noreferrer";
-          a.appendChild(renderInline(token.children, doc));
+          a.href = href;
+          // La DESTINATION reste consultable (URL complète au survol/focus),
+          // sans dupliquer une longue URL dans le fil : le texte affiché est le
+          // libellé de l'auteur (le texte parlé reste identique).
+          a.title = href;
+          if (isExternalLink(href)) {
+            // Site externe → NOUVEL onglet ; `noopener` interdit à la page
+            // ouverte de manipuler l'onglet de Yuki via `window.opener`.
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+          }
+          const label = renderInline(token.children, doc);
+          // Un libellé vide rendrait un lien INVISIBLE : on affiche alors l'URL,
+          // pour qu'un lien soit toujours reconnaissable (et lisible).
+          if (!fragmentHasVisibleText(label)) a.appendChild(doc.createTextNode(href));
+          else a.appendChild(label);
           frag.appendChild(a);
         } else {
           // Destination refusée : le texte reste affiché, jamais de lien piégé.

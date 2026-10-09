@@ -322,6 +322,138 @@ check(
   restored.sideAgents?.rows.find((r) => r.name === "nuc00")?.enabled === true,
 );
 
+/* ═════════════════ 2bis) Encart agents : menu contextuel (clic droit) ════ */
+// En RAIL (barre repliée), l'entrée est réduite à la pastille : on cible donc
+// la PASTILLE elle-même (le clic droit remonte jusqu'à l'entrée `<li>`).
+// La barre a été ÉPINGLÉE plus haut : on la dé-épingle pour revenir au rail.
+await evaluate(`(() => {
+  const s = document.querySelector('.sidebar');
+  if (s?.getAttribute('data-pinned') === 'true') document.querySelector('.sidebar__pin').click();
+})()`);
+await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 720, y: 480 });
+await sleep(400);
+const railBefore = await chatState();
+check("menu : la barre est repliée en rail (56 px)", railBefore.railWidth === 56, `largeur=${railBefore.railWidth}`);
+
+const openAgentMenu = (name) =>
+  evaluate(`(() => {
+    const row = [...document.querySelectorAll('.side-agent')].find((r) => r.querySelector('.side-agent__name')?.textContent === ${JSON.stringify(name)});
+    if (!row) throw new Error('agent absent : ' + ${JSON.stringify(name)});
+    const b = row.querySelector('.side-agent__badge');
+    const r = b.getBoundingClientRect();
+    b.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 6, clientY: r.top + 6 }));
+  })()`);
+
+const agentMenuState = () =>
+  evaluate(`(() => {
+    const m = document.querySelector('.ctx-menu--levels');
+    if (!m || m.hidden) return null;
+    return {
+      label: m.querySelector('.ctx-menu__label')?.textContent ?? '',
+      items: [...m.querySelectorAll('.ctx-menu__item--radio')].map((b) => ({
+        text: b.querySelector('.ctx-menu__text')?.textContent ?? '',
+        checked: b.getAttribute('aria-checked') === 'true',
+        role: b.getAttribute('role'),
+      })),
+      left: m.style.left,
+      top: m.style.top,
+    };
+  })()`);
+
+const clickAgentLevel = (label) =>
+  evaluate(`(() => {
+    const m = document.querySelector('.ctx-menu--levels');
+    const b = [...m.querySelectorAll('.ctx-menu__item--radio')].find((x) => x.querySelector('.ctx-menu__text')?.textContent === ${JSON.stringify(label)});
+    if (!b) throw new Error('niveau absent : ' + ${JSON.stringify(label)});
+    b.click();
+  })()`);
+
+await openAgentMenu("nuc00");
+const agentMenu = await agentMenuState();
+check("clic droit sur la pastille (rail) : le menu s'ouvre", agentMenu !== null);
+check(
+  "menu agent : titre + les 4 niveaux (D118)",
+  agentMenu?.label === "Niveau de confirmation" && agentMenu?.items.length === 4,
+  JSON.stringify(agentMenu?.items.map((i) => i.text)),
+);
+check(
+  "menu agent : libellés EXPLICITES en français",
+  JSON.stringify(agentMenu?.items.map((i) => i.text)) ===
+    JSON.stringify([
+      "Désactivé",
+      "Validation à chaque commande",
+      "Validation des commandes destructrices",
+      "Pas de validation",
+    ]),
+  JSON.stringify(agentMenu?.items.map((i) => i.text)),
+);
+check(
+  "menu agent : le niveau COURANT est marqué (rôle radio + aria-checked)",
+  agentMenu?.items.every((i) => i.role === "menuitemradio") &&
+    agentMenu?.items.filter((i) => i.checked).length === 1 &&
+    agentMenu?.items.find((i) => i.checked)?.text === "Validation des commandes destructrices",
+  JSON.stringify(agentMenu?.items),
+);
+check(
+  "menu agent : positionné au curseur via le CSSOM (aucun style en ligne)",
+  /^\d+px$/.test(agentMenu?.left ?? "") && /^\d+px$/.test(agentMenu?.top ?? ""),
+  `${agentMenu?.left} / ${agentMenu?.top}`,
+);
+await shot("pins-agents-menu-rail");
+
+// Choisir « Pas de validation » ⇒ le niveau change (partagé avec le on/off).
+await clickAgentLevel("Pas de validation");
+check(
+  "menu agent : régler le niveau change le store (`never`)",
+  await waitFor(`(async () => {
+    const r = await fetch('/api/agents');
+    const b = await r.json();
+    return b.agents.find((a) => a.agentId === 'agent-nuc00')?.level === 'never';
+  })()`),
+);
+
+// Ré-ouvrir : le marquage suit le nouvel état.
+await openAgentMenu("nuc00");
+const agentMenu2 = await agentMenuState();
+check(
+  "menu agent : le marquage suit le nouveau niveau",
+  agentMenu2?.items.find((i) => i.checked)?.text === "Pas de validation",
+  JSON.stringify(agentMenu2?.items),
+);
+
+// « Désactivé » = l'« off » : la pastille passe inactive, sans second état.
+await clickAgentLevel("Désactivé");
+check(
+  "menu agent : « Désactivé » EST l'état off (pas de second état)",
+  await waitFor(`(() => {
+    const row = [...document.querySelectorAll('.side-agent')].find((r) => r.querySelector('.side-agent__name')?.textContent === 'nuc00');
+    return row && row.querySelector('.side-agent__badge').getAttribute('data-enabled') !== 'true';
+  })()`),
+);
+check("menu agent : le store confirme `disabled`", (await levelOf("agent-nuc00")) === "disabled");
+
+// Rétablir la validation des destructrices (via le menu) pour la suite.
+await openAgentMenu("nuc00");
+await clickAgentLevel("Validation des commandes destructrices");
+check(
+  "menu agent : un niveau ≠ Désactivé REMET l'agent en marche",
+  await waitFor(`(async () => {
+    const r = await fetch('/api/agents');
+    const b = await r.json();
+    return b.agents.find((a) => a.agentId === 'agent-nuc00')?.level === 'destructive';
+  })()`),
+);
+
+// Accessibilité clavier : touche « Menu contextuel » depuis la pastille.
+await evaluate(`(() => {
+  const row = [...document.querySelectorAll('.side-agent')].find((r) => r.querySelector('.side-agent__name')?.textContent === 'nuc00');
+  row.querySelector('.side-agent__badge').dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true, cancelable: true }));
+})()`);
+check("menu agent : ouvrable au CLAVIER (touche Menu contextuel)", (await agentMenuState()) !== null);
+await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+await sleep(150);
+check("menu agent : Échap referme le menu", (await agentMenuState()) === null);
+
 /* ═══════════════════════ 3) /config : agents révoqués ═══════════════════ */
 await navigate(`${server.base}/config#agents`);
 check(

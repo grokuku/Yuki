@@ -2204,7 +2204,8 @@ le même chemin `textContent`/ajout de nœud).
 | **Bloc de code** | `pre > code` (classe `language-x`), dans `.md-code-block` |
 | **Code en ligne** | `code.md-code` |
 | **Gras / italique / barré** | `strong` / `em` / `del` (imbricables) |
-| **Liens** `[t](href)` | `a.md-link` — `href` seulement si `http(s)/mailto/relatif` (sinon texte) et `rel="noopener noreferrer"` |
+| **Liens** `[t](href)` | `a.md-link` — `href` seulement si `http(s)` (nouvel onglet `target="_blank"` + `rel="noopener noreferrer"`) ou cible de même origine (`/…`, `#…`) ; tout autre schéma (`javascript:`, `data:`, `file:`, `blob:`, `mailto:`…) ⇒ **texte** |
+| **URL nues** `http(s)://…` | **autolink** : `a.md-link` (mêmes garde-fous), le texte affiché reste l'URL |
 | **Tableaux** | `table.md-table` (`thead`/`th`, `tbody`/`td`) |
 | **Images** `![alt](src)` | `img.md-image` si `src` est `data:image/` ou de même origine ; **sinon placeholder** `span.md-image--placeholder` (rôle `img`, `aria-label`, alt affiché) |
 | **Bloc ` ```muet `** | `.md-code-block--mute` : `pre>code` **affiché**, surmonté d'une marque discrète `.md-mute-badge` (« muet — non lu ») |

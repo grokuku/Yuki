@@ -84,6 +84,23 @@
 
         <div id="thinking" class="thinking-indicator" hidden>réflexion…</div>
 
+        <!--
+          Indicateur « une validation est en attente » (D118). Affiché par
+          app.js SEULEMENT quand une demande de validation arrive alors que
+          l'utilisateur a remonté le fil : la vue n'est pas déplacée de force,
+          mais le bouton ramène sur le bloc. Un bloc qu'on ne voit pas est une
+          demande perdue.
+        -->
+        <button
+          id="pending-validation"
+          class="pending-validation"
+          type="button"
+          hidden
+        >
+          <span class="pending-validation__dot" aria-hidden="true"></span>
+          Une validation est en attente — afficher la demande
+        </button>
+
         <footer class="composer">
           <textarea
             id="input"

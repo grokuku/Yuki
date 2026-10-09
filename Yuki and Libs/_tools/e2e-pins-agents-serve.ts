@@ -116,6 +116,7 @@ const agentsGateway: AgentsGatewayPort = {
       online: hub.isOnline(record.agentId),
     })),
   setEnabled: (agentId, enabled) => store.setEnabled(agentId, enabled),
+  setLevel: (agentId, level) => store.setLevel(agentId, level),
   subscribe: (listener) => store.subscribe(listener),
 };
 

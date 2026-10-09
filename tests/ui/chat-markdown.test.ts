@@ -28,10 +28,12 @@ import {
 } from "../../src/tts/mute.js";
 import {
   MUTE_BLOCK_LABELS,
+  isExternalLink,
   isMuteInfoString,
   isSafeImageSrc,
   isSafeLink,
   parseBlocks,
+  renderBlock,
   splitStableBlocks,
   tokenizeInline,
 } from "../../public/ui/markdown.js";
@@ -174,13 +176,50 @@ describe("tokenizeInline — jetons de mise en forme", () => {
 });
 
 describe("sécurité des destinations (CSP / anti-injection)", () => {
-  it("refuse `javascript:` et les schémas inconnus, accepte http(s)/mailto/relatif", () => {
-    expect(isSafeLink("javascript:alert(1)")).toBe(false);
-    expect(isSafeLink("data:text/html,<script>")).toBe(false);
+  it("n'autorise QUE `http`/`https`, casse ignorée, tabulations et sauts de ligne neutralisés", () => {
     expect(isSafeLink("https://exemple.fr")).toBe(true);
-    expect(isSafeLink("mailto:a@b.fr")).toBe(true);
+    expect(isSafeLink("http://exemple.fr")).toBe(true);
+    expect(isSafeLink("HTTPS://exemple.fr")).toBe(true);
+    expect(isSafeLink("HttpS://exemple.fr")).toBe(true);
+    expect(isExternalLink("https://exemple.fr")).toBe(true);
+    expect(isExternalLink("http://exemple.fr")).toBe(true);
+    // Cibles SANS schéma : même origine (pas un site web).
     expect(isSafeLink("/chemin")).toBe(true);
     expect(isSafeLink("#ancre")).toBe(true);
+    expect(isExternalLink("/chemin")).toBe(false);
+  });
+
+  it("refuse `javascript:` sous TOUTES ses casses et variantes encodées", () => {
+    const refusés = [
+      "javascript:alert(1)",
+      "JavaScript:alert(1)",
+      "JAVASCRIPT:alert(1)",
+      " javascript:alert(1)", // espace de bord
+      "\tjavascript:alert(1)", // tabulation de bord
+      "\njavascript:alert(1)", // saut de ligne de bord
+      "java\tscript:alert(1)", // tabulation INTERNE (le navigateur l'ignore)
+      "java\nscript:alert(1)", // saut de ligne INTERNE
+      "jav\u0000ascript:alert(1)", // NUL interne
+      "\u0001javascript:alert(1)", // C0 de bord (le navigateur le retire)
+    ];
+    for (const href of refusés) {
+      expect(isSafeLink(href), href).toBe(false);
+      expect(isExternalLink(href), href).toBe(false);
+    }
+  });
+
+  it("refuse `data:`, `file:`, `blob:`, `vbscript:`, `mailto:` et le protocol-relatif", () => {
+    for (const href of [
+      "data:text/html,<script>alert(1)</script>",
+      "file:///etc/passwd",
+      "blob:https://yuki.local/id",
+      "vbscript:msgbox(1)",
+      "mailto:a@b.fr",
+      "//externe.example/x",
+      "\\\\externe.example/x",
+    ]) {
+      expect(isSafeLink(href), href).toBe(false);
+    }
   });
 
   it("n'autorise QUE `self`/`data:image` pour les images (CSP `img-src`)", () => {
@@ -190,6 +229,154 @@ describe("sécurité des destinations (CSP / anti-injection)", () => {
     expect(isSafeImageSrc("https://externe.example/x.png")).toBe(false);
     expect(isSafeImageSrc("//externe.example/x.png")).toBe(false);
     expect(isSafeImageSrc("data:text/html,<script>")).toBe(false);
+    // Variantes encodées : jamais de contournement de la garde `img-src`.
+    expect(isSafeImageSrc("java\tscript:x")).toBe(false);
+    expect(isSafeImageSrc("\u0001https://externe.example/x.png")).toBe(false);
+  });
+});
+
+/* ─── 2bis. Liens cliquables : autolink pur + rendu DOM (faux document) ──── */
+
+/** Tampon DOM minimal (suffisant pour `renderBlock` : création de nœuds). */
+function makeFakeDoc(): any {
+  const make = (nodeType: number, nodeName: string): any => {
+    const attrs: Record<string, string> = {};
+    const node: any = {
+      nodeType,
+      nodeName,
+      childNodes: [] as any[],
+      appendChild(child: any) {
+        this.childNodes.push(child);
+        return child;
+      },
+      setAttribute(key: string, value: string) {
+        attrs[key] = value;
+        this[key] = value;
+      },
+      getAttribute(key: string) {
+        return attrs[key];
+      },
+    };
+    Object.defineProperty(node, "textContent", {
+      get: () => {
+        if (node.nodeType === 3) return String(node.nodeValue ?? "");
+        if (node._ownText !== undefined) return node._ownText;
+        return node.childNodes.map((c: any) => c.textContent ?? "").join("");
+      },
+      set: (value: unknown) => {
+        node.childNodes = [];
+        node._ownText = String(value ?? "");
+      },
+    });
+    return node;
+  };
+  return {
+    createElement: (tag: string) => make(1, tag.toUpperCase()),
+    createTextNode: (value: string) => {
+      const node = make(3, "#text");
+      node.nodeValue = value;
+      return node;
+    },
+    createDocumentFragment: () => make(11, "#fragment"),
+  };
+}
+
+/** Rend un corpus markdown et renvoie tous ses nœuds `<a>` (faux DOM). */
+function renderedAnchors(markdown: string): any[] {
+  const doc = makeFakeDoc();
+  const roots = (parseBlocks(markdown, true).blocks as UiBlock[]).map((block) =>
+    renderBlock(block, doc),
+  );
+  const found: any[] = [];
+  const walk = (node: any): void => {
+    if (!node) return;
+    if (node.nodeName === "A") found.push(node);
+    for (const child of node.childNodes ?? []) walk(child);
+  };
+  for (const root of roots) walk(root);
+  return found;
+}
+
+describe("autolink des URL nues (pur)", () => {
+  it("reconnaît http(s):// et conserve l'URL comme texte du lien", () => {
+    expect(tokenizeInline("voir https://exemple.fr/doc")).toEqual([
+      { type: "text", value: "voir " },
+      { type: "link", children: [{ type: "text", value: "https://exemple.fr/doc" }], href: "https://exemple.fr/doc", autolink: true },
+    ]);
+  });
+
+  it("retire la ponctuation de fin de phrase et les parenthèses non appariées", () => {
+    expect(tokenizeInline("cf. https://exemple.fr/a).")).toEqual([
+      { type: "text", value: "cf. " },
+      { type: "link", children: [{ type: "text", value: "https://exemple.fr/a" }], href: "https://exemple.fr/a", autolink: true },
+      { type: "text", value: ")." },
+    ]);
+    expect(tokenizeInline("https://exemple.fr/a(b)")[0]).toMatchObject({ href: "https://exemple.fr/a(b)" });
+  });
+
+  it("ne découpe pas un mot et ignore les URL dans le code", () => {
+    expect(tokenizeInline("xhTTps://no.fr")).toEqual([{ type: "text", value: "xhTTps://no.fr" }]);
+    expect(tokenizeInline("`https://code.fr`")).toEqual([{ type: "code", value: "https://code.fr" }]);
+  });
+
+  it("exige un hôte (un schéma seul n'est pas un lien)", () => {
+    expect(tokenizeInline("http://")).toEqual([{ type: "text", value: "http://" }]);
+    expect(tokenizeInline("https://")).toEqual([{ type: "text", value: "https://" }]);
+    expect(tokenizeInline("http://x")).toEqual([
+      { type: "link", children: [{ type: "text", value: "http://x" }], href: "http://x", autolink: true },
+    ]);
+  });
+});
+
+describe("liens rendus (faux DOM) — attributs de sécurité", () => {
+  it("`https` et `http` deviennent des `<a>` externes en nouvel onglet", () => {
+    for (const href of ["https://exemple.fr/x", "http://exemple.fr/x"]) {
+      const [a] = renderedAnchors(`[doc](${href})`);
+      expect(a, href).toBeDefined();
+      expect(a.href).toBe(href);
+      expect(a.target).toBe("_blank");
+      expect(a.rel).toBe("noopener noreferrer");
+      expect(a.title).toBe(href);
+      expect(a.textContent).toBe("doc");
+    }
+  });
+
+  it("`javascript:` (et variantes) reste du TEXTE : aucun `<a>` produit", () => {
+    for (const href of [
+      "javascript:alert(1)",
+      "JavaScript:alert(1)",
+      " javascript:alert(1)",
+      "java\tscript:alert(1)",
+      "data:text/html,x",
+      "file:///etc/passwd",
+    ]) {
+      expect(renderedAnchors(`[clic](${href})`), href).toEqual([]);
+    }
+  });
+
+  it("une cible de même origine n'ouvre PAS de nouvel onglet", () => {
+    const [a] = renderedAnchors("[config](/config)");
+    expect(a.href).toBe("/config");
+    expect(a.target).toBeUndefined();
+    expect(a.rel).toBeUndefined();
+  });
+
+  it("un libellé vide affiche l'URL (lien jamais invisible)", () => {
+    const [a] = renderedAnchors("[](https://exemple.fr)");
+    expect(a.textContent).toBe("https://exemple.fr");
+  });
+
+  it("les URL des blocs de code ne sont JAMAIS cliquables", () => {
+    expect(renderedAnchors("```\nhttps://exemple.fr\n```")).toEqual([]);
+    expect(renderedAnchors("```muet\nhttps://exemple.fr\n```")).toEqual([]);
+  });
+
+  it("une URL nue devient un lien externe cliquable", () => {
+    const [a] = renderedAnchors("Voir https://exemple.fr/doc pour la doc.");
+    expect(a.href).toBe("https://exemple.fr/doc");
+    expect(a.target).toBe("_blank");
+    expect(a.rel).toBe("noopener noreferrer");
+    expect(a.textContent).toBe("https://exemple.fr/doc");
   });
 });
 

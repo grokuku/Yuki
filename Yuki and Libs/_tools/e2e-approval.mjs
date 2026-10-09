@@ -198,6 +198,19 @@ const blockState = () =>
     };
   })()`);
 
+/* VISIBILITÉ MESURÉE (pas seulement la présence DOM) : fraction du bloc
+ * réellement contenue dans la zone visible du fil `#conversation`. */
+const visibilityOf = () =>
+  evaluate(`(() => {
+    const block = document.querySelector('.approval:not(.approval--result)');
+    const conv = document.querySelector('#conversation');
+    if (!block || !conv) return null;
+    const b = block.getBoundingClientRect();
+    const c = conv.getBoundingClientRect();
+    const visibleH = Math.max(0, Math.min(b.bottom, c.bottom) - Math.max(b.top, c.top));
+    return { ratio: b.height > 0 ? visibleH / b.height : 0, scrollTop: conv.scrollTop };
+  })()`);
+
 /* ═══════════════ 1) Le bloc apparaît DANS la conversation ═══════════════ */
 await navigate(`${server.base}/`);
 const shown = await waitFor(`!!document.querySelector('.approval:not(.approval--result)')`);
@@ -211,13 +224,45 @@ check("motif destructeur expliqué", state.text.includes("suppression (rm)"), st
 check("expiration mentionnée (compte à rebours)", /Expire dans/i.test(state.text), state.text.slice(0, 200));
 check("boutons Valider ET Refuser", state.hasValider && state.hasRefuser);
 check("aucun attribut de style sur le bloc (CSP)", state.blockStyle === null, String(state.blockStyle));
+// ⚠️ Le défaut signalé : le bloc pouvait apparaître SOUS la ligne de flottaison.
+// On MESURE donc la visibilité réelle dans le viewport du fil.
+const visible = await visibilityOf();
+check(
+  "le bloc est RÉELLEMENT visible après apparition (mesuré dans le fil)",
+  Boolean(visible) && visible.ratio >= 0.99,
+  visible ? `ratio=${visible.ratio.toFixed(2)} scrollTop=${visible.scrollTop}` : "introuvable",
+);
 await shot("approval-block");
 
-/* ═══════════════ 2) Rechargement : réapparaît tant qu'en attente ═════════ */
+/* ═══ 2) Horloge CLIENTE en avance de 10 min : le bloc ne disparaît pas ═══
+ * Le compte à rebours repose sur une DURÉE (`ttlSeconds`) comptée depuis la
+ * réception, pas sur `expiresAt` comparé à l'horloge du poste. */
+const skewScript = await send("Page.addScriptToEvaluateOnNewDocument", {
+  source: `(() => {
+    const real = Date.now.bind(Date);
+    const skew = 10 * 60 * 1000;
+    Date.now = () => real() + skew;
+  })();`,
+});
+await navigate(`${server.base}/`);
+check(
+  "horloge en avance de 10 min : le bloc apparaît quand même",
+  await waitFor(`!!document.querySelector('.approval:not(.approval--result)')`),
+);
+await sleep(1500);
+const skew = await evaluate(`(() => ({
+  present: !!document.querySelector('.approval:not(.approval--result)'),
+  text: document.querySelector('.approval__expiry')?.textContent ?? '',
+}))()`);
+check("horloge en avance de 10 min : le bloc NE disparaît PAS", skew.present === true, skew.text);
+check("compte à rebours toujours positif (~5 min)", /Expire dans [1-5] min/.test(skew.text), skew.text);
+await send("Page.removeScriptToEvaluateOnNewDocument", { identifier: skewScript.identifier });
+
+/* ═══════════════ 3) Rechargement : réapparaît tant qu'en attente ═════════ */
 await navigate(`${server.base}/`);
 check("rechargement : le bloc réapparaît (demande encore en attente)", await waitFor(`!!document.querySelector('.approval:not(.approval--result)')`));
 
-/* ═══════════════ 3) Valider ⇒ bloc disparaît + résultat affiché ═════════ */
+/* ═══════════════ 4) Valider ⇒ bloc disparaît + résultat affiché ═════════ */
 await evaluate(`[...document.querySelectorAll('.approval__btn')].find((b) => b.textContent === 'Valider').click()`);
 const decided = await waitFor(`!!document.querySelector('.approval--result')`);
 check("valider : le bloc de validation disparaît et le résultat s'affiche", decided);

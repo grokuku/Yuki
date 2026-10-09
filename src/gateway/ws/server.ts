@@ -36,6 +36,7 @@ import {
   type WireAgent,
   type WireSession,
 } from "./protocol.js";
+import type { AgentLevel } from "../../agents/types.js";
 import { SessionStreamStore } from "./session-stream.js";
 import type { Transport, TransportStats } from "./transport.js";
 
@@ -53,6 +54,12 @@ export interface AgentsGatewayPort {
    * mémorisé (ou défaut). Lève si l'agent est inconnu.
    */
   setEnabled(agentId: string, enabled: boolean): void;
+  /**
+   * Règle DIRECTEMENT le niveau de confirmation (menu contextuel de l'agent).
+   * ⚠️ MÊME état que le on/off : `disabled` = off ; un autre niveau = on (le
+   * niveau mémorisé pour la bascule on/off est mis à jour par le store).
+   */
+  setLevel(agentId: string, level: AgentLevel): void;
   /** S'abonne aux changements du registre. Renvoie le désabonnement. */
   subscribe(listener: () => void): () => void;
 }
@@ -764,6 +771,32 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   }
 
+  /**
+   * Règle le niveau de confirmation d'un agent depuis le menu contextuel de
+   * l'encart de la barre latérale. ⚠️ Pas un second état : `disabled` = off.
+   */
+  function handleAgentLevel(client: ClientState, message: ClientMessage): void {
+    if (message.type !== "agent_level") return;
+    if (!agentPort) {
+      sendDirect(client, {
+        type: "error",
+        code: "agents_unavailable",
+        message: "Les agents ne sont pas disponibles.",
+      });
+      return;
+    }
+    try {
+      agentPort.setLevel(message.agentId, message.level);
+      // Le store notifie ses abonnés → diffusion de la trame `agents` à tous.
+    } catch (error) {
+      sendDirect(client, {
+        type: "error",
+        code: "agent_unknown",
+        message: error instanceof Error ? error.message : "Agent inconnu.",
+      });
+    }
+  }
+
   function handleMessage(client: ClientState, message: ClientMessage): void {
     if (message.type !== "message") return;
     const sessionId = sessionIdFor(client);
@@ -835,6 +868,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         return;
       case "agent_enabled":
         handleAgentEnabled(client, message);
+        return;
+      case "agent_level":
+        handleAgentLevel(client, message);
         return;
       case "approval_decision":
         await handleApprovalDecision(client, message);

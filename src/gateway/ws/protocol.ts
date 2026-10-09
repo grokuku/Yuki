@@ -13,7 +13,7 @@ import type {
   RunFinishReason,
   TranscriptEntry,
 } from "../../pi/types.js";
-import type { AgentLevel } from "../../agents/types.js";
+import { isAgentLevel, type AgentLevel } from "../../agents/types.js";
 import type {
   CapturedScreenshotView,
   ExecutionStatus,
@@ -33,6 +33,7 @@ export type ClientMessage =
   | { type: "setAside"; sessionId: string }
   | { type: "pin"; sessionId: string; pinned: boolean }
   | { type: "agent_enabled"; agentId: string; enabled: boolean }
+  | { type: "agent_level"; agentId: string; level: AgentLevel }
   | { type: "approval_decision"; id: string; decision: "approve" | "deny" }
   | { type: "ping"; t: number };
 
@@ -345,6 +346,20 @@ export function parseClientMessage(raw: string): ParseResult {
         ok: true,
         message: { type: "agent_enabled", agentId, enabled: parsed.enabled },
       };
+    }
+    case "agent_level": {
+      // Menu contextuel de l'agent : réglage DIRECT du niveau (D118). ⚠️ C'est
+      // le MÊME état que le on/off : `disabled` = off, tout autre niveau = on
+      // (le serveur mémorise le niveau précédent pour la bascule on/off).
+      const agentId = optionalString(parsed, "agentId");
+      if (agentId === undefined || agentId.length === 0) {
+        return { ok: false, error: "agent_level_missing_agent_id" };
+      }
+      const level = parsed.level;
+      if (!isAgentLevel(level)) {
+        return { ok: false, error: "agent_level_invalid_level" };
+      }
+      return { ok: true, message: { type: "agent_level", agentId, level } };
     }
     case "approval_decision": {
       const id = optionalString(parsed, "id");

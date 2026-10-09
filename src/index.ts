@@ -339,6 +339,12 @@ async function main(): Promise<void> {
       setEnabled: (agentId, enabled) => {
         agentStore.setEnabled(agentId, enabled);
       },
+      // Menu contextuel de l'agent : règle DIRECTEMENT le niveau (D118).
+      // ⚠️ MÊME état que le on/off : `disabled` = off ; tout autre niveau = on
+      // (le store mémorise le niveau pour la bascule on/off).
+      setLevel: (agentId, level) => {
+        agentStore.setLevel(agentId, level);
+      },
       subscribe: (listener) => agentStore.subscribe(listener),
     };
     agentExecution = new AgentExecutionService({
