@@ -11,6 +11,11 @@
 // niveau courant est marqué (`role="menuitemradio"` + `aria-checked` + ✓). ⚠️
 // « Désactivé » EST le même état que « off » : un seul état, jamais deux.
 //
+// Chaque niveau affiche AUSSI la CONSÉQUENCE réelle (une phrase) : un acte de
+// sécurité doit être lisible SANS ouvrir /config — « Désactivé » = commandes
+// REFUSÉES, « Pas de validation » = aucune validation. Les phrases reprennent
+// la sémantique du garde-fou serveur (`AgentExecutionService.authorize`).
+//
 // CSP stricte : rendu PUREMENT DOM (jamais d'injection HTML), aucun attribut de
 // style en ligne. Seule la POSITION du menu flottant utilise le CSSOM
 // (`position: fixed`), comme le menu des conversations.
@@ -31,10 +36,26 @@ const LEVEL_LABELS = {
  * Ce sont ceux du menu contextuel (mêmes mots que la page /config, sans numéro).
  */
 export const LEVEL_MENU_ITEMS = [
-  { level: "disabled", label: "Désactivé" },
-  { level: "always", label: "Validation à chaque commande" },
-  { level: "destructive", label: "Validation des commandes destructrices" },
-  { level: "never", label: "Pas de validation" },
+  {
+    level: "disabled",
+    label: "Désactivé",
+    hint: "Commandes REFUSÉES : l'agent ne peut plus rien exécuter.",
+  },
+  {
+    level: "always",
+    label: "Validation à chaque commande",
+    hint: "Chaque commande vous demande validation avant de s'exécuter.",
+  },
+  {
+    level: "destructive",
+    label: "Validation des commandes destructrices",
+    hint: "Seules les commandes destructrices vous demandent validation.",
+  },
+  {
+    level: "never",
+    label: "Pas de validation",
+    hint: "Aucune validation : les commandes s'exécutent directement.",
+  },
 ];
 
 /**
@@ -181,7 +202,7 @@ export function initSidebarAgents(deps = {}) {
       "Niveau de confirmation",
     );
     menu.appendChild(label);
-    for (const { level, label: text } of LEVEL_MENU_ITEMS) {
+    for (const { level, label: text, hint } of LEVEL_MENU_ITEMS) {
       const item = el(
         "button",
         { class: "ctx-menu__item ctx-menu__item--radio", type: "button", role: "menuitemradio" },
@@ -189,7 +210,17 @@ export function initSidebarAgents(deps = {}) {
       );
       item.append(
         el("span", { class: "ctx-menu__check", "aria-hidden": "true" }, "✓"),
-        el("span", { class: "ctx-menu__text" }, text),
+        (() => {
+          // Libellé EXPLICITE + CONSÉQUENCE sur une seconde ligne : un seul
+          // libellé radio (`.ctx-menu__text`) porte l'état, la phrase explique
+          // l'effet réel. Jamais d'injection HTML (nœuds créés).
+          const col = el("span", { class: "ctx-menu__col" });
+          col.append(
+            el("span", { class: "ctx-menu__text" }, text),
+            el("span", { class: "ctx-menu__hint" }, hint),
+          );
+          return col;
+        })(),
       );
       item.setAttribute("aria-checked", "false");
       item.addEventListener("click", () => {

@@ -560,6 +560,27 @@ a.pill:hover {
   gap: 8px;
 }
 
+/* Libellé + CONSÉQUENCE empilés : le ✓ reste aligné sur la première ligne. */
+.ctx-menu__col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Phrase de conséquence d'un niveau (acte de sécurité lisible sans /config). */
+.ctx-menu__hint {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  white-space: normal;
+}
+
+/* Menu des NIVEAUX : un peu plus large pour que les conséquences tiennent. */
+.ctx-menu--levels {
+  min-width: 260px;
+}
+
 .ctx-menu__check {
   flex: 0 0 auto;
   width: 1em;

@@ -352,6 +352,7 @@ const agentMenuState = () =>
       label: m.querySelector('.ctx-menu__label')?.textContent ?? '',
       items: [...m.querySelectorAll('.ctx-menu__item--radio')].map((b) => ({
         text: b.querySelector('.ctx-menu__text')?.textContent ?? '',
+        hint: b.querySelector('.ctx-menu__hint')?.textContent ?? '',
         checked: b.getAttribute('aria-checked') === 'true',
         role: b.getAttribute('role'),
       })),
@@ -386,6 +387,22 @@ check(
       "Pas de validation",
     ]),
   JSON.stringify(agentMenu?.items.map((i) => i.text)),
+);
+check(
+  "menu agent : chaque niveau dit sa CONSÉQUENCE (acte de sécurité lisible sans /config)",
+  JSON.stringify(agentMenu?.items.map((i) => i.hint)) ===
+    JSON.stringify([
+      "Commandes REFUSÉES : l'agent ne peut plus rien exécuter.",
+      "Chaque commande vous demande validation avant de s'exécuter.",
+      "Seules les commandes destructrices vous demandent validation.",
+      "Aucune validation : les commandes s'exécutent directement.",
+    ]),
+  JSON.stringify(agentMenu?.items.map((i) => i.hint)),
+);
+check(
+  "menu agent : « Désactivé » dit REFUSÉES ; « Pas de validation » dit aucune validation",
+  /REFUS/i.test(agentMenu?.items[0]?.hint ?? "") &&
+    /Aucune validation/i.test(agentMenu?.items[3]?.hint ?? ""),
 );
 check(
   "menu agent : le niveau COURANT est marqué (rôle radio + aria-checked)",

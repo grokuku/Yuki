@@ -66,6 +66,25 @@ describe("menu contextuel — les 4 niveaux (D118), libellés explicites", () =>
       "Pas de validation",
     ]);
   });
+
+  it("affiche la CONSÉQUENCE réelle de chaque niveau (sans ouvrir /config)", () => {
+    const hint = (level: string) =>
+      LEVEL_MENU_ITEMS.find((item) => item.level === level)?.hint ?? "";
+    // ⚠️ « Désactivé » = commandes REFUSÉES (pas seulement « inactif »).
+    expect(hint("disabled")).toMatch(/REFUS/i);
+    expect(hint("disabled")).toMatch(/exécuter/i);
+    // ⚠️ « Pas de validation » = AUCUNE validation : la nuance est explicite.
+    expect(hint("never")).toMatch(/Aucune validation/i);
+    expect(hint("never")).toMatch(/directement/i);
+    // Les deux niveaux de validation disent bien ce qui est validé.
+    expect(hint("always")).toMatch(/Chaque commande/i);
+    expect(hint("destructive")).toMatch(/destructrices/i);
+    // Chaque niveau porte une phrase non vide (jamais de promesse muette).
+    for (const item of LEVEL_MENU_ITEMS) {
+      expect(typeof item.hint).toBe("string");
+      expect((item.hint ?? "").length).toBeGreaterThan(20);
+    }
+  });
 });
 
 describe("garde-fous statiques de sidebar-agents.js (CSP, sémantique)", () => {
@@ -100,5 +119,11 @@ describe("garde-fous statiques de sidebar-agents.js (CSP, sémantique)", () => {
     expect(source).toContain("clientX");
     expect(source).toContain("clientY");
     expect(source).toContain("menu.style.left");
+  });
+
+  it("rend la conséquence de chaque niveau (nœud texte, jamais d'injection)", () => {
+    // Le hint est posé en `textContent` sur un nœud créé, comme le libellé.
+    expect(source).toContain("ctx-menu__hint");
+    expect(source).toContain("ctx-menu__col");
   });
 });
