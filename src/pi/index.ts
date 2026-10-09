@@ -77,4 +77,9 @@ export type {
 export { createSdkMemoryExtractor } from "./sdk/memory-extractor.js";
 export type { SdkMemoryExtractorConfig } from "./sdk/memory-extractor.js";
 
+// Libraire de Pi-Web : rédacteur de synthèse d'archivage (session éphémère
+// isolée). Le port renvoyé (`LibrarianSynthesizer`) est PUR.
+export { createSdkLibrarianSynthesizer } from "./sdk/librarian-synthesizer.js";
+export type { SdkLibrarianSynthesizerConfig } from "./sdk/librarian-synthesizer.js";
+
 export { sanitizeErrorText } from "./events.js";

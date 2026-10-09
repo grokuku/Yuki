@@ -451,6 +451,44 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_AUDIT_MAX_SIZE_MB",
   },
+
+  // --- Libraire de Pi-Web (recherche documentaire + web) -------------------
+  // ⚠️ `FieldType` = `string | int | enum`. L'URL de base est une chaîne : vide =
+  // libraire NON configuré (les quatre outils ne sont alors pas exposés au
+  // modèle). Les deux secrets (jeton agent `Authorization` + clé libraire
+  // `X-API-Key`) sont masqués par l'API et jamais journalisés.
+  // `apply: hot` : le client relit la configuration à chaque appel. ⚠️ L'exposition
+  // des OUTILS est fixée à la création du host : renseigner l'URL pour la première
+  // fois nécessite un redémarrage du gateway.
+  "librarian.baseUrl": {
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    apply: "hot",
+    env: "YUKI_LIBRARIAN_BASE_URL",
+  },
+  "librarian.agentToken": {
+    type: "string",
+    default: "",
+    apply: "hot",
+    secret: true,
+    env: "YUKI_LIBRARIAN_AGENT_TOKEN",
+  },
+  "librarian.apiKey": {
+    type: "string",
+    default: "",
+    apply: "hot",
+    secret: true,
+    env: "YUKI_LIBRARIAN_API_KEY",
+  },
+  "librarian.archiveTimeoutMs": {
+    type: "int",
+    default: 30_000,
+    min: 1_000,
+    max: 300_000,
+    apply: "hot",
+    env: "YUKI_LIBRARIAN_ARCHIVE_TIMEOUT_MS",
+  },
 };
 
 /** Ordre stable des chemins (déterminisme des réponses / journaux). */

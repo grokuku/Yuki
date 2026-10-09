@@ -9,6 +9,7 @@ import {
   PROVIDERS,
   AGENT_DIRECTORY_TOOLS,
   HERITAGE_TOOLS,
+  LIBRARIAN_TOOLS,
   buildModelsConfigFrom,
   DEFAULT_EFFECTIVE_LLM_CONFIG,
   containsForbiddenTool,
@@ -194,5 +195,46 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
       expect(allTools, forbidden).not.toContain(forbidden);
     }
     expect(containsForbiddenTool(allTools)).toBe(false);
+  });
+
+  it("les outils du LIBRAIRE ne sont exposés que s'ils sont activés, et aucun ne va chercher une page web", () => {
+    expect(LIBRARIAN_TOOLS).toEqual([
+      "recherche_libraire",
+      "liste_libraire",
+      "lire_libraire",
+      "archive_libraire",
+    ]);
+    // Par défaut : non exposés (URL de base non renseignée).
+    expect(toolAllowlist("light")).not.toContain("recherche_libraire");
+    const withLibrarian = toolAllowlist("light", { librarianEnabled: true });
+    for (const name of LIBRARIAN_TOOLS) expect(withLibrarian).toContain(name);
+    expect(containsForbiddenTool(withLibrarian)).toBe(false);
+
+    // ⚠️ AUCUN outil de fetch/HTTP générique : tout le web passe par le libraire.
+    const allTools = [
+      ...toolAllowlist("light", {
+        librarianEnabled: true,
+        executionEnabled: true,
+        directoryEnabled: true,
+        heritageEnabled: true,
+      }),
+      ...toolAllowlist("heavy", { librarianEnabled: true }),
+    ];
+    for (const forbidden of [
+      "fetch",
+      "http_get",
+      "http_fetch",
+      "web_fetch",
+      "curl",
+      "wget",
+      "naviguer_web",
+      "ouvrir_page",
+    ]) {
+      expect(allTools, forbidden).not.toContain(forbidden);
+    }
+
+    // Le lourd n'a JAMAIS les outils du libraire.
+    const heavyLibrarian = toolAllowlist("heavy", { librarianEnabled: true });
+    for (const name of LIBRARIAN_TOOLS) expect(heavyLibrarian).not.toContain(name);
   });
 });

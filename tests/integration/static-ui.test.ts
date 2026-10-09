@@ -785,3 +785,31 @@ describe("Panneau Personnalité — section « Vie antérieure » (édition de l
     }
   });
 });
+
+describe("Libraire de Pi-Web — section /config et test de connexion (sans nouvel onglet)", () => {
+  it("ajoute la section « Libraire » à l'onglet Système existant (7 onglets inchangés)", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    // Groupe de champs dans l'onglet Système (aucun nouvel onglet).
+    expect(js).toContain('id: "librarian"');
+    expect(js).toContain('groups: ["gpu", "transport", "librarian"]');
+    for (const path of ["librarian.baseUrl", "librarian.agentToken", "librarian.apiKey"]) {
+      expect(js, path).toContain(`path: "${path}"`);
+    }
+    // Aide en français : les TROIS cas réseau.
+    expect(js).toContain("http://pi-web:3000");
+    expect(js).toContain("http://<ip>:3005");
+    expect(js).toContain("https://pi.holaf.fr");
+    // Bouton « Tester la connexion » : route dédiée, résultat servi par le serveur.
+    expect(js).toContain("testLibrarianConnection");
+    expect(js).toContain("/api/config/librarian/test");
+    expect(js).toContain('test: "librarian"');
+    // CSP stricte : aucune injection HTML, aucun style inline.
+    expect(js).not.toContain("innerHTML");
+    expect(js).not.toContain(".style.");
+    expect(js).not.toContain('setAttribute("style"');
+    // Le markup garde exactement 7 onglets (verrou existant).
+    const body = await (await fetch(`${baseUrl}/config`)).text();
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    expect(body).toContain('id="group-systeme"');
+  });
+});

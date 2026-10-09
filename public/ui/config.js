@@ -369,6 +369,51 @@ const GROUPS = [
       },
     ],
   },
+  {
+    id: "librarian",
+    title: "Libraire (recherche documentaire et web)",
+    // Bouton « Tester la connexion » dédié (route `POST /api/config/librarian/test`).
+    test: "librarian",
+    fields: [
+      {
+        path: "librarian.baseUrl",
+        label: "URL de base du libraire",
+        kind: "text",
+        helper:
+          "Adresse du libraire de Pi-Web, selon votre réseau : même réseau Docker " +
+          "(http://pi-web:3000), même machine (http://<ip>:3005), ou accès public " +
+          "(https://pi.holaf.fr). ⚠️ Vide = libraire non configuré : les outils de " +
+          "recherche ne sont alors pas proposés au modèle. Renseigner l'URL prend " +
+          "effet au prochain redémarrage (l'URL elle-même est ensuite modifiable à chaud).",
+      },
+      {
+        path: "librarian.agentToken",
+        label: "Jeton agent (Authorization: Bearer …)",
+        kind: "secret",
+        helper:
+          "Secret envoyé dans l'en-tête Authorization à chaque appel protégé. " +
+          "Jamais réaffiché en clair ; remplaçable ou effaçable.",
+      },
+      {
+        path: "librarian.apiKey",
+        label: "Clé libraire (X-API-Key: lib-…)",
+        kind: "secret",
+        helper:
+          "Secret « lib-… » envoyé dans l'en-tête X-API-Key. Jamais réaffiché en clair.",
+      },
+      {
+        path: "librarian.archiveTimeoutMs",
+        label: "Délai maximal de rédaction d'archive (ms)",
+        kind: "number",
+        min: 1000,
+        max: 300000,
+        advanced: true,
+        helper:
+          "Délai au-delà duquel la rédaction de la synthèse d'archivage est " +
+          "abandonnée (l'échec est rapporté dans la conversation).",
+      },
+    ],
+  },
 ];
 
 const ALL_FIELDS = GROUPS.flatMap((group) => group.fields);
@@ -427,6 +472,8 @@ const FIELD_DEFAULTS = {
   "transport.replayBuffer": 1000,
   "transport.replayBytes": 5000000,
   "agents.serverName": "",
+  "librarian.baseUrl": "",
+  "librarian.archiveTimeoutMs": 30000,
 };
 
 /**
@@ -440,7 +487,7 @@ const TABS = [
   { id: "personnalite", groups: [] },
   { id: "voix", groups: ["tts"] },
   { id: "agents", groups: ["agents-acces"] },
-  { id: "systeme", groups: ["gpu", "transport"] },
+  { id: "systeme", groups: ["gpu", "transport", "librarian"] },
   { id: "maintenance", groups: [] },
 ];
 
@@ -673,6 +720,9 @@ function renderField(field) {
 
   if (field.kind === "secret") {
     row.append(renderSecret(field, entry));
+    // Aide contextuelle des secrets (ex. libraire) : jamais de valeur, seulement
+    // une explication du rôle du secret.
+    if (field.helper) row.append(h("p", { class: "config-helper", text: field.helper }));
   } else {
     let control;
     let node;
@@ -801,6 +851,13 @@ function render() {
     if (group.role) {
       const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
       test.addEventListener("click", () => testConnection(group.role, status));
+      head.append(h("div", { class: "config-secret" }, [test, status]));
+    } else if (group.test === "librarian") {
+      // Bouton de test DÉDIÉ au libraire (route `/api/config/librarian/test`) :
+      // il appelle `GET {base}/api/librarian/status` et affiche un résultat
+      // honnête et distinct (joignable, auth refusée, web indisponible, injoignable).
+      const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
+      test.addEventListener("click", () => testLibrarianConnection(status));
       head.append(h("div", { class: "config-secret" }, [test, status]));
     }
     section.append(head);
@@ -1107,6 +1164,49 @@ async function testConnection(role, statusEl) {
     }
   } catch (error) {
     statusEl.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
+/**
+ * Teste la connexion au LIBRAIRE de Pi-Web (`POST /api/config/librarian/test`).
+ * Le message affiché vient du SERVEUR (il reflète ce qui a réellement été
+ * observé : joignable, authentification refusée, moteurs web indisponibles,
+ * Pi-Web injoignable). Aucune cause n'est inventée côté navigateur.
+ *
+ * Les valeurs NON ENREGISTRÉES saisies dans le formulaire (URL, jetons) sont
+ * transmises pour permettre de tester avant d'enregistrer ; elles ne sont ni
+ * écrites ni journalisées.
+ */
+async function testLibrarianConnection(statusEl) {
+  statusEl.textContent = "Test en cours…";
+  statusEl.classList.remove("config-status--error");
+  try {
+    const baseControl = state.inputs.get("librarian.baseUrl");
+    const baseUrl =
+      baseControl && baseControl.value.trim() !== "" ? baseControl.value.trim() : undefined;
+    const tokenSecret = state.secretState.get("librarian.agentToken");
+    const agentToken =
+      tokenSecret?.input && tokenSecret.input.value.trim() !== ""
+        ? tokenSecret.input.value.trim()
+        : undefined;
+    const keySecret = state.secretState.get("librarian.apiKey");
+    const apiKey =
+      keySecret?.input && keySecret.input.value.trim() !== ""
+        ? keySecret.input.value.trim()
+        : undefined;
+    const body = await HolafFetch.post("/api/config/librarian/test", {
+      headers: WRITE_HEADERS,
+      body: {
+        ...(baseUrl ? { baseUrl } : {}),
+        ...(agentToken ? { agentToken } : {}),
+        ...(apiKey ? { apiKey } : {}),
+      },
+    });
+    statusEl.textContent = body.message ?? (body.ok ? "Connexion OK." : "Échec.");
+    statusEl.classList.toggle("config-status--error", !body.ok);
+  } catch (error) {
+    statusEl.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+    statusEl.classList.add("config-status--error");
   }
 }
 

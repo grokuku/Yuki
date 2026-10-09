@@ -27,6 +27,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/agent-roster-extension.ts",
   "src/pi/sdk/heritage-extension.ts",
   "src/pi/sdk/heritage-tools.ts",
+  "src/pi/sdk/librarian-tools.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =

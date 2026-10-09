@@ -82,6 +82,7 @@ import {
   type LlmConfig,
   type ThinkingLevelName,
 } from "./llm/index.js";
+import { createLibrarianArchiveService, createLibrarianClient, LIBRARIAN_SYNTHESIZER_SYSTEM_PROMPT } from "./librarian/index.js";
 import { collectSecretValues, createLogger } from "./observability/logger.js";
 import {
   HeritageAdminService,
@@ -91,7 +92,7 @@ import {
   MemoryStore,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
-import { createPiHost, createSdkHeavyWorker, createSdkMemoryExtractor, SessionPinStore, type PiHost } from "./pi/index.js";
+import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, SessionPinStore, type PiHost } from "./pi/index.js";
 import {
   AudioCppClient,
   EngineCapabilitiesProbe,
@@ -682,6 +683,44 @@ async function main(): Promise<void> {
       entries: heritageStore.info().entries,
     });
 
+    // --- Libraire de Pi-Web : client HTTP + archivage EN TÂCHE DE FOND --------
+    // ⚠️ Le libraire est un service EXTERNE. Le client relit la configuration à
+    // CHAQUE appel (`apply: hot`) ; l'archivage est soumis à un service de fond
+    // DÉDIÉ qui réutilise le `JobStore`/`JobQueue` et le canal de report des jobs.
+    // ⚠️ Les quatre outils ne sont exposés au modèle que si l'URL de base est
+    // renseignée AU DÉMARRAGE (l'allowlist est fixée à la création du host) ;
+    // c'est la seule action qui requiert un redémarrage.
+    const librarianClient = createLibrarianClient({
+      config: () => ({
+        baseUrl: config.getString("librarian.baseUrl"),
+        agentToken: config.getString("librarian.agentToken"),
+        apiKey: config.getString("librarian.apiKey"),
+      }),
+      logger,
+    });
+    const librarianJobs = JobStore.open({ path: env.librarianJobsPath, logger });
+    const librarianArchive = createLibrarianArchiveService({
+      store: librarianJobs,
+      client: librarianClient,
+      synthesizer: createSdkLibrarianSynthesizer({
+        cwd: env.piCwd,
+        agentDir: env.piAgentDir,
+        authPath: join(env.piAgentDir, "auth.json"),
+        modelsPath,
+        modelReference: lightRef,
+        thinking: "off",
+        timeoutMs: () => config.getNumber("librarian.archiveTimeoutMs"),
+        systemPrompt: LIBRARIAN_SYNTHESIZER_SYSTEM_PROMPT,
+        logger,
+      }),
+      logger,
+    });
+    const librarianConfigured = config.getString("librarian.baseUrl").trim() !== "";
+    logger.info("librarian.ready", {
+      configured: librarianConfigured,
+      jobs: env.librarianJobsPath,
+    });
+
     host = createPiHost({
       agentDir: env.piAgentDir,
       cwd: env.piCwd,
@@ -705,12 +744,16 @@ async function main(): Promise<void> {
         directoryEnabled: agentDirectory !== undefined,
         // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
         heritageEnabled: true,
+        // Libraire de Pi-Web : quatre outils, exposés seulement si l'URL de base
+        // est renseignée (décision prise à la création du host).
+        librarianEnabled: librarianConfigured,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentExecution ? { execution: agentExecution } : {}),
       ...(agentExecution ? { screenshots: agentExecution } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
       heritage: heritageStore,
+      ...(librarianConfigured ? { librarian: { client: librarianClient, archive: librarianArchive } } : {}),
       personality: personalityStore,
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
@@ -718,6 +761,7 @@ async function main(): Promise<void> {
       logger,
     });
     delegation.setWaker(host);
+    librarianArchive.setWaker(host);
 
     host.subscribeAll((event) => {
       if (event.type === "state") {

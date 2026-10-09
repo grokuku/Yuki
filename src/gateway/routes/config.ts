@@ -22,6 +22,13 @@ import {
   LockedByEnvError,
   type ConfigRuntime,
 } from "../../config/runtime.js";
+import {
+  LibrarianClient,
+  LIBRARIAN_ERROR_MESSAGES,
+  isLibrarianError,
+  type LibrarianErrorCode,
+  type LibrarianStatus,
+} from "../../librarian/index.js";
 import { VOICE_SPEECH_INSTRUCTION } from "../../llm/prompts.js";
 import { ConfigStoreWriteError } from "../../config/store.js";
 import { describeWriteFailure } from "../../config/paths.js";
@@ -42,6 +49,8 @@ const FLOW_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
 export const UNSPECIFIED_FLOW = "unspecified";
 /** Délai du test de connexion LLM. */
 export const LLM_TEST_TIMEOUT_MS = 5_000;
+/** Délai du test de connexion au libraire (Pi-Web). */
+export const LIBRARIAN_TEST_TIMEOUT_MS = 8_000;
 /** Taille maximale acceptée pour un corps de requête. */
 export const MAX_CONFIG_BODY_BYTES = 1_000_000;
 
@@ -372,6 +381,116 @@ async function handleLlmTest(input: ConfigRequestInput): Promise<ConfigHttpRespo
   }
 }
 
+/** Libellé de la COUCHE d'authentification en cause (message honnête, distinct). */
+function librarianAuthLayer(code: LibrarianErrorCode): "token" | "key" | undefined {
+  if (code === "unauthorized_key") return "key";
+  if (code === "unauthorized_token") return "token";
+  return undefined;
+}
+
+/**
+ * Message d'échec RÉELLEMENT observé pour le test de connexion.
+ *
+ * ⚠️ Un 5xx sur `/status` ne permet pas de DEVINER quelle couche est en cause ;
+ * on énonce donc le fait (le statut reçu) et on rapporte l'interprétation
+ * DOCUMENTÉE du contrat d'API (5xx ⇒ moteurs de recherche web indisponibles),
+ * sans jamais inventer de cause.
+ */
+function librarianFailureMessage(code: LibrarianErrorCode, status: number | undefined): string {
+  if (status === 500 || status === 502) {
+    return (
+      `Le libraire a répondu une erreur serveur (${status}). D'après le contrat ` +
+      "d'API, cela signifie que ses moteurs de recherche web sont indisponibles : " +
+      "la bibliothèque locale peut rester consultable."
+    );
+  }
+  return LIBRARIAN_ERROR_MESSAGES[code];
+}
+
+/** Compose le message de succès à partir de ce que `/status` a RÉELLEMENT renvoyé. */
+function describeLibrarianStatus(status: LibrarianStatus): string {
+  const docs =
+    typeof status.totalDocs === "number"
+      ? `${status.totalDocs} document(s)`
+      : "nombre de documents inconnu";
+  const parts = [`Libraire joignable — ${docs}`];
+  if (status.lastUpdated) parts.push(`dernière mise à jour ${status.lastUpdated}`);
+  if (status.lastScan) parts.push(`dernier scan ${status.lastScan}`);
+  return `${parts.join(", ")}.`;
+}
+
+/**
+ * `POST /api/config/librarian/test` — teste la connexion au libraire de Pi-Web
+ * en appelant `GET {base}/api/librarian/status`.
+ *
+ * ⚠️ Le message renvoyé reflète STRICTEMENT ce qui a été observé (aucune cause
+ * inventée) : joignable (avec le nombre de documents), authentification refusée
+ * (en précisant la COUCHE : clé libraire 401 ou jeton agent 403), moteurs web
+ * indisponibles (502), trop de requêtes (429), ou Pi-Web INJOIGNABLE depuis Yuki
+ * (réseau/délai). Des valeurs non enregistrées peuvent être testées en les
+ * fournissant dans le corps ; elles ne sont ni écrites ni journalisées.
+ */
+async function handleLibrarianTest(
+  input: ConfigRequestInput,
+): Promise<ConfigHttpResponse> {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+
+  let body: Record<string, unknown>;
+  try {
+    const parsed = input.body.trim() === "" ? {} : JSON.parse(input.body);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("objet attendu");
+    }
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return json(400, {
+      error: "invalid_json",
+      fields: [{ path: "", code: "invalid_json", message: "Corps JSON invalide." }],
+    });
+  }
+
+  const runtime = input.deps.runtime;
+  const provided = (key: string): string | undefined => {
+    const raw = body[key];
+    return typeof raw === "string" && raw.trim() !== "" ? raw.trim() : undefined;
+  };
+  const baseUrl = provided("baseUrl") ?? runtime.getString("librarian.baseUrl").trim();
+  const agentToken =
+    provided("agentToken") ?? runtime.getString("librarian.agentToken").trim();
+  const apiKey = provided("apiKey") ?? runtime.getString("librarian.apiKey").trim();
+
+  const client = new LibrarianClient({
+    config: () => ({ baseUrl, agentToken, apiKey }),
+    ...(input.deps.fetchImpl ? { fetchImpl: input.deps.fetchImpl } : {}),
+    timeoutMs: LIBRARIAN_TEST_TIMEOUT_MS,
+  });
+
+  try {
+    const status = await client.status();
+    return json(200, { ok: true, message: describeLibrarianStatus(status), info: status });
+  } catch (error) {
+    if (isLibrarianError(error)) {
+      const layer = librarianAuthLayer(error.code);
+      return json(200, {
+        ok: false,
+        code: error.code,
+        ...(error.status !== undefined ? { status: error.status } : {}),
+        ...(layer ? { layer } : {}),
+        message: librarianFailureMessage(error.code, error.status),
+      });
+    }
+    // Cause inattendue : on la NOMME (jamais de cause inventée, jamais un secret).
+    return json(200, {
+      ok: false,
+      code: "internal_error",
+      message: `Erreur inattendue lors du test du libraire : ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+  }
+}
+
 /** Vrai si le chemin relève de l'API de configuration. */
 export function isConfigPath(path: string): boolean {
   return path === "/api/config" || path.startsWith("/api/config/");
@@ -389,6 +508,10 @@ export async function handleConfigRequest(
   }
   if (path === "/api/config/llm/test") {
     if (method === "POST") return handleLlmTest(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path === "/api/config/librarian/test") {
+    if (method === "POST") return handleLibrarianTest(input);
     return json(405, { error: "method_not_allowed", method });
   }
   return json(404, { error: "not_found", path });

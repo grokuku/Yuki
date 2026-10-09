@@ -70,6 +70,7 @@ import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
 import { createPersonalityExtensionFactory } from "./sdk/personality-extension.js";
 import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
 import { createHeritageTools } from "./sdk/heritage-tools.js";
+import { createLibrarianTools } from "./sdk/librarian-tools.js";
 import type {
   PiEvent,
   PiEventListener,
@@ -720,6 +721,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // Lot 13 : outil de CONSULTATION de l'archive « vie antérieure » (LECTURE
       // SEULE). L'archive n'est jamais injectée ; on la consulte à la demande.
       customTools.push(...createHeritageTools(options.heritage));
+    }
+    if (options.librarian) {
+      // Libraire de Pi-Web : recherche documentaire + web, bibliothèque, relecture
+      // et archivage EN TÂCHE DE FOND (rend la main immédiatement). ⚠️ Aucun outil
+      // ne va chercher une page web : tout passe par le libraire.
+      customTools.push(...createLibrarianTools(options.librarian));
     }
 
     // Extensions INLINE, dans l'ORDRE D'APPLICATION voulu du prompt du tour :

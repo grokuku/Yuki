@@ -66,6 +66,12 @@ export interface Env {
   /** Fichier JSONL du journal d'audit des exécutions (volume `state`). */
   auditLogPath: string;
   /**
+   * Fichier JSONL des jobs d'ARCHIVAGE du libraire (volume `state`). Séparé de
+   * `jobsStorePath` (délégation) pour ne pas mêler les deux espaces de noms.
+   * Surcharge : `YUKI_LIBRARIAN_JOBS_PATH`.
+   */
+  librarianJobsPath: string;
+  /**
    * Fichier JSON des conversations ÉPINGLÉES (volume `state`). Séparé du SDK Pi :
    * on n'écrit jamais de champ maison dans le JSONL d'une session. Surcharge :
    * `YUKI_SESSION_PINS_PATH`.
@@ -261,6 +267,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_AUDIT_LOG_PATH",
       `${mountPoints.state}/audit.jsonl`,
+    ),
+    librarianJobsPath: getString(
+      env,
+      "YUKI_LIBRARIAN_JOBS_PATH",
+      `${mountPoints.state}/librarian-jobs.jsonl`,
     ),
     sessionPinsPath: getString(
       env,

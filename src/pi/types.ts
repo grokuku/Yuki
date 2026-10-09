@@ -10,6 +10,7 @@
 import type { AgentDirectoryPort } from "../agents/directory.js";
 import type { ExecutionServicePort, ScreenshotServicePort } from "../agents/execution.js";
 import type { DelegateServicePort } from "../delegation/ports.js";
+import type { LibrarianArchivePort, LibrarianPort } from "../librarian/types.js";
 import type { HeritagePort } from "../memory/heritage.js";
 import type { MemoryPort } from "../memory/types.js";
 import type { PersonalityPort } from "../personality/types.js";
@@ -106,6 +107,13 @@ export interface PiHostOptions {
    * Absent ⇒ ni outil ni signal (host nu, tests).
    */
   heritage?: HeritagePort;
+  /**
+   * Libraire de Pi-Web (recherche documentaire + web). Présent ⇒ la façade expose
+   * les quatre outils (`recherche_libraire`, `liste_libraire`, `lire_libraire`,
+   * `archive_libraire`). `client` sert la lecture, `archive` la soumission en
+   * tâche de fond. Absent ⇒ aucun outil (URL de base non renseignée, tests).
+   */
+  librarian?: { client: LibrarianPort; archive: LibrarianArchivePort };
   /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).

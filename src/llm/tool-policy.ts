@@ -47,13 +47,27 @@ export type AgentDirectoryToolName = "lister_agents" | "etat_agent";
  */
 export type HeritageToolName = "archive_vie_anterieure";
 
+/**
+ * Outils custom du LIBRAIRE de Pi-Web (recherche documentaire + web). Les trois
+ * premiers sont en LECTURE SEULE (`recherche_libraire`, `liste_libraire`,
+ * `lire_libraire`) ; `archive_libraire` SOUMET un travail de fond (rend la main
+ * immédiatement). ⚠️ AUCUN outil de fetch web générique : tout passe par le
+ * libraire.
+ */
+export type LibrarianToolName =
+  | "recherche_libraire"
+  | "liste_libraire"
+  | "lire_libraire"
+  | "archive_libraire";
+
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
 export type CustomToolName =
   | DelegateToolName
   | ExecutionToolName
   | ScreenshotToolName
   | AgentDirectoryToolName
-  | HeritageToolName;
+  | HeritageToolName
+  | LibrarianToolName;
 
 export interface ToolPolicyEntry {
   readonly role: LlmRole;
@@ -69,6 +83,8 @@ export interface ToolPolicyEntry {
   readonly directory: readonly AgentDirectoryToolName[];
   /** Outils de consultation de l'archive « vie antérieure » (Lot 13). */
   readonly heritage: readonly HeritageToolName[];
+  /** Outils du libraire de Pi-Web (recherche documentaire + web). */
+  readonly librarian: readonly LibrarianToolName[];
   /** Le rôle peut-il déléguer à un worker lourd ? */
   readonly canDelegate: boolean;
 }
@@ -122,6 +138,19 @@ export const HERITAGE_TOOLS: readonly HeritageToolName[] = [
   "archive_vie_anterieure",
 ];
 
+/**
+ * Outils du libraire (recherche documentaire + web). Comme les outils de
+ * consultation d'agents/archive, ils ne sont exposés que si le câblage les active
+ * (URL de base du libraire renseignée au démarrage). ⚠️ `archive_libraire` rend la
+ * main immédiatement (travail de fond) ; aucun outil ne va chercher une page web.
+ */
+export const LIBRARIAN_TOOLS: readonly LibrarianToolName[] = [
+  "recherche_libraire",
+  "liste_libraire",
+  "lire_libraire",
+  "archive_libraire",
+];
+
 export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
   light: {
     role: "light",
@@ -131,6 +160,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     screenshots: SCREENSHOT_TOOLS,
     directory: AGENT_DIRECTORY_TOOLS,
     heritage: HERITAGE_TOOLS,
+    librarian: LIBRARIAN_TOOLS,
     canDelegate: true,
   },
   heavy: {
@@ -141,6 +171,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     screenshots: [],
     directory: [],
     heritage: [],
+    librarian: [],
     canDelegate: false,
   },
 };
@@ -177,6 +208,11 @@ export interface ToolAllowlistOptions {
    * l'active, quand un port d'archive existe.
    */
   heritageEnabled?: boolean;
+  /**
+   * Active les quatre outils du libraire de Pi-Web. DÉSACTIVÉ par défaut : seul
+   * le câblage les active, quand une URL de base est renseignée au démarrage.
+   */
+  librarianEnabled?: boolean;
 }
 
 /**
@@ -195,6 +231,7 @@ export function toolAllowlist(
     (options.screenshotsEnabled ?? false) && entry.screenshots.length > 0;
   const directoryEnabled = (options.directoryEnabled ?? false) && entry.directory.length > 0;
   const heritageEnabled = (options.heritageEnabled ?? false) && entry.heritage.length > 0;
+  const librarianEnabled = (options.librarianEnabled ?? false) && entry.librarian.length > 0;
   const tools: string[] = [...entry.builtins];
   if (entry.canDelegate && delegationEnabled) {
     tools.push(...entry.custom);
@@ -210,6 +247,9 @@ export function toolAllowlist(
   }
   if (heritageEnabled) {
     tools.push(...entry.heritage);
+  }
+  if (librarianEnabled) {
+    tools.push(...entry.librarian);
   }
   return tools;
 }
