@@ -115,10 +115,21 @@ describe("garde-fous statiques de sessions-panel.js (CSP, choix utilisateur)", (
     expect(source).toContain("récupérable à la main");
   });
 
-  it("la punaise expose aria-pressed ET aria-expanded", () => {
-    expect(source).toContain('"aria-pressed"');
+  it("le BOUTON déplier/replier remplace la punaise et l'ouverture au survol", () => {
+    expect(source).toContain("sidebar__toggle");
     expect(source).toContain('"aria-expanded"');
-    expect(source).toContain("data-pinned");
+    expect(source).toContain("Déplier la barre latérale");
+    expect(source).toContain("Replier la barre latérale");
+    expect(source).toContain("data-expanded");
+    // La punaise de BARRE a disparu (classe + libellé).
+    expect(source).not.toContain("sidebar__pin");
+    expect(source).not.toContain("Épingler la barre");
+  });
+
+  it("persiste l'état déplié en localStorage (clé dédiée, tolérante au mode privé)", () => {
+    expect(source).toContain("SIDEBAR_EXPANDED_KEY");
+    expect(source).toContain("yuki-sidebar-expanded");
+    expect(source).toContain("localStorage");
   });
 });
 

@@ -198,11 +198,22 @@ async function clickMenuItem(text) {
   await sleep(400);
 }
 
+/** Déplie/replie la barre via le BOUTON (le survol ne l'ouvre PLUS). */
+const toggleBar = () => evaluate(`document.querySelector('.sidebar__toggle').click()`);
+
+/** Ramène la barre au rail (repliée) si elle est actuellement dépliée. */
+const ensureCollapsed = () =>
+  evaluate(`(() => {
+    const s = document.querySelector('.sidebar');
+    if (s?.getAttribute('data-expanded') === 'true') document.querySelector('.sidebar__toggle').click();
+  })()`);
+
 const chatState = () =>
   evaluate(`(() => {
     const sidebar = document.querySelector('.sidebar');
     return {
       railWidth: sidebar ? Math.round(sidebar.getBoundingClientRect().width) : 0,
+      expanded: sidebar ? sidebar.getAttribute('data-expanded') : null,
       convs: [...document.querySelectorAll('.conv')].map((c) => ({
         title: c.querySelector('.conv__title')?.textContent ?? '',
         pinned: c.classList.contains('conv--pinned'),
@@ -246,8 +257,8 @@ check("menu contextuel : « Épingler » présent", menu.includes("Épingler"), 
 check("menu contextuel : pas de label « Désépingler » sur une non épinglée", !menu.includes("Désépingler"));
 await clickMenuItem("Épingler");
 
-await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 28, y: 320 });
-await sleep(500); // déplie la barre pour voir l'indicateur
+await toggleBar(); // déplie la barre (le BOUTON remplace le survol)
+await sleep(500); // pour voir l'indicateur de conversation épinglée
 const pinned = await chatState();
 check("épinglage : la conversation remonte en TÊTE", pinned.convs[0]?.title === secondTitle, `${pinned.convs.map((c) => c.title).join(" > ")}`);
 check("épinglage : indicateur visuel présent (📌)", pinned.convs[0]?.pinned === true && pinned.convs[0]?.hasMark === true);
@@ -263,16 +274,21 @@ await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Esca
 /* ─── Persistance : rechargement ------------------------------------------- */
 await navigate(`${server.base}/`);
 await waitFor(`document.querySelectorAll('.conv').length === 2`);
-await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 28, y: 320 });
+// Le dépliage de la barre est PERSISTÉ : reste dépliée sans recliquer.
 await sleep(500);
 const reloaded = await chatState();
 check(
   "persistance : l'épinglage survit au redémarrage/rechargement",
   reloaded.convs[0]?.title === secondTitle && reloaded.convs[0]?.pinned === true,
 );
+check(
+  "persistance : la barre reste DÉPLIÉE après rechargement (pas de survol)",
+  reloaded.railWidth >= 278 && reloaded.expanded === "true",
+  `largeur=${reloaded.railWidth} data-expanded=${reloaded.expanded}`,
+);
 
 /* ─── Désépingler --------------------------------------------------------- */
-await evaluate(`document.querySelector('.sidebar__pin').click()`); // épingle la barre dépliée
+// (La barre est déjà dépliée : son état est persisté, aucun clic de punaise.)
 await sleep(200);
 await openMenuOn(0);
 await clickMenuItem("Désépingler");
@@ -326,10 +342,7 @@ check(
 // En RAIL (barre repliée), l'entrée est réduite à la pastille : on cible donc
 // la PASTILLE elle-même (le clic droit remonte jusqu'à l'entrée `<li>`).
 // La barre a été ÉPINGLÉE plus haut : on la dé-épingle pour revenir au rail.
-await evaluate(`(() => {
-  const s = document.querySelector('.sidebar');
-  if (s?.getAttribute('data-pinned') === 'true') document.querySelector('.sidebar__pin').click();
-})()`);
+await ensureCollapsed(); // revient au rail via le BOUTON (plus de punaise)
 await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 720, y: 480 });
 await sleep(400);
 const railBefore = await chatState();

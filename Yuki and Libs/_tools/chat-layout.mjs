@@ -6,9 +6,9 @@
  *   (1) le fil de conversation REMPLIT l'espace disponible (fini la colonne bornée à
  *       720 px et ses marges latérales vides) ; largeur de lecture réglable
  *       (`--read-max`) et compteur de CARACTÈRES PAR LIGNE affiché EN DIRECT ;
- *   (2) barre latérale à DEUX MODES : REPLIÉE par défaut (56 px, initiales), DÉPLIÉE
- *       (280 px) au SURVOL, avec une PUNAISE pour la bloquer dépliée (épinglée) ;
- *       animation fluide, la conversation se redimensionne en même temps ;
+ *   (2) barre latérale à DEUX MODES pilotés par UN SEUL BOUTON : REPLIÉE par
+ *       défaut (56 px, initiales) ou DÉPLIÉE (280 px) — plus de survol ni de
+ *       punaise ; animation fluide, la conversation se redimensionne en même temps ;
  *   (3) actions de conversation : menu contextuel au CLIC DROIT + un « ⋯ » discret
  *       (alternative visible / accessible au doigt) ;
  *   (4) état « aucune conversation ouverte » (logo ❄️ + « Yuki » + invitation),
@@ -22,7 +22,7 @@
  *    n'est écrit : le script LIT `Yuki/public/ui/themes.css` (preset `neutre-dark`)
  *    et écrit uniquement `Yuki and Libs/_tools/chat-layout.html`.
  *
- * ⚠️ Cette maquette embarque un <script> INLINE (survol, épinglage, clic droit,
+ * ⚠️ Cette maquette embarque un <script> INLINE (bouton de repli/dépli, clic droit,
  *    mesure en direct) pour être RÉELLEMENT manipulable dans la Preview. C'est
  *    admis ICI (maquette, hors production) : le code de production, lui, respecte
  *    la CSP stricte SANS script inline. Le HTML produit garde 0 `style=`, 0 <img>,
@@ -158,9 +158,10 @@ const ICON = {
   trash:
     '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/>' +
     '<path d="M9.5 7V4h5v3"/><path d="M6.5 7l1 13h9l1-13"/></svg>',
-  pin:
-    '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 17v5"/>' +
-    '<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>',
+  chevronRight:
+    '<svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>',
+  chevronLeft:
+    '<svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>',
   volume:
     '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/>' +
     '<path d="M17 8.5a5 5 0 0 1 0 7"/></svg>',
@@ -187,8 +188,8 @@ function sidebar(activeId) {
   const items = CONVERSATIONS.map((c) => convItem(c, activeId)).join("\n");
   return `          <aside class="sb">
             <div class="sb__top">
+              <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale">${ICON.chevronRight}${ICON.chevronLeft}</button>
               <span class="sb__title">Conversations</span>
-              <button class="sb__pin" type="button" aria-pressed="false" title="Épingler la barre (rester dépliée)">${ICON.pin}</button>
             </div>
             <button class="sb__new" type="button" title="Nouvelle conversation">
               <span class="sb__plus">${ICON.plus}</span>
@@ -249,7 +250,7 @@ const THREAD = [
                 <div class="code-block">
                   <span class="mute-badge">muet — non lu</span>
                   <pre><code>const LAYOUT = {
-  sidebar: { open: 280, rail: 56 }, // dépliée au survol, repliée par défaut
+  sidebar: { open: 280, rail: 56 }, // dépliée par le bouton, repliée par défaut
   readMax: 'none',   // largeur de lecture réglable (px ou none)
   // NB : une ligne volontairement longue pour vérifier que le débordement reste CONFINÉ dans la bulle.
 };</code></pre>
@@ -277,7 +278,6 @@ function emptyState() {
 function appScreen(opts) {
   const cls = ["app"];
   if (opts.open) cls.push("is-open");
-  if (opts.pinned) cls.push("app--pinned");
   return `        <div class="${cls.join(" ")}">
           <header class="tb">
             <div class="tb__brand">Yuki</div>
@@ -326,9 +326,9 @@ const FIG_A = figure({
   id: "etat-a", screenClass: "screen--wide",
   opts: { activeId: "c1" },
   title: "(a) REPLIÉE par défaut — 56 px · fenêtre 1600 × 900",
-  hint: "Survolez la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Cliquez la punaise pour la bloquer dépliée. Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer. Le fil est horodaté : l'heure discrète sous chaque bulle, la date complète au milieu des séparateurs de jour.",
+  hint: "Cliquez le bouton en haut de la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Un second clic la replie (le survol ne l'ouvre plus). Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer. Le fil est horodaté : l'heure discrète sous chaque bulle, la date complète au milieu des séparateurs de jour.",
   list: [
-    ["barre latérale", "repliée · <b data-live=\"sbstate\">au survol</b> · 56 px → 280 px au survol"],
+    ["barre latérale", "repliée · <b>bouton déplier/replier</b> · 56 px ⇄ 280 px"],
     ["largeur de lecture", "pleine largeur (réglable · <code>--read-max</code>) = <b data-live=\"rmax\">none</b>"],
     ["caractères par ligne", "≈ <b data-live=\"cpl\">—</b> (largeur de texte <b data-live=\"px\">—</b>)"],
     ["bulle utilisateur", "85 % de la largeur de lecture"],
@@ -338,12 +338,12 @@ const FIG_A = figure({
 
 const FIG_B = figure({
   id: "etat-b", screenClass: "screen--wide",
-  opts: { open: true, pinned: true, activeId: "c1" },
-  title: "(b) DÉPLIÉE & ÉPINGLÉE — 280 px · fenêtre 1600 × 900",
-  hint: "La punaise est active : la barre reste dépliée même quand la souris s'éloigne. Un second clic la désépingle et elle repasse au comportement « survol ».",
+  opts: { open: true, activeId: "c1" },
+  title: "(b) DÉPLIÉE (bouton) — 280 px · fenêtre 1600 × 900",
+  hint: "Le bouton est en état « déplié » : la barre reste grande même quand la souris s'éloigne. Un second clic la replie — le bouton décide seul.",
   list: [
-    ["barre latérale", "dépliée & épinglée · 280 px"],
-    ["état de la punaise", "<b data-live=\"pin\">épinglée (reste dépliée)</b>"],
+    ["barre latérale", "dépliée par le bouton · 280 px"],
+    ["état du bouton", "<b>déplié (reste dépliée)</b>"],
     ["caractères par ligne", "≈ <b data-live=\"cpl\">—</b> (largeur de texte <b data-live=\"px\">—</b>)"],
     ["actions", "clic droit ou « ⋯ » → menu renommer / supprimer"],
   ],
@@ -353,7 +353,7 @@ const FIG_C = figure({
   id: "etat-c", screenClass: "screen--narrow",
   opts: { activeId: "c2" },
   title: "(c) Fenêtre ÉTROITE — 720 × 640 (repliée)",
-  hint: "Même règle : le fil remplit la largeur. Sous cette taille, le survol de la barre continue de déplier par-dessus.",
+  hint: "Même règle : le fil remplit la largeur. Sous cette taille, le bouton de la barre la déplie PAR-DESSUS le fil.",
   list: [
     ["barre latérale", "repliée · 56 px"],
     ["zone de contenu", `${NARROW.w - M.rail} px`],
@@ -363,12 +363,12 @@ const FIG_C = figure({
 
 const FIG_D = figure({
   id: "etat-d", screenClass: "screen--wide",
-  opts: { open: true, pinned: true, activeId: null, empty: true },
+  opts: { open: true, activeId: null, empty: true },
   title: "(d) AUCUNE conversation ouverte — 1600 × 900",
   hint: "État affiché après avoir supprimé la conversation ouverte. Même shell (barre du haut + barre latérale visibles) : aucune conversation n'est active à gauche, le panneau invite à en reprendre ou créer une.",
   list: [
     ["panneau", "vide — logo ❄️ + « Yuki » + invitation"],
-    ["barre latérale", "dépliée & épinglée · 280 px"],
+    ["barre latérale", "dépliée par le bouton · 280 px"],
     ["conversation active", "<b>aucune</b> (message honnête : ce n'est pas une erreur)"],
   ],
 });
@@ -552,7 +552,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 }
 .app.is-open .sb { width: var(--m-sidebar); }
 
-.sb__top { flex: 0 0 auto; min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 7px 8px; }
+.sb__top { flex: 0 0 auto; min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 7px 15px; }
 .sb__title {
   flex: 1 1 auto; min-width: 0;
   font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
@@ -560,14 +560,16 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
   opacity: 0; transition: opacity 0.18s ease 0.06s;
 }
 .app.is-open .sb__title { opacity: 1; }
-.sb__pin {
+.sb__toggle {
   flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; border-radius: 7px;
   border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer;
 }
-.sb__pin:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.app--pinned .sb__pin { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+.sb__toggle:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.sb__toggle .ic--chevron-left { display: none; }
+.app.is-open .sb__toggle .ic--chevron-left { display: inline-block; }
+.app.is-open .sb__toggle .ic--chevron-right { display: none; }
 
 .sb__new {
   flex: 0 0 auto;
@@ -751,7 +753,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
   <p class="lead">
     Maquette <b>hors production</b>, pour <b>décider sur le visuel</b>. Couleurs lues dans
     <code>Yuki/public/ui/themes.css</code> (preset <b>${PRESET}</b>), <b>aucun</b> fichier de production modifié.
-    Aucune ressource externe, aucun style en ligne. <b>Le survol, la punaise et le clic droit fonctionnent vraiment</b> :
+    Aucune ressource externe, aucun style en ligne. <b>Le bouton de repli/dépli et le clic droit fonctionnent vraiment</b> :
     essayez-les dans la Preview. <b>Nouveau :</b> l'<b>heure discrète</b> sous chaque bulle et un <b>séparateur de jour</b>
     (ligne + date complète au milieu) quand la conversation change de jour.
   </p>
@@ -791,7 +793,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
       <button class="chip" type="button" data-max="900px" aria-pressed="false">900 px</button>
     </div>
     <p class="mesure__legend">
-      La valeur se met à jour <b>en direct</b> : survolez la barre latérale d'un cadre (elle se déplie à 280 px) ou
+      La valeur se met à jour <b>en direct</b> : cliquez le bouton de repli/dépli de la barre d'un cadre (280 px) ou
       changez la largeur ci-dessus. Le repère vert marque la plage confortable <b>60 – 90</b>.
     </p>
   </section>
@@ -807,8 +809,8 @@ ${FIG_D}
       <li><b>Horodatage (à implémenter plus tard)</b> — en production, un préfixe <code>[horodatage] YYYY-MM-DD HH:mm (heure locale)</code> sera <b>transmis au modèle</b> et <b>stocké</b> en tête de chaque message (Yuki sait enfin « quand » nous sommes) ; il sera aussi <b>visible dans le fil</b>, sous forme compacte « juste l'heure ». Les <b>souvenirs</b> porteront eux aussi leur date (champ <code>at</code>), pour que le rappel mémoire dise « quand ». La maquette n'affiche QUE l'heure sous les bulles et la date complète dans le séparateur de jour.</li>
       <li><b>Clic droit vs « ⋯ »</b> — le menu contextuel (clic droit) est le geste le plus rapide à la souris, mais il est <b>invisible</b> (rien n'indique qu'il existe) et <b>inaccessible au doigt</b> (pas de clic droit tactile). Le <b>« ⋯ »</b> discret, révélé au survol (et toujours visible sur la conversation active), rend l'action <b>découvrable et accessible</b>. Les deux ouvrent le <b>même</b> menu (renommer / supprimer).</li>
       <li><b>Largeur réglable</b> — le fil remplit l'espace par défaut (<code>--read-max: none</code>). La largeur maximale de lecture est <b>paramétrable</b> : utilisez les boutons du témoin de mesure pour voir l'effet sur la longueur de ligne.</li>
-      <li><b>Barre latérale</b> — <b>repliée par défaut</b> (56 px), dépliée à 280 px <b>au survol</b>, avec une <b>punaise</b> pour la bloquer dépliée. La conversation se redimensionne <b>en même temps</b> (animation ${M.animMs} ms sur la largeur).</li>
-      <li><b>Script INLINE (maquette uniquement)</b> — cette page embarque un <code>&lt;script&gt;</code> inline pour rendre le survol, la punaise, le clic droit et la mesure <b>réellement utilisables</b>. C'est <b>propre à la maquette (hors production)</b> : le code de production respecte la CSP stricte, sans script inline.</li>
+      <li><b>Barre latérale</b> — <b>repliée par défaut</b> (56 px), dépliée à 280 px par un <b>BOUTON déplier/replier</b> (plus de survol, plus de punaise : le bouton décide seul). La conversation se redimensionne <b>en même temps</b> (animation ${M.animMs} ms sur la largeur).</li>
+      <li><b>Script INLINE (maquette uniquement)</b> — cette page embarque un <code>&lt;script&gt;</code> inline pour rendre le bouton de repli/dépli, le clic droit et la mesure <b>réellement utilisables</b>. C'est <b>propre à la maquette (hors production)</b> : le code de production respecte la CSP stricte, sans script inline.</li>
     </ul>
   </footer>
 
@@ -835,30 +837,24 @@ ${FIG_D}
       return n ? w / n : 0;
     }
 
-    /* ── Barre latérale : ouverture au survol + épinglage ──────────────── */
+    /* ── Barre latérale : repli/dépli par le BOUTON (plus de survol) ───── */
     var apps = Array.prototype.slice.call(document.querySelectorAll(".app"));
     apps.forEach(function (app) {
-      var sb = app.querySelector(".sb");
-      var pin = app.querySelector(".sb__pin");
-      if (!sb) return;
-      sb.addEventListener("mouseenter", function () {
-        if (!app.classList.contains("app--pinned")) app.classList.add("is-open");
-      });
-      sb.addEventListener("mouseleave", function () {
-        if (!app.classList.contains("app--pinned")) app.classList.remove("is-open");
-      });
-      if (pin) {
-        pin.addEventListener("click", function (e) {
-          e.stopPropagation();
-          var on = app.classList.toggle("app--pinned");
-          pin.setAttribute("aria-pressed", on ? "true" : "false");
-          pin.setAttribute("title", on ? "Désépingler (revenir au survol)" : "Épingler la barre (rester dépliée)");
-          if (on) app.classList.add("is-open");
-          else if (!sb.matches(":hover")) app.classList.remove("is-open");
-          var lab = app.querySelector("[data-live='pin']");
-          if (lab) lab.textContent = on ? "épinglée (reste dépliée)" : "au survol";
-        });
+      var toggle = app.querySelector(".sb__toggle");
+      if (!toggle) return;
+      function syncSidebarToggle() {
+        var on = app.classList.contains("is-open");
+        var label = on ? "Replier la barre latérale" : "Déplier la barre latérale";
+        toggle.setAttribute("aria-expanded", on ? "true" : "false");
+        toggle.setAttribute("aria-label", label);
+        toggle.setAttribute("title", label);
       }
+      toggle.addEventListener("click", function (e) {
+        e.stopPropagation();
+        app.classList.toggle("is-open");
+        syncSidebarToggle();
+      });
+      syncSidebarToggle();
     });
 
     /* ── Mesure en direct des caractères par ligne ─────────────────────── */
@@ -1013,8 +1009,8 @@ console.log(`  barre du haut .......... ${M.topbar} px`);
 console.log(`  témoin typographique ... ${WITNESS_LEN} caractères (boîte 90 ch)`);
 console.log(`  jauge ................. échelle 0 – ${SCALE_MAX} ch · repères 60/90/120/150`);
 console.log("\nCadres :");
-console.log(`  (a) repliée (défaut)  ${WIDE.w} × ${WIDE.h}   survol → ${M.sidebarOpen} px`);
-console.log(`  (b) dépliée/épinglée  ${WIDE.w} × ${WIDE.h}   ${M.sidebarOpen} px`);
+console.log(`  (a) repliée (défaut)  ${WIDE.w} × ${WIDE.h}   bouton → ${M.sidebarOpen} px`);
+console.log(`  (b) dépliée (bouton)  ${WIDE.w} × ${WIDE.h}   ${M.sidebarOpen} px`);
 console.log(`  (c) étroite           ${NARROW.w} × ${NARROW.h}   repliée ${M.rail} px`);
 console.log(`  (d) aucune ouverte    ${WIDE.w} × ${WIDE.h}   vide, même shell`);
 console.log(`\nLargeur de texte indicative (fenêtre ${WIDE.w} px, police 15 px) :`);

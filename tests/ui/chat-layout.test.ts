@@ -22,10 +22,13 @@ describe("layout — barre latérale repliée/dépliée et fil pleine largeur", 
     expect(css).toContain("width: 56px");
     expect(css).toContain("width: 280px");
     expect(css).toContain("transition: width 280ms ease");
-    // Dépliage au survol, au focus clavier ET épinglé.
-    expect(css).toContain(".sidebar:hover");
-    expect(css).toContain('.sidebar[data-pinned="true"]');
-    expect(css).toContain(".sidebar:focus-within");
+    // Dépliage piloté par le SEUL bouton (attribut `data-expanded`) :
+    // plus d'ouverture au survol, plus de focus-within, plus de punaise.
+    expect(css).toContain('.sidebar[data-expanded="true"]');
+    expect(css).not.toContain(".sidebar:hover");
+    expect(css).not.toContain(".sidebar:focus-within");
+    expect(css).not.toContain("data-pinned");
+    expect(css).not.toContain(".sidebar__pin");
   });
 
   it("le contenu interne a une largeur FIXE (pas de recomposition pendant l'animation)", () => {

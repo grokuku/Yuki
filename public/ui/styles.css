@@ -136,10 +136,10 @@ a.pill:hover {
   transition: width 280ms ease;
 }
 
-/* Dépliage au SURVOL (ou épinglé) : 56 px → 280 px, animation fluide. */
-.sidebar:hover,
-.sidebar:focus-within,
-.sidebar[data-pinned="true"] {
+/* Dépliage piloté UNIQUEMENT par le bouton : l'<aside> porte
+ * `data-expanded="true"`. 56 px → 280 px, animation fluide. Aucun survol,
+ * aucune punaise : le bouton décide seul. */
+.sidebar[data-expanded="true"] {
   width: 280px;
 }
 
@@ -156,9 +156,9 @@ a.pill:hover {
 .sidebar__top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 12px 12px 6px;
+  /* 14 px = (56 − 28) / 2 : le bouton de 28 px tombe juste au centre du rail. */
+  padding: 12px 14px 6px;
 }
 
 .sidebar__title {
@@ -171,7 +171,10 @@ a.pill:hover {
   transition: opacity 160ms ease;
 }
 
-.sidebar__pin {
+/* Bouton déplier/replier : placé en TÊTE de la colonne interne, donc TOUJOURS
+ * visible et cliquable, y compris dans le rail (56 px). Il est la SEULE
+ * commande de l'état de la barre (plus de survol, plus de punaise). */
+.sidebar__toggle {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -184,18 +187,26 @@ a.pill:hover {
   color: var(--muted);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: 16px;
 }
 
-.sidebar__pin:hover {
+.sidebar__toggle:hover {
   color: var(--text);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
-.sidebar[data-pinned="true"] .sidebar__pin {
-  color: var(--accent-text);
-  background: var(--accent);
-  border-color: var(--accent);
+/* Bascule de l'icône selon l'état, comme la bascule soleil/lune de la topbar :
+ * replié = chevron droit (déplier) ; déplié = chevron gauche (replier). */
+.sidebar__toggle .icon--chevron-left {
+  display: none;
+}
+
+.sidebar[data-expanded="true"] .sidebar__toggle .icon--chevron-left {
+  display: inline-block;
+}
+
+.sidebar[data-expanded="true"] .sidebar__toggle .icon--chevron-right {
+  display: none;
 }
 
 .sidebar__new {
@@ -237,15 +248,9 @@ a.pill:hover {
   transition: opacity 160ms ease;
 }
 
-.sidebar:hover .sidebar__title,
-.sidebar:focus-within .sidebar__title,
-.sidebar:hover .sidebar__newlabel,
-.sidebar:focus-within .sidebar__newlabel,
-.sidebar:hover .conv__main,
-.sidebar:focus-within .conv__main,
-.sidebar[data-pinned="true"] .sidebar__title,
-.sidebar[data-pinned="true"] .sidebar__newlabel,
-.sidebar[data-pinned="true"] .conv__main {
+.sidebar[data-expanded="true"] .sidebar__title,
+.sidebar[data-expanded="true"] .sidebar__newlabel,
+.sidebar[data-expanded="true"] .conv__main {
   opacity: 1;
 }
 
@@ -340,7 +345,7 @@ a.pill:hover {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
 }
 
-.sidebar:not(:hover):not(:focus-within):not([data-pinned="true"]) .conv__pin {
+.sidebar:not([data-expanded="true"]) .conv__pin {
   display: none;
 }
 
@@ -386,18 +391,10 @@ a.pill:hover {
   transition: opacity 160ms ease;
 }
 
-.sidebar:hover .side-agents__title,
-.sidebar:focus-within .side-agents__title,
-.sidebar[data-pinned="true"] .side-agents__title,
-.sidebar:hover .side-agents__count,
-.sidebar:focus-within .side-agents__count,
-.sidebar[data-pinned="true"] .side-agents__count,
-.sidebar:hover .side-agent__main,
-.sidebar:focus-within .side-agent__main,
-.sidebar[data-pinned="true"] .side-agent__main,
-.sidebar:hover .side-agents__empty,
-.sidebar:focus-within .side-agents__empty,
-.sidebar[data-pinned="true"] .side-agents__empty {
+.sidebar[data-expanded="true"] .side-agents__title,
+.sidebar[data-expanded="true"] .side-agents__count,
+.sidebar[data-expanded="true"] .side-agent__main,
+.sidebar[data-expanded="true"] .side-agents__empty {
   opacity: 1;
 }
 

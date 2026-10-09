@@ -4,11 +4,12 @@
  * layout (barre latérale repliée/dépliée/épinglée), menu contextuel (clic
  * droit), état vide, avec la CSP RÉELLE et un hôte Pi RÉEL hors ligne.
  *
- * Vérifie : la liste s'affiche, le SURVOL agrandit la barre (56 → 280 px), la
- * PUNAISE tient dépliée, le CLIC DROIT ouvre le menu (renommer / supprimer +
- * place réservée pour le titre IA), la BASCULE change bien de fil, l'ÉTAT VIDE
- * s'affiche après suppression de la conversation ouverte, et ZÉRO violation
- * CSP / exception JS.
+ * Vérifie : la liste s'affiche, le SURVOL N'OUVRE PLUS la barre (elle reste le
+ * rail de 56 px), le BOUTON déplier/replier la déplie à 280 px puis la replie,
+ * l'état déplié PERSISTE après rechargement, la PUNAISE a disparu, le CLIC
+ * DROIT ouvre le menu (renommer / supprimer + place réservée pour le titre IA),
+ * la BASCULE change bien de fil, l'ÉTAT VIDE s'affiche après suppression de la
+ * conversation ouverte, et ZÉRO violation CSP / exception JS.
  *
  * Usage : node "/projects/Yuki/Yuki and Libs/_tools/e2e-chat-sessions.mjs"
  */
@@ -184,13 +185,34 @@ async function shot(name) {
   writeFileSync(join(SHOTS, name + ".png"), Buffer.from(res.data, "base64"));
 }
 
+/** Centre (client) du bouton déplier/replier de la barre latérale. */
+const toggleCenter = () =>
+  evaluate(`(() => {
+    const b = document.querySelector('.sidebar__toggle');
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`);
+
+/** Clic GAUCHE RÉEL (CDP) sur le bouton déplier/replier. */
+async function clickToggle() {
+  const pos = await toggleCenter();
+  if (!pos) throw new Error('bouton .sidebar__toggle introuvable');
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pos.x, y: pos.y, button: "none", buttons: 0 });
+  await sleep(20);
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: pos.x, y: pos.y, button: "left", buttons: 1, clickCount: 1 });
+  await sleep(20);
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: pos.x, y: pos.y, button: "left", buttons: 1, clickCount: 1 });
+}
+
 const chatState = () =>
   evaluate(`(() => {
     const sidebar = document.querySelector('.sidebar');
     const empty = document.querySelector('#empty-state');
     return {
       railWidth: sidebar ? Math.round(sidebar.getBoundingClientRect().width) : 0,
-      pinPressed: document.querySelector('.sidebar__pin')?.getAttribute('aria-pressed') ?? null,
+      expanded: sidebar ? sidebar.getAttribute('data-expanded') : null,
+      toggleExpanded: document.querySelector('.sidebar__toggle')?.getAttribute('aria-expanded') ?? null,
       convs: [...document.querySelectorAll('.conv')].map((c) => ({
         title: c.querySelector('.conv__title')?.textContent ?? '',
         meta: c.querySelector('.conv__meta')?.textContent ?? '',
@@ -214,21 +236,43 @@ check("titre + compteur jamais vides", initial.convs.every((c) => c.title.length
 const activeTitle = initial.convs.find((c) => c.active)?.title ?? "";
 await shot("chat-sessions-rail");
 
-/* ═══════════════════════ 2) Survol → dépliée 280 px ══════════════════════ */
+/* ═════════ 2) SURVOL SANS CLIC ⇒ la barre NE S'OUVRE PAS (test clé) ═════ */
 await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 28, y: 320 });
 await sleep(550);
 const hovered = await chatState();
-check("SURVOL : barre dépliée à 280 px", Math.abs(hovered.railWidth - 280) <= 2, `${hovered.railWidth} px`);
+check("SURVOL SANS CLIC : la barre RESTE repliée (56 px)", hovered.railWidth === 56, `${hovered.railWidth} px`);
 await shot("chat-sessions-hover");
 
-/* ═══════════════════════ 3) Punaise : reste dépliée ══════════════════════ */
-await evaluate(`document.querySelector('.sidebar__pin').click()`);
-await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 1100, y: 320 });
+/* ═════════ 3) CLIC RÉEL sur le bouton ⇒ dépliée à 280 px ═════════════════ */
+await clickToggle();
 await sleep(550);
-const pinned = await chatState();
-check("PUNAISE : reste dépliée sans survol (280 px)", Math.abs(pinned.railWidth - 280) <= 2, `${pinned.railWidth} px`);
-check("PUNAISE : aria-pressed=true (état visible)", pinned.pinPressed === "true", String(pinned.pinPressed));
-await shot("chat-sessions-pinned");
+const expanded = await chatState();
+check("BOUTON : un clic déplie la barre à 280 px", Math.abs(expanded.railWidth - 280) <= 2, `${expanded.railWidth} px`);
+check("BOUTON : aria-expanded=true", expanded.toggleExpanded === "true", String(expanded.toggleExpanded));
+check("BOUTON : data-expanded=true sur l'aside", expanded.expanded === "true", String(expanded.expanded));
+await shot("chat-sessions-expanded");
+
+/* ═════════ 3bis) PERSISTANCE : reste dépliée au rechargement ════════════ */
+await navigate(`${server.base}/`);
+await waitFor(`document.querySelectorAll('.conv').length === 2`);
+const reloaded = await chatState();
+check("PERSISTANCE : reste dépliée après rechargement (280 px)", Math.abs(reloaded.railWidth - 280) <= 2, `${reloaded.railWidth} px`);
+check("PERSISTANCE : aria-expanded=true après rechargement", reloaded.toggleExpanded === "true", String(reloaded.toggleExpanded));
+
+/* ═════════ 3ter) RE-CLIC ⇒ repliée (56 px), repli persisté ══════════════ */
+await clickToggle();
+await sleep(550);
+const collapsed = await chatState();
+check("BOUTON (re-clic) : la barre se replie (56 px)", collapsed.railWidth === 56, `${collapsed.railWidth} px`);
+check("BOUTON (re-clic) : aria-expanded=false", collapsed.toggleExpanded === "false", String(collapsed.toggleExpanded));
+await navigate(`${server.base}/`);
+await waitFor(`document.querySelectorAll('.conv').length === 2`);
+const collapsedReload = await chatState();
+check("PERSISTANCE : le repli survit au rechargement (56 px)", collapsedReload.railWidth === 56, `${collapsedReload.railWidth} px`);
+
+/* ═════════ 3quater) PUNAISE SUPPRIMÉE (aucun nœud résiduel) ════════════ */
+const hasPin = await evaluate(`!!document.querySelector('.sidebar__pin')`);
+check("PUNAISE SUPPRIMÉE : aucun nœud `.sidebar__pin` résiduel", hasPin === false, String(hasPin));
 
 /* ═══════════════════════ 4) Bascule de fil ═══════════════════════════════ */
 await evaluate(`(() => {

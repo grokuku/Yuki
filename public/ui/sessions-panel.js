@@ -14,8 +14,15 @@
 //
 // Le panneau peut recevoir un élément `footer` (encart agents) monté SOUS la
 // liste, dans la même colonne interne : il profite du repli/dépli de la barre.
+//
+// Repli/dépli de la barre : UN SEUL bouton (`.sidebar__toggle`) décide de
+// l'état — plus d'ouverture au SURVOL ni de PUNAISE. L'état déplié est persisté
+// en `localStorage` (`yuki-sidebar-expanded`) pour survivre au rechargement.
+// L'ICÔNE (chevrons) vient de la brique `holaf-icons`, convertie en nœud DOM
+// via `DOMParser` (aucune injection HTML directe).
 
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
+import { HolafIcons } from "./vendor/holaf/holaf-icons.js";
 
 // Mode CSS externe : le CSS de la brique est servi par la page (CSP stricte,
 // pas de <style> injecté). Le pont `window.HolafModal` laisse `theme.js`
@@ -98,6 +105,39 @@ export function formatDate(iso) {
   }
 }
 
+/** Clé `localStorage` de l'état déplié de la barre latérale (`"true"`/`"false"`). */
+export const SIDEBAR_EXPANDED_KEY = "yuki-sidebar-expanded";
+
+/**
+ * Convertit une icône de la brique `holaf-icons` en nœud SVG DOM.
+ * Passe par `DOMParser` (jamais d'injection HTML directe) : la source garde
+ * donc sa règle « aucun HTML injecté ». Le SVG provient d'une brique statique
+ * et de confiance, et `stroke="currentColor"` le laisse suivre la couleur CSS.
+ */
+function iconNode(name, className) {
+  const svg = HolafIcons.render(name, { class: className });
+  const parsed = new DOMParser().parseFromString(svg, "image/svg+xml");
+  return document.importNode(parsed.documentElement, true);
+}
+
+/** État déplié persisté ; replié par défaut, tolérant au stockage indisponible. */
+function readExpanded() {
+  try {
+    return window.localStorage.getItem(SIDEBAR_EXPANDED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Persiste l'état déplié (best-effort : mode privé / quota ignorés). */
+function writeExpanded(value) {
+  try {
+    window.localStorage.setItem(SIDEBAR_EXPANDED_KEY, value ? "true" : "false");
+  } catch {
+    // Stockage indisponible : l'état reste en mémoire pour la session.
+  }
+}
+
 /** `createElement` + attributs, sans aucune injection HTML directe. */
 function el(tag, attrs = {}, text) {
   const node = document.createElement(tag);
@@ -135,7 +175,9 @@ export function initSessionsPanel(deps) {
 
   let sessions = [];
   let activeId = null;
-  let pinned = false;
+  // État déplié/replié de la barre : replié par défaut, restauré du stockage
+  // local (pour rester déplié après un rechargement), décidé par LE BOUTON.
+  let expanded = readExpanded();
   let menuTargetId = null;
   let pinItem = null;
 
@@ -143,17 +185,22 @@ export function initSessionsPanel(deps) {
   const inner = el("div", { class: "sidebar__inner" });
 
   const top = el("div", { class: "sidebar__top" });
-  const title = el("span", { class: "sidebar__title" }, "Conversations");
-  const pin = el("button", {
-    class: "sidebar__pin",
+  // Bouton déplier/replier : placé EN TÊTE, donc visible et cliquable même
+  // dans le rail (56 px). L'icône (chevron de la brique) bascule par CSS.
+  const toggle = el("button", {
+    class: "sidebar__toggle",
     type: "button",
-    title: "Épingler la barre (rester dépliée)",
-    "aria-label": "Épingler la barre latérale",
-    "aria-pressed": "false",
+    title: "Déplier la barre latérale",
+    "aria-label": "Déplier la barre latérale",
+    "aria-controls": "sessions-sidebar",
     "aria-expanded": "false",
   });
-  pin.appendChild(el("span", { "aria-hidden": "true" }, "📌"));
-  top.append(title, pin);
+  toggle.append(
+    iconNode("chevron-right", "icon icon--chevron-right"),
+    iconNode("chevron-left", "icon icon--chevron-left"),
+  );
+  const title = el("span", { class: "sidebar__title" }, "Conversations");
+  top.append(toggle, title);
 
   const newBtn = el("button", {
     class: "sidebar__new",
@@ -317,18 +364,24 @@ export function initSessionsPanel(deps) {
     if (confirmed) onSetAside(id);
   }
 
-  // ─── Épinglage ───────────────────────────────────────────────────────────
-  function setPinned(value) {
-    pinned = Boolean(value);
-    if (pinned) root.setAttribute("data-pinned", "true");
-    else root.removeAttribute("data-pinned");
-    pin.setAttribute("aria-pressed", pinned ? "true" : "false");
-    pin.setAttribute("aria-expanded", pinned ? "true" : "false");
-    pin.title = pinned
-      ? "Désépingler (revenir au survol)"
-      : "Épingler la barre (rester dépliée)";
+  // ─── Déplier / replier la barre ───────────────────────────────────
+  // UNE SEULE commande : le bouton. `data-expanded` sur l'<aside> pilote la
+  // largeur et la révélation du contenu (CSS). L'état est persisté localement
+  // pour qu'un dépliage survive au rechargement.
+  function setExpanded(value) {
+    expanded = Boolean(value);
+    if (expanded) root.setAttribute("data-expanded", "true");
+    else root.removeAttribute("data-expanded");
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    const label = expanded
+      ? "Replier la barre latérale"
+      : "Déplier la barre latérale";
+    toggle.setAttribute("aria-label", label);
+    toggle.title = label;
+    writeExpanded(expanded);
   }
-  pin.addEventListener("click", () => setPinned(!pinned));
+  toggle.addEventListener("click", () => setExpanded(!expanded));
+  setExpanded(expanded);
   newBtn.addEventListener("click", () => onNew());
 
   // ─── Rendu de la liste ───────────────────────────────────────────────────
