@@ -538,3 +538,109 @@ relancer, ou persister le résultat dans le transcript).
 HTTP (`POST /api/agents/approvals/<id>/approve|deny`) **enregistre** la décision
 et fait disparaître le bloc de la conversation (via l'événement `decided`), mais
 n'exécute pas immédiatement : le lieu **principal** est la conversation.
+
+---
+
+## 16. Épinglage des conversations, encart agents, suppression définitive (note d'implémentation)
+
+> **Notes d'implémentation — hors décisions de conception.** Ajoutées **après la
+> validation**, à la demande d'usage réel (2026-10-09). Elles **ne modifient
+> aucune décision** `D109`–`D128`.
+
+**Épinglage d'une conversation.** L'action vit dans le **menu contextuel**
+(clic droit) : **« Épingler » / « Désépingler »** (libellé qui bascule selon
+l'état). ⚠️ La session appartient au SDK Pi (JSONL, `id` = nom de fichier) : on
+**n'écrit JAMAIS** de champ maison dedans. L'état vit dans un **store hôte
+séparé**, sur le volume `state` (`session-pins.json`, surchargeable par
+`YUKI_SESSION_PINS_PATH`), qui associe `sessionId → épinglé`. La trame
+`sessions` porte le champ `pinned` ; le serveur TRIE **les épinglées d'abord**,
+puis par date décroissante. Un **indicateur visuel discret** (📌) marque les
+épinglées (la seule position en tête ne suffirait pas). **Nettoyage** : une
+conversation mise de côté retire son épingle (`sendSessions`/`setAside`) ;
+`SessionPinStore.prune` retire les orphelines. ⚠️ La liste de l'hôte est
+plafonnée (`MAX_SESSIONS = 50`) : on ne purge donc PAS en comparant à cette
+liste (cela effacerait l'épingle d'un fil ancien), seulement sur action
+explicite.
+
+**Encart « agents » (bas de la barre latérale du chat).** Il liste les agents
+appairés **non révoqués** avec un bouton **on/off**. ⚠️ Le on/off **réutilise le
+niveau existant** (`D118`) : `off` ⇒ niveau `disabled` ; `on` ⇒ **niveau
+précédent mémorisé** (reconstruit au rejeu du journal, donc persistant), ou
+`destructive` si l'agent était **déjà** `disabled` (aligné sur le défaut
+`agents.defaultLevel`). **Aucun second drapeau d'activation** (une seule source
+de vérité). En rail (56 px), seule la pastille (initiale + témoin on/off) est
+visible ; le nom et l'état n'apparaissent qu'à 280 px (CSS). **Propagation** :
+le registre notifie ses abonnés (`AgentStore.subscribe`) et le transport
+**rediffuse** une trame de contrôle `agents` (aucun `seq` consommé) à chaque
+changement — **aucun polling**. La même trame est renvoyée à la connexion
+(`hello`) et à la reconnexion (`resume`), ce qui couvre aussi les modifications
+faites depuis `/config`.
+
+**Suppression DÉFINITIVE d'un agent.** Les agents **révoqués** ne restent plus
+mêlés aux actifs : ils sont regroupés dans une **section distincte, grisée**
+(« Agents révoqués »). La révocation (`DELETE /api/agents/<id>`, réversible)
+reste l'action des actifs ; la **suppression définitive**
+(`POST /api/agents/<id>/remove`) retire la **fiche** de la projection
+(`AgentStore.remove`). ⚠️ Il n'y a **PAS de liste de révocation** : Yuki refuse
+un agent par l'**absence de sa fiche** (`authorizedAgent` exige
+`store.has(agentId)`), donc retirer la fiche suffit à couper tout accès, même
+avec un certificat signé par le CA interne. Le **journal d'audit n'est PAS
+touché** (trace immuable). La confirmation passe par **`HolafModal`** et dit
+explicitement ce qui disparaît et que l'agent devra être **ré-apparié** pour
+revenir. Pour un **agent** (une simple fiche de connexion, pas du contenu), la
+suppression définitive est légitime — contrairement à la mémoire, l'archive et
+les conversations, qui restent **récupérables**.
+
+## 17. Capture d'écran par l'agent (note d'implémentation)
+
+> **Note d'implémentation — hors décisions de conception.** Ajoutée **après la
+> validation**, à la demande d'usage réel (2026-10-09). Elle **ne modifie aucune
+> décision** `D109`–`D128`.
+
+**Le trou n'était PAS la capture** (`run_command` peut déjà lancer
+`scrot`/`grim`/PowerShell) **mais le RETOUR** : le seul canal était
+`stdout`/`stderr`, plafonné à 256 Kio/flux et rendu en **texte**. On ajoute donc
+un **canal d'image dédié**.
+
+**Agent (Go).**
+- Paquet `internal/screen` : `Detect(goos, getenv, lookPath)` déclare la
+  capacité **seulement** si un **écran** (`DISPLAY`/`WAYLAND_DISPLAY` non vides
+  sous Linux/macOS ; `SESSIONNAME` sous Windows) **ET** un **outil** de capture
+  (`LookPath`) sont présents. Outils : X11 `scrot`, `import`,
+  `gnome-screenshot`, `spectacle` ; Wayland `grim`, `spectacle` (préférés quand
+  `WAYLAND_DISPLAY` est posé) ; Windows `powershell`. Aucun écran ⇒ **capacité
+  absente** (aucune déclaration à tort).
+- Capture → décodage → **redimensionnement** (côté long ≤ 1600 px, box filter) →
+  **JPEG** qualité 70 → **cible** ≤ 150 Kio binaire, **plafond DUR** de 256 Kio
+  en base64 (`ErrTooLarge` sinon). Les outils sans sortie standard reçoivent un
+  fichier **temporaire** supprimé aussitôt ; rien ne persiste.
+- Protocole (`internal/proto`) : nouvelle trame `screenshot` (Yuki → agent) et
+  `screenshot_data` (agent → Yuki, base64). `caps` du `hello` porte
+  `screenshot` **uniquement** si la détection réussit. Erreurs : `unsupported`
+  (pas d'écran/outil) et `too_large` (image trop lourde).
+
+**Yuki (TS).**
+- **Correctif du bug `caps`** : la capacité annoncée est désormais propagée
+  jusqu'au **modèle** — `AgentHub.caps`/`hasCapability` → `AgentSummary.caps` →
+  `frameAgentDirectory`/`frameAgentStatus` (bloc `<agents_disponibles>`).
+  Le modèle sait donc ce que chaque machine **sait faire**.
+- Service : `AgentExecutionService.capture()` applique **le MÊME garde-fou par
+  agent** (`authorize`) que `run_command` : `disabled` refuse, niveau 2
+  (`always`) demande une validation, niveau 3 (`destructive`) laisse passer
+  **sans validation** (une capture n'est **jamais** classée destructrice).
+  Aucun second mécanisme de validation : le registre d'approbations existant est
+  réutilisé (commande synthétique `capture d'écran`, origine `capturer_ecran`).
+  Capacité absente ⇒ **refus honnête** (« cette machine n'a pas d'affichage ou
+  d'outil de capture »).
+- Outil `capturer_ecran` (nom français, désignation par nom **ou** identifiant) :
+  il ne renvoie au modèle que des **MÉTADONNÉES** (dimensions, taille) —
+  **jamais** le blob (anti-exfiltration).
+- Affichage : la capture est diffusée par une **trame de contrôle**
+  `screenshot` (`sendDirect`, via `subscribeScreenshots`), **routée vers la
+  seule conversation** demanderesse. Elle ne consomme aucun `seq`, n'est jamais
+  bufferisée ⇒ **ni transcript, ni snapshot, ni rejeu, ni mémoire**. Le client
+  la rend en `<img class="md-image">` (`data:image/jpeg;base64,…`), via
+  `isSafeImageSrc` — **aucun élargissement de CSP** (`img-src 'self' data:`
+  suffit).
+- Audit : entrées d'événement `screenshot` (statuts `captured`/`unsupported`/
+  `refused`/`offline`/`too_large`/`failed`) **sans contenu d'image**.

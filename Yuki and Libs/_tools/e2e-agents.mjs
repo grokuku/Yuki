@@ -231,7 +231,7 @@ const withAgent = await evaluate(`(() => {
     lastSeen: [...root.querySelectorAll('.config-helper')].map((p) => p.textContent).find((t) => t.startsWith('Dernière connexion')) ?? '',
     levelOptions: selects[0]?.querySelectorAll('option').length ?? 0,
     privOptions: selects[1]?.querySelectorAll('option').length ?? 0,
-    hasDelete: [...root.querySelectorAll('button')].some((b) => b.textContent === "Supprimer l'agent"),
+    hasDelete: [...root.querySelectorAll('button')].some((b) => b.textContent === "Révoquer"),
     history: root?.textContent.includes('ls -la /srv') ?? false,
     approvals: !!approve,
     help: root?.textContent.includes('Comment appairer un agent') ?? false,
@@ -267,9 +267,9 @@ check(
 );
 check("[/config#agents] toujours aucun style= inline après renommage", renamed.styleAttrs === 0, String(renamed.styleAttrs));
 
-/* Modale HolafModal de suppression. */
+/* Modale HolafModal de révocation (réversible). */
 await evaluate(`(() => {
-  const b = [...document.querySelectorAll('#agents-root button')].find((x) => x.textContent === "Supprimer l'agent");
+  const b = [...document.querySelectorAll('#agents-root button')].find((x) => x.textContent === "Révoquer");
   b?.click();
 })()`);
 await sleep(400);
@@ -278,7 +278,7 @@ const modal = await evaluate(`(() => {
   const cancel = [...document.querySelectorAll('.holaf-modal-btn')].find((b) => b.textContent === 'Annuler');
   return { title, hasCancel: !!cancel };
 })()`);
-check("[/config#agents] suppression : confirmation HolafModal (pas window.confirm)", modal.title.includes("Supprimer cet agent"), JSON.stringify(modal));
+check("[/config#agents] révocation : confirmation HolafModal (pas window.confirm)", modal.title.includes("Révoquer cet agent"), JSON.stringify(modal));
 await evaluate(`(() => { [...document.querySelectorAll('.holaf-modal-btn')].find((b) => b.textContent === 'Annuler')?.click(); })()`);
 await sleep(200);
 

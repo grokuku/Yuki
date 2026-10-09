@@ -56,6 +56,7 @@ import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-too
 import {
   createAgentDirectoryTools,
   createExecutionTools,
+  createScreenshotTool,
 } from "./sdk/execution-tools.js";
 import {
   getSharedModelRuntime,
@@ -709,6 +710,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // `etat_agent`), en LECTURE SEULE. Actifs même quand l'exécution est
       // désactivée : consulter n'est pas exécuter.
       customTools.push(...createAgentDirectoryTools(options.directory));
+    }
+    if (options.screenshots) {
+      // Lot 4 (extension) : capture d'écran déléguée (`capturer_ecran`). Le
+      // garde-fou par agent est appliqué côté Yuki, comme pour `run_command`.
+      customTools.push(...createScreenshotTool(options.screenshots));
     }
     if (options.heritage) {
       // Lot 13 : outil de CONSULTATION de l'archive « vie antérieure » (LECTURE

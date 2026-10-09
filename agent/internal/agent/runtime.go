@@ -3,15 +3,18 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/grokuku/yuki/agent/internal/exec"
 	"github.com/grokuku/yuki/agent/internal/proto"
+	"github.com/grokuku/yuki/agent/internal/screen"
 	"github.com/grokuku/yuki/agent/internal/tlsconf"
 	"github.com/grokuku/yuki/agent/internal/transport"
 )
@@ -32,14 +35,28 @@ type Runtime struct {
 	sup *exec.Supervisor
 	log transport.Logger
 	now func() time.Time
+
+	// Capture d'écran : capacité CONDITIONNELLE détectée au démarrage (écran +
+	// outil). `screenOK` faux ⇒ toute demande est refusée honnêtement.
+	screenOK   bool
+	screenPlan screen.Plan
+	captureFn  func(ctx context.Context, plan screen.Plan, opts screen.Options) (*screen.Shot, error)
 }
 
 // NewRuntime construit le gestionnaire. `logger` nil ⇒ `transport.NopLogger`.
+//
+// La capacité de capture d'écran est détectée ICI (même détection que celle du
+// `hello`, `internal/screen`) : l'agent ne peut PAS capturer s'il ne l'a pas
+// déclarée.
 func NewRuntime(cfg *Config, sup *exec.Supervisor, logger transport.Logger) *Runtime {
 	if logger == nil {
 		logger = transport.NopLogger{}
 	}
-	return &Runtime{cfg: cfg, sup: sup, log: logger, now: time.Now}
+	plan, ok := screen.Detect(runtime.GOOS, os.Getenv, nil)
+	return &Runtime{
+		cfg: cfg, sup: sup, log: logger, now: time.Now,
+		screenOK: ok, screenPlan: plan, captureFn: screen.Capture,
+	}
 }
 
 // Supervisor expose le superviseur sous-jacent (arrêt propre, tests).
@@ -54,6 +71,8 @@ func (rt *Runtime) HandleMessage(ctx context.Context, msg proto.Message, reply t
 		// Sonde de vivacité : réponse immédiate (le transport gère en plus le
 		// heartbeat sortant ping/pong).
 		return reply(&proto.Pong{T: m.T, Ts: rt.now().Format(time.RFC3339Nano)})
+	case *proto.Screenshot:
+		return rt.handleScreenshot(m, reply)
 	case *proto.Config:
 		rt.log.Info("agent.config.recue", map[string]any{
 			"level": m.Level, "privilege": m.Privilege,
@@ -70,6 +89,105 @@ func (rt *Runtime) HandleMessage(ctx context.Context, msg proto.Message, reply t
 	default:
 		rt.log.Debug("agent.trame.ignoree", map[string]any{"type": string(m.Type())})
 		return nil
+	}
+}
+
+// handleScreenshot traite une demande de capture d'écran.
+//
+// ⚠️ Si l'agent n'a PAS déclaré la capacité `screenshot` (aucun écran ou aucun
+// outil au démarrage), il refuse HONNÊTEMENT : jamais d'échec silencieux, jamais
+// de capture simulée.
+func (rt *Runtime) handleScreenshot(shot *proto.Screenshot, reply transport.ReplyFunc) error {
+	if strings.TrimSpace(shot.CmdID) == "" {
+		rt.log.Warn("agent.capture.sans_id", nil)
+	}
+	rt.log.Info("agent.capture.recue", map[string]any{
+		"cmd_id": shot.CmdID, "max_edge": shot.MaxEdge, "quality": shot.Quality,
+	})
+	if !rt.screenOK {
+		rt.log.Warn("agent.capture.indisponible", map[string]any{"cmd_id": shot.CmdID})
+		return reply(&proto.Error{
+			Error:   string(proto.CodeUnsupported),
+			Code:    proto.CodeUnsupported,
+			Message: "capture d'écran indisponible : aucun écran ou outil de capture détecté sur cette machine",
+			Ref:     shot.CmdID,
+		})
+	}
+	// La capture peut prendre plusieurs secondes : goroutine (le read loop du
+	// transport reste libre).
+	go rt.executeScreenshot(shot, reply)
+	return nil
+}
+
+// executeScreenshot capture, compresse et renvoie l'image (ou une erreur).
+func (rt *Runtime) executeScreenshot(req *proto.Screenshot, reply transport.ReplyFunc) {
+	opts := screen.Options{}
+	if req.MaxEdge > 0 {
+		opts.MaxEdge = req.MaxEdge
+	}
+	if req.Quality > 0 {
+		opts.Quality = req.Quality
+	}
+	if req.TimeoutMs > 0 {
+		opts.Timeout = time.Duration(req.TimeoutMs) * time.Millisecond
+	}
+
+	started := rt.now()
+	capture := rt.captureFn
+	if capture == nil {
+		capture = screen.Capture
+	}
+	shot, err := capture(context.Background(), rt.screenPlan, opts)
+	if err != nil {
+		code := proto.CodeInternal
+		switch {
+		case errors.Is(err, screen.ErrTooLarge):
+			code = proto.CodeTooLarge
+		case errors.Is(err, screen.ErrUnsupported):
+			code = proto.CodeUnsupported
+		}
+		message := err.Error()
+		if code == proto.CodeTooLarge {
+			message = "capture trop lourde : impossible de la compresser sous le plafond de 256 Kio"
+		}
+		rt.log.Error("agent.capture.echec", map[string]any{
+			"cmd_id": req.CmdID, "code": string(code), "error": err.Error(),
+		})
+		if replyErr := reply(&proto.Error{
+			Error:   string(code),
+			Code:    code,
+			Message: message,
+			Ref:     req.CmdID,
+		}); replyErr != nil {
+			rt.log.Warn("agent.capture.envoi_echec", map[string]any{
+				"cmd_id": req.CmdID, "error": replyErr.Error(),
+			})
+		}
+		return
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(shot.Data)
+	// ⚠️ Journalisation des MÉTADONNÉES seulement : jamais le contenu de l'image.
+	rt.log.Info("agent.capture.terminee", map[string]any{
+		"cmd_id":      req.CmdID,
+		"width":       shot.Width,
+		"height":      shot.Height,
+		"bytes":       shot.Bytes,
+		"data_b64":    len(encoded),
+		"duration_ms": rt.now().Sub(started).Milliseconds(),
+	})
+	if replyErr := reply(&proto.ScreenshotData{
+		CmdID:      req.CmdID,
+		Format:     shot.Format,
+		Width:      shot.Width,
+		Height:     shot.Height,
+		Bytes:      shot.Bytes,
+		Data:       encoded,
+		DurationMs: rt.now().Sub(started).Milliseconds(),
+	}); replyErr != nil {
+		rt.log.Warn("agent.capture.envoi_echec", map[string]any{
+			"cmd_id": req.CmdID, "error": replyErr.Error(),
+		})
 	}
 }
 

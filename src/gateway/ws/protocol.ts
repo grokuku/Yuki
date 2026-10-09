@@ -13,7 +13,12 @@ import type {
   RunFinishReason,
   TranscriptEntry,
 } from "../../pi/types.js";
-import type { ExecutionStatus, PendingApprovalView } from "../../agents/execution.js";
+import type { AgentLevel } from "../../agents/types.js";
+import type {
+  CapturedScreenshotView,
+  ExecutionStatus,
+  PendingApprovalView,
+} from "../../agents/execution.js";
 
 /** Trame client → serveur. */
 export type ClientMessage =
@@ -26,6 +31,8 @@ export type ClientMessage =
   | { type: "new" }
   | { type: "rename"; sessionId: string; title: string }
   | { type: "setAside"; sessionId: string }
+  | { type: "pin"; sessionId: string; pinned: boolean }
+  | { type: "agent_enabled"; agentId: string; enabled: boolean }
   | { type: "approval_decision"; id: string; decision: "approve" | "deny" }
   | { type: "ping"; t: number };
 
@@ -39,6 +46,21 @@ export interface WireSession {
   messageCount: number;
   /** Extrait (premiers mots du premier message), si connu. */
   excerpt?: string;
+  /** `true` si la conversation est ÉPINGLÉE (elle est alors triée en tête). */
+  pinned?: boolean;
+}
+
+/** Agent exposé au client (encart de la barre latérale du chat). */
+export interface WireAgent {
+  agentId: string;
+  /** Nom affichable — JAMAIS vide (repli serveur : l'`agentId`). */
+  name: string;
+  /** Niveau de garde-fou courant (D118). */
+  level: AgentLevel;
+  /** `true` si l'agent est révoqué (dé-appairé, restaurable). */
+  revoked: boolean;
+  /** `true` si un canal vivant est ouvert pour cet agent. */
+  online: boolean;
 }
 
 /** Corps d'une trame serveur → client. */
@@ -107,6 +129,15 @@ export type ServerMessage =
     }
   | {
       /**
+       * État des agents appairés (encart de la barre latérale du chat). Trame de
+       * CONTRÔLE : envoyée à la connexion (`hello`/`resume`) puis DIFFUSÉE à
+       * chaque changement du registre — jamais bufferisée, aucun `seq` consommé.
+       */
+      type: "agents";
+      agents: WireAgent[];
+    }
+  | {
+      /**
        * Demande de VALIDATION HUMAINE à afficher DANS la conversation. C'est un
        * ÉTAT TEMPORAIRE de l'interface : trame de contrôle (aucun `seq`
        * consommé), JAMAIS bufferisée, JAMAIS dans le transcript ni le snapshot.
@@ -126,6 +157,16 @@ export type ServerMessage =
        */
       type: "approval_result";
       result: ApprovalResultFrame;
+    }
+  | {
+      /**
+       * CAPTURE D'ÉCRAN affichée DANS la conversation. Trame de CONTRÔLE (aucun
+       * `seq` consommé) : JAMAIS bufferisée, JAMAIS dans le transcript ni le
+       * snapshot ni la mémoire. L'image n'est affichée qu'à l'HUMAIN — elle
+       * n'est JAMAIS renvoyée au modèle.
+       */
+      type: "screenshot";
+      screenshot: CapturedScreenshotView;
     }
   | { type: "pong"; t: number }
   | { type: "bye"; reason: string };
@@ -281,6 +322,29 @@ export function parseClientMessage(raw: string): ParseResult {
         return { ok: false, error: "set_aside_missing_session_id" };
       }
       return { ok: true, message: { type: "setAside", sessionId } };
+    }
+    case "pin": {
+      const sessionId = optionalString(parsed, "sessionId");
+      if (sessionId === undefined) {
+        return { ok: false, error: "pin_missing_session_id" };
+      }
+      if (typeof parsed.pinned !== "boolean") {
+        return { ok: false, error: "pin_invalid_pinned" };
+      }
+      return { ok: true, message: { type: "pin", sessionId, pinned: parsed.pinned } };
+    }
+    case "agent_enabled": {
+      const agentId = optionalString(parsed, "agentId");
+      if (agentId === undefined || agentId.length === 0) {
+        return { ok: false, error: "agent_enabled_missing_agent_id" };
+      }
+      if (typeof parsed.enabled !== "boolean") {
+        return { ok: false, error: "agent_enabled_invalid_enabled" };
+      }
+      return {
+        ok: true,
+        message: { type: "agent_enabled", agentId, enabled: parsed.enabled },
+      };
     }
     case "approval_decision": {
       const id = optionalString(parsed, "id");

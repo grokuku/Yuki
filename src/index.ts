@@ -52,7 +52,7 @@ import {
   RESTART_REASON,
   startServer,
 } from "./gateway/server.js";
-import { createWsTransport } from "./gateway/ws/server.js";
+import { createWsTransport, type AgentsGatewayPort } from "./gateway/ws/server.js";
 import type { Transport } from "./gateway/ws/transport.js";
 import type { SubsystemsSnapshot } from "./gateway/routes/health.js";
 import type { VoiceApiDeps } from "./gateway/routes/voices.js";
@@ -91,7 +91,7 @@ import {
   MemoryStore,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
-import { createPiHost, createSdkHeavyWorker, createSdkMemoryExtractor, type PiHost } from "./pi/index.js";
+import { createPiHost, createSdkHeavyWorker, createSdkMemoryExtractor, SessionPinStore, type PiHost } from "./pi/index.js";
 import {
   AudioCppClient,
   EngineCapabilitiesProbe,
@@ -291,6 +291,8 @@ async function main(): Promise<void> {
   let agentsDeps: AgentsApiDeps | undefined;
   let agentExecution: AgentExecutionService | undefined;
   let agentDirectory: AgentDirectoryService | undefined;
+  /** Port du registre d'agents vers le transport WS (encart de la barre latérale). */
+  let agentsGateway: AgentsGatewayPort | undefined;
   try {
     const agentStore = AgentStore.open({
       path: env.agentsStorePath,
@@ -321,6 +323,23 @@ async function main(): Promise<void> {
     // humaines (B6bis) + service d'exécution (garde-fous D118).
     const agentHub = new AgentHub({ logger });
     const approvals = new ApprovalRegistry({ logger });
+    // Encart agents de la barre latérale du chat : port LECTURE + bascule on/off
+    // (`disabled` ⇄ niveau précédent) + abonnement aux changements. On ne
+    // diffuse JAMAIS le secret : ici, un simple résumé.
+    agentsGateway = {
+      list: () =>
+        agentStore.list().map((record) => ({
+          agentId: record.agentId,
+          name: record.name !== "" ? record.name : record.agentId,
+          level: record.level,
+          revoked: record.revoked,
+          online: agentHub.isOnline(record.agentId),
+        })),
+      setEnabled: (agentId, enabled) => {
+        agentStore.setEnabled(agentId, enabled);
+      },
+      subscribe: (listener) => agentStore.subscribe(listener),
+    };
     agentExecution = new AgentExecutionService({
       store: agentStore,
       hub: agentHub,
@@ -679,6 +698,8 @@ async function main(): Promise<void> {
       tools: toolAllowlist("light", {
         delegationEnabled: heavyAvailableAtStart,
         executionEnabled: agentExecution !== undefined,
+        // Capture d'écran : même canal agent que l'exécution.
+        screenshotsEnabled: agentExecution !== undefined,
         // ⚠️ Indépendant de `executionEnabled` : consulter les agents n'est pas
         // exécuter. Actif dès que le registre d'agents existe.
         directoryEnabled: agentDirectory !== undefined,
@@ -687,6 +708,7 @@ async function main(): Promise<void> {
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentExecution ? { execution: agentExecution } : {}),
+      ...(agentExecution ? { screenshots: agentExecution } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
       heritage: heritageStore,
       personality: personalityStore,
@@ -718,10 +740,17 @@ async function main(): Promise<void> {
       serverVersion: env.version,
       replayBufferSize: config.getNumber("transport.replayBuffer"),
       replayBufferBytes: config.getNumber("transport.replayBytes"),
+      // Épinglage des conversations : store hôte SÉPARÉ du JSONL du SDK Pi.
+      pins: SessionPinStore.open({ path: env.sessionPinsPath, logger }),
+      // Encart agents de la barre latérale (absent si le registre n'a pas démarré).
+      ...(agentsGateway ? { agents: agentsGateway } : {}),
       // Validations humaines (D118) DANS la conversation : le transport route la
       // demande vers les clients de la SEULE conversation concernée. Le panneau
       // /config garde son affichage (routes HTTP) pour les cas hors conversation.
       ...(agentExecution ? { approvals: agentExecution } : {}),
+      // Captures d'écran : l'image est diffusée en trame de CONTRÔLE vers la
+      // SEULE conversation demanderesse (jamais bufferisée, jamais persistée).
+      ...(agentExecution ? { screenshots: agentExecution } : {}),
       tts: {
         enabled: isTtsEnabled(config),
         config: {

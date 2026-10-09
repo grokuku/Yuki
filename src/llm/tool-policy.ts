@@ -25,6 +25,14 @@ export type DelegateToolName = "delegate" | "job_status" | "cancel_job";
 export type ExecutionToolName = "run_command";
 
 /**
+ * Outil custom de CAPTURE D'ÉCRAN par l'agent (Lot 4, extension).
+ * `capturer_ecran` demande une capture à une machine appairée ; l'image est
+ * affichée à l'HUMAIN dans la conversation, jamais renvoyée au modèle (qui ne
+ * reçoit que des métadonnées). Même garde-fou par agent que `run_command`.
+ */
+export type ScreenshotToolName = "capturer_ecran";
+
+/**
  * Outils custom de CONSULTATION des agents appairés (Lot 4, extension).
  * `lister_agents` et `etat_agent` sont en **LECTURE SEULE** : ils n'exécutent ni
  * ne modifient rien. Activables indépendamment des outils d'exécution.
@@ -43,6 +51,7 @@ export type HeritageToolName = "archive_vie_anterieure";
 export type CustomToolName =
   | DelegateToolName
   | ExecutionToolName
+  | ScreenshotToolName
   | AgentDirectoryToolName
   | HeritageToolName;
 
@@ -54,6 +63,8 @@ export interface ToolPolicyEntry {
   readonly custom: readonly DelegateToolName[];
   /** Outils d'exécution déléguée (Lot 4). */
   readonly execution: readonly ExecutionToolName[];
+  /** Outils de capture d'écran par l'agent (Lot 4, extension). */
+  readonly screenshots: readonly ScreenshotToolName[];
   /** Outils de consultation des agents (Lot 4, lecture seule). */
   readonly directory: readonly AgentDirectoryToolName[];
   /** Outils de consultation de l'archive « vie antérieure » (Lot 13). */
@@ -84,6 +95,14 @@ export const DELEGATE_TOOLS: readonly DelegateToolName[] = [
 export const EXECUTION_TOOLS: readonly ExecutionToolName[] = ["run_command"];
 
 /**
+ * Outils de capture d'écran par l'agent (Lot 4, extension). Non exposés par
+ * défaut : le câblage les active quand un service d'exécution existe. ⚠️ La
+ * capture n'est PAS classée destructrice : au niveau 3, elle passe sans
+ * validation ; un agent `disabled` la bloque comme toute exécution.
+ */
+export const SCREENSHOT_TOOLS: readonly ScreenshotToolName[] = ["capturer_ecran"];
+
+/**
  * Outils de consultation des agents (Lot 4, extension). Non exposés par défaut
  * (comme l'exécution) : le câblage les active dès qu'un service de consultation
  * existe — **indépendamment** de l'activation de l'exécution (consulter n'est
@@ -109,6 +128,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     builtins: READ_ONLY_TOOLS,
     custom: DELEGATE_TOOLS,
     execution: EXECUTION_TOOLS,
+    screenshots: SCREENSHOT_TOOLS,
     directory: AGENT_DIRECTORY_TOOLS,
     heritage: HERITAGE_TOOLS,
     canDelegate: true,
@@ -118,6 +138,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     builtins: READ_ONLY_TOOLS,
     custom: [],
     execution: [],
+    screenshots: [],
     directory: [],
     heritage: [],
     canDelegate: false,
@@ -136,6 +157,13 @@ export interface ToolAllowlistOptions {
    * défaut : seul le câblage l'active, quand un service d'exécution existe.
    */
   executionEnabled?: boolean;
+  /**
+   * Active l'outil de capture d'écran `capturer_ecran` (Lot 4, extension).
+   * DÉSACTIVÉ par défaut : seul le câblage l'active, quand un service d'exécution
+   * existe (la capture passe par le même canal agent). ⚠️ Même garde-fou que
+   * `run_command`, mais la capture n'est jamais destructrice.
+   */
+  screenshotsEnabled?: boolean;
   /**
    * Active les outils de consultation des agents `lister_agents`/`etat_agent`
    * (Lot 4, extension). DÉSACTIVÉ par défaut : seul le câblage les active, quand
@@ -163,6 +191,8 @@ export function toolAllowlist(
   const delegationEnabled =
     options.delegationEnabled ?? entry.canDelegate;
   const executionEnabled = (options.executionEnabled ?? false) && entry.execution.length > 0;
+  const screenshotsEnabled =
+    (options.screenshotsEnabled ?? false) && entry.screenshots.length > 0;
   const directoryEnabled = (options.directoryEnabled ?? false) && entry.directory.length > 0;
   const heritageEnabled = (options.heritageEnabled ?? false) && entry.heritage.length > 0;
   const tools: string[] = [...entry.builtins];
@@ -171,6 +201,9 @@ export function toolAllowlist(
   }
   if (executionEnabled) {
     tools.push(...entry.execution);
+  }
+  if (screenshotsEnabled) {
+    tools.push(...entry.screenshots);
   }
   if (directoryEnabled) {
     tools.push(...entry.directory);

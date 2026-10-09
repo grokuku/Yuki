@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/grokuku/yuki/agent/internal/proto"
+	"github.com/grokuku/yuki/agent/internal/screen"
 )
 
 func TestBuildHelloDepuisOS(t *testing.T) {
@@ -35,6 +36,10 @@ func TestBuildHelloDepuisOS(t *testing.T) {
 	if len(hello.Caps) == 0 {
 		t.Fatal("caps vide")
 	}
+	// `exec` est TOUJOURS déclarée (capacité du binaire, pas de l'écran).
+	if !contains(hello.Caps, "exec") {
+		t.Fatalf("caps = %v, `exec` attendue", hello.Caps)
+	}
 	// La trame doit être encodable avec le type et la version du protocole.
 	data, err := proto.Encode(hello)
 	if err != nil {
@@ -46,5 +51,55 @@ func TestBuildHelloDepuisOS(t *testing.T) {
 	}
 	if _, ok := decoded.(*proto.Hello); !ok {
 		t.Fatalf("trame décodée = %T", decoded)
+	}
+}
+
+func contains(caps []string, want string) bool {
+	for _, cap := range caps {
+		if cap == want {
+			return true
+		}
+	}
+	return false
+}
+
+func envOf(values map[string]string) screen.GetenvFunc {
+	return func(key string) string { return values[key] }
+}
+
+func lookPathOf(found ...string) screen.LookPathFunc {
+	set := make(map[string]bool, len(found))
+	for _, name := range found {
+		set[name] = true
+	}
+	return func(file string) (string, error) {
+		if set[file] {
+			return "/usr/bin/" + file, nil
+		}
+		return "", os.ErrNotExist
+	}
+}
+
+func TestCapabilitiesSansEcranSansScreenshot(t *testing.T) {
+	caps := capabilitiesFor("linux", envOf(nil), lookPathOf("scrot", "grim"))
+	if contains(caps, "screenshot") {
+		t.Fatalf("`screenshot` déclarée sans écran : %v", caps)
+	}
+}
+
+func TestCapabilitiesSansOutilSansScreenshot(t *testing.T) {
+	caps := capabilitiesFor("linux", envOf(map[string]string{"DISPLAY": ":0"}), lookPathOf())
+	if contains(caps, "screenshot") {
+		t.Fatalf("`screenshot` déclarée sans outil : %v", caps)
+	}
+}
+
+func TestCapabilitiesAvecEcranEtOutil(t *testing.T) {
+	caps := capabilitiesFor("linux", envOf(map[string]string{"DISPLAY": ":0"}), lookPathOf("scrot"))
+	if !contains(caps, "screenshot") {
+		t.Fatalf("`screenshot` absente alors qu'écran + outil sont présents : %v", caps)
+	}
+	if !contains(caps, "exec") || !contains(caps, "shell") || !contains(caps, "classify") {
+		t.Fatalf("capacités de base manquantes : %v", caps)
 	}
 }

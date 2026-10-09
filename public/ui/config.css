@@ -619,6 +619,25 @@
   border-color: var(--danger);
 }
 
+/* Section des agents RÉVOQUÉS : visiblement distincte (grisée) des actifs. */
+.agent-revoked {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+
+.agent-card--revoked {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
+.agent-card--revoked:hover,
+.agent-card--revoked:focus-within {
+  opacity: 1;
+}
+
 .agent-fields {
   display: grid;
   grid-template-columns: 1fr 1fr;

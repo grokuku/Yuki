@@ -10,7 +10,10 @@
  * Par agent appairé : état (en ligne / hors ligne / révoqué), dernière
  * connexion, petit historique (heure + commande + code de sortie — ⚠️ JAMAIS
  * la sortie complète, D127), niveau de garde-fou (4 choix, D118), privilège
- * (D120) et bouton de suppression (révocation, confirmation `HolafModal`).
+ * (D120), bouton « Révoquer » (réversible) et bouton « Supprimer
+ * définitivement » (irréversible, confirmation `HolafModal`). Les agents
+ * RÉVOQUÉS sont regroupés dans une section distincte, GRISÉE, avec « Restaurer »
+ * et « Supprimer définitivement » — ils ne restent plus mêlés aux actifs.
  *
  * Affiche aussi les VALIDATIONS EN ATTENTE (niveaux 2/3) : c'est le point où un
  * humain approuve une commande que le modèle ne peut pas s'auto-autoriser.
@@ -177,18 +180,48 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
     }
   }
 
-  async function removeAgent(agent) {
+  async function revokeAgent(agent) {
     const label = displayName(agent);
     const idNote = label === agent.agentId ? "" : ` (identifiant ${agent.agentId})`;
     const confirmed = await HolafModal.confirm(
-      "Supprimer cet agent ?",
-      `L'agent « ${label} »${idNote} sera révoqué : son certificat cessera d'être ` +
-        "accepté et son canal sera coupé. Cette action peut être annulée en le restaurant.",
+      "Révoquer cet agent ?",
+      `L'agent « ${label} »${idNote} sera RÉVOQUÉ : son certificat cessera d'être ` +
+        "accepté et son canal sera coupé. Il basculera dans « Agents révoqués » ; " +
+        "vous pourrez ensuite le RESTAURER ou le supprimer définitivement.",
       { danger: true, confirmText: "Révoquer" },
     );
     if (!confirmed) return;
     try {
       await HolafFetch.delete(`/api/agents/${encodeURIComponent(agent.agentId)}`, {
+        headers: WRITE_HEADERS,
+      });
+      await load();
+    } catch (error) {
+      state.error = apiMessage(error, "Révocation impossible.");
+      render();
+    }
+  }
+
+  /**
+   * Suppression DÉFINITIVE de la fiche : action IRRÉVERSIBLE. La confirmation
+   * dit EXACTEMENT ce qui disparaît (la fiche, donc l'accès) et que l'agent
+   * devra être RÉ-APPARIÉ pour revenir — jamais un « êtes-vous sûr ? » muet.
+   */
+  async function deleteAgent(agent) {
+    const label = displayName(agent);
+    const idNote = label === agent.agentId ? "" : ` (identifiant ${agent.agentId})`;
+    const confirmed = await HolafModal.confirm(
+      "Supprimer DÉFINITIVEMENT cet agent ?",
+      `L'agent « ${label} »${idNote} sera SUPPRIMÉ DÉFINITIVEMENT : sa fiche ` +
+        "disparaît de Yuki, son certificat ne sera plus accepté et il ne pourra " +
+        "plus se connecter. Son historique d'audit est CONSERVÉ (trace immuable), " +
+        "mais il devra être RÉ-APPARIÉ (nouveau code généré sur sa console) pour " +
+        "revenir. Cette action est IRRÉVERSIBLE.",
+      { danger: true, confirmText: "Supprimer définitivement", cancelText: "Annuler" },
+    );
+    if (!confirmed) return;
+    try {
+      await HolafFetch.post(`/api/agents/${encodeURIComponent(agent.agentId)}/remove`, {
         headers: WRITE_HEADERS,
       });
       await load();
@@ -208,6 +241,35 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
       state.error = apiMessage(error, "Restauration impossible.");
       render();
     }
+  }
+
+  /** Bouton « Restaurer » (annule une révocation). */
+  function restoreButton(agent) {
+    const b = h("button", {
+      class: "button button--ghost button--small",
+      type: "button",
+      text: "Restaurer",
+    });
+    b.addEventListener("click", () => restoreAgent(agent));
+    return b;
+  }
+
+  /** Bouton « Révoquer » (dé-appairage RÉVERSIBLE). */
+  function revokeButton(agent) {
+    const b = h("button", { class: "button button--small", type: "button", text: "Révoquer" });
+    b.addEventListener("click", () => revokeAgent(agent));
+    return b;
+  }
+
+  /** Bouton « Supprimer définitivement » (IRRÉVERSIBLE, confirmation explicite). */
+  function deleteButton(agent) {
+    const b = h("button", {
+      class: "button button--danger button--small",
+      type: "button",
+      text: "Supprimer définitivement",
+    });
+    b.addEventListener("click", () => deleteAgent(agent));
+    return b;
   }
 
   function renderApprovals() {
@@ -272,7 +334,9 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
   }
 
   function renderAgent(agent) {
-    const card = h("article", { class: "agent-card" });
+    const card = h("article", {
+      class: agent.revoked ? "agent-card agent-card--revoked" : "agent-card",
+    });
     const head = h("div", { class: "agent-card__head" }, [
       identityNode(agent.agentId, displayName(agent)),
       stateBadge(agent),
@@ -281,6 +345,27 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
     card.append(
       h("p", { class: "config-helper", text: `Dernière connexion : ${formatDate(agent.lastSeen)}` }),
     );
+
+    // Agent RÉVOQUÉ : bloc SÉPARÉ et grisé, sans champs de configuration (il ne
+    // peut plus exécuter). Deux issues : restaurer, ou supprimer définitivement.
+    if (agent.revoked) {
+      card.append(
+        h("p", {
+          class: "config-helper",
+          text:
+            "Agent révoqué : son certificat n'est plus accepté. Restaurez-le pour " +
+            "rétablir son accès, ou supprimez définitivement sa fiche (irréversible).",
+        }),
+      );
+      card.append(h("div", { class: "agent-actions" }, [restoreButton(agent), deleteButton(agent)]));
+      card.append(
+        h("details", { class: "agent-history-details" }, [
+          h("summary", { text: "Historique récent" }),
+          renderHistory(agent.agentId),
+        ]),
+      );
+      return card;
+    }
 
     const status = h("span", { class: "config-save-status" });
 
@@ -374,23 +459,7 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
     );
 
     const actions = h("div", { class: "agent-actions" });
-    if (agent.revoked) {
-      const restore = h("button", {
-        class: "button button--ghost button--small",
-        type: "button",
-        text: "Restaurer",
-      });
-      restore.addEventListener("click", () => restoreAgent(agent));
-      actions.append(restore);
-    } else {
-      const remove = h("button", {
-        class: "button button--danger button--small",
-        type: "button",
-        text: "Supprimer l'agent",
-      });
-      remove.addEventListener("click", () => removeAgent(agent));
-      actions.append(remove);
-    }
+    actions.append(revokeButton(agent), deleteButton(agent));
     card.append(actions);
     return card;
   }
@@ -527,9 +596,37 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
       return;
     }
 
-    const list = h("div", { class: "agent-list" });
-    for (const agent of state.agents) list.append(renderAgent(agent));
-    wrap.append(list);
+    // Les agents ACTIFS d'abord ; les RÉVOQUÉS dans une section distincte,
+    // grisée, avec l'action de suppression définitive (correctif : ils ne
+    // restent plus mêlés à la liste principale).
+    const active = state.agents.filter((agent) => !agent.revoked);
+    const revoked = state.agents.filter((agent) => agent.revoked);
+
+    if (active.length > 0) {
+      const list = h("div", { class: "agent-list" });
+      for (const agent of active) list.append(renderAgent(agent));
+      wrap.append(list);
+    } else {
+      wrap.append(h("p", { class: "config-helper", text: "Aucun agent actif." }));
+    }
+
+    if (revoked.length > 0) {
+      const section = h("section", { class: "agent-revoked" });
+      section.append(
+        h("h3", { class: "agent-card__title", text: "Agents révoqués" }),
+        h("p", {
+          class: "config-helper",
+          text:
+            "Ces agents ont été dé-appairés : ils ne peuvent plus exécuter de commande. " +
+            "Restaurez-les pour rétablir leur accès, ou supprimez définitivement leur fiche.",
+        }),
+      );
+      const list = h("div", { class: "agent-list agent-list--revoked" });
+      for (const agent of revoked) list.append(renderAgent(agent));
+      section.append(list);
+      wrap.append(section);
+    }
+
     root.append(wrap);
   }
 

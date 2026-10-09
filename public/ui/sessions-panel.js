@@ -8,9 +8,12 @@
 // saisie (voir `app.js`), et la CSP ne s'applique pas aux mutations CSSOM.
 //
 // Actions : clic pour BASCULER, CLIC DROIT pour le menu contextuel
-// (renommer / supprimer). PAS de bouton « trois points » (choix utilisateur
-// explicite). La suppression passe par `HolafModal` (jamais de confirmation
-// NATIVE du navigateur) et MET DE CÔTÉ.
+// (épingler / renommer / supprimer). PAS de bouton « trois points » (choix
+// utilisateur explicite). La suppression passe par `HolafModal` (jamais de
+// confirmation NATIVE du navigateur) et MET DE CÔTÉ.
+//
+// Le panneau peut recevoir un élément `footer` (encart agents) monté SOUS la
+// liste, dans la même colonne interne : il profite du repli/dépli de la barre.
 
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 
@@ -116,6 +119,8 @@ function el(tag, attrs = {}, text) {
  * @param {() => void} deps.onNew
  * @param {(id: string, title: string) => void} deps.onRename
  * @param {(id: string) => void} deps.onSetAside
+ * @param {(id: string, pinned: boolean) => void} deps.onPin
+ * @param {HTMLElement} [deps.footer] encart fixe en bas de la barre (agents).
  * @returns {{ update(sessions: unknown, activeId: unknown): void, closeMenu(): void }}
  */
 export function initSessionsPanel(deps) {
@@ -126,11 +131,13 @@ export function initSessionsPanel(deps) {
   const onNew = deps.onNew ?? (() => undefined);
   const onRename = deps.onRename ?? (() => undefined);
   const onSetAside = deps.onSetAside ?? (() => undefined);
+  const onPin = deps.onPin ?? (() => undefined);
 
   let sessions = [];
   let activeId = null;
   let pinned = false;
   let menuTargetId = null;
+  let pinItem = null;
 
   // ─── Squelette ──────────────────────────────────────────────────────────
   const inner = el("div", { class: "sidebar__inner" });
@@ -164,6 +171,9 @@ export function initSessionsPanel(deps) {
   });
 
   inner.append(top, newBtn, list);
+  // Encart FIXE en bas de la barre (agents), fourni par l'appelant : monté DANS
+  // la colonne interne pour profiter du repli/dépli et rester lisible en rail.
+  if (deps.footer instanceof Node) inner.append(deps.footer);
   root.replaceChildren(inner);
 
   // ─── Menu contextuel (clic droit) ───────────────────────────────────────
@@ -181,6 +191,17 @@ export function initSessionsPanel(deps) {
 
   function openMenu(id, anchor) {
     menuTargetId = id;
+    // Le libellé de l'action d'épinglage BASCULE selon l'état courant de la
+    // conversation ciblée (Épingler / Désépingler).
+    if (pinItem) {
+      const current = sessions.find((info) => info.id === id);
+      const isPinned = Boolean(current && current.pinned);
+      pinItem.textContent = isPinned ? "Désépingler" : "Épingler";
+      pinItem.setAttribute(
+        "aria-label",
+        isPinned ? "Désépingler la conversation" : "Épingler la conversation",
+      );
+    }
     menu.hidden = false;
     // Position CSSOM : `position: fixed` échappe au recadrage de la barre
     // latérale (aucun ancêtre `transform`). Jamais de `style=` dans le markup.
@@ -200,6 +221,19 @@ export function initSessionsPanel(deps) {
   }
 
   function buildMenu() {
+    pinItem = el(
+      "button",
+      { class: "ctx-menu__item", type: "button", role: "menuitem" },
+      "Épingler",
+    );
+    pinItem.addEventListener("click", () => {
+      const id = menuTargetId;
+      closeMenu();
+      if (!id) return;
+      const current = sessions.find((info) => info.id === id);
+      onPin(id, !(current && current.pinned));
+    });
+
     const rename = el(
       "button",
       { class: "ctx-menu__item", type: "button", role: "menuitem" },
@@ -237,6 +271,7 @@ export function initSessionsPanel(deps) {
     });
 
     menu.append(
+      pinItem,
       rename,
       genTitle,
       el("div", { class: "ctx-menu__sep", role: "separator" }),
@@ -299,13 +334,22 @@ export function initSessionsPanel(deps) {
   // ─── Rendu de la liste ───────────────────────────────────────────────────
   function renderItem(info) {
     const active = info.id === activeId;
+    const isPinned = Boolean(info.pinned);
     const item = el("div", {
-      class: `conv${active ? " conv--active" : ""}`,
+      class: `conv${active ? " conv--active" : ""}${isPinned ? " conv--pinned" : ""}`,
       role: "button",
       tabindex: "0",
       "data-id": info.id,
     });
     if (active) item.setAttribute("aria-current", "true");
+    if (isPinned) item.setAttribute("data-pinned", "true");
+    // Indicateur VISUEL discret : un 📌 (la seule position en tête ne suffirait
+    // pas à faire comprendre pourquoi la conversation est remontée).
+    if (isPinned) {
+      const mark = el("span", { class: "conv__pin", "aria-hidden": "true" }, "📌");
+      mark.title = "Conversation épinglée";
+      item.appendChild(mark);
+    }
     item.appendChild(
       el(
         "span",

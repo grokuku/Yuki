@@ -24,6 +24,7 @@ export type AgentFrameType =
   | "hello"
   | "ack"
   | "result"
+  | "screenshot_data"
   | "error"
   | "pong"
   | "ping"
@@ -62,6 +63,18 @@ export interface ResultFrame {
   endedAt?: string;
 }
 
+export interface ScreenshotDataFrame {
+  type: "screenshot_data";
+  cmdId: string;
+  format: string;
+  width: number;
+  height: number;
+  bytes: number;
+  /** Image encodée en base64 standard (sans préfixe `data:`). */
+  data: string;
+  durationMs?: number;
+}
+
 export interface ErrorFrame {
   type: "error";
   error: string;
@@ -91,6 +104,7 @@ export type AgentFrame =
   | HelloFrame
   | AckFrame
   | ResultFrame
+  | ScreenshotDataFrame
   | ErrorFrame
   | PongFrame
   | PingFrame
@@ -221,6 +235,27 @@ export function parseAgentFrame(raw: Buffer | string): AgentFrameParse {
         },
       };
     }
+    case "screenshot_data": {
+      const cmdId = asString(record["cmd_id"]);
+      if (!cmdId) {
+        return { ok: false, code: "invalid_frame", message: "`screenshot_data` sans `cmd_id`." };
+      }
+      return {
+        ok: true,
+        frame: {
+          type: "screenshot_data",
+          cmdId,
+          format: asString(record["format"]) ?? "jpeg",
+          width: asNumber(record["width"]) ?? 0,
+          height: asNumber(record["height"]) ?? 0,
+          bytes: asNumber(record["bytes"]) ?? 0,
+          data: asString(record["data"]) ?? "",
+          ...(asNumber(record["duration_ms"]) !== undefined
+            ? { durationMs: asNumber(record["duration_ms"]) as number }
+            : {}),
+        },
+      };
+    }
     case "error": {
       return {
         ok: true,
@@ -295,6 +330,28 @@ export function encodeCommandFrame(cmd: OutboundCommand): Record<string, unknown
     ...(cmd.timeoutMs !== undefined ? { timeout_ms: cmd.timeoutMs } : {}),
     ...(cmd.origin ? { origin: cmd.origin } : {}),
     ...(cmd.destructive !== undefined ? { destructive: cmd.destructive } : {}),
+  };
+}
+
+/** Demande de capture d'écran envoyée à l'agent (`screenshot`). */
+export interface OutboundScreenshot {
+  cmdId: string;
+  timeoutMs?: number;
+  /** Côté long maximal de l'image (px) ; 0/absent ⇒ défaut de l'agent. */
+  maxEdge?: number;
+  /** Qualité JPEG (1..100) ; 0/absent ⇒ défaut de l'agent. */
+  quality?: number;
+}
+
+/** Encode une demande de capture (`screenshot`), conforme au décodage Go. */
+export function encodeScreenshotFrame(shot: OutboundScreenshot): Record<string, unknown> {
+  return {
+    type: "screenshot",
+    proto_version: AGENT_PROTO_VERSION,
+    cmd_id: shot.cmdId,
+    ...(shot.timeoutMs !== undefined ? { timeout_ms: shot.timeoutMs } : {}),
+    ...(shot.maxEdge !== undefined ? { max_edge: shot.maxEdge } : {}),
+    ...(shot.quality !== undefined ? { quality: shot.quality } : {}),
   };
 }
 

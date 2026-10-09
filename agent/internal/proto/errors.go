@@ -20,6 +20,12 @@ const (
 	CodeUnsupportedVersion ErrorCode = "unsupported_version"
 	// CodeInternal : erreur interne inattendue.
 	CodeInternal ErrorCode = "internal_error"
+	// CodeUnsupported : la fonctionnalité demandée n'est pas supportée par cet
+	// agent (ex. capture d'écran sans écran ni outil).
+	CodeUnsupported ErrorCode = "unsupported"
+	// CodeTooLarge : le résultat dépasse une borne de taille (ex. image trop
+	// lourde après compression) — refus honnête, aucun envoi tronqué.
+	CodeTooLarge ErrorCode = "too_large"
 
 	// --- Appairage (internal/pair) -------------------------------------------
 	// CodeProofInvalid : preuve HMAC absente ou fausse (mauvais code `C`).

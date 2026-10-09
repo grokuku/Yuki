@@ -9,6 +9,7 @@
  *   PATCH  /api/agents/<id>                  → niveau (D118) + privilège (D120)
  *   POST   /api/agents/<id>/revoke           → dé-appairage (révocation, D118)
  *   POST   /api/agents/<id>/restore          → annulation d'une révocation
+ *   POST   /api/agents/<id>/remove           → SUPPRESSION DÉFINITIVE de la fiche
  *   DELETE /api/agents/<id>                  → révocation (alias REST de `revoke`)
  *   GET    /api/agents/approvals             → validations en attente (niveaux 2/3)
  *   POST   /api/agents/approvals/<id>/approve|deny → décision humaine
@@ -253,6 +254,32 @@ function handleRestore(input: AgentsRequestInput, agentId: string): AgentsHttpRe
   }
 }
 
+/**
+ * Suppression DÉFINITIVE de la fiche d'un agent.
+ *
+ * Retire l'enregistrement de la projection : `authorizedAgent` (`server.ts`)
+ * exige `store.has(agentId)`, donc l'agent ne peut PLUS se reconnecter — même
+ * avec un certificat signé par le CA interne (il n'y a PAS de liste de
+ * révocation : l'absence de fiche EST le refus). Le journal d'audit N'EST PAS
+ * touché (trace immuable) ; l'agent supprimé devra être RÉ-APPARIÉ pour revenir.
+ */
+function handleRemove(input: AgentsRequestInput, agentId: string): AgentsHttpResponse {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return guard;
+  if (!input.deps.store.has(agentId)) {
+    return json(404, {
+      error: "agent_not_found",
+      code: "agent_not_found",
+      message: `Agent inconnu : ${agentId}.`,
+    });
+  }
+  input.deps.store.remove(agentId);
+  // Coupe le canal vivant s'il existait (comme la révocation).
+  input.deps.hub?.disconnect(agentId);
+  input.deps.logger.info("agents.removed", { agent_id: agentId });
+  return json(200, { ok: true, removed: true, agentId });
+}
+
 function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResponse {
   const guard = requireWriteGuards(input.headers);
   if (guard) return guard;
@@ -392,13 +419,13 @@ export function handleAgentsRequest(input: AgentsRequestInput): AgentsHttpRespon
     if (method === "DELETE") return handleRevoke(input, agentId);
     return json(405, { error: "method_not_allowed", method });
   }
-  const action = /^\/api\/agents\/([^/]+)\/(revoke|restore)$/.exec(path);
+  const action = /^\/api\/agents\/([^/]+)\/(revoke|restore|remove)$/.exec(path);
   if (action) {
     const agentId = decodeURIComponent(action[1] as string);
     if (method !== "POST") return json(405, { error: "method_not_allowed", method });
-    return action[2] === "revoke"
-      ? handleRevoke(input, agentId)
-      : handleRestore(input, agentId);
+    if (action[2] === "revoke") return handleRevoke(input, agentId);
+    if (action[2] === "restore") return handleRestore(input, agentId);
+    return handleRemove(input, agentId);
   }
   return json(404, { error: "not_found", path });
 }

@@ -48,8 +48,22 @@ interface ProjectionState {
   byId: Map<string, AgentRecord>;
   appliedEventIds: Set<string>;
   seqByAgent: Map<string, number>;
+  /**
+   * Dernier niveau NON désactivé porté par chaque agent (mémoire du on/off de
+   * l'encart de la barre latérale). État DÉRIVÉ du journal : il se reconstruit au
+   * rejeu, donc survit au redémarrage SANS second drapeau d'activation.
+   */
+  lastEnabledLevel: Map<string, AgentLevel>;
   lastSeq: number;
 }
+
+/**
+ * Niveau appliqué quand « on » réactive un agent qui était DÉJÀ `disabled` (aucun
+ * niveau précédent mémorisé, ou le défaut configuré est lui-même `disabled`).
+ * Aligné sur le défaut de `agents.defaultLevel` (validation des destructrices) :
+ * le plus raisonnable en réseau local, ni permissif, ni paralysant.
+ */
+export const DEFAULT_ENABLED_LEVEL: AgentLevel = "destructive";
 
 let fallbackCounter = 0;
 
@@ -179,6 +193,11 @@ export function applyAgentEvent(
       if (patch.privilege !== undefined) next.privilege = patch.privilege;
       if (patch.lastSeen !== undefined) next.lastSeen = patch.lastSeen;
       state.byId.set(event.agentId, next);
+      // Mémoire du on/off : tout niveau effectif non `disabled` devient le
+      // niveau à restaurer si l'agent est ensuite désactivé.
+      if (next.level !== "disabled") {
+        state.lastEnabledLevel.set(event.agentId, next.level);
+      }
       break;
     }
     case "revoked": {
@@ -194,6 +213,7 @@ export function applyAgentEvent(
     case "removed": {
       if (!existing) return skip(`suppression d'un agent inconnu ${event.agentId}`);
       state.byId.delete(event.agentId);
+      state.lastEnabledLevel.delete(event.agentId);
       break;
     }
     default:
@@ -216,7 +236,9 @@ export class AgentStore {
   private readonly byId = new Map<string, AgentRecord>();
   private readonly appliedEventIds = new Set<string>();
   private readonly seqByAgent = new Map<string, number>();
+  private readonly lastEnabledLevel = new Map<string, AgentLevel>();
   private lastSeq = 0;
+  private readonly listeners = new Set<() => void>();
 
   private constructor(options: AgentStoreOptions) {
     this.path = options.path;
@@ -265,6 +287,19 @@ export class AgentStore {
 
   list(): AgentRecord[] {
     return [...this.byId.values()];
+  }
+
+  /**
+   * S'abonne aux changements du registre (créations, config, révocation,
+   * suppression). Sert au transport WebSocket pour DIFFUSER l'état des agents
+   * aux pages ouvertes SANS polling. Renvoie la fonction de désabonnement.
+   * Les exceptions d'un listener sont isolées (jamais propagées à l'écriture).
+   */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   /**
@@ -384,6 +419,35 @@ export class AgentStore {
     return this.configure(agentId, { privilege });
   }
 
+  /**
+   * Bascule ON/OFF de l'encart de la barre latérale :
+   *  - `enabled === false` ⇒ niveau `disabled` (le niveau effectif d'avant est
+   *    mémorisé par la projection) ;
+   *  - `enabled === true` ⇒ restaure le niveau mémorisé ; si l'agent était DÉJÀ
+   *    `disabled` (aucun précédent), applique `DEFAULT_ENABLED_LEVEL` (ou le
+   *    défaut configuré s'il n'est pas `disabled`).
+   * Réutilise le niveau existant : AUCUN second drapeau d'activation.
+   */
+  setEnabled(agentId: string, enabled: boolean): AgentRecord {
+    assertAgentId(agentId);
+    const record = this.byId.get(agentId);
+    if (!record) {
+      throw new AgentError("AGENT_NOT_FOUND", `Agent inconnu : ${agentId}.`, { agentId });
+    }
+    if (enabled) {
+      if (record.level !== "disabled") return record; // déjà actif : no-op
+      const remembered = this.lastEnabledLevel.get(agentId);
+      const fallback =
+        this.defaults.level !== "disabled"
+          ? this.defaults.level
+          : DEFAULT_ENABLED_LEVEL;
+      const level = remembered && remembered !== "disabled" ? remembered : fallback;
+      return this.configure(agentId, { level });
+    }
+    if (record.level === "disabled") return record; // déjà désactivé : no-op
+    return this.configure(agentId, { level: "disabled" });
+  }
+
   /** Révoque un agent (dé-appairage) : son accès cesse. */
   revoke(agentId: string): AgentRecord {
     assertAgentId(agentId);
@@ -436,6 +500,7 @@ export class AgentStore {
         byId: this.byId,
         appliedEventIds: this.appliedEventIds,
         seqByAgent: this.seqByAgent,
+        lastEnabledLevel: this.lastEnabledLevel,
         lastSeq: this.lastSeq,
       },
       event,
@@ -461,7 +526,21 @@ export class AgentStore {
     // Peut lever (agent inconnu, niveau invalide) SANS avoir écrit.
     this.apply(event, false);
     this.persist(event);
+    this.notify();
     return event;
+  }
+
+  /** Informe les abonnés qu'un événement a été appliqué ET persisté. */
+  private notify(): void {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch (error) {
+        this.logger?.warn("agents.store.listener_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private persist(event: AgentEvent): void {

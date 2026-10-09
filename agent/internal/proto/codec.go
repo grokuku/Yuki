@@ -73,6 +73,10 @@ func Decode(data []byte) (Message, error) {
 		m = &Config{}
 	case TypePing:
 		m = &Ping{}
+	case TypeScreenshot:
+		m = &Screenshot{}
+	case TypeScreenshotData:
+		m = &ScreenshotData{}
 	case TypePairBegin:
 		m = &PairBegin{}
 	case TypePairOK:

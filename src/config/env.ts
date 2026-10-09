@@ -65,6 +65,12 @@ export interface Env {
   agentsStorePath: string;
   /** Fichier JSONL du journal d'audit des exécutions (volume `state`). */
   auditLogPath: string;
+  /**
+   * Fichier JSON des conversations ÉPINGLÉES (volume `state`). Séparé du SDK Pi :
+   * on n'écrit jamais de champ maison dans le JSONL d'une session. Surcharge :
+   * `YUKI_SESSION_PINS_PATH`.
+   */
+  sessionPinsPath: string;
   // --- Personnalité de Yuki ---
   /**
    * Fichier Markdown de la personnalité (volume `state`), SÉPARÉ du prompt
@@ -255,6 +261,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_AUDIT_LOG_PATH",
       `${mountPoints.state}/audit.jsonl`,
+    ),
+    sessionPinsPath: getString(
+      env,
+      "YUKI_SESSION_PINS_PATH",
+      `${mountPoints.state}/session-pins.json`,
     ),
     personalityPath: getString(
       env,

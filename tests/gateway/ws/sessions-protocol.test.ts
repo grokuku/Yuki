@@ -48,4 +48,21 @@ describe("protocol — trames de gestion des conversations", () => {
       error: "set_aside_missing_session_id",
     });
   });
+
+  it("accepte pin avec sessionId + booléen épinglé", () => {
+    expect(
+      parseClientMessage(JSON.stringify({ type: "pin", sessionId: "s1", pinned: true })),
+    ).toEqual({ ok: true, message: { type: "pin", sessionId: "s1", pinned: true } });
+    expect(
+      parseClientMessage(JSON.stringify({ type: "pin", sessionId: "s1", pinned: false })),
+    ).toEqual({ ok: true, message: { type: "pin", sessionId: "s1", pinned: false } });
+    expect(parseClientMessage(JSON.stringify({ type: "pin", pinned: true }))).toEqual({
+      ok: false,
+      error: "pin_missing_session_id",
+    });
+    expect(parseClientMessage(JSON.stringify({ type: "pin", sessionId: "s1" }))).toEqual({
+      ok: false,
+      error: "pin_invalid_pinned",
+    });
+  });
 });

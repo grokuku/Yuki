@@ -11,7 +11,9 @@ import { createTtsPlayer } from "./tts-player.js";
 import { createTtsPreference, resolveSpeechState } from "./tts-preference.js";
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { initSessionsPanel } from "./sessions-panel.js";
+import { initSidebarAgents } from "./sidebar-agents.js";
 import { createApprovalBlocks } from "./approval-block.js";
+import { createScreenshotBlocks } from "./screenshot-block.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
@@ -50,9 +52,24 @@ let clientMsgCounter = 0;
  * trame au gateway, qui reste la SOURCE DE VÉRITÉ (liste + conversation
  * active) : le client ne fait que refléter les trames `sessions` reçues.
  */
+// Encart « agents » ancré en BAS de la barre latérale (sous la liste). Le
+// on/off envoie `agent_enabled` : le SERVEUR décide du niveau (`disabled` ⇄
+// précédent) et rediffuse la trame `agents` — un seul état, aucune divergence.
+const sidebarAgents = initSidebarAgents({
+  onToggle: (agentId, enabled) => {
+    if (sendRaw({ type: "agent_enabled", agentId, enabled })) return;
+    void HolafModal.alert(
+      "Hors ligne",
+      "Impossible de changer l'état de l'agent : la connexion au gateway est perdue.",
+      { okText: "Compris" },
+    );
+  },
+});
+
 const sessionsPanel = initSessionsPanel({
   root: document.getElementById("sessions-sidebar"),
   HolafModal,
+  footer: sidebarAgents.element,
   onSwitch: (id) => {
     if (id !== sessionId) sendRaw({ type: "switch", sessionId: id });
   },
@@ -64,6 +81,9 @@ const sessionsPanel = initSessionsPanel({
   },
   onSetAside: (id) => {
     sendRaw({ type: "setAside", sessionId: id });
+  },
+  onPin: (id, pinned) => {
+    sendRaw({ type: "pin", sessionId: id, pinned });
   },
 });
 
@@ -86,6 +106,13 @@ const approvalBlocks = createApprovalBlocks({
     );
   },
 });
+
+/* ─── Capture d'écran DANS la conversation ────────────────────────────────
+ * État TEMPORAIRE de l'interface (jamais un message, jamais dans l'historique) :
+ * le serveur ne l'envoie QUE par trame de contrôle `screenshot`, jamais dans le
+ * transcript ni le rejeu. L'image n'est affichée qu'ICI (à l'humain) : le modèle
+ * ne la reçoit jamais. */
+const screenshotBlocks = createScreenshotBlocks({ container: els.conversation });
 
 /** Bascule l'état « aucune conversation ouverte » (le fil est masqué). */
 function setEmptyState(empty) {
@@ -370,9 +397,11 @@ function appendAssistantMessage(text = null, pinned = isConversationPinned(), ts
 
 function applyTranscript(transcript) {
   const pinned = isConversationPinned();
-  // Le fil est reconstruit : on purge les blocs de validation (timers inclus).
-  // Ils seront ré-affichés par le serveur s'ils sont ENCORE en attente.
+  // Le fil est reconstruit : on purge les blocs de validation (timers inclus)
+  // et les captures ÉPHÉMÈRES. Ils seront ré-affichés par le serveur s'ils sont
+  // ENCORE vivants (états de contrôle).
   approvalBlocks.reset();
+  screenshotBlocks.reset();
   els.conversation.innerHTML = "";
   currentRenderer = null;
   lastDayKey = null;
@@ -435,6 +464,7 @@ function handleFrame(frame) {
     // ré-émette les demandes ENCORE en attente. Un bloc décidé PENDANT la
     // coupure ne doit PAS rester affiché (état vivant, pas d'historique).
     approvalBlocks.reset();
+    screenshotBlocks.reset();
     return;
   }
   if (type === "pong" || type === "bye") return;
@@ -473,6 +503,12 @@ function handleFrame(frame) {
     setEmptyState(activeId === null);
     return;
   }
+  // Encart agents : ÉTAT de contrôle (aucun `seq` consommé), envoyé à la
+  // connexion puis rediffusé à chaque changement du registre (jamais bufferisé).
+  if (type === "agents") {
+    sidebarAgents.update(frame.agents);
+    return;
+  }
   if (type === "snapshot") {
     applySnapshot(frame);
     return;
@@ -491,6 +527,13 @@ function handleFrame(frame) {
   }
   if (type === "approval_result") {
     approvalBlocks.showResult(frame.result);
+    return;
+  }
+  // Capture d'écran : ÉTAT TEMPORAIRE, trame de CONTRÔLE (aucun `seq` consommé).
+  // Traitée AVANT la logique de curseur `seq`, sinon elle serait prise pour un
+  // doublon. Jamais rejouée, jamais conservée, jamais envoyée au modèle.
+  if (type === "screenshot") {
+    screenshotBlocks.show(frame.screenshot);
     return;
   }
 

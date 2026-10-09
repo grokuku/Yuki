@@ -8,7 +8,7 @@
  */
 
 import type { AgentDirectoryPort } from "../agents/directory.js";
-import type { ExecutionServicePort } from "../agents/execution.js";
+import type { ExecutionServicePort, ScreenshotServicePort } from "../agents/execution.js";
 import type { DelegateServicePort } from "../delegation/ports.js";
 import type { HeritagePort } from "../memory/heritage.js";
 import type { MemoryPort } from "../memory/types.js";
@@ -87,6 +87,12 @@ export interface PiHostOptions {
    * aucun outil d'exécution.
    */
   execution?: ExecutionServicePort;
+  /**
+   * Port de CAPTURE D'ÉCRAN par l'agent (Lot 4, extension). Présent ⇒ la façade
+   * expose l'outil `capturer_ecran` (même garde-fou que `run_command`). Absent ⇒
+   * aucune capture possible.
+   */
+  screenshots?: ScreenshotServicePort;
   /**
    * Port de CONSULTATION des agents appairés (Lot 4, extension). Présent ⇒ la
    * façade expose les outils `lister_agents` et `etat_agent` (LECTURE SEULE).

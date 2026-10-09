@@ -43,6 +43,13 @@ export interface AgentSummary {
   privilege: AgentPrivilege;
   /** Dernière connexion (ISO 8601), `null` si jamais vue. */
   lastSeen: string | null;
+  /**
+   * Capacités DÉCLARÉES par l'agent dans son `hello` (ex. `exec`, `shell`,
+   * `screenshot`). `[]` si l'agent est hors ligne ou n'a rien annoncé. C'est ce
+   * qui rend visible au modèle ce que la machine SAIT faire ; une capacité
+   * absente signifie qu'elle est réellement indisponible.
+   */
+  caps: string[];
 }
 
 /** Libellés français lisibles des niveaux de validation (D118). */
@@ -81,15 +88,19 @@ export interface AgentDirectoryPort {
 
 export interface AgentDirectoryServiceOptions {
   store: AgentStore;
-  /** Seul `isOnline` est utilisé (facilite les doubles de test). */
-  hub: Pick<AgentHub, "isOnline">;
+  /**
+   * Seul `isOnline` est OBLIGATOIRE ; `caps` (facultatif) expose les capacités
+   * annoncées par l'agent connecté — c'est lui qui rend `screenshot` visible du
+   * modèle. Un double de test sans `caps` obtient `[]` (aucune capacité).
+   */
+  hub: Pick<AgentHub, "isOnline"> & Partial<Pick<AgentHub, "caps">>;
   /** Seul `recent` est utilisé (facilite les doubles de test). */
   audit: Pick<AuditLog, "recent">;
   logger?: DirectoryLogger;
 }
 
 /** Convertit un enregistrement de store en vue de consultation. */
-function toSummary(record: AgentRecord, online: boolean): AgentSummary {
+function toSummary(record: AgentRecord, online: boolean, caps: string[]): AgentSummary {
   return {
     agentId: record.agentId,
     name: record.name,
@@ -97,6 +108,7 @@ function toSummary(record: AgentRecord, online: boolean): AgentSummary {
     level: record.level,
     privilege: record.privilege,
     lastSeen: record.lastSeen,
+    caps,
   };
 }
 
@@ -109,7 +121,7 @@ function coerceExitCode(value: unknown): number | null | undefined {
 
 export class AgentDirectoryService implements AgentDirectoryPort {
   private readonly store: AgentStore;
-  private readonly hub: Pick<AgentHub, "isOnline">;
+  private readonly hub: Pick<AgentHub, "isOnline"> & Partial<Pick<AgentHub, "caps">>;
   private readonly audit: Pick<AuditLog, "recent">;
   private readonly logger?: DirectoryLogger;
 
@@ -120,17 +132,24 @@ export class AgentDirectoryService implements AgentDirectoryPort {
     this.logger = options.logger;
   }
 
+  /** Capacités de l'agent connecté (`[]` si le port ne les expose pas). */
+  private capsOf(agentId: string): string[] {
+    return this.hub.caps ? this.hub.caps(agentId) : [];
+  }
+
   list(): AgentSummary[] {
     return this.store
       .list()
       .filter((record) => !record.revoked)
-      .map((record) => toSummary(record, this.hub.isOnline(record.agentId)));
+      .map((record) =>
+        toSummary(record, this.hub.isOnline(record.agentId), this.capsOf(record.agentId)),
+      );
   }
 
   find(identifier: string): AgentSummary | undefined {
     const record = this.store.resolve(identifier);
     if (!record || record.revoked) return undefined;
-    return toSummary(record, this.hub.isOnline(record.agentId));
+    return toSummary(record, this.hub.isOnline(record.agentId), this.capsOf(record.agentId));
   }
 
   /**

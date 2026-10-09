@@ -204,6 +204,29 @@ describe("port machines — routes protégées (mTLS)", () => {
     expect(res.status).toBe(403);
   });
 
+  it("refuse (403) un agent SUPPRIMÉ définitivement (certificat pourtant valide)", async () => {
+    const s = await stack();
+    const agentId = "77777777-6666-5555-4444-333333333333";
+    s.register(agentId);
+    const cert = s.ca.signClientCertificate(agentId);
+    // Le certificat serait accepté…
+    expect(
+      (
+        await request(s.url, "/api/agent/whoami", {
+          cert: { cert: cert.certPem, key: cert.keyPem },
+          caPem: s.ca.certificatePem,
+        })
+      ).status,
+    ).toBe(200);
+    // …mais la fiche retirée du store fait échouer `authorizedAgent` (store.has).
+    s.store.remove(agentId);
+    const res = await request(s.url, "/api/agent/whoami", {
+      cert: { cert: cert.certPem, key: cert.keyPem },
+      caPem: s.ca.certificatePem,
+    });
+    expect(res.status).toBe(403);
+  });
+
   it("renouvelle le certificat sur le canal mTLS établi", async () => {
     const s = await stack();
     const agentId = "33333333-4444-5555-6666-777777777777";

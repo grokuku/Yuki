@@ -141,6 +141,12 @@ export interface AgentDirectoryEntry {
   level?: string;
   /** Privilège (libellé français). Optionnel. */
   privilege?: string;
+  /**
+   * Capacités DÉCLARÉES par l'agent (ex. `["exec", "shell", "screenshot"]`).
+   * Fourni ⇒ rendu tel quel (`aucune` si vide) : le modèle sait ainsi ce que la
+   * machine SAIT faire, sans supposer.
+   */
+  caps?: ReadonlyArray<string>;
 }
 
 /** Entrée d'historique bornée : commande + horodatage + code de sortie. */
@@ -162,6 +168,12 @@ function assertSingleClosing(framed: string, tag: string, label: string): string
   return framed;
 }
 
+/** Rend une liste de capacités en libellé échappé (`aucune` si vide). */
+function capsLabel(caps: ReadonlyArray<string>): string {
+  const rendered = caps.map((cap) => escapeOutputText(String(cap))).join(", ");
+  return rendered === "" ? "aucune" : rendered;
+}
+
 /**
  * Encadre la liste des agents disponibles pour le contexte du modèle — même
  * patron anti-injection que `frameCommandOutput` : les noms/ID fournis par
@@ -175,6 +187,7 @@ export function frameAgentDirectory(entries: ReadonlyArray<AgentDirectoryEntry>)
     if (entry.status !== undefined) attrs.push(escapeOutputText(entry.status));
     if (entry.level !== undefined) attrs.push(`niveau : ${escapeOutputText(entry.level)}`);
     if (entry.privilege !== undefined) attrs.push(`privilège : ${escapeOutputText(entry.privilege)}`);
+    if (entry.caps !== undefined) attrs.push(`capacités : ${capsLabel(entry.caps)}`);
     return `- ${label} (${attrs.join(", ")})`;
   });
   const body = lines.length > 0 ? lines.join("\n") : "(aucun agent appairé)";
@@ -194,6 +207,11 @@ export interface AgentStatusFrameInput {
   level: string;
   /** Privilège (libellé français). */
   privilege: string;
+  /**
+   * Capacités DÉCLARÉES par l'agent (`[]` si hors ligne). Fourni ⇒ rendu tel
+   * quel (`aucune` si vide).
+   */
+  caps?: ReadonlyArray<string>;
   /** Dernière connexion (ISO 8601), `null` si jamais vue. */
   lastSeen: string | null;
   /** Historique récent BORNÉ (commande + horodatage + code de sortie). */
@@ -215,6 +233,7 @@ export function frameAgentStatus(input: AgentStatusFrameInput): string {
     `État : ${escapeOutputText(input.status)}`,
     `Niveau : ${escapeOutputText(input.level)}`,
     `Privilège : ${escapeOutputText(input.privilege)}`,
+    ...(input.caps !== undefined ? [`Capacités : ${capsLabel(input.caps)}`] : []),
     `Dernière connexion : ${
       input.lastSeen === null ? "jamais" : escapeOutputText(input.lastSeen)
     }`,

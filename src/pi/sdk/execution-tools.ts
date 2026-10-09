@@ -29,7 +29,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { ExecutionOutcome, ExecutionServicePort } from "../../agents/execution.js";
+import type {
+  ExecutionOutcome,
+  ExecutionServicePort,
+  ScreenshotOutcome,
+  ScreenshotServicePort,
+} from "../../agents/execution.js";
 import {
   AGENT_LEVEL_LABELS,
   AGENT_PRIVILEGE_LABELS,
@@ -162,6 +167,91 @@ export function createExecutionTools(service: ExecutionServicePort): ToolDefinit
   return [runCommand];
 }
 
+// ── Capture d'écran par l'agent (image éphémère) ─────────────────────────────
+
+/**
+ * Résumé JSON STRICTEMENT MÉTADONNÉES d'une demande de capture.
+ *
+ * ⚠️ ANTI-EXFILTRATION : on ne met JAMAIS le `data:` URL ni le base64 ici. Le
+ * modèle n'apprend QUE des métadonnées (dimensions, taille) — l'image n'est
+ * affichée qu'à l'HUMAIN, dans la conversation.
+ */
+function screenshotSummary(outcome: ScreenshotOutcome): string {
+  return JSON.stringify({
+    status: outcome.status,
+    agent_id: outcome.agentId,
+    ...(outcome.agentName ? { agent_name: outcome.agentName } : {}),
+    ...(outcome.width !== undefined ? { width: outcome.width } : {}),
+    ...(outcome.height !== undefined ? { height: outcome.height } : {}),
+    ...(outcome.bytes !== undefined ? { bytes: outcome.bytes } : {}),
+    ...(outcome.format ? { format: outcome.format } : {}),
+    ...(outcome.approvalId ? { approval_id: outcome.approvalId } : {}),
+    message: outcome.message,
+    image_displayed_to_human: outcome.status === "captured",
+    note:
+      "L'image (si capturée) est AFFICHÉE À L'HUMAIN dans la conversation ; elle " +
+      "n'est PAS incluse dans ce résultat et n'est pas conservée. Ne la redemande " +
+      "pas pour la « voir » : tu ne la reçois jamais.",
+  });
+}
+
+/**
+ * Construit l'outil `capturer_ecran` (capture d'écran d'une machine appairée).
+ *
+ * ⚠️ Même garde-fou PAR AGENT (D118) que `run_command` : l'agent `disabled`
+ * bloque la capture, et comme la capture n'est PAS destructrice, au niveau 3
+ * elle passe SANS validation humaine. Si la machine n'a pas d'écran ou d'outil
+ * de capture, l'outil renvoie un REFUS HONNÊTE (jamais d'échec silencieux).
+ */
+export function createScreenshotTool(service: ScreenshotServicePort): ToolDefinition[] {
+  const capturerEcran = defineTool({
+    name: "capturer_ecran",
+    label: "Capturer l'écran d'une machine appairée",
+    description:
+      "Demande une CAPTURE D'ÉCRAN de l'affichage d'une machine appairée " +
+      "(agent d'exécution) et l'AFFICHE à l'humain dans la conversation. " +
+      "Désignez la machine par son NOM lisible OU son identifiant technique. " +
+      "⚠️ Tu ne reçois JAMAIS l'image : le résultat ne contient que des " +
+      "MÉTADONNÉES (dimensions, taille). N'invente donc rien sur le contenu de " +
+      "l'écran et ne prétends pas l'avoir vu. " +
+      "Si la machine n'a pas d'écran ni d'outil de capture (NAS sans écran, " +
+      "serveur sans session graphique), l'outil renvoie un refus explicite. " +
+      "Selon le niveau configuré pour l'agent, une validation humaine peut être " +
+      "requise. La capture n'est jamais conservée (ni historique, ni mémoire).",
+    promptSnippet:
+      "capturer_ecran(agent_id, timeout_ms?) — capture d'écran d'une machine appairée, affichée à l'humain",
+    parameters: Type.Object({
+      agent_id: Type.String({
+        minLength: 1,
+        maxLength: 128,
+        description:
+          "Nom lisible OU identifiant technique de l'agent appairé (machine cible). " +
+          "L'identifiant fonctionne toujours.",
+      }),
+      timeout_ms: Type.Optional(
+        Type.Union([Type.Integer(), Type.String(), Type.Null()], {
+          description: "Délai maximal de la capture en millisecondes (défaut 30000).",
+        }),
+      ),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+      const input = params as { agent_id: string; timeout_ms?: unknown };
+      const timeoutMs = coerceInt(input.timeout_ms);
+      const sessionId = sessionIdFromContext(ctx);
+      const outcome = await service.capture({
+        agentId: input.agent_id,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        origin: "capturer_ecran",
+      });
+      // ⚠️ Aucune donnée binaire : uniquement des métadonnées.
+      return { content: [{ type: "text", text: screenshotSummary(outcome) }], details: outcome };
+    },
+  });
+
+  return [capturerEcran];
+}
+
 // ── Consultation des agents (lecture seule) ────────────────────────────────
 
 /** Rend l'état de connexion en libellé français. */
@@ -177,6 +267,9 @@ function toDirectoryEntry(summary: AgentSummary): AgentDirectoryEntry {
     status: statusLabel(summary.online),
     level: AGENT_LEVEL_LABELS[summary.level],
     privilege: AGENT_PRIVILEGE_LABELS[summary.privilege],
+    // ⚠️ Capacités ANNONCÉES par l'agent : c'est ce qui rend `screenshot`
+    // visible du modèle (sinon il ne saurait pas que la machine peut capturer).
+    caps: summary.caps,
   };
 }
 
@@ -270,6 +363,7 @@ export function createAgentDirectoryTools(directory: AgentDirectoryPort): ToolDe
         status: statusLabel(summary.online),
         level: AGENT_LEVEL_LABELS[summary.level],
         privilege: AGENT_PRIVILEGE_LABELS[summary.privilege],
+        caps: summary.caps,
         lastSeen: summary.lastSeen,
         history,
       });

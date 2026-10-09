@@ -24,10 +24,11 @@ interface AgentFixture {
   level: AgentSummary["level"];
   privilege: AgentSummary["privilege"];
   lastSeen: string | null;
+  caps?: string[];
 }
 
 function summary(fixture: AgentFixture): AgentSummary {
-  return { ...fixture };
+  return { ...fixture, caps: fixture.caps ?? [] };
 }
 
 function stubDirectory(
@@ -123,6 +124,34 @@ describe("agents — outil lister_agents", () => {
     expect(text).toContain("niveau : envoi direct (aucune validation)");
     expect(text).toContain("privilège : normal (compte standard)");
     expect(countClosings(text)).toBe(1);
+  });
+
+  it("expose les CAPACITÉS annoncées (screenshot visible du modèle)", async () => {
+    const tools = createAgentDirectoryTools(
+      stubDirectory([
+        {
+          agentId: "agent-1",
+          name: "nuc00",
+          online: true,
+          level: "destructive",
+          privilege: "normal",
+          lastSeen: null,
+          caps: ["exec", "shell", "classify", "screenshot"],
+        },
+        {
+          agentId: "agent-2",
+          name: "nas",
+          online: true,
+          level: "destructive",
+          privilege: "normal",
+          lastSeen: null,
+          caps: [],
+        },
+      ]),
+    );
+    const { text } = await call(toolByName(tools, "lister_agents"), {});
+    expect(text).toContain("capacités : exec, shell, classify, screenshot");
+    expect(text).toContain("capacités : aucune");
   });
 
   it("INFALSIFIABLE : un nom piégé ne forge pas </agents_disponibles>", async () => {

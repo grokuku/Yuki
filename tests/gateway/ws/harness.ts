@@ -8,10 +8,11 @@ import type { AddressInfo } from "node:net";
 
 import { WebSocket } from "ws";
 
-import { createWsTransport } from "../../../src/gateway/ws/server.js";
+import { createWsTransport, type AgentsGatewayPort } from "../../../src/gateway/ws/server.js";
 import type { ServerFrame } from "../../../src/gateway/ws/protocol.js";
 import type { Transport } from "../../../src/gateway/ws/transport.js";
-import type { ApprovalGatewayPort } from "../../../src/agents/execution.js";
+import type { ApprovalGatewayPort, ScreenshotGatewayPort } from "../../../src/agents/execution.js";
+import type { SessionPinStore } from "../../../src/pi/session-pins.js";
 import type { TtsPipelineDeps } from "../../../src/tts/index.js";
 import { createLogger } from "../../../src/observability/logger.js";
 import { FakePiHost, type FakePiHostOptions } from "../../pi/host-double.js";
@@ -22,6 +23,12 @@ export interface HarnessOptions extends FakePiHostOptions {
   serverVersion?: string;
   tts?: TtsPipelineDeps;
   approvals?: ApprovalGatewayPort;
+  /** Captures d'écran affichées dans la conversation (optionnel). */
+  screenshots?: ScreenshotGatewayPort;
+  /** Épinglage des conversations (optionnel). */
+  pins?: SessionPinStore;
+  /** Registre d'agents (encart de la barre latérale, optionnel). */
+  agents?: AgentsGatewayPort;
 }
 
 export interface Harness {
@@ -44,6 +51,9 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     replayBufferBytes: options.replayBufferBytes ?? 1_000_000,
     ...(options.tts ? { tts: options.tts } : {}),
     ...(options.approvals ? { approvals: options.approvals } : {}),
+    ...(options.screenshots ? { screenshots: options.screenshots } : {}),
+    ...(options.pins ? { pins: options.pins } : {}),
+    ...(options.agents ? { agents: options.agents } : {}),
   });
   const server = createHttpServer((_req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });

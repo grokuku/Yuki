@@ -38,13 +38,18 @@ interface Capture {
   online: Set<string>;
   calls: Array<{ agentId?: string; event?: string; limit?: number }>;
   records: Record<string, unknown>[];
+  caps: Map<string, string[]>;
 }
 
 function makeService(store: AgentStore): { service: AgentDirectoryService; capture: Capture } {
-  const capture: Capture = { online: new Set(), calls: [], records: [] };
+  const capture: Capture = { online: new Set(), calls: [], records: [], caps: new Map() };
   const service = new AgentDirectoryService({
     store,
-    hub: { isOnline: (agentId) => capture.online.has(agentId) },
+    hub: {
+      isOnline: (agentId) => capture.online.has(agentId),
+      // Capacités annoncées par l'agent connecté (rendues visibles au modèle).
+      caps: (agentId) => capture.caps.get(agentId) ?? [],
+    },
     audit: {
       recent: (options = {}) => {
         capture.calls.push({
@@ -173,5 +178,35 @@ describe("agents — consultation (lecture seule)", () => {
       "never",
     ]);
     expect(Object.keys(AGENT_PRIVILEGE_LABELS).sort()).toEqual(["normal", "root"]);
+  });
+
+  it("expose les capacités DÉCLARÉES par l'agent (screenshot visible du modèle)", () => {
+    const store = makeStore();
+    store.markSeen("a1");
+    store.markSeen("a2");
+    const { service, capture } = makeService(store);
+    capture.online.add("a1");
+    capture.caps.set("a1", ["exec", "shell", "classify", "screenshot"]);
+    // a2 est hors ligne : aucune capacité (l'agent n'a pas annoncé de hello).
+    const list = service.list();
+    expect(list.find((a) => a.agentId === "a1")?.caps).toEqual([
+      "exec",
+      "shell",
+      "classify",
+      "screenshot",
+    ]);
+    expect(list.find((a) => a.agentId === "a2")?.caps).toEqual([]);
+    expect(service.find("a1")?.caps).toContain("screenshot");
+  });
+
+  it("sans port de capacités (double de test), renvoie une liste VIDE", () => {
+    const store = makeStore();
+    store.markSeen("a1");
+    const service = new AgentDirectoryService({
+      store,
+      hub: { isOnline: () => true },
+      audit: { recent: () => [] },
+    });
+    expect(service.list()[0]?.caps).toEqual([]);
   });
 });

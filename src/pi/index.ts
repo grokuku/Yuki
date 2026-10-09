@@ -33,6 +33,9 @@ export { PI_THINKING_LEVELS } from "./types.js";
 export { PiHostError } from "./errors.js";
 export type { PiHostErrorCode } from "./errors.js";
 
+export { SessionPinStore } from "./session-pins.js";
+export type { SessionPinLogger, SessionPinStoreOptions } from "./session-pins.js";
+
 export {
   applyPiEnvironment,
   ensurePiLayout,

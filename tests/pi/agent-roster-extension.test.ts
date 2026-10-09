@@ -46,6 +46,7 @@ function summary(name: string, agentId: string, online = false): AgentSummary {
     level: "destructive",
     privilege: "normal",
     lastSeen: null,
+    caps: [],
   };
 }
 

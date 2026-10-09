@@ -17,10 +17,12 @@ import { WebSocket, WebSocketServer } from "ws";
 
 import { toPiHostError } from "../../pi/errors.js";
 import { PHASE, type PiEvent, type PiHost } from "../../pi/index.js";
+import type { SessionPinStore } from "../../pi/session-pins.js";
 import type {
   ApprovalGatewayPort,
   ExecutionOutcome,
   PendingApprovalView,
+  ScreenshotGatewayPort,
 } from "../../agents/execution.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
@@ -31,12 +33,46 @@ import {
   type ServerEnvelope,
   type ServerFrame,
   type ServerMessage,
+  type WireAgent,
   type WireSession,
 } from "./protocol.js";
 import { SessionStreamStore } from "./session-stream.js";
 import type { Transport, TransportStats } from "./transport.js";
 
 export const WS_PATH = "/ws";
+
+/**
+ * Port du registre d'agents exposé au transport (encart de la barre latérale).
+ * Découplé du domaine `agents` : le transport ne connaît que ce contrat.
+ */
+export interface AgentsGatewayPort {
+  /** Résumé des agents appairés (actifs ET révoqués). */
+  list(): WireAgent[];
+  /**
+   * Applique on/off : `false` ⇒ niveau `disabled`, `true` ⇒ niveau précédent
+   * mémorisé (ou défaut). Lève si l'agent est inconnu.
+   */
+  setEnabled(agentId: string, enabled: boolean): void;
+  /** S'abonne aux changements du registre. Renvoie le désabonnement. */
+  subscribe(listener: () => void): () => void;
+}
+
+/**
+ * Ordre d'affichage de la barre latérale : les conversations ÉPINGLÉES d'abord,
+ * puis les autres par date décroissante. Les fiches sans date finissent en bas.
+ * Fonction PURE (testable) ; `Array.sort` est stable, l'ordre d'entrée départage.
+ */
+export function orderSessions(sessions: WireSession[]): WireSession[] {
+  return [...sessions].sort((a, b) => {
+    const pinnedA = a.pinned ? 1 : 0;
+    const pinnedB = b.pinned ? 1 : 0;
+    if (pinnedA !== pinnedB) return pinnedB - pinnedA;
+    const ta = a.updatedAt ?? "";
+    const tb = b.updatedAt ?? "";
+    if (ta === tb) return 0;
+    return ta < tb ? 1 : -1; // décroissant
+  });
+}
 
 export interface WsTransportOptions {
   host: PiHost;
@@ -55,6 +91,21 @@ export interface WsTransportOptions {
    * Absent ⇒ aucun bloc de validation (comportement inchangé).
    */
   approvals?: ApprovalGatewayPort;
+  /**
+   * Captures d'écran affichées DANS la conversation (image ÉPHÉMÈRE). Absent ⇒
+   * aucune trame `screenshot` (comportement inchangé).
+   */
+  screenshots?: ScreenshotGatewayPort;
+  /**
+   * Épinglage des conversations. Absent ⇒ aucune conversation épinglable (la
+   * trame `sessions` n'embarque alors aucun état `pinned`).
+   */
+  pins?: SessionPinStore;
+  /**
+   * Registre d'agents (encart de la barre latérale). Absent ⇒ aucune trame
+   * `agents` (comportement inchangé).
+   */
+  agents?: AgentsGatewayPort;
 }
 
 interface ClientState {
@@ -177,6 +228,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   });
   const clients = new Set<ClientState>();
   const approvals = options.approvals;
+  const pins = options.pins;
+  const agentPort = options.agents;
+  const screenshots = options.screenshots;
 
   const runT0 = new Map<string, number>();
   const unsubscribeHost = host.subscribeAll((event) => {
@@ -299,6 +353,37 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   });
 
+  // ── Captures d'écran dans la conversation (image ÉPHÉMÈRE) ──────────────
+  // L'image voyage par une trame de CONTRÔLE vers les clients de la SEULE
+  // conversation demanderesse : aucun `seq` consommé, jamais bufferisée, donc
+  // jamais dans le rejeu, le snapshot, le transcript ou la mémoire.
+  const unsubscribeScreenshots = screenshots?.subscribeScreenshots((event) => {
+    const sessionId = event.screenshot.sessionId;
+    if (!sessionId) return;
+    broadcastControl(sessionId, { type: "screenshot", screenshot: event.screenshot });
+  });
+
+  // ── Encart agents de la barre latérale ─────────────────────────────────
+  // Diffusion ÉVÉNEMENTIELLE : le registre change (aussi bien depuis /config que
+  // depuis l'encart lui-même) et on pousse l'état à TOUS les clients. Aucun
+  // polling : la page apprend les changements au fil de l'eau.
+  const unsubscribeAgents = agentPort?.subscribe(() => {
+    broadcastAgents();
+  });
+
+  /** Diffuse l'état des agents (trame de CONTRÔLE, aucun `seq` consommé). */
+  function broadcastAgents(): void {
+    if (!agentPort) return;
+    const agents = agentPort.list();
+    for (const client of clients) sendDirect(client, { type: "agents", agents });
+  }
+
+  /** Envoie l'état des agents au seul client (connexion / reprise). */
+  function sendAgents(client: ClientState): void {
+    if (!agentPort) return;
+    sendDirect(client, { type: "agents", agents: agentPort.list() });
+  }
+
   /** Décision humaine (Valider / Refuser) reçue depuis la conversation. */
   async function handleApprovalDecision(
     client: ClientState,
@@ -398,7 +483,11 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         ...(info.firstMessage && info.firstMessage !== "(no messages)"
           ? { excerpt: info.firstMessage }
           : {}),
+        ...(pins?.isPinned(info.sessionId) ? { pinned: true } : {}),
       }));
+      // Épinglées d'abord, puis date décroissante (ordre autoritatif, poussé au
+      // client : la barre latérale se contente de refléter cette liste).
+      sessions = orderSessions(sessions);
     } catch (error) {
       logger.warn("ws.sessions.list_failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -446,6 +535,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     ensureSubscribed(client);
     sendDirect(client, { type: "welcome", serverVersion, resumed });
     await sendSessions(client);
+    // État initial des agents (encart de la barre latérale), à la connexion.
+    sendAgents(client);
     // État initial autoritatif : le client initialise son rendu depuis le snapshot.
     sendSnapshotForCurrent(client);
     // État VIVANT : les validations en attente de ce fil sont ré-affichées.
@@ -519,6 +610,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
     // Uniquement si la session hôte a CHANGÉ : rafraîchit la barre latérale.
     if (switched) await sendSessions(client);
+    // Reconnexion : on RE-pousse l'état des agents (il a pu changer pendant la coupure).
+    sendAgents(client);
     // Ré-affichage des validations en attente (état vivant, jamais l'historique).
     sendPendingApprovals(client);
   }
@@ -624,10 +717,50 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       client.unsubscribeStream = undefined;
       client.subscribedSession = undefined;
     }
+    // Nettoyage de l'épingle orpheline : la conversation mise de côté disparaît
+    // de la liste, son éventuel épinglage n'a plus de sens.
+    pins?.remove(message.sessionId);
     await sendSessions(client);
     if (wasCurrent) {
       // Snapshot VIDE : le rendu du fil est réinitialisé, plus rien à l'écran.
       sendDirect(client, { type: "snapshot", state: "idle", transcript: [] });
+    }
+  }
+
+  /**
+   * Épingle / désépingle une conversation (action du menu contextuel). L'état
+   * n'est PAS écrit dans le JSONL de session (propriété du SDK) : il vit dans le
+   * store d'épingles, puis la liste est renvoyée avec son nouvel état.
+   */
+  async function handlePin(client: ClientState, message: ClientMessage): Promise<void> {
+    if (message.type !== "pin") return;
+    pins?.setPinned(message.sessionId, message.pinned);
+    await sendSessions(client);
+  }
+
+  /**
+   * Bascule on/off d'un agent depuis l'encart de la barre latérale. Le NIVEAU
+   * existant est réutilisé (`disabled` ⇄ précédent) : aucun second drapeau.
+   */
+  function handleAgentEnabled(client: ClientState, message: ClientMessage): void {
+    if (message.type !== "agent_enabled") return;
+    if (!agentPort) {
+      sendDirect(client, {
+        type: "error",
+        code: "agents_unavailable",
+        message: "Les agents ne sont pas disponibles.",
+      });
+      return;
+    }
+    try {
+      agentPort.setEnabled(message.agentId, message.enabled);
+      // Le store notifie ses abonnés → diffusion de la trame `agents` à tous.
+    } catch (error) {
+      sendDirect(client, {
+        type: "error",
+        code: "agent_unknown",
+        message: error instanceof Error ? error.message : "Agent inconnu.",
+      });
     }
   }
 
@@ -696,6 +829,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         return;
       case "setAside":
         await handleSetAside(client, message);
+        return;
+      case "pin":
+        await handlePin(client, message);
+        return;
+      case "agent_enabled":
+        handleAgentEnabled(client, message);
         return;
       case "approval_decision":
         await handleApprovalDecision(client, message);
@@ -812,6 +951,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       closed = true;
       unsubscribeHost();
       unsubscribeApprovals?.();
+      unsubscribeAgents?.();
+      unsubscribeScreenshots?.();
       tts?.cancelAll();
       if (httpServer) {
         httpServer.off("upgrade", onUpgrade);

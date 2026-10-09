@@ -35,7 +35,7 @@ export type {
   AgentRecord,
 } from "./types.js";
 
-export { AgentStore, applyAgentEvent, normalizeAgentName } from "./store.js";
+export { AgentStore, applyAgentEvent, DEFAULT_ENABLED_LEVEL, normalizeAgentName } from "./store.js";
 export type { AgentLogger, AgentStoreOptions } from "./store.js";
 
 export { AuditLog, maxSizeBytesFromMb } from "./audit.js";
@@ -186,6 +186,7 @@ export {
   encodeConfigFrame,
   encodePingFrame,
   encodePongFrame,
+  encodeScreenshotFrame,
   parseAgentFrame,
 } from "./protocol.js";
 export type {
@@ -197,9 +198,11 @@ export type {
   FrameErrorCode,
   HelloFrame,
   OutboundCommand,
+  OutboundScreenshot,
   PingFrame,
   PongFrame,
   ResultFrame,
+  ScreenshotDataFrame,
   StateFrame,
 } from "./protocol.js";
 
@@ -274,11 +277,16 @@ export type {
 export {
   AgentExecutionService,
   DEFAULT_COMMAND_TIMEOUT_MS,
+  DEFAULT_SCREENSHOT_TIMEOUT_MS,
+  SCREENSHOT_CAPABILITY,
+  SCREENSHOT_COMMAND,
+  SCREENSHOT_ORIGIN,
 } from "./execution.js";
 export type {
   ApprovalDecisionOutcome,
   ApprovalGatewayPort,
   ApprovalViewEvent,
+  CapturedScreenshotView,
   ExecutionLogger,
   ExecutionOutcome,
   ExecutionRequest,
@@ -286,4 +294,10 @@ export type {
   ExecutionServicePort,
   ExecutionStatus,
   PendingApprovalView,
+  ScreenshotGatewayPort,
+  ScreenshotOutcome,
+  ScreenshotRequest,
+  ScreenshotServicePort,
+  ScreenshotStatus,
+  ScreenshotViewEvent,
 } from "./execution.js";

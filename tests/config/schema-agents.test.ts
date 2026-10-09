@@ -103,20 +103,24 @@ describe("chemins persistés des agents (volume state)", () => {
     const env = loadEnv({});
     expect(env.agentsStorePath).toBe("/data/state/agents.jsonl");
     expect(env.auditLogPath).toBe("/data/state/audit.jsonl");
+    expect(env.sessionPinsPath).toBe("/data/state/session-pins.json");
   });
 
   it("suit la surcharge du volume `state`", () => {
     const env = loadEnv({ YUKI_MOUNT_STATE: "/custom/state" });
     expect(env.agentsStorePath).toBe("/custom/state/agents.jsonl");
     expect(env.auditLogPath).toBe("/custom/state/audit.jsonl");
+    expect(env.sessionPinsPath).toBe("/custom/state/session-pins.json");
   });
 
   it("reste surchargeable explicitement", () => {
     const env = loadEnv({
       YUKI_AGENTS_STORE_PATH: "/tmp/agents.jsonl",
       YUKI_AUDIT_LOG_PATH: "/tmp/audit.jsonl",
+      YUKI_SESSION_PINS_PATH: "/tmp/pins.json",
     });
     expect(env.agentsStorePath).toBe("/tmp/agents.jsonl");
     expect(env.auditLogPath).toBe("/tmp/audit.jsonl");
+    expect(env.sessionPinsPath).toBe("/tmp/pins.json");
   });
 });

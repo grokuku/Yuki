@@ -46,6 +46,10 @@ const (
 	TypeConfig MessageType = "config"
 	// TypePing : sonde de vivacité (Yuki → agent ou agent → Yuki).
 	TypePing MessageType = "ping"
+	// TypeScreenshot : Yuki → agent, demande de capture d'écran.
+	TypeScreenshot MessageType = "screenshot"
+	// TypeScreenshotData : agent → Yuki, image capturée (JPEG, base64).
+	TypeScreenshotData MessageType = "screenshot_data"
 	// TypePairBegin : agent → Yuki, première moitié de l'appairage.
 	TypePairBegin MessageType = "pair_begin"
 	// TypePairOK : Yuki → agent, seconde moitié chiffrée de l'appairage.
@@ -183,6 +187,43 @@ type Ping struct {
 	T int64 `json:"t"`
 }
 
+// Screenshot : demande de capture d'écran (Yuki → agent).
+//
+// ⚠️ L'agent ne décide RIEN : il capture si — et seulement si — il a déclaré la
+// capacité `screenshot` dans son `hello`. Sinon il refuse honnêtement.
+type Screenshot struct {
+	Header
+	CmdID string `json:"cmd_id"`
+	// TimeoutMs : délai maximal de la capture (ms). 0 ⇒ défaut de l'agent.
+	TimeoutMs int64 `json:"timeout_ms,omitempty"`
+	// MaxEdge : côté long maximal de l'image (px). 0 ⇒ défaut de l'agent.
+	MaxEdge int `json:"max_edge,omitempty"`
+	// Quality : qualité JPEG (1..100). 0 ⇒ défaut de l'agent.
+	Quality int `json:"quality,omitempty"`
+}
+
+// ScreenshotData : capture d'écran renvoyée par l'agent (agent → Yuki).
+//
+// ⚠️ `Data` est du base64 STANDARD (sans préfixe `data:`), borné par le plafond
+// DUR de 256 Kio côté agent. C'est une image ÉPHÉMÈRE : elle n'entre jamais dans
+// le transcript, le snapshot ou la mémoire de Yuki, et n'est jamais écrite sur
+// disque.
+type ScreenshotData struct {
+	Header
+	CmdID string `json:"cmd_id"`
+	// Format : format de l'image, toujours `jpeg` à ce jour.
+	Format string `json:"format"`
+	// Width / Height : dimensions de l'image transmise.
+	Width  int `json:"width"`
+	Height int `json:"height"`
+	// Bytes : taille BINAIRE de l'image (avant base64).
+	Bytes int `json:"bytes"`
+	// Data : image encodée en base64 standard.
+	Data string `json:"data"`
+	// DurationMs : durée de la capture (ms).
+	DurationMs int64 `json:"duration_ms,omitempty"`
+}
+
 // PairBegin : première moitié de l'appairage (agent → Yuki).
 //
 // `Proof = HMAC-SHA256(C, concat(yuki_fp_claimed, agent_nonce))` : elle prouve
@@ -215,28 +256,36 @@ type PairOK struct {
 
 /* ─── Implémentations du contrat `Message` ──────────────────────────────────── */
 
-func (m *Hello) header() *Header     { return &m.Header }
-func (m *Ack) header() *Header       { return &m.Header }
-func (m *Result) header() *Header    { return &m.Header }
-func (m *State) header() *Header     { return &m.Header }
-func (m *Pong) header() *Header      { return &m.Header }
-func (m *Error) header() *Header     { return &m.Header }
-func (m *Cmd) header() *Header       { return &m.Header }
-func (m *Cancel) header() *Header    { return &m.Header }
-func (m *Config) header() *Header    { return &m.Header }
-func (m *Ping) header() *Header      { return &m.Header }
+func (m *Hello) header() *Header      { return &m.Header }
+func (m *Ack) header() *Header        { return &m.Header }
+func (m *Result) header() *Header     { return &m.Header }
+func (m *State) header() *Header      { return &m.Header }
+func (m *Pong) header() *Header       { return &m.Header }
+func (m *Error) header() *Header      { return &m.Header }
+func (m *Cmd) header() *Header        { return &m.Header }
+func (m *Cancel) header() *Header     { return &m.Header }
+func (m *Config) header() *Header     { return &m.Header }
+func (m *Ping) header() *Header       { return &m.Header }
+func (m *Screenshot) header() *Header { return &m.Header }
+func (m *ScreenshotData) header() *Header {
+	return &m.Header
+}
 func (m *PairBegin) header() *Header { return &m.Header }
 func (m *PairOK) header() *Header    { return &m.Header }
 
-func (m *Hello) Type() MessageType     { return TypeHello }
-func (m *Ack) Type() MessageType       { return TypeAck }
-func (m *Result) Type() MessageType    { return TypeResult }
-func (m *State) Type() MessageType     { return TypeState }
-func (m *Pong) Type() MessageType      { return TypePong }
-func (m *Error) Type() MessageType     { return TypeError }
-func (m *Cmd) Type() MessageType       { return TypeCmd }
-func (m *Cancel) Type() MessageType    { return TypeCancel }
-func (m *Config) Type() MessageType    { return TypeConfig }
-func (m *Ping) Type() MessageType      { return TypePing }
-func (m *PairBegin) Type() MessageType { return TypePairBegin }
-func (m *PairOK) Type() MessageType    { return TypePairOK }
+func (m *Hello) Type() MessageType  { return TypeHello }
+func (m *Ack) Type() MessageType    { return TypeAck }
+func (m *Result) Type() MessageType { return TypeResult }
+func (m *State) Type() MessageType  { return TypeState }
+func (m *Pong) Type() MessageType   { return TypePong }
+func (m *Error) Type() MessageType  { return TypeError }
+func (m *Cmd) Type() MessageType    { return TypeCmd }
+func (m *Cancel) Type() MessageType { return TypeCancel }
+func (m *Config) Type() MessageType { return TypeConfig }
+func (m *Ping) Type() MessageType   { return TypePing }
+func (m *Screenshot) Type() MessageType {
+	return TypeScreenshot
+}
+func (m *ScreenshotData) Type() MessageType { return TypeScreenshotData }
+func (m *PairBegin) Type() MessageType      { return TypePairBegin }
+func (m *PairOK) Type() MessageType         { return TypePairOK }
