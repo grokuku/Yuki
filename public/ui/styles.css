@@ -987,6 +987,8 @@ h6.md-heading {
 
 .md-code-block {
   margin: 0 0 8px;
+  /* Repère de positionnement du bouton « copier » (superposé au coin). */
+  position: relative;
 }
 
 .md-code-block pre {
@@ -996,6 +998,97 @@ h6.md-heading {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow-x: auto;
+}
+
+/* Bouton « copier » : PETITE ICÔNE en HAUT À DROITE du bloc, en SUPERPOSITION
+ * (hors flux : il ne pousse jamais le texte ni ne décale la mise en page). Le
+ * libellé est porté par `aria-label`/`title` (icône seule ⇒ nom accessible
+ * obligatoire). Discrétion : masqué au repos sur les appareils à survol,
+ * révélé au survol ET au focus clavier (`:focus-within`) ; TOUJOURS visible
+ * là où le survol n'existe pas (écran tactile), pour rester atteignable. */
+.md-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  /* Le libellé d'un bouton ne doit JAMAIS entrer dans une sélection manuelle. */
+  user-select: none;
+  -webkit-user-select: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.md-copy-btn:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+/* Une seule icône visible selon l'état (copie / copié / échec). */
+.md-copy-icon {
+  display: none;
+}
+
+.md-copy-btn .md-copy-icon--copy {
+  display: inline-block;
+}
+
+.md-copy-btn--done .md-copy-icon--copy,
+.md-copy-btn--failed .md-copy-icon--copy {
+  display: none;
+}
+
+.md-copy-btn--done .md-copy-icon--done {
+  display: inline-block;
+  color: var(--ok);
+}
+
+.md-copy-btn--failed .md-copy-icon--failed {
+  display: inline-block;
+  color: var(--danger);
+}
+
+.md-copy-btn--done {
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--border));
+}
+
+.md-copy-btn--failed {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+
+/* Révélé au survol du bloc OU au focus clavier (le bouton reste tabulable). */
+.md-code-block:hover .md-copy-btn,
+.md-code-block:focus-within .md-copy-btn,
+.md-copy-btn:focus-visible {
+  opacity: 1;
+}
+
+/* Appareils sans survol (tactile) : le bouton reste visible en permanence. */
+@media (hover: none) {
+  .md-copy-btn {
+    opacity: 1;
+  }
+}
+
+/* Champ temporaire HORS ÉCRAN du repli `execCommand` (jamais visible). */
+.md-copy-helper {
+  position: fixed;
+  top: 0;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .md-code-block pre code {

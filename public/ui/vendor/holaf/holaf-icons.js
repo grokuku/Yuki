@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
- * Holaf UI — Brique HolafIcons · version 0.1.5
+ * Holaf UI — Brique HolafIcons · version 0.1.6
  * ─────────────────────────────────────────────────────────────────────────────
  * Set d'icônes SVG en trait (style « feather »), ZÉRO CSS (aucune feuille
  * n'est injectée) : chaque icône utilise `stroke="currentColor"` et lèse à
@@ -8,9 +8,10 @@
  * Chaque icône est un trait 24×24 (`viewBox="0 0 24 24"`), `fill="none"`,
  * `stroke-width="2"`, lignes/arrondis dans le style Feather. La plupart des
  * tracés sont repris du jeu d'icônes **Feather Icons** (licence MIT — voir
- * `README-holaf-icons.md` pour le crédit complet) ; certaines icônes ajoutées
- * ensuite (ex. `bar-chart`) reprennent ce style mais ne sont PAS des tracés
- * Feather littéraux.
+ * `README-holaf-icons.md` pour le crédit complet) ; les icônes de la vague
+ * v0.1.6 (fin de la migration Pi-Web) sont des tracés **Lucide** (licence ISC)
+ * et certaines icônes ajoutées auparavant (ex. `bar-chart`) reprennent le
+ * style Feather sans être des tracés Feather littéraux.
  *
  * AJOUT D'ICÔNE : cherche d'abord l'icône sur icons0.dev — API JSON publique
  * sans clé : GET https://icons0.dev/api/icons?q=<prefix>:<nom> (le champ
@@ -31,7 +32,7 @@
 const HolafIcons = (function () {
     "use strict";
 
-    const VERSION = "0.1.5";
+    const VERSION = "0.1.6";
 
     const NS = "http://www.w3.org/2000/svg";
 
@@ -303,6 +304,184 @@ const HolafIcons = (function () {
             '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>' +
             '<line x1="23" y1="9" x2="17" y2="15"></line>' +
             '<line x1="17" y1="9" x2="23" y2="15"></line>',
+
+        // ── v0.1.6 : fin de la migration d'icônes de Pi-Web ────────────────────
+        // 39 tracés repris À L'IDENTIQUE de lucide-react v0.446.0 (licence ISC :
+        // copyright Lucide Contributors 2022, portions Feather MIT de Cole Bemis
+        // 2013-2022 — texte complet au §5 de README-holaf-icons.md). Parité de
+        // rendu vérifiée (innerHTML identique au composant lucide-react installé
+        // côté Pi-Web), afin qu'aucune icône migrée ne change d'aspect.
+
+        // Fichiers / dossiers.
+        file:
+            '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path>' +
+            '<path d="M14 2v4a2 2 0 0 0 2 2h4"></path>',
+        "file-down":
+            '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path>' +
+            '<path d="M14 2v4a2 2 0 0 0 2 2h4"></path>' +
+            '<path d="M12 18v-6"></path>' +
+            '<path d="m9 15 3 3 3-3"></path>',
+        "folder-plus":
+            '<path d="M12 10v6"></path>' +
+            '<path d="M9 13h6"></path>' +
+            '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>',
+        "folder-x":
+            '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>' +
+            '<path d="m9.5 10.5 5 5"></path>' +
+            '<path d="m14.5 10.5-5 5"></path>',
+
+        // Édition / actions.
+        save:
+            '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"></path>' +
+            '<path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"></path>' +
+            '<path d="M7 3v4a1 1 0 0 0 1 1h7"></path>',
+        send:
+            '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"></path>' +
+            '<path d="m21.854 2.147-10.94 10.939"></path>',
+        "undo-2":
+            '<path d="M9 14 4 9l5-5"></path>' +
+            '<path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path>',
+        "redo-2":
+            '<path d="m15 14 5-5-5-5"></path>' +
+            '<path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"></path>',
+        unlink:
+            '<path d="m18.84 12.25 1.72-1.71h-.02a5.004 5.004 0 0 0-.12-7.07 5.006 5.006 0 0 0-6.95 0l-1.72 1.71"></path>' +
+            '<path d="m5.17 11.75-1.71 1.71a5.004 5.004 0 0 0 .12 7.07 5.006 5.006 0 0 0 6.95 0l1.71-1.71"></path>' +
+            '<line x1="8" x2="8" y1="2" y2="5"></line>' +
+            '<line x1="2" x2="5" y1="8" y2="8"></line>' +
+            '<line x1="16" x2="16" y1="19" y2="22"></line>' +
+            '<line x1="19" x2="22" y1="16" y2="16"></line>',
+        "zoom-in":
+            '<circle cx="11" cy="11" r="8"></circle>' +
+            '<line x1="21" x2="16.65" y1="21" y2="16.65"></line>' +
+            '<line x1="11" x2="11" y1="8" y2="14"></line>' +
+            '<line x1="8" x2="14" y1="11" y2="11"></line>',
+        "zoom-out":
+            '<circle cx="11" cy="11" r="8"></circle>' +
+            '<line x1="21" x2="16.65" y1="21" y2="16.65"></line>' +
+            '<line x1="8" x2="14" y1="11" y2="11"></line>',
+        "message-square-plus":
+            '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>' +
+            '<path d="M12 7v6"></path>' +
+            '<path d="M9 10h6"></path>',
+
+        // Validation / états.
+        "check-check":
+            '<path d="M18 6 7 17l-5-5"></path>' +
+            '<path d="m22 10-7.5 7.5L13 16"></path>',
+        "check-circle":
+            '<path d="M21.801 10A10 10 0 1 1 17 3.335"></path>' +
+            '<path d="m9 11 3 3L22 4"></path>',
+        "check-square":
+            '<path d="M21 10.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.5"></path>' +
+            '<path d="m9 11 3 3L22 4"></path>',
+        "plus-square":
+            '<rect width="18" height="18" x="3" y="3" rx="2"></rect>' +
+            '<path d="M8 12h8"></path>' +
+            '<path d="M12 8v8"></path>',
+        square: '<rect width="18" height="18" x="3" y="3" rx="2"></rect>',
+        "toggle-left":
+            '<rect width="20" height="12" x="2" y="6" rx="6" ry="6"></rect>' +
+            '<circle cx="8" cy="12" r="2"></circle>',
+        "toggle-right":
+            '<rect width="20" height="12" x="2" y="6" rx="6" ry="6"></rect>' +
+            '<circle cx="16" cy="12" r="2"></circle>',
+
+        // Développement / technique.
+        code:
+            '<polyline points="16 18 22 12 16 6"></polyline>' +
+            '<polyline points="8 6 2 12 8 18"></polyline>',
+        cpu:
+            '<rect width="16" height="16" x="4" y="4" rx="2"></rect>' +
+            '<rect width="6" height="6" x="9" y="9" rx="1"></rect>' +
+            '<path d="M15 2v2"></path>' +
+            '<path d="M15 20v2"></path>' +
+            '<path d="M2 15h2"></path>' +
+            '<path d="M2 9h2"></path>' +
+            '<path d="M20 15h2"></path>' +
+            '<path d="M20 9h2"></path>' +
+            '<path d="M9 2v2"></path>' +
+            '<path d="M9 20v2"></path>',
+        "git-commit":
+            '<circle cx="12" cy="12" r="3"></circle>' +
+            '<line x1="3" x2="9" y1="12" y2="12"></line>' +
+            '<line x1="15" x2="21" y1="12" y2="12"></line>',
+        keyboard:
+            '<path d="M10 8h.01"></path>' +
+            '<path d="M12 12h.01"></path>' +
+            '<path d="M14 8h.01"></path>' +
+            '<path d="M16 12h.01"></path>' +
+            '<path d="M18 8h.01"></path>' +
+            '<path d="M6 8h.01"></path>' +
+            '<path d="M7 16h10"></path>' +
+            '<path d="M8 12h.01"></path>' +
+            '<rect width="20" height="16" x="2" y="4" rx="2"></rect>',
+        wifi:
+            '<path d="M12 20h.01"></path>' +
+            '<path d="M2 8.82a15 15 0 0 1 20 0"></path>' +
+            '<path d="M5 12.859a10 10 0 0 1 14 0"></path>' +
+            '<path d="M8.5 16.429a5 5 0 0 1 7 0"></path>',
+        wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>',
+        "test-tube":
+            '<path d="M21 7 6.82 21.18a2.83 2.83 0 0 1-3.99-.01a2.83 2.83 0 0 1 0-4L17 3"></path>' +
+            '<path d="m16 2 6 6"></path>' +
+            '<path d="M12 16H4"></path>',
+
+        // Données / mesures.
+        calendar:
+            '<path d="M8 2v4"></path>' +
+            '<path d="M16 2v4"></path>' +
+            '<rect width="18" height="18" x="3" y="4" rx="2"></rect>' +
+            '<path d="M3 10h18"></path>',
+        hash:
+            '<line x1="4" x2="20" y1="9" y2="9"></line>' +
+            '<line x1="4" x2="20" y1="15" y2="15"></line>' +
+            '<line x1="10" x2="8" y1="3" y2="21"></line>' +
+            '<line x1="16" x2="14" y1="3" y2="21"></line>',
+        "pie-chart":
+            '<path d="M21 12c.552 0 1.005-.449.95-.998a10 10 0 0 0-8.953-8.951c-.55-.055-.998.398-.998.95v8a1 1 0 0 0 1 1z"></path>' +
+            '<path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path>',
+        "trending-up":
+            '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"></polyline>' +
+            '<polyline points="16 7 22 7 22 13"></polyline>',
+        gauge:
+            '<path d="m12 14 4-4"></path>' +
+            '<path d="M3.34 19a10 10 0 1 1 17.32 0"></path>',
+
+        // Divers UI.
+        package:
+            '<path d="m7.5 4.27 9 5.15"></path>' +
+            '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>' +
+            '<path d="m3.3 7 8.7 5 8.7-5"></path>' +
+            '<path d="M12 22V12"></path>',
+        palette:
+            '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"></circle>' +
+            '<circle cx="17.5" cy="10.5" r=".5" fill="currentColor"></circle>' +
+            '<circle cx="8.5" cy="7.5" r=".5" fill="currentColor"></circle>' +
+            '<circle cx="6.5" cy="12.5" r=".5" fill="currentColor"></circle>' +
+            '<path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"></path>',
+        puzzle: '<path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"></path>',
+        lightbulb:
+            '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"></path>' +
+            '<path d="M9 18h6"></path>' +
+            '<path d="M10 22h4"></path>',
+        sparkles:
+            '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"></path>' +
+            '<path d="M20 3v4"></path>' +
+            '<path d="M22 5h-4"></path>' +
+            '<path d="M4 17v2"></path>' +
+            '<path d="M5 18H3"></path>',
+        mail:
+            '<rect width="20" height="16" x="2" y="4" rx="2"></rect>' +
+            '<path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>',
+        paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>',
+        "image-off":
+            '<line x1="2" x2="22" y1="2" y2="22"></line>' +
+            '<path d="M10.41 10.41a2 2 0 1 1-2.83-2.83"></path>' +
+            '<line x1="13.5" x2="6" y1="13.5" y2="21"></line>' +
+            '<line x1="18" x2="21" y1="12" y2="15"></line>' +
+            '<path d="M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59"></path>' +
+            '<path d="M21 15V5a2 2 0 0 0-2-2H9"></path>',
     };
 
     // ── Helpers ─────────────────────────────────────────────────────────────

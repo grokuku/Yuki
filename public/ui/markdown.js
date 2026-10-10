@@ -30,6 +30,9 @@
  * (`renderBlock`, `renderInline`, `createMarkdownRenderer`) utilisent le DOM.
  */
 
+import { HolafIcons } from "./vendor/holaf/holaf-icons.js";
+import { copyText } from "./clipboard.js";
+
 /* ─────────────────────────── Convention muette (miroir) ─────────────────── */
 
 /** Étiquettes d'info-string reconnues comme muettes (miroir de `mute.ts`). */
@@ -775,10 +778,100 @@ export function renderBlock(block, doc = document) {
   }
 }
 
+/** Libellé accessible du bouton « copier » (icône seule ⇒ obligatoire). */
+export const COPY_LABEL = "Copier le code";
+/** Libellé annoncé après une copie réussie. */
+export const COPIED_LABEL = "Copié !";
+/** Libellé annoncé quand la copie échoue (jamais un silence). */
+export const COPY_FAILED_LABEL =
+  "Copie impossible : sélectionnez le texte à la main";
+/** Durée (ms) du retour visuel avant retour à l'état normal. */
+const COPY_FEEDBACK_MS = 1500;
+
+/**
+ * Construit un nœud SVG depuis la brique `holaf-icons`, SANS injection HTML :
+ * `DOMParser` (mode `image/svg+xml`) puis `importNode`. Reprend le patron de
+ * `sessions-panel.js`. Renvoie `null` si l'environnement n'offre pas `DOMParser`
+ * (ex. test unitaire sans DOM) — l'icône est décorative, le bouton reste
+ * accessible grâce à son `aria-label`.
+ */
+function iconNode(doc, name, className) {
+  const Parser =
+    (doc.defaultView && doc.defaultView.DOMParser) ||
+    (typeof DOMParser !== "undefined" ? DOMParser : null);
+  if (!Parser) return null;
+  const parsed = new Parser().parseFromString(
+    HolafIcons.render(name, { class: className }),
+    "image/svg+xml",
+  );
+  const node = doc.importNode ? doc.importNode(parsed.documentElement, true) : parsed.documentElement;
+  // L'icône est PUREMENT décorative : le nom accessible vient du `<button>`.
+  node.setAttribute("aria-hidden", "true");
+  return node;
+}
+
+/**
+ * Crée le bouton « copier » d'un bloc : VRAI `<button>` (clavier + toucher),
+ * icône seule mais `aria-label`/`title` explicites, en SUPERPOSITION (jamais
+ * dans le flux). Il copie `codeEl.textContent`, c'est-à-dire EXACTEMENT le
+ * contenu du bloc — ni l'icône, ni la marque « muet », ni un libellé.
+ */
+function createCopyButton(codeEl, doc) {
+  const button = doc.createElement("button");
+  button.type = "button";
+  button.className = "md-copy-btn";
+  button.setAttribute("aria-label", COPY_LABEL);
+  button.title = COPY_LABEL;
+
+  for (const [state, icon] of [
+    ["copy", "copy"],
+    ["done", "check"],
+    ["failed", "alert-triangle"],
+  ]) {
+    const node = iconNode(doc, icon, `md-copy-icon md-copy-icon--${state}`);
+    if (node) button.appendChild(node);
+  }
+
+  /** Retour visuel BREF (icône + libellé) puis état normal, sans décalage. */
+  let timer = null;
+  function applyState(state) {
+    button.classList.remove("md-copy-btn--done", "md-copy-btn--failed");
+    if (state === "done") {
+      button.classList.add("md-copy-btn--done");
+      button.setAttribute("aria-label", COPIED_LABEL);
+      button.title = COPIED_LABEL;
+    } else {
+      button.classList.add("md-copy-btn--failed");
+      button.setAttribute("aria-label", COPY_FAILED_LABEL);
+      button.title = COPY_FAILED_LABEL;
+    }
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      button.classList.remove("md-copy-btn--done", "md-copy-btn--failed");
+      button.setAttribute("aria-label", COPY_LABEL);
+      button.title = COPY_LABEL;
+      timer = null;
+    }, COPY_FEEDBACK_MS);
+  }
+
+  button.addEventListener("click", () => {
+    // `copyText` exécute la voie moderne OU le repli synchrone dans ce clic :
+    // l'activation utilisateur est préservée pour `execCommand`. Le bouton dit
+    // TOUJOURS le résultat (succès ou échec), jamais un silence.
+    Promise.resolve(copyText(codeEl.textContent)).then(
+      (status) => applyState(status === "copied" ? "done" : "failed"),
+      () => applyState("failed"),
+    );
+  });
+
+  return button;
+}
+
 /**
  * Rend un bloc de code. Un bloc **muet** est affiché avec une marque DISCRÈTE
  * indiquant qu'il n'est pas lu à voix haute (règle fondatrice : le visuel est
- * muet mais affiché) ; il reste un `<pre><code>` à l'écran.
+ * muet mais affiché) ; il reste un `<pre><code>` à l'écran. Un bloc de code
+ * (muet ou non) porte un petit bouton « copier » en HAUT À DROITE.
  */
 function renderCode(text, info, muted, doc) {
   const wrapper = doc.createElement("div");
@@ -798,6 +891,10 @@ function renderCode(text, info, muted, doc) {
   if (language.length > 0) code.className = `language-${language}`;
   code.textContent = text;
   pre.appendChild(code);
+
+  // Le bouton copie le CONTENU de `<code>` (posé juste au-dessus) : cible
+  // exacte, jamais polluée par l'icône ou la marque « muet ».
+  wrapper.appendChild(createCopyButton(code, doc));
   wrapper.appendChild(pre);
   return wrapper;
 }

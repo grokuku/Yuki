@@ -28,6 +28,9 @@ import {
 } from "../../src/tts/mute.js";
 import {
   MUTE_BLOCK_LABELS,
+  COPIED_LABEL,
+  COPY_FAILED_LABEL,
+  COPY_LABEL,
   isExternalLink,
   isMuteInfoString,
   isSafeImageSrc,
@@ -256,7 +259,14 @@ function makeFakeDoc(): any {
       getAttribute(key: string) {
         return attrs[key];
       },
+      addEventListener(type: string, handler: () => void) {
+        (this.listeners[type] ||= []).push(handler);
+      },
+      dispatch(type: string) {
+        for (const handler of this.listeners[type] ?? []) handler();
+      },
     };
+    node.listeners = {} as Record<string, Array<() => void>>;
     Object.defineProperty(node, "textContent", {
       get: () => {
         if (node.nodeType === 3) return String(node.nodeValue ?? "");
@@ -377,6 +387,98 @@ describe("liens rendus (faux DOM) — attributs de sécurité", () => {
     expect(a.target).toBe("_blank");
     expect(a.rel).toBe("noopener noreferrer");
     expect(a.textContent).toBe("https://exemple.fr/doc");
+  });
+});
+
+/* ─────── 2ter. Bouton « copier » des blocs de code (faux DOM) ───────────── */
+
+/** Rend un corpus markdown et renvoie les racines + tous les nœuds (faux DOM). */
+function renderRoots(markdown: string): { doc: any; roots: any[] } {
+  const doc = makeFakeDoc();
+  const roots = (parseBlocks(markdown, true).blocks as UiBlock[]).map((block) =>
+    renderBlock(block, doc),
+  );
+  return { doc, roots };
+}
+
+/** Parcours en profondeur : tous les nœuds d'un arbre faux-DOM. */
+function walkNodes(node: any, out: any[] = []): any[] {
+  if (!node) return out;
+  out.push(node);
+  for (const child of node.childNodes ?? []) walkNodes(child, out);
+  return out;
+}
+
+/** Tous les `<button class="md-copy-btn">` d'un rendu markdown. */
+function renderedCopyButtons(markdown: string): any[] {
+  const { roots } = renderRoots(markdown);
+  return roots.flatMap((root) => walkNodes(root)).filter((n) => n.className === "md-copy-btn");
+}
+
+/** Le premier `<code>` d'un rendu markdown (contenu à copier). */
+function renderedCodeNode(markdown: string): any | undefined {
+  const { roots } = renderRoots(markdown);
+  return roots.flatMap((root) => walkNodes(root)).find((n) => n.nodeName === "CODE");
+}
+
+describe("bouton « copier » des blocs de code", () => {
+  it("un bloc de code clôturé porte un VRAI <button> avec aria-label et title", () => {
+    const [button] = renderedCopyButtons("```\nconst x = 1;\n```\n");
+    expect(button).toBeDefined();
+    expect(button.nodeName).toBe("BUTTON");
+    expect(button.type).toBe("button");
+    expect(button.getAttribute("aria-label")).toBe(COPY_LABEL);
+    expect(button.title).toBe(COPY_LABEL);
+  });
+
+  it("un bloc « muet » porte aussi le bouton (en plus de la marque muet)", () => {
+    const { roots } = renderRoots("```muet\nsecret brut 42\n```\n");
+    const all = roots.flatMap((root) => walkNodes(root));
+    expect(all.some((n) => n.className === "md-copy-btn")).toBe(true);
+    expect(all.some((n) => n.className === "md-mute-badge")).toBe(true);
+  });
+
+  it("la cible de copie est EXACTEMENT le contenu du bloc (bouton et marque exclus)", () => {
+    // Cas piégeux : indentation, tabulation, espaces de fin, échappements HTML,
+    // Unicode, retours à la ligne — le texte doit être reproduit À L'IDENTIQUE.
+    const payload = [
+      "function f() {",
+      "\techo \"h\u00e9llo & <monde> 'x'\"", // tabulation + & < > quotes + é
+      "    return 42;   ", // espaces de fin conservés
+      "}",
+    ].join("\n");
+    const markdown = "```bash\n" + payload + "\n```\n";
+    const code = renderedCodeNode(markdown);
+    expect(code).toBeDefined();
+    expect(code.textContent).toBe(payload);
+    // Ni le libellé "Copier" ni la marque "muet" ne polluent la cible.
+    expect(code.textContent).not.toContain("Copier");
+    expect(code.textContent).not.toContain("muet");
+  });
+
+  it("le contenu d'un bloc muet reste propre (ni marque, ni bouton)", () => {
+    const payload = "donnees {\"brutes\": [1, 2, 3]}";
+    const code = renderedCodeNode("```muet\n" + payload + "\n```\n");
+    expect(code?.textContent).toBe(payload);
+  });
+
+  it("aucun bouton sur le code EN LIGNE ni sur les tableaux (choix assumé)", () => {
+    expect(renderedCopyButtons("du `code` en ligne\n")).toEqual([]);
+    expect(renderedCopyButtons("| A | B |\n| --- | --- |\n| 1 | 2 |\n\n")).toEqual([]);
+  });
+
+  it("les libellés d'état sont explicites et en français", () => {
+    expect(COPY_LABEL).toMatch(/copier/i);
+    expect(COPIED_LABEL).toMatch(/copi\u00e9/i);
+    expect(COPY_FAILED_LABEL).toMatch(/impossible/i);
+  });
+
+  it("TTS non perturbée : le bloc de code reste SILENCIEUX (ni contenu, ni libellé)", () => {
+    const md = "```\nsecret brut 42\n```\n";
+    const said = spoken(md);
+    expect(said).not.toContain("secret brut 42");
+    expect(said).not.toContain("Copier");
+    expect(said).not.toContain("Copié");
   });
 });
 
@@ -570,5 +672,19 @@ describe("garde anti-injection — le rendu n'emploie jamais innerHTML", () => {
     const matches = source.match(/\.innerHTML/g) ?? [];
     expect(matches.length).toBe(1);
     expect(source).toContain('els.conversation.innerHTML = ""');
+  });
+
+  it("le bouton « copier » n'emploie ni onclick ni style inline (CSP stricte)", () => {
+    const source = readFileSync(join(process.cwd(), "public/ui/markdown.js"), "utf8");
+    // Aucun gestionnaire en ligne ni style posé via attribut/JSOM.
+    expect(source).not.toMatch(/onclick\s*=/i);
+    expect(source).not.toContain(".style.");
+    expect(source).not.toContain('setAttribute("style"');
+    // L'icône vient de la brique holaf-icons (jamais un SVG dessiné en dur).
+    expect(source).toContain("HolafIcons");
+    expect(source).not.toContain("<svg");
+    expect(source).toContain("DOMParser");
+    // Le clic est câblé par addEventListener (jamais `onclick`).
+    expect(source).toContain('addEventListener("click"');
   });
 });
