@@ -463,7 +463,12 @@ export class FakePiHost implements PiHost {
       this.transcript.push({ role: "assistant", text: contentText });
     }
     this.partial = "";
-    run.instrumentation.complete(reason);
+    run.instrumentation.complete(
+      reason,
+      reason === "error" && run.errorMessage
+        ? { error: run.errorMessage }
+        : {},
+    );
     this.emit({
       type: "run_finished",
       sessionId: this.sessionId,

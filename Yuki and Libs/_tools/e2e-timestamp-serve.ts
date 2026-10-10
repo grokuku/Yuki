@@ -14,7 +14,7 @@
  */
 
 import { createServer as createHttpServer } from "node:http";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 
@@ -65,9 +65,33 @@ function user(stamp: string, text: string, ts: number): Record<string, unknown> 
   };
 }
 
+/**
+ * Écrit une session JSONL PERSISTÉE puis FIGE sa mtime sur sa DERNIÈRE
+ * activité (le plus récent des horodatages de messages), comme en production
+ * où le fichier est écrit quand le message arrive.
+ *
+ * ⚠️ Sans ce figeage, les deux fils seedés dans la même milliseconde (fréquent :
+ * 6 puis 2 écritures consécutives) ont des mtime quasi ÉGAUX. Or l'activation
+ * au démarrage passe par `SessionManager.continueRecent` → `findMostRecentSession`,
+ * qui trie par **mtime de fichier** (et non par horodatage de message). Le fil B
+ * écrit en SECOND gagnait alors quand l'horloge avançait entre les deux seeds ⇒
+ * le harnais croyait être sur le fil A alors qu'il affichait B.
+ * En figant la mtime sur la dernière activité, l'ordre redevient EXPLICITE et
+ * cohérent avec la liste (`updatedAt` = horodatage de message) : A est le plus
+ * récent selon les DEUX critères, quel que soit le rythme de l'horloge.
+ */
 function seed(entries: Array<Record<string, unknown>>): string {
   const manager = SessionManager.create(cwd, sessionsDir);
   for (const entry of entries) manager.appendMessage(entry as never);
+  const file = manager.getSessionFile();
+  if (file) {
+    const lastActivity = entries.reduce((max, entry) => {
+      const ts = typeof entry.timestamp === "number" ? entry.timestamp : 0;
+      return ts > max ? ts : max;
+    }, 0);
+    // mtime en SECONDES : le plus récent des messages de ce fil.
+    utimesSync(file, lastActivity / 1000, lastActivity / 1000);
+  }
   return manager.getSessionId();
 }
 

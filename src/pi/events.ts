@@ -64,6 +64,23 @@ export function finishReasonForMessage(
   return null;
 }
 
+/**
+ * Cause BRUTE d'un message assistant en erreur (`message.errorMessage`), posée
+ * par le SDK Pi et contenant le statut HTTP + le corps du fournisseur.
+ *
+ * Assainie (jamais de clé/token) et normalisée en `undefined` si absente/vide.
+ * ⚠️ Sans cette reprise, la cause d'un échec de génération est JETÉE : le run se
+ * termine en `error` sans qu'aucune cause ne soit journalisée ni affichée.
+ */
+export function errorTextFromMessage(
+  message: RawAgentMessage,
+): string | undefined {
+  const value = message.errorMessage;
+  if (typeof value !== "string") return undefined;
+  const sanitized = sanitizeErrorText(value).trim();
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

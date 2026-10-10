@@ -131,7 +131,7 @@ export class RunInstrumentation {
   }
 
   /** Marque et émet un étage. Idempotent par étage (le premier gagne). */
-  markStage(stage: string, options: { jobId?: string } = {}): void {
+  markStage(stage: string, options: { jobId?: string; error?: string } = {}): void {
     const at = this.now();
     const sinceT0Ms = Math.max(0, at - this.t0);
     this.emit({
@@ -148,6 +148,9 @@ export class RunInstrumentation {
       run_id: this.runId,
       ...(options.jobId ? { job_id: options.jobId } : {}),
       stage,
+      // ⚠️ Un `stage=error` DOIT porter sa cause : sans elle, un échec réel
+      // devient invisible (l'UI ne peut afficher qu'un texte générique).
+      ...(options.error ? { error: options.error } : {}),
       at: new Date(at).toISOString(),
       since_t0_ms: sinceT0Ms,
     });
@@ -174,11 +177,11 @@ export class RunInstrumentation {
   }
 
   /** Émet les étages terminaux : abort/error le cas échéant, puis run_finished. */
-  complete(reason: RunFinishReason): void {
+  complete(reason: RunFinishReason, options: { error?: string } = {}): void {
     if (this.completed) return;
     this.completed = true;
     if (reason === "abort") this.markStage(PHASE.abort);
-    if (reason === "error") this.markStage(PHASE.error);
+    if (reason === "error") this.markStage(PHASE.error, options);
     this.markStage(PHASE.runFinished);
   }
 

@@ -497,7 +497,7 @@ function handleFrame(frame) {
     if (frame.code === "session_inconnue" || frame.code === "PI_SESSION_ERROR") {
       void HolafModal.alert(
         "Action impossible",
-        frame.message || "Une erreur est survenue.",
+        frame.message || "Cette action a échoué ; le serveur n'a fourni aucun détail.",
         { okText: "Compris" },
       );
       return;
@@ -689,12 +689,19 @@ function applyEvent(frame) {
         if (frame.reason === "error") {
           currentAssistant.classList.add("message--error");
           if (currentRenderer) {
-            currentRenderer.setText(frame.errorMessage || "Une erreur est survenue.");
+            currentRenderer.setText(
+              frame.errorMessage || "Le modèle n'a pas répondu (aucun détail fourni).",
+            );
           }
         }
         pinIfNeeded(pinned);
       } else if (frame.reason === "error") {
-        appendMessage("assistant error", frame.errorMessage || "Une erreur est survenue.", undefined, Date.now());
+        appendMessage(
+          "assistant error",
+          frame.errorMessage || "Le modèle n'a pas répondu (aucun détail fourni).",
+          undefined,
+          Date.now(),
+        );
       }
       currentAssistant = null;
       currentRenderer = null;

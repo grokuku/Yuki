@@ -178,6 +178,31 @@ async function waitFor(expression, timeout = 8000) {
   return false;
 }
 
+/* Identifiants STABLES des deux fils seedés. Leur titre de barre latérale porte
+ * l'horodatage STOCKÉ (préfixe `[horodatage] …`) tronqué : la DATE y figure en
+ * tête et distingue les deux fils sans ambiguïté.
+ * ⚠️ On sélectionne par IDENTIFIANT, JAMAIS par « fil actif par défaut » ni
+ * « premier non-actif » : l'activation au démarrage dépend d'un tri par mtime
+ * (SessionManager.continueRecent → findMostRecentSession), donc l'ordre de la
+ * liste n'est pas un discriminant fiable — c'était la course du harnais. */
+const FIL_A = "2026-10-07";
+const FIL_B = "2026-10-01";
+
+/** Ouvre le fil identifié par `tag` (clic sur sa conversation) puis attend son
+ * rendu : `userCount` bulles utilisateur (`comparator` par défaut « === » ; « >= »
+ * pour un fil dont le message LIVE a pu s'ajouter). Sélection EXPLICITE : aucune
+ * attente aveugle, aucune dépendance à l'ordre de la liste. */
+async function openThread(tag, userCount, comparator = "===") {
+  const clicked = await evaluate(`(() => {
+    const c = [...document.querySelectorAll('.conv')].find((el) => el.textContent.includes(${JSON.stringify(tag)}));
+    if (!c) return false;
+    if (!c.classList.contains('conv--active')) c.click();
+    return true;
+  })()`);
+  if (!clicked) return false;
+  return waitFor(`document.querySelectorAll('.message--user').length ${comparator} ${userCount}`);
+}
+
 async function shot(name) {
   const res = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(SHOTS, name + ".png"), Buffer.from(res.data, "base64"));
@@ -270,7 +295,19 @@ const threadState = () =>
 
 /* ═══════════ 1) Fil A restauré : 2 séparateurs, heures masquant le préfixe ═══════════ */
 await navigate(`${server.base}/`);
-check("le fil s'affiche (3 messages utilisateur)", await waitFor(`document.querySelectorAll('.message--user').length === 3`));
+check("la liste des conversations est chargée (fil A + fil B)", await waitFor(`document.querySelectorAll('.conv').length === 2`));
+// Le fil le plus RÉCENT (A) doit être ACTIF dès le chargement : l'appli ouvre
+// la conversation la plus récente au démarrage (`SessionManager.continueRecent`
+// → tri par mtime). Le serve fige la mtime de chaque fil sur sa dernière
+// activité, donc A gagne selon ce critère ET selon l'horodatage des messages.
+check(
+  "le fil le plus récent (A) est actif au démarrage",
+  await evaluate(`(() => {
+    const c = document.querySelector('.conv--active');
+    return c ? c.textContent.includes(${JSON.stringify(FIL_A)}) : false;
+  })()`),
+);
+check("le fil A s'affiche (3 messages utilisateur)", await openThread(FIL_A, 3));
 const a = await threadState();
 
 check("2 séparateurs de jour (changement de jour)", a.seps.length === 2, JSON.stringify(a.seps.map((s) => s.text)));
@@ -398,11 +435,7 @@ check(
 );
 
 /* ═══════════ 3) Bascule de fil : séparateur du fil B ═══════════ */
-await evaluate(`(() => {
-  const target = [...document.querySelectorAll('.conv')].find((c) => !c.classList.contains('conv--active'));
-  target.click();
-})()`);
-await waitFor(`document.querySelectorAll('.message--user').length === 1`);
+await openThread(FIL_B, 1);
 await sleep(400);
 const b = await threadState();
 check("BASCULE : le fil B affiche 1 séparateur (jeudi 1 octobre 2026)", b.seps.length === 1 && b.seps[0]?.text === "jeudi 1 octobre 2026", JSON.stringify(b.seps.map((s) => s.text)));
@@ -410,11 +443,7 @@ check("BASCULE : heures du fil B (10:30 / 10:31)", JSON.stringify(b.userTimes) =
 check("BASCULE : préfixe toujours masqué", b.hasPrefix === false);
 
 // Retour au fil A : le rendu est reconstruit (snapshot), aucun doublon.
-await evaluate(`(() => {
-  const target = [...document.querySelectorAll('.conv')].find((c) => !c.classList.contains('conv--active'));
-  target.click();
-})()`);
-await waitFor(`document.querySelectorAll('.message--user').length === 3`);
+check("RETOUR au fil A : sélection explicite par identifiant", await openThread(FIL_A, 3));
 const back = await threadState();
 check("RETOUR au fil A : 2 séparateurs, 3 heures (aucun doublon)", back.seps.length === 2 && back.userTimes.length === 3, JSON.stringify(back.userTimes));
 
@@ -494,7 +523,8 @@ await evaluate(`document.querySelector('#stop')?.click()`);
 /* ═══════════ 5) Fenêtre ÉTROITE : aucun débordement NOUVEAU ═══════════ */
 await send("Emulation.setDeviceMetricsOverride", { width: 480, height: 720, deviceScaleFactor: 1, mobile: false });
 await navigate(`${server.base}/`);
-await waitFor(`document.querySelectorAll('.message--user').length >= 3`);
+await waitFor(`document.querySelectorAll('.conv').length === 2`);
+await openThread(FIL_A, 3, ">=");
 const narrow = await threadState();
 check("étroit : séparateurs toujours affichés (jours seedés présents en tête)", narrow.seps.length >= 2 && narrow.seps[0]?.text === "mercredi 7 octobre 2026" && narrow.seps[1]?.text === "jeudi 8 octobre 2026", narrow.seps.map((s) => s.text).join(" | "));
 check("étroit : aucun débordement horizontal NOUVEAU", narrow.overflow <= 1, `débordement ${narrow.overflow} px`);

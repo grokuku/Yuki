@@ -65,6 +65,123 @@ const RESOURCE_PATTERNS: ReadonlyArray<RegExp> = [
   /ENOSPC/,
 ];
 
+/**
+ * Motifs d'un refus du FOURNISSEUR de modèle, par cause actionnable.
+ *
+ * ⚠️ POURQUOI CE MAPPAGE EXISTE : le SDK Pi expose la cause BRUTE du fournisseur
+ * (statut HTTP + corps) dans `message.errorMessage`. Brute, elle est illisible
+ * pour un humain (jargon anglais, JSON) ; absente, elle rend un échec
+ * indiagnosticable. On la traduit donc en français ACTIONNABLE, sans jamais
+ * inventer une cause : un motif non reconnu retombe sur « le modèle n'a pas
+ * répondu » suivi du détail brut (tronqué).
+ */
+const CREDIT_PATTERNS: ReadonlyArray<RegExp> = [
+  /\b402\b/,
+  /quota/i,
+  /credits?\b/i,
+  /insufficient/i,
+  /balance/i,
+  /billing/i,
+  /payment required/i,
+  /recharge/i,
+  /no funds/i,
+];
+
+const AUTH_PATTERNS: ReadonlyArray<RegExp> = [
+  /\b401\b/,
+  /unauthor/i,
+  /invalid[ _-]?api[ _-]?key/i,
+  /api[ _-]?key[ _-]?(invalid|missing|not found|expired|revoked|required)/i,
+  /\bno\s+api[ _-]?key/i,
+  /missing.{0,24}api[ _-]?key/i,
+  /authentication/i,
+  /not authenticated/i,
+];
+
+/** 403 = refus de droits : ambigu (droits, quota proxy, clé) ⇒ formulation non trompeuse. */
+const FORBIDDEN_PATTERNS: ReadonlyArray<RegExp> = [/\b403\b/, /forbidden/i];
+
+const RATE_LIMIT_PATTERNS: ReadonlyArray<RegExp> = [
+  /\b429\b/,
+  /rate[ _-]?limit/i,
+  /too many requests/i,
+  /maximum.*requests/i,
+];
+
+const UNAVAILABLE_PATTERNS: ReadonlyArray<RegExp> = [
+  /\b50[0234]\b/,
+  /unavailable/i,
+  /overloaded/i,
+  /service unavailable/i,
+  /bad gateway/i,
+  /gateway time[ _-]?out/i,
+  /temporarily/i,
+  /network error/i,
+  /connection (refused|reset|closed)/i,
+];
+
+/** Longueur maximale du détail brut repris dans un message affichable. */
+const MAX_ERROR_DETAIL_CHARS = 400;
+
+/** Tronque un détail d'erreur en restant lisible. */
+function truncateDetail(text: string, max = MAX_ERROR_DETAIL_CHARS): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max - 1)}…`;
+}
+
+function matchesAny(text: string, patterns: ReadonlyArray<RegExp>): boolean {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+/**
+ * Traduit la cause d'un échec de génération en message UTILE pour l'humain.
+ *
+ * - cause reconnue (crédit/quota, authentification, débit, indisponibilité) ⇒
+ *   message EXPLICITE et actionnable ;
+ * - cause inconnue ⇒ « le modèle n'a pas répondu » suivi du détail BRUT (tronqué),
+ *   jamais un texte générique ni une cause inventée.
+ *
+ * `rawText` doit avoir été assaini ("sans secret") par l'appelant.
+ */
+export function describeModelError(rawText: string | undefined): string {
+  const raw = rawText?.trim() ?? "";
+  if (raw.length === 0) {
+    // Aucun détail : on dit seulement ce qu'on SAIT (le modèle n'a rien produit),
+    // sans inventer de cause.
+    return "Le modèle n'a pas répondu (aucun détail fourni par le fournisseur).";
+  }
+  if (matchesAny(raw, CREDIT_PATTERNS)) {
+    return (
+      "Le fournisseur du modèle a refusé la requête : crédits ou quota épuisés " +
+      "(rechargez le compte du fournisseur)."
+    );
+  }
+  if (matchesAny(raw, AUTH_PATTERNS)) {
+    return (
+      "Le fournisseur du modèle a refusé la requête : authentification refusée " +
+      "(clé API invalide, expirée ou absente)."
+    );
+  }
+  if (matchesAny(raw, FORBIDDEN_PATTERNS)) {
+    return (
+      "Le fournisseur du modèle a refusé la requête (accès refusé : droits, " +
+      "quota ou clé API à vérifier)."
+    );
+  }
+  if (matchesAny(raw, RATE_LIMIT_PATTERNS)) {
+    return (
+      "Le fournisseur du modèle a refusé la requête : limite de débit atteinte " +
+      "(trop de requêtes), réessayez dans un instant."
+    );
+  }
+  if (matchesAny(raw, UNAVAILABLE_PATTERNS)) {
+    return (
+      "Le fournisseur du modèle est momentanément indisponible ou injoignable."
+    );
+  }
+  return `Le modèle n'a pas répondu. Détail du fournisseur : ${truncateDetail(raw)}`;
+}
+
 function rawMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;

@@ -43,15 +43,17 @@ import {
   channelForAssistantEvent,
   contentTextFromMessage,
   deltaText,
+  errorTextFromMessage,
   finishReasonForMessage,
   messageTimestamp,
+  sanitizeErrorText,
   transcriptFromEntries,
   unstreamedContentSuffix,
   usageFromMessage,
   type RawAgentMessage,
   type RawAssistantMessageEvent,
 } from "./events.js";
-import { PiHostError, toPiHostError } from "./errors.js";
+import { describeModelError, PiHostError, toPiHostError } from "./errors.js";
 import { buildStoredUserText } from "./timestamp.js";
 import type { PiHost } from "./host.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "./instrumentation.js";
@@ -151,7 +153,10 @@ interface RunItem {
   emittedRunStarted: boolean;
   sawError: boolean;
   sawAbort: boolean;
+  /** Message d'erreur AFFICHABLE (français, mappé) pour l'UI. */
   errorMessage?: string;
+  /** Cause BRUTE du fournisseur (assainie, sans secret) pour les journaux. */
+  rawError?: string;
   usage?: PiUsage;
   resolveStart?: () => void;
   startPromise: Promise<void>;
@@ -172,6 +177,22 @@ interface SessionRecord {
 
 function newRunId(): string {
   return randomUUID();
+}
+
+/**
+ * Cause BRUTE d'une erreur, assainie (jamais de clé/token) et non vide, ou
+ * `undefined`. Utilisée pour journaliser le motif réel d'un rejet de prompt.
+ */
+function sanitizedCause(error: unknown): string | undefined {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : undefined;
+  if (raw === undefined) return undefined;
+  const sanitized = sanitizeErrorText(raw).trim();
+  return sanitized.length > 0 ? sanitized : undefined;
 }
 
 function makeRunItem(
@@ -429,7 +450,24 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         const message = (raw as { message?: RawAgentMessage }).message;
         if (!run || !message || message.role !== "assistant") return;
         const finishReason = finishReasonForMessage(message);
-        if (finishReason === "error") run.sawError = true;
+        if (finishReason === "error") {
+          run.sawError = true;
+          // ⚠️ LA CAUSE EST ICI. Le SDK pose le message BRUT du fournisseur
+          // (statut HTTP + corps) sur `message.errorMessage` ; sans cette
+          // reprise, l'échec sortait sans AUCUNE cause (`stage=error` muet,
+          // UI générique). On assainit (jamais de clé/token) et on journalise
+          // la cause brute ; le message d'affichage est mappé en français.
+          const rawError = errorTextFromMessage(message);
+          if (rawError && !run.rawError) {
+            run.rawError = rawError;
+            run.errorMessage = describeModelError(rawError);
+            logger.warn("pi.run.error", {
+              session_id: record.sessionId,
+              run_id: run.runId,
+              error: rawError,
+            });
+          }
+        }
         if (finishReason === "abort") run.sawAbort = true;
         const usage = usageFromMessage(message);
         if (usage) {
@@ -528,7 +566,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     reason: RunFinishReason,
   ): void {
     run.instrumentation.setUsage(run.usage);
-    run.instrumentation.complete(reason);
+    // ⚠️ Un `stage=error` DOIT porter sa cause (brute, assainie) : c'est ce qui
+    // manquait et qui a rendu un échec réel indiagnosticable.
+    run.instrumentation.complete(
+      reason,
+      run.rawError ? { error: run.rawError } : {},
+    );
     emitEvent({
       type: "run_finished",
       sessionId: record.sessionId,
@@ -592,6 +635,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         sessionId: record.sessionId,
         logger,
       });
+      // Cause BRUTE du SDK/du fournisseur : `toPiHostError` la conserve dans
+      // `cause` sous forme d'objet `Error`. On la remonte (assainie) car c'est
+      // elle qui rend l'échec diagnosticable.
+      const rawCause = sanitizedCause(piError.cause);
       // Un prompt qui rejette À CAUSE d'un abort doit être normalisé en
       // `run_finished(reason:"abort")`, jamais en erreur (spec Lot 1).
       if (run.abortRequested || piError.code === "PI_ABORTED") {
@@ -607,11 +654,23 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         session_id: record.sessionId,
         run_id: run.runId,
         code: piError.code,
+        ...(rawCause ? { error: rawCause } : {}),
       });
       run.sawError = true;
-      run.errorMessage = piError.message;
+      // Message d'affichage UTILE : la cause brute du SDK est mappée en français
+      // (crédit/auth/débit/indisponibilité) ; à défaut, le message de façade.
+      run.rawError = rawCause ?? piError.message;
+      run.errorMessage = rawCause
+        ? describeModelError(rawCause)
+        : piError.message;
       finalizeRun(record, run, "error");
       return;
+    }
+
+    if (run.sawError && !run.errorMessage) {
+      // Erreur signalée par le flux SDK sans message exploitable : on dit ce
+      // qu'on SAIT (le modèle n'a rien produit), sans inventer de cause.
+      run.errorMessage = describeModelError(run.rawError);
     }
 
     const reason: RunFinishReason =

@@ -37,11 +37,11 @@ const STATE_DIR = mkdtempSync(join(tmpdir(), "yuki-e2e-approval-"));
 const SHOTS = join(STATE_DIR, "shots");
 mkdirSync(SHOTS, { recursive: true });
 
-async function startServer() {
+async function startServer(extraEnv = {}) {
   const logs = [];
   const proc = spawn(TSX, [join(TOOLS, "e2e-approval-serve.ts")], {
     cwd: YUKI_DIR,
-    env: { ...process.env, YUKI_E2E_APPROVAL_DIR: STATE_DIR },
+    env: { ...process.env, YUKI_E2E_APPROVAL_DIR: STATE_DIR, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   proc.stdout.on("data", (d) => logs.push(d.toString()));
@@ -242,7 +242,16 @@ const rectOf = (selector) =>
       position: getComputedStyle(el).position, zIndex: getComputedStyle(el).zIndex };
   })()`);
 
-const windowRect = () => rectOf(".approval-window:not(.approval--result)");
+const windowRect = () =>
+  evaluate(`(() => {
+    // Fenêtre au PREMIER PLAN (dernière du DOM) : c'est elle que reçoit un clic.
+    const wins = [...document.querySelectorAll('.approval-window:not(.approval--result)')];
+    const el = wins[wins.length - 1];
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height,
+      position: getComputedStyle(el).position, zIndex: getComputedStyle(el).zIndex };
+  })()`);
 
 /* ═══════════════ 1) Fenêtre FLOTTANTE au-dessus de l'interface ══════════ */
 await navigate(`${server.base}/`);
@@ -384,6 +393,176 @@ await sleep(800);
 const finalState = await evaluate(`document.querySelectorAll('.approval-window:not(.approval--result)').length`);
 check("rechargement final : AUCUNE fenêtre ne revient (toutes décidées)", finalState === 0, String(finalState));
 await shot("approval-after-reload");
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 9) FORME PAYSAGE (≈ 16/9) + DÉCISION TOUJOURS ATTEIGNABLE — commande de 120
+ *    lignes. ⚠️ C'est LE test qui aurait dû exister : une fenêtre qui dépasse
+ *    le viewport empêche de valider/refuser ⇒ défaut FONCTIONNEL, pas esthétique.
+ * ═════════════════════════════════════════════════════════════════════ */
+const SHAPE_DIR = mkdtempSync(join(tmpdir(), "yuki-e2e-approval-shape-"));
+const longServer = await startServer({
+  YUKI_E2E_APPROVAL_DIR: SHAPE_DIR,
+  YUKI_E2E_APPROVAL_LONG_LINES: "120",
+  YUKI_E2E_APPROVAL_ONLY_LONG: "1",
+});
+const LONG_SELECTOR = '.approval-window:not(.approval--result)[data-approval-id="apr-e2e-1"]';
+
+const shapeState = () =>
+  evaluate(`(() => {
+    const win = document.querySelector(${JSON.stringify(LONG_SELECTOR)});
+    if (!win) return null;
+    const r = win.getBoundingClientRect();
+    const toggle = win.querySelector('.approval__fold-toggle');
+    const cmd = win.querySelector('.approval__command');
+    const valider = [...win.querySelectorAll('.approval__btn')].find((b) => b.textContent === 'Valider');
+    const refuser = [...win.querySelectorAll('.approval__btn')].find((b) => b.textContent === 'Refuser');
+    const inside = (el) => { const b = el.getBoundingClientRect(); return b.top >= 0 && b.bottom <= innerHeight && b.left >= 0 && b.right <= innerWidth; };
+    const body = win.querySelector('.approval-window__body');
+    return {
+      vw: innerWidth, vh: innerHeight,
+      left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height,
+      ratio: +(r.width / r.height).toFixed(3),
+      validerVisible: !!valider && inside(valider), refuserVisible: !!refuser && inside(refuser),
+      commandLines: (cmd.textContent || '').split('\\n').length,
+      folded: cmd.className.split(/\\s+/).includes('is-folded'),
+      toggleLabel: toggle ? toggle.textContent : null,
+      toggleExpanded: toggle ? toggle.getAttribute('aria-expanded') : null,
+      toggleControls: toggle ? toggle.getAttribute('aria-controls') : null,
+      bodyOverflowY: body ? getComputedStyle(body).overflowY : null,
+      bodyScrollTop: body ? body.scrollTop : null,
+      reason: win.querySelector('.approval__reason')?.textContent ?? '',
+      machine: win.querySelector('.approval__machine')?.textContent ?? '',
+      expiry: win.querySelector('.approval__expiry')?.textContent ?? '',
+      preview: cmd.textContent ?? '',
+      style: win.getAttribute('style'),
+    };
+  })()`);
+
+await navigate(`${longServer.base}/`);
+check(
+  "commande de 120 lignes : la fenêtre s'affiche",
+  await waitFor(`!!document.querySelector(${JSON.stringify(LONG_SELECTOR)})`),
+);
+const shape = await shapeState();
+check(
+  "FORME PAYSAGE ≈ 16/9 (largeur > hauteur)",
+  shape.ratio > 1 && Math.abs(shape.ratio - 16 / 9) <= 0.15,
+  `${Math.round(shape.width)}×${Math.round(shape.height)} px ; ratio ${shape.ratio} ; 16/9 = ${(16 / 9).toFixed(3)} (tolérance ±0,15)`,
+);
+check(
+  "la fenêtre NE DÉPASSE PAS le viewport (hauteur ET largeur)",
+  shape.left >= 0 && shape.top >= 0 && shape.right <= shape.vw + 1 && shape.bottom <= shape.vh + 1,
+  `fenêtre (${Math.round(shape.left)},${Math.round(shape.top)})→(${Math.round(shape.right)},${Math.round(shape.bottom)}) ; viewport ${shape.vw}×${shape.vh}`,
+);
+check(
+  "⚠️ Valider ET Refuser TOUJOURS dans le viewport (commande 120 lignes)",
+  shape.validerVisible && shape.refuserVisible,
+  `bas des boutons ≤ ${shape.vh}`,
+);
+check(
+  "commande longue REPLIÉE par défaut (contenu entier conservé dans le DOM)",
+  shape.folded === true && shape.commandLines === 120,
+  `${shape.commandLines} lignes`,
+);
+check(
+  "repli ANNONCÉ explicitement (volume + compte de lignes masquées)",
+  /Déplier la commande/.test(shape.toggleLabel ?? "") &&
+    /\d+ lignes/.test(shape.toggleLabel ?? "") &&
+    /masquées/.test(shape.toggleLabel ?? ""),
+  String(shape.toggleLabel),
+);
+check(
+  "repli accessible : vrai bouton aria-expanded=false + aria-controls",
+  shape.toggleExpanded === "false" && !!shape.toggleControls,
+  `aria-expanded=${shape.toggleExpanded} aria-controls=${shape.toggleControls}`,
+);
+check(
+  "défilement INTERNE du contenu (le corps défile, la fenêtre non)",
+  shape.bodyOverflowY === "auto",
+  String(shape.bodyOverflowY),
+);
+check(
+  "⚠️ l'ESSENTIEL reste visible : raison, machine, compte à rebours, aperçu de commande",
+  /suppression \(rm\)/.test(shape.reason) &&
+    /nuc00/.test(shape.machine) &&
+    /agent-nuc00/.test(shape.machine) &&
+    /Expire dans/.test(shape.expiry) &&
+    /rm -rf \/srv\/cache/.test(shape.preview),
+  `raison="${shape.reason.slice(0, 70)}" ; expiry="${shape.expiry.slice(0, 30)}"`,
+);
+check(
+  "positionnement CSSOM seul (left/top), aucun style parasite",
+  /left:\s*-?\d+(\.\d+)?px/.test(shape.style ?? "") && !/background|color|padding/i.test(shape.style ?? ""),
+  String(shape.style),
+);
+await shot("approval-shape-long");
+
+/* 9b) REPLI → DÉPLI par CLIC SOURIS RÉEL : le contenu se déplie, aria-expanded change. */
+const toggleRect = await rectOf(`${LONG_SELECTOR} .approval__fold-toggle`);
+await mouseClick(
+  Math.round(toggleRect.left + toggleRect.width / 2),
+  Math.round(toggleRect.top + toggleRect.height / 2),
+);
+const expanded = await shapeState();
+check(
+  "clic RÉEL sur « Déplier » : la commande se déplie (aria-expanded=true)",
+  expanded.folded === false &&
+    expanded.toggleExpanded === "true" &&
+    /Replier la commande/.test(expanded.toggleLabel ?? ""),
+  String(expanded.toggleLabel),
+);
+check(
+  "⚠️ commande DÉPLIÉE : les boutons Valider/Refuser restent dans le viewport",
+  expanded.validerVisible && expanded.refuserVisible,
+  `fenêtre bas ${Math.round(expanded.bottom)} ≤ ${expanded.vh}`,
+);
+await shot("approval-shape-expanded");
+
+/* 9c) NON-RÉGRESSION sur la fenêtre longue : défilement interne + drag. */
+await evaluate(`(() => {
+  const body = document.querySelector(${JSON.stringify(LONG_SELECTOR)} + ' .approval-window__body');
+  body.scrollTop = 400;
+  return body.scrollTop;
+})()`);
+const beforeDrag = await rectOf(LONG_SELECTOR);
+const dbarX = Math.round(beforeDrag.left + beforeDrag.width / 2);
+const dbarY = Math.round(beforeDrag.top + 16);
+await mouseDrag(dbarX, dbarY, dbarX - 200, dbarY - 120);
+const afterDrag = await rectOf(LONG_SELECTOR);
+check(
+  "DÉPLAÇABLE (fenêtre longue, contenu défilé) : la position change au glisser réel",
+  Math.abs(afterDrag.left - beforeDrag.left) > 40 && Math.abs(afterDrag.top - beforeDrag.top) > 30,
+  `avant=(${Math.round(beforeDrag.left)},${Math.round(beforeDrag.top)}) après=(${Math.round(afterDrag.left)},${Math.round(afterDrag.top)})`,
+);
+const scrollKept = await evaluate(
+  `document.querySelector(${JSON.stringify(LONG_SELECTOR)} + ' .approval-window__body').scrollTop`,
+);
+check("le défilement interne est conservé après le drag", scrollKept > 0, `scrollTop=${scrollKept}`);
+
+/* 9d) Clic à côté : la fenêtre longue RESTE affichée (non bloquante, non fermable). */
+await mouseClick(60, 60);
+check("clic à côté : la fenêtre longue RESTE affichée", !!(await shapeState()));
+
+/* 9e) FENÊTRE ÉTROITE (≤ 640 px, barre latérale en rail) : forme encore utilisable. */
+await send("Emulation.setDeviceMetricsOverride", { width: 600, height: 800, deviceScaleFactor: 1, mobile: false });
+await navigate(`${longServer.base}/`);
+await waitFor(`!!document.querySelector(${JSON.stringify(LONG_SELECTOR)})`);
+const narrow = await shapeState();
+check(
+  "fenêtre étroite (600×800) : tient dans le viewport et reste en PAYSAGE",
+  narrow.left >= 0 &&
+    narrow.right <= narrow.vw + 1 &&
+    narrow.bottom <= narrow.vh + 1 &&
+    narrow.ratio > 1,
+  `${Math.round(narrow.width)}×${Math.round(narrow.height)} px ; ratio ${narrow.ratio} ; viewport ${narrow.vw}×${narrow.vh}`,
+);
+check(
+  "fenêtre étroite : Valider/Refuser toujours atteignables",
+  narrow.validerVisible && narrow.refuserVisible,
+);
+await shot("approval-shape-narrow");
+await send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+longServer.proc.kill("SIGTERM");
 
 server.proc.kill("SIGTERM");
 await sleep(300);

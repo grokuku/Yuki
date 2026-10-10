@@ -379,6 +379,75 @@ describe("plusieurs demandes en attente — aucune n'écrase l'autre", () => {
   });
 });
 
+describe("commande longue — REPLI / DÉPLI (volume masqué mais ANNONCÉ)", () => {
+  const longCommand = Array.from({ length: 40 }, (_, i) => `echo ligne ${i + 1}`).join("\n");
+
+  it("replie par défaut une commande longue : contenu ENTIER gardé + indication explicite", () => {
+    const { layer } = setup();
+    layer.show(approval({ id: "fold1", command: longCommand }));
+    const win = windows()[0];
+    const region = win.querySelector(".approval__command");
+    expect(region?.className).toContain("is-folded");
+    // Rien n'est tronqué en mémoire : le texte COMPLET reste dans le DOM.
+    expect(region?.textContent).toBe(longCommand);
+    const toggle = win.querySelector(".approval__fold-toggle");
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle?.getAttribute("aria-controls")).toBe(region?.getAttribute("id"));
+  });
+
+  it("le repli ANNONCE le volume masqué (jamais silencieux)", () => {
+    const { layer } = setup();
+    layer.show(approval({ id: "fold1b", command: longCommand }));
+    const toggle = windows()[0].querySelector(".approval__fold-toggle");
+    expect(toggle?.textContent).toBe("Déplier la commande (40 lignes, 32 masquées)");
+  });
+
+  it("déplie au CLIC puis replie (aria-expanded synchronisé)", () => {
+    const { layer } = setup();
+    layer.show(approval({ id: "fold2", command: longCommand }));
+    const win = windows()[0];
+    const region = win.querySelector(".approval__command");
+    const toggle = win.querySelector(".approval__fold-toggle");
+    toggle?.click();
+    expect(region?.className).not.toContain("is-folded");
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle?.textContent).toBe("Replier la commande (40 lignes)");
+    toggle?.click();
+    expect(region?.className).toContain("is-folded");
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("ne replie PAS une commande courte (aucun bouton inutile)", () => {
+    const { layer } = setup();
+    layer.show(approval({ id: "short" }));
+    expect(windows()[0].querySelector(".approval__fold-toggle")).toBeNull();
+  });
+
+  it("le repli reste DANS le corps défilable ; la barre d'actions est un frère fixe", () => {
+    const { layer } = setup();
+    layer.show(approval({ id: "struct", command: longCommand }));
+    const win = windows()[0];
+    const body = win.querySelector(".approval-window__body");
+    expect(win.querySelector(".approval__fold")?.parent).toBe(body);
+    // Les boutons de décision sont HORS du corps défilable (ils ne défilent pas).
+    const actions = win.querySelector(".approval__actions");
+    expect(actions?.parent).toBe(win);
+    expect(body?.children).not.toContain(actions);
+  });
+
+  it("⚠️ ne replie JAMAIS l'essentiel : raison, machine et compte à rebours HORS du repli", () => {
+    const { layer } = setup();
+    layer.show(approval({ id: "ess", command: longCommand }));
+    const win = windows()[0];
+    expect(win.querySelector(".approval__reason")?.parent?.className).toContain("approval-window__meta");
+    expect(win.querySelector(".approval__expiry")?.parent?.className).toContain("approval-window__meta");
+    expect(win.querySelector(".approval__machine")?.parent?.className).toContain("approval__head");
+    // L'APERÇU reste visible : le début de la commande est présent même replié.
+    expect(win.querySelector(".approval__command")?.textContent).toContain("echo ligne 1");
+  });
+});
+
 describe("identité machine — nom + identifiant", () => {
   it("privilégie le nom lisible, replie sur l'identifiant", () => {
     expect(machineLabel({ agentId: "a1", agentName: "nuc00" })).toBe("nuc00");
@@ -411,6 +480,25 @@ describe("garde-fous statiques (CSP + positionnement par CSSOM)", () => {
   it("compte une DURÉE et ne compare JAMAIS l'horodatage serveur à l'horloge cliente", () => {
     expect(source).toContain("ttlSeconds");
     expect(source).not.toContain("Date.parse");
+  });
+
+  it("la forme PAYSAGE est bornée par le viewport (aspect-ratio + max-height)", () => {
+    expect(css).toMatch(/\.approval-window\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*9/);
+    expect(css).toMatch(/\.approval-window\s*\{[^}]*max-height:\s*calc\(100vh/);
+    expect(css).toMatch(/\.approval-window\s*\{[^}]*max-width:\s*calc\(100vw/);
+  });
+
+  it("le défilement est INTERNE au corps, la barre d'actions ne défile pas", () => {
+    expect(css).toMatch(/\.approval-window__body\s*\{[^}]*overflow-y:\s*auto/);
+    expect(css).toMatch(/\.approval-window \.approval__actions\s*\{[^}]*flex:\s*0 0 auto/);
+  });
+
+  it("le repli est un VRAI bouton (aria-expanded) qui annonce le volume masqué", () => {
+    expect(source).toContain('class: "approval__fold-toggle"');
+    expect(source).toContain('type: "button"');
+    expect(source).toContain('"aria-expanded"');
+    expect(source).toContain('"aria-controls"');
+    expect(source).toContain("Déplier");
   });
 
   it("rappelle que le résultat n'entre pas dans l'historique", () => {

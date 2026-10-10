@@ -32,6 +32,11 @@ const SECOND_MS = 1000;
 const EDGE = 16;
 /** Décalage (px) en cascade quand plusieurs demandes sont en attente. */
 const CASCADE = 28;
+/**
+ * Lignes visibles d'un bloc replié : un APERÇU substantiel, jamais 2 lignes.
+ * Au-delà, le reste est masqué mais ANNONCÉ (nombre de lignes) et dépliable.
+ */
+const PREVIEW_LINES = 8;
 /** Clé de persistance de la dernière position déplacée (localStorage). */
 export const POSITION_KEY = "yuki.approval.position";
 
@@ -91,6 +96,49 @@ function h(tag, props = {}, children = []) {
     el.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
   return el;
+}
+
+/**
+ * Bloc de texte REPLIABLE (commande longue, sortie…) :
+ *   - replié par défaut dès qu'il dépasse `PREVIEW_LINES` lignes ;
+ *   - le CONTENU ENTIER reste dans le DOM (le repli est VISUEL : hauteur bornée
+ *     par la classe `is-folded`), donc rien n'est perdu ni tronqué ;
+ *   - un VRAI `<button>` (clavier + `aria-expanded` + `aria-controls`) annonce
+ *     EXPLICITEMENT le volume masqué : « Déplier la commande (120 lignes,
+ *     112 masquées) » ⇒ un repli n'est JAMAIS silencieux.
+ *
+ * ⚠️ Sécurité : ce repli porte sur le VOLUME (script, sortie), jamais sur la
+ * raison de classification, la machine, le compte à rebours ni l'aperçu de la
+ * commande (les `PREVIEW_LINES` premières lignes restent visibles).
+ */
+let foldSeq = 0;
+function foldBlock({ tag, className, text, noun }) {
+  const value = String(text ?? "");
+  const lines = value.split("\n").length;
+  const regionId = `approval-fold-${++foldSeq}`;
+  const region = h(tag, { class: className, id: regionId, text: value });
+  if (lines <= PREVIEW_LINES) return region;
+
+  const hidden = lines - PREVIEW_LINES;
+  const foldedLabel = `Déplier ${noun} (${lines} lignes, ${hidden} masquées)`;
+  const expandedLabel = `Replier ${noun} (${lines} lignes)`;
+  let folded = true;
+  region.className = `${className} is-folded`;
+
+  const toggle = h("button", {
+    class: "approval__fold-toggle",
+    type: "button",
+    "aria-expanded": "false",
+    "aria-controls": regionId,
+  });
+  toggle.textContent = foldedLabel;
+  toggle.addEventListener("click", () => {
+    folded = !folded;
+    region.className = folded ? `${className} is-folded` : className;
+    toggle.setAttribute("aria-expanded", folded ? "false" : "true");
+    toggle.textContent = folded ? foldedLabel : expandedLabel;
+  });
+  return h("div", { class: "approval__fold" }, [region, toggle]);
 }
 
 /** Taille LUE (px) d'un élément déjà monté, avec repli sûr (mesure tardive). */
@@ -409,8 +457,18 @@ export function createApprovalLayer({
       },
       head: headWith(approval, []),
     });
-    el.append(
-      h("code", { class: "approval__command", text: String(approval.command ?? "") }),
+    // ⚠️ Structure : `body` DÉFILE (le volume : la commande repliable), `meta`
+    // (raison + compte à rebours) et `actions` (Valider/Refuser) restent FIXES
+    // dans la fenêtre ⇒ l'essentiel de la décision est TOUJOURS visible.
+    const body = h("div", { class: "approval-window__body" }, [
+      foldBlock({
+        tag: "code",
+        className: "approval__command",
+        text: String(approval.command ?? ""),
+        noun: "la commande",
+      }),
+    ]);
+    const meta = h("div", { class: "approval-window__meta" }, [
       reasons
         ? h("p", { class: "approval__reason" }, [
             "Pourquoi elle est classée destructrice : ",
@@ -419,8 +477,8 @@ export function createApprovalLayer({
           ])
         : null,
       h("p", { class: "approval__expiry", text: expiryText(deadline) }),
-      h("div", { class: "approval__actions" }, [approve, deny, note]),
-    );
+    ]);
+    el.append(body, meta, h("div", { class: "approval__actions" }, [approve, deny, note]));
 
     const entry = { el, timer: null, approve, deny, note, deadline, pos };
     requests.set(id, entry);
@@ -475,19 +533,34 @@ export function createApprovalLayer({
         close,
       ],
     });
-    el.append(h("code", { class: "approval__command", text: String(result.command ?? "") }));
+    const bodyChildren = [
+      foldBlock({
+        tag: "code",
+        className: "approval__command",
+        text: String(result.command ?? ""),
+        noun: "la commande",
+      }),
+    ];
     if (typeof result.output === "string" && result.output.length > 0) {
-      el.append(h("pre", { class: "approval__output", text: result.output }));
+      bodyChildren.push(
+        foldBlock({
+          tag: "pre",
+          className: "approval__output",
+          text: result.output,
+          noun: "la sortie",
+        }),
+      );
     }
     if (result.message) {
-      el.append(h("p", { class: "approval__message", text: String(result.message) }));
+      bodyChildren.push(h("p", { class: "approval__message", text: String(result.message) }));
     }
-    el.append(
+    bodyChildren.push(
       h("p", {
         class: "approval__note",
         text: "Résultat temporaire : il n'est pas conservé dans l'historique de la conversation.",
       }),
     );
+    el.append(h("div", { class: "approval-window__body" }, bodyChildren));
 
     entryRef.el = el;
     results.add(entryRef);

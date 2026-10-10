@@ -34,6 +34,24 @@ import type { GpuReport } from "../../src/types/gpu.js";
 
 const stateDir = process.env.YUKI_E2E_APPROVAL_DIR;
 if (!stateDir) throw new Error("YUKI_E2E_APPROVAL_DIR requis");
+
+/**
+ * Longueur (en lignes) de la commande de la demande #1. Par défaut une commande
+ * courte ; un test de FORME la rend énorme (ex. 120 lignes) pour prouver que la
+ * fenêtre ne dépasse jamais le viewport.
+ * `rm -rf /srv/cache` reste dans les PREMIÈRES lignes (aperçu visible même replié).
+ */
+function longCommand(lines: number): string {
+  const head = ["#!/usr/bin/env bash", "set -euo pipefail", "rm -rf /srv/cache", "cd /srv/data"];
+  const body: string[] = [];
+  for (let i = head.length; i < lines; i += 1) {
+    body.push(`echo "étape ${i + 1}/… : synchronisation du volume /srv/data"`);
+  }
+  return [...head, ...body].slice(0, Math.max(head.length, lines)).join("\n");
+}
+
+const longLines = Number.parseInt(process.env.YUKI_E2E_APPROVAL_LONG_LINES ?? "", 10);
+const command1 = Number.isFinite(longLines) && longLines > 0 ? longCommand(longLines) : "rm -rf /srv/cache";
 const agentDir = join(stateDir, "agent");
 const cwd = join(stateDir, "workspace");
 const sessionsDir = join(agentDir, "sessions");
@@ -69,8 +87,10 @@ class StubApprovalPort implements ApprovalGatewayPort {
     });
     this.entries.set(
       "apr-e2e-1",
-      mk("apr-e2e-1", "agent-nuc00", "nuc00", "rm -rf /srv/cache", true, ["suppression (rm)"]),
+      mk("apr-e2e-1", "agent-nuc00", "nuc00", command1, true, ["suppression (rm)"]),
     );
+    // Une seule demande pour les tests de FORME (fenêtre isolée, sans chevauchement).
+    if (process.env.YUKI_E2E_APPROVAL_ONLY_LONG === "1") return;
     this.entries.set(
       "apr-e2e-2",
       mk("apr-e2e-2", "agent-nuc01", "nuc01", "ls -la /srv", false, []),
