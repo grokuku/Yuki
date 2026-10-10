@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import {
   channelForAssistantEvent,
   contentTextFromMessage,
+  metricsFromCustomEntry,
+  RUN_METRICS_CUSTOM_TYPE,
   sanitizeErrorText,
   transcriptFromEntries,
   unstreamedContentSuffix,
@@ -223,6 +225,134 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       { role: "user", text: "zéro" },
       { role: "assistant", text: "nan" },
     ]);
+  });
+});
+
+describe("pi.events — statistiques d'exécution persistées (run_metrics)", () => {
+  const assistantEntry = (id: string, text: string): unknown => ({
+    type: "message",
+    id,
+    parentId: null,
+    timestamp: "2024-12-03T14:00:02.000Z",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  const metricsEntry = (
+    id: string,
+    parentId: unknown,
+    data: unknown,
+    customType: string = RUN_METRICS_CUSTOM_TYPE,
+  ): unknown => ({ type: "custom", id, parentId, customType, data });
+
+  it("corrèle par `parentId` et restitue les TROIS valeurs (ttftMs/totalMs/tokensOut)", () => {
+    const entries = [
+      assistantEntry("a1", "Première réponse"),
+      metricsEntry("m1", "a1", {
+        ttftMs: 842,
+        totalMs: 3120,
+        tokensOut: 412,
+      }),
+    ];
+    expect(transcriptFromEntries(entries)).toEqual([
+      {
+        role: "assistant",
+        text: "Première réponse",
+        metrics: { ttftMs: 842, totalMs: 3120, tokensOut: 412 },
+      },
+    ]);
+  });
+
+  it("un ancien message SANS entrée de métriques reste SANS pied (aucune ligne)", () => {
+    const entries = [assistantEntry("a1", "Réponse sans stats")];
+    expect(transcriptFromEntries(entries)).toEqual([
+      {
+        role: "assistant",
+        text: "Réponse sans stats",
+      },
+    ]);
+  });
+
+  it("IGNORE une entrée de métriques ORPHELINE (parentId sans message assistant)", () => {
+    const entries = [
+      assistantEntry("a1", "Réponse"),
+      metricsEntry("m1", "inconnu", { totalMs: 10 }),
+      metricsEntry("m2", null, { totalMs: 20 }),
+    ];
+    const transcript = transcriptFromEntries(entries);
+    expect(transcript).toHaveLength(1);
+    expect(transcript[0].metrics).toBeUndefined();
+  });
+
+  it("n'attache JAMAIS de métriques à un message UTILISATEUR", () => {
+    const entries = [
+      {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        message: { role: "user", content: "question" },
+      },
+      metricsEntry("m1", "u1", { totalMs: 10 }),
+    ];
+    expect(transcriptFromEntries(entries)).toEqual([
+      { role: "user", text: "question" },
+    ]);
+    expect(JSON.stringify(transcriptFromEntries(entries))).not.toContain("totalMs");
+  });
+
+  it("un autre `customType` est ignoré (aucun pied)", () => {
+    const entries = [
+      assistantEntry("a1", "Réponse"),
+      metricsEntry("m1", "a1", { totalMs: 10 }, "autre.extension"),
+    ];
+    expect(transcriptFromEntries(entries)[0].metrics).toBeUndefined();
+  });
+
+  it("n'expose QUE les trois NOMBRES : tout texte du `data` est ignoré (pas de fuite)", () => {
+    const entries = [
+      assistantEntry("a1", "Réponse"),
+      metricsEntry("m1", "a1", {
+        ttftMs: 5,
+        totalMs: 9,
+        tokensOut: 3,
+        // ⚠️ Contenu de prompt synthétique glissé de force : il ne doit JAMAIS
+        // ressortir ni dans le transcript ni dans les métriques.
+        prompt: "[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN] SORTIE-SECRÈTE",
+        text: "SORTIE-SECRÈTE",
+      }),
+    ];
+    const transcript = transcriptFromEntries(entries);
+    expect(transcript[0].metrics).toEqual({ ttftMs: 5, totalMs: 9, tokensOut: 3 });
+    expect(JSON.stringify(transcript)).not.toContain("SORTIE-SECRÈTE");
+    expect(JSON.stringify(transcript)).not.toContain("ARRIÈRE-PLAN");
+  });
+
+  it("ignore des données malformées (totalMs requis, valeurs non finies)", () => {
+    expect(metricsFromCustomEntry({ type: "custom", customType: RUN_METRICS_CUSTOM_TYPE, data: {} })).toBeUndefined();
+    expect(
+      metricsFromCustomEntry({
+        type: "custom",
+        customType: RUN_METRICS_CUSTOM_TYPE,
+        data: { totalMs: Number.NaN },
+      }),
+    ).toBeUndefined();
+    expect(
+      metricsFromCustomEntry({
+        type: "custom",
+        customType: RUN_METRICS_CUSTOM_TYPE,
+        data: { totalMs: 12, ttftMs: "8", tokensOut: null },
+      }),
+    ).toEqual({ totalMs: 12 });
+    expect(metricsFromCustomEntry(null)).toBeUndefined();
+  });
+
+  it("reste un mapping PUR (même entrée ⇒ même sortie)", () => {
+    const entries = [
+      assistantEntry("a1", "Réponse"),
+      metricsEntry("m1", "a1", { totalMs: 42 }),
+    ];
+    const first = transcriptFromEntries(entries);
+    const second = transcriptFromEntries(entries);
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
   });
 });
 

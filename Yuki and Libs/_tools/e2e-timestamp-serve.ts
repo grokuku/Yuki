@@ -82,7 +82,15 @@ function user(stamp: string, text: string, ts: number): Record<string, unknown> 
  */
 function seed(entries: Array<Record<string, unknown>>): string {
   const manager = SessionManager.create(cwd, sessionsDir);
-  for (const entry of entries) manager.appendMessage(entry as never);
+  for (const entry of entries) {
+    // Entrée `custom` de statistiques d'exécution : rattachée (parentId) au
+    // message assistant précédent, exactement comme le fait le host.
+    if (entry.type === "custom") {
+      manager.appendCustomEntry(entry.customType as string, entry.data);
+    } else {
+      manager.appendMessage(entry as never);
+    }
+  }
   const file = manager.getSessionFile();
   if (file) {
     const lastActivity = entries.reduce((max, entry) => {
@@ -95,17 +103,35 @@ function seed(entries: Array<Record<string, unknown>>): string {
   return manager.getSessionId();
 }
 
+/** Entrée `custom` de statistiques d'exécution (nombres seuls) d'un message assistant. */
+function runMetrics(
+  ttftMs: number,
+  totalMs: number,
+  tokensOut: number,
+): Record<string, unknown> {
+  return {
+    type: "custom",
+    customType: "yuki.run_metrics",
+    data: { ttftMs, totalMs, tokensOut },
+  };
+}
+
 const at = (iso: string): number => Date.parse(iso);
 
 // Fil A — DEUX jours (2026-10-07 puis 2026-10-08) : DEUX séparateurs attendus,
 // dont deux messages le MÊME jour (aucun séparateur entre eux).
+// Statistiques PERSISTÉES : la 1re et la 3e réponse en portent (le pied doit
+// survivre au rechargement), la 2e N'EN A PAS (preuve d'absence de ligne
+// fantôme). Un message sans stats ne doit garder AUCUN pied.
 seed([
   user("2026-10-07 15:39", "Première question du fil A", at("2026-10-07T15:39:00Z")),
   assistant("Première réponse du fil A", at("2026-10-07T15:41:00Z")),
+  runMetrics(842, 3120, 412),
   user("2026-10-07 16:12", "Deuxième question, même jour", at("2026-10-07T16:12:00Z")),
   assistant("Deuxième réponse, même jour", at("2026-10-07T16:14:00Z")),
   user("2026-10-08 09:05", "Question du lendemain", at("2026-10-08T09:05:00Z")),
   assistant("Réponse du lendemain", at("2026-10-08T09:07:00Z")),
+  runMetrics(1100, 2500, 210),
 ]);
 
 // Fil B — autre jour, plus ANCIEN (le fil A reste le plus récent = actif).

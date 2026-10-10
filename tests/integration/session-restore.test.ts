@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createWsTransport } from "../../src/gateway/ws/server.js";
 import type { Transport } from "../../src/gateway/ws/transport.js";
 import { createLogger } from "../../src/observability/logger.js";
+import { RUN_METRICS_CUSTOM_TYPE } from "../../src/pi/events.js";
 import { createPiHost, type PiHost } from "../../src/pi/host.js";
 import { TestClient } from "../gateway/ws/harness.js";
 
@@ -87,6 +88,15 @@ function seedSession(world: World): void {
     },
     stopReason: "stop",
     timestamp: T0 + 1000,
+  });
+  // Statistiques d'exécution PERSISTÉES, enfant du message assistant ci-dessus
+  // (comme les écrit désormais le host via `appendCustomEntry`). Le SDK Pi doit
+  // tolérer cette entrée à la relecture ; la restauration doit la CORRÉLER au
+  // message (par `parentId`) et exposer `metrics`.
+  manager.appendCustomEntry(RUN_METRICS_CUSTOM_TYPE, {
+    ttftMs: 842,
+    totalMs: 3120,
+    tokensOut: 412,
   });
   // Prompt SYNTHÉTIQUE de report de job : masqué du transcript (comme en direct).
   manager.appendMessage({
@@ -201,9 +211,24 @@ describe("intégration — reprise de session restaure le transcript", () => {
     // préfixe d'horodatage n'est PAS visible ; l'instant du message est conservé.
     expect(state?.transcript).toEqual([
       { role: "user", text: "Bonjour, qui es-tu ?", timestamp: T0 },
-      { role: "assistant", text: "Je suis Yuki.", timestamp: T0 + 1000 },
+      {
+        role: "assistant",
+        text: "Je suis Yuki.",
+        timestamp: T0 + 1000,
+        // Statistiques RESTITUÉES après relecture de la session (3 valeurs).
+        metrics: { ttftMs: 842, totalMs: 3120, tokensOut: 412 },
+      },
+      // Ce message n'a AUCUNE entrée run_metrics ⇒ aucun pied (pas de fantôme).
       { role: "assistant", text: "Le job est terminé.", timestamp: T0 + 3000 },
     ]);
+    // Le SDK tolère l'entrée `custom` : la reprise aboutit, et les métriques
+    // sont bien attachées au message porteur (jamais à un autre).
+    expect(state?.transcript[1].metrics).toEqual({
+      ttftMs: 842,
+      totalMs: 3120,
+      tokensOut: 412,
+    });
+    expect(state?.transcript[2].metrics).toBeUndefined();
     expect(JSON.stringify(state?.transcript)).not.toContain("raisonnement secret");
     expect(JSON.stringify(state?.transcript)).not.toContain(REPORT_HEADER);
     expect(JSON.stringify(state?.transcript)).not.toContain("horodatage");
@@ -236,6 +261,42 @@ describe("intégration — reprise de session restaure le transcript", () => {
     expect(snapshot2?.type).toBe("snapshot");
     if (snapshot2?.type !== "snapshot") return;
     expect(snapshot2.transcript).toEqual(snapshot.transcript);
+  });
+
+  it("session ANCIENNE sans run_metrics : s'ouvre normalement, sans pied ni erreur (compatibilité desc.)", async () => {
+    const world = emptyWorld();
+    const manager = SessionManager.create(world.cwd, world.sessionsDir);
+    manager.appendMessage({
+      role: "user",
+      content: "[horodatage] 2026-10-07 15:39 (heure locale) Ancienne question",
+      timestamp: T0,
+    });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Ancienne réponse." }],
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: T0 + 1000,
+    });
+    // Aucune entrée `run_metrics` : la reprise doit aboutir sans erreur et
+    // SANS pied (jamais de ligne fantôme).
+    const host = await startRealHost(world);
+    const state = host.getState();
+    expect(state?.transcript).toEqual([
+      { role: "user", text: "Ancienne question", timestamp: T0 },
+      { role: "assistant", text: "Ancienne réponse.", timestamp: T0 + 1000 },
+    ]);
+    expect(state?.transcript.every((entry) => entry.metrics === undefined)).toBe(true);
   });
 
   it("sans session, le transcript et le snapshot restent vides (propre)", async () => {

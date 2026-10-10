@@ -16,8 +16,10 @@ import { describe, expect, it } from "vitest";
 import {
   LOOPBACK_DNS_NAMES,
   LOOPBACK_IP_ADDRESSES,
+  localIpAddresses,
   serverCertificateNames,
   splitServerNames,
+  uncoveredLocalAddresses,
 } from "../../src/agents/index.js";
 
 describe("serverCertificateNames", () => {
@@ -105,5 +107,54 @@ describe("serverCertificateNames", () => {
     expect(splitServerNames(undefined)).toEqual([]);
     expect(splitServerNames("")).toEqual([]);
     expect(splitServerNames(" a , b ,, ")).toEqual(["a", "b"]);
+  });
+});
+
+/**
+ * Diagnostic au démarrage : lister les adresses d'interface locales et SIGNALER
+ * celles qui ne sont pas couvertes par le SAN — c'est exactement le piège
+ * « certificate is valid for 127.0.0.1, not 192.168.1.100 » d'un agent d'un autre
+ * sous-réseau. ⚠️ Aucune inscription automatique : un simple avertissement.
+ */
+describe("diagnostic des adresses locales NON couvertes", () => {
+  type Ifaces = NodeJS.Dict<import("node:os").NetworkInterfaceInfo[]>;
+  function info(address: string, family: string | number, internal = false) {
+    return { address, family, internal, netmask: "", mac: "", cidr: null };
+  }
+
+  it("localIpAddresses ignore boucle locale, 0.0.0.0 et doublons", () => {
+    const interfaces = {
+      lo: [info("127.0.0.1", "IPv4", true)],
+      lo6: [info("::1", "IPv6", true)],
+      eth0: [info("192.168.1.100", "IPv4"), info("10.10.0.5", 4)],
+      docker0: [info("172.17.0.2", "IPv4")],
+      any: [info("0.0.0.0", "IPv4")],
+      dupe: [info("192.168.1.100", "IPv4")],
+    } as unknown as Ifaces;
+
+    const ips = localIpAddresses(interfaces);
+    expect(ips).toContain("192.168.1.100");
+    expect(ips).toContain("10.10.0.5");
+    expect(ips).toContain("172.17.0.2");
+    expect(ips).not.toContain("127.0.0.1");
+    expect(ips).not.toContain("::1");
+    expect(ips).not.toContain("0.0.0.0");
+    expect(ips.filter((ip) => ip === "192.168.1.100")).toHaveLength(1);
+  });
+
+  it("uncoveredLocalAddresses nomme les adresses absentes du SAN", () => {
+    const names = serverCertificateNames({ bindHost: "0.0.0.0", serverName: "10.10.0.5" });
+    const uncovered = uncoveredLocalAddresses(names, [
+      "10.10.0.5",
+      "192.168.1.100",
+      "127.0.0.1",
+    ]);
+    // 10.10.0.5 est couverte, 192.168.1.100 ne l'est pas ; 127.0.0.1 l'est toujours.
+    expect(uncovered).toEqual(["192.168.1.100"]);
+  });
+
+  it("uncoveredLocalAddresses : rien quand tout est couvert", () => {
+    const names = serverCertificateNames({ serverName: "192.168.1.100" });
+    expect(uncoveredLocalAddresses(names, ["192.168.1.100"])).toEqual([]);
   });
 });

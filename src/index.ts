@@ -34,10 +34,12 @@ import {
   closeAgentsServer,
   createAgentsServer,
   installServerCertificateReload,
+  localIpAddresses,
   maxSizeBytesFromMb,
   PairingManager,
   serverCertificateNames,
   startAgentsServer,
+  uncoveredLocalAddresses,
   type AgentLevel,
 } from "./agents/index.js";
 import type { AgentsApiDeps } from "./gateway/routes/agents.js";
@@ -400,10 +402,32 @@ async function main(): Promise<void> {
       });
     const agentsServerNames = currentServerNames();
     const agentsServerCert = agentCa.ensureServerCertificate(agentsServerNames);
+    // Diagnostic : SAN effectif + adresses d'écoute locales. ⚠️ Aucune
+    // inscription automatique ; on AVERTIT si une interface locale n'est pas
+    // couverte — c'est exactement le piège « certificate is valid for …,
+    // not <ip> » où un agent d'un autre sous-réseau vient d'échouer.
+    const localAddresses = localIpAddresses();
     logger.info("agents.server_cert", {
       dns_names: agentsServerNames.dnsNames.join(","),
       ip_addresses: agentsServerNames.ipAddresses.join(","),
+      local_addresses: localAddresses.join(","),
     });
+    const uncovered = uncoveredLocalAddresses(agentsServerNames, localAddresses);
+    if (uncovered.length > 0) {
+      logger.warn("agents.server_cert.local_addresses_uncovered", {
+        addresses: uncovered.join(","),
+        server_name: config.getString("agents.serverName"),
+        hint:
+          "Une adresse d'interface locale de la machine n'est PAS couverte par le SAN " +
+          "du certificat serveur : un agent qui joint Yuki par l'une d'elles échouera " +
+          "la poignée de main TLS (« x509: certificate is valid for …, not <ip> »). " +
+          "Ajoutez ces adresses, séparées par des virgules, à « agents.serverName » " +
+          "(onglet Agents de /config) : le certificat serveur est rechargé À CHAUD, " +
+          "sans ré-appairage. ⚠️ Si Yuki tourne dans un conteneur, ces adresses " +
+          "peuvent être celles du conteneur et non de l'hôte : ne les déclarez que si " +
+          "vos agents joignent réellement Yuki par elles.",
+      });
+    }
     if (
       agentsBindHost === "0.0.0.0" &&
       config.getString("agents.serverName").trim() === ""

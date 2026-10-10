@@ -176,15 +176,34 @@ export interface RunHandle {
 export type PiSessionStateName = "idle" | "streaming" | "error";
 
 /**
+ * Statistiques d'exécution d'un message assistant, PERSISTÉES dans la session.
+ * Nombres UNIQUEMENT (jamais de texte : le prompt est éphémère et ne doit pas
+ * entrer dans l'historique). Absentes d'un ancien message : l'UI n'affiche
+ * alors AUCUN pied (pas de ligne vide fantôme).
+ */
+export interface RunMetrics {
+  /** TTFT en ms (t0 → premier token). Absent si aucun token n'a été streamé. */
+  ttftMs?: number;
+  /** Durée totale du run en ms. */
+  totalMs: number;
+  /** Tokens de sortie consommés par le run. Absent si inconnu. */
+  tokensOut?: number;
+}
+
+/**
  * Entrée de transcript : CONTENU SEUL (jamais de réflexion).
  * `timestamp` = instant du message en ms Unix, quand il est connu (message
  * restauré depuis une session, ou message live). Absent pour un ancien message
  * SANS horodatage : l'UI n'affiche alors AUCUNE heure (jamais d'erreur).
+ * `metrics` = statistiques d'exécution restaurées depuis la session (TTFT,
+ * total, tokens), ou posées en direct. Absent pour un message SANS statistiques
+ * ⇒ l'UI n'affiche alors AUCUN pied.
  */
 export interface TranscriptEntry {
   role: "user" | "assistant";
   text: string;
   timestamp?: number;
+  metrics?: RunMetrics;
 }
 
 /** État d'une session, sérialisable tel quel. */

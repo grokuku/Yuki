@@ -13,11 +13,14 @@
  *   - `agents.serverName` : adresse(s) ou nom(s) **déclarés par l'opérateur**
  *     (voir plus bas), séparés par des virgules.
  *
- * ⚠️ **Aucune détection automatique d'adresse locale.** Yuki tourne dans un
- * conteneur : `os.networkInterfaces()` ne renverrait que les interfaces DU
- * CONTENEUR (`172.17.x.x`…), **jamais** l'IP de l'hôte (`10.10.0.5`) que les
- * agents utilisent réellement. L'adresse vient donc **de la configuration**
- * (`agents.serverName`), jamais d'une supposition de Yuki.
+ * ⚠️ **Aucune inscription automatique d'adresse locale.** Yuki tourne souvent
+ * dans un conteneur : `os.networkInterfaces()` ne renverrait alors que les
+ * interfaces DU CONTENEUR (`172.17.x.x`…), **jamais** l'IP de l'hôte (`10.10.0.5`)
+ * que les agents utilisent réellement. L'adresse vient donc **de la
+ * configuration** (`agents.serverName`), jamais d'une supposition de Yuki.
+ * `localIpAddresses` / `uncoveredLocalAddresses` ne servent qu'à **avertir**
+ * l'opérateur d'une adresse locale absente du SAN (diagnostic au démarrage) —
+ * élargir le SAN reste une **décision de sécurité** de l'opérateur.
  *
  * ⚠️ **La vérification n'est PAS affaiblie.** Ce module enrichit le SAN ; il ne
  * touche ni à la vérification du nom d'hôte côté agent (Go `crypto/tls`,
@@ -29,6 +32,8 @@
  * donc dans une **chaîne unique, valeurs séparées par des virgules**. Une IP
  * littérale va dans `IPAddress`, un nom va dans `DNSName`.
  */
+
+import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 
 import { parseIpBytes } from "./x509.js";
 
@@ -135,4 +140,58 @@ export function serverCertificateNames(
   for (const token of splitServerNames(options.serverName)) addDeclared(token);
 
   return { dnsNames, ipAddresses };
+}
+
+/** `true` si l'adresse appartient à la boucle locale (`127.0.0.0/8`, `::1`). */
+function isLoopbackIp(value: string): boolean {
+  const bytes = parseIpBytes(value);
+  if (!bytes) return false;
+  if (bytes.length === 4) return bytes[0] === 127;
+  if (bytes.length === 16) {
+    return bytes.subarray(0, 15).every((byte) => byte === 0) && bytes[15] === 1;
+  }
+  return false;
+}
+
+/**
+ * Adresses IP des interfaces LOCALES de la machine (diagnostic), hors boucle
+ * locale et adresses « n'importe quelle interface ». ⚠️ Dans un conteneur, ce
+ * sont les interfaces DU CONTENEUR — d'où un simple **avertissement**, jamais une
+ * inscription automatique dans le SAN. Testable via un `interfaces` injecté.
+ */
+export function localIpAddresses(
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces(),
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const infos of Object.values(interfaces)) {
+    for (const info of infos ?? []) {
+      // `family` est `IPv4`/`IPv6` (chaîne) en Node moderne ; on tolère aussi
+      // la forme numérique historique (4/6) pour rester robuste.
+      const rawFamily = info.family as unknown;
+      const family =
+        rawFamily === 4 ? "IPv4" : rawFamily === 6 ? "IPv6" : String(rawFamily);
+      if (family !== "IPv4" && family !== "IPv6") continue;
+      const ip = stripIpDecoration(info.address);
+      if (!isUsableIp(ip) || isLoopbackIp(ip)) continue;
+      const key = ipKey(ip);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(ip);
+    }
+  }
+  return out;
+}
+
+/**
+ * Adresses locales NON couvertes par le SAN. ⚠️ **Diagnostic uniquement** :
+ * elles ne sont **jamais** ajoutées automatiquement (élargir le SAN est une
+ * décision de sécurité) — l'appelant **avertit** l'opérateur avec le geste à faire.
+ */
+export function uncoveredLocalAddresses(
+  names: ServerCertificateNames,
+  localAddresses: readonly string[] = localIpAddresses(),
+): string[] {
+  const covered = new Set(names.ipAddresses.map((ip) => ipKey(ip)));
+  return localAddresses.filter((ip) => !covered.has(ipKey(ip)));
 }

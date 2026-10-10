@@ -140,6 +140,11 @@ func cmdPair(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 					"\nLe code %s a expiré sans être validé ; génération d'un nouveau code…\n", code)
 			},
 			OnWaiting: waitAnnouncer(stdout),
+			OnNotice: func(message string) {
+				// ⚠️ Avertissement NON fatal (ex. code saisi différent) : l'appairage
+				// reste en attente, on informe sans interrompre la scrutation.
+				fmt.Fprintf(stdout, "\nAvertissement : %s\n", message)
+			},
 		})
 	if err != nil {
 		if agent.IsPairExpired(err) {

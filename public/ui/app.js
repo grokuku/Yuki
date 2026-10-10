@@ -417,6 +417,21 @@ function appendAssistantMessage(text = null, pinned = isConversationPinned(), ts
   return div;
 }
 
+/**
+ * Texte des infos TECHNIQUES (« TTFT … ms · total … ms · N tok »), ou `null`
+ * quand aucune statistique exploitable n'est fournie. Sert AUSSI BIEN à la
+ * trame temps réel `run_summary` qu'aux statistiques restaurées d'un message
+ * (`entry.metrics`). Un message sans statistiques n'affiche alors AUCUN pied.
+ */
+function metricsText(metrics) {
+  if (!metrics || typeof metrics.totalMs !== "number") return null;
+  const parts = [];
+  if (typeof metrics.ttftMs === "number") parts.push(`TTFT ${Math.round(metrics.ttftMs)} ms`);
+  parts.push(`total ${Math.round(metrics.totalMs)} ms`);
+  if (typeof metrics.tokensOut === "number") parts.push(`${metrics.tokensOut} tok`);
+  return parts.join(" · ");
+}
+
 function applyTranscript(transcript) {
   const pinned = isConversationPinned();
   // Le fil est reconstruit : on purge les blocs de validation (timers inclus)
@@ -437,8 +452,15 @@ function applyTranscript(transcript) {
   }
   for (const entry of transcript) {
     const ts = entry.timestamp;
-    if (entry.role === "user") appendMessage("user", entry.text ?? "", pinned, ts);
-    else appendAssistantMessage(entry.text ?? "", pinned, ts);
+    if (entry.role === "user") {
+      appendMessage("user", entry.text ?? "", pinned, ts);
+    } else {
+      // Statistiques PERSISTÉES : elles rétablissent le pied technique après un
+      // rechargement. Absentes (ancienne session) ⇒ aucun pied, aucune ligne.
+      const div = appendAssistantMessage(entry.text ?? "", pinned, ts);
+      const meta = metricsText(entry.metrics);
+      if (meta) setMeta(div, meta);
+    }
   }
   currentRenderer = null;
   pinIfNeeded(pinned);
@@ -710,11 +732,8 @@ function applyEvent(frame) {
     case "run_summary": {
       const target = els.conversation.lastElementChild;
       if (target && target.classList.contains("message--assistant")) {
-        const parts = [];
-        if (typeof frame.ttftMs === "number") parts.push(`TTFT ${Math.round(frame.ttftMs)} ms`);
-        parts.push(`total ${Math.round(frame.totalMs)} ms`);
-        if (typeof frame.tokensOut === "number") parts.push(`${frame.tokensOut} tok`);
-        setMeta(target, parts.join(" · "));
+        const text = metricsText(frame);
+        if (text) setMeta(target, text);
       }
       return;
     }

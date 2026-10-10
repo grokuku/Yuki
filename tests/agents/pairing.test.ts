@@ -234,16 +234,61 @@ describe("PairingManager", () => {
     expect(payload.agentId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it("mauvais code avec une session active ⇒ proof_invalid (pas de mise en attente)", () => {
+  it("code NON concordant avec une session active ⇒ conflit RÉCUPÉRABLE (mise en attente)", () => {
     const m = manager();
+    const other = "ABCD-2345-6798"; // code VALIDE mais différent de celui saisi
     m.submitCode(CODE, { ip: "1.2.3.4" });
-    const begin = agentBegin("ABCD-2345-6798");
+    const begin = agentBegin(other);
+    const result = m.beginPairing(begin.frame, { ip: "1.2.3.4" });
+    // ⚠️ Plus de `proof_invalid` opaque : la trame est MISE EN ATTENTE…
+    expect(result.status).toBe("mismatch");
+    if (result.status !== "mismatch") return;
+    expect(m.pendingCount()).toBe(1);
+    // …et la session active reste (l'essai compte : limite par code préservée).
+    expect(m.activeSessionCount()).toBe(1);
+
+    // RECOUVREMENT : dès que le BON code est saisi, la trame en attente est
+    // appariée — un code saisi différent au départ ne condamne plus l'appairage.
+    const submitted = m.submitCode(other, { ip: "1.2.3.4" });
+    expect(submitted.matched).toBe(true);
+    const polled = m.pollPairing(result.pairId);
+    expect(polled.status).toBe("ok");
+  });
+
+  it("essais NON concordants comptés : la limite par code est préservée", () => {
+    const m = manager({ maxAttempts: 2 });
+    m.submitCode(CODE, { ip: "1.2.3.4" });
+    for (let i = 0; i < 2; i += 1) {
+      // Nonces distincts (agentBegin) : ce ne sont pas des rejeux.
+      expect(m.beginPairing(agentBegin("ABCD-2345-6798").frame, { ip: "1.2.3.4" }).status).toBe(
+        "mismatch",
+      );
+    }
+    // Après `maxAttempts` essais non concordants, la session est invalidée.
+    try {
+      m.submitCode(CODE, { ip: "1.2.3.4" });
+      throw new Error("aurait dû échouer");
+    } catch (error) {
+      expect(pairCodeOf(error)).toBe("pair_rate_limited");
+    }
+  });
+
+  it("empreinte de CA NON concordante ⇒ pair_fp_mismatch (jamais proof_invalid)", () => {
+    const m = manager();
+    const begin = agentBegin(CODE, "f".repeat(64)); // empreinte ≠ CA courant
     try {
       m.beginPairing(begin.frame, { ip: "1.2.3.4" });
       throw new Error("aurait dû échouer");
     } catch (error) {
-      expect(pairCodeOf(error)).toBe("proof_invalid");
+      expect(pairCodeOf(error)).toBe("pair_fp_mismatch");
     }
+  });
+
+  it("empreinte de CA CONCORDANTE (re-appairage) ⇒ mise en attente nominale", () => {
+    const ca = CertificateAuthority.open({ dir: caDirectoryIn(tempDir()), logger });
+    const m = new PairingManager({ ca, logger });
+    const begin = agentBegin(CODE, ca.fingerprint);
+    expect(m.beginPairing(begin.frame, { ip: "1.2.3.4" }).status).toBe("pending");
   });
 
   it("sans trame en attente, submitCode signale matched=false", () => {

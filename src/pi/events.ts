@@ -9,7 +9,12 @@
  * assimilable à une réponse.
  */
 
-import type { DeltaChannel, PiUsage, TranscriptEntry } from "./types.js";
+import type {
+  DeltaChannel,
+  PiUsage,
+  RunMetrics,
+  TranscriptEntry,
+} from "./types.js";
 import { stripTimestampPrefix } from "./timestamp.js";
 
 /** Forme minimale d'un `assistantMessageEvent` du SDK. */
@@ -148,6 +153,49 @@ export interface TranscriptRestoreOptions {
   syntheticUserPrefixes?: readonly string[];
 }
 
+/**
+ * Type d'entrée `custom` portant les statistiques d'exécution d'un message
+ * assistant (`{ttftMs?, totalMs, tokensOut?}` — NOMBRES uniquement).
+ *
+ * Écrite par `src/pi/sdk-host.ts` via `SessionManager.appendCustomEntry`, donc
+ * en tant qu'enfant (`parentId`) de l'entrée de message assistant qu'elle
+ * documente. Le SDK Pi IGNORE les entrées `custom` dans le contexte du modèle
+ * (`sessionEntryToContextMessages` renvoie `[]`) : leur présence ne perturbe ni
+ * la reprise ni la compaction.
+ */
+export const RUN_METRICS_CUSTOM_TYPE = "yuki.run_metrics";
+
+/**
+ * Extrait les statistiques d'une entrée `custom` de type `yuki.run_metrics`.
+ *
+ * ⚠️ SEULS trois NOMBRES sont repris (`ttftMs`, `totalMs`, `tokensOut`) : tout
+ * champ inconnu — en particulier un éventuel texte — est IGNORÉ, afin qu'aucun
+ * contenu de prompt ne puisse fuiter dans l'historique. `totalMs` est requis ;
+ * sans lui, l'entrée est ignorée (le message restera sans pied).
+ */
+export function metricsFromCustomEntry(raw: unknown): RunMetrics | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const entry = raw as {
+    type?: unknown;
+    customType?: unknown;
+    data?: unknown;
+  };
+  if (entry.type !== "custom" || entry.customType !== RUN_METRICS_CUSTOM_TYPE) {
+    return undefined;
+  }
+  const data = entry.data;
+  if (!data || typeof data !== "object") return undefined;
+  const record = data as Record<string, unknown>;
+  const totalMs = finiteNumber(record.totalMs);
+  if (totalMs === undefined) return undefined;
+  const metrics: RunMetrics = { totalMs };
+  const ttftMs = finiteNumber(record.ttftMs);
+  if (ttftMs !== undefined) metrics.ttftMs = ttftMs;
+  const tokensOut = finiteNumber(record.tokensOut);
+  if (tokensOut !== undefined) metrics.tokensOut = tokensOut;
+  return metrics;
+}
+
 /** `true` si le texte d'un message utilisateur est un prompt synthétique. */
 function isSyntheticUserText(
   text: string,
@@ -168,11 +216,13 @@ function isSyntheticUserText(
  *     utilisateur est MASQUÉ (en stockage il est conservé ; voir timestamp.ts) ;
  *   - `timestamp` (ms Unix) est repris du message quand il est présent, afin
  *     que l'UI puisse afficher l'heure — y compris après restauration ;
- *   - les entrées d'outils, les résumés de compaction/branche, les entrées
- *     `custom` et les changements de modèle/niveau sont IGNORÉS (ils ne sont
- *     jamais dans le transcript live) ;
+ *   - les entrées d'outils, les résumés de compaction/branche, les changements
+ *     de modèle/niveau sont IGNORÉS (ils ne sont jamais dans le transcript live) ;
  *   - une entrée vide est ignorée (jamais de bulle muette) ;
- *   - un prompt utilisateur synthétique (report de job) est ignoré.
+ *   - un prompt utilisateur synthétique (report de job) est ignoré ;
+ *   - une entrée `custom` de type `yuki.run_metrics` n'apparaît JAMAIS comme
+ *     bulle, mais ses NOMBRES sont rattachés au message assistant dont elle est
+ *     l'enfant (`parentId`) et exposés via `TranscriptEntry.metrics`.
  *
  * Les entrées sont fournies dans l'ordre racine → feuille : l'ordre du retour
  * est donc l'ordre chronologique d'affichage. Mapping PUR et SANS état :
@@ -185,9 +235,13 @@ export function transcriptFromEntries(
 ): TranscriptEntry[] {
   const prefixes = options.syntheticUserPrefixes ?? [];
   const transcript: TranscriptEntry[] = [];
+  // Premier passage : le transcript (contenu seul). On mémorise l'index de
+  // chaque message ASSISTANT par identifiant d'entrée, pour corréler ensuite
+  // les métriques (`parentId`) dans un second passage.
+  const assistantIndexById = new Map<string, number>();
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
-    const entry = raw as { type?: unknown; message?: unknown };
+    const entry = raw as { type?: unknown; id?: unknown; message?: unknown };
     if (entry.type !== "message") continue;
     const message = entry.message;
     if (!message || typeof message !== "object") continue;
@@ -205,6 +259,23 @@ export function transcriptFromEntries(
     transcript.push(
       timestamp !== undefined ? { role, text, timestamp } : { role, text },
     );
+    if (role === "assistant" && typeof entry.id === "string") {
+      assistantIndexById.set(entry.id, transcript.length - 1);
+    }
+  }
+  // Second passage : rattache chaque entrée `custom` de métriques au message
+  // assistant DONT ELLE EST L'ENFANT (`parentId`). Une métrique sans parent
+  // assistant — entrée orpheline d'une session corrompue ou d'une ancienne
+  // version — est simplement IGNORÉE (jamais de pied sans message).
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const parentId = (raw as { parentId?: unknown }).parentId;
+    if (typeof parentId !== "string") continue;
+    const index = assistantIndexById.get(parentId);
+    if (index === undefined) continue;
+    const metrics = metricsFromCustomEntry(raw);
+    if (!metrics) continue;
+    transcript[index].metrics = metrics;
   }
   return transcript;
 }

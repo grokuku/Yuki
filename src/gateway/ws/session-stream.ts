@@ -144,6 +144,7 @@ export class SessionStream {
         role: entry.role,
         text: entry.text,
         ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
+        ...(entry.metrics !== undefined ? { metrics: entry.metrics } : {}),
       })),
     };
   }

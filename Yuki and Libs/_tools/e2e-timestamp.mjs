@@ -237,6 +237,7 @@ const threadState = () =>
       const time = m.querySelector('.message__time');
       const body = m.querySelector('.message__body');
       const footer = m.querySelector('.message__footer');
+      const stats = footer ? footer.querySelector('.message__stats') : null;
       return {
         msg: rect(m),
         time: time ? time.textContent : null,
@@ -244,6 +245,7 @@ const threadState = () =>
         timeRect: time ? rect(time) : null,
         body: body ? rect(body) : null,
         footer: footer ? rect(footer) : null,
+        stats: stats ? rect(stats) : null,
         footerText: footer ? footer.textContent : null,
         // true si l'en-tête précède le corps DANS LE DOM (heure au-dessus).
         headBeforeBody:
@@ -385,10 +387,46 @@ check(
   a.userFooters === 0,
   `${a.userFooters} pied(s)`,
 );
+/* — Pieds TECHNIQUES RESTAURÉS : les statistiques d'exécution survivent au
+ *   rechargement. La 1re et la 3e réponse du fil A en portent (TTFT/total/tok),
+ *   la 2e N'EN A PAS : un message sans stats garde un PIED ABSENT (aucune ligne
+ *   fantôme). */
+const restoredWithStats = [a.asstMsgs[0], a.asstMsgs[2]];
 check(
-  "ASSISTANT restauré : aucun pied technique (pas de ligne fantôme)",
-  a.asstFooters === 0,
+  "ASSISTANT restauré AVEC stats : pied présent et EXACT (TTFT/total/tok)",
+  restoredWithStats.every((m, i) => {
+    const expected = i === 0
+      ? "TTFT 842 ms · total 3120 ms · 412 tok"
+      : "TTFT 1100 ms · total 2500 ms · 210 tok";
+    return m && m.footer !== null && (m.footerText ?? "").trim() === expected;
+  }),
+  JSON.stringify(restoredWithStats.map((m) => m?.footerText ?? null)),
+);
+check(
+  "ASSISTANT restauré SANS stats : AUCUN pied (pas de ligne fantôme)",
+  a.asstMsgs[1] != null && a.asstMsgs[1].footer === null,
+  JSON.stringify(a.asstMsgs.map((m) => m.footerText ?? null)),
+);
+check(
+  "ASSISTANT restauré : 2 pieds (exactement les messages qui portent des stats)",
+  a.asstFooters === 2,
   `${a.asstFooters} pied(s)`,
+);
+check(
+  "pied RESTAURÉ EN BAS (pied.top >= corps.bottom)",
+  restoredWithStats.every((m) => m && m.footer && m.body && m.footer.top >= m.body.bottom),
+  JSON.stringify(restoredWithStats.map((m) => [m?.body?.bottom ?? null, m?.footer?.top ?? null])),
+);
+check(
+  "pied RESTAURÉ À DROITE de l'heure (centre stats > centre heure)",
+  restoredWithStats.every((m) => m && m.stats && m.timeRect && m.stats.cx > m.timeRect.cx),
+  JSON.stringify(restoredWithStats.map((m) => [m?.timeRect?.cx ?? null, m?.stats?.cx ?? null])),
+);
+check(
+  "pied RESTAURÉ au bord droit du bloc Yuki (≈ padding, jamais le bord du fil)",
+  a.asstFooterRightOffsets.length === 2 &&
+    a.asstFooterRightOffsets.every((v) => v >= 0 && v <= 16),
+  `écarts=${JSON.stringify(a.asstFooterRightOffsets)}`,
 );
 
 /* — ⚖️ MARGES LATÉRALES (preuve au pixel près) : la bulle UTILISATEUR est poussée
@@ -433,6 +471,13 @@ check(
     JSON.stringify(reloaded.asstTimes) === JSON.stringify(a.asstTimes),
   JSON.stringify(reloaded.userTimes),
 );
+check(
+  "RELOAD : pieds techniques CONSERVÉS, valeurs identiques (stats survivent au rechargement)",
+  reloaded.asstFooters === 2 &&
+    JSON.stringify(reloaded.asstMsgs.map((m) => m.footerText ?? null)) ===
+      JSON.stringify(a.asstMsgs.map((m) => m.footerText ?? null)),
+  JSON.stringify(reloaded.asstMsgs.map((m) => m.footerText ?? null)),
+);
 
 /* ═══════════ 3) Bascule de fil : séparateur du fil B ═══════════ */
 await openThread(FIL_B, 1);
@@ -441,6 +486,7 @@ const b = await threadState();
 check("BASCULE : le fil B affiche 1 séparateur (jeudi 1 octobre 2026)", b.seps.length === 1 && b.seps[0]?.text === "jeudi 1 octobre 2026", JSON.stringify(b.seps.map((s) => s.text)));
 check("BASCULE : heures du fil B (10:30 / 10:31)", JSON.stringify(b.userTimes) === JSON.stringify(["10:30"]) && JSON.stringify(b.asstTimes) === JSON.stringify(["10:31"]), JSON.stringify([b.userTimes, b.asstTimes]));
 check("BASCULE : préfixe toujours masqué", b.hasPrefix === false);
+check("BASCULE : fil B sans statistiques ⇒ AUCUN pied", b.asstFooters === 0, `${b.asstFooters} pied(s)`);
 
 // Retour au fil A : le rendu est reconstruit (snapshot), aucun doublon.
 check("RETOUR au fil A : sélection explicite par identifiant", await openThread(FIL_A, 3));

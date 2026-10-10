@@ -72,13 +72,16 @@ export type {
 } from "./ca.js";
 
 // Correctif SAN : SAN du certificat serveur = boucle locale + `agents.bindHost`
-// concret + `agents.serverName` déclaré (aucune détection automatique : Yuki
-// tourne en conteneur, `os.networkInterfaces()` ne voit pas l'IP de l'hôte).
+// concret + `agents.serverName` déclaré. `localIpAddresses` / 
+// `uncoveredLocalAddresses` alimentent un DIAGNOSTIC au démarrage (aucune
+// inscription automatique : Yuki tourne souvent en conteneur).
 export {
   LOOPBACK_DNS_NAMES,
   LOOPBACK_IP_ADDRESSES,
+  localIpAddresses,
   serverCertificateNames,
   splitServerNames,
+  uncoveredLocalAddresses,
 } from "./server-names.js";
 export type { ServerCertificateNames } from "./server-names.js";
 

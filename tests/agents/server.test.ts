@@ -129,7 +129,7 @@ describe("port machines — appairage (premier contact, sans certificat)", () =>
     expect((posted.body as { type: string }).type).toBe("pair_ok");
   });
 
-  it("mauvais code ⇒ 401 proof_invalid", async () => {
+  it("code non concordant ⇒ 409 pair_code_mismatch (trame mise en attente)", async () => {
     const s = await stack();
     s.pairing.submitCode("ABCD-2345-6789", { ip: "127.0.0.1" });
     const begin = agentBegin("ABCD-2345-6798");
@@ -137,8 +137,28 @@ describe("port machines — appairage (premier contact, sans certificat)", () =>
       method: "POST",
       body: pairBeginJson(begin.frame),
     });
-    expect(posted.status).toBe(401);
-    expect((posted.body as { code: string }).code).toBe("proof_invalid");
+    expect(posted.status).toBe(409);
+    const body = posted.body as { code: string; pair_id: string; message: string };
+    expect(body.code).toBe("pair_code_mismatch");
+    // Un `pair_id` est renvoyé : l'agent peut poursuivre sa scrutation.
+    expect(typeof body.pair_id).toBe("string");
+    expect(body.pair_id).not.toBe("");
+    // Message actionnable (français), sans divulguer le code attendu.
+    expect(body.message).toContain("ACTUELLEMENT");
+  });
+
+  it("empreinte de CA non concordante ⇒ 409 pair_fp_mismatch", async () => {
+    const s = await stack();
+    const begin = agentBegin("ABCD-2345-6789", "a".repeat(64));
+    const posted = await request(s.url, "/api/pair", {
+      method: "POST",
+      body: pairBeginJson(begin.frame),
+    });
+    expect(posted.status).toBe(409);
+    const body = posted.body as { code: string; message: string };
+    expect(body.code).toBe("pair_fp_mismatch");
+    // Aucune empreinte n'est exposée dans le message (justification anti-oracle).
+    expect(body.message).not.toContain("a".repeat(64));
   });
 
   it("trame mal formée ⇒ 400 malformed_message", async () => {

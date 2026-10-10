@@ -43,7 +43,7 @@ import {
 } from "./connection.js";
 import { PairError } from "./errors.js";
 import { parsePairBegin } from "./pair-protocol.js";
-import { pairOkJson, type PairingManager, type PairingOutcome } from "./pairing.js";
+import { pairOkJson, PAIR_CODE_MISMATCH_MESSAGE, type PairingManager, type PairingOutcome } from "./pairing.js";
 import type { AgentStore } from "./store.js";
 
 /** Chemin d'appairage (dépôt de la `pair_begin`). */
@@ -163,6 +163,8 @@ function statusForPairCode(code: string): number {
       return 429;
     case "pair_code_used":
     case "pair_replay":
+    case "pair_code_mismatch":
+    case "pair_fp_mismatch":
       return 409;
     case "pair_code_expired":
       return 410;
@@ -215,6 +217,24 @@ export function createAgentsServer(options: AgentsServerOptions): HttpsServer {
       const result = pairing.beginPairing(begin, { ip: clientIp(req) });
       if (result.status === "ok") {
         sendJson(res, { status: 200, body: pairOkJson(result.outcome) });
+        return;
+      }
+      if (result.status === "mismatch") {
+        // ⚠️ Conflit RÉCUPÉRABLE : aucune session active ne correspond à cette
+        // preuve (le code saisi dans Yuki est différent), mais la trame est MISE
+        // EN ATTENTE. `pair_id` est renvoyé pour que l'agent continue de scruter
+        // une fois le BON code saisi. Aucune information sensible n'est exposée
+        // (ni le code attendu, ni le nombre de tentatives restantes).
+        sendJson(res, {
+          status: 409,
+          body: {
+            error: "pair_code_mismatch",
+            code: "pair_code_mismatch",
+            message: PAIR_CODE_MISMATCH_MESSAGE,
+            pair_id: result.pairId,
+            retry_after_ms: result.retryAfterMs,
+          },
+        });
         return;
       }
       sendJson(res, {

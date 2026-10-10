@@ -36,6 +36,9 @@ type pairErrorBody struct {
 	Error   string `json:"error"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// PairID : renvoyé sur un `pair_code_mismatch` — la trame a MALGRÉ TOUT été
+	// mise en attente, l'agent peut poursuivre la scrutation avec cet identifiant.
+	PairID string `json:"pair_id"`
 }
 
 // PairExpiredError signale qu'une tentative d'appairage n'est plus valable : le
@@ -103,6 +106,12 @@ type PairingCallbacks struct {
 	// OnWaiting est appelé à chaque scrutation restée « en attente » (202),
 	// avec le temps écoulé depuis la génération du code courant.
 	OnWaiting func(elapsed time.Duration)
+	// OnNotice signale un AVERTISSEMENT NON FATAL : par exemple
+	// `pair_code_mismatch` — le code saisi dans Yuki ne correspond encore à aucun
+	// agent, mais la trame reste EN ATTENTE et l'appairage peut aboutir dès la
+	// bonne saisie. L'appelant l'affiche ; il ne doit PAS être traité comme un
+	// échec.
+	OnNotice func(message string)
 }
 
 // PairWithCodes joue l'appairage COMPLET côté agent, conforme à D119 : c'est
@@ -182,7 +191,7 @@ func performPairingOnce(
 	httpClient := firstContactHTTPClient()
 	defer httpClient.CloseIdleConnections()
 
-	ok, pairID, err := postPairBegin(ctx, httpClient, base+pairPath, body)
+	ok, pairID, err := postPairBegin(ctx, httpClient, base+pairPath, body, cb)
 	if err != nil {
 		return nil, err
 	}
@@ -211,8 +220,9 @@ func firstContactHTTPClient() *http.Client {
 }
 
 // postPairBegin dépose la `pair_begin`. Renvoie soit un `pair_ok` immédiat,
-// soit l'identifiant de scrutation (202).
-func postPairBegin(ctx context.Context, client *http.Client, endpoint string, body []byte) (*proto.PairOK, string, error) {
+// soit l'identifiant de scrutation (202, ou 409 `pair_code_mismatch` — conflit
+// RÉCUPÉRABLE où la trame a tout de même été mise en attente).
+func postPairBegin(ctx context.Context, client *http.Client, endpoint string, body []byte, cb PairingCallbacks) (*proto.PairOK, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, "", err
@@ -243,7 +253,18 @@ func postPairBegin(ctx context.Context, client *http.Client, endpoint string, bo
 		}
 		return nil, pending.PairID, nil
 	default:
-		return nil, "", fmt.Errorf("agent : appairage refusé (HTTP %d) : %s", resp.StatusCode, describePairError(data))
+		// ⚠️ Conflit RÉCUPÉRABLE : aucune session Yuki ne correspond encore au
+		// code de l'agent, mais le serveur a MIS LA TRAME EN ATTENTE et renvoie
+		// son `pair_id`. On AVERTIT (sans secret) et on poursuit la scrutation.
+		var envelope pairErrorBody
+		_ = json.Unmarshal(data, &envelope)
+		if envelope.Code == "pair_code_mismatch" && envelope.PairID != "" {
+			if cb.OnNotice != nil {
+				cb.OnNotice(pairRemedy(envelope.Code))
+			}
+			return nil, envelope.PairID, nil
+		}
+		return nil, "", fmt.Errorf("agent : %s", pairErrorMessage(resp.StatusCode, data))
 	}
 }
 
@@ -297,7 +318,7 @@ func pollPairOK(
 					Reason: "le code d'appairage n'est plus valable côté Yuki (expiré ou jamais saisi)",
 				}
 			}
-			return nil, fmt.Errorf("agent : appairage refusé (HTTP %d) : %s", resp.StatusCode, describePairError(data))
+			return nil, fmt.Errorf("agent : %s", pairErrorMessage(resp.StatusCode, data))
 		}
 	}
 }
@@ -341,6 +362,40 @@ func describePairError(data []byte) string {
 		return "sans détail"
 	}
 	return text
+}
+
+// pairRemedy associe à un code d'erreur d'appairage une PISTE d'action en
+// français, ou la chaîne vide. ⚠️ Elle ne divulgue QUE la cause et le geste à
+// faire : jamais le code attendu, jamais un décompte de tentatives.
+func pairRemedy(code string) string {
+	switch code {
+	case "pair_code_mismatch":
+		return "le code saisi dans Yuki ne correspond pas à celui de cette machine : " +
+			"recopiez le code ACTUELLEMENT affiché (un code périmé est remplacé)."
+	case "pair_fp_mismatch":
+		return "le CA de Yuki a changé ou l'adresse visée n'est pas la bonne : effacez le " +
+			"répertoire d'état de l'agent (--state-dir) puis relancez `yuki-agent pair`."
+	case "pair_code_used":
+		return "ce code a déjà servi (usage unique) : relancez `yuki-agent pair` pour en générer un nouveau."
+	case "pair_code_expired":
+		return "ce code a expiré : recopiez le NOUVEAU code affiché par cette machine."
+	case "pair_rate_limited":
+		return "trop de tentatives : relancez `yuki-agent pair` pour obtenir un nouveau code."
+	case "pair_code_invalid":
+		return "code au format invalide : recopiez exactement le code affiché (alphabet sans 0, 1, I, L, O, U)."
+	default:
+		return ""
+	}
+}
+
+// pairErrorMessage rend lisible le refus d'appairage de Yuki et y joint, quand
+// elle est connue, une piste d'action (voir `pairRemedy`).
+func pairErrorMessage(status int, data []byte) string {
+	message := fmt.Sprintf("appairage refusé (HTTP %d) : %s", status, describePairError(data))
+	if remedy := pairRemedy(pairErrorCode(data)); remedy != "" {
+		message += " — " + remedy
+	}
+	return message
 }
 
 // ReadCAFingerprint renvoie l'empreinte SHA-256 du CA déjà enregistré, ou la

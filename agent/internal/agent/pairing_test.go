@@ -372,3 +372,103 @@ func TestWriteMaterialPermissions(t *testing.T) {
 		t.Fatalf("contenu de la clé = %q (%v)", string(data), err)
 	}
 }
+
+/* ─── Messages actionnables & conflit de code RÉCUPÉRABLE ─────────────────── */
+
+// pairRemedy associe à chaque cause un geste concret, sans divulguer de secret.
+func TestPairRemedyEtMessage(t *testing.T) {
+	cases := map[string]string{
+		"pair_code_mismatch": "ACTUELLEMENT",
+		"pair_fp_mismatch":   "répertoire d'état",
+		"pair_code_used":     "déjà servi",
+		"pair_code_expired":  "expiré",
+		"pair_rate_limited":  "trop de tentatives",
+		"pair_code_invalid":  "format invalide",
+	}
+	for code, needle := range cases {
+		if remedy := pairRemedy(code); !strings.Contains(remedy, needle) {
+			t.Fatalf("pairRemedy(%q) = %q, attendu contenant %q", code, remedy, needle)
+		}
+	}
+	if pairRemedy("code_quelconque") != "" {
+		t.Fatal("un code inconnu ne doit pas produire de piste inventée")
+	}
+
+	// Le message joint la cause ET la piste, sans jamais exposer un code.
+	data, _ := json.Marshal(map[string]string{
+		"code": "pair_code_used", "message": "code déjà utilisé (usage unique)",
+	})
+	message := pairErrorMessage(409, data)
+	if !strings.Contains(message, "pair_code_used") || !strings.Contains(message, "déjà servi") {
+		t.Fatalf("message sans cause/piste : %q", message)
+	}
+	if strings.Contains(message, "ABCD") {
+		t.Fatalf("fuite de code dans le message : %q", message)
+	}
+}
+
+// beginBody construit le corps d'une `pair_begin` (miroir du client Go).
+func beginBody(t *testing.T, code, fp string) []byte {
+	t.Helper()
+	client, err := pair.NewClient(code, pair.Options{})
+	if err != nil {
+		t.Fatalf("NewClient : %v", err)
+	}
+	body, err := proto.Encode(client.Begin(fp))
+	if err != nil {
+		t.Fatalf("Encode : %v", err)
+	}
+	return body
+}
+
+// Un 409 `pair_code_mismatch` portant un `pair_id` n'interrompt PAS l'agent :
+// la trame a été mise en attente côté Yuki, la scrutation se poursuit.
+func TestPostPairBeginRecupereConflitDeCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error":   "pair_code_mismatch",
+			"code":    "pair_code_mismatch",
+			"message": "aucune session d'appairage ne correspond…",
+			"pair_id": "p1",
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	var notice string
+	ok, id, err := postPairBegin(context.Background(), firstContactHTTPClient(), srv.URL,
+		beginBody(t, "ABCD-2345-6789", ""),
+		PairingCallbacks{OnNotice: func(m string) { notice = m }})
+	if err != nil {
+		t.Fatalf("postPairBegin : %v", err)
+	}
+	if ok != nil || id != "p1" {
+		t.Fatalf("ok=%v id=%q, attendu (nil, \"p1\")", ok, id)
+	}
+	if !strings.Contains(notice, "ACTUELLEMENT") {
+		t.Fatalf("avertissement inattendu : %q", notice)
+	}
+}
+
+// Une erreur SANS `pair_id` (empreinte de CA) reste fatale, porte son code ET
+// une piste d'action, et n'est PAS classée comme une expiration.
+func TestPostPairBeginErreurAvecPisteDaction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writePairError(w, http.StatusConflict, "pair_fp_mismatch", "empreinte de CA non concordante")
+	}))
+	t.Cleanup(srv.Close)
+
+	_, _, err := postPairBegin(context.Background(), firstContactHTTPClient(), srv.URL,
+		beginBody(t, "ABCD-2345-6789", "aabb"), PairingCallbacks{})
+	if err == nil {
+		t.Fatal("attendu une erreur")
+	}
+	if IsPairExpired(err) {
+		t.Fatalf("erreur classée à tort comme expiration : %v", err)
+	}
+	if !strings.Contains(err.Error(), "pair_fp_mismatch") ||
+		!strings.Contains(err.Error(), "répertoire d'état") {
+		t.Fatalf("message sans code/piste : %v", err)
+	}
+}

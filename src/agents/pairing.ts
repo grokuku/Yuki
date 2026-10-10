@@ -191,6 +191,15 @@ export class PairingSession {
     this.attempts += 1;
     if (this.attempts >= this.maxAttempts) this.invalidated = true;
   }
+
+  /**
+   * Comptabilise un essai NON concordant (une `pair_begin` ne correspondant à
+   * cette session) SANS lever : préserve la limite de tentatives par code, sans
+   * confondre la cause ni empêcher l'appairage d'aboutir plus tard.
+   */
+  registerMismatch(): void {
+    this.registerFailure();
+  }
 }
 
 /** Contenu transmis à l'agent dans le `pair_ok` (CA + cert client + identité). */
@@ -236,7 +245,13 @@ export interface SubmitCodeResult {
 
 export type BeginPairingResult =
   | { status: "ok"; outcome: PairingOutcome }
-  | { status: "pending"; pairId: string; retryAfterMs: number };
+  | { status: "pending"; pairId: string; retryAfterMs: number }
+  /**
+   * Aucune session active ne correspond à la preuve (code saisi différent),
+   * mais la trame est **mise en attente** : `pairId` permet à l'agent de
+   * continuer à scruter une fois le BON code saisi (conflit récupérable).
+   */
+  | { status: "mismatch"; pairId: string; retryAfterMs: number };
 
 export type PollPairingResult =
   | { status: "ok"; outcome: PairingOutcome }
@@ -246,18 +261,26 @@ export type PollPairingResult =
 const POLL_RETRY_MS = 1_000;
 
 /**
- * Matériel factice utilisé UNIQUEMENT pour obtenir le code d'erreur exact d'une
- * trame qui ne correspond à AUCUNE session active (le chemin d'échec s'arrête
- * avant d'utiliser le matériel : `authorize` lève sur la preuve avant de le
- * sérialiser). Évite de signer un certificat inutile à chaque tentative ratée.
+ * Message d'un code NON concordant (aucune session active ne correspond à la
+ * preuve de l'agent). ⚠️ Actionnable : il dit à l'utilisateur QUOI FAIRE, sans
+ * divulguer le code attendu ni le nombre de tentatives restantes.
  */
-const FAILURE_MATERIAL: PairMaterial = {
-  caCert: "",
-  clientCert: "",
-  clientKey: "",
-  agentId: "",
-  caFingerprint: "",
-};
+export const PAIR_CODE_MISMATCH_MESSAGE =
+  "aucune session d'appairage ne correspond à cet agent : le code saisi dans " +
+  "Yuki n'est pas celui qu'emploie la machine. Recopiez le code ACTUELLEMENT " +
+  "affiché par l'agent (un code périmé est remplacé), ou relancez « yuki-agent " +
+  "pair » pour en obtenir un nouveau.";
+
+/**
+ * Message d'une empreinte de CA NON concordante. ⚠️ Aucune empreinte n'est
+ * exposée (elle n'est pas nécessaire à l'action) : on nomme la cause et le
+ * remède.
+ */
+export const PAIR_FP_MISMATCH_MESSAGE =
+  "l'empreinte de CA de cet agent ne correspond pas au CA actuel de Yuki : le " +
+  "CA a été régénéré, ou l'agent vise un autre serveur. Régénérez un code, et " +
+  "si l'agent conserve un ancien état (ca.pem/certificats), effacez son " +
+  "répertoire d'état puis ré-appairez.";
 
 export class PairingManager {
   private readonly ca: CertificateAuthority;
@@ -340,27 +363,42 @@ export class PairingManager {
     this.checkRate(meta.ip);
     this.prune();
 
+    // Empreinte de CA revendiquée (re-appairage) : si elle est renseignée et ne
+    // correspond pas au CA COURANT, l'agent vise un autre serveur ou porte un CA
+    // caduc. On le dit tôt et DISTINCTEMENT (l'empreinte n'est pas un secret :
+    // c'est celle du CA que Yuki présente).
+    const claimedFp = begin.yukiFpClaimed.trim();
+    if (claimedFp !== "" && claimedFp.toLowerCase() !== this.ca.fingerprint.toLowerCase()) {
+      this.auditPairing("failed", meta.ip, "pair_fp_mismatch");
+      throw new PairError("pair_fp_mismatch", PAIR_FP_MISMATCH_MESSAGE);
+    }
+
+    // Une session ACTIVE (code soumis, non consommé) correspond-elle à la preuve ?
     const active = [...this.sessions.values()].filter((s) => !s.isTerminal());
-    if (active.length > 0) {
-      const match = active.find((s) => s.probe(begin));
+    const match = active.find((s) => s.probe(begin));
+    if (match) {
       try {
-        if (match) {
-          const outcome = match.authorize(begin, this.signMaterial());
-          this.recordSuccess(outcome.agentId, meta.ip);
-          return { status: "ok", outcome };
-        }
-        // Aucune preuve ne correspond : on fait porter l'échec à la première
-        // session active pour renvoyer le code d'erreur exact (et comptabiliser
-        // l'essai), comme le ferait une `Authorize` unique. Le matériel factice
-        // n'est jamais sérialisé : `authorize` lève avant, sur la preuve.
-        const first = active[0] as PairingSession;
-        first.authorize(begin, FAILURE_MATERIAL);
-        throw new PairError("internal_error", "appairage : état incohérent");
+        const outcome = match.authorize(begin, this.signMaterial());
+        this.recordSuccess(outcome.agentId, meta.ip);
+        return { status: "ok", outcome };
       } catch (error) {
         const code = error instanceof PairError ? error.code : "internal_error";
         this.auditPairing("failed", meta.ip, code);
         throw error;
       }
+    }
+
+    // Aucune session active ne correspond. ⚠️ On NE rejette PAS la trame comme
+    // une « preuve invalide » : elle est MISE EN ATTENTE (comme au premier
+    // contact), afin qu'une saisie CORRECTE ultérieure puisse encore l'apparier.
+    // Un code différent (faute de frappe, code périmé remplacé, agent ayant
+    // régénéré son code) ne doit pas condamner l'appairage en cours. L'essai est
+    // toutefois comptabilisé sur la plus ancienne session active — la limite
+    // anti-bruteforce par code est donc PRÉSERVÉE.
+    const mismatch = active.length > 0;
+    if (mismatch) {
+      (active[0] as PairingSession).registerMismatch();
+      this.auditPairing("failed", meta.ip, "pair_code_mismatch");
     }
 
     if (this.pending.size >= this.maxPending) {
@@ -377,8 +415,10 @@ export class PairingManager {
       ip: meta.ip,
       createdAt: this.now(),
     });
-    this.auditPairing("pending", meta.ip, null);
-    return { status: "pending", pairId, retryAfterMs: POLL_RETRY_MS };
+    if (!mismatch) this.auditPairing("pending", meta.ip, null);
+    return mismatch
+      ? { status: "mismatch", pairId, retryAfterMs: POLL_RETRY_MS }
+      : { status: "pending", pairId, retryAfterMs: POLL_RETRY_MS };
   }
 
   /** Scrutation : le `pair_ok` est-il prêt pour cette trame ? */

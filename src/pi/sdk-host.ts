@@ -46,6 +46,7 @@ import {
   errorTextFromMessage,
   finishReasonForMessage,
   messageTimestamp,
+  RUN_METRICS_CUSTOM_TYPE,
   sanitizeErrorText,
   transcriptFromEntries,
   unstreamedContentSuffix,
@@ -56,7 +57,7 @@ import {
 import { describeModelError, PiHostError, toPiHostError } from "./errors.js";
 import { buildStoredUserText } from "./timestamp.js";
 import type { PiHost } from "./host.js";
-import { PHASE, RunInstrumentation, type RunTtsMetrics } from "./instrumentation.js";
+import { PHASE, RunInstrumentation, type RunSummary, type RunTtsMetrics } from "./instrumentation.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
 import {
   createAgentDirectoryTools,
@@ -85,6 +86,7 @@ import type {
   PiUsage,
   RunFinishReason,
   RunHandle,
+  RunMetrics,
   SendOptions,
   SessionInfo,
   SessionState,
@@ -158,6 +160,14 @@ interface RunItem {
   /** Cause BRUTE du fournisseur (assainie, sans secret) pour les journaux. */
   rawError?: string;
   usage?: PiUsage;
+  /**
+   * Dernière entrée de transcript ASSISTANT produite par ce run (contenu non
+   * vide). Sert à rattacher les statistiques d'exécution (`run_metrics`) à
+   * l'entrée de session réellement persistée dont elle est le miroir. Reste
+   * `undefined` quand le run n'a rien produit d'affichable (erreur, abandon,
+   * réponse vide) ⇒ aucune métrique n'est écrite (jamais d'entrée orpheline).
+   */
+  assistantEntry?: TranscriptEntry;
   resolveStart?: () => void;
   startPromise: Promise<void>;
 }
@@ -363,6 +373,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       role: entry.role,
       text: entry.text,
       ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
+      ...(entry.metrics !== undefined ? { metrics: entry.metrics } : {}),
     }));
     if (record.partial.length > 0) {
       transcript.push({ role: "assistant", text: record.partial });
@@ -495,11 +506,15 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         }
         const text = content.length > 0 ? content : record.partial;
         if (text.length > 0) {
-          record.transcript.push({
+          const assistantEntry: TranscriptEntry = {
             role: "assistant",
             text,
             timestamp: messageTimestamp(message) ?? Date.now(),
-          });
+          };
+          record.transcript.push(assistantEntry);
+          // Miroir de l'entrée de session que le SDK vient de persister : elle
+          // recevra les statistiques (`run_metrics`) si le run se termine bien.
+          run.assistantEntry = assistantEntry;
         }
         record.partial = "";
         return;
@@ -580,7 +595,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       ...(run.usage ? { usage: run.usage } : {}),
       ...(run.errorMessage ? { errorMessage: run.errorMessage } : {}),
     });
-    run.instrumentation.emitSummary();
+    // Les statistiques temps réel (`run_summary`) et celles PERSISTÉES doivent
+    // être EXACTEMENT les mêmes : on réutilise la synthèse déjà émise.
+    const summary = run.instrumentation.emitSummary();
+    persistRunMetrics(record, run, reason, summary);
 
     record.currentRun = undefined;
     record.activeRunId = undefined;
@@ -596,6 +614,65 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     const next = record.queue.shift();
     if (next) {
       void startRun(record, next);
+    }
+  }
+
+  /**
+   * Persiste les statistiques d'exécution du run dans le JSONL de session, sous
+   * forme d'une entrée `custom` (`yuki.run_metrics`) ENFANT (`parentId`) de
+   * l'entrée de message assistant que le SDK vient d'écrire.
+   *
+   * ⚠️ GARDE D'ÉPHÉMÉRITÉ — on n'écrit QUE si un message assistant a été
+   * RÉELLEMENT persisté par ce run :
+   *   - `reason === "done"` (pas d'erreur, pas d'abandon) ;
+   *   - `run.assistantEntry` existe (le run a produit un contenu d'affichage) ;
+   *   - le dernier enfant de la branche est BIEN ce message assistant, avec le
+   *     même texte que celui affiché. Sinon l'entrée serait ORPHELINE (une
+   *     métrique sans message) : on n'écrit rien.
+   *
+   * Le `data` ne contient QUE des NOMBRES (`ttftMs`, `totalMs`, `tokensOut`) :
+   * jamais le prompt, jamais de texte. Un échec d'écriture est journalisé et
+   * n'interrompt JAMAIS le run.
+   */
+  function persistRunMetrics(
+    record: SessionRecord,
+    run: RunItem,
+    reason: RunFinishReason,
+    summary: RunSummary,
+  ): void {
+    if (reason !== "done") return;
+    const assistant = run.assistantEntry;
+    if (!assistant) return;
+    try {
+      const manager = record.session.sessionManager;
+      const leaf = manager.getLeafEntry() as
+        | { type?: unknown; id?: unknown; message?: unknown }
+        | undefined;
+      if (!leaf || leaf.type !== "message") return;
+      const message = leaf.message as RawAgentMessage | undefined;
+      if (!message || message.role !== "assistant") return;
+      // Le message au bout de la branche DOIT être celui de ce run : on compare
+      // le contenu autoritatif. Une divergence (message antérieur, réponse
+      // vide, extension) ⇒ on n'écrit rien plutôt qu'une métrique orpheline.
+      if (contentTextFromMessage(message) !== assistant.text) return;
+      if (!Number.isFinite(summary.totalMs)) return;
+      const data: RunMetrics = { totalMs: summary.totalMs };
+      if (summary.ttftMs !== undefined && Number.isFinite(summary.ttftMs)) {
+        data.ttftMs = summary.ttftMs;
+      }
+      if (summary.tokensOut !== undefined && Number.isFinite(summary.tokensOut)) {
+        data.tokensOut = summary.tokensOut;
+      }
+      manager.appendCustomEntry(RUN_METRICS_CUSTOM_TYPE, data);
+      // Le miroir en mémoire porte les mêmes statistiques : un snapshot de la
+      // session COURANTE les affiche sans attendre un rechargement.
+      assistant.metrics = data;
+    } catch (error) {
+      logger.warn("pi.run.metrics.persist.failed", {
+        session_id: record.sessionId,
+        run_id: run.runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

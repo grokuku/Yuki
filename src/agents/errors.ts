@@ -30,7 +30,20 @@ export type PairErrorCode =
   | "pair_replay"
   | "pair_decrypt_failed"
   | "pair_payload_malformed"
-  | "pair_code_invalid";
+  | "pair_code_invalid"
+  /**
+   * Aucune session d'appairage ACTIVE ne correspond à la preuve : le code
+   * saisi dans Yuki n'est pas celui qu'emploie l'agent (faute de frappe, code
+   * périmé remplacé, ou code d'un autre agent). ⚠️ Conflit **récupérable** : la
+   * trame est mise en attente, une saisie correcte ultérieure l'appariera.
+   */
+  | "pair_code_mismatch"
+  /**
+   * L'empreinte de CA revendiquée par l'agent ne correspond pas au CA courant
+   * de Yuki : agent visant un autre serveur, ou CA régénéré depuis le dernier
+   * appairage (état de l'agent à rafraîchir).
+   */
+  | "pair_fp_mismatch";
 
 export class AgentError extends Error {
   override readonly name = "AgentError";
