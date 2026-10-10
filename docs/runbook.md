@@ -415,3 +415,23 @@ Nouveaux étages `phase` corrélés par `jobId` : `delegate_received`,
 ```bash
 YUKI_TEST_REAL_LLM=1 npx vitest run tests/integration/real-llm.test.ts
 ```
+
+## 11. Libraire (Libry)
+
+Service externe (recherche documentaire + web, et capture de pages). Réglé dans
+**`/config` → onglet Système → Libraire** :
+
+| Champ | Rôle |
+| --- | --- |
+| `librarian.baseUrl` | URL de Libry (ex. `http://pi-web:3000`). Vide = outils non exposés. |
+| `librarian.apiKey` | **Seul champ requis** : clé `lib-…`, envoyée en `X-API-Key` (et en `Authorization`). |
+| `librarian.agentToken` | **Facultatif** (compatibilité) : envoyé en `Authorization` s'il est renseigné, jamais s'il est vide. |
+| `librarian.screenshot` | `on` (défaut) / `off` : expose l'outil `capture_libraire` (capture d'une page http/https, image transmise à Yuki et affichée dans la conversation). |
+
+⚠️ Libry n'a **qu'une couche d'authentification** : une clé acceptée en
+`Authorization: Bearer` **ou** en `X-API-Key`. Un `agentToken` obsolète n'est
+plus exigé et ne masque plus `apiKey`.
+
+⚠️ Les captures sont stockées sous `${state}/librarian-shots` et servies en
+same-origin (`/captures/<id>.png`). Aucune clé n'apparaît dans les journaux,
+les messages d'erreur ni les artefacts.

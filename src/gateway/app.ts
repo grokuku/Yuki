@@ -62,6 +62,11 @@ import {
   type SubsystemsSnapshot,
 } from "./routes/health.js";
 import { resolveStaticRequest } from "./routes/static.js";
+import {
+  handleCapturesRequest,
+  isCapturesPath,
+  type CapturesApiDeps,
+} from "./routes/captures.js";
 import { versionInfo } from "./routes/version.js";
 
 export interface AppContext {
@@ -93,6 +98,11 @@ export interface AppContext {
    * `/api/self/heritage*` → 404. ⚠️ Interface uniquement (jamais le modèle).
    */
   heritage?: HeritageApiDeps;
+  /**
+   * Service SAME-ORIGIN des captures de pages web (`/captures/<id>.<ext>`).
+   * Absent ⇒ `/captures/*` → 404.
+   */
+  captures?: CapturesApiDeps;
 }
 
 interface RouteResponse {
@@ -422,6 +432,7 @@ export function createApp(context: AppContext): RequestListener {
     personality,
     memory,
     heritage,
+    captures,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -618,6 +629,9 @@ export function createApp(context: AppContext): RequestListener {
       });
     } else if (path === "/version") {
       response = versionInfo({ version: env.version, profile: report.resolvedProfile });
+    } else if (captures && isCapturesPath(path)) {
+      const result = handleCapturesRequest({ method, path, deps: captures });
+      response = { status: result.status, body: result.body, headers: result.headers };
     } else {
       const staticResult = resolveStaticRequest({ publicDir }, path);
       if (staticResult) {

@@ -77,7 +77,11 @@ export const LIGHT_MODEL: ModelSpec = {
   id: "gemma4:31b",
   name: "Gemma 4 31B (léger)",
   reasoning: false,
-  input: ["text"],
+  // ⚠️ Le léger reçoit les CAPTURES de pages web (`capture_libraire`) : sans
+  // « image » ici, le fournisseur compatible OpenAI (SDK) n'attache PAS la
+  // partie image et le modèle ne voit rien. Le lourd reste texte seul (il n'a
+  // pas l'outil de capture).
+  input: ["text", "image"],
   contextWindow: 131_072,
   maxTokens: 32_768,
   defaultThinking: "off",

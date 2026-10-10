@@ -55,6 +55,11 @@ import {
   startServer,
 } from "./gateway/server.js";
 import { createWsTransport, type AgentsGatewayPort } from "./gateway/ws/server.js";
+import type {
+  CapturedScreenshotView,
+  ScreenshotGatewayPort,
+  ScreenshotViewEvent,
+} from "./agents/execution.js";
 import type { Transport } from "./gateway/ws/transport.js";
 import type { SubsystemsSnapshot } from "./gateway/routes/health.js";
 import type { VoiceApiDeps } from "./gateway/routes/voices.js";
@@ -84,7 +89,13 @@ import {
   type LlmConfig,
   type ThinkingLevelName,
 } from "./llm/index.js";
-import { createLibrarianArchiveService, createLibrarianClient, LIBRARIAN_SYNTHESIZER_SYSTEM_PROMPT } from "./librarian/index.js";
+import {
+  createLibrarianArchiveService,
+  createLibrarianClient,
+  LibrarianShotsStore,
+  LIBRARIAN_SYNTHESIZER_SYSTEM_PROMPT,
+  type LibrarianShotView,
+} from "./librarian/index.js";
 import { collectSecretValues, createLogger } from "./observability/logger.js";
 import {
   HeritageAdminService,
@@ -647,6 +658,7 @@ async function main(): Promise<void> {
   let host: PiHost | undefined;
   let memoryService: MemoryService | undefined;
   let heritageStore: HeritageStore | undefined;
+  let librarianShots: LibrarianShotsStore | undefined;
   let transport: Transport | undefined;
   let delegation: DelegationService | undefined;
 
@@ -758,10 +770,56 @@ async function main(): Promise<void> {
       logger,
     });
     const librarianConfigured = config.getString("librarian.baseUrl").trim() !== "";
+    // Captures de pages web (Libry) : stockage local + diffusion vers l'UI.
+    librarianShots = new LibrarianShotsStore({
+      dir: env.librarianShotsDir,
+      logger,
+    });
+    librarianShots.ensureLayout();
+    const librarianConfiguredAtStart = librarianConfigured;
+    const librarianCaptureEnabledAtStart =
+      librarianConfiguredAtStart && config.getString("librarian.screenshot") === "on";
     logger.info("librarian.ready", {
       configured: librarianConfigured,
+      capture: librarianCaptureEnabledAtStart,
       jobs: env.librarianJobsPath,
+      shots: env.librarianShotsDir,
     });
+
+    // Diffusion des captures de pages web vers l'UI (trame de contrôle `screenshot`).
+    const librarianShotListeners = new Set<(event: ScreenshotViewEvent) => void>();
+    const librarianShotBus: ScreenshotGatewayPort = {
+      subscribeScreenshots: (listener) => {
+        librarianShotListeners.add(listener);
+        return () => {
+          librarianShotListeners.delete(listener);
+        };
+      },
+    };
+    const emitLibrarianShot = (view: LibrarianShotView): void => {
+      if (!view.sessionId) return;
+      const frame: CapturedScreenshotView = {
+        agentId: view.host,
+        agentName: view.host,
+        sessionId: view.sessionId,
+        dataUrl: view.imageSrc,
+        format: view.mimeType.split("/")[1] ?? "png",
+        width: view.width ?? 0,
+        height: view.height ?? 0,
+        bytes: view.bytes,
+        capturedAt: view.capturedAt,
+        source: "web",
+        url: view.pageUrl,
+      };
+      const event: ScreenshotViewEvent = { kind: "captured", screenshot: frame };
+      for (const listener of [...librarianShotListeners]) {
+        try {
+          listener(event);
+        } catch {
+          // Un client en échec ne doit pas interrompre les autres.
+        }
+      }
+    };
 
     host = createPiHost({
       agentDir: env.piAgentDir,
@@ -786,16 +844,28 @@ async function main(): Promise<void> {
         directoryEnabled: agentDirectory !== undefined,
         // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
         heritageEnabled: true,
-        // Libraire de Pi-Web : quatre outils, exposés seulement si l'URL de base
-        // est renseignée (décision prise à la création du host).
+        // Libraire : quatre outils + capture (selon l'URL et le réglage au
+        // démarrage ; décision prise à la création du host).
         librarianEnabled: librarianConfigured,
+        librarianCaptureEnabled: librarianCaptureEnabledAtStart,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentExecution ? { execution: agentExecution } : {}),
       ...(agentExecution ? { screenshots: agentExecution } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
       heritage: heritageStore,
-      ...(librarianConfigured ? { librarian: { client: librarianClient, archive: librarianArchive } } : {}),
+      ...(librarianConfigured
+        ? {
+            librarian: {
+              client: librarianClient,
+              archive: librarianArchive,
+              screenshot: librarianClient,
+              shots: librarianShots,
+              onShot: (view: LibrarianShotView) => emitLibrarianShot(view),
+              captureEnabled: () => config.getString("librarian.screenshot") === "on",
+            },
+          }
+        : {}),
       personality: personalityStore,
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
@@ -840,7 +910,17 @@ async function main(): Promise<void> {
       ...(agentExecution ? { approvals: agentExecution } : {}),
       // Captures d'écran : l'image est diffusée en trame de CONTRÔLE vers la
       // SEULE conversation demanderesse (jamais bufferisée, jamais persistée).
-      ...(agentExecution ? { screenshots: agentExecution } : {}),
+      // Combine les captures d'AGENTS et les captures de PAGES WEB (Libry).
+      screenshots: {
+        subscribeScreenshots: (listener) => {
+          const offAgents = agentExecution?.subscribeScreenshots(listener);
+          const offLibrarian = librarianShotBus.subscribeScreenshots(listener);
+          return () => {
+            offAgents?.();
+            offLibrarian();
+          };
+        },
+      },
       tts: {
         enabled: isTtsEnabled(config),
         config: {
@@ -935,6 +1015,8 @@ async function main(): Promise<void> {
       ...(heritageStore
         ? { heritage: { admin: new HeritageAdminService(heritageStore, { logger }), logger } }
         : {}),
+      // Captures de pages web : servies MÊME ORIGINE (`/captures/<id>.<ext>`).
+      ...(librarianShots ? { captures: { store: librarianShots, logger } } : {}),
       voices: voicesDeps,
       tts: ttsDeps,
       ...(agentsDeps ? { agents: agentsDeps } : {}),

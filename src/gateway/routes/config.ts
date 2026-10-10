@@ -425,10 +425,12 @@ function describeLibrarianStatus(status: LibrarianStatus): string {
  *
  * ⚠️ Le message renvoyé reflète STRICTEMENT ce qui a été observé (aucune cause
  * inventée) : joignable (avec le nombre de documents), authentification refusée
- * (en précisant la COUCHE : clé libraire 401 ou jeton agent 403), moteurs web
- * indisponibles (502), trop de requêtes (429), ou Pi-Web INJOIGNABLE depuis Yuki
- * (réseau/délai). Des valeurs non enregistrées peuvent être testées en les
- * fournissant dans le corps ; elles ne sont ni écrites ni journalisées.
+ * (401 = aucune clé valide parmi celles envoyées ; 403 = jeton agent refusé),
+ * moteurs web indisponibles (502), trop de requêtes (429), ou le libraire
+ * INJOIGNABLE depuis Yuki (réseau/délai). ⚠️ Libry n'a qu'UNE couche : la clé
+ * libraire (X-API-Key) suffit ; le jeton agent (Authorization) est facultatif.
+ * Des valeurs non enregistrées peuvent être testées en les fournissant dans le
+ * corps ; elles ne sont ni écrites ni journalisées.
  */
 async function handleLibrarianTest(
   input: ConfigRequestInput,

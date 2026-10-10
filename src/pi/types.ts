@@ -10,7 +10,12 @@
 import type { AgentDirectoryPort } from "../agents/directory.js";
 import type { ExecutionServicePort, ScreenshotServicePort } from "../agents/execution.js";
 import type { DelegateServicePort } from "../delegation/ports.js";
-import type { LibrarianArchivePort, LibrarianPort } from "../librarian/types.js";
+import type {
+  LibrarianArchivePort,
+  LibrarianPort,
+  LibrarianScreenshotPort,
+} from "../librarian/types.js";
+import type { LibrarianShotView, LibrarianShotsPort } from "../librarian/shots.js";
 import type { HeritagePort } from "../memory/heritage.js";
 import type { MemoryPort } from "../memory/types.js";
 import type { PersonalityPort } from "../personality/types.js";
@@ -112,8 +117,16 @@ export interface PiHostOptions {
    * les quatre outils (`recherche_libraire`, `liste_libraire`, `lire_libraire`,
    * `archive_libraire`). `client` sert la lecture, `archive` la soumission en
    * tâche de fond. Absent ⇒ aucun outil (URL de base non renseignée, tests).
+   * ⚠️ `screenshot` + `shots` (optionnels) exposent en plus `capture_libraire`.
    */
-  librarian?: { client: LibrarianPort; archive: LibrarianArchivePort };
+  librarian?: {
+    client: LibrarianPort;
+    archive: LibrarianArchivePort;
+    screenshot?: LibrarianScreenshotPort;
+    shots?: LibrarianShotsPort;
+    onShot?: (view: LibrarianShotView) => void;
+    captureEnabled?: () => boolean;
+  };
   /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).

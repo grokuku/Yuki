@@ -452,11 +452,14 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_AUDIT_MAX_SIZE_MB",
   },
 
-  // --- Libraire de Pi-Web (recherche documentaire + web) -------------------
+  // --- Libraire (Libry : recherche documentaire + web) ---------------------
   // ⚠️ `FieldType` = `string | int | enum`. L'URL de base est une chaîne : vide =
-  // libraire NON configuré (les quatre outils ne sont alors pas exposés au
-  // modèle). Les deux secrets (jeton agent `Authorization` + clé libraire
-  // `X-API-Key`) sont masqués par l'API et jamais journalisés.
+  // libraire NON configuré (les outils ne sont alors pas exposés au modèle).
+  // ⚠️ `librarian.apiKey` est LE champ de référence : Libry n'a qu'UNE couche
+  // d'authentification (clé acceptée en `Authorization: Bearer` OU en
+  // `X-API-Key`). `librarian.agentToken` est FACULTATIF : renseigné, il est
+  // toujours envoyé (compatibilité) ; vide, il n'est plus exigé ni envoyé.
+  // Les deux restent masqués par l'API et jamais journalisés.
   // `apply: hot` : le client relit la configuration à chaque appel. ⚠️ L'exposition
   // des OUTILS est fixée à la création du host : renseigner l'URL pour la première
   // fois nécessite un redémarrage du gateway.
@@ -470,6 +473,9 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   "librarian.agentToken": {
     type: "string",
     default: "",
+    // ⚠️ FACULTATIF : `allowEmpty` autorise la chaîne vide (sinon « clé non
+    // vide » exigée). Utile pour les configurations mono-clé (Libry).
+    allowEmpty: true,
     apply: "hot",
     secret: true,
     env: "YUKI_LIBRARIAN_AGENT_TOKEN",
@@ -480,6 +486,16 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     secret: true,
     env: "YUKI_LIBRARIAN_API_KEY",
+  },
+  // Activation de l'outil de CAPTURE de page web via Libry. ⚠️ Enum `off|on`
+  // (pas de booléen : `FieldType` = `string | int | enum`). `hot` : l'outil
+  // relit ce réglage à chaque appel (le refus est explicite si désactivé).
+  "librarian.screenshot": {
+    type: "enum",
+    enum: ["off", "on"],
+    default: "on",
+    apply: "hot",
+    env: "YUKI_LIBRARIAN_SCREENSHOT",
   },
   "librarian.archiveTimeoutMs": {
     type: "int",

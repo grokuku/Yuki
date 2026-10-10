@@ -24,6 +24,12 @@ export interface MockResponse {
   body?: unknown;
   /** Corps brut (prioritaire sur `body`). */
   raw?: string;
+  /** Corps BINAIRE (prioritaire sur `raw` et `body`) — pour les images. */
+  bytes?: Uint8Array;
+  /** Type MIME de la réponse (défaut JSON). */
+  contentType?: string;
+  /** En-têtes supplémentaires (ex. `retry-after`). */
+  headers?: Record<string, string>;
   /** Délai avant réponse (ms) — pour tester le délai dépassé. */
   delayMs?: number;
 }
@@ -49,10 +55,13 @@ function readBody(req: IncomingMessage): Promise<string> {
 }
 
 function send(res: ServerResponse, response: MockResponse): void {
-  const payload = response.raw ?? JSON.stringify(response.body ?? {});
+  const payload = response.bytes
+    ? Buffer.from(response.bytes)
+    : Buffer.from(response.raw ?? JSON.stringify(response.body ?? {}), "utf8");
   res.writeHead(response.status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(payload).toString(),
+    "content-type": response.contentType ?? "application/json; charset=utf-8",
+    "content-length": String(payload.byteLength),
+    ...(response.headers ?? {}),
   });
   res.end(payload);
 }

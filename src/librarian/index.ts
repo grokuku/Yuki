@@ -31,13 +31,18 @@ export type {
   LibrarianPort,
   LibrarianProbePort,
   LibrarianScheduleOutcome,
+  LibrarianScreenshot,
+  LibrarianScreenshotOptions,
+  LibrarianScreenshotPort,
   LibrarianSearchOutcome,
   LibrarianSearchResult,
+  LibrarianShotImage,
   LibrarianStatus,
   LibrarianSynthesizer,
 } from "./types.js";
 
 export {
+  DEFAULT_LIBRARIAN_SCREENSHOT_TIMEOUT_MS,
   DEFAULT_LIBRARIAN_SEARCH_TIMEOUT_MS,
   DEFAULT_LIBRARIAN_TIMEOUT_MS,
   LibrarianClient,
@@ -45,11 +50,20 @@ export {
   type LibrarianClientOptions,
 } from "./client.js";
 
-export { parseDoc, parseLibrary, parseSearchOutcome, parseStatus } from "./parse.js";
+export {
+  parseDoc,
+  parseLibrary,
+  parseScreenshot,
+  parseSearchOutcome,
+  parseStatus,
+} from "./parse.js";
 
 export {
+  MAX_CAPTURE_URL_CHARS,
   MAX_PATH_COMPONENT_CHARS,
+  validateCaptureUrl,
   validatePathComponent,
+  type CaptureUrlValidation,
   type PathComponentValidation,
 } from "./validation.js";
 
@@ -64,8 +78,21 @@ export {
   MAX_SNIPPET_CHARS,
   frameLibrarianDoc,
   frameLibrarianLibrary,
+  frameLibrarianScreenshot,
   frameLibrarianSearch,
+  type LibrarianScreenshotFrame,
 } from "./output.js";
+
+export {
+  MAX_LIBRARIAN_SHOT_BYTES,
+  LibrarianShotsStore,
+  librarianShotHost,
+  type LibrarianShotInput,
+  type LibrarianShotRecord,
+  type LibrarianShotView,
+  type LibrarianShotsPort,
+  type LibrarianShotsStoreOptions,
+} from "./shots.js";
 
 export {
   LIBRARIAN_SYNTHESIZER_SYSTEM_PROMPT,

@@ -18,8 +18,7 @@ import { isSafeImageSrc } from "./markdown.js";
 import { machineLabel } from "./approval-window.js";
 
 /** Petit constructeur DOM (attributs + enfants), sans injection HTML. */
-function h(tag, props = {}, children = []) {
-  const el = document.createElement(tag);
+function h(tag, props = {}, children = []) {  const el = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
     if (key === "class") el.className = value;
     else if (key === "text") el.textContent = value;
@@ -35,8 +34,7 @@ function h(tag, props = {}, children = []) {
 }
 
 /** Taille lisible : « ~140 Ko », « 512 octets ». */
-export function formatBytes(bytes) {
-  const n = Number(bytes);
+export function formatBytes(bytes) {  const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return "taille inconnue";
   if (n < 1024) return `${Math.round(n)} octets`;
   return `~${Math.max(1, Math.round(n / 1024))} Ko`;
@@ -49,6 +47,16 @@ export function screenshotMeta(shot) {
   const dims =
     Number.isFinite(w) && Number.isFinite(he) && w > 0 && he > 0 ? `${w}×${he}` : "dimensions inconnues";
   return `${dims} · ${formatBytes(shot?.bytes)}`;
+}
+
+/** Hôte lisible d'une URL (repli : chaîne vide). */
+function hostOf(url) {
+  if (typeof url !== "string" || url === "") return "";
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 /**
@@ -82,6 +90,34 @@ export function createScreenshotBlocks({ container }) {
   }
 
   function build(shot) {
+    const isWeb = shot?.source === "web";
+    if (isWeb) {
+      const host = hostOf(shot?.url) || String(shot?.agentId ?? "");
+      return h(
+        "div",
+        {
+          class: "screenshot",
+          role: "group",
+          "aria-label": "Capture de page web",
+        },
+        [
+          h("div", { class: "screenshot__head" }, [
+            h("span", { class: "screenshot__title", text: "Capture de page web" }),
+            h("span", { class: "screenshot__machine" }, [
+              h("span", { class: "screenshot__name", text: host }),
+            ]),
+            h("span", { class: "screenshot__badge", text: screenshotMeta(shot) }),
+          ]),
+          buildImage(shot, host),
+          h("p", {
+            class: "screenshot__note",
+            text:
+              "Capture d'une page web, affichée ici et transmise à Yuki ; elle " +
+              "n'est pas conservée dans l'historique de la conversation.",
+          }),
+        ],
+      );
+    }
     const label = machineLabel(shot);
     const machineChildren = [h("span", { class: "screenshot__name", text: label })];
     if (label !== String(shot?.agentId ?? "")) {

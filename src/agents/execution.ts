@@ -257,6 +257,14 @@ export interface CapturedScreenshotView {
   height: number;
   bytes: number;
   capturedAt: string;
+  /**
+   * Origine de la capture. Absent/`agent` = capture d'une MACHINE appairée
+   * (image réservée à l'humain). `web` = capture d'une page web via Libry
+   * (image transmise AUSSI au modèle, cf. `capture_libraire`).
+   */
+  source?: "agent" | "web";
+  /** URL de la page capturée (`source: "web"` uniquement). */
+  url?: string;
 }
 
 /** Événement de capture (diffusion temps réel vers les clients WS). */

@@ -1,10 +1,12 @@
 /**
  * Client HTTP du libraire — preuves RÉELLES contre un serveur mock.
  *
- * Prouve : les DEUX en-têtes d'authentification sur les routes protégées (et
- * seulement `Authorization` sur `/status`), la lecture des réponses, et surtout
- * la traduction DISTINCTE et HONNÊTE de chaque cause d'échec (401 clé, 403 jeton,
- * 404 absent, 429 limite, 502/500 moteurs web, injoignable, non configuré).
+ * Prouve : les en-têtes d'authentification envoyés (Authorization seulement si
+ * agentToken renseigné, X-API-Key seulement si apiKey renseignée — les deux sur
+ * TOUTES les routes quand les deux existent), la lecture des réponses, et
+ * surtout la traduction DISTINCTE et HONNÊTE de chaque cause d'échec (401 clé,
+ * 403 jeton, 404 absent, 429 limite, 502/500 moteurs web, injoignable, non
+ * configuré).
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,7 +22,11 @@ afterEach(async () => {
 });
 
 async function harness(
-  responder: (request: { method: string; url: string }) => MockResponse,
+  responder: (request: {
+    method: string;
+    url: string;
+    headers: Record<string, string | string[] | undefined>;
+  }) => MockResponse,
   overrides: Partial<{ baseUrl: string; agentToken: string; apiKey: string }> = {},
 ): Promise<{ mock: MockLibrarian; client: LibrarianClient }> {
   const mock = await startMockLibrarian((request) => responder(request));
@@ -44,7 +50,7 @@ async function codeOf(promise: Promise<unknown>): Promise<string> {
 }
 
 describe("libraire — client HTTP", () => {
-  it("envoie les DEUX en-têtes sur une route protégée, et seulement Authorization sur /status", async () => {
+  it("envoie les DEUX en-têtes sur une route protégée ET sur /status (clé disponible)", async () => {
     const { mock, client } = await harness((request) => {
       if (request.url.endsWith("/status")) return { status: 200, body: { totalDocs: 3 } };
       return { status: 200, body: { library: [] } };
@@ -55,10 +61,51 @@ describe("libraire — client HTTP", () => {
 
     const statusReq = mock.requests.find((r) => r.url.endsWith("/status"));
     const libraryReq = mock.requests.find((r) => r.url.endsWith("/library"));
+    // Libry accepte la clé en Authorization OU en X-API-Key : on envoie les deux
+    // quand les deux sont configurés (⚠️ ainsi un Bearer invalide ne masque plus
+    // une clé X-API-Key valide).
     expect(statusReq?.headers["authorization"]).toBe("Bearer jeton-agent-test");
-    expect(statusReq?.headers["x-api-key"]).toBeUndefined();
+    expect(statusReq?.headers["x-api-key"]).toBe("lib-cle-test");
     expect(libraryReq?.headers["authorization"]).toBe("Bearer jeton-agent-test");
     expect(libraryReq?.headers["x-api-key"]).toBe("lib-cle-test");
+  });
+
+  it("agentToken VIDE : aucun en-tête Authorization, mais X-API-Key présent", async () => {
+    const { mock, client } = await harness(() => ({ status: 200, body: { library: [] } }), {
+      agentToken: "",
+    });
+    await client.library();
+    const req = mock.requests[0];
+    expect(req?.headers["authorization"]).toBeUndefined();
+    expect(req?.headers["x-api-key"]).toBe("lib-cle-test");
+  });
+
+  it("agentToken renseigné (INVALIDE) + clé VALIDE : les deux en-têtes partent et Libry accepte la clé", async () => {
+    // Serveur SIMULÉ aux sémantiques de Libry : une clé valide dans X-API-Key
+    // suffit, même si le Bearer est invalide (le piège de la double clé disparaît).
+    const { mock, client } = await harness(
+      (request) => {
+        const key = request.headers["x-api-key"];
+        if (key === "lib-cle-test") return { status: 200, body: { library: [] } };
+        return { status: 401, body: {} };
+      },
+      { agentToken: "jeton-obsolete", apiKey: "lib-cle-test" },
+    );
+    const library = await client.library();
+    expect(library.library).toEqual([]);
+    const req = mock.requests[0];
+    expect(req?.headers["authorization"]).toBe("Bearer jeton-obsolete");
+    expect(req?.headers["x-api-key"]).toBe("lib-cle-test");
+  });
+
+  it("/status SANS agentToken : la clé libraire suffit (X-API-Key, pas d'Authorization)", async () => {
+    const { mock, client } = await harness(() => ({ status: 200, body: { totalDocs: 1 } }), {
+      agentToken: "",
+    });
+    await client.status();
+    const req = mock.requests.find((r) => r.url.endsWith("/status"));
+    expect(req?.headers["authorization"]).toBeUndefined();
+    expect(req?.headers["x-api-key"]).toBe("lib-cle-test");
   });
 
   it("search : distingue un document LOCAL (content) d'un résultat WEB (sans content)", async () => {

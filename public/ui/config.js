@@ -419,26 +419,41 @@ const GROUPS = [
         label: "URL de base du libraire",
         kind: "text",
         helper:
-          "Adresse du libraire de Pi-Web, selon votre réseau : même réseau Docker " +
+          "Adresse de Libry, selon votre réseau : même réseau Docker " +
           "(http://pi-web:3000), même machine (http://<ip>:3005), ou accès public " +
-          "(https://pi.holaf.fr). ⚠️ Vide = libraire non configuré : les outils de " +
-          "recherche ne sont alors pas proposés au modèle. Renseigner l'URL prend " +
-          "effet au prochain redémarrage (l'URL elle-même est ensuite modifiable à chaud).",
-      },
-      {
-        path: "librarian.agentToken",
-        label: "Jeton agent (Authorization: Bearer …)",
-        kind: "secret",
-        helper:
-          "Secret envoyé dans l'en-tête Authorization à chaque appel protégé. " +
-          "Jamais réaffiché en clair ; remplaçable ou effaçable.",
+          "(https://pi.holaf.fr). ⚠️ Vide = libraire non configuré : les outils " +
+          "ne sont alors pas proposés au modèle. Renseigner l'URL prend effet au " +
+          "prochain redémarrage (l'URL elle-même est ensuite modifiable à chaud).",
       },
       {
         path: "librarian.apiKey",
-        label: "Clé libraire (X-API-Key: lib-…)",
+        label: "Clé libraire (recommandée)",
         kind: "secret",
         helper:
-          "Secret « lib-… » envoyé dans l'en-tête X-API-Key. Jamais réaffiché en clair.",
+          "⚠️ SEUL champ requis pour l'authentification auprès de Libry. Secret " +
+          "« lib-… » envoyé dans l'en-tête X-API-Key (et/ou Authorization). " +
+          "Jamais réaffiché en clair.",
+      },
+      {
+        path: "librarian.screenshot",
+        label: "Capture de pages web",
+        kind: "select",
+        options: OPTIONS.ttsEnabled,
+        helper:
+          "Active l'outil « capture_libraire » : Libry capture une page web " +
+          "(Chromium headless) et l'image est transmise à Yuki puis affichée dans " +
+          "la conversation. ⚠️ Seules les URL http/https publiques sont " +
+          "capturables.",
+      },
+      {
+        path: "librarian.agentToken",
+        label: "Jeton agent (facultatif)",
+        kind: "secret",
+        advanced: true,
+        helper:
+          "Facultatif (compatibilité). Renseigné, il est envoyé dans l'en-tête " +
+          "Authorization ; vide, il n'est ni exigé ni envoyé — c'est la CLÉ " +
+          "libraire ci-dessus qui authentifie. Jamais réaffiché en clair.",
       },
       {
         path: "librarian.archiveTimeoutMs",
@@ -512,6 +527,7 @@ const FIELD_DEFAULTS = {
   "transport.replayBytes": 5000000,
   "agents.serverName": "",
   "librarian.baseUrl": "",
+  "librarian.screenshot": "on",
   "librarian.archiveTimeoutMs": 30000,
 };
 
@@ -1207,10 +1223,10 @@ async function testConnection(role, statusEl) {
 }
 
 /**
- * Teste la connexion au LIBRAIRE de Pi-Web (`POST /api/config/librarian/test`).
+ * Teste la connexion au LIBRAIRE (Libry) (`POST /api/config/librarian/test`).
  * Le message affiché vient du SERVEUR (il reflète ce qui a réellement été
  * observé : joignable, authentification refusée, moteurs web indisponibles,
- * Pi-Web injoignable). Aucune cause n'est inventée côté navigateur.
+ * libraire injoignable). Aucune cause n'est inventée côté navigateur.
  *
  * Les valeurs NON ENREGISTRÉES saisies dans le formulaire (URL, jetons) sont
  * transmises pour permettre de tester avant d'enregistrer ; elles ne sont ni

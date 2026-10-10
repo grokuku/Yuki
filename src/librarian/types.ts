@@ -11,9 +11,12 @@
 export interface LibrarianConfig {
   /** URL de base (`http://pi-web:3000`, `http://<ip>:3005`, `https://pi.holaf.fr`). */
   baseUrl: string;
-  /** Jeton agent envoyé dans `Authorization: Bearer …`. */
+  /**
+   * Jeton agent envoyé dans `Authorization: Bearer …`. ⚠️ FACULTATIF : vide, il
+   * n'est pas envoyé (Libry n'a qu'UNE couche d'authentification).
+   */
   agentToken: string;
-  /** Clé libraire envoyée dans `X-API-Key` (`lib-…`). */
+  /** Clé libraire envoyée dans `X-API-Key` (`lib-…`) — champ de RÉFÉRENCE. */
   apiKey: string;
 }
 
@@ -137,6 +140,52 @@ export interface LibrarianPort {
   library(signal?: AbortSignal): Promise<LibrarianLibrary>;
   doc(name: string, version?: string, signal?: AbortSignal): Promise<LibrarianDoc>;
   archive(payload: LibrarianArchivePayload, signal?: AbortSignal): Promise<LibrarianArchiveReceipt>;
+}
+
+/** Options d'une demande de capture (`POST /api/librarian/screenshot`). */
+export interface LibrarianScreenshotOptions {
+  /** Largeur du viewport (défaut Libry : 1440). */
+  width?: number;
+  /** Hauteur du viewport (défaut Libry : 900). */
+  height?: number;
+  /** Délai maximal de capture en ms (défaut Libry : 15000). */
+  timeoutMs?: number;
+  /** Demander les octets en ligne (défaut Libry : false). */
+  inline?: boolean;
+}
+
+/** Réponse 200 de `POST /api/librarian/screenshot`. */
+export interface LibrarianScreenshot {
+  /** Identifiant opaque permettant de télécharger l'image via `shot(id)`. */
+  id: string;
+  /** Type MIME de l'image (ex. `image/png`). */
+  mimeType: string;
+  width?: number;
+  height?: number;
+  bytes?: number;
+  /** URL effectivement capturée (normalisée par Libry). */
+  url?: string;
+  /** Origine de la capture (ex. `web`). */
+  origin?: string;
+}
+
+/** Image binaire téléchargée (`GET /api/librarian/shot/:id.png`). */
+export interface LibrarianShotImage {
+  bytes: Uint8Array;
+  mimeType: string;
+}
+
+/**
+ * Port de CAPTURE de page web via Libry. Séparé de `LibrarianPort` pour ne pas
+ * obliger les doubles des quatre outils existants à l'implémenter.
+ */
+export interface LibrarianScreenshotPort {
+  screenshot(
+    url: string,
+    options?: LibrarianScreenshotOptions,
+    signal?: AbortSignal,
+  ): Promise<LibrarianScreenshot>;
+  shot(id: string, signal?: AbortSignal): Promise<LibrarianShotImage>;
 }
 
 /** Port restreint de test de connexion (`GET /status`), pour la page /config. */

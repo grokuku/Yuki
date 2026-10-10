@@ -66,8 +66,13 @@ export {
   type HeritageExtensionOptions,
 } from "./heritage-extension.js";
 
-// Libraire de Pi-Web — quatre outils (recherche, liste, relecture, archivage).
-export { createLibrarianTools, MAX_ARCHIVE_MATERIAL_CHARS, type LibrarianToolsConfig } from "./librarian-tools.js";
+// Libraire (Libry) — quatre outils + capture optionnelle de page web.
+export {
+  createLibrarianTools,
+  MAX_ARCHIVE_MATERIAL_CHARS,
+  MAX_LIBRARIAN_SHOT_MODEL_BYTES,
+  type LibrarianToolsConfig,
+} from "./librarian-tools.js";
 export {
   createSdkLibrarianSynthesizer,
   type SdkLibrarianSynthesizerConfig,

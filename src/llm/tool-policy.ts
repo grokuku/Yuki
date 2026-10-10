@@ -58,7 +58,8 @@ export type LibrarianToolName =
   | "recherche_libraire"
   | "liste_libraire"
   | "lire_libraire"
-  | "archive_libraire";
+  | "archive_libraire"
+  | "capture_libraire";
 
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
 export type CustomToolName =
@@ -85,6 +86,8 @@ export interface ToolPolicyEntry {
   readonly heritage: readonly HeritageToolName[];
   /** Outils du libraire de Pi-Web (recherche documentaire + web). */
   readonly librarian: readonly LibrarianToolName[];
+  /** Outil de CAPTURE de page web via Libry (`capture_libraire`). */
+  readonly librarianCapture: readonly LibrarianToolName[];
   /** Le rôle peut-il déléguer à un worker lourd ? */
   readonly canDelegate: boolean;
 }
@@ -142,13 +145,22 @@ export const HERITAGE_TOOLS: readonly HeritageToolName[] = [
  * Outils du libraire (recherche documentaire + web). Comme les outils de
  * consultation d'agents/archive, ils ne sont exposés que si le câblage les active
  * (URL de base du libraire renseignée au démarrage). ⚠️ `archive_libraire` rend la
- * main immédiatement (travail de fond) ; aucun outil ne va chercher une page web.
+ * main immédiatement (travail de fond).
  */
 export const LIBRARIAN_TOOLS: readonly LibrarianToolName[] = [
   "recherche_libraire",
   "liste_libraire",
   "lire_libraire",
   "archive_libraire",
+];
+
+/**
+ * Outil de CAPTURE de page web via Libry (`capture_libraire`). Exposé quand le
+ * libraire est configuré ET que `librarian.screenshot` est `on` au démarrage
+ * (même contrainte que l'URL de base).
+ */
+export const LIBRARIAN_CAPTURE_TOOLS: readonly LibrarianToolName[] = [
+  "capture_libraire",
 ];
 
 export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
@@ -161,6 +173,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     directory: AGENT_DIRECTORY_TOOLS,
     heritage: HERITAGE_TOOLS,
     librarian: LIBRARIAN_TOOLS,
+    librarianCapture: LIBRARIAN_CAPTURE_TOOLS,
     canDelegate: true,
   },
   heavy: {
@@ -172,6 +185,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     directory: [],
     heritage: [],
     librarian: [],
+    librarianCapture: [],
     canDelegate: false,
   },
 };
@@ -213,6 +227,12 @@ export interface ToolAllowlistOptions {
    * le câblage les active, quand une URL de base est renseignée au démarrage.
    */
   librarianEnabled?: boolean;
+  /**
+   * Active l'outil de capture de page web `capture_libraire` (Libry). En plus de
+   * `librarianEnabled`, il faut que `librarian.screenshot` soit `on`. Défaut :
+   * désactivé.
+   */
+  librarianCaptureEnabled?: boolean;
 }
 
 /**
@@ -232,6 +252,10 @@ export function toolAllowlist(
   const directoryEnabled = (options.directoryEnabled ?? false) && entry.directory.length > 0;
   const heritageEnabled = (options.heritageEnabled ?? false) && entry.heritage.length > 0;
   const librarianEnabled = (options.librarianEnabled ?? false) && entry.librarian.length > 0;
+  const librarianCaptureEnabled =
+    librarianEnabled &&
+    (options.librarianCaptureEnabled ?? false) &&
+    entry.librarianCapture.length > 0;
   const tools: string[] = [...entry.builtins];
   if (entry.canDelegate && delegationEnabled) {
     tools.push(...entry.custom);
@@ -250,6 +274,9 @@ export function toolAllowlist(
   }
   if (librarianEnabled) {
     tools.push(...entry.librarian);
+  }
+  if (librarianCaptureEnabled) {
+    tools.push(...entry.librarianCapture);
   }
   return tools;
 }

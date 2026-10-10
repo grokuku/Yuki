@@ -9,6 +9,7 @@ import type {
   LibrarianDoc,
   LibrarianLibrary,
   LibrarianLibraryEntry,
+  LibrarianScreenshot,
   LibrarianSearchOutcome,
   LibrarianSearchResult,
   LibrarianStatus,
@@ -182,5 +183,26 @@ export function parseDoc(raw: unknown): LibrarianDoc {
     ...(breakingChanges !== undefined ? { breakingChanges } : {}),
     ...(rawContent !== undefined ? { rawContent } : {}),
     raw,
+  };
+}
+
+/** Lit la réponse 200 de `POST /api/librarian/screenshot`. */
+export function parseScreenshot(raw: unknown): LibrarianScreenshot {
+  if (!isRecord(raw)) return { id: "", mimeType: "image/png" };
+  const id = asString(raw.id) ?? "";
+  const mimeType = asString(raw.mimeType) ?? "image/png";
+  const width = typeof raw.width === "number" ? raw.width : undefined;
+  const height = typeof raw.height === "number" ? raw.height : undefined;
+  const bytes = typeof raw.bytes === "number" ? raw.bytes : undefined;
+  const url = asString(raw.url);
+  const origin = asString(raw.origin);
+  return {
+    id,
+    mimeType,
+    ...(width !== undefined ? { width } : {}),
+    ...(height !== undefined ? { height } : {}),
+    ...(bytes !== undefined ? { bytes } : {}),
+    ...(url !== undefined ? { url } : {}),
+    ...(origin !== undefined ? { origin } : {}),
   };
 }

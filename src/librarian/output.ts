@@ -236,3 +236,51 @@ export function frameLibrarianDoc(name: string, doc: LibrarianDoc): string {
 
   return frame([`document="${escapeOutputAttribute(doc.name ?? name)}"`], lines.join("\n"));
 }
+
+/** Métadonnées d'une CAPTURE de page web encadrées (⚠️ jamais le base64). */
+export interface LibrarianScreenshotFrame {
+  pageUrl: string;
+  host: string;
+  mimeType: string;
+  bytes: number;
+  width?: number;
+  height?: number;
+  /** `true` si l'image est jointe à ce résultat (transmise au modèle). */
+  imageAttached: boolean;
+  /** Raison honnête si l'image n'a PAS été jointe (trop volumineuse, illisible). */
+  imageOmittedReason?: string;
+}
+
+/**
+ * Encadre les métadonnées d'une capture de page web.
+ *
+ * ⚠️ La page web est une DONNÉE NON FIABLE : le bloc est ÉCHAPPÉ et encadré par
+ * `<libraire>` comme les autres résultats. ⚠️ Aucun octet d'image (base64) n'est
+ * écrit ici : l'image voyage, si elle est jointe, comme partie `image` du
+ * résultat d'outil — jamais dans ce texte.
+ */
+export function frameLibrarianScreenshot(input: LibrarianScreenshotFrame): string {
+  const lines: string[] = [
+    `Page capturée : ${escapeOutputText(input.pageUrl)}`,
+    `Hôte : ${escapeOutputText(input.host)}`,
+    `Image : ${escapeOutputText(input.mimeType)} (${input.bytes} octets)`,
+  ];
+  if (input.width !== undefined && input.height !== undefined) {
+    lines.push(`Dimensions : ${input.width}×${input.height}`);
+  }
+  if (input.imageAttached) {
+    lines.push(
+      "",
+      "L'image capturée est JOINTE à ce résultat : appuie-toi sur ce que tu y vois.",
+    );
+  } else {
+    lines.push(
+      "",
+      `⚠️ L'image n'est PAS jointe à ce résultat (${
+        input.imageOmittedReason ?? "indisponible"
+      }) : ne prétends pas l'avoir vue.`,
+      "Elle reste affichée à l'humain dans la conversation.",
+    );
+  }
+  return frame([`capture="${escapeOutputAttribute(input.host)}"`], lines.join("\n"));
+}

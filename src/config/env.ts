@@ -72,6 +72,12 @@ export interface Env {
    */
   librarianJobsPath: string;
   /**
+   * Répertoire des CAPTURES de pages web obtenues via Libry (volume `state`).
+   * Sert la route same-origin `/captures/<id>.<ext>`. Surcharge :
+   * `YUKI_LIBRARIAN_SHOTS_DIR`.
+   */
+  librarianShotsDir: string;
+  /**
    * Fichier JSON des conversations ÉPINGLÉES (volume `state`). Séparé du SDK Pi :
    * on n'écrit jamais de champ maison dans le JSONL d'une session. Surcharge :
    * `YUKI_SESSION_PINS_PATH`.
@@ -272,6 +278,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_LIBRARIAN_JOBS_PATH",
       `${mountPoints.state}/librarian-jobs.jsonl`,
+    ),
+    librarianShotsDir: getString(
+      env,
+      "YUKI_LIBRARIAN_SHOTS_DIR",
+      `${mountPoints.state}/librarian-shots`,
     ),
     sessionPinsPath: getString(
       env,
