@@ -705,24 +705,28 @@ a.pill:hover {
   color: var(--danger);
 }
 
-.message__meta {
+/* ─── En-tête de message : l'heure, AU-DESSUS du texte ─────────────────── */
+.message__head {
   display: block;
-  margin-top: 6px;
+  margin-bottom: 4px;
   font-size: 11px;
   color: var(--muted);
-  /* Chiffres à largeur FIXE : l'heure et les durées ne « sautent » pas. */
+  /* Chiffres à largeur FIXE : l'heure ne « saute » pas. */
   font-variant-numeric: tabular-nums;
 }
 
 /* Heure des messages utilisateur : alignée sur le bord EXTÉRIEUR (à droite). */
-.message__meta--end {
+.message__head--end {
   text-align: right;
 }
 
-/* Séparateur « · » entre l'heure (en tête) et les statistiques de l'assistant. */
-.message__meta__sep {
-  margin: 0 5px;
-  color: color-mix(in srgb, var(--muted) 60%, transparent);
+/* ─── Pied du message assistant : infos TECHNIQUES, EN BAS À DROITE ─────── */
+.message__footer {
+  margin-top: 6px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ─── Séparateur de jour : trait INTERROMPU, date complète au milieu ───────

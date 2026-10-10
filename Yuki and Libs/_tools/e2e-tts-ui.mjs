@@ -484,7 +484,7 @@ const LAST_ASSISTANT = `(() => {
     links: [...root.querySelectorAll("a.md-link")].map((a) => a.getAttribute("href")),
     listItems: [...root.querySelectorAll(".md-list li")].map((li) => li.textContent),
     tails: root.querySelectorAll(".md-tail").length,
-    metaText: root.querySelector(".message__meta")?.textContent ?? "",
+    metaText: root.querySelector(".message__footer")?.textContent ?? "",
     styleAttrs: root.querySelectorAll("[style]").length,
   };
 })()`;

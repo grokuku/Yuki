@@ -365,30 +365,39 @@ function ensureDaySeparator(ts) {
   appendDaySeparator(dayFormatter.format(new Date(ts)));
 }
 
-/** Ligne de métadonnées `.message__meta` d'un message (créée à la demande). */
-function ensureMeta(element) {
-  let meta = element.querySelector(".message__meta");
-  if (!meta) {
-    meta = document.createElement("span");
-    meta.className = "message__meta";
-    element.appendChild(meta);
-  }
-  return meta;
+/**
+ * Corps `.message__body` d'un message (texte brut). Le rendu markdown de
+ * l'assistant possède son propre `.message__body.markdown` (voir `markdown.js`).
+ * Le corps hérite du `white-space: pre-wrap` de la bulle (les sauts de ligne de
+ * l'utilisateur sont conservés).
+ */
+function createMessageBody(text) {
+  const body = document.createElement("div");
+  body.className = "message__body";
+  body.textContent = text ?? "";
+  return body;
 }
 
 /**
- * Pose l'heure « juste HH:mm » sur un message. `alignEnd` = bord extérieur à
- * droite (messages utilisateur). Un message SANS horodatage n'affiche rien.
+ * Pose l'heure « juste HH:mm » EN TÊTE d'un message (`.message__head`, AU-DESSUS
+ * du texte). `alignEnd` = bord extérieur à droite (messages utilisateur). Un
+ * message SANS horodatage n'affiche rien (pas de ligne d'en-tête vide).
  */
 function setMessageTime(element, ts, alignEnd) {
   if (!element || !isTimestamp(ts)) return;
-  const meta = ensureMeta(element);
-  if (alignEnd) meta.classList.add("message__meta--end");
-  let time = meta.querySelector(".message__meta__time");
+  let head = element.querySelector(".message__head");
+  if (!head) {
+    head = document.createElement("div");
+    head.className = "message__head";
+    // Inséré AVANT le corps : l'heure est TOUJOURS au-dessus du texte.
+    element.insertBefore(head, element.firstChild);
+  }
+  if (alignEnd) head.classList.add("message__head--end");
+  let time = head.querySelector(".message__time");
   if (!time) {
     time = document.createElement("span");
-    time.className = "message__meta__time";
-    meta.insertBefore(time, meta.firstChild);
+    time.className = "message__time";
+    head.appendChild(time);
   }
   time.textContent = hourFormatter.format(new Date(ts));
 }
@@ -398,9 +407,11 @@ function appendMessage(role, text, pinned = isConversationPinned(), ts = null) {
   ensureDaySeparator(ts);
   const div = document.createElement("div");
   div.className = `message message--${role}`;
-  div.textContent = text ?? "";
+  div.appendChild(createMessageBody(text));
   els.conversation.appendChild(div);
-  if (role === "user") setMessageTime(div, ts, true);
+  // L'heure est EN TÊTE pour TOUT message ; alignée au bord extérieur (droite)
+  // pour l'utilisateur, à gauche pour l'assistant (y compris les bulles d'erreur).
+  setMessageTime(div, ts, role === "user");
   pinIfNeeded(pinned);
   return div;
 }
@@ -456,25 +467,25 @@ function applyTranscript(transcript) {
   pinIfNeeded(pinned);
 }
 
-/** Statistiques du message assistant (ligne « TTFT … · total … · N tok »).
- * L'heure éventuelle est CONSERVÉE : les stats s'ajoutent APRÈS elle. */
+/**
+ * Infos TECHNIQUES du message assistant (ligne « TTFT … · total … · N tok »),
+ * EN BAS À DROITE (`.message__footer`). Le pied est créé À LA DEMANDE : un
+ * message SANS statistiques n'a AUCUN pied (pas de ligne fantôme, pas de saut
+ * de mise en page). Un texte vide est ignoré (rien à montrer).
+ */
 function setMeta(element, text) {
-  if (!element) return;
-  const meta = ensureMeta(element);
-  let stats = meta.querySelector(".message__meta__stats");
+  if (!element || !text) return;
+  let footer = element.querySelector(".message__footer");
+  if (!footer) {
+    footer = document.createElement("div");
+    footer.className = "message__footer";
+    element.appendChild(footer);
+  }
+  let stats = footer.querySelector(".message__stats");
   if (!stats) {
-    if (
-      meta.querySelector(".message__meta__time") &&
-      !meta.querySelector(".message__meta__sep")
-    ) {
-      const sep = document.createElement("span");
-      sep.className = "message__meta__sep";
-      sep.textContent = "·";
-      meta.appendChild(sep);
-    }
     stats = document.createElement("span");
-    stats.className = "message__meta__stats";
-    meta.appendChild(stats);
+    stats.className = "message__stats";
+    footer.appendChild(stats);
   }
   stats.textContent = text;
 }
@@ -527,7 +538,7 @@ function handleFrame(frame) {
     }
     // Autre échec (réseau, erreur serveur) : on réactive les boutons du bloc.
     approvalBlocks.resetBusy();
-    appendMessage("assistant error", frame.message || "erreur");
+    appendMessage("assistant error", frame.message || "erreur", undefined, Date.now());
     return;
   }
   if (type === "sessions") {
@@ -685,12 +696,13 @@ function applyEvent(frame) {
         }, 600);
       }
       if (currentAssistant) {
-        // `hasText` doit porter sur le CONTENU seul : la ligne de métadonnées
-        // (heure) fait partie du texte de la bulle mais n'est PAS une réponse.
+        // `hasText` doit porter sur le CONTENU seul : l'en-tête (heure) et le
+        // pied (infos techniques) font partie de la bulle mais ne sont PAS des
+        // réponses du modèle.
         const hasText = producedContent;
         if (frame.reason === "abort" && !hasText) {
           // On écrit dans le CORPS markdown (jamais `textContent` de la bulle :
-          // cela effacerait la ligne d'heure).
+          // cela effacerait l'en-tête d'heure et le pied technique).
           if (currentRenderer) currentRenderer.setText("(interrompu)");
         } else if (frame.reason === "done" && !hasText) {
           // Rien à afficher : on le DIT (bulle muette + métadonnées sinon
@@ -705,7 +717,7 @@ function applyEvent(frame) {
         }
         pinIfNeeded(pinned);
       } else if (frame.reason === "error") {
-        appendMessage("assistant error", frame.errorMessage || "Une erreur est survenue.");
+        appendMessage("assistant error", frame.errorMessage || "Une erreur est survenue.", undefined, Date.now());
       }
       currentAssistant = null;
       currentRenderer = null;
@@ -795,7 +807,7 @@ function sendMessage() {
       ...(CLIENT_TIME_ZONE ? { tz: CLIENT_TIME_ZONE } : {}),
     })
   ) {
-    appendMessage("assistant error", "Non connecté au gateway.");
+    appendMessage("assistant error", "Non connecté au gateway.", undefined, Date.now());
   }
 }
 

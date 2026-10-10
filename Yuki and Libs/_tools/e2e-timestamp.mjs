@@ -183,10 +183,20 @@ async function shot(name) {
   writeFileSync(join(SHOTS, name + ".png"), Buffer.from(res.data, "base64"));
 }
 
-/** Sonde du fil : séparateurs, heures, préfixe masqué, styles calculés. */
+/** Sonde du fil : séparateurs, heures, positions MESURÉES, préfixe masqué, styles calculés. */
 const threadState = () =>
   evaluate(`(() => {
     const conv = document.querySelector('#conversation');
+    const rect = (el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        top: Math.round(r.top),
+        bottom: Math.round(r.bottom),
+        left: Math.round(r.left),
+        right: Math.round(r.right),
+        cx: Math.round((r.left + r.right) / 2),
+      };
+    };
     const seps = [...document.querySelectorAll('.daysep')].map((s) => {
       const label = s.querySelector('.daysep__label');
       const sr = s.getBoundingClientRect();
@@ -197,22 +207,41 @@ const threadState = () =>
         rightGap: Math.round(sr.right - lr.right),
       };
     });
-    const userMsgs = [...document.querySelectorAll('.message--user')].map((m) => ({
-      time: m.querySelector('.message__meta__time')?.textContent ?? null,
-      end: m.querySelector('.message__meta--end') !== null,
-    }));
-    const asstMsgs = [...document.querySelectorAll('.message--assistant')].map((m) => ({
-      time: m.querySelector('.message__meta__time')?.textContent ?? null,
-    }));
-    const usermeta = document.querySelector('.message--user .message__meta');
+    const measure = (m) => {
+      const head = m.querySelector('.message__head');
+      const time = m.querySelector('.message__time');
+      const body = m.querySelector('.message__body');
+      const footer = m.querySelector('.message__footer');
+      return {
+        msg: rect(m),
+        time: time ? time.textContent : null,
+        end: head ? head.classList.contains('message__head--end') : false,
+        timeRect: time ? rect(time) : null,
+        body: body ? rect(body) : null,
+        footer: footer ? rect(footer) : null,
+        footerText: footer ? footer.textContent : null,
+        // true si l'en-tête précède le corps DANS LE DOM (heure au-dessus).
+        headBeforeBody:
+          head && body
+            ? (head.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+            : null,
+      };
+    };
+    const userMsgs = [...document.querySelectorAll('.message--user')].map(measure);
+    const asstMsgs = [...document.querySelectorAll('.message--assistant')].map(measure);
+    const usermeta = document.querySelector('.message--user .message__head');
     return {
       seps,
+      userMsgs,
+      asstMsgs,
       userTimes: userMsgs.map((m) => m.time),
       userEnd: userMsgs.every((m) => m.end),
       asstTimes: asstMsgs.map((m) => m.time).filter((t) => t !== null),
       hasPrefix: (conv ? conv.textContent : '').includes('horodatage'),
       textAlign: usermeta ? getComputedStyle(usermeta).textAlign : null,
       tabular: usermeta ? getComputedStyle(usermeta).fontVariantNumeric : null,
+      userFooters: userMsgs.filter((m) => m.footer !== null).length,
+      asstFooters: asstMsgs.filter((m) => m.footer !== null).length,
       styleAttrs: document.querySelectorAll('[style]').length,
       styles: [...document.querySelectorAll('[style]')].map(
         (e) => e.tagName + (e.className ? '.' + String(e.className).split(' ').join('.') : '') + ' → ' + (e.getAttribute('style') || ''),
@@ -260,6 +289,53 @@ check(
   JSON.stringify(a.asstTimes) === JSON.stringify(["15:41", "16:14", "09:07"]),
   JSON.stringify(a.asstTimes),
 );
+
+/* — Géométrie MESURÉE (valeurs brutes en px) : l'heure est AU-DESSUS du texte,
+ *   alignée par rôle ; rien en bas pour l'utilisateur ; l'en-tête précède le
+ *   corps dans le DOM. Ces mesures constituent la preuve géométrique. */
+const geometry = (msgs) =>
+  msgs.map((m) => ({
+    time: m.timeRect ? `${m.timeRect.top}–${m.timeRect.bottom}` : null,
+    body: m.body ? `${m.body.top}–${m.body.bottom}` : null,
+    timeCx: m.timeRect?.cx ?? null,
+    msgCx: m.msg?.cx ?? null,
+  }));
+check(
+  "ASSISTANT : heure AU-DESSUS du texte (heure.bottom <= texte.top)",
+  a.asstMsgs.length > 0 && a.asstMsgs.every((m) => m.timeRect && m.body && m.timeRect.bottom <= m.body.top),
+  JSON.stringify(geometry(a.asstMsgs)),
+);
+check(
+  "ASSISTANT : heure À GAUCHE (centre heure < centre bulle)",
+  a.asstMsgs.length > 0 && a.asstMsgs.every((m) => m.timeRect && m.timeRect.cx < m.msg.cx),
+  JSON.stringify(a.asstMsgs.map((m) => [m.timeRect?.cx, m.msg?.cx])),
+);
+check(
+  "ASSISTANT : en-tête AVANT le corps dans le DOM",
+  a.asstMsgs.every((m) => m.headBeforeBody === true),
+  JSON.stringify(a.asstMsgs.map((m) => m.headBeforeBody)),
+);
+check(
+  "UTILISATEUR : heure AU-DESSUS du texte (heure.bottom <= texte.top)",
+  a.userMsgs.length > 0 && a.userMsgs.every((m) => m.timeRect && m.body && m.timeRect.bottom <= m.body.top),
+  JSON.stringify(geometry(a.userMsgs)),
+);
+check(
+  "UTILISATEUR : heure À DROITE (centre heure > centre bulle)",
+  a.userMsgs.length > 0 && a.userMsgs.every((m) => m.timeRect && m.timeRect.cx > m.msg.cx),
+  JSON.stringify(a.userMsgs.map((m) => [m.timeRect?.cx, m.msg?.cx])),
+);
+check(
+  "UTILISATEUR : RIEN en bas (aucun pied technique)",
+  a.userFooters === 0,
+  `${a.userFooters} pied(s)`,
+);
+check(
+  "ASSISTANT restauré : aucun pied technique (pas de ligne fantôme)",
+  a.asstFooters === 0,
+  `${a.asstFooters} pied(s)`,
+);
+
 check("AUCUNE date sur les bulles (seulement l'heure)", a.userTimes.every((t) => /^\d{2}:\d{2}$/.test(t)));
 check("le préfixe [horodatage] est MASQUÉ à l'affichage", a.hasPrefix === false);
 // Le seul `[style]` attendu est le <html> racine : les variables de thème y
@@ -307,7 +383,7 @@ await waitFor(`document.querySelectorAll('.message--user').length === 3`);
 const back = await threadState();
 check("RETOUR au fil A : 2 séparateurs, 3 heures (aucun doublon)", back.seps.length === 2 && back.userTimes.length === 3, JSON.stringify(back.userTimes));
 
-/* ═══════════ 4) Envoi LIVE : l'heure apparaît sous la bulle utilisateur ═══════════ */
+/* ═══════════ 4) Envoi LIVE : heure au-dessus, infos techniques en bas à droite ═══════════ */
 await evaluate(`(() => {
   const input = document.querySelector('#input');
   input.value = 'Message live pour tester l horodatage';
@@ -320,10 +396,49 @@ const live = await evaluate(`(() => {
   const last = msgs[msgs.length - 1];
   return {
     count: msgs.length,
-    time: last?.querySelector('.message__meta__time')?.textContent ?? null,
+    time: last?.querySelector('.message__time')?.textContent ?? null,
   };
 })()`);
 check("LIVE : un nouveau message utilisateur horodaté apparaît immédiatement", live.count === 4 && /^\d{2}:\d{2}$/.test(live.time ?? ""), `${live.count} message(s), heure ${live.time}`);
+
+// Le run live se termine et pose un pied TECHNIQUE au message assistant
+// (« total … ms » au minimum, TTFT/tok selon la réponse). On l'attend, puis on
+// MESURE sa géométrie : EN BAS (sous le texte) et À DROITE (plus à droite que
+// l'heure).
+await waitFor(`document.querySelectorAll('.message--assistant .message__footer').length > 0`, 8000);
+const liveGeo = await evaluate(`(() => {
+  const m = [...document.querySelectorAll('.message--assistant')].pop();
+  if (!m) return null;
+  const rect = (el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), cx: Math.round((r.left + r.right) / 2) }; };
+  const time = m.querySelector('.message__time');
+  const body = m.querySelector('.message__body');
+  const footer = m.querySelector('.message__footer');
+  const stats = footer ? footer.querySelector('.message__stats') : null;
+  return {
+    msg: rect(m),
+    time: time ? rect(time) : null,
+    body: body ? rect(body) : null,
+    footer: footer ? rect(footer) : null,
+    stats: stats ? rect(stats) : null,
+    footerText: footer ? footer.textContent : null,
+  };
+})()`);
+check(
+  "LIVE : le message assistant porte un pied TECHNIQUE (infos non perdues)",
+  liveGeo?.footer != null && /total/.test(liveGeo.footerText ?? ""),
+  JSON.stringify({ footer: liveGeo?.footer ?? null, text: liveGeo?.footerText ?? null }),
+);
+check(
+  "LIVE : le pied technique est EN BAS (sous le texte : pied.top >= corps.bottom)",
+  liveGeo?.footer != null && liveGeo.body != null && liveGeo.footer.top >= liveGeo.body.bottom,
+  JSON.stringify({ corps: liveGeo?.body ?? null, pied: liveGeo?.footer ?? null }),
+);
+check(
+  "LIVE : le pied technique est À DROITE de l'heure (centre stats > centre heure)",
+  liveGeo?.stats != null && liveGeo.time != null && liveGeo.stats.cx > liveGeo.time.cx,
+  JSON.stringify({ heureCx: liveGeo?.time?.cx ?? null, statsCx: liveGeo?.stats?.cx ?? null, stats: liveGeo?.stats ?? null }),
+);
+await shot("timestamp-live-footer");
 await evaluate(`document.querySelector('#stop')?.click()`);
 
 /* ═══════════ 5) Fenêtre ÉTROITE : aucun débordement NOUVEAU ═══════════ */
@@ -331,7 +446,7 @@ await send("Emulation.setDeviceMetricsOverride", { width: 480, height: 720, devi
 await navigate(`${server.base}/`);
 await waitFor(`document.querySelectorAll('.message--user').length >= 3`);
 const narrow = await threadState();
-check("étroit : séparateurs toujours affichés", narrow.seps.length === 2, `${narrow.seps.length}`);
+check("étroit : séparateurs toujours affichés (jours seedés présents en tête)", narrow.seps.length >= 2 && narrow.seps[0]?.text === "mercredi 7 octobre 2026" && narrow.seps[1]?.text === "jeudi 8 octobre 2026", narrow.seps.map((s) => s.text).join(" | "));
 check("étroit : aucun débordement horizontal NOUVEAU", narrow.overflow <= 1, `débordement ${narrow.overflow} px`);
 await shot("timestamp-narrow");
 
