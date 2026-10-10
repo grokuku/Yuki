@@ -683,8 +683,13 @@ a.pill:hover {
 }
 
 .message {
-  /* BULLE PLEINE LARGEUR (assistant) ou ~85 % alignée à droite (utilisateur),
-     SANS colonne bornée ni centrage : le fil REMPLIT l'espace disponible. */
+  /* Bulle à largeur PROPORTIONNELLE, IDENTIQUE pour les deux rôles : le fil
+     REMPLIT l'espace disponible (aucune colonne bornée ni centrage, aucun px en
+     dur). L'utilisateur est poussé à DROITE et Yuki à GAUCHE : la MÊME largeur
+     (85 %) laisse donc EXACTEMENT la même marge — à gauche pour l'utilisateur,
+     à droite pour Yuki (symétrie par construction, prouvée par mesure en E2E).
+     100 % − 85 % = 15 % de marge de chaque côté. */
+  width: 85%;
   min-width: 0;
   max-width: 100%;
   padding: 10px 14px;
@@ -696,13 +701,11 @@ a.pill:hover {
 
 .message--user {
   align-self: flex-end;
-  width: 85%;
   background: var(--user);
 }
 
 .message--assistant {
   align-self: flex-start;
-  width: 100%;
   background: var(--assistant);
 }
 
@@ -767,45 +770,6 @@ a.pill:hover {
   font-size: 12px;
   color: var(--muted);
   font-style: italic;
-}
-
-/* ─── Indicateur « une validation est en attente » (D118) ────────────────
- * Affiché quand une demande de validation arrive alors que l'utilisateur a
- * remonté le fil : la vue n'est pas déplacée de force, mais la demande est
- * SIGNALÉE (et le bouton y ramène). Rendu sans style en ligne (CSP). */
-.pending-validation {
-  align-self: flex-end;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 24px 8px;
-  padding: 8px 14px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: var(--panel-2);
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgb(0 0 0 / 0.22);
-}
-
-/* `display` explicite ⇒ l'attribut `hidden` doit être réaffirmé. */
-.pending-validation[hidden] {
-  display: none;
-}
-
-.pending-validation:hover,
-.pending-validation:focus-visible {
-  background: var(--panel-hover);
-}
-
-.pending-validation__dot {
-  inline-size: 8px;
-  block-size: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: 0 0 auto;
 }
 
 .composer {
@@ -1240,6 +1204,56 @@ h6.md-heading {
 
 .approval__note {
   color: var(--muted);
+}
+
+/* ─── FENÊTRE FLOTTANTE de VALIDATION HUMAINE (D118) ────────────────────
+ * Affichée AU-DESSUS de l'interface (visible partout, y compris /config) :
+ * NON bloquante (aucun voile), DÉPLAÇABLE, ne se ferme PAS au clic à côté.
+ * Le rendu DOM est construit programmatiquement (aucun `style=` dans le markup) ;
+ * le déplacement fixe `left`/`top` par CSSOM, comme le menu contextuel (`ctx-menu`).
+ * Couleurs : variables de thème uniquement. */
+.approval-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  /* Aucun voile : le conteneur laisse passer les clics, seule la fenêtre les capte. */
+  pointer-events: none;
+}
+
+.approval-window {
+  position: fixed;
+  z-index: 1201;
+  pointer-events: auto;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  box-shadow: 0 18px 48px color-mix(in srgb, #000 45%, transparent);
+}
+
+.approval-window__bar {
+  cursor: move;
+  user-select: none;
+}
+
+.approval-window__bar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Poignée décorative (points) : le sens est porté par le texte, pas la couleur. */
+.approval-window__grip {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  background-image: radial-gradient(currentColor 1.2px, transparent 1.3px);
+  background-size: 4px 4px;
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.approval-window__close {
+  margin-left: auto;
 }
 
 /* ── Capture d'écran (bloc éphémère dans la conversation) ──────────────── */

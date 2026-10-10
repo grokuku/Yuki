@@ -35,9 +35,14 @@ describe("layout — barre latérale repliée/dépliée et fil pleine largeur", 
     expect(css).toMatch(/\.sidebar__inner\s*\{[^}]*width:\s*280px/s);
   });
 
-  it("fil pleine largeur : assistant 100 %, utilisateur 85 %", () => {
-    expect(css).toMatch(/\.message--assistant\s*\{[^}]*width:\s*100%/s);
-    expect(css).toMatch(/\.message--user\s*\{[^}]*width:\s*85%/s);
+  it("largeur proportionnelle IDENTIQUE aux deux rôles (marges symétriques)", () => {
+    // Une SEULE largeur proportionnelle portée par `.message` s'applique aux
+    // DEUX rôles : l'utilisateur (aligné à droite) laisse la même marge à
+    // gauche que Yuki (aligné à gauche) laisse à droite. Aucun px en dur,
+    // aucune colonne bornée ni centrage.
+    expect(css).toMatch(/\.message\s*\{[^}]*width:\s*85%/s);
+    expect(css).not.toMatch(/\.message--assistant\s*\{[^}]*width:/s);
+    expect(css).not.toMatch(/\.message--user\s*\{[^}]*width:/s);
     // Plus AUCUNE borne de colonne de lecture ni centrage.
     expect(css).not.toContain("max-width: min(78%, 900px)");
   });

@@ -530,9 +530,11 @@ suite (au lieu d'attendre que le modèle la redemande), et le **résultat**
 s'affiche dans la conversation **de façon éphémère** (même mécanisme que la
 demande : trame `approval_result`, jamais dans l'historique). Ce comportement
 est **isolé** dans `AgentExecutionService.decideApproval`
-(`src/agents/execution.ts`) et dans `public/ui/approval-block.js` : il peut être
-changé sans toucher au reste (par ex. ne plus exécuter et laisser le modèle
-relancer, ou persister le résultat dans le transcript).
+(`src/agents/execution.ts`) et dans la **fenêtre flottante** de validation
+(`public/ui/approval-window.js`, reçue aussi par `/config` via
+`public/ui/approval-channel.js`) : il peut être changé sans toucher au reste
+(par ex. ne plus exécuter et laisser le modèle relancer, ou persister le
+résultat dans le transcript).
 
 **Panneau Agents.** Conservé, **en repli** (utile hors conversation). Sa route
 HTTP (`POST /api/agents/approvals/<id>/approve|deny`) **enregistre** la décision

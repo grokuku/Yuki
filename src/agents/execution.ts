@@ -23,6 +23,7 @@ import type { AgentHub } from "./connection.js";
 import { isChannelError } from "./errors.js";
 import { destructiveLabels, evaluateDestructive } from "./destructive.js";
 import { escapeOutputText, frameAgentDirectory, frameCommandOutput } from "./output.js";
+import { buildApprovalResultPrompt, ORIGIN_APPROVAL_RESULT } from "./approval-report.js";
 import type { AuditLog } from "./audit.js";
 import type { AgentStore } from "./store.js";
 import type { AgentRecord } from "./types.js";
@@ -90,6 +91,19 @@ export interface ExecutionOutcome {
 /** Port consommé par l'outil `run_command`. */
 export interface ExecutionServicePort {
   execute(request: ExecutionRequest): Promise<ExecutionOutcome>;
+}
+
+/**
+ * Port de RÉVEIL du modèle : reçoit le prompt synthétique de résultat d'une
+ * commande validée. Structurellement compatible avec `LightWaker`
+ * (`src/delegation/ports.ts`) — le `PiHost` le satisfait tel quel.
+ */
+export interface ApprovalResultWaker {
+  send(
+    sessionId: string,
+    text: string,
+    opts?: { origin?: string; jobId?: string },
+  ): unknown;
 }
 
 /** Port consommé par l'outil `capturer_ecran`. */
@@ -268,6 +282,12 @@ export interface ExecutionServiceOptions {
    * (`ttlSeconds`) exposée dans les vues. Défaut : `Date.now`.
    */
   now?: () => number;
+  /**
+   * Réveil du modèle en fin de commande VALIDÉE (rapport `approval_id` +
+   * stdout/stderr/code de sortie, éphémère). Optionnel : sans lui, aucun
+   * rapport n'est envoyé (comportement inchangé).
+   */
+  waker?: ApprovalResultWaker;
 }
 
 /** Timeout par défaut d'une commande (ms). */
@@ -300,6 +320,7 @@ export class AgentExecutionService implements ExecutionServicePort {
   private readonly logger: ExecutionLogger;
   private readonly idFactory: () => string;
   private readonly now: () => number;
+  private waker?: ApprovalResultWaker;
 
   constructor(options: ExecutionServiceOptions) {
     this.store = options.store;
@@ -309,6 +330,15 @@ export class AgentExecutionService implements ExecutionServicePort {
     this.logger = options.logger;
     this.idFactory = options.idFactory ?? defaultCommandId;
     this.now = options.now ?? Date.now;
+    this.waker = options.waker;
+  }
+
+  /**
+   * Branche le réveil du modèle (renseigné après création du `PiHost`, comme
+   * `DelegationService.setWaker`). Sans lui, aucune notification n'est émise.
+   */
+  setWaker(waker: ApprovalResultWaker): void {
+    this.waker = waker;
   }
 
   async execute(request: ExecutionRequest): Promise<ExecutionOutcome> {
@@ -856,12 +886,49 @@ export class AgentExecutionService implements ExecutionServicePort {
       ...(approved.origin !== undefined ? { origin: approved.origin } : {}),
       ...(approved.sessionId !== undefined ? { sessionId: approved.sessionId } : {}),
     });
+    // ⚠️ Le modèle n'avait aucun retour après validation : on le réveille avec
+    // le résultat COMPLET (stdout/stderr/code de sortie), corrélé par
+    // `approval_id`. Le prompt est SYNTHÉTIQUE : jamais dans le transcript, le
+    // snapshot, le rejeu ni la mémoire (résultat toujours ÉPHÉMÈRE côté humain).
+    this.notifyApprovalResult(approved, outcome);
     return {
       ok: true,
       decision: "approve",
       approval: this.viewApproval(approved),
       outcome,
     };
+  }
+
+  /**
+   * Réveille le modèle avec le résultat d'une commande validée. Jamais bloquant
+   * pour la décision humaine : toute erreur est journalisée, jamais propagée.
+   * Sans `sessionId` (demande hors conversation) ou sans waker, rien n'est émis.
+   */
+  private notifyApprovalResult(approved: PendingApproval, outcome: ExecutionOutcome): void {
+    const sessionId = approved.sessionId;
+    if (!sessionId || !this.waker) return;
+    const prompt = buildApprovalResultPrompt({
+      approvalId: approved.id,
+      agentId: approved.agentId,
+      ...(outcome.agentName ? { agentName: outcome.agentName } : {}),
+      command: approved.command,
+      outcome,
+    });
+    try {
+      this.waker.send(sessionId, prompt, { origin: ORIGIN_APPROVAL_RESULT });
+      this.logger.info("agents.approval.result_reported", {
+        approval_id: approved.id,
+        agent_id: approved.agentId,
+        session_id: sessionId,
+        status: outcome.status,
+      });
+    } catch (error) {
+      this.logger.warn("agents.approval.result_report_failed", {
+        approval_id: approved.id,
+        session_id: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Convertit une demande mémorisée en vue publique (pour l'interface). */

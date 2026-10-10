@@ -72,14 +72,19 @@ describe("intégration — report du léger", () => {
     expect(outcome.status).toBe("completed");
     await wait(20);
 
-    // Le léger a été réveillé : exactement un message (le report), aucune
-    // bulle assistant du lourd, aucun "thinking".
+    // Le léger a été réveillé par un prompt SYNTHÉTIQUE (origine `job_report`).
+    // ⚠️ Miroir du host RÉEL : un prompt synthétique n'apparaît NI dans le
+    // transcript de l'UI, NI dans le `userText` du `run_started`. On vérifie
+    // donc le réveil sur l'ÉVÉNEMENT, pas sur le transcript.
+    const runStarted = events.find((event) => event.type === "run_started");
+    expect(runStarted?.origin).toBe("job_report");
+    expect(runStarted?.userText ?? "").not.toContain("[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]");
     const state = host.getState("sess-light");
     const transcript = state?.transcript ?? [];
-    expect(transcript).toHaveLength(1);
-    expect(transcript[0]?.role).toBe("user");
-    expect(transcript[0]?.text).toContain("[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]");
-    expect(transcript[0]?.text).not.toContain("thinking");
-    expect(transcript[0]?.text).not.toContain("réflexion interne secrète");
+    expect(transcript.some((entry) => entry.role === "user")).toBe(false);
+    expect(
+      transcript.some((entry) => entry.text.includes("[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]")),
+    ).toBe(false);
+    expect(transcript.some((entry) => entry.text.includes("réflexion interne secrète"))).toBe(false);
   });
 });

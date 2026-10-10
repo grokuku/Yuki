@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 /**
- * Harnais E2E JETABLE — validation humaine DANS la conversation (D118).
+ * Harnais E2E JETABLE — validation humaine en FENÊTRE FLOTTANTE (D118).
  *
- * Vérifie, avec la CSP RÉELLE et un hôte Pi RÉEL hors ligne : le bloc de
- * validation apparaît DANS le fil (machine + ID + commande exacte + motif
- * destructeur + compte à rebours), il RÉAPPARAÎT au rechargement tant qu'il est
- * en attente, VALIDER le fait disparaître et affiche le résultat, et une fois
- * décidé il ne revient PLUS (ni bloc ni résidu dans l'historique). ZÉRO violation
- * CSP / exception JS.
+ * Vérifie, avec la CSP RÉELLE et un hôte Pi RÉEL hors ligne :
+ *   - la demande s'affiche dans une fenêtre FLOTTANTE AU-DESSUS de l'interface
+ *     (pas dans le fil), NON bloquante, DÉPLAÇABLE ;
+ *   - elle ne se ferme PAS au clic à côté ;
+ *   - elle reste affichée en naviguant vers `/config` (le scénario demandé) ;
+ *   - plusieurs demandes cohabitent (aucune n'écrase l'autre) ;
+ *   - le compte à rebours résiste à une horloge cliente en AVANCE ;
+ *   - décider fait disparaître la BONNE fenêtre et affiche le résultat.
+ * ZÉRO violation CSP / exception JS.
  *
  * Usage : node "/projects/Yuki/Yuki and Libs/_tools/e2e-approval.mjs"
  */
@@ -182,61 +185,128 @@ async function shot(name) {
   writeFileSync(join(SHOTS, name + ".png"), Buffer.from(res.data, "base64"));
 }
 
-const blockState = () =>
+/** Clic SOURIS RÉEL (CDP) aux coordonnées viewport. */
+async function mouseClick(x, y) {
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  await sleep(120);
+}
+
+/** Glisser SOURIS RÉEL (CDP) de (x0,y0) à (x1,y1). */
+async function mouseDrag(x0, y0, x1, y1) {
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: x0, y: y0, button: "left", clickCount: 1 });
+  const steps = 6;
+  for (let i = 1; i <= steps; i += 1) {
+    await send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: x0 + ((x1 - x0) * i) / steps,
+      y: y0 + ((y1 - y0) * i) / steps,
+      button: "left",
+    });
+    await sleep(20);
+  }
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: x1, y: y1, button: "left", clickCount: 1 });
+  await sleep(120);
+}
+
+/** État de la couche flottante + des fenêtres de demande. */
+const layerState = () =>
   evaluate(`(() => {
+    const layer = document.querySelector('.approval-layer');
+    const wins = [...document.querySelectorAll('.approval-window:not(.approval--result)')];
     const conv = document.querySelector('#conversation');
-    const block = document.querySelector('.approval:not(.approval--result)');
-    const result = document.querySelector('.approval--result');
+    const first = wins[0] || null;
+    const text = first ? first.textContent : '';
     return {
-      inConversation: Boolean(block && conv && conv.contains(block)),
-      isMessage: block ? block.classList.contains('message') : false,
-      text: block ? block.textContent : '',
+      hasLayer: !!layer,
+      layerInBody: !!(layer && document.body.contains(layer)),
+      count: wins.length,
+      ids: wins.map((w) => w.getAttribute('data-approval-id')),
+      inConversation: wins.some((w) => conv && conv.contains(w)),
+      text,
       hasValider: !![...document.querySelectorAll('.approval__btn')].find((b) => b.textContent === 'Valider'),
       hasRefuser: !![...document.querySelectorAll('.approval__btn')].find((b) => b.textContent === 'Refuser'),
-      resultText: result ? result.textContent : '',
-      blockStyle: block ? block.getAttribute('style') : null,
+      role: first ? first.getAttribute('role') : null,
+      ariaModal: first ? first.getAttribute('aria-modal') : null,
+      style: first ? first.getAttribute('style') : null,
+      resultText: document.querySelector('.approval--result')?.textContent ?? '',
     };
   })()`);
 
-/* VISIBILITÉ MESURÉE (pas seulement la présence DOM) : fraction du bloc
- * réellement contenue dans la zone visible du fil `#conversation`. */
-const visibilityOf = () =>
+const rectOf = (selector) =>
   evaluate(`(() => {
-    const block = document.querySelector('.approval:not(.approval--result)');
-    const conv = document.querySelector('#conversation');
-    if (!block || !conv) return null;
-    const b = block.getBoundingClientRect();
-    const c = conv.getBoundingClientRect();
-    const visibleH = Math.max(0, Math.min(b.bottom, c.bottom) - Math.max(b.top, c.top));
-    return { ratio: b.height > 0 ? visibleH / b.height : 0, scrollTop: conv.scrollTop };
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height,
+      position: getComputedStyle(el).position, zIndex: getComputedStyle(el).zIndex };
   })()`);
 
-/* ═══════════════ 1) Le bloc apparaît DANS la conversation ═══════════════ */
+const windowRect = () => rectOf(".approval-window:not(.approval--result)");
+
+/* ═══════════════ 1) Fenêtre FLOTTANTE au-dessus de l'interface ══════════ */
 await navigate(`${server.base}/`);
-const shown = await waitFor(`!!document.querySelector('.approval:not(.approval--result)')`);
-check("le bloc de validation apparaît", shown);
-const state = await blockState();
-check("il est DANS la conversation (#conversation)", state.inConversation === true);
-check("ce n'est PAS un message (état temporaire)", state.isMessage === false);
+const shown = await waitFor(`document.querySelectorAll('.approval-window:not(.approval--result)').length >= 2`);
+check("deux fenêtres flottantes apparaissent (deux demandes en attente)", shown);
+const state = await layerState();
+check("la couche flottante est montée sur <body>", state.hasLayer && state.layerInBody === true);
+check("les fenêtres ne sont PAS dans le fil (#conversation)", state.inConversation === false);
+check("role=dialog + aria-modal=false (fenêtre NON modale)", state.role === "dialog" && state.ariaModal === "false");
 check("machine : nom + identifiant", /nuc00/.test(state.text) && /agent-nuc00/.test(state.text), state.text.slice(0, 120));
 check("commande EXACTE affichée", state.text.includes("rm -rf /srv/cache"));
 check("motif destructeur expliqué", state.text.includes("suppression (rm)"), state.text.slice(0, 200));
 check("expiration mentionnée (compte à rebours)", /Expire dans/i.test(state.text), state.text.slice(0, 200));
 check("boutons Valider ET Refuser", state.hasValider && state.hasRefuser);
-check("aucun attribut de style sur le bloc (CSP)", state.blockStyle === null, String(state.blockStyle));
-// ⚠️ Le défaut signalé : le bloc pouvait apparaître SOUS la ligne de flottaison.
-// On MESURE donc la visibilité réelle dans le viewport du fil.
-const visible = await visibilityOf();
 check(
-  "le bloc est RÉELLEMENT visible après apparition (mesuré dans le fil)",
-  Boolean(visible) && visible.ratio >= 0.99,
-  visible ? `ratio=${visible.ratio.toFixed(2)} scrollTop=${visible.scrollTop}` : "introuvable",
+  "positionnement par CSSOM (left/top), aucun autre style en ligne",
+  /left:\s*-?\d+(\.\d+)?px/.test(state.style ?? "") &&
+    /top:\s*-?\d+(\.\d+)?px/.test(state.style ?? "") &&
+    !/background|color|padding|border/i.test(state.style ?? ""),
+  String(state.style),
 );
-await shot("approval-block");
+const geometry = await windowRect();
+check("fenêtre position:fixed et dans le viewport", geometry?.position === "fixed" && geometry.left >= 0 && geometry.top >= 0 && geometry.bottom <= 901);
+check("z-index élevé (au-dessus de l'interface)", Number(geometry?.zIndex) >= 1000, String(geometry?.zIndex));
+await shot("approval-window");
 
-/* ═══ 2) Horloge CLIENTE en avance de 10 min : le bloc ne disparaît pas ═══
- * Le compte à rebours repose sur une DURÉE (`ttlSeconds`) comptée depuis la
- * réception, pas sur `expiresAt` comparé à l'horloge du poste. */
+/* ═══ 2) NON BLOQUANTE : un clic sur un élément du site DERRIÈRE passe ═══ */
+await evaluate(`(() => {
+  const b = document.createElement('button');
+  b.id = 'e2e-probe';
+  b.textContent = 'probe';
+  b.style.position = 'fixed';
+  b.style.left = '300px';
+  b.style.top = '300px';
+  b.style.zIndex = '500';
+  b.addEventListener('click', () => { window.__probeClicked = true; });
+  document.body.appendChild(b);
+})()`);
+const probeRect = await rectOf("#e2e-probe");
+const probeX = Math.round(probeRect.left + probeRect.width / 2);
+const probeY = Math.round(probeRect.top + probeRect.height / 2);
+await evaluate(`window.__probeClicked = false`);
+await mouseClick(probeX, probeY);
+const probeClicked = await evaluate(`window.__probeClicked === true`);
+check(
+  "NON bloquante : un clic SOUS la couche atteint l'élément du site DERRIÈRE",
+  probeClicked === true,
+  `clic réel (${probeX},${probeY})`,
+);
+check("clic à côté : les fenêtres RESTENT affichées", (await layerState()).count >= 2);
+
+/* ═══════════════ 3) DÉPLAÇABLE : glisser change la position ════════════ */
+const before = await windowRect();
+const barX = Math.round(before.left + before.width / 2);
+const barY = Math.round(before.top + 16);
+await mouseDrag(barX, barY, barX - 160, barY - 90);
+const after = await windowRect();
+check(
+  "DÉPLAÇABLE : la position change au glisser réel",
+  Math.abs(after.left - before.left) > 50 && Math.abs(after.top - before.top) > 30,
+  `avant=(${Math.round(before.left)},${Math.round(before.top)}) après=(${Math.round(after.left)},${Math.round(after.top)})`,
+);
+
+/* ═══ 4) Horloge CLIENTE en avance de 10 min : la fenêtre ne disparaît pas ═ */
 const skewScript = await send("Page.addScriptToEvaluateOnNewDocument", {
   source: `(() => {
     const real = Date.now.bind(Date);
@@ -246,47 +316,73 @@ const skewScript = await send("Page.addScriptToEvaluateOnNewDocument", {
 });
 await navigate(`${server.base}/`);
 check(
-  "horloge en avance de 10 min : le bloc apparaît quand même",
-  await waitFor(`!!document.querySelector('.approval:not(.approval--result)')`),
+  "horloge en avance de 10 min : les fenêtres apparaissent quand même",
+  await waitFor(`document.querySelectorAll('.approval-window:not(.approval--result)').length >= 2`),
 );
 await sleep(1500);
 const skew = await evaluate(`(() => ({
-  present: !!document.querySelector('.approval:not(.approval--result)'),
+  count: document.querySelectorAll('.approval-window:not(.approval--result)').length,
   text: document.querySelector('.approval__expiry')?.textContent ?? '',
 }))()`);
-check("horloge en avance de 10 min : le bloc NE disparaît PAS", skew.present === true, skew.text);
+check("horloge en avance de 10 min : elles NE disparaissent PAS", skew.count >= 2, skew.text);
 check("compte à rebours toujours positif (~5 min)", /Expire dans [1-5] min/.test(skew.text), skew.text);
 await send("Page.removeScriptToEvaluateOnNewDocument", { identifier: skewScript.identifier });
 
-/* ═══════════════ 3) Rechargement : réapparaît tant qu'en attente ═════════ */
-await navigate(`${server.base}/`);
-check("rechargement : le bloc réapparaît (demande encore en attente)", await waitFor(`!!document.querySelector('.approval:not(.approval--result)')`));
+/* ═══ 5) NAVIGATION vers /config : la fenêtre reste affichée (LE SCÉNARIO) ═ */
+await navigate(`${server.base}/config`);
+const onConfig = await waitFor(`document.querySelectorAll('.approval-window:not(.approval--result)').length >= 2`);
+check("navigation vers /config : les fenêtres SONT TOUJOURS LÀ", onConfig);
+const configState = await layerState();
+check("sur /config : la fenêtre montre bien la demande", /rm -rf \/srv\/cache/.test(configState.text), configState.text.slice(0, 120));
+await shot("approval-on-config");
 
-/* ═══════════════ 4) Valider ⇒ bloc disparaît + résultat affiché ═════════ */
-await evaluate(`[...document.querySelectorAll('.approval__btn')].find((b) => b.textContent === 'Valider').click()`);
+// Retour à la discussion : toujours là.
+await navigate(`${server.base}/`);
+check(
+  "retour sur / : les fenêtres sont encore là",
+  await waitFor(`document.querySelectorAll('.approval-window:not(.approval--result)').length >= 2`),
+);
+
+/* ═══════════════ 6) Valider UNE demande : la BONNE disparaît + résultat ═ */
+await evaluate(`(() => {
+  const win = document.querySelector('.approval-window[data-approval-id="apr-e2e-1"]');
+  const btn = [...win.querySelectorAll('.approval__btn')].find((b) => b.textContent === 'Valider');
+  btn.click();
+})()`);
 const decided = await waitFor(`!!document.querySelector('.approval--result')`);
-check("valider : le bloc de validation disparaît et le résultat s'affiche", decided);
+check("valider : la fenêtre #1 disparaît et le résultat s'affiche", decided);
 const afterDecision = await evaluate(`(() => ({
-  validation: document.querySelectorAll('.approval:not(.approval--result)').length,
+  ids: [...document.querySelectorAll('.approval-window:not(.approval--result)')].map((w) => w.getAttribute('data-approval-id')),
   resultText: document.querySelector('.approval--result')?.textContent ?? '',
 }))()`);
-check("valider : plus AUCUN bloc de validation", afterDecision.validation === 0, String(afterDecision.validation));
+check("valider : la demande #1 a disparu, la #2 reste en attente", JSON.stringify(afterDecision.ids) === JSON.stringify(["apr-e2e-2"]), JSON.stringify(afterDecision.ids));
 check("valider : le résultat montre la sortie", /suppression effectuée/.test(afterDecision.resultText), afterDecision.resultText.slice(0, 160));
-await shot("approval-result");
+await shot("approval-result-window");
 
-/* ═══════════════ 4) Rechargement après décision : plus rien ══════════════ */
+/* ═════ 7) Rechargement : seule la demande ENCORE en attente revient ════ */
 await navigate(`${server.base}/`);
 await sleep(800);
 const afterReload = await evaluate(`(() => ({
-  any: document.querySelectorAll('.approval').length,
+  ids: [...document.querySelectorAll('.approval-window:not(.approval--result)')].map((w) => w.getAttribute('data-approval-id')),
+  anyResult: !!document.querySelector('.approval--result'),
   thread: document.querySelector('#conversation')?.textContent ?? '',
 }))()`);
-check("rechargement APRÈS décision : aucun bloc ne revient", afterReload.any === 0, String(afterReload.any));
-check(
-  "aucun résidu dans l'historique (pas de « Validation requise »)",
-  !/Validation requise/i.test(afterReload.thread),
-  afterReload.thread.slice(0, 120),
-);
+check("rechargement APRÈS décision : la #1 (décidée) ne revient PAS", !afterReload.ids.includes("apr-e2e-1"), JSON.stringify(afterReload.ids));
+check("rechargement : la #2 (en attente) revient", afterReload.ids.includes("apr-e2e-2"), JSON.stringify(afterReload.ids));
+check("aucun résidu dans le fil (pas de « Validation requise »)", !/Validation requise/i.test(afterReload.thread), afterReload.thread.slice(0, 120));
+
+/* ═══════════════ 8) Refuser la dernière ⇒ plus aucune fenêtre ══════════ */
+await evaluate(`(() => {
+  const win = document.querySelector('.approval-window[data-approval-id="apr-e2e-2"]');
+  const btn = [...win.querySelectorAll('.approval__btn')].find((b) => b.textContent === 'Refuser');
+  btn.click();
+})()`);
+const noneLeft = await waitFor(`document.querySelectorAll('.approval-window:not(.approval--result)').length === 0`);
+check("refuser : la dernière fenêtre disparaît", noneLeft);
+await navigate(`${server.base}/`);
+await sleep(800);
+const finalState = await evaluate(`document.querySelectorAll('.approval-window:not(.approval--result)').length`);
+check("rechargement final : AUCUNE fenêtre ne revient (toutes décidées)", finalState === 0, String(finalState));
 await shot("approval-after-reload");
 
 server.proc.kill("SIGTERM");

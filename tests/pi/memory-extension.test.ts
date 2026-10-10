@@ -16,6 +16,8 @@
 import { describe, expect, it } from "vitest";
 
 import { createMemoryExtensionFactory, MEMORY_IDLE_NOTICE } from "../../src/pi/sdk/memory-extension.js";
+import { APPROVAL_RESULT_HEADER } from "../../src/agents/approval-report.js";
+import { SYNTHETIC_USER_PREFIXES } from "../../src/pi/synthetic.js";
 import type {
   BeforeCompactInput,
   MemoryPort,
@@ -165,6 +167,37 @@ describe("extension de mémoire — ÉCRITURE (agent_end / compaction)", () => {
       ["[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]"],
     );
     await handlers.get("agent_end")!({}, readOnlyCtx(synthetic));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("ignore un échange dont le prompt est le RÉSULTAT d'une commande validée", async () => {
+    const calls: TurnEndInput[] = [];
+    const synthetic = [
+      {
+        id: "e1",
+        type: "message",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `${APPROVAL_RESULT_HEADER}\napproval_id: apr-1\nSORTIE-SECRETE-MEMOIRE`,
+            },
+          ],
+        },
+      },
+      {
+        id: "e2",
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "Compris." }] },
+      },
+    ];
+    const { handlers } = capture(
+      fakePort({ onTurnEnd: (input) => calls.push(input) }),
+      SYNTHETIC_USER_PREFIXES,
+    );
+    await handlers.get("agent_end")!({}, readOnlyCtx(synthetic));
+    // ⚠️ La sortie brute n'est JAMAIS mémorisée.
     expect(calls).toHaveLength(0);
   });
 

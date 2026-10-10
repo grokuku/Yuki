@@ -287,6 +287,7 @@ export {
 export type {
   ApprovalDecisionOutcome,
   ApprovalGatewayPort,
+  ApprovalResultWaker,
   ApprovalViewEvent,
   CapturedScreenshotView,
   ExecutionLogger,
@@ -303,3 +304,13 @@ export type {
   ScreenshotStatus,
   ScreenshotViewEvent,
 } from "./execution.js";
+
+// Résultat d'une commande VALIDÉE renvoyé au modèle (prompt synthétique
+// corrélé par `approval_id`, éphémère côté humain).
+export {
+  APPROVAL_RESULT_HEADER,
+  APPROVAL_RESULT_INSTRUCTION,
+  buildApprovalResultPrompt,
+  ORIGIN_APPROVAL_RESULT,
+} from "./approval-report.js";
+export type { ApprovalResultInput } from "./approval-report.js";

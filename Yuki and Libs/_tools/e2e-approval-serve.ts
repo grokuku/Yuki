@@ -2,10 +2,10 @@
  * Harnais E2E JETABLE — validation humaine DANS la conversation (D118).
  *
  * Gateway RÉEL avec un hôte Pi RÉEL hors ligne et un port d'approbations EN
- * MÉMOIRE (aucun agent réel) : une demande de validation est rattachée à la
- * conversation courante. Le bloc doit apparaître DANS le fil, disparaître à la
- * décision, ne JAMAIS revenir une fois décidée, et n'entrer NI dans le
- * transcript NI au rechargement.
+ * MÉMOIRE (aucun agent réel) : DEUX demandes de validation sont rattachées à la
+ * conversation courante. Les fenêtres flottantes doivent apparaître AU-DESSUS
+ * de l'interface (pas dans le fil), disparaître à la décision, ne JAMAIS revenir
+ * une fois décidées, et n'entrer NI dans le transcript NI au rechargement.
  *
  * Usage : cd Yuki && npx tsx "../Yuki and Libs/_tools/e2e-approval-serve.ts"
  * Env :
@@ -39,26 +39,42 @@ const cwd = join(stateDir, "workspace");
 const sessionsDir = join(agentDir, "sessions");
 for (const dir of [agentDir, cwd, sessionsDir]) mkdirSync(dir, { recursive: true });
 
-/** Port d'approbations EN MÉMOIRE (une demande pour la conversation courante). */
+/** Port d'approbations EN MÉMOIRE (DEUX demandes pour la conversation courante).
+ * Deux demandes simultanées prouvent que plusieurs fenêtres flottantes cohabitent
+ * sans s'écraser. */
 class StubApprovalPort implements ApprovalGatewayPort {
-  private approval: PendingApprovalView | undefined;
-  private deleted = false;
+  private readonly entries = new Map<string, PendingApprovalView>();
 
   constructor(private readonly sessionId: string) {
     const now = Date.now();
-    this.approval = {
-      id: "apr-e2e-1",
+    const mk = (
+      id: string,
+      agentId: string,
+      agentName: string,
+      command: string,
+      destructive: boolean,
+      destructiveReasons: string[],
+    ): PendingApprovalView => ({
+      id,
       sessionId,
-      agentId: "agent-nuc00",
-      agentName: "nuc00",
-      command: "rm -rf /srv/cache",
-      destructive: true,
-      destructiveIds: ["rm"],
-      destructiveReasons: ["suppression (rm)"],
+      agentId,
+      agentName,
+      command,
+      destructive,
+      destructiveIds: destructive ? ["rm"] : [],
+      destructiveReasons,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + 300_000).toISOString(),
       ttlSeconds: 300,
-    };
+    });
+    this.entries.set(
+      "apr-e2e-1",
+      mk("apr-e2e-1", "agent-nuc00", "nuc00", "rm -rf /srv/cache", true, ["suppression (rm)"]),
+    );
+    this.entries.set(
+      "apr-e2e-2",
+      mk("apr-e2e-2", "agent-nuc01", "nuc01", "ls -la /srv", false, []),
+    );
   }
 
   subscribeApprovals(_listener: (event: ApprovalViewEvent) => void): () => void {
@@ -66,19 +82,18 @@ class StubApprovalPort implements ApprovalGatewayPort {
   }
 
   pendingApprovals(sessionId: string): PendingApprovalView[] {
-    if (this.deleted || !this.approval || this.approval.sessionId !== sessionId) return [];
-    return [this.approval];
+    return [...this.entries.values()].filter((a) => a.sessionId === sessionId);
   }
 
   async decideApproval(
     id: string,
     decision: "approve" | "deny",
   ): Promise<ApprovalDecisionOutcome> {
-    if (this.deleted || !this.approval || this.approval.id !== id) {
+    const approval = this.entries.get(id);
+    if (!approval) {
       return { ok: false, code: "approval_not_found", message: "Cette demande n'existe plus." };
     }
-    const approval = this.approval;
-    this.deleted = true;
+    this.entries.delete(id);
     if (decision === "deny") return { ok: true, decision: "deny", approval };
     const outcome: ExecutionOutcome = {
       status: "completed",
@@ -89,7 +104,7 @@ class StubApprovalPort implements ApprovalGatewayPort {
       destructiveIds: approval.destructiveIds,
       exitCode: 0,
       framed:
-        '<sortie machine="agent-nuc00" commande="rm -rf /srv/cache" code="0" tronquee="non" delai_depasse="non">\n' +
+        `<sortie machine="${approval.agentId}" commande="${approval.command}" code="0" tronquee="non" delai_depasse="non">\n` +
         "--- sortie standard ---\n(suppression effectuée)\n</sortie>",
       message: "Commande exécutée (code de sortie 0).",
       durationMs: 12,

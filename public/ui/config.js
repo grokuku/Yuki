@@ -25,6 +25,8 @@ import { HolafFetch } from './vendor/holaf/holaf-fetch.js';
  * `HolafModal.getCss()`). `injectStyles: false` coupe l'injection.
  */
 import { HolafModal } from './vendor/holaf/holaf-modal.js';
+import { createApprovalChannel } from './approval-channel.js';
+import { createApprovalLayer } from './approval-window.js';
 import { initAgentsPanel } from './agents-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
 import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
@@ -44,6 +46,43 @@ window.HolafModal = HolafModal;
 // topbar. Le pont `window.HolafModal` ci-dessus permet à theme.js de piloter
 // la brique avec le nom exact du preset (holaf-modal 0.5.0).
 initTheme();
+
+/* ─── Validations humaines — FENÊTRE FLOTTANTE (D118) ────────────────────
+ * ⚠️ `/config` est une AUTRE page que `/` : elle n'avait aucune connexion
+ * temps réel. On ouvre la MÊME connexion `/ws` (même protocole,
+ * `approval-channel.js`) pour recevoir les demandes de validation EN ATTENTE —
+ * notamment à la CONNEXION : `hello` fait ré-émettre l'état vivant par le
+ * serveur, donc la fenêtre ne disparaît PAS en passant de `/` à `/config`.
+ * La fenêtre est NON bloquante (aucun voile), DÉPLAÇABLE, et ne se ferme pas
+ * au clic à côté. */
+const approvalLayer = createApprovalLayer({
+  onDecide: (id, decision) => {
+    if (approvalChannel.decide(id, decision)) return;
+    approvalLayer.resetBusy();
+    void HolafModal.alert(
+      "Hors ligne",
+      "Impossible d'envoyer votre décision : la connexion au gateway est perdue. " +
+        "Réessayez une fois reconnecté.",
+      { okText: "Compris" },
+    );
+  },
+});
+
+const approvalChannel = createApprovalChannel({
+  onApproval: (approval) => approvalLayer.show(approval),
+  onCleared: (id) => approvalLayer.clear(id),
+  onResult: (result) => approvalLayer.showResult(result),
+  onError: (code, message) => {
+    approvalLayer.resetBusy();
+    void HolafModal.alert(
+      "Validation impossible",
+      message || "Cette demande de validation n'existe plus.",
+      { okText: "Compris" },
+    );
+  },
+});
+
+approvalChannel.connect();
 
 const WRITE_HEADERS = {
   "content-type": "application/json",

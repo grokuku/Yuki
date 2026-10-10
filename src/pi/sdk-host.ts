@@ -26,7 +26,10 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
-import { REPORT_HEADER } from "../delegation/report.js";
+import {
+  isSyntheticOrigin,
+  SYNTHETIC_USER_PREFIXES,
+} from "./synthetic.js";
 
 import {
   applyPiEnvironment,
@@ -89,9 +92,6 @@ import type {
 /** Bornes de sérialisation de l'abort derrière l'envoi en vol. */
 const ABORT_SERIALIZE_TIMEOUT_MS = 2_000;
 
-/** Origine d'un prompt synthétique de report (pas de bulle utilisateur). */
-const ORIGIN_JOB_REPORT = "job_report";
-
 /**
  * Sous-dossier de MISE DE CÔTÉ d'une conversation supprimée. `SessionManager.list`
  * et `findMostRecentSession` font un `readdir` NON récursif : ce dossier est donc
@@ -133,13 +133,6 @@ function titleFrom(name: string | undefined, firstMessage: string | undefined): 
 function timestampSlug(now: Date = new Date()): string {
   return now.toISOString().replace(/[:.]/g, "-");
 }
-
-/**
- * Préfixes des prompts SYNTHÉTIQUES (prompt de report d'un job). Ils ne sont
- * jamais affichés comme messages utilisateur — ni sur le flux temps réel (via
- * `ORIGIN_JOB_REPORT`), ni à la restauration du transcript (via ce filtre).
- */
-const SYNTHETIC_USER_PREFIXES: readonly string[] = [REPORT_HEADER];
 
 interface RunItem {
   runId: string;
@@ -201,7 +194,7 @@ function makeRunItem(
   const storedText = buildStoredUserText(text, {
     at: new Date(sentAt),
     ...(opts.timezone !== undefined ? { timeZone: opts.timezone } : {}),
-    ...(opts.origin === ORIGIN_JOB_REPORT ? { synthetic: true } : {}),
+    ...(isSyntheticOrigin(opts.origin) ? { synthetic: true } : {}),
   });
   return {
     runId,
@@ -376,7 +369,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
             type: "run_started",
             sessionId: record.sessionId,
             runId: run.runId,
-            userText: run.text,
+            // ⚠️ Un prompt synthétique (report de job, résultat de commande
+            // validée) ne diffuse JAMAIS son texte comme `userText` : il
+            // entrerait sinon dans le buffer de rejeu / le snapshot et
+            // ferait fuiter la sortie d'une machine dans l'historique.
+            ...(isSyntheticOrigin(run.origin) ? {} : { userText: run.text }),
             ...(run.origin !== undefined ? { origin: run.origin } : {}),
             ...(run.jobId !== undefined ? { jobId: run.jobId } : {}),
           });
@@ -563,9 +560,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     record.currentRun = run;
     record.activeRunId = run.runId;
     record.state = "streaming";
-    // Un prompt de report est SYNTHÉTIQUE : il ne doit pas produire de bulle
-    // utilisateur dans le transcript de l'UI.
-    if (run.origin !== ORIGIN_JOB_REPORT) {
+    // Un prompt synthétique (report de job, résultat de commande validée) ne
+    // doit pas produire de bulle utilisateur dans le transcript de l'UI.
+    if (!isSyntheticOrigin(run.origin)) {
       record.transcript.push({
         role: "user",
         text: run.text,

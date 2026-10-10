@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import type { PiHost } from "../../src/pi/host.js";
+import { isSyntheticOrigin } from "../../src/pi/synthetic.js";
 import { PiHostError } from "../../src/pi/errors.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "../../src/pi/instrumentation.js";
 import type {
@@ -53,6 +54,8 @@ interface FakeRun {
   runId: string;
   text: string;
   script: FakeScript;
+  /** Origine du tour (report synthétique, résultat de commande validée…). */
+  origin?: string;
   abortController: AbortController;
   aborted: boolean;
   sawError: boolean;
@@ -194,7 +197,7 @@ export class FakePiHost implements PiHost {
     return this.buildState();
   }
 
-  send(sessionId: string, text: string, _opts?: SendOptions): RunHandle {
+  send(sessionId: string, text: string, opts?: SendOptions): RunHandle {
     if (!this.ready) {
       throw new Error("PI_NOT_READY");
     }
@@ -209,6 +212,7 @@ export class FakePiHost implements PiHost {
       runId,
       text,
       script,
+      ...(opts?.origin !== undefined ? { origin: opts.origin } : {}),
       abortController: new AbortController(),
       aborted: false,
       sawError: false,
@@ -404,7 +408,13 @@ export class FakePiHost implements PiHost {
   private async run(run: FakeRun): Promise<void> {
     this.currentRun = run;
     this.partial = "";
-    this.transcript.push({ role: "user", text: run.text });
+    // ⚠️ Miroir du host réel : un prompt SYNTHÉTIQUE (report de job, résultat
+    // de commande validée) n'ajoute PAS de bulle utilisateur au transcript et
+    // ne diffuse PAS son texte dans `run_started`.
+    const synthetic = isSyntheticOrigin(run.origin);
+    if (!synthetic) {
+      this.transcript.push({ role: "user", text: run.text });
+    }
     this.setState("streaming", run.runId);
 
     run.instrumentation.markStage(PHASE.sendReceived);
@@ -414,7 +424,8 @@ export class FakePiHost implements PiHost {
       type: "run_started",
       sessionId: this.sessionId,
       runId: run.runId,
-      userText: run.text,
+      ...(synthetic ? {} : { userText: run.text }),
+      ...(run.origin !== undefined ? { origin: run.origin } : {}),
     });
 
     let contentText = "";

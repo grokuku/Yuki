@@ -780,6 +780,10 @@ async function main(): Promise<void> {
     });
     delegation.setWaker(host);
     librarianArchive.setWaker(host);
+    // Réveil du modèle en fin de commande VALIDÉE : rapport synthétique portant
+    // stdout/stderr/code de sortie, corrélé par `approval_id` (éphémère côté
+    // humain : ni transcript, ni snapshot, ni rejeu, ni mémoire).
+    agentExecution?.setWaker(host);
 
     host.subscribeAll((event) => {
       if (event.type === "state") {

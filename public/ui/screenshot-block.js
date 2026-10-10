@@ -15,7 +15,7 @@
 // (`img-src 'self' data:`).
 
 import { isSafeImageSrc } from "./markdown.js";
-import { machineLabel } from "./approval-block.js";
+import { machineLabel } from "./approval-window.js";
 
 /** Petit constructeur DOM (attributs + enfants), sans injection HTML. */
 function h(tag, props = {}, children = []) {

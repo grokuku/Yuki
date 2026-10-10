@@ -230,10 +230,28 @@ const threadState = () =>
     const userMsgs = [...document.querySelectorAll('.message--user')].map(measure);
     const asstMsgs = [...document.querySelectorAll('.message--assistant')].map(measure);
     const usermeta = document.querySelector('.message--user .message__head');
+    // Référence de la BOÎTE DE CONTENU du fil : un séparateur de jour est un
+    // élément pleine largeur (aucune marge horizontale) ⇒ ses bords gauche et
+    // droit SONT ceux du contenu du fil. Valeurs BRUTES (non arrondies).
+    const sepEl = document.querySelector('.daysep');
+    const sepRaw = sepEl ? sepEl.getBoundingClientRect() : null;
+    const userRaw = [...document.querySelectorAll('.message--user')].map((m) => m.getBoundingClientRect());
+    const asstRaw = [...document.querySelectorAll('.message--assistant')].map((m) => m.getBoundingClientRect());
+    const footerRaw = [...document.querySelectorAll('.message--assistant .message__footer')].map((f) => {
+      const fr = f.getBoundingClientRect();
+      const mr = f.closest('.message').getBoundingClientRect();
+      return { blockRight: mr.right, footerRight: fr.right, blockLeft: mr.left };
+    });
     return {
       seps,
       userMsgs,
       asstMsgs,
+      // Marges latérales BRUTES (px) : gauche de l'utilisateur / droite de Yuki.
+      contentLeft: sepRaw ? sepRaw.left : null,
+      contentRight: sepRaw ? sepRaw.right : null,
+      userLeftMargins: sepRaw ? userRaw.map((r) => r.left - sepRaw.left) : [],
+      asstRightMargins: sepRaw ? asstRaw.map((r) => sepRaw.right - r.right) : [],
+      asstFooterRightOffsets: footerRaw.map((f) => f.blockRight - f.footerRight),
       userTimes: userMsgs.map((m) => m.time),
       userEnd: userMsgs.every((m) => m.end),
       asstTimes: asstMsgs.map((m) => m.time).filter((t) => t !== null),
@@ -336,6 +354,23 @@ check(
   `${a.asstFooters} pied(s)`,
 );
 
+/* — ⚖️ MARGES LATÉRALES (preuve au pixel près) : la bulle UTILISATEUR est poussée
+ *   à droite (donc marge à GAUCHE) et le message de Yuki est poussé à gauche
+ *   (donc marge à DROITE). Les deux marges doivent être ÉGALES (≤ 1 px). On
+ *   compare les valeurs BRUTES mesurées depuis la boîte de contenu du fil. */
+const margins = [...a.userLeftMargins, ...a.asstRightMargins];
+const spread = margins.length >= 4 ? Math.max(...margins) - Math.min(...margins) : null;
+check(
+  "marges latérales ÉGALES : gauche (utilisateur) = droite (Yuki), ≤ 1 px",
+  margins.length >= 4 && spread !== null && spread <= 1,
+  `gauche=[${a.userLeftMargins.map((v) => v.toFixed(1)).join(", ")}] ; droite=[${a.asstRightMargins.map((v) => v.toFixed(1)).join(", ")}] ; écart=${spread === null ? "n/a" : spread.toFixed(2)} px`,
+);
+check(
+  "marge à droite de Yuki RÉELLEMENT > 0 (pas d'ancien plein-bord)",
+  a.asstRightMargins.length > 0 && a.asstRightMargins.every((v) => v > 1),
+  `droite=[${a.asstRightMargins.map((v) => v.toFixed(1)).join(", ")}] px`,
+);
+
 check("AUCUNE date sur les bulles (seulement l'heure)", a.userTimes.every((t) => /^\d{2}:\d{2}$/.test(t)));
 check("le préfixe [horodatage] est MASQUÉ à l'affichage", a.hasPrefix === false);
 // Le seul `[style]` attendu est le <html> racine : les variables de thème y
@@ -414,6 +449,8 @@ const liveGeo = await evaluate(`(() => {
   const body = m.querySelector('.message__body');
   const footer = m.querySelector('.message__footer');
   const stats = footer ? footer.querySelector('.message__stats') : null;
+  const sep = document.querySelector('.daysep');
+  const sepRight = sep ? sep.getBoundingClientRect().right : null;
   return {
     msg: rect(m),
     time: time ? rect(time) : null,
@@ -421,6 +458,10 @@ const liveGeo = await evaluate(`(() => {
     footer: footer ? rect(footer) : null,
     stats: stats ? rect(stats) : null,
     footerText: footer ? footer.textContent : null,
+    // Écart (px) entre le bord DROIT du bloc Yuki et le bord droit du pied,
+    // et position du bord droit du bloc par rapport au contenu du fil.
+    footerRightOffset: footer ? Math.round(m.getBoundingClientRect().right - footer.getBoundingClientRect().right) : null,
+    blockRightMargin: sepRight !== null ? Math.round(sepRight - m.getBoundingClientRect().right) : null,
   };
 })()`);
 check(
@@ -438,6 +479,15 @@ check(
   liveGeo?.stats != null && liveGeo.time != null && liveGeo.stats.cx > liveGeo.time.cx,
   JSON.stringify({ heureCx: liveGeo?.time?.cx ?? null, statsCx: liveGeo?.stats?.cx ?? null, stats: liveGeo?.stats ?? null }),
 );
+check(
+  "LIVE : le pied technique reste AU BORD DROIT du bloc Yuki (≈ padding), pas du fil",
+  liveGeo?.footerRightOffset != null &&
+    liveGeo.footerRightOffset >= 0 &&
+    liveGeo.footerRightOffset <= 16 &&
+    liveGeo.blockRightMargin != null &&
+    liveGeo.blockRightMargin > 1,
+  `écart pied↔bloc=${liveGeo?.footerRightOffset} px ; marge droite du bloc=${liveGeo?.blockRightMargin} px`,
+);
 await shot("timestamp-live-footer");
 await evaluate(`document.querySelector('#stop')?.click()`);
 
@@ -448,6 +498,14 @@ await waitFor(`document.querySelectorAll('.message--user').length >= 3`);
 const narrow = await threadState();
 check("étroit : séparateurs toujours affichés (jours seedés présents en tête)", narrow.seps.length >= 2 && narrow.seps[0]?.text === "mercredi 7 octobre 2026" && narrow.seps[1]?.text === "jeudi 8 octobre 2026", narrow.seps.map((s) => s.text).join(" | "));
 check("étroit : aucun débordement horizontal NOUVEAU", narrow.overflow <= 1, `débordement ${narrow.overflow} px`);
+const narrowMargins = [...narrow.userLeftMargins, ...narrow.asstRightMargins];
+const narrowSpread =
+  narrowMargins.length >= 4 ? Math.max(...narrowMargins) - Math.min(...narrowMargins) : null;
+check(
+  "étroit (≤ 640 px) : marges latérales TOUJOURS égales (≤ 1 px)",
+  narrowMargins.length >= 4 && narrowSpread !== null && narrowSpread <= 1,
+  `gauche=[${narrow.userLeftMargins.map((v) => v.toFixed(1)).join(", ")}] ; droite=[${narrow.asstRightMargins.map((v) => v.toFixed(1)).join(", ")}] ; écart=${narrowSpread === null ? "n/a" : narrowSpread.toFixed(2)} px`,
+);
 await shot("timestamp-narrow");
 
 server.proc.kill("SIGTERM");

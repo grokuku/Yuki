@@ -12,6 +12,8 @@ import {
   transcriptFromEntries,
   unstreamedContentSuffix,
 } from "../../src/pi/events.js";
+import { APPROVAL_RESULT_HEADER } from "../../src/agents/approval-report.js";
+import { SYNTHETIC_USER_PREFIXES } from "../../src/pi/synthetic.js";
 
 describe("pi.events — contenu vs thinking", () => {
   it("classe les deltas en content/thinking", () => {
@@ -143,6 +145,25 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       { role: "assistant", text: "vraie réponse" },
       { role: "assistant", text: "Résumé du job." },
     ]);
+  });
+
+  it("masque le RÉSULTAT d'une commande validée (prompt synthétique) via les préfixes partagés", () => {
+    const entries = [
+      userEntry("vraie question"),
+      assistantEntry([{ type: "text", text: "vraie réponse" }]),
+      userEntry(`${APPROVAL_RESULT_HEADER}\napproval_id: apr-1\nSORTIE-SECRETE`),
+      assistantEntry([{ type: "text", text: "Compris." }]),
+    ];
+    const transcript = transcriptFromEntries(entries, {
+      syntheticUserPrefixes: SYNTHETIC_USER_PREFIXES,
+    });
+    // Le rapport (et donc la sortie brute) n'entre JAMAIS dans le transcript.
+    expect(transcript).toEqual([
+      { role: "user", text: "vraie question" },
+      { role: "assistant", text: "vraie réponse" },
+      { role: "assistant", text: "Compris." },
+    ]);
+    expect(JSON.stringify(transcript)).not.toContain("SORTIE-SECRETE");
   });
 
   it("est un mapping PUR (même entrée ⇒ même sortie, aucun doublon)", () => {

@@ -192,6 +192,36 @@ async function waitFor(expression, timeout = 8000) {
   return false;
 }
 
+/**
+ * Attend le DÉCODAGE RÉEL de l'image `data:` de capture.
+ *
+ * ⚠️ La PRÉSENCE du nœud dans le DOM ne prouve PAS que l'image est décodée : le
+ * décodage d'une image est ASYNCHRONE (et `loading="lazy"` peut en plus différer
+ * le chargement jusqu'au viewport). Lire `img.complete`/`naturalWidth` juste
+ * après l'insertion du nœud était donc une COURSE — d'où l'instabilité.
+ *
+ * On s'appuie sur `img.decode()` : la promesse se résout EXACTEMENT quand
+ * l'image est décodée et prête à être peinte (garantie plus forte qu'un simple
+ * `complete`). Pour une image CASSÉE `decode()` REJETTE : on rend `false` sans
+ * attendre le timeout, ce qui laisse l'assertion échouer. La boucle n'est qu'un
+ * filet borné si le décodage n'aboutit jamais.
+ */
+async function waitForImageDecoded(timeout = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const status = await evaluate(`(async () => {
+      const img = document.querySelector('.screenshot__image');
+      if (!img) return 'absent';
+      try { await img.decode(); } catch { return 'broken'; }
+      return (img.complete && img.naturalWidth > 0) ? 'ready' : 'pending';
+    })()`);
+    if (status === "ready") return true;
+    if (status === "broken" || status === "absent") return false;
+    await sleep(50);
+  }
+  return false;
+}
+
 async function shot(name) {
   const res = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(SHOTS, name + ".png"), Buffer.from(res.data, "base64"));
@@ -221,6 +251,9 @@ await waitFor(`!!document.querySelector('#conversation')`);
 await fetch(`${server.base}/e2e/shot`);
 const shown = await waitFor(`!!document.querySelector('.screenshot__image')`);
 check("l'image de capture s'affiche dans le fil", shown);
+// ⚠️ Attendre le DÉCODAGE (pas seulement la présence du nœud) : c'est ce qui
+// supprime la course. L'assertion « image RÉELLEMENT rendue » reste INCHANGÉE.
+await waitForImageDecoded(5000);
 const state = await shotState();
 check("le bloc est DANS la conversation (#conversation)", state.inConversation === true);
 check("ce n'est PAS un message (état temporaire)", state.isMessage === false);

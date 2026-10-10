@@ -12,7 +12,7 @@ import { createTtsPreference, resolveSpeechState } from "./tts-preference.js";
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { initSessionsPanel } from "./sessions-panel.js";
 import { initSidebarAgents } from "./sidebar-agents.js";
-import { createApprovalBlocks } from "./approval-block.js";
+import { createApprovalLayer } from "./approval-window.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
@@ -32,7 +32,6 @@ const els = {
   connection: document.getElementById("connection"),
   sessionState: document.getElementById("session-state"),
   queued: document.getElementById("queued"),
-  pendingValidation: document.getElementById("pending-validation"),
   thinking: document.getElementById("thinking"),
   ttsToggle: document.getElementById("tts-toggle"),
   ttsStatus: document.getElementById("tts-status"),
@@ -98,23 +97,18 @@ const sessionsPanel = initSessionsPanel({
   },
 });
 
-/* ─── Validation humaine DANS la conversation (D118) ─────────────────────
- * État TEMPORAIRE de l'interface (jamais un message) : un bloc apparaît dans le
- * fil OÙ la commande a été demandée, on valide / refuse sur place, il disparaît
- * une fois décidé ou expiré. Il n'entre JAMAIS dans l'historique : le serveur ne
- * l'envoie que par trames de contrôle (jamais dans le transcript ni le rejeu).
- * La décision part par le WebSocket (trame `approval_decision`). */
-const approvalBlocks = createApprovalBlocks({
-  container: els.conversation,
-  // ⚠️ Défilement au MÊME mécanisme que l'auto-scroll des messages : on ne
-  // colle en bas que si l'utilisateur y était DÉJÀ (mesuré avant insertion).
-  isPinned: isConversationPinned,
-  scrollToEnd: () => pinIfNeeded(true),
-  // Sinon, un indicateur visible signale la demande sans déplacer la vue.
-  onAttention: (active) => setPendingValidation(active),
+/* ─── Validation humaine — FENÊTRE FLOTTANTE (D118) ─────────────────────
+ * La demande s'affiche AU-DESSUS de l'interface (position `fixed`), PARTOUT
+ * (y compris sur `/config`), NON bloquante (aucun voile), DÉPLAÇABLE, et ne se
+ * ferme PAS au clic à côté. Elle REMPLACE le bloc qui vivait dans le fil : une
+ * seule fenêtre par demande, aucun double compte à rebours. État TEMPORAIRE de
+ * l'interface (jamais un message, jamais dans l'historique : le serveur ne
+ * l'envoie que par trames de contrôle). La décision part par le WebSocket
+ * (trame `approval_decision`). */
+const approvalLayer = createApprovalLayer({
   onDecide: (id, decision) => {
     if (sendRaw({ type: "approval_decision", id, decision })) return;
-    approvalBlocks.resetBusy();
+    approvalLayer.resetBusy();
     void HolafModal.alert(
       "Hors ligne",
       "Impossible d'envoyer votre décision : la connexion au gateway est perdue. " +
@@ -122,23 +116,6 @@ const approvalBlocks = createApprovalBlocks({
       { okText: "Compris" },
     );
   },
-});
-
-/* ─── Indicateur « une validation est en attente » ──────────────────────
- * Affiché SEULEMENT quand une demande de validation arrive alors que
- * l'utilisateur a remonté le fil : on ne le déplace pas de force (ce serait
- * désagréable pendant une lecture), mais il ne peut pas rater la demande — le
- * bouton ramène la vue sur le bloc. */
-function setPendingValidation(active) {
-  if (els.pendingValidation) els.pendingValidation.hidden = !active;
-}
-
-if (els.pendingValidation) {
-  els.pendingValidation.addEventListener("click", () => approvalBlocks.reveal());
-}
-// Revenu près du bas : l'indicateur n'a plus lieu d'être.
-els.conversation.addEventListener("scroll", () => {
-  if (isConversationPinned()) approvalBlocks.acknowledge();
 });
 
 /* ─── Capture d'écran DANS la conversation ────────────────────────────────
@@ -445,7 +422,7 @@ function applyTranscript(transcript) {
   // Le fil est reconstruit : on purge les blocs de validation (timers inclus)
   // et les captures ÉPHÉMÈRES. Ils seront ré-affichés par le serveur s'ils sont
   // ENCORE vivants (états de contrôle).
-  approvalBlocks.reset();
+  approvalLayer.reset();
   screenshotBlocks.reset();
   els.conversation.innerHTML = "";
   currentRenderer = null;
@@ -505,10 +482,10 @@ function handleFrame(frame) {
     // Un `welcome { resumed: true }` acquitte notre `resume` : le rejeu (ou le
     // snapshot) suit, on autorise une nouvelle demande si un trou apparaissait.
     if (frame.resumed) resumePending = false;
-    // Reconnexion : on purge les blocs de validation AVANT que le serveur ne
-    // ré-émette les demandes ENCORE en attente. Un bloc décidé PENDANT la
-    // coupure ne doit PAS rester affiché (état vivant, pas d'historique).
-    approvalBlocks.reset();
+    // Reconnexion : on purge les fenêtres de validation AVANT que le serveur ne
+    // ré-émette les demandes ENCORE en attente. Une demande décidée PENDANT la
+    // coupure ne doit PAS rester affichée (état vivant, pas d'historique).
+    approvalLayer.reset();
     screenshotBlocks.reset();
     return;
   }
@@ -526,9 +503,9 @@ function handleFrame(frame) {
       return;
     }
     // Validation tardive (déjà décidée ou expirée) : message HONNÊTE, jamais un
-    // succès trompeur. Le bloc correspondant a été retiré par `approval_cleared`.
+    // succès trompeur. La fenêtre correspondante a été retirée par `approval_cleared`.
     if (frame.code === "approval_not_found" || frame.code === "approval_unavailable") {
-      approvalBlocks.resetBusy();
+      approvalLayer.resetBusy();
       void HolafModal.alert(
         "Validation impossible",
         frame.message || "Cette demande de validation n'existe plus.",
@@ -536,8 +513,8 @@ function handleFrame(frame) {
       );
       return;
     }
-    // Autre échec (réseau, erreur serveur) : on réactive les boutons du bloc.
-    approvalBlocks.resetBusy();
+    // Autre échec (réseau, erreur serveur) : on réactive les boutons de la fenêtre.
+    approvalLayer.resetBusy();
     appendMessage("assistant error", frame.message || "erreur", undefined, Date.now());
     return;
   }
@@ -563,15 +540,15 @@ function handleFrame(frame) {
   // consommé). Traitée AVANT la logique de curseur `seq`, sinon elle serait
   // prise pour un doublon. Jamais rejouée, jamais conservée.
   if (type === "approval") {
-    approvalBlocks.show(frame.approval);
+    approvalLayer.show(frame.approval);
     return;
   }
   if (type === "approval_cleared") {
-    approvalBlocks.clear(String(frame.id));
+    approvalLayer.clear(String(frame.id));
     return;
   }
   if (type === "approval_result") {
-    approvalBlocks.showResult(frame.result);
+    approvalLayer.showResult(frame.result);
     return;
   }
   // Capture d'écran : ÉTAT TEMPORAIRE, trame de CONTRÔLE (aucun `seq` consommé).

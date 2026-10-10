@@ -285,20 +285,43 @@ const newTitle = switched.convs.find((c) => c.active)?.title ?? "";
 check("BASCULE : la conversation active change", newTitle !== activeTitle && newTitle.length > 0, `${activeTitle} → ${newTitle}`);
 const expected = /PREMIER/.test(newTitle) ? "PREMIERE" : "SECONDE";
 check("BASCULE : le fil affiché correspond au nouveau", switched.threadText.includes(expected), expected);
-// Mesure RÉELLE du layout : fil pleine largeur, assistant 100 %, utilisateur ~85 %.
+// Mesure RÉELLE du layout : les deux rôles portent la MÊME largeur
+// proportionnelle (85 %) ⇒ marges latérales SYMÉTRIQUES (gauche utilisateur =
+// droite Yuki). Aucune colonne bornée, le fil remplit l'espace.
 const widths = await evaluate(`(() => {
   const conv = document.querySelector('#conversation');
   const assistant = document.querySelector('.message--assistant');
   const user = document.querySelector('.message--user');
   if (!conv || !assistant || !user) return null;
   const cs = getComputedStyle(conv);
+  const convRect = conv.getBoundingClientRect();
+  const contentLeft = convRect.left + parseFloat(cs.paddingLeft);
   const inner = conv.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  const aw = assistant.getBoundingClientRect().width;
-  const uw = user.getBoundingClientRect().width;
-  return { inner: Math.round(inner), aw: Math.round(aw), ratio: uw / aw };
+  // Boîte de CONTENU réelle (clientWidth exclut la barre de défilement) :
+  // sinon la marge à droite inclurait la largeur du scrollbar et fausserait
+  // la comparaison.
+  const contentRight = contentLeft + inner;
+  const ar = assistant.getBoundingClientRect();
+  const ur = user.getBoundingClientRect();
+  return {
+    inner: Math.round(inner),
+    aw: Math.round(ar.width),
+    uw: Math.round(ur.width),
+    ratio: ur.width / ar.width,
+    userLeftMargin: Math.round((ur.left - contentLeft) * 10) / 10,
+    asstRightMargin: Math.round((contentRight - ar.right) * 10) / 10,
+  };
 })()`);
-check("layout : bulle assistant = 100 % de la largeur du fil", widths && Math.abs(widths.aw - widths.inner) <= 2, JSON.stringify(widths));
-check("layout : bulle utilisateur ≈ 85 % (alignée à droite)", widths && Math.abs(widths.ratio - 0.85) <= 0.03, widths ? widths.ratio.toFixed(3) : "n/a");
+check(
+  "layout : bulles assistant ET utilisateur = 85 % de la largeur du fil",
+  widths && Math.abs(widths.aw - 0.85 * widths.inner) <= 3 && Math.abs(widths.uw - 0.85 * widths.inner) <= 3,
+  JSON.stringify(widths),
+);
+check(
+  "layout : marges LATÉRALES égales (gauche utilisateur = droite Yuki, ≤ 1 px)",
+  widths && Math.abs(widths.userLeftMargin - widths.asstRightMargin) <= 1,
+  `gauche=${widths?.userLeftMargin} px ; droite=${widths?.asstRightMargin} px`,
+);
 await shot("chat-sessions-switched");
 
 // Aller-retour B → A → B : le fil ne doit PAS grossir (aucun doublon).

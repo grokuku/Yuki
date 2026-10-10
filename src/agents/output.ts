@@ -32,6 +32,17 @@
 export const SORTIE_TAG = "sortie";
 
 /**
+ * Libellés INTERNES du bloc `<sortie>` (contrat de `frameCommandOutput`).
+ * Exportés pour que les consommateurs qui doivent REBORNER le bloc (plafond
+ * côté Yuki) le fassent sans recopier le format.
+ */
+export const SORTIE_STDOUT_LABEL = "--- sortie standard ---";
+export const SORTIE_STDERR_LABEL = "--- sortie d'erreur ---";
+export const SORTIE_CLOSE = `</${SORTIE_TAG}>`;
+/** Contenu affiché quand les DEUX flux sont vides (usage interne). */
+const SORTIE_EMPTY_LABEL = "(aucune sortie)";
+
+/**
  * Rappel de sécurité ajouté APRÈS chaque bloc `<sortie>`. Constante exportée
  * pour être réutilisée (tests, prompt système éventuel).
  */
@@ -95,15 +106,15 @@ export function frameCommandOutput(input: OutputFrameInput): string {
 
   const parts: string[] = [`<${SORTIE_TAG} ${attrs.join(" ")}>`];
   if (stdout !== "") {
-    parts.push("--- sortie standard ---", stdout);
+    parts.push(SORTIE_STDOUT_LABEL, stdout);
   }
   if (stderr !== "") {
-    parts.push("--- sortie d'erreur ---", stderr);
+    parts.push(SORTIE_STDERR_LABEL, stderr);
   }
   if (stdout === "" && stderr === "") {
-    parts.push("(aucune sortie)");
+    parts.push(SORTIE_EMPTY_LABEL);
   }
-  parts.push(`</${SORTIE_TAG}>`, "", OUTPUT_DATA_REMINDER);
+  parts.push(SORTIE_CLOSE, "", OUTPUT_DATA_REMINDER);
 
   const framed = parts.join("\n");
   // Invariant final : une seule balise de fermeture, celle de l'encadrement.
