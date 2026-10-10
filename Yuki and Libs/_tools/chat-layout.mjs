@@ -13,10 +13,18 @@
  *       (alternative visible / accessible au doigt) ;
  *   (4) état « aucune conversation ouverte » (logo ❄️ + « Yuki » + invitation),
  *       affiché dans le MÊME shell (barre du haut + barre latérale visibles) ;
- *   (5) HORODATAGE : l'heure « juste HH:mm », petite et discrète, sous CHAQUE
- *       message (utilisateur ET assistant) et un SÉPARATEUR DE JOUR (ligne
+ *   (5) HORODATAGE : l'heure « juste HH:mm », petite et discrète, EN TÊTE de
+ *       CHAQUE message (AU-DESSUS du texte) et un SÉPARATEUR DE JOUR (ligne
  *       interrompue portant la date complète en français au milieu, sans
  *       heure) quand le fil change de jour — au moins deux séparateurs.
+ *
+ * ⚠️ FIDÉLITÉ AU RÉEL (2026-10-10) : la maquette est ALIGNÉE sur le rendu réel
+ *    mesuré dans Chromium headless (harnais E2E) — le rail EMPILE les
+ *    conversations EN HAUT (largeur interne FIXE de 280 px, donc l'état actif
+ *    est un conteneur arrondi découpé au bord du rail, pas un grand cadre vide),
+ *    le « + » est en POINTILLÉS, le bouton chevron est un cadre arrondi à
+ *    contour fin, les infos techniques de l'assistant sont EN BAS À DROITE
+ *    (`.message__footer`) et l'heure est EN TÊTE (`.message__head`).
  *
  * ⚠️ C'EST UNE MAQUETTE, PAS DE LA PRODUCTION. AUCUN fichier de production
  *    n'est écrit : le script LIT `Yuki/public/ui/themes.css` (preset `neutre-dark`)
@@ -91,7 +99,7 @@ const M = {
   sidebarOpen: 280,   // barre dépliée
   rail: 56,           // barre repliée (rail d'initiales / d'icônes)
   gutter: 24,         // marge latérale de la zone de contenu
-  topbar: 56,         // hauteur de la barre du haut
+  topbar: 51,         // hauteur de la barre du haut (valeur RÉELLE mesurée)
   userBubble: 0.85,   // part de la largeur occupée par la bulle utilisateur
   animMs: 280,        // durée de l'animation d'ouverture / fermeture
   readMax: "none",    // largeur maximale de lecture (défaut : aucune borne = remplit)
@@ -126,26 +134,11 @@ if (witness.length !== WITNESS_LEN) throw new Error("témoin typographique : lon
  * ═════════════════════════════════════════════════════════════════════════ */
 
 const CONVERSATIONS = [
-  {
-    id: "c1", initials: "EL", title: "Espace de lecture 16/9",
-    date: "8 oct.", count: 24, excerpt: "Rends la colonne plus large et non centrée…",
-  },
-  {
-    id: "c2", initials: "TH", title: "Générer les thèmes V2",
-    date: "7 oct.", count: 41, excerpt: "Projette les 12 presets depuis le catalogue…",
-  },
-  {
-    id: "c3", initials: "VO", title: "Latence de la voix TTS",
-    date: "6 oct.", count: 12, excerpt: "La première phrase met trop longtemps à démarrer…",
-  },
-  {
-    id: "c4", initials: "MU", title: "Badge « muet » des blocs",
-    date: "4 oct.", count: 9, excerpt: "Le bloc muet reste affiché mais n'est pas lu…",
-  },
-  {
-    id: "c5", initials: "NO", title: "Notes de la réunion produit",
-    date: "1er oct.", count: 33, excerpt: "On garde deux niveaux de surface, pas plus…",
-  },
+  { id: "c1", initials: "EL", title: "Espace de lecture 16/9", date: "8 oct.", count: 24 },
+  { id: "c2", initials: "TH", title: "Générer les thèmes V2", date: "7 oct.", count: 41 },
+  { id: "c3", initials: "VO", title: "Latence de la voix TTS", date: "6 oct.", count: 12 },
+  { id: "c4", initials: "MU", title: "Badge « muet » des blocs", date: "4 oct.", count: 9 },
+  { id: "c5", initials: "NO", title: "Notes de la réunion produit", date: "1er oct.", count: 33 },
 ];
 
 const ICON = {
@@ -173,39 +166,43 @@ const ICON = {
 
 function convItem(c, activeId) {
   const active = c.id === activeId;
-  return `            <div class="conv${active ? " conv--active" : ""}" data-conv="${c.id}">
-              <span class="conv__av">${c.initials}</span>
-              <span class="conv__main">
-                <span class="conv__title">${c.title}</span>
-                <span class="conv__excerpt">${c.excerpt}</span>
-                <span class="conv__count">${c.date} · ${c.count} messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer">${ICON.dots}</button>
-            </div>`;
+  return `              <div class="conv${active ? " conv--active" : ""}" data-conv="${c.id}">
+                <span class="conv__av">${c.initials}</span>
+                <span class="conv__main">
+                  <span class="conv__title">${c.title}</span>
+                  <span class="conv__meta">${c.date} · ${c.count} messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer">${ICON.dots}</button>
+              </div>`;
 }
 
 function sidebar(activeId) {
   const items = CONVERSATIONS.map((c) => convItem(c, activeId)).join("\n");
   return `          <aside class="sb">
-            <div class="sb__top">
-              <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale">${ICON.chevronRight}${ICON.chevronLeft}</button>
-              <span class="sb__title">Conversations</span>
-            </div>
-            <button class="sb__new" type="button" title="Nouvelle conversation">
-              <span class="sb__plus">${ICON.plus}</span>
-              <span class="sb__newlabel">Nouvelle conversation</span>
-            </button>
-            <nav class="sb__list">
+            <div class="sb__inner">
+              <div class="sb__top">
+                <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale">${ICON.chevronRight}${ICON.chevronLeft}</button>
+                <span class="sb__title">Conversations</span>
+              </div>
+              <button class="sb__new" type="button" title="Nouvelle conversation">
+                <span class="sb__plus">${ICON.plus}</span>
+                <span class="sb__newlabel">Nouvelle conversation</span>
+              </button>
+              <nav class="sb__list">
 ${items}
-            </nav>
+              </nav>
+            </div>
           </aside>`;
 }
 
 /* ─── Heure des messages + séparateurs de jour ──────────────────────────────
- * L'heure est affichée PETITE et discrète, « juste l'heure » (HH:mm), sur la
- * ligne de métadonnées de CHAQUE message : alignée à droite de la bulle pour
- * l'utilisateur, en TÊTE de la ligne « TTFT … » pour l'assistant. La date
- * complète n'apparaît QUE dans le séparateur de jour (jamais sur les bulles).
+ * L'heure est affichée PETITE et discrète, « juste l'heure » (HH:mm), EN TÊTE
+ * du message (AU-DESSUS du texte) : bord extérieur à DROITE pour l'utilisateur,
+ * bord GAUCHE pour l'assistant. La date complète n'apparaît QUE dans le
+ * séparateur de jour (jamais sur les bulles).
+ *
+ * Les infos TECHNIQUES de l'assistant (« TTFT … · total … · N tok ») vont EN
+ * BAS À DROITE (`.message__footer`) ; l'utilisateur n'en a AUCUNE.
  *
  * En production, le préfixe réel transmis au modèle et stocké sera
  * `[horodatage] YYYY-MM-DD HH:mm (heure locale)` ; l'heure ci-dessous n'en est
@@ -216,20 +213,21 @@ function daySeparator(fullDate) {
 }
 
 function userMessage(text, time) {
-  return `            <div class="msg msg--user">
-              <div class="body">
+  return `            <div class="message message--user">
+              <span class="message__head message__head--end">${time}</span>
+              <div class="message__body">
                 <p class="p">${text}</p>
               </div>
-              <span class="meta meta--end">${time}</span>
             </div>`;
 }
 
 function assistantMessage(time, metaTail, bodyHtml) {
-  return `            <div class="msg msg--assistant">
-              <div class="body">
+  return `            <div class="message message--assistant">
+              <span class="message__head">${time}</span>
+              <div class="message__body">
 ${bodyHtml}
               </div>
-              <span class="meta"><span class="meta__time">${time}</span><span class="meta__dot">·</span>${metaTail}</span>
+              <span class="message__footer">${metaTail}</span>
             </div>`;
 }
 
@@ -326,13 +324,15 @@ const FIG_A = figure({
   id: "etat-a", screenClass: "screen--wide",
   opts: { activeId: "c1" },
   title: "(a) REPLIÉE par défaut — 56 px · fenêtre 1600 × 900",
-  hint: "Cliquez le bouton en haut de la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Un second clic la replie (le survol ne l'ouvre plus). Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer. Le fil est horodaté : l'heure discrète sous chaque bulle, la date complète au milieu des séparateurs de jour.",
+  hint: "Cliquez le bouton en haut de la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Un second clic la replie (le survol ne l'ouvre plus). Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer. Les conversations sont EMPILÉES EN HAUT (comme dans l'appli). Le fil est horodaté : l'heure discrète EN TÊTE de chaque message (au-dessus du texte), les infos techniques de l'assistant en bas à droite.",
   list: [
     ["barre latérale", "repliée · <b>bouton déplier/replier</b> · 56 px ⇄ 280 px"],
+    ["conversations", "empilées EN HAUT · larges de 268 px (découpées au bord du rail)"],
+    ["conversation active", "conteneur arrondi à faible teinte d'accent, <b>découpé au bord du rail</b>"],
     ["largeur de lecture", "pleine largeur (réglable · <code>--read-max</code>) = <b data-live=\"rmax\">none</b>"],
     ["caractères par ligne", "≈ <b data-live=\"cpl\">—</b> (largeur de texte <b data-live=\"px\">—</b>)"],
     ["bulle utilisateur", "85 % de la largeur de lecture"],
-    ["horodatage", "heure « juste HH:mm » sous chaque bulle · séparateur de jour daté (mercredi 7 / jeudi 8 octobre 2026)"],
+    ["horodatage", "heure « juste HH:mm » EN TÊTE de chaque message · infos techniques de l'assistant en bas à droite"],
   ],
 });
 
@@ -344,6 +344,7 @@ const FIG_B = figure({
   list: [
     ["barre latérale", "dépliée par le bouton · 280 px"],
     ["état du bouton", "<b>déplié (reste dépliée)</b>"],
+    ["items de conversation", "avatar + titre + méta (« date · N messages »), comme dans l'appli"],
     ["caractères par ligne", "≈ <b data-live=\"cpl\">—</b> (largeur de texte <b data-live=\"px\">—</b>)"],
     ["actions", "clic droit ou « ⋯ » → menu renommer / supprimer"],
   ],
@@ -356,6 +357,7 @@ const FIG_C = figure({
   hint: "Même règle : le fil remplit la largeur. Sous cette taille, le bouton de la barre la déplie PAR-DESSUS le fil.",
   list: [
     ["barre latérale", "repliée · 56 px"],
+    ["conversations", "empilées en haut · 268 px de large (découpées à 56 px)"],
     ["zone de contenu", `${NARROW.w - M.rail} px`],
     ["caractères par ligne", "≈ <b data-live=\"cpl\">—</b> (largeur de texte <b data-live=\"px\">—</b>)"],
   ],
@@ -540,19 +542,31 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 
 .app__body { flex: 1 1 auto; min-height: 0; display: flex; }
 
-/* ─── Barre latérale : repliée 56 px, dépliée 280 px (animation) ───────── */
+/* ─── Barre latérale : repliée 56 px, dépliée 280 px (animation) ─────────
+ * MÊME mécanisme que la production : la barre change de largeur, mais son
+ * contenu vit dans une colonne interne de largeur FIXE (280 px) qui ne se
+ * recompose pas pendant l'animation. Conséquence VISIBLE et RÉELLE : dans le
+ * rail (56 px), chaque conversation garde 268 px de large et son surlignage
+ * ACTIF est DÉCOUPÉ au bord du rail — un conteneur arrondi qui déborde vers la
+ * droite (ce n'est PAS un grand cadre vide). */
 .sb {
   flex: 0 0 auto;
   width: var(--m-rail);
   display: flex; flex-direction: column;
   overflow: hidden;
-  background: var(--panel-2);
+  background: var(--panel);
   border-right: 1px solid var(--border);
   transition: width var(--anim);
 }
 .app.is-open .sb { width: var(--m-sidebar); }
+.sb__inner {
+  width: var(--m-sidebar);
+  height: 100%;
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
 
-.sb__top { flex: 0 0 auto; min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 7px 15px; }
+.sb__top { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px 14px 6px; }
 .sb__title {
   flex: 1 1 auto; min-width: 0;
   font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
@@ -563,8 +577,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .sb__toggle {
   flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer;
+  width: 28px; height: 28px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer;
 }
 .sb__toggle:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .sb__toggle .ic--chevron-left { display: none; }
@@ -573,22 +587,22 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 
 .sb__new {
   flex: 0 0 auto;
-  display: flex; align-items: center; gap: 9px;
-  margin: 8px; padding: 9px 11px;
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--panel-3); color: var(--text);
-  font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  margin: 6px 8px; padding: 9px 10px;
+  border: 1px dashed var(--border); border-radius: 10px;
+  background: transparent; color: var(--text);
+  font: inherit; white-space: nowrap; cursor: pointer;
 }
-.sb__new:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.sb__plus { flex: 0 0 auto; display: inline-flex; color: var(--accent); }
+.sb__new:hover { background: var(--panel-hover); border-style: solid; }
+.sb__plus { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; color: var(--accent); }
 .sb__newlabel { opacity: 0; transition: opacity 0.18s ease 0.06s; }
 .app.is-open .sb__newlabel { opacity: 1; }
 
-.sb__list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 3px; padding: 0 8px 10px; overflow: hidden; }
+.sb__list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 2px; padding: 6px; overflow: hidden; }
 
 .conv {
-  display: flex; align-items: center; gap: 9px;
-  padding: 9px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px;
   border: 1px solid transparent; border-radius: 10px; cursor: pointer;
 }
 .conv:hover { background: var(--panel-hover); }
@@ -607,8 +621,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .app.is-open .sb .conv__main { opacity: 1; }
 .conv__title { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .conv--active .conv__title { font-weight: 600; }
-.conv__excerpt { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.conv__count { display: block; margin-top: 1px; font-size: 10.5px; color: var(--muted); }
+.conv__meta { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .conv__dots {
   flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
@@ -620,21 +633,21 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .conv__dots:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .app:not(.is-open) .conv__dots { opacity: 0; }
 
-/* ─── Zone principale : fil + saisie ───────────────────────────────────── */
+/* ─── Zone principale : fil + saisie ─────────────────────────────────── */
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.thread { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: var(--m-gutter); }
+.thread { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 20px var(--m-gutter); }
 .col { width: 100%; max-width: var(--read-max); }
 .thread .col { display: flex; flex-direction: column; gap: 12px; }
 
-.msg {
+.message {
   min-width: 0; max-width: 100%; overflow: hidden;
   padding: 10px 14px;
   border: 1px solid var(--border); border-radius: 14px;
 }
-.msg--user { align-self: flex-end; width: 85%; background: var(--user); }
-.msg--assistant { align-self: flex-start; width: 100%; background: var(--assistant); }
+.message--user { align-self: flex-end; width: 85%; background: var(--user); }
+.message--assistant { align-self: flex-start; width: 100%; background: var(--assistant); }
 
-.body { white-space: normal; }
+.message__body { white-space: normal; }
 .p { margin: 0 0 8px; }
 .p:last-child { margin-bottom: 0; }
 
@@ -655,11 +668,19 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .list { margin: 0; padding-left: 1.5em; }
 .list li { margin: 2px 0; }
 
-.meta { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-/* Heure des messages : « juste l'heure », alignée sur le bord extérieur de la
- * bulle (à droite pour l'utilisateur, en tête de la ligne TTFT pour l'assistant). */
-.meta--end { text-align: right; }
-.meta__dot { margin: 0 5px; color: color-mix(in srgb, var(--muted) 60%, transparent); }
+/* En-tête de message : l'heure « juste HH:mm », EN TÊTE (AU-DESSUS du texte).
+ * Bord extérieur à DROITE pour l'utilisateur, à GAUCHE pour l'assistant. */
+.message__head {
+  display: block; margin-bottom: 4px; font-size: 11px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.message__head--end { text-align: right; }
+/* Infos TECHNIQUES de l'assistant (TTFT … · total … · N tok) : EN BAS À
+ * DROITE. L'utilisateur n'en a AUCUNE. */
+.message__footer {
+  display: block; margin-top: 6px; text-align: right; font-size: 11px;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
 
 /* ─── Séparateur de jour : ligne interrompue, date complète au milieu ──── */
 .daysep { display: flex; align-items: center; gap: 12px; margin: 16px 0 4px; }
@@ -754,8 +775,9 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
     Maquette <b>hors production</b>, pour <b>décider sur le visuel</b>. Couleurs lues dans
     <code>Yuki/public/ui/themes.css</code> (preset <b>${PRESET}</b>), <b>aucun</b> fichier de production modifié.
     Aucune ressource externe, aucun style en ligne. <b>Le bouton de repli/dépli et le clic droit fonctionnent vraiment</b> :
-    essayez-les dans la Preview. <b>Nouveau :</b> l'<b>heure discrète</b> sous chaque bulle et un <b>séparateur de jour</b>
-    (ligne + date complète au milieu) quand la conversation change de jour.
+    essayez-les dans la Preview. <b>Agencement du fil (aligné sur le réel) :</b> l'<b>heure discrète</b> est EN TÊTE de
+    chaque message (au-dessus du texte), les <b>infos techniques</b> de l'assistant sont <b>en bas à droite</b>, et un
+    <b>séparateur de jour</b> (ligne + date complète au milieu) marque le changement de jour.
   </p>
 
   <section class="witness">
@@ -806,10 +828,11 @@ ${FIG_D}
   <footer class="note">
     <b>Compromis signalés</b> :
     <ul>
-      <li><b>Horodatage (à implémenter plus tard)</b> — en production, un préfixe <code>[horodatage] YYYY-MM-DD HH:mm (heure locale)</code> sera <b>transmis au modèle</b> et <b>stocké</b> en tête de chaque message (Yuki sait enfin « quand » nous sommes) ; il sera aussi <b>visible dans le fil</b>, sous forme compacte « juste l'heure ». Les <b>souvenirs</b> porteront eux aussi leur date (champ <code>at</code>), pour que le rappel mémoire dise « quand ». La maquette n'affiche QUE l'heure sous les bulles et la date complète dans le séparateur de jour.</li>
+      <li><b>Horodatage (à implémenter plus tard)</b> — en production, un préfixe <code>[horodatage] YYYY-MM-DD HH:mm (heure locale)</code> sera <b>transmis au modèle</b> et <b>stocké</b> en tête de chaque message (Yuki sait enfin « quand » nous sommes) ; il sera aussi <b>visible dans le fil</b>, sous forme compacte « juste l'heure ». Les <b>souvenirs</b> porteront eux aussi leur date (champ <code>at</code>), pour que le rappel mémoire dise « quand ». La maquette affiche l'heure EN TÊTE de chaque message (au-dessus du texte) et la date complète dans le séparateur de jour ; les infos techniques de l'assistant sont en bas à droite.</li>
       <li><b>Clic droit vs « ⋯ »</b> — le menu contextuel (clic droit) est le geste le plus rapide à la souris, mais il est <b>invisible</b> (rien n'indique qu'il existe) et <b>inaccessible au doigt</b> (pas de clic droit tactile). Le <b>« ⋯ »</b> discret, révélé au survol (et toujours visible sur la conversation active), rend l'action <b>découvrable et accessible</b>. Les deux ouvrent le <b>même</b> menu (renommer / supprimer).</li>
       <li><b>Largeur réglable</b> — le fil remplit l'espace par défaut (<code>--read-max: none</code>). La largeur maximale de lecture est <b>paramétrable</b> : utilisez les boutons du témoin de mesure pour voir l'effet sur la longueur de ligne.</li>
       <li><b>Barre latérale</b> — <b>repliée par défaut</b> (56 px), dépliée à 280 px par un <b>BOUTON déplier/replier</b> (plus de survol, plus de punaise : le bouton décide seul). La conversation se redimensionne <b>en même temps</b> (animation ${M.animMs} ms sur la largeur).</li>
+      <li><b>Fidélité au rendu réel (2026-10-10)</b> — cette maquette est ALIGNÉE sur le rendu réel mesuré dans Chromium headless : le rail <b>EMPILE les conversations EN HAUT</b> (colonne interne de largeur FIXE 280 px), le « <b>+</b> » est en <b>POINTILLÉS</b>, le bouton chevron est un cadre arrondi à contour fin, et la conversation <b>ACTIVE</b> porte un conteneur arrondi à faible teinte d'accent — <b>découpé au bord du rail</b> en mode replié (un grand cadre plein aurait été un mensonge).</li>
       <li><b>Script INLINE (maquette uniquement)</b> — cette page embarque un <code>&lt;script&gt;</code> inline pour rendre le bouton de repli/dépli, le clic droit et la mesure <b>réellement utilisables</b>. C'est <b>propre à la maquette (hors production)</b> : le code de production respecte la CSP stricte, sans script inline.</li>
     </ul>
   </footer>
@@ -860,7 +883,7 @@ ${FIG_D}
     /* ── Mesure en direct des caractères par ligne ─────────────────────── */
     var frames = Array.prototype.slice.call(document.querySelectorAll(".frame"));
     function measureFrame(frame) {
-      var p = frame.querySelector(".msg--assistant .p");
+      var p = frame.querySelector(".message--assistant .p");
       var cplEl = frame.querySelector("[data-live='cpl']");
       var pxEl = frame.querySelector("[data-live='px']");
       if (!p) { if (cplEl) cplEl.textContent = "—"; if (pxEl) pxEl.textContent = "—"; return null; }
@@ -972,7 +995,7 @@ ${FIG_D}
     if (typeof ResizeObserver === "function") {
       var ro = new ResizeObserver(function () { updateAll(); });
       frames.forEach(function (f) {
-        var p = f.querySelector(".msg--assistant .p");
+        var p = f.querySelector(".message--assistant .p");
         if (p) ro.observe(p);
       });
     }

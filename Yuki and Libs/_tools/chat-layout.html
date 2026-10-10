@@ -24,7 +24,7 @@
   --m-sidebar: 280px;
   --m-rail: 56px;
   --m-gutter: 24px;
-  --m-topbar: 56px;
+  --m-topbar: 51px;
   --read-max: none;
   --anim: 280ms cubic-bezier(.4, 0, .2, 1);
   --doc-bg: color-mix(in srgb, var(--bg) 55%, #000);
@@ -161,19 +161,31 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 
 .app__body { flex: 1 1 auto; min-height: 0; display: flex; }
 
-/* ─── Barre latérale : repliée 56 px, dépliée 280 px (animation) ───────── */
+/* ─── Barre latérale : repliée 56 px, dépliée 280 px (animation) ─────────
+ * MÊME mécanisme que la production : la barre change de largeur, mais son
+ * contenu vit dans une colonne interne de largeur FIXE (280 px) qui ne se
+ * recompose pas pendant l'animation. Conséquence VISIBLE et RÉELLE : dans le
+ * rail (56 px), chaque conversation garde 268 px de large et son surlignage
+ * ACTIF est DÉCOUPÉ au bord du rail — un conteneur arrondi qui déborde vers la
+ * droite (ce n'est PAS un grand cadre vide). */
 .sb {
   flex: 0 0 auto;
   width: var(--m-rail);
   display: flex; flex-direction: column;
   overflow: hidden;
-  background: var(--panel-2);
+  background: var(--panel);
   border-right: 1px solid var(--border);
   transition: width var(--anim);
 }
 .app.is-open .sb { width: var(--m-sidebar); }
+.sb__inner {
+  width: var(--m-sidebar);
+  height: 100%;
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
 
-.sb__top { flex: 0 0 auto; min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 7px 15px; }
+.sb__top { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 12px 14px 6px; }
 .sb__title {
   flex: 1 1 auto; min-width: 0;
   font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
@@ -184,8 +196,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .sb__toggle {
   flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer;
+  width: 28px; height: 28px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer;
 }
 .sb__toggle:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .sb__toggle .ic--chevron-left { display: none; }
@@ -194,22 +206,22 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 
 .sb__new {
   flex: 0 0 auto;
-  display: flex; align-items: center; gap: 9px;
-  margin: 8px; padding: 9px 11px;
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--panel-3); color: var(--text);
-  font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  margin: 6px 8px; padding: 9px 10px;
+  border: 1px dashed var(--border); border-radius: 10px;
+  background: transparent; color: var(--text);
+  font: inherit; white-space: nowrap; cursor: pointer;
 }
-.sb__new:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-.sb__plus { flex: 0 0 auto; display: inline-flex; color: var(--accent); }
+.sb__new:hover { background: var(--panel-hover); border-style: solid; }
+.sb__plus { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; color: var(--accent); }
 .sb__newlabel { opacity: 0; transition: opacity 0.18s ease 0.06s; }
 .app.is-open .sb__newlabel { opacity: 1; }
 
-.sb__list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 3px; padding: 0 8px 10px; overflow: hidden; }
+.sb__list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 2px; padding: 6px; overflow: hidden; }
 
 .conv {
-  display: flex; align-items: center; gap: 9px;
-  padding: 9px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px;
   border: 1px solid transparent; border-radius: 10px; cursor: pointer;
 }
 .conv:hover { background: var(--panel-hover); }
@@ -228,8 +240,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .app.is-open .sb .conv__main { opacity: 1; }
 .conv__title { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .conv--active .conv__title { font-weight: 600; }
-.conv__excerpt { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.conv__count { display: block; margin-top: 1px; font-size: 10.5px; color: var(--muted); }
+.conv__meta { display: block; margin-top: 2px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .conv__dots {
   flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
@@ -241,21 +252,21 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .conv__dots:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .app:not(.is-open) .conv__dots { opacity: 0; }
 
-/* ─── Zone principale : fil + saisie ───────────────────────────────────── */
+/* ─── Zone principale : fil + saisie ─────────────────────────────────── */
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.thread { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: var(--m-gutter); }
+.thread { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 20px var(--m-gutter); }
 .col { width: 100%; max-width: var(--read-max); }
 .thread .col { display: flex; flex-direction: column; gap: 12px; }
 
-.msg {
+.message {
   min-width: 0; max-width: 100%; overflow: hidden;
   padding: 10px 14px;
   border: 1px solid var(--border); border-radius: 14px;
 }
-.msg--user { align-self: flex-end; width: 85%; background: var(--user); }
-.msg--assistant { align-self: flex-start; width: 100%; background: var(--assistant); }
+.message--user { align-self: flex-end; width: 85%; background: var(--user); }
+.message--assistant { align-self: flex-start; width: 100%; background: var(--assistant); }
 
-.body { white-space: normal; }
+.message__body { white-space: normal; }
 .p { margin: 0 0 8px; }
 .p:last-child { margin-bottom: 0; }
 
@@ -276,11 +287,19 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 .list { margin: 0; padding-left: 1.5em; }
 .list li { margin: 2px 0; }
 
-.meta { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
-/* Heure des messages : « juste l'heure », alignée sur le bord extérieur de la
- * bulle (à droite pour l'utilisateur, en tête de la ligne TTFT pour l'assistant). */
-.meta--end { text-align: right; }
-.meta__dot { margin: 0 5px; color: color-mix(in srgb, var(--muted) 60%, transparent); }
+/* En-tête de message : l'heure « juste HH:mm », EN TÊTE (AU-DESSUS du texte).
+ * Bord extérieur à DROITE pour l'utilisateur, à GAUCHE pour l'assistant. */
+.message__head {
+  display: block; margin-bottom: 4px; font-size: 11px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.message__head--end { text-align: right; }
+/* Infos TECHNIQUES de l'assistant (TTFT … · total … · N tok) : EN BAS À
+ * DROITE. L'utilisateur n'en a AUCUNE. */
+.message__footer {
+  display: block; margin-top: 6px; text-align: right; font-size: 11px;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
 
 /* ─── Séparateur de jour : ligne interrompue, date complète au milieu ──── */
 .daysep { display: flex; align-items: center; gap: 12px; margin: 16px 0 4px; }
@@ -375,8 +394,9 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
     Maquette <b>hors production</b>, pour <b>décider sur le visuel</b>. Couleurs lues dans
     <code>Yuki/public/ui/themes.css</code> (preset <b>neutre-dark</b>), <b>aucun</b> fichier de production modifié.
     Aucune ressource externe, aucun style en ligne. <b>Le bouton de repli/dépli et le clic droit fonctionnent vraiment</b> :
-    essayez-les dans la Preview. <b>Nouveau :</b> l'<b>heure discrète</b> sous chaque bulle et un <b>séparateur de jour</b>
-    (ligne + date complète au milieu) quand la conversation change de jour.
+    essayez-les dans la Preview. <b>Agencement du fil (aligné sur le réel) :</b> l'<b>heure discrète</b> est EN TÊTE de
+    chaque message (au-dessus du texte), les <b>infos techniques</b> de l'assistant sont <b>en bas à droite</b>, et un
+    <b>séparateur de jour</b> (ligne + date complète au milieu) marque le changement de jour.
   </p>
 
   <section class="witness">
@@ -423,7 +443,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
 
       <figure class="frame" id="etat-a">
         <figcaption class="frame__cap"><span class="tag">(a) REPLIÉE par défaut — 56 px · fenêtre 1600 × 900</span></figcaption>
-        <p class="frame__hint">Cliquez le bouton en haut de la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Un second clic la replie (le survol ne l'ouvre plus). Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer. Le fil est horodaté : l'heure discrète sous chaque bulle, la date complète au milieu des séparateurs de jour.</p>
+        <p class="frame__hint">Cliquez le bouton en haut de la barre latérale : elle se déplie à 280 px en douceur et le fil se redimensionne en même temps. Un second clic la replie (le survol ne l'ouvre plus). Clic droit (ou « ⋯ ») sur une conversation pour renommer / supprimer. Les conversations sont EMPILÉES EN HAUT (comme dans l'appli). Le fil est horodaté : l'heure discrète EN TÊTE de chaque message (au-dessus du texte), les infos techniques de l'assistant en bas à droite.</p>
         <div class="screen screen--wide">        <div class="app">
           <header class="tb">
             <div class="tb__brand">Yuki</div>
@@ -438,90 +458,89 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
           </header>
           <div class="app__body">
           <aside class="sb">
-            <div class="sb__top">
-              <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale"><svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg><svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
-              <span class="sb__title">Conversations</span>
+            <div class="sb__inner">
+              <div class="sb__top">
+                <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale"><svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg><svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
+                <span class="sb__title">Conversations</span>
+              </div>
+              <button class="sb__new" type="button" title="Nouvelle conversation">
+                <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
+                <span class="sb__newlabel">Nouvelle conversation</span>
+              </button>
+              <nav class="sb__list">
+              <div class="conv conv--active" data-conv="c1">
+                <span class="conv__av">EL</span>
+                <span class="conv__main">
+                  <span class="conv__title">Espace de lecture 16/9</span>
+                  <span class="conv__meta">8 oct. · 24 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c2">
+                <span class="conv__av">TH</span>
+                <span class="conv__main">
+                  <span class="conv__title">Générer les thèmes V2</span>
+                  <span class="conv__meta">7 oct. · 41 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c3">
+                <span class="conv__av">VO</span>
+                <span class="conv__main">
+                  <span class="conv__title">Latence de la voix TTS</span>
+                  <span class="conv__meta">6 oct. · 12 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c4">
+                <span class="conv__av">MU</span>
+                <span class="conv__main">
+                  <span class="conv__title">Badge « muet » des blocs</span>
+                  <span class="conv__meta">4 oct. · 9 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c5">
+                <span class="conv__av">NO</span>
+                <span class="conv__main">
+                  <span class="conv__title">Notes de la réunion produit</span>
+                  <span class="conv__meta">1er oct. · 33 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              </nav>
             </div>
-            <button class="sb__new" type="button" title="Nouvelle conversation">
-              <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
-              <span class="sb__newlabel">Nouvelle conversation</span>
-            </button>
-            <nav class="sb__list">
-            <div class="conv conv--active" data-conv="c1">
-              <span class="conv__av">EL</span>
-              <span class="conv__main">
-                <span class="conv__title">Espace de lecture 16/9</span>
-                <span class="conv__excerpt">Rends la colonne plus large et non centrée…</span>
-                <span class="conv__count">8 oct. · 24 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c2">
-              <span class="conv__av">TH</span>
-              <span class="conv__main">
-                <span class="conv__title">Générer les thèmes V2</span>
-                <span class="conv__excerpt">Projette les 12 presets depuis le catalogue…</span>
-                <span class="conv__count">7 oct. · 41 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c3">
-              <span class="conv__av">VO</span>
-              <span class="conv__main">
-                <span class="conv__title">Latence de la voix TTS</span>
-                <span class="conv__excerpt">La première phrase met trop longtemps à démarrer…</span>
-                <span class="conv__count">6 oct. · 12 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c4">
-              <span class="conv__av">MU</span>
-              <span class="conv__main">
-                <span class="conv__title">Badge « muet » des blocs</span>
-                <span class="conv__excerpt">Le bloc muet reste affiché mais n'est pas lu…</span>
-                <span class="conv__count">4 oct. · 9 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c5">
-              <span class="conv__av">NO</span>
-              <span class="conv__main">
-                <span class="conv__title">Notes de la réunion produit</span>
-                <span class="conv__excerpt">On garde deux niveaux de surface, pas plus…</span>
-                <span class="conv__count">1er oct. · 33 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            </nav>
           </aside>
             <section class="main">
               <div class="thread"><div class="col">            <div class="daysep"><span class="daysep__label">mercredi 7 octobre 2026</span></div>
 
-            <div class="msg msg--user">
-              <div class="body">
+            <div class="message message--user">
+              <span class="message__head message__head--end">21:14</span>
+              <div class="message__body">
                 <p class="p">Est-ce que le fil pourrait afficher l'heure de chaque message ?</p>
               </div>
-              <span class="meta meta--end">21:14</span>
             </div>
 
-            <div class="msg msg--assistant">
-              <div class="body">
+            <div class="message message--assistant">
+              <span class="message__head">21:14</span>
+              <div class="message__body">
                 <p class="p">Oui. Je la poserai en petit sous chaque bulle, <b>juste l'heure</b> — la date complète reste dans le séparateur de jour, pour ne pas surcharger le fil.</p>
               </div>
-              <span class="meta"><span class="meta__time">21:14</span><span class="meta__dot">·</span>TTFT 268 ms · total 1 940 ms · 142 tok</span>
+              <span class="message__footer">TTFT 268 ms · total 1 940 ms · 142 tok</span>
             </div>
 
             <div class="daysep"><span class="daysep__label">jeudi 8 octobre 2026</span></div>
 
-            <div class="msg msg--user">
-              <div class="body">
+            <div class="message message--user">
+              <span class="message__head message__head--end">15:39</span>
+              <div class="message__body">
                 <p class="p">Peux-tu me préparer une version 16/9 où le fil remplit l'espace, sans colonne bornée ?</p>
               </div>
-              <span class="meta meta--end">15:39</span>
             </div>
 
-            <div class="msg msg--assistant">
-              <div class="body">
+            <div class="message message--assistant">
+              <span class="message__head">15:41</span>
+              <div class="message__body">
                 <p class="p">J'ai supprimé la borne à 720 px : le fil occupe maintenant toute la largeur utile. La conséquence, volontaire, est que les lignes redeviennent longues — d'autant plus que la barre latérale se replie au repos.</p>
                 <div class="code-block">
                   <span class="mute-badge">muet — non lu</span>
@@ -537,7 +556,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
                   <li>la zone de saisie suit exactement la même largeur de lecture.</li>
                 </ul>
               </div>
-              <span class="meta"><span class="meta__time">15:41</span><span class="meta__dot">·</span>TTFT 312 ms · total 4 210 ms · 386 tok</span>
+              <span class="message__footer">TTFT 312 ms · total 4 210 ms · 386 tok</span>
             </div>
               </div></div>
               <footer class="composer">
@@ -552,10 +571,12 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
         </div></div>
           <ul class="measures">
             <li><b>barre latérale</b> repliée · <b>bouton déplier/replier</b> · 56 px ⇄ 280 px</li>
+            <li><b>conversations</b> empilées EN HAUT · larges de 268 px (découpées au bord du rail)</li>
+            <li><b>conversation active</b> conteneur arrondi à faible teinte d'accent, <b>découpé au bord du rail</b></li>
             <li><b>largeur de lecture</b> pleine largeur (réglable · <code>--read-max</code>) = <b data-live="rmax">none</b></li>
             <li><b>caractères par ligne</b> ≈ <b data-live="cpl">—</b> (largeur de texte <b data-live="px">—</b>)</li>
             <li><b>bulle utilisateur</b> 85 % de la largeur de lecture</li>
-            <li><b>horodatage</b> heure « juste HH:mm » sous chaque bulle · séparateur de jour daté (mercredi 7 / jeudi 8 octobre 2026)</li>
+            <li><b>horodatage</b> heure « juste HH:mm » EN TÊTE de chaque message · infos techniques de l'assistant en bas à droite</li>
           </ul>
       </figure>
 
@@ -576,90 +597,89 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
           </header>
           <div class="app__body">
           <aside class="sb">
-            <div class="sb__top">
-              <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale"><svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg><svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
-              <span class="sb__title">Conversations</span>
+            <div class="sb__inner">
+              <div class="sb__top">
+                <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale"><svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg><svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
+                <span class="sb__title">Conversations</span>
+              </div>
+              <button class="sb__new" type="button" title="Nouvelle conversation">
+                <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
+                <span class="sb__newlabel">Nouvelle conversation</span>
+              </button>
+              <nav class="sb__list">
+              <div class="conv conv--active" data-conv="c1">
+                <span class="conv__av">EL</span>
+                <span class="conv__main">
+                  <span class="conv__title">Espace de lecture 16/9</span>
+                  <span class="conv__meta">8 oct. · 24 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c2">
+                <span class="conv__av">TH</span>
+                <span class="conv__main">
+                  <span class="conv__title">Générer les thèmes V2</span>
+                  <span class="conv__meta">7 oct. · 41 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c3">
+                <span class="conv__av">VO</span>
+                <span class="conv__main">
+                  <span class="conv__title">Latence de la voix TTS</span>
+                  <span class="conv__meta">6 oct. · 12 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c4">
+                <span class="conv__av">MU</span>
+                <span class="conv__main">
+                  <span class="conv__title">Badge « muet » des blocs</span>
+                  <span class="conv__meta">4 oct. · 9 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c5">
+                <span class="conv__av">NO</span>
+                <span class="conv__main">
+                  <span class="conv__title">Notes de la réunion produit</span>
+                  <span class="conv__meta">1er oct. · 33 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              </nav>
             </div>
-            <button class="sb__new" type="button" title="Nouvelle conversation">
-              <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
-              <span class="sb__newlabel">Nouvelle conversation</span>
-            </button>
-            <nav class="sb__list">
-            <div class="conv conv--active" data-conv="c1">
-              <span class="conv__av">EL</span>
-              <span class="conv__main">
-                <span class="conv__title">Espace de lecture 16/9</span>
-                <span class="conv__excerpt">Rends la colonne plus large et non centrée…</span>
-                <span class="conv__count">8 oct. · 24 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c2">
-              <span class="conv__av">TH</span>
-              <span class="conv__main">
-                <span class="conv__title">Générer les thèmes V2</span>
-                <span class="conv__excerpt">Projette les 12 presets depuis le catalogue…</span>
-                <span class="conv__count">7 oct. · 41 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c3">
-              <span class="conv__av">VO</span>
-              <span class="conv__main">
-                <span class="conv__title">Latence de la voix TTS</span>
-                <span class="conv__excerpt">La première phrase met trop longtemps à démarrer…</span>
-                <span class="conv__count">6 oct. · 12 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c4">
-              <span class="conv__av">MU</span>
-              <span class="conv__main">
-                <span class="conv__title">Badge « muet » des blocs</span>
-                <span class="conv__excerpt">Le bloc muet reste affiché mais n'est pas lu…</span>
-                <span class="conv__count">4 oct. · 9 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c5">
-              <span class="conv__av">NO</span>
-              <span class="conv__main">
-                <span class="conv__title">Notes de la réunion produit</span>
-                <span class="conv__excerpt">On garde deux niveaux de surface, pas plus…</span>
-                <span class="conv__count">1er oct. · 33 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            </nav>
           </aside>
             <section class="main">
               <div class="thread"><div class="col">            <div class="daysep"><span class="daysep__label">mercredi 7 octobre 2026</span></div>
 
-            <div class="msg msg--user">
-              <div class="body">
+            <div class="message message--user">
+              <span class="message__head message__head--end">21:14</span>
+              <div class="message__body">
                 <p class="p">Est-ce que le fil pourrait afficher l'heure de chaque message ?</p>
               </div>
-              <span class="meta meta--end">21:14</span>
             </div>
 
-            <div class="msg msg--assistant">
-              <div class="body">
+            <div class="message message--assistant">
+              <span class="message__head">21:14</span>
+              <div class="message__body">
                 <p class="p">Oui. Je la poserai en petit sous chaque bulle, <b>juste l'heure</b> — la date complète reste dans le séparateur de jour, pour ne pas surcharger le fil.</p>
               </div>
-              <span class="meta"><span class="meta__time">21:14</span><span class="meta__dot">·</span>TTFT 268 ms · total 1 940 ms · 142 tok</span>
+              <span class="message__footer">TTFT 268 ms · total 1 940 ms · 142 tok</span>
             </div>
 
             <div class="daysep"><span class="daysep__label">jeudi 8 octobre 2026</span></div>
 
-            <div class="msg msg--user">
-              <div class="body">
+            <div class="message message--user">
+              <span class="message__head message__head--end">15:39</span>
+              <div class="message__body">
                 <p class="p">Peux-tu me préparer une version 16/9 où le fil remplit l'espace, sans colonne bornée ?</p>
               </div>
-              <span class="meta meta--end">15:39</span>
             </div>
 
-            <div class="msg msg--assistant">
-              <div class="body">
+            <div class="message message--assistant">
+              <span class="message__head">15:41</span>
+              <div class="message__body">
                 <p class="p">J'ai supprimé la borne à 720 px : le fil occupe maintenant toute la largeur utile. La conséquence, volontaire, est que les lignes redeviennent longues — d'autant plus que la barre latérale se replie au repos.</p>
                 <div class="code-block">
                   <span class="mute-badge">muet — non lu</span>
@@ -675,7 +695,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
                   <li>la zone de saisie suit exactement la même largeur de lecture.</li>
                 </ul>
               </div>
-              <span class="meta"><span class="meta__time">15:41</span><span class="meta__dot">·</span>TTFT 312 ms · total 4 210 ms · 386 tok</span>
+              <span class="message__footer">TTFT 312 ms · total 4 210 ms · 386 tok</span>
             </div>
               </div></div>
               <footer class="composer">
@@ -691,6 +711,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
           <ul class="measures">
             <li><b>barre latérale</b> dépliée par le bouton · 280 px</li>
             <li><b>état du bouton</b> <b>déplié (reste dépliée)</b></li>
+            <li><b>items de conversation</b> avatar + titre + méta (« date · N messages »), comme dans l'appli</li>
             <li><b>caractères par ligne</b> ≈ <b data-live="cpl">—</b> (largeur de texte <b data-live="px">—</b>)</li>
             <li><b>actions</b> clic droit ou « ⋯ » → menu renommer / supprimer</li>
           </ul>
@@ -713,90 +734,89 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
           </header>
           <div class="app__body">
           <aside class="sb">
-            <div class="sb__top">
-              <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale"><svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg><svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
-              <span class="sb__title">Conversations</span>
+            <div class="sb__inner">
+              <div class="sb__top">
+                <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale"><svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg><svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
+                <span class="sb__title">Conversations</span>
+              </div>
+              <button class="sb__new" type="button" title="Nouvelle conversation">
+                <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
+                <span class="sb__newlabel">Nouvelle conversation</span>
+              </button>
+              <nav class="sb__list">
+              <div class="conv" data-conv="c1">
+                <span class="conv__av">EL</span>
+                <span class="conv__main">
+                  <span class="conv__title">Espace de lecture 16/9</span>
+                  <span class="conv__meta">8 oct. · 24 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv conv--active" data-conv="c2">
+                <span class="conv__av">TH</span>
+                <span class="conv__main">
+                  <span class="conv__title">Générer les thèmes V2</span>
+                  <span class="conv__meta">7 oct. · 41 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c3">
+                <span class="conv__av">VO</span>
+                <span class="conv__main">
+                  <span class="conv__title">Latence de la voix TTS</span>
+                  <span class="conv__meta">6 oct. · 12 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c4">
+                <span class="conv__av">MU</span>
+                <span class="conv__main">
+                  <span class="conv__title">Badge « muet » des blocs</span>
+                  <span class="conv__meta">4 oct. · 9 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c5">
+                <span class="conv__av">NO</span>
+                <span class="conv__main">
+                  <span class="conv__title">Notes de la réunion produit</span>
+                  <span class="conv__meta">1er oct. · 33 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              </nav>
             </div>
-            <button class="sb__new" type="button" title="Nouvelle conversation">
-              <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
-              <span class="sb__newlabel">Nouvelle conversation</span>
-            </button>
-            <nav class="sb__list">
-            <div class="conv" data-conv="c1">
-              <span class="conv__av">EL</span>
-              <span class="conv__main">
-                <span class="conv__title">Espace de lecture 16/9</span>
-                <span class="conv__excerpt">Rends la colonne plus large et non centrée…</span>
-                <span class="conv__count">8 oct. · 24 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv conv--active" data-conv="c2">
-              <span class="conv__av">TH</span>
-              <span class="conv__main">
-                <span class="conv__title">Générer les thèmes V2</span>
-                <span class="conv__excerpt">Projette les 12 presets depuis le catalogue…</span>
-                <span class="conv__count">7 oct. · 41 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c3">
-              <span class="conv__av">VO</span>
-              <span class="conv__main">
-                <span class="conv__title">Latence de la voix TTS</span>
-                <span class="conv__excerpt">La première phrase met trop longtemps à démarrer…</span>
-                <span class="conv__count">6 oct. · 12 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c4">
-              <span class="conv__av">MU</span>
-              <span class="conv__main">
-                <span class="conv__title">Badge « muet » des blocs</span>
-                <span class="conv__excerpt">Le bloc muet reste affiché mais n'est pas lu…</span>
-                <span class="conv__count">4 oct. · 9 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c5">
-              <span class="conv__av">NO</span>
-              <span class="conv__main">
-                <span class="conv__title">Notes de la réunion produit</span>
-                <span class="conv__excerpt">On garde deux niveaux de surface, pas plus…</span>
-                <span class="conv__count">1er oct. · 33 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            </nav>
           </aside>
             <section class="main">
               <div class="thread"><div class="col">            <div class="daysep"><span class="daysep__label">mercredi 7 octobre 2026</span></div>
 
-            <div class="msg msg--user">
-              <div class="body">
+            <div class="message message--user">
+              <span class="message__head message__head--end">21:14</span>
+              <div class="message__body">
                 <p class="p">Est-ce que le fil pourrait afficher l'heure de chaque message ?</p>
               </div>
-              <span class="meta meta--end">21:14</span>
             </div>
 
-            <div class="msg msg--assistant">
-              <div class="body">
+            <div class="message message--assistant">
+              <span class="message__head">21:14</span>
+              <div class="message__body">
                 <p class="p">Oui. Je la poserai en petit sous chaque bulle, <b>juste l'heure</b> — la date complète reste dans le séparateur de jour, pour ne pas surcharger le fil.</p>
               </div>
-              <span class="meta"><span class="meta__time">21:14</span><span class="meta__dot">·</span>TTFT 268 ms · total 1 940 ms · 142 tok</span>
+              <span class="message__footer">TTFT 268 ms · total 1 940 ms · 142 tok</span>
             </div>
 
             <div class="daysep"><span class="daysep__label">jeudi 8 octobre 2026</span></div>
 
-            <div class="msg msg--user">
-              <div class="body">
+            <div class="message message--user">
+              <span class="message__head message__head--end">15:39</span>
+              <div class="message__body">
                 <p class="p">Peux-tu me préparer une version 16/9 où le fil remplit l'espace, sans colonne bornée ?</p>
               </div>
-              <span class="meta meta--end">15:39</span>
             </div>
 
-            <div class="msg msg--assistant">
-              <div class="body">
+            <div class="message message--assistant">
+              <span class="message__head">15:41</span>
+              <div class="message__body">
                 <p class="p">J'ai supprimé la borne à 720 px : le fil occupe maintenant toute la largeur utile. La conséquence, volontaire, est que les lignes redeviennent longues — d'autant plus que la barre latérale se replie au repos.</p>
                 <div class="code-block">
                   <span class="mute-badge">muet — non lu</span>
@@ -812,7 +832,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
                   <li>la zone de saisie suit exactement la même largeur de lecture.</li>
                 </ul>
               </div>
-              <span class="meta"><span class="meta__time">15:41</span><span class="meta__dot">·</span>TTFT 312 ms · total 4 210 ms · 386 tok</span>
+              <span class="message__footer">TTFT 312 ms · total 4 210 ms · 386 tok</span>
             </div>
               </div></div>
               <footer class="composer">
@@ -827,6 +847,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
         </div></div>
           <ul class="measures">
             <li><b>barre latérale</b> repliée · 56 px</li>
+            <li><b>conversations</b> empilées en haut · 268 px de large (découpées à 56 px)</li>
             <li><b>zone de contenu</b> 664 px</li>
             <li><b>caractères par ligne</b> ≈ <b data-live="cpl">—</b> (largeur de texte <b data-live="px">—</b>)</li>
           </ul>
@@ -849,61 +870,58 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
           </header>
           <div class="app__body">
           <aside class="sb">
-            <div class="sb__top">
-              <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale"><svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg><svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
-              <span class="sb__title">Conversations</span>
+            <div class="sb__inner">
+              <div class="sb__top">
+                <button class="sb__toggle" type="button" aria-expanded="false" aria-controls="sb" title="Déplier la barre latérale" aria-label="Déplier la barre latérale"><svg class="ic ic--chevron-right" viewBox="0 0 24 24" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg><svg class="ic ic--chevron-left" viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
+                <span class="sb__title">Conversations</span>
+              </div>
+              <button class="sb__new" type="button" title="Nouvelle conversation">
+                <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
+                <span class="sb__newlabel">Nouvelle conversation</span>
+              </button>
+              <nav class="sb__list">
+              <div class="conv" data-conv="c1">
+                <span class="conv__av">EL</span>
+                <span class="conv__main">
+                  <span class="conv__title">Espace de lecture 16/9</span>
+                  <span class="conv__meta">8 oct. · 24 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c2">
+                <span class="conv__av">TH</span>
+                <span class="conv__main">
+                  <span class="conv__title">Générer les thèmes V2</span>
+                  <span class="conv__meta">7 oct. · 41 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c3">
+                <span class="conv__av">VO</span>
+                <span class="conv__main">
+                  <span class="conv__title">Latence de la voix TTS</span>
+                  <span class="conv__meta">6 oct. · 12 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c4">
+                <span class="conv__av">MU</span>
+                <span class="conv__main">
+                  <span class="conv__title">Badge « muet » des blocs</span>
+                  <span class="conv__meta">4 oct. · 9 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              <div class="conv" data-conv="c5">
+                <span class="conv__av">NO</span>
+                <span class="conv__main">
+                  <span class="conv__title">Notes de la réunion produit</span>
+                  <span class="conv__meta">1er oct. · 33 messages</span>
+                </span>
+                <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
+              </div>
+              </nav>
             </div>
-            <button class="sb__new" type="button" title="Nouvelle conversation">
-              <span class="sb__plus"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></span>
-              <span class="sb__newlabel">Nouvelle conversation</span>
-            </button>
-            <nav class="sb__list">
-            <div class="conv" data-conv="c1">
-              <span class="conv__av">EL</span>
-              <span class="conv__main">
-                <span class="conv__title">Espace de lecture 16/9</span>
-                <span class="conv__excerpt">Rends la colonne plus large et non centrée…</span>
-                <span class="conv__count">8 oct. · 24 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c2">
-              <span class="conv__av">TH</span>
-              <span class="conv__main">
-                <span class="conv__title">Générer les thèmes V2</span>
-                <span class="conv__excerpt">Projette les 12 presets depuis le catalogue…</span>
-                <span class="conv__count">7 oct. · 41 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c3">
-              <span class="conv__av">VO</span>
-              <span class="conv__main">
-                <span class="conv__title">Latence de la voix TTS</span>
-                <span class="conv__excerpt">La première phrase met trop longtemps à démarrer…</span>
-                <span class="conv__count">6 oct. · 12 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c4">
-              <span class="conv__av">MU</span>
-              <span class="conv__main">
-                <span class="conv__title">Badge « muet » des blocs</span>
-                <span class="conv__excerpt">Le bloc muet reste affiché mais n'est pas lu…</span>
-                <span class="conv__count">4 oct. · 9 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            <div class="conv" data-conv="c5">
-              <span class="conv__av">NO</span>
-              <span class="conv__main">
-                <span class="conv__title">Notes de la réunion produit</span>
-                <span class="conv__excerpt">On garde deux niveaux de surface, pas plus…</span>
-                <span class="conv__count">1er oct. · 33 messages</span>
-              </span>
-              <button class="conv__dots" type="button" aria-haspopup="menu" title="Actions — renommer / supprimer"><svg class="ic ic--dots" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
-            </div>
-            </nav>
           </aside>
             <section class="main main--empty">
           <section class="main main--empty">
@@ -927,10 +945,11 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
   <footer class="note">
     <b>Compromis signalés</b> :
     <ul>
-      <li><b>Horodatage (à implémenter plus tard)</b> — en production, un préfixe <code>[horodatage] YYYY-MM-DD HH:mm (heure locale)</code> sera <b>transmis au modèle</b> et <b>stocké</b> en tête de chaque message (Yuki sait enfin « quand » nous sommes) ; il sera aussi <b>visible dans le fil</b>, sous forme compacte « juste l'heure ». Les <b>souvenirs</b> porteront eux aussi leur date (champ <code>at</code>), pour que le rappel mémoire dise « quand ». La maquette n'affiche QUE l'heure sous les bulles et la date complète dans le séparateur de jour.</li>
+      <li><b>Horodatage (à implémenter plus tard)</b> — en production, un préfixe <code>[horodatage] YYYY-MM-DD HH:mm (heure locale)</code> sera <b>transmis au modèle</b> et <b>stocké</b> en tête de chaque message (Yuki sait enfin « quand » nous sommes) ; il sera aussi <b>visible dans le fil</b>, sous forme compacte « juste l'heure ». Les <b>souvenirs</b> porteront eux aussi leur date (champ <code>at</code>), pour que le rappel mémoire dise « quand ». La maquette affiche l'heure EN TÊTE de chaque message (au-dessus du texte) et la date complète dans le séparateur de jour ; les infos techniques de l'assistant sont en bas à droite.</li>
       <li><b>Clic droit vs « ⋯ »</b> — le menu contextuel (clic droit) est le geste le plus rapide à la souris, mais il est <b>invisible</b> (rien n'indique qu'il existe) et <b>inaccessible au doigt</b> (pas de clic droit tactile). Le <b>« ⋯ »</b> discret, révélé au survol (et toujours visible sur la conversation active), rend l'action <b>découvrable et accessible</b>. Les deux ouvrent le <b>même</b> menu (renommer / supprimer).</li>
       <li><b>Largeur réglable</b> — le fil remplit l'espace par défaut (<code>--read-max: none</code>). La largeur maximale de lecture est <b>paramétrable</b> : utilisez les boutons du témoin de mesure pour voir l'effet sur la longueur de ligne.</li>
       <li><b>Barre latérale</b> — <b>repliée par défaut</b> (56 px), dépliée à 280 px par un <b>BOUTON déplier/replier</b> (plus de survol, plus de punaise : le bouton décide seul). La conversation se redimensionne <b>en même temps</b> (animation 280 ms sur la largeur).</li>
+      <li><b>Fidélité au rendu réel (2026-10-10)</b> — cette maquette est ALIGNÉE sur le rendu réel mesuré dans Chromium headless : le rail <b>EMPILE les conversations EN HAUT</b> (colonne interne de largeur FIXE 280 px), le « <b>+</b> » est en <b>POINTILLÉS</b>, le bouton chevron est un cadre arrondi à contour fin, et la conversation <b>ACTIVE</b> porte un conteneur arrondi à faible teinte d'accent — <b>découpé au bord du rail</b> en mode replié (un grand cadre plein aurait été un mensonge).</li>
       <li><b>Script INLINE (maquette uniquement)</b> — cette page embarque un <code>&lt;script&gt;</code> inline pour rendre le bouton de repli/dépli, le clic droit et la mesure <b>réellement utilisables</b>. C'est <b>propre à la maquette (hors production)</b> : le code de production respecte la CSP stricte, sans script inline.</li>
     </ul>
   </footer>
@@ -981,7 +1000,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
     /* ── Mesure en direct des caractères par ligne ─────────────────────── */
     var frames = Array.prototype.slice.call(document.querySelectorAll(".frame"));
     function measureFrame(frame) {
-      var p = frame.querySelector(".msg--assistant .p");
+      var p = frame.querySelector(".message--assistant .p");
       var cplEl = frame.querySelector("[data-live='cpl']");
       var pxEl = frame.querySelector("[data-live='px']");
       if (!p) { if (cplEl) cplEl.textContent = "—"; if (pxEl) pxEl.textContent = "—"; return null; }
@@ -1093,7 +1112,7 @@ footer.note code { color: var(--text); font-family: ui-monospace, Menlo, Consola
     if (typeof ResizeObserver === "function") {
       var ro = new ResizeObserver(function () { updateAll(); });
       frames.forEach(function (f) {
-        var p = f.querySelector(".msg--assistant .p");
+        var p = f.querySelector(".message--assistant .p");
         if (p) ro.observe(p);
       });
     }
