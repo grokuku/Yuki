@@ -345,7 +345,19 @@ async function main(): Promise<void> {
       setLevel: (agentId, level) => {
         agentStore.setLevel(agentId, level);
       },
-      subscribe: (listener) => agentStore.subscribe(listener),
+      subscribe: (listener) => {
+        // Deux sources de changement : le registre (nom, niveau, révocation…) et
+        // le HUB (connexion / déconnexion d'un agent). ⚠️ Sans le hub, une
+        // déconnexion ne déclenchait AUCUNE mutation du store : la trame `agents`
+        // (donc l'état `online`/la pastille) restait périmée jusqu'à un
+        // rechargement. On s'abonne aux DEUX et on se désabonne des deux.
+        const offStore = agentStore.subscribe(listener);
+        const offHub = agentHub.subscribe(listener);
+        return () => {
+          offStore();
+          offHub();
+        };
+      },
     };
     agentExecution = new AgentExecutionService({
       store: agentStore,

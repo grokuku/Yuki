@@ -11,13 +11,16 @@
  */
 
 import { createServer as createHttpServer } from "node:http";
+import { EventEmitter } from "node:events";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import type { WebSocket } from "ws";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
+  AgentConnection,
   AgentExecutionService,
   AgentHub,
   AgentStore,
@@ -117,7 +120,16 @@ const agentsGateway: AgentsGatewayPort = {
     })),
   setEnabled: (agentId, enabled) => store.setEnabled(agentId, enabled),
   setLevel: (agentId, level) => store.setLevel(agentId, level),
-  subscribe: (listener) => store.subscribe(listener),
+  // ⚠️ Comme `src/index.ts` : le store ET le hub — une DÉCONNEXION d'agent
+  // n'écrit rien dans le store, elle ne se voit que par le hub.
+  subscribe: (listener) => {
+    const offStore = store.subscribe(listener);
+    const offHub = hub.subscribe(listener);
+    return () => {
+      offStore();
+      offHub();
+    };
+  },
 };
 
 // --- Hôte Pi + transport WS -------------------------------------------------
@@ -153,7 +165,49 @@ const context: AppContext = {
   agents: { pairing, store, logger, hub, audit, approvals },
 };
 
-const server = createHttpServer(createApp(context));
+const app = createApp(context);
+
+/**
+ * Socket factice suffisant à `AgentConnection`. Sert à ÉMULER un agent connecté
+ * pour l'E2E du RENDU de la pastille (vert/rouge) ; le chemin serveur réel
+ * (mTLS) est couvert par les tests d'intégration. Routes E2E UNIQUEMENT (ce
+ * harnais est jetable), jamais montées en production.
+ */
+function fakeAgentSocket(): WebSocket {
+  const socket = new EventEmitter() as unknown as EventEmitter & { readyState: number };
+  socket.readyState = 1; // WebSocket.OPEN
+  (socket as unknown as { send: () => boolean }).send = () => true;
+  (socket as unknown as { close: () => void }).close = () => socket.emit("close", 1000);
+  return socket as unknown as WebSocket;
+}
+
+const server = createHttpServer((req, res) => {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  if (
+    url.pathname === "/api/e2e/agent-connect" ||
+    url.pathname === "/api/e2e/agent-disconnect"
+  ) {
+    const agentId = url.searchParams.get("agentId") ?? "";
+    if (url.pathname === "/api/e2e/agent-connect") {
+      if (agentId && !hub.isOnline(agentId)) {
+        hub.register(
+          new AgentConnection({
+            ws: fakeAgentSocket(),
+            agentId,
+            logger,
+            onClose: (closed) => hub.unregister(closed),
+          }),
+        );
+      }
+    } else if (agentId) {
+      hub.disconnect(agentId);
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ agentId, online: hub.isOnline(agentId) }));
+    return;
+  }
+  app(req, res);
+});
 transport.attach(server);
 server.listen(0, "127.0.0.1", () => {
   const address = server.address() as AddressInfo;

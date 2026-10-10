@@ -455,11 +455,17 @@ a.pill:hover {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--muted);
+  /* La pastille ne parle QUE de CONNEXION : DÉCONNECTÉ (rouge) par défaut. */
+  background: var(--danger);
   box-shadow: 0 0 0 2px var(--panel);
 }
 
-.side-agent__badge[data-enabled="true"] .side-agent__dot {
+/* CONNECTÉ ⇒ pastille vert ; sinon ROUGE (base ci-dessus). ⚠️ Découplée de
+   `data-enabled` : l'état activé/désactivé reste porté par la COULEUR DU
+   BOUTON (`.side-agent__badge[data-enabled="true"]`), JAMAIS par la pastille.
+   ⚠️ La couleur seule est inaccessible (daltonisme) : le libellé explicite
+   « Connecté »/« Déconnecté » est posé sur l'élément (`title`/`aria-label`). */
+.side-agent__badge[data-online="true"] .side-agent__dot {
   background: var(--ok);
 }
 

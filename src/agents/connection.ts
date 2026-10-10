@@ -53,6 +53,25 @@ export interface AgentHello {
 /** Marge de sécurité ajoutée au timeout annoncé de la commande. */
 export const COMMAND_SAFETY_MARGIN_MS = 30_000;
 
+/**
+ * Silence maximal toléré sur une connexion AVANT de la considérer morte (socket
+ * « demi-ouverte » : le pair a disparu sans FIN TCP).
+ *
+ * ⚠️ Aligné sur le heartbeat APPLICATIF de l'agent Go : il envoie un `ping`
+ * toutes les 15 s et se déclare hors ligne après 45 s sans `pong`
+ * (`DefaultPingIntervalMS` / `DefaultOfflineAfterMS`, agent/internal/agent/config.go).
+ * Yuki réutilise le MÊME seuil : au-delà de 45 s sans AUCUNE trame reçue, le
+ * canal est rompu et l'agent est signalé DÉCONNECTÉ aux clients.
+ */
+export const AGENT_OFFLINE_AFTER_MS = 45_000;
+
+/**
+ * Granularité du balayage des connexions silencieuses. Le SEUIL reste
+ * `AGENT_OFFLINE_AFTER_MS` ; cette période ne fait que borner le retard de
+ * détection d'une socket morte (bascule au rouge en 45–50 s environ).
+ */
+export const AGENT_HUB_SWEEP_INTERVAL_MS = 5_000;
+
 interface PendingCommand {
   cmdId: string;
   agentId: string;
@@ -99,6 +118,8 @@ export class AgentConnection {
 
   private hello: AgentHello | null = null;
   private closed = false;
+  /** Horodatage de la DERNIÈRE trame reçue (détection de socket morte). */
+  private lastActivityAt: number;
   /** Identifiant croissant : distingue deux connexions successives du même agent. */
   readonly socketId: number;
 
@@ -109,6 +130,7 @@ export class AgentConnection {
     this.now = options.now ?? Date.now;
     this.onCloseCallback = options.onClose;
     this.onHelloCallback = options.onHello;
+    this.lastActivityAt = this.now();
     socketSeq += 1;
     this.socketId = socketSeq;
 
@@ -122,6 +144,15 @@ export class AgentConnection {
 
   get isClosed(): boolean {
     return this.closed;
+  }
+
+  /**
+   * `true` si AUCUNE trame n'a été reçue depuis `offlineAfterMs` : socket
+   * « demi-ouverte » (le pair a disparu sans FIN TCP). Aligné sur le heartbeat
+   * applicatif de l'agent (ping 15 s, hors ligne 45 s).
+   */
+  isStale(offlineAfterMs: number): boolean {
+    return this.now() - this.lastActivityAt >= offlineAfterMs;
   }
 
   /** Présentation reçue de l'agent, si reçue. */
@@ -153,6 +184,9 @@ export class AgentConnection {
 
   /** Traite UNE trame reçue (appelé par l'écouteur `message`). */
   handleMessage(data: Buffer | string): void {
+    // Toute trame reçue prouve que le pair est VIVANT : on horodate l'activité
+    // (sert au balayage des sockets « demi-ouvertes », cf. `isStale`).
+    this.lastActivityAt = this.now();
     const parsed = parseAgentFrame(data);
     if (!parsed.ok) {
       this.logger.warn("agents.ws.frame_invalid", {
@@ -512,9 +546,35 @@ export interface AgentHubOptions {
 export class AgentHub {
   private readonly logger: ChannelLogger;
   private readonly channels = new Map<string, AgentConnection>();
+  /** Abonnés aux changements de connexion (diffusion `agents`). */
+  private readonly listeners = new Set<() => void>();
 
   constructor(options: AgentHubOptions) {
     this.logger = options.logger;
+  }
+
+  /**
+   * S'abonne aux changements d'état de CONNEXION (une connexion s'ouvre, se
+   * ferme ou est rompue). Sert à DIFFUSER l'état `online` aux clients SANS
+   * attendre une mutation du store. Renvoie le désabonnement.
+   */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notify(): void {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch (error) {
+        this.logger.warn("agents.hub.listener_failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /** Enregistre une connexion (ferme la précédente du même agent, le cas échéant). */
@@ -525,12 +585,15 @@ export class AgentHub {
       previous.dispose("remplaced");
     }
     this.channels.set(connection.agentId, connection);
+    // ⚠️ APRÈS l'insertion : les abonnés doivent voir `isOnline === true`.
+    this.notify();
   }
 
   /** Désinscrit une connexion si c'est bien la connexion courante. */
   unregister(connection: AgentConnection): void {
     if (this.channels.get(connection.agentId) === connection) {
       this.channels.delete(connection.agentId);
+      this.notify();
     }
   }
 
@@ -561,6 +624,26 @@ export class AgentHub {
     return [...this.channels.values()].filter((c) => !c.isClosed).map((c) => c.agentId);
   }
 
+  /**
+   * Rompt les connexions SILENCIEUSES depuis `offlineAfterMs` (socket morte non
+   * détectée par TCP). Renvoie les identifiants rompus. Seuil aligné sur le
+   * heartbeat applicatif de l'agent.
+   */
+  sweepStale(offlineAfterMs: number): string[] {
+    const swept: string[] = [];
+    for (const connection of [...this.channels.values()]) {
+      if (connection.isStale(offlineAfterMs)) swept.push(connection.agentId);
+    }
+    for (const agentId of swept) {
+      this.logger.warn("agents.hub.stale", {
+        agent_id: agentId,
+        offline_after_ms: offlineAfterMs,
+      });
+      this.disconnect(agentId);
+    }
+    return swept;
+  }
+
   /** Envoie une commande à un agent connecté, sinon rejette (`agent_offline`). */
   sendCommand(agentId: string, cmd: OutboundCommand): Promise<ResultFrame> {
     const connection = this.get(agentId);
@@ -589,6 +672,9 @@ export class AgentHub {
     if (!connection) return false;
     this.channels.delete(agentId);
     connection.dispose("revoked");
+    // `dispose` a déjà appelé `unregister`, qui n'a rien trouvé (déjà retiré) :
+    // on notifie ici pour diffuser la déconnexion.
+    this.notify();
     return true;
   }
 
@@ -598,5 +684,6 @@ export class AgentHub {
       connection.dispose("shutdown");
     }
     this.channels.clear();
+    this.notify();
   }
 }

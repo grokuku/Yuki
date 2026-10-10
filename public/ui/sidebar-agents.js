@@ -19,9 +19,10 @@
 // CSP stricte : rendu PUREMENT DOM (jamais d'injection HTML), aucun attribut de
 // style en ligne. Seule la POSITION du menu flottant utilise le CSSOM
 // (`position: fixed`), comme le menu des conversations.
-// Repli/dépli de la barre (56 px / 280 px) : la pastille (initiale + témoin on/off)
-// tient dans les 56 px ; le nom et l'état ne s'affichent qu'à 280 px (CSS, `.sidebar:hover …`).
-// En rail, l'entrée EST la pastille : le clic droit dessus ouvre le menu.
+// Repli/dépli de la barre (56 px / 280 px) : la pastille (initiale + témoin de
+// connexion) tient dans les 56 px ; le nom et l'état ne s'affichent qu'à 280 px
+// (CSS, `.sidebar:hover …`). En rail, l'entrée EST la pastille : le clic droit
+// dessus ouvre le menu.
 
 /** Libellés COURTS de niveau pour l'encart (le détail vit dans /config). */
 const LEVEL_LABELS = {
@@ -79,6 +80,20 @@ export function agentInitial(agent) {
 /** `true` si l'agent est ACTIF (tout niveau sauf `disabled`). */
 export function isAgentEnabled(agent) {
   return agent?.level !== "disabled";
+}
+
+/** `true` si l'agent est actuellement CONNECTÉ à Yuki (canal vivant). */
+export function isAgentConnected(agent) {
+  return agent?.online === true;
+}
+
+/**
+ * Libellé EXPLICITE de la CONNEXION (« Connecté » / « Déconnecté »).
+ * ⚠️ La pastille couleur (vert/rouge) est inaccessible au daltonisme : ce
+ * libellé la double en texte (title / aria-label / état) — il est OBLIGATOIRE.
+ */
+export function agentConnectionLabel(agent) {
+  return isAgentConnected(agent) ? "Connecté" : "Déconnecté";
 }
 
 /** Libellé court du niveau (« désactivé », « valide le destructif »…). */
@@ -267,25 +282,37 @@ export function initSidebarAgents(deps = {}) {
   /** Rendu d'un agent (hors révoqués, filtrés en amont). */
   function renderAgent(agent) {
     const enabled = isAgentEnabled(agent);
+    const connected = isAgentConnected(agent);
+    const connectionLabel = agentConnectionLabel(agent);
     const label = agentLabel(agent);
     const item = el("li", { class: "side-agent" });
     item.setAttribute("data-agent-id", String(agent.agentId ?? ""));
 
+    // ⚠️ La PASTILLE (`.side-agent__dot`) indique UNIQUEMENT la CONNEXION
+    // (vert = connecté, rouge = déconnecté). L'état activé/désactivé reste porté
+    // par la COULEUR DU BOUTON (`data-enabled`), JAMAIS par la pastille.
+    // ⚠️ La couleur seule est inaccessible (daltonisme) : le libellé explicite
+    // « Connecté »/« Déconnecté » (title + aria-label + état) double la pastille.
     const badge = el("button", {
       class: "side-agent__badge",
       type: "button",
       role: "switch",
       "aria-checked": enabled ? "true" : "false",
-      "aria-label": `${label} — ${enabled ? "désactiver" : "activer"}`,
+      "aria-label": `${label} — ${connectionLabel} — ${enabled ? "désactiver" : "activer"}`,
       title: enabled
-        ? `${label} : actif (${agentLevelLabel(agent.level)}). Cliquer pour désactiver, clic droit pour régler le niveau.`
-        : `${label} : désactivé. Cliquer pour réactiver, clic droit pour régler le niveau.`,
+        ? `${label} : actif (${agentLevelLabel(agent.level)}), ${connectionLabel.toLowerCase()}. Cliquer pour désactiver, clic droit pour régler le niveau.`
+        : `${label} : désactivé, ${connectionLabel.toLowerCase()}. Cliquer pour réactiver, clic droit pour régler le niveau.`,
     });
     if (enabled) badge.setAttribute("data-enabled", "true");
-    if (agent.online) badge.setAttribute("data-online", "true");
+    badge.setAttribute("data-online", connected ? "true" : "false");
     badge.append(
       el("span", { class: "side-agent__initial", "aria-hidden": "true" }, agentInitial(agent)),
-      el("span", { class: "side-agent__dot", "aria-hidden": "true" }),
+      el("span", {
+        class: "side-agent__dot",
+        role: "img",
+        "aria-label": connectionLabel,
+        title: connectionLabel,
+      }),
     );
     badge.addEventListener("click", () => onToggle(agent.agentId, !enabled));
 
@@ -295,7 +322,7 @@ export function initSidebarAgents(deps = {}) {
       el(
         "span",
         { class: "side-agent__state" },
-        [agentLevelLabel(agent.level), agent.online ? "en ligne" : "hors ligne"]
+        [agentLevelLabel(agent.level), connectionLabel.toLowerCase()]
           .filter(Boolean)
           .join(" · "),
       ),

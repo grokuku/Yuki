@@ -12,9 +12,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  agentConnectionLabel,
   agentInitial,
   agentLabel,
   agentLevelLabel,
+  isAgentConnected,
   isAgentEnabled,
   LEVEL_MENU_ITEMS,
 } from "../../public/ui/sidebar-agents.js";
@@ -48,6 +50,30 @@ describe("on/off — état lu depuis le NIVEAU (aucun second drapeau)", () => {
     expect(agentLevelLabel("destructive")).toBe("valide le destructif");
     expect(agentLevelLabel("never")).toBe("sans validation");
     expect(agentLevelLabel("bogus")).toBe("bogus");
+  });
+});
+
+describe("pastille = CONNEXION, découplée de l'activation", () => {
+  it("l'état de connexion dépend UNIQUEMENT de `online`, jamais du niveau", () => {
+    // Désactivé MAIS connecté ⇒ connecté (la pastille parle de connexion).
+    expect(isAgentConnected({ level: "disabled", online: true })).toBe(true);
+    // Actif MAIS déconnecté ⇒ déconnecté.
+    expect(isAgentConnected({ level: "never", online: false })).toBe(false);
+    // Absent (jamais connecté) ⇒ déconnecté par défaut.
+    expect(isAgentConnected({ level: "destructive" })).toBe(false);
+    expect(isAgentConnected({ online: false })).toBe(false);
+    expect(isAgentConnected(undefined)).toBe(false);
+  });
+
+  it("l'activation reste indépendante de la connexion", () => {
+    expect(isAgentEnabled({ level: "never", online: false })).toBe(true);
+    expect(isAgentEnabled({ level: "disabled", online: true })).toBe(false);
+  });
+
+  it("libellé EXPLICITE de connexion (accessibilité)", () => {
+    expect(agentConnectionLabel({ online: true })).toBe("Connecté");
+    expect(agentConnectionLabel({ online: false })).toBe("Déconnecté");
+    expect(agentConnectionLabel({ level: "disabled", online: true })).toBe("Connecté");
   });
 });
 
@@ -102,6 +128,19 @@ describe("garde-fous statiques de sidebar-agents.js (CSP, sémantique)", () => {
     expect(source).toContain("onToggle");
   });
 
+  it("la pastille porte un libellé de connexion explicite (pas la couleur seule)", () => {
+    // ⚠️ Vert/rouge seuls = inaccessible (daltonisme) : le libellé est OBLIGATOIRE.
+    expect(source).toContain('"Connecté"');
+    expect(source).toContain('"Déconnecté"');
+    // Le témoin expose ce libellé (title/aria-label), il n'est plus décoratif.
+    expect(source).toContain('class: "side-agent__dot"');
+    expect(source).toContain('role: "img"');
+    expect(source).toContain('"aria-label": connectionLabel');
+    // La pastille est pilotée par la CONNEXION, jamais par l'activation.
+    expect(source).toContain("data-online");
+    expect(source).not.toContain('if (agent.online) badge.setAttribute("data-online"');
+  });
+
   it("masque les agents révoqués et affiche un message honnête quand la liste est vide", () => {
     expect(source).toContain("agent.revoked");
     expect(source).toContain('"Aucun agent appairé."');
@@ -134,5 +173,23 @@ describe("garde-fous statiques de sidebar-agents.js (CSP, sémantique)", () => {
     // SCOPÉ à la barre latérale (parité avec le menu des conversations).
     expect(source).not.toContain('window.addEventListener("scroll", closeMenu, true)');
     expect(source).toContain('closest(".sidebar")');
+  });
+});
+
+describe("pastille d'agent : la CSS la lie à la CONNEXION, plus à l'activation", () => {
+  const css = readFileSync(join(process.cwd(), "public", "ui", "styles.css"), "utf8");
+
+  it("vert piloté par `data-online`, et NON par `data-enabled`", () => {
+    expect(css).toContain('.side-agent__badge[data-online="true"] .side-agent__dot');
+    // ⚠️ Plus AUCUN lien entre la pastille et l'état activé/désactivé.
+    expect(css).not.toContain('.side-agent__badge[data-enabled="true"] .side-agent__dot');
+  });
+
+  it("déconnecté = rouge par défaut (variante de thème, aucune couleur en dur)", () => {
+    const dotBlock = css.slice(css.indexOf(".side-agent__dot {"));
+    const end = dotBlock.indexOf("}");
+    const rule = dotBlock.slice(0, end);
+    expect(rule).toContain("background: var(--danger)");
+    expect(rule).not.toMatch(/#[0-9a-fA-F]{3,6}/); // aucune couleur en dur
   });
 });

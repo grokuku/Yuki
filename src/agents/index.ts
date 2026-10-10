@@ -245,6 +245,8 @@ export type {
 } from "./directory.js";
 
 export {
+  AGENT_HUB_SWEEP_INTERVAL_MS,
+  AGENT_OFFLINE_AFTER_MS,
   AgentConnection,
   AgentHub,
   COMMAND_SAFETY_MARGIN_MS,

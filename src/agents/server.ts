@@ -35,7 +35,12 @@ import { WebSocket, WebSocketServer } from "ws";
 
 import type { AuditLog } from "./audit.js";
 import type { CertificateAuthority } from "./ca.js";
-import { AgentConnection, AgentHub } from "./connection.js";
+import {
+  AGENT_HUB_SWEEP_INTERVAL_MS,
+  AGENT_OFFLINE_AFTER_MS,
+  AgentConnection,
+  AgentHub,
+} from "./connection.js";
 import { PairError } from "./errors.js";
 import { parsePairBegin } from "./pair-protocol.js";
 import { pairOkJson, type PairingManager, type PairingOutcome } from "./pairing.js";
@@ -434,7 +439,18 @@ export function createAgentsServer(options: AgentsServerOptions): HttpsServer {
     logger.debug("agents.tls.client_error", { error: error.message });
   });
 
+  // Balayage des connexions SILENCIEUSES : une socket « demi-ouverte » (le pair
+  // a disparu sans FIN TCP) est rompue après `AGENT_OFFLINE_AFTER_MS` de silence
+  // et signalée DÉCONNECTÉE aux clients. Seuil aligné sur le heartbeat
+  // applicatif de l'agent (ping 15 s / hors ligne 45 s) ; `unref` pour ne jamais
+  // retenir le process.
+  const sweep = setInterval(() => {
+    hub.sweepStale(AGENT_OFFLINE_AFTER_MS);
+  }, AGENT_HUB_SWEEP_INTERVAL_MS);
+  sweep.unref?.();
+
   server.on("close", () => {
+    clearInterval(sweep);
     hub.closeAll();
     wss.close();
   });

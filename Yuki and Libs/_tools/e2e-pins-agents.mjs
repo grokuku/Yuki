@@ -250,6 +250,94 @@ check(
 );
 await shot("pins-agents-chat-rail");
 
+/* ═══════ 1bis) Pastille = CONNEXION (vert/rouge), découplée de l'act./désact. ═══ */
+// Couleurs ATTENDUES lues depuis le THÈME (aucune couleur en dur dans le test).
+const themeColors = await evaluate(`(() => {
+  const probe = document.createElement('span');
+  document.body.appendChild(probe);
+  const read = (v) => { probe.style.backgroundColor = v; return getComputedStyle(probe).backgroundColor; };
+  const root = getComputedStyle(document.documentElement);
+  const out = { ok: read(root.getPropertyValue('--ok')), danger: read(root.getPropertyValue('--danger')) };
+  probe.remove();
+  return out;
+})()`);
+
+const dotInfo = (name) =>
+  evaluate(`(() => {
+    const row = [...document.querySelectorAll('.side-agent')].find((r) => r.querySelector('.side-agent__name')?.textContent === ${JSON.stringify(name)});
+    if (!row) return null;
+    const badge = row.querySelector('.side-agent__badge');
+    const dot = row.querySelector('.side-agent__dot');
+    return {
+      enabled: badge?.getAttribute('data-enabled') === 'true',
+      online: badge?.getAttribute('data-online'),
+      dotLabel: dot?.getAttribute('aria-label') ?? dot?.getAttribute('title') ?? '',
+      dotColor: dot ? getComputedStyle(dot).backgroundColor : '',
+    };
+  })()`);
+
+const e2eAgent = (action, id) =>
+  evaluate(`fetch('/api/e2e/agent-${action}?agentId=' + encodeURIComponent(${JSON.stringify(id)})).then((r) => r.json())`);
+
+// Initial : nuc00 ACTIF (bouton coloré) mais DÉCONNECTÉ ⇒ pastille ROUGE.
+const off0 = await dotInfo("nuc00");
+check(
+  "pastille : agent actif mais déconnecté ⇒ ROUGE (découplage activation/connexion)",
+  off0?.enabled === true && off0.online === "false" && off0.dotColor === themeColors.danger && off0.dotLabel === "Déconnecté",
+  JSON.stringify(off0),
+);
+
+// Connexion de nuc00 : la pastille passe au VERT SANS rechargement.
+check("E2E : connexion nuc00 acceptée", (await e2eAgent("connect", "agent-nuc00"))?.online === true);
+check(
+  "CONNEXION EN DIRECT : pastille verte + aria-label « Connecté » (sans rechargement)",
+  await waitFor(`(() => {
+    const row = [...document.querySelectorAll('.side-agent')].find((r) => r.querySelector('.side-agent__name')?.textContent === 'nuc00');
+    return row?.querySelector('.side-agent__badge')?.getAttribute('data-online') === 'true';
+  })()`),
+);
+const on00 = await dotInfo("nuc00");
+check(
+  "pastille connectée : couleur de thème `--ok` + libellé explicite",
+  on00?.dotColor === themeColors.ok && on00.dotLabel === "Connecté" && on00.enabled === true,
+  JSON.stringify(on00),
+);
+
+// Désactivé MAIS connecté : bouton NON coloré, pastille VERTE (découplage prouvé).
+check("E2E : connexion nuc01 (niveau désactivé) acceptée", (await e2eAgent("connect", "agent-nuc01"))?.online === true);
+check(
+  "DÉSACTIVÉ MAIS CONNECTÉ : bouton non coloré + pastille VERTE",
+  await waitFor(`(() => {
+    const row = [...document.querySelectorAll('.side-agent')].find((r) => r.querySelector('.side-agent__name')?.textContent === 'nuc01');
+    const b = row?.querySelector('.side-agent__badge');
+    return b?.getAttribute('data-online') === 'true' && b.getAttribute('data-enabled') !== 'true';
+  })()`),
+);
+const on01 = await dotInfo("nuc01");
+check(
+  "pastille nuc01 : verte, mais `enabled` reste faux",
+  on01?.dotColor === themeColors.ok && on01.enabled === false && on01.dotLabel === "Connecté",
+  JSON.stringify(on01),
+);
+await shot("pins-agents-connected");
+
+// Déconnexion : retour au ROUGE SANS rechargement.
+await e2eAgent("disconnect", "agent-nuc00");
+await e2eAgent("disconnect", "agent-nuc01");
+check(
+  "DÉCONNEXION EN DIRECT : pastille rouge + aria-label « Déconnecté » (sans rechargement)",
+  await waitFor(`(() => {
+    const rows = [...document.querySelectorAll('.side-agent')];
+    return rows.length > 0 && rows.every((r) => r.querySelector('.side-agent__badge')?.getAttribute('data-online') === 'false');
+  })()`),
+);
+const offBack = await dotInfo("nuc00");
+check(
+  "pastille déconnectée : couleur de thème `--danger` + libellé explicite",
+  offBack?.dotColor === themeColors.danger && offBack.dotLabel === "Déconnecté",
+  JSON.stringify(offBack),
+);
+
 // Épingler la DEUXIÈME conversation (non active).
 await openMenuOn(1);
 const menu = await evaluate(`(() => [...document.querySelectorAll('.ctx-menu__item')].map((b) => b.textContent))()`);
