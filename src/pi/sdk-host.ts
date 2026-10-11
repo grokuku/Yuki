@@ -15,7 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 import {
   SessionManager,
@@ -175,6 +175,13 @@ interface RunItem {
 
 interface SessionRecord {
   sessionId: string;
+  /**
+   * Runtime PROPRE à cette conversation (E0). Chaque session vivante possède
+   * SON `AgentSessionRuntime` (donc ses services et ses extensions inline) :
+   * c'est ce qui permet à plusieurs conversations d'avoir un run EN VOL
+   * simultanément sans qu'aucune ne soit tuée au changement de focus.
+   */
+  runtime: AgentSessionRuntime;
   session: AgentSession;
   unsubscribe: () => void;
   state: PiSessionStateName;
@@ -336,11 +343,17 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
   const globalListeners = new Set<PiEventListener>();
   const runContext = createRunContextTracker();
 
-  let runtime: AgentSessionRuntime | undefined;
   let settingsManager: SettingsManager | undefined;
   let modelRuntime: Awaited<ReturnType<typeof getSharedModelRuntime>> | undefined;
   let resolvedModel: SdkModel | undefined;
   let resolvedThinking: PiThinkingLevel | undefined;
+  /** Config PARTAGÉE par tous les runtimes (résolue une fois dans `doStart`). */
+  let customTools: ToolDefinition[] = [];
+  let extensionFactories: InlineExtension[] = [];
+  /**
+   * Conversation FOCALISÉE (celle que l'UI suit). E0 : le focus n'est qu'un
+   * POINTEUR — le changer ne tue plus le run d'une autre conversation.
+   */
   let currentRecord: SessionRecord | undefined;
   let ready = false;
   let startPromise: Promise<void> | undefined;
@@ -559,9 +572,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     }
   }
 
-  function attachRecord(session: AgentSession): SessionRecord {
+  function attachRecord(runtime: AgentSessionRuntime): SessionRecord {
+    const session = runtime.session;
     const record: SessionRecord = {
       sessionId: session.sessionId,
+      runtime,
       session,
       unsubscribe: () => undefined,
       state: "idle",
@@ -577,13 +592,67 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     return record;
   }
 
-  function detachRecord(record: SessionRecord): void {
+  /**
+   * Retire une session du registre et FERME son runtime (services, extensions,
+   * ressources) ⇒ aucun runtime orphelin. Asynchrone : `dispose()` l'est.
+   */
+  async function detachRecord(record: SessionRecord): Promise<void> {
     try {
       record.unsubscribe();
     } catch {
       // ignore
     }
     sessions.delete(record.sessionId);
+    try {
+      await record.runtime.dispose();
+    } catch (error) {
+      logger.warn("pi.session.dispose.failed", {
+        session_id: record.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * E5 — Interroge la VÉRITÉ de complétion (port de délégation → `JobStore`).
+   * Ne lève JAMAIS : une erreur de lecture est journalisée et traitée comme
+   * « pas de travail en attente » (on ne bloque pas un tour pour un diagnostic).
+   */
+  function hasPendingWork(sessionId: string): boolean {
+    try {
+      return options.delegation?.hasPendingWork(sessionId) ?? false;
+    } catch (error) {
+      logger.warn("pi.pending_work.query.failed", {
+        session_id: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * E5 — Quand un job atteint un état terminal, on recalcule l'état de sa
+   * session SI aucun run n'est en vol (un run en vol reprendra la main à sa fin
+   * via `finalizeRun`). Différé d'une microtâche : le report du job (qui reste
+   * « du travail non achevé » tant qu'il n'est pas livré) est mis en lot JUSTE
+   * APRÈS l'événement terminal.
+   */
+  function scheduleWaitingRefresh(event: PiEvent): void {
+    if (event.type !== "job_finished") return;
+    const sessionId = event.sessionId;
+    queueMicrotask(() => {
+      const record = sessions.get(sessionId);
+      if (!record || record.currentRun) return;
+      const next: PiSessionStateName = hasPendingWork(record.sessionId)
+        ? "waiting"
+        : record.state === "error"
+          ? "error"
+          : "idle";
+      if (record.state === next) return;
+      record.state = next;
+      if (next !== "waiting") record.activeRunId = undefined;
+      emitEvent({ type: "state", sessionId: record.sessionId, state: next });
+    });
   }
 
   function finalizeRun(
@@ -614,7 +683,14 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     record.currentRun = undefined;
     record.activeRunId = undefined;
     record.partial = "";
-    record.state = reason === "error" ? "error" : "idle";
+    // ⚠️ E5 — VERROU ANTI-MENSONGE : la vérité de complétion vit dans le
+    // `JobStore`, JAMAIS dans le texte du modèle. Tant qu'il reste du travail
+    // NON achevé pour cette session (job non terminal ou résultat pas encore
+    // livré), l'état affiché est `waiting` — même si l'assistant vient d'écrire
+    // « c'est fait ». Le badge UI ne disparaît qu'à la livraison du résultat.
+    const outstanding = hasPendingWork(record.sessionId);
+    record.state =
+      reason === "error" ? "error" : outstanding ? "waiting" : "idle";
     runContext.clear(record.sessionId);
     emitEvent({
       type: "state",
@@ -770,9 +846,15 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     finalizeRun(record, run, reason);
   }
 
+  /**
+   * Session du REGISTRE pour `sessionId`. Sans identifiant, la session
+   * FOCALISÉE. ⚠️ E0 : plus de repli silencieux sur la session courante quand
+   * un identifiant inconnu est fourni (sinon un `abort` viserait le mauvais
+   * fil) — un identifiant inconnu est simplement introuvable.
+   */
   function recordFor(sessionId?: string): SessionRecord | undefined {
     if (sessionId) {
-      return sessions.get(sessionId) ?? currentRecord;
+      return sessions.get(sessionId);
     }
     return currentRecord;
   }
@@ -829,12 +911,8 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       paths.cwd,
       paths.sessionsDir,
     ).catch(() => []);
-    const sessionManager =
-      existing.length > 0
-        ? SessionManager.continueRecent(paths.cwd, paths.sessionsDir)
-        : SessionManager.create(paths.cwd, paths.sessionsDir);
 
-    const customTools: ToolDefinition[] = [
+    customTools = [
       ...((options.customTools ?? []) as readonly ToolDefinition[]),
     ];
     if (options.delegation) {
@@ -876,29 +954,22 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     // Extensions INLINE, dans l'ORDRE D'APPLICATION voulu du prompt du tour :
     // RÈGLES (consignes de l'utilisateur) → PERSONNALITÉ (base) → MÉMOIRE →
     // ANNUAIRE des agents → HERITAGE (voir `buildInlineExtensions`, verrouillé
-    // par un test d'ordre).
-    const extensionFactories = buildInlineExtensions(options);
+    // par un test d'ordre). Rejoué à l'identique pour CHAQUE runtime : chaque
+    // conversation applique l'ordre verrouillé.
+    extensionFactories = buildInlineExtensions(options);
 
-    runtime = await createLightRuntime({
-      cwd: paths.cwd,
-      agentDir: paths.agentDir,
-      settingsManager,
-      modelRuntime,
-      sessionManager,
-      systemPrompt: options.systemPrompt,
-      ...(resolvedModel ? { model: resolvedModel } : {}),
-      ...(resolvedThinking ? { thinkingLevel: resolvedThinking } : {}),
-      ...(options.tools ? { tools: options.tools } : {}),
-      ...(customTools.length > 0 ? { customTools } : {}),
-      ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
-    });
-
+    // Session initiale : la plus récente si elle existe, sinon une neuve.
+    const sessionManager =
+      existing.length > 0
+        ? SessionManager.continueRecent(paths.cwd, paths.sessionsDir)
+        : SessionManager.create(paths.cwd, paths.sessionsDir);
     // Abonnement posé IMMÉDIATEMENT, avant tout prompt.
-    currentRecord = attachRecord(runtime.session);
+    currentRecord = attachRecord(await createRuntimeFor(sessionManager));
     // Relaye les événements de la couche délégation sur le bus de la façade.
-    unsubscribeExternal = options.eventSource?.subscribe((event) =>
-      emitEvent(event),
-    );
+    unsubscribeExternal = options.eventSource?.subscribe((event) => {
+      emitEvent(event);
+      scheduleWaitingRefresh(event);
+    });
     ready = true;
     logger.info("pi.ready", {
       cwd: paths.cwd,
@@ -912,37 +983,74 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     });
   }
 
-  async function replaceSession(
-    action: () => Promise<{ cancelled?: boolean }>,
-  ): Promise<SessionState> {
-    if (!runtime) {
+  /**
+   * Fabrique le runtime d'UNE conversation persistante (fichier-backed).
+   *
+   * ⚠️ C'est la VARIANTE PERSISTANTE de `createEphemeralSession` : au lieu d'un
+   * `SessionManager.inMemory`, le `SessionManager` fourni EST le fichier JSONL
+   * de la conversation, et les extensions INLINE (règles → personnalité →
+   * mémoire → annuaire → héritage) sont ré-appliquées à CHAQUE runtime. Chaque
+   * conversation vivante possède donc SON `AgentSessionRuntime` — donc SES
+   * services et SES extensions — condition de l'isolation inter-fils (E0).
+   */
+  async function createRuntimeFor(
+    sessionManager: SessionManager,
+  ): Promise<AgentSessionRuntime> {
+    if (!settingsManager || !modelRuntime) {
       throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
     }
-    const previous = currentRecord;
-    if (previous) {
-      await host.abort(previous.sessionId).catch(() => undefined);
-      detachRecord(previous);
-      currentRecord = undefined;
-    }
-    try {
-      const result = await action();
-      if (result?.cancelled) {
-        throw new PiHostError(
-          "PI_SESSION_ERROR",
-          "Remplacement de session annulé.",
-        );
+    return createLightRuntime({
+      cwd: paths.cwd,
+      agentDir: paths.agentDir,
+      settingsManager,
+      modelRuntime,
+      sessionManager,
+      systemPrompt: options.systemPrompt,
+      ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(resolvedThinking ? { thinkingLevel: resolvedThinking } : {}),
+      ...(options.tools ? { tools: options.tools } : {}),
+      ...(customTools.length > 0 ? { customTools } : {}),
+      ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
+    });
+  }
+
+  /**
+   * Ouvre une conversation : fabrique son runtime, s'y abonne et l'enregistre
+   * dans le REGISTRE. Aucun run n'est TUE : on AJOUTE une session vivante.
+   */
+  async function openRecord(sessionManager: SessionManager): Promise<SessionRecord> {
+    return attachRecord(await createRuntimeFor(sessionManager));
+  }
+
+  /** Conversation VIVANTE (au registre) dont le fichier est `sessionFile`. */
+  function liveRecordForFile(sessionFile: string): SessionRecord | undefined {
+    const target = resolve(sessionFile);
+    for (const record of sessions.values()) {
+      let file: string | undefined;
+      try {
+        file = record.session.sessionManager.getSessionFile();
+      } catch {
+        file = undefined;
       }
-    } catch (error) {
-      throw toPiHostError(error, { logger });
+      if (file && resolve(file) === target) return record;
     }
-    // Ré-abonnement immédiat de la NOUVELLE session (exigé par le SDK).
-    currentRecord = attachRecord(runtime.session);
+    return undefined;
+  }
+
+  /**
+   * Bascule le FOCUS sur `record` SANS tuer aucun run (E0). Le run des autres
+   * conversations continue d'avancer en arrière-plan ; seule la conversation
+   * focalisée reste visible pour le client.
+   */
+  function focus(record: SessionRecord): SessionState {
+    currentRecord = record;
     emitEvent({
       type: "state",
-      sessionId: currentRecord.sessionId,
-      state: "idle",
+      sessionId: record.sessionId,
+      state: record.state,
+      ...(record.activeRunId ? { activeRunId: record.activeRunId } : {}),
     });
-    return buildState(currentRecord);
+    return buildState(record);
   }
 
   const host: PiHost = {
@@ -969,10 +1077,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
       }
       if (target?.sessionFile) {
-        return replaceSession(() => runtime!.switchSession(target.sessionFile!));
+        return host.resume(target.sessionFile);
       }
       if (target?.new) {
-        return replaceSession(() => runtime!.newSession());
+        return host.newSession();
       }
       if (!currentRecord) {
         return host.continueRecent();
@@ -984,7 +1092,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       if (!ready) {
         throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
       }
-      return replaceSession(() => runtime!.newSession());
+      const record = await openRecord(
+        SessionManager.create(paths.cwd, paths.sessionsDir),
+      );
+      return focus(record);
     },
 
     async continueRecent(): Promise<SessionState> {
@@ -995,21 +1106,31 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         paths.cwd,
         paths.sessionsDir,
       ).catch(() => []);
-      if (existing.length === 0) {
-        return replaceSession(() => runtime!.newSession());
-      }
       const mostRecent = existing[0];
       if (!mostRecent) {
-        return replaceSession(() => runtime!.newSession());
+        return host.newSession();
       }
-      return replaceSession(() => runtime!.switchSession(mostRecent.path));
+      return host.resume(mostRecent.path);
     },
 
     async resume(sessionFile: string): Promise<SessionState> {
       if (!ready) {
         throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
       }
-      return replaceSession(() => runtime!.switchSession(sessionFile));
+      // Fichier DÉJÀ OUVERT : on se contente de BASCULER LE FOCUS — aucun run
+      // n'est tué, aucune session n'est reconstruite (cœur de E0).
+      const live = liveRecordForFile(sessionFile);
+      if (live) {
+        return focus(live);
+      }
+      let manager: SessionManager;
+      try {
+        manager = SessionManager.open(sessionFile, paths.sessionsDir, paths.cwd);
+      } catch (error) {
+        throw toPiHostError(error, { logger });
+      }
+      const record = await openRecord(manager);
+      return focus(record);
     },
 
     send(sessionId: string, text: string, opts?: SendOptions): RunHandle {
@@ -1162,13 +1283,20 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         messageCount: info.messageCount,
         firstMessage: info.firstMessage,
       }));
-      // Fusionne la session COURANTE si son fichier n'est pas encore persisté
-      // (un fil neuf ne s'écrit qu'à la première réponse assistant) : sinon
-      // « Nouvelle conversation » n'apparaîtrait pas dans la liste.
-      const current = currentRecord;
-      if (current && !mapped.some((info) => info.sessionId === current.sessionId)) {
-        mapped.unshift(currentSessionSummary(current));
+      // Fusionne TOUTE session VIVANTE dont le fichier n'est pas encore
+      // persisté (un fil neuf ne s'écrit qu'à la première réponse assistant) :
+      // sinon « Nouvelle conversation » (et tout fil en cours d'écriture)
+      // n'apparaîtrait pas dans la liste. La session FOCALISÉE passe en tête.
+      const extra: SessionInfo[] = [];
+      for (const record of sessions.values()) {
+        if (mapped.some((info) => info.sessionId === record.sessionId)) continue;
+        if (record === currentRecord) {
+          extra.unshift(currentSessionSummary(record));
+        } else {
+          extra.push(currentSessionSummary(record));
+        }
       }
+      mapped.unshift(...extra);
       return mapped.slice(0, MAX_SESSIONS);
     },
 
@@ -1218,32 +1346,23 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       if (!ready) {
         throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
       }
+      const live = sessions.get(id);
       const isCurrent = currentRecord?.sessionId === id;
       const file = await host.sessionFileFor(id);
-      if (!isCurrent && (!file || !existsSync(file))) {
+      if (!live && (!file || !existsSync(file))) {
         throw new PiHostError("PI_SESSION_ERROR", "Conversation introuvable.", {
           sessionId: id,
         });
       }
-      // ⚠️ ORDRE OBLIGATOIRE quand c'est la session OUVERTE : on détache la
-      // session vivante AVANT de déplacer son fichier, sinon le prochain
-      // `_persist` du SDK recréerait le JSONL au chemin déplacé (fil fantôme).
-      if (isCurrent) {
-        if (currentRecord) {
-          await host.abort(id).catch(() => undefined);
-          detachRecord(currentRecord);
-          currentRecord = undefined;
-        }
-        // Session de remplacement FRÂCHE, en mémoire : son fichier ne s'écrit
-        // qu'à la première réponse — l'UI affiche donc l'état vide jusque-là.
-        const activeRuntime = runtime;
-        if (activeRuntime) {
-          try {
-            await activeRuntime.newSession();
-          } catch (error) {
-            throw toPiHostError(error, { logger, sessionId: id });
-          }
-        }
+      // ⚠️ ORDRE OBLIGATOIRE quand c'est une session VIVANTE : on la retire du
+      // registre et on FERME son runtime AVANT de déplacer son fichier, sinon
+      // le prochain `_persist` du SDK recréerait le JSONL au chemin déplacé
+      // (fil fantôme). La session OUVERTE bascule alors sur « état vide »
+      // (`currentRecord = undefined`), comme avant E0.
+      if (live) {
+        if (currentRecord === live) currentRecord = undefined;
+        await host.abort(id).catch(() => undefined);
+        await detachRecord(live);
       }
       // Déplacement horodaté : récupérable à la main, invisible à la liste.
       if (file && existsSync(file)) {
@@ -1263,8 +1382,15 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     },
 
     async sessionFileFor(id: string): Promise<string | undefined> {
-      if (currentRecord?.sessionId === id) {
-        return currentRecord.session.sessionManager.getSessionFile();
+      // Session VIVANTE (focalisée OU en arrière-plan) : son fichier est connu
+      // même s'il n'est pas encore persisté sur disque.
+      const live = sessions.get(id);
+      if (live) {
+        try {
+          return live.session.sessionManager.getSessionFile();
+        } catch {
+          // ignore : repli sur la liste persistée
+        }
       }
       const list = await SessionManager.list(
         paths.cwd,
@@ -1285,17 +1411,21 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           // ignore
         }
       }
+      // ⚠️ E0 : FERMER TOUS les runtimes (un par conversation vivante), pas
+      // seulement le dernier — sinon des runtimes orphelins survivraient à
+      // l'arrêt de l'hôte.
+      const toDispose = [...sessions.values()];
       sessions.clear();
       currentRecord = undefined;
-      if (runtime) {
+      for (const record of toDispose) {
         try {
-          await runtime.dispose();
+          await record.runtime.dispose();
         } catch (error) {
           logger.warn("pi.stop.failed", {
+            session_id: record.sessionId,
             error: error instanceof Error ? error.message : String(error),
           });
         }
-        runtime = undefined;
       }
       restoreEnv?.();
       restoreEnv = undefined;

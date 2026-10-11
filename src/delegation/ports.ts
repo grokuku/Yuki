@@ -95,6 +95,12 @@ export interface DelegateRequest {
   task: string;
   context?: string;
   deadlineMs?: number;
+  /**
+   * E4 — `true` (DÉFAUT) : tâche de fond NON BLOQUANTE. On rend la main
+   * IMMÉDIATEMENT avec un ticket ; le résultat sera réinjecté plus tard.
+   * `false` : attente inline bornée par `deadlineMs` (enchaînement explicite).
+   */
+  background?: boolean;
   lightSessionId: string;
   parentRunId?: string;
   origin?: string;
@@ -109,6 +115,17 @@ export interface DelegateCompleted {
   usage_input?: number;
   usage_output?: number;
   truncated: boolean;
+}
+
+/**
+ * E4 — ACCUSÉ DE LANCEMENT d'une tâche de fond NON BLOQUANTE. ⚠️ Ce ticket
+ * n'affirme AUCUN résultat : il annonce un lancement. Le résultat réel sera
+ * réinjecté plus tard (`job_report`).
+ */
+export interface DelegateDispatched {
+  status: "dispatched";
+  job_id: string;
+  note: string;
 }
 
 export interface DelegatePending {
@@ -147,6 +164,7 @@ export interface DelegateUnavailable {
 
 export type DelegateOutcome =
   | DelegateCompleted
+  | DelegateDispatched
   | DelegatePending
   | DelegateFailed
   | DelegateTimeout
@@ -177,6 +195,13 @@ export interface DelegateServicePort {
   delegate(request: DelegateRequest): Promise<DelegateOutcome>;
   jobStatus(jobId: string): JobRecord | undefined;
   cancelJob(jobId: string): Promise<CancelOutcome>;
+  /**
+   * E5 — VÉRITÉ DE COMPLÉTION, lue dans le `JobStore` (jamais dans le texte du
+   * modèle). `true` s'il reste du travail NON achevé pour cette session : au
+   * moins un job NON terminal, OU un job terminé dont le résultat n'a pas
+   * encore été livré. Le host s'en sert pour exposer l'état `waiting`.
+   */
+  hasPendingWork(sessionId: string): boolean;
 }
 
 /** Le service publie ses événements (phases + lifecycle) sur le bus Pi. */

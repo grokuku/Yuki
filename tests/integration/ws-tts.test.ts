@@ -409,4 +409,54 @@ describe("intégration WS — transport TTS", () => {
     // Le run se termine sans attendre la synthèse (borné largement).
     expect(elapsed).toBeLessThan(2_000);
   });
+
+  it("E0 — la TTS ne suit QUE la conversation focalisée (run d'arrière-plan muet)", async () => {
+    const tts = makeTts();
+    harness = await startHarness({ scripts: [SENTENCES], tts: tts.deps });
+    const client = await connect(harness);
+    const focused = harness.host.currentSessionId();
+    expect(focused).toBe("sess-1");
+    if (!focused) throw new Error("session focalisée absente");
+
+    // Run d'une AUTRE conversation (« arrière-plan ») : le pipeline ne doit
+    // RIEN synthétiser — sinon deux runs simultanés produiraient une double voix.
+    harness.host.emitExternal({
+      type: "run_started",
+      sessionId: "sess-back",
+      runId: "r-back",
+    });
+    harness.host.emitExternal({
+      type: "delta",
+      sessionId: "sess-back",
+      runId: "r-back",
+      channel: "content",
+      text: "Voix d'un autre fil. ",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(tts.requested).toEqual([]);
+    expect(client.binaryFrames.length).toBe(0);
+
+    // Run de la conversation FOCALISÉE : la voix parle.
+    harness.host.emitExternal({
+      type: "run_started",
+      sessionId: focused,
+      runId: "r-front",
+    });
+    harness.host.emitExternal({
+      type: "delta",
+      sessionId: focused,
+      runId: "r-front",
+      channel: "content",
+      text: "Voix du fil courant. ",
+    });
+    harness.host.emitExternal({
+      type: "run_finished",
+      sessionId: focused,
+      runId: "r-front",
+      reason: "done",
+    });
+    await until(() => tts.requested.length > 0);
+    expect(tts.requested.some((text) => text.includes("fil courant"))).toBe(true);
+    expect(tts.requested.every((text) => !text.includes("autre fil"))).toBe(true);
+  });
 });

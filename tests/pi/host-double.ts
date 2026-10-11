@@ -152,6 +152,15 @@ export class FakePiHost implements PiHost {
     this.scripts.push(script);
   }
 
+  /**
+   * Émet un événement EXTERNE sur le bus, toutes sessions confondues (double
+   * de test des jobs d'arrière-plan : `job_started`/`job_finished`/`job_report`
+   * sont produits par la couche délégation, pas par le host).
+   */
+  emitExternal(event: PiEvent): void {
+    this.emit(event);
+  }
+
   async start(): Promise<void> {
     this.ready = true;
   }

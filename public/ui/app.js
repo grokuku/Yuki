@@ -10,10 +10,17 @@ import { decodeTtsFrame } from "./tts-frames.js";
 import { createTtsPlayer } from "./tts-player.js";
 import { createTtsPreference, resolveSpeechState } from "./tts-preference.js";
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
-import { initSessionsPanel } from "./sessions-panel.js";
+import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
 import { initSidebarAgents } from "./sidebar-agents.js";
 import { createApprovalLayer } from "./approval-window.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
+import { createSubagentActivity } from "./subagent-activity.js";
+import {
+  JOB_FINISHED_HOLD_MS,
+  JOB_TICK_MS,
+  THINKING_LABEL,
+  describeActivity,
+} from "./activity.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
@@ -31,8 +38,10 @@ const els = {
   emptyNew: document.getElementById("empty-new"),
   connection: document.getElementById("connection"),
   sessionState: document.getElementById("session-state"),
+  pendingBadge: document.getElementById("pending-badge"),
   queued: document.getElementById("queued"),
   thinking: document.getElementById("thinking"),
+  jobActivity: document.getElementById("job-activity"),
   ttsToggle: document.getElementById("tts-toggle"),
   ttsStatus: document.getElementById("tts-status"),
 };
@@ -46,6 +55,235 @@ let resumePending = false;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let clientMsgCounter = 0;
+
+/* ─── E2 — STORES PAR CONVERSATION (transport multiplexé) ──────────────────
+ * Le serveur diffuse, PAR ABONNEMENT, les trames de TOUTES les conversations
+ * listées (pas seulement la focalisée). Chaque trame porte son `sessionId` :
+ * on la route vers le store du fil concerné. Le DOM ne reflète QUE la
+ * conversation FOCALISÉE (comportement inchangé) — mais l'activité d'un fil
+ * d'arrière-plan est VISIBLE dans la barre latérale, et on peut y basculer sans
+ * rien perdre (le run continue côté serveur, l'historique arrive par snapshot).
+ */
+const storeBySession = new Map();
+let lastSessions = [];
+let lastBusyKey = "";
+
+/** Store d'une conversation (créé à la demande). */
+function storeOf(id) {
+  if (!id) return null;
+  let store = storeBySession.get(id);
+  if (!store) {
+    store = {
+      id,
+      state: "idle",
+      activeRunId: null,
+      lastSeq: 0,
+      runningJobs: new Set(),
+    };
+    storeBySession.set(id, store);
+  }
+  return store;
+}
+
+/** `true` si la conversation TRAVAILLE (run en cours, tâche de fond active ou
+ * résultat en attente de livraison). */
+function isBusy(store) {
+  return (
+    Boolean(store) &&
+    (store.state === "streaming" ||
+      store.state === "waiting" ||
+      store.runningJobs.size > 0)
+  );
+}
+
+/** Reflète l'ensemble des conversations « en cours » dans la barre latérale. */
+function refreshSidebarBusy() {
+  const busy = busyIdList();
+  const key = busy.join(",");
+  if (key === lastBusyKey) return;
+  lastBusyKey = key;
+  sessionsPanel.setBusy(busy);
+}
+
+/** Identifiants des conversations EN COURS (triés, stable pour la comparaison). */
+function busyIdList() {
+  const busy = [];
+  for (const store of storeBySession.values()) {
+    // La conversation FOCALISÉE garde ses indicateurs habituels (attente, activité
+    // de fond) : le point « en cours » de la barre ne sert qu'aux AUTRES fils,
+    // pour que la conversation affichée se comporte EXACTEMENT comme avant.
+    if (store.id === sessionId) continue;
+    if (isBusy(store)) busy.push(store.id);
+  }
+  return busy.sort();
+}
+
+/** Applique un événement de session à l'ÉTAT (hors DOM) de son fil. */
+function updateStoreState(store, frame) {
+  switch (frame.type) {
+    case "state":
+      store.state = typeof frame.state === "string" ? frame.state : "idle";
+      store.activeRunId = typeof frame.activeRunId === "string" ? frame.activeRunId : null;
+      return;
+    case "run_started":
+      store.state = "streaming";
+      return;
+    case "run_finished":
+      store.state = "idle";
+      store.activeRunId = null;
+      return;
+    case "job_started":
+      if (frame.jobId !== undefined && frame.jobId !== null) {
+        store.runningJobs.add(String(frame.jobId));
+      }
+      return;
+    case "job_finished":
+      if (frame.jobId !== undefined && frame.jobId !== null) {
+        store.runningJobs.delete(String(frame.jobId));
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+/**
+ * Événement d'un fil NON focalisé : on nourrit SON store (aucun `seq` global,
+ * aucun `resume` demandé — le rejeu ne concerne que la session focalisée).
+ * Le DOM de la conversation affichée n'est JAMAIS touché ⇒ aucun mélange.
+ */
+function applyBackgroundEvent(id, frame) {
+  const store = storeOf(id);
+  if (!store) return;
+  if (typeof frame.seq === "number" && frame.seq > 0) {
+    if (frame.seq <= store.lastSeq) return; // doublon de CE fil
+    store.lastSeq = frame.seq;
+  }
+  updateStoreState(store, frame);
+  refreshSidebarBusy();
+}
+
+/** Titre lisible d'une conversation (repli honnête), pour étiqueter une demande. */
+function conversationLabelFor(id) {
+  if (!id) return "";
+  const info = lastSessions.find((entry) => entry.id === id);
+  return info ? conversationTitle(info) : "";
+}
+
+/* ─── Attente & activité de fond ─────────────────────────────────────────
+ * `#thinking` (`.thinking-indicator`) est l'UNIQUE indicateur d'attente : il
+ * s'affiche dès qu'un run est lancé (`run_started`) et disparaît dès le premier
+ * contenu. Le canal `thinking` du modèle est mort (modèle léger sans
+ * raisonnement) — l'indicateur est donc piloté par l'ÉTAT DU RUN, jamais par
+ * un canal qui n'arrive pas.
+ *
+ * `#job-activity` rend visible le cycle de vie des jobs d'arrière-plan (trames
+ * `job_*`) : sans lui, une délégation de fond est INVISIBLE jusqu'au tour de
+ * rapport. Il vit HORS de la conversation (jamais dans le transcript).
+ */
+els.thinking.textContent = THINKING_LABEL;
+
+/** État des jobs d'arrière-plan connus, par `jobId`. */
+const jobs = new Map();
+let jobsTick = null;
+let jobsHideTimer = null;
+const jobActivityText = document.createElement("span");
+jobActivityText.className = "job-activity__text";
+const jobActivityTimer = document.createElement("span");
+jobActivityTimer.className = "job-activity__timer";
+// Le compteur change chaque seconde : il ne doit PAS être annoncé (anti-spam).
+jobActivityTimer.setAttribute("aria-hidden", "true");
+els.jobActivity.append(jobActivityText, jobActivityTimer);
+
+function showThinking() {
+  els.thinking.hidden = false;
+}
+
+function hideThinking() {
+  els.thinking.hidden = true;
+}
+
+function renderJobActivity() {
+  const view = describeActivity([...jobs.values()], Date.now());
+  if (!view) {
+    els.jobActivity.hidden = true;
+    jobActivityText.textContent = "";
+    jobActivityTimer.textContent = "";
+    els.jobActivity.removeAttribute("data-tone");
+    return;
+  }
+  jobActivityText.textContent = view.text;
+  jobActivityTimer.textContent = view.timer;
+  els.jobActivity.dataset.tone = view.tone;
+  els.jobActivity.hidden = false;
+}
+
+/** Met à jour la cadence du compteur selon qu'une tâche est EN COURS. */
+function syncJobsTick() {
+  const hasRunning = [...jobs.values()].some((job) => job.status === "running");
+  if (hasRunning && !jobsTick) {
+    jobsTick = setInterval(renderJobActivity, JOB_TICK_MS);
+  } else if (!hasRunning && jobsTick) {
+    clearInterval(jobsTick);
+    jobsTick = null;
+  }
+}
+
+/** Efface l'activité de fond (bascule de fil : l'état appartient à un fil). */
+function resetJobActivity() {
+  jobs.clear();
+  if (jobsTick) {
+    clearInterval(jobsTick);
+    jobsTick = null;
+  }
+  if (jobsHideTimer) {
+    clearTimeout(jobsHideTimer);
+    jobsHideTimer = null;
+  }
+  renderJobActivity();
+}
+
+function onJobStarted(frame) {
+  const id = String(frame.jobId ?? "");
+  if (!id) return;
+  if (jobsHideTimer) {
+    clearTimeout(jobsHideTimer);
+    jobsHideTimer = null;
+  }
+  jobs.set(id, {
+    id,
+    task: typeof frame.task === "string" ? frame.task : undefined,
+    status: "running",
+    startedAt: Date.now(),
+  });
+  renderJobActivity();
+  syncJobsTick();
+}
+
+function onJobFinished(frame) {
+  const id = String(frame.jobId ?? "");
+  if (!id) return;
+  const existing = jobs.get(id);
+  const startedAt = existing?.startedAt ?? Date.now();
+  jobs.set(id, {
+    id,
+    task: existing?.task,
+    status: typeof frame.status === "string" ? frame.status : "completed",
+    startedAt,
+    durationMs: Math.max(0, Date.now() - startedAt),
+  });
+  renderJobActivity();
+  syncJobsTick();
+  // Un statut terminal reste visible un moment : il porte le résultat (statut +
+  // durée). Il ne s'efface QUE s'il n'y a plus aucune tâche en cours.
+  if (jobsHideTimer) clearTimeout(jobsHideTimer);
+  jobsHideTimer = setTimeout(() => {
+    jobsHideTimer = null;
+    if ([...jobs.values()].some((job) => job.status === "running")) return;
+    jobs.clear();
+    renderJobActivity();
+  }, JOB_FINISHED_HOLD_MS);
+}
 
 /* ─── Conversations multiples (barre latérale) ─────────────────────────────
  * Le panneau est un composant autonome monté par id. Chaque action envoie une
@@ -124,6 +362,12 @@ const approvalLayer = createApprovalLayer({
  * transcript ni le rejeu. L'image n'est affichée qu'ICI (à l'humain) : le modèle
  * ne la reçoit jamais. */
 const screenshotBlocks = createScreenshotBlocks({ container: els.conversation });
+
+/* ─── E3 — Activité d'un SOUS-AGENT DANS le fil ────────────────────────────
+ * Bloc COMPOSANT du fil (jamais un message) : replié par défaut, dépliable. Il
+ * est alimenté par les trames de CONTRÔLE `job_activity` (éphémères, MUETTES) et
+ * rattaché au fil `sessionId` de la conversation qui a lancé le sous-agent. */
+const subagentActivity = createSubagentActivity({ container: els.conversation });
 
 /** Bascule l'état « aucune conversation ouverte » (le fil est masqué). */
 function setEmptyState(empty) {
@@ -245,15 +489,22 @@ function setSessionState(state) {
   if (state === "streaming") {
     els.sessionState.textContent = "streaming";
     els.stop.disabled = false;
+  } else if (state === "waiting") {
+    // E5 — travail en cours (lu dans le JobStore) : l'état « en attente » est
+    // affiché quoi que dise le texte du modèle.
+    els.sessionState.textContent = "en attente";
+    els.stop.disabled = true;
   } else if (state === "error") {
     els.sessionState.textContent = "erreur";
     els.stop.disabled = true;
-    els.thinking.hidden = true;
+    hideThinking();
   } else {
     els.sessionState.textContent = "idle";
     els.stop.disabled = true;
-    els.thinking.hidden = true;
+    hideThinking();
   }
+  // E5 — badge NON MASQUABLE : visible UNIQUEMENT sur l'état serveur `waiting`.
+  if (els.pendingBadge) els.pendingBadge.hidden = state !== "waiting";
 }
 
 function clearEmpty() {
@@ -439,6 +690,7 @@ function applyTranscript(transcript) {
   // ENCORE vivants (états de contrôle).
   approvalLayer.reset();
   screenshotBlocks.reset();
+  subagentActivity.reset();
   els.conversation.innerHTML = "";
   currentRenderer = null;
   lastDayKey = null;
@@ -509,6 +761,7 @@ function handleFrame(frame) {
     // coupure ne doit PAS rester affichée (état vivant, pas d'historique).
     approvalLayer.reset();
     screenshotBlocks.reset();
+    subagentActivity.reset();
     return;
   }
   if (type === "pong" || type === "bye") return;
@@ -542,8 +795,11 @@ function handleFrame(frame) {
   }
   if (type === "sessions") {
     const activeId = typeof frame.activeId === "string" ? frame.activeId : null;
-    sessionsPanel.update(frame.sessions, activeId);
+    lastSessions = Array.isArray(frame.sessions) ? frame.sessions : [];
     sessionId = activeId;
+    // E2 : la liste porte l'ensemble des conversations SUIVIES ; on y joint
+    // l'état « en cours » connu de chacune (indicateur de la barre latérale).
+    sessionsPanel.update(lastSessions, activeId, busyIdList());
     setEmptyState(activeId === null);
     return;
   }
@@ -562,7 +818,13 @@ function handleFrame(frame) {
   // consommé). Traitée AVANT la logique de curseur `seq`, sinon elle serait
   // prise pour un doublon. Jamais rejouée, jamais conservée.
   if (type === "approval") {
-    approvalLayer.show(frame.approval);
+    // E2 : la fenêtre est GLOBALE ; on précise de QUELLE conversation vient la
+    // demande (plusieurs fils peuvent en avoir en attente).
+    approvalLayer.show(frame.approval, {
+      conversation: conversationLabelFor(
+        frame.approval ? frame.approval.sessionId : undefined,
+      ),
+    });
     return;
   }
   if (type === "approval_cleared") {
@@ -580,8 +842,35 @@ function handleFrame(frame) {
     screenshotBlocks.show(frame.screenshot);
     return;
   }
+  // E3 — ACTIVITÉ d'un sous-agent : trame de CONTRÔLE (aucun `seq` consommé),
+  // traitée AVANT le curseur `seq` (sinon prise pour un doublon). Éphémère :
+  // jamais rejouée, jamais conservée. Un fil NON focalisé ne la DESSINE pas
+  // (son activité reste suivie via son store) ⇒ aucun mélange de fils.
+  if (type === "job_activity") {
+    const activityTarget =
+      typeof frame.sessionId === "string" && frame.sessionId.length > 0
+        ? frame.sessionId
+        : sessionId;
+    if (activityTarget && activityTarget !== sessionId) return;
+    subagentActivity.apply(frame);
+    return;
+  }
 
-  // Événements de session : application stricte par curseur `seq`.
+  // ⚠️ E2 — ROUTAGE PAR CONVERSATION ──────────────────────────────────────
+  // Toute trame de session porte son `sessionId`. Le fil FOCALISÉ suit le
+  // chemin historique (curseur `seq` STRICT + rendu DOM). Un fil NON focalisé
+  // ne nourrit QUE son propre store : le DOM affiché n'est JAMAIS touché ⇒
+  // aucun mélange de messages entre deux fils.
+  const target =
+    typeof frame.sessionId === "string" && frame.sessionId.length > 0
+      ? frame.sessionId
+      : sessionId;
+  if (target && target !== sessionId) {
+    applyBackgroundEvent(target, frame);
+    return;
+  }
+
+  // Événements de la conversation FOCALISÉE : application stricte par `seq`.
   if (typeof frame.seq === "number" && frame.seq > 0) {
     if (frame.seq <= lastSeq) return; // doublon
     if (frame.seq !== lastSeq + 1) {
@@ -591,6 +880,12 @@ function handleFrame(frame) {
     lastSeq = frame.seq;
   }
   if (frame.sessionId) sessionId = frame.sessionId;
+  // Le store du fil focalisé reflète aussi son état (indicateur de la barre).
+  const focusedStore = storeOf(sessionId);
+  if (focusedStore) {
+    updateStoreState(focusedStore, frame);
+    refreshSidebarBusy();
+  }
   applyEvent(frame);
 }
 
@@ -600,6 +895,18 @@ function applySnapshot(frame) {
   resumePending = false;
   currentAssistant = null;
   currentRenderer = null;
+  // Le store du fil focalisé adopte l'état AUTORITATIF du snapshot (le run d'un
+  // fil d'arrière-plan continue, lui, côté serveur et reste dans SON store).
+  const store = storeOf(sessionId);
+  if (store) {
+    store.state = typeof frame.state === "string" ? frame.state : "idle";
+    store.activeRunId = typeof frame.activeRunId === "string" ? frame.activeRunId : null;
+    store.lastSeq = lastSeq;
+    store.runningJobs.clear();
+  }
+  refreshSidebarBusy();
+  // L'activité de fond appartient au FIL : on repart propre à chaque rendu.
+  resetJobActivity();
   applyTranscript(frame.transcript);
   setSessionState(frame.state || "idle");
 }
@@ -619,7 +926,9 @@ function applyEvent(frame) {
       return;
     case "run_started":
       els.queued.hidden = true;
-      els.thinking.hidden = true;
+      // Dès le lancement du run — AVANT le premier token — l'attente est
+      // visible : c'est le seul indicateur entre l'envoi et le premier contenu.
+      showThinking();
       currentAssistant = appendAssistantMessage(null, undefined, Date.now());
       // Nouveau run : réinitialise le diagnostic TTS.
       ttsRequestedRun = frame.runId ?? null;
@@ -634,10 +943,12 @@ function applyEvent(frame) {
       return;
     case "delta":
       if (frame.channel === "thinking") {
-        els.thinking.hidden = false;
+        showThinking();
         return;
       }
       {
+        // Du CONTENU arrive : l'attente est finie, l'indicateur disparaît.
+        hideThinking();
         // `pinned` est mesuré AVANT d'ajouter le moindre contenu : on ne colle
         // en bas que si l'utilisateur y était déjà.
         const pinned = isConversationPinned();
@@ -649,7 +960,7 @@ function applyEvent(frame) {
       }
       return;
     case "phase":
-      if (frame.stage === "first_token") els.thinking.hidden = true;
+      if (frame.stage === "first_token") hideThinking();
       if (typeof frame.stage === "string" && frame.stage.startsWith("tts_")) {
         onTtsPhase(frame);
       } else if (frame.stage === "sentence_segmented") {
@@ -657,7 +968,7 @@ function applyEvent(frame) {
       }
       return;
     case "run_finished": {
-      els.thinking.hidden = true;
+      hideThinking();
       els.queued.hidden = true;
       const pinned = isConversationPinned();
       // Dernier bloc (souvent resté en texte brut) : on le rend maintenant que
@@ -738,10 +1049,16 @@ function applyEvent(frame) {
       return;
     }
     case "job_started":
+      onJobStarted(frame);
+      // Le cycle de vie des jobs d'arrière-plan est DÉSORMAIS VISIBLE : sans
+      // cela, une délégation de fond reste invisible jusqu'au tour de rapport.
+      return;
     case "job_finished":
+      onJobFinished(frame);
+      return;
     case "job_report":
-      // Cycle de vie des jobs d'arrière-plan : informatif. Le rendu se fait via
-      // le tour de report du léger (`run_started` origin="job_report").
+      // Le tour de rapport arrive par `run_started` (origin="job_report") :
+      // l'activité de fond reste affichée jusqu'à son statut terminal.
       return;
     default:
       return;
@@ -763,6 +1080,11 @@ function handleBinaryFrame(data) {
     console.warn("[tts] trame binaire illisible ignorée");
     return;
   }
+  // E2 — DÉFENSE EN PROFONDEUR : on ne lit QUE l'audio du fil FOCALISÉ. Le
+  // serveur ne synthétise déjà que la session focalisée (garde `routeTtsEvent`)
+  // et ne livre l'audio qu'aux clients ABONNÉS ; si une trame d'un fil de fond
+  // arrivait malgré tout, elle est JETÉE (jamais de double voix).
+  if (decoded.header.sessionId && decoded.header.sessionId !== sessionId) return;
   // Seules les trames AUDIO comptent comme « du son a été émis » : les trames de
   // contrôle (`tts_end`/`tts_cancel`) sont émises même sans contenu. Compter ces
   // dernières comme de l'activité masquerait un vrai « aucun son ».
@@ -811,7 +1133,11 @@ function sendMessage() {
     })
   ) {
     appendMessage("assistant error", "Non connecté au gateway.", undefined, Date.now());
+    return;
   }
+  // Attente LOCALE dès l'envoi : elle couvre le court intervalle avant
+  // `run_started` (le serveur peut mettre un instant à accepter le run).
+  showThinking();
 }
 
 function abort() {

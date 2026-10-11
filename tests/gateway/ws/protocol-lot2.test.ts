@@ -78,4 +78,40 @@ describe("protocol — mapping serveur (Lot 2)", () => {
       toServerMessage({ type: "inconnu" } as unknown as PiEvent),
     ).toThrowError(/inconnu/i);
   });
+
+  it("mappe job_activity (E3) — type DISTINCT, champs optionnels omis si absents", () => {
+    expect(
+      toServerMessage({
+        type: "job_activity",
+        sessionId: "s1",
+        jobId: "job-1",
+        stage: "job_progress",
+        detail: "extrait",
+        at: "2026-01-01T00:00:00.000Z",
+      }),
+    ).toEqual({
+      type: "job_activity",
+      jobId: "job-1",
+      stage: "job_progress",
+      detail: "extrait",
+      at: "2026-01-01T00:00:00.000Z",
+    });
+    // Étape terminale : statut porté, tâche/détail omis.
+    expect(
+      toServerMessage({
+        type: "job_activity",
+        sessionId: "s1",
+        jobId: "job-1",
+        stage: "job_finished",
+        status: "completed",
+        at: "2026-01-01T00:00:01.000Z",
+      }),
+    ).toEqual({
+      type: "job_activity",
+      jobId: "job-1",
+      stage: "job_finished",
+      status: "completed",
+      at: "2026-01-01T00:00:01.000Z",
+    });
+  });
 });

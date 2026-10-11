@@ -8,18 +8,29 @@
 export {
   ORIGIN_JOB_REPORT,
   ORIGIN_USER,
+  ACTIVITY_DETAIL_MAX,
   DEFAULT_DEADLINE_MS,
   DEFAULT_INLINE_MAX_BYTES,
+  DEFAULT_RESULT_BATCH_WINDOW_MS,
+  DISPATCH_NOTE,
   MAX_DEADLINE_MS,
   MIN_DEADLINE_MS,
   DelegationService,
   clampDeadline,
   createDelegationService,
+  excerptForActivity,
   truncateToBytes,
 } from "./service.js";
 export type { DelegationLogger, DelegationServiceOptions } from "./service.js";
 
-export { REPORT_HEADER, REPORT_INSTRUCTION, REPORT_MAX_CHARS, buildReportPrompt } from "./report.js";
+export {
+  REPORT_HEADER,
+  REPORT_INSTRUCTION,
+  REPORT_INSTRUCTION_BATCH,
+  REPORT_MAX_CHARS,
+  buildBatchReportPrompt,
+  buildReportPrompt,
+} from "./report.js";
 
 export { DelegationError } from "./errors.js";
 export type { DelegationErrorCode } from "./errors.js";
@@ -32,6 +43,7 @@ export type {
   CancelSucceeded,
   DelegateCancelled,
   DelegateCompleted,
+  DelegateDispatched,
   DelegateFailed,
   DelegateOutcome,
   DelegatePending,

@@ -1,11 +1,13 @@
 /**
  * Intégration WS — validations humaines (D118) DANS la conversation.
  *
- * Vérifie le ROUTAGE par conversation (la trame ne part qu'aux clients du bon
- * fil), la diffusion temps réel, la décision par WebSocket, la ré-apparition à
- * la reconnexion tant que la demande est vivante, et — contrainte explicite —
- * que la demande n'entre NI dans le transcript NI dans le snapshot (trame de
- * CONTRÔLE : aucun `seq` consommé, jamais bufferisée).
+ * Vérifie le ROUTAGE par conversation (E2 : la trame suit l'ABONNEMENT du
+ * client et porte la session CONCERNÉE, même si le fil n'est pas focalisé — la
+ * fenêtre flottante globale sait de quel fil vient la demande), la diffusion
+ * temps réel, la décision par WebSocket, la ré-apparition à la reconnexion
+ * tant que la demande est vivante, et — contrainte explicite — que la demande
+ * n'entre NI dans le transcript NI dans le snapshot (trame de CONTRÔLE : aucun
+ * `seq` consommé, jamais bufferisée).
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -132,25 +134,36 @@ async function hello(h: Harness): Promise<TestClient> {
 }
 
 describe("WS — validation humaine routée par conversation", () => {
-  it("n'envoie la demande qu'aux clients du BON fil", async () => {
+  it("E2 — la demande suit l'ABONNEMENT et porte le BON fil (multiplexage)", async () => {
     const port = newPort();
-    // Session courante = sess-2 ; la demande vit dans sess-1 (routage strict).
+    // Session courante = sess-2 ; la demande vit dans sess-1. E2 : le client
+    // suit TOUTES les conversations listées ⇒ il reçoit la demande, MAIS
+    // l'enveloppe ET la vue portent la session CONCERNÉE (sess-1) : l'UI sait
+    // de quel fil vient la demande.
     const h = await start(port, "sess-2");
     port.add(view());
 
-    // Client sur sess-2 (session courante) : ne reçoit RIEN.
     const onOther = await hello(h);
-    expect(onOther.frames.some((f) => f.type === "approval")).toBe(false);
-
-    // Bascule vers sess-1 : la demande apparaît, avec la BONNE session d'enveloppe.
-    onOther.send({ type: "switch", sessionId: "sess-1" });
     const approval = await onOther.waitFor((f) => f.type === "approval");
     expect(approval.type === "approval" && approval.approval.id).toBe("ap-1");
     expect(approval.sessionId).toBe("sess-1");
+    expect(approval.type === "approval" && approval.approval.sessionId).toBe("sess-1");
     expect(approval.type === "approval" && approval.approval.command).toBe("rm -rf /tmp/x");
     expect(approval.type === "approval" && approval.approval.destructiveReasons).toEqual([
       "suppression (rm)",
     ]);
+
+    // ⚠️ Après mise de côté de sess-1, le client n'y est PLUS abonné : une
+    // nouvelle demande de ce fil ne lui parvient plus (aucune fuite).
+    onOther.send({ type: "setAside", sessionId: "sess-1" });
+    await onOther.waitFor(
+      (f) => f.type === "sessions" && f.sessions.every((s) => s.id !== "sess-1"),
+    );
+    port.emit({ kind: "requested", approval: view({ id: "ap-apres", sessionId: "sess-1" }) });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(
+      onOther.frames.some((f) => f.type === "approval" && f.approval.id === "ap-apres"),
+    ).toBe(false);
   });
 
   it("la demande est une trame de CONTRÔLE : ni transcript, ni snapshot, ni seq consommé", async () => {

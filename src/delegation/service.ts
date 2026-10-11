@@ -2,22 +2,30 @@
  * Service de délégation (AUCUN import SDK/typebox).
  *
  * Orchestre : admission dans la file bornée → création du job dans le
- * `JobStore` → démarrage du worker lourd → attente inline bornée par la
- * deadline → report du léger à la fin réelle du job.
+ * `JobStore` → démarrage du worker lourd → (E4) ticket IMMÉDIAT en mode tâche
+ * de fond (défaut), ou attente inline bornée par la deadline en mode bloquant →
+ * report du léger à la fin réelle du job, LOTISSÉ sur une fenêtre fixe.
  *
  * Le job n'est JAMAIS annulé du fait de la deadline : un Stop du léger pendant
  * un inline interrompt seulement l'attente, le job survit et sera rapporté.
+ *
+ * ⚠️ E4 — RÉSULTATS LOTIS : les fins de jobs d'UNE MÊME session sont regroupées
+ * sur une fenêtre FIXE (`resultBatchWindowMs`, déclenchée par le PREMIER résultat
+ * et NON repoussée) ⇒ UN lot = UN SEUL tour. C'est ce qui évite une pluie de
+ * tours pour N tâches terminées rapprochées.
  */
 
 import { JobQueue } from "../jobs/queue.js";
 import { JobStore } from "../jobs/store.js";
+import { isTerminal } from "../jobs/types.js";
 import type { JobRecord, JobUsage } from "../jobs/types.js";
 import { sanitizeErrorText } from "../pi/events.js";
 import { PHASE } from "../pi/instrumentation.js";
-import type { PiEvent, PiEventSource } from "../pi/types.js";
+import type { PiEvent, PiEventSource, PiJobTerminalStatus } from "../pi/types.js";
 import type {
   AvailabilityRole,
   CancelOutcome,
+  DelegateDispatched,
   DelegateOutcome,
   DelegateRequest,
   DelegateServicePort,
@@ -28,7 +36,7 @@ import type {
   LightWaker,
   ModelAvailability,
 } from "./ports.js";
-import { buildReportPrompt } from "./report.js";
+import { buildBatchReportPrompt } from "./report.js";
 
 export const DEFAULT_DEADLINE_MS = 1_500;
 export const MIN_DEADLINE_MS = 200;
@@ -36,6 +44,21 @@ export const MAX_DEADLINE_MS = 60_000;
 export const DEFAULT_INLINE_MAX_BYTES = 32_768;
 export const ORIGIN_JOB_REPORT = "job_report";
 export const ORIGIN_USER = "user";
+/** Taille maximale de l'extrait de progression porté par une trame d'activité. */
+export const ACTIVITY_DETAIL_MAX = 280;
+/**
+ * E4 — Fenêtre de LOTISSEMENT des résultats (ms). FIXE : déclenchée par le
+ * PREMIER résultat et NON repoussée (≠ debounce) ⇒ la latence est bornée.
+ */
+export const DEFAULT_RESULT_BATCH_WINDOW_MS = 3_000;
+/**
+ * E4 — Texte du ticket (accusé de LANCEMENT). ⚠️ N'affirme AUCUN résultat : il
+ * annonce un lancement et l'arrivée ultérieure du résultat.
+ */
+export const DISPATCH_NOTE =
+  "Tâche lancée en arrière-plan. Elle n'est PAS terminée : son résultat te sera " +
+  "transmis automatiquement dès qu'elle sera finie. Ne prétends jamais qu'elle " +
+  "est terminée avant d'avoir reçu ce résultat.";
 
 /** Bornes la deadline et retombe sur la valeur par défaut si non numérique. */
 export function clampDeadline(value: unknown): number {
@@ -67,6 +90,21 @@ export function truncateToBytes(
   return { text: text.slice(0, low), truncated: true };
 }
 
+/**
+ * Extrait lisible (une seule ligne) du travail partiel d'un sous-agent, pour le
+ * bloc d'ACTIVITÉ (E3). Tronqué sur une frontière de caractère, jamais au milieu
+ * d'un point de code. Donnée d'AFFICHAGE uniquement : jamais prononcée (le bus
+ * d'activité n'atteint pas le moteur TTS).
+ */
+export function excerptForActivity(
+  text: string,
+  max = ACTIVITY_DETAIL_MAX,
+): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= max) return collapsed;
+  return `${collapsed.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
 export interface DelegationLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
   info(message: string, fields?: Record<string, unknown>): void;
@@ -89,8 +127,13 @@ export interface DelegationServiceOptions {
   inlineMaxBytes?: number;
   /** Valeur (ou fournisseur) de la deadline par défaut. Lue en direct si fonction. */
   defaultDeadlineMs?: number | (() => number);
+  /** E4 — fenêtre de lotissement des résultats (défaut 3 000 ms). */
+  resultBatchWindowMs?: number;
   now?: () => number;
   idFactory?: () => string;
+  /** Horloges injectables (tests déterministes). */
+  setTimeoutFn?: (fn: () => void, ms: number) => unknown;
+  clearTimeoutFn?: (timer: unknown) => void;
 }
 
 interface Completion {
@@ -109,13 +152,21 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   private readonly totalTimeoutMs: number;
   private readonly inlineMaxBytes: number;
   private readonly defaultDeadlineMs: number | (() => number);
+  private readonly resultBatchWindowMs: number;
   private readonly now: () => number;
   private readonly idFactory: () => string;
+  private readonly setTimeoutFn: (fn: () => void, ms: number) => unknown;
+  private readonly clearTimeoutFn: (timer: unknown) => void;
 
   private waker?: LightWaker;
   private readonly listeners = new Set<(event: PiEvent) => void>();
   private readonly completions = new Map<string, Completion>();
   private readonly handles = new Map<string, HeavyRunHandle>();
+  /** E4 — lots de résultats en attente de livraison, PAR session légère. */
+  private readonly reportBatches = new Map<
+    string,
+    { records: JobRecord[]; timer: unknown }
+  >();
 
   constructor(options: DelegationServiceOptions) {
     this.store = options.store;
@@ -128,7 +179,15 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     this.totalTimeoutMs = options.totalTimeoutMs;
     this.inlineMaxBytes = options.inlineMaxBytes ?? DEFAULT_INLINE_MAX_BYTES;
     this.defaultDeadlineMs = options.defaultDeadlineMs ?? DEFAULT_DEADLINE_MS;
+    this.resultBatchWindowMs = Math.max(
+      0,
+      options.resultBatchWindowMs ?? DEFAULT_RESULT_BATCH_WINDOW_MS,
+    );
     this.now = options.now ?? Date.now;
+    this.setTimeoutFn = options.setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
+    this.clearTimeoutFn =
+      options.clearTimeoutFn ??
+      ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>));
     this.idFactory =
       options.idFactory ??
       (() => `job-${this.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
@@ -210,6 +269,23 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     this.store.append(jobId, "queued", {});
     this.emitPhase(PHASE.jobEnqueued, sessionId, runId, jobId, t0);
 
+    // ⚠️ E4 — DÉFAUT NON BLOQUANT : la tâche de fond rend la main IMMÉDIATEMENT
+    // (ticket honnête, AUCUNE attente). Le résultat sera réinjecté plus tard.
+    const background = request.background !== false;
+    if (background) {
+      if (admission.admission === "start") {
+        this.startJob(jobId);
+      } else {
+        this.logger.info("delegation.queued", {
+          job_id: jobId,
+          position: admission.position,
+        });
+      }
+      this.emitPhase(PHASE.delegateDispatched, sessionId, runId, jobId, t0);
+      const record = this.store.get(jobId);
+      return this.dispatchedOutcome(record?.id ?? jobId);
+    }
+
     const completion = this.makeCompletion();
     this.completions.set(jobId, completion);
 
@@ -231,6 +307,38 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     );
     this.completions.delete(jobId);
     return outcome;
+  }
+
+  /**
+   * E5 — VÉRITÉ DE COMPLÉTION (lue dans le `JobStore`, jamais dans le texte du
+   * modèle) : `true` s'il reste du travail NON achevé pour cette session — au
+   * moins un job NON terminal, OU un job terminé dont le lot de résultats n'a
+   * pas encore été livré.
+   */
+  hasPendingWork(sessionId: string): boolean {
+    for (const record of this.store.list()) {
+      if (record.lightSessionId === sessionId && !isTerminal(record.status)) {
+        return true;
+      }
+    }
+    const batch = this.reportBatches.get(sessionId);
+    return batch !== undefined && batch.records.length > 0;
+  }
+
+  /**
+   * E4 — Force la livraison IMMÉDIATE des lots en attente (arrêt propre, tests).
+   * Idempotent.
+   */
+  flushPendingReports(): void {
+    for (const batch of this.reportBatches.values()) {
+      if (batch.timer !== null) {
+        this.clearTimeoutFn(batch.timer);
+        batch.timer = null;
+      }
+    }
+    for (const sessionId of [...this.reportBatches.keys()]) {
+      this.flushReportBatch(sessionId);
+    }
   }
 
   async cancelJob(jobId: string): Promise<CancelOutcome> {
@@ -334,6 +442,29 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     this.emitEvent({ type: "job_started", sessionId, jobId, task });
   }
 
+  /**
+   * E3 — étape d'ACTIVITÉ d'un sous-agent : trame ÉPHÉMÈRE (jamais un message),
+   * rattachée à la session LÉGÈRE propriétaire. Le transport la route en trame
+   * de CONTRÔLE et ne la remet JAMAIS au moteur TTS.
+   */
+  private emitJobActivity(
+    sessionId: string,
+    jobId: string,
+    stage: string,
+    extra: { task?: string; detail?: string; status?: PiJobTerminalStatus } = {},
+  ): void {
+    this.emitEvent({
+      type: "job_activity",
+      sessionId,
+      jobId,
+      stage,
+      ...(extra.task !== undefined ? { task: extra.task } : {}),
+      ...(extra.detail !== undefined ? { detail: extra.detail } : {}),
+      ...(extra.status !== undefined ? { status: extra.status } : {}),
+      at: new Date(this.now()).toISOString(),
+    });
+  }
+
   private emitJobFinished(
     sessionId: string,
     jobId: string,
@@ -357,6 +488,9 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       this.now(),
     );
     this.emitJobStarted(record.lightSessionId, jobId, record.task);
+    this.emitJobActivity(record.lightSessionId, jobId, PHASE.jobStarted, {
+      task: record.task,
+    });
 
     const request: HeavyRunRequest = {
       jobId,
@@ -373,9 +507,13 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
           jobId,
           this.now(),
         );
+        this.emitJobActivity(record.lightSessionId, jobId, PHASE.jobFirstToken);
       },
       onProgress: (partial: string) => {
         this.store.append(jobId, "progress", { result: { partial } });
+        this.emitJobActivity(record.lightSessionId, jobId, PHASE.jobProgress, {
+          detail: excerptForActivity(partial),
+        });
       },
       onSession: (heavySessionId: string) => {
         this.store.append(jobId, "progress", { heavySessionId });
@@ -464,34 +602,74 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       this.now(),
     );
     this.emitJobFinished(record.lightSessionId, jobId, result.status);
+    this.emitJobActivity(record.lightSessionId, jobId, PHASE.jobFinished, {
+      status: result.status,
+    });
 
     if (status === "completed" || status === "failed") {
-      this.reportJob(jobId);
+      this.enqueueReport(jobId);
     }
   }
 
-  private reportJob(jobId: string): void {
+  /**
+   * E4 — Met un job terminé en LOT pour sa session. La fenêtre est ARMÉE une
+   * seule fois (par le PREMIER résultat) et NON repoussée : un lot = UN SEUL
+   * tour. Les jobs d'une même session sont regroupés ; deux sessions distinctes
+   * ont chacune leur propre lot.
+   */
+  private enqueueReport(jobId: string): void {
     const record = this.store.get(jobId);
     if (!record) return;
+    const sessionId = record.lightSessionId;
+    let batch = this.reportBatches.get(sessionId);
+    if (!batch) {
+      batch = { records: [], timer: null };
+      this.reportBatches.set(sessionId, batch);
+    }
+    if (!batch.records.some((item) => item.id === jobId)) {
+      batch.records.push(record);
+    }
+    if (batch.timer === null) {
+      batch.timer = this.setTimeoutFn(() => {
+        const current = this.reportBatches.get(sessionId);
+        if (current) current.timer = null;
+        this.flushReportBatch(sessionId);
+      }, this.resultBatchWindowMs);
+      (batch.timer as { unref?: () => void } | null)?.unref?.();
+    }
+  }
+
+  /**
+   * E4 — Livre UN lot : UN SEUL `waker.send` (donc UN SEUL tour), marque chaque
+   * job du lot comme `notified` et émet les trames de corrélation.
+   */
+  private flushReportBatch(sessionId: string): void {
+    const batch = this.reportBatches.get(sessionId);
+    if (!batch) return;
+    this.reportBatches.delete(sessionId);
+    const records = batch.records;
+    if (records.length === 0) return;
+    const head = records[0] as JobRecord;
     this.emitPhase(
       PHASE.reportRequested,
-      record.lightSessionId,
-      record.parentRunId ?? "",
-      jobId,
+      sessionId,
+      head.parentRunId ?? "",
+      head.id,
       this.now(),
     );
 
     let runId: string | undefined;
     if (this.waker) {
       try {
-        const handle = this.waker.send(record.lightSessionId, buildReportPrompt(record), {
-          origin: ORIGIN_JOB_REPORT,
-          jobId,
-        });
+        const handle = this.waker.send(
+          sessionId,
+          buildBatchReportPrompt(records),
+          { origin: ORIGIN_JOB_REPORT, jobId: head.id },
+        );
         if (handle && typeof handle.runId === "string") runId = handle.runId;
       } catch (error) {
         this.logger.warn("delegation.report.failed", {
-          job_id: jobId,
+          job_id: head.id,
           error: sanitizeErrorText(
             error instanceof Error ? error.message : String(error),
           ),
@@ -499,35 +677,46 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       }
     }
 
-    this.store.append(jobId, "notified", {
-      notified: true,
-      reportedAt: new Date(this.now()).toISOString(),
-    });
-    this.emitEvent({
-      type: "job_report",
-      sessionId: record.lightSessionId,
-      jobId,
-      ...(runId ? { runId } : {}),
-    });
+    for (const record of records) {
+      this.store.append(record.id, "notified", {
+        notified: true,
+        reportedAt: new Date(this.now()).toISOString(),
+      });
+      this.emitEvent({
+        type: "job_report",
+        sessionId,
+        jobId: record.id,
+        ...(runId ? { runId } : {}),
+      });
+    }
     this.emitPhase(
       PHASE.reportEmitted,
-      record.lightSessionId,
-      record.parentRunId ?? "",
-      jobId,
+      sessionId,
+      head.parentRunId ?? "",
+      head.id,
       this.now(),
     );
 
     // Réservé Lot 10 (canal de notification sortant) : non implémenté.
     if (this.reporter) {
-      void Promise.resolve(this.reporter.report(record)).catch((error: unknown) => {
-        this.logger.warn("delegation.reporter.failed", {
-          job_id: jobId,
-          error: sanitizeErrorText(
-            error instanceof Error ? error.message : String(error),
-          ),
+      for (const record of records) {
+        void Promise.resolve(this.reporter.report(record)).catch((error: unknown) => {
+          this.logger.warn("delegation.reporter.failed", {
+            job_id: record.id,
+            error: sanitizeErrorText(
+              error instanceof Error ? error.message : String(error),
+            ),
+          });
         });
-      });
+      }
     }
+  }
+
+  /**
+   * E4 — Ticket d'ACCUSÉ DE LANCEMENT (jamais un résultat).
+   */
+  private dispatchedOutcome(jobId: string): DelegateDispatched {
+    return { status: "dispatched", job_id: jobId, note: DISPATCH_NOTE };
   }
 
   private awaitInline(

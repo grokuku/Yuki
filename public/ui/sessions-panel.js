@@ -175,6 +175,11 @@ export function initSessionsPanel(deps) {
 
   let sessions = [];
   let activeId = null;
+  // E2 — conversations dont un run d'arrière-plan (ou une tâche de fond) est EN
+  // COURS. Rafraîchi par `setBusy` (l'app calcule l'état depuis les trames
+  // multiplexées), indépendamment de la conversation focalisée : on VOIT qu'un
+  // autre fil travaille et on peut y basculer sans rien perdre.
+  let busyIds = new Set();
   // État déplié/replié de la barre : replié par défaut, restauré du stockage
   // local (pour rester déplié après un rechargement), décidé par LE BOUTON.
   let expanded = readExpanded();
@@ -403,13 +408,16 @@ export function initSessionsPanel(deps) {
       mark.title = "Conversation épinglée";
       item.appendChild(mark);
     }
-    item.appendChild(
-      el(
-        "span",
-        { class: "conv__av", "aria-hidden": "true" },
-        initialsFor(conversationTitle(info)),
-      ),
+    const avatar = el(
+      "span",
+      { class: "conv__av", "aria-hidden": "true" },
+      initialsFor(conversationTitle(info)),
     );
+    // Point « en cours » (E2) : visible quand un run d'arrière-plan travaille.
+    // Toujours présent dans le DOM (visible via `.conv--busy`), donc le
+    // rafraîchissement n'est qu'un basculement de classe.
+    avatar.appendChild(el("span", { class: "conv__busy" }));
+    item.appendChild(avatar);
     const main = el("span", { class: "conv__main" });
     main.append(
       el("span", { class: "conv__title" }, conversationTitle(info)),
@@ -440,7 +448,21 @@ export function initSessionsPanel(deps) {
       event.preventDefault();
       openMenu(info.id, item);
     });
+    applyBusy(item, info.id);
     return item;
+  }
+
+  /** Applique l'état « en cours » d'une conversation (classe + libellé accessible). */
+  function applyBusy(item, id) {
+    const busy = busyIds.has(id);
+    item.classList.toggle("conv--busy", busy);
+    if (busy) {
+      item.setAttribute("data-busy", "true");
+      item.setAttribute("aria-label", `${conversationTitle(sessions.find((s) => s.id === id) ?? {})} — en cours`);
+    } else {
+      item.removeAttribute("data-busy");
+      item.removeAttribute("aria-label");
+    }
   }
 
   function render() {
@@ -464,11 +486,23 @@ export function initSessionsPanel(deps) {
   }
 
   return {
-    update(nextSessions, nextActiveId) {
+    update(nextSessions, nextActiveId, nextBusyIds) {
       sessions = Array.isArray(nextSessions) ? nextSessions : [];
       activeId = typeof nextActiveId === "string" ? nextActiveId : null;
+      if (Array.isArray(nextBusyIds)) busyIds = new Set(nextBusyIds);
       closeMenu();
       render();
+    },
+    /**
+     * E2 — met à jour l'ensemble des conversations « en cours » SANS refaire le
+     * rendu complet (basculage de classe ciblé) : l'indicateur s'allume/ s'éteint
+     * au fil des trames, sans reconstruire la liste ni perdre le menu contextuel.
+     */
+    setBusy(ids) {
+      busyIds = new Set(Array.isArray(ids) ? ids : []);
+      for (const item of list.querySelectorAll(".conv")) {
+        applyBusy(item, item.getAttribute("data-id") ?? "");
+      }
     },
     closeMenu,
   };

@@ -103,6 +103,7 @@ import {
   MemoryIndex,
   MemoryService,
   MemoryStore,
+  memoryWriteModelReference,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
 import { RulesStore } from "./rules/index.js";
@@ -714,6 +715,14 @@ async function main(): Promise<void> {
 
     const memoryStore = MemoryStore.open({ path: env.memoryStorePath, logger });
     const memoryIndex = new MemoryIndex({ path: env.memoryIndexPath, logger });
+    // Écriture de fond (extraction + consolidation) sur le compte LOURD quand
+    // il est disponible : libère le compte léger (déclaré mono-slot) pour le
+    // run de conversation suivant. Repli sur le léger sinon.
+    const memoryWriteRef = memoryWriteModelReference({
+      heavyAvailable: heavyAvailableAtStart,
+      heavyRef,
+      lightRef,
+    });
     memoryService = new MemoryService({
       store: memoryStore,
       index: memoryIndex,
@@ -729,7 +738,7 @@ async function main(): Promise<void> {
         agentDir: env.piAgentDir,
         authPath: join(env.piAgentDir, "auth.json"),
         modelsPath,
-        modelReference: lightRef,
+        modelReference: memoryWriteRef,
         thinking: "off",
         timeoutMs: () => config.getNumber("memory.extract.timeoutMs"),
         logger,
@@ -742,6 +751,7 @@ async function main(): Promise<void> {
       entries: memoryStore.size,
       store: env.memoryStorePath,
       index: env.memoryIndexPath,
+      write_role: heavyAvailableAtStart ? "heavy" : "light",
     });
 
     // Lot 13 : archive « vie antérieure » — dossier SÉPARÉ du store de mémoire,

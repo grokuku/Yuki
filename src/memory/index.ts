@@ -115,3 +115,8 @@ export {
 } from "./service.js";
 
 export { buildMatchQuery, fingerprint, foldText } from "./normalize.js";
+
+export {
+  memoryWriteModelReference,
+  type MemoryWriteModelRoles,
+} from "./write-model.js";

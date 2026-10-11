@@ -194,7 +194,7 @@ export interface RunHandle {
 }
 
 /** États observables d'une session. */
-export type PiSessionStateName = "idle" | "streaming" | "error";
+export type PiSessionStateName = "idle" | "streaming" | "waiting" | "error";
 
 /**
  * Statistiques d'exécution d'un message assistant, PERSISTÉES dans la session.
@@ -285,7 +285,31 @@ export type PiJobEvent =
       jobId: string;
       status: PiJobTerminalStatus;
     }
-  | { type: "job_report"; sessionId: string; jobId: string; runId?: string };
+  | { type: "job_report"; sessionId: string; jobId: string; runId?: string }
+  /**
+   * E3 — ACTIVITÉ d'un sous-agent (job d'arrière-plan) : progression et étapes,
+   * pour le bloc REPLIÉ affiché DANS le fil de la conversation qui l'a lancé.
+   *
+   * ⚠️ ÉPHÉMÈRE : ce n'est NI un message, NI une entrée d'historique ⇒ jamais
+   * dans le transcript, le snapshot, le rejeu ni la mémoire. Le transport le
+   * route en trame de CONTRÔLE (jamais bufferisée) et ne l'achemine JAMAIS vers
+   * `routeTtsEvent` ⇒ MUET par construction.
+   */
+  | {
+      type: "job_activity";
+      sessionId: string;
+      jobId: string;
+      /** Étape normalisée (chaîne ouverte, voir `PHASE`). */
+      stage: string;
+      /** Intitulé de la tâche (renseigné à l'étape `job_started`). */
+      task?: string;
+      /** Extrait de progression du sous-agent (DONNÉE d'affichage, jamais TTS). */
+      detail?: string;
+      /** Statut terminal (renseigné à l'étape `job_finished`). */
+      status?: PiJobTerminalStatus;
+      /** Instant ISO de l'étape. */
+      at: string;
+    };
 
 /** Événements normalisés émis par la façade. */
 export type PiEvent =

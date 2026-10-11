@@ -159,7 +159,7 @@ function sizeOf(el, fallback) {
  * @param {Window} [deps.win]
  * @param {{ get(k: string): string | null, set(k: string, v: string): void }} [deps.store]
  * @returns {{
- *   show(a: object): void,
+ *   show(a: object, options?: { conversation?: string }): void,
  *   clear(id: string): void,
  *   showResult(r: object): void,
  *   reset(): void,
@@ -362,16 +362,27 @@ export function createApprovalLayer({
     return { el, bar, pos };
   }
 
-  function headWith(source, extra) {
+  function headWith(source, extra, conversation = "") {
     const badge = source.destructive
       ? h("span", { class: "approval__badge approval__badge--danger", text: "Destructrice" })
       : h("span", { class: "approval__badge", text: "Ordinaire" });
-    return [
+    const head = [
       h("span", { class: "approval__title", text: "Validation requise" }),
       machineNode(source),
-      badge,
-      ...extra,
     ];
+    // E2 — étiquette du FIL concerné (plusieurs conversations peuvent avoir des
+    // demandes en attente : on doit savoir de laquelle vient chacune).
+    if (conversation) {
+      head.push(
+        h(
+          "span",
+          { class: "approval__conversation", title: `Conversation : ${conversation}` },
+          ["Dans ", h("strong", { text: conversation })],
+        ),
+      );
+    }
+    head.push(badge, ...extra);
+    return head;
   }
 
   function clearRequest(id) {
@@ -421,10 +432,16 @@ export function createApprovalLayer({
   }
 
   /** Affiche (ou met à jour) la fenêtre d'une demande de validation. */
-  function show(approval) {
+  function show(approval, options = {}) {
     if (!approval || approval.id === undefined || approval.id === null) return;
     const id = String(approval.id);
     if (requests.has(id)) clearRequest(id);
+
+    // E2 — quand PLUSIEURS fils peuvent avoir des demandes en attente, on dit
+    // de QUELLE conversation vient celle-ci. Le titre est fourni par l'appelant
+    // (qui détient la liste des conversations) ; absent ⇒ aucune étiquette.
+    const conversation =
+      typeof options.conversation === "string" ? options.conversation.trim() : "";
 
     const reasons =
       approval.destructive &&
@@ -455,7 +472,7 @@ export function createApprovalLayer({
         className: "approval approval-window",
         ariaLabel: `Demande de validation — ${machineLabel(approval)}`,
       },
-      head: headWith(approval, []),
+      head: headWith(approval, [], conversation),
     });
     // ⚠️ Structure : `body` DÉFILE (le volume : la commande repliable), `meta`
     // (raison + compte à rebours) et `actions` (Valider/Refuser) restent FIXES

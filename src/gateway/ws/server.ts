@@ -117,11 +117,19 @@ export interface WsTransportOptions {
 
 interface ClientState {
   ws: WebSocket;
+  /** Session FOCALISÉE (cible des envois, de l'abort et des validations). */
   sessionId?: string;
+  /** Curseur de rejeu de la session FOCALISÉE (reconnexion). */
   lastSeq: number;
   greeted: boolean;
-  unsubscribeStream?: () => void;
-  subscribedSession?: string;
+  /**
+   * E2 — abonnements aux flux, PAR SESSION (multiplexage). Le client suit
+   * TOUTES les conversations listées EN PLUS de la focalisée : chaque trame
+   * arrive avec son `sessionId`, l'UI route vers le store du bon fil —
+   * l'activité d'un fil d'arrière-plan reste ainsi VISIBLE sans changer de
+   * conversation. `sessionId → désabonnement`.
+   */
+  subscriptions: Map<string, () => void>;
 }
 
 /** Traduit un événement de façade en trame serveur. */
@@ -176,6 +184,18 @@ export function toServerMessage(event: PiEvent): ServerMessage {
         type: "job_report",
         jobId: event.jobId,
         ...(event.runId !== undefined ? { runId: event.runId } : {}),
+      };
+    case "job_activity":
+      // E3 — activité d'un sous-agent : trame de CONTRÔLE dédiée (jamais
+      // bufferisée, jamais envoyée à `routeTtsEvent`).
+      return {
+        type: "job_activity",
+        jobId: event.jobId,
+        stage: event.stage,
+        ...(event.task !== undefined ? { task: event.task } : {}),
+        ...(event.detail !== undefined ? { detail: event.detail } : {}),
+        ...(event.status !== undefined ? { status: event.status } : {}),
+        at: event.at,
       };
     case "run_summary":
       return {
@@ -241,6 +261,15 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
   const runT0 = new Map<string, number>();
   const unsubscribeHost = host.subscribeAll((event) => {
+    // ⚠️ E3 — L'ACTIVITÉ D'UN SOUS-AGENT est ÉPHÉMÈRE et MUETTE. Elle ne doit
+    // NI entrer dans le flux bufferisé (rejeu/snapshot/transcript) NI atteindre
+    // le moteur TTS. On la déroute AVANT `streams.append` et AVANT
+    // `routeTtsEvent`, vers une trame de CONTRÔLE rattachée à la conversation
+    // qui l'a lancée : c'est CE mécanisme (et lui seul) qui garantit le silence.
+    if (event.type === "job_activity") {
+      broadcastControl(event.sessionId, toServerMessage(event));
+      return;
+    }
     streams.get(event.sessionId).append(toServerMessage(event));
     routeTtsEvent(event);
   });
@@ -253,15 +282,60 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     return client.sessionId ?? host.currentSessionId();
   }
 
-  /** (Re)branche le client sur le flux de sa session courante. */
-  function ensureSubscribed(client: ClientState): void {
-    const sessionId = sessionIdFor(client);
-    if (!sessionId) return;
-    if (client.subscribedSession === sessionId) return;
-    client.unsubscribeStream?.();
+  /** Abonne le client au flux d'UNE session (idempotent). */
+  function subscribeTo(client: ClientState, sessionId: string): void {
+    if (client.subscriptions.has(sessionId)) return;
     const stream = streams.get(sessionId);
-    client.unsubscribeStream = stream.subscribe((frame) => sendFrame(client, frame));
-    client.subscribedSession = sessionId;
+    client.subscriptions.set(
+      sessionId,
+      stream.subscribe((frame) => sendFrame(client, frame)),
+    );
+  }
+
+  /** (Re)branche le client sur le flux de sa session FOCALISÉE (au moins elle). */
+  function subscribeFocused(client: ClientState): void {
+    const sessionId = sessionIdFor(client);
+    if (sessionId) subscribeTo(client, sessionId);
+  }
+
+  /**
+   * E2 — aligne les abonnements du client sur l'ensemble
+   * « {sessions listées} ∪ {session focalisée} ». Chaque conversation de la
+   * barre latérale devient un flux SUIVI : ses trames (état, jobs, deltas)
+   * arrivent avec leur `sessionId` et sont routées vers le store du bon fil.
+   * Les abonnements aux sessions disparues (mises de côté) sont retirés.
+   */
+  function syncSubscriptions(
+    client: ClientState,
+    listedSessionIds: string[],
+  ): void {
+    const wanted = new Set(listedSessionIds);
+    if (client.sessionId) wanted.add(client.sessionId);
+    for (const [sessionId, unsubscribe] of [...client.subscriptions]) {
+      if (wanted.has(sessionId)) continue;
+      unsubscribe();
+      client.subscriptions.delete(sessionId);
+    }
+    for (const sessionId of wanted) subscribeTo(client, sessionId);
+  }
+
+  /**
+   * E2 — resynchronise les abonnements depuis la liste des conversations SANS
+   * envoyer de trame `sessions` (reconnexion `resume` : la trame de liste ne
+   * doit pas perturber le curseur `seq` du rejeu).
+   */
+  async function syncSubscriptionsFromHost(client: ClientState): Promise<void> {
+    let ids: string[] = [];
+    try {
+      ids = (await host.listSessions()).map((info) => info.sessionId);
+    } catch (error) {
+      logger.warn("ws.subscriptions.list_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      subscribeFocused(client);
+      return;
+    }
+    syncSubscriptions(client, ids);
   }
 
   function envelopeFor(sessionId: string | undefined): ServerEnvelope {
@@ -286,11 +360,15 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   }
 
-  /** Diffuse une trame binaire `YTA1` aux clients de la session (§4.5). */
+  /** Diffuse une trame binaire `YTA1` aux clients ABONNÉS à la session (§4.5). */
   function broadcastBinary(sessionId: string, frame: Buffer): void {
     for (const client of clients) {
       if (client.ws.readyState !== WebSocket.OPEN) continue;
-      if (sessionIdFor(client) !== sessionId) continue;
+      // E2 : on identifie les destinataires par leur ABONNEMENT (multiplexage)
+      // et non par la session focalisée. La SOURCE reste la seule session
+      // FOCALISÉE du host (`routeTtsEvent`) : un fil d'arrière-plan ne produit
+      // donc AUCUNE trame audio (pas de double voix).
+      if (!client.subscriptions.has(sessionId)) continue;
       try {
         client.ws.send(frame, { binary: true });
       } catch (error) {
@@ -320,6 +398,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   function routeTtsEvent(event: PiEvent): void {
     if (!tts) return;
+    // ⚠️ E0 : plusieurs conversations peuvent avoir un run EN VOL simultanément
+    // (registre de sessions). La VOIX ne suit QUE la conversation FOCALISÉE :
+    // les runs d'arrière-plan continuent d'émettre pour LEUR flux (rejeu au
+    // retour) mais restent MUETS. Sans ce garde, deux runs simultanés
+    // alimenteraient la TTS d'un fil avec la sortie d'un autre (double voix).
+    if (event.sessionId !== host.currentSessionId()) return;
     switch (event.type) {
       case "phase":
         if (!runT0.has(event.runId)) {
@@ -344,6 +428,18 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       default:
         return;
     }
+  }
+
+  /**
+   * E2 — le FOCUS change de conversation : la voix du fil quitté s'arrête.
+   * Indispensable avec l'abonnement multiple : sinon les segments du fil
+   * quitté, encore en file, seraient livrés (via `broadcastBinary` par
+   * abonnement) alors que l'utilisateur regarde un AUTRE fil — double voix.
+   */
+  function cancelTtsOnFocusChange(previousSessionId: string | undefined): void {
+    if (!tts || !previousSessionId) return;
+    if (previousSessionId === host.currentSessionId()) return;
+    tts.cancel(previousSessionId);
   }
 
   // ── Validations humaines dans la conversation (D118) ────────────────────
@@ -451,15 +547,28 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   /**
-   * Diffuse une trame de CONTRÔLE aux clients d'UNE session (jamais aux
-   * autres). Sert aux états éphémères (validation humaine) : envoyés via
-   * `sendDirect`, ils ne consomment aucun `seq`, ne sont jamais bufferisés et
-   * donc n'entrent NI dans le rejeu NI dans un snapshot.
+   * Trame de CONTRÔLE portant l'enveloppe d'UNE session donnée (et non celle de
+   * la session focalisée du client). Ne consomme aucun `seq`.
+   */
+  function sendControl(
+    client: ClientState,
+    sessionId: string,
+    message: ServerMessage,
+  ): void {
+    sendFrame(client, { ...envelopeFor(sessionId), ...message } as ServerFrame);
+  }
+
+  /**
+   * Diffuse une trame de CONTRÔLE aux clients ABONNÉS à UNE session (jamais aux
+   * autres). Sert aux états éphémères (validation humaine, capture d'écran) :
+   * l'enveloppe porte l'identifiant de la session CONCERNÉE (l'UI sait de quel
+   * fil vient la demande), ils ne consomment aucun `seq`, ne sont jamais
+   * bufferisés et donc n'entrent NI dans le rejeu NI dans un snapshot.
    */
   function broadcastControl(sessionId: string, message: ServerMessage): void {
     for (const client of clients) {
-      if (sessionIdFor(client) !== sessionId) continue;
-      sendDirect(client, message);
+      if (!client.subscriptions.has(sessionId)) continue;
+      sendControl(client, sessionId, message);
     }
   }
 
@@ -470,16 +579,22 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   function sendPendingApprovals(client: ClientState): void {
     if (!approvals) return;
-    const sessionId = sessionIdFor(client);
-    if (!sessionId) return;
-    for (const approval of approvals.pendingApprovals(sessionId)) {
-      sendDirect(client, { type: "approval", approval });
+    // E2 : les demandes EN ATTENTE de TOUTES les conversations suivies sont
+    // ré-affichées (chacune portant son `sessionId`) — l'UI indique de quel fil
+    // vient chaque demande.
+    const sessionIds = new Set(client.subscriptions.keys());
+    if (client.sessionId) sessionIds.add(client.sessionId);
+    for (const sessionId of sessionIds) {
+      for (const approval of approvals.pendingApprovals(sessionId)) {
+        sendControl(client, sessionId, { type: "approval", approval });
+      }
     }
   }
 
   /** Liste des conversations + conversation active, envoyée au client. */
   async function sendSessions(client: ClientState): Promise<void> {
     let sessions: WireSession[] = [];
+    let listed = false;
     try {
       const list = await host.listSessions();
       sessions = list.map((info) => ({
@@ -495,11 +610,17 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       // Épinglées d'abord, puis date décroissante (ordre autoritatif, poussé au
       // client : la barre latérale se contente de refléter cette liste).
       sessions = orderSessions(sessions);
+      listed = true;
     } catch (error) {
       logger.warn("ws.sessions.list_failed", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    // E2 : la liste EST la source de vérité des conversations suivies ⇒ on y
+    // aligne les abonnements. En cas d'échec de lecture, on garde au moins la
+    // session focalisée (jamais zéro abonnement).
+    if (listed) syncSubscriptions(client, sessions.map((s) => s.id));
+    else subscribeFocused(client);
     sendDirect(client, {
       type: "sessions",
       sessions,
@@ -539,7 +660,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // client adopte un autre fil par la trame dédiée `switch`.
     client.sessionId = current;
     client.greeted = true;
-    ensureSubscribed(client);
+    subscribeFocused(client);
     sendDirect(client, { type: "welcome", serverVersion, resumed });
     await sendSessions(client);
     // État initial des agents (encart de la barre latérale), à la connexion.
@@ -552,6 +673,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
   async function handleResume(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "resume") return;
+    const previousFocus = host.currentSessionId();
     const target = message.sessionId || host.currentSessionId();
     if (!target) {
       sendDirect(client, {
@@ -590,7 +712,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       }
     }
     client.sessionId = host.currentSessionId() ?? target;
-    ensureSubscribed(client);
+    subscribeFocused(client);
+    // La voix du fil quitté s'arrête (E2) : un seul fil parle.
+    cancelTtsOnFocusChange(previousFocus);
     const stream = streams.get(client.sessionId);
     const result = stream.replay(message.fromSeq);
     sendDirect(client, {
@@ -616,7 +740,14 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       }
     }
     // Uniquement si la session hôte a CHANGÉ : rafraîchit la barre latérale.
-    if (switched) await sendSessions(client);
+    if (switched) {
+      await sendSessions(client);
+    } else {
+      // Reconnexion sur la même session : on resynchronise SILENCIEUSEMENT les
+      // abonnements (toutes les conversations listées) sans envoyer de trame
+      // `sessions` (elle ne doit pas troubler le curseur `seq` du rejeu).
+      await syncSubscriptionsFromHost(client);
+    }
     // Reconnexion : on RE-pousse l'état des agents (il a pu changer pendant la coupure).
     sendAgents(client);
     // Ré-affichage des validations en attente (état vivant, jamais l'historique).
@@ -626,6 +757,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   /** Bascule vers une autre conversation (abort du run en cours par construction). */
   async function handleSwitch(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "switch") return;
+    const previousFocus = host.currentSessionId();
     const file = await host.sessionFileFor(message.sessionId);
     if (!file) {
       sendDirect(client, {
@@ -650,7 +782,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       return;
     }
     client.sessionId = host.currentSessionId() ?? message.sessionId;
-    ensureSubscribed(client);
+    subscribeFocused(client);
+    // E2 : la voix du fil quitté s'arrête net (jamais de double voix).
+    cancelTtsOnFocusChange(previousFocus);
     await sendSessions(client);
     // ⚠️ Un `snapshot` à CHAQUE bascule : le client reconstruit TOUT son rendu
     // depuis le transcript du nouveau fil → aucun doublon possible.
@@ -660,6 +794,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
   /** Crée une nouvelle conversation et la rend active. */
   async function handleNew(client: ClientState): Promise<void> {
+    const previousFocus = host.currentSessionId();
     try {
       await host.newSession();
     } catch (error) {
@@ -672,7 +807,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       return;
     }
     client.sessionId = host.currentSessionId();
-    ensureSubscribed(client);
+    subscribeFocused(client);
+    cancelTtsOnFocusChange(previousFocus);
     await sendSessions(client);
     sendSnapshotForCurrent(client);
     sendPendingApprovals(client);
@@ -720,13 +856,14 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // supprimée était la conversation OUVERTE, le client retombe sur l'état vide.
     if (wasCurrent) {
       client.sessionId = undefined;
-      client.unsubscribeStream?.();
-      client.unsubscribeStream = undefined;
-      client.subscribedSession = undefined;
+      // La voix du fil supprimé s'arrête (E2).
+      cancelTtsOnFocusChange(message.sessionId);
     }
     // Nettoyage de l'épingle orpheline : la conversation mise de côté disparaît
     // de la liste, son éventuel épinglage n'a plus de sens.
     pins?.remove(message.sessionId);
+    // E2 : `sendSessions` resynchronise les abonnements ⇒ le flux de la
+    // conversation retirée est désabonné automatiquement.
     await sendSessions(client);
     if (wasCurrent) {
       // Snapshot VIDE : le rendu du fil est réinitialisé, plus rien à l'écran.
@@ -808,7 +945,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       });
       return;
     }
-    ensureSubscribed(client);
+    subscribeFocused(client);
     let handle;
     try {
       handle = host.send(
@@ -916,7 +1053,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   function onConnection(ws: WebSocket): void {
-    const client: ClientState = { ws, lastSeq: 0, greeted: false };
+    const client: ClientState = {
+      ws,
+      lastSeq: 0,
+      greeted: false,
+      subscriptions: new Map(),
+    };
     clients.add(client);
     logger.debug("ws.client.connected", { clients: clients.size });
 
@@ -934,7 +1076,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       });
     });
     ws.on("close", () => {
-      client.unsubscribeStream?.();
+      // E2 : on retire TOUS les abonnements du client (multiplexage).
+      for (const unsubscribe of client.subscriptions.values()) unsubscribe();
+      client.subscriptions.clear();
       clients.delete(client);
       logger.debug("ws.client.closed", { clients: clients.size });
     });
@@ -995,6 +1139,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         httpServer = undefined;
       }
       for (const client of clients) {
+        for (const unsubscribe of client.subscriptions.values()) unsubscribe();
+        client.subscriptions.clear();
         sendDirect(client, { type: "bye", reason: "server_shutdown" });
         try {
           client.ws.close(1001, "server_shutdown");

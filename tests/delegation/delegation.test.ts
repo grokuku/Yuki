@@ -5,9 +5,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  ACTIVITY_DETAIL_MAX,
+  DISPATCH_NOTE,
   REPORT_HEADER,
   clampDeadline,
   createDelegationService,
+  excerptForActivity,
   truncateToBytes,
   type DelegateOutcome,
   type ModelAvailability,
@@ -32,12 +35,15 @@ interface Harness {
   reports: Array<{ sessionId: string; text: string; origin?: string; jobId?: string }>;
   events: PiEvent[];
   service: ReturnType<typeof createDelegationService>;
+  /** Livre immédiatement les lots de résultats en attente (E4). */
+  flush: () => void;
 }
 
 function makeHarness(options: {
   available?: boolean;
   maxConcurrent?: number;
   maxQueue?: number;
+  resultBatchWindowMs?: number;
 } = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), "yuki-deleg-"));
   tempDirs.push(dir);
@@ -63,6 +69,9 @@ function makeHarness(options: {
     logger: createLogger({ level: "error", sink: () => {}, secretValues: [] }),
     idleTimeoutMs: 120_000,
     totalTimeoutMs: 1_200_000,
+    ...(options.resultBatchWindowMs !== undefined
+      ? { resultBatchWindowMs: options.resultBatchWindowMs }
+      : {}),
   });
   service.subscribe((event) => events.push(event));
   service.setWaker({
@@ -76,14 +85,138 @@ function makeHarness(options: {
       return { runId: "run-report-1" };
     },
   });
-  return { store, queue, worker, reports, events, service };
+  return {
+    store,
+    queue,
+    worker,
+    reports,
+    events,
+    service,
+    flush: () => service.flushPendingReports(),
+  };
 }
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describe("delegation — deadline & inline/pending", () => {
+describe("delegation — E4 : non bloquant par défaut (ticket immédiat)", () => {
+  it("sans `background` : rend la main IMMÉDIATEMENT avec un ticket de LANCEMENT", async () => {
+    const h = makeHarness();
+    h.worker.push({ manual: true });
+    const started = Date.now();
+    const outcome = await h.service.delegate({
+      task: "tâche longue",
+      lightSessionId: "sess-1",
+      parentRunId: "run-1",
+    });
+    const elapsed = Date.now() - started;
+    // ⚠️ PREUVE DE NON-BLOCAGE : le tour rend la main sans attendre le sous-agent.
+    expect(elapsed).toBeLessThan(100);
+    expect(outcome.status).toBe("dispatched");
+    if (outcome.status !== "dispatched") throw new Error("ticket attendu");
+    // Le ticket ANNONCE un lancement ; il n'affirme AUCUN résultat.
+    expect(outcome.job_id).toEqual(expect.any(String));
+    expect(outcome.note).toBe(DISPATCH_NOTE);
+    expect(outcome.note).toMatch(/lancée/i);
+    expect(outcome).not.toHaveProperty("result");
+
+    // Le job est BIEN lancé et tourne (non terminal) ; il n'est pas encore rapporté.
+    const record = h.store.get(outcome.job_id);
+    expect(record?.status).toBe("running");
+    expect(h.reports).toHaveLength(0);
+
+    // Une fois la tâche réellement terminée, le résultat est réinjecté (un tour).
+    h.worker.finishLast({ status: "completed", text: "résultat final" });
+    await wait(10);
+    h.flush();
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]?.text).toContain("résultat final");
+  });
+
+  it("`background: \"false\"` (chaîne) repasse en mode bloquant", async () => {
+    const h = makeHarness();
+    h.worker.push({ autoMs: 5, result: { status: "completed", text: "ok" } });
+    const outcome = await h.service.delegate({
+      task: "tâche",
+      lightSessionId: "sess-1",
+      // Un modèle envoie parfois la chaîne "false" : elle ne doit PAS rester
+      // en tâche de fond.
+      background: false,
+    });
+    expect(outcome.status).toBe("completed");
+  });
+
+  it("E4 — LOTISSEMENT : deux résultats proches ⇒ UN SEUL tour (fenêtre fixe 30 ms)", async () => {
+    const h = makeHarness({ resultBatchWindowMs: 30 });
+    h.worker.push({ manual: true });
+    h.worker.push({ manual: true });
+    const a = await h.service.delegate({ task: "tâche A", lightSessionId: "sess-1" });
+    const b = await h.service.delegate({ task: "tâche B", lightSessionId: "sess-1" });
+    expect(a.status).toBe("dispatched");
+    expect(b.status).toBe("dispatched");
+
+    // Les deux terminent dans la même fenêtre : un seul lot doit partir.
+    const aId = a.status === "dispatched" ? a.job_id : "";
+    const bId = b.status === "dispatched" ? b.job_id : "";
+    h.worker.finish(0, { status: "completed", text: "résultat A" });
+    h.worker.finish(1, { status: "completed", text: "résultat B" });
+    await wait(5);
+    // Avant l'échéance de la fenêtre : rien n'est encore parti.
+    expect(h.reports).toHaveLength(0);
+
+    await wait(60);
+    // ⚠️ PREUVE DU LOTISSEMENT : 2 résultats ⇒ 1 SEUL tour.
+    expect(h.reports).toHaveLength(1);
+    const prompt = h.reports[0]?.text ?? "";
+    expect(prompt.startsWith(REPORT_HEADER)).toBe(true);
+    expect(prompt).toContain("résultat A");
+    expect(prompt).toContain("résultat B");
+    expect(prompt).toContain("2 tâches terminées");
+    expect(h.store.get(aId)?.notified).toBe(true);
+    expect(h.store.get(bId)?.notified).toBe(true);
+  });
+
+  it("E4 — le lot n'est PAS repoussé (≠ debounce) : la fenêtre part du PREMIER résultat", async () => {
+    const h = makeHarness({ resultBatchWindowMs: 40 });
+    h.worker.push({ manual: true });
+    h.worker.push({ manual: true });
+    const a = await h.service.delegate({ task: "A", lightSessionId: "sess-1" });
+    const b = await h.service.delegate({ task: "B", lightSessionId: "sess-1" });
+    void a;
+    void b;
+    h.worker.finish(0, { status: "completed", text: "A fini" });
+    // Le second arrive APRÈS le début de la fenêtre (25 ms < 40 ms).
+    await wait(25);
+    h.worker.finish(1, { status: "completed", text: "B fini" });
+    // La fenêtre n'est PAS repoussée : le lot part ~40 ms après le 1er.
+    await wait(30);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]?.text).toContain("A fini");
+    expect(h.reports[0]?.text).toContain("B fini");
+  });
+
+  it("E5 — hasPendingWork : vrai tant qu'un job n'est pas terminal ET tant que le lot n'est pas livré", async () => {
+    const h = makeHarness();
+    h.worker.push({ manual: true });
+    const outcome = await h.service.delegate({
+      task: "tâche",
+      lightSessionId: "sess-1",
+    });
+    expect(h.service.hasPendingWork("sess-1")).toBe(true);
+    expect(h.service.hasPendingWork("autre")).toBe(false);
+
+    h.worker.finishLast({ status: "completed", text: "fini" });
+    await wait(10);
+    // Terminé mais résultat PAS encore livré ⇒ toujours du travail en attente.
+    expect(h.service.hasPendingWork("sess-1")).toBe(true);
+    h.flush();
+    expect(h.service.hasPendingWork("sess-1")).toBe(false);
+    void outcome;
+  });
+});
+
+describe("delegation — deadline & inline/pending (mode bloquant explicite)", () => {
   it("job terminé avant la deadline → INLINE avec usage", async () => {
     const h = makeHarness();
     h.worker.push({
@@ -96,6 +229,7 @@ describe("delegation — deadline & inline/pending", () => {
       task: "tâche",
       lightSessionId: "sess-1",
       parentRunId: "run-1",
+      background: false,
       deadlineMs: 1500,
     });
     expect(outcome).toMatchObject({
@@ -110,9 +244,10 @@ describe("delegation — deadline & inline/pending", () => {
     const [record] = h.store.list();
     expect(record?.status).toBe("completed");
     expect(record?.result.partial).toBe("brouillon");
-    // Rapport émis et journalisé (notified).
+    // Rapport émis et journalisé (notified) — à la livraison du lot.
+    h.flush();
     expect(h.reports).toHaveLength(1);
-    expect(record?.notified).toBe(true);
+    expect(h.store.get(record!.id)?.notified).toBe(true);
   });
 
   it("deadline courte → {pending, job_id} immédiat, puis le job finit en arrière-plan", async () => {
@@ -122,6 +257,7 @@ describe("delegation — deadline & inline/pending", () => {
     const outcome = await h.service.delegate({
       task: "tâche longue",
       lightSessionId: "sess-1",
+      background: false,
       deadlineMs: 200,
     });
     expect(outcome).toMatchObject({ status: "pending", deadline_ms: 200 });
@@ -133,6 +269,7 @@ describe("delegation — deadline & inline/pending", () => {
     h.worker.finishLast({ status: "completed", text: "terminé après coup" });
     await wait(20);
     expect(h.store.get(jobId)?.status).toBe("completed");
+    h.flush();
     expect(h.reports).toHaveLength(1);
     expect(h.reports[0]?.text).toContain(REPORT_HEADER);
   });
@@ -154,6 +291,7 @@ describe("delegation — deadline & inline/pending", () => {
     const first = h.service.delegate({
       task: "occupant",
       lightSessionId: "sess-1",
+      background: false,
       deadlineMs: 200,
     });
     const second = await h.service.delegate({
@@ -171,6 +309,7 @@ describe("delegation — deadline & inline/pending", () => {
     const outcome = await h.service.delegate({
       task: "annulable",
       lightSessionId: "sess-1",
+      background: false,
       deadlineMs: 200,
     });
     const jobId = outcome.status === "pending" ? outcome.job_id : "";
@@ -179,6 +318,7 @@ describe("delegation — deadline & inline/pending", () => {
     await wait(20);
     expect(h.store.get(jobId)?.status).toBe("cancelled");
     // Un job annulé n'est pas rapporté.
+    h.flush();
     expect(h.reports).toHaveLength(0);
   });
 });
@@ -191,8 +331,10 @@ describe("delegation — instrumentation & report", () => {
       task: "tâche",
       lightSessionId: "sess-1",
       parentRunId: "run-42",
+      background: false,
       deadlineMs: 1500,
     });
+    h.flush();
     const phases = h.events.filter((e) => e.type === "phase");
     const stages = phases.map((p) => (p.type === "phase" ? p.stage : ""));
     expect(stages).toEqual(
@@ -222,6 +364,63 @@ describe("delegation — instrumentation & report", () => {
     expect(jobEvents.length).toBeGreaterThanOrEqual(3);
   });
 
+  it("le mode tâche de fond émet l'étage `delegate_dispatched`", async () => {
+    const h = makeHarness();
+    h.worker.push({ manual: true });
+    await h.service.delegate({ task: "tâche", lightSessionId: "sess-1" });
+    const stages = h.events
+      .filter((e) => e.type === "phase")
+      .map((p) => (p.type === "phase" ? p.stage : ""));
+    expect(stages).toContain("delegate_dispatched");
+    expect(stages).not.toContain("delegate_inline_wait");
+  });
+
+  it("E3 — émet l'ACTIVITÉ du sous-agent (étapes + progression, corrélée au job)", async () => {
+    const h = makeHarness();
+    h.worker.push({
+      autoMs: 5,
+      firstToken: true,
+      partial: "travail partiel du lourd",
+      result: { status: "completed", text: "ok" },
+    });
+    await h.service.delegate({
+      task: "analyse",
+      lightSessionId: "sess-1",
+      parentRunId: "run-42",
+      background: false,
+      deadlineMs: 1500,
+    });
+    const activities = h.events.filter((e) => e.type === "job_activity");
+    const stages = activities.map((e) => (e.type === "job_activity" ? e.stage : ""));
+    expect(stages).toEqual(
+      expect.arrayContaining([
+        "job_started",
+        "job_first_token",
+        "job_progress",
+        "job_finished",
+      ]),
+    );
+    // TOUTES rattachées à la session LÉGÈRE et à UN job identifié.
+    for (const activity of activities) {
+      if (activity.type !== "job_activity") continue;
+      expect(activity.sessionId).toBe("sess-1");
+      expect(activity.jobId).toEqual(expect.any(String));
+      expect(activity.at).toEqual(expect.any(String));
+    }
+    const started = activities.find(
+      (e) => e.type === "job_activity" && e.stage === "job_started",
+    );
+    expect(started).toMatchObject({ task: "analyse" });
+    const progress = activities.find(
+      (e) => e.type === "job_activity" && e.stage === "job_progress",
+    );
+    expect(progress).toMatchObject({ detail: "travail partiel du lourd" });
+    const finished = activities.find(
+      (e) => e.type === "job_activity" && e.stage === "job_finished",
+    );
+    expect(finished).toMatchObject({ status: "completed" });
+  });
+
   it("le report porte l'en-tête, le job_id et n'expose aucun thinking", async () => {
     const h = makeHarness();
     h.worker.push({
@@ -231,8 +430,10 @@ describe("delegation — instrumentation & report", () => {
     await h.service.delegate({
       task: "tâche",
       lightSessionId: "sess-1",
+      background: false,
       deadlineMs: 1500,
     });
+    h.flush();
     const report = h.reports[0];
     expect(report).toBeDefined();
     expect(report?.origin).toBe("job_report");
@@ -252,8 +453,10 @@ describe("delegation — instrumentation & report", () => {
     await h.service.delegate({
       task: "tâche",
       lightSessionId: "sess-1",
+      background: false,
       deadlineMs: 1500,
     });
+    h.flush();
     const [record] = h.store.list();
     expect(record?.status).toBe("failed");
     expect(h.reports[0]?.text).toContain("moitié faite");
@@ -276,5 +479,14 @@ describe("delegation — helpers", () => {
     expect(truncated).toBe(true);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(2);
     expect(truncateToBytes("ok", 10)).toEqual({ text: "ok", truncated: false });
+  });
+
+  it("excerptForActivity tient sur une ligne et borne la longueur", () => {
+    expect(excerptForActivity("  a\n\nb\t c ")).toBe("a b c");
+    const long = excerptForActivity("x".repeat(500));
+    expect(long.length).toBeLessThanOrEqual(ACTIVITY_DETAIL_MAX);
+    expect(long.endsWith("…")).toBe(true);
+    const short = "y".repeat(ACTIVITY_DETAIL_MAX);
+    expect(excerptForActivity(short)).toBe(short);
   });
 });

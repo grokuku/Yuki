@@ -379,6 +379,22 @@ describe("plusieurs demandes en attente — aucune n'écrase l'autre", () => {
   });
 });
 
+describe("E2 — plusieurs fils : la fenêtre dit de QUELLE conversation vient la demande", () => {
+  it("étiquette le fil fourni, et n'en pose AUCUNE quand il n'est pas connu", () => {
+    const { layer } = setup();
+    layer.show(approval({ id: "avec" }), { conversation: "Fil B" });
+    const chip = windows()[0].querySelector(".approval__conversation");
+    expect(chip).not.toBeNull();
+    if (!chip) throw new Error("étiquette de conversation attendue");
+    expect(textOf(chip)).toContain("Fil B");
+    // Sans conversation connue : aucune étiquette (jamais une invention).
+    layer.show(approval({ id: "sans" }));
+    const other = windows().find((w) => w.getAttribute("data-approval-id") === "sans");
+    expect(other?.querySelector(".approval__conversation")).toBeNull();
+    layer.reset();
+  });
+});
+
 describe("commande longue — REPLI / DÉPLI (volume masqué mais ANNONCÉ)", () => {
   const longCommand = Array.from({ length: 40 }, (_, i) => `echo ligne ${i + 1}`).join("\n");
 

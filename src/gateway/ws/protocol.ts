@@ -102,6 +102,29 @@ export type ServerMessage =
       runId?: string;
     }
   | {
+      /**
+       * E3 — ACTIVITÉ d'un sous-agent (progression/étapes), affichée dans le fil
+       * de la conversation qui l'a lancé. C'est un ÉTAT TEMPORAIRE : trame de
+       * CONTRÔLE (aucun `seq` consommé), JAMAIS bufferisée, donc jamais dans le
+       * rejeu, le snapshot, le transcript ou la mémoire.
+       *
+       * ⚠️ MUETTE PAR CONSTRUCTION : le transport ne la passe JAMAIS à
+       * `routeTtsEvent` (seul alimentateur du moteur TTS).
+       */
+      type: "job_activity";
+      jobId: string;
+      /** Étape normalisée (`job_started`/`job_first_token`/`job_progress`/`job_finished`). */
+      stage: string;
+      /** Intitulé de la tâche (étape `job_started`). */
+      task?: string;
+      /** Extrait de progression du sous-agent (donnée d'affichage, jamais TTS). */
+      detail?: string;
+      /** Statut terminal (étape `job_finished`). */
+      status?: PiJobTerminalStatus;
+      /** Instant ISO de l'étape. */
+      at: string;
+    }
+  | {
       type: "run_summary";
       runId: string;
       ttftMs?: number;

@@ -5,8 +5,10 @@
  * ⚠️ SEUL endroit où `typebox` est importé. Les outils reçoivent un port
  * `DelegateServicePort` pur : aucune logique de délégation ici.
  *
- * `delegate` démarre le job IMMÉDIATEMENT en arrière-plan puis attend, borné par
- * `deadline_ms` (défaut 1500, bornes 200–60000, clamp, non numérique → défaut).
+ * `delegate` démarre le job IMMÉDIATEMENT en arrière-plan puis rend la main
+ * IMMÉDIATEMENT (E4, défaut non bloquant : un ticket d'accusé de lancement).
+ * `background:false` repasse à une attente inline bornée par `deadline_ms`
+ * (défaut 1500, bornes 200–60000, clamp, non numérique → défaut).
  * Le job n'est JAMAIS annulé du fait de la deadline.
  */
 
@@ -79,6 +81,15 @@ function coerceDeadline(value: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * E4 — Normalise `background` : DÉFAUT = `true` (tâche de fond non bloquante).
+ * Seul un `false` explicite (booléen OU chaîne "false", comme l'envoie parfois
+ * un modèle) repasse en mode bloquant — tout le reste reste en tâche de fond.
+ */
+function normalizeBackground(value: unknown): boolean {
+  return value !== false && value !== "false";
+}
+
 function summarizeJob(record: JobRecord): Record<string, unknown> {
   return {
     job_id: record.id,
@@ -118,9 +129,13 @@ export function createDelegateTools(
     label: "Déléguer une tâche",
     description:
       "Confie une tâche complexe à un worker lourd qui s'exécute en arrière-plan. " +
-      "Renvoie le résultat inline si la tâche finit dans la deadline, sinon un " +
-      "identifiant de job à suivre avec job_status. La tâche n'est jamais annulée.",
-    promptSnippet: "delegate(task, context?, deadline_ms?) — tâche lourde en arrière-plan",
+      "Par défaut (tâche de fond), rend la main IMMÉDIATEMENT avec un accusé de " +
+      "lancement : le résultat te sera renvoyé plus tard, quand la tâche sera " +
+      "RÉELLEMENT terminée. N'affirme jamais qu'une tâche déléguée est terminée " +
+      "avant d'avoir reçu son résultat. " +
+      "background=false force une attente inline bornée par deadline_ms.",
+    promptSnippet:
+      "delegate(task, context?, background?, deadline_ms?) — tâche lourde en arrière-plan",
     parameters: Type.Object({
       task: Type.String({
         minLength: 1,
@@ -133,25 +148,39 @@ export function createDelegateTools(
           description: "Contexte facultatif pour la tâche.",
         }),
       ),
+      background: Type.Optional(
+        Type.Boolean({
+          description:
+            "true (défaut) = tâche de fond non bloquante (ticket immédiat). " +
+            "false = attente inline bornée par deadline_ms.",
+        }),
+      ),
       deadline_ms: Type.Optional(
         Type.Union([Type.Integer(), Type.String(), Type.Null()], {
           description:
-            "Durée max d'attente inline en ms (défaut 1500, bornée 200–60000).",
+            "Durée max d'attente inline en ms (défaut 1500, bornée 200–60000). " +
+            "Ignorée en tâche de fond (background=true).",
         }),
       ),
     }),
     execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-      const context = config.tracker.current() ?? undefined;
-      const sessionId =
-        context?.sessionId ?? sessionIdFromContext(ctx) ?? "";
+      // ⚠️ E0 : plusieurs conversations peuvent tourner en parallèle. On cible
+      // le contexte de run de LA session qui exécute cet appel (jamais « le
+      // dernier run posé », qui appartiendrait à un autre fil).
+      const sessionId = sessionIdFromContext(ctx) ?? "";
+      const context = config.tracker.current(sessionId) ?? undefined;
       const deadlineMs = coerceDeadline(
         (params as { deadline_ms?: unknown }).deadline_ms,
+      );
+      const background = normalizeBackground(
+        (params as { background?: unknown }).background,
       );
       const task = (params as { task: string }).task;
       const contextText = (params as { context?: string }).context;
       const outcome: DelegateOutcome = await config.service.delegate({
         task,
-        lightSessionId: sessionId,
+        lightSessionId: context?.sessionId ?? sessionId,
+        background,
         ...(contextText !== undefined ? { context: contextText } : {}),
         ...(deadlineMs !== undefined ? { deadlineMs } : {}),
         ...(context?.runId ? { parentRunId: context.runId } : {}),

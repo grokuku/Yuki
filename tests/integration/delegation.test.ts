@@ -67,9 +67,12 @@ describe("intégration — report du léger", () => {
       task: "tâche complexe",
       lightSessionId: "sess-light",
       parentRunId: "run-light-1",
+      background: false,
       deadlineMs: 1500,
     });
     expect(outcome.status).toBe("completed");
+    // Livraison immédiate du lot de résultats (fenêtre 3 s par défaut).
+    service.flushPendingReports();
     await wait(20);
 
     // Le léger a été réveillé par un prompt SYNTHÉTIQUE (origine `job_report`).
