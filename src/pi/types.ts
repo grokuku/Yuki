@@ -19,6 +19,7 @@ import type { LibrarianShotView, LibrarianShotsPort } from "../librarian/shots.j
 import type { HeritagePort } from "../memory/heritage.js";
 import type { MemoryPort } from "../memory/types.js";
 import type { PersonalityPort } from "../personality/types.js";
+import type { RulesPort } from "../rules/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
 /** Niveaux de raisonnement acceptés par le SDK (repris tels quels). */
@@ -132,6 +133,13 @@ export interface PiHostOptions {
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).
    */
   llmAvailable?: boolean | (() => boolean);
+  /**
+   * RÈGLES STRICTES de Yuki (première base du prompt de chaque tour). Présent ⇒
+   * une extension SDK est enregistrée AVANT la personnalité : le bloc de règles
+   * est concaténé au prompt AVANT la personnalité, la mémoire, l'annuaire des
+   * agents et le signal d'archive. Absent ⇒ aucune règle (host nu, tests).
+   */
+  rules?: RulesPort;
   /**
    * Personnalité de Yuki (base du prompt de chaque tour). Présent ⇒ une
    * extension SDK est enregistrée EN PREMIER sur la session légère : le bloc de

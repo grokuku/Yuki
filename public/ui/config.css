@@ -857,6 +857,32 @@
   overflow: auto;
 }
 
+/* Bloc « Règles strictes » : VISUELLEMENT DISTINCT du reste du panneau (encadré
+   dédié + liseré d'accent), pour marquer que ce sont des consignes posées par
+   l'utilisateur, injectées AVANT la personnalité. */
+.personality-rules {
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.personality-rules__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.personality-rules__editor {
+  min-height: 200px;
+}
+
 /* Bloc « Mémoire durable » : VISUELLEMENT DISTINCT du formulaire de personnalité
    (encadré dédié + liseré de danger), pour éviter tout clic accidentel. */
 .personality-memory {

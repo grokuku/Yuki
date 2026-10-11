@@ -30,6 +30,11 @@ import {
   type PersonalityApiDeps,
 } from "./routes/personality.js";
 import {
+  handleRulesRequest,
+  isRulesPath,
+  type RulesApiDeps,
+} from "./routes/rules.js";
+import {
   handleMemoryRequest,
   isMemoryPath,
   type MemoryApiDeps,
@@ -91,6 +96,11 @@ export interface AppContext {
   agents?: AgentsApiDeps;
   /** API de la personnalité. Absente ⇒ `/api/self/personality*` → 404. */
   personality?: PersonalityApiDeps;
+  /**
+   * API des règles strictes. Absente ⇒ `/api/self/rules*` → 404. ⚠️ Interface
+   * uniquement (réservée à l'utilisateur ; le modèle ne peut pas les écrire).
+   */
+  rules?: RulesApiDeps;
   /** API d'administration de la mémoire. Absente ⇒ `/api/memory*` → 404. */
   memory?: MemoryApiDeps;
   /**
@@ -372,6 +382,33 @@ async function handlePersonalityHttp(
   );
 }
 
+/** Traite une requête de l'API des règles strictes (corps JSON borné). */
+async function handleRulesHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: RulesApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "PUT" || method === "POST") {
+    body = await readBody(req).catch(() => "");
+  }
+  const response = handleRulesRequest({
+    method,
+    path,
+    headers: req.headers,
+    body,
+    deps,
+  });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Traite une requête d'administration de la mémoire (corps JSON borné). */
 async function handleMemoryHttp(
   req: IncomingMessage,
@@ -430,6 +467,7 @@ export function createApp(context: AppContext): RequestListener {
     tts,
     agents,
     personality,
+    rules,
     memory,
     heritage,
     captures,
@@ -465,6 +503,27 @@ export function createApp(context: AppContext): RequestListener {
       void handleAgentsHttp(req, res, path, method, headOnly, agents).catch(
         (error: unknown) => {
           agents.logger.error("agents.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (rules && isRulesPath(path)) {
+      void handleRulesHttp(req, res, path, method, headOnly, rules).catch(
+        (error: unknown) => {
+          rules.logger.error("rules.request.failed", {
             error: error instanceof Error ? error.message : String(error),
             path,
           });

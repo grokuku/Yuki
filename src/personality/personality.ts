@@ -1,11 +1,16 @@
 /**
  * Personnalité de Yuki — RÈGLES PURES (bornes, format du bloc injecté).
  *
+ * La borne et le format du bloc sont PROPRES à la personnalité ; le mécanisme
+ * de bornage lui-même est partagé (`clampText`, `src/state/`).
+ *
  * La personnalité est la **BASE** du prompt de chaque tour : elle vit dans un
  * fichier SÉPARÉ (jamais dans `prompts.light`, la base de sûreté) et est
  * encadrée par un délimiteur explicite avant d'être concaténée au prompt du
  * tour.
  */
+
+import { clampText } from "../state/text-document-store.js";
 
 /** Borne DURE du contenu de personnalité (décision utilisateur : 8 000 caractères). */
 export const PERSONALITY_MAX_CHARS = 8_000;
@@ -50,15 +55,7 @@ export function clampPersonalityText(
   text: string,
   max: number = PERSONALITY_MAX_CHARS,
 ): ClampedPersonality {
-  const codePoints = Array.from(text);
-  if (codePoints.length <= max) {
-    return { text, chars: codePoints.length, truncated: false };
-  }
-  return {
-    text: codePoints.slice(0, max).join(""),
-    chars: max,
-    truncated: true,
-  };
+  return clampText(text, max);
 }
 
 /**

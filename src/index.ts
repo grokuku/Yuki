@@ -105,6 +105,7 @@ import {
   MemoryStore,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
+import { RulesStore } from "./rules/index.js";
 import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, SessionPinStore, type PiHost } from "./pi/index.js";
 import {
   AudioCppClient,
@@ -651,6 +652,22 @@ async function main(): Promise<void> {
     chars: personalityStore.read().chars,
   });
 
+  // --- Règles strictes de Yuki (consignes posées par l'utilisateur) ---------
+  // Fichier SÉPARÉ (voisin de personality.md), édité UNIQUEMENT par
+  // l'utilisateur ; Yuki ne peut pas les modifier. Comme la personnalité, le
+  // store est créé AVANT la porte GPU : l'API `/api/self/rules` reste
+  // disponible en mode dégradé.
+  const rulesStore = new RulesStore({
+    path: env.rulesPath,
+    logger,
+  });
+  logger.info("rules.ready", {
+    path: rulesStore.filePath,
+    history: rulesStore.historyPath,
+    journal: rulesStore.journalFilePath,
+    chars: rulesStore.read().chars,
+  });
+
   // --- Jobs, délégation, PiHost (uniquement si la porte est passée) ---------
   let piStatus: "starting" | "ready" | "error" = "starting";
   let sessionsCount = 0;
@@ -867,6 +884,7 @@ async function main(): Promise<void> {
           }
         : {}),
       personality: personalityStore,
+      rules: rulesStore,
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,
@@ -1006,6 +1024,7 @@ async function main(): Promise<void> {
       getSubsystems,
       config: { runtime: config, logger },
       personality: { store: personalityStore, logger },
+      rules: { store: rulesStore, logger },
       // Administration de la mémoire (archivage récupérable) : disponible
       // uniquement quand le service mémoire existe (porte passée).
       ...(memoryService ? { memory: { admin: memoryService, logger } } : {}),

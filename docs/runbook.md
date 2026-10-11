@@ -76,6 +76,10 @@ docker volume rm yuki-state
 # Inspecter les fichiers de configuration
 #   /data/pi/agent/models.json    : GÉNÉRÉ au démarrage (fournisseurs/modèles)
 #   /data/state/config.json       : store du paramétrage de la page /config (0600)
+#   /data/state/personality.md    : personnalité de Yuki (éditable dans /config)
+#   /data/state/rules.md          : RÈGLES STRICTES, éditées par VOUS seul dans
+#                                   /config (Yuki ne peut pas les modifier ;
+#                                   surcharges YUKI_PERSONALITY_PATH / YUKI_RULES_PATH)
 docker compose exec gateway sh -c 'cat /data/pi/agent/models.json'
 docker compose exec gateway sh -c 'cat /data/state/config.json'
 ```

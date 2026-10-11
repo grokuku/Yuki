@@ -74,6 +74,7 @@ import { createLightRuntime } from "./sdk/session-factory.js";
 import { createAgentRosterExtensionFactory } from "./sdk/agent-roster-extension.js";
 import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
 import { createPersonalityExtensionFactory } from "./sdk/personality-extension.js";
+import { createRulesExtensionFactory } from "./sdk/rules-extension.js";
 import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
 import { createHeritageTools } from "./sdk/heritage-tools.js";
 import { createLibrarianTools } from "./sdk/librarian-tools.js";
@@ -255,20 +256,30 @@ function makeRunItem(
 /**
  * Construit la liste ORDONNÉE des extensions INLINE injectées à chaque tour.
  *
- * L'ORDRE est le contrat : **personnalité (base) → mémoire → annuaire des
- * agents → heritage**. Le SDK chaîne les extensions qui renvoient
- * `systemPrompt` ; chacune CONCATÈNE au prompt courant, donc un ordre inversé
- * ferait passer un bloc APRÈS un autre sans l'écraser (mais changerait le sens
- * donné au modèle). Cette fonction est extraite pour être VERROUILLÉE par un
- * test d'ordre (voir `tests/pi/personality-extension.test.ts`).
+ * L'ORDRE est le contrat : **règles (consignes de l'utilisateur) → personnalité
+ * (base) → mémoire → annuaire des agents → heritage**. Le SDK chaîne les
+ * extensions qui renvoient `systemPrompt` ; chacune CONCATÈNE au prompt courant,
+ * donc un ordre inversé ferait passer un bloc APRÈS un autre sans l'écraser
+ * (mais changerait le sens donné au modèle). Cette fonction est extraite pour
+ * être VERROUILLÉE par un test d'ordre (voir
+ * `tests/pi/personality-extension.test.ts`).
  */
 export function buildInlineExtensions(
   options: Pick<
     PiHostOptions,
-    "personality" | "memory" | "directory" | "heritage" | "logger"
+    "rules" | "personality" | "memory" | "directory" | "heritage" | "logger"
   >,
 ): InlineExtension[] {
   const extensionFactories: InlineExtension[] = [];
+  if (options.rules) {
+    // EN PREMIER : les règles strictes de l'utilisateur précèdent tout le reste
+    // (priorité règles > personnalité > mémoire).
+    extensionFactories.push(
+      createRulesExtensionFactory(options.rules, {
+        logger: options.logger,
+      }),
+    );
+  }
   if (options.personality) {
     extensionFactories.push(
       createPersonalityExtensionFactory(options.personality, {
@@ -863,8 +874,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     }
 
     // Extensions INLINE, dans l'ORDRE D'APPLICATION voulu du prompt du tour :
-    // PERSONNALITÉ (base) → MÉMOIRE → ANNUAIRE des agents → HERITAGE (voir
-    // `buildInlineExtensions`, verrouillé par un test d'ordre).
+    // RÈGLES (consignes de l'utilisateur) → PERSONNALITÉ (base) → MÉMOIRE →
+    // ANNUAIRE des agents → HERITAGE (voir `buildInlineExtensions`, verrouillé
+    // par un test d'ordre).
     const extensionFactories = buildInlineExtensions(options);
 
     runtime = await createLightRuntime({

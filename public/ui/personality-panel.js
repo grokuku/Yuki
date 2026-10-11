@@ -90,6 +90,20 @@ const HERITAGE_HELP = [
     "modèle à la demande.",
 ];
 
+/**
+ * Rappel VISIBLE du statut des règles strictes : elles sont écrites par
+ * l'utilisateur, Yuki ne peut pas les modifier, et elles priment sur le reste.
+ * Aucun style inline (CSP stricte).
+ */
+const RULES_HELP = [
+  "Ce sont des CONSIGNES que vous posez sur Yuki. Elles sont injectées AVANT sa personnalité et " +
+    "priment en cas de conflit.",
+  "⚠️ Yuki NE PEUT PAS les modifier : elle ne dispose d'aucun outil pour écrire ce fichier, et rien " +
+    "dans l'interface ne lui permet de le faire. Vous seul les éditez ici.",
+  "Le fichier reste lisible à la main (rules.md, à côté de personality.md dans le volume state). " +
+    "Chaque version enregistrée est conservée (20 dernières).",
+];
+
 export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
   const state = {
     text: "",
@@ -105,6 +119,18 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     memoryArchiveDir: "",
     memoryStatus: "",
     memoryLoaded: false,
+    // Règles strictes (éditées UNIQUEMENT par l'utilisateur) — séparées.
+    rules: {
+      text: "",
+      chars: 0,
+      maxChars: 8000,
+      truncated: false,
+      history: [],
+      error: "",
+      status: "",
+      loaded: false,
+      editValue: "",
+    },
     // Archive « vie antérieure » (édition/ajout/suppression) — chargée séparément.
     heritage: {
       loaded: false,
@@ -178,6 +204,79 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
       state.heritage.available = false;
     }
     render();
+  }
+
+  /** Charge les RÈGLES STRICTES (contenu + historique). */
+  async function loadRules() {
+    state.rules.error = "";
+    try {
+      const body = await HolafFetch.get("/api/self/rules", { headers: JSON_HEADERS });
+      state.rules.text = typeof body?.text === "string" ? body.text : "";
+      state.rules.chars =
+        typeof body?.chars === "number" ? body.chars : codePointLength(state.rules.text);
+      state.rules.maxChars =
+        typeof body?.maxChars === "number" ? body.maxChars : state.rules.maxChars;
+      state.rules.truncated = Boolean(body?.truncated);
+      state.rules.history = Array.isArray(body?.history) ? body.history : [];
+      state.rules.loaded = true;
+    } catch (error) {
+      state.rules.error = apiMessage(error, "Impossible de charger les règles.");
+    }
+    render();
+  }
+
+  function updateRulesCounter() {
+    const length = codePointLength(state.rules.editValue);
+    if (state.rulesCounter) {
+      state.rulesCounter.textContent = `${length} / ${state.rules.maxChars} caractères`;
+    }
+    const near = length >= state.rules.maxChars * NEAR_LIMIT_RATIO;
+    const over = length > state.rules.maxChars;
+    state.rulesCounter?.classList.toggle("personality-counter--warn", near && !over);
+    state.rulesCounter?.classList.toggle("personality-counter--over", over);
+    if (state.rulesSaveButton) state.rulesSaveButton.disabled = !state.rules.loaded;
+  }
+
+  async function saveRules() {
+    state.rules.status = "Enregistrement…";
+    state.rulesStatusEl.textContent = state.rules.status;
+    try {
+      const body = await HolafFetch.put("/api/self/rules", {
+        headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "rules-save" },
+        body: { text: state.rules.editValue },
+      });
+      state.rules.truncated = Boolean(body?.truncated);
+      state.rules.status = body?.truncated
+        ? `Enregistré, mais TRONQUÉ à ${body.maxChars ?? state.rules.maxChars} caractères (borne atteinte).`
+        : "Enregistré. Les règles seront relues au prochain tour.";
+      await loadRules();
+      state.rulesStatusEl.textContent = state.rules.status;
+    } catch (error) {
+      state.rules.status = apiMessage(error, "Échec de l'enregistrement.");
+      state.rulesStatusEl.textContent = state.rules.status;
+    }
+  }
+
+  async function revertRules() {
+    const confirmed = await HolafModal.confirm(
+      "Revenir à la version précédente des règles ?",
+      "Le contenu actuel sera remplacé par la version enregistrée juste avant.",
+      { confirmText: "Restaurer" },
+    );
+    if (!confirmed) return;
+    state.rules.status = "Restauration…";
+    state.rulesStatusEl.textContent = state.rules.status;
+    try {
+      await HolafFetch.post("/api/self/rules/revert", {
+        headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "rules-revert" },
+      });
+      state.rules.status = "Version précédente restaurée.";
+      await loadRules();
+      state.rulesStatusEl.textContent = state.rules.status;
+    } catch (error) {
+      state.rules.status = apiMessage(error, "Restauration impossible.");
+      state.rulesStatusEl.textContent = state.rules.status;
+    }
   }
 
   /** Ouvre l'éditeur sur une entrée existante (lecture fraîche de son contenu). */
@@ -403,6 +502,107 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     }
     details.append(list);
     return details;
+  }
+
+  /** Historique des VERSIONS des règles (aperçus), replié comme celui de la personnalité. */
+  function renderRulesHistory() {
+    const details = h("details", { class: "personality-history" }, [
+      h("summary", { text: `Historique des versions (${state.rules.history.length})` }),
+    ]);
+    if (state.rules.history.length === 0) {
+      details.append(
+        h("p", {
+          class: "config-helper",
+          text: "Aucune version enregistrée pour l'instant.",
+        }),
+      );
+      return details;
+    }
+    const list = h("ul", { class: "personality-history__list" });
+    for (const version of state.rules.history) {
+      list.append(
+        h("li", { class: "personality-history__item" }, [
+          h("span", { class: "personality-history__date", text: String(version.at ?? "") }),
+          h("span", { class: "personality-history__chars", text: `${version.chars ?? "?"} car.` }),
+          h("pre", { class: "personality-history__preview", text: String(version.preview ?? "") }),
+        ]),
+      );
+    }
+    details.append(list);
+    return details;
+  }
+
+  /**
+   * Bloc « Règles strictes » — DISTINCT de la personnalité (nature différente :
+   * ce sont des consignes posées sur Yuki, pas son identité). Le libellé dit
+   * explicitement que Yuki ne peut pas les modifier. Aucun style inline (CSP).
+   */
+  function renderRulesSection() {
+    const block = h("section", { class: "personality-rules" });
+    block.append(h("h3", { class: "personality-rules__title", text: "Règles strictes" }));
+
+    const help = h("ul", { class: "personality-help personality-rules__help" });
+    for (const line of RULES_HELP) help.append(h("li", { text: line }));
+    block.append(help);
+
+    if (state.rules.error) {
+      block.append(
+        h("p", { class: "config-banner config-banner--warn", text: state.rules.error }),
+      );
+    }
+
+    const textarea = h("textarea", {
+      class: "config-textarea personality-editor personality-rules__editor",
+      spellcheck: "false",
+      rows: "12",
+      maxlength: String(TEXTAREA_MAXLENGTH),
+      "aria-label": "Règles strictes de l'utilisateur",
+    });
+    textarea.value = state.rules.text;
+    state.rules.editValue = state.rules.text;
+    textarea.addEventListener("input", () => {
+      state.rules.editValue = textarea.value;
+      updateRulesCounter();
+    });
+
+    state.rulesCounter = h("span", { class: "personality-counter" });
+    state.rulesStatusEl = h("span", { class: "config-save-status", role: "status" });
+    state.rulesStatusEl.textContent = state.rules.status;
+
+    state.rulesSaveButton = h("button", {
+      class: "button",
+      type: "button",
+      text: "Enregistrer les règles",
+    });
+    state.rulesSaveButton.addEventListener("click", () => void saveRules());
+    const revertButton = h("button", {
+      class: "button button--ghost",
+      type: "button",
+      text: "Revenir à la version précédente",
+    });
+    revertButton.addEventListener("click", () => void revertRules());
+
+    const actions = h("div", { class: "config-actions" }, [
+      state.rulesSaveButton,
+      revertButton,
+    ]);
+    actions.append(state.rulesCounter);
+    actions.append(state.rulesStatusEl);
+
+    block.append(textarea, actions, renderRulesHistory());
+
+    if (state.rules.truncated) {
+      block.append(
+        h("p", {
+          class: "config-banner config-banner--warn",
+          text:
+            "Le contenu enregistré dépasse la taille maximale : il est tronqué à la lecture. " +
+            "Réduisez-le puis enregistrez à nouveau.",
+        }),
+      );
+    }
+
+    return block;
   }
 
   /**
@@ -634,6 +834,10 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
       ]),
     );
 
+    // Les règles strictes précèdent la personnalité (nature différente : des
+    // consignes posées par l'utilisateur, injectées AVANT l'identité).
+    wrap.append(renderRulesSection());
+
     const help = h("ul", { class: "personality-help" });
     for (const line of BOOTSTRAP_HELP) help.append(h("li", { text: line }));
     wrap.append(help);
@@ -695,11 +899,13 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     root.append(wrap);
     updateCounter();
     state.statusEl.textContent = state.status;
+    updateRulesCounter();
   }
 
   render();
   void load();
   void loadMemory();
   void loadHeritage();
+  void loadRules();
   return { refresh: load };
 }

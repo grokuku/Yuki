@@ -46,7 +46,14 @@ export {
   type AgentRosterExtensionOptions,
 } from "./agent-roster-extension.js";
 
-// Personnalité de Yuki — base du prompt injectée à chaque tour (enregistrée EN PREMIER).
+// Règles strictes de l'utilisateur — PREMIÈRE base du prompt (enregistrée AVANT la personnalité).
+export {
+  RULES_EXTENSION_NAME,
+  createRulesExtensionFactory,
+  type RulesExtensionOptions,
+} from "./rules-extension.js";
+
+// Personnalité de Yuki — base du prompt injectée à chaque tour (après les règles).
 export {
   PERSONALITY_EXTENSION_NAME,
   createPersonalityExtensionFactory,

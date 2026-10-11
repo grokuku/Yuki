@@ -8,9 +8,10 @@
  * → le SDK chaîne les extensions qui le modifient), JAMAIS `message` (qui
  * créerait une entrée de session persistée).
  *
- * ⚠️ Elle est enregistrée EN PREMIER (voir `sdk-host.ts`) : l'ordre final du
- * prompt est **personnalité → mémoire → annuaire → heritage**. Chaque extension
- * CONCATÈNE au prompt courant, donc aucun bloc n'écrase un autre.
+ * ⚠️ Elle est enregistrée APRÈS les règles strictes (voir `sdk-host.ts`) :
+ * l'ordre final du prompt est **règles → personnalité → mémoire → annuaire →
+ * heritage**. Chaque extension CONCATÈNE au prompt courant, donc aucun bloc
+ * n'écrase un autre.
  *
  * Fichier ABSENT ou VIDE ⇒ RIEN n'est injecté (aucun bloc vide).
  */

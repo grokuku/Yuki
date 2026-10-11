@@ -90,6 +90,14 @@ export interface Env {
    * Surcharge : `YUKI_PERSONALITY_PATH`.
    */
   personalityPath: string;
+  // --- Règles strictes de Yuki (éditées par l'utilisateur) ---
+  /**
+   * Fichier Markdown des règles strictes (volume `state`), VOISIN de
+   * `personality.md` mais DISTINCT (l'utilisateur seul les édite ; Yuki ne les
+   * modifie jamais). Historique et journal sont dérivés de son dossier.
+   * Surcharge : `YUKI_RULES_PATH`.
+   */
+  rulesPath: string;
   // --- Configuration du moteur TTS `audio.cpp` (Lot 9) ---
   /**
    * Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw`).
@@ -293,6 +301,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_PERSONALITY_PATH",
       `${mountPoints.state}/personality.md`,
+    ),
+    rulesPath: getString(
+      env,
+      "YUKI_RULES_PATH",
+      `${mountPoints.state}/rules.md`,
     ),
     piAgentDir,
     piSessionsDir: getString(

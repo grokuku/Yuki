@@ -786,6 +786,46 @@ describe("Panneau Personnalité — section « Vie antérieure » (édition de l
   });
 });
 
+describe("Panneau Personnalité — section « Règles strictes » (éditées par l'utilisateur)", () => {
+  it("le panneau édite les règles via leur API dédiée et dit que Yuki ne peut pas les modifier", async () => {
+    const panel = await (await fetch(`${baseUrl}/ui/personality-panel.js`)).text();
+    // Section DISTINCTE dans le même panneau (aucun nouvel onglet).
+    expect(panel).toContain("renderRulesSection");
+    expect(panel).toContain("Règles strictes");
+    // Écriture par l'API gardée des règles (+ historique + retour arrière).
+    expect(panel).toContain("/api/self/rules");
+    expect(panel).toContain("/api/self/rules/revert");
+    // Libellé explicite : Yuki ne peut PAS les modifier.
+    expect(panel).toContain("NE PEUT PAS les modifier");
+    // Non-régression : l'éditeur de personnalité et le reset mémoire restent là.
+    expect(panel).toContain("renderMemoryBlock");
+    expect(panel).toContain("/api/self/personality");
+  });
+
+  it("pas de style inline, pas de window.confirm, pas d'innerHTML (CSP stricte)", async () => {
+    const panel = await (await fetch(`${baseUrl}/ui/personality-panel.js`)).text();
+    expect(panel).not.toContain("window.confirm(");
+    expect(panel).not.toContain("innerHTML");
+    expect(panel).not.toContain(".style.");
+    expect(panel).not.toContain('setAttribute("style"');
+    const css = await (await fetch(`${baseUrl}/ui/config.css`)).text();
+    for (const cls of [
+      ".personality-rules",
+      ".personality-rules__title",
+      ".personality-rules__editor",
+    ]) {
+      expect(css, cls).toContain(cls);
+    }
+  });
+
+  it("le markup /config garde exactement 7 onglets (aucun onglet Règles ajouté)", async () => {
+    const body = await (await fetch(`${baseUrl}/config`)).text();
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    expect(body).toContain('id="personality-root"');
+    expect(body).not.toMatch(/\sstyle=/);
+  });
+});
+
 describe("Libraire de Pi-Web — section /config et test de connexion (sans nouvel onglet)", () => {
   it("ajoute la section « Libraire » à l'onglet Système existant (7 onglets inchangés)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();

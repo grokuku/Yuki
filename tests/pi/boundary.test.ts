@@ -24,6 +24,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/execution-tools.ts",
   "src/pi/sdk/memory-extension.ts",
   "src/pi/sdk/personality-extension.ts",
+  "src/pi/sdk/rules-extension.ts",
   "src/pi/sdk/agent-roster-extension.ts",
   "src/pi/sdk/heritage-extension.ts",
   "src/pi/sdk/heritage-tools.ts",
@@ -134,6 +135,22 @@ describe("frontière SDK Pi", () => {
       const relativePath = rel(file);
       if (!relativePath.startsWith("src/pi/")) continue;
       if (/HeritageAdmin|heritage-admin|\/api\/self\/heritage/.test(readFileSync(file, "utf8"))) {
+        offenders.push(relativePath);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("invariant 5 — l'administration des RÈGLES n'est JAMAIS exposée au modèle (src/pi)", () => {
+    // L'écriture de `rules.md` est réservée à l'INTERFACE (`/api/self/rules` +
+    // `RulesStore`), éditable uniquement par l'utilisateur. AUCUN fichier de
+    // src/pi ne doit y référer : le modèle ne voit que le port de LECTURE SEULE
+    // (`RulesPort`), aucun outil d'écriture.
+    const offenders: string[] = [];
+    for (const file of files) {
+      const relativePath = rel(file);
+      if (!relativePath.startsWith("src/pi/")) continue;
+      if (/RulesAdmin|RulesStore|\/api\/self\/rules/.test(readFileSync(file, "utf8"))) {
         offenders.push(relativePath);
       }
     }
