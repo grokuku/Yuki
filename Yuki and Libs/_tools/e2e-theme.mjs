@@ -16,6 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 
+import { collectViolations } from "./browser-violations.mjs";
+
 const BASE = process.argv[2] || "http://127.0.0.1:4173";
 const SHOTS = join(import.meta.dirname, "shots");
 mkdirSync(SHOTS, { recursive: true });
@@ -342,13 +344,15 @@ for (const path of ["/", "/config"]) {
 }
 
 /* ═══════════════════════ Bilan CSP ═══════════════════════════════════════ */
-const cspViolations = [
-  ...consoleMessages.filter((m) => /refused|content security policy|csp/i.test(m.text)),
-  ...logEntries.filter((e) => /refused|content security policy|csp/i.test(e.text) || e.source === "security"),
-];
+const { cspViolations, connectionErrors } = collectViolations(consoleMessages, logEntries);
 console.log(`\nMessages console collectés : ${consoleMessages.length} ; entrées Log : ${logEntries.length}`);
 for (const m of consoleMessages.slice(0, 10)) console.log("  console:", m.type, JSON.stringify(m.text.slice(0, 200)));
 for (const e of logEntries.slice(0, 10)) console.log("  log:", e.source, e.level, JSON.stringify(e.text.slice(0, 200)));
+check(
+  "ZÉRO erreur de connexion réseau (serveur indisponible)",
+  connectionErrors.length === 0,
+  connectionErrors.map((v) => v.text).join(" | ").slice(0, 300),
+);
 check("ZÉRO violation CSP (aucun « Refused… » ni entrée security)", cspViolations.length === 0,
   cspViolations.map((v) => v.text).join(" | "));
 check("ZÉRO exception JavaScript", jsExceptions.length === 0, jsExceptions.join(" | "));

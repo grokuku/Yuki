@@ -19,6 +19,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 
+import { collectViolations, waitForGateway } from "./browser-violations.mjs";
+
 const TOOLS = import.meta.dirname;
 const WORKSPACE = join(TOOLS, "..");
 const YUKI_DIR = join(WORKSPACE, "Yuki");
@@ -61,6 +63,7 @@ async function startServer(extraEnv = {}) {
       reject(new Error(`serveur quitté (${code}) :\n` + logs.join("")));
     });
   });
+  await waitForGateway(base);
   return { proc, base };
 }
 
@@ -169,6 +172,29 @@ async function evaluate(expression) {
   return res.result.value;
 }
 
+/* Quitte la page testée AVANT d'arrêter son serveur : un `about:blank` chargé
+ * (ÉTAT constaté, pas un délai) détruit le contexte JS de la page et donc toute
+ * reconnexion WebSocket — sans quoi la page tenterait de se reconnecter à un
+ * port déjà mort et consignerait un `net::ERR_CONNECTION_REFUSED`. */
+async function stopPage() {
+  const done = new Promise((resolve) => {
+    const h = (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.method === "Page.loadEventFired") {
+        ws.off("message", h);
+        resolve();
+      }
+    };
+    ws.on("message", h);
+    setTimeout(() => {
+      ws.off("message", h);
+      resolve();
+    }, 5000);
+  });
+  await send("Page.navigate", { url: "about:blank" });
+  await done;
+}
+
 async function shot(name) {
   const res = await send("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(SHOTS, name + ".png"), Buffer.from(res.data, "base64"));
@@ -204,6 +230,7 @@ check("[/config#agents] champ de saisie du code présent", emptyState.hasInput =
 check("[/config#agents] bouton « Appairer » présent", emptyState.hasButton === true);
 check("[/config#agents] aucun style= inline (CSP)", emptyState.styleAttrs === 0);
 await shot("agents-e2e-empty");
+await stopPage();
 empty.proc.kill("SIGTERM");
 await sleep(300);
 
@@ -289,6 +316,7 @@ const afterApprove = await evaluate(`(() => ({
   approvals: [...document.querySelectorAll('#agents-root button')].some((b) => b.textContent === 'Approuver'),
 }))()`);
 check("[/config#agents] après approbation, la demande disparaît", afterApprove.approvals === false);
+await stopPage();
 seeded.proc.kill("SIGTERM");
 await sleep(300);
 
@@ -326,14 +354,17 @@ const afterPair = await evaluate(`(() => ({
 check("[/config#agents] l'agent apparié apparaît dans la liste", afterPair.cards >= 1, JSON.stringify(afterPair));
 check("[/config#agents] toujours aucun style= inline après appairage", afterPair.styleAttrs === 0, String(afterPair.styleAttrs));
 await shot("agents-e2e-pairing");
+await stopPage();
 pairing.proc.kill("SIGTERM");
 
 /* ═══════════════════════ Bilan CSP / exceptions ═══════════════════════ */
-const cspViolations = [
-  ...consoleMessages.filter((m) => /refused|content security policy|csp/i.test(m.text)),
-  ...logEntries.filter((e) => /refused|content security policy|csp/i.test(e.text) || e.source === "security"),
-];
+const { cspViolations, connectionErrors } = collectViolations(consoleMessages, logEntries);
 check("ZÉRO violation CSP", cspViolations.length === 0, cspViolations.map((v) => v.text).join(" | "));
+check(
+  "ZÉRO erreur de connexion réseau (serveur indisponible)",
+  connectionErrors.length === 0,
+  connectionErrors.map((v) => v.text).join(" | ").slice(0, 300),
+);
 check("ZÉRO exception JS non capturée", pageExceptions.length === 0, pageExceptions.join(" | ").slice(0, 300));
 console.log(`\nMessages console : ${consoleMessages.length} ; entrées Log : ${logEntries.length}`);
 

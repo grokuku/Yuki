@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 
+import { collectViolations } from "./browser-violations.mjs";
+
 const TOOLS = import.meta.dirname;
 const WORKSPACE = join(TOOLS, "..");
 const YUKI_DIR = join(WORKSPACE, "Yuki");
@@ -201,6 +203,29 @@ async function openThread(tag, userCount, comparator = "===") {
   })()`);
   if (!clicked) return false;
   return waitFor(`document.querySelectorAll('.message--user').length ${comparator} ${userCount}`);
+}
+
+/* Quitte la page testée AVANT d'arrêter son serveur : un `about:blank` chargé
+ * (ÉTAT constaté, pas un délai) détruit le contexte JS de la page et donc toute
+ * reconnexion WebSocket — sans quoi la page tenterait de se reconnecter à un
+ * port déjà mort et consignerait un `net::ERR_CONNECTION_REFUSED`. */
+async function stopPage() {
+  const done = new Promise((resolve) => {
+    const h = (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.method === "Page.loadEventFired") {
+        ws.off("message", h);
+        resolve();
+      }
+    };
+    ws.on("message", h);
+    setTimeout(() => {
+      ws.off("message", h);
+      resolve();
+    }, 5000);
+  });
+  await send("Page.navigate", { url: "about:blank" });
+  await done;
 }
 
 async function shot(name) {
@@ -584,14 +609,17 @@ check(
 );
 await shot("timestamp-narrow");
 
+await stopPage();
 server.proc.kill("SIGTERM");
 await sleep(300);
 
 /* ═══════════ Bilan CSP / exceptions ═══════════ */
-const cspViolations = [
-  ...consoleMessages.filter((m) => /refused|content security policy|csp/i.test(m.text)),
-  ...logEntries.filter((e) => /refused|content security policy|csp/i.test(e.text) || e.source === "security"),
-];
+const { cspViolations, connectionErrors } = collectViolations(consoleMessages, logEntries);
+check(
+  "ZÉRO erreur de connexion réseau (serveur indisponible)",
+  connectionErrors.length === 0,
+  connectionErrors.map((v) => v.text).join(" | ").slice(0, 300),
+);
 check("ZÉRO violation CSP", cspViolations.length === 0, cspViolations.map((v) => v.text).join(" | "));
 check("ZÉRO exception JS non capturée", pageExceptions.length === 0, pageExceptions.join(" | ").slice(0, 300));
 

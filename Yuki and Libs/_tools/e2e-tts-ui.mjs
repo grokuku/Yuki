@@ -21,6 +21,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 
+import { collectViolations } from "./browser-violations.mjs";
+
 const TOOLS = import.meta.dirname;
 const WORKSPACE = join(TOOLS, "..");
 const YUKI_DIR = join(WORKSPACE, "Yuki");
@@ -800,24 +802,88 @@ check(
   JSON.stringify(tabClick),
 );
 
+// La navigation clavier NE dépend PAS d'une POSITION figée : on lit l'ordre
+// RÉEL des onglets dans le DOM et on vérifie que ←/→, l'enroulement et
+// Home/End suivent cet ordre (roving tabindex + activation au focus). Cibler
+// par identifiant — et non « après N flèches on est sur l'onglet X » — évite
+// qu'un onglet AJOUTÉ (ex. « Personnalité ») ne fasse rougir le harnais.
 await evaluate(`document.getElementById("tab-voix").focus()`);
-await evaluate(
-  `document.getElementById("tab-voix").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }))`,
-);
 await sleep(80);
 const tabKey = await evaluate(`(() => {
-  const active = [...document.querySelectorAll('[role=tab]')].find((t) => t.getAttribute('aria-selected') === 'true')?.id;
+  const tabs = [...document.querySelectorAll('[role=tab]')];
+  const ids = tabs.map((t) => t.id);
+  const active = () => tabs.find((t) => t.getAttribute('aria-selected') === 'true')?.id;
+  const focus = () => document.activeElement?.id;
+  const press = (key) => {
+    document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    return { active: active(), focus: focus() };
+  };
+  const idx = (id) => ids.indexOf(id);
+  const wrap = (n) => ((n % ids.length) + ids.length) % ids.length;
+  // État « visible » de CHAQUE panneau, capturé au moment voulu.
+  const panelState = () => {
+    const state = {};
+    for (const panel of document.querySelectorAll('[role=tabpanel]')) state[panel.id] = !panel.hidden;
+    return state;
+  };
+
+  // Onglet de départ : « Voix » s'il existe, sinon le premier.
+  const start = ids.includes('tab-voix') ? 'tab-voix' : ids[0];
+  document.getElementById(start).focus();
+
+  // Flèche gauche : onglet PRÉCÉDENT dans l'ordre RÉEL du DOM (enroulement).
+  const leftExpected = ids[wrap(idx(start) - 1)];
+  const left = press('ArrowLeft');
+  const panelsAfterLeft = panelState();
+  // Flèche droite : revient au départ (onglet SUIVANT réel).
+  const right = press('ArrowRight');
+  const panelsAfterRight = panelState();
+
+  // Enroulement : premier ← → dernier ; dernier → → premier.
+  document.getElementById(ids[0]).focus();
+  const wrapLeft = press('ArrowLeft');
+  document.getElementById(ids[ids.length - 1]).focus();
+  const wrapRight = press('ArrowRight');
+
+  // Home / End.
+  document.getElementById(ids[1]).focus();
+  const home = press('Home');
+  const end = press('End');
+
+  // Roving tabindex : SEUL l'onglet actif est tabulable (0), les autres -1.
+  const roving = (() => {
+    const activeId = active();
+    return tabs.every((t) =>
+      t.id === activeId ? t.getAttribute('tabindex') === '0' : t.getAttribute('tabindex') === '-1',
+    );
+  })();
+
+  // Exactement UN panneau visible, et c'est celui de l'onglet actif.
+  const onlyPanel = (panels, activeTab) => {
+    const visible = Object.entries(panels).filter(([, shown]) => shown).map(([id]) => id);
+    return visible.length === 1 && visible[0] === 'panel-' + activeTab.replace(/^tab-/, '');
+  };
+
   return {
-    active,
-    focus: document.activeElement?.id,
-    voixVisible: !document.getElementById('panel-voix')?.hidden,
-    convVisible: !document.getElementById('panel-conversation')?.hidden,
+    ids, start, leftExpected,
+    left, right, wrapLeft, wrapRight, home, end,
+    firstId: ids[0], lastId: ids[ids.length - 1],
+    roving,
+    panelAfterLeftOk: onlyPanel(panelsAfterLeft, leftExpected),
+    panelAfterRightOk: onlyPanel(panelsAfterRight, start),
+    roleOk: tabs.every((t) => t.getAttribute('role') === 'tab'),
+    ariaSelectedOk: tabs.filter((t) => t.getAttribute('aria-selected') === 'true').length === 1,
   };
 })()`);
 check(
-  "[/config] flèche gauche change d'onglet (roving tabindex + activation au focus)",
-  tabKey.active === "tab-conversation" && tabKey.focus === "tab-conversation" &&
-    tabKey.convVisible === true && tabKey.voixVisible === false,
+  "[/config] flèches ←/→ + enroulement + Home/End changent d'onglet (roving tabindex, ARIA, focus, activation au focus)",
+  tabKey.left.active === tabKey.leftExpected && tabKey.left.focus === tabKey.leftExpected &&
+    tabKey.right.active === tabKey.start && tabKey.right.focus === tabKey.start &&
+    tabKey.wrapLeft.active === tabKey.lastId && tabKey.wrapLeft.focus === tabKey.lastId &&
+    tabKey.wrapRight.active === tabKey.firstId && tabKey.wrapRight.focus === tabKey.firstId &&
+    tabKey.home.active === tabKey.firstId && tabKey.end.active === tabKey.lastId &&
+    tabKey.roving && tabKey.roleOk && tabKey.ariaSelectedOk &&
+    tabKey.panelAfterLeftOk === true && tabKey.panelAfterRightOk === true,
   JSON.stringify(tabKey),
 );
 
@@ -1966,13 +2032,7 @@ check(
 await shot("config-tabs-mobile");
 
 /* ═══════════════════════ Bilan CSP ═══════════════════════════════════════ */
-const cspViolations = [
-  ...consoleMessages.filter((m) => /refused|content security policy|csp/i.test(m.text)),
-  ...logEntries.filter(
-    (e) =>
-      /refused|content security policy|csp/i.test(e.text) || e.source === "security",
-  ),
-];
+const { cspViolations, connectionErrors } = collectViolations(consoleMessages, logEntries);
 console.log(
   `\nMessages console : ${consoleMessages.length} ; entrées Log : ${logEntries.length}`,
 );
@@ -1982,6 +2042,11 @@ for (const m of consoleMessages.slice(0, 12)) {
 for (const e of logEntries.slice(0, 12)) {
   console.log("  log:", e.source, e.level, JSON.stringify(e.text.slice(0, 200)));
 }
+check(
+  "ZÉRO erreur de connexion réseau (serveur indisponible)",
+  connectionErrors.length === 0,
+  connectionErrors.map((v) => v.text).join(" | ").slice(0, 300),
+);
 check(
   "ZÉRO violation CSP (aucun « Refused… » ni entrée security)",
   cspViolations.length === 0,
