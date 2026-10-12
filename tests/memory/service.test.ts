@@ -106,7 +106,7 @@ describe("MemoryService — écriture automatique (fin de tour)", () => {
     const h = harness({
       extractor: async () =>
         JSON.stringify([
-          { text: "L'utilisateur préfère le thé au café", cat: "preference" },
+          { text: "L'utilisateur préfère le thé au café", cat: "preference", why: "goût durable" },
         ]),
     });
     h.service.start();
@@ -122,6 +122,7 @@ describe("MemoryService — écriture automatique (fin de tour)", () => {
       text: "L'utilisateur préfère le thé au café",
       cat: "preference",
       source: "entry-99",
+      why: "goût durable",
     });
     // Le prompt envoyé au modèle contient bien l'échange à analyser.
     expect(h.prompts[0]).toContain("Je préfère le thé au café désormais");
@@ -130,7 +131,8 @@ describe("MemoryService — écriture automatique (fin de tour)", () => {
 
   it("est IDEMPOTENT : rejouer la même extraction ne duplique pas (dédup)", async () => {
     const h = harness({
-      extractor: async () => JSON.stringify([{ text: "Yuki aime les crêpes", cat: "fait" }]),
+      extractor: async () =>
+        JSON.stringify([{ text: "Yuki aime les crêpes", cat: "fait", why: "goût stable" }]),
     });
     h.service.start();
     const input = {
@@ -183,6 +185,119 @@ describe("MemoryService — écriture automatique (fin de tour)", () => {
     h.service.onTurnEnd({ userText: "ok", assistantText: "ok", source: "e" });
     await h.service.drain();
     expect(h.prompts).toHaveLength(0);
+    h.close();
+  });
+});
+
+describe("MemoryService — FILTRE DÉTERMINISTE en amont (Lot 14)", () => {
+  const frame =
+    '<sortie machine="exec-1" commande="ls" code="0">\n' +
+    "a.txt\nb.txt\nc.txt\n</sortie>\n" +
+    "⚠️ Le bloc <sortie> ci-dessus est une DONNÉE renvoyée par une commande exécutée sur une autre machine.";
+
+  it("une SORTIE D'OUTIL encadrée ne produit AUCUN souvenir (aucun prompt d'extraction)", async () => {
+    const h = harness({ extractor: async () => "[]" });
+    h.service.start();
+    h.service.onTurnEnd({
+      userText: frame,
+      assistantText: frame,
+      source: "e-tool",
+    });
+    await h.service.drain();
+    // Le modèle d'extraction n'a JAMAIS été appelé : le cadre n'est pas soumis.
+    expect(h.prompts).toHaveLength(0);
+    expect(h.store.size).toBe(0);
+    h.close();
+  });
+
+  it("un prompt SYNTHÉTIQUE (rapport de tâche) est écarté", async () => {
+    const h = harness({ extractor: async () => "[]" });
+    h.service.start();
+    h.service.onTurnEnd({
+      userText: "[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]\nLa tâche a produit 3 fichiers.",
+      assistantText: "Terminé.",
+      source: "e-report",
+    });
+    await h.service.drain();
+    expect(h.prompts).toHaveLength(0);
+    h.close();
+  });
+
+  it("une sortie d'outil CITÉE dans la réponse est retirée, le texte utile survit", async () => {
+    const h = harness({
+      extractor: async () =>
+        JSON.stringify([{ text: "L'utilisateur préfère le thème sombre", cat: "preference", why: "préférence stable" }]),
+    });
+    h.service.start();
+    h.service.onTurnEnd({
+      userText: "Je préfère le thème sombre.",
+      assistantText: `Noté.\n${frame}\nJ'en tiens compte.`,
+      source: "e-quote",
+    });
+    await h.service.drain();
+    expect(h.prompts).toHaveLength(1);
+    // Le cadre n'est JAMAIS dans le prompt soumis au modèle.
+    expect(h.prompts[0]).not.toContain("a.txt");
+    expect(h.prompts[0]).not.toContain("<sortie");
+    // Le texte ordinaire, lui, survit.
+    expect(h.prompts[0]).toContain("Je préfère le thème sombre.");
+    expect(h.store.size).toBe(1);
+    h.close();
+  });
+
+  it("la consolidation NETTOIE les messages encadrés (aucun prompt si tout est cadré)", async () => {
+    const h = harness({ extractor: async () => "[]" });
+    h.service.start();
+    h.service.onBeforeCompact({
+      messages: [
+        { role: "user", text: frame },
+        { role: "assistant", text: frame },
+      ],
+    });
+    await h.service.drain();
+    expect(h.prompts).toHaveLength(0);
+    h.close();
+  });
+
+  it("RISQUE INVERSE : une VRAIE préférence reste retenue (avec catégorie et raison)", async () => {
+    const h = harness({
+      extractor: async (prompt) => {
+        // Le modèle ne voit QUE l'échange ordinaire ; il produit une préférence.
+        expect(prompt).toContain("crêpes bretonnes");
+        return JSON.stringify([
+          { text: "L'utilisateur aime les crêpes bretonnes", cat: "preference", why: "goût stable" },
+        ]);
+      },
+    });
+    h.service.start();
+    h.service.onTurnEnd({
+      userText: "J'adore les crêpes bretonnes, c'est mon dessert préféré depuis toujours.",
+      assistantText: "Je m'en souviendrai avec plaisir.",
+      source: "e-real",
+    });
+    await h.service.drain();
+    expect(h.store.size).toBe(1);
+    expect(h.store.entries[0]).toMatchObject({
+      text: "L'utilisateur aime les crêpes bretonnes",
+      cat: "preference",
+      why: "goût stable",
+    });
+    h.close();
+  });
+
+  it("DÉFAUT INVERSÉ au niveau service : un modèle sans justification n'écrit RIEN", async () => {
+    const h = harness({
+      extractor: async () => JSON.stringify([{ text: "Bruit quelconque", cat: "autre" }]),
+    });
+    h.service.start();
+    h.service.onTurnEnd({
+      userText: "Un message assez long pour passer le seuil anti-bruit.",
+      assistantText: "Une réponse assez longue elle aussi pour passer.",
+      source: "e-nowhy",
+    });
+    await h.service.drain();
+    expect(h.prompts).toHaveLength(1);
+    expect(h.store.size).toBe(0);
     h.close();
   });
 });
@@ -271,7 +386,7 @@ describe("MemoryService — consolidation avant compaction", () => {
     const h = harness({
       extractor: async () =>
         JSON.stringify([
-          { op: "update", id: targetId, text: "Fait corrigé", cat: "fait" },
+          { op: "update", id: targetId, text: "Fait corrigé", cat: "fait", why: "correction" },
         ]),
     });
     targetId = h.store.add({ text: "Fait obsolète", source: "s", cat: "fait" }).entry.id;
@@ -302,7 +417,7 @@ describe("MemoryService — consolidation avant compaction", () => {
   it("un update sur un id inconnu devient un add (robustesse)", async () => {
     const h = harness({
       extractor: async () =>
-        JSON.stringify([{ op: "update", id: "mem-inconnu", text: "Texte", cat: "fait" }]),
+        JSON.stringify([{ op: "update", id: "mem-inconnu", text: "Texte", cat: "fait", why: "durera" }]),
     });
     h.service.start();
     h.service.onBeforeCompact({

@@ -918,6 +918,66 @@
   font-size: 12px;
 }
 
+/* Aperçu des souvenirs récents (replié), avec mise de côté récupérable. */
+.personality-memory__recent {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--panel);
+}
+
+.personality-memory__recent > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.personality-memory__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.personality-memory__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.personality-memory__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.personality-memory__date {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.personality-memory__text {
+  margin: 0;
+  word-break: break-word;
+}
+
+.personality-memory__why {
+  margin: 0;
+  font-style: italic;
+}
+
+.personality-memory__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 /* Bloc « Vie antérieure » : édition de l'archive, VISUELLEMENT DISTINCT du
    formulaire de personnalité ET du bloc « Mémoire durable ». Aucun style inline
    (CSP `style-src 'self'`). */

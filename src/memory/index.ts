@@ -10,6 +10,7 @@ export {
   MEMORY_CATEGORIES,
   type BeforeCompactInput,
   type ConsolidateMessage,
+  type MemoryAdminEntry,
   type MemoryAdminInfo,
   type MemoryAdminPort,
   type MemoryBounds,
@@ -23,15 +24,19 @@ export {
   type MemoryPort,
   type MemoryRecallResult,
   type MemoryResetResult,
+  type MemorySetAsideResult,
   type TurnEndInput,
 } from "./types.js";
 
 export {
   MEMORY_ARCHIVE_DIR_NAME,
   MEMORY_FILE_HEADER,
+  MEMORY_SET_ASIDE_FILE,
   MEMORY_TEXT_MAX_CHARS,
+  MEMORY_WHY_MAX_CHARS,
   MemoryStore,
   clampMemoryText,
+  clampMemoryWhy,
   normalizeCategory,
   parseEvent,
   type AddResult,
@@ -45,9 +50,18 @@ export { MemoryIndex, type MemoryIndexOptions } from "./index-db.js";
 export {
   buildConsolidationPrompt,
   buildTurnExtractionPrompt,
+  DURABILITY_INSTRUCTION,
   HERITAGE_EXTRACTION_INSTRUCTION,
   parseMemoryOps,
 } from "./extract.js";
+
+export {
+  EXCLUDED_FRAME_TAGS,
+  EXCLUDED_PROMPT_PREFIXES,
+  isExcludedMemoryText,
+  sanitizeMemoryText,
+  stripExcludedMemoryBlocks,
+} from "./filter.js";
 
 export {
   HERITAGE_DATA_REMINDER,

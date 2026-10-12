@@ -46,16 +46,27 @@ const JSON_HEADERS: Record<string, string> = {
   "cache-control": "no-store",
 };
 
+/** Nombre maximal de souvenirs récents renvoyés à l'interface. */
+export const MEMORY_RECENT_LIMIT = 50;
+
+/** Préfixe de la route de mise de côté d'un souvenir. */
+const ENTRY_PREFIX = "/api/memory/entry/";
+
 function json(status: number, body: unknown): MemoryHttpResponse {
   return { status, body, headers: JSON_HEADERS };
 }
 
-/** Vue publique : nombre d'entrées courantes + dossier d'archive (chemin). */
+/**
+ * Vue publique : nombre d'entrées courantes, dossier d'archive, et APERÇU des
+ * souvenirs récents (contenu inclus : c'est une vue pour l'UTILISATEUR, jamais
+ * exposée au modèle).
+ */
 function memoryView(deps: MemoryApiDeps): Record<string, unknown> {
   const info = deps.admin.info();
   return {
     entries: info.entries,
     archiveDir: info.archiveDir,
+    recent: deps.admin.list(MEMORY_RECENT_LIMIT),
   };
 }
 
@@ -109,6 +120,44 @@ function handleReset(input: MemoryRequestInput): MemoryHttpResponse {
   });
 }
 
+/**
+ * Met un souvenir DE CÔTÉ (copie récupérable puis retrait). ⚠️ Jamais un
+ * effacement définitif : le souvenir est d'abord copié dans le fichier de mise
+ * de côté, puis retiré du store (ligne `delete`). Le journal d'audit ne contient
+ * JAMAIS le contenu du souvenir.
+ */
+function handleSetAside(input: MemoryRequestInput, id: string): MemoryHttpResponse {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return { status: guard.status, body: guard.body, headers: guard.headers };
+
+  const result = input.deps.admin.setAside(id);
+  input.deps.logger.info("memory.set_aside", {
+    at: result.at,
+    id,
+    setAside: result.setAside,
+    archive: result.archivePath,
+    flow: configWriteFlow(input.headers),
+  });
+
+  if (!result.setAside) {
+    return json(404, {
+      setAside: false,
+      id,
+      message: "Souvenir introuvable : il a peut-être déjà été mis de côté.",
+    });
+  }
+
+  return json(200, {
+    setAside: true,
+    id,
+    archivePath: result.archivePath,
+    at: result.at,
+    message:
+      `Souvenir mis de côté (récupérable dans ${result.archivePath}). ` +
+      "Il ne sera plus rappelé ; ce n'est PAS une suppression définitive.",
+  });
+}
+
 /** Vrai si le chemin relève de l'API d'administration de la mémoire. */
 export function isMemoryPath(path: string): boolean {
   return path === "/api/memory" || path.startsWith("/api/memory/");
@@ -123,6 +172,18 @@ export function handleMemoryRequest(input: MemoryRequestInput): MemoryHttpRespon
   }
   if (path === "/api/memory/reset") {
     if (method === "POST") return handleReset(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path.startsWith(ENTRY_PREFIX)) {
+    const rawId = path.slice(ENTRY_PREFIX.length);
+    let id: string;
+    try {
+      id = decodeURIComponent(rawId).trim();
+    } catch {
+      return json(400, { error: "bad_id" });
+    }
+    if (id.length === 0) return json(400, { error: "bad_id" });
+    if (method === "DELETE") return handleSetAside(input, id);
     return json(405, { error: "method_not_allowed", method });
   }
   return json(404, { error: "not_found", path });

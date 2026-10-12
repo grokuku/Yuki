@@ -72,8 +72,9 @@ describe("API mémoire — chemins", () => {
 });
 
 describe("API mémoire — état", () => {
-  it("GET renvoie le nombre d'entrées et le dossier d'archive", () => {
+  it("GET renvoie le nombre d'entrées, le dossier d'archive et l'aperçu RÉCENT", () => {
     const h = harness();
+    h.store.add({ text: "L'utilisateur aime les crêpes", source: "a", cat: "preference", why: "goût stable" });
     const response = handleMemoryRequest({
       method: "GET",
       path: "/api/memory",
@@ -83,8 +84,15 @@ describe("API mémoire — état", () => {
     });
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
-      entries: 0,
+      entries: 1,
       archiveDir: join(h.dir, MEMORY_ARCHIVE_DIR_NAME),
+    });
+    const recent = (response.body as { recent: Array<Record<string, unknown>> }).recent;
+    expect(recent).toHaveLength(1);
+    expect(recent[0]).toMatchObject({
+      text: "L'utilisateur aime les crêpes",
+      cat: "preference",
+      why: "goût stable",
     });
     h.service.close();
   });
@@ -199,8 +207,64 @@ describe("API mémoire — archivage", () => {
   });
 });
 
+describe("API mémoire — mise de côté d'un souvenir (DELETE)", () => {
+  it("sans en-tête X-Yuki-Config → 403", () => {
+    const h = harness();
+    h.store.add({ text: "Souvenir", source: "a", cat: "fait" });
+    const id = h.store.entries[0]!.id;
+    const response = handleMemoryRequest({
+      method: "DELETE",
+      path: `/api/memory/entry/${id}`,
+      headers: {},
+      body: "",
+      deps: h.deps,
+    });
+    expect(response.status).toBe(403);
+    h.service.close();
+  });
+
+  it("souvenir inconnu → 404, aucune archive", () => {
+    const h = harness();
+    const response = handleMemoryRequest({
+      method: "DELETE",
+      path: "/api/memory/entry/inconnu",
+      headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "memory-set-aside" },
+      body: "",
+      deps: h.deps,
+    });
+    expect(response.status).toBe(404);
+    h.service.close();
+  });
+
+  it("souvenir existant → copié dans le fichier de mise de côté puis retiré", () => {
+    const h = harness();
+    h.store.add({ text: SECRET_MEMORY, source: "a", cat: "fait", why: "test" });
+    const id = h.store.entries[0]!.id;
+    const response = handleMemoryRequest({
+      method: "DELETE",
+      path: `/api/memory/entry/${encodeURIComponent(id)}`,
+      headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "memory-set-aside" },
+      body: "",
+      deps: h.deps,
+    });
+    expect(response.status).toBe(200);
+    const body = response.body as { setAside: boolean; archivePath: string; message: string };
+    expect(body.setAside).toBe(true);
+    expect(existsSync(body.archivePath)).toBe(true);
+    expect(readFileSync(body.archivePath, "utf8")).toContain(SECRET_MEMORY);
+    expect(body.message).toContain("récupérable");
+    // Le store ne le sert plus.
+    expect(h.store.size).toBe(0);
+    // ⚠️ Le journal d'audit ne contient JAMAIS le contenu du souvenir.
+    const audit = h.lines.filter((line) => line.includes("memory.set_aside"));
+    expect(audit).toHaveLength(1);
+    expect(h.lines.join("\n")).not.toContain(SECRET_MEMORY);
+    h.service.close();
+  });
+});
+
 describe("API mémoire — méthode/chemin inconnus", () => {
-  it("DELETE → 405, chemin inconnu → 404", () => {
+  it("DELETE /api/memory → 405, chemin inconnu → 404, entry sans méthode → 405", () => {
     const del = handleMemoryRequest({
       method: "DELETE",
       path: "/api/memory",
@@ -217,5 +281,13 @@ describe("API mémoire — méthode/chemin inconnus", () => {
       deps: harness().deps,
     });
     expect(unknown.status).toBe(404);
+    const entryGet = handleMemoryRequest({
+      method: "GET",
+      path: "/api/memory/entry/x",
+      headers: {},
+      body: "",
+      deps: harness().deps,
+    });
+    expect(entryGet.status).toBe(405);
   });
 });

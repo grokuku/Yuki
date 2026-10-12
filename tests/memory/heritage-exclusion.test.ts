@@ -107,7 +107,7 @@ describe("EXCLUSION — fin de tour", () => {
   });
 
   it("CONTRÔLE : un échange ORDINAIRE produit bien une entrée (Lot 12 intact)", async () => {
-    const h = harness(async () => JSON.stringify([{ text: "L'utilisateur aime le thé", cat: "preference" }]));
+    const h = harness(async () => JSON.stringify([{ text: "L'utilisateur aime le thé", cat: "preference", why: "goût stable" }]));
     h.service.onTurnEnd({
       userText: "Je bois du thé tous les matins",
       assistantText: "Noté, je m'en souviendrai.",
@@ -146,7 +146,7 @@ describe("EXCLUSION — consolidation avant compaction", () => {
   });
 
   it("les messages ordinaires restent consolidés à côté d'un message d'archive", async () => {
-    const h = harness(async () => JSON.stringify([{ op: "add", text: "souvenir ordinaire", cat: "fait" }]));
+    const h = harness(async () => JSON.stringify([{ op: "add", text: "souvenir ordinaire", cat: "fait", why: "durera" }]));
     h.service.onBeforeCompact({
       messages: [
         { role: "user", text: ARCHIVE_TEXT },

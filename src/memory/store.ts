@@ -40,10 +40,17 @@ import {
   type MemoryEvent,
   type MemoryLogger,
   type MemoryResetResult,
+  type MemorySetAsideResult,
 } from "./types.js";
 
 /** Longueur maximale d'un souvenir (garde-fou anti-emballement). */
 export const MEMORY_TEXT_MAX_CHARS = 600;
+
+/**
+ * Longueur maximale de la JUSTIFICATION (champ `why`, Lot 14). Une ligne courte :
+ * « pourquoi ce souvenir durera ». Borne dure (le modèle peut déborder).
+ */
+export const MEMORY_WHY_MAX_CHARS = 300;
 
 /**
  * En-tête commenté écrit UNE SEULE FOIS à la création du fichier. Il documente
@@ -54,15 +61,24 @@ export const MEMORY_FILE_HEADER = [
   "# Une ligne = un événement JSON. Fichier LISIBLE et corrigeable à la main.",
   "# Le contenu courant est la PROJECTION de toutes les lignes, dans l'ordre.",
   '# Actions : "add" (créer), "update" (modifier), "delete" (supprimer).',
-  '#   {"v":1,"t":"add","id":"mem-…","at":"<ISO>","text":"…","source":"…","cat":"preference"}',
-  '#   {"v":1,"t":"update","id":"mem-…","at":"<ISO>","text":"…","source":"…","cat":"fait"}',
+  '#   {"v":1,"t":"add","id":"mem-…","at":"<ISO>","text":"…","source":"…","cat":"preference","why":"…"}',
+  '#   {"v":1,"t":"update","id":"mem-…","at":"<ISO>","text":"…","source":"…","cat":"fait","why":"…"}',
   '#   {"v":1,"t":"delete","id":"mem-…","at":"<ISO>"}',
+  '# Le champ "why" (facultatif : absent des souvenirs antérieurs au Lot 14) est',
+  '# la justification courte de pourquoi le souvenir durera.',
   "# Pour retirer un souvenir : ajoutez une ligne \"delete\" (ou supprimez sa ligne d'ajout).",
   "# N'écrivez jamais de ligne vide ou d'instruction exécutable : c'est une DONNÉE.",
 ].join("\n");
 
 /** Nom du dossier d'archivage (voisin du fichier de mémoire, volume `state`). */
 export const MEMORY_ARCHIVE_DIR_NAME = "memory-archive";
+
+/**
+ * Fichier (append-only) où sont COPIÉS les souvenirs mis de côté UN À UN. Le
+ * fichier de mémoire ne conserve qu'une ligne `delete` ; la copie rend la mise
+ * de côté RÉCUPÉRABLE (jamais une destruction).
+ */
+export const MEMORY_SET_ASIDE_FILE = "memory-set-aside.jsonl";
 
 export interface MemoryStoreOptions {
   path: string;
@@ -81,6 +97,8 @@ export interface MemoryDraft {
   text: string;
   source: string;
   cat?: string;
+  /** Justification courte (Lot 14) — facultative au niveau du store. */
+  why?: string;
 }
 
 export interface AddResult {
@@ -93,6 +111,7 @@ export interface MemoryUpdatePatch {
   text?: string;
   cat?: string;
   source?: string;
+  why?: string;
 }
 
 let fallbackCounter = 0;
@@ -123,6 +142,15 @@ export function clampMemoryText(text: string): string {
     : trimmed;
 }
 
+/** Normalise une justification à une ligne, bornée (`""` si absente). */
+export function clampMemoryWhy(why: unknown): string {
+  if (typeof why !== "string") return "";
+  const trimmed = why.replace(/\s+/g, " ").trim();
+  return trimmed.length > MEMORY_WHY_MAX_CHARS
+    ? trimmed.slice(0, MEMORY_WHY_MAX_CHARS)
+    : trimmed;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -148,6 +176,7 @@ function applyEvent(
       text: event.text,
       source: event.source,
       cat: event.cat,
+      ...(event.why ? { why: event.why } : {}),
     };
     state.byId.set(entry.id, entry);
     state.fingerprints.set(fingerprint(entry.text), entry.id);
@@ -166,6 +195,7 @@ function applyEvent(
       source: event.source,
       cat: event.cat,
       updatedAt: event.at,
+      ...(event.why ? { why: event.why } : {}),
     };
     state.byId.set(next.id, next);
     state.fingerprints.set(fingerprint(next.text), next.id);
@@ -352,12 +382,14 @@ export class MemoryStore {
       return { entry: existing, created: false };
     }
     const cat = normalizeCategory(draft.cat);
+    const why = clampMemoryWhy(draft.why);
     const entry: MemoryEntry = {
       id: this.idFactory(),
       at: new Date(this.now()).toISOString(),
       text,
       source: draft.source.length > 0 ? draft.source : "unknown",
       cat,
+      ...(why ? { why } : {}),
     };
     const event: MemoryEvent = {
       v: 1,
@@ -367,6 +399,7 @@ export class MemoryStore {
       text: entry.text,
       source: entry.source,
       cat: entry.cat,
+      ...(why ? { why } : {}),
     };
     this.persist(event);
     applyEvent({ byId: this.byId, fingerprints: this.fingerprints }, event, {});
@@ -384,11 +417,27 @@ export class MemoryStore {
     const text = patch.text !== undefined ? clampMemoryText(patch.text) : current.text;
     const cat = patch.cat !== undefined ? normalizeCategory(patch.cat) : current.cat;
     const source = patch.source !== undefined ? patch.source : current.source;
-    if (text === current.text && cat === current.cat && source === current.source) {
+    const why =
+      patch.why !== undefined ? clampMemoryWhy(patch.why) : clampMemoryWhy(current.why);
+    if (
+      text === current.text &&
+      cat === current.cat &&
+      source === current.source &&
+      why === (current.why ?? "")
+    ) {
       return false;
     }
     const at = new Date(this.now()).toISOString();
-    const event: MemoryEvent = { v: 1, t: "update", id, at, text, source, cat };
+    const event: MemoryEvent = {
+      v: 1,
+      t: "update",
+      id,
+      at,
+      text,
+      source,
+      cat,
+      ...(why ? { why } : {}),
+    };
     this.persist(event);
     applyEvent({ byId: this.byId, fingerprints: this.fingerprints }, event, {});
     this.emit({ type: "updated", entry: this.byId.get(id) as MemoryEntry });
@@ -406,6 +455,45 @@ export class MemoryStore {
     applyEvent({ byId: this.byId, fingerprints: this.fingerprints }, event, {});
     this.emit({ type: "removed", id });
     return true;
+  }
+
+  /** Souvenirs RÉCENTS, du plus récent au plus ancien, bornés à `limit`. */
+  list(limit: number): MemoryEntry[] {
+    const all = [...this.byId.values()];
+    const bounded = limit > 0 ? all.slice(-limit) : all;
+    return bounded.reverse();
+  }
+
+  /**
+   * ⚠️ « Supprimer » un souvenir = le METTRE DE CÔTÉ (jamais l'effacer).
+   *
+   * Le souvenir est d'abord COPIÉ dans le fichier append-only de mise de côté
+   * (`<archiveDir>/memory-set-aside.jsonl`), PUIS retiré du store via une ligne
+   * `delete` (le journal garde par ailleurs trace de son `add` d'origine). Si
+   * l'archivage échoue, RIEN n'est supprimé : l'erreur remonte.
+   */
+  putAside(id: string): MemorySetAsideResult {
+    const at = new Date(this.now()).toISOString();
+    const entry = this.byId.get(id);
+    if (!entry) {
+      return { setAside: false, id, archivePath: null, at, text: "" };
+    }
+    const archivePath = join(this.archiveDirPath, MEMORY_SET_ASIDE_FILE);
+    try {
+      mkdirSync(this.archiveDirPath, { recursive: true });
+      appendFileSync(archivePath, `${JSON.stringify({ at, entry })}\n`, "utf8");
+    } catch (error) {
+      // Pas de copie ⇒ PAS de suppression : on ne perd jamais un souvenir.
+      this.logger?.error("memory.store.set_aside.failed", {
+        id,
+        archive: archivePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    const removed = this.remove(id);
+    this.logger?.info("memory.store.set_aside", { id, archive: archivePath });
+    return { setAside: removed, id, archivePath, at, text: entry.text };
   }
 
   /**
@@ -493,6 +581,7 @@ export function parseEvent(value: unknown): MemoryEvent | null {
     ) {
       return null;
     }
+    const why = clampMemoryWhy(value.why);
     return {
       v: 1,
       t,
@@ -501,6 +590,7 @@ export function parseEvent(value: unknown): MemoryEvent | null {
       text: clampMemoryText(value.text),
       source: value.source,
       cat: normalizeCategory(value.cat),
+      ...(why ? { why } : {}),
     };
   }
   if (t === "delete") {

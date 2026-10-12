@@ -20,6 +20,7 @@ export interface MemoryLogger {
 /** Catégories reconnues (toute autre valeur est ramenée à `autre`). */
 export const MEMORY_CATEGORIES = [
   "preference",
+  "decision",
   "fait",
   "projet",
   "relation",
@@ -36,6 +37,12 @@ export interface MemoryEntry {
   updatedAt?: string;
   /** Contenu du souvenir (français, une phrase). */
   text: string;
+  /**
+   * Justification COURTE (une ligne) : pourquoi ce souvenir DURERA. Optionnelle
+   * (compatibilité : les souvenirs écrits AVANT le Lot 14 n'en ont pas). Les
+   * NOUVELLES écritures l'exigent (voir `parseMemoryOps`).
+   */
+  why?: string;
   /**
    * Source : identifiant du message d'origine (`<entrée de session>`) ou
    * `compaction` pour une passe de consolidation. Jamais vide.
@@ -56,6 +63,8 @@ export interface MemoryAddEvent {
   text: string;
   source: string;
   cat: MemoryCategory;
+  /** Justification (une ligne), absente pour les entrées antérieures au Lot 14. */
+  why?: string;
 }
 
 export interface MemoryUpdateEvent {
@@ -66,6 +75,7 @@ export interface MemoryUpdateEvent {
   text: string;
   source: string;
   cat: MemoryCategory;
+  why?: string;
 }
 
 export interface MemoryDeleteEvent {
@@ -98,8 +108,8 @@ export type MemoryChange =
 
 /** Opération produite par une passe d'extraction ou de consolidation. */
 export type MemoryOp =
-  | { op: "add"; text: string; cat: MemoryCategory }
-  | { op: "update"; id: string; text: string; cat: MemoryCategory }
+  | { op: "add"; text: string; cat: MemoryCategory; why: string }
+  | { op: "update"; id: string; text: string; cat: MemoryCategory; why: string }
   | { op: "delete"; id: string };
 
 /**
@@ -222,4 +232,42 @@ export interface MemoryAdminPort {
   resetMemory(): MemoryResetResult;
   /** État lisible (nombre d'entrées + dossier d'archive). */
   info(): MemoryAdminInfo;
+  /** Aperçu des souvenirs RÉCENTS (du plus récent au plus ancien), borné. */
+  list(limit: number): MemoryAdminEntry[];
+  /** Met un souvenir DE CÔTÉ (archivé, jamais effacé) puis le retire du store. */
+  setAside(id: string): MemorySetAsideResult;
+}
+
+/** Souvenir exposé à l'INTERFACE (aperçu, jamais au modèle). */
+export interface MemoryAdminEntry {
+  id: string;
+  /** Date de création (ISO-8601). */
+  at: string;
+  cat: MemoryCategory;
+  text: string;
+  /** Justification éventuelle (Lot 14), absente pour les souvenirs antérieurs. */
+  why?: string;
+  /** Source d'origine (message/`compaction`). */
+  source: string;
+}
+
+/**
+ * Résultat d'une mise de côté d'UN souvenir. ⚠️ « Supprimer » = METTRE DE CÔTÉ :
+ * le souvenir est d'abord copié dans le fichier de mise de côté (récupérable),
+ * puis retiré du store via une ligne `delete` (journal append-only).
+ */
+export interface MemorySetAsideResult {
+  /** `true` si un souvenir existant a été mis de côté. */
+  setAside: boolean;
+  /** Identifiant visé. */
+  id: string;
+  /**
+   * Chemin ABSOLU du fichier de mise de côté (append-only), ou `null` si aucun
+   * souvenir n'a été trouvé.
+   */
+  archivePath: string | null;
+  /** Horodatage ISO-8601 de l'opération. */
+  at: string;
+  /** Texte du souvenir mis de côté (`""` si introuvable). */
+  text: string;
 }

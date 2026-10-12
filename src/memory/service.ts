@@ -14,12 +14,14 @@
  */
 
 import { buildConsolidationPrompt, buildTurnExtractionPrompt, parseMemoryOps } from "./extract.js";
+import { sanitizeMemoryText } from "./filter.js";
 import { looksLikeHeritage } from "./heritage.js";
 import type { MemoryIndex } from "./index-db.js";
 import type { MemoryStore } from "./store.js";
 import type {
   BeforeCompactInput,
   ConsolidateMessage,
+  MemoryAdminEntry,
   MemoryAdminInfo,
   MemoryAdminPort,
   MemoryBounds,
@@ -30,6 +32,7 @@ import type {
   MemoryPort,
   MemoryRecallResult,
   MemoryResetResult,
+  MemorySetAsideResult,
   TurnEndInput,
 } from "./types.js";
 
@@ -234,20 +237,34 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
   /** Extraction de fin de tour — asynchrone, jamais bloquante. */
   onTurnEnd(input: TurnEndInput): void {
     if (!this.enabled() || !this.extractor) return;
+    // ⚠️ FILTRE DÉTERMINISTE EN AMONT (Lot 14) : cadrages de données techniques
+    // (`<sortie>`, `<libraire>`, `<agents_disponibles>`…) et prompts synthétiques
+    // sont retirés AVANT toute construction de prompt. Une sortie d'outil
+    // n'atteint donc JAMAIS le modèle d'extraction.
+    const userText = sanitizeMemoryText(input.userText);
+    const assistantText = sanitizeMemoryText(input.assistantText);
     if (
-      input.userText.trim().length < MIN_TEXT_CHARS ||
-      input.assistantText.trim().length < MIN_TEXT_CHARS
+      userText.length < MIN_TEXT_CHARS ||
+      assistantText.length < MIN_TEXT_CHARS
     ) {
+      if (
+        (input.userText.trim().length >= MIN_TEXT_CHARS && userText.length === 0) ||
+        (input.assistantText.trim().length >= MIN_TEXT_CHARS && assistantText.length === 0)
+      ) {
+        this.logger.info("memory.extract.skipped_data", { source: input.source });
+      }
       return;
     }
     // Lot 13 — garde STRUCTURELLE-LOCALE : un échange qui se présente comme une
     // archive « vie antérieure » (marqueur explicite) n'est JAMAIS extrait. Un
     // faux positif est sans danger (au pire, une extraction manquée).
-    if (looksLikeHeritage(input.userText) || looksLikeHeritage(input.assistantText)) {
+    if (looksLikeHeritage(userText) || looksLikeHeritage(assistantText)) {
       this.logger.info("memory.extract.skipped_heritage", { source: input.source });
       return;
     }
-    void this.enqueue(() => this.extractTurn(input));
+    void this.enqueue(() =>
+      this.extractTurn({ userText, assistantText, source: input.source }),
+    );
   }
 
   private async extractTurn(input: TurnEndInput): Promise<void> {
@@ -282,11 +299,15 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
   /** Consolidation avant compaction — capture immédiate, travail asynchrone. */
   onBeforeCompact(input: BeforeCompactInput): void {
     if (!this.enabled() || !this.extractor) return;
+    // ⚠️ FILTRE DÉTERMINISTE EN AMONT (Lot 14) : les messages encadrés (sorties
+    // d'outils et leurs rappels) sont NETTOYÉS, un prompt synthétique est écarté.
     // Lot 13 — un message qui se présente comme une archive « vie antérieure »
-    // est ÉCARTÉ de la consolidation : il ne doit jamais entrer dans la mémoire.
-    const messages = input.messages.filter(
-      (message) => message.text.trim().length > 0 && !looksLikeHeritage(message.text),
-    );
+    // est également écarté : il ne doit jamais entrer dans la mémoire.
+    const messages = input.messages
+      .map((message) => ({ role: message.role, text: sanitizeMemoryText(message.text) }))
+      .filter(
+        (message) => message.text.length > 0 && !looksLikeHeritage(message.text),
+      );
     if (messages.length === 0) return;
     const previousSummary = input.previousSummary;
     void this.enqueue(() => this.consolidate(messages, previousSummary));
@@ -333,16 +354,18 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
     for (const op of ops) {
       try {
         if (op.op === "add") {
-          if (this.store.add({ text: op.text, cat: op.cat, source }).created) {
+          if (
+            this.store.add({ text: op.text, cat: op.cat, why: op.why, source }).created
+          ) {
             counts.added += 1;
           }
         } else if (op.op === "update") {
           if (this.store.has(op.id)) {
-            if (this.store.update(op.id, { text: op.text, cat: op.cat })) {
+            if (this.store.update(op.id, { text: op.text, cat: op.cat, why: op.why })) {
               counts.updated += 1;
             }
           } else if (
-            this.store.add({ text: op.text, cat: op.cat, source }).created
+            this.store.add({ text: op.text, cat: op.cat, why: op.why, source }).created
           ) {
             counts.added += 1;
           }
@@ -402,5 +425,22 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
   /** État lisible (nombre d'entrées courantes + dossier d'archive). */
   info(): MemoryAdminInfo {
     return { entries: this.store.size, archiveDir: this.store.archiveDir };
+  }
+
+  /** Aperçu des souvenirs RÉCENTS (interface uniquement, jamais le modèle). */
+  list(limit: number): MemoryAdminEntry[] {
+    return this.store.list(limit).map((entry) => ({
+      id: entry.id,
+      at: entry.at,
+      cat: entry.cat,
+      text: entry.text,
+      source: entry.source,
+      ...(entry.why ? { why: entry.why } : {}),
+    }));
+  }
+
+  /** Met un souvenir DE CÔTÉ (archivé, jamais effacé) — interface uniquement. */
+  setAside(id: string): MemorySetAsideResult {
+    return this.store.putAside(id);
   }
 }

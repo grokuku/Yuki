@@ -117,6 +117,7 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     // Mémoire durable (archivage récupérable) — chargé séparément.
     memoryEntries: 0,
     memoryArchiveDir: "",
+    memoryRecent: [],
     memoryStatus: "",
     memoryLoaded: false,
     // Règles strictes (éditées UNIQUEMENT par l'utilisateur) — séparées.
@@ -167,16 +168,19 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     render();
   }
 
-  /** Charge l'état de la mémoire durable (nombre d'entrées + dossier d'archive). */
+  /** Charge l'état de la mémoire durable (nombre d'entrées + dossier + aperçu). */
   async function loadMemory() {
     try {
       const body = await HolafFetch.get("/api/memory", { headers: JSON_HEADERS });
       state.memoryEntries = typeof body?.entries === "number" ? body.entries : 0;
       state.memoryArchiveDir = typeof body?.archiveDir === "string" ? body.archiveDir : "";
+      // Aperçu des souvenirs récents (données RÉELLES du store, jamais des fausses).
+      state.memoryRecent = Array.isArray(body?.recent) ? body.recent : [];
       state.memoryLoaded = true;
     } catch {
       // La mémoire n'est pas disponible (porte non passée) : le bloc reste discret.
       state.memoryArchiveDir = "";
+      state.memoryRecent = [];
       state.memoryLoaded = false;
     }
     render();
@@ -606,6 +610,89 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
   }
 
   /**
+   * Met un souvenir DE CÔTÉ (jamais un effacement définitif). Confirmation
+   * explicite via HolafModal : le libellé dit CE QUI sera retiré et OÙ il part.
+   */
+  async function setAsideMemory(entry) {
+    const confirmed = await HolafModal.confirm(
+      "Mettre ce souvenir de côté ?",
+      `« ${entry.text} » sera RETIRÉ de la mémoire active et COPIÉ dans le fichier de mise ` +
+        "de côté (memory-set-aside.jsonl, dans le dossier d'archive) : il reste RÉCUPÉRABLE à la " +
+        "main. Ce n'est PAS une suppression définitive.",
+      { danger: true, confirmText: "Mettre de côté", cancelText: "Annuler" },
+    );
+    if (!confirmed) return;
+    state.memoryStatus = "Mise de côté…";
+    if (state.memoryStatusEl) state.memoryStatusEl.textContent = state.memoryStatus;
+    try {
+      const body = await HolafFetch.delete(
+        "/api/memory/entry/" + encodeURIComponent(entry.id),
+        { headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "memory-set-aside" } },
+      );
+      state.memoryStatus = body?.message ?? "Souvenir mis de côté.";
+      await loadMemory();
+    } catch (error) {
+      state.memoryStatus = apiMessage(error, "Mise de côté impossible.");
+    }
+    if (state.memoryStatusEl) state.memoryStatusEl.textContent = state.memoryStatus;
+  }
+
+  /** Date courte (`YYYY-MM-DD`) d'un souvenir, ou sa valeur brute si illisible. */
+  function memoryDateLabel(at) {
+    const value = String(at ?? "");
+    return /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(0, 10) : value;
+  }
+
+  /** Ligne d'aperçu d'un souvenir : date, catégorie, contenu, justification, action. */
+  function renderMemoryRow(entry) {
+    const row = h("li", { class: "personality-memory__item" });
+    const meta = h("div", { class: "personality-memory__meta" }, [
+      h("span", {
+        class: "personality-memory__date",
+        text: memoryDateLabel(entry.at),
+      }),
+      h("span", {
+        class: "badge personality-memory__cat",
+        text: String(entry.cat ?? "autre"),
+      }),
+    ]);
+    row.append(meta);
+    row.append(h("p", { class: "personality-memory__text", text: String(entry.text ?? "") }));
+    if (entry.why) {
+      row.append(
+        h("p", { class: "config-helper personality-memory__why", text: `Pourquoi : ${entry.why}` }),
+      );
+    }
+    const remove = h("button", {
+      class: "button button--danger button--small",
+      type: "button",
+      text: "Mettre de côté",
+    });
+    remove.addEventListener("click", () => void setAsideMemory(entry));
+    row.append(h("div", { class: "personality-memory__actions" }, [remove]));
+    return row;
+  }
+
+  /** Aperçu REPLIÉ des souvenirs récents (lecture seule + mise de côté). */
+  function renderMemoryRecent() {
+    const details = h("details", { class: "personality-memory__recent" }, [
+      h("summary", { text: `Souvenirs récents (${state.memoryRecent.length})` }),
+    ]);
+    details.append(
+      h("p", {
+        class: "config-helper",
+        text:
+          "Voici ce que Yuki a retenu. Vous pouvez mettre un souvenir de côté : il est " +
+          "COPIÉ dans le fichier de mise de côté puis retiré de la mémoire active (récupérable).",
+      }),
+    );
+    const list = h("ul", { class: "personality-memory__list" });
+    for (const entry of state.memoryRecent) list.append(renderMemoryRow(entry));
+    details.append(list);
+    return details;
+  }
+
+  /**
    * Bloc « Mémoire durable », VISUELLEMENT DISTINCT du formulaire de personnalité
    * (encadré dédié, bouton de danger) : on ne veut pas cliquer dessus par erreur.
    * Aucun style inline (CSP stricte).
@@ -636,6 +723,9 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
             h("code", { text: state.memoryArchiveDir }),
           ]),
         );
+      }
+      if (state.memoryRecent.length > 0) {
+        block.append(renderMemoryRecent());
       }
     }
 

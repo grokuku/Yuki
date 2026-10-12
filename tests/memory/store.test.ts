@@ -5,7 +5,7 @@
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -165,6 +165,80 @@ describe("MemoryStore — rejeu", () => {
     const reopened = newStore(path);
     expect(reopened.size).toBe(1);
     expect(reopened.entries[0]?.text).toBe("Valide");
+  });
+});
+
+describe("MemoryStore — justification (why, Lot 14) et compatibilité", () => {
+  it("conserve la justification à l'écriture et au rejeu", () => {
+    const path = tempStorePath();
+    const store = newStore(path, () => "mem-1");
+    store.add({ text: "Préfère le thé", source: "e", cat: "preference", why: "goût stable" });
+    const reopened = newStore(path);
+    expect(reopened.entries[0]).toMatchObject({ text: "Préfère le thé", why: "goût stable" });
+  });
+
+  it("COMPATIBILITÉ : une entrée SANS justification (ancienne) reste lisible", () => {
+    const path = tempStorePath();
+    // Événement d'ancien format : aucun champ `why`.
+    writeFileSync(
+      path,
+      `${MEMORY_FILE_HEADER}\n` +
+        JSON.stringify({
+          v: 1,
+          t: "add",
+          id: "old-1",
+          at: "2025-01-01T00:00:00.000Z",
+          text: "Souvenir ancien sans why",
+          source: "legacy",
+          cat: "fait",
+        }) +
+        "\n",
+    );
+    const store = newStore(path);
+    expect(store.size).toBe(1);
+    expect(store.entries[0]).toMatchObject({ id: "old-1", text: "Souvenir ancien sans why" });
+    expect(store.entries[0]?.why).toBeUndefined();
+  });
+
+  it("list() renvoie les plus RÉCENTS d'abord, bornés", () => {
+    const path = tempStorePath();
+    let n = 0;
+    const store = newStore(path, () => `mem-${++n}`);
+    store.add({ text: "Un", source: "e", cat: "fait" });
+    store.add({ text: "Deux", source: "e", cat: "fait" });
+    store.add({ text: "Trois", source: "e", cat: "fait" });
+    expect(store.list(2).map((entry) => entry.text)).toEqual(["Trois", "Deux"]);
+  });
+});
+
+describe("MemoryStore — mise de côté (putAside, jamais un effacement)", () => {
+  it("copie le souvenir dans le fichier de mise de côté PUIS le retire du store", () => {
+    const path = tempStorePath();
+    const store = newStore(path, () => "mem-1");
+    store.add({ text: "Souvenir à mettre de côté", source: "e", cat: "fait", why: "test" });
+    const result = store.putAside("mem-1");
+    expect(result.setAside).toBe(true);
+    expect(result.archivePath).not.toBeNull();
+    // Le fichier de mise de côté contient le contenu (récupérable).
+    const archive = readFileSync(result.archivePath as string, "utf8");
+    expect(archive).toContain("Souvenir à mettre de côté");
+    // Le store ne le sert plus.
+    expect(store.size).toBe(0);
+    expect(store.get("mem-1")).toBeUndefined();
+    // Le journal garde une ligne `delete` (append-only).
+    const lines = eventLines(path);
+    expect(lines.some((line) => line.includes('"t":"delete"'))).toBe(true);
+  });
+
+  it("un identifiant inconnu ⇒ aucune mise de côté, aucune archive créée", () => {
+    const path = tempStorePath();
+    const store = newStore(path);
+    const result = store.putAside("inconnu");
+    expect(result.setAside).toBe(false);
+    expect(result.archivePath).toBeNull();
+    expect(
+      existsSync(join(dirname(path), "memory-archive", "memory-set-aside.jsonl")),
+    ).toBe(false);
   });
 });
 

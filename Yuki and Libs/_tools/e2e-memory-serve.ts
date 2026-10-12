@@ -55,8 +55,18 @@ const memoryService = new MemoryService({
   bounds: () => ({ topK: 5, budgetChars: 8000, timeoutMs: 400 }),
 });
 memoryService.start();
-memoryStore.add({ text: "L'utilisateur aime les crêpes bretonnes", source: "e2e-1", cat: "preference" });
-memoryStore.add({ text: "L'utilisateur habite à Rennes", source: "e2e-2", cat: "fait" });
+memoryStore.add({
+  text: "L'utilisateur aime les crêpes bretonnes",
+  source: "e2e-1",
+  cat: "preference",
+  why: "goût stable depuis l'enfance",
+});
+memoryStore.add({
+  text: "L'utilisateur habite à Rennes",
+  source: "e2e-2",
+  cat: "fait",
+  why: "fait durable sur sa vie",
+});
 
 const context: AppContext = {
   env,
