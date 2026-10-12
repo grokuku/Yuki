@@ -15,7 +15,11 @@ import type { LlmRole } from "./providers.js";
 export type BuiltinToolName = "read" | "ls" | "grep" | "find";
 
 /** Outils custom de délégation (fournis au léger uniquement). */
-export type DelegateToolName = "delegate" | "job_status" | "cancel_job";
+export type DelegateToolName =
+  | "delegate"
+  | "job_status"
+  | "cancel_job"
+  | "steer_job";
 
 /**
  * Outils custom d'EXÉCUTION déléguée (Lot 4, B6bis). `run_command` permet au
@@ -104,6 +108,7 @@ export const DELEGATE_TOOLS: readonly DelegateToolName[] = [
   "delegate",
   "job_status",
   "cancel_job",
+  "steer_job",
 ];
 
 /**

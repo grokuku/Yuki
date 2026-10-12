@@ -378,6 +378,12 @@ await fetch(
 await fetch(
   `${control}/job-activity?jobId=act-1&stage=job_progress&detail=${encodeURIComponent(ACTIVITY_SECRET)}`,
 );
+// STEER orchestrateur → sous-agent : une consigne interne apparaît comme une
+// étape du bloc d'activité (MUETTE, éphémère), exactement comme les autres.
+const STEER_SECRET = "PRIORISE-LE-PAIEMENT";
+await fetch(
+  `${control}/job-activity?jobId=act-1&stage=steer&detail=${encodeURIComponent(STEER_SECRET)}`,
+);
 
 const readActivity = () =>
   evaluate(`(() => {
@@ -430,6 +436,12 @@ check(
     expanded.stepsText.includes(ACTIVITY_SECRET),
   expanded.stepsText.slice(0, 200),
 );
+check(
+  "E3 STEER : la consigne de l'orchestrateur apparaît dans le bloc (cadrage explicite)",
+  expanded.stepsText.includes("Consigne de l'orchestrateur envoyée") &&
+    expanded.stepsText.includes(STEER_SECRET),
+  expanded.stepsText.slice(0, 240),
+);
 await send("Page.captureScreenshot", { format: "png" }).then((res) =>
   writeFileSync(join(SHOTS, "subagent-activity.png"), Buffer.from(res.data, "base64")),
 );
@@ -454,6 +466,7 @@ check(
 check(
   "E3 TTS : AUCUN segment issu de la trame d'ACTIVITÉ (ni titre, ni étapes)",
   !spoken5.spoken.some((t) => t.includes(ACTIVITY_SECRET)) &&
+    !spoken5.spoken.some((t) => t.includes(STEER_SECRET)) &&
     !/Activité du sous-agent/.test(spoken5Text) &&
     !spoken5Text.includes("analyse du dépôt"),
   spoken5Text.slice(0, 200),
@@ -466,6 +479,7 @@ const transcript5 = await fetch(`${control}/transcript`).then((r) => r.json());
 check(
   "E3 ÉPHÉMÉRITÉ : l'activité n'est NI dans le transcript serveur NI un message",
   !transcript5.text.includes(ACTIVITY_SECRET) &&
+    !transcript5.text.includes(STEER_SECRET) &&
     !transcript5.text.includes("Activité du sous-agent"),
   transcript5.text.slice(0, 200),
 );

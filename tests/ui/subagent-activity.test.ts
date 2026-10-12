@@ -51,6 +51,18 @@ describe("subagentStepView — étape d'activité → ligne lisible (français)"
     expect(view.key).toBe("unknown");
     expect(view.tone).toBe("muted");
   });
+
+  it("steer : consigne de l'orchestrateur rendue (cadrage explicite)", () => {
+    const view = subagentStepView("steer", { detail: "priorise le paiement" });
+    expect(view.key).toBe("steer");
+    expect(view.label).toBe(
+      "Consigne de l'orchestrateur envoyée : priorise le paiement",
+    );
+    expect(view.tone).toBe("active");
+    expect(subagentStepView("steer", {}).label).toBe(
+      "Consigne de l'orchestrateur envoyée",
+    );
+  });
 });
 
 describe("subagentToggleLabel — libellé accessible du bouton", () => {

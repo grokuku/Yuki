@@ -14,8 +14,10 @@ import type {
   HeavyRunHandle,
   HeavyRunRequest,
   HeavyRunResult,
+  HeavySteerResult,
   HeavyWorker,
 } from "../../delegation/ports.js";
+import { MAX_PENDING_STEERS, composeFirstPrompt } from "../../delegation/steer.js";
 import type { JobUsage } from "../../jobs/types.js";
 import {
   channelForAssistantEvent,
@@ -55,6 +57,20 @@ function toJobUsage(usage: ReturnType<typeof usageFromMessage>): JobUsage | unde
   };
 }
 
+/** Vue minimale d'une session éphémère permettant de la steer. */
+type SteerableSession = { steer(text: string): Promise<void> };
+
+/** État partagé entre la poignée (`steer`) et l'exécution du job. */
+interface RunSteerState {
+  session?: SteerableSession;
+  /** Le premier prompt a-t-il été envoyé ? (avant : tampon) */
+  promptStarted: boolean;
+  /** Le job est-il achevé ? (après : plus steerable) */
+  finished: boolean;
+  /** Consignes de l'orchestrateur en attente d'intégration au premier prompt. */
+  pendingSteers: string[];
+}
+
 /** Fabrique l'implémentation SDK du worker lourd. */
 export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker {
   return {
@@ -62,14 +78,37 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
       const controller = new AbortController();
       let cancelled = false;
       let sessionDispose: (() => void) | undefined;
+      // ⚠️ Tampon des consignes de l'orchestrateur : tant que le PREMIER prompt
+      // n'est pas parti (session en cours de création), un `steer` serait
+      // ignoré. On TAMPONNE, puis on INTÈGRE au premier message (jamais perdu).
+      const state: RunSteerState = {
+        promptStarted: false,
+        finished: false,
+        pendingSteers: [...(request.initialSteers ?? [])].slice(
+          0,
+          MAX_PENDING_STEERS,
+        ),
+      };
 
       const task = execute(
         request,
         controller.signal,
         () => controller.abort(),
         () => cancelled,
-        (dispose) => {
+        state,
+        (session, dispose) => {
+          state.session = session;
           sessionDispose = dispose;
+        },
+      );
+      // Toute issue (succès, échec précoce, annulation) rend le job non
+      // steerable : on le reflète sur l'état partagé sans jamais rejeter.
+      void task.then(
+        () => {
+          state.finished = true;
+        },
+        () => {
+          state.finished = true;
         },
       );
 
@@ -85,6 +124,21 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
           }
           sessionDispose?.();
         },
+        async steer(text: string): Promise<HeavySteerResult> {
+          if (state.finished) return "finished";
+          const session = state.session;
+          if (!state.promptStarted || !session) {
+            if (state.pendingSteers.length >= MAX_PENDING_STEERS) return "full";
+            state.pendingSteers.push(text);
+            return "buffered";
+          }
+          try {
+            await session.steer(text);
+            return "injected";
+          } catch {
+            return "finished";
+          }
+        },
       };
     },
   };
@@ -94,7 +148,8 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     signal: AbortSignal,
     abort: () => void,
     isCancelled: () => boolean,
-    onSessionCreated: (dispose: () => void) => void,
+    state: RunSteerState,
+    onSessionCreated: (session: SteerableSession, dispose: () => void) => void,
   ): Promise<HeavyRunResult> {
     let runtime: ModelRuntime;
     try {
@@ -143,7 +198,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     }
 
     const { session } = ephemeral;
-    onSessionCreated(() => {
+    onSessionCreated(session, () => {
       try {
         session.dispose();
       } catch {
@@ -241,8 +296,17 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     });
 
     resetIdle();
+    // ⚠️ Les consignes tamponnées (file d'admission + fenêtre de création de la
+    // session) sont INTÉGRÉES au PREMIER message, sous un cadrage explicite : le
+    // sous-agent comprend qu'elles viennent de l'orchestrateur, pas de
+    // l'utilisateur. Le tampon est vidé (jamais rejoué).
+    const firstPrompt = composeFirstPrompt(
+      request.task,
+      state.pendingSteers.splice(0),
+    );
+    state.promptStarted = true;
     try {
-      await session.prompt(request.task, { expandPromptTemplates: false });
+      await session.prompt(firstPrompt, { expandPromptTemplates: false });
     } catch (error) {
       if (!sawError) {
         sawError = true;
@@ -259,6 +323,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
 
     const finalText = lastText || currentText;
     const partial = finalText.length > 0 ? finalText : undefined;
+    state.finished = true;
     session.dispose();
 
     if (isCancelled()) {

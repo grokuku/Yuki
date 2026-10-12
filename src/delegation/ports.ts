@@ -29,6 +29,12 @@ export interface HeavyRunRequest {
   jobId: string;
   task: string;
   context?: string;
+  /**
+   * Consignes de l'orchestrateur arrivées AVANT le démarrage du job (tampon de
+   * la file d'admission) : intégrées au PREMIER message du sous-agent, sous un
+   * cadrage explicite. Jamais perdues.
+   */
+  initialSteers?: readonly string[];
   /** Session légère propriétaire (instrumentation / corrélation). */
   lightSessionId: string;
   /** Durée d'inactivité maximale (sans événement) avant abort. */
@@ -54,11 +60,26 @@ export interface HeavyRunResult {
   error?: string;
 }
 
+/**
+ * Issue d'un `steer` remis au worker lourd.
+ * - `injected` : remis au run EN COURS (pris en compte avant le prochain tour) ;
+ * - `buffered` : session pas encore prête → tamponné, intégré au PREMIER message ;
+ * - `full` : tampon plein (borne `MAX_PENDING_STEERS`) ;
+ * - `finished` : job déjà terminé → non steerable.
+ */
+export type HeavySteerResult = "injected" | "buffered" | "full" | "finished";
+
 export interface HeavyRunHandle {
   /** Résout toujours (jamais de rejet) avec l'issue du job. */
   readonly promise: Promise<HeavyRunResult>;
   /** Aborte la session éphémère et libère ses ressources. */
   cancel(): Promise<void>;
+  /**
+   * Transmet une consigne de l'orchestrateur au sous-agent. Tamponne tant que
+   * le premier prompt n'a pas démarré (jamais perdue) ; l'injecte dans le run en
+   * cours ensuite. Ne rejette jamais : renvoie une issue honnête.
+   */
+  steer(text: string): Promise<HeavySteerResult>;
 }
 
 /** Exécute une tâche en session éphémère (une tâche = une session = une réponse). */
@@ -172,6 +193,53 @@ export type DelegateOutcome =
   | DelegateRejected
   | DelegateUnavailable;
 
+/* -------------------------------------------------------------------------- */
+/* Steer orchestrateur → sous-agent                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Consigne ACCEPTÉE : `injected` (remise au run en cours) ou `buffered`
+ * (intégrée au PREMIER message car le sous-agent n'avait pas encore démarré).
+ */
+export interface SteerAccepted {
+  status: "steered";
+  job_id: string;
+  delivery: "injected" | "buffered";
+  /** Nombre de consignes en attente de démarrage (`buffered` uniquement). */
+  pending?: number;
+  note: string;
+}
+
+/** Aucun job ne porte cet identifiant. */
+export interface SteerNotFound {
+  status: "not_found";
+  job_id: string;
+  note: string;
+}
+
+/** Job non steerable : terminé, déjà livré, ou en cours d'achèvement. */
+export interface SteerNotPossible {
+  status: "not_steerable";
+  job_id: string;
+  job_status: JobStatus;
+  reason: "job_finished" | "already_delivered" | "delivery_failed";
+  note: string;
+}
+
+/** Tampon plein : borné volontairement, on refuse plutôt que de jeter en silence. */
+export interface SteerBufferFull {
+  status: "buffer_full";
+  job_id: string;
+  limit: number;
+  note: string;
+}
+
+export type SteerOutcome =
+  | SteerAccepted
+  | SteerNotFound
+  | SteerNotPossible
+  | SteerBufferFull;
+
 export interface CancelSucceeded {
   status: "cancelled";
   job_id: string;
@@ -195,6 +263,12 @@ export interface DelegateServicePort {
   delegate(request: DelegateRequest): Promise<DelegateOutcome>;
   jobStatus(jobId: string): JobRecord | undefined;
   cancelJob(jobId: string): Promise<CancelOutcome>;
+  /**
+   * STEER orchestrateur → sous-agent : transmet une consigne à un job EN COURS
+   * ou, s'il n'a pas encore démarré, la TAMPONNE pour son PREMIER message.
+   * Renvoie toujours une issue honnête (jamais de succès silencieux).
+   */
+  steerJob(jobId: string, text: string): Promise<SteerOutcome>;
   /**
    * E5 — VÉRITÉ DE COMPLÉTION, lue dans le `JobStore` (jamais dans le texte du
    * modèle). `true` s'il reste du travail NON achevé pour cette session : au

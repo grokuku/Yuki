@@ -157,6 +157,16 @@ export function subagentStepView(stage, payload = {}) {
         tone: "active",
       };
     }
+    case "steer": {
+      const detail = typeof payload.detail === "string" ? payload.detail.trim() : "";
+      return {
+        key: "steer",
+        label: detail
+          ? `Consigne de l'orchestrateur envoyée : ${detail}`
+          : "Consigne de l'orchestrateur envoyée",
+        tone: "active",
+      };
+    }
     case "job_finished": {
       const view = jobStatusView(payload.status);
       return { key: "finished", label: `Terminée — ${view.label}`, tone: view.tone };

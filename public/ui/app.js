@@ -21,6 +21,7 @@ import {
   THINKING_LABEL,
   describeActivity,
 } from "./activity.js";
+import { liveRunMetricsText, runMetricsText } from "./run-stats.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
@@ -668,21 +669,6 @@ function appendAssistantMessage(text = null, pinned = isConversationPinned(), ts
   return div;
 }
 
-/**
- * Texte des infos TECHNIQUES (« TTFT … ms · total … ms · N tok »), ou `null`
- * quand aucune statistique exploitable n'est fournie. Sert AUSSI BIEN à la
- * trame temps réel `run_summary` qu'aux statistiques restaurées d'un message
- * (`entry.metrics`). Un message sans statistiques n'affiche alors AUCUN pied.
- */
-function metricsText(metrics) {
-  if (!metrics || typeof metrics.totalMs !== "number") return null;
-  const parts = [];
-  if (typeof metrics.ttftMs === "number") parts.push(`TTFT ${Math.round(metrics.ttftMs)} ms`);
-  parts.push(`total ${Math.round(metrics.totalMs)} ms`);
-  if (typeof metrics.tokensOut === "number") parts.push(`${metrics.tokensOut} tok`);
-  return parts.join(" · ");
-}
-
 function applyTranscript(transcript) {
   const pinned = isConversationPinned();
   // Le fil est reconstruit : on purge les blocs de validation (timers inclus)
@@ -691,6 +677,11 @@ function applyTranscript(transcript) {
   approvalLayer.reset();
   screenshotBlocks.reset();
   subagentActivity.reset();
+  // Le fil est reconstruit : toute statistique EN DIRECT (provisoire) devient
+  // obsolète. On arrête le minuteur et on oublie l'alignement t0 des runs en
+  // vol — les valeurs FINALES reviendront par le `run_summary`.
+  stopLiveStats();
+  runT0ByRun.clear();
   els.conversation.innerHTML = "";
   currentRenderer = null;
   lastDayKey = null;
@@ -710,7 +701,7 @@ function applyTranscript(transcript) {
       // Statistiques PERSISTÉES : elles rétablissent le pied technique après un
       // rechargement. Absentes (ancienne session) ⇒ aucun pied, aucune ligne.
       const div = appendAssistantMessage(entry.text ?? "", pinned, ts);
-      const meta = metricsText(entry.metrics);
+      const meta = runMetricsText(entry.metrics);
       if (meta) setMeta(div, meta);
     }
   }
@@ -719,13 +710,12 @@ function applyTranscript(transcript) {
 }
 
 /**
- * Infos TECHNIQUES du message assistant (ligne « TTFT … · total … · N tok »),
- * EN BAS À DROITE (`.message__footer`). Le pied est créé À LA DEMANDE : un
- * message SANS statistiques n'a AUCUN pied (pas de ligne fantôme, pas de saut
- * de mise en page). Un texte vide est ignoré (rien à montrer).
+ * Pied de message assistant (`.message__footer` > `.message__stats`) : ligne
+ * TECHNIQUE « TTFT … · total … · N tok », EN BAS À DROITE. Créé À LA DEMANDE.
+ * Aucune région `aria-live` : la valeur peut changer en continu, elle ne doit
+ * pas être annoncée à chaque rafraîchissement.
  */
-function setMeta(element, text) {
-  if (!element || !text) return;
+function statsSpan(element) {
   let footer = element.querySelector(".message__footer");
   if (!footer) {
     footer = document.createElement("div");
@@ -738,7 +728,85 @@ function setMeta(element, text) {
     stats.className = "message__stats";
     footer.appendChild(stats);
   }
+  return stats;
+}
+
+/**
+ * Valeurs FINALES (trame `run_summary`) : SEULES elles font foi. Le pied reprend
+ * son état normal — il redevient annonçable (accessibilité), un message sans
+ * statistiques n'ayant de toute façon AUCUN pied.
+ */
+function setMeta(element, text) {
+  if (!element || !text) return;
+  const stats = statsSpan(element);
+  stats.removeAttribute("aria-hidden");
   stats.textContent = text;
+}
+
+/**
+ * Valeurs PROVISOIRES (pendant le run) : purement VISUELLES. Le texte change en
+ * continu, on le retire donc de l'arbre d'accessibilité pendant qu'il évolue
+ * (même garde que le compteur de tâche de fond, `jobActivityTimer`) : un lecteur
+ * d'écran ne bégaie pas sur une valeur par seconde. Il sera réintégré à l'arrivée
+ * des valeurs finales.
+ */
+function setLiveMeta(element, text) {
+  if (!element || !text) return;
+  const stats = statsSpan(element);
+  stats.setAttribute("aria-hidden", "true");
+  stats.textContent = text;
+}
+
+/** Retire le pied (aucune statistique ⇒ aucune ligne, même provisoire). */
+function clearMeta(element) {
+  const footer = element ? element.querySelector(".message__footer") : null;
+  if (footer) footer.remove();
+}
+
+/* ─── Stats EN DIRECT (pied provisoire, remplacé par les valeurs finales) ──
+ * Dès `run_started`, un pied est posé et rafraîchi : le temps écoulé avance,
+ * le TTFT apparaît au premier token (MESURE serveur, trame `phase`). À la fin,
+ * le `run_summary` REMPLACE ces valeurs provisoires par les valeurs FINALES
+ * (celles qui sont persistées) — jamais l'inverse. Le pied est créé EN MÊME
+ * TEMPS que la bulle : sa présence ne décale donc jamais le fil.
+ */
+const LIVE_STATS_TICK_MS = 200;
+/** Alignement `t0` serveur → horloge client, par `runId` (trame `phase`). */
+const runT0ByRun = new Map();
+let liveStats = null;
+let liveStatsTimer = null;
+
+function renderLiveStats() {
+  if (!liveStats) return;
+  const text = liveRunMetricsText({
+    elapsedMs: Date.now() - liveStats.clientT0,
+    ttftMs: liveStats.ttftMs,
+  });
+  if (text) setLiveMeta(liveStats.element, text);
+}
+
+function startLiveStats(runId, element) {
+  stopLiveStats();
+  if (typeof runId !== "string" || !element) return;
+  const aligned = runT0ByRun.get(runId);
+  liveStats = {
+    runId,
+    element,
+    // Repli HONNÊTE : sans trame d'instrumentation alignée, on compte depuis
+    // l'instant où l'interface a vu le run démarrer (jamais de valeur inventée).
+    clientT0: typeof aligned === "number" ? aligned : Date.now(),
+    ttftMs: null,
+  };
+  renderLiveStats();
+  liveStatsTimer = setInterval(renderLiveStats, LIVE_STATS_TICK_MS);
+}
+
+function stopLiveStats() {
+  if (liveStatsTimer) {
+    clearInterval(liveStatsTimer);
+    liveStatsTimer = null;
+  }
+  liveStats = null;
 }
 
 function sendRaw(payload) {
@@ -922,6 +990,10 @@ function applyEvent(frame) {
       if (frame.state === "idle" || frame.state === "error") {
         currentAssistant = null;
         currentRenderer = null;
+        // Filet de sécurité : le `run_summary` précède TOUJOURS l'état terminal
+        // (il porte les valeurs FINALES et arrête déjà le minuteur). Si une trame
+        // se perdait, ceci évite un minuteur orphelin qui tournerait sans fin.
+        stopLiveStats();
       }
       return;
     case "run_started":
@@ -930,6 +1002,9 @@ function applyEvent(frame) {
       // visible : c'est le seul indicateur entre l'envoi et le premier contenu.
       showThinking();
       currentAssistant = appendAssistantMessage(null, undefined, Date.now());
+      // Pied de stats VISIBLE dès le lancement, mis à jour en direct (temps
+      // écoulé) puis complété au premier token (TTFT).
+      startLiveStats(frame.runId, currentAssistant);
       // Nouveau run : réinitialise le diagnostic TTS.
       ttsRequestedRun = frame.runId ?? null;
       ttsActivityRun = null;
@@ -960,6 +1035,25 @@ function applyEvent(frame) {
       }
       return;
     case "phase":
+      // Instrumentation : chaque trame porte `sinceT0Ms` (relatif au `t0`
+      // SERVEUR). On en déduit l'alignement horloge client ↔ serveur, puis on
+      // lit le TTFT RÉEL au premier token — jamais une valeur inventée.
+      if (
+        typeof frame.runId === "string" &&
+        typeof frame.sinceT0Ms === "number" &&
+        Number.isFinite(frame.sinceT0Ms) &&
+        !runT0ByRun.has(frame.runId)
+      ) {
+        runT0ByRun.set(frame.runId, Date.now() - frame.sinceT0Ms);
+      }
+      if (liveStats && liveStats.runId === frame.runId) {
+        const aligned = runT0ByRun.get(frame.runId);
+        if (typeof aligned === "number") liveStats.clientT0 = aligned;
+        if (frame.stage === "first_token" && typeof frame.sinceT0Ms === "number") {
+          liveStats.ttftMs = frame.sinceT0Ms;
+        }
+        renderLiveStats();
+      }
       if (frame.stage === "first_token") hideThinking();
       if (typeof frame.stage === "string" && frame.stage.startsWith("tts_")) {
         onTtsPhase(frame);
@@ -970,6 +1064,9 @@ function applyEvent(frame) {
     case "run_finished": {
       hideThinking();
       els.queued.hidden = true;
+      // L'alignement `t0` de ce run n'a plus d'usage (le `run_summary` — qui
+      // porte les valeurs FINALES — suit immédiatement).
+      runT0ByRun.delete(frame.runId);
       const pinned = isConversationPinned();
       // Dernier bloc (souvent resté en texte brut) : on le rend maintenant que
       // le flux est terminé, avant toute décision d'affichage. Le flush change
@@ -1041,10 +1138,17 @@ function applyEvent(frame) {
       return;
     }
     case "run_summary": {
-      const target = els.conversation.lastElementChild;
+      // Valeurs FINALES : elles REMPLACENT les provisoires (jamais l'inverse) et
+      // ce sont les seules que le serveur persiste (`yuki.run_metrics`).
+      const text = runMetricsText(frame);
+      const live =
+        liveStats && liveStats.runId === frame.runId ? liveStats : null;
+      stopLiveStats();
+      runT0ByRun.delete(frame.runId);
+      const target = live ? live.element : els.conversation.lastElementChild;
       if (target && target.classList.contains("message--assistant")) {
-        const text = metricsText(frame);
         if (text) setMeta(target, text);
+        else clearMeta(target); // aucune stat réelle ⇒ aucun pied (pas de ligne fantôme)
       }
       return;
     }

@@ -43,5 +43,12 @@ multi-étapes), tu peux confier le travail à un **worker lourd** avec
   arrière-plan et son rapport te sera renvoyé plus tard.
 - Utilise `job_status(job_id)` pour consulter l'avancement et
   `cancel_job(job_id)` pour interrompre un job.
+- `steer_job(job_id, text)` transmet une **consigne** à un sous-agent **déjà
+  lancé** pour infléchir son travail **en cours**, sans l'interrompre. Si le
+  sous-agent n'a pas encore démarré, la consigne est **mise en attente** et
+  intégrée à son **premier message** : elle n'est jamais perdue. Un job inconnu
+  ou déjà terminé renvoie une **erreur claire** : ne prétends jamais qu'une
+  consigne a été prise en compte si l'outil a répondu `not_found` ou
+  `not_steerable`.
 - Le worker lourd **ne parle jamais directement à l'utilisateur** : il te rend
   un rapport que **tu résumes**.

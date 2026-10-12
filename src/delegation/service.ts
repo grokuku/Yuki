@@ -31,12 +31,15 @@ import type {
   DelegateServicePort,
   HeavyRunHandle,
   HeavyRunRequest,
+  HeavySteerResult,
   HeavyWorker,
   JobReporter,
   LightWaker,
   ModelAvailability,
+  SteerOutcome,
 } from "./ports.js";
 import { buildBatchReportPrompt } from "./report.js";
+import { MAX_PENDING_STEERS } from "./steer.js";
 
 export const DEFAULT_DEADLINE_MS = 1_500;
 export const MIN_DEADLINE_MS = 200;
@@ -59,6 +62,15 @@ export const DISPATCH_NOTE =
   "Tâche lancée en arrière-plan. Elle n'est PAS terminée : son résultat te sera " +
   "transmis automatiquement dès qu'elle sera finie. Ne prétends jamais qu'elle " +
   "est terminée avant d'avoir reçu ce résultat.";
+
+/** Note d'une consigne REMISE au run en cours. */
+export const STEER_INJECTED_NOTE =
+  "Consigne transmise au sous-agent : il en tiendra compte dans son run en cours.";
+
+/** Note d'une consigne TAMPONNÉE (sous-agent pas encore démarré). */
+export const STEER_BUFFERED_NOTE =
+  "Le sous-agent n'a pas encore démarré : la consigne est mise en attente et " +
+  "sera intégrée à son premier message. Elle ne sera pas perdue.";
 
 /** Bornes la deadline et retombe sur la valeur par défaut si non numérique. */
 export function clampDeadline(value: unknown): number {
@@ -162,6 +174,13 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   private readonly listeners = new Set<(event: PiEvent) => void>();
   private readonly completions = new Map<string, Completion>();
   private readonly handles = new Map<string, HeavyRunHandle>();
+  /**
+   * Tampon des consignes de l'orchestrateur arrivées AVANT le démarrage du job
+   * (encore en file d'admission). Vidé au démarrage : passé au worker lourd pour
+   * être intégré au PREMIER message (`initialSteers`). Borné par
+   * `MAX_PENDING_STEERS` (refus honnête au-delà).
+   */
+  private readonly steerBuffers = new Map<string, string[]>();
   /** E4 — lots de résultats en attente de livraison, PAR session légère. */
   private readonly reportBatches = new Map<
     string,
@@ -346,6 +365,9 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     if (!record) return { status: "not_found", job_id: jobId };
     if (record.status === "queued") {
       this.queue.remove(jobId);
+      // Un job annulé ne recevra jamais son premier message : on jette le
+      // tampon de consignes (le job est terminé, plus rien à y intégrer).
+      this.steerBuffers.delete(jobId);
       this.store.append(jobId, "cancelled", {
         status: "cancelled",
         finishedAt: new Date(this.now()).toISOString(),
@@ -376,6 +398,133 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       return { status: "cancelled", job_id: jobId };
     }
     return { status: "not_cancellable", job_id: jobId, job_status: record.status };
+  }
+
+  /**
+   * STEER orchestrateur → sous-agent.
+   *
+   * - job INCONNU → `not_found` ;
+   * - job TERMINÉ / DÉJÀ LIVRÉ → `not_steerable` (jamais de succès silencieux) ;
+   * - job EN COURS → consigne remise au run en cours (`injected`) ;
+   * - job EN FILE (pas encore démarré) → consigne TAMPONNÉE (`buffered`),
+   *   intégrée au premier message ; tampon borné, refus honnête si plein.
+   */
+  async steerJob(jobId: string, text: string): Promise<SteerOutcome> {
+    const record = this.store.get(jobId);
+    if (!record) {
+      this.logger.warn("delegation.steer.not_found", { job_id: jobId });
+      return {
+        status: "not_found",
+        job_id: jobId,
+        note: "Aucun job ne porte cet identifiant : il n'existe pas ou a été oublié.",
+      };
+    }
+    if (isTerminal(record.status)) {
+      return {
+        status: "not_steerable",
+        job_id: jobId,
+        job_status: record.status,
+        reason: "job_finished",
+        note: `Le job est déjà terminé (${record.status}) : il n'y a plus rien à orienter.`,
+      };
+    }
+    if (record.notified) {
+      return {
+        status: "not_steerable",
+        job_id: jobId,
+        job_status: record.status,
+        reason: "already_delivered",
+        note: "Le résultat de ce job a déjà été livré : la consigne ne serait jamais lue.",
+      };
+    }
+
+    if (record.status === "running") {
+      const handle = this.handles.get(jobId);
+      if (handle) {
+        let result: HeavySteerResult;
+        try {
+          result = await handle.steer(text);
+        } catch (error) {
+          this.logger.warn("delegation.steer.failed", {
+            job_id: jobId,
+            error: sanitizeErrorText(
+              error instanceof Error ? error.message : String(error),
+            ),
+          });
+          result = "finished";
+        }
+        if (result === "injected" || result === "buffered") {
+          this.emitJobActivity(record.lightSessionId, jobId, PHASE.steer, {
+            detail: excerptForActivity(text),
+          });
+          return result === "injected"
+            ? {
+                status: "steered",
+                job_id: jobId,
+                delivery: "injected",
+                note: STEER_INJECTED_NOTE,
+              }
+            : {
+                status: "steered",
+                job_id: jobId,
+                delivery: "buffered",
+                note: STEER_BUFFERED_NOTE,
+              };
+        }
+        if (result === "full") {
+          return this.steerBufferFull(jobId);
+        }
+        // `finished` : le job s'est terminé entre la lecture du statut et l'appel.
+        return {
+          status: "not_steerable",
+          job_id: jobId,
+          job_status: record.status,
+          reason: "delivery_failed",
+          note: "Le sous-agent s'est terminé avant la remise de la consigne : elle n'a pas pu être lue.",
+        };
+      }
+      // En cours mais poignée absente : cas de course quasi impossible. On ne
+      // tamponne PAS (le tampon n'est consommé qu'au démarrage d'un job en
+      // file) : on REFUSE honnêtement plutôt que de laisser croire à un succès.
+      return {
+        status: "not_steerable",
+        job_id: jobId,
+        job_status: record.status,
+        reason: "delivery_failed",
+        note: "Le sous-agent est en cours mais n'accepte pas la consigne pour l'instant.",
+      };
+    }
+
+    // Job EN FILE : on tamponne pour le PREMIER message.
+    const buffer = this.steerBuffers.get(jobId) ?? [];
+    if (buffer.length >= MAX_PENDING_STEERS) {
+      return this.steerBufferFull(jobId);
+    }
+    buffer.push(text);
+    this.steerBuffers.set(jobId, buffer);
+    this.emitJobActivity(record.lightSessionId, jobId, PHASE.steer, {
+      detail: excerptForActivity(text),
+    });
+    return {
+      status: "steered",
+      job_id: jobId,
+      delivery: "buffered",
+      pending: buffer.length,
+      note: STEER_BUFFERED_NOTE,
+    };
+  }
+
+  /** Refus HONNÊTE quand le tampon de consignes est plein (jamais de perte silencieuse). */
+  private steerBufferFull(jobId: string): SteerOutcome {
+    this.logger.warn("delegation.steer.buffer_full", { job_id: jobId });
+    return {
+      status: "buffer_full",
+      job_id: jobId,
+      limit: MAX_PENDING_STEERS,
+      note:
+        `Le tampon de consignes est plein (${MAX_PENDING_STEERS}). ` +
+        "Attends le démarrage du sous-agent avant d'en envoyer une nouvelle.",
+    };
   }
 
   /* ------------------------------------------------------------------ */
@@ -476,6 +625,10 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   private startJob(jobId: string): void {
     const record = this.store.get(jobId);
     if (!record || record.status !== "queued") return;
+    // Consignes tamponnées pendant l'attente en file : passées au worker lourd
+    // pour être intégrées au PREMIER message. Vidée ici : jamais rejouée.
+    const bufferedSteers = this.steerBuffers.get(jobId);
+    this.steerBuffers.delete(jobId);
     this.store.append(jobId, "started", {
       status: "running",
       startedAt: new Date(this.now()).toISOString(),
@@ -499,6 +652,9 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       idleTimeoutMs: this.idleTimeoutMs,
       totalTimeoutMs: this.totalTimeoutMs,
       ...(record.context !== undefined ? { context: record.context } : {}),
+      ...(bufferedSteers && bufferedSteers.length > 0
+        ? { initialSteers: bufferedSteers }
+        : {}),
       onFirstToken: () => {
         this.emitPhase(
           PHASE.jobFirstToken,

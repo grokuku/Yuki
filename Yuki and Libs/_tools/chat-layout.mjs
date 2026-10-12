@@ -646,6 +646,10 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; co
 }
 .message--user { align-self: flex-end; width: 85%; background: var(--user); }
 .message--assistant { align-self: flex-start; width: 100%; background: var(--assistant); }
+/* Deux tours assistant CONSÉCUTIFS (rapport réinjecté, sans bulle utilisateur) :
+   une ligne d'air s'ajoute aux 12 px du conteneur — séparation PUREMENT visuelle
+   (miroir fidèle de Yuki/public/ui/styles.css). */
+.message--assistant + .message--assistant { margin-top: 22px; }
 
 .message__body { white-space: normal; }
 .p { margin: 0 0 8px; }

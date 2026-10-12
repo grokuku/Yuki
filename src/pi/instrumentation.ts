@@ -40,6 +40,8 @@ export const PHASE = {
   jobProgress: "job_progress",
   jobFinished: "job_finished",
   jobInterrupted: "job_interrupted",
+  /** Steer orchestrateur → sous-agent (consigne interne, trame d'ACTIVITÉ muette). */
+  steer: "steer",
   reportRequested: "report_requested",
   reportEmitted: "report_emitted",
   // Lot 7 — TTS / barge-in (définis ici ; émis par le pipeline du lot suivant)

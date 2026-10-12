@@ -312,4 +312,52 @@ describe("sdk-host réel — persistance des statistiques d'exécution (run_metr
       host.getState(sessionId)!.transcript.some((e) => e.metrics !== undefined),
     ).toBe(false);
   });
+
+  it("les valeurs PERSISTÉES sont EXACTEMENT celles de la trame `run_summary` (FINALE, jamais provisoire)", async () => {
+    // ⚠️ GARANTIE ANTI-DÉRIVE : le pied de l'interface affiche d'abord des
+    // valeurs PROVISOIRES (temps écoulé recalculé côté UI). Si une telle valeur
+    // était un jour persistée, les statistiques enregistrées deviendraient
+    // fausses. Ici on compare l'entrée JSONL BRUTE à la trame `run_summary` :
+    // elles doivent être STRICTEMENT identiques (même source, la synthèse du run).
+    const host = makeHost();
+    const events: PiEvent[] = [];
+    host.subscribeAll((event) => events.push(event));
+    await host.start();
+    const sessionId = host.currentSessionId()!;
+    const manager = stub.manager as Manager;
+
+    stub.onPrompt = async (m: Manager) => {
+      const assistant = assistantMessage("Réponse mesurée du run");
+      m.appendMessage(assistant as never);
+      stub.emit({ type: "agent_start" });
+      stub.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "Réponse mesurée " },
+      });
+      stub.emit({
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "du run" },
+      });
+      stub.emit({ type: "message_end", message: assistant });
+    };
+
+    const handle = host.send(sessionId, "question mesurée");
+    await waitForRunFinished(events, handle.runId);
+
+    const summary = events.find(
+      (e) => e.type === "run_summary" && e.runId === handle.runId,
+    );
+    if (summary?.type !== "run_summary") throw new Error("run_summary attendu");
+
+    const file = manager.getSessionFile()!;
+    const entries = metricsEntries(file);
+    expect(entries).toHaveLength(1);
+    // La valeur PERSISTÉE est celle de `run_summary`, champ par champ (aucune
+    // valeur d'horloge propre à l'interface, aucun arrondi divergent).
+    expect(entries[0].data).toEqual({
+      ...(summary.ttftMs !== undefined ? { ttftMs: summary.ttftMs } : {}),
+      totalMs: summary.totalMs,
+      ...(summary.tokensOut !== undefined ? { tokensOut: summary.tokensOut } : {}),
+    });
+  });
 });

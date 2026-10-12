@@ -9,6 +9,7 @@ import type {
   HeavyRunHandle,
   HeavyRunRequest,
   HeavyRunResult,
+  HeavySteerResult,
   HeavyWorker,
 } from "../../src/delegation/ports.js";
 
@@ -30,6 +31,8 @@ interface RecordedRun {
   behavior: FakeHeavyBehavior;
   resolve: (result: HeavyRunResult) => void;
   settled: boolean;
+  /** Consignes reçues EN COURS via `handle.steer`. */
+  steers: string[];
 }
 
 export class FakeHeavyWorker implements HeavyWorker {
@@ -50,7 +53,7 @@ export class FakeHeavyWorker implements HeavyWorker {
     const promise = new Promise<HeavyRunResult>((r) => {
       resolve = r;
     });
-    const record: RecordedRun = { request, behavior, resolve, settled: false };
+    const record: RecordedRun = { request, behavior, resolve, settled: false, steers: [] };
     this.pending.push(record);
 
     if (behavior.firstToken) request.onFirstToken?.();
@@ -67,6 +70,11 @@ export class FakeHeavyWorker implements HeavyWorker {
       promise,
       cancel: async (): Promise<void> => {
         this.settle(record, { status: "cancelled" });
+      },
+      steer: async (text: string): Promise<HeavySteerResult> => {
+        if (record.settled) return "finished";
+        record.steers.push(text);
+        return "injected";
       },
     };
   }
@@ -87,6 +95,11 @@ export class FakeHeavyWorker implements HeavyWorker {
   /** Résout le dernier run enregistré. */
   finishLast(result: HeavyRunResult): void {
     this.finish(this.pending.length - 1, result);
+  }
+
+  /** Consignes reçues EN COURS par le run d'index `index`. */
+  steersFor(index: number): string[] {
+    return this.pending[index]?.steers ?? [];
   }
 
   get pendingCount(): number {

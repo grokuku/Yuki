@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ACTIVITY_DETAIL_MAX,
   DISPATCH_NOTE,
+  MAX_PENDING_STEERS,
   REPORT_HEADER,
   clampDeadline,
   createDelegationService,
@@ -461,6 +462,104 @@ describe("delegation — instrumentation & report", () => {
     expect(record?.status).toBe("failed");
     expect(h.reports[0]?.text).toContain("moitié faite");
     expect(h.reports[0]?.text).toContain("failed");
+  });
+});
+
+describe("delegation — STEER orchestrateur → sous-agent", () => {
+  it("job EN COURS : la consigne est REMISE au run en cours (injected) + étape d'activité muette", async () => {
+    const h = makeHarness();
+    h.worker.push({ manual: true });
+    const outcome = await h.service.delegate({
+      task: "tâche",
+      lightSessionId: "sess-1",
+    });
+    const jobId = outcome.status === "dispatched" ? outcome.job_id : "";
+    const steer = await h.service.steerJob(jobId, "concentre-toi sur X");
+    expect(steer).toMatchObject({
+      status: "steered",
+      delivery: "injected",
+      job_id: jobId,
+    });
+    // ⚠️ PREUVE : la consigne est bien arrivée au worker (donc dans le run).
+    expect(h.worker.steersFor(0)).toEqual(["concentre-toi sur X"]);
+    // Visibilité E3 : une étape d'ACTIVITÉ (trame de contrôle, muette).
+    const activity = h.events.find(
+      (e) => e.type === "job_activity" && e.stage === "steer",
+    );
+    expect(activity).toMatchObject({ jobId, detail: "concentre-toi sur X" });
+  });
+
+  it("job EN FILE : consigne TAMPONNÉE puis intégrée au PREMIER message (jamais perdue)", async () => {
+    const h = makeHarness({ maxConcurrent: 1 });
+    h.worker.push({ manual: true }); // A occupe le seul slot.
+    h.worker.push({ manual: true }); // B reste en file.
+    const a = await h.service.delegate({ task: "A", lightSessionId: "sess-1" });
+    const b = await h.service.delegate({ task: "B", lightSessionId: "sess-1" });
+    const bId = b.status === "dispatched" ? b.job_id : "";
+    // B n'a PAS démarré (un seul run lourd enregistré).
+    expect(h.worker.runs).toHaveLength(1);
+    expect(h.store.get(bId)?.status).toBe("queued");
+
+    const steer = await h.service.steerJob(bId, "précision importante");
+    expect(steer).toMatchObject({
+      status: "steered",
+      delivery: "buffered",
+      pending: 1,
+    });
+    // Rien n'est remis au worker tant que B n'a pas démarré.
+    expect(h.worker.runs).toHaveLength(1);
+
+    // A se termine ⇒ B démarre AVEC la consigne tamponnée.
+    h.worker.finish(0, { status: "completed", text: "A fini" });
+    await wait(10);
+    expect(h.worker.runs).toHaveLength(2);
+    expect(h.worker.runs[1]?.initialSteers).toEqual(["précision importante"]);
+    void a;
+  });
+
+  it("job INCONNU : not_found (jamais de succès silencieux)", async () => {
+    const h = makeHarness();
+    const steer = await h.service.steerJob("job-inexistant", "x");
+    expect(steer).toMatchObject({
+      status: "not_found",
+      job_id: "job-inexistant",
+    });
+  });
+
+  it("job TERMINÉ : not_steerable (jamais de succès silencieux)", async () => {
+    const h = makeHarness();
+    h.worker.push({ autoMs: 5, result: { status: "completed", text: "ok" } });
+    const outcome = await h.service.delegate({
+      task: "tâche",
+      lightSessionId: "sess-1",
+    });
+    const jobId = outcome.status === "dispatched" ? outcome.job_id : "";
+    await wait(10);
+    const steer = await h.service.steerJob(jobId, "trop tard");
+    expect(steer).toMatchObject({
+      status: "not_steerable",
+      job_status: "completed",
+      reason: "job_finished",
+    });
+  });
+
+  it("tampon BORNÉ : au-delà de la borne, refus honnête (buffer_full)", async () => {
+    const h = makeHarness({ maxConcurrent: 1 });
+    h.worker.push({ manual: true });
+    h.worker.push({ manual: true });
+    await h.service.delegate({ task: "A", lightSessionId: "sess-1" });
+    const b = await h.service.delegate({ task: "B", lightSessionId: "sess-1" });
+    const bId = b.status === "dispatched" ? b.job_id : "";
+    for (let i = 0; i < MAX_PENDING_STEERS; i += 1) {
+      const accepted = await h.service.steerJob(bId, `consigne ${i}`);
+      expect(accepted.status).toBe("steered");
+    }
+    // ⚠️ Au-delà de la borne : REFUS explicite, jamais un jeté silencieux.
+    const full = await h.service.steerJob(bId, "de trop");
+    expect(full).toMatchObject({
+      status: "buffer_full",
+      limit: MAX_PENDING_STEERS,
+    });
   });
 });
 

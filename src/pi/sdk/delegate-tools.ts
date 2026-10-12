@@ -23,6 +23,7 @@ import type {
   DelegateOutcome,
   DelegateServicePort,
   ModelAvailability,
+  SteerOutcome,
 } from "../../delegation/ports.js";
 import type { JobRecord } from "../../jobs/types.js";
 
@@ -224,5 +225,33 @@ export function createDelegateTools(
     },
   });
 
-  return [delegate, jobStatus, cancelJob];
+  const steerJob = defineTool({
+    name: "steer_job",
+    label: "Orienter un job en cours",
+    description:
+      "Transmet une consigne à un sous-agent DÉJÀ lancé (job d'arrière-plan), " +
+      "pour infléchir son travail en cours sans l'interrompre. " +
+      "Si le sous-agent n'a pas encore démarré, la consigne est MISE EN ATTENTE " +
+      "et intégrée à son premier message : elle n'est jamais perdue. " +
+      "Un job inconnu ou déjà terminé n'est jamais orienté en silence : l'outil " +
+      "renvoie une erreur claire (`not_found`/`not_steerable`).",
+    promptSnippet:
+      "steer_job(job_id, text) — consigne à un sous-agent déjà lancé",
+    parameters: Type.Object({
+      job_id: Type.String({ minLength: 1, description: "Identifiant du job." }),
+      text: Type.String({
+        minLength: 1,
+        maxLength: 2000,
+        description:
+          "Consigne à transmettre au sous-agent (elle vient de toi, pas de l'utilisateur).",
+      }),
+    }),
+    execute: async (_toolCallId, params) => {
+      const { job_id: jobId, text } = params as { job_id: string; text: string };
+      const outcome: SteerOutcome = await config.service.steerJob(jobId, text);
+      return textResult(outcome, outcome);
+    },
+  });
+
+  return [delegate, jobStatus, cancelJob, steerJob];
 }

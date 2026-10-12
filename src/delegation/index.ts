@@ -15,6 +15,8 @@ export {
   DISPATCH_NOTE,
   MAX_DEADLINE_MS,
   MIN_DEADLINE_MS,
+  STEER_BUFFERED_NOTE,
+  STEER_INJECTED_NOTE,
   DelegationService,
   clampDeadline,
   createDelegationService,
@@ -31,6 +33,13 @@ export {
   buildBatchReportPrompt,
   buildReportPrompt,
 } from "./report.js";
+
+export {
+  MAX_PENDING_STEERS,
+  ORCHESTRATOR_STEER_HEADER,
+  composeFirstPrompt,
+  orchestratorSteerBlock,
+} from "./steer.js";
 
 export { DelegationError } from "./errors.js";
 export type { DelegationErrorCode } from "./errors.js";
@@ -55,10 +64,16 @@ export type {
   HeavyRunHandle,
   HeavyRunRequest,
   HeavyRunResult,
+  HeavySteerResult,
   HeavyWorker,
   JobReporter,
   LightWaker,
   ModelAvailability,
   PiEvent,
   PiEventSource,
+  SteerAccepted,
+  SteerBufferFull,
+  SteerNotFound,
+  SteerNotPossible,
+  SteerOutcome,
 } from "./ports.js";

@@ -156,6 +156,12 @@ interface RunItem {
   emittedRunStarted: boolean;
   sawError: boolean;
   sawAbort: boolean;
+  /**
+   * Le message utilisateur a DÉJÀ été versé au transcript (cas d'un message
+   * livré en `steer` à un run en cours). Évite une double bulle si le message
+   * doit finalement repasser par un tour normal (repli).
+   */
+  transcriptPushed?: boolean;
   /** Message d'erreur AFFICHABLE (français, mappé) pour l'UI. */
   errorMessage?: string;
   /** Cause BRUTE du fournisseur (assainie, sans secret) pour les journaux. */
@@ -769,12 +775,13 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     record.state = "streaming";
     // Un prompt synthétique (report de job, résultat de commande validée) ne
     // doit pas produire de bulle utilisateur dans le transcript de l'UI.
-    if (!isSyntheticOrigin(run.origin)) {
+    if (!isSyntheticOrigin(run.origin) && !run.transcriptPushed) {
       record.transcript.push({
         role: "user",
         text: run.text,
         timestamp: run.sentAt,
       });
+      run.transcriptPushed = true;
     }
     runContext.set({ sessionId: record.sessionId, runId: run.runId });
     emitEvent({
@@ -844,6 +851,39 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           ? "error"
           : "done";
     finalizeRun(record, run, reason);
+  }
+
+  /**
+   * STEER UTILISATEUR — injecte un message DÉJÀ versé au transcript dans le run
+   * EN COURS (`session.steer`). Le message est un VRAI échange : il est affiché
+   * (bulle client), transcripté (fait par l'appelant) et persisté par le SDK (donc
+   * mémorisable). Il n'est JAMAIS envoyé au TTS et n'ouvre pas de nouveau run.
+   *
+   * ⚠️ En cas d'échec (run terminé entre-temps), le message repasse en tour
+   * normal : il n'est jamais perdu (et jamais dupliqué dans le transcript, grâce
+   * à `run.transcriptPushed`).
+   */
+  async function steerRun(record: SessionRecord, run: RunItem): Promise<void> {
+    try {
+      await record.session.steer(run.storedText);
+    } catch (error) {
+      const piError = toPiHostError(error, {
+        runId: run.runId,
+        sessionId: record.sessionId,
+        logger,
+      });
+      logger.warn("pi.steer.rejected", {
+        session_id: record.sessionId,
+        run_id: run.runId,
+        code: piError.code,
+      });
+      if (record.currentRun) {
+        // Un run tourne encore : on remet le message en file derrière lui.
+        record.queue.push(run);
+        return;
+      }
+      void startRun(record, run);
+    }
   }
 
   /**
@@ -1173,8 +1213,31 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       run.instrumentation.markStage(PHASE.sendReceived);
 
       if (record.currentRun) {
-        record.queue.push(run);
-        return { runId, sessionId: record.sessionId, queued: true };
+        // ⚠️ DEUX NATURES DE MESSAGE PENDANT UN RUN — NE PAS LES CONFONDRE :
+        //
+        //  1) Un prompt SYNTHÉTIQUE (report de job, résultat de commande
+        //     validée) ne doit JAMAIS interrompre le tour de l'utilisateur : il
+        //     reste en FILE et démarrera après la fin du tour (comportement E4).
+        //
+        //  2) Un VRAI message UTILISATEUR est INJECTÉ dans le run EN COURS
+        //     (`session.steer`) : il infléchit le travail immédiatement, sans
+        //     attendre la fin du tour. C'est un vrai échange : sa bulle est
+        //     affichée (client), il entre dans le transcript (ci-dessous) et
+        //     sera persisté par le SDK (donc mémorisable, recharg_able). Il n'est
+        //     JAMAIS envoyé au TTS (comportement normal).
+        if (isSyntheticOrigin(opts?.origin)) {
+          record.queue.push(run);
+          return { runId, sessionId: record.sessionId, queued: true };
+        }
+        // Le transcript reçoit le message À L'INSTANT, comme un vrai message.
+        record.transcript.push({
+          role: "user",
+          text,
+          timestamp: run.sentAt,
+        });
+        run.transcriptPushed = true;
+        void steerRun(record, run);
+        return { runId, sessionId: record.sessionId, queued: false };
       }
       void startRun(record, run);
       return { runId, sessionId: record.sessionId, queued: false };
