@@ -60,6 +60,10 @@ import type { PiHost } from "./host.js";
 import { PHASE, RunInstrumentation, type RunSummary, type RunTtsMetrics } from "./instrumentation.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
 import {
+  createDelegationExtensionFactory,
+  type PendingJobEntry,
+} from "./sdk/delegation-extension.js";
+import {
   createAgentDirectoryTools,
   createExecutionTools,
   createScreenshotTool,
@@ -199,6 +203,13 @@ interface SessionRecord {
   listeners: Set<PiEventListener>;
   queue: RunItem[];
   currentRun?: RunItem;
+  /**
+   * ⚠️ FILET « PAS DE STEER ORPHELIN » (parité Pi-Web) : messages UTILISATEUR
+   * livrés en `steer` à un run EN COURS et pas encore connus comme consommés.
+   * À la fin du run, ceux encore présents dans la file du SDK sont REJOUÉS
+   * immédiatement comme un tour neuf (jamais attendre le rapport d'un job).
+   */
+  pendingUserSteers: RunItem[];
 }
 
 function newRunId(): string {
@@ -592,6 +603,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       partial: "",
       listeners: new Set(),
       queue: [],
+      pendingUserSteers: [],
     };
     record.unsubscribe = session.subscribe((event) => {
       handleSdkEvent(record, event);
@@ -663,6 +675,93 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     });
   }
 
+  /**
+   * E4/relais — Jobs d'arrière-plan NON terminaux de CETTE conversation, lus
+   * dans le `JobStore` (source de vérité : `job_id`, intitulé, statut
+   * `queued`/`running`). C'est cette information qui est injectée dans le prompt
+   * du léger (via l'extension de relais) pour qu'il sache QUOI relayer. Une
+   * lecture en échec est journalisée et traitée comme « aucun job ».
+   */
+  function activeJobsFor(sessionId: string): PendingJobEntry[] {
+    if (!options.delegation) return [];
+    try {
+      return options.delegation.pendingJobs(sessionId).map((job) => ({
+        jobId: job.jobId,
+        task: job.task,
+        status: job.status,
+      }));
+    } catch (error) {
+      logger.warn("delegation.pending_jobs.query.failed", {
+        session_id: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * ⚠️ FILET DÉTERMINISTE « PAS DE STEER ORPHELIN » — le correctif qui aurait
+   * sauvé le scénario réel : la demande de l'utilisateur arrivée PENDANT un run
+   * n'était lue qu'au rapport du job, donc trop tard.
+   *
+   * Un message UTILISATEUR livré en `steer` peut ne PAS être consommé avant la
+   * fin du run (`runLoop` ne polle la file de steering qu'au début d'un tour et
+   * entre deux tours). Sans ce filet, il ne serait lu qu'au PROCHAIN tour — en
+   * pratique le rapport d'un job, donc après la fin du travail. On le détecte
+   * ICI, à la fin du run, et on le REJOUE immédiatement comme un tour neuf.
+   *
+   * Source de vérité : la file de steering du SDK (`getSteeringMessages`), purgée
+   * à la livraison de chaque message. La livraison étant FIFO, les messages
+   * ENCORE en attente sont la QUEUE des steers suivis : on ne rejoue jamais un
+   * steer déjà consommé.
+   */
+  function drainOrphanUserSteers(record: SessionRecord): RunItem[] {
+    const tracked = record.pendingUserSteers;
+    record.pendingUserSteers = [];
+    if (tracked.length === 0) return [];
+    let pending: readonly string[] | undefined;
+    try {
+      pending = record.session.getSteeringMessages();
+    } catch {
+      // Session de test sans file de steering : rien d'orphelin à récupérer.
+      pending = undefined;
+    }
+    if (!pending || pending.length === 0) return [];
+    const count = Math.min(pending.length, tracked.length);
+    const orphans = tracked.slice(tracked.length - count);
+    // Purge la file du SDK : ces textes vont être REJOUÉS comme tours neufs ; les
+    // laisser en file les injecterait DEUX fois (prompt + steer).
+    try {
+      record.session.clearQueue();
+    } catch {
+      // ignore : on a déjà nos textes, la purge est une optimisation.
+    }
+    return orphans;
+  }
+
+  /**
+   * Rejoue un message UTILISATEUR orphané comme un TOUR NEUF : nouvel `runId` et
+   * instrumentation FRAÎCHE (le temps d'attente ne doit pas gonfler les stats du
+   * tour rejoué). Le message reste UN VRAI message : `transcriptPushed` est
+   * conservé (déjà versé au transcript à l'instant du steer, jamais dupliqué) et
+   * `storedText`/`sentAt` d'origine sont repris (même horodatage), de sorte que le
+   * SDK le persiste une seule fois, inchangé, à sa consommation.
+   */
+  function reissueUserRun(record: SessionRecord, run: RunItem): RunItem {
+    const next = makeRunItem(
+      newRunId(),
+      run.text,
+      record.sessionId,
+      logger,
+      emitEvent,
+      run.origin !== undefined ? { origin: run.origin } : {},
+    );
+    next.storedText = run.storedText;
+    next.sentAt = run.sentAt;
+    next.transcriptPushed = true;
+    return next;
+  }
+
   function finalizeRun(
     record: SessionRecord,
     run: RunItem,
@@ -705,6 +804,18 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       sessionId: record.sessionId,
       state: record.state,
     });
+
+    // ⚠️ FILET « PAS DE STEER ORPHELIN » : un message utilisateur non consommé à
+    // la fin du run rouvre un tour TOUT DE SUITE (jamais attendre le rapport du
+    // job). PRIORITAIRE sur la file : c'est ce que l'utilisateur vient d'écrire.
+    const orphans = drainOrphanUserSteers(record);
+    if (orphans.length > 0) {
+      const reissued = orphans.map((orphan) => reissueUserRun(record, orphan));
+      const [first, ...rest] = reissued;
+      if (rest.length > 0) record.queue.unshift(...rest);
+      void startRun(record, first);
+      return;
+    }
 
     const next = record.queue.shift();
     if (next) {
@@ -1005,6 +1116,16 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     // par un test d'ordre). Rejoué à l'identique pour CHAQUE runtime : chaque
     // conversation applique l'ordre verrouillé.
     extensionFactories = buildInlineExtensions(options);
+    if (options.delegation) {
+      // ⚠️ RELAIS + jobs EN COURS (parité Pi-Web) : consigne FERME « l'utilisateur
+      // ne parle qu'à toi » + liste des jobs de CETTE conversation, injectées dans
+      // le prompt du léger à chaque tour (mécanisme NON PERSISTÉ, comme la
+      // mémoire). Sans la liste, l'orchestrateur ne saurait pas QUOI relayer.
+      extensionFactories = [
+        ...extensionFactories,
+        createDelegationExtensionFactory({ activeJobs: activeJobsFor, logger }),
+      ];
+    }
 
     // Session initiale : la plus récente si elle existe, sinon une neuve.
     const sessionManager =
@@ -1310,6 +1431,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           timestamp: run.sentAt,
         });
         run.transcriptPushed = true;
+        // ⚠️ FILET « PAS DE STEER ORPHELIN » : on retient ce message utilisateur
+        // pour pouvoir le REJOUER immédiatement s'il n'est pas consommé avant la
+        // fin du run (voir `drainOrphanUserSteers`).
+        record.pendingUserSteers.push(run);
         void steerRun(record, run);
         return { runId, sessionId: record.sessionId, queued: false };
       }

@@ -69,6 +69,7 @@ export type {
   JobReporter,
   LightWaker,
   ModelAvailability,
+  PendingJobSummary,
   PiEvent,
   PiEventSource,
   SteerAccepted,

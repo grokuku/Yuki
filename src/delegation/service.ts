@@ -36,6 +36,7 @@ import type {
   JobReporter,
   LightWaker,
   ModelAvailability,
+  PendingJobSummary,
   SteerOutcome,
 } from "./ports.js";
 import { buildBatchReportPrompt } from "./report.js";
@@ -342,6 +343,26 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     }
     const batch = this.reportBatches.get(sessionId);
     return batch !== undefined && batch.records.length > 0;
+  }
+
+  /**
+   * E4/relais — JOBS NON TERMINAUX d'une session (`queued`/`running`) : lecture
+   * PURE du `JobStore` (source de vérité : `job_id`, intitulé, statut). Le host
+   * s'en sert pour injecter dans le prompt du léger « quelle tâche tourne » (pour
+   * qu'il sache QUOI relayer via `steer_job`).
+   */
+  pendingJobs(sessionId: string): PendingJobSummary[] {
+    const out: PendingJobSummary[] = [];
+    for (const record of this.store.list()) {
+      if (record.lightSessionId !== sessionId) continue;
+      if (record.status !== "queued" && record.status !== "running") continue;
+      out.push({
+        jobId: record.id,
+        task: record.task,
+        status: record.status,
+      });
+    }
+    return out;
   }
 
   /**

@@ -276,6 +276,25 @@ export interface DelegateServicePort {
    * encore été livré. Le host s'en sert pour exposer l'état `waiting`.
    */
   hasPendingWork(sessionId: string): boolean;
+  /**
+   * E4/relais — JOBS D'ARRIÈRE-PLAN NON TERMINAUX d'une session légère : lecture
+   * PURE du `JobStore` (source de vérité). Sert à injecter dans le prompt du
+   * léger l'information « telle tâche tourne » (`job_id` utilisable pour
+   * `steer_job`, intitulé, statut `queued`/`running`). Ne lève jamais.
+   */
+  pendingJobs(sessionId: string): PendingJobSummary[];
+}
+
+/**
+ * Résumé MINIMAL d'un job d'arrière-plan NON terminal, pour l'injection
+ * « quelle tâche tourne » dans le prompt du léger (relais).
+ */
+export interface PendingJobSummary {
+  jobId: string;
+  /** Intitulé de tâche fourni au `delegate`. */
+  task: string;
+  /** `queued` (en file d'admission) ou `running` (sous-agent en cours). */
+  status: Extract<JobStatus, "queued" | "running">;
 }
 
 /** Le service publie ses événements (phases + lifecycle) sur le bus Pi. */

@@ -26,6 +26,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/personality-extension.ts",
   "src/pi/sdk/rules-extension.ts",
   "src/pi/sdk/agent-roster-extension.ts",
+  "src/pi/sdk/delegation-extension.ts",
   "src/pi/sdk/heritage-extension.ts",
   "src/pi/sdk/heritage-tools.ts",
   "src/pi/sdk/librarian-tools.ts",
