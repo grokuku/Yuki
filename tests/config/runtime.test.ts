@@ -157,7 +157,22 @@ describe("update — patch fusionnant", () => {
       "llm.light.model": "small-model",
     });
     expect(result.applied.hot).toContain("llm.light.apiKey");
-    expect(result.applied.restart).toContain("llm.light.model");
+    // Le modèle est rechargé À CHAUD (re-résolu au prochain run, sans redémarrage).
+    expect(result.applied.hot).toContain("llm.light.model");
+  });
+
+  it("un changement de FOURNISSEUR (baseUrl/api) est appliqué À CHAUD", () => {
+    const { runtime } = makeRuntime();
+    const result = runtime.update({
+      "llm.light.baseUrl": "https://passerelle.example/v1",
+      "llm.heavy.baseUrl": "https://passerelle.example/v1",
+    });
+    // Ni l'un ni l'autre ne doit exiger de redémarrage : la bascule se fait entre
+    // deux runs via le runtime de modèles PARTAGÉ rafraîchi EN PLACE.
+    expect(result.applied.hot).toContain("llm.light.baseUrl");
+    expect(result.applied.hot).toContain("llm.heavy.baseUrl");
+    expect(result.applied.restart).not.toContain("llm.light.baseUrl");
+    expect(result.applied.restart).not.toContain("llm.heavy.baseUrl");
   });
 });
 

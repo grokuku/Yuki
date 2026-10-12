@@ -107,7 +107,7 @@ import {
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
 import { RulesStore } from "./rules/index.js";
-import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, SessionPinStore, type PiHost } from "./pi/index.js";
+import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
 import {
   AudioCppClient,
   EngineCapabilitiesProbe,
@@ -175,9 +175,17 @@ async function main(): Promise<void> {
   config.bridgeSecrets();
 
   // --- (3) Logger (redaction des clés d'env ET du store) --------------------
+  // ⚠️ Liste MUTABLE EN PLACE : le logger en garde la RÉFÉRENCE. Une clé saisie
+  // APRÈS le démarrage (via /config) doit être masquée elle aussi ; on la
+  // rafraîchit donc à chaque changement de configuration (voir `config.subscribe`
+  // plus bas). Un instantané figé laisserait fuir la NOUVELLE clé dans les logs.
+  const secretValues: string[] = [
+    ...collectSecretValues(),
+    ...config.secretValues(),
+  ];
   const logger = createLogger({
     level: env.logLevel,
-    secretValues: [...collectSecretValues(), ...config.secretValues()],
+    secretValues,
   });
 
   // --- Détection précoce des volumes `rw` non inscriptibles ------------------
@@ -284,8 +292,16 @@ async function main(): Promise<void> {
 
   const lightRef = llmConfig.models.light.reference;
   const lightThinking = llmConfig.models.light.defaultThinking;
-  const heavyRef = llmConfig.models.heavy.reference;
-  const heavyThinking = llmConfig.models.heavy.defaultThinking;
+  // Références « vivantes » (relues à chaque appel) : un changement de modèle
+  // (`apply: hot`) profite aux NOUVELLES utilisations (jobs de fond, prochain
+  // run de conversation) sans redémarrage. Les valeurs ci-dessus ne servent
+  // qu'à l'initialisation (création du host, libellés de démarrage).
+  const liveLightReference = (): string =>
+    resolveModelsFrom(effectiveLlmConfig(config)).light.reference;
+  const liveHeavyReference = (): string =>
+    resolveModelsFrom(effectiveLlmConfig(config)).heavy.reference;
+  const liveHeavyThinking = (): PiThinkingLevel =>
+    effectiveLlmConfig(config).heavy.thinking;
   const heavyAvailableAtStart = availabilityAtStart.isAvailable("heavy");
 
   const volumes = inspectMountPoints(mountPoints(env));
@@ -679,6 +695,8 @@ async function main(): Promise<void> {
   let librarianShots: LibrarianShotsStore | undefined;
   let transport: Transport | undefined;
   let delegation: DelegationService | undefined;
+  /** Désabonnement du rechargement À CHAUD des modèles LLM (voir plus bas). */
+  let stopLlmHotReload: (() => void) | undefined;
 
   if (gate.passed) {
     const idleTimeoutMs = config.getNumber("delegation.idleTimeoutMs");
@@ -695,8 +713,8 @@ async function main(): Promise<void> {
       authPath: join(env.piAgentDir, "auth.json"),
       modelsPath,
       systemPrompt: config.getString("prompts.heavy"),
-      modelReference: heavyRef,
-      thinking: heavyThinking,
+      modelReference: liveHeavyReference,
+      thinking: liveHeavyThinking,
       tools: toolAllowlist("heavy"),
       idleTimeoutMs,
       totalTimeoutMs,
@@ -717,12 +735,14 @@ async function main(): Promise<void> {
     const memoryIndex = new MemoryIndex({ path: env.memoryIndexPath, logger });
     // Écriture de fond (extraction + consolidation) sur le compte LOURD quand
     // il est disponible : libère le compte léger (déclaré mono-slot) pour le
-    // run de conversation suivant. Repli sur le léger sinon.
-    const memoryWriteRef = memoryWriteModelReference({
-      heavyAvailable: heavyAvailableAtStart,
-      heavyRef,
-      lightRef,
-    });
+    // run de conversation suivant. Repli sur le léger sinon. La référence est
+    // RELUE à chaque passe ⇒ un changement de modèle s'applique sans redémarrage.
+    const memoryWriteRef = (): string =>
+      memoryWriteModelReference({
+        heavyAvailable: resolveAvail().isAvailable("heavy"),
+        heavyRef: liveHeavyReference(),
+        lightRef: liveLightReference(),
+      });
     memoryService = new MemoryService({
       store: memoryStore,
       index: memoryIndex,
@@ -788,7 +808,7 @@ async function main(): Promise<void> {
         agentDir: env.piAgentDir,
         authPath: join(env.piAgentDir, "auth.json"),
         modelsPath,
-        modelReference: lightRef,
+        modelReference: liveLightReference,
         thinking: "off",
         timeoutMs: () => config.getNumber("librarian.archiveTimeoutMs"),
         systemPrompt: LIBRARIAN_SYNTHESIZER_SYSTEM_PROMPT,
@@ -922,6 +942,73 @@ async function main(): Promise<void> {
       logger.error("pi.start.failed", { error: messageOf(error) });
     }
 
+    // --- Providers / modèles LLM : rechargement À CHAUD (`apply: hot`) ------
+    // Un changement de FOURNISSEUR (`baseUrl`/`api`), de modèle, de réflexion ou
+    // de clé ne doit PLUS exiger de redémarrage. On observe le store : dès qu'un
+    // de ces champs change, on réécrit `models.json`, on rafraîchit le runtime de
+    // modèles PARTAGÉ (providers reconstruits EN PLACE) et on re-résout le
+    // modèle de conversation. Les runs EN COURS se terminent avec leur
+    // fournisseur/modèle d'origine ; le changement s'applique au PROCHAIN run /
+    // au prochain job de fond (toutes les références sont relues « vivantes »).
+    let llmHot = {
+      lightApi: effective.light.api,
+      lightBaseUrl: effective.light.baseUrl,
+      lightModel: effective.light.model,
+      lightThinking: effective.light.thinking,
+      heavyApi: effective.heavy.api,
+      heavyBaseUrl: effective.heavy.baseUrl,
+      heavyModel: effective.heavy.model,
+      heavyThinking: effective.heavy.thinking,
+    };
+    const sameLlm = (a: typeof llmHot, b: EffectiveLlmConfig): boolean =>
+      a.lightApi === b.light.api &&
+      a.lightBaseUrl === b.light.baseUrl &&
+      a.lightModel === b.light.model &&
+      a.lightThinking === b.light.thinking &&
+      a.heavyApi === b.heavy.api &&
+      a.heavyBaseUrl === b.heavy.baseUrl &&
+      a.heavyModel === b.heavy.model &&
+      a.heavyThinking === b.heavy.thinking;
+    stopLlmHotReload = config.subscribe(() => {
+      // Rafraîchit d'abord la liste des secrets masqués (clé saisie à chaud).
+      secretValues.splice(
+        0,
+        secretValues.length,
+        ...collectSecretValues(),
+        ...config.secretValues(),
+      );
+      const next = effectiveLlmConfig(config);
+      if (sameLlm(llmHot, next)) return;
+      llmHot = {
+        lightApi: next.light.api,
+        lightBaseUrl: next.light.baseUrl,
+        lightModel: next.light.model,
+        lightThinking: next.light.thinking,
+        heavyApi: next.heavy.api,
+        heavyBaseUrl: next.heavy.baseUrl,
+        heavyModel: next.heavy.model,
+        heavyThinking: next.heavy.thinking,
+      };
+      logger.info("llm.model.reload.requested", {
+        light: next.light.model,
+        lightBaseUrl: next.light.baseUrl,
+        heavy: next.heavy.model,
+        heavyBaseUrl: next.heavy.baseUrl,
+      });
+      const apply = host?.applyLlmConfig;
+      if (host && apply) {
+        void apply
+          .call(host, {
+            modelsConfig: buildModelsConfigFrom(next),
+            conversationModel: resolveModelsFrom(next).light.reference,
+            conversationThinking: next.light.thinking,
+          })
+          .catch((error: unknown) => {
+            logger.error("llm.model.reload.failed", { error: messageOf(error) });
+          });
+      }
+    });
+
     transport = createWsTransport({
       host,
       logger,
@@ -964,6 +1051,9 @@ async function main(): Promise<void> {
 
   const getSubsystems = (): SubsystemsSnapshot => {
     const availability = resolveAvail();
+    // Modèles EFFECTIFS lus en direct : un changement à chaud doit se refléter
+    // dans /health — afficher l'ancien modèle serait un MENSONGE.
+    const live = effectiveLlmConfig(config);
     const counts =
       delegation?.counts() ??
       { running: 0, queued: 0, completed: 0, failed: 0, interrupted: 0 };
@@ -973,7 +1063,7 @@ async function main(): Promise<void> {
         cwd: env.piCwd,
         agentDir: env.piAgentDir,
         sessionsDir: env.piSessionsDir,
-        model: lightRef,
+        model: resolveModelsFrom(live).light.reference,
         sessionsCount,
         activeRuns,
       },
@@ -987,13 +1077,13 @@ async function main(): Promise<void> {
       llm: {
         light: {
           provider: llmConfig.providers.light.id,
-          model: llmConfig.models.light.id,
+          model: live.light.model,
           status: availability.light.status,
           keyPresent: availability.light.keyPresent,
         },
         heavy: {
           provider: llmConfig.providers.heavy.id,
-          model: llmConfig.models.heavy.id,
+          model: live.heavy.model,
           status: availability.heavy.status,
           keyPresent: availability.heavy.keyPresent,
         },
@@ -1067,6 +1157,8 @@ async function main(): Promise<void> {
     beforeClose: async () => {
       stopAgentsCertReload?.();
       stopAgentsCertReload = undefined;
+      stopLlmHotReload?.();
+      stopLlmHotReload = undefined;
       if (agentsServer) await closeAgentsServer(agentsServer);
       await transport?.close();
       await host?.stop();

@@ -11,7 +11,7 @@
 import { contentTextFromMessage, type RawAgentMessage } from "../events.js";
 import type { MemoryExtractor } from "../../memory/types.js";
 import type { PiLogger, PiThinkingLevel } from "../types.js";
-import { getSharedModelRuntime, resolveSdkModel } from "./model-runtime.js";
+import { getSharedModelRuntime, liveValue, resolveSdkModel } from "./model-runtime.js";
 import { createEphemeralSession } from "./session-factory.js";
 
 /** Prompt système de la session d'extraction (réponse = tableau JSON strict). */
@@ -24,8 +24,10 @@ export interface SdkMemoryExtractorConfig {
   agentDir: string;
   authPath: string;
   modelsPath: string;
-  /** Référence `provider/modelId` utilisée pour l'extraction (ex. le léger). */
-  modelReference: string;
+  /** Référence `provider/modelId` utilisée pour l'extraction (ex. le léger).
+   *  Une FONCTION est relue à chaque extraction ⇒ un changement de modèle
+   *  (`apply: hot`) s'applique sans redémarrage. */
+  modelReference: string | (() => string);
   thinking: PiThinkingLevel;
   /** Allowlist d'outils (défaut : aucun). */
   tools?: readonly string[];
@@ -43,10 +45,11 @@ export function createSdkMemoryExtractor(
       authPath: config.authPath,
       modelsPath: config.modelsPath,
     });
-    const model = resolveSdkModel(runtime, config.modelReference);
+    const modelReference = liveValue(config.modelReference);
+    const model = resolveSdkModel(runtime, modelReference);
     if (!model) {
       config.logger.warn("memory.extractor.model.unresolved", {
-        model: config.modelReference,
+        model: modelReference,
       });
       return "";
     }

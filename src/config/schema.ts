@@ -67,30 +67,42 @@ export const GPU_PROFILES = ["", "confort", "compact", "repli", "texte-seul"] as
  */
 export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // --- LLM léger -----------------------------------------------------------
+  // ⚠️ `baseUrl` + `api` = changement de FOURNISSEUR : `apply: hot`, avec la
+  // MÊME mécanique que le modèle (pas un second chemin). Ces deux champs vivent
+  // dans `models.json` (généré par `buildModelsConfigFrom`) : un changement
+  // réécrit le fichier puis `refreshSharedModelRuntime` reconstruit les
+  // providers EN PLACE (même instance partagée) — voir `PiHost.applyLlmConfig`
+  // + l'abonnement `config.subscribe` de `src/index.ts`. La bascule a lieu
+  // ENTRE deux runs : un run EN VOL garde son fournisseur d'origine.
   "llm.light.api": {
     type: "enum",
     enum: ["openai-completions"],
     default: "openai-completions",
-    apply: "restart",
+    apply: "hot",
     env: "YUKI_LLM_LIGHT_API",
   },
   "llm.light.baseUrl": {
     type: "string",
     default: "https://ollama.com/v1",
-    apply: "restart",
+    apply: "hot",
     env: "YUKI_LLM_LIGHT_BASE_URL",
   },
+  // Modèle / réflexion du léger : `apply: hot`. Un changement de modèle est
+  // re-évalué et appliqué au PROCHAIN run de chaque conversation, sans
+  // redémarrage (voir `PiHost.applyLlmConfig` + l'abonnement `config.subscribe`
+  // dans `src/index.ts`). Les runs EN COURS gardent leur modèle d'origine
+  // (la bascule n'a lieu qu'entre deux runs).
   "llm.light.model": {
     type: "string",
     default: "gemma4:31b",
-    apply: "restart",
+    apply: "hot",
     env: "YUKI_LLM_LIGHT_MODEL",
   },
   "llm.light.thinking": {
     type: "enum",
     enum: THINKING_LEVELS,
     default: "off",
-    apply: "restart",
+    apply: "hot",
     env: "YUKI_LLM_LIGHT_THINKING",
   },
   "llm.light.apiKey": {
@@ -102,30 +114,38 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   },
 
   // --- LLM lourd -----------------------------------------------------------
+  // ⚠️ `baseUrl` + `api` du lourd : `apply: hot` (même mécanique que le modèle).
+  // Les jobs de fond sont des sessions ÉPHÉMÈRES qui re-résolvent le provider
+  // partagé (rafraîchi en place) au démarrage de chaque job ; un job EN VOL
+  // garde son fournisseur d'origine.
   "llm.heavy.api": {
     type: "enum",
     enum: ["openai-completions"],
     default: "openai-completions",
-    apply: "restart",
+    apply: "hot",
     env: "YUKI_LLM_HEAVY_API",
   },
   "llm.heavy.baseUrl": {
     type: "string",
     default: "https://ollama.com/v1",
-    apply: "restart",
+    apply: "hot",
     env: "YUKI_LLM_HEAVY_BASE_URL",
   },
+  // Modèle / réflexion du lourd : `apply: hot`. Les jobs de fond sont des
+  // sessions ÉPHÉMÈRES créées à chaque tâche : elles relisent la référence
+  // courante au démarrage du job (voir `SdkHeavyWorkerConfig.modelReference`),
+  // donc un changement s'applique aux NOUVEAUX jobs sans redémarrage.
   "llm.heavy.model": {
     type: "string",
     default: "deepseek-v4.1-flash",
-    apply: "restart",
+    apply: "hot",
     env: "YUKI_LLM_HEAVY_MODEL",
   },
   "llm.heavy.thinking": {
     type: "enum",
     enum: THINKING_LEVELS,
     default: "high",
-    apply: "restart",
+    apply: "hot",
     env: "YUKI_LLM_HEAVY_THINKING",
   },
   "llm.heavy.apiKey": {

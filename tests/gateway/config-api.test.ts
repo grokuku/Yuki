@@ -165,7 +165,7 @@ describe("GET /api/config en mode dégradé", () => {
     expect(body.fields["llm.light.model"]).toMatchObject({
       value: "gemma4:31b",
       origin: "default",
-      apply: "restart",
+      apply: "hot",
     });
     expect(body.fields["prompts.light"]).toMatchObject({ value: "P", origin: "default" });
   });

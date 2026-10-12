@@ -50,6 +50,23 @@ export interface PiLogger {
   error(message: string, fields?: Record<string, unknown>): void;
 }
 
+/**
+ * Options du rechargement À CHAUD de la configuration des modèles
+ * (`PiHost.applyLlmConfig`).
+ */
+export interface ApplyLlmConfigOptions {
+  /**
+   * Nouveau contenu GÉNÉRÉ de `models.json` (reconstruit depuis la config
+   * effective). Absent ⇒ le fichier n'est pas réécrit (seul le runtime de
+   * modèles est rafraîchi).
+   */
+  modelsConfig?: ModelsConfig;
+  /** Référence `provider/modelId` du modèle CONVERSATIONNEL (léger). */
+  conversationModel: string;
+  /** Niveau de raisonnement du léger (sinon celui déduit de la référence). */
+  conversationThinking?: PiThinkingLevel;
+}
+
 /** Options de construction du host embarqué. */
 export interface PiHostOptions {
   /** Répertoire d'état du SDK (settings.json, auth.json, models.json…). */

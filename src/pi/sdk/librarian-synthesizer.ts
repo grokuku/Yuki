@@ -15,7 +15,7 @@
 import { contentTextFromMessage, type RawAgentMessage } from "../events.js";
 import type { LibrarianSynthesizer } from "../../librarian/types.js";
 import type { PiLogger, PiThinkingLevel } from "../types.js";
-import { getSharedModelRuntime, resolveSdkModel } from "./model-runtime.js";
+import { getSharedModelRuntime, liveValue, resolveSdkModel } from "./model-runtime.js";
 import { createEphemeralSession } from "./session-factory.js";
 
 export interface SdkLibrarianSynthesizerConfig {
@@ -23,8 +23,9 @@ export interface SdkLibrarianSynthesizerConfig {
   agentDir: string;
   authPath: string;
   modelsPath: string;
-  /** Référence `provider/modelId` utilisée (ex. le léger). */
-  modelReference: string;
+  /** Référence `provider/modelId` utilisée (ex. le léger). Une FONCTION est
+   *  relue à chaque synthèse ⇒ changement de modèle à chaud sans redémarrage. */
+  modelReference: string | (() => string);
   thinking: PiThinkingLevel;
   /** Délai maximal d'une synthèse (ms), lu à chaud. */
   timeoutMs: () => number;
@@ -41,10 +42,11 @@ export function createSdkLibrarianSynthesizer(
       authPath: config.authPath,
       modelsPath: config.modelsPath,
     });
-    const model = resolveSdkModel(runtime, config.modelReference);
+    const modelReference = liveValue(config.modelReference);
+    const model = resolveSdkModel(runtime, modelReference);
     if (!model) {
       config.logger.warn("librarian.synthesizer.model.unresolved", {
-        model: config.modelReference,
+        model: modelReference,
       });
       return "";
     }

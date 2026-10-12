@@ -66,6 +66,7 @@ import {
 } from "./sdk/execution-tools.js";
 import {
   getSharedModelRuntime,
+  refreshSharedModelRuntime,
   resolveSdkModel,
   resolveSdkThinking,
   type SdkModel,
@@ -79,6 +80,7 @@ import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
 import { createHeritageTools } from "./sdk/heritage-tools.js";
 import { createLibrarianTools } from "./sdk/librarian-tools.js";
 import type {
+  ApplyLlmConfigOptions,
   PiEvent,
   PiEventListener,
   PiHostOptions,
@@ -792,6 +794,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     });
 
     try {
+      // Modèle à jour pour CE run : un changement de modèle (apply: hot) prend
+      // effet ICI, entre deux runs — sans jamais interrompre le run précédent.
+      // Condition SYNCHRONE : aucun surcoût quand rien n'a changé.
+      if (needsModelSwitch(record)) {
+        await ensureRecordModel(record);
+      }
       await record.session.prompt(run.storedText, {
         expandPromptTemplates: false,
         preflightResult: (accepted: boolean) => {
@@ -1052,6 +1060,72 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       ...(customTools.length > 0 ? { customTools } : {}),
       ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
     });
+  }
+
+  /**
+   * Deux « références de modèle » désignent-elles la MÊME cible d'exécution ?
+   * On compare AUSSI `baseUrl` : un changement de FOURNISSEUR (`llm.*.baseUrl`,
+   * `apply: hot`) garde le même `provider`/`id` mais une URL différente — sans
+   * cette comparaison, les sessions existantes conserveraient une capture
+   * FIGÉE de l'ancien endpoint (le prochain run partirait vers l'ancien).
+   */
+  function sameModelRef(
+    current: SdkModel | undefined,
+    next: SdkModel,
+  ): boolean {
+    return (
+      current !== undefined &&
+      current.provider === next.provider &&
+      current.id === next.id &&
+      current.baseUrl === next.baseUrl
+    );
+  }
+
+  /**
+   * Vrai si ce fil doit changer de modèle ou de niveau de réflexion. PRÉDICAT
+   * SYNCHRONE (aucune attente) : permet à `startRun` de ne PAS introduire de
+   * microtâche avant l'émission de `run_started` quand rien ne change.
+   */
+  function needsModelSwitch(record: SessionRecord): boolean {
+    if (!resolvedModel) return false;
+    if (!sameModelRef(record.session.model, resolvedModel)) return true;
+    return Boolean(
+      resolvedThinking && record.session.thinkingLevel !== resolvedThinking,
+    );
+  }
+
+  /**
+   * Aligne le modèle (et le niveau de réflexion) d'UNE conversation sur l'état
+   * COURANT (`resolvedModel`/`resolvedThinking`). Appelé AU DÉBUT de chaque run :
+   * c'est ce qui rend un changement de modèle effectif SANS redémarrage — le
+   * prochain run de chaque fil prend le nouveau modèle, sans jamais interrompre
+   * un run en vol (on ne touche pas au modèle au milieu d'un tour). Un échec de
+   * bascule (clé absente…) est journalisé et NE fait PAS échouer le run : on
+   * garde le modèle courant plutôt que de casser la conversation.
+   */
+  async function ensureRecordModel(record: SessionRecord): Promise<void> {
+    if (!resolvedModel) return;
+    const current = record.session.model;
+    const sameModel = sameModelRef(current, resolvedModel);
+    try {
+      if (!sameModel) {
+        await record.session.setModel(resolvedModel);
+        logger.info("pi.model.switched", {
+          session_id: record.sessionId,
+          model: `${resolvedModel.provider}/${resolvedModel.id}`,
+        });
+      }
+      // `setModel` applique le thinking DÉDUIT du modèle ; la config fait foi.
+      if (resolvedThinking && record.session.thinkingLevel !== resolvedThinking) {
+        record.session.setThinkingLevel(resolvedThinking);
+      }
+    } catch (error) {
+      logger.warn("pi.model.switch.failed", {
+        session_id: record.sessionId,
+        model: `${resolvedModel.provider}/${resolvedModel.id}`,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -1322,6 +1396,46 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       if (run && run.runId === runId) {
         run.instrumentation.recordTtsMetrics(metrics);
       }
+    },
+
+    async applyLlmConfig(options: ApplyLlmConfigOptions): Promise<void> {
+      if (!modelRuntime) return; // Host non démarré : rien à recharger.
+      // 1) Réécrit `models.json` (nouveau FOURNISSEUR `baseUrl`/`api` et/ou
+      //    nouveau modèle) puis rafraîchit le runtime PARTAGÉ (léger ET lourd)
+      //    EN PLACE. Le worker lourd, qui re-résout sa référence à chaque job,
+      //    voit ainsi le nouveau fournisseur/modèle.
+      if (options.modelsConfig !== undefined) {
+        writeModelsFile(paths, options.modelsConfig, logger);
+      }
+      await refreshSharedModelRuntime({
+        authPath: join(paths.agentDir, "auth.json"),
+        modelsPath: paths.modelsPath,
+      });
+      // 2) Re-résout le modèle de conversation + son thinking.
+      const nextModel = resolveSdkModel(modelRuntime, options.conversationModel);
+      if (!nextModel) {
+        logger.warn("pi.model.reload.unresolved", {
+          model: options.conversationModel,
+        });
+        return;
+      }
+      resolvedModel = nextModel;
+      resolvedThinking =
+        options.conversationThinking ??
+        resolveSdkThinking(modelRuntime, options.conversationModel) ??
+        resolvedThinking;
+      logger.info("pi.model.reloaded", {
+        model: `${nextModel.provider}/${nextModel.id}`,
+        thinking: resolvedThinking ?? null,
+      });
+      // 3) Applique AUX SESSIONS INACTIVES ; un run EN VOL gardera son modèle
+      //    jusqu'à sa fin (la bascule se fait au prochain `startRun`). On ATTEND
+      //    l'application pour que `applyLlmConfig` soit terminée à son retour.
+      await Promise.all(
+        [...sessions.values()]
+          .filter((record) => !record.currentRun)
+          .map((record) => ensureRecordModel(record)),
+      );
     },
 
     getState(sessionId?: string): SessionState | undefined {

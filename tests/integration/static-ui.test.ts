@@ -66,6 +66,23 @@ describe("UI statique servie par le gateway", () => {
     expect(body).toContain('href="/config"');
   });
 
+  it("le bandeau ne contient PLUS le raccourci « Voix » (doublon de Configuration)", async () => {
+    const body = await (await fetch(`${baseUrl}/`)).text();
+
+    // Le raccourci redondant vers l'onglet Voix est retiré (demande utilisateur).
+    expect(body).not.toContain('href="/config#voix"');
+    expect(body).not.toMatch(/>\s*Voix\s*</);
+
+    // Rien d'autre n'a disparu du bandeau : Configuration, connexion, état de
+    // session, sélecteur de thème, bascule jour/nuit et contrôle MUET (volume).
+    expect(body).toContain('href="/config"');
+    expect(body).toContain('id="connection"');
+    expect(body).toContain('id="session-state"');
+    expect(body).toContain('id="theme-family"');
+    expect(body).toContain('id="theme-toggle"');
+    expect(body).toContain('id="tts-toggle"');
+  });
+
   it("GET /ui/app.js et /ui/styles.css servent les assets", async () => {
     const app = await fetch(`${baseUrl}/ui/app.js`);
     expect(app.status).toBe(200);

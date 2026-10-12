@@ -12,6 +12,7 @@
 import { createSdkPiHost } from "./sdk-host.js";
 import type { RunTtsMetrics } from "./instrumentation.js";
 import type {
+  ApplyLlmConfigOptions,
   EnsureSessionOptions,
   PiEventListener,
   PiHostOptions,
@@ -86,6 +87,17 @@ export interface PiHost {
   /** Chemin du fichier JSONL d'une session (courante ou persistée). */
   sessionFileFor(id: string): Promise<string | undefined>;
 
+  /**
+   * Recharge À CHAUD la configuration d'exécution LLM (fournisseur `baseUrl`/
+   * `api`, modèle, réflexion). Réécrit `models.json`, rafraîchit le runtime de
+   * modèles PARTAGÉ (léger ET lourd) et re-résout le modèle de conversation. Les
+   * conversations EN COURS ne sont PAS interrompues : la bascule n'a lieu qu'entre
+   * deux runs (au démarrage du run suivant), donc un run en vol se termine avec son
+   * fournisseur/modèle d'origine. Optionnel pour rester rétro-compatible avec les
+   * doubles de test.
+   */
+  applyLlmConfig?(options: ApplyLlmConfigOptions): Promise<void>;
+
   /** Libère le runtime et les abonnements. */
   stop(): Promise<void>;
 }
@@ -96,6 +108,7 @@ export function createPiHost(options: PiHostOptions): PiHost {
 }
 
 export type {
+  ApplyLlmConfigOptions,
   EnsureSessionOptions,
   PiEventListener,
   PiHostOptions,

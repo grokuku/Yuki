@@ -49,6 +49,33 @@ export function getSharedModelRuntime(
   return created;
 }
 
+/**
+ * Valeur « vivante » : une fonction est appelée à CHAQUE lecture. Sert à
+ * rendre un champ de configuration lu à chaud (ex. référence de modèle) sans
+ * recâbler le composant : un changement de modèle (`apply: hot`) s'applique
+ * donc à la prochaine utilisation (nouveau job / prochain run).
+ */
+export function liveValue<T>(value: T | (() => T)): T {
+  return typeof value === "function" ? (value as () => T)() : value;
+}
+
+/**
+ * Rafraîchit À CHAUD le `ModelRuntime` partagé pour ces chemins : le fichier
+ * `models.json` est relu et les providers sont reconstruits EN PLACE (même
+ * instance ⇒ les sessions ET les workers de fond déjà câblés voient les
+ * nouveaux modèles). Aucun appel réseau (`allowNetwork: false`, `PI_OFFLINE`).
+ *
+ * Utilisé par le rechargement à chaud des modèles (`apply: hot`) : après avoir
+ * réécrit `models.json` avec le nouveau modèle, on re-résout la référence.
+ */
+export async function refreshSharedModelRuntime(
+  config: SdkModelRuntimeConfig,
+): Promise<ModelRuntime> {
+  const runtime = await getSharedModelRuntime(config);
+  await runtime.refresh({ allowNetwork: false });
+  return runtime;
+}
+
 /** Résout une référence `provider/modelId` en objet modèle (sans vérifier l'auth). */
 export function resolveSdkModel(
   runtime: ModelRuntime,

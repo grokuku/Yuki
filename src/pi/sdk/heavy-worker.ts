@@ -29,7 +29,7 @@ import {
   type RawAgentMessage,
 } from "../events.js";
 import type { PiLogger, PiThinkingLevel } from "../types.js";
-import { getSharedModelRuntime, resolveSdkModel } from "./model-runtime.js";
+import { getSharedModelRuntime, liveValue, resolveSdkModel } from "./model-runtime.js";
 import { createEphemeralSession } from "./session-factory.js";
 
 export interface SdkHeavyWorkerConfig {
@@ -38,9 +38,14 @@ export interface SdkHeavyWorkerConfig {
   authPath: string;
   modelsPath: string;
   systemPrompt: string;
-  /** Référence `provider/modelId` du modèle lourd. */
-  modelReference: string;
-  thinking: PiThinkingLevel;
+  /**
+   * Référence `provider/modelId` du modèle lourd. Une FONCTION est relue à
+   * CHAQUE job : un changement de modèle (`apply: hot`) s'applique donc aux
+   * NOUVEAUX jobs sans redémarrer Yuki (un job en vol garde son modèle).
+   */
+  modelReference: string | (() => string);
+  /** Niveau de réflexion du lourd (une fonction est relue à chaque job). */
+  thinking: PiThinkingLevel | (() => PiThinkingLevel);
   /** Allowlist d'outils du lourd (lecture seule). */
   tools: readonly string[];
   idleTimeoutMs: number;
@@ -167,11 +172,12 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
       return { status: "failed", error: "model_runtime_unavailable" };
     }
 
-    const model = resolveSdkModel(runtime, config.modelReference);
+    const modelReference = liveValue(config.modelReference);
+    const model = resolveSdkModel(runtime, modelReference);
     if (!model) {
       config.logger.warn("heavy.model.unresolved", {
         job_id: request.jobId,
-        model: config.modelReference,
+        model: modelReference,
       });
       return { status: "failed", error: "model_unresolved" };
     }
@@ -184,7 +190,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         systemPrompt: config.systemPrompt,
         modelRuntime: runtime,
         model,
-        thinkingLevel: config.thinking,
+        thinkingLevel: liveValue(config.thinking),
         tools: config.tools,
       });
     } catch (error) {

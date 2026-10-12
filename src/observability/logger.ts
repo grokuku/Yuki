@@ -116,7 +116,9 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     const record: Record<string, unknown> = {
       ts: new Date().toISOString(),
       level: entryLevel,
-      msg: message,
+      // Le message LIBRE est masqué lui aussi : une clé d'API glissée par erreur
+      // dans un texte (et non dans un champ) ne doit jamais apparaître en clair.
+      msg: redactValue(message, secretValues) as string,
       ...(redactObject(merged, secretValues) as Record<string, unknown>),
     };
     sink(JSON.stringify(record));
