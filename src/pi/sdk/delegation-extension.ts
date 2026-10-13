@@ -4,13 +4,24 @@
  *
  * À CHAQUE tour (`before_agent_start`), elle AJOUTE au PROMPT SYSTÈME du tour :
  *
- *  1) une consigne FERME de relais : l'utilisateur ne parle qu'à
+ *  1) une FRONTIÈRE FERME « faire ou déléguer ? » (règle calquée sur
+ *     `PI_HARNESS_ROLE` de Pi-Web, adaptée à une ASSISTANTE PERSONNELLE) : le
+ *     travail d'exécution LONG ou multi-étapes se DÉLÈGUE ; les choses RAPIDES se
+ *     font soi-même ; on accuse réception court puis on REND LA MAIN. Sans cette
+ *     règle, Yuki peut faire tout le travail elle-même « en attendant » — son tour
+ *     se bloque, le TTFT s'effondre et la délégation ne sert plus à rien ;
+ *  2) une consigne FERME de relais : l'utilisateur ne parle qu'à
  *     l'orchestrateur ; dès qu'il évoque une tâche EN COURS, il DOIT la
  *     transmettre au sous-agent (`steer_job`) — accuser réception ne suffit pas ;
- *  2) la LISTE des tâches EN COURS de CETTE conversation (`job_id` utilisable
+ *  3) la LISTE des tâches EN COURS de CETTE conversation (`job_id` utilisable
  *     pour `steer_job`, intitulé, statut « en cours » / « en file »), pour que
  *     l'orchestrateur sache QUOI relayer — sans quoi la consigne de relais serait
  *     inapplicable (équivalent de l'information « telle tâche tourne »).
+ *
+ * ⚠️ Les trois blocs vivent ICI, dans le MÊME endroit : deux textes de règle
+ * épars risqueraient de se contredire. Ils sont cohérents entre eux (le travail
+ * long se délègue, la réponse courte se fait soi-même, et une précision qui vise
+ * un job en cours se RELAIE).
  *
  * ⚠️ Comme la mémoire et l'annuaire, c'est un mécanisme NON PERSISTÉ : on
  * augmente seulement `systemPrompt` du tour (`types.d.ts` → « Replace the system
@@ -27,6 +38,37 @@
 import type { ExtensionAPI, InlineExtension } from "@earendil-works/pi-coding-agent";
 
 import { escapeOutputText } from "../../agents/output.js";
+
+/**
+ * Frontière BINDING « faire ou déléguer ? » (calquée sur `PI_HARNESS_ROLE` de
+ * `harness-orchestrator/index.ts`, Pi-Web), ADAPTÉE à une ASSISTANTE PERSONNELLE
+ * — Yuki n'est pas une cheffe de projet de développement. Exportée pour être
+ * VERROUILLÉE par un test : si quelqu'un l'affaiblit (la retire, la rend
+ * facultative, ou la transforme en « délègue tout »), la garantie « Yuki répond
+ * vite et rend la main au lieu de faire le travail long elle-même »
+ * disparaîtrait silencieusement.
+ *
+ * ⚠️ Utile, PAS absolue : elle distingue le LONG (à déléguer) du RAPIDE (à faire
+ * soi-même). « Délègue tout » serait absurde — une recherche libraire n'a pas à
+ * passer par un sous-agent.
+ */
+export const DELEGATION_RULE = [
+  "## Faire ou déléguer ? (règle STRICTE, non optionnelle)",
+  "",
+  "Tu es une ASSISTANTE PERSONNELLE : tu réponds VITE, tu gardes la main avec",
+  "l'utilisateur, et tu ne fais pas toi-même le travail long.",
+  "- DÉLÈGUE (`delegate`) tout travail d'EXÉCUTION long ou multi-étapes : écrire ou",
+  "  modifier du code, construire un projet, une analyse approfondie, une suite",
+  "  d'actions — tout ce qui prend du temps. Tu lances, tu accuses réception COURT",
+  "  (« c'est parti », « je m'en occupe »), puis tu RENDS LA MAIN : tu ne restes",
+  "  JAMAIS bloquée à faire ce travail toi-même ni à l'attendre. Le rapport te sera",
+  "  livré plus tard, dans un nouveau tour.",
+  "- FAIS-LE TOI-MÊME si c'est RAPIDE (un seul pas) : lire un fichier, une recherche",
+  "  libraire, lister les agents ou consulter leur état, une capture d'écran, une",
+  "  question de conversation. Pour si peu, un sous-agent serait plus lent qu'utile.",
+  "- En cas de doute : long ou plusieurs étapes ⇒ délègue ; immédiat ⇒ fais-le",
+  "  toi-même.",
+].join("\n");
 
 /**
  * Consigne de relais BINDING (calquée sur `harness-orchestrator/index.ts` de
@@ -164,7 +206,8 @@ export function createDelegationExtensionFactory(
             sessionId = undefined;
           }
           const jobs = sessionId ? options.activeJobs(sessionId) : [];
-          block = `${RELAY_RULE}\n\n${framePendingJobs(jobs)}`;
+          // MÊME bloc, même tour : frontière faire/déléguer → relais → jobs.
+          block = `${DELEGATION_RULE}\n\n${RELAY_RULE}\n\n${framePendingJobs(jobs)}`;
         } catch (error) {
           // Ne JAMAIS faire échouer le tour : un échec d'injection est omis.
           options.logger?.warn("delegation.relay.inject.failed", {

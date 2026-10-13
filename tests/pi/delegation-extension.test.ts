@@ -11,8 +11,11 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
+  DELEGATION_RULE,
   MAX_INLINE_PENDING_JOBS,
   PENDING_JOBS_TAG,
   RELAY_RULE,
@@ -85,6 +88,61 @@ describe("relais de délégation — injection dans le prompt système (non pers
     expect(RELAY_RULE).toMatch(/ne suffit PAS/);
     // L'utilisateur ne parle qu'à l'orchestrateur.
     expect(RELAY_RULE).toMatch(/ne parle qu'à TOI/);
+  });
+
+  it("injecte la FRONTIÈRE faire/déléguer dans le prompt système (non persistée)", () => {
+    const handlers = capture(() => []);
+    const result = inject(handlers);
+    // Un seul canal : le prompt système du tour, jamais un `message` persisté.
+    expect(Object.keys(result ?? {})).toEqual(["systemPrompt"]);
+    expect(result?.systemPrompt).toContain(DELEGATION_RULE);
+    expect(result?.systemPrompt).toContain("Faire ou déléguer ?");
+  });
+
+  it("la frontière est BINDING et distingue le LONG du RAPIDE", () => {
+    // Le travail long se DÉLÈGUE (impératif, pas « tu peux »).
+    expect(DELEGATION_RULE).toContain("DÉLÈGUE");
+    expect(DELEGATION_RULE).toMatch(/travail d'EXÉCUTION long/);
+    expect(DELEGATION_RULE).toMatch(/tout ce qui prend du temps/);
+    // Accuser réception COURT puis RENDRE LA MAIN (cœur du modèle Pi-Web).
+    expect(DELEGATION_RULE).toMatch(/accuses réception COURT/);
+    expect(DELEGATION_RULE).toMatch(/RENDS LA MAIN/);
+    expect(DELEGATION_RULE).toMatch(/JAMAIS bloquée/);
+    // Les choses RAPIDES se font soi-même (jamais par un sous-agent).
+    expect(DELEGATION_RULE).toMatch(/TOI-MÊME si c'est RAPIDE/);
+    expect(DELEGATION_RULE).toMatch(/recherche\s+libraire/);
+    expect(DELEGATION_RULE).toMatch(/capture d'écran/);
+    // La frontière n'est PAS absolue : pas de « délègue tout ».
+    expect(DELEGATION_RULE).not.toMatch(/délègue tout/i);
+  });
+
+  it("COHÉRENT avec le RELAY_RULE (les deux blocs cohabitent, sans contradiction)", () => {
+    const handlers = capture(() => []);
+    const text = inject(handlers)!.systemPrompt!;
+    // Les deux règles sont présentes ENSEMBLE et dans le bon ordre.
+    const iDeleg = text.indexOf(DELEGATION_RULE);
+    const iRelay = text.indexOf(RELAY_RULE);
+    expect(iDeleg).toBeGreaterThan(-1);
+    expect(iRelay).toBeGreaterThan(iDeleg);
+    // Les deux s'accordent à dire qu'une réponse courte se fait soi-même.
+    expect(DELEGATION_RULE).toContain("TOI-MÊME");
+    expect(RELAY_RULE).toMatch(/réponds COURT toi-même/);
+  });
+
+  it("PROMPT EFFECTIF (base livrée + extension) contient la frontière de délégation", () => {
+    // Le prompt « effectif » = base `prompts.light` (config/pi/system-prompt.md)
+    // augmenté, à CHAQUE tour, du bloc de l'extension.
+    const base = readFileSync(
+      resolve(process.cwd(), "config/pi/system-prompt.md"),
+      "utf8",
+    );
+    // La base décrit déjà `delegate` (mais de façon PERMISSIVE : « tu peux »).
+    expect(base).toMatch(/tu peux confier le travail/);
+    const handlers = capture(() => []);
+    const effective = inject(handlers, base)!.systemPrompt!;
+    expect(effective).toContain("Faire ou déléguer ?");
+    expect(effective).toContain("DÉLÈGUE");
+    expect(effective).toContain("RENDS LA MAIN");
   });
 
   it("INFALSIFIABLE : un intitulé piégé ne casse pas l'encadrement", () => {
