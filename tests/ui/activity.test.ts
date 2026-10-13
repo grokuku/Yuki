@@ -13,10 +13,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  THINKING_BLOCK_LABEL,
   THINKING_LABEL,
   describeActivity,
   formatDuration,
   jobStatusView,
+  thinkingToggleLabel,
 } from "../../public/ui/activity.js";
 
 
@@ -90,12 +92,15 @@ describe("describeActivity — rien à afficher quand aucun job", () => {
 });
 
 describe("describeActivity — tâche en cours", () => {
-  it("un job en cours : libellé + compteur de durée SÉPARÉ (anti-spam)", () => {
+  it("un job en cours : libellé GÉNÉRIQUE + compteur de durée SÉPARÉ (anti-spam)", () => {
     const view = mustActivity(
       [{ status: "running", task: "analyse du dépôt", startedAt: 1000 }],
       4240,
     );
-    expect(view.text).toBe("Tâche de fond « analyse du dépôt » en cours…");
+    // ⚠️ Le texte de la tâche (prompt du sous-agent) n'apparaît JAMAIS dans
+    // l'indicateur global : il n'a sa place que DANS le bloc repliable.
+    expect(view.text).toBe("Tâche de fond en cours…");
+    expect(view.text).not.toContain("analyse du dépôt");
     expect(view.timer).toBe(" (3,2 s)");
     expect(view.tone).toBe("active");
   });
@@ -120,12 +125,13 @@ describe("describeActivity — tâche en cours", () => {
 });
 
 describe("describeActivity — statut terminal", () => {
-  it("terminée : tâche + statut + durée DANS le libellé accessible", () => {
+  it("terminée : statut + durée DANS le libellé, SANS le texte de la tâche", () => {
     const view = mustActivity(
       [{ status: "completed", task: "analyse", startedAt: 0, durationMs: 28_500 }],
       99_999,
     );
-    expect(view.text).toBe("Tâche de fond « analyse » terminée (succès) — 28,5 s");
+    expect(view.text).toBe("Tâche de fond terminée (succès) — 28,5 s");
+    expect(view.text).not.toContain("analyse");
     expect(view.timer).toBe("");
     expect(view.tone).toBe("ok");
   });
@@ -149,6 +155,34 @@ describe("describeActivity — statut terminal", () => {
     );
     expect(view.text).toBe("Tâche de fond interrompue — 2,0 s");
     expect(view.tone).toBe("muted");
+  });
+});
+
+/* ─── Bloc de RÉFLEXION (libellés purs) ─────────────────────────────────── */
+
+describe("bloc de réflexion — libellés", () => {
+  it("le titre est en français", () => {
+    expect(THINKING_BLOCK_LABEL).toBe("Réflexion du modèle");
+  });
+
+  it("le libellé du bouton porte le nombre de caractères et l'action", () => {
+    expect(thinkingToggleLabel(0, false)).toBe(
+      "Réflexion du modèle — 0 caractères — déplier",
+    );
+    expect(thinkingToggleLabel(1, true)).toBe(
+      "Réflexion du modèle — 1 caractère — replier",
+    );
+    expect(thinkingToggleLabel(4200, false)).toBe(
+      "Réflexion du modèle — 4200 caractères — déplier",
+    );
+  });
+
+  it("nombre invalide → 0 caractères (jamais « NaN »)", () => {
+    expect(thinkingToggleLabel(Number.NaN, false)).toContain("0 caractères");
+    expect(thinkingToggleLabel(undefined as unknown as number, false)).toContain(
+      "0 caractères",
+    );
+    expect(thinkingToggleLabel(-5, false)).toContain("0 caractères");
   });
 });
 

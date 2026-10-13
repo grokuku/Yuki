@@ -13,6 +13,25 @@
 /** Libellé de l'indicateur d'attente affiché DÈS `run_started` (avant tout token). */
 export const THINKING_LABEL = "Yuki réfléchit…";
 
+/**
+ * Titre du bloc de RÉFLEXION (canal `thinking`) inséré DANS le fil.
+ * ⚠️ Libellé d'INTERFACE : jamais envoyé au moteur TTS.
+ */
+export const THINKING_BLOCK_LABEL = "Réflexion du modèle";
+
+/**
+ * Libellé accessible du bouton repli/dépli du bloc de réflexion.
+ * @param {number} chars nombre de caractères de réflexion connus
+ * @param {boolean} expanded état courant
+ * @returns {string}
+ */
+export function thinkingToggleLabel(chars, expanded) {
+  const n =
+    typeof chars === "number" && Number.isFinite(chars) && chars > 0 ? Math.floor(chars) : 0;
+  const unit = n === 1 ? "1 caractère" : `${n} caractères`;
+  return `${THINKING_BLOCK_LABEL} — ${unit} — ${expanded ? "replier" : "déplier"}`;
+}
+
 /** Durée pendant laquelle un statut TERMINAL reste affiché avant effacement. */
 export const JOB_FINISHED_HOLD_MS = 12_000;
 
@@ -61,6 +80,12 @@ export function formatDuration(ms) {
  * `{ task?, status, startedAt, durationMs? }` (la PLUS RÉCENTE en dernier),
  * `now` = instant courant (ms).
  *
+ * ⚠️ Le TEXTE DE LA TÂCHE (`task`) n'apparaît JAMAIS ici : c'est le prompt
+ * rédigé par Yuki pour le sous-agent (souvent long et multi-lignes). Il n'a sa
+ * place que DANS le bloc repliable d'activité du sous-agent (`.subagent-activity`,
+ * déplié à la demande) — l'afficher dans cet indicateur global le faisait
+ * déborder à l'écran et apparaître EN DOUBLE quand le bloc était déplié.
+ *
  * Renvoie `null` quand RIEN ne doit être affiché, sinon `{ text, timer, tone }` :
  *  - `text`  : libellé ACCESSIBLE (n'évolue qu'aux TRANSITIONS — pas de spam
  *              d'annonces pour un lecteur d'écran) ;
@@ -79,14 +104,7 @@ export function describeActivity(jobs, now) {
     const elapsed = formatDuration(Math.max(0, now - oldest));
     const timer = elapsed ? ` (${elapsed})` : "";
     if (running.length === 1) {
-      const task = typeof running[0].task === "string" ? running[0].task.trim() : "";
-      return {
-        tone: "active",
-        text: task
-          ? `Tâche de fond « ${task} » en cours…`
-          : "Tâche de fond en cours…",
-        timer,
-      };
+      return { tone: "active", text: "Tâche de fond en cours…", timer };
     }
     return {
       tone: "active",
@@ -96,13 +114,11 @@ export function describeActivity(jobs, now) {
   }
   const last = jobs[jobs.length - 1];
   const view = jobStatusView(last.status);
-  const task = typeof last.task === "string" ? last.task.trim() : "";
-  const subject = task ? `« ${task} » ` : "";
   const duration =
     typeof last.durationMs === "number" ? ` — ${formatDuration(last.durationMs)}` : "";
   return {
     tone: view.tone,
-    text: `Tâche de fond ${subject}${view.label}${duration}`,
+    text: `Tâche de fond ${view.label}${duration}`,
     timer: "",
   };
 }

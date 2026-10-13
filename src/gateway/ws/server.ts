@@ -270,6 +270,14 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       broadcastControl(event.sessionId, toServerMessage(event));
       return;
     }
+    // ⚠️ RÉFLEXION du modèle (canal `thinking`) : ÉPHÉMÈRE et MUETTE, exactement
+    // comme l'activité d'un sous-agent. On la déroute AVANT `streams.append`
+    // (donc JAMAIS dans le rejeu ni dans un snapshot) et AVANT `routeTtsEvent`
+    // (jamais prononcée), vers une trame de CONTRÔLE rattachée au fil concerné.
+    if (event.type === "delta" && event.channel === "thinking") {
+      broadcastControl(event.sessionId, toServerMessage(event));
+      return;
+    }
     streams.get(event.sessionId).append(toServerMessage(event));
     routeTtsEvent(event);
   });

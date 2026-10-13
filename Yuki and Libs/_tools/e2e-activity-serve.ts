@@ -39,6 +39,10 @@ const env = loadEnv({
 const REPLY_TEXT = "Voici la réponse, une fois l'attente terminée.";
 const FIRST_TOKEN_DELAY_MS = 1_600;
 
+/** Fragments de RÉFLEXION (canal `thinking`) — jamais prononcés, jamais persistés. */
+const THINKING_SECRET_A = "Je compare les options possibles. ";
+const THINKING_SECRET_B = "REPONSE-SECRETE-DE-REFLEXION";
+
 function chatSteps(text: string, size = 12, delayMs = 25): FakeStep[] {
   const steps: FakeStep[] = [];
   for (let i = 0; i < text.length; i += size) {
@@ -59,6 +63,16 @@ const host = new FakePiHost({
     },
     { name: "activity-follow-up", steps: chatSteps("Deuxième réponse.", 12, 25) },
     { name: "activity-third", steps: chatSteps("Troisième réponse.", 12, 25) },
+    // Réflexion (canal `thinking`) PUIS contenu : le bloc de réflexion doit
+    // apparaître AVANT la réponse, replié par défaut, et rester MUET pour la TTS.
+    {
+      name: "activity-thinking",
+      steps: [
+        { kind: "delta", channel: "thinking", text: THINKING_SECRET_A, delayMs: 30 },
+        { kind: "delta", channel: "thinking", text: THINKING_SECRET_B, delayMs: 30 },
+        { kind: "delta", channel: "content", text: "Quatrième réponse.", delayMs: 30 },
+      ],
+    },
   ],
 });
 await host.start();

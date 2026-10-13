@@ -96,6 +96,42 @@ describe("intégration WS — tour de conversation texte", () => {
     expect(assistantText).not.toContain("je réfléchis");
   });
 
+  it("la réflexion est ÉPHÉMÈRE : trame de CONTRÔLE, jamais dans le rejeu", async () => {
+    harness = await startHarness({ scripts: [THINKING, SIMPLE] });
+    const first = await connect(harness);
+
+    first.send({ type: "message", clientMsgId: "m1", text: "raisonne" });
+    await first.waitFor((frame) => frame.type === "run_finished" && frame.reason === "done");
+    // En DIRECT, la réflexion transite bien (canal `thinking`).
+    expect(
+      first.frames.some((frame) => frame.type === "delta" && frame.channel === "thinking"),
+    ).toBe(true);
+    const sessionId = first.frames[0]?.sessionId;
+    expect(sessionId).toBeTruthy();
+    await first.close();
+
+    // Un autre client produit d'autres événements PENDANT la déconnexion.
+    const other = await connect(harness);
+    other.send({ type: "message", clientMsgId: "m2", text: "deux" });
+    await other.waitFor((frame) => frame.type === "run_finished" && frame.reason === "done");
+
+    // Rejeu DEPUIS LE DÉBUT : la réflexion ne doit PAS être bufferisée.
+    const resumed = await TestClient.connect(harness.url);
+    clients.push(resumed);
+    const before = resumed.frames.length;
+    resumed.send({ type: "resume", sessionId, fromSeq: 0 });
+    await resumed.waitFor((frame) => frame.type === "run_summary");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const replayed = resumed.frames.slice(before).filter((frame) => frame.type !== "welcome");
+    expect(replayed.length).toBeGreaterThan(0);
+    // Aucune trame de réflexion rejouée : elle n'est jamais bufferisée.
+    expect(
+      replayed.some((frame) => frame.type === "delta" && frame.channel === "thinking"),
+    ).toBe(false);
+    expect(JSON.stringify(replayed)).not.toContain("je réfléchis");
+  });
+
   it("rejoue les événements manqués sans trou ni doublon après reconnexion", async () => {
     harness = await startHarness({ scripts: [SIMPLE, SIMPLE] });
     const first = await connect(harness);

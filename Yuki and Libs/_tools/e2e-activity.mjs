@@ -39,6 +39,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const THINKING_LABEL = "Yuki réfléchit…";
 const REPLY_TEXT = "Voici la réponse, une fois l'attente terminée.";
+// Tâche de fond LONGUE et SANS espace : reproduit la capture utilisateur (ligne
+// qui débordait à droite). Elle ne doit apparaître QUE dans le bloc repliable,
+// jamais dans l'indicateur global `#job-activity`.
+const LONG_TASK =
+  "Exécuter en LECTURE SEULE, sur la machine cachyos-salon, via l'agent d'exécution d'identifiant " +
+  "4a7bf3d9".repeat(40) +
+  " exactement la commande ci-dessous.";
+// Deux fragments de RÉFLEXION (canal `thinking`) — repris de `e2e-activity-serve.ts`.
+const THINKING_SECRET = "REPONSE-SECRETE-DE-REFLEXION";
 
 /* ─── Démarrage du gateway de test ──────────────────────────────────────── */
 const logs = [];
@@ -306,14 +315,32 @@ check(
 
 /* ══════════ 2) Tâches de fond VISIBLES (trames `job_*`) ══════════════════ */
 await fetch(`${control}/spoken-reset`);
-await fetch(`${control}/job-start?jobId=job-1&task=analyse%20du%20d%C3%A9p%C3%B4t`);
+await fetch(`${control}/job-start?jobId=job-1&task=${encodeURIComponent(LONG_TASK)}`);
 const jobRunning = await waitFor(
-  `(() => { const ja = document.querySelector('#job-activity'); return ja && !ja.hidden && /en cours/.test(ja.textContent) && /analyse du dépôt/.test(ja.textContent); })()`,
+  `(() => { const ja = document.querySelector('#job-activity'); return ja && !ja.hidden && /en cours/.test(ja.textContent); })()`,
 );
+const jobState = await readState();
 check(
   "job_started : une tâche de fond VISIBLE (« en cours »)",
   jobRunning,
-  JSON.stringify((await readState()).jobText),
+  JSON.stringify(jobState.jobText),
+);
+check(
+  "job_started : le TEXTE DE LA TÂCHE n'est PAS recopié hors du bloc (aucun doublon)",
+  !jobState.jobText.includes("cachyos-salon") && !jobState.jobText.includes("4a7bf3d9"),
+  JSON.stringify(jobState.jobText.slice(0, 160)),
+);
+// Le texte long ne doit RIEN faire déborder de l'écran (pas de scroll latéral).
+const overflow = await evaluate(`(() => ({
+  docScroll: document.documentElement.scrollWidth,
+  docClient: document.documentElement.clientWidth,
+  barScroll: document.querySelector('#job-activity').scrollWidth,
+  barClient: document.querySelector('#job-activity').clientWidth,
+}))()`);
+check(
+  "job_started : AUCUN débordement horizontal (document + indicateur)",
+  overflow.docScroll <= overflow.docClient && overflow.barScroll <= overflow.barClient,
+  JSON.stringify(overflow),
 );
 check(
   "job en cours : tonalité « active »",
@@ -372,6 +399,11 @@ check(
 /* ══════════ 5) E3 — BLOC D'ACTIVITÉ DU SOUS-AGENT (replié/dépliable, MUET) ═ */
 const ACTIVITY_SECRET = "ETAPE-SECRETE-DU-SOUS-AGENT";
 await fetch(`${control}/spoken-reset`);
+// Un job de fond porte le MÊME intitulé que l'étape du bloc : preuve que le
+// texte n'apparaît qu'UNE SEULE fois (dans le bloc), jamais recopié ailleurs.
+await fetch(
+  `${control}/job-start?jobId=dup-1&task=${encodeURIComponent("analyse du dépôt")}`,
+);
 await fetch(
   `${control}/job-activity?jobId=act-1&stage=job_started&task=${encodeURIComponent("analyse du dépôt")}`,
 );
@@ -391,6 +423,8 @@ const readActivity = () =>
     if (!root) return { present: false };
     const toggle = root.querySelector('.subagent-activity__toggle');
     const steps = root.querySelector('.subagent-activity__steps');
+    const rect = steps ? steps.getBoundingClientRect() : null;
+    const needle = ${JSON.stringify("analyse du dépôt")};
     return {
       present: true,
       inConversation: !!document.querySelector('#conversation')?.contains(root),
@@ -398,8 +432,20 @@ const readActivity = () =>
       ariaExpanded: toggle ? toggle.getAttribute('aria-expanded') : null,
       stepsHidden: steps ? (steps.hidden || getComputedStyle(steps).display === 'none') : null,
       stepsVisible: steps ? (!steps.hidden && getComputedStyle(steps).display !== 'none') : null,
+      stepsHeight: rect ? Math.round(rect.height) : null,
       headerText: toggle ? toggle.textContent : '',
       stepsText: steps ? steps.textContent : '',
+      rootScrollWidth: root.scrollWidth,
+      rootClientWidth: root.clientWidth,
+      // Nombre d'occurrences du texte de tâche dans TOUT le document : doit valoir
+      // 1 (dans le bloc) une fois déplié, et 0 texte visible quand replié.
+      taskOccurrences: (() => {
+        const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let n = 0, node;
+        while ((node = w.nextNode())) if (node.nodeValue && node.nodeValue.includes(needle)) n += 1;
+        return n;
+      })(),
+      docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     };
   })()`);
 
@@ -420,6 +466,11 @@ check(
     collapsed.stepsVisible === false,
   JSON.stringify({ aria: collapsed.ariaExpanded, hidden: collapsed.stepsHidden }),
 );
+check(
+  "E3 : replié ⇒ RIEN du contenu ne dépasse (hauteur visible des étapes = 0)",
+  collapsed.stepsHeight === 0,
+  `stepsHeight=${collapsed.stepsHeight}`,
+);
 
 // Clic RÉEL sur le bouton de repli/dépli.
 await evaluate(`document.querySelector('#conversation .subagent-activity__toggle').click()`);
@@ -435,6 +486,16 @@ check(
   expanded.stepsText.includes("analyse du dépôt") &&
     expanded.stepsText.includes(ACTIVITY_SECRET),
   expanded.stepsText.slice(0, 200),
+);
+check(
+  "E3 : déplié ⇒ le contenu apparaît UNE SEULE FOIS dans tout le document",
+  expanded.taskOccurrences === 1,
+  `occurrences=${expanded.taskOccurrences}`,
+);
+check(
+  "E3 : aucun débordement horizontal du bloc ni du document",
+  expanded.rootScrollWidth <= expanded.rootClientWidth && expanded.docOverflow === false,
+  JSON.stringify({ root: [expanded.rootScrollWidth, expanded.rootClientWidth], doc: expanded.docOverflow }),
 );
 check(
   "E3 STEER : la consigne de l'orchestrateur apparaît dans le bloc (cadrage explicite)",
@@ -472,6 +533,7 @@ check(
   spoken5Text.slice(0, 200),
 );
 await fetch(`${control}/job-activity?jobId=act-1&stage=job_finished&status=completed`);
+await fetch(`${control}/job-finish?jobId=dup-1&status=completed`);
 await sleep(100);
 
 /* ══════════ 7) E3 — ÉPHÉMÉRITÉ (transcript + snapshot/rejeu) ════════════ */
@@ -492,6 +554,127 @@ check(
   "E3 ÉPHÉMÉRITÉ : après rechargement (snapshot/rejeu), le bloc a DISPARU",
   (await evaluate(
     `document.querySelectorAll('#conversation .subagent-activity').length`,
+  )) === 0,
+);
+
+/* ══════════ 9) RÉFLEXION du modèle (canal `thinking`) : repliée, MUETTE ══ */
+// 4ᵉ message → script `activity-thinking` (réflexion PUIS contenu).
+await fetch(`${control}/spoken-reset`);
+await evaluate(`(() => {
+  const input = document.querySelector('#input');
+  input.value = 'Quatrième question.';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  document.querySelector('#send').click();
+  return true;
+})()`);
+await waitFor(
+  `document.querySelector('#conversation')?.textContent.includes('Quatrième réponse.')`,
+);
+await sleep(200);
+
+const readThinking = () =>
+  evaluate(`(() => {
+    const root = document.querySelector('#conversation .thinking-block');
+    if (!root) return { present: false };
+    const toggle = root.querySelector('.thinking-block__toggle');
+    const body = root.querySelector('.thinking-block__body');
+    const rect = body ? body.getBoundingClientRect() : null;
+    const lastAssistant = [...document.querySelectorAll('#conversation .message--assistant')].pop();
+    return {
+      present: true,
+      inConversation: !!document.querySelector('#conversation')?.contains(root),
+      isMessage: root.classList.contains('message'),
+      ariaExpanded: toggle ? toggle.getAttribute('aria-expanded') : null,
+      bodyHidden: body ? (body.hidden || getComputedStyle(body).display === 'none') : null,
+      bodyHeight: rect ? Math.round(rect.height) : null,
+      bodyText: body ? body.textContent : '',
+      beforeAnswer: lastAssistant
+        ? !!(root.compareDocumentPosition(lastAssistant) & Node.DOCUMENT_POSITION_FOLLOWING)
+        : null,
+      styleAttrs: root.querySelectorAll('[style]').length,
+      docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    };
+  })()`);
+
+const collapsedThinking = await readThinking();
+check(
+  "RÉFLEXION : un bloc apparaît DANS le fil",
+  collapsedThinking.present === true && collapsedThinking.inConversation === true,
+  JSON.stringify(collapsedThinking),
+);
+check(
+  "RÉFLEXION : le bloc est un COMPOSANT du fil, PAS un message",
+  collapsedThinking.isMessage === false,
+);
+check(
+  "RÉFLEXION : replié PAR DÉFAUT (aria-expanded=false, corps masqué, hauteur 0)",
+  collapsedThinking.ariaExpanded === "false" &&
+    collapsedThinking.bodyHidden === true &&
+    collapsedThinking.bodyHeight === 0,
+  JSON.stringify({
+    aria: collapsedThinking.ariaExpanded,
+    hidden: collapsedThinking.bodyHidden,
+    h: collapsedThinking.bodyHeight,
+  }),
+);
+check(
+  "RÉFLEXION : inséré À SA PLACE, AVANT la réponse du tour",
+  collapsedThinking.beforeAnswer === true,
+);
+check(
+  "RÉFLEXION : zéro style en ligne (CSP stricte)",
+  collapsedThinking.styleAttrs === 0,
+);
+await send("Page.captureScreenshot", { format: "png" }).then((res) =>
+  writeFileSync(join(SHOTS, "thinking-collapsed.png"), Buffer.from(res.data, "base64")),
+);
+
+await evaluate(`document.querySelector('#conversation .thinking-block__toggle').click()`);
+await sleep(120);
+const expandedThinking = await readThinking();
+check(
+  "RÉFLEXION : le clic DÉPLIE (aria-expanded=true) et le raisonnement est rendu",
+  expandedThinking.ariaExpanded === "true" &&
+    expandedThinking.bodyHidden === false &&
+    expandedThinking.bodyText.includes(THINKING_SECRET),
+  expandedThinking.bodyText.slice(0, 160),
+);
+check(
+  "RÉFLEXION : aucun débordement horizontal",
+  expandedThinking.docOverflow === false,
+);
+await send("Page.captureScreenshot", { format: "png" }).then((res) =>
+  writeFileSync(join(SHOTS, "thinking-expanded.png"), Buffer.from(res.data, "base64")),
+);
+
+// TTS : la réflexion n'est JAMAIS prononcée (seul le contenu l'est).
+const spokenThinking = await fetch(`${control}/spoken`).then((r) => r.json());
+const spokenThinkingText = spokenThinking.spoken.join(" ⏎ ");
+check(
+  "RÉFLEXION TTS : la réponse normale est bien synthétisée (la preuve n'est pas vide)",
+  spokenThinking.spoken.some((t) => t.includes("Quatrième réponse.")),
+  spokenThinkingText.slice(0, 160),
+);
+check(
+  "RÉFLEXION TTS : AUCUN fragment de réflexion prononcé",
+  !spokenThinkingText.includes(THINKING_SECRET) &&
+    !/compare les options/.test(spokenThinkingText),
+  spokenThinkingText.slice(0, 200),
+);
+
+// Éphémérité : absente du transcript serveur, et le bloc DISPARAÎT au rechargement.
+const transcriptThinking = await fetch(`${control}/transcript`).then((r) => r.json());
+check(
+  "RÉFLEXION ÉPHÉMÉRITÉ : absente du transcript serveur",
+  !transcriptThinking.text.includes(THINKING_SECRET),
+);
+await navigate(`${base}/`);
+await waitFor(`document.querySelector('#connection')?.textContent === 'connecté'`);
+await sleep(200);
+check(
+  "RÉFLEXION ÉPHÉMÉRITÉ : après rechargement (snapshot/rejeu), le bloc a DISPARU",
+  (await evaluate(
+    `document.querySelectorAll('#conversation .thinking-block').length`,
   )) === 0,
 );
 

@@ -15,6 +15,7 @@ import { initSidebarAgents } from "./sidebar-agents.js";
 import { createApprovalLayer } from "./approval-window.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
 import { createSubagentActivity } from "./subagent-activity.js";
+import { createThinkingBlocks } from "./thinking.js";
 import {
   JOB_FINISHED_HOLD_MS,
   JOB_TICK_MS,
@@ -370,6 +371,12 @@ const screenshotBlocks = createScreenshotBlocks({ container: els.conversation })
  * rattaché au fil `sessionId` de la conversation qui a lancé le sous-agent. */
 const subagentActivity = createSubagentActivity({ container: els.conversation });
 
+/* ─── Réflexion du modèle DANS le fil (canal `thinking`) ────────────────────
+ * Alimenté par une trame de CONTRÔLE éphémère (aucun `seq` consommé) : un bloc
+ * replié par défaut apparaît AVANT la réponse du tour, à sa place. Jamais dans
+ * le transcript ni le rejeu ; jamais prononcé (voir thinking.js). */
+const thinkingBlocks = createThinkingBlocks({ container: els.conversation });
+
 /** Bascule l'état « aucune conversation ouverte » (le fil est masqué). */
 function setEmptyState(empty) {
   if (els.chat) els.chat.classList.toggle("chat--empty", Boolean(empty));
@@ -681,6 +688,7 @@ function applyTranscript(transcript) {
   approvalLayer.reset();
   screenshotBlocks.reset();
   subagentActivity.reset();
+  thinkingBlocks.reset();
   // Le fil est reconstruit : toute statistique EN DIRECT (provisoire) devient
   // obsolète. On arrête le minuteur et on oublie l'alignement t0 des runs en
   // vol — les valeurs FINALES reviendront par le `run_summary`.
@@ -834,6 +842,7 @@ function handleFrame(frame) {
     approvalLayer.reset();
     screenshotBlocks.reset();
     subagentActivity.reset();
+    thinkingBlocks.reset();
     return;
   }
   if (type === "pong" || type === "bye") return;
@@ -925,6 +934,21 @@ function handleFrame(frame) {
         : sessionId;
     if (activityTarget && activityTarget !== sessionId) return;
     subagentActivity.apply(frame);
+    return;
+  }
+  // RÉFLEXION du modèle : trame de CONTRÔLE (aucun `seq` consommé), routée comme
+  // l'activité ⇒ JAMAIS bufferisée (ni rejeu, ni snapshot). ÉPHÉMÈRE et MUETTE
+  // (le serveur ne l'envoie jamais au TTS). Un fil NON focalisé ne la dessine
+  // pas. Le bloc est inséré AVANT la réponse du tour (ancrage sur le message
+  // assistant en cours).
+  if (type === "delta" && frame.channel === "thinking") {
+    const thinkingTarget =
+      typeof frame.sessionId === "string" && frame.sessionId.length > 0
+        ? frame.sessionId
+        : sessionId;
+    if (!thinkingTarget || thinkingTarget !== sessionId) return;
+    showThinking();
+    thinkingBlocks.append(frame.runId, frame.text, currentAssistant);
     return;
   }
 
