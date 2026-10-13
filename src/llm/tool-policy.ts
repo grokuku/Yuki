@@ -2,9 +2,15 @@
  * Politique d'outils par modèle (données pures, AUCUN import SDK/typebox).
  *
  * GARANTIE STRUCTURELLE — pas une consigne : à aucun moment les modèles ne
- * reçoivent d'outil d'écriture (`write`, `edit`) ni d'exécution (`bash`,
+ * reçoivent d'outil d'écriture (`write`, `edit`) ni d'exécution LOCALE (`bash`,
  * `powershell`). Le sidecar isolé n'existe qu'au Lot 4 ; il ne faut donc
- * AUCUN outil d'exécution au Lot 2. Le lourd ne peut pas redéléguer.
+ * AUCUN outil d'exécution locale. Le lourd ne peut pas redéléguer.
+ *
+ * ⚠️ INVERSION DES RÔLES (2026-10-13) : **Yuki (léger) LIT et CONVERSE, le
+ * worker LOURD EXÉCUTE** (comme Pi-Web). Les outils qui AGISSENT sur une machine
+ * appairée (`run_command`, `capturer_ecran`) sont donc portés par le rôle
+ * `heavy` ; le rôle `light` garde la lecture, la conversation, la délégation, la
+ * consultation (annuaire, archive) et le libraire.
  *
  * La table est extensible par simple ajout d'entrées aux lots 4/5.
  */
@@ -173,8 +179,11 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     role: "light",
     builtins: READ_ONLY_TOOLS,
     custom: DELEGATE_TOOLS,
-    execution: EXECUTION_TOOLS,
-    screenshots: SCREENSHOT_TOOLS,
+    // ⚠️ INVERSION DES RÔLES : Yuki (léger) n'AGIT PLUS. Elle ne porte AUCUN
+    // outil d'action (`run_command`, `capturer_ecran`) : ce qui agit sur une
+    // machine se DÉLÈGUE au worker lourd.
+    execution: [],
+    screenshots: [],
     directory: AGENT_DIRECTORY_TOOLS,
     heritage: HERITAGE_TOOLS,
     librarian: LIBRARIAN_TOOLS,
@@ -184,9 +193,13 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
   heavy: {
     role: "heavy",
     builtins: READ_ONLY_TOOLS,
+    // Le worker lourd est l'EXÉCUTEUR : il porte les outils d'ACTION sur les
+    // machines appairées, avec les MÊMES garde-fous par agent (niveaux, hors
+    // ligne = refus, audit, plafond de sortie). Il ne redélègue PAS et n'a ni
+    // annuaire ni archive ni libraire (il ne converse pas, il exécute).
     custom: [],
-    execution: [],
-    screenshots: [],
+    execution: EXECUTION_TOOLS,
+    screenshots: SCREENSHOT_TOOLS,
     directory: [],
     heritage: [],
     librarian: [],
@@ -242,7 +255,8 @@ export interface ToolAllowlistOptions {
 
 /**
  * Allowlist effective passée au SDK pour un rôle : builtins + outils custom
- * activés. Le lourd n'a jamais d'outil de délégation ni d'exécution.
+ * activés. Le lourd n'a jamais d'outil de délégation ; en revanche il porte les
+ * outils d'EXÉCUTION (inversion des rôles), le léger non.
  */
 export function toolAllowlist(
   role: LlmRole,

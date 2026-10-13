@@ -572,8 +572,10 @@ function dayKeyOf(ts) {
  * jour). Réinitialisée à chaque rendu complet (`applyTranscript`). */
 let lastDayKey = null;
 
-/** Séparateur de jour : deux demi-traits (`::before`/`::after`) autour du libellé. */
-function appendDaySeparator(label) {
+/** Séparateur de jour : deux demi-traits (`::before`/`::after`) autour du libellé.
+ * `before` permet de l'insérer AVANT un nœud existant (message utilisateur
+ * inséré pendant une sortie en cours) au lieu de la fin du fil. */
+function appendDaySeparator(label, before = null) {
   const separator = document.createElement("div");
   separator.className = "daysep";
   separator.setAttribute("role", "separator");
@@ -582,16 +584,17 @@ function appendDaySeparator(label) {
   span.className = "daysep__label";
   span.textContent = label;
   separator.appendChild(span);
-  els.conversation.appendChild(separator);
+  if (before) els.conversation.insertBefore(separator, before);
+  else els.conversation.appendChild(separator);
   return separator;
 }
 
 /** Insère un séparateur SI le jour change (le premier jour du fil est conservé). */
-function ensureDaySeparator(ts) {
+function ensureDaySeparator(ts, before = null) {
   const key = dayKeyOf(ts);
   if (key === null || key === lastDayKey) return;
   lastDayKey = key;
-  appendDaySeparator(dayFormatter.format(new Date(ts)));
+  appendDaySeparator(dayFormatter.format(new Date(ts)), before);
 }
 
 /**
@@ -631,13 +634,14 @@ function setMessageTime(element, ts, alignEnd) {
   time.textContent = hourFormatter.format(new Date(ts));
 }
 
-function appendMessage(role, text, pinned = isConversationPinned(), ts = null) {
+function appendMessage(role, text, pinned = isConversationPinned(), ts = null, before = null) {
   clearEmpty();
-  ensureDaySeparator(ts);
+  ensureDaySeparator(ts, before);
   const div = document.createElement("div");
   div.className = `message message--${role}`;
   div.appendChild(createMessageBody(text));
-  els.conversation.appendChild(div);
+  if (before) els.conversation.insertBefore(div, before);
+  else els.conversation.appendChild(div);
   // L'heure est EN TÊTE pour TOUT message ; alignée au bord extérieur (droite)
   // pour l'utilisateur, à gauche pour l'assistant (y compris les bulles d'erreur).
   setMessageTime(div, ts, role === "user");
@@ -1221,9 +1225,19 @@ function sendMessage() {
   const clientMsgId = `m${++clientMsgCounter}`;
   const sentAt = Date.now();
   clearEmpty();
-  appendMessage("user", text, undefined, sentAt);
-  currentAssistant = null;
-  currentRenderer = null;
+  // ⚠️ MESSAGE ENVOYÉ PENDANT UNE SORTIE EN COURS (steer) : le message assistant
+  // EN COURS garde SON bloc. On n'ouvre PAS un nouveau bloc (ni ne réinitialise
+  // `currentAssistant`/`currentRenderer`) : le flux continue d'être rendu dans
+  // l'unique bloc déjà affiché, ce qui garde le markdown cohérent (une fence de
+  // code ouverte reste rendue comme du code) et évite qu'une ligne soit coupée
+  // au milieu. La bulle utilisateur est insérée JUSTE AVANT ce bloc, à sa place
+  // chronologique (le message a été envoyé avant la fin de la réponse).
+  const streamingAssistant = currentAssistant;
+  appendMessage("user", text, undefined, sentAt, streamingAssistant);
+  if (!streamingAssistant) {
+    currentAssistant = null;
+    currentRenderer = null;
+  }
   els.input.value = "";
   els.input.style.height = "auto";
   // Le fuseau du navigateur part avec le message : le préfixe STOCKÉ est ainsi

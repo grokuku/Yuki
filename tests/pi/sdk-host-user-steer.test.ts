@@ -200,6 +200,52 @@ describe("sdk-host réel — STEER UTILISATEUR (message pendant un run)", () => 
     expect(host.getState(sessionId)?.state).toBe("idle");
   });
 
+  it("deux messages assistant d'un MÊME run sont FUSIONNÉS en UNE entrée de transcript", async () => {
+    // ⚠️ Le vrai SDK produit PLUSIEURS messages assistant dans un même run
+    // (suite après un steer UTILISATEUR). Le client ne crée qu'UN SEUL bloc par
+    // run (aucune frontière de message dans le flux de deltas) : le snapshot et
+    // le rechargement DOIVENT donc refléter ce bloc unique (sinon deux bulles et
+    // une fence de code ouverte coupée).
+    const host = makeHost();
+    const events: PiEvent[] = [];
+    host.subscribeAll((event) => events.push(event));
+    await host.start();
+    const sessionId = host.currentSessionId()!;
+
+    const first = host.send(sessionId, "message initial");
+    await delay(5);
+    host.send(sessionId, "précision pendant le run");
+    await delay(5);
+
+    const assistant = (text: string) => ({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    });
+    // 1er message assistant du run : ouvre une fence SANS la fermer.
+    stub.emit(assistant("code :\n```js\nl0();"));
+    await delay(5);
+    // 2e message assistant du MÊME run : ferme la fence.
+    stub.emit(assistant("\n```\nfin."));
+    await delay(5);
+
+    const transcript = host.getState(sessionId)?.transcript ?? [];
+    const assistants = transcript.filter((entry) => entry.role === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]?.text).toBe("code :\n```js\nl0();\n```\nfin.");
+    // L'ordre reste [user, user, assistant] (le message utilisateur AVANT la
+    // réponse en cours).
+    expect(transcript.map((entry) => entry.role).join(",")).toBe(
+      "user,user,assistant",
+    );
+
+    await releaseAndFinish(events, first.runId);
+  });
+
   it("un prompt SYNTHÉTIQUE (rapport de job) pendant un run reste EN FILE", async () => {
     const host = makeHost();
     const events: PiEvent[] = [];

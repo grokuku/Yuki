@@ -125,18 +125,29 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     expect(containsForbiddenTool(["read", "bash"])).toBe(true);
   });
 
-  it("l'outil d'exécution déléguée n'est exposé que s'il est activé (Lot 4)", () => {
-    // Par défaut : jamais d'outil d'exécution.
+  it("INVERSION DES RÔLES : l'exécution n'est portée QUE par le worker LOURD", () => {
+    // ⚠️ Le LÉGER n'a JAMAIS d'outil d'action, même si le câblage l'active :
+    // Yuki lit et converse, elle n'agit pas.
     expect(toolAllowlist("light")).not.toContain("run_command");
-    const withExec = toolAllowlist("light", { executionEnabled: true });
-    expect(withExec).toContain("run_command");
+    expect(toolAllowlist("light", { executionEnabled: true })).not.toContain("run_command");
+    expect(toolAllowlist("light", { screenshotsEnabled: true })).not.toContain("capturer_ecran");
+
+    // ⚠️ Le LOURD porte l'exécution, mais SEULEMENT quand elle est activée
+    // (service d'exécution présent) : pas par défaut.
+    expect(toolAllowlist("heavy")).not.toContain("run_command");
+    const heavyExec = toolAllowlist("heavy", { executionEnabled: true });
+    expect(heavyExec).toContain("run_command");
     // `run_command` n'est PAS un outil interdit : c'est le chemin sanctionné.
-    expect(containsForbiddenTool(withExec)).toBe(false);
-    // Le lourd n'a JAMAIS d'outil d'exécution.
-    expect(toolAllowlist("heavy", { executionEnabled: true })).not.toContain("run_command");
+    expect(containsForbiddenTool(heavyExec)).toBe(false);
+
+    // Capture d'écran : même inversion.
+    expect(toolAllowlist("heavy")).not.toContain("capturer_ecran");
+    const heavyShots = toolAllowlist("heavy", { screenshotsEnabled: true });
+    expect(heavyShots).toContain("capturer_ecran");
+    expect(containsForbiddenTool(heavyShots)).toBe(false);
   });
 
-  it("les outils de consultation sont activables INDÉPENDAMMENT de l'exécution", () => {
+  it("l'annuaire des agents reste au LÉGER, indépendamment de l'exécution", () => {
     expect(AGENT_DIRECTORY_TOOLS).toEqual(["lister_agents", "etat_agent"]);
     // Par défaut : non exposés.
     expect(toolAllowlist("light")).not.toContain("lister_agents");
@@ -146,18 +157,23 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     expect(withDir).toContain("lister_agents");
     expect(withDir).toContain("etat_agent");
     expect(withDir).not.toContain("run_command");
-    // Réciproque : l'exécution seule n'expose pas la consultation.
-    const withExec = toolAllowlist("light", { executionEnabled: true });
-    expect(withExec).not.toContain("lister_agents");
-    expect(withExec).not.toContain("etat_agent");
-    // Les deux ensemble.
-    const both = toolAllowlist("light", { executionEnabled: true, directoryEnabled: true });
-    expect(both).toEqual(expect.arrayContaining(["run_command", "lister_agents", "etat_agent"]));
-    expect(containsForbiddenTool(both)).toBe(false);
-    // Le lourd n'a JAMAIS d'outil de consultation.
-    const heavyDir = toolAllowlist("heavy", { directoryEnabled: true });
-    expect(heavyDir).not.toContain("lister_agents");
-    expect(heavyDir).not.toContain("etat_agent");
+    // ⚠️ Même quand le câblage « active l'exécution », le léger reste sans
+    // outil d'action : l'annuaire est bien la seule chose ajoutée.
+    const lightAll = toolAllowlist("light", {
+      executionEnabled: true,
+      directoryEnabled: true,
+    });
+    expect(lightAll).toContain("lister_agents");
+    expect(lightAll).toContain("etat_agent");
+    expect(lightAll).not.toContain("run_command");
+    // Le lourd n'a JAMAIS l'annuaire (il exécute, il ne converse pas).
+    const heavyBoth = toolAllowlist("heavy", {
+      executionEnabled: true,
+      directoryEnabled: true,
+    });
+    expect(heavyBoth).toContain("run_command");
+    expect(heavyBoth).not.toContain("lister_agents");
+    expect(heavyBoth).not.toContain("etat_agent");
   });
 
   it("l'outil de consultation de l'archive « vie antérieure » (Lot 13) est en LECTURE SEULE", () => {

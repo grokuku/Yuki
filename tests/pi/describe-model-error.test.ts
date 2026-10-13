@@ -62,6 +62,21 @@ describe("describeModelError — refus du fournisseur", () => {
     }
   });
 
+  it("modèle/route introuvable (404) : cause actionnable, jamais une indisponibilité inventée", () => {
+    for (const raw of [
+      '404: {"message":"service introuvable","type":"not_found"}',
+      "404: model 'deepseek-v4.1-flash' not found",
+      "unknown model: foo/bar",
+      "no such endpoint /v1/chat/completions",
+    ]) {
+      const message = describeModelError(raw);
+      expect(message).toContain("404");
+      expect(message).toContain("ne reconnaît pas le modèle ou l'endpoint");
+      // Jamais la cause inventée observée en usage réel.
+      expect(message).not.toContain("indisponible");
+    }
+  });
+
   it("cause inconnue : dit ce que l'on sait + détail BRUT (jamais un texte générique)", () => {
     const message = describeModelError(
       "Provider finish_reason: content_filter",

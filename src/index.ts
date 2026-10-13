@@ -715,7 +715,16 @@ async function main(): Promise<void> {
       systemPrompt: config.getString("prompts.heavy"),
       modelReference: liveHeavyReference,
       thinking: liveHeavyThinking,
-      tools: toolAllowlist("heavy"),
+      // ⚠️ INVERSION DES RÔLES : le worker LOURD porte les outils d'ACTION
+      // (`run_command`, `capturer_ecran`). Ceux-ci ne sont activés que si le
+      // service d'exécution existe (mêmes garde-fous par agent, hors ligne =
+      // refus, audit, plafond de sortie).
+      tools: toolAllowlist("heavy", {
+        executionEnabled: agentExecution !== undefined,
+        screenshotsEnabled: agentExecution !== undefined,
+      }),
+      ...(agentExecution ? { execution: agentExecution } : {}),
+      ...(agentExecution ? { screenshots: agentExecution } : {}),
       idleTimeoutMs,
       totalTimeoutMs,
       logger,
@@ -883,10 +892,11 @@ async function main(): Promise<void> {
       thinking: lightThinking,
       tools: toolAllowlist("light", {
         delegationEnabled: heavyAvailableAtStart,
-        executionEnabled: agentExecution !== undefined,
-        // Capture d'écran : même canal agent que l'exécution.
-        screenshotsEnabled: agentExecution !== undefined,
-        // ⚠️ Indépendant de `executionEnabled` : consulter les agents n'est pas
+        // ⚠️ INVERSION DES RÔLES : le LÉGER n'a AUCUN outil d'action. Il garde
+        // la lecture, la conversation, la délégation, l'annuaire des agents,
+        // l'archive et le libraire (consultation). `run_command` et
+        // `capturer_ecran` sont portés par le worker lourd (voir plus haut).
+        // ⚠️ Indépendant de l'exécution : consulter les agents n'est pas
         // exécuter. Actif dès que le registre d'agents existe.
         directoryEnabled: agentDirectory !== undefined,
         // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
@@ -897,8 +907,6 @@ async function main(): Promise<void> {
         librarianCaptureEnabled: librarianCaptureEnabledAtStart,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
-      ...(agentExecution ? { execution: agentExecution } : {}),
-      ...(agentExecution ? { screenshots: agentExecution } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
       heritage: heritageStore,
       ...(librarianConfigured

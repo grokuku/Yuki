@@ -179,8 +179,18 @@ interface RunItem {
    * l'entrée de session réellement persistée dont elle est le miroir. Reste
    * `undefined` quand le run n'a rien produit d'affichable (erreur, abandon,
    * réponse vide) ⇒ aucune métrique n'est écrite (jamais d'entrée orpheline).
+   *
+   * ⚠️ Un MÊME run peut produire PLUSIEURS messages assistant (suite après un
+   * steer UTILISATEUR, tour d'outil). Le client ne crée qu'UN SEUL bloc par run
+   * (le flux n'expose aucune frontière de message) : `assistantEntry` est donc
+   * FUSIONNÉE (texte concaténé) pour que le snapshot et le rechargement
+   * racontent la MÊME chose que le direct. `lastAssistantText`, lui, porte le
+   * texte du DERNIER message persisté par le SDK (contrôle d'intégrité de
+   * `persistRunMetrics`).
    */
   assistantEntry?: TranscriptEntry;
+  /** Texte du DERNIER message assistant persisté par le SDK au titre de ce run. */
+  lastAssistantText?: string;
   resolveStart?: () => void;
   startPromise: Promise<void>;
 }
@@ -549,15 +559,31 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         }
         const text = content.length > 0 ? content : record.partial;
         if (text.length > 0) {
-          const assistantEntry: TranscriptEntry = {
-            role: "assistant",
-            text,
-            timestamp: messageTimestamp(message) ?? Date.now(),
-          };
-          record.transcript.push(assistantEntry);
-          // Miroir de l'entrée de session que le SDK vient de persister : elle
-          // recevra les statistiques (`run_metrics`) si le run se termine bien.
-          run.assistantEntry = assistantEntry;
+          // ⚠️ CONTINUITÉ D'UN MÊME RUN — le client ne crée qu'UN SEUL bloc par
+          // run : le flux de deltas n'expose AUCUNE frontière de message, donc
+          // un 2e message assistant du même run (suite après un steer
+          // UTILISATEUR, tour d'outil) serait rendu dans le MÊME bloc que le
+          // précédent. Le snapshot/rechargement DOIT refléter exactement ce
+          // bloc unique : on FUSIONNE le texte dans la même entrée de
+          // transcript (au lieu d'en pousser une seconde, qui afficherait deux
+          // bulles et couperait une fence de code ouverte).
+          const previous = record.transcript[record.transcript.length - 1];
+          if (run.assistantEntry && previous === run.assistantEntry) {
+            run.assistantEntry.text += text;
+          } else {
+            const assistantEntry: TranscriptEntry = {
+              role: "assistant",
+              text,
+              timestamp: messageTimestamp(message) ?? Date.now(),
+            };
+            record.transcript.push(assistantEntry);
+            // Miroir de l'entrée de session que le SDK vient de persister : elle
+            // recevra les statistiques (`run_metrics`) si le run se termine bien.
+            run.assistantEntry = assistantEntry;
+          }
+          // Texte du DERNIER message persisté : contrôle d'intégrité séparé de
+          // l'entrée d'affichage (qui peut être une FUSION de plusieurs messages).
+          run.lastAssistantText = text;
         }
         record.partial = "";
         return;
@@ -858,9 +884,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       const message = leaf.message as RawAgentMessage | undefined;
       if (!message || message.role !== "assistant") return;
       // Le message au bout de la branche DOIT être celui de ce run : on compare
-      // le contenu autoritatif. Une divergence (message antérieur, réponse
-      // vide, extension) ⇒ on n'écrit rien plutôt qu'une métrique orpheline.
-      if (contentTextFromMessage(message) !== assistant.text) return;
+      // le contenu autoritatif au DERNIER message persisté du run (jamais au
+      // texte d'affichage FUSIONNÉ, qui peut concaténer plusieurs messages). Une
+      // divergence (message antérieur, réponse vide, extension) ⇒ on n'écrit
+      // rien plutôt qu'une métrique orpheline.
+      const expected = run.lastAssistantText ?? assistant.text;
+      if (contentTextFromMessage(message) !== expected) return;
       if (!Number.isFinite(summary.totalMs)) return;
       const data: RunMetrics = { totalMs: summary.totalMs };
       if (summary.ttftMs !== undefined && Number.isFinite(summary.ttftMs)) {
@@ -1425,11 +1454,23 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           return { runId, sessionId: record.sessionId, queued: true };
         }
         // Le transcript reçoit le message À L'INSTANT, comme un vrai message.
-        record.transcript.push({
+        // ⚠️ ORDRE COHÉRENT AVEC LE RENDU CLIENT : le message est placé JUSTE
+        // AVANT l'entrée assistant du run en cours (le client insère sa bulle
+        // avant le bloc assistant affiché). Sans cela, un steer arrivé APRÈS le
+        // premier message assistant du run (fenêtre étroite entre deux
+        // messages) se retrouverait APRÈS — le snapshot et le rechargement
+        // divergeraient alors du direct.
+        const active = record.currentRun;
+        const userEntry: TranscriptEntry = {
           role: "user",
           text,
           timestamp: run.sentAt,
-        });
+        };
+        const at = active.assistantEntry
+          ? record.transcript.indexOf(active.assistantEntry)
+          : -1;
+        if (at >= 0) record.transcript.splice(at, 0, userEntry);
+        else record.transcript.push(userEntry);
         run.transcriptPushed = true;
         // ⚠️ FILET « PAS DE STEER ORPHELIN » : on retient ce message utilisateur
         // pour pouvoir le REJOUER immédiatement s'il n'est pas consommé avant la

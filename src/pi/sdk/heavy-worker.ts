@@ -8,8 +8,12 @@
  * global (`totalTimeoutMs`) → `abort()` + job `failed` avec `partial`.
  */
 
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
+import type {
+  ExecutionServicePort,
+  ScreenshotServicePort,
+} from "../../agents/execution.js";
 import type {
   HeavyRunHandle,
   HeavyRunRequest,
@@ -23,12 +27,19 @@ import {
   channelForAssistantEvent,
   contentTextFromMessage,
   deltaText,
+  errorTextFromMessage,
   finishReasonForMessage,
   sanitizeErrorText,
   usageFromMessage,
   type RawAgentMessage,
 } from "../events.js";
+import { describeModelError } from "../errors.js";
 import type { PiLogger, PiThinkingLevel } from "../types.js";
+import {
+  createExecutionTools,
+  createScreenshotTool,
+  type ActionToolOptions,
+} from "./execution-tools.js";
 import { getSharedModelRuntime, liveValue, resolveSdkModel } from "./model-runtime.js";
 import { createEphemeralSession } from "./session-factory.js";
 
@@ -46,11 +57,48 @@ export interface SdkHeavyWorkerConfig {
   modelReference: string | (() => string);
   /** Niveau de réflexion du lourd (une fonction est relue à chaque job). */
   thinking: PiThinkingLevel | (() => PiThinkingLevel);
-  /** Allowlist d'outils du lourd (lecture seule). */
+  /** Allowlist d'outils du lourd (lecture + outils d'action). */
   tools: readonly string[];
+  /**
+   * Service d'exécution déléguée (agents appairés). Présent ⇒ le worker porte
+   * `run_command` (outil d'ACTION). ⚠️ Le garde-fou par agent (D118) reste
+   * appliqué côté Yuki ; ici on ne fait que RATTACHER la validation à la
+   * CONVERSATION propriétaire (`HeavyRunRequest.lightSessionId`).
+   */
+  execution?: ExecutionServicePort;
+  /** Service de capture d'écran. Présent ⇒ le worker porte `capturer_ecran`. */
+  screenshots?: ScreenshotServicePort;
+  /**
+   * Fabrique de session éphémère. Injectable pour les TESTS (défaut :
+   * `createEphemeralSession`). Permet d'exercer le câblage des outils d'action
+   * sans modèle ni réseau.
+   */
+  createSession?: typeof createEphemeralSession;
   idleTimeoutMs: number;
   totalTimeoutMs: number;
   logger: PiLogger;
+}
+
+/**
+ * Outils d'ACTION du worker lourd (`run_command` + `capturer_ecran`).
+ *
+ * ⚠️ La session du worker est ÉPHÉMÈRE : son propre identifiant ne doit JAMAIS
+ * rattacher une validation (la fenêtre s'afficherait dans une conversation
+ * invisible — trou de sécurité). On FORCE donc `approvalSessionId` à l'ID de la
+ * conversation propriétaire (`lightSessionId`). Extrait pour être VERROUILLÉ par
+ * un test.
+ */
+export function buildHeavyActionTools(
+  config: Pick<SdkHeavyWorkerConfig, "execution" | "screenshots">,
+  lightSessionId: string | undefined,
+): ToolDefinition[] {
+  const options: ActionToolOptions = {
+    approvalSessionId: () => lightSessionId,
+  };
+  const tools: ToolDefinition[] = [];
+  if (config.execution) tools.push(...createExecutionTools(config.execution, options));
+  if (config.screenshots) tools.push(...createScreenshotTool(config.screenshots, options));
+  return tools;
 }
 
 function toJobUsage(usage: ReturnType<typeof usageFromMessage>): JobUsage | undefined {
@@ -169,7 +217,12 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
           error instanceof Error ? error.message : String(error),
         ),
       });
-      return { status: "failed", error: "model_runtime_unavailable" };
+      return {
+        status: "failed",
+        error:
+          "Le worker lourd n'a pas pu démarrer : configuration des modèles ou " +
+          "authentification du fournisseur indisponible (voir les journaux).",
+      };
     }
 
     const modelReference = liveValue(config.modelReference);
@@ -179,12 +232,21 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         job_id: request.jobId,
         model: modelReference,
       });
-      return { status: "failed", error: "model_unresolved" };
+      return {
+        status: "failed",
+        error:
+          `Le modèle lourd « ${modelReference} » est introuvable dans ` +
+          "models.json : vérifiez « llm.heavy.model » et « llm.heavy.baseUrl ».",
+      };
     }
 
     let ephemeral;
     try {
-      ephemeral = await createEphemeralSession({
+      // Outils d'ACTION rattachés à la CONVERSATION PROPRIÉTAIRE (jamais à
+      // l'ID éphémère) : la validation humaine remonte donc dans la bonne
+      // conversation.
+      const actionTools = buildHeavyActionTools(config, request.lightSessionId);
+      ephemeral = await (config.createSession ?? createEphemeralSession)({
         cwd: config.cwd,
         agentDir: config.agentDir,
         systemPrompt: config.systemPrompt,
@@ -192,6 +254,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         model,
         thinkingLevel: liveValue(config.thinking),
         tools: config.tools,
+        ...(actionTools.length > 0 ? { customTools: actionTools } : {}),
       });
     } catch (error) {
       config.logger.warn("heavy.session.failed", {
@@ -200,7 +263,11 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
           error instanceof Error ? error.message : String(error),
         ),
       });
-      return { status: "failed", error: "session_creation_failed" };
+      return {
+        status: "failed",
+        error:
+          "La session du worker lourd n'a pas pu être créée (voir les journaux).",
+      };
     }
 
     const { session } = ephemeral;
@@ -289,10 +356,15 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
           const reason = finishReasonForMessage(message);
           if (reason === "error") {
             sawError = true;
-            errorMessage =
-              typeof message.errorMessage === "string"
-                ? sanitizeErrorText(message.errorMessage)
-                : "erreur du worker lourd";
+            // ⚠️ La cause BRUTE du fournisseur (statut HTTP + corps) est traduite
+            // en français ACTIONNABLE, comme le fait la session légère
+            // (`sdk-host.ts`). Sans cette traduction, le rapport de job porterait
+            // le jargon anglais/JSON brut, ce qui pousse le léger à INVENTER une
+            // cause (« le worker n'est pas disponible ») au lieu de la citer.
+            const raw = errorTextFromMessage(message);
+            if (raw !== undefined) {
+              errorMessage = describeModelError(raw);
+            }
           }
           return;
         }
@@ -316,8 +388,8 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     } catch (error) {
       if (!sawError) {
         sawError = true;
-        errorMessage = sanitizeErrorText(
-          error instanceof Error ? error.message : String(error),
+        errorMessage = describeModelError(
+          sanitizeErrorText(error instanceof Error ? error.message : String(error)),
         );
       }
     } finally {

@@ -59,6 +59,22 @@ function coerceInt(value: unknown): number | undefined {
 }
 
 /**
+ * Options des outils d'ACTION (`run_command`, `capturer_ecran`).
+ */
+export interface ActionToolOptions {
+  /**
+   * Conversation à laquelle RATTACHER les demandes de validation. Indispensable
+   * quand l'outil tourne dans une session ÉPHÉMÈRE (worker lourd) : l'ID de la
+   * session éphémère n'est PAS celui de la conversation, or la validation
+   * humaine DOIT s'afficher DANS la conversation de l'utilisateur. On force donc
+   * ici l'ID de la conversation propriétaire (`HeavyRunRequest.lightSessionId`).
+   * Absent ⇒ repli sur l'ID de la session de l'outil (session légère
+   * persistante, où les deux coïncident).
+   */
+  approvalSessionId?: () => string | undefined;
+}
+
+/**
  * Identifiant de la session (conversation) courante, lu depuis le contexte de
  * l'outil. Sert à RATTACHER une demande de validation à la bonne conversation.
  * Renvoie `undefined` si le contexte est indisponible (jamais une exception).
@@ -71,6 +87,20 @@ function sessionIdFromContext(ctx: ExtensionContext | undefined): string | undef
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Résout la conversation à laquelle rattacher la validation : l'ID FORCÉ
+ * (conversation propriétaire, fourni par le worker lourd) prime sur l'ID de la
+ * session de l'outil. Sans ID forcé, on retombe sur le contexte (session légère).
+ */
+function resolveSessionId(
+  ctx: ExtensionContext | undefined,
+  options: ActionToolOptions | undefined,
+): string | undefined {
+  const forced = options?.approvalSessionId?.();
+  if (forced && forced.length > 0) return forced;
+  return sessionIdFromContext(ctx);
 }
 
 /** Résumé JSON d'un résultat NON exécuté (refus, hors ligne, validation requise). */
@@ -87,8 +117,11 @@ function summaryText(outcome: ExecutionOutcome): string {
   });
 }
 
-/** Construit l'outil `run_command` exposé au léger. */
-export function createExecutionTools(service: ExecutionServicePort): ToolDefinition[] {
+/** Construit l'outil `run_command` porté par le worker LOURD (exécuteur). */
+export function createExecutionTools(
+  service: ExecutionServicePort,
+  options?: ActionToolOptions,
+): ToolDefinition[] {
   const runCommand = defineTool({
     name: "run_command",
     label: "Exécuter une commande sur une machine appairée",
@@ -146,7 +179,7 @@ export function createExecutionTools(service: ExecutionServicePort): ToolDefinit
         timeout_ms?: unknown;
       };
       const timeoutMs = coerceInt(input.timeout_ms);
-      const sessionId = sessionIdFromContext(ctx);
+      const sessionId = resolveSessionId(ctx, options);
       const outcome = await service.execute({
         agentId: input.agent_id,
         command: input.command,
@@ -203,7 +236,10 @@ function screenshotSummary(outcome: ScreenshotOutcome): string {
  * elle passe SANS validation humaine. Si la machine n'a pas d'écran ou d'outil
  * de capture, l'outil renvoie un REFUS HONNÊTE (jamais d'échec silencieux).
  */
-export function createScreenshotTool(service: ScreenshotServicePort): ToolDefinition[] {
+export function createScreenshotTool(
+  service: ScreenshotServicePort,
+  options?: ActionToolOptions,
+): ToolDefinition[] {
   const capturerEcran = defineTool({
     name: "capturer_ecran",
     label: "Capturer l'écran d'une machine appairée",
@@ -237,7 +273,7 @@ export function createScreenshotTool(service: ScreenshotServicePort): ToolDefini
     execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       const input = params as { agent_id: string; timeout_ms?: unknown };
       const timeoutMs = coerceInt(input.timeout_ms);
-      const sessionId = sessionIdFromContext(ctx);
+      const sessionId = resolveSessionId(ctx, options);
       const outcome = await service.capture({
         agentId: input.agent_id,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),

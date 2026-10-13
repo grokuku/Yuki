@@ -120,6 +120,22 @@ const UNAVAILABLE_PATTERNS: ReadonlyArray<RegExp> = [
   /connection (refused|reset|closed)/i,
 ];
 
+/**
+ * 404 = le fournisseur ne reconnaît NI le modèle NI la route demandée. C'est le
+ * cas typique d'un identifiant de modèle absent de la passerelle, ou d'une URL
+ * de base erronée (ex. `…/v1` manquant). On le dit EXPLICITEMENT : c'est
+ * actionnable, et cela évite de faire croire à une indisponibilité passagère.
+ */
+const MODEL_NOT_FOUND_PATTERNS: ReadonlyArray<RegExp> = [
+  /\b404\b/,
+  /not[ _-]?found/i,
+  /introuvable/i,
+  /unknown (model|endpoint|route|service)/i,
+  /no such (model|endpoint|route|service)/i,
+  /(model|endpoint|route|service).{0,24}(does not exist|n'existe pas)/i,
+  /unsupported (model|endpoint)/i,
+];
+
 /** Longueur maximale du détail brut repris dans un message affichable. */
 const MAX_ERROR_DETAIL_CHARS = 400;
 
@@ -136,8 +152,8 @@ function matchesAny(text: string, patterns: ReadonlyArray<RegExp>): boolean {
 /**
  * Traduit la cause d'un échec de génération en message UTILE pour l'humain.
  *
- * - cause reconnue (crédit/quota, authentification, débit, indisponibilité) ⇒
- *   message EXPLICITE et actionnable ;
+ * - cause reconnue (crédit/quota, authentification, débit, modèle/route
+ *   introuvable, indisponibilité) ⇒ message EXPLICITE et actionnable ;
  * - cause inconnue ⇒ « le modèle n'a pas répondu » suivi du détail BRUT (tronqué),
  *   jamais un texte générique ni une cause inventée.
  *
@@ -172,6 +188,13 @@ export function describeModelError(rawText: string | undefined): string {
     return (
       "Le fournisseur du modèle a refusé la requête : limite de débit atteinte " +
       "(trop de requêtes), réessayez dans un instant."
+    );
+  }
+  if (matchesAny(raw, MODEL_NOT_FOUND_PATTERNS)) {
+    return (
+      "Le fournisseur du modèle ne reconnaît pas le modèle ou l'endpoint demandé " +
+      "(erreur 404) : vérifiez l'identifiant du modèle et l'URL de base du " +
+      "fournisseur (elle doit inclure « /v1 »)."
     );
   }
   if (matchesAny(raw, UNAVAILABLE_PATTERNS)) {

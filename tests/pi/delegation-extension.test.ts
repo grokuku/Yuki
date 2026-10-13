@@ -16,6 +16,7 @@ import { resolve } from "node:path";
 
 import {
   DELEGATION_RULE,
+  FAILURE_RULE,
   MAX_INLINE_PENDING_JOBS,
   PENDING_JOBS_TAG,
   RELAY_RULE,
@@ -111,7 +112,14 @@ describe("relais de délégation — injection dans le prompt système (non pers
     // Les choses RAPIDES se font soi-même (jamais par un sous-agent).
     expect(DELEGATION_RULE).toMatch(/TOI-MÊME si c'est RAPIDE/);
     expect(DELEGATION_RULE).toMatch(/recherche\s+libraire/);
-    expect(DELEGATION_RULE).toMatch(/capture d'écran/);
+    // ⚠️ INVERSION DES RÔLES : l'exécution (commande sur une machine, capture
+    // d'écran) ne se fait PAS soi-même — elle se DÉLÈGUE, et Yuki n'a aucun
+    // outil d'action. La frontière ne doit donc plus ranger « capture d'écran »
+    // dans les choses RAPIDES faites soi-même.
+    expect(DELEGATION_RULE).toMatch(/se DÉLÈGUE/);
+    expect(DELEGATION_RULE).toMatch(/AUCUN outil/);
+    expect(DELEGATION_RULE).toMatch(/commande sur une machine/);
+    expect(DELEGATION_RULE).not.toMatch(/TOI-MÊME[^]*capture d'écran/);
     // La frontière n'est PAS absolue : pas de « délègue tout ».
     expect(DELEGATION_RULE).not.toMatch(/délègue tout/i);
   });
@@ -122,11 +130,35 @@ describe("relais de délégation — injection dans le prompt système (non pers
     // Les deux règles sont présentes ENSEMBLE et dans le bon ordre.
     const iDeleg = text.indexOf(DELEGATION_RULE);
     const iRelay = text.indexOf(RELAY_RULE);
+    const iFailure = text.indexOf(FAILURE_RULE);
     expect(iDeleg).toBeGreaterThan(-1);
     expect(iRelay).toBeGreaterThan(iDeleg);
+    expect(iFailure).toBeGreaterThan(iRelay);
     // Les deux s'accordent à dire qu'une réponse courte se fait soi-même.
     expect(DELEGATION_RULE).toContain("TOI-MÊME");
     expect(RELAY_RULE).toMatch(/réponds COURT toi-même/);
+  });
+
+  it("injecte la consigne d'ÉCHEC (annoncer honnêtement, sans reprendre le travail)", () => {
+    const handlers = capture(() => []);
+    const result = inject(handlers);
+    expect(result?.systemPrompt).toContain(FAILURE_RULE);
+    expect(result?.systemPrompt).toContain("Quand une tâche déléguée ÉCHOUE");
+  });
+
+  it("la consigne d'échec est BINDING : cite la cause, n'invente pas, laisse décider", () => {
+    // Annoncer l'échec en citant la cause EXACTE du rapport.
+    expect(FAILURE_RULE).toContain("CITANT la cause");
+    // Interdiction EXPLICITE de la cause inventée observée en usage réel.
+    expect(FAILURE_RULE).toMatch(/N'INVENTE jamais de cause/);
+    expect(FAILURE_RULE).toContain("le worker n'est pas disponible");
+    // Ne pas reprendre le travail long : laisser décider l'utilisateur.
+    expect(FAILURE_RULE).toMatch(/Ne reprends PAS le travail long/);
+    expect(FAILURE_RULE).toMatch(/Laisse l'utilisateur DÉCIDER/);
+    // ⚠️ INVERSION : elle n'a AUCUN outil d'exécution ; un échec de délégation
+    // ne peut pas être compensé par un repli « je le fais moi-même ».
+    expect(FAILURE_RULE).toMatch(/AUCUN outil pour EXÉCUTER/);
+    expect(FAILURE_RULE).toMatch(/le faire à la\s+main/);
   });
 
   it("PROMPT EFFECTIF (base livrée + extension) contient la frontière de délégation", () => {
@@ -136,13 +168,15 @@ describe("relais de délégation — injection dans le prompt système (non pers
       resolve(process.cwd(), "config/pi/system-prompt.md"),
       "utf8",
     );
-    // La base décrit déjà `delegate` (mais de façon PERMISSIVE : « tu peux »).
-    expect(base).toMatch(/tu peux confier le travail/);
+    // La base décrit déjà `delegate` et le worker lourd comme exécuteur.
+    expect(base).toMatch(/delegate\(task, context\?\)/);
+    expect(base).toMatch(/worker lourd/);
     const handlers = capture(() => []);
     const effective = inject(handlers, base)!.systemPrompt!;
     expect(effective).toContain("Faire ou déléguer ?");
     expect(effective).toContain("DÉLÈGUE");
     expect(effective).toContain("RENDS LA MAIN");
+    expect(effective).toContain("Quand une tâche déléguée ÉCHOUE");
   });
 
   it("INFALSIFIABLE : un intitulé piégé ne casse pas l'encadrement", () => {

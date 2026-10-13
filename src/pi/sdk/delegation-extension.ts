@@ -13,15 +13,20 @@
  *  2) une consigne FERME de relais : l'utilisateur ne parle qu'à
  *     l'orchestrateur ; dès qu'il évoque une tâche EN COURS, il DOIT la
  *     transmettre au sous-agent (`steer_job`) — accuser réception ne suffit pas ;
- *  3) la LISTE des tâches EN COURS de CETTE conversation (`job_id` utilisable
+ *  3) une consigne FERME de traitement d'un ÉCHEC de tâche : un rapport en
+ *     `failed` s'annonce HONNÊTEMENT en CITANT la cause fournie (jamais une cause
+ *     inventée du type « le worker n'est pas disponible »), et l'orchestrateur ne
+ *     reprend PAS le travail long à sa charge pour « compenser » (cela bloque sa
+ *     conversation) : il laisse l'utilisateur décider ;
+ *  4) la LISTE des tâches EN COURS de CETTE conversation (`job_id` utilisable
  *     pour `steer_job`, intitulé, statut « en cours » / « en file »), pour que
  *     l'orchestrateur sache QUOI relayer — sans quoi la consigne de relais serait
  *     inapplicable (équivalent de l'information « telle tâche tourne »).
  *
- * ⚠️ Les trois blocs vivent ICI, dans le MÊME endroit : deux textes de règle
+ * ⚠️ Les quatre blocs vivent ICI, dans le MÊME endroit : des textes de règle
  * épars risqueraient de se contredire. Ils sont cohérents entre eux (le travail
- * long se délègue, la réponse courte se fait soi-même, et une précision qui vise
- * un job en cours se RELAIE).
+ * long se délègue, la réponse courte se fait soi-même, une précision qui vise
+ * un job en cours se RELAIE, et un échec s'annonce sans être repris).
  *
  * ⚠️ Comme la mémoire et l'annuaire, c'est un mécanisme NON PERSISTÉ : on
  * augmente seulement `systemPrompt` du tour (`types.d.ts` → « Replace the system
@@ -64,8 +69,12 @@ export const DELEGATION_RULE = [
   "  JAMAIS bloquée à faire ce travail toi-même ni à l'attendre. Le rapport te sera",
   "  livré plus tard, dans un nouveau tour.",
   "- FAIS-LE TOI-MÊME si c'est RAPIDE (un seul pas) : lire un fichier, une recherche",
-  "  libraire, lister les agents ou consulter leur état, une capture d'écran, une",
-  "  question de conversation. Pour si peu, un sous-agent serait plus lent qu'utile.",
+  "  libraire, lister les agents ou consulter leur état, une question de",
+  "  conversation. Pour si peu, un sous-agent serait plus lent qu'utile.",
+  "- ⚠️ Tu n'EXÉCUTES rien toi-même : lancer une commande sur une machine",
+  "  appairée ou capturer son écran se DÉLÈGUE (`delegate`), même si l'action",
+  "  paraît courte. Tu ne disposes d'AUCUN outil pour cela — ne prétends jamais",
+  "  avoir exécuté une commande ni pris une capture.",
   "- En cas de doute : long ou plusieurs étapes ⇒ délègue ; immédiat ⇒ fais-le",
   "  toi-même.",
 ].join("\n");
@@ -87,6 +96,41 @@ export const RELAY_RULE = [
   "  le sous-agent.",
   "- S'il ne demande qu'une réponse (question générale, aparté) sans qu'un job",
   "  soit concerné, réponds COURT toi-même, sans relayer.",
+].join("\n");
+
+/**
+ * Consigne BINDING de traitement d'un ÉCHEC de tâche déléguée. Le rapport d'un
+ * job peut porter `statut: failed`, accompagné d'une cause EXACTE (fournie par
+ * le rapport, elle-même déjà traduite depuis la cause brute du fournisseur).
+ *
+ * ⚠️ POURQUOI CETTE RÈGLE EXISTE : sans elle, le léger INVENTAIT la cause
+ * (« le worker lourd n'est pas disponible » alors que le worker avait bien tourné
+ * et que le FOURNISSEUR avait refusé la requête) et reprenait le travail long à
+ * sa charge « pour compenser » — ce qui bloquait sa conversation, exactement
+ * l'inverse du but de la délégation. La règle impose donc : annoncer l'échec en
+ * CITANT la cause, ne rien inventer, et laisser l'utilisateur décider (ne pas se
+ * substituer silencieusement au sous-agent).
+ *
+ * Exportée pour être VERROUILLÉE par un test : si quelqu'un l'affaiblit (la
+ * retire, la rend facultative), la garantie « un échec est annoncé honnêtement,
+ * sans reprise silencieuse » disparaîtrait silencieusement.
+ */
+export const FAILURE_RULE = [
+  "## Quand une tâche déléguée ÉCHOUE (règle STRICTE, non optionnelle)",
+  "",
+  "Un rapport de tâche peut porter `statut: failed` avec sa cause exacte.",
+  "- Annonce l'échec HONNÊTEMENT, en CITANT la cause donnée dans le rapport.",
+  "  N'INVENTE jamais de cause : ne dis pas que « le worker n'est pas disponible »",
+  "  si le rapport dit autre chose (modèle ou endpoint inconnu, authentification",
+  "  refusée, quota épuisé…). Si la cause est technique, explique-la simplement.",
+  "- Ne reprends PAS le travail long à ta charge pour « compenser » : cela",
+  "  bloquerait la conversation. Laisse l'utilisateur DÉCIDER (relancer, corriger",
+  "  la configuration, ou demander explicitement une autre voie).",
+  "- ⚠️ Tu n'as AUCUN outil pour EXÉCUTER toi-même (commande sur une machine,",
+  "  capture d'écran) : si la délégation échoue, tu ne peux PAS « le faire à la",
+  "  main ». Dis-le clairement et honnêtement, sans promettre de le faire autrement.",
+  "- Tu peux PROPOSER une suite (réessayer, corriger le modèle/la clé/le",
+  "  fournisseur concerné), mais tu attends son accord avant de relancer.",
 ].join("\n");
 
 /** Balise d'encadrement de la liste des jobs en cours (donnée destinée au modèle). */
@@ -206,8 +250,8 @@ export function createDelegationExtensionFactory(
             sessionId = undefined;
           }
           const jobs = sessionId ? options.activeJobs(sessionId) : [];
-          // MÊME bloc, même tour : frontière faire/déléguer → relais → jobs.
-          block = `${DELEGATION_RULE}\n\n${RELAY_RULE}\n\n${framePendingJobs(jobs)}`;
+          // MÊME bloc, même tour : faire/déléguer → relais → échec → jobs.
+          block = `${DELEGATION_RULE}\n\n${RELAY_RULE}\n\n${FAILURE_RULE}\n\n${framePendingJobs(jobs)}`;
         } catch (error) {
           // Ne JAMAIS faire échouer le tour : un échec d'injection est omis.
           options.logger?.warn("delegation.relay.inject.failed", {

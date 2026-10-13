@@ -106,15 +106,18 @@ export interface PiHostOptions {
    */
   delegation?: DelegateServicePort;
   /**
-   * Port d'exécution déléguée (Lot 4). Présent ⇒ la façade construit et expose
-   * l'outil `run_command` (garde-fou par agent appliqué côté Yuki). Absent ⇒
-   * aucun outil d'exécution.
+   * Port d'exécution déléguée (Lot 4). Présent ⇒ la façade construit l'outil
+   * `run_command` (garde-fou par agent appliqué côté Yuki). ⚠️ INVERSION DES
+   * RÔLES : l'outil n'est réellement exposé que si l'allowlist du rôle le
+   * contient — c'est le cas du worker LOURD (session éphémère), jamais du léger.
+   * La session légère ne reçoit donc plus ce port.
    */
   execution?: ExecutionServicePort;
   /**
    * Port de CAPTURE D'ÉCRAN par l'agent (Lot 4, extension). Présent ⇒ la façade
-   * expose l'outil `capturer_ecran` (même garde-fou que `run_command`). Absent ⇒
-   * aucune capture possible.
+   * construit l'outil `capturer_ecran` (même garde-fou que `run_command`).
+   * ⚠️ INVERSION DES RÔLES : exposé uniquement au worker LOURD (allowlist) ; la
+   * session légère ne reçoit plus ce port.
    */
   screenshots?: ScreenshotServicePort;
   /**
