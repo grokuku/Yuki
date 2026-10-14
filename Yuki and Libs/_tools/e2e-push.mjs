@@ -220,22 +220,44 @@ const manifest = await evaluate(`(async () => {
   const r = await fetch('/manifest.webmanifest');
   const text = await r.text();
   let json = null; try { json = JSON.parse(text); } catch {}
-  return { status: r.status, type: r.headers.get('content-type'), name: json?.name ?? null, display: json?.display ?? null, icons: (json?.icons ?? []).map((i) => i.sizes) };
+  return { status: r.status, type: r.headers.get('content-type'), name: json?.name ?? null, display: json?.display ?? null, id: json?.id ?? null, icons: (json?.icons ?? []).map((i) => i.sizes) };
 })()`);
 check("[manifeste] servi 200", manifest.status === 200, String(manifest.status));
 check("[manifeste] type `application/manifest+json`", String(manifest.type).includes("application/manifest+json"), String(manifest.type));
 check("[manifeste] display=standalone, nom Yuki", manifest.display === "standalone" && manifest.name === "Yuki", `${manifest.display}/${manifest.name}`);
 check("[manifeste] icônes 192 et 512 présentes", manifest.icons.includes("192x192") && manifest.icons.includes("512x512"), JSON.stringify(manifest.icons));
+check("[manifeste] `id` déclaré (identité stable)", typeof manifest.id === "string" && manifest.id.length > 0, String(manifest.id));
+
+// ⚠️ Tailles RÉELLES (décodage de l'image), pas la déclaration : une icône
+// annoncée 512 mais réellement plus petite fait échouer l'installation Android
+// SANS message clair. On décode donc l'image dans le navigateur.
+const iconSizes = await evaluate(`(async () => {
+  const out = {};
+  for (const p of ['/ui/icons/icon-192.png', '/ui/icons/icon-512.png', '/ui/icons/icon-maskable-512.png']) {
+    const bmp = await createImageBitmap(await (await fetch(p)).blob());
+    out[p] = bmp.width + 'x' + bmp.height;
+    bmp.close();
+  }
+  return out;
+})()`);
+check(
+  "[icônes] tailles RÉELLES décodées = 192 et 512 (critère d'installation)",
+  iconSizes["/ui/icons/icon-192.png"] === "192x192" &&
+    iconSizes["/ui/icons/icon-512.png"] === "512x512" &&
+    iconSizes["/ui/icons/icon-maskable-512.png"] === "512x512",
+  JSON.stringify(iconSizes),
+);
 
 /* ═══════════════════════ 3) Service worker servi + enregistré ════════════ */
 const swFetch = await evaluate(`(async () => {
   const r = await fetch('/sw.js');
   const text = await r.text();
-  return { status: r.status, type: r.headers.get('content-type'), startsHtml: text.trimStart().startsWith('<'), hasPush: text.includes('addEventListener("push"') };
+  return { status: r.status, type: r.headers.get('content-type'), startsHtml: text.trimStart().startsWith('<'), hasPush: text.includes('addEventListener("push"'), hasFetch: text.includes('addEventListener("fetch"') };
 })()`);
 check("[sw] servi 200", swFetch.status === 200, String(swFetch.status));
 check("[sw] type JavaScript (jamais du HTML de forward-auth)", String(swFetch.type).includes("javascript") && swFetch.startsHtml === false, `${swFetch.type} / html=${swFetch.startsHtml}`);
 check("[sw] contient le gestionnaire push", swFetch.hasPush === true);
+check("[sw] contient un gestionnaire `fetch` (installabilité Chrome)", swFetch.hasFetch === true);
 
 const swState = await evaluate(`(async () => {
   const reg = await navigator.serviceWorker.getRegistration();

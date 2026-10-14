@@ -1,6 +1,7 @@
 {
   "name": "Yuki",
   "short_name": "Yuki",
+  "id": "/",
   "description": "Assistante personnelle Yuki — conversation, tâches de fond, validations humaines.",
   "lang": "fr",
   "dir": "ltr",

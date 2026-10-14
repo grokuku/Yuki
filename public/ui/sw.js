@@ -2,8 +2,12 @@
  *
  * Il ne met RIEN en cache : la PWA est « installable » et reçoit des
  * notifications, mais l'interface reste servie par le gateway (toujours fraîche,
- * jamais une version périmée). Aucun `fetch` intercepté — donc aucun risque de
- * servir une coquille obsolète.
+ * jamais une version périmée). Le gestionnaire `fetch` ci-dessous ne répond
+ * JAMAIS lui-même (aucun `respondWith`) : il laisse passer au réseau, donc aucune
+ * coquille obsolète ne peut être servie. Il n'est là que parce que Chrome exige,
+ * pour proposer « Installer l'application », un service worker AVEC un
+ * gestionnaire `fetch` — sans lui, Android ne propose que « Ajouter à l'écran
+ * d'accueil », un simple raccourci.
  *
  * Reçoit les notifications PUSH (charge utile chiffrée aes128gcm, RFC 8291) et
  * les affiche. Un clic RAMÈNE à la conversation concernée (même onglet si un
@@ -23,6 +27,14 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   // Prend la main sur les onglets déjà ouverts.
   event.waitUntil(self.clients.claim());
+});
+
+// ⚠️ Critère d'installabilité Chrome : un gestionnaire `fetch` doit exister pour
+// que le navigateur propose « Installer l'application ». Ce gestionnaire est
+// VOLONTAIREMENT VIDE : il n'appelle PAS `respondWith`, donc TOUTES les requêtes
+// poursuivent leur route réseau normale (aucun cache, interface toujours fraîche).
+self.addEventListener("fetch", () => {
+  // Intentionnellement vide : pas de `respondWith` ⇒ requête réseau par défaut.
 });
 
 /** Extrait le contenu utile d'une charge utile push (défensif). */
