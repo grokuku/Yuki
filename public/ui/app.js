@@ -27,6 +27,7 @@ import {
 } from "./unread.js";
 import { initSidebarAgents } from "./sidebar-agents.js";
 import { createApprovalLayer } from "./approval-window.js";
+import { createScrollToBottom } from "./scroll-button.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
 import { createSubagentActivity } from "./subagent-activity.js";
 import { createThinkingBlocks } from "./thinking.js";
@@ -630,15 +631,89 @@ function clearEmpty() {
  * ramènerait de force en bas. Le seuil tolère un léger décalage (arrondis).
  */
 const SCROLL_PIN_THRESHOLD_PX = 24;
+/** Durée (ms) du maintien en bas après un clic « revenir en bas » (le contenu
+ * qui streame grandit : on suit le fond, puis l'utilisateur reprend la main). */
+const STICK_TO_BOTTOM_MS = 600;
+
+/** Bouton « revenir en bas » (créé plus bas) ; référence pour rafraîchir sa
+ * visibilité depuis `pinIfNeeded`, SEUL point de passage après chaque mutation. */
+let scrollButton = null;
+/** `true` tant qu'un retour en bas FLUIDE est en cours (voir `goToEnd`). */
+let stickToBottom = false;
+let stickToBottomTimer = null;
 
 function isConversationPinned() {
   const el = els.conversation;
   return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_PIN_THRESHOLD_PX;
 }
 
-function pinIfNeeded(pinned) {
-  if (pinned) els.conversation.scrollTop = els.conversation.scrollHeight;
+/** `true` si le poste demande à réduire les animations (accessibilité). */
+function prefersReducedMotion() {
+  try {
+    return Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
+  } catch {
+    return false;
+  }
 }
+
+/** Défile jusqu'au fond MÊME calcul que `pinIfNeeded`, mais FLUIDE si permis. */
+function scrollConversationToEnd() {
+  const el = els.conversation;
+  if (typeof el.scrollTo === "function" && !prefersReducedMotion()) {
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  } else {
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+/**
+ * Retour en bas d'un clic sur le bouton : fluide, puis le fil RESTE épinglé le
+ * temps que la position se stabilise (le contenu en cours de flux grandit
+ * encore). Réutilise le défilement existant (`scrollConversationToEnd`).
+ */
+function goToEnd() {
+  stickToBottom = true;
+  scrollConversationToEnd();
+  if (stickToBottomTimer) clearTimeout(stickToBottomTimer);
+  stickToBottomTimer = setTimeout(() => {
+    stickToBottom = false;
+    stickToBottomTimer = null;
+  }, STICK_TO_BOTTOM_MS);
+}
+
+/** Geste utilisateur (molette, toucher, clavier) : il reprend la main. */
+function cancelStickToBottom() {
+  if (!stickToBottom) return;
+  stickToBottom = false;
+  if (stickToBottomTimer) {
+    clearTimeout(stickToBottomTimer);
+    stickToBottomTimer = null;
+  }
+}
+
+function pinIfNeeded(pinned) {
+  // Pendant un retour en bas, on SUIT le fond (le contenu grandit) au lieu de
+  // mesurer un `pinned` devenu faux le temps de l'animation.
+  if (stickToBottom) scrollConversationToEnd();
+  else if (pinned) els.conversation.scrollTop = els.conversation.scrollHeight;
+  // Seul point de passage après mutation : la visibilité du bouton y est remise
+  // à jour (masqué en bas, révélé dès qu'on remonte).
+  if (scrollButton) scrollButton.refresh();
+}
+
+/* ─── Bouton « revenir en bas » (uniquement si on a remonté le fil) ──────────
+ * Flottant, discret, il n'apparaît qu'au-delà du seuil d'apparition et ramène en
+ * bas (fluide + ré-épinglage) en RÉUTILISANT le défilement existant ci-dessus :
+ * la visibilité relit `isConversationPinned`, l'état de retour `stickToBottom`,
+ * et le clic appelle `goToEnd` — aucun second système de défilement.
+ * ⚠️ Créé APRÈS `pinIfNeeded` : `refresh()` lit `stickToBottom` (état `let`). */
+scrollButton = createScrollToBottom({
+  conversation: els.conversation,
+  isPinned: isConversationPinned,
+  isReturning: () => stickToBottom,
+  onActivate: goToEnd,
+  onUserIntent: cancelStickToBottom,
+});
 
 /* ─── Horodatage de l'interface ───────────────────────────────────────────
  * L'heure « juste HH:mm » est affichée PETITE et discrète sur la ligne de

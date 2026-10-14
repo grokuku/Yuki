@@ -1141,6 +1141,44 @@ a.pill:hover {
   background: var(--panel);
 }
 
+/* ─── Bouton « revenir en bas » (flottant, discret) ──────────────────────
+ * Hors flux (`position: fixed`) ⇒ il n'apparaît/disparaît JAMAIS en décalant la
+ * mise en page (le fil ne saute pas). Positionné par CSSOM (`left`/`top`, voir
+ * `scroll-button.js`), couleurs en variables de thème, icône en `currentColor`.
+ * Il prend le coin BAS-GAUCHE — à l'OPPOSÉ de la fenêtre de validation qui
+ * apparaît par défaut en BAS-DROITE. `z-index` SOUS la couche de validation
+ * (1200) : un chevauchement résiduel ne pourrait jamais la recouvrir. */
+.scroll-bottom {
+  position: fixed;
+  z-index: 900;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 6px 18px color-mix(in srgb, #000 30%, transparent);
+}
+
+.scroll-bottom[hidden] {
+  display: none;
+}
+
+.scroll-bottom:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.scroll-bottom:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .input {
   flex: 1;
   resize: none;
