@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>Yuki</title>
+    <!-- PWA : le manifeste (même origine) rend l'interface INSTALLABLE ; le
+         service worker `/sw.js` (racine ⇒ portée `/`) porte les notifications.
+         La CSP ajoute `manifest-src 'self'` : sans elle, `default-src 'none'`
+         bloquerait le manifeste (le service worker reste couvert par
+         `script-src 'self'`). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0e1116" />
     <link rel="stylesheet" href="/ui/styles.css" />
     <link rel="stylesheet" href="/ui/themes.css" />
     <!-- HolafModal — CSS extrait via getCss(), servi statiquement (CSP style-src 'self'). -->
@@ -29,6 +36,15 @@
           hidden
         >tâche en cours…</span>
         <span id="queued" class="pill pill--queued" hidden>en file</span>
+        <!-- Notifications de CET appareil (PWA + Web Push). Masqué par défaut :
+             révélé par push.js seulement si le navigateur gère le Web Push. -->
+        <button
+          id="notif-toggle"
+          class="pill notif-toggle"
+          type="button"
+          aria-pressed="false"
+          hidden
+        >Activer les notifications</button>
         <div class="theme-control">
           <select id="theme-family" name="theme-family" aria-label="Choisir la famille de thème">
             <option value="corail">Corail</option>

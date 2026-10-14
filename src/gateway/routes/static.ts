@@ -25,6 +25,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -42,8 +43,15 @@ export const STATIC_SECURITY_HEADERS: Record<string, string> = {
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "x-frame-options": "DENY",
+  // ⚠️ CSP volontairement MINIMALE. Elle a été élargie d'UNE seule directive
+  // pour la PWA : `manifest-src 'self'`. Le chargement du manifeste web est
+  // soumis à la CSP (`manifest-src`, repli sur `default-src`) ; sans cette
+  // directive, `default-src 'none'` BLOQUE le manifeste. Le service worker,
+  // lui, est couvert par `script-src 'self'` (repli `worker-src` → `child-src`
+  // → `script-src`) : aucune autre ouverture n'est nécessaire. L'abonnement
+  // Web Push et les notifications ne sont PAS gouvernés par la CSP.
   "content-security-policy":
-    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "cache-control": "no-cache",
 };
 
@@ -74,6 +82,15 @@ export function resolveStaticRequest(
     relative = "index.html";
   } else if (pathname === "/config" || pathname === "/config.html") {
     relative = "config.html";
+  } else if (pathname === "/manifest.webmanifest") {
+    // PWA : le manifeste doit être servi à la RACINE (sa `scope`), pas sous
+    // `/ui/`. `manifest-src 'self'` l'autorise (voir STATIC_SECURITY_HEADERS).
+    relative = "manifest.webmanifest";
+  } else if (pathname === "/sw.js") {
+    // ⚠️ Le service worker est servi à la RACINE : sa `scope` vaut alors `/`,
+    // donc il contrôle `/` ET `/config`. Servi sous `/ui/`, il ne pourrait pas
+    // contrôler la page racine. Même origine que la page (exigence navigateur).
+    relative = "sw.js";
   } else if (pathname.startsWith("/ui/")) {
     relative = pathname.slice("/ui/".length);
   } else {

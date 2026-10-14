@@ -107,6 +107,34 @@ a.pill:hover {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
+/* Bouton « Notifications » de la topbar : pilule CLIQUABLE, état lisible (actif
+   en vert, à activer en gris). Masqué tant que le navigateur ne gère pas le
+   Web Push (posé par `push.js`). */
+.notif-toggle {
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.notif-toggle:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+.notif-toggle--on {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+}
+
+.notif-toggle--off {
+  color: var(--muted);
+}
+
+.notif-toggle[disabled] {
+  cursor: progress;
+  opacity: 0.6;
+}
+
 .conversation {
   flex: 1;
   min-height: 0;

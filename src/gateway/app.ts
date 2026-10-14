@@ -50,6 +50,11 @@ import {
   type AdminApiDeps,
 } from "./routes/admin.js";
 import {
+  handlePushRequest,
+  isPushPath,
+  type PushApiDeps,
+} from "./routes/push.js";
+import {
   handleVoicesRequest,
   isVoicesPath,
   MAX_VOICE_BODY_BYTES,
@@ -88,6 +93,12 @@ export interface AppContext {
   config?: ConfigApiDeps;
   /** API d'administration (redémarrage). Absente ⇒ `/api/admin/**` → 404. */
   admin?: AdminApiDeps;
+  /**
+   * API des notifications (PWA + Web Push). Absente ⇒ `/api/push/**` → 404.
+   * Fonctionne même en mode dégradé (aucun PiHost requis) : l'utilisateur peut
+   * gérer ses appareils et consulter l'état.
+   */
+  push?: PushApiDeps;
   /** API de gestion des voix TTS (Lot 7). Absente ⇒ `/api/voices*` → 404. */
   voices?: VoiceApiDeps;
   /** Diagnostic TTS (Lot 8). Absent ⇒ `/api/tts/**` → 404. */
@@ -451,6 +462,27 @@ async function handleHeritageHttp(
   );
 }
 
+/** Traite une requête de l'API des notifications (corps JSON borné). */
+async function handlePushHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: PushApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "POST" || method === "PUT") {
+    body = await readBody(req).catch(() => "");
+  }
+  const response = handlePushRequest({ method, path, headers: req.headers, body, deps });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Construit l'écouteur HTTP de l'application. */
 export function createApp(context: AppContext): RequestListener {
   const {
@@ -463,6 +495,7 @@ export function createApp(context: AppContext): RequestListener {
     getSubsystems,
     config,
     admin,
+    push,
     voices,
     tts,
     agents,
@@ -651,6 +684,27 @@ export function createApp(context: AppContext): RequestListener {
         res,
         handleAdminRequest({ method, path, headers: req.headers, deps: admin }),
         headOnly,
+      );
+      return;
+    }
+
+    if (push && isPushPath(path)) {
+      void handlePushHttp(req, res, path, method, headOnly, push).catch(
+        (error: unknown) => {
+          push.logger.error("push.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
       );
       return;
     }

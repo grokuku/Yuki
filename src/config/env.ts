@@ -83,6 +83,17 @@ export interface Env {
    * `YUKI_SESSION_PINS_PATH`.
    */
   sessionPinsPath: string;
+  /**
+   * Fichier JSON des clés VAPID (volume `state`, 0600). ⚠️ Contient la clé
+   * PRIVÉE : jamais exposé, jamais journalisé. Surcharge : `YUKI_PUSH_VAPID_PATH`.
+   */
+  pushVapidPath: string;
+  /**
+   * Fichier JSON des ABONNEMENTS push par appareil (volume `state`, 0600).
+   * Données TECHNIQUES, jamais mêlées au transcript ni à la mémoire. Surcharge :
+   * `YUKI_PUSH_SUBSCRIPTIONS_PATH`.
+   */
+  pushSubscriptionsPath: string;
   // --- Personnalité de Yuki ---
   /**
    * Fichier Markdown de la personnalité (volume `state`), SÉPARÉ du prompt
@@ -296,6 +307,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_SESSION_PINS_PATH",
       `${mountPoints.state}/session-pins.json`,
+    ),
+    pushVapidPath: getString(
+      env,
+      "YUKI_PUSH_VAPID_PATH",
+      `${mountPoints.state}/push-vapid.json`,
+    ),
+    pushSubscriptionsPath: getString(
+      env,
+      "YUKI_PUSH_SUBSCRIPTIONS_PATH",
+      `${mountPoints.state}/push-subscriptions.json`,
     ),
     personalityPath: getString(
       env,

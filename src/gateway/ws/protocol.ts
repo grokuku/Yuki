@@ -32,6 +32,17 @@ export type ClientMessage =
   | { type: "rename"; sessionId: string; title: string }
   | { type: "setAside"; sessionId: string }
   | { type: "pin"; sessionId: string; pinned: boolean }
+  | {
+      /**
+       * Présence déclarée par le client : onglet VISIBLE et fenêtre FOCALISÉE.
+       * Sert uniquement à la décision anti-spam des notifications (jamais un
+       * accusé de réception de message). La conversation « regardée » est celle
+       * que le serveur connaît déjà (`client.sessionId`).
+       */
+      type: "presence";
+      visible: boolean;
+      focused: boolean;
+    }
   | { type: "agent_enabled"; agentId: string; enabled: boolean }
   | { type: "agent_level"; agentId: string; level: AgentLevel }
   | { type: "approval_decision"; id: string; decision: "approve" | "deny" }
@@ -356,6 +367,15 @@ export function parseClientMessage(raw: string): ParseResult {
         return { ok: false, error: "pin_invalid_pinned" };
       }
       return { ok: true, message: { type: "pin", sessionId, pinned: parsed.pinned } };
+    }
+    case "presence": {
+      if (typeof parsed.visible !== "boolean" || typeof parsed.focused !== "boolean") {
+        return { ok: false, error: "presence_invalid_flags" };
+      }
+      return {
+        ok: true,
+        message: { type: "presence", visible: parsed.visible, focused: parsed.focused },
+      };
     }
     case "agent_enabled": {
       const agentId = optionalString(parsed, "agentId");

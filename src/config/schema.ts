@@ -407,6 +407,28 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_WS_REPLAY_BYTES",
   },
 
+  // --- Notifications (PWA + Web Push) --------------------------------------
+  // ⚠️ `FieldType` = `string | int | enum` : l'activation est un ENUM `off|on`
+  // (aucun booléen). Défaut `on` : le service n'ENVOIE rien tant qu'aucun
+  // appareil n'est abonné (l'abonnement navigateur EST l'opt-in explicite).
+  // `apply: hot` : le service relit ce réglage à chaque événement.
+  "push.enabled": {
+    type: "enum",
+    enum: ["off", "on"],
+    default: "on",
+    apply: "hot",
+    env: "YUKI_PUSH_ENABLED",
+  },
+  // Sujet VAPID (`sub` du JWT, RFC 8292) : un `mailto:` ou une URL de contact.
+  // Certains services de push refusent une valeur vide ; on fournit un défaut
+  // neutre, sans prétendre à une adresse existante.
+  "push.contact": {
+    type: "string",
+    default: "mailto:yuki@localhost",
+    apply: "hot",
+    env: "YUKI_PUSH_CONTACT",
+  },
+
   // --- Agents d'exécution (Lot 4) -----------------------------------------
   // ⚠️ `FieldType` = `string | int | enum` : AUCUN booléen, aucun tableau. Le
   // niveau de garde-fou est donc un ENUM (D118) et le privilège un ENUM (D120).

@@ -106,6 +106,14 @@ import {
   memoryWriteModelReference,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
+import {
+  createPushSender,
+  createPushService,
+  loadOrCreateVapidKeys,
+  PushSubscriptionStore,
+  type PushService,
+} from "./push/index.js";
+import type { PushApiDeps } from "./gateway/routes/push.js";
 import { RulesStore } from "./rules/index.js";
 import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
 import {
@@ -654,6 +662,56 @@ async function main(): Promise<void> {
     voices: voiceStore.list().length,
   });
 
+  // --- Notifications : clés VAPID + abonnements + service (PWA + Web Push) ---
+  // ⚠️ La clé PRIVÉE VAPID est générée une seule fois, stockée en 0600 sur le
+  // volume `state`, jamais exposée ; on l'ajoute à la liste MUTABLE des secrets
+  // du logger pour qu'elle ne puisse pas fuiter dans un journal. L'initialisation
+  // est BEST-EFFORT : une panne du volume `state` ne doit pas empêcher le gateway
+  // humain de démarrer (les routes `/api/push/**` retombent alors en 404).
+  let pushService: PushService | undefined;
+  let pushDeps: PushApiDeps | undefined;
+  try {
+    const vapid = loadOrCreateVapidKeys(env.pushVapidPath, logger);
+    if (vapid.created) {
+      logger.info("push.vapid.created", { path: vapid.path });
+    }
+    // La clé privée est un SECRET : masquée partout dans les journaux.
+    secretValues.push(vapid.keys.privateKey);
+    const pushStore = new PushSubscriptionStore({
+      path: env.pushSubscriptionsPath,
+      logger,
+    });
+    const sender = createPushSender({
+      keys: vapid.keys,
+      subject: () => config.getString("push.contact"),
+      logger,
+    });
+    pushService = createPushService({
+      store: pushStore,
+      publicKey: vapid.keys.publicKey,
+      logger,
+      enabled: () => config.getString("push.enabled") === "on",
+      // Présence des clients connectés : le transport la déclare, le service
+      // décide (jamais l'inverse). Absent ⇒ aucune présence connue ⇒ on notifie.
+      presence: () => transport?.presenceView?.() ?? [],
+      send: (subscription, payload) => sender.send(subscription, payload),
+    });
+    pushDeps = {
+      store: pushStore,
+      logger,
+      enabled: () => config.getString("push.enabled") === "on",
+      publicKey: vapid.keys.publicKey,
+    };
+    logger.info("push.ready", {
+      enabled: config.getString("push.enabled") === "on",
+      devices: pushStore.size,
+      vapid: env.pushVapidPath,
+      subscriptions: env.pushSubscriptionsPath,
+    });
+  } catch (error) {
+    logger.error("push.init.failed", { error: messageOf(error) });
+  }
+
   // --- Personnalité de Yuki (base du prompt, éditable/versionnée) -----------
   // Fichier SÉPARÉ du prompt système de sûreté, sur le volume `state`. Le store
   // est créé AVANT la porte GPU : l'API `GET/PUT /api/self/personality` reste
@@ -697,6 +755,8 @@ async function main(): Promise<void> {
   let delegation: DelegationService | undefined;
   /** Désabonnement du rechargement À CHAUD des modèles LLM (voir plus bas). */
   let stopLlmHotReload: (() => void) | undefined;
+  /** Désabonnement des DÉCLENCHEURS de notification (voir plus bas). */
+  let stopPushTriggers: (() => void) | undefined;
 
   if (gate.passed) {
     const idleTimeoutMs = config.getNumber("delegation.idleTimeoutMs");
@@ -1055,6 +1115,14 @@ async function main(): Promise<void> {
         logger,
       },
     });
+
+    // Notifications : on branche les DÉCLENCHEURS sur les événements réels
+    // (fin de tâche de fond, validation en attente, réponse prête). Le service
+    // lit la présence des clients via le transport et décide d'émettre ou non.
+    stopPushTriggers = pushService?.bind({
+      host,
+      ...(agentExecution ? { approvals: agentExecution } : {}),
+    });
   }
 
   const getSubsystems = (): SubsystemsSnapshot => {
@@ -1147,6 +1215,7 @@ async function main(): Promise<void> {
       voices: voicesDeps,
       tts: ttsDeps,
       ...(agentsDeps ? { agents: agentsDeps } : {}),
+      ...(pushDeps ? { push: pushDeps } : {}),
       admin: {
         logger,
         requestShutdown: () => triggerShutdown?.(RESTART_REASON),
@@ -1167,6 +1236,8 @@ async function main(): Promise<void> {
       stopAgentsCertReload = undefined;
       stopLlmHotReload?.();
       stopLlmHotReload = undefined;
+      stopPushTriggers?.();
+      stopPushTriggers = undefined;
       if (agentsServer) await closeAgentsServer(agentsServer);
       await transport?.close();
       await host?.stop();

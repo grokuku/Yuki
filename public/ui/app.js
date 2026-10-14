@@ -10,6 +10,11 @@ import { decodeTtsFrame } from "./tts-frames.js";
 import { createTtsPlayer } from "./tts-player.js";
 import { createTtsPreference, resolveSpeechState } from "./tts-preference.js";
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
+import {
+  createNotificationsControl,
+  initPresenceTracking,
+  registerServiceWorker,
+} from "./push.js";
 import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
 import { initSidebarAgents } from "./sidebar-agents.js";
 import { createApprovalLayer } from "./approval-window.js";
@@ -57,6 +62,26 @@ let resumePending = false;
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 let clientMsgCounter = 0;
+
+/* ─── Notifications (PWA + Web Push) ──────────────────────────────────────
+ * Le service worker est enregistré dès l'ouverture (l'interface devient
+ * installable) ; le bouton de topbar gère l'abonnement de CET appareil, toujours
+ * à la demande de l'utilisateur. Le clic d'une notification rouvre la
+ * conversation concernée (`/?session=<id>`), que l'on adopte ci-dessous. */
+const notifControl = createNotificationsControl({
+  button: document.getElementById("notif-toggle"),
+  onError: (message) => {
+    void HolafModal.alert("Notifications", message, { okText: "Compris" });
+  },
+});
+void registerServiceWorker().then(() => notifControl.refresh());
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void notifControl.refresh();
+});
+
+/** Conversation visée par un clic de notification (`?session=<id>`). */
+const deepLinkSession = new URLSearchParams(window.location.search).get("session");
+let deepLinkHandled = false;
 
 /* ─── E2 — STORES PAR CONVERSATION (transport multiplexé) ──────────────────
  * Le serveur diffuse, PAR ABONNEMENT, les trames de TOUTES les conversations
@@ -827,6 +852,9 @@ function sendRaw(payload) {
   return true;
 }
 
+/** Déclare la présence (onglet visible / fenêtre focalisée) au serveur. */
+const sendPresence = initPresenceTracking(sendRaw);
+
 function handleFrame(frame) {
   if (!frame || typeof frame !== "object") return;
   const type = frame.type;
@@ -843,6 +871,10 @@ function handleFrame(frame) {
     screenshotBlocks.reset();
     subagentActivity.reset();
     thinkingBlocks.reset();
+    // Présence : le serveur sait ainsi si CETTE fenêtre regarde la conversation
+    // (décision anti-spam des notifications). Envoyée après `hello`, une fois la
+    // session courante connue du serveur.
+    sendPresence();
     return;
   }
   if (type === "pong" || type === "bye") return;
@@ -882,6 +914,15 @@ function handleFrame(frame) {
     // l'état « en cours » connu de chacune (indicateur de la barre latérale).
     sessionsPanel.update(lastSessions, activeId, busyIdList());
     setEmptyState(activeId === null);
+    // Clic sur une notification : on adopte la conversation visée, une seule
+    // fois, et seulement si elle existe (sinon on reste sur l'état courant).
+    if (!deepLinkHandled && deepLinkSession) {
+      deepLinkHandled = true;
+      const known = lastSessions.some((entry) => entry.id === deepLinkSession);
+      if (known && deepLinkSession !== activeId) {
+        sendRaw({ type: "switch", sessionId: deepLinkSession });
+      }
+    }
     return;
   }
   // Encart agents : ÉTAT de contrôle (aucun `seq` consommé), envoyé à la

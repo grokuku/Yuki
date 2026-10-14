@@ -140,6 +140,11 @@ const OPTIONS = {
     ["dramatique", "dramatique"],
     ["personnalisee", "personnalisée"],
   ],
+  // Notifications (PWA + Web Push).
+  pushEnabled: [
+    ["on", "activées"],
+    ["off", "désactivées"],
+  ],
 };
 
 const GROUPS = [
@@ -186,6 +191,27 @@ const GROUPS = [
       { path: "gpu.profile", label: "Profil forcé", kind: "select", options: OPTIONS.profiles },
       { path: "gpu.compatMode", label: "Mode de compatibilité", kind: "select", options: OPTIONS.compat },
       { path: "gpu.minDriver", label: "Driver NVIDIA minimal (majeure)", kind: "number", min: 1 },
+    ],
+  },
+  {
+    id: "notifications",
+    title: "Notifications (appareils)",
+    fields: [
+      {
+        path: "push.enabled",
+        label: "Activer les notifications",
+        kind: "select",
+        options: OPTIONS.pushEnabled,
+        helper:
+          "Interrupteur GLOBAL du serveur. Chaque appareil s'abonne séparément depuis le bouton « Notifications » de la barre du haut (chat) : accepter la permission du navigateur EST l'opt-in. Désactiver ici coupe les envois pour TOUS les appareils.",
+      },
+      {
+        path: "push.contact",
+        label: "Contact VAPID (mailto: ou URL)",
+        kind: "text",
+        helper:
+          "Sujet (sub) du JWT VAPID, exigé par certains services de push. Une adresse de contact suffit ; elle n'est pas vérifiée.",
+      },
     ],
   },
   {
@@ -525,6 +551,8 @@ const FIELD_DEFAULTS = {
   "tts.volume": 100,
   "transport.replayBuffer": 1000,
   "transport.replayBytes": 5000000,
+  "push.enabled": "on",
+  "push.contact": "mailto:yuki@localhost",
   "agents.serverName": "",
   "librarian.baseUrl": "",
   "librarian.screenshot": "on",
@@ -542,7 +570,7 @@ const TABS = [
   { id: "personnalite", groups: [] },
   { id: "voix", groups: ["tts"] },
   { id: "agents", groups: ["agents-acces"] },
-  { id: "systeme", groups: ["gpu", "transport", "librarian"] },
+  { id: "systeme", groups: ["gpu", "transport", "librarian", "notifications"] },
   { id: "maintenance", groups: [] },
 ];
 

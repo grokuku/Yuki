@@ -38,7 +38,7 @@ import {
 } from "./protocol.js";
 import type { AgentLevel } from "../../agents/types.js";
 import { SessionStreamStore } from "./session-stream.js";
-import type { Transport, TransportStats } from "./transport.js";
+import type { PresenceView, Transport, TransportStats } from "./transport.js";
 
 export const WS_PATH = "/ws";
 
@@ -130,6 +130,13 @@ interface ClientState {
    * conversation. `sessionId → désabonnement`.
    */
   subscriptions: Map<string, () => void>;
+  /**
+   * Présence DÉCLARÉE par le client (onglet visible / fenêtre focalisée).
+   * ⚠️ Valeur initiale CONSERVATRICE (`false`/`false`) : tant que le client n'a
+   * rien déclaré, on ne peut PAS affirmer qu'il regarde ⇒ une notification
+   * reste possible. Le client envoie sa présence dès la connexion.
+   */
+  presence: { visible: boolean; focused: boolean };
 }
 
 /** Traduit un événement de façade en trame serveur. */
@@ -1017,6 +1024,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       case "agent_level":
         handleAgentLevel(client, message);
         return;
+      case "presence":
+        // Présence déclarée : alimente la décision anti-spam des notifications.
+        // Aucune trame de réponse (silencieux, idempotent).
+        client.presence.visible = message.visible;
+        client.presence.focused = message.focused;
+        return;
       case "approval_decision":
         await handleApprovalDecision(client, message);
         return;
@@ -1066,6 +1079,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       lastSeq: 0,
       greeted: false,
       subscriptions: new Map(),
+      presence: { visible: false, focused: false },
     };
     clients.add(client);
     logger.debug("ws.client.connected", { clients: clients.size });
@@ -1124,6 +1138,19 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
     clientCount(): number {
       return clients.size;
+    },
+
+    presenceView(): PresenceView[] {
+      const views: PresenceView[] = [];
+      for (const client of clients) {
+        if (client.ws.readyState !== WebSocket.OPEN) continue;
+        views.push({
+          sessionId: client.sessionId ?? null,
+          visible: client.presence.visible,
+          focused: client.presence.focused,
+        });
+      }
+      return views;
     },
 
     stats(): TransportStats {
