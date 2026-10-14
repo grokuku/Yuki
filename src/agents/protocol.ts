@@ -312,6 +312,12 @@ export interface OutboundCommand {
   origin?: string;
   /** Décision de Yuki (D118/D126) ; l'agent la journalise sans la contester. */
   destructive?: boolean;
+  /**
+   * Variables d'environnement SUPPLÉMENTAIRES (SUR-ENSEMBLE) : c'est par ce
+   * champ que Yuki injecte les SECRETS du coffre, SANS jamais réécrire la
+   * commande (le shell développe `$NOM`). ⚠️ Jamais journalisé, jamais audité.
+   */
+  env?: Record<string, string>;
 }
 
 /**
@@ -330,6 +336,9 @@ export function encodeCommandFrame(cmd: OutboundCommand): Record<string, unknown
     ...(cmd.timeoutMs !== undefined ? { timeout_ms: cmd.timeoutMs } : {}),
     ...(cmd.origin ? { origin: cmd.origin } : {}),
     ...(cmd.destructive !== undefined ? { destructive: cmd.destructive } : {}),
+    // ⚠️ Les secrets passent par `env` (sur-ensemble d'environnement), jamais
+    // concaténés à `command`. Champ omis si vide (compatibilité filaire).
+    ...(cmd.env && Object.keys(cmd.env).length > 0 ? { env: cmd.env } : {}),
   };
 }
 

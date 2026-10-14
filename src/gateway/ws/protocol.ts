@@ -18,6 +18,7 @@ import type {
   CapturedScreenshotView,
   ExecutionStatus,
   PendingApprovalView,
+  PendingSecretView,
 } from "../../agents/execution.js";
 
 /** Trame client → serveur. */
@@ -46,6 +47,17 @@ export type ClientMessage =
   | { type: "agent_enabled"; agentId: string; enabled: boolean }
   | { type: "agent_level"; agentId: string; level: AgentLevel }
   | { type: "approval_decision"; id: string; decision: "approve" | "deny" }
+  | {
+      /**
+       * FOURNITURE d'un secret demandé (`awaiting_secret`) : l'humain a saisi les
+       * valeurs des NOMS listés dans la demande. ⚠️ La valeur transite ici
+       * (navigateur → serveur) puis est CHIFFRÉE dans le coffre ; elle n'est jamais
+       * renvoyée. Voir la limite HTTP/LAN documentée.
+       */
+      type: "secret_submit";
+      id: string;
+      values: Record<string, string>;
+    }
   | { type: "ping"; t: number };
 
 /** Session exposée au client (liste des conversations de la barre latérale). */
@@ -181,8 +193,26 @@ export type ServerMessage =
       approval: PendingApprovalView;
     }
   | {
-      /** Retire le bloc de validation (décidée/expirée) — idempotent. */
+      /**
+       * Retire le bloc de validation (décidée/expirée) — idempotent.
+       */
       type: "approval_cleared";
+      id: string;
+    }
+  | {
+      /**
+       * Demande de SECRET à afficher DANS la conversation (fenêtre flottante).
+       * ÉTAT TEMPORAIRE (trame de CONTRÔLE, aucun `seq` consommé) : JAMAIS
+       * bufferisée, donc jamais dans le rejeu, le snapshot, le transcript ou la
+       * mémoire. ⚠️ Ne porte JAMAIS une valeur : seulement les NOMS à fournir, la
+       * machine et la commande EXACTE (avec ses références).
+       */
+      type: "secret_request";
+      request: PendingSecretView;
+    }
+  | {
+      /** Retire la fenêtre de secret (fournie/annulée/expirée) — idempotent. */
+      type: "secret_cleared";
       id: string;
     }
   | {
@@ -414,6 +444,24 @@ export function parseClientMessage(raw: string): ParseResult {
         return { ok: false, error: "approval_decision_invalid" };
       }
       return { ok: true, message: { type: "approval_decision", id, decision } };
+    }
+    case "secret_submit": {
+      const id = optionalString(parsed, "id");
+      if (id === undefined || id.length === 0) {
+        return { ok: false, error: "secret_submit_missing_id" };
+      }
+      const values = parsed.values;
+      if (!isRecord(values)) {
+        return { ok: false, error: "secret_submit_invalid_values" };
+      }
+      const clean: Record<string, string> = {};
+      for (const [name, value] of Object.entries(values)) {
+        if (typeof value !== "string") {
+          return { ok: false, error: "secret_submit_invalid_values" };
+        }
+        clean[name] = value;
+      }
+      return { ok: true, message: { type: "secret_submit", id, values: clean } };
     }
     case "ping": {
       const t = parsed.t;

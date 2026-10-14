@@ -154,6 +154,8 @@ function sizeOf(el, fallback) {
  *
  * @param {object} deps
  * @param {(id: string, decision: "approve" | "deny") => void} deps.onDecide
+ * @param {(id: string, values: Record<string, string>) => void} [deps.onSubmitSecret]
+ *   soumission des valeurs d'une demande de secret (`awaiting_secret`).
  * @param {() => number} [deps.now] horloge (injectable pour les tests).
  * @param {Document} [deps.doc]
  * @param {Window} [deps.win]
@@ -162,6 +164,8 @@ function sizeOf(el, fallback) {
  *   show(a: object, options?: { conversation?: string }): void,
  *   clear(id: string): void,
  *   showResult(r: object): void,
+ *   showSecret(r: object, options?: { conversation?: string }): void,
+ *   clearSecret(id: string): void,
  *   reset(): void,
  *   resetBusy(): void,
  *   element: HTMLElement,
@@ -169,6 +173,7 @@ function sizeOf(el, fallback) {
  */
 export function createApprovalLayer({
   onDecide,
+  onSubmitSecret,
   now = () => Date.now(),
   doc = typeof document !== "undefined" ? document : undefined,
   win = typeof window !== "undefined" ? window : undefined,
@@ -176,6 +181,8 @@ export function createApprovalLayer({
 } = {}) {
   if (!doc || !doc.body) throw new Error("createApprovalLayer : document requis");
   const decide = typeof onDecide === "function" ? onDecide : () => undefined;
+  const submitSecret =
+    typeof onSubmitSecret === "function" ? onSubmitSecret : () => undefined;
   const clock = typeof now === "function" ? now : () => Date.now();
   const view = win ?? { innerWidth: 1024, innerHeight: 768 };
   const storage =
@@ -211,6 +218,8 @@ export function createApprovalLayer({
 
   /** id → { el, timer, approve, deny, note, deadline, pos } */
   const requests = new Map();
+  /** Demande de secret → { el, timer, inputs, submit, note, deadline, pos } */
+  const secrets = new Map();
   /** Fenêtres de RÉSULTAT (éphémères), retirées au reset / à la fermeture. */
   const results = new Set();
 
@@ -401,6 +410,7 @@ export function createApprovalLayer({
   /** Retire TOUTES les fenêtres (le rendu est reconstruit depuis un snapshot). */
   function reset() {
     for (const id of [...requests.keys()]) clearRequest(id);
+    for (const id of [...secrets.keys()]) clearSecret(id);
     for (const entry of results) {
       if (entry.timer !== null) clearTimer(entry.timer);
       entry.el.remove();
@@ -413,6 +423,10 @@ export function createApprovalLayer({
     for (const entry of requests.values()) {
       entry.approve.disabled = false;
       entry.deny.disabled = false;
+      entry.note.textContent = "";
+    }
+    for (const entry of secrets.values()) {
+      entry.submit.disabled = false;
       entry.note.textContent = "";
     }
   }
@@ -589,5 +603,128 @@ export function createApprovalLayer({
     });
   }
 
-  return { show, clear, showResult, reset, resetBusy, element: root };
+  /** Retire la fenêtre d'une demande de secret (fournie/annulée/expirée). */
+  function clearSecret(id) {
+    const entry = secrets.get(id);
+    if (!entry) return;
+    if (entry.timer !== null) clearTimer(entry.timer);
+    entry.el.remove();
+    secrets.delete(id);
+  }
+
+  /**
+   * Affiche (ou met à jour) la fenêtre d'une DEMANDE DE SECRET (`awaiting_secret`).
+   * ⚠️ Réutilise la MÊME mécanique que la validation humaine (fenêtre déplaçable,
+   * position mémorisée, ne se ferme pas au clic à côté, TTL affiché) — aucun second
+   * système. La fenêtre MONTRE la machine ET la commande EXACTE (avec ses
+   * références), jamais une valeur : l'humain saisit la valeur des secrets listés.
+   */
+  function showSecret(request, options = {}) {
+    if (!request || request.id === undefined || request.id === null) return;
+    const id = String(request.id);
+    if (secrets.has(id)) clearSecret(id);
+    const conversation =
+      typeof options.conversation === "string" ? options.conversation.trim() : "";
+    const names = Array.isArray(request.names) ? request.names.map((n) => String(n)) : [];
+
+    const inputs = new Map();
+    const fields = names.map((name) => {
+      const input = h("input", {
+        class: "approval__secret-input",
+        type: "password",
+        autocomplete: "off",
+        spellcheck: "false",
+        "aria-label": `Valeur de ${name}`,
+        placeholder: "Valeur du secret",
+      });
+      inputs.set(name, input);
+      return h("label", { class: "approval__secret-field" }, [
+        h("span", { class: "approval__secret-name", text: name }),
+        input,
+      ]);
+    });
+
+    const submit = h("button", {
+      class: "button approval__btn",
+      type: "button",
+      text: "Fournir",
+    });
+    const note = h("span", { class: "approval__note", role: "status" });
+    const receivedAt = clock();
+    const deadline = localDeadline(request.ttlSeconds, receivedAt);
+
+    const { el, pos } = shell({
+      id,
+      label: {
+        className: "approval approval--secret approval-window",
+        ariaLabel: `Demande de secret — ${machineLabel(request)}`,
+      },
+      head: [
+        h("span", { class: "approval__title", text: "Secret requis" }),
+        machineNode({ agentId: request.agentId, agentName: request.agentName }),
+        ...(conversation
+          ? [
+              h(
+                "span",
+                { class: "approval__conversation", title: `Conversation : ${conversation}` },
+                ["Dans ", h("strong", { text: conversation })],
+              ),
+            ]
+          : []),
+        h("span", { class: "approval__badge approval__badge--secret", text: "Secret" }),
+      ],
+    });
+    const body = h("div", { class: "approval-window__body" }, [
+      foldBlock({
+        tag: "code",
+        className: "approval__command",
+        text: String(request.command ?? ""),
+        noun: "la commande",
+      }),
+      h("p", {
+        class: "approval__secret-hint",
+        text:
+          "Ces secrets ne sont pas dans le coffre. Saisis leur valeur : elle sera " +
+          "chiffrée et la commande s'exécutera. Elle n'est jamais renvoyée ni journalisée.",
+      }),
+      ...fields,
+    ]);
+    const meta = h("div", { class: "approval-window__meta" }, [
+      h("p", { class: "approval__expiry", text: expiryText(deadline) }),
+    ]);
+    el.append(body, meta, h("div", { class: "approval__actions" }, [submit, note]));
+
+    const entry = { el, timer: null, submit, note, deadline, pos };
+    secrets.set(id, entry);
+    const position = placeNew(el, secrets.size - 1);
+    pos.left = position.left;
+    pos.top = position.top;
+    place(el, position.left, position.top);
+
+    submit.addEventListener("click", () => {
+      const values = {};
+      for (const name of names) values[name] = String(inputs.get(name)?.value ?? "");
+      const missing = names.filter((name) => values[name].length === 0);
+      if (missing.length > 0) {
+        note.textContent = `Valeur manquante : ${missing.join(", ")}`;
+        return;
+      }
+      submit.disabled = true;
+      note.textContent = "Envoi…";
+      submitSecret(id, values);
+    });
+
+    const tick = () => {
+      if (!secrets.has(id)) return;
+      const expiry = el.querySelector(".approval__expiry");
+      if (expiry) expiry.textContent = expiryText(entry.deadline);
+      if (isExpired(entry.deadline, clock())) clearSecret(id);
+    };
+    tick();
+    if (secrets.has(id)) {
+      entry.timer = setTimer(tick, SECOND_MS);
+    }
+  }
+
+  return { show, clear, showResult, showSecret, clearSecret, reset, resetBusy, element: root };
 }

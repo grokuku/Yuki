@@ -142,14 +142,14 @@ describe("UI statique servie par le gateway", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
-  it("organise /config en 7 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
+  it("organise /config en 8 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
 
     // Barre d'onglets accessible.
     expect(body).toContain('role="tablist"');
     expect(body).toMatch(/role="tablist"[^>]*aria-label="/);
 
-    // Les 7 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
+    // Les 8 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
     const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
     expect(tabLabels).toEqual([
       "Modèles",
@@ -157,6 +157,7 @@ describe("UI statique servie par le gateway", () => {
       "Personnalité",
       "Voix",
       "Agents",
+      "Secrets",
       "Système",
       "Maintenance",
     ]);
@@ -166,8 +167,8 @@ describe("UI statique servie par le gateway", () => {
     // (aria-labelledby).
     const tabTags = [...body.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
     const panelTags = [...body.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((m) => m[0]);
-    expect(tabTags.length).toBe(7);
-    expect(panelTags.length).toBe(7);
+    expect(tabTags.length).toBe(8);
+    expect(panelTags.length).toBe(8);
     for (const tag of tabTags) {
       const id = tag.match(/id="([^"]+)"/)?.[1];
       const controls = tag.match(/aria-controls="([^"]+)"/)?.[1];
@@ -184,7 +185,7 @@ describe("UI statique servie par le gateway", () => {
     // Rendu EAGER : les conteneurs de groupes des onglets existent dans le
     // markup (les lignes sont construites côté JS au chargement). Le panneau
     // Agents monte son composant dans `agents-root`.
-    for (const id of ["group-modeles", "group-conversation", "group-voix", "group-systeme", "agents-root", "personality-root"]) {
+    for (const id of ["group-modeles", "group-conversation", "group-voix", "group-systeme", "agents-root", "personality-root", "secrets-root"]) {
       expect(body).toContain(`id="${id}"`);
     }
 
@@ -835,16 +836,16 @@ describe("Panneau Personnalité — section « Règles strictes » (éditées pa
     }
   });
 
-  it("le markup /config garde exactement 7 onglets (aucun onglet Règles ajouté)", async () => {
+  it("le markup /config garde exactement 8 onglets (aucun onglet Règles ajouté)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
     expect(body).toContain('id="personality-root"');
     expect(body).not.toMatch(/\sstyle=/);
   });
 });
 
 describe("Libraire de Pi-Web — section /config et test de connexion (sans nouvel onglet)", () => {
-  it("ajoute la section « Libraire » à l'onglet Système existant (7 onglets inchangés)", async () => {
+  it("ajoute la section « Libraire » à l'onglet Système existant (8 onglets inchangés)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     // Groupe de champs dans l'onglet Système (aucun nouvel onglet).
     expect(js).toContain('id: "librarian"');
@@ -865,9 +866,9 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     expect(js).not.toContain("innerHTML");
     expect(js).not.toContain(".style.");
     expect(js).not.toContain('setAttribute("style"');
-    // Le markup garde exactement 7 onglets (verrou existant).
+    // Le markup garde exactement 8 onglets (verrou existant).
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
     expect(body).toContain('id="group-systeme"');
   });
 });

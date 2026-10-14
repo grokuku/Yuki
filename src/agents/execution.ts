@@ -27,6 +27,14 @@ import { buildApprovalResultPrompt, ORIGIN_APPROVAL_RESULT } from "./approval-re
 import type { AuditLog } from "./audit.js";
 import type { AgentStore } from "./store.js";
 import type { AgentRecord } from "./types.js";
+import { redactText } from "../observability/logger.js";
+import { resolveSecretReferences } from "../secrets/references.js";
+import type {
+  PendingSecretRequest,
+  SecretRequestRegistry,
+  SecretRequestEvent,
+} from "../secrets/requests.js";
+import { VaultError } from "../secrets/vault.js";
 
 export interface ExecutionLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
@@ -43,7 +51,8 @@ export type ExecutionStatus =
   | "timeout"
   | "refused"
   | "offline"
-  | "awaiting_validation";
+  | "awaiting_validation"
+  | "awaiting_secret";
 
 /** Demande d'exécution (portée par l'outil du modèle). */
 export interface ExecutionRequest {
@@ -81,6 +90,13 @@ export interface ExecutionOutcome {
   message: string;
   /** Identifiant de la validation humaine (si `awaiting_validation`). */
   approvalId?: string;
+  /**
+   * Identifiant de la demande de SECRET (si `awaiting_secret`) : l'humain doit
+   * fournir les NOMS listés dans `secretNames` (jamais la valeur ici).
+   */
+  secretRequestId?: string;
+  /** Noms des secrets MANQUANTS à fournir (si `awaiting_secret`) — jamais une valeur. */
+  secretNames?: string[];
   durationMs?: number;
   truncated?: boolean;
   timedOut?: boolean;
@@ -178,6 +194,72 @@ export interface ApprovalGatewayPort {
     id: string,
     decision: "approve" | "deny",
   ): Promise<ApprovalDecisionOutcome>;
+}
+
+// ── Secrets du coffre : résolution + flux `awaiting_secret` ──────────────
+
+/**
+ * Port de RÉSOLUTION des secrets, consommé par le service d'exécution.
+ *
+ * ⚠️ Structurellement satisfait par `SecretStore` (`src/secrets/store.ts`), sans
+ * que ce module importe la classe : le service ne connaît que ce contrat.
+ */
+export interface SecretLookupPort {
+  /** `true` si la clé maître est présente (coffre utilisable). */
+  isConfigured(): boolean;
+  /** Valeur d'un secret, ou `undefined` (verrouillé/absent). */
+  lookup(name: string): string | undefined;
+  /** Toutes les valeurs déchiffrées (redaction de sortie). Jamais levée. */
+  values(): string[];
+  /** Range un secret (chiffré). Lève si le coffre est verrouillé. */
+  set(name: string, value: string, label?: string): unknown;
+}
+
+/**
+ * Vue PUBLIQUE d'une demande de secret, destinée à l'interface (fenêtre
+ * flottante). ⚠️ Ne porte JAMAIS une valeur : seulement les NOMS à fournir, la
+ * machine et la commande EXACTE (avec ses références).
+ */
+export interface PendingSecretView {
+  id: string;
+  sessionId?: string;
+  agentId: string;
+  agentName?: string;
+  /** Commande EXACTE (références `${YUKI_SECRET_…}` incluses, jamais la valeur). */
+  command: string;
+  /** Noms de secrets à fournir (ordre de première apparition). */
+  names: string[];
+  createdAt: string;
+  expiresAt: string;
+  /** Durée restante (secondes), calculée à l'ÉMISSION (comme les validations). */
+  ttlSeconds: number;
+}
+
+/** Événement de demande de secret vu par l'interface. */
+export type SecretRequestViewEvent =
+  | { kind: "requested"; request: PendingSecretView }
+  | {
+      kind: "cleared";
+      request: PendingSecretView;
+      reason: "fulfilled" | "cancelled";
+    };
+
+/** Issue de la fourniture d'un secret par l'humain. */
+export type SecretSubmitOutcome =
+  | { ok: true; request: PendingSecretView; outcome: ExecutionOutcome }
+  | { ok: false; code: string; message: string };
+
+/**
+ * Port consommé par le transport WebSocket pour la fenêtre de SECRET.
+ * « AgentExecutionService » l'implémente ; le transport n'en connaît que cette
+ * surface (aucun import de classe).
+ */
+export interface SecretRequestGatewayPort {
+  subscribeSecrets(listener: (event: SecretRequestViewEvent) => void): () => void;
+  /** Demandes EN ATTENTE rattachées à une conversation (ré-affichage). */
+  pendingSecrets(sessionId: string): PendingSecretView[];
+  /** Fournit les valeurs ; les range au coffre puis REJOUE la commande. */
+  submitSecret(id: string, values: Record<string, string>): Promise<SecretSubmitOutcome>;
 }
 
 // ── Capture d'écran par l'agent (image ÉPHÉMÈRE) ──────────────────────────
@@ -296,6 +378,18 @@ export interface ExecutionServiceOptions {
    * rapport n'est envoyé (comportement inchangé).
    */
   waker?: ApprovalResultWaker;
+  /**
+   * Résolution des RÉFÉRENCES de secrets. Absent ⇒ les références `${YUKI_SECRET_…}`
+   * ne sont PAS reconnues comme telles (comportement historique : la commande
+   * part inchangée).
+   */
+  secrets?: SecretLookupPort;
+  /**
+   * Registre des demandes de secret (`awaiting_secret`). Absent ⇒ une référence
+   * vers un secret ABSENT du coffre est REFUSÉE (jamais exécutée avec une valeur
+   * vide implicite).
+   */
+  secretRequests?: SecretRequestRegistry;
 }
 
 /** Timeout par défaut d'une commande (ms). */
@@ -329,6 +423,8 @@ export class AgentExecutionService implements ExecutionServicePort {
   private readonly idFactory: () => string;
   private readonly now: () => number;
   private waker?: ApprovalResultWaker;
+  private readonly secrets?: SecretLookupPort;
+  private readonly secretRequests?: SecretRequestRegistry;
 
   constructor(options: ExecutionServiceOptions) {
     this.store = options.store;
@@ -339,6 +435,8 @@ export class AgentExecutionService implements ExecutionServicePort {
     this.idFactory = options.idFactory ?? defaultCommandId;
     this.now = options.now ?? Date.now;
     this.waker = options.waker;
+    this.secrets = options.secrets;
+    this.secretRequests = options.secretRequests;
   }
 
   /**
@@ -350,6 +448,19 @@ export class AgentExecutionService implements ExecutionServicePort {
   }
 
   async execute(request: ExecutionRequest): Promise<ExecutionOutcome> {
+    return this.run(request, false);
+  }
+
+  /**
+   * Corps réel de l'exécution. `guardAlreadySatisfied` = `true` quand la commande
+   * a DÉJÀ franchi le garde-fou D118 au moment où la demande de secret a été
+   * créée : le rejeu `awaiting_secret` ne revalide donc PAS (sinon une commande
+   * déjà approuvée exigerait une SECONDE validation).
+   */
+  private async run(
+    request: ExecutionRequest,
+    guardAlreadySatisfied: boolean,
+  ): Promise<ExecutionOutcome> {
     const requested = request.agentId;
     const command = request.command;
     const verdict = evaluateDestructive(command);
@@ -370,26 +481,29 @@ export class AgentExecutionService implements ExecutionServicePort {
     const agentName = record.name;
 
     // 1. Garde-fous de configuration + validation humaine (D118), via le MÊME
-    //    chemin que toute exécution (aucun second mécanisme).
-    const decision = this.authorize(record, command, verdict, request);
-    if (decision.kind === "refuse") {
-      return this.refuse(agentId, agentName, command, verdict, decision.message);
-    }
-    if (decision.kind === "awaiting") {
-      return {
-        status: "awaiting_validation",
-        agentId,
-        agentName,
-        command,
-        destructive: verdict.destructive,
-        destructiveIds: verdict.ids,
-        exitCode: null,
-        approvalId: decision.approval.id,
-        message:
-          "Validation humaine requise : la commande n'a PAS été exécutée. " +
-          "Une demande d'approbation s'affiche dans la conversation : un humain doit " +
-          "valider ou refuser. Une fois validée, la commande s'exécute automatiquement.",
-      };
+    //    chemin que toute exécution (aucun second mécanisme). ⚠️ SAUF lors du
+    //    rejeu post-secret : la validation a déjà été franchie.
+    if (!guardAlreadySatisfied) {
+      const decision = this.authorize(record, command, verdict, request);
+      if (decision.kind === "refuse") {
+        return this.refuse(agentId, agentName, command, verdict, decision.message);
+      }
+      if (decision.kind === "awaiting") {
+        return {
+          status: "awaiting_validation",
+          agentId,
+          agentName,
+          command,
+          destructive: verdict.destructive,
+          destructiveIds: verdict.ids,
+          exitCode: null,
+          approvalId: decision.approval.id,
+          message:
+            "Validation humaine requise : la commande n'a PAS été exécutée. " +
+            "Une demande d'approbation s'affiche dans la conversation : un humain doit " +
+            "valider ou refuser. Une fois validée, la commande s'exécute automatiquement.",
+        };
+      }
     }
 
     // 3. Hors ligne = rejet immédiat (D124) : pas de file d'attente.
@@ -404,6 +518,35 @@ export class AgentExecutionService implements ExecutionServicePort {
         exitCode: null,
         message: "Agent hors ligne : exécution refusée (aucune mise en file, D124).",
       };
+    }
+
+    // 3bis. RÉSOLUTION des références de secrets (décision utilisateur :
+    // INJECTION PAR VARIABLE D'ENVIRONNEMENT, jamais de substitution textuelle).
+    // La commande n'est JAMAIS réécrite : le shell développe `$NOM` depuis l'env.
+    let env: Record<string, string> | undefined;
+    if (this.secrets) {
+      const resolution = resolveSecretReferences(command, (name) =>
+        this.secrets?.lookup(name),
+      );
+      if (resolution.found.length > 0 || resolution.missing.length > 0) {
+        if (!this.secrets.isConfigured()) {
+          // ⚠️ REFUS : jamais de repli en clair, jamais d'exécution avec une
+          // variable d'environnement vide implicite.
+          return this.refuse(
+            agentId,
+            agentName,
+            command,
+            verdict,
+            "Commande refusée : elle référence un secret (${YUKI_SECRET_…}) mais le " +
+              "coffre est VERROUILLÉ (variable d'environnement YUKI_VAULT_KEY absente). " +
+              "Aucun repli en clair : fournissez la clé maître hors bande.",
+          );
+        }
+        if (resolution.missing.length > 0) {
+          return this.awaitSecret(record, verdict, request, resolution.missing);
+        }
+        env = resolution.env;
+      }
     }
 
     // 4. Envoi (au plus une fois) et attente du résultat.
@@ -426,6 +569,8 @@ export class AgentExecutionService implements ExecutionServicePort {
         timeoutMs,
         ...(request.origin ? { origin: request.origin } : {}),
         destructive: verdict.destructive,
+        // ⚠️ Les valeurs passent EN ENVIRONNEMENT, jamais dans `command`.
+        ...(env ? { env } : {}),
       });
 
       this.audit.append({
@@ -446,12 +591,17 @@ export class AgentExecutionService implements ExecutionServicePort {
         },
       });
 
+      // ⚠️ MASQUAGE À LA SOURCE : on redige stdout/stderr AVANT l'encadrement ET
+      // AVANT l'échappement. C'est le seul point sûr : `outcome.framed` alimente
+      // AUSSI BIEN le résultat d'outil que le rapport post-validation — masquer
+      // ici les couvre tous les deux (sinon le secret fuit par DEUX chemins).
+      const secretValues = this.redactionValues(env);
       const framed = frameCommandOutput({
         machine: agentId,
         command,
         exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
+        stdout: redactText(result.stdout, secretValues),
+        stderr: redactText(result.stderr, secretValues),
         truncatedStdout: result.stdoutTrunc,
         truncatedStderr: result.stderrTrunc,
         timedOut: result.timedOut,
@@ -475,6 +625,222 @@ export class AgentExecutionService implements ExecutionServicePort {
     } catch (error) {
       return this.onChannelFailure(agentId, agentName, command, verdict, error);
     }
+  }
+
+  // ── Secrets : demande `awaiting_secret` + fourniture ─────────────────────
+
+  /**
+   * Valeurs à masquer dans une sortie : TOUS les secrets du coffre + celles
+   * réellement injectées. Union par prudence (un secret lu depuis le disque par
+   * la commande, non référencé, doit être masqué lui aussi).
+   */
+  private redactionValues(env?: Record<string, string>): string[] {
+    const values = new Set<string>();
+    if (this.secrets) for (const value of this.secrets.values()) values.add(value);
+    if (env) for (const value of Object.values(env)) values.add(value);
+    return [...values];
+  }
+
+  /**
+   * Secret(s) manquant(s) : émet une demande de FOURNITURE (flux DÉDIÉ, qui
+   * couvre donc les agents SANS validation) et rend la main au modèle avec le
+   * statut `awaiting_secret`. ⚠️ La commande (avec ses références) et les NOMS
+   * partent ; JAMAIS une valeur (elle n'existe pas encore).
+   */
+  private awaitSecret(
+    record: AgentRecord,
+    verdict: { destructive: boolean; ids: string[] },
+    request: ExecutionRequest,
+    missing: string[],
+  ): ExecutionOutcome {
+    if (!this.secretRequests) {
+      return this.refuse(
+        record.agentId,
+        record.name || undefined,
+        request.command,
+        verdict,
+        `Secret manquant (${missing.join(", ")}) et flux de fourniture indisponible : ` +
+          "commande refusée.",
+      );
+    }
+    const pending = this.secretRequests.request({
+      agentId: record.agentId,
+      ...(record.name ? { agentName: record.name } : {}),
+      command: request.command,
+      names: missing,
+      ...(request.shell !== undefined ? { shell: request.shell } : {}),
+      ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
+      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+      ...(request.origin !== undefined ? { origin: request.origin } : {}),
+      ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+    });
+    this.logger.info("agents.exec.awaiting_secret", {
+      agent_id: record.agentId,
+      request_id: pending.id,
+      session_id: pending.sessionId ?? null,
+      // ⚠️ NOMS seulement : jamais la valeur (qui n'existe pas encore).
+      names: missing.join(","),
+    });
+    return {
+      status: "awaiting_secret",
+      agentId: record.agentId,
+      ...(record.name ? { agentName: record.name } : {}),
+      command: request.command,
+      destructive: verdict.destructive,
+      destructiveIds: verdict.ids,
+      exitCode: null,
+      secretRequestId: pending.id,
+      secretNames: [...missing],
+      message:
+        "Secret manquant : la commande référence des secrets absents du coffre. " +
+        "Elle n'a PAS été exécutée. Une fenêtre s'affiche dans la conversation pour " +
+        "fournir la valeur ; la commande s'exécutera alors automatiquement.",
+    };
+  }
+
+  /** S'abonne aux demandes de secret (délègue au registre). */
+  subscribeSecrets(listener: (event: SecretRequestViewEvent) => void): () => void {
+    if (!this.secretRequests) return () => undefined;
+    return this.secretRequests.subscribe((event: SecretRequestEvent) => {
+      if (event.kind === "requested") {
+        listener({ kind: "requested", request: this.viewSecret(event.request) });
+      } else {
+        listener({
+          kind: "cleared",
+          request: this.viewSecret(event.request),
+          reason: event.reason,
+        });
+      }
+    });
+  }
+
+  /** Demandes de secret EN ATTENTE d'une conversation (ré-affichage). */
+  pendingSecrets(sessionId: string): PendingSecretView[] {
+    if (!this.secretRequests) return [];
+    return this.secretRequests.listFor(sessionId).map((entry) => this.viewSecret(entry));
+  }
+
+  /**
+   * Fournit les valeurs d'une demande de secret : les range au coffre (chiffrées),
+   * puis REJOUE la commande — SANS repasser le garde-fou D118 (il a déjà été
+   * franchi quand la demande a été créée). Réveille le modèle avec le résultat.
+   *
+   * ⚠️ Ne lève jamais : renvoie `{ ok: false }` avec un message honnête (demande
+   * inconnue/expirée, valeur manquante, coffre verrouillé…).
+   */
+  async submitSecret(
+    id: string,
+    values: Record<string, string>,
+  ): Promise<SecretSubmitOutcome> {
+    const registry = this.secretRequests;
+    if (!registry) {
+      return {
+        ok: false,
+        code: "secret_unavailable",
+        message: "Flux de fourniture de secret indisponible.",
+      };
+    }
+    const entry = registry.get(id);
+    if (!entry || entry.status !== "pending") {
+      return {
+        ok: false,
+        code: "secret_request_not_found",
+        message: "Cette demande de secret n'existe plus (déjà fournie ou expirée).",
+      };
+    }
+    if (!this.secrets) {
+      return {
+        ok: false,
+        code: "secret_unavailable",
+        message: "Coffre de secrets indisponible.",
+      };
+    }
+    const required = entry.names;
+    const provided = new Map<string, string>();
+    for (const name of required) {
+      const value = values[name];
+      if (typeof value !== "string" || value.length === 0) {
+        return {
+          ok: false,
+          code: "secret_missing_value",
+          message: `Valeur manquante pour « ${name} ».`,
+        };
+      }
+      provided.set(name, value);
+    }
+    try {
+      for (const name of required) this.secrets.set(name, provided.get(name) as string);
+    } catch (error) {
+      const code = error instanceof VaultError ? error.name : "secret_store_failed";
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn("agents.secrets.store_failed", { request_id: id, code });
+      return { ok: false, code, message };
+    }
+    const fulfilled = registry.fulfill(id);
+    const outcome = await this.run(
+      {
+        agentId: fulfilled.agentId,
+        command: fulfilled.command,
+        ...(fulfilled.shell !== undefined ? { shell: fulfilled.shell } : {}),
+        ...(fulfilled.cwd !== undefined ? { cwd: fulfilled.cwd } : {}),
+        ...(fulfilled.timeoutMs !== undefined ? { timeoutMs: fulfilled.timeoutMs } : {}),
+        ...(fulfilled.origin !== undefined ? { origin: fulfilled.origin } : {}),
+        ...(fulfilled.sessionId !== undefined ? { sessionId: fulfilled.sessionId } : {}),
+      },
+      true,
+    );
+    this.notifySecretResult(fulfilled, outcome);
+    return { ok: true, request: this.viewSecret(fulfilled), outcome };
+  }
+
+  /**
+   * Réveille le modèle avec le résultat de la commande rejouée après fourniture
+   * du secret. Réutilise le canal synthétique existant (`ORIGIN_APPROVAL_RESULT`) :
+   * le résultat reste ÉPHÉMÈRE (jamais dans le transcript, le snapshot, le rejeu
+   * ni la mémoire). Jamais bloquant pour l'humain.
+   */
+  private notifySecretResult(entry: PendingSecretRequest, outcome: ExecutionOutcome): void {
+    const sessionId = entry.sessionId;
+    if (!sessionId || !this.waker) return;
+    const prompt = buildApprovalResultPrompt({
+      approvalId: entry.id,
+      agentId: entry.agentId,
+      ...(outcome.agentName ? { agentName: outcome.agentName } : {}),
+      command: entry.command,
+      outcome,
+    });
+    try {
+      this.waker.send(sessionId, prompt, { origin: ORIGIN_APPROVAL_RESULT });
+      this.logger.info("agents.secret.result_reported", {
+        request_id: entry.id,
+        agent_id: entry.agentId,
+        session_id: sessionId,
+        status: outcome.status,
+      });
+    } catch (error) {
+      this.logger.warn("agents.secret.result_report_failed", {
+        request_id: entry.id,
+        session_id: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Convertit une demande de secret mémorisée en vue publique (pour l'interface). */
+  private viewSecret(entry: PendingSecretRequest): PendingSecretView {
+    const record = this.store.get(entry.agentId);
+    const name = entry.agentName ?? record?.name;
+    return {
+      id: entry.id,
+      ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
+      agentId: entry.agentId,
+      ...(name ? { agentName: name } : {}),
+      command: entry.command,
+      names: [...entry.names],
+      createdAt: entry.createdAt,
+      expiresAt: entry.expiresAt,
+      ttlSeconds: Math.max(0, Math.round((Date.parse(entry.expiresAt) - this.now()) / 1000)),
+    };
   }
 
   // ── Garde-fou partagé (commandes ET captures) ────────────────────────────

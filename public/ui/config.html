@@ -124,6 +124,17 @@
             class="config-tab"
             type="button"
             role="tab"
+            id="tab-secrets"
+            aria-selected="false"
+            aria-controls="panel-secrets"
+            tabindex="-1"
+          >
+            Secrets<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
             id="tab-systeme"
             aria-selected="false"
             aria-controls="panel-systeme"
@@ -229,6 +240,21 @@
             -->
             <div id="group-agents" class="config-groups"></div>
             <div id="agents-root"></div>
+          </section>
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-secrets"
+            aria-labelledby="tab-secrets"
+            tabindex="0"
+            hidden
+          >
+            <!--
+              Onglet « Secrets » : gestion du coffre CHIFFRÉ (noms seulement,
+              jamais les valeurs). Composant autonome monté par id
+              (`secrets-panel.js`), aucun style inline (CSP `style-src 'self'`).
+            -->
+            <div id="secrets-root"></div>
           </section>
           <section
             class="config-panel"

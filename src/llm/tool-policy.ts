@@ -50,6 +50,13 @@ export type ScreenshotToolName = "capturer_ecran";
 export type AgentDirectoryToolName = "lister_agents" | "etat_agent";
 
 /**
+ * Outil custom de CONSULTATION des secrets du coffre. `lister_secrets` n'expose
+ * que les NOMS (jamais une valeur) : il permet au modèle de savoir QUELLES
+ * variables `${YUKI_SECRET_…}` référencer dans `run_command`.
+ */
+export type SecretToolName = "lister_secrets";
+
+/**
  * Outils custom de CONSULTATION de l'archive « vie antérieure » (Lot 13).
  * `archive_vie_anterieure` est en **LECTURE SEULE** : l'archive est séparée de la
  * mémoire courante et n'est jamais fusionnée. Activée indépendamment de tout le
@@ -77,6 +84,7 @@ export type CustomToolName =
   | ExecutionToolName
   | ScreenshotToolName
   | AgentDirectoryToolName
+  | SecretToolName
   | HeritageToolName
   | LibrarianToolName;
 
@@ -92,6 +100,8 @@ export interface ToolPolicyEntry {
   readonly screenshots: readonly ScreenshotToolName[];
   /** Outils de consultation des agents (Lot 4, lecture seule). */
   readonly directory: readonly AgentDirectoryToolName[];
+  /** Outils de consultation des secrets du coffre (NOMS seulement). */
+  readonly secrets: readonly SecretToolName[];
   /** Outils de consultation de l'archive « vie antérieure » (Lot 13). */
   readonly heritage: readonly HeritageToolName[];
   /** Outils du libraire de Pi-Web (recherche documentaire + web). */
@@ -144,6 +154,12 @@ export const AGENT_DIRECTORY_TOOLS: readonly AgentDirectoryToolName[] = [
 ];
 
 /**
+ * Outils de consultation des secrets du coffre. Comme les autres outils de
+ * consultation, exposés seulement si le câblage les active. ⚠️ NOMS seulement.
+ */
+export const SECRET_TOOLS: readonly SecretToolName[] = ["lister_secrets"];
+
+/**
  * Outils de consultation de l'archive « vie antérieure » (Lot 13). Comme les
  * outils de consultation d'agents, ils ne sont exposés que si le câblage les
  * active (un port d'archive existe). **LECTURE SEULE.**
@@ -185,6 +201,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     execution: [],
     screenshots: [],
     directory: AGENT_DIRECTORY_TOOLS,
+    secrets: SECRET_TOOLS,
     heritage: HERITAGE_TOOLS,
     librarian: LIBRARIAN_TOOLS,
     librarianCapture: LIBRARIAN_CAPTURE_TOOLS,
@@ -201,6 +218,9 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     execution: EXECUTION_TOOLS,
     screenshots: SCREENSHOT_TOOLS,
     directory: [],
+    // Le worker lourd EXÉCUTE : il doit connaître les NOMS des secrets pour
+    // écrire `${NOM}` dans ses commandes (jamais la valeur).
+    secrets: SECRET_TOOLS,
     heritage: [],
     librarian: [],
     librarianCapture: [],
@@ -234,6 +254,11 @@ export interface ToolAllowlistOptions {
    * les deux peuvent être activés séparément (consulter n'est pas exécuter).
    */
   directoryEnabled?: boolean;
+  /**
+   * Active l'outil de consultation des secrets `lister_secrets` (NOMS seulement).
+   * DÉSACTIVÉ par défaut : seul le câblage l'active, quand un coffre existe.
+   */
+  secretsEnabled?: boolean;
   /**
    * Active l'outil de consultation de l'archive « vie antérieure »
    * `archive_vie_anterieure` (Lot 13). DÉSACTIVÉ par défaut : seul le câblage
@@ -269,6 +294,7 @@ export function toolAllowlist(
   const screenshotsEnabled =
     (options.screenshotsEnabled ?? false) && entry.screenshots.length > 0;
   const directoryEnabled = (options.directoryEnabled ?? false) && entry.directory.length > 0;
+  const secretsEnabled = (options.secretsEnabled ?? false) && entry.secrets.length > 0;
   const heritageEnabled = (options.heritageEnabled ?? false) && entry.heritage.length > 0;
   const librarianEnabled = (options.librarianEnabled ?? false) && entry.librarian.length > 0;
   const librarianCaptureEnabled =
@@ -287,6 +313,9 @@ export function toolAllowlist(
   }
   if (directoryEnabled) {
     tools.push(...entry.directory);
+  }
+  if (secretsEnabled) {
+    tools.push(...entry.secrets);
   }
   if (heritageEnabled) {
     tools.push(...entry.heritage);

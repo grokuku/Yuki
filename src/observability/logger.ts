@@ -41,13 +41,7 @@ export function collectSecretValues(env: NodeJS.ProcessEnv = process.env): strin
 
 function redactValue(value: unknown, secretValues: string[]): unknown {
   if (typeof value === "string") {
-    let out = value;
-    for (const secret of secretValues) {
-      if (out.includes(secret)) {
-        out = out.split(secret).join(REDACTED);
-      }
-    }
-    return out;
+    return redactText(value, secretValues);
   }
   if (Array.isArray(value)) {
     return value.map((item) => redactValue(item, secretValues));
@@ -56,6 +50,26 @@ function redactValue(value: unknown, secretValues: string[]): unknown {
     return redactObject(value as Record<string, unknown>, secretValues);
   }
   return value;
+}
+
+/**
+ * Masque toute occurrence d'une valeur secrète dans un TEXTE (SOURCE UNIQUE de
+ * la redaction de chaîne, réutilisée par le logger ET par le masquage de la
+ * sortie de commande à la source, `src/agents/execution.ts`).
+ *
+ * ⚠️ La comparaison est EXACTE sur la valeur entière : un secret TRANSFORMÉ
+ * (base64, URL-encodé, découpé) n'est PAS détecté — limite documentée. Un secret
+ * de moins de 6 caractères n'est pas censé arriver ici (le coffre l'interdit),
+ * sinon il masquerait du texte légitime au hasard.
+ */
+export function redactText(value: string, secretValues: string[]): string {
+  let out = value;
+  for (const secret of secretValues) {
+    if (secret.length >= 6 && out.includes(secret)) {
+      out = out.split(secret).join(REDACTED);
+    }
+  }
+  return out;
 }
 
 /**

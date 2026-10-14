@@ -25,6 +25,11 @@ import {
   type AgentsApiDeps,
 } from "./routes/agents.js";
 import {
+  handleSecretsRequest,
+  isSecretsPath,
+  type SecretsApiDeps,
+} from "./routes/secrets.js";
+import {
   handlePersonalityRequest,
   isPersonalityPath,
   type PersonalityApiDeps,
@@ -105,6 +110,11 @@ export interface AppContext {
   tts?: TtsApiDeps;
   /** API des agents d'exécution (Lot 4). Absente ⇒ `/api/agents*` → 404. */
   agents?: AgentsApiDeps;
+  /**
+   * API de gestion du coffre de secrets. Absente ⇒ `/api/secrets*` → 404.
+   * ⚠️ Ne renvoie JAMAIS la valeur d'un secret (noms + libellés seulement).
+   */
+  secrets?: SecretsApiDeps;
   /** API de la personnalité. Absente ⇒ `/api/self/personality*` → 404. */
   personality?: PersonalityApiDeps;
   /**
@@ -366,6 +376,27 @@ async function handleAgentsHttp(
   );
 }
 
+/** Traite une requête de l'API des secrets (corps JSON borné). */
+async function handleSecretsHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: SecretsApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "POST" || method === "PUT") {
+    body = await readBody(req).catch(() => "");
+  }
+  const response = handleSecretsRequest({ method, path, headers: req.headers, body, deps });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Traite une requête de l'API de personnalité (corps JSON borné). */
 async function handlePersonalityHttp(
   req: IncomingMessage,
@@ -499,6 +530,7 @@ export function createApp(context: AppContext): RequestListener {
     voices,
     tts,
     agents,
+    secrets,
     personality,
     rules,
     memory,
@@ -536,6 +568,27 @@ export function createApp(context: AppContext): RequestListener {
       void handleAgentsHttp(req, res, path, method, headOnly, agents).catch(
         (error: unknown) => {
           agents.logger.error("agents.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (secrets && isSecretsPath(path)) {
+      void handleSecretsHttp(req, res, path, method, headOnly, secrets).catch(
+        (error: unknown) => {
+          secrets.logger.error("secrets.request.failed", {
             error: error instanceof Error ? error.message : String(error),
             path,
           });

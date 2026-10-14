@@ -11,7 +11,7 @@ import { WebSocket } from "ws";
 import { createWsTransport, type AgentsGatewayPort } from "../../../src/gateway/ws/server.js";
 import type { ServerFrame } from "../../../src/gateway/ws/protocol.js";
 import type { Transport } from "../../../src/gateway/ws/transport.js";
-import type { ApprovalGatewayPort, ScreenshotGatewayPort } from "../../../src/agents/execution.js";
+import type { ApprovalGatewayPort, ScreenshotGatewayPort, SecretRequestGatewayPort } from "../../../src/agents/execution.js";
 import type { SessionPinStore } from "../../../src/pi/session-pins.js";
 import type { TtsPipelineDeps } from "../../../src/tts/index.js";
 import { createLogger } from "../../../src/observability/logger.js";
@@ -29,6 +29,8 @@ export interface HarnessOptions extends FakePiHostOptions {
   pins?: SessionPinStore;
   /** Registre d'agents (encart de la barre latérale, optionnel). */
   agents?: AgentsGatewayPort;
+  /** Flux de fourniture de secrets (optionnel). */
+  secrets?: SecretRequestGatewayPort;
 }
 
 export interface Harness {
@@ -52,6 +54,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.tts ? { tts: options.tts } : {}),
     ...(options.approvals ? { approvals: options.approvals } : {}),
     ...(options.screenshots ? { screenshots: options.screenshots } : {}),
+    ...(options.secrets ? { secrets: options.secrets } : {}),
     ...(options.pins ? { pins: options.pins } : {}),
     ...(options.agents ? { agents: options.agents } : {}),
   });

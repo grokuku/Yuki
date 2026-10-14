@@ -16,6 +16,15 @@ import {
   registerServiceWorker,
 } from "./push.js";
 import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
+import {
+  UNREAD_STORAGE_KEY,
+  addUnread,
+  clearUnread,
+  parseUnread,
+  pruneUnread,
+  serializeUnread,
+  shouldMarkUnread,
+} from "./unread.js";
 import { initSidebarAgents } from "./sidebar-agents.js";
 import { createApprovalLayer } from "./approval-window.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
@@ -94,6 +103,58 @@ let deepLinkHandled = false;
 const storeBySession = new Map();
 let lastSessions = [];
 let lastBusyKey = "";
+
+/* ─── Indicateur « message NON LU » (barre latérale) ───────────────────────
+ * Deux informations DISTINCTES cohabitent dans la liste :
+ *   - « en cours » (`.conv--busy`) : une tâche travaille MAINTENANT ;
+ *   - « non lu » (`.conv--unread`) : un tour assistant s'est TERMINÉ dans une
+ *     conversation que l'on ne regardait pas.
+ * Un « non lu » s'allume sur la FIN D'UN TOUR (`run_finished`), jamais sur un
+ * delta (sinon il s'allumerait en permanence pendant le flux). Il s'éteint
+ * dès que la conversation devient la conversation FOCALISÉE (ouvrir = lire).
+ * L'état est PERSISTÉ en `localStorage` : il survit à un rechargement / à un
+ * redémarrage de la PWA, comme le repli de la barre.
+ */
+
+/** État persisté : `{ <sessionId>: <compteur> }`, purgé de tout non-exploitable. */
+function loadUnread() {
+  try {
+    return parseUnread(window.localStorage.getItem(UNREAD_STORAGE_KEY));
+  } catch {
+    return {}; // Stockage indisponible (mode privé) : état en mémoire seulement.
+  }
+}
+
+/** Persiste l'état non lu (best-effort, jamais bloquant). */
+function persistUnread(counts) {
+  try {
+    window.localStorage.setItem(UNREAD_STORAGE_KEY, serializeUnread(counts));
+  } catch {
+    // Stockage indisponible : l'état reste en mémoire pour la session.
+  }
+}
+
+let unreadBySession = loadUnread();
+
+/** Remplace l'état non lu, le persiste et rafraîchit la barre. */
+function commitUnread(next, refresh = true) {
+  if (next === unreadBySession) return;
+  unreadBySession = next;
+  persistUnread(next);
+  if (refresh) sessionsPanel.setUnread(next);
+}
+
+/** Allume/compte un non-lu sur un fil NON focalisé (la conversation regardée ne s'allume jamais). */
+function markConversationUnread(id) {
+  if (!id || id === sessionId) return;
+  commitUnread(addUnread(unreadBySession, id));
+}
+
+/** Éteint le non-lu d'une conversation (ouvrir = lire, sans exiger d'aller en bas). */
+function markConversationRead(id) {
+  if (!id) return;
+  commitUnread(clearUnread(unreadBySession, id));
+}
 
 /** Store d'une conversation (créé à la demande). */
 function storeOf(id) {
@@ -183,11 +244,16 @@ function applyBackgroundEvent(id, frame) {
   const store = storeOf(id);
   if (!store) return;
   if (typeof frame.seq === "number" && frame.seq > 0) {
-    if (frame.seq <= store.lastSeq) return; // doublon de CE fil
-    store.lastSeq = frame.seq;
+    if (frame.seq <= store.lastSeq) return; // doublon / REJEU de CE fil
   }
+  // Décision AVANT d'avancer `lastSeq` : la garde anti-rejeu de
+  // `shouldMarkUnread` compare le `seq` de la trame à celui DÉJÀ appliqué.
+  const unread = shouldMarkUnread(store, frame);
+  if (typeof frame.seq === "number" && frame.seq > 0) store.lastSeq = frame.seq;
   updateStoreState(store, frame);
   refreshSidebarBusy();
+  // Un tour assistant TERMINÉ dans un fil non focalisé = un message non lu.
+  if (unread) markConversationUnread(id);
 }
 
 /** Titre lisible d'une conversation (repli honnête), pour étiqueter une demande. */
@@ -377,6 +443,19 @@ const approvalLayer = createApprovalLayer({
     void HolafModal.alert(
       "Hors ligne",
       "Impossible d'envoyer votre décision : la connexion au gateway est perdue. " +
+        "Réessayez une fois reconnecté.",
+      { okText: "Compris" },
+    );
+  },
+  // Demande de SECRET (`awaiting_secret`) : la valeur saisie part par le
+  // WebSocket (trame `secret_submit`) puis est CHIFFRÉE côté serveur. ⚠️ Elle
+  // n'est jamais renvoyée par l'API et n'est jamais journalisée.
+  onSubmitSecret: (id, values) => {
+    if (sendRaw({ type: "secret_submit", id, values })) return;
+    approvalLayer.resetBusy();
+    void HolafModal.alert(
+      "Hors ligne",
+      "Impossible d'envoyer le secret : la connexion au gateway est perdue. " +
         "Réessayez une fois reconnecté.",
       { okText: "Compris" },
     );
@@ -910,9 +989,23 @@ function handleFrame(frame) {
     const activeId = typeof frame.activeId === "string" ? frame.activeId : null;
     lastSessions = Array.isArray(frame.sessions) ? frame.sessions : [];
     sessionId = activeId;
+    // « NON LU » : on purge les conversations disparues (mises de côté), puis
+    // OUVRIR la conversation focalisée éteint son indicateur (ouvrir = lire,
+    // sans exiger de faire défiler jusqu'en bas). `refresh=false` : le `update`
+    // ci-dessous rend la liste complète avec l'état à jour.
+    commitUnread(
+      clearUnread(
+        pruneUnread(
+          unreadBySession,
+          lastSessions.map((entry) => entry.id),
+        ),
+        activeId,
+      ),
+      false,
+    );
     // E2 : la liste porte l'ensemble des conversations SUIVIES ; on y joint
-    // l'état « en cours » connu de chacune (indicateur de la barre latérale).
-    sessionsPanel.update(lastSessions, activeId, busyIdList());
+    // l'état « en cours » ET « non lu » de chacune (indicateurs de la barre).
+    sessionsPanel.update(lastSessions, activeId, busyIdList(), unreadBySession);
     setEmptyState(activeId === null);
     // Clic sur une notification : on adopte la conversation visée, une seule
     // fois, et seulement si elle existe (sinon on reste sur l'état courant).
@@ -955,6 +1048,21 @@ function handleFrame(frame) {
   }
   if (type === "approval_result") {
     approvalLayer.showResult(frame.result);
+    return;
+  }
+  // Demande de SECRET : ÉTAT TEMPORAIRE, trame de CONTRÔLE (aucun `seq`
+  // consommé), traitée AVANT le curseur `seq`. Jamais rejouée, jamais
+  // conservée. ⚠️ Ne porte JAMAIS une valeur : seulement les NOMS à fournir.
+  if (type === "secret_request") {
+    approvalLayer.showSecret(frame.request, {
+      conversation: conversationLabelFor(
+        frame.request ? frame.request.sessionId : undefined,
+      ),
+    });
+    return;
+  }
+  if (type === "secret_cleared") {
+    approvalLayer.clearSecret(String(frame.id));
     return;
   }
   // Capture d'écran : ÉTAT TEMPORAIRE, trame de CONTRÔLE (aucun `seq` consommé).
@@ -1018,9 +1126,14 @@ function handleFrame(frame) {
   }
   if (frame.sessionId) sessionId = frame.sessionId;
   // Le store du fil focalisé reflète aussi son état (indicateur de la barre).
+  // On y avance `lastSeq` : si ce fil devient NON focalisé, ses trames déjà
+  // vues seront reconnues comme doublons (et un rejeu ne comptera pas).
   const focusedStore = storeOf(sessionId);
   if (focusedStore) {
     updateStoreState(focusedStore, frame);
+    if (typeof frame.seq === "number" && frame.seq > focusedStore.lastSeq) {
+      focusedStore.lastSeq = frame.seq;
+    }
     refreshSidebarBusy();
   }
   applyEvent(frame);
@@ -1042,6 +1155,8 @@ function applySnapshot(frame) {
     store.runningJobs.clear();
   }
   refreshSidebarBusy();
+  // Ouvrir/afficher une conversation éteint son indicateur « non lu ».
+  markConversationRead(sessionId);
   // L'activité de fond appartient au FIL : on repart propre à chaque rendu.
   resetJobActivity();
   applyTranscript(frame.transcript);

@@ -19,7 +19,7 @@
 
 import { createServer as createHttpServer } from "node:http";
 import { randomUUID } from "node:crypto";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 
 import { loadEnv } from "../../src/config/env.js";
 import { createApp, type AppContext } from "../../src/gateway/app.js";
@@ -415,6 +415,24 @@ const context: AppContext = {
 
 const server = createHttpServer(createApp(context));
 transport.attach(server);
+
+/* Test de REJEU : on peut COUPER la WebSocket du navigateur à la demande et
+ * refuser brièvement les reconnexions (`/hold`). L'UI se reconnecte alors et
+ * envoie un vrai `resume` : les trames rejouées ne doivent RIEN allumer. */
+const sockets = new Set<Socket>();
+let holdUntil = 0;
+server.on("connection", (socket: Socket) => {
+  sockets.add(socket);
+  socket.on("close", () => sockets.delete(socket));
+  // Pendant la fenêtre de maintien, on GÈLE la connexion (pas de handshake WS)
+  // au lieu de la refuser : aucune erreur réseau côté navigateur, et la
+  // reconnexion aboutit dès la fin du maintien.
+  if (Date.now() < holdUntil) {
+    socket.pause();
+    setTimeout(() => socket.resume(), Math.max(0, holdUntil - Date.now()) + 20);
+  }
+});
+
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address() as AddressInfo;
 console.log(`READY http://127.0.0.1:${address.port}`);
@@ -461,6 +479,14 @@ const control = createHttpServer((req, res) => {
   if (url.pathname === "/spoken-reset") {
     spoken.length = 0;
     return send({ ok: true });
+  }
+  if (url.pathname === "/hold") {
+    const ms = Number(url.searchParams.get("ms") ?? "1500");
+    holdUntil = Date.now() + Math.max(0, ms);
+    // Ferme PROPREMENT la WebSocket vivante (FIN, pas de RST) : l'UI se
+    // reconnecte, la nouvelle connexion est gelée jusqu'à la fin du maintien.
+    for (const socket of sockets) socket.end();
+    return send({ ok: true, holdUntil });
   }
   return send({ error: "unknown" }, 404);
 });

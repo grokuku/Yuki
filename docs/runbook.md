@@ -236,6 +236,77 @@ volumes `yuki-models` ni `yuki-pi` (agent Pi, sessions).
 | Bouton **Redémarrer** sans effet / Yuki ne revient pas | arrêt au démarrage (mauvaise config) ou superviseur en boucle | `./scripts/logs.sh` : chercher `[supervisor]` (`pas de relance (panne)`, `boucle détectée`) et corriger la cause ; un champ « redémarrage » invalide peut faire échouer le démarrage |
 | log `[supervisor] boucle détectée` | le programme ressort en 75 plusieurs fois de suite (arrêt gracieux immédiat) | vérifier que `POST /api/admin/restart` n'est pas appelé en boucle ; corriger puis redémarrer le conteneur |
 | `models.json` inattendu | il est **généré** à chaque démarrage | ne pas l'éditer : passer par `/config` |
+| Application **non installable** (« l'installation n'est pas disponible ») et/ou message navigateur « Une erreur s'est produite lors du chargement du manifeste : `NetworkError when attempting to fetch resource.` » | le manifeste (`/manifest.webmanifest`) est **derrière le `forward_auth`** du reverse-proxy : le navigateur le réclame **SANS le cookie de session** et reçoit une **redirection** | excepter `/manifest.webmanifest` **et** `/sw.js` de l'authentification — voir **§6.1** |
+
+### 6.1 Reverse-proxy (Caddy v2 + authentik) : excepter le manifeste et le service worker
+
+Yuki n'implémente **aucune authentification** : l'accès est protégé **en amont**
+par le reverse-proxy. Si vous mettez Yuki derrière un `forward_auth` (authentik),
+vous **devez** excepter **deux chemins**. Sinon l'application n'est **pas
+installable** et le navigateur affiche :
+
+> « **Une erreur s'est produite lors du chargement du manifeste :**
+> `NetworkError when attempting to fetch resource.` »
+
+**Pourquoi (comportement prescrit par le standard, pas un bug).** Le navigateur
+réclame le **manifeste web** en mode `credentials: "omit"` : la requête part
+**sans le cookie de session**, même quand vous êtes connecté. Derrière
+`forward_auth`, cette requête est donc vue comme **non authentifiée** et
+**redirigée (302) vers le portail authentik** — une **autre origine** : le
+navigateur bloque alors la redirection (CORS) et signale `NetworkError`.
+
+Le **service worker** `/sw.js`, lui, est réclamé **avec** le cookie (mode
+`credentials: "same-origin"`) : il passe aujourd'hui. On l'excepte quand même,
+car un script de service worker **redirigé est refusé**, et il doit rester
+joignable même session expirée.
+
+> ⚠️ Ce n'est ni un défaut de Yuki ni un défaut de Caddy : c'est exactement ce
+> que demande le standard pour le manifeste. Le seul correctif est d'**excepter
+> le manifeste de l'authentification**.
+
+**Configuration Caddy v2 (exemple — adapter l'hôte et le port) :**
+
+```caddy
+yuki.example.com {
+	# (1) Manifeste PWA — PUBLIC : le navigateur le réclame SANS cookie.
+	handle /manifest.webmanifest {
+		reverse_proxy 127.0.0.1:8083
+	}
+
+	# (2) Service worker — PUBLIC : un script de worker redirigé est refusé.
+	handle /sw.js {
+		reverse_proxy 127.0.0.1:8083
+	}
+
+	# (3) Tout le reste — derrière authentik.
+	handle {
+		forward_auth 127.0.0.1:9000 {
+			uri /outpost.goauthentik.io/auth/caddy
+			copy_headers X-Authentik-Username X-Authentik-Groups X-Authentik-Email X-Authentik-Name X-Authentik-Uid
+		}
+		reverse_proxy 127.0.0.1:8083
+	}
+}
+```
+
+**Diagnostic sans outil (F12 → Réseau).** Ouvrir l'application, recharger, puis
+cliquer la requête **`manifest.webmanifest`** :
+
+| Ce qu'on observe | Signification |
+| --- | --- |
+| **200**, type `application/manifest+json`, **aucune** redirection | ✅ correct — l'installation doit être proposée |
+| **302 / 307** vers une **autre origine** (ex. `auth.…`) | ❌ **c'est la cause** : le manifeste est protégé par `forward_auth` |
+| **200** mais type `text/html` | ❌ une **page de connexion** a été servie à la place du manifeste |
+| **401 / 403** | ❌ le manifeste est protégé par l'authentification |
+
+Vérifier de la même façon **`sw.js`** (200, `text/javascript`, **aucune**
+redirection). En ligne de commande (sans cookie, comme le navigateur pour le
+manifeste) :
+
+```bash
+curl -si https://yuki.example.com/manifest.webmanifest | head -20   # pas de 3xx
+curl -si https://yuki.example.com/sw.js                  | head -20   # pas de 3xx
+```
 
 ## 7. Développement
 
@@ -439,3 +510,55 @@ plus exigé et ne masque plus `apiKey`.
 ⚠️ Les captures sont stockées sous `${state}/librarian-shots` et servies en
 same-origin (`/captures/<id>.png`). Aucune clé n'apparaît dans les journaux,
 les messages d'erreur ni les artefacts.
+
+## 12. Coffre de secrets (exécution sur agents)
+
+Yuki peut injecter des secrets dans une commande exécutée sur une **machine
+appairée** — **sans jamais écrire la valeur dans la commande**. Le modèle
+référence un secret par son **nom** ; Yuki fournit sa valeur par **variable
+d'environnement** (c'est le shell qui développe `$NOM`).
+
+### 12.1 Mise en service (côté opérateur)
+
+1. **Générer une clé maître** et la conserver **AILLEURS** (gestionnaire de
+   mots de passe) : `openssl rand -base64 48`.
+2. La fournir à Yuki en **`YUKI_VAULT_KEY`** (hors bande, jamais dans un
+   fichier suivi par git). ⚠️ Sans cette variable, le coffre **REFUSE toute
+   opération** : aucune commande référençant un secret ne s'exécute, et
+   l'onglet **Secrets** de `/config` l'indique clairement. **Aucun repli en
+   clair.**
+3. Dans **`/config` → onglet Secrets**, enregistrer un secret : un **nom**
+   (préfixe réservé `YUKI_SECRET_`, ex. `YUKI_SECRET_NAS`), un libellé d'usage
+   facultatif, et la **valeur** (≥ 6 caractères). La valeur est **chiffrée**
+   (AES-256-GCM) dans `${state}/secrets.vault.json` (mode `0600`) ; l'API ne la
+   renvoie **jamais**.
+4. Dans une commande (`run_command`), référencer le secret par `${NOM}` :
+   ex. `curl -H "Authorization: Bearer ${YUKI_SECRET_NAS}" …`. Le modèle peut
+   lister les noms via l'outil `lister_secrets`.
+
+### 12.2 Flux `awaiting_secret`
+
+Si la commande référence un secret **absent du coffre**, elle **n'est pas
+exécutée** : une **fenêtre flottante** s'affiche dans la conversation (machine
++ commande EXACTE + TTL). L'humain saisit la valeur ; elle est **chiffrée** puis
+la commande est **rejouée automatiquement**. C'est un flux **dédié**, qui couvre
+aussi les agents **sans validation**.
+
+⚠️ **Si vous perdez `YUKI_VAULT_KEY`, les secrets sont définitivement perdus** :
+il n'existe aucun recours (la clé n'est rangée nulle part avec le coffre).
+
+### 12.3 Limites (à connaître)
+
+- **Secret transformé NON masqué** : le masquage de la sortie couvre la valeur
+  **exacte**. Une valeur transformée par la commande (base64, URL-encodage,
+  découpage, hachage…) **peut apparaître** dans la sortie. Ne construisez pas de
+  commandes qui transforment un secret et l'affichent.
+- **Valeur < 6 caractères refusée** : en dessous, le masquage sur-masquerait du
+  texte légitime. Le coffre impose donc une longueur minimale.
+- **Côté agent Go (hors périmètre de Yuki)** : la valeur lui parvient en
+  **variable d'environnement** ; ses **propres** journaux (sur la machine
+  distante) peuvent la contenir. Yuki ne peut pas les contrôler.
+- **Transport navigateur → serveur** : la fenêtre de secret transmet la valeur
+  du **navigateur au serveur** en HTTP. Yuki n'implémente **aucune
+  authentification** ; sur un LAN non chiffré, la valeur **transite en clair sur
+  le réseau**. Utilisez HTTPS/TLS en amont pour tout secret sensible.

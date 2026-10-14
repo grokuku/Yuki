@@ -9,6 +9,7 @@
 
 import type { AgentDirectoryPort } from "../agents/directory.js";
 import type { ExecutionServicePort, ScreenshotServicePort } from "../agents/execution.js";
+import type { SecretDirectoryPort } from "../secrets/directory.js";
 import type { DelegateServicePort } from "../delegation/ports.js";
 import type {
   LibrarianArchivePort,
@@ -126,6 +127,12 @@ export interface PiHostOptions {
    * Indépendant de `execution` : consulter n'est pas exécuter.
    */
   directory?: AgentDirectoryPort;
+  /**
+   * Port de CONSULTATION des secrets du coffre. Présent ⇒ la façade expose
+   * l'outil `lister_secrets` (LECTURE SEULE, NOMS seulement — jamais une valeur).
+   * Indépendant de l'exécution : savoir quels secrets existent n'est pas agir.
+   */
+  secrets?: SecretDirectoryPort;
   /**
    * Lot 13 : archive « vie antérieure ». Présent ⇒ la façade expose l'outil de
    * consultation `archive_vie_anterieure` (LECTURE SEULE) et enregistre

@@ -48,6 +48,7 @@ import {
   type AgentDirectoryEntry,
   type AgentHistoryEntry,
 } from "../../agents/output.js";
+import { frameSecretList, type SecretDirectoryPort } from "../../secrets/directory.js";
 
 /** Coerce une valeur LLM en entier, ou `undefined` (= défaut côté service). */
 function coerceInt(value: unknown): number | undefined {
@@ -414,4 +415,70 @@ export function createAgentDirectoryTools(directory: AgentDirectoryPort): ToolDe
   });
 
   return [listerAgents, etatAgent];
+}
+
+// ── Consultation des secrets (NOMS seulement, jamais une valeur) ────────────
+
+/** Détails structurés renvoyés par `lister_secrets` (rendu UI, jamais une valeur). */
+interface SecretListToolDetails {
+  status: "ok" | "locked" | "error";
+  count?: number;
+}
+
+/**
+ * Construit l'outil `lister_secrets` (LECTURE SEULE) : liste les NOMS des
+ * secrets du coffre et leur libellé d'usage. C'est ce qui permet au modèle de
+ * savoir QUELLES variables `${YUKI_SECRET_…}` référencer dans `run_command`.
+ *
+ * ⚠️ L'outil ne renvoie JAMAIS une valeur : seulement des noms (échappés,
+ * encadrés comme une DONNÉE). Coffre verrouillé (clé maître absente) ⇒ message
+ * honnête, aucune liste.
+ */
+export function createSecretTools(directory: SecretDirectoryPort): ToolDefinition[] {
+  const listerSecrets = defineTool({
+    name: "lister_secrets",
+    label: "Lister les secrets disponibles",
+    description:
+      "Liste les NOMS des secrets enregistrés dans le coffre de Yuki, avec leur " +
+      "libellé d'usage. À utiliser pour savoir QUELLE variable `${YUKI_SECRET_NOM}` " +
+      "référencer dans une commande `run_command`. ⚠️ Ne renvoie JAMAIS une valeur : " +
+      "seulement des noms. Pour utiliser un secret, écris ${NOM} dans la commande ; " +
+      "Yuki fournira sa valeur par variable d'environnement (tu ne la vois jamais). " +
+      "Si le coffre est verrouillé ou vide, l'outil l'indique clairement.",
+    promptSnippet: "lister_secrets() — noms des secrets disponibles (jamais leurs valeurs)",
+    parameters: Type.Object({}),
+    execute: async (): Promise<{ content: Array<{ type: "text"; text: string }>; details: SecretListToolDetails }> => {
+      if (!directory.isConfigured()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "Coffre de secrets verrouillé : la clé maître (YUKI_VAULT_KEY) n'est " +
+                "pas définie. Aucun secret n'est disponible en référence.",
+            },
+          ],
+          details: { status: "locked" },
+        };
+      }
+      let entries: ReturnType<SecretDirectoryPort["list"]>;
+      try {
+        entries = directory.list();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            { type: "text", text: `Coffre de secrets illisible : ${escapeOutputText(message)}` },
+          ],
+          details: { status: "error" },
+        };
+      }
+      return {
+        content: [{ type: "text", text: frameSecretList(entries) }],
+        details: { status: "ok", count: entries.length },
+      };
+    },
+  });
+
+  return [listerSecrets];
 }

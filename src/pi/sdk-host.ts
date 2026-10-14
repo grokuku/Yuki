@@ -67,6 +67,7 @@ import {
   createAgentDirectoryTools,
   createExecutionTools,
   createScreenshotTool,
+  createSecretTools,
 } from "./sdk/execution-tools.js";
 import {
   getSharedModelRuntime,
@@ -1126,6 +1127,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // Lot 4 (extension) : capture d'écran déléguée (`capturer_ecran`). Le
       // garde-fou par agent est appliqué côté Yuki, comme pour `run_command`.
       customTools.push(...createScreenshotTool(options.screenshots));
+    }
+    if (options.secrets) {
+      // Coffre de secrets (extension) : outil de CONSULTATION `lister_secrets`
+      // (LECTURE SEULE, NOMS seulement). Indépendant de l'exécution.
+      customTools.push(...createSecretTools(options.secrets));
     }
     if (options.heritage) {
       // Lot 13 : outil de CONSULTATION de l'archive « vie antérieure » (LECTURE

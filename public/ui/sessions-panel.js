@@ -23,6 +23,11 @@
 
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { HolafIcons } from "./vendor/holaf/holaf-icons.js";
+import {
+  composeConversationLabel,
+  formatUnreadBadge,
+  normalizeCount,
+} from "./unread.js";
 
 // Mode CSS externe : le CSS de la brique est servi par la page (CSP stricte,
 // pas de <style> injecté). Le pont `window.HolafModal` laisse `theme.js`
@@ -161,7 +166,7 @@ function el(tag, attrs = {}, text) {
  * @param {(id: string) => void} deps.onSetAside
  * @param {(id: string, pinned: boolean) => void} deps.onPin
  * @param {HTMLElement} [deps.footer] encart fixe en bas de la barre (agents).
- * @returns {{ update(sessions: unknown, activeId: unknown): void, closeMenu(): void }}
+ * @returns {{ update(sessions: unknown, activeId: unknown, busyIds?: string[], unread?: Record<string, number>): void, setBusy(ids: string[]): void, setUnread(counts: Record<string, number>): void, closeMenu(): void }}
  */
 export function initSessionsPanel(deps) {
   const root = deps.root;
@@ -180,6 +185,11 @@ export function initSessionsPanel(deps) {
   // multiplexées), indépendamment de la conversation focalisée : on VOIT qu'un
   // autre fil travaille et on peut y basculer sans rien perdre.
   let busyIds = new Set();
+  // Conversation → compteur de messages NON LUS. Alimenté par l'app depuis les
+  // trames de fil (`run_finished`) : le point « en cours » dit qu'une tâche
+  // travaille MAINTENANT, ce compteur dit que quelque chose est arrivé sans être
+  // vu. Les deux peuvent être vrais EN MÊME TEMPS (pastilles distinctes).
+  let unreadCounts = {};
   // État déplié/replié de la barre : replié par défaut, restauré du stockage
   // local (pour rester déplié après un rechargement), décidé par LE BOUTON.
   let expanded = readExpanded();
@@ -417,6 +427,12 @@ export function initSessionsPanel(deps) {
     // Toujours présent dans le DOM (visible via `.conv--busy`), donc le
     // rafraîchissement n'est qu'un basculement de classe.
     avatar.appendChild(el("span", { class: "conv__busy" }));
+    // Pastille « NON LU » : compteur, forme et EMPLACEMENT différents du point
+    // « en cours » (voir styles.css) — visible aussi dans le rail replié, car
+    // ancrée sur la pastille d'initiales, elle-même toujours affichée.
+    avatar.appendChild(
+      el("span", { class: "conv__unread", "aria-hidden": "true" }),
+    );
     item.appendChild(avatar);
     const main = el("span", { class: "conv__main" });
     main.append(
@@ -448,21 +464,33 @@ export function initSessionsPanel(deps) {
       event.preventDefault();
       openMenu(info.id, item);
     });
-    applyBusy(item, info.id);
+    applyIndicators(item, info.id);
     return item;
   }
 
-  /** Applique l'état « en cours » d'une conversation (classe + libellé accessible). */
-  function applyBusy(item, id) {
+  /**
+   * Applique les DEUX états d'une conversation — « en cours » ET « non lu » —
+   * et compose le libellé accessible/tooltip qui les DIT tous les deux. La
+   * couleur seule ne suffit pas (accessibilité) : on pose le compteur dans la
+   * pastille ET le libellé complet sur l'item.
+   */
+  function applyIndicators(item, id) {
     const busy = busyIds.has(id);
+    const unread = normalizeCount(unreadCounts[id]);
     item.classList.toggle("conv--busy", busy);
-    if (busy) {
-      item.setAttribute("data-busy", "true");
-      item.setAttribute("aria-label", `${conversationTitle(sessions.find((s) => s.id === id) ?? {})} — en cours`);
-    } else {
-      item.removeAttribute("data-busy");
-      item.removeAttribute("aria-label");
-    }
+    item.classList.toggle("conv--unread", unread > 0);
+    if (busy) item.setAttribute("data-busy", "true");
+    else item.removeAttribute("data-busy");
+    if (unread > 0) item.setAttribute("data-unread", String(unread));
+    else item.removeAttribute("data-unread");
+    const badge = item.querySelector(".conv__unread");
+    if (badge) badge.textContent = formatUnreadBadge(unread);
+    const label = composeConversationLabel(
+      conversationTitle(sessions.find((s) => s.id === id) ?? {}),
+      { busy, unread },
+    );
+    item.setAttribute("aria-label", label);
+    item.title = label;
   }
 
   function render() {
@@ -486,10 +514,11 @@ export function initSessionsPanel(deps) {
   }
 
   return {
-    update(nextSessions, nextActiveId, nextBusyIds) {
+    update(nextSessions, nextActiveId, nextBusyIds, nextUnread) {
       sessions = Array.isArray(nextSessions) ? nextSessions : [];
       activeId = typeof nextActiveId === "string" ? nextActiveId : null;
       if (Array.isArray(nextBusyIds)) busyIds = new Set(nextBusyIds);
+      if (nextUnread && typeof nextUnread === "object") unreadCounts = { ...nextUnread };
       closeMenu();
       render();
     },
@@ -501,7 +530,17 @@ export function initSessionsPanel(deps) {
     setBusy(ids) {
       busyIds = new Set(Array.isArray(ids) ? ids : []);
       for (const item of list.querySelectorAll(".conv")) {
-        applyBusy(item, item.getAttribute("data-id") ?? "");
+        applyIndicators(item, item.getAttribute("data-id") ?? "");
+      }
+    },
+    /**
+     * « NON LU » — même principe que `setBusy` : bascule ciblée des pastilles
+     * des items EXISTANTS (aucun `render()`, le menu contextuel survit).
+     */
+    setUnread(counts) {
+      unreadCounts = counts && typeof counts === "object" ? { ...counts } : {};
+      for (const item of list.querySelectorAll(".conv")) {
+        applyIndicators(item, item.getAttribute("data-id") ?? "");
       }
     },
     closeMenu,

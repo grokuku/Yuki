@@ -29,6 +29,7 @@ import { createApprovalChannel } from './approval-channel.js';
 import { createApprovalLayer } from './approval-window.js';
 import { initAgentsPanel } from './agents-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
+import { initSecretsPanel } from './secrets-panel.js';
 import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
@@ -570,6 +571,7 @@ const TABS = [
   { id: "personnalite", groups: [] },
   { id: "voix", groups: ["tts"] },
   { id: "agents", groups: ["agents-acces"] },
+  { id: "secrets", groups: [] },
   { id: "systeme", groups: ["gpu", "transport", "librarian", "notifications"] },
   { id: "maintenance", groups: [] },
 ];
@@ -620,6 +622,7 @@ const ttsAssistantRoot = document.getElementById("tts-assistant-root");
 const ttsEngineRoot = document.getElementById("tts-engine-root");
 /** Panneau des agents d'exécution (Lot 4, B5) — monté par id. */
 const agentsRoot = document.getElementById("agents-root");
+const secretsRoot = document.getElementById("secrets-root");
 /** Panneau de la personnalité — monté par id. */
 const personalityRoot = document.getElementById("personality-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
@@ -1511,6 +1514,11 @@ void (async () => {
     // privilège, suppression (HolafModal) et validations en attente.
     if (agentsRoot) {
       initAgentsPanel({ root: agentsRoot, HolafFetch, HolafModal });
+    }
+    // Panneau des secrets : coffre chiffré (noms seulement), ajout/modification/
+    // suppression à chaud. Aucune valeur n'est jamais réaffichée.
+    if (secretsRoot) {
+      initSecretsPanel({ root: secretsRoot, HolafFetch, HolafModal });
     }
     // Panneau de la personnalité : édition, enregistrement, retour arrière,
     // historique. Composant autonome monté par id.

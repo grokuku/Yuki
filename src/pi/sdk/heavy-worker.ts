@@ -14,6 +14,7 @@ import type {
   ExecutionServicePort,
   ScreenshotServicePort,
 } from "../../agents/execution.js";
+import type { SecretDirectoryPort } from "../../secrets/directory.js";
 import type {
   HeavyRunHandle,
   HeavyRunRequest,
@@ -38,6 +39,7 @@ import type { PiLogger, PiThinkingLevel } from "../types.js";
 import {
   createExecutionTools,
   createScreenshotTool,
+  createSecretTools,
   type ActionToolOptions,
 } from "./execution-tools.js";
 import { getSharedModelRuntime, liveValue, resolveSdkModel } from "./model-runtime.js";
@@ -69,6 +71,12 @@ export interface SdkHeavyWorkerConfig {
   /** Service de capture d'écran. Présent ⇒ le worker porte `capturer_ecran`. */
   screenshots?: ScreenshotServicePort;
   /**
+   * Port de consultation du coffre de secrets. Présent ⇒ le worker porte
+   * `lister_secrets` (NOMS seulement), pour savoir QUELLES variables
+   * `${YUKI_SECRET_…}` référencer dans `run_command`.
+   */
+  secrets?: SecretDirectoryPort;
+  /**
    * Fabrique de session éphémère. Injectable pour les TESTS (défaut :
    * `createEphemeralSession`). Permet d'exercer le câblage des outils d'action
    * sans modèle ni réseau.
@@ -89,7 +97,7 @@ export interface SdkHeavyWorkerConfig {
  * un test.
  */
 export function buildHeavyActionTools(
-  config: Pick<SdkHeavyWorkerConfig, "execution" | "screenshots">,
+  config: Pick<SdkHeavyWorkerConfig, "execution" | "screenshots" | "secrets">,
   lightSessionId: string | undefined,
 ): ToolDefinition[] {
   const options: ActionToolOptions = {
@@ -98,6 +106,7 @@ export function buildHeavyActionTools(
   const tools: ToolDefinition[] = [];
   if (config.execution) tools.push(...createExecutionTools(config.execution, options));
   if (config.screenshots) tools.push(...createScreenshotTool(config.screenshots, options));
+  if (config.secrets) tools.push(...createSecretTools(config.secrets));
   return tools;
 }
 

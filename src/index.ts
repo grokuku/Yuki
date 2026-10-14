@@ -43,6 +43,8 @@ import {
   type AgentLevel,
 } from "./agents/index.js";
 import type { AgentsApiDeps } from "./gateway/routes/agents.js";
+import { SecretRequestRegistry } from "./secrets/requests.js";
+import { SecretStore } from "./secrets/store.js";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
@@ -331,6 +333,22 @@ async function main(): Promise<void> {
   let agentsDeps: AgentsApiDeps | undefined;
   let agentExecution: AgentExecutionService | undefined;
   let agentDirectory: AgentDirectoryService | undefined;
+  /** Coffre de secrets (façade). `undefined` tant que l'init agents n'a pas réussi. */
+  let secretStore: SecretStore | undefined;
+  /**
+   * Rafraîchit la liste MUTABLE PARTAGÉE des valeurs à masquer (logger + audit) :
+   * clés d'environnement, clés saisies dans /config, secrets du coffre. Appelée au
+   * démarrage, à chaque changement de config ET à chaque mutation du coffre.
+   */
+  const refreshSecretValues = (): void => {
+    secretValues.splice(
+      0,
+      secretValues.length,
+      ...collectSecretValues(),
+      ...config.secretValues(),
+      ...(secretStore?.values() ?? []),
+    );
+  };
   /** Port du registre d'agents vers le transport WS (encart de la barre latérale). */
   let agentsGateway: AgentsGatewayPort | undefined;
   try {
@@ -347,6 +365,11 @@ async function main(): Promise<void> {
       path: env.auditLogPath,
       maxSizeBytes: maxSizeBytesFromMb(config.getNumber("audit.maxSizeMb")),
       retentionDays: config.getNumber("audit.retentionDays"),
+      // ⚠️ TROU COMBLÉ : l'audit partage la liste MUTABLE des secrets du logger
+      // (clés d'env, clés saisies dans /config, secrets du coffre). Sans cela,
+      // une valeur secrète présente dans une commande ou une méta d'audit serait
+      // journalisée EN CLAIR (l'audit ne retombait que sur `process.env`).
+      secretValues,
       logger,
     });
     agentCa = CertificateAuthority.open({
@@ -363,6 +386,17 @@ async function main(): Promise<void> {
     // humaines (B6bis) + service d'exécution (garde-fous D118).
     const agentHub = new AgentHub({ logger });
     const approvals = new ApprovalRegistry({ logger });
+    // Coffre de secrets CHIFFRÉ (AES-256-GCM). ⚠️ Clé maître HORS BANDE
+    // (`YUKI_VAULT_KEY`) : sans elle, toute opération REFUSE (jamais de repli en
+    // clair). À chaque mutation, on rafraîchit la liste partagée de redaction.
+    secretStore = new SecretStore({
+      path: env.secretsVaultPath,
+      logger,
+      onChange: () => refreshSecretValues(),
+    });
+    // Flux DÉDIÉ de fourniture de secret (couvre les agents SANS validation).
+    const secretRequests = new SecretRequestRegistry({ logger });
+    refreshSecretValues();
     // Encart agents de la barre latérale du chat : port LECTURE + bascule on/off
     // (`disabled` ⇄ niveau précédent) + abonnement aux changements. On ne
     // diffuse JAMAIS le secret : ici, un simple résumé.
@@ -404,6 +438,8 @@ async function main(): Promise<void> {
       audit: auditLog,
       approvals,
       logger,
+      ...(secretStore ? { secrets: secretStore } : {}),
+      secretRequests,
     });
     // Consultation des agents (extension) : LECTURE SEULE. Réutilise le même
     // store/hub/audit ; les outils sont exposés même quand l'exécution est
@@ -782,9 +818,11 @@ async function main(): Promise<void> {
       tools: toolAllowlist("heavy", {
         executionEnabled: agentExecution !== undefined,
         screenshotsEnabled: agentExecution !== undefined,
+        secretsEnabled: secretStore !== undefined,
       }),
       ...(agentExecution ? { execution: agentExecution } : {}),
       ...(agentExecution ? { screenshots: agentExecution } : {}),
+      ...(secretStore ? { secrets: secretStore } : {}),
       idleTimeoutMs,
       totalTimeoutMs,
       logger,
@@ -959,6 +997,9 @@ async function main(): Promise<void> {
         // ⚠️ Indépendant de l'exécution : consulter les agents n'est pas
         // exécuter. Actif dès que le registre d'agents existe.
         directoryEnabled: agentDirectory !== undefined,
+        // Secrets : consulter les NOMS (jamais les valeurs) pour savoir quoi
+        // référencer en délégation. Actif dès que le coffre est initialisé.
+        secretsEnabled: secretStore !== undefined,
         // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
         heritageEnabled: true,
         // Libraire : quatre outils + capture (selon l'URL et le réglage au
@@ -968,6 +1009,7 @@ async function main(): Promise<void> {
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
+      ...(secretStore ? { secrets: secretStore } : {}),
       heritage: heritageStore,
       ...(librarianConfigured
         ? {
@@ -1038,13 +1080,9 @@ async function main(): Promise<void> {
       a.heavyModel === b.heavy.model &&
       a.heavyThinking === b.heavy.thinking;
     stopLlmHotReload = config.subscribe(() => {
-      // Rafraîchit d'abord la liste des secrets masqués (clé saisie à chaud).
-      secretValues.splice(
-        0,
-        secretValues.length,
-        ...collectSecretValues(),
-        ...config.secretValues(),
-      );
+      // Rafraîchit d'abord la liste des secrets masqués (clé saisie à chaud) —
+      // clés d'env, clés de /config ET secrets du coffre (source unique).
+      refreshSecretValues();
       const next = effectiveLlmConfig(config);
       if (sameLlm(llmHot, next)) return;
       llmHot = {
@@ -1091,6 +1129,9 @@ async function main(): Promise<void> {
       // demande vers les clients de la SEULE conversation concernée. Le panneau
       // /config garde son affichage (routes HTTP) pour les cas hors conversation.
       ...(agentExecution ? { approvals: agentExecution } : {}),
+      // Demandes de SECRET (`awaiting_secret`) : flux DÉDIÉ, trame de contrôle
+      // éphémère routée vers la SEULE conversation (jamais une valeur).
+      ...(agentExecution ? { secrets: agentExecution } : {}),
       // Captures d'écran : l'image est diffusée en trame de CONTRÔLE vers la
       // SEULE conversation demanderesse (jamais bufferisée, jamais persistée).
       // Combine les captures d'AGENTS et les captures de PAGES WEB (Libry).
@@ -1215,6 +1256,7 @@ async function main(): Promise<void> {
       voices: voicesDeps,
       tts: ttsDeps,
       ...(agentsDeps ? { agents: agentsDeps } : {}),
+      ...(secretStore ? { secrets: { store: secretStore, logger } } : {}),
       ...(pushDeps ? { push: pushDeps } : {}),
       admin: {
         logger,

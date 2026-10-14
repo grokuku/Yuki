@@ -229,11 +229,12 @@ func (rt *Runtime) handleCmd(_ context.Context, cmd *proto.Cmd, reply transport.
 // executeCmd exécute réellement la commande et renvoie `result` (ou `error`).
 func (rt *Runtime) executeCmd(cmd *proto.Cmd, reply transport.ReplyFunc) {
 	req := exec.Request{
-		ID:      cmd.CmdID,
-		Command: cmd.Command,
-		Shell:   cmd.Shell,
-		Cwd:     cmd.Cwd,
-		Origin:  cmd.Origin,
+		ID:         cmd.CmdID,
+		Command:    cmd.Command,
+		Shell:      cmd.Shell,
+		Cwd:        cmd.Cwd,
+		EnvOverlay: cmd.Env,
+		Origin:     cmd.Origin,
 	}
 	if cmd.TimeoutMs > 0 {
 		req.Timeout = time.Duration(cmd.TimeoutMs) * time.Millisecond

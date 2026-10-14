@@ -31,6 +31,8 @@ import {
   type PairBeginFrame,
 } from "../../src/agents/index.js";
 import { createLogger } from "../../src/observability/logger.js";
+import type { SecretLookupPort } from "../../src/agents/execution.js";
+import type { SecretRequestRegistry } from "../../src/secrets/requests.js";
 
 const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
 
@@ -52,6 +54,10 @@ export interface StackOptions {
    * la production quand `agents.bindHost` est concret).
    */
   serverName?: string;
+  /** Port de résolution des secrets (coffre) à injecter dans le service. */
+  secrets?: SecretLookupPort;
+  /** Registre des demandes de secret (`awaiting_secret`) à injecter. */
+  secretRequests?: SecretRequestRegistry;
 }
 
 export interface TestStack {
@@ -112,7 +118,15 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
   );
   const hub = new AgentHub({ logger });
   const approvals = new ApprovalRegistry({ logger });
-  const execution = new AgentExecutionService({ store, hub, audit, approvals, logger });
+  const execution = new AgentExecutionService({
+    store,
+    hub,
+    audit,
+    approvals,
+    logger,
+    ...(options.secrets ? { secrets: options.secrets } : {}),
+    ...(options.secretRequests ? { secretRequests: options.secretRequests } : {}),
+  });
   const server = createAgentsServer({
     certPem: serverCert.certPem,
     keyPem: serverCert.keyPem,

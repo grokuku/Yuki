@@ -159,6 +159,14 @@ type Cmd struct {
 	Cwd       string `json:"cwd,omitempty"`
 	TimeoutMs int64  `json:"timeout_ms,omitempty"`
 	Origin    string `json:"origin,omitempty"`
+	// Env : variables d'environnement SUPPLÉMENTAIRES à passer à la commande
+	// (SECRETS du coffre de Yuki, cf. décision « injection par variable
+	// d'environnement »). ⚠️ C'est un SUR-ENSEMBLE : ces paires s'ajoutent à
+	// l'environnement hérité de l'agent (elle le COMPLÈTENT/écrasent clé par
+	// clé), elles ne le REMPLACENT pas — sinon `PATH`, `HOME`… disparaîtraient
+	// et un shell complet (D123) cesserait de fonctionner. La commande, elle,
+	// n'est JAMAIS réécrite : c'est le shell qui développe `$NOM`.
+	Env map[string]string `json:"env,omitempty"`
 	// Destructive : décision de Yuki (orchestrateur) sur le caractère
 	// destructeur de `Command`. Pointeur pour distinguer « non annoncé » (`nil`)
 	// de « annoncé faux ». ⚠️ L'agent ne s'en sert QUE pour JOURNALISER une

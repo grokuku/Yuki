@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	osexec "os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,11 @@ type Request struct {
 	Cwd string
 	// Env : environnement complet si non nil ; nil ⇒ environnement de l'agent.
 	Env []string
+	// EnvOverlay : variables SUPPLÉMENTAIRES ajoutées à l'environnement de base
+	// (hérité ou `Env`), clé par clé (écrase les clés existantes). C'est par ce
+	// champ que Yuki injecte les SECRETS du coffre sans jamais réécrire la
+	// commande. Vide/nil ⇒ environnement de base inchangé.
+	EnvOverlay map[string]string
 	// Timeout : délai maximal. <= 0 ⇒ `Options.DefaultTimeout`.
 	Timeout time.Duration
 	// Origin : origine logique de la commande (journalisation côté Yuki).
@@ -173,7 +179,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 
 	cmd := osexec.Command(shellPath, commandArgs(req.Shell, shellPath, req.Command)...)
 	cmd.Dir = req.Cwd
-	cmd.Env = r.environment(req.Env)
+	cmd.Env = r.environment(req.Env, req.EnvOverlay)
 	// Pas d'entrée interactive : `stdin` branché sur le périphérique nul.
 	cmd.Stdin = nil
 
@@ -260,24 +266,50 @@ func resolveShell(override, fallback string) (string, error) {
 //
 // ⚠️ DÉCISION DOCUMENTÉE : par défaut, l'environnement de l'agent est HÉRITÉ
 // (`os.Environ()`), afin qu'un shell COMPLET (D123) trouve `PATH`, `HOME`,
-// `LANG`… L'agent étant un service lancé par l'opérateur, la consigne est de
-// NE PAS y placer de secret : les secrets d'appairage vivent sur le disque
-// (`<state>/agents-ca`), jamais dans l'environnement. `Request.Env` permet à
-// Yuki (via l'agent) de fournir un environnement explicite, qui remplace alors
-// l'héritage.
-func (r *Runner) environment(reqEnv []string) []string {
-	if reqEnv != nil {
-		out := make([]string, len(reqEnv))
-		copy(out, reqEnv)
-		return out
-	}
-	base := r.opts.Env
-	if base == nil {
+// `LANG`… `Request.Env` permet à Yuki de fournir un environnement explicite, qui
+// remplace alors l'héritage.
+//
+// ⚠️ `overlay` (EnvOverlay) est un SUR-ENSEMBLE appliqué EN DERNIER, clé par
+// clé : il sert à injecter les SECRETS du coffre de Yuki SANS remplacer
+// l'environnement de base (sinon `PATH` disparaîtrait). La commande n'est jamais
+// réécrite : le shell développe `$NOM` depuis cet environnement.
+func (r *Runner) environment(reqEnv []string, overlay map[string]string) []string {
+	var base []string
+	switch {
+	case reqEnv != nil:
+		base = append([]string(nil), reqEnv...)
+	case r.opts.Env != nil:
+		base = append([]string(nil), r.opts.Env...)
+	default:
 		base = os.Environ()
 	}
-	out := make([]string, len(base))
-	copy(out, base)
-	return out
+	if len(overlay) == 0 {
+		return base
+	}
+	// On conserve l'ordre existant et on écrase les clés présentes ; les clés
+	// nouvelles sont ajoutées à la fin (ordre stable par clé pour l'overlay).
+	seen := make(map[string]bool, len(overlay))
+	for i, kv := range base {
+		key, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if value, present := overlay[key]; present {
+			base[i] = key + "=" + value
+			seen[key] = true
+		}
+	}
+	keys := make([]string, 0, len(overlay))
+	for key := range overlay {
+		if !seen[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		base = append(base, key+"="+overlay[key])
+	}
+	return base
 }
 
 // cappedWriter collecte une sortie plafonnée. Une fois le plafond atteint, les

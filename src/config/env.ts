@@ -66,6 +66,13 @@ export interface Env {
   /** Fichier JSONL du journal d'audit des exécutions (volume `state`). */
   auditLogPath: string;
   /**
+   * Fichier JSON du COFFRE DE SECRETS chiffré (volume `state`, 0600). ⚠️ Ne
+   * contient que des entrées CHIFFRÉES (AES-256-GCM) : la clé maître n'y est
+   * JAMAIS rangée, elle vient de `YUKI_VAULT_KEY` (hors bande). Surcharge :
+   * `YUKI_SECRETS_VAULT_PATH`.
+   */
+  secretsVaultPath: string;
+  /**
    * Fichier JSONL des jobs d'ARCHIVAGE du libraire (volume `state`). Séparé de
    * `jobsStorePath` (délégation) pour ne pas mêler les deux espaces de noms.
    * Surcharge : `YUKI_LIBRARIAN_JOBS_PATH`.
@@ -292,6 +299,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_AUDIT_LOG_PATH",
       `${mountPoints.state}/audit.jsonl`,
+    ),
+    secretsVaultPath: getString(
+      env,
+      "YUKI_SECRETS_VAULT_PATH",
+      `${mountPoints.state}/secrets.vault.json`,
     ),
     librarianJobsPath: getString(
       env,

@@ -241,6 +241,29 @@ const readState = () =>
     };
   })()`);
 
+/** État « NON LU » lu du DOM, par conversation (compteur, pastille, libellés). */
+const readUnread = () =>
+  evaluate(`(() => {
+    const out = {};
+    for (const c of document.querySelectorAll('.conv')) {
+      const id = c.getAttribute('data-id');
+      const badge = c.querySelector('.conv__unread');
+      out[id] = {
+        unread: c.classList.contains('conv--unread'),
+        busy: c.classList.contains('conv--busy'),
+        count: c.getAttribute('data-unread'),
+        badge: badge ? badge.textContent : null,
+        label: c.getAttribute('aria-label'),
+        title: c.title,
+      };
+    }
+    return out;
+  })()`);
+
+/** Valeur brute persistée dans `localStorage` (ou `null`). */
+const readStoredUnread = () =>
+  evaluate(`window.localStorage.getItem('yuki-unread')`);
+
 /** Envoi d'un message via l'INTERFACE (saisie + clic Envoyer). */
 const sendViaUi = (text) =>
   evaluate(`(() => {
@@ -446,6 +469,208 @@ check(
   !activityDom.thread.includes(ACTIVITE_FOND_A) &&
     !activityDom.thread.includes("tâche du fil A"),
   activityDom.thread.slice(-160),
+);
+
+/* ══════════ 5) INDICATEUR « MESSAGE NON LU » (distinct de « en cours ») ══ */
+// On part d'un état PROPRE : ouvrir A puis B efface l'éventuel non-lu de A
+// laissé par les sections précédentes, et laisse B focalisée.
+await clickConversation("sess-A");
+await waitFor(`document.querySelector('.conv[data-id="sess-A"]').classList.contains('conv--active')`);
+await clickConversation("sess-B");
+await waitFor(`document.querySelector('.conv[data-id="sess-B"]').classList.contains('conv--active')`);
+const cleanStart = await readUnread();
+check(
+  "point de départ propre : aucun indicateur non lu",
+  cleanStart["sess-A"].unread === false && cleanStart["sess-B"].unread === false,
+  JSON.stringify(cleanStart),
+);
+
+// ── U1) Message dans A pendant qu'on regarde B ⇒ A s'allume, PAS B ──
+await controlRun("sess-A", "NON-LU-A", 6, 80);
+check(
+  "U1 : un tour terminé dans A (non focalisée) ALLUME l'indicateur sur A",
+  await waitFor(`!!document.querySelector('.conv[data-id="sess-A"]')?.classList.contains('conv--unread')`),
+);
+const afterU1 = await readUnread();
+check(
+  "U1 : l'indicateur NE s'allume PAS sur la conversation REGARDÉE (B)",
+  afterU1["sess-B"].unread === false,
+  JSON.stringify(afterU1),
+);
+check(
+  "U1 : le compteur vaut 1 et la pastille affiche « 1 »",
+  afterU1["sess-A"].count === "1" && afterU1["sess-A"].badge === "1",
+  JSON.stringify(afterU1["sess-A"]),
+);
+check(
+  "U1 : accessibilité — le libellé (aria-label + title) DIT « non lu »",
+  /non lu/.test(afterU1["sess-A"].label || "") && /non lu/.test(afterU1["sess-A"].title || ""),
+  JSON.stringify({ label: afterU1["sess-A"].label, title: afterU1["sess-A"].title }),
+);
+
+// ── U2) Deux tours terminés ⇒ compteur 2 (par TOUR, pas par morceau de texte)
+await controlRun("sess-A", "NON-LU-A-2", 6, 80);
+check(
+  "U2 : un 2e tour terminé porte le compteur à « 2 » (un TOUR = un message)",
+  await waitFor(`document.querySelector('.conv[data-id="sess-A"]')?.getAttribute('data-unread') === '2'`),
+  JSON.stringify(await readUnread()),
+);
+
+// ── U3) « EN COURS » et « NON LU » COEXISTENT, sans se confondre ──
+await controlRun("sess-A", "TOUJOURS-EN-COURS", 20, 200);
+check(
+  "U3 : un nouveau run de fond allume AUSSI le point « en cours » sur A",
+  await waitFor(`!!document.querySelector('.conv[data-id="sess-A"]')?.classList.contains('conv--busy')`),
+);
+// Laisse la transition d'opacité (120 ms) s'achever avant de mesurer.
+await sleep(250);
+const coexistence = await evaluate(`(() => {
+  const c = document.querySelector('.conv[data-id="sess-A"]');
+  const busy = c.querySelector('.conv__busy');
+  const unread = c.querySelector('.conv__unread');
+  const r = (el) => el.getBoundingClientRect();
+  const cs = (el) => getComputedStyle(el);
+  return {
+    busyClass: c.classList.contains('conv--busy'),
+    unreadClass: c.classList.contains('conv--unread'),
+    sameNode: busy === unread,
+    busyOpacity: cs(busy).opacity,
+    unreadOpacity: cs(unread).opacity,
+    busyBg: cs(busy).backgroundColor,
+    unreadBg: cs(unread).backgroundColor,
+    unreadTop: r(unread).top,
+    busyTop: r(busy).top,
+  };
+})()`);
+check(
+  "U3 : les DEUX classes sont posées sur A en même temps",
+  coexistence.busyClass === true && coexistence.unreadClass === true,
+  JSON.stringify(coexistence),
+);
+check(
+  "U3 : ce sont des PASTILLES DIFFÉRENTES (nœuds, couleurs et positions)",
+  coexistence.sameNode === false &&
+    coexistence.busyBg !== coexistence.unreadBg &&
+    coexistence.unreadTop < coexistence.busyTop &&
+    Number(coexistence.busyOpacity) > 0 &&
+    Number(coexistence.unreadOpacity) > 0,
+  JSON.stringify(coexistence),
+);
+await waitFor(
+  `!document.querySelector('.conv[data-id="sess-A"]')?.classList.contains('conv--busy')`,
+  12000,
+);
+check(
+  "U3 : à la fin du run, « en cours » s'éteint mais « non lu » reste (compteur 3)",
+  await waitFor(`document.querySelector('.conv[data-id="sess-A"]')?.getAttribute('data-unread') === '3'`),
+);
+
+// ── U4) Ouvrir A ÉTEINT l'indicateur (sans exiger de défiler en bas) ──
+await clickConversation("sess-A");
+check(
+  "U4 : ouvrir A éteint son indicateur non lu",
+  await waitFor(`!document.querySelector('.conv[data-id="sess-A"]')?.classList.contains('conv--unread')`),
+);
+const afterU4 = await readUnread();
+const storedAfterU4 = await readStoredUnread();
+check(
+  "U4 : la pastille est vidée (ni compteur, ni texte)",
+  afterU4["sess-A"].count === null && afterU4["sess-A"].badge === "",
+  JSON.stringify(afterU4["sess-A"]),
+);
+check(
+  "U4 : l'état persisté ne contient plus A (localStorage)",
+  !String(storedAfterU4 || "").includes("sess-A"),
+  String(storedAfterU4),
+);
+
+// ── U5) PERSISTANCE au rechargement + pas de double comptage au rejeu ──
+await clickConversation("sess-B");
+await waitFor(`document.querySelector('.conv[data-id="sess-B"]').classList.contains('conv--active')`);
+await controlRun("sess-A", "PERSISTE-APRES-RELOAD", 6, 80);
+check(
+  "U5 : non-lu posé sur A avant rechargement",
+  await waitFor(`document.querySelector('.conv[data-id="sess-A"]')?.getAttribute('data-unread') === '1'`),
+);
+const storedBeforeReload = await readStoredUnread();
+check(
+  "U5 : l'état est PERSISTÉ dans localStorage (`yuki-unread`)",
+  String(storedBeforeReload || "").includes("sess-A"),
+  String(storedBeforeReload),
+);
+// Rechargement RÉEL de la page.
+await navigate(`${base}/`);
+check(
+  "U5 : après RECHARGEMENT, A porte TOUJOURS son non-lu (persistance)",
+  await waitFor(`document.querySelector('.conv[data-id="sess-A"]')?.getAttribute('data-unread') === '1'`),
+  8000,
+);
+const afterReload = await readUnread();
+check(
+  "U5 : le rejeu (snapshot du fil focalisé) ne double PAS le compteur (A reste à 1)",
+  afterReload["sess-A"].count === "1",
+  JSON.stringify(afterReload),
+);
+check(
+  "U5 : la conversation REGARDÉE (B) n'a pas été allumée par le rejeu",
+  afterReload["sess-B"].unread === false,
+  JSON.stringify(afterReload),
+);
+check(
+  "U5 : EXACTEMENT un indicateur non lu dans la liste",
+  (await evaluate(`document.querySelectorAll('.conv--unread').length`)) === 1,
+);
+// Second rechargement : l'état reste STABLE (aucune accumulation).
+await navigate(`${base}/`);
+check(
+  "U5 : un 2e rechargement laisse le compteur STABLE (toujours 1)",
+  await waitFor(`document.querySelector('.conv[data-id="sess-A"]')?.getAttribute('data-unread') === '1'`),
+  8000,
+);
+
+// ── U6) PIÈGE DU REJEU : un vrai `resume` ne fabrique AUCUN non-lu ──
+// On COUPE la WebSocket du côté serveur puis on REFUSE brièvement les
+// reconnexions : pendant la coupure, un tour se TERMINE (trames bufferisées).
+// Quand l'UI se reconnecte, elle envoie un vrai `resume` : le serveur REJOUE ses
+// trames — elles ne doivent RIEN allumer.
+await clickConversation("sess-B");
+await waitFor(`document.querySelector('.conv[data-id="sess-B"]').classList.contains('conv--active')`);
+const beforeReconnect = await readUnread();
+await fetch(`${control}/hold?ms=2400`);
+const wentOffline = await waitFor(`document.querySelector('#connection')?.textContent === 'hors ligne'`, 6000);
+// Pendant la coupure, un tour se TERMINE côté serveur (les trames sont bufferisées).
+await controlRun("sess-B", "REJEU-NE-COMPTE-PAS", 6, 120);
+await sleep(1500);
+const reconnected = await waitFor(
+  `document.querySelector('#connection')?.textContent === 'connecté'`,
+  15000,
+);
+// Le rejeu a été appliqué : le contenu du tour coupé est là.
+const replayApplied = await waitFor(
+  `document.querySelector('#conversation')?.textContent.includes('REJEU-NE-COMPTE-PAS')`,
+  8000,
+);
+const afterReconnect = await readUnread();
+check(
+  "U6 : la connexion a bien été coupée puis rétablie (un `resume` a eu lieu)",
+  wentOffline && reconnected,
+  JSON.stringify({ wentOffline, reconnected, replayApplied }),
+);
+check(
+  "U6 : le rejeu a bien été APPLIQUÉ (le tour manqué est réaffiché)",
+  replayApplied,
+);
+check(
+  "U6 : PIÈGE DU REJEU — aucune conversation allumée par le rejeu (B et A intacts)",
+  afterReconnect["sess-B"].unread === false &&
+    afterReconnect["sess-B"].count === null &&
+    afterReconnect["sess-A"].count === beforeReconnect["sess-A"].count,
+  JSON.stringify({ afterReconnect, beforeReconnect }),
+);
+check(
+  "U6 : le compteur de A n'a PAS été gonflé par les trames rejouées",
+  afterReconnect["sess-A"].count === "1",
+  JSON.stringify(afterReconnect["sess-A"]),
 );
 
 /* ═══════════════════════ Bilan CSP / exceptions ══════════════════════════ */

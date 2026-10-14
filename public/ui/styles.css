@@ -423,6 +423,44 @@ a.pill:hover {
   }
 }
 
+/* « NON LU » — complément du point « en cours », VOLONTAIREMENT différent pour
+ * ne jamais se confondre : ici une PASTILLE COMPTEUR (forme rectangulaire, un
+ * NOMBRE lisible) en HAUT À DROITE de la pastille d'initiales, couleur `--danger` et SANS
+ * animation ; le point « en cours » est un rond ANIMÉ en BAS À DROITE, couleur
+ * d'accent. Position + forme + couleur + animation les distinguent au premier
+ * coup d'œil, y compris quand les DEUX sont vrais simultanément (un fil de fond
+ * travaille ET un message est déjà arrivé). Ancré sur la pastille d'initiales
+ * (toujours affichée), donc VISIBLE AUSSI dans le rail replié de 56 px. */
+.conv__unread {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  box-sizing: border-box;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--danger);
+  /* Texte thémé : `--bg` est sombre sur fonds sombres, clair sur fonds clairs —
+   * il reste donc lisible sur la pastille `--danger` de la famille courante. */
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  border: 2px solid var(--panel);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--bg) 45%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.conv--unread .conv__unread {
+  opacity: 1;
+}
+
 /* ─── Encart agents (bas de la barre latérale) ──────────────────────────── */
 .side-agents {
   flex: 0 0 auto;
@@ -1578,6 +1616,50 @@ h6.md-heading {
 .approval__badge--ok {
   color: var(--ok);
   border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+
+/* Demande de SECRET (`awaiting_secret`) : même fenêtre que la validation, mais
+ * le titre et la couleur la distinguent — c'est une demande de VALEUR, pas une
+ * approbation. */
+.approval__badge--secret {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.approval--secret .approval__title {
+  color: var(--accent);
+}
+
+.approval__secret-hint {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.approval__secret-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.approval__secret-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.approval__secret-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-3);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
 }
 
 .approval__command {

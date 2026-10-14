@@ -23,6 +23,7 @@ import type {
   ExecutionOutcome,
   PendingApprovalView,
   ScreenshotGatewayPort,
+  SecretRequestGatewayPort,
 } from "../../agents/execution.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
@@ -113,6 +114,11 @@ export interface WsTransportOptions {
    * `agents` (comportement inchangé).
    */
   agents?: AgentsGatewayPort;
+  /**
+   * Flux de fourniture de SECRETS (`awaiting_secret`). Absent ⇒ aucune trame
+   * `secret_request` (comportement inchangé).
+   */
+  secrets?: SecretRequestGatewayPort;
 }
 
 interface ClientState {
@@ -265,6 +271,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const pins = options.pins;
   const agentPort = options.agents;
   const screenshots = options.screenshots;
+  const secretPort = options.secrets;
 
   const runT0 = new Map<string, number>();
   const unsubscribeHost = host.subscribeAll((event) => {
@@ -481,6 +488,21 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     broadcastControl(sessionId, { type: "screenshot", screenshot: event.screenshot });
   });
 
+  // ── Demandes de SECRET dans la conversation (`awaiting_secret`) ─────────
+  // Le registre diffuse `requested`/`cleared` ; on route vers les clients de la
+  // SEULE conversation concernée. Trame de CONTRÔLE (aucun `seq`), jamais
+  // bufferisée, donc jamais dans le rejeu, le snapshot, le transcript ou la
+  // mémoire. ⚠️ Ne porte JAMAIS une valeur : seulement les NOMS à fournir.
+  const unsubscribeSecrets = secretPort?.subscribeSecrets((event) => {
+    const sessionId = event.request.sessionId;
+    if (!sessionId) return;
+    if (event.kind === "requested") {
+      broadcastControl(sessionId, { type: "secret_request", request: event.request });
+    } else {
+      broadcastControl(sessionId, { type: "secret_cleared", id: event.request.id });
+    }
+  });
+
   // ── Encart agents de la barre latérale ─────────────────────────────────
   // Diffusion ÉVÉNEMENTIELLE : le registre change (aussi bien depuis /config que
   // depuis l'encart lui-même) et on pousse l'état à TOUS les clients. Aucun
@@ -551,6 +573,64 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   }
 
+  /** Fourniture d'un secret (fenêtre `awaiting_secret`) reçue depuis la conversation. */
+  async function handleSecretSubmit(
+    client: ClientState,
+    message: ClientMessage,
+  ): Promise<void> {
+    if (message.type !== "secret_submit") return;
+    // ⚠️ `message.values` porte les VALEURS : on ne les journalise JAMAIS.
+    if (!secretPort) {
+      sendDirect(client, {
+        type: "error",
+        code: "secret_unavailable",
+        message: "La fourniture de secrets n'est pas disponible.",
+      });
+      return;
+    }
+    let result;
+    try {
+      result = await secretPort.submitSecret(message.id, message.values);
+    } catch (error) {
+      sendDirect(client, {
+        type: "error",
+        code: "secret_failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (!result.ok) {
+      // Demande inconnue/expirée ou valeur refusée : on retire la fenêtre devenue
+      // obsolète puis on renvoie un message HONNÊTE (jamais un mensonge).
+      sendDirect(client, { type: "secret_cleared", id: message.id });
+      sendDirect(client, { type: "error", code: result.code, message: result.message });
+      return;
+    }
+    const sessionId = result.request.sessionId ?? sessionIdFor(client);
+    if (!sessionId) return;
+    broadcastControl(sessionId, { type: "secret_cleared", id: result.request.id });
+    // Résultat de la commande REJOUÉE : affiché à l'humain via la MÊME trame de
+    // résultat éphémère que les validations (déjà masquée à la source).
+    const outcome = result.outcome;
+    broadcastControl(sessionId, {
+      type: "approval_result",
+      result: {
+        id: result.request.id,
+        agentId: outcome.agentId,
+        ...(outcome.agentName ? { agentName: outcome.agentName } : {}),
+        command: outcome.command,
+        status: outcome.status,
+        ok: outcome.status === "completed",
+        exitCode: outcome.exitCode,
+        message: outcome.message,
+        ...(outcome.framed ? { output: outcome.framed } : {}),
+        ...(outcome.durationMs !== undefined ? { durationMs: outcome.durationMs } : {}),
+        ...(outcome.truncated !== undefined ? { truncated: outcome.truncated } : {}),
+        ...(outcome.timedOut !== undefined ? { timedOut: outcome.timedOut } : {}),
+      },
+    });
+  }
+
   /** Trame de contrôle : réutilise le `seq` courant sans le consommer. */
   function sendDirect(client: ClientState, message: ServerMessage): ServerFrame {
     const frame = {
@@ -602,6 +682,23 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     for (const sessionId of sessionIds) {
       for (const approval of approvals.pendingApprovals(sessionId)) {
         sendControl(client, sessionId, { type: "approval", approval });
+      }
+    }
+  }
+
+  /**
+   * Ré-affiche les demandes de SECRET en attente de la conversation du client
+   * (état VIVANT : reconnexion, bascule, création). Une demande fournie ou
+   * expirée n'est plus dans le registre ⇒ elle ne réapparaît pas. ⚠️ Les NOMS
+   * seulement : jamais une valeur.
+   */
+  function sendPendingSecrets(client: ClientState): void {
+    if (!secretPort) return;
+    const sessionIds = new Set(client.subscriptions.keys());
+    if (client.sessionId) sessionIds.add(client.sessionId);
+    for (const sessionId of sessionIds) {
+      for (const request of secretPort.pendingSecrets(sessionId)) {
+        sendControl(client, sessionId, { type: "secret_request", request });
       }
     }
   }
@@ -684,6 +781,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     sendSnapshotForCurrent(client);
     // État VIVANT : les validations en attente de ce fil sont ré-affichées.
     sendPendingApprovals(client);
+    sendPendingSecrets(client);
   }
 
   async function handleResume(client: ClientState, message: ClientMessage): Promise<void> {
@@ -767,6 +865,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     sendAgents(client);
     // Ré-affichage des validations en attente (état vivant, jamais l'historique).
     sendPendingApprovals(client);
+    sendPendingSecrets(client);
   }
 
   /** Bascule vers une autre conversation (abort du run en cours par construction). */
@@ -805,6 +904,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // depuis le transcript du nouveau fil → aucun doublon possible.
     sendSnapshotForCurrent(client);
     sendPendingApprovals(client);
+    sendPendingSecrets(client);
   }
 
   /** Crée une nouvelle conversation et la rend active. */
@@ -827,6 +927,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     await sendSessions(client);
     sendSnapshotForCurrent(client);
     sendPendingApprovals(client);
+    sendPendingSecrets(client);
   }
 
   /** Renomme une conversation (doublons refusés côté hôte). */
@@ -1033,6 +1134,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       case "approval_decision":
         await handleApprovalDecision(client, message);
         return;
+      case "secret_submit":
+        await handleSecretSubmit(client, message);
+        return;
       case "message":
         handleMessage(client, message);
         return;
@@ -1166,6 +1270,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       closed = true;
       unsubscribeHost();
       unsubscribeApprovals?.();
+      unsubscribeSecrets?.();
       unsubscribeAgents?.();
       unsubscribeScreenshots?.();
       tts?.cancelAll();
