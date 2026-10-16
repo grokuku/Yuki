@@ -336,8 +336,36 @@ for (let i = 0; i < 120; i += 1) {
 }
 check("[/] la réponse streamée dépasse la hauteur visible (historique défilable)", overflowed === true);
 
-// L'utilisateur REMONTE : le défilement ne doit PAS être collé de force.
-await evaluate(`(() => { const c = document.getElementById("conversation"); c.scrollTop = 0; })()`);
+// L'utilisateur REMONTE : le défilement ne doit PAS être collé de force pendant
+// le flux.
+//
+// ⚠️ ÉTABLIR L'ÉTAT AVANT DE L'OBSERVER (cause de l'instabilité). Affecter UNE
+// SEULE FOIS `scrollTop = 0` ne suffit pas : l'app apprend le remonté par le
+// `scroll` RÉEL, livré de façon ASYNCHRONE. Comme le flux est DÉJÀ en cours, un
+// delta peut replacer le fil en bas AVANT que ce `scroll` ne soit livré — le
+// remonté est alors purement perdu (l'app n'a jamais rien vu) et le test échoue
+// alors que l'app n'est pas fautive. On attend donc l'ÉTAT RÉEL de l'app (un
+// `scroll` observé avec le fil EN HAUT), en ré-affirmant `scrollTop = 0` tant
+// qu'il n'est pas établi. Délai BORNÉ (3 s) : si l'app refuse de remonter, le
+// contrôle DOIT échouer — on ne masque rien.
+const scrolledUp = await evaluate(`new Promise((resolve) => {
+  const c = document.getElementById("conversation");
+  const height = () => c.scrollHeight - c.clientHeight;
+  if (height() <= 60) { resolve(true); return; }
+  let seen = false;
+  const onScroll = () => { if (c.scrollTop <= 60) seen = true; };
+  c.addEventListener("scroll", onScroll, { passive: true });
+  const kick = setInterval(() => { if (!seen) c.scrollTop = 0; }, 12);
+  const deadline = Date.now() + 3000;
+  const poll = setInterval(() => {
+    if (!seen && Date.now() < deadline) return;
+    clearInterval(kick);
+    clearInterval(poll);
+    c.removeEventListener("scroll", onScroll);
+    resolve(seen);
+  }, 12);
+})`, true);
+
 let stayedUp = true;
 let sawStreamingAfterScroll = false;
 for (let i = 0; i < 40; i += 1) {
@@ -352,8 +380,8 @@ for (let i = 0; i < 40; i += 1) {
 }
 check(
   "[/] utilisateur remonté : le bas n'est PAS collé de force pendant le flux",
-  stayedUp === true && sawStreamingAfterScroll === true,
-  `stayedUp=${stayedUp} streamingAfterScroll=${sawStreamingAfterScroll}`,
+  scrolledUp === true && stayedUp === true && sawStreamingAfterScroll === true,
+  `scrolledUp=${scrolledUp} stayedUp=${stayedUp} streamingAfterScroll=${sawStreamingAfterScroll}`,
 );
 
 // Attendre la fin du run.

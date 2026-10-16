@@ -6,6 +6,10 @@
  * chargement). Un serveur de CONTRÔLE (port séparé, hors CSP) permet de :
  *   - lancer un tour qui STREAME un long texte (`/stream?chars=&delayMs=`) ;
  *   - lancer un tour court (`/turn?text=`) ;
+ *   - ARMER un tour SANS l'émettre (`/arm?chars=&delayMs=` / `/arm-text?text=`) :
+ *     le script est mis en file et sera consommé par le PROCHAIN envoi VENANT DE
+ *     L'UI (`sendMessage`), ce qui permet de mesurer le défilement d'un envoi
+ *     RÉEL de l'utilisateur puis de sa réponse ;
  *   - lire l'état du fil et le transcript serveur (`/state`).
  *
  * Sert à MESURER : apparition/disparition du bouton (seuil), retour en bas au
@@ -181,6 +185,21 @@ const control = createHttpServer((req, res) => {
     });
     const handle = host.send(SESSION_ID, "Question courte ?");
     return send({ ok: true, runId: handle.runId });
+  }
+  // ARMER sans émettre : le script en file sera consommé par le prochain envoi
+  // VENANT DE L'UI (le gateway appelle `host.send` sur la trame `message`).
+  if (url.pathname === "/arm") {
+    const chars = Number.parseInt(url.searchParams.get("chars") ?? "4000", 10);
+    const delayMs = Number.parseInt(url.searchParams.get("delayMs") ?? "5", 10);
+    host.pushScript({ steps: streamScript(chars, delayMs) });
+    return send({ ok: true });
+  }
+  if (url.pathname === "/arm-text") {
+    const text = url.searchParams.get("text") ?? "ok";
+    host.pushScript({
+      steps: [{ kind: "delta", channel: "content", text, delayMs: 0 }],
+    });
+    return send({ ok: true });
   }
   if (url.pathname === "/state") {
     const state = host.getState(SESSION_ID);

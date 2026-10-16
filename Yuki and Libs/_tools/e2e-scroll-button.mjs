@@ -12,6 +12,9 @@
  *   - le bouton ne RECOUVRE PAS la fenêtre de validation (rectangles), même en
  *     écran étroit (600×800, barre latérale en rail) ;
  *   - le libellé est FRANÇAIS (aria-label + title).
+ *   - ENVOI D'UN MESSAGE (long comme court) : on revient EN BAS et la RÉPONSE
+ *     qui suit est SUIVIE, même quand la zone de saisie a grandi (message long)
+ *     ou qu'on lisait plus haut — sans clignotement du bouton.
  * ZÉRO violation CSP / connexion / exception JS.
  *
  * Usage : node "/projects/Yuki/Yuki and Libs/_tools/e2e-scroll-button.mjs"
@@ -455,6 +458,133 @@ check(
   narrowSettled,
   `scrollTop=${Math.round((await state()).scrollTop)}`,
 );
+
+/* ═ 7) ENVOI UTILISATEUR : on reste EN BAS (message LONG comme COURT) ═══
+ * Reproduction du bug signalé : un message LONG fait grandir la ZONE DE SAISIE.
+ * #conversation RÉTRÉCIT alors sans qu'aucun `scroll` n'ait lieu : la distance au
+ * fond dépasse le seuil (24 px) alors que l'utilisateur n'a JAMAIS remonté.
+ * L'envoi doit donc ramener en bas et ré-épingler SANS dépendre du seuil, et la
+ * réponse qui suit doit être SUIVIE. Cas ① uniquement : le cas ② (« il lit plus
+ * haut, un message arrive ») reste couvert par l'étape 5. */
+await send("Emulation.setDeviceMetricsOverride", {
+  width: 1280,
+  height: 900,
+  deviceScaleFactor: 1,
+  mobile: false,
+});
+await navigate(`${server.base}/`);
+await waitFor(`document.querySelectorAll('#conversation .message').length >= 8`);
+
+/** Saisit `text` dans #input comme un vrai utilisateur (déclenche la croissance). */
+const typeIntoInput = (text) =>
+  evaluate(`(() => {
+    const i = document.querySelector('#input');
+    i.focus();
+    i.value = ${JSON.stringify(text)};
+    i.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+/** Envoie par Entrée (le vrai chemin de `sendMessage`, pas un clic simulé). */
+const pressEnter = () =>
+  evaluate(`(() => {
+    const i = document.querySelector('#input');
+    i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  })()`);
+
+await evaluate(`(() => { const c = document.querySelector('#conversation'); c.scrollTop = c.scrollHeight; })()`);
+await sleep(200);
+const beforeType = await state();
+check(
+  "ENVOI : on part bien du FOND avant de taper",
+  beforeType.distance <= 2,
+  `distance=${Math.round(beforeType.distance)} px`,
+);
+
+const LONG_MESSAGE =
+  "Bonjour, je voudrais que tu m'expliques en détail comment fonctionne le défilement automatique du fil de discussion. ".repeat(6);
+await typeIntoInput(LONG_MESSAGE);
+await sleep(180);
+const typedLong = await state();
+check(
+  "message LONG : la zone de saisie grandit et gonfle la distance au fond (cause du bug)",
+  typedLong.distance > 24,
+  `distance=${Math.round(typedLong.distance)} px ; hauteur saisie=${Math.round(typedLong.composerRect.height)} px`,
+);
+
+await control("/arm?chars=3000&delayMs=4");
+await pressEnter();
+await sleep(150);
+const afterLongSend = await state();
+check(
+  "ENVOI (message LONG) : le fil est ramené EN BAS (distance ≈ 0, indépendant du seuil)",
+  afterLongSend.distance <= 2,
+  `distance=${Math.round(afterLongSend.distance)} px (avant l'envoi : ${Math.round(typedLong.distance)} px)`,
+);
+check(
+  "ENVOI : le bouton « revenir en bas » reste INVISIBLE (on est au fond)",
+  afterLongSend.btnHidden === true,
+  `hidden=${afterLongSend.btnHidden}`,
+);
+
+/* Échantillonnage pendant la RÉPONSE : le fil doit SUIVRE et le bouton ne doit
+ * pas clignoter. */
+const sendSamples = [];
+const sendT0 = Date.now();
+while (Date.now() - sendT0 < 2500) {
+  sendSamples.push(await state());
+  await sleep(60);
+}
+const sendTransitions = sendSamples.filter(
+  (s, i) => i > 0 && s.btnHidden !== sendSamples[i - 1].btnHidden,
+).length;
+const maxSendDistance = Math.max(...sendSamples.map((s) => s.distance));
+check(
+  "la RÉPONSE qui arrive est SUIVIE : le fil reste EN BAS (distance ≈ 0 tout du long)",
+  maxSendDistance <= 2,
+  `${sendSamples.length} mesures ; distance max=${Math.round(maxSendDistance)} px`,
+);
+check(
+  "le bouton ne CLIGNOTE pas pendant la réponse qui suit l'envoi",
+  sendTransitions === 0 && sendSamples.every((s) => s.btnHidden === true),
+  `${sendTransitions} transition(s) ; hidden=${sendSamples[sendSamples.length - 1].btnHidden}`,
+);
+await shot("scroll-06-after-long-send");
+await waitFor(`document.querySelector('#session-state').textContent === 'idle'`, 8000);
+
+/* Message COURT : même garantie. */
+await evaluate(`(() => { const c = document.querySelector('#conversation'); c.scrollTop = c.scrollHeight; })()`);
+await sleep(120);
+await typeIntoInput("Merci, c'est court.");
+await control("/arm-text?text=Réponse à un message court.");
+await pressEnter();
+await sleep(150);
+const afterShortSend = await state();
+check(
+  "ENVOI (message COURT) : même garantie (distance ≈ 0, bouton invisible)",
+  afterShortSend.distance <= 2 && afterShortSend.btnHidden === true,
+  `distance=${Math.round(afterShortSend.distance)} px ; hidden=${afterShortSend.btnHidden}`,
+);
+await waitFor(`document.querySelector('#session-state').textContent === 'idle'`, 8000);
+
+/* Cas ① même quand l'utilisateur lisait PLUS HAUT : il vient d'AGIR ⇒ en bas. */
+await evaluate(`(() => { const c = document.querySelector('#conversation'); c.scrollTop = 0; })()`);
+await sleep(150);
+const readingUp = await state();
+check(
+  "remonté : le fil n'est plus épinglé (distance > seuil)",
+  readingUp.distance > 24,
+  `distance=${Math.round(readingUp.distance)} px`,
+);
+await typeIntoInput("Je reprends la main.");
+await control("/arm-text?text=Réponse après une remontée.");
+await pressEnter();
+await sleep(150);
+const sendWhileReading = await state();
+check(
+  "ENVOI alors qu'on lisait PLUS HAUT : on REVIENT en bas (un envoi ⇒ on va en bas)",
+  sendWhileReading.distance <= 2 && sendWhileReading.btnHidden === true,
+  `distance=${Math.round(sendWhileReading.distance)} px ; hidden=${sendWhileReading.btnHidden}`,
+);
+await waitFor(`document.querySelector('#session-state').textContent === 'idle'`, 8000);
 
 await stopPage();
 server.proc.kill("SIGTERM");

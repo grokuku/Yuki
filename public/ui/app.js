@@ -629,6 +629,15 @@ function clearEmpty() {
  * On ne colle en bas QUE si l'utilisateur y était DÉJÀ avant la mutation.
  * Sinon, remonter dans l'historique devient impossible : chaque delta le
  * ramènerait de force en bas. Le seuil tolère un léger décalage (arrondis).
+ *
+ * ⚠️ L'épinglage est un ÉTAT STICKY, réévalué UNIQUEMENT sur un `scroll` RÉEL.
+ * La distance au fond NE SUFFIT PAS à décider : elle grandit aussi SANS que
+ * l'utilisateur bouge, chaque fois que #conversation RÉTRÉCIT — la zone de
+ * saisie grandit quand on tape un message LONG, et l'indicateur d'attente
+ * s'affiche. Mesurer à ce moment-là déclarerait à tort le fil « non épinglé »
+ * alors que personne n'a remonté (bug « le scroll auto se désactive quand
+ * j'envoie un long message »). Un défilement de l'utilisateur, lui, émet un
+ * `scroll` : c'est le SEUL signal fiable.
  */
 const SCROLL_PIN_THRESHOLD_PX = 24;
 /** Durée (ms) du maintien en bas après un clic « revenir en bas » (le contenu
@@ -642,9 +651,26 @@ let scrollButton = null;
 let stickToBottom = false;
 let stickToBottomTimer = null;
 
-function isConversationPinned() {
+/** État d'épinglage STICKY (voir la règle en tête de section). */
+let conversationPinned = true;
+
+/** Distance (px) au fond du fil ; 0 = collé en bas. */
+function distanceFromBottom() {
   const el = els.conversation;
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_PIN_THRESHOLD_PX;
+  return el.scrollHeight - el.scrollTop - el.clientHeight;
+}
+
+function isConversationPinned() {
+  return conversationPinned;
+}
+
+/** Ré-évalue l'épinglage depuis la distance RÉELLE — appelé sur les `scroll`
+ * (geste utilisateur ou défilement programmatique), JAMAIS après une mutation. */
+function refreshPinnedFromScroll() {
+  // Retour en bas FLUIDE en cours : les positions intermédiaires de l'animation
+  // sont loin du fond ; les mesurer dé-épinglerait à tort avant stabilisation.
+  if (stickToBottom) return;
+  conversationPinned = distanceFromBottom() <= SCROLL_PIN_THRESHOLD_PX;
 }
 
 /** `true` si le poste demande à réduire les animations (accessibilité). */
@@ -672,6 +698,7 @@ function scrollConversationToEnd() {
  * encore). Réutilise le défilement existant (`scrollConversationToEnd`).
  */
 function goToEnd() {
+  conversationPinned = true;
   stickToBottom = true;
   scrollConversationToEnd();
   if (stickToBottomTimer) clearTimeout(stickToBottomTimer);
@@ -679,6 +706,20 @@ function goToEnd() {
     stickToBottom = false;
     stickToBottomTimer = null;
   }, STICK_TO_BOTTOM_MS);
+}
+
+/**
+ * L'utilisateur VIENT D'AGIR : il envoie un message. On lui montre TOUJOURS le
+ * fond et on RÉ-ÉPINGLE — SANS dépendre d'un seuil de distance. C'est la règle
+ * « un envoi ⇒ on va en bas » : quelle que soit la longueur du message (et donc
+ * la taille de la zone de saisie), il veut voir sa bulle ET la réponse.
+ * Distinct du cas « un message arrive alors qu'il lit plus haut » (on ne bouge
+ * PAS) : ici l'utilisateur est l'AUTEUR du geste.
+ */
+function pinAfterUserSend() {
+  conversationPinned = true;
+  els.conversation.scrollTop = els.conversation.scrollHeight;
+  if (scrollButton) scrollButton.refresh();
 }
 
 /** Geste utilisateur (molette, toucher, clavier) : il reprend la main. */
@@ -693,13 +734,21 @@ function cancelStickToBottom() {
 
 function pinIfNeeded(pinned) {
   // Pendant un retour en bas, on SUIT le fond (le contenu grandit) au lieu de
-  // mesurer un `pinned` devenu faux le temps de l'animation.
+  // mesurer un `pinned` devenu faux le temps de l'animation. Sinon, l'état
+  // STICKY fait foi : il ne dépend pas de la croissance du contenu.
   if (stickToBottom) scrollConversationToEnd();
-  else if (pinned) els.conversation.scrollTop = els.conversation.scrollHeight;
+  else if (pinned || conversationPinned)
+    els.conversation.scrollTop = els.conversation.scrollHeight;
   // Seul point de passage après mutation : la visibilité du bouton y est remise
   // à jour (masqué en bas, révélé dès qu'on remonte).
   if (scrollButton) scrollButton.refresh();
 }
+
+/* L'épinglage se réévalue sur chaque `scroll` RÉEL : un geste de l'utilisateur
+ * (ou un défilement programmatique) qui éloigne du fond dé-épingle ; revenir au
+ * fond ré-épingle. Enregistré AVANT le bouton pour que `isPinned()` voie l'état
+ * à jour (le bouton, lui, rafraîchit sur `requestAnimationFrame`). */
+els.conversation.addEventListener("scroll", refreshPinnedFromScroll, { passive: true });
 
 /* ─── Bouton « revenir en bas » (uniquement si on a remonté le fil) ──────────
  * Flottant, discret, il n'apparaît qu'au-delà du seuil d'apparition et ramène en
@@ -1489,6 +1538,10 @@ function sendMessage() {
   // chronologique (le message a été envoyé avant la fin de la réponse).
   const streamingAssistant = currentAssistant;
   appendMessage("user", text, undefined, sentAt, streamingAssistant);
+  // L'utilisateur vient d'AGIR : on va en bas et on ré-épingle EXPLICITEMENT,
+  // indépendamment du seuil (un message LONG fait grandir la zone de saisie et
+  // gonfle la distance au fond sans que l'utilisateur ait remonté).
+  pinAfterUserSend();
   if (!streamingAssistant) {
     currentAssistant = null;
     currentRenderer = null;
