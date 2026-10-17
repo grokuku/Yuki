@@ -14,8 +14,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { createRecapService } from "../../../src/recap/index.js";
+import { createRecapService, partHeading } from "../../../src/recap/index.js";
 import type { RecapGenerator, RecapInput } from "../../../src/recap/index.js";
+import type { TranscriptEntry } from "../../../src/pi/types.js";
+import type { ServerFrame } from "../../../src/gateway/ws/protocol.js";
 import type { TtsPipelineDeps } from "../../../src/tts/index.js";
 import type { Voice } from "../../../src/tts/types.js";
 import { TestClient, startHarness } from "./harness.js";
@@ -80,6 +82,7 @@ function makeGenerator(seen: RecapInput[]): RecapGenerator {
         "- Décision : la clé du coffre reste en 0600.\n" +
         "- Chiffrement : AES-256-GCM, 4096 bits.",
       messageCount: input.messages.length,
+      parts: 1,
     };
   };
 }
@@ -298,6 +301,75 @@ describe("ws — conversation dédiée (aperçu puis création)", () => {
       );
       if (error.type !== "error") throw new Error("error attendu");
       expect(error.code).toBe("recap_not_found");
+      await client.close();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("un fil VOLUMINEUX est DÉCOUPÉ : progression visible + récapitulatif complet (joints intacts)", async () => {
+    // 30 messages de 10 000 car. : plus long que la limite d'un appel.
+    const long: TranscriptEntry[] = Array.from({ length: 30 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      text:
+        `${index === 0 ? "FAIT-DEBUT " : index === 29 ? "FAIT-FIN " : ""}` +
+        `message ${index} ` +
+        "x".repeat(10_000),
+    }));
+    const prompts: string[] = [];
+    // VRAI service : c'est LUI qui découpe et concatène.
+    const service = createRecapService(async (prompt) => {
+      prompts.push(prompt);
+      const found = ["FAIT-DEBUT", "FAIT-FIN"].filter((f) => prompt.includes(f));
+      return `TITRE: Suite\n=== RÉCAPITULATIF ===\nPART: ${found.join(",") || "aucun"}`;
+    });
+    const harness = await startHarness({
+      recap: service,
+      sessions: [{ id: "big", file: "/fake/big.jsonl", title: "Longue", transcript: long }],
+    });
+    try {
+      const client = await TestClient.connect(harness.url);
+      await connectAndSeed(client);
+      // Bascule vers la conversation volumineuse.
+      client.send({ type: "switch", sessionId: "big" });
+      await client.waitFor((frame) => frame.type === "snapshot" && frame.transcript.length >= 30);
+
+      client.send({ type: "recap_preview", sessionId: "big", subject: "", requestId: "RB" });
+      const ready = await client.waitFor(
+        (frame) => frame.type === "recap_ready" && frame.requestId === "RB",
+        10_000,
+      );
+      if (ready.type !== "recap_ready") throw new Error("recap_ready attendu");
+
+      // Plus AUCUN refus : le fil volumineux est traité en plusieurs parties.
+      expect(ready.parts).toBeGreaterThan(1);
+      expect(prompts).toHaveLength(ready.parts);
+
+      // Le fait de la 1re tranche ET celui de la dernière sont TOUS DEUX présents.
+      expect(ready.recap).toContain("PART: FAIT-DEBUT");
+      expect(ready.recap).toContain("PART: FAIT-FIN");
+
+      // L'ordre des parties est respecté.
+      const positions = Array.from({ length: ready.parts }, (_, i) =>
+        ready.recap.indexOf(partHeading(i + 1, ready.parts)),
+      );
+      for (const position of positions) expect(position).toBeGreaterThan(-1);
+      for (let i = 1; i < positions.length; i += 1) {
+        expect(positions[i]).toBeGreaterThan(positions[i - 1]!);
+      }
+
+      // PROGRESSION VISIBLE : une trame par partie, dans l'ordre.
+      const progress = client.frames.filter(
+        (frame): frame is Extract<ServerFrame, { type: "recap_progress" }> =>
+          frame.type === "recap_progress" && frame.requestId === "RB",
+      );
+      expect(progress.map((frame) => frame.part)).toEqual(
+        Array.from({ length: ready.parts }, (_, i) => i + 1),
+      );
+      for (const frame of progress) {
+        expect(frame.parts).toBe(ready.parts);
+      }
+
       await client.close();
     } finally {
       await harness.close();

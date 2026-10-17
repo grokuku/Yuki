@@ -46,11 +46,29 @@ export const TITLE_PREFIX = "TITRE:";
 export const OUTPUT_SEPARATOR = "=== RÉCAPITULATIF ===";
 
 /**
- * Plafond de l'ENTRÉE du récapitulatif (caractères de conversation). GÉNÉREUX à
- * dessein : c'est le sujet qui prime. Au-delà, on REFUSE (jamais de troncature
- * silencieuse) — sans créer aucune conversation.
+ * Plafond de l'ENTRÉE d'UN SEUL appel de récapitulation (caractères de
+ * conversation). GÉNÉREUX à dessein : c'est le sujet qui prime. Une portion qui
+ * le dépasse est DÉCOUPÉE en tranches (`splitMessagesForRecap`) — jamais
+ * tronquée en silence. Seul un message ISOLÉ plus long que ce plafond (ou un
+ * nombre de tranches au-delà de `RECAP_MAX_PARTS`) provoque un refus honnête.
  */
 export const RECAP_INPUT_MAX_CHARS = 240_000;
+
+/**
+ * Budget VISÉ par tranche (caractères de conversation) quand un fil dépasse la
+ * capacité d'un appel. STRICTEMENT inférieur à `RECAP_INPUT_MAX_CHARS` : chaque
+ * tranche passe donc le garde-fou d'entrée. Les tranches sont découpées PAR
+ * MESSAGES (jamais au milieu d'un message ni d'un échange) et leurs
+ * récapitulatifs sont CONCATÉNÉS dans l'ordre — jamais re-synthétisés.
+ */
+export const RECAP_CHUNK_MAX_CHARS = 200_000;
+
+/**
+ * Nombre MAXIMAL de tranches (donc d'appels modèle) pour un récapitulatif. Au
+ * delà, on REFUSE honnêtement (aucune troncature, aucune conversation créée) en
+ * proposant une alternative RÉELLE et DISPONIBLE.
+ */
+export const RECAP_MAX_PARTS = 12;
 
 /** Longueur maximale du titre proposé, avant repli (caractères). */
 export const RECAP_TITLE_MAX_CHARS = 80;
@@ -90,6 +108,14 @@ export interface RecapSourceMessage {
   timestamp?: number;
 }
 
+/** Position d'une tranche dans un récapitulatif découpé. */
+export interface RecapPartPosition {
+  /** Numéro de la tranche (1-based). */
+  index: number;
+  /** Nombre total de tranches. */
+  total: number;
+}
+
 /** Entrée de `buildGeneratorPrompt`. */
 export interface BuildGeneratorPromptInput {
   /** Titre de la conversation d'origine (jamais vide : repli géré en amont). */
@@ -102,6 +128,11 @@ export interface BuildGeneratorPromptInput {
   fromIndex: number;
   /** Messages retenus, dans l'ordre chronologique. */
   messages: readonly RecapSourceMessage[];
+  /**
+   * Position de la tranche quand le fil a été DÉCOUPÉ (> 1 tranche). Absent
+   * pour un appel unique : rien ne change alors dans le prompt.
+   */
+  part?: RecapPartPosition;
 }
 
 const ROLE_LABEL: Record<RecapSourceRole, string> = {
@@ -136,6 +167,84 @@ export function measureMessages(messages: readonly RecapSourceMessage[]): number
   return total;
 }
 
+/** En-tête d'une partie dans un récapitulatif découpé (« — Partie 1/3 — »). */
+export function partHeading(index: number, total: number): string {
+  return `— Partie ${index}/${total} —`;
+}
+
+/**
+ * Découpe une portion en TRANCHES CONTIGUËS par messages, chacune mesurant au
+ * plus `budget` caractères (sauf un message isolé plus long, qu'on ne peut pas
+ * couper sans rompre son sens).
+ *
+ * ⚠️ Deux règles de bornes :
+ *   - jamais au milieu d'un message (on coupe ENTRE deux messages) ;
+ *   - jamais au milieu d'un ÉCHANGE : une tranche ne se termine pas sur un
+ *     message `user` dont la réponse `assistant` suit, tant que la paire tient
+ *     sous le plafond d'appel. Seule une paire elle-même plus longue que le
+ *     plafond est coupée entre ses deux messages (jamais dans un message).
+ *
+ * L'ensemble des tranches couvre EXACTEMENT la portion, dans l'ordre : aucune
+ * perte, aucun recouvrement.
+ */
+export function splitMessagesForRecap(
+  messages: readonly RecapSourceMessage[],
+  budget: number = RECAP_CHUNK_MAX_CHARS,
+): RecapSourceMessage[][] {
+  const limit = budget > 0 ? budget : RECAP_CHUNK_MAX_CHARS;
+  const count = messages.length;
+  const parts: RecapSourceMessage[][] = [];
+  let start = 0;
+  while (start < count) {
+    let end = start;
+    let total = 0;
+    // Accumule tant que la tranche tient dans le budget (un message isolé
+    // toujours inclus, même s'il dépasse à lui seul : on ne le coupe JAMAIS).
+    while (end < count) {
+      const size = (messages[end]?.text.length ?? 0) + 1;
+      if (end > start && total + size > limit) break;
+      total += size;
+      end += 1;
+    }
+    if (end < count) {
+      // Ne pas couper une paire question → réponse : si la tranche se termine
+      // sur un `user` dont la réponse `assistant` suit, on garde la paire dans
+      // la MÊME tranche. On ne le fait QUE si la paire tient sous le plafond
+      // d'appel ; sinon on repousse la question vers la tranche suivante, et en
+      // dernier recours (paire elle-même insécable) on coupe ENTRE les deux
+      // messages — jamais au milieu de l'un d'eux, et rien n'est perdu puisque
+      // les tranches sont concaténées dans l'ordre.
+      if (messages[end - 1]?.role === "user" && messages[end]?.role === "assistant") {
+        const withReply = messages.slice(start, end + 1);
+        if (measureMessages(withReply) <= RECAP_INPUT_MAX_CHARS) {
+          end += 1;
+        } else if (end - 1 > start) {
+          end -= 1;
+        }
+      }
+    }
+    parts.push(messages.slice(start, end));
+    start = end;
+  }
+  return parts;
+}
+
+/**
+ * Assemble les récapitulatifs de tranches DANS L'ORDRE, chaque partie SIGNALÉE
+ * (« — Partie i/N — ») pour que l'humain se repère.
+ *
+ * ⚠️ C'est une CONCATÉNATION — JAMAIS une re-synthèse (« résumer les résumés »
+ * perdrait de l'information à chaque étage, exactement ce que l'utilisateur
+ * refuse). Une seule partie ⇒ corps inchangé (aucun en-tête parasite).
+ */
+export function joinRecapParts(bodies: readonly string[]): string {
+  const cleaned = bodies.map((body) => (typeof body === "string" ? body.trim() : ""));
+  if (cleaned.length <= 1) return cleaned[0] ?? "";
+  return cleaned
+    .map((body, index) => `${partHeading(index + 1, cleaned.length)}\n${body}`)
+    .join("\n\n");
+}
+
 /**
  * Construit l'instruction (prompt utilisateur) de la session éphémère de
  * récapitulation. Le rappel d'exhaustivité est EXPLICITE : il ne doit jamais
@@ -143,9 +252,11 @@ export function measureMessages(messages: readonly RecapSourceMessage[]): number
  */
 export function buildGeneratorPrompt(input: BuildGeneratorPromptInput): string {
   const subject = normalizeSubject(input.subject);
-  const scope = input.wholeThread
-    ? "l'INTÉGRALITÉ de la conversation"
-    : `la conversation À PARTIR du message n°${input.fromIndex + 1} (inclus) jusqu'à la fin`;
+  const scope = input.part
+    ? `la PARTIE ${input.part.index}/${input.part.total} de la conversation (fil découpé)`
+    : input.wholeThread
+      ? "l'INTÉGRALITÉ de la conversation"
+      : `la conversation À PARTIR du message n°${input.fromIndex + 1} (inclus) jusqu'à la fin`;
   const focus =
     subject.length > 0
       ? [
@@ -172,14 +283,29 @@ export function buildGeneratorPrompt(input: BuildGeneratorPromptInput): string {
     "- Si une information est ambiguë dans la source, restitue l'ambiguïté : ne tranche pas à la place des auteurs.",
     "- Tu peux structurer (titres, listes) : c'est souhaitable, tant que RIEN n'est omis.",
     "- Ne t'arrête pas par souci de concision : un long récapitulatif fidèle vaut mieux qu'un court récapitulatif incomplet.",
+  ];
+  if (input.part) {
+    parts.push(
+      "",
+      `⚠️ DÉCOUPAGE : cette portion est la PARTIE ${input.part.index}/${input.part.total} d'une ` +
+        "conversation découpée pour être récapitulée SANS RIEN PERDRE (le fil est trop " +
+        "volumineux pour un seul appel). Récapitule EXHAUSTIVEMENT CETTE PARTIE SEULE, comme " +
+        "si c'était toute la conversation. N'ajoute AUCUN en-tête « Partie … » : la mise en " +
+        "forme des parties est ajoutée automatiquement lors de l'assemblage final. N'essaie " +
+        "PAS de résumer ni de deviner les parties que tu ne vois pas.",
+    );
+  }
+  parts.push(
     "",
     "FORMAT DE RÉPONSE STRICT (aucun autre texte) :",
     `1) Première ligne : \`${TITLE_PREFIX} <titre court (≤ ${RECAP_TITLE_MAX_CHARS} caractères) décrivant le SUJET>\``,
     `2) Puis une ligne contenant EXACTEMENT : ${OUTPUT_SEPARATOR}`,
     "3) Puis le récapitulatif EXHAUSTIF (ta réponse complète).",
     "",
-    "=== CONVERSATION SOURCE ===",
-  ];
+    input.part
+      ? `=== CONVERSATION SOURCE — PARTIE ${input.part.index}/${input.part.total} ===`
+      : "=== CONVERSATION SOURCE ===",
+  );
   input.messages.forEach((message, index) => {
     parts.push(
       "",

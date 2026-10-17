@@ -217,6 +217,21 @@ export type ServerMessage =
       subject?: string;
       /** Nombre de messages pris en compte. */
       messageCount: number;
+      /** Nombre de parties (1 = appel unique ; > 1 = conversation découpée). */
+      parts: number;
+    }
+  | {
+      /**
+       * PROGRESSION d'un récapitulatif DÉCOUPÉ (trame de CONTRÔLE, aucun `seq`
+       * consommé, jamais bufferisée) : signale la partie EN COURS pour que
+       * l'attente reste VISIBLE (plusieurs appels modèle = plusieurs minutes).
+       */
+      type: "recap_progress";
+      requestId: string;
+      /** Numéro (1-based) de la partie en cours. */
+      part: number;
+      /** Nombre total de parties. */
+      parts: number;
     }
   | {
       /**

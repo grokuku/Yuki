@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isRecapFrame,
+  recapProgressLabel,
   RECAP_TRIGGER_LABEL,
   validatePreview,
 } from "../../public/ui/recap-dedicated.js";
@@ -24,6 +25,7 @@ describe("isRecapFrame — corrélation par requestId", () => {
   it("ne retient QUE la requête en attente", () => {
     const pending = { requestId: "R1", phase: "preview" };
     expect(isRecapFrame({ type: "recap_ready", requestId: "R1" }, pending)).toBe(true);
+    expect(isRecapFrame({ type: "recap_progress", requestId: "R1" }, pending)).toBe(true);
     expect(isRecapFrame({ type: "error", requestId: "R1" }, pending)).toBe(true);
     expect(isRecapFrame({ type: "recap_ready", requestId: "R2" }, pending)).toBe(false);
   });
@@ -32,6 +34,18 @@ describe("isRecapFrame — corrélation par requestId", () => {
     expect(isRecapFrame({ type: "recap_ready", requestId: "R1" }, null)).toBe(false);
     expect(isRecapFrame({ type: "recap_ready" }, { requestId: "R1", phase: "preview" })).toBe(false);
     expect(isRecapFrame(null, { requestId: "R1", phase: "preview" })).toBe(false);
+  });
+});
+
+describe("recapProgressLabel — attente VISIBLE d'une conversation volumineuse", () => {
+  it("annonce la partie en cours et le nombre d'appels", () => {
+    const label = recapProgressLabel(2, 5);
+    expect(label).toContain("2/5");
+    expect(label).toContain("plusieurs minutes");
+  });
+
+  it("tolère des valeurs absentes (jamais de NaN affiché)", () => {
+    expect(recapProgressLabel(undefined, undefined)).not.toContain("NaN");
   });
 });
 
@@ -79,6 +93,13 @@ describe("garde-fous statiques de la source", () => {
     const generic = app.indexOf('if (type === "welcome")');
     expect(guarded).toBeGreaterThan(-1);
     expect(generic).toBeGreaterThan(guarded);
+  });
+
+  it("la PROGRESSION d'un fil découpé met à jour l'écran d'attente existant", () => {
+    // On réutilise le mécanisme d'attente (`busy.set`), sans 2ᵉ système.
+    expect(module).toContain('frame.type === "recap_progress"');
+    expect(module).toContain("busy.set(");
+    expect(module).toContain("recapProgressLabel");
   });
 
   it("le rendu du transcript reconnaît le rôle `recap`", () => {

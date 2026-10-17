@@ -31,6 +31,19 @@ export const RECAP_PREVIEW_TITLE = "Aperçu du récapitulatif";
 /** Texte d'attente pendant la génération. */
 export const RECAP_BUSY_LABEL = "Récapitulatif en cours… (cela peut prendre un moment)";
 
+/**
+ * Libellé d'attente d'un récapitulatif DÉCOUPÉ (plusieurs appels modèle). Rend
+ * l'attente VISIBLE sans laisser croire que c'est planté.
+ */
+export function recapProgressLabel(part, total) {
+  const p = Number.isFinite(part) ? part : 0;
+  const t = Number.isFinite(total) ? total : 0;
+  return (
+    `Récapitulatif en cours… partie ${p}/${t} — conversation volumineuse : ` +
+    "plusieurs appels au modèle sont nécessaires, cela peut prendre plusieurs minutes."
+  );
+}
+
 /** Libellé du bouton qui crée la conversation. */
 export const RECAP_CREATE_LABEL = "Créer la conversation";
 
@@ -155,8 +168,9 @@ export function createRecapDedicated({
     info.className = "recap-modal__info";
     const source = frame.originTitle ? `depuis « ${frame.originTitle} »` : "depuis cette conversation";
     const count = Number.isFinite(frame.messageCount) ? ` (${frame.messageCount} messages)` : "";
+    const parts = Number.isFinite(frame.parts) && frame.parts > 1 ? ` en ${frame.parts} parties assemblées` : "";
     info.textContent =
-      `Récapitulatif généré ${source}${count}. ` +
+      `Récapitulatif généré ${source}${count}${parts}. ` +
       "Relis-le et corrige-le si nécessaire AVANT de créer la conversation : " +
       "c'est lui qui servira de point de départ.";
     wrap.append(info);
@@ -252,6 +266,13 @@ export function createRecapDedicated({
         return true;
       }
       openPreview(frame);
+      return true;
+    }
+    if (frame.type === "recap_progress") {
+      // Fil découpé : on met à jour l'écran d'attente (le busy reste ouvert).
+      if (pending && pending.phase === "preview" && busy && typeof busy.set === "function") {
+        busy.set(recapProgressLabel(frame.part, frame.parts));
+      }
       return true;
     }
     if (frame.type === "error") {

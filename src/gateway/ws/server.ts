@@ -1133,6 +1133,18 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         fromIndex: 0,
         wholeThread: true,
         messages,
+        // Progression VISIBLE : un fil découpé = plusieurs appels modèle, donc
+        // plusieurs minutes d'attente. On signale la partie en cours par une
+        // trame de CONTRÔLE (jamais bufferisée), sans créer un 2ᵉ système.
+        onProgress: (progress) => {
+          if (progress.parts <= 1) return;
+          sendDirect(client, {
+            type: "recap_progress",
+            requestId: message.requestId,
+            part: progress.part,
+            parts: progress.parts,
+          });
+        },
       });
       pruneRecapPreviews();
       recapPreviews.set(message.requestId, {
@@ -1154,6 +1166,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         originSessionId: message.sessionId,
         ...(subject.length > 0 ? { subject } : {}),
         messageCount: result.messageCount,
+        parts: result.parts,
       });
     } catch (error) {
       const recapError = toRecapError(error);
