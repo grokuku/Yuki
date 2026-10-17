@@ -10,15 +10,25 @@ import (
 
 // Capabilities déclarées par l'agent au `hello`.
 //
-// ⚠️ `exec`, `shell` et `classify` sont TOUJOURS déclarées (elles décrivent des
-// capacités compilées dans le binaire). `screenshot` est CONDITIONNELLE : elle
-// n'est ajoutée que si un écran ET un outil de capture sont réellement présents
-// (capacitésFor → screen.Detect). Annoncer une capacité à tort ferait échouer
-// Yuki sans explication.
+// ⚠️ `exec`, `shell`, `classify` et `env` sont TOUJOURS déclarées (elles
+// décrivent des capacités compilées dans le binaire). `screenshot` est
+// CONDITIONNELLE : elle n'est ajoutée que si un écran ET un outil de capture
+// sont réellement présents (capacitésFor → screen.Detect). Annoncer une
+// capacité à tort ferait échouer Yuki sans explication.
+//
+// ⚠️ `env` = « sait recevoir des SECRETS par variable d'environnement » :
+// l'agent DÉCODE `Cmd.Env`, l'APPLIQUE en sur-ensemble de l'environnement de
+// l'enfant, et REFUSE une commande qui référence une variable réservée
+// (`YUKI_SECRET_…`) sans valeur fournie. C'est ce que Yuki vérifie AVANT
+// d'envoyer une commande porteuse d'un secret (`src/agents/execution.ts`).
+// Un agent ANTÉRIEUR à cette capacité ne la déclare pas ⇒ Yuki refuse
+// l'envoi au lieu de laisser le shell développer la variable en chaîne vide
+// (potentiellement destructeur).
 var capabilities = []string{
 	"exec",     // exécution de commandes
 	"shell",    // shell complet (D123)
 	"classify", // classification locale des commandes destructrices (A5)
+	"env",      // secrets reçus par variable d'environnement (Cmd.Env → enfant)
 }
 
 // capabilitiesFor renvoie les capacités à déclarer, en ajoutant `screenshot`

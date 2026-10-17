@@ -328,6 +328,20 @@ export const SCREENSHOT_ORIGIN = "capturer_ecran";
 /** Capacité que l'agent doit avoir déclarée pour qu'une capture soit possible. */
 export const SCREENSHOT_CAPABILITY = "screenshot";
 
+/**
+ * Capacité que l'agent doit avoir déclarée pour RECEVOIR des SECRETS par
+ * variable d'environnement (champ `env` de la trame `cmd`, côté Go).
+ *
+ * ⚠️ Un agent ANTÉRIEUR à cette capacité IGNORE le champ `env` en silence : le
+ * shell de l'enfant développerait alors `$YUKI_SECRET_…` en CHAÎNE VIDE, ce qui
+ * peut rendre DESTRUCTRICE une commande anodine (`rm -rf /$YUKI_SECRET_DIR`
+ * devient `rm -rf /`). Yuki REFUSE donc l'envoi au lieu d'exécuter à vide.
+ *
+ * ⚠️ Valeur ALIGNÉE sur la liste `capabilities` de l'agent Go
+ * (`agent/internal/agent/hello.go`).
+ */
+export const ENV_CAPABILITY = "env";
+
 /** Demande de capture d'écran (portée par l'outil du modèle). */
 export interface ScreenshotRequest {
   agentId: string;
@@ -576,6 +590,46 @@ export class AgentExecutionService implements ExecutionServicePort {
         this.secrets?.lookup(name),
       );
       if (resolution.found.length > 0 || resolution.missing.length > 0) {
+        // ⚠️ AGRÉGAT NÉGOCIÉ : un agent qui n'a pas déclaré la capacité « env »
+        // ignore le champ `env` de la trame `cmd`. Le shell développerait alors
+        // la variable en CHAÎNE VIDE — potentiellement destructeur. On REFUSE
+        // AVANT toute demande de secret (inutile de réclamer une valeur à
+        // l'humain si elle ne peut pas être transmise).
+        if (!this.hub.hasCapability(agentId, ENV_CAPABILITY)) {
+          this.logger.warn("agents.exec.env_non_supporte", {
+            agent_id: agentId,
+            agent_name: agentName || null,
+            agent_version: this.hub.get(agentId)?.helloInfo?.agentVersion ?? null,
+            names: resolution.found.concat(resolution.missing).join(","),
+          });
+          this.audit.append({
+            event: "command",
+            agentId,
+            command,
+            exitCode: null,
+            meta: {
+              status: "refused",
+              agent_name: agentName || null,
+              destructive: verdict.destructive,
+              destructive_ids: verdict.ids,
+              reason: "env_unsupported",
+            },
+          });
+          return this.refuse(
+            agentId,
+            agentName,
+            command,
+            verdict,
+            "Commande refusée : elle référence un secret (${YUKI_SECRET_…}) mais cet " +
+              "agent n'a pas déclaré la capacité « env » (celle qui lui permet de recevoir " +
+              "la valeur par variable d'environnement). " +
+              "Ton agent est TROP ANCIEN : mets-le à jour sur la machine " +
+              "(`yuki-agent version` puis mise à jour du binaire, cf. docs/runbook.md §12.4), " +
+              "puis réessaie. ⚠️ La commande n'a PAS été exécutée : sans la valeur, " +
+              "le shell l'aurait développée en chaîne vide (comportement " +
+              "potentiellement destructeur).",
+          );
+        }
         if (!this.secrets.isConfigured()) {
           // ⚠️ REFUS : jamais de repli en clair, jamais d'exécution avec une
           // variable d'environnement vide implicite.

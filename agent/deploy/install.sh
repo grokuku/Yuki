@@ -168,6 +168,11 @@ fi
 
 run systemctl daemon-reload
 run systemctl enable --now "$SERVICE_NAME"
+# ⚠️ MISE À JOUR : `enable --now` NE REDÉMARRE PAS un service déjà actif — sans
+# cette ligne, remplacer le binaire ne changerait RIEN (l'ancien processus
+# continuerait de tourner, donc l'ancien code). On redémarre explicitement pour
+# que la nouvelle version soit réellement chargée.
+run systemctl restart "$SERVICE_NAME"
 
 echo
 echo "Service « $SERVICE_NAME » installé."

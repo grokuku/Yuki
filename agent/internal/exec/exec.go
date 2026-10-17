@@ -30,6 +30,16 @@ const (
 // échouent explicitement plutôt que de simuler une exécution).
 var ErrUnsupported = errors.New("exec : exécution non supportée sur cette plateforme (Linux/Windows uniquement)")
 
+// ErrSecretEnvMissing signale qu'une commande référence une variable RÉSERVÉE
+// (`YUKI_SECRET_…`) qui n'est PAS fournie (ou l'est VIDE) par `EnvOverlay`.
+//
+// ⚠️ C'est un REFUS DÉLIBÉRÉ et NON NÉGOCIABLE : le shell développerait la
+// variable en CHAÎNE VIDE, ce qui peut rendre DESTRUCTRICE une commande anodine
+// (`rm -rf /$YUKI_SECRET_DIR` → `rm -rf /`). Aucun processus n'est lancé.
+var ErrSecretEnvMissing = errors.New(
+	"exec : secret réservé manquant dans l'environnement (refusé : variables vides interdites)",
+)
+
 // processController est le levier d'INTERRUPTION de l'ARBRE de processus, propre
 // à la plateforme : groupe de processus POSIX sous Linux
 // (`Setpgid` + `kill(-pgid)`), JOB OBJECT sous Windows (tue tout l'arbre).
@@ -147,6 +157,12 @@ func New(opts Options) *Runner {
 func (r *Runner) Run(ctx context.Context, req Request) (*Result, error) {
 	if strings.TrimSpace(req.Command) == "" {
 		return nil, errors.New("exec : commande vide")
+	}
+	// ⚠️ REFUS SÉCURISÉ AVANT TOUT LANCEMENT : une variable réservée référencée
+	// mais absente (ou vide) serait développée en chaîne vide par le shell —
+	// potentiellement DESTRUCTEUR. On n'exécute rien du tout.
+	if missing := MissingSecretEnv(req.Command, req.EnvOverlay); len(missing) > 0 {
+		return nil, fmt.Errorf("%w : %s", ErrSecretEnvMissing, strings.Join(missing, ", "))
 	}
 	if !platformSupported() {
 		return nil, ErrUnsupported

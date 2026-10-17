@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -172,6 +173,67 @@ func TestHandleCmdCodeSortieEtStderr(t *testing.T) {
 	}
 	if res.Stderr != "err" {
 		t.Fatalf("stderr = %q", res.Stderr)
+	}
+}
+
+// TestHandleCmdRefuseSecretSansEnvironnement prouve le REFUS SÉCURISÉ côté
+// protocole : une trame `cmd` qui référence `$YUKI_SECRET_…` sans fournir la
+// valeur reçoit une trame `error` de code `missing_secret_env` (ref = cmd_id) —
+// JAMAIS une trame `result` — et AUCUNE commande n'est lancée (effet de bord
+// observable : le fichier témoin ne doit pas exister).
+func TestHandleCmdRefuseSecretSansEnvironnement(t *testing.T) {
+	logger := &captureLogger{}
+	rt, _ := newTestRuntime(t, logger)
+	replies := &replyCollector{}
+
+	marker := filepath.Join(t.TempDir(), "execute.txt")
+	cmd := &proto.Cmd{
+		CmdID:   "c-secret",
+		Command: "touch " + marker + "; echo $YUKI_SECRET_NAS",
+	}
+	if err := rt.HandleMessage(context.Background(), cmd, replies.reply); err != nil {
+		t.Fatalf("HandleMessage : %v", err)
+	}
+
+	errFrame := waitReply(t, replies, proto.TypeError).(*proto.Error)
+	if errFrame.Ref != "c-secret" {
+		t.Fatalf("ref = %q, attendu c-secret", errFrame.Ref)
+	}
+	if errFrame.Code != proto.CodeMissingSecretEnv {
+		t.Fatalf("code = %q, attendu %q", errFrame.Code, proto.CodeMissingSecretEnv)
+	}
+	if errFrame.Message == "" {
+		t.Fatal("message vide : le refus doit être explicite")
+	}
+	// ⚠️ Aucun résultat d'exécution ne doit être émis.
+	if replies.first(proto.TypeResult) != nil {
+		t.Fatal("un résultat a été émis alors que la commande devait être refusée")
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("la commande a été EXÉCUTÉE malgré le refus")
+	}
+	if !logger.has("agent.commande.secret_env_manquant") {
+		t.Fatalf("refus non journalisé : %v", logger.lines)
+	}
+}
+
+// TestHandleCmdAppliqueEnvironnement prouve le maillon ③+④ côté protocole : la
+// trame `cmd` porte `env` et le processus enfant reçoit RÉELLEMENT la variable.
+func TestHandleCmdAppliqueEnvironnement(t *testing.T) {
+	rt, _ := newTestRuntime(t, transport.NopLogger{})
+	replies := &replyCollector{}
+
+	cmd := &proto.Cmd{
+		CmdID:   "c-env",
+		Command: `printf '%s' "$YUKI_SECRET_NAS"`,
+		Env:     map[string]string{"YUKI_SECRET_NAS": "valeur-secrete"},
+	}
+	if err := rt.HandleMessage(context.Background(), cmd, replies.reply); err != nil {
+		t.Fatalf("HandleMessage : %v", err)
+	}
+	res := waitReply(t, replies, proto.TypeResult).(*proto.Result)
+	if res.Stdout != "valeur-secrete" {
+		t.Fatalf("stdout = %q (le secret n'est pas arrivé au processus enfant)", res.Stdout)
 	}
 }
 

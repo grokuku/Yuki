@@ -3,6 +3,7 @@
 package exec
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -55,4 +56,46 @@ func TestEnvironmentOverlay(t *testing.T) {
 			t.Fatalf("env explicite mal surchargé : %v", out)
 		}
 	})
+}
+
+// TestEnfantRecoitVraimentLeSecret est la PREUVE MAILLON ④ : on lance un VRAI
+// processus (`/bin/sh`) par `Runner.Run` avec un `EnvOverlay` et on lit ce que
+// le shell a réellement développé. Le test ÉCHOUE si le câblage
+// `request.EnvOverlay → cmd.Env` est coupé (c'était le bug initial).
+//
+// ⚠️ Ce test-ci ne peut pas passer par lecture : il exige une exécution réelle.
+func TestEnfantRecoitVraimentLeSecret(t *testing.T) {
+	res, err := New(Options{}).Run(context.Background(), Request{
+		ID:      "env-reel",
+		Command: `printf '%s' "$YUKI_SECRET_NAS"`,
+		EnvOverlay: map[string]string{
+			"YUKI_SECRET_NAS": "s3cr3t-value",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run : %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, stderr = %q", res.ExitCode, res.Stderr)
+	}
+	if res.Stdout != "s3cr3t-value" {
+		t.Fatalf("le processus enfant n'a PAS reçu la variable : stdout = %q", res.Stdout)
+	}
+}
+
+// TestEnfantGardePathAvecOverlay prouve que l'overlay n'ÉCRASE pas
+// l'environnement : `PATH` reste exploitable (shell complet, D123) en présence
+// d'un secret. Sans cela, une commande référençant un secret perdrait `PATH` et
+// échouerait de façon déroutante.
+func TestEnfantGardePathAvecOverlay(t *testing.T) {
+	res, err := New(Options{}).Run(context.Background(), Request{
+		Command:    `printf '%s' "$YUKI_SECRET_NAS"; command -v sh >/dev/null && printf '|path-ok'`,
+		EnvOverlay: map[string]string{"YUKI_SECRET_NAS": "v"},
+	})
+	if err != nil {
+		t.Fatalf("Run : %v", err)
+	}
+	if res.Stdout != "v|path-ok" {
+		t.Fatalf("stdout = %q (secret et/ou PATH perdus)", res.Stdout)
+	}
 }

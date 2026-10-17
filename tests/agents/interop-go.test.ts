@@ -29,6 +29,7 @@ import {
   codeKey,
   computeProof,
   deriveKey,
+  encodeCommandFrame,
 } from "../../src/agents/index.js";
 import { startTestStack, type TestStack } from "./stack.js";
 
@@ -73,6 +74,55 @@ async function runGo(args: string[], timeoutMs: number): Promise<Record<string, 
   });
   const last = stdout.trim().split("\n").pop() as string;
   return JSON.parse(last) as Record<string, unknown>;
+}
+
+/**
+ * Exécute `paircheck` en lui passant une trame sur l'ENTRÉE STANDARD, en
+ * tolérant un code de sortie non nul (le mode `runframe` sort en 2 sur refus) :
+ * la sortie JSON est la SEULE chose qui compte.
+ *
+ * ⚠️ `spawn` (et non `execFile`) : `execFile` + option `input` RESTE BLOQUÉ sur
+ * cet environnement (stdin jamais consommé par `go run`) — `spawn` + `end()`
+ * fonctionne, vérifié.
+ */
+async function runGoWithStdin(
+  args: string[],
+  input: string,
+  timeoutMs: number,
+): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn("go", ["run", "./cmd/paircheck", ...args], {
+      cwd: AGENT_DIR,
+      env: { ...process.env, GOFLAGS: "-mod=mod" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (d: Buffer) => {
+      stdout += d.toString();
+    });
+    proc.stderr.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
+    const timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      reject(new Error(`paircheck ${args.join(" ")} : délai dépassé`));
+    }, timeoutMs);
+    proc.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    proc.on("exit", () => {
+      clearTimeout(timer);
+      const last = stdout.trim().split("\n").pop() ?? "";
+      try {
+        resolve(JSON.parse(last) as Record<string, unknown>);
+      } catch {
+        reject(new Error(`paircheck ${args.join(" ")} : sortie illisible : ${stdout} / ${stderr}`));
+      }
+    });
+    proc.stdin.end(input);
+  });
 }
 
 /**
@@ -161,6 +211,39 @@ afterEach(async () => {
 });
 
 describe.skipIf(!GO)("interopérabilité Go ↔ TS", () => {
+  it("chaîne des SECRETS : la trame `cmd` émise par Yuki est décodée par le Go et la variable atteint l'enfant", async () => {
+    const secret = "SUPER-SECRET-INTEROP-1234";
+    // ⚠️ Les octets viennent du VRAI encodeur TS (`encodeCommandFrame`) :
+    // c'est le contrat filaire réel qui est vérifié, pas un JSON écrit à la main.
+    const frame = encodeCommandFrame({
+      cmdId: "cmd-interop-1",
+      command: `printf '%s' "$YUKI_SECRET_NAS"`,
+      env: { YUKI_SECRET_NAS: secret },
+    });
+    const out = await runGoWithStdin(["runframe"], JSON.stringify(frame), 120_000);
+
+    expect(out["ok"]).toBe(true);
+    expect(out["stage"]).toBe("exec");
+    expect(out["cmd_id"]).toBe("cmd-interop-1");
+    expect(out["exit_code"]).toBe(0);
+    // ⚠️ LE MAILLON ④ : le processus enfant a RÉELLEMENT reçu la variable.
+    expect(out["stdout"]).toBe(secret);
+  }, 120_000);
+
+  it("chaîne des SECRETS : sans la valeur, le Go REFUSE (jamais de variable vide)", async () => {
+    // Trame SANS `env` : le shell développerait `$YUKI_SECRET_NAS` en chaîne
+    // vide (`rm -rf /$YUKI_SECRET_DIR` → `rm -rf /`). Le Go doit refuser.
+    const frame = encodeCommandFrame({
+      cmdId: "cmd-interop-2",
+      command: `printf '%s' "$YUKI_SECRET_NAS"`,
+    });
+    const out = await runGoWithStdin(["runframe"], JSON.stringify(frame), 120_000);
+
+    expect(out["ok"]).toBe(false);
+    expect(out["refused"]).toBe(true);
+    expect(String(out["error"])).toContain("YUKI_SECRET_NAS");
+  }, 120_000);
+
   it("vectors : matière de code, preuve HMAC et clé HKDF identiques", async () => {
     const code = "ABCD-2345-6789";
     const agentNonce = Buffer.alloc(32, 7);

@@ -66,6 +66,7 @@ async function waitFor(condition: () => boolean, timeoutMs = 4_000): Promise<voi
 async function connectAgent(
   s: TestStack,
   agentId: string,
+  options: { caps?: string[] } = {},
 ): Promise<{ ws: WebSocket; received: Array<Record<string, unknown>> }> {
   s.register(agentId);
   const cert = s.ca.signClientCertificate(agentId);
@@ -84,6 +85,16 @@ async function connectAgent(
     ws.once("error", reject);
   });
   await waitFor(() => s.hub.isOnline(agentId));
+  // ⚠️ Un VRAI agent annonce TOUJOURS ses capacités au `hello`. Les doubles de
+  // test doivent en faire autant : Yuki exige la capacité `env` pour envoyer une
+  // commande porteuse d'un secret (refus sinon — voir le cas dédié plus bas).
+  send(ws, {
+    type: "hello",
+    agent_id: agentId,
+    euid: 1000,
+    caps: options.caps ?? ["exec", "shell", "classify", "env"],
+  });
+  await waitFor(() => (s.hub.get(agentId)?.helloInfo ?? null) !== null);
   return { ws, received };
 }
 
@@ -141,6 +152,68 @@ describe("Secrets — injection par ENVIRONNEMENT (jamais dans la chaîne)", () 
     expect(String(cmd["command"])).not.toContain(SECRET_VALUE);
     // ⚠️ La valeur voyage par l'ENVIRONNEMENT.
     expect(cmd["env"]).toEqual({ YUKI_SECRET_NAS: SECRET_VALUE });
+  });
+});
+
+describe("Secrets — AGENT TROP ANCIEN (sans capacité `env`) ⇒ REFUS, aucune exécution", () => {
+  it("refuse d'envoyer une commande porteuse d'un secret à un agent sans `env`", async () => {
+    const { store, requests } = secretStack();
+    store.set("YUKI_SECRET_NAS", SECRET_VALUE);
+    const s = await startTestStack({ secrets: store, secretRequests: requests });
+    stacks.push(s);
+    const agentId = "agent-vieux";
+    // Agent ANTÉRIEUR à la capacité : il ne la déclare pas (hello sans `env`).
+    const { ws, received } = await connectAgent(s, agentId, {
+      caps: ["exec", "shell", "classify"],
+    });
+    ws.on("message", (data: Buffer) => {
+      const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (frame["type"] !== "cmd") return;
+      send(ws, { type: "ack", cmd_id: frame["cmd_id"] as string });
+      // ⚠️ On RÉPOND aussi un résultat : si le garde-fou disparaissait, le test
+      // échouerait VITE (statut « completed ») au lieu de rester en attente.
+      send(ws, {
+        type: "result",
+        cmd_id: frame["cmd_id"] as string,
+        exit_code: 0,
+        stdout: "EXÉCUTÉ-À-TORT\n",
+        stderr: "",
+      });
+    });
+
+    const outcome = await s.execution.execute({
+      agentId,
+      // Commande NON destructrice : elle passe le garde-fou D118 et arrive donc
+      // au contrôle de capacité. ⚠️ Une commande DESTRUCTRICE (`rm -rf
+      // /$YUKI_SECRET_DIR`) serait de toute façon interceptée EN AMONT par la
+      // validation humaine (D118) — le cas destructeur est couvert côté Go
+      // (`TestRunRefuseSecretManquant`), où le refus est inconditionnel.
+      command: "sshpass -p ${YUKI_SECRET_NAS} ssh nas",
+    });
+
+    // ⚠️ REFUS, et surtout : AUCUNE commande n'a été envoyée (jamais exécutée
+    // avec une variable vide, ce qui aurait pu être destructeur).
+    expect(outcome.status).toBe("refused");
+    expect(received.filter((f) => f["type"] === "cmd")).toHaveLength(0);
+    // Message CLAIR et ACTIONNABLE (mise à jour de l'agent).
+    expect(outcome.message).toContain("capacité « env »");
+    expect(outcome.message).toMatch(/mets-le à jour|mise à jour/);
+  });
+
+  it("un agent sans `env` n'est PAS pénalisé pour une commande SANS secret", async () => {
+    const { store, requests } = secretStack();
+    const s = await startTestStack({ secrets: store, secretRequests: requests });
+    stacks.push(s);
+    const agentId = "agent-vieux-2";
+    const { ws } = await connectAgent(s, agentId, { caps: ["exec", "shell", "classify"] });
+    ws.on("message", (data: Buffer) => {
+      const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (frame["type"] !== "cmd") return;
+      send(ws, { type: "ack", cmd_id: frame["cmd_id"] as string });
+      send(ws, { type: "result", cmd_id: frame["cmd_id"] as string, exit_code: 0, stdout: "ok\n" });
+    });
+    const outcome = await s.execution.execute({ agentId, command: "echo bonjour" });
+    expect(outcome.status).toBe("completed");
   });
 });
 

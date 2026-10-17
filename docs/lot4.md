@@ -661,3 +661,42 @@ un **canal d'image dédié**.
   suffit).
 - Audit : entrées d'événement `screenshot` (statuts `captured`/`unsupported`/
   `refused`/`offline`/`too_large`/`failed`) **sans contenu d'image**.
+
+## 18. Secrets du coffre côté AGENT Go (note d'implémentation)
+
+> **Note d'implémentation — hors décisions de conception.** Ajoutée **après la
+> validation**, à la demande d'usage réel (2026-10-17) : « *apparemment il n'y a
+> pas ce qu'il faut côté agents pour recevoir les secrets* ». Elle **ne modifie
+> aucune décision** `D109`–`D128`.
+
+**La chaîne, maillon par maillon.**
+
+| # | Maillon | Preuve d'exécution |
+|---|---|---|
+| ① | Yuki **émet** la trame `cmd` : `command` porte la **RÉFÉRENCE** (`${YUKI_SECRET_NAS}`), `env` porte la **VALEUR** | `tests/agents/execution-secrets.test.ts` (assertion sur la trame REÇUE) |
+| ② | Le Go **décode** le champ `env` | `agent/internal/proto/types.go` (`Cmd.Env`, `json:"env"`) + interop `paircheck runframe` (octets réels de `encodeCommandFrame`) |
+| ③ | Le Go **applique** l'overlay à l'enfant | `agent/internal/agent/runtime.go` (`EnvOverlay: cmd.Env`) → `agent/internal/exec/exec.go` (`cmd.Env = r.environment(…)`) |
+| ④ | L'**enfant reçoit** réellement la variable | `agent/internal/exec/env_overlay_test.go` (`TestEnfantRecoitVraimentLeSecret`), `agent/internal/agent/runtime_test.go` (`TestHandleCmdAppliqueEnvironnement`), interop `paircheck runframe` |
+
+**Refus sécurisé (le point le plus important).** Un shell qui ne trouve pas la
+variable la développe en **CHAÎNE VIDE** : `rm -rf /$YUKI_SECRET_DIR` deviendrait
+`rm -rf /`. D'où **deux garde-fous indépendants** :
+
+- **Agent (Go)** — `internal/exec/secrets.go` (module PUR, miroir de
+  `src/secrets/references.ts`) : `ExtractSecretReferences` puis
+  `MissingSecretEnv`. Si une variable **réservée** référencée est **absente ou
+  vide** dans `EnvOverlay`, `exec.Run` renvoie `ErrSecretEnvMissing` **AVANT tout
+  lancement de processus** ; `Runtime.executeCmd` le traduit en trame `error` de
+  code **`missing_secret_env`**. Refus **inconditionnel** (indépendant du niveau
+  de garde-fou), donc couvre aussi le cas destructeur.
+- **Gateway (TS)** — capacité déclarée **`env`** (`agent/internal/agent/hello.go`
+  → `AgentHub.hasCapability`) : `AgentExecutionService.run` **REFUSE d'envoyer**
+  une commande porteuse d'un secret à un agent qui ne la déclare pas
+  (`src/agents/execution.ts`, constante `ENV_CAPABILITY`). Message explicite
+  « **ton agent est TROP ANCIEN : mets-le à jour** ». ⚠️ Un agent antérieur
+  **ignore le champ `env` en silence** : c'est précisément ce que ce garde-fou
+  intercepte.
+
+**Version de l'agent.** `agent/VERSION` = **0.2.0** (`internal/buildinfo`), publiée
+par la CI `agent.yml` (`release agent-v<version>`). Procédure de mise à jour :
+`docs/runbook.md` §12.4.

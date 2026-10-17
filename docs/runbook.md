@@ -562,3 +562,57 @@ il n'existe aucun recours (la clé n'est rangée nulle part avec le coffre).
   du **navigateur au serveur** en HTTP. Yuki n'implémente **aucune
   authentification** ; sur un LAN non chiffré, la valeur **transite en clair sur
   le réseau**. Utilisez HTTPS/TLS en amont pour tout secret sensible.
+
+### 12.4 L'agent doit être à JOUR — capacité `env` (refus sécurisé)
+
+Le shell développe `$YUKI_SECRET_…` en **chaîne VIDE** si la variable n'est pas
+posée. Une commande anodine comme `rm -rf /$YUKI_SECRET_DIR` deviendrait alors
+`rm -rf /` — **destructrice**. Deux garde-fous indépendants existent :
+
+1. **Côté Yuki (gateway)** : l'agent déclare ses **capacités** au `hello`. Si un
+   agent ne déclare pas la capacité **`env`** (réception des secrets par variable
+   d'environnement), Yuki **REFUSE d'envoyer** toute commande qui référence un
+   secret — **aucune commande n'est transmise** — et renvoie un message
+   actionnable « **ton agent est TROP ANCIEN : mets-le à jour** ».
+2. **Côté agent (Go)** : quelle que soit l'origine de la trame, si une commande
+   référence une variable réservée (`$YUKI_SECRET_…` / `${YUKI_SECRET_…}`) qui
+   n'est **pas fournie** (ou l'est **vide**), l'agent **REFUSE** la commande
+   (`missing_secret_env`) et **ne lance AUCUN processus**.
+
+⇒ **Un agent trop ancien (= binaire d'avant la capacité `env`) ne peut plus
+exécuter de commande porteuse d'un secret : il la refuse au lieu de l'exécuter à
+vide.** Les commandes SANS secret continuent de fonctionner normalement.
+
+#### Mettre l'agent à jour (exactement)
+
+* **1. Obtenir le binaire** (version **0.2.0** ou plus récente — la version est
+  lisible par `yuki-agent version`) :
+  * soit depuis les **releases GitHub** `agent-v<version>` (binaires linux-amd64,
+    linux-arm64, windows-amd64… + `SHA256SUMS`) ;
+  * soit **en local** :
+    ```sh
+    cd agent
+    go build -ldflags "-s -w -X github.com/grokuku/yuki/agent/internal/buildinfo.Version=$(cat VERSION)" \
+      -o yuki-agent ./cmd/yuki-agent
+    ./yuki-agent version      # doit afficher 0.2.0 (ou plus)
+    ```
+* **2. Installer (systemd)** :
+  ```sh
+  sudo agent/deploy/install.sh --binary ./yuki-agent
+  ```
+  Le script **copie le binaire** dans `/usr/local/bin/yuki-agent`, réinstalle
+  l'unité et **redémarre** le service (`systemctl restart yuki-agent`).
+* **3. Sans le script** : remplacer le fichier puis redémarrer
+  ```sh
+  sudo install -m 0755 ./yuki-agent /usr/local/bin/yuki-agent
+  sudo systemctl restart yuki-agent
+  ```
+* **4. Unraid** : remplacer `/mnt/user/appdata/yuki-agent/yuki-agent` et relancer
+  le wrapper (cf. `agent/deploy/unraid.md` §6, « mise à jour propre »).
+* **5. Vérifier** : dans `/config` → Agents, le détail de l'agent doit lister la
+  capacité **`env`**. Les journaux de l'agent doivent contenir
+  `agent.commande.secret_env_manquant` uniquement en cas d'anomalie.
+
+⚠️ **`systemctl enable --now` ne redémarre PAS un service déjà actif** : la
+mise à jour exige un `restart` explicite (fait par `install.sh`). C'est la cause
+la plus fréquente d'un « j'ai remplacé le binaire et rien n'a changé ».

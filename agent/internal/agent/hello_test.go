@@ -103,3 +103,24 @@ func TestCapabilitiesAvecEcranEtOutil(t *testing.T) {
 		t.Fatalf("capacités de base manquantes : %v", caps)
 	}
 }
+
+// TestCapaciteEnvToujoursDeclaree verrouille le contrat de capacités : `env`
+// (réception des secrets par variable d'environnement) est INCONDITIONNELLE.
+// Si elle disparaissait, Yuki refuserait TOUTE commande porteuse d'un secret —
+// ce test le ferait échouer AVANT la mise en production.
+func TestCapaciteEnvToujoursDeclaree(t *testing.T) {
+	cases := []struct {
+		name string
+		caps []string
+	}{
+		{"sans écran", capabilitiesFor("linux", envOf(nil), lookPathOf("scrot"))},
+		{"sans outil", capabilitiesFor("linux", envOf(map[string]string{"DISPLAY": ":0"}), lookPathOf())},
+		{"avec écran et outil", capabilitiesFor("linux", envOf(map[string]string{"DISPLAY": ":0"}), lookPathOf("grim"))},
+		{"windows", capabilitiesFor("windows", envOf(nil), lookPathOf())},
+	}
+	for _, tc := range cases {
+		if !contains(tc.caps, "env") {
+			t.Fatalf("%s : capacité `env` absente : %v", tc.name, tc.caps)
+		}
+	}
+}

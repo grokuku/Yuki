@@ -26,6 +26,11 @@ const (
 	// CodeTooLarge : le résultat dépasse une borne de taille (ex. image trop
 	// lourde après compression) — refus honnête, aucun envoi tronqué.
 	CodeTooLarge ErrorCode = "too_large"
+	// CodeMissingSecretEnv : la commande référence une variable RÉSERVÉE
+	// (`YUKI_SECRET_…`) qui n'est pas fournie (ou l'est vide). L'agent REFUSE la
+	// commande : l'exécuter reviendrait à la lancer avec des variables vides
+	// (comportement potentiellement destructeur). Aucun processus n'est lancé.
+	CodeMissingSecretEnv ErrorCode = "missing_secret_env"
 
 	// --- Appairage (internal/pair) -------------------------------------------
 	// CodeProofInvalid : preuve HMAC absente ou fausse (mauvais code `C`).

@@ -17,6 +17,15 @@
 //	    code, l'écrit dans <codeFile> (l'utilisateur le recopie dans Yuki) et
 //	    scrute jusqu'à validation. Aucun code n'est fourni en entrée.
 //
+//	paircheck runframe
+//	    lit UNE trame `cmd` (JSON) sur l'entrée standard — exactement les octets
+//	    émis par `encodeCommandFrame` (TS) — la DÉCODE avec le vrai codec du
+//	    protocole, puis EXÉCUTE la commande avec le vrai moteur d'exécution de
+//	    l'agent (`internal/exec`, `EnvOverlay` compris). Imprime le résultat en
+//	    JSON. C'est la preuve d'interopérabilité de la chaîne des SECRETS :
+//	    trame Yuki → décodage Go → enfant (variable réellement reçue), et REFUS
+//	    si une variable réservée référencée n'est pas fournie.
+//
 // ⚠️ Ce programme n'est PAS embarqué dans l'agent de production : c'est un
 // outil de vérification, isolé du reste du module.
 package main
@@ -29,6 +38,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,6 +48,7 @@ import (
 	"time"
 
 	"github.com/grokuku/yuki/agent/internal/agent"
+	"github.com/grokuku/yuki/agent/internal/exec"
 	"github.com/grokuku/yuki/agent/internal/pair"
 	"github.com/grokuku/yuki/agent/internal/proto"
 )
@@ -53,9 +64,51 @@ func main() {
 		runPair(os.Args[2:])
 	case "pairflow":
 		runPairFlow(os.Args[2:])
+	case "runframe":
+		runFrame()
 	default:
 		fail("mode inconnu : " + os.Args[1])
 	}
+}
+
+// runFrame décode une trame `cmd` reçue sur stdin et l'exécute réellement.
+func runFrame() {
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fail("lecture de la trame : " + err.Error())
+	}
+	message, err := proto.Decode(raw)
+	if err != nil {
+		printJSON(map[string]any{"ok": false, "stage": "decode", "error": err.Error()})
+		os.Exit(1)
+	}
+	cmd, isCmd := message.(*proto.Cmd)
+	if !isCmd {
+		printJSON(map[string]any{
+			"ok": false, "stage": "decode",
+			"error": fmt.Sprintf("trame %q, attendu cmd", message.Type()),
+		})
+		os.Exit(1)
+	}
+	result, err := exec.New(exec.Options{}).Run(context.Background(), exec.Request{
+		ID:         cmd.CmdID,
+		Command:    cmd.Command,
+		Shell:      cmd.Shell,
+		Cwd:        cmd.Cwd,
+		EnvOverlay: cmd.Env,
+		Origin:     cmd.Origin,
+	})
+	if err != nil {
+		printJSON(map[string]any{
+			"ok": false, "stage": "exec", "error": err.Error(),
+			"refused": errors.Is(err, exec.ErrSecretEnvMissing),
+		})
+		os.Exit(2)
+	}
+	printJSON(map[string]any{
+		"ok": true, "stage": "exec", "cmd_id": result.ID,
+		"exit_code": result.ExitCode, "stdout": result.Stdout, "stderr": result.Stderr,
+	})
 }
 
 func fail(message string) {

@@ -10,4 +10,4 @@
 package buildinfo
 
 // Version est la version de l'agent d'exécution.
-var Version = "0.1.0"
+var Version = "0.2.0"

@@ -247,9 +247,26 @@ func (rt *Runtime) executeCmd(cmd *proto.Cmd, reply transport.ReplyFunc) {
 		if errors.Is(err, exec.ErrShuttingDown) {
 			message = "agent en cours d'arrêt, commande refusée"
 		}
-		rt.log.Error("agent.commande.echec", map[string]any{
-			"cmd_id": cmd.CmdID, "error": err.Error(),
-		})
+		// ⚠️ REFUS SÉCURISÉ : une variable réservée (`YUKI_SECRET_…`) référencée
+		// mais absente serait développée en chaîne vide par le shell. L'agent
+		// refuse — AUCUN processus n'a été lancé — et le dit à Yuki avec un code
+		// dédié, afin que le message utilisateur soit actionnable.
+		if errors.Is(err, exec.ErrSecretEnvMissing) {
+			code = proto.CodeMissingSecretEnv
+			message = "Commande refusée par l'agent : elle référence un secret " +
+				"($YUKI_SECRET_…) qui n'a PAS été fourni dans l'environnement. " +
+				"Exécuter la commande reviendrait à la lancer avec des variables " +
+				"vides (comportement potentiellement destructeur). Aucune commande " +
+				"n'a été exécutée. Mettez l'agent à jour (capacité « env ») ou " +
+				"vérifiez la résolution des secrets côté Yuki."
+			rt.log.Warn("agent.commande.secret_env_manquant", map[string]any{
+				"cmd_id": cmd.CmdID, "error": err.Error(),
+			})
+		} else {
+			rt.log.Error("agent.commande.echec", map[string]any{
+				"cmd_id": cmd.CmdID, "error": err.Error(),
+			})
+		}
 		if replyErr := reply(&proto.Error{
 			Error:   string(code),
 			Code:    code,
