@@ -8,7 +8,11 @@
  */
 
 import type { AgentDirectoryPort } from "../agents/directory.js";
-import type { ExecutionServicePort, ScreenshotServicePort } from "../agents/execution.js";
+import type {
+  ExecutionServicePort,
+  ScreenshotServicePort,
+  SecretRequestToolPort,
+} from "../agents/execution.js";
 import type { SecretDirectoryPort } from "../secrets/directory.js";
 import type { DelegateServicePort } from "../delegation/ports.js";
 import type {
@@ -133,6 +137,12 @@ export interface PiHostOptions {
    * Indépendant de l'exécution : savoir quels secrets existent n'est pas agir.
    */
   secrets?: SecretDirectoryPort;
+  /**
+   * Port de DEMANDE de secret par le modèle (`demander_secret`). Présent ⇒ la
+   * façade expose l'outil qui ouvre une fenêtre de saisie DANS la conversation.
+   * ⚠️ RÉSERVÉ AU LÉGER (celui qui converse) : le worker lourd n'a pas cet outil.
+   */
+  secretRequests?: SecretRequestToolPort;
   /**
    * Lot 13 : archive « vie antérieure ». Présent ⇒ la façade expose l'outil de
    * consultation `archive_vie_anterieure` (LECTURE SEULE) et enregistre

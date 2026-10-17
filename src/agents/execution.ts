@@ -24,6 +24,7 @@ import { isChannelError } from "./errors.js";
 import { destructiveLabels, evaluateDestructive } from "./destructive.js";
 import { escapeOutputText, frameAgentDirectory, frameCommandOutput } from "./output.js";
 import { buildApprovalResultPrompt, ORIGIN_APPROVAL_RESULT } from "./approval-report.js";
+import { buildSecretStoredPrompt, ORIGIN_SECRET_STORED } from "./secret-report.js";
 import type { AuditLog } from "./audit.js";
 import type { AgentStore } from "./store.js";
 import type { AgentRecord } from "./types.js";
@@ -34,6 +35,7 @@ import type {
   SecretRequestRegistry,
   SecretRequestEvent,
 } from "../secrets/requests.js";
+import { isReplayableSecretRequest } from "../secrets/requests.js";
 import { VaultError } from "../secrets/vault.js";
 
 export interface ExecutionLogger {
@@ -218,15 +220,20 @@ export interface SecretLookupPort {
 /**
  * Vue PUBLIQUE d'une demande de secret, destinée à l'interface (fenêtre
  * flottante). ⚠️ Ne porte JAMAIS une valeur : seulement les NOMS à fournir, la
- * machine et la commande EXACTE (avec ses références).
+ * machine (si connue) et la commande EXACTE (avec ses références) pour une
+ * demande sur RÉFÉRENCE MANQUANTE, ou la RAISON pour une demande DIRECTE.
  */
 export interface PendingSecretView {
   id: string;
   sessionId?: string;
-  agentId: string;
+  /** Machine cible — absente pour une demande DIRECTE sans machine. */
+  agentId?: string;
   agentName?: string;
-  /** Commande EXACTE (références `${YUKI_SECRET_…}` incluses, jamais la valeur). */
-  command: string;
+  /** Commande EXACTE (références `${YUKI_SECRET_…}` incluses, jamais la valeur).
+   * Absente pour une demande DIRECTE (rien à rejouer). */
+  command?: string;
+  /** « À quoi ça sert », en clair pour l'humain. Optionnel. */
+  purpose?: string;
   /** Noms de secrets à fournir (ordre de première apparition). */
   names: string[];
   createdAt: string;
@@ -246,8 +253,48 @@ export type SecretRequestViewEvent =
 
 /** Issue de la fourniture d'un secret par l'humain. */
 export type SecretSubmitOutcome =
-  | { ok: true; request: PendingSecretView; outcome: ExecutionOutcome }
+  | {
+      ok: true;
+      request: PendingSecretView;
+      /**
+       * Résultat de la commande REJOUÉE — présent UNIQUEMENT pour le flux sur
+       * RÉFÉRENCE MANQUANTE. Absent pour une demande DIRECTE (rien à rejouer :
+       * le secret est simplement enregistré).
+       */
+      outcome?: ExecutionOutcome;
+    }
   | { ok: false; code: string; message: string };
+
+/**
+ * Entrée d'une demande DIRECTE de secret (outil `demander_secret`). Aucune
+ * commande : on demande une valeur à l'humain pour l'ENREGISTRER au coffre.
+ */
+export interface DirectSecretRequestInput {
+  /** Noms à demander (format `YUKI_SECRET_…`). */
+  names: string[];
+  /** « À quoi ça sert », montré à l'humain. */
+  purpose: string;
+  /** Machine concernée (libellé humain facultatif). */
+  agentName?: string;
+  /** Conversation où afficher la fenêtre (routage). */
+  sessionId?: string;
+  origin?: string;
+}
+
+/** Issue d'une demande DIRECTE de secret. */
+export type SecretRequestToolOutcome =
+  | { ok: true; request: PendingSecretView }
+  | { ok: false; code: string; message: string };
+
+/**
+ * Port consommé par l'outil `demander_secret` (session LÉGÈRE qui CONVERSE).
+ * « AgentExecutionService » l'implémente ; l'outil n'en connaît que cette
+ * surface (aucun import de classe).
+ */
+export interface SecretRequestToolPort {
+  /** Émet une demande DIRECTE de secret (aucune commande) et route la fenêtre. */
+  requestSecret(input: DirectSecretRequestInput): SecretRequestToolOutcome;
+}
 
 /**
  * Port consommé par le transport WebSocket pour la fenêtre de SECRET.
@@ -777,20 +824,75 @@ export class AgentExecutionService implements ExecutionServicePort {
       return { ok: false, code, message };
     }
     const fulfilled = registry.fulfill(id);
-    const outcome = await this.run(
-      {
-        agentId: fulfilled.agentId,
-        command: fulfilled.command,
-        ...(fulfilled.shell !== undefined ? { shell: fulfilled.shell } : {}),
-        ...(fulfilled.cwd !== undefined ? { cwd: fulfilled.cwd } : {}),
-        ...(fulfilled.timeoutMs !== undefined ? { timeoutMs: fulfilled.timeoutMs } : {}),
-        ...(fulfilled.origin !== undefined ? { origin: fulfilled.origin } : {}),
-        ...(fulfilled.sessionId !== undefined ? { sessionId: fulfilled.sessionId } : {}),
-      },
-      true,
-    );
-    this.notifySecretResult(fulfilled, outcome);
-    return { ok: true, request: this.viewSecret(fulfilled), outcome };
+    // Flux sur RÉFÉRENCE MANQUANTE (commande + machine) : on REJOUE la commande
+    // SANS repasser le garde-fou D118 (déjà franchi à la création) et on réveille
+    // le modèle avec le résultat. Demande DIRECTE : rien à rejouer, on confirme
+    // seulement l'enregistrement.
+    if (isReplayableSecretRequest(fulfilled)) {
+      const outcome = await this.run(
+        {
+          agentId: fulfilled.agentId as string,
+          command: fulfilled.command as string,
+          ...(fulfilled.shell !== undefined ? { shell: fulfilled.shell } : {}),
+          ...(fulfilled.cwd !== undefined ? { cwd: fulfilled.cwd } : {}),
+          ...(fulfilled.timeoutMs !== undefined ? { timeoutMs: fulfilled.timeoutMs } : {}),
+          ...(fulfilled.origin !== undefined ? { origin: fulfilled.origin } : {}),
+          ...(fulfilled.sessionId !== undefined ? { sessionId: fulfilled.sessionId } : {}),
+        },
+        true,
+      );
+      this.notifySecretResult(fulfilled, outcome);
+      return { ok: true, request: this.viewSecret(fulfilled), outcome };
+    }
+    this.notifySecretStored(fulfilled);
+    return { ok: true, request: this.viewSecret(fulfilled) };
+  }
+
+  /**
+   * Émet une demande DIRECTE de secret (outil `demander_secret`) : aucune
+   * commande, juste une valeur à demander à l'humain et à RANGER au coffre. La
+   * fenêtre est routée vers la conversation (`sessionId`).
+   *
+   * ⚠️ Ne lève jamais : renvoie `{ ok: false }` avec un message honnête (flux
+   * indisponible, coffre verrouillé…). Ne porte JAMAIS une valeur.
+   */
+  requestSecret(input: DirectSecretRequestInput): SecretRequestToolOutcome {
+    const registry = this.secretRequests;
+    if (!registry) {
+      return {
+        ok: false,
+        code: "secret_unavailable",
+        message: "Flux de fourniture de secret indisponible.",
+      };
+    }
+    if (!this.secrets) {
+      return { ok: false, code: "secret_unavailable", message: "Coffre de secrets indisponible." };
+    }
+    if (!this.secrets.isConfigured()) {
+      // ⚠️ REFUS : jamais de repli en clair. On ne demande pas une valeur qu'on ne
+      // pourrait pas ranger.
+      return {
+        ok: false,
+        code: "vault_locked",
+        message:
+          "Coffre de secrets VERROUILLÉ (variable d'environnement YUKI_VAULT_KEY " +
+          "absente) : impossible d'enregistrer un secret. Fournissez la clé maître hors bande.",
+      };
+    }
+    const pending = registry.request({
+      names: input.names,
+      purpose: input.purpose,
+      ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+      ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+      ...(input.origin !== undefined ? { origin: input.origin } : {}),
+    });
+    // ⚠️ NOMS + RAISON seulement : jamais une valeur (elle n'existe pas encore).
+    this.logger.info("agents.secrets.direct_requested", {
+      request_id: pending.id,
+      session_id: pending.sessionId ?? null,
+      names: pending.names.join(","),
+    });
+    return { ok: true, request: this.viewSecret(pending) };
   }
 
   /**
@@ -804,16 +906,16 @@ export class AgentExecutionService implements ExecutionServicePort {
     if (!sessionId || !this.waker) return;
     const prompt = buildApprovalResultPrompt({
       approvalId: entry.id,
-      agentId: entry.agentId,
+      agentId: entry.agentId as string,
       ...(outcome.agentName ? { agentName: outcome.agentName } : {}),
-      command: entry.command,
+      command: entry.command as string,
       outcome,
     });
     try {
       this.waker.send(sessionId, prompt, { origin: ORIGIN_APPROVAL_RESULT });
       this.logger.info("agents.secret.result_reported", {
         request_id: entry.id,
-        agent_id: entry.agentId,
+        agent_id: entry.agentId ?? null,
         session_id: sessionId,
         status: outcome.status,
       });
@@ -826,16 +928,46 @@ export class AgentExecutionService implements ExecutionServicePort {
     }
   }
 
+  /**
+   * Réveille le modèle après l'ENREGISTREMENT d'un secret (demande DIRECTE).
+   * Prompt SYNTHÉTIQUE (`ORIGIN_SECRET_STORED`) : jamais dans le transcript, le
+   * snapshot, le rejeu ni la mémoire. ⚠️ Ne porte que des NOMS, jamais la valeur.
+   */
+  private notifySecretStored(entry: PendingSecretRequest): void {
+    const sessionId = entry.sessionId;
+    if (!sessionId || !this.waker) return;
+    const prompt = buildSecretStoredPrompt({
+      requestId: entry.id,
+      names: entry.names,
+      ...(entry.purpose !== undefined ? { purpose: entry.purpose } : {}),
+      ...(entry.agentName !== undefined ? { agentName: entry.agentName } : {}),
+    });
+    try {
+      this.waker.send(sessionId, prompt, { origin: ORIGIN_SECRET_STORED });
+      this.logger.info("agents.secret.stored_reported", {
+        request_id: entry.id,
+        session_id: sessionId,
+      });
+    } catch (error) {
+      this.logger.warn("agents.secret.stored_report_failed", {
+        request_id: entry.id,
+        session_id: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /** Convertit une demande de secret mémorisée en vue publique (pour l'interface). */
   private viewSecret(entry: PendingSecretRequest): PendingSecretView {
-    const record = this.store.get(entry.agentId);
+    const record = entry.agentId !== undefined ? this.store.get(entry.agentId) : undefined;
     const name = entry.agentName ?? record?.name;
     return {
       id: entry.id,
       ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
-      agentId: entry.agentId,
+      ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
       ...(name ? { agentName: name } : {}),
-      command: entry.command,
+      ...(entry.command !== undefined ? { command: entry.command } : {}),
+      ...(entry.purpose !== undefined ? { purpose: entry.purpose } : {}),
       names: [...entry.names],
       createdAt: entry.createdAt,
       expiresAt: entry.expiresAt,

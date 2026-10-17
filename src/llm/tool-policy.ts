@@ -54,7 +54,23 @@ export type AgentDirectoryToolName = "lister_agents" | "etat_agent";
  * que les NOMS (jamais une valeur) : il permet au modèle de savoir QUELLES
  * variables `${YUKI_SECRET_…}` référencer dans `run_command`.
  */
-export type SecretToolName = "lister_secrets";
+export type SecretToolName = "lister_secrets" | "demander_secret";
+
+/**
+ * Outils de CONSULTATION des secrets du coffre (NOMS seulement, jamais une
+ * valeur) : `lister_secrets`. Exposés aux DEUX rôles (le lourd doit connaître
+ * les NOMS pour écrire `${NOM}` dans ses commandes).
+ */
+export const SECRET_DIRECTORY_TOOLS: readonly SecretToolName[] = ["lister_secrets"];
+
+/**
+ * Outil de DEMANDE de secret par le modèle : `demander_secret` ouvre une fenêtre
+ * de saisie DANS la conversation (la valeur va du navigateur au serveur, jamais
+ * par le modèle). Porté par le LÉGER uniquement — c'est lui qui CONVERSE avec
+ * l'utilisateur ; le lourd, lui, obtient un secret en référençant `${NOM}` dans
+ * une commande (flux sur référence manquante).
+ */
+export const SECRET_REQUEST_TOOLS: readonly SecretToolName[] = ["demander_secret"];
 
 /**
  * Outils custom de CONSULTATION de l'archive « vie antérieure » (Lot 13).
@@ -102,6 +118,8 @@ export interface ToolPolicyEntry {
   readonly directory: readonly AgentDirectoryToolName[];
   /** Outils de consultation des secrets du coffre (NOMS seulement). */
   readonly secrets: readonly SecretToolName[];
+  /** Outil de DEMANDE de secret (`demander_secret`, léger uniquement). */
+  readonly secretRequests: readonly SecretToolName[];
   /** Outils de consultation de l'archive « vie antérieure » (Lot 13). */
   readonly heritage: readonly HeritageToolName[];
   /** Outils du libraire de Pi-Web (recherche documentaire + web). */
@@ -156,8 +174,8 @@ export const AGENT_DIRECTORY_TOOLS: readonly AgentDirectoryToolName[] = [
 /**
  * Outils de consultation des secrets du coffre. Comme les autres outils de
  * consultation, exposés seulement si le câblage les active. ⚠️ NOMS seulement.
+ * La DEMANDE de secret (`demander_secret`) est un outil SÉPARÉ, réservé au léger.
  */
-export const SECRET_TOOLS: readonly SecretToolName[] = ["lister_secrets"];
 
 /**
  * Outils de consultation de l'archive « vie antérieure » (Lot 13). Comme les
@@ -201,7 +219,8 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     execution: [],
     screenshots: [],
     directory: AGENT_DIRECTORY_TOOLS,
-    secrets: SECRET_TOOLS,
+    secrets: SECRET_DIRECTORY_TOOLS,
+    secretRequests: SECRET_REQUEST_TOOLS,
     heritage: HERITAGE_TOOLS,
     librarian: LIBRARIAN_TOOLS,
     librarianCapture: LIBRARIAN_CAPTURE_TOOLS,
@@ -219,8 +238,11 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     screenshots: SCREENSHOT_TOOLS,
     directory: [],
     // Le worker lourd EXÉCUTE : il doit connaître les NOMS des secrets pour
-    // écrire `${NOM}` dans ses commandes (jamais la valeur).
-    secrets: SECRET_TOOLS,
+    // écrire `${NOM}` dans ses commandes (jamais la valeur). Il ne DEMANDE pas
+    // de secret : il n'a pas d'outil `demander_secret` (il ne converse pas),
+    // il obtient la valeur par le flux sur référence manquante.
+    secrets: SECRET_DIRECTORY_TOOLS,
+    secretRequests: [],
     heritage: [],
     librarian: [],
     librarianCapture: [],
@@ -260,6 +282,12 @@ export interface ToolAllowlistOptions {
    */
   secretsEnabled?: boolean;
   /**
+   * Active l'outil de DEMANDE de secret `demander_secret` (léger uniquement).
+   * DÉSACTIVÉ par défaut : seul le câblage l'active, quand un service d'exécution
+   * expose le port de demande (le coffre doit être utilisable).
+   */
+  secretRequestsEnabled?: boolean;
+  /**
    * Active l'outil de consultation de l'archive « vie antérieure »
    * `archive_vie_anterieure` (Lot 13). DÉSACTIVÉ par défaut : seul le câblage
    * l'active, quand un port d'archive existe.
@@ -295,6 +323,8 @@ export function toolAllowlist(
     (options.screenshotsEnabled ?? false) && entry.screenshots.length > 0;
   const directoryEnabled = (options.directoryEnabled ?? false) && entry.directory.length > 0;
   const secretsEnabled = (options.secretsEnabled ?? false) && entry.secrets.length > 0;
+  const secretRequestsEnabled =
+    (options.secretRequestsEnabled ?? false) && entry.secretRequests.length > 0;
   const heritageEnabled = (options.heritageEnabled ?? false) && entry.heritage.length > 0;
   const librarianEnabled = (options.librarianEnabled ?? false) && entry.librarian.length > 0;
   const librarianCaptureEnabled =
@@ -316,6 +346,9 @@ export function toolAllowlist(
   }
   if (secretsEnabled) {
     tools.push(...entry.secrets);
+  }
+  if (secretRequestsEnabled) {
+    tools.push(...entry.secretRequests);
   }
   if (heritageEnabled) {
     tools.push(...entry.heritage);

@@ -212,7 +212,7 @@ describe("Secrets — `awaiting_secret` quand le secret manque (flux DÉDIÉ)", 
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.outcome.status).toBe("completed");
+      expect(result.outcome?.status).toBe("completed");
     }
     // La commande est rejouée AVEC la valeur en environnement, jamais dans la chaîne.
     const cmd = received.find((f) => f["type"] === "cmd") as Record<string, unknown>;
@@ -221,6 +221,39 @@ describe("Secrets — `awaiting_secret` quand le secret manque (flux DÉDIÉ)", 
     expect(String(cmd["command"])).not.toContain(SECRET_VALUE);
     // La valeur est désormais au coffre (chiffrée).
     expect(store.lookup("YUKI_SECRET_NAS")).toBe(SECRET_VALUE);
+  });
+});
+
+describe("Secrets — après une demande DIRECTE, le MODÈLE est réveillé (reprise)", () => {
+  it("envoie un prompt SYNTHÉTIQUE ne portant que les NOMS (jamais la valeur)", async () => {
+    const { store, requests } = secretStack();
+    const s = await startTestStack({ secrets: store, secretRequests: requests });
+    stacks.push(s);
+    const sent: Array<{ sessionId: string; text: string; origin?: string }> = [];
+    s.execution.setWaker({
+      send: (sessionId, text, opts) => {
+        sent.push({ sessionId, text, ...(opts?.origin !== undefined ? { origin: opts.origin } : {}) });
+      },
+    });
+
+    const result = s.execution.requestSecret({
+      names: ["YUKI_SECRET_NAS"],
+      purpose: "sauvegarde nocturne",
+      sessionId: "sess-reprise",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("demande refusée");
+    await s.execution.submitSecret(result.request.id, { YUKI_SECRET_NAS: SECRET_VALUE });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.sessionId).toBe("sess-reprise");
+    // Origine SYNTHÉTIQUE : jamais une bulle utilisateur, jamais mémorisé.
+    expect(sent[0]?.origin).toBe("secret_stored");
+    expect(sent[0]?.text.startsWith("[SECRET ENREGISTRÉ]")).toBe(true);
+    expect(sent[0]?.text).toContain("YUKI_SECRET_NAS");
+    expect(sent[0]?.text).toContain("sauvegarde nocturne");
+    // ⚠️ La valeur n'est JAMAIS dans le prompt du modèle.
+    expect(sent[0]?.text).not.toContain(SECRET_VALUE);
   });
 });
 
@@ -261,5 +294,93 @@ describe("Secrets — coffre VERROUILLÉ (clé absente) ⇒ REFUS", () => {
     });
     const outcome = await s.execution.execute({ agentId, command: "echo bonjour" });
     expect(outcome.status).toBe("completed");
+  });
+});
+
+describe("Secrets — demande DIRECTE par l'outil `demander_secret` (aucune commande)", () => {
+  it("émet une demande routée vers la conversation, puis ENREGISTRE sans rien exécuter", async () => {
+    const { store, requests } = secretStack();
+    const s = await startTestStack({ secrets: store, secretRequests: requests });
+    stacks.push(s);
+    const agentId = "agent-direct";
+    const { received } = await connectAgent(s, agentId);
+
+    const result = s.execution.requestSecret({
+      names: ["YUKI_SECRET_WIFI"],
+      purpose: "se connecter au wifi du bureau",
+      agentName: "nuc00",
+      sessionId: "sess-conversation",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("demande refusée");
+    // ⚠️ Aucune commande : rien à rejouer.
+    expect(result.request.command).toBeUndefined();
+    expect(result.request.purpose).toBe("se connecter au wifi du bureau");
+    expect(result.request.sessionId).toBe("sess-conversation");
+    // ⚠️ Routée vers la SEULE conversation concernée (piège de la session).
+    expect(s.execution.pendingSecrets("sess-conversation")).toHaveLength(1);
+    expect(s.execution.pendingSecrets("une-autre-conversation")).toHaveLength(0);
+
+    // L'humain fournit la valeur : elle est rangée au coffre, RIEN n'est exécuté.
+    const submitted = await s.execution.submitSecret(result.request.id, {
+      YUKI_SECRET_WIFI: SECRET_VALUE,
+    });
+    expect(submitted.ok).toBe(true);
+    if (submitted.ok) {
+      // ⚠️ Pas de résultat d'exécution : il n'y avait pas de commande.
+      expect(submitted.outcome).toBeUndefined();
+    }
+    expect(received.filter((f) => f["type"] === "cmd")).toHaveLength(0);
+    expect(store.lookup("YUKI_SECRET_WIFI")).toBe(SECRET_VALUE);
+    // La demande a disparu du registre (fournie).
+    expect(s.execution.pendingSecrets("sess-conversation")).toHaveLength(0);
+  });
+
+  it("coffre VERROUILLÉ ⇒ refus honnête, aucune fenêtre", () => {
+    const { store, requests } = secretStack({ configured: false });
+    return startTestStack({ secrets: store, secretRequests: requests }).then((s) => {
+      stacks.push(s);
+      const result = s.execution.requestSecret({ names: ["YUKI_SECRET_X"], purpose: "test" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.code).toBe("vault_locked");
+      expect(s.execution.pendingSecrets("sess")).toHaveLength(0);
+    });
+  });
+});
+
+describe("Secrets — agent SANS validation (`never`) : le flux DÉDIÉ le couvre", () => {
+  it("une référence manquante demande le secret AU LIEU de refuser, puis rejoue la commande", async () => {
+    const { store, requests } = secretStack();
+    const s = await startTestStack({ secrets: store, secretRequests: requests });
+    stacks.push(s);
+    const agentId = "agent-sans-validation";
+    const { ws, received } = await connectAgent(s, agentId);
+    // ⚠️ Niveau `never` : AUCUNE validation humaine — c'est le cas que le flux
+    // de secret DÉDIÉ doit couvrir (il ne dépend pas de la validation).
+    s.store.setLevel(agentId, "never");
+    ws.on("message", (data: Buffer) => {
+      const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (frame["type"] !== "cmd") return;
+      send(ws, { type: "ack", cmd_id: frame["cmd_id"] as string });
+      send(ws, { type: "result", cmd_id: frame["cmd_id"] as string, exit_code: 0, stdout: "ok\n" });
+    });
+
+    const first = await s.execution.execute({
+      agentId,
+      command: "sshpass -p ${YUKI_SECRET_NAS} ssh nas",
+    });
+    // ⚠️ Ni validation ni refus : une DEMANDE de secret.
+    expect(first.status).toBe("awaiting_secret");
+    expect(first.secretNames).toEqual(["YUKI_SECRET_NAS"]);
+    expect(received.filter((f) => f["type"] === "cmd")).toHaveLength(0);
+
+    const submitted = await s.execution.submitSecret(first.secretRequestId as string, {
+      YUKI_SECRET_NAS: SECRET_VALUE,
+    });
+    expect(submitted.ok).toBe(true);
+    if (submitted.ok) expect(submitted.outcome?.status).toBe("completed");
+    const cmd = received.find((f) => f["type"] === "cmd") as Record<string, unknown>;
+    expect(cmd["env"]).toEqual({ YUKI_SECRET_NAS: SECRET_VALUE });
+    expect(String(cmd["command"])).not.toContain(SECRET_VALUE);
   });
 });

@@ -19,6 +19,7 @@
  */
 
 import { APPROVAL_RESULT_HEADER, ORIGIN_APPROVAL_RESULT } from "../agents/approval-report.js";
+import { ORIGIN_SECRET_STORED, SECRET_STORED_HEADER } from "../agents/secret-report.js";
 import { REPORT_HEADER } from "../delegation/report.js";
 import { RECAP_HEADER } from "../recap/prompt.js";
 
@@ -34,11 +35,20 @@ export const ORIGIN_JOB_REPORT = "job_report";
  */
 export const ORIGIN_RECAP = "recap";
 
+/**
+ * Origine du prompt synthétique de CONFIRMATION d'enregistrement d'un secret
+ * (après saisie dans la fenêtre `awaiting_secret` d'une demande DIRECTE).
+ * C'est une DONNÉE système (jamais une parole de l'utilisateur) : pas de bulle,
+ * pas de mémoire — et elle ne porte JAMAIS la valeur du secret.
+ * La constante est définie dans `src/agents/secret-report.ts` (source unique).
+ */
+
 /** Préfixes des textes utilisateur SYNTHÉTIQUES (jamais affichés, jamais mémorisés). */
 export const SYNTHETIC_USER_PREFIXES: readonly string[] = [
   REPORT_HEADER,
   APPROVAL_RESULT_HEADER,
   RECAP_HEADER,
+  SECRET_STORED_HEADER,
 ];
 
 /** Origines SYNTHÉTIQUES connues (jamais de bulle utilisateur). */
@@ -46,6 +56,7 @@ export const SYNTHETIC_ORIGINS: readonly string[] = [
   ORIGIN_JOB_REPORT,
   ORIGIN_APPROVAL_RESULT,
   ORIGIN_RECAP,
+  ORIGIN_SECRET_STORED,
 ];
 
 /** `true` si l'origine désigne un prompt synthétique. */

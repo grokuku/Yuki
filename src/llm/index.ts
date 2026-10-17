@@ -48,6 +48,8 @@ export {
   HERITAGE_TOOLS,
   LIBRARIAN_TOOLS,
   READ_ONLY_TOOLS,
+  SECRET_DIRECTORY_TOOLS,
+  SECRET_REQUEST_TOOLS,
   toolAllowlist,
   TOOL_POLICY,
 } from "./tool-policy.js";
@@ -59,6 +61,7 @@ export type {
   ExecutionToolName,
   HeritageToolName,
   LibrarianToolName,
+  SecretToolName,
   ToolAllowlistOptions,
   ToolPolicyEntry,
 } from "./tool-policy.js";
@@ -82,6 +85,8 @@ export {
   DELEGATION_INSTRUCTION,
   DELEGATION_MARKER,
   HEAVY_NO_USER_MARKER,
+  HEAVY_SECRET_MARKER,
   HEAVY_SYSTEM_PROMPT_FALLBACK,
+  SECRET_REQUEST_MARKER,
   VOICE_SPEECH_INSTRUCTION,
 } from "./prompts.js";

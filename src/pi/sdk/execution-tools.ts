@@ -34,6 +34,7 @@ import type {
   ExecutionServicePort,
   ScreenshotOutcome,
   ScreenshotServicePort,
+  SecretRequestToolPort,
 } from "../../agents/execution.js";
 import {
   AGENT_LEVEL_LABELS,
@@ -49,6 +50,7 @@ import {
   type AgentHistoryEntry,
 } from "../../agents/output.js";
 import { frameSecretList, type SecretDirectoryPort } from "../../secrets/directory.js";
+import { isValidSecretName } from "../../secrets/references.js";
 
 /** Coerce une valeur LLM en entier, ou `undefined` (= défaut côté service). */
 function coerceInt(value: unknown): number | undefined {
@@ -481,4 +483,160 @@ export function createSecretTools(directory: SecretDirectoryPort): ToolDefinitio
   });
 
   return [listerSecrets];
+}
+
+// ── Demande de secret par le modèle (fenêtre dans la conversation) ──────────
+
+/** Détails structurés renvoyés par `demander_secret` (jamais une valeur). */
+interface SecretRequestToolDetails {
+  status: "awaiting_secret" | "invalid" | "unavailable";
+  names?: string[];
+  requestId?: string;
+}
+
+/**
+ * Construit l'outil `demander_secret` — le CHEMIN PAR LEQUEL le modèle DEMANDE
+ * une valeur secrète à l'humain. Son exécution ouvre une FENÊTRE de saisie DANS
+ * la conversation (même mécanique que la validation : déplaçable, TTL).
+ *
+ * ⚠️ INVARIANTS : l'outil ne renvoie JAMAIS une valeur (il n'en existe pas
+ * encore) ; la valeur saisie va du NAVIGATEUR au SERVEUR sans jamais passer par
+ * le modèle ; elle est CHIFFRÉE dans le coffre. Le modèle ne doit annoncer la
+ * fenêtre QUE si l'outil répond `awaiting_secret` (jamais de mensonge).
+ *
+ * ⚠️ Porté par le rôle LÉGER (celui qui converse). Le worker lourd obtient un
+ * secret en référençant `${NOM}` dans une commande (flux sur référence
+ * manquante) — il n'a PAS cet outil.
+ */
+export function createSecretRequestTool(
+  port: SecretRequestToolPort,
+  options?: ActionToolOptions,
+): ToolDefinition[] {
+  const demanderSecret = defineTool({
+    name: "demander_secret",
+    label: "Demander un secret à l'utilisateur",
+    description:
+      "Demande à l'utilisateur de FOURNIR une ou plusieurs valeurs secrètes (mot de " +
+      "passe, jeton, clé) et ouvre à cet effet une FENÊTRE de saisie DANS la " +
+      "conversation. La valeur saisie va directement au serveur et est CHIFFRÉE dans " +
+      "le coffre : ⚠️ elle ne te sera JAMAIS transmise et tu ne la vois jamais. " +
+      "Utilise cet outil quand tu as besoin d'un secret pour une tâche (par ex. te " +
+      "connecter à une machine). Donne un `raison` clair (à quoi ça sert) et, si tu la " +
+      "connais, la `machine` visée. ⚠️ N'annonce la fenêtre QUE si l'outil répond " +
+      "`awaiting_secret` ; ne prétends JAMAIS connaître la valeur ni qu'elle est " +
+      "enregistrée avant que l'utilisateur ait validé. Les noms suivent le format " +
+      "`YUKI_SECRET_NOM` (majuscules, chiffres, `_`).",
+    promptSnippet:
+      "demander_secret(secrets, raison, machine?) — demande à l'utilisateur une ou plusieurs valeurs secrètes (fenêtre dans la conversation)",
+    parameters: Type.Object({
+      secrets: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
+        minItems: 1,
+        maxItems: 10,
+        description:
+          "Noms des secrets à demander, au format `YUKI_SECRET_NOM` (ex. " +
+          "`YUKI_SECRET_NAS`). Ces noms seront référencés plus tard par `${NOM}`.",
+      }),
+      raison: Type.String({
+        minLength: 1,
+        maxLength: 512,
+        description: "À quoi sert le secret, en clair (MONTRÉ à l'utilisateur).",
+      }),
+      machine: Type.Optional(
+        Type.String({
+          maxLength: 128,
+          description: "Machine concernée par le secret (facultatif, montré à l'utilisateur).",
+        }),
+      ),
+    }),
+    execute: async (
+      _toolCallId,
+      params,
+      _signal,
+      _onUpdate,
+      ctx,
+    ): Promise<{
+      content: Array<{ type: "text"; text: string }>;
+      details: SecretRequestToolDetails;
+    }> => {
+      const input = params as { secrets: string[]; raison: string; machine?: string };
+      const names = [
+        ...new Set(
+          (Array.isArray(input.secrets) ? input.secrets : [])
+            .map((name) => String(name).trim())
+            .filter((name) => name.length > 0),
+        ),
+      ];
+      if (names.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Aucun nom de secret fourni : indique au moins un nom `YUKI_SECRET_NOM`.",
+            },
+          ],
+          details: { status: "invalid" },
+        };
+      }
+      const invalid = names.filter((name) => !isValidSecretName(name));
+      if (invalid.length > 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "Nom de secret invalide : " +
+                invalid.map((name) => escapeOutputText(name)).join(", ") +
+                ". Utilise le format `YUKI_SECRET_NOM` (majuscules, chiffres, `_`).",
+            },
+          ],
+          details: { status: "invalid" },
+        };
+      }
+      const sessionId = resolveSessionId(ctx, options);
+      let result;
+      try {
+        result = port.requestSecret({
+          names,
+          purpose: String(input.raison),
+          ...(input.machine !== undefined && String(input.machine).trim() !== ""
+            ? { agentName: String(input.machine).trim() }
+            : {}),
+          ...(sessionId !== undefined ? { sessionId } : {}),
+          origin: "demander_secret",
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [
+            { type: "text", text: `Demande impossible : ${escapeOutputText(message)}` },
+          ],
+          details: { status: "unavailable" },
+        };
+      }
+      if (!result.ok) {
+        return {
+          content: [
+            { type: "text", text: `Demande impossible : ${escapeOutputText(result.message)}` },
+          ],
+          details: { status: "unavailable" },
+        };
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Une fenêtre de saisie est affichée dans la conversation pour : ` +
+              `${names.join(", ")}. L'utilisateur doit y saisir la valeur ; elle va ` +
+              "directement au serveur et ne t'est JAMAIS transmise. " +
+              "⚠️ N'affirme PAS que le secret est enregistré tant que l'utilisateur " +
+              "n'a pas validé.",
+          },
+        ],
+        details: { status: "awaiting_secret", names, requestId: result.request.id },
+      };
+    },
+  });
+
+  return [demanderSecret];
 }

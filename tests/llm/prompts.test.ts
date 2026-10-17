@@ -12,10 +12,13 @@ import {
   DELEGATION_INSTRUCTION,
   DELEGATION_MARKER,
   HEAVY_NO_USER_MARKER,
+  HEAVY_SECRET_MARKER,
   HEAVY_SYSTEM_PROMPT_FALLBACK,
+  SECRET_REQUEST_MARKER,
   VOICE_SPEECH_INSTRUCTION,
   appendVoiceInstruction,
 } from "../../src/llm/prompts.js";
+import { readFileSync } from "node:fs";
 import { MUTE_BLOCK_LABEL } from "../../src/tts/mute.js";
 import { isTtsEnabled } from "../../src/tts/options.js";
 
@@ -74,6 +77,21 @@ describe("condition réelle : `tts.enabled === \"on\"`", () => {
         USER_PROMPT,
       );
     }
+  });
+});
+
+describe("prompts de CONFIG — la capacité « demander un secret » est décrite", () => {
+  const light = readFileSync("config/pi/system-prompt.md", "utf8");
+  const heavy = readFileSync("config/pi/system-prompt-heavy.md", "utf8");
+
+  it("le prompt LÉGER décrit `demander_secret` (sinon Yuki répond « non »)", () => {
+    expect(light).toContain(SECRET_REQUEST_MARKER);
+    expect(light).toMatch(/fenêtre/i);
+  });
+
+  it("le prompt LOURD décrit le flux `awaiting_secret` (référence manquante)", () => {
+    expect(heavy).toContain(HEAVY_SECRET_MARKER);
+    expect(heavy).toContain("YUKI_SECRET_");
   });
 });
 

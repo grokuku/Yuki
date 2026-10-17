@@ -54,8 +54,8 @@ class FakeSecretPort implements SecretRequestGatewayPort {
       request,
       outcome: {
         status: "completed",
-        agentId: request.agentId,
-        command: request.command,
+        agentId: request.agentId ?? "agent-a",
+        command: request.command ?? "mount -o ${YUKI_SECRET_NAS}",
         destructive: false,
         destructiveIds: [],
         exitCode: 0,

@@ -471,6 +471,77 @@ describe("identité machine — nom + identifiant", () => {
   });
 });
 
+describe("demande de SECRET — fenêtre dédiée (commande OU raison)", () => {
+  function setupSecret() {
+    const store = fakeStore();
+    const submitted: Array<{ id: string; values: Record<string, string> }> = [];
+    const layer = createApprovalLayer({
+      onDecide: () => undefined,
+      onSubmitSecret: (id: string, values: Record<string, string>) =>
+        submitted.push({ id, values }),
+      doc: doc as unknown as never,
+      win: { innerWidth: 1600, innerHeight: 1000 } as unknown as never,
+      store,
+    });
+    return { layer, store, submitted };
+  }
+
+  it("demande DIRECTE : montre la RAISON, pas de bloc commande, machine facultative", () => {
+    const { layer } = setupSecret();
+    layer.showSecret({
+      id: "sec-1",
+      names: ["YUKI_SECRET_WIFI"],
+      purpose: "se connecter au wifi du bureau",
+      ttlSeconds: 600,
+    });
+    const win = doc.body.querySelectorAll(".approval--secret")[0];
+    expect(win).not.toBeNull();
+    const text = textOf(win as unknown as FakeNode);
+    expect(text).toContain("se connecter au wifi du bureau");
+    expect(text).toContain("YUKI_SECRET_WIFI");
+    // Aucune commande : aucun bloc `.approval__command`.
+    expect((win as unknown as FakeNode).querySelector(".approval__command")).toBeNull();
+    // Aucune machine fournie : aucun noeud machine.
+    expect((win as unknown as FakeNode).querySelector(".approval__machine")).toBeNull();
+    layer.reset();
+  });
+
+  it("demande sur RÉFÉRENCE MANQUANTE : montre la commande exacte, pas de raison", () => {
+    const { layer } = setupSecret();
+    layer.showSecret({
+      id: "sec-2",
+      agentId: "agent-nas",
+      agentName: "nas",
+      command: "mount -o ${YUKI_SECRET_NAS}",
+      names: ["YUKI_SECRET_NAS"],
+      ttlSeconds: 600,
+    });
+    const win = doc.body.querySelectorAll(".approval--secret")[0] as unknown as FakeNode;
+    const text = textOf(win);
+    expect(text).toContain("mount -o ${YUKI_SECRET_NAS}");
+    expect(text).toContain("nas");
+    expect(win.querySelector(".approval__purpose")).toBeNull();
+    layer.reset();
+  });
+
+  it("soumet les valeurs sans jamais les afficher ailleurs (le champ reste local)", () => {
+    const { layer, submitted } = setupSecret();
+    layer.showSecret({
+      id: "sec-3",
+      names: ["YUKI_SECRET_NAS"],
+      purpose: "x",
+      ttlSeconds: 600,
+    });
+    const win = doc.body.querySelectorAll(".approval--secret")[0] as unknown as FakeNode;
+    const input = win.querySelector(".approval__secret-input") as FakeNode & { value: string };
+    input.value = "s3cr3t";
+    const submit = win.querySelector(".approval__btn") as FakeNode;
+    submit.click();
+    expect(submitted).toEqual([{ id: "sec-3", values: { YUKI_SECRET_NAS: "s3cr3t" } }]);
+    layer.reset();
+  });
+});
+
 describe("garde-fous statiques (CSP + positionnement par CSSOM)", () => {
   const source = readFileSync(join(process.cwd(), "public", "ui", "approval-window.js"), "utf8");
   const css = readFileSync(join(process.cwd(), "public", "ui", "styles.css"), "utf8");

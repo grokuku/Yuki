@@ -21,6 +21,16 @@ export const DELEGATION_MARKER = "delegate";
 /** Le prompt lourd DOIT interdire de s'adresser à l'utilisateur final. */
 export const HEAVY_NO_USER_MARKER = "NE T'ADRESSE JAMAIS À L'UTILISATEUR";
 
+/**
+ * Le prompt LÉGER DOIT décrire la DEMANDE de secret (`demander_secret`) : c'est
+ * ce qui fait que Yuki SAIT qu'elle peut afficher une fenêtre pour réclamer une
+ * valeur. Sans ce marqueur, elle répondrait « non » (bug utilisateur).
+ */
+export const SECRET_REQUEST_MARKER = "demander_secret";
+
+/** Le prompt LOURD DOIT décrire le flux sur référence manquante (`awaiting_secret`). */
+export const HEAVY_SECRET_MARKER = "awaiting_secret";
+
 /** Prompt système du lourd, utilisé si le fichier est absent/vide. */
 export const HEAVY_SYSTEM_PROMPT_FALLBACK = `# Yuki — worker lourd
 

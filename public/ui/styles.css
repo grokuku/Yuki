@@ -1756,6 +1756,17 @@ h6.md-heading {
   color: var(--muted);
 }
 
+.approval__purpose {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.approval__purpose strong {
+  color: var(--accent);
+}
+
 .approval__secret-field {
   display: flex;
   flex-direction: column;

@@ -697,9 +697,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     const sessionId = result.request.sessionId ?? sessionIdFor(client);
     if (!sessionId) return;
     broadcastControl(sessionId, { type: "secret_cleared", id: result.request.id });
+    // Une demande DIRECTE (outil `demander_secret`) n'a AUCUNE commande à rejouer :
+    // pas de résultat d'exécution à afficher — le modèle est réveillé à part.
+    const outcome = result.outcome;
+    if (!outcome) return;
     // Résultat de la commande REJOUÉE : affiché à l'humain via la MÊME trame de
     // résultat éphémère que les validations (déjà masquée à la source).
-    const outcome = result.outcome;
     broadcastControl(sessionId, {
       type: "approval_result",
       result: {

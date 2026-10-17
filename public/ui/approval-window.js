@@ -343,9 +343,11 @@ export function createApprovalLayer({
   /** En-tête machine partagé (nom + identifiant repli), sans injection. */
   function machineNode(source) {
     const label = machineLabel(source);
+    const id =
+      source.agentId === undefined || source.agentId === null ? "" : String(source.agentId);
     const children = [h("span", { class: "approval__name", text: label })];
-    if (label !== String(source.agentId)) {
-      children.push(h("span", { class: "approval__agent-id", text: `id ${source.agentId}` }));
+    if (id !== "" && label !== id) {
+      children.push(h("span", { class: "approval__agent-id", text: `id ${id}` }));
     }
     return h("span", { class: "approval__machine" }, children);
   }
@@ -626,6 +628,11 @@ export function createApprovalLayer({
     const conversation =
       typeof options.conversation === "string" ? options.conversation.trim() : "";
     const names = Array.isArray(request.names) ? request.names.map((n) => String(n)) : [];
+    const command = request.command === undefined || request.command === null
+      ? ""
+      : String(request.command);
+    const purpose = typeof request.purpose === "string" ? request.purpose.trim() : "";
+    const machine = machineLabel(request);
 
     const inputs = new Map();
     const fields = names.map((name) => {
@@ -657,11 +664,11 @@ export function createApprovalLayer({
       id,
       label: {
         className: "approval approval--secret approval-window",
-        ariaLabel: `Demande de secret — ${machineLabel(request)}`,
+        ariaLabel: machine !== "" ? `Demande de secret — ${machine}` : "Demande de secret",
       },
       head: [
         h("span", { class: "approval__title", text: "Secret requis" }),
-        machineNode({ agentId: request.agentId, agentName: request.agentName }),
+        ...(machine !== "" ? [machineNode(request)] : []),
         ...(conversation
           ? [
               h(
@@ -675,17 +682,35 @@ export function createApprovalLayer({
       ],
     });
     const body = h("div", { class: "approval-window__body" }, [
-      foldBlock({
-        tag: "code",
-        className: "approval__command",
-        text: String(request.command ?? ""),
-        noun: "la commande",
-      }),
+      // Demande sur RÉFÉRENCE MANQUANTE : on MONTRE la commande exacte (à quoi ça
+      // sert). Demande DIRECTE : aucune commande, on montre la RAISON.
+      ...(command !== ""
+        ? [
+            foldBlock({
+              tag: "code",
+              className: "approval__command",
+              text: command,
+              noun: "la commande",
+            }),
+          ]
+        : []),
+      ...(purpose !== ""
+        ? [
+            h("p", { class: "approval__purpose" }, [
+              h("strong", { text: "Pourquoi : " }),
+              purpose,
+            ]),
+          ]
+        : []),
       h("p", {
         class: "approval__secret-hint",
         text:
-          "Ces secrets ne sont pas dans le coffre. Saisis leur valeur : elle sera " +
-          "chiffrée et la commande s'exécutera. Elle n'est jamais renvoyée ni journalisée.",
+          "Ces secrets ne sont pas encore dans le coffre. Saisis leur valeur : elle " +
+          "sera chiffrée et " +
+          (command !== ""
+            ? "la commande s'exécutera."
+            : "enregistrée dans le coffre.") +
+          " Elle n'est jamais renvoyée ni journalisée.",
       }),
       ...fields,
     ]);

@@ -69,6 +69,7 @@ import {
   createAgentDirectoryTools,
   createExecutionTools,
   createScreenshotTool,
+  createSecretRequestTool,
   createSecretTools,
 } from "./sdk/execution-tools.js";
 import {
@@ -1151,6 +1152,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // Coffre de secrets (extension) : outil de CONSULTATION `lister_secrets`
       // (LECTURE SEULE, NOMS seulement). Indépendant de l'exécution.
       customTools.push(...createSecretTools(options.secrets));
+    }
+    if (options.secretRequests) {
+      // DEMANDE de secret (`demander_secret`) : ouvre une fenêtre de saisie DANS
+      // la conversation. La valeur va du navigateur au serveur SANS passer par le
+      // modèle. ⚠️ RÉSERVÉ au léger (le lourd n'a pas ce port).
+      customTools.push(...createSecretRequestTool(options.secretRequests));
     }
     if (options.heritage) {
       // Lot 13 : outil de CONSULTATION de l'archive « vie antérieure » (LECTURE

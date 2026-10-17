@@ -10,6 +10,8 @@ import {
   AGENT_DIRECTORY_TOOLS,
   HERITAGE_TOOLS,
   LIBRARIAN_TOOLS,
+  SECRET_DIRECTORY_TOOLS,
+  SECRET_REQUEST_TOOLS,
   buildModelsConfigFrom,
   DEFAULT_EFFECTIVE_LLM_CONFIG,
   containsForbiddenTool,
@@ -211,6 +213,27 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
       expect(allTools, forbidden).not.toContain(forbidden);
     }
     expect(containsForbiddenTool(allTools)).toBe(false);
+  });
+
+  it("les outils de SECRET : consultation pour les deux rôles, DEMANDE pour le léger UNIQUEMENT", () => {
+    expect(SECRET_DIRECTORY_TOOLS).toEqual(["lister_secrets"]);
+    expect(SECRET_REQUEST_TOOLS).toEqual(["demander_secret"]);
+
+    // Par défaut : aucun outil de secret exposé (coffre non initialisé).
+    expect(toolAllowlist("light")).not.toContain("lister_secrets");
+    expect(toolAllowlist("light")).not.toContain("demander_secret");
+
+    // `lister_secrets` : les DEUX rôles (le lourd en a besoin pour écrire `${NOM}`).
+    expect(toolAllowlist("light", { secretsEnabled: true })).toContain("lister_secrets");
+    expect(toolAllowlist("heavy", { secretsEnabled: true })).toContain("lister_secrets");
+
+    // `demander_secret` : le LÉGER seulement (c'est lui qui converse avec l'utilisateur).
+    const lightRequest = toolAllowlist("light", { secretRequestsEnabled: true });
+    expect(lightRequest).toContain("demander_secret");
+    // ⚠️ Même si le câblage l'active sur le lourd, la politique l'en empêche.
+    const heavyRequest = toolAllowlist("heavy", { secretRequestsEnabled: true });
+    expect(heavyRequest).not.toContain("demander_secret");
+    expect(containsForbiddenTool(lightRequest)).toBe(false);
   });
 
   it("les outils du LIBRAIRE ne sont exposés que s'ils sont activés, et aucun ne va chercher une page web", () => {

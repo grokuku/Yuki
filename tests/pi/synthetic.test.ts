@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { APPROVAL_RESULT_HEADER, ORIGIN_APPROVAL_RESULT } from "../../src/agents/approval-report.js";
+import { ORIGIN_SECRET_STORED, SECRET_STORED_HEADER } from "../../src/agents/secret-report.js";
 import { REPORT_HEADER } from "../../src/delegation/report.js";
 import { RECAP_HEADER } from "../../src/recap/prompt.js";
 import {
@@ -24,18 +25,23 @@ describe("prompts synthétiques — source unique", () => {
     expect(SYNTHETIC_USER_PREFIXES).toContain(REPORT_HEADER);
     expect(SYNTHETIC_USER_PREFIXES).toContain(APPROVAL_RESULT_HEADER);
     expect(SYNTHETIC_USER_PREFIXES).toContain(RECAP_HEADER);
+    // Confirmation d'enregistrement d'un secret (demande DIRECTE) : synthétique.
+    expect(SYNTHETIC_USER_PREFIXES).toContain(SECRET_STORED_HEADER);
   });
 
   it("les origines synthétiques sont reconnues, les autres non", () => {
     expect(isSyntheticOrigin(ORIGIN_JOB_REPORT)).toBe(true);
     expect(isSyntheticOrigin(ORIGIN_APPROVAL_RESULT)).toBe(true);
     expect(isSyntheticOrigin(ORIGIN_RECAP)).toBe(true);
+    expect(isSyntheticOrigin(ORIGIN_SECRET_STORED)).toBe(true);
     expect(isSyntheticOrigin("run_command")).toBe(false);
+    expect(isSyntheticOrigin("demander_secret")).toBe(false);
     expect(isSyntheticOrigin(undefined)).toBe(false);
     expect(SYNTHETIC_ORIGINS).toEqual([
       ORIGIN_JOB_REPORT,
       ORIGIN_APPROVAL_RESULT,
       ORIGIN_RECAP,
+      ORIGIN_SECRET_STORED,
     ]);
   });
 });

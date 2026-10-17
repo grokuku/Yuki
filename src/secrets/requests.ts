@@ -6,20 +6,36 @@
  * commande référence un secret absent du coffre, il faut malgré tout interroger
  * l'humain — c'est un flux PROPRE, qui couvre donc les agents SANS validation.
  *
- * Une demande naît quand une commande référence `${YUKI_SECRET_NOM}` et que
- * `NOM` n'est PAS dans le coffre. Elle porte le NOM (jamais la valeur) et de quoi
- * REJOUER la commande à l'identique. Elle est ÉPHÉMÈRE : registre EN MÉMOIRE,
- * borné, TTL — jamais persistée, jamais dans le transcript, le snapshot, le
- * rejeu ou la mémoire. La VALEUR fournie par l'humain ne transite que par le
- * message de soumission (voir transport WS) puis est CHIFFRÉE dans le coffre.
+ * Une demande naît de DEUX façons, toutes deux routées vers la MÊME fenêtre :
+ * (1) une commande référence `${YUKI_SECRET_NOM}` et `NOM` n'est PAS dans le
+ * coffre (flux sur RÉFÉRENCE MANQUANTE — elle porte alors la commande à REJOUER
+ * et la machine) ; (2) le modèle appelle l'outil `demander_secret` pour obtenir
+ * une valeur de l'humain (demande DIRECTE — sans commande, avec une `raison`).
+ * Dans les deux cas elle porte le NOM (jamais la valeur) et est ÉPHÉMÈRE :
+ * registre EN MÉMOIRE, borné, TTL — jamais persistée, jamais dans le transcript,
+ * le snapshot, le rejeu ou la mémoire. La VALEUR fournie par l'humain ne
+ * transite que par le message de soumission (voir transport WS) puis est
+ * CHIFFRÉE dans le coffre.
  */
 
 export interface PendingSecretRequest {
   id: string;
-  agentId: string;
+  /**
+   * Machine cible (flux sur RÉFÉRENCE MANQUANTE). Absente pour une demande
+   * DIRECTE (outil `demander_secret`) qui ne vise aucune machine en particulier.
+   */
+  agentId?: string;
   agentName?: string;
-  /** Commande EXACTE (avec ses références `${YUKI_SECRET_…}`, jamais la valeur). */
-  command: string;
+  /**
+   * Commande EXACTE (avec ses références `${YUKI_SECRET_…}`, jamais la valeur).
+   * Absente pour une demande DIRECTE : il n'y a alors AUCUNE commande à rejouer.
+   */
+  command?: string;
+  /**
+   * POURQUOI cette demande, en clair et pour l'humain (« à quoi ça sert »).
+   * ⚠️ Jamais une valeur. Optionnel.
+   */
+  purpose?: string;
   /** Détails d'exécution à REJOUER tels quels après fourniture (immédiateté). */
   shell?: string;
   cwd?: string;
@@ -27,7 +43,7 @@ export interface PendingSecretRequest {
   origin?: string;
   /** Conversation d'où la demande est émise (routage vers la bonne fenêtre). */
   sessionId?: string;
-  /** Noms de secrets MANQUANTS à fournir (ordre de première apparition). */
+  /** Noms de secrets à fournir (ordre de première apparition). */
   names: string[];
   status: "pending" | "fulfilled" | "cancelled";
   createdAt: string;
@@ -36,15 +52,30 @@ export interface PendingSecretRequest {
 }
 
 export interface SecretRequestInput {
-  agentId: string;
+  /** Machine cible — flux sur référence manquante. Absente pour une demande DIRECTE. */
+  agentId?: string;
   agentName?: string;
-  command: string;
+  /** Commande à rejouer — flux sur référence manquante. Absente pour une demande DIRECTE. */
+  command?: string;
+  /** « À quoi ça sert », pour l'humain — surtout les demandes DIRECTES. */
+  purpose?: string;
   names: string[];
   shell?: string;
   cwd?: string;
   timeoutMs?: number;
   origin?: string;
   sessionId?: string;
+}
+
+/**
+ * Une demande est REJOUABLE quand elle porte une commande ET une machine :
+ * c'est le flux sur RÉFÉRENCE MANQUANTE. Une demande DIRECTE (sans commande)
+ * ne fait qu'ENREGISTRER le secret — rien à relancer.
+ */
+export function isReplayableSecretRequest(
+  entry: Pick<PendingSecretRequest, "agentId" | "command">,
+): boolean {
+  return entry.command !== undefined && entry.agentId !== undefined;
 }
 
 export type SecretRequestEvent =
@@ -119,17 +150,23 @@ export class SecretRequestRegistry {
     }
   }
 
-  /** Demande (ou retrouve) une fourniture de secret pour une commande donnée. */
+  /**
+   * Demande (ou retrouve) une fourniture de secret. Deux usages :
+   *  - flux sur RÉFÉRENCE MANQUANTE : `agentId` + `command` présents (rejeu) ;
+   *  - demande DIRECTE (outil `demander_secret`) : `command`/`agentId` absents,
+   *    `purpose` décrit la raison. Rien à rejouer, on ne fait qu'enregistrer.
+   */
   request(input: SecretRequestInput): PendingSecretRequest {
     this.purge();
-    const existing = this.findPending(input.agentId, input.command, input.sessionId);
+    const existing = this.findPending(input);
     if (existing) return existing;
     const now = this.now();
     const entry: PendingSecretRequest = {
       id: this.idFactory(),
-      agentId: input.agentId,
+      ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
       ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
-      command: input.command,
+      ...(input.command !== undefined ? { command: input.command } : {}),
+      ...(input.purpose !== undefined ? { purpose: input.purpose } : {}),
       ...(input.shell !== undefined ? { shell: input.shell } : {}),
       ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
@@ -143,31 +180,32 @@ export class SecretRequestRegistry {
     };
     this.entries.set(entry.id, entry);
     this.enforceLimit();
-    // ⚠️ Journal SANS la valeur : uniquement le nom des secrets manquants.
+    // ⚠️ Journal SANS la valeur : uniquement les noms et la RAISON (jamais une valeur).
     this.logger?.info("secrets.request.requested", {
       request_id: entry.id,
-      agent_id: entry.agentId,
+      agent_id: entry.agentId ?? null,
       session_id: entry.sessionId ?? null,
       names: entry.names.join(","),
+      purpose: entry.purpose ?? null,
     });
     this.emit({ kind: "requested", request: entry });
     return entry;
   }
 
-  private findPending(
-    agentId: string,
-    command: string,
-    sessionId?: string,
-  ): PendingSecretRequest | undefined {
+  /**
+   * Une demande IDENTIQUE (même conversation, même machine, même commande,
+   * même raison, mêmes noms) déjà en attente est REUTILISÉE : jamais de doublon.
+   */
+  private findPending(input: SecretRequestInput): PendingSecretRequest | undefined {
+    const namesKey = input.names.join(",");
     for (const entry of this.entries.values()) {
-      if (
-        entry.status === "pending" &&
-        entry.agentId === agentId &&
-        entry.command === command &&
-        (sessionId === undefined || entry.sessionId === sessionId)
-      ) {
-        return entry;
-      }
+      if (entry.status !== "pending") continue;
+      if (input.sessionId !== undefined && entry.sessionId !== input.sessionId) continue;
+      if ((entry.agentId ?? "") !== (input.agentId ?? "")) continue;
+      if ((entry.command ?? "") !== (input.command ?? "")) continue;
+      if ((entry.purpose ?? "") !== (input.purpose ?? "")) continue;
+      if (entry.names.join(",") !== namesKey) continue;
+      return entry;
     }
     return undefined;
   }
@@ -194,7 +232,7 @@ export class SecretRequestRegistry {
     entry.status = "fulfilled";
     this.logger?.info("secrets.request.fulfilled", {
       request_id: id,
-      agent_id: entry.agentId,
+      agent_id: entry.agentId ?? null,
       session_id: entry.sessionId ?? null,
     });
     this.emit({ kind: "cleared", request: entry, reason: "fulfilled" });
@@ -207,7 +245,7 @@ export class SecretRequestRegistry {
     entry.status = "cancelled";
     this.logger?.info("secrets.request.cancelled", {
       request_id: id,
-      agent_id: entry.agentId,
+      agent_id: entry.agentId ?? null,
       session_id: entry.sessionId ?? null,
     });
     this.emit({ kind: "cleared", request: entry, reason: "cancelled" });

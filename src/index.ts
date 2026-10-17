@@ -1001,6 +1001,10 @@ async function main(): Promise<void> {
         // Secrets : consulter les NOMS (jamais les valeurs) pour savoir quoi
         // référencer en délégation. Actif dès que le coffre est initialisé.
         secretsEnabled: secretStore !== undefined,
+        // DEMANDE de secret (`demander_secret`) : ouvre une fenêtre de saisie
+        // DANS la conversation. Actif dès que le service d'exécution expose le
+        // port de demande (le coffre doit être utilisable).
+        secretRequestsEnabled: agentExecution !== undefined,
         // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
         heritageEnabled: true,
         // Libraire : quatre outils + capture (selon l'URL et le réglage au
@@ -1011,6 +1015,9 @@ async function main(): Promise<void> {
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
       ...(secretStore ? { secrets: secretStore } : {}),
+      // DEMANDE de secret : la fenêtre s'affiche dans SA conversation (session
+      // légère = celle de l'utilisateur).
+      ...(agentExecution ? { secretRequests: agentExecution } : {}),
       heritage: heritageStore,
       ...(librarianConfigured
         ? {
