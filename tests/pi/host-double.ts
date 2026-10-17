@@ -10,7 +10,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 import type { PiHost } from "../../src/pi/host.js";
-import { isSyntheticOrigin } from "../../src/pi/synthetic.js";
+import { isSyntheticOrigin, ORIGIN_RECAP } from "../../src/pi/synthetic.js";
+import { parseRecapPrompt } from "../../src/recap/prompt.js";
 import { PiHostError } from "../../src/pi/errors.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "../../src/pi/instrumentation.js";
 import type {
@@ -98,6 +99,12 @@ export interface FakePiHostOptions {
   latencyScale?: number;
   /** Sessions SUPPLÉMENTAIRES connues (bascule multi-fils), sans SDK. */
   sessions?: FakeSessionSeed[];
+  /**
+   * Fait ÉCHOUER le prochain `send` (double de test du cas « LLM indisponible ») :
+   * sert à prouver qu'une création de conversation dédiée ne laisse JAMAIS une
+   * conversation à moitié (tout ou rien).
+   */
+  failSendOnce?: boolean;
 }
 
 /** Session pré-remplie d'un double de host (id + fichier + titre + transcript). */
@@ -124,6 +131,7 @@ export class FakePiHost implements PiHost {
   private readonly knownSessions: FakeKnownSession[];
   private readonly titles = new Map<string, string>();
   private readonly setAsideIds = new Set<string>();
+  private failSendOnce: boolean;
 
   private sessionId: string;
   private ready = false;
@@ -145,11 +153,17 @@ export class FakePiHost implements PiHost {
       ...(seed.title ? { title: seed.title } : {}),
       transcript: (seed.transcript ?? []).map((entry) => ({ ...entry })),
     }));
+    this.failSendOnce = options.failSendOnce ?? false;
   }
 
   /** Ajoute un script à rejouer au prochain `send`. */
   pushScript(script: FakeScript): void {
     this.scripts.push(script);
+  }
+
+  /** Arme l'échec du PROCHAIN `send` (doublure du cas « LLM indisponible »). */
+  failNextSend(): void {
+    this.failSendOnce = true;
   }
 
   /**
@@ -209,6 +223,10 @@ export class FakePiHost implements PiHost {
   send(sessionId: string, text: string, opts?: SendOptions): RunHandle {
     if (!this.ready) {
       throw new Error("PI_NOT_READY");
+    }
+    if (this.failSendOnce) {
+      this.failSendOnce = false;
+      throw new PiHostError("LLM_UNAVAILABLE", "Aucun LLM disponible (test).");
     }
     void sessionId;
     const runId = randomUUID();
@@ -419,10 +437,21 @@ export class FakePiHost implements PiHost {
     this.partial = "";
     // ⚠️ Miroir du host réel : un prompt SYNTHÉTIQUE (report de job, résultat
     // de commande validée) n'ajoute PAS de bulle utilisateur au transcript et
-    // ne diffuse PAS son texte dans `run_started`.
+    // ne diffuse PAS son texte dans `run_started`. Le RÉCAPITULATIF de
+    // conversation dédiée, lui, pousse un bloc VISIBLE (`role: "recap"`).
     const synthetic = isSyntheticOrigin(run.origin);
     if (!synthetic) {
       this.transcript.push({ role: "user", text: run.text });
+    } else if (run.origin === ORIGIN_RECAP) {
+      const parsed = parseRecapPrompt(run.text);
+      if (parsed) {
+        this.transcript.push({
+          role: "recap",
+          text: parsed.recap,
+          ...(parsed.originTitle ? { origin: parsed.originTitle } : {}),
+          ...(parsed.subject ? { subject: parsed.subject } : {}),
+        });
+      }
     }
     this.setState("streaming", run.runId);
 

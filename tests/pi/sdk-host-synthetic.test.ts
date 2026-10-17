@@ -21,7 +21,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ORIGIN_APPROVAL_RESULT } from "../../src/agents/approval-report.js";
-import { ORIGIN_JOB_REPORT } from "../../src/pi/synthetic.js";
+import { ORIGIN_JOB_REPORT, ORIGIN_RECAP } from "../../src/pi/synthetic.js";
+import { frameRecapPrompt } from "../../src/recap/prompt.js";
 import type { PiEvent, PiLogger } from "../../src/pi/types.js";
 
 /**
@@ -158,6 +159,43 @@ describe("sdk-host réel — garde d'éphémérité du prompt synthétique", () 
     if (started?.type !== "run_started") throw new Error("run_started attendu");
     expect(started.userText).toBeUndefined();
     expect(started.origin).toBe(ORIGIN_JOB_REPORT);
+
+    await host.stop();
+  });
+
+  it("le RÉCAPITULATIF dédié devient un bloc VISIBLE, sans userText ni bulle utilisateur", async () => {
+    const host = makeHost();
+    const events: PiEvent[] = [];
+    host.subscribeAll((event) => events.push(event));
+    await host.start();
+    const sessionId = host.currentSessionId();
+
+    host.send(
+      sessionId!,
+      frameRecapPrompt({
+        originTitle: "Discussion générale",
+        originSessionId: "sess-origine",
+        subject: "le coffre de secrets",
+        wholeThread: true,
+        recap: "Décision : clé en 0600.\nChiffrement : AES-256-GCM.",
+      }),
+      { origin: ORIGIN_RECAP },
+    );
+    await delay(20);
+
+    const started = events.find((event) => event.type === "run_started");
+    if (started?.type !== "run_started") throw new Error("run_started attendu");
+    // Ni userText diffusé, ni origine utilisateur : c'est une donnée générée.
+    expect(started.userText).toBeUndefined();
+    expect(started.origin).toBe(ORIGIN_RECAP);
+    const transcript = host.getState(sessionId!)?.transcript ?? [];
+    expect(transcript.some((entry) => entry.role === "user")).toBe(false);
+    expect(transcript[0]).toMatchObject({
+      role: "recap",
+      text: "Décision : clé en 0600.\nChiffrement : AES-256-GCM.",
+      origin: "Discussion générale",
+      subject: "le coffre de secrets",
+    });
 
     await host.stop();
   });

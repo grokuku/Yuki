@@ -391,6 +391,19 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_MEMORY_EXTRACT_TIMEOUT_MS",
   },
 
+  // --- Récapitulatif « conversation dédiée » -------------------------------
+  // Appel LLM LONG (récapitulatif exhaustif d'une conversation) : délai
+  // GÉNÉREUX à dessein. Au-delà, on interrompt et on l'annonce honnêtement
+  // (aucune conversation n'est créée).
+  "recap.timeoutMs": {
+    type: "int",
+    default: 180_000,
+    min: 5_000,
+    max: 600_000,
+    apply: "hot",
+    env: "YUKI_RECAP_TIMEOUT_MS",
+  },
+
   // --- Transport temps réel ------------------------------------------------
   "transport.replayBuffer": {
     type: "int",

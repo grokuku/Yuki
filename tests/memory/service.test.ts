@@ -18,6 +18,7 @@ import {
   type MemoryEntry,
 } from "../../src/memory/index.js";
 import { createLogger } from "../../src/observability/logger.js";
+import { buildStoredUserText } from "../../src/pi/timestamp.js";
 
 const tempDirs: string[] = [];
 
@@ -335,6 +336,28 @@ describe("MemoryService — rappel borné et dégradation gracieuse", () => {
     expect(result.chars).toBe(0);
     // Mémoire ACTIVÉE même sans bloc : la capacité est annoncée honnêtement.
     expect(result.enabled).toBe(true);
+    h.close();
+  });
+
+  it("rappelle MALGRÉ le repère temporel `[horodatage] …` du message utilisateur stocké", async () => {
+    // ⚠️ RÉGRESSION PROUVÉE : le rappel reçoit le TEXTE UTILISATEUR STOCKÉ, qui
+    // porte le préfixe `[horodatage] YYYY-MM-DD HH:mm (heure locale)`. Sans le
+    // retirer, ses 8 jetons saturent le budget de termes de `buildMatchQuery`
+    // (les 8 PREMIERS) et le message utile ne trouve JAMAIS de souvenir.
+    const h = harness();
+    h.service.start();
+    h.store.add({
+      text: "L'utilisateur s'appelle Alice",
+      source: "s",
+      cat: "fait",
+    });
+    const stored = buildStoredUserText("Comment je m'appelle ?", {
+      at: new Date("2026-10-17T09:43:00Z"),
+    });
+    const result = await h.service.recall(stored);
+    expect(result.block).not.toBeNull();
+    expect(result.block).toContain("Alice");
+    expect(result.entries).toBe(1);
     h.close();
   });
 

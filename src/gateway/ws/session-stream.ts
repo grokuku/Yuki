@@ -145,6 +145,8 @@ export class SessionStream {
         text: entry.text,
         ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
         ...(entry.metrics !== undefined ? { metrics: entry.metrics } : {}),
+        ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+        ...(entry.subject !== undefined ? { subject: entry.subject } : {}),
       })),
     };
   }

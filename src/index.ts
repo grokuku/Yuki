@@ -117,7 +117,8 @@ import {
 } from "./push/index.js";
 import type { PushApiDeps } from "./gateway/routes/push.js";
 import { RulesStore } from "./rules/index.js";
-import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
+import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkRecapWriter, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
+import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
   EngineCapabilitiesProbe,
@@ -1121,6 +1122,33 @@ async function main(): Promise<void> {
       serverVersion: env.version,
       replayBufferSize: config.getNumber("transport.replayBuffer"),
       replayBufferBytes: config.getNumber("transport.replayBytes"),
+      // « Continuer dans une conversation dédiée » : appel LLM ISOLÉ (session
+      // éphémère en mémoire) NOURRI avec le transcript, sur le compte LOURD
+      // quand il est disponible — appel LONG et exigeant, qui ne doit pas
+      // occuper l'unique slot du léger réservé à la conversation — avec repli
+      // sur le léger. La référence est RELUE à chaque appel ⇒ un changement de
+      // modèle s'applique sans redémarrage. Aucun tour n'est exécuté dans la
+      // conversation d'origine : elle n'est jamais polluée ni modifiée.
+      recap: createRecapService(
+        createSdkRecapWriter({
+          cwd: env.piCwd,
+          agentDir: env.piAgentDir,
+          authPath: join(env.piAgentDir, "auth.json"),
+          modelsPath,
+          modelReference: () =>
+            memoryWriteModelReference({
+              heavyAvailable: resolveAvail().isAvailable("heavy"),
+              heavyRef: liveHeavyReference(),
+              lightRef: liveLightReference(),
+            }),
+          // Récapituler est une tâche de FIDÉLITÉ (restitution), pas de
+          // raisonnement : le niveau de réflexion reste « off » pour être
+          // compatible avec les DEUX modèles et borné en durée.
+          thinking: "off",
+          timeoutMs: () => config.getNumber("recap.timeoutMs"),
+          logger,
+        }),
+      ),
       // Épinglage des conversations : store hôte SÉPARÉ du JSONL du SDK Pi.
       pins: SessionPinStore.open({ path: env.sessionPinsPath, logger }),
       // Encart agents de la barre latérale (absent si le registre n'a pas démarré).

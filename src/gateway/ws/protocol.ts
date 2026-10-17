@@ -30,6 +30,34 @@ export type ClientMessage =
   | { type: "playback"; runId: string; event: "started" | "aborted" }
   | { type: "switch"; sessionId: string }
   | { type: "new" }
+  | {
+      /**
+       * « Continuer dans une conversation dédiée » — ÉTAPE 1 : l'utilisateur
+       * donne un SUJET (texte court) et l'on produit un RÉCAPITULATIF exhaustif
+       * axé sur ce sujet, tiré de TOUTE la conversation. La réponse arrive en
+       * trame de CONTRÔLE `recap_ready` (elle n'est PAS encore une conversation :
+       * c'est un APERÇU, que l'humain peut relire et corriger).
+       */
+      type: "recap_preview";
+      /** Conversation d'origine (jamais modifiée). */
+      sessionId: string;
+      /** Sujet visé ; vide ⇒ récapitulatif de toute la conversation. */
+      subject: string;
+      /** Identifiant de corrélation client (réponses `recap_ready`/`error`). */
+      requestId: string;
+    }
+  | {
+      /**
+       * ÉTAPE 2 : l'humain VALIDE l'aperçu (titre/texte éventuellement
+       * corrigés) et l'on crée la conversation dédiée. Le récapitulatif
+       * provient de l'aperçu serveur (jamais d'un texte arbitraire).
+       */
+      type: "recap_create";
+      requestId: string;
+      title: string;
+      /** Texte éventuellement corrigé par l'humain (défaut : l'aperçu). */
+      recap?: string;
+    }
   | { type: "rename"; sessionId: string; title: string }
   | { type: "setAside"; sessionId: string }
   | { type: "pin"; sessionId: string; pinned: boolean }
@@ -167,7 +195,38 @@ export type ServerMessage =
       activeRunId?: string;
       transcript: TranscriptEntry[];
     }
-  | { type: "error"; code: string; message: string; runId?: string }
+  | { type: "error"; code: string; message: string; runId?: string; requestId?: string }
+  | {
+      /**
+       * APERÇU de récapitulatif (trame de CONTRÔLE, aucun `seq` consommé :
+       * jamais bufferisée, jamais dans le rejeu ni un snapshot). Ce n'est PAS
+       * encore une conversation : c'est le garde-fou contre la perte
+       * d'information, affiché à l'humain AVANT toute création.
+       */
+      type: "recap_ready";
+      requestId: string;
+      /** Titre proposé (modifiable). */
+      title: string;
+      /** Récapitulatif EXHAUSTIF (relisible, corrigeable). */
+      recap: string;
+      /** Titre de la conversation d'origine (référence). */
+      originTitle: string;
+      /** Identifiant de la conversation d'origine. */
+      originSessionId: string;
+      /** Sujet visé, si l'utilisateur en a donné un. */
+      subject?: string;
+      /** Nombre de messages pris en compte. */
+      messageCount: number;
+    }
+  | {
+      /**
+       * La conversation dédiée a été CRÉÉE et le récapitulatif injecté. Trame de
+       * CONTRÔLE (aucun `seq` consommé) : elle clôt le cycle côté client (le
+       * déclencheur redevient disponible).
+       */
+      type: "recap_created";
+      requestId: string;
+    }
   | {
       /** Liste des conversations + conversation active (null = aucune). */
       type: "sessions";
@@ -368,6 +427,42 @@ export function parseClientMessage(raw: string): ParseResult {
     }
     case "new": {
       return { ok: true, message: { type: "new" } };
+    }
+    case "recap_preview": {
+      const sessionId = optionalString(parsed, "sessionId");
+      const requestId = optionalString(parsed, "requestId");
+      if (sessionId === undefined) {
+        return { ok: false, error: "recap_missing_session_id" };
+      }
+      if (requestId === undefined || requestId.trim().length === 0) {
+        return { ok: false, error: "recap_missing_request_id" };
+      }
+      // Le sujet peut être VIDE (récapitulatif de toute la conversation).
+      const subject = optionalString(parsed, "subject") ?? "";
+      return {
+        ok: true,
+        message: { type: "recap_preview", sessionId, requestId, subject },
+      };
+    }
+    case "recap_create": {
+      const requestId = optionalString(parsed, "requestId");
+      if (requestId === undefined || requestId.trim().length === 0) {
+        return { ok: false, error: "recap_missing_request_id" };
+      }
+      const title = optionalString(parsed, "title");
+      if (title === undefined) {
+        return { ok: false, error: "recap_invalid_title" };
+      }
+      const recap = optionalString(parsed, "recap");
+      return {
+        ok: true,
+        message: {
+          type: "recap_create",
+          requestId,
+          title,
+          ...(recap !== undefined ? { recap } : {}),
+        },
+      };
     }
     case "rename": {
       const sessionId = optionalString(parsed, "sessionId");

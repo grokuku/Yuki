@@ -18,6 +18,15 @@ import { WebSocket, WebSocketServer } from "ws";
 import { toPiHostError } from "../../pi/errors.js";
 import { PHASE, type PiEvent, type PiHost } from "../../pi/index.js";
 import type { SessionPinStore } from "../../pi/session-pins.js";
+import { ORIGIN_RECAP } from "../../pi/synthetic.js";
+import type { SessionState, TranscriptEntry } from "../../pi/index.js";
+import {
+  frameRecapPrompt,
+  normalizeSubject,
+  RecapError,
+  type RecapGenerator,
+  type RecapSourceMessage,
+} from "../../recap/index.js";
 import type {
   ApprovalGatewayPort,
   ExecutionOutcome,
@@ -119,6 +128,12 @@ export interface WsTransportOptions {
    * `secret_request` (comportement inchangé).
    */
   secrets?: SecretRequestGatewayPort;
+  /**
+   * « Continuer dans une conversation dédiée » : générateur de récapitulatif
+   * (appel LLM isolé, injecté). Absent ⇒ l'action est indisponible (trame
+   * d'erreur `recap_unavailable`, comportement inchangé pour le reste).
+   */
+  recap?: RecapGenerator;
 }
 
 interface ClientState {
@@ -143,6 +158,55 @@ interface ClientState {
    * reste possible. Le client envoie sa présence dès la connexion.
    */
   presence: { visible: boolean; focused: boolean };
+}
+
+/** Aperçu de récapitulatif en attente de validation humaine. */
+interface RecapPreview {
+  recap: string;
+  title: string;
+  originSessionId: string;
+  originTitle: string;
+  subject?: string;
+  fromAt?: string;
+  messageCount: number;
+  createdAt: number;
+}
+
+/** Convertit un transcript en messages de récapitulation (contenu seul). */
+function recapSourceMessages(
+  transcript: readonly TranscriptEntry[],
+): RecapSourceMessage[] {
+  const messages: RecapSourceMessage[] = [];
+  for (const entry of transcript) {
+    const text = entry.text ?? "";
+    if (text.trim().length === 0) continue;
+    messages.push({
+      role: entry.role,
+      text,
+      ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
+    });
+  }
+  return messages;
+}
+
+/** Instant ISO du premier message horodaté, ou `undefined`. */
+function firstTimestampIso(transcript: readonly TranscriptEntry[]): string | undefined {
+  for (const entry of transcript) {
+    if (entry.timestamp !== undefined && Number.isFinite(entry.timestamp)) {
+      return new Date(entry.timestamp).toISOString();
+    }
+  }
+  return undefined;
+}
+
+/** Traduit une erreur du domaine `recap` en couple (code, message honnête). */
+function toRecapError(error: unknown): { code: string; message: string } {
+  if (error instanceof RecapError) return { code: error.code, message: error.message };
+  return {
+    code: "recap_failed",
+    message:
+      "La génération du récapitulatif a échoué ; aucune conversation n'a été créée.",
+  };
 }
 
 /** Traduit un événement de façade en trame serveur. */
@@ -272,6 +336,30 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const agentPort = options.agents;
   const screenshots = options.screenshots;
   const secretPort = options.secrets;
+  const recap = options.recap;
+
+  /**
+   * APERÇUS de récapitulatif en attente de validation humaine, indexés par
+   * `requestId`. C'est la SOURCE DE VÉRITÉ du texte : `recap_create` ne
+   * réutilise pas un texte arbitraire arrivé du client, il reprend l'aperçu
+   * généré par le serveur (avec un éventuel texte corrigé fourni par l'humain).
+   * Purge paresseuse (TTL) : un aperçu jamais validé disparaît.
+   */
+  const recapPreviews = new Map<string, RecapPreview>();
+  const RECAP_PREVIEW_TTL_MS = 30 * 60_000;
+  const RECAP_PREVIEW_MAX = 32;
+
+  function pruneRecapPreviews(): void {
+    const now = options.now?.() ?? Date.now();
+    for (const [id, pending] of recapPreviews) {
+      if (now - pending.createdAt > RECAP_PREVIEW_TTL_MS) recapPreviews.delete(id);
+    }
+    while (recapPreviews.size >= RECAP_PREVIEW_MAX) {
+      const oldest = recapPreviews.keys().next().value;
+      if (oldest === undefined) break;
+      recapPreviews.delete(oldest);
+    }
+  }
 
   const runT0 = new Map<string, number>();
   const unsubscribeHost = host.subscribeAll((event) => {
@@ -999,6 +1087,204 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   /**
+   * « Continuer dans une conversation dédiée » — ÉTAPE 1 : produit un APERÇU de
+   * récapitulatif EXHAUSTIF axé sur le SUJET donné, sans RIEN créer ni modifier.
+   *
+   * ⚠️ MÉCANIQUE CHOISIE : appel LLM ISOLÉ (session éphémère en mémoire) nourri
+   * avec le transcript de la conversation. On n'exécute AUCUN tour dans la
+   * session d'origine ⇒ son transcript, son historique et son éventuel run EN
+   * COURS ne sont jamais touchés. C'est pourquoi un run en cours n'empêche PAS
+   * l'action : l'aperçu porte sur ce qui est DÉJÀ écrit (le tour en cours peut
+   * n'être que partiel — c'est un instantané honnête, jamais une invention).
+   */
+  async function handleRecapPreview(
+    client: ClientState,
+    message: ClientMessage,
+  ): Promise<void> {
+    if (message.type !== "recap_preview") return;
+    const fail = (code: string, text: string): void => {
+      sendDirect(client, { type: "error", code, message: text, requestId: message.requestId });
+    };
+    if (!recap) {
+      fail(
+        "recap_unavailable",
+        "Le récapitulatif n'est pas disponible (aucun modèle de récapitulation configuré).",
+      );
+      return;
+    }
+    const state = host.getState(message.sessionId);
+    if (!state) {
+      fail("recap_not_found", "Conversation introuvable.");
+      return;
+    }
+    const messages = recapSourceMessages(state.transcript);
+    if (messages.length === 0) {
+      fail("recap_empty", "Cette conversation est vide : il n'y a rien à récapituler.");
+      return;
+    }
+    const originTitle = await titleFor(message.sessionId);
+    const subject = normalizeSubject(message.subject);
+    const fromAt = firstTimestampIso(state.transcript);
+    try {
+      const result = await recap({
+        originSessionId: message.sessionId,
+        originTitle,
+        ...(subject.length > 0 ? { subject } : {}),
+        fromIndex: 0,
+        wholeThread: true,
+        messages,
+      });
+      pruneRecapPreviews();
+      recapPreviews.set(message.requestId, {
+        recap: result.recap,
+        title: result.title,
+        originSessionId: message.sessionId,
+        originTitle,
+        ...(subject.length > 0 ? { subject } : {}),
+        ...(fromAt !== undefined ? { fromAt } : {}),
+        messageCount: result.messageCount,
+        createdAt: options.now?.() ?? Date.now(),
+      });
+      sendDirect(client, {
+        type: "recap_ready",
+        requestId: message.requestId,
+        title: result.title,
+        recap: result.recap,
+        originTitle,
+        originSessionId: message.sessionId,
+        ...(subject.length > 0 ? { subject } : {}),
+        messageCount: result.messageCount,
+      });
+    } catch (error) {
+      const recapError = toRecapError(error);
+      logger.warn("ws.recap.preview_failed", {
+        session_id: message.sessionId,
+        code: recapError.code,
+        has_subject: subject.length > 0,
+      });
+      fail(recapError.code, recapError.message);
+    }
+  }
+
+  /**
+   * ÉTAPE 2 : l'humain a VALIDÉ l'aperçu (titre/texte éventuellement corrigés) ⇒
+   * on crée la conversation dédiée et on y injecte le récapitulatif comme PROMPT
+   * SYNTHÉTIQUE (origine `recap`) : le modèle le VOIT, il n'est ni attribué à
+   * l'utilisateur, ni prononcé par la TTS, ni mémorisé, et il est bien visible
+   * dans le fil (bloc `recap`).
+   *
+   * ⚠️ TOUT OU RIEN : si la création ou l'injection échoue, la conversation
+   * ébauchée est RETIRÉE (mise de côté) et le focus est rendu à l'origine.
+   */
+  async function handleRecapCreate(
+    client: ClientState,
+    message: ClientMessage,
+  ): Promise<void> {
+    if (message.type !== "recap_create") return;
+    const fail = (code: string, text: string): void => {
+      sendDirect(client, { type: "error", code, message: text, requestId: message.requestId });
+    };
+    pruneRecapPreviews();
+    const pending = recapPreviews.get(message.requestId);
+    if (!pending) {
+      fail(
+        "recap_not_found",
+        "Cet aperçu de récapitulatif a expiré ou n'existe plus. Relancez l'opération.",
+      );
+      return;
+    }
+    const title = message.title.replace(/\s+/g, " ").trim();
+    if (title.length === 0) {
+      fail("recap_invalid_title", "Le titre de la nouvelle conversation ne peut pas être vide.");
+      return;
+    }
+    // Le texte repris est celui de l'APERÇU serveur, éventuellement corrigé par
+    // l'humain : jamais un texte arbitraire venu d'ailleurs.
+    const recapText = (message.recap ?? pending.recap).trim();
+    if (recapText.length === 0) {
+      fail("recap_empty", "Le récapitulatif est vide : aucune conversation n'a été créée.");
+      return;
+    }
+    const previousFocus = host.currentSessionId();
+    let created: SessionState;
+    try {
+      created = await host.newSession();
+    } catch (error) {
+      const piError = toPiHostError(error, { logger });
+      fail(piError.code, piError.message);
+      return;
+    }
+    const newSessionId = created.sessionId;
+    client.sessionId = newSessionId;
+    subscribeFocused(client);
+    cancelTtsOnFocusChange(previousFocus);
+    try {
+      await host.renameSession(newSessionId, title);
+      host.send(
+        newSessionId,
+        frameRecapPrompt({
+          originTitle: pending.originTitle,
+          originSessionId: pending.originSessionId,
+          ...(pending.subject ? { subject: pending.subject } : {}),
+          ...(pending.fromAt ? { fromAt: pending.fromAt } : {}),
+          wholeThread: true,
+          recap: recapText,
+        }),
+        { origin: ORIGIN_RECAP },
+      );
+    } catch (error) {
+      // ⚠️ ÉCHEC APRÈS CRÉATION : on ne laisse JAMAIS une conversation à moitié
+      // faite. On la retire (mise de côté), on rend le focus à l'origine.
+      logger.warn("ws.recap.create_failed", {
+        session_id: newSessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await host.setAsideSession(newSessionId).catch(() => undefined);
+      pins?.remove(newSessionId);
+      // ⚠️ La session courante du host vient d'être retirée : on RÉTABLIT le
+      // focus sur la conversation d'origine (sinon la TTS et les envois
+      // seraient rattachés à une session disparue).
+      if (previousFocus) {
+        const file = await host
+          .sessionFileFor(previousFocus)
+          .catch(() => undefined);
+        if (file) {
+          await host.resume(file).catch(() => undefined);
+        }
+      }
+      client.sessionId = host.currentSessionId() ?? previousFocus;
+      subscribeFocused(client);
+      const piError = toPiHostError(error, { logger });
+      fail(
+        piError.code,
+        "La conversation dédiée n'a pas pu être créée (échec de l'injection du " +
+          "récapitulatif) : rien n'a été conservé.",
+      );
+      return;
+    }
+    recapPreviews.delete(message.requestId);
+    await sendSessions(client);
+    // Le récapitulatif est déjà dans le transcript (`role: "recap"`) : le
+    // snapshot le restitue, donc le modèle le voit et l'humain le relit.
+    sendSnapshotForCurrent(client);
+    sendPendingApprovals(client);
+    sendPendingSecrets(client);
+    // Clôture le cycle côté client : le déclencheur redevient disponible.
+    sendDirect(client, { type: "recap_created", requestId: message.requestId });
+  }
+
+  /** Titre PRÊT À L'EMPLOI d'une conversation (jamais vide). */
+  async function titleFor(sessionId: string): Promise<string> {
+    try {
+      const list = await host.listSessions();
+      const found = list.find((info) => info.sessionId === sessionId);
+      return found?.title ?? found?.name ?? "conversation d'origine";
+    } catch {
+      return "conversation d'origine";
+    }
+  }
+
+  /**
    * Bascule on/off d'un agent depuis l'encart de la barre latérale. Le NIVEAU
    * existant est réutilisé (`disabled` ⇄ précédent) : aucun second drapeau.
    */
@@ -1118,6 +1404,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         return;
       case "pin":
         await handlePin(client, message);
+        return;
+      case "recap_preview":
+        await handleRecapPreview(client, message);
+        return;
+      case "recap_create":
+        await handleRecapCreate(client, message);
         return;
       case "agent_enabled":
         handleAgentEnabled(client, message);

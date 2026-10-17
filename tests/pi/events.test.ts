@@ -15,6 +15,7 @@ import {
   unstreamedContentSuffix,
 } from "../../src/pi/events.js";
 import { APPROVAL_RESULT_HEADER } from "../../src/agents/approval-report.js";
+import { frameRecapPrompt } from "../../src/recap/prompt.js";
 import { SYNTHETIC_USER_PREFIXES } from "../../src/pi/synthetic.js";
 
 describe("pi.events — contenu vs thinking", () => {
@@ -166,6 +167,33 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       { role: "assistant", text: "Compris." },
     ]);
     expect(JSON.stringify(transcript)).not.toContain("SORTIE-SECRETE");
+  });
+
+  it("RESTITUE le récapitulatif de conversation dédiée (bloc visible, jamais une bulle utilisateur)", () => {
+    const prompt = frameRecapPrompt({
+      originTitle: "Discussion générale",
+      originSessionId: "sess-1",
+      subject: "le coffre de secrets",
+      wholeThread: true,
+      recap: "Décision : clé en 0600.\nChiffrement : AES-256-GCM.",
+    });
+    const entries = [
+      userEntry(prompt),
+      assistantEntry([{ type: "text", text: "Bien pris en compte." }]),
+    ];
+    const transcript = transcriptFromEntries(entries, {
+      syntheticUserPrefixes: SYNTHETIC_USER_PREFIXES,
+    });
+    // Le prompt synthétique n'est PAS une bulle utilisateur : il devient un bloc
+    // `recap` VISIBLE et relisible, avec la référence à l'origine.
+    expect(transcript[0]).toEqual({
+      role: "recap",
+      text: "Décision : clé en 0600.\nChiffrement : AES-256-GCM.",
+      origin: "Discussion générale",
+      subject: "le coffre de secrets",
+    });
+    expect(transcript.some((entry) => entry.role === "user")).toBe(false);
+    expect(transcript[1]).toEqual({ role: "assistant", text: "Bien pris en compte." });
   });
 
   it("est un mapping PUR (même entrée ⇒ même sortie, aucun doublon)", () => {

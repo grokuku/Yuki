@@ -840,6 +840,88 @@ a.pill:hover {
   color: var(--danger);
 }
 
+/* ─── Bloc de RÉCAPITULATIF GÉNÉRÉ (conversation dédiée) ─────────────────
+ * Ni un message de l'utilisateur ni une réponse de Yuki : c'est une DONNÉE
+ * générée, présentée comme un document (largeur pleine, filet d'accent à
+ * gauche) pour qu'elle ne puisse pas être prise pour une parole. Elle reste
+ * relisible (corps en markdown) et jamais prononcée par la synthèse vocale. */
+.message--recap {
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  background: var(--panel);
+  border-left: 3px solid var(--accent);
+}
+
+.recap-block__label {
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: none;
+}
+
+.recap-block__meta {
+  margin: 2px 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.recap-block__body {
+  white-space: normal;
+}
+
+/* « Continuer dans une conversation dédiée » : action SECONDAIRE du composeur
+ * (jamais confondue avec « Envoyer »). */
+.button--ghost {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
+}
+
+.button--ghost:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+/* ─── Aperçu du récapitulatif (modale) ────────────────────────────────────── */
+.recap-modal__info {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.recap-modal__label {
+  display: block;
+  margin: 10px 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.recap-modal__body {
+  width: 100%;
+  max-height: 46vh;
+  resize: vertical;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+  white-space: pre-wrap;
+  box-sizing: border-box;
+}
+
+.recap-modal__body:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.recap-modal__status {
+  margin: 8px 0 0;
+  min-height: 1em;
+  font-size: 12px;
+  color: var(--danger);
+}
+
 /* ─── En-tête de message : l'heure, AU-DESSUS du texte ─────────────────── */
 .message__head {
   display: block;

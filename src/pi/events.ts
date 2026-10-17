@@ -16,6 +16,7 @@ import type {
   TranscriptEntry,
 } from "./types.js";
 import { stripTimestampPrefix } from "./timestamp.js";
+import { parseRecapPrompt } from "../recap/prompt.js";
 
 /** Forme minimale d'un `assistantMessageEvent` du SDK. */
 export interface RawAssistantMessageEvent {
@@ -254,7 +255,26 @@ export function transcriptFromEntries(
     // correct quel que soit l'ordre de pose des préfixes.
     const text = role === "user" ? stripTimestampPrefix(rawText) : rawText;
     if (text.length === 0) continue;
-    if (role === "user" && isSyntheticUserText(text, prefixes)) continue;
+    if (role === "user") {
+      // ⚠️ RÉCAPITULATIF GÉNÉRÉ : c'est un message synthétique (rôle `user` dans
+      // le SDK) qui doit être VISIBLE — et non silencieusement écarté — car c'est
+      // le POINT DE DÉPART de la conversation. On l'affiche comme un bloc dédié
+      // (`role: "recap"`), jamais comme une bulle utilisateur, et on en extrait le
+      // corps VERBATIM. Les AUTRES prompts synthétiques restent exclus.
+      const recap = parseRecapPrompt(text);
+      if (recap) {
+        const timestamp = messageTimestamp(message as RawAgentMessage);
+        transcript.push({
+          role: "recap",
+          text: recap.recap,
+          ...(timestamp !== undefined ? { timestamp } : {}),
+          ...(recap.originTitle ? { origin: recap.originTitle } : {}),
+          ...(recap.subject ? { subject: recap.subject } : {}),
+        });
+        continue;
+      }
+      if (isSyntheticUserText(text, prefixes)) continue;
+    }
     const timestamp = messageTimestamp(message as RawAgentMessage);
     transcript.push(
       timestamp !== undefined ? { role, text, timestamp } : { role, text },

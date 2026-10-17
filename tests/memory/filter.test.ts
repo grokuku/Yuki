@@ -22,6 +22,7 @@ import { PERSONALITY_TAG } from "../../src/personality/personality.js";
 import { HERITAGE_TAG } from "../../src/memory/heritage.js";
 import { REPORT_HEADER } from "../../src/delegation/report.js";
 import { APPROVAL_RESULT_HEADER } from "../../src/agents/approval-report.js";
+import { frameRecapPrompt } from "../../src/recap/prompt.js";
 
 const SORTIE_BLOCK =
   '<sortie machine="exec-1" commande="ls" code="0">\n' +
@@ -80,6 +81,18 @@ describe("sanitizeMemoryText / isExcludedMemoryText", () => {
     expect(sanitizeMemoryText(`${REPORT_HEADER}\ncontenu`)).toBe("");
     expect(sanitizeMemoryText(`${APPROVAL_RESULT_HEADER}\ncontenu`)).toBe("");
     expect(isExcludedMemoryText(`${REPORT_HEADER}\ncontenu`)).toBe(true);
+  });
+
+  it("écarte un RÉCAPITULATIF de conversation dédiée (jamais ré-extrait comme un fait)", () => {
+    const prompt = frameRecapPrompt({
+      originTitle: "Général",
+      originSessionId: "s1",
+      subject: "le coffre de secrets",
+      wholeThread: true,
+      recap: "Décision : clé en 0600.",
+    });
+    expect(sanitizeMemoryText(prompt)).toBe("");
+    expect(isExcludedMemoryText(prompt)).toBe(true);
   });
 
   it("un texte entièrement encadré devient vide (jamais soumis)", () => {

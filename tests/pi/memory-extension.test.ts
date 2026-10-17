@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createMemoryExtensionFactory, MEMORY_IDLE_NOTICE } from "../../src/pi/sdk/memory-extension.js";
+import { buildStoredUserText } from "../../src/pi/timestamp.js";
 import { APPROVAL_RESULT_HEADER } from "../../src/agents/approval-report.js";
 import { SYNTHETIC_USER_PREFIXES } from "../../src/pi/synthetic.js";
 import type {
@@ -145,6 +146,32 @@ describe("extension de mémoire — ÉCRITURE (agent_end / compaction)", () => {
     ]);
   });
 
+  it("retire le repère temporel `[horodatage] …` du message utilisateur STOCKÉ", async () => {
+    const calls: TurnEndInput[] = [];
+    const stored = buildStoredUserText("Je préfère le thé", {
+      at: new Date("2026-10-17T09:43:00Z"),
+    });
+    const stamped = [
+      {
+        id: "e1",
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: stored }] },
+      },
+      {
+        id: "e2",
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "C'est noté" }] },
+      },
+    ];
+    const { handlers } = capture(fakePort({ onTurnEnd: (input) => calls.push(input) }));
+    await handlers.get("agent_end")!({}, readOnlyCtx(stamped));
+    // Le repère temporel est une MÉTADONNÉE : il ne doit jamais entrer dans
+    // l'échange soumis à l'extraction de mémoire.
+    expect(calls).toEqual([
+      { userText: "Je préfère le thé", assistantText: "C'est noté", source: "e1" },
+    ]);
+  });
+
   it("ignore un échange dont le prompt est SYNTHÉTIQUE (report de job)", async () => {
     const calls: TurnEndInput[] = [];
     const synthetic = [
@@ -227,5 +254,26 @@ describe("extension de mémoire — ÉCRITURE (agent_end / compaction)", () => {
       { role: "assistant", text: "Réponse partielle" },
     ]);
     expect(calls[0]?.previousSummary).toBe("résumé précédent");
+  });
+
+  it("retire le repère temporel des messages utilisateur de la consolidation", async () => {
+    const calls: BeforeCompactInput[] = [];
+    const stored = buildStoredUserText("Un message perdu", {
+      at: new Date("2026-10-17T09:43:00Z"),
+    });
+    const { handlers } = capture(
+      fakePort({ onBeforeCompact: (input) => calls.push(input) }),
+    );
+    await handlers.get("session_before_compact")!(
+      {
+        preparation: {
+          messagesToSummarize: [
+            { role: "user", content: [{ type: "text", text: stored }] },
+          ],
+        },
+      },
+      readOnlyCtx([]),
+    );
+    expect(calls[0]?.messages).toEqual([{ role: "user", text: "Un message perdu" }]);
   });
 });

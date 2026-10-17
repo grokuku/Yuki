@@ -246,12 +246,20 @@ export interface RunMetrics {
  * `metrics` = statistiques d'exécution restaurées depuis la session (TTFT,
  * total, tokens), ou posées en direct. Absent pour un message SANS statistiques
  * ⇒ l'UI n'affiche alors AUCUN pied.
+ *
+ * ⚠️ `role: "recap"` = bloc de RÉCAPITULATIF GÉNÉRÉ (jamais une parole de
+ * l'utilisateur ni de l'assistant). `origin` porte le titre de la conversation
+ * d'origine et `subject` le sujet visé : l'UI les affiche en en-tête du bloc.
  */
 export interface TranscriptEntry {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "recap";
   text: string;
   timestamp?: number;
   metrics?: RunMetrics;
+  /** Titre de la conversation d'origine (entrée `recap` uniquement). */
+  origin?: string;
+  /** Sujet visé par le récapitulatif (entrée `recap` uniquement). */
+  subject?: string;
 }
 
 /** État d'une session, sérialisable tel quel. */

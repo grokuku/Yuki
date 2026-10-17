@@ -28,8 +28,10 @@ import {
 
 import {
   isSyntheticOrigin,
+  ORIGIN_RECAP,
   SYNTHETIC_USER_PREFIXES,
 } from "./synthetic.js";
+import { parseRecapPrompt } from "../recap/prompt.js";
 
 import {
   applyPiEnvironment,
@@ -428,6 +430,8 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       text: entry.text,
       ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
       ...(entry.metrics !== undefined ? { metrics: entry.metrics } : {}),
+      ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+      ...(entry.subject !== undefined ? { subject: entry.subject } : {}),
     }));
     if (record.partial.length > 0) {
       transcript.push({ role: "assistant", text: record.partial });
@@ -924,6 +928,21 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         text: run.text,
         timestamp: run.sentAt,
       });
+      run.transcriptPushed = true;
+    } else if (run.origin === ORIGIN_RECAP && !run.transcriptPushed) {
+      // ⚠️ RÉCAPITULATIF GÉNÉRÉ : il ne produit PAS de bulle utilisateur, mais il
+      // doit être VISIBLE dans la nouvelle conversation. On pousse un bloc dédié
+      // (`role: "recap"`) portant le corps VERBATIM et la référence à l'origine.
+      const parsed = parseRecapPrompt(run.storedText ?? run.text);
+      if (parsed) {
+        record.transcript.push({
+          role: "recap",
+          text: parsed.recap,
+          timestamp: run.sentAt,
+          ...(parsed.originTitle ? { origin: parsed.originTitle } : {}),
+          ...(parsed.subject ? { subject: parsed.subject } : {}),
+        });
+      }
       run.transcriptPushed = true;
     }
     runContext.set({ sessionId: record.sessionId, runId: run.runId });

@@ -130,6 +130,18 @@
           <button id="stop" class="button button--stop" type="button" disabled>
             Stop
           </button>
+          <!-- « Continuer dans une conversation dédiée » : depuis la
+               conversation ouverte, l'utilisateur donne un SUJET et un appel
+               LLM produit un RÉCAPITULATIF exhaustif qui devient le point de
+               départ d'une NOUVELLE conversation (le fil d'origine n'est pas
+               modifié). Câblé par app.js via recap-dedicated.js. -->
+          <button
+            id="recap-dedicated"
+            class="button button--ghost"
+            type="button"
+            aria-label="Continuer un sujet dans une conversation dédiée"
+            title="Continuer un sujet dans une conversation dédiée"
+          >Conversation dédiée</button>
         </footer>
       </div>
     </div>

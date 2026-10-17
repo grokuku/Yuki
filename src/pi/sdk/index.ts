@@ -65,6 +65,12 @@ export {
   type SdkMemoryExtractorConfig,
 } from "./memory-extractor.js";
 
+// Récapitulatif « conversation dédiée » : écrivain SDK (session éphémère isolée).
+export {
+  createSdkRecapWriter,
+  type SdkRecapWriterConfig,
+} from "./recap-writer.js";
+
 // Lot 13 — archive « vie antérieure » : outil de consultation + signal d'existence.
 export { createHeritageTools } from "./heritage-tools.js";
 export {

@@ -28,6 +28,7 @@ import {
 import { initSidebarAgents } from "./sidebar-agents.js";
 import { createApprovalLayer } from "./approval-window.js";
 import { createScrollToBottom } from "./scroll-button.js";
+import { createRecapDedicated } from "./recap-dedicated.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
 import { createSubagentActivity } from "./subagent-activity.js";
 import { createThinkingBlocks } from "./thinking.js";
@@ -647,6 +648,7 @@ const STICK_TO_BOTTOM_MS = 600;
 /** Bouton « revenir en bas » (créé plus bas) ; référence pour rafraîchir sa
  * visibilité depuis `pinIfNeeded`, SEUL point de passage après chaque mutation. */
 let scrollButton = null;
+let recapDedicated = null;
 /** `true` tant qu'un retour en bas FLUIDE est en cours (voir `goToEnd`). */
 let stickToBottom = false;
 let stickToBottomTimer = null;
@@ -762,6 +764,19 @@ scrollButton = createScrollToBottom({
   isReturning: () => stickToBottom,
   onActivate: goToEnd,
   onUserIntent: cancelStickToBottom,
+});
+
+/* ─── « Continuer dans une conversation dédiée » ────────────────────────
+ * Depuis la conversation ouverte, l'utilisateur donne un SUJET ; le serveur
+ * produit un RÉCAPITULATIF EXHAUSTIF (aperçu relisible/corrigeable) puis crée
+ * une NOUVELLE conversation dédiée. Le fil d'origine n'est jamais modifié.
+ * Le module ne fait QUE présenter et envoyer : toute la logique vit côté
+ * serveur (un seul système de conversations, réutilisé). */
+recapDedicated = createRecapDedicated({
+  trigger: document.getElementById("recap-dedicated"),
+  send: sendRaw,
+  getSessionId: () => sessionId,
+  modal: HolafModal,
 });
 
 /* ─── Horodatage de l'interface ───────────────────────────────────────────
@@ -908,6 +923,52 @@ function appendAssistantMessage(text = null, pinned = isConversationPinned(), ts
   return div;
 }
 
+/**
+ * Bloc de RÉCAPITULATIF GÉNÉRÉ (point de départ d'une conversation dédiée).
+ *
+ * ⚠️ Ce n'est NI un message de l'utilisateur NI un message de Yuki : c'est une
+ * DONNÉE générée, rendue dans un bloc distinct (`message--recap`) avec un
+ * libellé explicite, le SUJET visé et la conversation d'origine. Le corps est
+ * rendu en markdown comme une réponse (donc relisible), sans jamais être lu par
+ * la synthèse vocale (c'est un message de rôle `user` côté modèle).
+ */
+function appendRecapBlock(entry, pinned = isConversationPinned(), ts = null) {
+  clearEmpty();
+  ensureDaySeparator(ts);
+  const div = document.createElement("div");
+  div.className = "message message--recap";
+  const head = document.createElement("div");
+  head.className = "message__head";
+  const label = document.createElement("span");
+  label.className = "recap-block__label";
+  label.textContent = "Récapitulatif généré — point de départ";
+  head.appendChild(label);
+  div.appendChild(head);
+  const metaParts = [];
+  if (typeof entry.subject === "string" && entry.subject.length > 0) {
+    metaParts.push(`Sujet : ${entry.subject}`);
+  }
+  if (typeof entry.origin === "string" && entry.origin.length > 0) {
+    metaParts.push(`Depuis « ${entry.origin} »`);
+  }
+  if (metaParts.length > 0) {
+    const meta = document.createElement("p");
+    meta.className = "recap-block__meta";
+    meta.textContent = metaParts.join(" · ");
+    div.appendChild(meta);
+  }
+  const renderer = createMarkdownRenderer();
+  renderer.element.classList.add("recap-block__body");
+  if (typeof entry.text === "string" && entry.text.length > 0) {
+    renderer.setText(entry.text);
+  }
+  div.appendChild(renderer.element);
+  els.conversation.appendChild(div);
+  setMessageTime(div, ts, false);
+  pinIfNeeded(pinned);
+  return div;
+}
+
 function applyTranscript(transcript) {
   const pinned = isConversationPinned();
   // Le fil est reconstruit : on purge les blocs de validation (timers inclus)
@@ -937,6 +998,8 @@ function applyTranscript(transcript) {
     const ts = entry.timestamp;
     if (entry.role === "user") {
       appendMessage("user", entry.text ?? "", pinned, ts);
+    } else if (entry.role === "recap") {
+      appendRecapBlock(entry, pinned, ts);
     } else {
       // Statistiques PERSISTÉES : elles rétablissent le pied technique après un
       // rechargement. Absentes (ancienne session) ⇒ aucun pied, aucune ligne.
@@ -1061,6 +1124,11 @@ const sendPresence = initPresenceTracking(sendRaw);
 function handleFrame(frame) {
   if (!frame || typeof frame !== "object") return;
   const type = frame.type;
+
+  // « Conversation dédiée » : l'aperçu (`recap_ready`) et les erreurs corrélées
+  // portent NOTRE `requestId`. On les traite en priorité pour ne pas les
+  // confondre avec une réponse de modèle.
+  if (recapDedicated && recapDedicated.handleFrame(frame)) return;
 
   if (type === "welcome") {
     if (frame.sessionId) sessionId = frame.sessionId;

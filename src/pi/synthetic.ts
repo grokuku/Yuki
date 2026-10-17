@@ -20,20 +20,32 @@
 
 import { APPROVAL_RESULT_HEADER, ORIGIN_APPROVAL_RESULT } from "../agents/approval-report.js";
 import { REPORT_HEADER } from "../delegation/report.js";
+import { RECAP_HEADER } from "../recap/prompt.js";
 
 /** Origine d'un prompt synthétique de report de job. */
 export const ORIGIN_JOB_REPORT = "job_report";
+
+/**
+ * Origine d'un prompt synthétique de RÉCAPITULATIF de conversation dédiée.
+ * Le récapitulatif est une DONNÉE générée (jamais une parole de l'utilisateur) :
+ * il n'est pas prononcé par la TTS (c'est un message de rôle `user`), il ne
+ * produit PAS de bulle utilisateur (le transcript le rend en bloc `recap`), et il
+ * n'entre PAS dans la mémoire durable.
+ */
+export const ORIGIN_RECAP = "recap";
 
 /** Préfixes des textes utilisateur SYNTHÉTIQUES (jamais affichés, jamais mémorisés). */
 export const SYNTHETIC_USER_PREFIXES: readonly string[] = [
   REPORT_HEADER,
   APPROVAL_RESULT_HEADER,
+  RECAP_HEADER,
 ];
 
 /** Origines SYNTHÉTIQUES connues (jamais de bulle utilisateur). */
 export const SYNTHETIC_ORIGINS: readonly string[] = [
   ORIGIN_JOB_REPORT,
   ORIGIN_APPROVAL_RESULT,
+  ORIGIN_RECAP,
 ];
 
 /** `true` si l'origine désigne un prompt synthétique. */

@@ -23,6 +23,7 @@ import type {
   MemoryPort,
 } from "../../memory/types.js";
 import { contentTextFromMessage, type RawAgentMessage } from "../events.js";
+import { stripTimestampPrefix } from "../timestamp.js";
 
 export interface MemoryExtensionOptions {
   /** Préfixes de textes utilisateur SYNTHÉTIQUES (report de job) à ignorer. */
@@ -81,7 +82,10 @@ function lastExchange(
       continue;
     }
     if (message.role !== "user") continue;
-    const userText = contentTextFromMessage(message);
+    // ⚠️ Le message utilisateur stocké porte le repère temporel
+    // `[horodatage] …` : c'est une MÉTADONNÉE, jamais un souvenir. On le retire
+    // pour que l'échange soumis à l'extraction ne contienne que les mots réels.
+    const userText = stripTimestampPrefix(contentTextFromMessage(message));
     if (userText.length === 0 || isSynthetic(userText, syntheticUserPrefixes)) {
       return null;
     }
@@ -93,7 +97,9 @@ function lastExchange(
 function toConsolidateMessage(message: unknown): ConsolidateMessage | null {
   const role = (message as { role?: unknown } | null)?.role;
   if (role !== "user" && role !== "assistant") return null;
-  const text = contentTextFromMessage(message as RawAgentMessage);
+  const raw = contentTextFromMessage(message as RawAgentMessage);
+  // Le repère temporel n'est présent QUE sur les messages utilisateur.
+  const text = role === "user" ? stripTimestampPrefix(raw) : raw;
   if (text.trim().length === 0) return null;
   return { role, text };
 }

@@ -77,6 +77,11 @@ export type {
 export { createSdkMemoryExtractor } from "./sdk/memory-extractor.js";
 export type { SdkMemoryExtractorConfig } from "./sdk/memory-extractor.js";
 
+// Récapitulatif « conversation dédiée » : écrivain SDK (session éphémère isolée).
+// Le port renvoyé (`RecapWriter`) est PUR : aucun type du SDK ne traverse la façade.
+export { createSdkRecapWriter } from "./sdk/recap-writer.js";
+export type { SdkRecapWriterConfig } from "./sdk/recap-writer.js";
+
 // Libraire de Pi-Web : rédacteur de synthèse d'archivage (session éphémère
 // isolée). Le port renvoyé (`LibrarianSynthesizer`) est PUR.
 export { createSdkLibrarianSynthesizer } from "./sdk/librarian-synthesizer.js";

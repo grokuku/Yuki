@@ -18,6 +18,13 @@ import { sanitizeMemoryText } from "./filter.js";
 import { looksLikeHeritage } from "./heritage.js";
 import type { MemoryIndex } from "./index-db.js";
 import type { MemoryStore } from "./store.js";
+// ⚠️ Le texte utilisateur STOCKÉ porte le repère temporel `[horodatage] …`
+// (voir `src/pi/timestamp.ts`). Il faut le RETIRER avant toute recherche :
+// sinon ses jetons (« horodatage », la date, l'heure, « heure », « locale »…)
+// saturent le budget de termes de `buildMatchQuery` (les 8 PREMIERS) et le
+// rappel ne trouve JAMAIS rien. (Même dépendance de domaine que `./filter.js`,
+// qui importe déjà les préfixes synthétiques de `../pi/synthetic.js`.)
+import { stripTimestampPrefix } from "../pi/timestamp.js";
 import type {
   BeforeCompactInput,
   ConsolidateMessage,
@@ -188,6 +195,15 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
    */
   async recall(query: string): Promise<MemoryRecallResult> {
     const started = this.now();
+    // ⚠️ La requête est le TEXTE UTILISATEUR STOCKÉ, préfixé du repère temporel
+    // `[horodatage] YYYY-MM-DD HH:mm (heure locale)` ajouté par
+    // `buildStoredUserText`. Ce préfixe est une MÉTADONNÉE, PAS une requête :
+    // `buildMatchQuery` ne retient que les 8 PREMIERS termes et le préfixe en
+    // consomme 8 à lui seul (année, mois, jour, heures, minutes, « horodatage »,
+    // « heure », « locale ») ⇒ le message utile n'atteignait jamais la recherche
+    // et AUCUN souvenir n'était jamais rappelé. On le retire donc AVANT la
+    // recherche (`stripTimestampPrefix` est un no-op sur un texte sans préfixe).
+    const cleanQuery = stripTimestampPrefix(query);
     // Capacité évaluée UNE fois : elle pilote la mention honnête côté extension
     // (« mémoire activée ») même quand aucun souvenir ne remonte.
     const enabled = this.enabled();
@@ -204,7 +220,7 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
       if (bounds.topK <= 0 || bounds.budgetChars <= 0) return empty();
       const ready = await this.waitReady(bounds.timeoutMs);
       if (!ready || !this.index.isAvailable()) return empty();
-      const ids = this.index.search(query, bounds.topK);
+      const ids = this.index.search(cleanQuery, bounds.topK);
       const entries: MemoryEntry[] = [];
       for (const id of ids) {
         const entry = this.store.get(id);
