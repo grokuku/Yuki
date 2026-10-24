@@ -124,6 +124,9 @@ jobs:
     name: Compose validation, build & smoke test
     runs-on: ubuntu-latest
     env:
+      # Propriétaire GHCR du repli d'image de base : suit le dépôt (le repli
+      # est `ghcr.io/<propriétaire>/yuki-node-base:<tag-avec-digest>`).
+      YUKI_GHCR_OWNER: ${{ github.repository_owner }}
       # Fixture nvidia-smi injectée dans le conteneur : le runner n'a pas de GPU.
       YUKI_CI_GPU_FIXTURE: ${{ github.workspace }}/tests/fixtures/gpu/rtx4070-12g.txt
       # Plateforme épinglée explicitement : `linux/amd64` SEULE (cohérent avec

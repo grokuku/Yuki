@@ -324,7 +324,16 @@ npm run dev        # tsx watch src/index.ts
 ./scripts/pin-digests.sh node 24.21.0-bookworm-slim
 ```
 
-Le script **propose** la ligne `FROM …@sha256:…` ; il n'écrit rien.
+Le script **résout** le digest depuis le miroir public `mirror.gcr.io` (sha256 du
+manifeste **confronté** à l'en-tête `Docker-Content-Digest`), puis **propose**
+les valeurs à reporter dans les quatre emplacements (Dockerfile
+`ARG NODE_BASE`, `scripts/node-base-ref.sh`, workflow de repli, `docs/versions.md`)
+et signale une **dérive** si l'un d'eux porte un digest périmé.
+
+Il n'écrit rien. Le repli GHCR (`ghcr.io/<propriétaire>/yuki-node-base:<tag>`)
+se **réalimente** avec le workflow manuel « Miroir image de base (GHCR) » :
+procédure complète dans [`versions.md`](versions.md) § « Réalimentation du
+miroir (repli GHCR) ».
 
 ## 9. Noyau texte (Lot 1)
 

@@ -60,6 +60,31 @@ export YUKI_CI_GPU_FIXTURE="${YUKI_CI_GPU_FIXTURE:-$ROOT/tests/fixtures/gpu/rtx4
 
 COMPOSE=(docker compose -f docker-compose.yml -f .github/ci/compose.ci.yml)
 
+# ---------------------------------------------------------------------------
+# Image de BASE (Node) — miroir public d'abord, copie GHCR en repli.
+#
+# Le Dockerfile n'a AUCUN moyen d'exprimer un repli entre deux `FROM` (un
+# second `FROM` serait toujours tiré, donc le registre mort ferait échouer le
+# build dans tous les cas). La sélection se fait donc ICI, à l'appel du build :
+#   * `scripts/node-base-ref.sh resolve` SONDE les registres et imprime la
+#     référence à utiliser (échec explicite si aucune ne répond) ;
+#   * elle est transmise par `--build-arg NODE_BASE=…` ;
+#   * si le build échoue alors qu'on était parti sur le miroir (registre
+#     joignable à la sonde mais cassé au pull, quota atteint en cours de route,
+#     coupure réseau…), on RÉESSAIE une fois sur la copie GHCR.
+# Voir docs/versions.md § « Réalimentation du miroir ».
+# ---------------------------------------------------------------------------
+NODE_BASE_REF="$ROOT/scripts/node-base-ref.sh"
+
+resolve_node_base() { "$NODE_BASE_REF" resolve; }
+node_base_fallback() { "$NODE_BASE_REF" fallback; }
+
+build_image() { # <référence de base> → construit `yuki-gateway:ci`
+  log "Build LOCAL de l'image gateway (Dockerfile multi-étage)"
+  log "Image de base : $1"
+  "${COMPOSE[@]}" build --build-arg "NODE_BASE=$1"
+}
+
 assert_jq() { # <json> <filtre jq> <message>
   printf '%s' "$1" | jq -e "$2" >/dev/null 2>&1 || fail "$3 (jq: $2)"
 }
@@ -103,8 +128,17 @@ run_smoke() {
   prepare
   trap cleanup EXIT
 
-  log "Build LOCAL de l'image gateway (Dockerfile multi-étage)"
-  "${COMPOSE[@]}" build
+  local node_base fallback
+  node_base="$(resolve_node_base)"
+  fallback="$(node_base_fallback)"
+
+  if ! build_image "$node_base"; then
+    if [ "$node_base" = "$fallback" ]; then
+      die "build impossible depuis la copie de repli GHCR ($fallback) — voir docs/versions.md § « Réalimentation du miroir »."
+    fi
+    log "⚠️ build échoué avec le miroir public — NOUVELLE TENTATIVE depuis la copie GHCR (repli)"
+    build_image "$fallback" || die "build impossible : ni le miroir public ni la copie GHCR ($fallback) n'ont fourni l'image de base."
+  fi
 
   log "Démarrage du conteneur + attente du healthcheck Compose"
   "${COMPOSE[@]}" up -d --wait --wait-timeout 180

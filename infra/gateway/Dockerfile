@@ -1,17 +1,40 @@
-# syntax=docker/dockerfile:1
-
 # =============================================================================
 # Yuki gateway — image runtime (Lots 0-1)
 #
-# Base épinglée par digest, tirée du MIROIR AWS ECR Public
-# (`public.ecr.aws/docker/library/node:24.21.0-bookworm-slim`) : même index
-# multi-arch que l'image officielle Docker Hub, SANS le rate limit « non
-# authentifié » (100 pulls / 6 h / IP) qui frappe les runners GitHub à IP
-# partagées.
-# Aucun tag flottant. Node 26 (Current) est explicitement interdit.
+# ⚠️ PAS de directive `# syntax=…` : elle ferait tirer une image de PLUS
+# (`docker/dockerfile:1` sur Docker Hub, donc soumise au rate limit) AVANT
+# même de lire ce fichier, et aucun repli ne serait alors possible (le
+# frontend doit être résolu avant l'interprétation des `ARG`). Ce Dockerfile
+# n'utilise que des instructions du frontend intérieur à BuildKit.
+#
+# Base épinglée par DIGEST, tirée du MIROIR PUBLIC de Docker Hub
+# (`mirror.gcr.io/library/node:24.21.0-bookworm-slim`) : même index multi-arch
+# que l'image officielle Docker Hub (octets identiques, vérifiés par sha256 du
+# manifeste), avec un quota tenable depuis des runners à IP partagées —
+# contrairement à Docker Hub (pulls anonymes rationnés, `429`) et à ECR Public
+# (utilisé avant) dont le quota SANS COMPTE est partagé par plage d'IP : il a
+# fini par renvoyer `429 toomanyrequests: Data limit exceeded`.
+#
+# Aucun tag flottant : un tag Node peut être REPUBLIÉ, un digest non. Le digest
+# ci-dessous est RÉSOLU (`scripts/pin-digests.sh`), jamais recopié.
+# Node 26 (Current) est explicitement interdit.
+#
+# REPLI : `--build-arg NODE_BASE=<autre référence>` (voir
+# `scripts/node-base-ref.sh` et docs/versions.md § « Réalimentation »).
+# Docker/BuildKit n'offre AUCUNE syntaxe de repli entre deux `FROM` : un
+# second `FROM` serait TOUJOURS tiré, donc le premier registre mort ferait
+# échouer le build quoi qu'il arrive. Le basculement se fait donc à l'appel du
+# build (CI : `scripts/ci-smoke.sh`, qui réessaie sur GHCR si le miroir
+# échoue).
 # =============================================================================
 
-FROM public.ecr.aws/docker/library/node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS base
+# Valeur par DÉFAUT de la source de l'image de base (miroir public, épinglé par
+# digest). Seule cette référence doit changer pour changer de registre.
+# `ARG` avant le premier `FROM` = portée globale, et interpolation autorisée
+# dans la référence du `FROM` (BuildKit).
+ARG NODE_BASE=mirror.gcr.io/library/node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+
+FROM ${NODE_BASE} AS base
 
 # IMPORTANT : `NODE_ENV=production` n'est PAS déclaré ici, sinon il serait hérité
 # par les étages `deps` et `builder` : `npm ci` appliquerait alors `omit=dev` et

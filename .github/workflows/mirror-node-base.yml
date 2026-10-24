@@ -1,0 +1,212 @@
+# =============================================================================
+# Yuki — « Miroir image de base (GHCR) » : recopie MANUELLE de l'image de base
+# Node dans GHCR, pour servir de REPLI quand le miroir public `mirror.gcr.io`
+# est injoignable (quota, panne) — c'est exactement la panne qui a cassé la CI
+# deux fois en une semaine (Docker Hub `429`, puis ECR Public `429`).
+#
+# ⚠️ MANUEL uniquement (`workflow_dispatch`) : aucune exécution planifiée, donc
+# aucun pull de registre parasite. On le lance quand on veut (re)constituer le
+# filet, pas « au cas où ».
+#
+# Ce que fait le workflow :
+#   job `preflight` (DÉDIÉ, court) : vérifie que la source répond RÉELLEMENT et
+#       que le tag cible contient bien le digest de la source. Échoue ICI, en
+#       quelques secondes, avec un message explicite — jamais au milieu d'un
+#       build de 10 minutes ;
+#   job `mirror` : `docker pull` la source, la re-tague dans GHCR, la pousse,
+#       puis RE-TIRE la copie et vérifie qu'elle a la MÊME identité (digest de
+#       configuration) que la source. Un push qui « réussit » mais publie autre
+#       chose est ainsi impossible.
+#
+# Le tag cible CONTIENT le digest source
+# (`24.21.0-bookworm-slim-sha256:<digest>`), parce qu'un tag `node:24.21.0-…`
+# peut être REPUBLIÉ par Node : c'est précisément ce qui avait périmé notre
+# digest une première fois. Un tag qui encode le digest ne peut pas dériver.
+#
+# Réalimentation (procédure complète) : docs/versions.md
+# § « Réalimentation du miroir (repli GHCR) ».
+# =============================================================================
+name: Miroir image de base (GHCR)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_image:
+        description: "Image source (référence complète ; le digest est vérifié)"
+        required: false
+        # Valeur par défaut = ce que le Dockerfile utilise. Après un changement
+        # de version/digest, mettre à jour ici ET dans
+        # `scripts/node-base-ref.sh` (source unique), via `scripts/pin-digests.sh`.
+        default: "mirror.gcr.io/library/node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
+      target_tag:
+        description: "Tag à écrire dans GHCR (doit contenir le digest source)"
+        required: false
+        default: "24.21.0-bookworm-slim-sha256-d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
+
+# Permissions minimales : lecture du dépôt (scripts) + écriture des packages.
+permissions:
+  contents: read
+  packages: write
+
+# Une (re)copie à la fois : deux pushes concurrents du même tag se marcheraient
+# dessus. On sérialise sans annuler (un push interrompu laisserait une copie
+# partielle).
+concurrency:
+  group: mirror-node-base
+  cancel-in-progress: false
+
+env:
+  TARGET_REPOSITORY: yuki-node-base
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Vérification de la source — job DÉDIÉ et court.
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Vérifier la source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      source_image: ${{ steps.check.outputs.source_image }}
+      target_ref: ${{ steps.check.outputs.target_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Vérifier la source et le tag cible
+        id: check
+        env:
+          # Jamais interpolés directement dans le script (anti-injection).
+          SOURCE: ${{ inputs.source_image }}
+          TARGET_TAG: ${{ inputs.target_tag }}
+          OWNER: ${{ github.repository_owner }}
+          TARGET_REPOSITORY: ${{ env.TARGET_REPOSITORY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SOURCE:-}" ] || [ -z "${TARGET_TAG:-}" ]; then
+            echo "::error::source_image et target_tag sont obligatoires."
+            exit 1
+          fi
+
+          # 1) Le registre doit RÉPONDRE (manifeste servi). Un pull qui échoue
+          #    ici doit échouer MAINTENANT, pas dans le job de copie.
+          if ! ./scripts/node-base-ref.sh probe "${SOURCE}"; then
+            echo "::error::la source « ${SOURCE} » est injoignable ou absente. Rien n'a été copié. Vérifier le registre (quota ?), puis relancer."
+            exit 1
+          fi
+
+          # 2) Le tag cible doit ENCODER le digest source : sinon la copie
+          #    deviendrait un tag flottant (dérive silencieuse).
+          DIGEST="${SOURCE#*@}"
+          case "${DIGEST}" in
+            sha256:*) ;;
+            *)
+              echo "::error::la source doit être épinglée par digest (« …@sha256:… »), reçu : ${SOURCE}"
+              exit 1
+              ;;
+          esac
+          case "${TARGET_TAG}" in
+            *"${DIGEST/:/-}"*) ;;
+            *)
+              echo "::error::target_tag « ${TARGET_TAG} » ne contient pas le digest source « ${DIGEST} ». Attendu : <tag>-${DIGEST/:/-}"
+              exit 1
+              ;;
+          esac
+
+          OWNER_LC="$(printf '%s' "${OWNER}" | tr '[:upper:]' '[:lower:]')"
+          TARGET_REF="ghcr.io/${OWNER_LC}/${TARGET_REPOSITORY}:${TARGET_TAG}"
+
+          {
+            echo "source_image=${SOURCE}"
+            echo "target_ref=${TARGET_REF}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "Source  : ${SOURCE}"
+          echo "Cible   : ${TARGET_REF}"
+
+  # ---------------------------------------------------------------------------
+  # Copie effective + vérification après coup.
+  # ---------------------------------------------------------------------------
+  mirror:
+    name: Copier dans GHCR
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE: ${{ needs.preflight.outputs.source_image }}
+      TARGET_REF: ${{ needs.preflight.outputs.target_ref }}
+    steps:
+      - name: Pull de la source
+        run: |
+          set -euo pipefail
+          echo "Pull : ${SOURCE}"
+          if ! docker pull "${SOURCE}"; then
+            echo "::error::pull impossible depuis « ${SOURCE} » (registre en quota, image retirée, réseau ?). Rien n'a été publié dans GHCR."
+            exit 1
+          fi
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag, push et vérification de la copie
+        run: |
+          set -euo pipefail
+
+          SOURCE_ID="$(docker image inspect --format '{{.Id}}' "${SOURCE}")"
+          if [ -z "${SOURCE_ID}" ]; then
+            echo "::error::image source absente du démon après le pull (« ${SOURCE} »)."
+            exit 1
+          fi
+
+          docker tag "${SOURCE}" "${TARGET_REF}"
+
+          # `docker push` échoue (code non nul) si le registre refuse : pas de
+          # réussite silencieuse.
+          if ! docker push "${TARGET_REF}"; then
+            echo "::error::push refusé par ghcr.io (« ${TARGET_REF} »). Vérifier permissions: packages: write et la visibilité du paquet."
+            exit 1
+          fi
+
+          # Vérification RÉELLE : on supprime la copie locale puis on la re-tire
+          # de GHCR. Son identité doit être celle de la source. Cela prouve que
+          # le tag publié sert bien l'image attendue (et qu'un anonyme peut le
+          # tirer, comme le fera le runner CI).
+          docker rmi "${TARGET_REF}" >/dev/null 2>&1 || true
+          if ! docker pull "${TARGET_REF}"; then
+            echo "::error::la copie « ${TARGET_REF} » ne peut pas être re-tirée depuis GHCR (paquet privé ? visibilité à corriger)."
+            exit 1
+          fi
+          TARGET_ID="$(docker image inspect --format '{{.Id}}' "${TARGET_REF}")"
+          if [ "${TARGET_ID}" != "${SOURCE_ID}" ]; then
+            echo "::error::identité différente après copie (source ${SOURCE_ID}, copie ${TARGET_ID}). La copie ne correspond PAS à la source."
+            exit 1
+          fi
+
+          echo "Copie vérifiée : ${TARGET_REF} (${TARGET_ID})"
+
+      - name: Summary
+        env:
+          SOURCE: ${{ needs.preflight.outputs.source_image }}
+          TARGET_REF: ${{ needs.preflight.outputs.target_ref }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Copie de l'image de base dans GHCR"
+            echo
+            echo "| Rôle | Référence |"
+            echo "| --- | --- |"
+            echo "| source | \`${SOURCE}\` |"
+            echo "| repli | \`${TARGET_REF}\` |"
+            echo
+            echo "> Le repli se référence par ce TAG (qui encode le digest source),"
+            echo "> jamais par digest : GHCR ré-emballe le manifeste lors du push,"
+            echo "> donc le digest GHCR peut différer de celui de l'index source."
+            echo
+            echo "> Le build bascule tout seul : \`scripts/node-base-ref.sh\` sonde le"
+            echo "> miroir puis cette copie. Rien à faire côté Dockerfile."
+          } >> "${GITHUB_STEP_SUMMARY}"

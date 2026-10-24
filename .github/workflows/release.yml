@@ -162,7 +162,33 @@ jobs:
           echo "Tags    :"
           while IFS= read -r tag; do printf '  - %s\n' "${tag}"; done <<< "${TAGS}"
 
+      - name: Resolve base image source (miroir public, repli GHCR)
+        id: base
+        env:
+          # Le propriétaire GHCR suit le dépôt (minuscules imposées plus bas).
+          YUKI_GHCR_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          # Sonde les registres : miroir public `mirror.gcr.io` d'abord, copie
+          # GHCR ensuite. Échec explicite si aucune ne répond — jamais un build
+          # de 10 minutes qui meurt sur un 429 anonyme.
+          REF="$(./scripts/node-base-ref.sh resolve)"
+          FALLBACK="$(./scripts/node-base-ref.sh fallback)"
+
+          {
+            echo "ref=${REF}"
+            echo "fallback=${FALLBACK}"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "Image de base         : ${REF}"
+          echo "Repli (si échec)      : ${FALLBACK}"
+
       - name: Build and push image
+        id: build
+        # Un échec ici n'est PAS fatal : l'étape suivante réessaie sur le repli.
+        # Le job échoue quand même si les DEUX échouent (étape explicite plus bas).
+        continue-on-error: true
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -171,8 +197,50 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          # Source de l'image de base : SEUL paramètre qui change de registre.
+          build-args: |
+            NODE_BASE=${{ steps.base.outputs.ref }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build and push image (repli GHCR)
+        # Bascule UNIQUEMENT si le premier build a échoué (registre mort, quota
+        # atteint en cours de pull…). `continue-on-error` pour pouvoir émettre un
+        # message unique et explicite si ce repli échoue AUSSI.
+        id: build_fallback
+        if: steps.build.outcome == 'failure'
+        continue-on-error: true
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/gateway/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            NODE_BASE=${{ steps.base.outputs.fallback }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Avertissement si la release n'a pu se faire que par le repli
+        if: steps.build_fallback.outcome == 'success'
+        env:
+          REF: ${{ steps.base.outputs.ref }}
+          FALLBACK: ${{ steps.base.outputs.fallback }}
+        run: |
+          set -euo pipefail
+          echo "::warning::image construite depuis le REPLI GHCR (${FALLBACK}) : le miroir public ${REF} n'a pas répondu. Réalimenter GHCR (workflow « Miroir image de base (GHCR) ») et vérifier le miroir."
+
+      - name: Échec explicite si aucun registre n'a fourni l'image de base
+        if: steps.build.outcome == 'failure' && steps.build_fallback.outcome == 'failure'
+        env:
+          REF: ${{ steps.base.outputs.ref }}
+          FALLBACK: ${{ steps.base.outputs.fallback }}
+        run: |
+          set -euo pipefail
+          # Message actionnable : on ne laisse pas un « build failed » nu.
+          echo "::error::aucune source d'image de base n'a fonctionné (${REF} puis ${FALLBACK}). Réalimenter GHCR : workflow « Miroir image de base (GHCR) » (docs/versions.md § « Réalimentation du miroir (repli GHCR) »)."
+          exit 1
 
       # --- 3. Incrémenter la version (APRÈS le push de l'image) -------------
       - name: Increment version.txt
