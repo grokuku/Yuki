@@ -42,6 +42,16 @@ export interface AgentStoreOptions {
   logger?: AgentLogger;
   now?: () => number;
   idFactory?: () => string;
+  /**
+   * Garde-fou de la coche « matériel sensible » : renvoie `true` si l'instance
+   * possède un mot de passe permettant de DÉVERROUILLER un agent sensible.
+   *
+   * ⚠️ Par défaut (`() => false`), la coche est REFUSÉE : sans mot de passe
+   * d'instance, un agent sensible serait verrouillé POUR TOUJOURS (personne ne
+   * pourrait le déverrouiller). La production câble ce prédicat sur
+   * `InstancePasswordStore.isConfigured()`.
+   */
+  canMarkSensitive?: () => boolean;
 }
 
 interface ProjectionState {
@@ -80,6 +90,8 @@ function newRecord(agentId: string, defaults: AgentDefaults): AgentRecord {
     privilege: defaults.privilege,
     lastSeen: null,
     revoked: false,
+    // Rétrocompatible : un journal ANTÉRIEUR à ce champ rejoue ici à `false`.
+    sensitive: false,
     schemaVersion: AGENT_SCHEMA_VERSION,
   };
 }
@@ -183,6 +195,9 @@ export function applyAgentEvent(
   if (patch.privilege !== undefined && !isAgentPrivilege(patch.privilege)) {
     return skip(`privilège invalide ${String(patch.privilege)}`);
   }
+  if (patch.sensitive !== undefined && typeof patch.sensitive !== "boolean") {
+    return skip(`indicateur « matériel sensible » invalide ${String(patch.sensitive)}`);
+  }
 
   switch (event.kind) {
     case "upsert": {
@@ -192,6 +207,7 @@ export function applyAgentEvent(
       if (patch.level !== undefined) next.level = patch.level;
       if (patch.privilege !== undefined) next.privilege = patch.privilege;
       if (patch.lastSeen !== undefined) next.lastSeen = patch.lastSeen;
+      if (patch.sensitive !== undefined) next.sensitive = patch.sensitive === true;
       state.byId.set(event.agentId, next);
       // Mémoire du on/off : tout niveau effectif non `disabled` devient le
       // niveau à restaurer si l'agent est ensuite désactivé.
@@ -232,6 +248,7 @@ export class AgentStore {
   private readonly logger?: AgentLogger;
   private readonly now: () => number;
   private readonly idFactory: () => string;
+  private readonly canMarkSensitive: () => boolean;
 
   private readonly byId = new Map<string, AgentRecord>();
   private readonly appliedEventIds = new Set<string>();
@@ -246,6 +263,9 @@ export class AgentStore {
     this.logger = options.logger;
     this.now = options.now ?? Date.now;
     this.idFactory = options.idFactory ?? defaultIdFactory;
+    // Sans prédicat fourni, la coche « matériel sensible » est REFUSÉE (un agent
+    // sensible sans mot de passe d'instance serait définitivement inutilisable).
+    this.canMarkSensitive = options.canMarkSensitive ?? (() => false);
   }
 
   /** Ouvre (ou crée) le journal et reconstruit la projection en le rejouant. */
@@ -344,16 +364,27 @@ export class AgentStore {
     return this.byId.get(agentId) as AgentRecord;
   }
 
-  /** Modifie la configuration d'un agent EXISTANT (niveau, privilège, nom). */
+  /** Modifie la configuration d'un agent EXISTANT (niveau, privilège, nom, sensible). */
   configure(
     agentId: string,
-    patch: { level?: AgentLevel; privilege?: AgentPrivilege; name?: string },
+    patch: {
+      level?: AgentLevel;
+      privilege?: AgentPrivilege;
+      name?: string;
+      sensitive?: boolean;
+    },
   ): AgentRecord {
     assertAgentId(agentId);
-    if (!this.byId.has(agentId)) {
+    const current = this.byId.get(agentId);
+    if (!current) {
       throw new AgentError("AGENT_NOT_FOUND", `Agent inconnu : ${agentId}.`, { agentId });
     }
-    const next: { level?: AgentLevel; privilege?: AgentPrivilege; name?: string } = {};
+    const next: {
+      level?: AgentLevel;
+      privilege?: AgentPrivilege;
+      name?: string;
+      sensitive?: boolean;
+    } = {};
     if (patch.level !== undefined) {
       assertLevel(patch.level);
       next.level = patch.level;
@@ -372,6 +403,29 @@ export class AgentStore {
         );
       }
       next.name = name;
+    }
+    if (patch.sensitive !== undefined) {
+      if (typeof patch.sensitive !== "boolean") {
+        throw new AgentError(
+          "INVALID_SENSITIVE",
+          "Indicateur « matériel sensible » : booléen attendu.",
+          { agentId },
+        );
+      }
+      // ⚠️ PIÈGE : cocher « sensible » SANS mot de passe d'instance rendrait
+      // l'agent VERROUILLÉ POUR TOUJOURS (personne ne pourrait le déverrouiller).
+      // On REFUSE donc la coche, avec un message qui dit quoi faire.
+      if (patch.sensitive && current.sensitive !== true && !this.canMarkSensitive()) {
+        throw new AgentError(
+          "SENSITIVE_REQUIRES_PASSWORD",
+          "Impossible de déclarer cet agent « matériel sensible » : aucun mot de " +
+            "passe d'instance n'est défini. Définissez-le d'abord dans « Mot de passe " +
+            "d'instance » (onglet Agents de /config), sinon l'agent serait verrouillé " +
+            "sans aucun moyen de le déverrouiller.",
+          { agentId },
+        );
+      }
+      next.sensitive = patch.sensitive;
     }
     if (Object.keys(next).length === 0) {
       return this.byId.get(agentId) as AgentRecord;
@@ -417,6 +471,17 @@ export class AgentStore {
   setPrivilege(agentId: string, privilege: AgentPrivilege): AgentRecord {
     assertPrivilege(privilege);
     return this.configure(agentId, { privilege });
+  }
+
+  /**
+   * Déclare (ou retire) « matériel sensible » pour un agent EXISTANT.
+   *
+   * ⚠️ Réglage PERSISTÉ, distinct de l'état « verrouillé » (en mémoire,
+   * `src/agents/lock.ts`) : basculer ce drapeau n'écrit jamais dans le journal un
+   * changement de NIVEAU.
+   */
+  setSensitive(agentId: string, sensitive: boolean): AgentRecord {
+    return this.configure(agentId, { sensitive });
   }
 
   /**

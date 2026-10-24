@@ -22,6 +22,8 @@
  * tout le CSS vit dans `config.css`.
  */
 
+import { unlockAgentWithPassword } from './password-modal.js';
+
 const JSON_HEADERS = { accept: "application/json" };
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-agents": "1" };
 
@@ -175,9 +177,57 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
       });
       if (statusEl) statusEl.textContent = "Enregistré.";
       await load();
+      return true;
     } catch (error) {
       if (statusEl) statusEl.textContent = apiMessage(error, "Échec de l'enregistrement.");
+      return false;
     }
+  }
+
+  /**
+   * Coche (ou décoche) « Matériel sensible ». ⚠️ Le SERVEUR refuse la coche si
+   * aucun mot de passe d'instance n'est défini (l'agent serait verrouillé pour
+   * toujours) : on affiche son message tel quel ET on remet la case à l'état
+   * RÉEL du serveur (jamais une case cochée qui ment).
+   */
+  async function setSensitive(agent, input, statusEl) {
+    const wanted = input.checked;
+    const ok = await patchAgent(agent.agentId, { sensitive: wanted }, statusEl);
+    if (!ok) {
+      input.checked = agent.sensitive === true;
+      return;
+    }
+  }
+
+  /** Reverrouillage IMMÉDIAT (action explicite de l'utilisateur). */
+  async function relockAgent(agent) {
+    try {
+      await HolafFetch.post(`/api/agents/${encodeURIComponent(agent.agentId)}/lock`, {
+        headers: WRITE_HEADERS,
+      });
+      await load();
+    } catch (error) {
+      state.error = apiMessage(error, "Reverrouillage impossible.");
+      render();
+    }
+  }
+
+  /** Déverrouillage (action HUMAINE) : mot de passe d'instance via `HolafModal`. */
+  async function unlockAgent(agent) {
+    const result = await unlockAgentWithPassword({
+      HolafModal,
+      agentId: agent.agentId,
+      agentLabel: displayName(agent),
+    });
+    if (result.cancelled) return;
+    if (!result.ok) {
+      // ⚠️ Refus dit la VRAIE cause (mauvais mot de passe, agent inconnu…) dans une
+      // fenêtre — jamais un bandeau lointain ni un échec muet.
+      await HolafModal.alert("Déverrouillage refusé", result.message, { okText: "Compris" });
+      return;
+    }
+    // Succès : la fiche affiche « Déverrouillé » + le temps restant.
+    await load();
   }
 
   async function revokeAgent(agent) {
@@ -439,6 +489,89 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
         ]),
       ]),
     );
+
+    // ─── Matériel sensible : RÉGLAGE persisté (≠ état verrouillé) ───────────
+    // ⚠️ Champ de l'ENREGISTREMENT de l'agent (pas du schéma de config, qui
+    // n'accepte que string/int/enum). L'état « verrouillé » vit EN MÉMOIRE et
+    // n'est jamais écrit ici.
+    const sensitiveId = `agent-sensitive-${agent.agentId}`;
+    const sensitiveInput = h("input", {
+      id: sensitiveId,
+      class: "agent-sensitive__input",
+      type: "checkbox",
+    });
+    sensitiveInput.checked = agent.sensitive === true;
+    const sensitiveStatus = h("span", { class: "config-save-status", role: "status" });
+    sensitiveInput.addEventListener("change", () =>
+      void setSensitive(agent, sensitiveInput, sensitiveStatus),
+    );
+    card.append(
+      h("div", { class: "agent-sensitive" }, [
+        h("label", { class: "agent-sensitive__label", for: sensitiveId }, [
+          sensitiveInput,
+          h("span", { class: "agent-field__label", text: "Matériel sensible" }),
+        ]),
+        h("p", {
+          class: "config-helper",
+          text:
+            "Agent sur du matériel SENSIBLE : il se VERROUILLE au démarrage et à " +
+            "chaque reconnexion, et aucune commande ne lui est transmise tant que " +
+            "vous ne l'avez pas déverrouillé avec le mot de passe d'instance. Il se " +
+            "reverrouille tout seul après 15 min sans activité. ⚠️ Son NIVEAU de " +
+            "validation reste INCHANGÉ pendant tout le cycle.",
+        }),
+        sensitiveStatus,
+      ]),
+    );
+
+    // État VERROUILLÉ/DÉVERROUILLÉ (en mémoire côté serveur) + action humaine.
+    if (agent.sensitive === true) {
+      const locked = agent.locked === true;
+      const lockRow = h("div", { class: "agent-lock" });
+      lockRow.append(
+        h("span", {
+          class: locked ? "agent-badge agent-badge--danger" : "agent-badge agent-badge--online",
+          text: locked ? "Verrouillé" : "Déverrouillé",
+        }),
+      );
+      if (!locked) {
+        const remaining = Number(agent.unlockRemainingMs);
+        if (Number.isFinite(remaining) && remaining > 0) {
+          const minutes = Math.max(1, Math.ceil(remaining / 60000));
+          lockRow.append(
+            h("span", {
+              class: "config-helper",
+              text: `Reverrouillage automatique dans ~${minutes} min (sans activité).`,
+            }),
+          );
+        }
+        const relock = h("button", {
+          class: "button button--ghost button--small",
+          type: "button",
+          text: "Reverrouiller maintenant",
+        });
+        relock.addEventListener("click", () => void relockAgent(agent));
+        lockRow.append(relock);
+      } else {
+        lockRow.append(
+          h("span", {
+            class: "config-helper",
+            text:
+              "Toute commande est REFUSÉE tant que l'agent est verrouillé (le modèle " +
+              "en est prévenu et vous alertera).",
+          }),
+        );
+        const unlock = h("button", {
+          class: "button button--small",
+          type: "button",
+          text: "Déverrouiller",
+        });
+        unlock.addEventListener("click", () => void unlockAgent(agent));
+        lockRow.append(unlock);
+      }
+      card.append(lockRow);
+    }
+
     card.append(nameStatus);
     card.append(
       h("p", {

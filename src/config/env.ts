@@ -73,6 +73,14 @@ export interface Env {
    */
   secretsVaultPath: string;
   /**
+   * Fichier JSON du MOT DE PASSE D'INSTANCE (volume `state`, 0600). ⚠️ Ne
+   * contient qu'un HACHÉ scrypt + un sel : jamais la valeur en clair. Sert au
+   * déverrouillage des agents « matériel sensible » (et, plus tard, à un éventuel
+   * déverrouillage applicatif global). Surcharge :
+   * `YUKI_INSTANCE_PASSWORD_PATH`.
+   */
+  instancePasswordPath: string;
+  /**
    * Fichier JSONL des jobs d'ARCHIVAGE du libraire (volume `state`). Séparé de
    * `jobsStorePath` (délégation) pour ne pas mêler les deux espaces de noms.
    * Surcharge : `YUKI_LIBRARIAN_JOBS_PATH`.
@@ -304,6 +312,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_SECRETS_VAULT_PATH",
       `${mountPoints.state}/secrets.vault.json`,
+    ),
+    instancePasswordPath: getString(
+      env,
+      "YUKI_INSTANCE_PASSWORD_PATH",
+      `${mountPoints.state}/instance-password.json`,
     ),
     librarianJobsPath: getString(
       env,

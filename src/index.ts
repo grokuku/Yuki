@@ -26,6 +26,7 @@ import {
   AgentDirectoryService,
   AgentExecutionService,
   AgentHub,
+  AgentLockService,
   AgentStore,
   ApprovalRegistry,
   AuditLog,
@@ -43,6 +44,7 @@ import {
   type AgentLevel,
 } from "./agents/index.js";
 import type { AgentsApiDeps } from "./gateway/routes/agents.js";
+import { InstancePasswordStore } from "./security/instance-password.js";
 import { SecretRequestRegistry } from "./secrets/requests.js";
 import { SecretStore } from "./secrets/store.js";
 
@@ -334,12 +336,41 @@ async function main(): Promise<void> {
   let agentsDeps: AgentsApiDeps | undefined;
   let agentExecution: AgentExecutionService | undefined;
   let agentDirectory: AgentDirectoryService | undefined;
+  /**
+   * Mot de passe d'INSTANCE (haché scrypt, volume `state`) : sert au
+   * déverrouillage des agents « matériel sensible ». `undefined` si le fichier
+   * est illisible (on échoue FERMÉ : les agents sensibles restent verrouillés).
+   */
+  let instancePassword: InstancePasswordStore | undefined;
+  /** Verrou des agents sensibles (état EN MÉMOIRE, jamais persisté). */
+  let agentLock: AgentLockService | undefined;
+  /** Arrêt des tâches périodiques du verrou (balayage). */
+  let stopLockSweep: (() => void) | undefined;
+  /**
+   * Valeurs secrètes REÇUES À CHAUD (mot de passe d'instance, déverrouillage) :
+   * elles doivent SURVIVRE à un rafraîchissement de la liste (changement de
+   * config, mutation du coffre), sinon une fuite accidentelle ultérieure ne
+   * serait plus masquée.
+   */
+  const typedSecretValues: string[] = [];
+  /**
+   * Mémorise une valeur secrète TRANSMISE par l'utilisateur (mot de passe
+   * d'instance reçu par l'API) dans la liste PARTAGÉE des valeurs à masquer :
+   * une fuite accidentelle ultérieure (log, audit) est ainsi masquée elle aussi.
+   * La valeur n'est écrite NULLE PART ailleurs.
+   */
+  const rememberSecretValue = (value: string): void => {
+    if (typeof value !== "string" || value.length < 6) return;
+    if (!typedSecretValues.includes(value)) typedSecretValues.push(value);
+    if (!secretValues.includes(value)) secretValues.push(value);
+  };
   /** Coffre de secrets (façade). `undefined` tant que l'init agents n'a pas réussi. */
   let secretStore: SecretStore | undefined;
   /**
    * Rafraîchit la liste MUTABLE PARTAGÉE des valeurs à masquer (logger + audit) :
-   * clés d'environnement, clés saisies dans /config, secrets du coffre. Appelée au
-   * démarrage, à chaque changement de config ET à chaque mutation du coffre.
+   * clés d'environnement, clés saisies dans /config, secrets du coffre, valeurs
+   * reçues à chaud. Appelée au démarrage, à chaque changement de config ET à
+   * chaque mutation du coffre.
    */
   const refreshSecretValues = (): void => {
     secretValues.splice(
@@ -348,11 +379,28 @@ async function main(): Promise<void> {
       ...collectSecretValues(),
       ...config.secretValues(),
       ...(secretStore?.values() ?? []),
+      ...typedSecretValues,
     );
   };
   /** Port du registre d'agents vers le transport WS (encart de la barre latérale). */
   let agentsGateway: AgentsGatewayPort | undefined;
   try {
+    // Mot de passe d'instance : SÉPARÉ des agents (nom neutre, réutilisable plus
+    // tard pour un déverrouillage applicatif global). Illisible ⇒ on continue
+    // sans lui mais on le DIT : aucun agent sensible ne serait déverrouillable.
+    try {
+      instancePassword = InstancePasswordStore.open({
+        path: env.instancePasswordPath,
+        logger,
+      });
+    } catch (error) {
+      logger.error("agents.instance_password.unreadable", {
+        path: env.instancePasswordPath,
+        error: messageOf(error),
+        hint: "Les agents « matériel sensible » resteront verrouillés : définissez un " +
+          "nouveau mot de passe d'instance dans /config (ou corrigez le fichier).",
+      });
+    }
     const agentStore = AgentStore.open({
       path: env.agentsStorePath,
       defaults: {
@@ -361,6 +409,9 @@ async function main(): Promise<void> {
         privilege: "normal",
       },
       logger,
+      // ⚠️ PIÈGE : cocher « matériel sensible » SANS mot de passe d'instance
+      // rendrait l'agent inutilisable POUR TOUJOURS ⇒ la coche est REFUSÉE.
+      canMarkSensitive: () => instancePassword?.isConfigured() === true,
     });
     const auditLog = AuditLog.open({
       path: env.auditLogPath,
@@ -387,6 +438,18 @@ async function main(): Promise<void> {
     // humaines (B6bis) + service d'exécution (garde-fous D118).
     const agentHub = new AgentHub({ logger });
     const approvals = new ApprovalRegistry({ logger });
+    // VERROU des agents « matériel sensible » (état EN MÉMOIRE, jamais persisté).
+    // ⚠️ Il lit le store mais n'y ÉCRIT JAMAIS : un reverrouillage ne touche ni
+    // le niveau ni aucune donnée de `agents.jsonl`.
+    agentLock = new AgentLockService({
+      store: agentStore,
+      ...(instancePassword ? { password: instancePassword } : {}),
+      logger,
+    });
+    // Un agent sensible est VERROUILLÉ au démarrage (table vide) et à chaque
+    // RECONNEXION (redémarrage côté machine ⇒ nouveau cycle).
+    agentLock.attachHub(agentHub);
+    stopLockSweep = agentLock.startSweep();
     // Coffre de secrets CHIFFRÉ (AES-256-GCM). ⚠️ Clé maître HORS BANDE
     // (`YUKI_VAULT_KEY`) : sans elle, toute opération REFUSE (jamais de repli en
     // clair). À chaque mutation, on rafraîchit la liste partagée de redaction.
@@ -403,14 +466,23 @@ async function main(): Promise<void> {
     // diffuse JAMAIS le secret : ici, un simple résumé.
     agentsGateway = {
       list: () =>
-        agentStore.list().map((record) => ({
-          agentId: record.agentId,
-          name: record.name !== "" ? record.name : record.agentId,
-          level: record.level,
-          revoked: record.revoked,
-          online: agentHub.isOnline(record.agentId),
-          lastSeen: record.lastSeen,
-        })),
+        agentStore.list().map((record) => {
+          const lockStatus = agentLock?.status(record.agentId);
+          return {
+            agentId: record.agentId,
+            name: record.name !== "" ? record.name : record.agentId,
+            level: record.level,
+            revoked: record.revoked,
+            online: agentHub.isOnline(record.agentId),
+            lastSeen: record.lastSeen,
+            // État SÉPARÉ du niveau : `sensitive` = réglage, `locked` = éphémère.
+            sensitive: record.sensitive === true,
+            locked: lockStatus ? lockStatus.locked : false,
+            ...(lockStatus?.remainingMs !== undefined
+              ? { unlockRemainingMs: lockStatus.remainingMs }
+              : {}),
+          };
+        }),
       setEnabled: (agentId, enabled) => {
         agentStore.setEnabled(agentId, enabled);
       },
@@ -421,16 +493,16 @@ async function main(): Promise<void> {
         agentStore.setLevel(agentId, level);
       },
       subscribe: (listener) => {
-        // Deux sources de changement : le registre (nom, niveau, révocation…) et
-        // le HUB (connexion / déconnexion d'un agent). ⚠️ Sans le hub, une
-        // déconnexion ne déclenchait AUCUNE mutation du store : la trame `agents`
-        // (donc l'état `online`/la pastille) restait périmée jusqu'à un
-        // rechargement. On s'abonne aux DEUX et on se désabonne des deux.
+        // TROIS sources de changement : le registre (nom, niveau, révocation…),
+        // le HUB (connexion / déconnexion) et le VERROU (déverrouillage et
+        // reverrouillage automatique, qui ne touchent NI le store NI le hub).
         const offStore = agentStore.subscribe(listener);
         const offHub = agentHub.subscribe(listener);
+        const offLock = agentLock ? agentLock.subscribe(listener) : () => undefined;
         return () => {
           offStore();
           offHub();
+          offLock();
         };
       },
     };
@@ -442,14 +514,18 @@ async function main(): Promise<void> {
       logger,
       ...(secretStore ? { secrets: secretStore } : {}),
       secretRequests,
+      ...(agentLock ? { lock: agentLock } : {}),
     });
     // Consultation des agents (extension) : LECTURE SEULE. Réutilise le même
     // store/hub/audit ; les outils sont exposés même quand l'exécution est
-    // désactivée (consulter n'est pas exécuter).
+    // désactivée (consulter n'est pas exécuter). Le VERROU est lu ici aussi :
+    // c'est ce qui fait apparaître `locked` dans `lister_agents`/`etat_agent` et
+    // dans l'annuaire injecté au modèle à chaque tour.
     agentDirectory = new AgentDirectoryService({
       store: agentStore,
       hub: agentHub,
       audit: auditLog,
+      ...(agentLock ? { lock: agentLock } : {}),
       logger,
     });
     if (agentsBindHost === "0.0.0.0") {
@@ -544,7 +620,18 @@ async function main(): Promise<void> {
       config,
       logger,
     });
-    agentsDeps = { pairing: pairingManager, store: agentStore, logger, hub: agentHub, audit: auditLog, approvals };
+    agentsDeps = {
+      pairing: pairingManager,
+      store: agentStore,
+      logger,
+      hub: agentHub,
+      audit: auditLog,
+      approvals,
+      // Verrou « matériel sensible » : déverrouillage/reverrouillage par l'API.
+      ...(agentLock ? { lock: agentLock } : {}),
+      // Toute valeur reçue (mot de passe) rejoint la liste des valeurs masquées.
+      onSecretSeen: rememberSecretValue,
+    };
     // Taille RÉELLE de l'annuaire au démarrage (observabilité d'exploitation) :
     // permet de retrouver dans les logs combien d'agents Yuki connaît — utile
     // pour diagnostiquer PLUS TARD un écart éventuel store ↔ runtime.
@@ -1275,7 +1362,19 @@ async function main(): Promise<void> {
       startedAt,
       volumes,
       getSubsystems,
-      config: { runtime: config, logger },
+      config: {
+        runtime: config,
+        logger,
+        // Mot de passe d'INSTANCE : section dédiée de /config (définir / changer).
+        ...(instancePassword ? { password: instancePassword } : {}),
+        // Retirer le mot de passe est REFUSÉ tant qu'un agent sensible existe.
+        sensitiveAgentCount: () =>
+          agentsDeps
+            ? agentsDeps.store.list().filter((record) => record.sensitive === true && !record.revoked)
+                .length
+            : 0,
+        onSecretSeen: rememberSecretValue,
+      },
       personality: { store: personalityStore, logger },
       rules: { store: rulesStore, logger },
       // Administration de la mémoire (archivage récupérable) : disponible
@@ -1312,6 +1411,9 @@ async function main(): Promise<void> {
     beforeClose: async () => {
       stopAgentsCertReload?.();
       stopAgentsCertReload = undefined;
+      // Verrou des agents sensibles : plus aucun balayage après l'arrêt.
+      stopLockSweep?.();
+      stopLockSweep = undefined;
       stopLlmHotReload?.();
       stopLlmHotReload = undefined;
       stopPushTriggers?.();

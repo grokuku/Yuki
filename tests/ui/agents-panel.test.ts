@@ -52,3 +52,48 @@ describe("agents-panel.js — suppression définitive", () => {
     expect(source).toContain("createElement");
   });
 });
+
+describe("agents-panel.js — verrou « matériel sensible »", () => {
+  it("case à cocher par agent, envoyée côté serveur (jamais un état local)", () => {
+    expect(source).toContain("agent-sensitive__input");
+    expect(source).toContain('text: "Matériel sensible"');
+    expect(source).toContain("{ sensitive: wanted }");
+  });
+
+  it("une case refusée est REMISE à l'état RÉEL du serveur (jamais une case qui ment)", () => {
+    expect(source).toContain("input.checked = agent.sensitive === true");
+  });
+
+  it("déverrouillage par HolafModal avec mot de passe, jamais window.prompt", () => {
+    expect(source).toContain("unlockAgentWithPassword");
+    expect(source).not.toContain("window.prompt(");
+    expect(source).not.toContain("window.confirm(");
+  });
+
+  it("affiche l'état VERROUILLÉ/DÉVERROUILLÉ et le temps restant", () => {
+    expect(source).toContain('text: locked ? "Verrouillé" : "Déverrouillé"');
+    expect(source).toContain("Reverrouillage automatique dans");
+    expect(source).toContain("/lock`");
+  });
+});
+
+describe("password-modal.js — saisie masquée, HolafModal uniquement", () => {
+  const modal = readFileSync(
+    join(process.cwd(), "public", "ui", "password-modal.js"),
+    "utf8",
+  );
+
+  it("champ `type=password` (jamais un champ texte qui afficherait le secret)", () => {
+    expect(modal).toContain('input.type = "password"');
+  });
+
+  it("modale de la brique, aucun prompt natif, aucune injection HTML", () => {
+    expect(modal).toContain("HolafModal.open");
+    expect(modal).not.toContain("window.prompt(");
+    expect(modal).not.toContain("window.confirm(");
+    // Le mot « innerHTML » n'apparaît que dans le commentaire d'en-tête : ce qui
+    // compte est qu'il ne soit jamais AFFECTÉ.
+    expect(modal).not.toMatch(/\.innerHTML\s*=/);
+    expect(modal).not.toContain("localStorage");
+  });
+});

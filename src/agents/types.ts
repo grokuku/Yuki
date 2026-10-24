@@ -49,6 +49,20 @@ export interface AgentRecord {
   lastSeen: string | null;
   /** `true` si l'agent a été révoqué (dé-appairage). */
   revoked: boolean;
+  /**
+   * `true` si cette machine est déclarée « MATÉRIEL SENSIBLE ».
+   *
+   * ⚠️ C'est un RÉGLAGE (persisté, journal `agents.jsonl`), DISTINCT de l'état
+   * « verrouillé/déverrouillé » qui vit EN MÉMOIRE (`src/agents/lock.ts`) : le
+   * reverrouillage automatique n'écrit JAMAIS ici — il ne touche NI ce champ NI
+   * `level`.
+   *
+   * Un agent sensible est VERROUILLÉ au démarrage et à chaque reconnexion :
+   * aucune commande n'est transmise tant que l'utilisateur ne l'a pas
+   * déverrouillée avec le mot de passe d'instance. Le niveau de garde-fou
+   * (`level`) reste INCHANGÉ pendant tout ce cycle.
+   */
+  sensitive: boolean;
   /** Version de schéma (migration future). */
   schemaVersion: typeof AGENT_SCHEMA_VERSION;
 }
@@ -60,6 +74,8 @@ export interface AgentPatch {
   level?: AgentLevel;
   privilege?: AgentPrivilege;
   lastSeen?: string;
+  /** Déclaration « matériel sensible » (réglage persisté, pas l'état verrouillé). */
+  sensitive?: boolean;
 }
 
 /** Nature d'un événement du journal d'agents. */

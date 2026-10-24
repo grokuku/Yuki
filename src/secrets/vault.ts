@@ -46,13 +46,25 @@ export const VAULT_SCHEMA_VERSION = 1;
  */
 export const VAULT_MIN_SECRET_LENGTH = 6;
 
-/** Paramètres scrypt (coût mémoire/CPU). Stockés en clair dans le fichier. */
-interface KdfParams {
-  algorithm: "scrypt";
+/**
+ * Paramètres scrypt (coût mémoire/CPU), stockés EN CLAIR dans le fichier : le
+ * sel n'a pas besoin d'être secret, seuls `n`/`r`/`p` décrivent le coût.
+ *
+ * ⚠️ SOURCE UNIQUE du KDF du projet : `InstancePasswordStore`
+ * (`src/security/instance-password.ts`) réutilise CECI (aucun second KDF
+ * écrit à la main).
+ */
+export interface ScryptParams {
+  /** Sel ALÉATOIRE, encodé en base64. */
   salt: string;
   n: number;
   r: number;
   p: number;
+}
+
+/** Paramètres scrypt (coût mémoire/CPU). Stockés en clair dans le fichier. */
+interface KdfParams extends ScryptParams {
+  algorithm: "scrypt";
 }
 
 /** Entrée chiffrée telle que stockée (jamais la valeur en clair). */
@@ -149,9 +161,9 @@ export class VaultWriteError extends VaultError {
   }
 }
 
-const SCRYPT_N = 16_384;
-const SCRYPT_R = 8;
-const SCRYPT_P = 1;
+/** Coût scrypt par défaut du projet (mémoire ≈ 128 × N × r ≈ 16 Mio). */
+export const SCRYPT_DEFAULTS = { n: 16_384, r: 8, p: 1 } as const;
+
 const KEY_LEN = 32;
 const IV_LEN = 12;
 const SALT_LEN = 16;
@@ -160,11 +172,26 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Dérive la clé AES-256 depuis la clé maître et le sel (scrypt). */
-function deriveKey(masterKey: string, params: KdfParams): Buffer {
+/** Tire un sel ALÉATOIRE (base64) — jamais réutilisé entre deux fichiers. */
+export function randomSalt(): string {
+  return randomBytes(SALT_LEN).toString("base64");
+}
+
+/**
+ * Dérive une clé de `keyLen` octets (scrypt) depuis un secret et un sel.
+ *
+ * ⚠️ KDF SOURCE UNIQUE : le coffre l'utilise pour sa clé AES-256, et
+ * `InstancePasswordStore` pour le hachage du mot de passe d'instance. Ne pas
+ * réimplémenter ailleurs.
+ */
+export function deriveScryptKey(
+  secret: string,
+  params: ScryptParams,
+  keyLen: number = KEY_LEN,
+): Buffer {
   // `maxmem` couvre 128 * N * r (+ marge) sinon Node lève « memory limit ».
   const maxmem = Math.max(32 * 1024 * 1024, 256 * params.n * params.r);
-  return scryptSync(masterKey, Buffer.from(params.salt, "base64"), KEY_LEN, {
+  return scryptSync(secret, Buffer.from(params.salt, "base64"), keyLen, {
     N: params.n,
     r: params.r,
     p: params.p,
@@ -172,13 +199,18 @@ function deriveKey(masterKey: string, params: KdfParams): Buffer {
   });
 }
 
+/** Dérive la clé AES-256 depuis la clé maître et le sel (scrypt). */
+function deriveKey(masterKey: string, params: KdfParams): Buffer {
+  return deriveScryptKey(masterKey, params, KEY_LEN);
+}
+
 function defaultKdf(): KdfParams {
   return {
     algorithm: "scrypt",
-    salt: randomBytes(SALT_LEN).toString("base64"),
-    n: SCRYPT_N,
-    r: SCRYPT_R,
-    p: SCRYPT_P,
+    salt: randomSalt(),
+    n: SCRYPT_DEFAULTS.n,
+    r: SCRYPT_DEFAULTS.r,
+    p: SCRYPT_DEFAULTS.p,
   };
 }
 

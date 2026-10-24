@@ -674,6 +674,74 @@
   color: var(--muted);
 }
 
+/* ─── « Matériel sensible » (case à cocher par agent) ─────────────────────
+ * Réglage PERSISTÉ, distinct de l'état « verrouillé » (en mémoire) affiché
+ * juste en dessous. La case et son libellé forment une seule zone cliquable. */
+.agent-sensitive {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.agent-sensitive__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.agent-sensitive__label .agent-field__label {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.agent-sensitive__input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* État VERROUILLÉ/DÉVERROUILLÉ + action (déverrouiller / reverrouiller). */
+.agent-lock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+/* ─── Section « Mot de passe d'instance » (/config) ────────────────────── */
+.config-password {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.config-password__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Rangée d'actions : les boutons ne se compriment pas (sinon « Retirer le mot
+ * de passe » s'écrase sur une colonne de 3 caractères) — ils passent à la
+ * ligne si la place manque. */
+.config-password .config-secret__form-actions {
+  flex-wrap: wrap;
+}
+
+.config-password .config-secret__form-actions .button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .agent-actions {
   display: flex;
   gap: 8px;
@@ -1202,4 +1270,25 @@
   margin: 0;
   font-size: 13px;
   color: var(--muted);
+}
+
+/* ─── Fenêtre de saisie d'un MOT DE PASSE (HolafModal, champ masqué) ───────
+ * Utilisée par « Déverrouiller l'agent » (onglet Agents) : le champ est un vrai
+ * `type="password"` (jamais un champ texte, qui afficherait le secret). */
+.secret-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.secret-prompt__message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.secret-prompt__input {
+  width: 100%;
+  box-sizing: border-box;
 }

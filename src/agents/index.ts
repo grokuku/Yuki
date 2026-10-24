@@ -308,6 +308,23 @@ export type {
   ScreenshotViewEvent,
 } from "./execution.js";
 
+// VERROU des agents « matériel sensible » : état ÉPHÉMÈRE (en mémoire), séparé
+// du niveau de garde-fou (le reverrouillage n'écrit RIEN dans `agents.jsonl`).
+export {
+  AgentLockService,
+  LOCK_SWEEP_INTERVAL_MS,
+  SENSITIVE_IDLE_TIMEOUT_MS,
+  lockedAgentMessage,
+} from "./lock.js";
+export type {
+  AgentLockPort,
+  AgentLockServiceOptions,
+  AgentLockStatus,
+  AgentUnlockOutcome,
+  InstancePasswordPort,
+  LockLogger,
+} from "./lock.js";
+
 // Résultat d'une commande VALIDÉE renvoyé au modèle (prompt synthétique
 // corrélé par `approval_id`, éphémère côté humain).
 export {

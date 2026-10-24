@@ -10,6 +10,14 @@ export type AgentErrorCode =
   | "INVALID_AGENT_ID"
   | "INVALID_AGENT_NAME"
   | "AGENT_NAME_TAKEN"
+  /** Indicateur « matériel sensible » : booléen attendu. */
+  | "INVALID_SENSITIVE"
+  /**
+   * Coche « matériel sensible » REFUSÉE : aucun mot de passe d'instance n'est
+   * défini, donc aucun déverrouillage ne serait possible (agent inutilisable
+   * pour toujours). Le message dit quoi faire avant de recocher.
+   */
+  | "SENSITIVE_REQUIRES_PASSWORD"
   | "STORE_IO";
 
 /**

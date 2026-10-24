@@ -18,8 +18,11 @@ import {
   agentLastSeenLabel,
   agentLevelBadge,
   agentLevelLabel,
+  agentLockHint,
+  agentLockLabel,
   isAgentConnected,
   isAgentEnabled,
+  isAgentLocked,
   LEVEL_MENU_ITEMS,
 } from "../../public/ui/sidebar-agents.js";
 
@@ -224,5 +227,48 @@ describe("pastille d'agent : la CSS la lie à la CONNEXION, plus à l'activation
     const rule = dotBlock.slice(0, end);
     expect(rule).toContain("background: var(--danger)");
     expect(rule).not.toMatch(/#[0-9a-fA-F]{3,6}/); // aucune couleur en dur
+  });
+});
+
+describe("verrou « matériel sensible » — libellés et source", () => {
+  it("un agent ordinaire n'a AUCUN libellé de verrou (non-régression)", () => {
+    expect(agentLockLabel({ agentId: "a1", level: "never" })).toBe("");
+    expect(agentLockHint({ agentId: "a1" })).toBe("");
+    expect(isAgentLocked({ agentId: "a1" })).toBe(false);
+    expect(isAgentLocked({ agentId: "a1", locked: false, sensitive: true })).toBe(false);
+  });
+
+  it("verrouillé : libellé « verrouillé » + consigne de déverrouillage HUMAIN", () => {
+    const agent = { agentId: "a1", sensitive: true, locked: true, level: "never" };
+    expect(isAgentLocked(agent)).toBe(true);
+    expect(agentLockLabel(agent)).toBe("verrouillé");
+    expect(agentLockHint(agent)).toContain("VERROUILLÉ");
+    expect(agentLockHint(agent)).toContain("Déverrouiller l'agent");
+  });
+
+  it("déverrouillé : affiche le TEMPS RESTANT avant reverrouillage", () => {
+    const agent = {
+      agentId: "a1",
+      sensitive: true,
+      locked: false,
+      level: "never",
+      unlockRemainingMs: 12 * 60_000,
+    };
+    expect(agentLockLabel(agent)).toBe("déverrouillé · reverrouille dans 12 min");
+    expect(agentLockLabel({ ...agent, unlockRemainingMs: 0 })).toBe("déverrouillé");
+  });
+
+  it("la source rend le cadenas, l'action de déverrouillage et aucune injection HTML", () => {
+    const source = readFileSync(
+      join(process.cwd(), "public", "ui", "sidebar-agents.js"),
+      "utf8",
+    );
+    expect(source).toContain('"side-agent__lock"');
+    expect(source).toContain("mnav-agent__lock");
+    expect(source).toContain("Déverrouiller l'agent…");
+    expect(source).toContain("ctx-menu__item--action");
+    expect(source).not.toContain("innerHTML");
+    expect(source).not.toContain("window.confirm(");
+    expect(source).not.toContain("window.prompt(");
   });
 });

@@ -10,6 +10,8 @@
  *   POST   /api/agents/<id>/revoke           → dé-appairage (révocation, D118)
  *   POST   /api/agents/<id>/restore          → annulation d'une révocation
  *   POST   /api/agents/<id>/remove           → SUPPRESSION DÉFINITIVE de la fiche
+ *   POST   /api/agents/<id>/unlock           → DÉVERROUILLAGE (mot de passe d'instance)
+ *   POST   /api/agents/<id>/lock             → reverrouillage immédiat (agent sensible)
  *   DELETE /api/agents/<id>                  → révocation (alias REST de `revoke`)
  *   GET    /api/agents/approvals             → validations en attente (niveaux 2/3)
  *   POST   /api/agents/approvals/<id>/approve|deny → décision humaine
@@ -25,6 +27,7 @@ import type { ApprovalRegistry } from "../../agents/approvals.js";
 import type { AuditLog } from "../../agents/audit.js";
 import type { AgentHub } from "../../agents/connection.js";
 import { AgentError } from "../../agents/errors.js";
+import type { AgentLockService } from "../../agents/lock.js";
 import type { PairingManager } from "../../agents/pairing.js";
 import type { AgentStore } from "../../agents/store.js";
 import { isAgentLevel, isAgentPrivilege, type AgentLevel, type AgentPrivilege } from "../../agents/types.js";
@@ -48,6 +51,17 @@ export interface AgentsApiDeps {
   audit?: AuditLog;
   /** Validations humaines en attente (B6bis). */
   approvals?: ApprovalRegistry;
+  /**
+   * Verrou « matériel sensible » (état EN MÉMOIRE). Absent ⇒ aucun agent n'est
+   * jamais verrouillé et les actions de déverrouillage répondent `unavailable`.
+   */
+  lock?: AgentLockService;
+  /**
+   * Notification d'un mot de passe REÇU (jamais journalisé) : sert à l'ajouter
+   * à la liste des valeurs à masquer, pour qu'une fuite accidentelle ultérieure
+   * (log/audit) soit masquée elle aussi.
+   */
+  onSecretSeen?: (value: string) => void;
   now?: () => number;
 }
 
@@ -127,6 +141,10 @@ function serialize(
   record: ReturnType<AgentStore["list"]>[number],
   deps: AgentsApiDeps,
 ): Record<string, unknown> {
+  // ⚠️ État SÉPARÉ du niveau : `sensitive` est le RÉGLAGE (persisté) et `locked`
+  // l'état éphémère (en mémoire). `level` n'est JAMAIS modifié par un
+  // reverrouillage. Aucune valeur secrète ici (jamais de mot de passe).
+  const lockStatus = deps.lock?.status(record.agentId);
   return {
     agentId: record.agentId,
     name: record.name,
@@ -135,6 +153,11 @@ function serialize(
     lastSeen: record.lastSeen,
     revoked: record.revoked,
     online: deps.hub?.isOnline(record.agentId) ?? false,
+    sensitive: record.sensitive === true,
+    locked: lockStatus ? lockStatus.locked : false,
+    ...(lockStatus?.remainingMs !== undefined
+      ? { unlockRemainingMs: lockStatus.remainingMs }
+      : {}),
   };
 }
 
@@ -285,10 +308,16 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
   if (guard) return guard;
   const body = parseJsonBody(input.body);
   if ("status" in body) return body;
-  const patch: { level?: AgentLevel; privilege?: AgentPrivilege; name?: string } = {};
+  const patch: {
+    level?: AgentLevel;
+    privilege?: AgentPrivilege;
+    name?: string;
+    sensitive?: boolean;
+  } = {};
   const level = body.value["level"];
   const privilege = body.value["privilege"];
   const name = body.value["name"];
+  const sensitive = body.value["sensitive"];
   if (level !== undefined) {
     if (!isAgentLevel(level)) {
       return json(400, { error: "invalid_level", code: "invalid_level", message: "Niveau invalide." });
@@ -317,6 +346,16 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
     // lève `INVALID_AGENT_NAME` ou `AGENT_NAME_TAKEN` (message honnête).
     patch.name = name;
   }
+  if (sensitive !== undefined) {
+    if (typeof sensitive !== "boolean") {
+      return json(400, {
+        error: "invalid_sensitive",
+        code: "invalid_sensitive",
+        message: "Indicateur « matériel sensible » : booléen attendu.",
+      });
+    }
+    patch.sensitive = sensitive;
+  }
   try {
     const record = input.deps.store.configure(agentId, patch);
     input.deps.logger.info("agents.configured", {
@@ -324,20 +363,99 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
       name: record.name,
       level: record.level,
       privilege: record.privilege,
+      sensitive: record.sensitive,
     });
+    // ⚠️ Décocher « matériel sensible » ne doit pas laisser un déverrouillage
+    // fantôme en mémoire pour un agent redevenu ordinaire.
+    if (patch.sensitive === false) input.deps.lock?.lock(agentId, "sensitive_removed");
     return json(200, { ok: true, agent: serialize(record, input.deps) });
   } catch (error) {
     if (error instanceof AgentError) {
       if (error.code === "AGENT_NAME_TAKEN") {
         return json(409, { error: error.code, code: error.code, message: error.message });
       }
-      if (error.code === "INVALID_AGENT_NAME") {
+      if (error.code === "INVALID_AGENT_NAME" || error.code === "INVALID_SENSITIVE") {
         return json(400, { error: error.code, code: error.code, message: error.message });
+      }
+      // ⚠️ Coche « matériel sensible » sans mot de passe d'instance : CONFLIT
+      // explicite (409) avec le message qui dit quoi faire — jamais un refus muet.
+      if (error.code === "SENSITIVE_REQUIRES_PASSWORD") {
+        return json(409, { error: error.code, code: error.code, message: error.message });
       }
       return json(404, { error: error.code, code: error.code, message: error.message });
     }
     throw error;
   }
+}
+
+/**
+ * `POST /api/agents/<id>/unlock` — DÉVERROUILLAGE d'un agent sensible.
+ *
+ * ⚠️ Le mot de passe vient du NAVIGATEUR (saisie de l'utilisateur) et ne quitte
+ * jamais ce couple requête/réponse : il n'est ni journalisé, ni audité, ni
+ * transmis au modèle. La réponse ne dit que « déverrouillé » + le temps restant.
+ */
+function handleUnlock(input: AgentsRequestInput, agentId: string): AgentsHttpResponse {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return guard;
+  const lock = input.deps.lock;
+  if (!lock) {
+    return json(503, {
+      error: "lock_unavailable",
+      code: "lock_unavailable",
+      message: "Verrouillage des agents indisponible sur cette instance.",
+    });
+  }
+  const body = parseJsonBody(input.body);
+  if ("status" in body) return body;
+  const password = body.value["password"];
+  if (typeof password !== "string" || password.length === 0) {
+    return json(400, {
+      error: "password_missing",
+      code: "password_missing",
+      message: "Mot de passe d'instance requis.",
+    });
+  }
+  // Défensif : la valeur reçue rejoint la liste des valeurs à MASQUER (logs +
+  // audit). On ne l'écrit nulle part.
+  input.deps.onSecretSeen?.(password);
+  const outcome = lock.unlock(agentId, password);
+  if (!outcome.ok) {
+    const status = outcome.code === "agent_not_found" ? 404 : outcome.code === "invalid_password" ? 403 : 400;
+    return json(status, { error: outcome.code, code: outcome.code, message: outcome.message });
+  }
+  input.deps.logger.info("agents.unlocked", { agent_id: agentId });
+  const record = input.deps.store.get(agentId);
+  return json(200, {
+    ok: true,
+    agent: record ? serialize(record, input.deps) : { agentId },
+    remainingMs: outcome.remainingMs,
+  });
+}
+
+/** `POST /api/agents/<id>/lock` — reverrouillage IMMÉDIAT (action explicite). */
+function handleLock(input: AgentsRequestInput, agentId: string): AgentsHttpResponse {
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return guard;
+  const lock = input.deps.lock;
+  if (!lock) {
+    return json(503, {
+      error: "lock_unavailable",
+      code: "lock_unavailable",
+      message: "Verrouillage des agents indisponible sur cette instance.",
+    });
+  }
+  if (!input.deps.store.has(agentId)) {
+    return json(404, {
+      error: "agent_not_found",
+      code: "agent_not_found",
+      message: `Agent inconnu : ${agentId}.`,
+    });
+  }
+  lock.lock(agentId, "manual");
+  input.deps.logger.info("agents.locked", { agent_id: agentId });
+  const record = input.deps.store.get(agentId);
+  return json(200, { ok: true, agent: record ? serialize(record, input.deps) : { agentId } });
 }
 
 function handleApprovalList(deps: AgentsApiDeps): AgentsHttpResponse {
@@ -419,12 +537,14 @@ export function handleAgentsRequest(input: AgentsRequestInput): AgentsHttpRespon
     if (method === "DELETE") return handleRevoke(input, agentId);
     return json(405, { error: "method_not_allowed", method });
   }
-  const action = /^\/api\/agents\/([^/]+)\/(revoke|restore|remove)$/.exec(path);
+  const action = /^\/api\/agents\/([^/]+)\/(revoke|restore|remove|unlock|lock)$/.exec(path);
   if (action) {
     const agentId = decodeURIComponent(action[1] as string);
     if (method !== "POST") return json(405, { error: "method_not_allowed", method });
     if (action[2] === "revoke") return handleRevoke(input, agentId);
     if (action[2] === "restore") return handleRestore(input, agentId);
+    if (action[2] === "unlock") return handleUnlock(input, agentId);
+    if (action[2] === "lock") return handleLock(input, agentId);
     return handleRemove(input, agentId);
   }
   return json(404, { error: "not_found", path });

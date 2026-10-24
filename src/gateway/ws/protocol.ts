@@ -119,6 +119,20 @@ export interface WireAgent {
    * inventer (l'interface affiche alors « jamais connecté »).
    */
   lastSeen?: string | null;
+  /**
+   * `true` si la machine est déclarée « MATÉRIEL SENSIBLE » (réglage persisté).
+   * Optionnel : absent = machine ordinaire.
+   */
+  sensitive?: boolean;
+  /**
+   * `true` si l'agent sensible est VERROUILLÉ (état EN MÉMOIRE, jamais persisté) :
+   * son niveau de garde-fou est INCHANGÉ, mais toute commande est refusée tant
+   * que l'utilisateur ne l'a pas déverrouillée avec le mot de passe d'instance.
+   * C'est ce que l'interface montre (cadenas) sur BUREAU et sur TÉLÉPHONE.
+   */
+  locked?: boolean;
+  /** Temps restant (ms) avant le reverrouillage automatique, si déverrouillé. */
+  unlockRemainingMs?: number;
 }
 
 /** Corps d'une trame serveur → client. */

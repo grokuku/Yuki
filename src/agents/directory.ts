@@ -21,6 +21,7 @@
 
 import type { AuditLog } from "./audit.js";
 import type { AgentHub } from "./connection.js";
+import type { AgentLockPort } from "./lock.js";
 import type { AgentHistoryEntry } from "./output.js";
 import type { AgentStore } from "./store.js";
 import type { AgentLevel, AgentPrivilege, AgentRecord } from "./types.js";
@@ -50,6 +51,19 @@ export interface AgentSummary {
    * absente signifie qu'elle est réellement indisponible.
    */
   caps: string[];
+  /**
+   * `true` si la machine est déclarée « matériel sensible ». Absent/`false` :
+   * machine ordinaire (aucun verrou possible).
+   */
+  sensitive?: boolean;
+  /**
+   * `true` si l'agent est sensible ET VERROUILLÉ : toute exécution sera
+   * REFUSÉE jusqu'à ce que l'UTILISATEUR le déverrouille dans les paramètres.
+   * ⚠️ C'est cette information qui empêche le modèle d'inventer une cause (et
+   * qui justifie qu'il ne demande JAMAIS de mot de passe : ce n'est pas son
+   * rôle).
+   */
+  locked?: boolean;
 }
 
 /** Libellés français lisibles des niveaux de validation (D118). */
@@ -96,11 +110,24 @@ export interface AgentDirectoryServiceOptions {
   hub: Pick<AgentHub, "isOnline"> & Partial<Pick<AgentHub, "caps">>;
   /** Seul `recent` est utilisé (facilite les doubles de test). */
   audit: Pick<AuditLog, "recent">;
+  /**
+   * Verrou « matériel sensible » (LECTURE SEULE ici). Absent ⇒ aucun agent
+   * n'est jamais signalé verrouillé (comportement historique).
+   */
+  lock?: Pick<AgentLockPort, "isLocked"> & { isSensitive?(agentId: string): boolean };
   logger?: DirectoryLogger;
 }
 
 /** Convertit un enregistrement de store en vue de consultation. */
-function toSummary(record: AgentRecord, online: boolean, caps: string[]): AgentSummary {
+function toSummary(
+  record: AgentRecord,
+  online: boolean,
+  caps: string[],
+  lock?: AgentDirectoryServiceOptions["lock"],
+): AgentSummary {
+  const sensitive = lock?.isSensitive
+    ? lock.isSensitive(record.agentId)
+    : record.sensitive === true;
   return {
     agentId: record.agentId,
     name: record.name,
@@ -109,6 +136,8 @@ function toSummary(record: AgentRecord, online: boolean, caps: string[]): AgentS
     privilege: record.privilege,
     lastSeen: record.lastSeen,
     caps,
+    sensitive,
+    locked: lock ? lock.isLocked(record.agentId) : false,
   };
 }
 
@@ -123,12 +152,14 @@ export class AgentDirectoryService implements AgentDirectoryPort {
   private readonly store: AgentStore;
   private readonly hub: Pick<AgentHub, "isOnline"> & Partial<Pick<AgentHub, "caps">>;
   private readonly audit: Pick<AuditLog, "recent">;
+  private readonly lock?: AgentDirectoryServiceOptions["lock"];
   private readonly logger?: DirectoryLogger;
 
   constructor(options: AgentDirectoryServiceOptions) {
     this.store = options.store;
     this.hub = options.hub;
     this.audit = options.audit;
+    this.lock = options.lock;
     this.logger = options.logger;
   }
 
@@ -142,14 +173,24 @@ export class AgentDirectoryService implements AgentDirectoryPort {
       .list()
       .filter((record) => !record.revoked)
       .map((record) =>
-        toSummary(record, this.hub.isOnline(record.agentId), this.capsOf(record.agentId)),
+        toSummary(
+          record,
+          this.hub.isOnline(record.agentId),
+          this.capsOf(record.agentId),
+          this.lock,
+        ),
       );
   }
 
   find(identifier: string): AgentSummary | undefined {
     const record = this.store.resolve(identifier);
     if (!record || record.revoked) return undefined;
-    return toSummary(record, this.hub.isOnline(record.agentId), this.capsOf(record.agentId));
+    return toSummary(
+      record,
+      this.hub.isOnline(record.agentId),
+      this.capsOf(record.agentId),
+      this.lock,
+    );
   }
 
   /**

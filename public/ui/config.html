@@ -239,6 +239,13 @@
               serveur) ; il est rendu par la mécanique de configuration commune.
             -->
             <div id="group-agents" class="config-groups"></div>
+            <!--
+              MOT DE PASSE D'INSTANCE : UN SEUL mot de passe pour toute
+              l'instance, stocké HACHÉ (scrypt) sur le volume d'état. Il
+              déverrouille les agents « matériel sensible ». Composant autonome
+              monté par id (`instance-password-panel.js`), aucun style inline.
+            -->
+            <div id="instance-password-root"></div>
             <div id="agents-root"></div>
           </section>
           <section

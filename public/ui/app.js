@@ -25,7 +25,8 @@ import {
   serializeUnread,
   shouldMarkUnread,
 } from "./unread.js";
-import { initSidebarAgents } from "./sidebar-agents.js";
+import { initSidebarAgents, agentLabel } from "./sidebar-agents.js";
+import { unlockAgentWithPassword } from "./password-modal.js";
 import { createApprovalLayer } from "./approval-window.js";
 import { createScrollToBottom } from "./scroll-button.js";
 import { createRecapDedicated } from "./recap-dedicated.js";
@@ -390,6 +391,9 @@ function onJobFinished(frame) {
 // Encart « agents » ancré en BAS de la barre latérale (sous la liste). Le
 // on/off envoie `agent_enabled` : le SERVEUR décide du niveau (`disabled` ⇄
 // précédent) et rediffuse la trame `agents` — un seul état, aucune divergence.
+/** Dernier état des agents reçu (trame `agents`), par identifiant. */
+let agentsById = new Map();
+
 const sidebarAgents = initSidebarAgents({
   // Menu TÉLÉPHONE « Agents » : même état, même menu de niveau (appui long).
   extraTargets: [
@@ -415,6 +419,30 @@ const sidebarAgents = initSidebarAgents({
       "Impossible de régler le niveau de l'agent : la connexion au gateway est perdue.",
       { okText: "Compris" },
     );
+  },
+  // DÉVERROUILLAGE d'un agent « matériel sensible » : action HUMAINE (saisie du
+  // mot de passe d'instance). ⚠️ Le modèle ne peut pas la déclencher : il n'a
+  // aucun outil pour ça, et le mot de passe ne quitte jamais navigateur → serveur.
+  onUnlock: (agentId) => {
+    const agent = agentsById.get(agentId);
+    void (async () => {
+      const result = await unlockAgentWithPassword({
+        HolafModal,
+        agentId,
+        agentLabel: agent ? agentLabel(agent) : agentId,
+      });
+      if (result.cancelled) return;
+      if (!result.ok) {
+        await HolafModal.alert("Déverrouillage refusé", result.message, { okText: "Compris" });
+        return;
+      }
+      await HolafModal.alert(
+        "Agent déverrouillé",
+        "L'agent est déverrouillé : il se reverrouillera tout seul après 15 min " +
+          "sans activité (une commande réellement transmise remet le compte à zéro).",
+        { okText: "Compris" },
+      );
+    })();
   },
 });
 
@@ -1299,6 +1327,13 @@ function handleFrame(frame) {
   // Encart agents : ÉTAT de contrôle (aucun `seq` consommé), envoyé à la
   // connexion puis rediffusé à chaque changement du registre (jamais bufferisé).
   if (type === "agents") {
+    // Le dernier état connu par ID sert au DÉVERROUILLAGE (nom lisible de
+    // l'agent dans la fenêtre de mot de passe).
+    agentsById = new Map(
+      (Array.isArray(frame.agents) ? frame.agents : [])
+        .filter((agent) => agent && typeof agent.agentId === "string")
+        .map((agent) => [agent.agentId, agent]),
+    );
     sidebarAgents.update(frame.agents);
     return;
   }

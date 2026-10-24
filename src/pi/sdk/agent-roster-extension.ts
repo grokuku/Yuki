@@ -3,10 +3,10 @@
  *
  * Enregistrée INLINE via `extensionFactories`. À CHAQUE tour
  * (`before_agent_start`), elle AJOUTE au PROMPT SYSTÈME du tour une ligne
- * compacte listant les machines pilotables — **nom + identifiant, jamais leur
- * état** (décision utilisateur 2026-10-08 : la liste est visible dès le départ,
- * sans appel d'outil ; l'état, qui change trop souvent, reste dans les outils
- * `lister_agents`/`etat_agent`).
+ * compacte listant les machines pilotables — **nom + identifiant**, et
+ * **l'état VERROUILLÉ d'un agent « matériel sensible »** (seule exception à la
+ * règle « pas d'état ici » : un agent verrouillé refuse TOUTE exécution, le
+ * modèle doit donc le savoir avant d'essayer).
  *
  * ⚠️ Le prompt système est la ZONE DE CONFIANCE du modèle. Les noms proviennent
  * des MACHINES (pré-remplissage par le nom d'hôte, cf. `src/agents/server.ts`) :
@@ -54,6 +54,9 @@ export function createAgentRosterExtensionFactory(
           const entries = directory.list().map((agent) => ({
             name: agent.name,
             agentId: agent.agentId,
+            // ⚠️ L'état VERROUILLÉ (matériel sensible) part à CHAQUE tour : sans
+            // lui, le modèle essaie, échoue et risque d'inventer la cause.
+            ...(agent.locked === true ? { locked: true } : {}),
           }));
           block = frameAgentRoster(
             entries,

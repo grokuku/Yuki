@@ -28,6 +28,7 @@ import { HolafModal } from './vendor/holaf/holaf-modal.js';
 import { createApprovalChannel } from './approval-channel.js';
 import { createApprovalLayer } from './approval-window.js';
 import { initAgentsPanel } from './agents-panel.js';
+import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
 import { initSecretsPanel } from './secrets-panel.js';
 import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
@@ -622,6 +623,8 @@ const ttsAssistantRoot = document.getElementById("tts-assistant-root");
 const ttsEngineRoot = document.getElementById("tts-engine-root");
 /** Panneau des agents d'exécution (Lot 4, B5) — monté par id. */
 const agentsRoot = document.getElementById("agents-root");
+/** Section « Mot de passe d'instance » (verrou des agents sensibles). */
+const instancePasswordRoot = document.getElementById("instance-password-root");
 const secretsRoot = document.getElementById("secrets-root");
 /** Panneau de la personnalité — monté par id. */
 const personalityRoot = document.getElementById("personality-root");
@@ -1510,8 +1513,15 @@ void (async () => {
         openMaintenance: () => selectTab("maintenance", { updateHash: true }),
       });
     }
+    // Section « Mot de passe d'instance » : UN SEUL mot de passe pour toute
+    // l'instance (haché scrypt), qui déverrouille les agents « matériel
+    // sensible ». Aucune valeur n'est jamais réaffichée.
+    if (instancePasswordRoot) {
+      initInstancePasswordPanel({ root: instancePasswordRoot, HolafFetch, HolafModal });
+    }
     // Panneau des agents d'exécution (Lot 4, B5) : liste, état, niveau,
-    // privilège, suppression (HolafModal) et validations en attente.
+    // privilège, « matériel sensible » (verrou), suppression (HolafModal) et
+    // validations en attente.
     if (agentsRoot) {
       initAgentsPanel({ root: agentsRoot, HolafFetch, HolafModal });
     }

@@ -309,6 +309,11 @@ function toDirectoryEntry(summary: AgentSummary): AgentDirectoryEntry {
     // ⚠️ Capacités ANNONCÉES par l'agent : c'est ce qui rend `screenshot`
     // visible du modèle (sinon il ne saurait pas que la machine peut capturer).
     caps: summary.caps,
+    // ⚠️ VERROU « matériel sensible » : le modèle voit que l'exécution sera
+    // REFUSÉE et que le déverrouillage est une ACTION HUMAINE (il ne doit pas
+    // réclamer de mot de passe).
+    ...(summary.sensitive === true ? { sensitive: true } : {}),
+    ...(summary.locked === true ? { locked: true } : {}),
   };
 }
 
@@ -404,6 +409,8 @@ export function createAgentDirectoryTools(directory: AgentDirectoryPort): ToolDe
         privilege: AGENT_PRIVILEGE_LABELS[summary.privilege],
         caps: summary.caps,
         lastSeen: summary.lastSeen,
+        ...(summary.sensitive === true ? { sensitive: true } : {}),
+        ...(summary.locked === true ? { locked: true } : {}),
         history,
       });
       const details: AgentStatusToolDetails = {

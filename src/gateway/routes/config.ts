@@ -5,6 +5,9 @@
  *   GET  /api/config          → valeurs effectives (jamais une clé en clair)
  *   PUT  /api/config          → patch partiel fusionnant
  *   POST /api/config/llm/test → test de connexion (endpoint OpenAI `/models`)
+ *   GET  /api/config/password → mot de passe d'INSTANCE : « défini ou pas » (+ date)
+ *   POST /api/config/password → définit / change le mot de passe d'instance
+ *   DEL  /api/config/password → retire le mot de passe d'instance (si possible)
  *
  * Précédence : `défauts < store < env`. Un champ défini par l'environnement est
  * VERROUILLÉ : un `PUT` le visant est refusé (`locked_by_env`), jamais un no-op
@@ -33,6 +36,13 @@ import { VOICE_SPEECH_INSTRUCTION } from "../../llm/prompts.js";
 import { ConfigStoreWriteError } from "../../config/store.js";
 import { describeWriteFailure } from "../../config/paths.js";
 import type { Logger } from "../../observability/logger.js";
+import {
+  InstancePasswordError,
+  INSTANCE_PASSWORD_MAX_LENGTH,
+  INSTANCE_PASSWORD_MIN_LENGTH,
+  type InstancePasswordStore,
+} from "../../security/instance-password.js";
+import { SENSITIVE_IDLE_TIMEOUT_MS } from "../../agents/lock.js";
 
 export const CONFIG_WRITE_HEADER = "x-yuki-config";
 export const CONFIG_HEADER_VALUE = "1";
@@ -60,6 +70,24 @@ export interface ConfigApiDeps {
   /** Injectable pour les tests. Défaut : `fetch` global. */
   fetchImpl?: typeof fetch;
   now?: () => number;
+  /**
+   * Mot de passe d'INSTANCE (haché scrypt, volume `state`). Absent ⇒ les routes
+   * `/api/config/password` répondent `password_unavailable` (jamais un faux
+   * succès : l'agent sensible resterait alors non déverrouillable).
+   */
+  password?: InstancePasswordStore;
+  /**
+   * Nombre d'agents déclarés « matériel sensible » : un mot de passe d'instance
+   * ne peut PAS être retiré tant qu'il en existe (ces agents deviendraient
+   * inutilisables pour toujours).
+   */
+  sensitiveAgentCount?: () => number;
+  /**
+   * Notification d'un mot de passe REÇU (jamais journalisé) : sert à l'ajouter à
+   * la liste des valeurs à MASQUER, pour qu'une fuite accidentelle ultérieure
+   * (log/audit) soit masquée elle aussi.
+   */
+  onSecretSeen?: (value: string) => void;
 }
 
 export interface ConfigHttpResponse {
@@ -498,6 +526,144 @@ export function isConfigPath(path: string): boolean {
   return path === "/api/config" || path.startsWith("/api/config/");
 }
 
+// ── Mot de passe d'INSTANCE (déverrouillage des agents sensibles) ───────────
+
+/**
+ * `GET /api/config/password` — état du mot de passe d'instance.
+ *
+ * ⚠️ Ne renvoie JAMAIS un mot de passe ni son haché : seulement « défini ou
+ * pas », la date du dernier changement, la longueur minimale et le délai
+ * d'inactivité appliqué aux agents sensibles.
+ */
+function handlePasswordGet(deps: ConfigApiDeps): ConfigHttpResponse {
+  if (!deps.password) {
+    return json(503, {
+      error: "password_unavailable",
+      code: "password_unavailable",
+      message: "Mot de passe d'instance indisponible sur cette instance.",
+    });
+  }
+  const view = deps.password.view();
+  return json(200, {
+    ...view,
+    minLength: INSTANCE_PASSWORD_MIN_LENGTH,
+    maxLength: INSTANCE_PASSWORD_MAX_LENGTH,
+    idleTimeoutMs: SENSITIVE_IDLE_TIMEOUT_MS,
+    sensitiveAgents: deps.sensitiveAgentCount ? deps.sensitiveAgentCount() : 0,
+  });
+}
+
+/**
+ * `POST /api/config/password` — définit (ou CHANGE) le mot de passe d'instance.
+ *
+ * Le corps porte `{ password, currentPassword? }`. ⚠️ Un CHANGEMENT exige
+ * l'ANCIEN mot de passe : sans cela, une page `/config` ouverte suffirait à
+ * remplacer le mot de passe et à rouvrir tous les agents sensibles sans le
+ * connaître. Aucune des deux valeurs n'est journalisée, auditée ni renvoyée.
+ */
+function handlePasswordSet(input: ConfigRequestInput): ConfigHttpResponse {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+  const store = input.deps.password;
+  if (!store) {
+    return json(503, {
+      error: "password_unavailable",
+      code: "password_unavailable",
+      message: "Mot de passe d'instance indisponible sur cette instance.",
+    });
+  }
+  let body: Record<string, unknown>;
+  try {
+    const parsed = input.body.trim() === "" ? {} : JSON.parse(input.body);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("objet attendu");
+    }
+    body = parsed as Record<string, unknown>;
+  } catch {
+    return json(400, {
+      error: "invalid_json",
+      code: "invalid_json",
+      message: "Corps JSON invalide (objet attendu).",
+    });
+  }
+  const password = body["password"];
+  const currentPassword = body["currentPassword"];
+  if (typeof password !== "string" || password.length === 0) {
+    return json(400, {
+      error: "password_missing",
+      code: "password_missing",
+      message: "Mot de passe d'instance requis.",
+    });
+  }
+  if (typeof currentPassword === "string" && currentPassword.length > 0) {
+    // Défensif : les deux valeurs reçues rejoignent la liste des valeurs à
+    // masquer (logs + audit). Rien n'est écrit.
+    input.deps.onSecretSeen?.(currentPassword);
+  }
+  input.deps.onSecretSeen?.(password);
+  try {
+    const view = store.set(
+      password,
+      typeof currentPassword === "string" ? { currentPassword } : {},
+    );
+    input.deps.logger.info("config.instance_password.set", {
+      at: new Date((input.deps.now ?? Date.now)()).toISOString(),
+      flow: configWriteFlow(input.headers),
+    });
+    return json(200, { ...view, minLength: INSTANCE_PASSWORD_MIN_LENGTH });
+  } catch (error) {
+    if (error instanceof InstancePasswordError) {
+      const status = error.code === "password_mismatch" ? 403 : 400;
+      return json(status, { error: error.code, code: error.code, message: error.message });
+    }
+    throw error;
+  }
+}
+
+/**
+ * `DELETE /api/config/password` — retire le mot de passe d'instance.
+ *
+ * ⚠️ REFUS tant qu'un agent « matériel sensible » existe : ces agents seraient
+ * alors VERROUILLÉS POUR TOUJOURS (personne ne pourrait plus les déverrouiller).
+ */
+function handlePasswordClear(input: ConfigRequestInput): ConfigHttpResponse {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+  const store = input.deps.password;
+  if (!store) {
+    return json(503, {
+      error: "password_unavailable",
+      code: "password_unavailable",
+      message: "Mot de passe d'instance indisponible sur cette instance.",
+    });
+  }
+  const sensitive = input.deps.sensitiveAgentCount ? input.deps.sensitiveAgentCount() : 0;
+  if (sensitive > 0) {
+    return json(409, {
+      error: "sensitive_agents_present",
+      code: "sensitive_agents_present",
+      message:
+        `${sensitive} agent(s) sont déclarés « matériel sensible » : le mot de passe ` +
+        "d'instance ne peut pas être retiré tant qu'il en existe un (ils deviendraient " +
+        "impossible à déverrouiller). Décochez d'abord « matériel sensible » sur ces agents.",
+    });
+  }
+  try {
+    const cleared = store.clear();
+    input.deps.logger.info("config.instance_password.cleared", {
+      at: new Date((input.deps.now ?? Date.now)()).toISOString(),
+      flow: configWriteFlow(input.headers),
+      cleared,
+    });
+    return json(200, { configured: false, cleared });
+  } catch (error) {
+    if (error instanceof InstancePasswordError) {
+      return json(500, { error: error.code, code: error.code, message: error.message });
+    }
+    throw error;
+  }
+}
+
 /** Traite une requête de configuration et renvoie la réponse HTTP. */
 export async function handleConfigRequest(
   input: ConfigRequestInput,
@@ -514,6 +680,12 @@ export async function handleConfigRequest(
   }
   if (path === "/api/config/librarian/test") {
     if (method === "POST") return handleLibrarianTest(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path === "/api/config/password") {
+    if (method === "GET" || method === "HEAD") return handlePasswordGet(input.deps);
+    if (method === "POST") return handlePasswordSet(input);
+    if (method === "DELETE") return handlePasswordClear(input);
     return json(405, { error: "method_not_allowed", method });
   }
   return json(404, { error: "not_found", path });

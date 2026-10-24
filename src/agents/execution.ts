@@ -22,6 +22,7 @@ import type { ApprovalRegistry, PendingApproval } from "./approvals.js";
 import type { AgentHub } from "./connection.js";
 import { isChannelError } from "./errors.js";
 import { destructiveLabels, evaluateDestructive } from "./destructive.js";
+import { lockedAgentMessage, type AgentLockPort } from "./lock.js";
 import { escapeOutputText, frameAgentDirectory, frameCommandOutput } from "./output.js";
 import { buildApprovalResultPrompt, ORIGIN_APPROVAL_RESULT } from "./approval-report.js";
 import { buildSecretStoredPrompt, ORIGIN_SECRET_STORED } from "./secret-report.js";
@@ -451,6 +452,17 @@ export interface ExecutionServiceOptions {
    * vide implicite).
    */
   secretRequests?: SecretRequestRegistry;
+  /**
+   * VERROU des agents « matériel sensible » (état en mémoire).
+   *
+   * Absent ⇒ aucun agent n'est jamais verrouillé (comportement historique :
+   * utile aux piles de test qui ne s'intéressent pas à cette fonctionnalité).
+   *
+   * Présent ⇒ une commande (ou une capture) visant un agent sensible VERROUILLÉ
+   * est REFUSÉE avant tout envoi, et chaque commande RÉELLEMENT TRANSMISE remet
+   * à zéro le compte d'inactivité (`touch`).
+   */
+  lock?: AgentLockPort;
 }
 
 /** Timeout par défaut d'une commande (ms). */
@@ -486,6 +498,7 @@ export class AgentExecutionService implements ExecutionServicePort {
   private waker?: ApprovalResultWaker;
   private readonly secrets?: SecretLookupPort;
   private readonly secretRequests?: SecretRequestRegistry;
+  private readonly lock?: AgentLockPort;
 
   constructor(options: ExecutionServiceOptions) {
     this.store = options.store;
@@ -498,6 +511,7 @@ export class AgentExecutionService implements ExecutionServicePort {
     this.waker = options.waker;
     this.secrets = options.secrets;
     this.secretRequests = options.secretRequests;
+    this.lock = options.lock;
   }
 
   /**
@@ -650,6 +664,20 @@ export class AgentExecutionService implements ExecutionServicePort {
       }
     }
 
+    // 3ter. VERROU « matériel sensible » — contrÔle du DERNIER MOMENT. Il
+    // couvre deux cas que le garde-fou ne voit pas : le REJEU post-secret
+    // (`guardAlreadySatisfied` saute `authorize`) et une expiration survenue
+    // PENDANT la préparation (demande de secret, résolution des références).
+    if (this.lock?.isLocked(agentId)) {
+      this.logger.info("agents.exec.locked", {
+        agent_id: agentId,
+        agent_name: agentName || null,
+        origin: request.origin ?? null,
+        stage: "before_send",
+      });
+      return this.refuse(agentId, agentName, command, verdict, lockedAgentMessage(agentName));
+    }
+
     // 4. Envoi (au plus une fois) et attente du résultat.
     const cmdId = this.idFactory();
     const timeoutMs = request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
@@ -660,6 +688,11 @@ export class AgentExecutionService implements ExecutionServicePort {
       destructive: verdict.destructive,
       origin: request.origin ?? null,
     });
+    // ⚠️ ACTIVITÉ : la commande PART réellement ⇒ le compte d'inactivité d'un
+    // agent sensible déverrouillé repart à zéro. Placé APRÈS tous les refus
+    // (un refus ne compte pas) et AVANT l'envoi (une commande en vol ne doit
+    // jamais être coupée par le reverrouillage).
+    this.lock?.touch(agentId);
 
     try {
       const result = await this.hub.sendCommand(agentId, {
@@ -1056,6 +1089,18 @@ export class AgentExecutionService implements ExecutionServicePort {
     if (record.level === "disabled") {
       return { kind: "refuse", message: "Agent désactivé (niveau 1) : exécution refusée." };
     }
+    // ⚠️ VERROU « matériel sensible » — état SÉPARÉ du niveau : il est évalué
+    // APRÈS la révocation et le niveau `disabled` (si l'utilisateur a désactivé
+    // l'agent, c'est LA vraie cause du refus), et AVANT toute demande de
+    // validation (inutile de faire valider une commande qui ne partira pas).
+    if (this.lock?.isLocked(record.agentId)) {
+      this.logger.info("agents.exec.locked", {
+        agent_id: record.agentId,
+        agent_name: record.name || null,
+        level: record.level,
+      });
+      return { kind: "refuse", message: lockedAgentMessage(record.name) };
+    }
     const needsApproval =
       record.level === "always" || (record.level === "destructive" && verdict.destructive);
     if (needsApproval && !this.approvals.consume(record.agentId, command)) {
@@ -1207,6 +1252,10 @@ export class AgentExecutionService implements ExecutionServicePort {
       cmd_id: cmdId,
       origin: request.origin ?? null,
     });
+    // ⚠️ ACTIVITÉ : une capture réellement TRANSMISE est une action exécutée sur
+    // la machine sensible ⇒ elle remet le compte d'inactivité à zéro (mais elle
+    // n'ouvre jamais un verrou : `authorize` a déjà refusé le cas échéant).
+    this.lock?.touch(agentId);
 
     try {
       const frame = await this.hub.sendScreenshot(agentId, {

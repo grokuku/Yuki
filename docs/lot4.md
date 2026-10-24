@@ -700,3 +700,90 @@ variable la développe en **CHAÎNE VIDE** : `rm -rf /$YUKI_SECRET_DIR` deviendr
 **Version de l'agent.** `agent/VERSION` = **0.2.0** (`internal/buildinfo`), publiée
 par la CI `agent.yml` (`release agent-v<version>`). Procédure de mise à jour :
 `docs/runbook.md` §12.4.
+
+## 19. Verrou « matériel sensible » (note d'implémentation)
+
+> **Note d'implémentation — hors décisions de conception.** Ajoutée après
+> validation, à la demande d'usage réel (2026-10-24) : « *une case à cocher pour
+> définir qu'un agent est sur du matériel sensible… une demande de mot de passe
+> quand on active cet agent, et qu'il se désactive tout seul au bout de 15 min
+> d'inactivité* ». Elle **ne modifie aucune décision `D109`–`D128`**.
+
+### 19.1 Les quatre réponses de l'utilisateur, appliquées telles quelles
+
+1. **UN SEUL mot de passe pour l'INSTANCE** (pas un par agent).
+2. **ÉTAT SÉPARÉ du niveau de garde-fou** : le niveau configuré **ne change
+   jamais** lors d'un reverrouillage — aucun événement de niveau n'est écrit
+   dans `agents.jsonl` (assertion sur les octets du journal).
+3. **Inactivité GLISSANTE de 15 min** : le compte repart à zéro à chaque
+   ACTIVITÉ réelle (ce n'est pas un compte à rebours fixe après déverrouillage).
+4. **Verrouillé + le modèle en a besoin ⇒ un simple MESSAGE** : aucune demande de
+   mot de passe déclenchée par le modèle ; c'est l'**utilisateur** qui
+   déverrouille dans les paramètres.
+
+### 19.2 Où vivent les choses
+
+| Élément | Emplacement | Persisté ? |
+|---|---|---|
+| Coche « Matériel sensible » | `AgentRecord.sensitive` (`src/agents/types.ts`), journal `agents.jsonl` | **oui** (réglage) |
+| Mot de passe d'instance | `src/security/instance-password.ts` → `state/instance-password.json` (**haché scrypt + sel**, `0600`, écriture atomique) | **oui** (haché seulement) |
+| État verrouillé/déverrouillé | `AgentLockService` (`src/agents/lock.ts`), table en mémoire | **non** (perdu au redémarrage ⇒ verrouillé) |
+
+Le KDF est **celui du coffre** (`deriveScryptKey`, `src/secrets/vault.ts`) :
+aucun second KDF écrit à la main. Le nom du stockage est **neutre**
+(`InstancePassword…`) : il pourra servir un jour de déverrouillage applicatif
+global sans migration.
+
+### 19.3 Définition d'« activité »
+
+**Remet le compteur à zéro** : une commande **réellement transmise** à l'agent
+(`run_command`), une **capture d'écran réellement transmise** (`capturer_ecran`),
+et le **déverrouillage lui-même**.
+
+**Ne le remet pas à zéro** : un **refus** (verrouillé, hors ligne, niveau
+`disabled`, validation refusée — rien n'a été transmis), une **connexion /
+reconnexion** de l'agent (au contraire : une reconnexion **reverrouille**), un
+ping/heartbeat, et toute **lecture** d'état (`lister_agents`, `etat_agent`).
+
+### 19.4 Refus et visibilité
+
+- **Refus explicite** avant tout envoi (`AgentExecutionService.authorize` +
+  contrôle du **dernier moment** juste avant `sendCommand`, qui couvre aussi le
+  rejeu post-secret) : message « Agent … **VERROUILLÉ** (matériel sensible) : la
+  commande n'a **PAS** été transmise », avec la consigne « ne demande pas de mot
+  de passe, préviens l'utilisateur ». Aucune commande ne part : l'agent ne reçoit
+  rien (assertion sur un hub qui enregistre les envois). Une commande **en vol**
+  au moment du reverrouillage va **au bout** ; la suivante est refusée.
+- **Le modèle le sait** : l'annuaire injecté à chaque tour
+  (`agent-roster-extension` → `frameAgentRoster`) porte `[VERROUILLÉ — …]`, et
+  `lister_agents` / `etat_agent` l'indiquent aussi (`frameAgentDirectory`,
+  `frameAgentStatus`).
+- **L'utilisateur le voit** : CADENAS + libellé « verrouillé » sur la pastille de
+  la barre latérale (**bureau**) **et** dans le menu « Agents » du **téléphone**
+  (appui long) ; fiche de `/config` : case à cocher, badge d'état, temps restant
+  et boutons « Déverrouiller » / « Reverrouiller maintenant » (`HolafModal`, champ
+  `type=password`).
+- **Coche refusée sans mot de passe** : `SENSITIVE_REQUIRES_PASSWORD`
+  (`AgentStore.configure`) → HTTP 409 avec le message qui dit quoi faire, sinon
+  l'agent serait verrouillé **pour toujours**.
+
+### 19.5 Garde-fous du secret
+
+Le mot de passe n'est **jamais** renvoyé par l'API (`GET /api/config/password`
+ne dit que « défini ou pas » + la date), **jamais** journalisé ni audité
+(assertions sur les octets réels), **jamais** dans le contexte du modèle, et
+**jamais** dans le DOM après saisie. La valeur reçue est de plus ajoutée à la
+liste partagée des valeurs à masquer (`onSecretSeen` → `secretValues`), comme
+les clés d'API. Changer le mot de passe **exige l'ancien** ; le retirer est
+**refusé** tant qu'un agent sensible existe.
+
+### 19.6 Commandes de vérification
+
+```bash
+npm test                                  # verrou, coffre de mot de passe, API, roster
+npx vitest run tests/agents/lock.test.ts tests/agents/execution-lock.test.ts \
+               tests/security/instance-password.test.ts \
+               tests/gateway/instance-password-api.test.ts \
+               tests/pi/agent-roster-lock.test.ts
+node "Yuki and Libs/_tools/e2e-agent-lock.mjs"   # interface bureau + téléphone
+```

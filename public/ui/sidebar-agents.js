@@ -28,6 +28,13 @@
 // (`extraTargets`), avec la pastille de connexion, le nom, la DERNIÈRE ACTIVITÉ
 // et le NIVEAU de garde-fou visible. Le menu de niveau est le MÊME (un seul
 // système), ouvert par clic droit sur bureau et par APPUI LONG au doigt.
+//
+// ⚠️ VERROU « MATÉRIEL SENSIBLE » : un agent sensible verrouillé porte un
+// CADENAS (dans la pastille + libellé « verrouillé »), sur BUREAU comme sur
+// TÉLÉPHONE. Le même menu (clic droit / appui long) expose alors une action
+// « Déverrouiller l'agent… » qui demande le mot de passe d'INSTANCE — c'est la
+// SEULE voie : le modèle ne peut pas la déclencher (décision utilisateur n°4).
+// L'état verrouillé est DISTINCT du niveau : il ne le modifie JAMAIS.
 
 import { attachLongPress } from "./long-press.js";
 
@@ -99,6 +106,48 @@ export function agentInitial(agent) {
 /** `true` si l'agent est ACTIF (tout niveau sauf `disabled`). */
 export function isAgentEnabled(agent) {
   return agent?.level !== "disabled";
+}
+
+/**
+ * `true` si l'agent est sensible ET VERROUILLÉ (matériel sensible).
+ *
+ * ⚠️ État SÉPARÉ du niveau : un agent verrouillé peut très bien être au niveau
+ * « Pas de validation ». Tant qu'il est verrouillé, AUCUNE commande ne part.
+ */
+export function isAgentLocked(agent) {
+  return agent?.locked === true;
+}
+
+/**
+ * Libellé du verrou (« verrouillé » / « déverrouillé · reverrouille dans N min »),
+ * jamais vide pour un agent sensible : c'est une information de SÉCURITÉ, elle
+ * doit être lisible en TEXTE (jamais seulement une couleur ou un glyphe).
+ */
+export function agentLockLabel(agent) {
+  if (agent?.sensitive !== true) return "";
+  if (isAgentLocked(agent)) return "verrouillé";
+  const remaining = Number(agent?.unlockRemainingMs);
+  if (!Number.isFinite(remaining) || remaining <= 0) return "déverrouillé";
+  const minutes = Math.max(1, Math.ceil(remaining / 60_000));
+  return `déverrouillé · reverrouille dans ${minutes} min`;
+}
+
+/**
+ * Phrase d'aide du verrou (title/aria-label) : dit ce qui est REFUSÉ et qui
+ * peut déverrouiller. C'est l'HUMAIN qui agit, jamais le modèle.
+ */
+export function agentLockHint(agent) {
+  if (agent?.sensitive !== true) return "";
+  if (isAgentLocked(agent)) {
+    return (
+      "Agent sensible VERROUILLÉ : aucune commande ne partira. Déverrouillez-le " +
+      "(clic droit ou appui long → Déverrouiller l'agent…) avec le mot de passe d'instance."
+    );
+  }
+  return (
+    "Agent sensible DÉVERROUILLÉ : il se reverrouillera tout seul après 15 min " +
+    "sans activité (une commande réellement transmise remet le compte à zéro)."
+  );
 }
 
 /** `true` si l'agent est actuellement CONNECTÉ à Yuki (canal vivant). */
@@ -182,6 +231,10 @@ function el(tag, attrs = {}, text) {
  * @param {(agentId: string, level: string) => void} [deps.onSetLevel]
  *   Appelé au choix d'un niveau dans le menu contextuel ; l'application envoie
  *   la trame `agent_level` (même état que le on/off : `disabled` = off).
+ * @param {(agentId: string) => void} [deps.onUnlock]
+ *   Appelé par l'action « Déverrouiller l'agent… » d'un agent sensible
+ *   VERROUILLÉ. C'est une action HUMAINE : l'application demande le mot de passe
+ *   d'instance et l'envoie au serveur (jamais au modèle).
  * @param {Array<{list: HTMLElement, empty?: HTMLElement}>} [deps.extraTargets]
  *   cibles SUPPLÉMENTAIRES (menu téléphone « Agents ») : même état, même menu de
  *   niveau, avec la dernière activité et le niveau de garde-fou en pastille.
@@ -190,6 +243,7 @@ function el(tag, attrs = {}, text) {
 export function initSidebarAgents(deps = {}) {
   const onToggle = deps.onToggle ?? (() => undefined);
   const onSetLevel = deps.onSetLevel ?? (() => undefined);
+  const onUnlock = deps.onUnlock ?? (() => undefined);
 
   const section = el("section", {
     class: "side-agents",
@@ -223,6 +277,8 @@ export function initSidebarAgents(deps = {}) {
 
   /** Niveau courant par agent (mis à jour à chaque trame `agents`). */
   const levels = new Map();
+  /** État VERROUILLÉ par agent (`sensitive` + `locked`), mis à jour avec la trame. */
+  const locks = new Map();
 
   // ─── Menu contextuel (clic droit sur l'entrée d'un agent) ─────────────────
   // Menu PARTAGÉ par toutes les entrées de l'encart, comme celui des
@@ -250,6 +306,8 @@ export function initSidebarAgents(deps = {}) {
   let menuAgentId = null;
   /** level → bouton (pour marquer l'élément courant à l'ouverture). */
   const levelItems = new Map();
+  /** Action « Déverrouiller l'agent… » — visible SEULEMENT si l'agent est verrouillé. */
+  let unlockItem = null;
 
   function closeMenu() {
     if (menu.hidden && !menuMounted) return;
@@ -266,6 +324,13 @@ export function initSidebarAgents(deps = {}) {
     for (const [level, item] of levelItems) {
       const checked = level === current;
       item.setAttribute("aria-checked", checked ? "true" : "false");
+    }
+    // Verrou : l'action de déverrouillage n'apparaît QUE sur un agent sensible
+    // verrouillé (sinon elle n'aurait aucun sens).
+    if (unlockItem) {
+      const lock = locks.get(agentId);
+      const locked = lock?.sensitive === true && lock?.locked === true;
+      unlockItem.hidden = !locked;
     }
     mountMenu();
     menu.hidden = false;
@@ -321,6 +386,33 @@ export function initSidebarAgents(deps = {}) {
       levelItems.set(level, item);
       menu.appendChild(item);
     }
+    // ─── Action de DÉVERROUILLAGE (matériel sensible) ─────────────────────
+    // Placée APRÈS les 4 niveaux (ce sont toujours les 4 mêmes entrées radio ;
+    // cette action n'est pas un niveau). Masquée tant que l'agent n'est pas
+    // verrouillé : elle n'apparaît que là où elle a un sens.
+    const unlock = el(
+      "button",
+      { class: "ctx-menu__item ctx-menu__item--action", type: "button", role: "menuitem" },
+      "",
+    );
+    const unlockCol = el("span", { class: "ctx-menu__col" });
+    unlockCol.append(
+      el("span", { class: "ctx-menu__text" }, "Déverrouiller l'agent…"),
+      el(
+        "span",
+        { class: "ctx-menu__hint" },
+        "Agent sensible verrouillé : demande le mot de passe d'instance.",
+      ),
+    );
+    unlock.append(el("span", { class: "ctx-menu__check", "aria-hidden": "true" }, "🔒"), unlockCol);
+    unlock.hidden = true;
+    unlock.addEventListener("click", () => {
+      const id = menuAgentId;
+      closeMenu();
+      if (id) onUnlock(id);
+    });
+    unlockItem = unlock;
+    menu.appendChild(unlock);
   }
   buildMenu();
 
@@ -367,11 +459,17 @@ export function initSidebarAgents(deps = {}) {
     const connected = isAgentConnected(agent);
     const connectionLabel = agentConnectionLabel(agent);
     const label = agentLabel(agent);
+    // VERROU « matériel sensible » : état DISTINCT du niveau.
+    const locked = isAgentLocked(agent);
+    const lockLabel = agentLockLabel(agent);
+    const lockHint = agentLockHint(agent);
     // ⚠️ La classe de LIGNE diffère en menu (`.mnav-agent`) : les sélecteurs E2E
     // du bureau (`.side-agent`) restent sans ambiguïté. Les classes INTERNES
     // (pastille, nom, état) sont les mêmes — un seul système visuel.
     const item = el("li", { class: menuVariant ? "mnav-agent" : "side-agent" });
     item.setAttribute("data-agent-id", String(agent.agentId ?? ""));
+    if (agent.sensitive === true) item.setAttribute("data-sensitive", "true");
+    if (locked) item.setAttribute("data-locked", "true");
 
     // ⚠️ La PASTILLE (`.side-agent__dot`) indique UNIQUEMENT la CONNEXION
     // (vert = connecté, rouge = déconnecté). L'état activé/désactivé reste porté
@@ -383,13 +481,19 @@ export function initSidebarAgents(deps = {}) {
       type: "button",
       role: "switch",
       "aria-checked": enabled ? "true" : "false",
-      "aria-label": `${label} — ${connectionLabel} — ${enabled ? "désactiver" : "activer"}`,
-      title: enabled
-        ? `${label} : actif (${agentLevelLabel(agent.level)}), ${connectionLabel.toLowerCase()}. Cliquer pour désactiver, clic droit pour régler le niveau.`
-        : `${label} : désactivé, ${connectionLabel.toLowerCase()}. Cliquer pour réactiver, clic droit pour régler le niveau.`,
+      "aria-label":
+        `${label} — ${connectionLabel}` +
+        (lockLabel !== "" ? ` — ${lockLabel}` : "") +
+        ` — ${enabled ? "désactiver" : "activer"}`,
+      title:
+        (enabled
+          ? `${label} : actif (${agentLevelLabel(agent.level)}), ${connectionLabel.toLowerCase()}. Cliquer pour désactiver, clic droit pour régler le niveau.`
+          : `${label} : désactivé, ${connectionLabel.toLowerCase()}. Cliquer pour réactiver, clic droit pour régler le niveau.`) +
+        (lockHint !== "" ? ` ${lockHint}` : ""),
     });
     if (enabled) badge.setAttribute("data-enabled", "true");
     badge.setAttribute("data-online", connected ? "true" : "false");
+    if (locked) badge.setAttribute("data-locked", "true");
     badge.append(
       el("span", { class: "side-agent__initial", "aria-hidden": "true" }, agentInitial(agent)),
       el("span", {
@@ -399,18 +503,30 @@ export function initSidebarAgents(deps = {}) {
         title: connectionLabel,
       }),
     );
+    // CADENAS : glyphe posé en haut à gauche de la pastille (le témoin de
+    // connexion reste en bas à droite). Purement DÉCORATIF ici : le nom
+    // accessible est sur le bouton (`aria-label`) et le libellé texte ci-dessous.
+    if (locked) {
+      badge.append(
+        el(
+          "span",
+          { class: "side-agent__lock", "aria-hidden": "true" },
+          "🔒",
+        ),
+      );
+    }
     badge.addEventListener("click", () => onToggle(agent.agentId, !enabled));
 
     const main = el("span", { class: "side-agent__main" });
     if (menuVariant) {
-      // Menu téléphone : connexion + DERNIÈRE ACTIVITÉ, et le NIVEAU visible en
-      // pastille (une information de sécurité ne doit pas être devinée).
+      // Menu téléphone : connexion + DERNIÈRE ACTIVITÉ, le VERROU et le NIVEAU
+      // visible en pastille (une information de sécurité ne se devine pas).
       main.append(
         el("span", { class: "side-agent__name" }, label),
         el(
           "span",
           { class: "side-agent__state" },
-          [connectionLabel, agentLastSeenLabel(agent.lastSeen)]
+          [connectionLabel, agentLastSeenLabel(agent.lastSeen), lockLabel]
             .filter(Boolean)
             .join(" · "),
         ),
@@ -422,6 +538,15 @@ export function initSidebarAgents(deps = {}) {
           },
           agentLevelBadge(agent.level),
         ),
+        ...(lockLabel !== ""
+          ? [
+              el(
+                "span",
+                { class: "mnav-agent__lock", "data-locked": locked ? "true" : "false" },
+                lockLabel,
+              ),
+            ]
+          : []),
       );
     } else {
       main.append(
@@ -429,7 +554,7 @@ export function initSidebarAgents(deps = {}) {
         el(
           "span",
           { class: "side-agent__state" },
-          [agentLevelLabel(agent.level), connectionLabel.toLowerCase()]
+          [agentLevelLabel(agent.level), connectionLabel.toLowerCase(), lockLabel]
             .filter(Boolean)
             .join(" · "),
         ),
@@ -462,8 +587,14 @@ export function initSidebarAgents(deps = {}) {
 
   function updateAgentState(agents) {
     levels.clear();
+    locks.clear();
     for (const agent of agents) {
-      if (agent && agent.agentId) levels.set(agent.agentId, agent.level);
+      if (!agent || !agent.agentId) continue;
+      levels.set(agent.agentId, agent.level);
+      locks.set(agent.agentId, {
+        sensitive: agent.sensitive === true,
+        locked: agent.locked === true,
+      });
     }
   }
 
@@ -487,6 +618,12 @@ export function initSidebarAgents(deps = {}) {
         const current = levels.get(menuAgentId);
         for (const [level, item] of levelItems) {
           item.setAttribute("aria-checked", level === current ? "true" : "false");
+        }
+        // L'action de déverrouillage suit l'état de l'agent (il a pu être
+        // déverrouillé pendant que le menu était ouvert).
+        if (unlockItem) {
+          const lock = locks.get(menuAgentId);
+          unlockItem.hidden = !(lock?.sensitive === true && lock?.locked === true);
         }
       }
     }

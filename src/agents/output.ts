@@ -158,6 +158,17 @@ export interface AgentDirectoryEntry {
    * machine SAIT faire, sans supposer.
    */
   caps?: ReadonlyArray<string>;
+  /**
+   * `true` si la machine est déclarée « matériel sensible » (réglage persisté).
+   * Optionnel : absent = machine ordinaire.
+   */
+  sensitive?: boolean;
+  /**
+   * `true` si l'agent est sensible ET VERROUILLÉ. Fourni à `true` ⇒ le modèle
+   * lit explicitement que l'exécution est REFUSÉE jusqu'à un déverrouillage par
+   * l'UTILISATEUR (jamais par lui, jamais avec un mot de passe demandé par lui).
+   */
+  locked?: boolean;
 }
 
 /** Entrée d'historique bornée : commande + horodatage + code de sortie. */
@@ -199,6 +210,12 @@ export function frameAgentDirectory(entries: ReadonlyArray<AgentDirectoryEntry>)
     if (entry.level !== undefined) attrs.push(`niveau : ${escapeOutputText(entry.level)}`);
     if (entry.privilege !== undefined) attrs.push(`privilège : ${escapeOutputText(entry.privilege)}`);
     if (entry.caps !== undefined) attrs.push(`capacités : ${capsLabel(entry.caps)}`);
+    if (entry.sensitive === true) attrs.push("MATÉRIEL SENSIBLE");
+    if (entry.locked === true) {
+      attrs.push(
+        "VERROUILLÉ (exécution REFUSÉE : l'UTILISATEUR doit le déverrouiller dans les paramètres)",
+      );
+    }
     return `- ${label} (${attrs.join(", ")})`;
   });
   const body = lines.length > 0 ? lines.join("\n") : "(aucun agent appairé)";
@@ -225,8 +242,30 @@ export interface AgentStatusFrameInput {
   caps?: ReadonlyArray<string>;
   /** Dernière connexion (ISO 8601), `null` si jamais vue. */
   lastSeen: string | null;
+  /** `true` si la machine est déclarée « matériel sensible » (réglage persisté). */
+  sensitive?: boolean;
+  /** `true` si l'agent est sensible ET VERROUILLÉ (exécution refusée). */
+  locked?: boolean;
+  /** Temps restant avant reverrouillage automatique (ms), si déverrouillé. */
+  unlockRemainingMs?: number;
   /** Historique récent BORNÉ (commande + horodatage + code de sortie). */
   history?: ReadonlyArray<AgentHistoryEntry>;
+}
+
+/**
+ * État du VERROU en une phrase (jamais une cause inventée) : verrouillé ⇒
+ * l'exécution est REFUSÉE et c'est l'UTILISATEUR qui doit déverrouiller.
+ */
+export function unlockLabel(locked: boolean, remainingMs?: number): string {
+  if (locked) {
+    return (
+      "VERROUILLÉ — exécution REFUSÉE jusqu'à ce que l'UTILISATEUR le déverrouille " +
+      "dans les paramètres (action humaine, mot de passe d'instance)"
+    );
+  }
+  if (remainingMs === undefined || !Number.isFinite(remainingMs)) return "déverrouillé";
+  const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+  return `déverrouillé — reverrouillage automatique après ${minutes} min sans activité`;
 }
 
 /**
@@ -245,6 +284,9 @@ export function frameAgentStatus(input: AgentStatusFrameInput): string {
     `Niveau : ${escapeOutputText(input.level)}`,
     `Privilège : ${escapeOutputText(input.privilege)}`,
     ...(input.caps !== undefined ? [`Capacités : ${capsLabel(input.caps)}`] : []),
+    ...(input.sensitive === true
+      ? [`Matériel sensible : oui (${unlockLabel(input.locked === true, input.unlockRemainingMs)})`]
+      : []),
     `Dernière connexion : ${
       input.lastSeen === null ? "jamais" : escapeOutputText(input.lastSeen)
     }`,
@@ -301,6 +343,12 @@ export interface AgentRosterEntry {
   /** Nom lisible, `""` si aucun — le rendu affiche alors « (sans nom) ». */
   name: string;
   agentId: string;
+  /**
+   * `true` si l'agent est sensible ET VERROUILLÉ (état EN MÉMOIRE, séparé du
+   * niveau). Le modèle doit le SAVOIR à chaque tour : sinon il essaie, échoue,
+   * et risque d'inventer une explication.
+   */
+  locked?: boolean;
 }
 
 /**
@@ -335,15 +383,30 @@ export function frameAgentRoster(
   const max = Math.max(0, Math.trunc(options.max ?? MAX_INLINE_AGENT_ROSTER));
   let body: string;
   if (entries.length > max) {
+    // ⚠️ Même quand la liste est tronquée, l'information SÉCURITÉ ne doit pas
+    // disparaître : un agent verrouillé rend toute exécution impossible.
+    const lockedCount = entries.filter((entry) => entry.locked === true).length;
     body =
       `${entries.length} agents appairés. La liste est trop longue pour être ` +
-      "affichée ici : utilise l'outil lister_agents pour la consulter.";
+      "affichée ici : utilise l'outil lister_agents pour la consulter." +
+      (lockedCount > 0
+        ? ` ⚠️ ${lockedCount} agent(s) VERROUILLÉ(s) (matériel sensible) : l'exécution ` +
+          "est refusée sur eux tant que l'utilisateur ne les a pas déverrouillés."
+        : "");
   } else {
     const items = entries.map((entry) => {
       const label = escapeOutputText(
         entry.name.trim() === "" ? "(sans nom)" : entry.name,
       );
-      return `${label} (${escapeOutputText(entry.agentId)})`;
+      // ⚠️ L'état VERROUILLÉ est injecté à chaque tour : c'est ce qui empêche le
+      // modèle d'inventer une cause à un refus (et ce qui lui interdit de
+      // réclamer un mot de passe : le déverrouillage est une action humaine).
+      const suffix =
+        entry.locked === true
+          ? " [VERROUILLÉ — exécution refusée : l'utilisateur doit le déverrouiller " +
+            "dans les paramètres]"
+          : "";
+      return `${label} (${escapeOutputText(entry.agentId)})${suffix}`;
     });
     body = `Machines pilotables : ${items.join(", ")}`;
   }
