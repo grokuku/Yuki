@@ -142,6 +142,12 @@ export class FakePiHost implements PiHost {
   private failSendOnce: boolean;
 
   private sessionId: string;
+  /**
+   * Compteur d'identifiants d'ENTRÉE de session (miroir du SDK) : un message
+   * persisté en reçoit un, et c'est cette valeur que `run_finished.entryId`
+   * porte (corrélation des réactions).
+   */
+  private entryCounter = 0;
   private ready = false;
   private state: PiSessionStateName = "idle";
   private activeRunId?: string;
@@ -461,6 +467,12 @@ export class FakePiHost implements PiHost {
 
   // --- interne ---------------------------------------------------------------
 
+  /** Identifiant d'entrée de session (unique par instance, comme le SDK). */
+  private nextEntryId(): string {
+    this.entryCounter += 1;
+    return `${this.sessionId}-e${this.entryCounter}`;
+  }
+
   private buildState(): SessionState {
     const transcript = this.transcript.map((entry) => ({ ...entry }));
     if (this.partial.length > 0) {
@@ -504,7 +516,7 @@ export class FakePiHost implements PiHost {
     // conversation dédiée, lui, pousse un bloc VISIBLE (`role: "recap"`).
     const synthetic = isSyntheticOrigin(run.origin);
     if (!synthetic) {
-      this.transcript.push({ role: "user", text: run.text });
+      this.transcript.push({ role: "user", text: run.text, id: this.nextEntryId() });
     } else if (run.origin === ORIGIN_RECAP) {
       const parsed = parseRecapPrompt(run.text);
       if (parsed) {
@@ -560,8 +572,14 @@ export class FakePiHost implements PiHost {
         ? "error"
         : "done";
     run.instrumentation.setUsage({ input: 12, output: contentText.length });
-    if (contentText.length > 0) {
-      this.transcript.push({ role: "assistant", text: contentText });
+    const assistantEntryId =
+      contentText.length > 0 ? this.nextEntryId() : undefined;
+    if (assistantEntryId) {
+      this.transcript.push({
+        role: "assistant",
+        text: contentText,
+        id: assistantEntryId,
+      });
     }
     this.partial = "";
     run.instrumentation.complete(
@@ -577,6 +595,9 @@ export class FakePiHost implements PiHost {
       reason,
       usage: { input: 12, output: contentText.length },
       ...(run.errorMessage ? { errorMessage: run.errorMessage } : {}),
+      // Miroir du host réel : l'identifiant STABLE du message persisté (celui que
+      // les réactions utilisent pour se rattacher).
+      ...(assistantEntryId ? { entryId: assistantEntryId } : {}),
     });
     run.instrumentation.emitSummary();
 

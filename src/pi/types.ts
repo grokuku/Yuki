@@ -25,6 +25,7 @@ import type { HeritagePort } from "../memory/heritage.js";
 import type { ConversationArchivePort } from "../memory/conversation-archive.js";
 import type { MemoryPort } from "../memory/types.js";
 import type { PersonalityPort } from "../personality/types.js";
+import type { ReactionsPort } from "../reactions/types.js";
 import type { RulesPort } from "../rules/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
@@ -199,6 +200,15 @@ export interface PiHostOptions {
    * et à la compaction). Absent ⇒ aucune mémoire (host nu, tests).
    */
   memory?: MemoryPort;
+  /**
+   * RÉACTIONS de l'utilisateur aux messages de Yuki. Présent ⇒ une extension SDK
+   * est enregistrée sur la session légère : les N dernières réactions sont
+   * injectées dans le PROMPT SYSTÈME du tour suivant (donnée encadrée). Absent ⇒
+   * aucune injection (host nu, tests).
+   *
+   * ⚠️ Une réaction ne déclenche JAMAIS de tour : l'extension ne fait que lire.
+   */
+  reactions?: ReactionsPort;
   logger: PiLogger;
 }
 
@@ -275,6 +285,23 @@ export interface TranscriptEntry {
   text: string;
   timestamp?: number;
   metrics?: RunMetrics;
+  /**
+   * IDENTIFIANT STABLE de l'entrée de session qui porte ce message (le même que
+   * celui dont les statistiques sont l'enfant via `parentId`).
+   *
+   * ⚠️ C'est l'unique corrélation admise pour rattacher une RÉACTION à un
+   * message : aucun second identifiant n'est inventé (une réaction attachée au
+   * mauvais message ferait apprendre au modèle le contraire). Absent pour une
+   * entrée qui n'a pas encore été persistée par le SDK (message en cours de
+   * flux) : l'interface n'affiche alors aucune action de réaction.
+   */
+  id?: string;
+  /**
+   * Réaction que l'utilisateur a posée sur CE message (identifiant de réaction),
+   * telle que le transport l'ajoute depuis le store des réactions. DONNÉE
+   * d'affichage : jamais dans le JSONL de session, jamais un message.
+   */
+  reaction?: string;
   /** Titre de la conversation d'origine (entrée `recap` uniquement). */
   origin?: string;
   /** Sujet visé par le récapitulatif (entrée `recap` uniquement). */
@@ -436,6 +463,15 @@ export type PiEvent =
       reason: RunFinishReason;
       usage?: PiUsage;
       errorMessage?: string;
+      /**
+       * Identifiant d'entrée de session du message assistant PERSISTÉ par ce run
+       * (celui que `run_finished` vient de clore). C'est l'identifiant de
+       * corrélation des réactions : l'interface l'attache à la bulle qu'elle
+       * vient d'afficher, et s'en sert pour poser une réaction sur CE message.
+       * Absent si le SDK n'a persisté aucun message correspondant (réponse vide,
+       * échec) : aucune action de réaction n'est alors proposée.
+       */
+      entryId?: string;
     }
   | {
       type: "phase";

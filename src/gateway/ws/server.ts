@@ -19,6 +19,7 @@ import { toPiHostError } from "../../pi/errors.js";
 import { PHASE, type PiEvent, type PiHost } from "../../pi/index.js";
 import type { SessionPinStore } from "../../pi/session-pins.js";
 import { ORIGIN_RECAP } from "../../pi/synthetic.js";
+import { isReactionId, type ReactionsGatewayPort } from "../../reactions/types.js";
 import type { SessionState, TranscriptEntry } from "../../pi/index.js";
 import {
   frameRecapPrompt,
@@ -47,7 +48,7 @@ import {
   type WireSession,
 } from "./protocol.js";
 import type { AgentLevel } from "../../agents/types.js";
-import { SessionStreamStore } from "./session-stream.js";
+import { SessionStreamStore, type StreamStateProvider } from "./session-stream.js";
 import type { PresenceView, Transport, TransportStats } from "./transport.js";
 
 export const WS_PATH = "/ws";
@@ -134,6 +135,12 @@ export interface WsTransportOptions {
    * d'erreur `recap_unavailable`, comportement inchangé pour le reste).
    */
   recap?: RecapGenerator;
+  /**
+   * RÉACTIONS de l'utilisateur aux messages de Yuki. Absent ⇒ l'action est
+   * indisponible (trame d'erreur `reactions_unavailable`, comportement inchangé
+   * pour le reste).
+   */
+  reactions?: ReactionsGatewayPort;
 }
 
 interface ClientState {
@@ -234,6 +241,8 @@ export function toServerMessage(event: PiEvent): ServerMessage {
         reason: event.reason,
         ...(event.usage ? { usage: event.usage } : {}),
         ...(event.errorMessage ? { errorMessage: event.errorMessage } : {}),
+        // Corrélation STABLE des réactions (identifiant d'entrée de session).
+        ...(event.entryId !== undefined ? { entryId: event.entryId } : {}),
       };
     case "phase":
       return {
@@ -328,7 +337,11 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     bufferSize: options.replayBufferSize,
     bufferBytes: options.replayBufferBytes,
     ...(options.now ? { now: options.now } : {}),
-    snapshotSource: (sessionId) => host.getState(sessionId),
+    // SNAPSHOT AUTORITATIF. Les RÉACTIONS sont fusionnées ICI (et nulle part
+    // ailleurs) : le store est la source de vérité, le transcript n'en garde
+    // aucune trace. Une réaction survit ainsi au RECHARGEMENT et à la
+    // RECONNEXION, rattachée à l'`entryId` du message qu'elle vise.
+    snapshotSource: (sessionId) => withReactions(sessionId, host.getState(sessionId)),
   });
   const clients = new Set<ClientState>();
   const approvals = options.approvals;
@@ -337,6 +350,28 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const screenshots = options.screenshots;
   const secretPort = options.secrets;
   const recap = options.recap;
+  const reactions = options.reactions;
+
+  /**
+   * État de session ENRICHI des réactions courantes (aucune copie inutile quand
+   * il n'y en a pas). Utilisé UNIQUEMENT pour le snapshot : les trames de flux
+   * (deltas, états) ne portent jamais de réaction.
+   */
+  function withReactions(
+    sessionId: string,
+    state: StreamStateProvider | undefined,
+  ): StreamStateProvider | undefined {
+    if (!state || !reactions) return state;
+    const byEntry = reactions.forSession(sessionId);
+    if (byEntry.size === 0) return state;
+    return {
+      ...state,
+      transcript: state.transcript.map((entry) => {
+        const reaction = entry.id ? byEntry.get(entry.id) : undefined;
+        return reaction ? { ...entry, reaction } : entry;
+      }),
+    };
+  }
 
   /**
    * APERÇUS de récapitulatif en attente de validation humaine, indexés par
@@ -1446,6 +1481,56 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   }
 
+  /**
+   * RÉACTION sur un message de Yuki — CE N'EST PAS UN MESSAGE.
+   *
+   * Ce qu'on fait : persister la réaction (store À PART), puis la rediffuser en
+   * trame de CONTRÔLE aux clients abonnés à CE fil (aucun `seq` consommé, rien
+   * dans le rejeu : le snapshot la restitue).
+   *
+   * ⚠️ Ce qu'on ne fait JAMAIS : aucun `host.send` (donc AUCUN tour, aucun
+   * `run_started`), aucun passage à `routeTtsEvent` (donc JAMAIS prononcée), et
+   * aucune écriture dans le JSONL de session ni dans la mémoire (une réaction
+   * isolée n'est pas un souvenir — voir `src/reactions/store.ts`).
+   */
+  function handleReaction(client: ClientState, message: ClientMessage): void {
+    if (message.type !== "reaction") return;
+    if (!reactions) {
+      sendDirect(client, {
+        type: "error",
+        code: "reactions_unavailable",
+        message: "Les réactions ne sont pas disponibles.",
+      });
+      return;
+    }
+    // ⚠️ La conversation vient du MESSAGE (jamais d'un repli silencieux sur le fil
+    // focalisé) : une réaction reste attachée à la conversation du message visé.
+    const sessionId = message.sessionId;
+    if (message.reaction === null) {
+      // Retrait idempotent : retirer une réaction absente n'est pas une erreur
+      // (double clic, ouverture dans deux onglets).
+      reactions.clear(sessionId, message.entryId);
+    } else {
+      if (!isReactionId(message.reaction)) {
+        sendDirect(client, {
+          type: "error",
+          code: "reaction_unknown",
+          message: "Cette réaction n'existe pas.",
+        });
+        return;
+      }
+      reactions.set(sessionId, message.entryId, message.reaction);
+    }
+    // Diffusion à TOUS les onglets de cette conversation (le geste est fait une
+    // fois, l'affichage suit partout).
+    broadcastControl(sessionId, {
+      type: "reaction",
+      sessionId,
+      entryId: message.entryId,
+      reaction: message.reaction,
+    });
+  }
+
   function handleMessage(client: ClientState, message: ClientMessage): void {
     if (message.type !== "message") return;
     const sessionId = sessionIdFor(client);
@@ -1520,6 +1605,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         return;
       case "pin":
         await handlePin(client, message);
+        return;
+      case "reaction":
+        handleReaction(client, message);
         return;
       case "recap_preview":
         await handleRecapPreview(client, message);

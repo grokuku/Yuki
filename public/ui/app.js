@@ -31,6 +31,7 @@ import { createApprovalLayer } from "./approval-window.js";
 import { createScrollToBottom } from "./scroll-button.js";
 import { createRecapDedicated } from "./recap-dedicated.js";
 import { createSessionActions } from "./session-actions.js";
+import { createReactionControl } from "./reactions.js";
 import { iconNode } from "./icons.js";
 import { MOBILE_MEDIA_QUERY, initMobileNav } from "./mobile-nav.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
@@ -596,6 +597,25 @@ const subagentActivity = createSubagentActivity({ container: els.conversation })
  * le transcript ni le rejeu ; jamais prononcé (voir thinking.js). */
 const thinkingBlocks = createThinkingBlocks({ container: els.conversation });
 
+/* ─── RÉACTIONS aux messages de Yuki ───────────────────────────────────────
+ * Un message assistant porte un petit bouton en bas à droite (au survol sur
+ * bureau, toujours visible au toucher) qui déploie UN menu à trois sections
+ * titrées : jugement technique / émotion / humeur, chaque entrée avec son
+ * libellé ET son explication.
+ *
+ * ⚠️ Une réaction N'EST PAS un message : le serveur la persiste À PART, la
+ * rediffuse ici (trame de CONTRÔLE, état vivant) et l'injecte au modèle au tour
+ * SUIVANT — aucun tour n'est déclenché, rien n'est prononcé, rien n'entre dans la
+ * mémoire (sauf régularité, côté serveur). */
+const reactionControl = createReactionControl({
+  onChange: (entryId, reaction) => {
+    if (!entryId || !sessionId) return;
+    // `sessionId` est celui de la conversation AFFICHÉE : la réaction est
+    // rattachée à la conversation ET au message (`entryId`), jamais au hasard.
+    sendRaw({ type: "reaction", sessionId, entryId, reaction });
+  },
+});
+
 /** Bascule l'état « aucune conversation ouverte » (le fil est masqué). */
 function setEmptyState(empty) {
   if (els.chat) els.chat.classList.toggle("chat--empty", Boolean(empty));
@@ -1096,16 +1116,15 @@ function appendRecapBlock(entry, pinned = isConversationPinned(), ts = null) {
 
 function applyTranscript(transcript) {
   const pinned = isConversationPinned();
-  // Le fil est reconstruit : on purge les blocs de validation (timers inclus)
-  // et les captures ÉPHÉMÈRES. Ils seront ré-affichés par le serveur s'ils sont
-  // ENCORE vivants (états de contrôle).
+  // Le fil est reconstruit : on purge les blocs ÉPHÉMÈRES (validation, captures,
+  // réflexion, réactions). Le serveur les ré-affichera s'ils vivent encore.
   approvalLayer.reset();
   screenshotBlocks.reset();
   subagentActivity.reset();
   thinkingBlocks.reset();
-  // Le fil est reconstruit : toute statistique EN DIRECT (provisoire) devient
-  // obsolète. On arrête le minuteur et on oublie l'alignement t0 des runs en
-  // vol — les valeurs FINALES reviendront par le `run_summary`.
+  reactionControl.reset();
+  // Toute statistique EN DIRECT devient obsolète : on arrête le minuteur et on
+  // oublie l'alignement t0 (les valeurs FINALES reviennent par `run_summary`).
   stopLiveStats();
   runT0ByRun.clear();
   els.conversation.innerHTML = "";
@@ -1131,6 +1150,13 @@ function applyTranscript(transcript) {
       const div = appendAssistantMessage(entry.text ?? "", pinned, ts);
       const meta = runMetricsText(entry.metrics);
       if (meta) setMeta(div, meta);
+      // RÉACTION : le serveur la fournit (store à part) avec l'identifiant STABLE
+      // du message. Elle réapparaît donc à la bonne place après un RECHARGEMENT,
+      // et peut être changée ou retirée.
+      reactionControl.attach(div, {
+        entryId: typeof entry.id === "string" ? entry.id : null,
+        reaction: typeof entry.reaction === "string" ? entry.reaction : null,
+      });
     }
   }
   currentRenderer = null;
@@ -1410,6 +1436,19 @@ function handleFrame(frame) {
     screenshotBlocks.show(frame.screenshot);
     return;
   }
+  // RÉACTION posée sur un message : trame de CONTRÔLE (aucun `seq` consommé),
+  // traitée AVANT le curseur `seq` (sinon prise pour un doublon). Elle se
+  // rattache au message par son `entryId` — jamais par sa position à l'écran.
+  // Un fil NON focalisé n'est pas redessiné : son état revient au snapshot quand
+  // on y bascule (le serveur reste la source de vérité).
+  if (type === "reaction") {
+    const target = typeof frame.sessionId === "string" && frame.sessionId.length > 0
+      ? frame.sessionId
+      : sessionId;
+    if (!target || target !== sessionId) return;
+    reactionControl.apply(frame);
+    return;
+  }
   // E3 — ACTIVITÉ d'un sous-agent : trame de CONTRÔLE (aucun `seq` consommé),
   // traitée AVANT le curseur `seq` (sinon prise pour un doublon). Éphémère :
   // jamais rejouée, jamais conservée. Un fil NON focalisé ne la DESSINE pas
@@ -1625,6 +1664,15 @@ function applyEvent(frame) {
         }, 600);
       }
       if (currentAssistant) {
+        // ⚠️ Le run vient d'être PERSISTÉ par le SDK : le serveur donne l'identifiant
+        // STABLE de l'entrée de session du message. C'est LUI qui rattachera la
+        // réaction au bon message (aucun identifiant inventé côté navigateur).
+        // Sans identifiant (réponse vide, échec), aucun bouton n'est proposé.
+        // Posé AVANT le `pinIfNeeded` final : la ligne du bouton fait grandir la
+        // bulle, le défilement doit en tenir compte (état STICKY préservé).
+        if (typeof frame.entryId === "string") {
+          reactionControl.attach(currentAssistant, { entryId: frame.entryId, reaction: null });
+        }
         // `hasText` doit porter sur le CONTENU seul : l'en-tête (heure) et le
         // pied (infos techniques) font partie de la bulle mais ne sont PAS des
         // réponses du modèle.

@@ -165,6 +165,25 @@ export interface ConsolidateMessage {
   text: string;
 }
 
+/**
+ * RÉGULARITÉ observée dans les réactions de l'utilisateur, candidate à un
+ * souvenir durable.
+ *
+ * ⚠️ Une réaction ISOLÉE n'est JAMAIS un souvenir : seul un MOTIF répété (le
+ * même jugement sur plusieurs messages) est proposé. La phrase est écrite par
+ * le CODE (déterministe), la justification (`why`) est OBLIGATOIRE, et la
+ * déduplication est celle de toutes les autres écritures.
+ */
+export interface ReactionRegularityInput {
+  /** Phrase du souvenir (français, une phrase). */
+  text: string;
+  cat: MemoryCategory;
+  /** Justification (une ligne) : pourquoi ce souvenir DURERA. */
+  why: string;
+  /** Source du souvenir (traçabilité dans le journal). */
+  source: string;
+}
+
 /** Entrée d'une passe de consolidation (avant compaction). */
 export interface BeforeCompactInput {
   messages: readonly ConsolidateMessage[];
@@ -275,6 +294,16 @@ export interface MemoryPort {
    * pour que l'appelant PUISSE décider de poursuivre la compaction.
    */
   onSessionCompact?(input: SessionMemoryPassInput): Promise<SessionMemoryPassResult>;
+  /**
+   * RÉGULARITÉ issue des RÉACTIONS (jamais une réaction isolée) : le texte et la
+   * justification sont déjà écrits par le code — seule la DÉDUPLICATION et
+   * l'écriture appartiennent à la mémoire, avec les mêmes gardes que le reste
+   * (filtre déterministe, `why` obligatoire, quasi-doublon refusé).
+   *
+   * ⚠️ Non bloquant et ne lève jamais : l'utilisateur vient de cliquer, il ne
+   * doit rien attendre.
+   */
+  onReactionRegularity?(input: ReactionRegularityInput): void;
 }
 
 // ---------------------------------------------------------------------------

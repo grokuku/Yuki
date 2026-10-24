@@ -114,6 +114,13 @@ export interface Env {
    */
   sessionPinsPath: string;
   /**
+   * Journal JSONL des RÉACTIONS de l'utilisateur aux messages de Yuki (volume
+   * `state`). ⚠️ Séparé du JSONL de session (propriété du SDK) ET de la mémoire
+   * durable : une réaction n'est ni un message ni un souvenir. Surcharge :
+   * `YUKI_REACTIONS_STORE_PATH`.
+   */
+  reactionsStorePath: string;
+  /**
    * Fichier JSON des clés VAPID (volume `state`, 0600). ⚠️ Contient la clé
    * PRIVÉE : jamais exposé, jamais journalisé. Surcharge : `YUKI_PUSH_VAPID_PATH`.
    */
@@ -357,6 +364,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_SESSION_PINS_PATH",
       `${mountPoints.state}/session-pins.json`,
+    ),
+    reactionsStorePath: getString(
+      env,
+      "YUKI_REACTIONS_STORE_PATH",
+      `${mountPoints.state}/reactions.jsonl`,
     ),
     pushVapidPath: getString(
       env,

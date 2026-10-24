@@ -82,6 +82,23 @@ export type ClientMessage =
   | { type: "pin"; sessionId: string; pinned: boolean }
   | {
       /**
+       * RÉACTION sur un message de Yuki (`reaction: null` = la retirer).
+       *
+       * ⚠️ Ce n'est PAS un message : le serveur la persiste à part et rediffuse
+       * une trame de CONTRÔLE. Il n'ouvre AUCUN tour (aucun `send` vers le
+       * modèle) et n'alimente JAMAIS la synthèse vocale.
+       *
+       * `entryId` est l'identifiant STABLE de l'entrée de session du message visé
+       * (le même que `yuki.run_metrics` utilise comme `parentId`) : aucun second
+       * identifiant n'est inventé.
+       */
+      type: "reaction";
+      sessionId: string;
+      entryId: string;
+      reaction: string | null;
+    }
+  | {
+      /**
        * Présence déclarée par le client : onglet VISIBLE et fenêtre FOCALISÉE.
        * Sert uniquement à la décision anti-spam des notifications (jamais un
        * accusé de réception de message). La conversation « regardée » est celle
@@ -167,6 +184,12 @@ export type ServerMessage =
       reason: RunFinishReason;
       usage?: PiUsage;
       errorMessage?: string;
+      /**
+       * Identifiant STABLE de l'entrée de session du message assistant persisté
+       * par ce run : c'est la clé de corrélation des RÉACTIONS (le même que le
+       * `parentId` de `yuki.run_metrics`). Absent ⇒ aucun bouton de réaction.
+       */
+      entryId?: string;
     }
   | {
       type: "phase";
@@ -388,6 +411,22 @@ export type ServerMessage =
       type: "screenshot";
       screenshot: CapturedScreenshotView;
     }
+  | {
+      /**
+       * RÉACTION posée sur un message de Yuki — trame de CONTRÔLE (aucun `seq`
+       * consommé, jamais bufferisée). État VIVANT : le rechargement et la
+       * reconnexion le retrouvent dans le `snapshot` (les entrées assistant y
+       * portent leur `reaction`). `reaction: null` = retirée.
+       *
+       * ⚠️ MUETTE PAR CONSTRUCTION : elle n'est jamais passée à `routeTtsEvent`
+       * (seul alimentateur du moteur TTS) et ne déclenche aucun tour.
+       */
+      type: "reaction";
+      /** Conversation concernée (l'enveloppe la porte déjà : on la redit). */
+      sessionId: string;
+      entryId: string;
+      reaction: string | null;
+    }
   | { type: "pong"; t: number }
   | { type: "bye"; reason: string };
 
@@ -606,6 +645,29 @@ export function parseClientMessage(raw: string): ParseResult {
         return { ok: false, error: "pin_invalid_pinned" };
       }
       return { ok: true, message: { type: "pin", sessionId, pinned: parsed.pinned } };
+    }
+    case "reaction": {
+      const sessionId = optionalString(parsed, "sessionId");
+      if (sessionId === undefined || sessionId.length === 0) {
+        return { ok: false, error: "reaction_missing_session_id" };
+      }
+      // L'identifiant du MESSAGE (entrée de session) est obligatoire : sans lui
+      // la réaction ne pourrait pas être rattachée, et on refuse plutôt que de
+      // la poser au hasard (une réaction sur le mauvais message est pire que
+      // pas de réaction du tout).
+      const entryId = optionalString(parsed, "entryId");
+      if (entryId === undefined || entryId.length === 0) {
+        return { ok: false, error: "reaction_missing_entry_id" };
+      }
+      // `null` = retrait ; une chaîne = identifiant de réaction du catalogue.
+      const reaction = parsed.reaction;
+      if (reaction !== null && typeof reaction !== "string") {
+        return { ok: false, error: "reaction_invalid_reaction" };
+      }
+      return {
+        ok: true,
+        message: { type: "reaction", sessionId, entryId, reaction },
+      };
     }
     case "presence": {
       if (typeof parsed.visible !== "boolean" || typeof parsed.focused !== "boolean") {

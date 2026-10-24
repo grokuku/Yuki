@@ -1322,6 +1322,118 @@ a.pill:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* ─── RÉACTIONS : petit bouton DISCRET en bas à droite d'un message assistant ──
+ * Visible au SURVOL (bureau) et TOUJOURS visible au TOUCHER (`@media (hover:
+ * none)` plus bas — un doigt ne survole pas), exactement comme le bouton
+ * « copier » d'un bloc de code. Il ne prend pas de place dans le flux du texte :
+ * c'est une ligne à part, sous le pied technique.
+ * Le menu est FLOTTANT (`position: fixed`) : il ne pousse donc RIEN et ne peut
+ * pas être rogné par le fil (`overflow`). */
+.message__react {
+  display: block;
+  margin-top: 4px;
+  text-align: right;
+  white-space: normal;
+}
+
+.message__react[hidden] {
+  display: none;
+}
+
+.message__react-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  /* Le pictogramme ne doit jamais entrer dans une sélection manuelle. */
+  user-select: none;
+  -webkit-user-select: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+/* Révélé au survol du message OU au focus clavier (le bouton reste tabulable). */
+.message--assistant:hover .message__react-btn,
+.message--assistant:focus-within .message__react-btn,
+.message__react-btn:focus-visible {
+  opacity: 1;
+}
+
+.message__react-btn:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-hover);
+}
+
+/* Une réaction POSÉE reste affichée (discrètement) même sans survol. */
+.message__react-btn--set {
+  opacity: 1;
+  color: var(--text);
+}
+
+.message__react-btn--set:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.message__react-btn .icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* Appareils sans survol (tactile) : le bouton reste visible en permanence. */
+@media (hover: none) {
+  .message__react-btn {
+    opacity: 1;
+  }
+}
+
+/* ─── Menu des RÉACTIONS : trois sections titrées, libellé + explication ─── */
+.ctx-menu--reactions {
+  min-width: 272px;
+  /* Jamais plus haut que l'écran : au-delà, le menu DÉFILE (il serait sinon
+   * coupé sur un petit écran, piège n°5). La borne laisse en plus la place de
+   * basculer AU-DESSUS du bouton sur le dernier message. */
+  max-height: min(64vh, 440px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.reaction-item {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.reaction-item__emoji {
+  flex: 0 0 auto;
+  width: 1.3em;
+  font-size: 15px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+/* Le ✓ des entrées radio est déjà rendu par `.ctx-menu__check`... sauf que ces
+ * entrées-ci n'en portent pas : on souligne plutôt l'entrée choisie. */
+.reaction-item[aria-checked="true"] .ctx-menu__text {
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.reaction-item--remove[hidden],
+.ctx-menu__sep[hidden] {
+  display: none;
+}
+
 /* ─── Séparateur de jour : trait INTERROMPU, date complète au milieu ───────
  * `::before`/`::after` portent les DEUX demi-traits (un vrai trou de 12 px au
  * milieu, pas un trait masqué par un fond) ; le libellé est centré, en français,

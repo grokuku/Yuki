@@ -80,11 +80,13 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       assistantEntry([{ type: "text", text: "Très bien." }]),
     ];
     const transcript = transcriptFromEntries(entries);
+    // L'identifiant d'entrée de session est repris : c'est la corrélation
+    // STABLE des réactions (aucun second identifiant).
     expect(transcript).toEqual([
-      { role: "user", text: "Bonjour" },
-      { role: "assistant", text: "Salut !" },
-      { role: "user", text: "Ça va ?" },
-      { role: "assistant", text: "Très bien." },
+      { role: "user", text: "Bonjour", id: "u" },
+      { role: "assistant", text: "Salut !", id: "a" },
+      { role: "user", text: "Ça va ?", id: "u" },
+      { role: "assistant", text: "Très bien.", id: "a" },
     ]);
     expect(JSON.stringify(transcript)).not.toContain("raisonnement secret");
   });
@@ -115,7 +117,7 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       },
     ];
     expect(transcriptFromEntries(entries)).toEqual([
-      { role: "user", text: "seul message retenu" },
+      { role: "user", text: "seul message retenu", id: "u" },
     ]);
   });
 
@@ -128,7 +130,7 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       assistantEntry([{ type: "text", text: "réelle réponse" }]),
     ];
     expect(transcriptFromEntries(entries)).toEqual([
-      { role: "assistant", text: "réelle réponse" },
+      { role: "assistant", text: "réelle réponse", id: "a" },
     ]);
   });
 
@@ -144,9 +146,9 @@ describe("pi.events — restauration du transcript depuis une session", () => {
     });
     // Le prompt synthétique est masqué ; sa réponse reste (comme en direct).
     expect(transcript).toEqual([
-      { role: "user", text: "vraie question" },
-      { role: "assistant", text: "vraie réponse" },
-      { role: "assistant", text: "Résumé du job." },
+      { role: "user", text: "vraie question", id: "u" },
+      { role: "assistant", text: "vraie réponse", id: "a" },
+      { role: "assistant", text: "Résumé du job.", id: "a" },
     ]);
   });
 
@@ -162,9 +164,9 @@ describe("pi.events — restauration du transcript depuis une session", () => {
     });
     // Le rapport (et donc la sortie brute) n'entre JAMAIS dans le transcript.
     expect(transcript).toEqual([
-      { role: "user", text: "vraie question" },
-      { role: "assistant", text: "vraie réponse" },
-      { role: "assistant", text: "Compris." },
+      { role: "user", text: "vraie question", id: "u" },
+      { role: "assistant", text: "vraie réponse", id: "a" },
+      { role: "assistant", text: "Compris.", id: "a" },
     ]);
     expect(JSON.stringify(transcript)).not.toContain("SORTIE-SECRETE");
   });
@@ -193,7 +195,11 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       subject: "le coffre de secrets",
     });
     expect(transcript.some((entry) => entry.role === "user")).toBe(false);
-    expect(transcript[1]).toEqual({ role: "assistant", text: "Bien pris en compte." });
+    expect(transcript[1]).toEqual({
+      role: "assistant",
+      text: "Bien pris en compte.",
+      id: "a",
+    });
   });
 
   it("est un mapping PUR (même entrée ⇒ même sortie, aucun doublon)", () => {
@@ -209,7 +215,9 @@ describe("pi.events — restauration du transcript depuis une session", () => {
 
   it("tolère des entrées malformées sans lever", () => {
     const entries = [null, 42, "texte", {}, { type: "message" }, userEntry("ok")];
-    expect(transcriptFromEntries(entries)).toEqual([{ role: "user", text: "ok" }]);
+    expect(transcriptFromEntries(entries)).toEqual([
+      { role: "user", text: "ok", id: "u" },
+    ]);
   });
 
   it("masque le préfixe d'horodatage et remonte le timestamp du message", () => {
@@ -227,7 +235,7 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       },
     ];
     expect(transcriptFromEntries(entries)).toEqual([
-      { role: "user", text: "Bonjour", timestamp: 1_700_000_000_000 },
+      { role: "user", text: "Bonjour", id: "u", timestamp: 1_700_000_000_000 },
     ]);
   });
 
@@ -248,10 +256,10 @@ describe("pi.events — restauration du transcript depuis une session", () => {
       },
     ];
     expect(transcriptFromEntries(entries)).toEqual([
-      { role: "user", text: "vieux" },
-      { role: "assistant", text: "ok" },
-      { role: "user", text: "zéro" },
-      { role: "assistant", text: "nan" },
+      { role: "user", text: "vieux", id: "u" },
+      { role: "assistant", text: "ok", id: "a" },
+      { role: "user", text: "zéro", id: "b" },
+      { role: "assistant", text: "nan", id: "c" },
     ]);
   });
 });
@@ -284,6 +292,7 @@ describe("pi.events — statistiques d'exécution persistées (run_metrics)", ()
       {
         role: "assistant",
         text: "Première réponse",
+        id: "a1",
         metrics: { ttftMs: 842, totalMs: 3120, tokensOut: 412 },
       },
     ]);
@@ -295,6 +304,7 @@ describe("pi.events — statistiques d'exécution persistées (run_metrics)", ()
       {
         role: "assistant",
         text: "Réponse sans stats",
+        id: "a1",
       },
     ]);
   });
@@ -321,7 +331,7 @@ describe("pi.events — statistiques d'exécution persistées (run_metrics)", ()
       metricsEntry("m1", "u1", { totalMs: 10 }),
     ];
     expect(transcriptFromEntries(entries)).toEqual([
-      { role: "user", text: "question" },
+      { role: "user", text: "question", id: "u1" },
     ]);
     expect(JSON.stringify(transcriptFromEntries(entries))).not.toContain("totalMs");
   });

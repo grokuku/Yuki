@@ -14,6 +14,7 @@ import type { Transport } from "../../../src/gateway/ws/transport.js";
 import type { ApprovalGatewayPort, ScreenshotGatewayPort, SecretRequestGatewayPort } from "../../../src/agents/execution.js";
 import type { SessionPinStore } from "../../../src/pi/session-pins.js";
 import type { RecapGenerator } from "../../../src/recap/index.js";
+import type { ReactionsGatewayPort } from "../../../src/reactions/types.js";
 import type { TtsPipelineDeps } from "../../../src/tts/index.js";
 import { createLogger } from "../../../src/observability/logger.js";
 import { FakePiHost, type FakePiHostOptions } from "../../pi/host-double.js";
@@ -34,6 +35,8 @@ export interface HarnessOptions extends FakePiHostOptions {
   secrets?: SecretRequestGatewayPort;
   /** Générateur de récapitulatif « conversation dédiée » (optionnel). */
   recap?: RecapGenerator;
+  /** RÉACTIONS aux messages de Yuki (optionnel). */
+  reactions?: ReactionsGatewayPort;
 }
 
 export interface Harness {
@@ -61,6 +64,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.recap ? { recap: options.recap } : {}),
     ...(options.pins ? { pins: options.pins } : {}),
     ...(options.agents ? { agents: options.agents } : {}),
+    ...(options.reactions ? { reactions: options.reactions } : {}),
   });
   const server = createHttpServer((_req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });

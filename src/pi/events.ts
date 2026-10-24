@@ -223,7 +223,9 @@ function isSyntheticUserText(
  *   - un prompt utilisateur synthétique (report de job) est ignoré ;
  *   - une entrée `custom` de type `yuki.run_metrics` n'apparaît JAMAIS comme
  *     bulle, mais ses NOMBRES sont rattachés au message assistant dont elle est
- *     l'enfant (`parentId`) et exposés via `TranscriptEntry.metrics`.
+ *     l'enfant (`parentId`) et exposés via `TranscriptEntry.metrics` ;
+ *   - chaque entrée de message expose son IDENTIFIANT d'entrée de session
+ *     (`TranscriptEntry.id`), seule corrélation admise pour les RÉACTIONS.
  *
  * Les entrées sont fournies dans l'ordre racine → feuille : l'ordre du retour
  * est donc l'ordre chronologique d'affichage. Mapping PUR et SANS état :
@@ -276,11 +278,15 @@ export function transcriptFromEntries(
       if (isSyntheticUserText(text, prefixes)) continue;
     }
     const timestamp = messageTimestamp(message as RawAgentMessage);
-    transcript.push(
-      timestamp !== undefined ? { role, text, timestamp } : { role, text },
-    );
-    if (role === "assistant" && typeof entry.id === "string") {
-      assistantIndexById.set(entry.id, transcript.length - 1);
+    const entryId = typeof entry.id === "string" ? entry.id : undefined;
+    transcript.push({
+      role,
+      text,
+      ...(entryId !== undefined ? { id: entryId } : {}),
+      ...(timestamp !== undefined ? { timestamp } : {}),
+    });
+    if (role === "assistant" && entryId !== undefined) {
+      assistantIndexById.set(entryId, transcript.length - 1);
     }
   }
   // Second passage : rattache chaque entrée `custom` de métriques au message

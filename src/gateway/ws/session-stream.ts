@@ -143,6 +143,11 @@ export class SessionStream {
       transcript: source.transcript.map((entry) => ({
         role: entry.role,
         text: entry.text,
+        // `id` = identifiant STABLE de l'entrée de session : c'est lui qui
+        // rattache la réaction au bon message après un rechargement ou une
+        // reconnexion (aucun second identifiant).
+        ...(entry.id !== undefined ? { id: entry.id } : {}),
+        ...(entry.reaction !== undefined ? { reaction: entry.reaction } : {}),
         ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
         ...(entry.metrics !== undefined ? { metrics: entry.metrics } : {}),
         ...(entry.origin !== undefined ? { origin: entry.origin } : {}),

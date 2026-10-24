@@ -23,6 +23,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/delegate-tools.ts",
   "src/pi/sdk/execution-tools.ts",
   "src/pi/sdk/memory-extension.ts",
+  "src/pi/sdk/reactions-extension.ts",
   "src/pi/sdk/personality-extension.ts",
   "src/pi/sdk/rules-extension.ts",
   "src/pi/sdk/agent-roster-extension.ts",

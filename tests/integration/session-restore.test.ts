@@ -28,6 +28,21 @@ import { TestClient } from "../gateway/ws/harness.js";
 
 const REPORT_HEADER = "[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]";
 
+/**
+ * Transcript SANS les identifiants d'entrée de session : ces identifiants sont
+ * générés par le SDK à l'écriture, ils ne sont donc pas prévisibles ici. Ils
+ * sont vérifiés à part (ils doivent être présents : c'est la corrélation des
+ * réactions).
+ */
+function withoutIds(
+  transcript: readonly { id?: string }[],
+): Record<string, unknown>[] {
+  return transcript.map((entry) => {
+    const { id: _id, ...rest } = entry as Record<string, unknown>;
+    return rest;
+  });
+}
+
 interface World {
   root: string;
   agentDir: string;
@@ -209,7 +224,14 @@ describe("intégration — reprise de session restaure le transcript", () => {
     expect(state).toBeDefined();
     // Le prompt synthétique de report est masqué ; « thinking » est exclu ; le
     // préfixe d'horodatage n'est PAS visible ; l'instant du message est conservé.
-    expect(state?.transcript).toEqual([
+    // Corrélation STABLE : chaque message restauré porte l'identifiant de son
+    // entrée de session (le même que le `parentId` des statistiques).
+    expect(state?.transcript.map((entry) => typeof entry.id)).toEqual([
+      "string",
+      "string",
+      "string",
+    ]);
+    expect(withoutIds(state?.transcript ?? [])).toEqual([
       { role: "user", text: "Bonjour, qui es-tu ?", timestamp: T0 },
       {
         role: "assistant",
@@ -292,10 +314,11 @@ describe("intégration — reprise de session restaure le transcript", () => {
     // SANS pied (jamais de ligne fantôme).
     const host = await startRealHost(world);
     const state = host.getState();
-    expect(state?.transcript).toEqual([
+    expect(withoutIds(state?.transcript ?? [])).toEqual([
       { role: "user", text: "Ancienne question", timestamp: T0 },
       { role: "assistant", text: "Ancienne réponse.", timestamp: T0 + 1000 },
     ]);
+    expect(state?.transcript.every((entry) => typeof entry.id === "string")).toBe(true);
     expect(state?.transcript.every((entry) => entry.metrics === undefined)).toBe(true);
   });
 

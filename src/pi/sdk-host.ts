@@ -82,6 +82,7 @@ import {
 import { createLightRuntime } from "./sdk/session-factory.js";
 import { createAgentRosterExtensionFactory } from "./sdk/agent-roster-extension.js";
 import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
+import { createReactionsExtensionFactory } from "./sdk/reactions-extension.js";
 import { createPersonalityExtensionFactory } from "./sdk/personality-extension.js";
 import { createRulesExtensionFactory } from "./sdk/rules-extension.js";
 import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
@@ -321,7 +322,7 @@ function makeRunItem(
 export function buildInlineExtensions(
   options: Pick<
     PiHostOptions,
-    "rules" | "personality" | "memory" | "directory" | "heritage" | "logger"
+    "rules" | "personality" | "memory" | "directory" | "heritage" | "reactions" | "logger"
   >,
 ): InlineExtension[] {
   const extensionFactories: InlineExtension[] = [];
@@ -363,6 +364,12 @@ export function buildInlineExtensions(
     extensionFactories.push(
       createHeritageExtensionFactory(options.heritage, { logger: options.logger }),
     );
+  }
+  if (options.reactions) {
+    // RÉACTIONS de l'utilisateur : DONNÉE de retour injectée dans le prompt
+    // système du tour suivant (bornée aux N dernières). En DERNIER : elle
+    // n'écrase rien, elle s'ajoute après la mémoire, l'annuaire et l'archive.
+    extensionFactories.push(createReactionsExtensionFactory(options.reactions));
   }
   return extensionFactories;
 }
@@ -443,6 +450,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     const transcript: TranscriptEntry[] = record.transcript.map((entry) => ({
       role: entry.role,
       text: entry.text,
+      ...(entry.id !== undefined ? { id: entry.id } : {}),
       ...(entry.timestamp !== undefined ? { timestamp: entry.timestamp } : {}),
       ...(entry.metrics !== undefined ? { metrics: entry.metrics } : {}),
       ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
@@ -820,6 +828,14 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       reason,
       run.rawError ? { error: run.rawError } : {},
     );
+    // ⚠️ IDENTIFIANT DE CORRÉLATION (réactions) : celui de l'entrée de session
+    // RÉELLEMENT persistée par ce run — le MÊME dont les statistiques sont
+    // l'enfant (`parentId`). Aucun second identifiant n'est inventé : c'est ce
+    // qui garantit qu'une réaction reste attachée au BON message.
+    if (run.assistantEntry && !run.assistantEntry.id) {
+      const entryId = resolveAssistantEntryId(record, run);
+      if (entryId) run.assistantEntry.id = entryId;
+    }
     emitEvent({
       type: "run_finished",
       sessionId: record.sessionId,
@@ -827,6 +843,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       reason,
       ...(run.usage ? { usage: run.usage } : {}),
       ...(run.errorMessage ? { errorMessage: run.errorMessage } : {}),
+      ...(run.assistantEntry?.id ? { entryId: run.assistantEntry.id } : {}),
     });
     // Les statistiques temps réel (`run_summary`) et celles PERSISTÉES doivent
     // être EXACTEMENT les mêmes : on réutilise la synthèse déjà émise.
@@ -867,6 +884,59 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     if (next) {
       void startRun(record, next);
     }
+  }
+
+  /**
+   * Identifiant de l'ENTRÉE DE SESSION qui porte le message assistant affiché par
+   * ce run, ou `undefined`.
+   *
+   * ⚠️ C'est la SEULE corrélation admise pour une réaction : le même identifiant
+   * que celui dont les statistiques sont l'enfant via `parentId`. On le lit dans
+   * la branche RÉELLE du SDK, jamais dans un compteur local (un index d'affichage
+   * se décale dès qu'un message est ajouté).
+   *
+   * Le message au bout de la branche est d'abord essayé (cas normal : le SDK
+   * vient de le persister). À défaut — fin de tour sur un appel d'outil sans
+   * texte, entrée `custom` ajoutée après coup, compaction automatique — on
+   * remonte la branche pour retrouver le DERNIER message assistant dont le
+   * contenu est EXACTEMENT celui qui est affiché. Aucune correspondance ⇒
+   * `undefined` (jamais d'identifiant approximatif : une réaction sur le mauvais
+   * message apprendrait au modèle le contraire).
+   */
+  function resolveAssistantEntryId(
+    record: SessionRecord,
+    run: RunItem,
+  ): string | undefined {
+    const expected = run.lastAssistantText ?? run.assistantEntry?.text;
+    if (expected === undefined) return undefined;
+    const manager = record.session.sessionManager;
+    const matchOf = (raw: unknown): string | undefined => {
+      if (!raw || typeof raw !== "object") return undefined;
+      const entry = raw as { type?: unknown; id?: unknown; message?: unknown };
+      if (entry.type !== "message" || typeof entry.id !== "string") {
+        return undefined;
+      }
+      const message = entry.message as RawAgentMessage | undefined;
+      if (!message || message.role !== "assistant") return undefined;
+      return contentTextFromMessage(message) === expected ? entry.id : undefined;
+    };
+    try {
+      const fromLeaf = matchOf(manager.getLeafEntry());
+      if (fromLeaf) return fromLeaf;
+      const branch: readonly unknown[] = manager.getBranch();
+      for (let index = branch.length - 1; index >= 0; index -= 1) {
+        const id = matchOf(branch[index]);
+        if (id) return id;
+      }
+    } catch (error) {
+      logger.warn("pi.run.entry_id.failed", {
+        session_id: record.sessionId,
+        run_id: run.runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+    return undefined;
   }
 
   /**

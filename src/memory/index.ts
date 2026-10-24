@@ -25,6 +25,7 @@ export {
   type MemoryRecallResult,
   type MemoryResetResult,
   type MemorySetAsideResult,
+  type ReactionRegularityInput,
   type SessionMemoryPassInput,
   type SessionMemoryPassReason,
   type SessionMemoryPassResult,
@@ -129,6 +130,7 @@ export {
 export {
   MEMORY_BLOCK_HEADER,
   MemoryService,
+  REACTIONS_SOURCE,
   SET_ASIDE_DEFAULT_BOUNDS,
   SET_ASIDE_SOURCE,
   formatMemoryBlock,

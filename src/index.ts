@@ -108,6 +108,7 @@ import {
   MemoryIndex,
   MemoryService,
   MemoryStore,
+  REACTIONS_SOURCE,
   memoryWriteModelReference,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
@@ -119,6 +120,11 @@ import {
   type PushService,
 } from "./push/index.js";
 import type { PushApiDeps } from "./gateway/routes/push.js";
+import {
+  ReactionStore,
+  regularityMemory,
+  type ReactionRegularity,
+} from "./reactions/index.js";
 import { RulesStore } from "./rules/index.js";
 import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkRecapWriter, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
@@ -885,6 +891,39 @@ async function main(): Promise<void> {
   /** Désabonnement des DÉCLENCHEURS de notification (voir plus bas). */
   let stopPushTriggers: (() => void) | undefined;
 
+  /**
+   * RÉACTIONS de l'utilisateur aux messages de Yuki (volume `state`, fichier
+   * SÉPARÉ). Créé AVANT la porte GPU : la couche transport le reçoit plus bas.
+   * ⚠️ Une réaction n'est NI un message NI un souvenir : elle ne déclenche aucun
+   * tour et ne va jamais dans le JSONL de session.
+   */
+  const reactionStore = ReactionStore.open({
+    path: env.reactionsStorePath,
+    logger,
+  });
+  logger.info("reactions.ready", {
+    path: reactionStore.filePath,
+    count: reactionStore.size,
+  });
+
+  /**
+   * Une RÉGULARITÉ de réactions devient (ou non) un SOUVENIR — avec les gardes
+   * EXISTANTS de la mémoire durable :
+   *  - le texte est écrit par le CODE (`regularityMemory`, déterministe) ;
+   *  - `MemoryService.onReactionRegularity` applique le filtre déterministe, exige
+   *    la justification (`why`), puis la déduplication (texte identique et
+   *    quasi-doublon) avant d'écrire ;
+   *  - une réaction ISOLÉE n'arrive jamais ici (seuil dans `ReactionStore`).
+   */
+  function rememberReactionRegularity(regularity: ReactionRegularity): void {
+    const candidate = regularityMemory(regularity);
+    if (!candidate || !memoryService) return;
+    memoryService.onReactionRegularity?.({
+      ...candidate,
+      source: REACTIONS_SOURCE,
+    });
+  }
+
   if (gate.passed) {
     const idleTimeoutMs = config.getNumber("delegation.idleTimeoutMs");
     const totalTimeoutMs = config.getNumber("delegation.totalTimeoutMs");
@@ -1152,6 +1191,9 @@ async function main(): Promise<void> {
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,
+      // RÉACTIONS : le modèle les VOIT au tour suivant (prompt système, borné),
+      // sans qu'aucun tour ne soit déclenché. Lecture seule depuis l'extension.
+      reactions: reactionStore,
       logger,
     });
     delegation.setWaker(host);
@@ -1274,6 +1316,19 @@ async function main(): Promise<void> {
       ),
       // Épinglage des conversations : store hôte SÉPARÉ du JSONL du SDK Pi.
       pins: SessionPinStore.open({ path: env.sessionPinsPath, logger }),
+      // RÉACTIONS : écrire une réaction ne déclenche AUCUN tour et n'alimente
+      // jamais la synthèse vocale. Seules les RÉGULARITÉS (le même jugement sur
+      // plusieurs messages) sont proposées à la mémoire — avec son filtre, son
+      // `why` obligatoire et sa déduplication, jamais pour une réaction isolée.
+      reactions: {
+        set: (sessionId, entryId, reaction) => {
+          const regularity = reactionStore.set(sessionId, entryId, reaction);
+          if (regularity) rememberReactionRegularity(regularity);
+          return regularity !== null;
+        },
+        clear: (sessionId, entryId) => reactionStore.clear(sessionId, entryId),
+        forSession: (sessionId) => reactionStore.forSession(sessionId),
+      },
       // Encart agents de la barre latérale (absent si le registre n'a pas démarré).
       ...(agentsGateway ? { agents: agentsGateway } : {}),
       // Validations humaines (D118) DANS la conversation : le transport route la

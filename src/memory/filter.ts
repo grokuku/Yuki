@@ -9,8 +9,8 @@
  * Sont écartés, avant toute construction de prompt :
  *  - les CADRAGES de données techniques : `<sortie …>` (sortie de commande),
  *    `<libraire …>`, `<agents_disponibles …>`, `<regles …>`, `<personnalite …>`,
- *    `<vie_anterieure …>`, `<conversations_archivees …>` — blocs ET leur rappel
- *    de sécurité ;
+ *    `<vie_anterieure …>`, `<conversations_archivees …>`,
+ *    `<reactions_utilisateur …>` — blocs ET leur rappel de sécurité ;
  *  - les PROMPTS SYNTHÉTIQUES (`[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]`,
  *    `[RÉSULTAT DE COMMANDE VALIDÉE]`) : rapport de tâche, résultat d'exécution.
  *
@@ -28,6 +28,7 @@ import { AGENT_LIST_TAG, SORTIE_TAG } from "../agents/output.js";
 import { LIBRARIAN_TAG } from "../librarian/output.js";
 import { PERSONALITY_TAG } from "../personality/personality.js";
 import { SYNTHETIC_USER_PREFIXES } from "../pi/synthetic.js";
+import { REACTIONS_TAG } from "../reactions/prompt.js";
 import { RULES_TAG } from "../rules/rules.js";
 import { CONVERSATION_ARCHIVE_TAG } from "./conversation-archive.js";
 import { HERITAGE_TAG } from "./heritage.js";
@@ -47,6 +48,11 @@ export const EXCLUDED_FRAME_TAGS: readonly string[] = [
   // consultée à la demande, jamais un souvenir (même doctrine que l'annuaire,
   // le roster et l'archive « vie antérieure »).
   CONVERSATION_ARCHIVE_TAG,
+  // ⚠️ RÉACTIONS aux messages (retour de l'utilisateur) : c'est une DONNÉE
+  // injectée dans le prompt système, jamais un échange. Sans cette exclusion,
+  // un rappel de réactions recopié dans une réponse pourrait devenir un
+  // souvenir — et une réaction isolée deviendrait un « fait durable ».
+  REACTIONS_TAG,
 ];
 
 /** Préfixes des prompts SYNTHÉTIQUES (jamais mémorisés) — source unique. */
