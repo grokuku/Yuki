@@ -1,0 +1,83 @@
+#!/bin/sh /etc/rc.common
+# =============================================================================
+# Script de service procd de l'agent d'exécution Yuki — OpenWrt.
+#
+# ⚠️ OpenWrt N'A PAS systemd (il a procd) : l'unité `deploy/yuki-agent.service`
+# est INUTILISABLE ici. Ce script est l'équivalent procd de cette unité :
+#   * `procd_set_param command` ≙ `ExecStart=` ;
+#   * `procd_set_param respawn`  ≙ `Restart=always` / `RestartSec=5` ;
+#   * `procd_set_param stderr 1` ≙ `StandardError=journal` (les journaux JSON
+#     structurés de l'agent partent sur stderr → `logread -e yuki-agent`).
+#
+# ⚠️ ÉQUIVALENT `User=` de l'unité systemd : procd démarre l'instance en ROOT
+# (c'est le comportement par défaut de procd, il n'y a pas de `User=` à écrire).
+# L'agent a besoin de ce privilège pour exécuter des commandes sur le routeur
+# (D120) — c'est un CHOIX d'installation, pas un effet de bord.
+#
+# ⚠️ INSTALLATION (voir `README.md` du même dossier) :
+#     cp yuki-agent.init /etc/init.d/yuki-agent
+#     chmod +x /etc/init.d/yuki-agent
+#     /etc/init.d/yuki-agent enable && /etc/init.d/yuki-agent start
+#
+# ⚠️ CHEMINS : le binaire vit dans `/usr/sbin` et l'état dans `/etc/yuki-agent`.
+# Sur OpenWrt, `/usr` et `/etc` sont sur l'overlayfs (PERSISTANTS après reboot) ;
+# `/tmp` est un tmpfs en RAM (PERDU au reboot) — ne jamais y installer le binaire
+# ni les certificats.
+# =============================================================================
+
+START=95
+STOP=10
+USE_PROCD=1
+
+PROG=/usr/sbin/yuki-agent
+CONFIG=/etc/yuki-agent/agent.json
+STATE_DIR=/etc/yuki-agent
+
+# start_service démarre l'instance procd. On REFUSE de démarrer sans appairage :
+# `run` sortirait en erreur toutes les 5 s (respawn), noyant `logread` sous des
+# messages identiques. Un service qui ne peut pas fonctionner doit le DIRE.
+start_service() {
+	if [ ! -x "$PROG" ]; then
+		echo "yuki-agent : binaire absent ou non exécutable : $PROG" >&2
+		logger -t yuki-agent "binaire absent : $PROG"
+		return 1
+	fi
+	if [ ! -f "$CONFIG" ]; then
+		echo "yuki-agent : configuration absente : $CONFIG" >&2
+		echo "yuki-agent : appairez d'abord : $PROG pair --yuki-url <wss://…> --config $CONFIG" >&2
+		logger -t yuki-agent "configuration absente : $CONFIG"
+		return 1
+	fi
+	for f in ca.pem client.pem client.key; do
+		if [ ! -f "$STATE_DIR/$f" ]; then
+			echo "yuki-agent : certificat absent : $STATE_DIR/$f" >&2
+			echo "yuki-agent : appairez d'abord : $PROG pair --yuki-url <wss://…> --config $CONFIG" >&2
+			logger -t yuki-agent "certificat absent : $STATE_DIR/$f"
+			return 1
+		fi
+	done
+
+	procd_open_instance
+	procd_set_param command "$PROG" run --config "$CONFIG"
+	# respawn <seuil_s> <délai_s> <nb_essais> : relance au bout de 5 s, sans
+	# limite — aligné sur la reconnexion permanente de l'agent (il ne « meurt »
+	# pas quand Yuki est injoignable, il réessaie avec backoff).
+	procd_set_param respawn 3600 5 0
+	# Journaux : stderr/stdout capturés par procd → `logread`.
+	procd_set_param stderr 1
+	procd_set_param stdout 1
+	# L'agent exécute des commandes arbitraires : pas de confinement (même
+	# raisonnement que `NoNewPrivileges` seul dans l'unité systemd).
+	procd_close_instance
+}
+
+# reload_service n'a pas de configuration UCI : un rechargement = un redémarrage.
+reload_service() {
+	restart
+}
+
+service_triggers() {
+	# Relance si le réseau revient (l'agent réessaie de toute façon seul ; ce
+	# trigger évite d'attendre le backoff après un `ifup`).
+	procd_add_reload_trigger "network"
+}

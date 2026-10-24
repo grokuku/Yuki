@@ -17,6 +17,13 @@
 #   agent-release → (workflow_dispatch UNIQUEMENT) GitHub Release `agent-v<version>`
 #                   portant les 4 binaires + `SHA256SUMS`.
 #
+# ⚠️ cibles LINUX = « MUSL / OpenWrt » : le module Go n'a AUCUN CGO (aucun
+# `import "C"`), donc `CGO_ENABLED=0` produit un ELF STATIQUE qui ne dépend
+# d'AUCUNE libc : le MÊME octet-à-octet binaire tourne sur glibc (Debian…) et
+# sur musl (OpenWrt, Alpine). Le suffixe `-musl` du nom rend la cible
+# EXPLICITE pour l'utilisateur OpenWrt ; ce n'est pas un second linkage.
+# Documentation d'installation OpenWrt : `agent/deploy/openwrt/README.md`.
+#
 # Publication des binaires :
 #   * `push` vers `main`  → artefacts téléchargeables à chaque push (rétention 7 j) ;
 #   * `pull_request`      → compilation VALIDÉE, aucun artefact publié ;
@@ -100,20 +107,24 @@ jobs:
   # ---------------------------------------------------------------------------
   # Compilation croisée des 4 cibles vérifiées (CGO_ENABLED=0, binaires
   # statiques). Une entrée de matrice PAR cible : nom de binaire EXPLICITE
-  # (`yuki-agent-<goos>-<goarch>[.exe]`), artefact par cible.
+  # (`yuki-agent-<goos>-<goarch><variante>[.exe]`), artefact par cible.
+  #
+  # `variant` : suffixe du nom, réservé à la CIBLE (pas au linkage) —
+  # `-musl` dit « validé pour OpenWrt / musl » sans rien changer au binaire, qui
+  # est statique et donc indépendant de la libc (voir l'en-tête du workflow).
   # ---------------------------------------------------------------------------
   agent-build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.variant }}
     needs: agent-quality
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { goos: linux, goarch: amd64, ext: '' }
-          - { goos: linux, goarch: arm64, ext: '' }
-          - { goos: windows, goarch: amd64, ext: '.exe' }
-          - { goos: windows, goarch: arm64, ext: '.exe' }
+          - { goos: linux, goarch: amd64, ext: '', variant: '-musl' }
+          - { goos: linux, goarch: arm64, ext: '', variant: '-musl' }
+          - { goos: windows, goarch: amd64, ext: '.exe', variant: '' }
+          - { goos: windows, goarch: arm64, ext: '.exe', variant: '' }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -135,6 +146,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           EXT: ${{ matrix.ext }}
+          VARIANT: ${{ matrix.variant }}
           CGO_ENABLED: '0'
         run: |
           set -euo pipefail
@@ -143,13 +155,37 @@ jobs:
             echo "::error::agent/VERSION est vide."
             exit 1
           fi
-          NAME="yuki-agent-${GOOS}-${GOARCH}${EXT}"
+          NAME="yuki-agent-${GOOS}-${GOARCH}${VARIANT}${EXT}"
           mkdir -p ../dist
           go build -trimpath \
             -ldflags "-s -w -X github.com/grokuku/yuki/agent/internal/buildinfo.Version=${VERSION}" \
             -o "../dist/${NAME}" ./cmd/yuki-agent
           echo "name=${NAME}" >> "${GITHUB_OUTPUT}"
           ls -l "../dist/${NAME}"
+
+      # Garde-fou de la cible Linux : le binaire DOIT être un ELF STATIQUE de la
+      # bonne architecture. Sans cette vérification, un `CGO_ENABLED=1` accidentel
+      # (ou une dépendance C ajoutée plus tard) produirait un binaire DYNAMIQUE
+      # qui ne démarrerait PAS sur OpenWrt (musl absent / autre libc).
+      - name: Vérifier binaire statique et architecture (Linux)
+        if: matrix.goos == 'linux'
+        working-directory: dist
+        env:
+          NAME: ${{ steps.build.outputs.name }}
+          WANT_ARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          info="$(file -b "${NAME}")"
+          echo "file : ${info}"
+          case "${info}" in
+            *"statically linked"*|*"static-pie linked"*) ;;
+            *) echo "::error::${NAME} n'est PAS statique (attendu : CGO_ENABLED=0) : ${info}"; exit 1 ;;
+          esac
+          case "${WANT_ARCH}:${info}" in
+            amd64:*"x86-64"*) ;;
+            arm64:*"aarch64"*) ;;
+            *) echo "::error::${NAME} ne correspond pas à l'architecture ${WANT_ARCH} : ${info}"; exit 1 ;;
+          esac
 
       - name: Empreinte SHA-256
         working-directory: dist
@@ -166,7 +202,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: yuki-agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: yuki-agent-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.variant }}
           path: |
             dist/${{ steps.build.outputs.name }}
             dist/SHA256SUMS
@@ -248,6 +284,6 @@ jobs:
           gh release create "${TAG}" release/* \
             --target "${SHA}" \
             --title "Agent Yuki v${VERSION}" \
-            --notes "Binaires statiques de l'agent d'exécution Yuki v${VERSION} (linux/amd64, linux/arm64, windows/amd64, windows/arm64 ; CGO_ENABLED=0). Vérifier les empreintes avec SHA256SUMS." \
+            --notes "Binaires statiques de l'agent d'exécution Yuki v${VERSION} (linux/amd64 et linux/arm64, libc-agnostiques : glibc ET musl/OpenWrt ; windows/amd64 et windows/arm64 ; CGO_ENABLED=0). Installation OpenWrt (procd) : agent/deploy/openwrt/README.md. Vérifier les empreintes avec SHA256SUMS." \
             --latest=false
           echo "Release ${TAG} créée."

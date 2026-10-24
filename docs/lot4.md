@@ -486,7 +486,7 @@ Le sous-lot **A6** livre le programme posable sur une machine :
 
 - `agent/cmd/yuki-agent` : CLI (`pair`/`run`/`install`/`uninstall`/`status`/`version`) ;
 - `agent/internal/agent` : configuration locale, `hello` OS, boucle `cmd → ack → classification → exécution → result`, journal JSON-lines, arrêt propre ;
-- `agent/internal/service` : service Windows (SCM) ; sous Linux, `deploy/yuki-agent.service` + `deploy/install.sh` (systemd) ;
+- `agent/internal/service` : service Windows (SCM) ; sous Linux, `deploy/yuki-agent.service` + `deploy/install.sh` (systemd) ; sur OpenWrt (musl, **procd** — pas de systemd), `deploy/openwrt/yuki-agent.init` + `deploy/openwrt/README.md` ;
 - `agent/internal/exec/proc_windows.go` : exécution réelle Windows (`cmd.exe /d /s /c`, `powershell.exe -NoProfile -NonInteractive -Command`) et **job object** tuant tout l'arbre au timeout.
 
 ### 14.1 Dépendance Go ajoutée (première du module)
