@@ -616,9 +616,14 @@ check(
   afterReload["sess-B"].unread === false,
   JSON.stringify(afterReload),
 );
+const unreadIndicators = await evaluate(`(() => ({
+  sidebar: document.querySelectorAll('.conv.conv--unread').length,
+  menu: document.querySelectorAll('.mnav-conv.conv--unread').length,
+}))()`);
 check(
-  "U5 : EXACTEMENT un indicateur non lu dans la liste",
-  (await evaluate(`document.querySelectorAll('.conv--unread').length`)) === 1,
+  "U5 : EXACTEMENT un indicateur non lu dans la liste (barre ET menu téléphone)",
+  unreadIndicators.sidebar === 1 && unreadIndicators.menu === 1,
+  JSON.stringify(unreadIndicators),
 );
 // Second rechargement : l'état reste STABLE (aucune accumulation).
 await navigate(`${base}/`);

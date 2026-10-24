@@ -21,7 +21,7 @@
     <header class="topbar">
       <div class="brand">Yuki</div>
       <div class="status">
-        <a class="pill" href="/config">Configuration</a>
+        <a class="pill topbar__config" href="/config">Configuration</a>
         <span id="connection" class="pill pill--offline">hors ligne</span>
         <span id="session-state" class="pill">idle</span>
         <!-- E5 — VERROU ANTI-MENSONGE : badge NON MASQUABLE affiché tant que la
@@ -87,9 +87,136 @@
       Coquille à deux colonnes : barre latérale des conversations (rendue par
       `sessions-panel.js`, `<aside>` vide dans le markup) + zone de discussion.
       Le fil REMPLIT la largeur disponible (aucune borne de lecture).
+
+      ⚠️ TÉLÉPHONE (≤ 767 px, ou paysage de téléphone) : la barre latérale est
+      MASQUÉE (CSS) et remplacée par la barre de trois menus déroulants
+      ci-dessous — le fil prend alors toute la largeur. Sur BUREAU, rien ne
+      change : la barre latérale reste entière et se replie de 56 à 280 px.
     -->
     <div class="shell">
       <aside id="sessions-sidebar" class="sidebar" aria-label="Conversations"></aside>
+
+      <!--
+        Barre TÉLÉPHONE : trois boutons de largeur ÉGALE (flex:1), chacun
+        icône + libellé + chevron, qui déploient un menu sous la barre.
+        Les icônes viennent de la brique holaf-icons (`data-holaf-icon`, posées
+        par `mobile-nav.js`) : aucun SVG écrit à la main, aucun style en ligne.
+        Masquée en bureau par CSS (`.mnav { display:none }`).
+      -->
+      <nav id="mobile-nav" class="mnav" aria-label="Navigation téléphone">
+        <button
+          id="mnav-btn-conversations"
+          class="mnav__btn"
+          type="button"
+          data-nav="conversations"
+          aria-expanded="false"
+          aria-controls="mnav-panel-conversations"
+        >
+          <span class="mnav__icon" data-holaf-icon="message-square-plus" aria-hidden="true"></span>
+          <span class="mnav__label">Conversations</span>
+          <span class="mnav__chevron" data-holaf-icon="chevron-down" aria-hidden="true"></span>
+        </button>
+        <button
+          id="mnav-btn-agents"
+          class="mnav__btn"
+          type="button"
+          data-nav="agents"
+          aria-expanded="false"
+          aria-controls="mnav-panel-agents"
+        >
+          <span class="mnav__icon" data-holaf-icon="layout" aria-hidden="true"></span>
+          <span class="mnav__label">Agents</span>
+          <span class="mnav__chevron" data-holaf-icon="chevron-down" aria-hidden="true"></span>
+        </button>
+        <button
+          id="mnav-btn-config"
+          class="mnav__btn"
+          type="button"
+          data-nav="config"
+          aria-expanded="false"
+          aria-controls="mnav-panel-config"
+        >
+          <span class="mnav__icon" data-holaf-icon="gear" aria-hidden="true"></span>
+          <span class="mnav__label">Config</span>
+          <span class="mnav__chevron" data-holaf-icon="chevron-down" aria-hidden="true"></span>
+        </button>
+      </nav>
+
+      <!--
+        Calque des menus : fond assombri (un toucher dessus ferme) + le panneau
+        ouvert, positionné SOUS la barre (CSSOM, voir `mobile-nav.js`). Hauteur =
+        tout l'espace disponible, contenu défilable.
+      -->
+      <div id="mobile-nav-layer" class="mnav-layer" hidden>
+        <section
+          id="mnav-panel-conversations"
+          class="mnav-panel"
+          data-panel="conversations"
+          role="dialog"
+          aria-label="Conversations"
+          tabindex="-1"
+          hidden
+        >
+          <header class="mnav-panel__head">
+            <h2 class="mnav-panel__title">Conversations</h2>
+            <button id="mnav-new" class="mnav-panel__action" type="button" data-action="new">
+              + Nouvelle
+            </button>
+          </header>
+          <nav
+            id="mnav-conv-list"
+            class="mnav-panel__body sidebar__list"
+            aria-label="Liste des conversations"
+          ></nav>
+          <p id="mnav-conv-empty" class="mnav-panel__empty" hidden>Aucune conversation.</p>
+        </section>
+
+        <section
+          id="mnav-panel-agents"
+          class="mnav-panel"
+          data-panel="agents"
+          role="dialog"
+          aria-label="Agents"
+          tabindex="-1"
+          hidden
+        >
+          <header class="mnav-panel__head">
+            <h2 class="mnav-panel__title">Agents</h2>
+            <a class="mnav-panel__action" href="/config#agents">+ Appairer</a>
+          </header>
+          <ul id="mnav-agent-list" class="mnav-panel__body side-agents__list"></ul>
+          <p id="mnav-agent-empty" class="mnav-panel__empty" hidden>Aucun agent appairé.</p>
+          <a class="mnav-link" href="/config#agents">Gérer les agents et les niveaux…</a>
+        </section>
+
+        <section
+          id="mnav-panel-config"
+          class="mnav-panel"
+          data-panel="config"
+          role="dialog"
+          aria-label="Configuration"
+          tabindex="-1"
+          hidden
+        >
+          <header class="mnav-panel__head">
+            <h2 class="mnav-panel__title">Configuration</h2>
+            <a class="mnav-panel__action" href="/config">Ouvrir</a>
+          </header>
+          <div class="mnav-panel__body mnav-list">
+            <a class="mnav-item" href="/config#personnalite">Personnalité &amp; règles</a>
+            <a class="mnav-item" href="/config#conversation">Mémoire durable</a>
+            <a class="mnav-item" href="/config#secrets">Coffre de secrets</a>
+            <a class="mnav-item" href="/config#voix">Voix (TTS)</a>
+            <button class="mnav-item" type="button" data-action="theme">
+              <span class="mnav-item__label">Thème</span>
+              <span class="mnav-item__value" data-theme-value></span>
+            </button>
+            <a class="mnav-item" href="/config#systeme">Notifications</a>
+            <a class="mnav-item" href="/config#modeles">Système &amp; modèles</a>
+          </div>
+        </section>
+      </div>
+
       <div id="chat" class="chat">
         <main id="conversation" class="conversation" aria-live="polite">
           <p class="empty">Envoyez un message pour commencer.</p>
@@ -127,21 +254,18 @@
             aria-label="Message"
           ></textarea>
           <button id="send" class="button" type="button">Envoyer</button>
-          <button id="stop" class="button button--stop" type="button" disabled>
-            Stop
-          </button>
-          <!-- « Continuer dans une conversation dédiée » : depuis la
-               conversation ouverte, l'utilisateur donne un SUJET et un appel
-               LLM produit un RÉCAPITULATIF exhaustif qui devient le point de
-               départ d'une NOUVELLE conversation (le fil d'origine n'est pas
-               modifié). Câblé par app.js via recap-dedicated.js. -->
+          <!-- Arrêter : bouton CARRÉ (36×36) à icône de stop, en couleur danger.
+               L'icône vient de la brique holaf-icons (`stop`), posée par
+               `app.js` — aucun SVG écrit à la main. Le bouton d'ENVOI reste
+               SÉPARÉ et inchangé. -->
           <button
-            id="recap-dedicated"
-            class="button button--ghost"
+            id="stop"
+            class="button button--stop"
             type="button"
-            aria-label="Continuer un sujet dans une conversation dédiée"
-            title="Continuer un sujet dans une conversation dédiée"
-          >Conversation dédiée</button>
+            aria-label="Arrêter la réponse"
+            title="Arrêter la réponse"
+            disabled
+          ></button>
         </footer>
       </div>
     </div>

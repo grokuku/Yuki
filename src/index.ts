@@ -409,6 +409,7 @@ async function main(): Promise<void> {
           level: record.level,
           revoked: record.revoked,
           online: agentHub.isOnline(record.agentId),
+          lastSeen: record.lastSeen,
         })),
       setEnabled: (agentId, enabled) => {
         agentStore.setEnabled(agentId, enabled);

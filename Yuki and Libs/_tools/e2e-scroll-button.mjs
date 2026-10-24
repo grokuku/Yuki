@@ -408,7 +408,7 @@ check(
 await shot("scroll-04-reading-not-pulled");
 await waitFor(`document.querySelector('#session-state').textContent === 'idle'`, 8000);
 
-/* ═══════════════ 6) ÉCRAN ÉTROIT (600×800, rail) : pas de recouvrement ══ */
+/* ═══ 6) ÉCRAN ÉTROIT (600×800, dessin TÉLÉPHONE) : pas de recouvrement ═══ */
 await send("Emulation.setDeviceMetricsOverride", {
   width: 600,
   height: 800,
@@ -433,9 +433,9 @@ check(
   `slot=${narrow.btnSlot} ; bouton haut=${Math.round(narrow.btnRect.top)} ; fenêtre haut=${Math.round(narrow.winRect.top)}`,
 );
 check(
-  "écran étroit : le bouton reste à DROITE du rail (atteignable au pouce)",
-  narrow.btnRect.left >= 56,
-  `left=${Math.round(narrow.btnRect.left)} px`,
+  "écran étroit : le bouton reste à la marge du FIL (aucune barre latérale au téléphone)",
+  narrow.btnRect.left >= 16 && narrow.btnRect.left <= 24,
+  `left=${Math.round(narrow.btnRect.left)} px (marge EDGE_PX = 16 px)`,
 );
 check(
   "écran étroit : le bouton ne chevauche PAS la zone de saisie",

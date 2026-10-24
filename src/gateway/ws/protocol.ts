@@ -113,6 +113,12 @@ export interface WireAgent {
   revoked: boolean;
   /** `true` si un canal vivant est ouvert pour cet agent. */
   online: boolean;
+  /**
+   * Dernière activité connue de l'agent (ISO), `null` s'il ne s'est JAMAIS
+   * connecté. Optionnel : un transport qui ne la connaît pas n'a rien à
+   * inventer (l'interface affiche alors « jamais connecté »).
+   */
+  lastSeen?: string | null;
 }
 
 /** Corps d'une trame serveur → client. */

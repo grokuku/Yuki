@@ -14,9 +14,10 @@ import { describe, expect, it } from "vitest";
 import {
   isRecapFrame,
   recapProgressLabel,
-  RECAP_TRIGGER_LABEL,
   validatePreview,
 } from "../../public/ui/recap-dedicated.js";
+
+import { RECAP_MENU_LABEL } from "../../public/ui/sessions-panel.js";
 
 const read = (...segments: string[]): string =>
   readFileSync(join(process.cwd(), ...segments), "utf8");
@@ -76,9 +77,18 @@ describe("garde-fous statiques de la source", () => {
     expect(module).toContain("body.value =");
   });
 
-  it("le déclencheur est présent dans le markup et porte un libellé accessible", () => {
-    expect(html).toContain('id="recap-dedicated"');
-    expect(html).toContain(RECAP_TRIGGER_LABEL);
+  it("le déclencheur vit dans le MENU DU TITRE (plus dans le composeur)", () => {
+    // ⚠️ Changement de contrat : le bouton du composeur a disparu, l'action est
+    // une entrée du menu contextuel du titre (téléphone ET bureau).
+    expect(html).not.toContain('id="recap-dedicated"');
+    expect(html).not.toContain(">Conversation dédiée<");
+    const panel = read("public", "ui", "sessions-panel.js");
+    expect(panel).toContain("RECAP_MENU_LABEL");
+    expect(panel).toContain(RECAP_MENU_LABEL);
+    expect(panel).toContain("onRecapDedicated");
+    // Le parcours n'est pas réécrit : c'est le module existant qui est ouvert.
+    expect(app).toContain("recapDedicated.open()");
+    expect(app).toContain("createRecapDedicated");
   });
 
   it("le bloc `recap` et l'aperçu ont un style dédié (thème, pas de px de couleur en dur)", () => {

@@ -15,6 +15,8 @@ import {
   agentConnectionLabel,
   agentInitial,
   agentLabel,
+  agentLastSeenLabel,
+  agentLevelBadge,
   agentLevelLabel,
   isAgentConnected,
   isAgentEnabled,
@@ -74,6 +76,28 @@ describe("pastille = CONNEXION, découplée de l'activation", () => {
     expect(agentConnectionLabel({ online: true })).toBe("Connecté");
     expect(agentConnectionLabel({ online: false })).toBe("Déconnecté");
     expect(agentConnectionLabel({ level: "disabled", online: true })).toBe("Connecté");
+  });
+});
+
+describe("menu TÉLÉPHONE : niveau en pastille + dernière activité", () => {
+  it("niveau de garde-fou lisible en UN MOT, mêmes 4 niveaux", () => {
+    expect(agentLevelBadge("destructive")).toBe("Destructrices");
+    expect(agentLevelBadge("always")).toBe("Chaque cmd");
+    expect(agentLevelBadge("never")).toBe("Aucune");
+    expect(agentLevelBadge("disabled")).toBe("Désactivé");
+    // Un niveau inconnu ne rend jamais `undefined` à l'écran.
+    expect(agentLevelBadge("bogus")).toBe("bogus");
+  });
+
+  it("dernière activité : honnête (jamais une date inventée)", () => {
+    const now = new Date("2026-10-23T15:00:00.000Z");
+    expect(agentLastSeenLabel(null, now)).toBe("jamais connecté");
+    expect(agentLastSeenLabel(undefined, now)).toBe("jamais connecté");
+    expect(agentLastSeenLabel("pas une date", now)).toBe("jamais connecté");
+    // Même jour : heure locale.
+    expect(agentLastSeenLabel("2026-10-23T12:34:00.000Z", now)).toContain("vu à");
+    // Autre jour : date courte.
+    expect(agentLastSeenLabel("2026-10-08T10:00:00.000Z", now)).toMatch(/^vu le /);
   });
 });
 
@@ -164,6 +188,15 @@ describe("garde-fous statiques de sidebar-agents.js (CSP, sémantique)", () => {
     // Le hint est posé en `textContent` sur un nœud créé, comme le libellé.
     expect(source).toContain("ctx-menu__hint");
     expect(source).toContain("ctx-menu__col");
+  });
+
+  it("le menu téléphone réutilise le MÊME menu de niveau (appui long)", () => {
+    // Pas de second menu, pas de second vocabulaire : mêmes items radio et
+    // même ouverture, la seule différence est le DÉCLENCHEUR (appui long).
+    expect(source).toContain("extraTargets");
+    expect(source).toContain("attachLongPress");
+    expect(source).toContain("mnav-agent");
+    expect(source).toContain("mnav-agent__level");
   });
 
   it("ne referme pas le menu sur un défilement ÉTRANGER au panneau", () => {

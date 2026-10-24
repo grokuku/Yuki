@@ -1,4 +1,9 @@
 :root {
+  /* Voile des panneaux flottants (menu téléphone) : couleur NEUTRE (noir
+   * translucide), indépendante des 6 familles — elle doit assombrir sans
+   * teinter, y compris sur un thème CLAIR. Les surfaces/accents, eux, viennent
+   * TOUS des variables de thème (themes.css). */
+  --scrim: color-mix(in srgb, #000 45%, transparent);
   --bg: #0f1115;
   --panel: #171a21;
   --panel-2: #1e2230;
@@ -769,24 +774,335 @@ a.pill:hover {
   color: var(--text);
 }
 
-/* ─── Fenêtre ÉTROITE : la barre reste un rail de 56 px et se déplie
- * PAR-DESSUS le fil (au lieu de l'écraser). Au plus simple, et documenté. */
-@media (max-width: 640px) {
-  .shell {
-    position: relative;
-  }
+/* ─── Barre TÉLÉPHONE (trois menus) ──────────────────────────────────────────
+ * Masquée en bureau ; affichée par le média téléphone ci-dessus. Trois boutons
+ * de largeur ÉGALE, hauteur 34 px, rayon 10 px, icône + libellé (ellipsé) +
+ * chevron. L'état ouvert est accentué et retourne le chevron. */
+.mnav {
+  display: none;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
 
-  .sidebar {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 20;
-  }
+.mnav__btn {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 34px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1;
+  cursor: pointer;
+}
 
-  .chat {
-    padding-left: 56px;
-  }
+.mnav__btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.mnav__btn[aria-expanded="true"],
+.mnav__btn--open {
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.mnav__btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.mnav__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* Libellé ÉLLIPSÉ : « Conversations » ne doit jamais être coupé au milieu d'un
+ * caractère ni déborder du bouton (vérifié à 320 px en E2E). */
+.mnav__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mnav__chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.mnav__btn[aria-expanded="true"] .mnav__chevron,
+.mnav__btn--open .mnav__chevron {
+  transform: rotate(180deg);
+}
+
+/* Calque : fond assombri DERRIÈRE le panneau ; sa hauteur commence SOUS la
+ * barre (le `top` est mesuré par `mobile-nav.js`). `z-index` : SOUS le menu
+ * contextuel (1000) et la fenêtre de validation (1200), AU-DESSUS du bouton
+ * « revenir en bas » (900) — ce dernier ne doit jamais flotter sur le voile. */
+.mnav-layer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 940;
+  background: var(--scrim);
+  overflow: hidden;
+}
+
+.mnav-layer[hidden] {
+  display: none;
+}
+
+/* Panneau : rayon 14 px, bordure, ombre marquée, hauteur = espace disponible,
+ * contenu défilable (jamais de débordement hors de l'écran). */
+.mnav-panel {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 16px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px color-mix(in srgb, #000 55%, transparent);
+  overflow: hidden;
+}
+
+.mnav-panel[hidden] {
+  display: none;
+}
+
+.mnav-panel__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mnav-panel__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.mnav-panel__action {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11.5px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.mnav-panel__action:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.mnav-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.mnav-panel__empty {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* « Gérer les agents et les niveaux… » : action SECONDAIRE, séparée du panneau. */
+.mnav-link {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.mnav-link:hover {
+  text-decoration: underline;
+}
+
+/* Entrée de configuration : ligne pleine largeur (lien ou bouton d'action). */
+.mnav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mnav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.mnav-item:hover {
+  background: var(--panel-hover);
+}
+
+.mnav-item__value {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* ─── Ligne de conversation du menu téléphone ───────────────────────────────
+ * MÊME contenu et MÊME apparence que la barre latérale (pastille + point
+ * « en cours » + pastille « non lu » + titre + méta), avec en plus l'aperçu du
+ * dernier message et une colonne de droite (jour/heure + nombre de messages).
+ * ⚠️ La classe de LIGNE diffère (`.mnav-conv`) : les mesures E2E de la barre
+ * latérale (`.conv`) restent sans ambiguïté. Les classes INTERNES sont
+ * partagées. */
+.mnav-conv {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  /* Appui long : pas de sélection de texte ni de menu natif au doigt. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.mnav-conv:hover {
+  background: var(--panel-hover);
+}
+
+.mnav-conv--active {
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.mnav-conv--pinned {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.mnav-conv:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.mnav-conv__aside {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mnav-conv__time {
+  white-space: nowrap;
+}
+
+/* Ligne d'aperçu (dernier message connu) : 2ᵉ ligne du titre, discrète. */
+.conv__excerpt {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Ligne d'agent du menu téléphone ───────────────────────────────────────
+ * Même pastille (initiale + témoin de connexion vert/rouge) que la barre
+ * latérale, avec le NIVEAU de garde-fou visible et la dernière activité.
+ * ⚠️ La classe de LIGNE diffère (`.mnav-agent`) : les sélecteurs E2E du bureau
+ * (`.side-agent`) restent sans ambiguïté. Les classes internes sont partagées. */
+.mnav-agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  border-radius: 10px;
+  /* Appui long : ni sélection de texte ni menu natif au doigt. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.mnav-agent:hover {
+  background: var(--panel-hover);
+}
+
+.mnav-agent__level {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* « Pas de validation » = le niveau le plus RISQUÉ : dit en couleur danger. */
+.mnav-agent__level[data-level="never"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+/* « Désactivé » : agent hors service (aucune commande acceptée). */
+.mnav-agent__level[data-level="disabled"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+  opacity: 0.8;
+}
+
+/* « Validation à chaque commande » : le plus prudent → accent. */
+.mnav-agent__level[data-level="always"] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .empty {
@@ -1297,10 +1613,30 @@ a.pill:hover {
   cursor: not-allowed;
 }
 
+/* Arrêter = bouton CARRÉ à icône (36×36, rayon 9 px), couleur DANGER : fond
+ * rouge à 14 %, bord à 40 %. Le carré PLEIN vient du tracé `stop` de la brique
+ * holaf-icons (rect 5..19) rempli par `currentColor` : aucune icône dessinée
+ * dans le projet. Le bouton d'ENVOI reste séparé (aucune fusion). */
 .button--stop {
-  background: transparent;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.button--stop .icon {
+  width: 20px;
+  height: 20px;
+  /* Le tracé `stop` est un rectangle en trait : le remplir donne le carré
+   * plein arrondi attendu, sans ajouter de SVG maison. */
+  fill: currentColor;
 }
 
 /* ─── Bouton voix (topbar) — partage la forme des contrôles de thème ─────── */
@@ -2050,4 +2386,87 @@ h6.md-heading {
   margin: 8px 0 0;
   font-size: 12.5px;
   color: var(--muted);
+}
+
+/* ─── TÉLÉPHONE : plus de barre latérale, trois menus déroulants en haut ────
+ *
+ * SEUIL : `max-width: 767px` (donc « moins de 768 px ») OU
+ * `(max-height: 480px) and (pointer: coarse)` pour un TÉLÉPHONE EN PAYSAGE —
+ * 844×390 par exemple : sa largeur (844 px) le classerait à tort en « bureau »,
+ * alors que sa hauteur (390 px) et son doigt (pointeur grossier) ne trompent
+ * pas. La même requête est posée côté JS (`MOBILE_MEDIA_QUERY`,
+ * `mobile-nav.js`) : une seule source de vérité.
+ *
+ * ⚠️ En BUREAU, rien de ce bloc ne s'applique : la barre latérale garde sa
+ * largeur (56/280 px), son bouton de repli et sa préférence mémorisée.
+ */
+@media (max-width: 767px), (max-height: 480px) and (pointer: coarse) {
+  /* Le fil PREND TOUTE LA PLACE : plus de rail, plus de bouton de repli. */
+  .sidebar {
+    display: none;
+  }
+
+  .shell {
+    flex-direction: column;
+  }
+
+  .mnav {
+    display: flex;
+  }
+
+  /* Barre du haut compacte : une seule rangée de taille réduite (les
+     informations — connexion, état, badge anti-mensonge, file, notifications,
+     thème, voix — restent TOUTES présentes ; rien n'est retiré). */
+  .brand {
+    display: none;
+  }
+
+  /* Le lien « Configuration » de la barre du haut est REDONDANT sur téléphone :
+     le menu ③ Config mène aux mêmes réglages (et donne accès à TOUTES les
+     sections). Le retirer libère la place des contrôles thème/voix. */
+  .topbar__config {
+    display: none;
+  }
+
+  .topbar {
+    padding: 7px 10px;
+    gap: 6px;
+  }
+
+  .status {
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .pill,
+  .notif-toggle {
+    font-size: 11px;
+    padding: 2px 8px;
+  }
+
+  .conversation {
+    padding: 14px 12px;
+  }
+
+  .composer {
+    padding: 8px 10px 10px;
+    gap: 6px;
+  }
+
+  .input {
+    min-height: 40px;
+    padding: 9px 10px;
+  }
+
+  .composer .button {
+    padding: 9px 12px;
+  }
+
+  /* Le contenu des menus est TOUJOURS lisible (le panneau n'est pas le rail de
+     56 px : les libellés ne sont jamais masqués par le repli). */
+  .mnav-panel .conv__main,
+  .mnav-panel .side-agent__main {
+    opacity: 1;
+  }
 }

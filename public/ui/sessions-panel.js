@@ -1,4 +1,4 @@
-// Yuki — panneau des conversations (barre latérale).
+// Yuki — panneau des conversations (barre latérale + menu téléphone).
 //
 // Composant autonome, monté par id (`#sessions-sidebar`) depuis `app.js`.
 // Rendu PUREMENT DOM (aucune injection HTML directe), aucune ressource externe,
@@ -7,10 +7,15 @@
 // via l'API CSSOM — le projet l'utilise déjà pour l'auto-croissance du champ de
 // saisie (voir `app.js`), et la CSP ne s'applique pas aux mutations CSSOM.
 //
-// Actions : clic pour BASCULER, CLIC DROIT pour le menu contextuel
-// (épingler / renommer / supprimer). PAS de bouton « trois points » (choix
-// utilisateur explicite). La suppression passe par `HolafModal` (jamais de
-// confirmation NATIVE du navigateur) et MET DE CÔTÉ.
+// Actions : clic pour BASCULER, CLIC DROIT (ou APPUI LONG au doigt) pour le
+// menu contextuel du TITRE (épingler / renommer / mettre de côté / conversation
+// dédiée…). PAS de bouton « trois points » (choix utilisateur explicite). La
+// mise de côté passe par `HolafModal` (jamais de confirmation NATIVE du
+// navigateur).
+//
+// ⚠️ Le MÊME composant rend AUSSI la liste du menu téléphone (`extraLists`) :
+// mêmes données, mêmes indicateurs (non lu, en cours, actif, épinglées), même
+// menu contextuel — aucun second panneau à maintenir.
 //
 // Le panneau peut recevoir un élément `footer` (encart agents) monté SOUS la
 // liste, dans la même colonne interne : il profite du repli/dépli de la barre.
@@ -23,6 +28,7 @@
 
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { HolafIcons } from "./vendor/holaf/holaf-icons.js";
+import { attachLongPress } from "./long-press.js";
 import {
   composeConversationLabel,
   formatUnreadBadge,
@@ -40,8 +46,19 @@ if (typeof window !== "undefined") {
 /** Repli d'affichage quand aucune conversation n'a de titre exploitable. */
 export const UNTITLED = "Conversation sans titre";
 
+/**
+ * Libellé de l'entrée « conversation dédiée » du MENU DU TITRE.
+ * ⚠️ C'est désormais le SEUL déclencheur (il n'y a plus de bouton dans le
+ * composeur, ni sur téléphone ni sur bureau). Le parcours lui-même reste
+ * `recap-dedicated.js` : on ne fait que le rebrancher.
+ */
+export const RECAP_MENU_LABEL = "Conversation dédiée…";
+
 /** Longueur maximale d'un titre dérivé des premiers mots d'un message. */
 const MAX_TITLE_CHARS = 60;
+
+/** Longueur maximale de l'aperçu du dernier message (menu téléphone). */
+const MAX_EXCERPT_CHARS = 90;
 
 /** Normalise un titre sur une seule ligne (espaces compactés, bornes retirées). */
 export function normalizeTitle(value) {
@@ -110,6 +127,43 @@ export function formatDate(iso) {
   }
 }
 
+/**
+ * Heure courte pour le menu téléphone : « 14:32 » si la date est AUJOURD'HUI,
+ * sinon la date courte (« 8 oct. »). Chaîne vide si inconnue/illisible.
+ *
+ * @param {string|null|undefined} iso date ISO de dernière activité.
+ * @param {Date} [now] instant de référence (injectable pour les tests).
+ */
+export function formatHour(iso, now = new Date()) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (!sameDay) return formatDate(iso);
+  try {
+    return new Intl.DateTimeFormat("fr-FR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  } catch {
+    return "";
+  }
+}
+
+/** Aperçu borné d'un message (jamais un pavé dans la liste). */
+export function excerptFor(info, title) {
+  const excerpt = normalizeTitle(info?.excerpt);
+  if (!excerpt) return "";
+  // Un extrait identique au titre n'apprend rien : on ne le répète pas.
+  if (excerpt.toLowerCase() === normalizeTitle(title).toLowerCase()) return "";
+  return excerpt.length <= MAX_EXCERPT_CHARS
+    ? excerpt
+    : `${excerpt.slice(0, MAX_EXCERPT_CHARS - 1).trimEnd()}…`;
+}
+
 /** Clé `localStorage` de l'état déplié de la barre latérale (`"true"`/`"false"`). */
 export const SIDEBAR_EXPANDED_KEY = "yuki-sidebar-expanded";
 
@@ -165,7 +219,12 @@ function el(tag, attrs = {}, text) {
  * @param {(id: string, title: string) => void} deps.onRename
  * @param {(id: string) => void} deps.onSetAside
  * @param {(id: string, pinned: boolean) => void} deps.onPin
+ * @param {(id: string) => void} [deps.onRecapDedicated] entrée « Conversation
+ *   dédiée… » du menu du titre (parcours `recap-dedicated.js`).
  * @param {HTMLElement} [deps.footer] encart fixe en bas de la barre (agents).
+ * @param {Array<{list: HTMLElement, empty?: HTMLElement}>} [deps.extraLists]
+ *   cibles SUPPLÉMENTAIRES (menu téléphone) : même rendu, classe de ligne
+ *   `.mnav-conv` (les mesures E2E de la barre latérale restent sans ambiguïté).
  * @returns {{ update(sessions: unknown, activeId: unknown, busyIds?: string[], unread?: Record<string, number>): void, setBusy(ids: string[]): void, setUnread(counts: Record<string, number>): void, closeMenu(): void }}
  */
 export function initSessionsPanel(deps) {
@@ -177,6 +236,7 @@ export function initSessionsPanel(deps) {
   const onRename = deps.onRename ?? (() => undefined);
   const onSetAside = deps.onSetAside ?? (() => undefined);
   const onPin = deps.onPin ?? (() => undefined);
+  const onRecapDedicated = deps.onRecapDedicated ?? (() => undefined);
 
   let sessions = [];
   let activeId = null;
@@ -195,6 +255,9 @@ export function initSessionsPanel(deps) {
   let expanded = readExpanded();
   let menuTargetId = null;
   let pinItem = null;
+  let recapItem = null;
+  /** Cibles de rendu : la barre latérale (`rail`) + les menus téléphone (`menu`). */
+  const targets = [];
 
   // ─── Squelette ──────────────────────────────────────────────────────────
   const inner = el("div", { class: "sidebar__inner" });
@@ -238,7 +301,22 @@ export function initSessionsPanel(deps) {
   if (deps.footer instanceof Node) inner.append(deps.footer);
   root.replaceChildren(inner);
 
-  // ─── Menu contextuel (clic droit) ───────────────────────────────────────
+  // ─── Cibles de rendu ───────────────────────────────────────────────────
+  // La barre latérale (bureau) est rendue EXACTEMENT comme avant ; les cibles
+  // supplémentaires (menu téléphone) reçoivent le même contenu, avec les
+  // informations en plus (aperçu du dernier message, jour/heure).
+  targets.push({ list, empty: null, variant: "rail" });
+  for (const extra of Array.isArray(deps.extraLists) ? deps.extraLists : []) {
+    if (extra && extra.list instanceof Node) {
+      targets.push({
+        list: extra.list,
+        empty: extra.empty instanceof Node ? extra.empty : null,
+        variant: "menu",
+      });
+    }
+  }
+
+  // ─── Menu contextuel (clic droit / appui long) ─────────────────────────
   const menu = el("div", { class: "ctx-menu", role: "menu" });
   menu.hidden = true;
   document.body.appendChild(menu);
@@ -251,7 +329,15 @@ export function initSessionsPanel(deps) {
     menu.removeAttribute("style");
   }
 
-  function openMenu(id, anchor) {
+  /**
+   * Ouvre le menu du TITRE.
+   *
+   * @param {string} id conversation ciblée.
+   * @param {HTMLElement} anchor ancre (ligne de la conversation).
+   * @param {{x: number, y: number}} [point] point de l'appui long (tactile).
+   *   Sans lui, le menu s'ouvre sous l'ancre (clic droit), comme avant.
+   */
+  function openMenu(id, anchor, point) {
     menuTargetId = id;
     // Le libellé de l'action d'épinglage BASCULE selon l'état courant de la
     // conversation ciblée (Épingler / Désépingler).
@@ -264,19 +350,33 @@ export function initSessionsPanel(deps) {
         isPinned ? "Désépingler la conversation" : "Épingler la conversation",
       );
     }
+    // « Conversation dédiée… » : TOUJOURS proposée. Le parcours récapitule le
+    // fil FOCALISÉ (`recap-dedicated.js`) ; sur une autre conversation,
+    // `app.js` l'OUVRE d'abord (`switch`) puis déclenche le parcours dès que le
+    // serveur confirme — l'entrée n'est donc jamais une promesse en l'air, et
+    // jamais une fonction absente.
+    if (recapItem) {
+      const isActive = typeof activeId === "string" && id === activeId;
+      recapItem.title = isActive
+        ? "Récapituler cette conversation et continuer dans un nouveau fil dédié."
+        : "Ouvrir cette conversation, puis la récapituler dans un nouveau fil dédié.";
+      recapItem.setAttribute("aria-label", RECAP_MENU_LABEL);
+    }
     menu.hidden = false;
     // Position CSSOM : `position: fixed` échappe au recadrage de la barre
     // latérale (aucun ancêtre `transform`). Jamais de `style=` dans le markup.
     const rect = anchor.getBoundingClientRect();
     const width = menu.offsetWidth || 200;
     const height = menu.offsetHeight || 128;
-    let left = rect.left + 8;
-    let top = rect.bottom + 4;
+    let left = point ? point.x : rect.left + 8;
+    let top = point ? point.y : rect.bottom + 4;
     if (left + width > window.innerWidth - 8) {
       left = Math.max(8, window.innerWidth - width - 8);
     }
     if (top + height > window.innerHeight - 8) {
-      top = Math.max(8, rect.top - height - 4);
+      // Appui long : on remonte le menu AU-DESSUS du doigt ; clic droit : on
+      // le bascule au-dessus de l'ancre (comportement historique).
+      top = point ? Math.max(8, point.y - height) : Math.max(8, rect.top - height - 4);
     }
     menu.style.left = `${Math.round(left)}px`;
     menu.style.top = `${Math.round(top)}px`;
@@ -317,6 +417,40 @@ export function initSessionsPanel(deps) {
     genTitle.disabled = true;
     genTitle.title = "Bientôt disponible (lot suivant).";
 
+    // « Conversation dédiée… » — EX-déclencheur du composeur, désormais une
+    // entrée de CE menu (téléphone ET bureau). Le parcours n'est pas réécrit :
+    // `onRecapDedicated` appelle `recapDedicated.open()` (app.js).
+    recapItem = el(
+      "button",
+      { class: "ctx-menu__item", type: "button", role: "menuitem" },
+      RECAP_MENU_LABEL,
+    );
+    recapItem.addEventListener("click", () => {
+      const id = menuTargetId;
+      closeMenu();
+      if (id) onRecapDedicated(id);
+    });
+
+    // La mise de côté EST la seule « suppression » offerte par le serveur
+    // (`setAside` : déplacement récupérable dans `conversations-supprimees/`).
+    // Le libellé le DIT désormais. L'entrée « Supprimer » reste présente mais
+    // DÉSACTIVÉE : aucune suppression définitive n'existe côté serveur, et on
+    // n'invente pas une action destructive qui promettrait l'irréversible.
+    const setAside = el(
+      "button",
+      {
+        class: "ctx-menu__item ctx-menu__item--danger",
+        type: "button",
+        role: "menuitem",
+      },
+      "Mettre de côté",
+    );
+    setAside.addEventListener("click", () => {
+      const id = menuTargetId;
+      closeMenu();
+      if (id) void confirmSetAside(id);
+    });
+
     const del = el(
       "button",
       {
@@ -326,17 +460,18 @@ export function initSessionsPanel(deps) {
       },
       "Supprimer",
     );
-    del.addEventListener("click", () => {
-      const id = menuTargetId;
-      closeMenu();
-      if (id) void confirmSetAside(id);
-    });
+    del.disabled = true;
+    del.title =
+      "Aucune suppression définitive n'existe : « Mettre de côté » déplace le fil, récupérable à la main.";
 
     menu.append(
-      pinItem,
       rename,
+      pinItem,
       genTitle,
       el("div", { class: "ctx-menu__sep", role: "separator" }),
+      recapItem,
+      el("div", { class: "ctx-menu__sep", role: "separator" }),
+      setAside,
       del,
     );
   }
@@ -400,11 +535,22 @@ export function initSessionsPanel(deps) {
   newBtn.addEventListener("click", () => onNew());
 
   // ─── Rendu de la liste ───────────────────────────────────────────────────
-  function renderItem(info) {
+  /**
+   * Ligne de conversation.
+   *
+   * @param {object} info session (`WireSession`).
+   * @param {"rail"|"menu"} variant `rail` = barre latérale (bureau, rendu
+   *   INCHANGÉ) ; `menu` = menu téléphone (même contenu + aperçu + jour/heure).
+   */
+  function renderItem(info, variant = "rail") {
     const active = info.id === activeId;
     const isPinned = Boolean(info.pinned);
+    const menuVariant = variant === "menu";
+    const baseClass = menuVariant ? "mnav-conv" : "conv";
     const item = el("div", {
-      class: `conv${active ? " conv--active" : ""}${isPinned ? " conv--pinned" : ""}`,
+      class: `${baseClass}${active ? (menuVariant ? " mnav-conv--active" : " conv--active") : ""}${
+        isPinned ? (menuVariant ? " mnav-conv--pinned" : " conv--pinned") : ""
+      }`,
       role: "button",
       tabindex: "0",
       "data-id": info.id,
@@ -435,18 +581,45 @@ export function initSessionsPanel(deps) {
     );
     item.appendChild(avatar);
     const main = el("span", { class: "conv__main" });
-    main.append(
-      el("span", { class: "conv__title" }, conversationTitle(info)),
-      el(
-        "span",
-        { class: "conv__meta" },
-        [formatDate(info.updatedAt), formatMessageCount(info.messageCount)]
-          .filter(Boolean)
-          .join(" · "),
-      ),
-    );
+    const titleText = conversationTitle(info);
+    main.append(el("span", { class: "conv__title" }, titleText));
+    if (menuVariant) {
+      // Aperçu du dernier message (le serveur expose le premier message de la
+      // conversation comme extrait) : la liste téléphone doit dire de QUOI
+      // parle le fil, pas seulement son titre.
+      const excerpt = excerptFor(info, titleText);
+      if (excerpt) main.append(el("span", { class: "conv__excerpt" }, excerpt));
+      main.append(
+        el(
+          "span",
+          { class: "conv__meta" },
+          formatMessageCount(info.messageCount),
+        ),
+      );
+    } else {
+      main.append(
+        el(
+          "span",
+          { class: "conv__meta" },
+          [formatDate(info.updatedAt), formatMessageCount(info.messageCount)]
+            .filter(Boolean)
+            .join(" · "),
+        ),
+      );
+    }
     item.appendChild(main);
+    if (menuVariant) {
+      // Colonne de droite : jour/heure + nombre de messages (l'heure complète
+      // n'apparaît que pour aujourd'hui, sinon la date courte).
+      const aside = el("span", { class: "mnav-conv__aside" });
+      const time = formatHour(info.updatedAt);
+      if (time) aside.append(el("span", { class: "mnav-conv__time" }, time));
+      item.appendChild(aside);
+    }
 
+    // APPUI LONG (tactile) : le clic droit n'existe pas au doigt. Armé AVANT
+    // l'écouteur de clic, et le clic qui suit est absorbé (voir long-press.js).
+    attachLongPress(item, (point) => openMenu(info.id, item, point));
     item.addEventListener("click", () => onSwitch(info.id));
     item.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
@@ -466,6 +639,15 @@ export function initSessionsPanel(deps) {
     });
     applyIndicators(item, info.id);
     return item;
+  }
+
+  /** Toutes les lignes rendues, TOUTES cibles confondues (barre + menu). */
+  function itemsByIdAll() {
+    const items = [];
+    for (const target of targets) {
+      for (const item of target.list.querySelectorAll("[data-id]")) items.push(item);
+    }
+    return items;
   }
 
   /**
@@ -494,9 +676,15 @@ export function initSessionsPanel(deps) {
   }
 
   function render() {
-    list.replaceChildren();
-    for (const info of sessions) {
-      if (info && typeof info.id === "string") list.appendChild(renderItem(info));
+    for (const target of targets) {
+      target.list.replaceChildren();
+      for (const info of sessions) {
+        if (info && typeof info.id === "string") {
+          target.list.appendChild(renderItem(info, target.variant));
+        }
+      }
+      // État vide EXPLICITE dans le menu téléphone (jamais un cadre muet).
+      if (target.empty) target.empty.hidden = sessions.length > 0;
     }
   }
 
@@ -529,7 +717,7 @@ export function initSessionsPanel(deps) {
      */
     setBusy(ids) {
       busyIds = new Set(Array.isArray(ids) ? ids : []);
-      for (const item of list.querySelectorAll(".conv")) {
+      for (const item of itemsByIdAll()) {
         applyIndicators(item, item.getAttribute("data-id") ?? "");
       }
     },
@@ -539,7 +727,7 @@ export function initSessionsPanel(deps) {
      */
     setUnread(counts) {
       unreadCounts = counts && typeof counts === "object" ? { ...counts } : {};
-      for (const item of list.querySelectorAll(".conv")) {
+      for (const item of itemsByIdAll()) {
         applyIndicators(item, item.getAttribute("data-id") ?? "");
       }
     },

@@ -234,8 +234,19 @@ check("une session d'origine est persistée", Object.keys(originBefore).length >
 const initialConvs = await evaluate(`document.querySelectorAll('.conv').length`);
 
 /* ═══════════════════════ 2) Déclencheur + sujet ══════════════════════════ */
-check("le déclencheur est présent dans le composeur", await evaluate(`!!document.getElementById('recap-dedicated')`));
-await evaluate(`document.getElementById('recap-dedicated').click()`);
+check(
+  "« Conversation dédiée… » est dans le MENU DU TITRE (plus près du bouton stop), via le clic droit",
+  (await evaluate(`(() => {
+    const item = document.querySelector('.conv--active') || document.querySelector('.conv');
+    if (!item) return false;
+    const r = item.getBoundingClientRect();
+    item.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 12, clientY: r.top + 12 }));
+    const b = [...document.querySelectorAll('.ctx-menu__item')].find((x) => x.textContent.trim().startsWith('Conversation dédiée'));
+    const nearStop = !!document.querySelector('.composer #recap-dedicated');
+    return Boolean(b) && !b.disabled && !nearStop;
+  })()`)) === true,
+);
+await clickByText(".ctx-menu__item", "Conversation dédiée");
 check("la saisie du SUJET s'ouvre (HolafModal)", await waitFor(`!!document.querySelector('.holaf-modal-input')`));
 await shot("recap-subject");
 await evaluate(`(() => {

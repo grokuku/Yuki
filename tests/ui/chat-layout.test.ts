@@ -53,9 +53,37 @@ describe("layout — barre latérale repliée/dépliée et fil pleine largeur", 
     expect(css).toContain(".empty-state__logo");
   });
 
-  it("fenêtre étroite : la barre se déplie PAR-DESSUS (média ≤ 640 px)", () => {
-    expect(css).toContain("@media (max-width: 640px)");
-    expect(css).toMatch(/@media \(max-width: 640px\)[\s\S]*\.sidebar\s*\{[^}]*position:\s*absolute/s);
+  it("TÉLÉPHONE : la barre latérale DISPARAÎT (≤ 767 px, ou paysage de téléphone)", () => {
+    // Un seul seuil, partagé avec le JS (`MOBILE_MEDIA_QUERY`) : en dessous,
+    // plus de rail NI de bouton de repli, et le fil prend toute la largeur.
+    expect(css).toContain(
+      "@media (max-width: 767px), (max-height: 480px) and (pointer: coarse)",
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.sidebar\s*\{[^}]*display:\s*none/s,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 767px\)[\s\S]*?\.shell\s*\{[^}]*flex-direction:\s*column/s,
+    );
+    // L'ancien média étroit (rail de 56 px par-dessus le fil) a disparu.
+    expect(css).not.toContain("@media (max-width: 640px)");
+  });
+
+  it("TÉLÉPHONE : les trois menus sont dans le markup, icônes via la brique", () => {
+    const html = ui("index.html");
+    expect(html).toContain('id="mobile-nav"');
+    expect(html).toContain('data-nav="conversations"');
+    expect(html).toContain('data-nav="agents"');
+    expect(html).toContain('data-nav="config"');
+    expect(html).toContain('data-panel="conversations"');
+    expect(html).toContain('data-panel="agents"');
+    expect(html).toContain('data-panel="config"');
+    // Icônes = brique holaf-icons (jamais un SVG écrit à la main).
+    expect(html).not.toContain("<svg");
+    expect(html).toContain('data-holaf-icon="gear"');
+    expect(css).toMatch(/\.mnav\s*\{[^}]*display:\s*none/s);
+    expect(css).toContain(".mnav__btn");
+    expect(css).toContain('transform: rotate(180deg)');
   });
 
   it("tableaux larges : défilement horizontal INTERNE à la bulle", () => {

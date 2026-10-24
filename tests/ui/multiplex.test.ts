@@ -65,8 +65,10 @@ describe("sessions-panel.js — indicateur « en cours » dans la LISTE", () => 
   });
 
   it("met à jour l'ensemble « en cours » SANS reconstruire la liste", () => {
-    // `setBusy` bascule la classe d'items EXISTANTS (pas de `render()`).
-    expect(panel).toMatch(/setBusy\(ids\) \{[\s\S]*?querySelectorAll\("\.conv"\)/);
+    // `setBusy` bascule la classe d'items EXISTANTS (pas de `render()`), dans
+    // TOUTES les cibles de rendu (barre latérale + menu téléphone).
+    expect(panel).toMatch(/setBusy\(ids\) \{[\s\S]*?applyIndicators\(item/);
+    expect(panel).toMatch(/itemsByIdAll\(\) \{[\s\S]*?querySelectorAll\("\[data-id\]"\)/);
   });
 
   it("reste sans injection HTML (CSP stricte)", () => {

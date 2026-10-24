@@ -68,10 +68,16 @@ describe("UI statique servie par le gateway", () => {
 
   it("le bandeau ne contient PLUS le raccourci « Voix » (doublon de Configuration)", async () => {
     const body = await (await fetch(`${baseUrl}/`)).text();
+    // ⚠️ Périmètre = le BANDEAU (`.topbar`) : le menu téléphone « Config » a,
+    // lui, une entrée « Voix (TTS) » qui mène à la même section (navigation).
+    const topbar = body.slice(
+      body.indexOf('<header class="topbar">'),
+      body.indexOf("</header>"),
+    );
 
     // Le raccourci redondant vers l'onglet Voix est retiré (demande utilisateur).
-    expect(body).not.toContain('href="/config#voix"');
-    expect(body).not.toMatch(/>\s*Voix\s*</);
+    expect(topbar).not.toContain('href="/config#voix"');
+    expect(topbar).not.toMatch(/>\s*Voix\s*</);
 
     // Rien d'autre n'a disparu du bandeau : Configuration, connexion, état de
     // session, sélecteur de thème, bascule jour/nuit et contrôle MUET (volume).

@@ -80,7 +80,10 @@ export function validatePreview(title, recap) {
  * Câble l'action « conversation dédiée ».
  *
  * @param {object} deps
- * @param {HTMLElement} deps.trigger bouton déclencheur.
+ * @param {HTMLElement} [deps.trigger] bouton déclencheur HISTORIQUE. Il n'y en a
+ *   plus dans le composeur : le déclencheur est l'entrée « Conversation dédiée… »
+ *   du MENU DU TITRE (`sessions-panel.js`), qui appelle `open()` ci-dessous.
+ *   Le paramètre reste accepté (aucun autre appelant à casser).
  * @param {(payload: object) => boolean} deps.send envoi d'une trame au gateway.
  * @param {() => (string|null)} deps.getSessionId conversation FOCALISÉE courante.
  * @param {object} deps.modal brique `HolafModal`.
@@ -303,6 +306,14 @@ export function createRecapDedicated({
 
   return {
     handleFrame,
+    /**
+     * Déclenche le parcours (saisie du sujet → récapitulatif → aperçu). C'est
+     * CE point d'entrée qu'utilise le menu du titre ; le parcours lui-même
+     * (trames `recap_*`, aperçu, création) est inchangé.
+     */
+    open() {
+      void onTrigger();
+    },
     isBusy: () => pending !== null,
     destroy() {
       reset();

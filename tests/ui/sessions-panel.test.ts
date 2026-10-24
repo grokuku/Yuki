@@ -10,8 +10,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  RECAP_MENU_LABEL,
   conversationTitle,
+  excerptFor,
   formatDate,
+  formatHour,
   formatMessageCount,
   initialsFor,
   isDuplicateTitle,
@@ -87,6 +90,26 @@ describe("formatage (compteur, initiales, date)", () => {
     expect(normalizeTitle("  a\n b\tc ")).toBe("a b c");
     expect(normalizeTitle(undefined)).toBe("");
   });
+
+  it("heure du menu téléphone : HH:mm aujourd'hui, date courte sinon", () => {
+    const now = new Date("2026-10-23T15:00:00.000Z");
+    expect(formatHour("2026-10-23T12:34:00.000Z", now)).toMatch(/^\d{2}:\d{2}$/);
+    expect(formatHour("2026-10-08T10:00:00.000Z", now)).toMatch(/oct/);
+    expect(formatHour(undefined, now)).toBe("");
+    expect(formatHour("pas une date", now)).toBe("");
+  });
+
+  it("aperçu borné, jamais une redite du titre", () => {
+    expect(excerptFor({ excerpt: "Bonjour, question" }, "Autre titre")).toBe(
+      "Bonjour, question",
+    );
+    // Extrait identique au titre (repli de `conversationTitle`) : rien à dire.
+    expect(excerptFor({ excerpt: "Mon titre" }, "Mon titre")).toBe("");
+    expect(excerptFor({}, "Mon titre")).toBe("");
+    const long = excerptFor({ excerpt: "a".repeat(200) }, "Titre");
+    expect(long.length).toBeLessThanOrEqual(90);
+    expect(long.endsWith("…")).toBe(true);
+  });
 });
 
 describe("garde-fous statiques de sessions-panel.js (CSP, choix utilisateur)", () => {
@@ -102,6 +125,28 @@ describe("garde-fous statiques de sessions-panel.js (CSP, choix utilisateur)", (
     expect(source).not.toContain("conv__dots");
     expect(source).toContain("contextmenu");
     expect(source).toContain('class: "ctx-menu"');
+  });
+
+  it("le menu du TITRE porte « Conversation dédiée… » et l'appui long tactile", () => {
+    expect(RECAP_MENU_LABEL).toBe("Conversation dédiée…");
+    expect(source).toContain("RECAP_MENU_LABEL");
+    expect(source).toContain("onRecapDedicated");
+    // Appui long partagé (tactile) ; le clic droit bureau reste câblé.
+    expect(source).toContain("attachLongPress");
+    expect(source).toContain("openMenu(info.id, item, point)");
+  });
+
+  it("« Mettre de côté » est l'action ; « Supprimer » n'invente pas l'irréversible", () => {
+    expect(source).toContain("Mettre de côté");
+    expect(source).toContain("del.disabled = true");
+    expect(source).toContain("Aucune suppression définitive");
+  });
+
+  it("rend le MÊME contenu dans le menu téléphone (cible supplémentaire)", () => {
+    expect(source).toContain("extraLists");
+    expect(source).toContain("mnav-conv");
+    expect(source).toContain("excerptFor");
+    expect(source).toContain("formatHour");
   });
 
   it("réserve la place du titre par modèle (désactivé, lot suivant)", () => {

@@ -362,8 +362,10 @@ const occurrences = (roundTrip.threadText.match(/Réponse (PREMIERE|SECONDE)/g) 
 check("aller-retour : AUCUN doublon (une seule réponse affichée)", occurrences === 1, `${occurrences} occurrence(s)`);
 
 /* ═══════════════════════ 5) Menu contextuel (clic droit) ═════════════════ */
+// Sur la conversation OUVERTE : c'est elle que « Conversation dédiée… » cible
+// (le parcours récapitule le fil focalisé).
 await evaluate(`(() => {
-  const c = document.querySelectorAll('.conv')[0];
+  const c = document.querySelector('.conv--active');
   const r = c.getBoundingClientRect();
   c.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 12, clientY: r.top + 12 }));
 })()`);
@@ -375,6 +377,16 @@ check("menu : « Supprimer » présent", menu.menuItems.some((i) => i.text === "
 check(
   "menu : « Titre généré par le modèle » réservé (désactivé)",
   menu.menuItems.some((i) => /modèle/i.test(i.text) && i.disabled === true),
+);
+check(
+  "menu du TITRE : « Conversation dédiée… » présent et ACTIF sur le fil ouvert",
+  menu.menuItems.some((i) => i.text.startsWith("Conversation dédiée") && !i.disabled),
+  menu.menuItems.map((i) => `${i.text}${i.disabled ? " (désactivé)" : ""}`).join(" | "),
+);
+check(
+  "menu du TITRE : « Mettre de côté » (l'action réelle) et « Supprimer » honnêtement désactivé",
+  menu.menuItems.some((i) => i.text === "Mettre de côté") &&
+    menu.menuItems.some((i) => i.text === "Supprimer" && i.disabled === true),
 );
 await shot("chat-sessions-menu");
 await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
@@ -388,7 +400,8 @@ await evaluate(`(() => {
 })()`);
 await sleep(200);
 await evaluate(`(() => {
-  const b = [...document.querySelectorAll('.ctx-menu__item')].find((x) => x.textContent === 'Supprimer');
+  // La mise de côté EST l'action offerte (aucune suppression définitive).
+  const b = [...document.querySelectorAll('.ctx-menu__item')].find((x) => x.textContent === 'Mettre de côté');
   b.click();
 })()`);
 await sleep(350);
@@ -409,19 +422,33 @@ check("état vide : message honnête (« ce n'est pas une erreur »)", /pas une 
 check("état vide : aucune conversation active", !afterDelete.convs.some((c) => c.active));
 await shot("chat-sessions-empty");
 
-/* ═══════════ 7) Fenêtre ÉTROITE : rail 56 px, aucun débordement ══════════ */
-await send("Emulation.setDeviceMetricsOverride", { width: 480, height: 720, deviceScaleFactor: 1, mobile: false });
+/* ═══════════ 7) TÉLÉPHONE (480 px) : plus de rail, barre de menus ═══════ */
+await send("Emulation.setDeviceMetricsOverride", { width: 480, height: 720, deviceScaleFactor: 1, mobile: true });
+await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
 await navigate(`${server.base}/`);
 await waitFor(`document.querySelectorAll('.conv').length >= 1`);
 const narrow = await evaluate(`(() => {
   const sb = document.querySelector('.sidebar');
+  const chat = document.querySelector('#chat');
   return {
-    railWidth: Math.round(sb.getBoundingClientRect().width),
+    sidebarDisplay: getComputedStyle(sb).display,
+    sidebarWidth: Math.round(sb.getBoundingClientRect().width),
+    chatWidth: Math.round(chat.getBoundingClientRect().width),
+    mnav: getComputedStyle(document.querySelector('.mnav')).display,
+    buttons: document.querySelectorAll('.mnav__btn').length,
     overflow: document.documentElement.scrollWidth - window.innerWidth,
   };
 })()`);
-check("fenêtre étroite : rail de 56 px", narrow.railWidth === 56, `${narrow.railWidth} px`);
-check("fenêtre étroite : aucun débordement horizontal du fil", narrow.overflow <= 1, `débordement ${narrow.overflow} px`);
+check(
+  "TÉLÉPHONE (480 px) : barre latérale ABSENTE et le fil prend TOUTE la largeur",
+  narrow.sidebarDisplay === "none" && narrow.sidebarWidth === 0 && narrow.chatWidth === 480,
+  `barre latérale=${narrow.sidebarDisplay}/${narrow.sidebarWidth}px ; fil=${narrow.chatWidth}px`,
+);
+check(
+  "TÉLÉPHONE (480 px) : la barre de trois menus remplace le rail, sans débordement",
+  narrow.mnav === "flex" && narrow.buttons === 3 && narrow.overflow <= 1,
+  `mnav=${narrow.mnav} ; boutons=${narrow.buttons} ; débordement=${narrow.overflow}px`,
+);
 await shot("chat-sessions-narrow");
 
 await stopPage();

@@ -4,7 +4,7 @@
 // curseur `seq` (ni trou ni doublon) et réinitialise son rendu à partir d'un
 // `snapshot` lorsque la fenêtre de rejeu est dépassée ou à la reconnexion.
 
-import { initTheme } from "./theme.js";
+import { getTheme, initTheme, setTheme } from "./theme.js";
 import { createMarkdownRenderer } from "./markdown.js";
 import { decodeTtsFrame } from "./tts-frames.js";
 import { createTtsPlayer } from "./tts-player.js";
@@ -29,6 +29,8 @@ import { initSidebarAgents } from "./sidebar-agents.js";
 import { createApprovalLayer } from "./approval-window.js";
 import { createScrollToBottom } from "./scroll-button.js";
 import { createRecapDedicated } from "./recap-dedicated.js";
+import { iconNode } from "./icons.js";
+import { MOBILE_MEDIA_QUERY, initMobileNav } from "./mobile-nav.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
 import { createSubagentActivity } from "./subagent-activity.js";
 import { createThinkingBlocks } from "./thinking.js";
@@ -389,6 +391,13 @@ function onJobFinished(frame) {
 // on/off envoie `agent_enabled` : le SERVEUR décide du niveau (`disabled` ⇄
 // précédent) et rediffuse la trame `agents` — un seul état, aucune divergence.
 const sidebarAgents = initSidebarAgents({
+  // Menu TÉLÉPHONE « Agents » : même état, même menu de niveau (appui long).
+  extraTargets: [
+    {
+      list: document.getElementById("mnav-agent-list"),
+      empty: document.getElementById("mnav-agent-empty"),
+    },
+  ],
   onToggle: (agentId, enabled) => {
     if (sendRaw({ type: "agent_enabled", agentId, enabled })) return;
     void HolafModal.alert(
@@ -409,24 +418,88 @@ const sidebarAgents = initSidebarAgents({
   },
 });
 
+/** Conversation à OUVRIR avant de déclencher « conversation dédiée » (menu). */
+let pendingRecapId = null;
+let recapSwitchTimer = null;
+/** Délai (ms) au-delà duquel une bascule non confirmée est abandonnée. */
+const RECAP_SWITCH_TIMEOUT_MS = 4000;
+
 const sessionsPanel = initSessionsPanel({
   root: document.getElementById("sessions-sidebar"),
   HolafModal,
   footer: sidebarAgents.element,
+  // Menu TÉLÉPHONE « Conversations » : MÊME rendu, mêmes indicateurs (non lu,
+  // en cours, actif, épinglées), même menu du titre (appui long).
+  extraLists: [
+    {
+      list: document.getElementById("mnav-conv-list"),
+      empty: document.getElementById("mnav-conv-empty"),
+    },
+  ],
   onSwitch: (id) => {
+    mobileNav.close();
     if (id !== sessionId) sendRaw({ type: "switch", sessionId: id });
   },
   onNew: () => {
+    mobileNav.close();
     sendRaw({ type: "new" });
   },
   onRename: (id, title) => {
+    mobileNav.close();
     sendRaw({ type: "rename", sessionId: id, title });
   },
   onSetAside: (id) => {
+    mobileNav.close();
     sendRaw({ type: "setAside", sessionId: id });
   },
   onPin: (id, pinned) => {
     sendRaw({ type: "pin", sessionId: id, pinned });
+  },
+  // Entrée « Conversation dédiée… » du MENU DU TITRE (téléphone ET bureau).
+  // Le parcours n'est pas réécrit : on ouvre celui de `recap-dedicated.js`.
+  // Sur une AUTRE conversation, on l'ouvre d'abord : le parcours repart quand
+  // le serveur a confirmé la bascule (`pendingRecapId`, voir `sessions`).
+  onRecapDedicated: (id) => {
+    mobileNav.close();
+    if (typeof id === "string" && id !== sessionId) {
+      if (sendRaw({ type: "switch", sessionId: id })) {
+        pendingRecapId = id;
+        if (recapSwitchTimer) clearTimeout(recapSwitchTimer);
+        // Filet de sécurité : si la bascule n'aboutit pas (conversation
+        // disparue), on n'ouvre RIEN et on ne laisse pas d'état fantôme.
+        recapSwitchTimer = setTimeout(() => {
+          pendingRecapId = null;
+          recapSwitchTimer = null;
+        }, RECAP_SWITCH_TIMEOUT_MS);
+        return;
+      }
+    }
+    if (recapDedicated) recapDedicated.open();
+  },
+});
+
+/* ─── Navigation TÉLÉPHONE (trois menus déroulants) ───────────────────────
+ * Masquée en bureau par CSS : la barre latérale y reste entière. Sur téléphone,
+ * elle remplace la barre latérale (absente) et donne accès à TOUT ce qu'elle
+ * montrait : conversations (avec aperçu, non lus, en cours, actives, épinglées),
+ * agents (connexion, niveau, dernière activité) et configuration.
+ */
+const mobileNav = initMobileNav({
+  root: document.getElementById("mobile-nav"),
+  layer: document.getElementById("mobile-nav-layer"),
+  onNew: () => {
+    sendRaw({ type: "new" });
+  },
+  getThemeSummary: () => {
+    const select = document.getElementById("theme-family");
+    const family = select?.selectedOptions?.[0]?.textContent?.trim() || "Neutre";
+    const mode = String(getTheme()).endsWith("-light") ? "clair" : "sombre";
+    return `${family} · ${mode}`;
+  },
+  // Bascule clair/sombre en CONSERVANT la famille (même moteur que la topbar).
+  onToggleTheme: () => {
+    const [family, mode] = String(getTheme()).split("-");
+    setTheme(`${family}-${mode === "dark" ? "light" : "dark"}`);
   },
 });
 
@@ -771,9 +844,12 @@ scrollButton = createScrollToBottom({
  * produit un RÉCAPITULATIF EXHAUSTIF (aperçu relisible/corrigeable) puis crée
  * une NOUVELLE conversation dédiée. Le fil d'origine n'est jamais modifié.
  * Le module ne fait QUE présenter et envoyer : toute la logique vit côté
- * serveur (un seul système de conversations, réutilisé). */
+ * serveur (un seul système de conversations, réutilisé).
+ *
+ * ⚠️ Plus de bouton dans le composeur : le déclencheur est l'entrée
+ * « Conversation dédiée… » du MENU DU TITRE (téléphone ET bureau), câblée plus
+ * haut via `onRecapDedicated` → `recapDedicated.open()`. */
 recapDedicated = createRecapDedicated({
-  trigger: document.getElementById("recap-dedicated"),
   send: sendRaw,
   getSessionId: () => sessionId,
   modal: HolafModal,
@@ -1199,6 +1275,16 @@ function handleFrame(frame) {
     // l'état « en cours » ET « non lu » de chacune (indicateurs de la barre).
     sessionsPanel.update(lastSessions, activeId, busyIdList(), unreadBySession);
     setEmptyState(activeId === null);
+    // Bascule demandée depuis « Conversation dédiée… » : le serveur vient de
+    // confirmer que cette conversation est ouverte ⇒ le parcours peut partir.
+    if (pendingRecapId !== null && pendingRecapId === activeId) {
+      pendingRecapId = null;
+      if (recapSwitchTimer) {
+        clearTimeout(recapSwitchTimer);
+        recapSwitchTimer = null;
+      }
+      if (recapDedicated) recapDedicated.open();
+    }
     // Clic sur une notification : on adopte la conversation visée, une seule
     // fois, et seulement si elle existe (sinon on reste sur l'état courant).
     if (!deepLinkHandled && deepLinkSession) {
@@ -1709,6 +1795,32 @@ function connect() {
     }
   });
 }
+
+/* Téléphone : le texte d'invite du composeur est RACCOURCI (la consigne
+ * clavier n'a pas de sens au doigt et débordait du champ sur 360 px). Le texte
+ * du bureau est celui du markup, restauré tel quel hors du dessin téléphone. */
+const DESKTOP_PLACEHOLDER = els.input.getAttribute("placeholder") ?? "";
+const MOBILE_PLACEHOLDER = "Écrivez un message…";
+const mobileMedia =
+  typeof window.matchMedia === "function" ? window.matchMedia(MOBILE_MEDIA_QUERY) : null;
+function syncInputPlaceholder() {
+  const mobile = Boolean(mobileMedia && mobileMedia.matches);
+  els.input.setAttribute(
+    "placeholder",
+    mobile ? MOBILE_PLACEHOLDER : DESKTOP_PLACEHOLDER,
+  );
+}
+syncInputPlaceholder();
+if (mobileMedia && typeof mobileMedia.addEventListener === "function") {
+  mobileMedia.addEventListener("change", syncInputPlaceholder);
+}
+
+/* Bouton STOP : CARRÉ à icône (36×36), sans libellé texte. L'icône `stop` de la
+ * brique holaf-icons est un rectangle en trait ; le CSS la REMPLIT pour obtenir
+ * le carré plein arrondi du dessin validé (aucun SVG écrit à la main). Le bouton
+ * d'ENVOI reste séparé. */
+const stopIcon = iconNode("stop", "icon icon--stop");
+if (stopIcon) els.stop.replaceChildren(stopIcon);
 
 els.send.addEventListener("click", sendMessage);
 els.stop.addEventListener("click", abort);

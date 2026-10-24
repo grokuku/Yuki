@@ -23,6 +23,13 @@
 // connexion) tient dans les 56 px ; le nom et l'état ne s'affichent qu'à 280 px
 // (CSS, `.sidebar:hover …`). En rail, l'entrée EST la pastille : le clic droit
 // dessus ouvre le menu.
+//
+// ⚠️ TÉLÉPHONE : le même composant rend AUSSI la liste du menu « Agents »
+// (`extraTargets`), avec la pastille de connexion, le nom, la DERNIÈRE ACTIVITÉ
+// et le NIVEAU de garde-fou visible. Le menu de niveau est le MÊME (un seul
+// système), ouvert par clic droit sur bureau et par APPUI LONG au doigt.
+
+import { attachLongPress } from "./long-press.js";
 
 /** Libellés COURTS de niveau pour l'encart (le détail vit dans /config). */
 const LEVEL_LABELS = {
@@ -30,6 +37,18 @@ const LEVEL_LABELS = {
   always: "valide tout",
   destructive: "valide le destructif",
   never: "sans validation",
+};
+
+/**
+ * Libellés COMPACTS du niveau, pour la pastille du menu téléphone : ils disent
+ * en UN MOT ce que l'agent a le droit de faire. Ce sont les mêmes 4 niveaux
+ * (D118) que `LEVEL_MENU_ITEMS`, jamais un second vocabulaire.
+ */
+export const LEVEL_BADGES = {
+  disabled: "Désactivé",
+  always: "Chaque cmd",
+  destructive: "Destructrices",
+  never: "Aucune",
 };
 
 /**
@@ -101,6 +120,47 @@ export function agentLevelLabel(level) {
   return LEVEL_LABELS[level] ?? String(level ?? "");
 }
 
+/** Libellé COMPACT du niveau (« Destructrices », « Chaque cmd », « Aucune »). */
+export function agentLevelBadge(level) {
+  return LEVEL_BADGES[level] ?? agentLevelLabel(level);
+}
+
+/**
+ * Dernière activité d'un agent, en clair : « vu à 14:32 » (aujourd'hui),
+ * « vu le 8 oct. » (autre jour), « jamais connecté » (aucune trace).
+ * ⚠️ Jamais une date inventée : sans `lastSeen` exploitable, on le DIT.
+ *
+ * @param {string|null|undefined} lastSeen date ISO fournie par le serveur.
+ * @param {Date} [now] instant de référence (injectable pour les tests).
+ */
+export function agentLastSeenLabel(lastSeen, now = new Date()) {
+  if (lastSeen === null || lastSeen === undefined || lastSeen === "") {
+    return "jamais connecté";
+  }
+  const date = new Date(lastSeen);
+  if (Number.isNaN(date.getTime())) return "jamais connecté";
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  try {
+    if (sameDay) {
+      const hour = new Intl.DateTimeFormat("fr-FR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(date);
+      return `vu à ${hour}`;
+    }
+    const day = new Intl.DateTimeFormat("fr-FR", {
+      day: "numeric",
+      month: "short",
+    }).format(date);
+    return `vu le ${day}`;
+  } catch {
+    return "jamais connecté";
+  }
+}
+
 /** `createElement` + attributs, sans aucune injection HTML directe. */
 function el(tag, attrs = {}, text) {
   const node = document.createElement(tag);
@@ -122,6 +182,9 @@ function el(tag, attrs = {}, text) {
  * @param {(agentId: string, level: string) => void} [deps.onSetLevel]
  *   Appelé au choix d'un niveau dans le menu contextuel ; l'application envoie
  *   la trame `agent_level` (même état que le on/off : `disabled` = off).
+ * @param {Array<{list: HTMLElement, empty?: HTMLElement}>} [deps.extraTargets]
+ *   cibles SUPPLÉMENTAIRES (menu téléphone « Agents ») : même état, même menu de
+ *   niveau, avec la dernière activité et le niveau de garde-fou en pastille.
  * @returns {{ element: HTMLElement, update(agents: unknown): void, closeMenu(): void }}
  */
 export function initSidebarAgents(deps = {}) {
@@ -145,6 +208,18 @@ export function initSidebarAgents(deps = {}) {
   const empty = el("p", { class: "side-agents__empty" }, "Aucun agent appairé.");
 
   section.append(head, list, empty);
+
+  /** Cibles de rendu : l'encart de la barre + le menu téléphone. */
+  const targets = [{ list, empty, variant: "rail" }];
+  for (const extra of Array.isArray(deps.extraTargets) ? deps.extraTargets : []) {
+    if (extra && extra.list instanceof Node) {
+      targets.push({
+        list: extra.list,
+        empty: extra.empty instanceof Node ? extra.empty : null,
+        variant: "menu",
+      });
+    }
+  }
 
   /** Niveau courant par agent (mis à jour à chaque trame `agents`). */
   const levels = new Map();
@@ -279,13 +354,23 @@ export function initSidebarAgents(deps = {}) {
     true,
   );
 
-  /** Rendu d'un agent (hors révoqués, filtrés en amont). */
-  function renderAgent(agent) {
+  /**
+   * Rendu d'un agent (hors révoqués, filtrés en amont).
+   *
+   * @param {object} agent agent de la trame `agents`.
+   * @param {"rail"|"menu"} variant `rail` = encart de la barre (INCHANGÉ) ;
+   *   `menu` = menu téléphone (niveau en pastille + dernière activité).
+   */
+  function renderAgent(agent, variant = "rail") {
+    const menuVariant = variant === "menu";
     const enabled = isAgentEnabled(agent);
     const connected = isAgentConnected(agent);
     const connectionLabel = agentConnectionLabel(agent);
     const label = agentLabel(agent);
-    const item = el("li", { class: "side-agent" });
+    // ⚠️ La classe de LIGNE diffère en menu (`.mnav-agent`) : les sélecteurs E2E
+    // du bureau (`.side-agent`) restent sans ambiguïté. Les classes INTERNES
+    // (pastille, nom, état) sont les mêmes — un seul système visuel.
+    const item = el("li", { class: menuVariant ? "mnav-agent" : "side-agent" });
     item.setAttribute("data-agent-id", String(agent.agentId ?? ""));
 
     // ⚠️ La PASTILLE (`.side-agent__dot`) indique UNIQUEMENT la CONNEXION
@@ -317,16 +402,45 @@ export function initSidebarAgents(deps = {}) {
     badge.addEventListener("click", () => onToggle(agent.agentId, !enabled));
 
     const main = el("span", { class: "side-agent__main" });
-    main.append(
-      el("span", { class: "side-agent__name" }, label),
-      el(
-        "span",
-        { class: "side-agent__state" },
-        [agentLevelLabel(agent.level), connectionLabel.toLowerCase()]
-          .filter(Boolean)
-          .join(" · "),
-      ),
-    );
+    if (menuVariant) {
+      // Menu téléphone : connexion + DERNIÈRE ACTIVITÉ, et le NIVEAU visible en
+      // pastille (une information de sécurité ne doit pas être devinée).
+      main.append(
+        el("span", { class: "side-agent__name" }, label),
+        el(
+          "span",
+          { class: "side-agent__state" },
+          [connectionLabel, agentLastSeenLabel(agent.lastSeen)]
+            .filter(Boolean)
+            .join(" · "),
+        ),
+        el(
+          "span",
+          {
+            class: "mnav-agent__level",
+            "data-level": String(agent.level ?? ""),
+          },
+          agentLevelBadge(agent.level),
+        ),
+      );
+    } else {
+      main.append(
+        el("span", { class: "side-agent__name" }, label),
+        el(
+          "span",
+          { class: "side-agent__state" },
+          [agentLevelLabel(agent.level), connectionLabel.toLowerCase()]
+            .filter(Boolean)
+            .join(" · "),
+        ),
+      );
+    }
+
+    // APPUI LONG (tactile) : même menu de niveau, ouvert au point de l'appui —
+    // puisqu'au doigt le clic droit n'existe pas (voir long-press.js).
+    if (menuVariant) {
+      attachLongPress(item, (point) => openMenuAt(agent.agentId, point.x, point.y));
+    }
 
     // Clic droit (ou touche « Menu contextuel » / Maj+F10) sur TOUTE l'entrée
     // (la pastille EST l'entrée en rail 56 px) : menu de réglage du niveau.
@@ -376,8 +490,11 @@ export function initSidebarAgents(deps = {}) {
         }
       }
     }
-    list.replaceChildren();
-    for (const agent of visible) list.append(renderAgent(agent));
+    for (const target of targets) {
+      target.list.replaceChildren();
+      for (const agent of visible) target.list.append(renderAgent(agent, target.variant));
+      if (target.empty) target.empty.hidden = visible.length > 0;
+    }
 
     count.textContent = visible.length > 0 ? String(visible.length) : "";
     count.hidden = visible.length === 0;
