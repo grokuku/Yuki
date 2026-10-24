@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  COMPACT_MENU_LABEL,
+  DELETE_MENU_LABEL,
   RECAP_MENU_LABEL,
   conversationTitle,
   excerptFor,
@@ -136,10 +138,35 @@ describe("garde-fous statiques de sessions-panel.js (CSP, choix utilisateur)", (
     expect(source).toContain("openMenu(info.id, item, point)");
   });
 
-  it("« Mettre de côté » est l'action ; « Supprimer » n'invente pas l'irréversible", () => {
+  it("« Mettre de côté » reste le déplacement récupérable", () => {
     expect(source).toContain("Mettre de côté");
-    expect(source).toContain("del.disabled = true");
-    expect(source).toContain("Aucune suppression définitive");
+    expect(source).toContain("conversations-supprimees");
+  });
+
+  it("« Supprimer » est une VRAIE suppression définitive, confirmée et nommée", () => {
+    // Le bouton n'est plus grisé : le serveur sait effacer le fil.
+    expect(DELETE_MENU_LABEL).toBe("Supprimer");
+    expect(source).not.toContain("del.disabled = true");
+    expect(source).toContain("DELETE_MENU_LABEL");
+    // La confirmation NOMME la conversation et dit l'irréversibilité.
+    expect(source).toContain("confirmDelete(id)");
+    // ⚠️ La suppression est CONDITIONNÉE au résultat de la fenêtre : aucune
+    // neutralisation « const confirmed = true » ne doit passer inaperçue.
+    expect(source).toMatch(/const confirmed = await modal\.confirm\(\s*`Supprimer définitivement/);
+    expect(source).not.toMatch(/const confirmed = true/);
+    expect(source).toContain("aucune récupération possible");
+    expect(source).toContain("Supprimer définitivement");
+    // …et dit que la mémoire n'est PAS touchée (promesse exacte).
+    expect(source).toContain("La mémoire durable n'est PAS touchée");
+  });
+
+  it("« Compacter… » est dans le MENU DU TITRE (bureau ET menu téléphone)", () => {
+    expect(COMPACT_MENU_LABEL).toBe("Compacter…");
+    expect(source).toContain("COMPACT_MENU_LABEL");
+    expect(source).toContain("onCompact");
+    // Le menu est construit UNE fois, rendu pour le rail ET le menu téléphone.
+    expect(source).toContain("buildMenu()");
+    expect(source).toContain("extraLists");
   });
 
   it("rend le MÊME contenu dans le menu téléphone (cible supplémentaire)", () => {

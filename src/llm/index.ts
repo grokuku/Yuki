@@ -41,6 +41,7 @@ export type {
 
 export {
   AGENT_DIRECTORY_TOOLS,
+  CONVERSATION_ARCHIVE_TOOLS,
   containsForbiddenTool,
   DELEGATE_TOOLS,
   EXECUTION_TOOLS,
@@ -56,6 +57,7 @@ export {
 export type {
   AgentDirectoryToolName,
   BuiltinToolName,
+  ConversationArchiveToolName,
   CustomToolName,
   DelegateToolName,
   ExecutionToolName,

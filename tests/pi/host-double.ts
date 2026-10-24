@@ -15,6 +15,8 @@ import { parseRecapPrompt } from "../../src/recap/prompt.js";
 import { PiHostError } from "../../src/pi/errors.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "../../src/pi/instrumentation.js";
 import type {
+  CompactOptions,
+  CompactOutcome,
   EnsureSessionOptions,
   PiEvent,
   PiEventListener,
@@ -131,6 +133,12 @@ export class FakePiHost implements PiHost {
   private readonly knownSessions: FakeKnownSession[];
   private readonly titles = new Map<string, string>();
   private readonly setAsideIds = new Set<string>();
+  /** Identifiants réellement SUPPRIMÉS (observation des tests). */
+  readonly deletedIds = new Set<string>();
+  /** Identifiants réellement COMPACTÉS (observation des tests). */
+  readonly compactedIds: string[] = [];
+  /** Message d'échec armé pour la prochaine compaction. */
+  private compactError?: string;
   private failSendOnce: boolean;
 
   private sessionId: string;
@@ -184,7 +192,7 @@ export class FakePiHost implements PiHost {
   }
 
   currentSessionId(): string | undefined {
-    return this.sessionId;
+    return this.sessionId.length > 0 ? this.sessionId : undefined;
   }
 
   async ensureSession(target?: EnsureSessionOptions): Promise<SessionState> {
@@ -328,8 +336,14 @@ export class FakePiHost implements PiHost {
   async listSessions(): Promise<SessionInfo[]> {
     const summaries: SessionInfo[] = this.knownSessions
       .filter((session) => !this.setAsideIds.has(session.id))
+      .filter((session) => !this.deletedIds.has(session.id))
       .map((session) => this.summaryFor(session.id, session.file, session.transcript));
-    if (!summaries.some((info) => info.sessionId === this.sessionId)) {
+    // Aucune conversation ouverte (après la suppression de celle qui l'était) :
+    // la liste ne comporte pas d'entrée fantôme d'identifiant vide.
+    if (
+      this.sessionId.length > 0 &&
+      !summaries.some((info) => info.sessionId === this.sessionId)
+    ) {
       summaries.unshift(
         this.summaryFor(this.sessionId, `/fake/${this.sessionId}.jsonl`, this.transcript),
       );
@@ -369,6 +383,55 @@ export class FakePiHost implements PiHost {
   async sessionFileFor(id: string): Promise<string | undefined> {
     if (this.sessionId === id) return `/fake/${id}.jsonl`;
     return this.knownSessions.find((session) => session.id === id)?.file;
+  }
+
+  /**
+   * SUPPRESSION DÉFINITIVE (double) : la conversation quitte la liste et son
+   * fichier n'existe plus. La mémoire n'est pas représentée ici : ce double ne
+   * prouve que le contrat de transport.
+   */
+  async deleteSession(id: string): Promise<void> {
+    const known = this.knownSessions.some((session) => session.id === id);
+    if (!known && this.sessionId !== id) {
+      // MÊME contrat que le vrai host : une cible inconnue est refusée.
+      throw new PiHostError("PI_SESSION_ERROR", "Conversation introuvable.", {
+        sessionId: id,
+      });
+    }
+    this.deletedIds.add(id);
+    const index = this.knownSessions.findIndex((session) => session.id === id);
+    if (index >= 0) this.knownSessions.splice(index, 1);
+    if (this.sessionId === id) {
+      // Plus aucune conversation ouverte ⇒ état vide (comme le vrai host).
+      this.sessionId = "";
+      this.transcript = [];
+      this.partial = "";
+    }
+  }
+
+  /**
+   * COMPACTION FORCÉE (double) : rejoue la passe de mémoire puis la compaction. Le
+   * `compactError` armé permet de prouver le CHEMIN D'ÉCHEC (message honnête).
+   */
+  async compactSession(id: string, options: CompactOptions = {}): Promise<CompactOutcome> {
+    this.compactedIds.push(id);
+    options.onProgress?.({ phase: "memory" });
+    if (this.compactError) {
+      const message = this.compactError;
+      this.compactError = undefined;
+      throw new PiHostError("PI_SESSION_ERROR", message, { sessionId: id });
+    }
+    options.onProgress?.({ phase: "compact" });
+    return {
+      memory: { ran: true, added: 1, updated: 0, removed: 0, skipped: 0, chunks: 1 },
+      tokensBefore: 4000,
+      tokensAfter: 800,
+    };
+  }
+
+  /** Arme l'échec de la PROCHAINE compaction (message rendu tel quel). */
+  failNextCompact(message: string): void {
+    this.compactError = message;
   }
 
   private summaryFor(

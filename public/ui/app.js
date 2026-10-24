@@ -30,6 +30,7 @@ import { unlockAgentWithPassword } from "./password-modal.js";
 import { createApprovalLayer } from "./approval-window.js";
 import { createScrollToBottom } from "./scroll-button.js";
 import { createRecapDedicated } from "./recap-dedicated.js";
+import { createSessionActions } from "./session-actions.js";
 import { iconNode } from "./icons.js";
 import { MOBILE_MEDIA_QUERY, initMobileNav } from "./mobile-nav.js";
 import { createScreenshotBlocks } from "./screenshot-block.js";
@@ -480,6 +481,17 @@ const sessionsPanel = initSessionsPanel({
     mobileNav.close();
     sendRaw({ type: "setAside", sessionId: id });
   },
+  // SUPPRESSION DÉFINITIVE (confirmation déjà donnée par le panneau, qui NOMME
+  // la conversation). Le serveur efface le fil ; la mémoire n'est pas touchée.
+  onDelete: (id) => {
+    mobileNav.close();
+    sendRaw({ type: "delete", sessionId: id });
+  },
+  // « Compacter… » : attente visible + compte rendu honnête (`session-actions.js`).
+  onCompact: (id) => {
+    mobileNav.close();
+    if (sessionActions) sessionActions.request(id);
+  },
   onPin: (id, pinned) => {
     sendRaw({ type: "pin", sessionId: id, pinned });
   },
@@ -750,6 +762,8 @@ const STICK_TO_BOTTOM_MS = 600;
  * visibilité depuis `pinIfNeeded`, SEUL point de passage après chaque mutation. */
 let scrollButton = null;
 let recapDedicated = null;
+/** Actions longues du menu du titre (« Compacter… ») — voir `session-actions.js`. */
+let sessionActions = null;
 /** `true` tant qu'un retour en bas FLUIDE est en cours (voir `goToEnd`). */
 let stickToBottom = false;
 let stickToBottomTimer = null;
@@ -882,6 +896,13 @@ recapDedicated = createRecapDedicated({
   getSessionId: () => sessionId,
   modal: HolafModal,
 });
+
+/* ─── « Compacter… » — COMPACTION FORCÉE ──────────────────────────────────
+ * Le serveur lance D'ABORD une passe de mémoire sur la conversation entière,
+ * PUIS compacte le fil (méthode de compaction du moteur, déclenchée a la
+ * demande). L'attente est VISIBLE (même écran `HolafModal.busy` que le
+ * récapitulatif) et le compte rendu vient du serveur : aucune invention ici. */
+sessionActions = createSessionActions({ send: sendRaw, modal: HolafModal });
 
 /* ─── Horodatage de l'interface ───────────────────────────────────────────
  * L'heure « juste HH:mm » est affichée PETITE et discrète sur la ligne de
@@ -1233,6 +1254,10 @@ function handleFrame(frame) {
   // portent NOTRE `requestId`. On les traite en priorité pour ne pas les
   // confondre avec une réponse de modèle.
   if (recapDedicated && recapDedicated.handleFrame(frame)) return;
+  // « Compacter… » : progression (`compact_progress`) et compte rendu
+  // (`compact_done`) corrélés par `requestId` — traités AVANT tout le reste,
+  // sinon une erreur de compaction deviendrait une bulle d'assistant.
+  if (sessionActions && sessionActions.handleFrame(frame)) return;
 
   if (type === "welcome") {
     if (frame.sessionId) sessionId = frame.sessionId;

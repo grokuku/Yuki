@@ -79,6 +79,13 @@ export {
   type HeritageExtensionOptions,
 } from "./heritage-extension.js";
 
+// Archive des conversations MISES DE CÔTÉ : outil de recherche (lecture seule).
+// ⚠️ Aucune extension : l'archive n'est JAMAIS injectée dans le prompt.
+export {
+  CONVERSATION_ARCHIVE_TOOL_NAME,
+  createConversationArchiveTools,
+} from "./conversation-archive-tools.js";
+
 // Libraire (Libry) — quatre outils + capture optionnelle de page web.
 export {
   createLibrarianTools,

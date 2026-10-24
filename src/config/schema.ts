@@ -390,6 +390,25 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_MEMORY_EXTRACT_TIMEOUT_MS",
   },
+  // Passe de SOLIDIFICATION déclenchée par la mise de côté d'une conversation :
+  // la conversation est relue ENTIÈRE, mais BORNÉE (taille d'un appel + nombre
+  // d'appels) — relire tout ne doit pas coûter un nombre illimité d'appels.
+  "memory.setAside.maxChars": {
+    type: "int",
+    default: 24_000,
+    min: 1_000,
+    max: 120_000,
+    apply: "hot",
+    env: "YUKI_MEMORY_SET_ASIDE_MAX_CHARS",
+  },
+  "memory.setAside.maxChunks": {
+    type: "int",
+    default: 2,
+    min: 1,
+    max: 6,
+    apply: "hot",
+    env: "YUKI_MEMORY_SET_ASIDE_MAX_CHUNKS",
+  },
 
   // --- Récapitulatif « conversation dédiée » -------------------------------
   // Appel LLM LONG (récapitulatif exhaustif d'une conversation) : délai

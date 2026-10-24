@@ -22,6 +22,7 @@ import type {
 } from "../librarian/types.js";
 import type { LibrarianShotView, LibrarianShotsPort } from "../librarian/shots.js";
 import type { HeritagePort } from "../memory/heritage.js";
+import type { ConversationArchivePort } from "../memory/conversation-archive.js";
 import type { MemoryPort } from "../memory/types.js";
 import type { PersonalityPort } from "../personality/types.js";
 import type { RulesPort } from "../rules/types.js";
@@ -150,6 +151,14 @@ export interface PiHostOptions {
    * Absent ⇒ ni outil ni signal (host nu, tests).
    */
   heritage?: HeritagePort;
+  /**
+   * Archive des conversations MISES DE CÔTÉ (fichiers du volume `state`, index
+   * plein texte FTS5). Présente ⇒ (a) la conversation est ARCHIVÉE EN ENTIER à
+   * la mise de côté et (b) la façade expose l'outil de recherche
+   * `chercher_conversations_archivees` (LECTURE SEULE, sur demande explicite).
+   * ⚠️ L'archive n'est JAMAIS injectée dans le prompt : seul l'outil la lit.
+   */
+  conversationArchive?: ConversationArchivePort;
   /**
    * Libraire de Pi-Web (recherche documentaire + web). Présent ⇒ la façade expose
    * les quatre outils (`recherche_libraire`, `liste_libraire`, `lire_libraire`,
@@ -294,6 +303,51 @@ export interface SessionInfo {
   updatedAt?: string;
   messageCount?: number;
   firstMessage?: string;
+}
+
+/**
+ * Étape annoncée pendant une COMPACTION FORCÉE (pour une attente VISIBLE : la
+ * passe de mémoire puis la compaction peuvent prendre plusieurs minutes).
+ */
+export interface CompactProgress {
+  /** `memory` = passe de remplissage ; `compact` = summarisation du fil. */
+  phase: "memory" | "compact";
+  /** Morceau en cours (1-based) de la passe de mémoire. */
+  part?: number;
+  /** Nombre total de morceaux de la passe de mémoire. */
+  parts?: number;
+}
+
+/** Options d'une compaction forcée. */
+export interface CompactOptions {
+  /** Progression observée (trame de contrôle côté transport, jamais persistée). */
+  onProgress?: (progress: CompactProgress) => void;
+}
+
+/**
+ * Résultat RÉEL d'une compaction forcée — ce que l'interface peut affirmer sans
+ * mentir : ce qui s'est passé pour la mémoire ET pour le fil.
+ */
+export interface CompactOutcome {
+  /** Résultat de la PASSE DE MÉMOIRE qui a précédé la compaction. */
+  memory: {
+    /** `true` si la passe a réellement tourné. */
+    ran: boolean;
+    /** Raison de l'absence de passe (`disabled`, `no_extractor`, `empty`, `failed`). */
+    reason?: string;
+    /** Détail d'un échec, si `reason === "failed"`. */
+    error?: string;
+    added: number;
+    updated: number;
+    removed: number;
+    skipped: number;
+    /** Nombre d'appels modèle réellement effectués par la passe. */
+    chunks: number;
+  };
+  /** Contexte AVANT compaction, en tokens (mesuré par le SDK). */
+  tokensBefore: number;
+  /** Estimation du contexte APRÈS compaction (heuristique du SDK). */
+  tokensAfter?: number;
 }
 
 /** Consommation de tokens d'un tour (agnostique du fournisseur). */

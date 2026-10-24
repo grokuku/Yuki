@@ -102,6 +102,7 @@ import {
 } from "./librarian/index.js";
 import { collectSecretValues, createLogger } from "./observability/logger.js";
 import {
+  ConversationArchiveStore,
   HeritageAdminService,
   HeritageStore,
   MemoryIndex,
@@ -875,6 +876,7 @@ async function main(): Promise<void> {
   let host: PiHost | undefined;
   let memoryService: MemoryService | undefined;
   let heritageStore: HeritageStore | undefined;
+  let conversationArchive: ConversationArchiveStore | undefined;
   let librarianShots: LibrarianShotsStore | undefined;
   let transport: Transport | undefined;
   let delegation: DelegationService | undefined;
@@ -960,6 +962,12 @@ async function main(): Promise<void> {
         logger,
       }),
       maxItemsPerPass: () => config.getNumber("memory.extract.maxItems"),
+      // Passe de SOLIDIFICATION à la mise de côté d'une conversation : relecture
+      // ENTIÈRE mais BORNÉE (taille d'un appel + nombre d'appels).
+      setAsideBounds: () => ({
+        maxChars: config.getNumber("memory.setAside.maxChars"),
+        maxChunks: config.getNumber("memory.setAside.maxChunks"),
+      }),
     });
     memoryService.start();
     logger.info("memory.ready", {
@@ -978,6 +986,22 @@ async function main(): Promise<void> {
     logger.info("memory.heritage.ready", {
       dir: heritageStore.dirPath,
       entries: heritageStore.info().entries,
+    });
+
+    // Archive des conversations MISES DE CÔTÉ : dossier dédié du volume `state`
+    // (une conversation = un fichier JSON complet) + index plein texte FTS5
+    // DÉRIVÉ. ⚠️ JAMAIS injectée dans le prompt : consultable uniquement sur
+    // demande explicite via l'outil `chercher_conversations_archivees`.
+    conversationArchive = new ConversationArchiveStore({
+      dir: env.conversationArchiveDir,
+      indexPath: env.conversationArchiveIndexPath,
+      logger,
+    });
+    conversationArchive.ensureLayout();
+    logger.info("memory.conversation_archive.ready", {
+      dir: conversationArchive.dirPath,
+      index: conversationArchive.indexFilePath,
+      conversations: conversationArchive.info().conversations,
     });
 
     // --- Libraire de Pi-Web : client HTTP + archivage EN TÂCHE DE FOND --------
@@ -1095,6 +1119,9 @@ async function main(): Promise<void> {
         secretRequestsEnabled: agentExecution !== undefined,
         // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
         heritageEnabled: true,
+        // Archive des conversations mises de côté : recherche PLEIN TEXTE en
+        // LECTURE SEULE, sur demande EXPLICITE de l'utilisateur.
+        conversationArchiveEnabled: conversationArchive !== undefined,
         // Libraire : quatre outils + capture (selon l'URL et le réglage au
         // démarrage ; décision prise à la création du host).
         librarianEnabled: librarianConfigured,
@@ -1107,6 +1134,7 @@ async function main(): Promise<void> {
       // légère = celle de l'utilisateur).
       ...(agentExecution ? { secretRequests: agentExecution } : {}),
       heritage: heritageStore,
+      conversationArchive,
       ...(librarianConfigured
         ? {
             librarian: {
@@ -1426,6 +1454,8 @@ async function main(): Promise<void> {
         memoryService.close();
         memoryService = undefined;
       }
+      conversationArchive?.close();
+      conversationArchive = undefined;
     },
   });
 

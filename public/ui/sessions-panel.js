@@ -54,6 +54,21 @@ export const UNTITLED = "Conversation sans titre";
  */
 export const RECAP_MENU_LABEL = "Conversation dédiée…";
 
+/**
+ * Libellé de l'entrée « compacter » du MENU DU TITRE : force une compression du
+ * fil, précédée d'une passe de remplissage de mémoire (côté serveur).
+ */
+export const COMPACT_MENU_LABEL = "Compacter…";
+
+/**
+ * Libellé de l'entrée « supprimer » du MENU DU TITRE — action DÉFINITIVE.
+ * ⚠️ Court comme « Mettre de côté » (les deux ne se confondent pas), mais la
+ * CONFIRMATION, elle, nomme la conversation et dit l'irréversibilité.
+ * ⚠️ Elle ne concerne que les conversations de la LISTE (les mises de côté en
+ * sortent : elles n'y sont plus, donc pas supprimables ici).
+ */
+export const DELETE_MENU_LABEL = "Supprimer";
+
 /** Longueur maximale d'un titre dérivé des premiers mots d'un message. */
 const MAX_TITLE_CHARS = 60;
 
@@ -218,6 +233,10 @@ function el(tag, attrs = {}, text) {
  * @param {() => void} deps.onNew
  * @param {(id: string, title: string) => void} deps.onRename
  * @param {(id: string) => void} deps.onSetAside
+ * @param {(id: string) => void} [deps.onDelete] suppression DÉFINITIVE (après la
+ *   confirmation qui nomme la conversation).
+ * @param {(id: string) => void} [deps.onCompact] compaction forcée (passe de
+ *   mémoire puis compression, côté serveur).
  * @param {(id: string, pinned: boolean) => void} deps.onPin
  * @param {(id: string) => void} [deps.onRecapDedicated] entrée « Conversation
  *   dédiée… » du menu du titre (parcours `recap-dedicated.js`).
@@ -235,6 +254,8 @@ export function initSessionsPanel(deps) {
   const onNew = deps.onNew ?? (() => undefined);
   const onRename = deps.onRename ?? (() => undefined);
   const onSetAside = deps.onSetAside ?? (() => undefined);
+  const onDelete = deps.onDelete ?? (() => undefined);
+  const onCompact = deps.onCompact ?? (() => undefined);
   const onPin = deps.onPin ?? (() => undefined);
   const onRecapDedicated = deps.onRecapDedicated ?? (() => undefined);
 
@@ -431,11 +452,26 @@ export function initSessionsPanel(deps) {
       if (id) onRecapDedicated(id);
     });
 
-    // La mise de côté EST la seule « suppression » offerte par le serveur
-    // (`setAside` : déplacement récupérable dans `conversations-supprimees/`).
-    // Le libellé le DIT désormais. L'entrée « Supprimer » reste présente mais
-    // DÉSACTIVÉE : aucune suppression définitive n'existe côté serveur, et on
-    // n'invente pas une action destructive qui promettrait l'irréversible.
+    // « Compacter… » — force la compression du fil (le serveur lance d'abord une
+    // PASSE DE MÉMOIRE sur la conversation entière). Action non destructive :
+    // aucune confirmation, mais une attente VISIBLE gérée par `session-actions.js`.
+    const compactItem = el(
+      "button",
+      { class: "ctx-menu__item", type: "button", role: "menuitem" },
+      COMPACT_MENU_LABEL,
+    );
+    compactItem.title =
+      "Remplir la mémoire de cette conversation, puis la compacter (compression du fil).";
+    compactItem.setAttribute("aria-label", COMPACT_MENU_LABEL);
+    compactItem.addEventListener("click", () => {
+      const id = menuTargetId;
+      closeMenu();
+      if (id) onCompact(id);
+    });
+
+    // La mise de côté EST une façon de retirer un fil de la liste, mais elle le
+    // DÉPLACE (récupérable). Le libellé le DIT, pour ne pas la confondre avec la
+    // suppression définitive ci-dessous.
     const setAside = el(
       "button",
       {
@@ -451,6 +487,9 @@ export function initSessionsPanel(deps) {
       if (id) void confirmSetAside(id);
     });
 
+    // SUPPRESSION DÉFINITIVE : le serveur sait désormais effacer le fil (`delete`).
+    // ⚠️ Action IRRÉVERSIBLE : la confirmation nomme la conversation et dit
+    // qu'il n'y a AUCUNE récupération ; jamais un « OK / Annuler » générique.
     const del = el(
       "button",
       {
@@ -458,11 +497,13 @@ export function initSessionsPanel(deps) {
         type: "button",
         role: "menuitem",
       },
-      "Supprimer",
+      DELETE_MENU_LABEL,
     );
-    del.disabled = true;
-    del.title =
-      "Aucune suppression définitive n'existe : « Mettre de côté » déplace le fil, récupérable à la main.";
+    del.addEventListener("click", () => {
+      const id = menuTargetId;
+      closeMenu();
+      if (id) void confirmDelete(id);
+    });
 
     menu.append(
       rename,
@@ -470,6 +511,7 @@ export function initSessionsPanel(deps) {
       genTitle,
       el("div", { class: "ctx-menu__sep", role: "separator" }),
       recapItem,
+      compactItem,
       el("div", { class: "ctx-menu__sep", role: "separator" }),
       setAside,
       del,
@@ -507,11 +549,31 @@ export function initSessionsPanel(deps) {
     const current = sessions.find((info) => info.id === id);
     const label = current ? conversationTitle(current) : "cette conversation";
     const confirmed = await modal.confirm(
-      "Supprimer cette conversation ?",
+      `Mettre de côté « ${label} » ?`,
       `« ${label} » sera MISE DE CÔTÉ : déplacée dans « conversations-supprimees/<horodatage>/ », pas détruite. Elle reste récupérable à la main. Si c'est la conversation ouverte, l'écran revient à l'état vide (ce n'est pas une erreur).`,
       { danger: true, confirmText: "Mettre de côté", cancelText: "Annuler" },
     );
     if (confirmed) onSetAside(id);
+  }
+
+  /**
+   * Confirmation de SUPPRESSION DÉFINITIVE.
+   *
+   * ⚠️ Le nom de la conversation est DANS la fenêtre (pas un « OK / Annuler »
+   * générique), et le texte dit l'irréversibilité ET ce qui n'est PAS touché
+   * (la mémoire durable), pour que l'utilisateur sache exactement ce qu'il perd.
+   */
+  async function confirmDelete(id) {
+    const current = sessions.find((info) => info.id === id);
+    const label = current ? conversationTitle(current) : "cette conversation";
+    const confirmed = await modal.confirm(
+      `Supprimer définitivement « ${label} » ?`,
+      `Cette conversation sera EFFACÉE : c'est DÉFINITIF, aucune récupération possible, aucune corbeille. ` +
+        "La mémoire durable n'est PAS touchée : les souvenirs déjà écrits restent." +
+        (id === activeId ? " C'est la conversation ouverte : l'écran reviendra à l'état vide." : ""),
+      { danger: true, confirmText: "Supprimer définitivement", cancelText: "Annuler" },
+    );
+    if (confirmed) onDelete(id);
   }
 
   // ─── Déplier / replier la barre ───────────────────────────────────

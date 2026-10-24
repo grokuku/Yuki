@@ -44,8 +44,10 @@ export interface MemoryEntry {
    */
   why?: string;
   /**
-   * Source : identifiant du message d'origine (`<entrée de session>`) ou
-   * `compaction` pour une passe de consolidation. Jamais vide.
+   * Source : identifiant du message d'origine (`<entrée de session>`),
+   * `compaction` pour une passe de consolidation avant compaction, ou
+   * `mise-de-cote` pour la passe déclenchée par la mise de côté d'une
+   * conversation. Jamais vide.
    */
   source: string;
   cat: MemoryCategory;
@@ -170,6 +172,78 @@ export interface BeforeCompactInput {
 }
 
 /**
+ * Message d'une conversation mise de côté (rôle + texte + horodatage).
+ *
+ * ⚠️ Sert à DEUX choses distinctes, jamais mêlées :
+ *  - l'ARCHIVE complète (fichier du volume `state`, jamais dans le prompt) ;
+ *  - la PASSE DE MÉMOIRE déclenchée par la mise de côté (mêmes règles que la
+ *    consolidation avant compaction).
+ */
+export interface SetAsideMessage {
+  role: string;
+  text: string;
+  /** Horodatage ISO-8601 de l'entrée de session (facultatif). */
+  at?: string;
+}
+
+/**
+ * Entrée de la passe de mémoire déclenchée par une MISE DE CÔTÉ : la
+ * conversation ENTIÈRE (l'utilisateur a tranché : « tout revoir »).
+ */
+export interface SessionSetAsideInput {
+  /** Identifiant de la conversation mise de côté (traçabilité, idempotence). */
+  sessionId: string;
+  /** Titre d'affichage au moment de la mise de côté. */
+  title: string;
+  messages: readonly SetAsideMessage[];
+}
+
+/**
+ * Entrée de la PASSE DE REMPLISSAGE exécutée AVANT une compaction forcée : la
+ * conversation ENTIÈRE, relue avant que le fil ne soit résumé (demande explicite
+ * de l'utilisateur : « une passe de remplissage de mémoire avant de compresser »).
+ *
+ * ⚠️ MÊME matière que la mise de côté (messages complets + titre) : aucune
+ * troisième lecture n'est inventée, et les mêmes filtres s'appliquent.
+ */
+export interface SessionMemoryPassInput extends SessionSetAsideInput {
+  /**
+   * Progression de la passe (1-based) : plusieurs appels modèle pour une
+   * conversation volumineuse, donc une attente qui doit rester VISIBLE.
+   */
+  onProgress?: (part: number, parts: number) => void;
+}
+
+/** Pourquoi une passe de mémoire n'a pas écrit (jamais confondu avec « 0 ajout »). */
+export type SessionMemoryPassReason =
+  | "disabled"
+  | "no_extractor"
+  | "empty"
+  | "failed";
+
+/**
+ * Résultat RÉEL d'une passe de mémoire ATTENDUE (compaction forcée).
+ *
+ * ⚠️ Il existe pour que l'interface puisse dire ce qui s'est VRAIMENT passé :
+ * « 2 souvenirs écrits », « passe inactive », « la passe a échoué » ne sont pas
+ * la même chose et ne doivent jamais être confondus avec un succès.
+ */
+export interface SessionMemoryPassResult {
+  /** `true` si la passe a réellement tourné (appels modèle compris). */
+  ran: boolean;
+  /** Raison de l'absence de passe (absent si `ran`). */
+  reason?: SessionMemoryPassReason;
+  /** Détail d'échec (message du modèle), si `reason === "failed"`. */
+  error?: string;
+  added: number;
+  updated: number;
+  removed: number;
+  skipped: number;
+  /** Nombre d'appels (morceaux) réellement soumis au modèle. */
+  chunks: number;
+}
+
+/**
  * Port de mémoire consommé par l'extension SDK. Contrat volontaires simple :
  * `recall` est borné et ne lève jamais ; les deux déclencheurs sont
  * asynchrones et ne bloquent JAMAIS l'appelant.
@@ -185,6 +259,22 @@ export interface MemoryPort {
   onTurnEnd(input: TurnEndInput): void;
   /** Déclenche la consolidation avant compaction (jamais bloquante). */
   onBeforeCompact(input: BeforeCompactInput): void;
+  /**
+   * Déclenche la passe de SOLIDIFICATION sur la conversation ENTIÈRE au moment
+   * où l'utilisateur la MET DE CÔTÉ (jamais bloquante, jamais bloquante pour la
+   * mise de côté elle-même). Optionnel : un host sans mémoire n'en a pas besoin.
+   */
+  onSessionSetAside?(input: SessionSetAsideInput): void;
+  /**
+   * PASSE DE REMPLISSAGE sur la conversation ENTIÈRE, **ATTENDUE**, exécutée
+   * AVANT une compaction forcée. Contrairement aux déclencheurs précédents, elle
+   * rend un RÉSULTAT (ce qui a été écrit, ou pourquoi rien ne l'a été) : c'est
+   * lui qui alimente le compte rendu honnête de l'interface.
+   *
+   * ⚠️ Ne lève JAMAIS : un échec est décrit dans le résultat (`reason:"failed"`)
+   * pour que l'appelant PUISSE décider de poursuivre la compaction.
+   */
+  onSessionCompact?(input: SessionMemoryPassInput): Promise<SessionMemoryPassResult>;
 }
 
 // ---------------------------------------------------------------------------

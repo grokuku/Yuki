@@ -1079,6 +1079,100 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   /**
+   * SUPPRESSION DÉFINITIVE d'une conversation de la liste (menu du titre).
+   *
+   * ⚠️ La MÉMOIRE DURABLE n'est PAS touchée : aucune écriture, aucun souvenir
+   * supprimé. Le serveur n'appelle rien d'autre que la suppression du fil.
+   * ⚠️ Épingle orpheline retirée, abonnements resynchronisés, voix arrêtée :
+   * mêmes nettoyages que la mise de côté (aucun state fantôme).
+   */
+  async function handleDelete(client: ClientState, message: ClientMessage): Promise<void> {
+    if (message.type !== "delete") return;
+    const wasCurrent = host.currentSessionId() === message.sessionId;
+    try {
+      await host.deleteSession(message.sessionId);
+    } catch (error) {
+      const piError = toPiHostError(error, {
+        sessionId: message.sessionId,
+        logger,
+      });
+      sendDirect(client, {
+        type: "error",
+        code: piError.code,
+        message: piError.message,
+      });
+      return;
+    }
+    if (wasCurrent) {
+      client.sessionId = undefined;
+      cancelTtsOnFocusChange(message.sessionId);
+    }
+    pins?.remove(message.sessionId);
+    await sendSessions(client);
+    if (wasCurrent) {
+      // Conversation supprimée = plus rien à l'écran (état vide, pas une erreur).
+      sendDirect(client, { type: "snapshot", state: "idle", transcript: [] });
+    }
+  }
+
+  /**
+   * COMPACTION FORCÉE d'une conversation : PASSE DE MÉMOIRE **puis** compaction.
+   *
+   * ⚠️ L'ordre et la réalité du résultat viennent du host (`compactSession`),
+   * pas d'une reconstitution côté interface. On ne fait que RELAYER :
+   *  - des trames de CONTRÔLE `compact_progress` pour que l'attente soit visible
+   *    (aucun `seq` consommé, jamais bufferisées) ;
+   *  - une trame `compact_done` qui DIT ce qui s'est passé ;
+   *  - une trame `error` corrélée (`requestId`) en cas d'échec — jamais un
+   *    succès fabriqué.
+   */
+  async function handleCompact(client: ClientState, message: ClientMessage): Promise<void> {
+    if (message.type !== "compact") return;
+    const title = await titleFor(message.sessionId);
+    try {
+      const outcome = await host.compactSession(message.sessionId, {
+        onProgress: (progress) => {
+          sendDirect(client, {
+            type: "compact_progress",
+            requestId: message.requestId,
+            phase: progress.phase,
+            ...(progress.part !== undefined ? { part: progress.part } : {}),
+            ...(progress.parts !== undefined ? { parts: progress.parts } : {}),
+          });
+        },
+      });
+      // MessageCount / updatedAt peuvent avoir bougé (arrêt d'un run, entrée de
+      // compaction écrite) : on resynchronise la liste avant de conclure.
+      await sendSessions(client);
+      sendDirect(client, {
+        type: "compact_done",
+        requestId: message.requestId,
+        memory: outcome.memory,
+        tokensBefore: outcome.tokensBefore,
+        ...(outcome.tokensAfter !== undefined ? { tokensAfter: outcome.tokensAfter } : {}),
+        title,
+      });
+    } catch (error) {
+      const piError = toPiHostError(error, {
+        sessionId: message.sessionId,
+        logger,
+      });
+      logger.warn("ws.compact.failed", {
+        session_id: message.sessionId,
+        code: piError.code,
+      });
+      sendDirect(client, {
+        type: "error",
+        code: piError.code,
+        message: piError.message,
+        requestId: message.requestId,
+      });
+      // Un run a pu être arrêté : l'interface doit refléter l'état RÉEL.
+      await sendSessions(client);
+    }
+  }
+
+  /**
    * Épingle / désépingle une conversation (action du menu contextuel). L'état
    * n'est PAS écrit dans le JSONL de session (propriété du SDK) : il vit dans le
    * store d'épingles, puis la liste est renvoyée avec son nouvel état.
@@ -1417,6 +1511,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         return;
       case "setAside":
         await handleSetAside(client, message);
+        return;
+      case "delete":
+        await handleDelete(client, message);
+        return;
+      case "compact":
+        await handleCompact(client, message);
         return;
       case "pin":
         await handlePin(client, message);

@@ -81,6 +81,14 @@ export const SECRET_REQUEST_TOOLS: readonly SecretToolName[] = ["demander_secret
 export type HeritageToolName = "archive_vie_anterieure";
 
 /**
+ * Outil custom de RECHERCHE dans l'archive des conversations MISES DE CÔTÉ.
+ * `chercher_conversations_archivees` est en **LECTURE SEULE**, PLEIN TEXTE (FTS5) :
+ * l'archive est séparée de la mémoire courante, jamais injectée, et consultée
+ * uniquement sur demande EXPLICITE de l'utilisateur.
+ */
+export type ConversationArchiveToolName = "chercher_conversations_archivees";
+
+/**
  * Outils custom du LIBRAIRE de Pi-Web (recherche documentaire + web). Les trois
  * premiers sont en LECTURE SEULE (`recherche_libraire`, `liste_libraire`,
  * `lire_libraire`) ; `archive_libraire` SOUMET un travail de fond (rend la main
@@ -102,6 +110,7 @@ export type CustomToolName =
   | AgentDirectoryToolName
   | SecretToolName
   | HeritageToolName
+  | ConversationArchiveToolName
   | LibrarianToolName;
 
 export interface ToolPolicyEntry {
@@ -122,6 +131,8 @@ export interface ToolPolicyEntry {
   readonly secretRequests: readonly SecretToolName[];
   /** Outils de consultation de l'archive « vie antérieure » (Lot 13). */
   readonly heritage: readonly HeritageToolName[];
+  /** Outil de recherche dans l'archive des conversations mises de côté. */
+  readonly conversationArchive: readonly ConversationArchiveToolName[];
   /** Outils du libraire de Pi-Web (recherche documentaire + web). */
   readonly librarian: readonly LibrarianToolName[];
   /** Outil de CAPTURE de page web via Libry (`capture_libraire`). */
@@ -187,6 +198,15 @@ export const HERITAGE_TOOLS: readonly HeritageToolName[] = [
 ];
 
 /**
+ * Outil de recherche dans l'archive des conversations mises de côté. LECTURE
+ * SEULE, PLEIN TEXTE ; exposé seulement si le câblage fournit un port d'archive.
+ * ⚠️ Le prompt de l'outil impose une demande EXPLICITE de l'utilisateur.
+ */
+export const CONVERSATION_ARCHIVE_TOOLS: readonly ConversationArchiveToolName[] = [
+  "chercher_conversations_archivees",
+];
+
+/**
  * Outils du libraire (recherche documentaire + web). Comme les outils de
  * consultation d'agents/archive, ils ne sont exposés que si le câblage les active
  * (URL de base du libraire renseignée au démarrage). ⚠️ `archive_libraire` rend la
@@ -222,6 +242,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     secrets: SECRET_DIRECTORY_TOOLS,
     secretRequests: SECRET_REQUEST_TOOLS,
     heritage: HERITAGE_TOOLS,
+    conversationArchive: CONVERSATION_ARCHIVE_TOOLS,
     librarian: LIBRARIAN_TOOLS,
     librarianCapture: LIBRARIAN_CAPTURE_TOOLS,
     canDelegate: true,
@@ -244,6 +265,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     secrets: SECRET_DIRECTORY_TOOLS,
     secretRequests: [],
     heritage: [],
+    conversationArchive: [],
     librarian: [],
     librarianCapture: [],
     canDelegate: false,
@@ -294,6 +316,12 @@ export interface ToolAllowlistOptions {
    */
   heritageEnabled?: boolean;
   /**
+   * Active l'outil de RECHERCHE dans l'archive des conversations mises de côté
+   * (`chercher_conversations_archivees`). DÉSACTIVÉ par défaut : seul le câblage
+   * l'active, quand un port d'archive existe.
+   */
+  conversationArchiveEnabled?: boolean;
+  /**
    * Active les quatre outils du libraire de Pi-Web. DÉSACTIVÉ par défaut : seul
    * le câblage les active, quand une URL de base est renseignée au démarrage.
    */
@@ -326,6 +354,8 @@ export function toolAllowlist(
   const secretRequestsEnabled =
     (options.secretRequestsEnabled ?? false) && entry.secretRequests.length > 0;
   const heritageEnabled = (options.heritageEnabled ?? false) && entry.heritage.length > 0;
+  const conversationArchiveEnabled =
+    (options.conversationArchiveEnabled ?? false) && entry.conversationArchive.length > 0;
   const librarianEnabled = (options.librarianEnabled ?? false) && entry.librarian.length > 0;
   const librarianCaptureEnabled =
     librarianEnabled &&
@@ -352,6 +382,9 @@ export function toolAllowlist(
   }
   if (heritageEnabled) {
     tools.push(...entry.heritage);
+  }
+  if (conversationArchiveEnabled) {
+    tools.push(...entry.conversationArchive);
   }
   if (librarianEnabled) {
     tools.push(...entry.librarian);

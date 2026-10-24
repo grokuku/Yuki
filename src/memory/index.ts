@@ -25,6 +25,11 @@ export {
   type MemoryRecallResult,
   type MemoryResetResult,
   type MemorySetAsideResult,
+  type SessionMemoryPassInput,
+  type SessionMemoryPassReason,
+  type SessionMemoryPassResult,
+  type SessionSetAsideInput,
+  type SetAsideMessage,
   type TurnEndInput,
 } from "./types.js";
 
@@ -124,9 +129,61 @@ export {
 export {
   MEMORY_BLOCK_HEADER,
   MemoryService,
+  SET_ASIDE_DEFAULT_BOUNDS,
+  SET_ASIDE_SOURCE,
   formatMemoryBlock,
   type MemoryServiceOptions,
+  type SetAsideBounds,
 } from "./service.js";
+
+export {
+  CONSOLIDATE_MESSAGE_MAX_CHARS,
+  chunkMessages,
+  sanitizeConsolidationMessages,
+  type ChunkOptions,
+  type ChunkedMessages,
+  type RawConsolidateMessage,
+} from "./consolidate.js";
+
+export {
+  NEAR_DUPLICATE_CONTAINMENT,
+  NEAR_DUPLICATE_MIN_TOKENS,
+  findNearDuplicate,
+  isNearDuplicate,
+  memoryTokens,
+  type DedupEntry,
+  type NearDuplicateMatch,
+} from "./dedup.js";
+
+export {
+  ARCHIVE_MESSAGE_MAX_CHARS,
+  ARCHIVE_SEARCH_DEFAULT_LIMIT,
+  ARCHIVE_SEARCH_MAX_LIMIT,
+  CONVERSATION_ARCHIVE_DATA_REMINDER,
+  CONVERSATION_ARCHIVE_DIR_NAME,
+  CONVERSATION_ARCHIVE_INDEX_FILE,
+  CONVERSATION_ARCHIVE_LABEL,
+  CONVERSATION_ARCHIVE_README_FILE,
+  CONVERSATION_ARCHIVE_TAG,
+  buildConversationArchiveReadme,
+  conversationFileName,
+  escapeArchiveText,
+  frameArchiveSearch,
+  type ArchiveSearchHit,
+  type ArchiveWriteResult,
+  type ArchivedConversation,
+  type ArchivedConversationDraft,
+  type ArchivedMessage,
+  type ArchivedRole,
+  type ConversationArchiveInfo,
+  type ConversationArchivePort,
+} from "./conversation-archive.js";
+
+export {
+  ConversationArchiveStore,
+  parseArchivedConversation,
+  type ConversationArchiveStoreOptions,
+} from "./conversation-archive-store.js";
 
 export { buildMatchQuery, fingerprint, foldText } from "./normalize.js";
 

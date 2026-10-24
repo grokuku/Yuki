@@ -65,4 +65,31 @@ describe("protocol — trames de gestion des conversations", () => {
       error: "pin_invalid_pinned",
     });
   });
+
+  it("accepte delete (suppression définitive) avec sessionId", () => {
+    expect(parseClientMessage(JSON.stringify({ type: "delete", sessionId: "s1" }))).toEqual({
+      ok: true,
+      message: { type: "delete", sessionId: "s1" },
+    });
+    expect(parseClientMessage(JSON.stringify({ type: "delete" }))).toEqual({
+      ok: false,
+      error: "delete_missing_session_id",
+    });
+  });
+
+  it("accepte compact avec sessionId + requestId (corrélation obligatoire)", () => {
+    expect(
+      parseClientMessage(
+        JSON.stringify({ type: "compact", sessionId: "s1", requestId: "r1" }),
+      ),
+    ).toEqual({ ok: true, message: { type: "compact", sessionId: "s1", requestId: "r1" } });
+    expect(parseClientMessage(JSON.stringify({ type: "compact", requestId: "r1" }))).toEqual({
+      ok: false,
+      error: "compact_missing_session_id",
+    });
+    expect(parseClientMessage(JSON.stringify({ type: "compact", sessionId: "s1" }))).toEqual({
+      ok: false,
+      error: "compact_missing_request_id",
+    });
+  });
 });

@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 import {
@@ -57,7 +57,7 @@ import {
   type RawAssistantMessageEvent,
 } from "./events.js";
 import { describeModelError, PiHostError, toPiHostError } from "./errors.js";
-import { buildStoredUserText } from "./timestamp.js";
+import { buildStoredUserText, stripTimestampPrefix } from "./timestamp.js";
 import type { PiHost } from "./host.js";
 import { PHASE, RunInstrumentation, type RunSummary, type RunTtsMetrics } from "./instrumentation.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
@@ -86,9 +86,16 @@ import { createPersonalityExtensionFactory } from "./sdk/personality-extension.j
 import { createRulesExtensionFactory } from "./sdk/rules-extension.js";
 import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
 import { createHeritageTools } from "./sdk/heritage-tools.js";
+import { createConversationArchiveTools } from "./sdk/conversation-archive-tools.js";
+import type {
+  ArchivedConversation,
+  ArchivedMessage,
+} from "../memory/conversation-archive.js";
 import { createLibrarianTools } from "./sdk/librarian-tools.js";
 import type {
   ApplyLlmConfigOptions,
+  CompactOptions,
+  CompactOutcome,
   PiEvent,
   PiEventListener,
   PiHostOptions,
@@ -117,6 +124,13 @@ const ASIDE_DIR = "conversations-supprimees";
 
 /** Plafond de `listSessions()` : les N sessions les plus récentes suffisent à l'UI. */
 const MAX_SESSIONS = 50;
+
+/**
+ * Nombre minimal de messages pour qu'une compaction forcée ait un sens : sans au
+ * moins un échange, il n'y a RIEN à résumer. On le refuse AVANT toute passe de
+ * mémoire (message clair plutôt qu'un succès vide).
+ */
+const COMPACT_MIN_MESSAGES = 2;
 
 /** Longueur maximale d'un titre dérivé des premiers mots du premier message. */
 const MAX_TITLE_CHARS = 60;
@@ -1090,6 +1104,234 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     };
   }
 
+  /**
+   * Messages d'une session (rôle + horodatage + texte), dans l'ORDRE du fichier.
+   * Le repère temporel `[horodatage] …` du message utilisateur est RETIRÉ (c'est
+   * une métadonnée : l'horodatage de l'entrée la porte déjà).
+   */
+  function messagesFromEntries(entries: readonly unknown[]): ArchivedMessage[] {
+    const messages: ArchivedMessage[] = [];
+    for (const raw of entries) {
+      if (!raw || typeof raw !== "object") continue;
+      const entry = raw as { type?: unknown; message?: unknown; timestamp?: unknown };
+      if (entry.type !== "message") continue;
+      const message = entry.message as RawAgentMessage | undefined;
+      if (!message || typeof message !== "object") continue;
+      const role = message.role;
+      if (role !== "user" && role !== "assistant") continue;
+      const rawText = contentTextFromMessage(message);
+      const text = role === "user" ? stripTimestampPrefix(rawText) : rawText;
+      if (text.trim().length === 0) continue;
+      const at =
+        typeof entry.timestamp === "string" && entry.timestamp.length > 0
+          ? entry.timestamp
+          : new Date(messageTimestamp(message) ?? Date.now()).toISOString();
+      messages.push({ at, role, text });
+    }
+    return messages;
+  }
+
+  /**
+   * Relit une conversation AVANT son déplacement : messages complets + titre.
+   * ⚠️ LECTURE SEULE et JAMAIS fatale : une erreur (fichier illisible, session
+   * disparue) renvoie `null` et n'empêche JAMAIS la mise de côté.
+   *
+   * ⚠️ Lecture du JSONL par `SessionManager.open` quand la session n'est pas
+   * vivante : la conversation est complète (le journal est append-only, la
+   * compaction n'efface rien).
+   */
+  function captureConversation(
+    sessionId: string,
+    live: SessionRecord | undefined,
+    file: string | undefined,
+  ): ArchivedConversation | null {
+    try {
+      const manager = live
+        ? live.session.sessionManager
+        : file && existsSync(file)
+          ? SessionManager.open(file, paths.sessionsDir, paths.cwd)
+          : undefined;
+      if (!manager) return null;
+      let name: string | undefined;
+      try {
+        name = manager.getSessionName();
+      } catch {
+        name = undefined;
+      }
+      const messages = messagesFromEntries(manager.getEntries());
+      const firstUser = messages.find((message) => message.role === "user")?.text;
+      return {
+        v: 1,
+        id: sessionId,
+        title: titleFrom(name, firstUser),
+        archivedAt: new Date().toISOString(),
+        messages,
+      };
+    } catch (error) {
+      logger.warn("pi.session.set_aside.capture.failed", {
+        session_id: sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Travail d'ARRIÈRE-PLAN après une mise de côté réussie :
+   *  1. ARCHIVE la conversation ENTIÈRE (`options.conversationArchive`) — une
+   *     donnée, jamais injectée dans le prompt ;
+   *  2. PASSE DE MÉMOIRE silencieuse sur la conversation entière
+   *     (`MemoryPort.onSessionSetAside`), mêmes règles que la consolidation.
+   *
+   * ⚠️ Appelé SANS `await` par `setAsideSession` : la mise de côté est immédiate.
+   * ⚠️ IDEMPOTENT : si la conversation est DÉJÀ archivée, ni réécriture ni
+   * nouvelle passe (sinon chaque mise de côté réécrirait tout).
+   * ⚠️ Toute erreur est journalisée, jamais propagée.
+   */
+  async function afterSetAside(conversation: ArchivedConversation): Promise<void> {
+    const archive = options.conversationArchive;
+    try {
+      if (archive) {
+        const result = archive.archiveConversation(conversation);
+        logger.info("pi.session.set_aside.archived", {
+          session_id: conversation.id,
+          messages: result.messages,
+          created: result.archived,
+          path: result.path,
+        });
+        if (!result.archived) {
+          // Déjà archivée ⇒ ne PAS relancer la passe (idempotence).
+          logger.info("pi.session.set_aside.skipped", {
+            session_id: conversation.id,
+            reason: "already_archived",
+          });
+          return;
+        }
+      }
+      options.memory?.onSessionSetAside?.({
+        sessionId: conversation.id,
+        title: conversation.title,
+        messages: conversation.messages,
+      });
+    } catch (error) {
+      // ⚠️ « Échec silencieux » : l'utilisateur ne voit RIEN (voulu), les journaux
+      // le montrent. La conversation reste mise de côté et archivée.
+      logger.warn("pi.session.set_aside.backfill.failed", {
+        session_id: conversation.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * PASSE DE REMPLISSAGE DE MÉMOIRE exécutée AVANT une compaction forcée.
+   *
+   * ⚠️ ATTENDUE (contrairement à la mise de côté) : l'utilisateur a demandé que
+   * la mémoire soit remplie AVANT la compression, et l'ordre doit être PROUVÉ.
+   * ⚠️ ÉCHEC NON BLOQUANT : on renvoie `reason: "failed"` — la compaction aura
+   * quand même lieu, et l'interface le dira (jamais un succès fabriqué).
+   */
+  async function runMemoryPassBeforeCompact(
+    sessionId: string,
+    captured: ArchivedConversation | null,
+    onProgress: ((part: number, parts: number) => void) | undefined,
+  ): Promise<CompactOutcome["memory"]> {
+    const none = (reason: string, error?: string): CompactOutcome["memory"] => ({
+      ran: false,
+      reason,
+      ...(error !== undefined ? { error } : {}),
+      added: 0,
+      updated: 0,
+      removed: 0,
+      skipped: 0,
+      chunks: 0,
+    });
+    const port = options.memory;
+    if (!port?.onSessionCompact) return none("unsupported");
+    // Conversation illisible (fichier disparu, JSONL corrompu) : rien à relire.
+    if (!captured) return none("unreadable");
+    logger.info("pi.session.compact.memory.begin", {
+      session_id: sessionId,
+      messages: captured.messages.length,
+    });
+    try {
+      const result = await port.onSessionCompact({
+        sessionId,
+        title: captured.title,
+        messages: captured.messages,
+        ...(onProgress ? { onProgress } : {}),
+      });
+      logger.info("pi.session.compact.memory.done", {
+        session_id: sessionId,
+        ran: result.ran,
+        reason: result.reason ?? null,
+        added: result.added,
+        updated: result.updated,
+        removed: result.removed,
+        skipped: result.skipped,
+        chunks: result.chunks,
+      });
+      return {
+        ran: result.ran,
+        ...(result.reason !== undefined ? { reason: result.reason } : {}),
+        ...(result.error !== undefined ? { error: result.error } : {}),
+        added: result.added,
+        updated: result.updated,
+        removed: result.removed,
+        skipped: result.skipped,
+        chunks: result.chunks,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn("pi.session.compact.memory.failed", {
+        session_id: sessionId,
+        error: message,
+      });
+      return none("failed", message);
+    }
+  }
+
+  /**
+   * Traduit l'échec BRUT de la compaction SDK en `PiHostError` franche.
+   * ⚠️ Aucun message anglais du SDK ne sort d'ici, et aucun échec n'est maquillé
+   * en succès : « trop court », « déjà compacté », « interrompu », « pas de
+   * modèle » et « échec du modèle » sont des situations DIFFÉRENTES.
+   */
+  function compactFailure(error: unknown, sessionId: string): PiHostError {
+    if (error instanceof PiHostError) return error;
+    const raw = error instanceof Error ? error.message : String(error);
+    const prefixed = raw.match(/compaction failed:\s*(.+)$/i);
+    const detail = (prefixed?.[1] ?? raw).trim();
+    const make = (code: PiHostError["code"], message: string): PiHostError =>
+      new PiHostError(code, message, { cause: error, sessionId });
+    if (/already compacted/i.test(detail)) {
+      return make(
+        "PI_SESSION_ERROR",
+        "Cette conversation vient d'être compactée : il n'y a rien de plus à compacter.",
+      );
+    }
+    if (/nothing to compact|too small/i.test(detail)) {
+      return make(
+        "PI_SESSION_ERROR",
+        "Conversation trop courte : il n'y a pas assez d'échanges à résumer.",
+      );
+    }
+    if (/cancel|abort/i.test(detail)) {
+      return make("PI_ABORTED", "La compaction a été interrompue.");
+    }
+    if (/no model|no api key|not authenticated|authentication failed/i.test(detail)) {
+      return make(
+        "LLM_UNAVAILABLE",
+        "Aucun modèle utilisable : la compaction nécessite un appel au modèle.",
+      );
+    }
+    const clean = sanitizeErrorText(detail).trim();
+    return make(
+      "PI_SESSION_ERROR",
+      `La compaction a échoué${clean.length > 0 ? ` : ${clean}` : "."}`,
+    );
+  }
+
   async function doStart(): Promise<void> {
     restoreEnv = applyPiEnvironment(paths);
     ensurePiLayout(paths);
@@ -1163,6 +1405,13 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // Lot 13 : outil de CONSULTATION de l'archive « vie antérieure » (LECTURE
       // SEULE). L'archive n'est jamais injectée ; on la consulte à la demande.
       customTools.push(...createHeritageTools(options.heritage));
+    }
+    if (options.conversationArchive) {
+      // Archive des conversations MISES DE CÔTÉ : RECHERCHE PLEIN TEXTE en
+      // LECTURE SEULE, utilisable UNIQUEMENT sur demande explicite de
+      // l'utilisateur (voir la description de l'outil). Aucune extension :
+      // l'archive n'est JAMAIS injectée dans le prompt.
+      customTools.push(...createConversationArchiveTools(options.conversationArchive));
     }
     if (options.librarian) {
       // Libraire de Pi-Web : recherche documentaire + web, bibliothèque, relecture
@@ -1729,6 +1978,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           sessionId: id,
         });
       }
+      // ⚠️ CAPTURE AVANT DÉPLACEMENT : l'archive et la passe de mémoire ont
+      // besoin de la conversation ENTIÈRE (messages + titre). Lecture seule et
+      // non fatale : un échec de capture n'empêche JAMAIS la mise de côté.
+      const captured = captureConversation(id, live, file);
       // ⚠️ ORDRE OBLIGATOIRE quand c'est une session VIVANTE : on la retire du
       // registre et on FERME son runtime AVANT de déplacer son fichier, sinon
       // le prochain `_persist` du SDK recréerait le JSONL au chemin déplacé
@@ -1754,6 +2007,151 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         was_current: isCurrent,
         aside_dir: file ? join(paths.sessionsDir, ASIDE_DIR) : null,
       });
+      // ⚠️ APRÈS le succès du déplacement, et SANS `await` : la mise de côté est
+      // IMMÉDIATE (piège n°1 : « ça mouline 30 s sur téléphone »). Archive +
+      // passe de mémoire tournent DERRIÈRE, silencieusement, et un échec ne
+      // remonte JAMAIS à l'appelant.
+      if (captured) void afterSetAside(captured);
+    },
+
+    /**
+     * SUPPRESSION DÉFINITIVE (aucune corbeille, aucune annulation).
+     *
+     * ⚠️ La MÉMOIRE n'est pas concernée : on n'écrit rien, on ne supprime aucun
+     * souvenir. Seul le fichier de la conversation est effacé.
+     */
+    async deleteSession(id: string): Promise<void> {
+      if (!ready) {
+        throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
+      }
+      const live = sessions.get(id) ?? (currentRecord?.sessionId === id ? currentRecord : undefined);
+      const file = await host.sessionFileFor(id);
+      if (!live && (!file || !existsSync(file))) {
+        throw new PiHostError("PI_SESSION_ERROR", "Conversation introuvable.", {
+          sessionId: id,
+        });
+      }
+      const isCurrent = currentRecord?.sessionId === id;
+      // ⚠️ ORDRE IMPÉRATIF : (1) arrêt du run EN COURS et vidage de la file,
+      // (2) fermeture du runtime, (3) EFFACEMENT. Effacer avant de fermer
+      // laisserait le prochain `_persist` du SDK recréer le fichier supprimé
+      // (fil fantôme) — même piège que la mise de côté.
+      if (live) {
+        if (currentRecord === live) currentRecord = undefined;
+        await host.abort(id).catch((error: unknown) => {
+          logger.warn("pi.session.delete.abort.failed", {
+            session_id: id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+        await detachRecord(live);
+      }
+      let fileDeleted = false;
+      if (file && existsSync(file)) {
+        try {
+          unlinkSync(file);
+          fileDeleted = true;
+        } catch (error) {
+          throw toPiHostError(error, { logger, sessionId: id });
+        }
+      }
+      logger.info("pi.session.deleted", {
+        session_id: id,
+        was_current: isCurrent,
+        file_deleted: fileDeleted,
+      });
+    },
+
+    /**
+     * COMPACTION FORCÉE : PASSE DE MÉMOIRE **puis** compression du fil.
+     *
+     * ⚠️ L'ORDRE est la demande explicite de l'utilisateur : la passe de
+     * remplissage tourne jusqu'au bout AVANT que la compaction ne rassemble le fil.
+     * ⚠️ La compaction est celle du SDK (`AgentSession.compact()`), donc le MÊME
+     * mécanisme qu'une compaction naturelle (même découpage, même prompt de
+     * résumé, même entrée `CompactionEntry`), pas une imitation.
+     */
+    async compactSession(id: string, opts: CompactOptions = {}): Promise<CompactOutcome> {
+      if (!ready) {
+        throw new PiHostError("PI_NOT_READY", "Host Pi non démarré.");
+      }
+      const file = await host.sessionFileFor(id);
+      let record =
+        sessions.get(id) ?? (currentRecord?.sessionId === id ? currentRecord : undefined);
+      if (!record) {
+        // Conversation NON VIVANTE : on l'OUVRE sans changer le focus (aucun run
+        // n'est tué, aucun fil n'est volé à l'utilisateur).
+        if (!file || !existsSync(file)) {
+          throw new PiHostError("PI_SESSION_ERROR", "Conversation introuvable.", {
+            sessionId: id,
+          });
+        }
+        let manager: SessionManager;
+        try {
+          manager = SessionManager.open(file, paths.sessionsDir, paths.cwd);
+        } catch (error) {
+          throw toPiHostError(error, { logger, sessionId: id });
+        }
+        record = await openRecord(manager);
+      }
+      // 1) LECTURE de la conversation ENTIÈRE (LECTURE SEULE, non fatale) : c'est
+      // la matière de la passe de mémoire. La compaction n'en dépend pas.
+      const captured = captureConversation(id, record, file);
+      const messageCount = captured?.messages.length ?? record.transcript.length;
+      if (messageCount < COMPACT_MIN_MESSAGES) {
+        // Message CLAIR plutôt qu'un succès vide (piège de la demande).
+        throw new PiHostError(
+          "PI_SESSION_ERROR",
+          "Cette conversation est vide ou trop courte : il n'y a rien à compacter.",
+          { sessionId: id },
+        );
+      }
+      // 2) PASSE DE MÉMOIRE D'ABORD — attendue, progression annoncée.
+      opts.onProgress?.({ phase: "memory" });
+      const memory = await runMemoryPassBeforeCompact(
+        id,
+        captured,
+        opts.onProgress
+          ? (part, parts) => opts.onProgress?.({ phase: "memory", part, parts })
+          : undefined,
+      );
+      // 3) Le run EN COURS (s'il y en a un) est arrêté PROPREMENT avant la
+      // compaction : `compact()` du SDK appelle `abort()`, mais la FILE d'attente
+      // du host doit aussi être vidée, sinon un message repartirait après.
+      await host.abort(id).catch((error: unknown) => {
+        logger.warn("pi.session.compact.abort.failed", {
+          session_id: id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      // 4) COMPACTION (même chemin que `/compact` : hook `session_before_compact`
+      // inclus, donc la consolidation habituelle de la mémoire s'applique aussi).
+      opts.onProgress?.({ phase: "compact" });
+      logger.info("pi.session.compact.begin", { session_id: id });
+      let result: { tokensBefore: number; estimatedTokensAfter?: number; summary: string };
+      try {
+        result = await record.session.compact();
+      } catch (error) {
+        throw compactFailure(error, id);
+      }
+      logger.info("pi.session.compact", {
+        session_id: id,
+        tokens_before: result.tokensBefore,
+        tokens_after: result.estimatedTokensAfter ?? null,
+        summary_chars: result.summary.length,
+        memory_ran: memory.ran,
+        memory_reason: memory.reason ?? null,
+        memory_added: memory.added,
+        memory_updated: memory.updated,
+        memory_skipped: memory.skipped,
+      });
+      return {
+        memory,
+        tokensBefore: result.tokensBefore,
+        ...(result.estimatedTokensAfter !== undefined
+          ? { tokensAfter: result.estimatedTokensAfter }
+          : {}),
+      };
     },
 
     async sessionFileFor(id: string): Promise<string | undefined> {

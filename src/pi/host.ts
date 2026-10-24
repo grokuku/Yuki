@@ -13,6 +13,8 @@ import { createSdkPiHost } from "./sdk-host.js";
 import type { RunTtsMetrics } from "./instrumentation.js";
 import type {
   ApplyLlmConfigOptions,
+  CompactOptions,
+  CompactOutcome,
   EnsureSessionOptions,
   PiEventListener,
   PiHostOptions,
@@ -84,6 +86,29 @@ export interface PiHost {
    * détache d'abord (état « aucune conversation ouverte »).
    */
   setAsideSession(id: string): Promise<void>;
+  /**
+   * SUPPRIME DÉFINITIVEMENT une conversation (fichier JSONL effacé, aucune
+   * corbeille, aucune annulation).
+   *
+   * ⚠️ La MÉMOIRE DURABLE n'est JAMAIS touchée : aucune écriture, aucune
+   * suppression de souvenir. On ne supprime qu'un fil.
+   * ⚠️ Un run EN COURS sur ce fil est ARRÊTÉ avant l'effacement (sinon le SDK
+   * recréerait le fichier supprimé) ; la file d'attente est vidée de même.
+   * ⚠️ Vise une conversation PRÉSENTE dans la liste (une mise de côté en sort,
+   * donc elle n'est pas supprimable) ; une cible inconnue est refusée.
+   */
+  deleteSession(id: string): Promise<void>;
+  /**
+   * COMPACTE À LA DEMANDE une conversation, APRÈS une PASSE DE REMPLISSAGE de
+   * mémoire sur la conversation ENTIÈRE (`MemoryPort.onSessionCompact`, attendue).
+   *
+   * ⚠️ Un échec de la passe de mémoire NE BLOQUE PAS la compaction : le résultat
+   * le DIT (`memory.reason = "failed"`) au lieu de le taire.
+   * ⚠️ Un run en cours est arrêté (la compaction du SDK a besoin de la main).
+   * ⚠️ Lève si la compaction est impossible (fil vide/trop court, déjà compacté,
+   * aucun modèle) avec un message en français, jamais un succès vide.
+   */
+  compactSession(id: string, options?: CompactOptions): Promise<CompactOutcome>;
   /** Chemin du fichier JSONL d'une session (courante ou persistée). */
   sessionFileFor(id: string): Promise<string | undefined>;
 
@@ -109,6 +134,9 @@ export function createPiHost(options: PiHostOptions): PiHost {
 
 export type {
   ApplyLlmConfigOptions,
+  CompactOptions,
+  CompactOutcome,
+  CompactProgress,
   EnsureSessionOptions,
   PiEventListener,
   PiHostOptions,

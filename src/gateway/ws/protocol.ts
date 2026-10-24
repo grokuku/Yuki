@@ -60,6 +60,25 @@ export type ClientMessage =
     }
   | { type: "rename"; sessionId: string; title: string }
   | { type: "setAside"; sessionId: string }
+  | {
+      /**
+       * SUPPRESSION DÉFINITIVE d'une conversation de la LISTE (aucune corbeille,
+       * aucune annulation). La mémoire durable n'est pas concernée.
+       */
+      type: "delete";
+      sessionId: string;
+    }
+  | {
+      /**
+       * COMPACTION FORCÉE : passe de remplissage de mémoire PUIS compression du
+       * fil. Longue opération : la réponse arrive en trames de CONTRÔLE
+       * `compact_progress` (attente visible) puis `compact_done`.
+       */
+      type: "compact";
+      sessionId: string;
+      /** Identifiant de corrélation client (réponses `compact_done`/`error`). */
+      requestId: string;
+    }
   | { type: "pin"; sessionId: string; pinned: boolean }
   | {
       /**
@@ -216,6 +235,48 @@ export type ServerMessage =
       transcript: TranscriptEntry[];
     }
   | { type: "error"; code: string; message: string; runId?: string; requestId?: string }
+  | {
+      /**
+       * PROGRESSION d'une COMPACTION FORCÉE (trame de CONTRÔLE : aucun `seq`
+       * consommé, jamais bufferisée). Deux phases longues : la passe de mémoire
+       * (morceau par morceau) puis la summarisation du fil. Sans elles,
+       * l'utilisateur croirait que c'est planté.
+       */
+      type: "compact_progress";
+      requestId: string;
+      /** `memory` = passe de remplissage de mémoire ; `compact` = compression. */
+      phase: "memory" | "compact";
+      /** Morceau en cours de la passe de mémoire (1-based). */
+      part?: number;
+      /** Nombre total de morceaux de la passe de mémoire. */
+      parts?: number;
+    }
+  | {
+      /**
+       * COMPACTION TERMINÉE — compte rendu RÉEL (trame de CONTRÔLE). Il dit ce
+       * qui s'est passé pour la mémoire ET pour le fil : jamais un succès muet,
+       * jamais une affirmation sans mesure.
+       */
+      type: "compact_done";
+      requestId: string;
+      /** Passe de mémoire qui a PRÉCÉDÉ la compaction (ordre garanti). */
+      memory: {
+        ran: boolean;
+        reason?: string;
+        error?: string;
+        added: number;
+        updated: number;
+        removed: number;
+        skipped: number;
+        chunks: number;
+      };
+      /** Contexte AVANT compaction, en tokens (mesuré par le moteur). */
+      tokensBefore: number;
+      /** Estimation APRÈS compaction (heuristique du moteur), si fournie. */
+      tokensAfter?: number;
+      /** Titre de la conversation compactée (compte rendu lisible). */
+      title: string;
+    }
   | {
       /**
        * APERÇU de récapitulatif (trame de CONTRÔLE, aucun `seq` consommé :
@@ -517,6 +578,24 @@ export function parseClientMessage(raw: string): ParseResult {
         return { ok: false, error: "set_aside_missing_session_id" };
       }
       return { ok: true, message: { type: "setAside", sessionId } };
+    }
+    case "delete": {
+      const sessionId = optionalString(parsed, "sessionId");
+      if (sessionId === undefined) {
+        return { ok: false, error: "delete_missing_session_id" };
+      }
+      return { ok: true, message: { type: "delete", sessionId } };
+    }
+    case "compact": {
+      const sessionId = optionalString(parsed, "sessionId");
+      if (sessionId === undefined) {
+        return { ok: false, error: "compact_missing_session_id" };
+      }
+      const requestId = optionalString(parsed, "requestId");
+      if (requestId === undefined) {
+        return { ok: false, error: "compact_missing_request_id" };
+      }
+      return { ok: true, message: { type: "compact", sessionId, requestId } };
     }
     case "pin": {
       const sessionId = optionalString(parsed, "sessionId");

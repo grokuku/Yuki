@@ -9,7 +9,8 @@
  * Sont écartés, avant toute construction de prompt :
  *  - les CADRAGES de données techniques : `<sortie …>` (sortie de commande),
  *    `<libraire …>`, `<agents_disponibles …>`, `<regles …>`, `<personnalite …>`,
- *    `<vie_anterieure …>` — blocs ET leur rappel de sécurité ;
+ *    `<vie_anterieure …>`, `<conversations_archivees …>` — blocs ET leur rappel
+ *    de sécurité ;
  *  - les PROMPTS SYNTHÉTIQUES (`[RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN]`,
  *    `[RÉSULTAT DE COMMANDE VALIDÉE]`) : rapport de tâche, résultat d'exécution.
  *
@@ -28,6 +29,7 @@ import { LIBRARIAN_TAG } from "../librarian/output.js";
 import { PERSONALITY_TAG } from "../personality/personality.js";
 import { SYNTHETIC_USER_PREFIXES } from "../pi/synthetic.js";
 import { RULES_TAG } from "../rules/rules.js";
+import { CONVERSATION_ARCHIVE_TAG } from "./conversation-archive.js";
 import { HERITAGE_TAG } from "./heritage.js";
 
 /**
@@ -41,6 +43,10 @@ export const EXCLUDED_FRAME_TAGS: readonly string[] = [
   RULES_TAG,
   PERSONALITY_TAG,
   HERITAGE_TAG,
+  // ⚠️ Résultats de l'ARCHIVE des conversations mises de côté : une DONNÉE
+  // consultée à la demande, jamais un souvenir (même doctrine que l'annuaire,
+  // le roster et l'archive « vie antérieure »).
+  CONVERSATION_ARCHIVE_TAG,
 ];
 
 /** Préfixes des prompts SYNTHÉTIQUES (jamais mémorisés) — source unique. */

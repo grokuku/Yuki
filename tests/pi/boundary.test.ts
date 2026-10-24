@@ -29,6 +29,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/delegation-extension.ts",
   "src/pi/sdk/heritage-extension.ts",
   "src/pi/sdk/heritage-tools.ts",
+  "src/pi/sdk/conversation-archive-tools.ts",
   "src/pi/sdk/librarian-tools.ts",
 ].map((path) => path.split("/").join(sep));
 

@@ -14,6 +14,8 @@
  */
 
 import { buildConsolidationPrompt, buildTurnExtractionPrompt, parseMemoryOps } from "./extract.js";
+import { chunkMessages, sanitizeConsolidationMessages } from "./consolidate.js";
+import { findNearDuplicate, type DedupEntry } from "./dedup.js";
 import { sanitizeMemoryText } from "./filter.js";
 import { looksLikeHeritage } from "./heritage.js";
 import type { MemoryIndex } from "./index-db.js";
@@ -40,6 +42,10 @@ import type {
   MemoryRecallResult,
   MemoryResetResult,
   MemorySetAsideResult,
+  SessionMemoryPassInput,
+  SessionMemoryPassReason,
+  SessionMemoryPassResult,
+  SessionSetAsideInput,
   TurnEndInput,
 } from "./types.js";
 
@@ -54,6 +60,34 @@ export const MEMORY_BLOCK_HEADER = [
 const MIN_TEXT_CHARS = 8;
 /** Extractions concurrentes maximales avant rejet (anti-emballement). */
 const MAX_PENDING_EXTRACTIONS = 2;
+/**
+ * Source des souvenirs écrits par la passe de MISE DE CÔTÉ (traçabilité dans le
+ * journal de mémoire : on voit d'où vient un souvenir).
+ */
+export const SET_ASIDE_SOURCE = "mise-de-cote";
+/**
+ * Bornes de la passe de mise de côté : taille d'UN appel et NOMBRE d'appels.
+ * Une conversation entière peut être longue ; on relit tout ce qui tient dans ces
+ * bornes et on DIT (journal) ce qui n'a pas été soumis.
+ */
+export interface SetAsideBounds {
+  /** Caractères maximaux d'un morceau de conversation soumis au modèle. */
+  maxChars: number;
+  /** Nombre maximal de morceaux (donc d'appels) par mise de côté. */
+  maxChunks: number;
+}
+
+/** Bornes par défaut de la passe de mise de côté. */
+export const SET_ASIDE_DEFAULT_BOUNDS: SetAsideBounds = {
+  maxChars: 24_000,
+  maxChunks: 2,
+};
+/**
+ * Borne du CONTEXTE des souvenirs existants fourni au modèle et à la
+déduplication (les plus récents : ce sont ceux que la passe risque de redire).
+ */
+const EXISTING_MAX_ENTRIES = 200;
+const EXISTING_MAX_CHARS = 12_000;
 
 export interface MemoryServiceOptions {
   store: MemoryStore;
@@ -67,6 +101,8 @@ export interface MemoryServiceOptions {
   extractor?: MemoryExtractor;
   /** Nombre maximal d'items produits par passe. */
   maxItemsPerPass?: () => number;
+  /** Bornes de la passe de mise de côté (défaut : `SET_ASIDE_DEFAULT_BOUNDS`). */
+  setAsideBounds?: () => SetAsideBounds;
   now?: () => number;
 }
 
@@ -127,6 +163,7 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
   private readonly bounds: () => MemoryBounds;
   private readonly extractor: MemoryExtractor | undefined;
   private readonly maxItemsPerPass: () => number;
+  private readonly setAsideBoundsProvider: () => SetAsideBounds;
   private readonly now: () => number;
 
   private unsubscribe: (() => void) | undefined;
@@ -143,6 +180,7 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
     this.bounds = options.bounds;
     this.extractor = options.extractor;
     this.maxItemsPerPass = options.maxItemsPerPass ?? (() => 3);
+    this.setAsideBoundsProvider = options.setAsideBounds ?? (() => SET_ASIDE_DEFAULT_BOUNDS);
     this.now = options.now ?? Date.now;
     // Synchronise l'index à chaque édition étroite du store.
     this.unsubscribe = this.store.subscribe((change) => {
@@ -319,14 +357,34 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
     // d'outils et leurs rappels) sont NETTOYÉS, un prompt synthétique est écarté.
     // Lot 13 — un message qui se présente comme une archive « vie antérieure »
     // est également écarté : il ne doit jamais entrer dans la mémoire.
-    const messages = input.messages
-      .map((message) => ({ role: message.role, text: sanitizeMemoryText(message.text) }))
-      .filter(
-        (message) => message.text.length > 0 && !looksLikeHeritage(message.text),
-      );
+    const messages = sanitizeConsolidationMessages(input.messages);
     if (messages.length === 0) return;
     const previousSummary = input.previousSummary;
     void this.enqueue(() => this.consolidate(messages, previousSummary));
+  }
+
+  /**
+   * Passe de SOLIDIFICATION à la MISE DE CÔTÉ d'une conversation.
+   *
+   * ⚠️ Exigence utilisateur : la conversation est relue EN ENTIÈRE (« tout
+   * revoir »), pas seulement ce qui manque. On RÉUTILISE la mécanique de
+   * consolidation (même filtre, même prompt, même justification obligatoire, même
+   * déduplication) : aucune troisième logique de mémoire n'est écrite ici.
+   *
+   * ⚠️ SILENCIEUSE et NON BLOQUANTE : la méthode rend la main immédiatement
+   * (la mise de côté est déjà faite), ne rend rien à l'utilisateur et n'échoue
+   * jamais vers l'appelant — un échec est JOURNALISÉ (`memory.set_aside.failed`).
+   */
+  onSessionSetAside(input: SessionSetAsideInput): void {
+    if (!this.enabled() || !this.extractor) return;
+    // ⚠️ MÊME FILTRE que la compaction : ni cadrage technique, ni prompt
+    // synthétique, ni contenu « vie antérieure » n'atteignent le modèle.
+    const messages = sanitizeConsolidationMessages(input.messages);
+    if (messages.length === 0) {
+      this.logger.info("memory.set_aside.empty", { session: input.sessionId });
+      return;
+    }
+    void this.enqueue(() => this.consolidateSession(input, messages), { force: true });
   }
 
   private async consolidate(
@@ -337,21 +395,18 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
     try {
       const maxItems = Math.max(0, this.maxItemsPerPass());
       if (maxItems === 0) return;
-      const existing = this.store.entries.slice(-40).map((entry) => ({
-        id: entry.id,
-        text: entry.text,
-        cat: entry.cat,
-      }));
+      const existing = this.existingSnapshot();
       const prompt = buildConsolidationPrompt(messages, existing, maxItems);
       const raw = await this.extractor!(prompt);
       const ops = parseMemoryOps(raw, maxItems);
-      const counts = this.applyOps(ops, "compaction");
+      const counts = this.applyOps(ops, "compaction", existing);
       this.logger.info("memory.consolidate", {
         messages: messages.length,
         has_previous_summary: Boolean(previousSummary),
         added: counts.added,
         updated: counts.updated,
         removed: counts.removed,
+        skipped: counts.skipped,
         duration_ms: this.now() - started,
       });
     } catch (error) {
@@ -361,32 +416,260 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
     }
   }
 
-  /** Applique des opérations via des ÉDITIONS ÉTROITES (jamais de réécriture). */
+  /**
+   * Passe de mise de côté : la conversation ENTIÈRE, en au plus `maxChunks`
+   * appels de taille bornée (voir `./consolidate.ts`).
+   *
+   * ⚠️ QUALITÉ : mêmes règles que la compaction (filtre en amont, `why`
+   * obligatoire, déduplication par quasi-doublon). Relire toute une conversation
+   * ne doit PAS produire plus de bruit — seulement moins d'oublis.
+   * ⚠️ ÉCHEC : journalisé, jamais propagé (la conversation reste mise de côté).
+   */
+  private async consolidateSession(
+    input: SessionSetAsideInput,
+    messages: readonly ConsolidateMessage[],
+  ): Promise<void> {
+    try {
+      await this.runSessionPass(input, messages, {
+        log: "set_aside",
+        source: SET_ASIDE_SOURCE,
+        promptFlavor: "set-aside",
+      });
+    } catch (error) {
+      // ⚠️ PIÈGE « échec silencieux » : l'utilisateur ne voit RIEN (voulu), mais
+      // les JOURNAUX doivent le montrer. Rien n'est cassé : la conversation est
+      // déjà mise de côté et archivée.
+      this.logger.warn("memory.set_aside.failed", {
+        session: input.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * PASSE DE REMPLISSAGE **ATTENDUE** avant une compaction forcée.
+   *
+   * ⚠️ MÊME mécanique que la mise de côté (`runSessionPass`) : mêmes bornes, même
+   * filtre, même prompt, même justification obligatoire, même déduplication.
+   * Aucune troisième logique de mémoire n'existe ici.
+   *
+   * ⚠️ Ne lève JAMAIS : l'appelant DOIT pouvoir décider de poursuivre la
+   * compaction même si la mémoire échoue — mais il doit le SAVOIR, d'où le
+   * résultat (`reason: "failed"`) au lieu d'un silence.
+   */
+  async onSessionCompact(
+    input: SessionMemoryPassInput,
+  ): Promise<SessionMemoryPassResult> {
+    const idle = (reason: SessionMemoryPassReason): SessionMemoryPassResult => ({
+      ran: false,
+      reason,
+      added: 0,
+      updated: 0,
+      removed: 0,
+      skipped: 0,
+      chunks: 0,
+    });
+    if (!this.enabled()) return idle("disabled");
+    if (!this.extractor) return idle("no_extractor");
+    // ⚠️ MÊME FILTRE que la compaction et la mise de côté : ni cadrage technique,
+    // ni prompt synthétique, ni contenu « vie antérieure ».
+    const messages = sanitizeConsolidationMessages(input.messages);
+    if (messages.length === 0) {
+      this.logger.info("memory.compact_pass.empty", { session: input.sessionId });
+      return idle("empty");
+    }
+    let result: SessionMemoryPassResult | undefined;
+    // ⚠️ SÉRIALISÉ sur la MÊME chaîne que les autres passes (`enqueue`) : jamais
+    // deux écritures concurrentes sur le store ; `force` ignore le plafond, car
+    // cette passe est explicitement demandée et attendue.
+    await this.enqueue(
+      async () => {
+        try {
+          result = await this.runSessionPass(input, messages, {
+            log: "compact_pass",
+            source: "compaction",
+            promptFlavor: "compaction",
+            ...(input.onProgress ? { onProgress: input.onProgress } : {}),
+          });
+        } catch (error) {
+          this.logger.warn("memory.compact_pass.failed", {
+            session: input.sessionId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          result = {
+            ...idle("failed"),
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+      { force: true },
+    );
+    return result ?? idle("failed");
+  }
+
+  /**
+   * Cœur COMMUN des passes « conversation entière » (mise de côté, compaction
+   * forcée) : morcelle, interroge le modèle morceau par morceau, applique les
+   * opérations avec déduplication. Renvoie les compteurs RÉELS ; lève en cas
+   * d'échec (l'appelant choisit comment le traiter).
+   *
+   * @param options.log préfixe des messages de journal (`set_aside`,
+   *   `compact_pass`) — l'observabilité existante ne change pas de nom.
+   * @param options.source `source` des souvenirs écrits (traçabilité).
+   */
+  private async runSessionPass(
+    input: SessionSetAsideInput,
+    messages: readonly ConsolidateMessage[],
+    options: {
+      log: string;
+      source: string;
+      promptFlavor: "set-aside" | "compaction";
+      onProgress?: (part: number, parts: number) => void;
+    },
+  ): Promise<SessionMemoryPassResult> {
+    const started = this.now();
+    const maxItems = Math.max(0, this.maxItemsPerPass());
+    if (maxItems === 0) {
+      return {
+        ran: true,
+        added: 0,
+        updated: 0,
+        removed: 0,
+        skipped: 0,
+        chunks: 0,
+      };
+    }
+    const bounds = this.setAsideBoundsProvider();
+    const { chunks, truncated, requiredChunks, submittedChars } = chunkMessages(
+      messages,
+      {
+        maxChars: bounds.maxChars,
+        maxChunks: bounds.maxChunks,
+      },
+    );
+    if (chunks.length === 0) {
+      this.logger.info(`memory.${options.log}.empty`, { session: input.sessionId });
+      return {
+        ran: false,
+        reason: "empty",
+        added: 0,
+        updated: 0,
+        removed: 0,
+        skipped: 0,
+        chunks: 0,
+      };
+    }
+    // Les souvenirs existants sont FOURNIS au modèle (fusion par `update`) et
+    // servent de référence à la déduplication déterministe.
+    const existing = this.existingSnapshot();
+    const working: DedupEntry[] = existing.map((entry) => ({
+      id: entry.id,
+      text: entry.text,
+    }));
+    const total = { added: 0, updated: 0, removed: 0, skipped: 0 };
+    for (const [index, chunk] of chunks.entries()) {
+      // Progression annoncée AVANT l'appel : l'attente reste visible pendant
+      // que le modèle travaille (une conversation volumineuse = plusieurs appels).
+      options.onProgress?.(index + 1, chunks.length);
+      const prompt = buildConsolidationPrompt(
+        chunk,
+        existing,
+        maxItems,
+        options.promptFlavor,
+      );
+      const raw = await this.extractor!(prompt);
+      const ops = parseMemoryOps(raw, maxItems);
+      const counts = this.applyOps(ops, options.source, working);
+      total.added += counts.added;
+      total.updated += counts.updated;
+      total.removed += counts.removed;
+      total.skipped += counts.skipped;
+      // ⚠️ Une annulation (`delete`) ne doit jamais viser un souvenir qui vient
+      // d'être écrit par CETTE passe : `working` est l'état réel après le morceau.
+      this.logger.debug(`memory.${options.log}.chunk`, {
+        session: input.sessionId,
+        chunk: index + 1,
+        chunks: chunks.length,
+        messages: chunk.length,
+        added: counts.added,
+        updated: counts.updated,
+        removed: counts.removed,
+        skipped: counts.skipped,
+      });
+    }
+    this.logger.info(`memory.${options.log}.consolidated`, {
+      session: input.sessionId,
+      messages: messages.length,
+      chunks: chunks.length,
+      required_chunks: requiredChunks,
+      truncated,
+      submitted_chars: submittedChars,
+      added: total.added,
+      updated: total.updated,
+      removed: total.removed,
+      skipped: total.skipped,
+      duration_ms: this.now() - started,
+    });
+    return { ran: true, ...total, chunks: chunks.length };
+  }
+
+  /**
+   * Souvenirs EXISTANTS à fournir à une passe de consolidation (bornés : les plus
+   * récents, dans la limite d'un nombre et d'un budget de caractères).
+   */
+  private existingSnapshot(): { id: string; text: string; cat: string }[] {
+    const recent = this.store.entries.slice(-EXISTING_MAX_ENTRIES).reverse();
+    const selected: { id: string; text: string; cat: string }[] = [];
+    let used = 0;
+    for (const entry of recent) {
+      const chars = entry.text.length + (entry.why?.length ?? 0) + 24;
+      if (selected.length > 0 && used + chars > EXISTING_MAX_CHARS) break;
+      selected.push({ id: entry.id, text: entry.text, cat: entry.cat });
+      used += chars;
+    }
+    return selected;
+  }
+
+  /**
+   * Applique des opérations via des ÉDITIONS ÉTROITES (jamais de réécriture).
+   *
+   * ⚠️ DÉDUPLICATION DÉTERMINISTE : quand `nearDedup` est fourni (passes qui
+   * voient TOUTE la mémoire : consolidation, mise de côté), un `add` qui n'est
+   * qu'une REFORMULATION d'un souvenir existant est ÉCARTÉ (`skipped`) — les
+   * tours ont déjà écrit à chaud, sans ce garde-fou le rappel se dégraderait.
+   * Le store reste la seconde barrière (texte identique ⇒ aucune écriture).
+   */
   private applyOps(
     ops: readonly MemoryOp[],
     source: string,
-  ): { added: number; updated: number; removed: number } {
-    const counts = { added: 0, updated: 0, removed: 0 };
+    nearDedup?: DedupEntry[],
+  ): { added: number; updated: number; removed: number; skipped: number } {
+    const counts = { added: 0, updated: 0, removed: 0, skipped: 0 };
     for (const op of ops) {
       try {
         if (op.op === "add") {
-          if (
-            this.store.add({ text: op.text, cat: op.cat, why: op.why, source }).created
-          ) {
-            counts.added += 1;
+          if (!this.applyAdd(op.text, op.cat, op.why, source, nearDedup)) {
+            counts.skipped += 1;
+            continue;
           }
+          counts.added += 1;
         } else if (op.op === "update") {
           if (this.store.has(op.id)) {
             if (this.store.update(op.id, { text: op.text, cat: op.cat, why: op.why })) {
               counts.updated += 1;
             }
-          } else if (
-            this.store.add({ text: op.text, cat: op.cat, why: op.why, source }).created
-          ) {
+            this.remember(nearDedup, op.id, op.text);
+          } else if (this.applyAdd(op.text, op.cat, op.why, source, nearDedup)) {
             counts.added += 1;
+          } else {
+            counts.skipped += 1;
           }
         } else if (this.store.remove(op.id)) {
           counts.removed += 1;
+          if (nearDedup) {
+            const index = nearDedup.findIndex((entry) => entry.id === op.id);
+            if (index >= 0) nearDedup.splice(index, 1);
+          }
         }
       } catch (error) {
         this.logger.warn("memory.apply.failed", {
@@ -398,9 +681,52 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
     return counts;
   }
 
-  /** Sérialise les extractions et borne celles en attente. */
-  private enqueue(task: () => Promise<void>): Promise<void> {
-    if (this.pending >= MAX_PENDING_EXTRACTIONS) {
+  /**
+   * Écrit un `add` (ou un `update` dégradé en `add`) en respectant la
+   * déduplication. Renvoie `false` si le candidat est un quasi-doublon ÉCARTÉ.
+   */
+  private applyAdd(
+    text: string,
+    cat: string,
+    why: string,
+    source: string,
+    nearDedup?: DedupEntry[],
+  ): boolean {
+    if (nearDedup) {
+      const duplicate = findNearDuplicate(text, nearDedup);
+      if (duplicate) {
+        this.logger.info("memory.dedup.near_duplicate", {
+          source,
+          existing: duplicate.id,
+          containment: Number(duplicate.containment.toFixed(2)),
+        });
+        return false;
+      }
+    }
+    const result = this.store.add({ text, cat, why, source });
+    if (!result.created) return false;
+    if (nearDedup) nearDedup.push({ id: result.entry.id, text: result.entry.text });
+    return true;
+  }
+
+  /** Met à jour la référence de déduplication après une écriture. */
+  private remember(nearDedup: DedupEntry[] | undefined, id: string, text: string): void {
+    if (!nearDedup) return;
+    const index = nearDedup.findIndex((entry) => entry.id === id);
+    if (index >= 0) nearDedup[index] = { id, text };
+    else nearDedup.push({ id, text });
+  }
+
+  /**
+   * Sérialise les extractions et borne celles en attente.
+   *
+   * ⚠️ `force` : la passe de MISE DE CÔTÉ ne doit PAS être escamotée par des
+   * extractions de fin de tour encore en vol (c'est la DERNIÈRE occasion de lire
+   * la conversation). Elle est donc admise malgré le plafond — mais reste
+   * SÉRIALISÉE derrière la chaîne (jamais deux passes simultanées).
+   */
+  private enqueue(task: () => Promise<void>, options: { force?: boolean } = {}): Promise<void> {
+    if (!options.force && this.pending >= MAX_PENDING_EXTRACTIONS) {
       this.logger.debug("memory.extract.skipped", { pending: this.pending });
       return Promise.resolve();
     }

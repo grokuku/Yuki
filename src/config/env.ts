@@ -14,6 +14,10 @@
  */
 
 import type { LogLevel } from "../observability/logger.js";
+import {
+  CONVERSATION_ARCHIVE_DIR_NAME,
+  CONVERSATION_ARCHIVE_INDEX_FILE,
+} from "../memory/conversation-archive.js";
 import { CONTAINER_PATHS } from "./container-paths.js";
 import { resolveConfigStorePath } from "./paths.js";
 import { CONFIG_SCHEMA } from "./schema.js";
@@ -60,6 +64,17 @@ export interface Env {
    * store de mémoire, jamais fusionné. Surcharge : `YUKI_HERITAGE_DIR`.
    */
   heritageDir: string;
+  /**
+   * Dossier de l'ARCHIVE des conversations mises de côté (volume `state`) :
+   * une conversation = un fichier JSON complet, JAMAIS injecté dans le prompt.
+   * Surcharge : `YUKI_CONVERSATION_ARCHIVE_DIR`.
+   */
+  conversationArchiveDir: string;
+  /**
+   * Fichier SQLite de l'index FTS5 de cette archive (DÉRIVÉ, reconstructible).
+   * Surcharge : `YUKI_CONVERSATION_ARCHIVE_INDEX_PATH`.
+   */
+  conversationArchiveIndexPath: string;
   // --- Agents d'exécution (Lot 4) ---
   /** Fichier JSONL du store des agents (journal append-only, volume `state`). */
   agentsStorePath: string;
@@ -297,6 +312,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_HERITAGE_DIR",
       `${mountPoints.state}/memory-heritage`,
+    ),
+    conversationArchiveDir: getString(
+      env,
+      "YUKI_CONVERSATION_ARCHIVE_DIR",
+      `${mountPoints.state}/${CONVERSATION_ARCHIVE_DIR_NAME}`,
+    ),
+    conversationArchiveIndexPath: getString(
+      env,
+      "YUKI_CONVERSATION_ARCHIVE_INDEX_PATH",
+      `${mountPoints.state}/${CONVERSATION_ARCHIVE_INDEX_FILE}`,
     ),
     agentsStorePath: getString(
       env,

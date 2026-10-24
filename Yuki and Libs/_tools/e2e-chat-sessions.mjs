@@ -384,9 +384,10 @@ check(
   menu.menuItems.map((i) => `${i.text}${i.disabled ? " (désactivé)" : ""}`).join(" | "),
 );
 check(
-  "menu du TITRE : « Mettre de côté » (l'action réelle) et « Supprimer » honnêtement désactivé",
+  "menu du TITRE : « Mettre de côté » (déplacement récupérable) ET « Supprimer » ACTIVÉ",
   menu.menuItems.some((i) => i.text === "Mettre de côté") &&
-    menu.menuItems.some((i) => i.text === "Supprimer" && i.disabled === true),
+    menu.menuItems.some((i) => i.text === "Supprimer" && i.disabled === false),
+  menu.menuItems.map((i) => `${i.text}${i.disabled ? " (désactivé)" : ""}`).join(" | "),
 );
 await shot("chat-sessions-menu");
 await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
