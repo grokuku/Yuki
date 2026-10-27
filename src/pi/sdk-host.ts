@@ -48,6 +48,7 @@ import {
   errorTextFromMessage,
   finishReasonForMessage,
   messageTimestamp,
+  RUN_ACK_CUSTOM_TYPE,
   RUN_METRICS_CUSTOM_TYPE,
   sanitizeErrorText,
   transcriptFromEntries,
@@ -192,6 +193,15 @@ interface RunItem {
    * deux outils longs dans le même tour ne produisent pas deux accusés).
    */
   acked?: boolean;
+  /**
+   * ACCUSÉ DE RÉCEPTION de ce run, tel qu'il a été ÉMIS (`{ tool, text }`).
+   *
+   * ⚠️ Mémorisé sur le run pour être attaché au message assistant qu'il préface
+   * (`TranscriptEntry.ack`) et PERSISTÉ à part (`yuki.run_ack`) : sans cela,
+   * l'accusé ne serait qu'une trame éphémère et disparaîtrait au rechargement,
+   * en laissant une bulle de réponse VIDE dans le fil.
+   */
+  ack?: { tool: string; text: string };
   /**
    * Le message utilisateur a DÉJÀ été versé au transcript (cas d'un message
    * livré en `steer` à un run en cours). Évite une double bulle si le message
@@ -483,9 +493,17 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       ...(entry.metrics !== undefined ? { metrics: entry.metrics } : {}),
       ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
       ...(entry.subject !== undefined ? { subject: entry.subject } : {}),
+      ...(entry.ack !== undefined ? { ack: entry.ack } : {}),
     }));
     if (record.partial.length > 0) {
-      transcript.push({ role: "assistant", text: record.partial });
+      // Le contenu en cours appartient au run COURANT : s'il a déjà accusé
+      // réception, l'accusé reste la première ligne de la bulle (une bascule de
+      // fil ou un rechargement ne le fait donc pas disparaître).
+      transcript.push({
+        role: "assistant",
+        text: record.partial,
+        ...(record.currentRun?.ack ? { ack: record.currentRun.ack.text } : {}),
+      });
     }
     // ⚠️ ÉTAT VIVANT, jamais déduit du transcript : l'attente (« premier contenu
     // pas encore arrivé ») et les jobs d'arrière-plan ENCORE ouverts viennent du
@@ -556,6 +574,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         const alreadySaid = record.partial.length > 0 || run.assistantEntry !== undefined;
         if (!shouldAcknowledge({ tool: toolName, alreadySaid, alreadyAcked: run.acked === true })) return;
         run.acked = true;
+        // ⚠️ MÉMORISÉ POUR LE TRANSCRIPT (et non seulement émis) : l'accusé est la
+        // PREMIÈRE ligne de la réponse, donc il appartient au message assistant.
+        // Il est rattaché ici (miroir en mémoire, disponible dès le snapshot
+        // suivant) puis persisté à part (`yuki.run_ack`) en fin de run.
+        run.ack = { tool: toolName, text };
+        if (run.assistantEntry) run.assistantEntry.ack = text;
         emitEvent({
           type: "ack",
           sessionId: record.sessionId,
@@ -670,6 +694,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
             const assistantEntry: TranscriptEntry = {
               role: "assistant",
               text,
+              // ⚠️ L'accusé du run OUVRE la bulle : il est attaché à l'entrée de
+              // transcript (donc au snapshot), sans jamais entrer dans le texte
+              // du message (il resterait sinon dans la réponse du modèle).
+              ...(run.ack ? { ack: run.ack.text } : {}),
               timestamp: messageTimestamp(message) ?? Date.now(),
             };
             record.transcript.push(assistantEntry);
@@ -905,6 +933,18 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       const entryId = resolveAssistantEntryId(record, run);
       if (entryId) run.assistantEntry.id = entryId;
     }
+    // ⚠️ ACCUSÉ SANS CONTENU (run qui s'achève sur une action, sans texte) : la
+    // bulle doit exister avec l'accusé. Sans cette entrée, le rechargement
+    // ramènerait une bulle VIDE (défaut signalé) — ici elle porte au moins la
+    // première ligne de la réponse.
+    if (run.ack && !run.assistantEntry) {
+      record.transcript.push({
+        role: "assistant",
+        text: "",
+        ack: run.ack.text,
+        timestamp: Date.now(),
+      });
+    }
     emitEvent({
       type: "run_finished",
       sessionId: record.sessionId,
@@ -917,7 +957,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     // Les statistiques temps réel (`run_summary`) et celles PERSISTÉES doivent
     // être EXACTEMENT les mêmes : on réutilise la synthèse déjà émise.
     const summary = run.instrumentation.emitSummary();
+    // Ordre VOLONTAIRE : les statistiques d'abord (elles ont besoin du message
+    // au bout de la branche), puis l'accusé (enfant de la chaîne).
     persistRunMetrics(record, run, reason, summary);
+    persistRunAck(record, run);
 
     record.currentRun = undefined;
     record.activeRunId = undefined;
@@ -1063,6 +1106,46 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       assistant.metrics = data;
     } catch (error) {
       logger.warn("pi.run.metrics.persist.failed", {
+        session_id: record.sessionId,
+        run_id: run.runId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Persiste l'ACCUSÉ DE RÉCEPTION du run dans le JSONL de session, sous forme
+   * d'une entrée `custom` (`yuki.run_ack`) rattachée à la même chaîne que les
+   * statistiques (message assistant → métriques → accusé).
+   *
+   * ⚠️ POURQUOI PERSISTER : sans cela, l'accusé n'existerait que dans la trame
+   * de contrôle éphémère. Au rechargement, la bulle de réponse reviendrait
+   * VIDE — c'est exactement le défaut signalé (« on croit que Yuki n'a rien
+   * répondu »).
+   *
+   * ⚠️ Ce qui est écrit est le NOM DE L'OUTIL, jamais la phrase : le libellé
+   * reste dans `src/pi/ack.ts` (source unique) et rien de visible ne se fige
+   * dans l'historique. Le moteur TTS ne lit que les `delta` de contenu : un
+   * accusé persisté n'est donc jamais prononcé, et le modèle ne le voit jamais
+   * (le SDK Pi retire les entrées `custom` du contexte).
+   *
+   * Garde : on n'écrit QUE si le message assistant de ce run a été identifié
+   * dans la branche (`assistantEntry.id`), pour ne jamais produire une entrée
+   * orpheline rattachable au mauvais message.
+   */
+  function persistRunAck(record: SessionRecord, run: RunItem): void {
+    const assistant = run.assistantEntry;
+    const ack = run.ack;
+    if (!assistant || !ack || assistant.id === undefined) return;
+    try {
+      record.session.sessionManager.appendCustomEntry(RUN_ACK_CUSTOM_TYPE, {
+        tool: ack.tool,
+      });
+      // Le miroir en mémoire porte déjà l'accusé : un snapshot de la session
+      // COURANTE l'affiche sans attendre un rechargement.
+      assistant.ack = ack.text;
+    } catch (error) {
+      logger.warn("pi.run.ack.persist.failed", {
         session_id: record.sessionId,
         run_id: run.runId,
         error: error instanceof Error ? error.message : String(error),

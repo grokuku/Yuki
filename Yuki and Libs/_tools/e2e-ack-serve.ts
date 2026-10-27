@@ -52,6 +52,14 @@ function chatSteps(text: string, size = 10, delayMs = FIRST_TOKEN_DELAY_MS): Fak
 /** Question simple : AUCUN accusé (aucune action n'est lancée). */
 const QUESTION_STEPS: FakeStep[] = chatSteps(ANSWER_TEXT);
 /**
+ * ACTION SANS CONTENU : l'accusé part, l'action dure, et le run s'achève SANS
+ * aucun texte. C'est le cas signalé par l'utilisateur (« la bulle de réponse
+ * était VIDE ») : la bulle doit porter l'accusé seul, jamais rester muette.
+ */
+const ACTION_ONLY_STEPS: FakeStep[] = [
+  { kind: "ack", text: "C'est parti.", tool: "generer_image", delayMs: 0 },
+];
+/**
  * Action qui démarre : l'accusé part AVANT le premier token, donc AVANT le
  * contenu — et sans ajouter un seul milliseconde au TTFT (même délai de premier
  * token que le tour « question », seul l'accusé s'ajoute).
@@ -130,12 +138,19 @@ const control = createHttpServer((req, res) => {
   };
   const sessionId = host.currentSessionId() ?? "e2e-ack-session";
   if (url.pathname === "/send") {
-    const script = url.searchParams.get("script") === "action" ? "action" : "question";
+    const requested = url.searchParams.get("script");
+    const script =
+      requested === "action" ? "action" : requested === "action_only" ? "action_only" : "question";
     lastSummary = null;
     // Le script est EMPILÉ avant l'envoi : le double le consomme au démarrage.
     host.pushScript({
       name: script,
-      steps: script === "action" ? [...ACTION_STEPS] : [...QUESTION_STEPS],
+      steps:
+        script === "action"
+          ? [...ACTION_STEPS]
+          : script === "action_only"
+            ? [...ACTION_ONLY_STEPS]
+            : [...QUESTION_STEPS],
     });
     const handle = host.send(sessionId, "Peux-tu t'occuper de ça ?");
     return send({ ok: true, runId: handle.runId, script, sessionId });

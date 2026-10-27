@@ -344,6 +344,22 @@ export interface TranscriptEntry {
   origin?: string;
   /** Sujet visé par le récapitulatif (entrée `recap` uniquement). */
   subject?: string;
+  /**
+   * ACCUSÉ DE RÉCEPTION de ce message assistant (« C'est parti. », « Je m'en
+   * occupe. ») : la PREMIÈRE ligne de la réponse, affichée EN TÊTE du corps de
+   * la bulle (voir `public/ui/ack-block.js`).
+   *
+   * ⚠️ C'est une ligne de STATUT, traitée séparément du contenu à dessein :
+   *  - elle n'est JAMAIS concaténée à `text` : le contenu du message reste
+   *    exactement ce que le modèle a dit (donc jamais prononcé par la synthèse
+   *    vocale, jamais dans le contexte du modèle, jamais un souvenir) ;
+   *  - elle est PERSISTÉE à part (`yuki.run_ack`, enfant de l'entrée de
+   *    message) : elle revient donc à l'identique après un rechargement, y
+   *    compris après un redémarrage du gateway ;
+   *  - elle peut exister SANS contenu (run qui s'achève sur une action, sans
+   *    texte) : la bulle montre alors l'accusé seul — jamais une bulle vide.
+   */
+  ack?: string;
 }
 
 /**

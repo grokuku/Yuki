@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
   channelForAssistantEvent,
   contentTextFromMessage,
+  ackFromCustomEntry,
   metricsFromCustomEntry,
+  RUN_ACK_CUSTOM_TYPE,
   RUN_METRICS_CUSTOM_TYPE,
   sanitizeErrorText,
   transcriptFromEntries,
@@ -391,6 +393,118 @@ describe("pi.events — statistiques d'exécution persistées (run_metrics)", ()
     const second = transcriptFromEntries(entries);
     expect(second).toEqual(first);
     expect(second).not.toBe(first);
+  });
+});
+
+describe("pi.events — accusé de réception persisté (run_ack)", () => {
+  const assistantEntry = (id: string, text: string): unknown => ({
+    type: "message",
+    id,
+    parentId: null,
+    timestamp: "2024-12-03T14:00:02.000Z",
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+  const ackEntry = (id: string, parentId: unknown, data: unknown): unknown => ({
+    type: "custom",
+    id,
+    parentId,
+    customType: RUN_ACK_CUSTOM_TYPE,
+    data,
+  });
+  const metricsEntry = (id: string, parentId: unknown, data: unknown): unknown => ({
+    type: "custom",
+    id,
+    parentId,
+    customType: RUN_METRICS_CUSTOM_TYPE,
+    data,
+  });
+
+  it("rattache l'accusé au message assistant et le redérive du NOM D'OUTIL", () => {
+    const transcript = transcriptFromEntries([
+      assistantEntry("a1", "Voilà l'image."),
+      ackEntry("k1", "a1", { tool: "generer_image" }),
+    ]);
+    // Le texte du message reste INTACT : l'accusé est un champ à part.
+    expect(transcript).toEqual([
+      { role: "assistant", text: "Voilà l'image.", id: "a1", ack: "C'est parti." },
+    ]);
+  });
+
+  it("reste correct quand l'accusé est la RACINE d'une chaîne (accusé → métriques)", () => {
+    // Ordre d'écriture réel : message → accusé → métriques (chaque entrée `custom`
+    // est l'enfant de la précédente).
+    const transcript = transcriptFromEntries([
+      assistantEntry("a1", "Voilà l'image."),
+      ackEntry("k1", "a1", { tool: "delegate" }),
+      metricsEntry("m1", "k1", { totalMs: 1200 }),
+    ]);
+    expect(transcript[0].ack).toBe("Je m'en occupe.");
+    expect(transcript[0].metrics).toEqual({ totalMs: 1200 });
+  });
+
+  it("reste correct quand les métriques précèdent l'accusé (chaîne inverse)", () => {
+    const transcript = transcriptFromEntries([
+      assistantEntry("a1", "Réponse"),
+      metricsEntry("m1", "a1", { totalMs: 42 }),
+      ackEntry("k1", "m1", { tool: "run_command" }),
+    ]);
+    expect(transcript[0]).toEqual({
+      role: "assistant",
+      text: "Réponse",
+      id: "a1",
+      metrics: { totalMs: 42 },
+      ack: "C'est parti.",
+    });
+  });
+
+  it("IGNORE un accusé orphelin (aucun message assistant parent)", () => {
+    const transcript = transcriptFromEntries([
+      {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        message: { role: "user", content: "question" },
+      },
+      ackEntry("k1", "u1", { tool: "delegate" }),
+    ]);
+    expect(transcript).toEqual([{ role: "user", text: "question", id: "u1" }]);
+    expect(JSON.stringify(transcript)).not.toContain("occupe");
+  });
+
+  it("ne lit JAMAIS de phrase dans le JSONL : elle est REDÉRIVÉE (source unique)", () => {
+    // Une entrée qui contiendrait une phrase (version future, données trafiquées)
+    // ne peut pas la faire apparaître : seul le nom d'outil compte.
+    expect(
+      ackFromCustomEntry({
+        type: "custom",
+        customType: RUN_ACK_CUSTOM_TYPE,
+        data: { tool: "delegate", text: "PHRASE-INJECTÉE" },
+      }),
+    ).toBe("Je m'en occupe.");
+    expect(JSON.stringify(
+      transcriptFromEntries([
+        assistantEntry("a1", "Réponse"),
+        ackEntry("k1", "a1", { tool: "delegate", text: "PHRASE-INJECTÉE" }),
+      ]),
+    )).not.toContain("PHRASE-INJECTÉE");
+  });
+
+  it("ignore un outil inconnu ou des données malformées (jamais d'accusé inventé)", () => {
+    expect(ackFromCustomEntry(null)).toBeUndefined();
+    expect(
+      ackFromCustomEntry({ type: "custom", customType: RUN_ACK_CUSTOM_TYPE, data: {} }),
+    ).toBeUndefined();
+    expect(
+      ackFromCustomEntry({
+        type: "custom",
+        customType: RUN_ACK_CUSTOM_TYPE,
+        data: { tool: "outil_inconnu" },
+      }),
+    ).toBeUndefined();
+    // Entrée de MÉTRIQUES : ce n'est pas un accusé.
+    expect(
+      ackFromCustomEntry({ type: "custom", customType: RUN_METRICS_CUSTOM_TYPE, data: { totalMs: 5 } }),
+    ).toBeUndefined();
   });
 });
 

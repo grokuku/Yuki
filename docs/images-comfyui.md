@@ -34,6 +34,30 @@ compris.
 **choisir** le workflow (`src/comfy/selection.ts`) et n'est jamais recopié dans le
 prompt (`src/comfy/generator.ts`).
 
+## Le FORMAT demandé (`ratio`) : il va jusqu'au latent
+
+`YUKI_WIDTH`/`YUKI_HEIGHT` reçoivent les réglages `images.width` × `images.height`
+(1024×1024 par défaut) — un couple **fixe**. Quand l'utilisateur demande un format
+précis (« une image réaliste au ratio 16:9 »), l'outil `generer_image` reçoit donc
+un paramètre **`ratio`** (`"16:9"`, `"9:16"`, `"4:3"`, `"1:1"`…), et les deux
+dimensions sont RECALCULÉES à **budget de pixels constant**
+(`src/comfy/ratio.ts:sizeForRatio`) : 16:9 avec le défaut ⇒ **1360×768**,
+9:16 ⇒ **768×1360**. Les côtés sont alignés sur un multiple de 16 (exigence des
+latents SD/Flux) et bornés à 64…4096.
+
+⚠️ Un format **illisible** est **refusé** (`invalid_ratio`, rien n'est soumis) :
+jamais un carré silencieux. Sans `ratio`, les réglages s'appliquent à
+l'identique (comportement historique).
+
+⚠️ Pourquoi c'est indispensable avec un graphe qui **déduit** sa résolution du
+ratio de l'image d'entrée (par ex. `FL_ImageBlank` → `AIHResolutionPresetV2` avec
+`use_image_ratio`) : ce nœud convertit le ratio du canevas en l'un des neuf
+formats connus, puis applique la table de résolution (ou le mode mégapixels). Un
+canevas **carré** y donne donc TOUJOURS un carré, quelle que soit la résolution
+finale (ex. 6 MP, multiple de 4 ⇒ 2508×2508) — même si le prompt final, lui,
+parle de 16:9. Le format doit donc être porté par les **dimensions**, pas
+seulement par le texte du prompt.
+
 ## `YUKI_OUTPUT` : l'image finale, et seulement elle
 
 Comportement exact (`src/comfy/client.ts:generate`, `src/comfy/generator.ts`) :
@@ -186,7 +210,8 @@ ne compte jamais dessus après coup.
 | --- | --- |
 | `src/comfy/validate.ts` | liste des sept étiquettes, résolution par titre, refus explicites |
 | `src/comfy/client.ts` | `POST /prompt`, `GET /history/{id}`, `GET /view` ; `findImageRef` (repli) et `findImageRefForNode` (`YUKI_OUTPUT`) ; `findFinalPromptText` (`YUKI_FINAL_PROMPT`, lit `ui.text`) |
-| `src/comfy/generator.ts` | passage du nœud de sortie et du nœud d'affichage, repli **annoncé** |
+| `src/comfy/generator.ts` | passage du nœud de sortie et du nœud d'affichage, repli **annoncé** ; dimensions calculées depuis le `ratio` demandé |
+| `src/comfy/ratio.ts` | `parseAspectRatio` / `sizeForRatio` : format demandé → dimensions (budget de pixels constant, multiples de 16) |
 | `src/comfy/images.ts` | stockage disque : copie immédiate, métadonnées, **rétention et purge**, rattachement à la conversation, vue d'affichage |
 | `src/files/retention.ts` | règle de rétention **partagée** (pièces jointes, images, captures) |
 | `src/gateway/ws/server.ts` | `restoreMedia` : ré-émission des médias conservés juste après un `snapshot` |

@@ -51,7 +51,7 @@ async function call(
 
 interface Harness {
   tool: Tool;
-  calls: Array<{ scene: string; style?: string }>;
+  calls: Array<{ scene: string; style?: string; ratio?: string }>;
   views: ComfyImageView[];
   /** FICHES (prompt final) émises APRÈS l'image. */
   fiches: ComfyImageFinalPromptView[];
@@ -65,7 +65,7 @@ function harness(options: {
   outputLabeled?: boolean;
   finalPrompt?: GeneratedImage["finalPrompt"];
 } = {}): Harness {
-  const calls: Array<{ scene: string; style?: string }> = [];
+  const calls: Array<{ scene: string; style?: string; ratio?: string }> = [];
   const views: ComfyImageView[] = [];
   const fiches: ComfyImageFinalPromptView[] = [];
   const order: string[] = [];
@@ -96,6 +96,7 @@ function harness(options: {
       calls.push({
         scene: input.scene,
         ...(input.style !== undefined ? { style: input.style } : {}),
+        ...(input.ratio !== undefined ? { ratio: input.ratio } : {}),
       });
       if (options.error) throw options.error;
       return image;
@@ -126,7 +127,7 @@ describe("l'outil existe et son contrat est explicite", () => {
     expect(tool.description).toContain("N'annonce JAMAIS le style");
   });
 
-  it("la scène est bornée par le schéma, et le style est facultatif", () => {
+  it("la scène est bornée par le schéma, le style et le RATIO sont facultatifs", () => {
     const { tool } = harness();
     const schema = tool.parameters as unknown as {
       properties?: Record<string, { maxLength?: number }>;
@@ -134,8 +135,35 @@ describe("l'outil existe et son contrat est explicite", () => {
     };
     expect(schema.properties?.scene?.maxLength).toBe(MAX_IMAGE_SCENE_CHARS);
     expect(schema.properties?.style).toBeDefined();
+    // FORMAT : sans ratio déclaré, l'outil ne pouvait pas transporter 16:9 jusqu'au
+    // latent (défaut corrigé : une image demandée en 16:9 sortait carrée).
+    expect(schema.properties?.ratio).toBeDefined();
     expect(schema.required).toContain("scene");
     expect(schema.required).not.toContain("style");
+    expect(schema.required).not.toContain("ratio");
+    expect(tool.description).toContain("ratio");
+  });
+
+  it("transmet le FORMAT demandé au générateur (et rien quand il est absent)", async () => {
+    const { tool, calls } = harness();
+    await call(tool, { scene: "Une scène.", ratio: "16:9" });
+    await call(tool, { scene: "Une scène." });
+    await call(tool, { scene: "Une scène.", ratio: "   " });
+    expect(calls).toEqual([
+      { scene: "Une scène.", ratio: "16:9" },
+      { scene: "Une scène." },
+      { scene: "Une scène." },
+    ]);
+  });
+
+  it("FORMAT refusé par le générateur : l'erreur réelle est rapportée (jamais un carré muet)", async () => {
+    const { tool } = harness({
+      error: new ComfyError("invalid_ratio", "Le format « carré » n'est pas un ratio lisible."),
+    });
+    const result = await call(tool, { scene: "Une scène.", ratio: "carré" });
+    expect(result.details.status).toBe("error");
+    expect(result.details.code).toBe("invalid_ratio");
+    expect(result.text).toContain("ratio lisible");
   });
 });
 

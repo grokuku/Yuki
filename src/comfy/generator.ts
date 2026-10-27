@@ -25,6 +25,7 @@ import type {
   GeneratedImagesPort,
 } from "./images.js";
 import { pngDimensions } from "./images.js";
+import { sizeForRatioOrThrow } from "./ratio.js";
 import { chooseWorkflow } from "./selection.js";
 import type { ComfyFinalPromptResult, ComfyLogger } from "./types.js";
 import { ComfyError } from "./types.js";
@@ -72,6 +73,15 @@ export interface ComfyImageGenerationPort {
   generate(input: {
     scene: string;
     style?: string;
+    /**
+     * FORMAT demandé (`« 16:9 »`, `« 9:16 »`, `« 1:1 »`…). Absent ⇒ dimensions
+     * des réglages (`images.width` × `images.height`), comportement historique.
+     *
+     * ⚠️ Un ratio DEMANDÉ devient un couple largeur/hauteur à budget de pixels
+     * constant (`./ratio.ts`) : c'est ce qui fait arriver le format au latent
+     * d'un graphe qui déduit sa résolution du ratio de l'image d'entrée.
+     */
+    ratio?: string;
     signal?: AbortSignal;
     onProgress?: (progress: ComfyProgress) => void;
   }): Promise<GeneratedImage>;
@@ -149,7 +159,19 @@ export function createComfyGenerator(
         );
       }
 
-      const sizes = options.sizes();
+      // ⚠️ FORMAT : la forme demandée prime sur le couple fixe des réglages, à
+      // budget de pixels constant. Sans format demandé, rien ne change.
+      const baseSizes = options.sizes();
+      const requestedRatio =
+        typeof input.ratio === "string" && input.ratio.trim() !== ""
+          ? input.ratio.trim()
+          : undefined;
+      const sizes =
+        requestedRatio !== undefined
+          ? sizeForRatioOrThrow(requestedRatio, baseSizes)
+          : baseSizes;
+      // Le format est résolu AVANT les réglages d'un ratio illisible : aucun
+      // graphe n'est soumis (refus explicite, jamais un carré silencieux).
       const { workflow, injected } = applyYukiValues(entry.workflow, entry.labels, {
         prompt: scene,
         // Négatif NEUTRE (aucun style) : uniquement si le graphe a le nœud.
@@ -171,6 +193,8 @@ export function createComfyGenerator(
         workflow: choice.name,
         reason: choice.reason,
         sceneChars: scene.length,
+        // Format réellement retenu (demandé, ou celui des réglages).
+        ratio: requestedRatio,
         width: entry.labels.YUKI_WIDTH ? sizes.width : undefined,
         height: entry.labels.YUKI_HEIGHT ? sizes.height : undefined,
         outputLabeled: outputNodeId !== undefined,

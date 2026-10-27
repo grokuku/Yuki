@@ -2560,19 +2560,53 @@ h6.md-heading {
   color: var(--muted);
 }
 
-/* ── ACCUSÉ DE RÉCEPTION (ligne de statut dans le fil) ─────────────────────
- * ⚠️ Ce n'est PAS une bulle de réponse : c'est une ligne courte et discrète qui
- * dit que la demande est prise en compte pendant qu'une ACTION démarre. Elle est
- * délibérément plus petite et plus sourde qu'un message pour qu'on ne la confonde
- * pas avec le fond, qui arrive ensuite. Aucun style en ligne (CSP). */
+/* ── ACCUSÉ DE RÉCEPTION (PREMIÈRE ligne de la bulle de réponse) ───────────
+ * ⚠️ Il vit DANS la bulle assistant, juste au-dessus du corps markdown : c'est le
+ * début de la réponse, pas un bloc posé à côté (une ligne séparée au-dessus d'une
+ * bulle vide faisait croire que Yuki n'avait rien répondu). Il reste délibérément
+ * plus petit, en italique et plus sourd que le fond, qui arrive ensuite, pour
+ * qu'on ne le confonde pas avec la réponse elle-même. Aucun style en ligne (CSP). */
 .ack-block {
-  align-self: flex-start;
-  max-width: 85%;
-  margin: 0 0 2px;
-  padding: 0 2px;
+  margin: 0 0 6px;
   font-size: 13px;
   font-style: italic;
+  line-height: 1.4;
   color: var(--muted);
+}
+
+/* ── ATTENTE dans la bulle (aucun accusé, aucun contenu encore) ────────────
+ * ⚠️ Une bulle de réponse ne doit JAMAIS être vide : tant que rien n'est dit,
+ * elle porte ces trois points, discrets et MUETS (`aria-hidden`, aucun texte
+ * lisible ni copiable — la forme est purement CSS). Ils disparaissent dès
+ * l'accusé ou le premier mot de la réponse. */
+.message__pending {
+  margin: 0 0 2px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+  letter-spacing: 2px;
+  animation: message-pending-pulse 1.4s ease-in-out infinite;
+}
+
+.message__pending::after {
+  content: "…";
+}
+
+@keyframes message-pending-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message__pending {
+    animation: none;
+    opacity: 0.7;
+  }
 }
 
 /* ── Image GÉNÉRÉE (bloc dans la conversation, CONSERVÉ avec le fil) ───────
@@ -2619,12 +2653,6 @@ h6.md-heading {
   display: block;
   margin: 4px 0 0;
   border: 1px solid var(--border);
-}
-
-.generated-image__note {
-  margin: 8px 0 0;
-  font-size: 12.5px;
-  color: var(--muted);
 }
 
 /* ── PROMPT FINAL (sortie du workflow, sous l'image) ────────────────────────

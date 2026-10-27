@@ -237,6 +237,34 @@ describe("étiquettes écrites aux BONS champs (PIÈGE ②)", () => {
     expect(graph.save?.inputs.filename_prefix).toBe("Yuki");
   });
 
+  it("FORMAT 16:9 : écrit des dimensions de PAYSAGE (jamais le carré des réglages)", async () => {
+    // ⚠️ DÉFAUT CORRIGÉ : un format demandé n'arrivait pas au latent (le graphe
+    // recevait toujours le couple FIXE des réglages ⇒ carré). Ici le budget de
+    // pixels est conservé et la FORME suit le ratio demandé.
+    const { generate, submitted } = harness({ sizes: { width: 1024, height: 1024 } });
+    await generate.generate({ scene: "Un gladiteur au Colisée, lumière rasante.", ratio: "16:9" });
+    const graph = submitted[0] as Record<string, { inputs: Record<string, unknown> }>;
+    expect(graph["latent"]?.inputs.width).toBe(1360);
+    expect(graph["latent-h"]?.inputs.height).toBe(768);
+    expect(graph["latent"]?.inputs.width).not.toBe(graph["latent-h"]?.inputs.height);
+  });
+
+  it("FORMAT illisible : REFUS explicite, AUCUN graphe soumis", async () => {
+    const { generate, submitted } = harness();
+    await expect(
+      generate.generate({ scene: "Un portrait.", ratio: "grand angle" }),
+    ).rejects.toMatchObject({ code: "invalid_ratio" });
+    expect(submitted).toHaveLength(0);
+  });
+
+  it("sans format demandé : les dimensions des réglages sont écrites (comportement historique)", async () => {
+    const { generate, submitted } = harness({ sizes: { width: 1024, height: 1024 } });
+    await generate.generate({ scene: "Un portrait." });
+    const graph = submitted[0] as Record<string, { inputs: Record<string, unknown> }>;
+    expect(graph["latent"]?.inputs.width).toBe(1024);
+    expect(graph["latent-h"]?.inputs.height).toBe(1024);
+  });
+
   it("n'injecte QUE les étiquettes présentes dans le graphe", async () => {
     // Un SEUL workflow, qui ne porte QUE le prompt obligatoire.
     const { generate, summaries, submitted } = harness({

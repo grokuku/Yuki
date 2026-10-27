@@ -1253,6 +1253,9 @@ function applyTranscript(transcript) {
     } else {
       // Statistiques PERSISTÉES : elles rétablissent le pied technique après un
       // rechargement. Absentes (ancienne session) ⇒ aucun pied, aucune ligne.
+      // ⚠️ JAMAIS DE BULLE VIDE : une entrée sans contenu ET sans accusé n'est
+      // pas rendue du tout (aucune bulle fantôme après restauration).
+      if ((entry.text ?? "").trim() === "" && typeof entry.ack !== "string") continue;
       const div = appendAssistantMessage(entry.text ?? "", pinned, ts);
       const meta = runMetricsText(entry.metrics);
       if (meta) setMeta(div, meta);
@@ -1263,6 +1266,10 @@ function applyTranscript(transcript) {
         entryId: typeof entry.id === "string" ? entry.id : null,
         reaction: typeof entry.reaction === "string" ? entry.reaction : null,
       });
+      // ACCUSÉ PERSISTÉ (il fait partie du message) : il revient donc après un
+      // rechargement, en PREMIÈRE ligne de la bulle, AVANT le corps (le point
+      // d'insertion est le corps, l'ordre des appels n'y change rien).
+      if (typeof entry.ack === "string") ackBlocks.show(div, entry.ack);
     }
   }
   currentRenderer = null;
@@ -1402,7 +1409,9 @@ function handleFrame(frame) {
     approvalLayer.reset();
     screenshotBlocks.reset();
     imageBlocks.reset();
-    ackBlocks.reset();
+    // ⚠️ Les accusés ne sont PLUS des blocs éphémères : ils font partie du
+    // message (persistés avec lui). On ne les efface donc pas ici — le snapshot
+    // qui suit reconstruit le fil, accusés compris.
     fileBlocks.reset();
     subagentActivity.reset();
     thinkingBlocks.reset();
@@ -1560,16 +1569,22 @@ function handleFrame(frame) {
     return;
   }
   // ACCUSÉ DE RÉCEPTION : trame de CONTRÔLE (aucun `seq` consommé), traitée AVANT
-  // le curseur `seq` (sinon prise pour un doublon). Placée JUSTE AVANT la bulle
-  // assistant encore vide du run : elle reste donc au-dessus de la réponse et de
-  // l'image qui suivent. Un fil non focalisé ne la dessine pas.
+  // le curseur `seq` (sinon prise pour un doublon). ⚠️ C'est la PREMIÈRE LIGNE de
+  // la réponse : elle s'affiche DANS la bulle assistant du run (au-dessus du
+  // corps markdown où le texte s'ajoutera ensuite), jamais dans un bloc séparé.
+  // Un fil non focalisé ne la dessine pas.
   if (type === "ack") {
     const ackTarget =
       typeof frame.sessionId === "string" && frame.sessionId.length > 0
         ? frame.sessionId
         : sessionId;
     if (ackTarget && ackTarget !== sessionId) return;
-    ackBlocks.show(frame.text, { before: currentAssistant });
+    const pinned = isConversationPinned();
+    if (!currentAssistant) {
+      currentAssistant = appendAssistantMessage(null, pinned, Date.now());
+    }
+    ackBlocks.show(currentAssistant, frame.text);
+    pinIfNeeded(pinned);
     return;
   }
   // FICHIER envoyé par Yuki : trame de CONTRÔLE (aucun `seq` consommé). La carte
@@ -1760,15 +1775,20 @@ function applyEvent(frame) {
         stopLiveStats();
       }
       return;
-    case "run_started":
+    case "run_started": {
       els.queued.hidden = true;
       // Dès le lancement du run — AVANT le premier token — l'attente est
       // visible : c'est le seul indicateur entre l'envoi et le premier contenu.
       showThinking();
-      currentAssistant = appendAssistantMessage(null, undefined, Date.now());
+      // `pinned` mesuré AVANT que la bulle ne grandisse (attente + pied).
+      const pinned = isConversationPinned();
+      currentAssistant = appendAssistantMessage(null, pinned, Date.now());
+      // AUCUNE BULLE VIDE : l'attente muette occupe la bulle tant que rien n'est dit.
+      ackBlocks.pending(currentAssistant);
       // Pied de stats VISIBLE dès le lancement, mis à jour en direct (temps
       // écoulé) puis complété au premier token (TTFT).
       startLiveStats(frame.runId, currentAssistant);
+      pinIfNeeded(pinned);
       // Nouveau run : réinitialise le diagnostic TTS.
       ttsRequestedRun = frame.runId ?? null;
       ttsActivityRun = null;
@@ -1780,6 +1800,7 @@ function applyEvent(frame) {
         if (frame.jobId) currentAssistant.dataset.jobId = frame.jobId;
       }
       return;
+    }
     case "delta":
       if (frame.channel === "thinking") {
         showThinking();
@@ -1794,6 +1815,9 @@ function applyEvent(frame) {
         if (!currentAssistant) {
           currentAssistant = appendAssistantMessage(null, pinned, Date.now());
         }
+        // Le premier mot de la réponse remplace l'indicateur d'attente : l'accusé,
+        // s'il y en a un, reste la première ligne de la bulle.
+        ackBlocks.settled(currentAssistant);
         if (currentRenderer) currentRenderer.push(frame.text ?? "");
         pinIfNeeded(pinned);
       }
@@ -1880,11 +1904,18 @@ function applyEvent(frame) {
         // pied (infos techniques) font partie de la bulle mais ne sont PAS des
         // réponses du modèle.
         const hasText = producedContent;
+        // ⚠️ L'accusé est DÉJÀ le début de la réponse : quand il est là et que le
+        // run s'achève NORMALEMENT, la bulle n'est pas muette, on n'ajoute donc
+        // pas de parenthèse technique (elle contredirait la ligne de statut que
+        // l'utilisateur vient de lire). ⚠️ Un ABANDON, lui, reste DIT : c'est une
+        // issue distincte, l'utilisateur doit savoir que rien d'autre n'arrivera.
+        const hasAck = ackBlocks.has(currentAssistant);
+        ackBlocks.settled(currentAssistant);
         if (frame.reason === "abort" && !hasText) {
           // On écrit dans le CORPS markdown (jamais `textContent` de la bulle :
           // cela effacerait l'en-tête d'heure et le pied technique).
           if (currentRenderer) currentRenderer.setText("(interrompu)");
-        } else if (frame.reason === "done" && !hasText) {
+        } else if (frame.reason === "done" && !hasText && !hasAck) {
           // Rien à afficher : on le DIT (bulle muette + métadonnées sinon
           // incompréhensibles), au lieu de laisser une bulle vide.
           if (currentRenderer) currentRenderer.setText("(aucune réponse texte reçue)");

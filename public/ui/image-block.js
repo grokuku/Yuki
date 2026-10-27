@@ -70,11 +70,6 @@ export function generatedImageMeta(image) {
 /** Libellé accessible du bouton de copie du prompt final (jamais un silence). */
 export const FINAL_PROMPT_COPY_LABEL = "Copier le prompt final";
 
-/** Phrase qui dit la CONSERVATION réelle de l'image (jamais « éphémère »). */
-export const GENERATED_IMAGE_KEPT_NOTE =
-  "Image conservée avec la conversation (même durée que les pièces jointes), " +
-  "servie par Yuki : elle reste affichée après un rechargement.";
-
 /**
  * Bloc REPLIABLE du prompt final : lecture seule, copiable, borné.
  *
@@ -177,9 +172,11 @@ export function createImageBlocks({ container, zoom } = {}) {
           h("span", { class: "generated-image__badge", text: generatedImageMeta(image) }),
         ]),
         // ⚠️ ORDRE DU DOM = ORDRE D'AFFICHAGE : image, PUIS fiche (sous l'image).
+        // ⚠️ AUCUNE phrase de conservation : la durée de rétention et le service
+        // same-origin sont des détails techniques déjà dits aux réglages. La
+        // carte se contente de montrer l'image, sa taille et sa fiche.
         buildImage(image),
         buildFinalPrompt(image?.finalPrompt),
-        h("p", { class: "generated-image__note", text: GENERATED_IMAGE_KEPT_NOTE }),
       ],
     );
   }
@@ -220,12 +217,9 @@ export function createImageBlocks({ container, zoom } = {}) {
     const image = block.querySelector(
       `:scope > .${ZOOM_WRAPPER_CLASS}, :scope > .generated-image__image`,
     );
-    const note = block.querySelector(":scope > .generated-image__note");
     if (image) {
       // ⚠️ APRÈS l'image : la fiche ne pousse donc jamais l'image vers le bas.
       image.after(fiche);
-    } else if (note) {
-      note.before(fiche);
     } else {
       block.append(fiche);
     }

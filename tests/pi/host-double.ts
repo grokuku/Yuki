@@ -554,6 +554,11 @@ export class FakePiHost implements PiHost {
     });
 
     let contentText = "";
+    // ACCUSÉ DE RÉCEPTION du run : le VRAI host l'attache au message assistant
+    // (première ligne de la bulle) et le persiste à part (`yuki.run_ack`). Le
+    // double en fait autant, sinon les tests d'interface prouveraient un
+    // comportement que la production n'a pas.
+    let ackText: string | undefined;
     for (const step of run.script.steps) {
       if (run.aborted) break;
       await sleep((step.delayMs ?? 1) * this.latencyScale, run.abortController.signal);
@@ -567,6 +572,9 @@ export class FakePiHost implements PiHost {
         // ⚠️ L'accusé n'est PAS du contenu : il ne marque pas le premier token et
         // n'entre pas dans `partial` (comme dans le vrai host, où il part au
         // démarrage d'un outil, après l'émission de la réponse du modèle).
+        // Il est en revanche MÉMORISÉ pour le message assistant : c'est la
+        // première ligne de la bulle, et elle survit au rechargement.
+        ackText = step.text;
         this.emit({
           type: "ack",
           sessionId: this.sessionId,
@@ -604,7 +612,12 @@ export class FakePiHost implements PiHost {
         role: "assistant",
         text: contentText,
         id: assistantEntryId,
+        ...(ackText !== undefined ? { ack: ackText } : {}),
       });
+    } else if (ackText !== undefined) {
+      // Run sans aucun contenu mais AVEC accusé : la bulle existe quand même
+      // (elle porte l'accusé seul) — jamais une bulle vide.
+      this.transcript.push({ role: "assistant", text: "", ack: ackText });
     }
     this.partial = "";
     run.instrumentation.complete(

@@ -401,9 +401,19 @@ check(
   state.text.slice(0, 200),
 );
 check(
-  "la fiche DIT la conservation RÉELLE (même durée que les pièces jointes)",
-  /conserv/i.test(state.text) && /rechargement/i.test(state.text),
+  "AUCUN bavardage technique : la carte ne parle pas de conservation ni de rechargement",
+  !/conserv/i.test(state.text) &&
+    !/rechargement/i.test(state.text) &&
+    !/pièces jointes/i.test(state.text) &&
+    !/servie par Yuki/i.test(state.text),
   state.text.slice(0, 260),
+);
+check(
+  "la carte montre l'essentiel : dimensions, taille et fiche du prompt final",
+  /64×64/.test(state.text) &&
+    /Ko|octets/.test(state.text) &&
+    /Prompt final \(\d+ caractères\)/.test(state.text),
+  state.text.slice(0, 200),
 );
 check(
   "source SAME-ORIGIN `/images/…` (CSP `img-src 'self'` inchangée)",

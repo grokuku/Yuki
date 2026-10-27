@@ -214,6 +214,12 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
       "proche parmi ceux proposés dans tes consignes (libellé + description). " +
       "Omets-le quand l'utilisateur ne précise rien : la scène décide alors. Si " +
       "rien ne correspond, le workflow par défaut s'applique.\n" +
+      "• `ratio` (facultatif) : FORMAT demandé, sous la forme « largeur:hauteur » " +
+      "(exemples : « 16:9 » pour un paysage large, « 9:16 » pour un téléphone, " +
+      "« 1:1 » pour un carré). ⚠️ Donne-le DÈS que l'utilisateur parle d'un " +
+      "format, d'un cadrage ou d'une orientation : c'est ce qui règle VRAIMENT " +
+      "les dimensions du canevas. Sans lui, les dimensions par défaut " +
+      "s'appliquent (souvent un carré). Ne l'invente pas s'il ne demande rien.\n" +
       "⚠️ N'annonce JAMAIS le style ni le workflow retenu : dis seulement ce que " +
       "montre l'image, ou pose une question sur ce qu'il faut changer.\n" +
       "Le résultat peut contenir le PROMPT FINAL produit par le workflow, dans un " +
@@ -223,7 +229,7 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
       "n'interrompt pas la conversation ; en cas d'échec, le message dit " +
       "exactement ce que le serveur a répondu (inutile de le deviner).",
     promptSnippet:
-      "generer_image(scene, style?) — génère une image via ComfyUI (scène en texte libre, SANS style) et te la montre",
+      "generer_image(scene, style?, ratio?) — génère une image via ComfyUI (scène en texte libre, SANS style ; `ratio` pour le format) et te la montre",
     parameters: Type.Object({
       scene: Type.String({
         minLength: 1,
@@ -241,9 +247,18 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
             "dans la scène et n'est jamais annoncé.",
         }),
       ),
+      ratio: Type.Optional(
+        Type.String({
+          maxLength: 16,
+          description:
+            "FORMAT demandé sous la forme « largeur:hauteur » (ex. « 16:9 », " +
+            "« 9:16 », « 4:3 », « 1:1 »). À fournir dès que l'utilisateur précise " +
+            "un format, un cadrage ou une orientation. Omis ⇒ dimensions par défaut.",
+        }),
+      ),
     }),
     execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
-      const input = params as { scene: string; style?: unknown };
+      const input = params as { scene: string; style?: unknown; ratio?: unknown };
       const scene = input.scene.trim();
       if (scene === "") {
         const payload = {
@@ -275,12 +290,20 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
         typeof input.style === "string" && input.style.trim() !== ""
           ? input.style.trim()
           : undefined;
+      // FORMAT : on ne devine JAMAIS à partir de la scène (le texte reste la
+      // scène). Un format fourni mais illisible est REFUSÉ explicitement par le
+      // générateur (`invalid_ratio`), jamais remplacé en silence par un carré.
+      const ratio =
+        typeof input.ratio === "string" && input.ratio.trim() !== ""
+          ? input.ratio.trim()
+          : undefined;
       const sessionId = sessionIdFromContext(ctx);
 
       try {
         const image = await port.generate({
           scene,
           ...(style !== undefined ? { style } : {}),
+          ...(ratio !== undefined ? { ratio } : {}),
           ...(signal ? { signal } : {}),
         });
 

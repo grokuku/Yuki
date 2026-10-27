@@ -2,8 +2,11 @@
  * Transport WS — ACCUSÉ DE RÉCEPTION.
  *
  * ⚠️ Ce que ce fichier prouve :
- *  - l'accusé voyage en trame de CONTRÔLE : aucun `seq` consommé, jamais dans le
- *    rejeu ni dans le snapshot, jamais dans le transcript ;
+ *  - l'accusé voyage en trame de CONTRÔLE : aucun `seq` consommé, jamais rejoué,
+ *    jamais dans le TEXTE d'un message ;
+ *  - il est en revanche PERSISTÉ AVEC le message (champ `ack` de l'entrée de
+ *    transcript) : c'est ce qui le fait revenir après un rechargement, au lieu
+ *    de laisser une bulle de réponse VIDE (défaut signalé par l'utilisateur) ;
  *  - il est diffusé à la SEULE conversation concernée ;
  *  - il garde son ORDRE : il arrive AVANT la trame de l'action qui démarre
  *    (`job_started`) et avant le contenu qui suit ;
@@ -74,12 +77,20 @@ describe("accusé de réception — trame de contrôle", () => {
     void snapshot;
 
     await c.waitFor("run_finished");
-    // ⚠️ Jamais dans le snapshot : ni l'accusé, ni un message.
+    // ⚠️ PERSISTÉ AVEC LE MESSAGE : après rechargement, l'accusé est là — dans le
+    // CHAMP `ack` de l'entrée assistant, jamais dans le texte de la réponse.
     const after = await newClientSnapshot(h, c);
-    expect(JSON.stringify(after)).not.toContain("Je m'en occupe");
-    expect(
-      after.transcript.filter((entry: { role?: string }) => entry.role === "assistant"),
-    ).toHaveLength(1);
+    const assistants = after.transcript.filter(
+      (entry: { role?: string }) => entry.role === "assistant",
+    );
+    expect(assistants).toHaveLength(1);
+    expect((assistants[0] as { ack?: string }).ack).toBe("Je m'en occupe.");
+    const texts = (after.transcript as Array<{ text?: string }>)
+      .map((entry) => entry.text ?? "")
+      .join("\n");
+    expect(texts).not.toContain("Je m'en occupe");
+    // Le contenu, lui, est intact et complet.
+    expect(texts).toContain("C'est noté, je te tiens au courant.");
   });
 
   it("une question simple ne produit AUCUN accusé", async () => {

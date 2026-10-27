@@ -7,9 +7,13 @@
  *   1. une QUESTION SIMPLE ne produit AUCUN accusé (et sa réponse est intacte) ;
  *   2. une ACTION qui démarre produit un accusé COURT et HUMAIN (« Je m'en
  *      occupe. »), qui n'est PAS une bulle de réponse ;
- *   3. l'accusé apparaît AVANT le contenu : ordre mesuré par MutationObserver
- *      (horodatages `performance.now()` à l'insertion de l'accusé vs au premier
- *      texte de la réponse) ;
+ *   3. l'accusé est le DÉBUT DE LA RÉPONSE : il est un ENFANT de la bulle
+ *      assistant (mesure DOM : parent, ordre, rectangles), jamais un bloc posé
+ *      à côté au-dessus d'une bulle vide ;
+ *   3bis. AUCUNE bulle vide : un run qui ne produit aucun texte mais accuse
+ *      réception affiche l'accusé SEUL dans la bulle ;
+ *   3ter. l'accusé SURVIT au RECHARGEMENT (persisté avec le message) et il est
+ *      présent dans le texte du message (copie / sélection) ;
  *   4. AUCUN surcoût au TTFT : le `run_summary` du tour « action » porte le MÊME
  *      TTFT que celui du tour « question » (même délai de premier token) ;
  *   5. l'accusé n'est JAMAIS prononcé (texte réellement synthétisé), alors que la
@@ -317,7 +321,20 @@ const action = await evaluate(`(() => {
   const ack = acks[acks.length - 1] ?? null;
   const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
   const last = bubbles[bubbles.length - 1] ?? null;
-  const rect = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; };
+  const body = last ? last.querySelector('.message__body') : null;
+  const rect = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
+  // ⚠️ TEXTES SÉLECTIONNÉS / COPIÉS : c'est ce que l'utilisateur récupère quand
+  // il sélectionne la bulle (aucun bouton « copier le message » n'existe).
+  let selected = '';
+  if (last) {
+    const range = document.createRange();
+    range.selectNodeContents(last);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    selected = sel.toString();
+    sel.removeAllRanges();
+  }
   return {
     acks: acks.length,
     ackText: ack ? ack.textContent : null,
@@ -327,9 +344,17 @@ const action = await evaluate(`(() => {
     ackStyled: ack ? ack.getAttribute('style') : null,
     ackRect: ack ? rect(ack) : null,
     bubbleRect: last ? rect(last) : null,
-    bubbleText: last ? (last.querySelector('.message__body')?.textContent ?? '') : '',
-    // Ordre DOM : l'accusé VIENT AVANT la bulle (DOCUMENT_POSITION_FOLLOWING).
-    ackBeforeBubble: Boolean(ack && last && (ack.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_FOLLOWING)),
+    bubbleText: body ? body.textContent : '',
+    // ⚠️ MESURE DE STRUCTURE : l'accusé est-il un ENFANT de la bulle ?
+    ackParentIsBubble: Boolean(ack && last && ack.parentElement === last),
+    ackInsideBubble: Boolean(ack && last && last.contains(ack)),
+    ackInThreadOnly: Boolean(ack && !ack.closest('.message--assistant')),
+    // Ordre DANS la bulle : l'accusé PRÉCÈDE le corps de la réponse.
+    ackBeforeBody: Boolean(ack && body && (ack.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING)),
+    // Le texte complet de la bulle (heure + accusé + réponse) : l'accusé en tête.
+    fullText: last ? last.textContent : '',
+    selected,
+    pending: document.querySelectorAll('#conversation .message__pending').length,
     order: window.__order ?? [],
   };
 })()`);
@@ -359,19 +384,118 @@ check(
   JSON.stringify(action.order),
 );
 check(
-  "ORDRE VISUEL : l'accusé est AU-DESSUS de la bulle de réponse",
-  action.ackBeforeBubble === true &&
+  "STRUCTURE : l'accusé est un ENFANT de la bulle de réponse (même nœud)",
+  action.ackParentIsBubble === true && action.ackInsideBubble === true && action.ackInThreadOnly === false,
+  JSON.stringify({
+    parent_est_bulle: action.ackParentIsBubble,
+    dans_bulle: action.ackInsideBubble,
+    hors_bulle: action.ackInThreadOnly,
+  }),
+);
+check(
+  "ORDRE DANS LA BULLE : l'accusé est AVANT le corps de la réponse",
+  action.ackBeforeBody === true &&
     typeof action.ackRect?.top === "number" &&
     typeof action.bubbleRect?.top === "number" &&
-    action.ackRect.top < action.bubbleRect.top,
+    action.ackRect.top >= action.bubbleRect.top &&
+    action.ackRect.bottom <= action.bubbleRect.bottom,
   JSON.stringify({ ack: action.ackRect, bulle: action.bubbleRect }),
 );
 check(
-  "le fond arrive ensuite : la réponse est complète sous l'accusé",
+  "le fond arrive ensuite : la réponse est complète APRÈS l'accusé (pas un remplacement)",
   /Voici la réponse, courte et directe/.test(action.bubbleText),
   action.bubbleText.slice(0, 120),
 );
+check(
+  "la bulle n'est JAMAIS vide : elle porte l'accusé et/ou le texte",
+  (action.fullText ?? "").trim().length > 0 && action.pending === 0,
+  JSON.stringify({ texte: (action.fullText ?? "").slice(0, 80), attente: action.pending }),
+);
+check(
+  "COPIE DU MESSAGE : l'accusé est dans le texte sélectionné, AVANT la réponse",
+  /Je m'en occupe\./.test(action.selected) &&
+    /Voici la réponse, courte et directe/.test(action.selected) &&
+    action.selected.indexOf("Je m'en occupe.") < action.selected.indexOf("Voici la réponse"),
+  JSON.stringify(action.selected.slice(0, 160)),
+);
+check(
+  "AUCUN doublon d'accusé (une seule ligne, même après le texte)",
+  (action.fullText.match(/Je m'en occupe\./g) ?? []).length === 1,
+  String((action.fullText.match(/Je m'en occupe\./g) ?? []).length),
+);
 await shot("ack-action");
+
+/* ═════════ 2bis) ACTION SANS CONTENU : l'accusé SEUL dans la bulle ══════ */
+await evaluate(`window.__orderObserver?.disconnect(); window.__order = []; true`);
+await fetch(`${control}/send?script=action_only`);
+await waitForSummary();
+await sleep(400);
+const onlyAck = await evaluate(`(() => {
+  const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
+  const last = bubbles[bubbles.length - 1] ?? null;
+  const ack = last ? last.querySelector('.ack-block') : null;
+  const body = last ? last.querySelector('.message__body') : null;
+  return {
+    bubbles: bubbles.length,
+    ackText: ack ? ack.textContent : null,
+    ackInBubble: Boolean(ack && last && ack.parentElement === last),
+    bodyText: body ? body.textContent : null,
+    fullText: last ? last.textContent.trim() : '',
+    pending: document.querySelectorAll('#conversation .message__pending').length,
+  };
+})()`);
+check(
+  "action SANS texte : la bulle affiche l'ACCUSÉ seul (jamais une bulle vide)",
+  onlyAck.ackInBubble === true &&
+    onlyAck.ackText === "C'est parti." &&
+    (onlyAck.fullText ?? "").replace(/\d{2}:\d{2}/, "").trim().length > 0,
+  JSON.stringify(onlyAck),
+);
+check(
+  "action SANS texte : aucune parenthèse technique contradictoire dans le corps",
+  (onlyAck.bodyText ?? "") === "" && onlyAck.pending === 0,
+  JSON.stringify({ corps: onlyAck.bodyText, attente: onlyAck.pending }),
+);
+await shot("ack-action-sans-texte");
+
+/* ═════════ 2ter) RECHARGEMENT : l'accusé est PERSISTÉ avec le message ═══ */
+await navigate(`${base}/`);
+check(
+  "rechargement : connexion rétablie",
+  await waitFor(`document.querySelector('#connection')?.textContent === 'connecté'`),
+);
+const afterReload = await evaluate(`(() => {
+  const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
+  const withAck = bubbles.filter((b) => b.querySelector('.ack-block'));
+  return {
+    bubbles: bubbles.length,
+    withAck: withAck.length,
+    acks: [...document.querySelectorAll('#conversation .ack-block')].map((a) => a.textContent),
+    acksInBubbles: [...document.querySelectorAll('#conversation .ack-block')].every(
+      (a) => a.parentElement && a.parentElement.classList.contains('message--assistant'),
+    ),
+    emptyBubbles: bubbles.filter((b) => {
+      const body = b.querySelector('.message__body');
+      return (body ? body.textContent : '').trim() === '' && !b.querySelector('.ack-block');
+    }).length,
+  };
+})()`);
+check(
+  "RECHARGEMENT : les accusés sont TOUJOURS là (persistés avec le message)",
+  afterReload.withAck === 2 && afterReload.acks.includes("Je m'en occupe.") && afterReload.acks.includes("C'est parti."),
+  JSON.stringify(afterReload),
+);
+check(
+  "RECHARGEMENT : les accusés sont DANS les bulles (aucun bloc hors bulle)",
+  afterReload.acksInBubbles === true,
+  JSON.stringify(afterReload.acks),
+);
+check(
+  "RECHARGEMENT : AUCUNE bulle vide",
+  afterReload.emptyBubbles === 0,
+  String(afterReload.emptyBubbles),
+);
+await shot("ack-apres-rechargement");
 
 /* ═════════ 3) AUCUN surcoût au TTFT (même délai de premier token) ═══════ */
 const ttftQuestion = simpleSummary?.ttftMs;

@@ -48,6 +48,7 @@ export type ComfyConfigProvider = () => ComfyConfig;
  *  - `no_workflow` : aucun workflow importé ;
  *  - `no_matching_workflow` : aucun workflow ne correspond ET aucun défaut ;
  *  - `workflow_not_found` : nom de workflow inconnu ;
+ *  - `invalid_ratio` : format demandé illisible (`16:9` attendu) ;
  *  - `storage_failed` : impossible d'enregistrer l'image sur le volume.
  */
 export type ComfyErrorCode =
@@ -66,6 +67,7 @@ export type ComfyErrorCode =
   | "no_workflow"
   | "no_matching_workflow"
   | "workflow_not_found"
+  | "invalid_ratio"
   | "storage_failed";
 
 /** Erreur portant la cause observée (statut HTTP, code réseau, message serveur). */

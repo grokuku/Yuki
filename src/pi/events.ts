@@ -16,6 +16,7 @@ import type {
   TranscriptEntry,
 } from "./types.js";
 import { stripTimestampPrefix } from "./timestamp.js";
+import { ackTextForTool } from "./ack.js";
 import { parseRecapPrompt } from "../recap/prompt.js";
 import { stripFilesBlock } from "../files/frame.js";
 
@@ -168,6 +169,44 @@ export interface TranscriptRestoreOptions {
 export const RUN_METRICS_CUSTOM_TYPE = "yuki.run_metrics";
 
 /**
+ * Type d'entrée `custom` portant l'ACCUSÉ DE RÉCEPTION d'un message assistant
+ * (« C'est parti. », « Je m'en occupe. »).
+ *
+ * ⚠️ Écrite elle aussi via `SessionManager.appendCustomEntry`, donc dans la
+ * branche de session, ENFANT de l'entrée de message assistant qu'elle préface :
+ * l'accusé revient donc après un RECHARGEMENT (et même après un redémarrage du
+ * gateway, puisque le JSONL de session est la source de reprise).
+ *
+ * ⚠️ Le `data` ne contient QUE le NOM DE L'OUTIL (`{"tool":"generer_image"}`),
+ * jamais la phrase affichée : le libellé reste l'unique affaire de
+ * `./ack.ts` (`ackTextForTool`), donc il ne peut pas se figer dans l'historique
+ * ni fuiter comme phrase du modèle. Le SDK Pi IGNORE les entrées `custom` dans
+ * le contexte du modèle (`sessionEntryToContextMessages` renvoie `[]`) : un
+ * accusé n'est donc jamais mémoire, jamais un tour du modèle.
+ */
+export const RUN_ACK_CUSTOM_TYPE = "yuki.run_ack";
+
+/**
+ * Extrait l'ACCUSÉ d'une entrée `custom` de type `yuki.run_ack`.
+ *
+ * Le texte n'est PAS lu dans le JSONL : il est REDÉRIVÉ du nom d'outil par la
+ * règle unique (`ackTextForTool`). Un outil inconnu (ou une entrée d'une version
+ * antérieure) est ignoré — jamais un accusé inventé.
+ */
+export function ackFromCustomEntry(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const entry = raw as { type?: unknown; customType?: unknown; data?: unknown };
+  if (entry.type !== "custom" || entry.customType !== RUN_ACK_CUSTOM_TYPE) {
+    return undefined;
+  }
+  const data = entry.data;
+  if (!data || typeof data !== "object") return undefined;
+  const tool = (data as Record<string, unknown>).tool;
+  if (typeof tool !== "string") return undefined;
+  return ackTextForTool(tool);
+}
+
+/**
  * Extrait les statistiques d'une entrée `custom` de type `yuki.run_metrics`.
  *
  * ⚠️ SEULS trois NOMBRES sont repris (`ttftMs`, `totalMs`, `tokensOut`) : tout
@@ -225,6 +264,11 @@ function isSyntheticUserText(
  *   - une entrée `custom` de type `yuki.run_metrics` n'apparaît JAMAIS comme
  *     bulle, mais ses NOMBRES sont rattachés au message assistant dont elle est
  *     l'enfant (`parentId`) et exposés via `TranscriptEntry.metrics` ;
+ *   - une entrée `custom` de type `yuki.run_ack` n'apparaît JAMAIS comme bulle
+ *     non plus : son libellé (redérivé du nom d'outil) est exposé via
+ *     `TranscriptEntry.ack`, c'est-à-dire la PREMIÈRE ligne de la bulle de
+ *     réponse — donc visible après un rechargement, sans jamais entrer dans le
+ *     texte du message ;
  *   - chaque entrée de message expose son IDENTIFIANT d'entrée de session
  *     (`TranscriptEntry.id`), seule corrélation admise pour les RÉACTIONS.
  *
@@ -295,19 +339,49 @@ export function transcriptFromEntries(
       assistantIndexById.set(entryId, transcript.length - 1);
     }
   }
-  // Second passage : rattache chaque entrée `custom` de métriques au message
-  // assistant DONT ELLE EST L'ENFANT (`parentId`). Une métrique sans parent
-  // assistant — entrée orpheline d'une session corrompue ou d'une ancienne
-  // version — est simplement IGNORÉE (jamais de pied sans message).
+  // Second passage : rattache chaque entrée `custom` (métriques, accusé) au
+  // message assistant DONT ELLE DÉPEND. Une entrée orpheline — parent disparu,
+  // session corrompue, ancienne version — est simplement IGNORÉE (jamais un pied
+  // ni un accusé sans message).
+  //
+  // ⚠️ Le parent N'EST PAS toujours le message : deux entrées `custom` d'un même
+  // message (l'accusé puis les métriques, écrites dans cet ordre) forment une
+  // CHAÎNE (message → accusé → métriques). On remonte donc la chaîne des
+  // `parentId` jusqu'au premier message assistant connu — c'est ce qui rend le
+  // rattachement insensible à l'ordre d'écriture.
+  const byId = new Map<string, unknown>();
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
-    const parentId = (raw as { parentId?: unknown }).parentId;
-    if (typeof parentId !== "string") continue;
-    const index = assistantIndexById.get(parentId);
+    const id = (raw as { id?: unknown }).id;
+    if (typeof id === "string") byId.set(id, raw);
+  }
+  const assistantIndexOf = (raw: unknown): number | undefined => {
+    let current = raw;
+    // Borne dure : une chaîne corrompue (cycle) ne boucle pas indéfiniment.
+    for (let hops = 0; hops < 64; hops += 1) {
+      if (!current || typeof current !== "object") return undefined;
+      const parentId = (current as { parentId?: unknown }).parentId;
+      if (typeof parentId !== "string") return undefined;
+      const parent = byId.get(parentId);
+      const index = assistantIndexById.get(parentId);
+      if (index !== undefined) return index;
+      if (parent === undefined) return undefined;
+      current = parent;
+    }
+    return undefined;
+  };
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    if ((raw as { type?: unknown }).type !== "custom") continue;
+    const index = assistantIndexOf(raw);
     if (index === undefined) continue;
     const metrics = metricsFromCustomEntry(raw);
-    if (!metrics) continue;
-    transcript[index].metrics = metrics;
+    if (metrics) {
+      transcript[index].metrics = metrics;
+      continue;
+    }
+    const ack = ackFromCustomEntry(raw);
+    if (ack !== undefined) transcript[index].ack = ack;
   }
   return transcript;
 }

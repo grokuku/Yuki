@@ -67,9 +67,12 @@ describe("garde-fous statiques de image-block.js", () => {
   it("expose `reset()` pour la reconstruction du fil, SANS perdre l'image du serveur", () => {
     expect(SOURCE).toContain("function reset()");
     expect(SOURCE).toContain(".generated-image");
-    // ⚠️ L'image est CONSERVÉE côté serveur : le bloc ne prétend plus être
-    // éphémère, il dit la vérité sur sa durée de conservation.
-    expect(SOURCE).toContain("GENERATED_IMAGE_KEPT_NOTE");
+    // ⚠️ L'image est CONSERVÉE côté serveur, mais la carte ne le BRUITE plus :
+    // aucune phrase de conservation (durée de rétention, service same-origin)
+    // n'est affichée dans le fil — c'est du bavardage technique.
+    expect(SOURCE).not.toContain("GENERATED_IMAGE_KEPT_NOTE");
+    expect(SOURCE).not.toContain("generated-image__note");
+    expect(SOURCE).not.toMatch(/même durée que les pièces jointes/);
     expect(SOURCE).not.toMatch(/pas conservée dans l'historique/);
   });
 
@@ -81,13 +84,10 @@ describe("garde-fous statiques de image-block.js", () => {
     expect(SOURCE).toContain("previous.replaceWith(fiche)");
     expect(SOURCE).not.toMatch(/image\.before\(/);
     expect(SOURCE).not.toMatch(/prepend\(/);
-    // L'ordre du DOM (image → fiche → note) est celui de `build()`.
+    // L'ordre du DOM (image PUIS fiche) est celui de `build()`.
     const build = SOURCE.slice(SOURCE.indexOf("function build(image)"));
     expect(build.indexOf("buildImage(image)")).toBeLessThan(
       build.indexOf("buildFinalPrompt(image?.finalPrompt)"),
-    );
-    expect(build.indexOf("buildFinalPrompt(image?.finalPrompt)")).toBeLessThan(
-      build.indexOf("generated-image__note"),
     );
   });
 
