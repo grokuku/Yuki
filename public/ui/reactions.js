@@ -5,10 +5,12 @@
 // onglets de la conversation et l'injecte au modèle au tour SUIVANT — sans
 // jamais déclencher de réponse, et sans jamais la faire prononcer par la voix.
 //
-// ⚠️ TROIS SECTIONS TITRÉES dans UN SEUL menu (décision utilisateur) :
+// ⚠️ QUATRE SECTIONS TITRÉES dans UN SEUL menu (décision utilisateur) :
 //   ① jugement technique (qualité de la réponse) ⇒ Yuki corrige son COMPORTEMENT ;
 //   ② réaction émotionnelle (contenu, registre casual) ⇒ Yuki ajuste son REGISTRE ;
-//   ③ humeur (sur l'utilisateur, pas sur le message) ⇒ Yuki module son TON.
+//   ③ humeur (sur l'utilisateur, pas sur le message) ⇒ Yuki module son TON ;
+//   ④ gratitude (un simple merci) ⇒ accusé de réception : Yuki ne corrige RIEN,
+//      ne module RIEN et ne surenchérit pas.
 // Chaque entrée porte son LIBELLÉ **et** une MINI-EXPLICATION, pour que
 // l'utilisateur ne se trompe pas de registre.
 //
@@ -44,6 +46,11 @@ export const REACTION_GROUPS = [
     title: "Humeur",
     meaning: "sur MOI, pas sur le message ⇒ module le TON",
   },
+  {
+    id: "gratitude",
+    title: "Gratitude",
+    meaning: "un MERCI ⇒ accusé de réception : rien à corriger, rien à moduler",
+  },
 ];
 
 export const REACTIONS = [
@@ -61,6 +68,7 @@ export const REACTIONS = [
   { id: "fatigue", group: "mood", emoji: "😴", label: "Fatigué", hint: "Allège le rythme et la longueur." },
   { id: "agace", group: "mood", emoji: "😤", label: "Agacé", hint: "Ton plus direct, moins d'entrain." },
   { id: "content", group: "mood", emoji: "🎉", label: "Content", hint: "Ton enthousiaste bienvenu." },
+  { id: "merci", group: "gratitude", emoji: "❤️", label: "Merci", hint: "Un simple merci — rien à corriger, rien à moduler." },
 ];
 
 const REACTION_BY_ID = new Map(REACTIONS.map((item) => [item.id, item]));
@@ -179,7 +187,7 @@ export function createReactionControl(deps = {}) {
     menuTarget = null;
   }
 
-  /** Construit le menu UNE fois : trois sections titrées, libellé + explication. */
+  /** Construit le menu UNE fois : quatre sections titrées, libellé + explication. */
   function buildMenu() {
     menu = el("div", { class: "ctx-menu ctx-menu--reactions", role: "menu" });
     // RETRAIT en TÊTE (visible seulement si une réaction est posée) : le menu

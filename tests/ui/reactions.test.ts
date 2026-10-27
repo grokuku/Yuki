@@ -5,7 +5,7 @@
  * Ce que ce test prouve :
  *  - le catalogue du NAVIGATEUR est identique, identifiant par identifiant et
  *    libellé par libellé, à celui du SERVEUR (une divergence casse la suite) ;
- *  - les trois sections titrées existent et chaque entrée porte son libellé ET
+ *  - les QUATRE sections titrées existent et chaque entrée porte son libellé ET
  *    son explication (demande utilisateur : « pour être sûr que je me trompe
  *    pas ») ;
  *  - le menu s'ouvre VERS LE HAUT quand il n'y a pas la place en dessous (dernier
@@ -71,16 +71,39 @@ describe("catalogue — miroir EXACT du serveur", () => {
     );
   });
 
-  it("trois sections titrées, chacune avec ses réactions", () => {
-    expect(REACTION_GROUPS).toHaveLength(3);
+  it("QUATRE sections titrées, chacune avec ses réactions", () => {
+    expect(REACTION_GROUPS).toHaveLength(4);
+    expect(REACTIONS).toHaveLength(15);
     for (const group of REACTION_GROUPS) {
       const items = REACTIONS.filter((item) => item.group === group.id);
-      expect(items.length).toBeGreaterThanOrEqual(4);
+      expect(items.length).toBeGreaterThanOrEqual(1);
       for (const item of items) {
         expect(item.label.length).toBeGreaterThan(0);
         expect(item.hint.length).toBeGreaterThan(0);
       }
     }
+  });
+
+  it("la GRATITUDE est la QUATRIÈME section, avec UNE seule réaction : ❤️ Merci", () => {
+    expect(REACTION_GROUPS.map((group) => group.id)).toEqual([
+      "judgement",
+      "emotion",
+      "mood",
+      "gratitude",
+    ]);
+    const gratitude = REACTIONS.filter((item) => item.group === "gratitude");
+    expect(gratitude).toEqual([
+      {
+        id: "merci",
+        group: "gratitude",
+        emoji: "❤️",
+        label: "Merci",
+        hint: "Un simple merci — rien à corriger, rien à moduler.",
+      },
+    ]);
+    // Le pictogramme et le nom accessible restent justes (bouton du message).
+    expect(reactionEmoji("merci")).toBe("❤️");
+    expect(reactionName("merci")).toBe("❤️ Merci");
   });
 
   it("résout une réaction par identifiant (pictogramme + nom accessible)", () => {

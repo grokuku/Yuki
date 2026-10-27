@@ -6,20 +6,27 @@
  * synthèse vocale, et elle n'entre dans le prompt que comme DONNÉE au tour
  * SUIVANT (voir `./prompt.ts` et `src/pi/sdk/reactions-extension.ts`).
  *
- * ⚠️ TROIS REGISTRES, JAMAIS CONFONDUS (c'est ce que le modèle reçoit) :
+ * ⚠️ QUATRE REGISTRES, JAMAIS CONFONDUS (c'est ce que le modèle reçoit) :
  *   ① `judgement` — sur la QUALITÉ de la réponse ⇒ corrige le COMPORTEMENT ;
  *   ② `emotion`   — sur le CONTENU (registre CASUAL) ⇒ informe sur le REGISTRE ;
- *   ③ `mood`      — sur L'UTILISATEUR (jamais sur le message) ⇒ module le TON.
- * Les mélanger serait un contresens : un jugement n'est pas une humeur, et une
- * humeur ne juge JAMAIS la réponse.
+ *   ③ `mood`      — sur L'UTILISATEUR (jamais sur le message) ⇒ module le TON ;
+ *   ④ `gratitude` — un MERCI ⇒ ACCUSÉ DE RÉCEPTION POSITIF : elle ne demande
+ *      RIEN, ne corrige RIEN, ne module RIEN (le modèle en prend acte, sans
+ *      surenchérir).
+ * Les mélanger serait un contresens : un jugement n'est pas une humeur, une
+ * humeur ne juge JAMAIS la réponse, et un merci n'est ni l'un ni l'autre.
  *
  * Aucun import SDK ni `typebox` (domaine de données testable en isolation).
  */
 
 import type { MemoryCategory } from "../memory/types.js";
 
-/** Registre d'une réaction (voir l'en-tête : les trois ne se confondent pas). */
-export type ReactionGroup = "judgement" | "emotion" | "mood";
+/**
+ * Registre d'une réaction (voir l'en-tête : les quatre ne se confondent pas).
+ * ⚠️ `gratitude` est un registre à part entière : ni un jugement, ni une
+ * émotion, ni une humeur — c'est de la RECONNAISSANCE envers Yuki.
+ */
+export type ReactionGroup = "judgement" | "emotion" | "mood" | "gratitude";
 
 /** Une réaction proposée à l'utilisateur. */
 export interface ReactionDef {
@@ -46,9 +53,11 @@ export interface ReactionGroupDef {
 }
 
 /**
- * Groupes, dans l'ORDRE du menu : jugement technique → émotion → humeur.
+ * Groupes, dans l'ORDRE du menu : jugement technique → émotion → humeur →
+ * gratitude.
  * ⚠️ L'ordre porte du sens : on corrige d'abord la réponse, on lit ensuite le
- * ressenti, on termine par l'état de l'utilisateur (qui module seulement le ton).
+ * ressenti, on termine par l'état de l'utilisateur (qui module seulement le ton)
+ * puis par le remerciement — le seul registre qui ne demande RIEN en retour.
  */
 export const REACTION_GROUPS: readonly ReactionGroupDef[] = [
   {
@@ -65,6 +74,11 @@ export const REACTION_GROUPS: readonly ReactionGroupDef[] = [
     id: "mood",
     title: "Humeur",
     meaning: "sur MOI, pas sur le message ⇒ module le TON",
+  },
+  {
+    id: "gratitude",
+    title: "Gratitude",
+    meaning: "un MERCI ⇒ accusé de réception : rien à corriger, rien à moduler",
   },
 ];
 
@@ -171,6 +185,15 @@ export const REACTIONS: readonly ReactionDef[] = [
     label: "Content",
     hint: "Ton enthousiaste bienvenu.",
   },
+  // ④ GRATITUDE — de la RECONNAISSANCE envers Yuki : ni jugement, ni émotion,
+  // ni humeur. Une seule réaction, volontairement (un merci ne se décline pas).
+  {
+    id: "merci",
+    group: "gratitude",
+    emoji: "❤️",
+    label: "Merci",
+    hint: "Un simple merci — rien à corriger, rien à moduler.",
+  },
 ];
 
 const BY_ID = new Map<string, ReactionDef>(REACTIONS.map((item) => [item.id, item]));
@@ -196,6 +219,29 @@ export function reactionsOfGroup(group: ReactionGroup): ReactionDef[] {
  * ⚠️ Une réaction ISOLÉE n'est jamais un souvenir.
  */
 export const REACTION_REGULARITY_MIN = 3;
+
+/**
+ * Registres EXCLUS de la RÉTENTION DURABLE.
+ *
+ * ⚠️ POURQUOI LA GRATITUDE N'EST PAS UN SOUVENIR : « l'utilisateur remercie
+ * souvent » n'apprend RIEN d'utile à Yuki (ce n'est ni une préférence, ni une
+ * consigne, ni un trait de caractère). Le seuil de régularité sert à distinguer
+ * un cas isolé d'une TENDANCE ; sur ce registre, il ne fabriquerait qu'un
+ * souvenir bizarre.
+ *
+ * ⚠️ Ce qui est exclu, c'est la RÉTENTION, pas le RETOUR : le ❤️ reste dans le
+ * bloc injecté au tour suivant (le modèle en prend acte), il ne passe
+ * simplement jamais par `regularityOf`.
+ */
+export const MEMORY_EXCLUDED_GROUPS: readonly ReactionGroup[] = ["gratitude"];
+
+/**
+ * `true` si une réaction de ce registre peut un jour devenir un souvenir, c'est-à-dire
+ * si sa répétition est une information DURABLE. Faux pour la gratitude.
+ */
+export function isMemoryEligibleGroup(group: ReactionGroup): boolean {
+  return !MEMORY_EXCLUDED_GROUPS.includes(group);
+}
 
 /** Une réaction COURANTE, telle que la projette le store. */
 export interface ReactionView {
@@ -272,6 +318,10 @@ export function regularityMemory(
 ): ReactionMemoryCandidate | null {
   const def = reactionById(regularity.reaction);
   if (!def) return null;
+  // ⚠️ Ceinture ET bretelles : le seuil ne rend déjà aucune régularité pour ce
+  // registre (`isMemoryEligibleGroup` dans `store.ts`), mais aucun chemin ne doit
+  // pouvoir FABRIQUER un souvenir de gratitude.
+  if (!isMemoryEligibleGroup(def.group)) return null;
   const count = Math.max(1, Math.floor(regularity.count));
   let text: string;
   if (def.group === "mood") {

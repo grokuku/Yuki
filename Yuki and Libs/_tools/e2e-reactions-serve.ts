@@ -12,13 +12,16 @@
  *   - relire le texte RÉELLEMENT prononcé (`/spoken`) ;
  *   - relire le transcript serveur, la réaction persistée par message ;
  *   - construire le BLOC réellement injecté au modèle via la VRAIE extension
- *     (`/prompt-block`) : preuve que le sens du groupe parvient au prompt.
+ *     (`/prompt-block`) : preuve que le sens du groupe parvient au prompt ;
+ *   - relire la MÉMOIRE DURABLE (`/memory`) : preuve qu'une GRATITUDE répétée
+ *     n'écrit AUCUNE ligne (le câblage est celui de la composition root :
+ *     `ReactionStore.set` → `regularityMemory` → `MemoryService`).
  *
  * Usage : cd Yuki && npx tsx "../Yuki and Libs/_tools/e2e-reactions-serve.ts"
  * Sortie : « READY http://127.0.0.1:<port> » puis « CONTROL http://… ».
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -26,10 +29,12 @@ import { join } from "node:path";
 import { loadEnv } from "../../src/config/env.js";
 import { createApp, type AppContext } from "../../src/gateway/app.js";
 import { createWsTransport } from "../../src/gateway/ws/server.js";
+import { MemoryIndex, MemoryService, MemoryStore, REACTIONS_SOURCE } from "../../src/memory/index.js";
 import { createLogger } from "../../src/observability/logger.js";
 import type { PiEvent } from "../../src/pi/types.js";
 import { createReactionsExtensionFactory } from "../../src/pi/sdk/reactions-extension.js";
 import { ReactionStore } from "../../src/reactions/store.js";
+import { regularityMemory, type ReactionRegularity } from "../../src/reactions/types.js";
 import type { SegmentSynthesizer, TtsPipelineDeps } from "../../src/tts/index.js";
 import type { GpuReport } from "../../src/types/gpu.js";
 import { FakePiHost, type FakeStep } from "../../tests/pi/host-double.js";
@@ -45,11 +50,22 @@ const env = loadEnv({
   YUKI_REACTIONS_STORE_PATH: join(STATE_DIR, "reactions.jsonl"),
 });
 
-/** Réponses des tours successifs (trois messages assistant distincts). */
+/**
+ * Réponses des tours successifs. Les TROIS premières sont citées par les
+ * assertions (extrait du message visé) : ne pas les changer. Les suivantes
+ * servent la preuve de rétention : dix messages distincts pour dix ❤️.
+ */
 const ANSWERS = [
   "Première réponse, courte et posée.",
   "Deuxième réponse, un peu plus détaillée que la précédente.",
   "Troisième réponse : la toute dernière du fil, celle du bas de l'écran.",
+  "Quatrième réponse, pour la dixième réaction.",
+  "Cinquième réponse, pour la dixième réaction.",
+  "Sixième réponse, pour la dixième réaction.",
+  "Septième réponse, pour la dixième réaction.",
+  "Huitième réponse, pour la dixième réaction.",
+  "Neuvième réponse, pour la dixième réaction.",
+  "Dixième réponse : la gratitude répétée ne doit rien mémoriser.",
 ];
 const USER_TEXT = "Peux-tu me répondre en trois temps ?";
 
@@ -72,6 +88,30 @@ await host.start();
 
 /** Réactions effectivement écrites (store RÉEL, journal sur disque). */
 const store = ReactionStore.open({ path: env.reactionsStorePath });
+
+/**
+ * MÉMOIRE DURABLE réelle, câblée comme la composition root (`src/index.ts`) :
+ * c'est le SEUL moyen de prouver qu'une gratitude répétée n'écrit rien.
+ */
+const memoryPath = join(STATE_DIR, "memory.jsonl");
+const memoryStore = MemoryStore.open({ path: memoryPath, logger });
+const memoryIndex = new MemoryIndex({ path: join(STATE_DIR, "memory-index.sqlite"), logger });
+const memory = new MemoryService({
+  store: memoryStore,
+  index: memoryIndex,
+  logger,
+  enabled: () => true,
+  bounds: () => ({ topK: 5, budgetChars: 8000, timeoutMs: 400 }),
+  maxItemsPerPass: () => 3,
+});
+memory.start();
+
+/** Traduit une régularité en souvenir — MÊME chaîne que `src/index.ts`. */
+function rememberReactionRegularity(regularity: ReactionRegularity): void {
+  const candidate = regularityMemory(regularity);
+  if (!candidate) return;
+  memory.onReactionRegularity({ ...candidate, source: REACTIONS_SOURCE });
+}
 /** Nombre de tours DÉCLENCHÉS (une réaction doit en produire ZÉRO). */
 let runs = 0;
 host.subscribeAll((event: PiEvent) => {
@@ -114,7 +154,11 @@ const transport = createWsTransport({
   tts: ttsPipeline,
   // Port d'écriture : MÊME store que celui injecté dans l'extension de prompt.
   reactions: {
-    set: (sessionId, entryId, reaction) => store.set(sessionId, entryId, reaction) !== null,
+    set: (sessionId, entryId, reaction) => {
+      const regularity = store.set(sessionId, entryId, reaction);
+      if (regularity) rememberReactionRegularity(regularity);
+      return regularity !== null;
+    },
     clear: (sessionId, entryId) => store.clear(sessionId, entryId),
     forSession: (sessionId) => store.forSession(sessionId),
   },
@@ -173,6 +217,20 @@ const control = createHttpServer(async (req, res) => {
       state: [...store.forSession(sessionId).entries()],
       file: store.filePath,
       count: store.size,
+    });
+  }
+  if (url.pathname === "/memory") {
+    // On laisse la file d'écriture se vider : une écriture asynchrone ne doit pas
+    // échapper à la mesure.
+    await memory.drain();
+    const lines = readFileSync(memoryPath, "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0 && !line.startsWith("#"));
+    return send({
+      file: memoryPath,
+      lines: lines.length,
+      events: lines,
+      entries: memoryStore.entries.map((entry) => entry.text),
     });
   }
   if (url.pathname === "/prompt-block") {

@@ -1,11 +1,11 @@
 /**
- * Bloc de RÉACTIONS injecté au modèle — cadrage DONNÉE, sens des trois registres,
- * bornes.
+ * Bloc de RÉACTIONS injecté au modèle — cadrage DONNÉE, sens des QUATRE
+ * registres, bornes.
  *
  * Ce que ce fichier prouve :
- *  - le bloc explique les TROIS registres et ce que chacun demande à Yuki
- *    (jugement ⇒ COMPORTEMENT, émotion ⇒ REGISTRE, humeur ⇒ TON) — les mélanger
- *    serait un contresens ;
+ *  - le bloc explique les QUATRE registres et ce que chacun demande à Yuki
+ *    (jugement ⇒ COMPORTEMENT, émotion ⇒ REGISTRE, humeur ⇒ TON, gratitude ⇒
+ *    accusé de réception SANS surenchère) — les mélanger serait un contresens ;
  *  - il est encadré (`<reactions_utilisateur>`) et suivi de son rappel : c'est une
  *    DONNÉE, jamais une instruction ;
  *  - il est BORNÉ (N dernières, une par message) : le prompt ne gonfle pas ;
@@ -26,7 +26,7 @@ import {
 } from "../../src/reactions/prompt.js";
 import { reactionById, REACTIONS } from "../../src/reactions/types.js";
 
-describe("bloc de réactions — sens des trois registres", () => {
+describe("bloc de réactions — sens des QUATRE registres", () => {
   const block = formatReactionsBlock([
     { entryId: "e-1", reaction: "trop-long", excerpt: "Une réponse très longue." },
     { entryId: "e-2", reaction: "rire", excerpt: "Une réponse drôle." },
@@ -42,7 +42,8 @@ describe("bloc de réactions — sens des trois registres", () => {
     expect(REACTIONS_REMINDER).toMatch(/^⚠️ Le bloc <[a-z_]+> /);
   });
 
-  it("explique les TROIS registres — jamais un seul, jamais confondus", () => {
+  it("explique les QUATRE registres — jamais un seul, jamais confondus", () => {
+    expect(block).toContain("Quatre registres DISTINCTS");
     expect(block).toContain("jugement (qualité de ta réponse)");
     expect(block).toContain("COMPORTEMENT");
     expect(block).toContain("émotion (contenu de ton message)");
@@ -51,6 +52,16 @@ describe("bloc de réactions — sens des trois registres", () => {
     expect(block).toContain("MODULE TON TON");
     // Une réaction ne déclenche pas de réponse : c'est écrit noir sur blanc.
     expect(block).toContain("ne déclenche aucune réponse");
+  });
+
+  it("dit que la GRATITUDE est un ACCUSÉ DE RÉCEPTION, sans surenchère", () => {
+    // Ce que le registre DEMANDE (l'accusé de réception positif)…
+    expect(block).toContain("gratitude (un MERCI, de la reconnaissance)");
+    expect(block).toContain("ACCUSÉ DE RÉCEPTION POSITIF");
+    // …et ce qu'il INTERDIT, mot pour mot (le piège : la politesse en trois
+    // paragraphes pour un simple merci).
+    expect(block).toContain("Ne pas commenter, ne pas remercier en retour, ne pas t'excuser, continuer normalement.");
+    expect(block).toContain("ne demande rien, ne corrige rien et ne module rien");
   });
 
   it("nomme le registre et le libellé de CHAQUE réaction, avec l'extrait visé", () => {
@@ -67,6 +78,13 @@ describe("bloc de réactions — sens des trois registres", () => {
     expect(block).toContain(
       "[mood · 😴 Fatigué] (état de l'utilisateur, pas un jugement sur un message)",
     );
+  });
+
+  it("accompagne un MERCI de son rappel de non-surenchère, à côté de l'entrée", () => {
+    const withMerci = formatReactionsBlock([
+      { entryId: "e-1", reaction: "merci", excerpt: "Voilà, c'est réparé." },
+    ]);
+    expect(withMerci).toContain("[gratitude · ❤️ Merci] (remerciement : reconnu, ne pas surenchérir)");
   });
 });
 
@@ -110,10 +128,12 @@ describe("bloc de réactions — bornes", () => {
 });
 
 describe("bloc de réactions — jamais un souvenir", () => {
+  const block = formatReactionsBlock([
+    { entryId: "e-1", reaction: "trop-long", excerpt: "Une réponse très longue." },
+    { entryId: "e-2", reaction: "merci" },
+  ])!;
+
   it("est retiré par le filtre DÉTERMINISTE de la mémoire (bloc + rappel)", () => {
-    const block = formatReactionsBlock([
-      { entryId: "e-1", reaction: "trop-long", excerpt: "Une réponse très longue." },
-    ])!;
     // Une réponse du modèle qui RECOPIE le bloc ne peut pas devenir un souvenir.
     const cleaned = sanitizeMemoryText(`Voici ce que je vois :\n${block}\nEt voilà.`);
     // Il ne reste que le texte ORDINAIRE autour du bloc (des blancs à la place).
@@ -121,6 +141,15 @@ describe("bloc de réactions — jamais un souvenir", () => {
     expect(cleaned).not.toContain(REACTIONS_TAG);
     expect(cleaned).not.toContain("Trop long");
     expect(cleaned).not.toContain("DONNÉE");
+  });
+
+  it("retire aussi la GRATITUDE recopiée (aucune fuite par le quatrième registre)", () => {
+    // Le bloc porte ici un ❤️ Merci : il disparaît ENTIÈREMENT, y compris la
+    // consigne « ne pas surenchérir » et le libellé du registre.
+    const cleaned = sanitizeMemoryText(block);
+    expect(cleaned.trim()).toBe("");
+    expect(cleaned).not.toContain("Merci");
+    expect(cleaned).not.toContain("surenchérir");
   });
 });
 

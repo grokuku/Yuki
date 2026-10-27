@@ -4,6 +4,8 @@
  * Ce que ce fichier prouve :
  *  - une régularité (le même jugement sur N messages DIFFÉRENTS) devient UN
  *    souvenir, avec sa justification (`why`) et sa source (`reactions`) ;
+ *  - la GRATITUDE en est EXCLUE : un ❤️ répété dix fois n'écrit pas une ligne de
+ *    `memory.jsonl` (« l'utilisateur remercie souvent » n'apprend rien d'utile) ;
  *  - elle passe par les gardes EXISTANTS : filtre déterministe, `why`
  *    obligatoire, texte identique refusé, quasi-doublon REFUSÉ (la mémoire n'est
  *    donc pas relâchée) ;
@@ -253,5 +255,32 @@ describe("chaîne COMPLÈTE (store de réactions → mémoire) — aucune pollut
     expect(w.store.size).toBe(0);
     expect(w.reactions.size).toBe(3);
     w.close();
+  });
+
+  it("la GRATITUDE (❤️ Merci) n'écrit RIEN, même sur DIX messages distincts", async () => {
+    const w = wire();
+    for (let index = 1; index <= 10; index += 1) w.port.set("s1", `e-${index}`, "merci");
+    await w.service.drain();
+
+    // Zéro candidat : le seuil de régularité est INAPPLICABLE à ce registre.
+    expect(w.candidates).toEqual([]);
+    expect(w.store.size).toBe(0);
+    // La réaction, elle, est bien persistée (elle reste vue au tour suivant).
+    expect(w.reactions.size).toBe(10);
+    expect(w.reactions.recentFor("s1", 10).every((view) => view.reaction === "merci")).toBe(
+      true,
+    );
+    // ⚠️ ASSERTION SUR LE FICHIER : aucune ligne JSON sous l'en-tête commenté.
+    const written = readFileSync(w.memoryPath, "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0 && !line.startsWith("#"));
+    expect(written).toEqual([]);
+    w.close();
+  });
+
+  it("aucun souvenir de gratitude ne peut être FABRIQUÉ à la main non plus", () => {
+    // Défense en profondeur : même en forçant une régularité (compteur arbitraire),
+    // le traducteur déterministe refuse le registre exclu.
+    expect(regularityMemory({ reaction: "merci", group: "gratitude", count: 99 })).toBeNull();
   });
 });

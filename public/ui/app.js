@@ -599,9 +599,9 @@ const thinkingBlocks = createThinkingBlocks({ container: els.conversation });
 
 /* ─── RÉACTIONS aux messages de Yuki ───────────────────────────────────────
  * Un message assistant porte un petit bouton en bas à droite (au survol sur
- * bureau, toujours visible au toucher) qui déploie UN menu à trois sections
- * titrées : jugement technique / émotion / humeur, chaque entrée avec son
- * libellé ET son explication.
+ * bureau, toujours visible au toucher) qui déploie UN menu à quatre sections
+ * titrées : jugement technique / émotion / humeur / gratitude, chaque entrée avec
+ * son libellé ET son explication.
  *
  * ⚠️ Une réaction N'EST PAS un message : le serveur la persiste À PART, la
  * rediffuse ici (trame de CONTRÔLE, état vivant) et l'injecte au modèle au tour

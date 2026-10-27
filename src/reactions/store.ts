@@ -27,6 +27,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import {
+  isMemoryEligibleGroup,
   isReactionId,
   reactionById,
   REACTION_REGULARITY_MIN,
@@ -206,12 +207,19 @@ export class ReactionStore implements ReactionsPort {
   /**
    * Régularité d'une réaction DANS L'ÉTAT COURANT : nombre de messages DISTINCTS
    * qui la portent. `null` en dessous du seuil (une réaction isolée n'est pas un
-   * souvenir) ou si l'on n'est pas sur un multiple exact du seuil (pas de
-   * réécriture à chaque réaction : 3, 6, 9… seulement).
+   * souvenir), si l'on n'est pas sur un multiple exact du seuil (pas de
+   * réécriture à chaque réaction : 3, 6, 9… seulement), ou si le REGISTRE est
+   * exclu de la rétention durable.
+   *
+   * ⚠️ GRATITUDE (`merci`) : TOUJOURS `null`, même répétée dix fois. Ce n'est pas
+   * un oubli — « l'utilisateur remercie souvent » n'apprend rien d'utile à Yuki.
+   * Le ❤️ reste vu par le modèle au tour suivant (bloc de prompt) ; il ne devient
+   * simplement jamais un souvenir (voir `MEMORY_EXCLUDED_GROUPS`).
    */
   regularityOf(reaction: string): ReactionRegularity | null {
     const def = reactionById(reaction);
     if (!def) return null;
+    if (!isMemoryEligibleGroup(def.group)) return null;
     let count = 0;
     for (const view of this.current.values()) {
       if (view.reaction === reaction) count += 1;

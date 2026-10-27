@@ -9,7 +9,8 @@
  *    retrait fonctionne ;
  *  - une réaction ISOLÉE ne produit AUCUNE régularité (donc aucun souvenir) ;
  *    la même réaction sur N messages distincts en produit une, aux multiples du
- *    seuil ;
+ *    seuil — SAUF le registre GRATITUDE, exclu de la rétention durable en toutes
+ *    circonstances ;
  *  - une ligne de journal illisible n'empêche jamais le démarrage.
  */
 
@@ -20,7 +21,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ReactionStore } from "../../src/reactions/store.js";
-import { REACTIONS, REACTION_REGULARITY_MIN } from "../../src/reactions/types.js";
+import {
+  isMemoryEligibleGroup,
+  REACTIONS,
+  REACTION_REGULARITY_MIN,
+} from "../../src/reactions/types.js";
 
 const dirs: string[] = [];
 
@@ -164,14 +169,43 @@ describe("ReactionStore — une réaction ISOLÉE n'est pas un souvenir", () => 
     expect(store.regularityOf("trop-long")).toBeNull();
     expect(store.regularityOf("fatigue")).toBeNull();
   });
+
+  it("la GRATITUDE ne produit JAMAIS de régularité, même sur DIX messages", () => {
+    const store = ReactionStore.open({ path: tempFile() });
+    const regularities: unknown[] = [];
+    // Dix messages DISTINCTS : le seuil de régularité est franchi trois fois.
+    for (let index = 1; index <= 10; index += 1) {
+      const regularity = store.set("s1", `e-${index}`, "merci");
+      if (regularity) regularities.push(regularity);
+    }
+    expect(store.size).toBe(10);
+    expect(store.regularityOf("merci")).toBeNull();
+    expect(regularities).toEqual([]);
+    // Le groupe reste EXCLU de la rétention, et le catalogue le dit.
+    expect(isMemoryEligibleGroup("gratitude")).toBe(false);
+    expect(isMemoryEligibleGroup("judgement")).toBe(true);
+  });
+
+  it("une autre réaction reste mémorisable sur les mêmes messages", () => {
+    const store = ReactionStore.open({ path: tempFile() });
+    for (let index = 1; index <= 10; index += 1) store.set("s1", `e-${index}`, "merci");
+    const seen: number[] = [];
+    for (let index = 11; index <= 13; index += 1) {
+      const regularity = store.set("s1", `e-${index}`, "utile");
+      if (regularity) seen.push(regularity.count);
+    }
+    // Preuve que le seuil fonctionne toujours : il n'a pas été désactivé, il est
+    // seulement INAPPLICABLE à la gratitude.
+    expect(seen).toEqual([REACTION_REGULARITY_MIN]);
+  });
 });
 
 describe("ReactionStore — catalogue", () => {
-  it("expose trois registres et des identifiants uniques", () => {
+  it("expose quatre registres et des identifiants uniques", () => {
     const ids = REACTIONS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(new Set(REACTIONS.map((item) => item.group))).toEqual(
-      new Set(["judgement", "emotion", "mood"]),
+      new Set(["judgement", "emotion", "mood", "gratitude"]),
     );
   });
 });

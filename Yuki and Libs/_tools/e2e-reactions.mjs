@@ -9,18 +9,22 @@
  *  2. il est DISCRET au bureau (invisible au repos, visible au survol — Chromium
  *     est lancé en « pointeur fin avec survol ») et TOUJOURS visible au toucher
  *     (second navigateur en `(hover: none)`, comme un téléphone) ;
- *  3. il déploie UN menu à TROIS SECTIONS TITRÉES, chaque entrée avec son libellé
- *     ET sa mini-explication ;
- *  4. le menu ne pousse RIEN (flottant) et ne sort pas de l'écran — sur le DERNIER
- *     message il s'ouvre VERS LE HAUT ;
+ *  3. il déploie UN menu à QUATRE SECTIONS TITRÉES, chaque entrée avec son
+ *     libellé ET sa mini-explication — dont la quatrième, GRATITUDE, avec une
+ *     seule réaction (❤️ Merci) ;
+ *  4. le menu ne pousse RIEN (flottant), ne sort pas de l'écran et s'ouvre VERS LE
+ *     HAUT sur le DERNIER message — mesures sur un écran de téléphone 360×640 ;
  *  5. la réaction choisie RESTE affichée, et peut être CHANGÉE ou RETIRÉE ;
  *  6. une réaction ne déclenche AUCUN tour (compteur `run_started`) et n'est
  *     JAMAIS prononcée (le synthétiseur n'est pas appelé) ;
  *  7. elle SURVIT au RECHARGEMENT et à la RECONNEXION, sur LE BON message
  *     (corrélation par l'identifiant d'entrée de session) ;
- *  8. le modèle reçoit le bloc avec le SENS du groupe (jugement / émotion / humeur)
- *     au tour SUIVANT, sans qu'aucun tour n'ait été ouvert par la réaction ;
- *  9. ZÉRO violation CSP, ZÉRO erreur de connexion, ZÉRO exception JS.
+ *  8. le modèle reçoit le bloc avec le SENS de chaque registre (jugement /
+ *     émotion / humeur / gratitude) au tour SUIVANT, sans qu'aucun tour n'ait été
+ *     ouvert par la réaction ;
+ *  9. un ❤️ répété DIX fois n'écrit AUCUNE ligne de mémoire durable (la gratitude
+ *     est exclue de la rétention) ;
+ * 10. ZÉRO violation CSP, ZÉRO erreur de connexion, ZÉRO exception JS.
  *
  * Usage : node "/projects/Yuki/Yuki and Libs/_tools/e2e-reactions.mjs"
  */
@@ -39,6 +43,11 @@ const YUKI_DIR = join(WORKSPACE, "Yuki");
 const TSX = join(YUKI_DIR, "node_modules", ".bin", "tsx");
 
 const results = [];
+/**
+ * Marge (px) entre le menu et le bord de la fenêtre — MIROIR de `MENU_MARGIN_PX`
+ * de `public/ui/reactions.js` (valeur vérifiée par `tests/ui/reactions.test.ts`).
+ */
+const MENU_MARGIN_PX = 8;
 function check(label, ok, detail = "") {
   results.push({ label, ok, detail });
   console.log(`${ok ? "✓" : "✗ ÉCHEC"}  ${label}${detail ? " — " + detail : ""}`);
@@ -403,7 +412,7 @@ check(
   `opacité ${await desktop.evaluate(opacityOf(0))}`,
 );
 
-/* ─── Le menu : trois sections titrées ───────────────────────────────────── */
+/* ─── Le menu : quatre sections titrées ──────────────────────────────────── */
 await desktop.clickAt(centerOf(".message--assistant .message__react-btn", 0));
 const menuInfo = await desktop.evaluate(`(() => {
   const menu = document.querySelector('.ctx-menu--reactions');
@@ -423,22 +432,29 @@ const menuInfo = await desktop.evaluate(`(() => {
 })()`);
 check("le menu s'ouvre au clic sur le bouton", menuInfo !== null);
 check(
-  "TROIS sections titrées (jugement technique / émotion / humeur)",
+  "QUATRE sections titrées (jugement technique / émotion / humeur / gratitude)",
   menuInfo !== null &&
-    menuInfo.titles.length === 3 &&
+    menuInfo.titles.length === 4 &&
     menuInfo.titles[0].includes("Jugement technique") &&
     menuInfo.titles[1].includes("Réaction émotionnelle") &&
-    menuInfo.titles[2].includes("Humeur"),
+    menuInfo.titles[2].includes("Humeur") &&
+    menuInfo.titles[3].includes("Gratitude"),
   JSON.stringify(menuInfo?.titles),
 );
 check(
-  "quatorze possibilités, chacune avec son LIBELLÉ et sa MINI-EXPLICATION",
+  "quinze possibilités, chacune avec son LIBELLÉ et sa MINI-EXPLICATION",
   menuInfo !== null &&
-    menuInfo.items.length === 14 &&
+    menuInfo.items.length === 15 &&
     menuInfo.items.every(
       (item) => item.label.length > 0 && item.hint.length > 0 && item.emoji.length > 0,
     ),
   `${menuInfo?.items.length} entrée(s)`,
+);
+check(
+  "❤️ « Merci » est DANS le menu, en QUATRIÈME section, avec son libellé",
+  menuInfo !== null &&
+    menuInfo.items.some((item) => item.emoji === "❤️" && item.label === "Merci"),
+  JSON.stringify(menuInfo?.items.find((item) => item.label === "Merci") ?? null),
 );
 check(
   "le menu est FLOTTANT (il ne pousse pas le texte)",
@@ -517,11 +533,21 @@ check(
 /* ─── Le modèle reçoit le SENS du groupe au tour suivant ─────────────────── */
 const block = (await api("/prompt-block")).prompt;
 check(
-  "le bloc injecté au tour SUIVANT explique les trois registres",
+  "le bloc injecté au tour SUIVANT explique les QUATRE registres",
   block.includes("<reactions_utilisateur>") &&
+    block.includes("Quatre registres DISTINCTS") &&
     block.includes("corrige ton COMPORTEMENT") &&
     block.includes("informe sur le REGISTRE") &&
-    block.includes("MODULE TON TON"),
+    block.includes("MODULE TON TON") &&
+    block.includes("ACCUSÉ DE RÉCEPTION POSITIF"),
+);
+check(
+  "il interdit EXPLICITEMENT la surenchère sur une gratitude",
+  block.includes(
+    "Ne pas commenter, ne pas remercier en retour, ne pas t'excuser, continuer normalement.",
+  ) &&
+    block.includes("ne demande rien, ne corrige rien et ne module rien"),
+  block.split("\n").find((line) => line.startsWith("- gratitude")) ?? "(absent)",
 );
 check(
   "il porte le registre ET le libellé de la réaction (sens explicite)",
@@ -597,7 +623,9 @@ check(
 /* ══════════════════ PHASE 2 — TÉLÉPHONE (toucher) ══════════════════ */
 await desktop.close();
 const mobile = await openBrowser({ hoverCapable: false });
-await mobile.setViewport(390, 780, { mobile: true });
+// ÉCRAN DE TÉLÉPHONE RÉEL et serré : 360×640 (c'est là que quatre sections
+// peuvent déborder — la mesure le prouve ou le démentit).
+await mobile.setViewport(360, 640, { mobile: true });
 const touchMedia = await mobile.evaluate(
   `({ none: matchMedia('(hover: none)').matches, coarse: matchMedia('(pointer: coarse)').matches })`,
 );
@@ -639,12 +667,30 @@ const mobileMenu = await mobile.evaluate(`(() => {
     inside: rect.left >= 0 && rect.top >= 0
       && rect.right <= window.innerWidth + 0.5 && rect.bottom <= window.innerHeight + 0.5,
     sections: menu.querySelectorAll('.ctx-menu__label').length,
+    items: menu.querySelectorAll('.reaction-item[data-reaction]').length,
+    height: Math.round(rect.height),
+    contentHeight: menu.scrollHeight,
+    scrolls: menu.scrollHeight > menu.clientHeight + 1,
+    width: Math.round(rect.width),
+    viewport: { w: window.innerWidth, h: window.innerHeight },
   };
 })()`);
 check(
-  "TÉLÉPHONE : le menu s'ouvre au toucher, entier, trois sections",
-  mobileMenu !== null && mobileMenu.inside === true && mobileMenu.sections === 3,
+  "TÉLÉPHONE 360×640 : le menu s'ouvre au toucher, ENTIER, quatre sections",
+  mobileMenu !== null &&
+    mobileMenu.inside === true &&
+    mobileMenu.sections === 4 &&
+    mobileMenu.items === 15,
   JSON.stringify(mobileMenu),
+);
+check(
+  "TÉLÉPHONE 360×640 : le menu tient dans l'écran (hauteur et largeur mesurées)",
+  mobileMenu !== null &&
+    mobileMenu.height <= mobileMenu.viewport.h - 2 * MENU_MARGIN_PX &&
+    mobileMenu.width <= mobileMenu.viewport.w,
+  `${mobileMenu?.height} px de haut pour un écran de ${mobileMenu?.viewport?.h} px ` +
+    `(contenu ${mobileMenu?.contentHeight} px, défile : ${mobileMenu?.scrolls}), ` +
+    `${mobileMenu?.width} px de large pour ${mobileMenu?.viewport?.w} px`,
 );
 await mobile.tapAt(centerOf(`.ctx-menu--reactions .reaction-item[data-reaction="fatigue"]`, 0));
 await sleep(300);
@@ -653,6 +699,154 @@ check(
   "TÉLÉPHONE : une réaction posée au doigt s'affiche (😴) sur le bon message",
   mobileReaction[0].reaction === "😴" && mobileReaction[1].reaction === null,
   JSON.stringify(mobileReaction.map((entry) => entry.reaction)),
+);
+
+/* ─── TÉLÉPHONE : le menu du DERNIER message, avec les QUATRE sections ───── */
+await mobile.evaluate(`document.querySelector('#conversation').scrollTop = 1e6`);
+await sleep(250);
+await mobile.tapAt(centerOf(".message--assistant .message__react-btn", 2));
+const mobileLastMenu = await mobile.evaluate(`(() => {
+  const menu = document.querySelector('.ctx-menu--reactions');
+  const button = document.querySelectorAll('.message--assistant .message__react-btn')[2];
+  if (!menu || menu.hidden || !button) return null;
+  const rect = menu.getBoundingClientRect();
+  const btn = button.getBoundingClientRect();
+  const merci = menu.querySelector('.reaction-item[data-reaction="merci"]');
+  // Le menu peut DÉFILER : on amène ❤️ dans la zone visible avant de mesurer.
+  if (merci) merci.scrollIntoView({ block: 'nearest' });
+  const merciRect = merci ? merci.getBoundingClientRect() : null;
+  const hit = merciRect
+    ? document.elementFromPoint(
+        merciRect.left + merciRect.width / 2,
+        merciRect.top + merciRect.height / 2,
+      )
+    : null;
+  return {
+    flippedUp: rect.bottom <= btn.top + 1,
+    inside: rect.top >= 0 && rect.bottom <= window.innerHeight + 0.5,
+    top: Math.round(rect.top),
+    bottom: Math.round(rect.bottom),
+    height: Math.round(rect.height),
+    viewport: window.innerHeight,
+    sections: menu.querySelectorAll('.ctx-menu__label').length,
+    merciReachable: Boolean(hit && (hit === merci || merci.contains(hit))),
+  };
+})()`);
+check(
+  "TÉLÉPHONE 360×640 : sur le DERNIER message, les QUATRE sections s'ouvrent VERS LE HAUT et tiennent",
+  mobileLastMenu !== null &&
+    mobileLastMenu.flippedUp === true &&
+    mobileLastMenu.inside === true &&
+    mobileLastMenu.sections === 4,
+  JSON.stringify(mobileLastMenu),
+);
+check(
+  "TÉLÉPHONE 360×640 : ❤️ Merci reste ATTEIGNABLE au doigt dans ce menu",
+  mobileLastMenu !== null && mobileLastMenu.merciReachable === true,
+  JSON.stringify(mobileLastMenu),
+);
+
+/* ═══════ PHASE 3 — GRATITUDE : dix ❤️ n'écrivent AUCUN souvenir ═══════ */
+// Dix messages DISTINCTS ⇒ le seuil de régularité (3) serait franchi trois fois.
+// Si la gratitude n'était pas exclue de la rétention, trois souvenirs seraient
+// écrits (« l'utilisateur remercie souvent » — ce qui n'apprend rien d'utile).
+const memoryBefore = await api("/memory");
+check(
+  "mémoire durable VIDE avant les mercis (condition de la preuve)",
+  memoryBefore.lines === 0 && memoryBefore.entries.length === 0,
+  JSON.stringify({ lines: memoryBefore.lines, entries: memoryBefore.entries }),
+);
+
+for (let index = 4; index <= 10; index += 1) {
+  await api(`/send?text=${encodeURIComponent("Peux-tu préciser ? (" + index + ")")}`);
+  await mobile.waitFor(
+    `document.querySelectorAll('.message--assistant').length >= ${index}`,
+    12_000,
+  );
+}
+await sleep(400);
+check(
+  "dix messages assistant : la condition des dix mercis est réunie",
+  (await mobile.evaluate(`document.querySelectorAll('.message--assistant').length`)) === 10,
+);
+// Le menu du dernier message est resté OUVERT après les mesures : on le referme,
+// sinon le premier appui de la boucle atterrirait sur le menu au lieu du bouton.
+await mobile.evaluate(
+  `(() => { const menu = document.querySelector('.ctx-menu--reactions'); if (menu) menu.hidden = true; })()`,
+);
+const runsAfterTurns = (await api("/runs")).runs;
+const spokenAfterTurns = (await api("/spoken")).spoken.length;
+
+/** Remercie le message `index` au doigt (défilement, menu, appui). */
+async function thank(index) {
+  await mobile.evaluate(`(() => {
+    const node = document.querySelectorAll('.message--assistant')[${index}];
+    if (node) node.scrollIntoView({ block: 'center' });
+  })()`);
+  await sleep(150);
+  await mobile.tapAt(centerOf(".message--assistant .message__react-btn", index));
+  await mobile.tapAt(centerOf('.ctx-menu--reactions .reaction-item[data-reaction="merci"]', 0));
+}
+for (let index = 0; index < 10; index += 1) await thank(index);
+
+const afterThanks = await mobile.evaluate(reactionState());
+check(
+  "❤️ Merci est posé sur les DIX messages (un ❤️ par message, jamais deux)",
+  afterThanks.length === 10 && afterThanks.every((entry) => entry.reaction === "❤️"),
+  JSON.stringify(afterThanks.map((entry) => entry.reaction)),
+);
+check(
+  "AUCUN tour déclenché par les mercis (`run_started` inchangé)",
+  (await api("/runs")).runs === runsAfterTurns,
+  `${(await api("/runs")).runs} (avant : ${runsAfterTurns})`,
+);
+check(
+  "jamais prononcée par la synthèse vocale (aucun segment, aucun « Merci »)",
+  (await api("/spoken")).spoken.length === spokenAfterTurns &&
+    !(await api("/spoken")).spoken.some((text) => /merci/iu.test(text)),
+  JSON.stringify((await api("/spoken")).spoken.slice(-2)),
+);
+
+const memoryAfter = await api("/memory");
+check(
+  "❤️ répété DIX fois : ZÉRO ligne dans `memory.jsonl` (gratitude exclue de la rétention)",
+  memoryAfter.lines === 0 && memoryAfter.entries.length === 0,
+  JSON.stringify({ lines: memoryAfter.lines, entries: memoryAfter.entries }),
+);
+
+const gratitudeBlock = (await api("/prompt-block")).prompt;
+check(
+  "le modèle reçoit le registre « gratitude » AVEC la consigne de ne pas surenchérir",
+  gratitudeBlock.includes(
+    "[gratitude · ❤️ Merci] (remerciement : reconnu, ne pas surenchérir)",
+  ) &&
+    gratitudeBlock.includes("ACCUSÉ DE RÉCEPTION POSITIF") &&
+    gratitudeBlock.includes("ne pas remercier en retour"),
+  gratitudeBlock.split("\n").find((line) => line.startsWith("- [gratitude")) ?? "(absent)",
+);
+
+/* ─── Corrélation après RECHARGEMENT : les dix ❤️ restent sur LEURS messages ── */
+await mobile.navigate(server.base);
+await mobile.waitFor(
+  `document.querySelectorAll('.message--assistant').length === 10`,
+  12_000,
+);
+await sleep(400);
+const afterThanksReload = await mobile.evaluate(reactionState());
+check(
+  "APRÈS RECHARGEMENT, les dix ❤️ sont toujours sur LEURS messages (corrélation `entryId`)",
+  afterThanksReload.length === 10 &&
+    afterThanksReload.every((entry) => entry.reaction === "❤️"),
+  JSON.stringify(afterThanksReload.map((entry) => entry.reaction)),
+);
+const storedThanks = await api("/reactions");
+check(
+  "les dix ❤️ sont persistés À PART, un par identifiant d'entrée de session",
+  storedThanks.state.length === 10 &&
+    storedThanks.state.every(
+      ([entryId, reaction]) => typeof entryId === "string" && entryId.length > 0 && reaction === "merci",
+    ),
+  JSON.stringify(storedThanks.state.slice(0, 2)),
 );
 
 /* ─── CSP, connexion, exceptions ─────────────────────────────────────────── */

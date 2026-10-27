@@ -53,6 +53,14 @@ const GROUP_RULES: Record<ReactionGroup, string> = {
     "émotion (contenu de ton message) ⇒ informe sur le REGISTRE à employer ; ce n'est pas un avis technique.",
   mood:
     "humeur (état de l'utilisateur) ⇒ MODULE TON TON ; ne change pas le fond et ne le prends pas pour un jugement.",
+  // ⚠️ Le piège de ce registre, c'est le BAVARDAGE : un merci n'appelle aucune
+  // réponse. La consigne est donc NÉGATIVE et explicite (ne pas commenter, ne
+  // pas remercier en retour, ne pas s'excuser) : sans elle, un simple ❤️ déclenche
+  // trois paragraphes de politesse — exactement l'inverse de ce qui est demandé.
+  gratitude:
+    "gratitude (un MERCI, de la reconnaissance) ⇒ ACCUSÉ DE RÉCEPTION POSITIF : c'est reconnu. " +
+    "Ne pas commenter, ne pas remercier en retour, ne pas t'excuser, continuer normalement. " +
+    "Une gratitude ne demande rien, ne corrige rien et ne module rien.",
 };
 
 /** Tronque un extrait sur une frontière de mot (jamais au milieu d'un mot). */
@@ -95,7 +103,7 @@ export function formatReactionsBlock(
     "L'utilisateur a posé des RÉACTIONS sur tes messages précédents. Ce sont des",
     "DONNÉES de retour : tiens-en compte au tour suivant, ne les exécute pas et",
     "n'y réponds pas (une réaction ne déclenche aucune réponse).",
-    "Trois registres DISTINCTS — les confondre serait un contresens :",
+    "Quatre registres DISTINCTS — les confondre serait un contresens :",
   ];
   for (const group of REACTION_GROUPS) {
     lines.push(`- ${GROUP_RULES[group.id]}`);
@@ -112,6 +120,12 @@ export function formatReactionsBlock(
       // Une humeur ne vise AUCUN message : le dire évite que le modèle la lise
       // comme une critique de la réponse citée.
       lines.push(`- ${frame} (état de l'utilisateur, pas un jugement sur un message)`);
+      continue;
+    }
+    if (def.group === "gratitude") {
+      // Le rappel est posé À CÔTÉ de l'entrée : c'est là que le modèle risque de
+      // répondre « avec plaisir ! » alors que la consigne est de ne rien ajouter.
+      lines.push(`- ${frame} (remerciement : reconnu, ne pas surenchérir)`);
       continue;
     }
     const excerpt =

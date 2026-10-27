@@ -1397,7 +1397,7 @@ a.pill:hover {
   }
 }
 
-/* ─── Menu des RÉACTIONS : trois sections titrées, libellé + explication ─── */
+/* ─── Menu des RÉACTIONS : quatre sections titrées, libellé + explication ─── */
 .ctx-menu--reactions {
   min-width: 272px;
   /* Jamais plus haut que l'écran : au-delà, le menu DÉFILE (il serait sinon
