@@ -35,7 +35,9 @@ import { createReactionControl } from "./reactions.js";
 import { iconNode } from "./icons.js";
 import { MOBILE_MEDIA_QUERY, initMobileNav } from "./mobile-nav.js";
 import { createScreenshotBlocks, formatBytes } from "./screenshot-block.js";
+import { createAckBlocks } from "./ack-block.js";
 import { createImageBlocks } from "./image-block.js";
+import { createImageLightbox } from "./lightbox.js";
 import {
   createFileBlocks,
   createFileCard,
@@ -629,15 +631,40 @@ const approvalLayer = createApprovalLayer({
  * le serveur ne l'envoie QUE par trame de contrôle `screenshot`, jamais dans le
  * transcript ni le rejeu. L'image n'est affichée qu'ICI (à l'humain) : le modèle
  * ne la reçoit jamais. */
-const screenshotBlocks = createScreenshotBlocks({ container: els.conversation });
+/* ─── VISIONNEUSE D'IMAGE (vignette cliquable + plein écran) ───────────────
+ * ⚠️ UNE SEULE visionneuse, PARTAGÉE par les deux familles d'images du fil
+ * (générées `/images/…` et captures `/captures/…`) : une image = une vignette
+ * bornée (320 px bureau, 220 px téléphone) qui s'ouvre en PLEIN ÉCRAN au clic.
+ *
+ * ⚠️ C'est une SURCOUCHE FIXE posée sur `document.body` : elle ne touche NI au
+ * fil, NI au `scrollTop`, NI à l'état STICKY (`conversationPinned`), NI au bouton
+ * « revenir en bas » (PIÈGE ①). La navigation entre images se fait sur la LISTE
+ * des vignettes présentes dans `#conversation`, dans l'ordre du DOM. */
+const imageLightbox = createImageLightbox({ root: els.conversation });
+
+const screenshotBlocks = createScreenshotBlocks({
+  container: els.conversation,
+  zoom: imageLightbox,
+});
 
 /* ─── IMAGES GÉNÉRÉES dans la conversation ─────────────────────────────────
- * Éphémère (trame de CONTRÔLE `image`, aucun `seq` consommé, jamais bufferisée) :
- * le bloc n'existe que dans cette session d'affichage et disparaît dès que le fil
- * est reconstruit. La source est un chemin SAME-ORIGIN (`/images/<id>.<ext>`) :
+ * CONSERVÉES (même réglage que les pièces jointes) : la carte revient après un
+ * RECHARGEMENT, le serveur la ré-envoyant en trame de CONTRÔLE `image` juste après
+ * le snapshot. La source est un chemin SAME-ORIGIN (`/images/<id>.<ext>`) :
  * aucune CSP à élargir. ⚠️ Contrairement aux captures d'agents, l'image a AUSSI
- * été transmise à Yuki, qui l'a donc vue et peut la juger. */
-const imageBlocks = createImageBlocks({ container: els.conversation });
+ * été transmise à Yuki, qui l'a donc vue et peut la juger.
+ * ⚠️ La FICHE (prompt final) peut arriver APRÈS l'image : elle est alors insérée
+ * SOUS l'image, jamais au-dessus (l'image ne bouge pas).
+ * ⚠️ MÊME vignette cliquable et MÊME visionneuse que les captures d'écran. */
+const imageBlocks = createImageBlocks({ container: els.conversation, zoom: imageLightbox });
+
+/* ─── ACCUSÉS DE RÉCEPTION dans la conversation ────────────────────────────
+ * Trame de CONTRÔLE éphémère `ack` (aucun `seq` consommé, jamais bufferisée,
+ * JAMAIS prononcée) : une ligne courte (« Je m'en occupe. ») au moment où une
+ * ACTION démarre (délégation, génération d'image, commande). Jamais pour une
+ * question simple : c'est le SERVEUR qui décide, sur un test booléen (une action
+ * a-t-elle été lancée ?), sans aucun calcul ni appel modèle supplémentaire. */
+const ackBlocks = createAckBlocks({ container: els.conversation });
 
 /* ─── FICHIERS dans la conversation (envoi ET réception) ───────────────────
  * Deux sources DISTINCTES :
@@ -1197,6 +1224,7 @@ function applyTranscript(transcript) {
   approvalLayer.reset();
   screenshotBlocks.reset();
   imageBlocks.reset();
+  ackBlocks.reset();
   fileBlocks.reset();
   subagentActivity.reset();
   thinkingBlocks.reset();
@@ -1374,6 +1402,7 @@ function handleFrame(frame) {
     approvalLayer.reset();
     screenshotBlocks.reset();
     imageBlocks.reset();
+    ackBlocks.reset();
     fileBlocks.reset();
     subagentActivity.reset();
     thinkingBlocks.reset();
@@ -1521,6 +1550,26 @@ function handleFrame(frame) {
   // jamais conservée : le chemin est same-origin, donc la CSP reste inchangée.
   if (type === "image") {
     imageBlocks.show(frame.image);
+    return;
+  }
+  // FICHE d'une image DÉJÀ affichée (prompt final publié par le workflow) : elle
+  // arrive APRÈS l'image et se place SOUS elle, sans jamais la déplacer. Trame de
+  // CONTRÔLE (aucun `seq` consommé), traitée AVANT le curseur `seq`.
+  if (type === "image_final_prompt") {
+    imageBlocks.setFinalPrompt(String(frame.id ?? ""), frame.finalPrompt);
+    return;
+  }
+  // ACCUSÉ DE RÉCEPTION : trame de CONTRÔLE (aucun `seq` consommé), traitée AVANT
+  // le curseur `seq` (sinon prise pour un doublon). Placée JUSTE AVANT la bulle
+  // assistant encore vide du run : elle reste donc au-dessus de la réponse et de
+  // l'image qui suivent. Un fil non focalisé ne la dessine pas.
+  if (type === "ack") {
+    const ackTarget =
+      typeof frame.sessionId === "string" && frame.sessionId.length > 0
+        ? frame.sessionId
+        : sessionId;
+    if (ackTarget && ackTarget !== sessionId) return;
+    ackBlocks.show(frame.text, { before: currentAssistant });
     return;
   }
   // FICHIER envoyé par Yuki : trame de CONTRÔLE (aucun `seq` consommé). La carte

@@ -12,8 +12,9 @@
  *  3. les étiquettes sont retrouvées PAR TITRE malgré des identifiants de nœuds
  *     NON NUMÉRIQUES (PIÈGE ②) : la graine/largeur/hauteur sont écrites aux bons
  *     champs, le style a choisi le workflow `manga` ;
- *  4. l'image est ÉPHÉMÈRE : elle disparaît au rechargement (jamais dans le
- *     snapshot, jamais dans le transcript) ;
+ *  4. l'image est CONSERVÉE (même rétention que les pièces jointes) : elle
+ *     SURVIT au RECHARGEMENT et à la PURGE du temporaire de ComfyUI, et la FICHE
+ *     (prompt final) s'affiche SOUS elle sans jamais la déplacer ;
  *  5. un ÉCHEC RÉEL du serveur (500) produit un message honnête, et rien n'est
  *     affiché dans le fil ;
  *  6. ZÉRO violation CSP, ZÉRO exception JS, ZÉRO erreur de connexion.
@@ -78,6 +79,19 @@ const WORKFLOW = {
     _meta: { title: "YUKI_HEIGHT" },
   },
   "save-99": { class_type: "SaveImage", inputs: { filename_prefix: "Yuki" } },
+  // ⚠️ Nœuds RÉELS de la suite maison de l'utilisateur : l'enhancer produit le
+  // prompt final, `AIHToText` l'AFFICHE (il publie `ui.text`, même si son champ
+  // `display_text` est vide). L'étiquette `YUKI_FINAL_PROMPT` est ici.
+  "enhancer-1709": {
+    class_type: "AIHPromptEnhancer",
+    inputs: { prompt: "text" },
+    _meta: { title: "enhancer" },
+  },
+  "affichage-1858": {
+    class_type: "AIHToText",
+    inputs: { display_mode: "Auto", display_text: "", any_input: ["enhancer-1709", 0] },
+    _meta: { title: "YUKI_FINAL_PROMPT" },
+  },
   // ⚠️ APERÇU INTERMÉDIAIRE : `SaveImage` (type `output`), que l'ancienne règle
   // « première image produite » préférait — il ne doit JAMAIS être servi quand
   // `YUKI_OUTPUT` est étiqueté.
@@ -101,6 +115,26 @@ const STYLE = "un truc style dessin animé japonais";
  */
 const WORKFLOW_SANS_OUTPUT = { ...WORKFLOW };
 delete WORKFLOW_SANS_OUTPUT["preview-final"];
+
+/**
+ * MÊME graphe, avec `YUKI_FINAL_PROMPT` sur un nœud qui N'AFFICHE PAS de texte
+ * (`CLIPTextEncode`) : c'est l'erreur à diagnostiquer. L'historique ne portera
+ * aucun `ui.text` ⇒ message EXPLICITE attendu (jamais un silence).
+ */
+const WORKFLOW_SANS_TEXTE = { ...WORKFLOW };
+WORKFLOW_SANS_TEXTE["affichage-1858"] = {
+  class_type: "CLIPTextEncode",
+  inputs: { text: "" },
+  _meta: { title: "YUKI_FINAL_PROMPT" },
+};
+
+/**
+ * MÊME graphe, SANS `YUKI_OUTPUT` NI `YUKI_FINAL_PROMPT` : le cas « workflow d'avant », qui
+ * doit continuer à fonctionner à l'identique (aucune étiquette obligatoire ajoutée).
+ */
+const WORKFLOW_SANS_PROMPT_FINAL = { ...WORKFLOW };
+delete WORKFLOW_SANS_PROMPT_FINAL["preview-final"];
+delete WORKFLOW_SANS_PROMPT_FINAL["affichage-1858"];
 
 async function startServer() {
   const logs = [];
@@ -316,8 +350,8 @@ const imported = await fetch(`${server.base}/api/images/workflows`, {
 const importedBody = await imported.json();
 check("import du workflow accepté (route réelle)", imported.status === 200 && importedBody.ok === true);
 check(
-  "étiquettes trouvées annoncées à l'import (six, dont YUKI_OUTPUT)",
-  Array.isArray(importedBody.workflow?.found) && importedBody.workflow.found.length === 6,
+  "étiquettes trouvées annoncées à l'import (sept, dont YUKI_OUTPUT et YUKI_FINAL_PROMPT)",
+  Array.isArray(importedBody.workflow?.found) && importedBody.workflow.found.length === 7,
   JSON.stringify(importedBody.workflow?.found),
 );
 check(
@@ -366,7 +400,11 @@ check(
   /64×64/.test(state.text) && /Ko|octets/.test(state.text),
   state.text.slice(0, 200),
 );
-check("mention « pas conservée dans l'historique »", /pas conservée dans l'historique/i.test(state.text), state.text.slice(0, 220));
+check(
+  "la fiche DIT la conservation RÉELLE (même durée que les pièces jointes)",
+  /conserv/i.test(state.text) && /rechargement/i.test(state.text),
+  state.text.slice(0, 260),
+);
 check(
   "source SAME-ORIGIN `/images/…` (CSP `img-src 'self'` inchangée)",
   typeof state.imgSrc === "string" && /^\/images\/[a-f0-9]{32}\.png$/.test(state.imgSrc),
@@ -426,20 +464,92 @@ check(
   JSON.stringify(lastView),
 );
 
-/* ═════════ 5) Rechargement : l'image NE revient PAS (éphémère) ═══════════ */
+/* ═══ 5) RECHARGEMENT : l'image et sa fiche REVIENNENT (conservation) ═════ */
+const generatedSrc = String(generated.imageSrc ?? "");
+check(
+  "la génération renvoie un chemin same-origin `/images/<id>.png`",
+  /^\/images\/[a-f0-9]{32}\.png$/.test(generatedSrc),
+  generatedSrc,
+);
+const storedBefore = await fetch(`${server.base}/e2e/images`).then((r) => r.json());
+check(
+  "l'image est ÉCRITE sur le disque de Yuki (copie immédiate, avant toute purge)",
+  Array.isArray(storedBefore.images) &&
+    storedBefore.images.some((item) => item.imageSrc === generatedSrc),
+  JSON.stringify(storedBefore.images ?? []).slice(0, 200),
+);
+check(
+  "la copie porte une date d'expiration (même règle que les pièces jointes)",
+  Array.isArray(storedBefore.images) &&
+    typeof storedBefore.images[0]?.expiresAt === "string" &&
+    Number.isFinite(Date.parse(storedBefore.images[0].expiresAt)),
+  String(storedBefore.images?.[0]?.expiresAt),
+);
+
 await navigate(`${server.base}/`);
-await sleep(800);
-const afterReload = await evaluate(`(() => ({
-  count: document.querySelectorAll('.generated-image').length,
-  thread: document.querySelector('#conversation')?.textContent ?? '',
-  images: [...document.querySelectorAll('img')].map((img) => img.getAttribute('src')).filter((src) => String(src).startsWith('/images/')).length,
-}))()`);
-check("rechargement : plus AUCUN bloc d'image générée", afterReload.count === 0, String(afterReload.count));
-check("rechargement : aucune image /images/ dans le fil", afterReload.images === 0, String(afterReload.images));
-check("rechargement : aucun résidu textuel", !/Image générée/i.test(afterReload.thread), afterReload.thread.slice(0, 120));
+await waitFor(`!!document.querySelector('.generated-image__image')`, 10000);
+await waitForImageDecoded(5000);
+const afterReload = await evaluate(`(() => {
+  const block = document.querySelector('.generated-image');
+  const img = document.querySelector('.generated-image__image');
+  const fiche = document.querySelector('.generated-image__prompt');
+  return {
+    count: document.querySelectorAll('.generated-image').length,
+    src: img ? img.getAttribute('src') : null,
+    loaded: img ? img.complete && img.naturalWidth > 0 : false,
+    naturalWidth: img ? img.naturalWidth : 0,
+    fiche: Boolean(fiche),
+    inImageBlock: Boolean(fiche && block && block.contains(fiche)),
+    thread: document.querySelector('#conversation')?.textContent ?? '',
+  };
+})()`);
+check("RECHARGEMENT : l'image générée est TOUJOURS affichée", afterReload.count === 1, String(afterReload.count));
+check("RECHARGEMENT : c'est la MÊME image (même chemin same-origin)", afterReload.src === generatedSrc, String(afterReload.src));
+check("RECHARGEMENT : image réellement DÉCODÉE par le navigateur", afterReload.loaded === true, String(afterReload.naturalWidth));
+check("RECHARGEMENT : la FICHE (prompt final) revient avec l'image", afterReload.fiche === true && afterReload.inImageBlock === true, JSON.stringify(afterReload).slice(0, 200));
 await shot("image-after-reload");
 
-/* ═══ 5 bis) Le PANNEAU /config affiche YUKI_OUTPUT (trouvée / absente) ═══ */
+/* ═══ 5 bis) PURGE du temporaire de ComfyUI : l'image vient de YUKI ═══════ */
+// Le faux serveur ComfyUI « purge » son répertoire temporaire : `/history` et
+// `/view` répondent 404. Si l'image affichée dépendait encore de ComfyUI, elle
+// serait cassée. ⚠️ C'est la COPIE de Yuki qui est servie.
+await fetch(`${server.base}/e2e/purge-comfy`);
+const comfyView = await fetch(`${server.base}/e2e/comfy-url`).then((r) => r.json());
+const comfyPurged = await fetch(`${comfyView.url}/view?filename=Vuki_preview-final_00001_.png&type=temp`).then((r) => r.status);
+check("le faux ComfyUI est bien PURGÉ (son /view répond 404)", comfyPurged === 404, String(comfyPurged));
+
+const served = await fetch(`${server.base}${generatedSrc}`);
+const servedBytes = served.ok ? (await served.arrayBuffer()).byteLength : 0;
+check("l'image est toujours SERVIE par Yuki après la purge de ComfyUI", served.status === 200, String(served.status));
+check("elle est servie en `image/png` (same-origin, CSP inchangée)", served.headers.get("content-type") === "image/png", String(served.headers.get("content-type")));
+check("le corps servi n'est pas vide (vraie copie, pas une redirection)", servedBytes > 0, String(servedBytes));
+
+await navigate(`${server.base}/`);
+await waitFor(`!!document.querySelector('.generated-image__image')`, 10000);
+await waitForImageDecoded(5000);
+const afterPurge = await evaluate(`(() => {
+  const img = document.querySelector('.generated-image__image');
+  return {
+    count: document.querySelectorAll('.generated-image').length,
+    src: img ? img.getAttribute('src') : null,
+    loaded: img ? img.complete && img.naturalWidth > 0 : false,
+  };
+})()`);
+check("après la purge de ComfyUI : l'image est TOUJOURS affichée", afterPurge.count === 1, String(afterPurge.count));
+check("après la purge : c'est toujours la MÊME image", afterPurge.src === generatedSrc, String(afterPurge.src));
+check("après la purge : image réellement DÉCODÉE", afterPurge.loaded === true, JSON.stringify(afterPurge));
+await shot("image-after-comfy-purge");
+
+// Remise à zéro du stockage du harnais : les sections suivantes comptent les
+// blocs depuis un fil VIDE (ce n'est pas une mesure de production).
+const reset = await fetch(`${server.base}/e2e/reset-media`).then((r) => r.json());
+check("le harnais vide son stockage d'images pour les mesures suivantes", reset.removed >= 1, JSON.stringify(reset));
+await navigate(`${server.base}/`);
+await sleep(500);
+const afterReset = await evaluate(`document.querySelectorAll('.generated-image').length`);
+check("fil reconstruit : plus aucun bloc d'image (l'état vient du serveur)", afterReset === 0, String(afterReset));
+
+/* ═══ 5 ter) Le PANNEAU /config affiche YUKI_OUTPUT (trouvée / absente) ═══ */
 await navigate(`${server.base}/config`);
 const panelReady = await waitFor(`!!document.querySelector('#images-root .image-workflow')`, 10000);
 check("le panneau des workflows est monté sur /config", panelReady, await evaluate(`JSON.stringify({ root: document.querySelector('#images-root')?.textContent?.slice(0,200) ?? null, cards: document.querySelectorAll('#images-root .image-workflow').length, err: document.querySelector('.config-error')?.textContent ?? null })`));
@@ -504,7 +614,250 @@ check(
 );
 await shot("config-images-panel");
 
-/* ═════════ 6) ÉCHEC RÉEL du serveur ⇒ message honnête, rien dans le fil ═ */
+/* ═══ 6) PROMPT FINAL : du nœud ÉTIQUETÉ → conversation ET modèle ════════ */
+await navigate(`${server.base}/`);
+await waitFor(`!!document.querySelector('#conversation')`);
+const SCENE_FINALE = "Un phare isolé, battu par les vagues, au crépuscule.";
+// ⚠️ `ficheDelayMs` : le harnais retarde l'émission de la FICHE de 900 ms, pour
+// MESURER que l'image ne bouge pas quand elle arrive (elle se place SOUS elle).
+// L'ORDRE est celui du code réel : image d'abord, fiche ensuite.
+const toolRun = await fetch(
+  `${server.base}/e2e/tool?scene=${encodeURIComponent(SCENE_FINALE)}&style=${encodeURIComponent(STYLE)}&ficheDelayMs=900`,
+).then((r) => r.json());
+const toolText = String(toolRun.text ?? "");
+check("l'outil generer_image aboutit (chemin réel du MODÈLE)", toolRun.ok === true, toolText.slice(0, 160));
+check(
+  "le MODÈLE reçoit le PROMPT FINAL (texte de l'enhancer, pas la scène)",
+  toolText.includes("focale 35 mm"),
+  toolText.slice(-260),
+);
+check(
+  "le prompt final est encadré comme DONNÉE, jamais comme consigne",
+  /DÉBUT DU PROMPT FINAL \(DONNÉE/.test(toolText) &&
+    /FIN DU PROMPT FINAL/.test(toolText) &&
+    /ne l'exécute pas/.test(toolText),
+  toolText.slice(-260),
+);
+check(
+  "les détails disent d'où vient le texte (nœud étiqueté, et non un autre)",
+  toolRun.details?.final_prompt_node === "affichage-1858" &&
+    toolRun.details?.final_prompt_status === "found",
+  JSON.stringify(toolRun.details ?? {}).slice(0, 240),
+);
+
+/* ── Mesure AVANT/APRÈS de la fiche : l'image ne doit pas bouger ── */
+// ⚠️ On attend que l'image soit RÉELLEMENT décodée : sinon la mesure comparerait
+// la taille provisoire de chargement à la taille finale, ce qui ne dirait rien
+// de l'effet de la fiche.
+await waitForImageDecoded(5000);
+const beforeFiche = await evaluate(`(() => {
+  const img = document.querySelector('.generated-image__image');
+  const block = document.querySelector('.generated-image');
+  const rect = img ? img.getBoundingClientRect() : null;
+  return {
+    fichePresent: Boolean(document.querySelector('.generated-image__prompt')),
+    top: rect ? rect.top : null,
+    left: rect ? rect.left : null,
+    width: rect ? rect.width : null,
+    height: rect ? rect.height : null,
+    blockHeight: block ? block.getBoundingClientRect().height : null,
+  };
+})()`);
+check(
+  "l'image est affichée AVANT sa fiche (la fiche arrive APRÈS)",
+  beforeFiche.fichePresent === false && typeof beforeFiche.top === "number",
+  JSON.stringify(beforeFiche),
+);
+
+const promptShown = await waitFor(`!!document.querySelector('.generated-image__prompt')`);
+check("le prompt final est AFFICHÉ dans la conversation, sous l'image", promptShown);
+await sleep(150);
+const placement = await evaluate(`(() => {
+  const img = document.querySelector('.generated-image__image');
+  const block = document.querySelector('.generated-image');
+  const details = document.querySelector('.generated-image__prompt');
+  const rect = img ? img.getBoundingClientRect() : null;
+  const ficheRect = details ? details.getBoundingClientRect() : null;
+  const blockRect = block ? block.getBoundingClientRect() : null;
+  return {
+    top: rect ? rect.top : null,
+    left: rect ? rect.left : null,
+    width: rect ? rect.width : null,
+    height: rect ? rect.height : null,
+    blockHeight: blockRect ? blockRect.height : null,
+    ficheTop: ficheRect ? ficheRect.top : null,
+    imageBottom: rect ? rect.bottom : null,
+    // Ordre dans le DOM : DOCUMENT_POSITION_FOLLOWING = la fiche VIENT APRÈS.
+    ficheAfterImage: Boolean(img && details) && Boolean(img.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING),
+    imgStillFirstImage: block ? block.querySelector('.generated-image__image') === img : false,
+  };
+})()`);
+check(
+  "la fiche est SOUS l'image (mesure : son haut ≥ le bas de l'image)",
+  typeof placement.ficheTop === "number" &&
+    typeof placement.imageBottom === "number" &&
+    placement.ficheTop >= placement.imageBottom - 0.5,
+  JSON.stringify({ ficheTop: placement.ficheTop, imageBottom: placement.imageBottom }),
+);
+check(
+  "la fiche vient APRÈS l'image dans le DOM (jamais avant)",
+  placement.ficheAfterImage === true && placement.imgStillFirstImage === true,
+  JSON.stringify(placement),
+);
+check(
+  "l'image n'a PAS BOUGÉ quand la fiche est arrivée (position et taille identiques)",
+  placement.top === beforeFiche.top &&
+    placement.left === beforeFiche.left &&
+    placement.width === beforeFiche.width &&
+    placement.height === beforeFiche.height,
+  JSON.stringify({ avant: beforeFiche, apres: placement }),
+);
+check(
+  "le bloc a seulement GRANDI vers le bas (la fiche ajoute sa hauteur)",
+  typeof placement.blockHeight === "number" &&
+    typeof beforeFiche.blockHeight === "number" &&
+    placement.blockHeight > beforeFiche.blockHeight,
+  JSON.stringify({ avant: beforeFiche.blockHeight, apres: placement.blockHeight }),
+);
+const promptState = await evaluate(`(() => {
+  const details = document.querySelector('.generated-image__prompt');
+  const block = document.querySelector('.generated-image');
+  const code = details ? details.querySelector('code') : null;
+  const button = details ? details.querySelector('.md-copy-btn') : null;
+  return {
+    open: details ? details.open : null,
+    inImageBlock: Boolean(details && block && block.contains(details)),
+    text: code ? code.textContent : '',
+    pwned: typeof window.__pwned !== 'undefined',
+    injectedNodes: details ? details.querySelectorAll('img, b').length : -1,
+    fields: details ? details.querySelectorAll('input, textarea').length : -1,
+    copyLabel: button ? button.getAttribute('aria-label') : null,
+    note: details ? details.textContent : '',
+    styled: details
+      ? details.getAttribute('style') !== null ||
+        [...details.querySelectorAll('*')].some((el) => el.getAttribute('style') !== null)
+      : null,
+  };
+})()`);
+check("il est REPLIÉ par défaut (lisible sans encombrer le fil)", promptState.open === false);
+check("il est DANS le bloc de l'image (sous/avec elle)", promptState.inImageBlock === true);
+check(
+  "le texte affiché est celui du NŒUD ÉTIQUETÉ (aucun autre nœud lu)",
+  String(promptState.text).includes("focale 35 mm"),
+  String(promptState.text).slice(0, 140),
+);
+check(
+  "texte inséré comme NŒUD TEXTE : la charge d'injection n'est PAS interprétée",
+  promptState.pwned === false && promptState.injectedNodes === 0,
+  `pwned=${String(promptState.pwned)} nœuds=${String(promptState.injectedNodes)}`,
+);
+check("aucun champ de saisie : c'est de la LECTURE", promptState.fields === 0, String(promptState.fields));
+check(
+  "bouton « copier » RÉUTILISÉ (le même que les blocs de code)",
+  /prompt final/i.test(String(promptState.copyLabel)),
+  String(promptState.copyLabel),
+);
+check(
+  "le bloc DIT qu'il est en lecture seule",
+  /LECTURE seule/.test(String(promptState.note)),
+  String(promptState.note).slice(-160),
+);
+check("aucun attribut de style en ligne (CSP)", promptState.styled === false, JSON.stringify(promptState.styled));
+await shot("image-final-prompt");
+
+/* ═══ 6 bis) Nœud étiqueté SANS texte ⇒ message EXPLICITE ═══════════════ */
+const importedNoText = await fetch(`${server.base}/api/images/workflows`, {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-yuki-config": "1" },
+  body: JSON.stringify({
+    name: "sans-texte",
+    description: "Sans texte — nœud étiqueté qui n'affiche aucun texte",
+    workflow: WORKFLOW_SANS_TEXTE,
+    isDefault: true,
+  }),
+});
+check(
+  "un workflow dont le nœud YUKI_FINAL_PROMPT n'affiche rien reste IMPORTABLE (le diagnostic est à la génération)",
+  importedNoText.status === 200,
+  String(importedNoText.status),
+);
+const noTextRun = await fetch(`${server.base}/e2e/tool?scene=zzz%20qqq&style=zzz%20qqq`).then((r) => r.json());
+const noTextMessage = String(noTextRun.text ?? "");
+check(
+  "nœud étiqueté SANS texte ⇒ message EXPLICITE (pas un silence)",
+  /AUCUN texte/.test(noTextMessage) && /YUKI_FINAL_PROMPT/.test(noTextMessage),
+  noTextMessage.slice(-300),
+);
+check(
+  "le message dit ce que le nœud publie RÉELLEMENT et comment corriger",
+  /sorties publiées par ce nœud/.test(noTextMessage) && /ui\.text/.test(noTextMessage),
+  noTextMessage.slice(-300),
+);
+check(
+  "l'image reste produite malgré le texte manquant (ce n'est pas un échec)",
+  noTextRun.details?.status === "ok" && noTextRun.details?.final_prompt_status === "empty",
+  JSON.stringify(noTextRun.details ?? {}).slice(0, 200),
+);
+await sleep(300);
+const noTextBlocks = await evaluate(`(() => ({
+  images: document.querySelectorAll('.generated-image').length,
+  prompts: document.querySelectorAll('.generated-image__prompt').length,
+}))()`);
+check(
+  "aucun bloc de prompt final n'est ajouté quand il n'y a rien à montrer",
+  noTextBlocks.images === 2 && noTextBlocks.prompts === 1,
+  JSON.stringify(noTextBlocks),
+);
+
+/* ═══ 6 ter) Workflow SANS l'étiquette ⇒ marche TOUJOURS ════════════════ */
+const importedNoLabel = await fetch(`${server.base}/api/images/workflows`, {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-yuki-config": "1" },
+  body: JSON.stringify({
+    name: "sans-prompt-final",
+    description: "Sans prompt final — workflow d'avant, aucune étiquette de lecture",
+    workflow: WORKFLOW_SANS_PROMPT_FINAL,
+    isDefault: false,
+  }),
+});
+check(
+  "un workflow SANS YUKI_FINAL_PROMPT reste importable (étiquette facultative)",
+  importedNoLabel.status === 200,
+  String(importedNoLabel.status),
+);
+await fetch(`${server.base}/api/images/workflows/sans-prompt-final/defaut`, {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-yuki-config": "1" },
+});
+const noLabelRun = await fetch(`${server.base}/e2e/tool?scene=zzz%20qqq&style=zzz%20qqq`).then((r) => r.json());
+const noLabelText = String(noLabelRun.text ?? "");
+check("workflow SANS YUKI_FINAL_PROMPT : la génération marche toujours", noLabelRun.details?.status === "ok", noLabelText.slice(0, 160));
+check("workflow SANS l'étiquette : aucun prompt final n'est inventé", !/PROMPT FINAL/.test(noLabelText), noLabelText.slice(0, 200));
+check(
+  "workflow SANS l'étiquette : rien n'est ajouté sous l'image",
+  noLabelRun.details?.final_prompt_labeled === false,
+  JSON.stringify(noLabelRun.details ?? {}).slice(0, 200),
+);
+await sleep(300);
+const noLabelBlocks = await evaluate(`(() => ({
+  images: document.querySelectorAll('.generated-image').length,
+  prompts: document.querySelectorAll('.generated-image__prompt').length,
+}))()`);
+check(
+  "l'image du workflow non étiqueté s'affiche sans bloc de prompt",
+  noLabelBlocks.images === 3 && noLabelBlocks.prompts === 1,
+  JSON.stringify(noLabelBlocks),
+);
+await shot("image-sans-etiquette");
+// Fil reconstruit : la section suivante compare le nombre de blocs AVANT/APRÈS
+// l'échec (les images CONSERVÉES reviennent, c'est normal : on ne compte que ce
+// que l'échec ajoute ou n'ajoute pas).
+await navigate(`${server.base}/`);
+await sleep(500);
+const blocksBeforeFailure = await evaluate(`document.querySelectorAll('.generated-image').length`);
+const storedBeforeFailure = await fetch(`${server.base}/e2e/images`).then((r) => r.json());
+
+/* ═════════ 7) ÉCHEC RÉEL du serveur ⇒ message honnête, rien dans le fil ═ */
 await fetch(`${server.base}/e2e/fail`);
 const failed = await fetch(
   `${server.base}/e2e/generate?scene=${encodeURIComponent("Un phare battu par les vagues.")}`,
@@ -514,7 +867,18 @@ check("échec serveur : le message dit ce que le serveur a répondu", /500/.test
 check("échec serveur : le message est en français et actionnable", /ComfyUI/.test(String(failed.message)), String(failed.message).slice(0, 200));
 await sleep(400);
 const afterFailure = await evaluate(`document.querySelectorAll('.generated-image').length`);
-check("échec serveur : RIEN n'est affiché dans le fil", afterFailure === 0, String(afterFailure));
+check(
+  "échec serveur : RIEN de NOUVEAU n'est affiché dans le fil",
+  afterFailure === blocksBeforeFailure,
+  `${String(blocksBeforeFailure)} → ${String(afterFailure)}`,
+);
+const storedAfterFailure = await fetch(`${server.base}/e2e/images`).then((r) => r.json());
+check(
+  "échec serveur : aucune image n'est écrite sur le disque",
+  Array.isArray(storedAfterFailure.images) &&
+    storedAfterFailure.images.length === (storedBeforeFailure.images?.length ?? -1),
+  `${String(storedBeforeFailure.images?.length)} → ${String(storedAfterFailure.images?.length)}`,
+);
 
 await stopPage();
 server.proc.kill("SIGTERM");await sleep(300);

@@ -54,6 +54,7 @@ import {
   ComfyWorkflowStore,
   GeneratedImagesStore,
   createComfyGenerator,
+  type ComfyImageFinalPromptView,
   type ComfyImageView,
   type ImagesGatewayPort,
 } from "./comfy/index.js";
@@ -156,9 +157,12 @@ const FALLBACK_SYSTEM_PROMPT =
   "Tu es Yuki, un assistant conversationnel généraliste. Réponds de manière claire et concise.";
 
 /**
- * Période du balayage de RÉTENTION des fichiers échangés (10 min). Court assez
- * pour qu'un fichier expiré ne survive pas longtemps, long assez pour ne rien
- * coûter (lecture des seules métadonnées du répertoire).
+ * Période du balayage de RÉTENTION du volume `state` (10 min) : pièces jointes,
+ * IMAGES GÉNÉRÉES et CAPTURES du libraire. Court assez pour qu'un expiré ne
+ * survive pas longtemps, long assez pour ne rien coûter (lecture des seules
+ * métadonnées des répertoires concernés). ⚠️ Un SEUL balayage pour les trois :
+ * c'est ce qui garantit qu'un même réglage (`files.retentionDays`) produit la
+ * même purge partout.
  */
 const FILES_PURGE_INTERVAL_MS = 10 * 60_000;
 
@@ -891,7 +895,7 @@ async function main(): Promise<void> {
     chars: rulesStore.read().chars,
   });
 
-  /** Balayage périodique de la RÉTENTION des fichiers échangés (voir plus bas). */
+  /** Balayage périodique de la RÉTENTION du volume `state` (voir plus bas). */
   let filesPurgeTimer: ReturnType<typeof setInterval> | undefined;
 
   // --- Fichiers échangés (l'utilisateur → Yuki, Yuki → l'utilisateur) -------
@@ -918,13 +922,10 @@ async function main(): Promise<void> {
     promptTotalChars: () => config.getNumber("files.promptTotalChars"),
   });
   // Balayage périodique : la rétention est une BORNE DE DISQUE, pas une promesse.
-  filesPurgeTimer = setInterval(() => {
-    try {
-      filesStore.purgeExpired();
-    } catch (error) {
-      logger.warn("files.purge.failed", { error: messageOf(error) });
-    }
-  }, FILES_PURGE_INTERVAL_MS);
+  // ⚠️ Le MÊME balayage purge les pièces jointes, les images générées et les
+  // captures du libraire (voir `purgeStateVolume`) : un seul réglage, une seule
+  // passe ⇒ impossible qu'un type survive au réglage d'un autre.
+  filesPurgeTimer = setInterval(purgeStateVolume, FILES_PURGE_INTERVAL_MS);
   filesPurgeTimer.unref?.();
   logger.info("files.ready", {
     dir: env.filesDir,
@@ -950,8 +951,18 @@ async function main(): Promise<void> {
     path: env.comfyWorkflowsPath,
     logger,
   });
-  const comfyImages = new GeneratedImagesStore({ dir: env.comfyImagesDir, logger });
+  const comfyImages = new GeneratedImagesStore({
+    dir: env.comfyImagesDir,
+    logger,
+    // ⚠️ MÊME réglage que les pièces jointes (`files.retentionDays`) : pas de 2ᵉ
+    // réglage de rétention pour les images. Relu à chaque dépôt ⇒ un changement
+    // dans `/config` s'applique à la génération suivante, sans redémarrage.
+    retentionDays: () => config.getNumber("files.retentionDays"),
+  });
   comfyImages.ensureLayout();
+  // Purge RÉELLE au démarrage : une image expirée pendant l'arrêt est supprimée
+  // (une rétention sans purge au démarrage laisserait le disque se remplir).
+  const purgedImagesAtStart = comfyImages.purgeExpired();
   const comfyClient = new ComfyClient({
     config: () => ({
       baseUrl: config.getString("images.baseUrl"),
@@ -974,8 +985,40 @@ async function main(): Promise<void> {
   logger.info("comfy.ready", {
     workflows: comfyWorkflows.size,
     imagesDir: env.comfyImagesDir,
+    purged: purgedImagesAtStart,
+    retentionDays: config.getNumber("files.retentionDays"),
     configured: config.getString("images.baseUrl").trim() !== "",
   });
+
+  /**
+   * Balayage UNIQUE de la rétention du volume `state` : pièces jointes, images
+   * générées par ComfyUI et captures du libraire.
+   *
+   * ⚠️ PIÈGE ④ : une rétention sans balayage ne purge rien — un fichier que
+   * personne ne relit resterait indéfiniment. Les trois stores partagent le MÊME
+   * réglage (`files.retentionDays`), la MÊME règle de calcul
+   * (`src/files/retention.ts`) et la MÊME passe périodique.
+   *
+   * Déclaré en FONCTION (hissée) : le balayage est posé AVANT la création des
+   * stores d'images et de captures, mais ne les lit qu'à l'exécution.
+   */
+  function purgeStateVolume(): void {
+    try {
+      filesStore.purgeExpired();
+    } catch (error) {
+      logger.warn("files.purge.failed", { error: messageOf(error) });
+    }
+    try {
+      comfyImages.purgeExpired();
+    } catch (error) {
+      logger.warn("comfy.image.purge.failed", { error: messageOf(error) });
+    }
+    try {
+      librarianShots?.purgeExpired();
+    } catch (error) {
+      logger.warn("librarian.shot.purge.failed", { error: messageOf(error) });
+    }
+  }
 
   // --- Jobs, délégation, PiHost (uniquement si la porte est passée) ---------
   let piStatus: "starting" | "ready" | "error" = "starting";
@@ -1181,11 +1224,16 @@ async function main(): Promise<void> {
     });
     const librarianConfigured = config.getString("librarian.baseUrl").trim() !== "";
     // Captures de pages web (Libry) : stockage local + diffusion vers l'UI.
+    // ⚠️ Ces captures ne sont plus ÉPHÉMÈRES : elles sont CONSERVÉES comme les
+    // pièces jointes (même réglage `files.retentionDays`, même purge) et donc
+    // RESTAURABLES après rechargement.
     librarianShots = new LibrarianShotsStore({
       dir: env.librarianShotsDir,
       logger,
+      retentionDays: () => config.getNumber("files.retentionDays"),
     });
     librarianShots.ensureLayout();
+    const purgedShotsAtStart = librarianShots.purgeExpired();
     const librarianConfiguredAtStart = librarianConfigured;
     const librarianCaptureEnabledAtStart =
       librarianConfiguredAtStart && config.getString("librarian.screenshot") === "on";
@@ -1194,24 +1242,22 @@ async function main(): Promise<void> {
       capture: librarianCaptureEnabledAtStart,
       jobs: env.librarianJobsPath,
       shots: env.librarianShotsDir,
+      purgedShots: purgedShotsAtStart,
+      retentionDays: config.getNumber("files.retentionDays"),
     });
 
     // Diffusion des captures de pages web vers l'UI (trame de contrôle `screenshot`).
     const librarianShotListeners = new Set<(event: ScreenshotViewEvent) => void>();
-    const librarianShotBus: ScreenshotGatewayPort = {
-      subscribeScreenshots: (listener) => {
-        librarianShotListeners.add(listener);
-        return () => {
-          librarianShotListeners.delete(listener);
-        };
-      },
-    };
-    const emitLibrarianShot = (view: LibrarianShotView): void => {
-      if (!view.sessionId) return;
-      const frame: CapturedScreenshotView = {
+    /**
+     * Vue d'une capture, telle que l'interface l'affiche. UN SEUL constructeur :
+     * la diffusion en direct et la RESTAURATION après rechargement produisent donc
+     * exactement la même trame (aucune divergence possible entre les deux).
+     */
+    function librarianShotFrame(view: LibrarianShotView, sessionId: string): CapturedScreenshotView {
+      return {
         agentId: view.host,
         agentName: view.host,
-        sessionId: view.sessionId,
+        sessionId,
         dataUrl: view.imageSrc,
         format: view.mimeType.split("/")[1] ?? "png",
         width: view.width ?? 0,
@@ -1221,7 +1267,29 @@ async function main(): Promise<void> {
         source: "web",
         url: view.pageUrl,
       };
-      const event: ScreenshotViewEvent = { kind: "captured", screenshot: frame };
+    }
+    const librarianShotBus: ScreenshotGatewayPort = {
+      subscribeScreenshots: (listener) => {
+        librarianShotListeners.add(listener);
+        return () => {
+          librarianShotListeners.delete(listener);
+        };
+      },
+      // RESTAURATION après rechargement / bascule : les captures de cette
+      // conversation encore valables (rétention non atteinte). Le transport les
+      // renvoie en trames de CONTRÔLE juste après le snapshot.
+      capturesForSession: (sessionId) => {
+        const store = librarianShots;
+        if (!store) return [];
+        return store.list({ sessionId }).map((record) => ({
+          kind: "captured" as const,
+          screenshot: librarianShotFrame(store.toView(record), sessionId),
+        }));
+      },
+    };
+    const emitLibrarianShot = (view: LibrarianShotView): void => {
+      if (!view.sessionId) return;
+      const event: ScreenshotViewEvent = { kind: "captured", screenshot: librarianShotFrame(view, view.sessionId) };
       for (const listener of [...librarianShotListeners]) {
         try {
           listener(event);
@@ -1236,6 +1304,7 @@ async function main(): Promise<void> {
     // interrompre les autres. ⚠️ Seules des métadonnées et un chemin SAME-ORIGIN
     // voyagent : aucun octet d'image, aucun nom de fichier du serveur ComfyUI.
     const imageViewListeners = new Set<(view: ComfyImageView) => void>();
+    const imageFinalPromptListeners = new Set<(view: ComfyImageFinalPromptView) => void>();
     imagesGateway = {
       subscribeImages: (listener) => {
         imageViewListeners.add(listener);
@@ -1243,9 +1312,28 @@ async function main(): Promise<void> {
           imageViewListeners.delete(listener);
         };
       },
+      subscribeImageFinalPrompts: (listener) => {
+        imageFinalPromptListeners.add(listener);
+        return () => {
+          imageFinalPromptListeners.delete(listener);
+        };
+      },
+      // RESTAURATION après rechargement / bascule : les images de cette
+      // conversation encore valables (rétention non atteinte). Le transport les
+      // renvoie en trames de CONTRÔLE juste après le snapshot — c'est ce qui fait
+      // qu'une image générée ne disparaît plus au rechargement.
+      imagesForSession: (sessionId) =>
+        comfyImages.list({ sessionId }).map((record) => comfyImages.toView(record)),
     };
     const emitGeneratedImage = (view: ComfyImageView): void => {
       if (!view.sessionId) return;
+      // ⚠️ Rattachement AVANT diffusion : c'est lui qui permet de retrouver
+      // l'image au rechargement (la vue seule ne survit pas au fil).
+      try {
+        comfyImages.attach(view.id, view.sessionId);
+      } catch (error) {
+        logger.warn("comfy.image.attach.failed", { error: messageOf(error) });
+      }
       for (const listener of [...imageViewListeners]) {
         try {
           listener(view);
@@ -1330,6 +1418,22 @@ async function main(): Promise<void> {
       images: {
         generator: comfyGenerator,
         onImage: (view: ComfyImageView) => emitGeneratedImage(view),
+        // FICHE de l'image (prompt final) : émise APRÈS l'image, affichée SOUS
+        // elle. Persistée avec l'image ⇒ la carte revient complète au rechargement.
+        onImageFinalPrompt: (view: ComfyImageFinalPromptView) => {
+          try {
+            comfyImages.attachFinalPrompt(view.id, view.finalPrompt);
+          } catch (error) {
+            logger.warn("comfy.image.final_prompt.failed", { error: messageOf(error) });
+          }
+          for (const listener of [...imageFinalPromptListeners]) {
+            try {
+              listener(view);
+            } catch {
+              // Un client en échec ne doit pas interrompre les autres.
+            }
+          }
+        },
         styles: {
           candidates: () => comfyWorkflows.candidates(),
           enabled: () => config.getString("images.baseUrl").trim() !== "",

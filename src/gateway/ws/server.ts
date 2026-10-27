@@ -33,9 +33,10 @@ import type {
   ExecutionOutcome,
   PendingApprovalView,
   ScreenshotGatewayPort,
+  ScreenshotViewEvent,
   SecretRequestGatewayPort,
 } from "../../agents/execution.js";
-import type { ImagesGatewayPort } from "../../comfy/types.js";
+import type { ComfyImageView, ImagesGatewayPort } from "../../comfy/types.js";
 import type { FilesGatewayPort } from "../../files/types.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
@@ -301,6 +302,16 @@ export function toServerMessage(event: PiEvent): ServerMessage {
         ...(event.status !== undefined ? { status: event.status } : {}),
         at: event.at,
       };
+    case "ack":
+      // ACCUSÉ DE RÉCEPTION : trame de CONTRÔLE (aucun `seq` consommé, jamais
+      // bufferisée) ⇒ jamais dans le rejeu, le snapshot, le transcript ou la
+      // mémoire, et JAMAIS prononcée (le TTS ne reçoit que les `delta` de contenu).
+      return {
+        type: "ack",
+        runId: event.runId,
+        tool: event.tool,
+        text: event.text,
+      };
     case "run_summary":
       return {
         type: "run_summary",
@@ -432,6 +443,14 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // (donc JAMAIS dans le rejeu ni dans un snapshot) et AVANT `routeTtsEvent`
     // (jamais prononcée), vers une trame de CONTRÔLE rattachée au fil concerné.
     if (event.type === "delta" && event.channel === "thinking") {
+      broadcastControl(event.sessionId, toServerMessage(event));
+      return;
+    }
+    // ⚠️ ACCUSÉ DE RÉCEPTION : ÉPHÉMÈRE et MUET, exactement comme la réflexion et
+    // l'activité d'un sous-agent. On le déroute AVANT `streams.append` (donc jamais
+    // dans le rejeu ni dans un snapshot) et AVANT `routeTtsEvent` (jamais
+    // prononcé) : c'est une ligne de STATUT, pas une phrase de la réponse.
+    if (event.type === "ack") {
       broadcastControl(event.sessionId, toServerMessage(event));
       return;
     }
@@ -639,6 +658,19 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const unsubscribeImages = imagesPort?.subscribeImages((view) => {
     if (!view.sessionId) return;
     broadcastControl(view.sessionId, { type: "image", image: view });
+  });
+
+  // ── FICHE d'une image déjà affichée (prompt final du workflow) ──────────
+  // ⚠️ Elle arrive APRÈS l'image : le client l'affiche SOUS l'image, sans la
+  // déplacer. Trame de CONTRÔLE (aucun `seq`), jamais bufferisée, jamais
+  // prononcée. Une fiche isolée est ignorée si la session n'est pas connue.
+  const unsubscribeImageFinalPrompts = imagesPort?.subscribeImageFinalPrompts?.((view) => {
+    if (!view.sessionId) return;
+    broadcastControl(view.sessionId, {
+      type: "image_final_prompt",
+      id: view.id,
+      finalPrompt: view.finalPrompt,
+    });
   });
 
   // ── Fichiers ENVOYÉS par Yuki (trame de CONTRÔLE) ────────────────────────
@@ -940,6 +972,59 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     const snapshot = streams.get(sessionId).snapshot();
     const frame = sendDirect(client, snapshotMessage(snapshot));
     client.lastSeq = frame.seq;
+    restoreMedia(client, sessionId);
+  }
+
+  /**
+   * RESTAURE dans le fil les MÉDIAS CONSERVÉS de la conversation : images
+   * générées par ComfyUI et captures de pages web du libraire.
+   *
+   * ⚠️ POURQUOI ICI : ces médias sont CONSERVÉS sur le disque de Yuki (même
+   * rétention que les pièces jointes, même purge) mais leur place dans le fil est
+   * un état VIVANT, comme l'attente d'un run ou les jobs encore ouverts — le
+   * transcript n'en garde aucune trace. Le snapshot est donc la seule voie par
+   * laquelle l'interface peut les retrouver après un RECHARGEMENT ou une bascule.
+   *
+   * Ce sont des trames de CONTRÔLE (aucun `seq` consommé, jamais bufferisées) :
+   * elles suivent immédiatement le snapshot, dans l'ordre chronologique, et le
+   * client les rend avec ses blocs habituels. Aucun élargissement de CSP : les
+   * chemins sont same-origin (`/images/…`, `/captures/…`).
+   */
+  function restoreMedia(client: ClientState, sessionId: string): void {
+    const items: Array<{ at: string; message: ServerMessage }> = [];
+    let images: ComfyImageView[] = [];
+    let captures: ScreenshotViewEvent[] = [];
+    try {
+      images = imagesPort?.imagesForSession?.(sessionId) ?? [];
+    } catch (error) {
+      logger.warn("ws.media.restore.failed", {
+        session_id: sessionId,
+        kind: "image",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      captures = screenshots?.capturesForSession?.(sessionId) ?? [];
+    } catch (error) {
+      logger.warn("ws.media.restore.failed", {
+        session_id: sessionId,
+        kind: "screenshot",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    for (const view of images) {
+      items.push({ at: view.createdAt, message: { type: "image", image: view } });
+    }
+    for (const event of captures) {
+      items.push({
+        at: event.screenshot.capturedAt,
+        message: { type: "screenshot", screenshot: event.screenshot },
+      });
+    }
+    // Ordre CHRONOLOGIQUE toutes natures confondues : l'image d'il y a deux jours
+    // ne doit pas passer après la capture d'aujourd'hui.
+    items.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    for (const item of items) sendControl(client, sessionId, item.message);
   }
 
   async function handleHello(client: ClientState, message: ClientMessage): Promise<void> {
@@ -1020,6 +1105,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     if (result.mode === "snapshot") {
       const frame = sendDirect(client, snapshotMessage(result.snapshot));
       client.lastSeq = frame.seq;
+      restoreMedia(client, client.sessionId);
     } else {
       for (const frame of result.frames) {
         sendFrame(client, frame);
@@ -1860,6 +1946,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       unsubscribeAgents?.();
       unsubscribeScreenshots?.();
       unsubscribeImages?.();
+      unsubscribeImageFinalPrompts?.();
       unsubscribeFiles?.();
       tts?.cancelAll();
       if (httpServer) {

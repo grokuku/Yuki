@@ -5,7 +5,7 @@
  * (aucune traversée), le 404 honnête et le refus des méthodes non-lecture.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,6 +44,25 @@ describe("captures de pages web — route same-origin", () => {
     expect(response.headers["content-type"]).toBe("image/png");
     expect(response.headers["content-security-policy"]).toContain("img-src 'self' data:");
     expect(Buffer.isBuffer(response.body) && response.body.equals(PNG)).toBe(true);
+  });
+
+  it("sert la capture CONSERVÉE puis répond 404 une fois la rétention dépassée", () => {
+    // ⚠️ Horloge INJECTABLE : même réglage (`retentionDays`) que les pièces jointes.
+    let now = Date.UTC(2026, 0, 1);
+    const dir = mkdtempSync(join(tmpdir(), "yuki-captures-retention-"));
+    dirs.push(dir);
+    const store = new LibrarianShotsStore({ dir, now: () => now, retentionDays: () => 30 });
+    const record = store.save({
+      data: new Uint8Array(PNG),
+      mimeType: "image/png",
+      pageUrl: "https://example.com/",
+    });
+    if (!record) throw new Error("enregistrement attendu");
+    expect(handleCapturesRequest({ method: "GET", path: record.imageSrc, deps: { store } }).status).toBe(200);
+
+    now += 30 * 86_400_000;
+    expect(handleCapturesRequest({ method: "GET", path: record.imageSrc, deps: { store } }).status).toBe(404);
+    expect(existsSync(record.file)).toBe(false);
   });
 
   it("404 sur identifiant inconnu, extension hors allowlist ou tentative de traversée", () => {

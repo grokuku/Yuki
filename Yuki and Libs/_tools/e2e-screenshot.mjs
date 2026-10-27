@@ -310,6 +310,85 @@ await sleep(600);
 const afterReload2 = await evaluate(`document.querySelectorAll('.screenshot').length`);
 check("second rechargement : toujours rien (état éphémère)", afterReload2 === 0, String(afterReload2));
 
+/* ═══ 4) Capture de PAGE WEB (Libry) : CONSERVÉE, elle revient ══════════ */
+await navigate(`${server.base}/`);
+await waitFor(`!!document.querySelector('#conversation')`);
+await fetch(`${server.base}/e2e/web-shot`);
+const webShown = await waitFor(`!!document.querySelector('.screenshot__image[src^="/captures/"]')`);
+check("une capture de PAGE WEB s'affiche (chemin same-origin `/captures/…`)", webShown);
+await waitForImageDecoded(5000);
+const webState = await evaluate(`(() => {
+  const block = [...document.querySelectorAll('.screenshot')].find((el) => el.textContent.includes('Capture de page web'));
+  const img = block ? block.querySelector('.screenshot__image') : null;
+  return {
+    text: block ? block.textContent : '',
+    src: img ? img.getAttribute('src') : null,
+    loaded: img ? img.complete && img.naturalWidth > 0 : false,
+  };
+})()`);
+check(
+  "elle vient de la page (hôte affiché) et dit sa CONSERVATION",
+  /exemple\.fr/.test(String(webState.text)) && /conserv/i.test(String(webState.text)),
+  String(webState.text).slice(0, 220),
+);
+check(
+  "source SAME-ORIGIN `/captures/<id>.png` (CSP `img-src 'self'`)",
+  /^\/captures\/[a-f0-9]{32}\.png$/.test(String(webState.src)),
+  String(webState.src),
+);
+check("image de la capture réellement DÉCODÉE", webState.loaded === true, JSON.stringify(webState.src));
+
+const stored = await fetch(`${server.base}/e2e/captures`).then((r) => r.json());
+check(
+  "la capture est ÉCRITE sur le disque de Yuki",
+  Array.isArray(stored.captures) && stored.captures.some((item) => item.imageSrc === webState.src),
+  JSON.stringify(stored.captures ?? []).slice(0, 200),
+);
+check(
+  "elle porte une date d'expiration (même règle que les pièces jointes)",
+  Array.isArray(stored.captures) &&
+    typeof stored.captures[0]?.expiresAt === "string" &&
+    Number.isFinite(Date.parse(stored.captures[0].expiresAt)),
+  String(stored.captures?.[0]?.expiresAt),
+);
+const servedCapture = await fetch(`${server.base}${webState.src}`);
+check(
+  "elle est servie same-origin en `image/png`",
+  servedCapture.status === 200 && servedCapture.headers.get("content-type") === "image/png",
+  `${String(servedCapture.status)} ${String(servedCapture.headers.get("content-type"))}`,
+);
+await shot("web-screenshot-block");
+
+/* ═══ 4 bis) RECHARGEMENT : la capture de page web REVIENT ══════════════ */
+await navigate(`${server.base}/`);
+await waitFor(`!!document.querySelector('.screenshot__image[src^="/captures/"]')`, 10000);
+await waitForImageDecoded(5000);
+const webAfterReload = await evaluate(`(() => {
+  const block = [...document.querySelectorAll('.screenshot')].find((el) => el.textContent.includes('Capture de page web'));
+  const img = block ? block.querySelector('.screenshot__image') : null;
+  return {
+    blocks: document.querySelectorAll('.screenshot').length,
+    src: img ? img.getAttribute('src') : null,
+    loaded: img ? img.complete && img.naturalWidth > 0 : false,
+  };
+})()`);
+check("RECHARGEMENT : la capture de page web est TOUJOURS là", webAfterReload.blocks === 1, String(webAfterReload.blocks));
+check("RECHARGEMENT : c'est la MÊME capture", webAfterReload.src === webState.src, String(webAfterReload.src));
+check("RECHARGEMENT : image réellement DÉCODÉE", webAfterReload.loaded === true, JSON.stringify(webAfterReload));
+const ephemeralAfterReload = await evaluate(`(() => {
+  const blocks = [...document.querySelectorAll('.screenshot')];
+  return {
+    total: blocks.length,
+    ephemeral: blocks.filter((el) => el.textContent.includes('temporaire')).length,
+  };
+})()`);
+check(
+  "RECHARGEMENT : la capture d'une MACHINE, elle, reste ABSENTE (éphémère)",
+  ephemeralAfterReload.total === 1 && ephemeralAfterReload.ephemeral === 0,
+  JSON.stringify(ephemeralAfterReload),
+);
+await shot("web-screenshot-after-reload");
+
 await stopPage();
 server.proc.kill("SIGTERM");
 await sleep(300);

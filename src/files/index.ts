@@ -8,5 +8,6 @@ export * from "./types.js";
 export * from "./name.js";
 export * from "./analyze.js";
 export * from "./frame.js";
+export * from "./retention.js";
 export * from "./store.js";
 export * from "./service.js";

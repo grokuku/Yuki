@@ -127,6 +127,7 @@ function harness(options: { captureEnabled?: boolean; saveReturnsNull?: boolean 
         ...(input.height !== undefined ? { height: input.height } : {}),
         imageSrc: `/captures/${"a".repeat(32)}.${ext}`,
         capturedAt: "2026-10-10T00:00:00.000Z",
+        expiresAt: "2026-11-09T00:00:00.000Z",
       };
       return record;
     },

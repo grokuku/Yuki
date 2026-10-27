@@ -815,13 +815,21 @@ function iconNode(doc, name, className) {
  * icône seule mais `aria-label`/`title` explicites, en SUPERPOSITION (jamais
  * dans le flux). Il copie `codeEl.textContent`, c'est-à-dire EXACTEMENT le
  * contenu du bloc — ni l'icône, ni la marque « muet », ni un libellé.
+ *
+ * ⚠️ Exporté pour être RÉUTILISÉ tel quel par les autres blocs de la
+ * conversation (prompt final d'une image générée) : un seul mécanisme de copie,
+ * donc un seul comportement (succès/échec toujours dit, repli `execCommand`).
+ * `labels` permet d'adapter le libellé accessible au contenu copié.
  */
-function createCopyButton(codeEl, doc) {
+export function createCopyButton(codeEl, doc = document, labels = {}) {
+  const label = labels.label ?? COPY_LABEL;
+  const copiedLabel = labels.copiedLabel ?? COPIED_LABEL;
+  const failedLabel = labels.failedLabel ?? COPY_FAILED_LABEL;
   const button = doc.createElement("button");
   button.type = "button";
   button.className = "md-copy-btn";
-  button.setAttribute("aria-label", COPY_LABEL);
-  button.title = COPY_LABEL;
+  button.setAttribute("aria-label", label);
+  button.title = label;
 
   for (const [state, icon] of [
     ["copy", "copy"],
@@ -838,18 +846,18 @@ function createCopyButton(codeEl, doc) {
     button.classList.remove("md-copy-btn--done", "md-copy-btn--failed");
     if (state === "done") {
       button.classList.add("md-copy-btn--done");
-      button.setAttribute("aria-label", COPIED_LABEL);
-      button.title = COPIED_LABEL;
+      button.setAttribute("aria-label", copiedLabel);
+      button.title = copiedLabel;
     } else {
       button.classList.add("md-copy-btn--failed");
-      button.setAttribute("aria-label", COPY_FAILED_LABEL);
-      button.title = COPY_FAILED_LABEL;
+      button.setAttribute("aria-label", failedLabel);
+      button.title = failedLabel;
     }
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       button.classList.remove("md-copy-btn--done", "md-copy-btn--failed");
-      button.setAttribute("aria-label", COPY_LABEL);
-      button.title = COPY_LABEL;
+      button.setAttribute("aria-label", label);
+      button.title = label;
       timer = null;
     }, COPY_FEEDBACK_MS);
   }

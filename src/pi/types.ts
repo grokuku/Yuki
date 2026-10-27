@@ -27,7 +27,11 @@ import type { MemoryPort } from "../memory/types.js";
 import type { PersonalityPort } from "../personality/types.js";
 import type { ReactionsPort } from "../reactions/types.js";
 import type { RulesPort } from "../rules/types.js";
-import type { ComfyImageGenerationPort, ComfyImageView } from "../comfy/index.js";
+import type {
+  ComfyImageFinalPromptView,
+  ComfyImageGenerationPort,
+  ComfyImageView,
+} from "../comfy/index.js";
 import type { FilesSendPort } from "../files/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
@@ -198,6 +202,12 @@ export interface PiHostOptions {
   images?: {
     generator: ComfyImageGenerationPort;
     onImage?: (view: ComfyImageView) => void;
+    /**
+     * Émet la FICHE de l'image (prompt final) APRÈS la vue de l'image : elle est
+     * affichée SOUS l'image, sans jamais la déplacer. Sans lui, la fiche n'est
+     * pas affichée (comportement inchangé).
+     */
+    onImageFinalPrompt?: (view: ComfyImageFinalPromptView) => void;
     styles: {
       candidates(): Array<{ name: string; description: string; isDefault: boolean }>;
       enabled(): boolean;
@@ -513,6 +523,26 @@ export type PiEvent =
       sessionId: string;
       runId: string;
       channel: DeltaChannel;
+      text: string;
+    }
+  | {
+      /**
+       * ACCUSÉ DE RÉCEPTION : une ACTION vient de démarrer (délégation, génération
+       * d'image, commande envoyée à un agent) et RIEN n'a encore été dit dans ce
+       * run. C'est une ligne de STATUT courte, pas une réponse : le fond arrive
+       * ensuite. Il ne promet aucun résultat (le ticket de délégation et le badge
+       * anti-mensonge portent le vrai état).
+       *
+       * ⚠️ ÉPHÉMÈRE et MUET : le transport le route en trame de CONTRÔLE (jamais
+       * bufferisée, hors transcript/snapshot/rejeu/mémoire) et ne l'envoie JAMAIS à
+       * `routeTtsEvent` — il n'est donc pas prononcé par la synthèse vocale.
+       */
+      type: "ack";
+      sessionId: string;
+      runId: string;
+      /** Outil dont l'action démarre (`delegate`, `generer_image`, `run_command`). */
+      tool: string;
+      /** Texte COURT et HUMAIN (« Je m'en occupe. », « C'est parti. »). */
       text: string;
     }
   | {

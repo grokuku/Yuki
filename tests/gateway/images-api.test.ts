@@ -13,7 +13,7 @@
  *    `/api/config`).
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -304,6 +304,32 @@ describe("service SAME-ORIGIN de l'image (PIÈGE ⑥)", () => {
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toBe("image/png");
     expect(Buffer.from(response.body as Buffer).equals(PNG)).toBe(true);
+  });
+
+  it("sert l'image CONSERVÉE puis répond 404 une fois la rétention dépassée", () => {
+    // ⚠️ Horloge INJECTABLE : on n'attend pas 30 jours. C'est la MÊME règle de
+    // rétention que les pièces jointes (`retentionDays`).
+    let now = Date.UTC(2026, 0, 1);
+    const images = new GeneratedImagesStore({
+      dir: join(tempDir("yuki-img-retention-"), "images"),
+      now: () => now,
+      retentionDays: () => 30,
+    });
+    const deps = {
+      workflows: new ComfyWorkflowStore({
+        path: join(tempDir("yuki-img-retention-w-"), "w.json"),
+      }),
+      images,
+      clientFor: () => ({ systemStats: async () => ({ devices: [] }) }),
+    };
+    const record = images.save({ data: PNG, mimeType: "image/png", promptId: "p" });
+    if (!record) throw new Error("enregistrement attendu");
+    expect(handleImagesServeRequest({ method: "GET", path: record.imageSrc, deps }).status).toBe(200);
+
+    now += 30 * 86_400_000;
+    // Expirée : la route répond 404 ET le fichier a été supprimé (PIÈGE ④).
+    expect(handleImagesServeRequest({ method: "GET", path: record.imageSrc, deps }).status).toBe(404);
+    expect(existsSync(record.file)).toBe(false);
   });
 
   it("refuse une traversée de répertoire et une méthode d'écriture", () => {

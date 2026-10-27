@@ -73,6 +73,7 @@ describe("store des workflows", () => {
       "YUKI_WIDTH",
       "YUKI_HEIGHT",
       "YUKI_OUTPUT",
+      "YUKI_FINAL_PROMPT",
     ]);
     expect(summary.nodes).toBe(2);
     expect(summary.bytes).toBeGreaterThan(0);

@@ -14,6 +14,10 @@
  *   - `POST /e2e/generate?scene=…&style=…` : lance une VRAIE génération (le
  *     workflow a été importé juste avant par la route réelle
  *     `POST /api/images/workflows`), puis émet la vue vers la conversation.
+ *   - `GET  /e2e/tool?scene=…&style=…` : passe par l'OUTIL `generer_image`
+ *     (`src/pi/sdk/image-tools.ts`) — donc par le MÊME chemin que le modèle — et
+ *     renvoie le TEXTE reçu par le modèle + les détails (preuve que le prompt
+ *     final lui est bien transmis, encadré comme DONNÉE).
  *   - `GET  /e2e/last-prompt` : le JSON RÉELLEMENT POSTÉ à `/prompt` (preuve que
  *     le style n'y est pas).
  *   - `GET  /e2e/fail` : arme un échec serveur (500) pour la prochaine génération.
@@ -36,6 +40,7 @@ import {
   ComfyWorkflowStore,
   GeneratedImagesStore,
   createComfyGenerator,
+  type ComfyImageFinalPromptView,
   type ComfyImageView,
   type ImagesGatewayPort,
 } from "../../src/comfy/index.js";
@@ -45,6 +50,7 @@ import { createApp, type AppContext } from "../../src/gateway/app.js";
 import { createWsTransport } from "../../src/gateway/ws/server.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { createPiHost } from "../../src/pi/host.js";
+import { createImageTools } from "../../src/pi/sdk/image-tools.js";
 import type { GpuReport } from "../../src/types/gpu.js";
 
 const stateDir = process.env.YUKI_E2E_IMAGE_DIR;
@@ -116,29 +122,58 @@ const fake = {
   served: new Set<string>(),
   /** Prochaine soumission en échec (500) ? */
   fail: false,
+  /**
+   * Vrai ⇒ ComfyUI a PURGÉ son répertoire temporaire : `/history` et `/view`
+   * répondent 404. Sert à prouver que l'image affichée est bien la COPIE de Yuki
+   * (elle survit à la purge du serveur d'images).
+   */
+  purged: false,
   url: "",
 };
 
 /**
+ * Nœuds d'AFFICHAGE de texte : ils publient `{"ui": {"text": [<texte>]}}` dans
+ * l'historique (forme vérifiée dans le code source : `PreviewAny` et `SaveText`
+ * du cœur, `ShowText`/`AIHToText` en extension).
+ */
+const DISPLAY_NODES = new Set(["PreviewAny", "SaveText", "ShowText", "AIHToText"]);
+
+/**
+ * Prompt final publié par les nœuds d'affichage : il DIFFÈRE de la scène (c'est
+ * le travail de l'enhancer) et contient VOLONTAIREMENT une charge d'injection :
+ * le bloc de la conversation doit l'afficher comme du TEXTE, jamais l'interpréter.
+ */
+const FINAL_PROMPT_TEXT =
+  "Un phare isolé battu par les vagues au crépuscule, lumière rasante, embruns, focale 35 mm. " +
+  "<img src=x onerror=\"window.__pwned=1\"><b>gras</b>";
+
+/**
  * Sorties publiées pour un graphe, comme ComfyUI le fait : UNIQUEMENT pour les
  * nœuds qui écrivent une image (`SaveImage` → `output`, `PreviewImage` → `temp`, cf.
- * `nodes.py` : `PreviewImage(SaveImage)` réutilise `save_images`).
+ * `nodes.py` : `PreviewImage(SaveImage)` réutilise `save_images`) et pour les
+ * nœuds d'AFFICHAGE de texte (`ui.text`).
  */
 function outputsOf(graph: Record<string, unknown>): Record<string, unknown> {
   const outputs: Record<string, unknown> = {};
   for (const [nodeId, raw] of Object.entries(graph)) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const classType = (raw as Record<string, unknown>).class_type;
-    if (classType !== "SaveImage" && classType !== "PreviewImage") continue;
-    outputs[nodeId] = {
-      images: [
-        {
-          filename: `Yuki_${nodeId}_00001_.png`,
-          subfolder: "",
-          type: classType === "PreviewImage" ? "temp" : "output",
-        },
-      ],
-    };
+    if (classType === "SaveImage" || classType === "PreviewImage") {
+      outputs[nodeId] = {
+        images: [
+          {
+            filename: `Yuki_${nodeId}_00001_.png`,
+            subfolder: "",
+            type: classType === "PreviewImage" ? "temp" : "output",
+          },
+        ],
+      };
+      continue;
+    }
+    // ⚠️ `ui.text` est un TABLEAU (tuple/liste) chez tous les nœuds d'affichage.
+    if (typeof classType === "string" && DISPLAY_NODES.has(classType)) {
+      outputs[nodeId] = { text: [FINAL_PROMPT_TEXT], mode: ["Plain"] };
+    }
   }
   return Object.keys(outputs).length > 0
     ? outputs
@@ -152,6 +187,9 @@ const comfyServer = createHttpServer((req, res) => {
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
       fake.lastPrompt = Buffer.concat(chunks).toString("utf8");
+      // Une nouvelle soumission signifie que le serveur retravaille : la purge
+      // simulée du temporaire est terminée (elle ne concerne que le PASSÉ).
+      fake.purged = false;
       if (fake.fail) {
         fake.fail = false;
         res.writeHead(500, { "content-type": "application/json" });
@@ -170,6 +208,11 @@ const comfyServer = createHttpServer((req, res) => {
     return;
   }
   if (url.pathname.startsWith("/history/")) {
+    if (fake.purged) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "history purgé" }));
+      return;
+    }
     const id = decodeURIComponent(url.pathname.slice("/history/".length));
     res.writeHead(200, { "content-type": "application/json" });
     // Le prompt est « terminé » dès la PREMIÈRE lecture (aucune attente de 10 s).
@@ -185,6 +228,11 @@ const comfyServer = createHttpServer((req, res) => {
     return;
   }
   if (url.pathname === "/view") {
+    if (fake.purged) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("purged");
+      return;
+    }
     fake.lastView = {
       filename: url.searchParams.get("filename") ?? "",
       type: url.searchParams.get("type") ?? "",
@@ -260,9 +308,14 @@ await host.start();
 const sessionId = host.currentSessionId();
 if (!sessionId) throw new Error("aucune session courante");
 
-/** Port d'images EN MÉMOIRE (comme le transport réel le consomme). */
+/**
+ * Port d'images du harnais : diffusion en direct (trames de contrôle) ET
+ * RESTAURATION depuis le store disque — c'est la même mécanique que le câblage
+ * réel (`src/index.ts`), donc le rechargement de la page prouve la conservation.
+ */
 class StubImagesPort implements ImagesGatewayPort {
   private readonly listeners = new Set<(view: ComfyImageView) => void>();
+  private readonly ficheListeners = new Set<(view: ComfyImageFinalPromptView) => void>();
 
   subscribeImages(listener: (view: ComfyImageView) => void): () => void {
     this.listeners.add(listener);
@@ -271,11 +324,57 @@ class StubImagesPort implements ImagesGatewayPort {
     };
   }
 
+  subscribeImageFinalPrompts(listener: (view: ComfyImageFinalPromptView) => void): () => void {
+    this.ficheListeners.add(listener);
+    return () => {
+      this.ficheListeners.delete(listener);
+    };
+  }
+
+  imagesForSession(sessionId: string): ComfyImageView[] {
+    return images.list({ sessionId }).map((record) => images.toView(record));
+  }
+
   emit(view: ComfyImageView): void {
     for (const listener of [...this.listeners]) listener(view);
   }
+
+  emitFiche(view: ComfyImageFinalPromptView): void {
+    for (const listener of [...this.ficheListeners]) listener(view);
+  }
 }
 const imagePort = new StubImagesPort();
+
+/**
+ * Délai (ms) avant l'émission de la FICHE de la prochaine génération : il permet
+ * de MESURER, dans le navigateur, que l'image ne bouge pas quand la fiche arrive
+ * (elle est insérée SOUS elle). ⚠️ L'ORDRE reste celui du code réel : image
+ * d'abord, fiche ensuite.
+ */
+let ficheDelayMs = 0;
+
+// ⚠️ L'OUTIL RÉEL du modèle (`generer_image`) : le E2E passe par LUI pour
+// prouver ce que le MODÈLE reçoit (prompt final encadré comme DONNÉE, borné).
+const [generateImageTool] = createImageTools({
+  generate: (input) => generator.generate(input),
+  onImage: (view) => {
+    // Rattachement AVANT diffusion, comme le câblage réel : c'est ce qui rend
+    // l'image RESTAURABLE après rechargement.
+    if (view.sessionId) images.attach(view.id, view.sessionId);
+    imagePort.emit(view);
+  },
+  onImageFinalPrompt: (fiche) => {
+    // Persistée avec l'image, exactement comme `src/index.ts` le fait.
+    images.attachFinalPrompt(fiche.id, fiche.finalPrompt);
+    const delay = ficheDelayMs;
+    if (delay <= 0) {
+      imagePort.emitFiche(fiche);
+      return;
+    }
+    setTimeout(() => imagePort.emitFiche(fiche), delay);
+  },
+});
+if (!generateImageTool) throw new Error("outil generer_image introuvable");
 
 const transport = createWsTransport({
   host,
@@ -325,6 +424,7 @@ const server = createHttpServer((req, res) => {
         ...(style ? { style } : {}),
       })
       .then((image) => {
+        images.attach(image.record.id, sessionId);
         imagePort.emit({
           id: image.record.id,
           imageSrc: image.record.imageSrc,
@@ -336,6 +436,16 @@ const server = createHttpServer((req, res) => {
           ...(image.record.height !== undefined ? { height: image.record.height } : {}),
           sessionId,
         });
+        if (image.finalPrompt?.status === "found") {
+          // Persistée AVEC l'image (comme `onImageFinalPrompt` du câblage réel) :
+          // la fiche revient donc après un rechargement.
+          images.attachFinalPrompt(image.record.id, image.finalPrompt.prompt);
+          imagePort.emitFiche({
+            id: image.record.id,
+            finalPrompt: image.finalPrompt.prompt,
+            sessionId,
+          });
+        }
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
@@ -355,6 +465,72 @@ const server = createHttpServer((req, res) => {
           }),
         );
       });
+    return;
+  }
+  if (url.pathname === "/e2e/tool") {
+    // MÊME chemin que le MODÈLE : l'outil réel, avec un contexte de session.
+    const scene = url.searchParams.get("scene") ?? "une scène";
+    const style = url.searchParams.get("style");
+    ficheDelayMs = Math.max(0, Number(url.searchParams.get("ficheDelayMs") ?? 0) || 0);
+    const execute = generateImageTool.execute as unknown as (
+      id: string,
+      params: unknown,
+      signal: undefined,
+      onUpdate: undefined,
+      ctx: unknown,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; details: unknown }>;
+    void execute(
+      "e2e-call",
+      { scene, ...(style ? { style } : {}) },
+      undefined,
+      undefined,
+      { sessionManager: { getSessionId: () => sessionId } },
+    )
+      .then((result) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            text: result.content.map((part) => part.text ?? "").join("\n"),
+            details: result.details,
+          }),
+        );
+      })
+      .catch((error: unknown) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({ ok: false, text: "", message: error instanceof Error ? error.message : String(error) }),
+        );
+      });
+    return;
+  }
+  if (url.pathname === "/e2e/purge-comfy") {
+    // ComfyUI « purge » son répertoire temporaire : l'image affichée ne doit PAS
+    // en dépendre (Yuki en garde une copie sur SON disque).
+    fake.purged = true;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ purged: true }));
+    return;
+  }
+  if (url.pathname === "/e2e/reset-media") {
+    // Vide le stockage d'images du harnais (remise à zéro d'une série de mesures).
+    let removed = 0;
+    for (const record of images.list()) {
+      if (images.remove(record.id)) removed += 1;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ removed }));
+    return;
+  }
+  if (url.pathname === "/e2e/images") {
+    // Ce que le STORE contient réellement (métadonnées seules, jamais les octets).
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        images: images.list({ sessionId }).map((record) => images.toView(record)),
+        dir: env.comfyImagesDir,
+      }),
+    );
     return;
   }
   if (url.pathname === "/e2e/last-prompt") {

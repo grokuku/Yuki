@@ -5,19 +5,31 @@
  * numéro : les identifiants changent dès qu'on retouche le graphe.
  *
  * Étiquettes reconnues (exactement, casse comprise) :
- *   YUKI_PROMPT   → prompt positif (OBLIGATOIRE)
- *   YUKI_NEGATIVE → prompt négatif (facultatif)
- *   YUKI_SEED     → graine
- *   YUKI_WIDTH    → largeur
- *   YUKI_HEIGHT   → hauteur
- *   YUKI_OUTPUT   → nœud qui produit l'IMAGE FINALE (facultatif)
+ *   YUKI_PROMPT        → prompt positif (OBLIGATOIRE)
+ *   YUKI_NEGATIVE      → prompt négatif (facultatif)
+ *   YUKI_SEED          → graine
+ *   YUKI_WIDTH         → largeur
+ *   YUKI_HEIGHT        → hauteur
+ *   YUKI_OUTPUT        → nœud qui produit l'IMAGE FINALE (facultatif)
+ *   YUKI_FINAL_PROMPT  → nœud qui AFFICHE le prompt final (facultatif)
  *
- * ⚠️ Les cinq premières désignent un CHAMP À ÉCRIRE ; `YUKI_OUTPUT` désigne un
- * NŒUD À LIRE (`outputs[<nœud>].images[]` dans l'historique) : il ne porte donc
- * aucun champ d'accueil. Absent, la première image produite est retenue (et
- * c'est DIT : journal + résultat de l'outil). Présent, SEULE son image est
- * retenue : si elle n'existe pas, c'est une ERREUR explicite — jamais de repli
- * silencieux sur un autre nœud.
+ * ⚠️ Les cinq premières désignent un CHAMP À ÉCRIRE ; `YUKI_OUTPUT` et
+ * `YUKI_FINAL_PROMPT` désignent des NŒUDS À LIRE : ils ne portent donc aucun
+ * champ d'accueil.
+ *
+ *  - `YUKI_OUTPUT` : lu dans `outputs[<nœud>].images[]` de l'historique. Absent,
+ *    la première image produite est retenue (et c'est DIT : journal + résultat
+ *    de l'outil). Présent, SEULE son image est retenue : si elle n'existe pas,
+ *    c'est une ERREUR explicite — jamais de repli silencieux sur un autre nœud.
+ *
+ *  - `YUKI_FINAL_PROMPT` : lu dans `outputs[<nœud>].text` de l'historique — la
+ *    forme publiée par les nœuds d'AFFICHAGE de texte (`PreviewAny`, `SaveText`
+ *    du cœur ; `ShowText`/`AIHToText` en extension renvoient la même forme).
+ *    ⚠️ Elle désigne une SORTIE : ce texte est MONTRÉ (à l'humain et au modèle),
+ *    il n'est JAMAIS réinjecté dans un graphe. Absente, rien n'est lu ni affiché
+ *    (les workflows existants continuent de fonctionner à l'identique). Présente
+ *    avec un nœud qui ne publie aucun texte ⇒ message EXPLICITE, jamais un
+ *    silence.
 
  * Le champ d'accueil est résolu à l'IMPORT (et non au moment de générer) : un
  * graphe mal étiqueté est REFUSÉ tout de suite, avec les étiquettes trouvées et
@@ -34,6 +46,7 @@ export const YUKI_NODE_LABELS = [
   "YUKI_WIDTH",
   "YUKI_HEIGHT",
   "YUKI_OUTPUT",
+  "YUKI_FINAL_PROMPT",
 ] as const;
 
 export type YukiNodeLabel = (typeof YUKI_NODE_LABELS)[number];
@@ -51,6 +64,16 @@ export const YUKI_REQUIRED_LABEL: YukiNodeLabel = "YUKI_PROMPT";
 export const YUKI_OUTPUT_LABEL: YukiNodeLabel = "YUKI_OUTPUT";
 
 /**
+ * Étiquette du nœud qui AFFICHE le prompt final (celui que produit l'enhancer
+ * du workflow de l'utilisateur).
+ *
+ * ⚠️ Comme `YUKI_OUTPUT`, elle ne désigne AUCUN champ à écrire : on LIT le
+ * texte que ce nœud publie dans `outputs[<nœud>].text` de l'historique. Elle
+ * reste FACULTATIVE.
+ */
+export const YUKI_FINAL_PROMPT_LABEL: YukiNodeLabel = "YUKI_FINAL_PROMPT";
+
+/**
  * Prompt négatif NEUTRE appliqué au nœud `YUKI_NEGATIVE`.
  *
  * ⚠️ Il ne décrit AUCUN style (pas de « manga », pas de « photo ») : uniquement
@@ -66,7 +89,8 @@ export interface WorkflowNodeRef {
   classType: string;
   /**
    * Nom du champ d'entrée réellement écrit (`text`, `seed`, `width`…).
-   * ⚠️ `undefined` pour `YUKI_OUTPUT` : cette étiquette ne désigne aucun champ.
+   * ⚠️ `undefined` pour `YUKI_OUTPUT` et `YUKI_FINAL_PROMPT` : ces étiquettes
+   * désignent un nœud qu'on LIT, jamais un champ à écrire.
    */
   field?: string;
 }
@@ -172,9 +196,9 @@ function pickIntField(
 /**
  * Résout le champ d'accueil d'une étiquette, ou `undefined` si impossible.
  *
- * ⚠️ `YUKI_OUTPUT` n'a JAMAIS de champ d'accueil : c'est un nœud qu'on LIT, pas
- * un champ qu'on écrit (`null` = « aucun champ attendu », distinct de
- * `undefined` = « champ introuvable »).
+ * ⚠️ `YUKI_OUTPUT` et `YUKI_FINAL_PROMPT` n'ont JAMAIS de champ d'accueil : ce
+ * sont des nœuds qu'on LIT, pas des champs qu'on écrit (`null` = « aucun champ
+ * attendu », distinct de `undefined` = « champ introuvable »).
  */
 function resolveField(
   label: YukiNodeLabel,
@@ -191,12 +215,13 @@ function resolveField(
     case "YUKI_HEIGHT":
       return pickIntField(inputs, ["height"]);
     case "YUKI_OUTPUT":
+    case "YUKI_FINAL_PROMPT":
       return null;
   }
 }
 
 /**
- * Valide un graphe au format API et résout les six étiquettes.
+ * Valide un graphe au format API et résout les sept étiquettes.
  *
  * Règles :
  *  - objet racine (une enveloppe `{ prompt }` est acceptée) ;
@@ -207,7 +232,10 @@ function resolveField(
  *    être résoluble (sinon refus explicite, plutôt qu'une écriture au hasard) ;
  *  - `YUKI_OUTPUT` ne demande AUCUN champ (elle désigne le nœud de sortie) :
  *    n'importe quel nœud peut la porter, c'est la génération qui vérifiera
- *    qu'il produit bien une image.
+ *    qu'il produit bien une image ;
+ *  - `YUKI_FINAL_PROMPT` ne demande AUCUN champ non plus (elle désigne le nœud
+ *    qui AFFICHE le prompt final) : c'est la génération qui vérifiera qu'il
+ *    publie bien un texte, et qui le dira explicitement sinon.
  */
 export function validateApiWorkflow(raw: unknown): WorkflowCheck {
   const emptyLabels: WorkflowLabels = {};
@@ -319,7 +347,7 @@ export function validateApiWorkflow(raw: unknown): WorkflowCheck {
     const inputs = node.inputs as Record<string, unknown>;
     const field = resolveField(label, inputs);
     if (field === null) {
-      // `YUKI_OUTPUT` : le nœud est retenu, sans champ à écrire.
+      // `YUKI_OUTPUT` / `YUKI_FINAL_PROMPT` : le nœud est retenu, sans champ à écrire.
       labels[label] = { nodeId: id, classType };
       found.push(label);
       continue;
@@ -375,6 +403,9 @@ function describeExpectedField(label: YukiNodeLabel): string {
     case "YUKI_OUTPUT":
       // Jamais utilisée : `YUKI_OUTPUT` n'attend aucun champ (cf. `resolveField`).
       return "nœud produisant une image (aucun champ à écrire)";
+    case "YUKI_FINAL_PROMPT":
+      // Jamais utilisée : cette étiquette n'attend aucun champ non plus.
+      return "nœud qui AFFICHE le prompt final (aucun champ à écrire)";
   }
 }
 
@@ -419,7 +450,8 @@ export function applyYukiValues(
     if (!ref) return;
     const field = ref.field;
     if (field === undefined) {
-      // Garde-fou : `YUKI_OUTPUT` désigne une SORTIE, jamais un champ à écrire.
+      // Garde-fou : `YUKI_OUTPUT` et `YUKI_FINAL_PROMPT` désignent des SORTIES,
+      // jamais un champ à écrire.
       throw new Error(`L'étiquette « ${label} » ne désigne aucun champ à écrire.`);
     }
     const node = clone[ref.nodeId];

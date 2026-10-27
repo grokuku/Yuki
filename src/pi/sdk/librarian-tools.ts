@@ -429,12 +429,18 @@ export function createLibrarianTools(config: LibrarianToolsConfig): ToolDefiniti
           const image = await screenshotPort.shot(meta.id, signal);
           const pageUrl = meta.url ?? urlCheck.value;
           const mimeType = image.mimeType !== "" ? image.mimeType : meta.mimeType;
+          // ⚠️ La CONVERSATION est connue AVANT le dépôt : elle est écrite avec
+          // la capture, sinon l'image ne pourrait pas être RESTAURÉE dans son fil
+          // après un rechargement (elle est conservée 30 jours, comme une pièce
+          // jointe).
+          const sessionId = sessionIdFromContext(ctx);
           const record = shotsPort.save({
             data: image.bytes,
             mimeType,
             pageUrl,
             ...(meta.width !== undefined ? { width: meta.width } : {}),
             ...(meta.height !== undefined ? { height: meta.height } : {}),
+            ...(sessionId !== undefined ? { sessionId } : {}),
           });
 
           // Image transmise au modèle, BORNÉE (jamais un puits non limité).
@@ -463,7 +469,6 @@ export function createLibrarianTools(config: LibrarianToolsConfig): ToolDefiniti
           // ⚠️ Affichage à l'HUMAIN : on émet la vue vers l'interface (trame de
           // contrôle). Aucune donnée binaire n'est journalisée.
           if (record && config.onShot) {
-            const sessionId = sessionIdFromContext(ctx);
             try {
               config.onShot({
                 id: record.id,

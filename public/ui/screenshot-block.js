@@ -8,6 +8,12 @@
 //
 // ⚠️ Le modèle ne reçoit JAMAIS l'image : elle n'est visible qu'ICI.
 //
+// ⚠️ MÊME VIGNETTE que les images générées : une capture est ENVELOPPÉE dans le
+// bouton `.md-image-zoom` (`lightbox.js`) — bornée en hauteur (320 px bureau,
+// 220 px téléphone) et ouverte en PLEIN ÉCRAN au clic. Les deux familles d'images
+// du fil (`/captures/` et `/images/`) se comportent donc EXACTEMENT pareil
+// (PIÈGE ⑤).
+//
 // Rendu PUREMENT DOM (`createElement`), AUCUN attribut de style en ligne,
 // aucune injection HTML directe (CSP `style-src 'self'`). L'image utilise le
 // MÊME chemin que le markdown : `isSafeImageSrc` (accepte `data:image/`) et la
@@ -64,9 +70,12 @@ function hostOf(url) {
  *
  * @param {object} deps
  * @param {HTMLElement} deps.container conteneur du fil.
+ * @param {{ decorate(img: HTMLImageElement): HTMLElement }} [deps.zoom]
+ *   visionneuse partagée (`lightbox.js`) : enveloppe l'image dans la vignette
+ *   cliquable. Absente ⇒ l'image est affichée telle quelle (aucun zoom).
  * @returns {{ show(shot: object): void, reset(): void }}
  */
-export function createScreenshotBlocks({ container }) {
+export function createScreenshotBlocks({ container, zoom } = {}) {
   if (!container) throw new Error("createScreenshotBlocks : conteneur absent");
 
   function buildImage(shot, label) {
@@ -80,7 +89,8 @@ export function createScreenshotBlocks({ container }) {
       img.src = src;
       img.alt = alt;
       img.loading = "lazy";
-      return img;
+      // ⚠️ MÊME vignette cliquable que les images générées (`lightbox.js`).
+      return zoom ? zoom.decorate(img) : img;
     }
     const span = h("span", { class: "md-image md-image--placeholder", role: "img" }, [
       "image indisponible",
@@ -111,9 +121,14 @@ export function createScreenshotBlocks({ container }) {
           buildImage(shot, host),
           h("p", {
             class: "screenshot__note",
+            // ⚠️ Une capture de PAGE WEB est CONSERVÉE (même rétention que les
+            // pièces jointes) : elle revient après un rechargement. Seules les
+            // captures d'une MACHINE restent temporaires (jamais écrites sur le
+            // disque de Yuki).
             text:
-              "Capture d'une page web, affichée ici et transmise à Yuki ; elle " +
-              "n'est pas conservée dans l'historique de la conversation.",
+              "Capture d'une page web, affichée ici et transmise à Yuki ; elle est " +
+              "conservée avec la conversation (même durée que les pièces jointes) et " +
+              "reste affichée après un rechargement.",
           }),
         ],
       );

@@ -67,7 +67,7 @@ interface Harness {
   generate: ReturnType<typeof createComfyGenerator>;
   submitted: Array<Record<string, unknown>>;
   /** Options réellement passées au client (dont `outputNodeId`). */
-  submitOptions: Array<{ outputNodeId?: string }>;
+  submitOptions: Array<{ outputNodeId?: string; finalPromptNodeId?: string }>;
   saved: GeneratedImageInput[];
   summaries: Map<string, ComfyWorkflowEntry>;
   /** Événements journalisés (preuve du repli ANNONCÉ). */
@@ -82,7 +82,7 @@ function harness(options: {
   clientError?: Error;
 } = {}): Harness {
   const submitted: Array<Record<string, unknown>> = [];
-  const submitOptions: Array<{ outputNodeId?: string }> = [];
+  const submitOptions: Array<{ outputNodeId?: string; finalPromptNodeId?: string }> = [];
   const events: string[] = [];
   const saved: GeneratedImageInput[] = [];
   const names = options.candidates ?? [
@@ -128,7 +128,14 @@ function harness(options: {
     },
     async generate(graph, generateOptions) {
       submitted.push(JSON.parse(JSON.stringify(graph)) as Record<string, unknown>);
-      submitOptions.push({ ...(generateOptions?.outputNodeId !== undefined ? { outputNodeId: generateOptions.outputNodeId } : {}) });
+      submitOptions.push({
+        ...(generateOptions?.outputNodeId !== undefined
+          ? { outputNodeId: generateOptions.outputNodeId }
+          : {}),
+        ...(generateOptions?.finalPromptNodeId !== undefined
+          ? { finalPromptNodeId: generateOptions.finalPromptNodeId }
+          : {}),
+      });
       if (options.clientError) throw options.clientError;
       return {
         bytes: PNG,
@@ -153,6 +160,7 @@ function harness(options: {
         bytes: input.data.byteLength,
         imageSrc: `/images/${"a".repeat(32)}.png`,
         createdAt: new Date(0).toISOString(),
+        expiresAt: new Date(0).toISOString(),
         promptId: input.promptId,
         ...(input.width !== undefined ? { width: input.width } : {}),
         ...(input.height !== undefined ? { height: input.height } : {}),
@@ -389,5 +397,80 @@ describe("YUKI_OUTPUT : l'image FINALE, et le repli ANNONCÉ (PIÈGE ①)", () =
     expect(error).toBe(original);
     expect(error.code).toBe("no_image");
     expect(error.message).toContain("YUKI_OUTPUT");
+  });
+});
+
+describe("YUKI_FINAL_PROMPT : le prompt final est LÉGUÉ tel quel (une SORTIE)", () => {
+  /** Ajoute un nœud d'affichage étiqueté `YUKI_FINAL_PROMPT`. */
+  function withFinalPrompt(summaries: Map<string, ComfyWorkflowEntry>): ComfyWorkflowEntry {
+    const entry = summaries.get("infographie") as ComfyWorkflowEntry;
+    entry.workflow = {
+      ...entry.workflow,
+      1709: {
+        class_type: "AIHPromptEnhancer",
+        inputs: { prompt: "text" },
+        _meta: { title: "enhancer" },
+      },
+      1858: {
+        class_type: "AIHToText",
+        inputs: { display_mode: "Auto", display_text: "", any_input: ["1709", 0] },
+        _meta: { title: "YUKI_FINAL_PROMPT" },
+      },
+    };
+    entry.labels = {
+      ...entry.labels,
+      YUKI_FINAL_PROMPT: { nodeId: "1858", classType: "AIHToText" },
+    };
+    return entry;
+  }
+
+  it("transmet le nœud d'affichage au client et rend le texte à l'appelant", async () => {
+    const { generate, summaries, submitOptions, submitted } = harness({
+      image: {
+        finalPrompt: {
+          status: "found",
+          prompt: {
+            nodeId: "1858",
+            text: "Un phare isolé, lumière rasante, embruns.",
+            totalChars: 40,
+            truncated: false,
+          },
+        },
+      },
+    });
+    withFinalPrompt(summaries);
+    const result = await generate.generate({ scene: "zzz qqq", style: "zzz" });
+    expect(submitOptions[0]?.finalPromptNodeId).toBe("1858");
+    expect(result.finalPrompt?.status).toBe("found");
+    if (result.finalPrompt?.status !== "found") return;
+    expect(result.finalPrompt.prompt.text).toContain("embruns");
+    // ⚠️ Le texte n'est JAMAIS écrit dans le graphe envoyé : c'est une SORTIE.
+    const serialized = JSON.stringify(submitted[0]);
+    expect(serialized).not.toContain("embruns");
+    expect((submitted[0] as Record<string, { inputs: Record<string, unknown> }>)["1858"]?.inputs).toEqual({
+      display_mode: "Auto",
+      display_text: "",
+      any_input: ["1709", 0],
+    });
+  });
+
+  it("sans l'étiquette : aucun nœud demandé au client, aucun texte rendu", async () => {
+    const { generate, submitOptions } = harness();
+    const result = await generate.generate({ scene: "zzz qqq", style: "zzz" });
+    expect(submitOptions[0]?.finalPromptNodeId).toBeUndefined();
+    expect(result.finalPrompt).toBeUndefined();
+  });
+
+  it("nœud étiqueté sans texte : l'issue `empty` est rendue TELLE QUELLE (pour être dite)", async () => {
+    const { generate, summaries } = harness({
+      image: { finalPrompt: { status: "empty", nodeId: "1858", publishedKeys: ["images"] } },
+    });
+    withFinalPrompt(summaries);
+    const result = await generate.generate({ scene: "zzz qqq", style: "zzz" });
+    expect(result.finalPrompt).toEqual({
+      status: "empty",
+      nodeId: "1858",
+      publishedKeys: ["images"],
+    });
   });
 });

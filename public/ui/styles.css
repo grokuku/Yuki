@@ -2560,7 +2560,22 @@ h6.md-heading {
   color: var(--muted);
 }
 
-/* ── Image GÉNÉRÉE (bloc éphémère dans la conversation) ────────────────────
+/* ── ACCUSÉ DE RÉCEPTION (ligne de statut dans le fil) ─────────────────────
+ * ⚠️ Ce n'est PAS une bulle de réponse : c'est une ligne courte et discrète qui
+ * dit que la demande est prise en compte pendant qu'une ACTION démarre. Elle est
+ * délibérément plus petite et plus sourde qu'un message pour qu'on ne la confonde
+ * pas avec le fond, qui arrive ensuite. Aucun style en ligne (CSP). */
+.ack-block {
+  align-self: flex-start;
+  max-width: 85%;
+  margin: 0 0 2px;
+  padding: 0 2px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--muted);
+}
+
+/* ── Image GÉNÉRÉE (bloc dans la conversation, CONSERVÉ avec le fil) ───────
  * Même grammaire que la capture d'écran, avec une teinte distincte : c'est une
  * image PRODUITE pour l'utilisateur, pas une capture. La source reste un chemin
  * SAME-ORIGIN (`/images/<id>.<ext>`) : aucune CSP n'est élargie. */
@@ -2609,6 +2624,52 @@ h6.md-heading {
 .generated-image__note {
   margin: 8px 0 0;
   font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* ── PROMPT FINAL (sortie du workflow, sous l'image) ────────────────────────
+ * REPLIÉ par défaut (`<details>`) : il encombrerait le fil sinon. En LECTURE
+ * seule, il réutilise la grammaire des blocs de code (`.md-code-block` : même
+ * fond, même bouton « copier » superposé). Aucun style en ligne (CSP). */
+.generated-image__prompt {
+  margin-top: 10px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+
+.generated-image__prompt-summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  /* Cible tactile confortable (le `summary` est la seule zone de clic). */
+  padding: 4px 0;
+}
+
+.generated-image__prompt-summary:hover,
+.generated-image__prompt-summary:focus-visible {
+  color: var(--text);
+}
+
+.generated-image__prompt-body {
+  margin: 6px 0 0;
+}
+
+.generated-image__prompt-body pre {
+  /* Un prompt final peut être long : il DÉFILE au lieu d'élargir le fil. */
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.generated-image__prompt-body code {
+  font-size: 12px;
+}
+
+.generated-image__prompt-note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
   color: var(--muted);
 }
 
@@ -2918,5 +2979,229 @@ h6.md-heading {
 
   .pending-files {
     padding: 8px 10px 0;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * VIGNETTE D'IMAGE CLIQUABLE + VISIONNEUSE PLEIN ÉCRAN (`lightbox.js`)
+ *
+ * ⚠️ POURQUOI UNE VIGNETTE BORNÉE : une image générée fait ~6 Mpx
+ * (~2500×2500). En pleine largeur elle occupe plusieurs écrans et écrase le fil
+ * (on ne voit plus ni la conversation, ni la fiche du prompt final).
+ *
+ * ⚠️ VALEURS CHOISIES (mesurées, `_tools/e2e-lightbox.mjs`) :
+ *   - BUREAU : `max-height: 320px` — sur un écran de 900 px de haut, l'image
+ *     garde ~1/3 de la hauteur : on voit encore la conversation au-dessus et la
+ *     fiche en dessous. 320 px est aussi le maximum qu'une image carrée peut
+ *     occuper en largeur dans une bulle de ~700 px sans dépasser.
+ *   - TÉLÉPHONE : `max-height: 220px` — sur 844 px de haut, l'image ne mange plus
+ *     l'écran : le fil reste lisible d'un coup d'œil, et la vignette est encore
+ *     assez grande pour juger une génération (220 px ≈ la moitié de la largeur
+ *     d'un téléphone tenu à la main).
+ *   - `object-fit: contain` PARTOUT : l'image n'est JAMAIS rognée ni déformée
+ *     (une image écrasée donnerait l'impression que la génération a raté), et
+ *     une image plus petite que la borne garde sa taille réelle (aucun
+ *     agrandissement flou).
+ *
+ * ⚠️ CSP : aucun style en ligne dans le balisage ; le seul CSSOM est le
+ * `transform` de l'image de la visionneuse (zoom/déplacement), qui n'est pas
+ * concerné par `style-src 'self'`.
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+/* Le bouton de vignette ENVELOPPE l'image : sa boîte épouse exactement celle de
+ * l'image (`inline-block`), ce qui permet de poser l'indice de clic dans le coin
+ * BAS-DROITE de l'IMAGE, quel que soit son format. Aucun chrome visible : le
+ * bouton ne doit pas ressembler à un bouton, seulement à une image cliquable. */
+.md-image-zoom {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 0;
+  cursor: zoom-in;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.md-image-zoom:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* VIGNETTE : bornée en HAUTEUR (le format le plus courant est carré ou
+ * portrait), jamais élargie au-delà du bloc, jamais déformée. */
+.md-image-zoom > img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+/* Indice de clic DISCRET : une pastille « loupe » dans le coin de l'image. Elle
+ * n'apparaît qu'au survol ou au focus sur BUREAU (le curseur `zoom-in` dit déjà
+ * le reste) et reste TOUJOURS visible sur un écran TACTILE (pas de survol). */
+.md-image-zoom__hint {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 15px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  /* Décoratif : ne vole jamais le clic au bouton. */
+  pointer-events: none;
+}
+
+.md-image-zoom:hover .md-image-zoom__hint,
+.md-image-zoom:focus-visible .md-image-zoom__hint {
+  opacity: 0.92;
+}
+
+@media (hover: none) {
+  .md-image-zoom__hint {
+    opacity: 0.92;
+  }
+}
+
+/* ─── Visionneuse PLEIN ÉCRAN (lightbox) ────────────────────────────────────
+ * ⚠️ SURCOUCHE FIXE, ajoutée à `document.body` : elle ne participe PAS à la mise
+ * en page du fil (aucun `scrollTop` ne bouge, l'état STICKY et le bouton
+ * « revenir en bas » sont intacts — PIÈGE ①). `z-index` AU-DESSUS de tout :
+ * fenêtre de validation (1200/1201), menu contextuel (1000), menus téléphone
+ * (940), bouton « revenir en bas » (900).
+ *
+ * Trois zones, jamais superposées à l'image :
+ *   - une bande HAUTE de 52 px (bouton de fermeture, coin droit) ;
+ *   - la ZONE DE L'IMAGE (au centre, `overflow: hidden`) ;
+ *   - une bande BASSE de 76 px (navigation ‹ 1/3 ›, zone du pouce sur téléphone).
+ * Le fond est NEUTRE (noir), indépendant des 6 familles de thème : il doit
+ * assombrir sans teinter. */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  background: color-mix(in srgb, #000 92%, transparent);
+  /* Aucun geste ne doit « fuir » vers le fil (défilement, zoom du navigateur). */
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+.lightbox__stage {
+  position: absolute;
+  inset: 52px 0 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+}
+
+/* L'image est CENTRÉE et CONTENUE : `contain` + bornes, jamais `fill`. Le zoom
+ * est un `scale()` UNIFORME (même facteur en X et Y) appliqué par CSSOM. */
+.lightbox__img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transform-origin: 50% 50%;
+  cursor: zoom-in;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.lightbox--zoomed .lightbox__img {
+  cursor: grab;
+}
+
+.lightbox--dragging .lightbox__img,
+.lightbox--grab .lightbox__img {
+  cursor: grabbing;
+}
+
+/* Boutons : 44 px de côté (cible tactile confortable), thème uniquement. */
+.lightbox__close,
+.lightbox__nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.lightbox__close:hover,
+.lightbox__nav:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.lightbox__close:focus-visible,
+.lightbox__nav:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lightbox__close {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+}
+
+.lightbox__bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.lightbox__count {
+  min-width: 3.5em;
+  text-align: center;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.lightbox__nav[hidden],
+.lightbox__count[hidden] {
+  display: none;
+}
+
+/* ─── TÉLÉPHONE : vignette plus petite encore ──────────────────────────────
+ * Sur 844 px de haut, 220 px laissent voir le message, l'image et sa fiche :
+ * l'image redevient un ÉLÉMENT du fil au lieu d'en être le sujet unique. La même
+ * requête média que le reste du dessin téléphone (une seule source de vérité,
+ * voir `MOBILE_MEDIA_QUERY` dans `mobile-nav.js`). */
+@media (max-width: 767px), (max-height: 480px) and (pointer: coarse) {
+  .md-image-zoom > img {
+    max-height: 220px;
+  }
+
+  .lightbox__stage {
+    inset: 48px 0 68px;
   }
 }

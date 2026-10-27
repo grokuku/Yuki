@@ -938,8 +938,8 @@ describe("Images générées (ComfyUI) — section /config et service same-origi
     expect(js).toContain("/api/images/workflows");
     expect(js).toContain("/defaut");
     expect(js).toContain("HolafFetch.delete");
-    // Les six étiquettes sont NOMMÉES (affichage trouvées / manquantes), dont
-    // YUKI_OUTPUT : le nœud qui produit l'IMAGE FINALE.
+    // Les SEPT étiquettes sont NOMMÉES (affichage trouvées / manquantes), dont
+    // YUKI_OUTPUT (l'image FINALE) et YUKI_FINAL_PROMPT (le prompt final AFFICHÉ).
     for (const label of [
       "YUKI_PROMPT",
       "YUKI_NEGATIVE",
@@ -947,13 +947,16 @@ describe("Images générées (ComfyUI) — section /config et service same-origi
       "YUKI_WIDTH",
       "YUKI_HEIGHT",
       "YUKI_OUTPUT",
+      "YUKI_FINAL_PROMPT",
     ]) {
       expect(js, label).toContain(label);
     }
     // ⚠️ Le panneau DIT qu'un `PreviewImage` étiqueté convient (aucun fichier
-    // permanent à stocker) et ce qui se passe SANS l'étiquette.
+    // permanent à stocker), ce qui se passe SANS l'étiquette, et qu'un nœud
+    // d'AFFICHAGE de texte est attendu pour le prompt final.
     expect(js).toContain("PreviewImage");
     expect(js, "repli annoncé").toContain("PREMIÈRE image produite");
+    expect(js, "nœud d'affichage").toContain("AFFICHER");
     // Export API expliqué à l'utilisateur.
     expect(js).toContain("Save (API");
     // CSP stricte : DOM programmatique uniquement.
@@ -965,14 +968,34 @@ describe("Images générées (ComfyUI) — section /config et service same-origi
     const block = await (await fetch(`${baseUrl}/ui/image-block.js`)).text();
     expect(block).toContain("isSafeImageSrc");
     expect(block).not.toContain("innerHTML");
+    // ⚠️ Le prompt final est affiché sous l'image, replié, avec le MÊME bouton
+    // « copier » que les blocs de code (aucun second mécanisme).
+    expect(block).toContain("createCopyButton");
+    expect(block).toContain("generated-image__prompt");
+    // ⚠️ La FICHE peut arriver APRÈS l'image : le bloc sait la compléter SOUS
+    // l'image, sans jamais la déplacer.
+    expect(block).toContain("setFinalPrompt");
     const app = await (await fetch(`${baseUrl}/ui/app.js`)).text();
     expect(app).toContain("createImageBlocks");
     // La trame de contrôle `image` est traitée AVANT le curseur `seq`.
     expect(app).toContain('type === "image"');
+    // La fiche (prompt final) arrive par sa PROPRE trame de contrôle.
+    expect(app).toContain('type === "image_final_prompt"');
+    expect(app).toContain("imageBlocks.setFinalPrompt");
+
+    // ACCUSÉ DE RÉCEPTION : bloc servi, câblé, stylé (aucun style en ligne).
+    const ack = await (await fetch(`${baseUrl}/ui/ack-block.js`)).text();
+    expect(ack).toContain("createAckBlocks");
+    expect(ack).toContain("textContent");
+    expect(ack).not.toContain("innerHTML");
+    expect(app).toContain('type === "ack"');
+    expect(app).toContain("ackBlocks.show");
     const css = await (await fetch(`${baseUrl}/ui/config.css`)).text();
     expect(css).toContain(".image-workflow");
     const styles = await (await fetch(`${baseUrl}/ui/styles.css`)).text();
     expect(styles).toContain(".generated-image");
+    expect(styles).toContain(".generated-image__prompt");
+    expect(styles).toContain(".ack-block");
   });
 
   it("sert l'image en same-origin et refuse une traversée de répertoire", async () => {

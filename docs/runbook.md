@@ -520,6 +520,12 @@ plus exigé et ne masque plus `apiKey`.
 same-origin (`/captures/<id>.png`). Aucune clé n'apparaît dans les journaux,
 les messages d'erreur ni les artefacts.
 
+⚠️ **Conservation** : une capture n'est plus éphémère. Elle est gardée **comme une
+pièce jointe** (même réglage `files.retentionDays`, même purge périodique — voir
+`src/files/retention.ts`) et **revient après un rechargement** (le `snapshot` est
+suivi de la ré-émission des médias conservés de la conversation). Lire une capture
+expirée répond **404** et supprime le fichier.
+
 ## 12. Coffre de secrets (exécution sur agents)
 
 Yuki peut injecter des secrets dans une commande exécutée sur une **machine

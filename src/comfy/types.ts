@@ -113,6 +113,64 @@ export interface ComfyImageBytes {
   /** Type ComfyUI : `output` (SaveImage) ou `temp` (PreviewImage). */
   type: string;
   promptId: string;
+  /**
+   * Texte publié par le nœud étiqueté `YUKI_FINAL_PROMPT`.
+   * ⚠️ Absent quand le workflow ne porte PAS cette étiquette (rien n'est lu).
+   */
+  finalPrompt?: ComfyFinalPromptResult;
+}
+
+/**
+ * Texte publié par un nœud d'AFFICHAGE, lu dans `outputs[<nœud>].text`.
+ *
+ * ⚠️ Forme VÉRIFIÉE dans le code source de ComfyUI et de ses extensions :
+ *  - `PreviewAny` (`comfy_extras/nodes_preview_any.py` :
+ *    `return {"ui": {"text": (value,)}, …}`) — un TUPLE, donc un TABLEAU en JSON ;
+ *  - `SaveText` (`comfy_extras/nodes_text.py` : `ui={"text": (text,)}`) — idem ;
+ *  - `ShowText` / `AIHToText` (extensions) — une LISTE d'un texte.
+ * Une CHAÎNE simple est aussi acceptée (nœuds maison) : on ne devine rien, on lit
+ * ce qui est publié et, sinon, on le DIT (`status: "empty"`).
+ */
+export interface ComfyFinalPromptText {
+  /** Nœud étiqueté `YUKI_FINAL_PROMPT`. */
+  nodeId: string;
+  /** Texte publié, BORNÉ (voir `MAX_FINAL_PROMPT_CHARS`). */
+  text: string;
+  /** Longueur RÉELLE du texte avant la borne (dit à l'utilisateur si coupé). */
+  totalChars: number;
+  /** Vrai si le texte a été coupé à la borne. */
+  truncated: boolean;
+}
+
+/**
+ * Résultat de la lecture du nœud `YUKI_FINAL_PROMPT`.
+ *
+ * ⚠️ `empty` n'est PAS un silence : le message d'échec liste ce que le nœud a
+ * réellement publié, pour que l'utilisateur puisse corriger son graphe.
+ */
+export type ComfyFinalPromptResult =
+  | { status: "found"; prompt: ComfyFinalPromptText }
+  | {
+      /** Le nœud étiqueté n'a publié AUCUN texte dans l'historique. */
+      status: "empty";
+      nodeId: string;
+      /** Clés réellement publiées par ce nœud (`images`, `gifs`…), jamais le texte. */
+      publishedKeys: string[];
+    };
+
+/**
+ * FICHE d'une image générée : le PROMPT FINAL lu sur le nœud `YUKI_FINAL_PROMPT`.
+ *
+ * ⚠️ Elle peut arriver APRÈS l'image (le texte est lu/parsé après les octets) :
+ * l'interface doit alors l'afficher SOUS l'image, sans jamais déplacer l'image.
+ * Ce n'est jamais une consigne : c'est une SORTIE du workflow (lecture seule).
+ */
+export interface ComfyImageFinalPromptView {
+  /** Image à compléter (`/images/<id>.<ext>`). */
+  id: string;
+  finalPrompt: ComfyFinalPromptText;
+  /** Conversation demandeuse (routage de la trame WS). */
+  sessionId?: string;
 }
 
 /**
@@ -121,6 +179,22 @@ export interface ComfyImageBytes {
  */
 export interface ImagesGatewayPort {
   subscribeImages(listener: (view: ComfyImageView) => void): () => void;
+  /**
+   * Complète une image DÉJÀ affichée par sa FICHE (prompt final), quand le texte
+   * du workflow n'est connu qu'APRÈS l'image. Optionnel : un transport qui ne la
+   * connaît pas ne restaure rien (comportement d'avant).
+   */
+  subscribeImageFinalPrompts?(
+    listener: (view: ComfyImageFinalPromptView) => void,
+  ): () => void;
+  /**
+   * Images ENCORE VALABLES d'une conversation (rétention non atteinte), de la
+   * plus ancienne à la plus récente. Optionnel : un transport qui ne la connaît
+   * pas ne restaure rien (comportement d'avant). C'est la source de la
+   * RESTAURATION après rechargement : l'image n'est plus un état purement
+   * éphémère, elle est conservée comme une pièce jointe.
+   */
+  imagesForSession?(sessionId: string): ComfyImageView[];
 }
 
 /** Vue d'une image générée destinée à l'interface (trame de contrôle WS). */
@@ -133,8 +207,19 @@ export interface ComfyImageView {
   height?: number;
   bytes: number;
   createdAt: string;
+  /**
+   * Instant d'EXPIRATION (ISO 8601) : la même rétention que les pièces jointes
+   * (`files.retentionDays`). Affiché par l'interface et vérifié côté serveur.
+   */
+  expiresAt?: string;
   /** Conversation demandeuse (routage de la trame WS). */
   sessionId?: string;
   /** Identifiant du prompt ComfyUI (diagnostic, jamais une donnée sensible). */
   promptId: string;
+  /**
+   * Prompt FINAL produit par le workflow (`YUKI_FINAL_PROMPT`), affiché sous
+   * l'image en LECTURE seule. ⚠️ Absent quand le workflow n'a pas l'étiquette :
+   * c'est une SORTIE, jamais une donnée réinjectée dans un graphe.
+   */
+  finalPrompt?: ComfyFinalPromptText;
 }

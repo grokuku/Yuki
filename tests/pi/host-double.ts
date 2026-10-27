@@ -36,13 +36,25 @@ export interface FakeDeltaStep {
   delayMs?: number;
 }
 
+/**
+ * Étape `ack` : le host émet un ACCUSÉ DE RÉCEPTION (action qui démarre). Elle
+ * permet de vérifier le transport (trame de CONTRÔLE, aucun `seq`, jamais
+ * bufferisée) et son ORDRE par rapport aux trames qui suivent.
+ */
+export interface FakeAckStep {
+  kind: "ack";
+  text: string;
+  tool?: string;
+  delayMs?: number;
+}
+
 export interface FakeErrorStep {
   kind: "error";
   message: string;
   delayMs?: number;
 }
 
-export type FakeStep = FakeDeltaStep | FakeErrorStep;
+export type FakeStep = FakeDeltaStep | FakeErrorStep | FakeAckStep;
 
 export interface FakeScript {
   name?: string;
@@ -550,6 +562,19 @@ export class FakePiHost implements PiHost {
         run.sawError = true;
         run.errorMessage = step.message;
         break;
+      }
+      if (step.kind === "ack") {
+        // ⚠️ L'accusé n'est PAS du contenu : il ne marque pas le premier token et
+        // n'entre pas dans `partial` (comme dans le vrai host, où il part au
+        // démarrage d'un outil, après l'émission de la réponse du modèle).
+        this.emit({
+          type: "ack",
+          sessionId: this.sessionId,
+          runId: run.runId,
+          tool: step.tool ?? "delegate",
+          text: step.text,
+        });
+        continue;
       }
       run.instrumentation.markFirstToken();
       if (step.channel === "content") {

@@ -420,6 +420,16 @@ export type ScreenshotViewEvent = { kind: "captured"; screenshot: CapturedScreen
  */
 export interface ScreenshotGatewayPort {
   subscribeScreenshots(listener: (event: ScreenshotViewEvent) => void): () => void;
+  /**
+   * Captures ENCORE VALABLES d'une conversation (rétention non atteinte), de la
+   * plus ancienne à la plus récente.
+   *
+   * ⚠️ Seules les captures de PAGES WEB (Libry) sont conservées : une capture
+   * d'écran d'une MACHINE appairée reste réservée à l'humain et éphémère (elle
+   * n'est pas stockée sur le disque de Yuki). Optionnel : un transport qui ne la
+   * connaît pas ne restaure rien (comportement d'avant).
+   */
+  capturesForSession?(sessionId: string): ScreenshotViewEvent[];
 }
 
 export interface ExecutionServiceOptions {

@@ -24,6 +24,8 @@ import {
   ComfyClient,
   ComfyError,
   MAX_COMFY_IMAGE_BYTES,
+  MAX_FINAL_PROMPT_CHARS,
+  findFinalPromptText,
   type ComfyConfig,
   type ComfyLogger,
 } from "../../src/comfy/index.js";
@@ -368,6 +370,139 @@ describe("étiquette YUKI_OUTPUT : SEULE l'image du nœud désigné est retenue"
     expect(error.code).toBe("no_image");
     expect(error.message).toContain("YUKI_OUTPUT");
     expect(fake.requests.some((request) => request.path === "/view")).toBe(false);
+  });
+});
+
+describe("étiquette YUKI_FINAL_PROMPT : le TEXTE du nœud d'affichage est lu", () => {
+  /** Graphe minimal + nœud d'affichage étiqueté (id volontairement arbitraire). */
+  function graphWith() {
+    return workflowWith({ prompt: "1", negative: "2", seed: "3", latent: "4", save: "42" });
+  }
+
+  it("lit `outputs[nœud].text` du nœud ÉTIQUETÉ (forme TABLEAU publiée par PreviewAny)", async () => {
+    const { fake, client } = await harness({ pollIntervalMs: 5 });
+    const finalText = "Un phare au crépuscule, lumière rasante, embruns.";
+    fake.behaviour.historyEntry = {
+      outputs: {
+        // ⚠️ Un AUTRE nœud publie aussi un texte : il ne doit pas être lu.
+        "42": { images: [{ filename: "Yuki_00001_.png", subfolder: "", type: "output" }] },
+        "1858": { text: [finalText], mode: ["Plain"] },
+        "999": { text: ["TEXTE D'UN AUTRE NŒUD"] },
+      },
+      status: { status_str: "success" },
+    };
+    const image = await client.generate(graphWith(), { finalPromptNodeId: "1858" });
+    expect(image.finalPrompt).toEqual({
+      status: "found",
+      prompt: {
+        nodeId: "1858",
+        text: finalText,
+        totalChars: finalText.length,
+        truncated: false,
+      },
+    });
+    // L'image reste celle du graphe (aucune interférence).
+    expect(image.filename).toBe("Yuki_00001_.png");
+  });
+
+  it("accepte une CHAÎNE simple et joint plusieurs entrées texte", async () => {
+    const { fake, client } = await harness({ pollIntervalMs: 5 });
+    fake.behaviour.historyEntry = {
+      outputs: {
+        "42": {
+          images: [{ filename: "Yuki_00001_.png", subfolder: "", type: "output" }],
+          text: "texte simple",
+        },
+      },
+      status: { status_str: "success" },
+    };
+    const single = await client.generate(graphWith(), { finalPromptNodeId: "42" });
+    expect(single.finalPrompt?.status).toBe("found");
+    if (single.finalPrompt?.status !== "found") return;
+    expect(single.finalPrompt.prompt.text).toBe("texte simple");
+
+    const multi = findFinalPromptText({ "7": { text: ["ligne 1", "ligne 2", 42] } }, "7");
+    expect(multi).toEqual({
+      status: "found",
+      text: "ligne 1\nligne 2",
+      totalChars: 15,
+      truncated: false,
+    });
+  });
+
+  it("étiquette présente mais AUCUN texte ⇒ `empty` + clés publiées (jamais un silence)", async () => {
+    const { fake, client } = await harness({ pollIntervalMs: 5 });
+    fake.behaviour.historyEntry = {
+      outputs: {
+        "42": { images: [{ filename: "Yuki_00001_.png", subfolder: "", type: "output" }] },
+        "1858": { images: [{ filename: "apercu.png", subfolder: "", type: "temp" }] },
+      },
+      status: { status_str: "success" },
+    };
+    // ⚠️ La génération n'échoue PAS : l'image est bonne, seul le texte manque.
+    const image = await client.generate(graphWith(), { finalPromptNodeId: "1858" });
+    expect(image.finalPrompt).toEqual({ status: "empty", nodeId: "1858", publishedKeys: ["images"] });
+    expect(image.filename).toBe("Yuki_00001_.png");
+  });
+
+  it("nœud étiqueté absent de `outputs` (jamais exécuté) ⇒ `empty`, rien n'est inventé", async () => {
+    const { fake, client } = await harness({ pollIntervalMs: 5 });
+    fake.behaviour.historyEntry = historyDone();
+    const image = await client.generate(graphWith(), { finalPromptNodeId: "1858" });
+    expect(image.finalPrompt).toEqual({ status: "empty", nodeId: "1858", publishedKeys: [] });
+  });
+
+  it("sans l'étiquette : AUCUN champ `finalPrompt` (comportement d'avant)", async () => {
+    const { fake, client } = await harness({ pollIntervalMs: 5 });
+    fake.behaviour.historyEntry = {
+      outputs: {
+        "42": { images: [{ filename: "Yuki_00001_.png", subfolder: "", type: "output" }] },
+        "1858": { text: ["un texte qui ne doit PAS être lu sans étiquette"] },
+      },
+      status: { status_str: "success" },
+    };
+    const image = await client.generate(graphWith());
+    expect(image.finalPrompt).toBeUndefined();
+    expect("finalPrompt" in image).toBe(false);
+  });
+
+  it("BORNE le texte et DIT la longueur réelle (jamais une coupe silencieuse)", async () => {
+    const long = "a".repeat(MAX_FINAL_PROMPT_CHARS + 500);
+    const read = findFinalPromptText({ "9": { text: [long] } }, "9");
+    expect(read.status).toBe("found");
+    if (read.status !== "found") return;
+    expect(read.text.length).toBe(MAX_FINAL_PROMPT_CHARS);
+    expect(read.totalChars).toBe(MAX_FINAL_PROMPT_CHARS + 500);
+    expect(read.truncated).toBe(true);
+    // Une coupe ne sépare jamais une paire de substitution (emoji).
+    const emoji = `${"a".repeat(MAX_FINAL_PROMPT_CHARS - 1)}😀${"b".repeat(10)}`;
+    const cut = findFinalPromptText({ "9": { text: [emoji] } }, "9");
+    if (cut.status !== "found") return;
+    expect(cut.text.length).toBe(MAX_FINAL_PROMPT_CHARS - 1);
+    expect(cut.text.endsWith("\ud83d")).toBe(false);
+  });
+
+  it("ne confond pas le texte d'affichage avec l'image (PIÈGE ②)", async () => {
+    // ⚠️ Le nœud d'affichage publie `ui.text` ET `ui.images` : l'image retenue
+    // doit rester celle de `YUKI_OUTPUT`, le texte celui du nœud étiqueté.
+    const { fake, client } = await harness({ pollIntervalMs: 5 });
+    fake.behaviour.historyEntry = {
+      outputs: {
+        "42": { images: [{ filename: "finale.png", subfolder: "", type: "output" }] },
+        "77": {
+          text: ["prompt final affiché"],
+          images: [{ filename: "apercu_du_meme_noeud.png", subfolder: "", type: "temp" }],
+        },
+      },
+      status: { status_str: "success" },
+    };
+    const image = await client.generate(graphWith(), {
+      outputNodeId: "42",
+      finalPromptNodeId: "77",
+    });
+    expect(image.filename).toBe("finale.png");
+    if (image.finalPrompt?.status !== "found") throw new Error("texte attendu");
+    expect(image.finalPrompt.prompt.text).toBe("prompt final affiché");
   });
 });
 

@@ -14,7 +14,7 @@ import type {
   SessionJobInfo,
   TranscriptEntry,
 } from "../../pi/types.js";
-import type { ComfyImageView } from "../../comfy/types.js";
+import type { ComfyFinalPromptText, ComfyImageView } from "../../comfy/types.js";
 import type { WireFile } from "../../files/types.js";
 import { isAgentLevel, type AgentLevel } from "../../agents/types.js";
 import type {
@@ -487,9 +487,49 @@ export type ServerMessage =
        *
        * ⚠️ Contrairement aux captures d'écran d'agents, l'image a AUSSI été
        * transmise au modèle : Yuki l'a vue et peut juger ou régénérer.
+       *
+       * ⚠️ `image.finalPrompt` (facultatif) porte le PROMPT FINAL publié par le
+       * nœud étiqueté `YUKI_FINAL_PROMPT` : il est affiché SOUS l'image, en
+       * LECTURE seule, replié. C'est une SORTIE du workflow — elle n'est jamais
+       * réinjectée dans un graphe — et elle est déjà bornée côté serveur.
        */
       type: "image";
       image: ComfyImageView;
+    }
+  | {
+      /**
+       * ACCUSÉ DE RÉCEPTION : une ACTION vient de démarrer (délégation, génération
+       * d'image, commande envoyée à un agent) et rien n'a encore été dit dans ce
+       * run. C'est une ligne de STATUT courte (« Je m'en occupe. »), pas une
+       * réponse : le fond suit. Elle ne promet AUCUN résultat.
+       *
+       * Trame de CONTRÔLE (aucun `seq` consommé, jamais bufferisée) ⇒ jamais dans
+       * le rejeu, le snapshot, le transcript ou la mémoire, et JAMAIS prononcée par
+       * la synthèse vocale (le moteur TTS ne reçoit que les `delta` de contenu).
+       */
+      type: "ack";
+      runId: string;
+      /** Outil dont l'action démarre (`delegate`, `generer_image`, `run_command`). */
+      tool: string;
+      /** Texte COURT et HUMAIN, en français. */
+      text: string;
+    }
+  | {
+      /**
+       * FICHE d'une image DÉJÀ affichée : le PROMPT FINAL publié par le workflow.
+       *
+       * ⚠️ Elle arrive APRÈS la trame `image` (le texte est lu après les octets) et
+       * l'interface l'affiche SOUS l'image, sans jamais déplacer l'image (PIÈGE ⑤).
+       * C'est une SORTIE du workflow, en LECTURE seule : elle n'est jamais
+       * réinjectée dans un graphe.
+       *
+       * Trame de CONTRÔLE (aucun `seq` consommé, jamais bufferisée) : ce n'est pas
+       * un message, et elle n'est jamais prononcée par la synthèse vocale.
+       */
+      type: "image_final_prompt";
+      /** Image à compléter (`/images/<id>.<ext>`). */
+      id: string;
+      finalPrompt: ComfyFinalPromptText;
     }
   | { type: "pong"; t: number }
   | { type: "bye"; reason: string };

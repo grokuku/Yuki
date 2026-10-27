@@ -12,7 +12,13 @@
  *                                  puis `{ [id]: { prompt, outputs, status } }`.
  *                                  ⚠️ Le NOM DE FICHIER de l'image produite est
  *                                  dans `outputs[<nœud>].images[].filename`
- *                                  (+ `subfolder`, `type`).
+ *                                  (+ `subfolder`, `type`). ⚠️ Le TEXTE d'un
+ *                                  nœud d'AFFICHAGE est dans
+ *                                  `outputs[<nœud>].text` (forme vérifiée dans
+ *                                  `comfy_extras/nodes_preview_any.py` :
+ *                                  `{"ui": {"text": (v,)}}`, donc un TABLEAU ;
+ *                                  `ShowText`/`AIHToText` publient aussi une
+ *                                  liste) — c'est ce que lit `YUKI_FINAL_PROMPT`.
  *  3. `GET  /view?filename=…&subfolder=…&type=…`
  *                                 → les OCTETS de l'image (`image/png`).
  *  4. `GET  /system_stats`       → `{ system: { comfyui_version, … }, devices: […] }`
@@ -36,6 +42,7 @@
 import type {
   ComfyConfigProvider,
   ComfyErrorCode,
+  ComfyFinalPromptResult,
   ComfyImageBytes,
   ComfyLogger,
 } from "./types.js";
@@ -49,6 +56,16 @@ export const DEFAULT_COMFY_GENERATION_TIMEOUT_MS = 180_000;
 export const DEFAULT_COMFY_POLL_INTERVAL_MS = 1_000;
 /** Plafond des octets récupérés pour une image générée. */
 export const MAX_COMFY_IMAGE_BYTES = 24 * 1024 * 1024;
+
+/**
+ * Plafond du TEXTE lu sur le nœud étiqueté `YUKI_FINAL_PROMPT` (caractères).
+ *
+ * ⚠️ Un prompt final peut être très long (un enhancer peut produire plusieurs
+ * milliers de caractères, un nœud d'affichage peut publier un JSON entier) : on
+ * BORNE ce qui voyage jusqu'à l'interface, et la coupe est TOUJOURS dite
+ * (`truncated`/`totalChars`).
+ */
+export const MAX_FINAL_PROMPT_CHARS = 8_000;
 
 /** Étape observée d'une génération (progression rapportée à l'outil). */
 export interface ComfyProgress {
@@ -91,6 +108,11 @@ export interface ComfyImageClientPort {
        * comportement historique (première image produite par le graphe).
        */
       outputNodeId?: string;
+      /**
+       * Nœud étiqueté `YUKI_FINAL_PROMPT` : on lit le TEXTE qu'il publie
+       * (`outputs[<nœud>].text`). `undefined` ⇒ rien n'est lu.
+       */
+      finalPromptNodeId?: string;
     },
   ): Promise<ComfyImageBytes>;
   systemStats(signal?: AbortSignal): Promise<ComfySystemStats>;
@@ -523,6 +545,7 @@ export class ComfyClient {
       signal?: AbortSignal;
       onProgress?: (progress: ComfyProgress) => void;
       outputNodeId?: string;
+      finalPromptNodeId?: string;
     } = {},
   ): Promise<ComfyImageBytes> {
     const startedAt = this.now();
@@ -601,6 +624,14 @@ export class ComfyClient {
       elapsedMs: this.now() - startedAt,
     });
     const image = await this.view(ref, options.signal);
+    // ⚠️ `YUKI_FINAL_PROMPT` : le texte est lu dans le MÊME historique, mais sur
+    // le nœud de l'étiquette — jamais sur le nœud de l'image (PIÈGE ② : un nœud
+    // peut publier `ui.text` ET `ui.images`, on ne confond pas les deux).
+    const finalPromptNodeId = options.finalPromptNodeId?.trim() ?? "";
+    const finalPrompt =
+      finalPromptNodeId !== ""
+        ? readFinalPrompt(parsed.outputs, finalPromptNodeId, this.logger, promptId)
+        : undefined;
     this.logger?.info("comfy.image.fetched", {
       promptId,
       nodeId: ref.nodeId,
@@ -609,7 +640,11 @@ export class ComfyClient {
       mimeType: image.mimeType,
       elapsedMs: this.now() - startedAt,
     });
-    return { ...image, promptId };
+    return {
+      ...image,
+      promptId,
+      ...(finalPrompt !== undefined ? { finalPrompt } : {}),
+    };
   }
 }
 
@@ -670,6 +705,113 @@ export function findImageRefForNode(
   const found = imagesOfNode(outputs[nodeId]).map((ref) => ({ ...ref, nodeId }));
   const output = found.find((ref) => ref.type === "output");
   return output ?? found[0] ?? null;
+}
+
+/**
+ * Texte publié par un nœud d'AFFICHAGE, lu dans `outputs[<nœud>].text`.
+ *
+ * ⚠️ Forme VÉRIFIÉE dans le code source (voir `ComfyFinalPromptText`) : les
+ * nœuds d'affichage publient `ui.text` sous forme de TUPLE/LISTE (⇒ tableau JSON
+ * `"text": ["…"]`) ; une CHAÎNE simple est aussi acceptée (nœud maison).
+ *
+ * ⚠️ On ne lit QUE cette clé : un nœud qui publie `ui.images` (ou `ui.prompt`)
+ * n'est PAS un nœud d'affichage de texte, et on ne prend pas son image pour un
+ * prompt (PIÈGE ②).
+ */
+export type FinalPromptRead =
+  | { status: "found"; text: string; totalChars: number; truncated: boolean }
+  | { status: "empty"; publishedKeys: string[] };
+
+/** Texte brut publié par un nœud, ou `null` s'il n'en publie aucun. */
+function textOfNode(output: unknown): string | null {
+  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  const raw = (output as Record<string, unknown>).text;
+  if (typeof raw === "string") return raw;
+  if (!Array.isArray(raw)) return null;
+  // `ui.text` est une liste : on garde les entrées TEXTE, dans l'ordre publié.
+  return raw.filter((entry): entry is string => typeof entry === "string").join("\n");
+}
+
+/**
+ * Coupe `text` à `limit` caractères SANS séparer une paire de substitution
+ * (emoji) : une demi-paire serait affichée comme un caractère de remplacement.
+ */
+function sliceText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const last = text.charCodeAt(limit - 1);
+  const cut = last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit;
+  return text.slice(0, cut);
+}
+
+/**
+ * Lit le prompt final publié par le nœud étiqueté `YUKI_FINAL_PROMPT`.
+ *
+ * ⚠️ Aucun repli sur un autre nœud : si celui-ci ne publie pas de texte, on
+ * renvoie `status: "empty"` avec les clés RÉELLEMENT publiées, pour que
+ * l'appelant le DISE (jamais un silence).
+ */
+export function findFinalPromptText(
+  outputs: Record<string, unknown>,
+  nodeId: string,
+  maxChars: number = MAX_FINAL_PROMPT_CHARS,
+): FinalPromptRead {
+  const output = outputs[nodeId];
+  const text = textOfNode(output);
+  const trimmed = (text ?? "").trim();
+  if (trimmed === "") {
+    return {
+      status: "empty",
+      publishedKeys:
+        output && typeof output === "object" && !Array.isArray(output)
+          ? Object.keys(output as Record<string, unknown>).slice(0, 8)
+          : [],
+    };
+  }
+  const limit = Math.max(0, Math.trunc(maxChars));
+  const bounded = sliceText(trimmed, limit);
+  return {
+    status: "found",
+    text: bounded,
+    totalChars: trimmed.length,
+    truncated: bounded.length < trimmed.length,
+  };
+}
+
+/** Lit le prompt final, JOURNALISE l'issue et l'emballe pour `ComfyImageBytes`. */
+function readFinalPrompt(
+  outputs: Record<string, unknown>,
+  nodeId: string,
+  logger: ComfyLogger | undefined,
+  promptId: string,
+): ComfyFinalPromptResult {
+  const read = findFinalPromptText(outputs, nodeId);
+  if (read.status === "empty") {
+    logger?.warn("comfy.final_prompt.empty", {
+      promptId,
+      nodeId,
+      publishedKeys: read.publishedKeys,
+      reason:
+        "le nœud étiqueté YUKI_FINAL_PROMPT n'a publié aucun texte " +
+        "(la sortie d'un nœud d'affichage doit être dans `ui.text`)",
+    });
+    return { status: "empty", nodeId, publishedKeys: read.publishedKeys };
+  }
+  logger?.info("comfy.final_prompt.read", {
+    promptId,
+    nodeId,
+    chars: read.text.length,
+    totalChars: read.totalChars,
+    truncated: read.truncated,
+  });
+  return {
+    status: "found",
+    prompt: {
+      nodeId,
+      text: read.text,
+      totalChars: read.totalChars,
+      truncated: read.truncated,
+    },
+  };
 }
 
 /** Images publiées par la sortie d'un nœud (forme défensive : `images[]`). */

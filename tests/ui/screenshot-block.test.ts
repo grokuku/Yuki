@@ -46,4 +46,10 @@ describe("garde-fous statiques de screenshot-block.js (CSP)", () => {
     expect(source).toContain("isSafeImageSrc");
     expect(source).toContain(".md-image");
   });
+
+  it("la capture est une VIGNETTE CLIQUABLE — MÊME visionneuse que `/images/` (PIÈGE ⑤)", () => {
+    // ⚠️ Les deux familles d'images du fil doivent se comporter PAREIL : une
+    // seule visionneuse partagée, un seul chemin de décoration.
+    expect(source).toContain("zoom.decorate(img)");
+  });
 });

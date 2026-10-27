@@ -23,6 +23,8 @@ export {
   DEFAULT_COMFY_POLL_INTERVAL_MS,
   DEFAULT_COMFY_REQUEST_TIMEOUT_MS,
   MAX_COMFY_IMAGE_BYTES,
+  MAX_FINAL_PROMPT_CHARS,
+  findFinalPromptText,
   findImageRef,
   findImageRefForNode,
   normalizeComfyBaseUrl,
@@ -30,6 +32,7 @@ export {
   type ComfyImageRef,
   type ComfyProgress,
   type ComfySystemStats,
+  type FinalPromptRead,
 } from "./client.js";
 export {
   ComfyError,
@@ -37,13 +40,17 @@ export {
   type ComfyConfig,
   type ComfyConfigProvider,
   type ComfyErrorCode,
+  type ComfyFinalPromptResult,
+  type ComfyFinalPromptText,
   type ComfyImageBytes,
+  type ComfyImageFinalPromptView,
   type ComfyImageView,
   type ComfyLogger,
   type ImagesGatewayPort,
 } from "./types.js";
 export {
   YUKI_DEFAULT_NEGATIVE,
+  YUKI_FINAL_PROMPT_LABEL,
   YUKI_NODE_LABELS,
   YUKI_OUTPUT_LABEL,
   YUKI_REQUIRED_LABEL,

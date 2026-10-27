@@ -12,7 +12,9 @@
  *  - l'image retenue est celle du nœud `YUKI_OUTPUT` QUAND le workflow porte
  *    cette étiquette (et seulement celle-là) ; sans elle, on garde le
  *    comportement historique — première image produite — et on le DIT
- *    (journal + indicateur `outputLabeled` remonté à l'outil).
+ *    (journal + indicateur `outputLabeled` remonté à l'outil) ;
+ *  - le prompt FINAL (`YUKI_FINAL_PROMPT`) est une SORTIE : il est LÉGUÉ tel
+ *    quel à l'appelant (affichage + modèle), jamais réinjecté dans un graphe.
  */
 
 import { randomInt } from "node:crypto";
@@ -24,7 +26,7 @@ import type {
 } from "./images.js";
 import { pngDimensions } from "./images.js";
 import { chooseWorkflow } from "./selection.js";
-import type { ComfyLogger } from "./types.js";
+import type { ComfyFinalPromptResult, ComfyLogger } from "./types.js";
 import { ComfyError } from "./types.js";
 import { YUKI_DEFAULT_NEGATIVE, applyYukiValues, type YukiNodeLabel } from "./validate.js";
 import type { ComfyWorkflowsPort } from "./workflows.js";
@@ -56,6 +58,13 @@ export interface GeneratedImage {
   outputLabeled: boolean;
   /** Étiquettes réellement écrites (preuve vérifiable). */
   labels: YukiNodeLabel[];
+  /**
+   * Texte du nœud étiqueté `YUKI_FINAL_PROMPT` (prompt final produit par le
+   * workflow). ⚠️ C'est une SORTIE : elle est MONTRÉE (humain + modèle) et
+   * jamais réécrite dans un graphe. `undefined` ⇒ le workflow n'a pas
+   * l'étiquette (rien n'est lu, rien n'est affiché).
+   */
+  finalPrompt?: ComfyFinalPromptResult;
 }
 
 /** Port consommé par l'outil `generer_image`. */
@@ -155,6 +164,9 @@ export function createComfyGenerator(
       // ⚠️ `YUKI_OUTPUT` désigne le nœud dont on LIT l'image finale (aucune
       // valeur à écrire). Absent ⇒ comportement historique, annoncé ensuite.
       const outputNodeId = entry.labels.YUKI_OUTPUT?.nodeId;
+      // ⚠️ `YUKI_FINAL_PROMPT` désigne le nœud dont on LIT le TEXTE publié (aucune
+      // valeur à écrire non plus). Absent ⇒ on ne lit ni n'affiche rien.
+      const finalPromptNodeId = entry.labels.YUKI_FINAL_PROMPT?.nodeId;
       options.logger?.info("comfy.generation.start", {
         workflow: choice.name,
         reason: choice.reason,
@@ -163,6 +175,8 @@ export function createComfyGenerator(
         height: entry.labels.YUKI_HEIGHT ? sizes.height : undefined,
         outputLabeled: outputNodeId !== undefined,
         outputNodeId,
+        finalPromptLabeled: finalPromptNodeId !== undefined,
+        finalPromptNodeId,
       });
       if (outputNodeId === undefined) {
         // ⚠️ On ne cache pas le repli : le journal ET le résultat de l'outil le
@@ -176,6 +190,7 @@ export function createComfyGenerator(
       }
       const image = await options.client.generate(workflow, {
         ...(outputNodeId !== undefined ? { outputNodeId } : {}),
+        ...(finalPromptNodeId !== undefined ? { finalPromptNodeId } : {}),
         ...(input.signal ? { signal: input.signal } : {}),
         ...(input.onProgress ? { onProgress: input.onProgress } : {}),
       });
@@ -212,6 +227,7 @@ export function createComfyGenerator(
         elapsedMs,
         outputLabeled: outputNodeId !== undefined,
         labels: injected.map((item) => item.label),
+        ...(image.finalPrompt !== undefined ? { finalPrompt: image.finalPrompt } : {}),
       };
     },
   };

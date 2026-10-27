@@ -19,11 +19,16 @@
  * MANQUANTES. Aucun graphe n'est renvoyé par l'API : le panneau ne montre que
  * des résumés.
  *
- * ⚠️ SIX étiquettes sont reconnues. `YUKI_OUTPUT` (facultative) désigne le nœud
+ * ⚠️ SEPT étiquettes sont reconnues. `YUKI_OUTPUT` (facultative) désigne le nœud
  * qui produit l'IMAGE FINALE : quand elle est présente, seule SON image est
  * retenue (un aperçu intermédiaire du graphe ne peut plus être servi par
  * erreur). Sans elle, la première image produite est retenue — et le panneau le
  * dit sur la fiche du workflow comme le résultat de l'outil.
+ *
+ * ⚠️ `YUKI_FINAL_PROMPT` (facultative) désigne le nœud qui AFFICHE le prompt
+ * final (la sortie de l'enhancer du workflow) : son TEXTE est lu dans
+ * `outputs[<nœud>].text` de l'historique, puis affiché sous l'image et transmis
+ * à Yuki. Aucun champ n'est écrit dans ce nœud.
  *
  * ⚠️ La CLÉ du serveur n'est JAMAIS réaffichée (elle passe par le champ secret
  * de la configuration commune) et n'apparaît nulle part ici.
@@ -36,7 +41,7 @@
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-config": "1" };
 const JSON_HEADERS = { accept: "application/json" };
 
-/** Les six étiquettes reconnues, dans l'ordre d'affichage (contrat serveur). */
+/** Les sept étiquettes reconnues, dans l'ordre d'affichage (contrat serveur). */
 const LABELS = [
   "YUKI_PROMPT",
   "YUKI_NEGATIVE",
@@ -44,6 +49,7 @@ const LABELS = [
   "YUKI_WIDTH",
   "YUKI_HEIGHT",
   "YUKI_OUTPUT",
+  "YUKI_FINAL_PROMPT",
 ];
 
 function h(tag, props = {}, children = []) {
@@ -285,8 +291,18 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
             "graphe est retenue, ce qui peut être un aperçu intermédiaire. " +
             "Étiquette le nœud de sortie (ex. « Preview Image ») YUKI_OUTPUT.",
         });
-    const actions = h("div", { class: "image-workflow__actions" });
-    if (!summary.isDefault) {
+    // ⚠️ `YUKI_FINAL_PROMPT` : la fiche DIT que le texte du nœud est affiché et
+    // transmis (et rappelle qu'il s'agit d'un nœud d'AFFICHAGE de texte).
+    const finalPromptNote = found.includes("YUKI_FINAL_PROMPT")
+      ? h("p", {
+          class: "config-helper",
+          text:
+            "Prompt final : le TEXTE publié par le nœud étiqueté YUKI_FINAL_PROMPT " +
+            "est affiché sous l'image et transmis à Yuki. Ce nœud doit AFFICHER du " +
+            "texte (« Preview as Text », « Show Text », AIHToText…).",
+        })
+      : null;
+    const actions = h("div", { class: "image-workflow__actions" });    if (!summary.isDefault) {
       const primary = h("button", {
         class: "button button--ghost button--small",
         type: "button",
@@ -312,6 +328,7 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
       }),
       labelList(summary),
       outputNote,
+      finalPromptNote,
       actions,
     ]);
   }
@@ -378,7 +395,10 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
           "YUKI_NEGATIVE, YUKI_SEED, YUKI_WIDTH, YUKI_HEIGHT, et YUKI_OUTPUT " +
           "(facultative : le nœud qui produit l'IMAGE FINALE — « Save Image » ou " +
           "« Preview Image »). Sans YUKI_OUTPUT, la première image produite est " +
-          "retenue, ce qui peut être un aperçu intermédiaire.",
+          "retenue, ce qui peut être un aperçu intermédiaire. " +
+          "YUKI_FINAL_PROMPT (facultative) : un nœud qui AFFICHE du texte " +
+          "(« Preview as Text », « Show Text »…) placé APRÈS l'enhancer — son " +
+          "texte est affiché sous l'image et transmis à Yuki.",
       }),
       h("div", { class: "image-import" }, [
         h("label", { class: "config-label", for: "image-workflow-name", text: "Nom d'usage" }),

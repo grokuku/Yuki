@@ -60,6 +60,7 @@ import { describeModelError, PiHostError, toPiHostError } from "./errors.js";
 import { buildStoredUserText, stripTimestampPrefix } from "./timestamp.js";
 import type { PiHost } from "./host.js";
 import { PHASE, RunInstrumentation, type RunSummary, type RunTtsMetrics } from "./instrumentation.js";
+import { ackTextForTool, shouldAcknowledge } from "./ack.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
 import {
   createDelegationExtensionFactory,
@@ -186,6 +187,11 @@ interface RunItem {
   emittedRunStarted: boolean;
   sawError: boolean;
   sawAbort: boolean;
+  /**
+   * Un ACCUSÉ DE RÉCEPTION est déjà parti pour ce run (une seule ligne par run :
+   * deux outils longs dans le même tour ne produisent pas deux accusés).
+   */
+  acked?: boolean;
   /**
    * Le message utilisateur a DÉJÀ été versé au transcript (cas d'un message
    * livré en `steer` à un run en cours). Évite une double bulle si le message
@@ -532,6 +538,31 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         if (run.abortRequested) {
           void record.session.abort().catch(() => undefined);
         }
+        return;
+      }
+      case "tool_execution_start": {
+        // ⚠️ ACCUSÉ DE RÉCEPTION — DÉCLENCHÉ PAR L'ACTION, JAMAIS PAR UNE PRÉDICTION.
+        // Le SDK émet cet événement JUSTE AVANT d'exécuter l'outil : l'accusé part
+        // donc AVANT que l'action ne démarre, et il ne coûte RIEN au TTFT (aucun
+        // calcul, aucune estimation, aucun appel modèle : un test booléen).
+        const run = record.currentRun;
+        if (!run) return;
+        const toolName = (raw as { toolName?: unknown }).toolName;
+        if (typeof toolName !== "string") return;
+        const text = ackTextForTool(toolName);
+        if (text === undefined) return;
+        // « Rien n'a encore été dit dans ce run » : le texte partiel du message en
+        // cours, ou un message assistant déjà complet, suffisent à le prouver.
+        const alreadySaid = record.partial.length > 0 || run.assistantEntry !== undefined;
+        if (!shouldAcknowledge({ tool: toolName, alreadySaid, alreadyAcked: run.acked === true })) return;
+        run.acked = true;
+        emitEvent({
+          type: "ack",
+          sessionId: record.sessionId,
+          runId: run.runId,
+          tool: toolName,
+          text,
+        });
         return;
       }
       case "message_start":
@@ -1548,6 +1579,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         ...createImageTools({
           generate: options.images.generator.generate,
           ...(options.images.onImage ? { onImage: options.images.onImage } : {}),
+          ...(options.images.onImageFinalPrompt
+            ? { onImageFinalPrompt: options.images.onImageFinalPrompt }
+            : {}),
         }),
       );
     }

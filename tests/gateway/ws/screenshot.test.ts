@@ -27,6 +27,15 @@ function delay(ms: number): Promise<void> {
 class FakeScreenshotPort implements ScreenshotGatewayPort {
   private readonly listeners = new Set<(event: { kind: "captured"; screenshot: CapturedScreenshotView }) => void>();
 
+  /** Captures de PAGES WEB encore valables (restauration après rechargement). */
+  restored: CapturedScreenshotView[] = [];
+
+  capturesForSession(sessionId: string): Array<{ kind: "captured"; screenshot: CapturedScreenshotView }> {
+    return this.restored
+      .filter((item) => item.sessionId === sessionId)
+      .map((screenshot) => ({ kind: "captured" as const, screenshot }));
+  }
+
   subscribeScreenshots(listener: (event: { kind: "captured"; screenshot: CapturedScreenshotView }) => void): () => void {
     this.listeners.add(listener);
     return () => {
@@ -98,6 +107,26 @@ describe("capture d'écran — trame de contrôle", () => {
     port.emit(shot({ sessionId: "une-autre-session" }));
     await delay(50);
     expect(countType(c, "screenshot")).toBe(0);
+  });
+
+  it("RESTAURE les captures CONSERVÉES de la conversation après un snapshot", async () => {
+    const port = new FakeScreenshotPort();
+    port.restored = [shot({ capturedAt: "2026-10-09T00:00:00.000Z" })];
+    const h = await startHarness({ screenshots: port });
+    harnesses.push(h);
+    const c = await TestClient.connect(h.url);
+    clients.push(c);
+    c.send({ type: "hello" });
+    const snapshot = await c.waitFor("snapshot");
+    await delay(30);
+
+    const restored = c.frames.filter((f) => f.type === "screenshot");
+    expect(restored).toHaveLength(1);
+    // APRÈS le snapshot, et en trame de CONTRÔLE (aucun `seq` consommé).
+    expect(c.frames.indexOf(restored[0]!)).toBeGreaterThan(
+      c.frames.findIndex((f) => f.type === "snapshot"),
+    );
+    expect(restored[0]!.seq).toBe(snapshot.seq);
   });
 
   it("n'entre NI dans le rejeu NI dans le snapshot", async () => {

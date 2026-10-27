@@ -53,13 +53,16 @@ function fullWorkflow(ids: {
 }
 
 describe("résolution des étiquettes PAR TITRE", () => {
-  it("résout les six étiquettes d'un graphe étiqueté", () => {
+  it("résout les sept étiquettes d'un graphe étiqueté", () => {
     // `YUKI_HEIGHT` est porté par le MÊME nœud que `YUKI_WIDTH` ? Non : un titre
     // par nœud. On ajoute donc un nœud dédié à la hauteur.
     const workflow = {
       ...fullWorkflow({ prompt: "6", negative: "7", seed: "3", size: "5", save: "9" }),
       h: node("YUKI_HEIGHT", { height: 512 }, "EmptyLatentImage"),
       out: node("YUKI_OUTPUT", { images: ["8", 0] }, "PreviewImage"),
+      // ⚠️ Nœud d'AFFICHAGE du prompt final : il ne publie que du TEXTE, aucun
+      // champ à écrire (comme `PreviewAny`/`ShowText`).
+      final: node("YUKI_FINAL_PROMPT", { source: ["8", 0] }, "PreviewAny"),
     };
     const check = validateApiWorkflow(workflow);
     expect(check.ok).toBe(true);
@@ -81,7 +84,10 @@ describe("résolution des étiquettes PAR TITRE", () => {
     // ⚠️ `YUKI_OUTPUT` ne désigne AUCUN champ : c'est un nœud qu'on LIT.
     expect(check.labels.YUKI_OUTPUT).toEqual({ nodeId: "out", classType: "PreviewImage" });
     expect(check.labels.YUKI_OUTPUT?.field).toBeUndefined();
-    expect(check.nodes).toBe(7);
+    // ⚠️ `YUKI_FINAL_PROMPT` non plus : on LIT son texte, on ne l'écrit pas.
+    expect(check.labels.YUKI_FINAL_PROMPT).toEqual({ nodeId: "final", classType: "PreviewAny" });
+    expect(check.labels.YUKI_FINAL_PROMPT?.field).toBeUndefined();
+    expect(check.nodes).toBe(8);
   });
 
   it("trouve les MÊMES nœuds avec des identifiants TOTALEMENT différents", () => {
@@ -167,7 +173,12 @@ describe("étiquettes OBLIGATOIRES et facultatives", () => {
     if (check.ok) return;
     expect(check.code).toBe("missing_required_label");
     expect(check.found).toEqual(["YUKI_SEED", "YUKI_WIDTH", "YUKI_HEIGHT"]);
-    expect(check.missing).toEqual(["YUKI_PROMPT", "YUKI_NEGATIVE", "YUKI_OUTPUT"]);
+    expect(check.missing).toEqual([
+      "YUKI_PROMPT",
+      "YUKI_NEGATIVE",
+      "YUKI_OUTPUT",
+      "YUKI_FINAL_PROMPT",
+    ]);
     expect(check.message).toContain("YUKI_PROMPT");
     expect(check.message).toContain("OBLIGATOIRE");
   });
@@ -187,6 +198,7 @@ describe("étiquettes OBLIGATOIRES et facultatives", () => {
       "YUKI_WIDTH",
       "YUKI_HEIGHT",
       "YUKI_OUTPUT",
+      "YUKI_FINAL_PROMPT",
     ]);
     // Aucune valeur n'est inventée pour les étiquettes absentes.
     const written = applyYukiValues(check.workflow, check.labels, {
@@ -254,6 +266,67 @@ describe("étiquette YUKI_OUTPUT : le nœud de l'IMAGE FINALE", () => {
     // Le nœud de sortie reste INTACT (aucune clé ajoutée dans ses entrées).
     const out = written.workflow["2"] as { inputs: Record<string, unknown> };
     expect(Object.keys(out.inputs)).toEqual(["images"]);
+  });
+});
+
+describe("étiquette YUKI_FINAL_PROMPT : le nœud qui AFFICHE le prompt final", () => {
+  it("accepte un nœud d'affichage SANS champ inscriptible (AIHToText réel)", () => {
+    // ⚠️ Cas RÉEL de l'utilisateur : `AIHToText` n'a que des entrées
+    // d'affichage (`display_mode`, `display_text`, `any_input`) — dont un
+    // `display_text` VIDE. Aucun de ces champs n'est écrit : on ne lit que la
+    // sortie `ui.text` du nœud.
+    const check = validateApiWorkflow({
+      1709: node("enhancer", { prompt: "…" }, "AIHPromptEnhancer"),
+      1858: node(
+        "YUKI_FINAL_PROMPT",
+        { display_mode: "Auto", display_text: "", any_input: ["1709", 0] },
+        "AIHToText",
+      ),
+      1: node("YUKI_PROMPT", { text: "text" }, "CLIPTextEncode"),
+    });
+    expect(check.ok).toBe(true);
+    if (!check.ok) return;
+    expect(check.labels.YUKI_FINAL_PROMPT).toEqual({ nodeId: "1858", classType: "AIHToText" });
+    expect(check.labels.YUKI_FINAL_PROMPT?.field).toBeUndefined();
+    // Le graphe reçu n'est PAS modifié à l'injection : aucune écriture.
+    const written = applyYukiValues(check.workflow, check.labels, { prompt: "une scène" });
+    expect(written.injected.map((item) => item.label)).toEqual(["YUKI_PROMPT"]);
+    const display = written.workflow["1858"] as { inputs: Record<string, unknown> };
+    expect(display.inputs).toEqual({ display_mode: "Auto", display_text: "", any_input: ["1709", 0] });
+  });
+
+  it("reste FACULTATIVE : un graphe sans elle est valide et la liste comme manquante", () => {
+    const check = validateApiWorkflow({
+      1: node("YUKI_PROMPT", { text: "text" }, "CLIPTextEncode"),
+      9: node(undefined, { filename_prefix: "Yuki" }, "SaveImage"),
+    });
+    expect(check.ok).toBe(true);
+    if (!check.ok) return;
+    expect(check.missing).toContain("YUKI_FINAL_PROMPT");
+    expect(check.labels.YUKI_FINAL_PROMPT).toBeUndefined();
+  });
+
+  it("est résolue PAR TITRE, malgré des identifiants non numériques", () => {
+    const check = validateApiWorkflow({
+      "zz-prompt": node("YUKI_PROMPT", { text: "text" }, "CLIPTextEncode"),
+      "aa-affichage": node("YUKI_FINAL_PROMPT", { source: ["zz-prompt", 0] }, "PreviewAny"),
+    });
+    expect(check.ok).toBe(true);
+    if (!check.ok) return;
+    expect(check.labels.YUKI_FINAL_PROMPT?.nodeId).toBe("aa-affichage");
+  });
+
+  it("REFUSE deux nœuds portant le titre YUKI_FINAL_PROMPT (comme les autres étiquettes)", () => {
+    const check = validateApiWorkflow({
+      1: node("YUKI_PROMPT", { text: "text" }, "CLIPTextEncode"),
+      2: node("YUKI_FINAL_PROMPT", { source: ["1", 0] }, "PreviewAny"),
+      3: node("YUKI_FINAL_PROMPT", { text: "x" }, "ShowText"),
+    });
+    expect(check.ok).toBe(false);
+    if (check.ok) return;
+    expect(check.code).toBe("duplicate_label");
+    expect(check.message).toContain("YUKI_FINAL_PROMPT");
+    expect(check.message).toContain("UN SEUL");
   });
 });
 

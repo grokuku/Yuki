@@ -37,6 +37,7 @@ import { join } from "node:path";
 
 import { analyzeStoredFile, normalizeMimeType } from "./analyze.js";
 import { extensionOf, sanitizeFileName } from "./name.js";
+import { expiresAtIso, isExpired } from "./retention.js";
 import {
   DEFAULT_MAX_FILE_BYTES,
   DEFAULT_RETENTION_DAYS,
@@ -217,7 +218,6 @@ export class FilesStore implements FilesPort {
     const ext = extensionOf(name);
     const mimeType = normalizeMimeType(input.mimeType, ext);
     const at = this.now();
-    const days = Math.max(1, Math.trunc(this.retentionDays()));
     let outcome;
     try {
       outcome = analyzeStoredFile(this.binPath(id), {
@@ -242,7 +242,9 @@ export class FilesStore implements FilesPort {
       ext,
       bytes,
       createdAt: new Date(at).toISOString(),
-      expiresAt: new Date(at + days * 86_400_000).toISOString(),
+      // ⚠️ Règle PARTAGÉE avec les images générées et les captures du libraire
+      // (`retention.ts`) : même réglage, même sémantique d'expiration.
+      expiresAt: expiresAtIso(at, this.retentionDays()),
       origin: input.origin,
       ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
       analysis: outcome.analysis,
@@ -287,9 +289,9 @@ export class FilesStore implements FilesPort {
     } catch {
       return null;
     }
-    const expiresAt = Date.parse(meta.expiresAt);
-    if (Number.isFinite(expiresAt) && expiresAt <= this.now()) {
-      // Expiré mais pas encore purgé : on le supprime et on répond ABSENT.
+    if (isExpired(meta.expiresAt, this.now())) {
+      // Expiré (ou date illisible) mais pas encore purgé : on le supprime et on
+      // répond ABSENT (lire un expiré vaut 404, jamais un fichier périmé).
       this.remove(id);
       return null;
     }
@@ -391,16 +393,16 @@ export class FilesStore implements FilesPort {
       if (!entry.endsWith(".json")) continue;
       const id = entry.slice(0, -".json".length);
       if (!isRecordId(id)) continue;
-      let expiresAt = Number.NaN;
+      let expiresAt: string | undefined;
       try {
         const meta = JSON.parse(readFileSync(join(this.dir, entry), "utf8")) as MetaFile;
-        expiresAt = Date.parse(meta.expiresAt);
+        expiresAt = meta.expiresAt;
       } catch {
         // Métadonnées illisibles : on considère le fichier orphelin et on purge
         // (aucun moyen de prouver sa date d'expiration → on ne le garde pas).
-        expiresAt = Number.NaN;
+        expiresAt = undefined;
       }
-      if (Number.isNaN(expiresAt) || expiresAt <= now) {
+      if (isExpired(expiresAt, now)) {
         if (this.remove(id)) removed += 1;
       }
     }
