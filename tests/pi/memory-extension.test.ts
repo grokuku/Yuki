@@ -172,6 +172,93 @@ describe("extension de mémoire — ÉCRITURE (agent_end / compaction)", () => {
     ]);
   });
 
+  it("n'apprend JAMAIS l'ACCUSÉ de réception (action longue lancée, rien d'autre dit)", async () => {
+    // ⚠️ L'accusé est écrit par le MODÈLE : c'est son premier texte, suivi de l'appel
+    // d'outil. Ce n'est pas une parole sur la demande — le mémoriser polluerait la
+    // mémoire durable d'une phrase mécanique.
+    const calls: TurnEndInput[] = [];
+    const ackOnly = [
+      {
+        id: "e1",
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "Génère-moi une image" }] },
+      },
+      {
+        id: "e2",
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Deux secondes, je m'en occupe." },
+            { type: "toolCall", id: "c1", name: "generer_image", arguments: {} },
+          ],
+        },
+      },
+    ];
+    const { handlers } = capture(fakePort({ onTurnEnd: (input) => calls.push(input) }));
+    await handlers.get("agent_end")!({}, readOnlyCtx(ackOnly));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("mémorise la RÉPONSE, jamais le préambule d'accusé qui la précède", async () => {
+    const calls: TurnEndInput[] = [];
+    const withAnswer = [
+      {
+        id: "e1",
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "Génère-moi une image" }] },
+      },
+      {
+        id: "e2",
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "C'est parti." },
+            { type: "toolCall", id: "c1", name: "generer_image", arguments: {} },
+          ],
+        },
+      },
+      {
+        id: "e3",
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "Voilà le chat." }] },
+      },
+    ];
+    const { handlers } = capture(fakePort({ onTurnEnd: (input) => calls.push(input) }));
+    await handlers.get("agent_end")!({}, readOnlyCtx(withAnswer));
+    // Le dernier message assistant porte la réponse : l'accusé n'y est pas.
+    expect(calls).toEqual([
+      { userText: "Génère-moi une image", assistantText: "Voilà le chat.", source: "e1" },
+    ]);
+  });
+
+  it("une VRAIE réponse qui appelle un outil n'est jamais tronquée (borne de l'accusé)", async () => {
+    const calls: TurnEndInput[] = [];
+    const longAnswer = [
+      {
+        id: "e1",
+        type: "message",
+        message: { role: "user", content: [{ type: "text", text: "Explique-moi ceci" }] },
+      },
+      {
+        id: "e2",
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Voici une explication complète, détaillée et argumentée qui dépasse très largement la borne dure d'un accusé." },
+            { type: "toolCall", id: "c1", name: "delegate", arguments: {} },
+          ],
+        },
+      },
+    ];
+    const { handlers } = capture(fakePort({ onTurnEnd: (input) => calls.push(input) }));
+    await handlers.get("agent_end")!({}, readOnlyCtx(longAnswer));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].assistantText).toContain("explication complète");
+  });
+
   it("ignore un échange dont le prompt est SYNTHÉTIQUE (report de job)", async () => {
     const calls: TurnEndInput[] = [];
     const synthetic = [

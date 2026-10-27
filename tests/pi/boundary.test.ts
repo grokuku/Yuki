@@ -29,6 +29,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/agent-roster-extension.ts",
   "src/pi/sdk/delegation-extension.ts",
   "src/pi/sdk/heritage-extension.ts",
+  "src/pi/sdk/ack-extension.ts",
   "src/pi/sdk/heritage-tools.ts",
   "src/pi/sdk/conversation-archive-tools.ts",
   "src/pi/sdk/librarian-tools.ts",

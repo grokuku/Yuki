@@ -23,6 +23,7 @@ import type {
   MemoryPort,
 } from "../../memory/types.js";
 import { contentTextFromMessage, type RawAgentMessage } from "../events.js";
+import { ackShapedText, firstAckToolCall } from "../ack.js";
 import { stripTimestampPrefix } from "../timestamp.js";
 
 export interface MemoryExtensionOptions {
@@ -77,7 +78,22 @@ function lastExchange(
     if (!message) continue;
     if (!assistant) {
       if (message.role !== "assistant") continue;
+      // ⚠️ Dernier message assistant = ACCUSÉ SEUL (action longue lancée, rien
+      // d'autre dit) : le tour n'a rien appris, donc AUCUN souvenir. On s'arrête
+      // là plutôt que de remonter à un échange antérieur (qui n'est pas le bon).
+      //
+      // ⚠️ L'accusé est écrit par le MODÈLE : c'est son premier texte, suivi de
+      // l'appel d'outil. Ce préambule ne dit RIEN de la demande — le mémoriser
+      // polluerait la mémoire durable d'une phrase mécanique. Le critère est la
+      // FORME (`ackShapedText`, la même règle que l'hôte) : une vraie réponse qui
+      // appelle un outil n'est jamais écartée.
       const text = contentTextFromMessage(message);
+      if (
+        firstAckToolCall(message.content) !== undefined &&
+        ackShapedText(text) !== undefined
+      ) {
+        return null;
+      }
       if (text.length > 0) assistant = { text, id: entry.id };
       continue;
     }

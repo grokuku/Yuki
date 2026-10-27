@@ -13,6 +13,7 @@ import type { PiHost } from "../../src/pi/host.js";
 import { isSyntheticOrigin, ORIGIN_RECAP } from "../../src/pi/synthetic.js";
 import { parseRecapPrompt } from "../../src/recap/prompt.js";
 import { PiHostError } from "../../src/pi/errors.js";
+import { ackFallbackText, ackShapedText } from "../../src/pi/ack.js";
 import { PHASE, RunInstrumentation, type RunTtsMetrics } from "../../src/pi/instrumentation.js";
 import type {
   CompactOptions,
@@ -37,14 +38,38 @@ export interface FakeDeltaStep {
 }
 
 /**
- * Étape `ack` : le host émet un ACCUSÉ DE RÉCEPTION (action qui démarre). Elle
- * permet de vérifier le transport (trame de CONTRÔLE, aucun `seq`, jamais
- * bufferisée) et son ORDRE par rapport aux trames qui suivent.
+ * Étape `ack` : le host émet directement un ACCUSÉ DE RÉCEPTION (sans passer par
+ * le texte du modèle). Elle permet de vérifier le TRANSPORT (trame de CONTRÔLE,
+ * aucun `seq`, jamais bufferisée) et son ORDRE par rapport aux trames qui suivent.
+ *
+ * ⚠️ Pour le comportement de PRODUCTION (le modèle écrit l'accusé puis appelle
+ * l'outil), utiliser l'étape `tool` : c'est elle qui rejoue la vraie règle.
  */
 export interface FakeAckStep {
   kind: "ack";
   text: string;
   tool?: string;
+  /** Origine annoncée (`model` par défaut) : sert à MESURER le taux de repli. */
+  source?: "model" | "fallback";
+  delayMs?: number;
+}
+
+/**
+ * Étape `tool` : une ACTION LONGUE démarre, précédée (ou non) du texte que le
+ * MODÈLE a écrit.
+ *
+ * ⚠️ C'est la reproduction FIDÈLE du couple « texte puis outil dans le même
+ * tour » : le texte est streamé en `delta` de contenu s'il n'est pas un accusé,
+ * et devient la trame `ack` s'il en a la forme — exactement la règle de
+ * `src/pi/ack.ts` et de `src/pi/sdk-host.ts` (le double ne réinvente rien, il
+ * réutilise `ackShapedText` / `ackFallbackText`).
+ */
+export interface FakeToolStep {
+  kind: "tool";
+  /** Outil lancé (`delegate`, `generer_image`, `run_command`…). */
+  tool: string;
+  /** Premier texte du tour écrit par le modèle (absent = il va droit à l'outil). */
+  text?: string;
   delayMs?: number;
 }
 
@@ -54,7 +79,7 @@ export interface FakeErrorStep {
   delayMs?: number;
 }
 
-export type FakeStep = FakeDeltaStep | FakeErrorStep | FakeAckStep;
+export type FakeStep = FakeDeltaStep | FakeErrorStep | FakeAckStep | FakeToolStep;
 
 export interface FakeScript {
   name?: string;
@@ -151,6 +176,8 @@ export class FakePiHost implements PiHost {
   readonly compactedIds: string[] = [];
   /** Message d'échec armé pour la prochaine compaction. */
   private compactError?: string;
+  /** Nombre de REPLIS d'accusé déjà utilisés (index de ROTATION des variations). */
+  private ackFallbacks = 0;
   private failSendOnce: boolean;
 
   private sessionId: string;
@@ -575,13 +602,68 @@ export class FakePiHost implements PiHost {
         // Il est en revanche MÉMORISÉ pour le message assistant : c'est la
         // première ligne de la bulle, et elle survit au rechargement.
         ackText = step.text;
+        run.instrumentation.markFirstToken();
         this.emit({
           type: "ack",
           sessionId: this.sessionId,
           runId: run.runId,
           tool: step.tool ?? "delegate",
           text: step.text,
+          source: step.source ?? "model",
         });
+        continue;
+      }
+      if (step.kind === "tool") {
+        // ⚠️ RÈGLE DE PRODUCTION REJOUÉE : le modèle a écrit `text` (déjà streamé
+        // ou non) puis appelle l'outil DANS LE MÊME TOUR. On applique exactement
+        // la décision de `src/pi/sdk-host.ts` — aucune divergence possible, les
+        // deux fonctions viennent de `src/pi/ack.ts`.
+        const candidate = step.text ?? "";
+        const fromModel = ackShapedText(candidate);
+        if (fromModel !== undefined && contentText.length === 0 && ackText === undefined) {
+          ackText = fromModel;
+          run.instrumentation.markFirstToken();
+          this.emit({
+            type: "ack",
+            sessionId: this.sessionId,
+            runId: run.runId,
+            tool: step.tool,
+            text: fromModel,
+            source: "model",
+          });
+        } else if (
+          candidate.trim().length === 0 &&
+          contentText.length === 0 &&
+          ackText === undefined
+        ) {
+          // Le modèle n'a RIEN écrit : le repli parle, en ROTATION.
+          const fallback = ackFallbackText(step.tool, this.ackFallbacks);
+          this.ackFallbacks += 1;
+          if (fallback !== undefined) {
+            ackText = fallback;
+            run.instrumentation.markFirstToken();
+            this.emit({
+              type: "ack",
+              sessionId: this.sessionId,
+              runId: run.runId,
+              tool: step.tool,
+              text: fallback,
+              source: "fallback",
+            });
+          }
+        } else if (candidate.length > 0 && contentText.length === 0) {
+          // Texte trop long pour un accusé : il part comme contenu ordinaire.
+          contentText += candidate;
+          this.partial += candidate;
+          run.instrumentation.markFirstToken();
+          this.emit({
+            type: "delta",
+            sessionId: this.sessionId,
+            runId: run.runId,
+            channel: "content",
+            text: candidate,
+          });
+        }
         continue;
       }
       run.instrumentation.markFirstToken();

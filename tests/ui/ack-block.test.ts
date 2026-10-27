@@ -94,7 +94,7 @@ describe("câblage de la trame `ack` dans app.js", () => {
   });
 
   it("pose l'accusé DANS la bulle courante (aucun bloc séparé)", () => {
-    expect(app).toContain("ackBlocks.show(currentAssistant, frame.text)");
+    expect(app).toContain("ackBlocks.show(currentAssistant, frame.text, frame.source)");
     // L'ancienne insertion « juste avant la bulle » a disparu.
     expect(app).not.toContain("ackBlocks.show(frame.text, { before:");
   });

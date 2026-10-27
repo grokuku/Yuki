@@ -345,17 +345,21 @@ export interface TranscriptEntry {
   /** Sujet visé par le récapitulatif (entrée `recap` uniquement). */
   subject?: string;
   /**
-   * ACCUSÉ DE RÉCEPTION de ce message assistant (« C'est parti. », « Je m'en
-   * occupe. ») : la PREMIÈRE ligne de la réponse, affichée EN TÊTE du corps de
-   * la bulle (voir `public/ui/ack-block.js`).
+   * ACCUSÉ DE RÉCEPTION de ce message assistant (« C'est parti. », « Deux
+   * secondes, je m'en occupe. ») : la PREMIÈRE ligne de la réponse, affichée EN
+   * TÊTE du corps de la bulle (voir `public/ui/ack-block.js`).
    *
-   * ⚠️ C'est une ligne de STATUT, traitée séparément du contenu à dessein :
-   *  - elle n'est JAMAIS concaténée à `text` : le contenu du message reste
-   *    exactement ce que le modèle a dit (donc jamais prononcé par la synthèse
-   *    vocale, jamais dans le contexte du modèle, jamais un souvenir) ;
-   *  - elle est PERSISTÉE à part (`yuki.run_ack`, enfant de l'entrée de
-   *    message) : elle revient donc à l'identique après un rechargement, y
-   *    compris après un redémarrage du gateway ;
+   * ⚠️ Le TEXTE est écrit par le MODÈLE (c'est le premier texte de son tour),
+   * puis RECONNU par l'hôte quand un outil d'action longue démarre dans le même
+   * message. Le repli en dur ne parle que s'il n'a rien écrit. C'est une ligne de
+   * STATUT, traitée séparément du contenu à dessein :
+   *  - elle est RETENUE pendant le flux et n'est JAMAIS émise comme `delta` de
+   *    contenu (donc jamais prononcée par la synthèse vocale, jamais dans le
+   *    corps affiché) ;
+   *  - elle est PERSISTÉE à part (`yuki.run_ack`, données `{tool, text}`) : elle
+   *    revient donc à l'identique après un rechargement, y compris après un
+   *    redémarrage du gateway, et le message qui ne portait QU'elle n'ouvre pas
+   *    de bulle de corps (aucun doublon) ;
    *  - elle peut exister SANS contenu (run qui s'achève sur une action, sans
    *    texte) : la bulle montre alors l'accusé seul — jamais une bulle vide.
    */
@@ -558,8 +562,15 @@ export type PiEvent =
       runId: string;
       /** Outil dont l'action démarre (`delegate`, `generer_image`, `run_command`). */
       tool: string;
-      /** Texte COURT et HUMAIN (« Je m'en occupe. », « C'est parti. »). */
+      /** Texte COURT et HUMAIN, écrit par le MODÈLE (sinon par le repli). */
       text: string;
+      /**
+       * ORIGINE de la phrase : `model` (le premier texte du tour) ou `fallback`
+       * (le modèle est allé droit à l'outil, le repli en dur a parlé).
+       * Sert à MESURER le taux de repli : s'il est élevé, c'est la consigne du
+       * prompt qu'il faut renforcer, pas le repli qu'il faut multiplier.
+       */
+      source: "model" | "fallback";
     }
   | {
       type: "run_finished";

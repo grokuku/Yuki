@@ -471,22 +471,47 @@ describe("pi.events — accusé de réception persisté (run_ack)", () => {
     expect(JSON.stringify(transcript)).not.toContain("occupe");
   });
 
-  it("ne lit JAMAIS de phrase dans le JSONL : elle est REDÉRIVÉE (source unique)", () => {
-    // Une entrée qui contiendrait une phrase (version future, données trafiquées)
-    // ne peut pas la faire apparaître : seul le nom d'outil compte.
+  it("lit le TEXTE persisté (celui du modèle) et le restitue VERBATIM", () => {
+    // ⚠️ Le texte de l'accusé est écrit par le MODÈLE : il faut le conserver, sinon
+    // un rechargement montrerait une autre phrase que celle qui a été dite.
     expect(
       ackFromCustomEntry({
         type: "custom",
         customType: RUN_ACK_CUSTOM_TYPE,
-        data: { tool: "delegate", text: "PHRASE-INJECTÉE" },
+        data: { tool: "delegate", text: "  Deux secondes, je m'en occupe.  " },
       }),
-    ).toBe("Je m'en occupe.");
-    expect(JSON.stringify(
-      transcriptFromEntries([
-        assistantEntry("a1", "Réponse"),
-        ackEntry("k1", "a1", { tool: "delegate", text: "PHRASE-INJECTÉE" }),
-      ]),
-    )).not.toContain("PHRASE-INJECTÉE");
+    ).toEqual({ tool: "delegate", text: "Deux secondes, je m'en occupe." });
+    const transcript = transcriptFromEntries([
+      assistantEntry("a1", "Deux secondes, je m'en occupe."),
+      ackEntry("k1", "a1", { tool: "delegate", text: "Deux secondes, je m'en occupe." }),
+    ]);
+    // Le message ne portait QUE l'accusé : il n'ouvre pas de bulle de corps, il
+    // devient la première ligne de la bulle (aucune duplication de la phrase).
+    expect(transcript).toEqual([
+      { role: "assistant", text: "", id: "a1", ack: "Deux secondes, je m'en occupe." },
+    ]);
+    expect(JSON.stringify(transcript).match(/Deux secondes/g)).toHaveLength(1);
+  });
+
+  it("REDÉRIVE le libellé d'une entrée d'une version antérieure (données = {tool})", () => {
+    // Les sessions écrites avant ce changement ne portaient que le nom d'outil.
+    expect(
+      ackFromCustomEntry({
+        type: "custom",
+        customType: RUN_ACK_CUSTOM_TYPE,
+        data: { tool: "delegate" },
+      }),
+    ).toEqual({ tool: "delegate", text: "Je m'en occupe." });
+    // Un `text` non exploitable (type inattendu, vide) retombe sur la dérivation.
+    for (const text of ["", "   ", 42, null]) {
+      expect(
+        ackFromCustomEntry({
+          type: "custom",
+          customType: RUN_ACK_CUSTOM_TYPE,
+          data: { tool: "generer_image", text },
+        }),
+      ).toEqual({ tool: "generer_image", text: "C'est parti." });
+    }
   });
 
   it("ignore un outil inconnu ou des données malformées (jamais d'accusé inventé)", () => {

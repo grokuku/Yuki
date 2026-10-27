@@ -660,10 +660,12 @@ const imageBlocks = createImageBlocks({ container: els.conversation, zoom: image
 
 /* ─── ACCUSÉS DE RÉCEPTION dans la conversation ────────────────────────────
  * Trame de CONTRÔLE éphémère `ack` (aucun `seq` consommé, jamais bufferisée,
- * JAMAIS prononcée) : une ligne courte (« Je m'en occupe. ») au moment où une
- * ACTION démarre (délégation, génération d'image, commande). Jamais pour une
- * question simple : c'est le SERVEUR qui décide, sur un test booléen (une action
- * a-t-elle été lancée ?), sans aucun calcul ni appel modèle supplémentaire. */
+ * JAMAIS prononcée) : une ligne courte au moment où une ACTION démarre
+ * (délégation, génération d'image, commande).
+ * ⚠️ Le TEXTE vient du MODÈLE (c'est le premier texte de son tour) ; le serveur
+ * ne le remplace que si le modèle n'a rien écrit (`source: "fallback"`). Jamais
+ * pour une question simple : c'est le SERVEUR qui décide, sur un test de forme
+ * (une action longue a-t-elle été lancée ?), sans appel modèle supplémentaire. */
 const ackBlocks = createAckBlocks({ container: els.conversation });
 
 /* ─── FICHIERS dans la conversation (envoi ET réception) ───────────────────
@@ -1583,7 +1585,7 @@ function handleFrame(frame) {
     if (!currentAssistant) {
       currentAssistant = appendAssistantMessage(null, pinned, Date.now());
     }
-    ackBlocks.show(currentAssistant, frame.text);
+    ackBlocks.show(currentAssistant, frame.text, frame.source);
     pinIfNeeded(pinned);
     return;
   }

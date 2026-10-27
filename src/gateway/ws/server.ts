@@ -305,12 +305,14 @@ export function toServerMessage(event: PiEvent): ServerMessage {
     case "ack":
       // ACCUSÉ DE RÉCEPTION : trame de CONTRÔLE (aucun `seq` consommé, jamais
       // bufferisée) ⇒ jamais dans le rejeu, le snapshot, le transcript ou la
-      // mémoire, et JAMAIS prononcée (le TTS ne reçoit que les `delta` de contenu).
+      // mémoire, et JAMAIS prononcée (le TTS ne reçoit que les `delta` de contenu ;
+      // le texte de l'accusé n'est jamais émis comme un delta).
       return {
         type: "ack",
         runId: event.runId,
         tool: event.tool,
         text: event.text,
+        source: event.source,
       };
     case "run_summary":
       return {

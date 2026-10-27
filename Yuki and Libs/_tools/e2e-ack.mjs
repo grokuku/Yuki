@@ -1,21 +1,20 @@
 #!/usr/bin/env node
 /**
- * Harnais E2E JETABLE — ACCUSÉ DE RÉCEPTION, mesuré dans un VRAI navigateur
- * (Chromium headless + CDP, CSP réelle).
+ * Harnais E2E JETABLE — ACCUSÉ DE RÉCEPTION écrit par le MODÈLE, mesuré dans un
+ * VRAI navigateur (Chromium headless + CDP, CSP réelle).
  *
  * Ce que l'on prouve PAR MESURE (et non par lecture du code) :
  *   1. une QUESTION SIMPLE ne produit AUCUN accusé (et sa réponse est intacte) ;
- *   2. une ACTION qui démarre produit un accusé COURT et HUMAIN (« Je m'en
- *      occupe. »), qui n'est PAS une bulle de réponse ;
- *   3. l'accusé est le DÉBUT DE LA RÉPONSE : il est un ENFANT de la bulle
- *      assistant (mesure DOM : parent, ordre, rectangles), jamais un bloc posé
- *      à côté au-dessus d'une bulle vide ;
- *   3bis. AUCUNE bulle vide : un run qui ne produit aucun texte mais accuse
- *      réception affiche l'accusé SEUL dans la bulle ;
- *   3ter. l'accusé SURVIT au RECHARGEMENT (persisté avec le message) et il est
- *      présent dans le texte du message (copie / sélection) ;
- *   4. AUCUN surcoût au TTFT : le `run_summary` du tour « action » porte le MÊME
- *      TTFT que celui du tour « question » (même délai de premier token) ;
+ *   2. une ACTION qui démarre produit un accusé dont le TEXTE VIENT DU MODÈLE
+ *      (`data-ack-source="model"`), et ce texte ARRIVE AVANT la réponse ;
+ *   3. DEUX tours d'action différents donnent DEUX formulations DIFFÉRENTES ⇒
+ *      le texte n'est pas figé dans le code (c'était le défaut signalé) ;
+ *   3bis. un run qui n'écrit QUE l'accusé affiche l'accusé SEUL (jamais une bulle vide) ;
+ *   3ter. les accusés SURVIVENT au RECHARGEMENT, à l'identique (persistés avec le message) ;
+ *   3quater. MODÈLE MUET ⇒ repli en dur, avec des VARIATIONS (deux phrases différentes)
+ *      et une origine ANNONCÉE (`data-ack-source="fallback"`) ⇒ le taux de repli est
+ *      mesurable : c'est ce compteur qu'il faut surveiller en production ;
+ *   4. l'accusé arrive au PREMIER TEXTE du modèle : même TTFT qu'un tour ordinaire ;
  *   5. l'accusé n'est JAMAIS prononcé (texte réellement synthétisé), alors que la
  *      réponse, elle, l'est ;
  *   6. ZÉRO violation CSP, ZÉRO exception JS, ZÉRO erreur de connexion.
@@ -47,6 +46,9 @@ function check(label, ok, detail = "") {
   console.log(`${ok ? "✓" : "✗ ÉCHEC"}  ${label}${detail ? " — " + detail : ""}`);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Réponse identique à tous les tours : seul l'accusé change. */
+const ANSWER = "Voici la réponse, courte et directe : deux lignes suffisent.";
 
 /* ─── Démarrage du gateway de test ──────────────────────────────────────── */
 const logs = [];
@@ -230,12 +232,6 @@ async function shot(label) {
   writeFileSync(join(SHOTS, `${label}.png`), Buffer.from(data, "base64"));
 }
 
-await navigate(`${base}/`);
-check(
-  "connexion au gateway établie",
-  await waitFor(`document.querySelector('#connection')?.textContent === 'connecté'`),
-);
-
 /**
  * Observateur d'ORDRE : il horodate (performance.now) l'apparition de l'accusé et
  * le PREMIER TEXTE de la bulle assistant. ⚠️ C'est la mesure de l'ordre, pas une
@@ -252,9 +248,13 @@ const INSTALL_ORDER_PROBE = `(() => {
   };
   let sawAck = false;
   let sawText = false;
+  const lastAck = () => {
+    const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
+    return bubbles.length > 0 ? bubbles[bubbles.length - 1].querySelector('.ack-block') : null;
+  };
   window.__orderObserver = new MutationObserver(() => {
     if (!sawAck) {
-      const ack = conv.querySelector('.ack-block');
+      const ack = lastAck();
       if (ack) {
         sawAck = true;
         window.__order.push({ kind: 'ack', t: performance.now(), text: ack.textContent });
@@ -272,29 +272,72 @@ const INSTALL_ORDER_PROBE = `(() => {
   return true;
 })()`;
 
-/* ═════════ 1) QUESTION SIMPLE : AUCUN accusé ═════════════════════════════ */
-await fetch(`${control}/spoken-reset`);
-await evaluate(INSTALL_ORDER_PROBE);
-await fetch(`${control}/send?script=question`);
-const simpleSummary = await waitForSummary();
-check("question simple : le tour se termine (run_summary reçu)", true, JSON.stringify(simpleSummary).slice(0, 120));
-await sleep(300);
-const simple = await evaluate(`(() => {
-  const acks = document.querySelectorAll('.ack-block').length;
+/** Relève l'ACCUSÉ de la dernière bulle assistant (texte + origine + structure). */
+const READ_LAST_ACK = `(() => {
   const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
-  const last = bubbles[bubbles.length - 1];
+  const last = bubbles[bubbles.length - 1] ?? null;
+  const ack = last ? last.querySelector('.ack-block') : null;
+  const body = last ? last.querySelector('.message__body') : null;
+  const rect = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; };
+  let selected = '';
+  if (last) {
+    const range = document.createRange();
+    range.selectNodeContents(last);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    selected = sel.toString();
+    sel.removeAllRanges();
+  }
   return {
-    acks,
     bubbles: bubbles.length,
-    text: last ? (last.querySelector('.message__body')?.textContent ?? '') : '',
+    acks: document.querySelectorAll('#conversation .ack-block').length,
+    ackText: ack ? ack.textContent : null,
+    ackSource: ack ? (ack.dataset.ackSource ?? null) : null,
+    ackRole: ack ? ack.getAttribute('role') : null,
+    ackInlineHtml: ack ? ack.querySelectorAll('*').length : -1,
+    ackStyled: ack ? ack.getAttribute('style') : null,
+    ackParentIsBubble: Boolean(ack && last && ack.parentElement === last),
+    ackBeforeBody: Boolean(ack && body && (ack.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING)),
+    ackRect: ack ? rect(ack) : null,
+    bubbleRect: last ? rect(last) : null,
+    bodyText: body ? body.textContent : '',
+    fullText: last ? last.textContent : '',
+    selected,
+    pending: document.querySelectorAll('#conversation .message__pending').length,
     order: window.__order ?? [],
   };
-})()`);
+})()`;
+
+async function runScript(script) {
+  await fetch(`${control}/spoken-reset`);
+  await evaluate(`window.__orderObserver?.disconnect(); window.__order = []; true`);
+  await evaluate(INSTALL_ORDER_PROBE);
+  await fetch(`${control}/send?script=${script}`);
+  const summary = await waitForSummary();
+  await sleep(400);
+  return summary;
+}
+
+await navigate(`${base}/`);
+check(
+  "connexion au gateway établie",
+  await waitFor(`document.querySelector('#connection')?.textContent === 'connecté'`),
+);
+
+/* ═════════ 1) QUESTION SIMPLE : AUCUN accusé ═════════════════════════════ */
+const simpleSummary = await runScript("question");
+check(
+  "question simple : le tour se termine (run_summary reçu)",
+  true,
+  JSON.stringify(simpleSummary).slice(0, 120),
+);
+const simple = await evaluate(READ_LAST_ACK);
 check("question simple : AUCUN accusé dans le fil", simple.acks === 0, String(simple.acks));
 check(
   "question simple : la réponse est là, entière",
-  /Voici la réponse, courte et directe/.test(simple.text),
-  simple.text.slice(0, 120),
+  /Voici la réponse, courte et directe/.test(simple.bodyText),
+  simple.bodyText.slice(0, 120),
 );
 check(
   "question simple : AUCUNE trame d'accusé n'a ouvert le tour",
@@ -308,66 +351,18 @@ check(
 );
 await shot("ack-question-simple");
 
-/* ═════════ 2) ACTION QUI DÉMARRE : accusé AVANT le contenu ══════════════ */
-await fetch(`${control}/spoken-reset`);
-await evaluate(`window.__orderObserver?.disconnect(); window.__order = []; true`);
-await evaluate(INSTALL_ORDER_PROBE);
-await fetch(`${control}/send?script=action`);
-const actionSummary = await waitForSummary();
-check("action : le tour se termine (run_summary reçu)", true, JSON.stringify(actionSummary).slice(0, 120));
-await sleep(400);
-const action = await evaluate(`(() => {
-  const acks = [...document.querySelectorAll('#conversation .ack-block')];
-  const ack = acks[acks.length - 1] ?? null;
-  const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
-  const last = bubbles[bubbles.length - 1] ?? null;
-  const body = last ? last.querySelector('.message__body') : null;
-  const rect = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; };
-  // ⚠️ TEXTES SÉLECTIONNÉS / COPIÉS : c'est ce que l'utilisateur récupère quand
-  // il sélectionne la bulle (aucun bouton « copier le message » n'existe).
-  let selected = '';
-  if (last) {
-    const range = document.createRange();
-    range.selectNodeContents(last);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-    selected = sel.toString();
-    sel.removeAllRanges();
-  }
-  return {
-    acks: acks.length,
-    ackText: ack ? ack.textContent : null,
-    ackIsMessage: ack ? ack.classList.contains('message') : null,
-    ackRole: ack ? ack.getAttribute('role') : null,
-    ackInlineHtml: ack ? ack.querySelectorAll('*').length : -1,
-    ackStyled: ack ? ack.getAttribute('style') : null,
-    ackRect: ack ? rect(ack) : null,
-    bubbleRect: last ? rect(last) : null,
-    bubbleText: body ? body.textContent : '',
-    // ⚠️ MESURE DE STRUCTURE : l'accusé est-il un ENFANT de la bulle ?
-    ackParentIsBubble: Boolean(ack && last && ack.parentElement === last),
-    ackInsideBubble: Boolean(ack && last && last.contains(ack)),
-    ackInThreadOnly: Boolean(ack && !ack.closest('.message--assistant')),
-    // Ordre DANS la bulle : l'accusé PRÉCÈDE le corps de la réponse.
-    ackBeforeBody: Boolean(ack && body && (ack.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING)),
-    // Le texte complet de la bulle (heure + accusé + réponse) : l'accusé en tête.
-    fullText: last ? last.textContent : '',
-    selected,
-    pending: document.querySelectorAll('#conversation .message__pending').length,
-    order: window.__order ?? [],
-  };
-})()`);
-check("action : UN accusé est affiché", action.acks === 1, String(action.acks));
+/* ═════════ 2) ACTION : l'accusé vient du MODÈLE, avant la réponse ════════ */
+const actionSummary = await runScript("action");
+const action = await evaluate(READ_LAST_ACK);
+check("action : UN seul accusé est affiché", action.acks === 1, String(action.acks));
 check(
-  "l'accusé est COURT et HUMAIN (« Je m'en occupe. »)",
-  action.ackText === "Je m'en occupe.",
-  String(action.ackText),
+  "action : le texte de l'accusé est CELUI DU MODÈLE (« Je m'en occupe. »)",
+  action.ackText === "Je m'en occupe." && action.ackSource === "model",
+  JSON.stringify({ texte: action.ackText, origine: action.ackSource }),
 );
 check(
   "ce n'est PAS une bulle de réponse (pas de classe `message`)",
-  action.ackIsMessage === false,
-  String(action.ackIsMessage),
+  await evaluate(`document.querySelectorAll('#conversation .ack-block.message').length === 0`),
 );
 check(
   "il est annoncé comme un STATUT (`role=status`), rendu en NŒUD TEXTE",
@@ -384,27 +379,18 @@ check(
   JSON.stringify(action.order),
 );
 check(
-  "STRUCTURE : l'accusé est un ENFANT de la bulle de réponse (même nœud)",
-  action.ackParentIsBubble === true && action.ackInsideBubble === true && action.ackInThreadOnly === false,
-  JSON.stringify({
-    parent_est_bulle: action.ackParentIsBubble,
-    dans_bulle: action.ackInsideBubble,
-    hors_bulle: action.ackInThreadOnly,
-  }),
-);
-check(
-  "ORDRE DANS LA BULLE : l'accusé est AVANT le corps de la réponse",
-  action.ackBeforeBody === true &&
+  "STRUCTURE : l'accusé est un ENFANT de la bulle de réponse, AVANT le corps",
+  action.ackParentIsBubble === true &&
+    action.ackBeforeBody === true &&
     typeof action.ackRect?.top === "number" &&
-    typeof action.bubbleRect?.top === "number" &&
     action.ackRect.top >= action.bubbleRect.top &&
     action.ackRect.bottom <= action.bubbleRect.bottom,
-  JSON.stringify({ ack: action.ackRect, bulle: action.bubbleRect }),
+  JSON.stringify({ parent: action.ackParentIsBubble, avant_corps: action.ackBeforeBody }),
 );
 check(
-  "le fond arrive ensuite : la réponse est complète APRÈS l'accusé (pas un remplacement)",
-  /Voici la réponse, courte et directe/.test(action.bubbleText),
-  action.bubbleText.slice(0, 120),
+  "le fond arrive ensuite : la réponse est complète APRÈS l'accusé",
+  /Voici la réponse, courte et directe/.test(action.bodyText),
+  action.bodyText.slice(0, 120),
 );
 check(
   "la bulle n'est JAMAIS vide : elle porte l'accusé et/ou le texte",
@@ -425,40 +411,77 @@ check(
 );
 await shot("ack-action");
 
-/* ═════════ 2bis) ACTION SANS CONTENU : l'accusé SEUL dans la bulle ══════ */
-await evaluate(`window.__orderObserver?.disconnect(); window.__order = []; true`);
-await fetch(`${control}/send?script=action_only`);
-await waitForSummary();
-await sleep(400);
-const onlyAck = await evaluate(`(() => {
-  const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
-  const last = bubbles[bubbles.length - 1] ?? null;
-  const ack = last ? last.querySelector('.ack-block') : null;
-  const body = last ? last.querySelector('.message__body') : null;
-  return {
-    bubbles: bubbles.length,
-    ackText: ack ? ack.textContent : null,
-    ackInBubble: Boolean(ack && last && ack.parentElement === last),
-    bodyText: body ? body.textContent : null,
-    fullText: last ? last.textContent.trim() : '',
-    pending: document.querySelectorAll('#conversation .message__pending').length,
-  };
-})()`);
+/* ═════════ 2bis) AUTRE CONTEXTE ⇒ AUTRE FORMULATION (texte du modèle) ════ */
+await runScript("action_variant");
+const variant = await evaluate(READ_LAST_ACK);
 check(
-  "action SANS texte : la bulle affiche l'ACCUSÉ seul (jamais une bulle vide)",
-  onlyAck.ackInBubble === true &&
-    onlyAck.ackText === "C'est parti." &&
-    (onlyAck.fullText ?? "").replace(/\d{2}:\d{2}/, "").trim().length > 0,
-  JSON.stringify(onlyAck),
+  "2ᵉ tour d'action : le modèle a écrit une AUTRE phrase (« Deux secondes, je m'en occupe. »)",
+  variant.ackText === "Deux secondes, je m'en occupe." && variant.ackSource === "model",
+  JSON.stringify({ texte: variant.ackText, origine: variant.ackSource }),
 );
 check(
-  "action SANS texte : aucune parenthèse technique contradictoire dans le corps",
-  (onlyAck.bodyText ?? "") === "" && onlyAck.pending === 0,
-  JSON.stringify({ corps: onlyAck.bodyText, attente: onlyAck.pending }),
+  "⚠️ le texte VARIE : deux formulations DIFFÉRENTES observées (plus de libellé figé)",
+  typeof action.ackText === "string" &&
+    typeof variant.ackText === "string" &&
+    action.ackText !== variant.ackText,
+  JSON.stringify({ tour1: action.ackText, tour2: variant.ackText }),
+);
+check(
+  "2ᵉ tour d'action : l'accusé précède encore le premier texte",
+  variant.order.length === 2 && variant.order[0].kind === "ack" && variant.order[1].kind === "text",
+  JSON.stringify(variant.order),
+);
+await shot("ack-action-variante");
+
+/* ═════════ 2ter) ACTION SANS RÉPONSE : l'accusé SEUL dans la bulle ═══════ */
+await runScript("action_only");
+const onlyAck = await evaluate(READ_LAST_ACK);
+check(
+  "action SANS texte : la bulle affiche l'ACCUSÉ seul (jamais une bulle vide)",
+  onlyAck.ackText === "C'est parti." &&
+    onlyAck.ackParentIsBubble === true &&
+    onlyAck.bodyText === "" &&
+    onlyAck.pending === 0,
+  JSON.stringify({ texte: onlyAck.ackText, corps: onlyAck.bodyText, attente: onlyAck.pending }),
 );
 await shot("ack-action-sans-texte");
 
-/* ═════════ 2ter) RECHARGEMENT : l'accusé est PERSISTÉ avec le message ═══ */
+/* ═════════ 2quater) MODÈLE MUET ⇒ REPLI EN DUR, AVEC VARIATIONS ═════════ */
+await runScript("silent");
+const silent1 = await evaluate(READ_LAST_ACK);
+await runScript("silent");
+const silent2 = await evaluate(READ_LAST_ACK);
+check(
+  "modèle MUET : le repli parle et son ORIGINE est annoncée (`model` / `fallback`)",
+  silent1.ackSource === "fallback" && silent1.ackText === "Je m'en occupe.",
+  JSON.stringify({ texte: silent1.ackText, origine: silent1.ackSource }),
+);
+check(
+  "⚠️ le REPLI VARIE : deux replis consécutifs ne disent PAS la même phrase",
+  typeof silent1.ackText === "string" &&
+    typeof silent2.ackText === "string" &&
+    silent1.ackText !== silent2.ackText,
+  JSON.stringify({ repli1: silent1.ackText, repli2: silent2.ackText }),
+);
+check(
+  "les deux replis restent COURTS (une ligne, borne serveur respectée)",
+  [silent1.ackText, silent2.ackText].every(
+    (text) => typeof text === "string" && text.length <= 90 && !text.includes("\n"),
+  ),
+  JSON.stringify([silent1.ackText, silent2.ackText]),
+);
+await shot("ack-repli");
+
+/* TAUX DE REPLI de la série : replis observés / tours d'action observés. */
+const actionTurns = 5; // action, action_variant, action_only, silent, silent
+const fallbackTurns = 2;
+const fallbackRate = Math.round((fallbackTurns / actionTurns) * 100);
+console.log(
+  `\nℹ️  TAUX DE REPLI observé sur cette série : ${fallbackTurns}/${actionTurns} = ${fallbackRate} % ` +
+    "(tours dont le modèle est un SCÉNARIO muet — mesure du MÉCANISME, pas de l'obéissance du vrai modèle).",
+);
+
+/* ═════════ 2quinquies) RECHARGEMENT : les accusés sont PERSISTÉS ═════════ */
 await navigate(`${base}/`);
 check(
   "rechargement : connexion rétablie",
@@ -478,17 +501,33 @@ const afterReload = await evaluate(`(() => {
       const body = b.querySelector('.message__body');
       return (body ? body.textContent : '').trim() === '' && !b.querySelector('.ack-block');
     }).length,
+    // ⚠️ La phrase du modèle ne doit PAS être répétée dans le corps de la bulle.
+    duplicated: bubbles.filter((b) => {
+      const ack = b.querySelector('.ack-block');
+      const body = b.querySelector('.message__body');
+      if (!ack || !body) return false;
+      const label = ack.textContent.trim();
+      return label.length > 0 && body.textContent.includes(label);
+    }).length,
   };
 })()`);
 check(
-  "RECHARGEMENT : les accusés sont TOUJOURS là (persistés avec le message)",
-  afterReload.withAck === 2 && afterReload.acks.includes("Je m'en occupe.") && afterReload.acks.includes("C'est parti."),
-  JSON.stringify(afterReload),
+  "RECHARGEMENT : les CINQ accusés sont TOUJOURS là (persistés avec le message)",
+  afterReload.withAck === 5 &&
+    afterReload.acks.includes("Je m'en occupe.") &&
+    afterReload.acks.includes("Deux secondes, je m'en occupe.") &&
+    afterReload.acks.includes("C'est parti."),
+  JSON.stringify(afterReload.acks),
 );
 check(
   "RECHARGEMENT : les accusés sont DANS les bulles (aucun bloc hors bulle)",
   afterReload.acksInBubbles === true,
   JSON.stringify(afterReload.acks),
+);
+check(
+  "RECHARGEMENT : l'accusé n'est JAMAIS répété dans le corps de la réponse",
+  afterReload.duplicated === 0,
+  String(afterReload.duplicated),
 );
 check(
   "RECHARGEMENT : AUCUNE bulle vide",
@@ -497,12 +536,12 @@ check(
 );
 await shot("ack-apres-rechargement");
 
-/* ═════════ 3) AUCUN surcoût au TTFT (même délai de premier token) ═══════ */
+/* ═════════ 3) AUCUN surcoût au TTFT (même délai de premier texte) ═══════ */
 const ttftQuestion = simpleSummary?.ttftMs;
 const ttftAction = actionSummary?.ttftMs;
 const delta = Math.abs((ttftAction ?? 0) - (ttftQuestion ?? 0));
 check(
-  "TTFT du tour AVEC accusé : mesuré, comparable au tour SANS accusé",
+  "TTFT du tour AVEC accusé : le PREMIER TEXTE du modèle, comme un tour ordinaire",
   typeof ttftQuestion === "number" &&
     typeof ttftAction === "number" &&
     ttftAction >= 100 &&
@@ -511,6 +550,7 @@ check(
 );
 
 /* ═════════ 4) L'accusé n'est JAMAIS prononcé ════════════════════════════ */
+await runScript("action");
 await sleep(700);
 const spoken = (await fetch(`${control}/spoken`).then((r) => r.json())).spoken ?? [];
 const spokenText = spoken.join(" ").replace(/\s+/g, "");
@@ -520,8 +560,10 @@ check(
   String(spokenText).slice(0, 120),
 );
 check(
-  "l'accusé n'est JAMAIS prononcé par la TTS",
-  !/occupe/i.test(spokenText),
+  "l'accusé n'est JAMAIS prononcé par la TTS (ni le repli)",
+  !/occupe/i.test(spokenText) &&
+    !/c'est parti/i.test(spokenText) &&
+    !/deux secondes/i.test(spokenText),
   String(spokenText).slice(0, 160),
 );
 

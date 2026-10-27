@@ -177,23 +177,30 @@ export const RUN_METRICS_CUSTOM_TYPE = "yuki.run_metrics";
  * l'accusé revient donc après un RECHARGEMENT (et même après un redémarrage du
  * gateway, puisque le JSONL de session est la source de reprise).
  *
- * ⚠️ Le `data` ne contient QUE le NOM DE L'OUTIL (`{"tool":"generer_image"}`),
- * jamais la phrase affichée : le libellé reste l'unique affaire de
- * `./ack.ts` (`ackTextForTool`), donc il ne peut pas se figer dans l'historique
- * ni fuiter comme phrase du modèle. Le SDK Pi IGNORE les entrées `custom` dans
- * le contexte du modèle (`sessionEntryToContextMessages` renvoie `[]`) : un
- * accusé n'est donc jamais mémoire, jamais un tour du modèle.
+ * ⚠️ Le `data` porte `{tool, text}` : le TEXTE est conservé verbatim, parce qu'il
+ * est désormais écrit par le MODÈLE (c'est le premier texte du tour). Sans lui, un
+ * rechargement montrerait une autre phrase que celle qui a été dite. Les entrées
+ * d'une version antérieure ne portaient que `{tool}` : leur libellé est alors
+ * REDÉRIVÉ par `ackTextForTool` (sessions déjà écrites). Le SDK Pi IGNORE les
+ * entrées `custom` dans le contexte du modèle (`sessionEntryToContextMessages`
+ * renvoie `[]`) : un accusé n'est donc jamais mémoire, jamais un tour du modèle.
  */
 export const RUN_ACK_CUSTOM_TYPE = "yuki.run_ack";
 
 /**
- * Extrait l'ACCUSÉ d'une entrée `custom` de type `yuki.run_ack`.
+ * ACCUSÉ contenu dans une entrée `custom` de type `yuki.run_ack`.
  *
- * Le texte n'est PAS lu dans le JSONL : il est REDÉRIVÉ du nom d'outil par la
- * règle unique (`ackTextForTool`). Un outil inconnu (ou une entrée d'une version
- * antérieure) est ignoré — jamais un accusé inventé.
+ * `text` est le texte RÉEL (écrit par le modèle ou par le repli). À défaut
+ * (entrée d'une version antérieure), il est redérivé du nom d'outil par la règle
+ * unique (`ackTextForTool`). Un outil inconnu est ignoré — jamais un accusé
+ * inventé.
  */
-export function ackFromCustomEntry(raw: unknown): string | undefined {
+export interface StoredAck {
+  tool: string;
+  text: string;
+}
+
+export function ackFromCustomEntry(raw: unknown): StoredAck | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const entry = raw as { type?: unknown; customType?: unknown; data?: unknown };
   if (entry.type !== "custom" || entry.customType !== RUN_ACK_CUSTOM_TYPE) {
@@ -201,9 +208,15 @@ export function ackFromCustomEntry(raw: unknown): string | undefined {
   }
   const data = entry.data;
   if (!data || typeof data !== "object") return undefined;
-  const tool = (data as Record<string, unknown>).tool;
+  const record = data as Record<string, unknown>;
+  const tool = record.tool;
   if (typeof tool !== "string") return undefined;
-  return ackTextForTool(tool);
+  const stored = record.text;
+  if (typeof stored === "string" && stored.trim().length > 0) {
+    return { tool, text: stored.trim() };
+  }
+  const legacy = ackTextForTool(tool);
+  return legacy === undefined ? undefined : { tool, text: legacy };
 }
 
 /**
@@ -283,10 +296,86 @@ export function transcriptFromEntries(
 ): TranscriptEntry[] {
   const prefixes = options.syntheticUserPrefixes ?? [];
   const transcript: TranscriptEntry[] = [];
-  // Premier passage : le transcript (contenu seul). On mémorise l'index de
-  // chaque message ASSISTANT par identifiant d'entrée, pour corréler ensuite
-  // les métriques (`parentId`) dans un second passage.
+  // Index de session par identifiant : sert à remonter la chaîne des `parentId`.
+  const byId = new Map<string, unknown>();
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const id = (raw as { id?: unknown }).id;
+    if (typeof id === "string") byId.set(id, raw);
+  }
+  /**
+   * Identifiant du MESSAGE ASSISTANT dont une entrée `custom` dépend.
+   *
+   * ⚠️ Le parent n'est pas toujours le message : deux entrées `custom` d'un même
+   * message (accusé puis métriques) forment une CHAÎNE. On remonte donc les
+   * `parentId` — le rattachement est ainsi insensible à l'ordre d'écriture.
+   */
+  const assistantMessageIdOf = (raw: unknown): string | undefined => {
+    let current = raw;
+    // Borne dure : une chaîne corrompue (cycle) ne boucle pas indéfiniment.
+    for (let hops = 0; hops < 64; hops += 1) {
+      if (!current || typeof current !== "object") return undefined;
+      const parentId = (current as { parentId?: unknown }).parentId;
+      if (typeof parentId !== "string") return undefined;
+      const parent = byId.get(parentId);
+      if (parent === undefined) return undefined;
+      const parentEntry = parent as { type?: unknown; message?: unknown };
+      if (parentEntry.type === "message") {
+        const role = (parentEntry.message as RawAgentMessage | undefined)?.role;
+        return role === "assistant" ? parentId : undefined;
+      }
+      current = parent;
+    }
+    return undefined;
+  };
+  // PASSAGE 0 — ACCUSÉS décidés en direct. C'est la SEULE source de vérité : elle
+  // reproduit exactement ce que l'interface a affiché (même décision, même texte),
+  // y compris quand le repli a parlé parce que le modèle n'avait rien écrit.
+  //
+  // Deux vues, pour deux besoins distincts :
+  //  - `ackByMessageId` : l'accusé rattaché au message que l'entrée `custom` décore
+  //    (le message qui a OUVERT la bulle côté direct) ;
+  //  - `ackTexts` : l'ensemble des phrases d'accusé. Un message dont le TEXTE est
+  //    exactement l'une d'elles n'est pas une réponse : c'est le préambule que le
+  //    MODÈLE a écrit avant l'appel d'outil (il n'ouvre donc pas de bulle).
+  const ackByMessageId = new Map<string, StoredAck>();
+  const ackTexts = new Set<string>();
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    if ((raw as { type?: unknown }).type !== "custom") continue;
+    const ack = ackFromCustomEntry(raw);
+    if (ack === undefined) continue;
+    ackTexts.add(ack.text);
+    const messageId = assistantMessageIdOf(raw);
+    if (messageId !== undefined && !ackByMessageId.has(messageId)) {
+      ackByMessageId.set(messageId, ack);
+    }
+  }
+
+  // PASSAGE 1 — le transcript (contenu seul). On mémorise l'index de chaque
+  // message ASSISTANT par identifiant d'entrée, pour corréler les métriques.
   const assistantIndexById = new Map<string, number>();
+  /**
+   * Accusé dont le message n'a AUCUN corps (le modèle n'a écrit que la phrase).
+   *
+   * ⚠️ Il OUVRE la bulle du message SUIVANT : c'est exactement ce que fait le
+   * direct, où ce message ne crée aucune bulle et où l'accusé est rattaché à la
+   * réponse qui suit. Sans cela, un rechargement afficherait une bulle de plus
+   * que le direct (la phrase seule, puis la réponse).
+   */
+  let pendingAck: { text: string; id?: string; timestamp?: number } | undefined;
+  const flushPendingAck = (): void => {
+    if (pendingAck === undefined) return;
+    transcript.push({
+      role: "assistant",
+      text: "",
+      ack: pendingAck.text,
+      ...(pendingAck.id !== undefined ? { id: pendingAck.id } : {}),
+      ...(pendingAck.timestamp !== undefined ? { timestamp: pendingAck.timestamp } : {}),
+    });
+    pendingAck = undefined;
+  };
+
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
     const entry = raw as { type?: unknown; id?: unknown; message?: unknown };
@@ -295,8 +384,8 @@ export function transcriptFromEntries(
     if (!message || typeof message !== "object") continue;
     const role = (message as RawAgentMessage).role;
     if (role !== "user" && role !== "assistant") continue;
-    const rawText = contentTextFromMessage(message as RawAgentMessage);
-    if (rawText.length === 0) continue;
+    const entryId = typeof entry.id === "string" ? entry.id : undefined;
+    const storedAck = entryId !== undefined ? ackByMessageId.get(entryId) : undefined;
     // Le repère temporel d'un message utilisateur est retiré AVANT le filtre
     // synthétique : un report de job n'est jamais horodaté, mais l'ordre reste
     // correct quel que soit l'ordre de pose des préfixes.
@@ -304,9 +393,35 @@ export function transcriptFromEntries(
     // c'est du matériau de PROMPT, pas un message. Les marqueurs
     // `[fichier] <id> <nom> (<n> octets)`, eux, RESTENT : ils portent les cartes
     // cliquables du message.
+    const rawText = contentTextFromMessage(message as RawAgentMessage);
     const text =
       role === "user" ? stripFilesBlock(stripTimestampPrefix(rawText)) : rawText;
-    if (text.length === 0) continue;
+    if (role === "assistant") {
+      const trimmed = text.trim();
+      // ⚠️ MESSAGE QUI N'ÉTAIT QUE L'ACCUSÉ : le modèle a écrit la phrase, puis
+      // appelé l'action longue — ce n'est pas une réponse. On ne crée pas de bulle
+      // pour lui : l'accusé s'affiche en tête de la bulle SUIVANTE (ou seul s'il
+      // n'y a rien d'autre). Le direct fait exactement la même chose.
+      //
+      // ⚠️ Le critère est l'ÉGALITÉ avec le texte RÉELLEMENT persisté, jamais « ça a
+      // l'air court » : une réponse brève (« Voilà l'image. ») ne doit JAMAIS être
+      // confondue avec un accusé.
+      const isAckText = trimmed.length > 0 && ackTexts.has(trimmed);
+      if (isAckText || text.length === 0) {
+        const ackText = storedAck?.text ?? (isAckText ? trimmed : undefined);
+        if (ackText !== undefined && pendingAck === undefined) {
+          const timestamp = messageTimestamp(message as RawAgentMessage);
+          pendingAck = {
+            text: ackText,
+            ...(entryId !== undefined ? { id: entryId } : {}),
+            ...(timestamp !== undefined ? { timestamp } : {}),
+          };
+        }
+        continue;
+      }
+    } else if (text.length === 0) {
+      continue;
+    }
     if (role === "user") {
       // ⚠️ RÉCAPITULATIF GÉNÉRÉ : c'est un message synthétique (rôle `user` dans
       // le SDK) qui doit être VISIBLE — et non silencieusement écarté — car c'est
@@ -316,6 +431,7 @@ export function transcriptFromEntries(
       const recap = parseRecapPrompt(text);
       if (recap) {
         const timestamp = messageTimestamp(message as RawAgentMessage);
+        flushPendingAck();
         transcript.push({
           role: "recap",
           text: recap.recap,
@@ -325,13 +441,17 @@ export function transcriptFromEntries(
         });
         continue;
       }
+      // Un prompt synthétique n'ouvre PAS la bulle : l'accusé reste en attente.
       if (isSyntheticUserText(text, prefixes)) continue;
     }
     const timestamp = messageTimestamp(message as RawAgentMessage);
-    const entryId = typeof entry.id === "string" ? entry.id : undefined;
+    // L'accusé du message porte la bulle ; sinon celui resté en attente la porte.
+    const ack = storedAck?.text ?? pendingAck?.text;
+    pendingAck = undefined;
     transcript.push({
       role,
       text,
+      ...(ack !== undefined ? { ack } : {}),
       ...(entryId !== undefined ? { id: entryId } : {}),
       ...(timestamp !== undefined ? { timestamp } : {}),
     });
@@ -339,49 +459,23 @@ export function transcriptFromEntries(
       assistantIndexById.set(entryId, transcript.length - 1);
     }
   }
-  // Second passage : rattache chaque entrée `custom` (métriques, accusé) au
-  // message assistant DONT ELLE DÉPEND. Une entrée orpheline — parent disparu,
-  // session corrompue, ancienne version — est simplement IGNORÉE (jamais un pied
-  // ni un accusé sans message).
-  //
-  // ⚠️ Le parent N'EST PAS toujours le message : deux entrées `custom` d'un même
-  // message (l'accusé puis les métriques, écrites dans cet ordre) forment une
-  // CHAÎNE (message → accusé → métriques). On remonte donc la chaîne des
-  // `parentId` jusqu'au premier message assistant connu — c'est ce qui rend le
-  // rattachement insensible à l'ordre d'écriture.
-  const byId = new Map<string, unknown>();
-  for (const raw of entries) {
-    if (!raw || typeof raw !== "object") continue;
-    const id = (raw as { id?: unknown }).id;
-    if (typeof id === "string") byId.set(id, raw);
-  }
-  const assistantIndexOf = (raw: unknown): number | undefined => {
-    let current = raw;
-    // Borne dure : une chaîne corrompue (cycle) ne boucle pas indéfiniment.
-    for (let hops = 0; hops < 64; hops += 1) {
-      if (!current || typeof current !== "object") return undefined;
-      const parentId = (current as { parentId?: unknown }).parentId;
-      if (typeof parentId !== "string") return undefined;
-      const parent = byId.get(parentId);
-      const index = assistantIndexById.get(parentId);
-      if (index !== undefined) return index;
-      if (parent === undefined) return undefined;
-      current = parent;
-    }
-    return undefined;
-  };
+  // Un accusé sans bulle suivante en ouvre une à lui seul : jamais une bulle vide,
+  // jamais un accusé perdu.
+  flushPendingAck();
+
+  // PASSAGE 2 — statistiques d'exécution (`yuki.run_metrics`). Une entrée
+  // orpheline — parent disparu, session corrompue, ancienne version — est
+  // simplement IGNORÉE (jamais un pied sans message).
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
     if ((raw as { type?: unknown }).type !== "custom") continue;
-    const index = assistantIndexOf(raw);
-    if (index === undefined) continue;
     const metrics = metricsFromCustomEntry(raw);
-    if (metrics) {
-      transcript[index].metrics = metrics;
-      continue;
-    }
-    const ack = ackFromCustomEntry(raw);
-    if (ack !== undefined) transcript[index].ack = ack;
+    if (!metrics) continue;
+    const messageId = assistantMessageIdOf(raw);
+    if (messageId === undefined) continue;
+    const index = assistantIndexById.get(messageId);
+    if (index === undefined) continue;
+    transcript[index].metrics = metrics;
   }
   return transcript;
 }

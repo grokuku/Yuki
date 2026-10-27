@@ -503,16 +503,22 @@ export type ServerMessage =
        * run. C'est une ligne de STATUT courte (« Je m'en occupe. »), pas une
        * réponse : le fond suit. Elle ne promet AUCUN résultat.
        *
+       * ⚠️ Le TEXTE vient du MODÈLE (c'est le premier texte du tour) ; le repli
+       * en dur ne parle que s'il n'a rien écrit (`source: "fallback"`).
+       *
        * Trame de CONTRÔLE (aucun `seq` consommé, jamais bufferisée) ⇒ jamais dans
        * le rejeu, le snapshot, le transcript ou la mémoire, et JAMAIS prononcée par
-       * la synthèse vocale (le moteur TTS ne reçoit que les `delta` de contenu).
+       * la synthèse vocale (le moteur TTS ne reçoit que les `delta` de contenu —
+       * le texte de l'accusé n'en est jamais un).
        */
       type: "ack";
       runId: string;
       /** Outil dont l'action démarre (`delegate`, `generer_image`, `run_command`). */
       tool: string;
-      /** Texte COURT et HUMAIN, en français. */
+      /** Texte COURT et HUMAIN, en français, écrit par le modèle (ou le repli). */
       text: string;
+      /** Origine de la phrase : le modèle l'a écrite, ou c'est le repli en dur. */
+      source: "model" | "fallback";
     }
   | {
       /**

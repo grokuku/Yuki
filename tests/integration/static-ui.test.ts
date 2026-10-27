@@ -990,7 +990,7 @@ describe("Images générées (ComfyUI) — section /config et service same-origi
     expect(ack).toContain("textContent");
     expect(ack).not.toContain("innerHTML");
     expect(app).toContain('type === "ack"');
-    expect(app).toContain("ackBlocks.show(currentAssistant, frame.text)");
+    expect(app).toContain("ackBlocks.show(currentAssistant, frame.text, frame.source)");
     // Accusé PERSISTÉ : il revient avec le transcript après un rechargement.
     expect(app).toContain("ackBlocks.show(div, entry.ack)");
     // Aucune bulle vide : l'attente occupe la bulle du run dès son lancement.

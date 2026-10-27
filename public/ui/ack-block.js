@@ -1,9 +1,14 @@
 // Yuki — ACCUSÉ DE RÉCEPTION et ATTENTE affichés EN TÊTE de la bulle de réponse.
 //
-// ⚠️ CE QUE C'EST : une ligne de statut COURTE et HUMAINE (« Je m'en occupe. »,
-// « C'est parti. ») qui dit que la demande est bien prise en compte QUAND Yuki
-// lance une action qui ne rendra pas la main tout de suite : une délégation, une
-// génération d'image, une commande envoyée à un agent.
+// ⚠️ CE QUE C'EST : une ligne de statut COURTE et HUMAINE qui dit que la demande
+// est bien prise en compte QUAND Yuki lance une action qui ne rendra pas la main
+// tout de suite : une délégation, une génération d'image, une commande envoyée à
+// un agent.
+//
+// ⚠️ SON TEXTE VIENT DU MODÈLE : c'est le PREMIER texte de son tour (consigne de
+// ton dans le prompt système). Le module ne fabrique donc plus la phrase ; il
+// n'en garde qu'un libellé de secours (`DEFAULT_ACK_TEXT`) si le serveur en
+// omettait un. Le repli EN DUR existe côté serveur, avec des VARIATIONS.
 //
 // ⚠️ ELLE APPARTIENT À LA RÉPONSE — c'est la PREMIÈRE ligne de la bulle
 // assistant, juste AVANT le corps markdown. Ce n'est pas un bloc posé à côté :
@@ -18,9 +23,13 @@
 //
 // ⚠️ PERSISTÉ AVEC LE MESSAGE : le serveur l'attache à l'entrée de transcript du
 // message (`ack`) et l'écrit dans le JSONL de session (`yuki.run_ack`). Il
-// revient donc après un rechargement — mais il n'est jamais concaténé au texte
-// du message, donc jamais prononcé par la synthèse vocale (le moteur TTS ne
-// reçoit que les trames de contenu) ni appris comme un souvenir.
+// revient donc après un rechargement, à l'identique. Il n'est jamais émis comme
+// trame de CONTENU, donc jamais prononcé par la synthèse vocale (le moteur TTS ne
+// reçoit que les trames de contenu) ni appris comme un souvenir (l'extracteur de
+// mémoire écarte le préambule d'accusé d'un message qui appelle un outil).
+//
+// `data-ack-source` (« model » / « fallback ») est une MIETTE de mesure, invisible
+// et muette : elle permet de compter les replis (voir `_tools/e2e-ack.mjs`).
 //
 // ⚠️ AUCUNE BULLE VIDE : tant que la bulle n'a ni accusé ni contenu, elle porte
 // l'indicateur d'attente (`.message__pending`, trois points discrets et MUETS :
@@ -50,7 +59,7 @@ const PENDING_CLASSES = [PENDING_CLASS];
  * @param {HTMLElement} deps.container conteneur du fil (`#conversation`).
  * @returns {{
  *   pending(message: HTMLElement): HTMLElement|null,
- *   show(message: HTMLElement, text: string): HTMLElement|null,
+ *   show(message: HTMLElement, text: string, source?: string): HTMLElement|null,
  *   has(message: HTMLElement|null): boolean,
  *   settled(message: HTMLElement|null): void,
  *   reset(): void,
@@ -107,14 +116,19 @@ export function createAckBlocks({ container }) {
    * réponse, pas un bloc séparé. L'indicateur d'attente est retiré au même
    * instant (jamais les deux). Un accusé par bulle : un second appel REMPLACE
    * le texte au lieu d'empiler une seconde ligne.
+   *
+   * @param {string} [source] `"model"` (le modèle a écrit la phrase) ou
+   *   `"fallback"` (repli en dur). Posé en `data-ack-source` : MIETTE de mesure
+   *   (taux de repli), muette et invisible, jamais du balisage.
    */
-  function show(message, text) {
+  function show(message, text, source) {
     if (!message) return null;
     const label =
       typeof text === "string" && text.trim() !== "" ? text.trim() : DEFAULT_ACK_TEXT;
     const existing = ackElement(message);
     if (existing) {
       existing.textContent = label;
+      if (typeof source === "string") existing.dataset.ackSource = source;
       settled(message);
       return existing;
     }
@@ -123,6 +137,7 @@ export function createAckBlocks({ container }) {
     // Statut « poli » pour les lecteurs d'écran : annoncé sans voler le focus.
     el.setAttribute("role", "status");
     el.textContent = label;
+    if (typeof source === "string") el.dataset.ackSource = source;
     place(message, el);
     settled(message);
     return el;

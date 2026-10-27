@@ -61,7 +61,12 @@ import { describeModelError, PiHostError, toPiHostError } from "./errors.js";
 import { buildStoredUserText, stripTimestampPrefix } from "./timestamp.js";
 import type { PiHost } from "./host.js";
 import { PHASE, RunInstrumentation, type RunSummary, type RunTtsMetrics } from "./instrumentation.js";
-import { ackTextForTool, shouldAcknowledge } from "./ack.js";
+import {
+  ACK_MAX_CHARS,
+  ackFallbackText,
+  ackShapedText,
+  firstAckToolCall,
+} from "./ack.js";
 import { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
 import {
   createDelegationExtensionFactory,
@@ -98,6 +103,7 @@ import { createLibrarianTools } from "./sdk/librarian-tools.js";
 import { createSendFileTools } from "./sdk/send-file-tool.js";
 import { createImageTools } from "./sdk/image-tools.js";
 import { createImageStylesExtensionFactory } from "./sdk/image-styles-extension.js";
+import { createAckExtensionFactory } from "./sdk/ack-extension.js";
 import { stripFilesBlock } from "../files/frame.js";
 import type {
   ApplyLlmConfigOptions,
@@ -194,6 +200,33 @@ interface RunItem {
    */
   acked?: boolean;
   /**
+   * ⚠️ FINESSE DE L'ACCUSÉ — le début du message assistant EN COURS est RETENU
+   * au lieu d'être émis comme contenu. Motif : l'accusé est le PREMIER TEXTE du
+   * tour (écrit par le modèle), mais il n'est un accusé que SI une action longue
+   * démarre dans le même message. Tant qu'on ne le sait pas, rien ne part :
+   *  - s'il s'avère que c'est un accusé, il est émis dans une trame `ack` (donc
+   *    JAMAIS un `delta` de contenu : ni prononcé par la TTS, ni dans le texte
+   *    du message, ni dans la mémoire) ;
+   *  - sinon il est relâché tel quel comme contenu ordinaire.
+   * `true` = on retient ; remis à `false` dès qu'une décision est prise (ou que
+   * le texte dépasse la borne, voir `ackHoldMustRelease`).
+   */
+  ackHolding?: boolean;
+  /** Texte du message assistant en cours RETENU (candidat accusé). */
+  ackCandidate?: string;
+  /**
+   * Du CONTENU (corps de réponse) a déjà été émis dans ce run. Si oui, aucune
+   * action ne produit d'accusé : elle a déjà parlé (pas de doublon).
+   */
+  saidContent?: boolean;
+  /**
+   * ORIGINE de l'accusé du run : `model` (le modèle a écrit la phrase) ou
+   * `fallback` (il est allé droit à l'outil, le repli en dur a parlé). Sert à
+   * MESURER le taux de repli — s'il est élevé, c'est la consigne du prompt qu'il
+   * faut renforcer, pas le repli qu'il faut multiplier.
+   */
+  ackSource?: "model" | "fallback";
+  /**
    * ACCUSÉ DE RÉCEPTION de ce run, tel qu'il a été ÉMIS (`{ tool, text }`).
    *
    * ⚠️ Mémorisé sur le run pour être attaché au message assistant qu'il préface
@@ -260,6 +293,12 @@ interface SessionRecord {
    * immédiatement comme un tour neuf (jamais attendre le rapport d'un job).
    */
   pendingUserSteers: RunItem[];
+  /**
+   * Nombre de REPLIS d'accusé déjà utilisés dans cette conversation. Index de
+   * ROTATION des variations (déterministe : voir `ACK_FALLBACK_TEXTS`) — deux
+   * replis consécutifs du même fil ne disent donc jamais la même phrase.
+   */
+  ackFallbacks: number;
 }
 
 function newRunId(): string {
@@ -528,6 +567,112 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     };
   }
 
+  /**
+   * Émet un delta de CONTENU (corps de réponse) et retient qu'elle a parlé.
+   *
+   * ⚠️ Seul chemin d'émission du contenu : c'est ce qui garantit que
+   * `saidContent` est toujours à jour (et donc qu'un accusé ne peut pas
+   * s'ajouter après coup à un tour qui a déjà répondu).
+   */
+  function emitContentDelta(record: SessionRecord, run: RunItem, text: string): void {
+    if (text.length === 0) return;
+    run.saidContent = true;
+    run.instrumentation.markFirstToken();
+    emitEvent({
+      type: "delta",
+      sessionId: record.sessionId,
+      runId: run.runId,
+      channel: "content",
+      text,
+    });
+  }
+
+  /**
+   * ⚠️ Le texte retenu peut-il encore être un accusé ?
+   *
+   * Il le peut tant qu'il tient en UNE ligne ET reste sous la borne
+   * (`ACK_MAX_CHARS`). Au-delà : c'est une réponse, on le relâche comme contenu
+   * ordinaire (PIÈGE ⑥ : un pavé n'est jamais une ligne de statut).
+   */
+  function ackHoldMustRelease(held: string): boolean {
+    return held.length > ACK_MAX_CHARS || /[\r\n]/.test(held);
+  }
+
+  /**
+   * DÉCIDE de l'accusé du run pour ce message, et l'émet. Renvoie `true` quand
+   * l'accusé EST le texte de ce message (⇒ ce texte ne doit pas partir comme
+   * contenu).
+   *
+   * Trois issues, et trois seulement :
+   *  1. le MODÈLE a écrit une phrase courte ⇒ elle devient l'accusé (tel quel) ;
+   *  2. il n'a rien écrit (il va droit à l'outil) ⇒ REPLI EN DUR, en ROTATION
+   *     (jamais deux fois la même phrase de suite) ;
+   *  3. il a déjà parlé dans ce run, ou écrit un texte trop long ⇒ AUCUN accusé.
+   *
+   * ⚠️ AUCUN appel modèle, aucune E/S, aucune estimation : la décision est un
+   * test de forme sur un texte DÉJÀ produit. L'accusé ne coûte donc pas un tour
+   * de plus ni une milliseconde de latence de modèle.
+   */
+  function maybeAcknowledge(
+    record: SessionRecord,
+    run: RunItem,
+    tool: string,
+    candidate: string,
+  ): boolean {
+    // Une seule ligne par run, et jamais quand l'action n'est pas un déclencheur.
+    if (run.acked === true) return false;
+    const wasHolding = run.ackHolding === true;
+    run.ackHolding = false;
+    run.ackCandidate = "";
+    if (!wasHolding || run.saidContent === true) return false;
+
+    const fromModel = ackShapedText(candidate);
+    let text: string;
+    let source: "model" | "fallback";
+    if (fromModel !== undefined) {
+      text = fromModel;
+      source = "model";
+    } else {
+      // Texte trop long ou multiligne : ce n'est pas un accusé mais une vraie
+      // réponse ⇒ elle part comme contenu, et AUCUN repli ne s'y ajoute.
+      if (candidate.trim().length > 0) return false;
+      const fallback = ackFallbackText(tool, record.ackFallbacks);
+      if (fallback === undefined) return false;
+      record.ackFallbacks += 1;
+      text = fallback;
+      source = "fallback";
+    }
+
+    run.acked = true;
+    run.ack = { tool, text };
+    run.ackSource = source;
+    // ⚠️ MÉMORISÉ POUR LE TRANSCRIPT (et non seulement émis) : l'accusé est la
+    // PREMIÈRE ligne de la réponse, donc il appartient au message assistant.
+    // Il est rattaché ici (miroir en mémoire, disponible dès le snapshot
+    // suivant) puis persisté à part (`yuki.run_ack`) en fin de run.
+    if (run.assistantEntry) run.assistantEntry.ack = text;
+    // L'accusé est la PREMIÈRE chose que l'utilisateur voit du tour : c'est bien
+    // le premier jeton visible, donc il arrête le chronomètre TTFT.
+    run.instrumentation.markFirstToken();
+    // MESURE DU TAUX DE REPLI : une ligne par accusé, avec son ORIGINE. Si les
+    // `fallback` dominent, c'est la consigne du prompt qu'il faut renforcer.
+    logger.info("pi.ack", {
+      session_id: record.sessionId,
+      run_id: run.runId,
+      tool,
+      source,
+    });
+    emitEvent({
+      type: "ack",
+      sessionId: record.sessionId,
+      runId: run.runId,
+      tool,
+      text,
+      source,
+    });
+    return source === "model";
+  }
+
   function handleSdkEvent(record: SessionRecord, raw: unknown): void {
     const event = raw as { type?: unknown };
     switch (event.type) {
@@ -559,38 +704,31 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         return;
       }
       case "tool_execution_start": {
-        // ⚠️ ACCUSÉ DE RÉCEPTION — DÉCLENCHÉ PAR L'ACTION, JAMAIS PAR UNE PRÉDICTION.
-        // Le SDK émet cet événement JUSTE AVANT d'exécuter l'outil : l'accusé part
-        // donc AVANT que l'action ne démarre, et il ne coûte RIEN au TTFT (aucun
-        // calcul, aucune estimation, aucun appel modèle : un test booléen).
+        // ⚠️ FILET DE SÉCURITÉ. La décision d'accusé est prise à `message_end`
+        // (le message du SDK porte alors son `toolCall`, donc on sait que
+        // l'action démarre — et c'est AVANT l'exécution de l'outil). Ce passage
+        // couvre un hôte qui n'émettrait pas `message_end` : on décide alors sur
+        // le texte déjà streamé. Idempotent (`run.acked`, `ackHolding`).
         const run = record.currentRun;
         if (!run) return;
         const toolName = (raw as { toolName?: unknown }).toolName;
         if (typeof toolName !== "string") return;
-        const text = ackTextForTool(toolName);
-        if (text === undefined) return;
-        // « Rien n'a encore été dit dans ce run » : le texte partiel du message en
-        // cours, ou un message assistant déjà complet, suffisent à le prouver.
-        const alreadySaid = record.partial.length > 0 || run.assistantEntry !== undefined;
-        if (!shouldAcknowledge({ tool: toolName, alreadySaid, alreadyAcked: run.acked === true })) return;
-        run.acked = true;
-        // ⚠️ MÉMORISÉ POUR LE TRANSCRIPT (et non seulement émis) : l'accusé est la
-        // PREMIÈRE ligne de la réponse, donc il appartient au message assistant.
-        // Il est rattaché ici (miroir en mémoire, disponible dès le snapshot
-        // suivant) puis persisté à part (`yuki.run_ack`) en fin de run.
-        run.ack = { tool: toolName, text };
-        if (run.assistantEntry) run.assistantEntry.ack = text;
-        emitEvent({
-          type: "ack",
-          sessionId: record.sessionId,
-          runId: run.runId,
-          tool: toolName,
-          text,
-        });
+        if (run.ackHolding !== true) return;
+        maybeAcknowledge(record, run, toolName, run.ackCandidate ?? "");
         return;
       }
-      case "message_start":
+      case "message_start": {
+        const run = record.currentRun;
+        if (!run) return;
+        // ⚠️ Un message ASSISTANT commence : son TEXTE peut être l'accusé (le
+        // modèle écrit d'abord une phrase, PUIS appelle l'outil dans le même
+        // tour). On RETIENT donc son début, sans rien émettre, jusqu'à savoir.
+        const role = (raw as { message?: { role?: unknown } }).message?.role;
+        if (role !== "assistant") return;
+        run.ackHolding = run.acked !== true;
+        run.ackCandidate = "";
         return;
+      }
       case "message_update": {
         const run = record.currentRun;
         if (!run) return;
@@ -602,10 +740,31 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         if (!channel) return;
         const text = deltaText(assistantEvent);
         if (text.length === 0) return;
-        run.instrumentation.markFirstToken();
         if (channel === "content") {
+          if (run.ackHolding === true) {
+            const held = (run.ackCandidate ?? "") + text;
+            if (!ackHoldMustRelease(held)) {
+              // Le texte est RETENU : `record.partial` ne le contient pas (il
+              // reste l'image exacte de ce qui a été ÉMIS), donc rien n'est
+              // affiché, rien n'est prononcé, rien n'est mémorisé pour l'instant.
+              run.ackCandidate = held;
+              return;
+            }
+            // Il ne peut plus être un accusé (trop long, ou plusieurs lignes) :
+            // on le relâche d'un bloc et la suite redevient un flux normal.
+            run.ackHolding = false;
+            run.ackCandidate = "";
+            record.partial = held;
+            emitContentDelta(record, run, held);
+            return;
+          }
           record.partial += text;
+          emitContentDelta(record, run, text);
+          return;
         }
+        // Canal `thinking` : jamais retenu (ce n'est jamais un accusé), jamais
+        // dans le transcript.
+        run.instrumentation.markFirstToken();
         emitEvent({
           type: "delta",
           sessionId: record.sessionId,
@@ -660,24 +819,41 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         }
         // Transcript = CONTENU SEUL : les blocs `thinking` sont exclus.
         const content = contentTextFromMessage(message);
+        // ⚠️ DÉCISION DE L'ACCUSÉ — ICI, ET NULLE PART AILLEURS. Le message porte
+        // son `content` AUTORITATIF, donc on sait à la fois son TEXTE et s'il
+        // contient un appel d'outil d'ACTION LONGUE. C'est décisif: `message_end`
+        // précède TOUJOURS `tool_execution_start` (voir `agent-loop.js` du SDK),
+        // donc l'accusé part AVANT que l'action ne démarre, sans aucun appel
+        // modèle supplémentaire (c'est le texte du tour lui-même).
+        const ackTool = firstAckToolCall(message.content);
+        const ackOwnsText =
+          ackTool !== undefined && maybeAcknowledge(record, run, ackTool, content);
+        // TEXTE D'AFFICHAGE de ce message : sans l'accusé quand c'est lui qui
+        // vient d'être reconnu (il n'est PAS une réponse : il vit dans `run.ack`).
+        const body = ackOwnsText ? "" : content;
         // Rattrapage : le contenu autoritatif du message peut contenir un
         // suffixe JAMAIS streamé (`text_delta` absent chez certains
         // fournisseurs). Sans ce delta, l'UI **live** resterait vide et le TTS
         // muet, alors que la réponse existe. On ne réémet que le suffixe
         // manquant (aucun doublon dans le cas normal où `partial === content`).
-        const suffix = unstreamedContentSuffix(record.partial, content);
+        // ⚠️ On calcule le suffixe sur le CORPS (accusé retiré) : sinon un texte
+        // retenu sortirait ici comme contenu, et l'accusé redeviendrait prononcé.
+        const suffix = unstreamedContentSuffix(record.partial, body);
         if (suffix.length > 0) {
           run.instrumentation.markFirstToken();
           record.partial += suffix;
-          emitEvent({
-            type: "delta",
-            sessionId: record.sessionId,
-            runId: run.runId,
-            channel: "content",
-            text: suffix,
-          });
+          emitContentDelta(record, run, suffix);
         }
-        const text = content.length > 0 ? content : record.partial;
+        const text = body.length > 0 ? body : content.length === 0 ? record.partial : "";
+        // Texte du DERNIER message assistant persisté par le SDK : contrôle
+        // d'intégrité de la persistance, séparé de l'entrée d'affichage (qui peut
+        // être une FUSION de plusieurs messages).
+        // ⚠️ C'est le CONTENU AUTORITATIF (`content`), accusé COMPRIS : c'est
+        // exactement ce que le SDK a écrit dans la session, et c'est à lui que
+        // `persistRunMetrics`/`resolveAssistantEntryId` comparent le message au
+        // bout de la branche. Il est donc posé MÊME quand la bulle n'a rien à
+        // afficher (message qui n'était QUE l'accusé).
+        run.lastAssistantText = content.length > 0 ? content : record.partial;
         if (text.length > 0) {
           // ⚠️ CONTINUITÉ D'UN MÊME RUN — le client ne crée qu'UN SEUL bloc par
           // run : le flux de deltas n'expose AUCUNE frontière de message, donc
@@ -705,10 +881,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
             // recevra les statistiques (`run_metrics`) si le run se termine bien.
             run.assistantEntry = assistantEntry;
           }
-          // Texte du DERNIER message persisté : contrôle d'intégrité séparé de
-          // l'entrée d'affichage (qui peut être une FUSION de plusieurs messages).
-          run.lastAssistantText = text;
         }
+        // Le message est clos : plus rien à retenir (même s'il n'a rien produit
+        // d'affichable, par exemple un message qui n'était QUE l'accusé).
+        run.ackHolding = false;
+        run.ackCandidate = "";
         record.partial = "";
         return;
       }
@@ -754,6 +931,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       listeners: new Set(),
       queue: [],
       pendingUserSteers: [],
+      ackFallbacks: 0,
     };
     record.unsubscribe = session.subscribe((event) => {
       handleSdkEvent(record, event);
@@ -918,6 +1096,20 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     run: RunItem,
     reason: RunFinishReason,
   ): void {
+    // ⚠️ FILET : un texte encore RETENU à la fin du run (hôte qui n'émettrait pas
+    // `message_end`) ne doit pas être perdu — il n'a jamais été émis comme
+    // contenu, donc il n'existe nulle part. On le relâche comme contenu
+    // ordinaire : c'est une réponse, pas un accusé (la décision n'a pas eu lieu).
+    if (run.ackHolding === true) {
+      const held = run.ackCandidate ?? "";
+      run.ackHolding = false;
+      run.ackCandidate = "";
+      if (held.length > 0) {
+        record.partial += held;
+        emitContentDelta(record, run, held);
+      }
+      record.partial = "";
+    }
     run.instrumentation.setUsage(run.usage);
     // ⚠️ Un `stage=error` DOIT porter sa cause (brute, assainie) : c'est ce qui
     // manquait et qui a rendu un échec réel indiagnosticable.
@@ -929,21 +1121,26 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     // RÉELLEMENT persistée par ce run — le MÊME dont les statistiques sont
     // l'enfant (`parentId`). Aucun second identifiant n'est inventé : c'est ce
     // qui garantit qu'une réaction reste attachée au BON message.
-    if (run.assistantEntry && !run.assistantEntry.id) {
-      const entryId = resolveAssistantEntryId(record, run);
-      if (entryId) run.assistantEntry.id = entryId;
+    const entryId = resolveAssistantEntryId(record, run);
+    if (run.assistantEntry && !run.assistantEntry.id && entryId) {
+      run.assistantEntry.id = entryId;
     }
-    // ⚠️ ACCUSÉ SANS CONTENU (run qui s'achève sur une action, sans texte) : la
-    // bulle doit exister avec l'accusé. Sans cette entrée, le rechargement
-    // ramènerait une bulle VIDE (défaut signalé) — ici elle porte au moins la
-    // première ligne de la réponse.
+    // ⚠️ ACCUSÉ SANS CONTENU AFFICHABLE (run qui s'achève sur une action, dont le
+    // message ne portait QUE l'accusé) : la bulle doit exister avec l'accusé.
+    // Sans cette entrée, le rechargement ramènerait une bulle VIDE (défaut
+    // signalé) — ici elle porte au moins la première ligne de la réponse.
     if (run.ack && !run.assistantEntry) {
-      record.transcript.push({
+      const entry: TranscriptEntry = {
         role: "assistant",
         text: "",
         ack: run.ack.text,
+        ...(entryId ? { id: entryId } : {}),
         timestamp: Date.now(),
-      });
+      };
+      record.transcript.push(entry);
+      // Miroir de l'entrée persistée : la persistance de l'accusé (`run_ack`) et
+      // les statistiques la retrouvent (elles s'y rattachent par `id`).
+      run.assistantEntry = entry;
     }
     emitEvent({
       type: "run_finished",
@@ -1123,11 +1320,13 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
    * VIDE — c'est exactement le défaut signalé (« on croit que Yuki n'a rien
    * répondu »).
    *
-   * ⚠️ Ce qui est écrit est le NOM DE L'OUTIL, jamais la phrase : le libellé
-   * reste dans `src/pi/ack.ts` (source unique) et rien de visible ne se fige
-   * dans l'historique. Le moteur TTS ne lit que les `delta` de contenu : un
-   * accusé persisté n'est donc jamais prononcé, et le modèle ne le voit jamais
-   * (le SDK Pi retire les entrées `custom` du contexte).
+   * ⚠️ Ce qui est écrit est `{tool, text}` : le texte est celui que le MODÈLE a
+   * écrit (à la virgule près), sinon celui du repli. Il faut le conserver, sinon
+   * un rechargement afficherait une phrase différente de celle qui a été dite.
+   * Le SDK Pi retire les entrées `custom` du contexte du modèle
+   * (`sessionEntryToContextMessages` renvoie `[]`) : l'accusé persisté n'est donc
+   * jamais relu comme une parole de Yuki, et le moteur TTS ne lit que les `delta`
+   * de contenu (un accusé n'en est jamais un).
    *
    * Garde : on n'écrit QUE si le message assistant de ce run a été identifié
    * dans la branche (`assistantEntry.id`), pour ne jamais produire une entrée
@@ -1140,6 +1339,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     try {
       record.session.sessionManager.appendCustomEntry(RUN_ACK_CUSTOM_TYPE, {
         tool: ack.tool,
+        text: ack.text,
       });
       // Le miroir en mémoire porte déjà l'accusé : un snapshot de la session
       // COURANTE l'affiche sans attendre un rechargement.
@@ -1675,6 +1875,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     // par un test d'ordre). Rejoué à l'identique pour CHAQUE runtime : chaque
     // conversation applique l'ordre verrouillé.
     extensionFactories = buildInlineExtensions(options);
+    // ⚠️ CONSIGNE D'ACCUSÉ DE RÉCEPTION (ton de Yuki) : ENREGISTRÉE TOUJOURS, même
+    // sans délégation — générer une image et envoyer une commande sont aussi des
+    // actions longues. Sans elle, le modèle part droit à l'outil et c'est le
+    // repli en dur qui parle (mécanique, répétitif).
+    extensionFactories = [...extensionFactories, createAckExtensionFactory()];
     if (options.delegation) {
       // ⚠️ RELAIS + jobs EN COURS (parité Pi-Web) : consigne FERME « l'utilisateur
       // ne parle qu'à toi » + liste des jobs de CETTE conversation, injectées dans

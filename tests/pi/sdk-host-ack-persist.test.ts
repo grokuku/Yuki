@@ -1,25 +1,22 @@
 /**
  * Intégration — PERSISTANCE de l'ACCUSÉ DE RÉCEPTION (`run_ack`).
  *
- * ⚠️ POURQUOI CE TEST EXISTE : l'accusé était une trame de CONTRÔLE purement
- * éphémère. Au rechargement, il DISPARAISSAIT en laissant une bulle de réponse
- * VIDE dans le fil — défaut signalé par l'utilisateur (« on croit que Yuki n'a
- * rien répondu »).
+ * ⚠️ POURQUOI CE TEST EXISTE : l'accusé ne pouvait pas rester une trame de
+ * CONTRÔLE purement éphémère. Au rechargement, il DISPARAISSAIT en laissant une
+ * bulle de réponse VIDE dans le fil — défaut signalé par l'utilisateur (« on
+ * croit que Yuki n'a rien répondu »).
+ *
+ * ⚠️ CE QUI A CHANGÉ : l'accusé est désormais le PREMIER TEXTE DU TOUR, écrit par
+ * le MODÈLE (plus une phrase figée par le code). Il est donc :
+ *  - RETENU côté host (jamais émis comme `delta` de contenu) ⇒ jamais prononcé par
+ *    la synthèse vocale, et jamais dans le corps de la réponse ;
+ *  - PERSISTÉ à part (`yuki.run_ack`, données `{tool, text}`) ⇒ il revient à
+ *    l'identique après un rechargement, même s'il est écrit par le repli en dur ;
+ *  - EXCLU du corps au rechargement (le message qui n'était que l'accusé n'ouvre pas
+ *    de bulle) ⇒ la phrase n'est jamais affichée deux fois.
  *
  * On exerce ici le VRAI `src/pi/sdk-host.ts` (runtime SDK stubé par `vi.mock`,
- * adossé à un `SessionManager` RÉEL) et on inspecte le JSONL BRUT :
- *
- *   - un run qui accuse réception puis répond écrit UNE entrée `custom`
- *     (`yuki.run_ack`) rattachée au message assistant ;
- *   - cette entrée ne contient QUE le NOM DE L'OUTIL — jamais la phrase, qui
- *     n'apparaît NULLE PART dans le JSONL (donc jamais dans le contexte du
- *     modèle : ce n'est pas un souvenir) ;
- *   - le TEXTE du message ne contient pas l'accusé (il n'est donc jamais
- *     prononcé par la synthèse vocale, qui ne lit que le contenu) ;
- *   - RELIRE la session (nouveau `SessionManager`) restitue l'accusé ;
- *   - un run qui accuse réception SANS produire de texte laisse une entrée de
- *     transcript portant l'accusé seul (aucune bulle vide) ;
- *   - un run SANS accusé n'écrit aucune entrée `run_ack`.
+ * adossé à un `SessionManager` RÉEL) et on inspecte le JSONL BRUT.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -29,7 +26,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ackTextForTool } from "../../src/pi/ack.js";
+import { ACK_FALLBACK_TEXTS } from "../../src/pi/ack.js";
 import { RUN_ACK_CUSTOM_TYPE, transcriptFromEntries } from "../../src/pi/events.js";
 import type { PiEvent, PiLogger } from "../../src/pi/types.js";
 
@@ -117,15 +114,21 @@ const USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function assistantMessage(text: string): Record<string, unknown> {
+/** Message assistant du SDK : blocs `text` PUIS blocs `toolCall`. */
+function assistantMessage(text: string, tool?: string): Record<string, unknown> {
+  const content: Array<Record<string, unknown>> = [];
+  if (text.length > 0) content.push({ type: "text", text });
+  if (tool !== undefined) {
+    content.push({ type: "toolCall", id: `call-${tool}`, name: tool, arguments: {} });
+  }
   return {
     role: "assistant",
-    content: [{ type: "text", text }],
+    content,
     api: "test",
     provider: "test",
     model: "test",
     usage: USAGE,
-    stopReason: "stop",
+    stopReason: tool !== undefined ? "toolUse" : "stop",
     timestamp: Date.now(),
   };
 }
@@ -163,32 +166,49 @@ afterEach(async () => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Le tour réel du SDK : un texte éventuel, puis le démarrage d'un outil. */
-async function runOnce(input: { tool?: string; text?: string; persistMessage: boolean }) {
+/**
+ * Joue un run avec l'ORDRE RÉEL du SDK : texte de l'accusé (ou rien), `message_end`
+ * du message portant l'outil, démarrage de l'outil, puis réponse éventuelle.
+ */
+async function runOnce(input: {
+  tool?: string;
+  /** Premier texte du tour (celui que le MODÈLE écrit, ou rien du tout). */
+  ackText?: string;
+  answer?: string;
+  persistMessage: boolean;
+}) {
   const host = makeHost();
   const events: PiEvent[] = [];
   host.subscribeAll((event) => events.push(event));
   await host.start();
   const sessionId = host.currentSessionId()!;
   const manager = stub.manager as Manager;
+  const ackText = input.ackText ?? "";
 
   stub.onPrompt = async (m: Manager) => {
     stub.emit({ type: "agent_start" });
-    // ⚠️ Ordre RÉEL du cas utile : le modèle va DROIT à l'outil (rien n'a encore
-    // été dit), l'accusé part, puis le texte arrive après le retour de l'outil.
     if (input.tool !== undefined) {
+      stub.emit({ type: "message_start", message: { role: "assistant" } });
+      if (ackText.length > 0) {
+        stub.emit({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: ackText },
+        });
+      }
+      const toolMessage = assistantMessage(ackText, input.tool);
+      if (input.persistMessage) m.appendMessage(toolMessage as never);
+      stub.emit({ type: "message_end", message: toolMessage });
       stub.emit({ type: "tool_execution_start", toolName: input.tool });
       stub.emit({ type: "tool_execution_end", toolName: input.tool, isError: false });
     }
-    if (input.text !== undefined) {
+    if (input.answer !== undefined) {
+      stub.emit({ type: "message_start", message: { role: "assistant" } });
       stub.emit({
         type: "message_update",
-        assistantMessageEvent: { type: "text_delta", delta: input.text },
+        assistantMessageEvent: { type: "text_delta", delta: input.answer },
       });
-    }
-    if (input.persistMessage && input.text !== undefined) {
-      const message = assistantMessage(input.text);
-      m.appendMessage(message as never);
+      const message = assistantMessage(input.answer);
+      if (input.persistMessage) m.appendMessage(message as never);
       stub.emit({ type: "message_end", message });
     }
   };
@@ -198,11 +218,13 @@ async function runOnce(input: { tool?: string; text?: string; persistMessage: bo
   return { host, manager, sessionId, events, runId: handle.runId };
 }
 
-describe("sdk-host réel — l'accusé est PERSISTÉ avec le message (run_ack)", () => {
-  it("accusé + réponse : entrée custom enfant du message, sans la phrase", async () => {
+describe("sdk-host réel — l'accusé du MODÈLE est PERSISTÉ avec le message (run_ack)", () => {
+  it("accusé du modèle + réponse : entrée custom enfant du message, texte VERBATIM", async () => {
+    const ackSentence = "Deux secondes, je m'en occupe.";
     const { host, manager, sessionId } = await runOnce({
       tool: "generer_image",
-      text: "Voici l'image demandée.",
+      ackText: ackSentence,
+      answer: "Voici l'image demandée.",
       persistMessage: true,
     });
     const file = manager.getSessionFile()!;
@@ -210,39 +232,74 @@ describe("sdk-host réel — l'accusé est PERSISTÉ avec le message (run_ack)",
     const lines = rawLines(file);
     const ackEntries = lines.filter((e) => e.customType === RUN_ACK_CUSTOM_TYPE);
     expect(ackEntries).toHaveLength(1);
-    // ⚠️ Les DONNÉES ne portent que le nom d'outil : le libellé reste dans
-    // `src/pi/ack.ts` (source unique), il ne se fige pas dans l'historique.
-    expect(ackEntries[0].data).toEqual({ tool: "generer_image" });
-    expect(JSON.stringify(ackEntries[0].data)).not.toContain("C'est parti");
+    // ⚠️ Les DONNÉES portent le texte RÉEL : sans lui, un rechargement montrerait
+    // une autre phrase que celle qui a été dite (le modèle l'a écrite).
+    expect(ackEntries[0].data).toEqual({ tool: "generer_image", text: ackSentence });
 
-    // ⚠️ La PHRASE n'apparaît NULLE PART dans le JSONL de session : les entrées
-    // `custom` étant retirées du contexte du modèle par le SDK, l'accusé ne peut
-    // donc jamais être mémorisé ni relu comme une parole de Yuki.
+    // Le message persisté PAR LE SDK contient la phrase (c'est le texte du modèle) ;
+    // l'entrée `custom` est retirée du contexte du modèle par le SDK, donc la
+    // persistance de l'accusé ne le transforme pas en souvenir du modèle.
     const raw = readFileSync(file, "utf8");
-    for (const tool of ["generer_image", "delegate", "run_command"]) {
-      const phrase = ackTextForTool(tool)!;
-      expect(raw).not.toContain(phrase);
-    }
+    expect(raw).toContain(ackSentence);
 
-    // Rattachement : le message assistant est bien dans la branche, et le
-    // transcript LIVE porte l'accusé AVEC le texte, sans mélange.
+    // Transcription LIVE : le corps ne contient PAS l'accusé (jamais un doublon).
     const live = host.getState(sessionId)!;
     const assistant = live.transcript.find((entry) => entry.role === "assistant");
-    expect(assistant?.ack).toBe("C'est parti.");
+    expect(assistant?.ack).toBe(ackSentence);
     expect(assistant?.text).toBe("Voici l'image demandée.");
-    expect(assistant?.text).not.toContain("C'est parti");
+    expect(assistant?.text).not.toContain(ackSentence);
 
-    // ALLER-RETOUR : relecture de la session par un SessionManager NEUF (comme
-    // après un redémarrage du gateway) ⇒ l'accusé revient en tête du message.
+    // ALLER-RETOUR : relecture par un `SessionManager` NEUF (comme après un
+    // redémarrage du gateway) ⇒ l'accusé revient, et n'est PAS répété dans le corps.
     const restored = transcriptFromEntries(SessionManager.open(file).getBranch(), {
       syntheticUserPrefixes: [],
     });
     const restoredAssistant = restored.find((entry) => entry.role === "assistant");
+    expect(restoredAssistant?.ack).toBe(ackSentence);
     expect(restoredAssistant?.text).toBe("Voici l'image demandée.");
-    expect(restoredAssistant?.ack).toBe("C'est parti.");
   });
 
-  it("accusé SANS texte : la bulle existe quand même (jamais une bulle vide)", async () => {
+  it("run qui s'achève sur l'accusé : il revient SEUL après rechargement (jamais une bulle vide)", async () => {
+    const ackSentence = "C'est parti.";
+    const { host, manager, sessionId } = await runOnce({
+      tool: "generer_image",
+      ackText: ackSentence,
+      persistMessage: true,
+    });
+    const file = manager.getSessionFile()!;
+    const live = host.getState(sessionId)!;
+    const assistant = live.transcript.find((entry) => entry.role === "assistant");
+    expect(assistant?.ack).toBe(ackSentence);
+    expect(assistant?.text).toBe("");
+    // Rechargement : le corps est vide, l'accusé est là. La phrase n'apparaît QU'UNE
+    // fois (elle est retranchée du message persisté).
+    const restored = transcriptFromEntries(SessionManager.open(file).getBranch(), {
+      syntheticUserPrefixes: [],
+    });
+    const restoredAssistant = restored.find((entry) => entry.role === "assistant");
+    expect(restoredAssistant?.ack).toBe(ackSentence);
+    expect(restoredAssistant?.text).toBe("");
+  });
+
+  it("REPLI (le modèle n'a rien écrit) : le texte du repli est persisté et revient", async () => {
+    const { host, manager, sessionId } = await runOnce({
+      tool: "delegate",
+      persistMessage: true,
+    });
+    const file = manager.getSessionFile()!;
+    const expected = (ACK_FALLBACK_TEXTS.delegate ?? [])[0];
+    const ackEntries = rawLines(file).filter((e) => e.customType === RUN_ACK_CUSTOM_TYPE);
+    expect(ackEntries).toHaveLength(1);
+    expect(ackEntries[0].data).toEqual({ tool: "delegate", text: expected });
+    const live = host.getState(sessionId)!.transcript.find((e) => e.role === "assistant");
+    expect(live?.ack).toBe(expected);
+    const restored = transcriptFromEntries(SessionManager.open(file).getBranch(), {
+      syntheticUserPrefixes: [],
+    });
+    expect(restored.find((e) => e.role === "assistant")?.ack).toBe(expected);
+  });
+
+  it("accusé SANS aucun message persisté : aucune entrée `run_ack` orpheline", async () => {
     const { host, manager, sessionId } = await runOnce({
       tool: "delegate",
       persistMessage: false,
@@ -252,8 +309,6 @@ describe("sdk-host réel — l'accusé est PERSISTÉ avec le message (run_ack)",
     expect(assistant).toBeDefined();
     expect(assistant?.ack).toBe("Je m'en occupe.");
     expect(assistant?.text).toBe("");
-    // Aucun message assistant persisté ⇒ rien n'est écrit dans le JSONL (aucune
-    // entrée `run_ack` orpheline, rattachable à un mauvais message).
     const file = manager.getSessionFile();
     if (file && existsSync(file)) {
       expect(rawLines(file).filter((e) => e.customType === RUN_ACK_CUSTOM_TYPE)).toEqual([]);
@@ -262,7 +317,7 @@ describe("sdk-host réel — l'accusé est PERSISTÉ avec le message (run_ack)",
 
   it("run SANS accusé : aucune entrée `run_ack` (jamais d'accusé inventé)", async () => {
     const { host, manager, sessionId } = await runOnce({
-      text: "Réponse immédiate.",
+      answer: "Réponse immédiate.",
       persistMessage: true,
     });
     const file = manager.getSessionFile()!;
@@ -273,9 +328,11 @@ describe("sdk-host réel — l'accusé est PERSISTÉ avec le message (run_ack)",
   });
 
   it("l'accusé ne part JAMAIS dans le contenu streamé (donc jamais prononcé)", async () => {
+    const ackSentence = "Je m'y mets.";
     const { events } = await runOnce({
       tool: "generer_image",
-      text: "Voici l'image demandée.",
+      ackText: ackSentence,
+      answer: "Voici l'image demandée.",
       persistMessage: true,
     });
     // Le moteur TTS ne consomme que les `delta` de canal `content` : on vérifie
@@ -285,6 +342,6 @@ describe("sdk-host réel — l'accusé est PERSISTÉ avec le message (run_ack)",
       .map((event) => (event.type === "delta" ? event.text : ""))
       .join("");
     expect(contentDeltas).toBe("Voici l'image demandée.");
-    expect(contentDeltas).not.toContain("C'est parti");
+    expect(contentDeltas).not.toContain(ackSentence);
   });
 });
