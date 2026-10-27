@@ -14,6 +14,7 @@ import type {
   SessionJobInfo,
   TranscriptEntry,
 } from "../../pi/types.js";
+import type { ComfyImageView } from "../../comfy/types.js";
 import type { WireFile } from "../../files/types.js";
 import { isAgentLevel, type AgentLevel } from "../../agents/types.js";
 import type {
@@ -471,6 +472,24 @@ export type ServerMessage =
       file: WireFile;
       /** `yuki` = envoyé par Yuki ; `user` = fichier joint par l'utilisateur. */
       from: "yuki" | "user";
+    }
+  | {
+      /**
+       * IMAGE GÉNÉRÉE par ComfyUI, affichée DANS la conversation. Trame de
+       * CONTRÔLE (aucun `seq` consommé, jamais bufferisée) : elle n'entre donc
+       * ni dans le rejeu, ni dans le snapshot, ni dans le transcript, ni dans la
+       * mémoire.
+       *
+       * ⚠️ Elle porte un chemin SAME-ORIGIN (`/images/<id>.<ext>`) : `img-src
+       * 'self'` suffit, la CSP n'est PAS élargie. Aucun octet d'image ne voyage
+       * ici, et le nom de fichier renvoyé par ComfyUI n'est jamais exposé
+       * (l'identifiant est aléatoire).
+       *
+       * ⚠️ Contrairement aux captures d'écran d'agents, l'image a AUSSI été
+       * transmise au modèle : Yuki l'a vue et peut juger ou régénérer.
+       */
+      type: "image";
+      image: ComfyImageView;
     }
   | { type: "pong"; t: number }
   | { type: "bye"; reason: string };

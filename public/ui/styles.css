@@ -2560,6 +2560,58 @@ h6.md-heading {
   color: var(--muted);
 }
 
+/* ── Image GÉNÉRÉE (bloc éphémère dans la conversation) ────────────────────
+ * Même grammaire que la capture d'écran, avec une teinte distincte : c'est une
+ * image PRODUITE pour l'utilisateur, pas une capture. La source reste un chemin
+ * SAME-ORIGIN (`/images/<id>.<ext>`) : aucune CSP n'est élargie. */
+.generated-image {
+  align-self: stretch;
+  max-width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 4px solid color-mix(in srgb, var(--text) 45%, var(--border));
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.generated-image__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.generated-image__title {
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.generated-image__badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-3);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.generated-image__image {
+  display: block;
+  margin: 4px 0 0;
+  border: 1px solid var(--border);
+}
+
+.generated-image__note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
 /* ─── TÉLÉPHONE : plus de barre latérale, trois menus déroulants en haut ────
  *
  * SEUIL : `max-width: 767px` (donc « moins de 768 px ») OU

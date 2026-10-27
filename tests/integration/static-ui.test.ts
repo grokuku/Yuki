@@ -1,7 +1,11 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { ComfyWorkflowStore, GeneratedImagesStore } from "../../src/comfy/index.js";
 import { loadEnv } from "../../src/config/env.js";
 import { inspectMountPoints, mountPoints } from "../../src/config/paths.js";
 import { createServer, startServer } from "../../src/gateway/server.js";
@@ -30,12 +34,27 @@ const gate = runGate(
   logger,
 );
 
+/**
+ * Volume JETABLE des images générées : la pile de test sert AUSSI les routes
+ * `/images/…` et `/api/images/…` (preuve de bout en bout, sans écriture hors de
+ * `/tmp`). Aucun appel réseau : le « serveur ComfyUI » est un double.
+ */
+const comfyDir = mkdtempSync(join(tmpdir(), "yuki-static-ui-comfy-"));
+
 const server = createServer({
   env,
   report: gate.report,
   gatePassed: gate.passed,
   startedAt: Date.now(),
   volumes: inspectMountPoints(mountPoints(env)),
+  images: {
+    workflows: new ComfyWorkflowStore({ path: join(comfyDir, "workflows.json") }),
+    images: new GeneratedImagesStore({ dir: join(comfyDir, "images") }),
+    clientFor: () => ({
+      systemStats: async () => ({ version: "0.3.40", devices: ["cuda:0"] }),
+    }),
+    logger,
+  },
 });
 
 let baseUrl = "";
@@ -50,6 +69,7 @@ afterAll(async () => {
     server.close(() => resolve());
     server.closeAllConnections?.();
   });
+  rmSync(comfyDir, { recursive: true, force: true });
 });
 
 describe("UI statique servie par le gateway", () => {
@@ -855,8 +875,11 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     // Groupe de champs dans l'onglet Système (aucun nouvel onglet).
     expect(js).toContain('id: "librarian"');
-    // ⚠️ Le groupe « notifications » (PWA + Web Push) a rejoint l'onglet Système.
-    expect(js).toContain('groups: ["gpu", "transport", "librarian", "notifications"]');
+    // ⚠️ Le groupe « notifications » (PWA + Web Push) et la section « Images
+    // générées » (serveur ComfyUI) ont rejoint l'onglet Système.
+    expect(js).toContain(
+      'groups: ["gpu", "transport", "librarian", "notifications", "images"]',
+    );
     for (const path of ["librarian.baseUrl", "librarian.agentToken", "librarian.apiKey"]) {
       expect(js, path).toContain(`path: "${path}"`);
     }
@@ -876,5 +899,101 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     const body = await (await fetch(`${baseUrl}/config`)).text();
     expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
     expect(body).toContain('id="group-systeme"');
+  });
+});
+
+describe("Images générées (ComfyUI) — section /config et service same-origin", () => {
+  it("ajoute la section « Images » à l'onglet Système (8 onglets inchangés)", async () => {
+    const body = await (await fetch(`${baseUrl}/config`)).text();
+    // Section dédiée DANS l'onglet Système, sans nouvel onglet.
+    expect(body).toContain('id="group-images"');
+    expect(body).toContain('id="images-root"');
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
+    // CSP : aucun style inline dans le markup.
+    expect(body).not.toMatch(/\sstyle=/);
+  });
+
+  it("déclare les champs du serveur et un bouton de test dédié (route ComfyUI)", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).toContain('id: "images"');
+    for (const path of ["images.baseUrl", "images.apiKey", "images.width", "images.height"]) {
+      expect(js, path).toContain(`path: "${path}"`);
+    }
+    expect(js).toContain('test: "images"');
+    expect(js).toContain("/api/images/test");
+    expect(js).toContain("initImagesPanel");
+    // La clé est un champ SECRET (jamais réaffichée en clair).
+    expect(js).toMatch(/path: "images\.apiKey",\s*\n\s*label: [^\n]+,\s*\n\s*kind: "secret"/);
+    // CSP stricte côté page.
+    expect(js).not.toContain("innerHTML");
+    expect(js).not.toContain(".style.");
+  });
+
+  it("sert le panneau des workflows (import au format API, sans injection HTML)", async () => {
+    const response = await fetch(`${baseUrl}/ui/images-panel.js`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/javascript");
+    const js = await response.text();
+    // Les quatre routes de gestion des workflows.
+    expect(js).toContain("/api/images/workflows");
+    expect(js).toContain("/defaut");
+    expect(js).toContain("HolafFetch.delete");
+    // Les six étiquettes sont NOMMÉES (affichage trouvées / manquantes), dont
+    // YUKI_OUTPUT : le nœud qui produit l'IMAGE FINALE.
+    for (const label of [
+      "YUKI_PROMPT",
+      "YUKI_NEGATIVE",
+      "YUKI_SEED",
+      "YUKI_WIDTH",
+      "YUKI_HEIGHT",
+      "YUKI_OUTPUT",
+    ]) {
+      expect(js, label).toContain(label);
+    }
+    // ⚠️ Le panneau DIT qu'un `PreviewImage` étiqueté convient (aucun fichier
+    // permanent à stocker) et ce qui se passe SANS l'étiquette.
+    expect(js).toContain("PreviewImage");
+    expect(js, "repli annoncé").toContain("PREMIÈRE image produite");
+    // Export API expliqué à l'utilisateur.
+    expect(js).toContain("Save (API");
+    // CSP stricte : DOM programmatique uniquement.
+    expect(js).not.toContain("innerHTML");
+    expect(js).not.toContain("style=");
+  });
+
+  it("sert le bloc d'image dans le fil et son style (chemin same-origin)", async () => {
+    const block = await (await fetch(`${baseUrl}/ui/image-block.js`)).text();
+    expect(block).toContain("isSafeImageSrc");
+    expect(block).not.toContain("innerHTML");
+    const app = await (await fetch(`${baseUrl}/ui/app.js`)).text();
+    expect(app).toContain("createImageBlocks");
+    // La trame de contrôle `image` est traitée AVANT le curseur `seq`.
+    expect(app).toContain('type === "image"');
+    const css = await (await fetch(`${baseUrl}/ui/config.css`)).text();
+    expect(css).toContain(".image-workflow");
+    const styles = await (await fetch(`${baseUrl}/ui/styles.css`)).text();
+    expect(styles).toContain(".generated-image");
+  });
+
+  it("sert l'image en same-origin et refuse une traversée de répertoire", async () => {
+    // Chemin inconnu ⇒ 404 (aucune fuite de fichier arbitraire).
+    for (const path of [
+      "/images/../../etc/passwd.png",
+      "/images/00000000000000000000000000000000.png",
+    ]) {
+      const response = await fetch(`${baseUrl}${path}`);
+      expect(response.status, path).toBe(404);
+    }
+    // Route d'API : la liste est vide tant qu'aucun workflow n'est importé.
+    const list = await fetch(`${baseUrl}/api/images/workflows`);
+    expect(list.status).toBe(200);
+    expect(await list.json()).toEqual({ workflows: [] });
+    // Écriture sans l'en-tête de configuration ⇒ refusée.
+    const refused = await fetch(`${baseUrl}/api/images/workflows`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "manga", description: "x", workflow: {} }),
+    });
+    expect(refused.status).toBe(403);
   });
 });

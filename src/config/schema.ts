@@ -630,6 +630,61 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_FILES_PROMPT_TOTAL_CHARS",
   },
+
+  // --- Images générées (serveur ComfyUI) -------------------------------------
+  // ⚠️ `images.baseUrl` vide = serveur NON configuré : l'outil `generer_image`
+  // existe quand même (il est câblé) mais REFUSE explicitement, avec la marche à
+  // suivre. `apply: hot` : le client relit l'URL à CHAQUE appel, donc la
+  // première configuration ne demande AUCUN redémarrage.
+  // ⚠️ Les WORKFLOWS, eux, ne sont PAS ici : ils vivent dans un fichier séparé du
+  // volume `state` (`${state}/comfy/workflows.json`) — un graphe pèse des dizaines
+  // de Ko et `PUT /api/config` n'accepte qu'un patch PLAT de scalaires.
+  "images.baseUrl": {
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    apply: "hot",
+    env: "YUKI_IMAGES_BASE_URL",
+  },
+  // Jeton facultatif (serveur ComfyUI derrière un reverse-proxy authentifié).
+  // ⚠️ Envoyé en `Authorization: Bearer …`, JAMAIS journalisé, JAMAIS renvoyé
+  // par l'API (masqué comme les autres champs `secret`).
+  "images.apiKey": {
+    type: "string",
+    default: "",
+    apply: "hot",
+    secret: true,
+    env: "YUKI_IMAGES_API_KEY",
+  },
+  // Dimensions injectées dans les nœuds `YUKI_WIDTH` / `YUKI_HEIGHT` (relues à
+  // chaque génération). Les workflows qui ne portent pas ces étiquettes les
+  // ignorent : ces valeurs ne sont jamais imposées à un graphe qui ne les demande pas.
+  "images.width": {
+    type: "int",
+    default: 1_024,
+    min: 64,
+    max: 4_096,
+    apply: "hot",
+    env: "YUKI_IMAGES_WIDTH",
+  },
+  "images.height": {
+    type: "int",
+    default: 1_024,
+    min: 64,
+    max: 4_096,
+    apply: "hot",
+    env: "YUKI_IMAGES_HEIGHT",
+  },
+  // Délai MAXIMAL d'une génération (10 s à 3 min en pratique). Au-delà, l'attente
+  // s'arrête et le message dit de vérifier la file du serveur : jamais de blocage.
+  "images.timeoutMs": {
+    type: "int",
+    default: 180_000,
+    min: 10_000,
+    max: 600_000,
+    apply: "hot",
+    env: "YUKI_IMAGES_TIMEOUT_MS",
+  },
 };
 
 /** Ordre stable des chemins (déterminisme des réponses / journaux). */

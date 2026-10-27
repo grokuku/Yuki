@@ -108,6 +108,8 @@ export type LibrarianToolName =
  * dans la conversation (fichier reçu, ou fichier déposé pour l'utilisateur).
  * Porté par le LÉGER uniquement — c'est lui qui converse.
  */
+export type ImageToolName = "generer_image";
+
 export type FilesToolName = "envoyer_fichier";
 
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
@@ -120,7 +122,8 @@ export type CustomToolName =
   | HeritageToolName
   | ConversationArchiveToolName
   | LibrarianToolName
-  | FilesToolName;
+  | FilesToolName
+  | ImageToolName;
 
 export interface ToolPolicyEntry {
   readonly role: LlmRole;
@@ -148,6 +151,8 @@ export interface ToolPolicyEntry {
   readonly librarianCapture: readonly LibrarianToolName[];
   /** Outils d'ENVOI de fichier par Yuki (`envoyer_fichier`). */
   readonly files: readonly FilesToolName[];
+  /** Outil de GÉNÉRATION d'image (`generer_image`, serveur ComfyUI). */
+  readonly images: readonly ImageToolName[];
   /** Le rôle peut-il déléguer à un worker lourd ? */
   readonly canDelegate: boolean;
 }
@@ -231,6 +236,14 @@ export const LIBRARIAN_TOOLS: readonly LibrarianToolName[] = [
 ];
 
 /**
+ * Outil de GÉNÉRATION d'image via un serveur ComfyUI (`generer_image`). Exposé
+ * quand le générateur est câblé (toujours, dans le gateway) : l'outil REFUSE
+ * explicitement tant qu'aucune URL de serveur n'est configurée, avec la marche à
+ * suivre — aucun redémarrage n'est donc nécessaire pour l'activer.
+ */
+export const IMAGE_TOOLS: readonly ImageToolName[] = ["generer_image"];
+
+/**
  * Outil de CAPTURE de page web via Libry (`capture_libraire`). Exposé quand le
  * libraire est configuré ET que `librarian.screenshot` est `on` au démarrage
  * (même contrainte que l'URL de base).
@@ -266,6 +279,9 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // Fichiers : Yuki peut RENVOYER un fichier de la conversation (le lourd
     // n'écrit qu'à l'utilisateur : il n'envoie pas de fichier).
     files: FILES_TOOLS,
+    // IMAGES : la génération est une action de CONVERSATION (Yuki décrit la
+    // scène, voit l'image, la juge) — elle reste donc au léger, jamais au worker.
+    images: IMAGE_TOOLS,
     canDelegate: true,
   },
   heavy: {
@@ -290,6 +306,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     librarian: [],
     librarianCapture: [],
     files: [],
+    images: [],
     canDelegate: false,
   },
 };
@@ -359,6 +376,11 @@ export interface ToolAllowlistOptions {
    * seul le câblage l'active, quand le stockage des fichiers existe.
    */
   filesEnabled?: boolean;
+  /**
+   * Active l'outil de génération d'image `generer_image` (serveur ComfyUI).
+   * DÉSACTIVÉ par défaut : seul le câblage l'active, quand le générateur existe.
+   */
+  imagesEnabled?: boolean;
 }
 
 /**
@@ -389,6 +411,7 @@ export function toolAllowlist(
     (options.librarianCaptureEnabled ?? false) &&
     entry.librarianCapture.length > 0;
   const filesEnabled = (options.filesEnabled ?? false) && entry.files.length > 0;
+  const imagesEnabled = (options.imagesEnabled ?? false) && entry.images.length > 0;
   const tools: string[] = [...entry.builtins];
   if (entry.canDelegate && delegationEnabled) {
     tools.push(...entry.custom);
@@ -422,6 +445,9 @@ export function toolAllowlist(
   }
   if (filesEnabled) {
     tools.push(...entry.files);
+  }
+  if (imagesEnabled) {
+    tools.push(...entry.images);
   }
   return tools;
 }

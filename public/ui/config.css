@@ -1292,3 +1292,110 @@
   width: 100%;
   box-sizing: border-box;
 }
+
+/* ─── Onglet « Images » — workflows ComfyUI importés ───────────────────────
+ * Le panneau est rendu par `images-panel.js` (DOM programmatique, aucun style
+ * inline : CSP `style-src 'self'`). Les cartes reprennent la grammaire visuelle
+ * des cartes de secrets (bordure, fond, titre, méta). */
+.image-workflows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.image-workflow {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.image-workflow__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.image-workflow__name {
+  font-family: var(--font-mono, monospace);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.image-workflow__description {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.image-workflow__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.image-workflow__label {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.image-workflow__label--found {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.image-workflow__label--missing {
+  opacity: 0.65;
+}
+
+.image-workflow__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.image-import {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 720px;
+}
+
+.image-import__default {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.image-import__refusal {
+  border: 1px solid var(--danger, #b4443c);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.image-import__refusal p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.image-import__title {
+  font-weight: 600;
+}
+
+.image-import__labels {
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+}

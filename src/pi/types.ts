@@ -27,6 +27,7 @@ import type { MemoryPort } from "../memory/types.js";
 import type { PersonalityPort } from "../personality/types.js";
 import type { ReactionsPort } from "../reactions/types.js";
 import type { RulesPort } from "../rules/types.js";
+import type { ComfyImageGenerationPort, ComfyImageView } from "../comfy/index.js";
 import type { FilesSendPort } from "../files/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
@@ -183,6 +184,25 @@ export interface PiHostOptions {
    * Absent ⇒ aucun outil (tests, host nu).
    */
   files?: FilesSendPort;
+  /**
+   * IMAGES GÉNÉRÉES (serveur ComfyUI). Présent ⇒ la façade expose l'outil
+   * `generer_image` (Yuki génère une image, la VOIT et peut régénérer) et
+   * l'extension qui rappelle la liste des styles disponibles à chaque tour.
+   * Absent ⇒ aucun outil, aucune injection (host nu, tests).
+   *
+   * ⚠️ `styles.enabled()` est relu à chaque tour et `generator` à chaque appel :
+   * importer un workflow ou changer l'URL du serveur ne demande aucun redémarrage.
+   * `onImage` émet la vue vers l'interface (trame de contrôle `image`) ; sans lui,
+   * l'image est quand même transmise au modèle mais rien n'est affiché dans le fil.
+   */
+  images?: {
+    generator: ComfyImageGenerationPort;
+    onImage?: (view: ComfyImageView) => void;
+    styles: {
+      candidates(): Array<{ name: string; description: string; isDefault: boolean }>;
+      enabled(): boolean;
+    };
+  };
   /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).

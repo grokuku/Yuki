@@ -35,6 +35,7 @@ import type {
   ScreenshotGatewayPort,
   SecretRequestGatewayPort,
 } from "../../agents/execution.js";
+import type { ImagesGatewayPort } from "../../comfy/types.js";
 import type { FilesGatewayPort } from "../../files/types.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
@@ -119,6 +120,12 @@ export interface WsTransportOptions {
    * aucune trame `screenshot` (comportement inchangé).
    */
   screenshots?: ScreenshotGatewayPort;
+  /**
+   * Images GÉNÉRÉES (ComfyUI) affichées DANS la conversation. Absent ⇒ aucune
+   * trame `image` (comportement inchangé). ⚠️ Servies en same-origin
+   * (`/images/<id>.<ext>`) : la CSP n'est jamais élargie.
+   */
+  images?: ImagesGatewayPort;
   /**
    * Épinglage des conversations. Absent ⇒ aucune conversation épinglable (la
    * trame `sessions` n'embarque alors aucun état `pinned`).
@@ -359,6 +366,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const pins = options.pins;
   const agentPort = options.agents;
   const screenshots = options.screenshots;
+  const imagesPort = options.images;
   const secretPort = options.secrets;
   const recap = options.recap;
   const reactions = options.reactions;
@@ -621,6 +629,16 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     const sessionId = event.screenshot.sessionId;
     if (!sessionId) return;
     broadcastControl(sessionId, { type: "screenshot", screenshot: event.screenshot });
+  });
+
+  // ── Images GÉNÉRÉES par ComfyUI (trame de CONTRÔLE) ──────────────────────
+  // Même régime que les captures : la trame va aux clients de la SEULE
+  // conversation demandeuse, aucun `seq` consommé, donc jamais dans le rejeu, le
+  // snapshot, le transcript ou la mémoire. ⚠️ Seul un chemin SAME-ORIGIN voyage
+  // (`/images/<id>.<ext>`) : la CSP reste `img-src 'self'`.
+  const unsubscribeImages = imagesPort?.subscribeImages((view) => {
+    if (!view.sessionId) return;
+    broadcastControl(view.sessionId, { type: "image", image: view });
   });
 
   // ── Fichiers ENVOYÉS par Yuki (trame de CONTRÔLE) ────────────────────────
@@ -1841,6 +1859,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       unsubscribeSecrets?.();
       unsubscribeAgents?.();
       unsubscribeScreenshots?.();
+      unsubscribeImages?.();
       unsubscribeFiles?.();
       tts?.cancelAll();
       if (httpServer) {

@@ -35,6 +35,7 @@ import { createReactionControl } from "./reactions.js";
 import { iconNode } from "./icons.js";
 import { MOBILE_MEDIA_QUERY, initMobileNav } from "./mobile-nav.js";
 import { createScreenshotBlocks, formatBytes } from "./screenshot-block.js";
+import { createImageBlocks } from "./image-block.js";
 import {
   createFileBlocks,
   createFileCard,
@@ -630,6 +631,14 @@ const approvalLayer = createApprovalLayer({
  * ne la reçoit jamais. */
 const screenshotBlocks = createScreenshotBlocks({ container: els.conversation });
 
+/* ─── IMAGES GÉNÉRÉES dans la conversation ─────────────────────────────────
+ * Éphémère (trame de CONTRÔLE `image`, aucun `seq` consommé, jamais bufferisée) :
+ * le bloc n'existe que dans cette session d'affichage et disparaît dès que le fil
+ * est reconstruit. La source est un chemin SAME-ORIGIN (`/images/<id>.<ext>`) :
+ * aucune CSP à élargir. ⚠️ Contrairement aux captures d'agents, l'image a AUSSI
+ * été transmise à Yuki, qui l'a donc vue et peut la juger. */
+const imageBlocks = createImageBlocks({ container: els.conversation });
+
 /* ─── FICHIERS dans la conversation (envoi ET réception) ───────────────────
  * Deux sources DISTINCTES :
  *  - les fichiers joints par l'UTILISATEUR portent leur marqueur DANS le
@@ -1187,6 +1196,7 @@ function applyTranscript(transcript) {
   // réflexion, réactions). Le serveur les ré-affichera s'ils vivent encore.
   approvalLayer.reset();
   screenshotBlocks.reset();
+  imageBlocks.reset();
   fileBlocks.reset();
   subagentActivity.reset();
   thinkingBlocks.reset();
@@ -1363,6 +1373,7 @@ function handleFrame(frame) {
     // coupure ne doit PAS rester affichée (état vivant, pas d'historique).
     approvalLayer.reset();
     screenshotBlocks.reset();
+    imageBlocks.reset();
     fileBlocks.reset();
     subagentActivity.reset();
     thinkingBlocks.reset();
@@ -1503,6 +1514,13 @@ function handleFrame(frame) {
   // doublon. Jamais rejouée, jamais conservée, jamais envoyée au modèle.
   if (type === "screenshot") {
     screenshotBlocks.show(frame.screenshot);
+    return;
+  }
+  // IMAGE GÉNÉRÉE : ÉTAT TEMPORAIRE, trame de CONTRÔLE (aucun `seq` consommé),
+  // traitée AVANT le curseur `seq` (sinon prise pour un doublon). Jamais rejouée,
+  // jamais conservée : le chemin est same-origin, donc la CSP reste inchangée.
+  if (type === "image") {
+    imageBlocks.show(frame.image);
     return;
   }
   // FICHIER envoyé par Yuki : trame de CONTRÔLE (aucun `seq` consommé). La carte

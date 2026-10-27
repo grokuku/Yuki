@@ -16,6 +16,7 @@ import type { SessionPinStore } from "../../../src/pi/session-pins.js";
 import type { RecapGenerator } from "../../../src/recap/index.js";
 import type { ReactionsGatewayPort } from "../../../src/reactions/types.js";
 import type { FilesGatewayPort } from "../../../src/files/types.js";
+import type { ImagesGatewayPort } from "../../../src/comfy/index.js";
 import type { TtsPipelineDeps } from "../../../src/tts/index.js";
 import { createLogger } from "../../../src/observability/logger.js";
 import { FakePiHost, type FakePiHostOptions } from "../../pi/host-double.js";
@@ -40,6 +41,8 @@ export interface HarnessOptions extends FakePiHostOptions {
   reactions?: ReactionsGatewayPort;
   /** FICHIERS échangés (pièces jointes + envoi par Yuki, optionnel). */
   files?: FilesGatewayPort;
+  /** IMAGES générées (ComfyUI) affichées dans la conversation (optionnel). */
+  images?: ImagesGatewayPort;
 }
 
 export interface Harness {
@@ -69,6 +72,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.agents ? { agents: options.agents } : {}),
     ...(options.reactions ? { reactions: options.reactions } : {}),
     ...(options.files ? { files: options.files } : {}),
+    ...(options.images ? { images: options.images } : {}),
   });
   const server = createHttpServer((_req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });

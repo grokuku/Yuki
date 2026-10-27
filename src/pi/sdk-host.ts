@@ -94,6 +94,8 @@ import type {
 } from "../memory/conversation-archive.js";
 import { createLibrarianTools } from "./sdk/librarian-tools.js";
 import { createSendFileTools } from "./sdk/send-file-tool.js";
+import { createImageTools } from "./sdk/image-tools.js";
+import { createImageStylesExtensionFactory } from "./sdk/image-styles-extension.js";
 import { stripFilesBlock } from "../files/frame.js";
 import type {
   ApplyLlmConfigOptions,
@@ -325,7 +327,14 @@ function makeRunItem(
 export function buildInlineExtensions(
   options: Pick<
     PiHostOptions,
-    "rules" | "personality" | "memory" | "directory" | "heritage" | "reactions" | "logger"
+    | "rules"
+    | "personality"
+    | "memory"
+    | "directory"
+    | "heritage"
+    | "reactions"
+    | "images"
+    | "logger"
   >,
 ): InlineExtension[] {
   const extensionFactories: InlineExtension[] = [];
@@ -373,6 +382,16 @@ export function buildInlineExtensions(
     // système du tour suivant (bornée aux N dernières). En DERNIER : elle
     // n'écrase rien, elle s'ajoute après la mémoire, l'annuaire et l'archive.
     extensionFactories.push(createReactionsExtensionFactory(options.reactions));
+  }
+  if (options.images) {
+    // IMAGES : la LISTE des styles (workflows ComfyUI) est rappelée à chaque tour
+    // — elle sert à CHOISIR le workflow, jamais à composer le prompt. Relue à
+    // chaud : un workflow importé est connu au tour suivant, sans redémarrage.
+    extensionFactories.push(
+      createImageStylesExtensionFactory(options.images.styles, {
+        logger: options.logger,
+      }),
+    );
   }
   return extensionFactories;
 }
@@ -1520,6 +1539,17 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // DÉJÀ présent dans la conversation. Aucun accès disque n'est ouvert au
       // modèle : l'outil ne connaît que les fichiers rattachés à ce fil.
       customTools.push(...createSendFileTools(options.files));
+    }
+    if (options.images) {
+      // IMAGES : `generer_image` décrit une SCÈNE (texte libre, sans style), le
+      // générateur choisit le workflow par proximité, l'image revient AU MODÈLE
+      // (elle la voit, peut régénérer) et s'affiche dans le fil (same-origin).
+      customTools.push(
+        ...createImageTools({
+          generate: options.images.generator.generate,
+          ...(options.images.onImage ? { onImage: options.images.onImage } : {}),
+        }),
+      );
     }
 
     // Extensions INLINE, dans l'ORDRE D'APPLICATION voulu du prompt du tour :

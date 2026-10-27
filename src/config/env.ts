@@ -128,6 +128,19 @@ export interface Env {
    */
   filesDir: string;
   /**
+   * Fichier JSON des WORKFLOWS ComfyUI nommés (volume `state`). ⚠️ Fichier
+   * SÉPARÉ de `config.json` : un graphe pèse des dizaines de Ko et l'API de
+   * configuration ne renvoie jamais un graphe. Surcharge :
+   * `YUKI_COMFY_WORKFLOWS_PATH`.
+   */
+  comfyWorkflowsPath: string;
+  /**
+   * Répertoire des IMAGES générées par ComfyUI (volume `state`). Servies en
+   * same-origin (`/images/<id>.<ext>`), comme les captures de pages web.
+   * Surcharge : `YUKI_COMFY_IMAGES_DIR`.
+   */
+  comfyImagesDir: string;
+  /**
    * Fichier JSON des clés VAPID (volume `state`, 0600). ⚠️ Contient la clé
    * PRIVÉE : jamais exposé, jamais journalisé. Surcharge : `YUKI_PUSH_VAPID_PATH`.
    */
@@ -378,6 +391,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       `${mountPoints.state}/reactions.jsonl`,
     ),
     filesDir: getString(env, "YUKI_FILES_DIR", `${mountPoints.state}/files`),
+    comfyWorkflowsPath: getString(
+      env,
+      "YUKI_COMFY_WORKFLOWS_PATH",
+      `${mountPoints.state}/comfy/workflows.json`,
+    ),
+    comfyImagesDir: getString(
+      env,
+      "YUKI_COMFY_IMAGES_DIR",
+      `${mountPoints.state}/comfy/images`,
+    ),
     pushVapidPath: getString(
       env,
       "YUKI_PUSH_VAPID_PATH",

@@ -49,6 +49,14 @@ import { SecretRequestRegistry } from "./secrets/requests.js";
 import { SecretStore } from "./secrets/store.js";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
+import {
+  ComfyClient,
+  ComfyWorkflowStore,
+  GeneratedImagesStore,
+  createComfyGenerator,
+  type ComfyImageView,
+  type ImagesGatewayPort,
+} from "./comfy/index.js";
 import { createFilesService, FilesStore } from "./files/index.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
@@ -927,6 +935,48 @@ async function main(): Promise<void> {
     promptTotalChars: config.getNumber("files.promptTotalChars"),
   });
 
+  // --- Images générées (serveur ComfyUI) ------------------------------------
+  // ⚠️ Ces briques ne dépendent NI de la porte GPU NI du PiHost : le stockage,
+  // le client HTTP et le générateur existent même en mode dégradé, ce qui permet
+  // d'importer des workflows et de tester la connexion depuis `/config` avant que
+  // la conversation ne fonctionne.
+  //
+  // - les WORKFLOWS vivent dans un fichier SÉPARÉ du volume `state` (un graphe
+  //   pèse des dizaines de Ko : jamais dans `config.json`) ;
+  // - les IMAGES vivent dans `${state}/comfy/images` et sont servies en
+  //   SAME-ORIGIN (`/images/<id>.<ext>`) : la CSP n'est pas élargie ;
+  // - l'URL et la CLÉ du serveur sont relues À CHAQUE appel (aucun redémarrage).
+  const comfyWorkflows = new ComfyWorkflowStore({
+    path: env.comfyWorkflowsPath,
+    logger,
+  });
+  const comfyImages = new GeneratedImagesStore({ dir: env.comfyImagesDir, logger });
+  comfyImages.ensureLayout();
+  const comfyClient = new ComfyClient({
+    config: () => ({
+      baseUrl: config.getString("images.baseUrl"),
+      apiKey: config.getString("images.apiKey"),
+    }),
+    logger,
+    // Délai de la génération COMPLÈTE, réglable à chaud (10 s à 10 min).
+    generationTimeoutMs: () => config.getNumber("images.timeoutMs"),
+  });
+  const comfyGenerator = createComfyGenerator({
+    client: comfyClient,
+    workflows: comfyWorkflows,
+    images: comfyImages,
+    sizes: () => ({
+      width: config.getNumber("images.width"),
+      height: config.getNumber("images.height"),
+    }),
+    logger,
+  });
+  logger.info("comfy.ready", {
+    workflows: comfyWorkflows.size,
+    imagesDir: env.comfyImagesDir,
+    configured: config.getString("images.baseUrl").trim() !== "",
+  });
+
   // --- Jobs, délégation, PiHost (uniquement si la porte est passée) ---------
   let piStatus: "starting" | "ready" | "error" = "starting";
   let sessionsCount = 0;
@@ -936,6 +986,8 @@ async function main(): Promise<void> {
   let heritageStore: HeritageStore | undefined;
   let conversationArchive: ConversationArchiveStore | undefined;
   let librarianShots: LibrarianShotsStore | undefined;
+  /** Bus de diffusion des images générées (posé quand le transport démarre). */
+  let imagesGateway: ImagesGatewayPort | undefined;
   let transport: Transport | undefined;
   let delegation: DelegationService | undefined;
   /** Désabonnement du rechargement À CHAUD des modèles LLM (voir plus bas). */
@@ -1179,6 +1231,30 @@ async function main(): Promise<void> {
       }
     };
 
+    // Diffusion des IMAGES GÉNÉRÉES vers l'UI (trame de contrôle `image`). Les
+    // abonnés sont posés par le transport WS ; un client en échec ne doit jamais
+    // interrompre les autres. ⚠️ Seules des métadonnées et un chemin SAME-ORIGIN
+    // voyagent : aucun octet d'image, aucun nom de fichier du serveur ComfyUI.
+    const imageViewListeners = new Set<(view: ComfyImageView) => void>();
+    imagesGateway = {
+      subscribeImages: (listener) => {
+        imageViewListeners.add(listener);
+        return () => {
+          imageViewListeners.delete(listener);
+        };
+      },
+    };
+    const emitGeneratedImage = (view: ComfyImageView): void => {
+      if (!view.sessionId) return;
+      for (const listener of [...imageViewListeners]) {
+        try {
+          listener(view);
+        } catch {
+          // Un client en échec ne doit pas interrompre les autres.
+        }
+      }
+    };
+
     host = createPiHost({
       agentDir: env.piAgentDir,
       cwd: env.piCwd,
@@ -1220,6 +1296,11 @@ async function main(): Promise<void> {
         // FICHIERS : `envoyer_fichier` (Yuki RENVOIE un fichier de la
         // conversation). Toujours actif : le stockage existe dès le démarrage.
         filesEnabled: true,
+        // IMAGES générées : l'outil `generer_image` est TOUJOURS proposé (il
+        // refuse explicitement tant qu'aucune URL de serveur n'est configurée,
+        // avec la marche à suivre) — configurer ComfyUI ne demande donc aucun
+        // redémarrage.
+        imagesEnabled: true,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
@@ -1244,6 +1325,16 @@ async function main(): Promise<void> {
       // FICHIERS : Yuki peut RENVOYER un fichier déjà présent dans la
       // conversation (fichier reçu, ou fichier déposé pour l'utilisateur).
       files: filesService,
+      // IMAGES : Yuki génère une image sur le serveur ComfyUI, la VOIT (elle peut
+      // juger et régénérer) et l'utilisateur la voit dans le fil (same-origin).
+      images: {
+        generator: comfyGenerator,
+        onImage: (view: ComfyImageView) => emitGeneratedImage(view),
+        styles: {
+          candidates: () => comfyWorkflows.candidates(),
+          enabled: () => config.getString("images.baseUrl").trim() !== "",
+        },
+      },
       personality: personalityStore,
       rules: rulesStore,
       eventSource: delegation,
@@ -1372,6 +1463,10 @@ async function main(): Promise<void> {
           logger,
         }),
       ),
+      // IMAGES générées : trame de contrôle `image` (aucun `seq` consommé, jamais
+      // bufferisée), routée vers la SEULE conversation demandeuse. L'image est
+      // servie en same-origin : la CSP n'est jamais élargie.
+      ...(imagesGateway ? { images: imagesGateway } : {}),
       // FICHIERS : rattachement des fichiers joints à un message (`attach`) et
       // envoi par Yuki (trame de contrôle `file_sent`, jamais bufferisée).
       files: filesService,
@@ -1536,6 +1631,25 @@ async function main(): Promise<void> {
       // SERVICE same-origin (`/fichiers/<id>.<ext>`). Disponible même en mode
       // dégradé : stocker et télécharger ne demande aucun modèle.
       files: { service: filesService, logger },
+      // IMAGES générées : import des workflows, bouton de test et SERVICE
+      // same-origin (`/images/<id>.<ext>`). Disponible même en mode dégradé :
+      // importer un workflow et tester le serveur ne demande aucun modèle.
+      images: {
+        workflows: comfyWorkflows,
+        images: comfyImages,
+        // Le bouton « Tester la connexion » vérifie les valeurs SAISIES (pas
+        // encore enregistrées) quand l'UI les fournit ; sinon la configuration.
+        clientFor: (override) =>
+          new ComfyClient({
+            config: () => ({
+              baseUrl: override.baseUrl ?? config.getString("images.baseUrl"),
+              apiKey: override.apiKey ?? config.getString("images.apiKey"),
+            }),
+            logger,
+            requestTimeoutMs: 8_000,
+          }),
+        logger,
+      },
       voices: voicesDeps,
       tts: ttsDeps,
       ...(agentsDeps ? { agents: agentsDeps } : {}),

@@ -10,6 +10,7 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
 import { resolve } from "node:path";
 
+import { MAX_COMFY_WORKFLOW_BYTES } from "../comfy/index.js";
 import type { Env } from "../config/env.js";
 import type { MountStatus } from "../config/paths.js";
 import type { GpuReport } from "../types/gpu.js";
@@ -77,6 +78,13 @@ import {
   type SubsystemsSnapshot,
 } from "./routes/health.js";
 import { resolveStaticRequest } from "./routes/static.js";
+import {
+  handleImagesApiRequest,
+  handleImagesServeRequest,
+  isImagesApiPath,
+  isImagesServePath,
+  type ImagesApiDeps,
+} from "./routes/images.js";
 import {
   handleCapturesRequest,
   isCapturesPath,
@@ -147,6 +155,12 @@ export interface AppContext {
    * same-origin (`/fichiers/<id>.<ext>`). Absent ⇒ ces routes → 404.
    */
   files?: FilesApiDeps;
+  /**
+   * Images générées via ComfyUI : import des workflows (`POST /api/images/…`),
+   * bouton de test et SERVICE same-origin (`/images/<id>.<ext>`). Absent ⇒ ces
+   * routes → 404.
+   */
+  images?: ImagesApiDeps;
 }
 
 interface RouteResponse {
@@ -527,6 +541,61 @@ async function handlePushHttp(
   );
 }
 
+/**
+ * Traite une requête de l'API des IMAGES générées (asynchrone : corps + test).
+ *
+ * ⚠️ Le corps peut être un GRAPHE complet : la borne de lecture est celle du
+ * workflow (`MAX_COMFY_WORKFLOW_BYTES`), pas celle de `/api/config` — un graphe
+ * de 1,5 Mo est parfaitement légitime. Au-delà, le refus est EXPLICITE (413).
+ */
+async function handleImagesHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: ImagesApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "POST" || method === "PUT" || method === "PATCH") {
+    try {
+      body = (
+        await readBodyBinary(req, MAX_COMFY_WORKFLOW_BYTES + 64 * 1024)
+      ).toString("utf8");
+    } catch (error) {
+      if (error instanceof BodyTooLargeError) {
+        writeResponse(
+          res,
+          {
+            status: 413,
+            body: {
+              error: "body_too_large",
+              message:
+                "Le corps de la requête dépasse la taille maximale d'un workflow " +
+                `(${MAX_COMFY_WORKFLOW_BYTES} octets).`,
+            },
+          },
+          headOnly,
+        );
+        return;
+      }
+      body = "";
+    }
+  }
+  const response = await handleImagesApiRequest({
+    method,
+    path,
+    headers: req.headers,
+    body,
+    deps,
+  });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Construit l'écouteur HTTP de l'application. */
 export function createApp(context: AppContext): RequestListener {
   const {
@@ -550,6 +619,7 @@ export function createApp(context: AppContext): RequestListener {
     heritage,
     captures,
     files,
+    images,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -738,6 +808,35 @@ export function createApp(context: AppContext): RequestListener {
               { status: 500, body: { error: "internal_error" } },
               headOnly,
             );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (images && isImagesServePath(path)) {
+      // SERVICE same-origin des images générées : aucune CSP à élargir
+      // (`img-src 'self'`), aucune donnée du serveur ComfyUI n'est exposée.
+      const result = handleImagesServeRequest({ method, path, deps: images });
+      writeResponse(
+        res,
+        { status: result.status, body: result.body, headers: result.headers },
+        headOnly,
+      );
+      return;
+    }
+
+    if (images && isImagesApiPath(path)) {
+      void handleImagesHttp(req, res, path, method, headOnly, images).catch(
+        (error: unknown) => {
+          images.logger?.error("images.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(res, { status: 500, body: { error: "internal_error" } }, headOnly);
           } else {
             res.end();
           }

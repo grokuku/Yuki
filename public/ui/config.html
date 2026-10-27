@@ -272,6 +272,20 @@
             hidden
           >
             <div id="group-systeme" class="config-groups"></div>
+            <!--
+              Section « Images générées » (serveur ComfyUI) — DANS l'onglet
+              Système, sans nouvel onglet (même convention que le Libraire) :
+                ➀ Serveur   → #group-images (URL, clé facultative, dimensions, délai)
+                ➁ Workflows → #images-root (import au format API, étiquettes
+                  trouvées / manquantes, « par défaut », suppression)
+
+              ⚠️ Les workflows ne sont PAS des champs de configuration : ils vivent
+              dans un fichier séparé du volume d'état (un graphe pèse des dizaines
+              de Ko). Le panneau est un composant autonome monté par id
+              (`images-panel.js`), aucun style inline (CSP `style-src 'self'`).
+            -->
+            <div id="group-images" class="config-groups"></div>
+            <div id="images-root"></div>
           </section>
           <section
             class="config-panel"

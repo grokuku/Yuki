@@ -28,6 +28,7 @@ import { HolafModal } from './vendor/holaf/holaf-modal.js';
 import { createApprovalChannel } from './approval-channel.js';
 import { createApprovalLayer } from './approval-window.js';
 import { initAgentsPanel } from './agents-panel.js';
+import { initImagesPanel } from './images-panel.js';
 import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
 import { initSecretsPanel } from './secrets-panel.js';
@@ -560,6 +561,64 @@ const GROUPS = [
       },
     ],
   },
+  {
+    id: "images",
+    title: "Serveur d'images (ComfyUI)",
+    // Bouton « Tester la connexion » dédié (route `POST /api/images/test`) : il
+    // interroge `GET /system_stats` avec l'URL et la clé SAISIES, sans rien
+    // enregistrer.
+    test: "images",
+    fields: [
+      {
+        path: "images.baseUrl",
+        label: "URL du serveur ComfyUI",
+        kind: "text",
+        helper:
+          "Adresse du serveur ComfyUI, ex. http://10.10.0.5:8188. ⚠️ Vide = aucun " +
+          "serveur : l'outil de génération d'image refuse explicitement, avec la " +
+          "marche à suivre. Modifiable À CHAUD : aucun redémarrage n'est nécessaire.",
+      },
+      {
+        path: "images.apiKey",
+        label: "Clé du serveur (facultative)",
+        kind: "secret",
+        helper:
+          "Uniquement si votre ComfyUI est derrière un reverse-proxy authentifié " +
+          "(envoyée en Authorization: Bearer). ⚠️ Jamais réaffichée en clair, " +
+          "jamais journalisée, jamais transmise au modèle.",
+      },
+      {
+        path: "images.width",
+        label: "Largeur demandée (pixels)",
+        kind: "number",
+        min: 64,
+        max: 4096,
+        helper:
+          "Écrite dans le nœud étiqueté YUKI_WIDTH, si le workflow en a un. Les " +
+          "workflows qui ne portent pas cette étiquette l'ignorent.",
+      },
+      {
+        path: "images.height",
+        label: "Hauteur demandée (pixels)",
+        kind: "number",
+        min: 64,
+        max: 4096,
+        helper: "Écrite dans le nœud étiqueté YUKI_HEIGHT, si le workflow en a un.",
+      },
+      {
+        path: "images.timeoutMs",
+        label: "Délai maximal d'une génération (ms)",
+        kind: "number",
+        min: 10000,
+        max: 600000,
+        advanced: true,
+        helper:
+          "Au-delà, l'attente s'arrête et le message dit de vérifier la file du " +
+          "serveur : la conversation n'est jamais bloquée. Défaut 180 000 ms " +
+          "(3 minutes).",
+      },
+    ],
+  },
 ];
 
 const ALL_FIELDS = GROUPS.flatMap((group) => group.fields);
@@ -628,6 +687,10 @@ const FIELD_DEFAULTS = {
   "files.maxAttachments": 5,
   "files.promptChars": 12000,
   "files.promptTotalChars": 24000,
+  "images.baseUrl": "",
+  "images.width": 1024,
+  "images.height": 1024,
+  "images.timeoutMs": 180000,
 };
 
 /**
@@ -642,7 +705,11 @@ const TABS = [
   { id: "voix", groups: ["tts"] },
   { id: "agents", groups: ["agents-acces"] },
   { id: "secrets", groups: [] },
-  { id: "systeme", groups: ["gpu", "transport", "librarian", "notifications"] },
+  // IMAGES générées (ComfyUI) : SECTION de l'onglet Système, sans nouvel onglet
+  // (même convention que le Libraire). Les WORKFLOWS ne sont pas des champs de
+  // configuration (fichier séparé, potentiellement volumineux) : le panneau
+  // `images-panel.js` les gère.
+  { id: "systeme", groups: ["gpu", "transport", "librarian", "notifications", "images"] },
   { id: "maintenance", groups: [] },
 ];
 
@@ -695,10 +762,14 @@ const agentsRoot = document.getElementById("agents-root");
 /** Section « Mot de passe d'instance » (verrou des agents sensibles). */
 const instancePasswordRoot = document.getElementById("instance-password-root");
 const secretsRoot = document.getElementById("secrets-root");
+/** Panneau des workflows d'images générées (serveur ComfyUI) — monté par id. */
+const imagesRoot = document.getElementById("images-root");
 /** Panneau de la personnalité — monté par id. */
 const personalityRoot = document.getElementById("personality-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
 let voicesPanel = null;
+/** Panneau des workflows d'images — instancié après le premier chargement. */
+let imagesPanel = null;
 
 function h(tag, props = {}, children = []) {
   const el = document.createElement(tag);
@@ -1010,6 +1081,13 @@ function render() {
       const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
       test.addEventListener("click", () => testConnection(group.role, status));
       head.append(h("div", { class: "config-secret" }, [test, status]));
+    } else if (group.test === "images") {
+      // Bouton de test DÉDIÉ au serveur d'images (route `/api/images/test`) : il
+      // interroge `GET /system_stats` avec les valeurs SAISIES (pas encore
+      // enregistrées), sans rien écrire.
+      const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
+      test.addEventListener("click", () => testImagesConnection(status));
+      head.append(h("div", { class: "config-secret" }, [test, status]));
     } else if (group.test === "librarian") {
       // Bouton de test DÉDIÉ au libraire (route `/api/config/librarian/test`) :
       // il appelle `GET {base}/api/librarian/status` et affiche un résultat
@@ -1131,6 +1209,10 @@ function activateTab(tabId, { focus = false } = {}) {
 function selectTab(tabId, { focus = false, updateHash = false } = {}) {
   if (!TABS.some((tab) => tab.id === tabId)) return;
   activateTab(tabId, { focus });
+  // Les workflows d'images peuvent avoir changé hors de cette page : on relit
+  // la liste à chaque affichage de l'onglet Système (lecture seule, aucun effet
+  // de bord).
+  if (tabId === "systeme") void imagesPanel?.refresh?.();
   if (updateHash && location.hash !== `#${tabId}`) {
     history.replaceState(null, "", `#${tabId}`);
   }
@@ -1368,6 +1450,38 @@ async function testLibrarianConnection(statusEl) {
   }
 }
 
+/**
+ * Teste la connexion au SERVEUR D'IMAGES (ComfyUI) (`POST /api/images/test`).
+ *
+ * ⚠️ Il envoie l'URL et la CLÉ SAISIES dans le formulaire (pas encore
+ * enregistrées) : elles ne sont ni écrites ni journalisées. Le message affiché
+ * est celui que le serveur a RÉELLEMENT observé (statut HTTP, code réseau) :
+ * aucune cause n'est inventée ici.
+ */
+async function testImagesConnection(statusEl) {
+  statusEl.textContent = "Test en cours…";
+  statusEl.classList.remove("config-status--error");
+  try {
+    const baseControl = state.inputs.get("images.baseUrl");
+    const baseUrl =
+      baseControl && baseControl.value.trim() !== "" ? baseControl.value.trim() : undefined;
+    const keySecret = state.secretState.get("images.apiKey");
+    const apiKey =
+      keySecret?.input && keySecret.input.value.trim() !== ""
+        ? keySecret.input.value.trim()
+        : undefined;
+    const body = await HolafFetch.post("/api/images/test", {
+      headers: WRITE_HEADERS,
+      body: { ...(baseUrl ? { baseUrl } : {}), ...(apiKey ? { apiKey } : {}) },
+    });
+    statusEl.textContent = body.message ?? (body.ok ? "Serveur joignable." : "Échec.");
+    statusEl.classList.toggle("config-status--error", !body.ok);
+  } catch (error) {
+    statusEl.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+    statusEl.classList.add("config-status--error");
+  }
+}
+
 function setRestartStatus(text, isError = false) {
   restartStatus.textContent = text;
   restartStatus.classList.toggle("config-status--error", isError);
@@ -1598,6 +1712,11 @@ void (async () => {
     // suppression à chaud. Aucune valeur n'est jamais réaffichée.
     if (secretsRoot) {
       initSecretsPanel({ root: secretsRoot, HolafFetch, HolafModal });
+    }
+    // Panneau des IMAGES générées : import des workflows (format API), étiquettes
+    // trouvées / manquantes, « par défaut », suppression. Composant autonome.
+    if (imagesRoot) {
+      imagesPanel = initImagesPanel({ root: imagesRoot, HolafFetch, HolafModal });
     }
     // Panneau de la personnalité : édition, enregistrement, retour arrière,
     // historique. Composant autonome monté par id.
