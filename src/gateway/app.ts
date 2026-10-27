@@ -82,6 +82,14 @@ import {
   isCapturesPath,
   type CapturesApiDeps,
 } from "./routes/captures.js";
+import {
+  handleFilesApiRequest,
+  handleFilesServeRequest,
+  handleFilesUpload,
+  isFilesApiPath,
+  isFilesServePath,
+  type FilesApiDeps,
+} from "./routes/files.js";
 import { versionInfo } from "./routes/version.js";
 
 export interface AppContext {
@@ -134,6 +142,11 @@ export interface AppContext {
    * Absent ⇒ `/captures/*` → 404.
    */
   captures?: CapturesApiDeps;
+  /**
+   * Fichiers échangés : dépôt (`POST /api/files`), liste, suppression et SERVICE
+   * same-origin (`/fichiers/<id>.<ext>`). Absent ⇒ ces routes → 404.
+   */
+  files?: FilesApiDeps;
 }
 
 interface RouteResponse {
@@ -536,6 +549,7 @@ export function createApp(context: AppContext): RequestListener {
     memory,
     heritage,
     captures,
+    files,
   } = context;
 
   return (req: IncomingMessage, res: ServerResponse): void => {
@@ -732,8 +746,54 @@ export function createApp(context: AppContext): RequestListener {
       return;
     }
 
-    if (admin && isAdminPath(path)) {
+    if (files && isFilesServePath(path)) {
+      const result = handleFilesServeRequest({ method, path, deps: files });
       writeResponse(
+        res,
+        { status: result.status, body: result.body, headers: result.headers },
+        headOnly,
+      );
+      return;
+    }
+
+    if (files && isFilesApiPath(path)) {
+      if (method === "POST") {
+        // ⚠️ Le corps est consommé EN FLUX : un fichier de 2 Gio ne passe jamais
+        // en mémoire (le stockage écrit au fil de l'eau et refuse au-delà du
+        // plafond, en supprimant le partiel).
+        void handleFilesUpload({ headers: req.headers, stream: req, deps: files })
+          .then((response) => {
+            writeResponse(
+              res,
+              { status: response.status, body: response.body, headers: response.headers },
+              headOnly,
+            );
+          })
+          .catch((error: unknown) => {
+            files.logger?.error("files.upload.failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            if (!res.headersSent) {
+              writeResponse(
+                res,
+                { status: 500, body: { error: "internal_error" } },
+                headOnly,
+              );
+            } else {
+              res.end();
+            }
+          });
+        return;
+      }
+      writeResponse(
+        res,
+        handleFilesApiRequest({ method, path, headers: req.headers, deps: files }),
+        headOnly,
+      );
+      return;
+    }
+
+    if (admin && isAdminPath(path)) {      writeResponse(
         res,
         handleAdminRequest({ method, path, headers: req.headers, deps: admin }),
         headOnly,

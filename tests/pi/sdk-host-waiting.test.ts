@@ -241,3 +241,55 @@ describe("sdk-host réel — E5 : l'état reste `waiting` malgré un texte qui p
     expect(service.hasPendingWork(sessionId)).toBe(false);
   });
 });
+
+describe("sdk-host réel — ÉTAT VIVANT exposé par getState() (retour sur un fil actif)", () => {
+  it("expose les jobs ENCORE ouverts dans `jobs` (le bloc d'activité est restaurable)", async () => {
+    const { host, worker, service } = makeHarness();
+    host.subscribeAll(() => undefined);
+    await host.start();
+    const sessionId = host.currentSessionId()!;
+
+    expect(host.getState(sessionId)?.jobs).toBeUndefined();
+
+    worker.push({ manual: true });
+    await service.delegate({ task: "tâche de fond", lightSessionId: sessionId });
+    await delay(10);
+
+    const jobs = host.getState(sessionId)?.jobs ?? [];
+    expect(jobs.map((job) => job.task)).toEqual(["tâche de fond"]);
+    expect(jobs[0]?.status).toBe("running");
+    // L'instant de démarrage vient du JobStore : le compteur restauré est honnête.
+    expect(jobs[0]?.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    // Job TERMINÉ ⇒ il disparaît de l'état : aucun faux « en cours » au retour.
+    worker.finishLast({ status: "completed", text: "résultat" });
+    await delay(10);
+    expect(host.getState(sessionId)?.jobs).toBeUndefined();
+  });
+
+  it("`awaitingFirstToken` ne vaut true QUE tant que le run n'a rien produit", async () => {
+    const { host } = makeHarness();
+    host.subscribeAll(() => undefined);
+    await host.start();
+    const sessionId = host.currentSessionId()!;
+
+    // Run qui DÉMARRE et reste sans contenu (le modèle n'a encore rien streamé).
+    stub.onPrompt = () => new Promise<void>(() => undefined);
+    host.send(sessionId, "Question sans réponse immédiate");
+    await delay(20);
+
+    const streaming = host.getState(sessionId)!;
+    expect(streaming.state).toBe("streaming");
+    // ⚠️ C'est CE champ qui permet à l'interface de réafficher « Yuki réfléchit… »
+    // en rouvrant une conversation qui tourne en arrière-plan.
+    expect(streaming.awaitingFirstToken).toBe(true);
+
+    // Premier contenu : l'attente est finie (l'indicateur doit s'éteindre).
+    stub.emit({
+      type: "message_update",
+      assistantMessageEvent: { type: "text_delta", delta: "Bonjour" },
+    });
+    await delay(5);
+    expect(host.getState(sessionId)?.awaitingFirstToken).toBe(false);
+  });
+});

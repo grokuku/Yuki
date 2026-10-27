@@ -102,6 +102,14 @@ export type LibrarianToolName =
   | "archive_libraire"
   | "capture_libraire";
 
+/**
+ * Outil custom d'ENVOI de fichier par Yuki (`envoyer_fichier`). Il ne touche à
+ * aucune machine : il rend CLIQUABLE et TÉLÉCHARGEABLE un fichier DÉJÀ présent
+ * dans la conversation (fichier reçu, ou fichier déposé pour l'utilisateur).
+ * Porté par le LÉGER uniquement — c'est lui qui converse.
+ */
+export type FilesToolName = "envoyer_fichier";
+
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
 export type CustomToolName =
   | DelegateToolName
@@ -111,7 +119,8 @@ export type CustomToolName =
   | SecretToolName
   | HeritageToolName
   | ConversationArchiveToolName
-  | LibrarianToolName;
+  | LibrarianToolName
+  | FilesToolName;
 
 export interface ToolPolicyEntry {
   readonly role: LlmRole;
@@ -137,6 +146,8 @@ export interface ToolPolicyEntry {
   readonly librarian: readonly LibrarianToolName[];
   /** Outil de CAPTURE de page web via Libry (`capture_libraire`). */
   readonly librarianCapture: readonly LibrarianToolName[];
+  /** Outils d'ENVOI de fichier par Yuki (`envoyer_fichier`). */
+  readonly files: readonly FilesToolName[];
   /** Le rôle peut-il déléguer à un worker lourd ? */
   readonly canDelegate: boolean;
 }
@@ -228,6 +239,13 @@ export const LIBRARIAN_CAPTURE_TOOLS: readonly LibrarianToolName[] = [
   "capture_libraire",
 ];
 
+/**
+ * Outil d'ENVOI de fichier (`envoyer_fichier`). Exposé quand le stockage des
+ * fichiers existe. ⚠️ Il n'ouvre AUCUN accès disque au modèle : il ne peut
+ * envoyer qu'un fichier DÉJÀ rattaché à la conversation courante.
+ */
+export const FILES_TOOLS: readonly FilesToolName[] = ["envoyer_fichier"];
+
 export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
   light: {
     role: "light",
@@ -245,6 +263,9 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     conversationArchive: CONVERSATION_ARCHIVE_TOOLS,
     librarian: LIBRARIAN_TOOLS,
     librarianCapture: LIBRARIAN_CAPTURE_TOOLS,
+    // Fichiers : Yuki peut RENVOYER un fichier de la conversation (le lourd
+    // n'écrit qu'à l'utilisateur : il n'envoie pas de fichier).
+    files: FILES_TOOLS,
     canDelegate: true,
   },
   heavy: {
@@ -268,6 +289,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     conversationArchive: [],
     librarian: [],
     librarianCapture: [],
+    files: [],
     canDelegate: false,
   },
 };
@@ -332,6 +354,11 @@ export interface ToolAllowlistOptions {
    * désactivé.
    */
   librarianCaptureEnabled?: boolean;
+  /**
+   * Active l'outil d'ENVOI de fichier `envoyer_fichier`. DÉSACTIVÉ par défaut :
+   * seul le câblage l'active, quand le stockage des fichiers existe.
+   */
+  filesEnabled?: boolean;
 }
 
 /**
@@ -361,6 +388,7 @@ export function toolAllowlist(
     librarianEnabled &&
     (options.librarianCaptureEnabled ?? false) &&
     entry.librarianCapture.length > 0;
+  const filesEnabled = (options.filesEnabled ?? false) && entry.files.length > 0;
   const tools: string[] = [...entry.builtins];
   if (entry.canDelegate && delegationEnabled) {
     tools.push(...entry.custom);
@@ -391,6 +419,9 @@ export function toolAllowlist(
   }
   if (librarianCaptureEnabled) {
     tools.push(...entry.librarianCapture);
+  }
+  if (filesEnabled) {
+    tools.push(...entry.files);
   }
   return tools;
 }

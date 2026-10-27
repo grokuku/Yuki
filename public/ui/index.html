@@ -245,7 +245,39 @@
              seules) + compteur de durée `aria-hidden` (voir app.js). -->
         <div id="job-activity" class="job-activity" role="status" aria-live="polite" hidden></div>
 
+        <!-- FICHIERS en attente d'envoi (liste construite par `app.js`, jamais
+             écrite en HTML) : le nom et la taille s'affichent AVANT l'envoi, et
+             chaque pièce peut être retirée. `hidden` tant qu'il n'y en a aucun. -->
+        <div
+          id="pending-files"
+          class="pending-files"
+          role="group"
+          aria-label="Fichiers joints"
+          hidden
+        ></div>
+
         <footer class="composer">
+          <!-- Joindre un fichier : bouton à icône `paperclip` de la brique
+               holaf-icons (posée par `app.js`, aucun SVG écrit à la main).
+               ⚠️ Le bouton reste VISIBLE ET UTILISABLE sur téléphone : le
+               sélecteur système propose alors l'appareil photo, la galerie et
+               les fichiers. Le glisser-déposer (voir `app.js`) s'y ajoute sur
+               ordinateur ; il n'est jamais le SEUL moyen. -->
+          <input
+            id="file-input"
+            class="composer__file-input"
+            type="file"
+            multiple
+            tabindex="-1"
+            aria-hidden="true"
+          />
+          <button
+            id="attach"
+            class="button button--attach"
+            type="button"
+            aria-label="Joindre un fichier"
+            title="Joindre un fichier"
+          ></button>
           <textarea
             id="input"
             class="input"

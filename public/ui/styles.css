@@ -2671,3 +2671,200 @@ h6.md-heading {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
 }
+
+/* ─── FICHIERS échangés (cartes dans le fil + liste d'attente du composeur) ──
+ * Un fichier n'est JAMAIS rendu en HTML (aucun aperçu de contenu) : la carte
+ * porte le nom, la taille, le genre et un lien de TÉLÉCHARGEMENT same-origin.
+ * Une IMAGE ajoute un aperçu `<img src="/fichiers/…">` — donc `img-src 'self'`
+ * suffit, la CSP n'est pas élargie. Couleurs et rayons : variables de thème. */
+.file-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  min-width: 0;
+}
+
+.file-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.file-card__title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.file-card__name {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.file-card__image {
+  /* ⚠️ Pas d'étirement : la carte est un conteneur FLEX, un `img` y serait
+   * étalé sur toute la largeur ET sur `max-height` (une vignette 1×1 devenait un
+   * bloc de 931×320). On rend l'image à sa taille naturelle, simplement BORNÉE. */
+  align-self: flex-start;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 320px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.file-card__download {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.92em;
+}
+
+.file-card__download:hover,
+.file-card__download:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.file-card__note {
+  margin: 0;
+  font-size: 0.88em;
+  color: var(--muted);
+}
+
+.message__files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Liste d'attente (avant envoi) : au-dessus du composeur, dans le flux. */
+.pending-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+.pending-files[hidden] {
+  display: none;
+}
+
+.pending-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: 0.9em;
+}
+
+.pending-file__name {
+  overflow-wrap: anywhere;
+}
+
+.pending-file__meta {
+  color: var(--muted);
+}
+
+.pending-file__remove {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.pending-file__remove:hover,
+.pending-file__remove:focus-visible {
+  color: var(--danger);
+}
+
+.pending-file--waiting {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Joindre : même forme carrée que l'arrêt, sans couleur de danger. */
+.button--attach {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.button--attach:hover,
+.button--attach:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.button--attach .icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Sélecteur natif : masqué visuellement mais ACTIONNABLE (le bouton ci-dessus
+ * l'ouvre par programme). `display: none` empêcherait son ouverture sur
+ * certains navigateurs mobiles. */
+.composer__file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Glisser-déposer : simple repère visuel pendant le survol. */
+.chat--dragover .composer {
+  border-top-color: var(--accent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* Téléphone : le bouton « Joindre » GARDE sa forme carrée (la règle mobile
+ * `.composer .button` ajoute un rembourrage large qui écraserait l'icône). */
+@media (max-width: 767px), (max-height: 480px) and (pointer: coarse) {
+  .composer .button--attach {
+    padding: 0;
+    width: 36px;
+    height: 36px;
+  }
+
+  .pending-files {
+    padding: 8px 10px 0;
+  }
+}

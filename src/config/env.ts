@@ -121,6 +121,13 @@ export interface Env {
    */
   reactionsStorePath: string;
   /**
+   * Répertoire des FICHIERS échangés avec l'utilisateur (volume `state`).
+   * `POST /api/files` y dépose les octets, `/fichiers/<id>.<ext>` les sert.
+   * ⚠️ MÊME volume que la configuration, la mémoire et les sessions : c'est
+   * pourquoi le plafond de taille existe. Surcharge : `YUKI_FILES_DIR`.
+   */
+  filesDir: string;
+  /**
    * Fichier JSON des clés VAPID (volume `state`, 0600). ⚠️ Contient la clé
    * PRIVÉE : jamais exposé, jamais journalisé. Surcharge : `YUKI_PUSH_VAPID_PATH`.
    */
@@ -370,6 +377,7 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       "YUKI_REACTIONS_STORE_PATH",
       `${mountPoints.state}/reactions.jsonl`,
     ),
+    filesDir: getString(env, "YUKI_FILES_DIR", `${mountPoints.state}/files`),
     pushVapidPath: getString(
       env,
       "YUKI_PUSH_VAPID_PATH",

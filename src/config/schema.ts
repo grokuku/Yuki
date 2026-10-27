@@ -579,6 +579,57 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_LIBRARIAN_ARCHIVE_TIMEOUT_MS",
   },
+
+  // --- Fichiers échangés (envoi ET réception) -------------------------------
+  // ⚠️ Un fichier peut remplir le disque : le plafond est TRÈS HAUT mais il
+  // existe, et il est RÉGLABLE. `apply: hot` : le stockage relit ces bornes à
+  // chaque dépôt (aucun redémarrage nécessaire pour un changement).
+  // `maxFileBytes` : 2 Gio par défaut (8 Gio maximum autorisé).
+  "files.maxFileBytes": {
+    type: "int",
+    default: 2_147_483_648,
+    min: 1_048_576,
+    max: 8_589_934_592,
+    apply: "hot",
+    env: "YUKI_FILES_MAX_BYTES",
+  },
+  // Rétention : au-delà, le FICHIER et son ANALYSE sont supprimés (purge réelle).
+  "files.retentionDays": {
+    type: "int",
+    default: 30,
+    min: 1,
+    max: 3_650,
+    apply: "hot",
+    env: "YUKI_FILES_RETENTION_DAYS",
+  },
+  // Nombre maximal de fichiers joints à UN message (au-delà : refus explicite).
+  "files.maxAttachments": {
+    type: "int",
+    default: 5,
+    min: 1,
+    max: 20,
+    apply: "hot",
+    env: "YUKI_FILES_MAX_ATTACHMENTS",
+  },
+  // BORNE d'injection au modèle, PAR fichier (un fichier énorme ne part jamais
+  // entier : la troncature est dite dans le bloc `<fichiers>`).
+  "files.promptChars": {
+    type: "int",
+    default: 12_000,
+    min: 1_000,
+    max: 100_000,
+    apply: "hot",
+    env: "YUKI_FILES_PROMPT_CHARS",
+  },
+  // BORNE d'injection au modèle pour TOUS les fichiers d'un même message.
+  "files.promptTotalChars": {
+    type: "int",
+    default: 24_000,
+    min: 1_000,
+    max: 400_000,
+    apply: "hot",
+    env: "YUKI_FILES_PROMPT_TOTAL_CHARS",
+  },
 };
 
 /** Ordre stable des chemins (déterminisme des réponses / journaux). */

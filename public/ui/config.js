@@ -496,6 +496,70 @@ const GROUPS = [
       },
     ],
   },
+  {
+    id: "fichiers",
+    title: "Fichiers échangés",
+    fields: [
+      {
+        path: "files.maxFileBytes",
+        label: "Taille maximale par fichier (octets)",
+        kind: "number",
+        min: 1048576,
+        max: 8589934592,
+        helper:
+          "Plafond d'un fichier envoyé. Défaut 2 147 483 648 octets (2 Gio). " +
+          "⚠️ Les fichiers vivent sur le MÊME volume que la configuration, la " +
+          "mémoire et les conversations : un fichier démesuré remplirait le " +
+          "disque et arrêterait Yuki. Au-delà du plafond, l'envoi est REFUSÉ " +
+          "explicitement (rien n'est conservé).",
+      },
+      {
+        path: "files.retentionDays",
+        label: "Rétention des fichiers (jours)",
+        kind: "number",
+        min: 1,
+        max: 3650,
+        helper:
+          "Durée de conservation d'un fichier ET de son analyse. À l'échéance, " +
+          "les deux sont SUPPRIMÉS du disque (purge réelle, vérifiée au " +
+          "démarrage puis toutes les 10 minutes).",
+      },
+      {
+        path: "files.maxAttachments",
+        label: "Fichiers joints par message (maximum)",
+        kind: "number",
+        min: 1,
+        max: 20,
+        helper:
+          "Nombre maximal de fichiers envoyés avec un même message. Au-delà, " +
+          "les fichiers en trop ne sont PAS joints et l'interface le dit.",
+      },
+      {
+        path: "files.promptChars",
+        label: "Contenu transmis au modèle par fichier (caractères)",
+        kind: "number",
+        min: 1000,
+        max: 100000,
+        helper:
+          "BORNE d'injection : un fichier n'est jamais transmis en entier. " +
+          "Au-delà, le modèle reçoit le début du texte et lit explicitement que " +
+          "le contenu est tronqué (le fichier complet reste stocké et " +
+          "téléchargeable).",
+      },
+      {
+        path: "files.promptTotalChars",
+        label: "Contenu transmis au modèle par message (caractères)",
+        kind: "number",
+        min: 1000,
+        max: 400000,
+        advanced: true,
+        helper:
+          "BORNE TOTALE : somme des contenus de TOUS les fichiers d'un message. " +
+          "Les fichiers qui ne tiennent plus sont déclarés NON transmis (le " +
+          "modèle le lit, rien n'est omis en silence).",
+      },
+    ],
+  },
 ];
 
 const ALL_FIELDS = GROUPS.flatMap((group) => group.fields);
@@ -559,6 +623,11 @@ const FIELD_DEFAULTS = {
   "librarian.baseUrl": "",
   "librarian.screenshot": "on",
   "librarian.archiveTimeoutMs": 30000,
+  "files.maxFileBytes": 2147483648,
+  "files.retentionDays": 30,
+  "files.maxAttachments": 5,
+  "files.promptChars": 12000,
+  "files.promptTotalChars": 24000,
 };
 
 /**
@@ -568,7 +637,7 @@ const FIELD_DEFAULTS = {
  */
 const TABS = [
   { id: "modeles", groups: ["llm-light", "llm-heavy"] },
-  { id: "conversation", groups: ["delegation", "prompts", "memoire"] },
+  { id: "conversation", groups: ["delegation", "prompts", "memoire", "fichiers"] },
   { id: "personnalite", groups: [] },
   { id: "voix", groups: ["tts"] },
   { id: "agents", groups: ["agents-acces"] },

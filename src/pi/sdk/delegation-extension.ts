@@ -158,6 +158,12 @@ export interface PendingJobEntry {
   task: string;
   /** `queued` (en file d'admission) ou `running` (sous-agent en cours). */
   status?: "queued" | "running";
+  /**
+   * Instant de démarrage RÉEL (ISO), quand il est connu. Sert uniquement à
+   * l'AFFICHAGE (compteur de durée restauré au retour sur le fil) : il n'entre
+   * jamais dans le prompt du modèle.
+   */
+  startedAt?: string;
 }
 
 /** Invariant commun : le bloc produit ne contient qu'UNE fermeture (celle de l'encadrement). */

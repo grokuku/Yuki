@@ -11,8 +11,10 @@ import type {
   PiSessionStateName,
   PiUsage,
   RunFinishReason,
+  SessionJobInfo,
   TranscriptEntry,
 } from "../../pi/types.js";
+import type { WireFile } from "../../files/types.js";
 import { isAgentLevel, type AgentLevel } from "../../agents/types.js";
 import type {
   CapturedScreenshotView,
@@ -25,7 +27,22 @@ import type {
 export type ClientMessage =
   | { type: "hello"; clientVersion?: string; sessionId?: string }
   | { type: "resume"; sessionId: string; fromSeq: number }
-  | { type: "message"; clientMsgId: string; text: string; tz?: string }
+  | {
+      /**
+       * Message de l'utilisateur. `files` porte les identifiants des fichiers
+       * DÉJÀ déposés (`POST /api/files`) : le serveur les rattache à la
+       * conversation, insère leurs marqueurs dans le message et ajoute le bloc
+       * `<fichiers>` (DONNÉE bornée) destiné au modèle.
+       *
+       * ⚠️ `text` peut être VIDE quand au moins un fichier est joint (un fichier
+       * sans légende est un envoi parfaitement légitime).
+       */
+      type: "message";
+      clientMsgId: string;
+      text: string;
+      tz?: string;
+      files?: string[];
+    }
   | { type: "abort"; runId?: string }
   | { type: "playback"; runId: string; event: "started" | "aborted" }
   | { type: "switch"; sessionId: string }
@@ -255,6 +272,18 @@ export type ServerMessage =
       type: "snapshot";
       state: PiSessionStateName;
       activeRunId?: string;
+      /**
+       * ÉTAT VIVANT du run en cours : `true` s'il n'a pas encore produit de
+       * contenu. Permet à l'interface de réafficher l'indicateur d'attente en
+       * ROUVRANT une conversation qui tournait en arrière-plan.
+       */
+      awaitingFirstToken?: boolean;
+      /**
+       * Jobs d'arrière-plan NON terminaux de la conversation (lus dans le
+       * `JobStore`). Absent quand il n'y en a aucun : un job fini pendant qu'on
+       * regardait un autre fil n'est donc JAMAIS présenté comme « en cours ».
+       */
+      jobs?: SessionJobInfo[];
       transcript: TranscriptEntry[];
     }
   | { type: "error"; code: string; message: string; runId?: string; requestId?: string }
@@ -427,6 +456,22 @@ export type ServerMessage =
       entryId: string;
       reaction: string | null;
     }
+  | {
+      /**
+       * Yuki a ENVOYÉ un fichier dans cette conversation. Trame de CONTRÔLE
+       * (aucun `seq` consommé, jamais bufferisée) : elle affiche dans le fil une
+       * carte CLIQUABLE et TÉLÉCHARGEABLE (`/fichiers/<id>.<ext>`).
+       *
+       * ⚠️ Aucun contenu ne voyage ici : seulement des métadonnées et le chemin
+       * same-origin (aucun élargissement de CSP : un fichier se télécharge, il ne
+       * s'affiche pas — sauf une image, servie en `image/*`).
+       */
+      type: "file_sent";
+      sessionId: string;
+      file: WireFile;
+      /** `yuki` = envoyé par Yuki ; `user` = fichier joint par l'utilisateur. */
+      from: "yuki" | "user";
+    }
   | { type: "pong"; t: number }
   | { type: "bye"; reason: string };
 
@@ -474,6 +519,29 @@ function optionalString(
   return typeof value === "string" ? value : undefined;
 }
 
+/** Nombre maximal d'identifiants de fichiers acceptés dans UNE trame `message`. */
+export const MAX_MESSAGE_FILE_IDS = 20;
+
+/**
+ * Analyse la liste d'identifiants de fichiers d'une trame `message`.
+ *
+ * Renvoie `[]` si le champ est absent, `null` si la forme est invalide (trame
+ * refusée : mieux vaut un refus explicite qu'un fichier joint au hasard).
+ * Un identifiant valide est EXACTEMENT 32 caractères hexadécimaux — la même
+ * forme que celle produite par le stockage.
+ */
+function parseFileIds(raw: unknown): string[] | null {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return null;
+  if (raw.length > MAX_MESSAGE_FILE_IDS) return null;
+  const ids: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string" || !/^[a-f0-9]{32}$/.test(value)) return null;
+    ids.push(value);
+  }
+  return ids;
+}
+
 /**
  * Analyse et valide une trame client. Tolérant sur les champs optionnels,
  * strict sur les champs requis. Ne lève jamais.
@@ -515,11 +583,21 @@ export function parseClientMessage(raw: string): ParseResult {
     }
     case "message": {
       const clientMsgId = optionalString(parsed, "clientMsgId");
-      const text = optionalString(parsed, "text");
       if (clientMsgId === undefined) {
         return { ok: false, error: "message_missing_client_msg_id" };
       }
-      if (text === undefined || text.trim().length === 0) {
+      // Fichiers joints : identifiants OPAQUES (hexadécimaux 32). La liste est
+      // bornée ICI (défense en profondeur : le service applique aussi sa borne).
+      const files = parseFileIds(parsed.files);
+      if (files === null) {
+        return { ok: false, error: "message_invalid_files" };
+      }
+      const text = optionalString(parsed, "text");
+      // ⚠️ Un texte VIDE est refusé SAUF s'il porte au moins un fichier.
+      if (text === undefined) {
+        return { ok: false, error: "message_empty_text" };
+      }
+      if (text.trim().length === 0 && files.length === 0) {
         return { ok: false, error: "message_empty_text" };
       }
       // Fuseau IANA du navigateur (facultatif) : permet d'horodater le message
@@ -532,6 +610,7 @@ export function parseClientMessage(raw: string): ParseResult {
           clientMsgId,
           text,
           ...(tz !== undefined && tz.trim().length > 0 ? { tz } : {}),
+          ...(files.length > 0 ? { files } : {}),
         },
       };
     }

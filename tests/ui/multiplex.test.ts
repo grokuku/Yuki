@@ -76,6 +76,40 @@ describe("sessions-panel.js — indicateur « en cours » dans la LISTE", () => 
   });
 });
 
+describe("app.js — RESTAURATION de l'activité d'un fil qu'on ROUVRE (snapshot)", () => {
+  const app = read("app.js");
+
+  it("restaure l'indicateur d'attente depuis l'ÉTAT du SERVEUR, jamais d'un état local", () => {
+    // Bug signalé : en revenant sur une conversation qui tournait, le fil
+    // paraissait inactif (l'état venait d'un `run_started` éphémère, perdu par
+    // la reconstruction du DOM).
+    expect(app).toContain("function restoreThreadActivity(");
+    expect(app).toMatch(/frame\.awaitingFirstToken/);
+    expect(app).toMatch(/if \(streaming && awaitingFirstToken\) showThinking\(\);/);
+    // Le seul état « en cours » accepté est celui du snapshot (`frame.state`).
+    expect(app).toMatch(/const streaming = frame\.state === "streaming";/);
+  });
+
+  it("appelle la restauration à CHAQUE snapshot (bascule, rechargement, reconnexion)", () => {
+    expect(app).toMatch(/applySnapshot\(frame\)/);
+    expect(app).toMatch(/restoreThreadActivity\(frame, snapshotJobs\);/);
+  });
+
+  it("restaure le bloc d'activité des sous-agents depuis `snapshot.jobs` (jobs ouverts)", () => {
+    expect(app).toMatch(/Array\.isArray\(frame\.jobs\)/);
+    expect(app).toContain("function restoreJobActivity(");
+    expect(app).toMatch(
+      /subagentActivity\.apply\(\{[\s\S]{0,200}stage: "job_started"/,
+    );
+  });
+
+  it("n'invente jamais un « en cours » : hors `streaming`, l'indicateur est ÉTEINT", () => {
+    expect(app).toMatch(/\) showThinking\(\);\s*\n\s*else hideThinking\(\);/);
+    // L'ensemble des jobs du fil focalisé est REMPLACÉ par celui du serveur.
+    expect(app).toMatch(/store\.runningJobs\.clear\(\);/);
+  });
+});
+
 describe("styles.css — indicateur « en cours » + étiquette de fil (variables de thème)", () => {
   const css = read("styles.css");
 

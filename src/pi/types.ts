@@ -27,6 +27,7 @@ import type { MemoryPort } from "../memory/types.js";
 import type { PersonalityPort } from "../personality/types.js";
 import type { ReactionsPort } from "../reactions/types.js";
 import type { RulesPort } from "../rules/types.js";
+import type { FilesSendPort } from "../files/types.js";
 import type { ModelsConfig } from "../llm/models.js";
 
 /** Niveaux de raisonnement acceptés par le SDK (repris tels quels). */
@@ -176,6 +177,13 @@ export interface PiHostOptions {
     captureEnabled?: () => boolean;
   };
   /**
+   * FICHIERS échangés avec l'utilisateur. Présent ⇒ la façade expose l'outil
+   * `envoyer_fichier` (Yuki renvoie un fichier DÉJÀ présent dans la
+   * conversation : fichier reçu, ou fichier déposé pour l'utilisateur).
+   * Absent ⇒ aucun outil (tests, host nu).
+   */
+  files?: FilesSendPort;
+  /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).
    */
@@ -308,12 +316,43 @@ export interface TranscriptEntry {
   subject?: string;
 }
 
+/**
+ * Job d'arrière-plan NON terminal d'une conversation, tel que le `JobStore` le
+ * connaît (`queued` : en file d'admission, `running` : sous-agent en cours).
+ *
+ * ⚠️ DONNÉE D'ÉTAT : elle ne vient jamais d'un texte du modèle, elle est lue
+ * dans le registre des jobs (source de vérité). Elle permet à l'interface de
+ * RÉAFFICHER l'activité d'une conversation que l'on vient de rouvrir.
+ */
+export interface SessionJobInfo {
+  jobId: string;
+  task: string;
+  status: "queued" | "running";
+  /** Instant de démarrage réel (ISO) — pour un compteur de durée honnête. */
+  startedAt?: string;
+}
+
 /** État d'une session, sérialisable tel quel. */
 export interface SessionState {
   sessionId: string;
   state: PiSessionStateName;
   activeRunId?: string;
   transcript: TranscriptEntry[];
+  /**
+   * `true` UNIQUEMENT quand un run est en cours et n'a pas encore produit de
+   * contenu (`state === "streaming"` sans texte partiel). L'interface s'en sert
+   * pour décider si l'indicateur d'attente doit être affiché — y compris quand
+   * elle ROUVRE une conversation qui tournait en arrière-plan (le transcript,
+   * lui, ne porte aucune trace de cet état).
+   */
+  awaitingFirstToken?: boolean;
+  /**
+   * Jobs d'arrière-plan NON TERMINAUX de cette conversation (lus dans le
+   * `JobStore`). Absent quand il n'y en a aucun. Permet de restaurer le bloc
+   * d'activité du sous-agent au retour sur un fil, sans jamais ressusciter un
+   * job déjà terminé.
+   */
+  jobs?: SessionJobInfo[];
 }
 
 /** Informations sur une session persistée. */

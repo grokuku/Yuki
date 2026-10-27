@@ -108,6 +108,60 @@ describe("SessionStream — rejeu", () => {
   });
 });
 
+describe("SessionStream — ÉTAT VIVANT dans le snapshot (retour sur un fil actif)", () => {
+  /** Flux dont l'état de session est EN COURS (run sans contenu + un job ouvert). */
+  function busyStream(): SessionStream {
+    return new SessionStream({
+      sessionId: "s1",
+      bufferSize: 1000,
+      bufferBytes: 1_000_000,
+      snapshotSource: () => ({
+        state: "streaming",
+        activeRunId: "r1",
+        awaitingFirstToken: true,
+        jobs: [
+          { jobId: "j1", task: "tâche de fond", status: "running", startedAt: "2026-10-27T09:00:00.000Z" },
+        ],
+        transcript: [{ role: "user", text: "bonjour" }],
+      }),
+    });
+  }
+
+  it("transporte `awaitingFirstToken` (run en cours SANS contenu)", () => {
+    // Sans ce champ, l'interface ne peut pas savoir qu'un run attend encore son
+    // premier contenu : en rouvrant le fil, elle n'afficherait AUCUN indicateur.
+    expect(busyStream().snapshot().awaitingFirstToken).toBe(true);
+  });
+
+  it("transporte les jobs d'arrière-plan ENCORE ouverts (bloc d'activité restauré)", () => {
+    expect(busyStream().snapshot().jobs).toEqual([
+      {
+        jobId: "j1",
+        task: "tâche de fond",
+        status: "running",
+        startedAt: "2026-10-27T09:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("OMET `jobs` quand aucun job n'est ouvert (aucun faux « en cours »)", () => {
+    const s = new SessionStream({
+      sessionId: "s1",
+      bufferSize: 10,
+      bufferBytes: 1000,
+      snapshotSource: () => ({ state: "idle", jobs: [], transcript: [] }),
+    });
+    const snapshot = s.snapshot();
+    expect("jobs" in snapshot).toBe(false);
+    expect("awaitingFirstToken" in snapshot).toBe(false);
+  });
+
+  it("le snapshot reste SÉRIALISABLE (aucune structure vivante transportée)", () => {
+    const snapshot = busyStream().snapshot();
+    expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot);
+  });
+});
+
 describe("SessionStreamStore", () => {
   it("crée un flux par session et expose la capacité", () => {
     const store = new SessionStreamStore({

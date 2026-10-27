@@ -8,19 +8,31 @@
  * transcript contenu seul + `seq` courant) et le client réinitialise son rendu.
  */
 
-import type { PiSessionStateName, TranscriptEntry } from "../../pi/types.js";
+import type {
+  PiSessionStateName,
+  SessionJobInfo,
+  TranscriptEntry,
+} from "../../pi/types.js";
 import type { ServerEnvelope, ServerFrame, ServerMessage } from "./protocol.js";
 
 export interface StreamStateProvider {
   state: PiSessionStateName;
   activeRunId?: string;
   transcript: TranscriptEntry[];
+  /** Run en cours qui n'a pas encore produit de contenu (état VIVANT). */
+  awaitingFirstToken?: boolean;
+  /** Jobs d'arrière-plan NON terminaux de la conversation (JobStore). */
+  jobs?: readonly SessionJobInfo[];
 }
 
 export interface SnapshotPayload {
   seq: number;
   state: PiSessionStateName;
   activeRunId?: string;
+  /** `true` si le run en cours attend encore son premier contenu. */
+  awaitingFirstToken?: boolean;
+  /** Jobs d'arrière-plan ENCORE ouverts (jamais un job terminé). */
+  jobs?: SessionJobInfo[];
   transcript: TranscriptEntry[];
 }
 
@@ -140,6 +152,21 @@ export class SessionStream {
       seq: this.counter,
       state: source.state,
       ...(source.activeRunId ? { activeRunId: source.activeRunId } : {}),
+      // ÉTAT VIVANT : il ne vit ni dans le transcript ni dans le rejeu, mais dans
+      // l'état courant de la session. Le snapshot est le SEUL endroit où il
+      // traverse la frontière — c'est lui qui permet de restaurer l'indicateur
+      // d'activité en rouvrant une conversation qui tourne.
+      ...(source.awaitingFirstToken === true ? { awaitingFirstToken: true } : {}),
+      ...(source.jobs && source.jobs.length > 0
+        ? {
+            jobs: source.jobs.map((job) => ({
+              jobId: job.jobId,
+              task: job.task,
+              status: job.status,
+              ...(job.startedAt !== undefined ? { startedAt: job.startedAt } : {}),
+            })),
+          }
+        : {}),
       transcript: source.transcript.map((entry) => ({
         role: entry.role,
         text: entry.text,

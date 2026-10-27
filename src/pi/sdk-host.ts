@@ -93,6 +93,8 @@ import type {
   ArchivedMessage,
 } from "../memory/conversation-archive.js";
 import { createLibrarianTools } from "./sdk/librarian-tools.js";
+import { createSendFileTools } from "./sdk/send-file-tool.js";
+import { stripFilesBlock } from "../files/frame.js";
 import type {
   ApplyLlmConfigOptions,
   CompactOptions,
@@ -108,6 +110,7 @@ import type {
   RunMetrics,
   SendOptions,
   SessionInfo,
+  SessionJobInfo,
   SessionState,
   TranscriptEntry,
 } from "./types.js";
@@ -459,10 +462,25 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     if (record.partial.length > 0) {
       transcript.push({ role: "assistant", text: record.partial });
     }
+    // ⚠️ ÉTAT VIVANT, jamais déduit du transcript : l'attente (« premier contenu
+    // pas encore arrivé ») et les jobs d'arrière-plan ENCORE ouverts viennent du
+    // serveur. C'est ce qui permet à l'interface de RESTAURER les indicateurs
+    // d'une conversation que l'on rouvre (le transcript n'en garde aucune trace).
+    // Un job sans statut connu est compté « en cours » : il est NON terminal.
+    const jobs: SessionJobInfo[] = activeJobsFor(record.sessionId).map((job) => ({
+      jobId: job.jobId,
+      task: job.task,
+      status: job.status ?? "running",
+      ...(job.startedAt !== undefined ? { startedAt: job.startedAt } : {}),
+    }));
     return {
       sessionId: record.sessionId,
       state: currentState(record),
       ...(record.activeRunId ? { activeRunId: record.activeRunId } : {}),
+      ...(record.state === "streaming"
+        ? { awaitingFirstToken: record.partial.length === 0 }
+        : {}),
+      ...(jobs.length > 0 ? { jobs } : {}),
       transcript,
     };
   }
@@ -743,6 +761,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         jobId: job.jobId,
         task: job.task,
         status: job.status,
+        ...(job.startedAt !== undefined ? { startedAt: job.startedAt } : {}),
       }));
     } catch (error) {
       logger.warn("delegation.pending_jobs.query.failed", {
@@ -1010,7 +1029,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     if (!isSyntheticOrigin(run.origin) && !run.transcriptPushed) {
       record.transcript.push({
         role: "user",
-        text: run.text,
+        // ⚠️ Le bloc `<fichiers>` est du matériau de PROMPT (donnée bornée) : il
+        // n'a rien à faire dans la bulle. Les marqueurs `[fichier] …`, eux,
+        // restent : ce sont eux qui portent les cartes cliquables.
+        text: stripFilesBlock(run.text),
         timestamp: run.sentAt,
       });
       run.transcriptPushed = true;
@@ -1190,7 +1212,11 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       const role = message.role;
       if (role !== "user" && role !== "assistant") continue;
       const rawText = contentTextFromMessage(message);
-      const text = role === "user" ? stripTimestampPrefix(rawText) : rawText;
+      // ⚠️ Le bloc `<fichiers>` est retiré : c'est du matériau de PROMPT (donnée
+      // bornée transmise au modèle), pas le message de l'utilisateur. Sans ce
+      // retrait, l'archive et la MÉMOIRE mémoriseraient le contenu des fichiers.
+      const text =
+        role === "user" ? stripFilesBlock(stripTimestampPrefix(rawText)) : rawText;
       if (text.trim().length === 0) continue;
       const at =
         typeof entry.timestamp === "string" && entry.timestamp.length > 0
@@ -1488,6 +1514,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // et archivage EN TÂCHE DE FOND (rend la main immédiatement). ⚠️ Aucun outil
       // ne va chercher une page web : tout passe par le libraire.
       customTools.push(...createLibrarianTools(options.librarian));
+    }
+    if (options.files) {
+      // FICHIERS : `envoyer_fichier` rend CLIQUABLE et TÉLÉCHARGEABLE un fichier
+      // DÉJÀ présent dans la conversation. Aucun accès disque n'est ouvert au
+      // modèle : l'outil ne connaît que les fichiers rattachés à ce fil.
+      customTools.push(...createSendFileTools(options.files));
     }
 
     // Extensions INLINE, dans l'ORDRE D'APPLICATION voulu du prompt du tour :
@@ -1814,7 +1846,8 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         const active = record.currentRun;
         const userEntry: TranscriptEntry = {
           role: "user",
-          text,
+          // Même règle que `startRun` : le bloc `<fichiers>` reste hors de la bulle.
+          text: stripFilesBlock(text),
           timestamp: run.sentAt,
         };
         const at = active.assistantEntry

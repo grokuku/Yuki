@@ -32,6 +32,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/heritage-tools.ts",
   "src/pi/sdk/conversation-archive-tools.ts",
   "src/pi/sdk/librarian-tools.ts",
+  "src/pi/sdk/send-file-tool.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =

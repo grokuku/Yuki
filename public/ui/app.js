@@ -34,7 +34,13 @@ import { createSessionActions } from "./session-actions.js";
 import { createReactionControl } from "./reactions.js";
 import { iconNode } from "./icons.js";
 import { MOBILE_MEDIA_QUERY, initMobileNav } from "./mobile-nav.js";
-import { createScreenshotBlocks } from "./screenshot-block.js";
+import { createScreenshotBlocks, formatBytes } from "./screenshot-block.js";
+import {
+  createFileBlocks,
+  createFileCard,
+  formatFileMarker,
+  parseMessageFiles,
+} from "./file-block.js";
 import { createSubagentActivity } from "./subagent-activity.js";
 import { createThinkingBlocks } from "./thinking.js";
 import {
@@ -67,6 +73,9 @@ const els = {
   jobActivity: document.getElementById("job-activity"),
   ttsToggle: document.getElementById("tts-toggle"),
   ttsStatus: document.getElementById("tts-status"),
+  attach: document.getElementById("attach"),
+  fileInput: document.getElementById("file-input"),
+  pendingFiles: document.getElementById("pending-files"),
 };
 
 let socket = null;
@@ -343,6 +352,42 @@ function resetJobActivity() {
   renderJobActivity();
 }
 
+/**
+ * RÉINSTALLE l'activité de fond d'un fil depuis la liste AUTORITAIRE du serveur
+ * (snapshot `jobs`, lue dans le `JobStore`).
+ *
+ * ⚠️ SOURCE DE VÉRITÉ = LE SERVEUR, jamais un état local : la liste ne contient
+ * que les jobs ENCORE ouverts ⇒ un job terminé pendant que l'on regardait un
+ * autre fil n'est PAS ressuscité (aucun faux « en cours »). Les étapes
+ * intermédiaires manquées (`job_activity`) ne sont pas rejouables : elles sont
+ * éphémères par construction.
+ *
+ * @param {Array<{ jobId?: string, task?: string, status?: string, startedAt?: string }>} entries
+ */
+function restoreJobActivity(entries) {
+  // Le conteneur est PARTAGÉ entre conversations : on repart d'un état propre.
+  resetJobActivity();
+  if (!Array.isArray(entries)) return;
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    const id = typeof entry.jobId === "string" && entry.jobId.length > 0 ? entry.jobId : "";
+    if (!id) continue;
+    // `queued` compte comme « en cours » : la tâche n'est PAS terminée. Un statut
+    // terminal n'arrive jamais ici (filtré côté serveur).
+    const startedAt = typeof entry.startedAt === "string" ? Date.parse(entry.startedAt) : NaN;
+    jobs.set(id, {
+      id,
+      task: typeof entry.task === "string" ? entry.task : undefined,
+      status: "running",
+      // Repli honnête : sans date serveur, aucun compteur de durée n'est affiché
+      // (`describeActivity` rend un compteur vide pour un instant non fini).
+      startedAt: Number.isFinite(startedAt) ? startedAt : NaN,
+    });
+  }
+  renderJobActivity();
+  syncJobsTick();
+}
+
 function onJobStarted(frame) {
   const id = String(frame.jobId ?? "");
   if (!id) return;
@@ -584,6 +629,15 @@ const approvalLayer = createApprovalLayer({
  * transcript ni le rejeu. L'image n'est affichée qu'ICI (à l'humain) : le modèle
  * ne la reçoit jamais. */
 const screenshotBlocks = createScreenshotBlocks({ container: els.conversation });
+
+/* ─── FICHIERS dans la conversation (envoi ET réception) ───────────────────
+ * Deux sources DISTINCTES :
+ *  - les fichiers joints par l'UTILISATEUR portent leur marqueur DANS le
+ *    message : leur carte est rendue avec la bulle et revient au rechargement ;
+ *  - les fichiers envoyés par YUKI arrivent par trame de CONTRÔLE `file_sent`
+ *    (éphémère, jamais bufferisée) : carte affichée immédiatement, retirée quand
+ *    le fil est reconstruit (`reset`). */
+const fileBlocks = createFileBlocks({ container: els.conversation });
 
 /* ─── E3 — Activité d'un SOUS-AGENT DANS le fil ────────────────────────────
  * Bloc COMPOSANT du fil (jamais un message) : replié par défaut, dépliable. Il
@@ -1001,7 +1055,20 @@ function ensureDaySeparator(ts, before = null) {
 function createMessageBody(text) {
   const body = document.createElement("div");
   body.className = "message__body";
-  body.textContent = text ?? "";
+  // ⚠️ Les fichiers joints portent leur MARQUEUR dans le texte du message : on
+  // les détache ici pour afficher une CARTE cliquable à la place de la ligne
+  // technique. Un message sans marqueur est rendu tel quel (aucun changement).
+  const parsed = parseMessageFiles(text ?? "");
+  body.textContent = parsed.text;
+  if (parsed.files.length === 0) return body;
+  const files = document.createElement("div");
+  files.className = "message__files";
+  for (const file of parsed.files) {
+    // Vue COMPLÈTE si la page la connaît (envoi à l'instant), sinon le marqueur
+    // suffit : le chemin et l'aperçu se déduisent du nom.
+    files.appendChild(createFileCard(knownFiles.get(file.id) ?? file, { from: "user" }));
+  }
+  body.appendChild(files);
   return body;
 }
 
@@ -1120,6 +1187,7 @@ function applyTranscript(transcript) {
   // réflexion, réactions). Le serveur les ré-affichera s'ils vivent encore.
   approvalLayer.reset();
   screenshotBlocks.reset();
+  fileBlocks.reset();
   subagentActivity.reset();
   thinkingBlocks.reset();
   reactionControl.reset();
@@ -1295,6 +1363,7 @@ function handleFrame(frame) {
     // coupure ne doit PAS rester affichée (état vivant, pas d'historique).
     approvalLayer.reset();
     screenshotBlocks.reset();
+    fileBlocks.reset();
     subagentActivity.reset();
     thinkingBlocks.reset();
     // Présence : le serveur sait ainsi si CETTE fenêtre regarde la conversation
@@ -1436,6 +1505,14 @@ function handleFrame(frame) {
     screenshotBlocks.show(frame.screenshot);
     return;
   }
+  // FICHIER envoyé par Yuki : trame de CONTRÔLE (aucun `seq` consommé). La carte
+  // apparaît DANS le fil, cliquable et téléchargeable (même origine, donc aucune
+  // CSP à élargir). ⚠️ Aucun contenu ne voyage : seulement des métadonnées.
+  if (type === "file_sent") {
+    rememberFile(frame.file);
+    fileBlocks.show(frame.file, { from: frame.from === "user" ? "user" : "yuki" });
+    return;
+  }
   // RÉACTION posée sur un message : trame de CONTRÔLE (aucun `seq` consommé),
   // traitée AVANT le curseur `seq` (sinon prise pour un doublon). Elle se
   // rattache au message par son `entryId` — jamais par sa position à l'écran.
@@ -1522,6 +1599,10 @@ function applySnapshot(frame) {
   resumePending = false;
   currentAssistant = null;
   currentRenderer = null;
+  // Jobs d'arrière-plan ENCORE ouverts, tels que le SERVEUR les connaît (il les lit
+  // dans le `JobStore`). Absents d'un snapshot ⇒ aucun job ouvert : c'est la seule
+  // information qui décide de l'activité affichée (aucun état local périmé).
+  const snapshotJobs = Array.isArray(frame.jobs) ? frame.jobs : [];
   // Le store du fil focalisé adopte l'état AUTORITATIF du snapshot (le run d'un
   // fil d'arrière-plan continue, lui, côté serveur et reste dans SON store).
   const store = storeOf(sessionId);
@@ -1529,15 +1610,70 @@ function applySnapshot(frame) {
     store.state = typeof frame.state === "string" ? frame.state : "idle";
     store.activeRunId = typeof frame.activeRunId === "string" ? frame.activeRunId : null;
     store.lastSeq = lastSeq;
+    // On REMPLACE l'ensemble (on n'accumule pas) : un job terminé pendant qu'on
+    // était ailleurs disparaît donc aussi de l'indicateur « en cours ».
     store.runningJobs.clear();
+    for (const job of snapshotJobs) {
+      if (job && typeof job.jobId === "string" && job.jobId.length > 0) {
+        store.runningJobs.add(job.jobId);
+      }
+    }
   }
   refreshSidebarBusy();
   // Ouvrir/afficher une conversation éteint son indicateur « non lu ».
   markConversationRead(sessionId);
-  // L'activité de fond appartient au FIL : on repart propre à chaque rendu.
-  resetJobActivity();
+  // Éphémères rattachés au fil : on repart propre, puis on RESTAURE depuis l'état
+  // du serveur (voir `restoreThreadActivity`).
   applyTranscript(frame.transcript);
   setSessionState(frame.state || "idle");
+  restoreThreadActivity(frame, snapshotJobs);
+}
+
+/**
+ * RESTAURE DANS LE FIL les indicateurs d'ACTIVITÉ d'une conversation qu'on
+ * vient de rouvrir (bascule, rechargement, reconnexion).
+ *
+ * ⚠️ Le BUG corrigé : ces indicateurs sont des états VIVANTS (trames de contrôle
+ * éphémères : `run_started`/
+ * `job_started`) et `applyTranscript` reconstruit le DOM SANS eux. En revenant
+ * sur une conversation qui tournait, le fil paraissait donc INACTIF alors que le
+ * run continuait côté serveur.
+ *
+ * ⚠️ La source de vérité est le SNAPSHOT (état du host + `JobStore`), jamais un
+ * état local : un run terminé pendant qu'on regardait ailleurs ne laisse AUCUN
+ * faux « en cours ».
+ *
+ * @param {object} frame trame `snapshot` (état autoritatif)
+ * @param {Array<object>} snapshotJobs jobs ENCORE ouverts de ce fil
+ */
+function restoreThreadActivity(frame, snapshotJobs) {
+  // 1) ATTENTE. L'indicateur « Yuki réfléchit… » s'affiche ENTRE le lancement d'un
+  // run et son premier contenu — exactement l'état que le host expose
+  // (`awaitingFirstToken`). Hors de ce cas il est ÉTEINT (aucun faux « en cours »).
+  const streaming = frame.state === "streaming";
+  const awaitingFirstToken =
+    typeof frame.awaitingFirstToken === "boolean" ? frame.awaitingFirstToken : streaming;
+  if (streaming && awaitingFirstToken) showThinking();
+  else hideThinking();
+
+  // 2) ACTIVITÉ DE FOND (indicateur de la barre du composeur) du fil rouvert.
+  restoreJobActivity(snapshotJobs);
+
+  // 3) BLOC D'ACTIVITÉ DU SOUS-AGENT DANS LE FIL : un bloc par job ENCORE ouvert.
+  // Les étapes détaillées manquées pendant l'absence ne sont pas rejouables
+  // (trames éphémères, jamais bufferisées) : le bloc repart de l'étape de
+  // lancement, avec l'intitulé RÉEL fourni par le serveur.
+  for (const job of snapshotJobs) {
+    if (!job || typeof job.jobId !== "string" || job.jobId.length === 0) continue;
+    subagentActivity.apply({
+      jobId: job.jobId,
+      stage: "job_started",
+      ...(typeof job.task === "string" ? { task: job.task } : {}),
+    });
+  }
+  // Les blocs ont grandi le fil APRÈS l'épinglage final : on ré-épingle si
+  // l'utilisateur était en bas (état STICKY), sinon on ne bouge pas.
+  if (snapshotJobs.length > 0) pinIfNeeded(conversationPinned);
 }
 
 function applyEvent(frame) {
@@ -1779,11 +1915,159 @@ function onTtsPhase(frame) {
   }
 }
 
+/* ─── FICHIERS à joindre (bouton, glisser-déposer, TÉLÉPHONE) ────────────────
+ * Le fichier est DÉPOSÉ au serveur (`POST /api/files`, corps = octets bruts) dès
+ * qu'il est choisi : la barre de progression n'existe pas, mais un refus (trop
+ * gros, disque en échec) est dit IMMÉDIATEMENT et EXPLICITEMENT — jamais un
+ * envoi silencieux de fichier manquant.
+ *
+ * ⚠️ Le corps est envoyé en FLUX par `fetch` (un `File`/`Blob` est accepté tel
+ * quel) : l'interface ne charge jamais le fichier entier en mémoire.
+ * ⚠️ TÉLÉPHONE : le même bouton ouvre le sélecteur système (appareil photo,
+ * galerie, fichiers). Le glisser-déposer n'est qu'un CONFORT supplémentaire. */
+const pendingFiles = new Map();
+let uploadingCount = 0;
+/**
+ * Vues COMPLÈTES des fichiers connus de cette page (identifiant → vue du
+ * serveur) : elles portent le genre, la lisibilité et la raison exacte, ce que
+ * le simple MARQUEUR du message ne dit pas. Sert aux cartes de la bulle en
+ * direct (après un rechargement, la carte se reconstruit à partir du marqueur).
+ * Bornée : ce n'est qu'un cache d'affichage.
+ */
+const knownFiles = new Map();
+const MAX_KNOWN_FILES = 50;
+
+function rememberFile(file) {
+  if (!file || typeof file.id !== "string") return;
+  knownFiles.set(file.id, file);
+  while (knownFiles.size > MAX_KNOWN_FILES) {
+    const oldest = knownFiles.keys().next().value;
+    if (oldest === undefined) break;
+    knownFiles.delete(oldest);
+  }
+}
+
+/** Taille lisible (même règle que les cartes, source unique `file-block.js`). */
+function refreshPendingFiles() {
+  if (!els.pendingFiles) return;
+  els.pendingFiles.replaceChildren();
+  for (const file of pendingFiles.values()) {
+    const chip = document.createElement("div");
+    chip.className = "pending-file";
+    const label = document.createElement("span");
+    label.className = "pending-file__name";
+    label.textContent = file.name;
+    const meta = document.createElement("span");
+    meta.className = "pending-file__meta";
+    meta.textContent = `${formatBytes(file.bytes)}${
+      file.readable === false ? " · non lisible" : ""
+    }`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "pending-file__remove";
+    remove.setAttribute("aria-label", `Retirer ${file.name}`);
+    remove.title = "Retirer";
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      pendingFiles.delete(file.id);
+      refreshPendingFiles();
+    });
+    chip.append(label, meta, remove);
+    els.pendingFiles.appendChild(chip);
+  }
+  els.pendingFiles.hidden = pendingFiles.size === 0 && uploadingCount === 0;
+  if (uploadingCount > 0) {
+    const waiting = document.createElement("span");
+    waiting.className = "pending-file pending-file--waiting";
+    waiting.textContent = "Envoi du fichier…";
+    els.pendingFiles.appendChild(waiting);
+  }
+}
+
+/**
+ * Dépose UN fichier au serveur. Renvoie la vue du fichier, ou `null` en échec
+ * (l'échec est TOUJOURS annoncé à l'utilisateur).
+ */
+async function uploadFile(file) {
+  const headers = {
+    // ⚠️ Nom en en-tête (pourcent-encodé) : le corps reste les OCTETS bruts du
+    // fichier (aucun formulaire multipart à analyser côté serveur).
+    "x-yuki-filename": encodeURIComponent(file.name || "fichier"),
+    "content-type": file.type || "application/octet-stream",
+  };
+  const current = sessionId;
+  if (current) headers["x-yuki-session"] = current;
+  let response;
+  try {
+    response = await fetch("/api/files", { method: "POST", headers, body: file });
+  } catch {
+    void HolafModal.alert(
+      "Envoi impossible",
+      `Le fichier « ${file.name} » n'a pas pu être envoyé : la connexion au gateway a échoué.`,
+      { okText: "Compris" },
+    );
+    return null;
+  }
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || !payload || !payload.file) {
+    // ⚠️ Le message du serveur est REPRIS TEL QUEL : il dit la cause ET le
+    // plafond (jamais un échec muet, jamais un chiffre inventé ici).
+    const message =
+      payload && typeof payload.message === "string"
+        ? payload.message
+        : `Le fichier « ${file.name} » n'a pas été accepté (statut ${response.status}).`;
+    void HolafModal.alert("Fichier refusé", message, { okText: "Compris" });
+    return null;
+  }
+  return payload.file;
+}
+
+/** Dépose une liste de fichiers (sélecteur, glisser-déposer, collage). */
+async function addFiles(fileList) {
+  if (!fileList || fileList.length === 0) return;
+  uploadingCount += 1;
+  refreshPendingFiles();
+  try {
+    for (const file of [...fileList]) {
+      const stored = await uploadFile(file);
+      if (stored) {
+        pendingFiles.set(stored.id, stored);
+        rememberFile(stored);
+      }
+    }
+  } finally {
+    uploadingCount = Math.max(0, uploadingCount - 1);
+    refreshPendingFiles();
+  }
+}
+
 function sendMessage() {
   const text = els.input.value.trim();
-  if (text.length === 0) return;
+  // ⚠️ Un fichier SANS légende est un envoi légitime : on n'exige pas de texte.
+  if (text.length === 0 && pendingFiles.size === 0) return;
   // Aucune conversation ouverte (état vide) : on n'envoie RIEN dans le vide.
   if (!sessionId) return;
+  // Une dépose est en cours : on attend qu'elle finisse (sinon l'identifiant du
+  // fichier n'existerait pas encore côté serveur).
+  if (uploadingCount > 0) {
+    void HolafModal.alert(
+      "Envoi en cours",
+      "Un fichier est encore en cours de dépôt : réessayez dans un instant.",
+      { okText: "Compris" },
+    );
+    return;
+  }
+  const attached = [...pendingFiles.values()];
+  // ⚠️ Le marqueur porte l'identifiant STABLE du fichier : la carte est rendue
+  // avec la bulle et REVIENT au rechargement (le marqueur est dans le message).
+  const composed = [text, ...attached.map((file) => formatFileMarker(file))]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
   // Nouveau message = barge-in local : la voix en cours s'arrête net.
   ttsPlayer.stopAll();
   // Geste utilisateur : débloque l'AudioContext pour la lecture à venir.
@@ -1799,7 +2083,7 @@ function sendMessage() {
   // au milieu. La bulle utilisateur est insérée JUSTE AVANT ce bloc, à sa place
   // chronologique (le message a été envoyé avant la fin de la réponse).
   const streamingAssistant = currentAssistant;
-  appendMessage("user", text, undefined, sentAt, streamingAssistant);
+  appendMessage("user", composed, undefined, sentAt, streamingAssistant);
   // L'utilisateur vient d'AGIR : on va en bas et on ré-épingle EXPLICITEMENT,
   // indépendamment du seuil (un message LONG fait grandir la zone de saisie et
   // gonfle la distance au fond sans que l'utilisateur ait remonté).
@@ -1810,6 +2094,10 @@ function sendMessage() {
   }
   els.input.value = "";
   els.input.style.height = "auto";
+  // Les fichiers joints sont maintenant DANS le message : la liste d'attente est
+  // vidée (ils restent stockés et rattachés à la conversation côté serveur).
+  pendingFiles.clear();
+  refreshPendingFiles();
   // Le fuseau du navigateur part avec le message : le préfixe STOCKÉ est ainsi
   // daté dans l'heure locale de l'utilisateur (le conteneur peut être en UTC).
   if (
@@ -1818,6 +2106,7 @@ function sendMessage() {
       clientMsgId,
       text,
       ...(CLIENT_TIME_ZONE ? { tz: CLIENT_TIME_ZONE } : {}),
+      ...(attached.length > 0 ? { files: attached.map((file) => file.id) } : {}),
     })
   ) {
     appendMessage("assistant error", "Non connecté au gateway.", undefined, Date.now());
@@ -1929,6 +2218,47 @@ if (mobileMedia && typeof mobileMedia.addEventListener === "function") {
  * d'ENVOI reste séparé. */
 const stopIcon = iconNode("stop", "icon icon--stop");
 if (stopIcon) els.stop.replaceChildren(stopIcon);
+
+/* Joindre un fichier : icône `paperclip` de la brique holaf-icons (aucun SVG
+ * écrit à la main). Le bouton reste SÉPARÉ de l'envoi et de l'arrêt. */
+const attachIcon = iconNode("paperclip", "icon");
+if (attachIcon && els.attach) els.attach.replaceChildren(attachIcon);
+if (els.attach && els.fileInput) {
+  els.attach.addEventListener("click", () => els.fileInput.click());
+  els.fileInput.addEventListener("change", () => {
+    const files = els.fileInput.files;
+    void addFiles(files);
+    // On remet le sélecteur à zéro : réenvoyer DEUX FOIS le même fichier doit
+    // fonctionner (sinon le second `change` ne se déclencherait jamais).
+    els.fileInput.value = "";
+  });
+}
+
+/* Glisser-déposer (ordinateur) : CONFORT seulement — le bouton ci-dessus reste
+ * le moyen universel, y compris sur téléphone où le glisser-déposer n'existe
+ * pas. On n'accepte QUE des fichiers (un texte glissé garde son usage normal). */
+if (els.chat) {
+  const hasFiles = (event) =>
+    Boolean(
+      event.dataTransfer &&
+        Array.from(event.dataTransfer.types ?? []).includes("Files"),
+    );
+  els.chat.addEventListener("dragover", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    els.chat.classList.add("chat--dragover");
+  });
+  els.chat.addEventListener("dragleave", (event) => {
+    if (event.target !== els.chat) return;
+    els.chat.classList.remove("chat--dragover");
+  });
+  els.chat.addEventListener("drop", (event) => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    els.chat.classList.remove("chat--dragover");
+    void addFiles(event.dataTransfer.files);
+  });
+}
 
 els.send.addEventListener("click", sendMessage);
 els.stop.addEventListener("click", abort);

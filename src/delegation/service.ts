@@ -360,6 +360,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
         jobId: record.id,
         task: record.task,
         status: record.status,
+        ...(record.startedAt !== undefined ? { startedAt: record.startedAt } : {}),
       });
     }
     return out;

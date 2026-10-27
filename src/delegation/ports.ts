@@ -295,6 +295,8 @@ export interface PendingJobSummary {
   task: string;
   /** `queued` (en file d'admission) ou `running` (sous-agent en cours). */
   status: Extract<JobStatus, "queued" | "running">;
+  /** Instant de démarrage réel (ISO), présent dès que le job a démarré. */
+  startedAt?: string;
 }
 
 /** Le service publie ses événements (phases + lifecycle) sur le bus Pi. */

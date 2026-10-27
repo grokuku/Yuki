@@ -49,6 +49,7 @@ import { SecretRequestRegistry } from "./secrets/requests.js";
 import { SecretStore } from "./secrets/store.js";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
+import { createFilesService, FilesStore } from "./files/index.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
 import { createDelegationService, type DelegationService } from "./delegation/index.js";
@@ -145,6 +146,13 @@ import type { ModelAvailability } from "./delegation/index.js";
 
 const FALLBACK_SYSTEM_PROMPT =
   "Tu es Yuki, un assistant conversationnel généraliste. Réponds de manière claire et concise.";
+
+/**
+ * Période du balayage de RÉTENTION des fichiers échangés (10 min). Court assez
+ * pour qu'un fichier expiré ne survive pas longtemps, long assez pour ne rien
+ * coûter (lecture des seules métadonnées du répertoire).
+ */
+const FILES_PURGE_INTERVAL_MS = 10 * 60_000;
 
 function loadTextFile(path: string, fallback: string): string {
   try {
@@ -875,6 +883,50 @@ async function main(): Promise<void> {
     chars: rulesStore.read().chars,
   });
 
+  /** Balayage périodique de la RÉTENTION des fichiers échangés (voir plus bas). */
+  let filesPurgeTimer: ReturnType<typeof setInterval> | undefined;
+
+  // --- Fichiers échangés (l'utilisateur → Yuki, Yuki → l'utilisateur) -------
+  // ⚠️ Créé AVANT la porte GPU : le dépôt et le téléchargement restent
+  // disponibles même en mode dégradé (aucun modèle requis pour stocker un
+  // fichier). Les BORNES (plafond par fichier, rétention, borne d'injection) sont
+  // relues dans la configuration À CHAQUE opération : un changement dans `/config`
+  // s'applique sans redémarrage.
+  const filesStore = new FilesStore({
+    dir: env.filesDir,
+    logger,
+    maxBytes: () => config.getNumber("files.maxFileBytes"),
+    retentionDays: () => config.getNumber("files.retentionDays"),
+  });
+  filesStore.ensureLayout();
+  // Purge RÉELLE au démarrage : un fichier expiré pendant l'arrêt est supprimé
+  // avec son analyse (le plafond ne sert à rien si l'expiré reste).
+  const purgedFilesAtStart = filesStore.purgeExpired();
+  const filesService = createFilesService({
+    store: filesStore,
+    logger,
+    maxAttachments: () => config.getNumber("files.maxAttachments"),
+    promptChars: () => config.getNumber("files.promptChars"),
+    promptTotalChars: () => config.getNumber("files.promptTotalChars"),
+  });
+  // Balayage périodique : la rétention est une BORNE DE DISQUE, pas une promesse.
+  filesPurgeTimer = setInterval(() => {
+    try {
+      filesStore.purgeExpired();
+    } catch (error) {
+      logger.warn("files.purge.failed", { error: messageOf(error) });
+    }
+  }, FILES_PURGE_INTERVAL_MS);
+  filesPurgeTimer.unref?.();
+  logger.info("files.ready", {
+    dir: env.filesDir,
+    purged: purgedFilesAtStart,
+    retentionDays: config.getNumber("files.retentionDays"),
+    maxFileBytes: config.getNumber("files.maxFileBytes"),
+    promptChars: config.getNumber("files.promptChars"),
+    promptTotalChars: config.getNumber("files.promptTotalChars"),
+  });
+
   // --- Jobs, délégation, PiHost (uniquement si la porte est passée) ---------
   let piStatus: "starting" | "ready" | "error" = "starting";
   let sessionsCount = 0;
@@ -1165,6 +1217,9 @@ async function main(): Promise<void> {
         // démarrage ; décision prise à la création du host).
         librarianEnabled: librarianConfigured,
         librarianCaptureEnabled: librarianCaptureEnabledAtStart,
+        // FICHIERS : `envoyer_fichier` (Yuki RENVOIE un fichier de la
+        // conversation). Toujours actif : le stockage existe dès le démarrage.
+        filesEnabled: true,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
@@ -1186,6 +1241,9 @@ async function main(): Promise<void> {
             },
           }
         : {}),
+      // FICHIERS : Yuki peut RENVOYER un fichier déjà présent dans la
+      // conversation (fichier reçu, ou fichier déposé pour l'utilisateur).
+      files: filesService,
       personality: personalityStore,
       rules: rulesStore,
       eventSource: delegation,
@@ -1314,6 +1372,9 @@ async function main(): Promise<void> {
           logger,
         }),
       ),
+      // FICHIERS : rattachement des fichiers joints à un message (`attach`) et
+      // envoi par Yuki (trame de contrôle `file_sent`, jamais bufferisée).
+      files: filesService,
       // Épinglage des conversations : store hôte SÉPARÉ du JSONL du SDK Pi.
       pins: SessionPinStore.open({ path: env.sessionPinsPath, logger }),
       // RÉACTIONS : écrire une réaction ne déclenche AUCUN tour et n'alimente
@@ -1471,6 +1532,10 @@ async function main(): Promise<void> {
         : {}),
       // Captures de pages web : servies MÊME ORIGINE (`/captures/<id>.<ext>`).
       ...(librarianShots ? { captures: { store: librarianShots, logger } } : {}),
+      // FICHIERS échangés : dépôt (`POST /api/files`), liste, suppression et
+      // SERVICE same-origin (`/fichiers/<id>.<ext>`). Disponible même en mode
+      // dégradé : stocker et télécharger ne demande aucun modèle.
+      files: { service: filesService, logger },
       voices: voicesDeps,
       tts: ttsDeps,
       ...(agentsDeps ? { agents: agentsDeps } : {}),
@@ -1497,6 +1562,9 @@ async function main(): Promise<void> {
       // Verrou des agents sensibles : plus aucun balayage après l'arrêt.
       stopLockSweep?.();
       stopLockSweep = undefined;
+      // Rétention des fichiers : plus aucun balayage après l'arrêt.
+      if (filesPurgeTimer) clearInterval(filesPurgeTimer);
+      filesPurgeTimer = undefined;
       stopLlmHotReload?.();
       stopLlmHotReload = undefined;
       stopPushTriggers?.();

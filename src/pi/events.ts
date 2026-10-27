@@ -17,6 +17,7 @@ import type {
 } from "./types.js";
 import { stripTimestampPrefix } from "./timestamp.js";
 import { parseRecapPrompt } from "../recap/prompt.js";
+import { stripFilesBlock } from "../files/frame.js";
 
 /** Forme minimale d'un `assistantMessageEvent` du SDK. */
 export interface RawAssistantMessageEvent {
@@ -255,7 +256,12 @@ export function transcriptFromEntries(
     // Le repère temporel d'un message utilisateur est retiré AVANT le filtre
     // synthétique : un report de job n'est jamais horodaté, mais l'ordre reste
     // correct quel que soit l'ordre de pose des préfixes.
-    const text = role === "user" ? stripTimestampPrefix(rawText) : rawText;
+    // ⚠️ Le bloc `<fichiers>` (DONNÉE jointe par l'utilisateur) est retiré AUSSI :
+    // c'est du matériau de PROMPT, pas un message. Les marqueurs
+    // `[fichier] <id> <nom> (<n> octets)`, eux, RESTENT : ils portent les cartes
+    // cliquables du message.
+    const text =
+      role === "user" ? stripFilesBlock(stripTimestampPrefix(rawText)) : rawText;
     if (text.length === 0) continue;
     if (role === "user") {
       // ⚠️ RÉCAPITULATIF GÉNÉRÉ : c'est un message synthétique (rôle `user` dans

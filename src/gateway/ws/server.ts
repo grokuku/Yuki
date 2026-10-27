@@ -35,6 +35,7 @@ import type {
   ScreenshotGatewayPort,
   SecretRequestGatewayPort,
 } from "../../agents/execution.js";
+import type { FilesGatewayPort } from "../../files/types.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
 import {
@@ -48,7 +49,11 @@ import {
   type WireSession,
 } from "./protocol.js";
 import type { AgentLevel } from "../../agents/types.js";
-import { SessionStreamStore, type StreamStateProvider } from "./session-stream.js";
+import {
+  SessionStreamStore,
+  type SnapshotPayload,
+  type StreamStateProvider,
+} from "./session-stream.js";
 import type { PresenceView, Transport, TransportStats } from "./transport.js";
 
 export const WS_PATH = "/ws";
@@ -141,6 +146,12 @@ export interface WsTransportOptions {
    * pour le reste).
    */
   reactions?: ReactionsGatewayPort;
+  /**
+   * FICHIERS échangés : rattachement des fichiers joints à un message et envoi
+   * par Yuki (trame de contrôle `file_sent`). Absent ⇒ aucune pièce jointe n'est
+   * acceptée (comportement inchangé pour le reste).
+   */
+  files?: FilesGatewayPort;
 }
 
 interface ClientState {
@@ -351,6 +362,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const secretPort = options.secrets;
   const recap = options.recap;
   const reactions = options.reactions;
+  const filesPort = options.files;
 
   /**
    * État de session ENRICHI des réactions courantes (aucune copie inutile quand
@@ -611,6 +623,17 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     broadcastControl(sessionId, { type: "screenshot", screenshot: event.screenshot });
   });
 
+  // ── Fichiers ENVOYÉS par Yuki (trame de CONTRÔLE) ────────────────────────
+  // La carte apparaît DANS LE FIL (cliquable, téléchargeable) chez les clients de
+  // la SEULE conversation concernée : aucun `seq` consommé, jamais bufferisée.
+  // ⚠️ Seules des métadonnées voyagent ; le contenu est servi par
+  // `/fichiers/<id>.<ext>` (same-origin, `Content-Disposition` correct).
+  const unsubscribeFiles = filesPort?.subscribeSent((view) => {
+    const { sessionId, ...file } = view;
+    if (!sessionId) return;
+    broadcastControl(sessionId, { type: "file_sent", sessionId, file, from: "yuki" });
+  });
+
   // ── Demandes de SECRET dans la conversation (`awaiting_secret`) ─────────
   // Le registre diffuse `requested`/`cleared` ; on route vers les clients de la
   // SEULE conversation concernée. Trame de CONTRÔLE (aucun `seq`), jamais
@@ -867,6 +890,25 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   /**
+   * Message `snapshot` sortant construit depuis le payload du flux.
+   *
+   * ⚠️ Les champs d'ÉTAT VIVANT (`awaitingFirstToken`, `jobs`) sont transmis
+   * tels quels : le snapshot est la SEULE voie par laquelle l'interface peut
+   * restaurer l'activité d'une conversation qu'elle rouvre (le transcript ne
+   * porte ni l'attente d'un run, ni les jobs encore ouverts).
+   */
+  function snapshotMessage(snapshot: SnapshotPayload): ServerMessage {
+    return {
+      type: "snapshot",
+      state: snapshot.state,
+      ...(snapshot.activeRunId ? { activeRunId: snapshot.activeRunId } : {}),
+      ...(snapshot.awaitingFirstToken === true ? { awaitingFirstToken: true } : {}),
+      ...(snapshot.jobs && snapshot.jobs.length > 0 ? { jobs: snapshot.jobs } : {}),
+      transcript: snapshot.transcript,
+    };
+  }
+
+  /**
    * Snapshot autoritatif de la session courante du client. Sans session
    * courante (état « aucune conversation ouverte »), envoie un snapshot VIDE :
    * le client réinitialise son rendu, aucun message ne part dans le vide.
@@ -878,12 +920,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       return;
     }
     const snapshot = streams.get(sessionId).snapshot();
-    const frame = sendDirect(client, {
-      type: "snapshot",
-      state: snapshot.state,
-      ...(snapshot.activeRunId ? { activeRunId: snapshot.activeRunId } : {}),
-      transcript: snapshot.transcript,
-    });
+    const frame = sendDirect(client, snapshotMessage(snapshot));
     client.lastSeq = frame.seq;
   }
 
@@ -963,14 +1000,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       replayFrom: message.fromSeq,
     });
     if (result.mode === "snapshot") {
-      const frame = sendDirect(client, {
-        type: "snapshot",
-        state: result.snapshot.state,
-        ...(result.snapshot.activeRunId
-          ? { activeRunId: result.snapshot.activeRunId }
-          : {}),
-        transcript: result.snapshot.transcript,
-      });
+      const frame = sendDirect(client, snapshotMessage(result.snapshot));
       client.lastSeq = frame.seq;
     } else {
       for (const frame of result.frames) {
@@ -1543,11 +1573,53 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       return;
     }
     subscribeFocused(client);
+    // ── Fichiers joints ────────────────────────────────────────────────
+    // Le serveur est AUTORITAIRE : il rattache les fichiers à CETTE conversation,
+    // insère leurs marqueurs (cartes cliquables) dans le message et ajoute le
+    // bloc `<fichiers>` — DONNÉE bornée — destiné au modèle. Le client ne peut
+    // donc pas faire passer un fichier d'une autre conversation ni composer
+    // lui-même le bloc transmis au modèle.
+    let text = message.text;
+    if (message.files !== undefined && message.files.length > 0) {
+      if (!filesPort) {
+        sendDirect(client, {
+          type: "error",
+          code: "files_unavailable",
+          message: "Les fichiers ne sont pas disponibles : le message n'a pas été envoyé.",
+        });
+        return;
+      }
+      const outcome = filesPort.attach(sessionId, message.files);
+      if (outcome.files.length === 0) {
+        sendDirect(client, {
+          type: "error",
+          code: "files_unavailable",
+          message:
+            "Aucun des fichiers joints n'est disponible (inconnu, expiré ou " +
+            "trop nombreux) : le message n'a pas été envoyé.",
+        });
+        return;
+      }
+      if (outcome.missing.length > 0) {
+        // ⚠️ Jamais silencieux : le message part, mais l'utilisateur APPREND que
+        // des fichiers n'ont pas suivi.
+        sendDirect(client, {
+          type: "error",
+          code: "files_partially_attached",
+          message:
+            `${outcome.missing.length} fichier(s) joint(s) n'ont pas pu être ajoutés ` +
+            "(inconnu, expiré, ou nombre maximal atteint). Les autres ont bien été transmis.",
+        });
+      }
+      const parts = [text.trim(), ...outcome.markers].filter((part) => part.length > 0);
+      text = parts.join("\n\n");
+      if (outcome.block !== undefined) text = `${text}\n\n${outcome.block}`;
+    }
     let handle;
     try {
       handle = host.send(
         sessionId,
-        message.text,
+        text,
         message.tz !== undefined ? { timezone: message.tz } : undefined,
       );
     } catch (error) {
@@ -1769,6 +1841,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       unsubscribeSecrets?.();
       unsubscribeAgents?.();
       unsubscribeScreenshots?.();
+      unsubscribeFiles?.();
       tts?.cancelAll();
       if (httpServer) {
         httpServer.off("upgrade", onUpgrade);
