@@ -14,10 +14,16 @@
  *                         preuve que le texte vient du modèle, pas d'un libellé figé ;
  *   - `action_only`     : le modèle écrit l'accusé et le run s'achève (bulle = accusé seul) ;
  *   - `silent`          : le modèle va DROIT à l'outil ⇒ REPLI en dur, en ROTATION
- *                         (deux appels successifs donnent deux phrases différentes).
+ *                         (deux appels successifs donnent deux phrases différentes) ;
+ *   - `media`           : l'accusé, puis une ACTION LONGUE (pause mesurée) pendant
+ *                         laquelle le harnais crée de VRAIS médias — c'est la mesure
+ *                         de l'ordre ACCUSÉ → IMAGE → CAPTURE → RÉPONSE, en direct
+ *                         ET après rechargement.
  *
  * Un serveur de CONTRÔLE (hors CSP) permet de :
  *   - lancer un tour (`/send?script=…`) ;
+ *   - créer un média daté (`/emit-media?kind=image|screenshot&at=<ISO>`) ;
+ *   - relire les médias émis (`/media`) ;
  *   - relire la dernière synthèse `run_summary` (le TTFT RÉEL, mesuré serveur) ;
  *   - relire le texte réellement prononcé (`/spoken`).
  *
@@ -27,7 +33,10 @@
 
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { deflateSync } from "node:zlib";
 
+import type { ScreenshotGatewayPort, ScreenshotViewEvent } from "../../src/agents/execution.js";
+import type { ComfyImageView, ImagesGatewayPort } from "../../src/comfy/types.js";
 import { loadEnv } from "../../src/config/env.js";
 import { createApp, type AppContext } from "../../src/gateway/app.js";
 import { createWsTransport } from "../../src/gateway/ws/server.js";
@@ -96,8 +105,151 @@ const SILENT_STEPS: FakeStep[] = [
   { kind: "tool", tool: "delegate", delayMs: FIRST_TOKEN_DELAY_MS },
   ...chatSteps(ANSWER_TEXT),
 ];
+/**
+ * ACTION LONGUE, IMAGE, RÉPONSE : l'accusé part au premier texte du modèle, puis
+ * l'action dure (pause mesurable) — c'est PENDANT cette pause que le harnais émet
+ * les médias, exactement comme une génération d'image réelle —, puis la réponse
+ * arrive. Le fil doit donc être : BULLE D'ACCUSÉ → CARTES MÉDIA → BULLE DE RÉPONSE.
+ */
+const MEDIA_PAUSE_MS = 1600;
+const MEDIA_STEPS: FakeStep[] = [
+  { kind: "tool", tool: "generer_image", text: "C'est parti.", delayMs: FIRST_TOKEN_DELAY_MS },
+  { kind: "wait", delayMs: MEDIA_PAUSE_MS },
+  ...chatSteps(ANSWER_TEXT),
+];
 
-const host = new FakePiHost({ sessionId: "e2e-ack-session" });
+/* ─── MÉDIAS (images générées + captures) : preuve de l'ORDRE du fil ──────
+ * ⚠️ L'ordre ACCUSÉ → IMAGE → TEXTE et sa CONSERVATION au rechargement ne peuvent
+ * se mesurer que si le fil contient de VRAIS médias ré-émis après le snapshot
+ * (`restoreMedia`). On les sert donc ici, en same-origin, avec de vrais octets PNG.
+ * Aucun ComfyUI, aucun agent : seuls comptent l'instant de création et la place
+ * dans le fil. */
+function crc32(bytes: Buffer): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function chunk(type: string, data: Buffer): Buffer {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([length, body, crc]);
+}
+
+/** PNG 48×48 réel (damier) : le navigateur le décode vraiment. */
+function buildPng(size = 48): Buffer {
+  const raw = Buffer.alloc((size * 3 + 1) * size);
+  for (let y = 0; y < size; y += 1) {
+    const row = y * (size * 3 + 1);
+    raw[row] = 0;
+    for (let x = 0; x < size; x += 1) {
+      const shade = (Math.floor(x / 6) + Math.floor(y / 6)) % 2 === 0 ? 0x2b : 0xd8;
+      raw[row + 1 + x * 3] = shade;
+      raw[row + 2 + x * 3] = shade;
+      raw[row + 3 + x * 3] = shade;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(raw)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const PNG = buildPng();
+
+/** Conversation du harnais (une seule). */
+const HARNESS_SESSION_ID = "e2e-ack-session";
+
+/** Médias émis par le harnais, dans l'ordre de leur CRÉATION (chronologie). */
+const images: ComfyImageView[] = [];
+const captures: ScreenshotViewEvent[] = [];
+const imageListeners = new Set<(view: ComfyImageView) => void>();
+const captureListeners = new Set<(event: ScreenshotViewEvent) => void>();
+
+const imagesPort: ImagesGatewayPort = {
+  subscribeImages: (listener) => {
+    imageListeners.add(listener);
+    return () => {
+      imageListeners.delete(listener);
+    };
+  },
+  imagesForSession: () => [...images],
+};
+
+const screenshotsPort: ScreenshotGatewayPort = {
+  subscribeScreenshots: (listener) => {
+    captureListeners.add(listener);
+    return () => {
+      captureListeners.delete(listener);
+    };
+  },
+  capturesForSession: () => [...captures],
+};
+
+/**
+ * Crée un média à l'instant `at` et le diffuse (trame de contrôle). C'est
+ * exactement ce que fait la production : le média est créé PENDANT l'action, donc
+ * entre l'accusé et la réponse.
+ */
+function emitMedia(kind: "image" | "screenshot", label: string, at: Date): ComfyImageView | ScreenshotViewEvent {
+  if (kind === "image") {
+    const id = `img-${label}`;
+    const view: ComfyImageView = {
+      id,
+      imageSrc: `/images/${id}.png`,
+      mimeType: "image/png",
+      width: 48,
+      height: 48,
+      bytes: PNG.length,
+      createdAt: at.toISOString(),
+      promptId: `p-${label}`,
+      // ⚠️ Le transport route la trame vers les clients de CETTE conversation :
+      // sans identifiant, aucune trame n'est envoyée (comme en production, où la
+      // vue est rattachée AVANT diffusion).
+      sessionId: HARNESS_SESSION_ID,
+    };
+    images.push(view);
+    for (const listener of [...imageListeners]) listener(view);
+    return view;
+  }
+  const id = `shot-${label}`;
+  const event: ScreenshotViewEvent = {
+    kind: "captured",
+    screenshot: {
+      agentId: "e2e-machine",
+      agentName: "e2e-machine",
+      sessionId: HARNESS_SESSION_ID,
+      dataUrl: `/captures/${id}.png`,
+      format: "png",
+      width: 48,
+      height: 48,
+      bytes: PNG.length,
+      capturedAt: at.toISOString(),
+      source: "web",
+      url: `https://e2e.local/${label}`,
+    },
+  };
+  captures.push(event);
+  for (const listener of [...captureListeners]) listener(event);
+  return event;
+}
+
+const host = new FakePiHost({ sessionId: HARNESS_SESSION_ID });
 await host.start();
 
 /** Dernière synthèse FINALE observée (trame `run_summary`). */
@@ -140,6 +292,8 @@ const transport = createWsTransport({
   replayBufferSize: 1000,
   replayBufferBytes: 1_000_000,
   tts: ttsPipeline,
+  images: imagesPort,
+  screenshots: screenshotsPort,
 });
 
 const context: AppContext = {
@@ -151,7 +305,16 @@ const context: AppContext = {
   publicDir: "public/ui",
 };
 
-const server = createHttpServer(createApp(context));
+const appHandler = createApp(context);
+const server = createHttpServer((req, res) => {
+  const path = (req.url ?? "").split("?")[0];
+  if (path.startsWith("/images/") || path.startsWith("/captures/")) {
+    res.writeHead(200, { "content-type": "image/png", "cache-control": "no-store" });
+    res.end(PNG);
+    return;
+  }
+  appHandler(req, res);
+});
 transport.attach(server);
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const address = server.address() as AddressInfo;
@@ -176,7 +339,9 @@ const control = createHttpServer((req, res) => {
             ? "action_only"
             : requested === "silent"
               ? "silent"
-              : "question";
+              : requested === "media"
+                ? "media"
+                : "question";
     lastSummary = null;
     // Le script est EMPILÉ avant l'envoi : le double le consomme au démarrage.
     host.pushScript({
@@ -190,10 +355,24 @@ const control = createHttpServer((req, res) => {
               ? [...ACTION_ONLY_STEPS]
               : script === "silent"
                 ? [...SILENT_STEPS]
-                : [...QUESTION_STEPS],
+                : script === "media"
+                  ? [...MEDIA_STEPS]
+                  : [...QUESTION_STEPS],
     });
     const handle = host.send(sessionId, "Peux-tu t'occuper de ça ?");
     return send({ ok: true, runId: handle.runId, script, sessionId });
+  }
+  // Émission d'un MÉDIA (image générée ou capture) à l'instant demandé : c'est ce
+  // qui remplace la génération réelle au milieu du run.
+  if (url.pathname === "/emit-media") {
+    const kind = url.searchParams.get("kind") === "screenshot" ? "screenshot" : "image";
+    const label = url.searchParams.get("label") ?? `m${images.length + captures.length}`;
+    const at = new Date(url.searchParams.get("at") ?? Date.now());
+    const view = emitMedia(kind, label, at);
+    return send({ ok: true, kind, at: at.toISOString(), view });
+  }
+  if (url.pathname === "/media") {
+    return send({ images, captures });
   }
   if (url.pathname === "/last-summary") {
     return send({ summary: lastSummary });

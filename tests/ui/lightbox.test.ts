@@ -30,7 +30,7 @@ import {
   clampPan,
   clampScale,
   clickZoomTarget,
-  pinchTranslate,
+  pinchZoom,
   realScale,
   zoomCeiling,
   zoomTranslate,
@@ -152,23 +152,39 @@ describe("zoomTranslate — le point visé reste sous le curseur", () => {
   });
 });
 
-describe("pinchTranslate — pincement à deux doigts", () => {
+describe("pinchZoom — deux doigts = UN SEUL geste : la mise à l'échelle", () => {
   const center = { x: 0, y: 0 };
 
-  it("sans changement d'échelle, l'image SUIT le milieu des doigts", () => {
-    const moved = pinchTranslate({ tx: 0, ty: 0 }, { x: 0, y: 0 }, { x: 30, y: 20 }, center, 2, 2);
-    expect(moved).toEqual({ tx: 30, ty: 20 });
+  it("deux doigts qui GLISSENT sans changer d'écart ne déplacent RIEN (l'image ne fuit plus)", () => {
+    // ⚠️ Régression mesurée en E2E : le pincement suivait AUSSI le milieu des
+    // doigts, donc un simple glisser à deux doigts faisait bouger l'image.
+    const moved = pinchZoom(
+      { tx: 12, ty: -8 },
+      { x: 300, y: 200 },
+      center,
+      2,
+      2,
+    );
+    expect(moved).toEqual({ tx: 12, ty: -8 });
   });
 
-  it("en doublant l'échelle, le point sous le milieu des doigts reste fixe", () => {
-    // Point à 100 px du centre, échelle 1 → 2 : il doit rester « sous les doigts ».
-    const moved = pinchTranslate({ tx: 0, ty: 0 }, { x: 100, y: 0 }, { x: 100, y: 0 }, center, 1, 2);
+  it("en doublant l'échelle, le point ANCRÉ (milieu initial) reste fixe", () => {
+    const moved = pinchZoom({ tx: 0, ty: 0 }, { x: 100, y: 0 }, center, 1, 2);
     expect(moved).toEqual({ tx: -100, ty: 0 });
   });
 
+  it("le déplacement ne dépend PAS du milieu courant : seule l'échelle compte", () => {
+    // Même ancre, même échelle finale, même point de départ ⇒ même déplacement,
+    // quel que soit le chemin des doigts (aucun report du glisser).
+    const a = pinchZoom({ tx: 0, ty: 0 }, { x: 40, y: 40 }, center, 1, 1.5);
+    const b = pinchZoom({ tx: 0, ty: 0 }, { x: 40, y: 40 }, center, 1, 1.5);
+    expect(a).toEqual(b);
+    expect(a).toEqual({ tx: -20, ty: -20 });
+  });
+
   it("un pincement qui revient à l'échelle de départ retrouve le déplacement initial", () => {
-    const there = pinchTranslate({ tx: 0, ty: 0 }, { x: 50, y: 50 }, { x: 80, y: 90 }, center, 1, 2.5);
-    const back = pinchTranslate(there, { x: 80, y: 90 }, { x: 50, y: 50 }, center, 2.5, 1);
+    const there = pinchZoom({ tx: 0, ty: 0 }, { x: 50, y: 50 }, center, 1, 2.5);
+    const back = pinchZoom(there, { x: 50, y: 50 }, center, 2.5, 1);
     expect(Math.round(back.tx)).toBe(0);
     expect(Math.round(back.ty)).toBe(0);
   });
@@ -217,8 +233,23 @@ describe("garde-fous STATIQUES de lightbox.js (CSP + réutilisation)", () => {
 
   it("le pincement à deux doigts est géré par les Pointer Events", () => {
     expect(SOURCE).toContain('"pointerdown"');
-    expect(SOURCE).toContain("pinchTranslate(");
+    expect(SOURCE).toContain("pinchZoom(");
     expect(CODE).toContain("ids.length === 2");
+  });
+
+  it("le glisser est SUSPENDU dès qu'un second pointeur est actif (jamais deux gestes concurrents)", () => {
+    // ⚠️ Garde mesurée en E2E : à `pointermove`, un déplacement à UN doigt ne doit
+    // pas s'appliquer quand deux pointeurs sont actifs.
+    expect(CODE).toContain("pointers.size === 1");
+  });
+
+  it("la navigation entre images repose l'échelle à « contain » (jamais un zoom hérité)", () => {
+    // `show()` (boutons ‹ › ET flèches du clavier) appelle `resetView()` AVANT
+    // de changer de source : on ne passe jamais d'une image zoomée à une autre
+    // image zoomée au même endroit.
+    const showBody = CODE.slice(CODE.indexOf("function show(next)"), CODE.indexOf("function build()"));
+    expect(showBody).toContain("resetView()");
+    expect(showBody.indexOf("resetView()")).toBeLessThan(showBody.indexOf("imgEl.src"));
   });
 
   it("la fermeture retire TOUS les écouteurs et le nœud (PIÈGE ④ : aucun orphelin)", () => {

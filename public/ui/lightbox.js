@@ -31,6 +31,10 @@
 // entre images vit dans une barre EN BAS (zone du pouce) ; le pincement à deux
 // doigts est géré (Pointer Events + `touch-action: none`).
 //
+// ⚠️ DEUX DOIGTS = UN SEUL GESTE (zoom) : le pincement ne déplace jamais l'image
+// (voir `pinchZoom`). Le glisser d'un doigt, le tap et la navigation gardent leur
+// comportement, inchangé.
+//
 // INSPIRATION : la galerie de `ComfyUI-AI-Helper` (brique `HolafViewport` :
 // molette → zoom vers le curseur, glisser → déplacement, `fit` = échelle 1,
 // déplacement borné pour que l'image ne quitte jamais la vue). Cette
@@ -147,24 +151,31 @@ export function zoomTranslate(tx, ty, prevScale, nextScale, dx, dy) {
 }
 
 /**
- * Même chose pour un PINCEment à deux doigts : les deux doigts encadrent le point
- * `mid0` au début, `mid1` maintenant — ce point doit rester sous les doigts, et
- * l'image suit AUSSI le déplacement du milieu des deux doigts (on peut donc
- * pincer ET déplacer dans le même geste).
+ * Déplacement à appliquer pour un PINCEment à deux doigts : SEULE l'échelle change,
+ * autour d'un point ANCRÉ (le milieu des doigts au DÉBUT du geste).
  *
- * `center` = centre de l'image à l'échelle 1 (coordonnées client), `translate`
- * = déplacement courant `{ tx, ty }`.
+ * ⚠️ DÉFAUT CORRIGÉ : le pincement faisait AUSSI suivre le milieu des doigts
+ * (déplacement), donc dès que les deux doigts glissaient — même d'un seul côté —
+ * l'image fuyait pendant qu'on zoomait : « ça fait aussi bouger l'image, du coup
+ * c'est pas contrôlable ». Ici, deux doigts = UN SEUL geste : la mise à l'échelle.
+ * Le déplacement reste au doigt UNIQUE (glisser), et rien ne se cumule.
+ *
+ * `anchor` = point d'écran tenu fixe (milieu initial), `center` = centre de l'image
+ * à l'échelle 1 (coordonnées client), `translate` = déplacement courant.
  */
-export function pinchTranslate(translate, mid0, mid1, center, prevScale, nextScale) {
-  const prev = Number(prevScale);
-  const next = Number(nextScale);
-  const ratio = Number.isFinite(prev) && prev > 0 && Number.isFinite(next) ? next / prev : 1;
+export function pinchZoom(translate, anchor, center, prevScale, nextScale) {
   const tx = Number(translate?.tx) || 0;
   const ty = Number(translate?.ty) || 0;
-  return {
-    tx: Number(mid1.x) - Number(center.x) - (Number(mid0.x) - Number(center.x) - tx) * ratio,
-    ty: Number(mid1.y) - Number(center.y) - (Number(mid0.y) - Number(center.y) - ty) * ratio,
-  };
+  // Distance du point ancré au CENTRE de l'image à l'écran : le `scale()` se fait
+  // autour du centre, donc c'est cette distance qui doit être conservée.
+  return zoomTranslate(
+    tx,
+    ty,
+    prevScale,
+    nextScale,
+    (Number(anchor?.x) || 0) - ((Number(center?.x) || 0) + tx),
+    (Number(anchor?.y) || 0) - ((Number(center?.y) || 0) + ty),
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -394,20 +405,15 @@ export function createImageLightbox({
     if (gesture && gesture.kind === "pinch" && ids.length >= 2) {
       const [a, b] = ids.map((id) => pointers.get(id));
       const dist = distance(a, b);
-      const mid = midpoint(a, b);
       const start = gesture.dist > 0 ? gesture.dist : dist || 1;
       const nextScale = clampScale(
         gesture.scale * (dist / start),
         zoomCeiling(zoom.naturalW, zoom.baseW),
       );
-      const moved = pinchTranslate(
-        { tx: zoom.tx, ty: zoom.ty },
-        gesture.mid,
-        mid,
-        gesture.center,
-        zoom.scale,
-        nextScale,
-      );
+      // ⚠️ L'ANCRE est le milieu des doigts au DÉBUT du geste, et elle ne bouge
+      // plus : un pincement ne déplace JAMAIS l'image (deux doigts ne sont pas un
+      // glisser). Le milieu COURANT ne sert qu'à mesurer l'écart.
+      const moved = pinchZoom(zoom, gesture.mid, gesture.center, zoom.scale, nextScale);
       zoom.scale = nextScale;
       zoom.tx = moved.tx;
       zoom.ty = moved.ty;
@@ -418,7 +424,15 @@ export function createImageLightbox({
       return;
     }
 
-    if (gesture && gesture.kind === "pan" && event.pointerId === gesture.id) {
+    // ⚠️ DÉPLACEMENT SEULEMENT AVEC UN DOIGT : si un second pointeur est actif
+    // (pincement en cours, ou doigt posé pendant un glisser), le glisser est
+    // SUSPENDU — jamais deux gestes concurrents qui se disputent l'image.
+    if (
+      gesture &&
+      gesture.kind === "pan" &&
+      event.pointerId === gesture.id &&
+      pointers.size === 1
+    ) {
       const dx = event.clientX - gesture.x;
       const dy = event.clientY - gesture.y;
       if (Math.hypot(dx, dy) > LIGHTBOX_DRAG_THRESHOLD_PX) {

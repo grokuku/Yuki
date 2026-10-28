@@ -179,9 +179,10 @@ export class SessionStream {
         ...(entry.metrics !== undefined ? { metrics: entry.metrics } : {}),
         ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
         ...(entry.subject !== undefined ? { subject: entry.subject } : {}),
-        // ACCUSÉ DE RÉCEPTION : il fait PARTIE du message (première ligne de la
-        // bulle), il traverse donc le snapshot pour revenir après un
-        // rechargement — sans jamais être mêlé au texte de la réponse.
+        // ACCUSÉ DE RÉCEPTION : il est un MESSAGE À PART ENTIÈRE (une entrée dont le
+        // `text` est vide et qui n'a que lui), donc il traverse le snapshot pour
+        // revenir après un rechargement, dans SA bulle et à SA place — sans jamais
+        // être mêlé au texte de la réponse.
         ...(entry.ack !== undefined ? { ack: entry.ack } : {}),
       })),
     };

@@ -229,12 +229,18 @@ interface RunItem {
   /**
    * ACCUSÉ DE RÉCEPTION de ce run, tel qu'il a été ÉMIS (`{ tool, text }`).
    *
-   * ⚠️ Mémorisé sur le run pour être attaché au message assistant qu'il préface
-   * (`TranscriptEntry.ack`) et PERSISTÉ à part (`yuki.run_ack`) : sans cela,
-   * l'accusé ne serait qu'une trame éphémère et disparaîtrait au rechargement,
-   * en laissant une bulle de réponse VIDE dans le fil.
+   * ⚠️ Mémorisé sur le run pour être versé au transcript comme un MESSAGE À PART
+   * ENTIÈRE (`TranscriptEntry` d'`ack` seul) et PERSISTÉ à part (`yuki.run_ack`) :
+   * sans cela, l'accusé ne serait qu'une trame éphémère et disparaîtrait au
+   * rechargement, en laissant une bulle de réponse VIDE dans le fil.
    */
   ack?: { tool: string; text: string };
+  /**
+   * Entrée de transcript de l'ACCUSÉ (bulle qui n'a que lui), poussée dès que la
+   * décision est prise : c'est elle qui occupe SA PROPRE place dans le fil, AVANT
+   * l'image ou le texte final que le run produira ensuite.
+   */
+  ackEntry?: TranscriptEntry;
   /**
    * Le message utilisateur a DÉJÀ été versé au transcript (cas d'un message
    * livré en `steer` à un run en cours). Évite une double bulle si le message
@@ -535,13 +541,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       ...(entry.ack !== undefined ? { ack: entry.ack } : {}),
     }));
     if (record.partial.length > 0) {
-      // Le contenu en cours appartient au run COURANT : s'il a déjà accusé
-      // réception, l'accusé reste la première ligne de la bulle (une bascule de
-      // fil ou un rechargement ne le fait donc pas disparaître).
+      // Le contenu en cours est un message À PART ENTIÈRE : l'accusé du run, lui,
+      // a déjà SA propre entrée (poussée à la décision), donc sa propre bulle
+      // au-dessus. Rien à rattacher ici.
       transcript.push({
         role: "assistant",
         text: record.partial,
-        ...(record.currentRun?.ack ? { ack: record.currentRun.ack.text } : {}),
       });
     }
     // ⚠️ ÉTAT VIVANT, jamais déduit du transcript : l'attente (« premier contenu
@@ -618,6 +623,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     run: RunItem,
     tool: string,
     candidate: string,
+    at?: number,
   ): boolean {
     // Une seule ligne par run, et jamais quand l'action n'est pas un déclencheur.
     if (run.acked === true) return false;
@@ -646,11 +652,22 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     run.acked = true;
     run.ack = { tool, text };
     run.ackSource = source;
-    // ⚠️ MÉMORISÉ POUR LE TRANSCRIPT (et non seulement émis) : l'accusé est la
-    // PREMIÈRE ligne de la réponse, donc il appartient au message assistant.
-    // Il est rattaché ici (miroir en mémoire, disponible dès le snapshot
-    // suivant) puis persisté à part (`yuki.run_ack`) en fin de run.
-    if (run.assistantEntry) run.assistantEntry.ack = text;
+    // ⚠️ VERSÉ AU TRANSCRIPT (et non seulement émis) : l'accusé est un MESSAGE À
+    // PART ENTIÈRE, qui ouvre SA PROPRE bulle. Il prend donc sa place MAINTENANT —
+    // avant l'image que l'action va produire et avant le texte final du tour —
+    // ce qui donne l'ordre ACCUSÉ → IMAGE → RÉPONSE, en direct comme au
+    // rechargement (le transcript est la source de ce que l'UI affiche).
+    // Persisté à part (`yuki.run_ack`) en fin de run.
+    if (!run.ackEntry) {
+      const entry: TranscriptEntry = {
+        role: "assistant",
+        text: "",
+        ack: text,
+        timestamp: at ?? Date.now(),
+      };
+      record.transcript.push(entry);
+      run.ackEntry = entry;
+    }
     // L'accusé est la PREMIÈRE chose que l'utilisateur voit du tour : c'est bien
     // le premier jeton visible, donc il arrête le chronomètre TTFT.
     run.instrumentation.markFirstToken();
@@ -827,7 +844,14 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         // modèle supplémentaire (c'est le texte du tour lui-même).
         const ackTool = firstAckToolCall(message.content);
         const ackOwnsText =
-          ackTool !== undefined && maybeAcknowledge(record, run, ackTool, content);
+          ackTool !== undefined &&
+          maybeAcknowledge(
+            record,
+            run,
+            ackTool,
+            content,
+            messageTimestamp(message),
+          );
         // TEXTE D'AFFICHAGE de ce message : sans l'accusé quand c'est lui qui
         // vient d'être reconnu (il n'est PAS une réponse : il vit dans `run.ack`).
         const body = ackOwnsText ? "" : content;
@@ -870,10 +894,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
             const assistantEntry: TranscriptEntry = {
               role: "assistant",
               text,
-              // ⚠️ L'accusé du run OUVRE la bulle : il est attaché à l'entrée de
-              // transcript (donc au snapshot), sans jamais entrer dans le texte
-              // du message (il resterait sinon dans la réponse du modèle).
-              ...(run.ack ? { ack: run.ack.text } : {}),
+              // ⚠️ L'accusé n'est PAS recopié ici : il a SA PROPRE entrée (donc sa
+              // propre bulle), poussée AVANT celle-ci. Il ne peut donc pas se
+              // répéter dans le corps de la réponse, et l'image générée entre les
+              // deux garde sa place entre les deux bulles.
               timestamp: messageTimestamp(message) ?? Date.now(),
             };
             record.transcript.push(assistantEntry);
@@ -1125,22 +1149,34 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     if (run.assistantEntry && !run.assistantEntry.id && entryId) {
       run.assistantEntry.id = entryId;
     }
-    // ⚠️ ACCUSÉ SANS CONTENU AFFICHABLE (run qui s'achève sur une action, dont le
-    // message ne portait QUE l'accusé) : la bulle doit exister avec l'accusé.
-    // Sans cette entrée, le rechargement ramènerait une bulle VIDE (défaut
-    // signalé) — ici elle porte au moins la première ligne de la réponse.
-    if (run.ack && !run.assistantEntry) {
+    // ⚠️ FILET — ACCUSÉ DÉJÀ VERSÉ, mais aucune entrée : cela ne doit pas arriver
+    // (l'entrée est poussée à la décision). On la crée ici plutôt que de laisser
+    // le run sans bulle, sans jamais la DUPLIQUER (`run.ackEntry`).
+    if (run.ack && !run.ackEntry) {
       const entry: TranscriptEntry = {
         role: "assistant",
         text: "",
         ack: run.ack.text,
-        ...(entryId ? { id: entryId } : {}),
         timestamp: Date.now(),
       };
-      record.transcript.push(entry);
-      // Miroir de l'entrée persistée : la persistance de l'accusé (`run_ack`) et
-      // les statistiques la retrouvent (elles s'y rattachent par `id`).
-      run.assistantEntry = entry;
+      // AVANT l'entrée de la réponse quand elle existe : l'accusé la précède
+      // toujours dans le fil (jamais de réponse avant son accusé).
+      const answerIndex =
+        run.assistantEntry === undefined
+          ? -1
+          : record.transcript.indexOf(run.assistantEntry);
+      if (answerIndex >= 0) record.transcript.splice(answerIndex, 0, entry);
+      else record.transcript.push(entry);
+      run.ackEntry = entry;
+    }
+    // ⚠️ ACCUSÉ SANS CONTENU AFFICHABLE (run qui s'achève sur une action, dont le
+    // message ne portait QUE l'accusé) : la bulle de l'accusé EST le message. Elle
+    // reçoit alors l'identifiant de corrélation (réactions, statistiques) — alors
+    // qu'une réponse existe, l'accusé n'en porte AUCUN : les actions d'un message
+    // restent attachées à la RÉPONSE, jamais à sa ligne de statut.
+    if (!run.assistantEntry && run.ackEntry) {
+      run.assistantEntry = run.ackEntry;
+      if (!run.assistantEntry.id && entryId) run.assistantEntry.id = entryId;
     }
     emitEvent({
       type: "run_finished",
@@ -1341,9 +1377,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         tool: ack.tool,
         text: ack.text,
       });
-      // Le miroir en mémoire porte déjà l'accusé : un snapshot de la session
-      // COURANTE l'affiche sans attendre un rechargement.
-      assistant.ack = ack.text;
+      // ⚠️ Le miroir en mémoire n'a RIEN à compléter : l'accusé a SA PROPRE entrée
+      // de transcript (donc sa propre bulle), poussée au moment de la décision. La
+      // reporter ici le remettrait dans la réponse (deux bulles pour lui).
     } catch (error) {
       logger.warn("pi.run.ack.persist.failed", {
         session_id: record.sessionId,

@@ -419,14 +419,16 @@ describe("pi.events — accusé de réception persisté (run_ack)", () => {
     data,
   });
 
-  it("rattache l'accusé au message assistant et le redérive du NOM D'OUTIL", () => {
+  it("l'accusé ouvre SA PROPRE entrée, AVANT le message de réponse", () => {
     const transcript = transcriptFromEntries([
       assistantEntry("a1", "Voilà l'image."),
       ackEntry("k1", "a1", { tool: "generer_image" }),
     ]);
-    // Le texte du message reste INTACT : l'accusé est un champ à part.
+    // ⚠️ Deux entrées, deux bulles : l'accusé est un message à part entière (donc
+    // AVANT l'image générée et AVANT la réponse), et le texte reste INTACT.
     expect(transcript).toEqual([
-      { role: "assistant", text: "Voilà l'image.", id: "a1", ack: "C'est parti." },
+      { role: "assistant", text: "", ack: "C'est parti." },
+      { role: "assistant", text: "Voilà l'image.", id: "a1" },
     ]);
   });
 
@@ -438,8 +440,18 @@ describe("pi.events — accusé de réception persisté (run_ack)", () => {
       ackEntry("k1", "a1", { tool: "delegate" }),
       metricsEntry("m1", "k1", { totalMs: 1200 }),
     ]);
-    expect(transcript[0].ack).toBe("Je m'en occupe.");
-    expect(transcript[0].metrics).toEqual({ totalMs: 1200 });
+    expect(transcript[0]).toEqual({
+      role: "assistant",
+      text: "",
+      ack: "Je m'en occupe.",
+    });
+    // Les statistiques restent sur la RÉPONSE, jamais sur la ligne de statut.
+    expect(transcript[1]).toEqual({
+      role: "assistant",
+      text: "Voilà l'image.",
+      id: "a1",
+      metrics: { totalMs: 1200 },
+    });
   });
 
   it("reste correct quand les métriques précèdent l'accusé (chaîne inverse)", () => {
@@ -448,13 +460,10 @@ describe("pi.events — accusé de réception persisté (run_ack)", () => {
       metricsEntry("m1", "a1", { totalMs: 42 }),
       ackEntry("k1", "m1", { tool: "run_command" }),
     ]);
-    expect(transcript[0]).toEqual({
-      role: "assistant",
-      text: "Réponse",
-      id: "a1",
-      metrics: { totalMs: 42 },
-      ack: "C'est parti.",
-    });
+    expect(transcript).toEqual([
+      { role: "assistant", text: "", ack: "C'est parti." },
+      { role: "assistant", text: "Réponse", id: "a1", metrics: { totalMs: 42 } },
+    ]);
   });
 
   it("IGNORE un accusé orphelin (aucun message assistant parent)", () => {
@@ -485,12 +494,24 @@ describe("pi.events — accusé de réception persisté (run_ack)", () => {
       assistantEntry("a1", "Deux secondes, je m'en occupe."),
       ackEntry("k1", "a1", { tool: "delegate", text: "Deux secondes, je m'en occupe." }),
     ]);
-    // Le message ne portait QUE l'accusé : il n'ouvre pas de bulle de corps, il
-    // devient la première ligne de la bulle (aucune duplication de la phrase).
+    // Le message ne portait QUE l'accusé : il n'ouvre pas de bulle de corps, la
+    // bulle d'accusé EST le message — elle en porte donc l'identifiant (réactions).
     expect(transcript).toEqual([
       { role: "assistant", text: "", id: "a1", ack: "Deux secondes, je m'en occupe." },
     ]);
     expect(JSON.stringify(transcript).match(/Deux secondes/g)).toHaveLength(1);
+  });
+
+  it("n'attribue AUCUN identifiant à l'accusé quand une réponse le suit", () => {
+    const transcript = transcriptFromEntries([
+      assistantEntry("a1", "C'est parti."),
+      assistantEntry("a2", "Voici l'image demandée."),
+      ackEntry("k1", "a2", { tool: "generer_image", text: "C'est parti." }),
+    ]);
+    expect(transcript).toEqual([
+      { role: "assistant", text: "", ack: "C'est parti." },
+      { role: "assistant", text: "Voici l'image demandée.", id: "a2" },
+    ]);
   });
 
   it("REDÉRIVE le libellé d'une entrée d'une version antérieure (données = {tool})", () => {

@@ -3,6 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- ⚠️ Le PINCEMENT de la page est bloqué SUR TÉLÉPHONE UNIQUEMENT, et il l'est
+         par `touch-action: pan-y` sur le fil (`styles.css`, requête média
+         téléphone) — PAS par `user-scalable=no` ici : iOS l'IGNORE depuis iOS 10,
+         et il bloquerait le zoom PARTOUT (y compris sur bureau, où `Ctrl+molette`
+         est un outil d'ACCESSIBILITÉ qu'on ne touche pas). -->
     <meta name="color-scheme" content="light dark" />
     <title>Yuki</title>
     <!-- PWA : le manifeste (même origine) rend l'interface INSTALLABLE ; le

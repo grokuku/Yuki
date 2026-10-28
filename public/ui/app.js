@@ -1114,9 +1114,15 @@ function createMessageBody(text) {
  * Pose l'heure « juste HH:mm » EN TÊTE d'un message (`.message__head`, AU-DESSUS
  * du texte). `alignEnd` = bord extérieur à droite (messages utilisateur). Un
  * message SANS horodatage n'affiche rien (pas de ligne d'en-tête vide).
+ *
+ * ⚠️ L'instant est AUSSI posé en `data-ts` (MIETTE de mesure, invisible et muette) :
+ * c'est lui qui permet aux médias restaurés APRÈS le snapshot (images générées,
+ * captures) de retrouver leur place CHRONOLOGIQUE dans le fil au lieu de
+ * s'empiler à la fin (voir `chronologicalAnchor`).
  */
 function setMessageTime(element, ts, alignEnd) {
   if (!element || !isTimestamp(ts)) return;
+  element.dataset.ts = String(ts);
   let head = element.querySelector(".message__head");
   if (!head) {
     head = document.createElement("div");
@@ -1174,7 +1180,26 @@ function appendAssistantMessage(text = null, pinned = isConversationPinned(), ts
 }
 
 /**
- * Bloc de RÉCAPITULATIF GÉNÉRÉ (point de départ d'une conversation dédiée).
+ * Garantit qu'une bulle de CONTENU existe pour le run courant — DISTINCTE de la
+ * bulle d'accusé — et la renvoie.
+ *
+ * ⚠️ POURQUOI : l'accusé est un MESSAGE À PART ENTIÈRE (sa bulle, son heure). Le
+ * texte de la réponse ne doit donc jamais s'écrire dedans : il ouvre SA bulle,
+ * juste en dessous — après l'image que l'action a éventuellement produite.
+ *
+ * @param {boolean} [pinned] état STICKY mesuré AVANT l'ajout.
+ */
+function ensureContentBubble(pinned = isConversationPinned()) {
+  if (currentAssistant && !ackBlocks.has(currentAssistant)) return currentAssistant;
+  const previous = currentAssistant;
+  currentAssistant = appendAssistantMessage(null, pinned, Date.now());
+  // Le pied technique (posé dès `run_started`) suit la réponse.
+  adoptLiveStats(previous, currentAssistant);
+  return currentAssistant;
+}
+
+/**
+ * Bulle de RÉCAPITULATIF GÉNÉRÉ (point de départ d'une conversation dédiée).
  *
  * ⚠️ Ce n'est NI un message de l'utilisateur NI un message de Yuki : c'est une
  * DONNÉE générée, rendue dans un bloc distinct (`message--recap`) avec un
@@ -1219,6 +1244,45 @@ function appendRecapBlock(entry, pinned = isConversationPinned(), ts = null) {
   return div;
 }
 
+/**
+ * Point d'insertion CHRONOLOGIQUE d'un MÉDIA (image générée, capture) dans le fil.
+ *
+ * ⚠️ PROBLÈME RÉSOLU : les médias conservés sont ré-émis par le serveur APRÈS le
+ * snapshot (`restoreMedia`, `src/gateway/ws/server.ts`). Les ajouter en fin de fil
+ * mettait TOUTES les images en bas et TOUS les messages en haut : la chronologie
+ * était perdue. On les insère donc AVANT le premier élément daté PLUS RÉCENT
+ * qu'eux (les messages portent leur instant en `data-ts`).
+ *
+ * ⚠️ Ce qui donne l'ordre ACCUSÉ → IMAGE → TEXTE : l'image est créée PENDANT
+ * l'action, donc APRÈS l'horodatage du message d'accusé et AVANT celui de la
+ * réponse finale. Un média postérieur à tout le fil (cas du flux en direct)
+ * reste simplement ajouté à la fin.
+ *
+ * @param {string|number|undefined} at instant du média (ISO 8601 ou ms Unix).
+ * @returns {Node|null} nœud devant lequel insérer, ou `null` pour la fin du fil.
+ */
+function chronologicalAnchor(at) {
+  const value = typeof at === "number" ? at : Date.parse(String(at ?? ""));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  for (const child of els.conversation.children) {
+    const stamp = Number(child.dataset ? child.dataset.ts : undefined);
+    if (!Number.isFinite(stamp) || stamp <= 0) continue;
+    if (stamp > value) {
+      // ⚠️ Un séparateur de JOUR juste avant ce message appartient au message :
+      // le média (antérieur) se place AVANT lui, dans le jour qui le précède.
+      let node = child;
+      while (
+        node.previousElementSibling &&
+        node.previousElementSibling.classList.contains("daysep")
+      ) {
+        node = node.previousElementSibling;
+      }
+      return node;
+    }
+  }
+  return null;
+}
+
 function applyTranscript(transcript) {
   const pinned = isConversationPinned();
   // Le fil est reconstruit : on purge les blocs ÉPHÉMÈRES (validation, captures,
@@ -1257,9 +1321,27 @@ function applyTranscript(transcript) {
       // rechargement. Absentes (ancienne session) ⇒ aucun pied, aucune ligne.
       // ⚠️ JAMAIS DE BULLE VIDE : une entrée sans contenu ET sans accusé n'est
       // pas rendue du tout (aucune bulle fantôme après restauration).
-      if ((entry.text ?? "").trim() === "" && typeof entry.ack !== "string") continue;
-      const div = appendAssistantMessage(entry.text ?? "", pinned, ts);
+      const ackText = typeof entry.ack === "string" ? entry.ack : null;
+      const bodyText = (entry.text ?? "").trim();
+      if (bodyText === "" && ackText === null) continue;
       const meta = runMetricsText(entry.metrics);
+      // ⚠️ L'ACCUSÉ EST UN MESSAGE À PART ENTIÈRE (sa propre bulle, son heure, son
+      // texte normal) : il ouvre donc la PREMIÈRE bulle, AVANT l'image que
+      // l'action a produite et AVANT la réponse. Une ancienne session peut encore
+      // réunir les deux dans une même entrée : les deux bulles sont alors créées
+      // ici, dans le MÊME ordre qu'en direct (aucune régression de relecture).
+      if (ackText !== null) {
+        const ackBubble = appendAssistantMessage(null, pinned, ts);
+        ackBlocks.show(ackBubble, ackText);
+        // Bulle d'accusé SEUL : elle EST le message du tour, elle porte donc son
+        // pied technique (exactement ce que le direct avait affiché). Aucune
+        // action, elle : la corrélation n'est admise que pour une VRAIE réponse.
+        if (bodyText === "") {
+          if (meta) setMeta(ackBubble, meta);
+          continue;
+        }
+      }
+      const div = appendAssistantMessage(entry.text ?? "", pinned, ts);
       if (meta) setMeta(div, meta);
       // RÉACTION : le serveur la fournit (store à part) avec l'identifiant STABLE
       // du message. Elle réapparaît donc à la bonne place après un RECHARGEMENT,
@@ -1268,10 +1350,8 @@ function applyTranscript(transcript) {
         entryId: typeof entry.id === "string" ? entry.id : null,
         reaction: typeof entry.reaction === "string" ? entry.reaction : null,
       });
-      // ACCUSÉ PERSISTÉ (il fait partie du message) : il revient donc après un
-      // rechargement, en PREMIÈRE ligne de la bulle, AVANT le corps (le point
-      // d'insertion est le corps, l'ordre des appels n'y change rien).
-      if (typeof entry.ack === "string") ackBlocks.show(div, entry.ack);
+      // ⚠️ L'accusé, lui, a DEJA eu SA bulle juste au-dessus : il n'est jamais
+      // recopié dans le corps de la réponse (aucun doublon de la phrase).
     }
   }
   currentRenderer = null;
@@ -1344,6 +1424,22 @@ const LIVE_STATS_TICK_MS = 200;
 const runT0ByRun = new Map();
 let liveStats = null;
 let liveStatsTimer = null;
+
+/**
+ * Déplace le pied de statistiques et l'alignement `t0` vers la bulle qui porte
+ * désormais la RÉPONSE.
+ *
+ * ⚠️ Le pied est posé dès `run_started` (donc sur la bulle d'attente ou d'accusé) :
+ * il doit suivre la réponse quand celle-ci ouvre SA bulle, sinon les chiffres
+ * techniques resteraient accrochés à la ligne de statut.
+ */
+function adoptLiveStats(from, to) {
+  if (!liveStats || !from || !to || from === to) return;
+  liveStats.element = to;
+  const footer = from.querySelector(":scope > .message__footer");
+  if (footer) to.appendChild(footer);
+  renderLiveStats();
+}
 
 function renderLiveStats() {
   if (!liveStats) return;
@@ -1553,14 +1649,30 @@ function handleFrame(frame) {
   // Traitée AVANT la logique de curseur `seq`, sinon elle serait prise pour un
   // doublon. Jamais rejouée, jamais conservée, jamais envoyée au modèle.
   if (type === "screenshot") {
-    screenshotBlocks.show(frame.screenshot);
+    // ⚠️ INSERTION CHRONOLOGIQUE : après un rechargement, la trame arrive APRÈS
+    // le snapshot (fil déjà complet) — le bloc doit retrouver SA place, pas la fin.
+    // ⚠️ PIÈGE ③ : une insertion AU MILIEU du fil ne doit pas lâcher le défilement —
+    // `pinned` est mesuré AVANT l'ajout, comme pour tout contenu qui grandit le fil.
+    const pinned = isConversationPinned();
+    screenshotBlocks.show(frame.screenshot, {
+      before: chronologicalAnchor(frame.screenshot?.capturedAt),
+    });
+    pinIfNeeded(pinned);
     return;
   }
   // IMAGE GÉNÉRÉE : ÉTAT TEMPORAIRE, trame de CONTRÔLE (aucun `seq` consommé),
   // traitée AVANT le curseur `seq` (sinon prise pour un doublon). Jamais rejouée,
   // jamais conservée : le chemin est same-origin, donc la CSP reste inchangée.
   if (type === "image") {
-    imageBlocks.show(frame.image);
+    // ⚠️ MÊME INSERTION CHRONOLOGIQUE que les captures : l'image générée se place
+    // ENTRE la bulle d'accusé et la bulle de réponse, comme en direct.
+    // ⚠️ PIÈGE ③ : `pinned` mesuré AVANT l'insertion (état STICKY et bouton
+    // « revenir en bas » préservés, même si la carte apparaît au milieu du fil).
+    const pinned = isConversationPinned();
+    imageBlocks.show(frame.image, {
+      before: chronologicalAnchor(frame.image?.createdAt),
+    });
+    pinIfNeeded(pinned);
     return;
   }
   // FICHE d'une image DÉJÀ affichée (prompt final publié par le workflow) : elle
@@ -1814,11 +1926,11 @@ function applyEvent(frame) {
         // `pinned` est mesuré AVANT d'ajouter le moindre contenu : on ne colle
         // en bas que si l'utilisateur y était déjà.
         const pinned = isConversationPinned();
-        if (!currentAssistant) {
-          currentAssistant = appendAssistantMessage(null, pinned, Date.now());
-        }
-        // Le premier mot de la réponse remplace l'indicateur d'attente : l'accusé,
-        // s'il y en a un, reste la première ligne de la bulle.
+        // ⚠️ L'accusé est UN MESSAGE À PART ENTIÈRE : la première ligne de contenu
+        // n'entre donc PAS dans sa bulle, elle en ouvre une NOUVELLE, juste en
+        // dessous — c'est ce qui donne l'ordre ACCUSÉ → IMAGE → TEXTE.
+        ensureContentBubble(pinned);
+        // Sans accusé, le premier mot remplace l'indicateur d'attente.
         ackBlocks.settled(currentAssistant);
         if (currentRenderer) currentRenderer.push(frame.text ?? "");
         pinIfNeeded(pinned);
@@ -1899,37 +2011,37 @@ function applyEvent(frame) {
         // Sans identifiant (réponse vide, échec), aucun bouton n'est proposé.
         // Posé AVANT le `pinIfNeeded` final : la ligne du bouton fait grandir la
         // bulle, le défilement doit en tenir compte (état STICKY préservé).
-        if (typeof frame.entryId === "string") {
-          reactionControl.attach(currentAssistant, { entryId: frame.entryId, reaction: null });
-        }
         // `hasText` doit porter sur le CONTENU seul : l'en-tête (heure) et le
         // pied (infos techniques) font partie de la bulle mais ne sont PAS des
         // réponses du modèle.
         const hasText = producedContent;
-        // ⚠️ L'accusé est DÉJÀ le début de la réponse : quand il est là et que le
-        // run s'achève NORMALEMENT, la bulle n'est pas muette, on n'ajoute donc
-        // pas de parenthèse technique (elle contredirait la ligne de statut que
-        // l'utilisateur vient de lire). ⚠️ Un ABANDON, lui, reste DIT : c'est une
-        // issue distincte, l'utilisateur doit savoir que rien d'autre n'arrivera.
+        // ⚠️ L'accusé est un MESSAGE À PART : quand un tour se termine sur lui (ou
+        // en échec), l'identifiant de corrélation et la réaction vont à SA bulle,
+        // qui est alors tout le message du tour.
+        if (typeof frame.entryId === "string") {
+          reactionControl.attach(currentAssistant, { entryId: frame.entryId, reaction: null });
+        }
+        // ⚠️ Une note technique (interruption, échec, réponse vide) se dit dans une
+        // bulle de TEXTE, jamais dans la bulle d'accusé (elle n'a rien à y faire :
+        // l'accusé est un message complet, pas un préambule). Un tour qui s'achève
+        // NORMALEMENT sur son accusé n'a donc AUCUNE note à ajouter.
         const hasAck = ackBlocks.has(currentAssistant);
-        ackBlocks.settled(currentAssistant);
-        if (frame.reason === "abort" && !hasText) {
+        const note =
+          frame.reason === "error"
+            ? frame.errorMessage || "Le modèle n'a pas répondu (aucun détail fourni)."
+            : frame.reason === "abort" && !hasText
+              ? "(interrompu)"
+              : frame.reason === "done" && !hasText && !hasAck
+                ? "(aucune réponse texte reçue)"
+                : null;
+        if (note !== null) {
+          ensureContentBubble(pinned);
           // On écrit dans le CORPS markdown (jamais `textContent` de la bulle :
           // cela effacerait l'en-tête d'heure et le pied technique).
-          if (currentRenderer) currentRenderer.setText("(interrompu)");
-        } else if (frame.reason === "done" && !hasText && !hasAck) {
-          // Rien à afficher : on le DIT (bulle muette + métadonnées sinon
-          // incompréhensibles), au lieu de laisser une bulle vide.
-          if (currentRenderer) currentRenderer.setText("(aucune réponse texte reçue)");
+          if (frame.reason === "error") currentAssistant.classList.add("message--error");
+          if (currentRenderer) currentRenderer.setText(note);
         }
-        if (frame.reason === "error") {
-          currentAssistant.classList.add("message--error");
-          if (currentRenderer) {
-            currentRenderer.setText(
-              frame.errorMessage || "Le modèle n'a pas répondu (aucun détail fourni).",
-            );
-          }
-        }
+        ackBlocks.settled(currentAssistant);
         pinIfNeeded(pinned);
       } else if (frame.reason === "error") {
         appendMessage(

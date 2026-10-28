@@ -354,6 +354,81 @@ async function pinch(center, from, to, steps = 8) {
   await sleep(200);
 }
 
+/** GLISSER D'UN DOIGT (défilement natif du fil). */
+async function touchDrag(x, fromY, toY, steps = 8) {
+  await send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x, y: fromY, id: 1 }],
+  });
+  await sleep(40);
+  for (let i = 1; i <= steps; i += 1) {
+    await send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x, y: fromY + ((toY - fromY) * i) / steps, id: 1 }],
+    });
+    await sleep(16);
+  }
+  await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await sleep(500);
+}
+
+/**
+ * GLISSER À DEUX DOIGTS : l'écart entre les doigts ne change PAS, seul le MILIEU
+ * se déplace de `dx` px. C'est le geste qui « faisait aussi bouger l'image ».
+ */
+async function twoFingerDrag(center, spread, dx, steps = 6) {
+  const point = (offset, id) => ({ x: center.x + offset, y: center.y, id });
+  await send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [point(-spread, 1), point(spread, 2)],
+  });
+  await sleep(40);
+  for (let i = 1; i <= steps; i += 1) {
+    const shift = (dx * i) / steps;
+    await send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [point(-spread + shift, 1), point(spread + shift, 2)],
+    });
+    await sleep(24);
+  }
+  await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await sleep(200);
+}
+
+/**
+ * PINCEMENT ASYMÉTRIQUE : l'écart passe de `from` à `to` (donc l'échelle change)
+ * ET le milieu des doigts DÉRIVE de `drift` px. C'est le cas qui distingue un
+ * zoom ANCRÉ (seule l'échelle change) d'un zoom qui suit les doigts.
+ */
+async function pinchWithDrift(center, from, to, drift, steps = 8) {
+  const point = (spread, ratio, id) => ({
+    x: center.x + drift * ratio + spread,
+    y: center.y,
+    id,
+  });
+  await send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [point(-from, 0, 1), point(from, 0, 2)],
+  });
+  await sleep(40);
+  for (let i = 1; i <= steps; i += 1) {
+    const k = i / steps;
+    const spread = from + ((to - from) * k);
+    await send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [point(-spread, k, 1), point(spread, k, 2)],
+    });
+    await sleep(24);
+  }
+  await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await sleep(200);
+}
+
+/** Centre de la boîte transformée (repère écran). */
+function rectCenter(rect) {
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
 async function pressKey(key, code, keyCode) {
   await send("Input.dispatchKeyEvent", {
     type: "keyDown",
@@ -808,6 +883,16 @@ check(
   `${thumbAfterReload.height?.toFixed(1)} px`,
 );
 
+/**
+ * ⚠️ ④b — MESURE DE RÉFÉRENCE SUR BUREAU : le fil ne doit RIEN imposer en
+ * `touch-action` sur un grand écran. Le zoom du NAVIGATEUR (Ctrl+molette) et le
+ * pincement d'un écran tactile restent donc disponibles : c'est de
+ * l'ACCESSIBILITÉ assumée (agrandir le texte), et rien ne change sur bureau.
+ */
+const desktopTouchAction = await evaluate(
+  `getComputedStyle(document.querySelector('#conversation')).touchAction`,
+);
+
 /* ═════════ 9) TÉLÉPHONE : vignette plus petite, TAP, PINCE ═══════════════ */
 await setMobileViewport();
 await sleep(400);
@@ -904,6 +989,90 @@ check(
     near(ratio(mobilePinched.rect.width, mobilePinched.rect.height), ratio(mobilePinched.naturalWidth, mobilePinched.naturalHeight), 0.02),
   ratio(mobilePinched.rect.width, mobilePinched.rect.height).toFixed(4),
 );
+/* ⚠️ ④a — DEUX DOIGTS = UN SEUL GESTE (mesuré) :
+ *   1. un GLISSER à deux doigts (écart constant) ne déplace RIEN ;
+ *   2. un pincement ne fait pas FUIR l'image : le point ancré (milieu initial)
+ *      reste fixe, alors que le milieu des doigts, lui, dérive.
+ */
+await pressKey("0", "Digit0", 48); // retour à « contain »
+await tap(
+  mobilePinched.stage.left + mobilePinched.stage.width / 2,
+  mobilePinched.stage.top + mobilePinched.stage.height / 2,
+);
+const zoomedForGestures = await measureLightbox();
+const glideCenter = rectCenter(zoomedForGestures.rect);
+await twoFingerDrag(glideCenter, 90, 70);
+const afterGlide = await measureLightbox();
+check(
+  "④a : un GLISSER à deux doigts (écart inchangé) ne modifie NI l'échelle NI la position",
+  near(afterGlide.scale, zoomedForGestures.scale, 0.02) &&
+    near(rectCenter(afterGlide.rect).x, glideCenter.x, 1.5) &&
+    near(rectCenter(afterGlide.rect).y, glideCenter.y, 1.5),
+  `échelle ${zoomedForGestures.scale.toFixed(2)}→${afterGlide.scale.toFixed(2)} ; ` +
+    `centre x ${glideCenter.x.toFixed(1)}→${rectCenter(afterGlide.rect).x.toFixed(1)}`,
+);
+
+// Pincement ASYMÉTRIQUE : l'ancre est à 80 px à droite du centre de l'image, les
+// doigts se resserrent ET dérivent de 60 px vers la droite.
+const beforeAnchored = await measureLightbox();
+const c0 = rectCenter(beforeAnchored.rect);
+const anchorPoint = { x: c0.x + 80, y: c0.y };
+// ⚠️ Les deux doigts restent DANS l'écran (390 px de large) : un doigt hors du
+// viewport serait rogné par le navigateur et fausserait la mesure.
+await pinchWithDrift(anchorPoint, 90, 45, 60);
+const afterAnchored = await measureLightbox();
+const c1 = rectCenter(afterAnchored.rect);
+const ratioScale = afterAnchored.scale / beforeAnchored.scale;
+// Prédiction du zoom ANCRÉ (l'image ne suit pas les doigts).
+const anchored = { x: anchorPoint.x - (anchorPoint.x - c0.x) * ratioScale };
+// Prédiction du zoom qui SUIT le milieu des doigts (ancien comportement).
+const followed = { x: anchorPoint.x + 60 - (anchorPoint.x - c0.x) * ratioScale };
+check(
+  "④a : le pincement change l'ÉCHELLE (le zoom fonctionne toujours)",
+  afterAnchored.scale < beforeAnchored.scale - 0.2,
+  `échelle ${beforeAnchored.scale.toFixed(2)} → ${afterAnchored.scale.toFixed(2)}`,
+);
+check(
+  "④a : le point ANCRÉ reste FIXE — aucun déplacement parasite pendant le pincement",
+  near(c1.x, anchored.x, 2) && Math.abs(c1.x - followed.x) > 20,
+  `centre x mesuré ${c1.x.toFixed(1)} ; ancré ${anchored.x.toFixed(1)} ; ` +
+    `suivi-des-doigts ${followed.x.toFixed(1)}`,
+);
+
+/* NAVIGATION AU DOIGT (elle doit survivre au geste à deux doigts) :
+ * un TAP court sur « › » change d'image, met le compteur à jour ET remet le zoom
+ * à « contain » — sinon on passe d'une image zoomée à une autre, au même endroit. */
+const mobileNav = await measureLightbox();
+const nextTapBox = await evaluate(`(() => {
+  const b = document.querySelector('.lightbox__nav--next').getBoundingClientRect();
+  return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+})()`);
+await tap(nextTapBox.x, nextTapBox.y);
+const afterNavTap = await measureLightbox();
+check(
+  "NAVIGATION AU DOIGT : le TAP sur « image suivante » change d'image et le compteur suit",
+  afterNavTap.open === true &&
+    afterNavTap.src !== mobileNav.src &&
+    afterNavTap.counter === "2 / 2",
+  `compteur ${String(mobileNav.counter)} → ${String(afterNavTap.counter)}`,
+);
+check(
+  "NAVIGATION : le changement d'image REMET L'ÉCHELLE à « contain » (1), jamais un zoom hérité",
+  near(afterNavTap.scale, 1, 0.001),
+  `échelle ${mobileNav.scale.toFixed(2)} → ${afterNavTap.scale.toFixed(2)}`,
+);
+const prevTapBox = await evaluate(`(() => {
+  const b = document.querySelector('.lightbox__nav--prev').getBoundingClientRect();
+  return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+})()`);
+await tap(prevTapBox.x, prevTapBox.y);
+const afterPrevTap = await measureLightbox();
+check(
+  "NAVIGATION AU DOIGT : le TAP sur « image précédente » revient à la première (circulaire)",
+  afterPrevTap.counter === "1 / 2" && afterPrevTap.src === mobileNav.src,
+  `compteur ${String(afterPrevTap.counter)}`,
+);
+
 check(
   "TÉLÉPHONE : la navigation est proposée et ATTEIGNABLE (barre du bas)",
   mobilePinched.nextHidden === false &&
@@ -927,6 +1096,57 @@ check(
 check(
   "TÉLÉPHONE : `scrollTop` du fil IDENTIQUE après fermeture",
   (await evaluate(`document.querySelector('#conversation').scrollTop`)) === mobileBeforeOpen,
+);
+
+/* ⚠️ ④b — LE PINCEMENT NE ZOOME PLUS LA PAGE SUR TÉLÉPHONE (mesuré) :
+ * la parade est `touch-action: pan-y` sur le fil ; elle AUTORISE le défilement
+ * vertical et bloque le pincement. On vérifie les deux, séparément.
+ * ⚠️ `user-scalable=no` de la balise `viewport` n'est PAS utilisé : iOS l'ignore
+ * depuis iOS 10 (et il bloquerait le zoom partout, y compris sur bureau). */
+const mobileTouchAction = await evaluate(
+  `getComputedStyle(document.querySelector('#conversation')).touchAction`,
+);
+check(
+  "④b : sur TÉLÉPHONE le fil bloque le PINCEMENT de la page (`touch-action: pan-y`)",
+  mobileTouchAction === "pan-y",
+  `téléphone = ${mobileTouchAction} ; bureau = ${desktopTouchAction}`,
+);
+check(
+  "BUREAU : aucune restriction de zoom imposée au fil (accessibilité préservée)",
+  desktopTouchAction === "auto",
+  desktopTouchAction,
+);
+await evaluate(`window.scrollTo(0, 0); true`);
+// Le fil de ce harnais est COURT (deux images) : on lui donne une hauteur
+// défilable le temps de la mesure, puis on retire ce nœud de mesure.
+await evaluate(`(() => {
+  const c = document.querySelector('#conversation');
+  const filler = document.createElement('div');
+  filler.id = 'e2e-scroll-filler';
+  filler.textContent = 'mesure';
+  // Le fil est un conteneur FLEX : sans flex-shrink 0, le nœud de mesure serait
+  // compressé et ne créerait aucun débordement (donc aucun défilement).
+  filler.style.flex = '0 0 2400px';
+  c.appendChild(filler);
+  c.scrollTop = 0;
+  return true;
+})()`);
+const scrollStart = await evaluate(`(() => {
+  const c = document.querySelector('#conversation');
+  return { top: c.scrollTop, max: c.scrollHeight - c.clientHeight };
+})()`);
+await touchDrag(195, 700, 300);
+const scrollEnd = await evaluate(`document.querySelector('#conversation').scrollTop`);
+await evaluate(`document.querySelector('#e2e-scroll-filler')?.remove(); true`);
+check(
+  "④b : le DÉFILEMENT VERTICAL du fil fonctionne toujours au doigt",
+  scrollStart.max > 0 && scrollEnd > scrollStart.top + 40,
+  `${scrollStart.top} → ${scrollEnd} (max ${scrollStart.max})`,
+);
+check(
+  "④b : le défilement du doigt n'a PAS zoomé la page (échelle du document inchangée)",
+  (await evaluate(`({ vv: window.visualViewport ? window.visualViewport.scale : 1, iw: window.innerWidth })`)).vv === 1,
+  JSON.stringify(await evaluate(`({ vv: window.visualViewport ? window.visualViewport.scale : 1, iw: window.innerWidth })`)),
 );
 
 await stopPage();

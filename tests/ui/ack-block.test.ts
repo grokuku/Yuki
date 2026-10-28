@@ -113,8 +113,13 @@ describe("câblage de la trame `ack` dans app.js", () => {
     expect(guard).toContain("return");
   });
 
-  it("affiche l'accusé PERSISTÉ du transcript (visible après rechargement)", () => {
-    expect(app).toContain("ackBlocks.show(div, entry.ack)");
+  it("affiche l'accusé PERSISTÉ du transcript dans SA PROPRE bulle (visible après rechargement)", () => {
+    expect(app).toContain(
+      'const ackText = typeof entry.ack === "string" ? entry.ack : null;',
+    );
+    expect(app).toContain("ackBlocks.show(ackBubble, ackText)");
+    // ⚠️ L'accusé n'est JAMAIS recopié dans la bulle de réponse (aucun doublon).
+    expect(app).not.toContain("ackBlocks.show(div, entry.ack)");
   });
 });
 
@@ -134,28 +139,39 @@ describe("aucune bulle vide (attente et fin de run)", () => {
   });
 
   it("la parenthèse technique « aucune réponse » est OMISE quand un accusé est affiché", () => {
-    expect(app).toContain("const hasAck = ackBlocks.has(currentAssistant)");
+    // L'accusé est un message à part : la note technique d'un tour muet ne
+    // s'écrit que si AUCUN accusé n'a parlé.
+    expect(app).toContain("const hasAck = ackBlocks.has(currentAssistant);");
     expect(app).toContain('frame.reason === "done" && !hasText && !hasAck');
-    // Un ABANDON reste dit, même avec un accusé (issue distincte).
-    expect(app).toContain('frame.reason === "abort" && !hasText)');
+    // Un ABANDON reste dit, même avec un accusé (issue distincte) — et il est dit
+    // dans une bulle de TEXTE, jamais dans la bulle d'accusé.
+    expect(app).toContain('frame.reason === "abort" && !hasText');
+    expect(app).toContain("if (note !== null) {");
+    expect(app).toContain("ensureContentBubble(pinned);");
     // Le remplacement du texte de la bulle ne peut donc jamais écraser l'accusé.
     expect(app).not.toContain("currentAssistant.textContent =");
   });
 
   it("une entrée de transcript sans contenu NI accusé n'est pas rendue", () => {
-    expect(app).toContain('if ((entry.text ?? "").trim() === "" && typeof entry.ack !== "string") continue;');
+    expect(app).toContain('if (bodyText === "" && ackText === null) continue;');
   });
 });
 
 describe("styles de l'accusé et de l'attente", () => {
   const styles = ui("styles.css");
 
-  it("l'accusé est une ligne DANS la bulle, pas un bloc du fil", () => {
+  it("l'accusé a le rendu d'un message ORDINAIRE (ni italique, ni gris, ni petit)", () => {
     expect(styles).toContain(".ack-block");
     expect(styles).toContain(".message__pending");
-    // Plus de mise en page d'élément autonome (largeur/alignement dans le fil).
+    // ⚠️ Défaut signalé : il avait l'air d'une annotation (italique, plus petit,
+    // plus sourd). C'est un MESSAGE : il hérite du texte de la bulle.
     const rule = styles.slice(styles.indexOf(".ack-block {"));
     const body = rule.slice(0, rule.indexOf("}"));
+    expect(body).not.toContain("italic");
+    expect(body).toContain("font: inherit");
+    expect(body).toContain("color: inherit");
+    expect(body).not.toContain("--muted");
+    // Plus de mise en page d'élément autonome (largeur/alignement dans le fil).
     expect(body).not.toContain("align-self");
     expect(body).not.toContain("max-width");
   });

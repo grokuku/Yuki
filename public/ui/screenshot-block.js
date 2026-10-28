@@ -73,10 +73,24 @@ function hostOf(url) {
  * @param {{ decorate(img: HTMLImageElement): HTMLElement }} [deps.zoom]
  *   visionneuse partagée (`lightbox.js`) : enveloppe l'image dans la vignette
  *   cliquable. Absente ⇒ l'image est affichée telle quelle (aucun zoom).
- * @returns {{ show(shot: object): void, reset(): void }}
+ * @returns {{ show(shot: object, options?: { before?: Node|null }): void, reset(): void }}
  */
 export function createScreenshotBlocks({ container, zoom } = {}) {
   if (!container) throw new Error("createScreenshotBlocks : conteneur absent");
+  /**
+   * Blocs déjà affichés, par CLÉ d'identité (aucun identifiant n'est fourni par le
+   * serveur) : une même capture ré-émise ne doit jamais apparaître deux fois.
+   */
+  const blocks = new Map();
+
+  /** Clé d'identité d'une capture : qui l'a prise, où et quand. */
+  function keyOf(shot) {
+    const agent = String(shot?.agentId ?? "");
+    const at = String(shot?.capturedAt ?? "");
+    const url = String(shot?.url ?? "");
+    const src = String(shot?.dataUrl ?? "");
+    return `${agent}|${at}|${url}|${src.length}`;
+  }
 
   function buildImage(shot, label) {
     const src = typeof shot?.dataUrl === "string" ? shot.dataUrl : "";
@@ -160,15 +174,30 @@ export function createScreenshotBlocks({ container, zoom } = {}) {
     );
   }
 
-  /** Affiche une capture dans le fil. */
-  function show(shot) {
+  /**
+   * Affiche une capture dans le fil.
+   *
+   * @param {object} shot vue de capture.
+   * @param {object} [options]
+   * @param {Node|null} [options.before] nœud devant lequel insérer : après un
+   *   rechargement, la capture est ré-émise APRÈS le snapshot (fil déjà complet)
+   *   et doit retrouver sa place CHRONOLOGIQUE, jamais la fin du fil.
+   */
+  function show(shot, options = {}) {
     if (!shot) return;
-    container.appendChild(build(shot));
+    const key = keyOf(shot);
+    if (blocks.has(key)) return;
+    const block = build(shot);
+    const before = options && options.before ? options.before : null;
+    if (before && before.parentNode === container) container.insertBefore(block, before);
+    else container.appendChild(block);
+    blocks.set(key, block);
   }
 
   /** Retire TOUTES les captures (le fil est reconstruit depuis un snapshot). */
   function reset() {
     for (const el of [...container.querySelectorAll(".screenshot")]) el.remove();
+    blocks.clear();
   }
 
   return { show, reset };

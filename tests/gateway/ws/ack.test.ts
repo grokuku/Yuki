@@ -77,14 +77,17 @@ describe("accusé de réception — trame de contrôle", () => {
     void snapshot;
 
     await c.waitFor("run_finished");
-    // ⚠️ PERSISTÉ AVEC LE MESSAGE : après rechargement, l'accusé est là — dans le
-    // CHAMP `ack` de l'entrée assistant, jamais dans le texte de la réponse.
+    // ⚠️ PERSISTÉ COMME UN MESSAGE à part entière : après rechargement, l'accusé est
+    // là, dans SA PROPRE entrée (donc sa propre bulle), placée AVANT la réponse —
+    // et jamais recopié dans le texte de la réponse.
     const after = await newClientSnapshot(h, c);
     const assistants = after.transcript.filter(
       (entry: { role?: string }) => entry.role === "assistant",
-    );
-    expect(assistants).toHaveLength(1);
-    expect((assistants[0] as { ack?: string }).ack).toBe("Je m'en occupe.");
+    ) as Array<{ text?: string; ack?: string }>;
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0]).toMatchObject({ text: "", ack: "Je m'en occupe." });
+    expect(assistants[1].ack).toBeUndefined();
+    expect(assistants[1].text).toContain("C'est noté, je te tiens au courant.");
     const texts = (after.transcript as Array<{ text?: string }>)
       .map((entry) => entry.text ?? "")
       .join("\n");

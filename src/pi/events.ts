@@ -278,10 +278,10 @@ function isSyntheticUserText(
  *     bulle, mais ses NOMBRES sont rattachés au message assistant dont elle est
  *     l'enfant (`parentId`) et exposés via `TranscriptEntry.metrics` ;
  *   - une entrée `custom` de type `yuki.run_ack` n'apparaît JAMAIS comme bulle
- *     non plus : son libellé (redérivé du nom d'outil) est exposé via
- *     `TranscriptEntry.ack`, c'est-à-dire la PREMIÈRE ligne de la bulle de
- *     réponse — donc visible après un rechargement, sans jamais entrer dans le
- *     texte du message ;
+ *     non plus : son libellé (redérivé du nom d'outil) ouvre une entrée d'ACCUSÉ
+ *     (`TranscriptEntry.ack`, `text` vide), c'est-à-dire un MESSAGE À PART
+ *     ENTIÈRE placé AVANT la réponse — donc visible après un rechargement, dans
+ *     le MÊME ordre que le direct, sans jamais entrer dans le texte du message ;
  *   - chaque entrée de message expose son IDENTIFIANT d'entrée de session
  *     (`TranscriptEntry.id`), seule corrélation admise pour les RÉACTIONS.
  *
@@ -334,10 +334,13 @@ export function transcriptFromEntries(
   //
   // Deux vues, pour deux besoins distincts :
   //  - `ackByMessageId` : l'accusé rattaché au message que l'entrée `custom` décore
-  //    (le message qui a OUVERT la bulle côté direct) ;
+  //    (le message qui a reçu l'accusé côté direct) ;
   //  - `ackTexts` : l'ensemble des phrases d'accusé. Un message dont le TEXTE est
-  //    exactement l'une d'elles n'est pas une réponse : c'est le préambule que le
-  //    MODÈLE a écrit avant l'appel d'outil (il n'ouvre donc pas de bulle).
+  //    exactement l'une d'elles n'est pas une réponse : c'est le message qu'à lui
+  //    seul l'accusé constitue (le modèle a écrit la phrase, puis appelé l'outil).
+  //
+  // ⚠️ Ces deux vues peuvent désigner la MÊME phrase : la précédence est fixée
+  // par `pendingAck === undefined` (un seul accusé par bulle, jamais deux).
   const ackByMessageId = new Map<string, StoredAck>();
   const ackTexts = new Set<string>();
   for (const raw of entries) {
@@ -356,21 +359,25 @@ export function transcriptFromEntries(
   // message ASSISTANT par identifiant d'entrée, pour corréler les métriques.
   const assistantIndexById = new Map<string, number>();
   /**
-   * Accusé dont le message n'a AUCUN corps (le modèle n'a écrit que la phrase).
+   * Accusé EN ATTENTE de sa place : il ouvre une entrée À LUI dès qu'on sait où
+   * (juste AVANT la prochaine entrée du fil, quelle qu'elle soit).
    *
-   * ⚠️ Il OUVRE la bulle du message SUIVANT : c'est exactement ce que fait le
-   * direct, où ce message ne crée aucune bulle et où l'accusé est rattaché à la
-   * réponse qui suit. Sans cela, un rechargement afficherait une bulle de plus
-   * que le direct (la phrase seule, puis la réponse).
+   * ⚠️ C'est un MESSAGE, pas un préambule : le direct lui donne sa propre bulle
+   * (`public/ui/app.js`), et le rechargement doit produire exactement la même
+   * chose — même nombre de bulles, même ordre, même horodatage.
+   *
+   * `id` n'est conservé que si l'accusé est TOUT le message du tour (aucune réponse
+   * ne suit) : c'est alors lui qui porte la corrélation du message (réactions,
+   * statistiques). Quand une réponse suit, ses actions restent sur la réponse.
    */
   let pendingAck: { text: string; id?: string; timestamp?: number } | undefined;
-  const flushPendingAck = (): void => {
+  const flushPendingAck = (followedByAnswer = false): void => {
     if (pendingAck === undefined) return;
     transcript.push({
       role: "assistant",
       text: "",
       ack: pendingAck.text,
-      ...(pendingAck.id !== undefined ? { id: pendingAck.id } : {}),
+      ...(!followedByAnswer && pendingAck.id !== undefined ? { id: pendingAck.id } : {}),
       ...(pendingAck.timestamp !== undefined ? { timestamp: pendingAck.timestamp } : {}),
     });
     pendingAck = undefined;
@@ -386,6 +393,28 @@ export function transcriptFromEntries(
     if (role !== "user" && role !== "assistant") continue;
     const entryId = typeof entry.id === "string" ? entry.id : undefined;
     const storedAck = entryId !== undefined ? ackByMessageId.get(entryId) : undefined;
+    /**
+     * Accusé que CE message porte, s'il n'a pas déjà été posé plus haut.
+     *
+     * `fromText` = le texte du message lui-même, quand il tient lieu d'accusé
+     * (repli si l'entrée `yuki.run_ack` manque : vieille session, écriture
+     * interrompue).
+     *
+     * ⚠️ `pendingAck === undefined` est la garde anti-doublon : la même phrase
+     * peut être désignée DEUX fois (par le texte du message qui ne portait qu'elle
+     * ET par l'entrée `custom` rattachée à la réponse) — elle ne doit produire
+     * qu'UNE seule bulle.
+     */
+    const takeAck = (at: number | undefined, fromText?: string): void => {
+      if (pendingAck !== undefined) return;
+      const label = storedAck?.text ?? fromText;
+      if (label === undefined || label === "") return;
+      pendingAck = {
+        text: label,
+        ...(entryId !== undefined ? { id: entryId } : {}),
+        ...(at !== undefined ? { timestamp: at } : {}),
+      };
+    };
     // Le repère temporel d'un message utilisateur est retiré AVANT le filtre
     // synthétique : un report de job n'est jamais horodaté, mais l'ordre reste
     // correct quel que soit l'ordre de pose des préfixes.
@@ -399,24 +428,16 @@ export function transcriptFromEntries(
     if (role === "assistant") {
       const trimmed = text.trim();
       // ⚠️ MESSAGE QUI N'ÉTAIT QUE L'ACCUSÉ : le modèle a écrit la phrase, puis
-      // appelé l'action longue — ce n'est pas une réponse. On ne crée pas de bulle
-      // pour lui : l'accusé s'affiche en tête de la bulle SUIVANTE (ou seul s'il
-      // n'y a rien d'autre). Le direct fait exactement la même chose.
+      // appelé l'action longue — ce n'est pas une réponse, et le direct ne lui a
+      // donné qu'une bulle d'accusé. Il occupe donc SA place ici : une entrée à
+      // part, AVANT l'image et AVANT la réponse finale.
       //
       // ⚠️ Le critère est l'ÉGALITÉ avec le texte RÉELLEMENT persisté, jamais « ça a
       // l'air court » : une réponse brève (« Voilà l'image. ») ne doit JAMAIS être
       // confondue avec un accusé.
       const isAckText = trimmed.length > 0 && ackTexts.has(trimmed);
       if (isAckText || text.length === 0) {
-        const ackText = storedAck?.text ?? (isAckText ? trimmed : undefined);
-        if (ackText !== undefined && pendingAck === undefined) {
-          const timestamp = messageTimestamp(message as RawAgentMessage);
-          pendingAck = {
-            text: ackText,
-            ...(entryId !== undefined ? { id: entryId } : {}),
-            ...(timestamp !== undefined ? { timestamp } : {}),
-          };
-        }
+        takeAck(messageTimestamp(message as RawAgentMessage), isAckText ? trimmed : undefined);
         continue;
       }
     } else if (text.length === 0) {
@@ -445,13 +466,13 @@ export function transcriptFromEntries(
       if (isSyntheticUserText(text, prefixes)) continue;
     }
     const timestamp = messageTimestamp(message as RawAgentMessage);
-    // L'accusé du message porte la bulle ; sinon celui resté en attente la porte.
-    const ack = storedAck?.text ?? pendingAck?.text;
-    pendingAck = undefined;
+    // Ce message porte-t-il l'accusé (mais pas son texte) ? Il le précède alors
+    // DANS SON PROPRE message : on le pose AVANT lui, jamais dedans.
+    takeAck(timestamp);
+    flushPendingAck(role === "assistant");
     transcript.push({
       role,
       text,
-      ...(ack !== undefined ? { ack } : {}),
       ...(entryId !== undefined ? { id: entryId } : {}),
       ...(timestamp !== undefined ? { timestamp } : {}),
     });
@@ -459,7 +480,7 @@ export function transcriptFromEntries(
       assistantIndexById.set(entryId, transcript.length - 1);
     }
   }
-  // Un accusé sans bulle suivante en ouvre une à lui seul : jamais une bulle vide,
+  // Un accusé resté en attente ouvre sa propre entrée : jamais une bulle vide,
   // jamais un accusé perdu.
   flushPendingAck();
 

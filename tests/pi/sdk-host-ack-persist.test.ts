@@ -242,21 +242,27 @@ describe("sdk-host réel — l'accusé du MODÈLE est PERSISTÉ avec le message 
     const raw = readFileSync(file, "utf8");
     expect(raw).toContain(ackSentence);
 
-    // Transcription LIVE : le corps ne contient PAS l'accusé (jamais un doublon).
+    // Transcription LIVE : l'accusé et la réponse sont DEUX messages distincts —
+    // l'accusé ouvre sa propre bulle (donc sa propre entrée), et le corps ne
+    // contient JAMAIS l'accusé (aucun doublon).
     const live = host.getState(sessionId)!;
-    const assistant = live.transcript.find((entry) => entry.role === "assistant");
-    expect(assistant?.ack).toBe(ackSentence);
-    expect(assistant?.text).toBe("Voici l'image demandée.");
-    expect(assistant?.text).not.toContain(ackSentence);
+    const assistant = live.transcript.filter((entry) => entry.role === "assistant");
+    expect(assistant.map((entry) => ({ text: entry.text, ack: entry.ack }))).toEqual([
+      { text: "", ack: ackSentence },
+      { text: "Voici l'image demandée.", ack: undefined },
+    ]);
 
     // ALLER-RETOUR : relecture par un `SessionManager` NEUF (comme après un
-    // redémarrage du gateway) ⇒ l'accusé revient, et n'est PAS répété dans le corps.
+    // redémarrage du gateway) ⇒ MÊME ordre, MÊME découpage en deux messages.
     const restored = transcriptFromEntries(SessionManager.open(file).getBranch(), {
       syntheticUserPrefixes: [],
-    });
-    const restoredAssistant = restored.find((entry) => entry.role === "assistant");
-    expect(restoredAssistant?.ack).toBe(ackSentence);
-    expect(restoredAssistant?.text).toBe("Voici l'image demandée.");
+    })
+      .filter((entry) => entry.role === "assistant")
+      .map((entry) => ({ text: entry.text, ack: entry.ack }));
+    expect(restored).toEqual([
+      { text: "", ack: ackSentence },
+      { text: "Voici l'image demandée.", ack: undefined },
+    ]);
   });
 
   it("run qui s'achève sur l'accusé : il revient SEUL après rechargement (jamais une bulle vide)", async () => {

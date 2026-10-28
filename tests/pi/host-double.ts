@@ -79,7 +79,17 @@ export interface FakeErrorStep {
   delayMs?: number;
 }
 
-export type FakeStep = FakeDeltaStep | FakeErrorStep | FakeAckStep | FakeToolStep;
+/**
+ * Étape `wait` : pause PURE, sans aucune trame. Elle permet de mesurer ce qui
+ * arrive PENDANT une action longue (émission de médias, rechargement…) sans
+ * inventer un contenu que la production n'émettrait pas.
+ */
+export interface FakeWaitStep {
+  kind: "wait";
+  delayMs: number;
+}
+
+export type FakeStep = FakeDeltaStep | FakeErrorStep | FakeAckStep | FakeToolStep | FakeWaitStep;
 
 export interface FakeScript {
   name?: string;
@@ -515,6 +525,8 @@ export class FakePiHost implements PiHost {
   private buildState(): SessionState {
     const transcript = this.transcript.map((entry) => ({ ...entry }));
     if (this.partial.length > 0) {
+      // Le contenu en cours est un message à part entière : l'accusé du run a déjà
+      // SA propre entrée (donc sa propre bulle, au-dessus).
       transcript.push({ role: "assistant", text: this.partial });
     }
     return {
@@ -555,13 +567,19 @@ export class FakePiHost implements PiHost {
     // conversation dédiée, lui, pousse un bloc VISIBLE (`role: "recap"`).
     const synthetic = isSyntheticOrigin(run.origin);
     if (!synthetic) {
-      this.transcript.push({ role: "user", text: run.text, id: this.nextEntryId() });
+      this.transcript.push({
+        role: "user",
+        text: run.text,
+        id: this.nextEntryId(),
+        timestamp: Date.now(),
+      });
     } else if (run.origin === ORIGIN_RECAP) {
       const parsed = parseRecapPrompt(run.text);
       if (parsed) {
         this.transcript.push({
           role: "recap",
           text: parsed.recap,
+          timestamp: Date.now(),
           ...(parsed.originTitle ? { origin: parsed.originTitle } : {}),
           ...(parsed.subject ? { subject: parsed.subject } : {}),
         });
@@ -581,15 +599,27 @@ export class FakePiHost implements PiHost {
     });
 
     let contentText = "";
-    // ACCUSÉ DE RÉCEPTION du run : le VRAI host l'attache au message assistant
-    // (première ligne de la bulle) et le persiste à part (`yuki.run_ack`). Le
-    // double en fait autant, sinon les tests d'interface prouveraient un
-    // comportement que la production n'a pas.
+    // ACCUSÉ DE RÉCEPTION du run : le VRAI host en fait un MESSAGE À PART ENTIÈRE
+    // (sa propre entrée de transcript, donc sa propre bulle, AVANT la réponse) et
+    // le persiste à part (`yuki.run_ack`). Le double en fait autant, sinon les
+    // tests d'interface prouveraient un comportement que la production n'a pas.
     let ackText: string | undefined;
+    let ackEntry: TranscriptEntry | undefined;
+    const pushAckEntry = (text: string): TranscriptEntry => {
+      const entry: TranscriptEntry = {
+        role: "assistant",
+        text: "",
+        ack: text,
+        timestamp: Date.now(),
+      };
+      this.transcript.push(entry);
+      return entry;
+    };
     for (const step of run.script.steps) {
       if (run.aborted) break;
       await sleep((step.delayMs ?? 1) * this.latencyScale, run.abortController.signal);
       if (run.aborted) break;
+      if (step.kind === "wait") continue;
       if (step.kind === "error") {
         run.sawError = true;
         run.errorMessage = step.message;
@@ -602,6 +632,7 @@ export class FakePiHost implements PiHost {
         // Il est en revanche MÉMORISÉ pour le message assistant : c'est la
         // première ligne de la bulle, et elle survit au rechargement.
         ackText = step.text;
+        ackEntry = pushAckEntry(step.text);
         run.instrumentation.markFirstToken();
         this.emit({
           type: "ack",
@@ -622,6 +653,7 @@ export class FakePiHost implements PiHost {
         const fromModel = ackShapedText(candidate);
         if (fromModel !== undefined && contentText.length === 0 && ackText === undefined) {
           ackText = fromModel;
+          ackEntry = pushAckEntry(fromModel);
           run.instrumentation.markFirstToken();
           this.emit({
             type: "ack",
@@ -641,6 +673,7 @@ export class FakePiHost implements PiHost {
           this.ackFallbacks += 1;
           if (fallback !== undefined) {
             ackText = fallback;
+            ackEntry = pushAckEntry(fallback);
             run.instrumentation.markFirstToken();
             this.emit({
               type: "ack",
@@ -690,16 +723,19 @@ export class FakePiHost implements PiHost {
     const assistantEntryId =
       contentText.length > 0 ? this.nextEntryId() : undefined;
     if (assistantEntryId) {
+      // ⚠️ L'accusé a SA PROPRE entrée (donc sa propre bulle, AVANT celle-ci) :
+      // le texte de la réponse ne le recopie jamais (aucun doublon), exactement
+      // comme `src/pi/sdk-host.ts`.
       this.transcript.push({
         role: "assistant",
         text: contentText,
         id: assistantEntryId,
-        ...(ackText !== undefined ? { ack: ackText } : {}),
+        timestamp: Date.now(),
       });
-    } else if (ackText !== undefined) {
-      // Run sans aucun contenu mais AVEC accusé : la bulle existe quand même
-      // (elle porte l'accusé seul) — jamais une bulle vide.
-      this.transcript.push({ role: "assistant", text: "", ack: ackText });
+    } else if (ackEntry) {
+      // Run sans aucun contenu mais AVEC accusé : la bulle de l'accusé EST le
+      // message du tour — elle en porte donc l'identifiant (réactions).
+      ackEntry.id = this.nextEntryId();
     }
     this.partial = "";
     run.instrumentation.complete(
@@ -717,7 +753,11 @@ export class FakePiHost implements PiHost {
       ...(run.errorMessage ? { errorMessage: run.errorMessage } : {}),
       // Miroir du host réel : l'identifiant STABLE du message persisté (celui que
       // les réactions utilisent pour se rattacher).
-      ...(assistantEntryId ? { entryId: assistantEntryId } : {}),
+      ...(assistantEntryId
+        ? { entryId: assistantEntryId }
+        : ackEntry?.id
+          ? { entryId: ackEntry.id }
+          : {}),
     });
     run.instrumentation.emitSummary();
 

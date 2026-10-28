@@ -1,32 +1,40 @@
-// Yuki — ACCUSÉ DE RÉCEPTION et ATTENTE affichés EN TÊTE de la bulle de réponse.
+// Yuki — ACCUSÉ DE RÉCEPTION affiché comme un MESSAGE À PART ENTIÈRE.
 //
-// ⚠️ CE QUE C'EST : une ligne de statut COURTE et HUMAINE qui dit que la demande
-// est bien prise en compte QUAND Yuki lance une action qui ne rendra pas la main
-// tout de suite : une délégation, une génération d'image, une commande envoyée à
-// un agent.
+// ⚠️ CE QUE C'EST : une phrase COURTE et HUMAINE qui dit que la demande est bien
+// prise en compte QUAND Yuki lance une action qui ne rendra pas la main tout de
+// suite : une délégation, une génération d'image, une commande envoyée à un agent.
 //
 // ⚠️ SON TEXTE VIENT DU MODÈLE : c'est le PREMIER texte de son tour (consigne de
 // ton dans le prompt système). Le module ne fabrique donc plus la phrase ; il
 // n'en garde qu'un libellé de secours (`DEFAULT_ACK_TEXT`) si le serveur en
 // omettait un. Le repli EN DUR existe côté serveur, avec des VARIATIONS.
 //
-// ⚠️ ELLE APPARTIENT À LA RÉPONSE — c'est la PREMIÈRE ligne de la bulle
-// assistant, juste AVANT le corps markdown. Ce n'est pas un bloc posé à côté :
-// une ligne séparée au-dessus d'une bulle vide faisait croire que Yuki n'avait
-// rien répondu (défaut signalé par l'utilisateur).
+// ⚠️ IL OUVRE SA PROPRE BULLE — c'est un message ORDINAIRE, au même titre qu'une
+// réponse : même bulle, même texte (AUCUN italique, aucun style spécial), même
+// heure au-dessus, et un séparateur visuel identique entre deux messages
+// d'assistant consécutifs. C'est ce qui donne l'ordre NATUREL du fil :
+//
+//     ① bulle d'ACCUSÉ   « C'est parti. »
+//     ② CARTE IMAGE      (vignette produite par l'action)
+//     ③ bulle de RÉPONSE le texte final
+//
+// (Défaut corrigé : l'accusé vivait en italique DANS la bulle de la réponse, donc
+// la réponse arrivait AVANT l'image qu'elle décrivait, et l'accusé ressemblait à
+// une annotation plutôt qu'à une réponse.)
 //
 // Trois règles tenues côté serveur (et vérifiées) :
-//  - ce n'est PAS une réponse : le fond arrive ensuite, dans la MÊME bulle ;
+//  - ce n'est pas la réponse : elle vient APRÈS, dans sa propre bulle ;
 //  - il n'est JAMAIS produit pour une question simple (aucune action lancée) ;
 //  - il ne PROMET AUCUN RÉSULTAT (« je m'en occupe » ≠ « voilà le résultat ») :
 //    le badge anti-mensonge et le ticket de délégation disent déjà le vrai état.
 //
-// ⚠️ PERSISTÉ AVEC LE MESSAGE : le serveur l'attache à l'entrée de transcript du
-// message (`ack`) et l'écrit dans le JSONL de session (`yuki.run_ack`). Il
-// revient donc après un rechargement, à l'identique. Il n'est jamais émis comme
-// trame de CONTENU, donc jamais prononcé par la synthèse vocale (le moteur TTS ne
-// reçoit que les trames de contenu) ni appris comme un souvenir (l'extracteur de
-// mémoire écarte le préambule d'accusé d'un message qui appelle un outil).
+// ⚠️ PERSISTÉ COMME UN MESSAGE : le serveur le verse au transcript comme une
+// entrée à part entière (`TranscriptEntry.ack`, `text` vide) et l'écrit dans le
+// JSONL de session (`yuki.run_ack`). Il revient donc après un rechargement, à la
+// MÊME place (avant l'image et avant la réponse). Il n'est jamais émis comme trame
+// de CONTENU, donc jamais prononcé par la synthèse vocale (le moteur TTS ne reçoit
+// que les trames de contenu) ni appris comme un souvenir (l'extracteur de mémoire
+// écarte le préambule d'accusé d'un message qui appelle un outil).
 //
 // `data-ack-source` (« model » / « fallback ») est une MIETTE de mesure, invisible
 // et muette : elle permet de compter les replis (voir `_tools/e2e-ack.mjs`).
@@ -42,7 +50,7 @@
 /** Accusé par défaut (le serveur envoie toujours un texte ; ceci n'est qu'un filet). */
 export const DEFAULT_ACK_TEXT = "Je m'en occupe.";
 
-/** Classe de la ligne d'accusé (DANS la bulle, avant le corps). */
+/** Classe de la ligne d'accusé (le contenu de SA bulle). */
 export const ACK_CLASS = "ack-block";
 
 /** Classe de l'indicateur d'attente (DANS la bulle, avant le corps). */
@@ -69,9 +77,9 @@ export function createAckBlocks({ container }) {
   if (!container) throw new Error("createAckBlocks : conteneur absent");
 
   /**
-   * Point d'insertion : JUSTE AVANT le corps markdown de la bulle (donc sous
-   * l'heure et au-dessus de la réponse). Repli : en fin de bulle si le corps
-   * n'existe pas encore — la ligne reste de toute façon DANS la bulle.
+   * Point d'insertion : AVANT le corps markdown de la bulle, quand elle en a un
+   * (la bulle d'attente en porte un, vide). L'accusé reste ainsi au-dessus de
+   * tout corps éventuel, et le texte de la réponse ne s'écrit jamais ici.
    */
   function slotOf(message) {
     if (!message) return null;
@@ -96,7 +104,7 @@ export function createAckBlocks({ container }) {
   /**
    * Affiche l'ATTENTE (aucun accusé, aucun contenu encore). Idempotent : un
    * second appel ne crée pas un second indicateur, et un indicateur n'est JAMAIS
-   * posé à côté d'un accusé (l'accusé EST le début de la réponse).
+   * posé à côté d'un accusé.
    */
   function pending(message) {
     if (!message || ackElement(message)) return null;
@@ -112,10 +120,10 @@ export function createAckBlocks({ container }) {
   }
 
   /**
-   * Affiche l'ACCUSÉ EN TÊTE de la bulle `message` — la première ligne de la
-   * réponse, pas un bloc séparé. L'indicateur d'attente est retiré au même
-   * instant (jamais les deux). Un accusé par bulle : un second appel REMPLACE
-   * le texte au lieu d'empiler une seconde ligne.
+   * Affiche l'ACCUSÉ dans la bulle `message` — la bulle du message d'accusé, qui
+   * ne contient QUE lui (le texte de la réponse ouvre sa propre bulle). Un accusé
+   * par bulle : un second appel REMPLACE le texte au lieu d'empiler une seconde
+   * ligne.
    *
    * @param {string} [source] `"model"` (le modèle a écrit la phrase) ou
    *   `"fallback"` (repli en dur). Posé en `data-ack-source` : MIETTE de mesure

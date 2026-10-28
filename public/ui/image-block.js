@@ -123,7 +123,7 @@ function buildFinalPrompt(finalPrompt) {
  *   visionneuse partagée (`lightbox.js`) : enveloppe l'image dans la vignette
  *   cliquable. Absente ⇒ l'image est affichée telle quelle (aucun zoom).
  * @returns {{
- *   show(image: object): void,
+ *   show(image: object, options?: { before?: Node|null }): void,
  *   setFinalPrompt(id: string, finalPrompt: object): boolean,
  *   reset(): void,
  * }}
@@ -181,13 +181,24 @@ export function createImageBlocks({ container, zoom } = {}) {
     );
   }
 
-  /** Affiche une image générée dans le fil (idempotent par identifiant). */
-  function show(image) {
+  /**
+   * Affiche une image générée dans le fil (idempotent par identifiant).
+   *
+   * @param {object} image vue `ComfyImageView`.
+   * @param {object} [options]
+   * @param {Node|null} [options.before] nœud devant lequel insérer le bloc. Il
+   *   vient de l'HORODATAGE du média (`createdAt`) : après un rechargement, la
+   *   trame est ré-émise APRÈS le snapshot et doit retrouver sa place entre la
+   *   bulle d'accusé et la bulle de réponse. Absent/null ⇒ fin du fil (flux).
+   */
+  function show(image, options = {}) {
     if (!image) return;
     const id = typeof image.id === "string" ? image.id : "";
     if (id !== "" && blocks.has(id)) return;
     const block = build(image);
-    container.appendChild(block);
+    const before = options && options.before ? options.before : null;
+    if (before && before.parentNode === container) container.insertBefore(block, before);
+    else container.appendChild(block);
     if (id !== "") blocks.set(id, block);
   }
 

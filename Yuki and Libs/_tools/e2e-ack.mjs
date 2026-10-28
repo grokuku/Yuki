@@ -234,34 +234,38 @@ async function shot(label) {
 
 /**
  * Observateur d'ORDRE : il horodate (performance.now) l'apparition de l'accusé et
- * le PREMIER TEXTE de la bulle assistant. ⚠️ C'est la mesure de l'ordre, pas une
+ * le PREMIER TEXTE de la bulle de réponse. ⚠️ C'est la mesure de l'ordre, pas une
  * simple présence.
  */
 const INSTALL_ORDER_PROBE = `(() => {
   window.__order = [];
   const conv = document.querySelector('#conversation');
-  const assistantText = () => {
-    const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
-    const last = bubbles[bubbles.length - 1];
-    const body = last ? last.querySelector('.message__body') : null;
-    return body ? body.textContent : '';
+  const bubbles = () => [...document.querySelectorAll('#conversation .message--assistant')];
+  /** La bulle qui porte l'ACCUSÉ (elle n'a que lui), ou null. */
+  const ackBubble = () => bubbles().find((b) => b.querySelector('.ack-block')) ?? null;
+  /** Texte de la dernière bulle de RÉPONSE (jamais celle de l'accusé). */
+  const replyText = () => {
+    const list = bubbles();
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      if (list[i].querySelector('.ack-block')) continue;
+      const body = list[i].querySelector('.message__body');
+      return body ? body.textContent : '';
+    }
+    return '';
   };
   let sawAck = false;
   let sawText = false;
-  const lastAck = () => {
-    const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
-    return bubbles.length > 0 ? bubbles[bubbles.length - 1].querySelector('.ack-block') : null;
-  };
   window.__orderObserver = new MutationObserver(() => {
     if (!sawAck) {
-      const ack = lastAck();
+      const bubble = ackBubble();
+      const ack = bubble ? bubble.querySelector('.ack-block') : null;
       if (ack) {
         sawAck = true;
         window.__order.push({ kind: 'ack', t: performance.now(), text: ack.textContent });
       }
     }
     if (!sawText) {
-      const text = assistantText();
+      const text = replyText();
       if (text && text.trim().length > 0) {
         sawText = true;
         window.__order.push({ kind: 'text', t: performance.now() });
@@ -272,23 +276,35 @@ const INSTALL_ORDER_PROBE = `(() => {
   return true;
 })()`;
 
-/** Relève l'ACCUSÉ de la dernière bulle assistant (texte + origine + structure). */
+/**
+ * Relève le dernier TOUR d'accusé : la bulle d'ACCUSÉ et, séparément, la bulle de
+ * RÉPONSE. ⚠️ On mesure AUSSI le style calculé de l'accusé : c'est la preuve qu'il
+ * a le rendu d'un message ordinaire (ni italique, ni grisé, ni plus petit).
+ */
 const READ_LAST_ACK = `(() => {
   const bubbles = [...document.querySelectorAll('#conversation .message--assistant')];
-  const last = bubbles[bubbles.length - 1] ?? null;
-  const ack = last ? last.querySelector('.ack-block') : null;
-  const body = last ? last.querySelector('.message__body') : null;
   const rect = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; };
-  let selected = '';
-  if (last) {
+  let ackIndex = -1;
+  for (let i = bubbles.length - 1; i >= 0; i -= 1) {
+    if (bubbles[i].querySelector('.ack-block')) { ackIndex = i; break; }
+  }
+  const ackBubble = ackIndex >= 0 ? bubbles[ackIndex] : null;
+  const ack = ackBubble ? ackBubble.querySelector('.ack-block') : null;
+  const reply = bubbles.length > 0 ? bubbles[bubbles.length - 1] : null;
+  const replyBody = reply && reply !== ackBubble ? reply.querySelector('.message__body') : null;
+  const ackStyle = ack ? getComputedStyle(ack) : null;
+  const bodyStyle = replyBody ? getComputedStyle(replyBody) : null;
+  const select = (el) => {
+    if (!el) return '';
     const range = document.createRange();
-    range.selectNodeContents(last);
+    range.selectNodeContents(el);
     const sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
-    selected = sel.toString();
+    const text = sel.toString();
     sel.removeAllRanges();
-  }
+    return text;
+  };
   return {
     bubbles: bubbles.length,
     acks: document.querySelectorAll('#conversation .ack-block').length,
@@ -297,17 +313,77 @@ const READ_LAST_ACK = `(() => {
     ackRole: ack ? ack.getAttribute('role') : null,
     ackInlineHtml: ack ? ack.querySelectorAll('*').length : -1,
     ackStyled: ack ? ack.getAttribute('style') : null,
-    ackParentIsBubble: Boolean(ack && last && ack.parentElement === last),
-    ackBeforeBody: Boolean(ack && body && (ack.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING)),
+    // ⚠️ STRUCTURE : l'accusé ouvre SA PROPRE bulle (distincte de la réponse).
+    ackHasOwnBubble: Boolean(ack && ackBubble && ackBubble !== reply),
+    ackBubbleBodyText: ackBubble ? (ackBubble.querySelector('.message__body')?.textContent ?? '') : null,
+    ackBubbleOnlyAck: Boolean(ackBubble && (ackBubble.querySelector('.message__body')?.textContent ?? '').trim() === ''),
+    ackBubbleBeforeReply: Boolean(
+      ackBubble && reply && ackBubble !== reply &&
+      (ackBubble.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING),
+    ),
+    ackHasTime: Boolean(ackBubble && ackBubble.querySelector('.message__time')),
+    replyHasTime: Boolean(reply && reply !== ackBubble && reply.querySelector('.message__time')),
+    ackFontStyle: ackStyle ? ackStyle.fontStyle : null,
+    ackFontSize: ackStyle ? ackStyle.fontSize : null,
+    bodyFontSize: bodyStyle ? bodyStyle.fontSize : null,
+    ackColor: ackStyle ? ackStyle.color : null,
+    bodyColor: bodyStyle ? bodyStyle.color : null,
     ackRect: ack ? rect(ack) : null,
-    bubbleRect: last ? rect(last) : null,
-    bodyText: body ? body.textContent : '',
-    fullText: last ? last.textContent : '',
-    selected,
+    ackBubbleRect: ackBubble ? rect(ackBubble) : null,
+    // ⚠️ Deux messages d'assistant CONSÉCUTIFS gardent un séparateur visuel (règle
+    // de voisin immédiat) : la bulle d'accusé et celle de la réponse ne se
+    // confondent pas.
+    replyMarginTop: reply && reply !== ackBubble ? getComputedStyle(reply).marginTop : null,
+    ackToReplyGap: ackBubble && reply && reply !== ackBubble
+      ? Math.round(rect(reply).top - rect(ackBubble).bottom)
+      : null,
+    bodyText: replyBody ? replyBody.textContent : '',
+    fullText: document.querySelector('#conversation').textContent,
+    selectedAck: select(ackBubble),
+    selectedReply: select(replyBody),
     pending: document.querySelectorAll('#conversation .message__pending').length,
     order: window.__order ?? [],
   };
 })()`;
+
+/**
+ * ORDRE DU FIL : la suite des nœuds de `#conversation` avec leur nature. C'est la
+ * mesure qui prouve ACCUSÉ → IMAGE → TEXTE (en direct ET après rechargement), et
+ * que les médias ne sont pas regroupés en bas.
+ */
+const READ_THREAD_ORDER = `(() => {
+  const kindOf = (n) => {
+    if (n.classList.contains('message--user')) return 'user';
+    if (n.classList.contains('message--assistant')) {
+      return n.querySelector('.ack-block') ? 'ack' : 'text';
+    }
+    if (n.classList.contains('generated-image')) return 'image';
+    if (n.classList.contains('screenshot')) return 'capture';
+    if (n.classList.contains('daysep')) return 'daysep';
+    return n.className || n.tagName.toLowerCase();
+  };
+  return [...document.querySelector('#conversation').children].map((n) => ({
+    kind: kindOf(n),
+    at: n.dataset.ts ?? null,
+    empty: (n.textContent ?? '').trim() === '' && !n.querySelector('img'),
+  }));
+})()`;
+
+/**
+ * Le SEUL dernier tour : à partir du dernier message utilisateur s'il est affiché
+ * (après rechargement), sinon du dernier accusé (en direct, le message utilisateur
+ * n'est pas encore rendu). Le message utilisateur et les séparateurs de jour sont
+ * écartés : on compare la même chose des deux côtés.
+ */
+function lastTurnOrder(order) {
+  const kinds = order.map((n) => n.kind);
+  const userAt = kinds.lastIndexOf('user');
+  const ackAt = kinds.lastIndexOf('ack');
+  const start = Math.max(userAt, ackAt);
+  return (start >= 0 ? kinds.slice(start) : kinds).filter(
+    (kind) => kind !== 'user' && kind !== 'daysep',
+  );
+}
 
 async function runScript(script) {
   await fetch(`${control}/spoken-reset`);
@@ -375,17 +451,44 @@ check(
   action.order.length === 2 &&
     action.order[0].kind === "ack" &&
     action.order[1].kind === "text" &&
-    action.order[0].t < action.order[1].t,
+    action.order[0].t <= action.order[1].t,
   JSON.stringify(action.order),
 );
 check(
-  "STRUCTURE : l'accusé est un ENFANT de la bulle de réponse, AVANT le corps",
-  action.ackParentIsBubble === true &&
-    action.ackBeforeBody === true &&
+  "STRUCTURE : l'accusé ouvre SA PROPRE bulle, AVANT celle de la réponse",
+  action.ackHasOwnBubble === true &&
+    action.ackBubbleOnlyAck === true &&
+    action.ackBubbleBeforeReply === true &&
     typeof action.ackRect?.top === "number" &&
-    action.ackRect.top >= action.bubbleRect.top &&
-    action.ackRect.bottom <= action.bubbleRect.bottom,
-  JSON.stringify({ parent: action.ackParentIsBubble, avant_corps: action.ackBeforeBody }),
+    action.ackRect.top >= action.ackBubbleRect.top &&
+    action.ackRect.bottom <= action.ackBubbleRect.bottom,
+  JSON.stringify({
+    bulle_propre: action.ackHasOwnBubble,
+    bulle_avant_reponse: action.ackBubbleBeforeReply,
+    bulle_sans_corps: action.ackBubbleOnlyAck,
+  }),
+);
+check(
+  "RENDU D'UN MESSAGE NORMAL : pas d'italique, même taille et même couleur que la réponse",
+  action.ackFontStyle === "normal" &&
+    action.ackFontSize === action.bodyFontSize &&
+    action.ackColor === action.bodyColor,
+  JSON.stringify({
+    font_style: action.ackFontStyle,
+    taille_accuse: action.ackFontSize,
+    taille_reponse: action.bodyFontSize,
+    meme_couleur: action.ackColor === action.bodyColor,
+  }),
+);
+check(
+  "SÉPARATEUR : deux messages d'assistant consécutifs restent DISTINCTS (marge de 22 px)",
+  action.replyMarginTop === "22px" && (action.ackToReplyGap ?? 0) >= 30,
+  JSON.stringify({ marge: action.replyMarginTop, ecart_px: action.ackToReplyGap }),
+);
+check(
+  "RENDU D'UN MESSAGE NORMAL : il porte son HORODATAGE, comme une réponse",
+  action.ackHasTime === true && action.replyHasTime === true,
+  JSON.stringify({ accuse: action.ackHasTime, reponse: action.replyHasTime }),
 );
 check(
   "le fond arrive ensuite : la réponse est complète APRÈS l'accusé",
@@ -398,11 +501,14 @@ check(
   JSON.stringify({ texte: (action.fullText ?? "").slice(0, 80), attente: action.pending }),
 );
 check(
-  "COPIE DU MESSAGE : l'accusé est dans le texte sélectionné, AVANT la réponse",
-  /Je m'en occupe\./.test(action.selected) &&
-    /Voici la réponse, courte et directe/.test(action.selected) &&
-    action.selected.indexOf("Je m'en occupe.") < action.selected.indexOf("Voici la réponse"),
-  JSON.stringify(action.selected.slice(0, 160)),
+  "COPIE : l'accusé est un texte à part, la réponse ne le contient PAS (aucun doublon)",
+  /Je m'en occupe\./.test(action.selectedAck) &&
+    /Voici la réponse, courte et directe/.test(action.selectedReply) &&
+    !/Je m'en occupe\./.test(action.selectedReply),
+  JSON.stringify({
+    accuse: action.selectedAck.slice(0, 60),
+    reponse: action.selectedReply.slice(0, 60),
+  }),
 );
 check(
   "AUCUN doublon d'accusé (une seule ligne, même après le texte)",
@@ -437,12 +543,18 @@ await shot("ack-action-variante");
 await runScript("action_only");
 const onlyAck = await evaluate(READ_LAST_ACK);
 check(
-  "action SANS texte : la bulle affiche l'ACCUSÉ seul (jamais une bulle vide)",
+  "action SANS texte : la bulle d'accusé EST tout le message (jamais une bulle vide)",
   onlyAck.ackText === "C'est parti." &&
-    onlyAck.ackParentIsBubble === true &&
+    onlyAck.ackBubbleOnlyAck === true &&
     onlyAck.bodyText === "" &&
     onlyAck.pending === 0,
-  JSON.stringify({ texte: onlyAck.ackText, corps: onlyAck.bodyText, attente: onlyAck.pending }),
+  JSON.stringify({
+    texte: onlyAck.ackText,
+    corps: onlyAck.bodyText,
+    attente: onlyAck.pending,
+    bulle_sans_corps: onlyAck.ackBubbleOnlyAck,
+    corps_de_la_bulle: onlyAck.ackBubbleBodyText,
+  }),
 );
 await shot("ack-action-sans-texte");
 
@@ -481,7 +593,47 @@ console.log(
     "(tours dont le modèle est un SCÉNARIO muet — mesure du MÉCANISME, pas de l'obéissance du vrai modèle).",
 );
 
-/* ═════════ 2quinquies) RECHARGEMENT : les accusés sont PERSISTÉS ═════════ */
+/* ═════════ 2sexies) ORDRE DU FIL : ACCUSÉ → MÉDIAS → RÉPONSE ════════════
+ * ⚠️ C'est la mesure centrale : un tour qui lance une action LONGUE doit produire
+ *   ① la bulle d'accusé, ② les cartes des médias produits par l'action, ③ la bulle
+ *   de réponse — et le MÊME ordre après un RECHARGEMENT (les médias sont ré-émis
+ *   APRÈS le snapshot : ils doivent retrouver leur place, pas finir en bas).
+ */
+await fetch(`${control}/spoken-reset`);
+await evaluate(`window.__orderObserver?.disconnect(); window.__order = []; true`);
+const acksBefore = await evaluate(`document.querySelectorAll('#conversation .ack-block').length`);
+await fetch(`${control}/send?script=media`);
+check(
+  "ordre : l'ACCUSÉ de CE tour apparaît en premier (bulle à lui)",
+  await waitFor(
+    `document.querySelectorAll('#conversation .ack-block').length > ${acksBefore}`,
+    8000,
+  ),
+  `accusés avant = ${acksBefore}`,
+);
+// L'action est EN COURS (pause mesurée côté serveur) : les médias sont créés
+// MAINTENANT, donc APRÈS l'accusé et AVANT la réponse — comme une vraie génération.
+const mediaA = Date.now();
+await fetch(`${control}/emit-media?kind=image&label=a&at=${new Date(mediaA).toISOString()}`).then((r) => r.json());
+await fetch(`${control}/emit-media?kind=image&label=b&at=${new Date(mediaA + 1).toISOString()}`).then((r) => r.json());
+await fetch(`${control}/emit-media?kind=screenshot&label=c&at=${new Date(mediaA + 2).toISOString()}`).then((r) => r.json());
+await waitForSummary();
+await sleep(500);
+const liveOrder = lastTurnOrder(await evaluate(READ_THREAD_ORDER));
+check(
+  "ORDRE EN DIRECT : ACCUSÉ → IMAGE → IMAGE → CAPTURE → RÉPONSE",
+  JSON.stringify(liveOrder) === JSON.stringify(["ack", "image", "image", "capture", "text"]),
+  JSON.stringify(liveOrder),
+);
+const liveMedia = await evaluate(`document.querySelectorAll('#conversation img.md-image').length`);
+check(
+  "les trois médias sont AFFICHÉS dans le fil (deux images + une capture)",
+  liveMedia >= 3,
+  String(liveMedia),
+);
+await shot("ack-ordre-direct");
+
+/* ═════════ 2quinquies) RECHARGEMENT : accusés ET ordre des médias ════════ */
 await navigate(`${base}/`);
 check(
   "rechargement : connexion rétablie",
@@ -501,19 +653,21 @@ const afterReload = await evaluate(`(() => {
       const body = b.querySelector('.message__body');
       return (body ? body.textContent : '').trim() === '' && !b.querySelector('.ack-block');
     }).length,
-    // ⚠️ La phrase du modèle ne doit PAS être répétée dans le corps de la bulle.
+    // ⚠️ Aucun CORPS de réponse ne recopie une phrase d'accusé (aucun doublon) :
+    // l'accusé est un message à part, jamais la première ligne de la réponse.
     duplicated: bubbles.filter((b) => {
-      const ack = b.querySelector('.ack-block');
       const body = b.querySelector('.message__body');
-      if (!ack || !body) return false;
-      const label = ack.textContent.trim();
-      return label.length > 0 && body.textContent.includes(label);
+      if (!body) return false;
+      const text = body.textContent;
+      return [...document.querySelectorAll('#conversation .ack-block')].some(
+        (ack) => ack.textContent.trim().length > 0 && text.includes(ack.textContent.trim()),
+      );
     }).length,
   };
 })()`);
 check(
-  "RECHARGEMENT : les CINQ accusés sont TOUJOURS là (persistés avec le message)",
-  afterReload.withAck === 5 &&
+  "RECHARGEMENT : les SIX accusés sont TOUJOURS là (persistés comme des messages)",
+  afterReload.withAck === 6 &&
     afterReload.acks.includes("Je m'en occupe.") &&
     afterReload.acks.includes("Deux secondes, je m'en occupe.") &&
     afterReload.acks.includes("C'est parti."),
@@ -533,6 +687,23 @@ check(
   "RECHARGEMENT : AUCUNE bulle vide",
   afterReload.emptyBubbles === 0,
   String(afterReload.emptyBubbles),
+);
+const reloadOrder = lastTurnOrder(await evaluate(READ_THREAD_ORDER));
+check(
+  "RECHARGEMENT : MÊME ordre qu'en direct — ACCUSÉ → IMAGE → IMAGE → CAPTURE → RÉPONSE",
+  JSON.stringify(reloadOrder) === JSON.stringify(["ack", "image", "image", "capture", "text"]),
+  JSON.stringify(reloadOrder),
+);
+check(
+  "RECHARGEMENT : les médias ne sont PAS regroupés en bas (aucun après la réponse)",
+  reloadOrder.indexOf("text") === reloadOrder.length - 1,
+  JSON.stringify(reloadOrder),
+);
+const restoredMedia = await evaluate(`document.querySelectorAll('#conversation img.md-image').length`);
+check(
+  "RECHARGEMENT : aucun média en DOUBLE (trois médias, trois images)",
+  restoredMedia === liveMedia,
+  `${liveMedia} → ${restoredMedia}`,
 );
 await shot("ack-apres-rechargement");
 

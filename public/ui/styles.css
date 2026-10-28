@@ -2560,18 +2560,21 @@ h6.md-heading {
   color: var(--muted);
 }
 
-/* ── ACCUSÉ DE RÉCEPTION (PREMIÈRE ligne de la bulle de réponse) ───────────
- * ⚠️ Il vit DANS la bulle assistant, juste au-dessus du corps markdown : c'est le
- * début de la réponse, pas un bloc posé à côté (une ligne séparée au-dessus d'une
- * bulle vide faisait croire que Yuki n'avait rien répondu). Il reste délibérément
- * plus petit, en italique et plus sourd que le fond, qui arrive ensuite, pour
- * qu'on ne le confonde pas avec la réponse elle-même. Aucun style en ligne (CSP). */
+/* ── ACCUSÉ DE RÉCEPTION (MESSAGE À PART ENTIÈRE) ──────────────────────────
+ * ⚠️ C'est une bulle `message--assistant` ORDINAIRE : même largeur, même fond,
+ * même heure au-dessus, et ce paragraphe hérite exactement du style du texte d'une
+ * réponse (`font: inherit`, couleur et interligne du corps).
+ * ⚠️ AUCUN STYLE SPÉCIAL : ni italique, ni taille réduite, ni gris « annotation ».
+ * C'était le défaut signalé — l'accusé ressemblait à une note de bas de page au
+ * lieu d'être une réponse. La classe ne sert plus qu'à le REPÉRER (mesures E2E,
+ * retrait à la reconstruction du fil). Aucun style en ligne (CSP). */
 .ack-block {
-  margin: 0 0 6px;
-  font-size: 13px;
-  font-style: italic;
-  line-height: 1.4;
-  color: var(--muted);
+  margin: 0;
+  font: inherit;
+  font-style: normal;
+  color: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ── ATTENTE dans la bulle (aucun accusé, aucun contenu encore) ────────────
@@ -2760,6 +2763,16 @@ h6.md-heading {
 
   .conversation {
     padding: 14px 12px;
+    /* ⚠️ TÉLÉPHONE SEULEMENT — le pincement à deux doigts ne doit plus zoomer la
+       PAGE depuis le fil (défaut signalé : on zoomait la conversation entière en
+       pinçant pour lire). `pan-y` AUTORISE le défilement vertical (le fil reste
+       utilisable) et bloque le pincement. Voir le commentaire de `viewport` dans
+       `index.html` : sur iOS, `user-scalable=no` est IGNORÉ depuis iOS 10, donc
+       c'est bien `touch-action` qui fait le travail.
+       ⚠️ PAS sur bureau : `Ctrl+molette` (zoom navigateur) reste disponible —
+       c'est de l'ACCESSIBILITÉ assumée (agrandir le texte), et un écran tactile de
+       bureau/tablette garde son pincement. */
+    touch-action: pan-y;
   }
 
   .composer {

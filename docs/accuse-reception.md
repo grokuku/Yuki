@@ -50,8 +50,8 @@ d'être émis comme contenu, tant qu'il peut être un accusé :
 
 - s'il s'avère que c'est un accusé (le message porte l'appel d'outil), il part dans
   une trame `ack` — **jamais** un `delta` de contenu. C'est ce qui garantit qu'il
-  n'est **ni prononcé** par la synthèse vocale, **ni** dans le corps de la bulle,
-  **ni** dans le texte du message ;
+  n'est **ni prononcé** par la synthèse vocale, **ni** recopié dans le corps de la
+  réponse, **ni** dans le texte du message ;
 - sinon (pas d'outil d'action, ou texte trop long / multiligne) il est **relâché
   tel quel** comme contenu, sans perte.
 
@@ -83,21 +83,43 @@ garantit qu'il ne tire pas deux fois la même phrase.
 ⚠️ Si le taux de repli dépasse ~20 % en production, c'est la **consigne du prompt**
 qu'il faut renforcer, pas le repli qu'il faut multiplier.
 
-## Ordre garanti : l'accusé AVANT l'action
+## Un MESSAGE À PART ENTIÈRE (et l'ordre du fil)
+
+L'accusé **ouvre sa propre bulle** : même fond, même texte, même heure qu'une
+réponse — **ni italique, ni taille réduite, ni gris d'annotation**. Ce n'est pas un
+détail cosmétique : il n'est pas une *note sur* la réponse, c'est le **premier
+message du tour**.
+
+Conséquence directe, l'ordre du fil devient celui de l'action elle-même :
+
+```
+① bulle d'ACCUSÉ        « C'est parti. »
+② CARTE IMAGE           la vignette que l'action vient de produire
+③ bulle de RÉPONSE      le texte final
+```
 
 Le SDK émet `message_end` du message assistant **avant** `tool_execution_start`
-(voir `agent-loop.js` du SDK : le streaming se termine, puis les appels d'outil sont
-exécutés). La décision est prise à `message_end`, donc :
+(voir `agent-loop.js` : le streaming se termine, puis les outils sont exécutés). La
+décision est prise à `message_end`, donc :
 
 - l'accusé précède l'exécution de l'outil (le corps du tool n'a pas commencé) ;
 - il précède les trames produites par l'action (`job_started`, `image`, …) ;
-- côté interface il est posé **dans** la bulle du run, **avant** le corps markdown.
+- il est versé au **transcript** comme une entrée à part entière (donc une bulle,
+  avec son horodatage), et le corps du run ouvre la bulle **suivante**.
 
-Preuves : `tests/pi/sdk-host-ack.test.ts` (ordre mesuré dans le VRAI host : un
-marqueur est posé juste après le retour de l'émission de `tool_execution_start`, et
-l'accusé doit le précéder) et `_tools/e2e-ack.mjs` (ordre mesuré dans le navigateur
-par `MutationObserver` + horodatages `performance.now()`, et deux formulations
-différentes observées).
+⚠️ **La même chose après un rechargement.** Les médias conservés (images, captures)
+sont ré-émis **après** le snapshot : ils retrouvent leur place **chronologique**
+(`createdAt` / `capturedAt` comparés aux horodatages des messages, voir
+`chronologicalAnchor` dans `public/ui/app.js`) au lieu de s'empiler à la fin du fil
+— le défaut corrigé (« tous les messages en haut, toutes les images en bas »).
+
+Preuves mesurées :
+- `tests/pi/sdk-host-ack.test.ts` (ordre réel dans le VRAI host) ;
+- `tests/pi/events.test.ts` (restitution : **deux** entrées, dans l'ordre) ;
+- `_tools/e2e-ack.mjs` (navigateur) : ordre ACCUSÉ → IMAGE → IMAGE → CAPTURE →
+  RÉPONSE mesuré **en direct ET après rechargement**, style calculé de l'accusé
+  (`font-style: normal`, même taille et même couleur que la réponse), horodatage,
+  séparateur de 22 px entre deux messages d'assistant consécutifs.
 
 ## Transport : trame de CONTRÔLE, éphémère et MUETTE
 
@@ -113,12 +135,15 @@ voix avec un texte qui n'apporte rien.
 
 ## Persistance (survit au rechargement)
 
-- l'accusé est attaché à l'entrée de transcript (`TranscriptEntry.ack`) et écrit
-  dans le JSONL de session (`yuki.run_ack`, données `{tool, text}`) : il revient
-  **à l'identique** après un rechargement, y compris après un redémarrage ;
-- au rechargement, le message qui **n'était que l'accusé** n'ouvre pas de bulle de
-  corps : l'accusé s'affiche en tête de la bulle suivante (ou seul) — jamais de
-  doublon, jamais de bulle vide ;
+- l'accusé est une **entrée de transcript à part entière** (`TranscriptEntry.ack`,
+  `text` vide) et il est écrit dans le JSONL de session (`yuki.run_ack`, données
+  `{tool, text}`) : il revient **à l'identique** après un rechargement, y compris
+  après un redémarrage, **dans sa propre bulle et à sa place** ;
+- le message du modèle qui **n'était que l'accusé** ne produit pas de bulle de
+  corps : l'auteur de la restitution (`transcriptFromEntries`) le reconnaît par
+  **égalité stricte** avec le texte persisté (jamais « ça a l'air court ») ;
+- aucune action (réaction, statistiques) n'est attachée à la bulle d'accusé quand
+  une réponse suit : la corrélation reste sur la **réponse** ;
 - ⚠️ **Pas un souvenir** : l'extracteur de mémoire écarte le préambule d'accusé
    d'un message qui appelle un outil (`src/pi/sdk/memory-extension.ts`), et une
   entrée `custom` n'est jamais relue par le modèle.
@@ -134,14 +159,15 @@ voix avec un texte qui n'apporte rien.
 | `src/pi/types.ts` | événement `PiEvent` de type `ack` (avec son origine) |
 | `src/gateway/ws/protocol.ts` | trame serveur `ack` (contrôle) |
 | `src/gateway/ws/server.ts` | routage en trame de contrôle, **avant** `streams.append` et **avant** `routeTtsEvent` |
-| `src/pi/events.ts` | persistance (`run_ack`) et restitution (une bulle par run) |
-| `public/ui/ack-block.js` | ligne de statut (`role="status"`, nœud texte) |
-| `public/ui/app.js` | branche `ack` (avant le curseur `seq`), dans la bulle du run |
-| `public/ui/styles.css` | `.ack-block` (discret, italique, plus petit qu'un message) |
+| `src/pi/events.ts` | persistance (`run_ack`) et restitution (entrée d'accusé + entrée de réponse, dans l'ordre) |
+| `public/ui/ack-block.js` | contenu de la bulle d'accusé (`role="status"`, nœud texte) |
+| `public/ui/app.js` | branche `ack` (avant le curseur `seq`) → **sa propre bulle** ; insertion **chronologique** des médias (`chronologicalAnchor`) |
+| `public/ui/image-block.js`, `public/ui/screenshot-block.js` | point d'insertion (`before`) + anti-doublon |
+| `public/ui/styles.css` | `.ack-block` = rendu d'un message ordinaire (aucun style spécial) |
 | `tests/pi/ack.test.ts` | déclencheurs, forme, bornes, variations du repli, consigne |
 | `tests/pi/sdk-host-ack.test.ts` | décision réelle du host, retenue, ordre, repli |
 | `tests/pi/sdk-host-ack-persist.test.ts` | persistance et restitution à l'identique |
 | `tests/pi/memory-extension.test.ts` | l'accusé n'est jamais mémorisé |
 | `tests/gateway/ws/ack.test.ts` | trame de contrôle (aucun `seq`), routage, non-prononciation |
 | `tests/ui/ack-block.test.ts` | garde-fous du bloc et de son câblage |
-| `_tools/e2e-ack.mjs` (+ `e2e-ack-serve.ts`) | preuves navigateur : texte du modèle, deux formulations, ordre, rechargement, repli, jamais prononcé |
+| `_tools/e2e-ack.mjs` (+ `e2e-ack-serve.ts`) | preuves navigateur : texte du modèle, deux formulations, ordre ACCUSÉ → MÉDIAS → RÉPONSE (en direct et après rechargement), style d'un message normal, horodatage, séparateur, repli, jamais prononcé |

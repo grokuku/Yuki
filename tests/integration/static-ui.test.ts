@@ -983,16 +983,17 @@ describe("Images générées (ComfyUI) — section /config et service same-origi
     expect(app).toContain('type === "image_final_prompt"');
     expect(app).toContain("imageBlocks.setFinalPrompt");
 
-    // ACCUSÉ DE RÉCEPTION : module servi, câblé DANS la bulle (première ligne de
-    // la réponse), stylé, et jamais rendu par `innerHTML` (CSP).
+    // ACCUSÉ DE RÉCEPTION : module servi, câblé dans SA PROPRE bulle (message à
+    // part entière), stylé, et jamais rendu par `innerHTML` (CSP).
     const ack = await (await fetch(`${baseUrl}/ui/ack-block.js`)).text();
     expect(ack).toContain("createAckBlocks");
     expect(ack).toContain("textContent");
     expect(ack).not.toContain("innerHTML");
     expect(app).toContain('type === "ack"');
     expect(app).toContain("ackBlocks.show(currentAssistant, frame.text, frame.source)");
-    // Accusé PERSISTÉ : il revient avec le transcript après un rechargement.
-    expect(app).toContain("ackBlocks.show(div, entry.ack)");
+    // Accusé PERSISTÉ : il revient avec le transcript après un rechargement, dans
+    // sa propre bulle, AVANT la réponse.
+    expect(app).toContain("ackBlocks.show(ackBubble, ackText)");
     // Aucune bulle vide : l'attente occupe la bulle du run dès son lancement.
     expect(app).toContain("ackBlocks.pending(currentAssistant)");
     const css = await (await fetch(`${baseUrl}/ui/config.css`)).text();

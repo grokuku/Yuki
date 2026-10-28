@@ -346,8 +346,12 @@ export interface TranscriptEntry {
   subject?: string;
   /**
    * ACCUSÉ DE RÉCEPTION de ce message assistant (« C'est parti. », « Deux
-   * secondes, je m'en occupe. ») : la PREMIÈRE ligne de la réponse, affichée EN
-   * TÊTE du corps de la bulle (voir `public/ui/ack-block.js`).
+   * secondes, je m'en occupe. »).
+   *
+   * ⚠️ C'EST UN MESSAGE À PART ENTIÈRE : une entrée de transcript qui ne porte
+   * QUE lui (`text` vide) et occupe donc SA PROPRE bulle, AVANT la réponse —
+   * l'ordre du fil est ACCUSÉ → (image produite par l'action) → RÉPONSE, en
+   * direct comme après un rechargement.
    *
    * ⚠️ Le TEXTE est écrit par le MODÈLE (c'est le premier texte de son tour),
    * puis RECONNU par l'hôte quand un outil d'action longue démarre dans le même
