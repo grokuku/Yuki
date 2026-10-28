@@ -2,7 +2,7 @@
  * Générateur d'images : choix du workflow → injection → appel → stockage.
  *
  * ⚠️ Ce que ce fichier PROUVE :
- *  - la SCÈNE au-delà de 1 500 caractères est REFUSÉE (jamais tronquée en
+ *  - la SCÈNE au-delà de 3 000 caractères est REFUSÉE (jamais tronquée en
  *    silence) et rien n'est soumis au serveur ;
  *  - le STYLE ne sert qu'à CHOISIR le workflow : le graphe transmis au client
  *    HTTP n'en garde AUCUNE trace (PIÈGE ①) ;
@@ -94,6 +94,7 @@ function harness(options: {
   const list: ComfyWorkflowSummary[] = names.map((candidate) => {
     summaries.set(candidate.name, {
       ...candidate,
+      documentation: "",
       addedAt: new Date(0).toISOString(),
       bytes: 10,
       nodes: 6,
@@ -119,6 +120,7 @@ function harness(options: {
     importWorkflow: () => {
       throw new Error("non utilisé");
     },
+    setDocumentation: () => null,
     remove: () => false,
     setDefault: () => false,
   };
@@ -191,7 +193,7 @@ function harness(options: {
 }
 
 describe("scène : texte libre, bornée, JAMAIS de style", () => {
-  it("REFUSE une scène de plus de 1 500 caractères (aucune troncature silencieuse)", async () => {
+  it("REFUSE une scène de plus de 3 000 caractères (aucune troncature silencieuse)", async () => {
     const { generate, submitted } = harness();
     const scene = "a".repeat(MAX_IMAGE_SCENE_CHARS + 1);
     const error = (await generate.generate({ scene }).catch((caught: unknown) => caught)) as ComfyError;
@@ -200,6 +202,21 @@ describe("scène : texte libre, bornée, JAMAIS de style", () => {
     expect(error.message).toContain(String(MAX_IMAGE_SCENE_CHARS));
     expect(error.message).toContain("Raccourcis-la");
     expect(submitted).toHaveLength(0); // rien n'est parti au serveur
+  });
+
+  it("la borne vaut 3 000 : 2 500 caractères PASSENT, 3 100 sont REFUSÉS en disant 3000", async () => {
+    expect(MAX_IMAGE_SCENE_CHARS).toBe(3_000);
+    const ok = harness();
+    const accepted = await ok.generate.generate({ scene: "c".repeat(2_500) });
+    expect(accepted.labels).toContain("YUKI_PROMPT");
+    const tooLong = harness();
+    const error = (await tooLong.generate
+      .generate({ scene: "c".repeat(3_100) })
+      .catch((caught: unknown) => caught)) as ComfyError;
+    expect(error).toBeInstanceOf(ComfyError);
+    expect(error.message).toContain("3000");
+    expect(error.code).toBe("scene_too_long");
+    expect(tooLong.submitted).toHaveLength(0);
   });
 
   it("accepte une scène à la borne EXACTE", async () => {

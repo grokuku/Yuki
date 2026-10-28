@@ -2,7 +2,7 @@
  * Outil `generer_image` — génération d'image via ComfyUI.
  *
  * Prouve : le nom et les paramètres, la SCÈNE bornée (refus explicite au-delà de
- * 1 500 caractères, rien n'est généré), le STYLE jamais recopié dans la scène,
+ * 3 000 caractères, rien n'est généré), le STYLE jamais recopié dans la scène,
  * l'image transmise AU MODÈLE (bornée à 1 Mio, avec `resizeImage`), l'affichage à
  * l'humain (émission d'une vue same-origin) et le message HONNÊTE en cas d'échec.
  */
@@ -51,6 +51,8 @@ async function call(
 
 interface Harness {
   tool: Tool;
+  /** Outil `consulter_workflow` (même fabrique, même suivi de consultation). */
+  consultTool: Tool;
   calls: Array<{ scene: string; style?: string; ratio?: string }>;
   views: ComfyImageView[];
   /** FICHES (prompt final) émises APRÈS l'image. */
@@ -64,6 +66,7 @@ function harness(options: {
   error?: unknown;
   outputLabeled?: boolean;
   finalPrompt?: GeneratedImage["finalPrompt"];
+  documentation?: string;
 } = {}): Harness {
   const calls: Array<{ scene: string; style?: string; ratio?: string }> = [];
   const views: ComfyImageView[] = [];
@@ -101,6 +104,12 @@ function harness(options: {
       if (options.error) throw options.error;
       return image;
     },
+    workflows: {
+      candidates: () => [
+        { name: "manga", description: "Manga / anime — traits marqués, trames", isDefault: true },
+      ],
+      documentationOf: (name) => (name === "manga" ? (options.documentation ?? "") : ""),
+    },
     onImage: (view) => {
       order.push("image");
       views.push(view);
@@ -110,7 +119,14 @@ function harness(options: {
       fiches.push(fiche);
     },
   });
-  return { tool: tools[0]!, calls, views, fiches, order };
+  return {
+    tool: tools[0]!,
+    consultTool: tools[1]!,
+    calls,
+    views,
+    fiches,
+    order,
+  };
 }
 
 describe("l'outil existe et son contrat est explicite", () => {
@@ -239,13 +255,25 @@ describe("bornes et refus", () => {
     expect(payload.field).toBe("scene");
   });
 
-  it("REFUSE une scène au-delà de la borne, sans rien générer", async () => {
+  it("REFUSE une scène de plus de 3 000 caractères, sans rien générer", async () => {
     const { tool, calls } = harness();
     const result = await call(tool, { scene: "a".repeat(MAX_IMAGE_SCENE_CHARS + 1) });
     expect(calls).toHaveLength(0);
     const payload = JSON.parse(result.text) as { status: string; message: string };
     expect(payload.status).toBe("invalid");
     expect(payload.message).toContain(String(MAX_IMAGE_SCENE_CHARS));
+  });
+
+  it("la borne vaut 3 000 : 2 500 caractères PASSENT, 3 100 sont REFUSÉS en disant 3000", async () => {
+    expect(MAX_IMAGE_SCENE_CHARS).toBe(3_000);
+    const ok = harness();
+    const accepted = await call(ok.tool, { scene: "c".repeat(2_500) });
+    expect(ok.calls).toHaveLength(1);
+    expect(accepted.details.status).toBe("ok");
+    const tooLong = harness();
+    const refused = await call(tooLong.tool, { scene: "c".repeat(3_100) });
+    expect(tooLong.calls).toHaveLength(0);
+    expect(JSON.parse(refused.text).message).toContain("3000");
   });
 
   it("n'attache PAS au modèle une image au-delà du plafond, et le DIT", async () => {

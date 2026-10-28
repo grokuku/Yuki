@@ -141,10 +141,15 @@ describe("extension enregistrée dans la chaîne de prompt", () => {
 });
 
 describe("allowlist d'outils", () => {
-  it("n'expose `generer_image` que si le câblage l'active, et seulement au léger", () => {
+  it("n'expose les outils d'image que si le câblage les active, et seulement au léger", () => {
     expect(toolAllowlist("light")).not.toContain("generer_image");
     expect(toolAllowlist("light", { imagesEnabled: true })).toContain("generer_image");
     expect(toolAllowlist("heavy", { imagesEnabled: true })).not.toContain("generer_image");
+    // ⚠️ `consulter_workflow` (GRATUIT, instantané) accompagne la génération :
+    // il n'a de sens que là où `generer_image` est exposé.
+    expect(toolAllowlist("light")).not.toContain("consulter_workflow");
+    expect(toolAllowlist("light", { imagesEnabled: true })).toContain("consulter_workflow");
+    expect(toolAllowlist("heavy", { imagesEnabled: true })).not.toContain("consulter_workflow");
   });
 });
 

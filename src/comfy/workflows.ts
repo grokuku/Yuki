@@ -13,9 +13,23 @@
  * et on journalise la cause (le fichier est conservé tel quel).
  *
  * Chaque entrée porte son NOM D'USAGE (`manga`, `realiste`…), une DESCRIPTION
- * COURTE (choix par proximité) et l'indicateur « par défaut ». Les étiquettes
- * (`YUKI_PROMPT`…) sont RE-RÉSOLUES au chargement : un graphe importé puis
- * modifié à la main ne peut pas passer pour valide.
+ * COURTE (choix par proximité), l'indicateur « par défaut » et une
+ * DOCUMENTATION D'ÉCRITURE (facultative). Les étiquettes (`YUKI_PROMPT`…) sont
+ * RE-RÉSOLUES au chargement : un graphe importé puis modifié à la main ne peut
+ * pas passer pour valide.
+ *
+ * ⚠️ LA DOCUMENTATION EST POUR YUKI, PAS POUR COMFYUI : elle décrit COMMENT
+ * ÉCRIRE la scène pour que CE workflow rende ce qu'elle veut. Elle n'est donc
+ * JAMAIS recopiée dans une scène, JAMAIS écrite dans un graphe, et JAMAIS
+ * injectée dans le prompt système (trop lourd à chaque tour) : elle est servie
+ * À LA DEMANDE, par l'outil `consulter_workflow`. C'est pour cela que
+ * `candidates()` ne la porte pas : ce qui part dans le prompt de chaque tour est
+ * exactement ce que `candidates()` renvoie.
+ *
+ * BORNE : `MAX_COMFY_DOCUMENTATION_CHARS` (8 000). Au-delà, l'enregistrement est
+ * REFUSÉ avec la longueur réelle (jamais une troncature silencieuse). Un fichier
+ * retouché à la main qui dépasserait la borne est, lui, TRONQUÉ AU CHARGEMENT et
+ * la coupe est JOURNALISÉE (un fichier abîmé ne doit pas empêcher le démarrage).
  */
 
 import { randomBytes } from "node:crypto";
@@ -47,6 +61,16 @@ export const MAX_COMFY_WORKFLOW_BYTES = 2 * 1024 * 1024;
 export const MAX_COMFY_WORKFLOWS_FILE_BYTES = 8 * 1024 * 1024;
 /** Longueur maximale d'une description courte. */
 export const MAX_COMFY_DESCRIPTION_CHARS = 200;
+/**
+ * Longueur maximale de la DOCUMENTATION d'écriture d'un workflow (caractères).
+ *
+ * ⚠️ 8 000 : la documentation d'un workflow peut être un VRAI CONTRAT (règles de
+ * décision, structure imposée, interdits, portes de vérification) et elle n'est
+ * JAMAIS dans le prompt système — seulement servie à la demande par
+ * `consulter_workflow`. Son poids ne coûte donc rien aux tours normaux : la
+ * borne ne protège plus la taille du contexte mais l'illisibilité.
+ */
+export const MAX_COMFY_DOCUMENTATION_CHARS = 8_000;
 /** Longueur maximale du nom d'usage. */
 export const MAX_COMFY_NAME_CHARS = 40;
 
@@ -56,6 +80,7 @@ const NAME_PATTERN = /^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/;
 export type ComfyWorkflowErrorCode =
   | "invalid_name"
   | "invalid_description"
+  | "invalid_documentation"
   | "invalid_workflow"
   | "unsupported_format"
   | "missing_required_label"
@@ -84,6 +109,11 @@ export class ComfyWorkflowError extends Error {
 export interface ComfyWorkflowSummary {
   name: string;
   description: string;
+  /**
+   * Consignes d'écriture POUR YUKI (`""` si aucune). ⚠️ Jamais injectée dans le
+   * prompt système : servie uniquement par l'outil `consulter_workflow`.
+   */
+  documentation: string;
   isDefault: boolean;
   addedAt: string;
   /** Taille du graphe sérialisé (octets). */
@@ -109,9 +139,16 @@ export interface ComfyWorkflowsPort {
   importWorkflow(input: {
     name: string;
     description: string;
+    /** Consignes d'écriture (facultatives, bornées) — jamais envoyées à ComfyUI. */
+    documentation?: string;
     workflow: unknown;
     isDefault?: boolean;
   }): ComfyWorkflowSummary;
+  /**
+   * Enregistre (ou efface, avec `""`) les CONSIGNES D'ÉCRITURE d'un workflow.
+   * Renvoie le résumé à jour, ou `null` si le workflow n'existe pas.
+   */
+  setDocumentation(name: string, documentation: unknown): ComfyWorkflowSummary | null;
   remove(name: string): boolean;
   setDefault(name: string): boolean;
 }
@@ -119,6 +156,7 @@ export interface ComfyWorkflowsPort {
 interface StoredWorkflow {
   name: string;
   description: string;
+  documentation: string;
   isDefault: boolean;
   addedAt: string;
   workflow: unknown;
@@ -200,10 +238,49 @@ export function normalizeWorkflowDescription(raw: unknown): string {
   return description;
 }
 
+/**
+ * Coupe un texte à `limit` caractères SANS séparer une paire de substitution
+ * (un emoji tronqué devient illisible).
+ */
+function cutText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  let cut = limit;
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+  return text.slice(0, cut);
+}
+
+/**
+ * Valide la DOCUMENTATION d'écriture (facultative).
+ *
+ * ⚠️ REFUS au-delà de la borne, avec la longueur RÉELLE : on ne tronque jamais
+ * en silence un texte que Yuki devra suivre.
+ */
+export function normalizeWorkflowDocumentation(raw: unknown): string {
+  if (raw === undefined || raw === null) return "";
+  if (typeof raw !== "string") {
+    throw new ComfyWorkflowError(
+      "invalid_documentation",
+      "Les consignes d'écriture doivent être un texte.",
+    );
+  }
+  const documentation = raw.trim();
+  if (documentation.length > MAX_COMFY_DOCUMENTATION_CHARS) {
+    throw new ComfyWorkflowError(
+      "invalid_documentation",
+      `Les consignes d'écriture font ${documentation.length} caractères : la ` +
+        `limite est de ${MAX_COMFY_DOCUMENTATION_CHARS}. Raccourcis-les puis ` +
+        "enregistre à nouveau (rien n'est tronqué en silence).",
+    );
+  }
+  return documentation;
+}
+
 /** Résumé à partir des champs bruts d'un graphe validé. */
 function summarize(
   name: string,
   description: string,
+  documentation: string,
   isDefault: boolean,
   addedAt: string,
   workflow: Record<string, unknown>,
@@ -215,6 +292,7 @@ function summarize(
   return {
     name,
     description,
+    documentation,
     isDefault,
     addedAt,
     bytes,
@@ -291,6 +369,7 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
         ...summarize(
           stored.name,
           stored.description,
+          stored.documentation,
           stored.isDefault,
           stored.addedAt,
           check.workflow,
@@ -313,6 +392,32 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
     });
   }
 
+  /**
+   * Documentation relue d'un fichier : LENIENTE et bornée.
+   *
+   * ⚠️ Un fichier retouché à la main ne doit JAMAIS empêcher le démarrage : une
+   * valeur non textuelle devient « aucune consigne », une valeur trop longue est
+   * TRONQUÉE À LA BORNE — et la coupe est JOURNALISÉE (elle est donc dite).
+   */
+  private readDocumentation(raw: unknown, name: string): string {
+    if (raw === undefined || raw === null) return "";
+    if (typeof raw !== "string") {
+      this.logger?.warn("comfy.workflow.documentation_invalid", {
+        name,
+        reason: "texte attendu",
+      });
+      return "";
+    }
+    const text = raw.trim();
+    if (text.length <= MAX_COMFY_DOCUMENTATION_CHARS) return text;
+    this.logger?.warn("comfy.workflow.documentation_truncated", {
+      name,
+      chars: text.length,
+      limit: MAX_COMFY_DOCUMENTATION_CHARS,
+    });
+    return cutText(text, MAX_COMFY_DOCUMENTATION_CHARS);
+  }
+
   /** Lit une entrée brute du fichier (forme défensive). */
   private readStored(raw: unknown): StoredWorkflow | null {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -323,6 +428,7 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
       return {
         name,
         description,
+        documentation: this.readDocumentation(entry.documentation, name),
         isDefault: entry.isDefault === true,
         addedAt: typeof entry.addedAt === "string" ? entry.addedAt : new Date(0).toISOString(),
         workflow: entry.workflow,
@@ -340,6 +446,7 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
       .map((entry) => ({
         name: entry.name,
         description: entry.description,
+        documentation: entry.documentation,
         isDefault: entry.isDefault,
         addedAt: entry.addedAt,
         workflow: entry.workflow,
@@ -407,11 +514,17 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
   importWorkflow(input: {
     name: string;
     description: string;
+    documentation?: string;
     workflow: unknown;
     isDefault?: boolean;
   }): ComfyWorkflowSummary {
     const name = normalizeWorkflowName(input.name);
     const description = normalizeWorkflowDescription(input.description);
+    // ⚠️ La documentation est validée AVANT toute écriture, comme le reste :
+    // un texte trop long ne laisse pas d'entrée à moitié enregistrée.
+    const documentation = normalizeWorkflowDocumentation(
+      input.documentation ?? this.entries.get(name)?.documentation ?? "",
+    );
     const serialized = (() => {
       try {
         return JSON.stringify(input.workflow ?? null);
@@ -460,6 +573,7 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
       ...summarize(
         name,
         description,
+        documentation,
         isDefault,
         this.entries.get(name)?.addedAt ?? new Date(this.now()).toISOString(),
         check.workflow,
@@ -477,6 +591,33 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
       found: entry.found,
       missing: entry.missing,
       isDefault,
+    });
+    const { workflow: _workflow, labels: _labels, ...summary } = entry;
+    return { ...summary };
+  }
+
+  /**
+   * Enregistre (ou EFFACE, avec `""`) les consignes d'écriture d'un workflow.
+   *
+   * ⚠️ Refus EXPLICITE au-delà de la borne (`invalid_documentation`) ; le
+   * workflow lui-même n'est jamais remplacé : seule la documentation change.
+   */
+  setDocumentation(name: string, documentation: unknown): ComfyWorkflowSummary | null {
+    let key: string;
+    try {
+      key = normalizeWorkflowName(name);
+    } catch {
+      return null;
+    }
+    const entry = this.entries.get(key);
+    if (!entry) return null;
+    const next = normalizeWorkflowDocumentation(documentation);
+    entry.documentation = next;
+    this.persist();
+    this.logger?.info("comfy.workflow.documentation", {
+      name: key,
+      chars: next.length,
+      cleared: next === "",
     });
     const { workflow: _workflow, labels: _labels, ...summary } = entry;
     return { ...summary };

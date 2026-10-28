@@ -1438,6 +1438,14 @@ async function main(): Promise<void> {
           candidates: () => comfyWorkflows.candidates(),
           enabled: () => config.getString("images.baseUrl").trim() !== "",
         },
+        // ⚠️ CONSIGNES D'ÉCRITURE par workflow : elles vivent AVEC le workflow
+        // (même fichier `comfy/workflows.json`) et ne sont servies QU'À LA
+        // DEMANDE, par l'outil `consulter_workflow` — jamais dans le prompt
+        // système, jamais dans la scène, jamais dans le graphe posté à ComfyUI.
+        workflows: {
+          candidates: () => comfyWorkflows.candidates(),
+          documentationOf: (name: string) => comfyWorkflows.get(name)?.documentation ?? "",
+        },
       },
       personality: personalityStore,
       rules: rulesStore,

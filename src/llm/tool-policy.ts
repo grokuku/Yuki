@@ -103,13 +103,18 @@ export type LibrarianToolName =
   | "capture_libraire";
 
 /**
+ * Outils d'IMAGE portés par le LÉGER : `generer_image` (génération via
+ * ComfyUI) et `consulter_workflow` (CONSIGNES D'ÉCRITURE du workflow retenu —
+ * gratuit, instantané, aucun appel modèle).
+ */
+export type ImageToolName = "generer_image" | "consulter_workflow";
+
+/**
  * Outil custom d'ENVOI de fichier par Yuki (`envoyer_fichier`). Il ne touche à
  * aucune machine : il rend CLIQUABLE et TÉLÉCHARGEABLE un fichier DÉJÀ présent
  * dans la conversation (fichier reçu, ou fichier déposé pour l'utilisateur).
  * Porté par le LÉGER uniquement — c'est lui qui converse.
  */
-export type ImageToolName = "generer_image";
-
 export type FilesToolName = "envoyer_fichier";
 
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
@@ -236,12 +241,19 @@ export const LIBRARIAN_TOOLS: readonly LibrarianToolName[] = [
 ];
 
 /**
- * Outil de GÉNÉRATION d'image via un serveur ComfyUI (`generer_image`). Exposé
- * quand le générateur est câblé (toujours, dans le gateway) : l'outil REFUSE
- * explicitement tant qu'aucune URL de serveur n'est configurée, avec la marche à
- * suivre — aucun redémarrage n'est donc nécessaire pour l'activer.
+ * Outils d'IMAGE : `generer_image` (génération via un serveur ComfyUI) et
+ * `consulter_workflow` (CONSIGNES D'ÉCRITURE du workflow retenu).
+ *
+ * ⚠️ `consulter_workflow` est GRATUIT et INSTANTANÉ (lecture locale, aucun appel
+ * modèle) et il n'est PAS un accusé de réception : c'est pour cela qu'il est
+ * exposé avec la génération sans figurer dans `ACK_TOOLS`.
+ *
+ * `generer_image` est exposé quand le générateur est câblé (toujours, dans le
+ * gateway) : l'outil REFUSE explicitement tant qu'aucune URL de serveur n'est
+ * configurée, avec la marche à suivre — aucun redémarrage n'est donc nécessaire
+ * pour l'activer.
  */
-export const IMAGE_TOOLS: readonly ImageToolName[] = ["generer_image"];
+export const IMAGE_TOOLS: readonly ImageToolName[] = ["generer_image", "consulter_workflow"];
 
 /**
  * Outil de CAPTURE de page web via Libry (`capture_libraire`). Exposé quand le

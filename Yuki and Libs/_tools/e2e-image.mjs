@@ -15,9 +15,14 @@
  *  4. l'image est CONSERVÉE (même rétention que les pièces jointes) : elle
  *     SURVIT au RECHARGEMENT et à la PURGE du temporaire de ComfyUI, et la FICHE
  *     (prompt final) s'affiche SOUS elle sans jamais la déplacer ;
- *  5. un ÉCHEC RÉEL du serveur (500) produit un message honnête, et rien n'est
+ *  5. les CONSIGNES D'ÉCRITURE d'un workflow (documentation) sont servies par
+ *     l'outil DÉDIÉ `consulter_workflow` — gratuit, instantané, SANS appel à
+ *     ComfyUI — et ne partent JAMAIS dans le graphe posté (ni dans le prompt de
+ *     chaque tour) ; une génération SANS consultation n'est JAMAIS refusée, et
+ *     la mesure « consulté avant ? » est exposée ;
+ *  6. un ÉCHEC RÉEL du serveur (500) produit un message honnête, et rien n'est
  *     affiché dans le fil ;
- *  6. ZÉRO violation CSP, ZÉRO exception JS, ZÉRO erreur de connexion.
+ *  7. ZÉRO violation CSP, ZÉRO exception JS, ZÉRO erreur de connexion.
  *
  * ⚠️ Aucune capture PNG suivie : tout va dans un dossier TEMPORAIRE.
  *
@@ -107,6 +112,17 @@ const WORKFLOW = {
 
 const SCENE = "Une femme âgée arrose des tomates au soleil couchant, arrosoir en zinc.";
 const STYLE = "un truc style dessin animé japonais";
+
+/**
+ * CONSIGNES D'ÉCRITURE du workflow (pour Yuki, PAS pour ComfyUI).
+ * ⚠️ Le marqueur `MARQUEUR-DOC` ne doit JAMAIS apparaître :
+ *  - ni dans le JSON posté à `/prompt` (assertion sur le corps RÉEL) ;
+ *  - ni dans le résultat de `generer_image`.
+ */
+const DOCUMENTATION =
+  "MARQUEUR-DOC : commence par le SUJET et le cadrage en une phrase, puis le décor " +
+  "et la lumière rasante. Deux phrases suffisent ; pas de listes ; n'écris jamais le " +
+  "nom du style dans la scène.";
 
 /**
  * MÊME graphe, SANS l'étiquette `YUKI_OUTPUT` : prouve que les workflows
@@ -343,6 +359,7 @@ const imported = await fetch(`${server.base}/api/images/workflows`, {
   body: JSON.stringify({
     name: "manga",
     description: "Manga / anime — traits marqués, trames",
+    documentation: DOCUMENTATION,
     workflow: WORKFLOW,
     isDefault: true,
   }),
@@ -583,6 +600,36 @@ check(
   "le panneau DIT que l'image finale vient du nœud étiqueté YUKI_OUTPUT",
   /Image finale/.test(String(firstCard?.text)) && /YUKI_OUTPUT/.test(String(firstCard?.text)),
   String(firstCard?.text).slice(0, 240),
+);
+// ⚠️ CONSIGNES D'ÉCRITURE : éditées DANS la page /config, bornées à 8 000.
+const docEditor = await evaluate(`(() => {
+  const card = [...document.querySelectorAll('#images-root .image-workflow')]
+    .find((el) => el.textContent.includes('manga'));
+  const zone = card ? card.querySelector('textarea') : null;
+  const helper = card ? card.textContent : '';
+  return {
+    hasZone: Boolean(zone),
+    value: zone ? zone.value : null,
+    maxlength: zone ? zone.getAttribute('maxlength') : null,
+    mentionsBound: /8000/.test(String(helper)),
+    mentionsTool: /consulter_workflow/.test(String(helper)),
+    mentionsNotSent: /Jamais envoyées/.test(String(helper)),
+  };
+})()`);
+check(
+  "le panneau /config édite les CONSIGNES D'ÉCRITURE du workflow (zone de texte pré-remplie)",
+  docEditor.hasZone === true && String(docEditor.value).includes("MARQUEUR-DOC"),
+  JSON.stringify(docEditor).slice(0, 240),
+);
+check(
+  "la zone est BORNÉE (8000) et la borne est DITE dans le panneau",
+  docEditor.maxlength === "8000" && docEditor.mentionsBound === true,
+  JSON.stringify(docEditor).slice(0, 200),
+);
+check(
+  "le panneau DIT que les consignes ne partent JAMAIS au serveur d'images",
+  docEditor.mentionsNotSent === true && docEditor.mentionsTool === true,
+  JSON.stringify(docEditor).slice(0, 200),
 );
 
 // Workflow SANS l'étiquette : accepté (facultative) et le repli est annoncé.
@@ -859,6 +906,107 @@ check(
   JSON.stringify(noLabelBlocks),
 );
 await shot("image-sans-etiquette");
+
+/* ═══ 6 quater) DOCUMENTATION PAR WORKFLOW — outil DÉDIÉ, gratuit ═══════ */
+// ① `generer_image` SANS consultation : AUCUN refus (décision utilisateur).
+const unconsulted = await fetch(
+  `${server.base}/e2e/tool?scene=${encodeURIComponent("Un verger sous la pluie.")}&style=${encodeURIComponent(STYLE)}`,
+).then((r) => r.json());
+check(
+  "generer_image fonctionne SANS avoir consulté les consignes (aucun refus)",
+  unconsulted.ok === true && unconsulted.details?.status === "ok",
+  JSON.stringify(unconsulted.details ?? unconsulted).slice(0, 200),
+);
+check(
+  "la mesure DIT que ce style n'avait PAS été consulté avant",
+  unconsulted.details?.workflow_consulted_before === false,
+  JSON.stringify(unconsulted.details?.consultation ?? null),
+);
+
+// ② `consulter_workflow` : GRATUIT et INSTANTANÉ — aucun appel à ComfyUI.
+const promptBeforeConsult = await fetch(`${server.base}/e2e/last-prompt`).then((r) => r.json());
+const consulted = await fetch(
+  `${server.base}/e2e/consult?style=${encodeURIComponent(STYLE)}`,
+).then((r) => r.json());
+const promptAfterConsult = await fetch(`${server.base}/e2e/last-prompt`).then((r) => r.json());
+const consultText = String(consulted.text ?? "");
+check(
+  "consulter_workflow rend la DOCUMENTATION du workflow retenu (par proximité)",
+  consulted.ok === true && consultText.includes("MARQUEUR-DOC") && consulted.details?.status === "ok",
+  consultText.slice(0, 200),
+);
+check(
+  "consulter_workflow est GRATUIT : aucun appel n'est parti vers ComfyUI",
+  promptBeforeConsult.body === promptAfterConsult.body,
+  `avant=${String(promptBeforeConsult.body).length}o après=${String(promptAfterConsult.body).length}o`,
+);
+check(
+  "consulter_workflow rappelle la BORNE de la scène (3000 caractères)",
+  consultText.includes("3000"),
+  consultText.slice(-160),
+);
+
+// ③ Un workflow SANS documentation : réponse explicite, PAS une erreur.
+const consultedEmpty = await fetch(
+  `${server.base}/e2e/consult?style=${encodeURIComponent("sans sortie")}`,
+).then((r) => r.json());
+check(
+  "workflow SANS consignes : réponse explicite (« aucune consigne particulière »)",
+  consultedEmpty.details?.status === "empty" &&
+    String(consultedEmpty.text).includes("Aucune consigne particulière"),
+  String(consultedEmpty.text).slice(0, 160),
+);
+
+// ④ Après consultation, la génération suivante est COMPTÉE « consultée avant ».
+const afterConsult = await fetch(
+  `${server.base}/e2e/tool?scene=${encodeURIComponent("Un verger sous la pluie, ciel bas.")}&style=${encodeURIComponent(STYLE)}`,
+).then((r) => r.json());
+check(
+  "après consultation, la génération est comptée comme précédée d'une consultation",
+  afterConsult.details?.workflow_consulted_before === true,
+  JSON.stringify(afterConsult.details?.consultation ?? null),
+);
+
+// ⑤ ⚠️ PIÈGE : la documentation ne doit JAMAIS partir dans le graphe posté…
+const postedWithDoc = await fetch(`${server.base}/e2e/last-prompt`).then((r) => r.json());
+const postedWithDocBody = String(postedWithDoc.body ?? "");
+check(
+  "⚠️ la documentation n'apparaît JAMAIS dans le JSON posté à ComfyUI",
+  !postedWithDocBody.includes("MARQUEUR-DOC") && postedWithDocBody.length > 0,
+  postedWithDocBody.slice(0, 120),
+);
+check(
+  "…ni dans le résultat rendu au MODÈLE",
+  !String(afterConsult.text ?? "").includes("MARQUEUR-DOC") &&
+    !JSON.stringify(afterConsult.details ?? {}).includes("MARQUEUR-DOC"),
+  String(afterConsult.text ?? "").slice(0, 160),
+);
+// …et la SCÈNE, elle, est bien celle demandée (rien n'a été remplacé par la doc).
+const scenePosted = (() => {
+  try {
+    // `POST /prompt` reçoit `{ prompt: <graphe>, client_id }` (contrat ComfyUI).
+    const body = JSON.parse(postedWithDocBody);
+    return body?.prompt?.["enc-positif"]?.inputs?.text ?? null;
+  } catch {
+    return null;
+  }
+})();
+check(
+  "le graphe posté porte la SCÈNE exacte (la doc ne s'y substitue jamais)",
+  scenePosted === "Un verger sous la pluie, ciel bas.",
+  String(scenePosted),
+);
+// ⑥ La documentation n'est PAS dans le prompt système : la LISTE des styles
+// (nom + description + défaut) n'en porte aucune trace, et rien d'autre ne
+// l'injecte (elle n'arrive QUE par l'outil).
+const listedStyles = await fetch(`${server.base}/api/images/workflows`).then((r) => r.json());
+check(
+  "l'API de configuration, elle, PORTE la documentation (éditeur du panneau)",
+  Array.isArray(listedStyles.workflows) &&
+    listedStyles.workflows.some((entry) => String(entry.documentation ?? "").includes("MARQUEUR-DOC")),
+  JSON.stringify((listedStyles.workflows ?? []).map((entry) => entry.name)),
+);
+
 // Fil reconstruit : la section suivante compare le nombre de blocs AVANT/APRÈS
 // l'échec (les images CONSERVÉES reviennent, c'est normal : on ne compte que ce
 // que l'échec ajoute ou n'ajoute pas).

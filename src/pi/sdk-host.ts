@@ -1894,9 +1894,14 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // IMAGES : `generer_image` décrit une SCÈNE (texte libre, sans style), le
       // générateur choisit le workflow par proximité, l'image revient AU MODÈLE
       // (elle la voit, peut régénérer) et s'affiche dans le fil (same-origin).
+      // ⚠️ `consulter_workflow` (outil SÉPARÉ) sert les CONSIGNES D'ÉCRITURE du
+      // workflow retenu : elles ne passent JAMAIS par le prompt système (trop
+      // lourd à chaque tour) ni par la scène — uniquement par cet outil.
       customTools.push(
         ...createImageTools({
           generate: options.images.generator.generate,
+          workflows: options.images.workflows,
+          logger,
           ...(options.images.onImage ? { onImage: options.images.onImage } : {}),
           ...(options.images.onImageFinalPrompt
             ? { onImageFinalPrompt: options.images.onImageFinalPrompt }

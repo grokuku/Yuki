@@ -5,14 +5,23 @@
  *   ① ÉTAT du serveur (URL + clé + bouton « Tester la connexion ») : rendues par
  *     la mécanique de configuration commune (`#group-images`) ;
  *   ② WORKFLOWS importés : nom d'usage, description courte, « par défaut »,
- *     étiquettes trouvées / manquantes, suppression ;
+ *     CONSIGNES D'ÉCRITURE (documentation), étiquettes trouvées / manquantes,
+ *     suppression ;
  *   ③ IMPORT d'un workflow au FORMAT API (collage ou fichier `.json`).
  *
  * Routes utilisées (aucune dépendance nouvelle, `HolafFetch` de la brique) :
  *   GET    /api/images/workflows            → { workflows: [...] }
  *   POST   /api/images/workflows            → import (refus explicite sinon)
+ *   PUT    /api/images/workflows/<nom>      → consignes d'écriture (documentation)
  *   DELETE /api/images/workflows/<nom>      → suppression
  *   POST   /api/images/workflows/<nom>/defaut → « par défaut »
+ *
+ * ⚠️ La DOCUMENTATION est un texte POUR YUKI (comment écrire la scène pour que
+ * ce workflow rende ce qu'elle veut). Elle n'est JAMAIS envoyée à ComfyUI, ni
+ * injectée dans le prompt système : Yuki la reçoit uniquement quand elle appelle
+ * l'outil `consulter_workflow`. Elle est BORNÉE (`MAX_DOCUMENTATION_CHARS`) et
+ * un texte trop long est REFUSÉ par le serveur (message explicite, aucune
+ * troncature silencieuse).
  *
  * ⚠️ L'import est VALIDÉ CÔTÉ SERVEUR : un JSON invalide ou sans étiquette
  * `YUKI_PROMPT` est REFUSÉ, et le panneau affiche les étiquettes TROUVÉES et
@@ -40,6 +49,13 @@
 
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-config": "1" };
 const JSON_HEADERS = { accept: "application/json" };
+
+/**
+ * Longueur maximale des CONSIGNES D'ÉCRITURE d'un workflow (caractères).
+ * ⚠️ MÊME borne que le serveur (`MAX_COMFY_DOCUMENTATION_CHARS`) : au-delà,
+ * l'enregistrement est REFUSÉ avec la longueur réelle — jamais tronqué.
+ */
+const MAX_DOCUMENTATION_CHARS = 8_000;
 
 /** Les sept étiquettes reconnues, dans l'ordre d'affichage (contrat serveur). */
 const LABELS = [
@@ -268,6 +284,93 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
     );
   }
 
+  /**
+   * Enregistre les CONSIGNES D'ÉCRITURE d'un workflow (texte pour Yuki).
+   * ⚠️ Un texte trop long est REFUSÉ par le serveur : on affiche la longueur
+   * réelle reçue en retour, jamais une troncature silencieuse.
+   */
+  async function saveDocumentation(name, value, statusEl, button) {
+    const documentation = value.trim();
+    if (documentation.length > MAX_DOCUMENTATION_CHARS) {
+      statusEl.textContent =
+        `Trop long : ${documentation.length} caractères, maximum ` +
+        `${MAX_DOCUMENTATION_CHARS}. Raccourcis les consignes puis réessaie.`;
+      return;
+    }
+    button.disabled = true;
+    statusEl.textContent = "Enregistrement…";
+    try {
+      await HolafFetch.put(`/api/images/workflows/${encodeURIComponent(name)}`, {
+        headers: WRITE_HEADERS,
+        body: { documentation },
+      });
+      statusEl.textContent =
+        documentation === ""
+          ? `« ${name} » n'a plus de consignes particulières.`
+          : `Consignes de « ${name} » enregistrées (${documentation.length} caractères).`;
+      await load();
+    } catch (error) {
+      statusEl.textContent = apiMessage(error, "L'enregistrement a échoué.");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  /**
+   * ÉDITEUR des consignes d'écriture d'un workflow : zone de texte + compteur
+   * de caractères + borne DITE + bouton d'enregistrement.
+   *
+   * ⚠️ Le serveur est la seule autorité (refus au-delà de la borne) : ce
+   * compteur ne fait qu'éviter l'aller-retour inutile.
+   */
+  function documentationEditor(summary) {
+    const current = typeof summary.documentation === "string" ? summary.documentation : "";
+    const statusEl = h("span", { class: "config-save-status", role: "status" });
+    const counter = h("span", {
+      class: "config-helper",
+      text: `${current.length}/${MAX_DOCUMENTATION_CHARS}`,
+    });
+    const textarea = h("textarea", {
+      class: "config-textarea",
+      rows: "10",
+      maxlength: String(MAX_DOCUMENTATION_CHARS),
+      spellcheck: "true",
+      placeholder:
+        "Comment écrire la scène pour CE workflow (ex. « commence par le sujet et le " +
+        "cadrage, puis le décor ; deux phrases suffisent ; évite les listes »).",
+      "aria-label": `Consignes d'écriture du workflow ${summary.name}`,
+    });
+    textarea.value = current;
+    textarea.addEventListener("input", () => {
+      counter.textContent = `${textarea.value.length}/${MAX_DOCUMENTATION_CHARS}`;
+    });
+    const save = h("button", {
+      class: "button button--ghost button--small",
+      type: "button",
+      text: "Enregistrer les consignes",
+    });
+    save.addEventListener("click", () =>
+      void saveDocumentation(summary.name, textarea.value, statusEl, save),
+    );
+    return h("div", { class: "image-workflow__doc" }, [
+      h("p", {
+        class: "config-label",
+        text: "Consignes d'écriture pour Yuki (facultatives)",
+      }),
+      h("p", {
+        class: "config-helper",
+        text:
+          "Yuki les reçoit quand elle consulte ce workflow (outil « consulter_workflow ») : " +
+          "elles décrivent COMMENT écrire la scène pour que ce workflow rende ce qu'elle " +
+          "veut. Jamais envoyées au serveur d'images, jamais ajoutées au prompt de chaque " +
+          `tour. Maximum ${MAX_DOCUMENTATION_CHARS} caractères (au-delà, l'enregistrement ` +
+          "est refusé).",
+      }),
+      textarea,
+      h("div", { class: "config-actions" }, [save, counter, statusEl]),
+    ]);
+  }
+
   function buildCard(summary) {
     const head = h("div", { class: "image-workflow__head" }, [
       h("span", { class: "image-workflow__name", text: summary.name }),
@@ -329,6 +432,7 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
       labelList(summary),
       outputNote,
       finalPromptNote,
+      documentationEditor(summary),
       actions,
     ]);
   }

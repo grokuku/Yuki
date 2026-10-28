@@ -32,8 +32,16 @@ import { ComfyError } from "./types.js";
 import { YUKI_DEFAULT_NEGATIVE, applyYukiValues, type YukiNodeLabel } from "./validate.js";
 import type { ComfyWorkflowsPort } from "./workflows.js";
 
-/** Longueur maximale de la SCÈNE (validée par l'utilisateur). */
-export const MAX_IMAGE_SCENE_CHARS = 1_500;
+/**
+ * Longueur maximale de la SCÈNE (validée par l'utilisateur).
+ *
+ * ⚠️ 3 000 : les consignes d'écriture d'un workflow peuvent être un VRAI
+ * CONTRAT (règles de décision, structure imposée, interdits, portes de
+ * vérification). La borne précédente ne permettait pas de porter à la fois ce
+ * contrat et la description concrète de l'image ; 3 000 le permet sans coûter
+ * un octet aux tours normaux (la scène n'est écrite qu'à la génération).
+ */
+export const MAX_IMAGE_SCENE_CHARS = 3_000;
 
 /** Image générée, prête à être montrée et enregistrée. */
 export interface GeneratedImage {

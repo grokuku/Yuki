@@ -23,6 +23,7 @@ import {
   ComfyWorkflowError,
   ComfyWorkflowStore,
   GeneratedImagesStore,
+  MAX_COMFY_DOCUMENTATION_CHARS,
   MAX_COMFY_WORKFLOWS,
   MAX_GENERATED_IMAGE_BYTES,
   pngDimensions,
@@ -258,6 +259,120 @@ describe("store des workflows", () => {
     expect(() =>
       store.importWorkflow({ name: "wf0", description: "remplacé", workflow: workflow() }),
     ).not.toThrow();
+  });
+});
+
+describe("documentation d'écriture par workflow", () => {
+  const DOC =
+    "Commence par le sujet et le cadrage en une phrase, puis le décor et la lumière. " +
+    "Deux phrases suffisent ; pas de listes.";
+
+  it("s'enregistre AVEC le workflow (même fichier) et se relit", () => {
+    const dir = tempDir("yuki-comfy-doc-");
+    const path = join(dir, "comfy", "workflows.json");
+    const store = new ComfyWorkflowStore({ path });
+    store.importWorkflow({
+      name: "manga",
+      description: "Manga / anime — traits marqués, trames",
+      workflow: workflow(),
+    });
+    // Un workflow NEUF n'a aucune consigne : il reste utilisable tel quel.
+    expect(store.get("manga")?.documentation).toBe("");
+
+    const summary = store.setDocumentation("manga", `  ${DOC}  `);
+    expect(summary?.documentation).toBe(DOC);
+    // Persistée DANS le fichier des workflows (pas un nouveau fichier).
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as {
+      workflows: Array<{ documentation?: string }>;
+    };
+    expect(onDisk.workflows[0]?.documentation).toBe(DOC);
+    expect(new ComfyWorkflowStore({ path }).get("manga")?.documentation).toBe(DOC);
+
+    // Effacer est EXPLICITE (""), jamais implicite.
+    expect(store.setDocumentation("manga", "")?.documentation).toBe("");
+    expect(new ComfyWorkflowStore({ path }).get("manga")?.documentation).toBe("");
+  });
+
+  it("n'est JAMAIS portée par `candidates()` (donc jamais dans le prompt système)", () => {
+    const store = new ComfyWorkflowStore({
+      path: join(tempDir("yuki-comfy-doc-cand-"), "w.json"),
+    });
+    store.importWorkflow({
+      name: "manga",
+      description: "Manga / anime",
+      documentation: DOC,
+      workflow: workflow(),
+    });
+    expect(JSON.stringify(store.candidates())).not.toContain("Commence par le sujet");
+    // `list()` (API de configuration) la porte, elle : c'est l'éditeur du panneau.
+    expect(store.list()[0]?.documentation).toBe(DOC);
+  });
+
+  it("est BORNÉE : refus au-delà, avec la longueur réelle (aucune troncature)", () => {
+    const store = new ComfyWorkflowStore({
+      path: join(tempDir("yuki-comfy-doc-max-"), "w.json"),
+    });
+    store.importWorkflow({ name: "manga", description: "manga", workflow: workflow() });
+    expect(() =>
+      store.importWorkflow({
+        name: "manga",
+        description: "manga",
+        documentation: "a".repeat(MAX_COMFY_DOCUMENTATION_CHARS + 1),
+        workflow: workflow(),
+      }),
+    ).toThrow(/8001 caractères/);
+    expect(() => store.setDocumentation("manga", "a".repeat(8_001))).toThrow(/limite est de 8000/);
+    // Un contenu non textuel est refusé aussi.
+    expect(() => store.setDocumentation("manga", 42)).toThrow(/texte/);
+    // Le workflow, lui, est INTACT et sans consignes.
+    expect(store.get("manga")?.documentation).toBe("");
+    expect(store.size).toBe(1);
+  });
+
+  it("TRONQUE au chargement une valeur trop longue d'un fichier retouché (et le journalise)", () => {
+    const dir = tempDir("yuki-comfy-doc-reload-");
+    const path = join(dir, "w.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: COMFY_WORKFLOWS_SCHEMA_VERSION,
+        workflows: [
+          {
+            name: "manga",
+            description: "manga",
+            documentation: "b".repeat(MAX_COMFY_DOCUMENTATION_CHARS + 50),
+            isDefault: false,
+            addedAt: new Date(0).toISOString(),
+            workflow: workflow(),
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const warnings: string[] = [];
+    const store = new ComfyWorkflowStore({
+      path,
+      logger: { info: () => {}, warn: (event) => warnings.push(event), error: () => {} },
+    });
+    // L'entrée reste UTILISABLE : seule la documentation est coupée, à la borne.
+    expect(store.size).toBe(1);
+    expect(store.get("manga")?.documentation.length).toBe(MAX_COMFY_DOCUMENTATION_CHARS);
+    expect(warnings).toContain("comfy.workflow.documentation_truncated");
+  });
+
+  it("la borne vaut 8 000 : 7 500 caractères sont ACCEPTÉS, 8 100 sont REFUSÉS en disant 8000", () => {
+    expect(MAX_COMFY_DOCUMENTATION_CHARS).toBe(8_000);
+    const store = new ComfyWorkflowStore({
+      path: join(tempDir("yuki-comfy-doc-8k-"), "w.json"),
+    });
+    store.importWorkflow({ name: "manga", description: "manga", workflow: workflow() });
+    const accepted = store.setDocumentation("manga", "a".repeat(7_500));
+    expect(accepted?.documentation.length).toBe(7_500);
+    expect(() => store.setDocumentation("manga", "a".repeat(8_100))).toThrow(
+      /8100 caractères[\s\S]*limite est de 8000/,
+    );
+    // Le contenu accepté reste INTACT (un refus n'écrit rien à moitié).
+    expect(store.get("manga")?.documentation.length).toBe(7_500);
   });
 });
 

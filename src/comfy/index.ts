@@ -7,8 +7,12 @@
  *  - `validate.ts`   : validation du graphe au FORMAT API + résolution des
  *                      étiquettes `YUKI_*` PAR TITRE de nœud ;
  *  - `selection.ts`  : choix du workflow par PROXIMITÉ (libellé + description) ;
+ *  - `consultation.ts` : MESURE des consultations préalables (par génération),
+ *                      pour décider plus tard, sur des chiffres réels, si la
+ *                      consigne suffit ;
  *  - `workflows.ts`  : stockage des workflows nommés (fichier séparé du volume
- *                      `state`, écriture atomique) ;
+ *                      `state`, écriture atomique), dont leur DOCUMENTATION
+ *                      D'ÉCRITURE (pour Yuki, jamais pour ComfyUI) ;
  *  - `images.ts`     : stockage LOCAL des images générées (servies en
  *                      same-origin, aucun élargissement de CSP) ;
  *  - `generator.ts`  : orchestration (choix → injection → appel → stockage).
@@ -64,6 +68,12 @@ export {
   type YukiNodeLabel,
 } from "./validate.js";
 export {
+  MAX_TRACKED_SESSIONS,
+  WorkflowConsultationTracker,
+  type WorkflowConsultation,
+  type WorkflowConsultationTrackerOptions,
+} from "./consultation.js";
+export {
   chooseWorkflow,
   foldText,
   tokenize,
@@ -82,10 +92,12 @@ export {
   ComfyWorkflowError,
   ComfyWorkflowStore,
   MAX_COMFY_DESCRIPTION_CHARS,
+  MAX_COMFY_DOCUMENTATION_CHARS,
   MAX_COMFY_NAME_CHARS,
   MAX_COMFY_WORKFLOWS,
   MAX_COMFY_WORKFLOW_BYTES,
   normalizeWorkflowDescription,
+  normalizeWorkflowDocumentation,
   normalizeWorkflowName,
   type ComfyWorkflowEntry,
   type ComfyWorkflowErrorCode,

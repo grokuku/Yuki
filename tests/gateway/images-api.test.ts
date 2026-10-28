@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ComfyWorkflowStore,
   GeneratedImagesStore,
+  MAX_COMFY_DOCUMENTATION_CHARS,
   type ComfySystemStats,
 } from "../../src/comfy/index.js";
 import {
@@ -243,6 +244,106 @@ describe("suppression et « par défaut »", () => {
     const missing = await call({ method: "DELETE", path: `${IMAGES_API_PREFIX}/workflows/manga` });
     expect(missing.status).toBe(404);
     expect((missing.body as { message: string }).message).toContain("manga");
+  });
+});
+
+describe("consignes d'écriture (documentation) d'un workflow", () => {
+  const DOC = "Commence par le sujet et le cadrage, puis le décor et la lumière.";
+
+  async function withManga() {
+    const ctx = harness();
+    await ctx.call({
+      method: "POST",
+      path: `${IMAGES_API_PREFIX}/workflows`,
+      body: { name: "manga", description: "Manga / anime", workflow: workflow() },
+    });
+    return ctx;
+  }
+
+  it("s'enregistre par PUT, se relit dans la liste, et ne touche pas au graphe", async () => {
+    const { call, workflows } = await withManga();
+    const saved = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      body: { documentation: DOC },
+    });
+    expect(saved.status).toBe(200);
+    expect((saved.body as { workflow: { documentation: string } }).workflow.documentation).toBe(DOC);
+    expect(workflows.get("manga")?.documentation).toBe(DOC);
+    // Le graphe est INTACT (seule la documentation a changé).
+    expect(workflows.get("manga")?.workflow["6"]).toBeDefined();
+
+    const listed = await call({ method: "GET", path: `${IMAGES_API_PREFIX}/workflows` });
+    expect(JSON.stringify(listed.body)).toContain(DOC);
+    // ⚠️ …mais le graphe ne fuit toujours pas par l'API.
+    expect(JSON.stringify(listed.body)).not.toContain("class_type");
+
+    // Effacer est explicite (chaîne vide).
+    const cleared = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      body: { documentation: "" },
+    });
+    expect(cleared.status).toBe(200);
+    expect(workflows.get("manga")?.documentation).toBe("");
+  });
+
+  it("REFUSE un texte au-delà de la borne en disant la longueur réelle", async () => {
+    const { call, workflows } = await withManga();
+    const tooLong = "a".repeat(MAX_COMFY_DOCUMENTATION_CHARS + 100);
+    const refused = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      body: { documentation: tooLong },
+    });
+    expect(refused.status).toBe(400);
+    const payload = refused.body as { code: string; message: string };
+    expect(payload.code).toBe("invalid_documentation");
+    expect(payload.message).toContain("8100 caractères");
+    expect(payload.message).toContain("8000");
+    // Rien n'a été écrit (aucune troncature silencieuse).
+    expect(workflows.get("manga")?.documentation).toBe("");
+  });
+
+  it("la borne vaut 8 000 : 7 500 caractères sont ACCEPTÉS par l'API", async () => {
+    const { call, workflows } = await withManga();
+    const long = "b".repeat(7_500);
+    const saved = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      body: { documentation: long },
+    });
+    expect(saved.status).toBe(200);
+    expect(workflows.get("manga")?.documentation.length).toBe(7_500);
+  });
+
+  it("exige un corps avec `documentation` et des garde-fous d'écriture", async () => {
+    const { call } = await withManga();
+    const noField = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      body: {},
+    });
+    expect(noField.status).toBe(400);
+    expect((noField.body as { error: string }).error).toBe("invalid_body");
+
+    const noGuard = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      headers: {},
+      body: { documentation: DOC },
+    });
+    expect(noGuard.status).toBe(403);
+  });
+
+  it("répond 404 pour un workflow inconnu", async () => {
+    const { call } = harness();
+    const missing = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/inconnu`,
+      body: { documentation: DOC },
+    });
+    expect(missing.status).toBe(404);
   });
 });
 

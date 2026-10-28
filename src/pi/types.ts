@@ -212,6 +212,20 @@ export interface PiHostOptions {
       candidates(): Array<{ name: string; description: string; isDefault: boolean }>;
       enabled(): boolean;
     };
+    /**
+     * CONSIGNES D'ÉCRITURE par workflow (outil `consulter_workflow`).
+     *
+     * ⚠️ Elles ne DOIVENT jamais être injectées dans le prompt système (elles
+     * pèsent à chaque tour) : `candidates()` ne les porte pas, et elles
+     * n'arrivent au modèle que par l'outil, à la demande. Elles ne partent
+     * jamais non plus dans la scène ni dans le graphe ComfyUI : c'est une
+     * consigne POUR Yuki, pas pour le workflow.
+     */
+    workflows: {
+      candidates(): Array<{ name: string; description: string; isDefault: boolean }>;
+      /** Consignes d'écriture du workflow nommé (`""` s'il n'en a pas). */
+      documentationOf(name: string): string;
+    };
   };
   /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère

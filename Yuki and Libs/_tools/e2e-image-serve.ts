@@ -19,7 +19,10 @@
  *     renvoie le TEXTE reçu par le modèle + les détails (preuve que le prompt
  *     final lui est bien transmis, encadré comme DONNÉE).
  *   - `GET  /e2e/last-prompt` : le JSON RÉELLEMENT POSTÉ à `/prompt` (preuve que
- *     le style n'y est pas).
+ *     le style n'y est pas, et que la documentation n'y est JAMAIS).
+ *   - `GET  /e2e/consult?style=…` : passe par l'OUTIL `consulter_workflow`
+ *     (`src/pi/sdk/image-tools.ts`) : rend les CONSIGNES D'ÉCRITURE du workflow
+ *     retenu, sans AUCUN appel à ComfyUI (gratuit, instantané).
  *   - `GET  /e2e/fail` : arme un échec serveur (500) pour la prochaine génération.
  *
  * ⚠️ Ne produit AUCUNE capture PNG suivie : le dossier du E2E est temporaire.
@@ -355,8 +358,15 @@ let ficheDelayMs = 0;
 
 // ⚠️ L'OUTIL RÉEL du modèle (`generer_image`) : le E2E passe par LUI pour
 // prouver ce que le MODÈLE reçoit (prompt final encadré comme DONNÉE, borné).
-const [generateImageTool] = createImageTools({
+// ⚠️ Et son OUTIL JUMEAU `consulter_workflow` (consignes d'écriture), SÉPARÉ :
+// il ne génère rien, ne touche pas au réseau et ne fait qu'une lecture locale.
+const [generateImageTool, consultWorkflowTool] = createImageTools({
   generate: (input) => generator.generate(input),
+  workflows: {
+    candidates: () => workflows.candidates(),
+    documentationOf: (name) => workflows.get(name)?.documentation ?? "",
+  },
+  logger,
   onImage: (view) => {
     // Rattachement AVANT diffusion, comme le câblage réel : c'est ce qui rend
     // l'image RESTAURABLE après rechargement.
@@ -375,6 +385,7 @@ const [generateImageTool] = createImageTools({
   },
 });
 if (!generateImageTool) throw new Error("outil generer_image introuvable");
+if (!consultWorkflowTool) throw new Error("outil consulter_workflow introuvable");
 
 const transport = createWsTransport({
   host,
@@ -500,6 +511,46 @@ const server = createHttpServer((req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
           JSON.stringify({ ok: false, text: "", message: error instanceof Error ? error.message : String(error) }),
+        );
+      });
+    return;
+  }
+  if (url.pathname === "/e2e/consult") {
+    // MÊME chemin que le MODÈLE : l'outil réel `consulter_workflow`, avec un
+    // contexte de session. Il ne doit déclencher AUCUN appel à ComfyUI.
+    const style = url.searchParams.get("style");
+    const execute = consultWorkflowTool.execute as unknown as (
+      id: string,
+      params: unknown,
+      signal: undefined,
+      onUpdate: undefined,
+      ctx: unknown,
+    ) => Promise<{ content: Array<{ type: string; text?: string }>; details: unknown }>;
+    void execute(
+      "e2e-consult",
+      style ? { style } : {},
+      undefined,
+      undefined,
+      { sessionManager: { getSessionId: () => sessionId } },
+    )
+      .then((result) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            text: result.content.map((part) => part.text ?? "").join("\n"),
+            details: result.details,
+          }),
+        );
+      })
+      .catch((error: unknown) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: false,
+            text: "",
+            message: error instanceof Error ? error.message : String(error),
+          }),
         );
       });
     return;

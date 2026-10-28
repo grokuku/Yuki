@@ -3,6 +3,7 @@
  *
  *  - `GET    /api/images/workflows`              liste des workflows (résumés).
  *  - `POST   /api/images/workflows`              IMPORT d'un workflow (JSON API).
+ *  - `PUT    /api/images/workflows/<nom>`        CONSIGNES D'ÉCRITURE (`documentation`).
  *  - `DELETE /api/images/workflows/<nom>`        suppression.
  *  - `POST   /api/images/workflows/<nom>/defaut` marque « par défaut ».
  *  - `POST   /api/images/test`                   bouton « Tester la connexion ».
@@ -14,7 +15,14 @@
  * `/api/config`.
  *
  * ⚠️ L'API ne renvoie JAMAIS le graphe complet ni la CLÉ du serveur (PIÈGE ④) :
- * seulement des résumés (nom, description, défaut, taille, étiquettes).
+ * seulement des résumés (nom, description, documentation, défaut, taille,
+ * étiquettes).
+ *
+ * ⚠️ La DOCUMENTATION (`PUT /api/images/workflows/<nom>`) est un texte POUR YUKI :
+ * il décrit comment écrire la scène pour ce workflow. Elle est BORNÉE
+ * (`MAX_COMFY_DOCUMENTATION_CHARS`) et REFUSÉE au-delà (`invalid_documentation`,
+ * avec la longueur réelle) — jamais entrée dans le graphe, jamais renvoyée à
+ * ComfyUI, jamais injectée dans le prompt système.
  *
  * ⚠️ Le service `/images/…` suit le patron de `/captures/` : identifiant
  * aléatoire de 32 hexadécimaux, extension sur allowlist, en-têtes de sécurité.
@@ -248,11 +256,15 @@ export function handleImagesApiRequest(input: {
         });
       }
       try {
-        // ⚠️ Le store VALIDE tout (nom, description, graphe) AVANT d'écrire :
-        // `name`/`description` sont relus en tant qu'inconnus, jamais convertis ici.
+        // ⚠️ Le store VALIDE tout (nom, description, documentation, graphe) AVANT
+        // d'écrire : `name`/`description` sont relus en tant qu'inconnus, jamais
+        // convertis ici.
         const summary = deps.workflows.importWorkflow({
           name: body.name as string,
           description: body.description as string,
+          ...(body.documentation !== undefined
+            ? { documentation: body.documentation as string }
+            : {}),
           workflow: body.workflow,
           ...(body.isDefault === true ? { isDefault: true } : {}),
         });
@@ -294,9 +306,41 @@ export function handleImagesApiRequest(input: {
       }
       return json(200, { ok: true, name, isDefault: true });
     }
-    if (method !== "DELETE") return json(405, { error: "method_not_allowed", method });
+    if (method !== "DELETE" && method !== "PUT") {
+      return json(405, { error: "method_not_allowed", method });
+    }
     const guard = requireWriteGuards(input.headers);
     if (guard) return guard;
+    if (method === "PUT") {
+      // ⚠️ CONSIGNES D'ÉCRITURE du workflow : un texte libre, BORNÉ. Un corps sans
+      // `documentation` est refusé (jamais un effacement accidentel) ; `""`
+      // efface les consignes, explicitement.
+      const body = parseBody(input.body);
+      if (body === null || !("documentation" in body)) {
+        return json(400, {
+          error: "invalid_body",
+          message: 'Corps JSON invalide : attendu { "documentation": "…" }.',
+        });
+      }
+      try {
+        const summary = deps.workflows.setDocumentation(name, body.documentation);
+        if (!summary) {
+          return json(404, {
+            error: "not_found",
+            message: `Aucun workflow nommé « ${name} ».`,
+          });
+        }
+        deps.logger?.info("comfy.workflow.documentation", {
+          name: summary.name,
+          chars: summary.documentation.length,
+          cleared: summary.documentation === "",
+        });
+        return json(200, { ok: true, workflow: summary });
+      } catch (error) {
+        if (error instanceof ComfyWorkflowError) return importRefusal(error);
+        throw error;
+      }
+    }
     if (!deps.workflows.remove(name)) {
       return json(404, { error: "not_found", message: `Aucun workflow nommé « ${name} ».` });
     }
