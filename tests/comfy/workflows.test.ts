@@ -279,7 +279,7 @@ describe("documentation d'écriture par workflow", () => {
     // Un workflow NEUF n'a aucune consigne : il reste utilisable tel quel.
     expect(store.get("manga")?.documentation).toBe("");
 
-    const summary = store.setDocumentation("manga", `  ${DOC}  `);
+    const summary = store.updateMetadata("manga", { documentation: `  ${DOC}  ` });
     expect(summary?.documentation).toBe(DOC);
     // Persistée DANS le fichier des workflows (pas un nouveau fichier).
     const onDisk = JSON.parse(readFileSync(path, "utf8")) as {
@@ -289,7 +289,7 @@ describe("documentation d'écriture par workflow", () => {
     expect(new ComfyWorkflowStore({ path }).get("manga")?.documentation).toBe(DOC);
 
     // Effacer est EXPLICITE (""), jamais implicite.
-    expect(store.setDocumentation("manga", "")?.documentation).toBe("");
+    expect(store.updateMetadata("manga", { documentation: "" })?.documentation).toBe("");
     expect(new ComfyWorkflowStore({ path }).get("manga")?.documentation).toBe("");
   });
 
@@ -321,9 +321,9 @@ describe("documentation d'écriture par workflow", () => {
         workflow: workflow(),
       }),
     ).toThrow(/8001 caractères/);
-    expect(() => store.setDocumentation("manga", "a".repeat(8_001))).toThrow(/limite est de 8000/);
+    expect(() => store.updateMetadata("manga", { documentation: "a".repeat(8_001) })).toThrow(/limite est de 8000/);
     // Un contenu non textuel est refusé aussi.
-    expect(() => store.setDocumentation("manga", 42)).toThrow(/texte/);
+    expect(() => store.updateMetadata("manga", { documentation: 42 })).toThrow(/texte/);
     // Le workflow, lui, est INTACT et sans consignes.
     expect(store.get("manga")?.documentation).toBe("");
     expect(store.size).toBe(1);
@@ -366,13 +366,79 @@ describe("documentation d'écriture par workflow", () => {
       path: join(tempDir("yuki-comfy-doc-8k-"), "w.json"),
     });
     store.importWorkflow({ name: "manga", description: "manga", workflow: workflow() });
-    const accepted = store.setDocumentation("manga", "a".repeat(7_500));
+    const accepted = store.updateMetadata("manga", { documentation: "a".repeat(7_500) });
     expect(accepted?.documentation.length).toBe(7_500);
-    expect(() => store.setDocumentation("manga", "a".repeat(8_100))).toThrow(
+    expect(() => store.updateMetadata("manga", { documentation: "a".repeat(8_100) })).toThrow(
       /8100 caractères[\s\S]*limite est de 8000/,
     );
     // Le contenu accepté reste INTACT (un refus n'écrit rien à moitié).
     expect(store.get("manga")?.documentation.length).toBe(7_500);
+  });
+});
+
+describe("édition des métadonnées d'un workflow (description + consignes)", () => {
+  function storeWithManga(): ComfyWorkflowStore {
+    const store = new ComfyWorkflowStore({
+      path: join(tempDir("yuki-comfy-meta-"), "w.json"),
+    });
+    store.importWorkflow({
+      name: "manga",
+      description: "Manga / anime",
+      documentation: "Consignes d'origine",
+      workflow: workflow(),
+    });
+    return store;
+  }
+
+  it("enregistre la DESCRIPTION COURTE (elle sert au choix par proximité) et se relit", () => {
+    const store = storeWithManga();
+    const summary = store.updateMetadata("manga", {
+      description: "  Manga / anime — traits marqués,  trames  ",
+    });
+    // Normalisée (espaces compactés) comme à l'import.
+    expect(summary?.description).toBe("Manga / anime — traits marqués, trames");
+    // ⚠️ `candidates()` PORTE la description (c'est elle qui sert au choix).
+    expect(store.candidates()[0]?.description).toBe("Manga / anime — traits marqués, trames");
+    // Les consignes ne sont pas touchées par une édition de description seule.
+    expect(store.get("manga")?.documentation).toBe("Consignes d'origine");
+    // Le graphe non plus.
+    expect(store.get("manga")?.workflow["6"]).toBeDefined();
+  });
+
+  it("édite description ET consignes en UNE écriture cohérente", () => {
+    const store = storeWithManga();
+    const summary = store.updateMetadata("manga", {
+      description: "Infographie",
+      documentation: "Nouvelle consigne",
+    });
+    expect(summary?.description).toBe("Infographie");
+    expect(summary?.documentation).toBe("Nouvelle consigne");
+  });
+
+  it("une valeur REFUSÉE n'écrit RIEN (pas de description à moitié enregistrée)", () => {
+    const store = storeWithManga();
+    expect(() =>
+      store.updateMetadata("manga", {
+        description: "Description valide",
+        documentation: "a".repeat(MAX_COMFY_DOCUMENTATION_CHARS + 100),
+      }),
+    ).toThrow(/8100 caractères/);
+    // Ni l'un ni l'autre n'a bougé.
+    expect(store.get("manga")?.description).toBe("Manga / anime");
+    expect(store.get("manga")?.documentation).toBe("Consignes d'origine");
+    // Une description VIDE est refusée de la même façon (elle est obligatoire).
+    expect(() => store.updateMetadata("manga", { description: "   " })).toThrow(/OBLIGATOIRE/);
+    expect(store.get("manga")?.description).toBe("Manga / anime");
+  });
+
+  it("ne trouve pas un workflow inconnu et ne change JAMAIS le nom (le nom est la clé)", () => {
+    const store = storeWithManga();
+    expect(store.updateMetadata("inconnu", { description: "x" })).toBeNull();
+    // ⚠️ Le port n'expose AUCUN renommage : la clé reste le nom d'usage (elle
+    // est utilisée par `PUT /workflows/<nom>`, `consulter_workflow` et
+    // `generer_image`).
+    store.updateMetadata("manga", { description: "Manga renommé ?" });
+    expect(store.list().map((entry) => entry.name)).toEqual(["manga"]);
   });
 });
 

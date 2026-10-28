@@ -362,7 +362,7 @@ describe("borne de la documentation", () => {
 
   it("REFUSE au-delà de la borne à l'enregistrement (aucune troncature silencieuse)", () => {
     const { store } = harness();
-    expect(() => store.setDocumentation("manga", "a".repeat(MAX_COMFY_DOCUMENTATION_CHARS + 1))).toThrow(
+    expect(() => store.updateMetadata("manga", { documentation: "a".repeat(MAX_COMFY_DOCUMENTATION_CHARS + 1) })).toThrow(
       /la limite est de 8000/,
     );
     // La documentation existante est INTACTE (rien n'a été écrit à moitié).
@@ -377,7 +377,7 @@ describe("borne de la documentation", () => {
     expect(result.details.documentation_chars).toBe(7_500);
     expect(String(result.text)).toContain(long);
     const tooLong = harness();
-    expect(() => tooLong.store.setDocumentation("manga", "a".repeat(8_100))).toThrow(/8000/);
+    expect(() => tooLong.store.updateMetadata("manga", { documentation: "a".repeat(8_100) })).toThrow(/8000/);
   });
 
   it("le bloc rendu est borné par la même valeur que le store", () => {

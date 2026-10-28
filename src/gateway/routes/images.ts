@@ -3,7 +3,8 @@
  *
  *  - `GET    /api/images/workflows`              liste des workflows (résumés).
  *  - `POST   /api/images/workflows`              IMPORT d'un workflow (JSON API).
- *  - `PUT    /api/images/workflows/<nom>`        CONSIGNES D'ÉCRITURE (`documentation`).
+ *  - `PUT    /api/images/workflows/<nom>`        MÉTADONNÉES ÉDITABLES
+ *                                                (`description`, `documentation`).
  *  - `DELETE /api/images/workflows/<nom>`        suppression.
  *  - `POST   /api/images/workflows/<nom>/defaut` marque « par défaut ».
  *  - `POST   /api/images/test`                   bouton « Tester la connexion ».
@@ -18,11 +19,13 @@
  * seulement des résumés (nom, description, documentation, défaut, taille,
  * étiquettes).
  *
- * ⚠️ La DOCUMENTATION (`PUT /api/images/workflows/<nom>`) est un texte POUR YUKI :
- * il décrit comment écrire la scène pour ce workflow. Elle est BORNÉE
- * (`MAX_COMFY_DOCUMENTATION_CHARS`) et REFUSÉE au-delà (`invalid_documentation`,
- * avec la longueur réelle) — jamais entrée dans le graphe, jamais renvoyée à
- * ComfyUI, jamais injectée dans le prompt système.
+ * ⚠️ Les MÉTADONNÉES ÉDITABLES (`PUT /api/images/workflows/<nom>`) sont la
+ * DESCRIPTION COURTE (`description`, elle sert au choix par proximité) et les
+ * CONSIGNES D'ÉCRITURE (`documentation`) : un texte POUR YUKI qui décrit comment
+ * écrire la scène pour ce workflow. Ce texte est BORNÉ
+ * (`MAX_COMFY_DOCUMENTATION_CHARS`) et REFUSÉ au-delà (`invalid_documentation`,
+ * avec la longueur réelle) — jamais entré dans le graphe, jamais renvoyé à
+ * ComfyUI, jamais injecté dans le prompt système.
  *
  * ⚠️ Le service `/images/…` suit le patron de `/captures/` : identifiant
  * aléatoire de 32 hexadécimaux, extension sur allowlist, en-têtes de sécurité.
@@ -312,28 +315,38 @@ export function handleImagesApiRequest(input: {
     const guard = requireWriteGuards(input.headers);
     if (guard) return guard;
     if (method === "PUT") {
-      // ⚠️ CONSIGNES D'ÉCRITURE du workflow : un texte libre, BORNÉ. Un corps sans
-      // `documentation` est refusé (jamais un effacement accidentel) ; `""`
-      // efface les consignes, explicitement.
+      // ⚠️ MÉTADONNÉES du workflow : `documentation` (consignes d'écriture pour
+      // Yuki) et/ou `description` (description courte, sert au choix par
+      // proximité). Un corps qui ne porte AUCUNE de ces deux clés est refusé
+      // (jamais un effacement accidentel) ; `""` efface, explicitement.
       const body = parseBody(input.body);
-      if (body === null || !("documentation" in body)) {
+      const hasDocumentation = body !== null && "documentation" in body;
+      const hasDescription = body !== null && "description" in body;
+      if (body === null || (!hasDocumentation && !hasDescription)) {
         return json(400, {
           error: "invalid_body",
-          message: 'Corps JSON invalide : attendu { "documentation": "…" }.',
+          message:
+            'Corps JSON invalide : attendu { "documentation": "…" } et/ou ' +
+            '{ "description": "…" }.',
         });
       }
       try {
-        const summary = deps.workflows.setDocumentation(name, body.documentation);
+        // ⚠️ Le store VALIDE les deux valeurs avant d'écrire : un refus ne
+        // laisse jamais une métadonnée enregistrée à moitié.
+        const summary = deps.workflows.updateMetadata(name, {
+          ...(hasDescription ? { description: body.description } : {}),
+          ...(hasDocumentation ? { documentation: body.documentation } : {}),
+        });
         if (!summary) {
           return json(404, {
             error: "not_found",
             message: `Aucun workflow nommé « ${name} ».`,
           });
         }
-        deps.logger?.info("comfy.workflow.documentation", {
+        deps.logger?.info("comfy.workflow.updated", {
           name: summary.name,
           chars: summary.documentation.length,
-          cleared: summary.documentation === "",
+          descriptionChars: summary.description.length,
         });
         return json(200, { ok: true, workflow: summary });
       } catch (error) {

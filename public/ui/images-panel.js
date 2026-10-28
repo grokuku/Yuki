@@ -1,18 +1,22 @@
 /**
  * Panneau « Images générées » de la page `/config` — serveur ComfyUI.
  *
- * Trois zones :
- *   ① ÉTAT du serveur (URL + clé + bouton « Tester la connexion ») : rendues par
- *     la mécanique de configuration commune (`#group-images`) ;
+ * ⚠️ MONTÉ DANS L'ONGLET « IMAGES » (onglet PROPRE, `#panel-images`), et non plus
+ * en bas de l'onglet « Système » où il était introuvable.
+ *
+ * Deux zones (dans cet onglet) :
+ *   ① ÉTAT du serveur et RÉGLAGES (URL + clé + « Tester la connexion » + largeur
+ *     + hauteur + délai) : rendus par la mécanique de configuration commune
+ *     (`#group-images`, voir `config.js`) ;
  *   ② WORKFLOWS importés : nom d'usage, description courte, « par défaut »,
- *     CONSIGNES D'ÉCRITURE (documentation), étiquettes trouvées / manquantes,
- *     suppression ;
- *   ③ IMPORT d'un workflow au FORMAT API (collage ou fichier `.json`).
+ *     consignes d'écriture (documentation), étiquettes trouvées / manquantes,
+ *     bouton « Éditer » TOUJOURS VISIBLE, suppression ; puis l'IMPORT d'un
+ *     workflow au FORMAT API (collage ou fichier `.json`).
  *
  * Routes utilisées (aucune dépendance nouvelle, `HolafFetch` de la brique) :
  *   GET    /api/images/workflows            → { workflows: [...] }
  *   POST   /api/images/workflows            → import (refus explicite sinon)
- *   PUT    /api/images/workflows/<nom>      → consignes d'écriture (documentation)
+ *   PUT    /api/images/workflows/<nom>      → description + consignes d'écriture
  *   DELETE /api/images/workflows/<nom>      → suppression
  *   POST   /api/images/workflows/<nom>/defaut → « par défaut »
  *
@@ -22,6 +26,10 @@
  * l'outil `consulter_workflow`. Elle est BORNÉE (`MAX_DOCUMENTATION_CHARS`) et
  * un texte trop long est REFUSÉ par le serveur (message explicite, aucune
  * troncature silencieuse).
+ *
+ * ⚠️ Le NOM d'usage n'est PAS modifiable : il est la CLÉ du workflow
+ * (`PUT /api/images/workflows/<nom>`, désigné par `consulter_workflow` et
+ * `generer_image`). L'éditeur le DIT et donne la marche à suivre.
  *
  * ⚠️ L'import est VALIDÉ CÔTÉ SERVEUR : un JSON invalide ou sans étiquette
  * `YUKI_PROMPT` est REFUSÉ, et le panneau affiche les étiquettes TROUVÉES et
@@ -56,6 +64,13 @@ const JSON_HEADERS = { accept: "application/json" };
  * l'enregistrement est REFUSÉ avec la longueur réelle — jamais tronqué.
  */
 const MAX_DOCUMENTATION_CHARS = 8_000;
+
+/**
+ * Longueur maximale de la DESCRIPTION COURTE d'un workflow (caractères).
+ * ⚠️ MÊME borne que le serveur (`MAX_COMFY_DESCRIPTION_CHARS`) : elle est
+ * OBLIGATOIRE (c'est elle qui permet de choisir le workflow par proximité).
+ */
+const MAX_DESCRIPTION_CHARS = 200;
 
 /** Les sept étiquettes reconnues, dans l'ordre d'affichage (contrat serveur). */
 const LABELS = [
@@ -285,74 +300,90 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
   }
 
   /**
-   * Enregistre les CONSIGNES D'ÉCRITURE d'un workflow (texte pour Yuki).
-   * ⚠️ Un texte trop long est REFUSÉ par le serveur : on affiche la longueur
-   * réelle reçue en retour, jamais une troncature silencieuse.
-   */
-  async function saveDocumentation(name, value, statusEl, button) {
-    const documentation = value.trim();
-    if (documentation.length > MAX_DOCUMENTATION_CHARS) {
-      statusEl.textContent =
-        `Trop long : ${documentation.length} caractères, maximum ` +
-        `${MAX_DOCUMENTATION_CHARS}. Raccourcis les consignes puis réessaie.`;
-      return;
-    }
-    button.disabled = true;
-    statusEl.textContent = "Enregistrement…";
-    try {
-      await HolafFetch.put(`/api/images/workflows/${encodeURIComponent(name)}`, {
-        headers: WRITE_HEADERS,
-        body: { documentation },
-      });
-      statusEl.textContent =
-        documentation === ""
-          ? `« ${name} » n'a plus de consignes particulières.`
-          : `Consignes de « ${name} » enregistrées (${documentation.length} caractères).`;
-      await load();
-    } catch (error) {
-      statusEl.textContent = apiMessage(error, "L'enregistrement a échoué.");
-    } finally {
-      button.disabled = false;
-    }
-  }
-
-  /**
-   * ÉDITEUR des consignes d'écriture d'un workflow : zone de texte + compteur
-   * de caractères + borne DITE + bouton d'enregistrement.
+   * ÉDITEUR D'UN WORKFLOW (modale `HolafModal`).
    *
-   * ⚠️ Le serveur est la seule autorité (refus au-delà de la borne) : ce
-   * compteur ne fait qu'éviter l'aller-retour inutile.
+   * ⚠️ POURQUOI UNE MODALE (et pas un formulaire en place dans la carte) : la
+   * zone des consignes vivait DANS chaque carte, tout en bas du dernier onglet —
+   * c'est ce qui la rendait introuvable. La modale met les quatre champs au même
+   * endroit, VISIBLES sans dépliage, avec le compteur `x / 8000`, et elle est
+   * utilisable au doigt (HolafModal occupe l'écran sur téléphone). La carte reste
+   * compacte : la liste des workflows se lit d'un coup d'œil.
+   *
+   * ⚠️ Le NOM d'usage est affiché mais NON modifiable : il est la CLÉ du
+   * workflow (`PUT /api/images/workflows/<nom>`, désigné par `consulter_workflow`
+   * et `generer_image`). Le renommer casserait ces références.
    */
-  function documentationEditor(summary) {
+  function openEditor(summary) {
+    const name = summary.name;
     const current = typeof summary.documentation === "string" ? summary.documentation : "";
-    const statusEl = h("span", { class: "config-save-status", role: "status" });
+
+    const descriptionInput = h("input", {
+      class: "config-input",
+      type: "text",
+      maxlength: String(MAX_DESCRIPTION_CHARS),
+      "aria-label": `Description courte du workflow ${name}`,
+    });
+    descriptionInput.id = "image-edit-description";
+    descriptionInput.value =
+      typeof summary.description === "string" ? summary.description : "";
+
+    const defaultInput = h("input", { type: "checkbox" });
+    defaultInput.id = "image-edit-default";
+    defaultInput.checked = summary.isDefault === true;
+    // ⚠️ On ne peut pas RETIRER le défaut à un workflow : un défaut existe
+    // toujours (c'est le repli du choix par proximité). On le DIT au lieu de
+    // laisser une case qui ne ferait rien.
+    defaultInput.disabled = summary.isDefault === true;
+
     const counter = h("span", {
       class: "config-helper",
-      text: `${current.length}/${MAX_DOCUMENTATION_CHARS}`,
+      text: `${current.length} / ${MAX_DOCUMENTATION_CHARS}`,
     });
     const textarea = h("textarea", {
       class: "config-textarea",
-      rows: "10",
+      rows: "12",
       maxlength: String(MAX_DOCUMENTATION_CHARS),
       spellcheck: "true",
       placeholder:
         "Comment écrire la scène pour CE workflow (ex. « commence par le sujet et le " +
         "cadrage, puis le décor ; deux phrases suffisent ; évite les listes »).",
-      "aria-label": `Consignes d'écriture du workflow ${summary.name}`,
+      "aria-label": `Consignes d'écriture du workflow ${name}`,
     });
+    textarea.id = "image-edit-documentation";
     textarea.value = current;
     textarea.addEventListener("input", () => {
-      counter.textContent = `${textarea.value.length}/${MAX_DOCUMENTATION_CHARS}`;
+      counter.textContent = `${textarea.value.length} / ${MAX_DOCUMENTATION_CHARS}`;
     });
-    const save = h("button", {
-      class: "button button--ghost button--small",
-      type: "button",
-      text: "Enregistrer les consignes",
-    });
-    save.addEventListener("click", () =>
-      void saveDocumentation(summary.name, textarea.value, statusEl, save),
-    );
-    return h("div", { class: "image-workflow__doc" }, [
+
+    const statusEl = h("span", { class: "config-save-status", role: "status" });
+
+    const form = h("form", { class: "image-edit" }, [
+      h("p", { class: "config-label", text: `Nom d'usage : ${name}` }),
+      h("p", {
+        class: "config-helper",
+        text:
+          "Le nom d'usage est la CLÉ du workflow : il n'est pas modifiable ici " +
+          "(il désigne le workflow pour Yuki et dans les routes). Pour le changer : " +
+          "réimportez le workflow sous le nouveau nom, puis supprimez l'ancien.",
+      }),
+      h("label", {
+        class: "config-label",
+        for: "image-edit-description",
+        text: "Description courte (sert au choix par proximité)",
+      }),
+      descriptionInput,
+      h("label", { class: "config-label image-import__default" }, [
+        defaultInput,
+        " Utiliser ce workflow par défaut quand rien ne correspond",
+      ]),
+      summary.isDefault
+        ? h("p", {
+            class: "config-helper",
+            text:
+              "Ce workflow EST le par défaut (case verrouillée) : pour en changer, " +
+              "cliquez sur « Définir par défaut » sur un autre workflow.",
+          })
+        : null,
       h("p", {
         class: "config-label",
         text: "Consignes d'écriture pour Yuki (facultatives)",
@@ -360,23 +391,122 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
       h("p", {
         class: "config-helper",
         text:
-          "Yuki les reçoit quand elle consulte ce workflow (outil « consulter_workflow ») : " +
-          "elles décrivent COMMENT écrire la scène pour que ce workflow rende ce qu'elle " +
-          "veut. Jamais envoyées au serveur d'images, jamais ajoutées au prompt de chaque " +
-          `tour. Maximum ${MAX_DOCUMENTATION_CHARS} caractères (au-delà, l'enregistrement ` +
-          "est refusé).",
+          "Ces consignes décrivent COMMENT ÉCRIRE la scène pour ce workflow. Yuki " +
+          "les consulte avec l'outil « consulter_workflow » avant de générer : elles " +
+          "ne sont jamais envoyées au serveur ComfyUI, et jamais ajoutées au prompt " +
+          `de chaque tour. Maximum ${MAX_DOCUMENTATION_CHARS} caractères (au-delà, ` +
+          "l'enregistrement est refusé : rien n'est tronqué en silence).",
       }),
       textarea,
-      h("div", { class: "config-actions" }, [save, counter, statusEl]),
+      h("div", { class: "config-actions" }, [counter, statusEl]),
     ]);
+
+    let ctrl = null;
+    let saving = false;
+
+    /**
+     * Enregistre les MÉTADONNÉES ÉDITABLES en UNE intention : description courte
+     * (obligatoire), consignes d'écriture, et « par défaut ».
+     *
+     * ⚠️ Un texte trop long est REFUSÉ par le serveur : on affiche la longueur
+     * réelle reçue en retour, jamais une troncature silencieuse.
+     * ⚠️ Le store VALIDE les deux valeurs avant d'écrire (aucun enregistrement
+     * partiel) : un refus ne modifie NI la description NI les consignes.
+     */
+    async function save() {
+      if (saving) return;
+      const description = descriptionInput.value.trim();
+      const documentation = textarea.value.trim();
+      if (description === "") {
+        statusEl.textContent =
+          "La description courte est OBLIGATOIRE : c'est elle qui permet de " +
+          "choisir ce workflow par proximité.";
+        descriptionInput.focus();
+        return;
+      }
+      if (documentation.length > MAX_DOCUMENTATION_CHARS) {
+        statusEl.textContent =
+          `Trop long : ${documentation.length} caractères, maximum ` +
+          `${MAX_DOCUMENTATION_CHARS}. Raccourcis les consignes puis réessaie.`;
+        textarea.focus();
+        return;
+      }
+      saving = true;
+      if (ctrl) ctrl.setBusy(true, "Enregistrement…");
+      statusEl.textContent = "Enregistrement…";
+      try {
+        await HolafFetch.put(`/api/images/workflows/${encodeURIComponent(name)}`, {
+          headers: WRITE_HEADERS,
+          body: { description, documentation },
+        });
+        // ⚠️ « par défaut » passe par SA route (une seule autorité : le store) ;
+        // on ne la déclenche que si la case vient d'être cochée.
+        if (defaultInput.checked && summary.isDefault !== true) {
+          await HolafFetch.post(`/api/images/workflows/${encodeURIComponent(name)}/defaut`, {
+            headers: WRITE_HEADERS,
+          });
+        }
+        statusEl.textContent =
+          documentation === ""
+            ? `« ${name} » enregistré (aucune consigne particulière).`
+            : `« ${name} » enregistré (${documentation.length} caractères de consignes).`;
+        await load();
+        if (ctrl) {
+          ctrl.setBusy(false);
+          ctrl.close("saved");
+        }
+      } catch (error) {
+        statusEl.textContent = apiMessage(error, "L'enregistrement a échoué.");
+      } finally {
+        saving = false;
+        if (ctrl) ctrl.setBusy(false);
+      }
+    }
+
+    // Entrée dans un champ soumet le formulaire (comportement natif ATTENDU)
+    // sans jamais recharger la page.
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void save();
+    });
+
+    ctrl = HolafModal.open({
+      id: "image-workflow-edit",
+      title: `Éditer le workflow « ${name} »`,
+      size: "lg",
+      content: form,
+      closeOnOverlay: false,
+      buttons: [
+        { text: "Annuler", type: "cancel", value: null },
+        {
+          text: "Enregistrer",
+          type: "primary",
+          close: false,
+          onClick: () => {
+            void save();
+          },
+        },
+      ],
+    });
+    textarea.focus();
   }
 
   function buildCard(summary) {
+    // ⚠️ « Éditer » est un bouton PLEIN (pas `button--small`, pas d'apparition au
+    // survol) : il est TOUJOURS visible et utilisable au doigt.
+    const edit = h("button", {
+      class: "button image-workflow__edit",
+      type: "button",
+      text: "Éditer",
+    });
+    edit.setAttribute("aria-label", `Éditer le workflow ${summary.name}`);
+    edit.addEventListener("click", () => openEditor(summary));
     const head = h("div", { class: "image-workflow__head" }, [
       h("span", { class: "image-workflow__name", text: summary.name }),
       summary.isDefault
         ? h("span", { class: "badge badge--hot", text: "par défaut" })
         : h("span", { class: "badge", text: "secondaire" }),
+      edit,
     ]);
     const found = Array.isArray(summary.found) ? summary.found : [];
     // ⚠️ Sans `YUKI_OUTPUT`, on le DIT ici : l'image retenue peut être un aperçu.
@@ -405,7 +535,20 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
             "texte (« Preview as Text », « Show Text », AIHToText…).",
         })
       : null;
-    const actions = h("div", { class: "image-workflow__actions" });    if (!summary.isDefault) {
+    // ⚠️ Les CONSIGNES D'ÉCRITURE sont résumées ICI et éditées dans la modale
+    // « Éditer » : la carte reste lisible et les consignes restent trouvables.
+    const docChars =
+      typeof summary.documentation === "string" ? summary.documentation.length : 0;
+    const docNote = h("p", {
+      class: "config-helper image-workflow__doc-summary",
+      text:
+        docChars === 0
+          ? "Consignes d'écriture : AUCUNE — cliquez sur « Éditer » pour en ajouter."
+          : `Consignes d'écriture : ${docChars} caractère(s) — cliquez sur « Éditer » ` +
+            "pour les lire ou les modifier.",
+    });
+    const actions = h("div", { class: "image-workflow__actions" });
+    if (!summary.isDefault) {
       const primary = h("button", {
         class: "button button--ghost button--small",
         type: "button",
@@ -432,22 +575,47 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
       labelList(summary),
       outputNote,
       finalPromptNote,
-      documentationEditor(summary),
+      docNote,
       actions,
+    ]);
+  }
+
+  /**
+   * ÉTAT VIDE explicite : on DIT qu'il n'y a aucun workflow et on donne le
+   * bouton qui mène directement au formulaire d'import (qui est plus bas dans
+   * l'onglet).
+   */
+  function emptyState() {
+    const importButton = h("button", {
+      class: "button",
+      type: "button",
+      text: "Importer un workflow",
+    });
+    importButton.addEventListener("click", () => {
+      // Le formulaire d'import est plus bas dans le même onglet : on y va et on
+      // place le curseur sur le premier champ (aucun style en ligne).
+      nameInput.scrollIntoView({ block: "center" });
+      nameInput.focus();
+    });
+    return h("div", { class: "image-empty" }, [
+      h("p", {
+        class: "image-empty__title",
+        text: "Aucun workflow importé — importez-en un pour commencer.",
+      }),
+      h("p", {
+        class: "config-helper",
+        text:
+          "Tant qu'il n'y en a pas, l'outil de génération d'image refuse " +
+          "explicitement de générer.",
+      }),
+      importButton,
     ]);
   }
 
   function renderList() {
     listEl.textContent = "";
     if (state.workflows.length === 0) {
-      listEl.append(
-        h("p", {
-          class: "config-helper",
-          text:
-            "Aucun workflow importé. Tant qu'il n'y en a pas, l'outil de " +
-            "génération d'image refuse explicitement de générer.",
-        }),
-      );
+      listEl.append(emptyState());
       return;
     }
     for (const summary of state.workflows) listEl.append(buildCard(summary));
@@ -479,6 +647,14 @@ export function initImagesPanel({ root, HolafFetch, HolafModal }) {
           "Un workflow par type d'image (manga, réaliste, infographie…). Yuki " +
           "choisit le PLUS PROCHE de la demande à partir du nom d'usage et de la " +
           "description courte ; le style n'est jamais recopié dans le prompt.",
+      }),
+      h("p", {
+        class: "config-helper",
+        text:
+          "« Éditer » ouvre la description courte, le « par défaut » et les " +
+          "CONSIGNES D'ÉCRITURE (comment écrire la scène pour ce workflow) : " +
+          "c'est là que se règlent les consignes que Yuki lit avec l'outil " +
+          "« consulter_workflow ».",
       }),
       errorEl,
       listEl,

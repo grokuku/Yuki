@@ -120,7 +120,7 @@ function harness(options: {
     importWorkflow: () => {
       throw new Error("non utilisé");
     },
-    setDocumentation: () => null,
+    updateMetadata: () => null,
     remove: () => false,
     setDefault: () => false,
   };

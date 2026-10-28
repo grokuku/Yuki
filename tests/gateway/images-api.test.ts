@@ -345,6 +345,48 @@ describe("consignes d'écriture (documentation) d'un workflow", () => {
     });
     expect(missing.status).toBe(404);
   });
+
+  it("édite aussi la DESCRIPTION COURTE (celle qui sert au choix par proximité)", async () => {
+    const { call, workflows } = await withManga();
+    const saved = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      body: { description: "Manga / anime — traits marqués, trames" },
+    });
+    expect(saved.status).toBe(200);
+    expect(workflows.get("manga")?.description).toBe("Manga / anime — traits marqués, trames");
+    // ⚠️ La description MODIFIÉE est bien celle que le choix par proximité voit.
+    expect(workflows.candidates()[0]?.description).toContain("traits marqués");
+    // Les consignes et le graphe sont INTACTS.
+    expect(workflows.get("manga")?.documentation).toBe("");
+    expect(workflows.get("manga")?.workflow["6"]).toBeDefined();
+  });
+
+  it("édite description ET consignes en un seul appel", async () => {
+    const { call, workflows } = await withManga();
+    const saved = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      body: { description: "Infographie", documentation: DOC },
+    });
+    expect(saved.status).toBe(200);
+    expect(workflows.get("manga")?.description).toBe("Infographie");
+    expect(workflows.get("manga")?.documentation).toBe(DOC);
+  });
+
+  it("REFUSE une description vide et n'écrit RIEN (aucun enregistrement partiel)", async () => {
+    const { call, workflows } = await withManga();
+    const refused = await call({
+      method: "PUT",
+      path: `${IMAGES_API_PREFIX}/workflows/manga`,
+      body: { description: "   ", documentation: DOC },
+    });
+    expect(refused.status).toBe(400);
+    expect((refused.body as { code: string }).code).toBe("invalid_description");
+    // ⚠️ Ni la description ni les consignes n'ont bougé.
+    expect(workflows.get("manga")?.description).toBe("Manga / anime");
+    expect(workflows.get("manga")?.documentation).toBe("");
+  });
 });
 
 describe("test de connexion", () => {

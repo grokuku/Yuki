@@ -145,10 +145,21 @@ export interface ComfyWorkflowsPort {
     isDefault?: boolean;
   }): ComfyWorkflowSummary;
   /**
-   * Enregistre (ou efface, avec `""`) les CONSIGNES D'ÉCRITURE d'un workflow.
-   * Renvoie le résumé à jour, ou `null` si le workflow n'existe pas.
+   * Enregistre les MÉTADONNÉES éditables d'un workflow : la DESCRIPTION COURTE
+   * (`description`, elle sert au choix par proximité) et/ou les CONSIGNES
+   * D'ÉCRITURE (`documentation`, texte POUR YUKI ; `""` efface).
+   *
+   * ⚠️ Les deux valeurs sont VALIDÉES AVANT la moindre écriture : un refus ne
+   * laisse JAMAIS un enregistrement partiel. Renvoie le résumé à jour, ou
+   * `null` si le workflow n'existe pas.
+   *
+   * ⚠️ Le NOM n'est pas modifiable : il sert de CLÉ (`PUT /workflows/<nom>`,
+   * `consulter_workflow`, `generer_image`).
    */
-  setDocumentation(name: string, documentation: unknown): ComfyWorkflowSummary | null;
+  updateMetadata(
+    name: string,
+    patch: { description?: unknown; documentation?: unknown },
+  ): ComfyWorkflowSummary | null;
   remove(name: string): boolean;
   setDefault(name: string): boolean;
 }
@@ -597,12 +608,19 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
   }
 
   /**
-   * Enregistre (ou EFFACE, avec `""`) les consignes d'écriture d'un workflow.
+   * Enregistre la DESCRIPTION COURTE et/ou les CONSIGNES D'ÉCRITURE d'un
+   * workflow.
    *
-   * ⚠️ Refus EXPLICITE au-delà de la borne (`invalid_documentation`) ; le
-   * workflow lui-même n'est jamais remplacé : seule la documentation change.
+   * ⚠️ VALIDATION D'ABORD, ÉCRITURE ENSUITE : les deux valeurs sont normalisées
+   * (donc validées) AVANT de toucher l'entrée. Un refus (`invalid_documentation`,
+   * `invalid_description`) laisse le workflow EXACTEMENT dans son état d'avant —
+   * jamais de description enregistrée à moitié.
+   * ⚠️ Le graphe lui-même n'est jamais remplacé : seules les métadonnées changent.
    */
-  setDocumentation(name: string, documentation: unknown): ComfyWorkflowSummary | null {
+  updateMetadata(
+    name: string,
+    patch: { description?: unknown; documentation?: unknown },
+  ): ComfyWorkflowSummary | null {
     let key: string;
     try {
       key = normalizeWorkflowName(name);
@@ -611,13 +629,28 @@ export class ComfyWorkflowStore implements ComfyWorkflowsPort {
     }
     const entry = this.entries.get(key);
     if (!entry) return null;
-    const next = normalizeWorkflowDocumentation(documentation);
-    entry.documentation = next;
-    this.persist();
-    this.logger?.info("comfy.workflow.documentation", {
+    const source = patch ?? {};
+    const hasDescription = Object.prototype.hasOwnProperty.call(source, "description");
+    const hasDocumentation = Object.prototype.hasOwnProperty.call(source, "documentation");
+    // ① Validation (aucune écriture tant que les deux ne sont pas validées).
+    const nextDescription = hasDescription
+      ? normalizeWorkflowDescription(source.description)
+      : entry.description;
+    const nextDocumentation = hasDocumentation
+      ? normalizeWorkflowDocumentation(source.documentation)
+      : entry.documentation;
+    // ② Écriture (une seule persistance, et seulement si quelque chose change).
+    const changed =
+      nextDescription !== entry.description || nextDocumentation !== entry.documentation;
+    entry.description = nextDescription;
+    entry.documentation = nextDocumentation;
+    if (changed) this.persist();
+    this.logger?.info("comfy.workflow.metadata", {
       name: key,
-      chars: next.length,
-      cleared: next === "",
+      chars: nextDocumentation.length,
+      cleared: nextDocumentation === "",
+      descriptionChars: nextDescription.length,
+      changed,
     });
     const { workflow: _workflow, labels: _labels, ...summary } = entry;
     return { ...summary };

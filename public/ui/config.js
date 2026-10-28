@@ -563,7 +563,7 @@ const GROUPS = [
   },
   {
     id: "images",
-    title: "Serveur d'images (ComfyUI)",
+    title: "Serveur et réglages d'images (ComfyUI)",
     // Bouton « Tester la connexion » dédié (route `POST /api/images/test`) : il
     // interroge `GET /system_stats` avec l'URL et la clé SAISIES, sans rien
     // enregistrer.
@@ -611,7 +611,8 @@ const GROUPS = [
         kind: "number",
         min: 10000,
         max: 600000,
-        advanced: true,
+        // ⚠️ PAS `advanced` : dans l'onglet « Images », le délai est un réglage
+        // d'image comme les autres — il doit être VISIBLE sans déplier « Avancé ».
         helper:
           "Au-delà, l'attente s'arrête et le message dit de vérifier la file du " +
           "serveur : la conversation n'est jamais bloquée. Défaut 180 000 ms " +
@@ -694,7 +695,7 @@ const FIELD_DEFAULTS = {
 };
 
 /**
- * Onglets de la page (5 sections) et répartition des groupes de champs.
+ * Onglets de la page (9 sections) et répartition des groupes de champs.
  * Le rendu reste EAGER : le contenu de chaque onglet est construit dans le DOM
  * dès le chargement ; l'onglet actif n'est qu'une question de `hidden`.
  */
@@ -703,13 +704,14 @@ const TABS = [
   { id: "conversation", groups: ["delegation", "prompts", "memoire", "fichiers"] },
   { id: "personnalite", groups: [] },
   { id: "voix", groups: ["tts"] },
+  // IMAGES générées (ComfyUI) : onglet PROPRE, nommé « Images ». Le panneau des
+  // workflows n'est plus noyé en bas de « Système » (il y était introuvable).
+  // ⚠️ Les WORKFLOWS ne sont pas des champs de configuration (fichier séparé,
+  // potentiellement volumineux) : le panneau `images-panel.js` les gère.
+  { id: "images", groups: ["images"] },
   { id: "agents", groups: ["agents-acces"] },
   { id: "secrets", groups: [] },
-  // IMAGES générées (ComfyUI) : SECTION de l'onglet Système, sans nouvel onglet
-  // (même convention que le Libraire). Les WORKFLOWS ne sont pas des champs de
-  // configuration (fichier séparé, potentiellement volumineux) : le panneau
-  // `images-panel.js` les gère.
-  { id: "systeme", groups: ["gpu", "transport", "librarian", "notifications", "images"] },
+  { id: "systeme", groups: ["gpu", "transport", "librarian", "notifications"] },
   { id: "maintenance", groups: [] },
 ];
 
@@ -1210,9 +1212,9 @@ function selectTab(tabId, { focus = false, updateHash = false } = {}) {
   if (!TABS.some((tab) => tab.id === tabId)) return;
   activateTab(tabId, { focus });
   // Les workflows d'images peuvent avoir changé hors de cette page : on relit
-  // la liste à chaque affichage de l'onglet Système (lecture seule, aucun effet
+  // la liste à chaque affichage de l'onglet Images (lecture seule, aucun effet
   // de bord).
-  if (tabId === "systeme") void imagesPanel?.refresh?.();
+  if (tabId === "images") void imagesPanel?.refresh?.();
   if (updateHash && location.hash !== `#${tabId}`) {
     history.replaceState(null, "", `#${tabId}`);
   }

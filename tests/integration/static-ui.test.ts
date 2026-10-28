@@ -168,20 +168,21 @@ describe("UI statique servie par le gateway", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
-  it("organise /config en 8 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
+  it("organise /config en 9 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
 
     // Barre d'onglets accessible.
     expect(body).toContain('role="tablist"');
     expect(body).toMatch(/role="tablist"[^>]*aria-label="/);
 
-    // Les 8 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
+    // Les 9 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
     const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
     expect(tabLabels).toEqual([
       "Modèles",
       "Conversation",
       "Personnalité",
       "Voix",
+      "Images",
       "Agents",
       "Secrets",
       "Système",
@@ -193,8 +194,8 @@ describe("UI statique servie par le gateway", () => {
     // (aria-labelledby).
     const tabTags = [...body.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
     const panelTags = [...body.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((m) => m[0]);
-    expect(tabTags.length).toBe(8);
-    expect(panelTags.length).toBe(8);
+    expect(tabTags.length).toBe(9);
+    expect(panelTags.length).toBe(9);
     for (const tag of tabTags) {
       const id = tag.match(/id="([^"]+)"/)?.[1];
       const controls = tag.match(/aria-controls="([^"]+)"/)?.[1];
@@ -211,7 +212,7 @@ describe("UI statique servie par le gateway", () => {
     // Rendu EAGER : les conteneurs de groupes des onglets existent dans le
     // markup (les lignes sont construites côté JS au chargement). Le panneau
     // Agents monte son composant dans `agents-root`.
-    for (const id of ["group-modeles", "group-conversation", "group-voix", "group-systeme", "agents-root", "personality-root", "secrets-root"]) {
+    for (const id of ["group-modeles", "group-conversation", "group-voix", "group-images", "images-root", "group-systeme", "agents-root", "personality-root", "secrets-root"]) {
       expect(body).toContain(`id="${id}"`);
     }
 
@@ -862,24 +863,22 @@ describe("Panneau Personnalité — section « Règles strictes » (éditées pa
     }
   });
 
-  it("le markup /config garde exactement 8 onglets (aucun onglet Règles ajouté)", async () => {
+  it("le markup /config garde exactement 9 onglets (aucun onglet Règles ajouté)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
     expect(body).toContain('id="personality-root"');
     expect(body).not.toMatch(/\sstyle=/);
   });
 });
 
 describe("Libraire de Pi-Web — section /config et test de connexion (sans nouvel onglet)", () => {
-  it("ajoute la section « Libraire » à l'onglet Système existant (8 onglets inchangés)", async () => {
+  it("ajoute la section « Libraire » à l'onglet Système existant (9 onglets inchangés)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     // Groupe de champs dans l'onglet Système (aucun nouvel onglet).
     expect(js).toContain('id: "librarian"');
-    // ⚠️ Le groupe « notifications » (PWA + Web Push) et la section « Images
-    // générées » (serveur ComfyUI) ont rejoint l'onglet Système.
-    expect(js).toContain(
-      'groups: ["gpu", "transport", "librarian", "notifications", "images"]',
-    );
+    // ⚠️ Le groupe « notifications » (PWA + Web Push) a rejoint l'onglet Système ;
+    // la section « Images » (ComfyUI) a désormais son ONGLET PROPRE.
+    expect(js).toContain('groups: ["gpu", "transport", "librarian", "notifications"]');
     for (const path of ["librarian.baseUrl", "librarian.agentToken", "librarian.apiKey"]) {
       expect(js, path).toContain(`path: "${path}"`);
     }
@@ -895,22 +894,39 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     expect(js).not.toContain("innerHTML");
     expect(js).not.toContain(".style.");
     expect(js).not.toContain('setAttribute("style"');
-    // Le markup garde exactement 8 onglets (verrou existant).
+    // Le markup garde exactement 9 onglets (verrou existant).
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
     expect(body).toContain('id="group-systeme"');
   });
 });
 
-describe("Images générées (ComfyUI) — section /config et service same-origin", () => {
-  it("ajoute la section « Images » à l'onglet Système (8 onglets inchangés)", async () => {
+describe("Images générées (ComfyUI) — onglet dédié « Images » et service same-origin", () => {
+  it("a son ONGLET PROPRE (« Images »), avec le serveur ET les workflows dedans", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    // Section dédiée DANS l'onglet Système, sans nouvel onglet.
-    expect(body).toContain('id="group-images"');
-    expect(body).toContain('id="images-root"');
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
+    // ⚠️ Onglet DÉDIÉ : la gestion des images n'est plus noyée en bas de
+    // « Système » (c'était introuvable).
+    expect(body).toContain('id="tab-images"');
+    expect(body).toContain('aria-controls="panel-images"');
+    expect(body).toContain('id="panel-images"');
+    // Le panneau « Système » ne porte PLUS la section Images.
+    const systeme = body.slice(body.indexOf('id="panel-systeme"'), body.indexOf('id="panel-maintenance"'));
+    expect(systeme).not.toContain('id="images-root"');
+    expect(systeme).not.toContain('id="group-images"');
+    // La section (champs serveur + panneau des workflows) vit dans SON onglet.
+    const images = body.slice(body.indexOf('id="panel-images"'), body.indexOf('id="panel-agents"'));
+    expect(images).toContain('id="group-images"');
+    expect(images).toContain('id="images-root"');
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
     // CSP : aucun style inline dans le markup.
     expect(body).not.toMatch(/\sstyle=/);
+  });
+
+  it("le groupe de champs « images » est rattaché à l'onglet « images »", async () => {
+    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    expect(js).toContain('{ id: "images", groups: ["images"] }');
+    // La liste des workflows est relue à CHAQUE affichage de l'onglet.
+    expect(js).toContain('if (tabId === "images")');
   });
 
   it("déclare les champs du serveur et un bouton de test dédié (route ComfyUI)", async () => {
@@ -959,6 +975,19 @@ describe("Images générées (ComfyUI) — section /config et service same-origi
     expect(js, "nœud d'affichage").toContain("AFFICHER");
     // Export API expliqué à l'utilisateur.
     expect(js).toContain("Save (API");
+    // ⚠️ ÉDITION : un bouton « Éditer » par workflow, et la zone des CONSIGNES
+    // D'ÉCRITURE **DANS** le formulaire d'édition (plus noyée dans la carte),
+    // avec son compteur et le texte d'aide qui dit à quoi ça sert.
+    expect(js, "bouton Éditer").toContain('"Éditer"');
+    expect(js, "éditeur en modale").toContain("HolafModal.open");
+    expect(js, "compteur").toContain("/ ${MAX_DOCUMENTATION_CHARS}");
+    expect(js, "aide sur les consignes").toContain("COMMENT ÉCRIRE la scène");
+    expect(js, "consignes jamais envoyées").toContain("jamais envoyées au serveur ComfyUI");
+    // Le NOM est la clé : l'éditeur DIT qu'il n'est pas modifiable.
+    expect(js, "nom = clé").toContain("il n'est pas modifiable ici");
+    // ÉTAT VIDE explicite + bouton d'import.
+    expect(js, "état vide").toContain("Aucun workflow importé — importez-en un pour commencer");
+    expect(js, "bouton d'import de l'état vide").toContain('"Importer un workflow"');
     // CSP stricte : DOM programmatique uniquement.
     expect(js).not.toContain("innerHTML");
     expect(js).not.toContain("style=");

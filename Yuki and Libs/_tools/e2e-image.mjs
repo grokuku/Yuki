@@ -576,10 +576,263 @@ await sleep(500);
 const afterReset = await evaluate(`document.querySelectorAll('.generated-image').length`);
 check("fil reconstruit : plus aucun bloc d'image (l'état vient du serveur)", afterReset === 0, String(afterReset));
 
-/* ═══ 5 ter) Le PANNEAU /config affiche YUKI_OUTPUT (trouvée / absente) ═══ */
+/* ═══ 5 ter) L'ONGLET « IMAGES » de /config : SECTION DÉDIÉE, bouton
+ *            « Éditer », CONSIGNES D'ÉCRITURE éditables et relues après
+ *            rechargement. Mesures : visibilité réelle (opacité, display,
+ *            géométrie), jamais un simple « le nœud existe ». ═══════════════ */
 await navigate(`${server.base}/config`);
-const panelReady = await waitFor(`!!document.querySelector('#images-root .image-workflow')`, 10000);
-check("le panneau des workflows est monté sur /config", panelReady, await evaluate(`JSON.stringify({ root: document.querySelector('#images-root')?.textContent?.slice(0,200) ?? null, cards: document.querySelectorAll('#images-root .image-workflow').length, err: document.querySelector('.config-error')?.textContent ?? null })`));
+const imagesTabFound = await waitFor(`!!document.getElementById('tab-images')`, 10000);
+check(
+  "[/config] l'onglet « Images » existe (onglet DÉDIÉ, plus noyé dans « Système »)",
+  imagesTabFound,
+  await evaluate(
+    `JSON.stringify([...document.querySelectorAll('[role="tab"]')].map((b) => b.textContent.trim()))`,
+  ),
+);
+
+// ① La section est VISIBLE SANS DÉPLIAGE : un clic sur l'onglet, rien d'autre.
+//    Les CHAMPS du serveur (URL, clé, largeur, hauteur, délai) sont dans le
+//    même onglet que les workflows, et le panneau « Système » ne les porte plus.
+const imagesView = await evaluate(`(() => {
+  const tab = document.getElementById('tab-images');
+  if (tab) tab.click();
+  const panel = document.getElementById('panel-images');
+  if (!panel) return null;
+  const group = document.getElementById('group-images');
+  const root = document.getElementById('images-root');
+  const rect = panel.getBoundingClientRect();
+  const labels = group ? [...group.querySelectorAll('.config-row .config-label')].map((el) => el.textContent.trim()) : [];
+  const details = panel.querySelectorAll('details');
+  const closedDetails = [...details].filter((d) => !d.open).length;
+  const card = root ? root.querySelector('.image-workflow') : null;
+  const importForm = root ? root.querySelector('.image-import') : null;
+  // ⚠️ « toute la largeur » = la largeur UTILE du conteneur (contenu du groupe,
+  // padding déduit) : on ne compare pas à un seuil arbitraire.
+  const fills = (el) => {
+    if (!el || !el.parentElement) return false;
+    const ps = getComputedStyle(el.parentElement);
+    const avail =
+      el.parentElement.clientWidth -
+      parseFloat(ps.paddingLeft || '0') -
+      parseFloat(ps.paddingRight || '0');
+    return Math.abs(el.getBoundingClientRect().width - avail) <= 2;
+  };
+  return {
+    hidden: panel.hidden,
+    height: Math.round(rect.height),
+    width: Math.round(rect.width),
+    scrollY: Math.round(window.scrollY),
+    labels,
+    testButton: group ? [...group.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Tester la connexion') : false,
+    workflows: root ? root.querySelectorAll('.image-workflow').length : -1,
+    rootInsidePanel: !!root && !!root.closest('#panel-images'),
+    groupInsidePanel: !!group && !!group.closest('#panel-images'),
+    systemeKeepsImages: !!document.getElementById('panel-systeme')?.querySelector('#group-images, #images-root'),
+    closedDetails,
+    rootWidth: root ? Math.round(root.getBoundingClientRect().width) : 0,
+    cardWidth: card ? Math.round(card.getBoundingClientRect().width) : 0,
+    importWidth: importForm ? Math.round(importForm.getBoundingClientRect().width) : 0,
+    cardFills: fills(card),
+    importFills: fills(importForm),
+  };
+})()`);
+check(
+  "[/config] la section « Images » est VISIBLE dès le clic sur l'onglet (aucun dépliage)",
+  imagesView &&
+    imagesView.hidden === false &&
+    imagesView.height > 200 &&
+    imagesView.width > 600 &&
+    imagesView.closedDetails === 0,
+  JSON.stringify(imagesView && { hidden: imagesView.hidden, height: imagesView.height, width: imagesView.width, closedDetails: imagesView.closedDetails }),
+);
+check(
+  "[/config] l'onglet porte l'URL, la clé, le test, la largeur, la hauteur et le délai",
+  Array.isArray(imagesView?.labels) &&
+    imagesView.labels.some((l) => l.includes("URL du serveur ComfyUI")) &&
+    imagesView.labels.some((l) => l.includes("Clé du serveur")) &&
+    imagesView.labels.some((l) => l.includes("Largeur")) &&
+    imagesView.labels.some((l) => l.includes("Hauteur")) &&
+    imagesView.labels.some((l) => l.includes("Délai")) &&
+    imagesView.testButton === true,
+  JSON.stringify(imagesView?.labels),
+);
+check(
+  "[/config] la section occupe TOUTE LA LARGEUR (carte et formulaire d'import)",
+  imagesView &&
+    imagesView.rootWidth > 600 &&
+    imagesView.cardFills === true &&
+    imagesView.importFills === true,
+  JSON.stringify(imagesView && { rootWidth: imagesView.rootWidth, cardWidth: imagesView.cardWidth, importWidth: imagesView.importWidth, cardFills: imagesView.cardFills, importFills: imagesView.importFills }),
+);
+check(
+  "[/config] les workflows sont dans le MÊME onglet, et plus dans « Système »",
+  imagesView &&
+    imagesView.workflows >= 1 &&
+    imagesView.rootInsidePanel === true &&
+    imagesView.groupInsidePanel === true &&
+    imagesView.systemeKeepsImages === false,
+  JSON.stringify(imagesView && { workflows: imagesView.workflows, rootInsidePanel: imagesView.rootInsidePanel, systemeKeepsImages: imagesView.systemeKeepsImages }),
+);
+
+// ② Le bouton « Éditer » est VISIBLE sans survol (opacité et géométrie MESURÉES).
+const editButton = await evaluate(`(() => {
+  const card = [...document.querySelectorAll('#images-root .image-workflow')]
+    .find((el) => el.textContent.includes('manga'));
+  if (!card) return null;
+  const btn = card.querySelector('.image-workflow__edit');
+  if (!btn) return { missing: true };
+  const cs = getComputedStyle(btn);
+  const rect = btn.getBoundingClientRect();
+  const panel = document.getElementById('panel-images');
+  return {
+    label: btn.textContent.trim(),
+    opacity: cs.opacity,
+    display: cs.display,
+    visibility: cs.visibility,
+    pointerEvents: cs.pointerEvents,
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+    inVisiblePanel: !!panel && panel.hidden === false && panel.contains(btn),
+  };
+})()`);
+check(
+  "[/config] le bouton « Éditer » est VISIBLE sur la carte (opacité 1, hors survol)",
+  editButton &&
+    editButton.label === "Éditer" &&
+    Number(editButton.opacity) === 1 &&
+    editButton.display !== "none" &&
+    editButton.visibility === "visible" &&
+    editButton.pointerEvents !== "none" &&
+    editButton.width > 50 &&
+    editButton.height >= 32 &&
+    editButton.inVisiblePanel === true,
+  JSON.stringify(editButton),
+);
+
+// ③ La zone des CONSIGNES D'ÉCRITURE est VISIBLE dans le formulaire d'édition,
+//    avec son compteur et le texte d'aide qui dit à quoi elle sert.
+await evaluate(`(() => {
+  const card = [...document.querySelectorAll('#images-root .image-workflow')]
+    .find((el) => el.textContent.includes('manga'));
+  card.querySelector('.image-workflow__edit').click();
+})()`);
+const editorOpened = await waitFor(`!!document.getElementById('image-workflow-edit')`, 5000);
+const editorState = await evaluate(`(() => {
+  const modal = document.getElementById('image-workflow-edit');
+  if (!modal) return null;
+  const zone = modal.querySelector('#image-edit-documentation');
+  const description = modal.querySelector('#image-edit-description');
+  const isDefault = modal.querySelector('#image-edit-default');
+  const helpers = [...modal.querySelectorAll('.config-helper')].map((n) => n.textContent);
+  const counter = helpers.find((t) => /[0-9]+ \\/ 8000/.test(t)) ?? null;
+  const cs = zone ? getComputedStyle(zone) : null;
+  const rect = zone ? zone.getBoundingClientRect() : { width: 0, height: 0, top: 0, bottom: 0 };
+  return {
+    visible:
+      !!cs &&
+      cs.display !== 'none' &&
+      cs.visibility === 'visible' &&
+      rect.width > 200 &&
+      rect.height > 80 &&
+      rect.top >= 0 &&
+      rect.bottom <= window.innerHeight,
+    value: zone ? zone.value : null,
+    maxlength: zone ? zone.getAttribute('maxlength') : null,
+    counter,
+    description: description ? description.value : null,
+    isDefault: isDefault ? isDefault.checked : null,
+    text: modal.textContent,
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  };
+})()`);
+check(
+  "[/config] « Éditer » ouvre le formulaire d'édition du workflow",
+  editorOpened === true && editorState !== null,
+  JSON.stringify(editorState && { visible: editorState.visible, counter: editorState.counter }),
+);
+check(
+  "[/config] la zone des CONSIGNES est VISIBLE dans le formulaire (pré-remplie, bornée 8000)",
+  editorState &&
+    editorState.visible === true &&
+    String(editorState.value).includes("MARQUEUR-DOC") &&
+    editorState.maxlength === "8000",
+  JSON.stringify(editorState && { visible: editorState.visible, maxlength: editorState.maxlength, width: editorState.width, height: editorState.height }),
+);
+check(
+  "[/config] le compteur « x / 8000 » est affiché",
+  /[0-9]+ \/ 8000/.test(String(editorState?.counter)),
+  String(editorState?.counter),
+);
+check(
+  "[/config] le formulaire édite AUSSI la description, le « par défaut » et dit que le nom est la CLÉ",
+  typeof editorState?.description === "string" &&
+    editorState.description.includes("Manga") &&
+    editorState.isDefault === true &&
+    /COMMENT ÉCRIRE la scène/.test(String(editorState?.text)) &&
+    /consulter_workflow/.test(String(editorState?.text)) &&
+    /jamais envoyées au serveur ComfyUI/.test(String(editorState?.text)) &&
+    /n'est pas modifiable/.test(String(editorState?.text)),
+  String(editorState?.text).slice(0, 240),
+);
+
+// ④ On ENREGISTRE une consigne, et on la RELIT après RECHARGEMENT.
+const EDITED_DOC = await evaluate(`(() => {
+  const modal = document.getElementById('image-workflow-edit');
+  const zone = modal.querySelector('#image-edit-documentation');
+  const value = zone.value + "\\n\\nAJOUT-EDITEUR : commence toujours par le décor et la lumière.";
+  zone.value = value;
+  zone.dispatchEvent(new Event('input', { bubbles: true }));
+  const helpers = [...modal.querySelectorAll('.config-helper')].map((n) => n.textContent);
+  return { value, counter: helpers.find((t) => /[0-9]+ \\/ 8000/.test(t)) ?? null };
+})()`);
+check(
+  "[/config] le compteur suit la saisie (x / 8000)",
+  String(EDITED_DOC?.counter).startsWith(String(String(EDITED_DOC?.value).length)),
+  `${String(EDITED_DOC?.counter)} pour ${String(String(EDITED_DOC?.value).length)} caractères`,
+);
+await evaluate(`(() => {
+  const modal = document.getElementById('image-workflow-edit');
+  [...modal.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Enregistrer').click();
+})()`);
+const editorClosed = await waitFor(`!document.getElementById('image-workflow-edit')`, 8000);
+const savedDoc = await fetch(`${server.base}/api/images/workflows`).then((r) => r.json());
+const savedManga = (savedDoc.workflows ?? []).find((entry) => entry.name === "manga");
+check(
+  "[/config] les consignes ENREGISTRÉES depuis le formulaire sont persistées",
+  editorClosed === true &&
+    typeof savedManga?.documentation === "string" &&
+    savedManga.documentation.includes("AJOUT-EDITEUR"),
+  JSON.stringify(savedManga && { chars: savedManga.documentation.length, description: savedManga.description }),
+);
+// RECHARGEMENT : on relit la consigne dans le formulaire, depuis le serveur.
+await navigate(`${server.base}/config#images`);
+await waitFor(`!!document.getElementById('tab-images')`, 10000);
+const reopened = await evaluate(`(() => {
+  const tab = document.getElementById('tab-images');
+  if (tab) tab.click();
+  const card = [...document.querySelectorAll('#images-root .image-workflow')]
+    .find((el) => el.textContent.includes('manga'));
+  if (!card) return null;
+  card.querySelector('.image-workflow__edit').click();
+  return true;
+})()`);
+await waitFor(`!!document.getElementById('image-workflow-edit')`, 5000);
+const reread = await evaluate(`(() => {
+  const modal = document.getElementById('image-workflow-edit');
+  const zone = modal ? modal.querySelector('#image-edit-documentation') : null;
+  return zone ? zone.value : null;
+})()`);
+check(
+  "[/config] la consigne est RELUE dans le formulaire après RECHARGEMENT",
+  reopened === true && String(reread).includes("AJOUT-EDITEUR") && String(reread).includes("MARQUEUR-DOC"),
+  String(reread).slice(0, 160),
+);
+// On referme sans enregistrer (Échap ne ferme que le sommet).
+await evaluate(`document.querySelector('#image-workflow-edit .holaf-modal-close')?.click()`);
+await waitFor(`!document.getElementById('image-workflow-edit')`, 5000);
+
+// ⑤ Les étiquettes (YUKI_OUTPUT trouvée / absente) restent affichées sur la carte.
 const firstCard = await evaluate(`(() => {
   const card = [...document.querySelectorAll('#images-root .image-workflow')]
     .find((el) => el.textContent.includes('manga'));
@@ -590,46 +843,21 @@ const firstCard = await evaluate(`(() => {
       }
     : null;
 })()`);
-check("le panneau des workflows liste le workflow importé", firstCard !== null, JSON.stringify(firstCard));
+check("[/config] la fiche du workflow liste le workflow importé", firstCard !== null, JSON.stringify(firstCard));
 check(
-  "le panneau affiche YUKI_OUTPUT comme TROUVÉE",
+  "[/config] la fiche affiche YUKI_OUTPUT comme TROUVÉE",
   Array.isArray(firstCard?.labels) && firstCard.labels.includes("YUKI_OUTPUT"),
   JSON.stringify(firstCard?.labels),
 );
 check(
-  "le panneau DIT que l'image finale vient du nœud étiqueté YUKI_OUTPUT",
+  "[/config] la fiche DIT que l'image finale vient du nœud étiqueté YUKI_OUTPUT",
   /Image finale/.test(String(firstCard?.text)) && /YUKI_OUTPUT/.test(String(firstCard?.text)),
   String(firstCard?.text).slice(0, 240),
 );
-// ⚠️ CONSIGNES D'ÉCRITURE : éditées DANS la page /config, bornées à 8 000.
-const docEditor = await evaluate(`(() => {
-  const card = [...document.querySelectorAll('#images-root .image-workflow')]
-    .find((el) => el.textContent.includes('manga'));
-  const zone = card ? card.querySelector('textarea') : null;
-  const helper = card ? card.textContent : '';
-  return {
-    hasZone: Boolean(zone),
-    value: zone ? zone.value : null,
-    maxlength: zone ? zone.getAttribute('maxlength') : null,
-    mentionsBound: /8000/.test(String(helper)),
-    mentionsTool: /consulter_workflow/.test(String(helper)),
-    mentionsNotSent: /Jamais envoyées/.test(String(helper)),
-  };
-})()`);
 check(
-  "le panneau /config édite les CONSIGNES D'ÉCRITURE du workflow (zone de texte pré-remplie)",
-  docEditor.hasZone === true && String(docEditor.value).includes("MARQUEUR-DOC"),
-  JSON.stringify(docEditor).slice(0, 240),
-);
-check(
-  "la zone est BORNÉE (8000) et la borne est DITE dans le panneau",
-  docEditor.maxlength === "8000" && docEditor.mentionsBound === true,
-  JSON.stringify(docEditor).slice(0, 200),
-);
-check(
-  "le panneau DIT que les consignes ne partent JAMAIS au serveur d'images",
-  docEditor.mentionsNotSent === true && docEditor.mentionsTool === true,
-  JSON.stringify(docEditor).slice(0, 200),
+  "[/config] la fiche DIT que les consignes s'éditent par « Éditer »",
+  /Consignes d'écriture/.test(String(firstCard?.text)) && /Éditer/.test(String(firstCard?.text)),
+  String(firstCard?.text).slice(0, 240),
 );
 
 // Workflow SANS l'étiquette : accepté (facultative) et le repli est annoncé.
@@ -647,7 +875,10 @@ check(
   withoutOutput.status === 200,
   String(withoutOutput.status),
 );
-await navigate(`${server.base}/config`);
+// ⚠️ `stopPage()` d'abord : naviguer vers la MÊME url (hash compris) ne
+// recharge pas le document — on veut l'état SERVEUR, pas celui du DOM.
+await stopPage();
+await navigate(`${server.base}/config#images`);
 await waitFor(`document.querySelectorAll('#images-root .image-workflow').length >= 2`, 10000);
 const sansSortie = await evaluate(`(() => {
   const card = [...document.querySelectorAll('#images-root .image-workflow')]
@@ -656,11 +887,12 @@ const sansSortie = await evaluate(`(() => {
     ? {
         labels: [...card.querySelectorAll('.image-workflow__label')].map((el) => el.textContent),
         text: card.textContent,
+        hasEdit: !!card.querySelector('.image-workflow__edit'),
       }
     : null;
 })()`);
 check(
-  "le panneau affiche YUKI_OUTPUT (ABSENTE) pour un workflow qui n'en a pas",
+  "la fiche affiche YUKI_OUTPUT (ABSENTE) pour un workflow qui n'en a pas",
   Array.isArray(sansSortie?.labels) && sansSortie.labels.includes("YUKI_OUTPUT (absente)"),
   JSON.stringify(sansSortie?.labels),
 );
@@ -668,6 +900,11 @@ check(
   "la fiche DIT que la PREMIÈRE image produite sera retenue (repli annoncé)",
   /PREMIÈRE image produite/.test(String(sansSortie?.text)),
   String(sansSortie?.text).slice(0, 240),
+);
+check(
+  "CHAQUE workflow porte son bouton « Éditer »",
+  sansSortie?.hasEdit === true,
+  JSON.stringify(sansSortie && { hasEdit: sansSortie.hasEdit }),
 );
 await shot("config-images-panel");
 
@@ -1037,6 +1274,158 @@ check(
     storedAfterFailure.images.length === (storedBeforeFailure.images?.length ?? -1),
   `${String(storedBeforeFailure.images?.length)} → ${String(storedAfterFailure.images?.length)}`,
 );
+
+/* ═════════ 8) ÉTAT VIDE explicite, puis usage AU DOIGT (téléphone) ═════ */
+// On supprime TOUS les workflows par la route réelle : l'état vide doit être
+// DIT, avec le bouton d'import — pas une page muette.
+const allWorkflows = await fetch(`${server.base}/api/images/workflows`).then((r) => r.json());
+for (const entry of allWorkflows.workflows ?? []) {
+  await fetch(`${server.base}/api/images/workflows/${encodeURIComponent(entry.name)}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json", "x-yuki-config": "1" },
+  });
+}
+await navigate(`${server.base}/config#images`);
+await waitFor(`!!document.getElementById('images-root')`, 10000);
+const empty = await evaluate(`(() => {
+  document.getElementById('tab-images')?.click();
+  const root = document.getElementById('images-root');
+  const box = root ? root.querySelector('.image-empty') : null;
+  const button = box ? [...box.querySelectorAll('button')][0] : null;
+  const rect = button ? button.getBoundingClientRect() : { width: 0, height: 0 };
+  const cs = button ? getComputedStyle(button) : null;
+  return {
+    text: box ? box.textContent : null,
+    hasButton: !!button,
+    buttonLabel: button ? button.textContent.trim() : null,
+    buttonVisible: !!cs && cs.display !== 'none' && cs.visibility === 'visible' && Number(cs.opacity) === 1,
+    buttonWidth: Math.round(rect.width),
+    buttonHeight: Math.round(rect.height),
+    cards: root ? root.querySelectorAll('.image-workflow').length : -1,
+  };
+})()`);
+check(
+  "état vide EXPLICITE : « Aucun workflow importé — importez-en un pour commencer »",
+  /Aucun workflow importé — importez-en un pour commencer/.test(String(empty?.text)) && empty?.cards === 0,
+  JSON.stringify(empty && { text: String(empty.text).slice(0, 120), cards: empty.cards }),
+);
+check(
+  "état vide : le bouton d'import est VISIBLE et cliquable",
+  empty?.hasButton === true &&
+    empty.buttonLabel === "Importer un workflow" &&
+    empty.buttonVisible === true &&
+    empty.buttonWidth > 50 &&
+    empty.buttonHeight >= 32,
+  JSON.stringify(empty && { label: empty.buttonLabel, visible: empty.buttonVisible, h: empty.buttonHeight }),
+);
+
+// ⚠️ TÉLÉPHONE : la section doit être UTILISABLE AU DOIGT (onglet atteignable,
+// plein largeur, bouton « Éditer » assez grand, formulaire d'édition dans
+// l'écran). On réimporte un workflow pour pouvoir mesurer le bouton.
+const reimported = await fetch(`${server.base}/api/images/workflows`, {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-yuki-config": "1" },
+  body: JSON.stringify({
+    name: "manga",
+    description: "Manga / anime — traits marqués, trames",
+    workflow: WORKFLOW,
+  }),
+});
+const reimportedBody = await reimported.json();
+check(
+  "un workflow est réimporté pour les mesures TÉLÉPHONE",
+  reimported.status === 200 && reimportedBody.ok === true,
+  JSON.stringify({ status: reimported.status, body: String(JSON.stringify(reimportedBody)).slice(0, 240) }),
+);
+await send("Emulation.setDeviceMetricsOverride", {
+  width: 390,
+  height: 844,
+  deviceScaleFactor: 1,
+  mobile: true,
+});
+await stopPage();
+await navigate(`${server.base}/config#images`);
+await waitFor(`document.querySelectorAll('#images-root .image-workflow').length >= 1`, 10000);
+const phone = await evaluate(`(() => {
+  const tab = document.getElementById('tab-images');
+  const tabRect = tab ? tab.getBoundingClientRect() : { width: 0, height: 0, right: 0 };
+  tab?.click();
+  const panel = document.getElementById('panel-images');
+  const card = document.querySelector('#images-root .image-workflow');
+  const button = card ? card.querySelector('.image-workflow__edit') : null;
+  const buttonRect = button ? button.getBoundingClientRect() : { width: 0, height: 0, right: 0 };
+  const cardRect = card ? card.getBoundingClientRect() : { width: 0, right: 0 };
+  const rootRect = document.getElementById('images-root').getBoundingClientRect();
+  // « toute la largeur » = largeur UTILE du conteneur (padding déduit).
+  let cardFills = false;
+  if (card && card.parentElement) {
+    const ps = getComputedStyle(card.parentElement);
+    const avail =
+      card.parentElement.clientWidth -
+      parseFloat(ps.paddingLeft || '0') -
+      parseFloat(ps.paddingRight || '0');
+    cardFills = Math.abs(cardRect.width - avail) <= 2;
+  }
+  return {
+    viewport: window.innerWidth,
+    rootWidth: Math.round(rootRect.width),
+    cardFills,
+    tabVisible: !!tab && tabRect.width > 0 && tabRect.height > 0,
+    panelVisible: !!panel && panel.hidden === false,
+    cardWidth: Math.round(cardRect.width),
+    cardFits: Math.round(cardRect.right) <= window.innerWidth,
+    editHeight: Math.round(buttonRect.height),
+    editFits: Math.round(buttonRect.right) <= window.innerWidth,
+    horizontalScroll: document.documentElement.scrollWidth > window.innerWidth,
+  };
+})()`);
+check(
+  "téléphone : l'onglet « Images » est atteignable et la section est utilisable",
+  phone.viewport === 390 && phone.tabVisible === true && phone.panelVisible === true && phone.horizontalScroll === false,
+  JSON.stringify(phone),
+);
+check(
+  "téléphone : les cartes occupent la LARGEUR (pas de colonne étroite) et rien ne déborde",
+  phone.rootWidth > 280 && phone.cardFills === true && phone.cardFits === true,
+  JSON.stringify({ rootWidth: phone.rootWidth, cardWidth: phone.cardWidth, cardFills: phone.cardFills, cardFits: phone.cardFits }),
+);
+check(
+  "téléphone : le bouton « Éditer » est assez grand pour le doigt (≥ 40 px de haut)",
+  phone.editHeight >= 40 && phone.editFits === true,
+  JSON.stringify({ editHeight: phone.editHeight, editFits: phone.editFits }),
+);
+await evaluate(`document.querySelector('#images-root .image-workflow .image-workflow__edit')?.click()`);
+await waitFor(`!!document.getElementById('image-workflow-edit')`, 5000);
+const phoneEditor = await evaluate(`(() => {
+  const modal = document.getElementById('image-workflow-edit');
+  if (!modal) return null;
+  const zone = modal.querySelector('#image-edit-documentation');
+  const rect = modal.getBoundingClientRect();
+  const zoneRect = zone ? zone.getBoundingClientRect() : { width: 0, height: 0, right: 0 };
+  return {
+    width: Math.round(rect.width),
+    fits: Math.round(rect.right) <= window.innerWidth && Math.round(rect.left) >= 0,
+    zoneWidth: Math.round(zoneRect.width),
+    zoneVisible: !!zone && zone.getBoundingClientRect().height > 60,
+  };
+})()`);
+check(
+  "téléphone : le formulaire d'édition tient dans l'écran et la zone des consignes est utilisable",
+  phoneEditor &&
+    phoneEditor.fits === true &&
+    phoneEditor.width <= 390 &&
+    phoneEditor.zoneVisible === true &&
+    phoneEditor.zoneWidth > 200,
+  JSON.stringify(phoneEditor),
+);
+await shot("config-images-panel-mobile");
+await evaluate(`document.querySelector('#image-workflow-edit .holaf-modal-close')?.click()`);
+await send("Emulation.setDeviceMetricsOverride", {
+  width: 1280,
+  height: 900,
+  deviceScaleFactor: 1,
+  mobile: false,
+});
 
 await stopPage();
 server.proc.kill("SIGTERM");await sleep(300);

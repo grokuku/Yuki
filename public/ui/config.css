@@ -1296,7 +1296,11 @@
 /* ─── Onglet « Images » — workflows ComfyUI importés ───────────────────────
  * Le panneau est rendu par `images-panel.js` (DOM programmatique, aucun style
  * inline : CSP `style-src 'self'`). Les cartes reprennent la grammaire visuelle
- * des cartes de secrets (bordure, fond, titre, méta). */
+ * des cartes de secrets (bordure, fond, titre, méta).
+ *
+ * ⚠️ TOUTE LA LARGEUR : aucun `max-width` de colonne (règle d'UI du projet —
+ * jamais une colonne étroite centrée), la liste se déploie sur la largeur de
+ * la page comme les autres sections de `/config`. */
 .image-workflows {
   display: flex;
   flex-direction: column;
@@ -1319,6 +1323,13 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Bouton « Éditer » : TOUJOURS visible (aucune apparition au survol), poussé à
+   droite de l'en-tête de la carte. Taille de bouton PLEIN : cible tactile. */
+.image-workflow__edit {
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .image-workflow__name {
@@ -1367,7 +1378,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 720px;
 }
 
 .image-import__default {
@@ -1398,4 +1408,34 @@
 .image-import__labels {
   font-family: var(--font-mono, monospace);
   font-size: 11.5px;
+}
+
+/* ÉTAT VIDE explicite : la phrase, l'explication et le bouton d'import. */
+.image-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.image-empty__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Formulaire d'édition (modale HolafModal) : une seule colonne pleine largeur,
+   la zone des consignes en monospace pour la lisibilité des textes longs. */
+.image-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.image-edit > .config-actions {
+  margin: 4px 0 0;
+  flex-wrap: wrap;
 }
