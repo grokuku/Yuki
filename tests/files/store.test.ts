@@ -7,7 +7,7 @@
  * sans attendre 30 jours.
  */
 
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -181,6 +181,60 @@ describe("rattachement à une conversation", () => {
     // Un identifiant qui n'a pas la forme attendue n'est jamais un chemin.
     expect(store.get("../../etc/passwd")).toBeNull();
     expect(store.readBytes("..%2Fetc")).toBeNull();
+  });
+
+  it("à date ÉGALE, l'ordre de la liste reste DÉTERMINÉ (départage par identifiant)", async () => {
+    // ⚠️ Ce test fige l'ordre là où il n'y a AUCUNE information chronologique :
+    // plusieurs dépôts dans la même milliseconde. Sans départage explicite,
+    // l'égalité laisserait l'ordre à `readdirSync` — non garanti, et variable
+    // d'un appel à l'autre (c'est exactement ce qui faisait échouer un test de
+    // `/api/files` sous charge).
+    const frozen = Date.parse("2026-01-01T00:00:00.000Z");
+    const { store } = makeStore({ now: () => frozen });
+    const saved: string[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      const outcome = await store.saveBytes(new Uint8Array(Buffer.from(`f${index}`)), {
+        name: `f${index}.txt`,
+        mimeType: "text/plain",
+        origin: "user",
+      });
+      expect(outcome.ok).toBe(true);
+      if (outcome.ok) saved.push(outcome.record.id);
+    }
+    expect(saved).toHaveLength(6);
+    // Toutes les dates sont identiques : le seul critère restant est l'identifiant.
+    expect(new Set(store.list().map((record) => record.createdAt)).size).toBe(1);
+    const expected = [...saved].sort();
+    // Stable dans le temps ET identique à la règle écrite (ordre total, croissant).
+    for (let pass = 0; pass < 5; pass += 1) {
+      expect(store.list().map((record) => record.id)).toEqual(expected);
+    }
+  });
+
+  it("l'ordre ne dépend PAS de l'ordre du répertoire (fiches écrites à la main)", () => {
+    // Les identifiants sont CHOISIS ici, et les fiches sont écrites dans l'ordre
+    // ALPHABÉTIQUE INVERSE : si le tri suivait `readdirSync`, la liste sortirait
+    // à l'envers. L'attente est donc exacte et ne dépend d'aucune horloge.
+    const { store, dir } = makeStore();
+    const at = "2026-01-01T00:00:00.000Z";
+    const ids = [`${"f".repeat(31)}f`, `${"a".repeat(31)}a`, `${"0".repeat(31)}1`];
+    for (const id of ids) {
+      writeFileSync(
+        join(dir, `${id}.json`),
+        JSON.stringify({
+          name: `${id.slice(-1)}.txt`,
+          mimeType: "text/plain",
+          ext: "txt",
+          bytes: 1,
+          createdAt: at,
+          expiresAt: "2099-01-01T00:00:00.000Z",
+          origin: "user",
+          analysis: { kind: "text", readable: true, chars: 1 },
+        }),
+        { mode: 0o600 },
+      );
+    }
+    expect(store.list().map((record) => record.id)).toEqual([...ids].sort());
   });
 
   it("supprime sur demande (fichier + analyse)", async () => {

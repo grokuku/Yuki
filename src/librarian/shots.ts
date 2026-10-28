@@ -270,7 +270,13 @@ export class LibrarianShotsStore implements LibrarianShotsPort {
     return this.toRecord(meta);
   }
 
-  /** Captures NON expirées, de la plus ancienne à la plus récente. */
+  /**
+   * Captures NON expirées, de la plus ancienne à la plus récente.
+   *
+   * ⚠️ Ordre TOTAL : `capturedAt` seul ne départage pas deux captures de la même
+   * milliseconde ; sans départage, l'égalité laisserait l'ordre à `readdirSync`
+   * (non garanti, variable d'un appel à l'autre). L'identifiant tranche.
+   */
   list(filter: { sessionId?: string } = {}): LibrarianShotRecord[] {
     let names: string[];
     try {
@@ -287,7 +293,10 @@ export class LibrarianShotsStore implements LibrarianShotsPort {
       if (filter.sessionId !== undefined && record.sessionId !== filter.sessionId) continue;
       records.push(record);
     }
-    records.sort((a, b) => (a.capturedAt < b.capturedAt ? -1 : a.capturedAt > b.capturedAt ? 1 : 0));
+    records.sort((a, b) => {
+      if (a.capturedAt !== b.capturedAt) return a.capturedAt < b.capturedAt ? -1 : 1;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
     return records;
   }
 

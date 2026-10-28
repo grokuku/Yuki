@@ -321,7 +321,15 @@ export class FilesStore implements FilesPort {
     }
   }
 
-  /** Fichiers non expirés, du plus ancien au plus récent. */
+  /**
+   * Fichiers non expirés, du plus ancien au plus récent.
+   *
+   * ⚠️ L'ordre est un CONTRAT (l'interface et le modèle voient cette liste dans
+   * cet ordre), donc il doit être TOTAL : `createdAt` seul ne départage pas deux
+   * dépôts faits dans la MÊME milliseconde, et l'égalité laisserait l'ordre à
+   * `readdirSync` — non garanti, variable d'un appel à l'autre. L'identifiant
+   * (aléatoire, unique) tranche : même entrée ⇒ même sortie, toujours.
+   */
   list(filter: { sessionId?: string } = {}): StoredFileRecord[] {
     let names: string[];
     try {
@@ -338,7 +346,13 @@ export class FilesStore implements FilesPort {
       if (filter.sessionId !== undefined && record.sessionId !== filter.sessionId) continue;
       records.push(record);
     }
-    records.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+    records.sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+      // ⚠️ Départage DÉTERMINISTE : deux fichiers déposés dans la même
+      // milliseconde n'ont pas d'ordre chronologique ; sans ce critère l'ordre
+      // suivrait le répertoire (non garanti) et changerait d'un appel à l'autre.
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
     return records;
   }
 

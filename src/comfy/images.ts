@@ -289,7 +289,14 @@ export class GeneratedImagesStore implements GeneratedImagesPort {
     return this.toRecord(next);
   }
 
-  /** Images NON expirées, de la plus ancienne à la plus récente. */
+  /**
+   * Images NON expirées, de la plus ancienne à la plus récente.
+   *
+   * ⚠️ Ordre TOTAL : `createdAt` seul ne départage pas deux images créées dans la
+   * même milliseconde ; sans départage, l'égalité laisserait l'ordre à
+   * `readdirSync` (non garanti, variable d'un appel à l'autre). L'identifiant
+   * tranche — la galerie affiche cette liste, elle ne doit pas « sauter ».
+   */
   list(filter: { sessionId?: string } = {}): GeneratedImageRecord[] {
     let names: string[];
     try {
@@ -306,7 +313,10 @@ export class GeneratedImagesStore implements GeneratedImagesPort {
       if (filter.sessionId !== undefined && record.sessionId !== filter.sessionId) continue;
       records.push(record);
     }
-    records.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+    records.sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
     return records;
   }
 

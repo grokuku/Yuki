@@ -129,7 +129,11 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
     return { files, markers, ...(block !== undefined ? { block } : {}), missing };
   }
 
-  /** Fichiers d'une conversation (métadonnées seules). */
+  /**
+   * Fichiers d'une conversation (métadonnées seules), du plus ancien au plus
+   * récent — ordre TOTAL garanti par le stockage (départage par identifiant),
+   * car c'est l'ordre que voient l'interface et le modèle.
+   */
   listForSession(sessionId: string): WireFile[] {
     return this.store.list({ sessionId }).map((record) => this.store.toWire(record));
   }

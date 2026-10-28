@@ -37,6 +37,22 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Attend que le WAKER ait produit `count` rapport(s) — attente de CONDITION.
+ *
+ * ⚠️ Un `delay(30)` fixe n'est pas une synchronisation : le rapport traverse le
+ * transport WS de façon ASYNCHRONE, et sous charge (plusieurs suites en
+ * parallèle) il arrive après le délai — le test échouait alors qu'aucun bug
+ * n'existait (observé : « expected [ … ] to have a length of 2 but got 1 »).
+ * Le court `settle` final est CONSERVÉ : il laisse le temps à un rapport EN TROP
+ * d'arriver, pour que « exactement N » reste réellement vérifié.
+ */
+async function waitForReports(rig: Rig, count: number, settleMs = 40): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (rig.reports.length < count && Date.now() < deadline) await delay(5);
+  await delay(settleMs);
+}
+
 interface Report {
   sessionId: string;
   text: string;
@@ -161,7 +177,7 @@ describe("résultat de commande validée → modèle (corrélé par approval_id)
     if (frame.type !== "approval_result") throw new Error("trame résultat attendue");
     expect(frame.result.output).toContain("SORTIE-OK-UNIQUE");
 
-    await delay(30);
+    await waitForReports(rig, 1, 30);
     expect(rig.reports).toHaveLength(1);
     const report = rig.reports[0] as Report;
     expect(report.sessionId).toBe("sess-1");
@@ -178,7 +194,7 @@ describe("résultat de commande validée → modèle (corrélé par approval_id)
     rig.setResult(() => ({ exit_code: 3, stdout: "avant\n", stderr: "ERREUR-UNIQUE\n", duration_ms: 2 }));
     const approvalId = await approve(rig, "rm -rf /srv/b");
 
-    await delay(40);
+    await waitForReports(rig, 1);
     expect(rig.reports).toHaveLength(1);
     const text = (rig.reports[0] as Report).text;
     expect(text).toContain(`approval_id: ${approvalId}`);
@@ -201,7 +217,7 @@ describe("résultat de commande validée → modèle (corrélé par approval_id)
     }));
     await approve(rig, "rm -rf /srv/volumineux");
 
-    await delay(40);
+    await waitForReports(rig, 1);
     expect(rig.reports).toHaveLength(1);
     const text = (rig.reports[0] as Report).text;
     expect(text).toContain("tronquee: oui");
@@ -218,9 +234,9 @@ describe("résultat de commande validée → modèle (corrélé par approval_id)
     }));
 
     const first = await approve(rig, "rm -rf /srv/one");
-    await delay(30);
+    await waitForReports(rig, 1, 0);
     const second = await approve(rig, "rm -rf /srv/two");
-    await delay(40);
+    await waitForReports(rig, 2);
 
     expect(first).not.toBe(second);
     expect(rig.reports).toHaveLength(2);
@@ -249,7 +265,7 @@ describe("résultat de commande validée → modèle (corrélé par approval_id)
     // HUMAIN : la sortie complète est bien là, non coupée par Yuki.
     expect(frame.result.output).toContain(gros);
 
-    await delay(60);
+    await waitForReports(rig, 1, 60);
     expect(rig.reports).toHaveLength(1);
     const text = (rig.reports[0] as Report).text;
     // MODÈLE : borné au même plafond que le report de job, mais l'id ET le code
@@ -276,7 +292,7 @@ describe("résultat de commande validée → modèle (corrélé par approval_id)
     // ⚠️ … et il ne diffuse PAS son texte : aucun `userText`.
     expect((runStarted as { userText?: string }).userText).toBeUndefined();
 
-    await delay(40);
+    await waitForReports(rig, 1);
     // (a) aucune trame déjà reçue ne contient le marqueur, HORS la trame
     //     éphémère destinée à l'HUMAIN (`approval_result`).
     const leaked = rig.client.frames.filter(

@@ -251,7 +251,13 @@ describe("API de gestion (liste, suppression)", () => {
 
 describe("rattachement à un message (service)", () => {
   it("produit les marqueurs du message et un bloc BORNÉ pour le modèle", async () => {
-    const { store } = makeDeps({ maxBytes: 10_000 });
+    // ⚠️ Horloge STRICTEMENT croissante : deux dépôts faits dans la MÊME
+    // milliseconde n'ont AUCUN ordre chronologique (le stockage départage alors
+    // par identifiant, ce qui est déterministe mais arbitraire). L'ordre affirmé
+    // plus bas est l'ordre de CRÉATION : il faut donc des dates distinctes, sinon
+    // la prémisse de l'assertion n'existe pas (elle passait par chance).
+    let clock = Date.parse("2026-01-01T00:00:00.000Z");
+    const { store } = makeDeps({ maxBytes: 10_000, now: () => (clock += 1) });
     const long = await store.saveBytes(new Uint8Array(Buffer.from("z".repeat(500))), {
       name: "long.txt",
       mimeType: "text/plain",
@@ -277,6 +283,7 @@ describe("rattachement à un message (service)", () => {
     expect(outcome.block).toContain('caracteres_transmis="50"');
     expect(outcome.block).toContain('lu="non"');
     // Le fichier est désormais rattaché à la conversation (liste + envoi par Yuki).
+    // ⚠️ Ordre CHRONOLOGIQUE garanti par le stockage (dates distinctes ci-dessus).
     expect(service.listForSession("sess-1").map((file) => file.name)).toEqual([
       "long.txt",
       "doc.pdf",

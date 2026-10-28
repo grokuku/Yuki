@@ -72,7 +72,13 @@ function formatDiagnostic(diagnostic: ts.Diagnostic): string {
 }
 
 describe("modules ES de l'UI — symboles définis et imports résolus", () => {
-  it("aucun symbole/import non résolu dans public/ui/*.js", () => {
+  // ⚠️ Ce test lance le COMPILATEUR TypeScript (analyse statique de tous les
+  // modules de `public/ui/`) : c'est du travail CPU, pas une attente réseau. Le
+  // budget par défaut (20 s) suffit à vide mais pas quand plusieurs suites
+  // tournent EN PARALLÈLE (validé sous charge : 5/5 échecs « Test timed out »).
+  // On donne donc un budget EXPLICITE à ce lot — les assertions, elles, sont
+  // inchangées (aucun relâchement : zéro diagnostic attendu).
+  it("aucun symbole/import non résolu dans public/ui/*.js", { timeout: 120_000 }, () => {
     const files = uiModuleFiles();
     // Le lot n'a de sens que s'il inspecte réellement plusieurs modules.
     expect(files.length).toBeGreaterThan(5);
@@ -80,7 +86,7 @@ describe("modules ES de l'UI — symboles définis et imports résolus", () => {
     expect(found).toEqual([]);
   });
 
-  it("le détecteur signale bien un symbole réellement non défini (auto-test)", () => {
+  it("le détecteur signale bien un symbole réellement non défini (auto-test)", { timeout: 60_000 }, () => {
     const dir = mkdtempSync(join(tmpdir(), "yuki-ui-symbols-"));
     tempDirs.push(dir);
     const file = join(dir, "buggy-module.js");
