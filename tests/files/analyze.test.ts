@@ -2,9 +2,14 @@
  * ANALYSE d'un fichier envoyé — et surtout : ce que Yuki ne sait PAS lire.
  *
  * PIÈGE ⑦ (mentir sur la lecture) : un PDF n'est PAS lu (le libraire n'expose
- * aucune extraction de texte), une image n'est PAS analysée (aucun modèle
- * multimodal), un binaire n'est PAS lu. Dans tous ces cas `readable` vaut `false`
- * ET une raison en français est fournie — elle part au modèle et à l'écran.
+ * aucune extraction de texte), un binaire n'est PAS lu. Dans tous ces cas
+ * `readable` vaut `false` ET une raison en français est fournie — elle part au
+ * modèle et à l'écran.
+ *
+ * ⚠️ CAS DE L'IMAGE : elle n'a pas de TEXTE à extraire, mais elle est TRANSMISE
+ * AU MODÈLE EN TANT QU'IMAGE (pièce jointe `ImageContent` du message). La raison
+ * ne doit donc PLUS dire « aucun modèle multimodal » (c'était factuellement faux,
+ * et cette phrase partait au modèle dans le bloc `<fichiers>`).
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -20,6 +25,7 @@ import {
   imageSize,
   isTextDeclaration,
   looksBinary,
+  modelImageMimeType,
   normalizeMimeType,
   UNREADABLE_REASONS,
 } from "../../src/files/analyze.js";
@@ -99,7 +105,7 @@ describe("classification des fichiers", () => {
     expect(outcome.text).toBeUndefined();
   });
 
-  it("une image est reconnue, ses dimensions lues, mais son CONTENU n'est pas analysé", () => {
+  it("une image est reconnue, ses dimensions lues, et sa raison dit la VÉRITÉ", () => {
     const path = tempFile(PNG, "photo.png");
     const outcome = analyzeStoredFile(path, {
       name: "photo.png",
@@ -107,11 +113,33 @@ describe("classification des fichiers", () => {
       mimeType: "image/png",
     });
     expect(outcome.analysis.kind).toBe("image");
+    // Il n'y a pas de TEXTE à lire dans une image.
     expect(outcome.analysis.readable).toBe(false);
     expect(outcome.analysis.reason).toBe(UNREADABLE_REASONS.image);
     expect(outcome.analysis.width).toBe(1);
     expect(outcome.analysis.height).toBe(1);
     expect(outcome.text).toBeUndefined();
+  });
+
+  it("la raison d'une image ne prétend plus « aucun modèle multimodal » (elle est TRANSMISE en tant qu'image)", () => {
+    // ⚠️ Cette phrase était factuellement FAUSSE (le modèle de chat accepte les
+    // images) et elle partait au modèle dans le bloc `<fichiers>` : une donnée
+    // fausse dans le prompt. Elle doit avoir disparu.
+    expect(UNREADABLE_REASONS.image).not.toContain("multimodal");
+    expect(UNREADABLE_REASONS.image).not.toContain("n'est pas analysé");
+    expect(UNREADABLE_REASONS.image).toContain("en tant qu'image");
+    expect(UNREADABLE_REASONS.image).toContain("transmise");
+  });
+
+  it("une image ne part au modèle que dans un format de VISION (PNG, JPEG, GIF, WebP)", () => {
+    expect(modelImageMimeType("png", "image/png")).toBe("image/png");
+    // Un type générique déclaré ne masque pas le format réel (extension d'abord).
+    expect(modelImageMimeType("png", "application/octet-stream")).toBe("image/png");
+    expect(modelImageMimeType("jpeg", "image/jpeg")).toBe("image/jpeg");
+    // BMP : affichable dans le fil, mais PAS un format de vision ⇒ refus explicite.
+    expect(modelImageMimeType("bmp", "image/bmp")).toBeUndefined();
+    // Un type déclaré fantaisiste n'est jamais annoncé au modèle.
+    expect(modelImageMimeType("bin", "image/tiff")).toBeUndefined();
   });
 
   it("un format inconnu BINAIRE est stocké mais NON lu", () => {

@@ -136,7 +136,7 @@ import {
   type ReactionRegularity,
 } from "./reactions/index.js";
 import { RulesStore } from "./rules/index.js";
-import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkRecapWriter, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
+import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -920,6 +920,15 @@ async function main(): Promise<void> {
     maxAttachments: () => config.getNumber("files.maxAttachments"),
     promptChars: () => config.getNumber("files.promptChars"),
     promptTotalChars: () => config.getNumber("files.promptTotalChars"),
+    // ⚠️ Plafond des images TRANSMISES AU MODÈLE : lu À CHAQUE message (apply:
+    // hot). Sans ce branchement, le réglage serait mort — et une image de 40 Mo
+    // partirait en base64 sur le fil.
+    imageMaxBytes: () => config.getNumber("files.imageMaxBytes"),
+    // ⚠️ RÉDUCTION À LA VOLÉE (`resizeImage` du SDK, Photon/WASM) : l'original
+    // stocké n'est jamais touché, la version réduite est éphémère. Sans ce
+    // branchement, aucune image hors bornes ne pourrait être réduite (elle serait
+    // refusée) : le chemin de vision ne serait pas complet.
+    imageResizer: sdkVisionImageResizer,
   });
   // Balayage périodique : la rétention est une BORNE DE DISQUE, pas une promesse.
   // ⚠️ Le MÊME balayage purge les pièces jointes, les images générées et les
@@ -932,6 +941,7 @@ async function main(): Promise<void> {
     purged: purgedFilesAtStart,
     retentionDays: config.getNumber("files.retentionDays"),
     maxFileBytes: config.getNumber("files.maxFileBytes"),
+    imageMaxBytes: config.getNumber("files.imageMaxBytes"),
     promptChars: config.getNumber("files.promptChars"),
     promptTotalChars: config.getNumber("files.promptTotalChars"),
   });

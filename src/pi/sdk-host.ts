@@ -185,6 +185,15 @@ interface RunItem {
   storedText: string;
   /** Instant de l'envoi (ms Unix) — horodate l'entrée de transcript. */
   sentAt: number;
+  /**
+   * IMAGES jointes à ce message (base64 + type MIME). Transmises au SDK à
+   * CHAQUE tour du run : `prompt(…, { images })` pour un tour, `steer(…, images)`
+   * pour une injection dans un run en cours. Absent ⇒ message texte seul.
+   *
+   * ⚠️ Jamais renseigné pour un message SYNTHÉTIQUE : la file d'attente (`send`)
+   * ne porte donc jamais d'image, et on ne l'élargit pas.
+   */
+  images?: readonly { data: string; mimeType: string }[];
   origin?: string;
   jobId?: string;
   instrumentation: RunInstrumentation;
@@ -327,6 +336,24 @@ function sanitizedCause(error: unknown): string | undefined {
   return sanitized.length > 0 ? sanitized : undefined;
 }
 
+/**
+ * Projette les images d'un run sur la forme `ImageContent` du SDK
+ * (`{ type: "image", data, mimeType }` — même forme que `src/pi/sdk/image-tools.ts`).
+ *
+ * ⚠️ `undefined` quand il n'y en a aucune : les options du prompt restent alors
+ * EXACTEMENT ce qu'elles étaient (aucun changement pour un message texte).
+ */
+function sdkImages(
+  images: readonly { data: string; mimeType: string }[] | undefined,
+): Array<{ type: "image"; data: string; mimeType: string }> | undefined {
+  if (images === undefined || images.length === 0) return undefined;
+  return images.map((image) => ({
+    type: "image" as const,
+    data: image.data,
+    mimeType: image.mimeType,
+  }));
+}
+
 function makeRunItem(
   runId: string,
   text: string,
@@ -349,11 +376,18 @@ function makeRunItem(
     ...(opts.timezone !== undefined ? { timeZone: opts.timezone } : {}),
     ...(isSyntheticOrigin(opts.origin) ? { synthetic: true } : {}),
   });
+  // ⚠️ Un message SYNTHÉTIQUE ne porte jamais d'image : il peut être MIS EN FILE
+  // (`record.queue`) et rejoué plus tard ; le chemin en file reste texte seul.
+  const images =
+    !isSyntheticOrigin(opts.origin) && opts.images !== undefined && opts.images.length > 0
+      ? opts.images
+      : undefined;
   return {
     runId,
     text,
     storedText,
     sentAt,
+    ...(images !== undefined ? { images } : {}),
     ...(opts.origin !== undefined ? { origin: opts.origin } : {}),
     ...(opts.jobId !== undefined ? { jobId: opts.jobId } : {}),
     abortController: new AbortController(),
@@ -1436,8 +1470,12 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       if (needsModelSwitch(record)) {
         await ensureRecordModel(record);
       }
+      const images = sdkImages(run.images);
       await record.session.prompt(run.storedText, {
         expandPromptTemplates: false,
+        // ⚠️ Les IMAGES du message utilisateur partent ICI : sans cette option,
+        // le SDK n'attache aucune partie image et le modèle ne voit rien.
+        ...(images !== undefined ? { images } : {}),
         preflightResult: (accepted: boolean) => {
           if (accepted) {
             run.instrumentation.markStage(PHASE.promptAccepted);
@@ -1509,7 +1547,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
    */
   async function steerRun(record: SessionRecord, run: RunItem): Promise<void> {
     try {
-      await record.session.steer(run.storedText);
+      // ⚠️ Une image envoyée PENDANT un run part avec l'injection : `steer`
+      // accepte les mêmes `ImageContent` que `prompt` (`undefined` = texte seul).
+      await record.session.steer(run.storedText, sdkImages(run.images));
     } catch (error) {
       const piError = toPiHostError(error, {
         runId: run.runId,

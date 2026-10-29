@@ -11,7 +11,9 @@
  *   - `POST /e2e/send-file` : fait ENVOYER par Yuki le dernier fichier de la
  *     conversation (CAS A : elle renvoie un fichier reçu) → trame `file_sent`.
  *   - `GET  /e2e/state` : métadonnées du stockage (identifiants, noms) — jamais
- *     un contenu.
+ *     un contenu — PLUS la sonde du dernier envoi : `lastPrompt` (texte transmis
+ *     au SDK) et `lastImages`/`lastImageMimeTypes`/`lastImageBytes` (images
+ *     RÉELLEMENT jointes au modèle, sans jamais publier le base64).
  *
  * ⚠️ Ne produit AUCUNE capture PNG suivie (le dossier de captures du E2E est
  * temporaire).
@@ -21,6 +23,7 @@
  *   YUKI_E2E_FILES_DIR     dossier d'état (OBLIGATOIRE).
  *   YUKI_E2E_MAX_BYTES     plafond par fichier (défaut 2 Gio ; le E2E le baisse
  *                          pour prouver le REFUS).
+ *   YUKI_E2E_IMAGE_MAX_BYTES  plafond de VISION (défaut 3 500 000).
  * Sortie : « READY http://127.0.0.1:<port> » puis reste vivant.
  */
 
@@ -34,6 +37,7 @@ import { createApp, type AppContext } from "../../src/gateway/app.js";
 import { createWsTransport } from "../../src/gateway/ws/server.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { createPiHost } from "../../src/pi/host.js";
+import { sdkVisionImageResizer } from "../../src/pi/index.js";
 import { createFilesService, FilesStore } from "../../src/files/index.js";
 import type { GpuReport } from "../../src/types/gpu.js";
 
@@ -78,9 +82,25 @@ if (!sessionId) throw new Error("aucune session courante");
  * interception de l'appel réel.
  */
 let lastPrompt = "";
+/**
+ * SONDE des IMAGES RÉELLEMENT TRANSMISES au SDK (vision du modèle).
+ *
+ * ⚠️ On ne publie JAMAIS le base64 : seulement le NOMBRE d'images, leurs types
+ * MIME et leur poids décodé. C'est ce qui prouve que l'image jointe par
+ * l'utilisateur arrive bien au modèle, sans faire transiter le contenu par
+ * `/e2e/state`.
+ */
+let lastImageMimeTypes: string[] = [];
+let lastImageBytes = 0;
 const originalSend = host.send.bind(host);
 host.send = ((target: string, text: string, opts?: Parameters<typeof originalSend>[2]) => {
   lastPrompt = text;
+  const images = opts?.images ?? [];
+  lastImageMimeTypes = images.map((image) => image.mimeType);
+  lastImageBytes = images.reduce(
+    (total, image) => total + Buffer.from(image.data, "base64").length,
+    0,
+  );
   return originalSend(target, text, opts);
 }) as typeof host.send;
 
@@ -101,6 +121,12 @@ const files = createFilesService({
   // Borne d'injection BASSE : la troncature est ainsi prouvable en E2E.
   promptChars: () => 2000,
   promptTotalChars: () => 4000,
+  // ⚠️ Plafond de VISION : par défaut celui de la production ; le E2E peut le
+  // baisser pour rendre la borne atteignable avec un petit fichier.
+  imageMaxBytes: () => Number(process.env.YUKI_E2E_IMAGE_MAX_BYTES ?? 3_500_000),
+  // ⚠️ Réduction À LA VOLÉE : le E2E exerce le VRAI redimensionneur du SDK, comme
+  // la production (aucune écriture : la version réduite est éphémère).
+  imageResizer: sdkVisionImageResizer,
 });
 
 const transport = createWsTransport({
@@ -156,6 +182,11 @@ const server = createHttpServer((req, res) => {
         sessionId,
         maxBytes,
         lastPrompt,
+        // ⚠️ Jamais le base64 : la LONGUEUR et le TYPE suffisent à prouver la
+        // transmission de l'image au modèle.
+        lastImages: lastImageMimeTypes.length,
+        lastImageMimeTypes,
+        lastImageBytes,
         files: files.listForSession(sessionId).map((file) => ({
           id: file.id,
           name: file.name,

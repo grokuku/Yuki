@@ -13,6 +13,7 @@ import { CONFIG_SCHEMA, validateDescriptor, type FieldDescriptor } from "../../s
 
 const PATHS = [
   "files.maxFileBytes",
+  "files.imageMaxBytes",
   "files.retentionDays",
   "files.maxAttachments",
   "files.promptChars",
@@ -20,7 +21,7 @@ const PATHS = [
 ] as const;
 
 describe("configuration des fichiers", () => {
-  it("les cinq champs existent, sont des entiers appliqués À CHAUD", () => {
+  it("les six champs existent, sont des entiers appliqués À CHAUD", () => {
     for (const path of PATHS) {
       const descriptor = CONFIG_SCHEMA[path] as FieldDescriptor | undefined;
       expect(descriptor, path).toBeDefined();
@@ -36,6 +37,19 @@ describe("configuration des fichiers", () => {
     expect(descriptor.max).toBe(8_589_934_592);
     // Un plafond trop bas refuserait des fichiers legitimes : au moins 1 Mio.
     expect(descriptor.min).toBe(1_048_576);
+  });
+
+  it("le plafond de VISION vaut 3 500 000 octets par défaut (~4,7 Mio en base64)", () => {
+    const descriptor = CONFIG_SCHEMA["files.imageMaxBytes"] as FieldDescriptor;
+    expect(descriptor.type).toBe("int");
+    expect(descriptor.default).toBe(3_500_000);
+    expect(descriptor.max).toBe(20_000_000);
+    // 1 octet est une valeur LÉGALE (tout refuser), 0 ne l'est pas.
+    expect(descriptor.min).toBe(1);
+    expect(validateDescriptor(descriptor, 0).ok).toBe(false);
+    expect(validateDescriptor(descriptor, 1).ok).toBe(true);
+    expect(validateDescriptor(descriptor, 20_000_001).ok).toBe(false);
+    expect(descriptor.env).toBe("YUKI_FILES_IMAGE_MAX_BYTES");
   });
 
   it("la rétention vaut 30 jours par défaut", () => {

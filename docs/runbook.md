@@ -648,13 +648,14 @@ Réglages dans **`/config` → onglet Conversation → groupe « Fichiers échan
 | `files.maxAttachments` | Fichiers joints à **un** message (défaut 5). Au-delà : non joints, et c'est dit. |
 | `files.promptChars` | **Borne d'injection** par fichier (défaut 12 000 caractères). |
 | `files.promptTotalChars` | **Borne d'injection** totale par message (défaut 24 000). |
+| `files.imageMaxBytes` | **Garde-fou ultime** de VISION : poids maximal d'une image transmise au modèle (défaut **3 500 000 octets**, soit ~4,7 Mo en base64). Au-delà, l'image est **réduite à la volée** ; si elle ne peut pas l'être (ou si elle deviendrait illisible), le message est **refusé** explicitement. |
 
 ### 13.1 Analyse (faite UNE fois, conservée)
 
 | Format | Ce que Yuki fait |
 | --- | --- |
 | texte / code / CSV / JSON | **lu** (borné), texte conservé avec le fichier |
-| image (png, jpeg, gif, webp, bmp) | **affichée** dans le fil ; le **contenu n'est pas analysé** (aucun modèle multimodal) |
+| image (png, jpeg, gif, webp, bmp) | **affichée** dans le fil **et TRANSMISE AU MODÈLE EN TANT QU'IMAGE** (vision) : rien n'est extrait en texte, le modèle la voit (voir § 13.6) |
 | PDF | **non lu** : le libraire (Libry) n'expose **aucune** extraction de texte PDF |
 | tout le reste | **stocké et téléchargeable**, mais **non lu** |
 
@@ -695,6 +696,9 @@ fichier expiré le supprime et répond « absent » (404).
 
 * **PDF non lu** : le libraire n'expose pas d'extraction de texte. Lire un PDF
   demanderait une dépendance (`pdfjs`, `pdftotext`) — **non ajoutée sans accord**.
+* **PDF / binaire en vision** : un PDF n'est pas converti en image (il faudrait
+  un moteur de rendu, dépendance lourde) — il reste annoncé `lu="non"` avec sa
+  raison.
 * **Fichier venu d'un agent** : le protocole de l'agent Go (v1) ne transporte ni
   fichier ni morceau de fichier (`stdout`/`stderr` seulement, et l'image de
   `capture d'écran`). Un transfert demanderait une nouvelle trame, un découpage en
@@ -704,3 +708,34 @@ fichier expiré le supprime et répond « absent » (404).
   origin: "externe", sessionId })`, puis `FilesService.attach(sessionId, [id])`
   (ou `send()` pour une apparition immédiate dans le fil) — sans aucune route
   publique d'écriture pour l'instant.
+
+### 13.6 Vision : l'image est VUE par le modèle (réduite à la volée, jamais stockée)
+
+Une image jointe ne sert pas qu'à l'affichage : elle part dans le **message
+utilisateur** sous forme de pièce jointe `ImageContent` (base64 + type MIME),
+sur `session.prompt(…, { images })` **et** sur `session.steer(…, images)` quand
+le message est injecté dans un tour en cours. Le modèle de chat
+(`llm.light.model`) déclare `input: ["text", "image"]` ; sans cette pièce jointe,
+il ne verrait rien.
+
+**L'original n'est jamais transformé.** Le fichier déposé est stocké tel quel
+(c'est lui qu'on télécharge). La réduction se fait **au moment de construire le
+message**, dans `src/files/vision.ts` :
+
+| Règle | Valeur |
+| --- | --- |
+| Côté maximal transmis (`VISION_MAX_EDGE`) | **2 000 px** (au-delà, l'image est réduite) |
+| Côté minimal LISIBLE (`VISION_MIN_EDGE`) | **700 px** — en dessous, on **refuse** (un texte ne serait plus lisible) |
+| Poids (`files.imageMaxBytes`) | **3 500 000 octets** de garde-fou : au-delà, réduction ; si elle échoue, **refus explicite** |
+
+* La version réduite est **éphémère** : ni disque, ni cache, ni base.
+* Formats transmis : **PNG, JPEG, GIF, WebP**. Un BMP (affichable) est **refusé**
+  en vision, avec un message qui le dit.
+* **Aucun refus dans le cas normal** : une photo de 5 Mo est réduite et part.
+* ⚠️ **Coût (mesuré, pour le TTFT)** : le redimensionneur (`resizeImage` du SDK,
+  Photon/WASM) coûte ~**1,8 s** pour une capture 2560×1440 et ~**2 à 4 s** pour
+  une image de 5 à 9 Mo à réduire. Une image **déjà dans les bornes ne paie
+  RIEN** (chemin rapide : base64 seul, ~1 ms pour 543 Ko).
+* ⚠️ **Contexte** : le SDK estime une image à ~1 200 jetons (`ESTIMATED_IMAGE_CHARS`),
+  quelle que soit sa taille — le contexte ne peut donc pas exploser par ce canal.
+

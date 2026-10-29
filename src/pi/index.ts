@@ -77,6 +77,11 @@ export type {
 export { createSdkMemoryExtractor } from "./sdk/memory-extractor.js";
 export type { SdkMemoryExtractorConfig } from "./sdk/memory-extractor.js";
 
+// VISION — réduction À LA VOLÉE des images envoyées au modèle. Le port rendu
+// (`VisionImageResizer`) est PUR : aucun type du SDK ne traverse la façade, et
+// `src/files/**` reste sans dépendance au SDK.
+export { sdkVisionImageResizer } from "./sdk/vision-resize.js";
+
 // Récapitulatif « conversation dédiée » : écrivain SDK (session éphémère isolée).
 // Le port renvoyé (`RecapWriter`) est PUR : aucun type du SDK ne traverse la façade.
 export { createSdkRecapWriter } from "./sdk/recap-writer.js";

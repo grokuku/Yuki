@@ -44,6 +44,7 @@ import {
   formatFileMarker,
   parseMessageFiles,
 } from "./file-block.js";
+import { filesFromClipboard } from "./clipboard-files.js";
 import { createSubagentActivity } from "./subagent-activity.js";
 import { createThinkingBlocks } from "./thinking.js";
 import {
@@ -675,7 +676,7 @@ const ackBlocks = createAckBlocks({ container: els.conversation });
  *  - les fichiers envoyés par YUKI arrivent par trame de CONTRÔLE `file_sent`
  *    (éphémère, jamais bufferisée) : carte affichée immédiatement, retirée quand
  *    le fil est reconstruit (`reset`). */
-const fileBlocks = createFileBlocks({ container: els.conversation });
+const fileBlocks = createFileBlocks({ container: els.conversation, zoom: imageLightbox });
 
 /* ─── E3 — Activité d'un SOUS-AGENT DANS le fil ────────────────────────────
  * Bloc COMPOSANT du fil (jamais un message) : replié par défaut, dépliable. Il
@@ -1104,7 +1105,14 @@ function createMessageBody(text) {
   for (const file of parsed.files) {
     // Vue COMPLÈTE si la page la connaît (envoi à l'instant), sinon le marqueur
     // suffit : le chemin et l'aperçu se déduisent du nom.
-    files.appendChild(createFileCard(knownFiles.get(file.id) ?? file, { from: "user" }));
+    files.appendChild(
+      createFileCard(knownFiles.get(file.id) ?? file, {
+        from: "user",
+        // ⚠️ MÊME visionneuse que les images générées : une image jointe
+        // s'agrandit au clic et se zoome comme les autres (`lightbox.js`).
+        zoom: imageLightbox,
+      }),
+    );
   }
   body.appendChild(files);
   return body;
@@ -2127,7 +2135,7 @@ function onTtsPhase(frame) {
   }
 }
 
-/* ─── FICHIERS à joindre (bouton, glisser-déposer, TÉLÉPHONE) ────────────────
+/* ─── FICHIERS à joindre (bouton, glisser-déposer, COLLAGE, TÉLÉPHONE) ───────
  * Le fichier est DÉPOSÉ au serveur (`POST /api/files`, corps = octets bruts) dès
  * qu'il est choisi : la barre de progression n'existe pas, mais un refus (trop
  * gros, disque en échec) est dit IMMÉDIATEMENT et EXPLICITEMENT — jamais un
@@ -2135,8 +2143,12 @@ function onTtsPhase(frame) {
  *
  * ⚠️ Le corps est envoyé en FLUX par `fetch` (un `File`/`Blob` est accepté tel
  * quel) : l'interface ne charge jamais le fichier entier en mémoire.
- * ⚠️ TÉLÉPHONE : le même bouton ouvre le sélecteur système (appareil photo,
- * galerie, fichiers). Le glisser-déposer n'est qu'un CONFORT supplémentaire. */
+ * ⚠️ Trois entrées MÈNENT au MÊME chemin (`addFiles`) : le trombone (qui ouvre
+ * aussi le sélecteur système du téléphone), le glisser-déposer et le COLLAGE
+ * (voir `onPaste` plus bas). Aucun second chemin d'envoi n'existe.
+ * ⚠️ TÉLÉPHONE : le bouton ouvre le sélecteur système (appareil photo, galerie,
+ * fichiers) et reste le moyen UNIVERSEL : ni le glisser-déposer ni le collage
+ * d'image n'y sont garantis. */
 const pendingFiles = new Map();
 let uploadingCount = 0;
 /**
@@ -2171,9 +2183,17 @@ function refreshPendingFiles() {
     label.textContent = file.name;
     const meta = document.createElement("span");
     meta.className = "pending-file__meta";
-    meta.textContent = `${formatBytes(file.bytes)}${
-      file.readable === false ? " · non lisible" : ""
-    }`;
+    // ⚠️ VÉRITÉ : « non lisible » veut dire « Yuki n'en extrait aucun texte ». Ce
+    // n'est PAS la même chose qu'invisible : une IMAGE est transmise au modèle EN
+    // TANT QU'IMAGE (elle est vue, aucun texte n'en est extrait). Lui coller
+    // « non lisible » serait un mensonge à l'écran.
+    const unreadableNote =
+      file.readable === false
+        ? file.kind === "image"
+          ? " · vue par le modèle"
+          : " · non lisible"
+        : "";
+    meta.textContent = `${formatBytes(file.bytes)}${unreadableNote}`;
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "pending-file__remove";
@@ -2239,7 +2259,12 @@ async function uploadFile(file) {
   return payload.file;
 }
 
-/** Dépose une liste de fichiers (sélecteur, glisser-déposer, collage). */
+/**
+ * Dépose une liste de fichiers (sélecteur, glisser-déposer, collage).
+ *
+ * ⚠️ C'est le SEUL chemin d'envoi : le collage ne réimplémente rien, il remet
+ * ses fichiers ici (mêmes refus explicites, même liste d'attente).
+ */
 async function addFiles(fileList) {
   if (!fileList || fileList.length === 0) return;
   uploadingCount += 1;
@@ -2256,6 +2281,26 @@ async function addFiles(fileList) {
     uploadingCount = Math.max(0, uploadingCount - 1);
     refreshPendingFiles();
   }
+}
+
+/* ─── COLLAGE d'un fichier ou d'une IMAGE (ordinateur) ──────────────────────
+ * Une capture d'écran copiée ou un fichier copié (Finder, explorateur,
+ * « Copier l'image » d'un navigateur) est traité EXACTEMENT comme un
+ * glisser-déposer : mêmes fichiers, même envoi, même liste d'attente.
+ *
+ * ⚠️ ORDRE CRITIQUE : on rend la main SANS rien faire quand le collage ne
+ * contient aucun fichier, et seulement ensuite on empêche le comportement par
+ * défaut. Inverser les deux casserait le collage de TEXTE et le collage
+ * `text/html` d'un tableur (le champ ne recevrait plus rien).
+ * ⚠️ TÉLÉPHONE : `paste` n'expose en général AUCUNE image (l'appui long ouvre
+ * le menu système du champ, qui propose « Coller » du texte). Le collage est
+ * donc un confort d'ORDINATEUR ; sur téléphone le trombone (appareil photo,
+ * galerie) reste le moyen d'envoyer une image. */
+function onPaste(event) {
+  const files = filesFromClipboard(event.clipboardData, { now: Date.now() });
+  if (files.length === 0) return;
+  event.preventDefault();
+  void addFiles(files);
 }
 
 function sendMessage() {
@@ -2472,6 +2517,7 @@ if (els.chat) {
   });
 }
 
+els.input.addEventListener("paste", onPaste);
 els.send.addEventListener("click", sendMessage);
 els.stop.addEventListener("click", abort);
 if (els.emptyNew) {

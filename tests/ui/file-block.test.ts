@@ -81,4 +81,22 @@ describe("garde-fous statiques de file-block.js (CSP)", () => {
     // La carte ne télécharge QUE depuis le service same-origin.
     expect(source).toContain("href: url");
   });
+
+  it("ZOOM : l'aperçu passe par la visionneuse PARTAGÉE (aucun second calque)", () => {
+    // Patron identique à `screenshot-block.js` : la visionneuse est INJECTÉE.
+    expect(source).toContain("options.zoom ? options.zoom.decorate(img) : img");
+    expect(source).toContain("zoom.decorate");
+    // `createFileBlocks` accepte la dépendance et la PROPAGE aux cartes.
+    expect(source).toMatch(/export function createFileBlocks\(\{ container, zoom \}/);
+    expect(source).toMatch(/createFileCard\(file, \{ from: options\.from \?\? "yuki", zoom \}\)/);
+    // ⚠️ Aucun calque propre à `file-block.js` : la visionneuse reste unique.
+    expect(source).not.toContain("lightbox__");
+    expect(source).not.toContain("createImageLightbox");
+  });
+
+  it("l'aperçu d'image reste une image SAME-ORIGIN, jamais un `data:` élargi", () => {
+    expect(source).toContain("img.src = file.imageSrc");
+    expect(source).not.toContain("innerHTML");
+    expect(source).not.toContain("style=");
+  });
 });

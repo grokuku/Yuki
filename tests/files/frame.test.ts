@@ -21,6 +21,7 @@ import {
   stripFilesBlock,
   UNAVAILABLE_ANALYSIS_REASON,
 } from "../../src/files/frame.js";
+import { UNREADABLE_REASONS } from "../../src/files/analyze.js";
 import {
   formatFileMarker as formatFileMarkerUi,
   parseMessageFiles,
@@ -135,6 +136,32 @@ describe("bloc <fichiers> — données, jamais une instruction", () => {
     expect(block).toContain('lu="non"');
     expect(block).toContain('genre="pdf"');
     expect(block).toContain("extraction de texte PDF");
+  });
+
+  it("une IMAGE jointe n'est jamais annoncée « contenu non transmis » (elle est VUE)", () => {
+    // ⚠️ Une image n'a pas de TEXTE à extraire, mais elle part AU MODÈLE en tant
+    // qu'image (pièce jointe `ImageContent`) : le bloc ne doit donc jamais dire
+    // qu'elle n'est pas transmise, ni répéter l'ancien mensonge « aucun modèle
+    // multimodal ».
+    const image = {
+      name: "photo.png",
+      mimeType: "image/png",
+      bytes: 70,
+      kind: "image" as const,
+      readable: false,
+      reason: UNREADABLE_REASONS.image,
+    };
+    const block = frameFiles([image], OPTIONS);
+    expect(block).toContain('genre="image"');
+    expect(block).toContain("en tant qu'image");
+    expect(block).not.toContain("multimodal");
+    expect(block).not.toContain("Contenu non transmis");
+
+    // Et même avec une borne TOTALE nulle, l'image ne bascule pas dans la branche
+    // « borne atteinte » : elle n'y a jamais droit (elle ne consomme aucun texte).
+    const tight = frameFiles([image], { promptChars: 1, promptTotalChars: 0 });
+    expect(tight).not.toContain("Contenu non transmis");
+    expect(tight).toContain("en tant qu'image");
   });
 
   it("aucun bloc quand il n'y a aucun fichier (aucun coût de contexte)", () => {

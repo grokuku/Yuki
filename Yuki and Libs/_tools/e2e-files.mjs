@@ -8,7 +8,8 @@
  *  2. un fichier INCONNU (binaire) est stocké, affiché « non lisible », et le bloc
  *     transmis DIT que rien n'en est lu ;
  *  3. une IMAGE est AFFICHÉE dans le fil (`<img src="/fichiers/…">` décodée, donc
- *     `img-src 'self'` suffit) ;
+ *     `img-src 'self'` suffit) ET TRANSMISE AU MODÈLE en tant qu'image (sonde
+ *     `lastImages` du harnais : le modèle la VOIT, il ne la devine pas) ;
  *  4. un fichier contenant « ignore tes consignes » n'apparaît PAS comme
  *     instruction : il est encadré comme DONNÉE (une seule fermeture de balise) et
  *     le message affiché ne recopie jamais son contenu ;
@@ -18,7 +19,13 @@
  *  7. Yuki RENVOIE un fichier reçu : carte dans le fil, téléchargement réel avec
  *     le bon nom et le bon type ;
  *  8. après 30 JOURS (horloge injectée), le FICHIER et son ANALYSE sont supprimés ;
- *  9. sur TÉLÉPHONE (viewport 390×844, tactile), l'envoi de fichier fonctionne.
+ *  9. sur TÉLÉPHONE (viewport 390×844, tactile), l'envoi de fichier fonctionne ;
+ * 10. un fichier ou une IMAGE COLLÉ (Ctrl+V, presse-papiers RÉEL) suit le même
+ *     chemin que le sélecteur et le glisser-déposer (puce, carte, aperçu), et
+ *     coller du TEXTE continue d'écrire dans le champ sans rien joindre ;
+ * 11. l'aperçu d'une image JOINTE est une vignette AGRANDISSABLE : bouton
+ *     accessible, visionneuse PARTAGÉE, molette, ‹ ›, Échap, et `scrollTop`
+ *     du fil INCHANGÉ (PIÈGE ①).
  *
  * ⚠️ Aucune capture PNG n'est écrite dans le dépôt : tout va dans un dossier
  * temporaire.
@@ -27,7 +34,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
@@ -211,6 +218,14 @@ await send("Emulation.setDeviceMetricsOverride", {
   deviceScaleFactor: 1,
   mobile: false,
 });
+// Le COLLAGE exige un document FOCUS (sinon `navigator.clipboard.write` refuse).
+await send("Emulation.setFocusEmulationEnabled", { enabled: true });
+// Permission presse-papiers pour l'origine du gateway (lecture ET écriture) —
+// même patron que `_tools/e2e-copy.mjs:164-167`.
+await send("Browser.grantPermissions", {
+  origin: server.base,
+  permissions: ["clipboardReadWrite", "clipboardSanitizedWrite"],
+});
 
 async function navigate(url) {
   const loaded = new Promise((resolve) => {
@@ -272,6 +287,100 @@ async function pickFiles(paths) {
   );
 }
 
+/** Clic RÉEL (souris) — même geste que `_tools/e2e-lightbox.mjs`. */
+async function mouseClick(x, y) {
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", buttons: 0 });
+  await send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+  await sleep(150);
+}
+
+/** Touche clavier RÉELLE (événement de confiance, comme un vrai clavier). */
+async function pressKey(key, code, keyCode) {
+  await send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key,
+    code,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key,
+    code,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  });
+  await sleep(120);
+}
+
+/**
+ * Ctrl+V dans le champ de saisie : c'est le NAVIGATEUR qui lit le presse-papiers
+ * et émet un `paste` de confiance (aucun `ClipboardEvent` fabriqué à la main).
+ */
+async function pasteKey() {
+  await send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    key: "Control",
+    code: "ControlLeft",
+    windowsVirtualKeyCode: 17,
+    nativeVirtualKeyCode: 17,
+    modifiers: 2,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    key: "v",
+    code: "KeyV",
+    unmodifiedText: "v",
+    windowsVirtualKeyCode: 86,
+    nativeVirtualKeyCode: 86,
+    modifiers: 2,
+    commands: ["paste"],
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "v",
+    code: "KeyV",
+    windowsVirtualKeyCode: 86,
+    nativeVirtualKeyCode: 86,
+    modifiers: 2,
+  });
+  await send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key: "Control",
+    code: "ControlLeft",
+    windowsVirtualKeyCode: 17,
+    nativeVirtualKeyCode: 17,
+    modifiers: 0,
+  });
+  await sleep(250);
+}
+
+/** Met le focus dans le champ de saisie par un CLIC réel. */
+async function focusInput() {
+  const box = await evaluate(`(() => {
+    const el = document.getElementById('input');
+    const r = el.getBoundingClientRect();
+    return { x: r.left + 20, y: r.top + r.height / 2, focused: document.activeElement === el };
+  })()`);
+  if (!box.focused) await mouseClick(box.x, box.y);
+  return evaluate(`document.activeElement === document.getElementById('input')`);
+}
+
 /** Attend qu'un fichier soit en attente (téléversé) dans le composeur. */
 async function waitReadyChips(count = 1, timeout = 10_000) {
   return waitFor(
@@ -322,6 +431,21 @@ function userBubbles() {
 async function sessionText() {
   const state = await fetch(`${server.base}/e2e/state`).then((r) => r.json());
   return String(state.lastPrompt ?? "");
+}
+
+/**
+ * IMAGES réellement transmises au SDK par le dernier envoi (sonde du harnais).
+ * ⚠️ Le harnais ne publie JAMAIS le base64 : nombre, types MIME et poids décodé
+ * suffisent à prouver que le modèle reçoit l'image.
+ */
+async function visionState() {
+  const state = await fetch(`${server.base}/e2e/state`).then((r) => r.json());
+  return {
+    images: Number(state.lastImages ?? 0),
+    mimeTypes: Array.isArray(state.lastImageMimeTypes) ? state.lastImageMimeTypes : [],
+    bytes: Number(state.lastImageBytes ?? 0),
+    prompt: String(state.lastPrompt ?? ""),
+  };
 }
 
 async function stopPage() {
@@ -533,6 +657,31 @@ check(
     Math.abs(imgBox.iw / imgBox.ih - imgBox.nw / imgBox.nh) < 0.05,
   JSON.stringify(imgBox),
 );
+
+/* ⚠️ VISION : l'image doit être VUE par le modèle, pas seulement affichée. */
+await sleep(600);
+const vision = await visionState();
+check(
+  "l'image jointe est TRANSMISE AU MODÈLE (1 pièce jointe image/png, poids exact)",
+  vision.images === 1 &&
+    vision.mimeTypes.length === 1 &&
+    vision.mimeTypes[0] === "image/png" &&
+    vision.bytes === statSync(IMAGE_FILE).size,
+  JSON.stringify({
+    images: vision.images,
+    mimeTypes: vision.mimeTypes,
+    bytes: vision.bytes,
+    attendu: statSync(IMAGE_FILE).size,
+  }),
+);
+check(
+  "le bloc <fichiers> dit la VÉRITÉ sur l'image (plus de « aucun modèle multimodal »)",
+  vision.prompt.includes('genre="image"') &&
+    vision.prompt.includes("en tant qu'image") &&
+    !/multimodal/i.test(vision.prompt) &&
+    !vision.prompt.includes("Contenu non transmis"),
+  vision.prompt.slice(vision.prompt.indexOf('nom="photo.png"'), vision.prompt.indexOf('nom="photo.png"') + 220),
+);
 await shot("files-image");
 
 /* ═══════════════ 5) « ignore tes consignes » = DONNÉE, pas instruction ════ */
@@ -694,6 +843,370 @@ check(
   JSON.stringify({ ...download, body: String(download.body).slice(0, 40) }),
 );
 await shot("files-yuki-send");
+
+/* ═══════════════ 8bis) COLLAGE : une IMAGE arrive par Ctrl+V ═════════════
+ * Chemin RÉEL : permission presse-papiers, image réellement posée dans le
+ * presse-papiers du navigateur, puis Ctrl+V dans le champ (aucun `paste`
+ * fabriqué à la main). L'image est dessinée dans un canvas : elle n'est pas
+ * 1×1, donc le zoom de la visionneuse est mesurable.
+ * ⚠️ 240×160 APLAT (≈1,4 Ko) : ce harnais plafonne volontairement l'envoi à
+ * 2048 octets (pour prouver le refus) ; une image plus lourde serait REFUSÉE
+ * et sa modale volerait le focus au reste du scénario. */
+await navigate(`${server.base}/`);
+await sleep(900);
+const pasted = await evaluate(`(async () => {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 240;
+    canvas.height = 160;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#2b6cb0';
+    ctx.fillRect(0, 0, 240, 160);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) return { ok: false, reason: 'canvas.toBlob a échoué' };
+    if (typeof ClipboardItem !== 'function' || !navigator.clipboard?.write) {
+      return { ok: false, reason: 'API presse-papiers absente' };
+    }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    return { ok: true, size: blob.size, type: blob.type };
+  } catch (error) {
+    return { ok: false, reason: String(error && error.message ? error.message : error) };
+  }
+})()`);
+check(
+  "une image PNG est RÉELLEMENT posée dans le presse-papiers du navigateur",
+  pasted?.ok === true && pasted.size > 500 && pasted.size < 2048 && pasted.type === "image/png",
+  JSON.stringify(pasted),
+);
+check("le champ de saisie a le FOCUS avant Ctrl+V", await focusInput());
+
+// Nombre de cartes d'IMAGE avant le collage : la preuve exige que le collage en
+// AJOUTE une (sinon on relirait une carte plus ancienne du fil).
+const imageCardsBeforePaste = await evaluate(
+  `document.querySelectorAll('.file-card__image').length`,
+);
+await pasteKey();
+const chipAfterPaste = await waitReadyChips(1, 8000);
+check(
+  "Ctrl+V d'une image ⇒ une puce d'attente apparaît (même chemin que le glisser-déposer)",
+  chipAfterPaste,
+  `presse-papiers=${JSON.stringify(pasted)} ; modale=${await evaluate(
+    `(document.querySelector('.holaf-modal-root')?.textContent ?? '').slice(0, 120)`,
+  )}`,
+);
+const pasteChips = await chipsState();
+check(
+  "la puce porte un nom PORTEUR D'EXTENSION (le type MIME est classant)",
+  // ⚠️ Chromium nomme lui-même une image collée « image.png » : ce nom est un
+  // nom EXPLOITABLE, donc CONSERVÉ (`namePastedFile`). Le cas du nom VIDE —
+  // celui d'autres systèmes — est prouvé juste après, et unitairement dans
+  // `tests/ui/clipboard-files.test.ts`.
+  pasteChips.length === 1 && /^\S+\.png/.test(pasteChips[0] ?? ""),
+  pasteChips.join(" | "),
+);
+await sendMessage("image collée depuis le presse-papiers");
+const lastImageCardExpr = `(() => Array.from(document.querySelectorAll('.file-card--user'))
+  .filter((el) => el.querySelector('img.file-card__image')).pop())()`;
+const pastedCard = await waitFor(
+  `document.querySelectorAll('.file-card__image').length === ${imageCardsBeforePaste + 1}`,
+  8000,
+);
+check(
+  "le collage AJOUTE une CARTE de fichier avec son aperçu dans le fil",
+  pastedCard,
+  `cartes d'image ${imageCardsBeforePaste} → ${await evaluate(
+    `document.querySelectorAll('.file-card__image').length`,
+  )}`,
+);
+const pastedState = await evaluate(`(() => {
+  const card = ${lastImageCardExpr};
+  if (!card) return null;
+  const img = card.querySelector('img.file-card__image');
+  return {
+    name: card.querySelector('.file-card__name')?.textContent ?? '',
+    href: card.querySelector('.file-card__download')?.getAttribute('href') ?? null,
+    imgSrc: img?.getAttribute('src') ?? null,
+    naturalWidth: img?.naturalWidth ?? 0,
+    naturalHeight: img?.naturalHeight ?? 0,
+    styleAttr: card.getAttribute('style'),
+    imgStyleAttr: img?.getAttribute('style') ?? null,
+  };
+})()`);
+check(
+  "la carte de l'image COLLÉE porte un nom .png, son APERÇU same-origin et les dimensions collées",
+  /\.png$/.test(pastedState?.name ?? "") &&
+    String(pastedState?.href).startsWith("/fichiers/") &&
+    String(pastedState?.imgSrc).startsWith("/fichiers/") &&
+    pastedState?.naturalWidth === 240 &&
+    pastedState?.naturalHeight === 160 &&
+    pastedState?.styleAttr === null &&
+    pastedState?.imgStyleAttr === null,
+  JSON.stringify(pastedState),
+);
+const pastedDecoded = await waitFor(
+  `(async () => {
+    const card = ${lastImageCardExpr};
+    const img = card ? card.querySelector('img.file-card__image') : null;
+    if (!img) return false;
+    try { await img.decode(); } catch { return false; }
+    return img.complete && img.naturalWidth > 0;
+  })()`,
+  6000,
+);
+check("l'image COLLÉE est réellement décodée par le navigateur", pastedDecoded);
+
+/* ── Collage SANS NOM : le cas des systèmes qui ne nomment pas l'image ───────
+ * Chromium nomme les images collées ; ce n'est PAS garanti partout. On rejoue
+ * donc le `paste` avec un fichier SANS nom (événement de la page, donc non
+ * confiance : c'est le seul moyen de reproduire ce cas) pour prouver que le nom
+ * GÉNÉRÉ sauve le classement de l'image. */
+const namelessPaste = await evaluate(`(async () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 60;
+  canvas.height = 40;
+  canvas.getContext('2d').fillRect(0, 0, 60, 40);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  const transfer = new DataTransfer();
+  transfer.items.add(new File([blob], '', { type: 'image/png' }));
+  const input = document.getElementById('input');
+  input.focus();
+  input.dispatchEvent(
+    new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }),
+  );
+  return { size: blob.size, kinds: Array.from(transfer.items).map((i) => i.kind) };
+})()`);
+const namelessChip = await waitReadyChips(1, 8000);
+const namelessChips = await chipsState();
+check(
+  "une image collée SANS NOM reçoit un nom DATÉ avec l'extension du type MIME",
+  namelessChip &&
+    namelessChips.length === 1 &&
+    /^collé-\d{8}-\d{6}\.png/.test(namelessChips[0] ?? ""),
+  JSON.stringify({ clip: namelessPaste, puces: namelessChips }),
+);
+// La puce est retirée (le scénario suivant a besoin d'un composeur VIDE).
+await evaluate(`(() => {
+  const remove = document.querySelector('#pending-files .pending-file__remove');
+  if (remove) remove.click();
+  return true;
+})()`);
+await sleep(200);
+await shot("files-paste");
+
+/* ═══════════════ 8ter) NON-RÉGRESSION : coller du TEXTE ne joint RIEN ═════
+ * Le collage d'une image ne doit PAS confisquer le presse-papiers du texte :
+ * on rend la main sans `preventDefault` quand aucun fichier n'est présent. */
+const textClipboard = await evaluate(`(async () => {
+  try {
+    await navigator.clipboard.writeText('Texte collé à la main, sans fichier.');
+    return true;
+  } catch (error) {
+    return String(error && error.message ? error.message : error);
+  }
+})()`);
+check("du TEXTE est posé dans le presse-papiers", textClipboard === true, String(textClipboard));
+const cardsBeforeTextPaste = (await cardsState()).length;
+check("le champ a de nouveau le FOCUS", await focusInput());
+await pasteKey();
+const textArrived = await waitFor(
+  `document.getElementById('input').value.includes('Texte collé à la main')`,
+  4000,
+);
+check(
+  "⚠️ coller du TEXTE écrit bien dans le champ (aucun `preventDefault` abusif)",
+  textArrived,
+  await evaluate(`document.getElementById('input').value.slice(0, 80)`),
+);
+check(
+  "⚠️ coller du TEXTE ne joint AUCUN fichier",
+  (await chipsState()).length === 0 && (await cardsState()).length === cardsBeforeTextPaste,
+  JSON.stringify({ puces: await chipsState(), cartes: await cardsState() }),
+);
+await evaluate(`(() => {
+  const input = document.getElementById('input');
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+})()`);
+
+/* ═══════════════ 8quater) ZOOM sur l'image envoyée par l'utilisateur ══════
+ * L'aperçu d'un fichier joint doit être la MÊME vignette cliquable que les
+ * images générées et les captures, et s'ouvrir dans la MÊME visionneuse. */
+const zoomState = await evaluate(`(() => {
+  const card = ${lastImageCardExpr};
+  if (!card) return null;
+  const img = card.querySelector('img.file-card__image');
+  if (!img) return null;
+  const wrap = img.closest('.md-image-zoom');
+  const style = getComputedStyle(img);
+  const cardBox = card.getBoundingClientRect();
+  const wrapBox = wrap ? wrap.getBoundingClientRect() : null;
+  return {
+    hasZoomClass: img.classList.contains('md-image--zoom'),
+    wrapTag: wrap ? wrap.tagName : null,
+    wrapType: wrap ? wrap.getAttribute('type') : null,
+    wrapLabel: wrap ? wrap.getAttribute('aria-label') : null,
+    wrapRole: wrap ? wrap.getAttribute('role') : null,
+    cursor: wrap ? getComputedStyle(wrap).cursor : null,
+    inlineStyle: img.getAttribute('style'),
+    wrapInlineStyle: wrap ? wrap.getAttribute('style') : null,
+    maxHeight: style.maxHeight,
+    objectFit: style.objectFit,
+    imgHeight: img.getBoundingClientRect().height,
+    cardWidth: cardBox.width,
+    wrapWidth: wrapBox ? wrapBox.width : 0,
+    zoomable: document.querySelectorAll('img.md-image--zoom').length,
+  };
+})()`);
+check(
+  "l'aperçu d'une image JOINTE porte la classe de vignette agrandissable",
+  zoomState?.hasZoomClass === true,
+  JSON.stringify(zoomState),
+);
+check(
+  "la vignette est un BOUTON accessible (`type=button`, libellé « Agrandir l'image »)",
+  zoomState?.wrapTag === "BUTTON" &&
+    zoomState?.wrapType === "button" &&
+    zoomState?.wrapLabel === "Agrandir l'image",
+  JSON.stringify({ tag: zoomState?.wrapTag, label: zoomState?.wrapLabel }),
+);
+check(
+  "l'aperçu est BORNÉ en hauteur (320 px bureau) et jamais déformé",
+  zoomState?.maxHeight === "320px" &&
+    zoomState?.imgHeight <= 320.5 &&
+    zoomState?.objectFit === "contain" &&
+    zoomState?.wrapWidth <= zoomState?.cardWidth + 0.5,
+  JSON.stringify({
+    maxHeight: zoomState?.maxHeight,
+    hauteur: zoomState?.imgHeight,
+    largeurBouton: zoomState?.wrapWidth,
+    largeurCarte: zoomState?.cardWidth,
+  }),
+);
+check(
+  "aucun attribut de style en ligne (CSP `style-src 'self'`)",
+  zoomState?.inlineStyle === null && zoomState?.wrapInlineStyle === null,
+  JSON.stringify({ img: zoomState?.inlineStyle, bouton: zoomState?.wrapInlineStyle }),
+);
+
+// Fil RÉELLEMENT défilable (comme une vraie conversation) avant de mesurer le
+// `scrollTop` : sinon la mesure ne prouverait rien (PIÈGE ①).
+await evaluate(`(() => {
+  const conv = document.querySelector('#conversation');
+  for (let i = 0; i < 8; i += 1) {
+    const filler = document.createElement('div');
+    filler.className = 'message';
+    filler.textContent = 'Remplissage ' + i + ' : ' + 'une phrase assez longue pour occuper de la place. '.repeat(4);
+    conv.prepend(filler);
+  }
+  conv.scrollTop = Math.round((conv.scrollHeight - conv.clientHeight) * 0.5);
+  return conv.scrollTop;
+})()`);
+await sleep(200);
+const beforeOpen = await evaluate(`(() => {
+  const conv = document.querySelector('#conversation');
+  const card = ${lastImageCardExpr};
+  const wrap = card ? card.querySelector('.md-image-zoom') : null;
+  if (!wrap) return { zoomable: false, scrollTop: 0, x: 0, y: 0 };
+  const r = wrap.getBoundingClientRect();
+  const box = conv.getBoundingClientRect();
+  conv.scrollTop += r.top - box.top - 120;
+  const after = wrap.getBoundingClientRect();
+  return {
+    zoomable: true,
+    scrollTop: conv.scrollTop,
+    x: after.left + after.width / 2,
+    y: after.top + after.height / 2,
+  };
+})()`);
+await sleep(150);
+check(
+  "fil RÉELLEMENT défilable avant la mesure (sinon le test ne prouverait rien)",
+  beforeOpen.scrollTop > 0,
+  `scrollTop=${beforeOpen.scrollTop}`,
+);
+
+if (!beforeOpen.zoomable) {
+  // Sans vignette agrandissable, la suite n'a plus de sens : on le DIT au lieu
+  // de faire tomber le harnais sur une exception (le diagnostic reste lisible).
+  check(
+    "CLIC sur l'aperçu d'une image JOINTE ⇒ la MÊME visionneuse s'ouvre",
+    false,
+    "aucune vignette agrandissable dans la carte de fichier",
+  );
+} else {
+  await mouseClick(beforeOpen.x, beforeOpen.y);
+  const lightboxOpened = await waitFor(`!!document.querySelector('.lightbox')`, 4000);
+  check(
+    "CLIC sur l'aperçu d'une image JOINTE ⇒ la MÊME visionneuse s'ouvre",
+    lightboxOpened,
+  );
+  await waitFor(
+    `(() => { const i = document.querySelector('.lightbox__img'); return Boolean(i && i.complete && i.naturalWidth > 0); })()`,
+    5000,
+  );
+  check(
+    "UNE SEULE visionneuse (aucun second calque)",
+    (await evaluate(`document.querySelectorAll('.lightbox').length`)) === 1,
+  );
+  const afterOpen = await evaluate(`document.querySelector('#conversation').scrollTop`);
+  check(
+    "⚠️ PIÈGE ① : `scrollTop` du fil IDENTIQUE après l'ouverture",
+    afterOpen === beforeOpen.scrollTop,
+    `${beforeOpen.scrollTop} → ${afterOpen}`,
+  );
+  const navShown = await evaluate(`(() => {
+    const next = document.querySelector('.lightbox__nav--next');
+    const counter = document.querySelector('.lightbox__count');
+    return { nextHidden: next ? next.hidden : null, counter: counter ? counter.textContent : null };
+  })()`);
+  check(
+    "‹ › sont proposés quand plusieurs images peuvent s'agrandir",
+    navShown.nextHidden === false,
+    JSON.stringify(navShown),
+  );
+
+  const scaleBefore = await evaluate(`(() => {
+    const img = document.querySelector('.lightbox__img');
+    const m = img ? getComputedStyle(img).transform : '';
+    return m && m !== 'none' ? Number(m.split('(')[1].split(',')[0]) : 1;
+  })()`);
+  const lbCenter = await evaluate(`(() => {
+    const r = document.querySelector('.lightbox__img').getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  })()`);
+  await send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: lbCenter.x,
+    y: lbCenter.y,
+    deltaX: 0,
+    deltaY: -240,
+  });
+  await sleep(300);
+  const scaleAfterWheel = await evaluate(`(() => {
+    const img = document.querySelector('.lightbox__img');
+    const m = img ? getComputedStyle(img).transform : '';
+    return m && m !== 'none' ? Number(m.split('(')[1].split(',')[0]) : 1;
+  })()`);
+  check(
+    "MOLETTE sur l'image agrandie ⇒ le zoom AUGMENTE vraiment",
+    scaleAfterWheel > 1 && scaleAfterWheel > scaleBefore + 0.05,
+    `échelle ${scaleBefore.toFixed(2)} → ${scaleAfterWheel.toFixed(2)}`,
+  );
+  await shot("files-zoom");
+
+  await pressKey("Escape", "Escape", 27);
+  check(
+    "ÉCHAP ferme le calque",
+    (await evaluate(`document.querySelectorAll('.lightbox').length`)) === 0,
+  );
+  const scrollAfterEscape = await evaluate(`document.querySelector('#conversation').scrollTop`);
+  check(
+    "⚠️ PIÈGE ① : `scrollTop` du fil IDENTIQUE après la fermeture",
+    scrollAfterEscape === beforeOpen.scrollTop,
+    `${beforeOpen.scrollTop} → ${scrollAfterEscape}`,
+  );
+}
 
 /* ═══════════════ 9) TÉLÉPHONE : l'envoi fonctionne ════════════════════════ */
 await send("Emulation.setDeviceMetricsOverride", {

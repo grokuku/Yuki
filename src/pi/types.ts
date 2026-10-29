@@ -291,6 +291,16 @@ export interface SendOptions {
    * UTC. Absent/invalide ⇒ fuseau du process Node.
    */
   timezone?: string;
+  /**
+   * IMAGES jointes à CE message : une image envoyée par l'utilisateur est VUE
+   * par le modèle, pas seulement affichée. Forme LOCALE (base64 + type MIME),
+   * volontairement SANS import du SDK : c'est `sdk-host.ts` qui la projette sur
+   * `ImageContent`.
+   *
+   * ⚠️ Un message SYNTHÉTIQUE (report de job, résultat d'exécution) n'en porte
+   * JAMAIS : ce n'est pas un tour de l'utilisateur.
+   */
+  images?: readonly { data: string; mimeType: string }[];
 }
 
 /** Poignée renvoyée immédiatement par `send`. */

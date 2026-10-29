@@ -4,8 +4,10 @@
  *
  * ⚠️ HONNÊTETÉ (PIÈGE ⑦) : on ne prétend JAMAIS avoir lu ce qu'on n'a pas lu.
  *  - `text`  : le texte est extrait et conservé (borné) ;
- *  - `image` : l'image est AFFICHÉE à l'humain, mais son contenu n'est pas
- *              analysable (aucun modèle multimodal) → `readable: false` ;
+ *  - `image` : l'image n'a pas de TEXTE à extraire, mais elle est TRANSMISE AU
+ *              MODÈLE EN TANT QU'IMAGE (`ImageContent`, voir
+ *              `prepareImages` du service) → `readable: false` et une `reason`
+ *              qui dit la vérité ;
  *  - `pdf`   : le libraire (Libry) n'expose AUCUNE route d'extraction de texte
  *              PDF (vérifié : `/status`, `/search`, `/library`, `/doc/:name`,
  *              `/archive`, `/screenshot`, `/shot/:id.png`) → `readable: false` ;
@@ -64,6 +66,19 @@ export const INLINE_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set(
   IMAGE_MIME_BY_EXT.values(),
 );
 
+/**
+ * Types d'image qu'un modèle de VISION accepte (formats des fournisseurs
+ * compatibles OpenAI). Un BMP est affichable mais PAS transmissible : on le
+ * refuse explicitement plutôt que d'envoyer une partie que le fournisseur
+ * rejetterait par une erreur opaque.
+ */
+export const MODEL_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
 /** Déclaration MIME → type de contenu normalisé (jamais un type inventé). */
 const MIME_BY_EXT: Readonly<Record<string, string>> = {
   txt: "text/plain", text: "text/plain", md: "text/markdown", markdown: "text/markdown",
@@ -101,6 +116,24 @@ export function normalizeMimeType(raw: string | undefined, ext: string): string 
   const imageMime = IMAGE_MIME_BY_EXT.get(ext);
   if (imageMime) return imageMime;
   return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
+/**
+ * Type MIME à ANNONCER au modèle pour une image du stockage — `undefined` si le
+ * format n'est pas un format de vision (ex. BMP, ou un type déclaré fantaisiste
+ * qui n'est pas une image).
+ *
+ * ⚠️ On se fie d'abord à l'EXTENSION (assainie par le stockage), pas au type
+ * DÉCLARÉ par le client : un PNG annoncé `text/plain` resterait une image.
+ */
+export function modelImageMimeType(
+  ext: string,
+  declaredMime: string,
+): string | undefined {
+  const byExt = IMAGE_MIME_BY_EXT.get(ext);
+  const declared = (declaredMime.split(";")[0] ?? "").trim().toLowerCase();
+  const candidate = byExt ?? declared;
+  return MODEL_IMAGE_MIME_TYPES.has(candidate) ? candidate : undefined;
 }
 
 /**
@@ -325,8 +358,8 @@ export const UNREADABLE_REASONS = {
     "Le libraire (Libry) n'expose aucune route d'extraction de texte PDF : " +
     "Yuki ne sait pas lire ce PDF. Le fichier est conservé et téléchargeable.",
   image:
-    "Yuki ne lit pas le CONTENU d'une image (aucun modèle multimodal) : elle est " +
-    "affichée à l'utilisateur, mais rien n'en est analysé.",
+    "Image jointe au message et transmise AU MODÈLE en tant qu'image : elle est " +
+    "vue directement, aucun texte n'en est extrait.",
   binary:
     "Contenu binaire : rien n'en est lu (le fichier est conservé et " +
     "téléchargeable).",

@@ -13,6 +13,11 @@
 // la source reste `/fichiers/…` — donc `img-src 'self'` suffit : AUCUN
 // élargissement de CSP.
 //
+// ⚠️ L'aperçu d'une IMAGE passe par la VISIONNEUSE partagée (`lightbox.js`,
+// dépendance `zoom` INJECTÉE, comme `createScreenshotBlocks`) : la vignette est
+// bornée en hauteur et s'ouvre en plein écran au clic. Sans `zoom` (dépendance
+// facultative), l'image reste affichée telle quelle.
+//
 // Rendu PUREMENT DOM (`createElement`), jamais d'injection de balisage, aucun
 // attribut de style en ligne (CSP `style-src 'self'`).
 
@@ -139,6 +144,9 @@ export function completeFile(file) {
  * @param {object} file vue du fichier (`id`, `name`, `bytes`, `kind`, `url`, `imageSrc`…).
  * @param {object} [options]
  * @param {"user"|"yuki"} [options.from] auteur de l'envoi (libellé de la carte).
+ * @param {{ decorate(img: HTMLImageElement): HTMLElement }} [options.zoom]
+ *   visionneuse partagée (`lightbox.js`) : enveloppe l'aperçu dans la vignette
+ *   cliquable. Absente ⇒ l'image est affichée telle quelle (aucun zoom).
  * @returns {HTMLElement}
  */
 export function createFileCard(rawFile, options = {}) {
@@ -155,13 +163,16 @@ export function createFileCard(rawFile, options = {}) {
     h("p", { class: "file-card__name", text: name }),
   ];
   // Aperçu : UNIQUEMENT une image servie en same-origin (`img-src 'self'`).
+  // ⚠️ MÊME vignette cliquable que les images générées et les captures : on
+  // passe l'image à `zoom.decorate` quand la visionneuse est fournie (patron
+  // exact de `screenshot-block.js`).
   if (file?.kind === "image" && isSafeImageSrc(file.imageSrc ?? "")) {
     const img = document.createElement("img");
     img.className = "md-image file-card__image";
     img.src = file.imageSrc;
     img.alt = `Aperçu de l'image jointe « ${name} »`;
     img.loading = "lazy";
-    children.push(img);
+    children.push(options.zoom ? options.zoom.decorate(img) : img);
   }
   if (url !== "") {
     // `download` demande le TÉLÉCHARGEMENT (le serveur envoie de toute façon
@@ -203,14 +214,18 @@ export function createFileCard(rawFile, options = {}) {
  *
  * @param {object} deps
  * @param {HTMLElement} deps.container conteneur du fil.
+ * @param {{ decorate(img: HTMLImageElement): HTMLElement }} [deps.zoom]
+ *   visionneuse partagée (`lightbox.js`) : propagée aux cartes d'IMAGE.
  */
-export function createFileBlocks({ container }) {
+export function createFileBlocks({ container, zoom } = {}) {
   if (!container) throw new Error("createFileBlocks : conteneur absent");
 
   /** Affiche la carte d'un fichier envoyé par Yuki. */
   function show(file, options = {}) {
     if (!file) return;
-    container.appendChild(createFileCard(file, { from: options.from ?? "yuki" }));
+    container.appendChild(
+      createFileCard(file, { from: options.from ?? "yuki", zoom }),
+    );
   }
 
   /** Retire les cartes ÉPHÉMÈRES (le fil est reconstruit depuis un snapshot). */

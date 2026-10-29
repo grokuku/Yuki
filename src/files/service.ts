@@ -22,9 +22,12 @@ import {
   type FileFrameInput,
 } from "./frame.js";
 import {
+  DEFAULT_IMAGE_MAX_BYTES,
   DEFAULT_MAX_ATTACHMENTS,
   DEFAULT_PROMPT_CHARS_PER_FILE,
   DEFAULT_PROMPT_TOTAL_CHARS,
+  type FileImageContent,
+  type FileImagesOutcome,
   type FileRejectionCode,
   type FileSaveInput,
   type FilesPort,
@@ -34,6 +37,7 @@ import {
   type WireFile,
 } from "./types.js";
 import type { FilesLogger } from "./store.js";
+import { prepareVisionImage, type VisionImageResizer } from "./vision.js";
 
 const ID_RE = /^[a-f0-9]{32}$/;
 
@@ -46,6 +50,18 @@ export interface FilesServiceOptions {
   promptChars?: () => number;
   /** Caractères transmis au modèle pour tous les fichiers d'un message. */
   promptTotalChars?: () => number;
+  /** Plafond en OCTETS d'une image transmise au modèle (relu à chaud). */
+  imageMaxBytes?: () => number;
+  /**
+   * Réducteur d'image INJECTÉ (`sdkVisionImageResizer` du SDK, exposé par la
+   * façade `src/pi` : ce domaine n'importe jamais le SDK).
+   *
+   * ⚠️ Absent ⇒ aucune réduction possible : une image hors bornes est REFUSÉE.
+   * La composition root le branche donc TOUJOURS (`src/index.ts`), sinon le
+   * chemin de vision serait incomplet. Les tests fournissent un double
+   * déterministe et instantané.
+   */
+  imageResizer?: VisionImageResizer;
 }
 
 export interface AttachOutcome {
@@ -73,6 +89,8 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
   private readonly maxAttachments: () => number;
   private readonly promptChars: () => number;
   private readonly promptTotalChars: () => number;
+  private readonly imageMaxBytes: () => number;
+  private readonly imageResizer: VisionImageResizer | undefined;
   private readonly sentListeners = new Set<(view: WireFile & { sessionId: string }) => void>();
 
   constructor(options: FilesServiceOptions) {
@@ -81,6 +99,8 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
     this.maxAttachments = options.maxAttachments ?? (() => DEFAULT_MAX_ATTACHMENTS);
     this.promptChars = options.promptChars ?? (() => DEFAULT_PROMPT_CHARS_PER_FILE);
     this.promptTotalChars = options.promptTotalChars ?? (() => DEFAULT_PROMPT_TOTAL_CHARS);
+    this.imageMaxBytes = options.imageMaxBytes ?? (() => DEFAULT_IMAGE_MAX_BYTES);
+    this.imageResizer = options.imageResizer;
   }
 
   /** Résout, rattache et cadre les fichiers d'un message utilisateur. */
@@ -127,6 +147,68 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
       });
     }
     return { files, markers, ...(block !== undefined ? { block } : {}), missing };
+  }
+
+  /**
+   * Prépare les IMAGES d'un message pour le MODÈLE : base64 + type MIME, dans la
+   * forme `ImageContent` que le SDK attend (`sdk-host.ts` la projette).
+   *
+   * ⚠️ Les fichiers d'un autre genre sont ignorés : leur contenu part dans le
+   * bloc `<fichiers>`, jamais en pièce jointe.
+   *
+   * ⚠️ RÉDUCTION À LA VOLÉE (et seulement ici) : une image trop grande ou trop
+   * définie est réduite au moment de construire le message. La version réduite
+   * est ÉPHÉMÈRE (aucune écriture, aucun cache, aucune base) ; l'ORIGINAL stocké
+   * — celui qu'on télécharge — n'est jamais touché.
+   *
+   * ⚠️ GARDE-FOU ULTIME `files.imageMaxBytes` : si la réduction n'aboutit pas
+   * (ou rendrait l'image illisible), l'appelant reçoit un refus explicite et
+   * n'envoie RIEN — jamais de troncature ni d'envoi muet d'une image démesurée.
+   *
+   * ⚠️ Aucun octet d'image n'est journalisé : seuls les POIDS, la durée de
+   * réduction et les dimensions le sont (`files.image.prepared`) — c'est la
+   * charge réseau et le TTFT qu'on surveille, pas le contenu.
+   */
+  async prepareImages(files: readonly WireFile[]): Promise<FileImagesOutcome> {
+    const limit = Math.max(1, Math.trunc(this.imageMaxBytes()));
+    const images: FileImageContent[] = [];
+    for (const file of files) {
+      if (file.kind !== "image") continue;
+      const record = this.store.get(file.id);
+      const bytes = record ? this.store.readBytes(file.id) : null;
+      if (!record || !bytes || bytes.length === 0) {
+        return {
+          ok: false,
+          code: "file_image_unreadable",
+          message:
+            `L'image « ${file.name} » n'a pas pu être relue : elle n'est pas ` +
+            "transmise au modèle. Le message n'a pas été envoyé.",
+        };
+      }
+      const outcome = await prepareVisionImage({
+        name: file.name,
+        bytes,
+        ext: record.ext,
+        mimeType: record.mimeType,
+        ...(record.analysis.width !== undefined ? { width: record.analysis.width } : {}),
+        ...(record.analysis.height !== undefined ? { height: record.analysis.height } : {}),
+        maxBytes: limit,
+        ...(this.imageResizer ? { resize: this.imageResizer } : {}),
+      });
+      if (!outcome.ok) return { ok: false, code: outcome.code, message: outcome.message };
+      images.push(outcome.image);
+      this.logger?.info("files.image.prepared", {
+        id: file.id,
+        bytesIn: bytes.length,
+        bytesOut: outcome.bytes,
+        resized: outcome.resized,
+        resizeMs: outcome.resizeMs,
+        ...(outcome.width !== undefined ? { width: outcome.width } : {}),
+        ...(outcome.height !== undefined ? { height: outcome.height } : {}),
+        limitBytes: limit,
+      });
+    }
+    return { ok: true, images };
   }
 
   /**

@@ -515,6 +515,22 @@ const GROUPS = [
           "explicitement (rien n'est conservé).",
       },
       {
+        path: "files.imageMaxBytes",
+        label: "Taille maximale d'une image transmise au modèle (octets)",
+        kind: "number",
+        min: 1,
+        max: 20000000,
+        helper:
+          "Garde-fou de VISION : poids maximal d'une image transmise au modèle. " +
+          "Défaut 3 500 000 octets (en base64 : ~4,7 Mo sur le fil). En pratique, " +
+          "une image plus grande est RÉDUITE à la volée (côté max 2 000 px, côté " +
+          "min lisible 700 px) — l'original enregistré, lui, n'est jamais " +
+          "modifié. Le message n'est REFUSÉ que si la réduction échoue ou rendrait " +
+          "l'image illisible. Ce plafond borne la charge réseau et le délai de " +
+          "première réponse ; le contexte, lui, compte ~1 200 jetons par image " +
+          "quelle que soit sa taille.",
+      },
+      {
         path: "files.retentionDays",
         label: "Rétention des fichiers (jours)",
         kind: "number",
@@ -684,6 +700,7 @@ const FIELD_DEFAULTS = {
   "librarian.screenshot": "on",
   "librarian.archiveTimeoutMs": 30000,
   "files.maxFileBytes": 2147483648,
+  "files.imageMaxBytes": 3500000,
   "files.retentionDays": 30,
   "files.maxAttachments": 5,
   "files.promptChars": 12000,

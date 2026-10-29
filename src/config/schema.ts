@@ -593,6 +593,25 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_FILES_MAX_BYTES",
   },
+  // ⚠️ GARDE-FOU ULTIME des images TRANSMISES AU MODÈLE (`files.imageMaxBytes`).
+  // Une image jointe part en base64 dans le message, et le base64 pèse ×1,33 :
+  // 3 500 000 octets ⇒ ~4,7 Mo sur le fil, sous la limite usuelle des
+  // fournisseurs compatibles OpenAI (5 Mo par image). Ce plafond borne la CHARGE
+  // RÉSEAU et le TTFT ; il ne borne PAS le contexte (le SDK estime une image à
+  // 4 800 caractères, quelle que soit sa taille).
+  //
+  // ⚠️ AU-DELÀ, ON RÉDUIT D'ABORD (`src/files/vision.ts` : côté max 2 000 px,
+  // côté min lisible 700 px) et on ne REFUSE que si la réduction n'aboutit pas
+  // ou rendrait l'image illisible : jamais de troncature, jamais d'envoi muet
+  // d'une image démesurée. L'original stocké, lui, n'est jamais transformé.
+  "files.imageMaxBytes": {
+    type: "int",
+    default: 3_500_000,
+    min: 1,
+    max: 20_000_000,
+    apply: "hot",
+    env: "YUKI_FILES_IMAGE_MAX_BYTES",
+  },
   // Rétention : au-delà, le FICHIER et son ANALYSE sont supprimés (purge réelle).
   "files.retentionDays": {
     type: "int",

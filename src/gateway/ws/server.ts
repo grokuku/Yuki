@@ -37,7 +37,7 @@ import type {
   SecretRequestGatewayPort,
 } from "../../agents/execution.js";
 import type { ComfyImageView, ImagesGatewayPort } from "../../comfy/types.js";
-import type { FilesGatewayPort } from "../../files/types.js";
+import type { FilesGatewayPort, FileImageContent } from "../../files/types.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
 import {
@@ -184,6 +184,11 @@ interface ClientState {
    * reste possible. Le client envoie sa présence dès la connexion.
    */
   presence: { visible: boolean; focused: boolean };
+  /**
+   * Chaîne des messages EN COURS de traitement (préparation d'image comprise) :
+   * garantit que deux messages d'un même onglet restent DANS L'ORDRE.
+   */
+  pendingMessage?: Promise<void>;
 }
 
 /** Aperçu de récapitulatif en attente de validation humaine. */
@@ -1667,7 +1672,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     });
   }
 
-  function handleMessage(client: ClientState, message: ClientMessage): void {
+  async function handleMessage(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "message") return;
     const sessionId = sessionIdFor(client);
     if (!sessionId) {
@@ -1686,6 +1691,13 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // donc pas faire passer un fichier d'une autre conversation ni composer
     // lui-même le bloc transmis au modèle.
     let text = message.text;
+    /**
+     * IMAGES du message, prêtes pour le modèle (`ImageContent` : base64 + type
+     * MIME). ⚠️ Construites ICI, côté serveur, à partir des seuls IDENTIFIANTS
+     * reçus : le client ne transmet jamais d'octets d'image (il ne peut donc pas
+     * faire passer le contenu d'une autre conversation).
+     */
+    let images: FileImageContent[] | undefined;
     if (message.files !== undefined && message.files.length > 0) {
       if (!filesPort) {
         sendDirect(client, {
@@ -1717,6 +1729,22 @@ export function createWsTransport(options: WsTransportOptions): Transport {
             "(inconnu, expiré, ou nombre maximal atteint). Les autres ont bien été transmis.",
         });
       }
+      // ⚠️ IMAGES : un fichier de genre `image` part en pièce jointe du message
+      // (« le modèle voit l'image »), réduite À LA VOLÉE si elle dépasse les
+      // bornes de vision (côté max 2 000 px, poids `files.imageMaxBytes`).
+      // La version réduite est ÉPHÉMÈRE : l'original stocké n'est pas touché.
+      // Si la réduction échoue (ou rendrait le texte illisible), le message est
+      // REFUSÉ et RIEN n'est envoyé : jamais de troncature silencieuse.
+      const preparedImages = await filesPort.prepareImages(outcome.files);
+      if (!preparedImages.ok) {
+        sendDirect(client, {
+          type: "error",
+          code: preparedImages.code,
+          message: preparedImages.message,
+        });
+        return;
+      }
+      if (preparedImages.images.length > 0) images = preparedImages.images;
       const parts = [text.trim(), ...outcome.markers].filter((part) => part.length > 0);
       text = parts.join("\n\n");
       if (outcome.block !== undefined) text = `${text}\n\n${outcome.block}`;
@@ -1726,7 +1754,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       handle = host.send(
         sessionId,
         text,
-        message.tz !== undefined ? { timezone: message.tz } : undefined,
+        message.tz === undefined && images === undefined
+          ? undefined
+          : {
+              ...(message.tz !== undefined ? { timezone: message.tz } : {}),
+              ...(images !== undefined ? { images } : {}),
+            },
       );
     } catch (error) {
       const piError = toPiHostError(error, { sessionId, logger });
@@ -1811,9 +1844,20 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       case "secret_submit":
         await handleSecretSubmit(client, message);
         return;
-      case "message":
-        handleMessage(client, message);
+      case "message": {
+        // ⚠️ SÉRIALISATION PAR CLIENT : préparer une image peut demander une
+        // RÉDUCTION à la volée (quelques centaines de ms à quelques secondes).
+        // Sans cette chaîne, un message suivant SANS image doublerait le
+        // précédent et le modèle verrait les deux messages dans le désordre.
+        const previous = client.pendingMessage ?? Promise.resolve();
+        const next = previous.then(() => handleMessage(client, message));
+        client.pendingMessage = next.catch((error: unknown) => {
+          logger.warn("ws.message.failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
         return;
+      }
       case "abort":
         if (!client.greeted) client.sessionId = host.currentSessionId();
         tts?.cancel(

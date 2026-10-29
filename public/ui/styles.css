@@ -3118,6 +3118,16 @@ h6.md-heading {
   }
 }
 
+/* CARTE DE FICHIER : l'aperçu d'une image jointe est ENVELOPPÉ par la même
+ * visionneuse (`file-block.js` reçoit `decorate`). Le bouton doit alors épouser
+ * l'IMAGE : dans la carte FLEX, un bouton non borné s'étirerait sur toute la
+ * largeur et sa pastille « loupe » s'éloignerait de l'image. Les bornes de
+ * hauteur sont celles de la vignette commune (320 px bureau, 220 px téléphone). */
+.file-card .md-image-zoom {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
 /* ─── Visionneuse PLEIN ÉCRAN (lightbox) ────────────────────────────────────
  * ⚠️ SURCOUCHE FIXE, ajoutée à `document.body` : elle ne participe PAS à la mise
  * en page du fil (aucun `scrollTop` ne bouge, l'état STICKY et le bouton
@@ -3239,6 +3249,13 @@ h6.md-heading {
  * voir `MOBILE_MEDIA_QUERY` dans `mobile-nav.js`). */
 @media (max-width: 767px), (max-height: 480px) and (pointer: coarse) {
   .md-image-zoom > img {
+    max-height: 220px;
+  }
+
+  /* Même borne dans la carte de fichier : l'aperçu d'une image jointe ne doit
+   * pas manger l'écran du téléphone. ⚠️ Sélecteur DESCENDANT (0,2,0) : la règle
+   * générique `.md-image-zoom > img` (0,1,1) poserait sinon 320 px. */
+  .file-card .file-card__image {
     max-height: 220px;
   }
 

@@ -137,6 +137,28 @@ export interface FilesPort {
   toWire(record: StoredFileRecord): WireFile;
 }
 
+/**
+ * Image d'un message utilisateur, dans la FORME que le modèle attend
+ * (`ImageContent` du SDK) : base64 + type MIME. ⚠️ Type LOCAL : la façade `src/pi`
+ * ne dépend jamais du SDK, c'est `sdk-host.ts` qui projette cette forme sur le
+ * type du SDK.
+ */
+export interface FileImageContent {
+  /** Octets de l'image en base64 (jamais journalisé, jamais dans une trame). */
+  data: string;
+  mimeType: string;
+}
+
+/**
+ * Issue de la préparation des images d'un message.
+ *
+ * ⚠️ Un refus n'est JAMAIS partiel : `ok: false` ⇒ l'image fautive est nommée
+ * et le message entier n'est pas envoyé (patron `files_unavailable`).
+ */
+export type FileImagesOutcome =
+  | { ok: true; images: FileImageContent[] }
+  | { ok: false; code: string; message: string };
+
 /** Ce que le transport reçoit quand Yuki envoie un fichier (trame de contrôle). */
 export interface FilesGatewayPort {
   /**
@@ -151,6 +173,22 @@ export interface FilesGatewayPort {
   ): { files: WireFile[]; markers: string[]; block?: string; missing: string[] };
   /** S'abonne aux fichiers ENVOYÉS PAR YUKI. Renvoie le désabonnement. */
   subscribeSent(listener: (view: WireFile & { sessionId: string }) => void): () => void;
+  /**
+   * Prépare les IMAGES d'un message pour le modèle (`ImageContent` : base64 +
+   * type MIME).
+   *
+   * ⚠️ Les fichiers d'un autre genre sont ignorés : leur contenu part dans le
+   * bloc `<fichiers>`, jamais en pièce jointe.
+   *
+   * ⚠️ RÉDUCTION À LA VOLÉE : une image trop lourde ou trop définie est réduite
+   * ICI, au moment de construire le message — la version réduite est ÉPHÉMÈRE
+   * (aucune écriture, aucun cache) et l'original stocké n'est jamais modifié.
+   *
+   * ⚠️ GARDE-FOU ULTIME `files.imageMaxBytes` : si la réduction n'aboutit pas (ou
+   * rendrait l'image illisible), `ok: false` avec un message français nommant le
+   * fichier — l'appelant n'envoie alors RIEN (jamais de troncature silencieuse).
+   */
+  prepareImages(files: readonly WireFile[]): Promise<FileImagesOutcome>;
 }
 
 /** Consommation de l'outil `envoyer_fichier` (léger) : envoi par Yuki. */
@@ -192,3 +230,9 @@ export const DEFAULT_PROMPT_TOTAL_CHARS = 24_000;
 
 /** Rétention par défaut (jours) — défaut de `files.retentionDays`. */
 export const DEFAULT_RETENTION_DAYS = 30;
+
+/**
+ * Plafond d'une image transmise au MODÈLE — défaut de `files.imageMaxBytes`.
+ * 3 500 000 octets ⇒ ~4,7 Mio en base64 sur le fil (×1,33).
+ */
+export const DEFAULT_IMAGE_MAX_BYTES = 3_500_000;
