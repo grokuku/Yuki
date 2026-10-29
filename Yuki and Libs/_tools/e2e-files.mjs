@@ -59,6 +59,17 @@ const TRAP_FILE = join(UPLOADS, "piege.txt");
 const BINARY_FILE = join(UPLOADS, "mystere.xyz");
 const IMAGE_FILE = join(UPLOADS, "photo.png");
 const BIG_FILE = join(UPLOADS, "trop-gros.txt");
+// ⚠️ Même NATURE que le fichier réel d'un utilisateur : un log d'installeur
+// Windows en build Unicode (UTF-16LE + BOM `FF FE`, donc un octet NUL sur deux).
+const UTF16_LOG_FILE = join(UPLOADS, "EvokoHome.msi.log");
+const UTF16_LOG_TEXT =
+  "=== Verbose logging started: 29/10/2026 15:48:06  Build type: SHIP UNICODE 5.00.1001 ===\r\n" +
+  "Action start 15:48:06: INSTALL.\r\n" +
+  "MSI (s) (C4:9C) [15:48:07:114]: Le produit est déjà installé.\r\n";
+writeFileSync(
+  UTF16_LOG_FILE,
+  Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(UTF16_LOG_TEXT, "utf16le")]),
+);
 
 const TEXT_CONTENT = "Bonjour Yuki, voici mes notes de réunion.";
 // ⚠️ Fichier PIÉGÉ : il contient une consigne ET une fausse fermeture de balise,
@@ -408,11 +419,59 @@ check(
   JSON.stringify(afterReload.map((c) => c.text)),
 );
 
+/* ═══════════════ 2bis) Log UTF-16LE : Yuki le LIT (NUL ≠ binaire) ═══════ */
+{
+  // Le fichier est refusé par l'ANCIENNE détection (NUL au premier octet) : on
+  // le vérifie sur les octets bruts, puis on prouve que le chemin RÉEL de
+  // l'interface le lit désormais.
+  const brut = readFileSync(UTF16_LOG_FILE);
+  check(
+    "le log UTF-16LE porte bien un NUL sur deux (motif du cas réel)",
+    brut[0] === 0xff && brut[1] === 0xfe && brut[3] === 0x00,
+    brut.subarray(0, 8).toString("hex"),
+  );
+  await pickFiles([UTF16_LOG_FILE]);
+  await waitReadyChips(1);
+  const utf16Chips = await chipsState();
+  check(
+    "un log UTF-16 n'est PAS annoncé « non lisible » dans le composeur",
+    utf16Chips.length === 1 &&
+      /EvokoHome\.msi\.log/.test(utf16Chips[0]) &&
+      !/non lisible/.test(utf16Chips[0]),
+    utf16Chips.join(" | "),
+  );
+  await sendMessage("peux-tu lire ce journal d'installation ?");
+  const logCardReady = await waitFor(
+    `(() => Array.from(document.querySelectorAll('.file-card')).some((el) =>
+      el.textContent.includes('EvokoHome.msi.log')))()`,
+    8000,
+  );
+  check("le log UTF-16 obtient sa carte dans le fil", logCardReady);
+  const logCard = (await cardsState()).find((card) => card.text.includes("EvokoHome.msi.log"));
+  check(
+    "la carte du log UTF-16 ne dit PAS « non lisible » (il est lu)",
+    Boolean(logCard) && !/non lisible/i.test(String(logCard?.text)),
+    String(logCard?.text).slice(0, 200),
+  );
+  await sleep(1200);
+  session = await sessionText();
+  check(
+    "Yuki REÇOIT le log UTF-16 DÉCODÉ : premières lignes lisibles, aucun NUL",
+    session.includes('nom="EvokoHome.msi.log"') &&
+      session.includes('lu="oui"') &&
+      session.includes("=== Verbose logging started") &&
+      session.includes("Le produit est déjà installé.") &&
+      !session.includes("\u0000"),
+    JSON.stringify(session.slice(session.indexOf('nom="EvokoHome'), session.indexOf('nom="EvokoHome') + 220)),
+  );
+  await shot("files-utf16");
+}
+
 /* ═══════════════ 3) Fichier INCONNU : stocké, NON lu, et Yuki le DIT ══════ */
 await pickFiles([BINARY_FILE]);
 await waitReadyChips(1);
 await sendMessage("et celui-là ?");
-await waitFor(`document.querySelectorAll('.message--user').length >= 2`);
+await waitFor(`document.querySelectorAll('.message--user').length >= 3`);
 const allCards = await cardsState();
 const binaryCard = allCards.find((card) => card.text.includes("mystere.xyz"));
 check("le fichier inconnu est stocké et affiché", Boolean(binaryCard), JSON.stringify(binaryCard));
@@ -435,7 +494,7 @@ check(
 await pickFiles([IMAGE_FILE]);
 await waitReadyChips(1);
 await sendMessage("regarde cette image");
-await waitFor(`document.querySelectorAll('.message--user').length >= 3`);
+await waitFor(`document.querySelectorAll('.message--user').length >= 4`);
 const withImage = (await cardsState()).find((card) => card.text.includes("photo.png"));
 check(
   "l'image est rendue par un `<img src=\"/fichiers/…\">` (same-origin, aucune CSP élargie)",
@@ -480,7 +539,7 @@ await shot("files-image");
 await pickFiles([TRAP_FILE]);
 await waitReadyChips(1);
 await sendMessage("que dit ce fichier ?");
-await waitFor(`document.querySelectorAll('.message--user').length >= 4`);
+await waitFor(`document.querySelectorAll('.message--user').length >= 5`);
 const trapBubbles = await userBubbles();
 check(
   "l'instruction piégée n'est PAS recopiée dans le fil",

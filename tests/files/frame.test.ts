@@ -19,6 +19,7 @@ import {
   frameFiles,
   humanBytes,
   stripFilesBlock,
+  UNAVAILABLE_ANALYSIS_REASON,
 } from "../../src/files/frame.js";
 import {
   formatFileMarker as formatFileMarkerUi,
@@ -138,6 +139,36 @@ describe("bloc <fichiers> — données, jamais une instruction", () => {
 
   it("aucun bloc quand il n'y a aucun fichier (aucun coût de contexte)", () => {
     expect(frameFiles([], OPTIONS)).toBeUndefined();
+  });
+
+  it("`readable` SANS texte conservé : jamais `lu=\"oui\"`, raison honnête", () => {
+    // Cas latent : la fiche dit lisible mais le texte d'analyse est introuvable
+    // (fichier d'analyse absent). Dites « lu » ET « pas lisible » serait une
+    // CONTRADICTION : on ne transmet rien et on le dit, sans inventer de cause.
+    const block = frameFiles(
+      [
+        {
+          name: "notes.txt",
+          mimeType: "text/plain",
+          bytes: 12,
+          kind: "text",
+          readable: true,
+          storedChars: 12,
+        },
+      ],
+      OPTIONS,
+    );
+    expect(block).toBeTruthy();
+    expect(block).toContain('lu="non"');
+    expect(block).not.toContain('lu="oui"');
+    expect(block).not.toContain('tronque="oui"');
+    expect(block).toContain(UNAVAILABLE_ANALYSIS_REASON);
+    expect(block).toContain("Analyse indisponible");
+    // Aucune cause INVENTÉE (ni binaire, ni format non pris en charge).
+    expect(block).not.toContain("Contenu binaire");
+    expect(block).not.toContain("Format non pris en charge");
+    // Le fichier reste là : l'utilisateur peut le télécharger.
+    expect(block).toContain("conservé et téléchargeable");
   });
 });
 

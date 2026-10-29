@@ -94,6 +94,18 @@ export function humanBytes(bytes: number): string {
 }
 
 /**
+ * Raison émise quand la fiche dit `readable: true` mais que le TEXTE conservé
+ * est introuvable (analyse perdue, fichier d'analyse absent).
+ *
+ * ⚠️ HONNÊTETÉ (PIÈGE ⑦) : on ne prétend pas avoir lu, et on n'INVENTE pas de
+ * cause (ni « binaire », ni « format non pris en charge ») : on constate que
+ * l'analyse n'est pas retrouvable, et on rappelle que le fichier reste là.
+ */
+export const UNAVAILABLE_ANALYSIS_REASON =
+  "Analyse indisponible : le texte lu de ce fichier n'a pas pu être relu, donc " +
+  "rien n'en est transmis. Le fichier reste conservé et téléchargeable.";
+
+/**
  * Construit le bloc `<fichiers>` transmis au modèle.
  *
  * ⚠️ Renvoie `undefined` quand il n'y a AUCUN fichier : aucun bloc vide, donc
@@ -157,7 +169,15 @@ export function frameFiles(
       continue;
     }
     if (entry.readable && entry.text === undefined) {
-      attrs.push('tronque="oui"');
+      // ⚠️ `readable` SANS texte conservé ne veut pas dire « lu » : émettre
+      // `lu="oui"` avec la phrase « pas lisible » serait une CONTRADICTION.
+      // On ne transmet rien, on le DIT, et on ne devine pas la cause.
+      const honest = attrs.map((attr) => (attr.startsWith('lu="') ? 'lu="non"' : attr));
+      const reason = entry.reason ?? UNAVAILABLE_ANALYSIS_REASON;
+      blocks.push(
+        [`<fichier ${honest.join(" ")}>`, escapeOutputText(reason), "</fichier>"].join("\n"),
+      );
+      continue;
     }
     const reason = entry.reason ?? "Ce fichier n'est pas lisible par Yuki.";
     blocks.push(
