@@ -709,7 +709,20 @@ const ackBlocks = createAckBlocks({ container: els.conversation });
  *  - les fichiers envoyés par YUKI arrivent par trame de CONTRÔLE `file_sent`
  *    (éphémère, jamais bufferisée) : carte affichée immédiatement, retirée quand
  *    le fil est reconstruit (`reset`). */
-const fileBlocks = createFileBlocks({ container: els.conversation, zoom: imageLightbox });
+const fileBlocks = createFileBlocks({
+  container: els.conversation,
+  zoom: imageLightbox,
+  // ⚠️ Clic sur « Inclure dans la discussion » d'un fichier RÉCUPÉRÉ d'une
+  // machine : il rejoint la liste des pièces jointes (même chemin que le
+  // trombone). L'utilisateur peut ensuite envoyer son message avec le fichier.
+  onInclude: (file) => {
+    if (!file || typeof file.id !== "string") return;
+    pendingFiles.set(file.id, file);
+    rememberFile(file);
+    refreshPendingFiles();
+    if (els.input) els.input.focus();
+  },
+});
 
 /* ─── E3 — Activité d'un SOUS-AGENT DANS le fil ────────────────────────────
  * Bloc COMPOSANT du fil (jamais un message) : replié par défaut, dépliable. Il
@@ -1748,6 +1761,25 @@ function handleFrame(frame) {
   if (type === "file_sent") {
     rememberFile(frame.file);
     fileBlocks.show(frame.file, { from: frame.from === "user" ? "user" : "yuki" });
+    return;
+  }
+  // FICHIER RÉCUPÉRÉ depuis une machine appairée : trame de CONTRÔLE (aucun
+  // `seq` consommé). Le fichier est SUR LE DISQUE de Yuki — la carte le signale
+  // et propose « Inclure dans la discussion ». ⚠️ `pinned` mesuré AVANT
+  // l'insertion (état STICKY et `scrollTop` préservés, PIÈGE ③).
+  if (type === "file_received") {
+    const receivedTarget =
+      typeof frame.sessionId === "string" && frame.sessionId.length > 0
+        ? frame.sessionId
+        : sessionId;
+    if (receivedTarget && receivedTarget !== sessionId) return;
+    const pinned = isConversationPinned();
+    rememberFile(frame.file);
+    fileBlocks.show(frame.file, {
+      from: "agent",
+      ...(typeof frame.agentName === "string" ? { agentName: frame.agentName } : {}),
+    });
+    pinIfNeeded(pinned);
     return;
   }
   // RÉACTION posée sur un message : trame de CONTRÔLE (aucun `seq` consommé),

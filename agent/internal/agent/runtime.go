@@ -10,9 +10,11 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/grokuku/yuki/agent/internal/exec"
+	"github.com/grokuku/yuki/agent/internal/files"
 	"github.com/grokuku/yuki/agent/internal/proto"
 	"github.com/grokuku/yuki/agent/internal/screen"
 	"github.com/grokuku/yuki/agent/internal/tlsconf"
@@ -41,6 +43,12 @@ type Runtime struct {
 	screenOK   bool
 	screenPlan screen.Plan
 	captureFn  func(ctx context.Context, plan screen.Plan, opts screen.Options) (*screen.Shot, error)
+
+	// Transfert de fichiers : écritures EN COURS, indexées par `cmd_id`.
+	// ⚠️ ÉTAT LOCAL à l'agent : il n'existe QUE le temps d'un `file_put`
+	// (les trames `file_put_chunk` arrivent à la suite du `file_put`).
+	putMu sync.Mutex
+	puts  map[string]*files.Writer
 }
 
 // NewRuntime construit le gestionnaire. `logger` nil ⇒ `transport.NopLogger`.
@@ -56,6 +64,7 @@ func NewRuntime(cfg *Config, sup *exec.Supervisor, logger transport.Logger) *Run
 	return &Runtime{
 		cfg: cfg, sup: sup, log: logger, now: time.Now,
 		screenOK: ok, screenPlan: plan, captureFn: screen.Capture,
+		puts: map[string]*files.Writer{},
 	}
 }
 
@@ -73,6 +82,12 @@ func (rt *Runtime) HandleMessage(ctx context.Context, msg proto.Message, reply t
 		return reply(&proto.Pong{T: m.T, Ts: rt.now().Format(time.RFC3339Nano)})
 	case *proto.Screenshot:
 		return rt.handleScreenshot(m, reply)
+	case *proto.FileGet:
+		return rt.handleFileGet(m, reply)
+	case *proto.FilePut:
+		return rt.handleFilePut(m, reply)
+	case *proto.FilePutChunk:
+		return rt.handleFilePutChunk(m, reply)
 	case *proto.Config:
 		rt.log.Info("agent.config.recue", map[string]any{
 			"level": m.Level, "privilege": m.Privilege,
@@ -414,4 +429,195 @@ func hostOf(rawURL string) string {
 		return ""
 	}
 	return parsed.Hostname()
+}
+
+/* ─── Transfert de fichiers (capacité `files`) ───────────────────────────────
+ *
+ * ⚠️ Aucun de ces gestionnaires n'est atteint par un agent ANTÉRIEUR : il ne
+ * déclare pas la capacité `files` dans son `hello`, donc Yuki n'émet jamais ces
+ * trames (`src/agents/execution.ts`). Si elles arrivaient malgré tout, un agent
+ * ancien les IGNORERait (`client.go`), sans réponse — d'où le refus côté Yuki.
+ */
+
+// handleFileGet traite une demande de LECTURE : refus honnête ou envoi des
+// morceaux dans une goroutine (le read loop du transport reste libre).
+func (rt *Runtime) handleFileGet(req *proto.FileGet, reply transport.ReplyFunc) error {
+	rt.log.Info("agent.fichier.lecture_recue", map[string]any{
+		"cmd_id": req.CmdID, "path": req.Path, "offset": req.Offset,
+	})
+	reader, err := files.Open(req.Path, req.Offset, req.MaxTotal)
+	if err != nil {
+		code := proto.CodeIOError
+		var tooLarge *files.TropGrosError
+		switch {
+		case errors.As(err, &tooLarge):
+			code = proto.CodeTooLarge
+		case errors.Is(err, files.ErrIntrouvable):
+			code = proto.CodeNotFound
+		case errors.Is(err, files.ErrRelatif):
+			code = proto.CodeIOError
+		}
+		rt.log.Warn("agent.fichier.lecture_refusee", map[string]any{
+			"cmd_id": req.CmdID, "code": string(code),
+		})
+		return reply(&proto.Error{Error: string(code), Code: code, Message: err.Error(), Ref: req.CmdID})
+	}
+	reader.SetChunk(req.Chunk)
+	go rt.sendFileChunks(req.CmdID, reader, reply)
+	return nil
+}
+
+// sendFileChunks envoie TOUS les morceaux d'un fichier lu, puis ferme le
+// fichier. `sha256` n'est renseigné que sur le dernier morceau (empreinte du
+// fichier COMPLET, calculée pendant la lecture).
+func (rt *Runtime) sendFileChunks(cmdID string, reader *files.Reader, reply transport.ReplyFunc) {
+	defer reader.Close()
+	seq := 0
+	for {
+		data, off, last, err := reader.Next()
+		if err != nil {
+			rt.log.Error("agent.fichier.lecture_echec", map[string]any{
+				"cmd_id": cmdID, "error": err.Error(),
+			})
+			_ = reply(&proto.Error{
+				Error:   string(proto.CodeIOError),
+				Code:    proto.CodeIOError,
+				Message: err.Error(),
+				Ref:     cmdID,
+			})
+			return
+		}
+		frame := &proto.FileChunk{
+			CmdID:   cmdID,
+			Seq:     seq,
+			Offset:  off,
+			Data:    data,
+			Dernier: last,
+		}
+		if last {
+			frame.Total = reader.Total()
+			frame.Sha256 = reader.Sha256()
+		}
+		if err := reply(frame); err != nil {
+			rt.log.Warn("agent.fichier.envoi_echec", map[string]any{
+				"cmd_id": cmdID, "error": err.Error(),
+			})
+			return
+		}
+		seq++
+		if last {
+			// ⚠️ Métadonnées seulement : jamais le contenu.
+			rt.log.Info("agent.fichier.lecture_terminee", map[string]any{
+				"cmd_id": cmdID, "bytes": reader.Total(), "chunks": seq,
+			})
+			return
+		}
+	}
+}
+
+// handleFilePut prépare une ÉCRITURE : chemin absolu, conflit sans `ecraser`,
+// puis ouverture du `.part`. ⚠️ Rien n'est encore visible à la destination.
+func (rt *Runtime) handleFilePut(req *proto.FilePut, reply transport.ReplyFunc) error {
+	rt.log.Info("agent.fichier.ecriture_recue", map[string]any{
+		"cmd_id": req.CmdID, "path": req.Path, "bytes": req.Bytes, "ecraser": req.Ecraser,
+	})
+	// ⚠️ Un `cmd_id` déjà en cours est REFUSÉ : sinon deux `file_put` partageant
+	// le même identifiant mélangeraient leurs morceaux.
+	rt.putMu.Lock()
+	if _, exists := rt.puts[req.CmdID]; exists {
+		rt.putMu.Unlock()
+		return reply(&proto.FileResult{
+			CmdID:   req.CmdID,
+			Status:  proto.FileStatusRefused,
+			Code:    proto.CodeConflict,
+			Message: "un transfert portant le même identifiant est déjà en cours",
+		})
+	}
+	writer, err := files.Create(req.Path, req.Bytes, req.Mode, req.Ecraser)
+	if err != nil {
+		rt.putMu.Unlock()
+		code := proto.CodeIOError
+		switch {
+		case errors.Is(err, files.ErrConflit):
+			code = proto.CodeConflict
+		case errors.Is(err, files.ErrRelatif):
+			code = proto.CodeIOError
+		}
+		rt.log.Warn("agent.fichier.ecriture_refusee", map[string]any{
+			"cmd_id": req.CmdID, "code": string(code),
+		})
+		return reply(&proto.FileResult{
+			CmdID:   req.CmdID,
+			Status:  proto.FileStatusRefused,
+			Code:    code,
+			Message: err.Error(),
+		})
+	}
+	rt.puts[req.CmdID] = writer
+	rt.putMu.Unlock()
+	return nil
+}
+
+// handleFilePutChunk écrit un morceau ; sur le dernier, vérifie l'empreinte,
+// `fsync` puis renomme (écriture ATOMIQUE). ⚠️ Un échec supprime le `.part`.
+func (rt *Runtime) handleFilePutChunk(chunk *proto.FilePutChunk, reply transport.ReplyFunc) error {
+	rt.putMu.Lock()
+	writer := rt.puts[chunk.CmdID]
+	if writer == nil {
+		rt.putMu.Unlock()
+		rt.log.Warn("agent.fichier.morceau_orphelin", map[string]any{"cmd_id": chunk.CmdID})
+		return reply(&proto.FileResult{
+			CmdID:   chunk.CmdID,
+			Status:  proto.FileStatusRefused,
+			Code:    proto.CodeInterrupted,
+			Message: "aucun `file_put` en cours pour cette trame : le transfert est interrompu",
+		})
+	}
+	if err := writer.WriteChunk(chunk.Data); err != nil {
+		delete(rt.puts, chunk.CmdID)
+		rt.putMu.Unlock()
+		writer.Abort()
+		rt.log.Error("agent.fichier.ecriture_echec", map[string]any{
+			"cmd_id": chunk.CmdID, "error": err.Error(),
+		})
+		return reply(&proto.FileResult{
+			CmdID:   chunk.CmdID,
+			Status:  proto.FileStatusRefused,
+			Code:    proto.CodeIOError,
+			Message: err.Error(),
+		})
+	}
+	if !chunk.Dernier {
+		rt.putMu.Unlock()
+		return nil
+	}
+	delete(rt.puts, chunk.CmdID)
+	rt.putMu.Unlock()
+
+	digest, err := writer.Commit(chunk.Sha256)
+	if err != nil {
+		code := proto.CodeIOError
+		if errors.Is(err, files.ErrEmpreinte) {
+			code = proto.CodeDigestMismatch
+		}
+		rt.log.Error("agent.fichier.ecriture_refusee", map[string]any{
+			"cmd_id": chunk.CmdID, "code": string(code),
+		})
+		return reply(&proto.FileResult{
+			CmdID:   chunk.CmdID,
+			Status:  proto.FileStatusRefused,
+			Code:    code,
+			Message: err.Error(),
+		})
+	}
+	// ⚠️ Métadonnées seulement : jamais le contenu du fichier.
+	rt.log.Info("agent.fichier.ecriture_terminee", map[string]any{
+		"cmd_id": chunk.CmdID, "bytes": writer.Written(), "chunks": writer.Seq(),
+	})
+	return reply(&proto.FileResult{
+		CmdID:  chunk.CmdID,
+		Status: proto.FileStatusOK,
+		Bytes:  writer.Written(),
+		Sha256: digest,
+	})
 }

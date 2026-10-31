@@ -483,6 +483,26 @@ export type ServerMessage =
     }
   | {
       /**
+       * Yuki a RÉCUPÉRÉ un fichier depuis une machine appairée : il est désormais
+       * SUR SON DISQUE. Trame de CONTRÔLE (aucun `seq` consommé, jamais
+       * bufferisée) : elle affiche dans le fil une carte CLIQUABLE portant le
+       * bouton « Inclure dans la discussion ».
+       *
+       * ⚠️ SIGNALEMENT : sans cette carte, l'utilisateur ignorerait que le fichier
+       * existe (il n'est pas renvoyé au modèle, et le résultat d'outil ne porte que
+       * des métadonnées).
+       *
+       * ⚠️ Aucun contenu ne voyage ici : seulement des métadonnées et le chemin
+       * same-origin `/fichiers/<id>.<ext>` (aucun élargissement de CSP).
+       */
+      type: "file_received";
+      sessionId: string;
+      file: WireFile;
+      /** Machine d'où le fichier a été récupéré (nom ou identifiant). */
+      agentName?: string;
+    }
+  | {
+      /**
        * IMAGE GÉNÉRÉE par ComfyUI, affichée DANS la conversation. Trame de
        * CONTRÔLE (aucun `seq` consommé, jamais bufferisée) : elle n'entre donc
        * ni dans le rejeu, ni dans le snapshot, ni dans le transcript, ni dans la

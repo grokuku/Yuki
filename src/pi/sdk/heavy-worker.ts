@@ -14,6 +14,7 @@ import type {
   ExecutionServicePort,
   ScreenshotServicePort,
 } from "../../agents/execution.js";
+import type { TransferServicePort } from "../../agents/transfer.js";
 import type { SecretDirectoryPort } from "../../secrets/directory.js";
 import type {
   HeavyRunHandle,
@@ -38,6 +39,7 @@ import { describeModelError } from "../errors.js";
 import type { PiLogger, PiThinkingLevel } from "../types.js";
 import {
   createExecutionTools,
+  createFileTransferTools,
   createScreenshotTool,
   createSecretTools,
   type ActionToolOptions,
@@ -71,6 +73,12 @@ export interface SdkHeavyWorkerConfig {
   /** Service de capture d'écran. Présent ⇒ le worker porte `capturer_ecran`. */
   screenshots?: ScreenshotServicePort;
   /**
+   * Service de TRANSFERT de fichiers (capacité `files`). Présent ⇒ le worker
+   * porte `recuperer_fichier`/`deposer_fichier`. ⚠️ Même garde-fou par agent
+   * que `run_command` ; l'agent sans la capacité est refusé AVANT émission.
+   */
+  transfers?: TransferServicePort;
+  /**
    * Port de consultation du coffre de secrets. Présent ⇒ le worker porte
    * `lister_secrets` (NOMS seulement), pour savoir QUELLES variables
    * `${YUKI_SECRET_…}` référencer dans `run_command`.
@@ -97,7 +105,10 @@ export interface SdkHeavyWorkerConfig {
  * un test.
  */
 export function buildHeavyActionTools(
-  config: Pick<SdkHeavyWorkerConfig, "execution" | "screenshots" | "secrets">,
+  config: Pick<
+    SdkHeavyWorkerConfig,
+    "execution" | "screenshots" | "secrets" | "transfers"
+  >,
   lightSessionId: string | undefined,
 ): ToolDefinition[] {
   const options: ActionToolOptions = {
@@ -106,6 +117,8 @@ export function buildHeavyActionTools(
   const tools: ToolDefinition[] = [];
   if (config.execution) tools.push(...createExecutionTools(config.execution, options));
   if (config.screenshots) tools.push(...createScreenshotTool(config.screenshots, options));
+  // ⚠️ TRANSFERT : c'est le lourd qui AGIT sur une machine (récupérer/déposer).
+  if (config.transfers) tools.push(...createFileTransferTools(config.transfers, options));
   if (config.secrets) tools.push(...createSecretTools(config.secrets));
   return tools;
 }

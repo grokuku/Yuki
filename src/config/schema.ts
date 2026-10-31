@@ -650,6 +650,41 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_FILES_PROMPT_TOTAL_CHARS",
   },
 
+  // --- Transfert de fichiers vers/depuis une machine (capacité `files`) ------
+  // ⚠️ Ces trois bornes sont RELUES à chaque transfert (`src/agents/transfer.ts`),
+  // donc un changement dans `/config` s'applique sans redémarrage.
+  //
+  // `agentMaxBytes` : plafond PAR TRANSFERT (256 Mio). Au-delà, le transfert est
+  // REFUSÉ avec un message qui dit d'utiliser `run_command` (un transfert de
+  // plusieurs Gio bloquerait le tour du modèle).
+  "files.agentMaxBytes": {
+    type: "int",
+    default: 268_435_456,
+    min: 1_048_576,
+    max: 8_589_934_592,
+    apply: "hot",
+    env: "YUKI_FILES_AGENT_MAX_BYTES",
+  },
+  // `agentChunkBytes` : taille BINAIRE d'un morceau (192 Kio ⇒ ~256 Kio en
+  // base64, très en dessous de la trame max 8 Mio).
+  "files.agentChunkBytes": {
+    type: "int",
+    default: 196_608,
+    min: 16_384,
+    max: 4_194_304,
+    apply: "hot",
+    env: "YUKI_FILES_AGENT_CHUNK_BYTES",
+  },
+  // `agentTimeoutMs` : délai INACTIF maximal d'un transfert (sans trame reçue).
+  "files.agentTimeoutMs": {
+    type: "int",
+    default: 120_000,
+    min: 5_000,
+    max: 3_600_000,
+    apply: "hot",
+    env: "YUKI_FILES_AGENT_TIMEOUT_MS",
+  },
+
   // --- Sources (programmes extérieurs qui réveillent Yuki) -------------------
   // ⚠️ Les SOURCES elles-mêmes (nom, consigne, réglages) ne sont PAS ici : elles
   // vivent dans un fichier séparé du volume `state` (`sources.json`), car

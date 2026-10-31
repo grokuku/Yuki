@@ -532,6 +532,44 @@ const GROUPS = [
           "quelle que soit sa taille.",
       },
       {
+        path: "files.agentMaxBytes",
+        label: "Transfert machine : plafond par transfert (octets)",
+        kind: "number",
+        min: 1048576,
+        max: 8589934592,
+        advanced: true,
+        helper:
+          "Plafond d'un fichier transféré vers ou depuis une machine appairée " +
+          "(agent d'exécution). Défaut 268 435 456 octets (256 Mio). Au-delà, le " +
+          "transfert est REFUSÉ avec un message qui dit d'utiliser run_command " +
+          "(scp, rsync, tar…) : un transfert de plusieurs Gio bloquerait le tour " +
+          "du modèle des minutes durant.",
+      },
+      {
+        path: "files.agentChunkBytes",
+        label: "Transfert machine : taille d'un morceau (octets)",
+        kind: "number",
+        min: 16384,
+        max: 4194304,
+        advanced: true,
+        helper:
+          "Taille binaire d'un morceau de transfert. Défaut 196 608 octets " +
+          "(192 Kio, ~256 Kio en base64) : très en dessous de la trame maximale " +
+          "du canal (8 Mio).",
+      },
+      {
+        path: "files.agentTimeoutMs",
+        label: "Transfert machine : délai maximal (ms)",
+        kind: "number",
+        min: 5000,
+        max: 3600000,
+        advanced: true,
+        helper:
+          "Délai au-delà duquel un transfert sans aucune trame reçue est " +
+          "considéré comme interrompu. Une seule reprise est tentée à la " +
+          "reconnexion ; au-delà, l'échec est dit (jamais un succès partiel).",
+      },
+      {
         path: "files.retentionDays",
         label: "Rétention des fichiers (jours)",
         kind: "number",
@@ -719,6 +757,9 @@ const FIELD_DEFAULTS = {
   "librarian.screenshot": "on",
   "librarian.archiveTimeoutMs": 30000,
   "files.maxFileBytes": 2147483648,
+  "files.agentMaxBytes": 268435456,
+  "files.agentChunkBytes": 196608,
+  "files.agentTimeoutMs": 120000,
   "files.imageMaxBytes": 3500000,
   "files.retentionDays": 30,
   "files.maxAttachments": 5,

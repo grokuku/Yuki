@@ -81,6 +81,16 @@ func Decode(data []byte) (Message, error) {
 		m = &PairBegin{}
 	case TypePairOK:
 		m = &PairOK{}
+	case TypeFileGet:
+		m = &FileGet{}
+	case TypeFileChunk:
+		m = &FileChunk{}
+	case TypeFilePut:
+		m = &FilePut{}
+	case TypeFilePutChunk:
+		m = &FilePutChunk{}
+	case TypeFileResult:
+		m = &FileResult{}
 	default:
 		return nil, NewError(CodeUnknownType, fmt.Sprintf("type inconnu : %q", h.Type))
 	}

@@ -86,9 +86,11 @@ describe("garde-fous statiques de file-block.js (CSP)", () => {
     // Patron identique à `screenshot-block.js` : la visionneuse est INJECTÉE.
     expect(source).toContain("options.zoom ? options.zoom.decorate(img) : img");
     expect(source).toContain("zoom.decorate");
-    // `createFileBlocks` accepte la dépendance et la PROPAGE aux cartes.
-    expect(source).toMatch(/export function createFileBlocks\(\{ container, zoom \}/);
-    expect(source).toMatch(/createFileCard\(file, \{ from: options\.from \?\? "yuki", zoom \}\)/);
+    // `createFileBlocks` accepte la dépendance et la PROPAGE aux cartes
+    // (signature élargie : `onInclude` pour une carte de fichier récupéré).
+    expect(source).toMatch(/export function createFileBlocks\(\{ container, zoom, onInclude \}/);
+    // ⚠️ `zoom` est TOUJOURS propagé aux cartes, quel que soit le bouton ajouté.
+    expect(source).toMatch(/createFileCard\(file, \{\s*from,\s*zoom,/);
     // ⚠️ Aucun calque propre à `file-block.js` : la visionneuse reste unique.
     expect(source).not.toContain("lightbox__");
     expect(source).not.toContain("createImageLightbox");
@@ -96,6 +98,35 @@ describe("garde-fous statiques de file-block.js (CSP)", () => {
 
   it("l'aperçu d'image reste une image SAME-ORIGIN, jamais un `data:` élargi", () => {
     expect(source).toContain("img.src = file.imageSrc");
+    expect(source).not.toContain("innerHTML");
+    expect(source).not.toContain("style=");
+  });
+});
+
+describe("carte d'un fichier RÉCUPÉRÉ depuis une machine (bouton « Inclure »)", () => {
+  const source = readFileSync(
+    join(process.cwd(), "public", "ui", "file-block.js"),
+    "utf8",
+  );
+
+  it("rend le bouton « Inclure dans la discussion » pour une carte `agent`", () => {
+    expect(source).toContain("file-card__include");
+    expect(source).toContain("Inclure dans la discussion");
+    // Le bouton n'est proposé QUE pour une carte de fichier récupéré.
+    expect(source).toMatch(/from === "agent" && typeof options\.onInclude === "function"/);
+  });
+
+  it("affiche la machine d'origine (d'où vient le fichier)", () => {
+    expect(source).toContain("file-card__origin");
+    expect(source).toContain("Depuis la machine");
+  });
+
+  it("le clic appelle `onInclude` puis désactive le bouton (aucun double envoi)", () => {
+    expect(source).toContain("options.onInclude(file)");
+    expect(source).toContain("include.disabled = true");
+  });
+
+  it("n'utilise NI `innerHTML` NI style en ligne (CSP inchangée)", () => {
     expect(source).not.toContain("innerHTML");
     expect(source).not.toContain("style=");
   });

@@ -29,6 +29,15 @@ var capabilities = []string{
 	"shell",    // shell complet (D123)
 	"classify", // classification locale des commandes destructrices (A5)
 	"env",      // secrets reçus par variable d'environnement (Cmd.Env → enfant)
+	// `files` : sait lire (`file_get`/`file_chunk`) et ÉCRIRE
+	// (`file_put`/`file_put_chunk`/`file_result`) un fichier de sa machine.
+	//
+	// ⚠️ C'est la SEULE négociation du transfert de fichiers : `proto.Version`
+	// reste à 1 (un incrément ferait refuser TOUS les agents déployés,
+	// `codec.go`). Un agent antérieur IGNORE ces trames (`client.go`) ; Yuki
+	// vérifie donc cette capacité AVANT d'émettre quoi que ce soit, sinon
+	// elle attendrait une réponse qui n'arriverait jamais.
+	"files",
 }
 
 // capabilitiesFor renvoie les capacités à déclarer, en ajoutant `screenshot`

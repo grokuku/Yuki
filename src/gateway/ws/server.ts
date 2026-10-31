@@ -38,6 +38,7 @@ import type {
 } from "../../agents/execution.js";
 import type { ComfyImageView, ImagesGatewayPort } from "../../comfy/types.js";
 import type { FilesGatewayPort, FileImageContent } from "../../files/types.js";
+import type { FileReceivedView } from "../../agents/transfer.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
 import {
@@ -161,6 +162,13 @@ export interface WsTransportOptions {
    */
   files?: FilesGatewayPort;
   /**
+   * TRANSFERT de fichiers depuis une machine appairée : la trame de CONTRÔLE
+   * `file_received` signale à l'utilisateur qu'un fichier est désormais sur le
+   * disque de Yuki (carte cliquable « Inclure dans la discussion »). Absent ⇒
+   * aucune trame `file_received` (comportement inchangé).
+   */
+  agentTransfers?: FileTransferGatewayPort;
+  /**
    * SOURCES : programmes extérieurs qui postent dans une conversation.
    *
    *  - la trame `sessions` dit, pour chaque fil, QUELLES sources y postent — c'est
@@ -171,6 +179,15 @@ export interface WsTransportOptions {
    * Absent ⇒ aucun marquage, aucune réaffectation (comportement inchangé).
    */
   sources?: SourcesGatewayPort;
+}
+
+/**
+ * Port des TRANSFERTS de fichiers exposé au transport. Découplé du domaine
+ * `agents` : le transport ne connaît que ce contrat (aucun import du service).
+ */
+export interface FileTransferGatewayPort {
+  /** S'abonne aux fichiers RÉCUPÉRÉS depuis une machine. Renvoie le désabonnement. */
+  subscribeReceived(listener: (view: FileReceivedView) => void): () => void;
 }
 
 /**
@@ -415,6 +432,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const recap = options.recap;
   const reactions = options.reactions;
   const filesPort = options.files;
+  const agentTransfers = options.agentTransfers;
   const sourcesPort = options.sources;
 
   /**
@@ -716,6 +734,21 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     const { sessionId, ...file } = view;
     if (!sessionId) return;
     broadcastControl(sessionId, { type: "file_sent", sessionId, file, from: "yuki" });
+  });
+
+  // ── Fichiers RÉCUPÉRÉS depuis une machine (trame de CONTRÔLE) ───────────
+  // ⚠️ SIGNALEMENT indispensable : le fichier est sur le disque de Yuki, mais
+  // l'utilisateur ne le sait pas sans cette carte. Aucun `seq` consommé, jamais
+  // bufferisée. Aucun contenu : uniquement des métadonnées et le chemin
+  // same-origin `/fichiers/<id>.<ext>` (CSP inchangée).
+  const unsubscribeReceived = agentTransfers?.subscribeReceived((view) => {
+    if (!view.sessionId) return;
+    broadcastControl(view.sessionId, {
+      type: "file_received",
+      sessionId: view.sessionId,
+      file: view.file,
+      ...(view.agentName ? { agentName: view.agentName } : {}),
+    });
   });
 
   // ── Demandes de SECRET dans la conversation (`awaiting_secret`) ─────────
@@ -2037,6 +2070,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       unsubscribeImages?.();
       unsubscribeImageFinalPrompts?.();
       unsubscribeFiles?.();
+      unsubscribeReceived?.();
       tts?.cancelAll();
       if (httpServer) {
         httpServer.off("upgrade", onUpgrade);

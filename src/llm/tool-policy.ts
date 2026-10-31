@@ -117,6 +117,16 @@ export type ImageToolName = "generer_image" | "consulter_workflow";
  */
 export type FilesToolName = "envoyer_fichier";
 
+/**
+ * Outils custom de TRANSFERT DE FICHIERS vers/depuis une machine appairée
+ * (capacité `files`). `recuperer_fichier` fait LIRE un fichier distant et le
+ * dépose sur le DISQUE de Yuki ; `deposer_fichier` envoie un fichier de Yuki sur
+ * la machine. ⚠️ Portés par le worker LOURD (c'est lui qui AGIT sur une machine)
+ * et gardés par le MÊME garde-fou par agent que `run_command`. Capacité exigée
+ * AVANT toute émission : un agent antérieur ignorerait les trames.
+ */
+export type FileTransferToolName = "recuperer_fichier" | "deposer_fichier";
+
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
 export type CustomToolName =
   | DelegateToolName
@@ -128,6 +138,7 @@ export type CustomToolName =
   | ConversationArchiveToolName
   | LibrarianToolName
   | FilesToolName
+  | FileTransferToolName
   | ImageToolName;
 
 export interface ToolPolicyEntry {
@@ -156,6 +167,8 @@ export interface ToolPolicyEntry {
   readonly librarianCapture: readonly LibrarianToolName[];
   /** Outils d'ENVOI de fichier par Yuki (`envoyer_fichier`). */
   readonly files: readonly FilesToolName[];
+  /** Outils de TRANSFERT de fichiers vers/depuis une machine (`files`). */
+  readonly fileTransfer: readonly FileTransferToolName[];
   /** Outil de GÉNÉRATION d'image (`generer_image`, serveur ComfyUI). */
   readonly images: readonly ImageToolName[];
   /** Le rôle peut-il déléguer à un worker lourd ? */
@@ -271,6 +284,16 @@ export const LIBRARIAN_CAPTURE_TOOLS: readonly LibrarianToolName[] = [
  */
 export const FILES_TOOLS: readonly FilesToolName[] = ["envoyer_fichier"];
 
+/**
+ * Outils de TRANSFERT de fichiers (capacité `files`). Exposés quand le service
+ * de transfert existe et que l'exécution n'est pas désactivée. ⚠️ Le lourd les
+ * porte ; le léger, non (il converse, il n'agit pas sur une machine).
+ */
+export const FILE_TRANSFER_TOOLS: readonly FileTransferToolName[] = [
+  "recuperer_fichier",
+  "deposer_fichier",
+];
+
 export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
   light: {
     role: "light",
@@ -291,6 +314,9 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // Fichiers : Yuki peut RENVOYER un fichier de la conversation (le lourd
     // n'écrit qu'à l'utilisateur : il n'envoie pas de fichier).
     files: FILES_TOOLS,
+    // ⚠️ Le LÉGER ne transfère PAS de fichiers depuis/vers une machine : il
+    // délègue au worker lourd.
+    fileTransfer: [],
     // IMAGES : la génération est une action de CONVERSATION (Yuki décrit la
     // scène, voit l'image, la juge) — elle reste donc au léger, jamais au worker.
     images: IMAGE_TOOLS,
@@ -318,6 +344,9 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     librarian: [],
     librarianCapture: [],
     files: [],
+    // ⚠️ Le worker lourd TRANFÈRE les fichiers : c'est lui qui agit sur une
+    // machine. Mêmes garde-fous par agent que `run_command`.
+    fileTransfer: FILE_TRANSFER_TOOLS,
     images: [],
     canDelegate: false,
   },
@@ -389,6 +418,12 @@ export interface ToolAllowlistOptions {
    */
   filesEnabled?: boolean;
   /**
+   * Active les outils de TRANSFERT de fichiers `recuperer_fichier`/`deposer_fichier`
+   * (capacité `files`). DÉSACTIVÉ par défaut : seul le câblage l'active, quand un
+   * service de transfert existe.
+   */
+  fileTransferEnabled?: boolean;
+  /**
    * Active l'outil de génération d'image `generer_image` (serveur ComfyUI).
    * DÉSACTIVÉ par défaut : seul le câblage l'active, quand le générateur existe.
    */
@@ -423,6 +458,8 @@ export function toolAllowlist(
     (options.librarianCaptureEnabled ?? false) &&
     entry.librarianCapture.length > 0;
   const filesEnabled = (options.filesEnabled ?? false) && entry.files.length > 0;
+  const fileTransferEnabled =
+    (options.fileTransferEnabled ?? false) && entry.fileTransfer.length > 0;
   const imagesEnabled = (options.imagesEnabled ?? false) && entry.images.length > 0;
   const tools: string[] = [...entry.builtins];
   if (entry.canDelegate && delegationEnabled) {
@@ -457,6 +494,9 @@ export function toolAllowlist(
   }
   if (filesEnabled) {
     tools.push(...entry.files);
+  }
+  if (fileTransferEnabled) {
+    tools.push(...entry.fileTransfer);
   }
   if (imagesEnabled) {
     tools.push(...entry.images);

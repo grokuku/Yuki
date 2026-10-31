@@ -49,6 +49,22 @@ const (
 	CodePayloadMalformed ErrorCode = "pair_payload_malformed"
 	// CodeInvalidCode : format du code d'appairage invalide.
 	CodeInvalidCode ErrorCode = "pair_code_invalid"
+
+	// --- Transfert de fichiers (capacité `files`) ---------------------------
+	// CodeDigestMismatch : l'empreinte SHA-256 observée ne correspond pas à
+	// celle annoncée. ⚠️ Ni le fichier reçu ni celui écrit ne sont conservés.
+	CodeDigestMismatch ErrorCode = "digest_mismatch"
+	// CodeIOError : erreur d'entrée/sortie côté agent (permission, disque plein,
+	// chemin invalide) — le message porte la cause SYSTÈME.
+	CodeIOError ErrorCode = "io_error"
+	// CodeNotFound : le fichier demandé n'existe pas (ou n'est pas un fichier
+	// ordinaire, ou n'est pas lisible).
+	CodeNotFound ErrorCode = "not_found"
+	// CodeConflict : la destination existe déjà et `ecraser` est faux.
+	CodeConflict ErrorCode = "conflict"
+	// CodeInterrupted : le transfert a été interrompu (reprise impossible ou
+	// abandonnée) — ⚠️ jamais un succès partiel.
+	CodeInterrupted ErrorCode = "interrupted"
 )
 
 // ProtocolError est l'erreur renvoyée par `Decode` et par les helpers de ce

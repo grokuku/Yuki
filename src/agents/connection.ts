@@ -23,11 +23,19 @@ import {
   encodeCancelFrame,
   encodeCommandFrame,
   encodeConfigFrame,
+  encodeFileGetFrame,
+  encodeFilePutChunkFrame,
+  encodeFilePutFrame,
   encodePongFrame,
   encodePingFrame,
   encodeScreenshotFrame,
   parseAgentFrame,
+  type FileChunkFrame,
+  type FileResultFrame,
   type OutboundCommand,
+  type OutboundFileGet,
+  type OutboundFilePut,
+  type OutboundFilePutChunk,
   type OutboundScreenshot,
   type ResultFrame,
   type ScreenshotDataFrame,
@@ -90,6 +98,32 @@ interface PendingShot {
   timer?: NodeJS.Timeout;
 }
 
+/**
+ * Transfert de fichier EN COURS sur une connexion.
+ *
+ * ⚠️ REGISTRE SÉPARÉ de `pending` (commandes) : un transfert de fichier n'est
+ * PAS une commande shell, il dure potentiellement des minutes, et sa perte à la
+ * déconnexion doit être signalée comme `interrupted` (reprise côté
+ * `transfer.ts`), pas comme `result_lost`.
+ *
+ * Un transfert est soit une LECTURE (attente de `file_chunk`), soit une ÉCRITURE
+ * (attente de `file_result`).
+ */
+interface PendingFileTransfer {
+  cmdId: string;
+  agentId: string;
+  kind: "get" | "put";
+  /** Reçoit chaque `file_chunk` (lecture seulement). */
+  onChunk?: (chunk: FileChunkFrame) => void;
+  /** Reçoit l'issue d'une écriture (`file_result`). */
+  onResult?: (result: FileResultFrame) => void;
+  /** Erreur de transfert (refus de l'agent, déconnexion, délai). */
+  reject: (error: Error) => void;
+  /** Résolution au DERNIER morceau (lecture) : `undefined` pour une écriture. */
+  resolveGet?: () => void;
+  timer?: NodeJS.Timeout;
+}
+
 export interface AgentConnectionOptions {
   ws: WebSocket;
   agentId: string;
@@ -115,6 +149,12 @@ export class AgentConnection {
   private readonly onHelloCallback?: (connection: AgentConnection, hello: AgentHello) => void;
   private readonly pending = new Map<string, PendingCommand>();
   private readonly pendingShots = new Map<string, PendingShot>();
+  /**
+   * Transferts de fichiers en cours, indexés par `cmd_id`. ⚠️ HORS de `pending` :
+   * un transfert abandonné à la déconnexion est repris côté Yuki (registre
+   * persistant `transfers.json`), jamais rejoué aveuglément ici.
+   */
+  private readonly pendingFiles = new Map<string, PendingFileTransfer>();
 
   private hello: AgentHello | null = null;
   private closed = false;
@@ -291,9 +331,76 @@ export class AgentConnection {
         pending.resolve(parsed.frame);
         return;
       }
+      case "file_chunk": {
+        const transfer = this.pendingFiles.get(parsed.frame.cmdId);
+        if (!transfer || transfer.kind !== "get") {
+          this.logger.warn("agents.ws.file_chunk_unknown", {
+            agent_id: this.agentId,
+            cmd_id: parsed.frame.cmdId,
+          });
+          return;
+        }
+        // ⚠️ Métadonnées seulement : JAMAIS le contenu base64 du morceau.
+        this.logger.debug("agents.ws.file_chunk", {
+          agent_id: this.agentId,
+          cmd_id: parsed.frame.cmdId,
+          seq: parsed.frame.seq,
+          offset: parsed.frame.offset,
+          b64_bytes: parsed.frame.data.length,
+          dernier: parsed.frame.dernier,
+        });
+        try {
+          transfer.onChunk?.(parsed.frame);
+        } catch (error) {
+          this.settleFile(transfer);
+          transfer.reject(
+            new AgentChannelError("send_failed", "Traitement du morceau impossible.", {
+              agentId: this.agentId,
+            }),
+          );
+          void error;
+          return;
+        }
+        if (parsed.frame.dernier) {
+          this.settleFile(transfer);
+          transfer.resolveGet?.();
+        }
+        return;
+      }
+      case "file_result": {
+        const transfer = this.pendingFiles.get(parsed.frame.cmdId);
+        if (!transfer || transfer.kind !== "put") {
+          this.logger.warn("agents.ws.file_result_unknown", {
+            agent_id: this.agentId,
+            cmd_id: parsed.frame.cmdId,
+          });
+          return;
+        }
+        this.settleFile(transfer);
+        // ⚠️ Métadonnées seulement : taille et empreinte, jamais un contenu.
+        this.logger.info("agents.ws.file_result", {
+          agent_id: this.agentId,
+          cmd_id: parsed.frame.cmdId,
+          status: parsed.frame.status,
+          bytes: parsed.frame.bytes ?? null,
+          code: parsed.frame.code ?? null,
+        });
+        if (parsed.frame.status === "ok") {
+          transfer.onResult?.(parsed.frame);
+          return;
+        }
+        transfer.reject(
+          new AgentChannelError("agent_error", parsed.frame.message ?? "Écriture refusée.", {
+            agentId: this.agentId,
+            ...(parsed.frame.code !== undefined ? { agentCode: parsed.frame.code } : {}),
+          }),
+        );
+        return;
+      }
       case "error": {
         const ref = parsed.frame.ref;
         const pending = ref ? this.pending.get(ref) : undefined;
+        const fileTransfer = ref ? this.pendingFiles.get(ref) : undefined;
         this.logger.warn("agents.ws.agent_error", {
           agent_id: this.agentId,
           cmd_id: ref ?? null,
@@ -304,6 +411,18 @@ export class AgentConnection {
         if (pending) {
           this.settle(pending);
           pending.reject(
+            new AgentChannelError("agent_error", parsed.frame.message, {
+              agentId: this.agentId,
+              agentCode: parsed.frame.code,
+            }),
+          );
+        }
+        // ⚠️ Un `error` peut viser un TRANSFERT (lecture refusée : chemin
+        // relatif, fichier introuvable, trop lourd…). Il est alors répercuté au
+        // transfert, qui décide de la suite (échec explicite, jamais muet).
+        if (fileTransfer) {
+          this.settleFile(fileTransfer);
+          fileTransfer.reject(
             new AgentChannelError("agent_error", parsed.frame.message, {
               agentId: this.agentId,
               agentCode: parsed.frame.code,
@@ -482,6 +601,145 @@ export class AgentConnection {
   }
 
   /**
+   * Demande la LECTURE d'un fichier distant (`file_get`) et attend les
+   * `file_chunk` (résout au DERNIER morceau, rejette sur `error`, déconnexion ou
+   * dépassement du budget).
+   *
+   * ⚠️ Le préalable `hasCapability("files")` est vérifié par l'APPELANT, AVANT
+   * d'arriver ici : un agent antérieur ignorerait la trame sans jamais répondre.
+   */
+  sendFileGet(
+    get: OutboundFileGet,
+    onChunk: (chunk: FileChunkFrame) => void,
+  ): Promise<void> {
+    if (!this.ready()) {
+      return Promise.reject(
+        new AgentChannelError("agent_offline", "Agent hors ligne.", { agentId: this.agentId }),
+      );
+    }
+    if (this.pendingFiles.has(get.cmdId)) {
+      return Promise.reject(
+        new AgentChannelError("send_failed", "Transfert déjà en cours.", {
+          agentId: this.agentId,
+        }),
+      );
+    }
+    return new Promise<void>((resolve, reject) => {
+      const transfer: PendingFileTransfer = {
+        cmdId: get.cmdId,
+        agentId: this.agentId,
+        kind: "get",
+        onChunk,
+        reject,
+        resolveGet: resolve,
+      };
+      this.pendingFiles.set(get.cmdId, transfer);
+      this.ws.send(JSON.stringify(encodeFileGetFrame(get)), (error?: Error) => {
+        if (!error) return;
+        const current = this.pendingFiles.get(get.cmdId);
+        if (!current) return;
+        this.settleFile(current);
+        reject(
+          new AgentChannelError("send_failed", "Envoi de la demande de lecture impossible.", {
+            agentId: this.agentId,
+          }),
+        );
+      });
+    });
+  }
+
+  /** Arme le délai d'un transfert (lecture ou écriture), en ms. */
+  armFileTimer(cmdId: string, timeoutMs: number): void {
+    const transfer = this.pendingFiles.get(cmdId);
+    if (!transfer) return;
+    transfer.timer = setTimeout(() => {
+      const current = this.pendingFiles.get(cmdId);
+      if (!current) return;
+      this.settleFile(current);
+      this.logger.warn("agents.ws.file_timeout", {
+        agent_id: this.agentId,
+        cmd_id: cmdId,
+        kind: current.kind,
+      });
+      current.reject(
+        new AgentChannelError("command_timeout", "Délai dépassé pendant le transfert.", {
+          agentId: this.agentId,
+        }),
+      );
+    }, Math.max(1_000, timeoutMs));
+    transfer.timer.unref?.();
+  }
+
+  /**
+   * Annonce une ÉCRITURE (`file_put`) puis envoie ses morceaux (`file_put_chunk`)
+   * et attend `file_result`.
+   *
+   * ⚠️ Les morceaux sont déjà en base64 : ce module ne lit aucun fichier, il ne
+   * fait que parler le protocole. Le `sha256` du DERNIER morceau porte
+   * l'empreinte du fichier COMPLET.
+   */
+  async sendFilePut(
+    put: OutboundFilePut,
+    chunks: readonly OutboundFilePutChunk[],
+  ): Promise<FileResultFrame> {
+    if (!this.ready()) {
+      throw new AgentChannelError("agent_offline", "Agent hors ligne.", {
+        agentId: this.agentId,
+      });
+    }
+    if (this.pendingFiles.has(put.cmdId)) {
+      throw new AgentChannelError("send_failed", "Transfert déjà en cours.", {
+        agentId: this.agentId,
+      });
+    }
+    const done = new Promise<FileResultFrame>((resolveResult, reject) => {
+      const transfer: PendingFileTransfer = {
+        cmdId: put.cmdId,
+        agentId: this.agentId,
+        kind: "put",
+        onResult: resolveResult,
+        reject,
+      };
+      this.pendingFiles.set(put.cmdId, transfer);
+    });
+    // ⚠️ Un échec d'émission ne doit pas laisser une promesse orpheline.
+    done.catch(() => undefined);
+    this.sendFrameOrFail(put.cmdId, encodeFilePutFrame(put), "Envoi de l'annonce impossible.");
+    for (const chunk of chunks) {
+      // Une erreur (`error` de l'agent) a pu clore le transfert entre-temps.
+      if (!this.pendingFiles.has(put.cmdId)) break;
+      this.sendFrameOrFail(put.cmdId, encodeFilePutChunkFrame(chunk), "Envoi d'un morceau impossible.");
+    }
+    return done;
+  }
+
+  /** Envoie une trame de transfert ; un échec d'E/S rejette le transfert. */
+  private sendFrameOrFail(
+    cmdId: string,
+    frame: Record<string, unknown>,
+    message: string,
+  ): void {
+    this.ws.send(JSON.stringify(frame), (error?: Error) => {
+      if (!error) return;
+      const current = this.pendingFiles.get(cmdId);
+      if (!current) return;
+      this.settleFile(current);
+      current.reject(new AgentChannelError("send_failed", message, { agentId: this.agentId }));
+    });
+  }
+
+  /** Retire un transfert en attente et nettoie son minuteur. */
+  private settleFile(transfer: PendingFileTransfer): void {
+    this.pendingFiles.delete(transfer.cmdId);
+    if (transfer.timer) clearTimeout(transfer.timer);
+  }
+
+  /** Nombre de transferts de fichiers en cours. */
+  get pendingFileCount(): number {
+    return this.pendingFiles.size;
+  }
+
+  /**
    * Ferme la connexion et perd les commandes en attente (`result_lost`).
    * Idempotent.
    */
@@ -522,6 +780,28 @@ export class AgentConnection {
       this.logger.warn("agents.ws.screenshot_lost", {
         agent_id: this.agentId,
         count: lostShots.length,
+        ...(detail ? { detail } : {}),
+      });
+    }
+    // ⚠️ TRANSFERTS DE FICHIERS : `interrupted` (jamais `result_lost`). Le
+    // registre persistant de Yuki (`transfers.json`) décide ensuite d'une
+    // reprise UNIQUE à la reconnexion ; au-delà, l'échec est DIT.
+    const lostFiles = [...this.pendingFiles.values()];
+    for (const transfer of lostFiles) {
+      this.settleFile(transfer);
+      transfer.reject(
+        new AgentChannelError(
+          "interrupted",
+          "Connexion fermée pendant le transfert : reprise à la reconnexion.",
+          { agentId: this.agentId },
+        ),
+      );
+    }
+    if (lostFiles.length > 0) {
+      this.logger.warn("agents.ws.file_transfer_interrupted", {
+        agent_id: this.agentId,
+        count: lostFiles.length,
+        cmd_ids: lostFiles.map((transfer) => transfer.cmdId),
         ...(detail ? { detail } : {}),
       });
     }
@@ -664,6 +944,47 @@ export class AgentHub {
       );
     }
     return connection.sendScreenshot(shot);
+  }
+
+  /**
+   * Demande la lecture d'un fichier distant à un agent connecté, sinon rejette.
+   * ⚠️ La capacité `files` doit avoir été vérifiée AVANT (refus explicite).
+   */
+  sendFileGet(
+    agentId: string,
+    get: OutboundFileGet,
+    onChunk: (chunk: FileChunkFrame) => void,
+  ): Promise<void> {
+    const connection = this.get(agentId);
+    if (!connection) {
+      return Promise.reject(
+        new AgentChannelError("agent_offline", "Agent hors ligne.", { agentId }),
+      );
+    }
+    return connection.sendFileGet(get, onChunk);
+  }
+
+  /** Arme le délai d'un transfert d'un agent connecté (best-effort). */
+  armFileTimer(agentId: string, cmdId: string, timeoutMs: number): void {
+    this.get(agentId)?.armFileTimer(cmdId, timeoutMs);
+  }
+
+  /**
+   * Annonce et pousse une écriture à un agent connecté, sinon rejette.
+   * ⚠️ La capacité `files` doit avoir été vérifiée AVANT.
+   */
+  sendFilePut(
+    agentId: string,
+    put: OutboundFilePut,
+    chunks: readonly OutboundFilePutChunk[],
+  ): Promise<FileResultFrame> {
+    const connection = this.get(agentId);
+    if (!connection) {
+      return Promise.reject(
+        new AgentChannelError("agent_offline", "Agent hors ligne.", { agentId }),
+      );
+    }
+    return connection.sendFilePut(put, chunks);
   }
 
   /** Ferme de force la connexion d'un agent (révocation). */

@@ -25,6 +25,44 @@ import {
   createScreenshotTool,
 } from "../../src/pi/sdk/execution-tools.js";
 import { buildHeavyActionTools } from "../../src/pi/sdk/heavy-worker.js";
+import type {
+  FileGetRequest,
+  FilePutRequest,
+  TransferOutcome,
+  TransferServicePort,
+} from "../../src/agents/transfer.js";
+
+function stubTransfers(): { service: TransferServicePort; gets: FileGetRequest[]; puts: FilePutRequest[] } {
+  const gets: FileGetRequest[] = [];
+  const puts: FilePutRequest[] = [];
+  const service: TransferServicePort = {
+    get: async (request: FileGetRequest): Promise<TransferOutcome> => {
+      gets.push(request);
+      return {
+        status: "completed",
+        agentId: request.agentId,
+        direction: "get",
+        path: request.path,
+        bytes: 1234,
+        sha256: "e".repeat(64),
+        message: "récupéré",
+      };
+    },
+    put: async (request: FilePutRequest): Promise<TransferOutcome> => {
+      puts.push(request);
+      return {
+        status: "completed",
+        agentId: request.agentId,
+        direction: "put",
+        path: request.path,
+        bytes: 42,
+        sha256: "f".repeat(64),
+        message: "déposé",
+      };
+    },
+  };
+  return { service, gets, puts };
+}
 
 /** Session ÉPHÉMÈRE du worker : un ID DIFFÉRENT de la conversation. */
 const EPHEMERAL = "ephemeral-session-xyz";
@@ -84,6 +122,35 @@ describe("outils d'action du worker lourd — rattachement de la validation", ()
     const { service: screenshots } = stubScreenshot();
     const tools = buildHeavyActionTools({ execution, screenshots }, CONVERSATION);
     expect(tools.map((tool) => tool.name).sort()).toEqual(["capturer_ecran", "run_command"]);
+  });
+
+  it("buildHeavyActionTools expose recuperer_fichier/deposer_fichier quand le transfert existe", () => {
+    const { service } = stubTransfers();
+    const tools = buildHeavyActionTools({ transfers: service }, CONVERSATION);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["deposer_fichier", "recuperer_fichier"]);
+  });
+
+  it("recuperer_fichier RATTACHE la validation à la CONVERSATION (jamais l'éphémère)", async () => {
+    const { service, gets } = stubTransfers();
+    const tools = buildHeavyActionTools({ transfers: service }, CONVERSATION);
+    const get = tools.find((tool) => tool.name === "recuperer_fichier") as unknown as AnyTool;
+    await invoke(get, { agent: "nuc00", chemin: "/home/x/a.txt" }, ephemeralCtx);
+    expect(gets[0]?.sessionId).toBe(CONVERSATION);
+    expect(gets[0]?.path).toBe("/home/x/a.txt");
+  });
+
+  it("deposer_fichier transmet `ecraser` SEULEMENT si demandé", async () => {
+    const { service, puts } = stubTransfers();
+    const tools = buildHeavyActionTools({ transfers: service }, CONVERSATION);
+    const put = tools.find((tool) => tool.name === "deposer_fichier") as unknown as AnyTool;
+    await invoke(put, { agent: "nuc00", fichier: "abc.txt", chemin_distant: "/tmp/x" }, ephemeralCtx);
+    expect(puts[0]?.ecraser).toBeUndefined();
+    await invoke(
+      put,
+      { agent: "nuc00", fichier: "abc.txt", chemin_distant: "/tmp/x", ecraser: true },
+      ephemeralCtx,
+    );
+    expect(puts[1]?.ecraser).toBe(true);
   });
 
   it("buildHeavyActionTools n'expose RIEN sans service (worker sans exécution)", () => {

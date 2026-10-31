@@ -23,6 +23,7 @@
 import { randomBytes } from "node:crypto";
 import {
   closeSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -42,8 +43,10 @@ import {
   DEFAULT_MAX_FILE_BYTES,
   DEFAULT_RETENTION_DAYS,
   MAX_STORED_ANALYSIS_CHARS,
+  type FileRejectionCode,
   type FileSaveInput,
   type FileSaveResult,
+  type FileSink,
   type FilesPort,
   type StoredFileRecord,
   type WireFile,
@@ -169,6 +172,116 @@ export class FilesStore implements FilesPort {
       return { ok: false, code: "io_error", receivedBytes: received, limitBytes: limit };
     }
     return { ok: true, record };
+  }
+
+  /**
+   * Ouvre un ÉCRIVAIN BORNÉ pour un flux reçu PAR MORCEAUX (transfert depuis une
+   * machine, cf. `src/agents/transfer.ts`).
+   *
+   * ⚠️ Écriture dans `<id>.bin.part` (jamais dans la destination finale) et
+   * plafond vérifié à CHAQUE morceau : un flux trop gros est REFUSÉ sans laisser
+   * de résidu, et la fiche n'existe qu'après `commit()`.
+   */
+  createSink(input: FileSaveInput): FileSink {
+    const limit = Math.max(1, Math.trunc(this.maxBytes()));
+    this.ensureLayout();
+    const id = randomBytes(16).toString("hex");
+    const part = join(this.dir, `${id}.bin.part`);
+    let fd: number | undefined;
+    let received = 0;
+    let failed = false;
+    let committed = false;
+    try {
+      fd = openSync(part, "w", 0o600);
+    } catch (error) {
+      failed = true;
+      this.logger?.warn("files.sink.open_failed", {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+    /** Supprime le partiel et ferme le descripteur (idempotent). */
+    const discard = (): void => {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          /* déjà fermé */
+        }
+        fd = undefined;
+      }
+      rmSync(part, { force: true });
+    };
+    const store = this;
+    return {
+      get receivedBytes(): number {
+        return received;
+      },
+      write(chunk: Uint8Array) {
+        if (failed || fd === undefined) {
+          return { ok: false as const, code: "io_error" as FileRejectionCode, receivedBytes: received, limitBytes: limit };
+        }
+        received += chunk.byteLength;
+        if (received > limit) {
+          // ⚠️ On ARRÊTE d'écrire et on supprime le partiel : un fichier refusé
+          // ne doit jamais occuper le disque.
+          failed = true;
+          discard();
+          store.logger?.warn("files.rejected.too_large", { received, limit });
+          return { ok: false as const, code: "too_large" as FileRejectionCode, receivedBytes: received, limitBytes: limit };
+        }
+        try {
+          writeSync(fd, chunk);
+        } catch (error) {
+          failed = true;
+          discard();
+          store.logger?.warn("files.sink.write_failed", {
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          return { ok: false as const, code: "io_error" as FileRejectionCode, receivedBytes: received, limitBytes: limit };
+        }
+        return { ok: true as const };
+      },
+      commit(): FileSaveResult {
+        if (failed || fd === undefined) {
+          return { ok: false, code: "io_error", receivedBytes: received, limitBytes: limit };
+        }
+        try {
+          // ⚠️ fsync AVANT le rename : une coupure d'alimentation ne doit pas
+          // publier un fichier à la bonne taille mais au contenu incomplet.
+          fsyncSync(fd);
+        } catch {
+          // Certains systèmes de fichiers refusent `fsync` : on continue, le
+          // rename reste atomique.
+        }
+        closeSync(fd);
+        fd = undefined;
+        if (received === 0) {
+          discard();
+          return { ok: false, code: "empty", receivedBytes: 0, limitBytes: limit };
+        }
+        try {
+          renameSync(part, store.binPath(id));
+        } catch (error) {
+          discard();
+          store.logger?.warn("files.sink.rename_failed", {
+            reason: error instanceof Error ? error.message : String(error),
+          });
+          return { ok: false, code: "io_error", receivedBytes: received, limitBytes: limit };
+        }
+        const record = store.finalize(id, received, input);
+        if (!record) {
+          store.remove(id);
+          return { ok: false, code: "io_error", receivedBytes: received, limitBytes: limit };
+        }
+        committed = true;
+        return { ok: true, record };
+      },
+      abort(): void {
+        if (committed) return;
+        failed = true;
+        discard();
+      },
+    };
   }
 
   /** Enregistre des octets déjà en mémoire (outil, tests, déposant externe). */

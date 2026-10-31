@@ -28,7 +28,9 @@ export type AgentFrameType =
   | "error"
   | "pong"
   | "ping"
-  | "state";
+  | "state"
+  | "file_chunk"
+  | "file_result";
 
 export interface HelloFrame {
   type: "hello";
@@ -100,6 +102,55 @@ export interface StateFrame {
   detail?: string;
 }
 
+/**
+ * Morceau d'un fichier lu sur la machine (`file_chunk`, agent → Yuki).
+ *
+ * ⚠️ `data` est du base64 STANDARD (sans préfixe `data:`). `sha256` (hexadécimal
+ * minuscule) n'est renseigné que sur le DERNIER morceau : c'est l'empreinte du
+ * fichier COMPLET, que Yuki vérifie avant d'accepter le transfert.
+ */
+export interface FileChunkFrame {
+  type: "file_chunk";
+  cmdId: string;
+  seq: number;
+  /** Position du PREMIER octet du morceau dans le fichier. */
+  offset: number;
+  /** Contenu du morceau, en base64 standard. */
+  data: string;
+  /** `true` sur le dernier morceau. */
+  dernier: boolean;
+  /** Taille TOTALE du fichier (dernier morceau). */
+  total?: number;
+  /** Empreinte SHA-256 du fichier COMPLET, hexadécimale (dernier morceau). */
+  sha256?: string;
+}
+
+/** Codes de refus d'un transfert (miroir de `proto.ErrorCode`). */
+export type AgentFileErrorCode =
+  | "unsupported"
+  | "too_large"
+  | "digest_mismatch"
+  | "io_error"
+  | "not_found"
+  | "conflict"
+  | "interrupted";
+
+/**
+ * Issue d'une ÉCRITURE sur la machine (`file_result`, agent → Yuki).
+ *
+ * ⚠️ Ne porte JAMAIS le contenu : seulement la taille et l'empreinte du fichier
+ * réellement écrit (ou le code et le message du refus).
+ */
+export interface FileResultFrame {
+  type: "file_result";
+  cmdId: string;
+  status: "ok" | "refused";
+  bytes?: number;
+  sha256?: string;
+  code?: AgentFileErrorCode;
+  message?: string;
+}
+
 export type AgentFrame =
   | HelloFrame
   | AckFrame
@@ -108,7 +159,9 @@ export type AgentFrame =
   | ErrorFrame
   | PongFrame
   | PingFrame
-  | StateFrame;
+  | StateFrame
+  | FileChunkFrame
+  | FileResultFrame;
 
 /** Codes d'erreur de CADRAGE (alignés sur `proto.ErrorCode`). */
 export type FrameErrorCode =
@@ -297,6 +350,59 @@ export function parseAgentFrame(raw: Buffer | string): AgentFrameParse {
         },
       };
     }
+    case "file_chunk": {
+      const cmdId = asString(record["cmd_id"]);
+      if (!cmdId) {
+        return { ok: false, code: "invalid_frame", message: "`file_chunk` sans `cmd_id`." };
+      }
+      const data = asString(record["data"]);
+      if (data === undefined) {
+        return { ok: false, code: "invalid_frame", message: "`file_chunk` sans `data`." };
+      }
+      return {
+        ok: true,
+        frame: {
+          type: "file_chunk",
+          cmdId,
+          seq: asNumber(record["seq"]) ?? 0,
+          offset: asNumber(record["offset"]) ?? 0,
+          data,
+          dernier: asBoolean(record["dernier"]) ?? false,
+          ...(asNumber(record["total"]) !== undefined
+            ? { total: asNumber(record["total"]) as number }
+            : {}),
+          ...(asString(record["sha256"]) !== undefined
+            ? { sha256: asString(record["sha256"]) as string }
+            : {}),
+        },
+      };
+    }
+    case "file_result": {
+      const cmdId = asString(record["cmd_id"]);
+      if (!cmdId) {
+        return { ok: false, code: "invalid_frame", message: "`file_result` sans `cmd_id`." };
+      }
+      const status = asString(record["status"]);
+      const code = asString(record["code"]);
+      return {
+        ok: true,
+        frame: {
+          type: "file_result",
+          cmdId,
+          status: status === "ok" ? "ok" : "refused",
+          ...(asNumber(record["bytes"]) !== undefined
+            ? { bytes: asNumber(record["bytes"]) as number }
+            : {}),
+          ...(asString(record["sha256"]) !== undefined
+            ? { sha256: asString(record["sha256"]) as string }
+            : {}),
+          ...(code !== undefined ? { code: code as AgentFileErrorCode } : {}),
+          ...(asString(record["message"]) !== undefined
+            ? { message: asString(record["message"]) as string }
+            : {}),
+        },
+      };
+    }
     default:
       return { ok: false, code: "unknown_type", message: `type inconnu : ${type}` };
   }
@@ -388,4 +494,95 @@ export function encodePongFrame(t: number, ts?: string): Record<string, unknown>
 
 export function encodeConfigFrame(level: string, privilege: string): Record<string, unknown> {
   return { type: "config", proto_version: AGENT_PROTO_VERSION, level, privilege };
+}
+
+// ── Transfert de fichiers (négocié par la capacité `files`) ────────────────
+//
+// ⚠️ Aucune de ces trames n'est émise sans que l'agent ait DÉCLARÉ `files` dans
+// son `hello` : un agent antérieur les ignorerait (`client.go` côté Go) et Yuki
+// attendrait une réponse qui n'arrive jamais. Le contrôle est fait dans
+// `AgentExecutionService` AVANT tout envoi.
+
+/** Taille BINAIRE par défaut d'un morceau (192 Kio ⇒ ~256 Kio en base64). */
+export const DEFAULT_FILE_CHUNK_BYTES = 192 * 1024;
+
+/** Demande de lecture d'un fichier DISTANT (`file_get`). */
+export interface OutboundFileGet {
+  cmdId: string;
+  /** Chemin ABSOLU sur la machine. Un chemin relatif est refusé par l'agent. */
+  path: string;
+  /** Premier octet demandé (reprise après coupure). */
+  offset?: number;
+  /** Nombre total d'octets acceptés ; au-delà l'agent refuse AVANT émission. */
+  maxTotal?: number;
+  /** Taille BINAIRE maximale d'un morceau. */
+  chunk?: number;
+}
+
+/** Encode une demande de lecture, conforme au décodage Go. */
+export function encodeFileGetFrame(get: OutboundFileGet): Record<string, unknown> {
+  return {
+    type: "file_get",
+    proto_version: AGENT_PROTO_VERSION,
+    cmd_id: get.cmdId,
+    path: get.path,
+    ...(get.offset !== undefined ? { offset: get.offset } : {}),
+    ...(get.maxTotal !== undefined ? { max_total: get.maxTotal } : {}),
+    ...(get.chunk !== undefined ? { chunk: get.chunk } : {}),
+  };
+}
+
+/** Annonce d'écriture d'un fichier DISTANT (`file_put`). */
+export interface OutboundFilePut {
+  cmdId: string;
+  /** Chemin ABSOLU de destination. */
+  path: string;
+  /** Taille attendue, en octets. */
+  bytes: number;
+  /** Empreinte SHA-256 attendue du fichier COMPLET (hexadécimal minuscule). */
+  sha256: string;
+  /** Permissions POSIX (0 ⇒ 0o600 côté agent). */
+  mode?: number;
+  /** `true` autorise le remplacement d'un fichier existant. */
+  ecraser?: boolean;
+}
+
+/** Encode une annonce d'écriture, conforme au décodage Go. */
+export function encodeFilePutFrame(put: OutboundFilePut): Record<string, unknown> {
+  return {
+    type: "file_put",
+    proto_version: AGENT_PROTO_VERSION,
+    cmd_id: put.cmdId,
+    path: put.path,
+    bytes: put.bytes,
+    sha256: put.sha256,
+    ...(put.mode !== undefined ? { mode: put.mode } : {}),
+    ...(put.ecraser !== undefined ? { ecraser: put.ecraser } : {}),
+  };
+}
+
+/** Morceau d'un fichier à écrire (`file_put_chunk`). */
+export interface OutboundFilePutChunk {
+  cmdId: string;
+  seq: number;
+  /** Contenu binaire en base64 standard. */
+  data: string;
+  dernier: boolean;
+  /** Empreinte du fichier COMPLET (dernier morceau). */
+  sha256?: string;
+}
+
+/** Encode un morceau d'écriture, conforme au décodage Go. */
+export function encodeFilePutChunkFrame(
+  chunk: OutboundFilePutChunk,
+): Record<string, unknown> {
+  return {
+    type: "file_put_chunk",
+    proto_version: AGENT_PROTO_VERSION,
+    cmd_id: chunk.cmdId,
+    seq: chunk.seq,
+    data: chunk.data,
+    ...(chunk.dernier ? { dernier: true } : {}),
+    ...(chunk.sha256 ? { sha256: chunk.sha256 } : {}),
+  };
 }

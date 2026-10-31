@@ -36,6 +36,10 @@ import type {
   ScreenshotServicePort,
   SecretRequestToolPort,
 } from "../../agents/execution.js";
+import type {
+  TransferOutcome,
+  TransferServicePort,
+} from "../../agents/transfer.js";
 import {
   AGENT_LEVEL_LABELS,
   AGENT_PRIVILEGE_LABELS,
@@ -646,4 +650,177 @@ export function createSecretRequestTool(
   });
 
   return [demanderSecret];
+}
+
+// ── Transfert de fichiers vers/depuis une machine appairée (capacité `files`) ─
+
+/** Taille lisible (français) — partagée avec `src/agents/transfer.ts`. */
+function humanSize(bytes: number): string {
+  const n = Number.isFinite(bytes) ? Math.max(0, Math.trunc(bytes)) : 0;
+  if (n < 1024) return `${n} octets`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} Ko`;
+  if (n < 1024 * 1024 * 1024) return `${Math.round(n / (1024 * 1024))} Mo`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} Go`;
+}
+
+/**
+ * Résumé JSON d'un transfert — ⚠️ IL PÈSE ET LE DIT.
+ *
+ * Le modèle DOIT savoir qu'un fichier de 200 Mo vient de transiter (taille +
+ * empreinte) : un silence sur le volume serait un mensonge par omission. Un échec
+ * est toujours nommé avec son statut exact (jamais un « c'est fait » de complaisance).
+ */
+function transferSummary(outcome: TransferOutcome): string {
+  return JSON.stringify({
+    status: outcome.status,
+    agent_id: outcome.agentId,
+    ...(outcome.agentName ? { agent_name: outcome.agentName } : {}),
+    direction: outcome.direction,
+    path: outcome.path,
+    ...(outcome.file
+      ? {
+          file_id: outcome.file.id,
+          name: outcome.file.name,
+          url: outcome.file.url,
+          kind: outcome.file.kind,
+          readable: outcome.file.readable,
+        }
+      : {}),
+    ...(outcome.bytes !== undefined ? { bytes: outcome.bytes, size: humanSize(outcome.bytes) } : {}),
+    ...(outcome.sha256 ? { sha256: outcome.sha256 } : {}),
+    ...(outcome.approvalId ? { approval_id: outcome.approvalId } : {}),
+    message: outcome.message,
+    ...(outcome.status === "completed" && outcome.direction === "get"
+      ? {
+          note:
+            "Le fichier est SUR LE DISQUE de Yuki et une carte cliquable s'affiche " +
+            "dans la conversation. Tu ne vois pas son contenu ici : si l'utilisateur " +
+            "veut que tu le lises, il l'inclura dans la discussion.",
+        }
+      : {}),
+  });
+}
+
+/**
+ * Construit les deux outils de TRANSFERT de fichiers d'une machine appairée :
+ *
+ *   - `recuperer_fichier(agent, chemin)` : LIT un fichier distant et le dépose
+ *     SUR LE DISQUE de Yuki (une carte cliquable apparaît dans la conversation) ;
+ *   - `deposer_fichier(agent, fichier, chemin_distant, ecraser?)` : ÉCRIT un
+ *     fichier de Yuki sur la machine, atomiquement, jamais sans `ecraser`.
+ *
+ * ⚠️ Même garde-fou par agent (D118) que `run_command` : un agent `disabled`
+ * refuse, un niveau 2 fait valider, un agent SANS la capacité `files` est refusé
+ * AVANT toute émission (message actionnable « ton agent est TROP ANCIEN »).
+ */
+export function createFileTransferTools(
+  service: TransferServicePort,
+  options?: ActionToolOptions,
+): ToolDefinition[] {
+  const recupererFichier = defineTool({
+    name: "recuperer_fichier",
+    label: "Récupérer un fichier depuis une machine appairée",
+    description:
+      "RÉCUPÈRE un fichier d'une machine appairée (agent d'exécution) et le dépose " +
+      "SUR LE DISQUE de Yuki : une carte cliquable apparaît dans la conversation, " +
+      "que l'utilisateur peut inclure dans la discussion. Désignez la machine par " +
+      "son NOM ou son identifiant (l'identifiant fonctionne toujours) et donnez le " +
+      "chemin ABSOLU du fichier sur la machine (un chemin relatif est refusé). " +
+      "Le résultat indique la TAILLE et l'empreinte SHA-256 : ne prétends pas " +
+      "connaître le contenu du fichier, tu ne le reçois pas. Plafond 256 Mo par " +
+      "transfert : au-delà, utilise run_command (scp, rsync, tar…). Si l'agent est " +
+      "trop ancien (capacité « files » absente), l'outil le dit AVANT tout envoi.",
+    promptSnippet:
+      "recuperer_fichier(agent, chemin) — lit un fichier distant et le dépose sur le disque de Yuki",
+    parameters: Type.Object({
+      agent: Type.String({
+        minLength: 1,
+        maxLength: 128,
+        description:
+          "Nom lisible OU identifiant technique de l'agent appairé (machine source).",
+      }),
+      chemin: Type.String({
+        minLength: 1,
+        maxLength: 4096,
+        description: "Chemin ABSOLU du fichier à récupérer sur la machine (ex. /home/user/x.txt).",
+      }),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+      const input = params as { agent: string; chemin: string };
+      const sessionId = resolveSessionId(ctx, options);
+      const outcome = await service.get({
+        agentId: input.agent,
+        path: input.chemin,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        origin: "recuperer_fichier",
+      });
+      return { content: [{ type: "text", text: transferSummary(outcome) }], details: outcome };
+    },
+  });
+
+  const deposerFichier = defineTool({
+    name: "deposer_fichier",
+    label: "Déposer un fichier sur une machine appairée",
+    description:
+      "ÉCRIT un fichier de la conversation (identifiant ou nom fourni par " +
+      "l'utilisateur) sur une machine appairée, à un chemin ABSOLU de destination. " +
+      "L'écriture est ATOMIQUE côté machine (fichier temporaire puis renommage) et " +
+      "l'empreinte SHA-256 est vérifiée : un transfert altéré échoue, il ne laisse " +
+      "aucun fichier corrompu. ⚠️ Aucun écrasement sans `ecraser: true` : si la " +
+      "destination existe déjà, l'outil REFUSE avec `conflict` — demande alors " +
+      "explicitement à l'utilisateur s'il faut écraser. Tu ne peux déposer que des " +
+      "fichiers DÉJÀ présents dans la conversation (tu n'as aucun accès disque).",
+    promptSnippet:
+      "deposer_fichier(agent, fichier, chemin_distant, ecraser?) — écrit un fichier de la conversation sur une machine",
+    parameters: Type.Object({
+      agent: Type.String({
+        minLength: 1,
+        maxLength: 128,
+        description:
+          "Nom lisible OU identifiant technique de l'agent appairé (machine cible).",
+      }),
+      fichier: Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          "Identifiant (32 hexadécimaux) ou nom EXACT d'un fichier de la conversation à déposer.",
+      }),
+      chemin_distant: Type.String({
+        minLength: 1,
+        maxLength: 4096,
+        description: "Chemin ABSOLU de destination sur la machine (ex. /home/user/x.txt).",
+      }),
+      ecraser: Type.Optional(
+        Type.Union([Type.Boolean(), Type.String(), Type.Null()], {
+          description:
+            "Autorise le REMPLACEMENT d'un fichier existant à destination (défaut : non).",
+        }),
+      ),
+    }),
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+      const input = params as {
+        agent: string;
+        fichier: string;
+        chemin_distant: string;
+        ecraser?: unknown;
+      };
+      const ecraser =
+        input.ecraser === true ||
+        input.ecraser === "true" ||
+        input.ecraser === "oui" ||
+        input.ecraser === 1;
+      const sessionId = resolveSessionId(ctx, options);
+      const outcome = await service.put({
+        agentId: input.agent,
+        fileId: input.fichier,
+        path: input.chemin_distant,
+        ...(ecraser ? { ecraser: true } : {}),
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        origin: "deposer_fichier",
+      });
+      return { content: [{ type: "text", text: transferSummary(outcome) }], details: outcome };
+    },
+  });
+
+  return [recupererFichier, deposerFichier];
 }

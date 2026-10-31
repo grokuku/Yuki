@@ -87,16 +87,44 @@ export interface WireFile {
   expiresAt: string;
 }
 
-/** Dépôt refusé (jamais silencieux : le code porte la cause exacte). */
+/**
+ * Dépôt refusé (jamais silencieux : le code porte la cause exacte).
+ *
+ * ⚠️ Les codes `digest_mismatch` et `interrupted` viennent du TRANSFERT depuis
+ * une machine (`src/agents/transfer.ts`) : une empreinte fausse ou un flux coupé
+ * supprime ce qui a été écrit — jamais un fichier partiel ou corrompu publié.
+ */
 export type FileRejectionCode =
   | "too_large"
   | "empty"
   | "empty_name"
-  | "io_error";
+  | "io_error"
+  | "digest_mismatch"
+  | "interrupted";
 
 export type FileSaveResult =
   | { ok: true; record: StoredFileRecord }
   | { ok: false; code: FileRejectionCode; receivedBytes: number; limitBytes: number };
+
+/**
+ * Écrivain borné d'un fichier reçu par morceaux.
+ *
+ * ⚠️ Aucune publication avant `commit()` : la destination finale n'existe
+ * qu'une fois le flux complet (et son empreinte, vérifiée par l'appelant).
+ */
+export interface FileSink {
+  /** Écrit un morceau ; `ok: false` (avec code) si le plafond est dépassé. */
+  write(chunk: Uint8Array): { ok: true } | { ok: false; code: FileRejectionCode; receivedBytes: number; limitBytes: number };
+  /** Octets déjà écrits. */
+  readonly receivedBytes: number;
+  /**
+   * Publie le fichier (`<id>.bin` + métadonnées + analyse). ⚠️ Refuse un flux
+   * vide (`empty`).
+   */
+  commit(): FileSaveResult;
+  /** Supprime le fichier partiel (idempotent). */
+  abort(): void;
+}
 
 /** Entrée d'un dépôt (le flux d'octets arrive par le corps HTTP). */
 export interface FileSaveInput {
@@ -135,6 +163,14 @@ export interface FilesPort {
   purgeExpired(): number;
   /** Convertit une fiche en vue client (aucun contenu). */
   toWire(record: StoredFileRecord): WireFile;
+  /**
+   * Ouvre un ÉCRIVAIN BORNÉ pour un flux d'octets ARRIVANT PAR MORCEAUX (ex.
+   * transfert depuis une machine). ⚠️ Les octets vont dans `<id>.bin.part` ;
+   * seul `commit()` publie le fichier final (`rename`) et produit la fiche.
+   * `abort()` supprime le partiel : un transfert refusé n'occupe JAMAIS le
+   * disque. Le plafond `maxBytes` est vérifié À CHAQUE morceau.
+   */
+  createSink(input: FileSaveInput): FileSink;
 }
 
 /**

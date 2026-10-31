@@ -54,6 +54,24 @@ const (
 	TypePairBegin MessageType = "pair_begin"
 	// TypePairOK : Yuki → agent, seconde moitié chiffrée de l'appairage.
 	TypePairOK MessageType = "pair_ok"
+
+	// --- Transfert de fichiers (négocié par la capacité `files`) -----------
+	// ⚠️ Ces cinq trames sont AJOUTÉES sans changer `Version` : un agent qui ne
+	// les connaît pas les IGNORE (journalisées puis ignorées,
+	// `internal/transport/client.go`). C'est la capacité `files` du `hello` —
+	// et non un numéro de version — qui autorise Yuki à les émettre. Sans elle,
+	// Yuki refuse AVANT l'émission (aucune attente infinie).
+
+	// TypeFileGet : Yuki → agent, demande de LECTURE d'un fichier distant.
+	TypeFileGet MessageType = "file_get"
+	// TypeFileChunk : agent → Yuki, morceau du fichier lu (base64).
+	TypeFileChunk MessageType = "file_chunk"
+	// TypeFilePut : Yuki → agent, annonce d'une ÉCRITURE de fichier distant.
+	TypeFilePut MessageType = "file_put"
+	// TypeFilePutChunk : Yuki → agent, morceau du fichier à écrire (base64).
+	TypeFilePutChunk MessageType = "file_put_chunk"
+	// TypeFileResult : agent → Yuki, issue d'un `file_put` (jamais un contenu).
+	TypeFileResult MessageType = "file_result"
 )
 
 // Header est l'en-tête commun à TOUTE trame.
@@ -262,6 +280,108 @@ type PairOK struct {
 	Blob []byte `json:"blob"`
 }
 
+// FileGet : demande de LECTURE d'un fichier DISTANT (Yuki → agent).
+//
+// ⚠️ `Path` doit être un chemin ABSOLU : l'agent refuse un chemin relatif
+// (`io_error`), car il dépendrait du répertoire de travail du service — non
+// maîtrisé par Yuki.
+type FileGet struct {
+	Header
+	CmdID string `json:"cmd_id"`
+	// Path : chemin ABSOLU du fichier à lire sur la machine.
+	Path string `json:"path"`
+	// Offset : premier octet demandé (reprise après coupure). 0 ⇒ début.
+	Offset int64 `json:"offset,omitempty"`
+	// MaxTotal : nombre total d'octets que Yuki accepte de recevoir. Au-delà,
+	// l'agent refuse AVANT d'émettre quoi que ce soit (`too_large`).
+	MaxTotal int64 `json:"max_total,omitempty"`
+	// Chunk : taille BINAIRE maximale d'un morceau (192 Kio par défaut). 0 ⇒
+	// défaut de l'agent. ⚠️ Bornée par l'agent (marge sous la trame max 8 Mio).
+	Chunk int `json:"chunk,omitempty"`
+}
+
+// FileChunk : morceau d'un fichier lu (agent → Yuki).
+//
+// ⚠️ `Data` est du base64 standard (sans préfixe `data:`) : `[]byte` le
+// code/décode automatiquement. `Sha256` n'est renseigné que sur le DERNIER
+// morceau : c'est l'empreinte du CONTENU COMPLET du fichier (pas du morceau),
+// vérifiée par Yuki avant d'accepter le transfert.
+type FileChunk struct {
+	Header
+	CmdID string `json:"cmd_id"`
+	// Seq : numéro de morceau, croissant à partir de 0.
+	Seq int `json:"seq"`
+	// Offset : position du PREMIER octet de ce morceau dans le fichier.
+	Offset int64 `json:"offset"`
+	// Data : contenu binaire du morceau (base64 standard).
+	Data []byte `json:"data"`
+	// Dernier : `true` sur le dernier morceau.
+	Dernier bool `json:"dernier,omitempty"`
+	// Total : taille TOTALE du fichier (octets) — renseignée sur le dernier.
+	Total int64 `json:"total,omitempty"`
+	// Sha256 : empreinte hexadécimale (minuscule) du fichier COMPLET — sur le
+	// dernier morceau uniquement.
+	Sha256 string `json:"sha256,omitempty"`
+}
+
+// FilePut : annonce d'une ÉCRITURE de fichier distant (Yuki → agent).
+//
+// ⚠️ L'agent n'écrit RIEN tant qu'il n'a pas tous les morceaux : l'écriture se
+// fait dans `<path>.part` puis `fsync` + `rename` (jamais un fichier partiel
+// visible). ⚠️ Jamais d'écrasement sans `Ecraser: true` ⇒ `conflict`.
+type FilePut struct {
+	Header
+	CmdID string `json:"cmd_id"`
+	// Path : chemin ABSOLU de destination (un relatif est refusé).
+	Path string `json:"path"`
+	// Bytes : taille attendue du fichier (octets).
+	Bytes int64 `json:"bytes"`
+	// Sha256 : empreinte hexadécimale attendue du fichier COMPLET.
+	Sha256 string `json:"sha256"`
+	// Mode : permissions POSIX (octet) ; 0 ⇒ 0o600.
+	Mode int `json:"mode,omitempty"`
+	// Ecraser : `true` autorise le remplacement d'un fichier existant.
+	Ecraser bool `json:"ecraser,omitempty"`
+}
+
+// FilePutChunk : morceau du fichier à écrire (Yuki → agent).
+type FilePutChunk struct {
+	Header
+	CmdID string `json:"cmd_id"`
+	// Seq : numéro de morceau, croissant à partir de 0.
+	Seq int `json:"seq"`
+	// Data : contenu binaire du morceau (base64 standard).
+	Data []byte `json:"data"`
+	// Dernier : `true` sur le dernier morceau ⇒ l'agent vérifie et écrit.
+	Dernier bool `json:"dernier,omitempty"`
+	// Sha256 : empreinte du fichier COMPLET (dernier morceau).
+	Sha256 string `json:"sha256,omitempty"`
+}
+
+// FileResult : issue d'une écriture (agent → Yuki) — JAMAIS un contenu.
+type FileResult struct {
+	Header
+	CmdID string `json:"cmd_id"`
+	// Status : `ok` ou `refused`.
+	Status string `json:"status"`
+	// Bytes : octets réellement écrits (présent si `ok`).
+	Bytes int64 `json:"bytes,omitempty"`
+	// Sha256 : empreinte du fichier ÉCRIT (présent si `ok`).
+	Sha256 string `json:"sha256,omitempty"`
+	// Code : code d'erreur machine (présent si `refused`).
+	Code ErrorCode `json:"code,omitempty"`
+	// Message : explication française actionnable (présent si `refused`).
+	Message string `json:"message,omitempty"`
+}
+
+/* Codes de STATUT d'un `file_result`. */
+const (
+	// FileStatusOK : écriture réussie (empreinte conforme).
+	FileStatusOK = "ok"
+	// FileStatusRefused : écriture refusée — `Code` dit pourquoi.
+	FileStatusRefused = "refused"
+)
+
 /* ─── Implémentations du contrat `Message` ──────────────────────────────────── */
 
 func (m *Hello) header() *Header      { return &m.Header }
@@ -280,6 +400,13 @@ func (m *ScreenshotData) header() *Header {
 }
 func (m *PairBegin) header() *Header { return &m.Header }
 func (m *PairOK) header() *Header    { return &m.Header }
+func (m *FileGet) header() *Header   { return &m.Header }
+func (m *FileChunk) header() *Header { return &m.Header }
+func (m *FilePut) header() *Header   { return &m.Header }
+func (m *FilePutChunk) header() *Header {
+	return &m.Header
+}
+func (m *FileResult) header() *Header { return &m.Header }
 
 func (m *Hello) Type() MessageType  { return TypeHello }
 func (m *Ack) Type() MessageType    { return TypeAck }
@@ -297,3 +424,8 @@ func (m *Screenshot) Type() MessageType {
 func (m *ScreenshotData) Type() MessageType { return TypeScreenshotData }
 func (m *PairBegin) Type() MessageType      { return TypePairBegin }
 func (m *PairOK) Type() MessageType         { return TypePairOK }
+func (m *FileGet) Type() MessageType        { return TypeFileGet }
+func (m *FileChunk) Type() MessageType      { return TypeFileChunk }
+func (m *FilePut) Type() MessageType        { return TypeFilePut }
+func (m *FilePutChunk) Type() MessageType   { return TypeFilePutChunk }
+func (m *FileResult) Type() MessageType     { return TypeFileResult }

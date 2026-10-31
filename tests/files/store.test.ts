@@ -251,3 +251,95 @@ describe("rattachement à une conversation", () => {
     expect(store.remove(outcome.record.id)).toBe(false);
   });
 });
+
+describe("createSink — écrivain borné d'un fichier reçu par morceaux", () => {
+  function makeStore(dir: string, maxBytes = 1024): FilesStore {
+    const store = new FilesStore({
+      dir,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      now: () => Date.now(),
+      maxBytes: () => maxBytes,
+      retentionDays: () => 30,
+    });
+    store.ensureLayout();
+    return store;
+  }
+
+  it("écrit dans un `.part` puis publie au commit (jamais partiel visible)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yuki-sink-"));
+    try {
+      const store = makeStore(dir);
+      const sink = store.createSink({
+        name: "note.txt",
+        mimeType: "text/plain",
+        origin: "externe",
+      });
+      const ok = sink.write(new TextEncoder().encode("bonjour"));
+      expect(ok.ok).toBe(true);
+      // ⚠️ Aucun fichier métadonnées tant que `commit()` n'est pas appelé.
+      expect(store.list()).toHaveLength(0);
+      const committed = sink.commit();
+      expect(committed.ok).toBe(true);
+      if (!committed.ok) return;
+      expect(store.readBytes(committed.record.id)?.toString("utf8")).toBe("bonjour");
+      expect(existsSync(join(dir, `${committed.record.id}.bin.part`))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuse un flux trop gros et supprime le partiel", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yuki-sink-"));
+    try {
+      const store = makeStore(dir, 4);
+      const sink = store.createSink({
+        name: "gros.bin",
+        mimeType: "application/octet-stream",
+        origin: "externe",
+      });
+      const result = sink.write(new Uint8Array(8));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.code).toBe("too_large");
+      // ⚠️ Aucun résidu sur le disque après un refus.
+      expect(readdirSync(dir).filter((name) => name.endsWith(".part"))).toHaveLength(0);
+      expect(store.list()).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("abort() ne laisse AUCUN fichier (ni partiel, ni final)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yuki-sink-"));
+    try {
+      const store = makeStore(dir);
+      const sink = store.createSink({
+        name: "annule.txt",
+        mimeType: "text/plain",
+        origin: "externe",
+      });
+      sink.write(new TextEncoder().encode("partiel"));
+      sink.abort();
+      expect(store.list()).toHaveLength(0);
+      expect(readdirSync(dir).filter((name) => name.endsWith(".part"))).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("un flux VIDE est refusé (`empty`)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yuki-sink-"));
+    try {
+      const store = makeStore(dir);
+      const sink = store.createSink({
+        name: "vide.txt",
+        mimeType: "text/plain",
+        origin: "externe",
+      });
+      const committed = sink.commit();
+      expect(committed.ok).toBe(false);
+      if (!committed.ok) expect(committed.code).toBe("empty");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

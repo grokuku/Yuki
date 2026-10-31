@@ -25,6 +25,7 @@ import { dirname, join } from "node:path";
 import {
   AgentDirectoryService,
   AgentExecutionService,
+  AgentFileTransferService,
   AgentHub,
   AgentLockService,
   AgentStore,
@@ -369,6 +370,20 @@ async function main(): Promise<void> {
   let agentExecution: AgentExecutionService | undefined;
   let agentDirectory: AgentDirectoryService | undefined;
   /**
+   * TRANSFERT de fichiers vers/depuis une machine (capacité `files`).
+   * ⚠️ Créé APRÈS le stockage des fichiers (`filesStore`) : il en a besoin pour
+   * déposer sur le disque de Yuki les octets récupérés.
+   */
+  let agentTransfers: AgentFileTransferService | undefined;
+  /**
+   * Références du bloc `try` agents, nécessaires au TRANSFERT de fichiers créé
+   * APRÈS le stockage (`filesStore`). ⚠️ `undefined` si l'init agents a échoué :
+   * dans ce cas, aucun transfert n'existe (l'outil n'est pas exposé non plus).
+   */
+  let agentStoreRef: AgentStore | undefined;
+  let agentHubRef: AgentHub | undefined;
+  let auditLogRef: AuditLog | undefined;
+  /**
    * Mot de passe d'INSTANCE (haché scrypt, volume `state`) : sert au
    * déverrouillage des agents « matériel sensible ». `undefined` si le fichier
    * est illisible (on échoue FERMÉ : les agents sensibles restent verrouillés).
@@ -469,6 +484,11 @@ async function main(): Promise<void> {
     // Canal d'exécution (B6) : registre des connexions vivantes + validations
     // humaines (B6bis) + service d'exécution (garde-fous D118).
     const agentHub = new AgentHub({ logger });
+    // ⚠️ Références HISSÉES pour le service de TRANSFERT de fichiers, créé plus
+    // bas (il a besoin du stockage des fichiers, lui-même créé après ce bloc).
+    agentStoreRef = agentStore;
+    agentHubRef = agentHub;
+    auditLogRef = auditLog;
     const approvals = new ApprovalRegistry({ logger });
     // VERROU des agents « matériel sensible » (état EN MÉMOIRE, jamais persisté).
     // ⚠️ Il lit le store mais n'y ÉCRIT JAMAIS : un reverrouillage ne touche ni
@@ -977,6 +997,45 @@ async function main(): Promise<void> {
   // passe ⇒ impossible qu'un type survive au réglage d'un autre.
   filesPurgeTimer = setInterval(purgeStateVolume, FILES_PURGE_INTERVAL_MS);
   filesPurgeTimer.unref?.();
+  // --- TRANSFERT de fichiers vers/depuis une machine appairée (capacité `files`)
+  // ⚠️ Négocié par CAPACITÉ, jamais par un bump de `proto.Version` (un incrément
+  // ferait refuser TOUS les agents déployés, `proto/codec.go`). Les trois bornes
+  // sont RELUES à chaque transfert (`apply: hot`). Registre persistant sur le
+  // volume `state` : il survit à un redémarrage du gateway, qui marque alors
+  // toute entrée `in_progress` comme `interrupted` (jamais un succès partiel).
+  if (agentExecution && agentStoreRef && agentHubRef && auditLogRef) {
+    try {
+      agentTransfers = new AgentFileTransferService({
+        store: agentStoreRef!,
+        hub: agentHubRef!,
+        audit: auditLogRef!,
+        logger,
+        files: filesStore,
+        registryPath: env.agentTransfersPath,
+        limits: {
+          maxBytes: () => config.getNumber("files.agentMaxBytes"),
+          chunkBytes: () => config.getNumber("files.agentChunkBytes"),
+          timeoutMs: () => config.getNumber("files.agentTimeoutMs"),
+        },
+        // ⚠️ MÊME garde-fou PAR AGENT (D118) que toute action : aucun second
+        // mécanisme de validation.
+        authorize: (request) =>
+          agentExecution!.authorizeTransfer(request.agentId, request.command, {
+            origin: request.origin,
+            ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+          }),
+      });
+      logger.info("agents.transfers.ready", {
+        registry: env.agentTransfersPath,
+        maxBytes: config.getNumber("files.agentMaxBytes"),
+        chunkBytes: config.getNumber("files.agentChunkBytes"),
+        timeoutMs: config.getNumber("files.agentTimeoutMs"),
+      });
+    } catch (error) {
+      logger.warn("agents.transfers.init_failed", { error: messageOf(error) });
+      agentTransfers = undefined;
+    }
+  }
   logger.info("files.ready", {
     dir: env.filesDir,
     purged: purgedFilesAtStart,
@@ -1146,10 +1205,13 @@ async function main(): Promise<void> {
       tools: toolAllowlist("heavy", {
         executionEnabled: agentExecution !== undefined,
         screenshotsEnabled: agentExecution !== undefined,
+        // ⚠️ TRANSFERT de fichiers : exposé seulement si le service existe.
+        fileTransferEnabled: agentTransfers !== undefined,
         secretsEnabled: secretStore !== undefined,
       }),
       ...(agentExecution ? { execution: agentExecution } : {}),
       ...(agentExecution ? { screenshots: agentExecution } : {}),
+      ...(agentTransfers ? { transfers: agentTransfers } : {}),
       ...(secretStore ? { secrets: secretStore } : {}),
       idleTimeoutMs,
       totalTimeoutMs,
@@ -1641,6 +1703,10 @@ async function main(): Promise<void> {
       // FICHIERS : rattachement des fichiers joints à un message (`attach`) et
       // envoi par Yuki (trame de contrôle `file_sent`, jamais bufferisée).
       files: filesService,
+      // TRANSFERT depuis une machine : trame de contrôle `file_received` (carte
+      // cliquable « Inclure dans la discussion ») — signalement indispensable,
+      // sinon l'utilisateur ignore que le fichier est sur le disque de Yuki.
+      ...(agentTransfers ? { agentTransfers } : {}),
       // Épinglage des conversations : store hôte SÉPARÉ du JSONL du SDK Pi.
       pins: SessionPinStore.open({ path: env.sessionPinsPath, logger }),
       // SOURCES : la trame `sessions` dit quelles sources postent dans chaque fil

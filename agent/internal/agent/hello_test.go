@@ -124,3 +124,26 @@ func TestCapaciteEnvToujoursDeclaree(t *testing.T) {
 		}
 	}
 }
+
+// TestCapaciteFilesToujoursDeclaree verrouille le contrat du TRANSFERT DE
+// FICHIERS : `files` est INCONDITIONNELLE (capacité du binaire).
+//
+// ⚠️ C'est la SEULE négociation du transfert (`proto.Version` reste à 1 : un
+// bump ferait refuser TOUS les agents déployés). Si `files` disparaissait du
+// `hello`, Yuki refuserait AVANT toute émission avec « agent TROP ANCIEN ».
+func TestCapaciteFilesToujoursDeclaree(t *testing.T) {
+	cases := []struct {
+		name string
+		caps []string
+	}{
+		{"sans écran", capabilitiesFor("linux", envOf(nil), lookPathOf("scrot"))},
+		{"sans outil", capabilitiesFor("linux", envOf(map[string]string{"DISPLAY": ":0"}), lookPathOf())},
+		{"avec écran et outil", capabilitiesFor("linux", envOf(map[string]string{"DISPLAY": ":0"}), lookPathOf("grim"))},
+		{"windows", capabilitiesFor("windows", envOf(nil), lookPathOf())},
+	}
+	for _, tc := range cases {
+		if !contains(tc.caps, "files") {
+			t.Fatalf("%s : capacité `files` absente : %v", tc.name, tc.caps)
+		}
+	}
+}

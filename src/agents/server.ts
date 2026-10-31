@@ -59,6 +59,17 @@ export const AGENTS_WS_PATH = "/ws";
 /** Taille maximale d'un corps d'appairage. */
 export const MAX_AGENTS_BODY_BYTES = 64 * 1024;
 
+/**
+ * Taille maximale d'une TRAME WebSocket d'exécution côté Yuki (8 Mio).
+ *
+ * ⚠️ Alignée sur `maxFrameBytes` de l'agent (`agent/internal/transport/websocket.go`).
+ * `ws` n'applique AUCUNE borne par défaut : sans ce réglage, un pair malveillant
+ * (ou un agent bogué) pourrait pousser une trame de plusieurs Gio et épuiser la
+ * mémoire du gateway. Un morceau de fichier pèse 192 Kio binaires (~256 Kio en
+ * base64), très en dessous de cette borne.
+ */
+export const MAX_AGENT_FRAME_BYTES = 8 * 1024 * 1024;
+
 export interface AgentsServerLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
   info(message: string, fields?: Record<string, unknown>): void;
@@ -192,7 +203,9 @@ function sendJson(res: ServerResponse, response: JsonResponse): void {
 export function createAgentsServer(options: AgentsServerOptions): HttpsServer {
   const { pairing, store, audit, ca, logger } = options;
   const maxBody = options.maxBodyBytes ?? MAX_AGENTS_BODY_BYTES;
-  const wss = new WebSocketServer({ noServer: true });
+  // ⚠️ `maxPayload` FIXÉ EXPLICITEMENT (absent de `ws` par défaut) : borne dure
+  // sur la taille d'une trame, alignée sur l'agent.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_AGENT_FRAME_BYTES });
   const hub = options.hub ?? new AgentHub({ logger });
 
   /** L'agent est-il authentifié (chaîne CA + SAN connue + non révoqué) ? */

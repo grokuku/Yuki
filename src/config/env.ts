@@ -127,6 +127,8 @@ export interface Env {
    * pourquoi le plafond de taille existe. Surcharge : `YUKI_FILES_DIR`.
    */
   filesDir: string;
+  /** Registre persistant des transferts de fichiers agent (`transfers.json`). */
+  agentTransfersPath: string;
   /**
    * Fichier JSON des WORKFLOWS ComfyUI nommés (volume `state`). ⚠️ Fichier
    * SÉPARÉ de `config.json` : un graphe pèse des dizaines de Ko et l'API de
@@ -404,6 +406,13 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       `${mountPoints.state}/reactions.jsonl`,
     ),
     filesDir: getString(env, "YUKI_FILES_DIR", `${mountPoints.state}/files`),
+    // ⚠️ Registre PERSISTANT des transferts de fichiers en cours (reprise après
+    // coupure). Sur le volume `state` : il survit à un redémarrage du gateway.
+    agentTransfersPath: getString(
+      env,
+      "YUKI_AGENT_TRANSFERS_PATH",
+      `${mountPoints.state}/agent-transfers.json`,
+    ),
     comfyWorkflowsPath: getString(
       env,
       "YUKI_COMFY_WORKFLOWS_PATH",

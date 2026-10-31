@@ -104,7 +104,14 @@ export type ChannelErrorCode =
   | "send_failed"
   | "result_lost"
   | "agent_error"
-  | "command_timeout";
+  | "command_timeout"
+  /**
+   * Transfert de FICHIER interrompu (connexion fermée au milieu, délai dépassé
+   * après une coupure). ⚠️ Distinct de `result_lost` : un transfert interrompu
+   * est REPRIS (une fois) côté Yuki, et l'échec est DIT au-delà — jamais un
+   * succès partiel.
+   */
+  | "interrupted";
 
 /** Erreur du canal d'exécution (transport WebSocket ↔ agent). */
 export class AgentChannelError extends Error {

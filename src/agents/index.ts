@@ -334,3 +334,49 @@ export {
   ORIGIN_APPROVAL_RESULT,
 } from "./approval-report.js";
 export type { ApprovalResultInput } from "./approval-report.js";
+
+// TRANSFERT DE FICHIERS vers/depuis une machine appairée (capacité `files`).
+// ⚠️ Négocié par CAPACITÉ, jamais par un bump de `proto.Version` (qui ferait
+// refuser TOUS les agents déployés). Reprise après coupure via un registre
+// persistant (`transfers.json` sur le volume `state`), jamais un succès partiel.
+export {
+  AgentFileTransferService,
+  DEFAULT_AGENT_MAX_BYTES,
+  DEFAULT_AGENT_TIMEOUT_MS,
+  FILE_GET_COMMAND,
+  FILE_PUT_COMMAND,
+  FILES_CAPABILITY,
+  FILES_GET_ORIGIN,
+  FILES_PUT_ORIGIN,
+  filesUnsupportedMessage,
+  humanSize,
+  isAbsolutePath,
+  sha256Hex,
+  tooLargeMessage,
+} from "./transfer.js";
+export type {
+  FileGetRequest,
+  FilePutRequest,
+  FileReceivedView,
+  TransferLimits,
+  TransferLogger,
+  TransferOutcome,
+  TransferServiceOptions,
+  TransferServicePort,
+  TransferStatus,
+} from "./transfer.js";
+export type {
+  AgentFileErrorCode,
+  FileChunkFrame,
+  FileResultFrame,
+  OutboundFileGet,
+  OutboundFilePut,
+  OutboundFilePutChunk,
+} from "./protocol.js";
+export {
+  DEFAULT_FILE_CHUNK_BYTES,
+  encodeFileGetFrame,
+  encodeFilePutChunkFrame,
+  encodeFilePutFrame,
+} from "./protocol.js";
+export { MAX_AGENT_FRAME_BYTES } from "./server.js";

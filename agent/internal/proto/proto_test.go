@@ -31,6 +31,12 @@ func allMessages() []Message {
 			YukiNonce: []byte("abcdefghijklmnopqrstuvwxyz012345"),
 			Blob:      []byte{9, 8, 7, 6},
 		},
+		&FileGet{CmdID: "c-1", Path: "/tmp/x.bin", Offset: 2, MaxTotal: 1024, Chunk: 196608},
+		&FileChunk{CmdID: "c-1", Seq: 3, Offset: 589824, Data: []byte{1, 2, 3}, Dernier: true, Total: 589827, Sha256: strings.Repeat("ab", 32)},
+		&FilePut{CmdID: "c-1", Path: "/tmp/y.bin", Bytes: 12, Sha256: strings.Repeat("cd", 32), Mode: 0o600, Ecraser: true},
+		&FilePutChunk{CmdID: "c-1", Seq: 0, Data: []byte{4, 5, 6}, Dernier: true, Sha256: strings.Repeat("cd", 32)},
+		&FileResult{CmdID: "c-1", Status: FileStatusOK, Bytes: 12, Sha256: strings.Repeat("cd", 32)},
+		&FileResult{CmdID: "c-2", Status: FileStatusRefused, Code: CodeConflict, Message: "existe déjà"},
 	}
 }
 

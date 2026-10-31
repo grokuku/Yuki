@@ -1072,6 +1072,39 @@ export class AgentExecutionService implements ExecutionServicePort {
     };
   }
 
+  /**
+   * Garde-fou PAR AGENT (D118) exposé au TRANSFERT de fichiers : MÊME chemin que
+   * toute action, jamais un second mécanisme. Une action non destructrice
+   * (`récupérer`/`déposer` un fichier) passe sans validation au niveau 3, mais un
+   * agent révoqué/`disabled`/verrouillé est REFUSÉ.
+   *
+   * ⚠️ Ne s'occupe QUE du garde-fou : la capacité `files`, la présence en ligne,
+   * le chemin absolu et le plafond sont vérifiés par le service de transfert.
+   */
+  authorizeTransfer(
+    agentId: string,
+    command: string,
+    request: { origin: string; sessionId?: string },
+  ):
+    | { kind: "proceed" }
+    | { kind: "refuse"; message: string }
+    | { kind: "awaiting"; approvalId: string } {
+    const record = this.store.get(agentId);
+    if (!record) {
+      return { kind: "refuse", message: "Agent inconnu : transfert refusé." };
+    }
+    const verdict = { destructive: false, ids: [] as string[] };
+    const decision = this.authorize(record, command, verdict, {
+      ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+      origin: request.origin,
+    });
+    if (decision.kind === "refuse") return decision;
+    if (decision.kind === "awaiting") {
+      return { kind: "awaiting", approvalId: decision.approval.id };
+    }
+    return { kind: "proceed" };
+  }
+
   // ── Garde-fou partagé (commandes ET captures) ────────────────────────────
 
   /**

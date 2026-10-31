@@ -5,7 +5,10 @@
 //     `[fichier] <id> <nom> (<n> octets)` est DANS le message (donc dans le
 //     transcript) → la carte survit au rechargement et reste à sa place ;
 //  2. les fichiers ENVOYÉS PAR YUKI : trame de CONTRÔLE `file_sent` (aucun `seq`
-//     consommé, jamais bufferisée) → carte affichée immédiatement.
+//     consommé, jamais bufferisée) → carte affichée immédiatement ;
+//  3. les fichiers RÉCUPÉRÉS depuis une MACHINE appairée : trame de CONTRÔLE
+//     `file_received` → carte avec le bouton « Inclure dans la discussion »
+//     (le fichier est sur le disque de Yuki, pas dans la conversation).
 //
 // ⚠️ Aucun contenu de fichier n'est affiché : la carte porte le nom, la taille,
 // le genre, un lien de TÉLÉCHARGEMENT (`/fichiers/<id>.<ext>`, same-origin,
@@ -143,18 +146,29 @@ export function completeFile(file) {
  *
  * @param {object} file vue du fichier (`id`, `name`, `bytes`, `kind`, `url`, `imageSrc`…).
  * @param {object} [options]
- * @param {"user"|"yuki"} [options.from] auteur de l'envoi (libellé de la carte).
+ * @param {"user"|"yuki"|"agent"} [options.from] auteur de la carte
+ *   (`agent` = fichier RÉCUPÉRÉ depuis une machine appairée).
  * @param {{ decorate(img: HTMLImageElement): HTMLElement }} [options.zoom]
  *   visionneuse partagée (`lightbox.js`) : enveloppe l'aperçu dans la vignette
  *   cliquable. Absente ⇒ l'image est affichée telle quelle (aucun zoom).
+ * @param {string} [options.agentName] machine source (carte `agent` seulement).
+ * @param {(file: object) => void} [options.onInclude] action du bouton
+ *   « Inclure dans la discussion » (carte `agent` seulement). Absente ⇒ le bouton
+ *   n'est pas rendu (aucun bouton mort).
  * @returns {HTMLElement}
  */
 export function createFileCard(rawFile, options = {}) {
-  const from = options.from === "yuki" ? "yuki" : "user";
+  const from =
+    options.from === "yuki" || options.from === "agent" ? options.from : "user";
   const file = completeFile(rawFile);
   const name = String(file?.name ?? "fichier");
   const url = typeof file?.url === "string" ? file.url : "";
-  const label = from === "yuki" ? "Fichier envoyé" : "Fichier joint";
+  const label =
+    from === "yuki"
+      ? "Fichier envoyé"
+      : from === "agent"
+        ? "Fichier récupéré"
+        : "Fichier joint";
   const children = [
     h("div", { class: "file-card__head" }, [
       h("span", { class: "file-card__title", text: label }),
@@ -162,6 +176,13 @@ export function createFileCard(rawFile, options = {}) {
     ]),
     h("p", { class: "file-card__name", text: name }),
   ];
+  // ⚠️ Provenance d'un fichier RÉCUPÉRÉ : la machine d'où il vient. Sans elle,
+  // l'utilisateur ne sait pas d'où sort ce fichier.
+  if (from === "agent" && typeof options.agentName === "string" && options.agentName !== "") {
+    children.push(
+      h("p", { class: "file-card__origin", text: `Depuis la machine « ${options.agentName} »` }),
+    );
+  }
   // Aperçu : UNIQUEMENT une image servie en same-origin (`img-src 'self'`).
   // ⚠️ MÊME vignette cliquable que les images générées et les captures : on
   // passe l'image à `zoom.decorate` quand la visionneuse est fournie (patron
@@ -190,6 +211,28 @@ export function createFileCard(rawFile, options = {}) {
       ),
     );
   }
+  // ⚠️ SIGNALEMENT : un fichier récupéré depuis une machine est SUR LE DISQUE de
+  // Yuki, mais il n'est PAS dans la conversation. Sans ce bouton, l'utilisateur
+  // ignore qu'il peut l'utiliser. Le clic l'ajoute à la liste des pièces jointes
+  // (même chemin que le trombone : `pendingFiles` + `refreshPendingFiles`).
+  if (from === "agent" && typeof options.onInclude === "function") {
+    const include = h(
+      "button",
+      {
+        type: "button",
+        class: "file-card__include",
+        "aria-label": `Inclure ${name} dans la discussion`,
+      },
+      [h("span", { class: "file-card__include-label", text: "Inclure dans la discussion" })],
+    );
+    include.addEventListener("click", () => {
+      options.onInclude(file);
+      include.disabled = true;
+      include.querySelector(".file-card__include-label").textContent =
+        "Ajouté à la discussion";
+    });
+    children.push(include);
+  }
   if (file?.readable === false && typeof file?.reason === "string") {
     // ⚠️ HONNÊTETÉ : quand Yuki ne peut pas lire le fichier, elle le DIT — ici,
     // à l'écran, comme dans le bloc transmis au modèle.
@@ -217,20 +260,30 @@ export function createFileCard(rawFile, options = {}) {
  * @param {{ decorate(img: HTMLImageElement): HTMLElement }} [deps.zoom]
  *   visionneuse partagée (`lightbox.js`) : propagée aux cartes d'IMAGE.
  */
-export function createFileBlocks({ container, zoom } = {}) {
+export function createFileBlocks({ container, zoom, onInclude } = {}) {
   if (!container) throw new Error("createFileBlocks : conteneur absent");
 
-  /** Affiche la carte d'un fichier envoyé par Yuki. */
+  /** Affiche la carte d'un fichier envoyé par Yuki (ou récupéré d'une machine). */
   function show(file, options = {}) {
     if (!file) return;
+    const from = options.from ?? "yuki";
     container.appendChild(
-      createFileCard(file, { from: options.from ?? "yuki", zoom }),
+      createFileCard(file, {
+        from,
+        zoom,
+        ...(typeof options.agentName === "string" ? { agentName: options.agentName } : {}),
+        // ⚠️ Le bouton « Inclure dans la discussion » n'est proposé que pour un
+        // fichier RÉCUPÉRÉ (une carte `agent`).
+        ...(from === "agent" && typeof onInclude === "function" ? { onInclude } : {}),
+      }),
     );
   }
 
   /** Retire les cartes ÉPHÉMÈRES (le fil est reconstruit depuis un snapshot). */
   function reset() {
-    for (const el of [...container.querySelectorAll(".file-card--yuki")]) el.remove();
+    for (const el of [...container.querySelectorAll(".file-card--yuki, .file-card--agent")]) {
+      el.remove();
+    }
   }
 
   return { show, reset };
