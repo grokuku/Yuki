@@ -656,7 +656,8 @@ la plus fréquente d'un « j'ai remplacé le binaire et rien n'a changé ».
 Yuki **reçoit** des fichiers de l'utilisateur (bouton « Joindre » du composeur ou
 glisser-déposer — le bouton fonctionne aussi **sur téléphone**) et peut en
 **envoyer** (outil `envoyer_fichier` : elle renvoie un fichier déjà présent dans
-la conversation).
+la conversation). Elle peut aussi **transférer** un fichier vers/depuis une
+**machine appairée** (`recuperer_fichier` / `deposer_fichier`, voir § 13.7).
 
 Réglages dans **`/config` → onglet Conversation → groupe « Fichiers échangés »** :
 
@@ -718,10 +719,10 @@ fichier expiré le supprime et répond « absent » (404).
 * **PDF / binaire en vision** : un PDF n'est pas converti en image (il faudrait
   un moteur de rendu, dépendance lourde) — il reste annoncé `lu="non"` avec sa
   raison.
-* **Fichier venu d'un agent** : le protocole de l'agent Go (v1) ne transporte ni
-  fichier ni morceau de fichier (`stdout`/`stderr` seulement, et l'image de
-  `capture d'écran`). Un transfert demanderait une nouvelle trame, un découpage en
-  morceaux et une négociation de capacité côté agent.
+* **Fichier venu d'un agent** : c'est désormais **fait** (capacité `files`, voir
+  § 13.7) ; ce qui reste absent est la reprise d'un transfert **après expiration**
+  ou au-delà d'**une** reprise après coupure, et le transfert de fichiers
+  **supérieurs au plafond** (`run_command` + `scp`/`rsync` restent la voie).
 * **Entrée externe** (ex. un process qui dépose un GIF météo) : non construite.
   Le point d'accroche existe — `FilesStore.saveBytes(octets, { name, mimeType,
   origin: "externe", sessionId })`, puis `FilesService.attach(sessionId, [id])`
@@ -757,4 +758,73 @@ message**, dans `src/files/vision.ts` :
   RIEN** (chemin rapide : base64 seul, ~1 ms pour 543 Ko).
 * ⚠️ **Contexte** : le SDK estime une image à ~1 200 jetons (`ESTIMATED_IMAGE_CHARS`),
   quelle que soit sa taille — le contexte ne peut donc pas exploser par ce canal.
+
+### 13.7 Transfert vers/depuis une machine appairée (capacité `files`)
+
+Deux outils, portés par le **worker lourd** (c'est lui qui agit sur une machine,
+jamais le léger qui converse) :
+
+| Outil | Sens | Paramètres |
+| --- | --- | --- |
+| `recuperer_fichier` | machine → Yuki | `agent` (nom **ou** identifiant de la machine), `chemin` (**absolu** côté machine) |
+| `deposer_fichier` | Yuki → machine | `agent`, `fichier` (**identifiant** du fichier stocké), `chemin_distant` (**absolu** côté machine), `ecraser?` |
+
+⚠️ **`fichier` est un IDENTIFIANT, jamais un nom.** Le stockage refuse toute
+référence qui n'est pas 32 hexadécimaux (`src/files/store.ts`, `ID_RE`).
+**Décision actée : identifiant STRICT** — un nom n'est **jamais** accepté, même
+s'il est unique, même s'il ressemble à un chemin ; aucun repli « si le nom est
+unique » n'existe ni ne sera ajouté.
+
+Où trouver l'identifiant (**trois sources réelles**) :
+
+1. le marqueur `[fichier] <identifiant> <nom> (n octets)` du message — écrit par
+   `src/files/frame.ts` (`formatFileMarker`) et inséré par
+   `src/files/service.ts` ;
+2. le champ `file_id` du résultat de `recuperer_fichier` (`transferSummary`,
+   `src/pi/sdk/execution-tools.ts`) ;
+3. l'URL de la carte de fichier, `/fichiers/<identifiant>.<ext>`
+   (`src/files/store.ts`, `fileUrl`).
+
+Un nom produit désormais un **refus explicite qui dit quoi passer et où le
+trouver** :
+
+* nom inconnu → « « x.txt » n'est pas un identifiant… aucun fichier de cette
+  conversation ne porte non plus ce nom » ;
+* nom porté par **un** fichier → l'**identifiant** à utiliser est donné ;
+* nom porté par **plusieurs** fichiers → « plusieurs fichiers portent ce nom —
+  utilisez l'IDENTIFIANT », avec la liste (bornée) des identifiants candidats.
+
+⚠️ Cette aide est **purement diagnostique** : le nom n'est jamais accepté, et la
+recherche par nom est bornée à la **conversation** du transfert (aucune fuite
+d'un fil à l'autre).
+
+⚠️ **Écart assumé avec `envoyer_fichier`** (Yuki renvoie un fichier à
+l'utilisateur, § 13) : celui-ci accepte **identifiant ou nom** parmi les fichiers
+de la conversation (`FilesService.send`), parce qu'il ne fait que rendre un
+fichier cliquable. Le dépôt, lui, **agit** sur une machine : il exige
+l'identifiant.
+
+#### Exemple correct, de bout en bout (récupérer puis redéposer le MÊME fichier)
+
+1. `recuperer_fichier(agent: "nuc00", chemin: "/home/nico/temoin.txt")`
+   → résultat : `{ status: "completed", direction: "get", file_id: "9f2c…e1",
+   name: "temoin.txt", bytes: 131, sha256: "…" }`.
+2. **Redéposer ce même fichier** : `deposer_fichier(agent: "nuc00",
+   fichier: "9f2c…e1", chemin_distant: "/home/nico/retour/temoin.txt")`.
+   ⚠️ `fichier` = le `file_id` de l'étape 1 (ou l'identifiant du marqueur
+   `[fichier] 9f2c…e1 temoin.txt (131 octets)`), **jamais** `"temoin.txt"`.
+3. ❌ **Ce qui échoue volontairement** : `deposer_fichier(agent: "nuc00",
+   fichier: "temoin.txt", chemin_distant: "/home/nico/retour/temoin.txt")`
+   → `status: "not_found"` et un message qui dit qu'un **identifiant** est
+   attendu, où le trouver, et — si ce nom est porté par un seul fichier —
+   **quel identifiant utiliser**. Rien n'est écrit sur la machine : le refus
+   intervient **avant** toute trame.
+4. Si la destination existe déjà : l'outil répond `conflict` sans rien écrire ;
+   redemander explicitement à l'utilisateur, puis `ecraser: true`.
+
+Garde-fous (inchangés) : chemin **relatif refusé**, agent **hors ligne** refusé
+(aucune mise en file), agent **sans capacité `files`** refusé **avant toute
+émission** (« ton agent est TROP ANCIEN »), plafond par transfert (au-delà :
+`run_command` + `scp`/`rsync`), écriture **atomique** côté machine (`.part` +
+renommage) avec empreinte SHA-256 vérifiée, et **aucun écrasement silencieux**.
 

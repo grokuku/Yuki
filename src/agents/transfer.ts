@@ -48,7 +48,7 @@ import type { AuditLog } from "./audit.js";
 import type { AgentHub } from "./connection.js";
 import { AgentChannelError, isChannelError } from "./errors.js";
 import type { AgentStore } from "./store.js";
-import type { FileSaveInput, FilesPort, WireFile } from "../files/types.js";
+import type { FileSaveInput, FilesPort, StoredFileRecord, WireFile } from "../files/types.js";
 import { DEFAULT_FILE_CHUNK_BYTES, type OutboundFilePutChunk } from "./protocol.js";
 
 /** Capacité qu'un agent doit déclarer pour que le transfert soit possible. */
@@ -250,6 +250,99 @@ export function filesUnsupportedMessage(agentName: string | undefined): string {
     "(`yuki-agent version` puis mise à jour du binaire, cf. docs/runbook.md §12.4), " +
     "puis réessaie. ⚠️ AUCUNE trame n'a été émise : sans cette capacité, l'agent " +
     "ignorerait silencieusement la demande et le transfert resterait bloqué."
+  );
+}
+
+/**
+ * `true` si `reference` a la FORME d'un identifiant de fichier de Yuki
+ * (32 hexadécimaux, cf. `src/files/store.ts` — `ID_RE`).
+ *
+ * ⚠️ Sert UNIQUEMENT à diagnostiquer un refus : le dépôt n'accepte QUE
+ * l'identifiant, jamais un nom (voir `unknownFileReferenceMessage`).
+ */
+export function looksLikeFileId(reference: string): boolean {
+  return /^[a-f0-9]{32}$/i.test(reference.trim());
+}
+
+/** Nombre de candidats NOMMÉS cités au maximum dans un message de refus. */
+const MAX_NAME_CANDIDATES = 5;
+
+/**
+ * Où trouver l'identifiant d'un fichier — dit AU MODÈLE, à chaque refus.
+ *
+ * ⚠️ Ce texte est VÉRIFIÉ : les trois sources existent réellement.
+ *  - `[fichier] <identifiant> <nom> (n octets)` : marqueur du message, produit par
+ *    `src/files/frame.ts` (`formatFileMarker`) et inséré par
+ *    `src/files/service.ts` ;
+ *  - `file_id` : champ du résultat JSON de `recuperer_fichier`
+ *    (`src/pi/sdk/execution-tools.ts`, `transferSummary`) ;
+ *  - `/fichiers/<id>.<ext>` : URL de téléchargement de la carte de fichier
+ *    (`src/files/store.ts`, `fileUrl`).
+ */
+export const FILE_ID_HINT =
+  "Où trouver l'identifiant : (1) le marqueur « [fichier] <identifiant> <nom> " +
+  "(n octets) » du message, (2) le champ `file_id` renvoyé par `recuperer_fichier`, " +
+  "(3) l'URL de la carte « /fichiers/<identifiant>.<ext> ».";
+
+/**
+ * Message de refus quand la référence de fichier ne désigne aucun fichier stocké.
+ *
+ * ⚠️ Ce n'est PAS une résolution par nom — DÉCISION ACTÉE : **identifiant strict**,
+ * un nom n'est JAMAIS accepté, même unique, même s'il ressemble à un chemin. Le
+ * stockage refuse tout ce qui n'est pas 32 hexadécimaux (`src/files/store.ts`,
+ * `ID_RE`). Le nom ne sert qu'à DIRE quoi passer (« ce nom n'est pas un
+ * identifiant, voici l'identifiant à utiliser ») et, si plusieurs fichiers
+ * portent ce nom, à le dire au lieu d'en choisir un au hasard.
+ *
+ * `candidates` = fichiers de la conversation dont le nom correspond exactement
+ * (insensible à la casse). Vide quand la référence a déjà la forme d'un
+ * identifiant, ou qu'aucun fichier visible ne porte ce nom.
+ */
+export function unknownFileReferenceMessage(
+  reference: string,
+  candidates: readonly StoredFileRecord[] = [],
+): string {
+  const given = reference.trim();
+  const label = given === "" ? "(vide)" : given;
+  const tail =
+    "Le paramètre `fichier` attend l'IDENTIFIANT du fichier — les 32 caractères " +
+    "hexadécimaux de la carte du fichier — PAS son nom : un nom n'est jamais " +
+    "accepté, même unique (deux fichiers peuvent porter le même nom). " +
+    FILE_ID_HINT +
+    " ";
+  if (looksLikeFileId(given)) {
+    return (
+      `Fichier à déposer introuvable dans Yuki : aucun fichier ne porte l'identifiant « ${label} ». ` +
+      "Il a peut-être expiré. " +
+      tail +
+      "Redemande le fichier à l'utilisateur, ou récupère-le d'abord avec `recuperer_fichier`."
+    );
+  }
+  if (candidates.length === 0) {
+    return (
+      `Fichier à déposer refusé : « ${label} » n'est pas un identifiant. ` +
+      tail +
+      "Aucun fichier de cette conversation ne porte non plus ce nom : redemande-le à " +
+      "l'utilisateur, ou récupère-le d'abord avec `recuperer_fichier`."
+    );
+  }
+  const shown = candidates.slice(0, MAX_NAME_CANDIDATES);
+  const listed = shown.map((record) => `« ${record.id} » (nom « ${record.name} »)`).join(", ");
+  const more =
+    candidates.length > shown.length
+      ? ` et ${candidates.length - shown.length} autre(s) fichier(s) du même nom`
+      : "";
+  if (candidates.length === 1) {
+    return (
+      `Fichier à déposer refusé : « ${label} » est un NOM, pas un identifiant. ` +
+      tail +
+      `L'identifiant de ce fichier est ${listed} : réessaie avec CET identifiant.`
+    );
+  }
+  return (
+    `Fichier à déposer refusé : plusieurs fichiers de cette conversation portent le nom ` +
+    `« ${label} » — utilisez l'IDENTIFIANT. ${tail}` +
+    `Identifiants possibles : ${listed}${more}.`
   );
 }
 
@@ -739,6 +832,25 @@ export class AgentFileTransferService implements TransferServicePort {
     };
   }
 
+  /**
+   * Fichiers de la MÊME conversation dont le nom correspond à la référence
+   * fournie : sert UNIQUEMENT à écrire un refus qui dit quoi passer.
+   *
+   * ⚠️ Ce n'est PAS une résolution par nom : l'appelant refuse dans tous les cas
+   * (le dépôt n'accepte que l'identifiant). ⚠️ On ne regarde QUE la conversation
+   * du transfert (aucune fuite d'un fil à l'autre) ; sans conversation
+   * identifiée, aucun candidat n'est proposé.
+   */
+  private nameCandidates(request: FilePutRequest): StoredFileRecord[] {
+    const wanted = request.fileId.trim().toLowerCase();
+    if (wanted === "" || looksLikeFileId(wanted)) return [];
+    const sessionId = request.sessionId;
+    if (sessionId === undefined || sessionId === "") return [];
+    return this.files
+      .list({ sessionId })
+      .filter((record) => record.name.trim().toLowerCase() === wanted);
+  }
+
   // ── DÉPÔT (Yuki → machine) ───────────────────────────────────────────────
 
   async put(request: FilePutRequest): Promise<TransferOutcome> {
@@ -762,7 +874,9 @@ export class AgentFileTransferService implements TransferServicePort {
     }
 
     // ⚠️ La source est un fichier DÉJÀ stocké par Yuki (le modèle n'a aucun accès
-    // disque). Un identifiant inconnu/expiré est refusé explicitement.
+    // disque), désigné par son IDENTIFIANT. Un identifiant inconnu/expiré — ou un
+    // NOM, qui n'est pas un identifiant — est refusé explicitement, avec ce qu'il
+    // faut passer à la place.
     const stored = this.files.get(request.fileId);
     if (!stored) {
       return this.simpleOutcome(
@@ -771,8 +885,7 @@ export class AgentFileTransferService implements TransferServicePort {
         "put",
         request.path,
         "not_found",
-        `Fichier à déposer introuvable dans Yuki (« ${request.fileId} »). Il a peut-être expiré : ` +
-          "redemande-le à l'utilisateur, ou récupère-le d'abord depuis la conversation.",
+        unknownFileReferenceMessage(request.fileId, this.nameCandidates(request)),
         origin,
       );
     }

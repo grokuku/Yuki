@@ -695,7 +695,9 @@ function transferSummary(outcome: TransferOutcome): string {
           note:
             "Le fichier est SUR LE DISQUE de Yuki et une carte cliquable s'affiche " +
             "dans la conversation. Tu ne vois pas son contenu ici : si l'utilisateur " +
-            "veut que tu le lises, il l'inclura dans la discussion.",
+            "veut que tu le lises, il l'inclura dans la discussion. ⚠️ Pour REDÉPOSER " +
+            "ce même fichier sur une machine, passe `file_id` (ci-dessus) au paramètre " +
+            "`fichier` de `deposer_fichier` : le NOM seul est refusé.",
         }
       : {}),
   });
@@ -708,6 +710,13 @@ function transferSummary(outcome: TransferOutcome): string {
  *     SUR LE DISQUE de Yuki (une carte cliquable apparaît dans la conversation) ;
  *   - `deposer_fichier(agent, fichier, chemin_distant, ecraser?)` : ÉCRIT un
  *     fichier de Yuki sur la machine, atomiquement, jamais sans `ecraser`.
+ *
+ * ⚠️ `fichier` est un IDENTIFIANT de fichier stocké (32 hexadécimaux), JAMAIS un
+ * nom — DÉCISION ACTÉE : **identifiant strict**, même unique, même ressemblant à
+ * un chemin. `FilesPort.get` refuse tout ce qui n'est pas un identifiant
+ * (`src/files/store.ts`, `ID_RE`), et deux fichiers peuvent porter le même nom.
+ * Un nom produit un refus explicite qui dit quel identifiant utiliser et où le
+ * trouver (`src/agents/transfer.ts`, `unknownFileReferenceMessage`).
  *
  * ⚠️ Même garde-fou par agent (D118) que `run_command` : un agent `disabled`
  * refuse, un niveau 2 fait valider, un agent SANS la capacité `files` est refusé
@@ -762,8 +771,14 @@ export function createFileTransferTools(
     name: "deposer_fichier",
     label: "Déposer un fichier sur une machine appairée",
     description:
-      "ÉCRIT un fichier de la conversation (identifiant ou nom fourni par " +
-      "l'utilisateur) sur une machine appairée, à un chemin ABSOLU de destination. " +
+      "ÉCRIT un fichier de la conversation sur une machine appairée, à un chemin " +
+      "ABSOLU de destination. ⚠️ `fichier` est l'IDENTIFIANT DU FICHIER (PAS son " +
+      "nom) : les 32 caractères hexadécimaux visibles dans le marqueur " +
+      "« [fichier] <identifiant> <nom> (n octets) » du message, ou dans le champ " +
+      "`file_id` que renvoie `recuperer_fichier`, ou dans l'URL " +
+      "« /fichiers/<identifiant>.<ext> » de la carte du fichier. Un NOM n'est " +
+      "JAMAIS accepté, même unique : l'outil refuse et dit quel identifiant " +
+      "utiliser (deux fichiers peuvent porter le même nom). " +
       "L'écriture est ATOMIQUE côté machine (fichier temporaire puis renommage) et " +
       "l'empreinte SHA-256 est vérifiée : un transfert altéré échoue, il ne laisse " +
       "aucun fichier corrompu. ⚠️ Aucun écrasement sans `ecraser: true` : si la " +
@@ -771,7 +786,7 @@ export function createFileTransferTools(
       "explicitement à l'utilisateur s'il faut écraser. Tu ne peux déposer que des " +
       "fichiers DÉJÀ présents dans la conversation (tu n'as aucun accès disque).",
     promptSnippet:
-      "deposer_fichier(agent, fichier, chemin_distant, ecraser?) — écrit un fichier de la conversation sur une machine",
+      "deposer_fichier(agent, fichier, chemin_distant, ecraser?) — écrit un fichier de la conversation sur une machine (fichier = IDENTIFIANT du fichier, PAS son nom)",
     parameters: Type.Object({
       agent: Type.String({
         minLength: 1,
@@ -783,7 +798,11 @@ export function createFileTransferTools(
         minLength: 1,
         maxLength: 256,
         description:
-          "Identifiant (32 hexadécimaux) ou nom EXACT d'un fichier de la conversation à déposer.",
+          "IDENTIFIANT du fichier (PAS son nom) : 32 caractères hexadécimaux, pris " +
+          "dans le marqueur « [fichier] <identifiant> <nom> (n octets) » du message, " +
+          "dans le champ `file_id` renvoyé par `recuperer_fichier`, ou dans l'URL " +
+          "« /fichiers/<identifiant>.<ext> » de la carte. ⚠️ Un nom est REFUSÉ, " +
+          "même unique ; l'outil indique alors l'identifiant à utiliser.",
       }),
       chemin_distant: Type.String({
         minLength: 1,
