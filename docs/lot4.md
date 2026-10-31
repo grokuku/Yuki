@@ -697,9 +697,11 @@ variable la développe en **CHAÎNE VIDE** : `rm -rf /$YUKI_SECRET_DIR` deviendr
   **ignore le champ `env` en silence** : c'est précisément ce que ce garde-fou
   intercepte.
 
-**Version de l'agent.** `agent/VERSION` = **0.2.0** (`internal/buildinfo`), publiée
-par la CI `agent.yml` (`release agent-v<version>`). Procédure de mise à jour :
-`docs/runbook.md` §12.4.
+**Version de l'agent.** Lue dans **`version.txt`** (racine), injectée à la
+compilation : c'est le **même numéro** que l'image du gateway (le fichier `VERSION`
+sous `agent/` a été supprimé). Publiée par `release.yml` (release GitHub
+`v<version>`).
+Procédure de mise à jour : `docs/runbook.md` §12.4.
 
 ## 19. Verrou « matériel sensible » (note d'implémentation)
 

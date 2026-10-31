@@ -619,20 +619,37 @@ vide.** Les commandes SANS secret continuent de fonctionner normalement.
 
 #### Mettre l'agent à jour (exactement)
 
-* **1. Obtenir le binaire** (version **0.2.0** ou plus récente — la version est
-  lisible par `yuki-agent version`) :
-  * soit depuis les **releases GitHub** `agent-v<version>` (binaires linux-amd64,
-    linux-arm64, windows-amd64… + `SHA256SUMS`) ;
-  * soit **en local** :
+* **1. Obtenir le binaire** (la version est lisible par `yuki-agent version`) :
+  * depuis la **release GitHub `v<version>`** — ⚠️ même numéro que l'image du
+    gateway (`version.txt`). La version la plus récente :
+    ```sh
+    gh release list --limit 1            # ou : voir github.com/grokuku/Yuki/releases
+    ```
+  * **téléchargement + vérification** (exemple pour `v0.1.0`, linux/amd64) :
+    ```sh
+    gh release download v0.1.0 \
+      --pattern 'yuki-agent-linux-amd64-musl' --pattern SHA256SUMS
+    sha256sum -c SHA256SUMS --ignore-missing
+    chmod +x yuki-agent-linux-amd64-musl
+    ./yuki-agent-linux-amd64-musl version    # → « yuki-agent 0.1.0 »
+    ```
+    Sans `gh` (même contenu, via `curl`) :
+    ```sh
+    curl -fLO https://github.com/grokuku/Yuki/releases/download/v0.1.0/yuki-agent-linux-amd64-musl
+    curl -fLO https://github.com/grokuku/Yuki/releases/download/v0.1.0/SHA256SUMS
+    ```
+    ⚠️ `agent/deploy/install.sh` **ne télécharge rien** : il installe un binaire
+    DÉJÀ présent (`--binary <chemin>`).
+  * ou **en local** (from source), avec la version de `version.txt` :
     ```sh
     cd agent
-    go build -ldflags "-s -w -X github.com/grokuku/yuki/agent/internal/buildinfo.Version=$(cat VERSION)" \
+    go build -ldflags "-s -w -X github.com/grokuku/yuki/agent/internal/buildinfo.Version=$(tr -d '[:space:]' < ../version.txt)" \
       -o yuki-agent ./cmd/yuki-agent
-    ./yuki-agent version      # doit afficher 0.2.0 (ou plus)
+    ./yuki-agent version      # doit afficher la version de version.txt
     ```
 * **2. Installer (systemd)** :
   ```sh
-  sudo agent/deploy/install.sh --binary ./yuki-agent
+  sudo agent/deploy/install.sh --binary ./yuki-agent-linux-amd64-musl
   ```
   Le script **copie le binaire** dans `/usr/local/bin/yuki-agent`, réinstalle
   l'unité et **redémarre** le service (`systemctl restart yuki-agent`).

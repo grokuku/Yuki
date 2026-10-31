@@ -16,7 +16,8 @@ lie **aucune libc** : le même binaire tourne sur **glibc** (Debian…) et sur
 installer, et **pas** de second linkage : `-musl` dans le nom du fichier nomme
 la **cible validée**, pas une variante de compilation.
 
-Mesures (agent 0.2.0, `-trimpath -ldflags "-s -w"`, `CGO_ENABLED=0`) :
+Mesures (agent 0.2.0 — releases d'avant l'unification des versions, `-trimpath
+-ldflags "-s -w"`, `CGO_ENABLED=0`) :
 
 | Binaire | Taille | `file` |
 | --- | --- | --- |

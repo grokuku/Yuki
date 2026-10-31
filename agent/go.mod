@@ -1,8 +1,9 @@
 // Module Go de l'« agent d'exécution » Yuki (Lot 4).
 //
 // ⚠️ Ce module est INDÉPENDANT du projet Node/TS de Yuki : il n'y a PAS de
-// `go.mod` à la racine de Yuki. La version de l'agent (`agent/VERSION`) est
-// découplée de la version de Yuki (`version.txt`).
+// `go.mod` à la racine de Yuki. La version de l'agent est lue dans `version.txt`
+// (racine de Yuki) et INJECTÉE à la compilation : c'est le MÊME numéro que
+// l'image du gateway.
 //
 // Dépendances : la bibliothèque standard couvre toute la cryptographie
 // (crypto/hmac, crypto/sha256, crypto/hkdf, crypto/aes, crypto/cipher,

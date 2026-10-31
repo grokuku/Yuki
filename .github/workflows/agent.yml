@@ -1,33 +1,28 @@
 # =============================================================================
-# Yuki — CI de l'« agent d'exécution » (Lot 4) : compilation et publication des
-# binaires TÉLÉCHARGEABLES.
+# Yuki — CI AUTONOME de l'« agent d'exécution » (Lot 4).
 #
-# ⚠️ Workflow SÉPARÉ de `test-build.yml` / `release.yml` (volet image Docker) :
-#   * il ne se déclenche QUE si des fichiers sous `agent/**` (ou ce workflow)
-#     changent — un push qui ne touche que le gateway Node ne le lance jamais, et
-#     réciproquement (le filtre `paths` de `test-build.yml` n'est PAS modifié) ;
-#   * il ne touche NI `version.txt` (version DE Yuki, volet image) NI
-#     `agent/VERSION` (version DE l'agent, source unique de vérité ici). Aucun
-#     bump automatique : la version de l'agent est découplée et gérée à la main.
+# ⚠️ La compilation elle-même vit dans `agent-build.yml` (workflow
+# RÉUTILISABLE, `workflow_call`), pour être partagée mot pour mot avec la
+# publication unifiée (`release.yml`) : une seule copie de la logique de build,
+# donc aucune dérive entre « CI de l'agent » et « publication ». Ce fichier ne
+# garde que l'ORCHESTRATION et la release de REJEU manuel.
 #
-# Chaîne de jobs :
-#   agent-quality → gofmt / go vet / go test (module Go dans `agent/`) ;
-#   agent-build   → compilation CROISÉE des 4 cibles (matrice) + artefacts
-#                   (binaire nommé explicitement + empreinte SHA-256) ;
-#   agent-release → (workflow_dispatch UNIQUEMENT) GitHub Release `agent-v<version>`
-#                   portant les 4 binaires + `SHA256SUMS`.
+# ⚠️ UN SEUL NUMÉRO DE VERSION : `version.txt` (racine du dépôt), le MÊME que
+# l'image du gateway (`ghcr.io/grokuku/yuki:<version>`). Le fichier `VERSION` de
+# `agent/` a été
+# SUPPRIMÉ (deux fichiers de version = divergence garantie). La version est
+# injectée à la compilation, donc `yuki-agent version` affiche le numéro publié.
 #
-# ⚠️ cibles LINUX = « MUSL / OpenWrt » : le module Go n'a AUCUN CGO (aucun
-# `import "C"`), donc `CGO_ENABLED=0` produit un ELF STATIQUE qui ne dépend
-# d'AUCUNE libc : le MÊME octet-à-octet binaire tourne sur glibc (Debian…) et
-# sur musl (OpenWrt, Alpine). Le suffixe `-musl` du nom rend la cible
-# EXPLICITE pour l'utilisateur OpenWrt ; ce n'est pas un second linkage.
-# Documentation d'installation OpenWrt : `agent/deploy/openwrt/README.md`.
-#
-# Publication des binaires :
-#   * `push` vers `main`  → artefacts téléchargeables à chaque push (rétention 7 j) ;
+# Déclencheurs (comportement historique conservé) :
+#   * `push` vers `main`  → compilation + artefacts (rétention 7 j) ;
 #   * `pull_request`      → compilation VALIDÉE, aucun artefact publié ;
-#   * `workflow_dispatch` → artefacts + GitHub Release (jamais sur push).
+#   * `workflow_dispatch` → compilation + GitHub Release `v<version>`.
+#     (`create_release: false` = compiler sans publier.)
+#
+# ⚠️ La publication CANONIQUE (image + binaires + release, dans la même action)
+# est `release.yml`. Ce workflow reste la porte de REJEU de l'agent seul : s'il
+# rejoue une version déjà publiée, la création de la release ÉCHOUE avec un
+# message explicite (« incrémentez version.txt ») — jamais d'écrasement.
 #
 # Aucun secret à configurer : le jeton éphémère `GITHUB_TOKEN` suffit (lecture
 # des artefacts implicite ; `contents: write` seulement pour créer la release).
@@ -42,13 +37,24 @@ on:
     paths:
       - 'agent/**'
       - '.github/workflows/agent.yml'
+      - '.github/workflows/agent-build.yml'
+      # `version.txt` porte la version INJECTÉE dans les binaires : un bump doit
+      # recompiler (sinon l'artefact publié porterait l'ancien numéro).
+      - 'version.txt'
   pull_request:
     branches: [main]
     paths:
       - 'agent/**'
       - '.github/workflows/agent.yml'
-  # Porte de rejeu manuel : (re)compile et PUBLIE une release `agent-v<version>`.
+      - '.github/workflows/agent-build.yml'
+      - 'version.txt'
+  # Porte de rejeu manuel : (re)compile et PUBLIE une release `v<version>`.
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: "Créer la GitHub Release v<version> (false = compiler seulement)"
+        type: boolean
+        default: true
 
 # Permissions minimales par défaut : lecture seule. Le job `agent-release`
 # relève `contents` à `write` (création de la release) et RIEN d'autre.
@@ -61,190 +67,53 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  # Version de Go ÉPINGLÉE, cohérente avec la directive `go 1.27` de `agent/go.mod`.
-  GO_VERSION: '1.27.1'
-
 jobs:
   # ---------------------------------------------------------------------------
-  # Garde-fou qualité du module Go : les jobs `agent-build` / `agent-release`
-  # en dépendent. Commandes strictement identiques à la vérification locale.
-  # ---------------------------------------------------------------------------
-  agent-quality:
-    name: Qualité Go (gofmt, vet, tests)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: agent
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: agent/go.sum
-
-      - name: gofmt (échec si un fichier n'est pas formaté)
-        run: |
-          set -euo pipefail
-          unformatted="$(gofmt -l .)"
-          if [ -n "${unformatted}" ]; then
-            echo "::error::fichiers Go non formatés (gofmt -l) :"
-            printf '%s\n' "${unformatted}"
-            exit 1
-          fi
-          echo "gofmt : aucun fichier à reformater."
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: go test
-        run: go test ./...
-
-  # ---------------------------------------------------------------------------
-  # Compilation croisée des 4 cibles vérifiées (CGO_ENABLED=0, binaires
-  # statiques). Une entrée de matrice PAR cible : nom de binaire EXPLICITE
-  # (`yuki-agent-<goos>-<goarch><variante>[.exe]`), artefact par cible.
-  #
-  # `variant` : suffixe du nom, réservé à la CIBLE (pas au linkage) —
-  # `-musl` dit « validé pour OpenWrt / musl » sans rien changer au binaire, qui
-  # est statique et donc indépendant de la libc (voir l'en-tête du workflow).
+  # Compilation : délègue TOUT au workflow réutilisable (qualité Go + matrice des
+  # 4 cibles + artefacts). Aucune version transmise ⇒ il lit `version.txt`.
   # ---------------------------------------------------------------------------
   agent-build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.variant }}
-    needs: agent-quality
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { goos: linux, goarch: amd64, ext: '', variant: '-musl' }
-          - { goos: linux, goarch: arm64, ext: '', variant: '-musl' }
-          - { goos: windows, goarch: amd64, ext: '.exe', variant: '' }
-          - { goos: windows, goarch: arm64, ext: '.exe', variant: '' }
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: agent/go.sum
-
-      # La version de l'agent est INJECTÉE à la compilation depuis
-      # `agent/VERSION` (via `buildinfo.Version`) : le binaire publié porte la
-      # version de la source, indépendamment du défaut codé en dur.
-      - name: Compiler le binaire
-        id: build
-        working-directory: agent
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          EXT: ${{ matrix.ext }}
-          VARIANT: ${{ matrix.variant }}
-          CGO_ENABLED: '0'
-        run: |
-          set -euo pipefail
-          VERSION="$(tr -d '[:space:]' < VERSION)"
-          if [ -z "${VERSION}" ]; then
-            echo "::error::agent/VERSION est vide."
-            exit 1
-          fi
-          NAME="yuki-agent-${GOOS}-${GOARCH}${VARIANT}${EXT}"
-          mkdir -p ../dist
-          go build -trimpath \
-            -ldflags "-s -w -X github.com/grokuku/yuki/agent/internal/buildinfo.Version=${VERSION}" \
-            -o "../dist/${NAME}" ./cmd/yuki-agent
-          echo "name=${NAME}" >> "${GITHUB_OUTPUT}"
-          ls -l "../dist/${NAME}"
-
-      # Garde-fou de la cible Linux : le binaire DOIT être un ELF STATIQUE de la
-      # bonne architecture. Sans cette vérification, un `CGO_ENABLED=1` accidentel
-      # (ou une dépendance C ajoutée plus tard) produirait un binaire DYNAMIQUE
-      # qui ne démarrerait PAS sur OpenWrt (musl absent / autre libc).
-      - name: Vérifier binaire statique et architecture (Linux)
-        if: matrix.goos == 'linux'
-        working-directory: dist
-        env:
-          NAME: ${{ steps.build.outputs.name }}
-          WANT_ARCH: ${{ matrix.goarch }}
-        run: |
-          set -euo pipefail
-          info="$(file -b "${NAME}")"
-          echo "file : ${info}"
-          case "${info}" in
-            *"statically linked"*|*"static-pie linked"*) ;;
-            *) echo "::error::${NAME} n'est PAS statique (attendu : CGO_ENABLED=0) : ${info}"; exit 1 ;;
-          esac
-          case "${WANT_ARCH}:${info}" in
-            amd64:*"x86-64"*) ;;
-            arm64:*"aarch64"*) ;;
-            *) echo "::error::${NAME} ne correspond pas à l'architecture ${WANT_ARCH} : ${info}"; exit 1 ;;
-          esac
-
-      - name: Empreinte SHA-256
-        working-directory: dist
-        env:
-          NAME: ${{ steps.build.outputs.name }}
-        run: |
-          set -euo pipefail
-          sha256sum "${NAME}" > SHA256SUMS
-          cat SHA256SUMS
-
-      # Jamais de binaire téléchargeable pour une PR : on VALIDE la compilation
-      # (étapes ci-dessus), on ne publie rien.
-      - name: Publier l'artefact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: yuki-agent-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.variant }}
-          path: |
-            dist/${{ steps.build.outputs.name }}
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
+    name: Compilation de l'agent
+    uses: ./.github/workflows/agent-build.yml
 
   # ---------------------------------------------------------------------------
   # GitHub Release, UNIQUEMENT sur `workflow_dispatch` (déclenchement manuel).
   #
-  # Choix : PAS de déclencheur sur tag `agent-v*`. Le projet a acté que la
-  # version est lue dans un FICHIER (`version.txt` pour l'image, `agent/VERSION`
-  # pour l'agent) et que la publication est manuelle (voir `release.yml`) — « plus
-  # aucun tag Git ». On reste cohérent : le tag `agent-v<version>` est CRÉÉ par ce
-  # job au moment de la release, jamais poussé à la main.
+  # Choix : PAS de déclencheur sur tag `v*`. Le projet a acté que la version est
+  # lue dans un FICHIER (`version.txt`, unique pour l'image ET l'agent) et que la
+  # publication est manuelle (voir `release.yml`) — « plus aucun tag Git poussé à
+  # la main ». Le tag `v<version>` est CRÉÉ par ce job (ou par `release.yml`) au
+  # moment de la release.
   # ---------------------------------------------------------------------------
   agent-release:
     name: Release des binaires de l'agent
-    needs: [agent-quality, agent-build]
-    if: github.event_name == 'workflow_dispatch'
+    needs: agent-build
+    # ⚠️ `github.event.inputs` (et pas le contexte `inputs`) : ce job est évalué
+    # aussi sur `push`/`pull_request`, où le contexte `inputs` n'a pas de sens.
+    # `github.event` existe sur TOUS les événements, donc l'expression est sûre.
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.create_release != 'false'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # création de la GitHub Release + du tag `agent-v<version>`
+      contents: write # création de la GitHub Release + du tag `v<version>`
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Lire la version de l'agent
+      - name: Lire la version (version.txt)
         id: version
-        working-directory: agent
         run: |
           set -euo pipefail
-          VERSION="$(tr -d '[:space:]' < VERSION)"
+          VERSION="$(tr -d '[:space:]' < version.txt)"
           if [ -z "${VERSION}" ]; then
-            echo "::error::agent/VERSION est vide."
+            echo "::error::version.txt est vide."
             exit 1
           fi
           if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::version invalide « ${VERSION} » dans agent/VERSION (attendu MAJOR.MINOR.PATCH)."
+            echo "::error::version invalide « ${VERSION} » dans version.txt (attendu MAJOR.MINOR.PATCH)."
             exit 1
           fi
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
-          echo "Version de l'agent : ${VERSION}"
+          echo "Version publiée : ${VERSION}"
 
       # `download-artifact` sans `merge-multiple` : chaque artefact est extrait
       # dans son propre sous-dossier `dist/<nom-d-artefact>/`.
@@ -264,6 +133,8 @@ jobs:
           # Empreintes recalculées sur l'ENSEMBLE final : ce sont elles qui
           # accompagnent la release.
           ( cd release && sha256sum yuki-agent-* > SHA256SUMS )
+          # Le déploiement minimal accompagne les binaires (même action GitHub).
+          cp deploy/minimal/docker-compose.yml release/docker-compose.yml
           echo "Fichiers attachés à la release :"
           ls -l release
           cat release/SHA256SUMS
@@ -275,15 +146,17 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          TAG="agent-v${VERSION}"
+          TAG="v${VERSION}"
+          # ⚠️ AUCUN écrasement silencieux : un asset existant fait ÉCHOUER la commande au
+          # lieu de l'écraser en silence.
           # Idempotence : une release ne se réécrit pas silencieusement.
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "::error::la release ${TAG} existe déjà — incrémentez agent/VERSION avant de republier."
+            echo "::error::la release ${TAG} existe déjà — incrémentez version.txt avant de republier."
             exit 1
           fi
           gh release create "${TAG}" release/* \
             --target "${SHA}" \
-            --title "Agent Yuki v${VERSION}" \
-            --notes "Binaires statiques de l'agent d'exécution Yuki v${VERSION} (linux/amd64 et linux/arm64, libc-agnostiques : glibc ET musl/OpenWrt ; windows/amd64 et windows/arm64 ; CGO_ENABLED=0). Installation OpenWrt (procd) : agent/deploy/openwrt/README.md. Vérifier les empreintes avec SHA256SUMS." \
+            --title "Yuki v${VERSION}" \
+            --notes "Binaires de l'agent d'exécution Yuki v${VERSION} (même numéro que l'image ghcr.io/grokuku/yuki:${VERSION}) : linux/amd64 et linux/arm64, libc-agnostiques (glibc ET musl/OpenWrt) ; windows/amd64 et windows/arm64 ; CGO_ENABLED=0. Vérifier les empreintes avec SHA256SUMS. Installation OpenWrt (procd) : agent/deploy/openwrt/README.md. ⚠️ Les releases antérieures propres à l'agent ne sont plus produites : le tag publié est désormais v<version>, le même numéro que l'image." \
             --latest=false
           echo "Release ${TAG} créée."

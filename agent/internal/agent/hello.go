@@ -61,8 +61,8 @@ func capabilitiesFor(goos string, getenv screen.GetenvFunc, lookPath screen.Look
 //   - `caps` : capacités de l'agent, dont `screenshot` seulement si elle est
 //     réelle (écran + outil de capture détectés).
 //
-// ⚠️ `agent_version` est la version PROPRE de l'agent (`agent/VERSION`),
-// indépendante de la version de Yuki.
+// ⚠️ `agent_version` est la version de l'agent, INJECTÉE à la compilation
+// depuis `version.txt` (racine) : c'est le MÊME numéro que l'image du gateway.
 func BuildHello(cfg *Config, version string) *proto.Hello {
 	host, err := os.Hostname()
 	if err != nil {

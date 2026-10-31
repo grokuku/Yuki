@@ -1,0 +1,216 @@
+# =============================================================================
+# Yuki — Compilation des binaires de l'« agent d'exécution » (workflow
+# RÉUTILISABLE, `workflow_call` uniquement).
+#
+# Ce fichier ne contient QUE la logique de compilation : il ne décide PAS d'une
+# publication. Il est appelé par DEUX points d'entrée :
+#   * `agent.yml`      — CI autonome (`push`/`pull_request`/`workflow_dispatch`) ;
+#   * `release.yml`    — publication UNIFIÉE : image ghcr + binaires + release,
+#                        dans la MÊME action GitHub.
+# Une seule copie de la logique de build ⇒ aucune dérive entre les deux.
+#
+# ⚠️ UN SEUL NUMÉRO DE VERSION : `version.txt` (racine du dépôt), le MÊME que
+# l'image du gateway. Il n'y a PLUS de fichier `VERSION` sous `agent/`. La version
+# est INJECTÉE
+# à la compilation (`-X …/internal/buildinfo.Version=…`) : `yuki-agent version`
+# affiche donc exactement le numéro publié.
+#
+# Entrée :
+#   `version` — version à injecter. VIDE = lue dans `version.txt` du commit
+#   courant. ⚠️ `release.yml` DOIT la transmettre : il appelle ce workflow APRÈS
+#   avoir incrémenté et poussé `version.txt`, donc la copie de travail est encore
+#   sur le commit d'AVANT le bump (sinon le binaire porterait l'ancien numéro).
+#
+# ⚠️ cibles LINUX = « MUSL / OpenWrt » : le module Go n'a AUCUN CGO (aucun
+# `import "C"`), donc `CGO_ENABLED=0` produit un ELF STATIQUE qui ne dépend
+# d'AUCUNE libc : le MÊME octet-à-octet binaire tourne sur glibc (Debian…) et
+# sur musl (OpenWrt, Alpine). Le suffixe `-musl` du nom rend la cible EXPLICITE
+# pour l'utilisateur OpenWrt ; ce n'est pas un second linkage.
+# Documentation d'installation OpenWrt : `agent/deploy/openwrt/README.md`.
+#
+# Artefacts : un par cible (`yuki-agent-<goos>-<goarch><variante>[.exe]` +
+# `SHA256SUMS`), rétention 7 jours, jamais publiés pour une `pull_request`.
+# Versions d'actions et de Go ÉPINGLÉES (règle maison : pas de `latest`/`main`).
+# =============================================================================
+name: Agent (compilation)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version injectée dans les binaires (vide = version.txt du commit courant)"
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  # Version de Go ÉPINGLÉE, cohérente avec la directive `go 1.27` de `agent/go.mod`.
+  GO_VERSION: '1.27.1'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Garde-fou qualité du module Go : `agent-build` en dépend. Commandes
+  # strictement identiques à la vérification locale.
+  # ---------------------------------------------------------------------------
+  agent-quality:
+    name: Qualité Go (gofmt, vet, tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: agent/go.sum
+
+      - name: gofmt (échec si un fichier n'est pas formaté)
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "::error::fichiers Go non formatés (gofmt -l) :"
+            printf '%s\n' "${unformatted}"
+            exit 1
+          fi
+          echo "gofmt : aucun fichier à reformater."
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+  # ---------------------------------------------------------------------------
+  # Compilation croisée des 4 cibles vérifiées (CGO_ENABLED=0, binaires
+  # statiques). Une entrée de matrice PAR cible : nom de binaire EXPLICITE
+  # (`yuki-agent-<goos>-<goarch><variante>[.exe]`), artefact par cible.
+  #
+  # `variant` : suffixe du nom, réservé à la CIBLE (pas au linkage) —
+  # `-musl` dit « validé pour OpenWrt / musl » sans rien changer au binaire, qui
+  # est statique et donc indépendant de la libc (voir l'en-tête).
+  # ---------------------------------------------------------------------------
+  agent-build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.variant }}
+    needs: agent-quality
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, ext: '', variant: '-musl' }
+          - { goos: linux, goarch: arm64, ext: '', variant: '-musl' }
+          - { goos: windows, goarch: amd64, ext: '.exe', variant: '' }
+          - { goos: windows, goarch: arm64, ext: '.exe', variant: '' }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: agent/go.sum
+
+      # La version vient de `version.txt` (racine, source UNIQUE), sauf si
+      # l'appelant en impose une (cas `release.yml`, APRÈS le bump).
+      - name: Résoudre la version (version.txt ou entrée d'appel)
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION}" ]; then
+            VERSION="${INPUT_VERSION}"
+            echo "Version reçue de l'appelant : ${VERSION}"
+          else
+            VERSION="$(tr -d '[:space:]' < version.txt)"
+            echo "Version lue dans version.txt : ${VERSION}"
+          fi
+          if [ -z "${VERSION}" ]; then
+            echo "::error::version.txt est vide."
+            exit 1
+          fi
+          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version invalide « ${VERSION} » (attendu MAJOR.MINOR.PATCH)."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      # La version est INJECTÉE à la compilation (via `buildinfo.Version`) : le
+      # binaire publié porte exactement le numéro de `version.txt`, donc celui de
+      # l'image publiée par `release.yml`.
+      - name: Compiler le binaire
+        id: build
+        working-directory: agent
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          EXT: ${{ matrix.ext }}
+          VARIANT: ${{ matrix.variant }}
+          CGO_ENABLED: '0'
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          NAME="yuki-agent-${GOOS}-${GOARCH}${VARIANT}${EXT}"
+          mkdir -p ../dist
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/grokuku/yuki/agent/internal/buildinfo.Version=${VERSION}" \
+            -o "../dist/${NAME}" ./cmd/yuki-agent
+          echo "name=${NAME}" >> "${GITHUB_OUTPUT}"
+          ls -l "../dist/${NAME}"
+
+      # Garde-fou de la cible Linux : le binaire DOIT être un ELF STATIQUE de la
+      # bonne architecture. Sans cette vérification, un `CGO_ENABLED=1` accidentel
+      # (ou une dépendance C ajoutée plus tard) produirait un binaire DYNAMIQUE
+      # qui ne démarrerait PAS sur OpenWrt (musl absent / autre libc).
+      - name: Vérifier binaire statique et architecture (Linux)
+        if: matrix.goos == 'linux'
+        working-directory: dist
+        env:
+          NAME: ${{ steps.build.outputs.name }}
+          WANT_ARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          info="$(file -b "${NAME}")"
+          echo "file : ${info}"
+          case "${info}" in
+            *"statically linked"*|*"static-pie linked"*) ;;
+            *) echo "::error::${NAME} n'est PAS statique (attendu : CGO_ENABLED=0) : ${info}"; exit 1 ;;
+          esac
+          case "${WANT_ARCH}:${info}" in
+            amd64:*"x86-64"*) ;;
+            arm64:*"aarch64"*) ;;
+            *) echo "::error::${NAME} ne correspond pas à l'architecture ${WANT_ARCH} : ${info}"; exit 1 ;;
+          esac
+
+      - name: Empreinte SHA-256
+        working-directory: dist
+        env:
+          NAME: ${{ steps.build.outputs.name }}
+        run: |
+          set -euo pipefail
+          sha256sum "${NAME}" > SHA256SUMS
+          cat SHA256SUMS
+
+      # Jamais de binaire téléchargeable pour une PR : on VALIDE la compilation
+      # (étapes ci-dessus), on ne publie rien.
+      - name: Publier l'artefact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: yuki-agent-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.variant }}
+          path: |
+            dist/${{ steps.build.outputs.name }}
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7

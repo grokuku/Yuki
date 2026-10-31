@@ -1,19 +1,40 @@
 # =============================================================================
-# Yuki — Publication de l'image Docker (GitHub Container Registry, `ghcr.io`).
+# Yuki — PUBLICATION UNIFIÉE : image Docker (ghcr.io) + binaires de l'agent +
+# GitHub Release, dans la MÊME action GitHub.
 #
-# Mécanisme repris FIDÈLEMENT de Docky
+# Mécanisme d'image repris FIDÈLEMENT de Docky
 # (/projects/Docky/.github/workflows/release.yml) :
 #
-#   lire `version.txt` → construire et pousser l'image taguée `:<version>` +
-#   `:latest` → incrémenter `version.txt` (patch) → commit → push.
+#   lire `version.txt` → l'incrémenter (patch) → construire et pousser l'image
+#   taguée `:<version>` + `:latest` → commit → push du bump.
 #
-#   * `version.txt` (racine du dépôt) est la SOURCE UNIQUE de vérité de la
-#     version : plus aucune saisie manuelle, plus aucun tag Git.
+# ⚠️ Écart VOULU vs Docky : le bump est écrit AVANT le build, pour que l'image,
+# le tag de release et les binaires de l'agent portent LE MÊME numéro dans ce
+# seul run (« un seul n°, ça simplifie les releases »). Le commit du bump n'est
+# poussé qu'APRÈS le push réussi de l'image : si le build échoue, `version.txt`
+# reste intact sur le remote.
+#
+#   * `version.txt` (racine du dépôt) est la **SOURCE UNIQUE de vérité** de la
+#     version : le MÊME numéro pour l'image ET pour les binaires de l'agent (il
+#     n'y a plus de fichier `VERSION` sous `agent/`). Plus aucune saisie manuelle,
+#     plus aucun tag
+#     Git poussé à la main.
 #   * Déclenchement MANUEL uniquement (`workflow_dispatch`), comme Docky : le
 #     push du commit d'incrémentation sur `main` ne peut donc PAS relancer ce
-#     workflow (garde anti-boucle).
-#   * Permissions : `contents: write` (push du commit de version) +
-#     `packages: write` (push de l'image sur ghcr.io).
+#     workflow (garde anti-boucle — jamais de `on: push`, sinon une release par
+#     push).
+#
+# Chaîne de jobs, en `needs:` STRICT (aucun `continue-on-error` : une release ne
+# doit JAMAIS exister si l'image ou un binaire a échoué) :
+#
+#   quality → publish (bump `version.txt` + image ghcr + push du commit)
+#           → agent-build (matrice Go, workflow réutilisable `agent-build.yml`)
+#           → release (GitHub Release `v<version>` + assets)
+#
+# ⚠️ ORDRE CRITIQUE : le job `release` vient APRÈS le bump ET le push. Le tag
+# `v<version>` est posé sur le commit de bump (`publish.outputs.release_sha`) :
+# `git show v<version>:version.txt` donne donc EXACTEMENT le numéro du tag, et
+# les binaires attachés portent ce même numéro (`yuki-agent version`).
 #
 # Écart conservé vs Docky : build `linux/amd64` uniquement (pas de QEMU) —
 # l'usage réel est amd64 (GPU/NVIDIA amd64, images CUDA amd64-only).
@@ -24,7 +45,7 @@
 #    dernier build publié, tandis que `:<version>` et `:sha-<court>` permettent
 #    d'épingler un artefact reproductible.
 # =============================================================================
-name: Release image
+name: Release image et agents
 
 on:
   # Publication manuelle uniquement. Aucun déclencheur `push` (ni branche, ni
@@ -80,20 +101,40 @@ jobs:
         run: npm run build
 
   # ---------------------------------------------------------------------------
-  # Publication de l'image du gateway sur ghcr.io, puis bump de `version.txt`.
+  # Publication : bump de `version.txt`, puis IMAGE du gateway sur ghcr.io, puis
+  # commit + push du bump.
+  #
+  # ⚠️ UN SEUL NUMÉRO pour toute l'action : le bump est écrit AVANT le build, si
+  # bien que, dans ce MÊME run, l'image `:<version>`, le tag de release
+  # `v<version>` et les binaires de l'agent (`yuki-agent version`) portent le
+  # numéro IDENTIQUE — celui de `version.txt` sur le commit de bump.
+  #
+  # Sorties consommées par les jobs suivants :
+  #   * `version`         — version de l'IMAGE publiée (= `version.txt` bumpé) ;
+  #   * `release_version` — version de la Release GitHub (même valeur) ;
+  #   * `release_sha`     — commit de bump poussé (cible du tag de release).
   # ---------------------------------------------------------------------------
   publish:
-    name: Build, push & bump version
+    name: Bump, build & push image
     needs: quality
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit + push de `version.txt`
       packages: write # push de l'image sur ghcr.io
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.version.outputs.next_version }}
+      release_version: ${{ steps.version.outputs.next_version }}
+      release_sha: ${{ steps.release_commit.outputs.new_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       # --- 1. Lire la version (source unique de vérité) ---------------------
+      # Calcule la version PUBLIÉE (patch + 1) : elle sert au bump, au tag de
+      # release et au numéro injecté dans les binaires. Le contrôle d'existence
+      # du tag est fait ICI, AVANT toute publication : on échoue tôt, sans avoir
+      # poussé d'image ni de commit.
       - name: Read version from version.txt
         id: version
         run: |
@@ -108,16 +149,48 @@ jobs:
             echo "::error::${FILE} est vide."
             exit 1
           fi
-          # Le format MAJOR.MINOR.PATCH est requis par la règle d'incrémentation
-          # (voir étape « Increment version.txt »).
+          # Le format MAJOR.MINOR.PATCH est requis par la règle d'incrémentation.
           if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::Version invalide « ${VERSION} » dans ${FILE} (attendu : MAJOR.MINOR.PATCH, ex. 0.1.0)."
             exit 1
           fi
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
-          echo "Version lue : ${VERSION}"
 
-      # --- 2. Construire et pousser l'image AVEC la version courante --------
+          MAJOR="$(printf '%s' "${VERSION}" | cut -d. -f1)"
+          MINOR="$(printf '%s' "${VERSION}" | cut -d. -f2)"
+          PATCH="$(printf '%s' "${VERSION}" | cut -d. -f3)"
+          NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+
+          # ⚠️ Le tag `v<version publiée>` ne doit PAS déjà exister : on ne crée
+          # jamais une release par-dessus une autre (aucun écrasement d'asset).
+          # Message actionnable, pas un « 422 already_exists » nu.
+          # `|| true` : une erreur réseau ne doit pas interrompre le script ici —
+          # `gh release create` reste l'arbitre final (il refuse un tag existant).
+          EXISTING="$(git ls-remote --tags origin "refs/tags/v${NEXT_VERSION}" 2>/dev/null || true)"
+          if [ -n "${EXISTING}" ]; then
+            echo "::error::le tag v${NEXT_VERSION} existe déjà — incrémentez version.txt (ou publiez une version supérieure) avant de relancer la publication."
+            exit 1
+          fi
+
+          {
+            echo "version=${VERSION}"
+            echo "next_version=${NEXT_VERSION}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Version lue        : ${VERSION}"
+          echo "Version publiée    : ${NEXT_VERSION} (image, tag v${NEXT_VERSION}, agents)"
+
+      # --- 2. Écrire le bump AVANT le build --------------------------------
+      # Le commit n'est poussé qu'APRÈS le push réussi de l'image : si le build
+      # échoue, `version.txt` reste intact sur le remote.
+      - name: Increment version.txt
+        id: bump
+        env:
+          NEXT_VERSION: ${{ steps.version.outputs.next_version }}
+        run: |
+          set -euo pipefail
+          echo "${NEXT_VERSION}" > version.txt
+          echo "version.txt préparé : $(cat version.txt)"
+
+      # --- 3. Construire et pousser l'image AVEC la version publiée --------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -133,7 +206,7 @@ jobs:
         env:
           # Version validée par l'étape précédente (MAJOR.MINOR.PATCH) : passée
           # via `env`, jamais interpolée directement dans le script.
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.version.outputs.next_version }}
         run: |
           set -euo pipefail
 
@@ -242,21 +315,12 @@ jobs:
           echo "::error::aucune source d'image de base n'a fonctionné (${REF} puis ${FALLBACK}). Réalimenter GHCR : workflow « Miroir image de base (GHCR) » (docs/versions.md § « Réalimentation du miroir (repli GHCR) »)."
           exit 1
 
-      # --- 3. Incrémenter la version (APRÈS le push de l'image) -------------
-      - name: Increment version.txt
-        run: |
-          set -euo pipefail
-          CURRENT="$(tr -d '[:space:]' < version.txt)"
-          MAJOR="$(echo "${CURRENT}" | cut -d. -f1)"
-          MINOR="$(echo "${CURRENT}" | cut -d. -f2)"
-          PATCH="$(echo "${CURRENT}" | cut -d. -f3)"
-          NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
-          echo "${NEW_VERSION}" > version.txt
-          echo "Nouvelle version : ${NEW_VERSION}"
-
-      # --- 4. Committer et pousser le bump ----------------------------------
+      # --- 4. Committer et pousser le bump (APRÈS le push de l'image) -------
+      # ⚠️ Ce push DOIT précéder le job `release` : le tag de release est posé
+      # sur le commit produit ici (`new_sha`), sinon il tomberait sur le commit
+      # d'AVANT le bump et `v<version>` désignerait un `version.txt` différent.
       - name: Commit and push new version
+        id: release_commit
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -264,6 +328,9 @@ jobs:
           git add version.txt
           git commit -m "chore: bump version to $(cat version.txt)"
           git push
+          NEW_SHA="$(git rev-parse HEAD)"
+          echo "new_sha=${NEW_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "Commit de bump poussé : ${NEW_SHA}"
 
       - name: Summary
         run: |
@@ -276,5 +343,179 @@ jobs:
             echo "| latest | \`${IMAGE}:latest\` |"
             echo "| immuable | \`${IMAGE}:sha-${{ steps.meta.outputs.sha_short }}\` |"
             echo
-            echo "Version suivante : \`$(cat version.txt)\` (commit poussé par le workflow)."
+            echo "Version unique du run (image + tag de release + agents) : \`${VERSION}\`"
+            echo "\`version.txt\` du commit de bump : \`$(cat version.txt)\`."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # ---------------------------------------------------------------------------
+  # Binaires de l'agent : délègue à `agent-build.yml` (workflow RÉUTILISABLE,
+  # même logique que la CI autonome `agent.yml` — une seule copie, aucune
+  # dérive). `version` est TRANSMISE car `version.txt` vient d'être incrémenté
+  # côté remote : la copie de travail est encore sur le commit d'AVANT le bump.
+  # ---------------------------------------------------------------------------
+  agent-build:
+    name: Binaires de l'agent
+    needs: publish
+    uses: ./.github/workflows/agent-build.yml
+    with:
+      version: ${{ needs.publish.outputs.release_version }}
+    # L'agent n'a besoin QUE de lire le dépôt ; la release est créée plus bas.
+    permissions:
+      contents: read
+
+  # ---------------------------------------------------------------------------
+  # GitHub Release `v<version>` : 4 binaires (noms INCHANGÉS) + `SHA256SUMS` +
+  # `deploy/minimal/docker-compose.yml`.
+  #
+  # `permissions: contents: write` UNIQUEMENT ici (`packages: write` reste sur
+  # `publish`). `needs: [publish, agent-build]` SANS `continue-on-error` : si
+  # l'image ou un binaire a échoué, ce job ne démarre jamais.
+  # ---------------------------------------------------------------------------
+  release:
+    name: GitHub Release v${{ needs.publish.outputs.release_version }}
+    needs: [publish, agent-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # création de la release + du tag `v<version>`
+    steps:
+      # Checkout du commit de BUMP (poussé par `publish`) : c'est lui que le tag
+      # doit désigner, et c'est là que se trouve `deploy/minimal/docker-compose.yml`.
+      - name: Checkout (commit de bump)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.publish.outputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Vérifier la cohérence version / commit / tag
+        env:
+          VERSION: ${{ needs.publish.outputs.release_version }}
+          SHA: ${{ needs.publish.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          HEAD_NOW="$(git rev-parse HEAD)"
+          if [ "${HEAD_NOW}" != "${SHA}" ]; then
+            echo "::error::la copie de travail (${HEAD_NOW}) n'est pas le commit de bump (${SHA})."
+            exit 1
+          fi
+          # `version.txt` du commit coïncide-t-il vraiment avec le tag qu'on pose ?
+          # Sinon le tag désignerait un autre numéro : on refuse de publier.
+          FILE_VERSION="$(tr -d '[:space:]' < version.txt)"
+          if [ "${FILE_VERSION}" != "${VERSION}" ]; then
+            echo "::error::version.txt du commit = ${FILE_VERSION} mais la release annonce ${VERSION} — publication refusée."
+            exit 1
+          fi
+          # ⚠️ Aucun écrasement : tag ou release déjà présents ⇒ échec dit.
+          EXISTING="$(git ls-remote --tags origin "refs/tags/v${VERSION}" 2>/dev/null || true)"
+          if [ -n "${EXISTING}" ]; then
+            echo "::error::le tag v${VERSION} existe déjà — incrémentez version.txt avant de republier."
+            exit 1
+          fi
+          echo "Version ${VERSION} sur le commit ${SHA} : cohérent."
+
+      # Artefacts de la matrice (4 cibles), + `SHA256SUMS` par artefact qu'on
+      # ignore ensuite au profit d'une empreinte recalculée sur l'ensemble.
+      - name: Télécharger les artefacts de build
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Rassembler les assets de la release
+        env:
+          VERSION: ${{ needs.publish.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          # Noms de binaires INCHANGÉS (contrat des utilisateurs et de la doc).
+          find dist -type f -name 'yuki-agent-*' -exec cp -t release {} +
+          for NAME in yuki-agent-linux-amd64-musl yuki-agent-linux-arm64-musl \
+                      yuki-agent-windows-amd64.exe yuki-agent-windows-arm64.exe; do
+            if [ ! -f "release/${NAME}" ]; then
+              echo "::error::binaire manquant dans les artefacts : ${NAME}"
+              exit 1
+            fi
+          done
+          ( cd release && sha256sum yuki-agent-* > SHA256SUMS )
+          # Déploiement minimal livré avec les binaires (même action GitHub).
+          cp deploy/minimal/docker-compose.yml release/docker-compose.yml
+          echo "Assets de la release ${VERSION} :"
+          ls -l release
+          cat release/SHA256SUMS
+
+      - name: Créer la GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.publish.outputs.release_version }}
+          SHA: ${{ needs.publish.outputs.release_sha }}
+          IMAGE: ${{ needs.publish.outputs.image }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+
+          # ⚠️ AUCUN écrasement silencieux : un asset ou un tag existant fait ÉCHOUER la
+          # commande (message explicite) au lieu d'écraser en silence.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::la release ${TAG} existe déjà — incrémentez version.txt avant de republier."
+            exit 1
+          fi
+
+          NOTES=$(cat <<EOF
+          Yuki **v${VERSION}** — image du gateway et binaires de l'agent, MÊME numéro de version.
+
+          ## Image (gateway)
+          \`\`\`sh
+          docker compose pull          # tire ${IMAGE}:latest
+          \`\`\`
+          Épingler cette version : \`YUKI_VERSION=${VERSION}\` dans le \`.env\`
+          (l'image publiée par ce run porte \`${IMAGE}:${VERSION}\`, comme ce tag de release).
+
+          ## Binaires de l'agent
+          | Cible | Fichier |
+          | --- | --- |
+          | Linux amd64 (statique, glibc **et** musl/OpenWrt) | \`yuki-agent-linux-amd64-musl\` |
+          | Linux arm64 (statique, glibc **et** musl/OpenWrt) | \`yuki-agent-linux-arm64-musl\` |
+          | Windows amd64 | \`yuki-agent-windows-amd64.exe\` |
+          | Windows arm64 | \`yuki-agent-windows-arm64.exe\` |
+
+          Empreintes : \`SHA256SUMS\`. Déploiement minimal : \`docker-compose.yml\`.
+
+          ## Télécharger et vérifier
+          \`\`\`sh
+          gh release download v${VERSION} --pattern 'yuki-agent-linux-amd64-musl' --pattern SHA256SUMS
+          # ou, sans gh :
+          curl -fLO ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/yuki-agent-linux-amd64-musl
+          curl -fLO ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/SHA256SUMS
+          sha256sum -c SHA256SUMS --ignore-missing
+          chmod +x yuki-agent-linux-amd64-musl
+          ./yuki-agent-linux-amd64-musl version   # doit afficher « yuki-agent ${VERSION} »
+          \`\`\`
+
+          ## Installer (systemd)
+          \`\`\`sh
+          sudo agent/deploy/install.sh --binary ./yuki-agent-linux-amd64-musl
+          \`\`\`
+          OpenWrt (procd) : \`agent/deploy/openwrt/README.md\`.
+          EOF
+          )
+
+          gh release create "${TAG}" release/* \
+            --target "${SHA}" \
+            --title "Yuki v${VERSION}" \
+            --notes "${NOTES}" \
+            --latest
+          echo "Release ${TAG} créée sur le commit ${SHA}."
+
+      - name: Summary
+        env:
+          VERSION: ${{ needs.publish.outputs.release_version }}
+          SHA: ${{ needs.publish.outputs.release_sha }}
+        run: |
+          {
+            echo "### Release \`v${VERSION}\`"
+            echo
+            echo "Tag \`v${VERSION}\` posé sur le commit \`${SHA:0:7}\` (commit de bump)."
+            echo "Assets : 4 binaires de l'agent + \`SHA256SUMS\` + \`docker-compose.yml\`."
+            echo
+            echo "\`\`\`sh"
+            echo "gh release download v${VERSION} --pattern 'yuki-agent-*' --pattern SHA256SUMS --pattern docker-compose.yml"
+            echo "\`\`\`"
           } >> "${GITHUB_STEP_SUMMARY}"
