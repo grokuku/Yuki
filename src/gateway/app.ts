@@ -11,6 +11,7 @@ import type { IncomingMessage, RequestListener, ServerResponse } from "node:http
 import { resolve } from "node:path";
 
 import { MAX_COMFY_WORKFLOW_BYTES } from "../comfy/index.js";
+import { MAX_SOURCE_MESSAGE_BYTES } from "../sources/types.js";
 import type { Env } from "../config/env.js";
 import type { MountStatus } from "../config/paths.js";
 import type { GpuReport } from "../types/gpu.js";
@@ -91,6 +92,11 @@ import {
   type CapturesApiDeps,
 } from "./routes/captures.js";
 import {
+  handleSourcesRequest,
+  isSourcesPath,
+  type SourcesApiDeps,
+} from "./routes/sources.js";
+import {
   handleFilesApiRequest,
   handleFilesServeRequest,
   handleFilesUpload,
@@ -126,6 +132,11 @@ export interface AppContext {
   tts?: TtsApiDeps;
   /** API des agents d'exécution (Lot 4). Absente ⇒ `/api/agents*` → 404. */
   agents?: AgentsApiDeps;
+  /**
+   * API des SOURCES (réveil générique par un programme extérieur) et de la boîte
+   * « Notifications ». Absente ⇒ `/api/sources*` → 404.
+   */
+  sources?: SourcesApiDeps;
   /**
    * API de gestion du coffre de secrets. Absente ⇒ `/api/secrets*` → 404.
    * ⚠️ Ne renvoie JAMAIS la valeur d'un secret (noms + libellés seulement).
@@ -381,6 +392,58 @@ async function handleTtsHttp(
   );
 }
 
+/**
+ * Traite une requête de l'API des SOURCES (corps JSON borné à 64 Kio).
+ *
+ * ⚠️ C'est la SEULE route d'écriture de l'application qui n'exige PAS le jeton
+ * d'interface : un programme extérieur s'authentifie par le JETON de SA source
+ * (`Authorization: Bearer …`), vérifié en temps constant par le service.
+ */
+async function handleSourcesHttp(
+  req: IncomingMessage,
+  res: ServerResponse,
+  path: string,
+  method: string,
+  headOnly: boolean,
+  deps: SourcesApiDeps,
+): Promise<void> {
+  let body = "";
+  if (method === "POST" || method === "PATCH" || method === "PUT") {
+    try {
+      body = (await readBodyBinary(req, MAX_SOURCE_MESSAGE_BYTES)).toString("utf8");
+    } catch (error) {
+      const tooLarge = error instanceof BodyTooLargeError;
+      writeResponse(
+        res,
+        {
+          status: tooLarge ? 413 : 400,
+          body: {
+            error: tooLarge ? "body_too_large" : "invalid_body",
+            code: tooLarge ? "body_too_large" : "invalid_body",
+            message: tooLarge
+              ? `Corps trop volumineux : ${error.receivedBytes} octets reçus, maximum ${MAX_SOURCE_MESSAGE_BYTES} octets (64 Kio).`
+              : "Corps de requête illisible.",
+          },
+        },
+        headOnly,
+      );
+      return;
+    }
+  }
+  const response = await handleSourcesRequest({
+    method,
+    path,
+    headers: req.headers,
+    body,
+    deps,
+  });
+  writeResponse(
+    res,
+    { status: response.status, body: response.body, headers: response.headers },
+    headOnly,
+  );
+}
+
 /** Traite une requête de l'API des agents (corps JSON borné). */
 async function handleAgentsHttp(
   req: IncomingMessage,
@@ -609,6 +672,7 @@ export function createApp(context: AppContext): RequestListener {
     config,
     admin,
     push,
+    sources,
     voices,
     tts,
     agents,
@@ -631,6 +695,27 @@ export function createApp(context: AppContext): RequestListener {
       void handleConfigHttp(req, res, path, method, headOnly, config).catch(
         (error: unknown) => {
           config.logger.error("config.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(
+              res,
+              { status: 500, body: { error: "internal_error" } },
+              headOnly,
+            );
+          } else {
+            res.end();
+          }
+        },
+      );
+      return;
+    }
+
+    if (sources && isSourcesPath(path)) {
+      void handleSourcesHttp(req, res, path, method, headOnly, sources).catch(
+        (error: unknown) => {
+          sources.logger.error("sources.request.failed", {
             error: error instanceof Error ? error.message : String(error),
             path,
           });

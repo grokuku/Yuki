@@ -23,8 +23,19 @@
 /** Préfixe RÉSERVÉ de tout nom de secret du coffre. */
 export const SECRET_NAME_PREFIX = "YUKI_SECRET_";
 
+/**
+ * Préfixe RÉSERVÉ du nom de secret portant le JETON d'une source
+ * (`YUKI_SOURCE_<NOM>`, voir `src/sources/**`).
+ *
+ * ⚠️ Second préfixe réservé du coffre : le jeton d'une source est un secret à
+ * part entière (chiffré, jamais réaffiché). Il n'est PAS référençable dans une
+ * commande (`isSecretReferenceName` exige `YUKI_SECRET_`) : un jeton de source
+ * n'a rien à faire dans une ligne de commande.
+ */
+export const SOURCE_TOKEN_NAME_PREFIX = "YUKI_SOURCE_";
+
 /** Nom de secret valide : préfixe réservé + identifiant shell. */
-const SECRET_NAME_PATTERN = /^YUKI_SECRET_[A-Za-z0-9_]+$/;
+const SECRET_NAME_PATTERN = /^(?:YUKI_SECRET_|YUKI_SOURCE_)[A-Za-z0-9_]+$/;
 
 /**
  * Motif des références (`${NOM}` ou `$NOM`). On capture le nom SANS le `$` et

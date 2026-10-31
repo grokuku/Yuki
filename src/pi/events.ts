@@ -19,6 +19,7 @@ import { stripTimestampPrefix } from "./timestamp.js";
 import { ackTextForTool } from "./ack.js";
 import { parseRecapPrompt } from "../recap/prompt.js";
 import { stripFilesBlock } from "../files/frame.js";
+import { stripSourcesBlock } from "../sources/frame.js";
 
 /** Forme minimale d'un `assistantMessageEvent` du SDK. */
 export interface RawAssistantMessageEvent {
@@ -424,7 +425,9 @@ export function transcriptFromEntries(
     // cliquables du message.
     const rawText = contentTextFromMessage(message as RawAgentMessage);
     const text =
-      role === "user" ? stripFilesBlock(stripTimestampPrefix(rawText)) : rawText;
+      role === "user"
+        ? stripSourcesBlock(stripFilesBlock(stripTimestampPrefix(rawText)))
+        : rawText;
     if (role === "assistant") {
       const trimmed = text.trim();
       // ⚠️ MESSAGE QUI N'ÉTAIT QUE L'ACCUSÉ : le modèle a écrit la phrase, puis

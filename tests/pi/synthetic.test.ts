@@ -19,6 +19,7 @@ import {
   SYNTHETIC_ORIGINS,
   SYNTHETIC_USER_PREFIXES,
 } from "../../src/pi/synthetic.js";
+import { ORIGIN_SOURCE } from "../../src/sources/frame.js";
 
 describe("prompts synthétiques — source unique", () => {
   it("les deux en-têtes sont des préfixes reconnus", () => {
@@ -34,6 +35,9 @@ describe("prompts synthétiques — source unique", () => {
     expect(isSyntheticOrigin(ORIGIN_APPROVAL_RESULT)).toBe(true);
     expect(isSyntheticOrigin(ORIGIN_RECAP)).toBe(true);
     expect(isSyntheticOrigin(ORIGIN_SECRET_STORED)).toBe(true);
+    // Message d'une SOURCE (programme extérieur branché par l'utilisateur) : il ne
+    // produit aucune bulle utilisateur, il vit dans la section « Notifications ».
+    expect(isSyntheticOrigin(ORIGIN_SOURCE)).toBe(true);
     expect(isSyntheticOrigin("run_command")).toBe(false);
     expect(isSyntheticOrigin("demander_secret")).toBe(false);
     expect(isSyntheticOrigin(undefined)).toBe(false);
@@ -42,6 +46,7 @@ describe("prompts synthétiques — source unique", () => {
       ORIGIN_APPROVAL_RESULT,
       ORIGIN_RECAP,
       ORIGIN_SECRET_STORED,
+      ORIGIN_SOURCE,
     ]);
   });
 });

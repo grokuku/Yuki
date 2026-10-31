@@ -3263,3 +3263,334 @@ h6.md-heading {
     inset: 48px 0 68px;
   }
 }
+
+/* ─── NOTIFICATIONS DES SOURCES ──────────────────────────────────────────────
+ * Messages envoyés par un programme branché (veille, messagerie…). Décision
+ * utilisateur : ils ne sont PAS des bulles dans un fil, ils s'empilent ici.
+ * Le compteur de non-lus vit dans l'en-tête (pastille sur la pilule).
+ * Aucun style inline n'est posé par le JS : tout est ici (CSP `style-src 'self'`).
+ */
+.notifs-toggle {
+  position: relative;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.notifs-toggle[hidden] {
+  display: none;
+}
+
+.notifs-toggle.has-unread {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel-2));
+}
+
+.notifs-toggle__count {
+  display: inline-block;
+  min-width: 1.35em;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text, #fff);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.notifs-toggle__count[hidden] {
+  display: none;
+}
+
+/* Calque + panneau : même mécanique que les menus téléphone (fond assombri qui
+ * ferme au toucher, panneau défilable à l'intérieur). */
+.notifs-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+  background: var(--scrim);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px;
+  overflow: auto;
+}
+
+.notifs-layer[hidden] {
+  display: none;
+}
+
+.notifs {
+  width: min(760px, 100%);
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px color-mix(in srgb, #000 55%, transparent);
+  overflow: hidden;
+}
+
+.notifs:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.notifs__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.notifs__title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.notifs__summary {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.notifs__list {
+  padding: 10px 12px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.notifs__empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.notif {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.notif--unread {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.notif__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.notif__state {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.notif__state--recu {
+  color: var(--text);
+}
+
+.notif__state--traite {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
+}
+
+.notif__state--echec {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+/* État « alerte » : un AVIS de Yuki, pas un message de source. */
+.notif__state--alerte {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.notif__source {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.notif__title {
+  color: var(--text);
+}
+
+.notif__unread {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.notif__details > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.notif__details[open] > summary {
+  margin-bottom: 6px;
+}
+
+/* Contenu BRUT : on préserve les retours à la ligne et on borne la hauteur
+ * (une notification de 64 Kio ne doit pas envahir l'écran). */
+.notif__content {
+  margin: 0;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notif__reply {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.notif__reply-label {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.notif__reply-text {
+  font-size: 13.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.notif__reply-empty,
+.notif__reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* AVIS de Yuki (fil supprimé, source réaffectée) : ce n'est pas un message reçu,
+ * il se lit tout de suite — et il n'est jamais replié. */
+.notif__note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+}
+
+.notif__reason {
+  color: color-mix(in srgb, var(--danger) 70%, var(--muted));
+}
+
+.notif__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Téléphone : le panneau occupe toute la largeur, les actions passent à la
+ * ligne (aucun débordement horizontal). */
+@media (max-width: 767px) {
+  .notifs-layer {
+    padding: 0;
+  }
+
+  .notifs {
+    width: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+
+  .notif__actions .button {
+    flex: 1 1 auto;
+  }
+}
+
+/* ── Modale « ce fil reçoit des sources » (suppression d'une conversation) ────
+ * Le contenu est un <form> du projet hôte (HolafModal v0.4.0) : ces règles
+ * habillent les champs, jamais d'attribut `style` (CSP `style-src 'self'`). */
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dialog-text,
+.dialog-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.dialog-note {
+  color: var(--muted);
+}
+
+.dialog-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dialog-field[hidden] {
+  display: none;
+}
+
+.dialog-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dialog-select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}

@@ -69,6 +69,18 @@ export const COMPACT_MENU_LABEL = "Compacter…";
  */
 export const DELETE_MENU_LABEL = "Supprimer";
 
+/**
+ * Libellé du CHOIX « supprimer quand même » de la modale de suppression d'un fil
+ * qui reçoit des sources (⚠️ les sources, elles, ne sont jamais supprimées).
+ */
+export const DELETE_WITH_SOURCES_LABEL = "Supprimer quand même";
+
+/**
+ * En-tête exigé par les routes des sources (lecture ET écriture) — même garde que
+ * `/api/config`. Sert à réaffecter les sources d'un fil avant de le supprimer.
+ */
+const SOURCES_HEADERS = { "content-type": "application/json", "x-yuki-config": "1" };
+
 /** Longueur maximale d'un titre dérivé des premiers mots d'un message. */
 const MAX_TITLE_CHARS = 60;
 
@@ -258,6 +270,8 @@ export function initSessionsPanel(deps) {
   const onCompact = deps.onCompact ?? (() => undefined);
   const onPin = deps.onPin ?? (() => undefined);
   const onRecapDedicated = deps.onRecapDedicated ?? (() => undefined);
+  /** `fetch` injectable (tests) : la modale de suppression réaffecte les sources. */
+  const doFetch = deps.fetchImpl ?? ((url, init) => fetch(url, init));
 
   let sessions = [];
   let activeId = null;
@@ -566,6 +580,16 @@ export function initSessionsPanel(deps) {
   async function confirmDelete(id) {
     const current = sessions.find((info) => info.id === id);
     const label = current ? conversationTitle(current) : "cette conversation";
+    // ⚠️ ③ Un fil qui REÇOIT des sources ne se supprime pas comme un autre : la
+    // modale LISTE ces sources et exige un CHOIX explicite (aucune suppression
+    // silencieuse d'un programme configuré pour y poster).
+    const feeding = Array.isArray(current?.sources)
+      ? current.sources.filter((nom) => typeof nom === "string" && nom !== "")
+      : [];
+    if (feeding.length > 0) {
+      await confirmDeleteWithSources(id, label, feeding);
+      return;
+    }
     const confirmed = await modal.confirm(
       `Supprimer définitivement « ${label} » ?`,
       `Cette conversation sera EFFACÉE : c'est DÉFINITIF, aucune récupération possible, aucune corbeille. ` +
@@ -574,6 +598,159 @@ export function initSessionsPanel(deps) {
       { danger: true, confirmText: "Supprimer définitivement", cancelText: "Annuler" },
     );
     if (confirmed) onDelete(id);
+  }
+
+  /**
+   * Réaffecte des sources à une autre destination (`PATCH /api/sources/<nom>`).
+   * Lève si une requête échoue : l'appelant DIT l'échec et ne supprime rien.
+   */
+  async function reassignSources(noms, conversation) {
+    for (const nom of noms) {
+      const response = await doFetch(`/api/sources/${encodeURIComponent(nom)}`, {
+        method: "PATCH",
+        headers: SOURCES_HEADERS,
+        body: JSON.stringify({ conversation }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(
+          data?.message ?? `La source « ${nom} » n'a pas pu être réaffectée (HTTP ${response.status}).`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Modale de SUPPRESSION d'un fil qui reçoit des sources.
+   *
+   * Trois choix EXPLICITES (aucun défaut) :
+   *  1. rattacher ces sources à un autre fil (liste des autres conversations) ;
+   *  2. les passer en « nouvelle conversation à chaque fois » ;
+   *  3. supprimer quand même — ⚠️ les sources NE SONT PAS supprimées : le serveur
+   *     les réaffecte et écrit une entrée d'alerte dans la boîte.
+   */
+  const DELETE_SOURCES_FORM = "sources-delete-form";
+
+  async function confirmDeleteWithSources(id, label, noms) {
+    const choices = [
+      ["nouvelle", "Passer ces sources en « nouvelle conversation à chaque fois »"],
+      ["supprimer", DELETE_WITH_SOURCES_LABEL],
+    ];
+    const targets = sessions.filter((info) => info.id !== id);
+    const canReattach = targets.length > 0;
+    if (canReattach) {
+      choices.unshift(["rattacher", "Rattacher ces sources à un autre fil"]);
+    }
+
+    const choiceSelect = el("select", {
+      class: "dialog-select",
+      id: "sources-delete-choice",
+      "aria-label": "Ce que deviennent les sources de ce fil",
+    });
+    for (const [value, text] of choices) choiceSelect.append(el("option", { value }, text));
+
+    const targetSelect = el("select", {
+      class: "dialog-select",
+      id: "sources-delete-target",
+      "aria-label": "Nouveau fil des sources",
+    });
+    for (const info of targets) {
+      targetSelect.append(el("option", { value: info.id }, conversationTitle(info)));
+    }
+    const targetRow = el("div", { class: "dialog-field" });
+    targetRow.append(
+      el("label", { class: "dialog-label", for: "sources-delete-target" }, "Nouveau fil :"),
+      targetSelect,
+    );
+    targetRow.hidden = true;
+    choiceSelect.addEventListener("change", () => {
+      targetRow.hidden = choiceSelect.value !== "rattacher";
+    });
+
+    const intro = el(
+      "p",
+      { class: "dialog-text" },
+      `${noms.length} source${noms.length > 1 ? "s" : ""} poste${
+        noms.length > 1 ? "nt" : ""
+      } dans cette conversation. Elles ne seront PAS supprimées : choisissez où leurs ` +
+        "prochains messages arriveront.",
+    );
+    const list = el("ul", { class: "dialog-list" });
+    for (const nom of noms) list.append(el("li", {}, nom));
+    const choiceRow = el("div", { class: "dialog-field" });
+    choiceRow.append(
+      el("label", { class: "dialog-label", for: "sources-delete-choice" }, "Que faire ?"),
+      choiceSelect,
+    );
+    const note = el(
+      "p",
+      { class: "dialog-note" },
+      "La conversation, elle, sera EFFACÉE : c'est DÉFINITIF, aucune récupération " +
+        "possible, aucune corbeille. La mémoire durable n'est PAS touchée.",
+    );
+    const form = el("form", { class: "dialog-form", id: DELETE_SOURCES_FORM });
+    form.append(intro, list, choiceRow, targetRow, note);
+
+    const ctrl = modal.open({
+      title: `Supprimer « ${label} » ?`,
+      size: "md",
+      content: form,
+      actions: [
+        { label: "Continuer", form: DELETE_SOURCES_FORM },
+        { label: "Annuler", type: "cancel", guard: false },
+      ],
+    });
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const choice = choiceSelect.value;
+      void (async () => {
+        if (choice === "rattacher") {
+          const target = targetSelect.value;
+          if (typeof target !== "string" || target === "") {
+            await modal.alert(
+              "Aucun fil disponible",
+              "Il n'y a pas d'autre conversation où envoyer ces sources. Choisissez " +
+                "« nouvelle conversation à chaque fois », ou annulez.",
+              { okText: "Compris" },
+            );
+            return;
+          }
+          try {
+            await reassignSources(noms, target);
+          } catch (error) {
+            await modal.alert(
+              "Réaffectation impossible",
+              error instanceof Error ? error.message : String(error),
+              { okText: "Compris" },
+            );
+            return;
+          }
+          ctrl.close();
+          onDelete(id);
+          return;
+        }
+        if (choice === "nouvelle") {
+          try {
+            await reassignSources(noms, "nouvelle");
+          } catch (error) {
+            await modal.alert(
+              "Réaffectation impossible",
+              error instanceof Error ? error.message : String(error),
+              { okText: "Compris" },
+            );
+            return;
+          }
+          ctrl.close();
+          onDelete(id);
+          return;
+        }
+        // « Supprimer quand même » : le serveur réaffecte les sources et écrit
+        // une entrée d'alerte dans la boîte de notifications.
+        ctrl.close();
+        onDelete(id);
+      })();
+    });
   }
 
   // ─── Déplier / replier la barre ───────────────────────────────────

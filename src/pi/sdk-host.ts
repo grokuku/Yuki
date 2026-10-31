@@ -105,6 +105,7 @@ import { createImageTools } from "./sdk/image-tools.js";
 import { createImageStylesExtensionFactory } from "./sdk/image-styles-extension.js";
 import { createAckExtensionFactory } from "./sdk/ack-extension.js";
 import { stripFilesBlock } from "../files/frame.js";
+import { stripSourcesBlock } from "../sources/frame.js";
 import type {
   ApplyLlmConfigOptions,
   CompactOptions,
@@ -1427,15 +1428,31 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     record.currentRun = run;
     record.activeRunId = run.runId;
     record.state = "streaming";
+    // ⚠️ DRAIN GROUPÉ DES SOURCES — au DÉBUT du tour, JAMAIS pendant.
+    // Les notifications en attente (messages `stocker`, ou `lancer` qui n'ont pas
+    // pu partir) sont fusionnées en UN SEUL bloc `<sources>` préfixé au prompt de
+    // CE tour : un unique envoi, donc aucune rafale de tours (protection TTFT).
+    // Le bloc n'entre PAS dans la bulle (préfixé à `storedText` seulement) et il
+    // est retiré du transcript relu (`stripSourcesBlock`).
+    const drained = options.sources?.takePending(run.runId);
+    if (drained !== undefined && drained !== "") {
+      run.storedText = `${drained}\n\n${run.storedText}`;
+      logger.info("pi.run.sources.drained", {
+        session_id: record.sessionId,
+        run_id: run.runId,
+        chars: drained.length,
+      });
+    }
     // Un prompt synthétique (report de job, résultat de commande validée) ne
     // doit pas produire de bulle utilisateur dans le transcript de l'UI.
     if (!isSyntheticOrigin(run.origin) && !run.transcriptPushed) {
       record.transcript.push({
         role: "user",
-        // ⚠️ Le bloc `<fichiers>` est du matériau de PROMPT (donnée bornée) : il
-        // n'a rien à faire dans la bulle. Les marqueurs `[fichier] …`, eux,
-        // restent : ce sont eux qui portent les cartes cliquables.
-        text: stripFilesBlock(run.text),
+        // ⚠️ Les blocs `<fichiers>` et `<sources>` sont du matériau de PROMPT
+        // (données bornées) : ils n'ont rien à faire dans la bulle. Les marqueurs
+        // `[fichier] …`, eux, restent : ce sont eux qui portent les cartes
+        // cliquables.
+        text: stripSourcesBlock(stripFilesBlock(run.text)),
         timestamp: run.sentAt,
       });
       run.transcriptPushed = true;
@@ -1621,11 +1638,14 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       const role = message.role;
       if (role !== "user" && role !== "assistant") continue;
       const rawText = contentTextFromMessage(message);
-      // ⚠️ Le bloc `<fichiers>` est retiré : c'est du matériau de PROMPT (donnée
-      // bornée transmise au modèle), pas le message de l'utilisateur. Sans ce
-      // retrait, l'archive et la MÉMOIRE mémoriseraient le contenu des fichiers.
+      // ⚠️ Les blocs `<fichiers>` et `<sources>` sont retirés : c'est du matériau
+      // de PROMPT (données bornées transmises au modèle), pas le message de
+      // l'utilisateur. Sans ce retrait, l'archive et la MÉMOIRE mémoriseraient le
+      // contenu des fichiers et des notifications.
       const text =
-        role === "user" ? stripFilesBlock(stripTimestampPrefix(rawText)) : rawText;
+        role === "user"
+          ? stripSourcesBlock(stripFilesBlock(stripTimestampPrefix(rawText)))
+          : rawText;
       if (text.trim().length === 0) continue;
       const at =
         typeof entry.timestamp === "string" && entry.timestamp.length > 0
@@ -2279,8 +2299,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         const active = record.currentRun;
         const userEntry: TranscriptEntry = {
           role: "user",
-          // Même règle que `startRun` : le bloc `<fichiers>` reste hors de la bulle.
-          text: stripFilesBlock(text),
+          // Même règle que `startRun` : les blocs `<fichiers>` et `<sources>`
+          // restent hors de la bulle.
+          text: stripSourcesBlock(stripFilesBlock(text)),
           timestamp: run.sentAt,
         };
         const at = active.assistantEntry

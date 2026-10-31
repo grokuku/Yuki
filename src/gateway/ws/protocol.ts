@@ -154,6 +154,14 @@ export interface WireSession {
   excerpt?: string;
   /** `true` si la conversation est ÉPINGLÉE (elle est alors triée en tête). */
   pinned?: boolean;
+  /**
+   * Noms des SOURCES dont la destination est cette conversation (programmes
+   * extérieurs qui y postent). Absent quand aucune source n'y poste.
+   *
+   * ⚠️ Sert à la modale de SUPPRESSION : supprimer un fil qui reçoit des sources
+   * n'est jamais silencieux (les sources sont listées, puis réaffectées).
+   */
+  sources?: string[];
 }
 
 /** Agent exposé au client (encart de la barre latérale du chat). */

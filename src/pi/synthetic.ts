@@ -22,6 +22,7 @@ import { APPROVAL_RESULT_HEADER, ORIGIN_APPROVAL_RESULT } from "../agents/approv
 import { ORIGIN_SECRET_STORED, SECRET_STORED_HEADER } from "../agents/secret-report.js";
 import { REPORT_HEADER } from "../delegation/report.js";
 import { RECAP_HEADER } from "../recap/prompt.js";
+import { ORIGIN_SOURCE } from "../sources/frame.js";
 
 /** Origine d'un prompt synthétique de report de job. */
 export const ORIGIN_JOB_REPORT = "job_report";
@@ -43,6 +44,13 @@ export const ORIGIN_RECAP = "recap";
  * La constante est définie dans `src/agents/secret-report.ts` (source unique).
  */
 
+/**
+ * Origine d'un message de SOURCE — programme extérieur branché par l'utilisateur
+ * (voir `src/sources/frame.ts`, qui est la source UNIQUE de la constante).
+ * ⚠️ SYNTHÉTIQUE : un message de source ne produit AUCUNE bulle utilisateur — il
+ * vit dans la section « Notifications », jamais dans un fil.
+ */
+
 /** Préfixes des textes utilisateur SYNTHÉTIQUES (jamais affichés, jamais mémorisés). */
 export const SYNTHETIC_USER_PREFIXES: readonly string[] = [
   REPORT_HEADER,
@@ -57,6 +65,9 @@ export const SYNTHETIC_ORIGINS: readonly string[] = [
   ORIGIN_APPROVAL_RESULT,
   ORIGIN_RECAP,
   ORIGIN_SECRET_STORED,
+  // Un message de source est une DONNÉE poussée par un programme : il ne doit
+  // jamais apparaître comme une parole de l'utilisateur.
+  ORIGIN_SOURCE,
 ];
 
 /** `true` si l'origine désigne un prompt synthétique. */

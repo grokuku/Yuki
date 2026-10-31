@@ -160,6 +160,32 @@ export interface WsTransportOptions {
    * acceptée (comportement inchangé pour le reste).
    */
   files?: FilesGatewayPort;
+  /**
+   * SOURCES : programmes extérieurs qui postent dans une conversation.
+   *
+   *  - la trame `sessions` dit, pour chaque fil, QUELLES sources y postent — c'est
+   *    ce qui permet à la modale de suppression de LISTER les sources concernées ;
+   *  - `detachSession` réaffecte ces sources (« nouvelle conversation à chaque
+   *    fois ») quand le fil est supprimé, et l'écrit dans la boîte.
+   *
+   * Absent ⇒ aucun marquage, aucune réaffectation (comportement inchangé).
+   */
+  sources?: SourcesGatewayPort;
+}
+
+/**
+ * Port des SOURCES exposé au transport. Découplé du domaine `sources` : le
+ * transport ne connaît que ce contrat (aucun import du service).
+ */
+export interface SourcesGatewayPort {
+  /** Noms des sources dont la destination effective est cette conversation. */
+  sourcesForSession(sessionId: string): readonly string[];
+  /**
+   * ⚠️ Le fil est SUPPRIMÉ : les sources qui y postaient ne sont JAMAIS supprimées,
+   * elles passent en « nouvelle conversation à chaque fois » — et une entrée
+   * d'alerte le dit. Renvoie les noms réaffectés.
+   */
+  detachSession(sessionId: string): readonly string[];
 }
 
 interface ClientState {
@@ -389,6 +415,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const recap = options.recap;
   const reactions = options.reactions;
   const filesPort = options.files;
+  const sourcesPort = options.sources;
 
   /**
    * État de session ENRICHI des réactions courantes (aucune copie inutile quand
@@ -915,16 +942,22 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     let listed = false;
     try {
       const list = await host.listSessions();
-      sessions = list.map((info) => ({
-        id: info.sessionId,
-        title: info.title ?? info.name ?? "Conversation sans titre",
-        ...(info.updatedAt ? { updatedAt: info.updatedAt } : {}),
-        messageCount: info.messageCount ?? 0,
-        ...(info.firstMessage && info.firstMessage !== "(no messages)"
-          ? { excerpt: info.firstMessage }
-          : {}),
-        ...(pins?.isPinned(info.sessionId) ? { pinned: true } : {}),
-      }));
+      sessions = list.map((info) => {
+        // Sources qui postent dans CE fil : la modale de suppression les LISTE
+        // (⚠️ aucune suppression silencieuse d'un fil qui reçoit des sources).
+        const feeding = sourcesPort?.sourcesForSession(info.sessionId) ?? [];
+        return {
+          id: info.sessionId,
+          title: info.title ?? info.name ?? "Conversation sans titre",
+          ...(info.updatedAt ? { updatedAt: info.updatedAt } : {}),
+          messageCount: info.messageCount ?? 0,
+          ...(info.firstMessage && info.firstMessage !== "(no messages)"
+            ? { excerpt: info.firstMessage }
+            : {}),
+          ...(pins?.isPinned(info.sessionId) ? { pinned: true } : {}),
+          ...(feeding.length > 0 ? { sources: [...feeding] } : {}),
+        };
+      });
       // Épinglées d'abord, puis date décroissante (ordre autoritatif, poussé au
       // client : la barre latérale se contente de refléter cette liste).
       sessions = orderSessions(sessions);
@@ -1284,6 +1317,16 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       cancelTtsOnFocusChange(message.sessionId);
     }
     pins?.remove(message.sessionId);
+    // ⚠️ ③ AUCUNE SUPPRESSION SILENCIEUSE : si des sources postaient dans ce fil,
+    // elles ne sont PAS supprimées — elles passent en « nouvelle conversation à
+    // chaque fois », et une entrée d'alerte le dit dans la boîte.
+    const detached = sourcesPort?.detachSession(message.sessionId) ?? [];
+    if (detached.length > 0) {
+      logger.info("ws.session.delete.sources_detached", {
+        session_id: message.sessionId,
+        sources: detached.length,
+      });
+    }
     await sendSessions(client);
     if (wasCurrent) {
       // Conversation supprimée = plus rien à l'écran (état vide, pas une erreur).

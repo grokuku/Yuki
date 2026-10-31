@@ -13,7 +13,16 @@ import type { PresenceView } from "../gateway/ws/transport.js";
 export type { PresenceView };
 
 /** Nature d'un événement susceptible de déclencher une notification. */
-export type NotifyKind = "approval" | "job_report" | "run_finished";
+export type NotifyKind =
+  | "approval"
+  | "job_report"
+  | "run_finished"
+  /**
+   * Message poussé par une SOURCE (programme extérieur branché par l'utilisateur,
+   * `src/sources/**`). Il ne crée aucun fil : l'entrée et la réponse de Yuki
+   * vivent dans la section « Notifications ».
+   */
+  | "source";
 
 /**
  * Événement soumis à la décision « faut-il notifier ? ». `sessionId` = la

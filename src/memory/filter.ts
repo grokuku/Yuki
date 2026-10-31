@@ -30,6 +30,7 @@ import { PERSONALITY_TAG } from "../personality/personality.js";
 import { SYNTHETIC_USER_PREFIXES } from "../pi/synthetic.js";
 import { REACTIONS_TAG } from "../reactions/prompt.js";
 import { RULES_TAG } from "../rules/rules.js";
+import { SOURCES_TAG } from "../sources/frame.js";
 import { CONVERSATION_ARCHIVE_TAG } from "./conversation-archive.js";
 import { HERITAGE_TAG } from "./heritage.js";
 
@@ -53,6 +54,11 @@ export const EXCLUDED_FRAME_TAGS: readonly string[] = [
   // un rappel de réactions recopié dans une réponse pourrait devenir un
   // souvenir — et une réaction isolée deviendrait un « fait durable ».
   REACTIONS_TAG,
+  // ⚠️ Messages des SOURCES (programmes extérieurs branchés par l'utilisateur) :
+  // c'est une DONNÉE poussée de l'extérieur, jamais un souvenir. Le bloc est
+  // retiré du texte candidat ; le message UTILISATEUR auquel il a été préfixé
+  // (drain groupé) reste, lui, mémorisable.
+  SOURCES_TAG,
 ];
 
 /** Préfixes des prompts SYNTHÉTIQUES (jamais mémorisés) — source unique. */

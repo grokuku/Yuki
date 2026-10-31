@@ -166,6 +166,19 @@ export interface Env {
    * Surcharge : `YUKI_RULES_PATH`.
    */
   rulesPath: string;
+  /**
+   * Registre des SOURCES — programmes extérieurs autorisés à réveiller Yuki
+   * (volume `state`). ⚠️ Séparé de `config.json` : la configuration n'accepte
+   * qu'un patch PLAT de scalaires, une liste de sources n'y a pas sa place.
+   * Surcharge : `YUKI_SOURCES_STORE_PATH`.
+   */
+  sourcesStorePath: string;
+  /**
+   * Boîte « Notifications » des messages de sources (volume `state`). ⚠️ Les
+   * messages de sources ne sont JAMAIS des bulles dans un fil. Surcharge :
+   * `YUKI_SOURCES_INBOX_PATH`.
+   */
+  sourcesInboxPath: string;
   // --- Configuration du moteur TTS `audio.cpp` (Lot 9) ---
   /**
    * Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw`).
@@ -420,6 +433,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_RULES_PATH",
       `${mountPoints.state}/rules.md`,
+    ),
+    sourcesStorePath: getString(
+      env,
+      "YUKI_SOURCES_STORE_PATH",
+      `${mountPoints.state}/sources.json`,
+    ),
+    sourcesInboxPath: getString(
+      env,
+      "YUKI_SOURCES_INBOX_PATH",
+      `${mountPoints.state}/sources-inbox.json`,
     ),
     piAgentDir,
     piSessionsDir: getString(

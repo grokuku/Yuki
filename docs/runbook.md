@@ -125,6 +125,25 @@ curl -s http://127.0.0.1:8083/version
 Les logs sont du **JSON-lines** sur stdout : une ligne = un objet
 `{ ts, level, msg, … }`. Les secrets sont masqués (`[REDACTED]`).
 
+### 2.1 Sources : un programme extérieur réveille Yuki
+
+Un programme (agrégateur de news, client de messagerie, monitoring, cron) peut
+réveiller Yuki par `POST /api/sources/<nom>/messages`, avec **son** jeton
+(`Authorization: Bearer …`). Tout est ici, vérifié contre le code :
+**[`docs/lot17-sources.md`](lot17-sources.md)** — création d'une source dans
+`/config` (⚠️ le jeton n'est affiché **qu'une fois**), contrat HTTP complet
+(corps exact + **toutes** les réponses `202/200/400/401/404/413/415/429` et quoi
+faire), exemples `curl` / `bash` (cron) / `Python` / `Node`, idempotence, limites,
+sécurité du jeton, diagnostic, suppression d'un fil qui reçoit des sources.
+
+Pour observer un envoi : les événements `sources.*` du journal ci-dessus
+(`sources.message.started`, `sources.message.stored` + `raison`,
+`sources.message.duplicate`, `sources.message.unauthorized`,
+`sources.message.rate_limited`, `sources.inbox.full`, `sources.run.finished`,
+`sources.session.vanished`, `sources.session.detached`), **et** l'entrée
+correspondante dans la section **« Notifications »** de la page `/` (état
+`reçu` / `traité` / `en échec` / `alerte`).
+
 ## 3. Rapport GPU sans serveur
 
 ```bash

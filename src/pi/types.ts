@@ -261,7 +261,30 @@ export interface PiHostOptions {
    * ⚠️ Une réaction ne déclenche JAMAIS de tour : l'extension ne fait que lire.
    */
   reactions?: ReactionsPort;
+  /**
+   * SOURCES : programmes extérieurs qui poussent des messages à Yuki.
+   *
+   * Présent ⇒ AU DÉBUT DE CHAQUE TOUR, le host demande `takePending(runId)` : le
+   * service renvoie UN SEUL bloc `<sources>` contenant TOUTES les notifications
+   * EN ATTENTE, qui est préfixé au prompt de ce tour (drain GROUPÉ, un seul
+   * envoi ⇒ protection du TTFT). Absent ⇒ aucun drain (host nu, tests).
+   */
+  sources?: SourcesDrainPort;
   logger: PiLogger;
+}
+
+/**
+ * Port étroit du DRAIN des notifications de sources (`src/sources/**`).
+ *
+ * ⚠️ Appelé UNIQUEMENT au démarrage d'un run, jamais pendant : c'est ce qui
+ * garantit qu'un message de source n'interrompt pas un tour en cours.
+ */
+export interface SourcesDrainPort {
+  /**
+   * Bloc `<sources>` des entrées en attente pour CE run, ou `undefined` s'il n'y
+   * en a aucune. `runId` permet au service de créditer les entrées de la réponse.
+   */
+  takePending(runId: string): string | undefined;
 }
 
 /** Cible d'ouverture/remplacement de session. */

@@ -144,4 +144,5 @@ export type {
   SendOptions,
   SessionInfo,
   SessionState,
+  SourcesDrainPort,
 } from "./types.js";

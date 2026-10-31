@@ -185,6 +185,15 @@
             hidden
           >
             <div id="group-conversation" class="config-groups"></div>
+            <!--
+              SOURCES — programmes autorisés à RÉVEILLER Yuki (agrégateur de news,
+              client de messagerie, script maison…). Composant autonome monté par id
+              (`sources-panel.js`) : tableau (nom, où, tour, notifier, dernier appel),
+              création/modification dans une `HolafModal`, jeton affiché UNE SEULE
+              FOIS. ⚠️ Aucun onglet nouveau (les 9 onglets sont verrouillés par un
+              test) et aucun style inline (CSP `style-src 'self'`).
+            -->
+            <div id="sources-root"></div>
           </section>
           <section
             class="config-panel"

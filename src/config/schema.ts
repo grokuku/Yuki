@@ -650,6 +650,21 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_FILES_PROMPT_TOTAL_CHARS",
   },
 
+  // --- Sources (programmes extérieurs qui réveillent Yuki) -------------------
+  // ⚠️ Les SOURCES elles-mêmes (nom, consigne, réglages) ne sont PAS ici : elles
+  // vivent dans un fichier séparé du volume `state` (`sources.json`), car
+  // `PUT /api/config` n'accepte qu'un patch PLAT de scalaires. Seule cette BORNE
+  // d'injection est un scalaire — elle borne le bloc `<sources>` transmis au
+  // modèle au début d'un tour (drain groupé).
+  "sources.promptTotalChars": {
+    type: "int",
+    default: 4_000,
+    min: 500,
+    max: 40_000,
+    apply: "hot",
+    env: "YUKI_SOURCES_PROMPT_TOTAL_CHARS",
+  },
+
   // --- Images générées (serveur ComfyUI) -------------------------------------
   // ⚠️ `images.baseUrl` vide = serveur NON configuré : l'outil `generer_image`
   // existe quand même (il est câblé) mais REFUSE explicitement, avec la marche à

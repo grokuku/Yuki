@@ -50,6 +50,21 @@
           aria-pressed="false"
           hidden
         >Activer les notifications</button>
+        <!-- NOTIFICATIONS DES SOURCES : compteur de non-lus dans l'en-tête.
+             Les messages envoyés par un programme branché (veille, messagerie…)
+             ne sont PAS des bulles dans un fil : ils s'empilent dans la section
+             dédiée ci-dessous. Le bouton est révélé par `notifications-panel.js`
+             (compteur à zéro = pastille masquée). -->
+        <button
+          id="sources-notifs-toggle"
+          class="pill notifs-toggle"
+          type="button"
+          aria-expanded="false"
+          aria-controls="sources-notifs-panel"
+          hidden
+        >
+          Notifications<span id="sources-notifs-count" class="notifs-toggle__count" hidden></span>
+        </button>
         <div class="theme-control">
           <select id="theme-family" name="theme-family" aria-label="Choisir la famille de thème">
             <option value="corail">Corail</option>
@@ -305,6 +320,43 @@
           ></button>
         </footer>
       </div>
+    </div>
+
+    <!--
+      SECTION « NOTIFICATIONS » — messages reçus des SOURCES.
+      Calque identique à celui des menus téléphone : un toucher sur le fond ferme,
+      le panneau est un `role="dialog"` NON modal (la discussion reste utilisable
+      derrière). Le contenu des entrées est REPLIÉ par défaut (<details>), la
+      réponse de Yuki s'affiche dans la MÊME entrée, et « Continuer dans une
+      conversation » est le SEUL bouton qui crée/ouvre un fil.
+      Aucun style inline (CSP `style-src 'self'`) : tout vient de `styles.css`.
+    -->
+    <div id="sources-notifs-layer" class="notifs-layer" hidden>
+      <section
+        id="sources-notifs-panel"
+        class="notifs"
+        role="dialog"
+        aria-label="Notifications des sources"
+        aria-modal="false"
+        tabindex="-1"
+      >
+        <header class="notifs__head">
+          <h2 class="notifs__title">Notifications</h2>
+          <span id="sources-notifs-summary" class="notifs__summary" role="status"></span>
+          <button
+            id="sources-notifs-readall"
+            class="button button--ghost button--small"
+            type="button"
+          >Tout marquer comme lu</button>
+          <button
+            id="sources-notifs-close"
+            class="button button--ghost button--small"
+            type="button"
+            aria-label="Fermer les notifications"
+          >Fermer</button>
+        </header>
+        <div id="sources-notifs-list" class="notifs__list"></div>
+      </section>
     </div>
 
     <script src="/ui/app.js" type="module"></script>

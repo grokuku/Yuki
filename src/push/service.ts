@@ -80,6 +80,17 @@ export function buildNotification(event: NotifyEvent): NotificationPayload {
       };
     case "run_finished":
       return { title: "Réponse prête", body: "Yuki a terminé de répondre.", ...base };
+    case "source":
+      // ⚠️ Le contenu d'une source n'est JAMAIS recopié ici : la notification
+      // annonce qu'il y a du nouveau, l'utilisateur lit le contenu dans la
+      // section « Notifications » (où il est replié par défaut).
+      return {
+        title: "Nouveau message d'une source",
+        body: event.detail
+          ? truncate(event.detail, MAX_NOTIFICATION_BODY_CHARS)
+          : "Un programme branché sur Yuki vous a envoyé quelque chose.",
+        ...base,
+      };
     default: {
       const exhaustive: never = event.kind;
       throw new Error(`Type de notification inconnu : ${String(exhaustive)}`);

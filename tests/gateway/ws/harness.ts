@@ -8,7 +8,11 @@ import type { AddressInfo } from "node:net";
 
 import { WebSocket } from "ws";
 
-import { createWsTransport, type AgentsGatewayPort } from "../../../src/gateway/ws/server.js";
+import {
+  createWsTransport,
+  type AgentsGatewayPort,
+  type SourcesGatewayPort,
+} from "../../../src/gateway/ws/server.js";
 import type { ServerFrame } from "../../../src/gateway/ws/protocol.js";
 import type { Transport } from "../../../src/gateway/ws/transport.js";
 import type { ApprovalGatewayPort, ScreenshotGatewayPort, SecretRequestGatewayPort } from "../../../src/agents/execution.js";
@@ -43,6 +47,8 @@ export interface HarnessOptions extends FakePiHostOptions {
   files?: FilesGatewayPort;
   /** IMAGES générées (ComfyUI) affichées dans la conversation (optionnel). */
   images?: ImagesGatewayPort;
+  /** SOURCES : marquage des fils + réaffectation à la suppression (optionnel). */
+  sources?: SourcesGatewayPort;
 }
 
 export interface Harness {
@@ -73,6 +79,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.reactions ? { reactions: options.reactions } : {}),
     ...(options.files ? { files: options.files } : {}),
     ...(options.images ? { images: options.images } : {}),
+    ...(options.sources ? { sources: options.sources } : {}),
   });
   const server = createHttpServer((_req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });

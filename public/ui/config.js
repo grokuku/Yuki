@@ -32,6 +32,7 @@ import { initImagesPanel } from './images-panel.js';
 import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
 import { initSecretsPanel } from './secrets-panel.js';
+import { initSourcesPanel } from './sources-panel.js';
 import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
@@ -578,6 +579,24 @@ const GROUPS = [
     ],
   },
   {
+    id: "sources",
+    title: "Notifications des sources (borne d'injection)",
+    fields: [
+      {
+        path: "sources.promptTotalChars",
+        label: "Notifications transmises au modèle en un tour (caractères)",
+        kind: "number",
+        min: 500,
+        max: 40000,
+        helper:
+          "BORNE d'injection du bloc <sources> : les notifications en attente " +
+          "partent GROUPÉES au début du prochain tour, jamais pendant. Au-delà de " +
+          "cette borne, une entrée est déclarée NON transmise (le modèle le lit) " +
+          "et son contenu entier reste dans la boîte de notifications.",
+      },
+    ],
+  },
+  {
     id: "images",
     title: "Serveur et réglages d'images (ComfyUI)",
     // Bouton « Tester la connexion » dédié (route `POST /api/images/test`) : il
@@ -718,7 +737,12 @@ const FIELD_DEFAULTS = {
  */
 const TABS = [
   { id: "modeles", groups: ["llm-light", "llm-heavy"] },
-  { id: "conversation", groups: ["delegation", "prompts", "memoire", "fichiers"] },
+  {
+    id: "conversation",
+    // `sources` = borne d'injection du bloc `<sources>` (les SOURCES elles-mêmes
+    // vivent dans `sources.json` et sont gérées par le panneau `sources-root`).
+    groups: ["delegation", "prompts", "memoire", "fichiers", "sources"],
+  },
   { id: "personnalite", groups: [] },
   { id: "voix", groups: ["tts"] },
   // IMAGES générées (ComfyUI) : onglet PROPRE, nommé « Images ». Le panneau des
@@ -783,6 +807,8 @@ const instancePasswordRoot = document.getElementById("instance-password-root");
 const secretsRoot = document.getElementById("secrets-root");
 /** Panneau des workflows d'images générées (serveur ComfyUI) — monté par id. */
 const imagesRoot = document.getElementById("images-root");
+/** Panneau des SOURCES (programmes qui réveillent Yuki) — monté par id. */
+const sourcesRoot = document.getElementById("sources-root");
 /** Panneau de la personnalité — monté par id. */
 const personalityRoot = document.getElementById("personality-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
@@ -1736,6 +1762,12 @@ void (async () => {
     // trouvées / manquantes, « par défaut », suppression. Composant autonome.
     if (imagesRoot) {
       imagesPanel = initImagesPanel({ root: imagesRoot, HolafFetch, HolafModal });
+    }
+    // Panneau des SOURCES : programmes extérieurs autorisés à réveiller Yuki
+    // (nom + jeton du coffre + trois réglages indépendants + consigne libre).
+    // ⚠️ Le jeton n'est affiché qu'UNE fois, à sa création.
+    if (sourcesRoot) {
+      initSourcesPanel({ root: sourcesRoot, HolafFetch, HolafModal });
     }
     // Panneau de la personnalité : édition, enregistrement, retour arrière,
     // historique. Composant autonome monté par id.

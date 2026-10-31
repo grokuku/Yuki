@@ -54,6 +54,7 @@ import {
   describeActivity,
 } from "./activity.js";
 import { liveRunMetricsText, runMetricsText } from "./run-stats.js";
+import { initSourcesNotifications } from "./notifications-panel.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
@@ -80,6 +81,14 @@ const els = {
   attach: document.getElementById("attach"),
   fileInput: document.getElementById("file-input"),
   pendingFiles: document.getElementById("pending-files"),
+  sourcesNotifsToggle: document.getElementById("sources-notifs-toggle"),
+  sourcesNotifsCount: document.getElementById("sources-notifs-count"),
+  sourcesNotifsLayer: document.getElementById("sources-notifs-layer"),
+  sourcesNotifsPanel: document.getElementById("sources-notifs-panel"),
+  sourcesNotifsList: document.getElementById("sources-notifs-list"),
+  sourcesNotifsSummary: document.getElementById("sources-notifs-summary"),
+  sourcesNotifsReadAll: document.getElementById("sources-notifs-readall"),
+  sourcesNotifsClose: document.getElementById("sources-notifs-close"),
 };
 
 let socket = null;
@@ -106,6 +115,30 @@ const notifControl = createNotificationsControl({
 void registerServiceWorker().then(() => notifControl.refresh());
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void notifControl.refresh();
+});
+
+/* ─── Notifications des SOURCES (veille, messagerie, n'importe quel programme)
+ * Les messages de sources ne sont JAMAIS des bulles dans un fil : ils s'empilent
+ * dans cette section, avec leur état et la réponse de Yuki. Le bouton de l'en-tête
+ * porte le compteur de non-lus. « Continuer dans une conversation » est le SEUL
+ * bouton qui crée/ouvre un fil : sans ce clic, aucune conversation n'existe.
+ * La boîte est relue périodiquement (le serveur reste la source de vérité) et à
+ * chaque retour au premier plan. */
+const sourcesNotifications = initSourcesNotifications({
+  button: els.sourcesNotifsToggle,
+  count: els.sourcesNotifsCount,
+  layer: els.sourcesNotifsLayer,
+  panel: els.sourcesNotifsPanel,
+  list: els.sourcesNotifsList,
+  summary: els.sourcesNotifsSummary,
+  readAllButton: els.sourcesNotifsReadAll,
+  closeButton: els.sourcesNotifsClose,
+  HolafModal,
+  // Bascule EXPLICITE vers la conversation que le serveur vient de créer/ouvrir.
+  onOpenConversation: (sessionId) => {
+    sourcesNotifications.close();
+    sendRaw({ type: "switch", sessionId });
+  },
 });
 
 /** Conversation visée par un clic de notification (`?session=<id>`). */

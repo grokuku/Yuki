@@ -136,6 +136,11 @@ import {
   type ReactionRegularity,
 } from "./reactions/index.js";
 import { RulesStore } from "./rules/index.js";
+import {
+  SourcesInbox,
+  SourcesService,
+  SourcesStore,
+} from "./sources/index.js";
 import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
@@ -895,6 +900,42 @@ async function main(): Promise<void> {
     chars: rulesStore.read().chars,
   });
 
+  // --- SOURCES : programmes extérieurs qui réveillent Yuki -------------------
+  // ⚠️ Deux fichiers JSON DÉDIÉS du volume `state`, JAMAIS dans `config.json`
+  // (la configuration n'accepte qu'un patch PLAT de scalaires) :
+  //   - `sources.json`       : les sources (nom, consigne, où, tour, notifier) ;
+  //   - `sources-inbox.json` : la boîte « Notifications » (≤ 200 entrées, refus
+  //     explicite au-delà) + la mémoire d'idempotence `(source, id)` de 7 jours.
+  // Le service est créé AVANT la porte GPU : gérer une source et lire la boîte ne
+  // demandent aucun modèle (le host est branché plus bas par `setWaker`).
+  const sourcesStore = new SourcesStore({ path: env.sourcesStorePath, logger });
+  const sourcesInbox = new SourcesInbox({ path: env.sourcesInboxPath, logger });
+  const sourcesService = new SourcesService({
+    store: sourcesStore,
+    inbox: sourcesInbox,
+    logger,
+    // Le coffre porte les JETONS (`YUKI_SOURCE_<NOM>`), jamais le fichier JSON.
+    ...(secretStore ? { tokens: secretStore } : {}),
+    // Borne d'injection du bloc `<sources>` : relue à chaud (`apply: hot`).
+    promptTotalChars: () => config.getNumber("sources.promptTotalChars"),
+    // « notifier » : Web Push à l'appareil. Le CONTENU n'est jamais recopié dans
+    // la notification (on annonce du nouveau, on ne diffuse pas la donnée).
+    notify: (event) => {
+      if (!pushService) return;
+      void pushService
+        .notify({ kind: "source", ...(event.titre ? { detail: event.titre } : {}) })
+        .catch((error: unknown) => {
+          logger.warn("sources.notify.failed", { source: event.source, error: messageOf(error) });
+        });
+    },
+  });
+  logger.info("sources.ready", {
+    store: env.sourcesStorePath,
+    inbox: env.sourcesInboxPath,
+    sources: sourcesStore.size,
+    entries: sourcesInbox.size,
+  });
+
   /** Balayage périodique de la RÉTENTION du volume `state` (voir plus bas). */
   let filesPurgeTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -1459,6 +1500,10 @@ async function main(): Promise<void> {
       },
       personality: personalityStore,
       rules: rulesStore,
+      // DRAIN GROUPÉ des notifications de sources : le host demande le bloc
+      // `<sources>` au DÉBUT de chaque tour (jamais pendant) et le fusionne dans
+      // l'envoi de ce tour — un seul `send`, donc pas de rafale de tours.
+      sources: sourcesService,
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,
@@ -1488,6 +1533,10 @@ async function main(): Promise<void> {
       piStatus = "error";
       logger.error("pi.start.failed", { error: messageOf(error) });
     }
+
+    // SOURCES : le host est prêt ⇒ on branche le réveil (tour `lancer`) et le
+    // suivi des réponses (attachées aux entrées de la boîte, jamais dans un fil).
+    sourcesService.setWaker(host);
 
     // --- Providers / modèles LLM : rechargement À CHAUD (`apply: hot`) ------
     // Un changement de FOURNISSEUR (`baseUrl`/`api`), de modèle, de réflexion ou
@@ -1594,6 +1643,11 @@ async function main(): Promise<void> {
       files: filesService,
       // Épinglage des conversations : store hôte SÉPARÉ du JSONL du SDK Pi.
       pins: SessionPinStore.open({ path: env.sessionPinsPath, logger }),
+      // SOURCES : la trame `sessions` dit quelles sources postent dans chaque fil
+      // (modale de suppression) et la suppression d'un fil RÉAFFECTE les sources
+      // qui y postaient (« nouvelle conversation à chaque fois ») au lieu de les
+      // laisser pointer dans le vide.
+      sources: sourcesService,
       // RÉACTIONS : écrire une réaction ne déclenche AUCUN tour et n'alimente
       // jamais la synthèse vocale. Seules les RÉGULARITÉS (le même jugement sur
       // plusieurs messages) sont proposées à la mémoire — avec son filtre, son
@@ -1738,6 +1792,11 @@ async function main(): Promise<void> {
       },
       personality: { store: personalityStore, logger },
       rules: { store: rulesStore, logger },
+      // SOURCES : API générique de réveil (`POST /api/sources/<nom>/messages`)
+      // + boîte « Notifications ». Mêmes garde-fous que `/api/config` pour les
+      // écritures d'administration ; le jeton de chaque source authentifie les
+      // messages poussés par les programmes extérieurs.
+      sources: { service: sourcesService, logger },
       // Administration de la mémoire (archivage récupérable) : disponible
       // uniquement quand le service mémoire existe (porte passée).
       ...(memoryService ? { memory: { admin: memoryService, logger } } : {}),
@@ -1805,6 +1864,9 @@ async function main(): Promise<void> {
       stopLlmHotReload = undefined;
       stopPushTriggers?.();
       stopPushTriggers = undefined;
+      // SOURCES : plus aucun suivi de run après l'arrêt (aucune écriture tardive
+      // dans la boîte de notifications).
+      sourcesService.detach();
       if (agentsServer) await closeAgentsServer(agentsServer);
       await transport?.close();
       await host?.stop();

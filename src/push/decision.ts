@@ -43,7 +43,7 @@ export function isWatching(viewer: PresenceView, sessionId: string | null | unde
 export function shouldNotify(event: NotifyEvent, viewers: readonly PresenceView[]): boolean {
   const active = viewers.filter((v) => v.visible === true && v.focused === true);
 
-  if (event.kind === "approval") {
+  if (event.kind === "approval" || event.kind === "source") {
     // La fenêtre de validation est globale : un client actif la voit à l'écran.
     return active.length === 0;
   }
