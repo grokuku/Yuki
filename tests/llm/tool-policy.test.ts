@@ -9,6 +9,7 @@ import {
   PROVIDERS,
   AGENT_DIRECTORY_TOOLS,
   FILE_LIST_TOOLS,
+  FILE_READ_TOOLS,
   HERITAGE_TOOLS,
   LIBRARIAN_TOOLS,
   SECRET_DIRECTORY_TOOLS,
@@ -72,12 +73,14 @@ describe("llm — providers & modèles", () => {
         baseUrl: "https://light.example/v1",
         model: "small-model",
         thinking: "low",
+        vision: true,
       },
       heavy: {
         api: "openai-completions",
         baseUrl: "https://heavy.example/v1",
         model: "big-model",
         thinking: "high",
+        vision: true,
       },
     });
     expect(config.providers["llm-light"]?.baseUrl).toBe("https://light.example/v1");
@@ -133,6 +136,18 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     expect(toolAllowlist("light", { fileListEnabled: true })).not.toContain("lister_fichiers");
     // Lecture seule : jamais un outil interdit.
     expect(containsForbiddenTool(toolAllowlist("heavy", { fileListEnabled: true }))).toBe(false);
+  });
+
+  it("la LECTURE du contenu (`lire_fichier`) est un outil du LOURD seul", () => {
+    // Par défaut : jamais exposé (le câblage doit l'activer explicitement).
+    expect(toolAllowlist("heavy")).not.toContain("lire_fichier");
+    expect(FILE_READ_TOOLS).toEqual(["lire_fichier"]);
+    expect(toolAllowlist("heavy", { fileReadEnabled: true })).toContain("lire_fichier");
+    // ⚠️ Le LÉGER ne le porte PAS : il reçoit DÉJÀ le texte dans le bloc
+    // `<fichiers>` et les images en pièce jointe de son message. Lui ouvrir la
+    // lecture du store n'ajouterait aucune capacité, seulement une surface.
+    expect(toolAllowlist("light", { fileReadEnabled: true })).not.toContain("lire_fichier");
+    expect(containsForbiddenTool(toolAllowlist("heavy", { fileReadEnabled: true }))).toBe(false);
   });
 
   it("détecte effectivement les outils interdits (garde-fou)", () => {

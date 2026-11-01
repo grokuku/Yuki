@@ -48,7 +48,13 @@ import type { AuditLog } from "./audit.js";
 import type { AgentHub } from "./connection.js";
 import { AgentChannelError, isChannelError } from "./errors.js";
 import type { AgentStore } from "./store.js";
-import type { FileSaveInput, FilesPort, StoredFileRecord, WireFile } from "../files/types.js";
+import type {
+  FileImagesOutcome,
+  FileSaveInput,
+  FilesPort,
+  StoredFileRecord,
+  WireFile,
+} from "../files/types.js";
 import { DEFAULT_FILE_CHUNK_BYTES, type OutboundFilePutChunk } from "./protocol.js";
 
 /** Capacité qu'un agent doit déclarer pour que le transfert soit possible. */
@@ -154,6 +160,13 @@ export interface FileReceivedView {
 export interface TransferServicePort {
   get(request: FileGetRequest): Promise<TransferOutcome>;
   put(request: FilePutRequest): Promise<TransferOutcome>;
+  /**
+   * Prépare l'IMAGE d'un fichier DÉJÀ RÉCUPÉRÉ pour le modèle (`ImageContent` :
+   * base64 + type MIME), en appliquant la politique de vision partagée
+   * (`src/files/vision.ts` : réduction éphémère, refus explicite d'une image
+   * illisible). Absent ⇒ l'outil ne joint aucune image et le DIT.
+   */
+  prepareImage?(file: WireFile): Promise<FileImagesOutcome>;
 }
 
 /** État d'un transfert dans le registre persistant (`transfers.json`). */
@@ -189,6 +202,13 @@ export interface TransferServiceOptions {
   logger: TransferLogger;
   /** Stockage des fichiers de Yuki (destination d'une récupération). */
   files: FilesPort;
+  /**
+   * Prépare les IMAGES d'un fichier récupéré pour le modèle — MÊME politique que
+   * les pièces jointes d'un message (`FilesService.prepareImages`, `src/files`).
+   * Absent (tests, doublures) ⇒ `recuperer_fichier` n'attache aucune image et
+   * l'écrit dans son résultat.
+   */
+  prepareImages?: (files: readonly WireFile[]) => Promise<FileImagesOutcome>;
   limits: TransferLimits;
   /**
    * Chemin du registre persistant (`transfers.json`). Absent ⇒ registre en
@@ -374,6 +394,7 @@ export class AgentFileTransferService implements TransferServicePort {
   private readonly audit: AuditLog;
   private readonly logger: TransferLogger;
   private readonly files: FilesPort;
+  private readonly prepareImagesFn?: TransferServiceOptions["prepareImages"];
   private readonly limits: TransferLimits;
   private readonly registryPath?: string;
   private readonly idFactory: () => string;
@@ -390,6 +411,7 @@ export class AgentFileTransferService implements TransferServicePort {
     this.audit = options.audit;
     this.logger = options.logger;
     this.files = options.files;
+    this.prepareImagesFn = options.prepareImages;
     this.limits = options.limits;
     this.registryPath = options.registryPath;
     this.idFactory = options.idFactory ?? defaultTransferId;
@@ -426,6 +448,31 @@ export class AgentFileTransferService implements TransferServicePort {
         });
       }
     }
+  }
+
+  // ── Image du fichier récupéré (vision) ───────────────────────────────────
+
+  /**
+   * Prépare l'image d'un fichier RÉCUPÉRÉ pour le modèle.
+   *
+   * ⚠️ Les octets viennent du STORE (`FilesService.prepareImages`), jamais d'une
+   * lecture disque hors de ses bornes : le fichier n'a pas de chemin public. La
+   * politique de vision est celle des pièces jointes (côté max 2 000 px, côté
+   * min 700 px, réduction ÉPHÉMÈRE, refus explicite) : l'original stocké n'est
+   * jamais modifié.
+   */
+  async prepareImage(file: WireFile): Promise<FileImagesOutcome> {
+    const prepare = this.prepareImagesFn;
+    if (!prepare) {
+      return {
+        ok: false,
+        code: "file_image_unavailable",
+        message:
+          `L'image « ${file.name} » n'est pas transmise au modèle : la préparation ` +
+          "des images n'est pas branchée sur ce serveur.",
+      };
+    }
+    return prepare([file]);
   }
 
   // ── Registre persistant ──────────────────────────────────────────────────

@@ -120,6 +120,7 @@ function effective(baseUrl: string): EffectiveLlmConfig {
     baseUrl,
     model: "test-model",
     thinking: "off" as const,
+    vision: true,
   };
   return { light: role, heavy: role };
 }

@@ -664,13 +664,29 @@ function humanSize(bytes: number): string {
 }
 
 /**
+ * Déclaration de VISION passée aux outils de transfert : le résultat doit dire
+ * la VÉRITÉ sur ce que le modèle voit.
+ */
+export interface FileTransferVision {
+  /** Le modèle RÉSOLU pour ce job accepte-t-il les images (`model.input`) ? */
+  imagesSupported: boolean;
+  /** Référence `provider/modelId` du modèle (message honnête en cas de refus). */
+  modelLabel?: string;
+}
+
+/**
  * Résumé JSON d'un transfert — ⚠️ IL PÈSE ET LE DIT.
  *
  * Le modèle DOIT savoir qu'un fichier de 200 Mo vient de transiter (taille +
  * empreinte) : un silence sur le volume serait un mensonge par omission. Un échec
  * est toujours nommé avec son statut exact (jamais un « c'est fait » de complaisance).
+ *
+ * ⚠️ IMAGE : quand le fichier est une image, la note dit exactement ce qui se
+ * passe — image JOINte et donc VUE, ou image NON jointe (modèle déclaré texte
+ * seul, refus de la politique de vision, préparation indisponible) avec le geste
+ * à faire. Jamais « tu la vois » quand elle a été jetée.
  */
-function transferSummary(outcome: TransferOutcome): string {
+function transferSummary(outcome: TransferOutcome, vision?: TransferVision): string {
   return JSON.stringify({
     status: outcome.status,
     agent_id: outcome.agentId,
@@ -691,16 +707,56 @@ function transferSummary(outcome: TransferOutcome): string {
     ...(outcome.approvalId ? { approval_id: outcome.approvalId } : {}),
     message: outcome.message,
     ...(outcome.status === "completed" && outcome.direction === "get"
-      ? {
-          note:
-            "Le fichier est SUR LE DISQUE de Yuki et une carte cliquable s'affiche " +
-            "dans la conversation. Tu ne vois pas son contenu ici : si l'utilisateur " +
-            "veut que tu le lises, il l'inclura dans la discussion. ⚠️ Pour REDÉPOSER " +
-            "ce même fichier sur une machine, passe `file_id` (ci-dessus) au paramètre " +
-            "`fichier` de `deposer_fichier` : le NOM seul est refusé.",
-        }
+      ? { note: fileNote(vision) }
       : {}),
   });
+}
+
+/** Ce que devient l'image d'un fichier récupéré (la vérité, jamais une promesse). */
+type TransferVision = { kind: "attached" } | { kind: "not_an_image" } | {
+  kind: "unsupported";
+  modelLabel: string;
+} | { kind: "refused"; code: string; message: string } | { kind: "unavailable" };
+
+/** Note de fin du résumé : ce que le modèle voit RÉELLEMENT du fichier. */
+function fileNote(vision: TransferVision | undefined): string {
+  switch (vision?.kind) {
+    case "attached":
+      return (
+        "L'image de ce fichier t'est JOINte ci-dessous (base64) : tu la VOIS. " +
+        "Elle a été réduite à la volée si elle dépassait les bornes de vision ; " +
+        "l'original stocké, lui, n'est pas modifié. L'utilisateur voit la carte " +
+        "du fichier dans la conversation."
+      );
+    case "unsupported":
+      return (
+        `⚠️ Le modèle « ${vision.modelLabel} » ne reçoit PAS les images (déclaration ` +
+        '`input` = ["text"] dans models.json) : l\'image N\'EST PAS jointe ici et tu ne ' +
+        "la vois pas. Ne prétends pas l'avoir vue. Pour la voir : activer la vision " +
+        "du modèle dans /config (onglet « Modèles », réglage « Reçoit les images »), " +
+        "ou demander à l'utilisateur de l'inclure dans la discussion."
+      );
+    case "refused":
+      return (
+        `L'image de ce fichier n'est PAS transmise au modèle : ${vision.message} ` +
+        `(code ${vision.code}). Tu ne la vois pas — ne prétends pas le contraire.`
+      );
+    case "unavailable":
+      return (
+        "L'image de ce fichier n'est PAS jointe ici (préparation des images " +
+        "indisponible sur ce serveur) : tu ne la vois pas. Le fichier reste " +
+        "téléchargeable dans la conversation."
+      );
+    case "not_an_image":
+    case undefined:
+      return (
+        "Le fichier est SUR LE DISQUE de Yuki et une carte cliquable s'affiche " +
+        "dans la conversation. Tu ne vois pas son contenu ici : si l'utilisateur " +
+        "veut que tu le lises, il l'inclura dans la discussion. ⚠️ Pour REDÉPOSER " +
+        "ce même fichier sur une machine, passe `file_id` (ci-dessus) au paramètre " +
+        "`fichier` de `deposer_fichier` : le NOM seul est refusé."
+      );
+  }
 }
 
 /**
@@ -725,6 +781,7 @@ function transferSummary(outcome: TransferOutcome): string {
 export function createFileTransferTools(
   service: TransferServicePort,
   options?: ActionToolOptions,
+  vision?: FileTransferVision,
 ): ToolDefinition[] {
   const recupererFichier = defineTool({
     name: "recuperer_fichier",
@@ -735,12 +792,15 @@ export function createFileTransferTools(
       "que l'utilisateur peut inclure dans la discussion. Désignez la machine par " +
       "son NOM ou son identifiant (l'identifiant fonctionne toujours) et donnez le " +
       "chemin ABSOLU du fichier sur la machine (un chemin relatif est refusé). " +
-      "Le résultat indique la TAILLE et l'empreinte SHA-256 : ne prétends pas " +
-      "connaître le contenu du fichier, tu ne le reçois pas. Plafond 256 Mo par " +
-      "transfert : au-delà, utilise run_command (scp, rsync, tar…). Si l'agent est " +
-      "trop ancien (capacité « files » absente), l'outil le dit AVANT tout envoi.",
+      "Le résultat indique la TAILLE et l'empreinte SHA-256. ⚠️ IMAGE (PNG, JPEG, " +
+      "GIF, WebP) : elle t'est AUSSI transmise ci-dessous et tu la VOIS — sauf si " +
+      "le résultat dit explicitement le contraire (« ne reçoit PAS les images », " +
+      "« n'est PAS transmise »). Pour tout autre format, tu ne reçois aucun " +
+      "contenu : ne prétends pas connaître ce que tu n'as pas vu. Plafond 256 Mo " +
+      "par transfert : au-delà, utilise run_command (scp, rsync, tar…). Si l'agent " +
+      "est trop ancien (capacité « files » absente), l'outil le dit AVANT tout envoi.",
     promptSnippet:
-      "recuperer_fichier(agent, chemin) — lit un fichier distant et le dépose sur le disque de Yuki",
+      "recuperer_fichier(agent, chemin) — lit un fichier distant et le dépose sur le disque de Yuki (l'image est jointe au modèle quand il la reçoit)",
     parameters: Type.Object({
       agent: Type.String({
         minLength: 1,
@@ -763,7 +823,66 @@ export function createFileTransferTools(
         ...(sessionId !== undefined ? { sessionId } : {}),
         origin: "recuperer_fichier",
       });
-      return { content: [{ type: "text", text: transferSummary(outcome) }], details: outcome };
+      // ⚠️ VISION : une image RÉCUPÉRÉE est montrée au modèle, pas seulement
+      // déposée sur disque. Les octets viennent du STORE (port `prepareImage`),
+      // la politique de vision est celle des pièces jointes (réduction
+      // éphémère, refus explicite) — l'original n'est jamais modifié.
+      const file = outcome.file;
+      const isImage =
+        outcome.status === "completed" &&
+        outcome.direction === "get" &&
+        file !== undefined &&
+        file.kind === "image";
+      let image: { type: "image"; data: string; mimeType: string } | undefined;
+      let visionNote: TransferVision = { kind: "not_an_image" };
+      if (isImage && file !== undefined) {
+        if (vision !== undefined && !vision.imagesSupported) {
+          // ⚠️ On NE JOINT PAS l'image : le SDK la remplacerait par un
+          // « (tool image omitted…) » et le modèle croirait l'avoir vue.
+          visionNote = { kind: "unsupported", modelLabel: vision.modelLabel ?? "configuré" };
+        } else if (!service.prepareImage) {
+          visionNote = { kind: "unavailable" };
+        } else {
+          try {
+            const prepared = await service.prepareImage(file);
+            const attached = prepared.ok ? prepared.images[0] : undefined;
+            if (prepared.ok && attached !== undefined) {
+              image = { type: "image", data: attached.data, mimeType: attached.mimeType };
+              visionNote = { kind: "attached" };
+            } else if (prepared.ok) {
+              visionNote = { kind: "unavailable" };
+            } else {
+              visionNote = { kind: "refused", code: prepared.code, message: prepared.message };
+            }
+          } catch (error) {
+            visionNote = {
+              kind: "refused",
+              code: "file_image_unreadable",
+              message:
+                `L'image « ${file.name} » n'a pas pu être relue ` +
+                `(${escapeOutputText(error instanceof Error ? error.message : String(error))}).`,
+            };
+          }
+        }
+      }
+      const content: Array<
+        { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
+      > = [{ type: "text", text: transferSummary(outcome, visionNote) }];
+      if (image !== undefined) content.push(image);
+      return {
+        content,
+        details: {
+          ...outcome,
+          ...(visionNote.kind !== "not_an_image"
+            ? {
+                image_attached: image !== undefined,
+                ...(image !== undefined ? { image_mime_type: image.mimeType } : {}),
+                ...(visionNote.kind === "refused" ? { image_error: visionNote.code } : {}),
+                ...(visionNote.kind === "unsupported" ? { image_error: "model_without_vision" } : {}),
+              }
+            : {}),
+        },
+      };
     },
   });
 

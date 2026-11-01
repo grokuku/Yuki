@@ -168,7 +168,7 @@ async function makeHarness(): Promise<Harness> {
     systemPrompt: "Tu es un worker lourd de test.",
     modelReference: "llm-heavy/heavy-ok",
     thinking: "off",
-    tools: ["read", "ls", "grep", "find", "lister_fichiers"],
+    tools: ["read", "ls", "grep", "find", "lister_fichiers", "lire_fichier"],
     files,
     idleTimeoutMs: 30_000,
     totalTimeoutMs: 30_000,
@@ -274,6 +274,34 @@ describe("intégration — contexte et pièces jointes du worker lourd", () => {
       expect(body).toContain("capture.png");
       // Métadonnées seules : le CONTENU du fichier n'est jamais transmis.
       expect(body).not.toContain("CONTENU-SECRET-DU-FICHIER");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("le worker lourd PORTE `lire_fichier` : il peut lire le contenu sans l'utilisateur", async () => {
+    // ⚠️ POURQUOI CE TEST : `lister_fichiers` donnait l'identifiant, `deposer_fichier`
+    // l'exige, mais AUCUN outil ne lisait le contenu — le worker savait qu'une image
+    // existait sans jamais pouvoir la voir. On lit ici la LISTE D'OUTILS telle
+    // qu'elle part réellement au modèle (corps de la requête capturé).
+    const harness = await makeHarness();
+    try {
+      const outcome = await harness.service.delegate({
+        task: "Regarde la capture de la conversation, puis dépose-la sur nuc00:/tmp/.",
+        lightSessionId: SESSION,
+      });
+      if (outcome.status !== "dispatched") throw new Error("ticket attendu");
+      await waitTerminal(harness.store, outcome.job_id);
+
+      const body = promptBody(harness.provider);
+      // Les DEUX maillons de lecture sont exposés au worker (rien à faire à
+      // l'humain). ⚠️ `deposer_fichier` n'apparaît pas ici : il dépend du service
+      // de TRANSFERT, absent de ce banc — d'où le test séparé des outils d'action.
+      expect(body).toContain('"lister_fichiers"');
+      expect(body).toContain('"lire_fichier"');
+      // Le contrat de l'outil est explicite : l'identifiant, pas un nom ni un chemin.
+      expect(body).toContain("IDENTIFIANT du fichier (32 caractères hexadécimaux)");
+      expect(body).toContain("un PDF ou un binaire est REFUSÉ");
     } finally {
       await harness.close();
     }

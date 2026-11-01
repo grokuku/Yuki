@@ -162,6 +162,17 @@ export interface WsTransportOptions {
    */
   files?: FilesGatewayPort;
   /**
+   * CAPACITÉ VISION du modèle de conversation (réglage `/config`
+   * `llm.light.vision`, qui produit `input` dans `models.json`).
+   *
+   * Absent ⇒ comportement historique (les images jointes partent). `false` ⇒ un
+   * message porteur d'une IMAGE est REFUSÉ avec un motif explicite : sans
+   * `"image"` dans `input`, le SDK remplace la pièce jointe par
+   * « (tool image omitted: model does not support images) », et l'utilisateur
+   * croirait que le modèle a vu son image. Jamais de silence.
+   */
+  vision?: { conversationReceivesImages: () => boolean };
+  /**
    * TRANSFERT de fichiers depuis une machine appairée : la trame de CONTRÔLE
    * `file_received` signale à l'utilisateur qu'un fichier est désormais sur le
    * disque de Yuki (carte cliquable « Inclure dans la discussion »). Absent ⇒
@@ -1811,6 +1822,26 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       // La version réduite est ÉPHÉMÈRE : l'original stocké n'est pas touché.
       // Si la réduction échoue (ou rendrait le texte illisible), le message est
       // REFUSÉ et RIEN n'est envoyé : jamais de troncature silencieuse.
+      //
+      // ⚠️ CAPACITÉ VISION : si le modèle de conversation est DÉCLARÉ sans vision
+      // (`llm.light.vision` = « non »), l'image ne serait pas vue (le SDK la
+      // remplacerait par « (tool image omitted…) ») : on REFUSE le message et on
+      // dit quoi activer — jamais une image « envoyée » qui n'arrive nulle part.
+      const attachedImages = outcome.files.filter((file) => file.kind === "image");
+      if (attachedImages.length > 0 && options.vision !== undefined) {
+        if (!options.vision.conversationReceivesImages()) {
+          sendDirect(client, {
+            type: "error",
+            code: "file_image_vision_disabled",
+            message:
+              "Le modèle de conversation est déclaré SANS vision : l'image n'est " +
+              "pas envoyée et le message n'a pas été expédié. Activez « Reçoit les " +
+              "images (vision) » pour ce modèle dans /config (onglet « Modèles »), " +
+              "ou retirez l'image du message.",
+          });
+          return;
+        }
+      }
       const preparedImages = await filesPort.prepareImages(outcome.files);
       if (!preparedImages.ok) {
         sendDirect(client, {

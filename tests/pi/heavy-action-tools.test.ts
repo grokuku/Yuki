@@ -31,6 +31,11 @@ import type {
   TransferOutcome,
   TransferServicePort,
 } from "../../src/agents/transfer.js";
+import type {
+  FilesReadPort,
+  StoredFileRecord,
+  WireFile,
+} from "../../src/files/types.js";
 
 function stubTransfers(): { service: TransferServicePort; gets: FileGetRequest[]; puts: FilePutRequest[] } {
   const gets: FileGetRequest[] = [];
@@ -110,6 +115,44 @@ function stubScreenshot(): {
   return { service, calls };
 }
 
+/**
+ * Port des fichiers DOUBLE : une pièce jointe TEXTE de la CONVERSATION, et rien
+ * d'autre. Sert à prouver que le worker LIT le contenu de la bonne conversation.
+ */
+const FILE_ID = "b".repeat(32);
+
+function stubFiles(): FilesReadPort {
+  const wire: WireFile = {
+    id: FILE_ID,
+    name: "notes.txt",
+    mimeType: "text/plain",
+    bytes: 11,
+    kind: "text",
+    readable: true,
+    url: `/fichiers/${FILE_ID}.txt`,
+    createdAt: "2026-11-01T10:00:00.000Z",
+    expiresAt: "2026-12-01T10:00:00.000Z",
+  };
+  const record = {
+    id: FILE_ID,
+    name: wire.name,
+    mimeType: wire.mimeType,
+    ext: "txt",
+    bytes: 11,
+    createdAt: wire.createdAt,
+    expiresAt: wire.expiresAt,
+    origin: "user",
+    sessionId: CONVERSATION,
+    analysis: { kind: "text", readable: true, chars: 11 },
+  } as StoredFileRecord;
+  return {
+    listForSession: (sessionId: string) => (sessionId === CONVERSATION ? [wire] : []),
+    get: (id: string) => (id === FILE_ID ? record : null),
+    readBytes: (id: string) => (id === FILE_ID ? Buffer.from("coucou toi\n") : null),
+    prepareImages: async () => ({ ok: true, images: [] }),
+  };
+}
+
 type AnyTool = { name: string; execute: (...args: unknown[]) => Promise<unknown> };
 
 async function invoke(tool: AnyTool, params: Record<string, unknown>, ctx: unknown): Promise<void> {
@@ -155,6 +198,23 @@ describe("outils d'action du worker lourd — rattachement de la validation", ()
 
   it("buildHeavyActionTools n'expose RIEN sans service (worker sans exécution)", () => {
     expect(buildHeavyActionTools({}, CONVERSATION)).toEqual([]);
+  });
+
+  it("buildHeavyActionTools expose lister_fichiers ET lire_fichier (le worker LIT le contenu)", () => {
+    const tools = buildHeavyActionTools({ files: stubFiles() }, CONVERSATION);
+    // ⚠️ Avant `lire_fichier`, le worker recevait la liste et AUCUN contenu : il
+    // savait qu'une image existait, en avait l'identifiant, et ne pouvait rien en
+    // faire. Les deux outils sont maintenant attachés ensemble.
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["lire_fichier", "lister_fichiers"]);
+  });
+
+  it("lire_fichier lit la CONVERSATION propriétaire (jamais la session éphémère)", async () => {
+    const tools = buildHeavyActionTools({ files: stubFiles() }, CONVERSATION);
+    const read = tools.find((tool) => tool.name === "lire_fichier") as unknown as AnyTool;
+    const result = (await read.execute("call", { identifiant: FILE_ID }, undefined, undefined, ephemeralCtx)) as {
+      content: { type: string; text?: string }[];
+    };
+    expect(result.content.map((block) => block.text ?? "").join("")).toContain("coucou toi");
   });
 
   it("run_command RATTACHE la validation à la CONVERSATION, pas à la session éphémère", async () => {

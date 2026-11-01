@@ -67,6 +67,8 @@ function harness(options: {
   outputLabeled?: boolean;
   finalPrompt?: GeneratedImage["finalPrompt"];
   documentation?: string;
+  /** Capacité VISION du modèle de conversation (défaut : oui). */
+  receivesImages?: () => boolean;
 } = {}): Harness {
   const calls: Array<{ scene: string; style?: string; ratio?: string }> = [];
   const views: ComfyImageView[] = [];
@@ -118,6 +120,7 @@ function harness(options: {
       order.push("fiche");
       fiches.push(fiche);
     },
+    ...(options.receivesImages ? { receivesImages: options.receivesImages } : {}),
   });
   return {
     tool: tools[0]!,
@@ -274,6 +277,19 @@ describe("bornes et refus", () => {
     const refused = await call(tooLong.tool, { scene: "c".repeat(3_100) });
     expect(tooLong.calls).toHaveLength(0);
     expect(JSON.parse(refused.text).message).toContain("3000");
+  });
+
+  it("un modèle DÉCLARÉ sans vision ne reçoit pas l'image générée — et le DIT", async () => {
+    // ⚠️ Sans « image » dans `input` (réglage `/config` `llm.light.vision`), le SDK
+    // remplacerait la partie image par « (tool image omitted…) » : le modèle
+    // croirait l'avoir jugée. L'image reste AFFICHÉE pour l'humain.
+    const { tool, views } = harness({ receivesImages: () => false });
+    const result = await call(tool, { scene: "un phare au crépuscule" });
+    expect(result.content.some((part) => part.type === "image")).toBe(false);
+    expect(result.details.image_attached).toBe(false);
+    expect(views).toHaveLength(1);
+    expect(result.text).toContain("déclaré SANS vision");
+    expect(result.text).not.toContain("tu la vois ci-dessous");
   });
 
   it("n'attache PAS au modèle une image au-delà du plafond, et le DIT", async () => {

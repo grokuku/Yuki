@@ -47,6 +47,7 @@ function effective(model: string): EffectiveLlmConfig {
     baseUrl: "https://ollama.com/v1",
     model,
     thinking: "off" as const,
+    vision: true,
   };
   return { light: role, heavy: role };
 }

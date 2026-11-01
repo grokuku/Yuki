@@ -761,13 +761,38 @@ fichier expiré le supprime et répond « absent » (404).
 Une image jointe ne sert pas qu'à l'affichage : elle part dans le **message
 utilisateur** sous forme de pièce jointe `ImageContent` (base64 + type MIME),
 sur `session.prompt(…, { images })` **et** sur `session.steer(…, images)` quand
-le message est injecté dans un tour en cours. Le modèle de chat
-(`llm.light.model`) déclare `input: ["text", "image"]` ; sans cette pièce jointe,
-il ne verrait rien.
+le message est injecté dans un tour en cours.
 
-**L'original n'est jamais transformé.** Le fichier déposé est stocké tel quel
-(c'est lui qu'on télécharge). La réduction se fait **au moment de construire le
-message**, dans `src/files/vision.ts` :
+#### ⚠️ La capacité VISION est une DÉCLARATION (le piège qui coûte une soirée)
+
+Aucune API de fournisseur ne publie « ce modèle voit les images » : Yuki **ne
+peut pas la mesurer**. La capacité est donc une **déclaration**, réglée dans
+`/config` → onglet **Modèles** → **« Reçoit les images (vision) »**
+(`llm.light.vision` pour la conversation, `llm.heavy.vision` pour le worker),
+valeurs `oui` / `non`, appliquée à chaud.
+
+Ce réglage produit le champ `input` du modèle dans `models.json` :
+
+| Réglage | `input` généré | Conséquence |
+| --- | --- | --- |
+| `oui` | `["text", "image"]` | l'image part en pièce jointe, le modèle la voit |
+| `non` | `["text"]` | ⚠️ **l'image n'est pas envoyée** — et c'est **dit** |
+
+⚠️ **Pourquoi c'est un piège** : avec `input: ["text"]`, le SDK **remplace** toute
+partie image par `(tool image omitted: model does not support images)`. Le modèle
+reçoit alors du **bruit** au milieu de son prompt et **on croit** qu'il a vu
+l'image. D'où deux garde-fous :
+
+* un message porteur d'une **image** est **refusé** (trame d'erreur
+  `file_image_vision_disabled`) si la conversation est déclarée sans vision ;
+* `recuperer_fichier` **n'envoie pas** l'image au worker déclaré texte seul et
+  l'écrit dans son résultat (`image_error: "model_without_vision"`).
+
+⚠️ **Où éditer** : le `models.json` du volume `state` est **réécrit à chaque
+démarrage** (`writeModelsFile`, `src/pi/config.ts`) depuis `buildModelsConfigFrom`
+(`src/llm/models.ts`) : une correction **manuelle** de ce fichier est **perdue**.
+Le seul endroit qui compte est le réglage `/config` (ou, hors interface,
+`config/pi/models.json`, qui n'est que le reflet testé des défauts).
 
 | Règle | Valeur |
 | --- | --- |
@@ -785,16 +810,96 @@ message**, dans `src/files/vision.ts` :
   RIEN** (chemin rapide : base64 seul, ~1 ms pour 543 Ko).
 * ⚠️ **Contexte** : le SDK estime une image à ~1 200 jetons (`ESTIMATED_IMAGE_CHARS`),
   quelle que soit sa taille — le contexte ne peut donc pas exploser par ce canal.
+* ⚠️ **Tous les chemins d'image** consultent la MÊME déclaration : un message
+  porteur d'une image est **refusé** (`file_image_vision_disabled`) si la
+  conversation est déclarée sans vision ; `generer_image` et `capture_libraire`
+  **n'attachent pas** l'image (`image_attached: false`) et écrivent le motif dans
+  leur résultat ; `recuperer_fichier` et `lire_fichier` font de même (§ 13.7).
 
-### 13.7 Transfert vers/depuis une machine appairée (capacité `files`)
+### 13.7 Fichiers d'une conversation et transfert vers/depuis une machine (capacité `files`)
 
-Deux outils, portés par le **worker lourd** (c'est lui qui agit sur une machine,
-jamais le léger qui converse) :
+Trois outils, portés par le **worker lourd** (c'est lui qui agit, jamais le léger
+qui converse) :
 
 | Outil | Sens | Paramètres |
 | --- | --- | --- |
+| `lister_fichiers` | lecture seule | aucun — métadonnées des pièces jointes (**identifiants** compris) |
+| `lire_fichier` | lecture du **contenu** | `identifiant` (32 hex), `debut?` (décalage en **caractères**) |
 | `recuperer_fichier` | machine → Yuki | `agent` (nom **ou** identifiant de la machine), `chemin` (**absolu** côté machine) |
 | `deposer_fichier` | Yuki → machine | `agent`, `fichier` (**identifiant** du fichier stocké), `chemin_distant` (**absolu** côté machine), `ecraser?` |
+
+#### Ce que rend `recuperer_fichier` (et ce qui reste vrai)
+
+| Cas | Ce que le worker reçoit |
+| --- | --- |
+| fichier **non image** (texte, PDF, binaire) | un **résumé JSON** (statut, `file_id`, nom, taille, SHA-256, `kind`) + la note « tu ne vois pas son contenu ici ». **Aucune** image, aucun binaire dans le prompt. |
+| **image** (PNG, JPEG, GIF, WebP) **et** worker déclaré avec vision | le **même résumé**, **plus** un bloc `{ type: "image", data (base64), mimeType }` — le worker **voit** l'image. `details.image_attached = true`. |
+| **image** mais worker déclaré **texte seul** (`llm.heavy.vision` = « non ») | **aucune** image jointe ; le texte dit « ce modèle ne reçoit pas les images » et **où activer la vision**. `details.image_error = "model_without_vision"`. |
+| **image refusée** par la politique de vision (trop petite pour rester lisible) | **aucune** image ; le code (`file_image_illegible`, `file_image_too_large`, `file_image_unsupported`) et la raison sont dans le texte. `details.image_error = <code>`. |
+
+⚠️ **La politique de vision est la MÊME que celle des pièces jointes**
+(§ 13.6) : côté max **2 000 px**, côté min lisible **700 px**, réduction
+**éphémère**, **original jamais modifié**. Les octets sont lus par le **store**
+(`FilesService.prepareImages` → `readBytes`), jamais par un chemin disque.
+
+⚠️ **Ce qui reste vrai** : le worker n'a **aucun accès disque** aux fichiers de
+Yuki (aucun chemin n'est exposé). Le contenu se demande donc **explicitement**,
+fichier par fichier, avec `lire_fichier` (§ ci-dessus). Sans le bloc image
+(modèle texte seul, refus, format non supporté), il ne voit pas l'image — et il
+ne doit pas prétendre le contraire.
+
+⚠️ **Cas silencieux corrigé** : un fichier récupéré arrive en
+`application/octet-stream` avec le nom **distant** (souvent **sans extension**).
+La classification reconnaît désormais l'image à sa **signature d'octets**
+(PNG/JPEG/GIF/WebP, `src/files/analyze.ts`) et le stockage corrige le type MIME
+(`files.mime.sniffed`) : sans cela, une capture PNG sans extension était classée
+`unknown` et n'était **jamais** montrée au modèle.
+
+#### `lire_fichier` : le contenu, selon le GENRE (worker lourd)
+
+Il manquait le maillon « celui qui peut agir ne peut pas LIRE » : le worker
+connaissait l'identifiant d'une image et n'en lisait aucun octet (un fichier du
+store n'est **pas** sur un chemin que `read` atteint). `lire_fichier` le ferme.
+
+| Genre | Ce que le worker reçoit | Bornes |
+| --- | --- | --- |
+| **image** | un bloc `{ type: "image", data (base64), mimeType }` — il la **voit**. `details.image_attached = true` | politique de vision **partagée** (§ 13.6) : côté max **2 000 px**, côté min lisible **700 px**, réduction **éphémère**, original **jamais** modifié |
+| **image**, modèle déclaré **texte seul** | **aucune** image ; le texte dit « ce modèle ne reçoit pas les images » et **où** activer la vision. `image_error = "model_without_vision"` | — |
+| **image refusée** (trop petite, trop lourde, format non transmissible) | **aucune** image ; le code (`file_image_illegible`, `file_image_too_large`, `file_image_unsupported`) et la raison sont dans le texte | — |
+| **texte** | le contenu **décodé** (UTF-8, UTF-16 **LE et BE**, avec ou sans BOM), encadré comme **DONNÉE** (`<fichiers>`, échappement anti-injection), avec l'encodage et la plage rendue | **20 000 caractères** par appel (`MAX_READ_TEXT_CHARS`) et les **2 Mio** premiers octets du fichier |
+| **texte plus long que le plafond** | **refus explicite** qui donne la plage exacte à demander : `lire_fichier(identifiant, debut: 20000)`. Un `debut` explicite est **servi** et borné, le reste est **annoncé** | jamais de troncature muette |
+| **PDF** | refus (`file_pdf_unreadable`) : le libraire n'expose **aucune** extraction de texte | — |
+| **binaire / genre inconnu** | refus (`file_content_binary`, `file_not_readable`) : **aucun** octet binaire dans un prompt | — |
+
+⚠️ **Périmètre** : la conversation est **FORCÉE** (`lightSessionId`, comme
+`lister_fichiers`) — la session du worker est éphémère et ne désigne aucun
+fichier. Un identifiant d'une **autre** conversation est **refusé** avant toute
+lecture (`other_session`).
+⚠️ **Audit** : l'ouverture est journalisée (`files.read.opened` : identifiant,
+genre, octets, mode, plage) — **jamais** le contenu, comme les transferts.
+⚠️ **Le léger ne porte PAS `lire_fichier`** : il reçoit déjà le texte dans le bloc
+`<fichiers>` (borné par `files.promptChars`) et les images en pièce jointe de son
+message. Lui ouvrir la lecture du store n'ajouterait aucune capacité, seulement
+une surface d'accès aux octets.
+
+#### Le parcours complet, sans humain (worker lourd)
+
+1. **lister** — `lister_fichiers()` (ou le bloc automatique du premier message)
+   rend les identifiants des pièces jointes de la conversation ;
+2. **lire** — `lire_fichier(identifiant)` : une image est **vue**, un texte est
+   rendu décodé et borné, un binaire est **refusé** (la raison est écrite) ;
+3. **décider** — le worker juge sur pièce (et non sur le nom du fichier) ;
+4. **déposer / récupérer** — `deposer_fichier(agent, fichier: <identifiant>,
+   chemin_distant)` ou `recuperer_fichier(agent, chemin)`.
+
+⚠️ **Ce qui manque encore, dit franchement** : une image **GÉNÉRÉE**
+(`generer_image`) vit dans le store des **images générées** (`/images/<id>.<ext>`,
+`src/comfy/images.ts`) et **pas** dans le store des fichiers (`/fichiers/…`) —
+elle n'est donc **ni listée** par `lister_fichiers`, **ni lisible** par
+`lire_fichier`, **ni déposable** par `deposer_fichier` (qui ne résout que les
+identifiants du store de fichiers). Le chemin `generer_image` → `deposer_fichier`
+**ne fonctionne pas** aujourd'hui ; il demanderait de déposer une copie dans le
+store de fichiers, rattachée à la conversation (décision produit, non prise ici).
 
 ⚠️ **`fichier` est un IDENTIFIANT, jamais un nom.** Le stockage refuse toute
 référence qui n'est pas 32 hexadécimaux (`src/files/store.ts`, `ID_RE`).

@@ -84,8 +84,9 @@ export function createListFilesTool(
     description:
       "Liste les PIÈCES JOINTES de la conversation (métadonnées SEULES : identifiant, " +
       "nom, genre, taille, date, lisibilité). Aucun contenu n'est lu ni transmis. " +
-      "⚠️ L'IDENTIFIANT (32 caractères hexadécimaux) est ce qu'exige `deposer_fichier` " +
-      "pour transférer un fichier vers une machine : c'est ici qu'on le trouve. " +
+      "⚠️ L'IDENTIFIANT (32 caractères hexadécimaux) est ce qu'exigent `lire_fichier` " +
+      "(LIRE le contenu : image vue, texte décodé) et `deposer_fichier` (transfert " +
+      "vers une machine) : c'est ici qu'on le trouve. " +
       "La liste est BORNÉE et dit explicitement combien de fichiers ne sont pas " +
       "montrés — n'invente jamais un fichier absent de cette liste.",
     promptSnippet:
@@ -129,6 +130,8 @@ export function createListFilesTool(
       const lines = [
         `Pièces jointes de cette conversation (identifiant, nom, genre, taille) — ` +
           `${shownFiles.length} montrée(s) sur ${listed.length} :`,
+        "(Aucun contenu ici : utilise `lire_fichier` avec un identifiant pour lire " +
+          "le contenu d'un de ces fichiers.)",
         ...shownFiles.map(formatAttachmentLine),
       ];
       if (omitted > 0) {

@@ -125,6 +125,14 @@ const OPTIONS = {
     ["degrade", "degrade"],
     ["refuse", "refuse"],
   ],
+  // ⚠️ CAPACITÉ VISION : une DÉCLARATION, pas une mesure. Aucune API ne publie
+  // « ce modèle voit les images » : c'est à l'utilisateur de le dire, et ce
+  // réglage produit `input` dans `models.json`. « non » ⇒ les images ne sont pas
+  // envoyées au modèle (et le résultat d'un outil le DIT, jamais de silence).
+  vision: [
+    ["oui", "oui — le modèle voit les images"],
+    ["non", "non — pas d'image envoyée au modèle"],
+  ],
   // Lot 7 — TTS / voix.
   ttsEnabled: [
     ["off", "désactivé"],
@@ -160,6 +168,17 @@ const GROUPS = [
       { path: "llm.light.baseUrl", label: "URL de base", kind: "text" },
       { path: "llm.light.apiKey", label: "Clé d'API", kind: "secret" },
       { path: "llm.light.model", label: "Modèle", kind: "text" },
+      {
+        path: "llm.light.vision",
+        label: "Reçoit les images (vision)",
+        kind: "select",
+        options: OPTIONS.vision,
+        helper:
+          "Déclaration, pas une mesure : aucun fournisseur ne publie si un modèle " +
+          "voit les images. « non » ⇒ Yuki n'envoie AUCUNE image à ce modèle " +
+          "(pièces jointes comme captures) ; « oui » ⇒ les images partent en pièce " +
+          "jointe. Appliqué à chaud.",
+      },
       { path: "llm.light.api", label: "Dialecte d'API", kind: "select", options: OPTIONS.api },
       { path: "llm.light.thinking", label: "Réflexion (thinking)", kind: "select", options: OPTIONS.thinking },
     ],
@@ -172,6 +191,17 @@ const GROUPS = [
       { path: "llm.heavy.baseUrl", label: "URL de base", kind: "text" },
       { path: "llm.heavy.apiKey", label: "Clé d'API", kind: "secret" },
       { path: "llm.heavy.model", label: "Modèle", kind: "text" },
+      {
+        path: "llm.heavy.vision",
+        label: "Reçoit les images (vision)",
+        kind: "select",
+        options: OPTIONS.vision,
+        helper:
+          "Déclaration, pas une mesure : aucun fournisseur ne publie si un modèle " +
+          "voit les images. « oui » ⇒ une image récupérée d'une machine " +
+          "(`recuperer_fichier`) est jointe au worker ; « non » ⇒ elle n'est PAS " +
+          "envoyée et le résultat de l'outil le dit. Appliqué à chaud (job suivant).",
+      },
       { path: "llm.heavy.api", label: "Dialecte d'API", kind: "select", options: OPTIONS.api },
       { path: "llm.heavy.thinking", label: "Réflexion (thinking)", kind: "select", options: OPTIONS.thinking },
     ],
@@ -712,10 +742,12 @@ LABELS.set("tts.voice", "Voix active");
 const FIELD_DEFAULTS = {
   "llm.light.baseUrl": "https://ollama.com/v1",
   "llm.light.model": "gemma4:31b",
+  "llm.light.vision": "oui",
   "llm.light.api": "openai-completions",
   "llm.light.thinking": "off",
   "llm.heavy.baseUrl": "https://ollama.com/v1",
   "llm.heavy.model": "deepseek-v4.1-flash",
+  "llm.heavy.vision": "oui",
   "llm.heavy.api": "openai-completions",
   "llm.heavy.thinking": "high",
   "llm.missingKeyMode": "degrade",

@@ -36,7 +36,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
-import { analyzeStoredFile, normalizeMimeType } from "./analyze.js";
+import {
+  analyzeStoredFile,
+  GENERIC_MIME_TYPES,
+  imageMimeFromBytes,
+  normalizeMimeType,
+  readStoredHead,
+} from "./analyze.js";
 import { extensionOf, sanitizeFileName } from "./name.js";
 import { expiresAtIso, isExpired } from "./retention.js";
 import {
@@ -329,7 +335,20 @@ export class FilesStore implements FilesPort {
       return null;
     }
     const ext = extensionOf(name);
-    const mimeType = normalizeMimeType(input.mimeType, ext);
+    let mimeType = normalizeMimeType(input.mimeType, ext);
+    // ⚠️ SIGNATURE : un fichier RÉCUPÉRÉ d'une machine arrive en
+    // `application/octet-stream` (le transfert déclare ce type, le nom distant
+    // est souvent sans extension). Sans cette correction, une PNG serait servie
+    // en `application/octet-stream` (donc en TÉLÉCHARGEMENT), classée `unknown`
+    // et JAMAIS transmise au modèle. On ne corrige QUE le type générique : un
+    // type déclaré (ou déduit d'une extension connue) n'est jamais écrasé.
+    if (GENERIC_MIME_TYPES.has(mimeType)) {
+      const sniffed = imageMimeFromBytes(readStoredHead(this.binPath(id), 64));
+      if (sniffed !== undefined) {
+        mimeType = sniffed;
+        this.logger?.info("files.mime.sniffed", { id, mimeType, declared: "application/octet-stream" });
+      }
+    }
     const at = this.now();
     let outcome;
     try {

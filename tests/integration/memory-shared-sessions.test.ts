@@ -296,12 +296,14 @@ describe("intégration — mémoire durable PARTAGÉE entre conversations", () =
         baseUrl: provider.url,
         model: "test-model",
         thinking: "off",
+        vision: true,
       },
       heavy: {
         api: providerSpec.api,
         baseUrl: provider.url,
         model: "test-model",
         thinking: "off",
+        vision: true,
       },
     };
 
@@ -407,8 +409,20 @@ describe("intégration — mémoire durable PARTAGÉE entre conversations", () =
       maxConcurrentRequests: 4,
     };
     const effective: EffectiveLlmConfig = {
-      light: { api: providerSpec.api, baseUrl: provider.url, model: "test-model", thinking: "off" },
-      heavy: { api: providerSpec.api, baseUrl: provider.url, model: "test-model", thinking: "off" },
+      light: {
+        api: providerSpec.api,
+        baseUrl: provider.url,
+        model: "test-model",
+        thinking: "off",
+        vision: true,
+      },
+      heavy: {
+        api: providerSpec.api,
+        baseUrl: provider.url,
+        model: "test-model",
+        thinking: "off",
+        vision: true,
+      },
     };
 
     const events: PiEvent[] = [];

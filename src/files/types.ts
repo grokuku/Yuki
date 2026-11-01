@@ -239,6 +239,33 @@ export interface FilesListPort {
   listForSession(sessionId: string): WireFile[];
 }
 
+/**
+ * LECTURE du CONTENU d'une pièce jointe (worker lourd).
+ *
+ * ⚠️ POURQUOI CE PORT EXISTE : `lister_fichiers` ne rend que des MÉTADONNÉES
+ * (identifiant, nom, genre, taille). Le worker savait donc qu'une image existait,
+ * sans jamais pouvoir en lire un OCTET — il ne pouvait ni la voir, ni lire un
+ * fichier texte du store (ce fichier n'est PAS sur un chemin que `read` atteint).
+ * `lire_fichier` comble ce trou, et ce port lui donne les octets, l'analyse
+ * conservée et la politique de VISION partagée (`prepareImages`), sans exposer
+ * le disque.
+ *
+ * ⚠️ `FilesService` (`src/files/service.ts`) satisfait cette interface tel quel :
+ * le câblage n'ajoute aucune pièce, il ouvre la lecture.
+ */
+export interface FilesReadPort extends FilesListPort {
+  /** Fiche d'un fichier (métadonnées + analyse), `null` si absent ou expiré. */
+  get(id: string): StoredFileRecord | null;
+  /** Octets bruts, `null` si absent ou expiré. Jamais journalisés. */
+  readBytes(id: string): Buffer | null;
+  /**
+   * Politique de VISION partagée (bornes, réduction éphémère, refus explicite).
+   * ⚠️ C'est la MÊME que celle des pièces jointes d'un message : un seul chemin,
+   * donc une seule vérité sur ce que le modèle reçoit.
+   */
+  prepareImages(files: readonly WireFile[]): Promise<FileImagesOutcome>;
+}
+
 /** Consommation de l'outil `envoyer_fichier` (léger) : envoi par Yuki. */
 export interface FilesSendPort extends FilesListPort {
   /**

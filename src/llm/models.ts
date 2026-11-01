@@ -7,6 +7,14 @@
  *   ACTIVÉ. Sur un endpoint OpenAI, `think:false` est ignoré : c'est
  *   `reasoning_effort: "none"` qui coupe le thinking, d'où le `thinkingLevelMap`.
  *
+ * ⚠️ CAPACITÉ VISION (`input`) : elle n'est PAS déductible d'un modèle (aucune
+ * API ne la publie). C'est donc une DÉCLARATION, décidée par l'utilisateur dans
+ * `/config` (`llm.<role>.vision`), et elle est la SEULE chose qui décide si une
+ * image part vers le fournisseur : `input` sans `"image"` ⇒ le SDK remplace la
+ * pièce jointe par « (tool image omitted: model does not support images) » et le
+ * modèle ne voit RIEN (bruit silencieux). Les valeurs ci-dessous sont les
+ * déclarations par défaut ; `resolveModelsFrom` les remplace par le réglage.
+
  * `buildModelsConfigFrom(configEffective)` est la source unique du contenu de
  * `config/pi/models.json` (testée contre le fichier livré) : le fichier embarqué
  * ne peut pas dériver du code. Le fichier est désormais GÉNÉRÉ au démarrage
@@ -77,10 +85,10 @@ export const LIGHT_MODEL: ModelSpec = {
   id: "gemma4:31b",
   name: "Gemma 4 31B (léger)",
   reasoning: false,
-  // ⚠️ Le léger reçoit les CAPTURES de pages web (`capture_libraire`) : sans
-  // « image » ici, le fournisseur compatible OpenAI (SDK) n'attache PAS la
-  // partie image et le modèle ne voit rien. Le lourd reste texte seul (il n'a
-  // pas l'outil de capture).
+  // ⚠️ Le léger reçoit les CAPTURES de pages web (`capture_libraire`) ET les
+  // images jointes à la conversation : sans « image » ici, le fournisseur
+  // compatible OpenAI (SDK) n'attache PAS la partie image et le modèle ne voit
+  // rien. Réglable dans `/config` (`llm.light.vision`).
   input: ["text", "image"],
   contextWindow: 131_072,
   maxTokens: 32_768,
@@ -95,7 +103,11 @@ export const HEAVY_MODEL: ModelSpec = {
   name: "DeepSeek V4.1 Flash (lourd)",
   reasoning: true,
   thinkingLevelMap: HEAVY_THINKING_LEVEL_MAP,
-  input: ["text"],
+  // ⚠️ DÉCLARATION UTILISATEUR (2026-11-01) : le modèle lourd EST multimodal.
+  // Sans « image » ici, une image récupérée d'un agent (`recuperer_fichier`)
+  // serait jetée en silence par le SDK. Réglable dans `/config`
+  // (`llm.heavy.vision`) : c'est CE réglage qui fait foi à l'exécution.
+  input: ["text", "image"],
   contextWindow: 131_072,
   maxTokens: 32_768,
   defaultThinking: "high",
@@ -117,6 +129,12 @@ export interface EffectiveLlmRole {
   baseUrl: string;
   model: string;
   thinking: ThinkingLevelName;
+  /**
+   * Le modèle de ce rôle reçoit-il les IMAGES ? (réglage `/config`
+   * `llm.<role>.vision`). ⚠️ C'est lui qui produit `input` dans `models.json` :
+   * `false` ⇒ `["text"]`, donc aucune image n'atteint le modèle.
+   */
+  vision: boolean;
 }
 
 export type EffectiveLlmConfig = Readonly<Record<LlmRole, EffectiveLlmRole>>;
@@ -128,12 +146,14 @@ export const DEFAULT_EFFECTIVE_LLM_CONFIG: EffectiveLlmConfig = {
     baseUrl: LIGHT_PROVIDER.baseUrl,
     model: LIGHT_MODEL.id,
     thinking: LIGHT_MODEL.defaultThinking,
+    vision: LIGHT_MODEL.input.includes("image"),
   },
   heavy: {
     api: HEAVY_PROVIDER.api,
     baseUrl: HEAVY_PROVIDER.baseUrl,
     model: HEAVY_MODEL.id,
     thinking: HEAVY_MODEL.defaultThinking,
+    vision: HEAVY_MODEL.input.includes("image"),
   },
 };
 
@@ -161,6 +181,10 @@ export function resolveModelsFrom(
     providerId,
     id: config[role].model,
     defaultThinking: config[role].thinking,
+    // ⚠️ La DÉCLARATION suit le réglage : c'est le seul chemin par lequel un
+    // utilisateur peut dire « mon modèle voit les images » sans éditer un
+    // fichier (le réglage est dans `/config`, `llm.<role>.vision`).
+    input: config[role].vision ? ["text", "image"] : ["text"],
     reference: `${providerId}/${config[role].model}`,
   });
   return {

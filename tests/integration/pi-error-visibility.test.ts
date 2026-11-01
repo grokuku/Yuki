@@ -183,12 +183,14 @@ describe("intégration — la cause d'un échec de run est VISIBLE", () => {
         baseUrl: provider.url,
         model: "test-model",
         thinking: "off",
+        vision: true,
       },
       heavy: {
         api: providerSpec.api,
         baseUrl: provider.url,
         model: "test-model",
         thinking: "off",
+        vision: true,
       },
     };
     process.env["YUKI_LLM_LIGHT_API_KEY"] = "test-key";

@@ -194,12 +194,15 @@ function effectiveLlmConfig(config: ConfigRuntime): EffectiveLlmConfig {
       baseUrl: config.getString("llm.light.baseUrl"),
       model: config.getString("llm.light.model"),
       thinking: config.getString("llm.light.thinking") as ThinkingLevelName,
+      // ⚠️ Déclaration VISION : produit `input` dans `models.json`.
+      vision: config.getString("llm.light.vision") === "oui",
     },
     heavy: {
       api: config.getString("llm.heavy.api"),
       baseUrl: config.getString("llm.heavy.baseUrl"),
       model: config.getString("llm.heavy.model"),
       thinking: config.getString("llm.heavy.thinking") as ThinkingLevelName,
+      vision: config.getString("llm.heavy.vision") === "oui",
     },
   };
 }
@@ -1011,6 +1014,12 @@ async function main(): Promise<void> {
         audit: auditLogRef!,
         logger,
         files: filesStore,
+        // ⚠️ VISION : l'image d'un fichier récupéré est préparée par le MÊME
+        // service que les pièces jointes d'un message (bornes de vision, refus
+        // explicite, réduction éphémère). C'est ce qui permet à
+        // `recuperer_fichier` de MONTRER l'image au modèle au lieu de la
+        // seulement déposer sur disque.
+        prepareImages: (files) => filesService.prepareImages(files),
         registryPath: env.agentTransfersPath,
         limits: {
           maxBytes: () => config.getNumber("files.agentMaxBytes"),
@@ -1210,6 +1219,10 @@ async function main(): Promise<void> {
         // ⚠️ LISTAGE des pièces jointes (lecture seule, identifiants compris) :
         // le worker doit pouvoir retrouver l'identifiant qu'exige `deposer_fichier`.
         fileListEnabled: filesService !== undefined,
+        // ⚠️ LECTURE du CONTENU (image vue, texte décodé et borné, binaire
+        // refusé) : sans elle, le worker savait qu'une image existait sans
+        // pouvoir la voir — la boucle « lister → lire → déposer » restait ouverte.
+        fileReadEnabled: filesService !== undefined,
         secretsEnabled: secretStore !== undefined,
       }),
       ...(agentExecution ? { execution: agentExecution } : {}),
@@ -1619,20 +1632,24 @@ async function main(): Promise<void> {
       lightBaseUrl: effective.light.baseUrl,
       lightModel: effective.light.model,
       lightThinking: effective.light.thinking,
+      lightVision: effective.light.vision,
       heavyApi: effective.heavy.api,
       heavyBaseUrl: effective.heavy.baseUrl,
       heavyModel: effective.heavy.model,
       heavyThinking: effective.heavy.thinking,
+      heavyVision: effective.heavy.vision,
     };
     const sameLlm = (a: typeof llmHot, b: EffectiveLlmConfig): boolean =>
       a.lightApi === b.light.api &&
       a.lightBaseUrl === b.light.baseUrl &&
       a.lightModel === b.light.model &&
       a.lightThinking === b.light.thinking &&
+      a.lightVision === b.light.vision &&
       a.heavyApi === b.heavy.api &&
       a.heavyBaseUrl === b.heavy.baseUrl &&
       a.heavyModel === b.heavy.model &&
-      a.heavyThinking === b.heavy.thinking;
+      a.heavyThinking === b.heavy.thinking &&
+      a.heavyVision === b.heavy.vision;
     stopLlmHotReload = config.subscribe(() => {
       // Rafraîchit d'abord la liste des secrets masqués (clé saisie à chaud) —
       // clés d'env, clés de /config ET secrets du coffre (source unique).
@@ -1644,16 +1661,20 @@ async function main(): Promise<void> {
         lightBaseUrl: next.light.baseUrl,
         lightModel: next.light.model,
         lightThinking: next.light.thinking,
+        lightVision: next.light.vision,
         heavyApi: next.heavy.api,
         heavyBaseUrl: next.heavy.baseUrl,
         heavyModel: next.heavy.model,
         heavyThinking: next.heavy.thinking,
+        heavyVision: next.heavy.vision,
       };
       logger.info("llm.model.reload.requested", {
         light: next.light.model,
         lightBaseUrl: next.light.baseUrl,
+        lightVision: next.light.vision,
         heavy: next.heavy.model,
         heavyBaseUrl: next.heavy.baseUrl,
+        heavyVision: next.heavy.vision,
       });
       const apply = host?.applyLlmConfig;
       if (host && apply) {
@@ -1709,6 +1730,13 @@ async function main(): Promise<void> {
       // FICHIERS : rattachement des fichiers joints à un message (`attach`) et
       // envoi par Yuki (trame de contrôle `file_sent`, jamais bufferisée).
       files: filesService,
+      // ⚠️ VISION de la conversation : la capacité DÉCLARÉE (`/config`
+      // `llm.light.vision`) est relue à CHAQUE message (apply: hot). Déclarée
+      // sans vision ⇒ une image jointe est REFUSÉE avec un motif explicite au
+      // lieu d'être silencieusement remplacée par « (tool image omitted…) ».
+      vision: {
+        conversationReceivesImages: () => effectiveLlmConfig(config).light.vision,
+      },
       // TRANSFERT depuis une machine : trame de contrôle `file_received` (carte
       // cliquable « Inclure dans la discussion ») — signalement indispensable,
       // sinon l'utilisateur ignore que le fichier est sur le disque de Yuki.

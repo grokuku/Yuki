@@ -1,10 +1,11 @@
 /**
  * PIÈCES JOINTES d'une conversation — liste de MÉTADONNÉES pour un prompt.
  *
- * ⚠️ Ce module ne transmet JAMAIS le contenu d'un fichier : uniquement
+ * ⚠️ Ce module ne transmet JAMAIS le contenu d'un fichier dans ce bloc : uniquement
  * l'IDENTIFIANT, le nom, le genre, la taille, la date et la lisibilité. C'est ce
  * qu'il faut au modèle pour AGIR (ex. `deposer_fichier`, qui exige l'identifiant)
- * sans lui envoyer un octet de données.
+ * sans lui envoyer un octet de données. Le CONTENU se demande explicitement,
+ * fichier par fichier, avec `lire_fichier` (`src/pi/sdk/read-file-tool.ts`).
  *
  * ⚠️ Borné et JAMAIS silencieux : au-delà de `MAX_LISTED_ATTACHMENTS`, la liste
  * s'arrête et le bloc DIT combien de fichiers ne sont pas montrés, en renvoyant
@@ -34,9 +35,13 @@ export const ATTACHMENTS_HEADER =
 
 /** Rappel honnête de ce qu'un worker peut faire d'un identifiant de fichier. */
 export const ATTACHMENTS_USAGE_NOTE =
-  "Usage : l'IDENTIFIANT sert par exemple à `deposer_fichier` (transfert vers une " +
-  "machine appairée). Ce worker ne peut pas LIRE le contenu d'une pièce jointe : " +
-  "si la tâche l'exige, dis-le dans ton rapport au lieu de l'inventer.";
+  "Usage : l'IDENTIFIANT sert à `lire_fichier` (LIRE le contenu : une image est " +
+  "alors transmise au modèle et tu la vois ; un texte est rendu décodé et borné ; " +
+  "un binaire est refusé) et à `deposer_fichier` (transfert vers une machine " +
+  "appairée). ⚠️ Une pièce jointe de genre « image » n'est PAS dans ce prompt : " +
+  "elle n'y est pas jointe, et son contenu n'y figure pas — pour la VOIR, appelle " +
+  "`lire_fichier` avec son identifiant (si le modèle reçoit les images ; le " +
+  "résultat dit la vérité dans tous les cas).";
 
 const KIND_LABELS: Readonly<Record<FileKind, string>> = {
   text: "texte",

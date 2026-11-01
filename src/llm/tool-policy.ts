@@ -136,6 +136,16 @@ export type FileTransferToolName = "recuperer_fichier" | "deposer_fichier";
  */
 export type FileListToolName = "lister_fichiers";
 
+/**
+ * Outil de LECTURE du CONTENU d'une pièce jointe (`lire_fichier`) : image ⇒
+ * transmise au modèle (politique de vision partagée), texte ⇒ contenu décodé et
+ * borné, binaire ⇒ refus. ⚠️ Porté par le LOURD seul : le léger reçoit déjà le
+ * texte dans le bloc `<fichiers>` et les images en pièce jointe de son message —
+ * lui ouvrir la lecture du store n'ajouterait qu'une surface, aucune capacité.
+ * Le léger n'a d'ailleurs aucun outil de transfert (`fileTransfer: []`).
+ */
+export type FileReadToolName = "lire_fichier";
+
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
 export type CustomToolName =
   | DelegateToolName
@@ -149,6 +159,7 @@ export type CustomToolName =
   | FilesToolName
   | FileTransferToolName
   | FileListToolName
+  | FileReadToolName
   | ImageToolName;
 
 export interface ToolPolicyEntry {
@@ -181,6 +192,8 @@ export interface ToolPolicyEntry {
   readonly fileTransfer: readonly FileTransferToolName[];
   /** Outil de LISTAGE des pièces jointes (`lister_fichiers`, lecture seule). */
   readonly fileList: readonly FileListToolName[];
+  /** Outil de LECTURE du contenu d'une pièce jointe (`lire_fichier`). */
+  readonly fileRead: readonly FileReadToolName[];
   /** Outil de GÉNÉRATION d'image (`generer_image`, serveur ComfyUI). */
   readonly images: readonly ImageToolName[];
   /** Le rôle peut-il déléguer à un worker lourd ? */
@@ -313,6 +326,13 @@ export const FILE_TRANSFER_TOOLS: readonly FileTransferToolName[] = [
  */
 export const FILE_LIST_TOOLS: readonly FileListToolName[] = ["lister_fichiers"];
 
+/**
+ * Outil de LECTURE du contenu d'une pièce jointe. ⚠️ Le worker lourd en a besoin
+ * pour FERMER la boucle `lister_fichiers` → `lire_fichier` → `deposer_fichier` :
+ * sans lui, il connaît l'identifiant d'une image et ne peut pas la voir.
+ */
+export const FILE_READ_TOOLS: readonly FileReadToolName[] = ["lire_fichier"];
+
 export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
   light: {
     role: "light",
@@ -340,6 +360,11 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // rend déjà la liste, désormais AVEC les identifiants. Un seul outil de
     // listage à maintenir pour lui.
     fileList: [],
+    // ⚠️ Pas de `lire_fichier` au léger : il reçoit DÉJÀ le contenu — texte dans
+    // le bloc `<fichiers>` (borné par `files.promptChars`), images en pièce
+    // jointe du message (`prepareImages`). Lui ouvrir la lecture du store
+    // n'ajouterait aucune capacité, seulement une surface d'accès aux octets.
+    fileRead: [],
     // IMAGES : la génération est une action de CONVERSATION (Yuki décrit la
     // scène, voit l'image, la juge) — elle reste donc au léger, jamais au worker.
     images: IMAGE_TOOLS,
@@ -372,6 +397,9 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     fileTransfer: FILE_TRANSFER_TOOLS,
     // ⚠️ Le worker lourd LISTE (avec identifiants) pour pouvoir DÉPOSER.
     fileList: FILE_LIST_TOOLS,
+    // ⚠️ … et LIT le contenu : sans `lire_fichier`, il savait qu'une image
+    // existait sans pouvoir la voir (l'utilisateur restait dans la boucle).
+    fileRead: FILE_READ_TOOLS,
     images: [],
     canDelegate: false,
   },
@@ -455,6 +483,12 @@ export interface ToolAllowlistOptions {
    */
   fileListEnabled?: boolean;
   /**
+   * Active l'outil de LECTURE du contenu `lire_fichier`. DÉSACTIVÉ par défaut :
+   * seul le câblage l'active, quand le service des fichiers expose la lecture
+   * des octets et la politique de vision.
+   */
+  fileReadEnabled?: boolean;
+  /**
    * Active l'outil de génération d'image `generer_image` (serveur ComfyUI).
    * DÉSACTIVÉ par défaut : seul le câblage l'active, quand le générateur existe.
    */
@@ -493,6 +527,8 @@ export function toolAllowlist(
     (options.fileTransferEnabled ?? false) && entry.fileTransfer.length > 0;
   const fileListEnabled =
     (options.fileListEnabled ?? false) && entry.fileList.length > 0;
+  const fileReadEnabled =
+    (options.fileReadEnabled ?? false) && entry.fileRead.length > 0;
   const imagesEnabled = (options.imagesEnabled ?? false) && entry.images.length > 0;
   const tools: string[] = [...entry.builtins];
   if (entry.canDelegate && delegationEnabled) {
@@ -533,6 +569,9 @@ export function toolAllowlist(
   }
   if (fileListEnabled) {
     tools.push(...entry.fileList);
+  }
+  if (fileReadEnabled) {
+    tools.push(...entry.fileRead);
   }
   if (imagesEnabled) {
     tools.push(...entry.images);

@@ -119,6 +119,14 @@ export interface ImageToolPort {
    * émis : l'image reste seule, exactement comme avant.
    */
   onImageFinalPrompt?: (view: ComfyImageFinalPromptView) => void;
+  /**
+   * Le MODÈLE de conversation reçoit-il les IMAGES ? (`model.input` de
+   * `models.json`, produit par `/config` `llm.light.vision`). Absent ⇒ oui.
+   * ⚠️ `false` ⇒ l'image générée n'est PAS jointe : le SDK la remplacerait par
+   * « (tool image omitted…) » et le modèle croirait l'avoir jugée. Elle reste
+   * affichée à l'humain, et le résultat dit pourquoi elle n'est pas jointe.
+   */
+  receivesImages?: () => boolean;
 }
 
 /** Identifiant de la session (conversation) courante, ou `undefined`. */
@@ -546,7 +554,11 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
           }
         }
 
-        const attached = await boundImageForModel(image.bytes, image.record.mimeType);
+        // ⚠️ Un modèle DÉCLARÉ sans vision ne reçoit pas l'image (cf. `receivesImages`).
+        const receivesImages = port.receivesImages?.() ?? true;
+        const attached = receivesImages
+          ? await boundImageForModel(image.bytes, image.record.mimeType)
+          : null;
         const seconds = Math.max(1, Math.round(image.elapsedMs / 1000));
         // ⚠️ Aucune étiquette `YUKI_OUTPUT` dans le workflow ⇒ on le DIT (au
         // modèle ET à l'humain, qui lit ce résultat) : l'image retenue peut être
@@ -561,13 +573,21 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
         const text =
           `Image générée en ${seconds} s (${dimensionsOf(image)}, ` +
           `${humanBytes(image.record.bytes)}). Elle est affichée dans la ` +
-          "conversation et tu la vois ci-dessous : juge-la et régénère si besoin." +
+          "conversation" +
+          (receivesImages
+            ? " et tu la vois ci-dessous : juge-la et régénère si besoin."
+            : ".") +
           outputNote +
           finalPrompt.text +
           (attached === null
-            ? " ⚠️ Elle est trop volumineuse pour t'être jointe ici : tu ne l'as " +
-              "PAS vue — ne prétends pas l'avoir jugée. Réduis la définition dans " +
-              "les réglages (paramètres → Système → Images générées) puis relance."
+            ? receivesImages
+              ? " ⚠️ Elle est trop volumineuse pour t'être jointe ici : tu ne l'as " +
+                "PAS vue — ne prétends pas l'avoir jugée. Réduis la définition dans " +
+                "les réglages (paramètres → Système → Images générées) puis relance."
+              : " ⚠️ Le modèle de conversation est déclaré SANS vision (réglage " +
+                "« Reçoit les images » dans /config, onglet Modèles) : elle n'est " +
+                "PAS jointe ici, tu ne la vois pas — ne prétends pas l'avoir jugée. " +
+                "Elle reste affichée pour l'utilisateur."
             : "");
         const details = {
           status: "ok",

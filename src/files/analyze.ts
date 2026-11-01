@@ -260,6 +260,58 @@ function readHead(path: string, limit: number): Buffer {
   }
 }
 
+/**
+ * Lit les premiers octets d'un fichier STOCKÉ (borné) — exporté pour que le
+ * stockage puisse corriger un type MIME GÉNÉRIQUE d'après la SIGNATURE réelle.
+ */
+export function readStoredHead(path: string, limit = 64): Buffer {
+  return readHead(path, Math.max(1, Math.trunc(limit)));
+}
+
+/**
+ * Type d'image reconnu dans les PREMIERS OCTETS (signature de format).
+ *
+ * ⚠️ POURQUOI : un fichier RÉCUPÉRÉ d'une machine arrive avec le nom distant, qui
+ * n'a souvent PAS d'extension (`/var/lib/x/dump`), et le transfert déclare
+ * `application/octet-stream` (`src/agents/transfer.ts`). Classée par extension
+ * seule, une image serait alors `unknown` — donc jamais montrée au modèle et
+ * jamais affichée. La signature des octets tranche sans deviner.
+ *
+ * Seuls les formats de VISION sont reconnus (PNG, JPEG, GIF, WebP) : un BMP
+ * reste classé par son extension, il n'est de toute façon pas transmissible.
+ */
+export function imageMimeFromBytes(head: Buffer): string | undefined {
+  if (
+    head.length >= 8 &&
+    head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47 &&
+    head[4] === 0x0d && head[5] === 0x0a && head[6] === 0x1a && head[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (head.length >= 6) {
+    const signature = head.subarray(0, 6).toString("latin1");
+    if (signature === "GIF87a" || signature === "GIF89a") return "image/gif";
+  }
+  if (
+    head.length >= 12 &&
+    head.subarray(0, 4).toString("latin1") === "RIFF" &&
+    head.subarray(8, 12).toString("latin1") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return undefined;
+}
+
+/** Types MIME GÉNÉRIQUES : ni un format annoncé, ni une image déductible. */
+export const GENERIC_MIME_TYPES: ReadonlySet<string> = new Set([
+  "application/octet-stream",
+  "binary/octet-stream",
+  "",
+]);
+
 /** `true` si les octets ressemblent à du BINAIRE (NUL, ou trop de contrôles). */
 export function looksBinary(sample: Uint8Array): boolean {
   if (sample.length === 0) return false;
@@ -381,6 +433,14 @@ export function classifyFile(input: {
   if (ext === "pdf" || mimeType === "application/pdf") return "pdf";
   if (IMAGE_MIME_BY_EXT.has(ext) || INLINE_IMAGE_MIME_TYPES.has(mimeType)) {
     return "image";
+  }
+  // ⚠️ SIGNATURE (fichier venu d'une machine, récupéré par `recuperer_fichier`) :
+  // nom sans extension ⇒ type générique ⇒ sans ce test le fichier serait
+  // `unknown` et l'image ne serait JAMAIS montrée au modèle. On ne sniffE que
+  // si le type est GÉNÉRIQUE et que l'extension ne dit pas « texte » : un `.txt`
+  // (ou un `.md`) reste du texte, la classification existante ne bouge pas.
+  if (GENERIC_MIME_TYPES.has(mimeType) && !TEXT_EXTENSIONS.has(ext)) {
+    if (imageMimeFromBytes(head) !== undefined) return "image";
   }
   // SVG est du texte (jamais servi inline) : il suit la branche texte.
   if (TEXT_EXTENSIONS.has(ext)) return "text";

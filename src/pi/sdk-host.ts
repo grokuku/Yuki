@@ -84,6 +84,7 @@ import {
   refreshSharedModelRuntime,
   resolveSdkModel,
   resolveSdkThinking,
+  sdkModelSupportsImages,
   type SdkModel,
 } from "./sdk/model-runtime.js";
 import { createLightRuntime } from "./sdk/session-factory.js";
@@ -519,6 +520,17 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
   let modelRuntime: Awaited<ReturnType<typeof getSharedModelRuntime>> | undefined;
   let resolvedModel: SdkModel | undefined;
   let resolvedThinking: PiThinkingLevel | undefined;
+  /**
+   * CAPACITÉ VISION du modèle de conversation, relue à CHAQUE appel :
+   * `resolvedModel` est re-résolu à chaud (`applyLlmConfig`) et sa déclaration
+   * `input` vient de `models.json` (produit par `/config` `llm.light.vision`).
+   * ⚠️ Sans `"image"`, aucune image n'est jointe par les outils (`generer_image`,
+   * `capture_libraire`) ni par un message : le SDK remplacerait la partie image
+   * par « (tool image omitted: model does not support images) » et le modèle
+   * croirait l'avoir vue. Absent (modèle non résolu) ⇒ on n'invente rien : oui.
+   */
+  const conversationReceivesImages = (): boolean =>
+    resolvedModel !== undefined ? sdkModelSupportsImages(resolvedModel) : true;
   /** Config PARTAGÉE par tous les runtimes (résolue une fois dans `doStart`). */
   let customTools: ToolDefinition[] = [];
   let extensionFactories: InlineExtension[] = [];
@@ -1942,7 +1954,15 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // Libraire de Pi-Web : recherche documentaire + web, bibliothèque, relecture
       // et archivage EN TÂCHE DE FOND (rend la main immédiatement). ⚠️ Aucun outil
       // ne va chercher une page web : tout passe par le libraire.
-      customTools.push(...createLibrarianTools(options.librarian));
+      customTools.push(
+        ...createLibrarianTools({
+          ...options.librarian,
+          // ⚠️ CAPACITÉ VISION relue à CHAQUE appel (le modèle peut changer à
+          // chaud) : sans « image » dans `input`, la capture n'est pas jointe et
+          // le motif est écrit dans le résultat.
+          receivesImages: conversationReceivesImages,
+        }),
+      );
     }
     if (options.files) {
       // FICHIERS : `envoyer_fichier` rend CLIQUABLE et TÉLÉCHARGEABLE un fichier
@@ -1962,6 +1982,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           generate: options.images.generator.generate,
           workflows: options.images.workflows,
           logger,
+          // ⚠️ MÊME capacité : une image générée n'est jointe que si le modèle
+          // la reçoit (sinon le SDK met « (tool image omitted…) » et le modèle
+          // croirait l'avoir jugée).
+          receivesImages: conversationReceivesImages,
           ...(options.images.onImage ? { onImage: options.images.onImage } : {}),
           ...(options.images.onImageFinalPrompt
             ? { onImageFinalPrompt: options.images.onImageFinalPrompt }

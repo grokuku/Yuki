@@ -35,6 +35,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/librarian-tools.ts",
   "src/pi/sdk/send-file-tool.ts",
   "src/pi/sdk/list-files-tool.ts",
+  "src/pi/sdk/read-file-tool.ts",
   "src/pi/sdk/image-tools.ts",
   "src/pi/sdk/image-styles-extension.ts",
   "src/pi/sdk/vision-resize.ts",

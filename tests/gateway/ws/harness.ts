@@ -49,6 +49,11 @@ export interface HarnessOptions extends FakePiHostOptions {
   images?: ImagesGatewayPort;
   /** SOURCES : marquage des fils + réaffectation à la suppression (optionnel). */
   sources?: SourcesGatewayPort;
+  /**
+   * CAPACITÉ VISION du modèle de conversation (optionnel). Absent ⇒ comportement
+   * historique (les images partent).
+   */
+  vision?: { conversationReceivesImages: () => boolean };
 }
 
 export interface Harness {
@@ -80,6 +85,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.files ? { files: options.files } : {}),
     ...(options.images ? { images: options.images } : {}),
     ...(options.sources ? { sources: options.sources } : {}),
+    ...(options.vision ? { vision: options.vision } : {}),
   });
   const server = createHttpServer((_req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });

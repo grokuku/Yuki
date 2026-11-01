@@ -76,7 +76,14 @@ interface Harness {
   setShot(value: () => Promise<LibrarianShotImage>): void;
 }
 
-function harness(options: { captureEnabled?: boolean; saveReturnsNull?: boolean } = {}): Harness {
+function harness(
+  options: {
+    captureEnabled?: boolean;
+    saveReturnsNull?: boolean;
+    /** Capacité VISION du modèle de conversation (défaut : oui). */
+    receivesImages?: boolean;
+  } = {},
+): Harness {
   const saved: LibrarianShotInput[] = [];
   const views: LibrarianShotView[] = [];
   const calls: string[] = [];
@@ -142,6 +149,9 @@ function harness(options: { captureEnabled?: boolean; saveReturnsNull?: boolean 
       shots,
       onShot: (view) => views.push(view),
       captureEnabled: () => options.captureEnabled ?? true,
+      ...(options.receivesImages !== undefined
+        ? { receivesImages: () => options.receivesImages === true }
+        : {}),
     }),
     saved,
     views,
@@ -203,6 +213,19 @@ describe("libraire — outil capture_libraire", () => {
     expect(h.views[0]?.imageSrc).toBe(`/captures/${"a".repeat(32)}.png`);
     expect(h.views[0]?.sessionId).toBe("conv-1");
     expect(details).toMatchObject({ status: "ok", image_attached: true, image_displayed_to_human: true });
+  });
+
+  it("un modèle DÉCLARÉ sans vision ne reçoit pas la capture — et le motif est écrit", async () => {
+    // ⚠️ Sans « image » dans `input` (réglage `/config` `llm.light.vision`), le SDK
+    // remplacerait la capture par « (tool image omitted…) » : le modèle croirait
+    // l'avoir vue. La capture reste affichée à l'humain.
+    const h = harness({ receivesImages: false });
+    const { content, details } = await call(toolByName(h.tools, "capture_libraire"), {
+      url: "https://example.com/",
+    });
+    expect(content.some((part) => part.type === "image")).toBe(false);
+    expect(details).toMatchObject({ status: "ok", image_attached: false });
+    expect(h.views).toHaveLength(1);
   });
 
   it("REFUSE une URL non http/https AVANT tout réseau (file://)", async () => {

@@ -105,6 +105,20 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_LLM_LIGHT_THINKING",
   },
+  // ⚠️ CAPACITÉ VISION — déclaration, JAMAIS une mesure.
+  // Aucune API de fournisseur ne publie « ce modèle voit les images » : c'est
+  // donc à l'utilisateur de le DIRE, et le réglage produit `input` dans
+  // `models.json` (`resolveModelsFrom`). `non` ⇒ `input: ["text"]` : le SDK
+  // remplace alors toute pièce jointe image par « (tool image omitted: model
+  // does not support images) » — l'image est JETÉE en silence. `apply: hot` :
+  // un changement réécrit `models.json` et rafraîchit le runtime partagé, sans
+  // redémarrage (même mécanique que `llm.<role>.model`).
+  "llm.light.vision": {
+    type: "enum",
+    enum: ["oui", "non"],
+    default: "oui",
+    apply: "hot",
+  },
   "llm.light.apiKey": {
     type: "string",
     default: "",
@@ -147,6 +161,18 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     default: "high",
     apply: "hot",
     env: "YUKI_LLM_HEAVY_THINKING",
+  },
+  // ⚠️ MÊME DÉCLARATION que le léger, pour le worker lourd : c'est elle qui
+  // autorise `recuperer_fichier` à joindre l'image d'un fichier récupéré. Faux
+  // ⇒ l'outil REFUSE d'envoyer l'image et le DIT (aucun `(tool image omitted…)`
+  // silencieux). Défaut « oui » : l'utilisateur a déclaré son modèle lourd
+  // multimodal ; si le fournisseur le refuse, la réponse est une ERREUR de
+  // modèle visible, pas un silence.
+  "llm.heavy.vision": {
+    type: "enum",
+    enum: ["oui", "non"],
+    default: "oui",
+    apply: "hot",
   },
   "llm.heavy.apiKey": {
     type: "string",

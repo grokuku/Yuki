@@ -103,6 +103,20 @@ export function resolveSdkThinking(
   return resolved.thinkingLevel;
 }
 
+/**
+ * Vrai si le modèle RÉSOLU À L'EXÉCUTION accepte les images.
+ *
+ * ⚠️ C'est la SEULE vérité au runtime : `model.input` vient de `models.json` (lui-
+ * même généré depuis le réglage `/config` `llm.<role>.vision`), relu à chaque job
+ * (un changement de modèle ou de capacité s'applique donc au job suivant). Si la
+ * capacité vaut `["text"]`, le SDK REMPLACE toute partie image par
+ * « (tool image omitted: model does not support images) » : envoyer l'image
+ * malgré tout ne produirait que du bruit et un mensonge implicite.
+ */
+export function sdkModelSupportsImages(model: SdkModel): boolean {
+  return Array.isArray(model.input) && model.input.includes("image");
+}
+
 /** Vrai si une authentification est configurée pour ce provider (aucun réseau). */
 export function providerHasAuth(
   runtime: ModelRuntime,

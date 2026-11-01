@@ -74,6 +74,14 @@ export interface LibrarianToolsConfig {
   onShot?: (view: LibrarianShotView) => void;
   /** Réglage d'activation (défaut : actif). Faux ⇒ refus explicite. */
   captureEnabled?: () => boolean;
+  /**
+   * Le MODÈLE de conversation reçoit-il les IMAGES ? (`model.input` de
+   * `models.json`, produit par `/config` `llm.light.vision`). Absent ⇒ oui.
+   * ⚠️ `false` ⇒ la capture n'est PAS jointe : le SDK la remplacerait par
+   * « (tool image omitted…) » et le modèle croirait l'avoir vue. La capture
+   * reste affichée à l'humain, et le motif est écrit dans le résultat.
+   */
+  receivesImages?: () => boolean;
 }
 
 /** Identifiant de la session (conversation) courante, ou `undefined`. */
@@ -444,7 +452,12 @@ export function createLibrarianTools(config: LibrarianToolsConfig): ToolDefiniti
           });
 
           // Image transmise au modèle, BORNÉE (jamais un puits non limité).
-          const attached = record ? await boundShotForModel(image.bytes, mimeType) : null;
+          // ⚠️ Le modèle DÉCLARÉ sans vision ne la reçoit pas : on ne joint rien et
+          // on le DIT (`imageOmittedReason`), au lieu de laisser le SDK remplacer
+          // la capture par « (tool image omitted…) ».
+          const receivesImages = config.receivesImages?.() ?? true;
+          const attached =
+            record && receivesImages ? await boundShotForModel(image.bytes, mimeType) : null;
           const text = frameLibrarianScreenshot({
             pageUrl,
             host: librarianShotHost(pageUrl),
@@ -455,9 +468,12 @@ export function createLibrarianTools(config: LibrarianToolsConfig): ToolDefiniti
             imageAttached: attached !== null,
             ...(attached === null
               ? {
-                  imageOmittedReason: record
-                    ? "image trop volumineuse pour le contexte"
-                    : "image trop volumineuse pour être conservée",
+                  imageOmittedReason: receivesImages
+                    ? record
+                      ? "image trop volumineuse pour le contexte"
+                      : "image trop volumineuse pour être conservée"
+                    : "le modèle de conversation est déclaré sans vision " +
+                      "(/config → Modèles → « Reçoit les images »)",
                 }
               : {}),
           });

@@ -163,8 +163,9 @@ inactivité `YUKI_HEAVY_IDLE_TIMEOUT_MS` (120 s) et global
   rattachés à l'ID de session courant — ni l'historique, ni un fichier expiré
   (rétention) ne sont reconstitués ; (b) l'erreur de lecture du stockage ne tue
   pas le job : elle est **dite** au worker, qui peut appeler `lister_fichiers` ;
-  (c) le worker ne peut pas LIRE le contenu d'une pièce jointe (il n'a pas
-  d'accès disque aux fichiers de Yuki) — le bloc le lui rappelle explicitement.
+  (c) le worker LIT le contenu **à la demande** avec `lire_fichier` (image vue via
+  la politique de vision, texte décodé et borné, binaire refusé) — le bloc de
+  liste, lui, ne porte que des métadonnées et le lui rappelle.
 
 ## `JobStore`
 

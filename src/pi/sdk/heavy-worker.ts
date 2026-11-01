@@ -15,7 +15,7 @@ import type {
   ScreenshotServicePort,
 } from "../../agents/execution.js";
 import type { TransferServicePort } from "../../agents/transfer.js";
-import { formatAttachmentsForPrompt, type FilesListPort } from "../../files/index.js";
+import { formatAttachmentsForPrompt, type FilesReadPort } from "../../files/index.js";
 import type { SecretDirectoryPort } from "../../secrets/directory.js";
 import type {
   HeavyRunHandle,
@@ -51,8 +51,9 @@ import {
   createSecretTools,
   type ActionToolOptions,
 } from "./execution-tools.js";
-import { getSharedModelRuntime, liveValue, resolveSdkModel } from "./model-runtime.js";
+import { getSharedModelRuntime, liveValue, resolveSdkModel, sdkModelSupportsImages } from "./model-runtime.js";
 import { createListFilesTool } from "./list-files-tool.js";
+import { createReadFileTool } from "./read-file-tool.js";
 import { createEphemeralSession } from "./session-factory.js";
 
 export interface SdkHeavyWorkerConfig {
@@ -87,13 +88,17 @@ export interface SdkHeavyWorkerConfig {
    */
   transfers?: TransferServicePort;
   /**
-   * Port de LECTURE des fichiers de la conversation (métadonnées seules).
-   * Présent ⇒ le worker porte `lister_fichiers` ET reçoit AUTOMATIQUEMENT, dans
-   * son premier message, la liste des pièces jointes de la conversation
-   * propriétaire (identifiants compris). ⚠️ Aucun contenu de fichier n'est
-   * transmis : le worker n'a pas d'accès disque aux fichiers de Yuki.
+   * Port de LECTURE des fichiers de la conversation (métadonnées ET contenu).
+   * Présent ⇒ le worker porte `lister_fichiers`, `lire_fichier` ET reçoit
+   * AUTOMATIQUEMENT, dans son premier message, la liste des pièces jointes de la
+   * conversation propriétaire (identifiants compris).
+   *
+   * ⚠️ Avant `lire_fichier`, ce port ne rendait que des MÉTADONNÉES : le worker
+   * savait qu'une image existait, en avait l'identifiant, et ne pouvait en lire
+   * aucun octet (un fichier du store n'est pas sur un chemin de son espace de
+   * travail : `read` ne l'atteint pas).
    */
-  files?: FilesListPort;
+  files?: FilesReadPort;
   /**
    * Port de consultation du coffre de secrets. Présent ⇒ le worker porte
    * `lister_secrets` (NOMS seulement), pour savoir QUELLES variables
@@ -112,6 +117,19 @@ export interface SdkHeavyWorkerConfig {
 }
 
 /**
+/**
+ * Vision du MODÈLE RÉSOLU pour un job — lue à l'exécution (`model.input`), jamais
+ * supposée. Passée aux outils de transfert pour qu'ils disent la vérité quand une
+ * image n'est pas jointe.
+ */
+export interface HeavyActionToolVision {
+  /** Référence `provider/modelId` du modèle effectivement résolu. */
+  modelLabel: string;
+  /** Le modèle accepte-t-il les images ? (`model.input` de `models.json`) */
+  imagesSupported: boolean;
+}
+
+/**
  * Outils d'ACTION du worker lourd (`run_command` + `capturer_ecran`).
  *
  * ⚠️ La session du worker est ÉPHÉMÈRE : son propre identifiant ne doit JAMAIS
@@ -124,8 +142,12 @@ export function buildHeavyActionTools(
   config: Pick<
     SdkHeavyWorkerConfig,
     "execution" | "screenshots" | "secrets" | "transfers" | "files"
-  >,
+  > & {
+    /** Journal d'AUDIT des lectures de fichiers (facultatif : métadonnées seules). */
+    logger?: PiLogger;
+  },
   lightSessionId: string | undefined,
+  vision?: HeavyActionToolVision,
 ): ToolDefinition[] {
   const options: ActionToolOptions = {
     approvalSessionId: () => lightSessionId,
@@ -134,7 +156,22 @@ export function buildHeavyActionTools(
   if (config.execution) tools.push(...createExecutionTools(config.execution, options));
   if (config.screenshots) tools.push(...createScreenshotTool(config.screenshots, options));
   // ⚠️ TRANSFERT : c'est le lourd qui AGIT sur une machine (récupérer/déposer).
-  if (config.transfers) tools.push(...createFileTransferTools(config.transfers, options));
+  // La CAPACITÉ VISION du modèle résolu lui est passée : une image récupérée n'est
+  // jointe que si le modèle la reçoit, et le résultat le dit dans tous les cas.
+  if (config.transfers) {
+    tools.push(
+      ...createFileTransferTools(
+        config.transfers,
+        options,
+        vision !== undefined
+          ? {
+              imagesSupported: vision.imagesSupported,
+              modelLabel: vision.modelLabel,
+            }
+          : undefined,
+      ),
+    );
+  }
   if (config.secrets) tools.push(...createSecretTools(config.secrets));
   // ⚠️ LISTAGE : le worker doit pouvoir retrouver un IDENTIFIANT de fichier (ce
   // qu'exige `deposer_fichier`) sans dépendre du léger. La conversation est
@@ -142,6 +179,19 @@ export function buildHeavyActionTools(
   if (config.files) {
     tools.push(
       ...createListFilesTool(config.files, { sessionId: () => lightSessionId }),
+    );
+    // ⚠️ LECTURE du CONTENU : sans elle, le worker sait qu'une image existe et
+    // ne peut rien en faire (l'utilisateur resterait dans la boucle). MÊME
+    // conversation forcée ; la capacité VISION du modèle résolu décide si une
+    // image est réellement jointe, et le résultat le dit dans tous les cas.
+    tools.push(
+      ...createReadFileTool(config.files, {
+        sessionId: () => lightSessionId,
+        logger: config.logger,
+        ...(vision !== undefined
+          ? { imagesSupported: vision.imagesSupported, modelLabel: vision.modelLabel }
+          : {}),
+      }),
     );
   }
   return tools;
@@ -153,7 +203,7 @@ export function buildHeavyActionTools(
  * tronqué. Une erreur de lecture ne tue PAS le job : elle est DITE au worker.
  */
 export function collectAttachmentBlock(
-  files: FilesListPort | undefined,
+  files: FilesReadPort | undefined,
   sessionId: string,
   logger: PiLogger,
   jobId: string,
@@ -362,7 +412,13 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
       // Outils d'ACTION rattachés à la CONVERSATION PROPRIÉTAIRE (jamais à
       // l'ID éphémère) : la validation humaine remonte donc dans la bonne
       // conversation.
-      const actionTools = buildHeavyActionTools(config, request.lightSessionId);
+      const actionTools = buildHeavyActionTools(config, request.lightSessionId, {
+        modelLabel: modelReference,
+        // ⚠️ Capacité lue sur le modèle RÉSOLU (donc sur `models.json` à cet
+        // instant) : un modèle texte seul ne reçoit jamais d'image, même si le
+        // réglage changeait en cours de route.
+        imagesSupported: sdkModelSupportsImages(model),
+      });
       ephemeral = await (config.createSession ?? createEphemeralSession)({
         cwd: config.cwd,
         agentDir: config.agentDir,

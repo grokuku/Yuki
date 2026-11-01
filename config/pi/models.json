@@ -42,7 +42,8 @@
           "name": "DeepSeek V4.1 Flash (lourd)",
           "reasoning": true,
           "input": [
-            "text"
+            "text",
+            "image"
           ],
           "contextWindow": 131072,
           "maxTokens": 32768,
