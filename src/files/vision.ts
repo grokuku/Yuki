@@ -13,12 +13,23 @@
  * réseau et de TTFT que l'utilisateur paie à chaque tour. Le fournisseur, lui,
  * la réduirait de toute façon (souvent à ~1 500 px) — mais APRÈS le transfert.
  *
- * DEUX GARDE-FOUS, DANS CET ORDRE :
+ * TROIS GARDE-FOUS, DANS CET ORDRE :
  *  1. **DIMENSION** (`VISION_MAX_EDGE`) : une image n'est jamais transmise
  *     au-delà de 2 000 px de côté, quelle que soit sa taille en octets ;
- *  2. **POIDS** (`files.imageMaxBytes`, garde-fou ultime) : au-delà, on tente la
- *     réduction ; si elle n'aboutit pas, on REFUSE explicitement — jamais de
- *     troncature, jamais d'envoi muet d'une image démesurée.
+ *  2. **POIDS TRANSMIS** (`files.imageMaxWireBytes`) : la borne qui compte est
+ *     la taille **base64** (×1,33 sur les octets d'origine) — c'est elle qui
+ *     pèse sur le corps HTTP et que le fournisseur refuse (`500 « request
+ *     entity too large »`). Au-delà, on RÉDUIT davantage (par le CÔTÉ) ;
+ *  3. **POIDS DU FICHIER** (`files.imageMaxBytes`, garde-fou de lecture) : au-delà,
+ *     on tente la réduction ; si elle n'aboutit pas, on REFUSE explicitement —
+ *     jamais de troncature, jamais d'envoi muet d'une image démesurée.
+ *
+ * ⚠️ INCIDENT MESURÉ (2026-11-01) : ce module ne raisonnait QUE sur les octets
+ * d'ORIGINE. Une image de 2 876 Ko / 2231×961 était donc réduite à `2000×861`
+ * puis transmise en PNG (~3,1 Mio de base64), bien au-dessus de ce que le
+ * fournisseur accepte : `500 « request entity too large »`, **0 jeton**, 17 s
+ * perdues, et aucun moyen d'agir pour l'utilisateur. La réduction était juste ;
+ * son UNITÉ ne l'était pas.
  *
  * ⚠️ LISIBILITÉ DU TEXTE : réduire une capture d'écran jusqu'à la rendre floue
  * serait une perte silencieuse. Si la réduction devrait descendre sous
@@ -95,6 +106,14 @@ export interface VisionImageInput {
   /** Plafond en OCTETS BRUTS de l'image transmise (`files.imageMaxBytes`). */
   maxBytes: number;
   /**
+   * Plafond en OCTETS TRANSMIS, c'est-à-dire en BASE64 (`files.imageMaxWireBytes`).
+   *
+   * ⚠️ C'est LA borne qui compte : le base64 est ce qui part dans le corps HTTP
+   * (×1,33 sur les octets du fichier). `maxBytes` borne la lecture/réduction ;
+   * `maxWireBytes` borne l'ÉMISSION.
+   */
+  maxWireBytes: number;
+  /**
    * Réducteur INJECTÉ (`sdkVisionImageResizer`, exposé par la façade `src/pi`).
    *
    * ⚠️ `src/files` n'importe JAMAIS le SDK (frontière verrouillée par
@@ -113,6 +132,8 @@ export type VisionImageOutcome =
       resized: boolean;
       /** Octets BRUTS de l'image transmise (base64 décodé). */
       bytes: number;
+      /** Octets RÉELLEMENT transmis (longueur du base64, ×1,33 les octets bruts). */
+      wireBytes: number;
       /** Dimensions de l'image transmise (celles de l'original si intacte). */
       width?: number;
       height?: number;
@@ -159,17 +180,26 @@ export async function prepareVisionImage(
   }
 
   const limit = Math.max(1, Math.trunc(input.maxBytes));
+  const wireLimit = Math.max(1, Math.trunc(input.maxWireBytes));
   const originalCount = input.bytes.length;
   const knownEdge = Math.max(input.width ?? 0, input.height ?? 0);
 
   // ⚠️ CHEMIN RAPIDE : rien à réduire. Aucun appel au réducteur (mesuré ~100 ms
   // même pour une image déjà conforme : on ne le paie pas).
-  if (originalCount <= limit && knownEdge > 0 && knownEdge <= VISION_MAX_EDGE) {
+  // ⚠️ La taille TRANSMISE (base64) est testée AUSSI : une image légère mais
+  // incompressible peut dépasser le plafond du fil alors qu'elle tient en octets.
+  if (
+    originalCount <= limit &&
+    base64Size(originalCount) <= wireLimit &&
+    knownEdge > 0 &&
+    knownEdge <= VISION_MAX_EDGE
+  ) {
     return {
       ok: true,
       image: { data: input.bytes.toString("base64"), mimeType },
       resized: false,
       bytes: originalCount,
+      wireBytes: base64Size(originalCount),
       ...(input.width !== undefined ? { width: input.width } : {}),
       ...(input.height !== undefined ? { height: input.height } : {}),
       resizeMs: 0,
@@ -177,6 +207,23 @@ export async function prepareVisionImage(
   }
 
   const resize = input.resize;
+  // ⚠️ LE BUDGET DONNÉ AU RÉDUCTEUR EST EN BASE64, et c'est le PLUS PETIT des
+  // deux plafonds : le plafond du fil (octets transmis) et le plafond du fichier
+  // traduit en base64 (×4/3). Avant le correctif, seul le second était utilisé :
+  // un plafond de 3 500 000 octets laissait donc partir 4 666 668 octets de
+  // base64 — exactement ce que le fournisseur a refusé.
+  const budget = Math.min(base64Size(limit), wireLimit);
+  // Message de refus UNIQUE (deux causes : réducteur sans résultat, ou résultat
+  // encore trop lourd) — même cause utile pour l'humain : « cette image ne peut
+  // pas tenir sous le plafond ».
+  const tooLarge = {
+    ok: false as const,
+    code: "file_image_too_large",
+    message:
+      `L'image « ${input.name} » (${visionSize(originalCount)}) ne peut pas être ` +
+      `réduite sous le plafond de vision (${visionSize(budget)} transmis, en base64) : ` +
+      "elle n'est pas transmise au modèle. Retirez-la, ou joignez une version plus petite.",
+  };
   let reduced: VisionResizeResult | null = null;
   let resizeMs = 0;
   if (resize !== undefined) {
@@ -185,10 +232,7 @@ export async function prepareVisionImage(
       reduced = await resize(input.bytes, mimeType, {
         maxWidth: VISION_MAX_EDGE,
         maxHeight: VISION_MAX_EDGE,
-        // Le SDK compare une taille BASE64 : on lui donne le budget qui
-        // correspond au plafond en octets BRUTS (×4/3). Le contrôle exact est
-        // refait après coup, sur la taille RÉELLEMENT décodée.
-        maxBytes: base64Size(limit),
+        maxBytes: budget,
       });
     } catch {
       reduced = null;
@@ -199,26 +243,15 @@ export async function prepareVisionImage(
   if (reduced === null) {
     // Le réducteur n'a pas pu tenir le budget (ou n'est pas disponible ici).
     // GARDE-FOU ULTIME : refus explicite, français, sans cause inventée.
-    return {
-      ok: false,
-      code: "file_image_too_large",
-      message:
-        `L'image « ${input.name} » (${visionSize(originalCount)}) ne peut pas être ` +
-        `réduite sous le plafond de vision (${visionSize(limit)}) : elle n'est pas ` +
-        "transmise au modèle. Retirez-la, ou joignez une version plus petite.",
-    };
+    return tooLarge;
   }
 
   const sentBytes = Buffer.byteLength(reduced.data, "base64");
-  if (sentBytes > limit) {
-    return {
-      ok: false,
-      code: "file_image_too_large",
-      message:
-        `L'image « ${input.name} » (${visionSize(originalCount)}) ne peut pas être ` +
-        `réduite sous le plafond de vision (${visionSize(limit)}) : elle n'est pas ` +
-        "transmise au modèle. Retirez-la, ou joignez une version plus petite.",
-    };
+  const wireBytes = Buffer.byteLength(reduced.data, "utf8");
+  if (sentBytes > limit || wireBytes > wireLimit) {
+    // ⚠️ Contrôle APRÈS coup sur la taille RÉELLEMENT émise : le réducteur peut
+    // rendre un candidat au-dessus du budget demandé (ou lever silencieusement).
+    return tooLarge;
   }
 
   if (reduced.wasResized && Math.max(reduced.width, reduced.height) < VISION_MIN_EDGE) {
@@ -229,9 +262,9 @@ export async function prepareVisionImage(
       code: "file_image_illegible",
       message:
         `L'image « ${input.name} » devrait descendre à ${reduced.width}×${reduced.height} px ` +
-        `pour tenir sous le plafond de vision (${visionSize(limit)}) : à cette taille, un ` +
-        "texte ou un schéma ne serait plus lisible. Elle n'est pas transmise au modèle : " +
-        "recadrez la zone utile, ou joignez une capture plus petite.",
+        `pour tenir sous le plafond de vision (${visionSize(budget)} transmis, en base64) : ` +
+        "à cette taille, un texte ou un schéma ne serait plus lisible. Elle n'est pas " +
+        "transmise au modèle : recadrez la zone utile, ou joignez une capture plus petite.",
     };
   }
 
@@ -240,6 +273,7 @@ export async function prepareVisionImage(
     image: { data: reduced.data, mimeType: reduced.mimeType },
     resized: reduced.wasResized,
     bytes: sentBytes,
+    wireBytes,
     width: reduced.width,
     height: reduced.height,
     resizeMs,

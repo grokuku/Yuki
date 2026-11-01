@@ -89,3 +89,38 @@ export function gradientPng(width: number, height: number): Buffer {
   }
   return encodePng(width, height, pixels);
 }
+
+/**
+ * PNG « capture d'écran détaillée » — reproduit une image RÉELLE de quelques Mo.
+ *
+ * ⚠️ Pourquoi un bruit par BLOCS 2×2 (et non par pixel) : une capture réelle garde
+ * sa masse après sous-échantillonnage, alors qu'un bruit par pixel devient
+ * incompressible après Lanczos (le PNG rééchantillonné grossit). C'est cette
+ * propriété qui reproduit le cas de production : 2231×961 @ amplitude 8
+ * ⇒ **3 120 Ko** au départ, dont le PNG rééchantillonné en 2000×861 pèse encore
+ * ~2 400 Ko (mesuré) — donc un ré-encodage est indispensable.
+ */
+export function detailedScreenshotPng(width: number, height: number, amplitude = 8): Buffer {
+  const pixels = Buffer.alloc(width * height * 3);
+  let state = 31 >>> 0;
+  for (let by = 0; by < height; by += 2) {
+    for (let bx = 0; bx < width; bx += 2) {
+      state = (state * 1664525 + 1013904223) >>> 0;
+      const noise = (((state >>> 24) & 0xff) / 255) * amplitude - amplitude / 2;
+      const yMax = Math.min(by + 2, height);
+      const xMax = Math.min(bx + 2, width);
+      for (let y = by; y < yMax; y += 1) {
+        for (let x = bx; x < xMax; x += 1) {
+          const index = (y * width + x) * 3;
+          const r = 128 + 60 * Math.sin(x / 220) + 18 * Math.sin(y / 70);
+          const g = 120 + 50 * Math.sin((x + y) / 260);
+          const b = 140 + 45 * Math.cos(x / 160);
+          pixels[index] = Math.min(255, Math.max(0, Math.round(r + noise)));
+          pixels[index + 1] = Math.min(255, Math.max(0, Math.round(g + noise)));
+          pixels[index + 2] = Math.min(255, Math.max(0, Math.round(b + noise)));
+        }
+      }
+    }
+  }
+  return encodePng(width, height, pixels);
+}

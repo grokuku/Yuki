@@ -74,6 +74,7 @@ describe("vision — chemin rapide (aucun coût quand rien ne dépasse)", () => 
       width: 1,
       height: 1,
       maxBytes: 3_500_000,
+      maxWireBytes: 700_000,
       resize: resizer,
     });
     expect(outcome.ok).toBe(true);
@@ -93,6 +94,7 @@ describe("vision — chemin rapide (aucun coût quand rien ne dépasse)", () => 
       ext: "bmp",
       mimeType: "image/bmp",
       maxBytes: 3_500_000,
+      maxWireBytes: 700_000,
     });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
@@ -123,11 +125,13 @@ describe("vision — réduction (le plafond n'est qu'un GARDE-FOU)", () => {
       width: 400,
       height: 300,
       maxBytes: limit,
+      // Plafond TRANSMIS large : ici c'est le plafond du FICHIER qui tranche.
+      maxWireBytes: 700_000,
       resize: resizer,
     });
     expect(calls).toHaveLength(1);
-    // Le SDK compare une taille BASE64 : le budget qui lui est donné correspond
-    // au plafond en OCTETS BRUTS (×4/3), sinon on refuserait à tort.
+    // Le SDK compare une taille BASE64 : le budget qui lui est donné est le PLUS
+    // PETIT des deux plafonds, traduit en base64 (×4/3), sinon on refuserait à tort.
     expect(calls[0]?.options.maxBytes).toBe(base64Size(limit));
     expect(calls[0]?.options.maxWidth).toBe(VISION_MAX_EDGE);
     expect(calls[0]?.options.maxHeight).toBe(VISION_MAX_EDGE);
@@ -157,6 +161,7 @@ describe("vision — réduction (le plafond n'est qu'un GARDE-FOU)", () => {
       width: 2_560,
       height: 1_440,
       maxBytes: 3_500_000,
+      maxWireBytes: 700_000,
       resize: resizer,
     });
     expect(calls).toHaveLength(1);
@@ -180,6 +185,7 @@ describe("vision — réduction (le plafond n'est qu'un GARDE-FOU)", () => {
       ext: "png",
       mimeType: "image/png",
       maxBytes: 3_500_000,
+      maxWireBytes: 700_000,
       resize: resizer,
     });
     expect(calls).toHaveLength(1);
@@ -198,6 +204,7 @@ describe("vision — garde-fous (refus explicite, jamais silencieux)", () => {
       width: 120,
       height: 90,
       maxBytes: 64,
+      maxWireBytes: 700_000,
       resize: resizer,
     });
     expect(outcome.ok).toBe(false);
@@ -225,6 +232,7 @@ describe("vision — garde-fous (refus explicite, jamais silencieux)", () => {
       width: 400,
       height: 300,
       maxBytes: 1_000,
+      maxWireBytes: 700_000,
       resize: resizer,
     });
     expect(outcome.ok).toBe(false);
@@ -248,6 +256,7 @@ describe("vision — garde-fous (refus explicite, jamais silencieux)", () => {
       width: 3_000,
       height: 2_000,
       maxBytes: 1_000,
+      maxWireBytes: 700_000,
       resize: resizer,
     });
     expect(outcome.ok).toBe(false);
@@ -269,6 +278,7 @@ describe("vision — garde-fous (refus explicite, jamais silencieux)", () => {
       width: 80,
       height: 60,
       maxBytes: 32,
+      maxWireBytes: 700_000,
       resize: async () => {
         throw new Error("Photon indisponible");
       },
@@ -276,6 +286,92 @@ describe("vision — garde-fous (refus explicite, jamais silencieux)", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.code).toBe("file_image_too_large");
+  });
+});
+
+describe("vision — la borne qui compte est la taille TRANSMISE (base64 ×1,33)", () => {
+  it("le budget donné au réducteur est le PLUS PETIT des deux plafonds, en base64", async () => {
+    // ⚠️ C'est CE point qui a produit `500 « request entity too large »` : le budget
+    // était `base64Size(imageMaxBytes)` (4 666 668 octets), donc le réducteur
+    // pouvait garder un PNG de 3,2 Mio sur le fil et se croire conforme.
+    const { resizer, calls } = fakeResizer({
+      data: PNG_1X1,
+      mimeType: "image/jpeg",
+      width: 2_000,
+      height: 900,
+      wasResized: true,
+    });
+    const outcome = await prepareVisionImage({
+      name: "capture.png",
+      bytes: noisyPng(400, 300, 21),
+      ext: "png",
+      mimeType: "image/png",
+      width: 4_000,
+      height: 3_000,
+      maxBytes: 3_500_000,
+      maxWireBytes: 700_000,
+      resize: resizer,
+    });
+    expect(outcome.ok).toBe(true);
+    // 700 000 < base64Size(3 500 000) = 4 666 668 ⇒ c'est le plafond du FIL qui tranche.
+    expect(calls[0]?.options.maxBytes).toBe(700_000);
+  });
+
+  it("une image qui tient en OCTETS mais pas SUR LE FIL n'emprunte pas le chemin rapide", async () => {
+    const { resizer, calls } = fakeResizer({
+      data: PNG_1X1,
+      mimeType: "image/png",
+      // Dimensions encore LISIBLES : c'est bien le POIDS qui tranche ici.
+      width: 2_000,
+      height: 1_400,
+      wasResized: true,
+    });
+    const original = noisyPng(70, 50, 23); // 70×50 : petit, mais pas compressible
+    expect(original.length).toBeGreaterThan(48);
+    const outcome = await prepareVisionImage({
+      name: "petite-mais-lourde.png",
+      bytes: original,
+      ext: "png",
+      mimeType: "image/png",
+      width: 70,
+      height: 50,
+      maxBytes: 3_500_000,
+      // Plafond TRANSMIS égal au base64 du seul contenu que le double sait rendre
+      // (le PNG 1×1, 96 octets de base64) : l'ORIGINAL, lui, pèse bien plus sur le
+      // fil (×1,33), donc le chemin rapide doit être écarté.
+      maxWireBytes: 96,
+      resize: resizer,
+    });
+    expect(calls).toHaveLength(1);
+    expect(outcome.ok).toBe(true);
+  });
+
+  it("un réducteur qui rend un base64 au-dessus du plafond du FIL est REFUSÉ", async () => {
+    // Le contrôle porte sur les octets RÉELLEMENT émis (`data.length`), pas sur
+    // une reconversion approximative : c'est le corps HTTP qui compte.
+    const sent = noisyPng(60, 40, 29);
+    const { resizer } = fakeResizer({
+      data: sent,
+      mimeType: "image/png",
+      width: 900,
+      height: 600,
+      wasResized: true,
+    });
+    const outcome = await prepareVisionImage({
+      name: "capture.png",
+      bytes: noisyPng(300, 200, 31),
+      ext: "png",
+      mimeType: "image/png",
+      width: 3_000,
+      height: 2_000,
+      maxBytes: 3_500_000,
+      maxWireBytes: 200,
+      resize: resizer,
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe("file_image_too_large");
+    expect(outcome.message).toContain("transmis, en base64");
   });
 });
 
@@ -353,6 +449,7 @@ describe("vision — le réducteur RÉEL du SDK (Photon/WASM) fonctionne", () =>
       width: 320,
       height: 200,
       maxBytes: 3_500_000,
+      maxWireBytes: 700_000,
       resize: spy,
     });
     expect(outcome.ok).toBe(true);

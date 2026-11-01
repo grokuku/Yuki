@@ -220,9 +220,12 @@ export interface FilesGatewayPort {
    * ICI, au moment de construire le message — la version réduite est ÉPHÉMÈRE
    * (aucune écriture, aucun cache) et l'original stocké n'est jamais modifié.
    *
-   * ⚠️ GARDE-FOU ULTIME `files.imageMaxBytes` : si la réduction n'aboutit pas (ou
-   * rendrait l'image illisible), `ok: false` avec un message français nommant le
-   * fichier — l'appelant n'envoie alors RIEN (jamais de troncature silencieuse).
+   * ⚠️ GARDE-FOU ULTIME `files.imageMaxBytes` (poids du FICHIER) **et**
+   * `files.imageMaxWireBytes` (poids TRANSMIS, base64 ×1,33 — celui que voit le
+   * fournisseur) : si la réduction n'aboutit pas (ou rendrait l'image illisible),
+   * `ok: false` avec un message français nommant le fichier — l'appelant n'envoie
+   * alors RIEN (jamais de troncature silencieuse), et ce refus arrive **AVANT**
+   * l'appel au fournisseur.
    */
   prepareImages(files: readonly WireFile[]): Promise<FileImagesOutcome>;
 }
@@ -305,7 +308,44 @@ export const DEFAULT_PROMPT_TOTAL_CHARS = 24_000;
 export const DEFAULT_RETENTION_DAYS = 30;
 
 /**
- * Plafond d'une image transmise au MODÈLE — défaut de `files.imageMaxBytes`.
- * 3 500 000 octets ⇒ ~4,7 Mio en base64 sur le fil (×1,33).
+ * Plafond en OCTETS BRUTS d'une image transmise au MODÈLE — défaut de
+ * `files.imageMaxBytes`.
+ *
+ * ⚠️ C'est la bonne borne pour ce qu'on accepte de LIRE/RÉDUIRE, PAS pour ce
+ * qu'on ÉMET : sur le fil, le base64 pèse ×1,33 (voir
+ * `DEFAULT_IMAGE_MAX_WIRE_BYTES`).
  */
 export const DEFAULT_IMAGE_MAX_BYTES = 3_500_000;
+
+/**
+ * Plafond en OCTETS TRANSMIS (base64, ce qui part réellement sur le fil) —
+ * défaut de `files.imageMaxWireBytes`.
+ *
+ * ⚠️ POURQUOI CETTE BORNE EXISTE (incident mesuré du 2026-11-01) : une image de
+ * 2 876 Ko / 2231×961 était bien RÉDUITE (côté 2 000 px), mais le plafond
+ * `files.imageMaxBytes` raisonnait en octets d'ORIGINE : traduit en budget base64
+ * (×4/3) il laissait partir jusqu'à **4 666 668 octets** sur le fil. Le
+ * fournisseur a répondu `500 « request entity too large »` après 17 s et 0 jeton
+ * produit — c'est-à-dire que la réduction était juste, mais son UNITÉ fausse.
+ *
+ * 700 000 octets base64 (~0,67 Mio) — la CIBLE est « quelques centaines de Ko »,
+ * pas « sous les 5 Mo du fournisseur » :
+ *  - le chemin qui FONCTIONNE (même image, même modèle, même fournisseur, envoyée
+ *    par un client qui ré-encode) part à **479,5 Ko** sur 2000×861 : c'est la
+ *    référence mesurée, pas une valeur inventée ;
+ *  - 700 000 laisse à un JPEG qualité 80 en 2000 px la marge nécessaire pour
+ *    rester sous ~1 Mo même sur une image très détaillée, et garde le corps HTTP
+ *    du tour (texte + historique) loin des plafonds de proxys (~4 Mio) ;
+ *  - un PNG qui tient sous ce budget est conservé (transparence préservée) ; sinon
+ *    le SDK RÉ-ENCODE (JPEG q80 → q40), ce qui ne change pas les dimensions
+ *    lisibles mais divise le poids par 5 à 15.
+ *
+ * ⚠️ Mesuré sur cette machine : image 2231×961 de 3 120 Ko, côté ramené à 2000 px —
+ * avec l'ancien budget (4 666 668 base64) le SDK gardait le PNG et émettait
+ * **3 208 Ko** ; avec 700 000 il ré-encode en JPEG et émet **208 Ko**, à
+ * dimensions identiques (2000×861).
+ *
+ * ⚠️ Réglable dans `/config` : un fournisseur plus permissif peut le monter sans
+ * redémarrage (`apply: hot`).
+ */
+export const DEFAULT_IMAGE_MAX_WIRE_BYTES = 700_000;

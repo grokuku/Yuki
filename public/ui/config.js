@@ -547,19 +547,32 @@ const GROUPS = [
       },
       {
         path: "files.imageMaxBytes",
-        label: "Taille maximale d'une image transmise au modèle (octets)",
+        label: "Taille maximale du FICHIER image transmis au modèle (octets)",
         kind: "number",
         min: 1,
         max: 20000000,
         helper:
-          "Garde-fou de VISION : poids maximal d'une image transmise au modèle. " +
-          "Défaut 3 500 000 octets (en base64 : ~4,7 Mo sur le fil). En pratique, " +
-          "une image plus grande est RÉDUITE à la volée (côté max 2 000 px, côté " +
-          "min lisible 700 px) — l'original enregistré, lui, n'est jamais " +
-          "modifié. Le message n'est REFUSÉ que si la réduction échoue ou rendrait " +
-          "l'image illisible. Ce plafond borne la charge réseau et le délai de " +
-          "première réponse ; le contexte, lui, compte ~1 200 jetons par image " +
-          "quelle que soit sa taille.",
+          "Garde-fou de VISION sur les octets du FICHIER : au-delà, l'image est " +
+          "RÉDUITE à la volée (côté max 2 000 px, côté min lisible 700 px) — " +
+          "l'original enregistré, lui, n'est jamais modifié. ⚠️ Ce plafond ne " +
+          "borne PAS ce qui part sur le fil (le base64 pèse ×1,33) : voir le " +
+          "plafond TRANSMIS ci-dessous.",
+      },
+      {
+        path: "files.imageMaxWireBytes",
+        label: "Taille maximale TRANSMISE d'une image (octets base64)",
+        kind: "number",
+        min: 100000,
+        max: 20000000,
+        helper:
+          "⚠️ La borne qui compte : le base64 pèse ×1,33 sur le fichier, et " +
+          "c'est ce volume que le fournisseur refuse (`500 request entity too " +
+          "large`). Défaut 700 000 octets (~0,7 Mo transmis). Au-delà, l'image " +
+          "est RÉDUITE davantage : d'abord par le CÔTÉ, puis par RÉ-ENCODAGE " +
+          "(JPEG) quand un PNG reste trop lourd — c'est ce ré-encodage qui fait " +
+          "passer une capture de 2,9 Mo à ~0,5 Mo. Si elle ne peut pas l'être " +
+          "sans devenir illisible, le message est REFUSÉ explicitement, AVANT " +
+          "l'appel au fournisseur.",
       },
       {
         path: "files.agentMaxBytes",
@@ -793,6 +806,7 @@ const FIELD_DEFAULTS = {
   "files.agentChunkBytes": 196608,
   "files.agentTimeoutMs": 120000,
   "files.imageMaxBytes": 3500000,
+  "files.imageMaxWireBytes": 700000,
   "files.retentionDays": 30,
   "files.maxAttachments": 5,
   "files.promptChars": 12000,

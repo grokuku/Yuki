@@ -988,6 +988,9 @@ async function main(): Promise<void> {
     // hot). Sans ce branchement, le réglage serait mort — et une image de 40 Mo
     // partirait en base64 sur le fil.
     imageMaxBytes: () => config.getNumber("files.imageMaxBytes"),
+    // ⚠️ PLAFOND EN OCTETS TRANSMIS (base64 ×1,33) : c'est LUI que le fournisseur
+    // compte, et c'est lui qui manquait (`500 « request entity too large »`).
+    imageMaxWireBytes: () => config.getNumber("files.imageMaxWireBytes"),
     // ⚠️ RÉDUCTION À LA VOLÉE (`resizeImage` du SDK, Photon/WASM) : l'original
     // stocké n'est jamais touché, la version réduite est éphémère. Sans ce
     // branchement, aucune image hors bornes ne pourrait être réduite (elle serait
@@ -1051,6 +1054,7 @@ async function main(): Promise<void> {
     retentionDays: config.getNumber("files.retentionDays"),
     maxFileBytes: config.getNumber("files.maxFileBytes"),
     imageMaxBytes: config.getNumber("files.imageMaxBytes"),
+    imageMaxWireBytes: config.getNumber("files.imageMaxWireBytes"),
     promptChars: config.getNumber("files.promptChars"),
     promptTotalChars: config.getNumber("files.promptTotalChars"),
   });

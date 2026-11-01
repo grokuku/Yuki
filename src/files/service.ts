@@ -23,6 +23,7 @@ import {
 } from "./frame.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
+  DEFAULT_IMAGE_MAX_WIRE_BYTES,
   DEFAULT_MAX_ATTACHMENTS,
   DEFAULT_PROMPT_CHARS_PER_FILE,
   DEFAULT_PROMPT_TOTAL_CHARS,
@@ -52,6 +53,11 @@ export interface FilesServiceOptions {
   promptTotalChars?: () => number;
   /** Plafond en OCTETS d'une image transmise au modèle (relu à chaud). */
   imageMaxBytes?: () => number;
+  /**
+   * Plafond en OCTETS TRANSMIS (base64) — la borne qui compte sur le fil (relue
+   * à chaud). Absent : `DEFAULT_IMAGE_MAX_WIRE_BYTES`.
+   */
+  imageMaxWireBytes?: () => number;
   /**
    * Réducteur d'image INJECTÉ (`sdkVisionImageResizer` du SDK, exposé par la
    * façade `src/pi` : ce domaine n'importe jamais le SDK).
@@ -90,6 +96,7 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
   private readonly promptChars: () => number;
   private readonly promptTotalChars: () => number;
   private readonly imageMaxBytes: () => number;
+  private readonly imageMaxWireBytes: () => number;
   private readonly imageResizer: VisionImageResizer | undefined;
   private readonly sentListeners = new Set<(view: WireFile & { sessionId: string }) => void>();
 
@@ -100,6 +107,7 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
     this.promptChars = options.promptChars ?? (() => DEFAULT_PROMPT_CHARS_PER_FILE);
     this.promptTotalChars = options.promptTotalChars ?? (() => DEFAULT_PROMPT_TOTAL_CHARS);
     this.imageMaxBytes = options.imageMaxBytes ?? (() => DEFAULT_IMAGE_MAX_BYTES);
+    this.imageMaxWireBytes = options.imageMaxWireBytes ?? (() => DEFAULT_IMAGE_MAX_WIRE_BYTES);
     this.imageResizer = options.imageResizer;
   }
 
@@ -165,12 +173,17 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
    * (ou rendrait l'image illisible), l'appelant reçoit un refus explicite et
    * n'envoie RIEN — jamais de troncature ni d'envoi muet d'une image démesurée.
    *
+   * ⚠️ DEUX PLAFONDS, DEUX UNITÉS : `files.imageMaxBytes` borne les octets du
+   * FICHIER (lecture/réduction) et `files.imageMaxWireBytes` borne les octets
+   * TRANSMIS (base64, ×1,33) — c'est le second que le fournisseur voit.
+   *
    * ⚠️ Aucun octet d'image n'est journalisé : seuls les POIDS, la durée de
    * réduction et les dimensions le sont (`files.image.prepared`) — c'est la
    * charge réseau et le TTFT qu'on surveille, pas le contenu.
    */
   async prepareImages(files: readonly WireFile[]): Promise<FileImagesOutcome> {
     const limit = Math.max(1, Math.trunc(this.imageMaxBytes()));
+    const wireLimit = Math.max(1, Math.trunc(this.imageMaxWireBytes()));
     const images: FileImageContent[] = [];
     for (const file of files) {
       if (file.kind !== "image") continue;
@@ -193,6 +206,7 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
         ...(record.analysis.width !== undefined ? { width: record.analysis.width } : {}),
         ...(record.analysis.height !== undefined ? { height: record.analysis.height } : {}),
         maxBytes: limit,
+        maxWireBytes: wireLimit,
         ...(this.imageResizer ? { resize: this.imageResizer } : {}),
       });
       if (!outcome.ok) return { ok: false, code: outcome.code, message: outcome.message };
@@ -201,11 +215,14 @@ export class FilesService implements FilesGatewayPort, FilesSendPort {
         id: file.id,
         bytesIn: bytes.length,
         bytesOut: outcome.bytes,
+        // ⚠️ `bytesWire` est LA mesure de la charge réseau réelle (base64 ×1,33).
+        bytesWire: outcome.wireBytes,
         resized: outcome.resized,
         resizeMs: outcome.resizeMs,
         ...(outcome.width !== undefined ? { width: outcome.width } : {}),
         ...(outcome.height !== undefined ? { height: outcome.height } : {}),
         limitBytes: limit,
+        limitWireBytes: wireLimit,
       });
     }
     return { ok: true, images };

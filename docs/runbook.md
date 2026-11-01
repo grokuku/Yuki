@@ -695,7 +695,8 @@ Réglages dans **`/config` → onglet Conversation → groupe « Fichiers échan
 | `files.maxAttachments` | Fichiers joints à **un** message (défaut 5). Au-delà : non joints, et c'est dit. |
 | `files.promptChars` | **Borne d'injection** par fichier (défaut 12 000 caractères). |
 | `files.promptTotalChars` | **Borne d'injection** totale par message (défaut 24 000). |
-| `files.imageMaxBytes` | **Garde-fou ultime** de VISION : poids maximal d'une image transmise au modèle (défaut **3 500 000 octets**, soit ~4,7 Mo en base64). Au-delà, l'image est **réduite à la volée** ; si elle ne peut pas l'être (ou si elle deviendrait illisible), le message est **refusé** explicitement. |
+| `files.imageMaxBytes` | **Garde-fou de LECTURE** de VISION : poids maximal du **FICHIER** image transmis au modèle (défaut **3 500 000 octets**). Au-delà, l'image est **réduite à la volée** ; si elle ne peut pas l'être (ou si elle deviendrait illisible), le message est **refusé** explicitement. ⚠️ Ce n'est PAS la taille sur le fil (base64 ×1,33) : voir la ligne suivante. |
+| `files.imageMaxWireBytes` | ⚠️ **La borne qui compte sur le fil** : taille maximale **TRANSMISE** d'une image, en **base64** (défaut **700 000 octets**, ~0,7 Mo). Au-delà, l'image est **réduite davantage** (côté, puis **ré-encodage JPEG** si un PNG reste trop lourd) ; si elle ne peut pas l'être sans devenir illisible, le message est **refusé AVANT l'appel** au fournisseur. |
 
 ### 13.1 Analyse (faite UNE fois, conservée)
 
@@ -798,12 +799,35 @@ Le seul endroit qui compte est le réglage `/config` (ou, hors interface,
 | --- | --- |
 | Côté maximal transmis (`VISION_MAX_EDGE`) | **2 000 px** (au-delà, l'image est réduite) |
 | Côté minimal LISIBLE (`VISION_MIN_EDGE`) | **700 px** — en dessous, on **refuse** (un texte ne serait plus lisible) |
-| Poids (`files.imageMaxBytes`) | **3 500 000 octets** de garde-fou : au-delà, réduction ; si elle échoue, **refus explicite** |
+| Poids du FICHIER (`files.imageMaxBytes`) | **3 500 000 octets** : au-delà, réduction ; si elle échoue, **refus explicite** |
+| Poids **TRANSMIS** (`files.imageMaxWireBytes`) | **700 000 octets base64** (~0,7 Mo sur le fil) : la borne que le fournisseur voit |
+
+#### ⚠️ La taille qui compte est celle TRANSMISE (base64 ×1,33), pas celle du fichier
+
+Le base64 pèse **×1,33** sur les octets du fichier : une capture de **2 876 Ko**
+part à **3,8 Mio** si on l'envoie telle quelle, et **3,2 Mio** si on se contente de
+réduire le côté en gardant le PNG. C'est exactement ce qui a produit, le
+2026-11-01, un `500 « request entity too large »` **après 17 s et 0 jeton** — la
+même image, le même modèle et le même fournisseur fonctionnaient depuis un client
+qui, lui, **ré-encode** (479,5 Ko en 2000×861).
+
+Le budget donné au réducteur est donc le **plus petit des deux plafonds, exprimé
+en base64** (`src/files/vision.ts`) :
+
+| Étape | Ce qui se passe |
+| --- | --- |
+| 1. côté | ramené à **2 000 px** au plus (`resizeImage` du SDK, Photon) |
+| 2. ré-encodage | le SDK essaie **PNG**, puis **JPEG q80 → q40** ; il retient le premier candidat qui tient sous le budget ⇒ un PNG très détaillé est **ré-encodé** (mesuré : 3 208 Ko → **208 Ko**, à dimensions identiques 2000×861) |
+| 3. contrôle après coup | les octets **réellement émis** (`data.length`, base64) sont re-vérifiés contre le plafond |
+| 4. refus | si la réduction devrait descendre **sous 700 px**, le message est **refusé AVANT l'appel** (`file_image_illegible`) : un texte à cette taille ne serait plus lisible, et l'utilisateur n'aurait aucun moyen d'agir après coup |
 
 * La version réduite est **éphémère** : ni disque, ni cache, ni base.
 * Formats transmis : **PNG, JPEG, GIF, WebP**. Un BMP (affichable) est **refusé**
   en vision, avec un message qui le dit.
 * **Aucun refus dans le cas normal** : une photo de 5 Mo est réduite et part.
+* ⚠️ **Transparence** : un PNG qui tient sous le plafond transmis est conservé
+  (alpha préservé). S'il ne tient pas, le ré-encodage JPEG **aplatit** l'alpha sur
+  du noir — l'image reste lisible, mais c'est la contrepartie du ré-encodage.
 * ⚠️ **Coût (mesuré, pour le TTFT)** : le redimensionneur (`resizeImage` du SDK,
   Photon/WASM) coûte ~**1,8 s** pour une capture 2560×1440 et ~**2 à 4 s** pour
   une image de 5 à 9 Mo à réduire. Une image **déjà dans les bornes ne paie

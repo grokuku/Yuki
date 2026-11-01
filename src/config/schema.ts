@@ -619,12 +619,11 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_FILES_MAX_BYTES",
   },
-  // ⚠️ GARDE-FOU ULTIME des images TRANSMISES AU MODÈLE (`files.imageMaxBytes`).
+  // ⚠️ GARDE-FOU de LECTURE/RÉDUCTION des images (`files.imageMaxBytes`).
   // Une image jointe part en base64 dans le message, et le base64 pèse ×1,33 :
-  // 3 500 000 octets ⇒ ~4,7 Mo sur le fil, sous la limite usuelle des
-  // fournisseurs compatibles OpenAI (5 Mo par image). Ce plafond borne la CHARGE
-  // RÉSEAU et le TTFT ; il ne borne PAS le contexte (le SDK estime une image à
-  // 4 800 caractères, quelle que soit sa taille).
+  // ce plafond borne les octets du FICHIER, PAS la charge réseau. La borne qui
+  // compte sur le fil est `files.imageMaxWireBytes` (ci-dessous) — les deux sont
+  // combinées dans `src/files/vision.ts` (budget = le plus petit des deux).
   //
   // ⚠️ AU-DELÀ, ON RÉDUIT D'ABORD (`src/files/vision.ts` : côté max 2 000 px,
   // côté min lisible 700 px) et on ne REFUSE que si la réduction n'aboutit pas
@@ -637,6 +636,30 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     max: 20_000_000,
     apply: "hot",
     env: "YUKI_FILES_IMAGE_MAX_BYTES",
+  },
+  // ⚠️ PLAFOND EN OCTETS TRANSMIS (base64) — LA borne qui compte sur le fil.
+  //
+  // Incident mesuré (2026-11-01) : une image de 2 876 Ko / 2231×961 était bien
+  // réduite (côté 2 000 px) mais partait à ~3,1 Mio de base64, et le fournisseur
+  // répondait `500 « request entity too large »` après 17 s et 0 jeton. La
+  // politique ne raisonnait que sur les octets d'ORIGINE : traduits en budget
+  // base64 (×4/3) par `files.imageMaxBytes`, ils laissaient passer 4 666 668
+  // octets sur le fil.
+  //
+  // ⚠️ La CIBLE n'est pas « sous les 5 Mo du fournisseur » mais « quelques
+  // centaines de Ko » : le chemin qui FONCTIONNE (la même image, le même modèle,
+  // le même fournisseur, envoyée par un client qui ré-encode) part à 479,5 Ko sur
+  // 2000×861. Mesuré ici : à budget 4 666 668 le SDK garde le PNG et émet
+  // 3 208 Ko ; à 700 000 il ré-encode en JPEG et émet 208 Ko — mêmes dimensions.
+  // 1 000 est le plancher : en dessous, aucune capture n'est lisible et TOUT
+  // serait refusé — c'est légal (comme `files.imageMaxBytes: 1`) mais absurde.
+  "files.imageMaxWireBytes": {
+    type: "int",
+    default: 700_000,
+    min: 1_000,
+    max: 20_000_000,
+    apply: "hot",
+    env: "YUKI_FILES_IMAGE_MAX_WIRE_BYTES",
   },
   // Rétention : au-delà, le FICHIER et son ANALYSE sont supprimés (purge réelle).
   "files.retentionDays": {

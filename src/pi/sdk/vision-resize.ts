@@ -11,9 +11,15 @@
  *   - image déjà conforme : ~100 ms par appel (démarrage du worker + WASM) ⇒
  *     c'est pourquoi `prepareVisionImage` ne l'appelle QUE s'il y a à réduire ;
  *   - capture 2560×1440 (569 Ko) ramenée à 2000×1125 : ~1,8 s ;
- *   - image de 9 Mo ramenée sous 3,5 Mo : ~2,1 s (et ~3,8 s sous 1 Mo).
+ *   - image de 2231×961 de 3 120 Ko, ramenée à 2000×861 : ~1,5 s — et c'est le
+ *     RÉ-ENCODAGE qui fait le poids (PNG conservé à l'ancien budget : 3 208 Ko ;
+ *     JPEG au budget du fil : 208 Ko, mêmes dimensions).
  * Ce coût est payé UNE fois, au moment d'envoyer le message (TTFT), et rien
  * n'est écrit sur le disque : la version réduite est éphémère.
+ *
+ * ⚠️ `options.maxBytes` est en BASE64 (c'est ce que compare le SDK) :
+ * `src/files/vision.ts` lui passe le plus petit des deux plafonds — octets
+ * transmis (`files.imageMaxWireBytes`) ou octets du fichier traduits en base64.
  */
 
 import { resizeImage } from "@earendil-works/pi-coding-agent";
