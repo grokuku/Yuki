@@ -143,6 +143,13 @@ export interface EphemeralSessionOptions {
   thinkingLevel?: SdkThinkingLevel;
   tools?: readonly string[];
   customTools?: readonly ToolDefinition[];
+  /**
+   * Extensions INLINE de la session éphémère. Le worker lourd y branche la BORNE
+   * des images transmises (`src/pi/sdk/image-budget-extension.ts`) : une tâche
+   * peut lire plusieurs images, et chacune repartirait sinon dans CHAQUE appel
+   * modèle de la boucle d'outils.
+   */
+  extensionFactories?: readonly InlineExtension[];
   logger?: PiLogger;
 }
 
@@ -170,7 +177,10 @@ export async function createEphemeralSession(
     agentDir: options.agentDir,
     settingsManager,
     modelRuntime: options.modelRuntime,
-    resourceLoaderOptions: buildResourceLoaderOptions(options.systemPrompt),
+    resourceLoaderOptions: buildResourceLoaderOptions(
+      options.systemPrompt,
+      options.extensionFactories,
+    ),
   });
   const result = await createAgentSessionFromServices({
     services,

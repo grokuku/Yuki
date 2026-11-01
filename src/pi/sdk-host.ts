@@ -104,6 +104,7 @@ import { createLibrarianTools } from "./sdk/librarian-tools.js";
 import { createSendFileTools } from "./sdk/send-file-tool.js";
 import { createImageTools } from "./sdk/image-tools.js";
 import { createImageStylesExtensionFactory } from "./sdk/image-styles-extension.js";
+import { createImageBudgetExtensionFactory } from "./sdk/image-budget-extension.js";
 import { createAckExtensionFactory } from "./sdk/ack-extension.js";
 import { stripFilesBlock } from "../files/frame.js";
 import { stripSourcesBlock } from "../sources/frame.js";
@@ -431,6 +432,7 @@ export function buildInlineExtensions(
     | "heritage"
     | "reactions"
     | "images"
+    | "imageRequestBudgetBytes"
     | "logger"
   >,
 ): InlineExtension[] {
@@ -486,6 +488,19 @@ export function buildInlineExtensions(
     // chaud : un workflow importé est connu au tour suivant, sans redémarrage.
     extensionFactories.push(
       createImageStylesExtensionFactory(options.images.styles, {
+        logger: options.logger,
+      }),
+    );
+  }
+  if (options.imageRequestBudgetBytes) {
+    // ⚠️ BORNE DES IMAGES SUR LE FIL : en DERNIER, mais elle ne touche pas au
+    // prompt système — elle n'agit que sur l'événement `context` (la copie des
+    // messages envoyée à chaque appel modèle). Sans elle, une image déjà vue
+    // repart à CHAQUE tour et le fournisseur finit par répondre
+    // `500 « request entity too large »` malgré un contexte texte minuscule.
+    extensionFactories.push(
+      createImageBudgetExtensionFactory({
+        budgetBytes: options.imageRequestBudgetBytes,
         logger: options.logger,
       }),
     );

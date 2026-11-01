@@ -18,6 +18,7 @@ const PATHS = [
   "files.maxFileBytes",
   "files.imageMaxBytes",
   "files.imageMaxWireBytes",
+  "files.imageRequestBudgetBytes",
   "files.retentionDays",
   "files.maxAttachments",
   "files.promptChars",
@@ -25,7 +26,7 @@ const PATHS = [
 ] as const;
 
 describe("configuration des fichiers", () => {
-  it("les sept champs existent, sont des entiers appliqués À CHAUD", () => {
+  it("les huit champs existent, sont des entiers appliqués À CHAUD", () => {
     for (const path of PATHS) {
       const descriptor = CONFIG_SCHEMA[path] as FieldDescriptor | undefined;
       expect(descriptor, path).toBeDefined();
@@ -81,6 +82,33 @@ describe("configuration des fichiers", () => {
     );
     const service = readFileSync(join(process.cwd(), "src", "files", "service.ts"), "utf8");
     expect(service).toContain("maxWireBytes: wireLimit");
+  });
+
+  it("le plafond d'IMAGES PAR REQUÊTE vaut 1 500 000 octets base64 et est BRANCHÉ deux fois", () => {
+    // ⚠️ Une borne PAR IMAGE ne suffit pas : le SDK renvoie à CHAQUE tour tout
+    // l'historique, donc une image déjà vue repartait dans chaque requête
+    // (mesuré : 2,4 Mo de corps après trois images vues, `500 request entity too
+    // large` alors que le contexte TEXTE était minuscule).
+    const descriptor = CONFIG_SCHEMA["files.imageRequestBudgetBytes"] as FieldDescriptor;
+    expect(descriptor.type).toBe("int");
+    expect(descriptor.apply).toBe("hot");
+    expect(descriptor.default).toBe(1_500_000);
+    // Au moins deux images pleines (`files.imageMaxWireBytes` = 700 000), sinon la
+    // pièce jointe du tour et le résultat d'outil ne tiendraient pas ensemble.
+    expect(descriptor.default).toBeGreaterThanOrEqual(2 * 700_000);
+    expect(descriptor.max).toBe(60_000_000);
+    expect(descriptor.min).toBe(1_000);
+    expect(validateDescriptor(descriptor, 999).ok).toBe(false);
+    expect(validateDescriptor(descriptor, 1_000).ok).toBe(true);
+    expect(validateDescriptor(descriptor, 60_000_001).ok).toBe(false);
+    expect(descriptor.env).toBe("YUKI_FILES_IMAGE_REQUEST_BUDGET_BYTES");
+
+    // BRANCHÉ deux fois : session LÉGÈRE (sdk-host) ET worker LOURD (par tâche).
+    const index = readFileSync(join(process.cwd(), "src", "index.ts"), "utf8");
+    expect(
+      index.split('imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes")')
+        .length - 1,
+    ).toBe(2);
   });
 
   it("la rétention vaut 30 jours par défaut", () => {

@@ -575,6 +575,22 @@ const GROUPS = [
           "l'appel au fournisseur.",
       },
       {
+        path: "files.imageRequestBudgetBytes",
+        label: "Total maximal d'images TRANSMISES par requête (octets base64)",
+        kind: "number",
+        min: 1000,
+        max: 60000000,
+        helper:
+          "⚠️ Le plafond d'UNE image ne suffit pas : l'historique entier repart " +
+          "à CHAQUE tour, donc chaque image déjà vue repartait aussi. Ce plafond " +
+          "borne le TOTAL des images d'une requête. Défaut 1 500 000 octets " +
+          "(~1,5 Mo transmis, soit deux images pleines). Au-delà, les images les " +
+          "plus ANCIENNES sont retirées AVANT l'appel et remplacées par un texte " +
+          "qui dit la vérité (« déjà vue, relis-la avec lire_fichier ») : la " +
+          "vision reste active, seule la répétition disparaît. 0 ⇒ pas de borne " +
+          "(déconseillé : c'est ce qui produisait `500 request entity too large`).",
+      },
+      {
         path: "files.agentMaxBytes",
         label: "Transfert machine : plafond par transfert (octets)",
         kind: "number",
@@ -807,6 +823,7 @@ const FIELD_DEFAULTS = {
   "files.agentTimeoutMs": 120000,
   "files.imageMaxBytes": 3500000,
   "files.imageMaxWireBytes": 700000,
+  "files.imageRequestBudgetBytes": 1500000,
   "files.retentionDays": 30,
   "files.maxAttachments": 5,
   "files.promptChars": 12000,

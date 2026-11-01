@@ -39,6 +39,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/image-tools.ts",
   "src/pi/sdk/image-styles-extension.ts",
   "src/pi/sdk/vision-resize.ts",
+  "src/pi/sdk/image-budget-extension.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =

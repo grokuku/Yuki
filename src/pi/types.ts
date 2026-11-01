@@ -239,6 +239,21 @@ export interface PiHostOptions {
     };
   };
   /**
+   * BORNE des images transmises à CHAQUE appel modèle (réglage
+   * `files.imageRequestBudgetBytes`).
+   *
+   * ⚠️ Le SDK renvoie à chaque tour TOUT l'historique : une image rendue par
+   * `lire_fichier` repartait dans chaque requête suivante, jusqu'au
+   * `500 « request entity too large »` du fournisseur — alors que le contexte
+   * TEXTE, lui, était petit (et que la compaction ne compte une image que pour
+   * ~1 200 jetons). Avec cette borne, l'image est vue UNE fois (le tour qui la
+   * produit) puis remplacée par un texte explicite dans les tours suivants.
+   *
+   * Une FONCTION est relue à CHAQUE appel (`apply: hot`). Absente ⇒ pas de
+   * borne (host nu, tests) ; `<= 0` ⇒ pas de borne non plus.
+   */
+  imageRequestBudgetBytes?: () => number;
+  /**
    * Faux ⇒ `send` échoue explicitement en `LLM_UNAVAILABLE` (clé légère
    * manquante). Une FONCTION est lue en direct (bascule à chaud des clés).
    */

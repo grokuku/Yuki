@@ -53,6 +53,7 @@ import {
 } from "./execution-tools.js";
 import { getSharedModelRuntime, liveValue, resolveSdkModel, sdkModelSupportsImages } from "./model-runtime.js";
 import { createListFilesTool } from "./list-files-tool.js";
+import { createImageBudgetExtensionFactory } from "./image-budget-extension.js";
 import { createReadFileTool } from "./read-file-tool.js";
 import { createEphemeralSession } from "./session-factory.js";
 
@@ -127,6 +128,17 @@ export interface SdkHeavyWorkerConfig {
    * sans modèle ni réseau.
    */
   createSession?: typeof createEphemeralSession;
+  /**
+   * BORNE des images transmises à CHAQUE appel modèle de la tâche (réglage
+   * `files.imageRequestBudgetBytes`, relu à chaque job quand c'est une fonction).
+   *
+   * ⚠️ Une tâche peut lire PLUSIEURS images (`lire_fichier`, `recuperer_fichier`) :
+   * sans cette borne, chacune repart dans chaque appel modèle de la boucle
+   * d'outils, et le fournisseur finit par répondre `500 request entity too large`.
+   * La vision reste active : l'image FRAÎCHE est toujours vue, les précédentes
+   * deviennent un texte qui dit comment les revoir. Absent ⇒ pas de borne.
+   */
+  imageRequestBudgetBytes?: () => number;
   idleTimeoutMs: number;
   totalTimeoutMs: number;
   logger: PiLogger;
@@ -449,6 +461,19 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         thinkingLevel: liveValue(config.thinking),
         tools: config.tools,
         ...(actionTools.length > 0 ? { customTools: actionTools } : {}),
+        // ⚠️ MÊME BORNE D'IMAGES QUE LA SESSION LÉGÈRE (`sdk-host.ts`) : une
+        // tâche qui lit trois images les ferait sinon repartir toutes les trois
+        // dans chaque appel modèle de sa boucle d'outils.
+        ...(config.imageRequestBudgetBytes !== undefined
+          ? {
+              extensionFactories: [
+                createImageBudgetExtensionFactory({
+                  budgetBytes: config.imageRequestBudgetBytes,
+                  logger: config.logger,
+                }),
+              ],
+            }
+          : {}),
       });
     } catch (error) {
       const sessionCause = truncateCause(

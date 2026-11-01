@@ -661,6 +661,33 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_FILES_IMAGE_MAX_WIRE_BYTES",
   },
+  // ⚠️ PLAFOND DES IMAGES D'UNE **REQUÊTE ENTIÈRE** (et non d'une seule image).
+  //
+  // Incident mesuré (2026-11-01, 2 h de blocage) : `files.imageMaxWireBytes` borne
+  // UNE image, mais le SDK renvoie à CHAQUE tour TOUT l'historique — une image
+  // rendue par `lire_fichier` repartait donc dans chaque requête suivante. Après
+  // trois lectures, le corps HTTP dépassait la limite du fournisseur alors que le
+  // contexte TEXTE était devenu minuscule (« redescendu à 23 k ») : la compaction
+  // ne voit une image que comme ~1 200 jetons et CONSERVE les messages récents
+  // tels quels, blocs image compris.
+  //
+  // Corrigé par `src/pi/sdk/context-images.ts` (événement `context` du SDK, qui ne
+  // modifie QUE la copie envoyée) : du plus RÉCENT au plus ANCIEN, les images sont
+  // gardées tant que le total TRANSMIS (base64) reste sous ce plafond ; au-delà,
+  // le bloc image devient un texte qui dit la vérité et comment la revoir.
+  // ⚠️ La VISION reste ACTIVE : l'image fraîche (outil ou pièce jointe du tour)
+  // est toujours vue ; seule sa RÉPÉTITION dans les tours suivants est retirée.
+  // 1 500 000 ≈ deux images pleines (une pièce jointe + un résultat d'outil) ;
+  // au-delà, une image supplémentaire est retirée AVANT l'appel, jamais après
+  // l'échec. 0 (ou moins) ⇒ pas de borne (comportement antérieur, déconseillé).
+  "files.imageRequestBudgetBytes": {
+    type: "int",
+    default: 1_500_000,
+    min: 1_000,
+    max: 60_000_000,
+    apply: "hot",
+    env: "YUKI_FILES_IMAGE_REQUEST_BUDGET_BYTES",
+  },
   // Rétention : au-delà, le FICHIER et son ANALYSE sont supprimés (purge réelle).
   "files.retentionDays": {
     type: "int",

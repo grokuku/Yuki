@@ -1259,6 +1259,10 @@ async function main(): Promise<void> {
       // AUTOMATIQUEMENT au premier message du worker (métadonnées seules).
       files: filesService,
       ...(secretStore ? { secrets: secretStore } : {}),
+      // ⚠️ BORNE DES IMAGES SUR LE FIL : une tâche peut lire plusieurs images,
+      // et chacune repartirait sinon dans CHAQUE appel modèle de sa boucle
+      // d'outils (`500 request entity too large`). Relue à chaque job.
+      imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes"),
       idleTimeoutMs,
       totalTimeoutMs,
       logger,
@@ -1619,6 +1623,11 @@ async function main(): Promise<void> {
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,
+      // ⚠️ BORNE DES IMAGES SUR LE FIL : le SDK renvoie TOUT l'historique à
+      // chaque tour, donc une image rendue par un outil repartait à chaque
+      // tour suivant (`500 request entity too large`, contexte texte pourtant
+      // minuscule). Relue à chaque appel ⇒ réglage `apply: hot`.
+      imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes"),
       // RÉACTIONS : le modèle les VOIT au tour suivant (prompt système, borné),
       // sans qu'aucun tour ne soit déclenché. Lecture seule depuis l'extension.
       reactions: reactionStore,
