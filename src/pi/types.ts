@@ -441,6 +441,21 @@ export interface TranscriptEntry {
    *    texte) : la bulle montre alors l'accusé seul — jamais une bulle vide.
    */
   ack?: string;
+  /**
+   * AUTEUR réel du message, pour une conversation MIROIR (canal distant).
+   *
+   * ⚠️ Absent pour les conversations de Yuki : l'interface applique alors le
+   * rendu historique (utilisateur / Yuki). Présent, il nomme l'humain (ou le
+   * robot) qui a écrit dans le canal — sans lui, tous les participants d'un
+   * canal seraient indiscernables.
+   */
+  author?: { id: string; nom: string; estBot: boolean };
+  /**
+   * MESSAGE PARENT quand cette entrée est une réponse de FIL (conversation
+   * miroir uniquement). Absent pour un message racine et pour toute
+   * conversation locale : l'interface n'affiche alors aucun fil.
+   */
+  threadRootId?: string;
 }
 
 /**

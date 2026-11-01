@@ -96,6 +96,7 @@ import {
   isSourcesPath,
   type SourcesApiDeps,
 } from "./routes/sources.js";
+import { handleChatRequest, isChatApiPath, type ChatApiDeps } from "./routes/chat.js";
 import {
   handleFilesApiRequest,
   handleFilesServeRequest,
@@ -137,6 +138,11 @@ export interface AppContext {
    * « Notifications ». Absente ⇒ `/api/sources*` → 404.
    */
   sources?: SourcesApiDeps;
+  /**
+   * API des DISCUSSIONS externes (lot 18) : mode courant et état de la
+   * plateforme, sans secret. Absente ⇒ `/api/chat*` → 404.
+   */
+  chat?: ChatApiDeps;
   /**
    * API de gestion du coffre de secrets. Absente ⇒ `/api/secrets*` → 404.
    * ⚠️ Ne renvoie JAMAIS la valeur d'un secret (noms + libellés seulement).
@@ -673,6 +679,7 @@ export function createApp(context: AppContext): RequestListener {
     admin,
     push,
     sources,
+    chat,
     voices,
     tts,
     agents,
@@ -708,6 +715,21 @@ export function createApp(context: AppContext): RequestListener {
             res.end();
           }
         },
+      );
+      return;
+    }
+
+    if (chat && isChatApiPath(path)) {
+      const response = handleChatRequest({
+        method,
+        path,
+        headers: req.headers,
+        deps: chat,
+      });
+      writeResponse(
+        res,
+        { status: response.status, body: response.body, headers: response.headers },
+        headOnly,
       );
       return;
     }

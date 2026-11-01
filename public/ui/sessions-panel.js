@@ -30,6 +30,11 @@ import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { HolafIcons } from "./vendor/holaf/holaf-icons.js";
 import { attachLongPress } from "./long-press.js";
 import {
+  creationRefusal,
+  initChatModeSelector,
+  modeNotice,
+} from "./chat-mode.js";
+import {
   composeConversationLabel,
   formatUnreadBadge,
   normalizeCount,
@@ -252,6 +257,8 @@ function el(tag, attrs = {}, text) {
  * @param {(id: string, pinned: boolean) => void} deps.onPin
  * @param {(id: string) => void} [deps.onRecapDedicated] entrée « Conversation
  *   dédiée… » du menu du titre (parcours `recap-dedicated.js`).
+ * @param {(mode: string) => void} [deps.onChatModeChange] mode de DISCUSSION
+ *   choisi dans le sélecteur segmenté (Local · Mattermost · Discord).
  * @param {HTMLElement} [deps.footer] encart fixe en bas de la barre (agents).
  * @param {Array<{list: HTMLElement, empty?: HTMLElement}>} [deps.extraLists]
  *   cibles SUPPLÉMENTAIRES (menu téléphone) : même rendu, classe de ligne
@@ -270,6 +277,7 @@ export function initSessionsPanel(deps) {
   const onCompact = deps.onCompact ?? (() => undefined);
   const onPin = deps.onPin ?? (() => undefined);
   const onRecapDedicated = deps.onRecapDedicated ?? (() => undefined);
+  const onChatModeChange = deps.onChatModeChange ?? (() => undefined);
   /** `fetch` injectable (tests) : la modale de suppression réaffecte les sources. */
   const doFetch = deps.fetchImpl ?? ((url, init) => fetch(url, init));
 
@@ -330,7 +338,23 @@ export function initSessionsPanel(deps) {
     "aria-label": "Liste des conversations",
   });
 
-  inner.append(top, newBtn, list);
+  // ─── Mode de DISCUSSION (Local · Mattermost · Discord) ──────────────────
+  // ⚠️ Placé EN TÊTE, au-dessus de « + Nouvelle conversation » : le mode décide
+  // de ce que la liste contient (conversations de Yuki, canaux d'une
+  // plateforme). L'état est PERSISTÉ CÔTÉ SERVEUR (`chat.mode`) : le panneau ne
+  // fait qu'afficher et demander.
+  const modeSlot = el("div", { class: "sidebar__mode" });
+  let chatStatus = null;
+  const selector = initChatModeSelector({ root: modeSlot, onChange: onChatModeChange });
+
+  // Bandeau/état vide du mode distant + raison VISIBLE du refus de création.
+  const notice = el("div", { class: "sidebar__notice" });
+  notice.hidden = true;
+  const noticeTitle = el("p", { class: "sidebar__notice-title" });
+  const noticeDetail = el("p", { class: "sidebar__notice-detail" });
+  notice.append(noticeTitle, noticeDetail);
+
+  inner.append(top, modeSlot, newBtn, notice, list);
   // Encart FIXE en bas de la barre (agents), fourni par l'appelant : monté DANS
   // la colonne interne pour profiter du repli/dépli et rester lisible en rail.
   if (deps.footer instanceof Node) inner.append(deps.footer);
@@ -940,6 +964,35 @@ export function initSessionsPanel(deps) {
     root.addEventListener("scroll", closeMenu, true);
   }
 
+  /**
+   * Applique l'état du MODE DE DISCUSSION (server-authoritative).
+   *
+   * - sélecteur segmenté + badge ●/◐/○ (raison exacte en `title`) ;
+   * - `+ Nouvelle conversation` DÉSACTIVÉE avec la raison du serveur quand la
+   *   création est refusée (mode distant) — le serveur refuse de son côté ;
+   * - état vide / bandeau explicite du mode (`chat-mode.js`).
+   *
+   * @param {unknown} status corps de `GET /api/chat/status`.
+   */
+  function setChatMode(status) {
+    chatStatus = status && typeof status === "object" ? status : null;
+    selector.update(chatStatus);
+    const refusal = creationRefusal(chatStatus);
+    newBtn.disabled = refusal !== null;
+    if (refusal !== null) {
+      newBtn.setAttribute("aria-disabled", "true");
+      newBtn.title = refusal;
+    } else {
+      newBtn.removeAttribute("aria-disabled");
+      newBtn.title = "Nouvelle conversation";
+    }
+    const mode = modeNotice(chatStatus);
+    const titre = mode ? mode.titre : refusal !== null ? "Création désactivée" : "";
+    noticeTitle.textContent = titre;
+    noticeDetail.textContent = mode ? mode.detail : refusal ?? "";
+    notice.hidden = titre === "";
+  }
+
   return {
     update(nextSessions, nextActiveId, nextBusyIds, nextUnread) {
       sessions = Array.isArray(nextSessions) ? nextSessions : [];
@@ -970,6 +1023,11 @@ export function initSessionsPanel(deps) {
         applyIndicators(item, item.getAttribute("data-id") ?? "");
       }
     },
+    /** État du mode de discussion le plus récent (null tant qu'il est inconnu). */
+    chatMode() {
+      return chatStatus;
+    },
+    setChatMode,
     closeMenu,
   };
 }

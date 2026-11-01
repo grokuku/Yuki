@@ -11,6 +11,7 @@ import { WebSocket } from "ws";
 import {
   createWsTransport,
   type AgentsGatewayPort,
+  type ChatGatewayPort,
   type SourcesGatewayPort,
 } from "../../../src/gateway/ws/server.js";
 import type { ServerFrame } from "../../../src/gateway/ws/protocol.js";
@@ -49,6 +50,8 @@ export interface HarnessOptions extends FakePiHostOptions {
   images?: ImagesGatewayPort;
   /** SOURCES : marquage des fils + réaffectation à la suppression (optionnel). */
   sources?: SourcesGatewayPort;
+  /** DISCUSSIONS : canaux MIROIR + mode + refus de création (optionnel). */
+  chat?: ChatGatewayPort;
   /**
    * CAPACITÉ VISION du modèle de conversation (optionnel). Absent ⇒ comportement
    * historique (les images partent).
@@ -85,6 +88,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.files ? { files: options.files } : {}),
     ...(options.images ? { images: options.images } : {}),
     ...(options.sources ? { sources: options.sources } : {}),
+    ...(options.chat ? { chat: options.chat } : {}),
     ...(options.vision ? { vision: options.vision } : {}),
   });
   const server = createHttpServer((_req, res) => {

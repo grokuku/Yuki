@@ -579,6 +579,76 @@ export function toolAllowlist(
   return tools;
 }
 
+/**
+ * POLITIQUE D'OUTILS PAR MODE DE DISCUSSION (lot 18).
+ *
+ * ⚠️ Dimension PROPRE, posée à côté des catégories existantes : un run né dans
+ * une conversation DISTANTE (canal Mattermost/Discord) n'a pas les mêmes droits
+ * qu'un run de la conversation locale. Ce n'est pas un booléen global : c'est un
+ * jeu d'outils FERMÉ, énuméré.
+ *
+ * Exigence utilisateur (2026-11-01) : en mode distant, les AGENTS sont
+ * désactivés PAR DÉFAUT (sécurité) — « pas de délégation, pas de transfert de
+ * fichier, pas de commande » — mais **`generer_image` et l'ANALYSE D'IMAGE
+ * doivent rester disponibles** (« je veux pouvoir générer et analyser des
+ * images sur mattermost »).
+ */
+export type ChatOriginMode = "local" | "mattermost" | "discord";
+
+/**
+ * Outils autorisés à un run distant quand les AGENTS sont désactivés (défaut).
+ *
+ * ⚠️ Liste FERMÉE, volontairement courte :
+ *  - `generer_image` + `consulter_workflow` (génération d'image) ;
+ *  - `lister_fichiers` + `lire_fichier` (analyse d'une image jointe).
+ *
+ * Rien d'autre : AUCUN builtin de lecture (`read`, `ls`, `grep`, `find`), aucune
+ * délégation (`delegate`, `job_status`, `cancel_job`, `steer_job`), aucun
+ * transfert (`recuperer_fichier`, `deposer_fichier`), aucune commande
+ * (`run_command`, `capturer_ecran`), aucun secret (`lister_secrets`,
+ * `demander_secret`), ni annuaire, ni archive, ni libraire.
+ */
+export const REMOTE_SAFE_TOOLS: readonly CustomToolName[] = [
+  ...IMAGE_TOOLS,
+  ...FILE_LIST_TOOLS,
+  ...FILE_READ_TOOLS,
+];
+
+export interface ChatToolPolicyOptions {
+  /** Origine du run : le mode de discussion de la conversation déclencheuse. */
+  chatMode: ChatOriginMode;
+  /** `chat.remoteAgents` : `true` ⇒ politique PLEINE (le relais d'approbations du lot 3 devient obligatoire). */
+  remoteAgents: boolean;
+}
+
+/**
+ * Allowlist d'un run, selon l'ORIGINE du run.
+ *
+ * - mode `local` (défaut) : politique du rôle, STRICTEMENT inchangée ;
+ * - mode distant + agents ACTIVÉS : politique du rôle (le relais d'approbations
+ *   du lot 3 est alors indispensable — une action sans validation serait
+ *   déclenchée par un tiers) ;
+ * - mode distant + agents DÉSACTIVÉS (défaut) : `REMOTE_SAFE_TOOLS` pour le rôle
+ *   léger, et RIEN pour le rôle lourd (sans délégation, aucun run lourd ne peut
+ *   naître d'une conversation distante).
+ *
+ * ⚠️ Ce calcul n'est PAS encore branché sur le SDK : au lot 1, le seul run
+ * existant est celui de la conversation locale, et lui appliquer la restriction
+ * distante casserait l'usage courant. Le branchement appartient au lot 2/3,
+ * quand un run pourra naître d'un canal.
+ */
+export function toolAllowlistForChat(
+  role: LlmRole,
+  options: ToolAllowlistOptions,
+  chat: ChatToolPolicyOptions,
+): string[] {
+  if (chat.chatMode === "local" || chat.remoteAgents) {
+    return toolAllowlist(role, options);
+  }
+  if (role !== "light") return [];
+  return [...REMOTE_SAFE_TOOLS];
+}
+
 /** Outils d'écriture/exécution explicitement interdits au Lot 2. */
 export const FORBIDDEN_TOOLS: readonly string[] = [
   "write",

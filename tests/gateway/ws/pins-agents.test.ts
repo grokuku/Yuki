@@ -102,19 +102,24 @@ class FakeAgentPort implements AgentsGatewayPort {
 
 describe("orderSessions — épinglées d'abord, puis date décroissante", () => {
   it("place les épinglées en tête et trie le reste par date", () => {
+    // Conversations LOCALES : `kind`/`platform`/`readOnly`/`canRun` sont
+    // désormais obligatoires dans `WireSession` (lot 18) et ne changent RIEN à
+    // l'ordre.
+    const local = { kind: "local" as const, platform: "local" as const, readOnly: false, canRun: true };
     const sessions: WireSession[] = [
-      { id: "a", title: "a", messageCount: 0, updatedAt: "2026-01-03T00:00:00.000Z" },
-      { id: "b", title: "b", messageCount: 0, updatedAt: "2026-01-05T00:00:00.000Z", pinned: true },
-      { id: "c", title: "c", messageCount: 0, updatedAt: "2026-01-04T00:00:00.000Z" },
-      { id: "d", title: "d", messageCount: 0, updatedAt: "2026-01-01T00:00:00.000Z", pinned: true },
+      { ...local, id: "a", title: "a", messageCount: 0, updatedAt: "2026-01-03T00:00:00.000Z" },
+      { ...local, id: "b", title: "b", messageCount: 0, updatedAt: "2026-01-05T00:00:00.000Z", pinned: true },
+      { ...local, id: "c", title: "c", messageCount: 0, updatedAt: "2026-01-04T00:00:00.000Z" },
+      { ...local, id: "d", title: "d", messageCount: 0, updatedAt: "2026-01-01T00:00:00.000Z", pinned: true },
     ];
     expect(orderSessions(sessions).map((s) => s.id)).toEqual(["b", "d", "c", "a"]);
   });
 
   it("stable : à date égale, l'ordre d'entrée est conservé", () => {
+    const local = { kind: "local" as const, platform: "local" as const, readOnly: false, canRun: true };
     const sessions: WireSession[] = [
-      { id: "a", title: "a", messageCount: 0 },
-      { id: "b", title: "b", messageCount: 0 },
+      { ...local, id: "a", title: "a", messageCount: 0 },
+      { ...local, id: "b", title: "b", messageCount: 0 },
     ];
     expect(orderSessions(sessions).map((s) => s.id)).toEqual(["a", "b"]);
   });

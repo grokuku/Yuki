@@ -51,6 +51,8 @@ import {
   type WireAgent,
   type WireSession,
 } from "./protocol.js";
+import type { ChatMode, RemoteConversation, RemoteMessage } from "../../chat/types.js";
+import { isMirrorConversationId, remoteMessageToTranscript } from "../../chat/mirror.js";
 import type { AgentLevel } from "../../agents/types.js";
 import {
   SessionStreamStore,
@@ -190,6 +192,12 @@ export interface WsTransportOptions {
    * Absent ⇒ aucun marquage, aucune réaffectation (comportement inchangé).
    */
   sources?: SourcesGatewayPort;
+  /**
+   * DISCUSSIONS (lot 18) : conversations MIROIR d'un canal distant. Absent ⇒
+   * aucune trame `sessions` distante et aucun refus de création (comportement
+   * strictement inchangé).
+   */
+  chat?: ChatGatewayPort;
 }
 
 /**
@@ -199,6 +207,29 @@ export interface WsTransportOptions {
 export interface FileTransferGatewayPort {
   /** S'abonne aux fichiers RÉCUPÉRÉS depuis une machine. Renvoie le désabonnement. */
   subscribeReceived(listener: (view: FileReceivedView) => void): () => void;
+}
+
+/**
+ * Port des DISCUSSIONS (lot 18) — ce que le transport a besoin de savoir pour
+ * traiter une conversation MIROIR (canal distant).
+ *
+ * ⚠️ Le transport ne parle JAMAIS à une plateforme : il ne connaît ni jeton, ni
+ * URL, ni transport distant. Il demande au service de discussion le mode, le
+ * motif de refus de création et les conversations miroir.
+ */
+export interface ChatGatewayPort {
+  /** Mode courant (`local` | `mattermost` | `discord`) — relu à chaque message. */
+  mode(): ChatMode;
+  /** `true` si le mode courant est distant (la création locale est alors refusée). */
+  isRemote(): boolean;
+  /** Motif LISIBLE du refus de créer une conversation locale ; `null` en mode local. */
+  creationRefusal(): string | null;
+  /** Conversations miroir disponibles (vide tant qu'aucune synchronisation n'existe). */
+  conversations(): readonly RemoteConversation[];
+  /** Conversation miroir par identifiant Yuki (`mm-…`), ou `null` si inconnue. */
+  conversation(conversationId: string): RemoteConversation | null;
+  /** Messages d'une conversation miroir (ordre chronologique). */
+  messages(conversationId: string): readonly RemoteMessage[];
 }
 
 /**
@@ -220,6 +251,15 @@ interface ClientState {
   ws: WebSocket;
   /** Session FOCALISÉE (cible des envois, de l'abort et des validations). */
   sessionId?: string;
+  /**
+   * Conversation MIROIR actuellement AFFICHÉE par ce client (`mm-…` / `dc-…`),
+   * quand l'utilisateur regarde un canal distant.
+   *
+   * ⚠️ Le focus Pi (`sessionId`) n'est PAS touché : un miroir n'a pas de fichier
+   * de session, donc aucune bascule d'hôte n'a lieu — c'est justement pour cela
+   * que `handleSwitch` ne peut pas le servir. `undefined` = conversation locale.
+   */
+  focusedId?: string;
   /** Curseur de rejeu de la session FOCALISÉE (reconnexion). */
   lastSeq: number;
   greeted: boolean;
@@ -445,6 +485,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const filesPort = options.files;
   const agentTransfers = options.agentTransfers;
   const sourcesPort = options.sources;
+  const chatPort = options.chat;
 
   /**
    * État de session ENRICHI des réactions courantes (aucune copie inutile quand
@@ -980,18 +1021,61 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   }
 
+  /**
+   * Conversations MIROIR du mode courant (`sessions` distantes).
+   *
+   * ⚠️ Aucune n'existe au lot 1 (pas de synchronisation) : la liste est VIDE et
+   * l'interface affiche son état vide explicite. La mécanique est là pour que le
+   * lot 2 n'ait qu'à remplir le miroir.
+   */
+  function mirrorSessions(): WireSession[] {
+    if (!chatPort) return [];
+    const mode = chatPort.mode();
+    if (mode === "local") return [];
+    return chatPort
+      .conversations()
+      .filter((conversation) => conversation.platform === mode)
+      .map((conversation) => ({
+        id: conversation.id,
+        kind: "remote",
+        platform: conversation.platform,
+        // ⚠️ Lecture seule CÔTÉ INTERFACE WEB (on n'y crée rien, on n'y écrit
+        // rien) — PAS « inerte » : `canRun` dit qu'elle répond.
+        readOnly: conversation.readOnly,
+        canRun: conversation.canRun,
+        ...(conversation.replyMode ? { replyMode: conversation.replyMode } : {}),
+        title: conversation.title,
+        ...(conversation.updatedAt ? { updatedAt: conversation.updatedAt } : {}),
+        messageCount: conversation.messageCount,
+      }));
+  }
+
   /** Liste des conversations + conversation active, envoyée au client. */
   async function sendSessions(client: ClientState): Promise<void> {
     let sessions: WireSession[] = [];
     let listed = false;
+    // Mode DISTANT : la liste ne contient QUE les canaux de la plateforme (vide
+    // tant que rien n'est synchronisé). Les conversations locales reviennent dès
+    // qu'on repasse en mode local — elles ne sont pas supprimées.
+    const remoteMode = chatPort !== undefined && chatPort.mode() !== "local";
+    // Identifiants des sessions Pi : SEULES elles peuvent être « abonnées » (un
+    // miroir n'a pas de flux). On les tient à part pour ne jamais créer un flux
+    // sur un identifiant `mm-…`.
+    let localIds: string[] = [];
     try {
-      const list = await host.listSessions();
+      const list = remoteMode ? [] : await host.listSessions();
       sessions = list.map((info) => {
         // Sources qui postent dans CE fil : la modale de suppression les LISTE
         // (⚠️ aucune suppression silencieuse d'un fil qui reçoit des sources).
         const feeding = sourcesPort?.sourcesForSession(info.sessionId) ?? [];
         return {
           id: info.sessionId,
+          kind: "local" as const,
+          platform: "local" as const,
+          // Une conversation locale : l'interface web y crée et y écrit, et elle
+          // produit des runs. Aucun changement de comportement, seulement dit.
+          readOnly: false,
+          canRun: true,
           title: info.title ?? info.name ?? "Conversation sans titre",
           ...(info.updatedAt ? { updatedAt: info.updatedAt } : {}),
           messageCount: info.messageCount ?? 0,
@@ -1002,9 +1086,11 @@ export function createWsTransport(options: WsTransportOptions): Transport {
           ...(feeding.length > 0 ? { sources: [...feeding] } : {}),
         };
       });
+      localIds = sessions.map((session) => session.id);
       // Épinglées d'abord, puis date décroissante (ordre autoritatif, poussé au
-      // client : la barre latérale se contente de refléter cette liste).
-      sessions = orderSessions(sessions);
+      // client : la barre latérale se contente de refléter cette liste). Les
+      // canaux miroir suivent la même règle (ils n'ont pas d'épingle).
+      sessions = orderSessions([...sessions, ...mirrorSessions()]);
       listed = true;
     } catch (error) {
       logger.warn("ws.sessions.list_failed", {
@@ -1012,14 +1098,21 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       });
     }
     // E2 : la liste EST la source de vérité des conversations suivies ⇒ on y
-    // aligne les abonnements. En cas d'échec de lecture, on garde au moins la
-    // session focalisée (jamais zéro abonnement).
-    if (listed) syncSubscriptions(client, sessions.map((s) => s.id));
+    // aligne les abonnements (SESSIONS PI seulement). En cas d'échec de lecture,
+    // on garde au moins la session focalisée (jamais zéro abonnement).
+    if (listed) syncSubscriptions(client, localIds);
     else subscribeFocused(client);
+    // Focus AFFICHÉ : le miroir sélectionné prime (il n'existe pas côté Pi).
+    if (client.focusedId !== undefined && !sessions.some((s) => s.id === client.focusedId)) {
+      // Le canal a disparu (ou le mode a changé) : on ne laisse pas un focus mort.
+      client.focusedId = undefined;
+    }
     sendDirect(client, {
       type: "sessions",
       sessions,
-      activeId: host.currentSessionId() ?? null,
+      // En mode distant, aucune conversation locale n'est « ouverte » : seul un
+      // canal sélectionné l'est (sinon l'interface affiche son état vide).
+      activeId: client.focusedId ?? (remoteMode ? null : host.currentSessionId() ?? null),
     });
   }
 
@@ -1049,6 +1142,13 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   function sendSnapshotForCurrent(client: ClientState): void {
     const sessionId = sessionIdFor(client);
+    // Mode DISTANT sans canal sélectionné : on n'affiche PAS la conversation
+    // locale (elle n'est pas dans la liste de ce mode) — snapshot vide, dit
+    // `readOnly`. Un canal, lui, passe par `handleSelectRemote`.
+    if (chatPort !== undefined && chatPort.mode() !== "local" && !isMirrorConversationId(client.focusedId)) {
+      sendDirect(client, { type: "snapshot", state: "idle", readOnly: true, transcript: [] });
+      return;
+    }
     if (!sessionId) {
       sendDirect(client, { type: "snapshot", state: "idle", transcript: [] });
       return;
@@ -1122,6 +1222,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // client adopte un autre fil par la trame dédiée `switch`.
     client.sessionId = current;
     client.greeted = true;
+    // Connexion neuve : le focus affiché est celui de l'hôte (aucun miroir).
+    client.focusedId = undefined;
     subscribeFocused(client);
     sendDirect(client, { type: "welcome", serverVersion, resumed });
     await sendSessions(client);
@@ -1146,6 +1248,16 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       });
       return;
     }
+    // ⚠️ Rechargement pendant qu'on regardait un canal distant : `resume` vise un
+    // miroir, qui n'a pas de session Pi. Sans cette branche, l'utilisateur
+    // recevrait « Conversation introuvable » à chaque reconnexion.
+    if (isMirrorConversationId(target)) {
+      sendDirect(client, { type: "welcome", serverVersion, resumed: false });
+      await handleSelectRemote(client, target);
+      sendAgents(client);
+      return;
+    }
+    client.focusedId = undefined;
     // ⚠️ TROU #2 CORRIGÉ : la bascule doit RÉELLEMENT changer la session HÔTE
     // (`host.resume`), pas seulement l'abonnement au flux — sinon le 1er
     // message échouerait « Session inconnue ». On ne le fait que si la session
@@ -1212,9 +1324,78 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     sendPendingSecrets(client);
   }
 
+  /**
+   * Sélection d'une conversation MIROIR (canal distant).
+   *
+   * ⚠️ Chemin SÉPARÉ de `handleSwitch` : un miroir n'a pas de fichier de session
+   * Pi, donc `host.sessionFileFor` / `host.resume` ne s'appliquent pas. On ne
+   * touche PAS au focus Pi (la conversation locale reste celle de l'hôte) ; on
+   * ne fait que poser `client.focusedId` et servir un snapshot SYNTHÉTIQUE :
+   * transcript du miroir, `state: "idle"`, `readOnly: true` (l'interface web n'y
+   * compose pas — même si la conversation, elle, peut produire des runs).
+   */
+  async function handleSelectRemote(
+    client: ClientState,
+    conversationId: string,
+  ): Promise<void> {
+    const conversation = chatPort?.conversation(conversationId) ?? null;
+    if (!conversation) {
+      sendDirect(client, {
+        type: "error",
+        code: "session_inconnue",
+        message:
+          "Ce canal distant n'est pas (encore) synchronisé : aucun message à afficher.",
+      });
+      return;
+    }
+    client.focusedId = conversation.id;
+    await sendSessions(client);
+    // ⚠️ Enveloppe construite à la main, portant l'identifiant du CANAL : la
+    // trame ne doit surtout pas partir avec l'enveloppe d'une session Pi (le
+    // client routerait le transcript du canal vers le store du mauvais fil).
+    sendFrame(client, {
+      seq: 0,
+      ts: new Date().toISOString(),
+      sessionId: conversation.id,
+      type: "snapshot",
+      state: "idle",
+      readOnly: true,
+      transcript: chatPort?.messages(conversation.id).map(remoteMessageToTranscript) ?? [],
+    });
+  }
+
+  /**
+   * Refus EXPLICITE d'une écriture visant une conversation miroir.
+   *
+   * ⚠️ Ce n'est pas une règle d'interface : le serveur refuse, quoi que fasse le
+   * client. Un miroir ne s'écrit pas depuis l'interface web (création,
+   * renommage, épingle, mise de côté, suppression, compaction, réaction, envoi
+   * de message).
+   *
+   * @returns `true` quand la trame d'erreur a été envoyée (l'appelant s'arrête).
+   */
+  function refuseMirrorWrite(client: ClientState, conversationId: string | undefined): boolean {
+    if (!isMirrorConversationId(conversationId)) return false;
+    sendDirect(client, {
+      type: "error",
+      code: "conversation_lecture_seule",
+      message:
+        "Cette conversation est un canal distant en lecture seule : elle ne " +
+        "s'écrit pas depuis l'interface web.",
+    });
+    return true;
+  }
+
   /** Bascule vers une autre conversation (abort du run en cours par construction). */
   async function handleSwitch(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "switch") return;
+    // Miroir (canal distant) : chemin dédié, focus Pi INTACT.
+    if (isMirrorConversationId(message.sessionId)) {
+      await handleSelectRemote(client, message.sessionId);
+      return;
+    }
+    // Retour à une conversation locale : le focus affiché redevient celui de Pi.
+    client.focusedId = undefined;
     const previousFocus = host.currentSessionId();
     const file = await host.sessionFileFor(message.sessionId);
     if (!file) {
@@ -1251,8 +1432,23 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     sendPendingSecrets(client);
   }
 
-  /** Crée une nouvelle conversation et la rend active. */
+  /**
+   * Crée une nouvelle conversation et la rend active.
+   *
+   * ⚠️ En mode DISTANT, la création est REFUSÉE ici aussi (pas seulement
+   * désactivée en CSS) : la liste des conversations vient de la plateforme.
+   */
   async function handleNew(client: ClientState): Promise<void> {
+    const refusal = chatPort?.creationRefusal() ?? null;
+    if (refusal !== null) {
+      sendDirect(client, {
+        type: "error",
+        code: "creation_desactivee",
+        message: refusal,
+      });
+      return;
+    }
+    client.focusedId = undefined;
     const previousFocus = host.currentSessionId();
     try {
       await host.newSession();
@@ -1277,6 +1473,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   /** Renomme une conversation (doublons refusés côté hôte). */
   async function handleRename(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "rename") return;
+    if (refuseMirrorWrite(client, message.sessionId)) return;
     try {
       await host.renameSession(message.sessionId, message.title);
     } catch (error) {
@@ -1297,6 +1494,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   /** Met une conversation de côté (déplacement horodaté, récupérable). */
   async function handleSetAside(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "setAside") return;
+    if (refuseMirrorWrite(client, message.sessionId)) return;
     const wasCurrent = host.currentSessionId() === message.sessionId;
     try {
       await host.setAsideSession(message.sessionId);
@@ -1341,6 +1539,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   async function handleDelete(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "delete") return;
+    if (refuseMirrorWrite(client, message.sessionId)) return;
     const wasCurrent = host.currentSessionId() === message.sessionId;
     try {
       await host.deleteSession(message.sessionId);
@@ -1391,6 +1590,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   async function handleCompact(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "compact") return;
+    if (refuseMirrorWrite(client, message.sessionId)) return;
     const title = await titleFor(message.sessionId);
     try {
       const outcome = await host.compactSession(message.sessionId, {
@@ -1442,6 +1642,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   async function handlePin(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "pin") return;
+    if (refuseMirrorWrite(client, message.sessionId)) return;
     pins?.setPinned(message.sessionId, message.pinned);
     await sendSessions(client);
   }
@@ -1723,6 +1924,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   function handleReaction(client: ClientState, message: ClientMessage): void {
     if (message.type !== "reaction") return;
+    if (refuseMirrorWrite(client, message.sessionId)) return;
     if (!reactions) {
       sendDirect(client, {
         type: "error",
@@ -1761,6 +1963,22 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
   async function handleMessage(client: ClientState, message: ClientMessage): Promise<void> {
     if (message.type !== "message") return;
+    // ⚠️ L'interface affiche un CANAL DISTANT : on n'écrit pas dedans (le focus Pi
+    // pointerait sur une autre conversation, la réponse partirait au mauvais
+    // endroit — d'où un refus explicite, jamais un envoi silencieux).
+    if (refuseMirrorWrite(client, client.focusedId)) return;
+    // Mode DISTANT : l'interface web n'écrit dans AUCUNE conversation (la liste
+    // vient de la plateforme). Refus explicite, même sans canal sélectionné.
+    if (chatPort !== undefined && chatPort.mode() !== "local") {
+      sendDirect(client, {
+        type: "error",
+        code: "conversation_lecture_seule",
+        message:
+          "En mode distant, l'interface web n'écrit dans aucune conversation : " +
+          "les messages viennent de la plateforme.",
+      });
+      return;
+    }
     const sessionId = sessionIdFor(client);
     if (!sessionId) {
       sendDirect(client, {
@@ -1992,6 +2210,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         }
         return;
       }
+      case "chat_refresh":
+        // Rafraîchissement de la LISTE après un changement de mode (le mode est
+        // écrit par `PUT /api/config`, hors de ce canal) : le serveur reste
+        // autoritaire sur ce que chaque mode contient.
+        await sendSessions(client);
+        return;
       case "ping":
         sendDirect(client, { type: "pong", t: message.t });
         return;

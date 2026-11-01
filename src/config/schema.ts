@@ -449,6 +449,49 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_RECAP_TIMEOUT_MS",
   },
 
+  // --- Discussions (lot 18) ------------------------------------------------
+  // ⚠️ `FieldType` = `string | int | enum` : tout ce qui est une LISTE ou un
+  // OBJET (canaux, mapping auteur→rôle, mode de réponse par canal) vit dans un
+  // fichier JSON du volume `state`, jamais ici. Seul le MODE est un réglage.
+  //
+  // `apply: hot` : le mode est relu à CHAQUE appel (`ChatService.mode()`), donc
+  // `GET /api/chat/status` et le sélecteur de la barre latérale suivent
+  // immédiatement un changement — sans redémarrage, sans reconnexion.
+  "chat.mode": {
+    type: "enum",
+    enum: ["local", "mattermost", "discord"],
+    default: "local",
+    apply: "hot",
+    env: "YUKI_CHAT_MODE",
+  },
+  // ⚠️ SÉCURITÉ (exigence utilisateur du 2026-11-01) : en mode DISTANT, les
+  // AGENTS sont DÉSACTIVÉS PAR DÉFAUT. « Désactivé » veut dire : aucune
+  // délégation, aucun transfert de fichier, aucune commande, aucun secret —
+  // mais `generer_image` et l'ANALYSE D'IMAGE restent disponibles (demande
+  // explicite : « générer et analyser des images sur mattermost »).
+  // La politique correspondante est `toolAllowlistForChat`
+  // (`src/llm/tool-policy.ts`) ; elle sera BRANCHÉE quand les runs distants
+  // existeront (lot 2/3) — aujourd'hui le seul run est local, lui appliquer la
+  // restriction casserait l'usage courant.
+  "chat.remoteAgents": {
+    type: "enum",
+    enum: ["desactive", "actives"],
+    default: "desactive",
+    apply: "hot",
+    env: "YUKI_CHAT_REMOTE_AGENTS",
+  },
+  // ⚠️ MÉMOIRE DURABLE : NON en mode distant pour commencer (choix utilisateur),
+  // mais DÉFAUT RÉVERSIBLE — c'est un réglage, pas une décision codée en dur.
+  // Au lot 1, le champ et son défaut existent ; la mémoire n'est PAS branchée sur
+  // les conversations distantes (lot 2/3).
+  "chat.remoteMemory": {
+    type: "enum",
+    enum: ["desactive", "actives"],
+    default: "desactive",
+    apply: "hot",
+    env: "YUKI_CHAT_REMOTE_MEMORY",
+  },
+
   // --- Transport temps réel ------------------------------------------------
   "transport.replayBuffer": {
     type: "int",

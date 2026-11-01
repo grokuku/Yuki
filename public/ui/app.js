@@ -16,6 +16,7 @@ import {
   registerServiceWorker,
 } from "./push.js";
 import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
+import { creationRefusal, fetchChatStatus, saveChatMode } from "./chat-mode.js";
 import {
   UNREAD_STORAGE_KEY,
   addUnread,
@@ -70,6 +71,8 @@ const els = {
   send: document.getElementById("send"),
   stop: document.getElementById("stop"),
   emptyNew: document.getElementById("empty-new"),
+  /** Phrase d'aide de l'état vide (réécrite quand le mode distant n'a rien à montrer). */
+  emptyHint: document.querySelector("#empty-state .empty-state__hint"),
   connection: document.getElementById("connection"),
   sessionState: document.getElementById("session-state"),
   pendingBadge: document.getElementById("pending-badge"),
@@ -530,6 +533,91 @@ const sidebarAgents = initSidebarAgents({
   },
 });
 
+/* ─── MODE DE DISCUSSION (Local · Mattermost · Discord) ────────────────────
+ * État AUTORITAIRE lu sur `GET /api/chat/status`. ⚠️ La création d'une
+ * conversation locale est décidée par le SERVEUR (`creation.autorisee`) : ici on
+ * ne fait qu'empêcher un clic inutile — les trois chemins de clic passent par
+ * `requestNew()`, et le serveur refuse de son côté (`creation_desactivee`). */
+let chatStatus = null;
+
+/** Raison (serveur) pour laquelle on ne crée pas de conversation ; `null` si permis. */
+function newConversationRefusal() {
+  return creationRefusal(chatStatus);
+}
+
+/**
+ * CHEMIN UNIQUE de création d'une conversation.
+ * Les trois déclencheurs (barre latérale, menu téléphone, bouton de l'état vide)
+ * passent par ici : en mode distant, aucun ne crée rien et la raison est dite.
+ */
+function requestNew() {
+  const refusal = newConversationRefusal();
+  if (refusal !== null) {
+    void HolafModal.alert("Création désactivée", refusal, { okText: "Compris" });
+    return false;
+  }
+  sendRaw({ type: "new" });
+  return true;
+}
+
+/** Phrase d'aide par défaut de l'état vide (markup de `index.html`). */
+const EMPTY_HINT_DEFAULT = "Sélectionnez une conversation ou créez-en une.";
+
+/** Reflète l'état du mode dans le panneau, le bouton de l'état vide et la liste. */
+function applyChatStatus(status) {
+  chatStatus = status && typeof status === "object" ? status : null;
+  sessionsPanel.setChatMode(chatStatus);
+  const refusal = newConversationRefusal();
+  if (els.emptyNew) {
+    els.emptyNew.disabled = refusal !== null;
+    els.emptyNew.title = refusal ?? "Nouvelle conversation";
+  }
+  // État vide : en mode distant, « créez-en une » serait faux (la création est
+  // désactivée). On dit ce qui est vrai, et on rétablit la phrase d'origine en
+  // mode local (comportement inchangé).
+  if (els.emptyHint) {
+    els.emptyHint.textContent =
+      refusal !== null
+        ? "Aucune conversation dans ce mode : la création est désactivée (voir la barre latérale)."
+        : EMPTY_HINT_DEFAULT;
+  }
+}
+
+/** Relit l'état du mode puis rafraîchit la LISTE (qui dépend du mode). */
+async function refreshChatStatus() {
+  try {
+    const status = await fetchChatStatus();
+    applyChatStatus(status);
+    // La liste est AUTORITAIRE côté serveur : on la redemande (le mode décide de
+    // son contenu). Aucune trame n'est inventée ici.
+    sendRaw({ type: "chat_refresh" });
+    return status;
+  } catch {
+    // État illisible : on ne prétend RIEN (pas de badge « connecté » inventé).
+    applyChatStatus(null);
+    return null;
+  }
+}
+
+/** Changement de mode demandé par le sélecteur : persisté CÔTÉ SERVEUR. */
+async function onChatModeChange(mode) {
+  try {
+    const status = await saveChatMode(mode);
+    applyChatStatus(status);
+    sendRaw({ type: "chat_refresh" });
+  } catch (error) {
+    void HolafModal.alert(
+      "Mode non enregistré",
+      error instanceof Error && error.message
+        ? error.message
+        : "Le gateway n'a pas accepté le changement de mode.",
+      { okText: "Compris" },
+    );
+    // On réaffiche l'état RÉEL (le choix n'a pas été retenu).
+    void refreshChatStatus();
+  }
+}
+
 /** Conversation à OUVRIR avant de déclencher « conversation dédiée » (menu). */
 let pendingRecapId = null;
 let recapSwitchTimer = null;
@@ -554,7 +642,7 @@ const sessionsPanel = initSessionsPanel({
   },
   onNew: () => {
     mobileNav.close();
-    sendRaw({ type: "new" });
+    requestNew();
   },
   onRename: (id, title) => {
     mobileNav.close();
@@ -578,6 +666,8 @@ const sessionsPanel = initSessionsPanel({
   onPin: (id, pinned) => {
     sendRaw({ type: "pin", sessionId: id, pinned });
   },
+  // Mode de DISCUSSION : persisté côté serveur (`PUT /api/config`).
+  onChatModeChange,
   // Entrée « Conversation dédiée… » du MENU DU TITRE (téléphone ET bureau).
   // Le parcours n'est pas réécrit : on ouvre celui de `recap-dedicated.js`.
   // Sur une AUTRE conversation, on l'ouvre d'abord : le parcours repart quand
@@ -611,7 +701,7 @@ const mobileNav = initMobileNav({
   root: document.getElementById("mobile-nav"),
   layer: document.getElementById("mobile-nav-layer"),
   onNew: () => {
-    sendRaw({ type: "new" });
+    requestNew();
   },
   getThemeSummary: () => {
     const select = document.getElementById("theme-family");
@@ -1571,6 +1661,9 @@ function handleFrame(frame) {
     // (décision anti-spam des notifications). Envoyée après `hello`, une fois la
     // session courante connue du serveur.
     sendPresence();
+    // Mode de discussion : relu à CHAQUE connexion (il a pu changer pendant la
+    // coupure, ou depuis un autre onglet / la page `/config`).
+    void refreshChatStatus();
     return;
   }
   if (type === "pong" || type === "bye") return;
@@ -2587,7 +2680,7 @@ els.send.addEventListener("click", sendMessage);
 els.stop.addEventListener("click", abort);
 if (els.emptyNew) {
   els.emptyNew.addEventListener("click", () => {
-    sendRaw({ type: "new" });
+    requestNew();
   });
 }
 if (els.ttsToggle) els.ttsToggle.addEventListener("click", onTtsToggleClick);
@@ -2606,4 +2699,6 @@ setConnection(false);
 setSessionState("idle");
 refreshTtsToggle();
 void loadTtsServerState();
+// Mode de discussion : état lu au démarrage (sélecteur + badge + création).
+void refreshChatStatus();
 connect();

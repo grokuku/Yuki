@@ -60,6 +60,7 @@ import {
   type ImagesGatewayPort,
 } from "./comfy/index.js";
 import { createFilesService, createGeneratedImageFiles, FilesStore } from "./files/index.js";
+import { ChatService } from "./chat/index.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
 import { createDelegationService, type DelegationService } from "./delegation/index.js";
@@ -1217,6 +1218,15 @@ async function main(): Promise<void> {
     });
   }
 
+  // DISCUSSIONS (lot 18) : service LECTURE SEULE du mode (`chat.mode`, apply hot)
+  // et de l'état des plateformes. Aucun client distant n'est instancié au lot 1 ;
+  // le miroir est VIDE (sa synchronisation est le lot 2).
+  const chatService = new ChatService({
+    mode: () => config.getString("chat.mode"),
+    remoteAgents: () => config.getString("chat.remoteAgents"),
+    remoteMemory: () => config.getString("chat.remoteMemory"),
+  });
+
   if (gate.passed) {
     const idleTimeoutMs = config.getNumber("delegation.idleTimeoutMs");
     const totalTimeoutMs = config.getNumber("delegation.totalTimeoutMs");
@@ -1788,6 +1798,11 @@ async function main(): Promise<void> {
       // qui y postaient (« nouvelle conversation à chaque fois ») au lieu de les
       // laisser pointer dans le vide.
       sources: sourcesService,
+      // DISCUSSIONS : trame `sessions` des CANAUX MIROIR (`kind: "remote"`,
+      // `readOnly` côté interface web, `canRun`), sélection d'un canal, et refus
+      // d'écriture (`conversation_lecture_seule`) / de création
+      // (`creation_desactivee`) tant que le mode est distant.
+      chat: chatService,
       // RÉACTIONS : écrire une réaction ne déclenche AUCUN tour et n'alimente
       // jamais la synthèse vocale. Seules les RÉGULARITÉS (le même jugement sur
       // plusieurs messages) sont proposées à la mémoire — avec son filtre, son
@@ -1937,6 +1952,10 @@ async function main(): Promise<void> {
       // écritures d'administration ; le jeton de chaque source authentifie les
       // messages poussés par les programmes extérieurs.
       sources: { service: sourcesService, logger },
+      // DISCUSSIONS : `GET /api/chat/status` (lecture GARDÉE par l'en-tête
+      // `X-Yuki-Config: 1`) — mode, état de la plateforme, motif de refus de
+      // création. ⚠️ Jamais un secret, jamais une URL d'API.
+      chat: { service: chatService },
       // Administration de la mémoire (archivage récupérable) : disponible
       // uniquement quand le service mémoire existe (porte passée).
       ...(memoryService ? { memory: { admin: memoryService, logger } } : {}),

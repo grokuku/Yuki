@@ -16,6 +16,7 @@ import type {
 } from "../../pi/types.js";
 import type { ComfyFinalPromptText, ComfyImageView } from "../../comfy/types.js";
 import type { WireFile } from "../../files/types.js";
+import type { ChatMode, ChatReplyMode } from "../../chat/types.js";
 import { isAgentLevel, type AgentLevel } from "../../agents/types.js";
 import type {
   CapturedScreenshotView,
@@ -140,11 +141,42 @@ export type ClientMessage =
       id: string;
       values: Record<string, string>;
     }
+  /**
+   * Demande un RAFRAÎCHISSEMENT de la liste des conversations. Utilisé après un
+   * changement de mode de discussion : la liste est AUTORITAIRE côté serveur
+   * (elle seule sait ce que le mode distant contient), donc l'interface ne la
+   * filtre pas elle-même.
+   */
+  | { type: "chat_refresh" }
   | { type: "ping"; t: number };
 
 /** Session exposée au client (liste des conversations de la barre latérale). */
 export interface WireSession {
   id: string;
+  /**
+   * NATURE de la conversation :
+   *  - `local`  → session Pi (comportement historique : composeur, run, outils) ;
+   *  - `remote` → MIROIR d'un canal distant (`mm-…`, `dc-…`) : la liste vient de
+   *    la plateforme, l'interface web n'y écrit rien ni n'y crée de conversation.
+   */
+  kind: "local" | "remote";
+  /** Plateforme d'origine (`local` pour une session Pi). */
+  platform: ChatMode;
+  /**
+   * ⚠️ SENS RESTREINT : « on ne crée pas de conversation et on n'écrit pas
+   * DEPUIS L'INTERFACE WEB ». Ce champ ne dit **jamais** qu'aucun run n'est
+   * possible — c'est `canRun` qui répond à cette question. Un nom qui mentirait
+   * au lot 2 est précisément ce qu'on veut éviter ici.
+   */
+  readOnly: boolean;
+  /**
+   * `true` quand la conversation peut produire un RUN côté Yuki (donc appeler
+   * des outils et demander des approbations). Un miroir distant répond aux
+   * messages : il n'est pas inerte.
+   */
+  canRun: boolean;
+  /** Mode de RÉPONSE du canal distant (`tout` | `auto` | `mention`), si connu. */
+  replyMode?: ChatReplyMode;
   /** Titre PRÊT À L'EMPLOI (jamais vide : repli géré côté serveur). */
   title: string;
   /** Date de dernière activité (ISO), si connue. */
@@ -280,6 +312,12 @@ export type ServerMessage =
   | {
       type: "snapshot";
       state: PiSessionStateName;
+      /**
+       * `true` quand ce transcript vient d'un MIROIR (canal distant) : l'état est
+       * figé côté Yuki, l'interface web n'y compose pas. Absent pour une
+       * conversation locale (aucun changement de comportement).
+       */
+      readOnly?: boolean;
       activeRunId?: string;
       /**
        * ÉTAT VIVANT du run en cours : `true` s'il n'a pas encore produit de
@@ -905,6 +943,9 @@ export function parseClientMessage(raw: string): ParseResult {
         clean[name] = value;
       }
       return { ok: true, message: { type: "secret_submit", id, values: clean } };
+    }
+    case "chat_refresh": {
+      return { ok: true, message: { type: "chat_refresh" } };
     }
     case "ping": {
       const t = parsed.t;
