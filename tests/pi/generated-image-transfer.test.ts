@@ -37,7 +37,7 @@ import { WebSocket } from "ws";
 
 import { AgentFileTransferService, FILES_CAPABILITY } from "../../src/agents/transfer.js";
 import { GeneratedImagesStore } from "../../src/comfy/images.js";
-import type { GeneratedImage } from "../../src/comfy/index.js";
+import type { ComfyImageView, GeneratedImage } from "../../src/comfy/index.js";
 import { DAY_MS } from "../../src/files/retention.js";
 import { createFilesService, type FilesService } from "../../src/files/service.js";
 import { FilesStore } from "../../src/files/store.js";
@@ -163,13 +163,17 @@ function generateTool(
       candidates: () => [{ name: "manga", description: "Manga", isDefault: true }],
       documentationOf: () => "",
     },
-    onImage: (view) => {
+    // ⚠️ Type EXPLICITE, identique à `ImageToolPort.onImage`
+    // (`src/pi/sdk/image-tools.ts:116`) : dès qu'une assertion (`as never`) ou une
+    // construction qui casse le typage contextuel réapparaît, un paramètre nu
+    // retombe en `any` implicite (TS7006) et casse `npm run typecheck`.
+    onImage: (view: ComfyImageView) => {
       views.push({ id: view.id });
       // Même chaîne que le câblage réel : la vue rattache l'image à la conversation.
       depot.images.attach(view.id, SESSION);
     },
     ...(archive ? { archive } : {}),
-  } as never);
+  });
   return { tool: tool as unknown as AnyTool, views };
 }
 
