@@ -88,6 +88,16 @@ export interface GeneratedImageRecord {
   promptId: string;
   /** Conversation demandeuse (rattachée à l'émission de la vue). */
   sessionId?: string;
+  /**
+   * Identifiant du FICHIER de la conversation qui porte une COPIE de cette image
+   * (`generer_image` → store des fichiers, `src/files/generated.ts`).
+   *
+   * ⚠️ Sert uniquement à la DÉDUPLICATION : une image déjà copiée n'est jamais
+   * recopiée. Ce n'est pas une donnée d'affichage — `toView` ne l'expose pas.
+   * ⚠️ La copie et l'image EXPIRENT INDÉPENDAMMENT (même réglage, deux fiches) :
+   * si la copie a expiré, l'identifiant ne résout plus et la copie est refaite.
+   */
+  fileId?: string;
   width?: number;
   height?: number;
   /**
@@ -278,13 +288,34 @@ export class GeneratedImagesStore implements GeneratedImagesPort {
     return this.toRecord(next);
   }
 
-  /** Rattache l'image à une CONVERSATION (restauration après rechargement). */
+  /**
+   * Rattache l'image à une CONVERSATION (restauration après rechargement).
+   */
   attach(id: string, sessionId: string): GeneratedImageRecord | null {
     const record = this.get(id);
     if (!record) return null;
     if (record.sessionId === sessionId) return record;
     const { file: _file, imageSrc: _src, ...meta } = record;
     const next: ImageMeta = { ...meta, sessionId };
+    if (!this.writeMeta(next)) return record;
+    return this.toRecord(next);
+  }
+
+  /**
+   * Mémorise le FICHIER de la conversation qui porte une COPIE de cette image.
+   *
+   * ⚠️ C'est ce lien qui rend la copie IDEMPOTENTE : `generer_image` peut être
+   * rejoué pour la même image (reprise, double appel) sans dupliquer plusieurs
+   * mégaoctets sur le disque. Le lien n'est qu'une mémoire de déduplication :
+   * un fichier expiré ne résout plus et la copie est refaite par l'appelant.
+   */
+  attachFile(id: string, fileId: string): GeneratedImageRecord | null {
+    if (!ID_RE.test(fileId)) return null;
+    const record = this.get(id);
+    if (!record) return null;
+    if (record.fileId === fileId) return record;
+    const { file: _file, imageSrc: _src, ...meta } = record;
+    const next: ImageMeta = { ...meta, fileId };
     if (!this.writeMeta(next)) return record;
     return this.toRecord(next);
   }

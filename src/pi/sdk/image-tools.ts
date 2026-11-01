@@ -59,6 +59,10 @@ import {
   type GeneratedImage,
   type WorkflowCandidate,
 } from "../../comfy/index.js";
+import type {
+  GeneratedImageFileOutcome,
+  GeneratedImageFilesPort,
+} from "../../files/index.js";
 
 /**
  * Plafond de l'image transmise AU MODÈLE (octets bruts). Au-delà, on tente une
@@ -127,6 +131,20 @@ export interface ImageToolPort {
    * affichée à l'humain, et le résultat dit pourquoi elle n'est pas jointe.
    */
   receivesImages?: () => boolean;
+  /**
+   * COPIE de l'image dans le store des FICHIERS de la conversation
+   * (`src/files/generated.ts`).
+   *
+   * ⚠️ POURQUOI : une image ne vivait que dans le store des IMAGES GÉNÉRÉES
+   * (`/images/<id>.<ext>`), que `lister_fichiers`, `lire_fichier` et
+   * `deposer_fichier` ne résolvent pas. Sans cette copie, le parcours
+   * « générer → lister → lire → déposer » restait cassé.
+   *
+   * ⚠️ Un ÉCHEC de copie n'échoue JAMAIS la génération : l'image est générée et
+   * affichée, le résultat de l'outil porte un AVERTISSEMENT explicite. Absent ⇒
+   * aucune copie (host nu, tests) et le résultat ne promet rien.
+   */
+  archive?: GeneratedImageFilesPort;
 }
 
 /** Identifiant de la session (conversation) courante, ou `undefined`. */
@@ -554,7 +572,34 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
           }
         }
 
-        // ⚠️ Un modèle DÉCLARÉ sans vision ne reçoit pas l'image (cf. `receivesImages`).
+        // ⚠️ COPIE dans le store des FICHIERS de la conversation : c'est elle qui
+        // rend l'image LISTABLE (`lister_fichiers`), LISIBLE (`lire_fichier`) et
+        // TRANSFÉRABLE (`deposer_fichier`). Elle est faite APRÈS l'affichage pour
+        // qu'un stockage lent ne retarde jamais l'image à l'écran, et son échec
+        // n'échoue JAMAIS la génération (l'image existe déjà et s'affiche).
+        const archivePort = port.archive;
+        let archive: GeneratedImageFileOutcome | undefined;
+        if (archivePort) {
+          try {
+            archive = archivePort.archive({
+              imageId: image.record.id,
+              data: image.bytes,
+              mimeType: image.record.mimeType,
+              ...(sessionId !== undefined ? { sessionId } : {}),
+            });
+          } catch (error) {
+            // Une exception du stockage ne doit pas non plus remonter : elle devient
+            // un avertissement lisible (même doctrine que l'affichage).
+            archive = {
+              ok: false,
+              code: "io_error",
+              message: `le stockage des fichiers a levé une erreur (${
+                error instanceof Error ? error.message : String(error)
+              })`,
+            };
+          }
+        }
+
         const receivesImages = port.receivesImages?.() ?? true;
         const attached = receivesImages
           ? await boundImageForModel(image.bytes, image.record.mimeType)
@@ -570,6 +615,26 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
             "intermédiaire). Pour garantir l'image finale, étiquette son nœud de " +
             "sortie YUKI_OUTPUT (Paramètres → Système → Images générées).";
         const finalPrompt = finalPromptPart(image.finalPrompt);
+        // ⚠️ Ce que la copie a donné est DIT au modèle, dans les trois cas :
+        // copiée (identifiant donné, c'est ce qu'exige `deposer_fichier`), déjà
+        // copiée (aucun octet réécrit), ou REFUSÉE (l'image reste affichée, mais
+        // les trois outils de fichiers ne la verront pas — jamais un silence).
+        const fileNote =
+          archive === undefined
+            ? ""
+            : archive.ok
+              ? archive.copied
+                ? " Elle est AUSSI enregistrée comme fichier de la conversation " +
+                  `(« ${archive.file.name} », identifiant ${archive.file.id}) : ` +
+                  "`lister_fichiers` la montre, `lire_fichier` la lit et " +
+                  "`deposer_fichier` la transfère."
+                : " Elle était DÉJÀ enregistrée comme fichier de la conversation " +
+                  `(« ${archive.file.name} », identifiant ${archive.file.id}) : ` +
+                  "aucune copie supplémentaire n'a été faite."
+              : " ⚠️ Elle n'a PAS pu être enregistrée comme fichier de la " +
+                `conversation (${archive.message}) : elle reste affichée ici, mais ` +
+                "`lister_fichiers` ne la montrera pas, `lire_fichier` ne la lira pas " +
+                "et `deposer_fichier` ne la transférera pas.";
         const text =
           `Image générée en ${seconds} s (${dimensionsOf(image)}, ` +
           `${humanBytes(image.record.bytes)}). Elle est affichée dans la ` +
@@ -577,6 +642,7 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
           (receivesImages
             ? " et tu la vois ci-dessous : juge-la et régénère si besoin."
             : ".") +
+          fileNote +
           outputNote +
           finalPrompt.text +
           (attached === null
@@ -597,6 +663,17 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
           elapsed_ms: image.elapsedMs,
           image_attached: attached !== null,
           image_displayed_to_human: port.onImage !== undefined,
+          /**
+           * FICHIER de la conversation qui porte la copie (`null` si la copie a
+           * échoué). C'est l'identifiant qu'exigent `lire_fichier` et
+           * `deposer_fichier` — il évite un `lister_fichiers` de plus.
+           */
+          file_id: archive === undefined ? null : archive.ok ? archive.file.id : null,
+          /** `true` ⇒ copie faite À CET appel ; `false` ⇒ déjà copiée ou refusée. */
+          file_copied: archive !== undefined && archive.ok && archive.copied,
+          ...(archive !== undefined && !archive.ok
+            ? { file_error: archive.code, file_message: archive.message }
+            : {}),
           /** Faux ⇒ l'image retenue est la première produite (pas de YUKI_OUTPUT). */
           output_labeled: image.outputLabeled,
           /** Mesure : le style de CE workflow avait-il été consulté avant ? */

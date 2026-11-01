@@ -33,6 +33,7 @@ import type {
   ComfyImageView,
 } from "../comfy/index.js";
 import type { FilesSendPort } from "../files/types.js";
+import type { GeneratedImageFilesPort } from "../files/generated.js";
 import type { ModelsConfig } from "../llm/models.js";
 
 /** Niveaux de raisonnement acceptés par le SDK (repris tels quels). */
@@ -202,6 +203,16 @@ export interface PiHostOptions {
   images?: {
     generator: ComfyImageGenerationPort;
     onImage?: (view: ComfyImageView) => void;
+    /**
+     * COPIE de l'image générée dans le store des FICHIERS de la conversation
+     * (`src/files/generated.ts`).
+     *
+     * ⚠️ Sans elle, une image générée n'est ni listable (`lister_fichiers`), ni
+     * lisible (`lire_fichier`), ni transférable (`deposer_fichier`) : elle ne vit
+     * que dans le store des images générées. Un ÉCHEC de copie n'échoue jamais la
+     * génération — il devient un avertissement dans le résultat de l'outil.
+     */
+    archive?: GeneratedImageFilesPort;
     /**
      * Émet la FICHE de l'image (prompt final) APRÈS la vue de l'image : elle est
      * affichée SOUS l'image, sans jamais la déplacer. Sans lui, la fiche n'est

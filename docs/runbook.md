@@ -884,6 +884,9 @@ une surface d'accès aux octets.
 
 #### Le parcours complet, sans humain (worker lourd)
 
+0. **générer** (léger) — `generer_image(scene)` : l'image devient un **fichier de
+   la conversation** (copie dans le store des fichiers, cf. ci-dessous) et son
+   identifiant est rendu dans le résultat (`file_id`) ;
 1. **lister** — `lister_fichiers()` (ou le bloc automatique du premier message)
    rend les identifiants des pièces jointes de la conversation ;
 2. **lire** — `lire_fichier(identifiant)` : une image est **vue**, un texte est
@@ -892,14 +895,25 @@ une surface d'accès aux octets.
 4. **déposer / récupérer** — `deposer_fichier(agent, fichier: <identifiant>,
    chemin_distant)` ou `recuperer_fichier(agent, chemin)`.
 
-⚠️ **Ce qui manque encore, dit franchement** : une image **GÉNÉRÉE**
-(`generer_image`) vit dans le store des **images générées** (`/images/<id>.<ext>`,
-`src/comfy/images.ts`) et **pas** dans le store des fichiers (`/fichiers/…`) —
-elle n'est donc **ni listée** par `lister_fichiers`, **ni lisible** par
-`lire_fichier`, **ni déposable** par `deposer_fichier` (qui ne résout que les
-identifiants du store de fichiers). Le chemin `generer_image` → `deposer_fichier`
-**ne fonctionne pas** aujourd'hui ; il demanderait de déposer une copie dans le
-store de fichiers, rattachée à la conversation (décision produit, non prise ici).
+⚠️ **Une image GÉNÉRÉE est un fichier de la conversation** (chantier livré).
+`generer_image` écrit l'image dans le store des images générées
+(`/images/<id>.<ext>`, `src/comfy/images.ts`) **et en dépose une COPIE** dans le
+store des fichiers, rattachée à la conversation (`src/files/generated.ts`, branché
+dans `src/index.ts`). Cette copie a un **identifiant du store de fichiers** (32
+hex), donc : **listée** par `lister_fichiers`, **lisible** par `lire_fichier`,
+**déposable** par `deposer_fichier`. Le résultat de `generer_image` porte
+`file_id` — inutile de lister pour le retrouver.
+
+⚠️ **Une copie impossible n'échoue jamais la génération** : plafond
+`files.maxFileBytes`, erreur d'entrée/sortie ou format non servi ⇒ l'image est
+quand même générée, affichée et conservée, et le résultat porte un
+**avertissement** explicite (code + raison). La copie n'est **jamais** refaite deux
+fois pour la même image (lien `fileId` dans la fiche de l'image).
+
+⚠️ **Rétention** : la copie expire avec `files.retentionDays` (même règle que les
+pièces jointes, `src/files/retention.ts`), indépendamment de la fiche du store
+d'images. **C'est la copie qui fait foi** pour « lister / lire / déposer » ;
+l'image du store Comfy fait foi pour l'affichage dans le fil.
 
 ⚠️ **`fichier` est un IDENTIFIANT, jamais un nom.** Le stockage refuse toute
 référence qui n'est pas 32 hexadécimaux (`src/files/store.ts`, `ID_RE`).

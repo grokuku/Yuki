@@ -59,7 +59,7 @@ import {
   type ComfyImageView,
   type ImagesGatewayPort,
 } from "./comfy/index.js";
-import { createFilesService, FilesStore } from "./files/index.js";
+import { createFilesService, createGeneratedImageFiles, FilesStore } from "./files/index.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
 import { createDelegationService, type DelegationService } from "./delegation/index.js";
@@ -1110,6 +1110,29 @@ async function main(): Promise<void> {
   });
 
   /**
+   * COPIE d'une image générée dans le store des FICHIERS de la conversation.
+   *
+   * ⚠️ POURQUOI : sans elle, une image générée n'existe que dans le store des
+   * images (`/images/<id>.<ext>`) — que `lister_fichiers`, `lire_fichier` et
+   * `deposer_fichier` ne résolvent PAS (ils n'acceptent que les identifiants du
+   * store des fichiers). Le parcours « générer → lister → lire → déposer »
+   * restait donc cassé.
+   *
+   * ⚠️ DEUX COPIES, DEUX PURGES ? Les deux fiches suivent le MÊME réglage
+   * (`files.retentionDays`) et la MÊME règle (`files/retention.ts`), mais elles
+   * expirent SÉPARÉMENT : la copie de la conversation fait foi pour l'usage
+   * « fichier de la conversation » (lister/lire/déposer), l'image du store Comfy
+   * fait foi pour l'affichage dans le fil. Une copie expirée est refaite si
+   * l'image est régénérée/copiée à nouveau (la déduplication ne s'applique qu'à
+   * une copie encore valable).
+   */
+  const generatedImageFiles = createGeneratedImageFiles({
+    files: filesStore,
+    images: comfyImages,
+    logger,
+  });
+
+  /**
    * Balayage UNIQUE de la rétention du volume `state` : pièces jointes, images
    * générées par ComfyUI et captures du libraire.
    *
@@ -1549,6 +1572,10 @@ async function main(): Promise<void> {
       // juger et régénérer) et l'utilisateur la voit dans le fil (same-origin).
       images: {
         generator: comfyGenerator,
+        // ⚠️ La copie rend l'image LISTABLE, LISIBLE et TRANSFÉRABLE (elle devient
+        // un fichier de la conversation, rattaché au fil). Un échec de copie
+        // n'échoue pas la génération : il devient un avertissement du résultat.
+        archive: generatedImageFiles,
         onImage: (view: ComfyImageView) => emitGeneratedImage(view),
         // FICHE de l'image (prompt final) : émise APRÈS l'image, affichée SOUS
         // elle. Persistée avec l'image ⇒ la carte revient complète au rechargement.

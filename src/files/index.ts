@@ -13,3 +13,4 @@ export * from "./vision.js";
 export * from "./retention.js";
 export * from "./store.js";
 export * from "./service.js";
+export * from "./generated.js";

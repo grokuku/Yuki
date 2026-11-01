@@ -126,6 +126,36 @@ moment : on ne compte jamais dessus après coup) et elle est **conservée** :
 ⚠️ La fiche (prompt final) est **persistée avec l'image** : elle revient donc aussi
 après un rechargement.
 
+## L'image générée DEVIENT un fichier de la conversation (lister → lire → déposer)
+
+⚠️ **Décision (2026-11-01)** : l'image est **COPIÉE** dans le store des fichiers
+**à la génération**, rattachée à la conversation (`src/files/generated.ts`,
+branché dans `src/index.ts`). Ce n'est **pas** un adaptateur de lecture : une
+image copiée **ne disparaît pas** quand ComfyUI purge son `temp/`, ni quand la
+fiche du store d'images expire. Coût assumé : deux copies sur disque.
+
+| Aspect | Règle |
+| --- | --- |
+| Quand | juste après la génération, **après** l'affichage (un stockage lent ne retarde jamais l'image à l'écran) — `src/pi/sdk/image-tools.ts` |
+| Où | `${state}/fichiers/<id>.bin` + `<id>.json` : le **même** store que les pièces jointes (`src/files/store.ts`) |
+| Identifiant | celui du store des **fichiers** (32 hex) — c'est celui qu'exigent `lire_fichier` et `deposer_fichier`. Il est rendu au modèle (`file_id`) : un `lister_fichiers` de plus est inutile |
+| Rattachement | `sessionId` de la conversation demandeuse ⇒ `lister_fichiers` la voit, et le worker la reçoit dans son bloc de pièces jointes |
+| Déduplication | lien image → fichier mémorisé dans la fiche de l'image (`GeneratedImagesStore.attachFile`) : une image déjà copiée n'est **jamais** recopiée (le résultat dit « aucune copie supplémentaire ») |
+| Copie impossible (plafond `files.maxFileBytes`, I/O, format non servi) | ⚠️ **la génération RÉUSSIT quand même** : image générée, affichée, conservée ; le résultat porte un **AVERTISSEMENT** (code + raison) et dit que `lister_fichiers` / `lire_fichier` / `deposer_fichier` ne la verront pas |
+| Rétention | **c'est la COPIE qui fait foi** pour « lister / lire / déposer » : `files.retentionDays`, calculé à l'écriture (`src/files/retention.ts`). La fiche du store d'images garde **sa** propre expiration (même réglage, deux fiches indépendantes) : une copie expirée ne bloque pas la suivante, elle est refaite |
+| `/api/files` | l'image générée **apparaît** dans la liste des fichiers de SA conversation (`GET /api/files?session=<id>`, `src/gateway/routes/files.ts:167`) : c'est voulu — elle est téléchargeable et transférable. Le fil, lui, l'affiche toujours par la carte d'image (`public/ui/image-block.js`, **inchangée** ; aucun `innerHTML`, CSP inchangée) |
+
+### Le parcours complet, sans humain
+
+1. **générer** — `generer_image(scene)` : l'image devient un **fichier** de la conversation (identifiant dans `file_id`) ;
+2. **lister** — `lister_fichiers()` : l'image y figure avec **son** identifiant ;
+3. **lire** — `lire_fichier(identifiant)` : **bloc image** (politique de vision `src/files/vision.ts`), ou refus explicite si le modèle déclaré ne reçoit pas les images ;
+4. **déposer** — `deposer_fichier(agent, fichier: <identifiant>, chemin_distant)` : transfert vers une machine appairée.
+
+Preuves : `tests/pi/generated-image-transfer.test.ts` (vrais stores, agent simulé :
+les octets reçus sont exactement ceux de l'image générée), plus les cas « copie
+refusée » et « déduplication ».
+
 ## La FICHE s'affiche SOUS l'image, même quand elle arrive APRÈS
 
 Le prompt final est **émis après l'image**, dans une trame de contrôle dédiée
@@ -212,10 +242,11 @@ ne compte jamais dessus après coup.
 | `src/comfy/client.ts` | `POST /prompt`, `GET /history/{id}`, `GET /view` ; `findImageRef` (repli) et `findImageRefForNode` (`YUKI_OUTPUT`) ; `findFinalPromptText` (`YUKI_FINAL_PROMPT`, lit `ui.text`) |
 | `src/comfy/generator.ts` | passage du nœud de sortie et du nœud d'affichage, repli **annoncé** ; dimensions calculées depuis le `ratio` demandé |
 | `src/comfy/ratio.ts` | `parseAspectRatio` / `sizeForRatio` : format demandé → dimensions (budget de pixels constant, multiples de 16) |
-| `src/comfy/images.ts` | stockage disque : copie immédiate, métadonnées, **rétention et purge**, rattachement à la conversation, vue d'affichage |
+| `src/comfy/images.ts` | stockage disque : copie immédiate, métadonnées, **rétention et purge**, rattachement à la conversation, lien vers la copie « fichier » (`attachFile`), vue d'affichage |
+| `src/files/generated.ts` | **copie de l'image dans le store des fichiers** (rattachée à la conversation), déduplication, refus jamais bloquant + messages français |
 | `src/files/retention.ts` | règle de rétention **partagée** (pièces jointes, images, captures) |
 | `src/gateway/ws/server.ts` | `restoreMedia` : ré-émission des médias conservés juste après un `snapshot` |
-| `src/pi/sdk/image-tools.ts` | phrase remontée au modèle quand le workflow n'a pas `YUKI_OUTPUT` ; bloc « DONNÉE » du prompt final, borné |
+| `src/pi/sdk/image-tools.ts` | phrase remontée au modèle quand le workflow n'a pas `YUKI_OUTPUT` ; bloc « DONNÉE » du prompt final, borné ; **copie en fichier** de la conversation (`file_id`, avertissement si la copie échoue) |
 | `public/ui/image-block.js` | vignette cliquable + bloc repliable du prompt final **sous** l'image (lecture seule, copiable), complété après coup sans déplacer l'image |
 | `public/ui/lightbox.js` | visionneuse plein écran **partagée** (`/images/…` et `/captures/…`) : zoom clic/molette/pincement, déplacement borné, navigation, fermeture Échap/clic à côté/bouton |
 | `public/ui/images-panel.js` | aide d'import, badges trouvées/absentes, mention du repli par workflow, mention du prompt final |

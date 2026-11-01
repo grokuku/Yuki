@@ -1987,6 +1987,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
           // croirait l'avoir jugée).
           receivesImages: conversationReceivesImages,
           ...(options.images.onImage ? { onImage: options.images.onImage } : {}),
+          // ⚠️ COPIE dans le store des FICHIERS : c'est elle qui rend l'image
+          // listable, lisible et transférable (lister → lire → déposer).
+          ...(options.images.archive ? { archive: options.images.archive } : {}),
           ...(options.images.onImageFinalPrompt
             ? { onImageFinalPrompt: options.images.onImageFinalPrompt }
             : {}),
