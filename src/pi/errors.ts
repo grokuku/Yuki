@@ -108,6 +108,29 @@ const RATE_LIMIT_PATTERNS: ReadonlyArray<RegExp> = [
   /maximum.*requests/i,
 ];
 
+/**
+ * ÉCHEC INTERNE du SDK (configuration de la SESSION), PAS une réponse du
+ * fournisseur.
+ *
+ * ⚠️ POURQUOI CE MOTIF PASSE AVANT TOUS LES AUTRES : le SDK Pi lève ces deux
+ * messages quand le modèle — ou un outil — de la configuration active n'existe
+ * pas dans le registre de la session AU MOMENT de la requête
+ * (`prepareGeneration` → `configurationError2("model_unavailable" |
+ * "configured_tools_unavailable")`). Aucune requête n'est alors émise.
+ *
+ * ⚠️ CES DEUX PHRASES CONTIENNENT « unavailable » : sans ce test préalable, elles
+ * tombaient dans `UNAVAILABLE_PATTERNS` et devenaient « Le fournisseur du modèle
+ * est momentanément indisponible ou injoignable » — un MENSONGE qui a fait
+ * chercher une panne de fournisseur pendant des heures alors que le fournisseur
+ * répondait parfaitement à la session légère. Une cause interne doit se dire
+ * interne.
+ */
+const SDK_SESSION_CONFIGURATION_PATTERNS: ReadonlyArray<RegExp> = [
+  /configured model is unavailable in this process/i,
+  /configured tools? (?:is|are) unavailable in this process/i,
+  /^model unavailable$/i,
+];
+
 const UNAVAILABLE_PATTERNS: ReadonlyArray<RegExp> = [
   /\b50[0234]\b/,
   /unavailable/i,
@@ -166,6 +189,18 @@ export function describeModelError(rawText: string | undefined): string {
     // sans inventer de cause.
     return "Le modèle n'a pas répondu (aucun détail fourni par le fournisseur).";
   }
+  if (matchesAny(raw, SDK_SESSION_CONFIGURATION_PATTERNS)) {
+    // ⚠️ AVANT les causes « fournisseur » : c'est un échec INTERNE (registre de
+    // session), survenu AVANT tout envoi. Le dire franchement, avec le détail.
+    return (
+      "Échec INTERNE de la session (côté Yuki) — ce n'est PAS une panne du " +
+      "fournisseur : le modèle ou les outils configurés pour cette session ne " +
+      "sont pas dans son registre au moment de la requête, donc rien n'a été " +
+      "envoyé. Vérifie que le modèle existe bien dans models.json " +
+      "(« llm.<rôle>.model ») puis relance. Détail : " +
+      truncateDetail(raw)
+    );
+  }
   if (matchesAny(raw, CREDIT_PATTERNS)) {
     return (
       "Le fournisseur du modèle a refusé la requête : crédits ou quota épuisés " +
@@ -198,8 +233,14 @@ export function describeModelError(rawText: string | undefined): string {
     );
   }
   if (matchesAny(raw, UNAVAILABLE_PATTERNS)) {
+    // ⚠️ Ce motif est le plus LARGE de la table (50x, « unavailable »,
+    // « temporarily », « network error », « connection reset »…) : deux causes
+    // très différentes y tombent. On ne cache donc JAMAIS le détail brut ici —
+    // sans lui, un « connection reset » pendant la génération passe pour une
+    // panne de fournisseur permanente.
     return (
-      "Le fournisseur du modèle est momentanément indisponible ou injoignable."
+      "Le fournisseur du modèle est momentanément indisponible ou injoignable. " +
+      `Détail brut : ${truncateDetail(raw)}`
     );
   }
   return `Le modèle n'a pas répondu. Détail du fournisseur : ${truncateDetail(raw)}`;

@@ -6,7 +6,8 @@
       "api": "openai-completions",
       "apiKey": "$YUKI_LLM_LIGHT_API_KEY",
       "compat": {
-        "supportsDeveloperRole": false
+        "supportsDeveloperRole": false,
+        "requiresAssistantAfterToolResult": true
       },
       "models": [
         {
@@ -34,7 +35,8 @@
       "api": "openai-completions",
       "apiKey": "$YUKI_LLM_HEAVY_API_KEY",
       "compat": {
-        "supportsDeveloperRole": false
+        "supportsDeveloperRole": false,
+        "requiresAssistantAfterToolResult": true
       },
       "models": [
         {

@@ -816,6 +816,27 @@ Le seul endroit qui compte est le réglage `/config` (ou, hors interface,
   **n'attachent pas** l'image (`image_attached: false`) et écrivent le motif dans
   leur résultat ; `recuperer_fichier` et `lire_fichier` font de même (§ 13.7).
 
+#### ⚠️ Une image de RÉSULTAT D'OUTIL change la FORME de la conversation (`requiresAssistantAfterToolResult`)
+
+Le SDK **n'écrit jamais l'image dans le message `tool`** : il y met le texte seul
+(`(see attached image)` s'il n'y a pas de texte) et ajoute **après** un message
+`user` « Attached image(s) from tool result: » portant `image_url` en data-URL
+base64 (`pi-ai` → `dist/api/openai-completions.js`, branche `toolResult`).
+
+⇒ La suite de messages devient **`tool` → `user`**. Une requête **sans image**
+n'a **jamais** de `user` après un `tool` : c'est le **seul écart structurel**
+entre « le lourd marche » et « le lourd casse dès qu'il doit voir une image ».
+Les fournisseurs dont le template de chat exige un tour `assistant` entre un
+résultat d'outil et un message utilisateur refusent alors **toute** la requête
+(400 « invalid message order ») — le job échoue avec la cause du fournisseur.
+
+**Correctif (posé dans `models.json`, donc à ne pas défaire)** : `compat`
+porte `requiresAssistantAfterToolResult: true` (`src/llm/models.ts`,
+`buildModelsConfigFrom`). Le SDK intercale alors « I have processed the tool
+results. » avant le message image. Verrouillé par
+`tests/integration/heavy-image-tool-result.test.ts` (fournisseur simulé
+**strict** : il refuse la suite `tool` → `user`).
+
 ### 13.7 Fichiers d'une conversation et transfert vers/depuis une machine (capacité `files`)
 
 Trois outils, portés par le **worker lourd** (c'est lui qui agit, jamais le léger

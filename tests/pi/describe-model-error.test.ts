@@ -52,13 +52,36 @@ describe("describeModelError — refus du fournisseur", () => {
     }
   });
 
-  it("indisponibilité du fournisseur (50x / overloaded)", () => {
+  it("indisponibilité du fournisseur (50x / overloaded) — avec le détail BRUT", () => {
     for (const raw of [
       "503: Service Unavailable",
       "502: Bad Gateway",
       "the model is overloaded",
     ]) {
-      expect(describeModelError(raw)).toContain("indisponible");
+      const message = describeModelError(raw);
+      expect(message).toContain("indisponible");
+      // ⚠️ Ce motif est le plus LARGE de la table : sans le détail brut, un
+      // « connection reset » passager est indiscernable d'une panne durable.
+      expect(message).toContain("Détail brut");
+    }
+  });
+
+  it("échec INTERNE de session (SDK) : jamais attribué au fournisseur", () => {
+    // ⚠️ Régression vécue : le SDK Pi dit « …unavailable in this process » quand
+    // le modèle (ou un outil) de la configuration active manque au registre de la
+    // session. Le mot « unavailable » suffisait pour que ce message devienne
+    // « Le fournisseur du modèle est momentanément indisponible ou injoignable »,
+    // alors qu'AUCUNE requête n'était émise.
+    for (const raw of [
+      "The configured model is unavailable in this process",
+      "One or more configured tools are unavailable in this process",
+      "Model unavailable",
+    ]) {
+      const message = describeModelError(raw);
+      expect(message).toContain("Échec INTERNE");
+      expect(message).toContain("PAS une panne du fournisseur");
+      expect(message).not.toContain("indisponible");
+      expect(message).not.toContain("injoignable");
     }
   });
 

@@ -56,6 +56,22 @@ import { createListFilesTool } from "./list-files-tool.js";
 import { createReadFileTool } from "./read-file-tool.js";
 import { createEphemeralSession } from "./session-factory.js";
 
+/**
+ * Borne une cause d'erreur destinée au RAPPORT DE JOB (donc à l'utilisateur).
+ *
+ * ⚠️ La cause BRUTE est reprise telle quelle (assainie en amont) : une erreur
+ * traduite sans sa source est indiagnosticable — un même message de façade peut
+ * recouvrir plusieurs causes très différentes. On la borne pour qu'un corps
+ * HTTP de plusieurs kilo-octets ne noie pas le rapport.
+ */
+const MAX_CAUSE_CHARS = 300;
+
+export function truncateCause(text: string, max = MAX_CAUSE_CHARS): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return "(aucun détail)";
+  return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max - 1)}…`;
+}
+
 export interface SdkHeavyWorkerConfig {
   cwd: string;
   agentDir: string;
@@ -378,17 +394,22 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         modelsPath: config.modelsPath,
       });
     } catch (error) {
+      // ⚠️ La cause RÉELLE est reprise dans le message (assainie, bornée) : le
+      // rapport de job est ce que lit l'utilisateur. « (voir les journaux) » sans
+      // la cause a déjà coûté des heures de diagnostic.
+      const runtimeCause = truncateCause(
+        sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+      );
       config.logger.warn("heavy.runtime.failed", {
         job_id: request.jobId,
-        error: sanitizeErrorText(
-          error instanceof Error ? error.message : String(error),
-        ),
+        error: runtimeCause,
       });
       return {
         status: "failed",
         error:
           "Le worker lourd n'a pas pu démarrer : configuration des modèles ou " +
-          "authentification du fournisseur indisponible (voir les journaux).",
+          "authentification du fournisseur indisponible. Cause : " +
+          runtimeCause,
       };
     }
 
@@ -430,16 +451,17 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         ...(actionTools.length > 0 ? { customTools: actionTools } : {}),
       });
     } catch (error) {
+      const sessionCause = truncateCause(
+        sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+      );
       config.logger.warn("heavy.session.failed", {
         job_id: request.jobId,
-        error: sanitizeErrorText(
-          error instanceof Error ? error.message : String(error),
-        ),
+        error: sessionCause,
       });
       return {
         status: "failed",
         error:
-          "La session du worker lourd n'a pas pu être créée (voir les journaux).",
+          "La session du worker lourd n'a pas pu être créée. Cause : " + sessionCause,
       };
     }
 
@@ -535,6 +557,17 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
             // le jargon anglais/JSON brut, ce qui pousse le léger à INVENTER une
             // cause (« le worker n'est pas disponible ») au lieu de la citer.
             const raw = errorTextFromMessage(message);
+            // ⚠️ ET ON LA JOURNALISE : une cause TRADUITE sans sa source reste
+            // indiagnosticable (le motif le plus large — « indisponible » —
+            // recouvre plusieurs causes distinctes). Le brut est borné et
+            // assaini (jamais de clé).
+            config.logger.warn("heavy.prompt.error", {
+              job_id: request.jobId,
+              model: liveValue(config.modelReference),
+              error: truncateCause(
+                raw ?? "(aucun détail fourni par le fournisseur)",
+              ),
+            });
             if (raw !== undefined) {
               errorMessage = describeModelError(raw);
             }
@@ -567,9 +600,15 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     } catch (error) {
       if (!sawError) {
         sawError = true;
-        errorMessage = describeModelError(
+        const cause = truncateCause(
           sanitizeErrorText(error instanceof Error ? error.message : String(error)),
         );
+        config.logger.warn("heavy.prompt.error", {
+          job_id: request.jobId,
+          model: liveValue(config.modelReference),
+          error: cause,
+        });
+        errorMessage = describeModelError(cause);
       }
     } finally {
       clearTimeout(totalTimer);

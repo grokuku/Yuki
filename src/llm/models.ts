@@ -255,7 +255,16 @@ interface ModelsConfigProvider {
   baseUrl: string;
   api: string;
   apiKey: string;
-  compat: { supportsDeveloperRole: boolean };
+  compat: {
+    supportsDeveloperRole: boolean;
+    /**
+     * `true` ⇒ le SDK intercale un message `assistant` entre un résultat d'outil
+     * et le message `user` qui porte son image (voir le commentaire de
+     * `buildModelsConfigFrom`). Facultatif dans la FORME du fichier (le SDK le
+     * traite comme tel) ; toujours écrit par `buildModelsConfigFrom`.
+     */
+    requiresAssistantAfterToolResult?: boolean;
+  };
   models: ModelsConfigModel[];
 }
 
@@ -294,7 +303,23 @@ export function buildModelsConfigFrom(config: EffectiveLlmConfig): ModelsConfig 
     apiKey: `$${spec.keyEnv}`,
     // Le fournisseur compatible OpenAI ne comprend pas toujours le rôle
     // `developer` utilisé par le SDK pour les modèles à raisonnement.
-    compat: { supportsDeveloperRole: false },
+    //
+    // ⚠️ `requiresAssistantAfterToolResult` — INDISPENSABLE DÈS QU'UNE IMAGE
+    // ENTRE DANS LE CHEMIN. Quand un RÉSULTAT D'OUTIL porte une image, le SDK
+    // n'écrit pas l'image dans le message `tool` : il ajoute APRÈS lui un
+    // message `user` « Attached image(s) from tool result: » (pi-ai
+    // `dist/api/openai-completions.js` → branche `toolResult`). Sans ce drapeau
+    // il n'insère AUCUN message `assistant` de liaison (ligne
+    // `requiresAssistantAfterToolResult: false` de la détection par défaut), et
+    // la conversation part avec la suite `tool` → `user` : les fournisseurs dont
+    // le template de chat exige un tour `assistant` entre un résultat d'outil et
+    // un message utilisateur REFUSENT alors toute la requête (400 « invalid
+    // message order »). C'est le SEUL écart structurel entre une requête SANS
+    // image (jamais de `user` après `tool`) et une requête AVEC image — un lourd
+    // qui « marche tant qu'il ne doit pas voir d'image » s'explique exactement
+    // par là. Avec le drapeau, le SDK intercale « I have processed the tool
+    // results. » et le modèle voit l'image.
+    compat: { supportsDeveloperRole: false, requiresAssistantAfterToolResult: true },
     models: [toModelConfig(model)],
   });
   return {
