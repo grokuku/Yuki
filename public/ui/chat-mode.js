@@ -32,6 +32,60 @@ export const CHAT_MODE_OPTIONS = [
   },
 ];
 
+/**
+ * MODES DE RÉPONSE d'un canal distant, dans l'ordre d'affichage du menu contextuel.
+ *
+ * ⚠️ `mention` est le DÉFAUT côté serveur (`DEFAULT_REPLY_MODE`, `src/chat/reply/
+ * responder.ts`) : le libellé le dit, pour que l'utilisateur sache ce qui se passe tant
+ * qu'il n'a rien choisi.
+ */
+export const REPLY_MODE_OPTIONS = [
+  {
+    mode: "tout",
+    label: "Répondre à tous les messages",
+    title: "Yuki répond à chaque message HUMAIN du canal (jamais à ses propres messages).",
+  },
+  {
+    mode: "auto",
+    label: "Répondre quand on s'adresse à elle (jugé par le modèle)",
+    title:
+      "Un appel modèle léger décide, message par message, si Yuki est concernée. " +
+      "Chaque message n'est jugé qu'une seule fois.",
+  },
+  {
+    mode: "mention",
+    label: "Répondre seulement si elle est citée",
+    title: "Yuki ne répond que si son nom est cité (@yuki). C'est le mode par défaut.",
+  },
+];
+
+/** Libellé d'un mode de réponse (`mode` inconnu ⇒ la valeur brute). */
+export function replyModeLabel(mode) {
+  const option = REPLY_MODE_OPTIONS.find((item) => item.mode === mode);
+  return option ? option.label : String(mode ?? "");
+}
+
+/** Enregistre le mode de RÉPONSE d'un canal distant (`PATCH /api/chat/conversations/<id>`). */
+export async function saveReplyMode(conversationId, mode, fetchImpl) {
+  const doFetch = fetchImpl ?? ((url, init) => fetch(url, init));
+  const response = await doFetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "PATCH",
+    headers: WRITE_HEADERS,
+    body: JSON.stringify({ replyMode: mode ?? null }),
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = typeof body?.message === "string" ? body.message : "";
+    } catch {
+      // Corps illisible : on garde le code HTTP, jamais un succès supposé.
+    }
+    throw new Error(detail !== "" ? detail : `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 /** Glyphes d'état du badge, par état serveur. */
 export const CHAT_BADGES = {
   on: { glyph: "●", label: "connecté" },

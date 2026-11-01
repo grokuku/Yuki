@@ -152,9 +152,9 @@ describe("GET /api/chat/status", () => {
 });
 
 describe("garde-fou directement sur le handler", () => {
-  it("sans en-tête : 403, quel que soit le chemin", () => {
+  it("sans en-tête : 403, quel que soit le chemin", async () => {
     const service = new ChatService({ mode: () => "local" });
-    const response = handleChatRequest({
+    const response = await handleChatRequest({
       method: "GET",
       path: "/api/chat/status",
       headers: {},

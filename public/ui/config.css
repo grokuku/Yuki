@@ -1439,3 +1439,30 @@
   margin: 4px 0 0;
   flex-wrap: wrap;
 }
+
+/* ─── Panneau « Discussions » (Mattermost) — onglet Conversation ──────────
+ * Lot 18, lot 2. Aucun style inline : tout est ici (CSP `style-src 'self'`). */
+.chat-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.chat-panel__status {
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-panel__channels {
+  margin: 6px 0 10px;
+  padding-left: 18px;
+}
+
+.chat-panel__channel {
+  margin: 4px 0;
+  line-height: 1.4;
+}
+
+.chat-panel__channel-name {
+  font-weight: 600;
+}

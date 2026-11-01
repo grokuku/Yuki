@@ -812,6 +812,24 @@ a.pill:hover {
   background: var(--border);
 }
 
+/* ─── Bloc « mode de réponse » d'un CANAL distant (lot 18, lot 2) ──────────
+ * Groupe séparé du reste du menu (les actions de la conversation ne s'appliquent pas
+ * à un miroir). `hidden` quand la conversation visée n'est pas un canal. */
+.ctx-menu__group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.ctx-menu__group[hidden] {
+  display: none;
+}
+
+/* Mode COURANT du canal : marqué par un point ET en gras (jamais la couleur seule). */
+.ctx-menu__item--active {
+  font-weight: 600;
+}
+
 /* Menu de NIVEAU de l'agent : libellé de groupe + items radio (niveau courant
  * coché). Le ✓ n'apparaît QUE sur l'élément marqué `aria-checked="true"`. */
 .ctx-menu__label {
@@ -1420,6 +1438,53 @@ a.pill:hover {
 /* Heure des messages utilisateur : alignée sur le bord EXTÉRIEUR (à droite). */
 .message__head--end {
   text-align: right;
+}
+
+/* ─── Auteur (conversations MIROIR : canaux distants) ──────────────────────
+ * ⚠️ Affiché seulement pour un message qui PORTE un auteur (canal Mattermost). Une
+ * conversation locale n'affiche rien de plus qu'avant. */
+.message__author {
+  margin-right: 6px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* ─── FILS (canaux distants) ───────────────────────────────────────────────
+ * Une réponse de fil est REPLIÉE par défaut ; seul le compteur « N réponses » est
+ * visible sous le message racine. Le dépliage est un clic sur ce bouton. */
+.thread {
+  margin: 0 0 10px 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border, rgba(127, 127, 127, 0.35));
+}
+
+.thread__toggle {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent, #4a9eff);
+  cursor: pointer;
+  text-align: left;
+}
+
+.thread__toggle:hover,
+.thread__toggle:focus-visible {
+  text-decoration: underline;
+}
+
+.thread__toggle::before {
+  content: "▸ ";
+}
+
+.thread__toggle[aria-expanded="true"]::before {
+  content: "▾ ";
+}
+
+.thread__body {
+  margin-top: 6px;
 }
 
 /* ─── Pied du message assistant : infos TECHNIQUES, EN BAS À DROITE ─────── */

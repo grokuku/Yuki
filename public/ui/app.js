@@ -668,6 +668,12 @@ const sessionsPanel = initSessionsPanel({
   },
   // Mode de DISCUSSION : persisté côté serveur (`PUT /api/config`).
   onChatModeChange,
+  // Mode de RÉPONSE d'un CANAL (clic droit sur un canal distant) : déjà enregistré par
+  // le panneau (`PATCH /api/chat/conversations/<id>`) ; on demande seulement la liste à
+  // jour, qui est AUTORITAIRE côté serveur.
+  onReplyMode: () => {
+    sendRaw({ type: "chat_refresh" });
+  },
   // Entrée « Conversation dédiée… » du MENU DU TITRE (téléphone ET bureau).
   // Le parcours n'est pas réécrit : on ouvre celui de `recap-dedicated.js`.
   // Sur une AUTRE conversation, on l'ouvre d'abord : le parcours repart quand
@@ -1284,6 +1290,33 @@ function setMessageTime(element, ts, alignEnd) {
   time.textContent = hourFormatter.format(new Date(ts));
 }
 
+/**
+ * Auteur d'un message (`.message__author`), pour les conversations MIROIR.
+ *
+ * ⚠️ Sans lui, un canal distant afficherait tous les humains comme « l'utilisateur »
+ * et perdrait l'information la plus utile d'un canal d'équipe : QUI parle. Il est posé
+ * dans le même en-tête que l'heure, AVANT elle.
+ */
+function setMessageAuthor(element, author) {
+  if (!element || !author || typeof author !== "object") return;
+  const nom = typeof author.nom === "string" ? author.nom.trim() : "";
+  if (nom === "") return;
+  let head = element.querySelector(".message__head");
+  if (!head) {
+    head = document.createElement("div");
+    head.className = "message__head";
+    element.insertBefore(head, element.firstChild);
+  }
+  let span = head.querySelector(".message__author");
+  if (!span) {
+    span = document.createElement("span");
+    span.className = "message__author";
+    // AVANT l'heure (le nom est l'information principale de la ligne).
+    head.insertBefore(span, head.firstChild);
+  }
+  span.textContent = nom;
+}
+
 function appendMessage(role, text, pinned = isConversationPinned(), ts = null, before = null) {
   clearEmpty();
   ensureDaySeparator(ts, before);
@@ -1454,10 +1487,94 @@ function applyTranscript(transcript) {
     pinIfNeeded(pinned);
     return;
   }
+  // ─── FILS (canaux distants, `threadRootId`) ──────────────────────────────
+  // ⚠️ Un FIL se reconnaît à son PARENT (`threadRootId`), qui voyage dans le transcript
+  // depuis le lot 1. Une réponse dont la racine n'est PAS dans le fil affiché est rendue
+  // normalement (elle ne doit pas disparaître sous prétexte que son parent est hors
+  // fenêtre).
+  const racines = new Set(
+    transcript
+      .filter((entry) => entry && typeof entry.threadRootId !== "string")
+      .map((entry) => entry.id)
+      .filter((id) => typeof id === "string"),
+  );
+  const reponsesParRacine = new Map();
   for (const entry of transcript) {
+    if (!entry || typeof entry.threadRootId !== "string") continue;
+    if (!racines.has(entry.threadRootId)) continue;
+    const liste = reponsesParRacine.get(entry.threadRootId) ?? [];
+    liste.push(entry);
+    reponsesParRacine.set(entry.threadRootId, liste);
+  }
+
+  /**
+   * Réponses d'un FIL, REPLIÉES par défaut (comme Mattermost).
+   *
+   * ⚠️ Le compteur est le SEUL indice visible quand le fil est replié : c'est lui qui
+   * dit qu'il se passe quelque chose sous un message racine. Le dépliage est un CLIC
+   * (ou Entrée au clavier : le contrôle est un vrai bouton avec `aria-expanded`).
+   */
+  function appendThreadBlock(replies, pinned) {
+    const wrap = document.createElement("div");
+    wrap.className = "thread";
+    const count = replies.length;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "thread__toggle";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = `${count} réponse${count > 1 ? "s" : ""}`;
+    const body = document.createElement("div");
+    body.className = "thread__body";
+    // REPLIÉ PAR DÉFAUT (demande explicite : « état replié par défaut, déplié au clic »).
+    body.hidden = true;
+    toggle.addEventListener("click", () => {
+      const ouvert = toggle.getAttribute("aria-expanded") === "true";
+      toggle.setAttribute("aria-expanded", ouvert ? "false" : "true");
+      body.hidden = ouvert;
+    });
+    wrap.append(toggle, body);
+    // ⚠️ Les fonctions de rendu existantes écrivent dans `els.conversation` : on
+    // redirige TEMPORAIREMENT la cible vers le corps du fil (et on restaure, même en
+    // cas d'erreur). Aucune fonction de rendu n'est dupliquée pour les fils.
+    const cible = els.conversation;
+    const jourCourant = lastDayKey;
+    els.conversation = body;
+    try {
+      for (const reply of replies) renderTranscriptEntry(reply, pinned);
+    } finally {
+      els.conversation = cible;
+      lastDayKey = jourCourant;
+    }
+    if (body.children.length === 0) return null;
+    return wrap;
+  }
+
+  for (const entry of transcript) {
+    if (typeof entry.threadRootId === "string" && racines.has(entry.threadRootId)) continue;
+    renderTranscriptEntry(entry, pinned);
+    const replies = reponsesParRacine.get(entry.id);
+    if (replies && replies.length > 0) {
+      const block = appendThreadBlock(replies, pinned);
+      if (block) els.conversation.appendChild(block);
+    }
+  }
+  currentRenderer = null;
+  pinIfNeeded(pinned);
+}
+
+/**
+ * Rend UNE entrée de transcript (bulle, récapitulatif, ou rien du tout).
+ *
+ * ⚠️ Extrait de `applyTranscript` pour que les réponses d'un FIL soient rendues
+ * EXACTEMENT comme les autres messages (aucun second rendu à maintenir).
+ */
+function renderTranscriptEntry(entry, pinned) {
+  {
     const ts = entry.timestamp;
     if (entry.role === "user") {
-      appendMessage("user", entry.text ?? "", pinned, ts);
+      // ⚠️ L'AUTEUR est posé pour les conversations MIROIR (un canal d'équipe compte
+      // plusieurs humains) ; une session locale n'en porte pas et rien ne change.
+      setMessageAuthor(appendMessage("user", entry.text ?? "", pinned, ts), entry.author);
     } else if (entry.role === "recap") {
       appendRecapBlock(entry, pinned, ts);
     } else {
@@ -1467,7 +1584,7 @@ function applyTranscript(transcript) {
       // pas rendue du tout (aucune bulle fantôme après restauration).
       const ackText = typeof entry.ack === "string" ? entry.ack : null;
       const bodyText = (entry.text ?? "").trim();
-      if (bodyText === "" && ackText === null) continue;
+      if (bodyText === "" && ackText === null) return;
       const meta = runMetricsText(entry.metrics);
       // ⚠️ L'ACCUSÉ EST UN MESSAGE À PART ENTIÈRE (sa propre bulle, son heure, son
       // texte normal) : il ouvre donc la PREMIÈRE bulle, AVANT l'image que
@@ -1476,16 +1593,18 @@ function applyTranscript(transcript) {
       // ici, dans le MÊME ordre qu'en direct (aucune régression de relecture).
       if (ackText !== null) {
         const ackBubble = appendAssistantMessage(null, pinned, ts);
+        setMessageAuthor(ackBubble, entry.author);
         ackBlocks.show(ackBubble, ackText);
         // Bulle d'accusé SEUL : elle EST le message du tour, elle porte donc son
         // pied technique (exactement ce que le direct avait affiché). Aucune
         // action, elle : la corrélation n'est admise que pour une VRAIE réponse.
         if (bodyText === "") {
           if (meta) setMeta(ackBubble, meta);
-          continue;
+          return;
         }
       }
       const div = appendAssistantMessage(entry.text ?? "", pinned, ts);
+      setMessageAuthor(div, entry.author);
       if (meta) setMeta(div, meta);
       // RÉACTION : le serveur la fournit (store à part) avec l'identifiant STABLE
       // du message. Elle réapparaît donc à la bonne place après un RECHARGEMENT,
@@ -1498,8 +1617,6 @@ function applyTranscript(transcript) {
       // recopié dans le corps de la réponse (aucun doublon de la phrase).
     }
   }
-  currentRenderer = null;
-  pinIfNeeded(pinned);
 }
 
 /**

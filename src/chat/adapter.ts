@@ -31,9 +31,36 @@ export class ChatAdapterError extends Error {
 /** Adaptateurs connus, par plateforme. */
 const registry = new Map<ChatMode, ChatAdapter>();
 
+/**
+ * FOURNISSEURS d'adaptateur, par plateforme.
+ *
+ * ⚠️ POURQUOI UN FOURNISSEUR ET PAS SEULEMENT UNE INSTANCE : un adaptateur distant a
+ * besoin du stockage, du coffre et de la configuration du serveur ; les construire au
+ * chargement du module obligerait à importer la moitié du programme ici. Le fournisseur
+ * est enregistré au DÉMARRAGE (`src/index.ts`) et rend l'instance déjà câblée.
+ */
+const providers = new Map<ChatMode, () => ChatAdapter | null>();
+
 /** Enregistre un adaptateur (remplace l'existant : redémarrage à chaud). */
 export function registerAdapter(adapter: ChatAdapter): void {
   registry.set(adapter.platform, adapter);
+}
+
+/**
+ * Enregistre un FOURNISSEUR d'adaptateur (construction paresseuse mais unique).
+ * Une plateforme ainsi déclarée apparaît dans `listPlatforms()`. */
+export function registerAdapterProvider(
+  platform: ChatMode,
+  provider: () => ChatAdapter | null,
+): void {
+  providers.set(platform, provider);
+  registry.delete(platform);
+}
+
+/** Désenregistre une plateforme (tests : retour à l'état « non livrée »). */
+export function unregisterAdapter(platform: ChatMode): void {
+  registry.delete(platform);
+  providers.delete(platform);
 }
 
 /**
@@ -43,27 +70,28 @@ export function registerAdapter(adapter: ChatAdapter): void {
  *   n'existe (au lot 1, Mattermost n'en a pas encore : c'est le lot 2).
  */
 export function getAdapter(platform: string): ChatAdapter {
-  const adapter = registry.get(platform as ChatMode);
-  if (!adapter) {
-    throw new ChatAdapterError(
-      "unknown_platform",
-      `Aucun adaptateur de discussion pour « ${platform} ».`,
-    );
-  }
-  return adapter;
+  const direct = registry.get(platform as ChatMode);
+  if (direct) return direct;
+  const provider = providers.get(platform as ChatMode);
+  const built = provider?.() ?? null;
+  if (built) return built;
+  throw new ChatAdapterError(
+    "unknown_platform",
+    `Aucun adaptateur de discussion pour « ${platform} ».`,
+  );
 }
 
-/** Plateformes RÉELLEMENT enregistrées, dans l'ordre de `CHAT_MODES`. */
+/** Plateformes RÉELLEMENT disponibles (instance ou fournisseur enregistré). */
 export function listPlatforms(): ChatMode[] {
-  return CHAT_MODES.filter((mode) => registry.has(mode));
+  return CHAT_MODES.filter((mode) => registry.has(mode) || providers.has(mode));
 }
 
 /**
  * Enregistrement des adaptateurs LIVRÉS.
  *
- * ⚠️ Mattermost n'est PAS enregistré au lot 1 (aucun client) : le service de
- * discussion rend alors un statut `off` explicite au lieu d'inventer une
- * connexion.
+ * `local` et `discord` sont autonomes : ils n'ont besoin de rien. Mattermost est
+ * enregistré par un FOURNISSEUR au démarrage du serveur (`src/index.ts`) : il lui faut
+ * le miroir, le coffre et la configuration.
  */
 registerAdapter(new LocalChatAdapter());
 registerAdapter(new DiscordChatAdapter());

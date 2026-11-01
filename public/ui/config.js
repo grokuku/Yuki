@@ -33,6 +33,7 @@ import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
 import { initSecretsPanel } from './secrets-panel.js';
 import { initSourcesPanel } from './sources-panel.js';
+import { initChatPanel } from './chat-panel.js';
 import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
@@ -913,6 +914,8 @@ const secretsRoot = document.getElementById("secrets-root");
 const imagesRoot = document.getElementById("images-root");
 /** Panneau des SOURCES (programmes qui réveillent Yuki) — monté par id. */
 const sourcesRoot = document.getElementById("sources-root");
+/** Conteneur du panneau « Discussions » (Mattermost), dans l'onglet Conversation. */
+const chatRoot = document.getElementById("chat-root");
 /** Panneau de la personnalité — monté par id. */
 const personalityRoot = document.getElementById("personality-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
@@ -1872,6 +1875,11 @@ void (async () => {
     // ⚠️ Le jeton n'est affiché qu'UNE fois, à sa création.
     if (sourcesRoot) {
       initSourcesPanel({ root: sourcesRoot, HolafFetch, HolafModal });
+    }
+    // Panneau « Discussions » (Mattermost) : URL, jeton saisi une fois, état de la
+    // connexion, backfill 2 semaines, canaux suivis. Composant autonome monté par id.
+    if (chatRoot) {
+      initChatPanel({ root: chatRoot, HolafModal });
     }
     // Panneau de la personnalité : édition, enregistrement, retour arrière,
     // historique. Composant autonome monté par id.

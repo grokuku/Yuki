@@ -153,7 +153,11 @@ describe("aucune bulle vide (attente et fin de run)", () => {
   });
 
   it("une entrée de transcript sans contenu NI accusé n'est pas rendue", () => {
-    expect(app).toContain('if (bodyText === "" && ackText === null) continue;');
+    // ⚠️ Lot 18, lot 2 : le corps de la boucle de `applyTranscript` a été extrait dans
+    // `renderTranscriptEntry` (pour que les réponses d'un FIL soient rendues par le MÊME
+    // code). L'entrée est donc QUITTÉE (`return`) au lieu d'être sautée (`continue`) —
+    // comportement identique : aucune bulle vide n'est rendue.
+    expect(app).toContain('if (bodyText === "" && ackText === null) return;');
   });
 });
 

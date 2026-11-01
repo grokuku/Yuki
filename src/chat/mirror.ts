@@ -62,6 +62,14 @@ export interface ChatMirror {
   conversations(): readonly RemoteConversation[];
   /** Messages d'une conversation miroir, en ordre CHRONOLOGIQUE. */
   messages(conversationId: string): readonly RemoteMessage[];
+  /**
+   * Abonnement aux CHANGEMENTS (message ajouté ou édité, canal découvert, backfill
+   * terminé). Facultatif : le miroir VIDE du lot 1 ne l'implémente pas.
+   *
+   * ⚠️ Le rappel reçoit l'identifiant de la conversation concernée quand il est connu :
+   * le transport ne renvoie alors le fil qu'aux clients qui regardent ce canal.
+   */
+  onChange?(listener: (conversationId?: string) => void): () => void;
 }
 
 /** Miroir VIDE (lot 1) : aucune conversation, aucun message. */

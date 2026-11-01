@@ -230,6 +230,14 @@ export interface ChatGatewayPort {
   conversation(conversationId: string): RemoteConversation | null;
   /** Messages d'une conversation miroir (ordre chronologique). */
   messages(conversationId: string): readonly RemoteMessage[];
+  /**
+   * Abonnement aux CHANGEMENTS du miroir (message reçu, canal découvert). Facultatif :
+   * sans lui, la liste et le fil ne se rafraîchissent qu'à la demande du client.
+   *
+   * ⚠️ Aucun contenu ne circule ici : la notification dit SEULEMENT quelle conversation
+   * a changé ; le transport relit le miroir et renvoie ce qu'il faut.
+   */
+  subscribe?(listener: (conversationId?: string) => void): (() => void) | undefined;
 }
 
 /**
@@ -1350,19 +1358,50 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
     client.focusedId = conversation.id;
     await sendSessions(client);
-    // ⚠️ Enveloppe construite à la main, portant l'identifiant du CANAL : la
-    // trame ne doit surtout pas partir avec l'enveloppe d'une session Pi (le
-    // client routerait le transcript du canal vers le store du mauvais fil).
+    sendMirrorSnapshot(client, conversation.id);
+  }
+
+  /**
+   * Snapshot SYNTHÉTIQUE d'un canal miroir.
+   *
+   * ⚠️ Enveloppe construite à la main, portant l'identifiant du CANAL : la trame ne doit
+   * surtout pas partir avec l'enveloppe d'une session Pi (le client routerait le
+   * transcript du canal vers le store du mauvais fil). `readOnly: true` dit que
+   * l'interface web n'y compose pas — un canal distant SE LIT, il ne s'écrit pas depuis
+   * le navigateur (c'est la plateforme qui reçoit les messages).
+   */
+  function sendMirrorSnapshot(client: ClientState, conversationId: string): void {
     sendFrame(client, {
       seq: 0,
       ts: new Date().toISOString(),
-      sessionId: conversation.id,
+      sessionId: conversationId,
       type: "snapshot",
       state: "idle",
       readOnly: true,
-      transcript: chatPort?.messages(conversation.id).map(remoteMessageToTranscript) ?? [],
+      transcript: chatPort?.messages(conversationId).map(remoteMessageToTranscript) ?? [],
     });
   }
+
+  /**
+   * Changement du MIROIR (message reçu, canal découvert, backfill terminé).
+   *
+   * ⚠️ On rafraîchit la LISTE de tous les clients (compteurs et canaux nouveaux) et le
+   * FIL de ceux qui regardent précisément ce canal. Aucune notification hors sujet : un
+   * client qui lit une conversation locale ne reçoit pas de trame de canal.
+   */
+  function onMirrorChange(conversationId?: string): void {
+    for (const client of clients) {
+      void sendSessions(client);
+      if (conversationId !== undefined && client.focusedId === conversationId) {
+        sendMirrorSnapshot(client, conversationId);
+      }
+    }
+  }
+
+  // Abonnement aux changements du miroir (facultatif : absent ⇒ comportement inchangé).
+  const unsubscribeChat = chatPort?.subscribe?.((conversationId) =>
+    onMirrorChange(conversationId),
+  );
 
   /**
    * Refus EXPLICITE d'une écriture visant une conversation miroir.
@@ -2321,6 +2360,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       unsubscribeApprovals?.();
       unsubscribeSecrets?.();
       unsubscribeAgents?.();
+      unsubscribeChat?.();
       unsubscribeScreenshots?.();
       unsubscribeImages?.();
       unsubscribeImageFinalPrompts?.();

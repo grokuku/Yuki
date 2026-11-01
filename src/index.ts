@@ -60,7 +60,21 @@ import {
   type ImagesGatewayPort,
 } from "./comfy/index.js";
 import { createFilesService, createGeneratedImageFiles, FilesStore } from "./files/index.js";
-import { ChatService } from "./chat/index.js";
+import {
+  CHAT_JUDGE_SYSTEM_PROMPT,
+  CHAT_JUDGE_TIMEOUT_MS,
+  CHAT_REPLY_SYSTEM_PROMPT,
+  CHAT_REPLY_TIMEOUT_MS,
+  ChatMirrorStore,
+  ChatService,
+  MattermostChatAdapter,
+  buildJudgePrompt,
+  buildReplyPrompt,
+  parseJudgeAnswer,
+  registerAdapterProvider,
+} from "./chat/index.js";
+import { MATTERMOST_TOKEN_SECRET_NAME } from "./secrets/references.js";
+import type { ChatMattermostPort } from "./gateway/routes/chat.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
 import { createDelegationService, type DelegationService } from "./delegation/index.js";
@@ -143,7 +157,7 @@ import {
   SourcesService,
   SourcesStore,
 } from "./sources/index.js";
-import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
+import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -1218,13 +1232,144 @@ async function main(): Promise<void> {
     });
   }
 
-  // DISCUSSIONS (lot 18) : service LECTURE SEULE du mode (`chat.mode`, apply hot)
-  // et de l'état des plateformes. Aucun client distant n'est instancié au lot 1 ;
-  // le miroir est VIDE (sa synchronisation est le lot 2).
+  // DISCUSSIONS (lot 18) : MIROIR PERSISTANT des canaux distants (index JSON +
+  // un JSONL append-only par canal), ouvert AVANT le service pour que l'interface
+  // puisse lister les canaux dès le démarrage. Aucun modèle n'est requis : un
+  // miroir se lit même en mode dégradé.
+  const chatMirror = ChatMirrorStore.open({
+    indexPath: env.chatMirrorPath,
+    messagesDir: env.chatMirrorDir,
+    logger,
+  });
+
+  /**
+   * Écrivain d'un canal distant (JUGE du mode `auto`, RÉDACTEUR de la réponse).
+   *
+   * ⚠️ Modèle LÉGER et réflexion `off` : juger un message ou rédiger trois phrases
+   * n'est pas une tâche de raisonnement long. `timeoutMs` est BORNÉ par usage (un juge
+   * lent retarderait la réponse au message). Modèle introuvable ⇒ l'écrivain LÈVE, et
+   * l'appelant le traduit en refus explicite (jamais une réponse vide publiée).
+   */
+  const chatWriter = (systemPrompt: string, timeoutMs: number, label: string) =>
+    createSdkPromptWriter({
+      cwd: env.piCwd,
+      agentDir: env.piAgentDir,
+      authPath: join(env.piAgentDir, "auth.json"),
+      modelsPath,
+      systemPrompt,
+      modelReference: liveLightReference,
+      thinking: "off",
+      timeoutMs: () => timeoutMs,
+      logger,
+      label,
+    });
+
+  // Client MATTERMOST (lot 2) : REST + temps réel + miroir. ⚠️ Le JETON ne sort
+  // JAMAIS d'ici (coffre `YUKI_CHAT_MATTERMOST`, lu à chaque appel) et il n'est ni
+  // journalisé ni renvoyé par une route.
+  const mattermost = new MattermostChatAdapter({
+    baseUrl: () => chatMirror.baseUrl(),
+    token: () => secretStore?.lookup(MATTERMOST_TOKEN_SECRET_NAME),
+    store: chatMirror,
+    logger,
+    // Le générateur et le juge ne sont câblés que si un modèle léger est disponible :
+    // sans lui, la décision `auto` rend « juge indisponible » et le rédacteur refuse
+    // explicitement — on ne publie jamais une réponse inventée.
+    judge: async ({ message, channelTitle }) => {
+      if (!resolveAvail().isAvailable("light")) return false;
+      const writer = chatWriter(CHAT_JUDGE_SYSTEM_PROMPT, CHAT_JUDGE_TIMEOUT_MS, "juge");
+      const answer = await writer(
+        buildJudgePrompt({
+          channelTitle,
+          message,
+          recent: chatMirror
+            .messages(message.conversationId)
+            .filter((item) => item.remoteId !== message.remoteId)
+            .slice(-4),
+        }),
+      );
+      return parseJudgeAnswer(answer);
+    },
+    generateReply: async ({ channelTitle, transcript, message }) => {
+      if (!resolveAvail().isAvailable("light")) {
+        throw new Error(
+          "Aucun modèle léger disponible : Yuki ne peut pas rédiger de réponse.",
+        );
+      }
+      const writer = chatWriter(CHAT_REPLY_SYSTEM_PROMPT, CHAT_REPLY_TIMEOUT_MS, "réponse");
+      return writer(
+        buildReplyPrompt({
+          channelTitle,
+          transcript,
+          message,
+          botName: chatMirror.bot().username ?? "Yuki",
+        }),
+      );
+    },
+  });
+  // Le registre rend l'adaptateur au transport et à `GET /api/chat/status`.
+  registerAdapterProvider("mattermost", () => mattermost);
+
+  /**
+   * Port MATTERMOST de la page `/config → Discussions`.
+   *
+   * ⚠️ Le jeton est ÉCRIT ici et n'en ressort jamais : `tokenConfigured()` est un
+   * booléen, jamais la valeur, jamais un préfixe. Une fois enregistré, le jeton ne peut
+   * plus être relu depuis l'interface — seulement remplacé.
+   */
+  const mattermostPort: ChatMattermostPort = {
+    baseUrl: () => chatMirror.baseUrl(),
+    tokenConfigured: () => secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true,
+    saveBaseUrl: (url) => chatMirror.setBaseUrl(url),
+    saveToken: (token) => {
+      if (!secretStore) {
+        throw new Error(
+          "Le coffre de secrets n'est pas disponible : le jeton Mattermost ne peut pas " +
+            "être enregistré (redémarrez avec le volume `state` accessible).",
+        );
+      }
+      secretStore.set(MATTERMOST_TOKEN_SECRET_NAME, token, "Jeton du bot Mattermost");
+      // La liste de rédaction du journal est rafraîchie immédiatement : le jeton ne
+      // pourra même pas apparaître dans une ligne de journal ultérieure.
+      refreshSecretValues();
+    },
+    connect: () => mattermost.connect(),
+    view: () => {
+      const canaux = Object.entries(chatMirror.records())
+        .filter(([, record]) => record.platform === "mattermost")
+        .map(([id, record]) => ({
+          id,
+          titre: record.title,
+          messageCount: record.messageCount,
+          ...(record.replyMode !== undefined ? { replyMode: record.replyMode } : {}),
+          backfillFait: record.backfillDone,
+          historiqueAnterieur:
+            record.historiqueAnterieur === true || record.borneAtteinte === true,
+        }));
+      return {
+        url: chatMirror.baseUrl(),
+        jetonEnregistre: secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true,
+        plateforme: mattermost.status(),
+        synchronisation: mattermost.syncStatus(),
+        canaux,
+      };
+    },
+    replyMode: (conversationId) => mattermost.replyMode(conversationId),
+    setReplyMode: (conversationId, mode) => {
+      if (!chatMirror.record(conversationId)) return false;
+      chatMirror.setReplyMode(conversationId, mode);
+      return true;
+    },
+  };
+
+  // Service de DISCUSSION : lit le mode (`chat.mode`, apply hot) et sert le miroir en
+  // LECTURE seule. ⚠️ `chat.mode` ne filtre que la VUE : la synchronisation démarre
+  // dès que la plateforme est configurée (décision du lot 1, tenue ici).
   const chatService = new ChatService({
     mode: () => config.getString("chat.mode"),
     remoteAgents: () => config.getString("chat.remoteAgents"),
     remoteMemory: () => config.getString("chat.remoteMemory"),
+    mirror: chatMirror,
   });
 
   if (gate.passed) {
@@ -1953,9 +2098,10 @@ async function main(): Promise<void> {
       // messages poussés par les programmes extérieurs.
       sources: { service: sourcesService, logger },
       // DISCUSSIONS : `GET /api/chat/status` (lecture GARDÉE par l'en-tête
-      // `X-Yuki-Config: 1`) — mode, état de la plateforme, motif de refus de
-      // création. ⚠️ Jamais un secret, jamais une URL d'API.
-      chat: { service: chatService },
+      // `X-Yuki-Config: 1`) — mode, état de la plateforme, état Mattermost, motif de
+      // refus de création ; plus l'URL du serveur, le JETON (écriture seule, une fois) et
+      // le mode de réponse PAR CANAL. ⚠️ Jamais un jeton en réponse.
+      chat: { service: chatService, mattermost: mattermostPort, logger },
       // Administration de la mémoire (archivage récupérable) : disponible
       // uniquement quand le service mémoire existe (porte passée).
       ...(memoryService ? { memory: { admin: memoryService, logger } } : {}),
@@ -2023,6 +2169,9 @@ async function main(): Promise<void> {
       stopLlmHotReload = undefined;
       stopPushTriggers?.();
       stopPushTriggers = undefined;
+      // DISCUSSIONS : plus aucune reconnexion ni rattrapage après l'arrêt (aucune
+      // écriture tardive dans le miroir, aucune socket orpheline).
+      await mattermost.disconnect();
       // SOURCES : plus aucun suivi de run après l'arrêt (aucune écriture tardive
       // dans la boîte de notifications).
       sourcesService.detach();
@@ -2050,6 +2199,16 @@ async function main(): Promise<void> {
     light: availabilityAtStart.light.status,
     heavy: availabilityAtStart.heavy.status,
   });
+
+  // DISCUSSIONS (lot 18, lot 2) — la SYNCHRONISATION démarre dès que la plateforme est
+  // CONFIGURÉE (URL du serveur + jeton du bot dans le coffre), et cela INDÉPENDAMMENT
+  // du mode affiché : `chat.mode` ne filtre que la VUE (décision du lot 1). Un échec est
+  // journalisé ET remonté par le statut ; il ne bloque jamais le démarrage du gateway.
+  if (chatMirror.baseUrl() !== "" && secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true) {
+    void mattermost.connect().catch((error: unknown) => {
+      logger.warn("chat.mattermost.connect_failed", { error: messageOf(error) });
+    });
+  }
 
   // Port machines (Lot 4) : écoute LAN mTLS. Un échec d'écoute est journalisé
   // mais NE fait PAS tomber le gateway humain.

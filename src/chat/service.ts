@@ -70,17 +70,23 @@ export interface ChatStatusView {
 const CREATION_REFUSALS: Record<Exclude<ChatMode, "local">, string> = {
   mattermost:
     "En mode Mattermost, les conversations viennent des canaux synchronisés : " +
-    "la création d'une conversation locale est désactivée. La synchronisation " +
-    "des canaux n'est pas encore disponible (lot 2).",
+    "la création d'une conversation locale est désactivée. Écrivez dans un canal " +
+    "Mattermost : Yuki y répondra selon le mode de réponse du canal.",
   discord:
     "Discord n'est pas encore configuré — ce mode ne fait rien pour l'instant : " +
     "la création d'une conversation locale est désactivée.",
 };
 
-/** Motif d'un mode dont l'adaptateur n'est pas encore livré (Mattermost, lot 2). */
+/**
+ * Motif affiché quand aucun adaptateur n'est câblé pour le mode courant.
+ *
+ * ⚠️ Mattermost EST livré (lot 2) : ce motif ne doit apparaître que si le serveur
+ * n'a pas enregistré son fournisseur d'adaptateur (démarrage incomplet). Il dit donc
+ * quoi FAIRE, il ne promet pas un lot futur.
+ */
 const MISSING_ADAPTER_REASON =
-  "La connexion à Mattermost n'est pas encore disponible : la synchronisation " +
-  "des canaux arrive au lot 2.";
+  "La connexion à Mattermost n'est pas active : renseignez l'URL du serveur et le " +
+  "jeton du bot dans /config → Discussions, puis cliquez sur « Se connecter ».";
 
 /** Normalise une valeur brute de configuration en mode connu. */
 function normalizeMode(raw: string): ChatMode {
@@ -176,6 +182,19 @@ export class ChatService {
   /** Messages d'une conversation miroir (ordre chronologique). */
   messages(conversationId: string): readonly RemoteMessage[] {
     return this.mirror.messages(conversationId);
+  }
+
+  /**
+   * S'abonne aux changements du MIROIR (message ajouté, canal découvert, backfill
+   * terminé). Rend le désabonnement, ou `undefined` si le miroir ne sait pas le faire
+   * (miroir vide du lot 1).
+   *
+   * ⚠️ Aucun contenu de message ne circule ici : seule la NOTIFICATION « quelque chose
+   * a changé dans cette conversation » — le transport relit lui-même ce qu'il doit
+   * envoyer.
+   */
+  subscribe(listener: (conversationId?: string) => void): (() => void) | undefined {
+    return this.mirror.onChange?.(listener);
   }
 
   /** Plus récente activité connue du miroir pour une plateforme (ISO). */

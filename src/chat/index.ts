@@ -20,8 +20,75 @@ export {
   getAdapter,
   listPlatforms,
   registerAdapter,
+  registerAdapterProvider,
+  unregisterAdapter,
   type ChatAdapterErrorCode,
 } from "./adapter.js";
+export {
+  MattermostChatAdapter,
+  MATTERMOST_NOT_CONFIGURED_REASON,
+  normalizeReplyMode,
+  type MattermostAdapterDeps,
+  type MattermostReplyGenerator,
+} from "./mattermost/adapter.js";
+export {
+  MattermostApiError,
+  MattermostClient,
+  mattermostApiBase,
+  mattermostWebSocketUrl,
+  type MattermostApiErrorCode,
+  type MattermostClientOptions,
+  type MattermostPostsPage,
+} from "./mattermost/client.js";
+export { MattermostSocket, type MattermostSocketStatus } from "./mattermost/ws.js";
+export {
+  DELETED_NOTICE,
+  MAX_MESSAGE_BYTES,
+  MAX_MESSAGES_PER_CONVERSATION,
+  MAX_MIRRORED_CONVERSATIONS,
+  ChatMirrorStore,
+  TRUNCATION_SUFFIX,
+  truncateUtf8,
+  type ChatMirrorConversationRecord,
+  type ChatMirrorWriteOutcome,
+} from "./mirror/store.js";
+export {
+  conversationIdOfChannel,
+  ingestPost,
+  isOwnMessage,
+  postToRemoteMessage,
+  type IngestContext,
+  type IngestOutcome,
+} from "./mirror/ingest.js";
+export {
+  BACKFILL_DAYS,
+  BACKFILL_MAX_MESSAGES,
+  ChatSyncService,
+  DEFAULT_POLL_INTERVAL_MS,
+  type ChatSyncStatus,
+} from "./sync/service.js";
+export type { ChatSyncChannel, ChatSyncPlatform } from "./sync/platform.js";
+export {
+  CHAT_JUDGE_SYSTEM_PROMPT,
+  CHAT_REPLY_SYSTEM_PROMPT,
+  CHAT_JUDGE_TIMEOUT_MS,
+  CHAT_REPLY_TIMEOUT_MS,
+  CHAT_REPLY_TRANSCRIPT_MAX_CHARS,
+  buildJudgePrompt,
+  buildReplyPrompt,
+  parseJudgeAnswer,
+} from "./reply/prompt.js";
+export {
+  DEFAULT_REPLY_MODE,
+  REPLY_MODE_LABELS,
+  botAliases,
+  decideReply,
+  isBotMentioned,
+  type ChatReplyJudge,
+  type DecideReplyInput,
+  type ReplyDecision,
+  type ReplyReason,
+} from "./reply/responder.js";
 export {
   MIRROR_ID_PREFIX,
   emptyChatMirror,

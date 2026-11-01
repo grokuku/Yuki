@@ -30,9 +30,12 @@ import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { HolafIcons } from "./vendor/holaf/holaf-icons.js";
 import { attachLongPress } from "./long-press.js";
 import {
+  REPLY_MODE_OPTIONS,
   creationRefusal,
   initChatModeSelector,
   modeNotice,
+  replyModeLabel,
+  saveReplyMode,
 } from "./chat-mode.js";
 import {
   composeConversationLabel,
@@ -278,6 +281,7 @@ export function initSessionsPanel(deps) {
   const onPin = deps.onPin ?? (() => undefined);
   const onRecapDedicated = deps.onRecapDedicated ?? (() => undefined);
   const onChatModeChange = deps.onChatModeChange ?? (() => undefined);
+  const onReplyMode = deps.onReplyMode ?? (() => undefined);
   /** `fetch` injectable (tests) : la modale de suppression réaffecte les sources. */
   const doFetch = deps.fetchImpl ?? ((url, init) => fetch(url, init));
 
@@ -299,6 +303,9 @@ export function initSessionsPanel(deps) {
   let menuTargetId = null;
   let pinItem = null;
   let recapItem = null;
+  /** Bloc « mode de réponse » du menu contextuel (canaux distants seulement). */
+  let replyBlock = null;
+  const replyItems = new Map();
   /** Cibles de rendu : la barre latérale (`rail`) + les menus téléphone (`menu`). */
   const targets = [];
 
@@ -420,6 +427,23 @@ export function initSessionsPanel(deps) {
         ? "Récapituler cette conversation et continuer dans un nouveau fil dédié."
         : "Ouvrir cette conversation, puis la récapituler dans un nouveau fil dédié.";
       recapItem.setAttribute("aria-label", RECAP_MENU_LABEL);
+    }
+    // ⚠️ MODE DE RÉPONSE : proposé UNIQUEMENT sur un canal distant (miroir). Sur une
+    // conversation locale, la section est MASQUÉE — pas grisée, absente : elle n'a
+    // aucun sens et prendrait la place des actions réelles.
+    if (replyBlock) {
+      const cible = sessions.find((info) => info.id === id);
+      const distant = cible && cible.kind === "remote";
+      replyBlock.hidden = !distant;
+      if (distant) {
+        const courant = cible.replyMode ?? "mention";
+        for (const [mode, item] of replyItems) {
+          const actif = mode === courant;
+          item.classList.toggle("ctx-menu__item--active", actif);
+          item.setAttribute("aria-checked", actif ? "true" : "false");
+          item.textContent = `${actif ? "● " : "○ "}${replyModeLabel(mode)}`;
+        }
+      }
     }
     menu.hidden = false;
     // Position CSSOM : `position: fixed` échappe au recadrage de la barre
@@ -543,6 +567,39 @@ export function initSessionsPanel(deps) {
       if (id) void confirmDelete(id);
     });
 
+    // ─── MODE DE RÉPONSE du canal distant (`tout` / `auto` / `mention`) ────
+    // ⚠️ Réglage PAR CANAL, persisté côté serveur (`chat-mirror.json`) : il survit au
+    // redémarrage et s'applique à la synchronisation, pas seulement à l'affichage.
+    replyBlock = el("div", { class: "ctx-menu__group", role: "group" });
+    replyBlock.hidden = true;
+    replyBlock.setAttribute("aria-label", "Mode de réponse du canal");
+    const replyTitle = el(
+      "p",
+      { class: "ctx-menu__label" },
+      "Réponses de Yuki dans ce canal",
+    );
+    replyBlock.append(replyTitle);
+    for (const option of REPLY_MODE_OPTIONS) {
+      const item = el(
+        "button",
+        {
+          class: "ctx-menu__item",
+          type: "button",
+          role: "menuitemradio",
+          "aria-checked": "false",
+          title: option.title,
+        },
+        option.label,
+      );
+      item.addEventListener("click", () => {
+        const id = menuTargetId;
+        closeMenu();
+        if (id) void applyReplyMode(id, option.mode);
+      });
+      replyItems.set(option.mode, item);
+      replyBlock.append(item);
+    }
+
     menu.append(
       rename,
       pinItem,
@@ -550,6 +607,9 @@ export function initSessionsPanel(deps) {
       el("div", { class: "ctx-menu__sep", role: "separator" }),
       recapItem,
       compactItem,
+      // Mode de RÉPONSE : AVANT les actions destructrices (ce n'est pas une action
+      // dangereuse, il n'a pas à voisiner « Supprimer »).
+      replyBlock,
       el("div", { class: "ctx-menu__sep", role: "separator" }),
       setAside,
       del,
@@ -581,6 +641,28 @@ export function initSessionsPanel(deps) {
       return;
     }
     onRename(id, normalized);
+  }
+
+  /**
+   * Applique un mode de RÉPONSE à un canal distant (`PATCH /api/chat/conversations/<id>`).
+   *
+   * ⚠️ L'échec est DIT (modale), jamais avalé : l'utilisateur doit savoir que le canal
+   * ne répondra pas comme il l'a demandé.
+   */
+  async function applyReplyMode(id, mode) {
+    try {
+      await saveReplyMode(id, mode, doFetch);
+    } catch (error) {
+      await modal.alert(
+        "Mode de réponse non enregistré",
+        `Le mode de réponse de ce canal n'a pas pu être enregistré : ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { okText: "Compris" },
+      );
+      return;
+    }
+    onReplyMode(id, mode);
   }
 
   async function confirmSetAside(id) {

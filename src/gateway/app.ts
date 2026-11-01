@@ -720,17 +720,31 @@ export function createApp(context: AppContext): RequestListener {
     }
 
     if (chat && isChatApiPath(path)) {
-      const response = handleChatRequest({
-        method,
-        path,
-        headers: req.headers,
-        deps: chat,
-      });
-      writeResponse(
-        res,
-        { status: response.status, body: response.body, headers: response.headers },
-        headOnly,
-      );
+      // ⚠️ Certaines routes de discussion ÉCRIVENT puis ATTENDENT (connexion, backfill) :
+      // la lecture du corps est bornée comme celle de `/api/config`, et l'échec est
+      // journalisé sans laisser la réponse en suspens.
+      void (async () => {
+        const body = method === "GET" || method === "HEAD" ? "" : await readBody(req).catch(() => "");
+        return handleChatRequest({ method, path, headers: req.headers, body, deps: chat });
+      })()
+        .then((response) => {
+          writeResponse(
+            res,
+            { status: response.status, body: response.body, headers: response.headers },
+            headOnly,
+          );
+        })
+        .catch((error: unknown) => {
+          chat.logger?.error("chat.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(res, { status: 500, body: { error: "internal_error" } }, headOnly);
+          } else {
+            res.end();
+          }
+        });
       return;
     }
 

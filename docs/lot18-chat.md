@@ -1,96 +1,256 @@
-# Lot 18 — Modes de discussion : parler depuis Mattermost (et Discord plus tard)
+# Lot 18 — Modes de discussion : parler depuis Mattermost
 
 > Objectif : Yuki lit et répond **dans un canal externe**, avec le **même** socle
-> que la conversation locale. Ce lot (lot 1) pose le **socle**, le **sélecteur de
-> mode** et le **modèle de données**. ⚠️ **Aucun client Mattermost, aucune
-> synchronisation** : c'est le lot 2.
+> que la conversation locale.
+>
+> **Lot 1** (livré) : socle (types, registre, miroir vide), sélecteur de mode,
+> modèle de données. **Lot 2** (ce document) : **vrai client Mattermost** — REST,
+> WebSocket, miroir persistant, backfill 2 semaines, fils dépliables, trois modes
+> de réponse, panneau `/config → Discussions`.
 
 ## 1. Les trois modes
 
 | Mode | Ce qu'il fait | Ce qui vient du serveur |
 | --- | --- | --- |
 | **Local** (défaut, `chat.mode = local`) | conversations de Yuki, comportement **inchangé** | liste des sessions Pi |
-| **Mattermost** | canaux synchronisés en **lecture seule côté interface web** | liste vide tant que le lot 2 n'est pas livré |
+| **Mattermost** | canaux **synchronisés** (lecture seule côté interface web) | liste des canaux suivis + leur fil |
 | **Discord** | **stub honnête** : « Discord n'est pas encore configuré. » | aucune conversation, création désactivée |
 
-## 2. Répondre : trois modes PAR CANAL
+⚠️ **`chat.mode` ne filtre QUE la vue.** La synchronisation démarre dès que la
+plateforme est **configurée** (URL + jeton), même si l'utilisateur regarde le mode
+local : sinon les messages reçus pendant ce temps seraient perdus
+(`src/index.ts`, démarrage de `mattermost.connect()`).
 
-| `ChatReplyMode` | Sens |
+## 2. Le client Mattermost — ce qui a été VÉRIFIÉ
+
+| Point | Source vérifiée |
 | --- | --- |
-| `tout` | elle répond à **tous** les messages du canal |
-| `auto` | elle répond quand le message lui est **adressé** — c'est le **LLM qui juge** |
-| `mention` | elle ne répond que si elle est **citée** |
+| Base `/api/v4`, `me` = utilisateur courant, `per_page` **max 200 tronqué EN SILENCE**, défaut 60 | `api/v4/source/introduction.yaml` (section *Schema & Conventions*) |
+| **Trame d'authentification WebSocket** : après ouverture, premier message `{"seq":1,"action":"authentication_challenge","data":{"token":…}}` ; succès = `{"status":"OK","seq_reply":1}` puis événement `hello` | même fichier, section *WebSocket → Authentication* |
+| Événements de post : `posted`, `post_edited`, `post_deleted` (parmi ~50 événements) | même fichier, section *WebSocket Events* |
+| `GET /channels/{id}/posts` : `since` **non combinable** avec `page`/`per_page`, limité à **1000** posts, **continuité non garantie** | `api/v4/source/posts.yaml` + page archivée `mattermost-get-posts-for-channel` |
+| `data.post` d'un événement est une **CHAÎNE JSON** (double encodage) | `server/channels/app/post.go:852` — `message.Add("post", postJSON)` |
+| `POST /posts` avec `channel_id`, `message`, `root_id` | `api/v4/source/posts.yaml` |
+| `POST /users/ids` (liste d'identifiants → utilisateurs) | `api/v4/source/users.yaml:682` |
 
-Le choix se fait par **clic droit sur le canal** dans la barre latérale (le mode
-est stocké par canal dans un JSON du volume `state` — le schéma de `/config`
-n'accepte ni liste ni objet, `src/config/schema.ts:14`).
+⚠️ **Ce qui reste INVERIFIABLE ici** : aucun serveur Mattermost n'est accessible
+depuis cet environnement. Les tests utilisent des **serveurs fixtures réels**
+(HTTP et WebSocket) qui rejouent le contrat ci-dessus, pas une instance
+Mattermost. Les commandes de vérification contre un vrai serveur sont en §10.
 
-## 3. Fils dépliables et backfill
+## 3. Lecture REST — pas de troncature muette
 
-- **Un canal = une conversation** ; chaque message porte son **parent**
-  (`threadRootId`, obligatoire dès le modèle : `src/chat/types.ts`). Les fils
-  s'affichent et se déplient comme dans Mattermost. Ajouter ce champ après coup
-  aurait imposé de **re-synchroniser tout le miroir**.
-- **Backfill : deux semaines** d'historique par canal (suffisant, choix
-  utilisateur). Curseur **opaque** fourni par l'adaptateur, idempotence
-  `(platform, conversationId, remoteMessageId)`.
+`src/chat/mattermost/client.ts`
 
-## 4. Ce qui est LIVRÉ (lot 1) et ce qui reste (lot 2/3)
+- `per_page` n'est **jamais** demandé au-delà de 200 (`MM_MAX_PER_PAGE`) : au-delà,
+  le serveur tronque **sans erreur**.
+- Pagination : `channelPostsAll` s'arrête sur `has_next === false`, sur une page
+  vide, ou sur la borne demandée — et dans ce dernier cas rend `hasNext: true`.
+  ⚠️ **Quand `has_next` est absent**, une page plus courte que demandé n'est PAS
+  la preuve de la fin (c'est exactement le piège du plafond à 60) : le client
+  règle son pas sur ce que le serveur a bien voulu rendre et interroge la page
+  suivante. Le test `mattermost-client.test.ts` le prouve avec un serveur qui
+  plafonne à 60 et 250 messages à servir.
+- `since` : un seul appel (l'API l'interdit avec `page`/`per_page`) ; si le
+  serveur rend **1000** posts, la borne est **annoncée** (`hasNext: true`).
+- **Débit** : une requête toutes les `MM_MIN_REQUEST_INTERVAL_MS` (250 ms). Un
+  `429` est absorbé par un backoff borné (`Retry-After` s'il existe, sinon
+  exponentiel, 4 tentatives) et allume le statut **« ralenti »**, visible dans
+  l'interface (il retombe tout seul au bout de 60 s).
+- **Jeton** : uniquement dans l'en-tête `Authorization` de la requête montante.
+  Jamais dans une URL, jamais dans un message d'erreur (une erreur cite le
+  **chemin** — `GET /users/me` — jamais l'hôte), jamais dans une réponse HTTP.
 
-| Livré au lot 1 | Lot 2 / lot 3 |
+## 4. Temps réel — WebSocket
+
+`src/chat/mattermost/ws.ts`
+
+- Connexion à `/api/v4/websocket`, **authentification en premier message**
+  (trame vérifiée ci-dessus). Le jeton ne circule que là : il ne part **jamais**
+  vers un navigateur (la CSP `default-src 'none'` interdit de toute façon tout
+  appel du navigateur vers Mattermost).
+- Événements retenus : `posted`, `post_edited`, `post_deleted`. Tout le reste
+  (`channel_viewed`, `typing`, `status_change`…) est ignoré : ce ne sont pas des
+  messages.
+- **Reconnexion** : backoff exponentiel **borné** 1 s → 60 s + gigue, compteur de
+  tentatives **visible** dans `status()`. Au-delà de `maxAttempts` (20), le temps
+  réel **s'arrête et le dit** : jamais de reconnexion silencieuse à l'infini.
+- Un **jeton refusé** (`status: "FAIL"`) arrête net : aucune boucle de
+  reconnexion sur une erreur qui ne se répare pas.
+- **Filet de sécurité** : rattrapage REST toutes les **60 s** depuis le curseur
+  persisté, plus une passe au démarrage. Le temps réel peut tomber, les messages
+  ne sont pas perdus.
+
+## 5. Miroir et ingestion
+
+`src/chat/mirror/store.ts` + `src/chat/mirror/ingest.ts`
+
+| Fichier | Rôle |
 | --- | --- |
-| `src/chat/types.ts` (`ChatAdapter`, `RemoteConversation`, `RemoteMessage`, `ChatReplyMode`, origine de run, messages sortants typés) | client Mattermost, authentification, transport |
-| registre `getAdapter` / `listPlatforms`, adaptateur **local**, **stub** Discord | adaptateur Mattermost, miroir `chat-mirror.json` + `chat-mirror/<id>.jsonl` |
-| `chat.mode` (`apply: hot`), `chat.remoteAgents`, `chat.remoteMemory` (défaut `desactive`) | synchronisation, backfill 2 semaines, curseurs |
-| `GET /api/chat/status` (lecture **gardée** : `X-Yuki-Config: 1`) | onglet « Configuration → Discussions » |
-| sélecteur segmenté + badge ●/◐/○, création désactivée **avec la raison** | relais des approbations (lot 3), outils par mode en exécution |
-| trame `sessions` : `kind`, `platform`, `readOnly`, `canRun` ; sélection d'un miroir ; refus `conversation_lecture_seule` ; refus `creation_desactivee` | réponses, images générées envoyées dans le canal |
+| `<état>/chat-mirror.json` | index : URL, identité du bot, une entrée par canal (plateforme, id distant, titre, curseur, compteur, backfill, mode de réponse) |
+| `<état>/chat-mirror/<conversationId>.jsonl` | messages, **append-only** |
 
-⚠️ **`readOnly` et `canRun` ne disent pas la même chose** : `readOnly` = « on ne
-crée rien et on n'écrit pas **depuis l'interface web** » ; `canRun` = « la
-conversation **répond** donc produit des runs » (et pourra demander des
-approbations). Un nom qui confondrait les deux mentirait au lot 2.
+- Écriture **atomique** (`tmp` + `rename`) pour l'index, **0600** ; JSONL complété
+  en ajout, **0600**. Chemins par `src/config/env.ts` (`chatMirrorPath`,
+  `chatMirrorDir`).
+- **Idempotence stricte** : clé `(platform, conversationId, remoteMessageId)`,
+  index en mémoire construit au **chargement**, retour **avant** toute écriture.
+  **Aucune heuristique de hachage de texte** : deux « ok » restent deux messages.
+- **Édité** ⇒ mise à jour **sur place** : une ligne de plus portant le **même**
+  identifiant ; au chargement la dernière gagne ⇒ **une seule bulle**, et le
+  fichier ne perd jamais rien.
+- **Supprimé** ⇒ l'entrée **reste**, avec la mention « (supprimé sur
+  Mattermost) » et le **texte d'origine conservé** s'il était connu. Aucune
+  disparition silencieuse.
+- **Auteur → rôle** : `botUserId` ⇒ `assistant`, tout le reste ⇒ `user`.
+- **Bornes explicites** : 50 canaux suivis, 20 000 messages/canal, 16 Kio/message
+  (corps tronqué **avec mention**, jamais coupé en silence). Un dépassement est
+  **refusé et journalisé**, et le canal est marqué pour que l'interface le dise.
 
-## 5. Agents et mémoire en mode distant — désactivés par défaut
+## 6. Backfill — deux semaines, borné deux fois
 
-| Réglage | Défaut | Sens |
-| --- | --- | --- |
-| `chat.remoteAgents` | `desactive` | pas de délégation, pas de transfert, pas de commande, pas de secret |
-| `chat.remoteMemory` | `desactive` | la mémoire durable des conversations distantes n'est pas branchée (**réversible**) |
+`src/chat/sync/service.ts`
 
-La politique d'outils correspondante existe déjà
-(`toolAllowlistForChat`, `src/llm/tool-policy.ts`) : un run distant, agents
-désactivés, garde **seulement** `generer_image`, `consulter_workflow`,
-`lister_fichiers` et `lire_fichier` — c'est-à-dire **générer et analyser des
-images**. Elle sera **branchée** quand des runs distants existeront (lot 2/3) :
-aujourd'hui le seul run est local, et lui appliquer la restriction casserait
-l'usage courant.
+- `since = maintenant − 14 jours` (`BACKFILL_DAYS`), **ET** borne dure de
+  **1 000 messages par canal** (`BACKFILL_MAX_MESSAGES`).
+- Si la borne est atteinte (par les nôtres ou par celle de l'API), le canal est
+  marqué `historiqueAnterieur` et l'interface affiche « **historique antérieur non
+  importé** ». Le panneau `/config` porte le même bandeau.
+- Un canal **déjà backfillé** n'est pas relu (aucun doublon au redémarrage).
+- Un canal en échec n'empêche pas les autres et **n'est pas marqué fait** : son
+  échec est visible dans le statut.
+- **Un canal membre = une conversation**, titre = nom du canal. Les conversations
+  **directes** (`type: "D"`) et de **groupe** (`G`) ne sont pas des canaux : elles
+  ne sont pas miroitées.
 
-## 6. Le bricolage Mattermost
+## 7. Répondre — trois modes PAR CANAL
 
-Le « bricolage » (agent qui lit un canal) vit dans une **VM « playground »**,
-**hors du dépôt** : rien à retirer ici. C'est l'utilisateur qui la supprime.
+`src/chat/reply/responder.ts` + `src/chat/reply/prompt.ts`
 
-## 7. Où c'est prouvé
+| Mode | Règle |
+| --- | --- |
+| `tout` | répond à **chaque message humain** |
+| `mention` | répond **seulement** si Yuki est **citée** : `@<pseudo du bot>`, `@<nom affiché>` ou l'identifiant du bot. Détection **explicite** (frontière de mot) : `@yukiko`, `contact@yuki.fr` ou le pseudo **nu** ne déclenchent rien |
+| `auto` | un **appel modèle léger** juge (« ce message s'adresse-t-il à Yuki ? »). Le juge est **borné** : jamais sur un message du bot, **jamais deux fois** le même identifiant de message, et **jamais** si le canal n'est pas `auto` |
+
+- **Anti-boucle** (prime sur les trois modes) : un message dont l'auteur est
+  `botUserId` — ou déjà classé `assistant` — **ne déclenche aucune réponse**.
+  Contrôlé **deux fois** (adaptateur + `decideReply`) : c'est le seul défaut
+  capable de saturer un canal sans intervention humaine.
+- **Réponse publiée** via `POST /api/v4/posts` **avec `root_id`** : dans le fil du
+  message s'il en a un, sous le message sinon (le mode `tout` ne noie pas le
+  canal).
+- **Réglage par canal** persisté dans `chat-mirror.json` (`replyMode`). Défaut :
+  `mention` (`DEFAULT_REPLY_MODE`), le plus prudent qui laisse le canal utilisable.
+- **Échec d'envoi ⇒ visible** : journal + raison remontée par `status()`, et le
+  panneau `/config` l'affiche. Jamais un échec silencieux.
+- Le **relais d'approbations** (lot 3) n'est **PAS** branché : `send()` refuse
+  explicitement un `ChatOutboundMessage` d'approbation.
+
+## 8. Interface
+
+- **`/config` → onglet Conversation → « Discussions — Mattermost »**
+  (`public/ui/chat-panel.js`) : URL du serveur, jeton **saisi une fois** (champ
+  vidé aussitôt, jamais réaffiché), bouton « Se connecter », état de connexion
+  (badge ● / ◐ / ○ + raison), avancement du backfill, canaux suivis, bandeau
+  « historique antérieur non importé ». Rendu **DOM pur** (`createElement`), aucun
+  `innerHTML`, aucun style en ligne.
+  ⚠️ **Pas de nouvel onglet** : les 9 onglets de `/config` sont verrouillés par un
+  test ; la section vit dans l'onglet **Conversation**, comme « Libraire » vit
+  dans « Système ».
+- **Fils dépliables** (`public/ui/app.js`) : sous un message racine, un bouton
+  « **N réponses** » (replié **par défaut**, `aria-expanded`), qui déplie les
+  réponses. La racine est reconnue par `threadRootId` ; une réponse dont la racine
+  n'est pas dans le fil affiché est rendue normalement. L'**auteur** de chaque
+  message est affiché (information essentielle d'un canal d'équipe).
+- **Clic droit sur un canal ⇒ mode de réponse** : le menu contextuel existant
+  gagne un groupe « Réponses de Yuki dans ce canal » (`tout` / `auto` /
+  `mention`), **masqué** sur une conversation locale. L'enregistrement passe par
+  `PATCH /api/chat/conversations/<id>` et un échec est **dit** dans une modale.
+- **Composer désactivé** sur un miroir : c'est `readOnly: true` (trame `sessions`)
+  qui le porte, **pas** `canRun` — un canal miroir a `canRun: true` (il répond,
+  donc il produit des runs) et reste malgré tout non composable depuis le
+  navigateur.
+
+## 9. Secret
+
+- Le jeton vit dans le **coffre** sous **`YUKI_CHAT_MATTERMOST`**. Le préfixe
+  `YUKI_CHAT_` est ajouté à `SECRET_NAME_PATTERN`
+  (`src/secrets/references.ts`) — **troisième** préfixe réservé, après
+  `YUKI_SECRET_` et `YUKI_SOURCE_`.
+- ⚠️ **Non référençable dans une commande** : `isSecretReferenceName()` exige
+  `YUKI_SECRET_`, donc `${YUKI_CHAT_MATTERMOST}` n'est jamais résolu par le shell
+  d'un agent.
+- **Saisi via l'interface uniquement**, affiché **une seule fois**, **jamais
+  journalisé** (le logger masque aussi les valeurs du coffre), **jamais dans une
+  trame** vers le navigateur.
+
+## 10. Procédure de configuration (à exécuter sur un VRAI serveur)
+
+1. Mattermost → **Intégrations → Bots → Ajouter un bot** (ou *System Console →
+   Integrations → Bot Accounts* s'il faut d'abord autoriser les comptes bots) :
+   nom `yuki`, rôle `System User` ou `Member`.
+2. Copier le **jeton** affiché **une seule fois** par Mattermost.
+3. **Inviter le bot dans les canaux** à suivre (`/invite @yuki`). Un canal où le
+   bot n'est pas membre n'est pas lu.
+4. Yuki → `/config` → **Conversation** → « Discussions — Mattermost » : saisir
+   l'**URL** du serveur (`https://mattermost.exemple.fr`), **Enregistrer le
+   jeton**, puis **Se connecter**.
+5. Vérifier que le badge passe à **●** et que le backfill affiche une date.
+
+Vérifications en ligne de commande (à lancer par l'utilisateur, avec le jeton
+dans une variable d'environnement — jamais en argument) :
+
+```bash
+export MM=https://mattermost.exemple.fr
+read -rs MM_TOKEN            # saisie masquée, jamais dans l'historique
+curl -s -H "Authorization: Bearer $MM_TOKEN" "$MM/api/v4/users/me" | head -c 200
+curl -s -H "Authorization: Bearer $MM_TOKEN" "$MM/api/v4/users/me/teams" | head -c 200
+# Borne de 1 000 posts sur `since` (réponse tronquée ⇒ « historique antérieur ») :
+curl -s -G -H "Authorization: Bearer $MM_TOKEN" \
+  --data-urlencode "since=1700000000000" \
+  "$MM/api/v4/channels/<channelId>/posts" | head -c 200
+```
+
+Côté Yuki, ce qui est **observable sans serveur** : `GET /api/chat/status`
+(en-tête `X-Yuki-Config: 1`) rend l'état, le backfill et les canaux suivis — et
+la ligne d'erreur dit précisément ce qui manque (URL, jeton, ou refus du serveur).
+
+## 11. Limites assumées
+
+| Limite | Pourquoi |
+| --- | --- |
+| **Aucun relais d'approbations** dans un canal | lot suivant : `ChatApprovalRequest` / `ChatApprovalDecision` existent, rien n'est branché |
+| **Aucune mémoire durable** des conversations distantes | `chat.remoteMemory` existe, reste `desactive` (réversible) |
+| Backfill **borné** à 2 semaines / 1 000 messages | choix utilisateur ; le reste vit sur Mattermost, et l'interface le dit |
+| `since` **non paginable** (API) | si un canal a plus de 1 000 messages modifiés dans la fenêtre, le surplus n'est pas récupéré et le bandeau s'affiche |
+| Aucune vérification contre un **vrai** serveur Mattermost | pas d'instance accessible ici ; les tests rejouent le contrat de l'API sur des serveurs fixtures |
+| Pas de rendu Markdown des messages entrants | ils sont affichés tels quels (le Markdown sortant n'est pas produit non plus) |
+
+## 12. Où c'est prouvé
 
 | Sujet | Fichier |
 | --- | --- |
 | registre, stub Discord, inconnu propre | `tests/chat/adapters.test.ts` |
 | identifiants `mm-…`/`dc-…`, auteur + parent conservés | `tests/chat/mirror.test.ts` |
 | mode lu à chaud, refus de création, capacités distantes | `tests/chat/service.test.ts` |
+| **client REST** : `me`, canaux, **pagination sans perte sur serveur qui tronque**, `since`, `429`, jeton jamais dans une erreur | `tests/chat/mattermost-client.test.ts` |
+| **WebSocket** : trame d'auth exacte, `posted` ingéré, **reconnexion**, jeton refusé, réponse avec `root_id`, **anti-boucle** | `tests/chat/mattermost-ws.test.ts` |
+| **miroir** : idempotence, édition sur place, suppression conservée, append-only 0600, bornes 16 Kio / 20 000 / 50 canaux | `tests/chat/mirror-ingest.test.ts` |
+| **backfill** : `since` = −14 j, borne 1 000 + bandeau, reprise au curseur sans doublon | `tests/chat/sync-backfill.test.ts` |
+| **trois modes** : `tout`, `mention` (cas pièges), `auto` (un seul jugement) | `tests/chat/reply-modes.test.ts` |
+| **routes** : URL validée, jeton jamais relu, refus explicites, mode par canal | `tests/chat/chat-api.test.ts` |
+| `YUKI_CHAT_` accepté au coffre, **non** référençable en commande | `tests/secrets/references.test.ts` |
 | `chat.mode` / `chat.remoteAgents` / `chat.remoteMemory` | `tests/config/schema-chat.test.ts` |
 | politique d'outils par mode | `tests/llm/tool-policy-chat.test.ts` |
-| route gardée, mode câblé, aucun secret | `tests/gateway/chat-api.test.ts` |
 | trame `sessions`, sélection de miroir, refus d'écriture | `tests/gateway/ws/chat-remote.test.ts` |
-| sélecteur, badge, **trois** chemins de clic | `tests/ui/chat-mode.test.ts` |
 
-## 8. Ce que ce lot ne prouve pas
+## 13. Ce que ce lot ne prouve pas
 
-- **Aucune** conversation réelle n'est lue : le miroir est vide par
-  construction (`emptyChatMirror`, `src/chat/mirror.ts`), donc « les canaux
-  s'affichent » n'est pas démontré — seule la **mécanique** l'est.
-- Le **relais d'approbations** et l'envoi vers une plateforme ne sont pas
-  implémentés (`send?` absent des adaptateurs livrés) : seuls les **types** sont
-  réservés.
-- Rien n'a été vérifié contre un vrai serveur Mattermost (aucun client n'existe
-  encore).
+- Aucun échange avec un **vrai** Mattermost (cf. §10 pour les commandes à lancer).
+- Le **rendu visuel** des fils dépliables n'est vérifié par aucun test de
+  navigateur : seule la structure DOM est construite par `app.js` (pas de test
+  unitaire sur `public/ui/app.js`, qui n'est pas instrumenté).
+- Le **juge `auto`** est prouvé par des doubles (contrat et bornes), pas par un
+  vrai modèle : le chemin SDK est le même que le récapitulatif
+  (`createSdkPromptWriter`), déjà éprouvé.

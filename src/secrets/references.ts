@@ -34,8 +34,22 @@ export const SECRET_NAME_PREFIX = "YUKI_SECRET_";
  */
 export const SOURCE_TOKEN_NAME_PREFIX = "YUKI_SOURCE_";
 
+/**
+ * Préfixe RÉSERVÉ du nom de secret portant le JETON d'une conversation distante
+ * (`YUKI_CHAT_MATTERMOST`, voir `src/chat/**`).
+ *
+ * ⚠️ Troisième préfixe réservé du coffre. Comme le jeton d'une source, il n'est PAS
+ * référençable dans une commande (`isSecretReferenceName` exige `YUKI_SECRET_`) : le
+ * jeton d'un bot de discussion n'a rien à faire dans une ligne de commande, et il ne
+ * doit jamais apparaître dans un transcript de session.
+ */
+export const CHAT_TOKEN_NAME_PREFIX = "YUKI_CHAT_";
+
+/** Nom du jeton du bot Mattermost (saisi une fois dans `/config → Discussions`). */
+export const MATTERMOST_TOKEN_SECRET_NAME = "YUKI_CHAT_MATTERMOST";
+
 /** Nom de secret valide : préfixe réservé + identifiant shell. */
-const SECRET_NAME_PATTERN = /^(?:YUKI_SECRET_|YUKI_SOURCE_)[A-Za-z0-9_]+$/;
+const SECRET_NAME_PATTERN = /^(?:YUKI_SECRET_|YUKI_SOURCE_|YUKI_CHAT_)[A-Za-z0-9_]+$/;
 
 /**
  * Motif des références (`${NOM}` ou `$NOM`). On capture le nom SANS le `$` et

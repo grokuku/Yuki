@@ -10,6 +10,8 @@ import { describe, expect, it } from "vitest";
 import {
   extractSecretReferences,
   isSecretReferenceName,
+  CHAT_TOKEN_NAME_PREFIX,
+  MATTERMOST_TOKEN_SECRET_NAME,
   isValidSecretName,
   resolveSecretReferences,
   SECRET_NAME_PREFIX,
@@ -39,6 +41,16 @@ describe("references — validation d'un nom", () => {
     expect(isValidSecretName("YUKI_SECRET_")).toBe(false);
     expect(isValidSecretName("YUKI_SECRET_A-B")).toBe(false); // tiret interdit
     expect(isValidSecretName("SECRET_X")).toBe(false);
+  });
+
+  it("accepte le nom du jeton de DISCUSSION (lot 18) mais PAS comme référence de commande", () => {
+    // ⚠️ Troisième préfixe réservé du coffre (`YUKI_CHAT_`) : le jeton d'un bot
+    // Mattermost y est stocké chiffré, et il n'a RIEN à faire dans une ligne de commande.
+    expect(isValidSecretName(MATTERMOST_TOKEN_SECRET_NAME)).toBe(true);
+    expect(isValidSecretName("YUKI_CHAT_")).toBe(false);
+    expect(MATTERMOST_TOKEN_SECRET_NAME.startsWith(CHAT_TOKEN_NAME_PREFIX)).toBe(true);
+    expect(isSecretReferenceName(MATTERMOST_TOKEN_SECRET_NAME)).toBe(false);
+    expect(extractSecretReferences("echo ${YUKI_CHAT_MATTERMOST}")).toEqual([]);
   });
 });
 

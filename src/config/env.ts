@@ -181,6 +181,20 @@ export interface Env {
    * `YUKI_SOURCES_INBOX_PATH`.
    */
   sourcesInboxPath: string;
+  // --- Discussions distantes (Lot 18, lot 2) ---
+  /**
+   * INDEX du MIROIR des canaux distants (volume `state`, `chat-mirror.json`).
+   * ⚠️ Séparé de `config.json` : le schéma de `/config` n'accepte ni liste ni objet,
+   * et un mapping `canal → conversation` n'y a pas sa place. Le JETON du bot ne s'y
+   * trouve jamais : il vit dans le coffre (`YUKI_CHAT_MATTERMOST`).
+   * Surcharge : `YUKI_CHAT_MIRROR_PATH`.
+   */
+  chatMirrorPath: string;
+  /**
+   * Dossier des messages miroir (un JSONL append-only par canal). Dérivé du chemin de
+   * l'index (`<état>/chat-mirror`) ; surcharge : `YUKI_CHAT_MIRROR_DIR`.
+   */
+  chatMirrorDir: string;
   // --- Configuration du moteur TTS `audio.cpp` (Lot 9) ---
   /**
    * Dossier de configuration du moteur, VU PAR LE GATEWAY (montage `rw`).
@@ -452,6 +466,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_SOURCES_INBOX_PATH",
       `${mountPoints.state}/sources-inbox.json`,
+    ),
+    chatMirrorPath: getString(
+      env,
+      "YUKI_CHAT_MIRROR_PATH",
+      `${mountPoints.state}/chat-mirror.json`,
+    ),
+    chatMirrorDir: getString(
+      env,
+      "YUKI_CHAT_MIRROR_DIR",
+      `${mountPoints.state}/chat-mirror`,
     ),
     piAgentDir,
     piSessionsDir: getString(
