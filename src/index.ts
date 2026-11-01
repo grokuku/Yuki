@@ -1207,11 +1207,17 @@ async function main(): Promise<void> {
         screenshotsEnabled: agentExecution !== undefined,
         // ⚠️ TRANSFERT de fichiers : exposé seulement si le service existe.
         fileTransferEnabled: agentTransfers !== undefined,
+        // ⚠️ LISTAGE des pièces jointes (lecture seule, identifiants compris) :
+        // le worker doit pouvoir retrouver l'identifiant qu'exige `deposer_fichier`.
+        fileListEnabled: filesService !== undefined,
         secretsEnabled: secretStore !== undefined,
       }),
       ...(agentExecution ? { execution: agentExecution } : {}),
       ...(agentExecution ? { screenshots: agentExecution } : {}),
       ...(agentTransfers ? { transfers: agentTransfers } : {}),
+      // ⚠️ FICHIERS : la liste des pièces jointes de la conversation est jointe
+      // AUTOMATIQUEMENT au premier message du worker (métadonnées seules).
+      files: filesService,
       ...(secretStore ? { secrets: secretStore } : {}),
       idleTimeoutMs,
       totalTimeoutMs,

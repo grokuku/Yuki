@@ -146,7 +146,12 @@ export function createDelegateTools(
       context: Type.Optional(
         Type.String({
           maxLength: 8000,
-          description: "Contexte facultatif pour la tâche.",
+          description:
+            "Contexte facultatif pour la tâche (faits, chemins, identifiants) : une " +
+            "NOTE bornée à 8000 caractères, pas une conversation. Au-delà, la " +
+            "délégation est REFUSÉE (aucune troncature). ⚠️ Les pièces jointes de " +
+            "la conversation (identifiants compris) sont transmises " +
+            "AUTOMATIQUEMENT au worker : inutile de les recopier ici.",
         }),
       ),
       background: Type.Optional(

@@ -15,6 +15,7 @@ import type {
   ScreenshotServicePort,
 } from "../../agents/execution.js";
 import type { TransferServicePort } from "../../agents/transfer.js";
+import { formatAttachmentsForPrompt, type FilesListPort } from "../../files/index.js";
 import type { SecretDirectoryPort } from "../../secrets/directory.js";
 import type {
   HeavyRunHandle,
@@ -23,7 +24,13 @@ import type {
   HeavySteerResult,
   HeavyWorker,
 } from "../../delegation/ports.js";
-import { MAX_PENDING_STEERS, composeFirstPrompt } from "../../delegation/steer.js";
+import {
+  MAX_DELEGATION_CONTEXT_CHARS,
+  MAX_PENDING_STEERS,
+  assertDelegationContext,
+  composeFirstPrompt,
+  DelegationContextTooLongError,
+} from "../../delegation/steer.js";
 import type { JobUsage } from "../../jobs/types.js";
 import {
   channelForAssistantEvent,
@@ -45,6 +52,7 @@ import {
   type ActionToolOptions,
 } from "./execution-tools.js";
 import { getSharedModelRuntime, liveValue, resolveSdkModel } from "./model-runtime.js";
+import { createListFilesTool } from "./list-files-tool.js";
 import { createEphemeralSession } from "./session-factory.js";
 
 export interface SdkHeavyWorkerConfig {
@@ -79,6 +87,14 @@ export interface SdkHeavyWorkerConfig {
    */
   transfers?: TransferServicePort;
   /**
+   * Port de LECTURE des fichiers de la conversation (métadonnées seules).
+   * Présent ⇒ le worker porte `lister_fichiers` ET reçoit AUTOMATIQUEMENT, dans
+   * son premier message, la liste des pièces jointes de la conversation
+   * propriétaire (identifiants compris). ⚠️ Aucun contenu de fichier n'est
+   * transmis : le worker n'a pas d'accès disque aux fichiers de Yuki.
+   */
+  files?: FilesListPort;
+  /**
    * Port de consultation du coffre de secrets. Présent ⇒ le worker porte
    * `lister_secrets` (NOMS seulement), pour savoir QUELLES variables
    * `${YUKI_SECRET_…}` référencer dans `run_command`.
@@ -107,7 +123,7 @@ export interface SdkHeavyWorkerConfig {
 export function buildHeavyActionTools(
   config: Pick<
     SdkHeavyWorkerConfig,
-    "execution" | "screenshots" | "secrets" | "transfers"
+    "execution" | "screenshots" | "secrets" | "transfers" | "files"
   >,
   lightSessionId: string | undefined,
 ): ToolDefinition[] {
@@ -120,7 +136,51 @@ export function buildHeavyActionTools(
   // ⚠️ TRANSFERT : c'est le lourd qui AGIT sur une machine (récupérer/déposer).
   if (config.transfers) tools.push(...createFileTransferTools(config.transfers, options));
   if (config.secrets) tools.push(...createSecretTools(config.secrets));
+  // ⚠️ LISTAGE : le worker doit pouvoir retrouver un IDENTIFIANT de fichier (ce
+  // qu'exige `deposer_fichier`) sans dépendre du léger. La conversation est
+  // FORCÉE à celle du léger (sa propre session est éphémère).
+  if (config.files) {
+    tools.push(
+      ...createListFilesTool(config.files, { sessionId: () => lightSessionId }),
+    );
+  }
   return tools;
+}
+
+/**
+ * Bloc « pièces jointes » joint AUTOMATIQUEMENT au premier message du worker
+ * (le léger n'a rien à transmettre). Métadonnées seules, borné, explicite si
+ * tronqué. Une erreur de lecture ne tue PAS le job : elle est DITE au worker.
+ */
+export function collectAttachmentBlock(
+  files: FilesListPort | undefined,
+  sessionId: string,
+  logger: PiLogger,
+  jobId: string,
+): string {
+  if (!files) return "";
+  try {
+    const block = formatAttachmentsForPrompt(files.listForSession(sessionId));
+    if (block.total > 0) {
+      logger.info("heavy.attachments.listed", {
+        job_id: jobId,
+        total: block.total,
+        shown: block.shown,
+        omitted: block.omitted,
+      });
+    }
+    return block.text;
+  } catch (error) {
+    logger.warn("heavy.attachments.failed", {
+      job_id: jobId,
+      error: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+    });
+    return (
+      "PIÈCES JOINTES : la liste n'a pas pu être lue (erreur du stockage côté " +
+      "Yuki). Appelle `lister_fichiers` ; s'il échoue aussi, dis-le dans ton " +
+      "rapport au lieu de deviner un identifiant."
+    );
+  }
 }
 
 function toJobUsage(usage: ReturnType<typeof usageFromMessage>): JobUsage | undefined {
@@ -226,6 +286,41 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     state: RunSteerState,
     onSessionCreated: (session: SteerableSession, dispose: () => void) => void,
   ): Promise<HeavyRunResult> {
+    // ⚠️ CONTEXTE de délégation (`delegate(task, context?)`) : VÉRIFIÉ AVANT
+    // toute session, donc avant toute exécution. Au-delà du plafond, on REFUSE
+    // le job avec un motif explicite — jamais de troncature muette (le worker
+    // croirait avoir reçu la note entière).
+    try {
+      assertDelegationContext(request.context);
+    } catch (error) {
+      const chars =
+        error instanceof DelegationContextTooLongError ? error.chars : undefined;
+      config.logger.warn("heavy.context.too_long", {
+        job_id: request.jobId,
+        ...(chars !== undefined ? { chars } : {}),
+      });
+      return {
+        status: "failed",
+        error:
+          "Contexte de délégation REFUSÉ : " +
+          (chars !== undefined ? `${chars} caractères` : "taille inconnue") +
+          " pour un plafond de " +
+          `${MAX_DELEGATION_CONTEXT_CHARS}. Rien n'a été exécuté : le contexte ` +
+          "doit rester une NOTE (faits, chemins, identifiants), pas une " +
+          "conversation. Raccourcis-le, puis relance la tâche.",
+      };
+    }
+
+    // ⚠️ PIÈCES JOINTES : jointes AUTOMATIQUEMENT (le léger n'a pas à y penser).
+    // Métadonnées seules (identifiant, nom, genre, taille, date) — jamais le
+    // contenu, jamais l'historique de la conversation.
+    const attachments = collectAttachmentBlock(
+      config.files,
+      request.lightSessionId,
+      config.logger,
+      request.jobId,
+    );
+
     let runtime: ModelRuntime;
     try {
       runtime = await getSharedModelRuntime({
@@ -403,6 +498,12 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     const firstPrompt = composeFirstPrompt(
       request.task,
       state.pendingSteers.splice(0),
+      {
+        ...(request.context !== undefined && request.context.trim() !== ""
+          ? { context: request.context }
+          : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
+      },
     );
     state.promptStarted = true;
     try {

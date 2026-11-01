@@ -92,8 +92,8 @@ YUKI_LLM_HEAVY_THINKING=high
 
 | Rôle | Outils exposés |
 | --- | --- |
-| **Léger** | builtins `read`, `ls`, `grep`, `find` + custom `delegate`, `job_status`, `cancel_job` |
-| **Lourd** | builtins `read`, `ls`, `grep`, `find` uniquement |
+| **Léger** | builtins `read`, `ls`, `grep`, `find` + custom `delegate`, `job_status`, `cancel_job`, `steer_job`, `envoyer_fichier` |
+| **Lourd** | builtins `read`, `ls`, `grep`, `find` + outils d'action (`run_command`, `capturer_ecran`, `recuperer_fichier`, `deposer_fichier`) + `lister_fichiers` (lecture seule) |
 
 **Aucun** `bash`/`powershell`/`edit`/`write` (le sidecar isolé n'existe qu'au
 Lot 4) et **pas de `delegate` pour le lourd** (pas de redélégation). La table vit
@@ -116,6 +116,17 @@ Schémas de retour : `completed` (`result`, `duration_ms`, `usage_input`,
 (`reason:"heavy_unavailable"`). Le texte inline peut être tronqué
 (`truncated:true`, ex. 32 ko) ; le complet reste dans le `JobStore`.
 
+**`context` est RÉELLEMENT transmis** (2026-11-01). Le chemin complet est
+`delegate-tools.ts` → `delegation/service.ts` (stocké dans le job) →
+`HeavyRunRequest.context` (`delegation/ports.ts`) → **premier prompt du worker**
+(`src/delegation/steer.ts:composeFirstPrompt`). Le bloc est placé **APRÈS la
+tâche**, sous un cadrage explicite (« ⚠️ CONTEXTE … ce n'est PAS la consigne : la
+consigne est écrite plus haut ») : c'est une **note**, pas une conversation.
+**Plafond 8 000 caractères** (`MAX_DELEGATION_CONTEXT_CHARS`, aligné sur la borne
+de l'outil) : au-delà, le job est **REFUSÉ** AVANT toute session, avec un motif
+explicite — jamais de troncature silencieuse (le worker croirait avoir reçu la
+note entière).
+
 ## Worker lourd
 
 Session **éphémère en mémoire** par job (`SessionManager.inMemory()`) : une tâche
@@ -128,6 +139,32 @@ inactivité `YUKI_HEAVY_IDLE_TIMEOUT_MS` (120 s) et global
 `YUKI_HEAVY_TOTAL_TIMEOUT_MS` (20 min) → `abort()` + job `failed` avec
 `partial`. Travail partiel persisté à chaque `turn_end`. `cancel_job` →
 `abort()` + `dispose()`.
+
+### Contexte et pièces jointes du worker (2026-11-01)
+
+- **`context` lu** : voir le contrat de `delegate` ci-dessus.
+- **Pièces jointes jointes AUTOMATIQUEMENT** au premier message du worker
+  (`src/pi/sdk/heavy-worker.ts`, `src/files/attachments.ts`) : la liste des
+  fichiers **de la conversation propriétaire** (`lightSessionId`, relue dans le
+  stockage des fichiers) avec **identifiant, nom, genre, taille, date,
+  lisibilité**. ⚠️ **Métadonnées seules** : aucun contenu de fichier, **aucun
+  historique** de conversation n'est transmis. Le léger n'a rien à faire — c'est
+  le code qui joint la liste.
+- **Borné à 30 lignes** (`MAX_LISTED_ATTACHMENTS`). Au-delà, le bloc **dit**
+  combien de pièces jointes ne sont pas montrées et renvoie à `lister_fichiers`
+  : jamais de troncature muette.
+- **`lister_fichiers`** (worker lourd, lecture seule) : la même liste, à la
+  demande, avec les identifiants. C'est le chaînon manquant : `deposer_fichier`
+  exige un identifiant (`/^[a-f0-9]{32}$/`), et aucun outil ne le rendait au
+  worker. ⚠️ Le **léger** n'a pas cet outil : `envoyer_fichier` (sans argument)
+  rend la liste **avec les identifiants** (et ne transfère rien).
+- **Non couvert (dit franchement)** : (a) un job lancé depuis une conversation
+  **compactée** ne voit que les fichiers encore présents dans le stockage et
+  rattachés à l'ID de session courant — ni l'historique, ni un fichier expiré
+  (rétention) ne sont reconstitués ; (b) l'erreur de lecture du stockage ne tue
+  pas le job : elle est **dite** au worker, qui peut appeler `lister_fichiers` ;
+  (c) le worker ne peut pas LIRE le contenu d'une pièce jointe (il n'a pas
+  d'accès disque aux fichiers de Yuki) — le bloc le lui rappelle explicitement.
 
 ## `JobStore`
 

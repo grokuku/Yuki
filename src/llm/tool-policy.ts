@@ -127,6 +127,15 @@ export type FilesToolName = "envoyer_fichier";
  */
 export type FileTransferToolName = "recuperer_fichier" | "deposer_fichier";
 
+/**
+ * Outil de LISTAGE des pièces jointes d'une conversation (`lister_fichiers`),
+ * en LECTURE SEULE : identifiant, nom, genre, taille, date. ⚠️ C'est le chaînon
+ * manquant du worker lourd : `deposer_fichier` exige un IDENTIFIANT, et aucun
+ * outil ne le rendait. Porté par le LOURD (celui qui agit) ; le léger, lui,
+ * obtient les identifiants dans la liste de `envoyer_fichier`.
+ */
+export type FileListToolName = "lister_fichiers";
+
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
 export type CustomToolName =
   | DelegateToolName
@@ -139,6 +148,7 @@ export type CustomToolName =
   | LibrarianToolName
   | FilesToolName
   | FileTransferToolName
+  | FileListToolName
   | ImageToolName;
 
 export interface ToolPolicyEntry {
@@ -169,6 +179,8 @@ export interface ToolPolicyEntry {
   readonly files: readonly FilesToolName[];
   /** Outils de TRANSFERT de fichiers vers/depuis une machine (`files`). */
   readonly fileTransfer: readonly FileTransferToolName[];
+  /** Outil de LISTAGE des pièces jointes (`lister_fichiers`, lecture seule). */
+  readonly fileList: readonly FileListToolName[];
   /** Outil de GÉNÉRATION d'image (`generer_image`, serveur ComfyUI). */
   readonly images: readonly ImageToolName[];
   /** Le rôle peut-il déléguer à un worker lourd ? */
@@ -294,6 +306,13 @@ export const FILE_TRANSFER_TOOLS: readonly FileTransferToolName[] = [
   "deposer_fichier",
 ];
 
+/**
+ * Outil de LISTAGE des pièces jointes. ⚠️ LECTURE SEULE : il ne transfère rien
+ * et n'élargit donc PAS le périmètre d'action du rôle. Porté par le worker
+ * LOURD uniquement (« le léger liste via `envoyer_fichier`, le lourd agit »).
+ */
+export const FILE_LIST_TOOLS: readonly FileListToolName[] = ["lister_fichiers"];
+
 export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
   light: {
     role: "light",
@@ -317,6 +336,10 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // ⚠️ Le LÉGER ne transfère PAS de fichiers depuis/vers une machine : il
     // délègue au worker lourd.
     fileTransfer: [],
+    // ⚠️ Pas de `lister_fichiers` au léger : `envoyer_fichier` (sans argument)
+    // rend déjà la liste, désormais AVEC les identifiants. Un seul outil de
+    // listage à maintenir pour lui.
+    fileList: [],
     // IMAGES : la génération est une action de CONVERSATION (Yuki décrit la
     // scène, voit l'image, la juge) — elle reste donc au léger, jamais au worker.
     images: IMAGE_TOOLS,
@@ -347,6 +370,8 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // ⚠️ Le worker lourd TRANFÈRE les fichiers : c'est lui qui agit sur une
     // machine. Mêmes garde-fous par agent que `run_command`.
     fileTransfer: FILE_TRANSFER_TOOLS,
+    // ⚠️ Le worker lourd LISTE (avec identifiants) pour pouvoir DÉPOSER.
+    fileList: FILE_LIST_TOOLS,
     images: [],
     canDelegate: false,
   },
@@ -424,6 +449,12 @@ export interface ToolAllowlistOptions {
    */
   fileTransferEnabled?: boolean;
   /**
+   * Active l'outil de LISTAGE des pièces jointes `lister_fichiers` (lecture
+   * seule). DÉSACTIVÉ par défaut : seul le câblage l'active, quand le service
+   * des fichiers existe.
+   */
+  fileListEnabled?: boolean;
+  /**
    * Active l'outil de génération d'image `generer_image` (serveur ComfyUI).
    * DÉSACTIVÉ par défaut : seul le câblage l'active, quand le générateur existe.
    */
@@ -460,6 +491,8 @@ export function toolAllowlist(
   const filesEnabled = (options.filesEnabled ?? false) && entry.files.length > 0;
   const fileTransferEnabled =
     (options.fileTransferEnabled ?? false) && entry.fileTransfer.length > 0;
+  const fileListEnabled =
+    (options.fileListEnabled ?? false) && entry.fileList.length > 0;
   const imagesEnabled = (options.imagesEnabled ?? false) && entry.images.length > 0;
   const tools: string[] = [...entry.builtins];
   if (entry.canDelegate && delegationEnabled) {
@@ -497,6 +530,9 @@ export function toolAllowlist(
   }
   if (fileTransferEnabled) {
     tools.push(...entry.fileTransfer);
+  }
+  if (fileListEnabled) {
+    tools.push(...entry.fileList);
   }
   if (imagesEnabled) {
     tools.push(...entry.images);

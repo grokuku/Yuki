@@ -25,7 +25,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { humanBytes, type FilesSendPort, type WireFile } from "../../files/index.js";
+import {
+  formatAttachmentLine,
+  humanBytes,
+  type FilesSendPort,
+  type WireFile,
+} from "../../files/index.js";
 
 /** Détails structurés renvoyés par l'outil (rendu UI, jamais un contenu). */
 interface SendFileDetails {
@@ -46,10 +51,14 @@ function sessionIdFromContext(ctx: ExtensionContext | undefined): string | undef
   }
 }
 
-/** Résumé d'un fichier envoyable (nom + taille + lisibilité), sans contenu. */
+/**
+ * Résumé d'un fichier envoyable : IDENTIFIANT, nom, genre, taille, date.
+ * ⚠️ L'identifiant est indispensable : c'est la seule forme que `deposer_fichier`
+ * accepte, et Yuki doit pouvoir le recopier dans un contexte de délégation. Le
+ * contenu n'apparaît jamais.
+ */
 function describe(file: WireFile): string {
-  const state = file.readable ? "lisible" : "non lisible";
-  return `- « ${file.name} » (${humanBytes(file.bytes)}, ${state})`;
+  return formatAttachmentLine(file);
 }
 
 /**
@@ -65,7 +74,9 @@ export function createSendFileTools(files: FilesSendPort): ToolDefinition[] {
       "un fichier qu'il t'a joint (tu le lui renvoies), ou un fichier déposé pour " +
       "lui (par exemple par un agent). Le fichier apparaît DANS le fil, cliquable " +
       "et téléchargeable — tu n'as PAS à en recopier le contenu. Sans argument, " +
-      "liste les fichiers envoyables de cette conversation. Avec un identifiant " +
+      "liste les fichiers envoyables de cette conversation AVEC leur IDENTIFIANT " +
+      "(32 caractères hexadécimaux : c'est la forme que les outils de transfert " +
+      "exigent). Avec un identifiant " +
       "ou un nom EXACT, envoie ce fichier. ⚠️ Tu ne peux envoyer que les fichiers " +
       "de CETTE conversation : si aucun ne correspond, l'outil le dit (n'invente " +
       "jamais un fichier, ne promets jamais un envoi que tu ne peux pas faire).",
@@ -111,8 +122,8 @@ export function createSendFileTools(files: FilesSendPort): ToolDefinition[] {
             ? "Aucun fichier envoyable dans cette conversation. Tu ne peux donc " +
               "envoyer aucun fichier pour l'instant — dis-le à l'utilisateur au " +
               "lieu d'en promettre un."
-            : "Fichiers envoyables dans cette conversation (aucun contenu n'est " +
-              "affiché) :\n" +
+            : "Fichiers de cette conversation (identifiant, nom, genre, taille — " +
+              "aucun contenu n'est affiché) :\n" +
               available.map(describe).join("\n") +
               "\n\nPour en envoyer un, appelle `envoyer_fichier` avec son nom " +
               "EXACT ou son identifiant.";
@@ -136,7 +147,7 @@ export function createSendFileTools(files: FilesSendPort): ToolDefinition[] {
           "été envoyé. " +
           (names.length === 0
             ? "Aucun fichier n'est disponible ici."
-            : "Fichiers envoyables : " + names.map((name) => `« ${name} »`).join(", ") + ".");
+            : "Fichiers disponibles :\n" + available.map(describe).join("\n"));
         return { content: [{ type: "text", text }], details: payload };
       }
 

@@ -35,11 +35,16 @@ export {
 } from "./report.js";
 
 export {
+  DELEGATION_CONTEXT_HEADER,
+  DelegationContextTooLongError,
+  MAX_DELEGATION_CONTEXT_CHARS,
   MAX_PENDING_STEERS,
   ORCHESTRATOR_STEER_HEADER,
+  assertDelegationContext,
   composeFirstPrompt,
   orchestratorSteerBlock,
 } from "./steer.js";
+export type { FirstPromptExtras } from "./steer.js";
 
 export { DelegationError } from "./errors.js";
 export type { DelegationErrorCode } from "./errors.js";

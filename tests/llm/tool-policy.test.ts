@@ -8,6 +8,7 @@ import {
   LIGHT_MODEL,
   PROVIDERS,
   AGENT_DIRECTORY_TOOLS,
+  FILE_LIST_TOOLS,
   HERITAGE_TOOLS,
   LIBRARIAN_TOOLS,
   SECRET_DIRECTORY_TOOLS,
@@ -120,6 +121,18 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     expect(tools).not.toContain("job_status");
     expect(tools).not.toContain("cancel_job");
     expect(containsForbiddenTool(tools)).toBe(false);
+  });
+
+  it("le listage des pièces jointes est un outil du LOURD (le léger liste via envoyer_fichier)", () => {
+    // Par défaut : jamais exposé (le câblage doit l'activer explicitement).
+    expect(toolAllowlist("heavy")).not.toContain("lister_fichiers");
+    expect(FILE_LIST_TOOLS).toEqual(["lister_fichiers"]);
+    expect(toolAllowlist("heavy", { fileListEnabled: true })).toContain("lister_fichiers");
+    // ⚠️ Le LÉGER ne le porte PAS : `envoyer_fichier` (sans argument) rend déjà
+    // la liste AVEC les identifiants. Un seul outil de listage de son côté.
+    expect(toolAllowlist("light", { fileListEnabled: true })).not.toContain("lister_fichiers");
+    // Lecture seule : jamais un outil interdit.
+    expect(containsForbiddenTool(toolAllowlist("heavy", { fileListEnabled: true }))).toBe(false);
   });
 
   it("détecte effectivement les outils interdits (garde-fou)", () => {

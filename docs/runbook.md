@@ -482,6 +482,16 @@ disponibilité (`/health/ready`) bascule **sans redémarrage** et **sans réseau
   arrière-plan ; l'outil attend au plus `deadline_ms` (défaut **1500 ms**, bornes
   **200–60000**, clamp). Fini à temps → résultat **inline** ; sinon → `job_id`
   (`pending`). Le job **survit** toujours à la deadline.
+- **`context` est transmis au worker** (bloc « ⚠️ CONTEXTE » APRÈS la tâche,
+  plafond **8 000 caractères**, refus explicite au-delà — jamais de troncature
+  muette).
+- **Pièces jointes jointes automatiquement** : le worker reçoit la liste des
+  fichiers de la conversation (identifiant, nom, genre, taille, date) — aucun
+  contenu, aucun historique — bornée à **30 lignes**, avec renvoi à
+  `lister_fichiers` s'il y en a plus. Le léger n'a rien à transmettre.
+- `lister_fichiers()` (worker lourd) rend les **identifiants** : c'est ce
+  qu'exige `deposer_fichier`. Côté léger, `envoyer_fichier` sans argument rend
+  la même liste, identifiants compris.
 - `job_status(job_id)` / `cancel_job(job_id)` pour suivre/interrompre.
 - Concurrence : **3 jobs simultanés** + file de **10**
   (`delegation.maxConcurrent`, `delegation.maxQueue`). File pleine →

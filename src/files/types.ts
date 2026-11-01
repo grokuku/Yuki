@@ -227,10 +227,20 @@ export interface FilesGatewayPort {
   prepareImages(files: readonly WireFile[]): Promise<FileImagesOutcome>;
 }
 
-/** Consommation de l'outil `envoyer_fichier` (léger) : envoi par Yuki. */
-export interface FilesSendPort {
-  /** Fichiers d'une conversation (pour que le modèle sache ce qu'il peut renvoyer). */
+/**
+ * Consultation en LECTURE SEULE des fichiers d'une conversation (métadonnées
+ * seules, jamais le contenu). Sert à deux usages distincts :
+ *  - `envoyer_fichier` (léger) : savoir ce qu'il peut renvoyer à l'utilisateur ;
+ *  - `lister_fichiers` + liste automatique du worker lourd : connaître les
+ *    IDENTIFIANTS des pièces jointes (indispensable pour `deposer_fichier`).
+ */
+export interface FilesListPort {
+  /** Fichiers d'une conversation, du plus ancien au plus récent. */
   listForSession(sessionId: string): WireFile[];
+}
+
+/** Consommation de l'outil `envoyer_fichier` (léger) : envoi par Yuki. */
+export interface FilesSendPort extends FilesListPort {
   /**
    * Envoie un fichier de la conversation à l'utilisateur (identifiant OU nom
    * exact). Renvoie la vue, ou `null` si aucun fichier ne correspond.

@@ -85,7 +85,7 @@ describe("outil `envoyer_fichier` — envoi par Yuki", () => {
     expect(tool.promptSnippet ?? "").toContain("envoyer_fichier");
   });
 
-  it("liste les fichiers envoyables de la conversation (sans contenu)", async () => {
+  it("liste les fichiers envoyables de la conversation AVEC leur identifiant (sans contenu)", async () => {
     const service = await serviceWith([
       { name: "notes.txt", body: "secret-notes", sessionId: "sess-1" },
       { name: "autre.txt", body: "autre-contenu", sessionId: "sess-2" },
@@ -93,6 +93,12 @@ describe("outil `envoyer_fichier` — envoi par Yuki", () => {
     const tool = createSendFileTools(service)[0]!;
     const { text, details } = await call(tool, {});
     expect(text).toContain("notes.txt");
+    // ⚠️ L'IDENTIFIANT est indispensable : c'est ce que `deposer_fichier` exige,
+    // et ce que le léger doit pouvoir recopier dans un contexte de délégation.
+    const [file] = service.listForSession("sess-1");
+    expect(file).toBeDefined();
+    expect(text).toContain(file!.id);
+    expect(file!.id).toMatch(/^[a-f0-9]{32}$/);
     // ⚠️ Ni le contenu, ni les fichiers d'une AUTRE conversation.
     expect(text).not.toContain("secret-notes");
     expect(text).not.toContain("autre.txt");
