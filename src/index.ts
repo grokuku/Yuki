@@ -2147,6 +2147,9 @@ async function main(): Promise<void> {
       ? {
           client: librarianClient,
           archive: librarianArchive,
+          // ⚠️ LECTURE du TEXTE d'une page (`POST /read`) : le MÊME client, donc la
+          // MÊME configuration relue à chaud et les MÊMES erreurs typées.
+          read: librarianClient,
           screenshot: librarianClient,
           shots: librarianShots,
           // ⚠️ COPIE de la capture dans le store des FICHIERS de la conversation (même
@@ -2240,6 +2243,9 @@ async function main(): Promise<void> {
             librarian: {
               client: librarianClient,
               archive: librarianArchive,
+              // ⚠️ LECTURE du TEXTE d'une page (`POST /read`) : c'est cet outil qui
+              // évite au modèle de réclamer une capture d'écran faute de texte.
+              read: librarianClient,
               screenshot: librarianClient,
               shots: librarianShots,
               // ⚠️ MÊME copie que pour un run distant : une capture devient un FICHIER

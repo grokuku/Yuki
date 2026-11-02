@@ -269,10 +269,13 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
   });
 
   it("les outils du LIBRAIRE ne sont exposés que s'ils sont activés, et aucun ne va chercher une page web", () => {
+    // ⚠️ `lire_page_web` (LECTURE du TEXTE d'une page, `POST /read`) fait partie du
+    // groupe : c'est le libraire qui visite la page, jamais Yuki directement.
     expect(LIBRARIAN_TOOLS).toEqual([
       "recherche_libraire",
       "liste_libraire",
       "lire_libraire",
+      "lire_page_web",
       "archive_libraire",
     ]);
     // Par défaut : non exposés (URL de base non renseignée).

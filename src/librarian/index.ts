@@ -30,6 +30,9 @@ export type {
   LibrarianLogger,
   LibrarianPort,
   LibrarianProbePort,
+  LibrarianReadOptions,
+  LibrarianReadPort,
+  LibrarianReadResult,
   LibrarianScheduleOutcome,
   LibrarianScreenshot,
   LibrarianScreenshotOptions,
@@ -42,6 +45,7 @@ export type {
 } from "./types.js";
 
 export {
+  DEFAULT_LIBRARIAN_READ_TIMEOUT_MS,
   DEFAULT_LIBRARIAN_SCREENSHOT_TIMEOUT_MS,
   DEFAULT_LIBRARIAN_SEARCH_TIMEOUT_MS,
   DEFAULT_LIBRARIAN_TIMEOUT_MS,
@@ -53,6 +57,7 @@ export {
 export {
   parseDoc,
   parseLibrary,
+  parseReadPage,
   parseScreenshot,
   parseSearchOutcome,
   parseStatus,
@@ -74,12 +79,15 @@ export {
   MAX_DOC_RAW_CHARS,
   MAX_LIBRARY_ENTRIES,
   MAX_LOCAL_CONTENT_CHARS,
+  MAX_READ_TEXT_CHARS,
   MAX_SEARCH_RESULTS,
   MAX_SNIPPET_CHARS,
   frameLibrarianDoc,
   frameLibrarianLibrary,
+  frameLibrarianRead,
   frameLibrarianScreenshot,
   frameLibrarianSearch,
+  type LibrarianReadFrame,
   type LibrarianScreenshotFrame,
 } from "./output.js";
 

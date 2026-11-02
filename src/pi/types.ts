@@ -18,6 +18,7 @@ import type { DelegateServicePort } from "../delegation/ports.js";
 import type {
   LibrarianArchivePort,
   LibrarianPort,
+  LibrarianReadPort,
   LibrarianScreenshotPort,
 } from "../librarian/types.js";
 import type { LibrarianShotView, LibrarianShotsPort } from "../librarian/shots.js";
@@ -169,14 +170,18 @@ export interface PiHostOptions {
   conversationArchive?: ConversationArchivePort;
   /**
    * Libraire de Pi-Web (recherche documentaire + web). Présent ⇒ la façade expose
-   * les quatre outils (`recherche_libraire`, `liste_libraire`, `lire_libraire`,
-   * `archive_libraire`). `client` sert la lecture, `archive` la soumission en
-   * tâche de fond. Absent ⇒ aucun outil (URL de base non renseignée, tests).
-   * ⚠️ `screenshot` + `shots` (optionnels) exposent en plus `capture_libraire`.
+   * les outils (`recherche_libraire`, `liste_libraire`, `lire_libraire`,
+   * `archive_libraire`, et `lire_page_web` si `read` est fourni). `client` sert la
+   * lecture, `archive` la soumission en tâche de fond. Absent ⇒ aucun outil (URL
+   * de base non renseignée, tests).
+   * ⚠️ `read` (LECTURE du TEXTE d'une page) et `screenshot` + `shots` (CAPTURE,
+   * pour vérifier un RENDU) sont optionnels et indépendants.
    */
   librarian?: {
     client: LibrarianPort;
     archive: LibrarianArchivePort;
+    /** Port de LECTURE du TEXTE d'une page web (`POST /read`) ⇒ `lire_page_web`. */
+    read?: LibrarianReadPort;
     screenshot?: LibrarianScreenshotPort;
     shots?: LibrarianShotsPort;
     /**

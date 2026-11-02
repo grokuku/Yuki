@@ -9,6 +9,7 @@ import type {
   LibrarianDoc,
   LibrarianLibrary,
   LibrarianLibraryEntry,
+  LibrarianReadResult,
   LibrarianScreenshot,
   LibrarianSearchOutcome,
   LibrarianSearchResult,
@@ -204,5 +205,43 @@ export function parseScreenshot(raw: unknown): LibrarianScreenshot {
     ...(bytes !== undefined ? { bytes } : {}),
     ...(url !== undefined ? { url } : {}),
     ...(origin !== undefined ? { origin } : {}),
+  };
+}
+
+/**
+ * Lit la réponse 200 de `POST /api/librarian/read` (le TEXTE d'une page).
+ *
+ * ⚠️ Tolérant comme le reste du module, mais SANS invention : `text` absent ⇒
+ * chaîne vide ; `totalChars` absent ou incohérent ⇒ `offset + text.length` ;
+ * `truncated` absent ⇒ calculé. Un `offset` renvoyé par le service est préféré
+ * (c'est LUI qui a découpé), sinon celui de la requête.
+ */
+export function parseReadPage(raw: unknown): LibrarianReadResult {
+  if (!isRecord(raw)) {
+    return { url: "", text: "", totalChars: 0, offset: 0, truncated: false, contentType: "" };
+  }
+  const url = asString(raw.url) ?? "";
+  const finalUrl = asString(raw.finalUrl);
+  const title = asString(raw.title);
+  const text = asString(raw.text) ?? "";
+  const offsetRaw = typeof raw.offset === "number" ? raw.offset : undefined;
+  const offset = offsetRaw !== undefined && Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+  const totalRaw = typeof raw.totalChars === "number" ? raw.totalChars : undefined;
+  const totalChars =
+    totalRaw !== undefined && Number.isFinite(totalRaw) && totalRaw >= 0
+      ? totalRaw
+      : offset + text.length;
+  const truncatedRaw = typeof raw.truncated === "boolean" ? raw.truncated : undefined;
+  const truncated = truncatedRaw ?? offset + text.length < totalChars;
+  const contentType = asString(raw.contentType) ?? "";
+  return {
+    url,
+    ...(finalUrl !== undefined ? { finalUrl } : {}),
+    ...(title !== undefined ? { title } : {}),
+    text,
+    totalChars,
+    offset,
+    truncated,
+    contentType,
   };
 }

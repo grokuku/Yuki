@@ -13,9 +13,10 @@
  * issues de la config) ni renvoyé dans un message d'erreur : les messages sont
  * des PHRASES, jamais l'URL complète ni un en-tête.
  *
- * ⚠️ Yuki ne va JAMAIS chercher une page web elle-même SAUF via la capture
- * explicite de Libry (`screenshot`) : ce client ne parle qu'aux routes du
- * libraire (documentaires + capture).
+ * ⚠️ Yuki ne va JAMAIS chercher une page web elle-même : ce client ne parle
+ * qu'aux routes du libraire. ⚠️ La LECTURE d'une page (`POST /read`) rend du
+ * TEXTE ; la CAPTURE (`POST /screenshot`) rend une IMAGE — la première sert à
+ * LIRE, la seconde à VÉRIFIER UN RENDU.
  */
 
 import {
@@ -25,6 +26,7 @@ import {
 import {
   parseDoc,
   parseLibrary,
+  parseReadPage,
   parseScreenshot,
   parseSearchOutcome,
   parseStatus,
@@ -37,6 +39,9 @@ import type {
   LibrarianLibrary,
   LibrarianLogger,
   LibrarianPort,
+  LibrarianReadOptions,
+  LibrarianReadPort,
+  LibrarianReadResult,
   LibrarianScreenshot,
   LibrarianScreenshotOptions,
   LibrarianScreenshotPort,
@@ -51,6 +56,15 @@ export const DEFAULT_LIBRARIAN_TIMEOUT_MS = 15_000;
 export const DEFAULT_LIBRARIAN_SEARCH_TIMEOUT_MS = 30_000;
 /** Délai maximal d'une CAPTURE de page web (Chromium headless côté Libry). */
 export const DEFAULT_LIBRARIAN_SCREENSHOT_TIMEOUT_MS = 30_000;
+/**
+ * Délai maximal d'une LECTURE de page (`POST /read`).
+ *
+ * ⚠️ VOLONTAIREMENT SUPÉRIEUR au délai interne de Libry (15 s) : si Yuki
+ * coupait en même temps, le `504 TIMEOUT` HONNÊTE de Libry serait remplacé par
+ * un « injoignable » qui ne dit pas la même chose. La marge laisse au service
+ * le temps de répondre sa propre erreur typée.
+ */
+export const DEFAULT_LIBRARIAN_READ_TIMEOUT_MS = 20_000;
 
 export interface LibrarianClientOptions {
   config: LibrarianConfigProvider;
@@ -63,6 +77,8 @@ export interface LibrarianClientOptions {
   searchTimeoutMs?: number;
   /** Délai des captures (défaut `DEFAULT_LIBRARIAN_SCREENSHOT_TIMEOUT_MS`). */
   screenshotTimeoutMs?: number;
+  /** Délai des LECTURES de page (défaut `DEFAULT_LIBRARIAN_READ_TIMEOUT_MS`). */
+  readTimeoutMs?: number;
 }
 
 interface RequestOptions {
@@ -73,7 +89,8 @@ interface RequestOptions {
     | "doc"
     | "archive"
     | "screenshot"
-    | "shot";
+    | "shot"
+    | "read";
   method: "GET" | "POST";
   path: string;
   body?: unknown;
@@ -87,6 +104,11 @@ interface RequestOptions {
   accept?: string;
   /** `true` pour une réponse BINAIRE (image) : le corps n'est pas lu en JSON. */
   binary?: boolean;
+  /**
+   * `true` pour lire le corps JSON de l'erreur et en extraire le `code` TYPÉ du
+   * service (`TOO_LARGE`, `NOT_TEXT`, `HTTP_403`, `TIMEOUT`…). Utilisé par `/read`.
+   */
+  errorBody?: boolean;
   timeoutMs: number;
   signal?: AbortSignal;
 }
@@ -99,13 +121,14 @@ function joinBaseUrl(baseUrl: string): string {
  * Client du libraire. La configuration (URL + clés) est relue à CHAQUE appel :
  * une modification dans `/config` s'applique à chaud, sans redémarrage.
  */
-export class LibrarianClient implements LibrarianPort, LibrarianScreenshotPort {
+export class LibrarianClient implements LibrarianPort, LibrarianScreenshotPort, LibrarianReadPort {
   private readonly config: LibrarianConfigProvider;
   private readonly fetchImpl: typeof fetch;
   private readonly logger: LibrarianLogger | undefined;
   private readonly timeoutMs: number;
   private readonly searchTimeoutMs: number;
   private readonly screenshotTimeoutMs: number;
+  private readonly readTimeoutMs: number;
 
   constructor(options: LibrarianClientOptions) {
     this.config = options.config;
@@ -115,6 +138,7 @@ export class LibrarianClient implements LibrarianPort, LibrarianScreenshotPort {
     this.searchTimeoutMs = options.searchTimeoutMs ?? DEFAULT_LIBRARIAN_SEARCH_TIMEOUT_MS;
     this.screenshotTimeoutMs =
       options.screenshotTimeoutMs ?? DEFAULT_LIBRARIAN_SCREENSHOT_TIMEOUT_MS;
+    this.readTimeoutMs = options.readTimeoutMs ?? DEFAULT_LIBRARIAN_READ_TIMEOUT_MS;
   }
 
   async status(signal?: AbortSignal): Promise<LibrarianStatus> {
@@ -183,6 +207,35 @@ export class LibrarianClient implements LibrarianPort, LibrarianScreenshotPort {
       ...(signal ? { signal } : {}),
     });
     return { name: payload.name, version: payload.version, status };
+  }
+
+  /**
+   * Lit le TEXTE d'une page web (`POST /api/librarian/read`).
+   *
+   * ⚠️ Le texte est rendu SANS balise, PAGINÉ par le service : `text` est la
+   * tranche demandée, `totalChars`/`truncated` disent ce qui reste. Une panne
+   * (`not_configured`, `unreachable`) et un refus typé (`read_too_large`,
+   * `read_not_text`, `read_failed`, `read_timeout`) sont des erreurs DISTINCTES.
+   */
+  async read(
+    url: string,
+    options: LibrarianReadOptions = {},
+    signal?: AbortSignal,
+  ): Promise<LibrarianReadResult> {
+    const body: Record<string, unknown> = { url };
+    if (options.offset !== undefined) body.offset = options.offset;
+    if (options.limit !== undefined) body.limit = options.limit;
+    const { data } = await this.request({
+      route: "read",
+      method: "POST",
+      path: "/read",
+      body,
+      requireKey: true,
+      errorBody: true,
+      timeoutMs: this.readTimeoutMs,
+      ...(signal ? { signal } : {}),
+    });
+    return parseReadPage(data);
   }
 
   /** Demande une CAPTURE de page web (Chromium headless côté Libry). */
@@ -312,14 +365,17 @@ export class LibrarianClient implements LibrarianPort, LibrarianScreenshotPort {
 
     if (!response.ok) {
       const retryAfterSeconds = readRetryAfterSeconds(response);
+      const upstreamCode = options.errorBody ? await readUpstreamCode(response) : undefined;
       const mapped = librarianErrorFromStatus(response.status, {
         route: options.route,
         ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+        ...(upstreamCode !== undefined ? { upstreamCode } : {}),
       });
       this.logger?.warn("librarian.request.refused", {
         route: options.route,
         status: response.status,
         code: mapped.code,
+        ...(upstreamCode !== undefined ? { upstreamCode } : {}),
       });
       throw mapped;
     }
@@ -336,6 +392,24 @@ function readRetryAfterSeconds(response: Response): number | undefined {
   if (!/^\d+$/.test(value)) return undefined;
   const seconds = Number.parseInt(value, 10);
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+}
+
+/**
+ * Lit le `code` TYPÉ du corps d'erreur de Libry (`{ error, code, url }`).
+ *
+ * ⚠️ On ne conserve QUE le code : jamais le message brut du service (il peut
+ * contenir l'URL cible), jamais un en-tête, jamais la clé. Toute anomalie de
+ * lecture rend `undefined` — un corps illisible ne doit pas masquer le statut.
+ */
+async function readUpstreamCode(response: Response): Promise<string | undefined> {
+  try {
+    const raw = (await response.json()) as unknown;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+    const code = (raw as Record<string, unknown>).code;
+    return typeof code === "string" && code.trim() !== "" ? code.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Fabrique du client du libraire. */

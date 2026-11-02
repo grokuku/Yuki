@@ -15,6 +15,11 @@
  *  - `web_unavailable`   : 502/500 sur `/search` — moteurs web indisponibles ;
  *  - `capture_failed`    : 502 sur une CAPTURE — page non capturable ;
  *  - `capture_timeout`   : 504 sur une CAPTURE — délai de capture dépassé ;
+ *  - `read_blocked`      : 403 sur une LECTURE — URL interne/privée ou schéma refusé ;
+ *  - `read_too_large`    : 413 sur une LECTURE — page au-delà du plafond (3 Mio) ;
+ *  - `read_not_text`     : 415 sur une LECTURE — la ressource n'est pas du texte ;
+ *  - `read_failed`       : 502 sur une LECTURE — DNS, réseau, page d'erreur, redirections ;
+ *  - `read_timeout`      : 504 sur une LECTURE — délai de lecture dépassé ;
  *  - `server_error`      : autre 5xx ;
  *  - `unreachable`       : connexion impossible / délai dépassé (⚠️ réseau) ;
  *  - `invalid_response`  : corps illisible (JSON attendu).
@@ -34,6 +39,11 @@ export type LibrarianErrorCode =
   | "web_unavailable"
   | "capture_failed"
   | "capture_timeout"
+  | "read_blocked"
+  | "read_too_large"
+  | "read_not_text"
+  | "read_failed"
+  | "read_timeout"
   | "server_error"
   | "unreachable"
   | "invalid_response";
@@ -68,6 +78,22 @@ export const LIBRARIAN_ERROR_MESSAGES: Readonly<Record<LibrarianErrorCode, strin
     "inaccessible ou refuse la connexion.",
   capture_timeout:
     "La capture a dépassé le délai imparti (504) : réessayez ou augmentez « timeoutMs ».",
+  read_blocked:
+    "Le libraire a refusé de lire cette page (403) : adresse interne/privée ou schéma " +
+    "non autorisé. Seules les URL http/https publiques sont lisibles.",
+  read_too_large:
+    "La page est trop volumineuse pour être lue (413) : le libraire refuse de " +
+    "télécharger au-delà de 3 Mio. Cette page ne peut pas être lue en entier.",
+  read_not_text:
+    "Cette adresse ne renvoie pas du TEXTE (415) : le contenu n'est pas lisible " +
+    "comme du texte (binaire, image, archive…). Une capture d'écran ne le rendrait " +
+    "pas lisible non plus.",
+  read_failed:
+    "Le libraire n'a pas pu lire la page (502) : nom de domaine introuvable, réseau " +
+    "indisponible, page en erreur (404/403 côté site) ou trop de redirections.",
+  read_timeout:
+    "La lecture de la page a dépassé le délai imparti (504) : le site n'a pas " +
+    "répondu à temps. Réessayez, ou demandez moins de texte (« limit » plus petit).",
   server_error:
     "Le libraire a renvoyé une erreur interne (5xx) : réessayez plus tard.",
   unreachable:
@@ -81,16 +107,24 @@ export class LibrarianError extends Error {
   override readonly name = "LibrarianError";
   readonly code: LibrarianErrorCode;
   readonly status: number | undefined;
+  /**
+   * Code TYPÉ renvoyé par Libry lui-même quand il en fournit un (`TOO_LARGE`,
+   * `NOT_TEXT`, `HTTP_403`, `TIMEOUT`, `BLOCKED_URL`, …). ⚠️ C'est la cause
+   * PRÉCISE du service, pas une déduction de Yuki : elle est transmise au modèle
+   * telle quelle (texte ET `details`).
+   */
+  readonly upstreamCode: string | undefined;
 
   constructor(
     code: LibrarianErrorCode,
-    options: { message?: string; status?: number; cause?: unknown } = {},
+    options: { message?: string; status?: number; cause?: unknown; upstreamCode?: string } = {},
   ) {
     super(options.message ?? LIBRARIAN_ERROR_MESSAGES[code], {
       ...(options.cause !== undefined ? { cause: options.cause } : {}),
     });
     this.code = code;
     this.status = options.status;
+    this.upstreamCode = options.upstreamCode;
   }
 }
 
@@ -109,10 +143,16 @@ export function isLibrarianError(error: unknown): error is LibrarianError {
  * contrat : `403` y désigne un REFUS SSRF (URL interne/privée), `502` un échec
  * de capture et `504` un dépassement de délai. On ne réutilise donc pas les
  * causes d'authentification sur ces routes.
+ *
+ * ⚠️ La route de LECTURE (`/read`) a la SIENNE, plus fine encore : `413`
+ * (`TOO_LARGE`), `415` (`NOT_TEXT`), `504` (`TIMEOUT`) et `502` (DNS, réseau,
+ * `HTTP_404`/`HTTP_403` du site, redirections) sont des causes DISTINCTES qui
+ * doivent parvenir au modèle comme une RAISON, jamais comme « échec générique ».
+ * Le code typé renvoyé par Libry est conservé (`upstreamCode`).
  */
 export function librarianErrorFromStatus(
   status: number,
-  context: { route: string; retryAfterSeconds?: number },
+  context: { route: string; retryAfterSeconds?: number; upstreamCode?: string },
 ): LibrarianError {
   const isCapture = context.route === "screenshot" || context.route === "shot";
   if (isCapture) {
@@ -141,6 +181,10 @@ export function librarianErrorFromStatus(
     }
   }
 
+  if (context.route === "read") {
+    return readErrorFromStatus(status, context);
+  }
+
   const isSearch = context.route === "search";
   switch (status) {
     case 400:
@@ -162,6 +206,70 @@ export function librarianErrorFromStatus(
       return new LibrarianError("server_error", { status });
   }
 }
+
+/**
+ * Traduit un statut de `POST /api/librarian/read` en cause DISTINCTE.
+ *
+ * ⚠️ Le `code` du service (`upstreamCode` : `TOO_LARGE`, `NOT_TEXT`,
+ * `HTTP_403`, `DNS`, `TIMEOUT`, …) est CONSERVÉ : le modèle reçoit la raison
+ * exacte, pas seulement « le libraire a échoué ».
+ */
+function readErrorFromStatus(
+  status: number,
+  context: { retryAfterSeconds?: number; upstreamCode?: string },
+): LibrarianError {
+  const upstreamCode = context.upstreamCode;
+  const raise = (code: LibrarianErrorCode, extra?: string): LibrarianError =>
+    new LibrarianError(code, {
+      status,
+      ...(upstreamCode !== undefined ? { upstreamCode } : {}),
+      message: [
+        LIBRARIAN_ERROR_MESSAGES[code],
+        upstreamCode !== undefined ? `Code du libraire : ${upstreamCode}.` : "",
+        extra ?? "",
+      ]
+        .filter((part) => part !== "")
+        .join(" "),
+    });
+
+  switch (status) {
+    case 400:
+      return raise(
+        "bad_request",
+        "Paramètres attendus : `url` (http/https) et, en option, `offset` (entier ≥ 0) " +
+          "et `limit` (entier ≥ 1).",
+      );
+    case 401:
+      return raise("unauthorized_key");
+    // 403 sur /read = protection SSRF de Libry (message volontairement générique).
+    case 403:
+      return raise("target_refused");
+    case 413:
+      return raise("read_too_large");
+    case 415:
+      return raise("read_not_text");
+    case 429:
+      return rateLimitedError(status, context.retryAfterSeconds);
+    case 502:
+      return raise("read_failed", REFINEMENT_502[upstreamCode ?? ""] ?? "");
+    case 504:
+      return raise("read_timeout");
+    default:
+      return raise("server_error");
+  }
+}
+
+/**
+ * Précisions HONNÊTES ajoutées au 502 de `/read`, selon le code du libraire.
+ * Aucune n'invente une cause : chacune reformule le code reçu.
+ */
+const REFINEMENT_502: Readonly<Record<string, string>> = {
+  DNS: "Le nom de domaine de cette adresse n'existe pas (DNS).",
+  NETWORK: "La connexion au site a échoué (réseau).",
+  HTTP_404: "Le site répond « page introuvable » (404) : cette adresse n'existe pas.",
+  HTTP_403: "Le site refuse l'accès à cette page (403).",
+  TOO_MANY_REDIRECTS: "La page redirige trop de fois (5 redirections maximum).",
+};
 
 /** 429 : message enrichi de `Retry-After` quand l'en-tête est présent. */
 function rateLimitedError(status: number, retryAfterSeconds?: number): LibrarianError {

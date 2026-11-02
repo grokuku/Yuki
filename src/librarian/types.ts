@@ -142,6 +142,59 @@ export interface LibrarianPort {
   archive(payload: LibrarianArchivePayload, signal?: AbortSignal): Promise<LibrarianArchiveReceipt>;
 }
 
+/** Options d'une LECTURE de page (`POST /api/librarian/read`). */
+export interface LibrarianReadOptions {
+  /**
+   * Position de départ dans le texte COMPLET (défaut 0). ⚠️ C'est ce qui rend la
+   * pagination exploitable : `offset + text.length` enchaîne sans trou ni
+   * recouvrement.
+   */
+  offset?: number;
+  /** Longueur maximale rendue (défaut Libry 20 000, plafond 100 000). */
+  limit?: number;
+}
+
+/**
+ * Réponse de `POST /api/librarian/read` — le TEXTE d'une page web (le chaînon
+ * qui manquait : sans lui, le modèle ne pouvait que demander une CAPTURE).
+ *
+ * ⚠️ `text` est la TRANCHE `[offset, offset + limit)` du texte complet ;
+ * `totalChars` est la longueur du texte COMPLET (identique quel que soit
+ * `offset`) et `truncated` dit s'il RESTE du texte après la tranche rendue.
+ */
+export interface LibrarianReadResult {
+  /** URL demandée. */
+  url: string;
+  /** URL effectivement lue (après redirections), si le libraire la fournit. */
+  finalUrl?: string;
+  /** Titre de la page, si le libraire l'a extrait. */
+  title?: string;
+  /** Texte EXTRAIT (sans balise), tranche `[offset, offset + limit)`. */
+  text: string;
+  /** Longueur du texte COMPLET de la page. */
+  totalChars: number;
+  /** Position de départ de `text` dans le texte complet. */
+  offset: number;
+  /** Vrai s'il RESTE du texte après `offset + text.length`. */
+  truncated: boolean;
+  /** Type MIME de la ressource lue (ex. `text/html`, `text/plain`). */
+  contentType: string;
+}
+
+/**
+ * Port de LECTURE du TEXTE d'une page web via Libry.
+ *
+ * ⚠️ Séparé de `LibrarianPort` (même raison que `LibrarianScreenshotPort`) : les
+ * doubles des quatre outils historiques n'ont pas à l'implémenter.
+ */
+export interface LibrarianReadPort {
+  read(
+    url: string,
+    options?: LibrarianReadOptions,
+    signal?: AbortSignal,
+  ): Promise<LibrarianReadResult>;
+}
+
 /** Options d'une demande de capture (`POST /api/librarian/screenshot`). */
 export interface LibrarianScreenshotOptions {
   /** Largeur du viewport (défaut Libry : 1440). */

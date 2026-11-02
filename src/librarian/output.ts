@@ -325,3 +325,81 @@ export function frameLibrarianScreenshot(input: LibrarianScreenshotFrame): strin
   }
   return frame([`capture="${escapeOutputAttribute(input.host)}"`], lines.join("\n"));
 }
+
+/** Nombre de caractères de texte de page rendu au modèle dans un tour. */
+export const MAX_READ_TEXT_CHARS = 20_000;
+
+/** Métadonnées + tranche de texte d'une page lue (`POST /api/librarian/read`). */
+export interface LibrarianReadFrame {
+  /** URL demandée. */
+  url: string;
+  /** URL effectivement lue (après redirections), si le libraire la fournit. */
+  finalUrl?: string;
+  title?: string;
+  /** Tranche de texte rendue (déjà sans balise, côté libraire). */
+  text: string;
+  /** Longueur du texte COMPLET de la page. */
+  totalChars: number;
+  /** Position de la tranche dans le texte complet. */
+  offset: number;
+  /** Vrai s'il RESTE du texte après la tranche. */
+  truncated: boolean;
+  contentType?: string;
+}
+
+/**
+ * Encadre le TEXTE d'une page web lu par le libraire.
+ *
+ * ⚠️ Deux exigences non négociables :
+ *  1. le texte est ÉCHAPPÉ et encadré par `<libraire>` : c'est une DONNÉE NON
+ *     FIABLE (une page piégée peut contenir « ignore tes instructions » ou
+ *     forger la balise de fermeture) ;
+ *  2. la PAGINATION est DITE : `totalChars`, la tranche rendue et le `offset`
+ *     exact pour continuer — sinon on retombe sur une troncature MUETTE (le
+ *     défaut d'origine : le modèle ne savait pas qu'il manquait du texte).
+ */
+export function frameLibrarianRead(input: LibrarianReadFrame): string {
+  const escaped = escapeOutputText(input.text);
+  const shown = clamp(escaped, MAX_READ_TEXT_CHARS);
+  const end = input.offset + input.text.length;
+  const lines: string[] = [`Page lue : ${escapeOutputText(input.finalUrl ?? input.url)}`];
+  if (input.title !== undefined && input.title.trim() !== "") {
+    lines.push(`Titre : ${escapeOutputText(input.title)}`);
+  }
+  if (input.contentType !== undefined && input.contentType !== "") {
+    lines.push(`Type de contenu : ${escapeOutputText(input.contentType)}`);
+  }
+  lines.push(
+    `Texte complet : ${input.totalChars} caractères. Tranche rendue : ${input.offset} à ${end} ` +
+      `(${input.text.length} caractères)${shown.truncated ? ", ramenée à la borne d'affichage" : ""}.`,
+  );
+  lines.push("");
+  lines.push(shown.text === "" ? "(aucun texte dans cette tranche)" : shown.text);
+  lines.push("");
+  if (input.text === "") {
+    // ⚠️ `offset` au-delà de la fin : ce n'est PAS une erreur, la page est plus
+    // courte. On le dit pour que le modèle n'invente pas un échec. Et si la page
+    // n'a rendu AUCUN texte, on le dit aussi — sans laisser croire qu'une capture
+    // d'écran le rendrait lisible.
+    lines.push(
+      input.totalChars === 0
+        ? "⚠️ La page n'a livré AUCUN texte (0 caractère) : le contenu n'est pas du " +
+            "texte lisible (image, canvas, JavaScript). Une capture d'écran sert à " +
+            "VÉRIFIER UN RENDU, pas à lire du texte — dis-le à l'utilisateur."
+        : `⚠️ La tranche demandée (offset ${input.offset}) est au-delà de la fin : il n'y a ` +
+            `rien à lire après ${input.totalChars} caractères. Reprends à offset 0 si besoin.`,
+    );
+  } else if (input.truncated) {
+    const rest = Math.max(input.totalChars - end, 0);
+    lines.push(
+      `⚠️ Le texte N'EST PAS complet : il reste ${rest} caractères après la tranche. ` +
+        `Pour continuer, rappelle l'outil avec offset=${end} (même limit).`,
+    );
+  } else {
+    lines.push("Fin du document atteinte : rien ne reste après cette tranche.");
+  }
+  return frame(
+    [`lecture="${escapeOutputAttribute(input.finalUrl ?? input.url)}"`, `total="${input.totalChars}"`],
+    lines.join("\n"),
+  );
+}

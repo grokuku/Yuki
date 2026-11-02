@@ -100,6 +100,7 @@ export type LibrarianToolName =
   | "liste_libraire"
   | "lire_libraire"
   | "archive_libraire"
+  | "lire_page_web"
   | "capture_libraire";
 
 /**
@@ -286,11 +287,16 @@ export const CONVERSATION_ARCHIVE_TOOLS: readonly ConversationArchiveToolName[] 
  * consultation d'agents/archive, ils ne sont exposés que si le câblage les active
  * (URL de base du libraire renseignée au démarrage). ⚠️ `archive_libraire` rend la
  * main immédiatement (travail de fond).
+ *
+ * ⚠️ `lire_page_web` (LECTURE du TEXTE d'une page, `POST /read`) fait partie de
+ * ce groupe : il sert à LIRE, pas à capturer. `capture_libraire` reste séparé
+ * (`LIBRARIAN_CAPTURE_TOOLS`) et réservé à la VÉRIFICATION D'UN RENDU.
  */
 export const LIBRARIAN_TOOLS: readonly LibrarianToolName[] = [
   "recherche_libraire",
   "liste_libraire",
   "lire_libraire",
+  "lire_page_web",
   "archive_libraire",
 ];
 
@@ -692,6 +698,7 @@ export const REMOTE_TOOL_GROUP_OF: Readonly<Record<CustomToolName, RemoteToolGro
   recherche_libraire: "outils",
   liste_libraire: "outils",
   lire_libraire: "outils",
+  lire_page_web: "outils",
   archive_libraire: "outils",
   capture_libraire: "outils",
   archive_vie_anterieure: "outils",
