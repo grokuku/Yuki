@@ -775,13 +775,19 @@ export function longRunningTool(name: string): LongRunningTool | undefined {
 
 /**
  * RÉGLAGE qui ouvre la délégation en canal — nommé EXACTEMENT comme dans
- * l'interface (`public/ui/chat-panel.js`, contrôle « Agents distants »).
+ * l'interface : ONGLET « Conversation » (`public/ui/config.html`, `#tab-conversation`),
+ * contrôle « Agents distants » (`public/ui/chat-panel.js`) tout en bas de cet onglet.
  *
  * ⚠️ Le texte du refus pointe ce chemin : un message de refus qui dit « la
  * délégation est désactivée » sans dire OÙ l'activer ne laisse que la recherche
  * dans un fichier de configuration (défaut `desactive`, `src/config/schema.ts`).
+ *
+ * ⚠️ DÉFAUT DE PRODUCTION CORRIGÉ (2026-11-02) : ce chemin nommait un onglet
+ * « Discussions » qui N'EXISTE PAS — l'onglet s'appelle « Conversation », et le
+ * message envoyait donc l'utilisateur chercher un onglet absent.
  */
-export const REMOTE_AGENTS_SETTING_PATH = "Configuration → Discussions → Agents distants";
+export const REMOTE_AGENTS_SETTING_PATH =
+  "Configuration → Conversation → Agents distants (tout en bas de la page)";
 
 /**
  * Texte de REFUS d'un appel INLINE d'un outil long dans un run de CANAL.

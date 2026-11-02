@@ -67,7 +67,7 @@ import {
 /** Raison EXACTE affichée quand rien n'est configuré (jamais un « erreur »). */
 export const MATTERMOST_NOT_CONFIGURED_REASON =
   "Mattermost n'est pas configuré : renseignez l'URL du serveur et le jeton du bot " +
-  "dans /config → Discussions.";
+  "dans /config → Conversation → « Discussions — Mattermost ».";
 
 /**
  * Générateur de réponse : `transcript + message → texte` (injecté, jamais deviné).

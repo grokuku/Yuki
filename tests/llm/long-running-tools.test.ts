@@ -240,7 +240,7 @@ describe("refus de l'appel INLINE dans un run de CANAL", () => {
     expect(texte).toContain("delegate");
     // ⚠️ Le chemin EXACT de configuration est nommé (libellé de l'interface).
     expect(texte).toContain(REMOTE_AGENTS_SETTING_PATH);
-    expect(texte).toContain("Configuration → Discussions → Agents distants");
+    expect(texte).toContain("Configuration → Conversation → Agents distants");
     expect((resultat.details as { status?: string }).status).toBe("refused");
   });
 

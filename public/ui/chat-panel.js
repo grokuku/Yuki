@@ -134,10 +134,28 @@ const PLATFORMS = [
  *
  * ⚠️ CE SONT LES MOTS EMPLOYÉS PAR LE MESSAGE DE REFUS d'un outil long
  * (`REMOTE_AGENTS_SETTING_PATH`, `src/llm/tool-policy.ts`) : « Configuration →
- * Discussions → Agents distants ». Renommer ce libellé sans renommer le chemin
- * rendrait le refus inutilisable — un test statique verrouille l'égalité.
+ * Conversation → Agents distants (tout en bas de la page) ». L'onglet s'appelle
+ * « Conversation » — ⚠️ PAS « Discussions », qui n'existe pas comme onglet
+ * (défaut de production corrigé le 2026-11-02). Renommer ce libellé sans renommer
+ * le chemin rendrait le refus inutilisable — un test statique verrouille l'égalité.
  */
 export const REMOTE_AGENTS_LABEL = "Agents distants";
+
+/**
+ * Id STABLE du contrôle : c'est AUSSI l'ancre de la page (`/config#chat-remote-agents`),
+ * reconnue par `tabFromHash` (`public/ui/config.js`) pour ouvrir l'onglet
+ * « Conversation » puis défiler jusqu'ici.
+ */
+export const REMOTE_AGENTS_ANCHOR = "chat-remote-agents";
+
+/**
+ * Texte affiché quand l'état effectif n'a PAS pu être lu (`GET /api/chat/status`).
+ *
+ * ⚠️ On n'affiche JAMAIS « Désactivé » dans ce cas : ce serait un état effectif
+ * INVENTÉ, et l'utilisateur croirait la délégation coupée alors qu'elle ne l'est
+ * peut-être pas (défaut de production constaté le 2026-11-02).
+ */
+export const REMOTE_AGENTS_UNKNOWN = "Valeur inconnue (impossible de joindre le serveur)";
 
 /** Texte d'aide du réglage « Agents distants ». */
 export const REMOTE_AGENTS_HELP =
@@ -155,6 +173,11 @@ export const REMOTE_AGENTS_HELP =
  * chemin qui n'existait pas, et l'activer demandait d'éditer `config.json`. La
  * valeur effective vient du serveur (`GET /api/chat/status`, champ `distant.agents`),
  * jamais d'une supposition locale.
+ *
+ * ⚠️ ÉTAT INCONNU ASSUMÉ : si `GET /api/chat/status` échoue, le `<select>` affiche
+ * « Valeur inconnue (impossible de joindre le serveur) » et les DEUX contrôles sont
+ * désactivés — on ne modifie pas un état qu'on ne connaît pas, et on n'affiche pas
+ * un « Désactivés (défaut) » qui serait un mensonge.
  */
 function renderRemoteAgents({ request, report, shared, refresh }) {
   const section = h("section", { class: "config-group" });
@@ -162,7 +185,7 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
   const aide = h("p", { class: "config-helper", text: REMOTE_AGENTS_HELP });
   const select = h("select", {
     class: "config-input",
-    id: "chat-remote-agents",
+    id: REMOTE_AGENTS_ANCHOR,
     "aria-label": REMOTE_AGENTS_LABEL,
   });
   for (const [valeur, libelle] of [
@@ -171,6 +194,9 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
   ]) {
     select.append(h("option", { value: valeur, text: libelle }));
   }
+  /** ⚠️ Option d'ÉTAT INCONNU : présente SEULEMENT quand le statut manque. */
+  const optionInconnue = h("option", { value: "inconnue", text: REMOTE_AGENTS_UNKNOWN });
+  let inconnueAffichee = false;
   const save = h("button", {
     class: "button button--small",
     type: "button",
@@ -179,6 +205,12 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
   const etat = h("p", { class: "config-helper" });
   save.addEventListener("click", () => {
     void (async () => {
+      // ⚠️ Garde supplémentaire : un clic ne doit jamais écrire une valeur dont on
+      // n'a pas lu l'état courant (`shared.state` absent).
+      if (shared.state?.distant?.agents === undefined) {
+        render();
+        return;
+      }
       try {
         // ⚠️ `PUT /api/config` (même route que les autres réglages) : la valeur est
         // validée par le schéma serveur, appliquée à chaud (`apply: hot`). L'en-tête
@@ -208,9 +240,29 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
   function render() {
     const valeur = shared.state?.distant?.agents;
     if (valeur === undefined) {
-      etat.textContent = "Valeur inconnue : lisez l'état des discussions avant de régler.";
+      // ⚠️ État NON LU (statut indisponible, ou pas encore arrivé) : on le DIT, et on
+      // n'offre pas d'écriture.
+      if (!inconnueAffichee) {
+        select.append(optionInconnue);
+        inconnueAffichee = true;
+      }
+      select.value = "inconnue";
+      select.disabled = true;
+      save.disabled = true;
+      // La RAISON de l'échec n'est pas recopiée dans le texte (elle peut être longue) :
+      // elle est disponible au survol, et JOURNALISÉE côté client.
+      etat.title = typeof shared.error === "string" ? shared.error : "";
+      etat.textContent =
+        "Valeur effective : inconnue (impossible de joindre le serveur) — rechargez la page " +
+        "pour réessayer.";
       return;
     }
+    if (inconnueAffichee) {
+      select.removeChild(optionInconnue);
+      inconnueAffichee = false;
+    }
+    select.disabled = false;
+    save.disabled = false;
     select.value = valeur === "actives" ? "actives" : "desactive";
     etat.textContent =
       valeur === "actives"
@@ -228,19 +280,31 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
  * @param {HTMLElement} deps.root conteneur (`#chat-root`).
  * @param {object} [deps.HolafModal] modale de la brique (`alert`).
  * @param {typeof fetch} [deps.fetchImpl] `fetch` injectable (tests).
+ * @param {() => void} [deps.onFirstRender] appelé UNE fois, après la PREMIÈRE
+ *   lecture de l'état (succès ou échec) et le rendu qui la suit. Sert aux ancres
+ *   (`/config#chat-remote-agents`) : la hauteur de la page n'est définitive qu'à ce
+ *   moment-là (les sections des plateformes sont remplies par cette lecture).
  */
 export function initChatPanel(deps) {
   const root = deps.root;
   if (!root) throw new Error("initChatPanel : racine absente");
   const modal = deps.HolafModal ?? null;
   const doFetch = deps.fetchImpl ?? ((url, init) => fetch(url, init));
+  const onFirstRender = typeof deps.onFirstRender === "function" ? deps.onFirstRender : null;
+  let premiereLectureTerminee = false;
+  /** ⚠️ Une SEULE fois : ensuite l'utilisateur est maître de son défilement. */
+  function signalerPremierRendu() {
+    if (premiereLectureTerminee) return;
+    premiereLectureTerminee = true;
+    onFirstRender?.();
+  }
   /**
    * État PARTAGÉ par les sections (une seule requête `GET /api/chat/status`).
    *
    * ⚠️ Aucune donnée secrète : URL, booléens, compteurs. Chaque section relit ce qu'elle
    * doit afficher ; aucune ne garde une copie qui pourrait diverger.
    */
-  const shared = { state: null };
+  const shared = { state: null, error: undefined };
 
   async function request(url, init) {
     const response = await doFetch(url, init);
@@ -261,15 +325,26 @@ export function initChatPanel(deps) {
   async function refresh() {
     try {
       shared.state = await request("/api/chat/status", { headers: READ_HEADERS, cache: "no-store" });
+      shared.error = undefined;
       mount();
       for (const platform of platforms) platform.render();
       remoteAgents.render();
+      signalerPremierRendu();
     } catch (error) {
+      // ⚠️ ON N'INVENTE RIEN : l'état précédent est OUBLIÉ (un état périmé serait un
+      // mensonge de plus) et le réglage « Agents distants » affiche « Valeur inconnue »
+      // avec ses contrôles DÉSACTIVÉS — il ne retombe jamais sur « Désactivés (défaut) ».
+      const message = apiMessage(error, "erreur inconnue");
+      shared.state = null;
+      shared.error = message;
+      // Journalisation côté client, SANS secret : la route ne rend que URL, booléens,
+      // compteurs (jamais un jeton).
+      console.warn("[config/chat] état des discussions illisible :", message);
       for (const platform of platforms) {
-        platform.setError(
-          `Impossible de lire l'état des discussions : ${apiMessage(error, "erreur inconnue")}`,
-        );
+        platform.setError(`Impossible de lire l'état des discussions : ${message}`);
       }
+      remoteAgents.render();
+      signalerPremierRendu();
     }
   }
 
@@ -322,6 +397,10 @@ export function initChatPanel(deps) {
     );
   }
   mount();
+  // ⚠️ Avant la première lecture, l'état effectif est INCONNU : on l'affiche comme tel
+  // au lieu de laisser le `<select>` sur « Désactivés (défaut) », une valeur que
+  // personne n'a lue (défaut de production corrigé le 2026-11-02).
+  remoteAgents.render();
 
   void refresh();
   return { element: root, refresh };

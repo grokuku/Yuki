@@ -373,7 +373,7 @@ describe("adaptateur — ingestion, fils et anti-boucle", () => {
     const sansJeton = new DiscordChatAdapter({ token: () => undefined, store });
     const off = sansJeton.status();
     expect(off.etat).toBe("off");
-    expect(String(off.raison)).toContain("/config → Discussions");
+    expect(String(off.raison)).toContain("/config → Conversation");
     // Et il nomme le prérequis le plus probable : l'intent privilégié.
     expect(String(off.raison)).toContain("MESSAGE_CONTENT");
   });

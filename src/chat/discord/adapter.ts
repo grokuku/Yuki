@@ -89,7 +89,8 @@ export const DISCORD_PLATFORM: RemotePlatform = "discord";
 
 /** Raison EXACTE affichée quand rien n'est configuré (jamais un « erreur »). */
 export const DISCORD_NOT_CONFIGURED_REASON =
-  "Discord n'est pas configuré : enregistrez le jeton du bot dans /config → Discussions " +
+  "Discord n'est pas configuré : enregistrez le jeton du bot dans " +
+  "/config → Conversation → « Discussions — Discord » " +
   "(et vérifiez que l'intent MESSAGE_CONTENT est activé dans le portail développeur).";
 
 /**
@@ -540,7 +541,7 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
     if (voulu !== "" && retenues.length === 0) {
       this.derniereErreur =
         `Le serveur configuré (${voulu}) n'est pas dans la liste des serveurs du bot : ` +
-        "vérifiez l'identifiant dans /config → Discussions.";
+        "vérifiez l'identifiant dans /config → Conversation → « Discussions — Discord ».";
     }
     const out: ChatSyncChannel[] = [];
     const seen = new Set<string>();

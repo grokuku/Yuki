@@ -1455,7 +1455,8 @@ async function main(): Promise<void> {
         // ⚠️ PUBLICATION INTER-CANAL (décision A, 2026-11-02) : le périmètre
         // « canaux SUIVIS, même plateforme » est tenu ICI, côté serveur — le modèle ne
         // peut pas le contourner. Un canal hors miroir est refusé avec la marche à suivre
-        // (Configuration → Discussions), au lieu d'inventer une validation humaine.
+        // (Configuration → Conversation → « Discussions — Mattermost / Discord »), au lieu
+        // d'inventer une validation humaine.
         channels: createChannelPostPort({
           plateforme:
             mirrorPlatformOf(conversationId) ??
@@ -1668,7 +1669,7 @@ async function main(): Promise<void> {
   });
 
   /**
-   * Port MATTERMOST de la page `/config → Discussions`.
+   * Port MATTERMOST de la page `/config → Conversation → « Discussions — Mattermost »`.
    *
    * ⚠️ Le jeton est ÉCRIT ici et n'en ressort jamais : `tokenConfigured()` est un
    * booléen, jamais la valeur, jamais un préfixe. Une fois enregistré, le jeton ne peut
@@ -1755,7 +1756,7 @@ async function main(): Promise<void> {
   });
 
   /**
-   * Port DISCORD de la page `/config → Discussions`.
+   * Port DISCORD de la page `/config → Conversation → « Discussions — Discord »`.
    *
    * ⚠️ Comme pour Mattermost : le jeton est ÉCRIT ici et n'en ressort jamais
    * (`tokenConfigured()` est un booléen). Les réglages scalaires (serveur, borne d'envoi)

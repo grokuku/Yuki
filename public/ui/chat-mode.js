@@ -24,13 +24,15 @@ export const CHAT_MODE_OPTIONS = [
     mode: "mattermost",
     label: "Mattermost",
     title:
-      "Canaux Mattermost du bot : configuration, jeton et état dans /config → Discussions.",
+      "Canaux Mattermost du bot : configuration, jeton et état dans " +
+      "/config → Conversation → « Discussions — Mattermost ».",
   },
   {
     mode: "discord",
     label: "Discord",
     title:
-      "Salons Discord du bot : configuration, jeton et état dans /config → Discussions. " +
+      "Salons Discord du bot : configuration, jeton et état dans " +
+      "/config → Conversation → « Discussions — Discord ». " +
       "L'intent MESSAGE_CONTENT doit être activé dans le portail développeur.",
   },
 ];
@@ -220,7 +222,8 @@ export function modeNotice(status) {
       kind: "vide",
       titre: "Aucun canal synchronisé.",
       detail:
-        "Renseignez l'URL du serveur et le jeton du bot dans /config → Discussions, puis " +
+        "Renseignez l'URL du serveur et le jeton du bot dans " +
+        "/config → Conversation → « Discussions — Mattermost », puis " +
         "cliquez sur « Se connecter » : les canaux et deux semaines d'historique seront " +
         "alors importés.",
     };
@@ -230,7 +233,8 @@ export function modeNotice(status) {
       kind: "vide",
       titre: "Aucun salon synchronisé.",
       detail:
-        "Enregistrez le jeton du bot Discord dans /config → Discussions (et activez " +
+        "Enregistrez le jeton du bot Discord dans " +
+        "/config → Conversation → « Discussions — Discord » (et activez " +
         "l'intent MESSAGE_CONTENT dans le portail développeur), puis cliquez sur " +
         "« Se connecter » : les salons texte du serveur seront importés.",
     };

@@ -33,7 +33,7 @@ import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
 import { initSecretsPanel } from './secrets-panel.js';
 import { initSourcesPanel } from './sources-panel.js';
-import { initChatPanel } from './chat-panel.js';
+import { initChatPanel, REMOTE_AGENTS_ANCHOR } from './chat-panel.js';
 import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
@@ -1330,10 +1330,41 @@ function refreshVisibility() {
   }
 }
 
+/**
+ * ANCRES PROFONDES : id d'un CONTRÔLE de la page → onglet qui le contient.
+ *
+ * ⚠️ `/config#chat-remote-agents` doit ouvrir « Conversation » et défiler jusqu'au
+ * réglage « Agents distants » : ce contrôle vit à ~5 800 px du haut, et le message de
+ * refus de Yuki nomme ce chemin — sans ancre, on ne le trouve pas.
+ *
+ * ⚠️ La correspondance se fait par ID D'ÉLÉMENT, jamais par GROUPE de champs : la
+ * tentative précédente par groupe (`#group-images`) envoyait les champs dans le
+ * mauvais onglet. Une ancre inconnue retombe sur le comportement d'origine (« Modèles »).
+ */
+const ANCRES_PROFONDES = new Map([[REMOTE_AGENTS_ANCHOR, "conversation"]]);
+
 /** Identifiant d'onglet valide déduit du hash courant, sinon `null`. */
 function tabFromHash() {
   const raw = location.hash.replace(/^#/, "");
-  return TABS.some((tab) => tab.id === raw) ? raw : null;
+  if (TABS.some((tab) => tab.id === raw)) return raw;
+  // Ancre profonde : c'est l'ONGLET qui la contient qui doit s'ouvrir.
+  return ANCRES_PROFONDES.get(raw) ?? null;
+}
+
+/**
+ * Amène la cible du hash dans la vue (défilement seul, aucun état modifié).
+ *
+ * ⚠️ Retourne `false` si l'élément n'est pas encore monté : l'appelant réessaie après
+ * le montage des panneaux (le panneau des discussions est monté par `initChatPanel`, et
+ * son contrôle n'existe qu'à ce moment-là).
+ */
+function revealHashTarget() {
+  const raw = location.hash.replace(/^#/, "");
+  if (raw === "") return false;
+  const target = document.getElementById(raw);
+  if (!target || typeof target.scrollIntoView !== "function") return false;
+  target.scrollIntoView({ block: "center" });
+  return true;
 }
 
 /**
@@ -1797,6 +1828,7 @@ if (tablistEl) {
 }
 window.addEventListener("hashchange", () => {
   selectTab(tabFromHash() ?? "modeles");
+  revealHashTarget();
 });
 
 // Onglet initial : celui du hash, sinon « Modèles ». Appliqué avant le
@@ -1879,7 +1911,17 @@ void (async () => {
     // Panneau « Discussions » (Mattermost, Discord) : jeton saisi une fois, état de la
     // connexion, backfill 2 semaines, canaux suivis. Composant autonome monté par id.
     if (chatRoot) {
-      initChatPanel({ root: chatRoot, HolafModal });
+      initChatPanel({
+        root: chatRoot,
+        HolafModal,
+        // ⚠️ Ancre `/config#chat-remote-agents` : le contrôle « Agents distants » n'existe
+        // qu'APRÈS ce montage, et la hauteur de l'onglet n'est DÉFINITIVE qu'après la
+        // première lecture d'état (les sections de plateforme se remplissent alors). On
+        // refait donc le défilement une fois, puis plus jamais (l'utilisateur est maître
+        // de son défilement ensuite).
+        onFirstRender: () => revealHashTarget(),
+      });
+      revealHashTarget();
     }
     // Panneau de la personnalité : édition, enregistrement, retour arrière,
     // historique. Composant autonome monté par id.

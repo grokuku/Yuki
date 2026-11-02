@@ -27,7 +27,8 @@ import type { ChannelPostChannel, ChannelPostOutcome, ChannelPostPort } from "..
 
 /** Raison affichée quand le canal demandé n'est pas suivi (jamais un simple « non »). */
 export const CANAL_NON_SUIVI_RAISON =
-  "Ce canal n'est pas suivi par Yuki : ajoutez-le dans Configuration → Discussions " +
+  "Ce canal n'est pas suivi par Yuki : ajoutez-le dans Configuration → Conversation " +
+  "→ « Discussions — Mattermost / Discord » " +
   "(les canaux suivis sont les seuls où elle peut écrire).";
 
 /** Raison affichée quand le canal appartient à une AUTRE plateforme que le run. */

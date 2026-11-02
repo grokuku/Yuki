@@ -38,7 +38,7 @@ génération courte passait ; maintenant jamais ». Règle désormais appliquée
 
 | Situation | Comportement |
 |---|---|
-| `delegate` **disponible** (`actives`) | appel long inline **REFUSÉ** ; le message nomme `delegate` **et** le chemin d'activation (Configuration → Discussions → Agents distants) |
+| `delegate` **disponible** (`actives`) | appel long inline **REFUSÉ** ; le message nomme `delegate` **et** le chemin d'activation (Configuration → Conversation → Agents distants, tout en bas de la page) |
 | `delegate` **absent** (`desactive`, défaut) | appel long **AUTORISÉ** inline ; la **borne du tour** est relevée à `max(base, borne de l'outil)` (`channelTurnTimeoutMs`) ; l'accusé prévient de la durée (« jusqu'à trois minutes ») |
 | mode LOCAL | inchangé (aucun refus, aucune borne ajoutée) |
 

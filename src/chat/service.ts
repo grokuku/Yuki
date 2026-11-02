@@ -86,7 +86,8 @@ const CREATION_REFUSALS: Record<Exclude<ChatMode, "local">, string> = {
  */
 const MISSING_ADAPTER_REASON =
   "La connexion à Mattermost n'est pas active : renseignez l'URL du serveur et le " +
-  "jeton du bot dans /config → Discussions, puis cliquez sur « Se connecter ».";
+  "jeton du bot dans /config → Conversation → « Discussions — Mattermost », puis " +
+  "cliquez sur « Se connecter ».";
 
 /** Normalise une valeur brute de configuration en mode connu. */
 function normalizeMode(raw: string): ChatMode {

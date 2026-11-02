@@ -6,7 +6,7 @@
 > **Lot 1** (livré) : socle (types, registre, miroir vide), sélecteur de mode,
 > modèle de données. **Lot 2** (ce document) : **vrai client Mattermost** — REST,
 > WebSocket, miroir persistant, backfill 2 semaines, fils dépliables, trois modes
-> de réponse, panneau `/config → Discussions`.
+> de réponse, panneau `/config → Conversation → « Discussions — Mattermost »`.
 
 ## 1. Les trois modes
 
@@ -254,3 +254,24 @@ la ligne d'erreur dit précisément ce qui manque (URL, jeton, ou refus du serve
 - Le **juge `auto`** est prouvé par des doubles (contrat et bornes), pas par un
   vrai modèle : le chemin SDK est le même que le récapitulatif
   (`createSdkPromptWriter`), déjà éprouvé.
+
+## 14. Ce que Yuki voit d'un canal — le vrai modèle mental
+
+Court, et à lire avant de lui demander quelque chose dans un canal (lot 25).
+
+| Elle a… | Où c'est vrai | Conséquence pratique |
+| --- | --- | --- |
+| **Aucune mémoire durable** | chaque réponse est une session éphémère (`src/pi/sdk/prompt-writer.ts:157`) ; `chat.remoteMemory` n'existe plus (§11) | elle ne « se souvient » pas de la conversation précédente : ce qui n'est pas dans la fenêtre ci-dessous est **perdu** |
+| une **fenêtre horodatée** des derniers messages | `CHAT_REPLY_TRANSCRIPT_MAX_CHARS` = 6 000 (`src/chat/reply/prompt.ts:108`), lignes `[JJ/MM HH:mm]` (`:252`), **plus récent d'abord** (`:244-266`) | elle sait ce qui est récent ; quand la fenêtre coupe, le prompt le **dit** (`CHAT_PARTIAL_HISTORY_NOTICE`, `:119`) |
+| l'**heure courante** | `src/chat/reply/prompt.ts:236` | elle peut dire « ce matin », « il y a dix minutes » |
+| les **pièces jointes du message courant** | images vues par le modèle (`src/chat/mattermost/adapter.ts:804`), le reste **annoncé** et non transmis (`notes`, `src/chat/reply/prompt.ts:272-277`) | un fichier joint à *son* message est connu ; les autres ne le sont pas d'office |
+
+⚠️ **Piège pour l'utilisateur — les images des AUTRES messages** : elles ne sont
+**pas** dans le prompt. Yuki doit aller les chercher (`lister_fichiers` puis
+`lire_fichier`), et ces deux outils **existent bien en canal** : ils sont réajoutés par
+`REMOTE_SAFE_TOOLS` (`src/llm/tool-policy.ts:645-648`, appliqué `:884-887`) alors que le
+rôle léger ne les porte pas en local (`fileList: []`/`fileRead: []`, `:381`/`:386`), et le
+port fichiers est fourni (`files: filesService`, `src/index.ts:1509`). Elle ne peut donc
+les voir que si le modèle du run a la **vision** (`receivesImages`,
+`src/index.ts:1504`) — et seulement pour un fichier **de ce canal**
+(`conversationSource`, `src/index.ts:1470`).

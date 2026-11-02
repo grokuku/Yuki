@@ -52,7 +52,7 @@ actions de **machine** ; elle est désormais suivie d'une consigne explicite de 
 | Règle | Où elle est tenue |
 | --- | --- |
 | canal désigné par **nom lisible** (résolu côté serveur) ou par identifiant | `resoudreCanal`, `src/chat/reply/channel-post.ts` |
-| **canaux suivis uniquement** (miroir `chat-mirror.json`) — sinon refus + « ajoutez-le dans Configuration → Discussions » | `createChannelPostPort` |
+| **canaux suivis uniquement** (miroir `chat-mirror.json`) — sinon refus + « ajoutez-le dans Configuration → Conversation → « Discussions — Mattermost / Discord » » | `createChannelPostPort` |
 | **même plateforme que le run** (`dc-…` depuis Mattermost ⇒ refus) | `createChannelPostPort` |
 | **aucune approbation** (c'est un message, pas une commande) ⇒ `REMOTE_SAFE_TOOLS`, construit même sous `desactive` | `src/llm/tool-policy.ts`, `src/pi/sdk/remote-run-tools.ts` |
 | **bornes réutilisées** (`fitMattermostContent`, `fitDiscordContent`) — troncature **dite** au modèle | `src/chat/reply/channel-post.ts` |

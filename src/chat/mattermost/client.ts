@@ -121,7 +121,8 @@ export function mattermostApiBase(rawBaseUrl: string): string {
   if (trimmed === "") {
     throw new MattermostApiError(
       "not_configured",
-      "L'URL du serveur Mattermost n'est pas renseignée (page /config → Discussions).",
+      "L'URL du serveur Mattermost n'est pas renseignée " +
+        "(page /config → Conversation → « Discussions — Mattermost »).",
     );
   }
   let parsed: URL;
@@ -578,7 +579,8 @@ export class MattermostClient {
     if (token === "") {
       throw new MattermostApiError(
         "not_configured",
-        "Le jeton du bot Mattermost n'est pas encore enregistré (page /config → Discussions).",
+        "Le jeton du bot Mattermost n'est pas encore enregistré " +
+          "(page /config → Conversation → « Discussions — Mattermost »).",
       );
     }
     const base = mattermostApiBase(this.baseUrlFactory());

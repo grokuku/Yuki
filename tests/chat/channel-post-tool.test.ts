@@ -147,7 +147,7 @@ describe("port de publication — périmètre (canaux SUIVIS)", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) throw new Error("attendu : refus");
     expect(outcome.raison).toContain("pas suivi");
-    expect(outcome.raison).toContain("Configuration → Discussions");
+    expect(outcome.raison).toContain("Configuration → Conversation");
     // La liste réelle est rendue : le modèle propose le bon canal au lieu d'en inventer un.
     expect(outcome.canaux?.map((canal) => canal.titre)).toEqual(["Général", "L'Imagerie"]);
     expect(envois).toHaveLength(0);
@@ -174,7 +174,7 @@ describe("port de publication — périmètre (canaux SUIVIS)", () => {
     expect(resolution.ok).toBe(false);
     if (resolution.ok) throw new Error("attendu : ambigu");
     expect(resolution.raison).toContain("Plusieurs canaux");
-    expect(CANAL_NON_SUIVI_RAISON).toContain("Configuration → Discussions");
+    expect(CANAL_NON_SUIVI_RAISON).toContain("Configuration → Conversation");
   });
 
   it("texte trop long ⇒ TRONQUÉ en le disant (limite Mattermost réutilisée)", async () => {

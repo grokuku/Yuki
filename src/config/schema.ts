@@ -497,8 +497,8 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // `src/llm/tool-policy.ts`, appliquée par `src/index.ts`). L'accusé prévient de
   // la durée (« jusqu'à trois minutes ») et l'image part dès qu'elle est prête
   // (`src/chat/reply/progress.ts`). Sous `actives`, l'appel inline est REFUSÉ avec
-  // le chemin d'activation de ce réglage (Configuration → Discussions → Agents
-  // distants, `public/ui/chat-panel.js`).
+  // le chemin d'activation de ce réglage (Configuration → Conversation → Agents
+  // distants, tout en bas de l'onglet « Conversation », `public/ui/chat-panel.js`).
   "chat.remoteAgents": {
     type: "enum",
     enum: ["desactive", "actives"],

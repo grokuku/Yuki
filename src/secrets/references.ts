@@ -45,10 +45,12 @@ export const SOURCE_TOKEN_NAME_PREFIX = "YUKI_SOURCE_";
  */
 export const CHAT_TOKEN_NAME_PREFIX = "YUKI_CHAT_";
 
-/** Nom du jeton du bot Mattermost (saisi une fois dans `/config → Discussions`). */
+/** Nom du jeton du bot Mattermost (saisi une fois dans
+ * `/config → Conversation → « Discussions — Mattermost »`). */
 export const MATTERMOST_TOKEN_SECRET_NAME = "YUKI_CHAT_MATTERMOST";
 
-/** Nom du jeton du bot Discord (saisi une fois dans `/config → Discussions`). */
+/** Nom du jeton du bot Discord (saisi une fois dans
+ * `/config → Conversation → « Discussions — Discord »`). */
 export const DISCORD_TOKEN_SECRET_NAME = "YUKI_CHAT_DISCORD";
 
 /** Nom de secret valide : préfixe réservé + identifiant shell. */

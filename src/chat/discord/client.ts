@@ -595,7 +595,8 @@ export class DiscordClient {
     if (token === "") {
       throw new DiscordApiError(
         "not_configured",
-        "Le jeton du bot Discord n'est pas encore enregistré (page /config → Discussions).",
+        "Le jeton du bot Discord n'est pas encore enregistré " +
+          "(page /config → Conversation → « Discussions — Discord »).",
       );
     }
     const url = new URL(`${this.apiBase}${path}`);
@@ -659,7 +660,7 @@ export class DiscordClient {
         throw new DiscordApiError(
           "unauthorized",
           "Discord a refusé le jeton du bot (HTTP 401) : vérifiez le jeton dans " +
-            "/config → Discussions, puis redémarrez la connexion.",
+            "/config → Conversation → « Discussions — Discord », puis redémarrez la connexion.",
           401,
         );
       }

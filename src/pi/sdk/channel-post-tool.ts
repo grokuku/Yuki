@@ -126,7 +126,8 @@ export function createChannelPostTool(port: ChannelPostPort): ToolDefinition[] {
     description:
       "Publie un message dans un AUTRE canal que celui où tu es. Le canal se désigne " +
       "par son NOM lisible (celui affiché dans l'interface) ou par son identifiant. " +
-      "Seuls les canaux SUIVIS sont accessibles : ceux de Configuration → Discussions, " +
+      "Seuls les canaux SUIVIS sont accessibles : ceux de Configuration → Conversation " +
+      "→ « Discussions — Mattermost / Discord », " +
       "sur la même plateforme que ce canal. Un canal non suivi est refusé, et l'outil " +
       "te dit lequel ajouter — ne réessaie pas un autre nom au hasard. Sans argument, " +
       "l'outil liste les canaux disponibles. " +
@@ -201,7 +202,7 @@ export function createChannelPostTool(port: ChannelPostPort): ToolDefinition[] {
           canaux.length === 0
             ? "Aucun canal n'est suivi : tu ne peux publier dans AUCUN autre canal. " +
               "Dis-le simplement à la personne qui te le demande (les canaux suivis se " +
-              "règlent dans Configuration → Discussions)."
+              "règlent dans Configuration → Conversation → « Discussions — Mattermost / Discord »)."
             : "Canaux où tu peux publier (nom lisible et identifiant) :\n" +
               canaux.map(describeChannel).join("\n") +
               "\n\nPour publier, appelle `publier_dans_canal` avec le NOM exact du " +

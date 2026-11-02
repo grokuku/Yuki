@@ -467,7 +467,8 @@ export class DiscordSocket {
       this.derniereErreur =
         code === 4004
           ? "Discord a refusé le jeton du bot (fermeture 4004) : le temps réel est arrêté. " +
-            "Vérifiez le jeton dans /config → Discussions, puis relancez la connexion."
+            "Vérifiez le jeton dans /config → Conversation → « Discussions — Discord », " +
+            "puis relancez la connexion."
           : `Discord a fermé la connexion (code ${code}${reason !== undefined && reason !== "" ? `, ${reason}` : ""}) : ` +
             "le temps réel est arrêté, aucun nouvel essai.";
       this.options.logger?.warn("chat.discord.ws.fermeture_definitive", { code });

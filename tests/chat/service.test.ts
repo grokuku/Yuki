@@ -57,15 +57,15 @@ describe("mode de discussion — lu à chaud, jamais deviné", () => {
     expect(status.mode).toBe("mattermost");
     // ⚠️ Depuis le lot 2, Mattermost est LIVRÉ mais son fournisseur d'adaptateur est
     // enregistré au démarrage du serveur : ici, aucun n'est câblé, donc l'état est `off`
-    // et le motif DIT QUOI FAIRE (URL + jeton dans /config → Discussions).
+    // et le motif DIT QUOI FAIRE (URL + jeton dans /config → Conversation).
     expect(status.plateforme.etat).toBe("off");
-    expect(status.plateforme.raison).toContain("/config → Discussions");
+    expect(status.plateforme.raison).toContain("/config → Conversation");
     setMode("discord");
     // ⚠️ Lot 21 : Discord est LIVRÉ, mais comme Mattermost son fournisseur d'adaptateur
     // est enregistré au démarrage du serveur. Sans lui, l'état est `off` et le motif DIT
     // QUOI FAIRE (jeton + intent MESSAGE_CONTENT).
     expect(service.status().plateforme.etat).toBe("off");
-    expect(service.status().plateforme.raison).toContain("/config → Discussions");
+    expect(service.status().plateforme.raison).toContain("/config → Conversation");
   });
 });
 

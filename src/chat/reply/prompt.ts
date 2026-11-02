@@ -13,8 +13,22 @@
  * ⚠️ Le transcript envoyé au rédacteur est BORNÉ (`maxChars`) et **exclut** le message
  * déclencheur du corps du prompt (il est présenté à part, à la fin) : sans cette borne,
  * un canal actif ferait grossir chaque appel jusqu'au refus du fournisseur.
+ *
+ * ⚠️ HORODATAGE (lot 25). Le fil était injecté SANS aucune heure : le modèle ne pouvait
+ * donc pas savoir quel message était récent, et citait une fiche du matin comme « la
+ * dernière » sans voir celle produite trois minutes plus tard. Depuis ce lot :
+ *   - chaque ligne du fil porte `[JJ/MM HH:mm]` (date ET heure, compact) ;
+ *   - le prompt porte l'HEURE COURANTE au même format que les prompts locaux
+ *     (`[horodatage] AAAA-MM-JJ HH:mm (heure locale)`, `src/pi/timestamp.ts:92`) ;
+ *   - quand la fenêtre coupe, une mention DIT que l'historique est partiel.
+ *
+ * ⚠️ Pourquoi l'heure courante est en TÊTE DE FIL et non dans le prompt système :
+ * `CHAT_REPLY_SYSTEM_PROMPT` est une CONSTANTE du contrat de comportement (elle ne peut
+ * pas changer d'un run à l'autre), et le repère n'a de sens qu'à côté des horodatages
+ * qu'il permet d'interpréter.
  */
 
+import { buildTimestampPrefix, formatCompactDateTime } from "../../pi/timestamp.js";
 import type { RemoteMessage } from "../types.js";
 import { auteurAffichable } from "../mirror/names.js";
 
@@ -51,7 +65,8 @@ export const CHAT_REPLY_SYSTEM_PROMPT = [
   "ici. Si on te les demande, tu le dis clairement au lieu d'attendre ou d'inventer.",
   "",
   "⚠️ Tu peux PUBLIER un message dans un AUTRE canal suivi avec l'outil",
-  "`publier_dans_canal` (canaux de la liste Configuration → Discussions). Cet outil",
+  "`publier_dans_canal` (canaux de la liste Configuration → Conversation → " +
+  "« Discussions — Mattermost / Discord »). Cet outil",
   "transportait du TEXTE — il transporte aussi des FICHIERS : passe leurs identifiants",
   "dans `fichier_ids` (ceux de `lister_fichiers`, ou l'image que tu viens de produire),",
   "trois au maximum, et seulement des fichiers de CETTE conversation. Tu ne dis donc",
@@ -95,6 +110,19 @@ export const CHAT_REPLY_TRANSCRIPT_MAX_CHARS = 6_000;
 /** Nombre de messages récents transmis au juge (contexte minimal). */
 export const CHAT_JUDGE_CONTEXT_MESSAGES = 4;
 
+/**
+ * Mention ajoutée au-dessus de la réponse quand la fenêtre a coupé le fil.
+ *
+ * ⚠️ SANS elle, le modèle croit avoir TOUT vu : il répond alors « comme si » l'échange
+ * complet lui était connu, alors que les messages les plus anciens ont été jetés.
+ */
+export const CHAT_PARTIAL_HISTORY_NOTICE =
+  "⚠️ Historique PARTIEL : l'historique ci-dessus est incomplet — des messages plus " +
+  "anciens ne sont pas affichés (fenêtre bornée aux messages les plus récents).";
+
+/** Repère d'une ligne dont l'instant d'envoi est illisible (jamais une heure inventée). */
+const UNKNOWN_LINE_TIMESTAMP = "[horodatage inconnu]";
+
 /** Auteur affichable d'un message (jamais vide, jamais un identifiant brut). */
 function authorLabel(message: RemoteMessage): string {
   return auteurAffichable(message.author);
@@ -104,6 +132,29 @@ function authorLabel(message: RemoteMessage): string {
 function bodyOf(message: RemoteMessage): string {
   const text = message.text ?? "";
   return message.deleted === true ? `${text} [message supprimé]` : text;
+}
+
+/**
+ * Repère COMPACT d'une ligne de fil : `[JJ/MM HH:mm]`.
+ *
+ * ⚠️ Même horloge et même fuseau que les prompts locaux : `formatCompactDateTime`
+ * (`src/pi/timestamp.ts:81`) rend `AAAA-MM-JJ HH:mm` avec `Intl` et le fuseau demandé.
+ * On en dérive la forme courte — la fenêtre de 6 000 caractères est déjà serrée, et
+ * chaque ligne paie son horodatage (il entre dans le décompte, voir `buildReplyPrompt`).
+ *
+ * ⚠️ La DATE est toujours présente, même pour aujourd'hui : « 11:46 » seul ne dit pas
+ * de quel jour il s'agit après une nuit de messages, et une ligne datée du 02/11 se
+ * compare d'un coup d'œil à l'heure courante.
+ */
+export function formatLineTimestamp(sentAt: string, timeZone?: string): string {
+  const instant = new Date(sentAt);
+  if (!Number.isFinite(instant.getTime())) return UNKNOWN_LINE_TIMESTAMP;
+  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(
+    formatCompactDateTime(instant, timeZone),
+  );
+  if (!match) return UNKNOWN_LINE_TIMESTAMP;
+  const [, , mois, jour, heure, minute] = match;
+  return `[${jour}/${mois} ${heure}:${minute}]`;
 }
 
 /**
@@ -153,8 +204,10 @@ export function parseJudgeAnswer(text: string): boolean {
 /**
  * Prompt du RÉDACTEUR : fil borné + dernier message, puis consigne de réponse.
  *
- * @param input.maxChars budget de caractères du fil (défaut
- *   `CHAT_REPLY_TRANSCRIPT_MAX_CHARS`).
+ * @param input.maxChars budget de caractères du fil, horodatages et retours à la ligne
+ *   compris (défaut `CHAT_REPLY_TRANSCRIPT_MAX_CHARS`).
+ * @param input.now instant courant (défaut : maintenant) — injecté par les tests.
+ * @param input.timeZone fuseau IANA ; absent ⇒ fuseau du process Node.
  */
 export function buildReplyPrompt(input: {
   channelTitle: string;
@@ -162,6 +215,8 @@ export function buildReplyPrompt(input: {
   message: RemoteMessage;
   botName?: string;
   maxChars?: number;
+  now?: Date;
+  timeZone?: string;
   /**
    * Pièces jointes qui n'ont PAS pu être transmises (fichier non image, trop lourd,
    * illisible). ⚠️ Elles sont DITES au rédacteur : sans cela il répondrait comme si le
@@ -170,26 +225,49 @@ export function buildReplyPrompt(input: {
   notes?: readonly string[];
 }): string {
   const maxChars = input.maxChars ?? CHAT_REPLY_TRANSCRIPT_MAX_CHARS;
+  const now = input.now ?? new Date();
+  const timeZone = input.timeZone;
   const lines: string[] = [];
   if (input.botName !== undefined && input.botName !== "") lines.push(`Tu es ${input.botName}.`);
   if (input.channelTitle !== "") lines.push(`Canal : ${input.channelTitle}`);
+  lines.push("");
+  // ⚠️ NOTION DE PRÉSENT : sans cette ligne, « tout à l'heure » et « ce matin » n'ont
+  // aucun point de référence, même avec des messages horodatés.
+  lines.push(`Heure courante : ${buildTimestampPrefix(now, timeZone)}`);
   lines.push("");
   lines.push("Fil récent (du plus ancien au plus récent) :");
 
   // ⚠️ On garde les messages les PLUS RÉCENTS quand la borne est atteinte : couper la
   // fin retirerait justement le contexte du message auquel il faut répondre.
+  // ⚠️ L'horodatage de ligne ENTRE dans le décompte (il fait partie du coût réel), et le
+  // retour à la ligne aussi : sans cela la fenêtre déborderait sans le dire.
+  const ordered = [...input.transcript].reverse();
   const kept: string[] = [];
   let used = 0;
-  for (const message of [...input.transcript].reverse()) {
+  let dropped = 0;
+  for (let index = 0; index < ordered.length; index += 1) {
+    const message = ordered[index] as RemoteMessage;
     if (message.remoteId === input.message.remoteId) continue;
     const root = message.threadRootId !== undefined ? " (réponse de fil)" : "";
-    const line = `${authorLabel(message)}${root} : ${bodyOf(message)}`;
-    if (used + line.length > maxChars && kept.length > 0) break;
-    used += line.length;
+    const line = `${formatLineTimestamp(message.sentAt, timeZone)} ${authorLabel(message)}${root} : ${bodyOf(message)}`;
+    const cost = line.length + (kept.length > 0 ? 1 : 0);
+    if (used + cost > maxChars && kept.length > 0) {
+      // ⚠️ On COMPTE ce qui est jeté : c'est ce qui déclenche la mention « historique
+      // partiel » (le message déclencheur, présenté à part, n'en fait pas partie).
+      dropped = ordered
+        .slice(index)
+        .filter((reste) => reste.remoteId !== input.message.remoteId).length;
+      break;
+    }
+    used += cost;
     kept.push(line);
   }
   for (const line of kept.reverse()) lines.push(line);
   if (kept.length === 0) lines.push("(aucun message précédent)");
+  if (dropped > 0) {
+    lines.push("");
+    lines.push(CHAT_PARTIAL_HISTORY_NOTICE);
+  }
 
   const notes = (input.notes ?? []).filter((note) => note.trim() !== "");
   if (notes.length > 0) {

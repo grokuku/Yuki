@@ -14,12 +14,12 @@
    `content` VIDE** : le bot est connecté, il ne « voit » rien (sauf s'il est cité).
    C'est **la** cause n°1 de « ça ne marche pas ». L'intent est détecté par
    `GET /applications/@me` (drapeaux `1 << 18` / `1 << 19`) et affiché **en rouge** dans
-   `/config → Discussions` (`src/chat/discord/client.ts:application`,
+   `/config → Conversation → « Discussions — Discord »` (`src/chat/discord/client.ts:application`,
    `public/ui/chat-panel.js:MESSAGE_CONTENT_WARNING`).
 3. **Inviter le bot** avec les permissions : *Voir les salons*, *Lire l'historique des
    messages*, *Envoyer des messages*, *Joindre des fichiers* (+ *Gérer les fils* si les
    réponses doivent partir dans un fil).
-4. Dans Yuki : `/config → Discussions → Discord` → coller le jeton →
+4. Dans Yuki : `/config → Conversation → « Discussions — Discord »` → coller le jeton →
    **Enregistrer le jeton** → **Se connecter**.
 
 ## 2. Ce qui est livré
@@ -140,7 +140,7 @@ curl -s -H "Authorization: Bot $JETON" https://discord.com/api/v10/applications/
 # 2. Un salon lisible par le bot (remplacer SALON)
 curl -s -H "Authorization: Bot $JETON" "https://discord.com/api/v10/channels/SALON/messages?limit=5"
 ```
-Puis, dans Yuki : `/config → Discussions → Discord` → jeton → **Se connecter** → vérifier
+Puis, dans Yuki : `/config → Conversation → « Discussions — Discord »` → jeton → **Se connecter** → vérifier
 que le badge passe à ● et que les salons apparaissent. Enfin : écrire `@Yuki bonjour` dans
 un salon (mode `mention` par défaut) et vérifier que la réponse arrive **dans le fil**.
 
