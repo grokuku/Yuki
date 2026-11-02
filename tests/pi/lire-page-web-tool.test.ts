@@ -291,7 +291,7 @@ describe("libraire — outil lire_page_web", () => {
     expect(seen[0]?.options?.limit).toBe(100_000);
   });
 
-  it(" borne d'affichage atteinte : la reprise ne SAUTE aucun caractère", async () => {
+  it("borne d'affichage atteinte : la reprise ne SAUTE aucun caractère", async () => {
     // ⚠️ Le texte est ÉCHAPPÉ avant d'être montré (`&` → `&amp;`), donc la borne
     // d'affichage coupe AVANT la fin de la tranche demandée. Si `next_offset`
     // valait la fin de la tranche BRUTE, le modèle sauterait silencieusement tout

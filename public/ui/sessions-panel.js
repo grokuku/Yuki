@@ -361,6 +361,10 @@ export function initSessionsPanel(deps) {
   // fait qu'afficher et demander.
   const modeSlot = el("div", { class: "sidebar__mode" });
   let chatStatus = null;
+  // ⚠️ La liste des conversations a-t-elle été REÇUE du serveur (trame `sessions`) ?
+  // Tant que non, `sessions` est vide parce qu'on ne sait pas encore — pas parce
+  // qu'il n'y a rien. L'encart ne doit donc RIEN affirmer avant ce moment-là.
+  let listeConnue = false;
   const selector = initChatModeSelector({ root: modeSlot, onChange: onChatModeChange });
 
   // Bandeau/état vide du mode distant + raison VISIBLE du refus de création.
@@ -1101,7 +1105,8 @@ export function initSessionsPanel(deps) {
    * - sélecteur segmenté + badge ●/◐/○ (raison exacte en `title`) ;
    * - `+ Nouvelle conversation` DÉSACTIVÉE avec la raison du serveur quand la
    *   création est refusée (mode distant) — le serveur refuse de son côté ;
-   * - état vide / bandeau explicite du mode (`chat-mode.js`).
+   * - encart de la barre, recalculé par `applyNotice` (état vide / chargement /
+   *   échec de synchronisation / refus de création).
    *
    * @param {unknown} status corps de `GET /api/chat/status`.
    */
@@ -1117,21 +1122,49 @@ export function initSessionsPanel(deps) {
       newBtn.removeAttribute("aria-disabled");
       newBtn.title = "Nouvelle conversation";
     }
-    const mode = modeNotice(chatStatus);
-    const titre = mode ? mode.titre : refusal !== null ? "Création désactivée" : "";
+    applyNotice();
+  }
+
+  /**
+   * Applique l'encart UNIQUE de la barre — état vide, chargement, échec de
+   * synchronisation, ou raison du refus de création.
+   *
+   * ⚠️ DÉFAUT DE PRODUCTION corrigé ici (2026-11-02) : l'encart ne dépendait que
+   * de `GET /api/chat/status`. En mode Mattermost, « Aucun canal synchronisé »
+   * restait donc affiché AU-DESSUS des canaux bel et bien listés (l'encart était
+   * rendu avant l'arrivée de la liste, puis jamais recalculé) — deux vérités
+   * contradictoires à l'écran, l'utilisateur croyant à une panne de synchro.
+   *
+   * ⚠️ La décision est UNIQUE (`modeNotice`, `chat-mode.js`) et rejouée à CHAQUE
+   * changement de l'une des deux sources : l'état du mode (`setChatMode`) ET la
+   * liste affichée (`update`). L'ordre d'arrivée n'a donc plus d'importance, et
+   * une liste non vide ne peut JAMAIS être contredite par un état vide.
+   */
+  function applyNotice() {
+    const avis = modeNotice(chatStatus, { nombre: sessions.length, connue: listeConnue });
+    const refusal = creationRefusal(chatStatus);
+    const titre = avis ? avis.titre : refusal !== null ? "Création désactivée" : "";
     noticeTitle.textContent = titre;
-    noticeDetail.textContent = mode ? mode.detail : refusal ?? "";
+    noticeDetail.textContent = avis ? avis.detail : refusal ?? "";
     notice.hidden = titre === "";
+    if (avis) notice.setAttribute("data-kind", avis.kind);
+    else if (refusal !== null) notice.setAttribute("data-kind", "refus");
+    else notice.removeAttribute("data-kind");
   }
 
   return {
     update(nextSessions, nextActiveId, nextBusyIds, nextUnread) {
       sessions = Array.isArray(nextSessions) ? nextSessions : [];
+      // La liste vient d'être REÇUE : à partir d'ici, son contenu (même vide) est
+      // une information du serveur, plus un « pas encore chargé ».
+      listeConnue = true;
       activeId = typeof nextActiveId === "string" ? nextActiveId : null;
       if (Array.isArray(nextBusyIds)) busyIds = new Set(nextBusyIds);
       if (nextUnread && typeof nextUnread === "object") unreadCounts = { ...nextUnread };
       closeMenu();
       render();
+      // ⚠️ RECALCUL après le rendu : l'encart suit la liste, il ne la précède plus.
+      applyNotice();
     },
     /**
      * E2 — met à jour l'ensemble des conversations « en cours » SANS refaire le

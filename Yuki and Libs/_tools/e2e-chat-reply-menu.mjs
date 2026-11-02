@@ -14,6 +14,9 @@
  *  - le clavier n'est pas régressé : `Maj+F10` ouvre le menu, `Échap` le ferme, et
  *    `Entrée` sur une entrée l'applique ;
  *  - rendu DOM PUR (aucun `style` en ligne, aucun HTML interprété) ;
+ *  - ⚠️ ENCART DE LA BARRE LATÉRALE : « Aucun canal synchronisé » n'est JAMAIS
+ *    affiché quand des canaux sont listés, et quand la liste est VIDE l'encart
+ *    dit l'ÉCHEC de synchronisation (raison + chemin exact) ;
  *  - ZÉRO violation CSP, ZÉRO exception JS, ZÉRO erreur de connexion.
  *
  * Usage : node "/projects/Yuki/Yuki and Libs/_tools/e2e-chat-reply-menu.mjs"
@@ -43,11 +46,19 @@ const STATE_DIR = mkdtempSync(join(tmpdir(), "yuki-e2e-reply-menu-"));
 const SHOTS = join(STATE_DIR, "shots");
 mkdirSync(SHOTS, { recursive: true });
 
-async function startServer() {
+/**
+ * Démarre le gateway de test.
+ *
+ * @param {string} stateDir dossier d'état PROPRE (le miroir y est persisté : deux
+ *   serveurs successifs ne doivent pas se partager le même, sinon le second
+ *   relirait les canaux du premier).
+ * @param {Record<string, string>} [extraEnv] variables en plus (`YUKI_E2E_CHAT_VIDE`).
+ */
+async function startServer(stateDir = STATE_DIR, extraEnv = {}) {
   const logs = [];
   const proc = spawn(TSX, [join(TOOLS, "e2e-chat-reply-menu-serve.ts")], {
     cwd: YUKI_DIR,
-    env: { ...process.env, YUKI_E2E_CHAT_DIR: STATE_DIR },
+    env: { ...process.env, YUKI_E2E_CHAT_DIR: stateDir, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   proc.stdout.on("data", (d) => logs.push(d.toString()));
@@ -255,6 +266,23 @@ async function cliquer(label) {
   })()`);
 }
 
+/**
+ * L'ENCART de la barre latérale, tel qu'il est RÉELLEMENT rendu : présent,
+ * masqué, nature (`data-kind`) et texte lu par l'utilisateur.
+ */
+const etatEncart = () =>
+  evaluate(`(() => {
+    const n = document.querySelector('#sessions-sidebar .sidebar__notice');
+    if (!n) return { present: false };
+    return {
+      present: true,
+      hidden: n.hidden,
+      visible: getComputedStyle(n).display !== 'none',
+      kind: n.getAttribute('data-kind'),
+      texte: n.textContent.replace(/\\s+/g, ' ').trim(),
+    };
+  })()`);
+
 /** Réglages vus par le SERVEUR (jamais l'état du DOM). */
 async function reglagesServeur() {
   const response = await fetch(`${server.base}/api/chat/status`, {
@@ -270,6 +298,25 @@ await navigate(`${server.base}/`);
 check(
   "mode DISTANT : le canal miroir est affiché dans la barre latérale",
   await waitFor(`document.querySelectorAll('.conv').length === 1`),
+);
+
+/* ═════════ 1bis) L'ENCART NE CONTREDIT PAS LA LISTE (défaut du 2026-11-02) ══
+ * Production : « Aucun canal synchronisé. Renseignez l'URL du serveur… » s'affichait
+ * AU-DESSUS des canaux bel et bien listés — l'encart était décidé avant l'arrivée
+ * de la liste, et jamais recalculé. */
+// ⚠️ On attend que l'ÉTAT du mode soit appliqué (badge `data-etat`) : avant, la
+// réponse honnête est « chargement », pas une conclusion sur la liste.
+await waitFor(`document.querySelector('.chat-mode__badge')?.getAttribute('data-etat') !== null`, 10_000);
+await sleep(200);
+const encartAvecCanaux = await etatEncart();
+check(
+  "encart de la barre : AUCUN « Aucun canal synchronisé » quand des canaux sont listés",
+  encartAvecCanaux.present === true &&
+    !encartAvecCanaux.texte.includes("Aucun canal") &&
+    !encartAvecCanaux.texte.includes("Aucun salon") &&
+    encartAvecCanaux.kind !== "vide" &&
+    encartAvecCanaux.kind !== "chargement",
+  JSON.stringify(encartAvecCanaux),
 );
 
 /* ═════════════ 2) Clic droit : les TROIS groupes ═════════════════════════ */
@@ -412,6 +459,47 @@ check(
 
 await stopPage();
 server.proc.kill("SIGTERM");
+await sleep(300);
+
+/* ═══ 8) LISTE VIDE : l'encart dit POURQUOI (échec), jamais « aucun canal » ═══
+ * Même page, miroir SANS canal : la liste est sincèrement vide. L'encart doit
+ * alors parler — et dire l'ÉCHEC de synchronisation avec la raison du serveur et
+ * le chemin EXACT du réglage, jamais « Aucun canal synchronisé » (qui est un
+ * autre diagnostic : synchro faite, rien à importer). */
+const serverVide = await startServer(
+  mkdtempSync(join(tmpdir(), "yuki-e2e-reply-menu-vide-")),
+  { YUKI_E2E_CHAT_VIDE: "1" },
+);
+await navigate(`${serverVide.base}/`);
+await waitFor(`document.querySelectorAll('.conv').length === 0`);
+// Même attente : l'encart n'est définitif qu'une fois la liste ET l'état reçus.
+await waitFor(`(() => {
+  const n = document.querySelector('#sessions-sidebar .sidebar__notice');
+  return n ? n.getAttribute('data-kind') === 'echec' : false;
+})()`, 10_000);
+// Barre DÉPLIÉE : l'encart est masqué dans le rail (CSS), on veut le voir rendu.
+await evaluate(`(() => {
+  const bouton = document.querySelector('.sidebar__toggle');
+  if (bouton) bouton.click();
+  return true;
+})()`);
+await sleep(300);
+const encartListeVide = await etatEncart();
+check(
+  "liste VIDE ⇒ encart d'ÉCHEC distinct (raison du serveur + chemin exact)",
+  encartListeVide.present === true &&
+    encartListeVide.hidden === false &&
+    encartListeVide.visible === true &&
+    encartListeVide.kind === "echec" &&
+    encartListeVide.texte.includes("Synchronisation des canaux impossible.") &&
+    encartListeVide.texte.includes("/config → Conversation → « Discussions — Mattermost »") &&
+    !encartListeVide.texte.includes("Aucun canal"),
+  JSON.stringify(encartListeVide),
+);
+await shot("encart-liste-vide-echec");
+
+await stopPage();
+serverVide.proc.kill("SIGTERM");
 await sleep(300);
 
 const { cspViolations, connectionErrors } = collectViolations(consoleMessages, logEntries);

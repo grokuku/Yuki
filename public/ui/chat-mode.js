@@ -13,6 +13,25 @@
  * style en ligne : la CSP `style-src 'self'` reste inchangée.
  */
 
+/**
+ * CHEMIN EXACT du réglage de chaque plateforme, dans `/config`.
+ *
+ * ⚠️ Les MOTS sont ceux de la page elle-même : l'onglet s'appelle
+ * « Conversation » et la SECTION « Discussions — Mattermost » / « Discussions —
+ * Discord » (`public/ui/chat-panel.js`, titres des panneaux). C'est vérifiable par
+ * ancre : `/config#chat-remote-agents` ouvre cet onglet puis défile jusqu'au
+ * réglage (`ANCRES_PROFONDES`, `public/ui/config.js:1348`).
+ *
+ * ⚠️ Un chemin approximatif (« … → « Discussions » ») envoie l'utilisateur
+ * chercher une section qui n'existe pas : c'est le défaut corrigé le 2026-11-02.
+ * Les textes ci-dessous n'écrivent donc JAMAIS « Discussions » sans la
+ * plateforme — un test verrouille l'égalité.
+ */
+export const CHEMIN_MATTERMOST = "/config → Conversation → « Discussions — Mattermost »";
+
+/** Chemin exact de la section Discord (`/config`, onglet « Conversation »). */
+export const CHEMIN_DISCORD = "/config → Conversation → « Discussions — Discord »";
+
 /** Les trois modes proposés, dans l'ordre d'affichage. */
 export const CHAT_MODE_OPTIONS = [
   {
@@ -23,16 +42,13 @@ export const CHAT_MODE_OPTIONS = [
   {
     mode: "mattermost",
     label: "Mattermost",
-    title:
-      "Canaux Mattermost du bot : configuration, jeton et état dans " +
-      "/config → Conversation → « Discussions — Mattermost ».",
+    title: `Canaux Mattermost du bot : configuration, jeton et état dans ${CHEMIN_MATTERMOST}.`,
   },
   {
     mode: "discord",
     label: "Discord",
     title:
-      "Salons Discord du bot : configuration, jeton et état dans " +
-      "/config → Conversation → « Discussions — Discord ». " +
+      `Salons Discord du bot : configuration, jeton et état dans ${CHEMIN_DISCORD}. ` +
       "L'intent MESSAGE_CONTENT doit être activé dans le portail développeur.",
   },
 ];
@@ -224,37 +240,119 @@ export function creationRefusal(status) {
     : "La création d'une conversation est désactivée dans ce mode.";
 }
 
+/** Mot du serveur pour « ce que la plateforme liste », au PLURIEL (canaux / salons). */
+const MOTS_LISTE = { mattermost: "canaux", discord: "salons" };
+
+/** Chemin du réglage pour un mode distant (jamais vide). */
+function cheminDeReglage(mode) {
+  return mode === "discord" ? CHEMIN_DISCORD : CHEMIN_MATTERMOST;
+}
+
+/** Encart « on n'affirme encore RIEN » (état ou liste pas encore reçus). */
+function noticeChargement(mode) {
+  return {
+    kind: "chargement",
+    titre: `Chargement des ${MOTS_LISTE[mode]}…`,
+    detail: "Lecture de l'état de la synchronisation…",
+  };
+}
+
 /**
- * Contenu d'état vide / bandeau pour le mode courant.
+ * Encart d'ÉCHEC de synchronisation (jeton refusé, URL injoignable, plateforme
+ * non configurée). ⚠️ Ce n'est PAS « aucun canal » : la raison du serveur est
+ * recopiée, et le chemin du réglage est ajouté s'il n'y figure pas déjà.
  *
- * @returns `null` en mode local (comportement inchangé), sinon
- *   `{ kind: "vide" | "bandeau", titre, detail }`.
+ * @param {"impossible" | "interrompue"} forme « rien n'a pu démarrer » (adapter
+ *   absent ou non configuré) vs « la connexion s'est arrêtée » (raison d'erreur).
  */
-export function modeNotice(status) {
-  const mode = status?.mode;
-  if (mode === "mattermost") {
-    return {
-      kind: "vide",
-      titre: "Aucun canal synchronisé.",
-      detail:
-        "Renseignez l'URL du serveur et le jeton du bot dans " +
-        "/config → Conversation → « Discussions — Mattermost », puis " +
-        "cliquez sur « Se connecter » : les canaux et deux semaines d'historique seront " +
-        "alors importés.",
-    };
-  }
+function noticeEchec(mode, raison, forme) {
+  const chemin = cheminDeReglage(mode);
+  const motif =
+    raison !== ""
+      ? raison.includes("« Discussions") // la raison du serveur cite déjà la section
+        ? raison
+        : `${raison} Réglage : ${chemin}.`
+      : `Le serveur n'a pas donné de raison. Réglage : ${chemin}.`;
+  return {
+    kind: "echec",
+    titre: `Synchronisation des ${MOTS_LISTE[mode]} ${forme}.`,
+    detail: motif,
+  };
+}
+
+/** Encart d'état VIDE : la synchro est faite, il n'y a sincèrement rien à lister. */
+function noticeVide(mode) {
   if (mode === "discord") {
     return {
       kind: "vide",
       titre: "Aucun salon synchronisé.",
       detail:
-        "Enregistrez le jeton du bot Discord dans " +
-        "/config → Conversation → « Discussions — Discord » (et activez " +
+        `Enregistrez le jeton du bot Discord dans ${CHEMIN_DISCORD} (et activez ` +
         "l'intent MESSAGE_CONTENT dans le portail développeur), puis cliquez sur " +
         "« Se connecter » : les salons texte du serveur seront importés.",
     };
   }
-  return null;
+  return {
+    kind: "vide",
+    titre: "Aucun canal synchronisé.",
+    detail:
+      `Renseignez l'URL du serveur et le jeton du bot dans ${CHEMIN_MATTERMOST}, puis ` +
+      "cliquez sur « Se connecter » : les canaux et deux semaines d'historique seront " +
+      "alors importés.",
+  };
+}
+
+/**
+ * Encart de la barre latérale — DÉCISION UNIQUE, à partir de l'état du mode ET
+ * de ce que la liste montre VRAIMENT.
+ *
+ * ⚠️ DÉFAUT DE PRODUCTION corrigé ici (2026-11-02) : la décision ne regardait que
+ * `status.mode`. En mode Mattermost, l'encart « Aucun canal synchronisé »
+ * s'affichait donc AUSSI quand 5 canaux étaient listés — deux informations
+ * contradictoires, l'utilisateur croyait à une panne de synchronisation.
+ *
+ * Règles, dans cet ordre (UNE SEULE vérité affichée à la fois) :
+ *  ① mode local ou inconnu ⇒ aucun encart ;
+ *  ② liste NON VIDE ⇒ aucun encart (la liste dit la vérité, l'état vide la
+ *    contredirait) — même si la synchronisation signale une erreur, la raison
+ *    reste lisible sur le badge (`badgeFor`) ;
+ *  ③ état du mode ou liste pas encore REÇUS ⇒ « chargement » discret (jamais
+ *    « aucun canal », jamais une liste vide présentée comme définitive) ;
+ *  ④ synchronisation inaboutie (`plateforme.etat` ≠ `on` AVEC raison serveur, ou
+ *    `off`) ⇒ encart d'ÉCHEC avec la raison — ce n'est pas « aucun canal » ;
+ *  ⑤ connexion EN COURS sans raison d'échec (`connexion`) ⇒ « chargement » :
+ *    l'import peut encore remplir la liste, on n'affirme pas qu'elle est vide ;
+ *  ⑥ synchro faite (`on`) et aucun élément ⇒ encart d'état vide, avec le chemin
+ *    EXACT du réglage.
+ *
+ * @param {unknown} status corps de `GET /api/chat/status` (`null` = pas encore reçu).
+ * @param {{nombre?: number, connue?: boolean}} [etatListe] ce que la barre sait de
+ *   SA liste : nombre d'éléments rendus, et fait de l'avoir REÇUE du serveur.
+ * @returns `null` (rien à dire), ou `{ kind: "chargement" | "echec" | "vide",
+ *   titre, detail }`.
+ */
+export function modeNotice(status, etatListe) {
+  const mode = status?.mode;
+  if (mode !== "mattermost" && mode !== "discord") return null;
+
+  const nombre = Number(etatListe?.nombre ?? 0);
+  const listeConnue = etatListe?.connue === true;
+  const plateforme = status?.plateforme ?? {};
+  const raison = typeof plateforme.raison === "string" ? plateforme.raison.trim() : "";
+
+  // ② La LISTE est la première vérité : tant qu'elle a du contenu, aucun encart
+  //    d'état vide ni de chargement ne vient la contredire.
+  if (Number.isFinite(nombre) && nombre > 0) return null;
+  // ③ Rien n'est encore affirmable : ni l'état du mode, ni la liste.
+  if (!listeConnue) return noticeChargement(mode);
+  // ④ La synchro n'a pas abouti : la raison du SERVEUR, jamais « aucun canal ».
+  if (plateforme.etat === "off") return noticeEchec(mode, raison, "impossible");
+  if (plateforme.etat !== "on" && raison !== "") return noticeEchec(mode, raison, "interrompue");
+  // ⑤ Connexion EN COURS (`connexion` sans raison) : l'import peut encore remplir la
+  //    liste, donc on ne prétend pas qu'elle est vide.
+  if (plateforme.etat !== "on") return noticeChargement(mode);
+  // ⑥ Synchro faite et rien à lister.
+  return noticeVide(mode);
 }
 
 /** En-têtes d'écriture de configuration (mêmes que la page `/config`). */

@@ -59,20 +59,25 @@ const chatMirror = ChatMirrorStore.open({
 const CHANNEL = "canal-e2e";
 const CONVERSATION = `mm-${CHANNEL}`;
 chatMirror.setBaseUrl("https://mattermost.exemple.fr");
-chatMirror.ensureConversation({
-  conversationId: CONVERSATION,
-  platform: "mattermost",
-  remoteId: CHANNEL,
-  title: "Général",
-});
-chatMirror.upsert({
-  remoteId: "p1",
-  conversationId: CONVERSATION,
-  author: { id: "humain-1", nom: "Camille", estBot: false },
-  role: "user",
-  text: "Bonjour Yuki, peux-tu regarder la capture ?",
-  sentAt: "2026-11-01T10:00:00.000Z",
-});
+// ⚠️ `YUKI_E2E_CHAT_VIDE=1` : miroir SANS aucun canal. Sert à prouver le SECOND
+// sens de l'encart de la barre latérale (liste VIDE ⇒ l'encart d'échec parle, et
+// dit POURQUOI) sans le confondre avec « aucun canal synchronisé ».
+if (process.env.YUKI_E2E_CHAT_VIDE !== "1") {
+  chatMirror.ensureConversation({
+    conversationId: CONVERSATION,
+    platform: "mattermost",
+    remoteId: CHANNEL,
+    title: "Général",
+  });
+  chatMirror.upsert({
+    remoteId: "p1",
+    conversationId: CONVERSATION,
+    author: { id: "humain-1", nom: "Camille", estBot: false },
+    role: "user",
+    text: "Bonjour Yuki, peux-tu regarder la capture ?",
+    sentAt: "2026-11-01T10:00:00.000Z",
+  });
+}
 
 /** Service de discussion : il lit le miroir, ne décide de rien. */
 const chatService = new ChatService({
