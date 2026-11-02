@@ -1,5 +1,12 @@
 /**
- * COPIE d'une IMAGE GÉNÉRÉE dans le STORE DES FICHIERS de la conversation.
+ * COPIE d'une IMAGE PRODUITE PAR YUKI dans le STORE DES FICHIERS de la conversation.
+ *
+ * Deux producteurs, UN SEUL module (donc une seule règle de nom, de plafond et de
+ * rétention) :
+ *  - `generer_image` (store des IMAGES GÉNÉRÉES, `/images/<id>.<ext>`,
+ *    `src/comfy/images.ts`) ;
+ *  - `capture_libraire` (store des CAPTURES de pages web, `/captures/<id>.<ext>`,
+ *    `src/librarian/shots.ts`).
  *
  * ⚠️ POURQUOI CE MODULE EXISTE : `generer_image` écrit l'image dans le store des
  * images générées (`/images/<id>.<ext>`, `src/comfy/images.ts`) — un store que
@@ -8,7 +15,10 @@
  * `src/files/store.ts:ID_RE`). Sans cette copie, une image générée n'était donc
  * **ni listable, ni lisible, ni transférable** : le parcours
  * `generer_image` → `deposer_fichier` restait cassé (décision utilisateur :
- * « j'en ai absolument besoin »).
+ * « j'en ai absolument besoin »). ⚠️ MÊME CAUSE pour une capture : sans copie,
+ * elle existait sans être un fichier, donc l'adaptateur d'un canal n'avait AUCUN
+ * identifiant à publier (défaut de production du 2026-11-02 : « les captures ne
+ * sont pas postées, alors qu'elle dit que c'est fait »).
  *
  * DÉCISION : on COPIE à la génération (et non un adaptateur de lecture). Une
  * image copiée survit à la purge de ComfyUI **et** à l'expiration de la copie
@@ -39,16 +49,26 @@ const EXTENSIONS: ReadonlyMap<string, string> = new Map([
   ["image/webp", "webp"],
 ]);
 
-/** Entrée d'une copie (appelée juste après une génération réussie). */
+/** Entrée d'une copie (appelée juste après une production réussie). */
 export interface GeneratedImageFileInput {
-  /** Identifiant de l'image dans le store des IMAGES GÉNÉRÉES. */
+  /**
+   * Identifiant de l'image dans SON store de production : image générée
+   * (`comfy.images`) ou capture de page web (`librarian.shots`).
+   */
   imageId: string;
-  /** Octets de l'image (l'original conservé par le store des images). */
+  /** Octets de l'image (l'original conservé par son store de production). */
   data: Uint8Array;
   /** Type MIME réel de l'image. */
   mimeType: string;
   /** Conversation demandeuse : la copie y est rattachée (donc listable). */
   sessionId?: string;
+  /**
+   * Base du nom d'affichage, SANS extension (ex. `capture-example.com-3fa2b1c9`).
+   * ⚠️ L'extension vient TOUJOURS du type MIME réel, jamais de l'appelant : un
+   * nom qui annoncerait `.jpg` pour des octets PNG ferait servir la copie sous le
+   * mauvais type. Défaut : `image-generee-<8 premiers hex>`.
+   */
+  name?: string;
 }
 
 /**
@@ -82,8 +102,15 @@ export interface GeneratedImageLinkPort {
 export interface GeneratedImageFilesOptions {
   /** Store des fichiers (dépôt en mémoire, résolution, vue client). */
   files: Pick<FilesPort, "saveBytes" | "get" | "toWire">;
-  /** Store des images générées (lien image → fichier, pour la déduplication). */
-  images: GeneratedImageLinkPort;
+  /**
+   * Store des IMAGES GÉNÉRÉES (lien image → fichier, pour la déduplication).
+   *
+   * ⚠️ ABSENT pour une CAPTURE : chaque capture a un identifiant NEUF (aucune
+   * fiche à relier, donc aucune déduplication possible) et une copie par capture
+   * est exactement ce qu'on veut. Le mécanisme reste le même, seule la source du
+   * lien disparaît — on ne réécrit pas une seconde copie de ce module.
+   */
+  images?: GeneratedImageLinkPort;
   logger?: FilesLogger;
 }
 
@@ -126,6 +153,8 @@ export function createGeneratedImageFiles(
 
   /** Copie déjà faite et ENCORE VALABLE (l'expirée ne compte pas). */
   function existingCopy(imageId: string): StoredFileRecord | null {
+    // Capture : aucun lien à consulter ⇒ pas de déduplication (copie assumée).
+    if (!images) return null;
     let fileId: string | undefined;
     try {
       fileId = images.get(imageId)?.fileId;
@@ -167,8 +196,12 @@ export function createGeneratedImageFiles(
 
       // ⚠️ Nom d'affichage DÉRIVÉ de l'identifiant de l'image (jamais le
       // `filename` renvoyé par ComfyUI, qui est une donnée externe) : l'extension
-      // vient du type MIME, assainie par le stockage.
-      const name = `image-generee-${input.imageId.slice(0, 8)}.${ext}`;
+      // vient du type MIME, assainie par le stockage. Pour une CAPTURE, la base
+      // est fournie par l'appelant (hôte de la page), l'extension reste la nôtre.
+      const base = input.name !== undefined && input.name.trim() !== ""
+        ? input.name.trim()
+        : `image-generee-${input.imageId.slice(0, 8)}`;
+      const name = `${base}.${ext}`;
       let result;
       try {
         result = files.saveBytes(input.data, {
@@ -204,7 +237,7 @@ export function createGeneratedImageFiles(
       // ⚠️ Le lien image → fichier sert la DÉDUPLICATION. Un échec d'écriture de ce
       // lien n'invalide PAS la copie (elle existe) : on le signale seulement.
       try {
-        images.attachFile(input.imageId, result.record.id);
+        images?.attachFile(input.imageId, result.record.id);
       } catch (error) {
         logger?.warn("files.generated.link_write_failed", {
           image_id: input.imageId,

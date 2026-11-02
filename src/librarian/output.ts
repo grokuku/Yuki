@@ -249,6 +249,16 @@ export interface LibrarianScreenshotFrame {
   imageAttached: boolean;
   /** Raison honnête si l'image n'a PAS été jointe (trop volumineuse, illisible). */
   imageOmittedReason?: string;
+  /** `true` si la capture a été CONSERVÉE et donc affichée à l'humain (interface). */
+  imageStored?: boolean;
+  /** Nom du FICHIER de la conversation qui porte la copie (si la copie a réussi). */
+  fileName?: string;
+  /** Identifiant (32 hex) de ce fichier : c'est ce qu'exigent `deposer_fichier`/`publier_dans_canal`. */
+  fileId?: string;
+  /** `true` ⇒ copie faite par CET appel ; `false` ⇒ copie déjà présente. */
+  fileCopied?: boolean;
+  /** Motif français quand la copie dans les fichiers a ÉCHOUÉ (jamais un silence). */
+  fileError?: string;
 }
 
 /**
@@ -272,6 +282,12 @@ export function frameLibrarianScreenshot(input: LibrarianScreenshotFrame): strin
     lines.push(
       "",
       "L'image capturée est JOINTE à ce résultat : appuie-toi sur ce que tu y vois.",
+      // ⚠️ HONNÊTETÉ (défaut de production du 2026-11-02) : le modèle VOIT la capture,
+      // donc il affirmait « elle s'affiche ici » alors qu'aucune image n'était postée.
+      // Ce qu'il voit et ce que l'utilisateur voit sont DEUX choses distinctes.
+      "⚠️ Tu la vois, TOI ; tu ne peux pas savoir si elle est AFFICHÉE chez la " +
+        "personne qui parle : ne l'affirme JAMAIS (« elle s'affiche ici », « regarde »). " +
+        "Dis seulement ce que tu as fait.",
     );
   } else {
     lines.push(
@@ -279,7 +295,32 @@ export function frameLibrarianScreenshot(input: LibrarianScreenshotFrame): strin
       `⚠️ L'image n'est PAS jointe à ce résultat (${
         input.imageOmittedReason ?? "indisponible"
       }) : ne prétends pas l'avoir vue.`,
-      "Elle reste affichée à l'humain dans la conversation.",
+    );
+    if (input.imageStored === true) {
+      lines.push("La capture est en revanche conservée : elle est affichée dans l'interface de Yuki.");
+    }
+  }
+  // ⚠️ Ce que la copie dans le store des FICHIERS a donné est DIT dans les DEUX cas :
+  // copiée (l'identifiant est donné : c'est lui qui rend la capture publiable), ou
+  // REFUSÉE (la capture reste rendue au modèle, mais elle n'est pas un fichier —
+  // jamais un silence qui laisserait croire qu'elle est partie).
+  if (input.fileId !== undefined) {
+    lines.push(
+      "",
+      input.fileCopied === false
+        ? "Cette capture est DÉJÀ enregistrée comme fichier de la conversation " +
+          `(« ${escapeOutputText(input.fileName ?? input.fileId)} », identifiant ${input.fileId}) : ` +
+          "aucune copie supplémentaire n'a été faite."
+        : "Cette capture est AUSSI enregistrée comme fichier de la conversation " +
+          `(« ${escapeOutputText(input.fileName ?? input.fileId)} », identifiant ${input.fileId}) : ` +
+          "`lister_fichiers` la montre et `lire_fichier` la lit.",
+    );
+  } else if (input.fileError !== undefined) {
+    lines.push(
+      "",
+      "⚠️ Elle n'a PAS pu être enregistrée comme fichier de la conversation " +
+        `(${escapeOutputText(input.fileError)}) : elle reste jointe à ce résultat, mais ` +
+        "`lister_fichiers` ne la montrera pas et `publier_dans_canal` ne la transférera pas.",
     );
   }
   return frame([`capture="${escapeOutputAttribute(input.host)}"`], lines.join("\n"));

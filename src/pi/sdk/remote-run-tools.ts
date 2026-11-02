@@ -121,9 +121,10 @@ export interface RemoteRunToolPorts {
    */
   channels?: ChannelPostPort;
   /**
-   * Fichier produit par le run (image générée COPIÉE dans le store des fichiers).
-   * ⚠️ C'est ce que l'adaptateur joint au message publié (`file_ids`) : sans ce
-   * rappel, l'image existerait sans jamais arriver dans le canal.
+   * Fichier produit par le run et COPIÉ dans le store des fichiers : image générée
+   * (`generer_image`) ou capture de page web (`capture_libraire`).
+   * ⚠️ C'est ce que l'adaptateur joint au message publié (`file_ids` / multipart) :
+   * sans ce rappel, le fichier existerait sans jamais arriver dans le canal.
    */
   onFileProduced?: (fileId: string) => void;
   /** Annuaire des agents appairés. Absent ⇒ ni `lister_agents` ni `etat_agent`. */
@@ -283,9 +284,28 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
   }
 
   if (ports.librarian) {
+    const librarian = ports.librarian;
+    // ⚠️ MÊME ENVELOPPE QUE `generer_image` : la copie de la capture dans le store
+    // des FICHIERS est RETENUE par le run, qui joint l'identifiant au message publié
+    // (`file_ids` Mattermost / multipart Discord). Sans ce rappel, la capture
+    // existait comme fichier de la conversation mais n'arrivait JAMAIS dans le canal
+    // (défaut de production du 2026-11-02 : « les captures ne sont pas postées, alors
+    // qu'elle dit que c'est fait »).
+    const shotFiles = librarian.files;
     tools.push(
       ...createLibrarianTools({
-        ...ports.librarian,
+        ...librarian,
+        ...(shotFiles
+          ? {
+              files: {
+                archive: (input) => {
+                  const outcome = shotFiles.archive(input);
+                  if (outcome.ok) ports.onFileProduced?.(outcome.file.id);
+                  return outcome;
+                },
+              },
+            }
+          : {}),
         // ⚠️ La CAPTURE d'une page est enregistrée dans le fil du CANAL (sinon
         // elle serait rattachée à la session éphémère, donc irrestaurable).
         sessionId: conversation,

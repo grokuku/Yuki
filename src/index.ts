@@ -2149,6 +2149,11 @@ async function main(): Promise<void> {
           archive: librarianArchive,
           screenshot: librarianClient,
           shots: librarianShots,
+          // ⚠️ COPIE de la capture dans le store des FICHIERS de la conversation (même
+          // archiveur que `generer_image`) : c'est elle qui donne à la capture un
+          // identifiant PUBLIABLE, donc l'image dans le canal. `buildRemoteRunTools`
+          // l'enveloppe pour que l'identifiant remonte au message publié.
+          files: generatedImageFiles,
           onShot: (view: LibrarianShotView) => emitLibrarianShot(view),
           captureEnabled: () => config.getString("librarian.screenshot") === "on",
           // ⚠️ Capacité VISION relue à chaque capture (le modèle peut changer à chaud).
@@ -2237,6 +2242,11 @@ async function main(): Promise<void> {
               archive: librarianArchive,
               screenshot: librarianClient,
               shots: librarianShots,
+              // ⚠️ MÊME copie que pour un run distant : une capture devient un FICHIER
+              // de la conversation (donc listable, lisible et transférable), comme
+              // une image générée. En local, aucun canal n'est publié : c'est
+              // l'interface qui l'affiche (trame de contrôle `captured`).
+              files: generatedImageFiles,
               onShot: (view: LibrarianShotView) => emitLibrarianShot(view),
               captureEnabled: () => config.getString("librarian.screenshot") === "on",
             },

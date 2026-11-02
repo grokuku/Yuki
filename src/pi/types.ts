@@ -179,6 +179,12 @@ export interface PiHostOptions {
     archive: LibrarianArchivePort;
     screenshot?: LibrarianScreenshotPort;
     shots?: LibrarianShotsPort;
+    /**
+     * COPIE de la capture dans le store des FICHIERS (comme une image générée,
+     * `src/files/generated.ts`) : sans elle, une capture n'a aucun identifiant du
+     * store des fichiers, donc rien à publier dans un canal.
+     */
+    files?: GeneratedImageFilesPort;
     onShot?: (view: LibrarianShotView) => void;
     captureEnabled?: () => boolean;
   };

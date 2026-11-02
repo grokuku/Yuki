@@ -59,7 +59,10 @@ export interface RemoteRunToolsOptions {
   files?: FilesReadPort;
   /** Vision du modèle du run distant. */
   vision?: RemoteRunVision;
-  /** Fichier produit par le run (image copiée dans le store), à joindre au message. */
+  /**
+   * Fichier produit par le run (image générée ou capture) COPIÉ dans le store des
+   * fichiers de la conversation : l'adaptateur le joint au message publié.
+   */
   onFileProduced?: (fileId: string) => void;
   /**
    * Ports des outils d'AGENTS — utilisés SEULEMENT sous `remoteAgents = actives`.
