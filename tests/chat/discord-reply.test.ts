@@ -151,16 +151,28 @@ describe("les trois modes", () => {
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(fixture.posts).toHaveLength(0);
 
-    // ② Citation du pseudo du bot : réponse, avec la citation de l'auteur.
+    // ② Citation du pseudo du bot : réponse, avec la MENTION de l'auteur (pas de citation
+    // de son texte : la plateforme affiche déjà le message d'origine).
     fixture.dispatch(
       "MESSAGE_CREATE",
       messageFixture({ id: "111111111111111113", content: "@yuki tu peux m'aider ?" }),
       3,
     );
     await waitFor(() => fixture.posts.length === 1, "la réponse au message cité");
-    const contenu = String(payloadOf(fixture.posts[0]?.body ?? "").content);
-    expect(contenu).toContain("> **@humain** a écrit :");
-    expect(contenu).toContain("Réponse à « @yuki tu peux m'aider ? »");
+    const corps = payloadOf(fixture.posts[0]?.body ?? "");
+    const contenu = String(corps.content);
+    // ⚠️ Mention NATIVE Discord : `<@identifiant>`, forme moderne (`<@!…>` est dépréciée).
+    expect(contenu).toBe('<@723456789012345678>\n\nRéponse à « @yuki tu peux m\'aider ? »');
+    expect(contenu).not.toContain("a écrit");
+    // Aucun bloc de citation Markdown (le seul `>` restant est celui de la mention).
+    expect(contenu).not.toContain("> **");
+    // ⚠️ Sans cette autorisation, le client neutralise la mention (`parse: []`) :
+    // `<@id>` s'afficherait sans notifier la personne. `parse` reste VIDE : jamais
+    // `@everyone`, `@here` ou un rôle.
+    expect(corps.allowed_mentions).toEqual({
+      parse: [],
+      users: ["723456789012345678"],
+    });
   });
 
   it("`auto` fait juger UNE seule fois, même si le message est rejoué", async () => {

@@ -19,9 +19,15 @@
  *  3. jamais si le canal n'est PAS en `auto` (le juge n'est même pas appelé).
  */
 
-import type { ChatQuoteAuthor, ChatReplyMode, ChatReplyStyle, RemoteMessage, RemotePlatform } from "../types.js";
+import type {
+  ChatQuoteAuthor,
+  ChatReplyMode,
+  ChatReplyStyle,
+  RemoteAuthor,
+  RemoteMessage,
+  RemotePlatform,
+} from "../types.js";
 import { isOwnMessage } from "../mirror/ingest.js";
-import { auteurAffichable } from "../mirror/names.js";
 
 /**
  * Mode de réponse par DÉFAUT quand le canal n'en a pas choisi.
@@ -68,44 +74,50 @@ export const REPLY_STYLE_LABELS: Record<ChatReplyStyle, string> = {
   nouveau: "Nouveau message (à la racine du canal)",
 };
 
-/** Libellés français de la citation d'auteur (interface : clic droit sur un canal). */
+/** Libellés français de la mention d'auteur (interface : clic droit sur un canal). */
 export const QUOTE_AUTHOR_LABELS: Record<ChatQuoteAuthor, string> = {
-  oui: "Citer l'auteur du message",
-  non: "Ne pas citer l'auteur",
+  oui: "Mentionner l'auteur du message (il est notifié)",
+  non: "Ne mentionner personne",
 };
 
-/** Nombre maximal de LIGNES reprises dans une citation (borne : jamais un pavé). */
-export const REPLY_QUOTE_MAX_LINES = 3;
-
-/** Nombre maximal de CARACTÈRES repris dans une citation (borne de coût et de bruit). */
-export const REPLY_QUOTE_MAX_CHARS = 240;
+/**
+ * Longueur maximale du préfixe ajouté : une MENTION, jamais une citation.
+ *
+ * ⚠️ Le préfixe le plus long possible est `<@` + un identifiant Discord + `>` (22
+ * caractères) ou `@` + un pseudo Mattermost (22 caractères au plus, règle serveur) :
+ * 32 laisse une marge sans jamais laisser passer un pavé. C'est cette borne qui
+ * remplace les 240 caractères de l'ancienne citation de texte.
+ */
+export const REPLY_MENTION_MAX_CHARS = 32;
 
 /**
- * Caractères Markdown neutralisés dans une citation.
+ * Pseudo Mattermost valide (documentation : 3 à 22 caractères, commence par une lettre,
+ * minuscules, chiffres et `.` `-` `_`).
  *
- * ⚠️ Raison exacte : le texte cité vient d'un TIERS. Sans échappement, un message qui
- * contient `# titre`, `[texte](url)`, `**gras**` ou une clôture de bloc de code
- * changerait la FORME du message de Yuki. On rend donc le texte cité littéral, ligne
- * par ligne, dans un bloc `> …` — ce qui reste toujours rendu par Mattermost.
+ * ⚠️ Un pseudo qui n'entre pas dans ce motif n'est PAS mentionné : Mattermost ne
+ * notifie que sur le **pseudo** (un surnom ou un nom complet tapé après `@` ne
+ * déclenche aucune notification, cf. doc « Manage your Mattermost profile »).
  */
-const MARKDOWN_SIGNIFICANT = /[\\`*_{}[\]()#+!|<>~]/g;
+const MATTERMOST_USERNAME = /^[a-z][a-z0-9._-]{2,21}$/;
 
-/** Retire les caractères de contrôle (jamais de saut de ligne vertical dans une citation). */
-function stripControlChars(text: string): string {
-  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
-}
+/** Identifiant Discord (« snowflake ») : uniquement des chiffres. */
+const DISCORD_SNOWFLAKE = /^\d{5,25}$/;
 
 /**
- * Neutralise un fragment de texte pour une citation Markdown.
+ * Mots qu'une mention Mattermost ne doit JAMAIS produire.
  *
- * ⚠️ Les `@` reçoivent un espace de largeur nulle : sans cela, citer `@channel` ou
- * `@ici` RELANCERAIT une notification en citant un message — ce serait une injection
- * de mention, pas une citation.
+ * ⚠️ `@channel`, `@all` et `@here` notifient TOUT LE CANAL (documentation Mattermost,
+ * « Mention people in messages ») : un auteur dont le pseudo serait l'un de ces mots
+ * transformerait une réponse en notification de masse.
  */
-function escapeQuoted(text: string): string {
-  return stripControlChars(text)
-    .replace(MARKDOWN_SIGNIFICANT, (char) => `\\${char}`)
-    .replace(/@/g, "@\u200B");
+const MASS_MENTION_WORDS: ReadonlySet<string> = new Set(["channel", "all", "here"]);
+
+/** Plateforme d'une conversation miroir (`mm-…` / `dc-…`), ou `undefined`. */
+function platformOfConversationId(conversationId: string | undefined): RemotePlatform | undefined {
+  if (typeof conversationId !== "string") return undefined;
+  if (conversationId.startsWith("mm-")) return "mattermost";
+  if (conversationId.startsWith("dc-")) return "discord";
+  return undefined;
 }
 
 /**
@@ -127,59 +139,112 @@ export function rootIdForReply(input: {
   return root !== undefined && root !== "" ? root : input.message.remoteId;
 }
 
-/**
- * Citation de l'auteur, en Markdown `>` (toujours rendu par Mattermost).
- *
- * Format : `> **@auteur** a écrit :` puis les premières lignes du message, bornées.
- *
- * @param options.maxLines nombre de lignes reprises (défaut `REPLY_QUOTE_MAX_LINES`).
- * @param options.maxChars longueur maximale (défaut `REPLY_QUOTE_MAX_CHARS`).
- */
-export function quotePrefixOf(
-  message: Pick<RemoteMessage, "author" | "text">,
-  options: { maxLines?: number; maxChars?: number } = {},
-): string {
-  const maxLines = Math.max(1, options.maxLines ?? REPLY_QUOTE_MAX_LINES);
-  const maxChars = Math.max(1, options.maxChars ?? REPLY_QUOTE_MAX_CHARS);
-  const auteur = auteurAffichable(message.author);
-  const lignes = stripControlChars(message.text ?? "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "")
-    .slice(0, maxLines);
-  const corpsBrut = lignes.join("\n");
-  const corps =
-    corpsBrut.length > maxChars ? `${corpsBrut.slice(0, Math.max(1, maxChars - 1))}…` : corpsBrut;
-  const entete = `> **@${escapeQuoted(auteur)}** a écrit :`;
-  if (corps === "") return entete;
-  const cite = corps
-    .split("\n")
-    .map((line) => `> ${escapeQuoted(line)}`)
-    .join("\n");
-  return `${entete}\n${cite}`;
+/** Mention native d'un auteur, telle qu'une plateforme la comprend. */
+export interface AuthorMention {
+  /** Forme EXACTE à écrire dans le message (`@pseudo` ou `<@identifiant>`). */
+  mention: string;
+  /**
+   * Identifiants dont la mention est AUTORISÉE par la plateforme.
+   *
+   * ⚠️ Discord neutralise les mentions d'un message de bot par défaut
+   * (`allowed_mentions: { parse: [] }`, cf. `src/chat/discord/client.ts`) : sans cette
+   * liste, `<@identifiant>` s'afficherait sans notifier personne.
+   */
+  userIds: readonly string[];
+}
+
+/** Message PRÊT à publier : son texte et les mentions qu'il est autorisé à déclencher. */
+export interface ComposedReply {
+  text: string;
+  /** Vide quand aucune mention n'est posée (ou hors Discord). */
+  mentionUserIds: readonly string[];
 }
 
 /**
- * Compose le texte PUBLIÉ : citation (si demandée) puis réponse.
+ * MENTION NATIVE de l'auteur d'un message — celle qui **notifie** la personne.
  *
- * ⚠️ `quoteAuthor = "non"` rend le texte EXACTEMENT tel quel — c'est le comportement
- * observé en production, et il ne change pas tant que l'utilisateur ne demande rien.
+ * ⚠️ Décision utilisateur du 2026-11-02 : « je veux la version qui notifie ». Le réglage
+ * `quoteAuthor` ne cite donc PLUS le texte du message d'origine (la plateforme affiche
+ * déjà cette citation, la redoubler était du bruit) : il pose une mention, en tête.
+ *
+ *  - **Mattermost** : `@pseudo` (le PSEUDO, en minuscules). Source : documentation
+ *    Mattermost « Mention people in messages » — « mention a teammate by using the @
+ *    symbol plus their username to send them a mention notification ». Un surnom ou un
+ *    nom complet ne notifie pas (doc « Manage your Mattermost profile »).
+ *  - **Discord** : `<@identifiant>` (forme moderne ; `<@!identifiant>` est l'ancienne
+ *    forme de pseudo de serveur, dépréciée). Source : documentation Discord sur les
+ *    mentions — « User mention: `<@USER_ID>` ». ⚠️ Notre client neutralise les mentions
+ *    par défaut (`allowed_mentions: { parse: [] }`) : l'identifiant rendu ici doit être
+ *    AUTORISÉ par l'appelant (`mentionUserIds`), sinon `<@id>` s'affiche sans notifier.
+ *
+ * Rend `undefined` quand aucune mention SÛRE n'est possible :
+ *  - auteur ROBOT (dont Yuki elle-même) : la mentionner créerait une notification
+ *    circulaire (et, pour Yuki, une boucle de notification) ;
+ *  - nom qui n'est pas un pseudo valide (forme courte d'un auteur non résolu, surnom
+ *    avec espaces…) : une mention qui ne résout personne n'apporte rien ;
+ *  - pseudo de masse (`channel`, `all`, `here`) : jamais une notification de canal ;
+ *  - identifiant Discord non numérique : la forme `<@…>` serait affichée brute.
  */
-export function composeReplyText(input: {
+export function mentionOfAuthor(input: {
+  author: Pick<RemoteAuthor, "id" | "nom"> & { estBot?: boolean };
+  platform: RemotePlatform;
+  /** Identifiant du bot : sa propre mention est TOUJOURS refusée. */
+  botUserId?: string;
+}): AuthorMention | undefined {
+  const id = typeof input.author.id === "string" ? input.author.id.trim() : "";
+  if (input.author.estBot === true) return undefined;
+  if (input.botUserId !== undefined && input.botUserId !== "" && id === input.botUserId) {
+    return undefined;
+  }
+  if (input.platform === "discord") {
+    if (!DISCORD_SNOWFLAKE.test(id)) return undefined;
+    const mention = `<@${id}>`;
+    if (mention.length > REPLY_MENTION_MAX_CHARS) return undefined;
+    return { mention, userIds: [id] };
+  }
+  const brut = typeof input.author.nom === "string" ? input.author.nom.trim() : "";
+  const pseudo = brut.toLowerCase();
+  if (!MATTERMOST_USERNAME.test(pseudo)) return undefined;
+  if (MASS_MENTION_WORDS.has(pseudo)) return undefined;
+  const mention = `@${pseudo}`;
+  if (mention.length > REPLY_MENTION_MAX_CHARS) return undefined;
+  return { mention, userIds: [] };
+}
+
+/**
+ * Compose le message PUBLIÉ : mention de l'auteur (si demandée) puis le texte de Yuki.
+ *
+ * ⚠️ `quoteAuthor = "non"` rend le texte EXACTEMENT tel quel (comportement par défaut).
+ * ⚠️ `mentionUserIds` n'est PAS décoratif : chez Discord, le client neutralise les
+ * mentions par défaut ; c'est cette liste qui autorise la SEULE personne mentionnée
+ * (jamais `@everyone`, jamais un rôle).
+ *
+ * ⚠️ LIMITE ASSUMÉE : une mention identifie une PERSONNE, pas un message. Deux messages
+ * simultanés de la même personne ne sont plus distingués par le préfixe — ce sont
+ * `root_id` (Mattermost) et `message_reference` (Discord) qui portent l'ancrage.
+ */
+export function composeReply(input: {
   text: string;
-  message: Pick<RemoteMessage, "author" | "text">;
+  message: Pick<RemoteMessage, "author"> & { conversationId?: string };
   quoteAuthor: ChatQuoteAuthor;
-  maxLines?: number;
-  maxChars?: number;
-}): string {
-  if (input.quoteAuthor !== "oui") return input.text;
-  const prefixe = quotePrefixOf(input.message, {
-    ...(input.maxLines !== undefined ? { maxLines: input.maxLines } : {}),
-    ...(input.maxChars !== undefined ? { maxChars: input.maxChars } : {}),
+  /** Plateforme de la conversation (sinon déduite de `conversationId`). */
+  platform?: RemotePlatform;
+  botUserId?: string;
+}): ComposedReply {
+  if (input.quoteAuthor !== "oui") return { text: input.text, mentionUserIds: [] };
+  const platform = input.platform ?? platformOfConversationId(input.message.conversationId);
+  if (platform === undefined) return { text: input.text, mentionUserIds: [] };
+  const mention = mentionOfAuthor({
+    author: input.message.author,
+    platform,
+    ...(input.botUserId !== undefined ? { botUserId: input.botUserId } : {}),
   });
+  if (mention === undefined) return { text: input.text, mentionUserIds: [] };
   const corps = input.text.trim();
-  return corps === "" ? prefixe : `${prefixe}\n\n${corps}`;
+  return {
+    text: corps === "" ? mention.mention : `${mention.mention}\n\n${corps}`,
+    mentionUserIds: mention.userIds,
+  };
 }
 
 /** Juge `auto` : rend `true` si le message s'adresse à Yuki. */

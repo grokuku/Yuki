@@ -12,7 +12,7 @@ personne qui avait écrit dans le canal n'avait aucun signe de vie.
 | `onTool` sur l'écrivain SDK : `tool_execution_start`/`_end` **sortent** (avec le texte déjà écrit, `ackCandidat`) | `src/pi/sdk/prompt-writer.ts` (config `onTool`, abonnement `tool_execution_*`) |
 | `ReplyProgress` : module **pur**, 1 accusé/run, 3 résultats/run, rappel unique > 90 s, ligne d'échec unique, publication **sérialisée** | `src/chat/reply/progress.ts:33`, `:36`, `:91`, `:177`, `:201` |
 | `publier` dans l'entrée du générateur ; la ligne d'accusé est **retirée** du texte final ; les fichiers déjà postés **ne sont pas réattachés** | `src/chat/reply/generate.ts` (`RemoteReplyInput.publier`) |
-| Image publiée **à l'arrivée** (`onFileProduced`) avec `rootIdForReply` + `composeReplyText` (citation **forcée**, `quoteAuthor` inchangé pour la réponse) | `src/chat/mattermost/adapter.ts:766-800`, `src/chat/discord/adapter.ts` |
+| Image publiée **à l'arrivée** (`onFileProduced`) avec `rootIdForReply` + `composeReply` (**sans mention** : un statut ne notifie personne, `quoteAuthor` ne s'applique qu'à la réponse) | `src/chat/mattermost/adapter.ts` (`redigerEtPublier`, `publier`), `src/chat/discord/adapter.ts` |
 | Prompt assoupli : « une seule **réponse de fond** ; une ligne d'accusé avant une action est permise » | `src/chat/reply/prompt.ts:43` |
 | Garanties verrouillées : ordre `[ack, image, réponse]`, anti-boucle (écho de nos posts ⇒ `auteur_bot`), `historique:true` ⇒ **zéro** run | `tests/chat/reply-*.test.ts` |
 

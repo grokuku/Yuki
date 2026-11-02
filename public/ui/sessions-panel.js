@@ -635,7 +635,7 @@ export function initSessionsPanel(deps) {
     ajouterGroupe("Comment répondre", REPLY_STYLE_OPTIONS, "style", styleItems, (id, style) =>
       applyReplySettings(id, { replyStyle: style }),
     );
-    ajouterGroupe("Citer l'auteur", QUOTE_AUTHOR_OPTIONS, "quote", quoteItems, (id, quote) =>
+    ajouterGroupe("Mentionner l'auteur", QUOTE_AUTHOR_OPTIONS, "quote", quoteItems, (id, quote) =>
       applyReplySettings(id, { quoteAuthor: quote }),
     );
 

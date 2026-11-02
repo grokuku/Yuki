@@ -79,8 +79,8 @@ export const REPLY_STYLE_TEXT = {
 
 /** Texte du réglage « CITER l'auteur » (`oui` | `non`), valeur EFFECTIVE. */
 export const QUOTE_AUTHOR_TEXT = {
-  oui: "citation de l'auteur",
-  non: "sans citation",
+  oui: "mention de l'auteur (notifie)",
+  non: "sans mention",
 };
 
 /** Texte du bandeau « historique antérieur non importé ». */

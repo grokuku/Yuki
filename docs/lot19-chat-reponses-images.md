@@ -9,8 +9,8 @@
 
 | Où | Quoi |
 | --- | --- |
-| Clic droit sur un canal distant | trois groupes : **Quand répondre** (`tout` / `auto` / `mention`), **Comment répondre** (**Réponse dans le fil** / **Nouveau message**), **Citer l'auteur** (oui / non). L'option active est cochée (● + gras + `aria-checked`). |
-| Réponse de Yuki dans le canal | si « Citer l'auteur » est actif, la réponse commence par un bloc `> **@auteur** a écrit :` **borné** (3 lignes, 240 caractères) |
+| Clic droit sur un canal distant | trois groupes : **Quand répondre** (`tout` / `auto` / `mention`), **Comment répondre** (**Réponse dans le fil** / **Nouveau message**), **Mentionner l'auteur** (oui / non). L'option active est cochée (● + gras + `aria-checked`). |
+| Réponse de Yuki dans le canal | si « Mentionner l'auteur » est actif, la réponse commence par une **mention native** de l'auteur (`@pseudo` chez Mattermost, `<@identifiant>` chez Discord) : elle le **notifie**, et le texte du message d'origine n'est **pas** recité |
 | Pièce jointe impossible à envoyer | le texte part quand même, et une ligne discrète dit laquelle n'est pas passée (`_(…)`) — et la raison est aussi dans l'état de la plateforme |
 
 ## 2. Réglages — par canal, dans `chat-mirror.json`
@@ -20,7 +20,7 @@
 | Clé | Valeurs | Défaut | Sens |
 | --- | --- | --- | --- |
 | `replyStyle` | `fil` \| `nouveau` | **`fil`** | réponse dans le fil du message, ou nouveau message **à la racine du canal** |
-| `quoteAuthor` | `oui` \| `non` | **`non`** | préfixe la réponse par une citation de l'auteur du message |
+| `quoteAuthor` | `oui` \| `non` | **`non`** | préfixe la réponse par une **mention native** de l'auteur (elle notifie) — jamais par une citation de son texte |
 
 - ⚠️ **Compatibilité** : un `chat-mirror.json` écrit par la version précédente **n'a pas
   ces clés**. Les défauts sont appliqués **à la lecture** (`effectiveReplyStyle`,
@@ -31,7 +31,7 @@
   `GET /api/chat/status`) : elle n'a aucun défaut à deviner, donc aucun état local qui
   pourrait diverger du serveur.
 
-## 3. Envoi — la RACINE du fil, et une citation sûre
+## 3. Envoi — la RACINE du fil, et une mention sûre
 
 `src/chat/reply/responder.ts`, `src/chat/mattermost/adapter.ts`
 
@@ -45,14 +45,34 @@
 message crée un **fil imbriqué**, que Mattermost n'affiche pas comme une réponse du fil
 d'origine.
 
-Citation (`quotePrefixOf`) — Markdown `>` (toujours rendu par Mattermost ; aucune autre
-syntaxe de citation n'est documentée côté API) :
+#### Mention de l'auteur (`mentionOfAuthor`, `composeReply`)
 
-- format : `> **@auteur** a écrit :` puis les lignes du message, chacune préfixée par `> ` ;
-- **bornée** : `REPLY_QUOTE_MAX_LINES` = 3, `REPLY_QUOTE_MAX_CHARS` = 240, « … » si coupé ;
-- **assainie** : caractères Markdown significatifs échappés (`\#`, `\[`, `\*`…), caractères
-  de contrôle retirés, et **`@` suivi d'un espace de largeur nulle** — citer `@channel` ne
-  doit pas **notifier** le canal (c'est une injection de mention, pas une citation).
+Décision utilisateur du 2026-11-02 : « je veux la version qui notifie ». Le réglage
+`quoteAuthor = oui` ne recopie donc **plus** le texte du message d'origine (la plateforme
+l'affiche déjà : c'était de la redondance) ; il pose une **mention native** en tête.
+
+| Plateforme | Forme produite | Source |
+| --- | --- | --- |
+| Mattermost | `@pseudo` (pseudo en minuscules) | doc Mattermost « Mention people in messages » : « mention a teammate by using the `@` symbol plus their username to send them a mention notification » ; les **surnoms** ne notifient pas (doc « Manage your Mattermost profile ») |
+| Discord | `<@identifiant>` (forme moderne ; `<@!identifiant>` est l'ancienne forme de pseudo de serveur, dépréciée) | doc Discord des mentions : « User mention: `<@USER_ID>` » |
+
+- **bornée** : `REPLY_MENTION_MAX_CHARS` = 32 (le préfixe le plus long possible fait 23) ;
+- **sûre** : aucune mention si l'auteur est un **robot** (dont Yuki : pas de notification
+  circulaire), si son nom n'est pas un pseudo exploitable (surnom avec espaces, forme
+  courte d'un auteur non résolu, identifiant Discord non numérique), ou si le pseudo est un
+  mot de **masse** (`channel`, `all`, `here`) — une réponse ne doit jamais notifier un canal ;
+- ⚠️ côté Discord, `<@id>` ne notifie que si le client l'autorise :
+  `allowed_mentions: { parse: [], users: [id] }` — la liste est bornée à **cette** personne,
+  donc ni `@everyone`, ni `@here`, ni un rôle ne peuvent être déclenchés.
+
+⚠️ **LIMITE ASSUMÉE** : une mention identifie une **personne**, pas un **message**. Deux
+messages simultanés de la même personne ne sont plus distingués par le préfixe ; l'ancrage
+reste `root_id` (Mattermost) et `message_reference` (Discord).
+
+⚠️ **Les STATUTS ne portent AUCUNE mention** (accusé, résultat d'outil, image) : notifier la
+personne à chaque outil serait insupportable, et l'accusé n'a pas à re-notifier celle qui
+vient d'écrire. Le `root_id` reste posé ; l'ancrage inter-runs ne repose donc plus que sur
+lui (limite assumée ci-dessus).
 
 ## 4. Route — la MÊME, étendue
 
@@ -137,7 +157,7 @@ Mattermost** (téléchargement d'un `file_id`, métadonnées `GET /files/<id>/in
 | Sujet | Fichier |
 | --- | --- |
 | défauts sur un miroir **existant** (fichier non réécrit), valeur inconnue ignorée, persistance + relecture | `tests/chat/reply-style.test.ts` |
-| `root_id` = racine du fil / absent en `nouveau` (4 combinaisons contre un serveur fixture réel), citation bornée et assainie | `tests/chat/reply-style.test.ts` |
+| `root_id` = racine du fil / absent en `nouveau` (4 combinaisons contre un serveur fixture réel), mention native bornée et sûre (pas de citation de texte, pas de mention de masse) | `tests/chat/reply-style.test.ts` |
 | `PATCH` : sous-ensemble, `null` = défaut, refus explicites, canal inconnu | `tests/chat/chat-api.test.ts` |
 | pièces jointes ingérées **et conservées** au redémarrage | `tests/chat/mirror-ingest.test.ts` |
 | `POST /files` multipart puis `file_ids` ; refus avant réseau ; échec visible ; jeton absent | `tests/chat/mattermost-files.test.ts` |
@@ -158,5 +178,5 @@ ciblée `git show HEAD:<f>` dans `/tmp`, sans aucun `checkout`/`reset`) :
 | --- | --- |
 | Un vrai serveur Mattermost | aucun n'est accessible depuis cet environnement : les tests rejouent le contrat de l'API sur des serveurs fixtures (HTTP réels) |
 | La borne réelle d'upload de **votre** instance | dépend de `FileSettings.MaxFileSize` **et** de `client_max_body_size` du proxy : un `413` sera annoncé, jamais contourné |
-| Le rendu de la citation dans le client Mattermost | vérifié en Markdown standard (`>`), pas dans un vrai client |
+| La **notification** réellement reçue par la personne mentionnée | dépend des préférences de notification du compte (Mattermost) et des réglages du serveur Discord : la forme produite est celle de la doc, l'effet n'est pas observable ici |
 | **Générer une image depuis Mattermost** | **atteignable depuis le lot 20** : politique d'outils branchée sur le run distant (`docs/lot20-chat-outils-distants.md`). Prouvé contre un serveur fixture + un modèle SIMULÉ (`tests/chat/mattermost-image-chain.test.ts`) — pas contre un vrai Mattermost ni un vrai LLM |

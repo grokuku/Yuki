@@ -94,14 +94,29 @@ export const REPLY_STYLE_OPTIONS = [
 ];
 
 /**
- * Citer (ou non) l'auteur du message auquel Yuki répond.
+ * MENTIONNER (ou non) l'auteur du message auquel Yuki répond.
  *
- * ⚠️ `non` est le DÉFAUT côté serveur (`DEFAULT_QUOTE_AUTHOR`) : aucune citation n'est
+ * ⚠️ Il s'agit d'une MENTION NATIVE (`@pseudo` chez Mattermost, `<@identifiant>` chez
+ * Discord), pas d'une citation de texte : la plateforme affiche déjà le message
+ * d'origine. ⚠️ Une mention NATIVE **notifie** la personne (choix utilisateur du
+ * 2026-11-02 : « je veux la version qui notifie »).
+ *
+ * ⚠️ `non` est le DÉFAUT côté serveur (`DEFAULT_QUOTE_AUTHOR`) : aucune mention n'est
  * ajoutée tant que l'utilisateur ne le demande pas.
  */
 export const QUOTE_AUTHOR_OPTIONS = [
-  { quote: "oui", label: "Citer l'auteur", title: "La réponse commence par une citation de l'auteur du message." },
-  { quote: "non", label: "Ne pas citer l'auteur", title: "La réponse ne cite personne (comportement par défaut)." },
+  {
+    quote: "oui",
+    label: "Mentionner l'auteur",
+    title:
+      "La réponse commence par une mention native de l'auteur du message : " +
+      "elle le NOTIFIE (aucune citation du texte n'est ajoutée).",
+  },
+  {
+    quote: "non",
+    label: "Ne mentionner personne",
+    title: "La réponse ne mentionne personne et ne cite personne (comportement par défaut).",
+  },
 ];
 
 /** Libellé d'un style de réponse (`style` inconnu ⇒ la valeur brute). */

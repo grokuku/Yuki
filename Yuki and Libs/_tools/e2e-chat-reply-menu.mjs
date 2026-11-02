@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * Harnais E2E JETABLE — MENU CONTEXTUEL d'un canal distant : « quand » répondre,
- * « comment » répondre (fil / nouveau message) et « citer l'auteur ».
+ * « comment » répondre (fil / nouveau message) et « mentionner l'auteur ».
  *
  * Ce que ce harnais prouve, avec la CSP RÉELLE et sans serveur Mattermost :
  *  - le clic droit sur un CANAL affiche les TROIS groupes, groupés visuellement
- *    (« Quand répondre », « Comment répondre », « Citer l'auteur ») ;
+ *    (« Quand répondre », « Comment répondre », « Mentionner l'auteur ») ;
  *  - l'option ACTIVE est cochée (● ET `aria-checked="true"`) et vient du SERVEUR ;
  *  - un clic enregistre le réglage (`PATCH /api/chat/conversations/<id>`), sans
  *    rechargement de page, et le serveur le relit (`GET /api/chat/status`) ;
@@ -277,13 +277,13 @@ await ouvrirMenu();
 const menu = await etatMenu();
 check("CLIC DROIT : le menu du canal s'ouvre", menu.ouvert === true);
 check(
-  "trois groupes GROUPÉS : « Quand répondre », « Comment répondre », « Citer l'auteur »",
+  "trois groupes GROUPÉS : « Quand répondre », « Comment répondre », « Mentionner l'auteur »",
   JSON.stringify(menu.libelles) ===
-    JSON.stringify(["Réponses de Yuki dans ce canal", "Quand répondre", "Comment répondre", "Citer l'auteur"]),
+    JSON.stringify(["Réponses de Yuki dans ce canal", "Quand répondre", "Comment répondre", "Mentionner l'auteur"]),
   JSON.stringify(menu.libelles),
 );
 check(
-  "7 entrées radio : 3 (quand) + 2 (comment) + 2 (citation)",
+  "7 entrées radio : 3 (quand) + 2 (comment) + 2 (mention)",
   menu.entrees?.length === 7,
   String(menu.entrees?.length),
 );
@@ -298,7 +298,7 @@ check(
   JSON.stringify(menu.entrees),
 );
 check(
-  "DÉFAUTS du serveur cochés : « Répondre seulement si elle est citée », « Réponse dans le fil », « Ne pas citer l'auteur »",
+  "DÉFAUTS du serveur cochés : « Répondre seulement si elle est citée », « Réponse dans le fil », « Ne mentionner personne »",
   menu.entrees[2]?.coche === true && menu.entrees[3]?.coche === true && menu.entrees[6]?.coche === true,
 );
 check("rendu DOM PUR : aucun `style` en ligne dans le menu", menu.styleEnLigne === 0, String(menu.styleEnLigne));
@@ -327,8 +327,8 @@ check(
   JSON.stringify(releve.entrees?.slice(3, 5)),
 );
 
-/* ═════════════ 5) « Citer l'auteur » ═════════════════════════════════════ */
-check("clic sur « Citer l'auteur »", await cliquer("Citer l'auteur"));
+/* ═════════════ 5) « Mentionner l'auteur » ═══════════════════════════════ */
+check("clic sur « Mentionner l'auteur »", await cliquer("Mentionner l'auteur"));
 await sleep(500);
 const apresCitation = await reglagesServeur();
 check(

@@ -391,6 +391,15 @@ export class DiscordClient {
     maxFileBytes?: number;
     /** `true` (défaut) : neutralise TOUTE mention automatique du contenu publié. */
     suppressMentions?: boolean;
+    /**
+     * Identifiants d'utilisateurs dont la mention est EXPLICITEMENT autorisée.
+     *
+     * ⚠️ `allowed_mentions: { parse: [], users: [...] }` : seules ces personnes peuvent
+     * être notifiées. `parse: []` reste vide, donc ni `@everyone`, ni `@here`, ni un rôle
+     * ne peut être déclenché par le texte publié — c'est ce qui rend la mention native
+     * SÛRE (une mention posée par erreur ne notifie pas la terre entière).
+     */
+    mentionUserIds?: readonly string[];
   }): Promise<DiscordMessage> {
     const files = input.files ?? [];
     const limite = Math.max(1, Math.trunc(input.maxFileBytes ?? DISCORD_MAX_UPLOAD_BYTES));
@@ -406,9 +415,19 @@ export class DiscordClient {
         );
       }
     }
+    const autorises = (input.mentionUserIds ?? []).filter(
+      (id): id is string => typeof id === "string" && /^\d{5,25}$/.test(id),
+    );
     const payload: Record<string, unknown> = {
       content: input.content,
-      ...(input.suppressMentions === false ? {} : { allowed_mentions: { parse: [] as string[] } }),
+      ...(input.suppressMentions === false
+        ? {}
+        : {
+            allowed_mentions: {
+              parse: [] as string[],
+              ...(autorises.length > 0 ? { users: autorises } : {}),
+            },
+          }),
     };
     if (input.replyToMessageId !== undefined && input.replyToMessageId !== "") {
       payload.message_reference = {

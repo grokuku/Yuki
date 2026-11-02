@@ -299,6 +299,17 @@ export type ChatOutboundMessage =
        * ANNONCÉ (journal + raison visible).
        */
       fichiers?: readonly string[];
+      /**
+       * Identifiants d'utilisateurs dont la MENTION NATIVE est autorisée.
+       *
+       * ⚠️ Discord neutralise les mentions d'un message de bot par défaut
+       * (`allowed_mentions: { parse: [] }`) : sans cette liste, un `<@identifiant>` posé
+       * dans le texte s'afficherait SANS notifier personne. La liste est BORNEÉE à ces
+       * identifiants précis : ni `@everyone`, ni un rôle ne peuvent être déclenchés.
+       *
+       * Ignoré par les plateformes qui n'ont pas de neutralisation à lever (Mattermost).
+       */
+      mentionUserIds?: readonly string[];
     }
   | { kind: "approbation"; approval: ChatApprovalRequest; threadRootId?: string }
   | {

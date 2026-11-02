@@ -9,7 +9,7 @@
  *  - `ChatSyncService` (orchestration, PARTAGÉ) — backfill 14 jours + rattrapage 60 s.
  *
  * ⚠️ CE QUI N'EST **PAS** DUPLIQUÉ (et ne doit jamais l'être) : la décision de répondre
- * (`decideReply`), la composition de la réponse (`composeReplyText`), le choix du fil
+ * (`decideReply`), la composition de la réponse (`composeReply`), le choix du fil
  * (`rootIdForReply`), la politique d'outils du run distant, le prompt et le générateur.
  * Tout cela vient de `src/chat/reply/**` et de `src/llm/tool-policy.ts`, identiquement
  * pour les deux plateformes.
@@ -59,7 +59,7 @@ import {
 } from "../mirror/store.js";
 import {
   botAliases,
-  composeReplyText,
+  composeReply,
   decideReply,
   defaultReplyModeFor,
   rootIdForReply,
@@ -455,6 +455,9 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
       content: fitDiscordContent(texte),
       ...(reference !== undefined ? { replyToMessageId: reference } : {}),
       ...(pieces.length > 0 ? { files: pieces, maxFileBytes: borne } : {}),
+      ...(message.kind === "texte" && message.mentionUserIds !== undefined
+        ? { mentionUserIds: message.mentionUserIds }
+        : {}),
     });
     // Le message envoyé entre dans le miroir comme n'importe quel autre (il sera relu,
     // donc affiché) et ne déclenchera AUCUNE réponse (auteur = bot).
@@ -876,19 +879,21 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
       const rootId = rapport
         ? undefined
         : rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
-      // ⚠️ ANCRAGE INTER-RUNS : les messages intermédiaires citent TOUJOURS l'auteur du
-      // message traité, même quand `quoteAuthor` vaut `non` — ce sont des STATUTS.
+      // ⚠️ AUCUNE MENTION sur les STATUTS (accusé, résultat d'outil, image) — décision
+      // utilisateur du 2026-11-02 : un statut qui notifierait la personne à chaque outil
+      // serait insupportable. L'ancrage inter-runs ne repose donc plus que sur
+      // `message_reference` : c'est une LIMITE ASSUMÉE (deux runs simultanés dans le même
+      // fil ne sont plus distingués par le préfixe).
       let publies = 0;
       const publier = async (intermediaire: {
         text: string;
         fichiers?: readonly string[];
       }): Promise<void> => {
-        const texte = composeReplyText({
+        const texte = composeReply({
           text: intermediaire.text,
           message,
-          // ⚠️ Un rapport système n'est pas une personne : le citer serait du bruit.
-          quoteAuthor: rapport ? "non" : "oui",
-        });
+          quoteAuthor: "non",
+        }).text;
         const fichiers = intermediaire.fichiers ?? [];
         await this.send(message.conversationId, {
           kind: "texte",
@@ -927,17 +932,25 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
         this.derniereErreur = "Le générateur n'a produit aucun texte : rien n'a été publié.";
         return false;
       }
-      const texte = composeReplyText({
+      // ⚠️ MENTION NATIVE (`<@identifiant>`), JAMAIS une citation du texte : la plateforme
+      // affiche déjà le message d'origine au-dessus de la réponse.
+      // ⚠️ `mentionUserIds` est INDISPENSABLE : ce client neutralise les mentions par
+      // défaut (`allowed_mentions: { parse: [] }`), donc `<@id>` ne notifierait personne.
+      const compose = composeReply({
         text,
         message,
         quoteAuthor: rapport ? "non" : effectiveQuoteAuthor(record),
+        platform: "discord",
+        ...(this.identite?.id !== undefined ? { botUserId: this.identite.id } : {}),
       });
+      const texte = compose.text;
       const fichiers = reponse.fichiers ?? [];
       await this.send(message.conversationId, {
         kind: "texte",
         text: texte,
         ...(rootId !== undefined ? { threadRootId: rootId } : {}),
         ...(fichiers.length > 0 ? { fichiers } : {}),
+        ...(compose.mentionUserIds.length > 0 ? { mentionUserIds: compose.mentionUserIds } : {}),
       });
       this.derniereErreur = undefined;
       return true;

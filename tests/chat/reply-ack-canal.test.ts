@@ -77,7 +77,10 @@ interface Scenario {
  * Monte l'adaptateur RÉEL sur la fixture, avec un écrivain SIMULÉ qui rejoue le
  * scénario. Aucun modèle, aucun réseau : seules les requêtes HTTP sont réelles.
  */
-async function monter(scenario: Scenario, fixtureOptions: { delaiFichierMs?: number } = {}) {
+async function monter(
+  scenario: Scenario,
+  fixtureOptions: { delaiFichierMs?: number; quoteAuthor?: "oui" | "non" } = {},
+) {
   const fixture: MmFixture = await startMmFixture(
     cleanups,
     fixtureOptions.delaiFichierMs !== undefined
@@ -146,6 +149,9 @@ async function monter(scenario: Scenario, fixtureOptions: { delaiFichierMs?: num
   await adapter.connect();
   await waitFor(() => fixture.open > 0, "la connexion temps réel");
   store.setReplyMode(CONVERSATION, "tout");
+  if (fixtureOptions.quoteAuthor !== undefined) {
+    store.setReplySettings(CONVERSATION, { quoteAuthor: fixtureOptions.quoteAuthor });
+  }
   // Les requêtes de la CONNEXION (users/me, équipes, canaux, miroir) ne comptent pas.
   requetesAvant = fixture.requetes.length;
 
@@ -172,6 +178,31 @@ async function monter(scenario: Scenario, fixtureOptions: { delaiFichierMs?: num
     botId: MM_BOT_ID,
   };
 }
+
+describe("accusé d'un canal — la MENTION ne s'applique qu'à la réponse", () => {
+  it("`quoteAuthor = oui` : l'accusé (STATUT) ne mentionne PERSONNE, la réponse finale si", async () => {
+    // ⚠️ Décision utilisateur du 2026-11-02 : la mention NOTIFIE. Un statut qui
+    // notifierait la personne à chaque outil serait insupportable, et l'accusé n'a pas à
+    // re-notifier celle qui vient d'écrire. La réponse finale, elle, la mentionne.
+    const run = await monter(
+      { ackCandidat: "C'est parti.", texteFinal: "Voilà le chat demandé." },
+      { quoteAuthor: "oui" },
+    );
+    await waitFor(() => run.posts().length >= 2, "l'accusé puis la réponse", 8_000);
+
+    const posts = run.posts();
+    expect(posts).toHaveLength(2);
+    // ① STATUT : texte exact, aucune mention, aucune citation.
+    expect(posts[0]).toBe("C'est parti.");
+    // ② RÉPONSE : mention NATIVE de l'auteur (minuscules, règle Mattermost) et le texte
+    //    du message d'origine N'EST PAS recité.
+    // ⚠️ PSEUDO, pas nom affiché : la fixture résout `humain-1` en `nom-humain-1`
+    // (`/api/v4/users/ids`), et c'est bien ce pseudo qui est mentionné.
+    expect(posts[1]).toBe("@nom-humain-1\n\nVoilà le chat demandé.");
+    expect(posts[1]).not.toContain("génère une image de chat");
+    expect(posts[1]).not.toContain("a écrit");
+  });
+});
 
 describe("accusé d'un canal — un seul post par texte", () => {
   it("accusé + réponse qui COMMENCE par le même texte ⇒ deux posts, et le second ne le répète pas", async () => {

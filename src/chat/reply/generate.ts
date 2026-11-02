@@ -110,8 +110,8 @@ export interface RemoteReplyInput {
    * Publication INTERMÉDIAIRE (accusé, image produite, échec) dans le canal.
    *
    * ⚠️ Construite par l'ADAPTATEUR, parce qu'elle doit être ancrée au MÊME fil que
-   * la réponse (`rootIdForReply` + `composeReplyText`) : le générateur ne connaît ni
-   * le réglage `replyStyle` du canal ni sa règle de citation. Absente ⇒ aucune
+   * la réponse (`rootIdForReply`) : le générateur ne connaît ni le réglage
+   * `replyStyle` du canal ni la règle de mention. Absente ⇒ aucune
    * publication intermédiaire (aucun changement pour un appelant qui n'en veut pas).
    */
   publier?: ProgressPublisher;

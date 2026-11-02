@@ -8,14 +8,15 @@
  *    PAS réécrit ;
  *  - `root_id` d'une réponse = la RACINE du fil (jamais le message lui-même, sinon
  *    Mattermost crée un fil imbriqué) ; en `nouveau`, il est ABSENT ;
- *  - la citation est un bloc `> **@auteur** a écrit :`, BORNÉ (lignes et caractères) et
- *    ASSAINI (aucune mention recréée, aucun Markdown du message cité interprété) ;
+ *  - `quoteAuthor = oui` pose une MENTION NATIVE de l'auteur (`@pseudo` chez Mattermost,
+ *    `<@identifiant>` chez Discord) et NE RECOPIE PAS le texte du message d'origine ;
+ *    le préfixe est BORNÉ, et jamais une mention de masse ni une mention de robot ;
  *  - les QUATRE combinaisons (fil/nouveau × citer/non) aboutissent au bon `POST /posts`
  *    contre un SERVEUR FIXTURE RÉEL.
  *
- * ⚠️ Échoue sur le code d'origine : ni `rootIdForReply`/`composeReplyText`, ni
+ * ⚠️ Échoue sur le code d'origine : ni `rootIdForReply`/`composeReply`/`mentionOfAuthor`, ni
  * `replyStyle`/`quoteAuthor` n'existent ; le `root_id` était toujours calculé de la même
- * façon (`threadRootId ?? remoteId`).
+ * façon (`threadRootId ?? remoteId`), et un éventuel préfixe citait le TEXTE du message.
  */
 
 import { createServer, type Server } from "node:http";
@@ -28,13 +29,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { MattermostChatAdapter } from "../../src/chat/mattermost/adapter.js";
+import {
+  RAPPORT_SYSTEME_AUTHOR_ID,
+  RAPPORT_SYSTEME_AUTHOR_NAME,
+} from "../../src/chat/reply/job-report.js";
 import { ChatMirrorStore, effectiveQuoteAuthor, effectiveReplyStyle } from "../../src/chat/mirror/store.js";
 import { conversationIdOfChannel } from "../../src/chat/mirror/ingest.js";
 import {
-  REPLY_QUOTE_MAX_CHARS,
-  REPLY_QUOTE_MAX_LINES,
-  composeReplyText,
-  quotePrefixOf,
+  REPLY_MENTION_MAX_CHARS,
+  composeReply,
+  mentionOfAuthor,
   rootIdForReply,
 } from "../../src/chat/reply/responder.js";
 import type { RemoteMessage } from "../../src/chat/types.js";
@@ -194,53 +198,134 @@ describe("fil ou nouveau message — la RACINE, jamais le message lui-même", ()
   });
 });
 
-describe("citation de l'auteur — bornée et assainie", () => {
+describe("mention de l'auteur — native, courte et sûre", () => {
+  /** Message Discord minimal (identifiant « snowflake » réel). */
+  function messageDiscord(extra: Partial<RemoteMessage> = {}): RemoteMessage {
+    return messageOf({
+      conversationId: "dc-323456789012345678",
+      author: { id: "723456789012345678", nom: "humain", estBot: false },
+      ...extra,
+    });
+  }
+
   it("`non` rend le texte EXACTEMENT inchangé (comportement de production)", () => {
-    expect(
-      composeReplyText({ text: "  bonjour  ", message: messageOf(), quoteAuthor: "non" }),
-    ).toBe("  bonjour  ");
+    expect(composeReply({ text: "  bonjour  ", message: messageOf(), quoteAuthor: "non" })).toEqual(
+      { text: "  bonjour  ", mentionUserIds: [] },
+    );
   });
 
-  it("`oui` préfixe par un bloc Markdown `> **@auteur** a écrit :`", () => {
-    const texte = composeReplyText({
+  it("`oui` pose une mention NATIVE et NE RECOPIE PAS le texte d'origine", () => {
+    const compose = composeReply({
       text: "Oui, je regarde.",
       message: messageOf({ text: "tu peux jeter un œil ?" }),
       quoteAuthor: "oui",
     });
-    expect(texte).toBe(
-      "> **@Camille** a écrit :\n> tu peux jeter un œil ?\n\nOui, je regarde.",
-    );
+    // ⚠️ La demande : l'auteur est TAGUÉ, le message d'origine n'est PAS cité.
+    expect(compose.text).toBe("@camille\n\nOui, je regarde.");
+    expect(compose.text).not.toContain("tu peux jeter un œil");
+    expect(compose.text).not.toContain("a écrit");
+    // Plus aucun bloc de citation Markdown.
+    expect(compose.text).not.toContain(">");
+    // Mattermost n'a rien à autoriser : la mention est dans le texte du post.
+    expect(compose.mentionUserIds).toEqual([]);
   });
 
-  it("borne la citation (lignes ET caractères) : jamais un pavé", () => {
-    const long = Array.from({ length: 40 }, (_, index) => `ligne ${index} ${"x".repeat(120)}`).join("\n");
-    const prefixe = quotePrefixOf(messageOf({ text: long }));
-    const lignes = prefixe.split("\n");
-    expect(lignes.length).toBeGreaterThan(1);
-    expect(lignes.length).toBeLessThanOrEqual(1 + REPLY_QUOTE_MAX_LINES);
-    const corps = lignes.slice(1).map((line) => line.replace(/^> /, "")).join("\n");
-    expect(corps.length).toBeLessThanOrEqual(REPLY_QUOTE_MAX_CHARS);
-    expect(corps.endsWith("…")).toBe(true);
+  it("Discord : `<@identifiant>` ET autorisation explicite de CETTE personne", () => {
+    const compose = composeReply({
+      text: "Oui, je regarde.",
+      message: messageDiscord({ text: "tu peux jeter un œil ?" }),
+      quoteAuthor: "oui",
+    });
+    expect(compose.text).toBe("<@723456789012345678>\n\nOui, je regarde.");
+    // ⚠️ Sans cette liste, le client Discord neutralise la mention : `<@id>` s'affiche
+    // sans que personne ne soit notifié (`allowed_mentions: { parse: [] }`).
+    expect(compose.mentionUserIds).toEqual(["723456789012345678"]);
+    expect(compose.text).not.toContain("tu peux jeter un œil");
   });
 
-  it("n'ouvre AUCUNE mention et n'interprète AUCUN Markdown du message cité", () => {
-    const prefixe = quotePrefixOf(
-      messageOf({ text: "@channel # titre\n[clic](https://exemple.fr) **gras** `code`" }),
-    );
-    // ⚠️ Un `@` cité ne doit pas notifier : il est suivi d'un espace de largeur nulle.
-    expect(prefixe).toContain("@\u200Bchannel");
-    expect(prefixe).not.toMatch(/@channel/u);
-    // ⚠️ Les caractères significatifs sont échappés : le texte cité reste littéral.
-    expect(prefixe).toContain("\\#");
-    expect(prefixe).toContain("\\[clic\\]");
-    expect(prefixe).toContain("\\*\\*gras\\*\\*");
-    // Et chaque ligne citée commence par `>` (toujours rendu par Mattermost).
-    for (const ligne of prefixe.split("\n").slice(1)) expect(ligne.startsWith("> ")).toBe(true);
+  it("ne mentionne JAMAIS un robot, ni Yuki elle-même", () => {
+    const robot = messageOf({ author: { id: "humain-1", nom: "camille", estBot: true } });
+    expect(composeReply({ text: "ok", message: robot, quoteAuthor: "oui" })).toEqual({
+      text: "ok",
+      mentionUserIds: [],
+    });
+    // Le second filet : l'identifiant du bot, même quand `estBot` n'a pas été posé.
+    expect(
+      mentionOfAuthor({
+        author: { id: "botidentifiant0123456789ab", nom: "yuki", estBot: false },
+        platform: "mattermost",
+        botUserId: "botidentifiant0123456789ab",
+      }),
+    ).toBeUndefined();
   });
 
-  it("retire les caractères de contrôle (jamais de rupture de citation)", () => {
-    const prefixe = quotePrefixOf(messageOf({ text: "avant\u0007après\u0000fin" }));
-    expect(prefixe).toContain("avantaprèsfin");
+  it("le préfixe reste BORNÉ : une mention, jamais un pavé", () => {
+    const long = Array.from({ length: 40 }, (_, i) => `ligne ${i} ${"x".repeat(120)}`).join("\n");
+    const compose = composeReply({
+      text: "Voilà.",
+      message: messageOf({ text: long }),
+      quoteAuthor: "oui",
+    });
+    const [prefixe = ""] = compose.text.split("\n");
+    expect(prefixe.length).toBeGreaterThan(0);
+    expect(prefixe.length).toBeLessThanOrEqual(REPLY_MENTION_MAX_CHARS);
+    // ⚠️ Le texte d'origine n'est pas repris DU TOUT (l'ancienne citation en reprenait 240).
+    expect(compose.text).not.toContain("ligne 0");
+    expect(compose.text.length).toBeLessThan(REPLY_MENTION_MAX_CHARS + 40);
+  });
+
+  it("un pseudo de MASSE (`channel`, `all`, `here`) ne produit AUCUNE mention", () => {
+    for (const nom of ["channel", "all", "here", "CHANNEL"]) {
+      expect(
+        mentionOfAuthor({ author: { id: "humain-1", nom, estBot: false }, platform: "mattermost" }),
+      ).toBeUndefined();
+      expect(composeReply({ text: "ok", message: messageOf({ author: { id: "humain-1", nom, estBot: false } }), quoteAuthor: "oui" })).toEqual({
+        text: "ok",
+        mentionUserIds: [],
+      });
+    }
+  });
+
+  it("un nom qui n'est pas un pseudo exploitable ne produit AUCUNE mention", () => {
+    // Surnom avec espaces, forme courte d'un auteur non résolu, identifiant non numérique
+    // chez Discord : aucune de ces formes ne notifierait quelqu'un.
+    for (const nom of ["Jean Dupont", "membre inconnu (g68pqn…)", "camille!", ""]) {
+      expect(
+        mentionOfAuthor({ author: { id: "humain-1", nom, estBot: false }, platform: "mattermost" }),
+      ).toBeUndefined();
+    }
+    expect(
+      mentionOfAuthor({ author: { id: "inconnu", nom: "humain", estBot: false }, platform: "discord" }),
+    ).toBeUndefined();
+  });
+
+  it("assainit le pseudo : aucun caractère Markdown ne casse la mention", () => {
+    const mention = mentionOfAuthor({
+      author: { id: "humain-1", nom: "**@channel**", estBot: false },
+      platform: "mattermost",
+    });
+    expect(mention).toBeUndefined();
+    // Un pseudo conforme est rendu en MINUSCULES (règle serveur) et sans ornement.
+    expect(
+      mentionOfAuthor({ author: { id: "humain-1", nom: "Camille.Dev", estBot: false }, platform: "mattermost" }),
+    ).toEqual({ mention: "@camille.dev", userIds: [] });
+  });
+
+  it("un rapport SYSTÈME n'est mentionné par personne", () => {
+    // ⚠️ L'auteur d'un rapport de tâche n'est pas une personne (robot + nom avec espaces) :
+    // le mentionner créerait une notification sans destinataire.
+    const rapport = messageOf({
+      conversationId: "mm-canal-1",
+      author: {
+        id: RAPPORT_SYSTEME_AUTHOR_ID,
+        nom: RAPPORT_SYSTEME_AUTHOR_NAME,
+        estBot: true,
+      },
+    });
+    expect(composeReply({ text: "ok", message: rapport, quoteAuthor: "oui" })).toEqual({
+      text: "ok",
+      mentionUserIds: [],
+    });
   });
 });
 
@@ -401,7 +486,9 @@ describe("adaptateur — les QUATRE combinaisons de réglages", () => {
       }
       const texte = String(body.message ?? "");
       if (attendu.prefixe) {
-        expect(texte.startsWith("> **@Camille** a écrit :\n> merci de regarder\n\n")).toBe(true);
+        // ⚠️ MENTION NATIVE seule : le texte du message d'origine n'est PAS recité.
+        expect(texte.startsWith("@camille\n\n")).toBe(true);
+        expect(texte).not.toContain("merci de regarder");
       } else {
         expect(texte).toBe("Voilà, c'est fait.");
       }

@@ -47,7 +47,7 @@ import { estRapportSysteme, messageRapportSysteme } from "../reply/job-report.js
 import {
   DEFAULT_REPLY_MODE,
   botAliases,
-  composeReplyText,
+  composeReply,
   decideReply,
   rootIdForReply,
   type ChatReplyJudge,
@@ -870,22 +870,22 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       const rootId = rapport
         ? undefined
         : rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
-      // ⚠️ ANCRAGE INTER-RUNS : les messages intermédiaires citent TOUJOURS l'auteur du
-      // message traité, même quand `quoteAuthor` vaut `non` — ce sont des STATUTS
-      // rattachés à une demande, pas des réponses (`root_id` seul ne suffit pas : deux
-      // runs simultanés peuvent partager le même fil).
+      // ⚠️ AUCUNE MENTION sur les STATUTS (accusé, résultat d'outil, image) — décision
+      // utilisateur du 2026-11-02 : un statut qui notifierait la personne à chaque outil
+      // serait insupportable, et l'accusé n'a pas à re-notifier celle qui vient d'écrire.
+      // ⚠️ L'ANCRAGE INTER-RUNS ne repose donc plus que sur `root_id` : c'est une LIMITE
+      // ASSUMÉE — deux runs simultanés dans le MÊME fil ne sont plus distingués par le
+      // préfixe (`root_id` reste le seul rattachement, et il est posé ci-dessous).
       let publies = 0;
       const publier = async (intermediaire: {
         text: string;
         fichiers?: readonly string[];
       }): Promise<void> => {
-        const texte = composeReplyText({
+        const texte = composeReply({
           text: intermediaire.text,
           message,
-          // ⚠️ Un rapport système n'est pas une personne : le citer serait du bruit
-          // (et sauterait le repli quand `quoteAuthor` vaut `oui`).
-          quoteAuthor: rapport ? "non" : "oui",
-        });
+          quoteAuthor: "non",
+        }).text;
         const fichiers = intermediaire.fichiers ?? [];
         await this.send(message.conversationId, {
           kind: "texte",
@@ -929,11 +929,16 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         this.derniereErreur = "Le générateur n'a produit aucun texte : rien n'a été publié.";
         return false;
       }
-      const texte = composeReplyText({
+      // ⚠️ MENTION NATIVE de l'auteur (`@pseudo`), JAMAIS une citation de son texte :
+      // la plateforme affiche déjà le message d'origine au-dessus de la réponse.
+      // ⚠️ Un rapport système n'a pas d'auteur humain : aucune mention.
+      const texte = composeReply({
         text,
         message,
         quoteAuthor: rapport ? "non" : effectiveQuoteAuthor(record),
-      });
+        platform: "mattermost",
+        ...(this.identite?.id !== undefined ? { botUserId: this.identite.id } : {}),
+      }).text;
       const fichiers = reponse.fichiers ?? [];
       await this.send(message.conversationId, {
         kind: "texte",
