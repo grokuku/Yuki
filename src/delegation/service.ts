@@ -39,6 +39,7 @@ import type {
   PendingJobSummary,
   SteerOutcome,
 } from "./ports.js";
+import { TIMEOUT_CODES, type TimeoutCode } from "./ports.js";
 import { buildBatchReportPrompt } from "./report.js";
 import { MAX_PENDING_STEERS } from "./steer.js";
 
@@ -733,6 +734,8 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       error?: string;
       /** Fichiers produits par la tâche (voir `HeavyRunResult.fichiers`). */
       fichiers?: readonly string[];
+      /** Phrase écrite par le SERVEUR, transportée telle quelle (voir `JobResult.repli`). */
+      repli?: string;
     },
   ): void {
     this.handles.delete(jobId);
@@ -747,6 +750,11 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       result.fichiers !== undefined && result.fichiers.length > 0
         ? { fichiers: result.fichiers }
         : {};
+    // ⚠️ Le REPLI est journalisé avec le résultat, comme les fichiers : il doit
+    // survivre à un redémarrage avant la livraison du rapport (sinon la personne
+    // du canal verrait une image sans explication).
+    const repli =
+      result.repli !== undefined && result.repli !== "" ? { repli: result.repli } : {};
     if (result.status === "completed") {
       this.store.append(jobId, "completed", {
         status: "completed",
@@ -755,17 +763,21 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
           text: result.text ?? "",
           usage: result.usage ?? { input: 0, output: 0 },
           ...fichiers,
+          ...repli,
         },
       });
     } else if (result.status === "cancelled") {
       this.store.append(jobId, "cancelled", {
         status: "cancelled",
         finishedAt,
-        ...(result.partial !== undefined || fichiers.fichiers !== undefined
+        ...(result.partial !== undefined ||
+        fichiers.fichiers !== undefined ||
+        repli.repli !== undefined
           ? {
               result: {
                 ...(result.partial !== undefined ? { partial: result.partial } : {}),
                 ...fichiers,
+                ...repli,
               },
             }
           : {}),
@@ -779,6 +791,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
           ...(result.partial !== undefined ? { partial: result.partial } : {}),
           ...(result.usage !== undefined ? { usage: result.usage } : {}),
           ...fichiers,
+          ...repli,
         },
         error: { message: sanitizeErrorText(result.error ?? "échec du worker lourd") },
       });
@@ -861,9 +874,17 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       // réveil de CANAL les joint au message publié ; sans eux, une image
       // déléguée ne serait jamais visible (le rapport ne porte que du texte).
       const fichiers: string[] = [];
+      // ⚠️ REPLI(S) DU LOT : joints comme les fichiers, et pour la même raison —
+      // le rapport d'un canal est RÉSUMÉ avant publication, et un repli perdu au
+      // résumé serait un repli silencieux. Le réveil de canal les ajoute APRÈS.
+      const replis: string[] = [];
       for (const record of records) {
         for (const id of record.result.fichiers ?? []) {
           if (!fichiers.includes(id)) fichiers.push(id);
+        }
+        const repli = record.result.repli;
+        if (repli !== undefined && repli !== "" && !replis.includes(repli)) {
+          replis.push(repli);
         }
       }
       try {
@@ -874,6 +895,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
             origin: ORIGIN_JOB_REPORT,
             jobId: head.id,
             ...(fichiers.length > 0 ? { fichiers } : {}),
+            ...(replis.length > 0 ? { repli: replis.join("\n") } : {}),
           },
         );
         if (handle && typeof handle.runId === "string") runId = handle.runId;
@@ -1016,10 +1038,20 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       case "failed": {
         const message = record.error?.message ?? "échec du worker lourd";
         const partial = record.result.partial;
-        if (message === "timeout" || message === "idle_timeout") {
+        // ⚠️ DÉPASSEMENT DE DÉLAI : le statut reste `timeout` (contrat historique),
+        // mais l'EXPLICATION du worker voyage avec lui. Sans elle, le modèle léger
+        // ne recevait que le mot « timeout » et INVENTAIT une cause — mesuré en
+        // production le 2026-11-02 (« interrompue faute de réponse de la machine »
+        // alors que la commande avait été tuée par notre propre délai).
+        if (TIMEOUT_CODES.some((code) => message === code || message.startsWith(`${code} :`))) {
+          const code = TIMEOUT_CODES.find(
+            (candidate) => message === candidate || message.startsWith(`${candidate} :`),
+          ) as TimeoutCode;
           return {
             status: "timeout",
             error: "timeout",
+            cause: code,
+            note: message,
             ...(partial !== undefined ? { partial } : {}),
           };
         }

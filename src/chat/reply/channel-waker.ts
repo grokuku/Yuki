@@ -1,31 +1,48 @@
 /**
- * RÉVEIL d'un job terminé quand sa conversation est un CANAL DISTANT.
+ * RÉVEIL d'un job terminé dans un CANAL — **le rapport RÉVEILLE Yuki, il ne publie pas**.
  *
- * ⚠️ LE TROU QUE CE MODULE FERME (2026-11-02). Un `delegate` lancé depuis un
- * canal produit un job ASYNCHRONE. Son résultat est livré par le service de
- * délégation via un « réveil » (`LightWaker.send`), et le seul réveil branché en
- * production est le HOST PI (`src/index.ts`, `delegation.setWaker(host)`). Or le
- * host refuse une session qu'il ne connaît pas (`PI_SESSION_ERROR`,
- * « Session inconnue. », `src/pi/sdk-host.ts:2295`) : une conversation de canal
- * n'est PAS une session Pi. Résultat sans ce module : le job se termine, son
- * rapport est perdu, et **la personne dans le canal attend indéfiniment**.
+ * ⚠️ INVARIANT (exigence utilisateur, rappelée dans `docs/lot18-chat.md`) : **dans un
+ * canal, un seul rédacteur — le tour de Yuki**. Le worker lourd REND un résultat, il
+ * ne parle jamais ; le SERVEUR ne publie qu'en dernier recours, et quand il le fait,
+ * il le DIT.
  *
- * ⚠️ CE QUE CE MODULE FAIT : il enveloppe le réveil historique sans le modifier.
- *  - session Pi (conversation LOCALE) ⇒ délégation EXACTE à `fallback` (aucun
- *    changement de comportement, testé) ;
- *  - conversation de CANAL (identifiant miroir `mm-…`/`dc-…`) ⇒ le rapport est
- *    RÉSUMÉ par le modèle léger puis PUBLIÉ dans ce canal (adaptateur de la
- *    plateforme). Aucun run Pi n'est ouvert, aucune session fantôme.
+ * ⚠️ LE DÉFAUT QUE CE MODULE CORRIGE (deux défauts, mesurés en production) :
+ *  1. le seul réveil branché était le HOST PI, qui REFUSE une session qu'il n'a pas
+ *     ouverte (« Session inconnue. », `src/pi/sdk-host.ts`) : un `delegate` lancé
+ *     depuis Mattermost produisait un job dont le résultat n'arrivait nulle part ;
+ *  2. corrigé, il a produit un SECOND RÉDACTEUR : le réveil RÉSUMAIT le rapport avec
+ *     un écrivain dédié puis le PUBLIAIT — deux messages collés, deux images, un
+ *     ordre cassé. Le rapport est désormais INJECTÉ comme message dans la conversation
+ *     du canal (`src/chat/reply/job-report.ts`) : Yuki le lit, décide de ce qu'elle
+ *     dit, et c'est SA réponse qui part.
  *
- * ⚠️ HONNÊTETÉ : si le résumé échoue, on publie quand même une phrase qui dit
- * la vérité (et qui donne l'identifiant du job, pour que « où en est le job X »
- * ait une réponse) ; si la PUBLICATION elle-même échoue, l'échec est journalisé
- * (`chat.job_report.failed`) — il n'y a rien d'autre à faire, et le taire serait
- * pire.
+ * ⚠️ CE MODULE EST LE RÉVEIL COMPOSITE, et il ne double AUCUN mécanisme :
+ *  - conversation LOCALE (session Pi) ⇒ délégation EXACTE à `fallback` (inchangé) ;
+ *  - conversation de CANAL (identifiant miroir `mm-…`/`dc-…`) ⇒ `wake` (le tour de
+ *    Yuki, qui publie lui-même) ;
+ *  - `wake` en ÉCHEC (modèle injoignable, canal supprimé, tour sans réponse) ⇒
+ *    REPLI EXPLICITE : le rapport part en TEXTE, précédé d'une phrase qui dit que
+ *    c'est un repli. C'est le SEUL cas où le serveur écrit dans un canal.
+ *
+ * ⚠️ RÉUTILISATION, PAS UN SECOND MÉCANISME : le réveil des SOURCES fait exactement
+ * la même chose pour une session Pi — un message ENCADRÉ, marqué d'une ORIGINE
+ * (`src/sources/frame.ts`, `ORIGIN_SOURCE`, `SourcesWaker.send`), qui déclenche un
+ * tour au lieu d'être publié. On reprend ce PATTERN à l'identique (encadrement +
+ * origine marquée + bornes, `src/chat/reply/job-report.ts`) ; seul le TRANSPORT
+ * change, parce qu'un canal n'est pas une session Pi : c'est l'adaptateur de la
+ * plateforme qui ouvre le tour (`wakeReport`), pas le host. Écrire un second
+ * réveil parallèle aurait produit exactement le doublon que ce module supprime.
+ *
+ * ⚠️ ORDRE : les réveils d'un MÊME canal sont SÉRIALISÉS (une file par
+ * conversation). Deux réveils simultanés publieraient deux messages qui se
+ * chevauchent — donc un ordre non garanti, et éventuellement un repli qui double un
+ * tour de Yuki. Les canaux DIFFÉRENTS restent parallèles.
  */
 
 import type { LightWaker } from "../../delegation/ports.js";
 import { isMirrorConversationId } from "../mirror.js";
+import type { ChatWakeRequest } from "../types.js";
+import { frameRapportSysteme } from "./job-report.js";
 
 /** Journal minimal (aucun type du SDK ne traverse ce module). */
 export interface ChannelWakerLogger {
@@ -33,37 +50,39 @@ export interface ChannelWakerLogger {
   warn(message: string, fields?: Record<string, unknown>): void;
 }
 
+/** Demande de réveil d'un canal — définie avec le contrat d'adaptateur (`ChatWakeRequest`). */
+export type ChannelWakeRequest = ChatWakeRequest;
+
 export interface ChannelWakerOptions {
   /** Réveil historique : les conversations LOCALES gardent leur comportement. */
   fallback: LightWaker;
   /**
-   * Résume le rapport d'un job en une réponse publiable (modèle léger). Peut
-   * lever : l'échec est traité, jamais propagé au service de délégation.
+   * RÉVEILLE Yuki DANS le canal : injecte le message et attend que SA réponse soit
+   * publiée. Peut lever : l'échec déclenche le REPLI, jamais un silence.
    */
-  summarize: (report: string) => Promise<string>;
+  wake: (request: ChannelWakeRequest) => Promise<void>;
   /**
-   * Publie un texte (et, s'il y en a, des FICHIERS) dans le canal. Peut lever
-   * (canal supprimé, jeton expiré…) : l'échec est traité, jamais propagé.
+   * REPLI : publie un TEXTE (et, s'il y en a, des FICHIERS) dans le canal.
    *
-   * ⚠️ `fichiers` ne doit JAMAIS faire perdre le texte : un échec de publication
-   * avec fichiers est RETENTÉ sans eux, en le disant (voir `publier`).
+   * ⚠️ Ce n'est PAS le chemin normal : il ne sert que si `wake` a échoué, et le
+   * texte publié le DIT (`reportFallbackText`). Peut lever (canal supprimé, jeton
+   * expiré…) : l'échec est traité, jamais propagé.
    */
   post: (conversationId: string, text: string, fichiers?: readonly string[]) => Promise<void>;
   logger?: ChannelWakerLogger;
-  /** Borne du texte publié (défaut `CHANNEL_REPORT_MAX_CHARS`). */
+  /** Borne du texte injecté/publié (défaut `CHANNEL_REPORT_MAX_CHARS`). */
   maxChars?: number;
 }
 
-/** Caractères publiés au maximum : au-delà, on tronque et on le dit. */
+/** Caractères d'un rapport transmis au canal, au maximum : au-delà, on tronque et on le dit. */
 export const CHANNEL_REPORT_MAX_CHARS = 4_000;
 
 /**
- * Nombre maximal de FICHIERS joints au rapport d'un job.
+ * Nombre maximal de FICHIERS joints à la réponse de Yuki.
  *
- * ⚠️ Un rapport agrège un LOT de jobs : sans borne, une tâche bavarde posterait
- * dix images d'un coup dans le canal. Au-delà, on joint les premiers et on DIT
- * combien ne suivent pas — le fichier reste dans le store de la conversation,
- * jamais détruit en silence.
+ * ⚠️ Un rapport agrège un LOT de jobs : sans borne, une tâche bavarde joindrait dix
+ * images d'un coup. Au-delà, on joint les premiers et on DIT combien ne suivent pas —
+ * le fichier reste dans le store de la conversation, jamais détruit en silence.
  */
 export const CHANNEL_REPORT_MAX_FILES = 3;
 
@@ -88,62 +107,71 @@ export function filesOmittedText(omis: number): string {
   );
 }
 
-/** Phrase de repli quand le résumé n'a pas pu être produit (jamais un mensonge). */
+/**
+ * Phrase du REPLI (le serveur parle : il doit le dire).
+ *
+ * ⚠️ Elle nomme l'identifiant du job pour que « où en est le job X » ait une
+ * réponse, et elle annonce que le rapport brut suit — jamais de rapport muet, jamais
+ * de prétention à un résumé qui n'a pas eu lieu.
+ */
 export function reportFallbackText(jobId?: string): string {
   const ref = jobId && jobId.length > 0 ? ` (job ${jobId})` : "";
   return (
-    `Une tâche d'arrière-plan lancée depuis ce canal s'est terminée${ref}, mais je ` +
-    "n'ai pas pu en rédiger le résumé ici. Le résultat n'est pas perdu : demande-moi " +
-    (jobId && jobId.length > 0 ? `« où en est le job ${jobId} »` : "l'état de la tâche") +
-    " et je te le donnerai."
+    `⚠️ Repli : je n'ai pas pu reprendre la rédaction dans ce canal, donc voici le ` +
+    `résultat BRUT de la tâche${ref}, tel quel.` +
+    (jobId && jobId.length > 0 ? ` (demande-moi « où en est le job ${jobId} ».)` : "")
   );
 }
 
 /**
- * Réveil COMPOSITE : les conversations locales passent par `fallback`, les
- * canaux reçoivent une réponse publiée.
+ * Réveil COMPOSITE : les conversations locales passent par `fallback`, les canaux
+ * réveillent Yuki (et ne publient en texte qu'en dernier recours).
  */
 export function createChannelAwareWaker(options: ChannelWakerOptions): LightWaker {
   const maxChars = options.maxChars ?? CHANNEL_REPORT_MAX_CHARS;
+  /** File par CONVERSATION : deux réveils d'un même canal ne se chevauchent jamais. */
+  const files = new Map<string, Promise<void>>();
 
   const borné = (text: string): string => {
     if (text.length <= maxChars) return text;
     return `${text.slice(0, maxChars)}\n[…tronqué]`;
   };
 
-  /** Publication d'un rapport dans son canal (jamais bloquante pour l'appelant). */
-  const publier = async (
+  /** Sérialise une tâche par conversation (les canaux différents restent parallèles). */
+  const enfiler = (conversationId: string, tache: () => Promise<void>): void => {
+    const precedente = files.get(conversationId) ?? Promise.resolve();
+    const suivante = precedente.then(tache, tache);
+    // ⚠️ On ne laisse pas la promesse accumuler des rejets : `tache` ne lève jamais.
+    files.set(
+      conversationId,
+      suivante.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+  };
+
+  /**
+   * Publication du REPLI : le rapport en TEXTE, précédé de la phrase qui le dit.
+   *
+   * ⚠️ Les fichiers sont joints APRÈS le texte, et un échec de fichier ne fait pas
+   * perdre le texte (on retente SANS, en le disant) : un rapport sans son image reste
+   * utile, un rapport perdu ne l'est jamais.
+   */
+  const replier = async (
     conversationId: string,
-    report: string,
+    texte: string,
     jobId: string | undefined,
-    fichiers: readonly string[],
+    joints: readonly string[],
   ): Promise<void> => {
-    let texte = "";
-    try {
-      texte = (await options.summarize(report)).trim();
-    } catch (error) {
-      options.logger?.warn("chat.job_report.summary_failed", {
-        conversation: conversationId,
-        job_id: jobId ?? null,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    if (texte === "") texte = reportFallbackText(jobId);
-    // ⚠️ BORNE des fichiers : les premiers sont joints, le reste est DIT.
-    const joints = fichiers.slice(0, CHANNEL_REPORT_MAX_FILES);
-    const omis = fichiers.length - joints.length;
-    if (omis > 0) texte = `${texte}\n\n${filesOmittedText(omis)}`;
-    const texteBorne = borné(texte);
+    const corps = borné(`${reportFallbackText(jobId)}\n\n${texte}`);
     try {
       await options.post(
         conversationId,
-        texteBorne,
+        corps,
         joints.length > 0 ? joints : undefined,
       );
     } catch (error) {
-      // ⚠️ ÉCHEC DE FICHIER ⇒ LE TEXTE PART QUAND MÊME. Un rapport sans son
-      // image reste utile ; un rapport perdu ne l'est jamais. On retente donc
-      // SANS les fichiers, en disant l'échec (jamais d'échec silencieux).
       if (joints.length === 0) {
         // ⚠️ Il n'y a AUCUN autre chemin : c'est le seul endroit où l'échec peut
         // être dit. Le taire ferait attendre la personne du canal pour toujours.
@@ -163,7 +191,7 @@ export function createChannelAwareWaker(options: ChannelWakerOptions): LightWake
       try {
         await options.post(
           conversationId,
-          borné(`${texteBorne}\n\n${filesFailureText(joints.length)}`),
+          borné(`${corps}\n\n${filesFailureText(joints.length)}`),
         );
       } catch (second) {
         options.logger?.warn("chat.job_report.failed", {
@@ -175,20 +203,69 @@ export function createChannelAwareWaker(options: ChannelWakerOptions): LightWake
     }
   };
 
+  /** Réveil d'un canal : Yuki rédige ; le serveur ne parle qu'en repli. */
+  const reveiller = async (
+    conversationId: string,
+    report: string,
+    jobId: string | undefined,
+    fichiers: readonly string[],
+    repli: string | undefined,
+  ): Promise<void> => {
+    // ⚠️ BORNE des fichiers : les premiers sont joints, le reste est DIT (le fichier
+    // n'est jamais détruit, il reste dans les fichiers de la conversation).
+    const joints = fichiers.slice(0, CHANNEL_REPORT_MAX_FILES);
+    const omis = fichiers.length - joints.length;
+    // ⚠️ Le message injecté nomme les fichiers pour que Yuki puisse les PUBLIER
+    // (`fichier_ids`) : sans leurs identifiants, elle ne les a pas.
+    const texte = frameRapportSysteme({
+      rapport: borné(omis > 0 ? `${report}\n\n${filesOmittedText(omis)}` : report),
+      fichiers: joints,
+      ...(repli !== undefined ? { repli } : {}),
+      ...(jobId !== undefined ? { jobId } : {}),
+    });
+    options.logger?.info("chat.job_report.waking", {
+      conversation: conversationId,
+      job_id: jobId ?? null,
+      fichiers: joints.length,
+    });
+    try {
+      await options.wake({
+        conversationId,
+        texte,
+        ...(jobId !== undefined ? { jobId } : {}),
+        ...(joints.length > 0 ? { fichiers: joints } : {}),
+      });
+      return;
+    } catch (error) {
+      // ⚠️ SEUL CAS OÙ LE SERVEUR PARLE : le tour de Yuki n'a pas eu lieu (modèle
+      // injoignable, canal disparu, file pleine). On publie le rapport en texte, et
+      // on le DIT — un silence laisserait la personne attendre indéfiniment.
+      options.logger?.warn("chat.job_report.wake_failed", {
+        conversation: conversationId,
+        job_id: jobId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await replier(conversationId, texte, jobId, joints);
+    }
+  };
+
   return {
     send(sessionId, text, opts) {
       if (!isMirrorConversationId(sessionId)) {
         // Conversation LOCALE : comportement historique, à l'identique.
         return options.fallback.send(sessionId, text, opts);
       }
-      options.logger?.info("chat.job_report.publishing", {
-        conversation: sessionId,
-        job_id: opts?.jobId ?? null,
-        origin: opts?.origin ?? null,
-        fichiers: opts?.fichiers?.length ?? 0,
-      });
-      void publier(sessionId, text, opts?.jobId, opts?.fichiers ?? []);
-      // Aucun run Pi n'est ouvert : pas d'identifiant de run à rendre.
+      enfiler(sessionId, () =>
+        reveiller(
+          sessionId,
+          text,
+          opts?.jobId,
+          opts?.fichiers ?? [],
+          opts?.repli,
+        ),
+      );
+      // Aucun run Pi n'est ouvert ici : pas d'identifiant de run à rendre (le tour
+      // de Yuki est celui du canal, suivi par son propre adaptateur).
       return undefined;
     },
   };

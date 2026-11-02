@@ -275,3 +275,42 @@ port fichiers est fourni (`files: filesService`, `src/index.ts:1509`). Elle ne p
 les voir que si le modèle du run a la **vision** (`receivesImages`,
 `src/index.ts:1504`) — et seulement pour un fichier **de ce canal**
 (`conversationSource`, `src/index.ts:1470`).
+
+## 15. ⚠️ INVARIANT — dans un canal, UN SEUL RÉDACTEUR : le tour de Yuki
+
+> **Le worker REND un résultat. Il ne parle pas.** Le serveur ne parle qu'en dernier
+> recours, et quand il le fait, il le **dit**.
+
+Ce n'est pas une consigne de prompt : c'est tenu par la **construction**.
+
+| Qui peut écrire | Où c'est tenu |
+| --- | --- |
+| **Le tour de Yuki** — la seule voie normale | `src/chat/mattermost/adapter.ts` (`redigerEtPublier`), `src/chat/discord/adapter.ts` |
+| `publier_dans_canal` — **dans le RUN DE CANAL** (c'est Yuki) | `REMOTE_SAFE_TOOLS`, `src/llm/tool-policy.ts` ; port `src/chat/reply/channel-post.ts` |
+| Le **worker lourd** — ⚠️ **jamais** | il n'a **aucun** outil de publication : ni catégorie de politique, ni définition (`tests/pi/worker-sans-publication.test.ts`) |
+| Le **serveur** — **repli uniquement** (réveil impossible), et il le dit | `reportFallbackText`, `src/chat/reply/channel-waker.ts` |
+
+**Le rapport d'une tâche terminée ne se poste pas : il RÉVEILLE Yuki.**
+`src/chat/reply/channel-waker.ts` → `wakeReport` de l'adaptateur → un message **système**
+(`src/chat/reply/job-report.ts`, origine `job`, auteur « Rapport de tâche ») entre dans la
+conversation ; Yuki le lit, et **sa** réponse est publiée, avec les fichiers du job
+rattachés pour qu'elle puisse les publier (ou qu'ils partent avec elle).
+
+Ce que l'injection garantit, et qui est verrouillé par des tests :
+
+| Garantie | Pourquoi | Où |
+| --- | --- | --- |
+| rapport **reconnaissable** (jamais un humain) | un rapport n'est pas une parole de quelqu'un | `RAPPORT_SYSTEME_AUTHOR_ID`, `estRapportSysteme` |
+| contenu = **DONNÉE**, pas consigne | un rapport peut citer du texte impératif (« supprime tout ») | `RAPPORT_SYSTEME_RAPPEL` |
+| **aucune boucle de rédélégation** | un tour né d'un rapport n'a pas `delegate` (structurel) | `src/index.ts` (`remoteAgents: origine !== "job"`) |
+| fichiers du job **disponibles** | sinon elle ne peut pas les publier | `fichiersDuJob` du prompt + message injecté |
+| **aucun fichier envoyé deux fois** | publié ailleurs ⇒ pas re-joint à la réponse | `src/chat/reply/channel-post-recorder.ts` |
+| **ordre** : un seul envoi en vol par conversation | deux `POST` simultanés = messages collés | `src/chat/reply/send-queue.ts` |
+| **repli explicite** si le réveil échoue | un silence ferait attendre indéfiniment | `reportFallbackText`, `chat.job_report.wake_failed` |
+
+**Preuves** : `tests/chat/job-report-files.test.ts` (bout en bout : un job qui produit une
+image ⇒ **un seul** message, celui de Yuki, avec `file_ids`), `tests/chat/job-report-wake.test.ts`
+(message système, prompt, anti-rédélégation, fichiers joints une fois),
+`tests/chat/channel-waker.test.ts` (réveil, repli, ordre), `tests/chat/send-queue.test.ts`
+(une publication en vol par conversation), `tests/pi/worker-sans-publication.test.ts`
+(le worker n'a **aucun** outil de publication, et le run de canal garde le sien).

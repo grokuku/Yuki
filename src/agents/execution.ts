@@ -23,7 +23,12 @@ import type { AgentHub } from "./connection.js";
 import { isChannelError } from "./errors.js";
 import { destructiveLabels, evaluateDestructive } from "./destructive.js";
 import { lockedAgentMessage, type AgentLockPort } from "./lock.js";
-import { escapeOutputText, frameAgentDirectory, frameCommandOutput } from "./output.js";
+import {
+  escapeOutputText,
+  frameAgentDirectory,
+  frameCommandOutput,
+  INTERRUPTION_CONSEQUENCE,
+} from "./output.js";
 import { buildApprovalResultPrompt, ORIGIN_APPROVAL_RESULT } from "./approval-report.js";
 import { buildSecretStoredPrompt, ORIGIN_SECRET_STORED } from "./secret-report.js";
 import type { AuditLog } from "./audit.js";
@@ -478,8 +483,98 @@ export interface ExecutionServiceOptions {
 /** Timeout par défaut d'une commande (ms). */
 export const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 
+/** Borne BASSE d'un délai de commande accepté (ms). */
+export const MIN_COMMAND_TIMEOUT_MS = 1_000;
+
+/**
+ * PLAFOND DUR d'un délai de commande (ms) — 15 minutes.
+ *
+ * ⚠️ POURQUOI CE PLAFOND EXISTE (production, 2026-11-02) : une mise à jour de
+ * Raspberry Pi (`apt update && apt upgrade -y`) dure 5 à 20 minutes. Avec le
+ * seul défaut de 60 s, elle était tuée AU MILIEU, et le rapport ne pouvait plus
+ * rien dire d'utile. Le modèle peut donc DEMANDER un délai plus long (paramètre
+ * `timeout_ms` de `run_command`), mais dans cette borne : sans plafond, un
+ * modèle qui écrit `3600000` monopoliserait un worker pendant une heure.
+ *
+ * ⚠️ Il reste SOUS `delegation.totalTimeoutMs` (1_200_000 ms = 20 min,
+ * `src/config/schema.ts`), et sous le chien de garde d'outil du worker lourd
+ * (`DEFAULT_TOOL_WATCHDOG_MS` = 16 min, `src/pi/sdk/heavy-worker.ts`) : une
+ * commande ne peut pas survivre à la borne du job qui la porte — sinon elle
+ * serait coupée par une limite PLUS LARGE que la sienne, sans explication.
+ */
+export const MAX_COMMAND_TIMEOUT_MS = 900_000;
+
 /** Timeout par défaut d'une capture d'écran (ms). */
 export const DEFAULT_SCREENSHOT_TIMEOUT_MS = 30_000;
+
+/** Résolution d'un délai de commande DEMANDÉ (par le modèle ou par l'appelant). */
+export interface CommandTimeoutResolution {
+  /** Délai réellement appliqué (toujours dans `[MIN, MAX]`). */
+  timeoutMs: number;
+  /** Valeur demandée, si elle était exploitable (nombre fini). */
+  requestedMs?: number;
+  /** `true` quand la valeur demandée a été RAMENÉE dans les bornes. */
+  clamped: boolean;
+}
+
+/**
+ * Ramène un délai de commande dans ses bornes. Une valeur absente, non finie ou
+ * non exploitable vaut le DÉFAUT (jamais 0 : un délai nul tuerait la commande
+ * avant son démarrage).
+ *
+ * ⚠️ Fonction PURE et exportée : c'est la SOURCE UNIQUE du calcul, utilisée par
+ * l'exécution (`run`) et vérifiable directement en test — aucun second chemin.
+ */
+export function resolveCommandTimeout(requested?: unknown): CommandTimeoutResolution {
+  if (typeof requested !== "number" || !Number.isFinite(requested)) {
+    return { timeoutMs: DEFAULT_COMMAND_TIMEOUT_MS, clamped: false };
+  }
+  const wanted = Math.trunc(requested);
+  if (wanted < MIN_COMMAND_TIMEOUT_MS) {
+    return { timeoutMs: MIN_COMMAND_TIMEOUT_MS, requestedMs: wanted, clamped: true };
+  }
+  if (wanted > MAX_COMMAND_TIMEOUT_MS) {
+    return { timeoutMs: MAX_COMMAND_TIMEOUT_MS, requestedMs: wanted, clamped: true };
+  }
+  return { timeoutMs: wanted, requestedMs: wanted, clamped: false };
+}
+
+/** Secondes lisibles d'une durée (jamais 0, jamais une décimale). */
+function secondsOf(ms: number | undefined): number | undefined {
+  if (ms === undefined || !Number.isFinite(ms) || ms <= 0) return undefined;
+  return Math.max(1, Math.round(ms / 1000));
+}
+
+/**
+ * Message d'une commande TUÉE à l'expiration de son délai (l'agent a répondu :
+ * il a interrompu l'arbre de processus, voir `agent/internal/exec/exec.go`).
+ * ⚠️ Le code de sortie n'est pas une conclusion : la commande a pu faire la
+ * moitié de son travail.
+ */
+export function interruptionMessage(durationMs?: number): string {
+  const s = secondsOf(durationMs);
+  const quand = s !== undefined ? `après ${s} s` : "à l'expiration du délai accordé";
+  return `Commande INTERROMPUE ${quand} (délai maximal accordé) : ${INTERRUPTION_CONSEQUENCE}`;
+}
+
+/**
+ * Message d'un DÉPASSEMENT SANS RÉSULTAT (la borne côté Yuki a expiré avant
+ * toute réponse de l'agent).
+ *
+ * ⚠️ Deux cas sont indistinguables d'ici : la commande est en cours, ou elle a
+ * fini sans que la réponse arrive. Le message le DIT — jamais « la machine n'a
+ * pas répondu », qui laisserait croire que rien n'a été exécuté alors que la
+ * commande ÉTAIT partie.
+ */
+export function timeoutWithoutResultMessage(timeoutMs: number): string {
+  const s = secondsOf(timeoutMs);
+  const duree = s !== undefined ? `${s} s` : "délai accordé";
+  return (
+    `Aucun résultat reçu de la machine dans le délai de ${duree} ` +
+    "(la commande AVAIT été transmise) : " + INTERRUPTION_CONSEQUENCE +
+    " Son état final n'est pas connu : elle est peut-être encore en cours côté machine."
+  );
+}
 
 /**
  * Décision du garde-fou PAR AGENT (D118), partagée par l'exécution de commande
@@ -690,11 +785,27 @@ export class AgentExecutionService implements ExecutionServicePort {
 
     // 4. Envoi (au plus une fois) et attente du résultat.
     const cmdId = this.idFactory();
-    const timeoutMs = request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    // ⚠️ Délai BORNÉ (plafond dur : `MAX_COMMAND_TIMEOUT_MS`). Le modèle peut
+    // demander plus que le défaut pour une action LONGUE (mise à jour système),
+    // jamais sans limite.
+    const timeout = resolveCommandTimeout(request.timeoutMs);
+    const timeoutMs = timeout.timeoutMs;
+    if (timeout.clamped) {
+      this.logger.warn("agents.exec.timeout_borne", {
+        agent_id: agentId,
+        agent_name: agentName || null,
+        requested_ms: timeout.requestedMs ?? null,
+        applied_ms: timeoutMs,
+        min_ms: MIN_COMMAND_TIMEOUT_MS,
+        max_ms: MAX_COMMAND_TIMEOUT_MS,
+        origin: request.origin ?? null,
+      });
+    }
     this.logger.info("agents.exec.sent", {
       agent_id: agentId,
       agent_name: agentName || null,
       cmd_id: cmdId,
+      timeout_ms: timeoutMs,
       destructive: verdict.destructive,
       origin: request.origin ?? null,
     });
@@ -761,13 +872,18 @@ export class AgentExecutionService implements ExecutionServicePort {
         destructiveIds: verdict.ids,
         exitCode: result.exitCode,
         framed,
-        message: `Commande exécutée (code de sortie ${result.exitCode}).`,
+        // ⚠️ Un délai dépassé n'est JAMAIS présenté comme une exécution
+        // ordinaire : le message, comme le bloc `<sortie>`, dit que la commande
+        // a été INTERROMPUE et qu'elle a pu modifier la machine.
+        message: result.timedOut
+          ? interruptionMessage(result.durationMs)
+          : `Commande exécutée (code de sortie ${result.exitCode}).`,
         durationMs: result.durationMs,
         truncated: result.truncated,
         timedOut: result.timedOut,
       };
     } catch (error) {
-      return this.onChannelFailure(agentId, agentName, command, verdict, error);
+      return this.onChannelFailure(agentId, agentName, command, verdict, error, timeoutMs);
     }
   }
 
@@ -1619,12 +1735,18 @@ export class AgentExecutionService implements ExecutionServicePort {
   }
 
   /** Traduit un échec de canal en résultat terminal audité (jamais la sortie). */
+  /**
+   * Échec de canal. ⚠️ Un DÉPASSEMENT DE DÉLAI ne rend jamais le message brut du
+   * transport (« Délai dépassé sans résultat. ») : il dit la durée, l'incertitude
+   * sur l'état de la machine, et ce que le lecteur ne doit PAS supposer.
+   */
   private onChannelFailure(
     agentId: string,
     agentName: string,
     command: string,
     verdict: { destructive: boolean; ids: string[] },
     error: unknown,
+    timeoutMs: number = DEFAULT_COMMAND_TIMEOUT_MS,
   ): ExecutionOutcome {
     const code = isChannelError(error) ? error.code : "send_failed";
     const status: ExecutionStatus =
@@ -1635,7 +1757,12 @@ export class AgentExecutionService implements ExecutionServicePort {
           : code === "agent_offline"
             ? "offline"
             : "failed";
-    const message = error instanceof Error ? error.message : String(error);
+    const message =
+      code === "command_timeout"
+        ? timeoutWithoutResultMessage(timeoutMs)
+        : error instanceof Error
+          ? error.message
+          : String(error);
 
     this.audit.append({
       event: "command",
@@ -1654,6 +1781,7 @@ export class AgentExecutionService implements ExecutionServicePort {
       agent_name: agentName || null,
       status,
       code,
+      timeout_ms: code === "command_timeout" ? timeoutMs : null,
       error: message,
     });
 

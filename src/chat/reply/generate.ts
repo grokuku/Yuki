@@ -28,6 +28,10 @@ import type { ChatOriginMode } from "../../llm/tool-policy.js";
 import { mirrorPlatformOf } from "../mirror.js";
 import type { RemoteMessage } from "../types.js";
 import { buildReplyPrompt } from "./prompt.js";
+import {
+  createChannelPostRecorder,
+  type ChannelPostRecorder,
+} from "./channel-post-recorder.js";
 import { ReplyProgress, type ProgressLogger, type ProgressPublisher } from "./progress.js";
 
 /** Un run distant : sa politique (allowlist) et ses définitions d'outils. */
@@ -81,6 +85,7 @@ export interface RemoteReplyGeneratorOptions {
   runTools: (
     conversationId: string,
     onFileProduced: (fileId: string) => void,
+    contexte: ReplyRunContext,
   ) => RemoteRunTools;
   /** Écrivain SDK, construit avec le run (la politique y entre). */
   createWriter: (run: ReplyRun) => SdkPromptWriter;
@@ -110,6 +115,32 @@ export interface RemoteReplyInput {
    * publication intermédiaire (aucun changement pour un appelant qui n'en veut pas).
    */
   publier?: ProgressPublisher;
+  /**
+   * ORIGINE du tour : `job` = le message déclencheur est un RAPPORT SYSTÈME
+   * (`src/chat/reply/job-report.ts`), pas une parole d'humain (défaut `message`).
+   */
+  origine?: "message" | "job";
+  /**
+   * FICHIERS produits par la tâche (identifiants du store de CETTE conversation).
+   *
+   * ⚠️ Ils sont joints à la réponse SAUF s'ils ont été publiés ailleurs dans le tour
+   * (`publier_dans_canal`) : un fichier ne doit jamais partir deux fois.
+   */
+  fichiersDuJob?: readonly string[];
+}
+
+/**
+ * CONTEXTE du tour transmis à la fabrique d'outils (`runTools`).
+ *
+ * ⚠️ Deux décisions structurelles en dépendent, jamais le prompt seul :
+ *  - `origine` : un tour né d'un rapport de tâche ne peut pas DÉLÉGUER (aucune
+ *    nouvelle tâche ⇒ aucune boucle de rédélégation) ;
+ *  - `channelPosts` : le suivi des publications inter-canal du tour, pour que les
+ *    fichiers du job ne soient pas joints à la réponse en plus d'avoir été publiés.
+ */
+export interface ReplyRunContext {
+  origine: "message" | "job";
+  channelPosts: ChannelPostRecorder;
 }
 
 /** Sortie : texte seul, ou texte + identifiants de fichiers à joindre. */
@@ -163,11 +194,22 @@ export function createRemoteReplyGenerator(
     // mais `onFileProduced` ne tire que PENDANT le run : la fermeture est donc
     // toujours renseignée au moment où elle sert.
     let progress: ReplyProgress | undefined;
-    const run = options.runTools(input.message.conversationId, (fileId) => {
-      if (produits.includes(fileId)) return;
-      produits.push(fileId);
-      progress?.publierFichier(fileId);
-    });
+    // ⚠️ ORIGINE du tour : un rapport de tâche (`job`) ne relance AUCUN travail.
+    const origine = input.origine ?? "message";
+    // ⚠️ SUIVI des publications inter-canal de CE tour (état local) : il porte la
+    // garantie « aucun fichier envoyé deux fois ». Un fichier du job publié ailleurs
+    // n'est PAS re-joint à la réponse ; sans ce suivi, l'image apparaîtrait dans le
+    // canal cible ET ici (défaut de production du 2026-11-02).
+    const channelPosts = createChannelPostRecorder();
+    const run = options.runTools(
+      input.message.conversationId,
+      (fileId) => {
+        if (produits.includes(fileId)) return;
+        produits.push(fileId);
+        progress?.publierFichier(fileId);
+      },
+      { origine, channelPosts },
+    );
     if (input.publier !== undefined) {
       const conversationId = input.message.conversationId;
       progress = new ReplyProgress({
@@ -225,6 +267,12 @@ export function createRemoteReplyGenerator(
       message: input.message,
       botName: options.botName(input.message.conversationId),
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      // ⚠️ ORIGINE et FICHIERS du job : sans eux, Yuki lit un rapport qui parle
+      // d'une image qu'elle ne peut ni nommer ni publier.
+      ...(origine === "job" ? { origine: "job" as const } : {}),
+      ...(input.fichiersDuJob !== undefined
+        ? { fichiersDuJob: input.fichiersDuJob }
+        : {}),
     });
     // ⚠️ `images` n'est passé que s'il y en a : les options du prompt restent alors
     // EXACTEMENT celles d'un message texte (aucune surprise pour un modèle sans vision).
@@ -256,6 +304,19 @@ export function createRemoteReplyGenerator(
 
     // ⚠️ Les fichiers DÉJÀ postés ne sont pas réattachés (ils auraient deux fois).
     const restants = progression !== undefined ? progression.fichiersRestants(produits) : produits;
+    // ⚠️ FICHIERS DU JOB : joints ici SAUF s'ils ont été publiés ailleurs dans le tour
+    // (`publier_dans_canal`). C'est la seule raison d'avoir un suivi par tour.
+    const publiesAilleurs = new Set(channelPosts.fichiersPublies());
+    const duJob = (input.fichiersDuJob ?? []).filter(
+      (id) => id !== "" && !publiesAilleurs.has(id) && !restants.includes(id),
+    );
+    for (const id of duJob) restants.push(id);
+    if (channelPosts.echecs().length > 0) {
+      options.logger?.warn?.("chat.channel_post.failed", {
+        conversation: input.message.conversationId,
+        echecs: channelPosts.echecs().length,
+      });
+    }
     return restants.length > 0 ? { text: texte, fichiers: restants } : texte;
   };
 }

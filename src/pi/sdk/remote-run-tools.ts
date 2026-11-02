@@ -158,9 +158,9 @@ export interface RemoteRunToolPorts {
  *
  * ⚠️ Deux garanties distinctes :
  *  - `delegate` : le job est rattaché au canal (`lightSessionId`), donc son
- *    rapport est livré dans CE canal (voir `createChannelAwareWaker`,
+ *    rapport RÉVEILLE Yuki dans CE canal (voir `createChannelAwareWaker`,
  *    `src/chat/reply/channel-waker.ts`) — il ne « remonte » pas dans une session
- *    éphémère que personne ne verra ;
+ *    éphémère que personne ne verra, et il n'est pas publié par le serveur ;
  *  - `job_status`/`cancel_job`/`steer_job` : un job d'un AUTRE canal (ou d'une
  *    conversation locale) répond `not_found`. Sans ce cloisonnement, n'importe
  *    quel membre d'un canal pourrait lire ou annuler le travail d'un autre.

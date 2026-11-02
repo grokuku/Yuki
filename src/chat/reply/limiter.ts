@@ -79,10 +79,14 @@ export class ReplyLimiter {
   /**
    * Exécute `tache` dans la limite, ou la MET EN ATTENTE, ou la REFUSE.
    *
-   * Rend une promesse résolue quand la tâche est terminée (ou immédiatement en cas de
-   * refus) : l'appelant peut donc l'attendre sans se demander ce qui s'est passé.
+   * Rend la valeur de la tâche (ou `undefined` en cas de refus, et `undefined` si la
+   * tâche a levé — l'échec est journalisé, jamais propagé à l'appelant).
+   *
+   * ⚠️ GÉNÉRIQUE À DESSEIN : le réveil de canal a besoin de savoir si le tour a
+   * réellement PUBLIÉ (`wakeReport` : sinon le rapport part en repli texte). Une
+   * signature `Promise<void>` forcerait un état partagé pour la même information.
    */
-  async run(tache: () => Promise<void>): Promise<void> {
+  async run<T>(tache: () => Promise<T>): Promise<T | undefined> {
     if (this.actifs >= this.maxConcurrent) {
       if (this.file.length >= this.maxQueue) {
         this.refusees += 1;
@@ -92,7 +96,7 @@ export class ReplyLimiter {
           enCours: this.actifs,
           enAttente: this.file.length,
         });
-        return;
+        return undefined;
       }
       // On attend une PLACE ; le libérant nous la transmet (il incrémente `actifs`).
       await new Promise<void>((resolve) => {
@@ -102,12 +106,13 @@ export class ReplyLimiter {
       this.actifs += 1;
     }
     try {
-      await tache();
+      return await tache();
     } catch (error) {
       this.logger?.warn("chat.reply.task_failed", {
         plateforme: this.plateforme,
         error: error instanceof Error ? error.message : String(error),
       });
+      return undefined;
     } finally {
       this.actifs -= 1;
       this.libererUnePlace();

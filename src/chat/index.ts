@@ -133,7 +133,7 @@ export {
 } from "./sync/service.js";
 export type { ChatSyncChannel, ChatSyncPlatform } from "./sync/platform.js";
 export {
-  CHAT_JOB_REPORT_TIMEOUT_MS,
+  CHAT_JOB_REPORT_INSTRUCTION,
   CHAT_JUDGE_SYSTEM_PROMPT,
   CHAT_REPLY_SYSTEM_PROMPT,
   CHAT_JUDGE_TIMEOUT_MS,
@@ -155,11 +155,32 @@ export {
 } from "./reply/generate.js";
 export {
   CHANNEL_REPORT_MAX_CHARS,
+  CHANNEL_REPORT_MAX_FILES,
   createChannelAwareWaker,
+  filesFailureText,
+  filesOmittedText,
   reportFallbackText,
+  type ChannelWakeRequest,
   type ChannelWakerLogger,
   type ChannelWakerOptions,
 } from "./reply/channel-waker.js";
+export {
+  RAPPORT_SYSTEME_AUTHOR_ID,
+  RAPPORT_SYSTEME_AUTHOR_NAME,
+  RAPPORT_SYSTEME_ENTETE,
+  RAPPORT_SYSTEME_FICHIERS_ENTETE,
+  RAPPORT_SYSTEME_RAPPEL,
+  estRapportSysteme,
+  frameRapportSysteme,
+  messageRapportSysteme,
+  type RapportSystemeInput,
+} from "./reply/job-report.js";
+export {
+  createChannelPostRecorder,
+  type ChannelPostFailure,
+  type ChannelPostRecorder,
+} from "./reply/channel-post-recorder.js";
+export { ConversationSendQueue } from "./reply/send-queue.js";
 export {
   REPLY_MAX_CONCURRENT,
   REPLY_MAX_QUEUE,
@@ -250,6 +271,7 @@ export {
   type ChatApprovalRequest,
   type ChatOutboundMessage,
   type ChatRunOrigin,
+  type ChatWakeRequest,
   type ChatFetchOptions,
   type ChatFetchPage,
   type ChatMode,

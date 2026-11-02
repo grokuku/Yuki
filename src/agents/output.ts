@@ -43,6 +43,34 @@ export const SORTIE_CLOSE = `</${SORTIE_TAG}>`;
 const SORTIE_EMPTY_LABEL = "(aucune sortie)";
 
 /**
+ * CONSÉQUENCE d'une commande interrompue — phrase SOURCE UNIQUE.
+ *
+ * ⚠️ POURQUOI ELLE EXISTE (production, 2026-11-02) : une mise à jour de
+ * Raspberry Pi a été coupée par le délai de commande, et le rapport n'en disait
+ * rien. Un modèle qui ne lit pas l'interruption l'habille d'une cause inventée
+ * (« la machine n'a pas répondu »). La phrase est donc écrite ICI, par le code,
+ * et reprise telle quelle par le bloc `<sortie>` ET par le message d'exécution.
+ */
+export const INTERRUPTION_CONSEQUENCE =
+  "elle a peut-être déjà modifié le système : ne conclus ni au succès ni à " +
+  "l'échec sans vérifier l'état de la machine.";
+
+/**
+ * Ligne EXPLICITE ajoutée en tête d'un bloc `<sortie>` interrompu.
+ *
+ * Exemple : `⚠️ COMMANDE INTERROMPUE après 60 s (délai maximal accordé), elle a
+ * peut-être déjà modifié le système : …`
+ */
+export function sortieTimeoutNotice(durationMs?: number): string {
+  const seconds =
+    durationMs !== undefined && Number.isFinite(durationMs) && durationMs > 0
+      ? Math.max(1, Math.round(durationMs / 1000))
+      : undefined;
+  const quand = seconds !== undefined ? `après ${seconds} s` : "à l'expiration du délai";
+  return `⚠️ COMMANDE INTERROMPUE ${quand} (délai maximal accordé), ${INTERRUPTION_CONSEQUENCE}`;
+}
+
+/**
  * Rappel de sécurité ajouté APRÈS chaque bloc `<sortie>`. Constante exportée
  * pour être réutilisée (tests, prompt système éventuel).
  */
@@ -105,6 +133,11 @@ export function frameCommandOutput(input: OutputFrameInput): string {
   ];
 
   const parts: string[] = [`<${SORTIE_TAG} ${attrs.join(" ")}>`];
+  // ⚠️ La ligne d'interruption est la PREMIÈRE du bloc : elle doit être lue
+  // AVANT la sortie (qui peut être vide, ou s'arrêter au milieu d'une phrase).
+  if (input.timedOut) {
+    parts.push(sortieTimeoutNotice(input.durationMs));
+  }
   if (stdout !== "") {
     parts.push(SORTIE_STDOUT_LABEL, stdout);
   }

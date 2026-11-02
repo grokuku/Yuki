@@ -68,6 +68,20 @@ export interface HeavyRunResult {
    * les joint au message publié dans le canal.
    */
   fichiers?: readonly string[];
+  /**
+   * PHRASE écrite par le SERVEUR (jamais par un modèle), ajoutée TELLE QUELLE au
+   * rapport de tâche.
+   *
+   * ⚠️ Elle voyage à part du texte parce que le rapport brut peut être reformulé :
+   * un fait aussi structurant ne doit pas dépendre de la fidélité d'une rédaction.
+   * Le réveil de canal l'insère dans le message SYSTÈME injecté
+   * (`src/chat/reply/job-report.ts`), avant que Yuki ne rédige — donc jamais perdue.
+   * ⚠️ Le worker lourd ne publie plus rien (invariant « un seul rédacteur ») : ce
+   * champ n'a donc plus de producteur côté worker, mais le TRANSPORT reste : c'est
+   * le seul endroit où le serveur peut faire passer une phrase sans passer par un
+   * modèle.
+   */
+  repli?: string;
 }
 
 /**
@@ -111,7 +125,8 @@ export interface LightWaker {
       jobId?: string;
       /**
        * FICHIERS produits par le job (identifiants du store de la
-       * conversation). Le réveil de CANAL les joint au message publié ; le
+       * conversation). Le réveil de CANAL les RATTACHE au message système injecté,
+       * pour que Yuki puisse les publier (ou qu'ils partent avec sa réponse) ; le
        * réveil LOCAL les ignore (le host ne connaît que du texte).
        *
        * ⚠️ Sans ce transport, déléguer une image donnerait une image que
@@ -119,6 +134,14 @@ export interface LightWaker {
        * resterait dans le store.
        */
       fichiers?: readonly string[];
+      /**
+       * PHRASE écrite par le SERVEUR (`JobResult.repli`), insérée TELLE QUELLE dans
+       * le message système injecté — jamais reformulée, jamais perdue.
+       *
+       * ⚠️ Le réveil LOCAL ne l'utilise pas : il reçoit le rapport BRUT, qui la
+       * contient déjà.
+       */
+      repli?: string;
     },
   ): { runId?: string } | void;
 }
@@ -188,8 +211,31 @@ export interface DelegateFailed {
 export interface DelegateTimeout {
   status: "timeout";
   error: "timeout";
+  /**
+   * Motif EXACT du dépassement :
+   *  - `timeout` — délai TOTAL de la tâche (`delegation.totalTimeoutMs`) ;
+   *  - `idle_timeout` — plus aucun signe de vie du modèle (`delegation.idleTimeoutMs`) ;
+   *  - `tool_timeout` — un OUTIL n'a pas rendu la main (chien de garde du worker).
+   * ⚠️ Absent sur un ancien enregistrement de job (journal rejoué).
+   */
+  cause?: TimeoutCode;
+  /**
+   * Phrase EXPLICATIVE du worker, en français (durée, outil, incertitude sur
+   * l'état de la machine). Destinée au MODÈLE : c'est elle qui l'empêche
+   * d'inventer une cause (« la machine n'a pas répondu »).
+   */
+  note?: string;
   partial?: string;
 }
+
+/**
+ * Codes d'échec d'un job qui sont des DÉPASSEMENTS DE DÉLAI (et non des pannes
+ * du fournisseur ou de la machine). Source unique du classement.
+ */
+export const TIMEOUT_CODES = ["timeout", "idle_timeout", "tool_timeout"] as const;
+
+/** Code d'un dépassement de délai. */
+export type TimeoutCode = (typeof TIMEOUT_CODES)[number];
 
 export interface DelegateCancelled {
   status: "cancelled";

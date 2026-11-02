@@ -1,23 +1,24 @@
 /**
- * CHAÎNE COMPLÈTE — un JOB qui produit une image ⇒ le fichier est POSTÉ DANS LE
- * CANAL (`POST /files` multipart, puis `POST /posts` avec `file_ids`).
+ * CHAÎNE COMPLÈTE — un JOB qui produit une image ⇒ **c'est le TOUR DE YUKI qui
+ * publie**, avec le fichier. AUCUNE publication du serveur.
  *
- * ⚠️ LE DÉFAUT QUE CE FICHIER VERROUILLE (2026-11-02) : le rapport d'un job était
- * PUR TEXTE (`LightWaker.post(conversationId, text)`). Un `delegate` demandé depuis
- * Mattermost qui produisait une image annonçait donc « c'est fait »… et l'image
- * restait dans le store, invisible pour la personne du canal. C'est le prérequis
- * de tout l'objectif « Yuki orchestratrice en canal » : sans transport de fichier,
- * déléguer une image ne sert à rien.
+ * ⚠️ LE DÉFAUT QUE CE FICHIER VERROUILLE (production, 2026-11-02) : le rapport d'un job
+ * était publié par le SERVEUR (`createChannelAwareWaker` → `post`), en plus de la
+ * réponse de Yuki. Deux rédacteurs ⇒ deux messages collés, deux images, un ordre cassé.
  *
  * Ce que ce fichier prouve, de bout en bout (service de délégation RÉEL, réveil réel,
  * adaptateur Mattermost réel, serveur HTTP fixture) :
- *  ① le worker lourd rend son fichier (`HeavyRunResult.fichiers`) ;
- *  ② le service le JOURNALISE avec le résultat du job (donc il survit à un redémarrage) ;
- *  ③ le réveil le transporte jusqu'à la publication (`LightWaker.send(..., { fichiers })`) ;
- *  ④ l'adaptateur téléverse les octets (multipart) et attache `file_ids` au post.
+ *  ① le worker rend son fichier (`HeavyRunResult.fichiers`), il ne publie rien ;
+ *  ② le service le JOURNALISE avec le résultat (il survit à un redémarrage) ;
+ *  ③ le réveil INJECTE le rapport dans la conversation du canal (aucun `send`) ;
+ *  ④ le tour de Yuki publie UN SEUL message : le sien, avec les `file_ids` du job,
+ *     à la racine du canal (l'identifiant synthétique du rapport n'est jamais utilisé
+ *     comme `root_id` : il n'existe pas chez la plateforme) ;
+ *  ⑤ si le tour de Yuki n'a pas lieu (modèle injoignable), le repli est EXPLICITE :
+ *     le rapport part en texte, précédé de la phrase qui dit que c'est un repli.
  *
- * ⚠️ Échoue sur le code d'origine : `JobResult`/`HeavyRunResult`/`LightWaker` n'avaient
- * aucun champ de fichier, et rien ne publiait d'image à la fin d'un job.
+ * ⚠️ Échoue sur le code d'origine : le réveil publiait lui-même le rapport
+ * (`post`), et le tour de Yuki n'existait pas pour un rapport de job.
  */
 
 import { createServer, type Server } from "node:http";
@@ -28,10 +29,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createChannelAwareWaker } from "../../src/chat/reply/channel-waker.js";
+import { createChannelAwareWaker, reportFallbackText } from "../../src/chat/reply/channel-waker.js";
 import { MattermostChatAdapter } from "../../src/chat/mattermost/adapter.js";
 import { conversationIdOfChannel } from "../../src/chat/mirror/ingest.js";
 import { ChatMirrorStore } from "../../src/chat/mirror/store.js";
+import type { ChatReplyGenerator } from "../../src/chat/types.js";
 import { createDelegationService } from "../../src/delegation/index.js";
 import type { HeavyRunHandle, HeavyWorker } from "../../src/delegation/ports.js";
 import { FilesStore } from "../../src/files/index.js";
@@ -58,14 +60,14 @@ afterEach(async () => {
 });
 
 function tempDir(purpose: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `yuki-job-files-${purpose}-`));
+  const dir = mkdtempSync(join(tmpdir(), `yuki-job-wake-${purpose}-`));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
 
 interface Fixture {
   baseUrl: string;
-  /** Corps des posts publiés par Yuki. */
+  /** Corps des posts publiés (par qui que ce soit). */
   created: Array<Record<string, unknown>>;
   /** Charges multipart des fichiers téléversés. */
   uploads: string[];
@@ -134,7 +136,7 @@ async function waitFor(check: () => boolean, label: string, timeoutMs = 5_000): 
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error(`Délai dépassé en attendant : ${label}`);
+  throw new Error(`Délai dépasse en attendant : ${label}`.replace("dépasse", "dépassé"));
 }
 
 /** Worker lourd en double : il a « généré » un fichier déjà présent dans le store. */
@@ -156,96 +158,159 @@ function heavyWorkerAvecFichier(fichier: string): HeavyWorker {
   };
 }
 
-describe("rapport de job — le fichier arrive DANS le canal", () => {
-  it("un job qui produit une image la publie : `POST /files` multipart puis `file_ids`", async () => {
-    const fixture = await startFixture();
+interface Banc {
+  fixture: Fixture;
+  delegation: ReturnType<typeof createDelegationService>;
+  jobStore: JobStore;
+  fichier: string;
+  /** Entrées reçues par le générateur de réponse (ce que Yuki voit). */
+  tours: Array<Record<string, unknown>>;
+}
 
-    // ── Le fichier « produit » par le job, dans le store du CANAL ─────────────
-    const filesStore = new FilesStore({
-      dir: tempDir("files"),
+/**
+ * Banc complet : store de fichiers RÉEL, miroir RÉEL, adaptateur RÉEL, service de
+ * délégation RÉEL, et le générateur de réponse remplacé par un double qui enregistre
+ * ce qu'il reçoit (le modèle n'est pas le sujet ici : le CÂBLAGE l'est).
+ */
+async function monterBanc(
+  generer: ChatReplyGenerator,
+): Promise<Banc> {
+  const fixture = await startFixture();
+  const filesStore = new FilesStore({
+    dir: tempDir("files"),
+    logger,
+    retentionDays: () => 30,
+  });
+  filesStore.ensureLayout();
+  const enregistre = filesStore.saveBytes(PNG, {
+    sessionId: CONVERSATION,
+    name: "image-du-job.png",
+    mimeType: "image/png",
+    origin: "yuki",
+  });
+  const fichier = enregistre.ok ? enregistre.record.id : "";
+
+  const store = ChatMirrorStore.open({
+    indexPath: join(tempDir("miroir"), "chat-mirror.json"),
+    messagesDir: join(tempDir("miroir-msg"), "chat-mirror"),
+  });
+  store.ensureConversation({
+    conversationId: CONVERSATION,
+    platform: "mattermost",
+    remoteId: CHANNEL,
+    title: "Général",
+  });
+
+  const tours: Array<Record<string, unknown>> = [];
+  const adapter = new MattermostChatAdapter({
+    baseUrl: () => fixture.baseUrl,
+    token: () => TOKEN,
+    store,
+    files: filesStore,
+    // Double : il enregistre l'entrée reçue et rend une réponse de Yuki.
+    generateReply: async (input) => {
+      tours.push(input as unknown as Record<string, unknown>);
+      return generer(input);
+    },
+  });
+
+  const jobStore = JobStore.open({ path: join(tempDir("jobs"), "jobs.jsonl"), logger });
+  const delegation = createDelegationService({
+    store: jobStore,
+    queue: new JobQueue({ maxConcurrent: 2, maxQueue: 4 }),
+    heavy: heavyWorkerAvecFichier(fichier),
+    availability: { isAvailable: () => true },
+    idleTimeoutMs: 5_000,
+    totalTimeoutMs: 5_000,
+    // Fenêtre de lotissement nulle : le rapport part au tour suivant la fin.
+    resultBatchWindowMs: 0,
+    logger,
+  });
+  delegation.setWaker(
+    createChannelAwareWaker({
+      fallback: { send: () => undefined },
+      // ⚠️ MÊME chemin qu'en production (`src/index.ts`) : le réveil passe par
+      // l'adaptateur de la plateforme, qui ouvre un TOUR de Yuki.
+      wake: (request) => adapter.wakeReport(request),
+      // ⚠️ REPLI seulement : jamais le chemin normal.
+      post: async (conversationId, text, fichiers) => {
+        await adapter.send(conversationId, {
+          kind: "texte",
+          text,
+          ...(fichiers && fichiers.length > 0 ? { fichiers } : {}),
+        });
+      },
       logger,
-      retentionDays: () => 30,
-    });
-    filesStore.ensureLayout();
-    const enregistre = filesStore.saveBytes(PNG, {
-      sessionId: CONVERSATION,
-      name: "image-du-job.png",
-      mimeType: "image/png",
-      origin: "yuki",
-    });
-    expect(enregistre.ok).toBe(true);
-    const fichier = enregistre.ok ? enregistre.record.id : "";
+    }),
+  );
+  return { fixture, delegation, jobStore, fichier, tours };
+}
 
-    // ── Le miroir et l'ADAPTATEUR réels (le seul chemin de publication) ───────
-    const store = ChatMirrorStore.open({
-      indexPath: join(tempDir("miroir"), "chat-mirror.json"),
-      messagesDir: join(tempDir("miroir-msg"), "chat-mirror"),
-    });
-    expect(
-      store.ensureConversation({
-        conversationId: CONVERSATION,
-        platform: "mattermost",
-        remoteId: CHANNEL,
-        title: "Général",
-      }),
-    ).toBe(true);
-    const adapter = new MattermostChatAdapter({
-      baseUrl: () => fixture.baseUrl,
-      token: () => TOKEN,
-      store,
-      files: filesStore,
-    });
+async function lancerJob(banc: Banc): Promise<string> {
+  const issue = await banc.delegation.delegate({
+    task: "Génère une image d'un chat roux",
+    lightSessionId: CONVERSATION,
+    background: true,
+  });
+  expect(issue.status).toBe("dispatched");
+  return issue.status === "dispatched" ? issue.job_id : "";
+}
 
-    // ── Service de DÉLÉGATION réel + réveil de canal réel ─────────────────────
-    const jobStore = JobStore.open({ path: join(tempDir("jobs"), "jobs.jsonl"), logger });
-    const delegation = createDelegationService({
-      store: jobStore,
-      queue: new JobQueue({ maxConcurrent: 2, maxQueue: 4 }),
-      heavy: heavyWorkerAvecFichier(fichier),
-      availability: { isAvailable: () => true },
-      idleTimeoutMs: 5_000,
-      totalTimeoutMs: 5_000,
-      // Fenêtre de lotissement nulle : le rapport part au tour suivant la fin.
-      resultBatchWindowMs: 0,
-      logger,
-    });
-    delegation.setWaker(
-      createChannelAwareWaker({
-        fallback: { send: () => undefined },
-        summarize: async () => "L'image demandée est prête.",
-        // ⚠️ MÊME chemin qu'en production (`envoyerDansCanal`, `src/index.ts`) :
-        // un seul mécanisme de publication, jamais un second.
-        post: async (conversationId, text, fichiers) => {
-          await adapter.send(conversationId, {
-            kind: "texte",
-            text,
-            ...(fichiers && fichiers.length > 0 ? { fichiers } : {}),
-          });
-        },
-        logger,
-      }),
-    );
+describe("rapport de job — UN SEUL rédacteur : le tour de Yuki", () => {
+  it("le job produit une image : Yuki (et elle seule) publie, avec le fichier", async () => {
+    const banc = await monterBanc(async (input) => ({
+      text: "L'image demandée est prête.",
+      // ⚠️ Le VRAI générateur rend les fichiers du job (ceux qui n'ont pas été publiés
+      // ailleurs) : on reproduit ce contrat ici.
+      ...(input.fichiersDuJob !== undefined ? { fichiers: input.fichiersDuJob } : {}),
+    }));
 
-    const issue = await delegation.delegate({
-      task: "Génère une image d'un chat roux",
-      lightSessionId: CONVERSATION,
-      background: true,
-    });
-    expect(issue.status).toBe("dispatched");
-
-    await waitFor(() => fixture.created.length >= 1, "le post du rapport de job");
-
+    const jobId = await lancerJob(banc);
     // ① ② Le job a bien enregistré son fichier avec son résultat.
-    const jobId = issue.status === "dispatched" ? issue.job_id : "";
-    const job = jobStore.get(jobId);
-    expect(job?.result.fichiers).toEqual([fichier]);
+    expect(banc.jobStore.get(jobId)?.result.fichiers).toEqual([banc.fichier]);
 
-    // ③ ④ L'image est PARTIE : multipart, puis `file_ids` dans le post.
-    expect(fixture.uploads).toHaveLength(1);
-    expect(fixture.uploads[0]).toContain("multipart/form-data; boundary=");
-    expect(fixture.uploads[0]).toContain(CHANNEL);
-    const post = fixture.created[0]!;
+    await waitFor(() => banc.fixture.created.length >= 1, "le message publié");
+
+    // ③④ UN SEUL message publié, et c'est celui de Yuki — pas le rapport brut.
+    expect(banc.fixture.created).toHaveLength(1);
+    const post = banc.fixture.created[0]!;
+    expect(String(post.message)).toContain("L'image demandée est prête.");
+    expect(String(post.message)).not.toContain("RÉSULTAT DE TÂCHE");
+    expect(String(post.message)).not.toContain("RAPPORT SYSTÈME");
+    // Le fichier du job est bien parti avec elle.
+    expect(banc.fixture.uploads).toHaveLength(1);
     expect(post.file_ids).toEqual(["fichier-1"]);
-    expect(String(post.message)).toContain("prête");
+    // ⚠️ L'identifiant SYNTHÉTIQUE du rapport n'existe pas chez la plateforme : il ne
+    // doit jamais servir de `root_id` (le post serait refusé).
+    expect(post.root_id).toBeUndefined();
+
+    // Le tour de Yuki a bien reçu l'ORIGINE et les FICHIERS du job : sans eux, elle ne
+    // saurait pas d'où vient le rapport et ne pourrait pas publier l'image ailleurs.
+    expect(banc.tours).toHaveLength(1);
+    expect(banc.tours[0]?.origine).toBe("job");
+    expect(banc.tours[0]?.fichiersDuJob).toEqual([banc.fichier]);
+    const message = banc.tours[0]?.message as { text: string; author: { nom: string } };
+    expect(message.author.nom).toBe("Rapport de tâche");
+    expect(message.text).toContain("RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN");
+  });
+
+  it("Yuki ne peut pas rédiger (modèle injoignable) : repli TEXTE, et il est DIT", async () => {
+    const banc = await monterBanc(() => {
+      throw new Error("modèle indisponible");
+    });
+
+    await lancerJob(banc);
+    await waitFor(() => banc.fixture.created.length >= 1, "le repli publié");
+
+    // ⚠️ SEUL cas où le serveur parle : le rapport part en texte, précédé de la
+    // phrase qui dit que c'est un repli.
+    expect(banc.fixture.created).toHaveLength(1);
+    const post = banc.fixture.created[0]!;
+    const message = String(post.message);
+    expect(message).toContain(reportFallbackText(undefined).slice(0, 25));
+    expect(message).toContain("Repli");
+    expect(message).toContain("RÉSULTAT DE TÂCHE EN ARRIÈRE-PLAN");
+    // L'image n'est pas perdue : elle part avec le repli.
+    expect(post.file_ids).toEqual(["fichier-1"]);
   });
 });

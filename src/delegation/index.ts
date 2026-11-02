@@ -83,3 +83,5 @@ export type {
   SteerNotPossible,
   SteerOutcome,
 } from "./ports.js";
+export { TIMEOUT_CODES } from "./ports.js";
+export type { TimeoutCode } from "./ports.js";

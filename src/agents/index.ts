@@ -219,9 +219,11 @@ export {
   AGENT_LIST_REMINDER,
   AGENT_LIST_TAG,
   AGENT_ROSTER_REMINDER,
+  INTERRUPTION_CONSEQUENCE,
   MAX_INLINE_AGENT_ROSTER,
   OUTPUT_DATA_REMINDER,
   SORTIE_TAG,
+  sortieTimeoutNotice,
 } from "./output.js";
 export type {
   AgentDirectoryEntry,
@@ -283,9 +285,14 @@ export {
   AgentExecutionService,
   DEFAULT_COMMAND_TIMEOUT_MS,
   DEFAULT_SCREENSHOT_TIMEOUT_MS,
+  interruptionMessage,
+  MAX_COMMAND_TIMEOUT_MS,
+  MIN_COMMAND_TIMEOUT_MS,
+  resolveCommandTimeout,
   SCREENSHOT_CAPABILITY,
   SCREENSHOT_COMMAND,
   SCREENSHOT_ORIGIN,
+  timeoutWithoutResultMessage,
 } from "./execution.js";
 export type {
   ApprovalDecisionOutcome,
@@ -293,6 +300,7 @@ export type {
   ApprovalResultWaker,
   ApprovalViewEvent,
   CapturedScreenshotView,
+  CommandTimeoutResolution,
   ExecutionLogger,
   ExecutionOutcome,
   ExecutionRequest,

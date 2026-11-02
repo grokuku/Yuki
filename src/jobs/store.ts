@@ -65,6 +65,7 @@ function mergeResult(
   if (patch.partial !== undefined) merged.partial = patch.partial;
   if (patch.usage !== undefined) merged.usage = patch.usage;
   if (patch.truncated !== undefined) merged.truncated = patch.truncated;
+  if (patch.repli !== undefined && patch.repli !== "") merged.repli = patch.repli;
   if (patch.fichiers !== undefined) {
     // ⚠️ UNION des identifiants, ordre de première apparition : un job peut
     // journaliser ses fichiers en fin d'exécution, et le rejeu du journal ne doit

@@ -25,6 +25,19 @@ export interface MmFixture {
   baseUrl: string;
   /** Posts créés par le test ou par Yuki (`POST /api/v4/posts`). */
   created: Array<Record<string, unknown>>;
+  /**
+   * HORODATAGE de CHAQUE requête HTTP reçue par le serveur (`chemin` + `at`), et de sa
+   * RÉPONSE (`fin`).
+   *
+   * ⚠️ C'est la seule mesure honnête d'un envoi : l'appel de `publier` peut précéder
+   * de plusieurs secondes la requête réelle (file d'attente, verrou, débit). Un test
+   * qui mesure l'APPEL ne prouve donc rien sur l'ARRIVÉE dans le canal.
+   *
+   * ⚠️ `fin` est ce qui permet de prouver qu'il n'y a JAMAIS deux envois en vol :
+   * deux requêtes qui se recouvrent (`at` de l'une avant `fin` de l'autre) sont deux
+   * messages postés simultanément — l'ordre et l'espacement sont alors perdus.
+   */
+  requetes: Array<{ at: number; fin?: number; method: string; chemin: string }>;
   /** Diffuse un événement comme le ferait le serveur. */
   broadcast(event: string, post: Record<string, unknown>): void;
   /** Nombre de clients WebSocket ouverts (attente de connexion). */
@@ -34,6 +47,14 @@ export interface MmFixture {
 export interface MmFixtureOptions {
   /** Messages déjà présents dans le canal (rejoués au backfill). */
   backlog?: Array<Record<string, unknown>>;
+  /**
+   * Délai (ms) avant de répondre à `POST /api/v4/files`.
+   *
+   * ⚠️ Un téléversement réel prend des secondes (Mio d'image). Ce délai rend le test
+   * capable de mesurer ce que la file de publication fait SUBIR à l'accusé : avec 0, un
+   * téléversement ne bloque rien et le défaut ne se voit pas.
+   */
+  delaiFichierMs?: number;
 }
 
 /** Démarre la fixture ; le nettoyage est enregistré dans `cleanups`. */
@@ -42,11 +63,22 @@ export async function startMmFixture(
   options: MmFixtureOptions = {},
 ): Promise<MmFixture> {
   const created: Array<Record<string, unknown>> = [];
+  const requetes: Array<{ at: number; fin?: number; method: string; chemin: string }> = [];
   const backlog = [...(options.backlog ?? [])];
   let open = 0;
 
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
+    const trace: { at: number; fin?: number; method: string; chemin: string } = {
+      at: Date.now(),
+      method: req.method ?? "GET",
+      chemin: url.pathname,
+    };
+    requetes.push(trace);
+    // ⚠️ `fin` : la réponse est écrite ⇒ la requête n'est plus « en vol ».
+    res.on("finish", () => {
+      trace.fin = Date.now();
+    });
     const send = (body: unknown) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
@@ -98,7 +130,14 @@ export async function startMmFixture(
         return;
       }
       if (url.pathname === "/api/v4/files") {
-        send({ file_infos: [{ id: "fichier-1", name: "f.png", size: 1, mime_type: "image/png" }] });
+        const repondre = (): void => {
+          send({
+            file_infos: [{ id: "fichier-1", name: "f.png", size: 1, mime_type: "image/png" }],
+          });
+        };
+        const delai = Math.max(0, Math.trunc(options.delaiFichierMs ?? 0));
+        if (delai === 0) repondre();
+        else setTimeout(repondre, delai).unref?.();
         return;
       }
       res.writeHead(404, { "content-type": "application/json" });
@@ -136,6 +175,7 @@ export async function startMmFixture(
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     created,
+    requetes,
     get open() {
       return open;
     },

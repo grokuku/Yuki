@@ -89,28 +89,28 @@ rattaché à une conversation fantôme (`src/pi/sdk/remote-run-tools.ts`).
 ## 3. Le résultat d'une délégation revient DANS le canal
 
 Un `delegate` produit un **job asynchrone**. Son résultat est livré par un « réveil »
-(`LightWaker.send`, `src/delegation/service.ts:838`), et le seul réveil branché avant ce
-lot était le **host Pi** — qui **refuse** une session qu'il n'a pas ouverte
-(`PI_SESSION_ERROR` « Session inconnue. », `src/pi/sdk-host.ts:2295`). Une conversation
-de canal n'est pas une session Pi : **le résultat était perdu**.
+(`LightWaker.send`, `src/delegation/service.ts`), et le seul réveil branché au départ était
+le **host Pi** — qui **refuse** une session qu'il n'a pas ouverte (`PI_SESSION_ERROR`
+« Session inconnue. », `src/pi/sdk-host.ts`). Une conversation de canal n'est pas une
+session Pi : **le résultat était perdu**.
 
-`createChannelAwareWaker` (`src/chat/reply/channel-waker.ts`, branché dans `src/index.ts`)
-enveloppe le réveil sans le modifier :
+⚠️ **INVARIANT (2026-11-02, corrigé une deuxième fois)** : dans un canal, **un seul
+rédacteur — le tour de Yuki** (`docs/lot18-chat.md` § 15). Le réveil de canal ne publie
+donc **rien** lui-même : il INJECTE le rapport comme message SYSTÈME dans la conversation
+et c'est la **réponse de Yuki** qui part.
 
 | Conversation du job | Ce qui se passe |
 | --- | --- |
 | **locale** (`sessionId` Pi) | délégation **exacte** au host : comportement inchangé |
-| **canal** (`mm-…` / `dc-…`) | le rapport est **résumé** par le modèle léger (délai `CHAT_JOB_REPORT_TIMEOUT_MS`, 45 s) puis **publié dans ce canal**, borné à 4 000 caractères |
+| **canal** (`mm-…` / `dc-…`) | le rapport est **injecté** (`wakeReport`, `src/chat/reply/job-report.ts`) : Yuki le lit et **sa** réponse est publiée, avec les fichiers du job |
 
-Le même réveil sert à `archive_libraire` (archivage de fond).
+**Ce que voit une personne du canal** :
 
-**Ce que voit une personne du canal quand ça se passe mal** :
-
-| Panne | Ce qu'elle voit |
+| Situation | Ce qu'elle voit |
 | --- | --- |
-| le job **échoue** | le rapport contient l'erreur et le travail partiel ; le résumé le dit, dans le canal |
-| le **résumé** échoue (modèle indisponible) | une phrase honnête, avec l'identifiant : « …s'est terminée (job `X`), mais je n'ai pas pu en rédiger le résumé ici. Demande-moi « où en est le job `X` »… » — et `job_status` répond |
-| la **publication** échoue (canal supprimé, jeton expiré) | rien dans le canal ; l'échec est **journalisé** (`chat.job_report.failed`). ⚠️ C'est la seule limite : aucun autre canal n'existe pour le dire |
+| le job **réussit** | la réponse de Yuki (1–3 phrases), avec les fichiers produits **joints** — sauf ceux qu'elle a publiés ailleurs dans le tour |
+| le job **échoue** | la réponse de Yuki le dit : le rapport (erreur + travail partiel) est dans son contexte |
+| Yuki **ne peut pas rédiger** (modèle injoignable, canal disparu, file pleine) | **repli explicite** : le rapport part en texte, précédé de « ⚠️ Repli : je n'ai pas pu reprendre la rédaction dans ce canal… » — seul cas où le serveur écrit |
 | job d'un **autre** canal | `job_status`/`cancel_job`/`steer_job` répondent `not_found` (cloisonnement) |
 
 Le délai du rédacteur vaut « rédaction + génération » (`CHAT_REPLY_TIMEOUT_MS` +

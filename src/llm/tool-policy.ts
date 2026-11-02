@@ -202,6 +202,10 @@ export interface ToolPolicyEntry {
   readonly files: readonly FilesToolName[];
   /** Outils de TRANSFERT de fichiers vers/depuis une machine (`files`). */
   readonly fileTransfer: readonly FileTransferToolName[];
+  // ⚠️ AUCUNE CATÉGORIE DE PUBLICATION INTER-CANAL, À DESSEIN : dans un canal il n'y a
+  // qu'UN rédacteur, le tour de Yuki (`docs/lot18-chat.md`). `publier_dans_canal` est
+  // donc une capacité des RUNS DE CANAL (`REMOTE_SAFE_TOOLS`, plus bas), jamais un
+  // droit de RÔLE : le worker lourd ne l'a pas et ne peut pas l'avoir.
   /** Outil de LISTAGE des pièces jointes (`lister_fichiers`, lecture seule). */
   readonly fileList: readonly FileListToolName[];
   /** Outil de LECTURE du contenu d'une pièce jointe (`lire_fichier`). */
@@ -733,11 +737,16 @@ export const LONG_RUNNING_TOOLS: readonly LongRunningTool[] = [
     seconds: 180,
     source: "src/config/schema.ts:899-905 (images.timeoutMs = 180_000)",
   },
-  // 60 s — délai d'une commande déléguée.
+  // 60 s — délai d'une commande déléguée (DÉFAUT ; le modèle peut demander
+  // jusqu'à `MAX_COMMAND_TIMEOUT_MS` = 900 s pour une action longue).
+  // ⚠️ Cette borne ne sert qu'aux runs de CANAL, où `run_command` n'est jamais
+  // exposé (`APPROVAL_REQUIRED_TOOLS`, retiré des allowlists de canal).
   {
     name: "run_command",
     seconds: 60,
-    source: "src/agents/execution.ts:479 (DEFAULT_COMMAND_TIMEOUT_MS = 60_000)",
+    source:
+      "src/agents/execution.ts:479 (DEFAULT_COMMAND_TIMEOUT_MS = 60_000 ; " +
+      "MAX_COMMAND_TIMEOUT_MS = 900_000)",
   },
   // 120 s — délai INACTIF d'un transfert de fichier.
   {
@@ -811,12 +820,23 @@ export function longToolInlineRefusal(
   if (!info) return undefined;
   // ⚠️ RÈGLE : on ne refuse JAMAIS une action sans proposer d'autre voie.
   if ((options.delegationAvailable ?? true) === false) return undefined;
+  /**
+   * ⚠️ TEXTE DESTINÉ AU MODÈLE, mais LISIBLE PARTOUT : le modèle le RECOPIE (défaut de
+   * production 2026-11-02 : « la génération directe depuis ce canal a été refusée par le
+   * système (elle dépasse la borne d'un tour) »). Il ne contient donc AUCUN terme de
+   * plomberie (« borne », « tour », « système », « worker », « délai maximal ») : si le
+   * modèle le cite, la personne du canal lit une phrase qui a du sens.
+   */
   return (
-    `« ${info.name} » peut prendre jusqu'à ${info.seconds} s. Un tour dans un CANAL ` +
-    "est borné : l'action serait interrompue en plein vol, sans résultat ni message " +
-    "(c'est déjà arrivé). Rien n'a été lancé. Relance-la avec `delegate` : le job " +
-    "d'arrière-plan n'a pas de borne de tour, et son résultat — le fichier produit y " +
-    `compris — sera publié dans ce canal. (La délégation s'active dans ${REMOTE_AGENTS_SETTING_PATH}.)`
+    `« ${info.name} » peut prendre jusqu'à ${info.seconds} s : c'est trop long pour être `
+    + "fait pendant un échange dans un canal, où le travail serait interrompu en plein vol, "
+    + "sans résultat ni message (c'est déjà arrivé). Rien n'a été lancé. "
+    + "Relance-la avec l'outil `delegate` : le travail se fait en arrière-plan, sans "
+    + "cette limite de durée, et son résultat — le fichier produit y compris — arrivera "
+    + "dans ce canal. "
+    + "À la personne, tu dis seulement que l'action est longue et combien de temps elle "
+    + "prend, sans expliquer ce mécanisme. "
+    + `(Cet outil s'active dans ${REMOTE_AGENTS_SETTING_PATH}.)`
   );
 }
 

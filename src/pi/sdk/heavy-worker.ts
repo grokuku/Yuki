@@ -74,6 +74,57 @@ export function truncateCause(text: string, max = MAX_CAUSE_CHARS): string {
   return collapsed.length <= max ? collapsed : `${collapsed.slice(0, max - 1)}…`;
 }
 
+/**
+ * CHIEN DE GARDE d'un OUTIL (ms) — 16 minutes.
+ *
+ * ⚠️ Il doit rester AU-DESSUS du plus long délai de commande possible
+ * (`MAX_COMMAND_TIMEOUT_MS` = 900 s + `COMMAND_SAFETY_MARGIN_MS` = 30 s d'attente
+ * côté Yuki, `src/agents/execution.ts` / `src/agents/connection.ts`), et
+ * AU-DESSOUS de `delegation.totalTimeoutMs` (20 min par défaut,
+ * `src/config/schema.ts`) : le chien de garde est donc le PREMIER à parler quand
+ * un outil ne rend jamais la main.
+ */
+export const DEFAULT_TOOL_WATCHDOG_MS = 960_000;
+
+/** Secondes lisibles d'une durée (jamais 0). */
+function secondsUntil(ms: number): number {
+  return Math.max(1, Math.round(ms / 1000));
+}
+
+/**
+ * Motif d'échec d'un job dont l'OUTIL n'a pas rendu la main.
+ *
+ * ⚠️ Le code lisible (`tool_timeout`) reste en tête pour que la délégation le
+ * CLASSE (`src/delegation/service.ts`), et la phrase en français suit : sans
+ * elle, le rapport ne portait que le mot « timeout » et le modèle léger
+ * INVENTAIT une cause (« la machine n'a pas répondu »).
+ */
+export function toolWatchdogError(tool: string, ms: number): string {
+  return (
+    `tool_timeout : l'outil « ${tool} » n'a pas rendu la main en ${secondsUntil(ms)} s — ` +
+    "le job a été interrompu pour ne pas rester bloqué. L'action a peut-être continué " +
+    "côté machine : son état final n'est pas connu."
+  );
+}
+
+/** Motif d'échec d'un job dont le délai d'INACTIVITÉ a expiré. */
+export function idleTimeoutError(ms: number, lastTool = ""): string {
+  const outil = lastTool !== "" ? ` (dernier outil : « ${lastTool} »)` : "";
+  return (
+    `idle_timeout : la tâche n'a plus donné signe de vie pendant ${secondsUntil(ms)} s${outil} — ` +
+    "elle a été interrompue. Ce n'est PAS un échec de la machine distante."
+  );
+}
+
+/** Motif d'échec d'un job ayant atteint son délai TOTAL. */
+export function totalTimeoutError(ms: number): string {
+  return (
+    `timeout : délai total de la tâche dépassé (${secondsUntil(ms)} s) — la tâche a été ` +
+    "interrompue. Une action lancée sur une machine a pu continuer : son état final " +
+    "n'est pas connu."
+  );
+}
+
 export interface SdkHeavyWorkerConfig {
   cwd: string;
   agentDir: string;
@@ -156,6 +207,20 @@ export interface SdkHeavyWorkerConfig {
   imageRequestBudgetBytes?: () => number;
   idleTimeoutMs: number;
   totalTimeoutMs: number;
+  /**
+   * CHIEN DE GARDE d'un OUTIL : durée maximale pendant laquelle un seul appel
+   * d'outil peut rester sans rendre la main (ms). Défaut
+   * `DEFAULT_TOOL_WATCHDOG_MS` (16 min).
+   *
+   * ⚠️ POURQUOI IL EXISTE (production, 2026-11-02) : pendant qu'un outil
+   * s'exécute, la session n'émet AUCUN événement — et le délai d'INACTIVITÉ
+   * (`idleTimeoutMs`, 120 s) abattait donc tout job lançant une commande un peu
+   * longue (« la tâche s'est interrompue sans jamais rendre la main »). Le délai
+   * d'inactivité est maintenant SUSPENDU pendant un outil, et remplacé par cette
+   * borne : un outil qui ne rend jamais fait ÉCHOUER le job PROPREMENT, avec un
+   * message nommant l'outil et la durée, au lieu de le laisser bloqué.
+   */
+  toolWatchdogMs?: number;
   logger: PiLogger;
 }
 
@@ -237,6 +302,10 @@ export function buildHeavyActionTools(
     );
   }
   if (config.secrets) tools.push(...createSecretTools(config.secrets));
+  // ⚠️ AUCUN OUTIL DE PUBLICATION, et c'est STRUCTUREL : dans un canal il n'y a
+  // qu'UN rédacteur, le tour de Yuki (`docs/lot18-chat.md`). Le worker REND un
+  // résultat ; c'est Yuki qui décide quoi publier et où, et elle a pour cela
+  // `publier_dans_canal` (`REMOTE_SAFE_TOOLS`) — pas lui.
   // ⚠️ LISTAGE : le worker doit pouvoir retrouver un IDENTIFIANT de fichier (ce
   // qu'exige `deposer_fichier`) sans dépendre du léger. La conversation est
   // FORCÉE à celle du léger (sa propre session est éphémère).
@@ -591,10 +660,66 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     let errorMessage: string | undefined;
     let idleTimedOut = false;
     let totalTimedOut = false;
+    /** Outil qui a dépassé le chien de garde (nom + borne appliquée). */
+    let toolTimedOut: { name: string; ms: number } | undefined;
 
     let idleTimer: NodeJS.Timeout | undefined;
+    const clearIdle = (): void => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+    };
+
+    // ── Outils EN COURS : l'inactivité est SUSPENDUE, un chien de garde la remplace
+    // ⚠️ Un outil en vol n'est pas de l'inactivité : `run_command` peut durer
+    // `MAX_COMMAND_TIMEOUT_MS` (15 min, `src/agents/execution.ts`) sans qu'aucun
+    // événement de session ne soit émis. Suspendre `idleTimeoutMs` pendant ce
+    // temps est ce qui rend une commande longue POSSIBLE ; le chien de garde
+    // garde la garantie « ça ne reste jamais bloqué ».
+    let toolsInFlight = 0;
+    let lastToolName = "";
+    let toolWatchdog: NodeJS.Timeout | undefined;
+    const toolWatchdogMs = config.toolWatchdogMs ?? DEFAULT_TOOL_WATCHDOG_MS;
+    const clearToolWatchdog = (): void => {
+      if (toolWatchdog) {
+        clearTimeout(toolWatchdog);
+        toolWatchdog = undefined;
+      }
+    };
+    const armToolWatchdog = (name: string): void => {
+      clearToolWatchdog();
+      toolWatchdog = setTimeout(() => {
+        toolTimedOut = { name, ms: toolWatchdogMs };
+        config.logger.warn("heavy.tool.watchdog", {
+          job_id: request.jobId,
+          tool: name,
+          tool_watchdog_ms: toolWatchdogMs,
+        });
+        abort();
+      }, toolWatchdogMs);
+      toolWatchdog.unref?.();
+    };
+    const beginTool = (name: string): void => {
+      toolsInFlight += 1;
+      lastToolName = name;
+      // ⚠️ Plus d'inactivité du modèle à mesurer : c'est le MODÈLE qui attend
+      // l'outil, pas l'inverse.
+      clearIdle();
+      armToolWatchdog(name);
+    };
+    const endTool = (): void => {
+      toolsInFlight = Math.max(0, toolsInFlight - 1);
+      if (toolsInFlight > 0) return;
+      clearToolWatchdog();
+      // Le tour reprend : le compte d'inactivité repart de zéro à partir d'ici.
+      resetIdle();
+    };
+
     const resetIdle = (): void => {
-      if (idleTimer) clearTimeout(idleTimer);
+      // ⚠️ Pendant un outil, `idleTimeoutMs` ne s'applique PAS (voir ci-dessus).
+      if (toolsInFlight > 0) return;
+      clearIdle();
       idleTimer = setTimeout(() => {
         idleTimedOut = true;
         abort();
@@ -620,8 +745,31 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         type?: unknown;
         message?: unknown;
         assistantMessageEvent?: unknown;
+        toolName?: unknown;
       };
       switch (event.type) {
+        // ⚠️ OUTILS : suivis AVANT tout autre traitement (ils suspendent le
+        // délai d'inactivité). `heavy.tool.start/end` est journalisé pour que
+        // l'attente longue soit traçable côté serveur.
+        case "tool_execution_start": {
+          const name = typeof event.toolName === "string" ? event.toolName : "(outil inconnu)";
+          config.logger.info("heavy.tool.start", {
+            job_id: request.jobId,
+            tool: name,
+          });
+          beginTool(name);
+          return;
+        }
+        case "tool_execution_end": {
+          const name = typeof event.toolName === "string" ? event.toolName : "(outil inconnu)";
+          config.logger.info("heavy.tool.end", {
+            job_id: request.jobId,
+            tool: name,
+            outils_en_cours: toolsInFlight - 1,
+          });
+          endTool();
+          return;
+        }
         case "message_update": {
           const assistantEvent = event.assistantMessageEvent as
             | { type?: unknown; delta?: unknown }
@@ -720,19 +868,24 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
       }
     } finally {
       clearTimeout(totalTimer);
-      if (idleTimer) clearTimeout(idleTimer);
+      clearIdle();
+      clearToolWatchdog();
       signal.removeEventListener("abort", onAbort);
       unsubscribe();
     }
 
     const finalText = lastText || currentText;
-    const partial = finalText.length > 0 ? finalText : undefined;
     state.finished = true;
     session.dispose();
 
-    // ⚠️ Les fichiers DÉJÀ produits sortent quel que soit le statut final : un
-    // job interrompu après une génération réussie ne doit pas perdre l'image
-    // (le serveur ComfyUI l'a bien produite).
+    // ⚠️ Le worker ne PUBLIE RIEN (invariant « un seul rédacteur ») : tout ce qu'il a
+    // produit sort par le RÉSULTAT (`HeavyRunResult.fichiers`), et c'est le tour de
+    // Yuki — réveillé par le rapport — qui décide de le publier ici ou ailleurs.
+    const texteFinal = finalText;
+    const partial = texteFinal.length > 0 ? texteFinal : undefined;
+    // ⚠️ Les fichiers produits sortent quel que soit le statut final : un job
+    // interrompu après une génération réussie ne doit pas perdre l'image (le serveur
+    // ComfyUI l'a bien produite).
     const produits = fichiers.length > 0 ? { fichiers: [...fichiers] } : {};
     if (isCancelled()) {
       return {
@@ -744,7 +897,16 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     if (totalTimedOut) {
       return {
         status: "failed",
-        error: "timeout",
+        error: totalTimeoutError(config.totalTimeoutMs),
+        ...(partial ? { partial } : {}),
+        ...(usage ? { usage } : {}),
+        ...produits,
+      };
+    }
+    if (toolTimedOut) {
+      return {
+        status: "failed",
+        error: toolWatchdogError(toolTimedOut.name, toolTimedOut.ms),
         ...(partial ? { partial } : {}),
         ...(usage ? { usage } : {}),
         ...produits,
@@ -753,7 +915,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     if (idleTimedOut) {
       return {
         status: "failed",
-        error: "idle_timeout",
+        error: idleTimeoutError(config.idleTimeoutMs, lastToolName),
         ...(partial ? { partial } : {}),
         ...(usage ? { usage } : {}),
         ...produits,
@@ -770,7 +932,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     }
     return {
       status: "completed",
-      text: finalText,
+      text: texteFinal,
       ...(usage ? { usage } : {}),
       ...produits,
     };

@@ -363,6 +363,22 @@ export interface ChatAdapter {
    */
   send?(conversationId: string, message: ChatOutboundMessage): Promise<RemoteMessage>;
   /**
+   * RÉVEIL du canal par un RAPPORT SYSTÈME (fin d'une tâche d'arrière-plan).
+   *
+   * ⚠️ INVARIANT (`docs/lot18-chat.md`) : **dans un canal, un seul rédacteur — le
+   * tour de Yuki**. Cette méthode ne publie donc PAS le rapport : elle l'INJECTE
+   * comme message déclencheur d'un tour de Yuki, et c'est la RÉPONSE de ce tour qui
+   * est publiée (avec les fichiers du job).
+   *
+   * Lève quand le tour n'a pas pu avoir lieu (générateur absent, canal supprimé,
+   * publication impossible) : c'est l'appelant (`src/chat/reply/channel-waker.ts`)
+   * qui décide du REPLI (publier le rapport en texte, en le disant).
+   *
+   * Absent = la plateforme ne sait pas réveiller Yuki : le réveil retombe alors
+   * sur le repli texte, jamais sur un silence.
+   */
+  wakeReport?(input: ChatWakeRequest): Promise<void>;
+  /**
    * Décisions d'approbation prises DEPUIS la plateforme (« Approuver » cliqué
    * dans le canal). Absent = la plateforme ne sait pas le faire (état du lot 1).
    */
@@ -390,6 +406,28 @@ export interface ChatAdapter {
  * son port de fichiers, puis les joint selon SA mécanique (Mattermost : `POST /files`
  * puis `file_ids` ; Discord : multipart dans le même appel).
  */
+/**
+ * Demande de RÉVEIL d'un canal par un rapport de tâche.
+ *
+ * ⚠️ `texte` est le message SYSTÈME complet, déjà encadré
+ * (`frameRapportSysteme`, `src/chat/reply/job-report.ts`) : l'adaptateur ne le
+ * réécrit pas, il le fait lire par Yuki.
+ */
+export interface ChatWakeRequest {
+  /** Conversation Yuki du canal (`mm-…` / `dc-…`). */
+  conversationId: string;
+  /** Message système injecté (rapport encadré + identifiants de fichiers). */
+  texte: string;
+  /** Identifiant du job (traçabilité du tour, jamais affiché tel quel). */
+  jobId?: string;
+  /**
+   * Fichiers produits par la tâche (identifiants du STORE, pas des chemins).
+   * ⚠️ Ils sont joints à la réponse de Yuki SAUF s'ils ont été publiés ailleurs
+   * dans le tour (`publier_dans_canal`) — aucun fichier ne part deux fois.
+   */
+  fichiers?: readonly string[];
+}
+
 export type ChatReplyGenerator = (input: {
   channelTitle: string;
   transcript: readonly RemoteMessage[];
@@ -411,4 +449,14 @@ export type ChatReplyGenerator = (input: {
    * ⚠️ Absente ⇒ un seul message à la fin, comportement antérieur inchangé.
    */
   publier?: (message: { text: string; fichiers?: readonly string[] }) => Promise<void>;
+  /**
+   * ORIGINE du tour : `job` = le message déclencheur est un RAPPORT SYSTÈME.
+   *
+   * ⚠️ Un tour né d'un rapport ne DÉLÈGUE pas (aucune nouvelle tâche : c'est ce qui
+   * rend la boucle de rédélégation structurellement impossible, pas seulement
+   * déconseillée par le prompt).
+   */
+  origine?: "message" | "job";
+  /** Fichiers produits par la tâche (identifiants du store de cette conversation). */
+  fichiersDuJob?: readonly string[];
 }) => Promise<string | { text: string; fichiers?: readonly string[] }>;

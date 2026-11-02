@@ -61,6 +61,15 @@ export interface JobResult {
    * réveil (`LightWaker.send`), qui les joint au message publié.
    */
   fichiers?: readonly string[];
+  /**
+   * PHRASE écrite par le SERVEUR, transportée TELLE QUELLE jusqu'au rapport.
+   *
+   * ⚠️ Pourquoi un champ distinct du texte : le rapport d'un canal est relu puis
+   * REFORMULÉ par Yuki (`src/chat/reply/job-report.ts`). Un fait aussi structurant
+   * ne peut pas dépendre de la fidélité d'une rédaction : le réveil l'insère dans le
+   * message SYSTÈME injecté, AVANT la rédaction — donc jamais perdue.
+   */
+  repli?: string;
 }
 
 export interface JobErrorInfo {

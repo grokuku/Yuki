@@ -36,6 +36,11 @@ import type {
   ScreenshotServicePort,
   SecretRequestToolPort,
 } from "../../agents/execution.js";
+import {
+  DEFAULT_COMMAND_TIMEOUT_MS,
+  MAX_COMMAND_TIMEOUT_MS,
+  MIN_COMMAND_TIMEOUT_MS,
+} from "../../agents/execution.js";
 import type {
   TransferOutcome,
   TransferServicePort,
@@ -145,7 +150,8 @@ export function createExecutionTools(
       "validation humaine peut être requise : la commande n'est alors PAS exécutée et " +
       "l'outil renvoie `awaiting_validation` avec l'identifiant de la demande.",
     promptSnippet:
-      "run_command(agent_id, command, shell?, cwd?, timeout_ms?) — commande sur un agent appairé, désigné par nom ou identifiant",
+      "run_command(agent_id, command, shell?, cwd?, timeout_ms?) — commande sur un agent appairé, désigné par nom ou identifiant (timeout_ms jusqu'à " +
+        `${MAX_COMMAND_TIMEOUT_MS} pour une action longue)`,
     parameters: Type.Object({
       agent_id: Type.String({
         minLength: 1,
@@ -173,7 +179,13 @@ export function createExecutionTools(
       ),
       timeout_ms: Type.Optional(
         Type.Union([Type.Integer(), Type.String(), Type.Null()], {
-          description: "Délai maximal d'exécution en millisecondes (défaut 60000).",
+          description:
+            `Délai maximal d'exécution en millisecondes (défaut ${DEFAULT_COMMAND_TIMEOUT_MS}, ` +
+            `borné ${MIN_COMMAND_TIMEOUT_MS}–${MAX_COMMAND_TIMEOUT_MS}). ` +
+            "⚠️ Pour une action LONGUE et légitime (mise à jour système, `apt upgrade`, " +
+            "compilation), DEMANDE un délai suffisant (ex. 900000 = 15 min) : avec le " +
+            "défaut, la commande est TUÉE au milieu et tu n'obtiens aucun résultat " +
+            "exploitable. Au-delà du plafond, la valeur est ramenée au plafond.",
         }),
       ),
     }),

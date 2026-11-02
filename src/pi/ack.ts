@@ -204,29 +204,39 @@ export function ackRuleFor(tools: readonly string[] = ACK_TOOLS): string {
 
   const liste = cites.map((tool) => `\`${tool}\``).join(", ");
   /**
-   * ⚠️ DURÉE DITE QUAND ELLE EST CONNUE, JAMAIS DEVINÉE : `generer_image` porte une
-   * borne DÉCLARÉE (`images.timeoutMs`, 180 s par défaut,
+   * ⚠️ DURÉE DITE QUAND ELLE EST CONNUE, JAMAIS DEVINÉE : une génération d'image a une
+   * durée maximale annoncée de trois minutes (`images.timeoutMs`, 180 s,
    * `src/config/schema.ts:899-905`). Sous `chat.remoteAgents = desactive`, l'appel
-   * s'exécute DANS le tour (la borne du tour est relevée) : la personne du canal
-   * doit donc savoir qu'elle attendra jusqu'à trois minutes — annoncé en même temps
-   * que l'action, pas après.
+   * s'exécute dans le tour (sa durée maximale est relevée) : la personne du canal doit
+   * donc savoir qu'elle attendra jusqu'à trois minutes — annoncé en même temps que
+   * l'action, pas après.
+   *
+   * ⚠️ La consigne ne cite AUCUN nom de réglage (`images.timeoutMs`) : le modèle
+   * recopie parfois ses consignes mot pour mot, et une personne du canal n'a rien à
+   * lire de la plomberie (défaut de production 2026-11-02).
    */
   const dureeImage = cites.includes("generer_image")
     ? [
-        "- Une GÉNÉRATION D'IMAGE peut durer jusqu'à trois minutes (`images.timeoutMs`) :",
+        "- Une GÉNÉRATION D'IMAGE peut durer jusqu'à trois minutes :",
         "  quand tu la lances toi-même, DIS-LE dans ton accusé (« ça peut prendre jusqu'à",
-        "  trois minutes »). Ce n'est pas une estimation : c'est la borne déclarée.",
+        "  trois minutes »). Ce n'est pas une estimation : c'est la durée annoncée.",
       ]
     : [];
   return [
     "## Accusé de réception d'une action longue (règle STRICTE, non optionnelle)",
     "",
     `Quand tu t'apprêtes à lancer une action LONGUE (${liste}), ta réponse COMMENCE`,
-    "par UNE phrase courte d'accusé de réception, puis tu appelles l'outil DANS LE MÊME TOUR.",
+    "par UNE phrase courte d'accusé de réception, puis tu appelles l'outil dans la",
+    "même réponse.",
     `- Une SEULE phrase, moins de ${ACK_RULE_MAX_CHARS} caractères, en français, ton humain`,
     "  et VARIÉ : « Je m'en occupe. », « Deux secondes. », « Je lance ça. »,",
     "  « C'est parti. », « Je m'y mets. »",
-    "- Ne répète pas la même formule d'un tour à l'autre : VARIE.",
+    "- ⚠️ UNE SEULE LIGNE d'accusé, JAMAIS DEUX : si tu écris deux phrases d'attente",
+    "  (« je prends ça en charge » puis « je lance la mise à jour »), la SECONDE est",
+    "  perdue — elle est retirée de ta réponse. Une seule attente, puis le fond.",
+    "- Elle est la TOUTE PREMIÈRE ligne de ta réponse, avant l'appel de l'outil :",
+    "  l'attente qui arrive après coup ne sert à rien.",
+    "- Ne répète pas la même formule d'un message à l'autre : VARIE.",
     ...dureeImage,
     "- Annonce l'INTENTION, jamais la promesse d'un résultat : « je m'en occupe » est",
     "  sûr ; « je te génère ça tout de suite » est un engagement qui peut échouer.",

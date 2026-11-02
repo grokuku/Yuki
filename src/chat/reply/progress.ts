@@ -28,12 +28,99 @@
  * livrable lui-même, le jeter reviendrait à perdre la réponse à la demande. Il est
  * publié UNE fois (dédupliqué) et il compte dans le plafond des lignes de texte.
  *
- * ⚠️ ORDRE : les publications sont SÉRIALISÉES par une chaîne de promesses. L'ordre
- * des événements (accusé → image → réponse) est donc l'ordre d'arrivée sur la
- * plateforme, sans qu'aucun appelant n'ait à attendre.
+ * ⚠️ ORDRE ET EXCLUSIVITÉ : les publications sont SÉRIALISÉES par une file vidée
+ * UNE PAR UNE. L'ordre des événements (accusé → image → réponse) est donc l'ordre
+ * d'arrivée sur la plateforme, et JAMAIS deux `send` ne sont en vol en même temps
+ * (défaut mesuré le 2026-11-02 : « deux messages qui arrivent en même temps »).
+ *
+ * ⚠️ UNE PRIORITÉ, PAS UNE EXCEPTION : l'accusé double la FILE d'attente (`prioritaire`)
+ * parce qu'il n'a de valeur que s'il arrive pendant l'action — derrière une image déjà
+ * en attente, il perdrait son seul intérêt. Il ne double JAMAIS l'envoi en cours :
+ * l'exclusivité est absolue.
  */
 
-import { ACK_MAX_CHARS, ackFallbackText, ackShapedText, isAckTool } from "../../pi/ack.js";
+import {
+  ACK_MAX_CHARS,
+  ACK_RULE_MAX_CHARS,
+  ackFallbackText,
+  ackShapedText,
+  isAckTool,
+} from "../../pi/ack.js";
+
+/**
+ * Forme COMPARABLE d'un texte : minuscules, sans accents ni ponctuation.
+ *
+ * ⚠️ Sert UNIQUEMENT à reconnaître l'accusé déjà publié (« C'est parti ! » vs
+ * « c'est parti. »). Elle ne sert jamais à réécrire ce qui est publié.
+ */
+function normaliserPourAccuse(texte: string): string {
+  return texte
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, " ")
+    .trim();
+}
+
+/**
+ * Verbe d'ENGAGEMENT en tête de ligne, sous forme COMPARABLE (minuscules, sans accents).
+ *
+ * ⚠️ C'est la seule chose qui distingue une phrase d'attente (« Je prends ça en
+ * charge. ») d'une ligne de CONTENU (« C'est en route sur la PI5 : apt update… »).
+ * Une ligne de contenu n'est JAMAIS retirée — voir `ressembleAUnAccuse`.
+ */
+const DEBUT_ACCUSE =
+  /^(?:ok|d accord|tres bien|compris|bien recu|deux secondes|une seconde|un instant|un moment|c est parti|c est en route|ca arrive|ca vient|j y vais|on y va|je|j |on s en occupe)\b/u;
+
+/**
+ * Cette ligne est-elle une phrase d'ATTENTE (donc déjà dite, ou redondante) ?
+ *
+ * ⚠️ Trois garde-fous pour ne JAMAIS manger du contenu légitime :
+ *  1. la ligne doit tenir sur une seule ligne et dans `ACK_RULE_MAX_CHARS` (la longueur
+ *     CONSEILLÉE d'un accusé, plus stricte que la borne de reconnaissance) ;
+ *  2. elle ne doit rien ANNONCER de précis : ni deux-points (une énumération), ni
+ *     chiffre, ni identifiant entre accents graves — dans ce cas c'est du contenu ;
+ *  3. elle doit commencer par un verbe d'engagement (`DEBUT_ACCUSE`).
+ *
+ * Un `undefined` de `ackShapedText` (texte long ou multiligne) suffit à écarter la ligne.
+ */
+function ressembleAUnAccuse(ligne: string): boolean {
+  const texte = ligne.trim();
+  if (ackShapedText(texte) === undefined) return false;
+  if ([...texte].length > ACK_RULE_MAX_CHARS) return false;
+  if (texte.includes(":") || texte.includes("`") || /[0-9]/u.test(texte)) return false;
+  const comparable = normaliserPourAccuse(texte);
+  if (comparable === "") return false;
+  return DEBUT_ACCUSE.test(`${comparable} `);
+}
+
+/**
+ * Retire `ack` du DÉBUT de `texte` quand il en est le préfixe (casse et ponctuation
+ * près), et rend le RESTE — `undefined` quand `texte` ne commence pas par l'accusé.
+ *
+ * ⚠️ On avance caractère par caractère dans le texte ORIGINAL : la forme comparable
+ * sert de repère, la coupe se fait sur les caractères réellement reçus (aucune
+ * réécriture des mots du modèle).
+ */
+function retirerPrefixe(texte: string, ack: string): string | undefined {
+  const cible = normaliserPourAccuse(ack);
+  if (cible === "") return undefined;
+  let accumule = "";
+  let coupe = -1;
+  for (let index = 0; index < texte.length; index += 1) {
+    accumule += texte[index] ?? "";
+    const comparable = normaliserPourAccuse(accumule);
+    if (comparable === cible) {
+      coupe = index + 1;
+      break;
+    }
+    if (!cible.startsWith(comparable)) return undefined;
+  }
+  if (coupe === -1) return undefined;
+  // La ponctuation/les blancs qui suivent l'accusé (« C'est parti, » « C'est parti : »)
+  // n'appartiennent pas au reste : on les retire avec lui.
+  return texte.slice(coupe).replace(/^[\s.,;:!?…—–-]+/u, "").trim();
+}
 
 /** Résultats MAXIMUM publiés pour un run (au-delà : agrégés dans la réponse finale). */
 export const PROGRESS_MAX_RESULTS = 3;
@@ -83,6 +170,9 @@ export interface ProgressLogger {
   info?(message: string, fields?: Record<string, unknown>): void;
   warn?(message: string, fields?: Record<string, unknown>): void;
 }
+
+/** Nature d'une publication intermédiaire (journal seulement). */
+type PublicationContext = { outil: string; role: "ack" | "rappel" | "fichier" | "resultat" };
 
 /** Publication d'un message intermédiaire (déjà ancrée au fil par l'appelant). */
 export type ProgressPublisher = (message: ProgressMessage) => Promise<void>;
@@ -146,8 +236,21 @@ export class ReplyProgress {
   private readonly debuts = new Map<string, number>();
   /** Rotation du repli : incrémentée à chaque accusé de repli. */
   private replis = 0;
-  /** Chaîne SÉRIALISÉE des publications : elle garantit l'ordre d'arrivée. */
+  /**
+   * FILE des publications en attente + chaîne qui les vide UNE PAR UNE.
+   *
+   * ⚠️ UNE SEULE PUBLICATION EN VOL À LA FOIS, jamais deux : deux `send` simultanés
+   * pour un même run perdent l'ORDRE et l'ESPACEMENT à l'arrivée (défaut de production
+   * du 2026-11-02 : « toujours deux messages qui arrivent en même temps »). La chaîne
+   * est donc une section EXCLUSIVE, pas un simple `.then`.
+   *
+   * ⚠️ Mais l'accusé passe DEVANT les autres tâches (`prioritaire`) : il n'a de valeur
+   * que s'il arrive pendant l'action. Il double la file d'ATTENTE, jamais l'envoi en
+   * cours — l'exclusivité reste absolue.
+   */
   private chaine: Promise<void> = Promise.resolve();
+  /** Tâches en attente d'envoi (l'accusé s'y glisse en tête). */
+  private readonly enAttente: Array<{ tache: () => Promise<void>; contexte: PublicationContext }> = [];
 
   constructor(options: ReplyProgressOptions) {
     this.publier = options.publier;
@@ -218,7 +321,10 @@ export class ReplyProgress {
     // ⚠️ MESURE DE PRODUCTION : la SOURCE, jamais le texte (un accusé n'est pas un
     // journal). Si `repli` domine, c'est la consigne du prompt qu'il faut renforcer.
     this.logger?.info?.("chat.progress.ack", { tool: event.tool, source });
-    this.enfiler(() => this.publier({ text: texte }), { outil: event.tool, role: "ack" });
+    // ⚠️ L'ACCUSÉ PASSE DEVANT : il double la FILE d'attente (pas l'envoi en cours —
+    // l'exclusivité reste absolue) pour partir au démarrage de l'outil, pas après une
+    // image ou une ligne de résultat déjà en attente.
+    this.enfiler(() => this.publier({ text: texte }), { outil: event.tool, role: "ack" }, true);
   }
 
   /** Un outil vient de se TERMINER : rappel désarmé, puis échec (une fois). */
@@ -263,28 +369,86 @@ export class ReplyProgress {
     });
   }
 
-  /** Attend que TOUTES les publications intermédiaires soient parties. */
+  /**
+   * Attend que TOUTES les publications intermédiaires soient parties.
+   *
+   * ⚠️ DEUX chemins : la chaîne sérialisée (image, résultat, rappel) ET les envois
+   * immédiats (l'accusé). N'attendre que la chaîne laisserait l'accusé en vol alors
+   * que le run est clos — donc un accusé qui arrive APRÈS la réponse.
+   */
   async attendre(): Promise<void> {
     await this.chaine;
   }
 
   /**
-   * Retire du texte FINAL la ligne d'accusé déjà publiée.
+   * Retire du texte FINAL l'accusé déjà publié.
    *
-   * ⚠️ Comparaison STRICTE de la première ligne non vide (jamais « ça a l'air
-   * court ») : l'accusé est un texte connu, on retire exactement celui-là. Un texte
-   * différent garde sa place — c'est une réponse, pas un doublon.
+   * ⚠️ DEUX FORMES, dans cet ordre :
+   *  1. **LIGNE ENTIÈRE** — la première ligne non vide est exactement l'accusé
+   *     (« Deux secondes.\n\nVoilà l'image. ») ;
+   *  2. **PRÉFIXE** — le texte COMMENCE par l'accusé puis continue sur la même ligne
+   *     (« C'est parti, avec ta fiche sous les yeux… »). Défaut de production du
+   *     2026-11-02 : l'égalité stricte seule ne retirait rien, et le canal recevait
+   *     l'accusé DEUX fois.
+   *
+   * ⚠️ La comparaison ignore la CASSE et la PONCTUATION (« C'est parti ! » vs
+   * « c'est parti. ») : c'est le MÊME texte pour qui le lit. On ne retire jamais autre
+   * chose que ce préfixe, et le reste est publié VERBATIM.
+   *
+   * ⚠️ Reste VIDE ⇒ on rend la chaîne vide : l'appelant ne publie alors AUCUNE réponse
+   * (sinon le canal recevrait une bulle vide, ou l'accusé une seconde fois).
+   *
+   * ⚠️ PLUSIEURS LIGNES D'ACCUSÉ (production, 2026-11-02 15:50 : une seule bulle portait
+   * « Je prends ça en charge. » PUIS « Je lance la mise à jour. ») : le modèle en écrit
+   * parfois deux. Une seule est PUBLIÉE (la première, verrou 1/run) ; les suivantes sont
+   * retirées du texte final, jamais publiées — sans quoi la personne relit l'attente
+   * qu'elle vient de recevoir.
    */
   retirerAck(texte: string): string {
     const ack = this.ack;
     if (ack === undefined) return texte;
     const lignes = texte.split(/\r?\n/u);
-    const index = lignes.findIndex((ligne) => ligne.trim() !== "");
+    /** Première ligne NON VIDE (les blancs de tête ne comptent pas). */
+    const premiereUtile = (): number => lignes.findIndex((ligne) => ligne.trim() !== "");
+    let index = premiereUtile();
     if (index === -1) return texte;
-    if (lignes[index]?.trim() !== ack.text.trim()) return texte;
-    lignes.splice(index, 1);
-    // La suppression laisse au plus UNE ligne vide de tête : on la retire aussi.
-    if (index < lignes.length && lignes[index]?.trim() === "") lignes.splice(index, 1);
+
+    const ligne = lignes[index] ?? "";
+    /** Une ligne de tête appartenait-elle à l'accusé ? (garde-fou du ③ ci-dessous) */
+    let retie = false;
+    // ① La première ligne EST l'accusé : on la retire, elle seule.
+    if (normaliserPourAccuse(ligne) === normaliserPourAccuse(ack.text)) {
+      lignes.splice(index, 1);
+      retie = true;
+    } else {
+      // ② Le texte COMMENCE par l'accusé (même ligne, puis la suite) : on retire le
+      //    préfixe et on publie le reste. `undefined` ⇒ la première ligne n'est pas
+      //    l'accusé, c'est le CORPS : on n'y touche pas, et ③ reste désarmé.
+      const reste = retirerPrefixe(ligne, ack.text);
+      if (reste !== undefined) {
+        if (reste === "") lignes.splice(index, 1);
+        else lignes[index] = reste;
+        retie = true;
+      }
+    }
+
+    // ③ LIGNES D'ACCUSÉ SUIVANTES : on les retire TANT QU'il reste un corps derrière.
+    //    ⚠️ Deux garde-fous, chacun pour une raison mesurable :
+    //     - `retie` : on ne nettoie la suite que si le texte REPRENAIT l'accusé. Sans ce
+    //       verrou, une réponse qui commence par une phrase d'action légitime
+    //       (« Je pense que c'est une bonne idée. ») la perdrait ;
+    //     - `corps` : une réponse dont TOUTES les lignes sont des attentes garde la
+    //       dernière — sinon elle deviendrait muette.
+    while (retie) {
+      const debut = premiereUtile();
+      if (debut === -1) break;
+      if (!ressembleAUnAccuse(lignes[debut] ?? "")) break;
+      const corps = lignes
+        .slice(debut + 1)
+        .some((suite) => suite.trim() !== "" && !ressembleAUnAccuse(suite));
+      if (!corps) break;
+      lignes.splice(debut, 1);
+    }
     return lignes.join("\n").trim();
   }
 
@@ -355,12 +519,16 @@ export class ReplyProgress {
   }
 
   /**
-   * Ajoute une publication à la chaîne. ⚠️ Elle ne REJETTE jamais : une publication
-   * intermédiaire refusée est journalisée, la réponse finale part quand même.
+   * Met une publication en file (prioritaire ou non) et relance le vidage.
+   *
+   * ⚠️ Elle ne REJETTE jamais : une publication intermédiaire refusée est journalisée,
+   * la réponse finale part quand même. Le vidage est SÉRIEL : une tâche n'est appelée
+   * qu'après la fin complète de la précédente (aucun `send` simultané).
    */
   private enfiler(
     tache: () => Promise<void>,
-    contexte: { outil: string; role: "ack" | "rappel" | "fichier" | "resultat" },
+    contexte: PublicationContext,
+    prioritaire = false,
   ): void {
     // ⚠️ Après la clôture, rien ne part : une ligne intermédiaire qui arriverait
     // après la réponse finale serait au mieux inutile, au pire un doublon.
@@ -368,11 +536,25 @@ export class ReplyProgress {
       this.logger?.warn?.("chat.progress.publish_after_close", { ...contexte });
       return;
     }
-    this.chaine = this.chaine.then(tache).catch((error: unknown) => {
-      this.logger?.warn?.("chat.progress.publish_failed", {
-        ...contexte,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+    if (prioritaire) this.enAttente.unshift({ tache, contexte });
+    else this.enAttente.push({ tache, contexte });
+    this.chaine = this.chaine.then(() => this.vider());
+  }
+
+  /** Vide la file UNE PAR UNE jusqu'à épuisement (section exclusive). */
+  private async vider(): Promise<void> {
+    for (;;) {
+      const suivant = this.enAttente.shift();
+      if (suivant === undefined) return;
+      try {
+        // ⚠️ `await` : la tâche suivante ne démarre qu'APRÈS la fin de celle-ci.
+        await suivant.tache();
+      } catch (error) {
+        this.logger?.warn?.("chat.progress.publish_failed", {
+          ...suivant.contexte,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 }

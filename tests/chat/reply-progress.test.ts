@@ -225,6 +225,66 @@ describe("outil long — un rappel UNIQUE, publié PENDANT l'outil", () => {
   });
 });
 
+describe("publications — UNE seule en vol, et l'accusé passe devant la FILE", () => {
+  it("jamais deux `send` simultanés, et l'accusé double la file sans doubler l'envoi en cours", async () => {
+    // ⚠️ Défaut de production (2026-11-02) : « toujours deux messages qui arrivent en
+    // même temps ». Deux `send` concurrents perdent l'ORDRE et l'ESPACEMENT ; l'accusé,
+    // lui, doit passer DEVANT une publication qui attend (sinon il arrive après
+    // l'action qu'il annonce) — mais JAMAIS devant un envoi déjà commencé.
+    const journal: Array<{ cle: string; debut: number; fin: number }> = [];
+    let enVol = 0;
+    let maxEnVol = 0;
+    const p = new ReplyProgress({
+      publier: async (message) => {
+        enVol += 1;
+        maxEnVol = Math.max(maxEnVol, enVol);
+        const debut = Date.now();
+        // Une image (téléversement) est bien plus lente qu'une ligne de texte.
+        await new Promise((resolve) => setTimeout(resolve, message.fichiers ? 120 : 20));
+        const cle = message.fichiers !== undefined ? String(message.fichiers[0]) : message.text;
+        journal.push({ cle, debut, fin: Date.now() });
+        enVol -= 1;
+      },
+      outils: [...OUTILS_DISTANTS, "delegate"],
+    });
+    p.publierFichier("f-1"); // part tout de suite, LONG
+    p.publierFichier("f-2"); // attend son tour
+    // Le téléversement de f-1 est RÉELLEMENT en vol (sinon f-1 serait encore en file).
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // L'outil long démarre pendant ce téléversement : l'accusé arrive APRÈS f-2 dans
+    // la file, et doit pourtant partir AVANT lui.
+    p.demarrerOutil({ tool: "delegate", ackCandidat: "C'est parti." });
+
+    await p.attendre();
+    // ① Aucun chevauchement : au plus UNE publication en vol à la fois.
+    expect(maxEnVol).toBe(1);
+    // ② Ordre strict garanti (exclusivité) : f-1 en vol, puis l'accusé prioritaire,
+    //    puis f-2 qui attendait.
+    expect(journal.map((entree) => entree.cle)).toEqual(["f-1", "C'est parti.", "f-2"]);
+    // ③ Les intervalles ne se recouvrent jamais (mesure directe).
+    for (let index = 1; index < journal.length; index += 1) {
+      expect(journal[index]!.debut).toBeGreaterThanOrEqual(journal[index - 1]!.fin);
+    }
+  });
+
+  it("`attendre()` couvre AUSSI l'accusé immédiat (jamais orphelin à la clôture)", async () => {
+    let parti = false;
+    const p = new ReplyProgress({
+      publier: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        parti = true;
+      },
+      outils: [...OUTILS_DISTANTS, "delegate"],
+    });
+    p.demarrerOutil({ tool: "delegate", ackCandidat: "Deux secondes." });
+    // ⚠️ Sans cette attente, `cloturer()` suivrait immédiatement et la réponse finale
+    // pourrait partir avant l'accusé.
+    expect(parti).toBe(false);
+    await p.attendre();
+    expect(parti).toBe(true);
+  });
+});
+
 describe("clôture — RIEN ne part après la réponse finale", () => {
   it("une publication tentée après `cloturer()` est refusée (jamais un accusé tardif)", async () => {
     const trace = journal();
@@ -313,6 +373,45 @@ describe("ordre et retrait de l'accusé", () => {
   it("sans accusé publié, le texte final est INCHANGÉ", () => {
     const p = progress(journal().publier);
     expect(p.retirerAck("Deux secondes.\n\nVoilà.")).toBe("Deux secondes.\n\nVoilà.");
+  });
+
+  it("retire TOUTES les lignes d'accusé de tête (le modèle en écrit parfois deux)", async () => {
+    // ⚠️ Production, 2026-11-02 15:50 : une seule bulle portait deux attentes.
+    const p = progress(journal().publier, { outils: [...OUTILS_DISTANTS, "delegate"] });
+    p.demarrerOutil({ tool: "delegate", ackCandidat: "Je prends ça en charge." });
+    await p.attendre();
+
+    expect(
+      p.retirerAck(
+        [
+          "Je prends ça en charge.",
+          "Je lance la mise à jour.",
+          "C'est en route sur la PI5, par délégation : apt update puis montée de version complète.",
+        ].join("\n"),
+      ),
+    ).toBe("C'est en route sur la PI5, par délégation : apt update puis montée de version complète.");
+  });
+
+  it("ne mange JAMAIS une ligne de contenu qui suit immédiatement l'accusé", async () => {
+    const p = progress(journal().publier, { outils: [...OUTILS_DISTANTS, "delegate"] });
+    p.demarrerOutil({ tool: "delegate", ackCandidat: "Deux secondes." });
+    await p.attendre();
+
+    // « Voilà l'image. » n'est pas une phrase d'attente : elle reste.
+    expect(p.retirerAck("Deux secondes.\nVoilà l'image.")).toBe("Voilà l'image.");
+    // Une ligne qui ANNONCE du détail (deux-points, chiffre) n'est pas un accusé.
+    expect(p.retirerAck("Deux secondes.\nJ'ai trouvé 3 fichiers dans la conversation.")).toBe(
+      "J'ai trouvé 3 fichiers dans la conversation.",
+    );
+  });
+
+  it("un tour fait UNIQUEMENT d'attentes garde la dernière (jamais une réponse vide par excès de zèle)", async () => {
+    const p = progress(journal().publier, { outils: [...OUTILS_DISTANTS, "delegate"] });
+    p.demarrerOutil({ tool: "delegate", ackCandidat: "Je m'en occupe." });
+    await p.attendre();
+
+    // L'accusé publié est retiré ; la seconde attente reste, faute de corps derrière.
+    expect(p.retirerAck("Je m'en occupe.\nJe lance la mise à jour.")).toBe("Je lance la mise à jour.");
   });
 
   it("une publication qui échoue n'interrompt pas la suite", async () => {

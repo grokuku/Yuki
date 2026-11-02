@@ -61,7 +61,6 @@ import {
 } from "./comfy/index.js";
 import { createFilesService, createGeneratedImageFiles, FilesStore } from "./files/index.js";
 import {
-  CHAT_JOB_REPORT_TIMEOUT_MS,
   CHAT_JUDGE_SYSTEM_PROMPT,
   CHAT_JUDGE_TIMEOUT_MS,
   CHAT_REPLY_SYSTEM_PROMPT,
@@ -72,6 +71,7 @@ import {
   MattermostChatAdapter,
   type ChatReplyJudge,
   type RemoteMessage,
+  type RemotePlatform,
   buildJudgePrompt,
   createChannelAwareWaker,
   createChannelPostPort,
@@ -1388,11 +1388,14 @@ async function main(): Promise<void> {
    * PUBLICATION d'un texte (et, facultativement, d'un fichier du store) dans un
    * CANAL distant — Mattermost ou Discord, selon l'identifiant de conversation.
    *
-   * ⚠️ Un seul chemin pour les deux usages qui doivent ATTEINDRE la personne du
-   * canal : le RAPPORT d'un job (`createChannelAwareWaker`, ci-dessous) et le
-   * FICHIER envoyé par `envoyer_fichier`. La plateforme est déduite de
-   * l'identifiant miroir (`mm-…`/`dc-…`) : un run né dans un salon Discord poste
-   * sur Discord même si l'interface affiche Mattermost (lot 21).
+   * ⚠️ Deux usages seulement, et aucun n'est le chemin NORMAL d'une réponse :
+   *  - le FICHIER envoyé par `envoyer_fichier` (Yuki, dans son tour) ;
+   *  - le REPLI du réveil de job, quand le tour de Yuki n'a pas pu avoir lieu
+   *    (`createChannelAwareWaker`, plus bas) — c'est le SEUL cas où le serveur
+   *    écrit de lui-même, et il le dit.
+   * La plateforme est déduite de l'identifiant miroir (`mm-…`/`dc-…`) : un run né
+   * dans un salon Discord poste sur Discord même si l'interface affiche Mattermost
+   * (lot 21).
    *
    * ⚠️ Lève quand l'envoi est impossible (plateforme inconnue, adaptateur sans
    * `send`, canal absent du miroir) : l'appelant journalise — jamais un échec
@@ -1426,6 +1429,51 @@ async function main(): Promise<void> {
   };
 
   /**
+   * PORT de publication inter-canal (`publier_dans_canal`) — FABRIQUÉ ICI, UNE SEULE
+   * DÉFINITION, pour ses DEUX porteurs :
+   *  - les RUNS de canal (`createRemoteReplyGenerator`, ci-dessous) ;
+   *  - le WORKER LOURD (`createSdkHeavyWorker`, plus bas) : depuis le 2026-11-02 il
+   *    peut publier le livrable d'un job (une image) dans un AUTRE canal, parce que
+   *    c'est LUI qui le produit — sans cet outil, l'image retombait dans le canal de
+   *    conversation, ce que l'utilisateur refusait explicitement.
+   *
+   * ⚠️ Le périmètre « canaux SUIVIS, même plateforme » est tenu par le PORT
+   * (`src/chat/reply/channel-post.ts`), jamais par le modèle : un nom inventé est
+   * refusé avec la marche à suivre (Configuration → Conversation → « Discussions —
+   * Mattermost / Discord »). `conversationSource` est la garde ANTI-FUITE : un
+   * fichier joint ne peut venir QUE de la conversation propriétaire (un identifiant
+   * volé ailleurs est refusé, et les conversations LOCALES restent hors de portée).
+   */
+  const portDePublication = (
+    conversationSource: string,
+    plateforme: RemotePlatform,
+  ) =>
+    createChannelPostPort({
+      plateforme,
+      conversationSource,
+      canaux: () =>
+        chatMirror.conversations().map((conversation) => ({
+          conversationId: conversation.id,
+          titre: conversation.title,
+          plateforme: conversation.platform,
+        })),
+      // ⚠️ UN SEUL mécanisme d'envoi : `envoyerDansCanal` (téléversement +
+      // `file_ids` + échec VISIBLE). Aucun second chemin de fichiers.
+      envoyer: ({ conversationId: cible, texte, filDe, fichierIds }) =>
+        envoyerDansCanal(cible, texte, fichierIds, filDe),
+      // ⚠️ RÉSOLUTION CÔTÉ SERVEUR des identifiants du store : propriété
+      // (`sessionId`) et taille, jamais un chemin disque. Un identifiant
+      // inconnu/expiré est refusé, jamais ignoré en silence.
+      fichier: (fichierId) => filesStore.get(fichierId),
+      // Borne de taille par fichier : celle du dépôt (`files.maxFileBytes`),
+      // appliquée AVANT l'appel réseau (un binaire ne se tronque pas).
+      maxFichierBytes: () => config.getNumber("files.maxFileBytes"),
+      // Le fil demandé doit exister dans CE canal (garde avant tout appel réseau).
+      filConnu: (cible, racine) => chatMirror.has(cible, racine),
+      logger,
+    });
+
+  /**
    * RÉDACTEUR d'une réponse distante — **COMMUN aux plateformes** (lot 21).
    *
    * ⚠️ Mêmes PORTES que le run local (`createRemoteRunTools` recalculé à chaque réponse),
@@ -1446,47 +1494,33 @@ async function main(): Promise<void> {
     // si l'interface affiche Mattermost (et inversement). Les outils à approbation en
     // sont RETIRÉS : une approbation s'affiche dans l'interface web, jamais dans le canal
     // (`REMOTE_APPROVAL_REFUSAL`).
-    runTools: (conversationId, onFileProduced) =>
+    runTools: (conversationId, onFileProduced, contexte) =>
       createRemoteRunTools({
         conversationId,
         chatMode: runPlatformOf(conversationId, config.getString("chat.mode") as ChatOriginMode),
-        remoteAgents: config.getString("chat.remoteAgents") === "actives",
+        // ⚠️ ANTI-BOUCLE STRUCTURELLE : un tour RÉVEILLÉ par un rapport de tâche
+        // (`contexte.origine === "job"`) n'a PAS `delegate`. Ce n'est pas une consigne
+        // de prompt : le modèle ne peut pas relancer un travail qu'il vient de recevoir,
+        // donc aucune rédélégation en boucle n'est possible.
+        remoteAgents:
+          config.getString("chat.remoteAgents") === "actives" && contexte.origine !== "job",
         lightOptions: lightToolOptions,
         // ⚠️ PUBLICATION INTER-CANAL (décision A, 2026-11-02) : le périmètre
-        // « canaux SUIVIS, même plateforme » est tenu ICI, côté serveur — le modèle ne
-        // peut pas le contourner. Un canal hors miroir est refusé avec la marche à suivre
-        // (Configuration → Conversation → « Discussions — Mattermost / Discord »), au lieu
-        // d'inventer une validation humaine.
-        channels: createChannelPostPort({
-          plateforme:
+        // « canaux SUIVIS, même plateforme » est tenu par le PORT (une seule
+        // définition, `portDePublication`) — le modèle ne peut pas le contourner. Un
+        // canal hors miroir est refusé avec la marche à suivre (Configuration →
+        // Conversation → « Discussions — Mattermost / Discord »), au lieu d'inventer
+        // une validation humaine.
+        // ⚠️ Le port est ENVELOPPÉ par le suivi du tour : ce que Yuki publie dans un
+        // autre canal n'est PAS re-joint à sa réponse (sinon un fichier de tâche
+        // apparaîtrait deux fois).
+        channels: contexte.channelPosts.wrap(
+          portDePublication(
+            conversationId,
             mirrorPlatformOf(conversationId) ??
-            (config.getString("chat.mode") === "discord" ? "discord" : "mattermost"),
-          // ⚠️ CONVERSATION SOURCE : un fichier joint ne peut venir QUE de ce canal
-          // (`mm-…`/`dc-…`). Sans cette garde, un identifiant volé dans une autre
-          // conversation ferait fuiter un fichier (et les conversations LOCALES
-          // sont hors de portée d'un canal distant par construction).
-          conversationSource: conversationId,
-          canaux: () =>
-            chatMirror.conversations().map((conversation) => ({
-              conversationId: conversation.id,
-              titre: conversation.title,
-              plateforme: conversation.platform,
-            })),
-          // ⚠️ UN SEUL mécanisme d'envoi : `envoyerDansCanal` (téléversement +
-          // `file_ids` + échec VISIBLE). Aucun second chemin de fichiers.
-          envoyer: ({ conversationId: cible, texte, filDe, fichierIds }) =>
-            envoyerDansCanal(cible, texte, fichierIds, filDe),
-          // ⚠️ RÉSOLUTION CÔTÉ SERVEUR des identifiants du store : propriété
-          // (`sessionId`) et taille, jamais un chemin disque. Un identifiant
-          // inconnu/expiré est refusé, jamais ignoré en silence.
-          fichier: (fichierId) => filesStore.get(fichierId),
-          // Borne de taille par fichier : celle du dépôt (`files.maxFileBytes`),
-          // appliquée AVANT l'appel réseau (un binaire ne se tronque pas).
-          maxFichierBytes: () => config.getNumber("files.maxFileBytes"),
-          // Le fil demandé doit exister dans CE canal (garde avant tout appel réseau).
-          filConnu: (cible, racine) => chatMirror.has(cible, racine),
-          logger,
-        }),
+              (config.getString("chat.mode") === "discord" ? "discord" : "mattermost"),
+          ),
+        ),
         // MÊMES ports d'image que le host local : le générateur ComfyUI et la
         // copie de l'image dans le store des fichiers de la conversation (le canal).
         // ⚠️ Pas d'`onImage` : l'image d'un run distant part sur le CANAL, pas dans
@@ -1522,7 +1556,8 @@ async function main(): Promise<void> {
         ...(secretStore ? { secrets: secretStore } : {}),
         // ⚠️ DÉLÉGATION : les jobs créés depuis un canal sont rattachés au CANAL
         // (`channelScopedDelegation`, `src/pi/sdk/remote-run-tools.ts`) et leur
-        // résultat y est PUBLIÉ (`createChannelAwareWaker`, plus bas).
+        // rapport RÉVEILLE Yuki dans ce canal (`createChannelAwareWaker`, plus bas) :
+        // ce n'est pas le serveur qui publie, c'est SON tour.
         ...(delegation ? { delegation } : {}),
         ...(heritageStore ? { heritage: heritageStore } : {}),
         ...(conversationArchive ? { conversationArchive } : {}),
@@ -1861,6 +1896,10 @@ async function main(): Promise<void> {
         // lui, l'outil ne serait construit que pour REFUSER, et la politique
         // annoncerait une capacité absente.
         imagesEnabled: comfyGenerator !== undefined,
+        // ⚠️ AUCUN OUTIL DE PUBLICATION ICI, et c'est STRUCTUREL : le worker REND un
+        // résultat, il ne parle pas (`docs/lot18-chat.md`, invariant « un seul
+        // rédacteur »). `publier_dans_canal` reste au contraire disponible dans le RUN
+        // DE CANAL (`REMOTE_SAFE_TOOLS`) : là, c'est Yuki qui écrit, et c'est légitime.
       }),
       ...(agentExecution ? { execution: agentExecution } : {}),
       ...(agentExecution ? { screenshots: agentExecution } : {}),
@@ -2249,29 +2288,37 @@ async function main(): Promise<void> {
       reactions: reactionStore,
       logger,
     });
-    // ⚠️ RÉVEIL DES JOBS : un job terminé doit être ANNONCÉ LÀ OÙ SON AUTEUR
-    // ATTEND. Le réveil historique (`host`) ne connaît que les conversations
-    // LOCALES : il REFUSE une session qu'il n'a pas ouverte (« Session inconnue. »,
-    // `src/pi/sdk-host.ts:2295`), et une conversation de canal n'en est pas une.
-    // Le réveil composite garde donc le host à l'IDENTIQUE pour le local et
-    // PUBLIE dans le canal le rapport d'un job rattaché à un canal
-    // (`createChannelAwareWaker`, `src/chat/reply/channel-waker.ts`) : sans lui,
-    // un `delegate` lancé depuis Mattermost/Discord produirait un job dont
-    // PERSONNE ne verrait jamais le résultat.
+    // ⚠️ RÉVEIL DES JOBS — INVARIANT : **dans un canal, UN SEUL RÉDACTEUR, le tour de
+    // Yuki** (`docs/lot18-chat.md`). Un job terminé doit être ANNONCÉ là où son auteur
+    // attend, mais le serveur n'écrit jamais à sa place : le rapport est INJECTÉ comme
+    // message dans la conversation du canal, Yuki le lit et sa RÉPONSE est publiée
+    // (`wakeReport` des adaptateurs).
+    //  - conversation LOCALE ⇒ le host Pi, à l'IDENTIQUE (il refuse une session qu'il
+    //    n'a pas ouverte, `src/pi/sdk-host.ts` : un canal n'est pas une session Pi) ;
+    //  - conversation de CANAL ⇒ `wake`, et le texte publié n'est qu'un REPLI dit
+    //    quand le tour n'a pas pu avoir lieu (`createChannelAwareWaker`).
     const jobReportWaker = createChannelAwareWaker({
       fallback: host,
-      // ⚠️ Le rapport est un PROMPT technique (`buildBatchReportPrompt`) : on le
-      // fait résumer par le léger avant publication, avec le prompt du rédacteur
-      // de canal — un rapport brut dans un canal serait illisible.
-      summarize: (report) =>
-        chatWriter(
-          CHAT_REPLY_SYSTEM_PROMPT,
-          CHAT_JOB_REPORT_TIMEOUT_MS,
-          "rapport d'arrière-plan",
-        )(report),
-      // ⚠️ FICHIERS DU JOB (lot 23) : MÊME chemin que `envoyer_fichier` — un job
-      // qui a produit une image la fait ARRIVER dans le canal avec son rapport.
-      // Sans ce transport, l'image restait dans le store et personne ne la voyait.
+      // ⚠️ RÉVEIL : le rapport entre dans la conversation du canal comme message
+      // SYSTÈME (`frameRapportSysteme`) ; les fichiers du job y sont rattachés pour que
+      // Yuki puisse les publier. Le tour est borné par l'adaptateur (`ReplyLimiter`).
+      wake: async (request) => {
+        const plateforme = mirrorPlatformOf(request.conversationId);
+        if (!plateforme) {
+          throw new Error(
+            `Conversation « ${request.conversationId} » : la plateforme du canal est inconnue.`,
+          );
+        }
+        const adapter = getAdapter(plateforme);
+        if (!adapter.wakeReport) {
+          throw new Error(
+            `La plateforme « ${plateforme} » ne sait pas réveiller Yuki dans un canal.`,
+          );
+        }
+        await adapter.wakeReport(request);
+      },
+      // ⚠️ REPLI (SEUL cas où le serveur parle) : MÊME chemin que `envoyer_fichier`
+      // (`envoyerDansCanal`), donc aucun second mécanisme de publication.
       post: (conversationId, text, fichiers) =>
         envoyerDansCanal(conversationId, text, fichiers),
       logger,

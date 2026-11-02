@@ -40,6 +40,10 @@ import {
 } from "../mirror/store.js";
 import { mirrorPlatformOf } from "../mirror.js";
 import { ReplyLimiter } from "../reply/limiter.js";
+import { ConversationSendQueue } from "../reply/send-queue.js";
+// ⚠️ RAPPORT SYSTÈME (un seul rédacteur dans un canal) : mise en forme du message
+// injecté et reconnaissance de l'auteur synthétique.
+import { estRapportSysteme, messageRapportSysteme } from "../reply/job-report.js";
 import {
   DEFAULT_REPLY_MODE,
   botAliases,
@@ -60,6 +64,7 @@ import {
   type ChatOutboundMessage,
   type ChatReplyMode,
   type ChatReplySettings,
+  type ChatWakeRequest,
   type RemoteConversation,
   type RemoteMessage,
 } from "../types.js";
@@ -188,6 +193,16 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
    * Au-delà de `REPLY_MAX_CONCURRENT` rédactions en cours, les messages attendent dans
    * une file bornée ; au-delà de la file, le refus est EXPLICITE et journalisé.
    */
+  /**
+   * FILE D'ENVOI par conversation : **une seule publication en vol à la fois**.
+   *
+   * ⚠️ Deux rédactions simultanées (voulu, `REPLY_MAX_CONCURRENT`) publiaient en
+   * parallèle : deux `POST` en vol, donc un ordre non garanti et, côté lecture, deux
+   * messages collés (`src/chat/reply/send-queue.ts`). Les RUNS restent concurrents :
+   * ce sont les ENVOIS qui sont sérialisés, conversation par conversation.
+   */
+  private readonly envois = new ConversationSendQueue();
+
   private readonly reponses: ReplyLimiter;
 
   constructor(deps: MattermostAdapterDeps) {
@@ -303,7 +318,19 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   }
 
   /**
-   * Envoi d'un message sur le canal (`POST /api/v4/posts`).
+   * Envoi d'un message — SÉRIALISÉ PAR CONVERSATION.
+   *
+   * ⚠️ Une seule publication en vol à la fois pour une même conversation : deux tours
+   * simultanés ne peuvent donc pas entrelacer leurs messages (accusé, image, réponse).
+   * ⚠️ La file ne change RIEN à la sémantique : les erreurs remontent à l'appelant,
+   * un envoi en échec ne bloque pas les suivants.
+   */
+  send(conversationId: string, message: ChatOutboundMessage): Promise<RemoteMessage> {
+    return this.envois.run(conversationId, () => this.envoyerMaintenant(conversationId, message));
+  }
+
+  /**
+   * Envoi d'un message sur le canal (`POST /api/v4/posts`) — hors file d'attente.
    *
    * ⚠️ `root_id` : c'est l'APPELANT qui le choisit (`rootIdForReply`, selon `replyStyle`
    * du canal). Une réponse à un message racine ouvre un fil SOUS lui — sans quoi le mode
@@ -312,7 +339,10 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
    * ⚠️ `fichiers` : identifiants du store de Yuki. Chacun est téléversé AVANT le post
    * (`POST /files`), puis attaché par `file_ids`. Un refus n'annule pas le texte.
    */
-  async send(conversationId: string, message: ChatOutboundMessage): Promise<RemoteMessage> {
+  private async envoyerMaintenant(
+    conversationId: string,
+    message: ChatOutboundMessage,
+  ): Promise<RemoteMessage> {
     const conversation = this.deps.store.conversations().find((item) => item.id === conversationId);
     if (!conversation) {
       throw new Error(
@@ -706,6 +736,41 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   }
 
   /**
+   * RÉVEIL du canal par un RAPPORT SYSTÈME (fin d'une tâche d'arrière-plan).
+   *
+   * ⚠️ INVARIANT (`docs/lot18-chat.md`) : **dans un canal, un seul rédacteur — le
+   * tour de Yuki**. Cette méthode ne publie donc RIEN elle-même : elle injecte le
+   * rapport comme message déclencheur, laisse Yuki rédiger, et c'est SA réponse qui
+   * part (avec les fichiers du job).
+   *
+   * ⚠️ Elle LÈVE quand le tour n'a rien publié (générateur absent, canal disparu,
+   * modèle injoignable) : l'appelant (`src/chat/reply/channel-waker.ts`) publie alors
+   * le rapport en TEXTE, en le disant — c'est le seul cas où le serveur parle.
+   */
+  async wakeReport(input: ChatWakeRequest): Promise<void> {
+    const record = this.deps.store.record(input.conversationId);
+    if (!record || record.platform !== "mattermost") {
+      throw new Error(
+        `Le canal « ${input.conversationId} » n'est pas suivi : aucune réponse n'a pu y ` +
+          "être rédigée.",
+      );
+    }
+    const message = messageRapportSysteme({
+      conversationId: input.conversationId,
+      texte: input.texte,
+      ...(input.jobId !== undefined ? { jobId: input.jobId } : {}),
+    });
+    const publie = await this.produceReply(message, record.title, {
+      fichiersDuJob: input.fichiers ?? [],
+    });
+    if (!publie) {
+      throw new Error(
+        this.derniereErreur ?? "le tour de rédaction n'a rien publié dans ce canal.",
+      );
+    }
+  }
+
+  /**
    * Décide — et seulement alors — de répondre, puis publie.
    *
    * ⚠️ Toute défaillance est VISIBLE : journal + `derniereErreur` remontée par
@@ -747,8 +812,16 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
    * Au-delà de `REPLY_MAX_CONCURRENT` rédactions, le message ATTEND dans une file bornée ;
    * au-delà de la file, le refus est JOURNALISÉ et REMONTÉ (`derniereErreur`) — jamais un
    * silence.
+   *
+   * Rend `true` quand quelque chose a été PUBLIÉ (réponse ou message intermédiaire),
+   * `false` sinon : le réveil de canal a besoin de le savoir pour ne pas laisser un
+   * rapport de tâche sans aucune trace (`wakeReport`).
    */
-  private async produceReply(message: RemoteMessage, channelTitle: string): Promise<void> {
+  private async produceReply(
+    message: RemoteMessage,
+    channelTitle: string,
+    options?: { fichiersDuJob?: readonly string[] },
+  ): Promise<boolean> {
     if (!this.deps.generateReply) {
       this.derniereErreur =
         "Yuki ne peut pas encore RÉDIGER de réponse dans un canal distant : le générateur " +
@@ -756,20 +829,36 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       this.deps.logger?.warn("chat.mattermost.reply.unavailable", {
         conversation: message.conversationId,
       });
-      return;
+      return false;
     }
     const avant = this.reponses.refuseesCount;
-    await this.reponses.run(() => this.redigerEtPublier(message, channelTitle));
+    const publie = await this.reponses.run(() =>
+      this.redigerEtPublier(message, channelTitle, options),
+    );
     if (this.reponses.refuseesCount > avant) {
       this.derniereErreur =
         "Trop de réponses en attente sur ce canal : la file est pleine, un message est " +
         "resté sans réponse.";
+      return false;
     }
+    return publie === true;
   }
 
-  /** Rédaction + publication d'UNE réponse (appelée seulement avec une place RÉSERVÉE). */
-  private async redigerEtPublier(message: RemoteMessage, channelTitle: string): Promise<void> {
-    if (!this.deps.generateReply) return;
+  /**
+   * Rédaction + publication d'UNE réponse (appelée seulement avec une place RÉSERVÉE).
+   *
+   * Rend `true` quand au moins un message est PARTI dans le canal.
+   */
+  private async redigerEtPublier(
+    message: RemoteMessage,
+    channelTitle: string,
+    options?: { fichiersDuJob?: readonly string[] },
+  ): Promise<boolean> {
+    if (!this.deps.generateReply) return false;
+    // ⚠️ RAPPORT SYSTÈME : son identifiant distant n'existe PAS chez la plateforme.
+    // Répondre « dans son fil » ou le citer produirait un post refusé (ou du bruit) :
+    // on répond donc à la RACINE du canal, sans citation.
+    const rapport = estRapportSysteme(message);
     try {
       const transcript = this.deps.store.messages(message.conversationId);
       // ⚠️ COMMENT répondre : réglage PAR CANAL, persisté. `fil` (défaut) repart de la
@@ -778,7 +867,9 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       // ⚠️ Calculé AVANT le run : les messages INTERMÉDIAIRES (accusé, image) doivent
       // être ancrés au MÊME message que la réponse.
       const record = this.deps.store.record(message.conversationId);
-      const rootId = rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
+      const rootId = rapport
+        ? undefined
+        : rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
       // ⚠️ ANCRAGE INTER-RUNS : les messages intermédiaires citent TOUJOURS l'auteur du
       // message traité, même quand `quoteAuthor` vaut `non` — ce sont des STATUTS
       // rattachés à une demande, pas des réponses (`root_id` seul ne suffit pas : deux
@@ -788,7 +879,13 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         text: string;
         fichiers?: readonly string[];
       }): Promise<void> => {
-        const texte = composeReplyText({ text: intermediaire.text, message, quoteAuthor: "oui" });
+        const texte = composeReplyText({
+          text: intermediaire.text,
+          message,
+          // ⚠️ Un rapport système n'est pas une personne : le citer serait du bruit
+          // (et sauterait le repli quand `quoteAuthor` vaut `oui`).
+          quoteAuthor: rapport ? "non" : "oui",
+        });
         const fichiers = intermediaire.fichiers ?? [];
         await this.send(message.conversationId, {
           kind: "texte",
@@ -811,6 +908,12 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         ...(joints.images.length > 0 ? { images: joints.images } : {}),
         ...(joints.notes.length > 0 ? { notes: joints.notes } : {}),
         publier,
+        // ⚠️ ORIGINE et FICHIERS du job : sans eux, le tour de Yuki ne sait pas d'où
+        // vient le rapport et ne peut pas publier les fichiers produits.
+        ...(rapport ? { origine: "job" as const } : {}),
+        ...(options?.fichiersDuJob !== undefined && options.fichiersDuJob.length > 0
+          ? { fichiersDuJob: options.fichiersDuJob }
+          : {}),
       });
       // ⚠️ Le générateur peut encore rendre des FICHIERS (ceux qu'il n'a pas déjà
       // postés) : ils partent dans le MÊME post, par `file_ids`.
@@ -821,15 +924,15 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         // dire : ce n'est pas une erreur, c'est un silence voulu.
         if (publies > 0) {
           this.derniereErreur = undefined;
-          return;
+          return true;
         }
         this.derniereErreur = "Le générateur n'a produit aucun texte : rien n'a été publié.";
-        return;
+        return false;
       }
       const texte = composeReplyText({
         text,
         message,
-        quoteAuthor: effectiveQuoteAuthor(record),
+        quoteAuthor: rapport ? "non" : effectiveQuoteAuthor(record),
       });
       const fichiers = reponse.fichiers ?? [];
       await this.send(message.conversationId, {
@@ -839,6 +942,7 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         ...(fichiers.length > 0 ? { fichiers } : {}),
       });
       this.derniereErreur = undefined;
+      return true;
     } catch (error) {
       // ⚠️ ÉCHEC VISIBLE : jamais silencieux.
       this.derniereErreur =
@@ -849,6 +953,7 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         conversation: message.conversationId,
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     }
   }
 

@@ -18,6 +18,7 @@ import {
 } from "../../src/delegation/index.js";
 import { JobQueue, JobStore } from "../../src/jobs/index.js";
 import { createLogger } from "../../src/observability/logger.js";
+import { toolWatchdogError } from "../../src/pi/index.js";
 import type { PiEvent } from "../../src/pi/types.js";
 import { FakeHeavyWorker } from "./fake-heavy-worker.js";
 
@@ -462,6 +463,32 @@ describe("delegation — instrumentation & report", () => {
     expect(record?.status).toBe("failed");
     expect(h.reports[0]?.text).toContain("moitié faite");
     expect(h.reports[0]?.text).toContain("failed");
+  });
+
+  it("job interrompu par un OUTIL qui ne rend pas la main ⇒ statut timeout AVEC sa cause", async () => {
+    const h = makeHarness();
+    h.worker.push({
+      autoMs: 5,
+      result: { status: "failed", error: toolWatchdogError("run_command", 960_000) },
+    });
+    const outcome = await h.service.delegate({
+      task: "mettre à jour la Pi",
+      lightSessionId: "sess-1",
+      background: false,
+      deadlineMs: 1500,
+    });
+    // ⚠️ Le statut reste `timeout` (contrat), mais le motif EXACT le suit : c'est
+    // ce qui empêche le léger d'inventer « la machine n'a pas répondu ».
+    expect(outcome.status).toBe("timeout");
+    if (outcome.status !== "timeout") throw new Error("timeout attendu");
+    expect(outcome.cause).toBe("tool_timeout");
+    expect(outcome.note).toContain("run_command");
+    expect(outcome.note).toContain("n'a pas rendu la main");
+    // Le rapport (prompt synthétique) porte l'explication, pas le mot « timeout » nu.
+    h.flush();
+    expect(h.reports[0]?.text).toContain("n'a pas rendu la main");
+    expect(h.reports[0]?.text).toContain("run_command");
+    expect(h.reports[0]?.text).toContain("état final n'est pas connu");
   });
 });
 

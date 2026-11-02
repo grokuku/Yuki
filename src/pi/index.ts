@@ -64,7 +64,14 @@ export {
 // aucun type du SDK ne traverse `src/pi/index.ts`. La composition root
 // (`src/index.ts`) reste ainsi hors de `src/pi/sdk/**`.
 // ---------------------------------------------------------------------------
-export { createSdkHeavyWorker, truncateCause } from "./sdk/heavy-worker.js";
+export {
+  DEFAULT_TOOL_WATCHDOG_MS,
+  createSdkHeavyWorker,
+  idleTimeoutError,
+  toolWatchdogError,
+  totalTimeoutError,
+  truncateCause,
+} from "./sdk/heavy-worker.js";
 export type { SdkHeavyWorkerConfig } from "./sdk/heavy-worker.js";
 export { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
 export type {

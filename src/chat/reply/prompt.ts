@@ -78,9 +78,22 @@ export const CHAT_REPLY_SYSTEM_PROMPT = [
   "que tu n'as pas : une capacité absente se dit en une phrase, sans justification",
   "inventée.",
   "",
-  "Si tu confies une tâche à un worker (outil de délégation), le résultat te sera",
-  "renvoyé DANS CE CANAL plus tard, quand la tâche sera réellement terminée : tu ne",
-  "l'annonces jamais comme faite avant de l'avoir reçu.",
+  "Si tu confies une tâche à l'outil `delegate`, le résultat te sera renvoyé DANS CE",
+  "CANAL plus tard, quand la tâche sera réellement terminée : tu ne l'annonces jamais",
+  "comme faite avant de l'avoir reçu.",
+  "",
+  "⚠️ Tu ne parles JAMAIS de la mécanique qui fait tourner Yuki : durées techniques,",
+  "limites internes, outils d'arrière-plan, raisons d'un refus. Ce sont des détails",
+  "d'implémentation, pas une réponse. Tu dis simplement ce que tu fais et combien de",
+  "temps ça prend (« je lance ça, ça prendra quelques minutes »), et si une action",
+  "n'est pas possible depuis ce canal, tu le dis en une phrase simple, sans en",
+  "expliquer le mécanisme ni citer de message d'erreur interne.",
+  "",
+  "⚠️ IMAGES : UNE SEULE génération par demande. Si l'image a un défaut, tu DÉCRIS",
+  "précisément ce qui cloche et tu PROPOSES de la refaire — tu ne relances JAMAIS de",
+  "toi-même (cela coûte une génération de plus et produit une image que personne n'a",
+  "demandée). Si tu n'as pas pu voir l'image (trop lourde, modèle sans vision), tu le",
+  "dis et tu demandes si la personne veut une nouvelle génération.",
 ].join("\n");
 
 /**
@@ -92,23 +105,37 @@ export const CHAT_JUDGE_TIMEOUT_MS = 20_000;
 /** Délai maximal du RÉDACTEUR (ms) : laisser le temps d'écrire, sans bloquer un canal. */
 export const CHAT_REPLY_TIMEOUT_MS = 90_000;
 
-/**
- * Délai maximal du RÉSUMÉ d'un rapport de job d'arrière-plan (ms).
- *
- * ⚠️ Il s'agit de la publication du résultat d'un `delegate` (ou d'un archivage du
- * libraire) dans le canal. Il est plus COURT que celui du rédacteur : résumer un
- * rapport déjà borné (`REPORT_MAX_CHARS`) ne demande pas une génération d'image, et
- * une personne qui attend le résultat d'une tâche ne doit pas attendre trois
- * minutes de plus. Au-delà, `createChannelAwareWaker` publie une phrase honnête
- * (job terminé, résumé indisponible) plutôt que rien du tout.
- */
-export const CHAT_JOB_REPORT_TIMEOUT_MS = 45_000;
-
 /** Nombre de caractères de transcript transmis au rédacteur (borne de coût). */
 export const CHAT_REPLY_TRANSCRIPT_MAX_CHARS = 6_000;
 
 /** Nombre de messages récents transmis au juge (contexte minimal). */
 export const CHAT_JUDGE_CONTEXT_MESSAGES = 4;
+
+/**
+ * Consigne ajoutée au rédacteur quand le message déclencheur est un RAPPORT
+ * SYSTÈME (fin d'une tâche d'arrière-plan, `src/chat/reply/job-report.ts`).
+ *
+ * ⚠️ POURQUOI ELLE EXISTE (invariant « un seul rédacteur ») : le rapport n'est pas
+ * une personne. Sans cette consigne, le modèle pouvait :
+ *  - répondre au rapport comme on répond à quelqu'un ;
+ *  - RELANCER la tâche décrite (nouveau travail, donc boucle de délégation) ;
+ *  - recopier le rapport brut dans le canal, ce qui rend le serveur rédacteur par
+ *    personne interposée.
+ *
+ * ⚠️ Elle ne nomme AUCUN mécanisme interne (« worker », « job », « système ») : le
+ * modèle s'adresse à des personnes qui parlent dans un canal.
+ */
+export const CHAT_JOB_REPORT_INSTRUCTION = [
+  "⚠️ Le message auquel tu réponds est un RAPPORT de tâche terminée, pas un message",
+  "d'une personne. Tu ne le remercies pas, tu ne lui poses pas de question, tu ne",
+  "relances AUCUNE tâche (le travail est déjà fait). Tu réponds à la personne qui",
+  "avait demandé ce travail : tu lui dis, en 1 à 3 phrases, ce qui a été fait et ce",
+  "qu'elle doit savoir. Tu ne recopies pas le rapport tel quel.",
+  "Si des fichiers sont produits, ils sont joints à ta réponse : tu n'as rien à faire",
+  "pour les envoyer ici. Si on t'avait demandé de les publier dans un AUTRE canal, tu",
+  "utilises `publier_dans_canal` avec leurs identifiants (ils ne seront alors pas",
+  "joints ici, pour ne pas apparaître deux fois).",
+].join("\n");
 
 /**
  * Mention ajoutée au-dessus de la réponse quand la fenêtre a coupé le fil.
@@ -223,6 +250,19 @@ export function buildReplyPrompt(input: {
    * message n'en portait aucune, alors que l'humain croit avoir joint une image.
    */
   notes?: readonly string[];
+  /**
+   * ORIGINE du tour : `job` = le message déclencheur est un RAPPORT SYSTÈME
+   * (`src/chat/reply/job-report.ts`), pas une parole d'humain.
+   */
+  origine?: "message" | "job";
+  /**
+   * FICHIERS produits par la tâche (identifiants du store de CETTE conversation).
+   *
+   * ⚠️ Sans cette liste, Yuki reçoit un rapport qui parle d'un fichier qu'elle ne
+   * peut pas nommer : elle ne peut donc pas le publier ailleurs (`fichier_ids`), et
+   * le fichier du job n'arrive nulle part.
+   */
+  fichiersDuJob?: readonly string[];
 }): string {
   const maxChars = input.maxChars ?? CHAT_REPLY_TRANSCRIPT_MAX_CHARS;
   const now = input.now ?? new Date();
@@ -277,6 +317,16 @@ export function buildReplyPrompt(input: {
   }
 
   lines.push("");
+  if (input.origine === "job") {
+    lines.push(CHAT_JOB_REPORT_INSTRUCTION);
+    lines.push("");
+  }
+  const fichiersDuJob = (input.fichiersDuJob ?? []).filter((id) => id.trim() !== "");
+  if (fichiersDuJob.length > 0) {
+    lines.push("Fichiers produits par la tâche (identifiants de CETTE conversation) :");
+    for (const id of fichiersDuJob) lines.push(`- ${id}`);
+    lines.push("");
+  }
   lines.push(`Message auquel tu dois répondre — ${authorLabel(input.message)} :`);
   lines.push(bodyOf(input.message));
   lines.push("");
