@@ -99,6 +99,7 @@ describe("règle de délégation — run de CANAL", () => {
       conversationId: CANAL,
       chatMode: "mattermost",
       remoteAgents: true,
+      remoteTools: false,
       lightOptions: () => ({ delegationEnabled: true }),
       delegation: delegationPort(),
       logger: { debug: () => undefined, info: () => undefined, warn: () => undefined, error: () => undefined },
@@ -128,7 +129,13 @@ describe("règle de délégation — run de CANAL", () => {
       conversationId: CANAL,
       chatMode: "mattermost",
       remoteAgents: false,
-      lightOptions: () => ({ delegationEnabled: true }),
+      // ⚠️ OUTILS ouverts : c'est le groupe qui porte `generer_image`, donc le
+      // déclencheur de l'accusé. Avec les deux réglages fermés il n'y aurait
+      // aucune action longue, donc aucune consigne à tester ici.
+      remoteTools: true,
+      // ⚠️ `imagesEnabled` : c'est le PORT qui rend `generer_image` disponible dans le
+      // groupe `outils` (le réglage ouvre la permission, l'option dit si le port existe).
+      lightOptions: () => ({ delegationEnabled: true, imagesEnabled: true }),
       delegation: delegationPort(),
     });
     // Et `delegate` n'est pas non plus dans la politique : la règle serait inapplicable.
@@ -137,8 +144,8 @@ describe("règle de délégation — run de CANAL", () => {
     const prompt = promptDuTour(capturer(run.extensionFactories ?? []));
     expect(prompt).toBeDefined();
     expect(prompt).not.toContain(DELEGATION_RULE);
-    // ⚠️ L'accusé, en revanche, GARDE un déclencheur ici (`generer_image` est dans
-    // `REMOTE_SAFE_TOOLS`) : la consigne est donc présente, et paramétrée par CE run.
+    // ⚠️ L'accusé, en revanche, GARDE un déclencheur ici (`generer_image`, groupe
+    // `outils`) : la consigne est donc présente, et paramétrée par CE run.
     expect(prompt).toContain("Accusé de réception d'une action longue");
     expect(prompt).toContain("`generer_image`");
     expect(prompt).not.toContain("`run_command`");

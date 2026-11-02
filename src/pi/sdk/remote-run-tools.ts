@@ -7,13 +7,13 @@
  * l'utilisateur l'a exigé (« je veux pouvoir générer et analyser des images sur
  * mattermost »).
  *
- * ⚠️ LE SECOND TROU QUE CE MODULE FERME (2026-11-02) : la politique distante
+ * ⚠️ Le SECOND TROU QUE CE MODULE FERME (2026-11-02) : la politique distante
  * autorisait ~19 outils sous `chat.remoteAgents = actives`, alors que ce module
  * n'en construisait que 5 : la délégation, l'annuaire des agents, le coffre,
  * l'archive, le libraire et l'envoi de fichier étaient **autorisés mais
  * absents**. Un réglage qui ne donne rien est un mensonge d'interface — les
  * fabriques du host local sont donc instanciées ici, dans le MÊME ordre de
- * lecture, sous `actives` seulement.
+ * lecture, selon leur GROUPE (`REMOTE_TOOL_GROUP_OF`).
  *
  * ⚠️ MÊME CHEMIN QUE LE MODE LOCAL, PAS UNE SECONDE LISTE : ce module n'écrit
  * aucune liste d'outils. Il instancie les MÊMES fabriques que le host local
@@ -201,10 +201,11 @@ function channelScopedDelegation(
  * Construit les outils d'un run distant.
  *
  * ⚠️ Chaque port ABSENT retire ses outils : un run distant sans coffre exposé
- * n'a pas `lister_secrets`, etc. L'appelant (`src/pi/chat-run.ts`) ne fournit ces
- * ports QUE sous `chat.remoteAgents = actives`, si bien que la liste construite
- * ici est exactement celle de la politique (`REMOTE_SAFE_TOOLS` quand les agents
- * sont désactivés).
+ * n'a pas `lister_secrets`, etc. L'appelant (`src/pi/chat-run.ts`) ne fournit les
+ * ports du groupe `agents` que sous `chat.remoteAgents = actives`, et ceux du
+ * groupe `outils` que sous `chat.remoteTools = actives` (l'image comprise) : la
+ * liste construite ici est donc exactement celle de la politique
+ * (`REMOTE_TOOL_GROUP_OF`, `src/llm/tool-policy.ts`).
  */
 export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[] {
   const tools: ToolDefinition[] = [];

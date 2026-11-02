@@ -149,6 +149,19 @@ export const REMOTE_AGENTS_LABEL = "Agents distants";
 export const REMOTE_AGENTS_ANCHOR = "chat-remote-agents";
 
 /**
+ * SECOND réglage, INDÉPENDANT (demande utilisateur du 2026-11-02 : « images oui,
+ * agents non » était impossible avec un seul interrupteur).
+ *
+ * ⚠️ Les deux contrôles sont côte à côte et NE partagent AUCUNE option : changer
+ * l'un ne touche pas l'autre. C'est la seule façon de répondre à « est-ce que je
+ * peux différencier l'accès aux agents de l'accès aux outils ? ».
+ */
+export const REMOTE_TOOLS_LABEL = "Outils distants";
+
+/** Ancre de page du contrôle « Outils distants » (`/config#chat-remote-tools`). */
+export const REMOTE_TOOLS_ANCHOR = "chat-remote-tools";
+
+/**
  * Texte affiché quand l'état effectif n'a PAS pu être lu (`GET /api/chat/status`).
  *
  * ⚠️ On n'affiche JAMAIS « Désactivé » dans ce cas : ce serait un état effectif
@@ -159,39 +172,66 @@ export const REMOTE_AGENTS_UNKNOWN = "Valeur inconnue (impossible de joindre le 
 
 /** Texte d'aide du réglage « Agents distants ». */
 export const REMOTE_AGENTS_HELP =
-  "Désactivé (défaut) : aucun agent, aucune délégation, aucun transfert de fichier — " +
-  "mais la GÉNÉRATION D'IMAGE fonctionne dans le canal (elle peut alors durer jusqu'à " +
-  "trois minutes et l'accusé le dit). Activé : Yuki peut DÉLÉGUER une tâche à un agent " +
-  "(le travail long part en arrière-plan, son résultat revient dans le canal). ⚠️ " +
-  "Réglage GLOBAL : il vaut pour TOUS les canaux suivis, et n'importe quel membre d'un " +
-  "canal peut alors faire exécuter du travail sur les machines appairées.";
+  "Ouvre l'accès aux MACHINES que vous avez appairées : déléguer une tâche à un agent, " +
+  "lister les agents, consulter le coffre de secrets (noms seulement). Activé : Yuki peut " +
+  "DÉLÉGUER un travail long (il part en arrière-plan, son résultat revient dans le canal). " +
+  "Désactivé (défaut) : aucune délégation, aucune commande, aucun transfert de fichier. " +
+  "⚠️ La GÉNÉRATION D'IMAGE ne dépend PAS de ce réglage : elle est ouverte par « " +
+  "Outils distants » ci-dessous. ⚠️ Réglage GLOBAL : il vaut pour TOUS les canaux " +
+  "suivis, et n'importe quel membre d'un canal peut alors faire exécuter du travail sur " +
+  "vos machines.";
+
+/** Texte d'aide du réglage « Outils distants ». */
+export const REMOTE_TOOLS_HELP =
+  "Ouvre les capacités qui ne touchent à AUCUNE machine : génération d'image, libraire " +
+  "(recherche, lecture, archivage, capture de page), archive « vie antérieure » et " +
+  "recherche dans les conversations archivées. Activé : ces outils fonctionnent dans un " +
+  "canal sans ouvrir la délégation. Désactivé (défaut) : Yuki converse, lit les pièces " +
+  "jointes et publie des messages, mais ne génère rien et n'interroge aucune archive. " +
+  "⚠️ Restent TOUJOURS ouverts : lister/lire une pièce jointe, publier dans un canal " +
+  "suivi, envoyer un fichier déjà rattaché à la conversation. ⚠️ Restent TOUJOURS " +
+  "fermés : les outils qui demandent une approbation humaine (commande, capture " +
+  "d'écran, transfert de fichier, demande de secret).";
 
 /**
- * MONTE la section du réglage « Agents distants ».
+ * MONTE une section de réglage d'accès distant.
  *
- * ⚠️ Ce réglage n'avait AUCUNE interface : le message de refus renvoyait vers un
- * chemin qui n'existait pas, et l'activer demandait d'éditer `config.json`. La
- * valeur effective vient du serveur (`GET /api/chat/status`, champ `distant.agents`),
- * jamais d'une supposition locale.
+ * ⚠️ DEUX contrôles, DEUX réglages (2026-11-02) : ce n'est pas cosmétique —
+ * chacun écrit SA clé de configuration et lit SA valeur effective (`distant.agents`
+ * ou `distant.outils`). Aucun des deux ne devine l'autre.
+ *
+ * ⚠️ Ce réglage n'avait AUCUNE interface au départ : le message de refus renvoyait
+ * vers un chemin qui n'existait pas, et l'activer demandait d'éditer `config.json`.
+ * La valeur effective vient du serveur (`GET /api/chat/status`), jamais d'une
+ * supposition locale.
  *
  * ⚠️ ÉTAT INCONNU ASSUMÉ : si `GET /api/chat/status` échoue, le `<select>` affiche
  * « Valeur inconnue (impossible de joindre le serveur) » et les DEUX contrôles sont
  * désactivés — on ne modifie pas un état qu'on ne connaît pas, et on n'affiche pas
  * un « Désactivés (défaut) » qui serait un mensonge.
  */
-function renderRemoteAgents({ request, report, shared, refresh }) {
+function renderRemoteSwitch({
+  label,
+  anchor,
+  aide: texteAide,
+  cle,
+  flux,
+  lire,
+  textes,
+  request,
+  report,
+  shared,
+  refresh,
+}) {
   const section = h("section", { class: "config-group" });
-  const title = h("h2", { class: "config-group__title", text: REMOTE_AGENTS_LABEL });
-  const aide = h("p", { class: "config-helper", text: REMOTE_AGENTS_HELP });
+  const title = h("h2", { class: "config-group__title", text: label });
+  const aide = h("p", { class: "config-helper", text: texteAide });
   const select = h("select", {
     class: "config-input",
-    id: REMOTE_AGENTS_ANCHOR,
-    "aria-label": REMOTE_AGENTS_LABEL,
+    id: anchor,
+    "aria-label": label,
   });
-  for (const [valeur, libelle] of [
-    ["desactive", "Désactivés (défaut)"],
-    ["actives", "Activés (délégation possible)"],
-  ]) {
+  for (const [valeur, libelle] of textes.options) {
     select.append(h("option", { value: valeur, text: libelle }));
   }
   /** ⚠️ Option d'ÉTAT INCONNU : présente SEULEMENT quand le statut manque. */
@@ -207,7 +247,7 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
     void (async () => {
       // ⚠️ Garde supplémentaire : un clic ne doit jamais écrire une valeur dont on
       // n'a pas lu l'état courant (`shared.state` absent).
-      if (shared.state?.distant?.agents === undefined) {
+      if (lire(shared.state) === undefined) {
         render();
         return;
       }
@@ -220,9 +260,9 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
           headers: {
             "content-type": "application/json",
             "x-yuki-config": "1",
-            "x-yuki-config-flow": "chat-remote-agents",
+            "x-yuki-config-flow": flux,
           },
-          body: JSON.stringify({ "chat.remoteAgents": select.value }),
+          body: JSON.stringify({ [cle]: select.value }),
         });
         await refresh();
       } catch (error) {
@@ -238,7 +278,7 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
   );
 
   function render() {
-    const valeur = shared.state?.distant?.agents;
+    const valeur = lire(shared.state);
     if (valeur === undefined) {
       // ⚠️ État NON LU (statut indisponible, ou pas encore arrivé) : on le DIT, et on
       // n'offre pas d'écriture.
@@ -264,13 +304,64 @@ function renderRemoteAgents({ request, report, shared, refresh }) {
     select.disabled = false;
     save.disabled = false;
     select.value = valeur === "actives" ? "actives" : "desactive";
-    etat.textContent =
-      valeur === "actives"
-        ? "Valeur effective : agents ACTIVÉS (délégation disponible dans les canaux)."
-        : "Valeur effective : agents DÉSACTIVÉS (génération d'image possible dans le canal, délégation impossible).";
+    etat.textContent = valeur === "actives" ? textes.actives : textes.desactives;
   }
 
   return { element: section, render };
+}
+
+/**
+ * Section « Agents distants » (`chat.remoteAgents`) : les MACHINES appairées.
+ *
+ * ⚠️ Montée EN PREMIER dans le panneau : c'est la section que cherche la personne
+ * qui lit le chemin d'un refus (« Configuration → Conversation → Agents distants »),
+ * et l'ordre ne change rien à l'independent des deux réglages.
+ */
+function renderRemoteAgents(deps) {
+  return renderRemoteSwitch({
+    label: REMOTE_AGENTS_LABEL,
+    anchor: REMOTE_AGENTS_ANCHOR,
+    aide: REMOTE_AGENTS_HELP,
+    cle: "chat.remoteAgents",
+    flux: "chat-remote-agents",
+    lire: (state) => state?.distant?.agents,
+    textes: {
+      options: [
+        ["desactive", "Désactivés (défaut)"],
+        ["actives", "Activés (délégation possible)"],
+      ],
+      actives: "Valeur effective : agents ACTIVÉS (délégation disponible dans les canaux).",
+      desactives:
+        "Valeur effective : agents DÉSACTIVÉS (aucune délégation, aucune commande, " +
+        "aucun transfert de fichier depuis un canal).",
+    },
+    ...deps,
+  });
+}
+
+/** Section « Outils distants » (`chat.remoteTools`) : image, libraire, archives. */
+function renderRemoteTools(deps) {
+  return renderRemoteSwitch({
+    label: REMOTE_TOOLS_LABEL,
+    anchor: REMOTE_TOOLS_ANCHOR,
+    aide: REMOTE_TOOLS_HELP,
+    cle: "chat.remoteTools",
+    flux: "chat-remote-tools",
+    lire: (state) => state?.distant?.outils,
+    textes: {
+      options: [
+        ["desactive", "Désactivés (défaut)"],
+        ["actives", "Activés (images, libraire, archives)"],
+      ],
+      actives:
+        "Valeur effective : outils ACTIVÉS (génération d'image, libraire, archives " +
+        "disponibles dans les canaux).",
+      desactives:
+        "Valeur effective : outils DÉSACTIVÉS (pas de génération d'image, pas de " +
+        "libraire, pas d'archive depuis un canal).",
+    },
+    ...deps,
+  });
 }
 
 /**
@@ -329,6 +420,7 @@ export function initChatPanel(deps) {
       mount();
       for (const platform of platforms) platform.render();
       remoteAgents.render();
+      remoteTools.render();
       signalerPremierRendu();
     } catch (error) {
       // ⚠️ ON N'INVENTE RIEN : l'état précédent est OUBLIÉ (un état périmé serait un
@@ -344,6 +436,7 @@ export function initChatPanel(deps) {
         platform.setError(`Impossible de lire l'état des discussions : ${message}`);
       }
       remoteAgents.render();
+      remoteTools.render();
       signalerPremierRendu();
     }
   }
@@ -360,21 +453,27 @@ export function initChatPanel(deps) {
   );
 
   /**
-   * ⚠️ RÉGLAGE COMMUN « Agents distants » : il décide des OUTILS de tous les canaux
-   * (délégation ou non), donc il n'appartient à aucune plateforme — il est monté
-   * UNE fois. C'est ce chemin que nomme le message de refus d'un outil long.
+   * ⚠️ DEUX RÉGLAGES D'ACCÈS DISTANT, INDÉPENDANTS : « Agents distants » (les
+   * machines appairées) et « Outils distants » (image, libraire, archives). Ils
+   * décident des outils de TOUS les canaux, donc ils n'appartiennent à aucune
+   * plateforme — chacun est monté UNE fois.
+   *
+   * ⚠️ ORDRE : les AGENTS d'abord — c'est ce chemin que nomme le message de refus
+   * d'un outil long (`REMOTE_AGENTS_SETTING_PATH`).
    */
   const remoteAgents = renderRemoteAgents({ request, report, shared, refresh });
+  const remoteTools = renderRemoteTools({ request, report, shared, refresh });
 
   const limits = h("p", {
     class: "config-helper",
     text:
       "Limites assumées : les demandes d'APPROBATION ne sont pas relayées dans un canal " +
       "(une approbation se donne dans l'interface web), et la MÉMOIRE durable n'est pas " +
-      "branchée en mode distant — il n'existe donc AUCUN réglage pour l'activer (seul " +
-      "« " +
+      "branchée en mode distant — il n'existe donc AUCUN réglage pour l'activer. Seuls « " +
       REMOTE_AGENTS_LABEL +
-      " » décide des outils).",
+      " » et « " +
+      REMOTE_TOOLS_LABEL +
+      " » décident des outils d'un canal, et chacun n'ouvre QUE sa famille.",
   });
 
   /**
@@ -393,14 +492,16 @@ export function initChatPanel(deps) {
     root.replaceChildren(
       ...visibles.map((platform) => platform.element),
       remoteAgents.element,
+      remoteTools.element,
       limits,
     );
   }
   mount();
   // ⚠️ Avant la première lecture, l'état effectif est INCONNU : on l'affiche comme tel
-  // au lieu de laisser le `<select>` sur « Désactivés (défaut) », une valeur que
+  // au lieu de laisser les `<select>` sur « Désactivés (défaut) », une valeur que
   // personne n'a lue (défaut de production corrigé le 2026-11-02).
   remoteAgents.render();
+  remoteTools.render();
 
   void refresh();
   return { element: root, refresh };

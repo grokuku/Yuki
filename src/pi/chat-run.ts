@@ -42,6 +42,13 @@ export interface RemoteRunToolsOptions {
   /** `chat.remoteAgents === "actives"` (relu à chaque réponse, `apply: hot`). */
   remoteAgents: boolean;
   /**
+   * `chat.remoteTools === "actives"` (relu à chaque réponse, `apply: hot`).
+   *
+   * ⚠️ INDÉPENDANT de `remoteAgents` : c'est ce qui permet « images oui, agents
+   * non » (demande utilisateur du 2026-11-02).
+   */
+  remoteTools: boolean;
+  /**
    * Options de politique du rôle LÉGER — LES MÊMES que le host local
    * (`createPiHost`). C'est ce partage qui interdit une seconde liste.
    */
@@ -60,17 +67,17 @@ export interface RemoteRunToolsOptions {
    * donc les instancier ne servirait qu'à élargir la surface pour rien.
    */
   agents?: AgentDirectoryPort;
-  /** Coffre (NOMS seulement, `lister_secrets`). Sous `actives` uniquement. */
+  /** Coffre (NOMS seulement, `lister_secrets`). Groupe `agents` uniquement. */
   secrets?: SecretDirectoryPort;
-  /** Délégation (`delegate`, `job_status`, `cancel_job`, `steer_job`). Sous `actives` uniquement. */
+  /** Délégation (`delegate`, `job_status`, `cancel_job`, `steer_job`). Groupe `agents`. */
   delegation?: DelegateServicePort;
-  /** Archive « vie antérieure ». Sous `actives` uniquement. */
+  /** Archive « vie antérieure ». Groupe `outils` (sous `remoteTools`). */
   heritage?: HeritagePort;
-  /** Archive des conversations mises de côté. Sous `actives` uniquement. */
+  /** Archive des conversations mises de côté. Groupe `outils` (sous `remoteTools`). */
   conversationArchive?: ConversationArchivePort;
-  /** Libraire (5 outils, bornes du host local). Sous `actives` uniquement. */
+  /** Libraire (5 outils, bornes du host local). Groupe `outils` (sous `remoteTools`). */
   librarian?: RemoteRunLibrarianPorts;
-  /** Fichiers envoyables (`envoyer_fichier`). Sous `actives` uniquement. */
+  /** Fichiers envoyables (`envoyer_fichier`). Groupe `toujours` : toujours construit. */
   filesSend?: FilesSendPort;
   /** Fichier envoyé par Yuki : l'appelant le publie DANS LE CANAL. */
   onFileSent?: (file: WireFile) => void;
@@ -93,20 +100,23 @@ export interface RemoteRunTools {
   /**
    * BORNE (ms) que le TOUR doit couvrir à cause d'outils longs AUTORISÉS INLINE.
    *
-   * ⚠️ `0` quand aucun outil long n'est autorisé inline : sous
-   * `chat.remoteAgents = actives`, les outils longs sont REFUSÉS (donc coût zéro),
-   * et en LOCAL ce champ n'est jamais lu (le host n'a pas de borne de tour).
-   * ⚠️ Sous `desactive`, `generer_image` peut s'exécuter inline : la borne du tour
+   * ⚠️ `0` quand aucun outil long n'est autorisé inline : quand `delegate` existe
+   * (groupe `agents` ouvert), les outils longs sont REFUSÉS (donc coût zéro), et
+   * en LOCAL ce champ n'est jamais lu (le host n'a pas de borne de tour).
+   * ⚠️ Sans `delegate`, `generer_image` peut s'exécuter inline : la borne du tour
    * doit alors valoir AU MOINS `images.timeoutMs` (180 s), sinon la génération
    * serait coupée en plein vol — le défaut même que le refus prétendait fermer.
+   * ⚠️ INDÉPENDANT des deux réglages : c'est l'ABSENCE de `delegate` qui décide,
+   * pas la valeur de `chat.remoteTools`.
    */
   inlineLongToolBudgetMs?: number;
   /**
    * EXTENSIONS INLINE du run (opaques hors de `src/pi/**`).
    *
-   * ⚠️ Elles portent la CONSIGNE D'ACCUSÉ (`ackRuleFor(tools)`) et, sous
-   * `chat.remoteAgents = actives`, la RÈGLE DE DÉLÉGATION + la liste des jobs du
-   * CANAL (`createDelegationExtensionFactory`, `src/pi/sdk/delegation-extension.ts`).
+   * ⚠️ Elles portent la CONSIGNE D'ACCUSÉ (`ackRuleFor(tools)`) et, quand
+   * `delegate` existe (groupe `agents` ouvert), la RÈGLE DE DÉLÉGATION + la liste
+   * des jobs du CANAL (`createDelegationExtensionFactory`,
+   * `src/pi/sdk/delegation-extension.ts`).
    *
    * ⚠️ Sans la consigne d'accusé, le modèle du canal appelle l'outil SANS RIEN DIRE :
    * c'est alors la table de replis qui parle à sa place — le comportement mécanique
@@ -199,34 +209,49 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
   const tools = toolAllowlistForChat("light", options.lightOptions(), {
     chatMode: options.chatMode,
     remoteAgents: options.remoteAgents,
+    remoteTools: options.remoteTools,
   });
   assertNoApprovalTool(tools);
 
-  // ⚠️ SOUS `desactive`, les ports d'AGENTS ne sont même pas transmis : la
-  // politique les retire, donc les construire n'ouvrirait rien — et un test
-  // vérifie que les DÉFINITIONS restent, elles aussi, dans `REMOTE_SAFE_TOOLS`.
+  // ⚠️ DEUX INTERRUPTEURS, DEUX FAMILLES DE PORTS :
+  //  - `agents` (délégation, annuaire, coffre) ne sont transmis que sous
+  //    `remoteAgents = actives` ;
+  //  - `outils` (libraire, archives) ne sont transmis que sous
+  //    `remoteTools = actives` ;
+  //  - `images` suit `chat.remoteTools` (groupe `outils`) ; `files` et
+  //    `filesSend` (groupes `toujours`) sont transmis TOUJOURS : `buildRemoteRunTools`
+  //    décide, et la politique a déjà tranché.
+  // Construire un port que la politique retire n'ouvrirait rien — un test vérifie
+  // que les DÉFINITIONS restent, elles aussi, dans le périmètre autorisé.
   const actifs = options.remoteAgents;
+  const outilsOuverts = options.remoteTools;
 
   const customTools = buildRemoteRunTools({
     conversationId: options.conversationId,
-    ...(options.images ? { images: options.images } : {}),
+    // ⚠️ IMAGE = groupe `outils` : le port n'est transmis que sous
+    // `remoteTools = actives`. Sinon la définition existerait sans sa permission —
+    // exactement l'écart politique ↔ définitions que les tests interdisent.
+    ...(outilsOuverts && options.images ? { images: options.images } : {}),
     ...(options.files ? { files: options.files } : {}),
     ...(options.vision ? { vision: options.vision } : {}),
     ...(options.onFileProduced ? { onFileProduced: options.onFileProduced } : {}),
-    // ⚠️ PUBLICATION INTER-CANAL : hors du bloc `actifs` À DESSEIN — l'outil est dans
-    // `REMOTE_SAFE_TOOLS`, et le construire seulement sous `actives` ferait diverger la
-    // politique de l'implémentation (l'écart est journalisé, mais autant ne pas l'avoir).
+    // ⚠️ PUBLICATION INTER-CANAL : hors de tout bloc de réglage À DESSEIN — l'outil est
+    // dans le groupe `toujours` (aucun réglage), et le construire seulement sous
+    // `actives` ferait diverger la politique de l'implémentation (l'écart est
+    // journalisé, mais autant ne pas l'avoir).
     ...(options.channels ? { channels: options.channels } : {}),
     ...(actifs && options.agents ? { agents: options.agents } : {}),
     ...(actifs && options.secrets ? { secrets: options.secrets } : {}),
     ...(actifs && options.delegation ? { delegation: options.delegation } : {}),
-    ...(actifs && options.heritage ? { heritage: options.heritage } : {}),
-    ...(actifs && options.conversationArchive
+    ...(outilsOuverts && options.heritage ? { heritage: options.heritage } : {}),
+    ...(outilsOuverts && options.conversationArchive
       ? { conversationArchive: options.conversationArchive }
       : {}),
-    ...(actifs && options.librarian ? { librarian: options.librarian } : {}),
-    ...(actifs && options.filesSend ? { filesSend: options.filesSend } : {}),
-    ...(actifs && options.onFileSent ? { onFileSent: options.onFileSent } : {}),
+    ...(outilsOuverts && options.librarian ? { librarian: options.librarian } : {}),
+    // ⚠️ `envoyer_fichier` est du groupe `toujours` : son port est transmis même
+    // sans aucun réglage (il ne sort pas de la conversation).
+    ...(options.filesSend ? { filesSend: options.filesSend } : {}),
+    ...(options.onFileSent ? { onFileSent: options.onFileSent } : {}),
   });
   assertNoApprovalToolDefinition(customTools);
 
@@ -235,9 +260,10 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
   // le tour était coupé à `CHAT_REPLY_TIMEOUT_MS` (90 s) sans aucun message.
   //
   // ⚠️ SOUS `chat.remoteAgents = actives` SEULEMENT : sous `desactive`, `delegate`
-  // n'existe pas (`REMOTE_SAFE_TOOLS`) et une règle qui ordonne un outil absent
+  // n'existe pas (groupe `agents`) et une règle qui ordonne un outil absent
   // ferait inventer une action au modèle. ⚠️ Le DÉFAUT de `chat.remoteAgents`
-  // reste `desactive` — donc, par défaut, la délégation est IMPOSSIBLE en canal.
+  // reste `desactive` — donc, par défaut, la délégation est IMPOSSIBLE en canal,
+  // quel que soit `chat.remoteTools` (les outils n'ouvrent pas la délégation).
   const regleDelegation =
     actifs && options.delegation
       ? [
@@ -284,17 +310,19 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
       conversation: options.conversationId,
       mode: options.chatMode,
       agents: options.remoteAgents,
+      outils: options.remoteTools,
       tools: manquants,
     });
   }
 
   // ⚠️ BORNE DU TOUR quand des outils longs sont AUTORISÉS INLINE (2026-11-02) :
-  // sous `chat.remoteAgents = desactive` (le DÉFAUT), `delegate` n'existe pas — le
-  // garde-fou ne refuse donc PLUS `generer_image` (`guardLongToolsInChannel`). Un
-  // tour de canal vaut `CHAT_REPLY_TIMEOUT_MS` (90 s) alors que la génération peut
-  // durer `images.timeoutMs` (180 s) : la borne est donc DÉRIVÉE des outils longs
-  // réellement construits, jamais devinée. Sous `actives`, tous les outils longs
-  // sont refusés inline ⇒ budget 0 (la borne de base reste inchangée).
+  // quand `delegate` n'existe pas (groupe `agents` fermé — le DÉFAUT), le
+  // garde-fou ne refuse PAS `generer_image` (`guardLongToolsInChannel`) s'il est
+  // ouvert par `chat.remoteTools`. Un tour de canal vaut `CHAT_REPLY_TIMEOUT_MS`
+  // (90 s) alors que la génération peut durer `images.timeoutMs` (180 s) : la
+  // borne est donc DÉRIVÉE des outils longs réellement construits, jamais devinée.
+  // Avec `delegate`, tous les outils longs sont refusés inline ⇒ budget 0 (la
+  // borne de base reste inchangée).
   const delegationDisponible = actifs && options.delegation !== undefined;
   const inlineLongToolBudgetMs = delegationDisponible
     ? 0

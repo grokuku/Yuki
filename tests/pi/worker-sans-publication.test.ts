@@ -304,7 +304,9 @@ describe("④ non-régression — le RUN DE CANAL de Yuki garde la publication",
     const outils = toolAllowlistForChat(
       "light",
       TOUT_ACTIVE,
-      { chatMode: "mattermost", remoteAgents: false },
+      // ⚠️ Les DEUX réglages fermés : le socle dont `publier_dans_canal` fait partie
+      // ne dépend d'aucun des deux.
+      { chatMode: "mattermost", remoteAgents: false, remoteTools: false },
     );
     expect(outils).toContain(OUTIL_PUBLICATION);
     // Aucun outil à approbation n'entre dans un run distant.
@@ -316,6 +318,7 @@ describe("④ non-régression — le RUN DE CANAL de Yuki garde la publication",
       conversationId: CONVERSATION,
       chatMode: "mattermost",
       remoteAgents: false,
+      remoteTools: false,
       lightOptions: () => ({}),
       channels: {
         canaux: () => [],

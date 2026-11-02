@@ -464,15 +464,21 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_CHAT_MODE",
   },
-  // ⚠️ SÉCURITÉ (exigence utilisateur du 2026-11-01) : en mode DISTANT, les
-  // AGENTS sont DÉSACTIVÉS PAR DÉFAUT. « Désactivé » veut dire : aucune
-  // délégation, aucun transfert de fichier, aucune commande, aucun secret —
-  // mais `generer_image` et l'ANALYSE D'IMAGE restent disponibles (demande
-  // explicite : « générer et analyser des images sur mattermost »).
+  // ⚠️ SÉCURITÉ (exigence utilisateur du 2026-11-01) : en mode DISTANT, l'accès aux
+  // AGENTS est DÉSACTIVÉ PAR DÉFAUT. Depuis le 2026-11-02 il y a DEUX réglages
+  // INDÉPENDANTS, parce qu'un seul ne permettait pas de répondre à « est-ce que je
+  // peux différencier l'accès aux agents de l'accès aux outils ? » :
+  //  - `chat.remoteAgents` (ci-dessous) : délégation, annuaire, coffre — tout ce qui
+  //    ATTEINT une machine appairée ;
+  //  - `chat.remoteTools` (juste après) : image, libraire, archives — les capacités
+  //    de Yuki qui ne touchent à aucune machine.
+  // Le classement outil par outil vit dans `REMOTE_TOOL_GROUP_OF`
+  // (`src/llm/tool-policy.ts`) : un outil = un groupe, sans exception (garde de
+  // compilation + test de garde).
   // La politique correspondante est `toolAllowlistForChat`
   // (`src/llm/tool-policy.ts`) : elle est BRANCHÉE sur le run distant depuis le
   // lot 20 (`src/chat/reply/generate.ts`). Elle est relue à CHAQUE réponse
-  // (`apply: hot`) : changer `remoteAgents` s'applique à la réponse suivante.
+  // (`apply: hot`) : changer un des deux réglages s'applique à la réponse suivante.
   // ⚠️ `actives` n'ouvre JAMAIS un outil qui exige une approbation : une
   // approbation s'affiche dans l'interface WEB et ne peut pas être donnée
   // depuis un canal — ces outils sont retirés de la politique distante.
@@ -486,25 +492,46 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   //
   // ⚠️ CE QUI DEVIENT IMPOSSIBLE SANS `actives` (lot 23, à dire clairement) : la
   // DÉLÉGATION. `delegate` n'existe pas dans la politique distante sous
-  // `desactive` (`REMOTE_SAFE_TOOLS`, `src/llm/tool-policy.ts`), et la RÈGLE
+  // `desactive` (groupe `agents`, `src/llm/tool-policy.ts`), et la RÈGLE
   // « faire ou déléguer ? » n'est injectée que sous `actives`
   // (`createRemoteRunTools`, `src/pi/chat-run.ts`).
   //
   // ⚠️ MAIS ON NE REFUSE JAMAIS SANS ALTERNATIVE (correctif 2026-11-02, régression
-  // de production) : sous `desactive`, un outil LONG appelé INLINE
-  // (`LONG_RUNNING_TOOLS`) n'est PAS refusé — il s'exécute, et c'est la BORNE DU
+  // de production) : un outil LONG appelé INLINE (`LONG_RUNNING_TOOLS`) n'est PAS
+  // refusé tant que `delegate` est absent — il s'exécute, et c'est la BORNE DU
   // TOUR qui est relevée jusqu'à sa borne déclarée (`channelTurnTimeoutMs`,
-  // `src/llm/tool-policy.ts`, appliquée par `src/index.ts`). L'accusé prévient de
-  // la durée (« jusqu'à trois minutes ») et l'image part dès qu'elle est prête
-  // (`src/chat/reply/progress.ts`). Sous `actives`, l'appel inline est REFUSÉ avec
-  // le chemin d'activation de ce réglage (Configuration → Conversation → Agents
-  // distants, tout en bas de l'onglet « Conversation », `public/ui/chat-panel.js`).
+  // `src/llm/tool-policy.ts`, appliquée par `src/index.ts`). Ce correctif ne
+  // dépend QUE de l'absence de `delegate` : « agents non + outils oui » laisse
+  // donc `generer_image` s'exécuter inline, avec la borne relevée à 180 s
+  // (`images.timeoutMs`).
   "chat.remoteAgents": {
     type: "enum",
     enum: ["desactive", "actives"],
     default: "desactive",
     apply: "hot",
     env: "YUKI_CHAT_REMOTE_AGENTS",
+  },
+  // ⚠️ SECOND RÉGLAGE, INDÉPENDANT (demande utilisateur du 2026-11-02 : « images oui,
+  // agents non » était impossible avec un seul interrupteur).
+  // `desactive` (défaut) : aucun outil du groupe `outils` — ni `generer_image`, ni
+  // `consulter_workflow`, ni libraire, ni archives. `actives` : ces outils sont
+  // offerts au run distant, SANS ouvrir la délégation ni quoi que ce soit qui
+  // atteigne une machine.
+  // ⚠️ CE QUI RESTE OUVERT DANS TOUS LES CAS (aucun réglage) : `lister_fichiers`,
+  // `lire_fichier`, `publier_dans_canal`, `envoyer_fichier` — ils ne sortent pas de
+  // la conversation (`REMOTE_TOOL_GROUP_OF`, groupe `toujours`).
+  // ⚠️ CE QUI RESTE FERMÉ DANS TOUS LES CAS : `run_command`, `capturer_ecran`,
+  // `recuperer_fichier`, `deposer_fichier`, `demander_secret` — ils exigent une
+  // approbation humaine, impossible à donner depuis un canal.
+  // ⚠️ RISQUE : `actives` permet à N'IMPORTE QUEL membre d'un canal suivi de faire
+  // générer des images, d'interroger le libraire et de lire les archives. Aucune
+  // machine n'est atteinte, mais cela consomme du GPU et du temps de Yuki.
+  "chat.remoteTools": {
+    type: "enum",
+    enum: ["desactive", "actives"],
+    default: "desactive",
+    apply: "hot",
+    env: "YUKI_CHAT_REMOTE_TOOLS",
   },
   // ⚠️ MÉMOIRE DURABLE : elle n'est PAS branchée sur les conversations
   // distantes, et il n'y a donc AUCUN réglage. `chat.remoteMemory` a existé au

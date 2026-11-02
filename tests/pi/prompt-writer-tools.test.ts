@@ -152,6 +152,7 @@ describe("run distant — la politique atteint la session", () => {
       conversationId: "mm-canal-1",
       chatMode: "mattermost",
       remoteAgents: false,
+      remoteTools: true,
       lightOptions: () => LIGHT_OPTIONS,
     });
     const writer = makeWriter(capture, {
@@ -160,8 +161,9 @@ describe("run distant — la politique atteint la session", () => {
     });
     expect(await writer("prompt")).toBe("Voilà.");
 
-    // ① L'allowlist passée au SDK est EXACTEMENT la politique de l'origine du run.
-    expect(capture.tools).toEqual([...REMOTE_SAFE_TOOLS]);
+    // ① L'allowlist passée au SDK est EXACTEMENT la politique de l'origine du run
+    //    (comparaison TRIÉE : la composition compte, pas l'ordre).
+    expect([...(capture.tools ?? [])].sort()).toEqual([...REMOTE_SAFE_TOOLS].sort());
     // ② Les DÉFINITIONS construites ne débordent JAMAIS de l'allowlist : le SDK ne
     //    registre que ce qu'elle autorise (parité politique ↔ implémentation, vérifiée
     //    outil par outil dans `tests/chat/mattermost-image-chain.test.ts`).
@@ -176,6 +178,7 @@ describe("run distant — la politique atteint la session", () => {
       conversationId: "mm-canal-1",
       chatMode: "mattermost",
       remoteAgents: true,
+      remoteTools: true,
       lightOptions: () => LIGHT_OPTIONS,
     });
     const writer = makeWriter(capture, {
@@ -187,6 +190,7 @@ describe("run distant — la politique atteint la session", () => {
     const attendu = toolAllowlistForChat("light", LIGHT_OPTIONS, {
       chatMode: "mattermost",
       remoteAgents: true,
+      remoteTools: true,
     });
     expect(capture.tools).toEqual(attendu);
     // Plus large que la liste sûre : la délégation et les outils de consultation reviennent.
@@ -200,7 +204,11 @@ describe("run distant — la politique atteint la session", () => {
   it("mode LOCAL : la politique du host est, élément pour élément, celle d'avant", () => {
     // Non-régression : le host local passe par le MÊME calcul, sans filtrage.
     expect(
-      toolAllowlistForChat("light", LIGHT_OPTIONS, { chatMode: "local", remoteAgents: false }),
+      toolAllowlistForChat("light", LIGHT_OPTIONS, {
+        chatMode: "local",
+        remoteAgents: false,
+        remoteTools: false,
+      }),
     ).toEqual(toolAllowlist("light", LIGHT_OPTIONS));
   });
 
@@ -222,15 +230,20 @@ describe("run distant — la politique atteint la session", () => {
     // Le message est en FRANÇAIS et dit ce qui se passe (aucune exécution).
     expect(REMOTE_APPROVAL_REFUSAL).toContain("ne peut pas être donnée depuis un canal");
     expect(() => assertNoApprovalTool(["run_command"])).toThrow(/run_command/);
-    // Et la politique distante, elle, n'en contient jamais (les deux modes).
+    // Et la politique distante, elle, n'en contient jamais (les quatre combinaisons
+    // des deux réglages, puisque les outils à approbation ne dépendent ni de l'un ni
+    // de l'autre).
     for (const remoteAgents of [true, false]) {
-      const run = createRemoteRunTools({
-        conversationId: "mm-canal-1",
-        chatMode: "mattermost",
-        remoteAgents,
-        lightOptions: () => LIGHT_OPTIONS,
-      });
-      expect(approvalRequiredTools(run.tools)).toEqual([]);
+      for (const remoteTools of [true, false]) {
+        const run = createRemoteRunTools({
+          conversationId: "mm-canal-1",
+          chatMode: "mattermost",
+          remoteAgents,
+          remoteTools,
+          lightOptions: () => LIGHT_OPTIONS,
+        });
+        expect(approvalRequiredTools(run.tools)).toEqual([]);
+      }
     }
   });
 });

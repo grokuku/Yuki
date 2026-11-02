@@ -633,34 +633,134 @@ export function toolAllowlist(
 export type ChatOriginMode = "local" | "mattermost" | "discord";
 
 /**
- * Outils autorisés à un run distant quand les AGENTS sont désactivés (défaut).
+ * GROUPE d'accès d'un outil dans une conversation DISTANTE (canal).
  *
- * ⚠️ Liste FERMÉE, volontairement courte :
- *  - `generer_image` + `consulter_workflow` (génération d'image) ;
- *  - `lister_fichiers` + `lire_fichier` (analyse d'une image jointe) ;
- *  - `publier_dans_canal` (publier un message dans un AUTRE canal SUIVI — décision A).
+ * ⚠️ DEUX RÉGLAGES INDÉPENDANTS (demande utilisateur du 2026-11-02) :
+ * l'utilisateur a voulu « images oui, agents non » et ne pouvait pas — un seul
+ * interrupteur (`chat.remoteAgents`) décidait de TOUT. Chaque outil appartient
+ * donc à EXACTEMENT UN groupe, et c'est le groupe qui décide quel réglage
+ * l'ouvre :
+ *  - `agents`   → `chat.remoteAgents` : tout ce qui ATTEINT une machine appairée
+ *    (délégation, annuaire, coffre) ;
+ *  - `outils`   → `chat.remoteTools` (NOUVEAU) : les capacités de Yuki qui ne
+ *    touchent à aucune machine (image, libraire, archives) ;
+ *  - `toujours` → AUCUN réglage : ce qui reste DANS la conversation (lister/lire
+ *    une pièce jointe, publier un message dans un canal suivi, envoyer un
+ *    fichier déjà rattaché) ;
+ *  - `jamais`   → toujours REFUSÉ en distant : exige une approbation humaine (ou
+ *    une saisie), qui ne peut pas être donnée depuis un canal.
+ */
+export type RemoteToolGroup = "agents" | "outils" | "toujours" | "jamais";
+
+/**
+ * CLASSEMENT EXHAUSTIF des outils custom : un outil = un groupe, JAMAIS deux.
  *
- * Rien d'autre : AUCUN builtin de lecture (`read`, `ls`, `grep`, `find`), aucune
- * délégation (`delegate`, `job_status`, `cancel_job`, `steer_job`), aucun
- * transfert (`recuperer_fichier`, `deposer_fichier`), aucune commande
- * (`run_command`, `capturer_ecran`), aucun secret (`lister_secrets`,
- * `demander_secret`), ni annuaire, ni archive, ni libraire.
+ * ⚠️ Le type `Record<CustomToolName, …>` est la garde de COMPILATION : ajouter un
+ * outil à `CustomToolName` sans le classer ici ne compile plus. Un outil non
+ * classé deviendrait sinon invisible (ou silencieusement disponible) dans tous
+ * les runs distants — et personne ne s'en apercevrait.
+ *
+ * ⚠️ `lister_secrets` est dans `agents` — DÉCISION JUSTIFIÉE : il ne touche à
+ * aucune machine (il lit des NOMS dans le coffre de Yuki, jamais une valeur),
+ * mais son unique usage est de savoir QUEL `${NOM}` référencer dans une
+ * commande déléguée : il n'a de sens QUE si la délégation est ouverte. Le mettre
+ * avec `outils` l'ouvrirait à un run qui ne peut rien déléguer ; le classer
+ * `jamais` retirerait une capacité déjà offerte au rôle léger (`TOOL_POLICY`).
+ * Il reste donc derrière le réglage le plus SENSIBLE, sans exposer de valeur.
+ *
+ * ⚠️ `envoyer_fichier` est dans `toujours` — VÉRIFIÉ : il ne liste et n'envoie
+ * que des fichiers DÉJÀ rattachés à la conversation courante
+ * (`createSendFileTools`, `sessionId` FORCÉ) ; aucun accès disque, aucune
+ * machine, aucune approbation. C'est le pendant exact de `lister_fichiers`.
+ *
+ * ⚠️ `publier_dans_canal` est dans `toujours` : un MESSAGE, pas une action sur
+ * une machine (décision A, 2026-11-02). Le périmètre (canaux SUIVIS, même
+ * plateforme) est tenu par le PORT, jamais par l'allowlist.
+ */
+export const REMOTE_TOOL_GROUP_OF: Readonly<Record<CustomToolName, RemoteToolGroup>> = {
+  // ── groupe AGENTS (`chat.remoteAgents`) ────────────────────────────────
+  delegate: "agents",
+  job_status: "agents",
+  cancel_job: "agents",
+  steer_job: "agents",
+  lister_agents: "agents",
+  etat_agent: "agents",
+  lister_secrets: "agents",
+  // ── groupe OUTILS (`chat.remoteTools`) ────────────────────────────────
+  generer_image: "outils",
+  consulter_workflow: "outils",
+  recherche_libraire: "outils",
+  liste_libraire: "outils",
+  lire_libraire: "outils",
+  archive_libraire: "outils",
+  capture_libraire: "outils",
+  archive_vie_anterieure: "outils",
+  chercher_conversations_archivees: "outils",
+  // ── groupe TOUJOURS (aucun réglage) ───────────────────────────────────
+  lister_fichiers: "toujours",
+  lire_fichier: "toujours",
+  publier_dans_canal: "toujours",
+  envoyer_fichier: "toujours",
+  // ── groupe JAMAIS (approbation impossible depuis un canal) ────────────
+  run_command: "jamais",
+  capturer_ecran: "jamais",
+  recuperer_fichier: "jamais",
+  deposer_fichier: "jamais",
+  demander_secret: "jamais",
+};
+
+/** Noms classés dans `groupe`, dans l'ordre de la table (déterministe, testable). */
+function nomsDuGroupe(groupe: RemoteToolGroup): CustomToolName[] {
+  return (Object.keys(REMOTE_TOOL_GROUP_OF) as CustomToolName[]).filter(
+    (nom) => REMOTE_TOOL_GROUP_OF[nom] === groupe,
+  );
+}
+
+/** Groupe d'un outil distant, ou `undefined` si ce n'est pas un outil custom. */
+export function remoteToolGroup(nom: string): RemoteToolGroup | undefined {
+  return (REMOTE_TOOL_GROUP_OF as Record<string, RemoteToolGroup | undefined>)[nom];
+}
+
+/** Outils ouverts par `chat.remoteAgents` (tout ce qui atteint une machine). */
+export const REMOTE_AGENTS_TOOLS: readonly CustomToolName[] = nomsDuGroupe("agents");
+
+/** Outils ouverts par `chat.remoteTools` (image, libraire, archives). */
+export const REMOTE_TOOLS: readonly CustomToolName[] = nomsDuGroupe("outils");
+
+/** Outils d'une conversation distante, quel que soit le réglage. */
+export const REMOTE_ALWAYS_TOOLS: readonly CustomToolName[] = nomsDuGroupe("toujours");
+
+/** Outils JAMAIS offerts à une conversation distante (outils à approbation). */
+export const REMOTE_NEVER_TOOLS: readonly CustomToolName[] = nomsDuGroupe("jamais");
+
+/**
+ * Ensemble des outils qu'un run distant peut atteindre, TOUS RÉGLAGES CONFONDUS
+ * (`outils` puis `toujours`).
+ *
+ * ⚠️ Ce n'est PLUS la liste d'un run précis : un run n'obtient le groupe `outils`
+ * que si `chat.remoteTools = actives`, et le groupe `agents` que si
+ * `chat.remoteAgents = actives`. La liste reste exportée comme BORNE (un outil
+ * hors d'elle ne peut jamais être atteint en distant) — c'est ce que vérifient
+ * les tests de garde et les messages de refus.
  */
 export const REMOTE_SAFE_TOOLS: readonly CustomToolName[] = [
-  ...IMAGE_TOOLS,
-  ...FILE_LIST_TOOLS,
-  ...FILE_READ_TOOLS,
-  // ⚠️ PUBLICATION inter-canal : un MESSAGE, pas une action sur une machine ⇒ aucune
-  // approbation requise, et donc disponible même sous `chat.remoteAgents = desactive`
-  // (décision A, 2026-11-02). Le périmètre (canaux suivis) est tenu par le PORT.
-  ...CHANNEL_POST_TOOLS,
+  ...REMOTE_TOOLS,
+  ...REMOTE_ALWAYS_TOOLS,
 ];
 
 export interface ChatToolPolicyOptions {
   /** Origine du run : le mode de discussion de la conversation déclencheuse. */
   chatMode: ChatOriginMode;
-  /** `chat.remoteAgents` : `true` ⇒ politique du rôle (complète), hors outils à approbation. */
+  /** `chat.remoteAgents` : `true` ⇒ groupe AGENTS ouvert (délégation, annuaire, coffre). */
   remoteAgents: boolean;
+  /**
+   * `chat.remoteTools` : `true` ⇒ groupe OUTILS ouvert (image, libraire, archives).
+   *
+   * ⚠️ INDÉPENDANT de `remoteAgents` : « agents non + outils oui » est une
+   * configuration LÉGITIME (c'est même celle que l'utilisateur demandait le
+   * 2026-11-02 : génération d'image dans le canal, aucune délégation).
+   */
+  remoteTools: boolean;
 }
 
 /**
@@ -836,7 +936,7 @@ export function longToolInlineRefusal(
     + "dans ce canal. "
     + "À la personne, tu dis seulement que l'action est longue et combien de temps elle "
     + "prend, sans expliquer ce mécanisme. "
-    + `(Cet outil s'active dans ${REMOTE_AGENTS_SETTING_PATH}.)`
+    + `(Le recours à \`delegate\` s'active dans ${REMOTE_AGENTS_SETTING_PATH}.)`
   );
 }
 
@@ -871,16 +971,21 @@ export function channelTurnTimeoutMs(input: {
 }
 
 /**
- * Allowlist d'un run, selon l'ORIGINE du run.
+ * Allowlist d'un run, selon l'ORIGINE du run et les DEUX réglages d'accès distant.
  *
  * - mode `local` (défaut) : politique du rôle, STRICTEMENT inchangée — c'est le
  *   même appel, donc la même liste, élément pour élément ;
- * - mode distant + agents DÉSACTIVÉS (défaut) : `REMOTE_SAFE_TOOLS` pour le rôle
- *   léger (image + lecture), et RIEN pour le rôle lourd ;
- * - mode distant + agents ACTIVÉS : la politique du rôle léger, PLUS les outils
- *   de `REMOTE_SAFE_TOOLS` qu'elle ne porte pas (le léger local ne lit pas le
- *   store de fichiers : dans un canal, si — c'est son seul moyen de voir une
- *   image jointe) ;
+ * - mode distant : seuls les outils dont le GROUPE est ouvert
+ *   (`REMOTE_TOOL_GROUP_OF`) sont retenus, plus les outils `toujours` :
+ *    · `chat.remoteAgents = actives` ⇒ groupe `agents` (machines appairées) et
+ *      builtins de lecture du rôle (comportement d'avant, inchangé) ;
+ *    · `chat.remoteTools = actives` ⇒ groupe `outils` (image, libraire,
+ *      archives), tels que les OPTIONS du rôle les activent (un port absent ⇒
+ *      outil absent : la liste ne promet rien qui ne soit câblé) ;
+ *    · `toujours` ⇒ toujours présents (`lister_fichiers`, `lire_fichier`,
+ *      `publier_dans_canal`, `envoyer_fichier`), même avec les deux réglages
+ *      désactivés ;
+ *    · `jamais` ⇒ jamais (outils à approbation) ;
  * - et dans TOUS les cas distants, `APPROVAL_REQUIRED_TOOLS` est RETIRÉ : une
  *   approbation s'affiche dans l'interface web et ne peut pas être donnée
  *   depuis un canal ⇒ refus AVANT exécution, jamais un run en attente.
@@ -891,6 +996,10 @@ export function channelTurnTimeoutMs(input: {
  * ⚠️ Le filtrage n'est pas une politesse : c'est le seul endroit qui décide de
  * ce qu'un run distant peut appeler. Le run distant (canal) passe par cette
  * fonction, jamais par une liste écrite sur place.
+ *
+ * ⚠️ `remoteAgents` et `remoteTools` sont LUS SÉPARÉMENT : « agents non +
+ * outils oui » donne `generer_image` SANS `delegate` — c'est la demande
+ * explicite de l'utilisateur du 2026-11-02, impossible avec un seul réglage.
  */
 export function toolAllowlistForChat(
   role: LlmRole,
@@ -901,11 +1010,27 @@ export function toolAllowlistForChat(
     return toolAllowlist(role, options);
   }
   if (role !== "light") return [];
-  const merged = chat.remoteAgents ? [...toolAllowlist(role, options)] : [];
-  for (const tool of REMOTE_SAFE_TOOLS) {
-    if (!merged.includes(tool)) merged.push(tool);
+  const autorises = new Set<string>();
+  for (const tool of toolAllowlist(role, options)) {
+    const groupe = remoteToolGroup(tool);
+    // ⚠️ Builtins (`read`, `ls`, `grep`, `find`) : pas des outils CUSTOM, donc pas
+    // dans la table des groupes. Ils restent ouverts par `chat.remoteAgents`,
+    // exactement comme avant (la politique distante « complète » les portait).
+    if (groupe === undefined) {
+      if (chat.remoteAgents) autorises.add(tool);
+      continue;
+    }
+    if (groupe === "agents" && !chat.remoteAgents) continue;
+    if (groupe === "outils" && !chat.remoteTools) continue;
+    if (groupe === "jamais") continue;
+    autorises.add(tool);
   }
-  return merged.filter((tool) => !APPROVAL_REQUIRED_TOOLS.includes(tool));
+  // ⚠️ SOCLE `toujours` : poussé INDÉPENDAMMENT des options du rôle, parce que le
+  // léger LOCAL ne porte ni `lister_fichiers` ni `lire_fichier` (il reçoit le
+  // contenu dans son message) alors qu'un run de canal en a besoin pour voir une
+  // pièce jointe. Un port absent est signalé par l'appelant, jamais deviné ici.
+  for (const tool of REMOTE_ALWAYS_TOOLS) autorises.add(tool);
+  return [...autorises].filter((tool) => !APPROVAL_REQUIRED_TOOLS.includes(tool));
 }
 
 /** Outils d'écriture/exécution explicitement interdits au Lot 2. */

@@ -83,17 +83,19 @@ describe("createRemoteReplyGenerator — le prompt nomme le bot de SA plateforme
     const outils = toolAllowlistForChat(
       "light",
       { imagesEnabled: true, filesEnabled: true },
-      { chatMode: plateforme, remoteAgents: false },
+      // ⚠️ DEUX réglages : les outils distants sont ouverts, les agents non.
+      { chatMode: plateforme, remoteAgents: false, remoteTools: true },
     );
     // ⚠️ Un run distant ne reçoit JAMAIS la politique LOCALE complète (lecture du disque,
     // exécution) : la liste reste celle des outils de canal (`REMOTE_SAFE_TOOLS`).
-    expect(outils).toEqual([
-      "generer_image",
+    expect([...outils].sort()).toEqual([
       "consulter_workflow",
-      "lister_fichiers",
+      "envoyer_fichier",
+      "generer_image",
       "lire_fichier",
+      "lister_fichiers",
       // ⚠️ Publication inter-canal : un MESSAGE, pas une action sur une machine ⇒
-      // aucune approbation, donc présent même sous `remoteAgents = desactive` (décision A).
+      // aucune approbation, donc présent quel que soit le réglage (décision A).
       "publier_dans_canal",
     ]);
     // Et le mode global, lui, aurait donné exactement la même liste : la différence n'est

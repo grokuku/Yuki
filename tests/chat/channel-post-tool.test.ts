@@ -406,6 +406,7 @@ describe("outil `publier_dans_canal` — politique d'outils", () => {
       conversationId: GENERAL,
       chatMode: "mattermost",
       remoteAgents: false,
+      remoteTools: false,
       lightOptions: () => ({}),
       channels: port,
     });

@@ -64,6 +64,7 @@ async function startHarness(processEnv: Record<string, string> = {}): Promise<Ha
   const service = new ChatService({
     mode: () => runtime.getString("chat.mode"),
     remoteAgents: () => runtime.getString("chat.remoteAgents"),
+    remoteTools: () => runtime.getString("chat.remoteTools"),
   });
   const server = createServer({
     env,
@@ -106,12 +107,14 @@ describe("GET /api/chat/status", () => {
       mode: string;
       plateforme: { etat: string; raison?: string };
       creation: { autorisee: boolean; raison?: string };
-      distant: { agents: string };
+      distant: { agents: string; outils: string };
     };
     expect(body.mode).toBe("local");
     expect(body.plateforme.etat).toBe("on");
     expect(body.creation).toEqual({ autorisee: true });
-    expect(body.distant).toEqual({ agents: "desactive" });
+    // ⚠️ LES DEUX valeurs sont exposées : l'interface ne peut pas deviner l'une à
+    // partir de l'autre, et le défaut est bien `desactive`/`desactive`.
+    expect(body.distant).toEqual({ agents: "desactive", outils: "desactive" });
   });
 
   it("est CÂBLÉE sur `chat.mode` : un changement du réglage change la réponse", async () => {

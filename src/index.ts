@@ -1489,21 +1489,32 @@ async function main(): Promise<void> {
     botName: (conversationId) =>
       chatMirror.bot(mirrorPlatformOf(conversationId) ?? "mattermost").username ?? "Yuki",
     // ⚠️ POLITIQUE PAR PLATEFORME : `toolAllowlistForChat` selon la plateforme DU RUN et
-    // `chat.remoteAgents`, à partir des MÊMES options que le host local. Ce n'est pas
-    // `chat.mode` qui décide : un run né dans un salon Discord reste un run DISTANT même
-    // si l'interface affiche Mattermost (et inversement). Les outils à approbation en
-    // sont RETIRÉS : une approbation s'affiche dans l'interface web, jamais dans le canal
+    // les DEUX réglages d'accès distant (`chat.remoteAgents`, `chat.remoteTools`), à
+    // partir des MÊMES options que le host local. Ce n'est pas `chat.mode` qui décide :
+    // un run né dans un salon Discord reste un run DISTANT même si l'interface affiche
+    // Mattermost (et inversement). Les outils à approbation en sont RETIRÉS : une
+    // approbation s'affiche dans l'interface web, jamais dans le canal
     // (`REMOTE_APPROVAL_REFUSAL`).
     runTools: (conversationId, onFileProduced, contexte) =>
       createRemoteRunTools({
         conversationId,
         chatMode: runPlatformOf(conversationId, config.getString("chat.mode") as ChatOriginMode),
         // ⚠️ ANTI-BOUCLE STRUCTURELLE : un tour RÉVEILLÉ par un rapport de tâche
-        // (`contexte.origine === "job"`) n'a PAS `delegate`. Ce n'est pas une consigne
-        // de prompt : le modèle ne peut pas relancer un travail qu'il vient de recevoir,
-        // donc aucune rédélégation en boucle n'est possible.
+        // (`contexte.origine === "job"`) n'a NI `delegate` NI les outils d'accès
+        // distant. Ce n'est pas une consigne de prompt : le modèle ne peut pas
+        // relancer un travail qu'il vient de recevoir, donc aucune redélégation en
+        // boucle n'est possible. ⚠️ DÉCISION : un rapport est une DONNÉE — il ne doit
+        // pas relancer du travail (ni délégation, ni génération d'image, ni
+        // libraire, ni archive). Il garde seulement le SOCLE `toujours`
+        // (lister/lire une pièce jointe, publier, envoyer un fichier déjà rattaché),
+        // qui ne sort pas de la conversation.
         remoteAgents:
           config.getString("chat.remoteAgents") === "actives" && contexte.origine !== "job",
+        // ⚠️ SECOND RÉGLAGE, INDÉPENDANT : image/consulter_workflow/libraire/archives.
+        // « agents non + outils oui » est la configuration que l'utilisateur
+        // demandait (génération d'image dans le canal sans délégation).
+        remoteTools:
+          config.getString("chat.remoteTools") === "actives" && contexte.origine !== "job",
         lightOptions: lightToolOptions,
         // ⚠️ PUBLICATION INTER-CANAL (décision A, 2026-11-02) : le périmètre
         // « canaux SUIVIS, même plateforme » est tenu par le PORT (une seule
@@ -1547,11 +1558,11 @@ async function main(): Promise<void> {
           imagesSupported: () => effectiveLlmConfig(config).light.vision,
         },
         onFileProduced,
-        // ⚠️ OUTILS D'AGENTS (uniquement sous `chat.remoteAgents = actives`) :
-        // `createRemoteRunTools` ne les construit QUE dans ce cas, même si les
-        // ports sont toujours fournis. Ils réutilisent les services du host local
-        // (annuaire, coffre, délégation, archive, libraire) : aucune seconde
-        // implémentation, donc aucun garde-fou parallèle à maintenir.
+        // ⚠️ OUTILS DES DEUX GROUPES : `createRemoteRunTools` ne construit les outils du
+        // groupe `agents` que sous `chat.remoteAgents = actives`, et ceux du groupe
+        // `outils` que sous `chat.remoteTools = actives` (l'image comprise). Les ports
+        // sont fournis dans les deux cas — aucune seconde implémentation, donc aucun
+        // garde-fou parallèle à maintenir.
         ...(agentDirectory ? { agents: agentDirectory } : {}),
         ...(secretStore ? { secrets: secretStore } : {}),
         // ⚠️ DÉLÉGATION : les jobs créés depuis un canal sont rattachés au CANAL
@@ -1854,6 +1865,8 @@ async function main(): Promise<void> {
   const chatService = new ChatService({
     mode: () => config.getString("chat.mode"),
     remoteAgents: () => config.getString("chat.remoteAgents"),
+    // ⚠️ SECOND réglage, INDÉPENDANT : image/libraire/archives sans délégation.
+    remoteTools: () => config.getString("chat.remoteTools"),
     mirror: chatMirror,
   });
 
@@ -2207,6 +2220,7 @@ async function main(): Promise<void> {
       tools: toolAllowlistForChat("light", lightToolOptions(), {
         chatMode: "local",
         remoteAgents: false,
+        remoteTools: false,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),

@@ -89,26 +89,39 @@ describe("mode distant — création refusée avec un motif lisible", () => {
   });
 });
 
-describe("capacités distantes — réglage lu, défaut SÉCURISÉ", () => {
-  it("les agents sont DÉSACTIVÉS par défaut, et la mémoire n'est plus une clé du statut", () => {
+describe("capacités distantes — DEUX réglages lus, défaut SÉCURISÉ", () => {
+  it("agents ET outils sont DÉSACTIVÉS par défaut, et la mémoire n'est plus une clé", () => {
     const { service } = serviceWith("mattermost");
     expect(service.remoteAgents()).toBe("desactive");
-    expect(service.status().distant).toEqual({ agents: "desactive" });
+    expect(service.remoteTools()).toBe("desactive");
+    // ⚠️ LES DEUX valeurs sont exposées par le statut : l'interface ne devine rien.
+    expect(service.status().distant).toEqual({ agents: "desactive", outils: "desactive" });
     // ⚠️ `memoire` a disparu avec `chat.remoteMemory` : un champ d'état qui afficherait
     // « désactivée » sans que rien ne puisse l'activer serait un mensonge de plus.
     expect("memoire" in service.status().distant).toBe(false);
   });
 
-  it("le réglage est réellement LU (ce n'est pas une constante)", () => {
-    const { service } = serviceWith("mattermost", {
+  it("les deux réglages sont réellement LUS, et INDÉPENDANTS", () => {
+    // « agents non + outils oui » : la configuration que l'utilisateur demandait
+    // (génération d'image dans un canal, aucune délégation).
+    const outilsSeuls = serviceWith("mattermost", { remoteTools: () => "actives" }).service;
+    expect(outilsSeuls.status().distant).toEqual({ agents: "desactive", outils: "actives" });
+    const agentsSeuls = serviceWith("mattermost", { remoteAgents: () => "actives" }).service;
+    expect(agentsSeuls.status().distant).toEqual({ agents: "actives", outils: "desactive" });
+    const lesDeux = serviceWith("mattermost", {
       remoteAgents: () => "actives",
-    });
-    expect(service.status().distant).toEqual({ agents: "actives" });
+      remoteTools: () => "actives",
+    }).service;
+    expect(lesDeux.status().distant).toEqual({ agents: "actives", outils: "actives" });
   });
 
   it("une valeur inattendue retombe sur `desactive` (jamais une activation par accident)", () => {
-    const { service } = serviceWith("mattermost", { remoteAgents: () => "oui" });
+    const { service } = serviceWith("mattermost", {
+      remoteAgents: () => "oui",
+      remoteTools: () => "ACTIVES",
+    });
     expect(service.remoteAgents()).toBe("desactive");
+    expect(service.remoteTools()).toBe("desactive");
   });
 });
 

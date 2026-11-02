@@ -150,7 +150,7 @@ describe("LONG_RUNNING_TOOLS — déclaration mesurée", () => {
     const politiqueActifs = toolAllowlistForChat(
       "light",
       { imagesEnabled: true, librarianEnabled: true, librarianCaptureEnabled: true },
-      { chatMode: "mattermost", remoteAgents: true },
+      { chatMode: "mattermost", remoteAgents: true, remoteTools: true },
     );
     const perimetre = new Set<string>([...REMOTE_SAFE_TOOLS, ...politiqueActifs]);
     const atteignables = [...perimetre].filter((nom) => longRunningTool(nom) !== undefined);
@@ -264,6 +264,9 @@ describe("refus de l'appel INLINE dans un run de CANAL", () => {
       conversationId: "mm-canal-1",
       chatMode: "mattermost",
       remoteAgents: false,
+      // ⚠️ « agents non + outils oui » : c'est CETTE combinaison que le correctif
+      // protège (l'image s'exécute inline faute de `delegate`).
+      remoteTools: true,
       lightOptions: () => ({ imagesEnabled: true }),
       images: imagePort({ appels: 0 }),
     });

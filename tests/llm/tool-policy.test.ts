@@ -329,21 +329,29 @@ describe("llm — politique d'outils d'un run DISTANT (branchée par `toolAllowl
     // Non-régression : le mode local passe par le même calcul mais rend
     // EXACTEMENT `toolAllowlist`, sans filtrage ni réordonnancement.
     for (const role of ["light", "heavy"] as const) {
-      expect(
-        toolAllowlistForChat(role, lightOptions, { chatMode: "local", remoteAgents: false }),
-      ).toEqual(toolAllowlist(role, lightOptions));
-      expect(
-        toolAllowlistForChat(role, lightOptions, { chatMode: "local", remoteAgents: true }),
-      ).toEqual(toolAllowlist(role, lightOptions));
+      for (const remoteAgents of [true, false]) {
+        for (const remoteTools of [true, false]) {
+          expect(
+            toolAllowlistForChat(role, lightOptions, {
+              chatMode: "local",
+              remoteAgents,
+              remoteTools,
+            }),
+          ).toEqual(toolAllowlist(role, lightOptions));
+        }
+      }
     }
   });
 
-  it("agents DÉSACTIVÉS : image + lecture seulement, jamais un outil d'action", () => {
+  it("agents DÉSACTIVÉS + outils ACTIVÉS : image + lecture, jamais un outil d'action", () => {
     const tools = toolAllowlistForChat("light", lightOptions, {
       chatMode: "mattermost",
       remoteAgents: false,
+      remoteTools: true,
     });
-    expect(tools).toEqual([...REMOTE_SAFE_TOOLS]);
+    // ⚠️ Comparaison TRIÉE : l'ordre de la liste n'est pas le sujet ici (il dépend
+    // de l'ordre des options du rôle), la COMPOSITION l'est.
+    expect([...tools].sort()).toEqual([...REMOTE_SAFE_TOOLS].sort());
     // Les quatre outils que l'utilisateur a exigés depuis Mattermost.
     expect(tools).toEqual(
       expect.arrayContaining([
@@ -361,7 +369,6 @@ describe("llm — politique d'outils d'un run DISTANT (branchée par `toolAllowl
       "deposer_fichier",
       "demander_secret",
       "lister_secrets",
-      "envoyer_fichier",
       "read",
       "ls",
       "grep",
@@ -371,14 +378,19 @@ describe("llm — politique d'outils d'un run DISTANT (branchée par `toolAllowl
     }
     // Le RÔLE LOURD n'obtient RIEN en distant (aucun run lourd n'en naît).
     expect(
-      toolAllowlistForChat("heavy", lightOptions, { chatMode: "mattermost", remoteAgents: false }),
+      toolAllowlistForChat("heavy", lightOptions, {
+        chatMode: "mattermost",
+        remoteAgents: false,
+        remoteTools: true,
+      }),
     ).toEqual([]);
   });
 
-  it("agents ACTIVÉS : toute la politique locale, MOINS les outils à approbation", () => {
+  it("agents ACTIVÉS + outils ACTIVÉS : toute la politique locale, MOINS les approbations", () => {
     const tools = toolAllowlistForChat("light", lightOptions, {
       chatMode: "mattermost",
       remoteAgents: true,
+      remoteTools: true,
     });
     const local = toolAllowlist("light", lightOptions);
     // « Complète » = la liste locale (dans son ordre), PLUS les outils sûrs qu'elle
@@ -413,9 +425,19 @@ describe("llm — politique d'outils d'un run DISTANT (branchée par `toolAllowl
     expect(approvalRequiredTools([...REMOTE_SAFE_TOOLS])).toEqual([]);
     for (const chatMode of ["mattermost", "discord"] as const) {
       for (const remoteAgents of [true, false]) {
-        const tools = toolAllowlistForChat("light", lightOptions, { chatMode, remoteAgents });
-        expect(approvalRequiredTools(tools)).toEqual([]);
-        expect(approvalRequiredTools(toolAllowlistForChat("heavy", lightOptions, { chatMode, remoteAgents }))).toEqual([]);
+        for (const remoteTools of [true, false]) {
+          const tools = toolAllowlistForChat("light", lightOptions, {
+            chatMode,
+            remoteAgents,
+            remoteTools,
+          });
+          expect(approvalRequiredTools(tools)).toEqual([]);
+          expect(
+            approvalRequiredTools(
+              toolAllowlistForChat("heavy", lightOptions, { chatMode, remoteAgents, remoteTools }),
+            ),
+          ).toEqual([]);
+        }
       }
     }
   });

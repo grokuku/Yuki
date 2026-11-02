@@ -29,6 +29,9 @@ import {
   REMOTE_AGENTS_HELP,
   REMOTE_AGENTS_LABEL,
   REMOTE_AGENTS_UNKNOWN,
+  REMOTE_TOOLS_ANCHOR,
+  REMOTE_TOOLS_HELP,
+  REMOTE_TOOLS_LABEL,
   initChatPanel,
 } from "../../public/ui/chat-panel.js";
 import { REMOTE_AGENTS_SETTING_PATH } from "../../src/llm/tool-policy.js";
@@ -236,11 +239,14 @@ describe("chemin d'activation du réglage « Agents distants »", () => {
   it("le panneau rend le contrôle et écrit la CLÉ de configuration attendue", () => {
     const source = lire("public/ui/chat-panel.js");
     expect(REMOTE_AGENTS_ANCHOR).toBe("chat-remote-agents");
-    expect(source).toContain("id: REMOTE_AGENTS_ANCHOR");
-    expect(source).toContain('"chat.remoteAgents": select.value');
+    // ⚠️ Fabrique COMMUNE aux deux contrôles : ce qui distingue « Agents distants »,
+    // c'est son ancre, sa CLÉ et la valeur d'état qu'il lit.
+    expect(source).toContain("anchor: REMOTE_AGENTS_ANCHOR");
+    expect(source).toContain('cle: "chat.remoteAgents"');
+    expect(source).toContain("body: JSON.stringify({ [cle]: select.value })");
     expect(source).toContain("x-yuki-config");
     // ⚠️ La valeur effective vient du SERVEUR, jamais d'une supposition locale.
-    expect(source).toContain("shared.state?.distant?.agents");
+    expect(source).toContain("lire: (state) => state?.distant?.agents");
   });
 
   it("l'aide dit ce que le réglage change (images inline vs délégation)", () => {
@@ -304,12 +310,117 @@ describe("état effectif du réglage « Agents distants »", () => {
   });
 });
 
+// ─── ②bis Deux contrôles, deux valeurs effectives ─────────────────────────
+
+/**
+ * Statut factice à DEUX capacités, et journal des écritures (pour prouver que
+ * chaque contrôle écrit SA clé).
+ */
+function statutDeux(agents: string, outils: string | undefined, ecritures: unknown[] = []) {
+  return async (url: string, init?: { method?: string; body?: string }) => {
+    if (init?.method === "PUT") {
+      ecritures.push({ url, body: init.body });
+      return { ok: true, status: 200, json: async () => ({}) };
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        mode: "mattermost",
+        distant: outils === undefined ? { agents } : { agents, outils },
+        mattermost: { plateforme: { etat: "off" }, canaux: [] },
+      }),
+    };
+  };
+}
+
+async function monterComplet(agents: string, outils: string | undefined, ecritures: unknown[] = []) {
+  installerDom();
+  const root = new Noeud("div");
+  const panneau = initChatPanel({ root, fetchImpl: statutDeux(agents, outils, ecritures) as never });
+  await panneau.refresh();
+  const noeuds = descendants(root);
+  const selects = noeuds.filter((noeud) => noeud.tag === "select");
+  const boutons = noeuds.filter(
+    (noeud) => noeud.tag === "button" && noeud.textContent === "Enregistrer le réglage",
+  );
+  return { root, noeuds, selects, boutons, panneau };
+}
+
+describe("deux réglages, DEUX contrôles (agents / outils)", () => {
+  it("le panneau monte les deux sections, dans l'ordre agents puis outils", async () => {
+    const { selects } = await monterComplet("desactive", "actives");
+    expect(selects).toHaveLength(2);
+    expect(selects[0]?.getAttribute("id")).toBe(REMOTE_AGENTS_ANCHOR);
+    expect(selects[1]?.getAttribute("id")).toBe(REMOTE_TOOLS_ANCHOR);
+    // ⚠️ Les libellés sont distincts : deux listes, pas une.
+    expect(REMOTE_AGENTS_LABEL).not.toBe(REMOTE_TOOLS_LABEL);
+  });
+
+  it("chaque contrôle affiche SA valeur effective (aucun ne devine l'autre)", async () => {
+    const { selects, noeuds } = await monterComplet("desactive", "actives");
+    expect(selects[0]?.value).toBe("desactive");
+    expect(selects[1]?.value).toBe("actives");
+    const textes = noeuds
+      .filter((noeud) => noeud.textContent.startsWith("Valeur effective :"))
+      .map((noeud) => noeud.textContent);
+    expect(textes).toHaveLength(2);
+    expect(textes[0]).toContain("agents DÉSACTIVÉS");
+    expect(textes[1]).toContain("outils ACTIVÉS");
+  });
+
+  it("état d'OUTILS illisible ⇒ « Valeur inconnue », jamais un faux « Désactivés »", async () => {
+    const { selects, boutons } = await monterComplet("actives", undefined);
+    const outils = selects[1]!;
+    expect(outils.value).toBe("inconnue");
+    expect(outils.texteSelectionne).toBe(REMOTE_AGENTS_UNKNOWN);
+    expect(outils.disabled).toBe(true);
+    expect(boutons[1]?.disabled).toBe(true);
+    // ⚠️ L'autre contrôle, lui, reste lisible ET actif : les deux états sont distincts.
+    expect(selects[0]?.value).toBe("actives");
+    expect(selects[0]?.disabled).toBe(false);
+  });
+
+  it("chaque bouton écrit SA clé de configuration", async () => {
+    const ecritures: unknown[] = [];
+    const { selects, boutons } = await monterComplet("desactive", "desactive", ecritures);
+    selects[1]!.value = "actives";
+    const clic = boutons[1]!.listeners.get("click") ?? [];
+    expect(clic).toHaveLength(1);
+    clic[0]!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const corps = ecritures.map((e) => JSON.parse((e as { body: string }).body));
+    expect(corps).toEqual([{ "chat.remoteTools": "actives" }]);
+  });
+
+  it("l'aide de chaque contrôle dit CONCRÈTEMENT ce qu'il ouvre", () => {
+    // ⚠️ Les deux textes doivent être actionnables, pas des étiquettes.
+    expect(REMOTE_TOOLS_HELP).toContain("génération d'image");
+    expect(REMOTE_TOOLS_HELP).toContain("libraire");
+    expect(REMOTE_TOOLS_HELP).toContain("archive");
+    expect(REMOTE_AGENTS_HELP).toContain("MACHINES");
+    expect(REMOTE_AGENTS_HELP).toContain("DÉLÉGUER");
+    // Et chacun dit que l'AUTRE famille ne dépend pas de lui.
+    expect(REMOTE_AGENTS_HELP).toContain("GÉNÉRATION D'IMAGE");
+    expect(REMOTE_TOOLS_HELP).toContain("sans ouvrir la délégation");
+    // Les outils à approbation restent annoncés comme exclus.
+    expect(REMOTE_TOOLS_HELP).toContain("approbation");
+  });
+
+  it("l'ancre `/config#chat-remote-tools` ouvre aussi l'onglet « Conversation »", () => {
+    const source = lire("public/ui/config.js");
+    expect(source).toContain(`[REMOTE_TOOLS_ANCHOR, "conversation"]`);
+  });
+});
+
 // ─── ③ L'ancre qui rend le contrôle trouvable ──────────────────────────────
 
 describe("ancre `/config#chat-remote-agents`", () => {
   it("`tabFromHash` reconnaît l'ancre et ouvre l'onglet « Conversation »", () => {
     const source = lire("public/ui/config.js");
-    expect(source).toContain(`new Map([[REMOTE_AGENTS_ANCHOR, "conversation"]])`);
+    // ⚠️ Depuis le découpage des deux accès (2026-11-02), la table porte AUSSI
+    // l'ancre `chat-remote-tools` : on vérifie l'ENTRÉE, pas la forme de la ligne.
+    expect(source).toContain(`[REMOTE_AGENTS_ANCHOR, "conversation"]`);
     expect(source).toContain("return ANCRES_PROFONDES.get(raw) ?? null;");
     // Le défilement est SÉPARÉ de la sélection d'onglet (et tolère l'absence de l'élément).
     expect(source).toContain("function revealHashTarget()");

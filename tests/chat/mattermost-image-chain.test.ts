@@ -356,6 +356,9 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
           conversationId,
           chatMode: "mattermost",
           remoteAgents: false,
+          // ⚠️ « agents non + OUTILS OUI » : la génération d'image reste ouverte,
+          // c'est exactement la configuration que l'utilisateur demandait.
+          remoteTools: true,
           lightOptions: () => ({ imagesEnabled: true, filesEnabled: true }),
           // ⚠️ PUBLICATION INTER-CANAL : ce câblage de test est un mini-composition root,
           // il doit donc FOURNIR le port comme le vrai — sinon la parité
@@ -401,6 +404,11 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
             onImage: (view: ComfyImageView) => imagesVues.push(view),
           },
           files: depot.service,
+          // ⚠️ `envoyer_fichier` (groupe `toujours`) : son PORT est câblé en
+          // production dans TOUS les cas — sans lui ici, la politique autoriserait un
+          // outil que le run ne construit pas, et la parité testée plus bas serait
+          // fausse pour une raison de câblage de test, pas de politique.
+          filesSend: depot.service,
           onFileProduced,
           logger,
         }),
@@ -456,9 +464,14 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
 
     // ② La politique du run distant est bien arrivée à la session : `generer_image`
     //    est OFFERT (le modèle peut le demander et il s'exécute).
-    expect(received.tools).toEqual([...REMOTE_SAFE_TOOLS]);
-    expect(received.noms.sort()).toEqual([...REMOTE_SAFE_TOOLS].sort());
-    expect(received.tools).toContain("generer_image");
+    // ⚠️ PARITÉ politique ↔ définitions : `REMOTE_SAFE_TOOLS` est désormais la BORNE
+    // (outils + socle), pas la liste d'un run précis — les options de ce câblage
+    // n'ouvrent que l'image et les fichiers.
+    const outils = received.tools ?? [];
+    expect([...outils].sort()).toEqual([...received.noms].sort());
+    expect(outils).toContain("generer_image");
+    // Et aucun outil ne sort de la BORNE distante (jamais la politique locale).
+    for (const nom of outils) expect(REMOTE_SAFE_TOOLS).toContain(nom);
 
     // ③ L'outil a réellement été appelé, avec la scène demandée… et il a TOURNÉ.
     //    ⚠️ Correctif du 2026-11-02 : sous `chat.remoteAgents = desactive` (le

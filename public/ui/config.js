@@ -33,7 +33,7 @@ import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
 import { initSecretsPanel } from './secrets-panel.js';
 import { initSourcesPanel } from './sources-panel.js';
-import { initChatPanel, REMOTE_AGENTS_ANCHOR } from './chat-panel.js';
+import { initChatPanel, REMOTE_AGENTS_ANCHOR, REMOTE_TOOLS_ANCHOR } from './chat-panel.js';
 import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
 import { initTheme } from './theme.js';
 import { createTtsPlayer } from './tts-player.js';
@@ -1337,11 +1337,18 @@ function refreshVisibility() {
  * réglage « Agents distants » : ce contrôle vit à ~5 800 px du haut, et le message de
  * refus de Yuki nomme ce chemin — sans ancre, on ne le trouve pas.
  *
+ * ⚠️ DEUX ancres depuis le 2026-11-02 : « Agents distants » ET « Outils distants ».
+ * Chacune ouvre « Conversation » ; elles ne désignent pas la même section, donc
+ * elles ne peuvent pas partager un seul id.
+ *
  * ⚠️ La correspondance se fait par ID D'ÉLÉMENT, jamais par GROUPE de champs : la
  * tentative précédente par groupe (`#group-images`) envoyait les champs dans le
  * mauvais onglet. Une ancre inconnue retombe sur le comportement d'origine (« Modèles »).
  */
-const ANCRES_PROFONDES = new Map([[REMOTE_AGENTS_ANCHOR, "conversation"]]);
+const ANCRES_PROFONDES = new Map([
+  [REMOTE_AGENTS_ANCHOR, "conversation"],
+  [REMOTE_TOOLS_ANCHOR, "conversation"],
+]);
 
 /** Identifiant d'onglet valide déduit du hash courant, sinon `null`. */
 function tabFromHash() {

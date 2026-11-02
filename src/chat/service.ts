@@ -33,11 +33,16 @@ export interface ChatServiceOptions {
    * la sécurité est le DÉFAUT, jamais l'inverse.
    */
   remoteAgents?: () => string;
+  /**
+   * Lit `chat.remoteTools` (`desactive` | `actives`) — SECOND réglage, INDÉPENDANT
+   * du précédent : image, libraire, archives. Absent = `desactive`.
+   */
+  remoteTools?: () => string;
   /** Miroir des canaux synchronisés. Absent = miroir VIDE (état du lot 1). */
   mirror?: ChatMirror;
 }
 
-/** Mode d'une capacité distante (agents). */
+/** Mode d'une capacité distante (agents ou outils). */
 export type ChatRemoteCapability = "desactive" | "actives";
 
 /** Vue d'état consommée par l'interface (`GET /api/chat/status`). */
@@ -53,8 +58,13 @@ export interface ChatStatusView {
    * branchée, et `chat.remoteMemory` a été RETIRÉ (réglage sans consommateur =
    * mensonge d'interface). Un champ d'état qui afficherait « désactivée » sans
    * que rien ne puisse l'activer serait le même mensonge, une couche plus bas.
+   * ⚠️ DEUX RÉGLAGES INDÉPENDANTS depuis le 2026-11-02 : `agents` (délégation,
+   * annuaire, coffre — tout ce qui ATTEINT une machine appairée) et `outils`
+   * (image, libraire, archives — rien qui touche une machine). Les fondre en un
+   * seul champ obligerait l'interface à DEVINER, et « image oui / agents non »
+   * était impossible avant ce découpage.
    */
-  distant: { agents: ChatRemoteCapability };
+  distant: { agents: ChatRemoteCapability; outils: ChatRemoteCapability };
   /**
    * Création d'une conversation LOCALE.
    *
@@ -98,17 +108,24 @@ function normalizeMode(raw: string): ChatMode {
 export class ChatService {
   private readonly readMode: () => string;
   private readonly readRemoteAgents: () => string;
+  private readonly readRemoteTools: () => string;
   private readonly mirror: ChatMirror;
 
   constructor(options: ChatServiceOptions) {
     this.readMode = options.mode;
     this.readRemoteAgents = options.remoteAgents ?? (() => "desactive");
+    this.readRemoteTools = options.remoteTools ?? (() => "desactive");
     this.mirror = options.mirror ?? emptyChatMirror();
   }
 
   /** `chat.remoteAgents` : les agents sont-ils autorisés sur une conversation distante ? */
   remoteAgents(): ChatRemoteCapability {
     return this.readRemoteAgents() === "actives" ? "actives" : "desactive";
+  }
+
+  /** `chat.remoteTools` : les outils (image, libraire, archives) sont-ils ouverts ? */
+  remoteTools(): ChatRemoteCapability {
+    return this.readRemoteTools() === "actives" ? "actives" : "desactive";
   }
 
   /** Mode courant (relu à chaque appel : changement à chaud). */
@@ -159,7 +176,7 @@ export class ChatService {
       mode: this.mode(),
       plateforme: this.platformStatus(),
       creation: refusal === null ? { autorisee: true } : { autorisee: false, raison: refusal },
-      distant: { agents: this.remoteAgents() },
+      distant: { agents: this.remoteAgents(), outils: this.remoteTools() },
     };
   }
 

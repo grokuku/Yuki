@@ -188,11 +188,16 @@ function generer(options: {
       if (options.capture !== undefined) options.capture.contexte = recu;
       return {
         // ⚠️ MÊME calcul qu'en production (`src/index.ts`) : un tour né d'un rapport
-        // n'a pas la délégation, donc il ne peut pas relancer un travail.
+        // n'a NI délégation NI outils d'accès distant — un rapport est une donnée, il
+        // ne relance pas de travail.
         tools: toolAllowlistForChat(
           "light",
           {},
-          { chatMode: "mattermost", remoteAgents: contexte.origine !== "job" },
+          {
+            chatMode: "mattermost",
+            remoteAgents: contexte.origine !== "job",
+            remoteTools: contexte.origine !== "job",
+          },
         ),
         customTools: [],
       };
@@ -229,13 +234,21 @@ describe("④ un tour né d'un rapport ne redélègue pas", () => {
     const allowlist = toolAllowlistForChat(
       "light",
       {},
-      { chatMode: "mattermost", remoteAgents: capture.contexte?.origine !== "job" },
+      {
+        chatMode: "mattermost",
+        remoteAgents: capture.contexte?.origine !== "job",
+        remoteTools: capture.contexte?.origine !== "job",
+      },
     );
     expect(allowlist).not.toContain("delegate");
     // Et le même câblage, pour un message d'HUMAIN, garde la délégation : ce n'est
     // donc pas la politique distante qui a changé, seulement ce tour-là.
     expect(
-      toolAllowlistForChat("light", {}, { chatMode: "mattermost", remoteAgents: true }),
+      toolAllowlistForChat("light", {}, {
+        chatMode: "mattermost",
+        remoteAgents: true,
+        remoteTools: true,
+      }),
     ).toContain("delegate");
   });
 });

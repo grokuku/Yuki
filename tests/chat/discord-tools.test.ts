@@ -38,6 +38,7 @@ describe("politique d'outils — Discord est traité comme un canal distant", ()
     const tools = toolAllowlistForChat("light", lightOptions(), {
       chatMode: "discord",
       remoteAgents: false,
+      remoteTools: true,
     });
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) expect(REMOTE_SAFE_TOOLS).toContain(tool);
@@ -49,7 +50,11 @@ describe("politique d'outils — Discord est traité comme un canal distant", ()
 
   it("aucun outil à approbation, quel que soit le réglage des agents", () => {
     for (const remoteAgents of [false, true]) {
-      const tools = toolAllowlistForChat("light", lightOptions(), { chatMode: "discord", remoteAgents });
+      const tools = toolAllowlistForChat("light", lightOptions(), {
+        chatMode: "discord",
+        remoteAgents,
+        remoteTools: true,
+      });
       for (const tool of APPROVAL_REQUIRED_TOOLS) expect(tools).not.toContain(tool);
       // ⚠️ Second filet : l'assertion du run distant ne lève pas sur cette liste.
       expect(() => assertNoApprovalTool(tools)).not.toThrow();
@@ -59,7 +64,11 @@ describe("politique d'outils — Discord est traité comme un canal distant", ()
   it("un run LOURD ne peut pas naître d'un canal (allowlist vide)", () => {
     for (const remoteAgents of [false, true]) {
       expect(
-        toolAllowlistForChat("heavy", lightOptions(), { chatMode: "discord", remoteAgents }),
+        toolAllowlistForChat("heavy", lightOptions(), {
+          chatMode: "discord",
+          remoteAgents,
+          remoteTools: true,
+        }),
       ).toEqual([]);
     }
   });
@@ -74,7 +83,8 @@ describe("politique d'outils — Discord est traité comme un canal distant", ()
   it("la MÉMOIRE distante n'est pas un réglage du tout (aucun interrupteur sans effet)", () => {
     const service = new ChatService({ mode: () => "discord" });
     // ⚠️ `service.remoteMemory()` N'EXISTE PLUS, et `chat.remoteMemory` non plus : la
-    // mémoire d'un canal n'est pas branchée, donc il n'y a rien à activer.
-    expect(service.status().distant).toEqual({ agents: "desactive" });
+    // mémoire d'un canal n'est pas branchée, donc il n'y a rien à activer. Les DEUX
+    // réglages réels (agents, outils) sont, eux, exposés et désactivés par défaut.
+    expect(service.status().distant).toEqual({ agents: "desactive", outils: "desactive" });
   });
 });

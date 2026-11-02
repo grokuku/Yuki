@@ -87,8 +87,14 @@ const ATTENDUS_SOUS_ACTIVES = [
   "capture_libraire",
 ] as const;
 
+/**
+ * Outils qui NE DOIVENT PAS apparaître quand les DEUX réglages sont fermés.
+ * ⚠️ `envoyer_fichier` n'y est PLUS : il appartient au socle `toujours`
+ * (`REMOTE_TOOL_GROUP_OF`) — il n'envoie qu'un fichier déjà rattaché à la
+ * conversation, sans accès disque ni machine.
+ */
 const OUTILS_DESACTIVE = [
-  ...ATTENDUS_SOUS_ACTIVES,
+  ...ATTENDUS_SOUS_ACTIVES.filter((nom) => nom !== "envoyer_fichier"),
   "read",
   "ls",
   "grep",
@@ -277,6 +283,7 @@ describe("run distant — les outils de `actives` sont RÉELLEMENT construits", 
       conversationId: CANAL,
       chatMode: "mattermost",
       remoteAgents: true,
+      remoteTools: true,
       lightOptions: () => LIGHT_OPTIONS,
     });
     const presents = noms(run.customTools as ReadonlyArray<{ name?: string }>);
@@ -293,12 +300,13 @@ describe("run distant — les outils de `actives` sont RÉELLEMENT construits", 
     expect(approvalDans(presents)).toEqual([]);
   });
 
-  it("sous `desactive`, AUCUN de ces outils n'est construit (sécurité)", () => {
+  it("les DEUX réglages `desactive` : AUCUN de ces outils n'est construit (sécurité)", () => {
     const run = createRemoteRunTools({
       ...tousLesPorts(),
       conversationId: CANAL,
       chatMode: "mattermost",
       remoteAgents: false,
+      remoteTools: false,
       lightOptions: () => LIGHT_OPTIONS,
     });
     const presents = noms(run.customTools as ReadonlyArray<{ name?: string }>);
@@ -306,10 +314,41 @@ describe("run distant — les outils de `actives` sont RÉELLEMENT construits", 
       expect(run.tools, `allowlist ne doit pas contenir ${interdit}`).not.toContain(interdit);
       expect(presents, `définition ne doit pas contenir ${interdit}`).not.toContain(interdit);
     }
-    // Ce qui reste : la LECTURE de fichiers, et rien d'autre (aucun port d'image
-    // n'est fourni ici ; les outils d'image sont couverts par
-    // `tests/chat/mattermost-image-chain.test.ts`).
-    expect(presents).toEqual(["lire_fichier", "lister_fichiers"].sort());
+    // Ce qui reste : le SOCLE `toujours`, et rien d'autre — les fichiers de la
+    // conversation (`lister_fichiers`, `lire_fichier`, `envoyer_fichier`). Aucun
+    // port d'image ni de publication n'est fourni ici : les outils d'image sont
+    // couverts par `tests/chat/mattermost-image-chain.test.ts`.
+    expect(presents).toEqual(["envoyer_fichier", "lire_fichier", "lister_fichiers"].sort());
+  });
+
+  it("`remoteTools` seul (agents fermés) : les outils, JAMAIS la délégation", () => {
+    const run = createRemoteRunTools({
+      ...tousLesPorts(),
+      conversationId: CANAL,
+      chatMode: "mattermost",
+      remoteAgents: false,
+      remoteTools: true,
+      lightOptions: () => LIGHT_OPTIONS,
+    });
+    const presents = noms(run.customTools as ReadonlyArray<{ name?: string }>);
+    // Les outils sont CONSTRUITS (définitions) et AUTORISÉS (allowlist)…
+    for (const attendu of [
+      "archive_vie_anterieure",
+      "chercher_conversations_archivees",
+      "recherche_libraire",
+      "liste_libraire",
+      "lire_libraire",
+      "archive_libraire",
+      "capture_libraire",
+    ]) {
+      expect(run.tools, attendu).toContain(attendu);
+      expect(presents, attendu).toContain(attendu);
+    }
+    // … et rien de ce qui atteint une machine n'existe, ni en liste ni en définition.
+    for (const interdit of ["delegate", "lister_agents", "lister_secrets"]) {
+      expect(run.tools, interdit).not.toContain(interdit);
+      expect(presents, interdit).not.toContain(interdit);
+    }
   });
 
   it("un port ABSENT retire ses outils (et l'écart est journalisé sans les builtins)", () => {
@@ -318,6 +357,7 @@ describe("run distant — les outils de `actives` sont RÉELLEMENT construits", 
       conversationId: CANAL,
       chatMode: "mattermost",
       remoteAgents: true,
+      remoteTools: true,
       lightOptions: () => LIGHT_OPTIONS,
       files: filesPort({ envoyes: [] }),
       logger: {
