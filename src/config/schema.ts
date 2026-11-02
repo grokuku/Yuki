@@ -488,12 +488,17 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // DÉLÉGATION. `delegate` n'existe pas dans la politique distante sous
   // `desactive` (`REMOTE_SAFE_TOOLS`, `src/llm/tool-policy.ts`), et la RÈGLE
   // « faire ou déléguer ? » n'est injectée que sous `actives`
-  // (`createRemoteRunTools`, `src/pi/chat-run.ts`). Or un tour de canal est borné
-  // à `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts`) : les actions
-  // LONGUES (`generer_image` 180 s, `capture_libraire` 30 s…) sont donc REFUSÉES
-  // inline (`LONG_RUNNING_TOOLS`) et **aucune voie de repli n'existe** — Yuki
-  // l'annonce honnêtement au lieu d'attendre. Conséquence assumée : par défaut,
-  // on ne peut PAS faire générer d'image depuis un canal.
+  // (`createRemoteRunTools`, `src/pi/chat-run.ts`).
+  //
+  // ⚠️ MAIS ON NE REFUSE JAMAIS SANS ALTERNATIVE (correctif 2026-11-02, régression
+  // de production) : sous `desactive`, un outil LONG appelé INLINE
+  // (`LONG_RUNNING_TOOLS`) n'est PAS refusé — il s'exécute, et c'est la BORNE DU
+  // TOUR qui est relevée jusqu'à sa borne déclarée (`channelTurnTimeoutMs`,
+  // `src/llm/tool-policy.ts`, appliquée par `src/index.ts`). L'accusé prévient de
+  // la durée (« jusqu'à trois minutes ») et l'image part dès qu'elle est prête
+  // (`src/chat/reply/progress.ts`). Sous `actives`, l'appel inline est REFUSÉ avec
+  // le chemin d'activation de ce réglage (Configuration → Discussions → Agents
+  // distants, `public/ui/chat-panel.js`).
   "chat.remoteAgents": {
     type: "enum",
     enum: ["desactive", "actives"],

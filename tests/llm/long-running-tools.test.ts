@@ -29,13 +29,17 @@ import type { GeneratedImage } from "../../src/comfy/index.js";
 import {
   APPROVAL_REQUIRED_TOOLS,
   LONG_RUNNING_TOOLS,
+  REMOTE_AGENTS_SETTING_PATH,
   REMOTE_SAFE_TOOLS,
   TOOL_POLICY,
+  channelTurnTimeoutMs,
   longRunningTool,
   longToolInlineRefusal,
   toolAllowlist,
   toolAllowlistForChat,
 } from "../../src/llm/tool-policy.js";
+import { CHAT_REPLY_TIMEOUT_MS } from "../../src/chat/reply/prompt.js";
+import { createRemoteRunTools } from "../../src/pi/chat-run.js";
 import { guardLongToolsInChannel } from "../../src/pi/sdk/long-tool-guard.js";
 import { createImageTools } from "../../src/pi/sdk/image-tools.js";
 import { buildRemoteRunTools } from "../../src/pi/sdk/remote-run-tools.js";
@@ -169,13 +173,43 @@ describe("LONG_RUNNING_TOOLS — déclaration mesurée", () => {
     ]);
   });
 
-  it("le refus est ACTIONNABLE : borne, raison et `delegate`", () => {
+  it("le refus est ACTIONNABLE : borne, raison, `delegate` et chemin d'activation", () => {
     const message = longToolInlineRefusal("generer_image");
     expect(message).toContain("generer_image");
     expect(message).toContain("180 s");
     expect(message).toContain("delegate");
+    // ⚠️ Dire « la délégation est désactivée » sans dire OÙ l'activer ne suffit pas.
+    expect(message).toContain(REMOTE_AGENTS_SETTING_PATH);
     // Un outil non long n'a aucun refus.
     expect(longToolInlineRefusal("lire_fichier")).toBeUndefined();
+  });
+
+  it("SANS délégation, il n'y a AUCUN refus : on ne retire pas une capacité sans alternative", () => {
+    // ⚠️ Régression de production (2026-11-02) : sous le défaut
+    // `chat.remoteAgents = desactive`, refuser `generer_image` revenait à supprimer
+    // la génération d'image en canal (« avant, une génération courte passait »).
+    expect(longToolInlineRefusal("generer_image", { delegationAvailable: false })).toBeUndefined();
+    expect(longToolInlineRefusal("run_command", { delegationAvailable: false })).toBeUndefined();
+  });
+
+  it("la borne du tour est RELEVÉE quand un outil long est autorisé inline", () => {
+    // `CHAT_REPLY_TIMEOUT_MS` (90 s) < `images.timeoutMs` (180 s) : sans levée, la
+    // génération serait coupée en plein vol.
+    expect(
+      channelTurnTimeoutMs({
+        tools: ["generer_image", "consulter_workflow"],
+        delegationAvailable: false,
+        baseMs: CHAT_REPLY_TIMEOUT_MS,
+      }),
+    ).toBe(180_000);
+    // Base plus grande ⇒ elle gagne (jamais une borne plus courte qu'avant).
+    expect(
+      channelTurnTimeoutMs({ tools: ["generer_image"], delegationAvailable: false, baseMs: 270_000 }),
+    ).toBe(270_000);
+    // Délégation disponible ⇒ rien n'est autorisé inline ⇒ base inchangée.
+    expect(
+      channelTurnTimeoutMs({ tools: ["generer_image"], delegationAvailable: true, baseMs: 90_000 }),
+    ).toBe(90_000);
   });
 });
 
@@ -204,10 +238,13 @@ describe("refus de l'appel INLINE dans un run de CANAL", () => {
     const texte = resultat.content.map((bloc) => bloc.text ?? "").join("");
     expect(texte).toContain("180 s");
     expect(texte).toContain("delegate");
+    // ⚠️ Le chemin EXACT de configuration est nommé (libellé de l'interface).
+    expect(texte).toContain(REMOTE_AGENTS_SETTING_PATH);
+    expect(texte).toContain("Configuration → Discussions → Agents distants");
     expect((resultat.details as { status?: string }).status).toBe("refused");
   });
 
-  it("sans délégation en canal (DÉFAUT `chat.remoteAgents = desactive`) : le refus le DIT", async () => {
+  it("sans délégation en canal (DÉFAUT `chat.remoteAgents = desactive`) : l'appel INLINE est AUTORISÉ", async () => {
     const marque = { appels: 0 };
     const outils = buildRemoteRunTools({
       conversationId: "mm-canal-1",
@@ -216,11 +253,21 @@ describe("refus de l'appel INLINE dans un run de CANAL", () => {
     const generer = outils.find((tool) => tool.name === "generer_image")!;
     const resultat = await generer.execute("appel-5", { scene: "un chat" }, undefined, undefined, CTX);
     const texte = resultat.content.map((bloc) => bloc.text ?? "").join("");
-    expect(marque.appels).toBe(0);
-    // ⚠️ Ordonner `delegate` alors qu'il n'existe pas serait un mensonge.
-    expect(texte).toContain("chat.remoteAgents");
-    expect(texte).not.toContain("Relance-la avec `delegate`");
-    expect((resultat.details as { delegate_tool?: string }).delegate_tool).toBeUndefined();
+    // ⚠️ Le générateur a RÉELLEMENT tourné : c'est la capacité qui revient.
+    expect(marque.appels).toBe(1);
+    // ⚠️ Ordonner `delegate` alors qu'il n'existe pas serait un mensonge : aucun refus.
+    expect(texte).not.toContain("delegate");
+    expect(texte).not.toContain("Rien n'a été lancé");
+    expect((resultat.details as { status?: string }).status).not.toBe("refused");
+    // Et le tour doit pouvoir durer au moins la borne déclarée de l'outil.
+    const run = createRemoteRunTools({
+      conversationId: "mm-canal-1",
+      chatMode: "mattermost",
+      remoteAgents: false,
+      lightOptions: () => ({ imagesEnabled: true }),
+      images: imagePort({ appels: 0 }),
+    });
+    expect(run.inlineLongToolBudgetMs).toBeGreaterThanOrEqual(180_000);
   });
 
   it("le refus ne touche QUE les outils longs : `consulter_workflow` reste appelable", async () => {

@@ -35,26 +35,74 @@ export const CANAL_AUTRE_PLATEFORME_RAISON =
   "Ce canal appartient à une autre plateforme que cette conversation : Yuki ne publie " +
   "que sur la plateforme du canal où elle se trouve.";
 
+/** Raison affichée quand un fichier joint appartient à une AUTRE conversation. */
+export const FICHIER_AUTRE_CONVERSATION_RAISON =
+  "Ce fichier n'appartient pas à cette conversation : Yuki ne joint que les fichiers " +
+  "qui lui ont été envoyés ici (ou qu'elle y a produits).";
+
+/** Raison affichée quand un fichier joint vient d'une AUTRE plateforme. */
+export const FICHIER_AUTRE_PLATEFORME_RAISON =
+  "Ce fichier vient d'une autre plateforme que ce canal : un fichier Mattermost ne " +
+  "part pas sur Discord, et inversement.";
+
+/** Raison affichée quand aucun port de fichiers n'est branché (jamais un silence). */
+export const FICHIER_INDISPONIBLE_RAISON =
+  "Le stockage des fichiers n'est pas disponible dans ce processus : aucun fichier ne " +
+  "peut être joint à la publication.";
+
 export interface ChannelPostPortOptions {
   /** Plateforme du RUN : seuls les canaux de cette plateforme sont publiables. */
   plateforme: RemotePlatform;
+  /**
+   * Conversation SOURCE du run (le canal où Yuki se trouve).
+   *
+   * ⚠️ C'est la garde anti-FUITE : un fichier n'est publiable que s'il est rattaché
+   * à CETTE conversation (`StoredFileRecord.sessionId`). Sans elle, un identifiant
+   * suffirait à faire sortir un fichier d'une autre conversation (locale comprise).
+   */
+  conversationSource?: string;
   /** Canaux SUIVIS (lus dans le miroir à chaque appel : `apply: hot`). */
   canaux: () => readonly ChannelPostChannel[];
   /**
    * Envoi effectif (l'adaptateur de la plateforme). Lève en cas d'échec : le port
    * transforme l'exception en refus LISIBLE (jamais un succès silencieux).
+   *
+   * ⚠️ `fichierIds` : identifiants du STORE des fichiers Yuki, téléversés par
+   * l'adaptateur (multipart) puis attachés au post (`file_ids`) — jamais des
+   * chemins, jamais des octets qui traverseraient le prompt.
    */
   envoyer: (input: {
     conversationId: string;
     texte: string;
     filDe?: string;
+    fichierIds?: readonly string[];
   }) => Promise<void>;
+  /**
+   * Résolution SERVEUR d'un identifiant de fichier (métadonnées seulement).
+   * Absent ⇒ aucun fichier ne peut être joint (refus explicite, jamais un silence).
+   */
+  fichier?: (fichierId: string) => {
+    sessionId?: string;
+    name: string;
+    bytes: number;
+  } | null;
+  /** Borne de TAILLE par fichier (octets), relue à chaque appel. */
+  maxFichierBytes?: () => number;
   /** Borne de caractères d'un message, par plateforme (relue à chaque appel). */
   maxChars?: (plateforme: RemotePlatform) => number;
   /** Un message RACINE existe-t-il dans ce canal ? (garde sur `fil_de`). */
   filConnu?: (conversationId: string, remoteId: string) => boolean;
   logger?: { warn(message: string, fields?: Record<string, unknown>): void };
 }
+
+/**
+ * Nombre MAXIMAL de fichiers joints à une publication inter-canal.
+ *
+ * ⚠️ Trois : au-delà, ce n'est plus un message de canal mais un transfert — et
+ * chaque fichier ajoute un téléversement (temps d'attente dans le canal). Le
+ * dépassement est REFUSÉ en le disant, jamais tronqué en silence.
+ */
+export const CHANNEL_POST_MAX_FILES = 3;
 
 /** Normalise un nom de canal pour la comparaison (casse, `#`, espaces, apostrophes). */
 export function normaliserNomCanal(value: string): string {
@@ -129,7 +177,7 @@ export function createChannelPostPort(options: ChannelPostPortOptions): ChannelP
 
   return {
     canaux,
-    publier: async ({ canal, texte, filDe }): Promise<ChannelPostOutcome> => {
+    publier: async ({ canal, texte, filDe, fichierIds }): Promise<ChannelPostOutcome> => {
       const disponibles = canaux();
       // ⚠️ Un identifiant d'une AUTRE plateforme est refusé AVANT la résolution : c'est
       // une erreur de modèle fréquente, et le message doit dire pourquoi.
@@ -175,11 +223,23 @@ export function createChannelPostPort(options: ChannelPostPortOptions): ChannelP
             })()
           : fitMattermostContent(texte, limite);
 
+      // ⚠️ BORNES FICHIERS, AVANT tout appel réseau : un binaire ne se tronque pas,
+      // donc un dépassement est un REFUS explicite (jamais un envoi partiel).
+      const fichiers = validerFichiers(fichierIds, options);
+      if (!fichiers.ok) {
+        return {
+          ok: false,
+          raison: fichiers.raison,
+          ...(disponibles.length > 0 ? { canaux: disponibles } : {}),
+        };
+      }
+
       try {
         await options.envoyer({
           conversationId: cible.conversationId,
           texte: coupe.texte,
           ...(filDe !== undefined ? { filDe } : {}),
+          ...(fichiers.ids.length > 0 ? { fichierIds: fichiers.ids } : {}),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -207,7 +267,84 @@ export function createChannelPostPort(options: ChannelPostPortOptions): ChannelP
         conversationId: cible.conversationId,
         titre: cible.titre,
         tronque: coupe.tronque,
+        // ⚠️ Champ ABSENT quand aucun fichier n'est joint : une publication de
+        // texte seul garde exactement la forme qu'elle avait.
+        ...(fichiers.ids.length > 0 ? { fichiers: fichiers.ids.length } : {}),
       };
     },
   };
+}
+
+/**
+ * VALIDE les fichiers demandés : propriété, plateforme, taille, nombre.
+ *
+ * ⚠️ Tout est vérifié AVANT l'appel réseau : un refus ici ne publie RIEN (ni texte,
+ * ni fichier) — la personne n'a donc jamais un demi-message.
+ *
+ * ⚠️ L'ORDRE des contrôles est celui du DROIT : nombre (le modèle s'est trompé
+ * d'outil) → résolution (le fichier existe-t-il ?) → propriété (fuite possible ?) →
+ * plateforme → taille. Le premier refus est le plus utile à lire.
+ */
+function validerFichiers(
+  demandes: readonly string[] | undefined,
+  options: ChannelPostPortOptions,
+): { ok: true; ids: string[] } | { ok: false; raison: string } {
+  if (demandes === undefined || demandes.length === 0) return { ok: true, ids: [] };
+  const ids = demandes.map((id) => (typeof id === "string" ? id.trim() : "")).filter((id) => id !== "");
+  if (ids.length > CHANNEL_POST_MAX_FILES) {
+    return {
+      ok: false,
+      raison:
+        `Rien n'a été publié : ${ids.length} fichiers demandés alors que ${CHANNEL_POST_MAX_FILES} ` +
+        "au maximum peuvent être joints à un message. Publie le texte seul, puis les " +
+        `fichiers en plusieurs messages (${CHANNEL_POST_MAX_FILES} par message au plus).`,
+    };
+  }
+  if (options.fichier === undefined) {
+    return { ok: false, raison: FICHIER_INDISPONIBLE_RAISON };
+  }
+  const borne = Math.max(1, Math.trunc(options.maxFichierBytes?.() ?? Number.POSITIVE_INFINITY));
+  const uniques: string[] = [];
+  for (const id of ids) {
+    if (uniques.includes(id)) continue;
+    const record = options.fichier(id);
+    if (!record) {
+      return {
+        ok: false,
+        raison:
+          `Rien n'a été publié : le fichier « ${id} » est introuvable ou expiré. ` +
+          "Liste les fichiers disponibles avec `lister_fichiers` avant de publier.",
+      };
+    }
+    const source = record.sessionId ?? "";
+    if (options.conversationSource !== undefined && source !== options.conversationSource) {
+      // ⚠️ Plateforme DIFFÉRENTE : la raison le dit (« un fichier Mattermost ne part
+      // pas sur Discord »), sinon on explique simplement l'appartenance.
+      const autrePlateforme = platformOfConversation(source);
+      return {
+        ok: false,
+        raison:
+          autrePlateforme !== undefined && autrePlateforme !== options.plateforme
+            ? FICHIER_AUTRE_PLATEFORME_RAISON
+            : FICHIER_AUTRE_CONVERSATION_RAISON,
+      };
+    }
+    if (record.bytes > borne) {
+      return {
+        ok: false,
+        raison:
+          `Rien n'a été publié : le fichier « ${record.name} » (${record.bytes} octets) ` +
+          `dépasse la taille maximale d'un fichier (${borne} octets).`,
+      };
+    }
+    uniques.push(id);
+  }
+  return { ok: true, ids: uniques };
+}
+
+/** Plateforme d'une conversation miroir (`mm-…` / `dc-…`), ou `undefined`. */
+function platformOfConversation(conversationId: string): RemotePlatform | undefined {
+  if (conversationId.startsWith("mm-")) return "mattermost";
+  if (conversationId.startsWith("dc-")) return "discord";
+  return undefined;
 }

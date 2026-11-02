@@ -74,6 +74,11 @@ export const ACK_FALLBACK_TEXTS: Readonly<Record<string, readonly string[]>> = {
     "C'est parti.",
     "Je lance la génération.",
     "Deux secondes, ça arrive.",
+    // ⚠️ BORNE DÉCLARÉE (`images.timeoutMs` = 180 s) : sous `chat.remoteAgents =
+    // desactive`, la génération s'exécute DANS le tour — la personne doit savoir
+    // qu'elle attendra. Ce n'est pas une promesse de RÉSULTAT (le badge
+    // anti-mensonge existe déjà), c'est la durée réelle de l'action.
+    "Ça peut prendre jusqu'à trois minutes.",
     "Je m'en occupe.",
     "Ok, je génère ça.",
   ],
@@ -198,6 +203,21 @@ export function ackRuleFor(tools: readonly string[] = ACK_TOOLS): string {
   }
 
   const liste = cites.map((tool) => `\`${tool}\``).join(", ");
+  /**
+   * ⚠️ DURÉE DITE QUAND ELLE EST CONNUE, JAMAIS DEVINÉE : `generer_image` porte une
+   * borne DÉCLARÉE (`images.timeoutMs`, 180 s par défaut,
+   * `src/config/schema.ts:899-905`). Sous `chat.remoteAgents = desactive`, l'appel
+   * s'exécute DANS le tour (la borne du tour est relevée) : la personne du canal
+   * doit donc savoir qu'elle attendra jusqu'à trois minutes — annoncé en même temps
+   * que l'action, pas après.
+   */
+  const dureeImage = cites.includes("generer_image")
+    ? [
+        "- Une GÉNÉRATION D'IMAGE peut durer jusqu'à trois minutes (`images.timeoutMs`) :",
+        "  quand tu la lances toi-même, DIS-LE dans ton accusé (« ça peut prendre jusqu'à",
+        "  trois minutes »). Ce n'est pas une estimation : c'est la borne déclarée.",
+      ]
+    : [];
   return [
     "## Accusé de réception d'une action longue (règle STRICTE, non optionnelle)",
     "",
@@ -207,6 +227,7 @@ export function ackRuleFor(tools: readonly string[] = ACK_TOOLS): string {
     "  et VARIÉ : « Je m'en occupe. », « Deux secondes. », « Je lance ça. »,",
     "  « C'est parti. », « Je m'y mets. »",
     "- Ne répète pas la même formule d'un tour à l'autre : VARIE.",
+    ...dureeImage,
     "- Annonce l'INTENTION, jamais la promesse d'un résultat : « je m'en occupe » est",
     "  sûr ; « je te génère ça tout de suite » est un engagement qui peut échouer.",
     "- Cette phrase est MUETTE à l'oral (la synthèse vocale ne la lit pas) et ce n'est",

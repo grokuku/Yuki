@@ -46,6 +46,15 @@ export interface ChannelPostRequest {
   texte: string;
   /** Message RACINE du fil où répondre (`root_id`), si fourni. */
   filDe?: string;
+  /**
+   * Identifiants du STORE des fichiers à joindre.
+   *
+   * ⚠️ Résolus CÔTÉ SERVEUR (`src/chat/reply/channel-post.ts`) : le fichier doit
+   * appartenir à la conversation SOURCE du run (sinon fuite inter-conversations),
+   * peser moins que `files.maxFileBytes`, et il y en a TROIS au plus. Aucun chemin
+   * disque, aucun octet ne traverse le prompt.
+   */
+  fichierIds?: readonly string[];
 }
 
 /** Issue d'une publication : toujours DITE, jamais un booléen muet. */
@@ -57,6 +66,8 @@ export type ChannelPostOutcome =
       titre: string;
       /** `true` quand la plateforme a imposé une coupe (annoncée au modèle). */
       tronque: boolean;
+      /** Fichiers RÉELLEMENT joints (0 quand aucun). */
+      fichiers?: number;
     }
   | {
       ok: false;
@@ -93,6 +104,8 @@ interface ChannelPostDetails {
   titre?: string;
   /** `true` quand la plateforme a imposé une coupe. */
   tronque?: boolean;
+  /** Nombre de fichiers réellement joints à la publication. */
+  fichiers?: number;
 }
 
 /** Description du canal pour le modèle : titre ET identifiant (les deux sont acceptés). */
@@ -116,13 +129,20 @@ export function createChannelPostTool(port: ChannelPostPort): ToolDefinition[] {
       "Seuls les canaux SUIVIS sont accessibles : ceux de Configuration → Discussions, " +
       "sur la même plateforme que ce canal. Un canal non suivi est refusé, et l'outil " +
       "te dit lequel ajouter — ne réessaie pas un autre nom au hasard. Sans argument, " +
-      "l'outil liste les canaux disponibles. La publication ne demande AUCUNE " +
+      "l'outil liste les canaux disponibles. " +
+      "⚠️ TU PEUX JOINDRE DES FICHIERS (`fichier_ids`) : les identifiants viennent de " +
+      "`lister_fichiers` (ou d'une image que tu viens de produire) et le fichier doit " +
+      "appartenir à CETTE conversation ; trois fichiers au maximum par message. Un " +
+      "fichier qui n'est pas d'ici, d'une autre plateforme, introuvable ou trop gros " +
+      "est REFUSÉ (rien n'est publié). " +
+      "La publication ne demande AUCUNE " +
       "validation : elle est immédiate (au-delà de la limite de la plateforme, le texte " +
       "est tronqué et c'est annoncé). ⚠️ Si ce canal n'est pas suivi, ou si l'outil " +
       "n'est pas disponible, dis simplement que tu ne peux pas publier là — n'invente " +
       "jamais une approbation, une validation humaine ou une limitation technique.",
     promptSnippet:
-      "publier_dans_canal(canal?, texte?, fil_de?) — publie dans un canal SUIVI (liste si `canal` est omis)",
+      "publier_dans_canal(canal?, texte?, fichier_ids?, fil_de?) — publie dans un canal " +
+      "SUIVI, avec des fichiers du store si besoin (liste si `canal` est omis)",
     parameters: Type.Object({
       canal: Type.Optional(
         Type.String({
@@ -149,6 +169,16 @@ export function createChannelPostTool(port: ChannelPostPort): ToolDefinition[] {
             "existant). Omis ⇒ message à la racine du canal.",
         }),
       ),
+      fichier_ids: Type.Optional(
+        Type.Array(Type.String({ maxLength: 64 }), {
+          maxItems: 3,
+          description:
+            "Identifiants de fichiers à JOINDRE (ceux de `lister_fichiers`, ou d'une " +
+            "image que tu viens de produire). Trois au maximum. Le fichier doit " +
+            "appartenir à CETTE conversation et à la même plateforme que le canal " +
+            "cible : sinon la publication est refusée et rien ne part.",
+        }),
+      ),
     }),
     execute: async (_toolCallId, params) => {
       const canalBrut = (params as { canal?: unknown }).canal;
@@ -157,6 +187,13 @@ export function createChannelPostTool(port: ChannelPostPort): ToolDefinition[] {
       const texte = typeof texteBrut === "string" ? texteBrut : "";
       const filBrut = (params as { fil_de?: unknown }).fil_de;
       const filDe = typeof filBrut === "string" && filBrut.trim() !== "" ? filBrut.trim() : undefined;
+      const fichiersBruts = (params as { fichier_ids?: unknown }).fichier_ids;
+      const fichierIds =
+        Array.isArray(fichiersBruts)
+          ? fichiersBruts
+              .map((id) => (typeof id === "string" ? id.trim() : ""))
+              .filter((id) => id !== "")
+          : [];
 
       if (canal === "") {
         const canaux = port.canaux();
@@ -176,22 +213,28 @@ export function createChannelPostTool(port: ChannelPostPort): ToolDefinition[] {
         return { content: [{ type: "text", text: body }], details };
       }
 
-      if (texte.trim() === "") {
+      if (texte.trim() === "" && fichierIds.length === 0) {
         const details: ChannelPostDetails = { status: "texte_vide", canal };
         return {
           content: [
             {
               type: "text",
               text:
-                "Rien n'a été publié : le texte du message est vide. Donne le message " +
-                "à publier dans l'argument `texte`.",
+                "Rien n'a été publié : il n'y a ni texte ni fichier à envoyer. Donne le " +
+                "message dans l'argument `texte`, ou les identifiants de fichiers dans " +
+                "`fichier_ids` (un message peut n'être qu'une pièce jointe).",
             },
           ],
           details,
         };
       }
 
-      const outcome = await port.publier({ canal, texte, ...(filDe !== undefined ? { filDe } : {}) });
+      const outcome = await port.publier({
+        canal,
+        texte,
+        ...(filDe !== undefined ? { filDe } : {}),
+        ...(fichierIds.length > 0 ? { fichierIds } : {}),
+      });
       if (!outcome.ok) {
         const liste =
           outcome.canaux === undefined || outcome.canaux.length === 0
@@ -221,6 +264,9 @@ export function createChannelPostTool(port: ChannelPostPort): ToolDefinition[] {
             type: "text",
             text:
               `Message publié dans « ${outcome.titre} »` +
+              ((outcome.fichiers ?? 0) > 0
+                ? ` avec ${outcome.fichiers} pièce(s) jointe(s)`
+                : "") +
               (outcome.tronque
                 ? " — ATTENTION : le texte dépassait la limite de la plateforme et a " +
                   "été TRONQUÉ (la mention de troncature figure dans le message publié)."
@@ -234,6 +280,7 @@ export function createChannelPostTool(port: ChannelPostPort): ToolDefinition[] {
           canal: outcome.conversationId,
           titre: outcome.titre,
           tronque: outcome.tronque,
+          fichiers: outcome.fichiers ?? 0,
         } satisfies ChannelPostDetails,
       };
     },

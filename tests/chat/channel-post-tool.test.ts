@@ -31,12 +31,16 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   CANAL_AUTRE_PLATEFORME_RAISON,
   CANAL_NON_SUIVI_RAISON,
+  CHANNEL_POST_MAX_FILES,
+  FICHIER_AUTRE_CONVERSATION_RAISON,
+  FICHIER_AUTRE_PLATEFORME_RAISON,
   createChannelPostPort,
   resoudreCanal,
 } from "../../src/chat/index.js";
 import { MM_DEFAULT_MAX_POST_CHARS } from "../../src/chat/mattermost/adapter.js";
 import { DISCORD_MAX_CONTENT_CHARS } from "../../src/chat/discord/types.js";
 import { MattermostChatAdapter } from "../../src/chat/mattermost/adapter.js";
+import { FilesStore } from "../../src/files/index.js";
 import { ChatMirrorStore } from "../../src/chat/mirror/store.js";
 import { conversationIdOfChannel } from "../../src/chat/mirror/ingest.js";
 import { createChannelPostTool } from "../../src/pi/sdk/channel-post-tool.js";
@@ -48,6 +52,24 @@ const BOT_ID = "botidentifiant0123456789ab";
 const GENERAL = conversationIdOfChannel("canal-general");
 const IMAGERIE = conversationIdOfChannel("canal-imagerie");
 const DISCORD_SALON = "dc-salon-1";
+
+/** Identifiants de fichiers (forme du store : 32 hexadécimaux). */
+/** PNG 1×1 valide (aucune I/O réseau). */
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+const ID_A = "a".repeat(32);
+const ID_B = "b".repeat(32);
+const ID_C = "c".repeat(32);
+const ID_D = "d".repeat(32);
+const ID_E = "e".repeat(32);
+const ID_F = "f".repeat(32);
+const ID_G = "0".repeat(32);
+const ID_H = "1".repeat(32);
+const ID_I = "9".repeat(32);
+const ID_J = "8".repeat(32);
 
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
@@ -81,6 +103,7 @@ interface Envoi {
   conversationId: string;
   texte: string;
   filDe?: string;
+  fichierIds?: readonly string[];
 }
 
 function portEspion(options: { filConnu?: boolean } = {}) {
@@ -218,6 +241,159 @@ describe("port de publication — périmètre (canaux SUIVIS)", () => {
   });
 });
 
+// ─── Fichiers joints (`fichier_ids`) ────────────────────────────────────────
+
+/** Faux store de fichiers : identifiant → { conversation, taille }. */
+function fichiersFactices(
+  entrees: Record<string, { sessionId?: string; name: string; bytes: number }>,
+) {
+  return (id: string) => entrees[id] ?? null;
+}
+
+function portAvecFichiers(
+  entrees: Record<string, { sessionId?: string; name: string; bytes: number }>,
+  options: { maxBytes?: number; source?: string } = {},
+) {
+  const envois: Envoi[] = [];
+  const port = createChannelPostPort({
+    plateforme: "mattermost",
+    canaux: () => CANAUX,
+    conversationSource: options.source ?? GENERAL,
+    fichier: fichiersFactices(entrees),
+    ...(options.maxBytes !== undefined ? { maxFichierBytes: () => options.maxBytes as number } : {}),
+    envoyer: async (input) => {
+      envois.push(input);
+    },
+  });
+  return { port, envois };
+}
+
+describe("publication inter-canal — FICHIERS joints", () => {
+  it("joint les fichiers demandés (identifiants du store) : la requête les porte", async () => {
+    const { port, envois } = portAvecFichiers({
+      [ID_A]: { sessionId: GENERAL, name: "chat.png", bytes: 70 },
+    });
+    const outcome = await port.publier({
+      canal: "L'Imagerie",
+      texte: "Voici le rendu.",
+      fichierIds: [ID_A],
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("attendu : publication");
+    expect(outcome.fichiers).toBe(1);
+    expect(envois[0]?.fichierIds).toEqual([ID_A]);
+  });
+
+  it("SANS `fichierIds` : le message part en TEXTE SEUL (non-régression)", async () => {
+    const { port, envois } = portAvecFichiers({});
+    const outcome = await port.publier({ canal: "L'Imagerie", texte: "bonjour" });
+    expect(outcome.ok).toBe(true);
+    expect(envois[0]?.fichierIds).toBeUndefined();
+  });
+
+  it("fichier d'une AUTRE conversation ⇒ refus, ZÉRO requête", async () => {
+    const { port, envois } = portAvecFichiers({
+      [ID_B]: { sessionId: IMAGERIE, name: "ailleurs.png", bytes: 70 },
+    });
+    const outcome = await port.publier({
+      canal: "L'Imagerie",
+      texte: "Voici le rendu.",
+      fichierIds: [ID_B],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("attendu : refus");
+    expect(outcome.raison).toBe(FICHIER_AUTRE_CONVERSATION_RAISON);
+    expect(envois).toHaveLength(0);
+  });
+
+  it("fichier d'une AUTRE plateforme ⇒ refus (un fichier Mattermost ne part pas sur Discord)", async () => {
+    const { port, envois } = portAvecFichiers({
+      [ID_C]: { sessionId: DISCORD_SALON, name: "discord.png", bytes: 70 },
+    });
+    const outcome = await port.publier({
+      canal: "L'Imagerie",
+      texte: "Voici le rendu.",
+      fichierIds: [ID_C],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("attendu : refus");
+    expect(outcome.raison).toBe(FICHIER_AUTRE_PLATEFORME_RAISON);
+    expect(envois).toHaveLength(0);
+  });
+
+  it("fichier inconnu ou expiré ⇒ refus explicite, ZÉRO requête", async () => {
+    const { port, envois } = portAvecFichiers({});
+    const outcome = await port.publier({
+      canal: "L'Imagerie",
+      texte: "Voici le rendu.",
+      fichierIds: [ID_D],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("attendu : refus");
+    expect(outcome.raison).toContain("introuvable ou expiré");
+    expect(envois).toHaveLength(0);
+  });
+
+  it("PLUS DE TROIS fichiers ⇒ refus explicite (jamais une coupe silencieuse)", async () => {
+    const entrees: Record<string, { sessionId?: string; name: string; bytes: number }> = {};
+    for (const id of [ID_E, ID_F, ID_G, ID_H]) {
+      entrees[id] = { sessionId: GENERAL, name: `${id.slice(0, 1)}.png`, bytes: 10 };
+    }
+    const { port, envois } = portAvecFichiers(entrees);
+    const outcome = await port.publier({
+      canal: "L'Imagerie",
+      texte: "quatre fichiers",
+      fichierIds: [ID_E, ID_F, ID_G, ID_H],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("attendu : refus");
+    expect(outcome.raison).toContain(String(CHANNEL_POST_MAX_FILES));
+    expect(outcome.raison).toContain("Rien n'a été publié");
+    expect(envois).toHaveLength(0);
+  });
+
+  it("fichier trop GROS ⇒ refus AVANT le réseau (un binaire ne se tronque pas)", async () => {
+    const { port, envois } = portAvecFichiers(
+      { [ID_I]: { sessionId: GENERAL, name: "enorme.png", bytes: 5_000 } },
+      { maxBytes: 1_000 },
+    );
+    const outcome = await port.publier({
+      canal: "L'Imagerie",
+      texte: "trop gros",
+      fichierIds: [ID_I],
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("attendu : refus");
+    expect(outcome.raison).toContain("dépasse la taille maximale");
+    expect(envois).toHaveLength(0);
+  });
+
+  it("l'OUTIL transmet `fichier_ids` au port et annonce les pièces jointes", async () => {
+    const { port, envois } = portAvecFichiers({
+      [ID_J]: { sessionId: GENERAL, name: "chat.png", bytes: 70 },
+    });
+    const tool = createChannelPostTool(port)[0]!;
+    const resultat = await callTool(tool, {
+      canal: "L'Imagerie",
+      texte: "Voici le rendu.",
+      fichier_ids: [ID_J],
+    });
+    expect(resultat.details.status).toBe("publie");
+    expect(resultat.details.fichiers).toBe(1);
+    expect(resultat.text).toContain("pièce");
+    expect(envois[0]?.fichierIds).toEqual([ID_J]);
+  });
+
+  it("la DESCRIPTION de l'outil dit qu'il peut joindre des fichiers", () => {
+    const { port } = portEspion();
+    const tool = createChannelPostTool(port)[0]!;
+    // ⚠️ Sans cette phrase, le modèle continue de répondre « je ne peux pas envoyer
+    // l'image » : la capacité existe mais personne ne le sait.
+    expect(tool.description).toContain("fichier_ids");
+    expect(tool.description).toContain("trois fichiers au maximum");
+  });
+});
+
 describe("outil `publier_dans_canal` — politique d'outils", () => {
   it("est dans REMOTE_SAFE_TOOLS, jamais dans les outils à approbation", () => {
     expect(REMOTE_SAFE_TOOLS).toContain("publier_dans_canal");
@@ -253,7 +429,8 @@ describe("outil `publier_dans_canal` — politique d'outils", () => {
     expect(refus.details.status).toBe("refus");
 
     const vide = await callTool(tool, { canal: "Général", texte: "   " });
-    expect(vide.text).toContain("texte du message est vide");
+    // ⚠️ Le refus couvre désormais les deux cas : ni texte ni fichier.
+    expect(vide.text).toContain("ni texte ni fichier");
     expect(envois).toHaveLength(0);
   });
 
@@ -270,11 +447,14 @@ describe("outil `publier_dans_canal` — politique d'outils", () => {
 interface Fixture {
   baseUrl: string;
   created: Array<Record<string, unknown>>;
+  /** Charge multipart de chaque `POST /files` (une entrée par fichier téléversé). */
+  uploads: string[];
   broadcast(event: string, post: Record<string, unknown>): void;
 }
 
 async function startFixture(): Promise<Fixture> {
   const created: Array<Record<string, unknown>> = [];
+  const uploads: string[] = [];
 
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -307,6 +487,22 @@ async function startFixture(): Promise<Fixture> {
       req.on("end", () => {
         const ids = JSON.parse(Buffer.concat(chunks).toString("utf8") || "[]") as string[];
         send(ids.map((id) => ({ id, username: id === BOT_ID ? "yuki" : `nom-${id}` })));
+      });
+      return;
+    }
+    if (url.pathname === "/api/v4/files") {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        uploads.push(`${String(req.headers["content-type"] ?? "")}\n${Buffer.concat(chunks).toString("utf8")}`);
+        res.writeHead(201, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            file_infos: [
+              { id: `fichier-${uploads.length}`, name: "image-generee.png", size: 70, mime_type: "image/png" },
+            ],
+          }),
+        );
       });
       return;
     }
@@ -359,6 +555,7 @@ async function startFixture(): Promise<Fixture> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     created,
+    uploads,
     broadcast(event, post) {
       const payload = JSON.stringify({ event, data: { post: JSON.stringify(post) }, seq: 2 });
       for (const client of wss.clients) {
@@ -443,5 +640,76 @@ describe("bout en bout — publication réelle et anti-boucle", () => {
     // ③ …et il ne produit AUCUNE réponse, même en mode `tout`.
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(fixture.created).toHaveLength(1);
+  });
+});
+
+describe("bout en bout — publication d'une IMAGE dans un autre canal", () => {
+  it("le fichier part en MULTIPART (`POST /files`) puis le post porte `file_ids`", async () => {
+    const fixture = await startFixture();
+    const root = mkdtempSync(join(tmpdir(), "yuki-channel-post-files-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const store = ChatMirrorStore.open({
+      indexPath: join(root, "chat-mirror.json"),
+      messagesDir: join(root, "chat-mirror"),
+    });
+    // ⚠️ VRAI store de fichiers (sur disque) : l'adaptateur lève les octets par ce
+    // port, exactement comme en production (`src/files/store.ts`).
+    const files = new FilesStore({ dir: join(root, "files"), retentionDays: () => 30 });
+    files.ensureLayout();
+    const image = files.saveBytes(PNG, {
+      name: "image-generee.png",
+      mimeType: "image/png",
+      origin: "yuki",
+    });
+    expect(image.ok).toBe(true);
+    if (!image.ok) throw new Error("dépôt refusé");
+    // Le fichier appartient à la conversation SOURCE (le canal d'où Yuki publie).
+    expect(files.attach(image.record.id, GENERAL)).not.toBeNull();
+
+    const adapter = new MattermostChatAdapter({
+      baseUrl: () => fixture.baseUrl,
+      token: () => TOKEN,
+      store,
+      pollIntervalMs: 0,
+      files,
+    });
+    cleanups.push(() => adapter.disconnect());
+    await adapter.connect();
+    await waitFor(() => adapter.status().etat === "on", "la connexion temps réel");
+
+    const port = createChannelPostPort({
+      plateforme: "mattermost",
+      conversationSource: GENERAL,
+      canaux: () =>
+        store.conversations().map((conversation) => ({
+          conversationId: conversation.id,
+          titre: conversation.title,
+          plateforme: conversation.platform,
+        })),
+      fichier: (id) => files.get(id),
+      envoyer: async ({ conversationId, texte, filDe, fichierIds }) => {
+        await adapter.send(conversationId, {
+          kind: "texte",
+          text: texte,
+          ...(filDe !== undefined ? { threadRootId: filDe } : {}),
+          ...(fichierIds !== undefined ? { fichiers: fichierIds } : {}),
+        });
+      },
+    });
+    const tool = createChannelPostTool(port)[0]!;
+
+    const resultat = await callTool(tool, {
+      canal: "L'Imagerie",
+      texte: "Le chat roux est prêt.",
+      fichier_ids: [image.record.id],
+    });
+    expect(resultat.details.status).toBe("publie");
+    // ① Le fichier est TÉLÉVERSÉ (multipart) sur le canal CIBLE.
+    expect(fixture.uploads).toHaveLength(1);
+    expect(fixture.uploads[0]).toContain("multipart/form-data");
+    // ② Le post porte le `file_ids` rendu par le téléversement.
+    expect(fixture.created).toHaveLength(1);
+    expect(fixture.created[0]?.file_ids).toEqual(["fichier-1"]);
+    expect(fixture.created[0]?.channel_id).toBe("canal-imagerie");
   });
 });

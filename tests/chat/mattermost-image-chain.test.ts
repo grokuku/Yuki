@@ -1,32 +1,30 @@
 /**
  * CHAÎNE COMPLÈTE — un message Mattermost qui demande une image ⇒ la POLITIQUE du
- * run distant ⇒ `generer_image` ⇒ ⚠️ REFUS INLINE (lot 23) ⇒ la génération doit
- * passer par `delegate`, et son fichier arrive par le rapport de job.
+ * run distant ⇒ `generer_image` ⇒ ACCUSÉ ⇒ IMAGE ⇒ RÉPONSE.
  *
- * ⚠️ CE QUI A CHANGÉ (2026-11-02) : `generer_image` peut prendre jusqu'à
- * `images.timeoutMs` (180 s, `src/config/schema.ts:899-905`) alors qu'un tour de
- * CANAL est borné à `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts:72`).
- * L'appel inline était donc coupé EN PLEIN VOL, sans message. Le contrat est
- * désormais : l'outil REFUSE avec un message actionnable
- * (`LONG_RUNNING_TOOLS`, `src/llm/tool-policy.ts`), et la génération se fait dans
- * un JOB dont le fichier est publié dans le canal
- * (`tests/chat/job-report-files.test.ts` pour cette moitié-là).
+ * ⚠️ CE QUI A CHANGÉ (correctif du 2026-11-02, régression de production) : sous le
+ * DÉFAUT `chat.remoteAgents = desactive`, `delegate` n'existe pas. Le refus inline
+ * des outils longs (lot 23) supprimait donc purement et simplement la génération
+ * d'image en canal (« avant, une génération courte passait ; maintenant jamais »).
+ * Le contrat est désormais : sans délégation, l'appel est AUTORISÉ inline, la BORNE
+ * DU TOUR est relevée (`channelTurnTimeoutMs`) et l'accusé prévient de la durée.
  *
- * ⚠️ CE QUE CE FICHIER PROUVE ENCORE, MAILLON PAR MAILLON, contre un SERVEUR
- * FIXTURE RÉEL (HTTP + WebSocket) et un MODÈLE SIMULÉ (session éphémère injectée,
- * qui appelle réellement l'outil reçu) :
+ * ⚠️ CE QUE CE FICHIER PROUVE, MAILLON PAR MAILLON, contre un SERVEUR FIXTURE RÉEL
+ * (HTTP + WebSocket), un vrai adaptateur Mattermost et un MODÈLE SIMULÉ (session
+ * éphémère injectée, qui appelle réellement l'outil reçu et streame son accusé) :
  *  ① le message déclencheur entre par le temps réel et le canal est en mode `tout` ;
- *  ② la POLITIQUE du run distant est calculée selon l'origine (`chat.mode` +
- *     `chat.remoteAgents`) et arrive à la session — aujourd'hui la réponse distante
- *     était écrite avec `tools: []`, donc SANS aucun outil ;
- *  ③ `generer_image` REÇOIT l'appel et le REFUSE, en nommant la borne (180 s) et
- *     l'outil à utiliser (`delegate`) : le générateur ComfyUI n'est PAS appelé, et
- *     aucun fichier n'est produit dans le canal par ce chemin ;
- *  ④ la réponse du tour part quand même (elle ne dépend pas de la génération), et
- *     elle ne porte AUCUN `file_ids` : rien n'est promis à moitié.
+ *  ② la POLITIQUE du run distant arrive à la session (allowlist + définitions) ;
+ *  ③ `generer_image` s'EXÉCUTE (le générateur simulé tourne, l'image est copiée
+ *     dans le store des fichiers de la CONVERSATION du canal) ;
+ *  ④ ORDRE STRICT des trois posts : [ACCUSÉ, IMAGE (`file_ids`), RÉPONSE] — l'image
+ *     n'est pas réattachée à la réponse, et l'accusé n'y est pas dupliqué ;
+ *  ⑤ TIMING : l'accusé part à moins d'une seconde du DÉMARRAGE de l'outil, donc
+ *     PENDANT la génération (1,2 s ici), jamais avec la réponse finale — c'est le
+ *     défaut signalé à 13:38 le 2026-11-02 (« s'il attend que tout soit fait pour
+ *     le poster, ça sert à rien »).
  *
- * ⚠️ Échoue sur le code d'origine : `createSdkPromptWriter` y passait `tools: []` en
- * dur (aucun outil ⇒ aucun appel de `generer_image`).
+ * ⚠️ Échoue sur le code d'origine : l'outil y est REFUSÉ (aucune image produite,
+ * aucune pièce jointe), donc aucun des trois posts attendus n'existe.
  */
 
 import { createServer, type Server } from "node:http";
@@ -58,6 +56,12 @@ const BOT_ID = "botidentifiant0123456789ab";
 const CHANNEL = "canal-1";
 const CONVERSATION = conversationIdOfChannel(CHANNEL);
 
+/** Durée SIMULÉE d'une génération d'image (assez longue pour mesurer l'accusé). */
+const DUREE_GENERATION_MS = 1_200;
+
+/** Borne de l'exigence « l'accusé part AVANT que l'outil n'ait fini » (< 1 s). */
+const ACK_MAX_DELAI_MS = 1_000;
+
 const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
 const MODELS = buildModelsConfig();
 const MODEL_REFERENCE = resolveModelsFrom(DEFAULT_EFFECTIVE_LLM_CONFIG).light.reference;
@@ -78,6 +82,8 @@ interface Fixture {
   baseUrl: string;
   /** Corps bruts des posts publiés par Yuki. */
   created: Array<Record<string, unknown>>;
+  /** Instant (ms epoch) d'arrivée de chaque `POST /posts` (ordre = ordre d'arrivée). */
+  arrivees: number[];
   /** Charge multipart des fichiers téléversés. */
   uploads: string[];
   broadcast(event: string, post: Record<string, unknown>): void;
@@ -86,6 +92,7 @@ interface Fixture {
 /** Serveur fixture : API v4 minimale + WebSocket d'événements au même port. */
 async function startFixture(): Promise<Fixture> {
   const created: Array<Record<string, unknown>> = [];
+  const arrivees: number[] = [];
   const uploads: string[] = [];
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -138,6 +145,7 @@ async function startFixture(): Promise<Fixture> {
       if (url.pathname === "/api/v4/posts") {
         const payload = JSON.parse(body || "{}") as Record<string, unknown>;
         created.push(payload);
+        arrivees.push(Date.now());
         res.writeHead(201, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
@@ -178,6 +186,7 @@ async function startFixture(): Promise<Fixture> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     created,
+    arrivees,
     uploads,
     broadcast(event, post) {
       const payload = JSON.stringify({ event, data: { post: JSON.stringify(post) }, seq: 2 });
@@ -226,6 +235,9 @@ interface Received {
   scene?: string;
   /** Texte RENDU par l'outil à l'appel (refus inline, lot 23). */
   refus?: string;
+  /** Horodatages de la simulation (ms epoch). */
+  debutOutil?: number;
+  finOutil?: number;
 }
 
 type AnyTool = {
@@ -234,19 +246,28 @@ type AnyTool = {
 };
 
 /**
- * Session éphémère SIMULÉE : elle appelle l'outil `generer_image` qu'elle a
- * RÉELLEMENT reçu (comme le ferait le modèle), puis rend son texte.
+ * Session éphémère SIMULÉE : elle **streame** un accusé de réception, DÉMARRE
+ * l'outil `generer_image` qu'elle a RÉELLEMENT reçu (comme le ferait le modèle),
+ * puis rend son texte.
+ *
+ * ⚠️ L'ordre des événements est celui du SDK (`src/pi/sdk/prompt-writer.ts:213-235`) :
+ * `message_start` → `message_update` (`text_delta`) → `tool_execution_start` →
+ * (exécution de l'outil) → `tool_execution_end` → `message_end`. Sans lui, on ne
+ * pourrait PAS prouver qu'un accusé part AVANT l'outil.
  */
-function simulatedModel(received: Received, scene: string) {
-  return async (options: {
+function simulatedModel(received: Received, scene: string, options: { texteAck?: string } = {}) {
+  return async (opts: {
     tools?: readonly string[];
     customTools?: readonly unknown[];
   }): Promise<EphemeralSession> => {
-    received.tools = options.tools;
-    const tools = (options.customTools ?? []) as readonly AnyTool[];
+    received.tools = opts.tools;
+    const tools = (opts.customTools ?? []) as readonly AnyTool[];
     received.noms = tools.map((tool) => tool.name);
     type Listener = (event: unknown) => void;
     const listeners: Listener[] = [];
+    const emettre = (event: unknown): void => {
+      for (const listener of listeners) listener(event);
+    };
     return {
       session: {
         subscribe(cb: Listener): () => void {
@@ -257,6 +278,15 @@ function simulatedModel(received: Received, scene: string) {
           const generer = tools.find((tool) => tool.name === "generer_image");
           if (!generer) throw new Error("aucun outil `generer_image` : le run n'en a pas reçu");
           received.scene = scene;
+          emettre({ type: "message_start", message: { role: "assistant", content: [] } });
+          if (options.texteAck !== undefined) {
+            emettre({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: options.texteAck },
+            });
+          }
+          received.debutOutil = Date.now();
+          emettre({ type: "tool_execution_start", toolName: "generer_image" });
           // ⚠️ Contexte de la SESSION ÉPHÉMÈRE (identifiant jetable) : c'est bien la
           // conversation FORCÉE qui doit gagner, pas cet identifiant.
           const ctx = { sessionManager: { getSessionId: () => "session-ephemere-du-run" } };
@@ -267,16 +297,24 @@ function simulatedModel(received: Received, scene: string) {
             undefined,
             ctx,
           )) as { content: Array<{ type: string; text?: string }> };
+          received.finOutil = Date.now();
           received.refus = resultat.content.map((bloc) => bloc.text ?? "").join("");
-          for (const listener of listeners) {
-            listener({
-              type: "message_end",
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Voilà l'image demandée." }],
-              },
-            });
-          }
+          emettre({ type: "tool_execution_end", toolName: "generer_image" });
+          emettre({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text:
+                    options.texteAck !== undefined
+                      ? `${options.texteAck}\nVoilà l'image demandée.`
+                      : "Voilà l'image demandée.",
+                },
+              ],
+            },
+          });
         },
         async abort(): Promise<void> {},
         dispose(): void {},
@@ -287,7 +325,7 @@ function simulatedModel(received: Received, scene: string) {
 }
 
 describe("chaîne complète — Mattermost → generer_image → fichier → file_ids", () => {
-  it("un message qui demande une image : l'appel inline est REFUSÉ, la réponse part sans fichier", async () => {
+  it("un message qui demande une image : accusé → image → réponse, tous les trois dans le canal", async () => {
     const fixture = await startFixture();
     const depot = makeDepot();
     const store = ChatMirrorStore.open({
@@ -332,7 +370,10 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
           images: {
             // Générateur ComfyUI SIMULÉ : il écrit dans le VRAI store d'images et
             // rend exactement ce que rend le générateur réel.
+            // ⚠️ Il est LENT (1,2 s) À DESSEIN : c'est la durée qui permet de
+            // prouver que l'accusé part AVANT la fin de l'outil.
             async generate(): Promise<GeneratedImage> {
+              await new Promise((resolve) => setTimeout(resolve, DUREE_GENERATION_MS));
               const record = depot.images.save({
                 data: PNG,
                 mimeType: "image/png",
@@ -375,9 +416,15 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
           timeoutMs: () => 10_000,
           logger,
           label: "réponse",
-          createSession: simulatedModel(received, "un chat roux sur un clavier") as never,
+          createSession: simulatedModel(received, "un chat roux sur un clavier", {
+            texteAck: "C'est parti.",
+          }) as never,
           tools: run.tools,
           customTools: run.customTools,
+          // ⚠️ INDISPENSABLE : c'est l'observateur d'outils qui publie l'ACCUSÉ au
+          // démarrage (`ReplyProgress.demarrerOutil`). Sans lui, le texte du modèle
+          // resterait dans la réponse finale — c'est exactement le défaut mesuré.
+          ...(run.onTool ? { onTool: run.onTool } : {}),
         }),
     });
 
@@ -404,34 +451,51 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
       message: "génère-moi un chat roux sur un clavier",
       create_at: 1_700_000_000_000,
     });
-    // ⚠️ UN SEUL post attendu : la réponse du tour. L'image, elle, n'est plus
-    // générée inline (refus, lot 23) : elle viendra d'un JOB.
-    await waitFor(() => fixture.created.length >= 1, "le post de la réponse");
+    // ⚠️ TROIS posts attendus : ACCUSÉ, IMAGE (avec `file_ids`), RÉPONSE.
+    await waitFor(() => fixture.created.length >= 3, "les trois posts du run");
 
     // ② La politique du run distant est bien arrivée à la session : `generer_image`
-    //    est OFFERT (le modèle peut le demander et reçoit une explication utile).
+    //    est OFFERT (le modèle peut le demander et il s'exécute).
     expect(received.tools).toEqual([...REMOTE_SAFE_TOOLS]);
     expect(received.noms.sort()).toEqual([...REMOTE_SAFE_TOOLS].sort());
     expect(received.tools).toContain("generer_image");
 
-    // ③ L'outil a réellement été appelé, avec la scène demandée… et il a REFUSÉ.
+    // ③ L'outil a réellement été appelé, avec la scène demandée… et il a TOURNÉ.
+    //    ⚠️ Correctif du 2026-11-02 : sous `chat.remoteAgents = desactive` (le
+    //    DÉFAUT), `delegate` n'existe pas — refuser l'appel supprimait donc la
+    //    génération d'image en canal (« avant, une génération courte passait »).
     expect(received.scene).toBe("un chat roux sur un clavier");
-    expect(received.refus).toContain("180 s");
-    // ⚠️ Ce run est sous `chat.remoteAgents = desactive` : `delegate` n'existe pas,
-    // donc le refus ne l'ordonne pas — il dit que la délégation est désactivée.
-    expect(received.refus).toContain("chat.remoteAgents");
-    expect(received.refus).not.toContain("Relance-la avec `delegate`");
-    // ⚠️ Le générateur n'a PAS tourné : aucune vue d'image, aucun fichier produit,
-    // aucun téléversement. Le refus arrive AVANT le travail, pas en plein vol.
-    expect(imagesVues).toHaveLength(0);
-    expect(depot.service.listForSession(CONVERSATION)).toHaveLength(0);
-    expect(fixture.uploads).toHaveLength(0);
+    expect(received.refus ?? "").not.toContain("Rien n'a été lancé");
+    expect(imagesVues).toHaveLength(1);
+    expect(depot.service.listForSession(CONVERSATION)).toHaveLength(1);
+    expect(fixture.uploads).toHaveLength(1);
 
-    // ④ La réponse du tour part quand même, SANS `file_ids` (rien n'est promis à
-    //    moitié : l'image viendra du job, par le rapport).
-    const postReponse = fixture.created[0]!;
-    expect(postReponse.file_ids).toBeUndefined();
-    expect(String(postReponse.message)).toContain("Voilà l'image demandée.");
-    expect(fixture.created).toHaveLength(1);
+    // ④ ORDRE STRICT : accusé → image → réponse. L'accusé est le premier post et il
+    //    porte le texte du MODÈLE (pas la table de repli).
+    const [postAck, postImage, postReponse] = fixture.created;
+    expect(String(postAck!.message)).toContain("C'est parti.");
+    expect(postAck!.file_ids).toBeUndefined();
+    expect(postImage!.file_ids).toEqual(["fichier-1"]);
+    expect(String(postImage!.message)).toContain("Voici l'image.");
+    // ⚠️ L'image déjà publiée n'est PAS réattachée à la réponse (jamais deux fois).
+    expect(postReponse!.file_ids).toBeUndefined();
+    expect(String(postReponse!.message)).toContain("Voilà l'image demandée.");
+    // ⚠️ La ligne d'accusé a DÉJÀ été publiée : elle ne figure pas dans la réponse.
+    expect(String(postReponse!.message)).not.toContain("C'est parti.");
+    expect(fixture.created).toHaveLength(3);
+
+    // ⑤ TIMING — le point du 2026-11-02 13:38 : un accusé publié APRÈS le travail
+    //    n'est plus un accusé. L'accusé doit partir PENDANT l'outil, à moins d'une
+    //    seconde de son démarrage (l'outil, lui, dure `DUREE_GENERATION_MS`).
+    const debutOutil = received.debutOutil ?? 0;
+    const finOutil = received.finOutil ?? 0;
+    expect(finOutil - debutOutil).toBeGreaterThanOrEqual(DUREE_GENERATION_MS);
+    const delaiAck = fixture.arrivees[0]! - debutOutil;
+    expect(delaiAck).toBeLessThan(ACK_MAX_DELAI_MS);
+    // Preuve que l'accusé n'a PAS attendu la fin de l'outil.
+    expect(fixture.arrivees[0]!).toBeLessThan(finOutil);
+    // L'image arrive APRÈS la fin de la génération, la réponse après l'image.
+    expect(fixture.arrivees[1]!).toBeGreaterThanOrEqual(finOutil);
+    expect(fixture.arrivees[2]!).toBeGreaterThanOrEqual(fixture.arrivees[1]!);
   });
 });

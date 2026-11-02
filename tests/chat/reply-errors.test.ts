@@ -20,7 +20,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   createRemoteReplyGenerator,
-  PROGRESS_LONG_TOOL_MS,
   PROGRESS_LONG_TOOL_TEXT,
   PROGRESS_MAX_RESULTS,
   PROGRESS_SUPPRESSED_TEXT,
@@ -69,17 +68,18 @@ describe("échec d'outil — une ligne, déterministe", () => {
 });
 
 describe("outil long — rappel UNIQUE", () => {
-  it("un outil de plus de 90 s rappelle UNE fois, pas une fois par outil", async () => {
-    let horloge = 0;
+  it("un outil long rappelle UNE fois, pas une fois par outil", async () => {
+    // ⚠️ Le rappel est ARMÉ au démarrage de l'outil (délai RÉEL) : le seuil est donc
+    // abaissé ici, la règle testée restant celle du run de canal (90 s).
     const trace = collecteur();
     const p = new ReplyProgress({
       publier: trace.publier,
       outils: ["generer_image", "lire_fichier"],
-      maintenant: () => horloge,
+      seuilRappelMs: 20,
     });
     for (const outil of ["generer_image", "lire_fichier", "generer_image"]) {
       p.demarrerOutil({ tool: outil });
-      horloge += PROGRESS_LONG_TOOL_MS + 1;
+      await new Promise((resolve) => setTimeout(resolve, 40));
       p.terminerOutil({ tool: outil });
     }
     await p.attendre();

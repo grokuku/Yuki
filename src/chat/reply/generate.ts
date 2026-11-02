@@ -48,6 +48,15 @@ export interface ReplyRun {
    * sans lui, l'écrivain ne savait rien dire avant la fin du tour.
    */
   onTool?: (event: SdkToolEvent) => void;
+  /**
+   * BORNE (ms) des outils longs AUTORISÉS INLINE (`0` : aucun).
+   *
+   * ⚠️ Transmise par `createRemoteRunTools` (`src/pi/chat-run.ts`) : sous
+   * `chat.remoteAgents = desactive`, `generer_image` s'exécute dans le tour, donc
+   * le délai du tour doit couvrir `images.timeoutMs` — sinon la génération serait
+   * coupée en plein vol.
+   */
+  inlineLongToolBudgetMs?: number;
 }
 
 export interface RemoteReplyGeneratorOptions {
@@ -176,6 +185,12 @@ export function createRemoteReplyGenerator(
     const writer = options.createWriter({
       tools: () => run.tools,
       customTools: () => run.customTools,
+      // ⚠️ BORNE DU TOUR : les outils longs autorisés INLINE (sous `desactive`)
+      // doivent tenir dans le délai de l'écrivain. Sans ce report, l'appel serait
+      // coupé en plein vol — le défaut que le refus prétendait fermer.
+      ...((run.inlineLongToolBudgetMs ?? 0) > 0
+        ? { inlineLongToolBudgetMs: run.inlineLongToolBudgetMs as number }
+        : {}),
       // ⚠️ RÈGLE DE DÉLÉGATION (lot 23) et CONSIGNE D'ACCUSÉ (lot 24) : transmises au run
       // quand sa politique les produit (`createRemoteRunTools`, `src/pi/chat-run.ts`). Sans
       // elles, le modèle exécutait le travail long INLINE et le tour était coupé ; et il
@@ -222,6 +237,11 @@ export function createRemoteReplyGenerator(
     // PARTIES avant de rendre le texte, sinon la réponse finale pourrait arriver
     // avant l'image qu'elle commente.
     await progression?.attendre();
+    // ⚠️ CLÔTURE : après ce point, plus AUCUNE publication intermédiaire n'est
+    // possible. Un accusé qui arriverait APRÈS la réponse ne serait plus un accusé
+    // (défaut signalé le 2026-11-02 : « s'il attend que tout soit fait pour le
+    // poster, ça sert à rien ») : il est donc structurellement impossible.
+    progression?.cloturer();
 
     // ⚠️ La ligne d'accusé a DÉJÀ été publiée : la laisser dans le corps la
     // dupliquerait à chaque tour. On ne retire QUE cette ligne-là (égalité stricte).

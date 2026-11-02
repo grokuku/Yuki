@@ -11,7 +11,7 @@
  *  - le REFUS AVANT EXÉCUTION des outils qui exigent une approbation humaine.
  */
 
-import { APPROVAL_REQUIRED_TOOLS, READ_ONLY_TOOLS, approvalRequiredTools, toolAllowlistForChat } from "../llm/tool-policy.js";
+import { APPROVAL_REQUIRED_TOOLS, READ_ONLY_TOOLS, approvalRequiredTools, channelTurnTimeoutMs, toolAllowlistForChat } from "../llm/tool-policy.js";
 import type { ChatOriginMode, ToolAllowlistOptions } from "../llm/tool-policy.js";
 import type { FilesReadPort, FilesSendPort, WireFile } from "../files/index.js";
 import type { AgentDirectoryPort } from "../agents/directory.js";
@@ -90,6 +90,17 @@ export interface RemoteRunTools {
   tools: readonly string[];
   /** Définitions construites (opaques hors de `src/pi/**`). */
   customTools: readonly unknown[];
+  /**
+   * BORNE (ms) que le TOUR doit couvrir à cause d'outils longs AUTORISÉS INLINE.
+   *
+   * ⚠️ `0` quand aucun outil long n'est autorisé inline : sous
+   * `chat.remoteAgents = actives`, les outils longs sont REFUSÉS (donc coût zéro),
+   * et en LOCAL ce champ n'est jamais lu (le host n'a pas de borne de tour).
+   * ⚠️ Sous `desactive`, `generer_image` peut s'exécuter inline : la borne du tour
+   * doit alors valoir AU MOINS `images.timeoutMs` (180 s), sinon la génération
+   * serait coupée en plein vol — le défaut même que le refus prétendait fermer.
+   */
+  inlineLongToolBudgetMs?: number;
   /**
    * EXTENSIONS INLINE du run (opaques hors de `src/pi/**`).
    *
@@ -277,9 +288,26 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
     });
   }
 
+  // ⚠️ BORNE DU TOUR quand des outils longs sont AUTORISÉS INLINE (2026-11-02) :
+  // sous `chat.remoteAgents = desactive` (le DÉFAUT), `delegate` n'existe pas — le
+  // garde-fou ne refuse donc PLUS `generer_image` (`guardLongToolsInChannel`). Un
+  // tour de canal vaut `CHAT_REPLY_TIMEOUT_MS` (90 s) alors que la génération peut
+  // durer `images.timeoutMs` (180 s) : la borne est donc DÉRIVÉE des outils longs
+  // réellement construits, jamais devinée. Sous `actives`, tous les outils longs
+  // sont refusés inline ⇒ budget 0 (la borne de base reste inchangée).
+  const delegationDisponible = actifs && options.delegation !== undefined;
+  const inlineLongToolBudgetMs = delegationDisponible
+    ? 0
+    : channelTurnTimeoutMs({
+        tools: customTools.map((tool) => (tool as { name?: string }).name ?? ""),
+        delegationAvailable: false,
+        baseMs: 0,
+      });
+
   return {
     tools,
     customTools,
+    inlineLongToolBudgetMs,
     ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
   };
 }

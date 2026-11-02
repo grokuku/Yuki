@@ -29,10 +29,24 @@ que personne ne voyait.
 ## Conséquence assumée
 
 `chat.remoteAgents` reste **`desactive` par défaut** (`src/config/schema.ts`). Sous ce
-défaut, `delegate` **n'existe pas** en canal : une action longue est donc **refusée**
-et le refus **le dit** (il ne renvoie pas vers un outil absent). **Sans
-`chat.remoteAgents = actives`, la délégation est impossible en canal — et donc la
-génération d'image aussi.**
+défaut, `delegate` **n'existe pas** en canal : **la délégation est impossible.**
+
+## CORRIGENDUM (2026-11-02 13:36 — régression de production)
+
+⚠️ Le refus inline **sans alternative** supprimait une capacité : « avant, une
+génération courte passait ; maintenant jamais ». Règle désormais appliquée :
+
+| Situation | Comportement |
+|---|---|
+| `delegate` **disponible** (`actives`) | appel long inline **REFUSÉ** ; le message nomme `delegate` **et** le chemin d'activation (Configuration → Discussions → Agents distants) |
+| `delegate` **absent** (`desactive`, défaut) | appel long **AUTORISÉ** inline ; la **borne du tour** est relevée à `max(base, borne de l'outil)` (`channelTurnTimeoutMs`) ; l'accusé prévient de la durée (« jusqu'à trois minutes ») |
+| mode LOCAL | inchangé (aucun refus, aucune borne ajoutée) |
+
+Fichiers : `src/llm/tool-policy.ts`, `src/pi/sdk/long-tool-guard.ts`, `src/pi/chat-run.ts`
+(`inlineLongToolBudgetMs`), `src/index.ts` (borne du rédacteur), `src/pi/ack.ts`
+(consigne + repli). Preuve : `tests/chat/mattermost-image-chain.test.ts` (ordre
+`[accusé, image, réponse]` et accusé à moins d'une seconde du démarrage de l'outil) et
+`tests/llm/long-running-tools.test.ts`.
 
 ## Non vérifiable ici
 

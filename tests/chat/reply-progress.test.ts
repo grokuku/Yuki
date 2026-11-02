@@ -180,29 +180,79 @@ describe("échec d'outil — une ligne, déterministe", () => {
   });
 });
 
-describe("outil long — un rappel UNIQUE", () => {
-  it("un outil de plus de 90 s déclenche un seul rappel, même pour deux outils", async () => {
-    let horloge = 0;
+describe("outil long — un rappel UNIQUE, publié PENDANT l'outil", () => {
+  it("le rappel part AVANT la fin de l'outil (jamais après le travail)", async () => {
+    // ⚠️ Défaut mesuré le 2026-11-02 13:38 : un message de progression publié À LA
+    // FIN de l'action ne sert à rien. Le rappel est donc ARMÉ au démarrage.
     const trace = journal();
-    const p = progress(trace.publier, { maintenant: () => horloge });
+    const p = new ReplyProgress({
+      publier: trace.publier,
+      outils: OUTILS_DISTANTS,
+      // Seuil abaissé : le test ne dure pas 90 s, mais la règle est la même.
+      seuilRappelMs: 30,
+    });
+    let outilTermine = false;
     p.demarrerOutil({ tool: "lire_fichier" });
-    horloge = PROGRESS_LONG_TOOL_MS + 1;
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(outilTermine).toBe(false);
+    // Le rappel est DÉJÀ parti alors que l'outil n'est pas terminé.
+    expect(trace.envoyes.map((m) => m.text)).toContain(PROGRESS_LONG_TOOL_TEXT);
     p.terminerOutil({ tool: "lire_fichier" });
-    p.demarrerOutil({ tool: "lire_fichier" });
-    horloge += PROGRESS_LONG_TOOL_MS + 1;
-    p.terminerOutil({ tool: "lire_fichier" });
+    outilTermine = true;
     await p.attendre();
-
+    // …et il ne repart PAS à la fin (un seul par run).
     expect(trace.envoyes.filter((m) => m.text === PROGRESS_LONG_TOOL_TEXT)).toHaveLength(1);
   });
 
-  it("un outil court ne déclenche AUCUN rappel", async () => {
-    let horloge = 0;
+  it("un outil qui se termine AVANT le seuil ne déclenche AUCUN rappel", async () => {
     const trace = journal();
-    const p = progress(trace.publier, { maintenant: () => horloge });
+    const p = new ReplyProgress({
+      publier: trace.publier,
+      outils: OUTILS_DISTANTS,
+      seuilRappelMs: 60_000,
+    });
     p.demarrerOutil({ tool: "lire_fichier" });
-    horloge = PROGRESS_LONG_TOOL_MS - 1;
     p.terminerOutil({ tool: "lire_fichier" });
+    await p.attendre();
+    // Le minuteur est DÉSARMÉ à la fin de l'outil : attendre ne produit rien.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await p.attendre();
+    expect(trace.envoyes).toEqual([]);
+  });
+
+  it("le seuil par défaut est bien celui du run de canal (90 s)", () => {
+    expect(PROGRESS_LONG_TOOL_MS).toBe(90_000);
+  });
+});
+
+describe("clôture — RIEN ne part après la réponse finale", () => {
+  it("une publication tentée après `cloturer()` est refusée (jamais un accusé tardif)", async () => {
+    const trace = journal();
+    const p = progress(trace.publier);
+    p.demarrerOutil({ tool: "generer_image", ackCandidat: "C'est parti." });
+    await p.attendre();
+    expect(trace.envoyes).toHaveLength(1);
+    // ⚠️ La réponse finale est sur le point de partir : le run est clos.
+    p.cloturer();
+    // Un événement d'outil arrivé trop tard (nouvel appel, fichier produit) ne
+    // publie PLUS RIEN : un ack après la réponse n'est plus un ack.
+    p.demarrerOutil({ tool: "generer_image" });
+    p.publierFichier("f".repeat(32));
+    p.terminerOutil({ tool: "generer_image", isError: true });
+    await p.attendre();
+    expect(trace.envoyes).toHaveLength(1);
+  });
+
+  it("`cloturer()` ANNULE un rappel encore armé", async () => {
+    const trace = journal();
+    const p = new ReplyProgress({
+      publier: trace.publier,
+      outils: OUTILS_DISTANTS,
+      seuilRappelMs: 20,
+    });
+    p.demarrerOutil({ tool: "lire_fichier" });
+    p.cloturer();
+    await new Promise((resolve) => setTimeout(resolve, 60));
     await p.attendre();
     expect(trace.envoyes).toEqual([]);
   });

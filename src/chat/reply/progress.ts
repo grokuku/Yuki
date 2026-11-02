@@ -100,6 +100,16 @@ export interface ReplyProgressOptions {
   outils: readonly string[];
   /** Horloge injectable (tests : le rappel de longueur se vérifie sans attendre). */
   maintenant?: () => number;
+  /**
+   * Seuil (ms) au-delà duquel un outil ENCORE EN COURS mérite un rappel unique.
+   *
+   * ⚠️ C'est un DÉLAI RÉEL, armé au démarrage de l'outil : le rappel doit partir
+   * PENDANT l'action. Publier ce rappel à la FIN de l'outil (comportement
+   * précédent) revenait à dire « ça prend quelques minutes » une fois que c'était
+   * fini — même défaut de timing que l'accusé tardif (signalé le 2026-11-02).
+   * Défaut `PROGRESS_LONG_TOOL_MS` ; les tests l'abaissent.
+   */
+  seuilRappelMs?: number;
   /** Position de ROTATION du repli (défaut : compteur interne au run). */
   indexRepli?: () => number;
   logger?: ProgressLogger;
@@ -113,6 +123,11 @@ export class ReplyProgress {
   private readonly publier: ProgressPublisher;
   private readonly outils: ReadonlySet<string>;
   private readonly maintenant: () => number;
+  private readonly seuilRappelMs: number;
+  /** Rappels ARMÉS par outil en cours (annulés à sa fin : jamais deux). */
+  private readonly rappels = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Run CLOS : plus aucune publication intermédiaire (jamais après la réponse). */
+  private clos = false;
   private readonly indexRepliOptionnel: (() => number) | undefined;
   private readonly logger: ReplyProgressOptions["logger"];
   /** L'accusé déjà publié (verrou 1/run). */
@@ -138,6 +153,7 @@ export class ReplyProgress {
     this.publier = options.publier;
     this.outils = new Set(options.outils);
     this.maintenant = options.maintenant ?? Date.now;
+    this.seuilRappelMs = Math.max(1, Math.trunc(options.seuilRappelMs ?? PROGRESS_LONG_TOOL_MS));
     this.indexRepliOptionnel = options.indexRepli;
     this.logger = options.logger;
   }
@@ -174,7 +190,9 @@ export class ReplyProgress {
    *     en ROTATION par conversation (jamais toujours la même phrase).
    */
   demarrerOutil(event: { tool: string; ackCandidat?: string }): void {
+    if (this.clos) return;
     this.debuts.set(event.tool, this.maintenant());
+    this.armerRappel(event.tool);
     if (this.ack !== undefined) return;
     if (!this.outils.has(event.tool) || !isAckTool(event.tool)) return;
     const candidat = (event.ackCandidat ?? "").trim();
@@ -203,22 +221,28 @@ export class ReplyProgress {
     this.enfiler(() => this.publier({ text: texte }), { outil: event.tool, role: "ack" });
   }
 
-  /** Un outil vient de se TERMINER : rappel de longueur (une fois) puis échec (une fois). */
+  /** Un outil vient de se TERMINER : rappel désarmé, puis échec (une fois). */
   terminerOutil(event: { tool: string; isError?: boolean }): void {
-    const debut = this.debuts.get(event.tool);
+    this.desarmerRappel(event.tool);
     this.debuts.delete(event.tool);
-    const duree = debut === undefined ? 0 : this.maintenant() - debut;
-    if (!this.rappelEnvoye && duree >= PROGRESS_LONG_TOOL_MS) {
-      this.rappelEnvoye = true;
-      this.enfiler(() => this.publier({ text: PROGRESS_LONG_TOOL_TEXT }), {
-        outil: event.tool,
-        role: "rappel",
-      });
-    }
     if (event.isError !== true) return;
     if (this.echecs.has(event.tool)) return;
     this.echecs.add(event.tool);
     this.resultatTexte(progressErrorText(event.tool), event.tool);
+  }
+
+  /**
+   * CLÔT le run : après cet appel, plus AUCUNE publication intermédiaire.
+   *
+   * ⚠️ Appelé par le générateur APRÈS `attendre()` et AVANT de rendre le texte
+   * (`src/chat/reply/generate.ts`) : c'est ce qui rend structurellement impossible
+   * un accusé (ou un rappel) qui arriverait APRÈS la réponse finale. Un rappel
+   * encore armé est ANNULÉ.
+   */
+  cloturer(): void {
+    this.clos = true;
+    for (const timer of this.rappels.values()) clearTimeout(timer);
+    this.rappels.clear();
   }
 
   /**
@@ -302,6 +326,35 @@ export class ReplyProgress {
   }
 
   /**
+   * Armé au DÉMARRAGE de l'outil : le rappel part PENDANT l'action, pas à sa fin.
+   *
+   * ⚠️ Un seul rappel par run (`rappelEnvoye`) et un seul minuteur par outil :
+   * deux outils longs simultanés ne produisent pas deux lignes.
+   */
+  private armerRappel(tool: string): void {
+    if (this.clos || this.rappelEnvoye) return;
+    const timer = setTimeout(() => {
+      this.rappels.delete(tool);
+      if (this.clos || this.rappelEnvoye) return;
+      this.rappelEnvoye = true;
+      this.enfiler(() => this.publier({ text: PROGRESS_LONG_TOOL_TEXT }), {
+        outil: tool,
+        role: "rappel",
+      });
+    }, this.seuilRappelMs);
+    timer.unref?.();
+    this.rappels.set(tool, timer);
+  }
+
+  /** L'outil est fini : son rappel éventuel ne partira pas (ou a déjà été dédupliqué). */
+  private desarmerRappel(tool: string): void {
+    const timer = this.rappels.get(tool);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.rappels.delete(tool);
+  }
+
+  /**
    * Ajoute une publication à la chaîne. ⚠️ Elle ne REJETTE jamais : une publication
    * intermédiaire refusée est journalisée, la réponse finale part quand même.
    */
@@ -309,6 +362,12 @@ export class ReplyProgress {
     tache: () => Promise<void>,
     contexte: { outil: string; role: "ack" | "rappel" | "fichier" | "resultat" },
   ): void {
+    // ⚠️ Après la clôture, rien ne part : une ligne intermédiaire qui arriverait
+    // après la réponse finale serait au mieux inutile, au pire un doublon.
+    if (this.clos) {
+      this.logger?.warn?.("chat.progress.publish_after_close", { ...contexte });
+      return;
+    }
     this.chaine = this.chaine.then(tache).catch((error: unknown) => {
       this.logger?.warn?.("chat.progress.publish_failed", {
         ...contexte,

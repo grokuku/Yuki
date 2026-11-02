@@ -130,6 +130,98 @@ const PLATFORMS = [
 ];
 
 /**
+ * Libellés du réglage « Agents distants » (`chat.remoteAgents`).
+ *
+ * ⚠️ CE SONT LES MOTS EMPLOYÉS PAR LE MESSAGE DE REFUS d'un outil long
+ * (`REMOTE_AGENTS_SETTING_PATH`, `src/llm/tool-policy.ts`) : « Configuration →
+ * Discussions → Agents distants ». Renommer ce libellé sans renommer le chemin
+ * rendrait le refus inutilisable — un test statique verrouille l'égalité.
+ */
+export const REMOTE_AGENTS_LABEL = "Agents distants";
+
+/** Texte d'aide du réglage « Agents distants ». */
+export const REMOTE_AGENTS_HELP =
+  "Désactivé (défaut) : aucun agent, aucune délégation, aucun transfert de fichier — " +
+  "mais la GÉNÉRATION D'IMAGE fonctionne dans le canal (elle peut alors durer jusqu'à " +
+  "trois minutes et l'accusé le dit). Activé : Yuki peut DÉLÉGUER une tâche à un agent " +
+  "(le travail long part en arrière-plan, son résultat revient dans le canal). ⚠️ " +
+  "Réglage GLOBAL : il vaut pour TOUS les canaux suivis, et n'importe quel membre d'un " +
+  "canal peut alors faire exécuter du travail sur les machines appairées.";
+
+/**
+ * MONTE la section du réglage « Agents distants ».
+ *
+ * ⚠️ Ce réglage n'avait AUCUNE interface : le message de refus renvoyait vers un
+ * chemin qui n'existait pas, et l'activer demandait d'éditer `config.json`. La
+ * valeur effective vient du serveur (`GET /api/chat/status`, champ `distant.agents`),
+ * jamais d'une supposition locale.
+ */
+function renderRemoteAgents({ request, report, shared, refresh }) {
+  const section = h("section", { class: "config-group" });
+  const title = h("h2", { class: "config-group__title", text: REMOTE_AGENTS_LABEL });
+  const aide = h("p", { class: "config-helper", text: REMOTE_AGENTS_HELP });
+  const select = h("select", {
+    class: "config-input",
+    id: "chat-remote-agents",
+    "aria-label": REMOTE_AGENTS_LABEL,
+  });
+  for (const [valeur, libelle] of [
+    ["desactive", "Désactivés (défaut)"],
+    ["actives", "Activés (délégation possible)"],
+  ]) {
+    select.append(h("option", { value: valeur, text: libelle }));
+  }
+  const save = h("button", {
+    class: "button button--small",
+    type: "button",
+    text: "Enregistrer le réglage",
+  });
+  const etat = h("p", { class: "config-helper" });
+  save.addEventListener("click", () => {
+    void (async () => {
+      try {
+        // ⚠️ `PUT /api/config` (même route que les autres réglages) : la valeur est
+        // validée par le schéma serveur, appliquée à chaud (`apply: hot`). L'en-tête
+        // de FLUX est le même diagnostic que la page Configuration.
+        await request("/api/config", {
+          method: "PUT",
+          headers: {
+            "content-type": "application/json",
+            "x-yuki-config": "1",
+            "x-yuki-config-flow": "chat-remote-agents",
+          },
+          body: JSON.stringify({ "chat.remoteAgents": select.value }),
+        });
+        await refresh();
+      } catch (error) {
+        await report(etat, "Réglage non enregistré", error);
+      }
+    })();
+  });
+  section.append(
+    title,
+    aide,
+    h("div", { class: "config-actions" }, [select, save]),
+    etat,
+  );
+
+  function render() {
+    const valeur = shared.state?.distant?.agents;
+    if (valeur === undefined) {
+      etat.textContent = "Valeur inconnue : lisez l'état des discussions avant de régler.";
+      return;
+    }
+    select.value = valeur === "actives" ? "actives" : "desactive";
+    etat.textContent =
+      valeur === "actives"
+        ? "Valeur effective : agents ACTIVÉS (délégation disponible dans les canaux)."
+        : "Valeur effective : agents DÉSACTIVÉS (génération d'image possible dans le canal, délégation impossible).";
+  }
+
+  return { element: section, render };
+}
+
+/**
  * Monte le panneau (une section par plateforme câblée côté serveur).
  *
  * @param {object} deps
@@ -171,6 +263,7 @@ export function initChatPanel(deps) {
       shared.state = await request("/api/chat/status", { headers: READ_HEADERS, cache: "no-store" });
       mount();
       for (const platform of platforms) platform.render();
+      remoteAgents.render();
     } catch (error) {
       for (const platform of platforms) {
         platform.setError(
@@ -191,13 +284,22 @@ export function initChatPanel(deps) {
     renderPlatform({ description, request, report, shared, refresh }),
   );
 
+  /**
+   * ⚠️ RÉGLAGE COMMUN « Agents distants » : il décide des OUTILS de tous les canaux
+   * (délégation ou non), donc il n'appartient à aucune plateforme — il est monté
+   * UNE fois. C'est ce chemin que nomme le message de refus d'un outil long.
+   */
+  const remoteAgents = renderRemoteAgents({ request, report, shared, refresh });
+
   const limits = h("p", {
     class: "config-helper",
     text:
       "Limites assumées : les demandes d'APPROBATION ne sont pas relayées dans un canal " +
       "(une approbation se donne dans l'interface web), et la MÉMOIRE durable n'est pas " +
       "branchée en mode distant — il n'existe donc AUCUN réglage pour l'activer (seul " +
-      "`chat.remoteAgents` décide des outils).",
+      "« " +
+      REMOTE_AGENTS_LABEL +
+      " » décide des outils).",
   });
 
   /**
@@ -213,7 +315,11 @@ export function initChatPanel(deps) {
       shared.state === null
         ? platforms
         : platforms.filter((platform) => shared.state?.[platform.platform] !== undefined);
-    root.replaceChildren(...visibles.map((platform) => platform.element), limits);
+    root.replaceChildren(
+      ...visibles.map((platform) => platform.element),
+      remoteAgents.element,
+      limits,
+    );
   }
   mount();
 

@@ -115,8 +115,9 @@ export interface RemoteRunToolPorts {
    *
    * ⚠️ Fourni INDÉPENDAMMENT de `chat.remoteAgents` : publier un message ne touche à aucune
    * machine, donc aucune approbation n'est en jeu — l'outil fait partie de
-   * `REMOTE_SAFE_TOOLS`. Le PÉRIMÈTRE (canaux suivis, même plateforme) est tenu par le port
-   * (`src/chat/reply/channel-post.ts`), jamais par le modèle.
+   * `REMOTE_SAFE_TOOLS`. Le PÉRIMÈTRE (canaux suivis, même plateforme, fichiers de
+   * la conversation SOURCE) est tenu par le port (`src/chat/reply/channel-post.ts`),
+   * jamais par le modèle.
    */
   channels?: ChannelPostPort;
   /**
@@ -299,6 +300,9 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
     // ⚠️ PUBLICATION INTER-CANAL (décision A) : l'outil ne porte AUCUNE règle de périmètre —
     // le port refuse un canal non suivi (ou d'une autre plateforme) avec une raison
     // actionnable. Rien ici ne permet donc au modèle d'écrire hors du miroir.
+    // ⚠️ FICHIERS (2026-11-02) : `fichier_ids` sont des identifiants du STORE des
+    // fichiers, résolus et VALIDÉS par le port (appartenance à la conversation
+    // source, même plateforme, bornes) — jamais des chemins, jamais des octets.
     tools.push(...createChannelPostTool(ports.channels));
   }
 

@@ -12,8 +12,15 @@
  * ⚠️ POURQUOI DANS L'OUTIL, ET PAS DANS LE PROMPT : c'est le seul endroit où le
  * modèle ne peut pas « oublier » la règle. Le prompt conseille ; l'outil, lui,
  * refuse. Le refus est ACTIONNABLE (`longToolInlineRefusal`,
- * `src/llm/tool-policy.ts`) : il nomme la borne, dit pourquoi, et indique
- * `delegate`.
+ * `src/llm/tool-policy.ts`) : il nomme la borne, dit pourquoi, indique
+ * `delegate` et le chemin d'activation de la délégation.
+ *
+ * ⚠️ MAIS SEULEMENT SI LA DÉLÉGATION EXISTE : sans `delegate`
+ * (`chat.remoteAgents = desactive`, le DÉFAUT), refuser reviendrait à supprimer
+ * la capacité — c'est exactement la régression signalée en production le
+ * 2026-11-02 (« avant, une génération courte passait ; maintenant jamais »).
+ * Dans ce cas, aucun outil n'est enrobé et la borne du tour est relevée par
+ * l'appelant (`channelTurnTimeoutMs`).
  *
  * ⚠️ LA LISTE N'EST PAS ICI : elle vit dans `LONG_RUNNING_TOOLS`
  * (`src/llm/tool-policy.ts`), avec la valeur MESURÉE de chaque borne. Ce module
@@ -35,8 +42,11 @@ import { longRunningTool, longToolInlineRefusal } from "../../llm/tool-policy.js
  * (`LONG_RUNNING_TOOLS`) ne s'exécute PAS, il rend un refus explicite.
  *
  * `delegationAvailable` = `false` quand la politique du canal ne donne pas
- * `delegate` (défaut `chat.remoteAgents = desactive`) : le refus ne doit alors PAS
- * ordonner un outil absent.
+ * `delegate` (défaut `chat.remoteAgents = desactive`) : **AUCUN outil n'est alors
+ * enrobé** — les outils sortent INCHANGÉS et l'appel long s'exécute inline.
+ * ⚠️ Refuser sans alternative reviendrait à SUPPRIMER la capacité (régression
+ * mesurée en production le 2026-11-02) ; c'est la borne du tour qui est relevée
+ * à la place (`channelTurnTimeoutMs`, `src/llm/tool-policy.ts`).
  *
  * ⚠️ Le refus est rendu comme un RÉSULTAT (jamais une exception) : le modèle le
  * lit, peut enchaîner sur `delegate` dans le MÊME tour, et la transcription n'a
@@ -48,6 +58,9 @@ export function guardLongToolsInChannel(
   options: { delegationAvailable?: boolean } = {},
 ): ToolDefinition[] {
   const delegationAvailable = options.delegationAvailable ?? true;
+  // ⚠️ PAS DE DÉLÉGATION ⇒ PAS DE REFUS : on ne retire une capacité que si une
+  // autre voie existe. Les définitions sont rendues TELLES QUELLES (mêmes objets).
+  if (!delegationAvailable) return [...tools];
   return tools.map((tool) => {
     const info = longRunningTool(tool.name);
     if (!info) return tool;
@@ -65,7 +78,7 @@ export function guardLongToolsInChannel(
         tool: tool.name,
         budget_seconds: info.seconds,
         source: info.source,
-        ...(delegationAvailable ? { delegate_tool: "delegate" } : {}),
+        delegate_tool: "delegate",
       },
     });
     return { ...tool, execute: refuse } as ToolDefinition;

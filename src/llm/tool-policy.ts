@@ -706,8 +706,10 @@ export function approvalRequiredTools(tools: readonly string[]): string[] {
  * génération d'image peut prendre 180 s (`images.timeoutMs`,
  * `src/config/schema.ts:899-905`) : l'appel était coupé EN PLEIN VOL, sans
  * message, et la personne du canal restait sans réponse. Un outil long appelé
- * INLINE dans un canal rend donc maintenant un refus ACTIONNABLE ; il doit être
- * lancé par `delegate`, qui n'a pas de borne de tour.
+ * INLINE dans un canal est donc REFUSÉ — mais SEULEMENT quand `delegate` existe
+ * (`chat.remoteAgents = actives`) : sans délégation, refuser supprimerait la
+ * capacité. Dans ce cas l'appel passe et c'est la BORNE DU TOUR qui est relevée
+ * (`channelTurnTimeoutMs`), avec l'accusé qui prévient de la durée.
  *
  * ⚠️ Le mode LOCAL n'est PAS concerné : il n'a pas de borne de tour (il bloque),
  * et le bloquer davantage serait une régression. Le refus ne s'applique qu'aux
@@ -772,16 +774,28 @@ export function longRunningTool(name: string): LongRunningTool | undefined {
 }
 
 /**
+ * RÉGLAGE qui ouvre la délégation en canal — nommé EXACTEMENT comme dans
+ * l'interface (`public/ui/chat-panel.js`, contrôle « Agents distants »).
+ *
+ * ⚠️ Le texte du refus pointe ce chemin : un message de refus qui dit « la
+ * délégation est désactivée » sans dire OÙ l'activer ne laisse que la recherche
+ * dans un fichier de configuration (défaut `desactive`, `src/config/schema.ts`).
+ */
+export const REMOTE_AGENTS_SETTING_PATH = "Configuration → Discussions → Agents distants";
+
+/**
  * Texte de REFUS d'un appel INLINE d'un outil long dans un run de CANAL.
  *
  * ⚠️ Actionnable, jamais une plainte : il dit ce que l'action coûte, pourquoi le
- * tour ne peut pas la contenir, et QUELLE outil utiliser à la place. `undefined`
+ * tour ne peut pas la contenir, et QUEL outil utiliser à la place. `undefined`
  * si l'outil n'est pas long (l'appel passe).
  *
  * ⚠️ `delegationAvailable: false` (défaut de `chat.remoteAgents`, c'est-à-dire
- * `desactive`) change la CONCLUSION : `delegate` n'existe pas dans ce canal, donc
- * ordonner de le lancer serait un mensonge. Le refus dit alors que l'action n'est
- * pas réalisable ici — et pourquoi.
+ * `desactive`) ⇒ **AUCUN refus** (`undefined`) : sans `delegate`, refuser
+ * reviendrait à SUPPRIMER la capacité (régression mesurée en production le
+ * 2026-11-02 : « avant, une génération courte passait ; maintenant jamais »).
+ * L'appel est alors AUTORISÉ inline, et c'est la BORNE DU TOUR qui est relevée
+ * (`channelTurnTimeoutMs`) pour que l'action puisse aboutir.
  */
 export function longToolInlineRefusal(
   name: string,
@@ -789,24 +803,45 @@ export function longToolInlineRefusal(
 ): string | undefined {
   const info = longRunningTool(name);
   if (!info) return undefined;
-  const avant =
+  // ⚠️ RÈGLE : on ne refuse JAMAIS une action sans proposer d'autre voie.
+  if ((options.delegationAvailable ?? true) === false) return undefined;
+  return (
     `« ${info.name} » peut prendre jusqu'à ${info.seconds} s. Un tour dans un CANAL ` +
     "est borné : l'action serait interrompue en plein vol, sans résultat ni message " +
-    "(c'est déjà arrivé). Rien n'a été lancé.";
-  if (options.delegationAvailable ?? true) {
-    return (
-      `${avant} Relance-la avec \`delegate\` : le job d'arrière-plan n'a pas de ` +
-      "borne de tour, et son résultat — le fichier produit y compris — sera publié " +
-      "dans ce canal."
-    );
-  }
-  return (
-    `${avant} ⚠️ La délégation est DÉSACTIVÉE dans ce canal (réglage ` +
-    "`chat.remoteAgents`, valeur `actives` requise) : `delegate` n'existe donc pas " +
-    "ici. Dis-le à la personne et propose-lui de faire l'action depuis l'interface " +
-    "web, ou de faire activer la délégation — n'attends pas et ne prétends pas " +
-    "l'avoir faite."
+    "(c'est déjà arrivé). Rien n'a été lancé. Relance-la avec `delegate` : le job " +
+    "d'arrière-plan n'a pas de borne de tour, et son résultat — le fichier produit y " +
+    `compris — sera publié dans ce canal. (La délégation s'active dans ${REMOTE_AGENTS_SETTING_PATH}.)`
   );
+}
+
+/**
+ * BORNE (ms) du tour d'un CANAL, quand des outils longs sont AUTORISÉS inline.
+ *
+ * ⚠️ POURQUOI ELLE EXISTE : `CHAT_REPLY_TIMEOUT_MS` (90 s,
+ * `src/chat/reply/prompt.ts:72`) est PLUS COURT que `images.timeoutMs` (180 s,
+ * `src/config/schema.ts:899-905`). Autoriser `generer_image` inline sans relever
+ * la borne ne ferait que déplacer le défaut : l'appel serait coupé en plein vol.
+ *
+ * Règle : `max(borne de base, borne des outils longs autorisés)`. Sous
+ * `chat.remoteAgents = actives`, tous les outils longs sont refusés inline ⇒
+ * aucune levée (la borne de base reste, strictement inchangée).
+ */
+export function channelTurnTimeoutMs(input: {
+  /** Allowlist RÉELLE du run : seuls ces outils peuvent être appelés. */
+  tools: readonly string[];
+  /** `delegate` est-il disponible dans ce run ? */
+  delegationAvailable: boolean;
+  /** Borne de base du tour (rédaction + ce que le tour doit déjà couvrir). */
+  baseMs: number;
+}): number {
+  const base = Math.max(1, Math.trunc(input.baseMs));
+  if (input.delegationAvailable) return base;
+  let secondes = 0;
+  for (const name of input.tools) {
+    const info = longRunningTool(name);
+    if (info !== undefined && info.seconds > secondes) secondes = info.seconds;
+  }
+  return Math.max(base, secondes * 1000);
 }
 
 /**

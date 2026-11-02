@@ -1341,7 +1341,15 @@ async function main(): Promise<void> {
    */
   const chatWriter = (
     systemPrompt: string,
-    timeoutMs: number,
+    /**
+     * Délai de l'appel (ms) — FIXE ou RELU à chaque tour.
+     *
+     * ⚠️ La réponse d'un CANAL le passe en FONCTION : la borne dépend des outils
+     * longs réellement autorisés INLINE, donc de la politique du run, recalculée à
+     * chaque réponse (`apply: hot`). Une valeur figée à la construction ignorerait
+     * un changement de `chat.remoteAgents` sans redémarrage.
+     */
+    timeoutMs: number | (() => number),
     label: string,
     run?: {
       tools: () => readonly string[];
@@ -1363,7 +1371,7 @@ async function main(): Promise<void> {
       systemPrompt,
       modelReference: liveLightReference,
       thinking: "off",
-      timeoutMs: () => timeoutMs,
+      timeoutMs: typeof timeoutMs === "function" ? timeoutMs : () => timeoutMs,
       logger,
       label,
       ...(run
@@ -1452,14 +1460,28 @@ async function main(): Promise<void> {
           plateforme:
             mirrorPlatformOf(conversationId) ??
             (config.getString("chat.mode") === "discord" ? "discord" : "mattermost"),
+          // ⚠️ CONVERSATION SOURCE : un fichier joint ne peut venir QUE de ce canal
+          // (`mm-…`/`dc-…`). Sans cette garde, un identifiant volé dans une autre
+          // conversation ferait fuiter un fichier (et les conversations LOCALES
+          // sont hors de portée d'un canal distant par construction).
+          conversationSource: conversationId,
           canaux: () =>
             chatMirror.conversations().map((conversation) => ({
               conversationId: conversation.id,
               titre: conversation.title,
               plateforme: conversation.platform,
             })),
-          envoyer: ({ conversationId: cible, texte, filDe }) =>
-            envoyerDansCanal(cible, texte, undefined, filDe),
+          // ⚠️ UN SEUL mécanisme d'envoi : `envoyerDansCanal` (téléversement +
+          // `file_ids` + échec VISIBLE). Aucun second chemin de fichiers.
+          envoyer: ({ conversationId: cible, texte, filDe, fichierIds }) =>
+            envoyerDansCanal(cible, texte, fichierIds, filDe),
+          // ⚠️ RÉSOLUTION CÔTÉ SERVEUR des identifiants du store : propriété
+          // (`sessionId`) et taille, jamais un chemin disque. Un identifiant
+          // inconnu/expiré est refusé, jamais ignoré en silence.
+          fichier: (fichierId) => filesStore.get(fichierId),
+          // Borne de taille par fichier : celle du dépôt (`files.maxFileBytes`),
+          // appliquée AVANT l'appel réseau (un binaire ne se tronque pas).
+          maxFichierBytes: () => config.getNumber("files.maxFileBytes"),
           // Le fil demandé doit exister dans CE canal (garde avant tout appel réseau).
           filConnu: (cible, racine) => chatMirror.has(cible, racine),
           logger,
@@ -1524,11 +1546,19 @@ async function main(): Promise<void> {
     createWriter: (run) =>
       chatWriter(
         CHAT_REPLY_SYSTEM_PROMPT,
-        // ⚠️ Une GÉNÉRATION d'image peut durer jusqu'à `images.timeoutMs` (180 s par
-        // défaut) : le délai du rédacteur doit la COUVRIR, sinon le run serait
-        // interrompu en pleine génération et le canal n'aurait aucune réponse. Le
-        // délai est donc « rédaction + génération », relu à chaque réponse.
-        CHAT_REPLY_TIMEOUT_MS + config.getNumber("images.timeoutMs"),
+        // ⚠️ BORNE DU TOUR, dérivée de la POLITIQUE du run (relue à chaque réponse) :
+        //  - base = « rédaction (`CHAT_REPLY_TIMEOUT_MS`) + une génération
+        //    (`images.timeoutMs`) », comme avant ;
+        //  - relevée au moins jusqu'à la borne des outils longs AUTORISÉS INLINE,
+        //    calculée par `createRemoteRunTools` (`channelTurnTimeoutMs`,
+        //    `src/llm/tool-policy.ts`) : sous `chat.remoteAgents = desactive` (le
+        //    DÉFAUT), `generer_image` s'exécute DANS le tour — sans cette levée, il
+        //    serait coupé en plein vol, ce qui était le défaut d'origine.
+        () =>
+          Math.max(
+            CHAT_REPLY_TIMEOUT_MS + config.getNumber("images.timeoutMs"),
+            run.inlineLongToolBudgetMs ?? 0,
+          ),
         "réponse",
         run,
       ),
