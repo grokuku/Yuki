@@ -58,6 +58,16 @@ export interface HeavyRunResult {
   usage?: JobUsage;
   /** Motif d'échec (`timeout`, `idle_timeout`, …). */
   error?: string;
+  /**
+   * FICHIERS produits par la tâche (identifiants du store des fichiers de la
+   * conversation propriétaire).
+   *
+   * ⚠️ Un job qui GÉNÈRE une image la copie dans ce store ; sans ce retour, le
+   * rapport annoncerait du texte et l'image resterait invisible. Le worker les
+   * remonte donc ICI, le service les journalise avec le résultat, et le réveil
+   * les joint au message publié dans le canal.
+   */
+  fichiers?: readonly string[];
 }
 
 /**
@@ -96,7 +106,20 @@ export interface LightWaker {
   send(
     sessionId: string,
     text: string,
-    opts?: { origin?: string; jobId?: string },
+    opts?: {
+      origin?: string;
+      jobId?: string;
+      /**
+       * FICHIERS produits par le job (identifiants du store de la
+       * conversation). Le réveil de CANAL les joint au message publié ; le
+       * réveil LOCAL les ignore (le host ne connaît que du texte).
+       *
+       * ⚠️ Sans ce transport, déléguer une image donnerait une image que
+       * personne ne voit : le rapport dirait « c'est fait », et le fichier
+       * resterait dans le store.
+       */
+      fichiers?: readonly string[];
+    },
   ): { runId?: string } | void;
 }
 

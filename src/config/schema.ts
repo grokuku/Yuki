@@ -483,6 +483,17 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // ligne, verrou matériel, audit — mais il n'existe AUCUNE autorisation par
   // PERSONNE). Détail et proposition de restriction par canal :
   // `docs/lot20-chat-outils-distants.md` §4. Défaut `desactive` = le seul réglage sûr.
+  //
+  // ⚠️ CE QUI DEVIENT IMPOSSIBLE SANS `actives` (lot 23, à dire clairement) : la
+  // DÉLÉGATION. `delegate` n'existe pas dans la politique distante sous
+  // `desactive` (`REMOTE_SAFE_TOOLS`, `src/llm/tool-policy.ts`), et la RÈGLE
+  // « faire ou déléguer ? » n'est injectée que sous `actives`
+  // (`createRemoteRunTools`, `src/pi/chat-run.ts`). Or un tour de canal est borné
+  // à `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts`) : les actions
+  // LONGUES (`generer_image` 180 s, `capture_libraire` 30 s…) sont donc REFUSÉES
+  // inline (`LONG_RUNNING_TOOLS`) et **aucune voie de repli n'existe** — Yuki
+  // l'annonce honnêtement au lieu d'attendre. Conséquence assumée : par défaut,
+  // on ne peut PAS faire générer d'image depuis un canal.
   "chat.remoteAgents": {
     type: "enum",
     enum: ["desactive", "actives"],

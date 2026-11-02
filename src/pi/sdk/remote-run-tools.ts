@@ -59,6 +59,10 @@ import type { HeritagePort } from "../../memory/heritage.js";
 import type { SecretDirectoryPort } from "../../secrets/directory.js";
 import { createDelegateTools, createRunContextTracker } from "./delegate-tools.js";
 import { createAgentDirectoryTools, createSecretTools } from "./execution-tools.js";
+import { createChannelPostTool, type ChannelPostPort } from "./channel-post-tool.js";
+import { guardLongToolsInChannel } from "./long-tool-guard.js";
+
+export type { ChannelPostPort };
 import { createConversationArchiveTools } from "./conversation-archive-tools.js";
 import { createHeritageTools } from "./heritage-tools.js";
 import { createImageTools, type ImageToolPort } from "./image-tools.js";
@@ -106,6 +110,15 @@ export interface RemoteRunToolPorts {
   files?: FilesReadPort;
   /** Vision du modèle du run (transmise à `lire_fichier` pour dire la vérité). */
   vision?: RemoteRunVision;
+  /**
+   * Port de PUBLICATION inter-canal (`publier_dans_canal`, décision A).
+   *
+   * ⚠️ Fourni INDÉPENDAMMENT de `chat.remoteAgents` : publier un message ne touche à aucune
+   * machine, donc aucune approbation n'est en jeu — l'outil fait partie de
+   * `REMOTE_SAFE_TOOLS`. Le PÉRIMÈTRE (canaux suivis, même plateforme) est tenu par le port
+   * (`src/chat/reply/channel-post.ts`), jamais par le modèle.
+   */
+  channels?: ChannelPostPort;
   /**
    * Fichier produit par le run (image générée COPIÉE dans le store des fichiers).
    * ⚠️ C'est ce que l'adaptateur joint au message publié (`file_ids`) : sans ce
@@ -282,6 +295,13 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
     );
   }
 
+  if (ports.channels) {
+    // ⚠️ PUBLICATION INTER-CANAL (décision A) : l'outil ne porte AUCUNE règle de périmètre —
+    // le port refuse un canal non suivi (ou d'une autre plateforme) avec une raison
+    // actionnable. Rien ici ne permet donc au modèle d'écrire hors du miroir.
+    tools.push(...createChannelPostTool(ports.channels));
+  }
+
   if (ports.filesSend) {
     const service = ports.filesSend;
     // ⚠️ Le fichier envoyé doit ARRIVER DANS LE CANAL : le port d'origine ne
@@ -302,5 +322,15 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
     );
   }
 
-  return tools;
+  // ⚠️ OUTILS LONGS REFUSÉS (lot 23) : un run de CANAL est borné par
+  // `CHAT_REPLY_TIMEOUT_MS` (90 s) alors que `generer_image` peut prendre 180 s.
+  // Le refus est porté par l'OUTIL (`LONG_RUNNING_TOOLS`, `src/llm/tool-policy.ts`) :
+  // c'est le seul endroit où le modèle ne peut pas l'ignorer. ⚠️ Le refus ne
+  // renvoie vers `delegate` QUE si la délégation existe dans ce run (sous
+  // `chat.remoteAgents = actives`) : sinon il dirait de lancer un outil absent.
+  // Les outils non longs sortent de ce garde-fou inchangés, et le mode LOCAL n'y
+  // passe jamais.
+  return guardLongToolsInChannel(tools, {
+    delegationAvailable: ports.delegation !== undefined,
+  });
 }

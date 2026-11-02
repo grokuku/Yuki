@@ -20,8 +20,15 @@ import type { ConversationArchivePort } from "../memory/conversation-archive.js"
 import type { HeritagePort } from "../memory/heritage.js";
 import type { SecretDirectoryPort } from "../secrets/directory.js";
 import type { PiLogger } from "./types.js";
+import { ackRuleFor, ackToolsOf } from "./ack.js";
+import { createAckExtensionFactory } from "./sdk/ack-extension.js";
+import {
+  createDelegationExtensionFactory,
+  type PendingJobEntry,
+} from "./sdk/delegation-extension.js";
 import {
   buildRemoteRunTools,
+  type ChannelPostPort,
   type RemoteRunImagePorts,
   type RemoteRunLibrarianPorts,
   type RemoteRunVision,
@@ -67,6 +74,14 @@ export interface RemoteRunToolsOptions {
   filesSend?: FilesSendPort;
   /** Fichier envoyé par Yuki : l'appelant le publie DANS LE CANAL. */
   onFileSent?: (file: WireFile) => void;
+  /**
+   * Publication inter-canal (`publier_dans_canal`, décision A).
+   *
+   * ⚠️ Utilisé MÊME sous `chat.remoteAgents = desactive` : c'est un message, pas une
+   * action sur une machine, donc aucune approbation n'est requise. Le périmètre (canaux
+   * suivis, plateforme du run) est tenu par le port, pas par l'allowlist.
+   */
+  channels?: ChannelPostPort;
   logger?: PiLogger;
 }
 
@@ -75,6 +90,18 @@ export interface RemoteRunTools {
   tools: readonly string[];
   /** Définitions construites (opaques hors de `src/pi/**`). */
   customTools: readonly unknown[];
+  /**
+   * EXTENSIONS INLINE du run (opaques hors de `src/pi/**`).
+   *
+   * ⚠️ Elles portent la CONSIGNE D'ACCUSÉ (`ackRuleFor(tools)`) et, sous
+   * `chat.remoteAgents = actives`, la RÈGLE DE DÉLÉGATION + la liste des jobs du
+   * CANAL (`createDelegationExtensionFactory`, `src/pi/sdk/delegation-extension.ts`).
+   *
+   * ⚠️ Sans la consigne d'accusé, le modèle du canal appelle l'outil SANS RIEN DIRE :
+   * c'est alors la table de replis qui parle à sa place — le comportement mécanique
+   * (« toujours la même phrase ») que l'utilisateur a refusé (2026-11-02).
+   */
+  extensionFactories?: readonly unknown[];
 }
 
 /**
@@ -128,6 +155,32 @@ export function assertNoApprovalToolDefinition(
 }
 
 /**
+ * Jobs EN COURS de la CONVERSATION (le canal), pour la règle de délégation.
+ *
+ * ⚠️ On interroge la CONVERSATION, jamais l'identifiant de la session
+ * éphémère du run : elle ne désigne aucun fil, donc `pendingJobs` y rendrait
+ * toujours « aucun job » et le modèle n'aurait rien à relayer. Une lecture en
+ * échec est traitée comme « aucun job » (on ne casse jamais un tour pour un
+ * diagnostic).
+ */
+function jobsOfConversation(
+  port: DelegateServicePort | undefined,
+  conversationId: string,
+): PendingJobEntry[] {
+  if (!port) return [];
+  try {
+    return port.pendingJobs(conversationId).map((job) => ({
+      jobId: job.jobId,
+      task: job.task,
+      ...(job.status !== undefined ? { status: job.status } : {}),
+      ...(job.startedAt !== undefined ? { startedAt: job.startedAt } : {}),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Calcule le jeu d'outils d'un run distant : la POLITIQUE de son origine, puis
  * les DÉFINITIONS correspondantes (mêmes fabriques que le host local).
  */
@@ -149,6 +202,10 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
     ...(options.files ? { files: options.files } : {}),
     ...(options.vision ? { vision: options.vision } : {}),
     ...(options.onFileProduced ? { onFileProduced: options.onFileProduced } : {}),
+    // ⚠️ PUBLICATION INTER-CANAL : hors du bloc `actifs` À DESSEIN — l'outil est dans
+    // `REMOTE_SAFE_TOOLS`, et le construire seulement sous `actives` ferait diverger la
+    // politique de l'implémentation (l'écart est journalisé, mais autant ne pas l'avoir).
+    ...(options.channels ? { channels: options.channels } : {}),
     ...(actifs && options.agents ? { agents: options.agents } : {}),
     ...(actifs && options.secrets ? { secrets: options.secrets } : {}),
     ...(actifs && options.delegation ? { delegation: options.delegation } : {}),
@@ -161,6 +218,42 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
     ...(actifs && options.onFileSent ? { onFileSent: options.onFileSent } : {}),
   });
   assertNoApprovalToolDefinition(customTools);
+
+  // ⚠️ RÈGLE DE DÉLÉGATION EN CANAL (lot 23) : SANS elle, le modèle du canal ne
+  // savait pas qu'il pouvait déléguer — il faisait le travail long lui-même, et
+  // le tour était coupé à `CHAT_REPLY_TIMEOUT_MS` (90 s) sans aucun message.
+  //
+  // ⚠️ SOUS `chat.remoteAgents = actives` SEULEMENT : sous `desactive`, `delegate`
+  // n'existe pas (`REMOTE_SAFE_TOOLS`) et une règle qui ordonne un outil absent
+  // ferait inventer une action au modèle. ⚠️ Le DÉFAUT de `chat.remoteAgents`
+  // reste `desactive` — donc, par défaut, la délégation est IMPOSSIBLE en canal.
+  const regleDelegation =
+    actifs && options.delegation
+      ? [
+          createDelegationExtensionFactory({
+            activeJobs: () => jobsOfConversation(options.delegation, options.conversationId),
+            ...(options.logger ? { logger: options.logger } : {}),
+          }),
+        ]
+      : [];
+
+  // ⚠️ CONSIGNE D'ACCUSÉ (décision utilisateur 2026-11-02) : l'accusé est ÉCRIT PAR LE
+  // MODÈLE, comme en local. La consigne voyage par le MÊME mécanisme que la règle de
+  // délégation (`extensionFactories` → prompt système du tour), donc ZÉRO appel modèle
+  // supplémentaire : c'est le tour existant qui la porte.
+  //
+  // ⚠️ PARAMÉTRÉE PAR L'ALLOWLIST RÉELLE DU RUN (`ackRuleFor`, `src/pi/ack.ts`) et non
+  // `ACK_RULE` (la variante locale, qui cite `run_command` — outil qu'un canal n'a
+  // jamais). Citer un outil absent décrit une action que le modèle ne peut pas lancer.
+  //
+  // ⚠️ INUTILE (donc absente) sans aucun déclencheur : sans action longue, une consigne
+  // d'accusé ne pourrait que produire du bruit dans le prompt.
+  const regleAccuse: readonly unknown[] =
+    ackToolsOf(tools).length > 0 ? [createAckExtensionFactory(ackRuleFor(tools))] : [];
+
+  // L'ordre suit celui du host local (`src/pi/sdk-host.ts:2025`) : les règles du run
+  // d'abord, la consigne d'accusé en dernier.
+  const extensionFactories: readonly unknown[] = [...regleDelegation, ...regleAccuse];
 
   // ⚠️ ÉCART DIT, JAMAIS SILENCIEUX : la politique peut autoriser un outil que
   // ce run n'instancie pas (port absent — pas de coffre, pas de libraire
@@ -184,5 +277,9 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
     });
   }
 
-  return { tools, customTools };
+  return {
+    tools,
+    customTools,
+    ...(extensionFactories.length > 0 ? { extensionFactories } : {}),
+  };
 }

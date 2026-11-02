@@ -42,10 +42,13 @@ export interface ChannelWakerOptions {
    */
   summarize: (report: string) => Promise<string>;
   /**
-   * Publie un texte dans le canal. Peut lever (canal supprimé, jeton expiré…) :
-   * l'échec est journalisé, jamais propagé.
+   * Publie un texte (et, s'il y en a, des FICHIERS) dans le canal. Peut lever
+   * (canal supprimé, jeton expiré…) : l'échec est traité, jamais propagé.
+   *
+   * ⚠️ `fichiers` ne doit JAMAIS faire perdre le texte : un échec de publication
+   * avec fichiers est RETENTÉ sans eux, en le disant (voir `publier`).
    */
-  post: (conversationId: string, text: string) => Promise<void>;
+  post: (conversationId: string, text: string, fichiers?: readonly string[]) => Promise<void>;
   logger?: ChannelWakerLogger;
   /** Borne du texte publié (défaut `CHANNEL_REPORT_MAX_CHARS`). */
   maxChars?: number;
@@ -53,6 +56,37 @@ export interface ChannelWakerOptions {
 
 /** Caractères publiés au maximum : au-delà, on tronque et on le dit. */
 export const CHANNEL_REPORT_MAX_CHARS = 4_000;
+
+/**
+ * Nombre maximal de FICHIERS joints au rapport d'un job.
+ *
+ * ⚠️ Un rapport agrège un LOT de jobs : sans borne, une tâche bavarde posterait
+ * dix images d'un coup dans le canal. Au-delà, on joint les premiers et on DIT
+ * combien ne suivent pas — le fichier reste dans le store de la conversation,
+ * jamais détruit en silence.
+ */
+export const CHANNEL_REPORT_MAX_FILES = 3;
+
+/** Phrase qui dit qu'un fichier du job n'a pas pu être publié (jamais un silence). */
+export function filesFailureText(count: number): string {
+  const pluriel = count > 1 ? "s" : "";
+  return (
+    `[⚠️ ${count} fichier${pluriel} produit${pluriel} par la tâche n'a pas pu ` +
+    "être joint" +
+    `${pluriel} : il${pluriel ? "s restent" : " reste"} dans les fichiers de ` +
+    "cette conversation (dis-moi de te l'envoyer).]"
+  );
+}
+
+/** Phrase qui dit combien de fichiers produits restent NON joints (borne). */
+export function filesOmittedText(omis: number): string {
+  const pluriel = omis > 1 ? "s" : "";
+  return (
+    `[${omis} autre${pluriel} fichier${pluriel} produit${pluriel} : non joint${pluriel} ` +
+    `ici (${CHANNEL_REPORT_MAX_FILES} au maximum). Il${pluriel ? "s restent" : " reste"} ` +
+    "dans les fichiers de cette conversation.]"
+  );
+}
 
 /** Phrase de repli quand le résumé n'a pas pu être produit (jamais un mensonge). */
 export function reportFallbackText(jobId?: string): string {
@@ -82,6 +116,7 @@ export function createChannelAwareWaker(options: ChannelWakerOptions): LightWake
     conversationId: string,
     report: string,
     jobId: string | undefined,
+    fichiers: readonly string[],
   ): Promise<void> => {
     let texte = "";
     try {
@@ -94,16 +129,49 @@ export function createChannelAwareWaker(options: ChannelWakerOptions): LightWake
       });
     }
     if (texte === "") texte = reportFallbackText(jobId);
+    // ⚠️ BORNE des fichiers : les premiers sont joints, le reste est DIT.
+    const joints = fichiers.slice(0, CHANNEL_REPORT_MAX_FILES);
+    const omis = fichiers.length - joints.length;
+    if (omis > 0) texte = `${texte}\n\n${filesOmittedText(omis)}`;
+    const texteBorne = borné(texte);
     try {
-      await options.post(conversationId, borné(texte));
+      await options.post(
+        conversationId,
+        texteBorne,
+        joints.length > 0 ? joints : undefined,
+      );
     } catch (error) {
-      // ⚠️ Il n'y a AUCUN autre chemin : c'est le seul endroit où l'échec peut
-      // être dit. Le taire ferait attendre la personne du canal pour toujours.
-      options.logger?.warn("chat.job_report.failed", {
+      // ⚠️ ÉCHEC DE FICHIER ⇒ LE TEXTE PART QUAND MÊME. Un rapport sans son
+      // image reste utile ; un rapport perdu ne l'est jamais. On retente donc
+      // SANS les fichiers, en disant l'échec (jamais d'échec silencieux).
+      if (joints.length === 0) {
+        // ⚠️ Il n'y a AUCUN autre chemin : c'est le seul endroit où l'échec peut
+        // être dit. Le taire ferait attendre la personne du canal pour toujours.
+        options.logger?.warn("chat.job_report.failed", {
+          conversation: conversationId,
+          job_id: jobId ?? null,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      options.logger?.warn("chat.job_report.files_failed", {
         conversation: conversationId,
         job_id: jobId ?? null,
+        fichiers: joints.length,
         error: error instanceof Error ? error.message : String(error),
       });
+      try {
+        await options.post(
+          conversationId,
+          borné(`${texteBorne}\n\n${filesFailureText(joints.length)}`),
+        );
+      } catch (second) {
+        options.logger?.warn("chat.job_report.failed", {
+          conversation: conversationId,
+          job_id: jobId ?? null,
+          error: second instanceof Error ? second.message : String(second),
+        });
+      }
     }
   };
 
@@ -117,8 +185,9 @@ export function createChannelAwareWaker(options: ChannelWakerOptions): LightWake
         conversation: sessionId,
         job_id: opts?.jobId ?? null,
         origin: opts?.origin ?? null,
+        fichiers: opts?.fichiers?.length ?? 0,
       });
-      void publier(sessionId, text, opts?.jobId);
+      void publier(sessionId, text, opts?.jobId, opts?.fichiers ?? []);
       // Aucun run Pi n'est ouvert : pas d'identifiant de run à rendre.
       return undefined;
     },

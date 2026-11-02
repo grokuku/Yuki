@@ -166,6 +166,20 @@ export {
   type ReplyLimiterOptions,
 } from "./reply/limiter.js";
 export {
+  PROGRESS_IMAGE_TEXT,
+  PROGRESS_LONG_TOOL_MS,
+  PROGRESS_LONG_TOOL_TEXT,
+  PROGRESS_MAX_RESULTS,
+  PROGRESS_SUPPRESSED_TEXT,
+  ReplyProgress,
+  progressErrorText,
+  type ProgressLogger,
+  type ProgressMessage,
+  type ProgressPublisher,
+  type AckSource,
+  type ReplyProgressOptions,
+} from "./reply/progress.js";
+export {
   DEFAULT_REPLY_MODE,
   DEFAULT_REPLY_MODE_BY_PLATFORM,
   QUOTE_AUTHOR_LABELS,
@@ -186,6 +200,14 @@ export {
   type ReplyReason,
 } from "./reply/responder.js";
 export {
+  CANAL_AUTRE_PLATEFORME_RAISON,
+  CANAL_NON_SUIVI_RAISON,
+  createChannelPostPort,
+  normaliserNomCanal,
+  resoudreCanal,
+  type ChannelPostPortOptions,
+} from "./reply/channel-post.js";
+export {
   MIRROR_ID_PREFIX,
   emptyChatMirror,
   isMirrorConversationId,
@@ -201,6 +223,12 @@ export {
   type ChatServiceOptions,
   type ChatStatusView,
 } from "./service.js";
+export {
+  AuthorDirectory,
+  AUTHOR_NAME_BATCH_SIZE,
+  auteurAffichable,
+  formeCourteAuteur,
+} from "./mirror/names.js";
 export {
   CHAT_MODES,
   CHAT_QUOTE_AUTHORS,

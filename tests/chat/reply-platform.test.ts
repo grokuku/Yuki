@@ -87,7 +87,15 @@ describe("createRemoteReplyGenerator — le prompt nomme le bot de SA plateforme
     );
     // ⚠️ Un run distant ne reçoit JAMAIS la politique LOCALE complète (lecture du disque,
     // exécution) : la liste reste celle des outils de canal (`REMOTE_SAFE_TOOLS`).
-    expect(outils).toEqual(["generer_image", "consulter_workflow", "lister_fichiers", "lire_fichier"]);
+    expect(outils).toEqual([
+      "generer_image",
+      "consulter_workflow",
+      "lister_fichiers",
+      "lire_fichier",
+      // ⚠️ Publication inter-canal : un MESSAGE, pas une action sur une machine ⇒
+      // aucune approbation, donc présent même sous `remoteAgents = desactive` (décision A).
+      "publier_dans_canal",
+    ]);
     // Et le mode global, lui, aurait donné exactement la même liste : la différence n'est
     // donc visible que par la plateforme transmise, que ce test verrouille ci-dessus.
     expect(plateforme).toBe("discord");

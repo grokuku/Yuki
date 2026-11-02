@@ -509,6 +509,11 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
       ...(typeof me.username === "string" && me.username !== "" ? { username: me.username } : {}),
       ...(display !== "" ? { displayName: display } : {}),
     };
+    // ⚠️ Le compte de YUKI entre dans l'annuaire des noms : sinon ses propres messages
+    // s'affichaient avec son identifiant brut (même défaut que côté Mattermost).
+    this.deps.store.rememberPlatformAuthorNames("discord", [
+      [me.id, display !== "" ? display : typeof me.username === "string" ? me.username : me.id],
+    ]);
     return this.identite;
   }
 
@@ -776,6 +781,28 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
     if (!this.deps.generateReply) return;
     try {
       const transcript = this.deps.store.messages(message.conversationId);
+      const record = this.deps.store.record(message.conversationId);
+      // ⚠️ `fil` ⇒ référence le message (ou la RACINE de son fil) ; `nouveau` ⇒ aucune
+      // référence, le message part à la racine du salon. Calculé AVANT le run : les
+      // messages intermédiaires doivent être ancrés au MÊME message que la réponse.
+      const rootId = rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
+      // ⚠️ ANCRAGE INTER-RUNS : les messages intermédiaires citent TOUJOURS l'auteur du
+      // message traité, même quand `quoteAuthor` vaut `non` — ce sont des STATUTS.
+      let publies = 0;
+      const publier = async (intermediaire: {
+        text: string;
+        fichiers?: readonly string[];
+      }): Promise<void> => {
+        const texte = composeReplyText({ text: intermediaire.text, message, quoteAuthor: "oui" });
+        const fichiers = intermediaire.fichiers ?? [];
+        await this.send(message.conversationId, {
+          kind: "texte",
+          text: texte,
+          ...(rootId !== undefined ? { threadRootId: rootId } : {}),
+          ...(fichiers.length > 0 ? { fichiers } : {}),
+        });
+        publies += 1;
+      };
       const joints = this.deps.readImages
         ? await this.deps.readImages({ conversationId: message.conversationId, message })
         : { images: [], notes: [] };
@@ -785,17 +812,20 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
         message,
         ...(joints.images.length > 0 ? { images: joints.images } : {}),
         ...(joints.notes.length > 0 ? { notes: joints.notes } : {}),
+        publier,
       });
       const reponse = typeof brut === "string" ? { text: brut } : brut;
       const text = reponse.text.trim();
       if (text === "") {
+        // ⚠️ Un tour qui n'a fait qu'accuser et produire une image n'a RIEN de plus à
+        // dire : ce n'est pas une erreur, c'est un silence voulu.
+        if (publies > 0) {
+          this.derniereErreur = undefined;
+          return;
+        }
         this.derniereErreur = "Le générateur n'a produit aucun texte : rien n'a été publié.";
         return;
       }
-      const record = this.deps.store.record(message.conversationId);
-      // ⚠️ `fil` ⇒ référence le message (ou la RACINE de son fil) ; `nouveau` ⇒ aucune
-      // référence, le message part à la racine du salon.
-      const rootId = rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
       const texte = composeReplyText({
         text,
         message,

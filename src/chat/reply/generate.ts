@@ -10,8 +10,11 @@
  *  1. la POLITIQUE du run (`createRemoteRunTools`, `src/pi/chat-run.ts`) ;
  *  2. l'écrivain SDK, qui reçoit cette allowlist et ses définitions ;
  *  3. la COLLECTE des fichiers produits (image générée → fichier de la
- *     conversation), rendus à l'adaptateur qui les téléverse puis les attache
- *     au post (`file_ids`).
+ *     conversation), publiés DÈS LEUR PRODUCTION dans le canal (lot 2) — ils ne sont
+ *     plus réattachés à la réponse finale.
+ *
+ * ⚠️ Il porte aussi la PROGRESSION (`src/chat/reply/progress.ts`) : l'écrivain lui
+ * signale le démarrage et la fin de chaque outil, et l'accusé part AVANT l'action.
  *
  * ⚠️ Reste DEHORS de ce module : la politique elle-même (`src/llm/tool-policy.ts`)
  * et les outils (`src/pi/sdk/remote-run-tools.ts`). Ici, uniquement le câblage —
@@ -19,17 +22,32 @@
  * vrai store et un écrivain simulé.
  */
 
-import type { SdkPromptWriter, RemoteRunTools } from "../../pi/index.js";
+import type { SdkPromptWriter, RemoteRunTools, SdkToolEvent } from "../../pi/index.js";
 import type { FileImageContent } from "../../files/index.js";
 import type { ChatOriginMode } from "../../llm/tool-policy.js";
 import { mirrorPlatformOf } from "../mirror.js";
 import type { RemoteMessage } from "../types.js";
 import { buildReplyPrompt } from "./prompt.js";
+import { ReplyProgress, type ProgressLogger, type ProgressPublisher } from "./progress.js";
 
 /** Un run distant : sa politique (allowlist) et ses définitions d'outils. */
 export interface ReplyRun {
   tools: () => readonly string[];
   customTools: () => readonly unknown[];
+  /**
+   * EXTENSIONS INLINE du run (opaques ici) : elles portent la RÈGLE DE
+   * DÉLÉGATION et la liste des jobs du CANAL, sous `chat.remoteAgents = actives`
+   * (`createRemoteRunTools`, `src/pi/chat-run.ts`). Absentes ⇒ aucune extension
+   * (comportement inchangé).
+   */
+  extensionFactories?: () => readonly unknown[];
+  /**
+   * Événements d'OUTIL du run (`tool_execution_start`/`_end`).
+   *
+   * ⚠️ C'est le SEUL moyen de publier un accusé AVANT que l'outil ne tourne :
+   * sans lui, l'écrivain ne savait rien dire avant la fin du tour.
+   */
+  onTool?: (event: SdkToolEvent) => void;
 }
 
 export interface RemoteReplyGeneratorOptions {
@@ -57,6 +75,14 @@ export interface RemoteReplyGeneratorOptions {
   ) => RemoteRunTools;
   /** Écrivain SDK, construit avec le run (la politique y entre). */
   createWriter: (run: ReplyRun) => SdkPromptWriter;
+  /**
+   * Journal de la PROGRESSION (facultatif).
+   *
+   * ⚠️ Il sert à MESURER l'accusé en production : `chat.progress.ack` porte sa SOURCE
+   * (`modele`/`repli`) et JAMAIS son texte. Si les `repli` dominent, c'est la consigne
+   * du prompt qu'il faut renforcer. Absent ⇒ aucun journal (comportement inchangé).
+   */
+  logger?: ProgressLogger;
 }
 
 /** Entrée du générateur (forme du contrat `MattermostReplyGenerator`). */
@@ -66,6 +92,15 @@ export interface RemoteReplyInput {
   message: RemoteMessage;
   images?: readonly FileImageContent[];
   notes?: readonly string[];
+  /**
+   * Publication INTERMÉDIAIRE (accusé, image produite, échec) dans le canal.
+   *
+   * ⚠️ Construite par l'ADAPTATEUR, parce qu'elle doit être ancrée au MÊME fil que
+   * la réponse (`rootIdForReply` + `composeReplyText`) : le générateur ne connaît ni
+   * le réglage `replyStyle` du canal ni sa règle de citation. Absente ⇒ aucune
+   * publication intermédiaire (aucun changement pour un appelant qui n'en veut pas).
+   */
+  publier?: ProgressPublisher;
 }
 
 /** Sortie : texte seul, ou texte + identifiants de fichiers à joindre. */
@@ -96,6 +131,15 @@ export function runPlatformOf(conversationId: string, chatMode: ChatOriginMode):
 export function createRemoteReplyGenerator(
   options: RemoteReplyGeneratorOptions,
 ): (input: RemoteReplyInput) => Promise<RemoteReplyOutcome> {
+  /**
+   * ROTATION du repli d'accusé, PAR CONVERSATION.
+   *
+   * ⚠️ Même mécanisme que le host local (`record.ackFallbacks`) : sans compteur
+   * partagé, chaque run repartirait de l'index 0 et le repli dirait TOUJOURS la même
+   * phrase — exactement le défaut mécanique que l'accusé écrit par le modèle corrige.
+   * Déterministe (donc reproductible en test), borné par le nombre de canaux suivis.
+   */
+  const replisAck = new Map<string, number>();
   return async (input: RemoteReplyInput): Promise<RemoteReplyOutcome> => {
     if (!options.available()) {
       // Jamais une réponse inventée : l'adaptateur traduit ce refus en message.
@@ -103,14 +147,61 @@ export function createRemoteReplyGenerator(
     }
 
     // ⚠️ FICHIERS PRODUITS par CE run (image générée, copiée dans le store par
-    // `generer_image`). Collectés ICI, rendus avec le texte.
+    // `generer_image`). Chacun part IMMÉDIATEMENT dans le canal (lot 2) : il n'est
+    // plus réattaché à la réponse finale, qui arrive parfois trois minutes après.
     const produits: string[] = [];
+    // La progression est créée APRÈS la politique (elle a besoin de son allowlist),
+    // mais `onFileProduced` ne tire que PENDANT le run : la fermeture est donc
+    // toujours renseignée au moment où elle sert.
+    let progress: ReplyProgress | undefined;
     const run = options.runTools(input.message.conversationId, (fileId) => {
-      if (!produits.includes(fileId)) produits.push(fileId);
+      if (produits.includes(fileId)) return;
+      produits.push(fileId);
+      progress?.publierFichier(fileId);
     });
+    if (input.publier !== undefined) {
+      const conversationId = input.message.conversationId;
+      progress = new ReplyProgress({
+        publier: input.publier,
+        outils: run.tools,
+        indexRepli: () => {
+          const index = replisAck.get(conversationId) ?? 0;
+          replisAck.set(conversationId, index + 1);
+          return index;
+        },
+        ...(options.logger ? { logger: options.logger } : {}),
+      });
+    }
+    const progression = progress;
     const writer = options.createWriter({
       tools: () => run.tools,
       customTools: () => run.customTools,
+      // ⚠️ RÈGLE DE DÉLÉGATION (lot 23) et CONSIGNE D'ACCUSÉ (lot 24) : transmises au run
+      // quand sa politique les produit (`createRemoteRunTools`, `src/pi/chat-run.ts`). Sans
+      // elles, le modèle exécutait le travail long INLINE et le tour était coupé ; et il
+      // appelait l'outil SANS RIEN DIRE (c'était alors la table de repli qui parlait).
+      // ⚠️ `ReplyRun` porte la LISTE, l'écrivain attend une FABRIQUE relue à chaque tour
+      // (`apply: hot`) : d'où cette lambda, qui rend le tableau COURANT à chaque appel.
+      ...(run.extensionFactories !== undefined
+        ? { extensionFactories: () => run.extensionFactories ?? [] }
+        : {}),
+      ...(progression !== undefined
+        ? {
+            onTool: (event: SdkToolEvent): void => {
+              if (event.phase === "start") {
+                progression.demarrerOutil({
+                  tool: event.tool,
+                  ...(event.ackCandidat !== undefined ? { ackCandidat: event.ackCandidat } : {}),
+                });
+                return;
+              }
+              progression.terminerOutil({
+                tool: event.tool,
+                ...(event.isError === true ? { isError: true } : {}),
+              });
+            },
+          }
+        : {}),
     });
 
     const prompt = buildReplyPrompt({
@@ -122,13 +213,29 @@ export function createRemoteReplyGenerator(
     });
     // ⚠️ `images` n'est passé que s'il y en a : les options du prompt restent alors
     // EXACTEMENT celles d'un message texte (aucune surprise pour un modèle sans vision).
-    const texte =
+    const brut =
       input.images !== undefined && input.images.length > 0
         ? await writer(prompt, { images: input.images })
         : await writer(prompt);
 
-    // ⚠️ La collecte se fait PAR RÉFÉRENCE : `runTools` a reçu le tableau, il l'a
-    // rempli pendant le run (l'image est produite au milieu de la boucle d'outils).
-    return produits.length > 0 ? { text: texte, fichiers: produits } : texte;
+    // ⚠️ ORDRE GARANTI : on attend que les publications intermédiaires soient
+    // PARTIES avant de rendre le texte, sinon la réponse finale pourrait arriver
+    // avant l'image qu'elle commente.
+    await progression?.attendre();
+
+    // ⚠️ La ligne d'accusé a DÉJÀ été publiée : la laisser dans le corps la
+    // dupliquerait à chaque tour. On ne retire QUE cette ligne-là (égalité stricte).
+    const corps = progression !== undefined ? progression.retirerAck(brut) : brut;
+    const agrege = progression?.resume();
+    const texte =
+      agrege === undefined
+        ? corps
+        : corps.trim() === ""
+          ? agrege
+          : `${corps}\n\n${agrege}`;
+
+    // ⚠️ Les fichiers DÉJÀ postés ne sont pas réattachés (ils auraient deux fois).
+    const restants = progression !== undefined ? progression.fichiersRestants(produits) : produits;
+    return restants.length > 0 ? { text: texte, fichiers: restants } : texte;
   };
 }

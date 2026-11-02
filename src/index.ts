@@ -74,6 +74,7 @@ import {
   type RemoteMessage,
   buildJudgePrompt,
   createChannelAwareWaker,
+  createChannelPostPort,
   createRemoteReplyGenerator,
   effectiveQuoteAuthor,
   effectiveReplyStyle,
@@ -175,7 +176,7 @@ import {
   SourcesService,
   SourcesStore,
 } from "./sources/index.js";
-import { createPiHost, createRemoteRunTools, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -1342,7 +1343,17 @@ async function main(): Promise<void> {
     systemPrompt: string,
     timeoutMs: number,
     label: string,
-    run?: { tools: () => readonly string[]; customTools: () => readonly unknown[] },
+    run?: {
+      tools: () => readonly string[];
+      customTools: () => readonly unknown[];
+      /**
+       * EXTENSIONS du run : la CONSIGNE D'ACCUSÉ (`ackRuleFor(tools)`) et, sous
+       * `actives` seulement, la RÈGLE DE DÉLÉGATION + la liste des jobs du canal
+       * (`createRemoteRunTools`, `src/pi/chat-run.ts`).
+       */
+      extensionFactories?: () => readonly unknown[];
+      onTool?: (event: SdkToolEvent) => void;
+    },
   ) =>
     createSdkPromptWriter({
       cwd: env.piCwd,
@@ -1355,7 +1366,14 @@ async function main(): Promise<void> {
       timeoutMs: () => timeoutMs,
       logger,
       label,
-      ...(run ? { tools: run.tools, customTools: run.customTools } : {}),
+      ...(run
+        ? {
+            tools: run.tools,
+            customTools: run.customTools,
+            ...(run.extensionFactories ? { extensionFactories: run.extensionFactories } : {}),
+            ...(run.onTool ? { onTool: run.onTool } : {}),
+          }
+        : {}),
     });
 
   /**
@@ -1376,6 +1394,7 @@ async function main(): Promise<void> {
     conversationId: string,
     text: string,
     fichiers?: readonly string[],
+    filDe?: string,
   ): Promise<void> => {
     const plateforme = mirrorPlatformOf(conversationId);
     if (!plateforme) {
@@ -1393,6 +1412,8 @@ async function main(): Promise<void> {
       kind: "texte",
       text,
       ...(fichiers && fichiers.length > 0 ? { fichiers } : {}),
+      // ⚠️ `root_id` : répondre DANS un fil existant, jamais à la racine par accident.
+      ...(filDe !== undefined && filDe !== "" ? { threadRootId: filDe } : {}),
     });
   };
 
@@ -1423,6 +1444,26 @@ async function main(): Promise<void> {
         chatMode: runPlatformOf(conversationId, config.getString("chat.mode") as ChatOriginMode),
         remoteAgents: config.getString("chat.remoteAgents") === "actives",
         lightOptions: lightToolOptions,
+        // ⚠️ PUBLICATION INTER-CANAL (décision A, 2026-11-02) : le périmètre
+        // « canaux SUIVIS, même plateforme » est tenu ICI, côté serveur — le modèle ne
+        // peut pas le contourner. Un canal hors miroir est refusé avec la marche à suivre
+        // (Configuration → Discussions), au lieu d'inventer une validation humaine.
+        channels: createChannelPostPort({
+          plateforme:
+            mirrorPlatformOf(conversationId) ??
+            (config.getString("chat.mode") === "discord" ? "discord" : "mattermost"),
+          canaux: () =>
+            chatMirror.conversations().map((conversation) => ({
+              conversationId: conversation.id,
+              titre: conversation.title,
+              plateforme: conversation.platform,
+            })),
+          envoyer: ({ conversationId: cible, texte, filDe }) =>
+            envoyerDansCanal(cible, texte, undefined, filDe),
+          // Le fil demandé doit exister dans CE canal (garde avant tout appel réseau).
+          filConnu: (cible, racine) => chatMirror.has(cible, racine),
+          logger,
+        }),
         // MÊMES ports d'image que le host local : le générateur ComfyUI et la
         // copie de l'image dans le store des fichiers de la conversation (le canal).
         // ⚠️ Pas d'`onImage` : l'image d'un run distant part sur le CANAL, pas dans
@@ -1491,6 +1532,9 @@ async function main(): Promise<void> {
         "réponse",
         run,
       ),
+    // ⚠️ MESURE de l'accusé : `chat.progress.ack` porte sa SOURCE (`modele`/`repli`),
+    // jamais son texte (voir `src/chat/reply/progress.ts`).
+    logger,
   });
 
   /**
@@ -1781,10 +1825,29 @@ async function main(): Promise<void> {
         // pouvoir la voir — la boucle « lister → lire → déposer » restait ouverte.
         fileReadEnabled: filesService !== undefined,
         secretsEnabled: secretStore !== undefined,
+        // ⚠️ IMAGES (lot 23) : `generer_image` + `consulter_workflow`. La valeur
+        // suit l'EXISTENCE du générateur ComfyUI, câblé juste en dessous : sans
+        // lui, l'outil ne serait construit que pour REFUSER, et la politique
+        // annoncerait une capacité absente.
+        imagesEnabled: comfyGenerator !== undefined,
       }),
       ...(agentExecution ? { execution: agentExecution } : {}),
       ...(agentExecution ? { screenshots: agentExecution } : {}),
       ...(agentTransfers ? { transfers: agentTransfers } : {}),
+      // ⚠️ IMAGES : MÊMES ports que le host local (générateur ComfyUI + copie dans
+      // le store des fichiers). La conversation est FORCÉE par le worker à celle
+      // de sa conversation propriétaire (le canal), et l'identifiant du fichier
+      // produit remonte dans `HeavyRunResult.fichiers` ⇒ il est publié avec le
+      // rapport. ⚠️ Pas d'`onImage` : un job n'alimente aucune interface web ;
+      // c'est le RAPPORT qui est le canal de sortie.
+      images: {
+        generate: comfyGenerator.generate,
+        archive: generatedImageFiles,
+        workflows: {
+          candidates: () => comfyWorkflows.candidates(),
+          documentationOf: (name: string) => comfyWorkflows.get(name)?.documentation ?? "",
+        },
+      },
       // ⚠️ FICHIERS : la liste des pièces jointes de la conversation est jointe
       // AUTOMATIQUEMENT au premier message du worker (métadonnées seules).
       files: filesService,
@@ -2175,7 +2238,11 @@ async function main(): Promise<void> {
           CHAT_JOB_REPORT_TIMEOUT_MS,
           "rapport d'arrière-plan",
         )(report),
-      post: (conversationId, text) => envoyerDansCanal(conversationId, text),
+      // ⚠️ FICHIERS DU JOB (lot 23) : MÊME chemin que `envoyer_fichier` — un job
+      // qui a produit une image la fait ARRIVER dans le canal avec son rapport.
+      // Sans ce transport, l'image restait dans le store et personne ne la voyait.
+      post: (conversationId, text, fichiers) =>
+        envoyerDansCanal(conversationId, text, fichiers),
       logger,
     });
     delegation.setWaker(jobReportWaker);

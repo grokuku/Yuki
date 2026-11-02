@@ -25,7 +25,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CHANNEL_REPORT_MAX_CHARS,
+  CHANNEL_REPORT_MAX_FILES,
   createChannelAwareWaker,
+  filesFailureText,
   reportFallbackText,
 } from "../../src/chat/reply/channel-waker.js";
 import type { LightWaker } from "../../src/delegation/ports.js";
@@ -139,5 +141,85 @@ describe("réveil des jobs — canal distant", () => {
     await unTour();
     expect(publies[0]!.length).toBeLessThanOrEqual(CHANNEL_REPORT_MAX_CHARS + 32);
     expect(publies[0]).toContain("[…tronqué]");
+  });
+
+  it("les FICHIERS du job sont TRANSPORTÉS jusqu'à la publication", async () => {
+    const envois: Array<{ text: string; fichiers?: readonly string[] }> = [];
+    const waker = createChannelAwareWaker({
+      fallback: fallbackPort(),
+      summarize: async () => "L'image demandée est prête.",
+      post: async (_conversationId, text, fichiers) => {
+        envois.push({ text, ...(fichiers ? { fichiers } : {}) });
+      },
+    });
+    waker.send(CANAL, RAPPORT, {
+      origin: "job_report",
+      jobId: "job-9",
+      fichiers: ["f-1"],
+    });
+    await unTour();
+    expect(envois).toEqual([{ text: "L'image demandée est prête.", fichiers: ["f-1"] }]);
+  });
+
+  it("au-delà de la borne, les premiers fichiers partent et le reste est DIT", async () => {
+    const envois: Array<{ text: string; fichiers?: readonly string[] }> = [];
+    const waker = createChannelAwareWaker({
+      fallback: fallbackPort(),
+      summarize: async () => "Terminé.",
+      post: async (_conversationId, text, fichiers) => {
+        envois.push({ text, ...(fichiers ? { fichiers } : {}) });
+      },
+    });
+    const tous = ["f-1", "f-2", "f-3", "f-4", "f-5"];
+    waker.send(CANAL, RAPPORT, { origin: "job_report", jobId: "job-10", fichiers: tous });
+    await unTour();
+    expect(envois).toHaveLength(1);
+    expect(envois[0]!.fichiers).toEqual(tous.slice(0, CHANNEL_REPORT_MAX_FILES));
+    // ⚠️ La troncature est DITE : les fichiers non joints restent dans le store.
+    expect(envois[0]!.text).toContain("2 autres fichiers");
+  });
+
+  it("échec de publication d'un fichier : le TEXTE part quand même, et l'échec est dit", async () => {
+    const envois: Array<{ text: string; fichiers?: readonly string[] }> = [];
+    const warns: string[] = [];
+    const waker = createChannelAwareWaker({
+      fallback: fallbackPort(),
+      summarize: async () => "L'image demandée est prête.",
+      post: async (_conversationId, text, fichiers) => {
+        if (fichiers !== undefined && fichiers.length > 0) {
+          throw new Error("413 : pièce jointe refusée");
+        }
+        envois.push({ text });
+      },
+      logger: {
+        info: () => undefined,
+        warn: (message) => warns.push(message),
+      },
+    });
+    waker.send(CANAL, RAPPORT, { origin: "job_report", jobId: "job-11", fichiers: ["f-1"] });
+    await unTour();
+    // ⚠️ Un rapport SANS son image reste utile ; un rapport perdu ne l'est jamais.
+    expect(envois).toHaveLength(1);
+    expect(envois[0]!.text).toContain("L'image demandée est prête.");
+    expect(envois[0]!.text).toContain(filesFailureText(1));
+    expect(warns).toContain("chat.job_report.files_failed");
+  });
+
+  it("échec TOTAL : un seul avertissement `failed`, jamais un fichier à moitié annoncé", async () => {
+    const warns: string[] = [];
+    const waker = createChannelAwareWaker({
+      fallback: fallbackPort(),
+      summarize: async () => "Terminé.",
+      post: async () => {
+        throw new Error("canal disparu");
+      },
+      logger: {
+        info: () => undefined,
+        warn: (message) => warns.push(message),
+      },
+    });
+    waker.send(CANAL, RAPPORT, { origin: "job_report", jobId: "job-12", fichiers: ["f-1"] });
+    await unTour();
+    expect(warns.filter((m) => m === "chat.job_report.failed")).toHaveLength(1);
   });
 });

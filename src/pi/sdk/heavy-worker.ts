@@ -53,6 +53,7 @@ import {
 } from "./execution-tools.js";
 import { getSharedModelRuntime, liveValue, resolveSdkModel, sdkModelSupportsImages } from "./model-runtime.js";
 import { createListFilesTool } from "./list-files-tool.js";
+import { createImageTools, type ImageToolPort } from "./image-tools.js";
 import { createImageBudgetExtensionFactory } from "./image-budget-extension.js";
 import { createReadFileTool } from "./read-file-tool.js";
 import { createEphemeralSession } from "./session-factory.js";
@@ -123,6 +124,20 @@ export interface SdkHeavyWorkerConfig {
    */
   secrets?: SecretDirectoryPort;
   /**
+   * Port de génération d'IMAGES (serveur ComfyUI). Présent ⇒ le worker porte
+   * `generer_image` et `consulter_workflow`.
+   *
+   * ⚠️ POURQUOI LE LOURD LES PORTE (lot 23) : une génération prend jusqu'à
+   * `images.timeoutMs` (180 s par défaut), alors qu'un run de CANAL est borné
+   * (`CHAT_REPLY_TIMEOUT_MS`, 90 s) ⇒ l'image y était avortée en plein vol, SANS
+   * message. Le job, lui, n'a pas de borne de tour : c'est donc sa place.
+   *
+   * ⚠️ La conversation est FORCÉE à celle du léger (la session du job est
+   * éphémère) : l'image copiée va dans le store du CANAL, et son identifiant
+   * remonte jusqu'au rapport (`HeavyRunResult.fichiers`) qui la publie.
+   */
+  images?: HeavyImagePorts;
+  /**
    * Fabrique de session éphémère. Injectable pour les TESTS (défaut :
    * `createEphemeralSession`). Permet d'exercer le câblage des outils d'action
    * sans modèle ni réseau.
@@ -145,6 +160,21 @@ export interface SdkHeavyWorkerConfig {
 }
 
 /**
+ * Ports d'IMAGE du worker lourd : MÊMES ports que le léger, à ceci près que la
+ * conversation n'est pas lue du contexte de l'outil — elle est FORCÉE (la
+ * session du job est ÉPHÉMÈRE), et la capacité VISION est celle du modèle
+ * RÉSOLU du job (lue à l'exécution, jamais supposée).
+ *
+ * ⚠️ `onImage`/`onImageFinalPrompt` sont ABSENTS à dessein : il n'y a aucune
+ * interface web à alimenter pour un job. Le LIVRABLE remonte par
+ * `HeavyRunResult.fichiers` (copie dans le store de la conversation), sinon
+ * l'image serait générée puis perdue.
+ */
+export type HeavyImagePorts = Omit<
+  ImageToolPort,
+  "sessionId" | "logger" | "consultation" | "onImage" | "onImageFinalPrompt" | "receivesImages"
+>;
+
 /**
  * Vision du MODÈLE RÉSOLU pour un job — lue à l'exécution (`model.input`), jamais
  * supposée. Passée aux outils de transfert pour qu'ils disent la vérité quand une
@@ -169,13 +199,19 @@ export interface HeavyActionToolVision {
 export function buildHeavyActionTools(
   config: Pick<
     SdkHeavyWorkerConfig,
-    "execution" | "screenshots" | "secrets" | "transfers" | "files"
+    "execution" | "screenshots" | "secrets" | "transfers" | "files" | "images"
   > & {
     /** Journal d'AUDIT des lectures de fichiers (facultatif : métadonnées seules). */
     logger?: PiLogger;
   },
   lightSessionId: string | undefined,
   vision?: HeavyActionToolVision,
+  /**
+   * Receveur des FICHIERS produits (image copiée dans le store de la conversation).
+   * ⚠️ Sans lui, le worker générerait une image que le rapport ne transporterait
+   * jamais : elle serait invisible pour la personne qui a demandé la tâche.
+   */
+  onFileProduced?: (fileId: string) => void,
 ): ToolDefinition[] {
   const options: ActionToolOptions = {
     approvalSessionId: () => lightSessionId,
@@ -218,6 +254,39 @@ export function buildHeavyActionTools(
         logger: config.logger,
         ...(vision !== undefined
           ? { imagesSupported: vision.imagesSupported, modelLabel: vision.modelLabel }
+          : {}),
+      }),
+    );
+  }
+  // ⚠️ IMAGES : la génération est une ACTION LONGUE (jusqu'à 180 s), donc sans
+  // place dans un tour de canal mais parfaitement à sa place dans un job. La
+  // conversation est FORCÉE à celle du léger : l'image est copiée dans le store
+  // du CANAL, et l'identifiant produit REMONTE au rapport par `onFileProduced`.
+  // ⚠️ Aucun outil à approbation n'est ajouté ici : `generer_image` n'en exige
+  // aucune (`APPROVAL_REQUIRED_TOOLS`, `src/llm/tool-policy.ts`).
+  if (config.images) {
+    const archive = config.images.archive;
+    tools.push(
+      ...createImageTools({
+        ...config.images,
+        sessionId: () => lightSessionId,
+        // ⚠️ Journal du worker : c'est là que le COMPTEUR de consultations
+        // (`comfy.workflow.consulted`) est exposé en production. Sans lui, une
+        // génération de job serait silencieuse côté observabilité.
+        ...(config.logger ? { logger: config.logger } : {}),
+        ...(vision !== undefined
+          ? { receivesImages: () => vision.imagesSupported }
+          : {}),
+        ...(archive
+          ? {
+              archive: {
+                archive: (input) => {
+                  const outcome = archive.archive(input);
+                  if (outcome.ok) onFileProduced?.(outcome.file.id);
+                  return outcome;
+                },
+              },
+            }
           : {}),
       }),
     );
@@ -441,17 +510,31 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     }
 
     let ephemeral;
+    // ⚠️ FICHIERS produits par CE job : ils sont rendus au service de délégation
+    // (`HeavyRunResult.fichiers`), journalisés avec le résultat, puis publiés
+    // dans le canal par le réveil. Sans ce fil, `generer_image` produirait une
+    // image dans le store que personne ne verrait jamais.
+    const fichiers: string[] = [];
+    const onFileProduced = (fileId: string): void => {
+      if (fileId === "" || fichiers.includes(fileId)) return;
+      fichiers.push(fileId);
+    };
     try {
       // Outils d'ACTION rattachés à la CONVERSATION PROPRIÉTAIRE (jamais à
       // l'ID éphémère) : la validation humaine remonte donc dans la bonne
       // conversation.
-      const actionTools = buildHeavyActionTools(config, request.lightSessionId, {
-        modelLabel: modelReference,
-        // ⚠️ Capacité lue sur le modèle RÉSOLU (donc sur `models.json` à cet
-        // instant) : un modèle texte seul ne reçoit jamais d'image, même si le
-        // réglage changeait en cours de route.
-        imagesSupported: sdkModelSupportsImages(model),
-      });
+      const actionTools = buildHeavyActionTools(
+        config,
+        request.lightSessionId,
+        {
+          modelLabel: modelReference,
+          // ⚠️ Capacité lue sur le modèle RÉSOLU (donc sur `models.json` à cet
+          // instant) : un modèle texte seul ne reçoit jamais d'image, même si le
+          // réglage changeait en cours de route.
+          imagesSupported: sdkModelSupportsImages(model),
+        },
+        onFileProduced,
+      );
       ephemeral = await (config.createSession ?? createEphemeralSession)({
         cwd: config.cwd,
         agentDir: config.agentDir,
@@ -647,8 +730,16 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     state.finished = true;
     session.dispose();
 
+    // ⚠️ Les fichiers DÉJÀ produits sortent quel que soit le statut final : un
+    // job interrompu après une génération réussie ne doit pas perdre l'image
+    // (le serveur ComfyUI l'a bien produite).
+    const produits = fichiers.length > 0 ? { fichiers: [...fichiers] } : {};
     if (isCancelled()) {
-      return { status: "cancelled", ...(partial ? { partial } : {}) };
+      return {
+        status: "cancelled",
+        ...(partial ? { partial } : {}),
+        ...produits,
+      };
     }
     if (totalTimedOut) {
       return {
@@ -656,6 +747,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         error: "timeout",
         ...(partial ? { partial } : {}),
         ...(usage ? { usage } : {}),
+        ...produits,
       };
     }
     if (idleTimedOut) {
@@ -664,6 +756,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         error: "idle_timeout",
         ...(partial ? { partial } : {}),
         ...(usage ? { usage } : {}),
+        ...produits,
       };
     }
     if (sawError) {
@@ -672,12 +765,14 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         error: errorMessage ?? "erreur du worker lourd",
         ...(partial ? { partial } : {}),
         ...(usage ? { usage } : {}),
+        ...produits,
       };
     }
     return {
       status: "completed",
       text: finalText,
       ...(usage ? { usage } : {}),
+      ...produits,
     };
   }
 }

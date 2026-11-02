@@ -92,6 +92,21 @@ export function isAckTool(tool: string): boolean {
 }
 
 /**
+ * Déclencheurs d'accusé PARMI les outils RÉELLEMENT autorisés d'un run, dans
+ * l'ordre canonique de `ACK_TOOLS` (dédupliqué).
+ *
+ * ⚠️ POURQUOI CETTE FONCTION EXISTE : un run DISTANT n'a pas les mêmes outils
+ * qu'un run local (`run_command` y est structurellement absent : aucune commande
+ * n'est validable depuis un canal). Une consigne qui cite un outil absent décrit
+ * une action que le modèle ne peut pas lancer — au mieux inutile, au pire elle
+ * l'incite à invoquer une capacité qu'il n'a pas.
+ */
+export function ackToolsOf(tools: readonly string[]): string[] {
+  const autorises = new Set(tools);
+  return ACK_TOOLS.filter((tool) => autorises.has(tool));
+}
+
+/**
  * Texte de repli pour un outil, à la `index`-ième position de la rotation.
  * `undefined` si l'outil n'est pas un déclencheur (⇒ aucun accusé, jamais un
  * accusé « au cas où »).
@@ -155,20 +170,58 @@ export function firstAckToolCall(content: unknown): string | undefined {
  * l'outil sans rien dire et c'est le repli qui parle (mécanique, répétitif — le
  * défaut signalé par l'utilisateur).
  */
-export const ACK_RULE = [
-  "## Accusé de réception d'une action longue (règle STRICTE, non optionnelle)",
-  "",
-  "Quand tu t'apprêtes à lancer une action LONGUE (`delegate`, `generer_image`,",
-  "`run_command`), ta réponse COMMENCE par UNE phrase courte d'accusé de",
-  "réception, puis tu appelles l'outil DANS LE MÊME TOUR.",
-  `- Une SEULE phrase, moins de ${ACK_RULE_MAX_CHARS} caractères, en français, ton humain`,
-  "  et VARIÉ : « Je m'en occupe. », « Deux secondes. », « Je lance ça. »,",
-  "  « C'est parti. », « Je m'y mets. »",
-  "- Ne répète pas la même formule d'un tour à l'autre : VARIE.",
-  "- Annonce l'INTENTION, jamais la promesse d'un résultat : « je m'en occupe » est",
-  "  sûr ; « je te génère ça tout de suite » est un engagement qui peut échouer.",
-  "- Cette phrase est MUETTE à l'oral (la synthèse vocale ne la lit pas) et ce n'est",
-  "  PAS la réponse : le fond vient ensuite, dans la même bulle.",
-  "- Si tu appelles l'outil sans rien écrire, un accusé de repli est utilisé à ta",
-  "  place : c'est correct, mais moins naturel.",
-].join("\n");
+/**
+ * Consigne de l'accusé, pour une LISTE D'OUTILS DONNÉE (source unique du texte).
+ *
+ * ⚠️ Le host LOCAL l'appelle avec `ACK_TOOLS` (tous ses déclencheurs) ; un run
+ * DISTANT l'appelle avec SON allowlist (`run.tools()`), qui ne contient pas
+ * `run_command`. La règle ne cite donc que des outils que le modèle possède
+ * réellement — c'est la seule façon d'avoir UNE consigne et ZÉRO mensonge.
+ *
+ * ⚠️ AUCUN déclencheur disponible ⇒ consigne INVERSE (pas d'accusé du tout) :
+ * sans action longue, une ligne de statut serait du bruit pur.
+ */
+export function ackRuleFor(tools: readonly string[] = ACK_TOOLS): string {
+  const cites = ackToolsOf(tools);
+  if (cites.length === 0) {
+    return [
+      "## Accusé de réception d'une action longue (règle STRICTE, non optionnelle)",
+      "",
+      "Aucune action longue n'est disponible dans cet échange : tu ne délègues rien,",
+      "tu ne génères aucune image et tu ne lances aucune commande.",
+      "- N'écris donc AUCUN préambule du type « je m'en occupe » ou « deux secondes » :",
+      "  ta réponse est directement le fond.",
+      "- Annonce l'INTENTION, jamais la promesse d'un résultat : « je m'en occupe » est",
+      "  sûr ; « je te génère ça tout de suite » est un engagement qui peut échouer.",
+      "- Une SEULE réponse, en français, sans formule de politesse creuse.",
+    ].join("\n");
+  }
+
+  const liste = cites.map((tool) => `\`${tool}\``).join(", ");
+  return [
+    "## Accusé de réception d'une action longue (règle STRICTE, non optionnelle)",
+    "",
+    `Quand tu t'apprêtes à lancer une action LONGUE (${liste}), ta réponse COMMENCE`,
+    "par UNE phrase courte d'accusé de réception, puis tu appelles l'outil DANS LE MÊME TOUR.",
+    `- Une SEULE phrase, moins de ${ACK_RULE_MAX_CHARS} caractères, en français, ton humain`,
+    "  et VARIÉ : « Je m'en occupe. », « Deux secondes. », « Je lance ça. »,",
+    "  « C'est parti. », « Je m'y mets. »",
+    "- Ne répète pas la même formule d'un tour à l'autre : VARIE.",
+    "- Annonce l'INTENTION, jamais la promesse d'un résultat : « je m'en occupe » est",
+    "  sûr ; « je te génère ça tout de suite » est un engagement qui peut échouer.",
+    "- Cette phrase est MUETTE à l'oral (la synthèse vocale ne la lit pas) et ce n'est",
+    "  PAS la réponse : le fond vient ensuite, dans la même bulle.",
+    "- Un AUTRE outil (lecture, recherche, fichiers) ne prend JAMAIS d'accusé : la",
+    "  règle ne vaut que pour les outils cités ci-dessus.",
+    "- Si tu appelles l'outil sans rien écrire, un accusé de repli est utilisé à ta",
+    "  place : c'est correct, mais moins naturel.",
+  ].join("\n");
+}
+
+/**
+ * Consigne HISTORIQUE du host LOCAL : exactement `ackRuleFor(ACK_TOOLS)`.
+ *
+ * ⚠️ C'est une VALEUR DÉRIVÉE, pas une seconde constante : la source du texte est
+ * `ackRuleFor`, ce qui interdit aux deux variantes (locale et distante) de diverger.
+ */
+export const ACK_RULE = ackRuleFor(ACK_TOOLS);

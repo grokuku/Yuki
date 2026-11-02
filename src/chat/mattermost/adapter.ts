@@ -23,11 +23,13 @@
 import { MattermostClient, type MattermostClientLogger } from "./client.js";
 import { MattermostSocket, type MattermostSocketLogger } from "./ws.js";
 import {
+  authorNameOf,
   conversationIdOfChannel,
   ingestPost,
   postToRemoteMessage,
   type IngestContext,
 } from "../mirror/ingest.js";
+import { AUTHOR_NAME_BATCH_SIZE } from "../mirror/names.js";
 import { MM_MAX_UPLOAD_BYTES, type MattermostPost, type MattermostUser } from "./types.js";
 import type { FileImageContent, FilesPort } from "../../files/types.js";
 import {
@@ -90,6 +92,11 @@ export type MattermostReplyGenerator = (input: {
    * françaises, transmises au rédacteur pour qu'il réponde en connaissance de cause.
    */
   notes?: readonly string[];
+  /**
+   * Publication INTERMÉDIAIRE (accusé, image produite, échec) — déjà ancrée au fil.
+   * ⚠️ Absente ⇒ un seul message à la fin (comportement antérieur).
+   */
+  publier?: (message: { text: string; fichiers?: readonly string[] }) => Promise<void>;
 }) => Promise<string | { text: string; fichiers?: readonly string[] }>;
 
 /** Ce dont l'adaptateur a besoin du reste du programme (aucun secret en dur). */
@@ -168,6 +175,14 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   private derniereAvertissement: string | undefined;
   private identite: { id: string; username?: string; displayName?: string } | null = null;
   /**
+   * Identifiants d'auteurs DÉJÀ demandés à `POST /users/ids` (succès comme « inconnu »).
+   *
+   * ⚠️ C'est le CACHE de résolution : un second message du même auteur ne doit produire
+   * AUCUN appel réseau. Un lot en ÉCHEC est retiré de cet ensemble (on réessaiera), un
+   * utilisateur supprimé y reste (le serveur a répondu, il n'existe plus).
+   */
+  private readonly nomsDemandes = new Set<string>();
+  /**
    * BORNE des réponses simultanées (⚠️ elle BLOQUE, elle ne compte pas).
    *
    * Au-delà de `REPLY_MAX_CONCURRENT` rédactions en cours, les messages attendent dans
@@ -225,6 +240,14 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     if (!this.client.isConfigured()) return;
     await this.sync.start();
     await this.socket.start();
+    // ⚠️ RATTRAPAGE DES NOMS (indépendant de la connexion) : les messages ingérés AVANT
+    // la résolution portent l'identifiant de leur auteur. On complète l'annuaire une
+    // fois, en arrière-plan, sans jamais retarder le temps réel ni réécrire le miroir.
+    void this.rattraperNoms().catch((error: unknown) => {
+      this.deps.logger?.warn("chat.mattermost.names_catchup_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   async disconnect(): Promise<void> {
@@ -446,6 +469,9 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       ...(typeof me.username === "string" && me.username !== "" ? { username: me.username } : {}),
       ...(display !== "" ? { displayName: display } : {}),
     };
+    // ⚠️ Le compte de YUKI entre aussi dans l'annuaire : sans cela, les messages qu'elle
+    // publie elle-même s'affichaient avec l'identifiant brut du bot dans le fil.
+    this.deps.store.rememberPlatformAuthorNames("mattermost", [[me.id, authorNameOf(me, me.id)]]);
     return this.identite;
   }
 
@@ -499,30 +525,16 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     const sinceMs = Math.max(1, Date.parse(since) || 1);
     const page = await this.client.channelPostsSince(remoteChannelId, sinceMs);
     const conversationId = conversationIdOfChannel(remoteChannelId);
-    const base = this.ingestContext(conversationId);
-    const known = base.users ?? new Map<string, MattermostUser>();
-    const wanted = [
-      ...new Set(
-        page.posts
-          .map((post) => post.user_id)
-          .filter((id): id is string => typeof id === "string" && id !== "" && !known.has(id)),
-      ),
-    ];
-    let users = known;
-    if (wanted.length > 0) {
-      try {
-        const resolved = await this.client.usersByIds(wanted);
-        const map = new Map(known);
-        for (const user of resolved) map.set(user.id, user);
-        users = map;
-      } catch (error) {
-        // Les noms manqueront : les messages s'afficheront avec leur identifiant.
-        this.deps.logger?.warn("chat.mattermost.users_unresolved", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    const ctx: IngestContext = { ...base, users };
+    // ⚠️ La résolution précède la CONVERSION : sans elle, `authorOf` écrit l'identifiant
+    // brut dans `nom` (c'était exactement le défaut de production : un auteur affiché
+    // « g68qpnp8pykm89pj3eqn1khhe »).
+    const users = await this.resoudreAuteurs(
+      page.posts.map((post) => post.user_id),
+      conversationId,
+    );
+    // ⚠️ Le contexte est construit APRÈS la résolution : il porte donc les noms fraîchement
+    // appris (`ingestContext` lit l'annuaire).
+    const ctx: IngestContext = { ...this.ingestContext(conversationId), users };
     return {
       messages: page.posts.map((post) => postToRemoteMessage(post, ctx)),
       // ⚠️ `hasNext` d'une lecture `since` signifie « la borne de 1 000 du serveur a
@@ -547,7 +559,83 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       platform: "mattermost",
       conversationId,
       ...(bot.id !== undefined ? { botUserId: bot.id } : {}),
+      // ⚠️ Les noms DÉJÀ connus entrent dans l'ingestion : un message dont l'auteur a
+      // été résolu une fois est écrit AVEC son nom, sans appel réseau.
+      names: this.deps.store.authorNamesOf(conversationId),
     };
+  }
+
+  /**
+   * Résout des identifiants d'auteurs en LOTS BORNÉS, avec cache (`nomsDemandes`).
+   *
+   * ⚠️ Trois règles, chacune pour une raison mesurable :
+   *  1. un identifiant dont l'ANNUAIRE connaît le nom ne provoque AUCUN appel (sinon un
+   *     canal actif ferait un `POST /users/ids` par message) ;
+   *  2. les identifiants sont groupés par `AUTHOR_NAME_BATCH_SIZE` (50) : au-delà, on
+   *     fragmente la requête et on s'expose au `429` de l'instance ;
+   *  3. un lot en ÉCHEC ne condamne pas l'auteur : il est retiré du cache pour être
+   *     redemandé (un utilisateur SUPPRIMÉ, lui, reste inconnu : le serveur a répondu).
+   *
+   * Rend les utilisateurs résolus (l'appelant s'en sert pour `estBot`, que l'annuaire
+   * ne porte pas).
+   */
+  private async resoudreAuteurs(
+    ids: readonly (string | undefined)[],
+    conversationId: string,
+  ): Promise<Map<string, MattermostUser>> {
+    const out = new Map<string, MattermostUser>();
+    const wanted: string[] = [];
+    for (const id of new Set(ids)) {
+      if (typeof id !== "string" || id === "" || id === "inconnu") continue;
+      if (this.nomsDemandes.has(id)) continue;
+      // Nom DÉJÀ connu (annuaire persistant) : aucun appel réseau.
+      if (this.deps.store.authorName(conversationId, id) !== undefined) continue;
+      wanted.push(id);
+    }
+    for (let index = 0; index < wanted.length; index += AUTHOR_NAME_BATCH_SIZE) {
+      const lot = wanted.slice(index, index + AUTHOR_NAME_BATCH_SIZE);
+      // ⚠️ Marqués AVANT l'appel : deux événements simultanés du même auteur ne
+      // produisent pas deux requêtes identiques.
+      for (const id of lot) this.nomsDemandes.add(id);
+      try {
+        const users = await this.client.usersByIds(lot);
+        for (const user of users) out.set(user.id, user);
+        // Les noms sont PERSISTÉS (annuaire) : les entrées déjà écrites dans le miroir
+        // deviennent lisibles à la LECTURE, sans réécrire le `.jsonl`.
+        this.deps.store.rememberAuthorNames(
+          conversationId,
+          users.map((user) => [user.id, authorNameOf(user, user.id)] as const),
+        );
+      } catch (error) {
+        // Les noms manqueront POUR L'INSTANT : le message s'affichera avec la forme
+        // courte de l'identifiant, et le nom sera redemandé au prochain message.
+        for (const id of lot) this.nomsDemandes.delete(id);
+        this.deps.logger?.warn("chat.mattermost.users_unresolved", {
+          conversation: conversationId,
+          demandes: lot.length,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * RATTRAPE les noms des auteurs DÉJÀ présents dans le miroir (messages anciens).
+   *
+   * ⚠️ Borné par canal (`AUTHOR_NAME_BATCH_SIZE` identifiants) : un canal de 20 000
+   * messages ne déclenche pas 400 requêtes au démarrage. Les auteurs non traités cette
+   * fois seront résolus dès qu'ils écriront (chemin temps réel) ou au prochain
+   * démarrage — et leur affichage reste lisible entre-temps (forme courte).
+   */
+  private async rattraperNoms(): Promise<void> {
+    if (!this.client.isConfigured()) return;
+    for (const [conversationId, record] of Object.entries(this.deps.store.records())) {
+      if (record.platform !== "mattermost") continue;
+      const ids = this.deps.store.authorIdsWithoutName(conversationId, AUTHOR_NAME_BATCH_SIZE);
+      if (ids.length === 0) continue;
+      await this.resoudreAuteurs(ids, conversationId);
+    }
   }
 
   /** Événement temps réel : ingestion (idempotente) puis diffusion. */
@@ -561,7 +649,13 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     // ⚠️ On n'ingère QUE les canaux suivis : l'événement d'un canal non miroité est
     // ignoré (sinon le miroir se remplirait de canaux que personne n'a choisis).
     if (!this.deps.store.record(conversationId)) return;
-    const ctx = this.ingestContext(conversationId);
+    // ⚠️ CAUSE DU DÉFAUT DE PRODUCTION (2026-11-02) : ce chemin n'avait AUCUNE table
+    // d'utilisateurs — le message était donc ingéré avec l'identifiant de son auteur dans
+    // `nom`, et l'interface affichait « g68pqnp8pykm89pj3eqn1khhe ». La résolution est
+    // faite ICI, AVANT l'écriture, et elle est attendue (un appel groupé au premier
+    // message d'un auteur, ZÉRO ensuite grâce à l'annuaire).
+    const users = await this.resoudreAuteurs([post.user_id], conversationId);
+    const ctx: IngestContext = { ...this.ingestContext(conversationId), users };
     const outcome = ingestPost(this.deps.store, post, ctx);
     if (outcome !== "insere" || kind !== "posted") return;
     const message = this.deps.store.message(conversationId, post.id);
@@ -678,6 +772,32 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     if (!this.deps.generateReply) return;
     try {
       const transcript = this.deps.store.messages(message.conversationId);
+      // ⚠️ COMMENT répondre : réglage PAR CANAL, persisté. `fil` (défaut) repart de la
+      // RACINE du fil — jamais du message lui-même, sinon Mattermost créerait un fil
+      // imbriqué ; `nouveau` n'envoie AUCUN `root_id`, même sur un message de fil.
+      // ⚠️ Calculé AVANT le run : les messages INTERMÉDIAIRES (accusé, image) doivent
+      // être ancrés au MÊME message que la réponse.
+      const record = this.deps.store.record(message.conversationId);
+      const rootId = rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
+      // ⚠️ ANCRAGE INTER-RUNS : les messages intermédiaires citent TOUJOURS l'auteur du
+      // message traité, même quand `quoteAuthor` vaut `non` — ce sont des STATUTS
+      // rattachés à une demande, pas des réponses (`root_id` seul ne suffit pas : deux
+      // runs simultanés peuvent partager le même fil).
+      let publies = 0;
+      const publier = async (intermediaire: {
+        text: string;
+        fichiers?: readonly string[];
+      }): Promise<void> => {
+        const texte = composeReplyText({ text: intermediaire.text, message, quoteAuthor: "oui" });
+        const fichiers = intermediaire.fichiers ?? [];
+        await this.send(message.conversationId, {
+          kind: "texte",
+          text: texte,
+          ...(rootId !== undefined ? { threadRootId: rootId } : {}),
+          ...(fichiers.length > 0 ? { fichiers } : {}),
+        });
+        publies += 1;
+      };
       // ⚠️ PIÈCES JOINTES du message déclencheur : préparées ICI, à la demande (jamais
       // pendant la synchronisation), par la politique de vision partagée. Ce qui n'a pas
       // pu être joint est transmis au rédacteur (`notes`) : jamais un silence.
@@ -690,21 +810,22 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         message,
         ...(joints.images.length > 0 ? { images: joints.images } : {}),
         ...(joints.notes.length > 0 ? { notes: joints.notes } : {}),
+        publier,
       });
-      // ⚠️ Le générateur peut rendre des FICHIERS en plus du texte (image GÉNÉRÉE par le
-      // run : `generer_image`). Ils partent dans le MÊME post, par `file_ids` — sans
-      // cela l'image resterait dans le store et n'arriverait jamais dans le canal.
+      // ⚠️ Le générateur peut encore rendre des FICHIERS (ceux qu'il n'a pas déjà
+      // postés) : ils partent dans le MÊME post, par `file_ids`.
       const reponse = typeof brut === "string" ? { text: brut } : brut;
       const text = reponse.text.trim();
       if (text === "") {
+        // ⚠️ Un tour qui n'a fait qu'accuser et produire une image n'a RIEN de plus à
+        // dire : ce n'est pas une erreur, c'est un silence voulu.
+        if (publies > 0) {
+          this.derniereErreur = undefined;
+          return;
+        }
         this.derniereErreur = "Le générateur n'a produit aucun texte : rien n'a été publié.";
         return;
       }
-      // ⚠️ COMMENT répondre : réglage PAR CANAL, persisté. `fil` (défaut) repart de la
-      // RACINE du fil — jamais du message lui-même, sinon Mattermost créerait un fil
-      // imbriqué ; `nouveau` n'envoie AUCUN `root_id`, même sur un message de fil.
-      const record = this.deps.store.record(message.conversationId);
-      const rootId = rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
       const texte = composeReplyText({
         text,
         message,

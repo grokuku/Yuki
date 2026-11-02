@@ -16,6 +16,7 @@
  */
 
 import type { RemoteMessage } from "../types.js";
+import { auteurAffichable } from "../mirror/names.js";
 
 /** Entrée `auto` : une seule question, réponse `oui`/`non`. */
 export const CHAT_JUDGE_SYSTEM_PROMPT = [
@@ -39,12 +40,22 @@ export const CHAT_REPLY_SYSTEM_PROMPT = [
   "Tu réponds au DERNIER message, en tenant compte du fil fourni.",
   "Si tu ne sais pas, tu le dis simplement. Tu ne prétends jamais avoir fait une action",
   "que tu n'as pas faite. Tu ne révèles aucun secret, aucun jeton, aucun chemin interne.",
-  "Tu n'écris qu'un seul message, sans balise ni bloc de code si ce n'est pas nécessaire.",
+  "Tu n'écris qu'une seule RÉPONSE DE FOND ; une ligne d'accusé de réception avant une",
+  "action longue est permise (elle part séparément, dans le canal). Pas de balise ni de",
+  "bloc de code si ce n'est pas nécessaire.",
   "",
   "Depuis ce canal, certaines actions sont IMPOSSIBLES : exécuter une commande sur une",
   "machine, transférer un fichier, demander un secret. Elles exigent une validation",
   "humaine qui s'affiche uniquement dans l'interface web et ne peut pas être donnée",
   "ici. Si on te les demande, tu le dis clairement au lieu d'attendre ou d'inventer.",
+  "",
+  "⚠️ Tu peux PUBLIER un message dans un AUTRE canal suivi avec l'outil",
+  "`publier_dans_canal` (canaux de la liste Configuration → Discussions). Si cet outil",
+  "n'est pas dans ta liste, ou si le canal demandé n'est pas suivi, tu réponds",
+  "simplement que tu ne peux pas le faire. Tu n'invoques JAMAIS une validation",
+  "humaine, une approbation ou une limitation technique imaginaire pour une action",
+  "que tu n'as pas : une capacité absente se dit en une phrase, sans justification",
+  "inventée.",
   "",
   "Si tu confies une tâche à un worker (outil de délégation), le résultat te sera",
   "renvoyé DANS CE CANAL plus tard, quand la tâche sera réellement terminée : tu ne",
@@ -78,10 +89,9 @@ export const CHAT_REPLY_TRANSCRIPT_MAX_CHARS = 6_000;
 /** Nombre de messages récents transmis au juge (contexte minimal). */
 export const CHAT_JUDGE_CONTEXT_MESSAGES = 4;
 
-/** Auteur affichable d'un message (jamais vide). */
+/** Auteur affichable d'un message (jamais vide, jamais un identifiant brut). */
 function authorLabel(message: RemoteMessage): string {
-  const nom = message.author.nom.trim();
-  return nom !== "" ? nom : message.author.id;
+  return auteurAffichable(message.author);
 }
 
 /** Extrait le texte d'un message pour un prompt (mention de suppression comprise). */

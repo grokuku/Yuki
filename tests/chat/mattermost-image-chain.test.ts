@@ -1,23 +1,32 @@
 /**
- * CHAÎNE COMPLÈTE — un message Mattermost qui demande une image ⇒ `generer_image`
- * ⇒ fichier de la conversation ⇒ `POST /files` + `POST /posts` avec `file_ids`.
+ * CHAÎNE COMPLÈTE — un message Mattermost qui demande une image ⇒ la POLITIQUE du
+ * run distant ⇒ `generer_image` ⇒ ⚠️ REFUS INLINE (lot 23) ⇒ la génération doit
+ * passer par `delegate`, et son fichier arrive par le rapport de job.
  *
- * ⚠️ CE QUE CE FICHIER PROUVE, MAILLON PAR MAILLON, contre un SERVEUR FIXTURE RÉEL
- * (HTTP + WebSocket) et un MODÈLE SIMULÉ (session éphémère injectée, qui appelle
- * réellement l'outil reçu) :
+ * ⚠️ CE QUI A CHANGÉ (2026-11-02) : `generer_image` peut prendre jusqu'à
+ * `images.timeoutMs` (180 s, `src/config/schema.ts:899-905`) alors qu'un tour de
+ * CANAL est borné à `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts:72`).
+ * L'appel inline était donc coupé EN PLEIN VOL, sans message. Le contrat est
+ * désormais : l'outil REFUSE avec un message actionnable
+ * (`LONG_RUNNING_TOOLS`, `src/llm/tool-policy.ts`), et la génération se fait dans
+ * un JOB dont le fichier est publié dans le canal
+ * (`tests/chat/job-report-files.test.ts` pour cette moitié-là).
+ *
+ * ⚠️ CE QUE CE FICHIER PROUVE ENCORE, MAILLON PAR MAILLON, contre un SERVEUR
+ * FIXTURE RÉEL (HTTP + WebSocket) et un MODÈLE SIMULÉ (session éphémère injectée,
+ * qui appelle réellement l'outil reçu) :
  *  ① le message déclencheur entre par le temps réel et le canal est en mode `tout` ;
  *  ② la POLITIQUE du run distant est calculée selon l'origine (`chat.mode` +
  *     `chat.remoteAgents`) et arrive à la session — aujourd'hui la réponse distante
  *     était écrite avec `tools: []`, donc SANS aucun outil ;
- *  ③ `generer_image` s'exécute vraiment (générateur ComfyUI simulé, stores RÉELS) et
- *     l'image est COPIÉE dans le store des fichiers, rattachée à la CONVERSATION DU
- *     CANAL (et non à la session éphémère du run) ;
- *  ④ le texte ET l'image partent dans le MÊME post : `POST /files` (multipart), puis
- *     `POST /posts` avec des `file_ids` NON VIDES.
+ *  ③ `generer_image` REÇOIT l'appel et le REFUSE, en nommant la borne (180 s) et
+ *     l'outil à utiliser (`delegate`) : le générateur ComfyUI n'est PAS appelé, et
+ *     aucun fichier n'est produit dans le canal par ce chemin ;
+ *  ④ la réponse du tour part quand même (elle ne dépend pas de la génération), et
+ *     elle ne porte AUCUN `file_ids` : rien n'est promis à moitié.
  *
  * ⚠️ Échoue sur le code d'origine : `createSdkPromptWriter` y passait `tools: []` en
- * dur (aucun outil ⇒ aucun appel de `generer_image`), `createGeneratedImageFiles` et
- * `POST /files` n'existaient pas, et `generateReply` ne pouvait pas rendre de fichier.
+ * dur (aucun outil ⇒ aucun appel de `generer_image`).
  */
 
 import { createServer, type Server } from "node:http";
@@ -31,6 +40,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 
 import { MattermostChatAdapter } from "../../src/chat/mattermost/adapter.js";
 import { createRemoteReplyGenerator, CHAT_REPLY_SYSTEM_PROMPT } from "../../src/chat/index.js";
+import { createChannelPostPort } from "../../src/chat/index.js";
 import { conversationIdOfChannel } from "../../src/chat/mirror/ingest.js";
 import { ChatMirrorStore } from "../../src/chat/mirror/store.js";
 import type { ComfyImageView, GeneratedImage } from "../../src/comfy/index.js";
@@ -214,6 +224,8 @@ interface Received {
   noms: string[];
   /** Scène réellement passée à `generer_image` (aucune si l'outil manque). */
   scene?: string;
+  /** Texte RENDU par l'outil à l'appel (refus inline, lot 23). */
+  refus?: string;
 }
 
 type AnyTool = {
@@ -248,7 +260,14 @@ function simulatedModel(received: Received, scene: string) {
           // ⚠️ Contexte de la SESSION ÉPHÉMÈRE (identifiant jetable) : c'est bien la
           // conversation FORCÉE qui doit gagner, pas cet identifiant.
           const ctx = { sessionManager: { getSessionId: () => "session-ephemere-du-run" } };
-          await generer.execute("appel-1", { scene }, undefined, undefined, ctx);
+          const resultat = (await generer.execute(
+            "appel-1",
+            { scene },
+            undefined,
+            undefined,
+            ctx,
+          )) as { content: Array<{ type: string; text?: string }> };
+          received.refus = resultat.content.map((bloc) => bloc.text ?? "").join("");
           for (const listener of listeners) {
             listener({
               type: "message_end",
@@ -268,7 +287,7 @@ function simulatedModel(received: Received, scene: string) {
 }
 
 describe("chaîne complète — Mattermost → generer_image → fichier → file_ids", () => {
-  it("un message qui demande une image produit un post AVEC `file_ids`", async () => {
+  it("un message qui demande une image : l'appel inline est REFUSÉ, la réponse part sans fichier", async () => {
     const fixture = await startFixture();
     const depot = makeDepot();
     const store = ChatMirrorStore.open({
@@ -300,6 +319,16 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
           chatMode: "mattermost",
           remoteAgents: false,
           lightOptions: () => ({ imagesEnabled: true, filesEnabled: true }),
+          // ⚠️ PUBLICATION INTER-CANAL : ce câblage de test est un mini-composition root,
+          // il doit donc FOURNIR le port comme le vrai — sinon la parité
+          // politique ↔ définitions (assertion plus bas) deviendrait fausse.
+          channels: createChannelPostPort({
+            plateforme: "mattermost",
+            canaux: () => [
+              { conversationId: CONVERSATION, titre: "Général", plateforme: "mattermost" },
+            ],
+            envoyer: async () => undefined,
+          }),
           images: {
             // Générateur ComfyUI SIMULÉ : il écrit dans le VRAI store d'images et
             // rend exactement ce que rend le générateur réel.
@@ -375,29 +404,34 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
       message: "génère-moi un chat roux sur un clavier",
       create_at: 1_700_000_000_000,
     });
-    await waitFor(() => fixture.created.length > 0, "le post publié par Yuki");
+    // ⚠️ UN SEUL post attendu : la réponse du tour. L'image, elle, n'est plus
+    // générée inline (refus, lot 23) : elle viendra d'un JOB.
+    await waitFor(() => fixture.created.length >= 1, "le post de la réponse");
 
-    // ② La politique du run distant est bien arrivée à la session.
+    // ② La politique du run distant est bien arrivée à la session : `generer_image`
+    //    est OFFERT (le modèle peut le demander et reçoit une explication utile).
     expect(received.tools).toEqual([...REMOTE_SAFE_TOOLS]);
     expect(received.noms.sort()).toEqual([...REMOTE_SAFE_TOOLS].sort());
-    // ③ L'outil a réellement été appelé, avec la scène demandée.
+    expect(received.tools).toContain("generer_image");
+
+    // ③ L'outil a réellement été appelé, avec la scène demandée… et il a REFUSÉ.
     expect(received.scene).toBe("un chat roux sur un clavier");
-    expect(imagesVues).toHaveLength(1);
+    expect(received.refus).toContain("180 s");
+    // ⚠️ Ce run est sous `chat.remoteAgents = desactive` : `delegate` n'existe pas,
+    // donc le refus ne l'ordonne pas — il dit que la délégation est désactivée.
+    expect(received.refus).toContain("chat.remoteAgents");
+    expect(received.refus).not.toContain("Relance-la avec `delegate`");
+    // ⚠️ Le générateur n'a PAS tourné : aucune vue d'image, aucun fichier produit,
+    // aucun téléversement. Le refus arrive AVANT le travail, pas en plein vol.
+    expect(imagesVues).toHaveLength(0);
+    expect(depot.service.listForSession(CONVERSATION)).toHaveLength(0);
+    expect(fixture.uploads).toHaveLength(0);
 
-    // ③ L'image est un FICHIER de la CONVERSATION DU CANAL (pas de la session
-    //    éphémère du run) : elle est donc téléversable et re-listable.
-    const fichiers = depot.service.listForSession(CONVERSATION);
-    expect(fichiers).toHaveLength(1);
-    const fichier = fichiers[0]!;
-    expect(depot.files.get(fichier.id)).not.toBeNull();
-    expect(depot.service.listForSession("session-ephemere-du-run")).toHaveLength(0);
-
-    // ④ `POST /files` (multipart) PUIS `POST /posts` avec des `file_ids` non vides.
-    expect(fixture.uploads).toHaveLength(1);
-    expect(fixture.uploads[0]).toContain("multipart/form-data; boundary=");
-    expect(fixture.uploads[0]).toContain(CHANNEL);
-    const post = fixture.created[0]!;
-    expect(post.file_ids).toEqual(["fichier-1"]);
-    expect(String(post.message)).toContain("Voilà l'image demandée.");
+    // ④ La réponse du tour part quand même, SANS `file_ids` (rien n'est promis à
+    //    moitié : l'image viendra du job, par le rapport).
+    const postReponse = fixture.created[0]!;
+    expect(postReponse.file_ids).toBeUndefined();
+    expect(String(postReponse.message)).toContain("Voilà l'image demandée.");
+    expect(fixture.created).toHaveLength(1);
   });
 });

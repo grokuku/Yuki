@@ -40,6 +40,15 @@ export interface IngestContext {
   botUserId?: string;
   /** Auteurs déjà résolus (`users/ids`), pour les noms affichables. */
   users?: ReadonlyMap<string, MattermostUser>;
+  /**
+   * Noms DÉJÀ résolus (`AuthorDirectory`, `src/chat/mirror/names.ts`).
+   *
+   * ⚠️ Deuxième source, et pas un doublon de `users` : l'annuaire survit aux
+   * redémarrages, alors qu'une table `users` ne vit que le temps d'une page de posts.
+   * C'est lui qui fait qu'un message temps réel arrive DÉJÀ nommé quand l'auteur a été
+   * vu une fois, sans le moindre appel réseau.
+   */
+  names?: ReadonlyMap<string, string>;
 }
 
 /** Résultat d'une ingestion (jamais un booléen nu : on veut savoir QUOI). */
@@ -62,10 +71,15 @@ export function authorNameOf(user: MattermostUser | undefined, fallbackId: strin
 function authorOf(post: MattermostPost, ctx: IngestContext): RemoteAuthor {
   const id = typeof post.user_id === "string" && post.user_id !== "" ? post.user_id : "inconnu";
   const user = ctx.users?.get(id);
+  const connu = user === undefined ? ctx.names?.get(id) : undefined;
   return {
     id,
-    nom: authorNameOf(user, id),
-    estBot: ctx.botUserId !== undefined && id === ctx.botUserId,
+    nom: connu !== undefined && connu.trim() !== "" ? connu.trim() : authorNameOf(user, id),
+    // ⚠️ D2 DE L'AUDIT : `is_bot` de l'API n'était PAS lu — le compte d'un AUTRE robot
+    // passait donc pour un humain et pouvait déclencher une réponse. Les deux critères
+    // comptent : l'identité de Yuki (`botUserId`) ET le drapeau de la plateforme.
+    estBot:
+      (ctx.botUserId !== undefined && id === ctx.botUserId) || user?.is_bot === true,
   };
 }
 
@@ -150,6 +164,14 @@ export function applyMessageToMirror(
   conversationId: string,
   message: RemoteMessage,
 ): IngestOutcome {
+  // ⚠️ ANNUAIRE : tout message qui porte un nom RÉSOLU l'apprend au miroir, AVANT le
+  // contrôle d'idempotence. C'est ce qui rattrape les entrées anciennes : elles portent
+  // l'identifiant, l'annuaire connaît le nom, et la LECTURE fait la jonction
+  // (`store.messages`) sans réécrire une ligne du `.jsonl`.
+  const nomAuteur = message.author.nom;
+  if (typeof nomAuteur === "string" && nomAuteur.trim() !== "" && nomAuteur !== message.author.id) {
+    store.rememberAuthorNames(conversationId, [[message.author.id, nomAuteur]]);
+  }
   const known = store.has(conversationId, message.remoteId);
   if (!known) return store.upsert(message);
   // Message DÉJÀ connu : seule une ÉDITION ou une SUPPRESSION justifie une écriture

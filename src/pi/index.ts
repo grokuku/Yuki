@@ -87,7 +87,11 @@ export { sdkVisionImageResizer } from "./sdk/vision-resize.js";
 export { createSdkRecapWriter } from "./sdk/recap-writer.js";
 export type { SdkRecapWriterConfig } from "./sdk/recap-writer.js";
 export { createSdkPromptWriter } from "./sdk/prompt-writer.js";
-export type { SdkPromptWriter, SdkPromptWriterConfig } from "./sdk/prompt-writer.js";
+export type {
+  SdkPromptWriter,
+  SdkPromptWriterConfig,
+  SdkToolEvent,
+} from "./sdk/prompt-writer.js";
 
 // Libraire de Pi-Web : rédacteur de synthèse d'archivage (session éphémère
 // isolée). Le port renvoyé (`LibrarianSynthesizer`) est PUR.
@@ -113,3 +117,11 @@ export type {
   RemoteRunToolPorts,
   RemoteRunVision,
 } from "./sdk/remote-run-tools.js";
+// Publication inter-canal (décision A) : ce sont des TYPES seulement — la façade ne
+// laisse passer aucun symbole du SDK.
+export type {
+  ChannelPostChannel,
+  ChannelPostOutcome,
+  ChannelPostPort,
+  ChannelPostRequest,
+} from "./sdk/channel-post-tool.js";

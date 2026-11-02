@@ -51,6 +51,16 @@ export interface JobResult {
   partial?: string;
   usage?: JobUsage;
   truncated?: boolean;
+  /**
+   * FICHIERS produits par le job (identifiants du store des fichiers de la
+   * conversation propriétaire).
+   *
+   * ⚠️ Sans eux, le rapport d'un job qui a généré une image annoncerait un
+   * résultat que PERSONNE ne peut voir : le texte part, l'image reste dans le
+   * store. Ils sont donc journalisés AVEC le résultat et transportés jusqu'au
+   * réveil (`LightWaker.send`), qui les joint au message publié.
+   */
+  fichiers?: readonly string[];
 }
 
 export interface JobErrorInfo {

@@ -110,6 +110,17 @@ export type LibrarianToolName =
 export type ImageToolName = "generer_image" | "consulter_workflow";
 
 /**
+ * Outil custom de PUBLICATION dans un AUTRE canal (`publier_dans_canal`).
+ *
+ * ⚠️ DÉCISION A (utilisateur, 2026-11-02) : l'outil existe, mais il est RESTREINT côté
+ * serveur aux canaux SUIVIS (`chat-mirror.json`) et à la plateforme du run. Il ne touche
+ * à aucune machine — publier un message n'exige donc AUCUNE approbation, ce qui le rend
+ * utilisable dans un canal distant (contrairement à `run_command` :
+ * `APPROVAL_REQUIRED_TOOLS`).
+ */
+export type ChannelPostToolName = "publier_dans_canal";
+
+/**
  * Outil custom d'ENVOI de fichier par Yuki (`envoyer_fichier`). Il ne touche à
  * aucune machine : il rend CLIQUABLE et TÉLÉCHARGEABLE un fichier DÉJÀ présent
  * dans la conversation (fichier reçu, ou fichier déposé pour l'utilisateur).
@@ -157,6 +168,7 @@ export type CustomToolName =
   | ConversationArchiveToolName
   | LibrarianToolName
   | FilesToolName
+  | ChannelPostToolName
   | FileTransferToolName
   | FileListToolName
   | FileReadToolName
@@ -294,6 +306,13 @@ export const LIBRARIAN_TOOLS: readonly LibrarianToolName[] = [
 export const IMAGE_TOOLS: readonly ImageToolName[] = ["generer_image", "consulter_workflow"];
 
 /**
+ * Outils de publication inter-canal (décision A). ⚠️ Restreints aux canaux SUIVIS par
+ * le port (`src/chat/reply/channel-post.ts`) : la liste déclarée ici ne dit que
+ * « l'outil a le droit d'être construit », jamais « n'importe quel canal ».
+ */
+export const CHANNEL_POST_TOOLS: readonly ChannelPostToolName[] = ["publier_dans_canal"];
+
+/**
  * Outil de CAPTURE de page web via Libry (`capture_libraire`). Exposé quand le
  * libraire est configuré ET que `librarian.screenshot` est `on` au démarrage
  * (même contrainte que l'URL de base).
@@ -365,8 +384,10 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // jointe du message (`prepareImages`). Lui ouvrir la lecture du store
     // n'ajouterait aucune capacité, seulement une surface d'accès aux octets.
     fileRead: [],
-    // IMAGES : la génération est une action de CONVERSATION (Yuki décrit la
-    // scène, voit l'image, la juge) — elle reste donc au léger, jamais au worker.
+    // IMAGES : le léger garde la génération pour le mode LOCAL (il y bloque, ce
+    // qui est acceptable). ⚠️ En CANAL, un tour borné ne peut pas la contenir :
+    // c'est le job qui la porte (`heavy.images`, lot 23), et un appel inline y est
+    // REFUSÉ par l'outil lui-même (`LONG_RUNNING_TOOLS`).
     images: IMAGE_TOOLS,
     canDelegate: true,
   },
@@ -397,10 +418,22 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     fileTransfer: FILE_TRANSFER_TOOLS,
     // ⚠️ Le worker lourd LISTE (avec identifiants) pour pouvoir DÉPOSER.
     fileList: FILE_LIST_TOOLS,
-    // ⚠️ … et LIT le contenu : sans `lire_fichier`, il savait qu'une image
+    // ⚠️ Le worker lourd LIT le contenu : sans `lire_fichier`, il savait qu'une image
     // existait sans pouvoir la voir (l'utilisateur restait dans la boucle).
     fileRead: FILE_READ_TOOLS,
-    images: [],
+    // ⚠️ IMAGES : le lourd PORTE la génération (lot 23).
+    //
+    // Pourquoi pas le léger ? Une génération prend jusqu'à `images.timeoutMs`
+    // (180 s, `src/config/schema.ts`) alors qu'un run de CANAL est borné par
+    // `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts`) : l'image était
+    // avortée en plein vol, sans message. Le job, lui, n'a pas de borne de tour.
+    // Le léger GARDE ses outils d'image (`light.images` ci-dessus) pour le mode
+    // LOCAL, où il bloque sans conséquence.
+    //
+    // ⚠️ Aucun outil à approbation n'entre ici : `generer_image` et
+    // `consulter_workflow` n'en exigent aucune (`APPROVAL_REQUIRED_TOOLS` plus
+    // bas) — un test le verrouille.
+    images: IMAGE_TOOLS,
     canDelegate: false,
   },
 };
@@ -600,7 +633,8 @@ export type ChatOriginMode = "local" | "mattermost" | "discord";
  *
  * ⚠️ Liste FERMÉE, volontairement courte :
  *  - `generer_image` + `consulter_workflow` (génération d'image) ;
- *  - `lister_fichiers` + `lire_fichier` (analyse d'une image jointe).
+ *  - `lister_fichiers` + `lire_fichier` (analyse d'une image jointe) ;
+ *  - `publier_dans_canal` (publier un message dans un AUTRE canal SUIVI — décision A).
  *
  * Rien d'autre : AUCUN builtin de lecture (`read`, `ls`, `grep`, `find`), aucune
  * délégation (`delegate`, `job_status`, `cancel_job`, `steer_job`), aucun
@@ -612,6 +646,10 @@ export const REMOTE_SAFE_TOOLS: readonly CustomToolName[] = [
   ...IMAGE_TOOLS,
   ...FILE_LIST_TOOLS,
   ...FILE_READ_TOOLS,
+  // ⚠️ PUBLICATION inter-canal : un MESSAGE, pas une action sur une machine ⇒ aucune
+  // approbation requise, et donc disponible même sous `chat.remoteAgents = desactive`
+  // (décision A, 2026-11-02). Le périmètre (canaux suivis) est tenu par le PORT.
+  ...CHANNEL_POST_TOOLS,
 ];
 
 export interface ChatToolPolicyOptions {
@@ -640,8 +678,8 @@ export interface ChatToolPolicyOptions {
  *  - `demander_secret` : ouvre une fenêtre de saisie DANS la conversation web
  *    (`src/pi/sdk/execution-tools.ts`, `createSecretRequestTool`).
  *
- * ⚠️ Les quatre outils de `REMOTE_SAFE_TOOLS` (`generer_image`,
- * `consulter_workflow`, `lister_fichiers`, `lire_fichier`) n'y figurent pas et
+ * ⚠️ Les outils de `REMOTE_SAFE_TOOLS` (`generer_image`, `consulter_workflow`,
+ * `lister_fichiers`, `lire_fichier`, `publier_dans_canal`) n'y figurent pas et
  * n'en dépendent pas : ils ne demandent AUCUNE validation. Un test le vérifie
  * (`tests/llm/tool-policy.test.ts`) pour qu'un ajout futur ne passe pas
  * inaperçu.
@@ -657,6 +695,118 @@ export const APPROVAL_REQUIRED_TOOLS: readonly string[] = [
 /** Sous-ensemble d'une allowlist qui exige une approbation (jamais silencieux). */
 export function approvalRequiredTools(tools: readonly string[]): string[] {
   return tools.filter((tool) => APPROVAL_REQUIRED_TOOLS.includes(tool));
+}
+
+/**
+ * OUTIL LONG : borne DÉCLARÉE > 30 s ET résultat = un LIVRABLE (pas une entrée
+ * du raisonnement).
+ *
+ * ⚠️ POURQUOI CETTE LISTE EXISTE (2026-11-02) : un run de CANAL est borné par
+ * `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts:72`) alors qu'une
+ * génération d'image peut prendre 180 s (`images.timeoutMs`,
+ * `src/config/schema.ts:899-905`) : l'appel était coupé EN PLEIN VOL, sans
+ * message, et la personne du canal restait sans réponse. Un outil long appelé
+ * INLINE dans un canal rend donc maintenant un refus ACTIONNABLE ; il doit être
+ * lancé par `delegate`, qui n'a pas de borne de tour.
+ *
+ * ⚠️ Le mode LOCAL n'est PAS concerné : il n'a pas de borne de tour (il bloque),
+ * et le bloquer davantage serait une régression. Le refus ne s'applique qu'aux
+ * runs de canal (`src/pi/sdk/long-tool-guard.ts`).
+ *
+ * ⚠️ Chaque borne est MESURÉE, pas devinée : la source est citée à côté de la
+ * valeur. Une entrée ajoutée ici sans sa source serait invérifiable.
+ */
+export interface LongRunningTool {
+  readonly name: CustomToolName;
+  /** Borne déclarée de l'action, en secondes. */
+  readonly seconds: number;
+  /** `fichier:ligne` de la borne mesurée (jamais une estimation). */
+  readonly source: string;
+}
+
+export const LONG_RUNNING_TOOLS: readonly LongRunningTool[] = [
+  // 180 s — `images.timeoutMs` (défaut 180_000, max 600_000).
+  {
+    name: "generer_image",
+    seconds: 180,
+    source: "src/config/schema.ts:899-905 (images.timeoutMs = 180_000)",
+  },
+  // 60 s — délai d'une commande déléguée.
+  {
+    name: "run_command",
+    seconds: 60,
+    source: "src/agents/execution.ts:479 (DEFAULT_COMMAND_TIMEOUT_MS = 60_000)",
+  },
+  // 120 s — délai INACTIF d'un transfert de fichier.
+  {
+    name: "recuperer_fichier",
+    seconds: 120,
+    source: "src/config/schema.ts:829-836 (files.agentTimeoutMs = 120_000)",
+  },
+  {
+    name: "deposer_fichier",
+    seconds: 120,
+    source: "src/config/schema.ts:829-836 (files.agentTimeoutMs = 120_000)",
+  },
+  // 30 s — capture d'écran d'une machine appairée.
+  {
+    name: "capturer_ecran",
+    seconds: 30,
+    source: "src/agents/execution.ts:482 (DEFAULT_SCREENSHOT_TIMEOUT_MS = 30_000)",
+  },
+  // 30 s — capture d'une page web par Libry (Chromium headless côté libraire).
+  // ⚠️ `recherche_libraire` partage la même borne (`DEFAULT_LIBRARIAN_SEARCH_TIMEOUT_MS`,
+  // `src/librarian/client.ts:49`) mais son résultat est une ENTRÉE du raisonnement,
+  // pas un livrable : il n'est donc PAS déclaré long (la règle de délégation
+  // dit elle-même qu'une recherche libraire se fait soi-même).
+  {
+    name: "capture_libraire",
+    seconds: 30,
+    source: "src/librarian/client.ts:51 (DEFAULT_LIBRARIAN_SCREENSHOT_TIMEOUT_MS = 30_000)",
+  },
+];
+
+/** Fiche de l'outil long nommé (`undefined` s'il n'est pas déclaré long). */
+export function longRunningTool(name: string): LongRunningTool | undefined {
+  return LONG_RUNNING_TOOLS.find((tool) => tool.name === name);
+}
+
+/**
+ * Texte de REFUS d'un appel INLINE d'un outil long dans un run de CANAL.
+ *
+ * ⚠️ Actionnable, jamais une plainte : il dit ce que l'action coûte, pourquoi le
+ * tour ne peut pas la contenir, et QUELLE outil utiliser à la place. `undefined`
+ * si l'outil n'est pas long (l'appel passe).
+ *
+ * ⚠️ `delegationAvailable: false` (défaut de `chat.remoteAgents`, c'est-à-dire
+ * `desactive`) change la CONCLUSION : `delegate` n'existe pas dans ce canal, donc
+ * ordonner de le lancer serait un mensonge. Le refus dit alors que l'action n'est
+ * pas réalisable ici — et pourquoi.
+ */
+export function longToolInlineRefusal(
+  name: string,
+  options: { delegationAvailable?: boolean } = {},
+): string | undefined {
+  const info = longRunningTool(name);
+  if (!info) return undefined;
+  const avant =
+    `« ${info.name} » peut prendre jusqu'à ${info.seconds} s. Un tour dans un CANAL ` +
+    "est borné : l'action serait interrompue en plein vol, sans résultat ni message " +
+    "(c'est déjà arrivé). Rien n'a été lancé.";
+  if (options.delegationAvailable ?? true) {
+    return (
+      `${avant} Relance-la avec \`delegate\` : le job d'arrière-plan n'a pas de ` +
+      "borne de tour, et son résultat — le fichier produit y compris — sera publié " +
+      "dans ce canal."
+    );
+  }
+  return (
+    `${avant} ⚠️ La délégation est DÉSACTIVÉE dans ce canal (réglage ` +
+    "`chat.remoteAgents`, valeur `actives` requise) : `delegate` n'existe donc pas " +
+    "ici. Dis-le à la personne et propose-lui de faire l'action depuis l'interface " +
+    "web, ou de faire activer la délégation — n'attends pas et ne prétends pas " +
+    "l'avoir faite."
+  );
 }
 
 /**

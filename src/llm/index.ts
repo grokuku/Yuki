@@ -55,6 +55,12 @@ export {
   SECRET_REQUEST_TOOLS,
   APPROVAL_REQUIRED_TOOLS,
   approvalRequiredTools,
+  // ⚠️ OUTILS LONGS (lot 23) : la liste MESURÉE et le refus actionnable sont
+  // publics — c'est ce qui permet de les verrouiller par test et de les exposer
+  // au run de canal (`src/pi/sdk/long-tool-guard.ts`).
+  LONG_RUNNING_TOOLS,
+  longRunningTool,
+  longToolInlineRefusal,
   REMOTE_SAFE_TOOLS,
   toolAllowlist,
   toolAllowlistForChat,
@@ -72,6 +78,7 @@ export type {
   FileListToolName,
   HeritageToolName,
   LibrarianToolName,
+  LongRunningTool,
   SecretToolName,
   ToolAllowlistOptions,
   ToolPolicyEntry,

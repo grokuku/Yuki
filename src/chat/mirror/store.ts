@@ -53,7 +53,8 @@ import {
   type RemoteMessage,
   type RemotePlatform,
 } from "../types.js";
-import type { ChatMirror } from "../mirror.js";
+import { mirrorPlatformOf, type ChatMirror } from "../mirror.js";
+import { AuthorDirectory } from "./names.js";
 
 export const CHAT_MIRROR_SCHEMA_VERSION = 1;
 
@@ -166,6 +167,15 @@ export interface ChatMirrorStoreOptions {
   logger?: ChatMirrorLogger;
   maxMessagesPerConversation?: number;
   maxMessageBytes?: number;
+  /**
+   * Chemin de l'ANNUAIRE des noms d'auteurs.
+   *
+   * ⚠️ Fichier SÉPARÉ à dessein : le miroir est append-only, une entrée déjà écrite
+   * porte l'identifiant brut de son auteur. L'annuaire est consulté à la LECTURE
+   * (`messages`, `message`), ce qui rend les entrées anciennes lisibles sans réécrire
+   * une seule ligne du `.jsonl`. Défaut : `<messagesDir>/author-names.json`.
+   */
+  authorNamesPath?: string;
 }
 
 export class ChatMirrorStore implements ChatMirror {
@@ -179,6 +189,8 @@ export class ChatMirrorStore implements ChatMirror {
   private readonly loaded = new Map<string, Map<string, RemoteMessage>>();
   /** Clés d'idempotence déjà vues : `(platform, conversationId, remoteMessageId)`. */
   private readonly seen = new Map<string, Set<string>>();
+  /** Annuaire `(plateforme, id) → nom`, consulté à la LECTURE (jamais réécrit ici). */
+  private readonly authorNames: AuthorDirectory;
   /** Observateurs (le transport les prévient pour rafraîchir la liste / le fil). */
   private readonly listeners = new Set<(conversationId?: string) => void>();
 
@@ -188,6 +200,10 @@ export class ChatMirrorStore implements ChatMirror {
     this.logger = options.logger;
     this.maxMessages = options.maxMessagesPerConversation ?? MAX_MESSAGES_PER_CONVERSATION;
     this.maxMessageBytes = options.maxMessageBytes ?? MAX_MESSAGE_BYTES;
+    this.authorNames = new AuthorDirectory({
+      path: options.authorNamesPath ?? join(this.messagesDir, "author-names.json"),
+      ...(options.logger ? { logger: options.logger } : {}),
+    });
     this.index = this.loadIndex();
     this.loadMessages();
   }
@@ -222,6 +238,7 @@ export class ChatMirrorStore implements ChatMirror {
 
   /** Messages d'une conversation, en ordre CHRONOLOGIQUE. */
   messages(conversationId: string): readonly RemoteMessage[] {
+    const platform = mirrorPlatformOf(conversationId);
     const rows = [...(this.loaded.get(conversationId)?.values() ?? [])];
     // Tri stable par instant d'envoi : deux messages du même instant gardent leur
     // ordre d'arrivée (jamais un ordre aléatoire d'un chargement à l'autre).
@@ -233,12 +250,112 @@ export class ChatMirrorStore implements ChatMirror {
         if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
         return a.position - b.position;
       })
-      .map((entry) => entry.message);
+      .map((entry) => this.avecNomConnu(platform, entry.message));
   }
 
   /** Un message précis, ou `undefined` (accès O(1), sans copier tout le fil). */
   message(conversationId: string, remoteId: string): RemoteMessage | undefined {
-    return this.loaded.get(conversationId)?.get(remoteId);
+    const found = this.loaded.get(conversationId)?.get(remoteId);
+    if (!found) return undefined;
+    return this.avecNomConnu(mirrorPlatformOf(conversationId), found);
+  }
+
+  // ─── Annuaire des noms d'auteurs ─────────────────────────────────────────
+
+  /** Nom connu d'un auteur (annuaire), ou `undefined`. */
+  authorName(conversationId: string, authorId: string): string | undefined {
+    const platform = mirrorPlatformOf(conversationId);
+    if (platform === null) return undefined;
+    return this.authorNames.name(platform, authorId);
+  }
+
+  /**
+   * Tous les noms connus pour la plateforme d'une conversation (copie défensive).
+   *
+   * ⚠️ Sert à l'INGESTION : un message arrivé en temps réel est écrit avec son nom quand
+   * l'annuaire le connaît déjà, sans le moindre appel réseau.
+   */
+  authorNamesOf(conversationId: string): Map<string, string> {
+    const platform = mirrorPlatformOf(conversationId);
+    if (platform === null) return new Map();
+    return this.authorNames.namesOf(platform);
+  }
+
+  /**
+   * Apprend des noms d'auteurs pour la plateforme d'une conversation.
+   *
+   * ⚠️ Rend le nombre de noms NOUVEAUX : c'est ce qui décide d'une notification (un
+   * nom appris change l'affichage d'entrées DÉJÀ présentes dans le fil).
+   */
+  rememberAuthorNames(
+    conversationId: string,
+    entries: Iterable<readonly [string, string]>,
+  ): number {
+    const platform = mirrorPlatformOf(conversationId);
+    if (platform === null) return 0;
+    const changes = this.authorNames.remember(platform, entries);
+    if (changes > 0) this.notifyChange(conversationId);
+    return changes;
+  }
+
+  /**
+   * Apprend des noms pour une PLATEFORME, sans conversation (identité du bot, par ex.).
+   */
+  rememberPlatformAuthorNames(
+    platform: RemotePlatform,
+    entries: Iterable<readonly [string, string]>,
+  ): number {
+    return this.authorNames.remember(platform, entries);
+  }
+
+  /**
+   * Identifiants d'auteurs d'une conversation dont le nom n'est TOUJOURS PAS connu.
+   *
+   * ⚠️ Sert au RATTRAPAGE : les messages ingérés avant la résolution portent
+   * l'identifiant dans `nom` (`authorOf`). On ne redemande jamais un identifiant déjà
+   * présent dans l'annuaire. `limit` borne la passe (jamais 20 000 identifiants d'un
+   * coup sur un canal ancien).
+   */
+  authorIdsWithoutName(conversationId: string, limit = 200): string[] {
+    const platform = mirrorPlatformOf(conversationId);
+    if (platform === null) return [];
+    const wanted = new Set<string>();
+    for (const message of this.loaded.get(conversationId)?.values() ?? []) {
+      const id = message.author.id;
+      if (typeof id !== "string" || id === "" || id === "inconnu") continue;
+      const nom = typeof message.author.nom === "string" ? message.author.nom.trim() : "";
+      // Nom DÉJÀ résolu (≠ identifiant) : rien à demander.
+      if (nom !== "" && nom !== id) continue;
+      if (this.authorNames.name(platform, id) !== undefined) continue;
+      wanted.add(id);
+      if (wanted.size >= Math.max(1, Math.trunc(limit))) break;
+    }
+    return [...wanted];
+  }
+
+  /** Taille de l'annuaire des noms (diagnostic). */
+  authorNamesCount(): number {
+    return this.authorNames.size;
+  }
+
+  /**
+   * Applique le nom CONNU à un message dont l'auteur n'est pas résolu.
+   *
+   * ⚠️ Le marqueur d'échec est `author.nom === author.id` (voir `authorOf`, `ingest.ts`) :
+   * un nom différent n'est JAMAIS écrasé, même si l'annuaire dit autre chose (le nom
+   * écrit dans le message vient de la plateforme au moment du post).
+   */
+  private avecNomConnu(
+    platform: RemotePlatform | null,
+    message: RemoteMessage,
+  ): RemoteMessage {
+    if (platform === null) return message;
+    const id = message.author.id;
+    const nom = typeof message.author.nom === "string" ? message.author.nom.trim() : "";
+    if (nom !== "" && nom !== id) return message;
+    const connu = this.authorNames.name(platform, id);
+    if (connu === undefined) return message;
+    return { ...message, author: { ...message.author, nom: connu } };
   }
 
   /** Enregistrement d'index d'une conversation, ou `undefined`. */

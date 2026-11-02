@@ -24,7 +24,7 @@
 Les **implémentations** viennent d'une fabrique unique (`buildRemoteRunTools`,
 `src/pi/sdk/remote-run-tools.ts`) qui instancie les **mêmes** fabriques que le host local.
 
-### `chat.remoteAgents = desactive` (**défaut**) — jeu FERMÉ, 4 outils
+### `chat.remoteAgents = desactive` (**défaut**) — jeu FERMÉ, 5 outils
 
 | Outil | Ce qu'il fait |
 | --- | --- |
@@ -32,9 +32,37 @@ Les **implémentations** viennent d'une fabrique unique (`buildRemoteRunTools`,
 | `consulter_workflow` | consignes d'écriture du workflow retenu (lecture locale) |
 | `lister_fichiers` | liste les pièces jointes du canal (identifiant, nom, taille) |
 | `lire_fichier` | lit une pièce jointe (image vue par le modèle, texte borné) |
+| `publier_dans_canal` | publie un message dans un **AUTRE canal SUIVI** (voir § 2 bis) |
 
 Rien d'autre : **ni builtin** (`read`, `ls`, `grep`, `find`), ni délégation, ni transfert,
 ni commande, ni secret, ni annuaire, ni archive, ni libraire, ni envoi de fichier.
+
+### 2 bis. `publier_dans_canal` — publication inter-canal (2026-11-02)
+
+**Ce que Yuki disait, et qui était faux** : « ça demande une validation humaine qui ne
+s'affiche que dans l'interface web ». Deux erreurs : aucune approbation n'est en jeu, et
+l'outil **n'existait pas**. La phrase du prompt qui l'induisait en erreur
+(`CHAT_REPLY_SYSTEM_PROMPT`, « elles exigent une validation humaine… ») ne parlait que des
+actions de **machine** ; elle est désormais suivie d'une consigne explicite de **vérité**
+(« une capacité absente se dit en une phrase, sans justification inventée »).
+
+**Décision utilisateur (2026-11-02) : option A** — l'outil existe, restreint aux canaux
+**SUIVIS**.
+
+| Règle | Où elle est tenue |
+| --- | --- |
+| canal désigné par **nom lisible** (résolu côté serveur) ou par identifiant | `resoudreCanal`, `src/chat/reply/channel-post.ts` |
+| **canaux suivis uniquement** (miroir `chat-mirror.json`) — sinon refus + « ajoutez-le dans Configuration → Discussions » | `createChannelPostPort` |
+| **même plateforme que le run** (`dc-…` depuis Mattermost ⇒ refus) | `createChannelPostPort` |
+| **aucune approbation** (c'est un message, pas une commande) ⇒ `REMOTE_SAFE_TOOLS`, construit même sous `desactive` | `src/llm/tool-policy.ts`, `src/pi/sdk/remote-run-tools.ts` |
+| **bornes réutilisées** (`fitMattermostContent`, `fitDiscordContent`) — troncature **dite** au modèle | `src/chat/reply/channel-post.ts` |
+| **fil** (`root_id`) facultatif ; un fil inconnu est refusé | `filConnu` (câblage `src/index.ts`) |
+| **anti-boucle** : le message publié revient par le WebSocket, il est ingéré (`estBot`/`assistant`) et ne déclenche **aucune** réponse | `tests/chat/channel-post-tool.test.ts` (bout en bout) |
+
+⚠️ **Risque assumé de l'option A** : sous ce périmètre, Yuki peut publier dans **n'importe
+lequel** des canaux suivis (jusqu'à 50). Ce n'est pas « n'importe où » : un canal non suivi
+est refusé côté serveur, et le modèle reçoit la liste réelle. Une restriction par canal
+(`publier: non`) serait la suite naturelle, sur le modèle de `replyMode`.
 
 ### `chat.remoteAgents = actives` — politique locale **complète** (hors approbation)
 
@@ -127,6 +155,10 @@ nouveauté de ce lot — mais un canal distant y a désormais accès.
    contre un câblage forgé à la main ;
 3. la consigne du rédacteur le dit au modèle (`CHAT_REPLY_SYSTEM_PROMPT`).
 
+⚠️ **Publier n'est PAS dans cette liste** : `publier_dans_canal` n'exige aucune validation
+humaine (aucune machine n'est touchée). C'est vérifié par un test de garde
+(`REMOTE_SAFE_TOOLS` ∩ `APPROVAL_REQUIRED_TOOLS` = ∅).
+
 ⚠️ **Limite assumée** : une délégation peut rencontrer une action à valider sur une
 machine ; la demande s'affiche alors dans l'interface **web**, et le canal n'en reçoit
 que le texte du modèle. Le **relais d'approbations** (lot suivant) est le vrai remède.
@@ -147,6 +179,7 @@ configuré, service de délégation indisponible).
 | **chaque** outil de `actives` est construit (nommés un par un) ; `desactive` ⇒ tous absents ; aucun outil à approbation ; `lister_secrets` noms seuls (sentinelle) ; délégation rattachée au canal ; `job_status` cloisonné ; `envoyer_fichier` signalé pour publication ; journal **sans** les builtins | `tests/pi/remote-run-tools.test.ts` |
 | le rapport d'un job est **publié dans le canal**, le local passe au host à l'identique, phrase honnête si le résumé échoue, échec de publication journalisé, texte borné | `tests/chat/channel-waker.test.ts` |
 | politique par mode, aucun outil à approbation, mode local inchangé | `tests/llm/tool-policy.test.ts`, `tests/llm/tool-policy-chat.test.ts` |
+| `publier_dans_canal` : canal suivi (nom/identifiant), refus hors miroir et hors plateforme, bornes/troncature, fil, anti-boucle de bout en bout | `tests/chat/channel-post-tool.test.ts` |
 | chaîne complète jusqu'aux `file_ids` (serveur Mattermost fixture) | `tests/chat/mattermost-image-chain.test.ts` |
 | frontière : la façade `src/pi` reste sans type du SDK | `tests/pi/boundary.test.ts` |
 

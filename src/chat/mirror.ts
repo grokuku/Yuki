@@ -11,6 +11,7 @@
  */
 
 import type { TranscriptEntry } from "../pi/types.js";
+import { auteurAffichable } from "./mirror/names.js";
 import {
   REMOTE_PLATFORMS,
   type RemoteConversation,
@@ -104,7 +105,11 @@ export function remoteMessageToTranscript(message: RemoteMessage): TranscriptEnt
     text,
     ...(timestamp !== undefined ? { timestamp } : {}),
     id: message.remoteId,
-    author: { ...message.author },
+    // ⚠️ NOM AFFICHABLE, jamais un identifiant BRUT : quand la résolution a échoué
+    // (utilisateur supprimé, réseau), `author.nom` vaut l'identifiant lui-même. On rend
+    // alors une forme courte et lisible (`membre inconnu (g68pqn…)`) plutôt que 26
+    // caractères au milieu d'une phrase.
+    author: { ...message.author, nom: auteurAffichable(message.author) },
     ...(message.threadRootId !== undefined ? { threadRootId: message.threadRootId } : {}),
   };
 }

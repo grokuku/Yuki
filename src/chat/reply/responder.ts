@@ -21,6 +21,7 @@
 
 import type { ChatQuoteAuthor, ChatReplyMode, ChatReplyStyle, RemoteMessage, RemotePlatform } from "../types.js";
 import { isOwnMessage } from "../mirror/ingest.js";
+import { auteurAffichable } from "../mirror/names.js";
 
 /**
  * Mode de réponse par DÉFAUT quand le canal n'en a pas choisi.
@@ -140,7 +141,7 @@ export function quotePrefixOf(
 ): string {
   const maxLines = Math.max(1, options.maxLines ?? REPLY_QUOTE_MAX_LINES);
   const maxChars = Math.max(1, options.maxChars ?? REPLY_QUOTE_MAX_CHARS);
-  const auteur = (message.author.nom ?? "").trim() || message.author.id;
+  const auteur = auteurAffichable(message.author);
   const lignes = stripControlChars(message.text ?? "")
     .replace(/\r\n?/g, "\n")
     .split("\n")

@@ -65,6 +65,17 @@ function mergeResult(
   if (patch.partial !== undefined) merged.partial = patch.partial;
   if (patch.usage !== undefined) merged.usage = patch.usage;
   if (patch.truncated !== undefined) merged.truncated = patch.truncated;
+  if (patch.fichiers !== undefined) {
+    // ⚠️ UNION des identifiants, ordre de première apparition : un job peut
+    // journaliser ses fichiers en fin d'exécution, et le rejeu du journal ne doit
+    // jamais faire disparaître un fichier déjà produit (déduplication stricte,
+    // jamais de doublon dans le rapport publié).
+    const fichiers: string[] = [];
+    for (const id of [...(base?.fichiers ?? []), ...patch.fichiers]) {
+      if (!fichiers.includes(id)) fichiers.push(id);
+    }
+    merged.fichiers = fichiers;
+  }
   return merged;
 }
 

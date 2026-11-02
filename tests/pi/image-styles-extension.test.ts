@@ -141,15 +141,22 @@ describe("extension enregistrée dans la chaîne de prompt", () => {
 });
 
 describe("allowlist d'outils", () => {
-  it("n'expose les outils d'image que si le câblage les active, et seulement au léger", () => {
+  it("n'expose les outils d'image que si le câblage les active, et aux DEUX rôles qui en ont besoin", () => {
     expect(toolAllowlist("light")).not.toContain("generer_image");
     expect(toolAllowlist("light", { imagesEnabled: true })).toContain("generer_image");
-    expect(toolAllowlist("heavy", { imagesEnabled: true })).not.toContain("generer_image");
+    // ⚠️ LOT 23 : le LOURD porte désormais la génération. Une image prend jusqu'à
+    // `images.timeoutMs` (180 s) alors qu'un run de CANAL est borné à 90 s
+    // (`CHAT_REPLY_TIMEOUT_MS`) : c'est le job qui doit la produire, et il ne
+    // l'obtient que si la politique la lui donne.
+    expect(toolAllowlist("heavy", { imagesEnabled: true })).toContain("generer_image");
+    // ⚠️ À défaut d'activation, RIEN n'est exposé (ni au léger ni au lourd).
+    expect(toolAllowlist("heavy")).not.toContain("generer_image");
     // ⚠️ `consulter_workflow` (GRATUIT, instantané) accompagne la génération :
     // il n'a de sens que là où `generer_image` est exposé.
     expect(toolAllowlist("light")).not.toContain("consulter_workflow");
     expect(toolAllowlist("light", { imagesEnabled: true })).toContain("consulter_workflow");
-    expect(toolAllowlist("heavy", { imagesEnabled: true })).not.toContain("consulter_workflow");
+    expect(toolAllowlist("heavy", { imagesEnabled: true })).toContain("consulter_workflow");
+    expect(toolAllowlist("heavy")).not.toContain("consulter_workflow");
   });
 });
 

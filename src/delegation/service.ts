@@ -731,6 +731,8 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       partial?: string;
       usage?: JobUsage;
       error?: string;
+      /** Fichiers produits par la tâche (voir `HeavyRunResult.fichiers`). */
+      fichiers?: readonly string[];
     },
   ): void {
     this.handles.delete(jobId);
@@ -738,18 +740,34 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     if (!record) return;
 
     const finishedAt = new Date(this.now()).toISOString();
+    // ⚠️ Les FICHIERS sont journalisés AVEC le résultat, quel que soit le statut :
+    // un job interrompu après avoir généré une image doit pouvoir la rendre
+    // (sinon le travail déjà payé au serveur ComfyUI serait perdu).
+    const fichiers =
+      result.fichiers !== undefined && result.fichiers.length > 0
+        ? { fichiers: result.fichiers }
+        : {};
     if (result.status === "completed") {
       this.store.append(jobId, "completed", {
         status: "completed",
         finishedAt,
-        result: { text: result.text ?? "", usage: result.usage ?? { input: 0, output: 0 } },
+        result: {
+          text: result.text ?? "",
+          usage: result.usage ?? { input: 0, output: 0 },
+          ...fichiers,
+        },
       });
     } else if (result.status === "cancelled") {
       this.store.append(jobId, "cancelled", {
         status: "cancelled",
         finishedAt,
-        ...(result.partial !== undefined
-          ? { result: { partial: result.partial } }
+        ...(result.partial !== undefined || fichiers.fichiers !== undefined
+          ? {
+              result: {
+                ...(result.partial !== undefined ? { partial: result.partial } : {}),
+                ...fichiers,
+              },
+            }
           : {}),
       });
     } else {
@@ -760,6 +778,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
           ...(result.text !== undefined ? { text: result.text } : {}),
           ...(result.partial !== undefined ? { partial: result.partial } : {}),
           ...(result.usage !== undefined ? { usage: result.usage } : {}),
+          ...fichiers,
         },
         error: { message: sanitizeErrorText(result.error ?? "échec du worker lourd") },
       });
@@ -838,11 +857,24 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
 
     let runId: string | undefined;
     if (this.waker) {
+      // ⚠️ FICHIERS DU LOT : réunis dans l'ordre des jobs et dédupliqués. Le
+      // réveil de CANAL les joint au message publié ; sans eux, une image
+      // déléguée ne serait jamais visible (le rapport ne porte que du texte).
+      const fichiers: string[] = [];
+      for (const record of records) {
+        for (const id of record.result.fichiers ?? []) {
+          if (!fichiers.includes(id)) fichiers.push(id);
+        }
+      }
       try {
         const handle = this.waker.send(
           sessionId,
           buildBatchReportPrompt(records),
-          { origin: ORIGIN_JOB_REPORT, jobId: head.id },
+          {
+            origin: ORIGIN_JOB_REPORT,
+            jobId: head.id,
+            ...(fichiers.length > 0 ? { fichiers } : {}),
+          },
         );
         if (handle && typeof handle.runId === "string") runId = handle.runId;
       } catch (error) {

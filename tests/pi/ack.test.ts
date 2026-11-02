@@ -24,6 +24,7 @@ import {
   ACK_RULE_MAX_CHARS,
   ACK_TOOLS,
   ackFallbackText,
+  ackRuleFor,
   ackShapedText,
   ackTextForTool,
   firstAckToolCall,
@@ -151,5 +152,34 @@ describe("consigne injectée au prompt", () => {
     for (const tool of ACK_TOOLS) {
       expect(ACK_RULE).toContain(tool);
     }
+  });
+});
+
+/**
+ * ⚠️ LOT 22 — la consigne est PARAMÉTRÉE par les outils du run.
+ *
+ * Un run DISTANT n'a pas `run_command` (aucune commande n'est validable depuis un
+ * canal) : citer un outil absent décrit une action que le modèle ne peut pas lancer.
+ * La source du texte reste UNIQUE (`ackRuleFor`), `ACK_RULE` n'en est qu'un cas
+ * particulier (`ackRuleFor(ACK_TOOLS)`).
+ */
+describe("consigne paramétrée par l'allowlist du run", () => {
+  it("ne cite QUE les outils autorisés (le distant n'a pas `run_command`)", () => {
+    const distante = ackRuleFor(["generer_image", "lire_fichier", "envoyer_fichier"]);
+    expect(distante).toContain("generer_image");
+    expect(distante).not.toContain("run_command");
+    expect(distante).not.toContain("delegate");
+    expect(distante).toContain(String(ACK_RULE_MAX_CHARS));
+  });
+
+  it("`ACK_RULE` est EXACTEMENT `ackRuleFor(ACK_TOOLS)` (source unique)", () => {
+    expect(ACK_RULE).toBe(ackRuleFor(ACK_TOOLS));
+    expect(ACK_RULE).toBe(ackRuleFor());
+  });
+
+  it("sans aucun déclencheur, la consigne est INVERSE (aucun accusé)", () => {
+    const sans = ackRuleFor(["lire_fichier", "recherche_libraire"]);
+    for (const tool of ACK_TOOLS) expect(sans).not.toContain(`\`${tool}\``);
+    expect(sans).toContain("AUCUN préambule");
   });
 });

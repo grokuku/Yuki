@@ -404,4 +404,11 @@ export type ChatReplyGenerator = (input: {
    * françaises transmises au rédacteur pour qu'il réponde en connaissance de cause.
    */
   notes?: readonly string[];
+  /**
+   * Publication INTERMÉDIAIRE (accusé avant une action, image dès sa production,
+   * ligne d'échec) dans le canal — déjà ancrée au bon fil par l'adaptateur.
+   *
+   * ⚠️ Absente ⇒ un seul message à la fin, comportement antérieur inchangé.
+   */
+  publier?: (message: { text: string; fichiers?: readonly string[] }) => Promise<void>;
 }) => Promise<string | { text: string; fichiers?: readonly string[] }>;

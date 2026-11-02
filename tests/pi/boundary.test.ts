@@ -22,6 +22,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/heavy-worker.ts",
   "src/pi/sdk/prompt-writer.ts",
   "src/pi/sdk/remote-run-tools.ts",
+  "src/pi/sdk/channel-post-tool.ts",
   "src/pi/sdk/delegate-tools.ts",
   "src/pi/sdk/execution-tools.ts",
   "src/pi/sdk/memory-extension.ts",
@@ -42,6 +43,10 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/image-styles-extension.ts",
   "src/pi/sdk/vision-resize.ts",
   "src/pi/sdk/image-budget-extension.ts",
+  // ⚠️ REFUS des outils longs dans un run de canal (lot 23) : ce fichier n'enrobe
+  // que les DÉFINITIONS d'outils — c'est le seul endroit où l'outil peut refuser
+  // lui-même, et il n'expose aucun type du SDK hors de `src/pi/**`.
+  "src/pi/sdk/long-tool-guard.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =
