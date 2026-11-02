@@ -242,8 +242,10 @@ function readErrorFromStatus(
     case 401:
       return raise("unauthorized_key");
     // 403 sur /read = protection SSRF de Libry (message volontairement générique).
+    // ⚠️ Cause PROPRE à la lecture (`read_blocked`) : `target_refused` parle de
+    // « pages capturées », ce qui n'est pas ce qu'on vient de demander.
     case 403:
-      return raise("target_refused");
+      return raise("read_blocked");
     case 413:
       return raise("read_too_large");
     case 415:

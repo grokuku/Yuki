@@ -60,6 +60,7 @@ import {
   frameLibrarianSearch,
   isLibrarianError,
   librarianShotHost,
+  readRenderedChars,
   validateCaptureUrl,
   validatePathComponent,
   type LibrarianArchivePort,
@@ -494,6 +495,12 @@ export function createLibrarianTools(config: LibrarianToolsConfig): ToolDefiniti
 
           try {
             const page = await readPort.read(urlCheck.value, { offset, limit }, signal);
+            // ⚠️ La borne d'AFFICHAGE peut rendre moins de texte que la tranche
+            // demandée (échappement + `MAX_READ_TEXT_CHARS`) : c'est le nombre
+            // RÉELLEMENT montré qui fixe la reprise, sinon le modèle sauterait
+            // sans le savoir la partie coupée.
+            const rendered = readRenderedChars(page.text);
+            const nextOffset = page.offset + rendered;
             return {
               content: [{ type: "text", text: frameLibrarianRead(page) }],
               details: {
@@ -502,11 +509,11 @@ export function createLibrarianTools(config: LibrarianToolsConfig): ToolDefiniti
                 ...(page.title !== undefined ? { title: page.title } : {}),
                 total_chars: page.totalChars,
                 offset: page.offset,
-                returned_chars: page.text.length,
-                truncated: page.truncated,
+                returned_chars: rendered,
+                truncated: page.truncated || rendered < page.text.length,
                 content_type: page.contentType,
                 // ⚠️ Ce qui permet au modèle de CONTINUER sans trou ni recouvrement.
-                next_offset: page.truncated ? page.offset + page.text.length : null,
+                next_offset: page.truncated || rendered < page.text.length ? nextOffset : null,
               },
             };
           } catch (error) {

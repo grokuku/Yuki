@@ -329,6 +329,28 @@ export function frameLibrarianScreenshot(input: LibrarianScreenshotFrame): strin
 /** Nombre de caractères de texte de page rendu au modèle dans un tour. */
 export const MAX_READ_TEXT_CHARS = 20_000;
 
+/**
+ * Nombre de caractères BRUTS de `text` dont l'ÉCHAPPEMENT tient dans `max`.
+ *
+ * ⚠️ Indispensable à la pagination : l'échappement ALLONGE le texte (`&` →
+ * `&amp;`), donc borner le texte échappé revient à n'en montrer qu'une PARTIE.
+ * C'est ce nombre-là (et non `text.length`) qui donne l'`offset` de reprise —
+ * sinon le modèle sauterait, sans le savoir, ce qui a été coupé à l'affichage.
+ * L'échappement traite chaque caractère séparément : la longueur échappée croît
+ * avec la longueur brute, d'où la dichotomie exacte en `log2(n)` essais.
+ */
+export function readRenderedChars(text: string, max = MAX_READ_TEXT_CHARS): number {
+  if (escapeOutputText(text).length <= max) return text.length;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (escapeOutputText(text.slice(0, mid)).length <= max) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
 /** Métadonnées + tranche de texte d'une page lue (`POST /api/librarian/read`). */
 export interface LibrarianReadFrame {
   /** URL demandée. */
@@ -359,9 +381,13 @@ export interface LibrarianReadFrame {
  *     défaut d'origine : le modèle ne savait pas qu'il manquait du texte).
  */
 export function frameLibrarianRead(input: LibrarianReadFrame): string {
-  const escaped = escapeOutputText(input.text);
-  const shown = clamp(escaped, MAX_READ_TEXT_CHARS);
-  const end = input.offset + input.text.length;
+  // ⚠️ On borne le texte BRUT avant échappement, et c'est ce nombre qui fixe la
+  // fin de tranche : la reprise (`offset`) ne saute donc JAMAIS ce qui n'a pas été
+  // montré (le défaut serait un trou MUET dans la page).
+  const rendered = readRenderedChars(input.text);
+  const shownText = rendered < input.text.length ? input.text.slice(0, rendered) : input.text;
+  const escapedShown = escapeOutputText(shownText);
+  const end = input.offset + rendered;
   const lines: string[] = [`Page lue : ${escapeOutputText(input.finalUrl ?? input.url)}`];
   if (input.title !== undefined && input.title.trim() !== "") {
     lines.push(`Titre : ${escapeOutputText(input.title)}`);
@@ -371,10 +397,10 @@ export function frameLibrarianRead(input: LibrarianReadFrame): string {
   }
   lines.push(
     `Texte complet : ${input.totalChars} caractères. Tranche rendue : ${input.offset} à ${end} ` +
-      `(${input.text.length} caractères)${shown.truncated ? ", ramenée à la borne d'affichage" : ""}.`,
+      `(${rendered} caractères)${rendered < input.text.length ? ", ramenée à la borne d'affichage" : ""}.`,
   );
   lines.push("");
-  lines.push(shown.text === "" ? "(aucun texte dans cette tranche)" : shown.text);
+  lines.push(escapedShown === "" ? "(aucun texte dans cette tranche)" : escapedShown);
   lines.push("");
   if (input.text === "") {
     // ⚠️ `offset` au-delà de la fin : ce n'est PAS une erreur, la page est plus
@@ -389,7 +415,7 @@ export function frameLibrarianRead(input: LibrarianReadFrame): string {
         : `⚠️ La tranche demandée (offset ${input.offset}) est au-delà de la fin : il n'y a ` +
             `rien à lire après ${input.totalChars} caractères. Reprends à offset 0 si besoin.`,
     );
-  } else if (input.truncated) {
+  } else if (input.truncated || rendered < input.text.length) {
     const rest = Math.max(input.totalChars - end, 0);
     lines.push(
       `⚠️ Le texte N'EST PAS complet : il reste ${rest} caractères après la tranche. ` +

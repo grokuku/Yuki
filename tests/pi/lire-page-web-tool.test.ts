@@ -291,6 +291,30 @@ describe("libraire — outil lire_page_web", () => {
     expect(seen[0]?.options?.limit).toBe(100_000);
   });
 
+  it(" borne d'affichage atteinte : la reprise ne SAUTE aucun caractère", async () => {
+    // ⚠️ Le texte est ÉCHAPPÉ avant d'être montré (`&` → `&amp;`), donc la borne
+    // d'affichage coupe AVANT la fin de la tranche demandée. Si `next_offset`
+    // valait la fin de la tranche BRUTE, le modèle sauterait silencieusement tout
+    // ce qui n'a pas été montré : c'est le trou que ce test interdit.
+    const full = "& < > ".repeat(6_000); // 36 000 caractères bruts
+    const tool = toolByName(tools(readPort(full)), "lire_page_web");
+    const first = await call(tool, { url: "https://exemple.test/enorme", limit: 30_000 });
+
+    expect(String(first.text)).toContain("ramenée à la borne d'affichage");
+    const nextOffset = Number(first.details.next_offset);
+    expect(Number.isFinite(nextOffset)).toBe(true);
+    // Ce qui est RÉELLEMENT montré doit se terminer exactement à `next_offset`.
+    expect(nextOffset).toBeLessThan(30_000);
+    expect(first.details.returned_chars).toBe(nextOffset);
+    expect(String(first.text)).toContain(`offset=${nextOffset}`);
+    // Et le texte affiché est bien le préfixe brut de la tranche, sans coupure.
+    const shownRaw = full.slice(0, nextOffset);
+    const escapedEnd = shownRaw.slice(-4);
+    expect(String(first.text)).toContain(
+      escapedEnd.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
+    );
+  });
+
   it("la clé libraire n'apparaît dans AUCUNE sortie de l'outil", async () => {
     const apiKey = "lib-CLE-INTERDITE-A-AFFICHER";
     // Un port qui échoue PROPREMENT (comme le client réel, qui ne met jamais la clé

@@ -87,6 +87,7 @@ export {
   frameLibrarianRead,
   frameLibrarianScreenshot,
   frameLibrarianSearch,
+  readRenderedChars,
   type LibrarianReadFrame,
   type LibrarianScreenshotFrame,
 } from "./output.js";

@@ -180,7 +180,7 @@ describe("libraire — lecture du texte d'une page (POST /read)", () => {
     [415, "NOT_TEXT", "read_not_text"],
     [502, "HTTP_403", "read_failed"],
     [504, "TIMEOUT", "read_timeout"],
-    [403, "BLOCKED_URL", "target_refused"],
+    [403, "BLOCKED_URL", "read_blocked"],
   ])("statut %i (%s) → cause typée %s, code du libraire conservé", async (status, upstream, code) => {
     const { fetchImpl } = stubFetch(() =>
       json(status, { error: "refus", code: upstream, url: "https://interne.test/" }),
