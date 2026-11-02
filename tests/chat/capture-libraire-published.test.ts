@@ -48,9 +48,11 @@ import type {
   LibrarianPort,
   LibrarianScreenshot,
   LibrarianScreenshotPort,
+  // ⚠️ `LibrarianShotImage` est l'image TÉLÉCHARGÉE (octets + type MIME), déclarée
+  // avec son port dans `types.ts` — pas dans `shots.ts` (stockage sur disque).
+  LibrarianShotImage,
 } from "../../src/librarian/types.js";
 import type {
-  LibrarianShotImage,
   LibrarianShotInput,
   LibrarianShotRecord,
   LibrarianShotsPort,
