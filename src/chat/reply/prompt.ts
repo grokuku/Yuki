@@ -45,6 +45,10 @@ export const CHAT_REPLY_SYSTEM_PROMPT = [
   "machine, transférer un fichier, demander un secret. Elles exigent une validation",
   "humaine qui s'affiche uniquement dans l'interface web et ne peut pas être donnée",
   "ici. Si on te les demande, tu le dis clairement au lieu d'attendre ou d'inventer.",
+  "",
+  "Si tu confies une tâche à un worker (outil de délégation), le résultat te sera",
+  "renvoyé DANS CE CANAL plus tard, quand la tâche sera réellement terminée : tu ne",
+  "l'annonces jamais comme faite avant de l'avoir reçu.",
 ].join("\n");
 
 /**
@@ -55,6 +59,18 @@ export const CHAT_JUDGE_TIMEOUT_MS = 20_000;
 
 /** Délai maximal du RÉDACTEUR (ms) : laisser le temps d'écrire, sans bloquer un canal. */
 export const CHAT_REPLY_TIMEOUT_MS = 90_000;
+
+/**
+ * Délai maximal du RÉSUMÉ d'un rapport de job d'arrière-plan (ms).
+ *
+ * ⚠️ Il s'agit de la publication du résultat d'un `delegate` (ou d'un archivage du
+ * libraire) dans le canal. Il est plus COURT que celui du rédacteur : résumer un
+ * rapport déjà borné (`REPORT_MAX_CHARS`) ne demande pas une génération d'image, et
+ * une personne qui attend le résultat d'une tâche ne doit pas attendre trois
+ * minutes de plus. Au-delà, `createChannelAwareWaker` publie une phrase honnête
+ * (job terminé, résumé indisponible) plutôt que rien du tout.
+ */
+export const CHAT_JOB_REPORT_TIMEOUT_MS = 45_000;
 
 /** Nombre de caractères de transcript transmis au rédacteur (borne de coût). */
 export const CHAT_REPLY_TRANSCRIPT_MAX_CHARS = 6_000;

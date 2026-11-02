@@ -61,11 +61,26 @@ function describe(file: WireFile): string {
   return formatAttachmentLine(file);
 }
 
+export interface SendFileToolOptions {
+  /**
+   * Conversation FORCÉE (run distant : le canal). Absente ⇒ l'identifiant est lu
+   * du contexte de l'outil (host local, comportement historique).
+   *
+   * ⚠️ La session d'un run distant est ÉPHÉMÈRE : sans ce forçage, l'outil
+   * chercherait les fichiers d'une conversation qui n'en contient aucun et
+   * répondrait « aucun fichier envoyable » alors que le canal en a.
+   */
+  sessionId?: () => string | undefined;
+}
+
 /**
  * Construit l'outil `envoyer_fichier`. Le port fournit la liste des fichiers de
  * la conversation et effectue l'envoi (diffusion vers l'interface).
  */
-export function createSendFileTools(files: FilesSendPort): ToolDefinition[] {
+export function createSendFileTools(
+  files: FilesSendPort,
+  options?: SendFileToolOptions,
+): ToolDefinition[] {
   const tool = defineTool({
     name: "envoyer_fichier",
     label: "Envoyer un fichier à l'utilisateur",
@@ -93,7 +108,7 @@ export function createSendFileTools(files: FilesSendPort): ToolDefinition[] {
       ),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
-      const sessionId = sessionIdFromContext(ctx);
+      const sessionId = options?.sessionId?.() ?? sessionIdFromContext(ctx);
       if (!sessionId) {
         const payload: SendFileDetails = { status: "unavailable" };
         return {

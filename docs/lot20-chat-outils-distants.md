@@ -4,6 +4,11 @@
 > (`prompt-writer.ts:83` `tools: []`) ⇒ `generer_image` y est **inatteignable**. »
 > L'utilisateur avait exigé : « je veux pouvoir **générer et analyser des images** sur
 > mattermost ». Ce lot ferme ce trou.
+>
+> **Complément du 2026-11-02** : la politique autorisait ~19 outils sous
+> `chat.remoteAgents = actives` mais le run n'en construisait que 5. Les outils
+> manquants sont désormais **instanciés** (§2), leur résultat est **publié dans le
+> canal** (§3), et le risque de sécurité est **écrit noir sur blanc** (§4).
 
 ## 1. La politique était écrite, jamais branchée
 
@@ -13,101 +18,151 @@
 | `toolAllowlistForChat` (`src/llm/tool-policy.ts`) existait mais **personne ne l'appelait** | elle est appelée par `createRemoteRunTools` (`src/pi/chat-run.ts`), seule porte du run distant |
 | les options de politique du léger étaient écrites **dans** `createPiHost` | une seule fonction `lightToolOptions()` (`src/index.ts`) alimente le host LOCAL **et** le run DISTANT, puis `toolAllowlistForChat` décide — **pas de seconde liste** |
 
-## 2. Quels outils dans un run distant
+## 2. La liste RÉELLE des outils d'un run distant
 
-`src/llm/tool-policy.ts` → `toolAllowlistForChat("light", options, { chatMode, remoteAgents })`
-
-| Configuration | Allowlist du run |
-| --- | --- |
-| `chat.mode = local` | **inchangée** : exactement `toolAllowlist("light", options)` (test de non-régression) |
-| distant + `chat.remoteAgents = desactive` (**défaut**) | `REMOTE_SAFE_TOOLS` : `generer_image`, `consulter_workflow`, `lister_fichiers`, `lire_fichier` — rien d'autre |
-| distant + `chat.remoteAgents = actives` | la politique locale du léger, **plus** les quatre outils ci-dessus qu'elle ne porte pas (le léger local lit le store via `envoyer_fichier` ; un run distant n'a que `lire_fichier` pour voir une image), **moins** les outils à approbation |
-| distant, **rôle lourd** | **rien**, même agents activés : aucun run lourd ne naît d'un canal |
-
+`src/llm/tool-policy.ts` → `toolAllowlistForChat("light", options, { chatMode, remoteAgents })`.
 Les **implémentations** viennent d'une fabrique unique (`buildRemoteRunTools`,
-`src/pi/sdk/remote-run-tools.ts`) qui instancie les **mêmes** fabriques que le host local
-(`createImageTools`, `createListFilesTool`, `createReadFileTool`). La conversation est
-**forcée** au canal : la session du run est éphémère, et sans cela l'image serait
-rattachée à une conversation fantôme. Un test verrouille la **parité** entre
-`REMOTE_SAFE_TOOLS` et les outils réellement construits.
+`src/pi/sdk/remote-run-tools.ts`) qui instancie les **mêmes** fabriques que le host local.
 
-## 3. Approbations — ce qui est RETIRÉ, et ce qui se passe
+### `chat.remoteAgents = desactive` (**défaut**) — jeu FERMÉ, 4 outils
 
-⚠️ **Une approbation s'affiche dans l'interface WEB** (`ApprovalRegistry` →
-`src/agents/execution.ts:1147`) ; `demander_secret` ouvre aussi une fenêtre dans le web.
-**Un run distant qui en demanderait une resterait en attente d'une décision que personne
-ne peut prendre depuis le canal.**
-
-`APPROVAL_REQUIRED_TOOLS` (`src/llm/tool-policy.ts`) :
-
-| Outil | Pourquoi |
+| Outil | Ce qu'il fait |
 | --- | --- |
-| `run_command`, `capturer_ecran` | garde-fou par agent (niveau 2, ou 3 si destructrice) ⇒ demande de validation |
-| `recuperer_fichier`, `deposer_fichier` | même garde-fou (`authorizeTransfer`) |
-| `demander_secret` | fenêtre de saisie dans la conversation web |
+| `generer_image` | génère une image sur le serveur ComfyUI et l'envoie dans le canal |
+| `consulter_workflow` | consignes d'écriture du workflow retenu (lecture locale) |
+| `lister_fichiers` | liste les pièces jointes du canal (identifiant, nom, taille) |
+| `lire_fichier` | lit une pièce jointe (image vue par le modèle, texte borné) |
 
-Décision **tranchée** :
-1. ces outils sont **RETIRÉS de toute politique distante** (refus **avant** exécution) ;
-2. `assertNoApprovalTool` (`src/pi/chat-run.ts`) **lève** si une liste en contient un
-   (« Cette action nécessite une approbation humaine, qui ne peut pas être donnée depuis
-   un canal distant… Rien n'a été exécuté. ») — second filet pour une liste forgée à la main ;
-3. la consigne du rédacteur le dit au modèle (`CHAT_REPLY_SYSTEM_PROMPT`,
-   `src/chat/reply/prompt.ts`) : il annonce l'impossibilité au lieu d'attendre.
+Rien d'autre : **ni builtin** (`read`, `ls`, `grep`, `find`), ni délégation, ni transfert,
+ni commande, ni secret, ni annuaire, ni archive, ni libraire, ni envoi de fichier.
 
-**Les quatre outils de `REMOTE_SAFE_TOOLS` ne demandent AUCUNE approbation** (vérifié
-outil par outil) : `generer_image` (génération locale sur ComfyUI), `consulter_workflow`
-(lecture locale), `lister_fichiers` et `lire_fichier` (lecture du store de la
-conversation). Un test échoue si quelqu'un en ajoute un.
+### `chat.remoteAgents = actives` — politique locale **complète** (hors approbation)
 
-⚠️ **Limite assumée** : sous `actives`, la **délégation** reste autorisée (elle ne demande
-pas d'approbation) ; si le worker lourd qu'elle déclenche rencontre une action à valider
-sur une machine, la demande s'affiche dans l'interface web et le canal n'en voit que le
-texte du modèle. Le **relais d'approbations** (lot suivant) est le vrai remède.
+| Groupe | Outils instanciés | Notes |
+| --- | --- | --- |
+| Lecture disque (builtins SDK) | `read`, `ls`, `grep`, `find` | fournis par le SDK quand ils sont dans l'allowlist (§5) |
+| Agents | `lister_agents`, `etat_agent` | **lecture seule** ; sortie balisée/échappée (`src/agents/output.ts`) |
+| Délégation | `delegate`, `job_status`, `cancel_job`, `steer_job` | jobs **rattachés au canal** ; résultat **publié dans le canal** (§3) |
+| Secrets | `lister_secrets` | ⚠️ **NOMS seulement**, jamais une valeur |
+| Fichiers | `envoyer_fichier` (+ `lister_fichiers`, `lire_fichier`) | le fichier est **téléversé dans le canal**, pas seulement affiché dans le web |
+| Archive | `archive_vie_anterieure`, `chercher_conversations_archivees` | lecture seule |
+| Libraire | `recherche_libraire`, `liste_libraire`, `lire_libraire`, `archive_libraire`, `capture_libraire` | bornes du host local conservées (URL http/https, taille d'image, délais) |
+| Images | `generer_image`, `consulter_workflow` | comme en `desactive` |
 
-## 4. La chaîne complète, prouvée
+**Conversation FORCÉE au canal** pour tous les outils qui touchent une conversation
+(image générée, pièces jointes, envoi de fichier, capture du libraire, jobs de
+délégation) : la session du run est **éphémère**, et sans ce forçage tout serait
+rattaché à une conversation fantôme (`src/pi/sdk/remote-run-tools.ts`).
 
-`tests/chat/mattermost-image-chain.test.ts` (serveur Mattermost **fixture** HTTP + WS,
-stores **réels**, modèle **simulé** qui appelle vraiment l'outil reçu) :
+### Rôle lourd
 
-1. message posté dans le canal → miroir → décision de répondre (`tout`) ;
-2. la politique du run est calculée (`mattermost`, `desactive`) et **arrive à la session** ;
-3. `generer_image` s'exécute (générateur ComfyUI simulé) → l'image est **copiée dans le
-   store des fichiers**, rattachée à la **conversation du canal** (jamais à la session
-   éphémère) ;
-4. `POST /files` (multipart) puis `POST /posts` avec **`file_ids` non vides**.
+**Rien**, même sous `actives` : aucun run lourd ne naît d'un canal.
 
-⚠️ L'image d'un run distant n'est **pas** diffusée dans l'interface web (pas de trame
-`image` : aucune conversation web n'est concernée) — elle vit dans le canal et dans le
-store des fichiers de la conversation distante.
+## 3. Le résultat d'une délégation revient DANS le canal
 
-⚠️ **Délai** : une génération peut durer jusqu'à `images.timeoutMs` (180 s par défaut).
-Le délai du rédacteur vaut donc « rédaction + génération » (`src/index.ts`), sinon le run
-serait interrompu **en pleine génération** et le canal n'aurait aucune réponse.
+Un `delegate` produit un **job asynchrone**. Son résultat est livré par un « réveil »
+(`LightWaker.send`, `src/delegation/service.ts:838`), et le seul réveil branché avant ce
+lot était le **host Pi** — qui **refuse** une session qu'il n'a pas ouverte
+(`PI_SESSION_ERROR` « Session inconnue. », `src/pi/sdk-host.ts:2295`). Une conversation
+de canal n'est pas une session Pi : **le résultat était perdu**.
 
-Le contrat de sortie du générateur de réponse a été étendu pour cela :
-`Promise<string | { text, fichiers? }>` (`src/chat/mattermost/adapter.ts`), et
-`produceReply` joint les fichiers au post (`send(..., { fichiers })`).
+`createChannelAwareWaker` (`src/chat/reply/channel-waker.ts`, branché dans `src/index.ts`)
+enveloppe le réveil sans le modifier :
 
-## 5. Tests — et ce qu'ils prouvent
+| Conversation du job | Ce qui se passe |
+| --- | --- |
+| **locale** (`sessionId` Pi) | délégation **exacte** au host : comportement inchangé |
+| **canal** (`mm-…` / `dc-…`) | le rapport est **résumé** par le modèle léger (délai `CHAT_JOB_REPORT_TIMEOUT_MS`, 45 s) puis **publié dans ce canal**, borné à 4 000 caractères |
+
+Le même réveil sert à `archive_libraire` (archivage de fond).
+
+**Ce que voit une personne du canal quand ça se passe mal** :
+
+| Panne | Ce qu'elle voit |
+| --- | --- |
+| le job **échoue** | le rapport contient l'erreur et le travail partiel ; le résumé le dit, dans le canal |
+| le **résumé** échoue (modèle indisponible) | une phrase honnête, avec l'identifiant : « …s'est terminée (job `X`), mais je n'ai pas pu en rédiger le résumé ici. Demande-moi « où en est le job `X` »… » — et `job_status` répond |
+| la **publication** échoue (canal supprimé, jeton expiré) | rien dans le canal ; l'échec est **journalisé** (`chat.job_report.failed`). ⚠️ C'est la seule limite : aucun autre canal n'existe pour le dire |
+| job d'un **autre** canal | `job_status`/`cancel_job`/`steer_job` répondent `not_found` (cloisonnement) |
+
+Le délai du rédacteur vaut « rédaction + génération » (`CHAT_REPLY_TIMEOUT_MS` +
+`images.timeoutMs`), sinon un run serait interrompu en pleine génération.
+
+## 4. ⚠️ SÉCURITÉ — le risque, écrit en clair
+
+**Depuis un canal distant, n'importe quel membre peut écrire à Yuki.** Sous
+`chat.remoteAgents = actives`, il peut donc **déléguer une tâche**, c'est-à-dire
+**faire exécuter du travail sur les machines appairées**. Ce qui protège, et ce qui ne
+protège pas :
+
+| Garde-fou | État |
+| --- | --- |
+| **Autorisation par agent** (niveau de validation, agent désactivé/hors ligne, verrou matériel sensible, audit) | ✅ s'applique : le worker lourd passe par `AgentExecutionService` ; un agent non autorisé **refuse** |
+| **Outils à approbation** (`run_command`, `capturer_ecran`, `recuperer_fichier`, `deposer_fichier`, `demander_secret`) | ✅ **retirés et non instanciés** : jamais atteignables depuis un canal (test de garde) |
+| **Secrets** | ✅ `lister_secrets` ne rend que des **NOMS** ; `demander_secret` est exclu |
+| **Cloisonnement des jobs** | ✅ un canal ne voit/annule/oriente que **ses** jobs |
+| **`chat.remoteAgents`** | ⚠️ réglage **GLOBAL** : `actives` l'ouvre pour **tous** les canaux suivis |
+| **Qui parle dans le canal** | ⚠️ **aucune notion d'autorisation par personne** : un membre du canal vaut un autre |
+
+**Proposition (NON implémentée ici)** : une restriction **par canal**, sur le modèle des
+réglages de réponse déjà stockés dans le miroir (`replyMode`/`replyStyle`,
+`ChatMirrorStore.setReplySettings`) — un champ `agents: desactive|actives` par
+conversation, lu par `runTools` avant `createRemoteRunTools`. Tant qu'elle n'existe pas :
+`actives` = confiance dans **tous** les membres de **tous** les canaux suivis. Laisser
+`desactive` (défaut) est le seul réglage sûr.
+
+⚠️ Rappel : sous `actives`, les builtins `read`/`ls`/`grep`/`find` lisent le répertoire de
+travail de Yuki (`/workspace`). C'est le comportement de la politique locale, pas une
+nouveauté de ce lot — mais un canal distant y a désormais accès.
+
+### Approbations — ce qui est RETIRÉ, et ce qui se passe
+
+`APPROVAL_REQUIRED_TOOLS` (`src/llm/tool-policy.ts`) : `run_command`, `capturer_ecran`,
+`recuperer_fichier`, `deposer_fichier` (garde-fou par agent ⇒ demande de validation) et
+`demander_secret` (fenêtre de saisie web). Décisions :
+
+1. ils sont **RETIRÉS de toute politique distante** (refus **avant** exécution) ;
+2. `assertNoApprovalTool` **et** `assertNoApprovalToolDefinition` (`src/pi/chat-run.ts`)
+   lèvent si une liste **ou une définition construite** en contient un — second filet
+   contre un câblage forgé à la main ;
+3. la consigne du rédacteur le dit au modèle (`CHAT_REPLY_SYSTEM_PROMPT`).
+
+⚠️ **Limite assumée** : une délégation peut rencontrer une action à valider sur une
+machine ; la demande s'affiche alors dans l'interface **web**, et le canal n'en reçoit
+que le texte du modèle. Le **relais d'approbations** (lot suivant) est le vrai remède.
+
+## 5. Le journal de l'écart — corrigé
+
+`chat.remote.tools.unimplemented` (`src/pi/chat-run.ts`) signalait comme « manquants »
+`read`, `ls`, `grep`, `find` : **c'était faux**, ces outils sont fournis par le SDK dès
+qu'ils figurent dans l'allowlist (`node_modules/@earendil-works/…/core/agent-session.js`).
+La comparaison les **exclut** désormais (`READ_ONLY_TOOLS`). Le journal ne sert plus
+qu'aux outils réellement absents, faute de port (coffre non initialisé, libraire non
+configuré, service de délégation indisponible).
+
+## 6. Tests — et ce qu'ils prouvent
 
 | Sujet | Fichier |
 | --- | --- |
-| le prompt distant **contient les outils** de la politique (aujourd'hui `[]` sur l'origine) ; `desactive` ⇒ image/lecture ; `actives` ⇒ liste locale complète | `tests/pi/prompt-writer-tools.test.ts` |
-| politique par mode, **aucun** outil à approbation, mode local inchangé | `tests/llm/tool-policy.test.ts`, `tests/llm/tool-policy-chat.test.ts` |
-| chaîne complète jusqu'aux `file_ids` | `tests/chat/mattermost-image-chain.test.ts` |
+| **chaque** outil de `actives` est construit (nommés un par un) ; `desactive` ⇒ tous absents ; aucun outil à approbation ; `lister_secrets` noms seuls (sentinelle) ; délégation rattachée au canal ; `job_status` cloisonné ; `envoyer_fichier` signalé pour publication ; journal **sans** les builtins | `tests/pi/remote-run-tools.test.ts` |
+| le rapport d'un job est **publié dans le canal**, le local passe au host à l'identique, phrase honnête si le résumé échoue, échec de publication journalisé, texte borné | `tests/chat/channel-waker.test.ts` |
+| politique par mode, aucun outil à approbation, mode local inchangé | `tests/llm/tool-policy.test.ts`, `tests/llm/tool-policy-chat.test.ts` |
+| chaîne complète jusqu'aux `file_ids` (serveur Mattermost fixture) | `tests/chat/mattermost-image-chain.test.ts` |
 | frontière : la façade `src/pi` reste sans type du SDK | `tests/pi/boundary.test.ts` |
 
-⚠️ **Échouent sur le code d'origine** (copie ciblée `git show HEAD:<f>` dans
-`/tmp/preuve-lot20`, sans aucun `checkout`/`reset`) : `toolAllowlistForChat is not a
-function`, `createRemoteRunTools is not a function`, `createRemoteReplyGenerator is not a
-function` ⇒ **10 tests en échec** ; et `git show HEAD:src/pi/sdk/prompt-writer.ts` montre
-bien `tools: [],` là où le code courant passe `config.tools?.() ?? []`.
+⚠️ **Échouent sur le code d'origine** (copie ciblée `git show HEAD:<f>` dans `/tmp`,
+sans aucun `checkout`/`reset`) : `buildRemoteRunTools` n'acceptait que
+`images`/`files`/`vision`/`onFileProduced` ⇒ `delegate`, `lister_agents`,
+`lister_secrets`, les outils d'archive, du libraire et `envoyer_fichier` **n'existaient
+pas** dans une définition de run distant ; `createChannelAwareWaker` n'existait pas ;
+et le journal citait bien les builtins.
 
-## 6. Ce qui reste INVÉRIFIABLE ici
+## 7. Ce qui reste INVÉRIFIABLE ici
 
 | Point | Pourquoi |
 | --- | --- |
-| Un **vrai** Mattermost | aucun serveur accessible : fixture HTTP/WS qui rejoue le contrat de l'API |
-| Un **vrai** LLM décidant d'appeler `generer_image` | fournisseur simulé : c'est le test qui appelle l'outil, pas un modèle. La boucle d'outils du SDK est celle, déjà exercée, du host local |
-| Un **vrai** serveur ComfyUI | générateur simulé (écrit dans le vrai store d'images, rend la même forme que le réel) |
-| Les outils de `actives` **non instanciés** dans un run éphémère (délégation, coffre, libraire, archive, envoi de fichier) | ils supposent un état de conversation persistant : la politique les autorise, le run ne les fournit pas encore, et l'écart est **journalisé** (`chat.remote.tools.unimplemented`) — jamais silencieux |
+| Un **vrai** Mattermost / Discord | aucun serveur accessible : fixtures HTTP/WS rejouant le contrat des API |
+| Un **vrai** LLM décidant d'appeler `delegate` | modèle simulé : c'est le test qui appelle l'outil. La boucle d'outils du SDK est celle, déjà exercée, du host local |
+| Un **vrai** serveur ComfyUI / un **vrai** Libry | générateurs simulés (mêmes formes que les réels) |
+| La **publication réelle** du rapport d'un job dans un canal | l'adaptateur est couvert par ses propres tests (`send`), et le waker par `tests/chat/channel-waker.test.ts`, mais la chaîne « job → résumé → post » n'a pas été rejouée contre un serveur réel |
+| L'**autorisation par personne** dans un canal | elle n'existe pas (voir §4) : le risque est documenté, pas corrigé |

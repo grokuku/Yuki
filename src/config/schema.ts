@@ -476,6 +476,13 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // ⚠️ `actives` n'ouvre JAMAIS un outil qui exige une approbation : une
   // approbation s'affiche dans l'interface WEB et ne peut pas être donnée
   // depuis un canal — ces outils sont retirés de la politique distante.
+  // ⚠️ RISQUE, EN CLAIR : `actives` vaut pour TOUS les canaux suivis (réglage
+  // GLOBAL) et n'importe quel membre d'un canal peut écrire à Yuki. Il peut donc
+  // DÉLÉGUER une tâche, c'est-à-dire faire exécuter du travail sur les machines
+  // appairées (le garde-fou par AGENT s'applique : niveau, agent désactivé/hors
+  // ligne, verrou matériel, audit — mais il n'existe AUCUNE autorisation par
+  // PERSONNE). Détail et proposition de restriction par canal :
+  // `docs/lot20-chat-outils-distants.md` §4. Défaut `desactive` = le seul réglage sûr.
   "chat.remoteAgents": {
     type: "enum",
     enum: ["desactive", "actives"],

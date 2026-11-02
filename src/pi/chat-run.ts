@@ -11,13 +11,19 @@
  *  - le REFUS AVANT EXÉCUTION des outils qui exigent une approbation humaine.
  */
 
-import { approvalRequiredTools, toolAllowlistForChat } from "../llm/tool-policy.js";
+import { APPROVAL_REQUIRED_TOOLS, READ_ONLY_TOOLS, approvalRequiredTools, toolAllowlistForChat } from "../llm/tool-policy.js";
 import type { ChatOriginMode, ToolAllowlistOptions } from "../llm/tool-policy.js";
-import type { FilesReadPort } from "../files/index.js";
+import type { FilesReadPort, FilesSendPort, WireFile } from "../files/index.js";
+import type { AgentDirectoryPort } from "../agents/directory.js";
+import type { DelegateServicePort } from "../delegation/ports.js";
+import type { ConversationArchivePort } from "../memory/conversation-archive.js";
+import type { HeritagePort } from "../memory/heritage.js";
+import type { SecretDirectoryPort } from "../secrets/directory.js";
 import type { PiLogger } from "./types.js";
 import {
   buildRemoteRunTools,
   type RemoteRunImagePorts,
+  type RemoteRunLibrarianPorts,
   type RemoteRunVision,
 } from "./sdk/remote-run-tools.js";
 
@@ -41,6 +47,26 @@ export interface RemoteRunToolsOptions {
   vision?: RemoteRunVision;
   /** Fichier produit par le run (image copiée dans le store), à joindre au message. */
   onFileProduced?: (fileId: string) => void;
+  /**
+   * Ports des outils d'AGENTS — utilisés SEULEMENT sous `remoteAgents = actives`.
+   * Fournis mais désactivés, ils ne construisent rien : la politique les retire,
+   * donc les instancier ne servirait qu'à élargir la surface pour rien.
+   */
+  agents?: AgentDirectoryPort;
+  /** Coffre (NOMS seulement, `lister_secrets`). Sous `actives` uniquement. */
+  secrets?: SecretDirectoryPort;
+  /** Délégation (`delegate`, `job_status`, `cancel_job`, `steer_job`). Sous `actives` uniquement. */
+  delegation?: DelegateServicePort;
+  /** Archive « vie antérieure ». Sous `actives` uniquement. */
+  heritage?: HeritagePort;
+  /** Archive des conversations mises de côté. Sous `actives` uniquement. */
+  conversationArchive?: ConversationArchivePort;
+  /** Libraire (5 outils, bornes du host local). Sous `actives` uniquement. */
+  librarian?: RemoteRunLibrarianPorts;
+  /** Fichiers envoyables (`envoyer_fichier`). Sous `actives` uniquement. */
+  filesSend?: FilesSendPort;
+  /** Fichier envoyé par Yuki : l'appelant le publie DANS LE CANAL. */
+  onFileSent?: (file: WireFile) => void;
   logger?: PiLogger;
 }
 
@@ -80,6 +106,28 @@ export function assertNoApprovalTool(tools: readonly string[]): void {
 }
 
 /**
+ * LÈVE si le jeu de DÉFINITIONS contient un outil à approbation.
+ *
+ * ⚠️ Ce n'est pas redondant avec `assertNoApprovalTool` : celui-ci contrôle la
+ * LISTE, celui-là ce qui est réellement CONSTRUIT. Un outil instancié mais absent
+ * de la liste serait filtré par le SDK ; l'inverse (liste propre, définition à
+ * approbation fournie par un port mal câblé) est exactement ce qu'on refuse.
+ */
+export function assertNoApprovalToolDefinition(
+  customTools: readonly unknown[],
+): void {
+  const noms = customTools
+    .map((tool) => (tool as { name?: string }).name)
+    .filter((name): name is string => typeof name === "string");
+  const bloquants = noms.filter((name) => APPROVAL_REQUIRED_TOOLS.includes(name));
+  if (bloquants.length > 0) {
+    throw new Error(
+      `${REMOTE_APPROVAL_REFUSAL} Outils refusés : ${bloquants.join(", ")}.`,
+    );
+  }
+}
+
+/**
  * Calcule le jeu d'outils d'un run distant : la POLITIQUE de son origine, puis
  * les DÉFINITIONS correspondantes (mêmes fabriques que le host local).
  */
@@ -90,22 +138,43 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
   });
   assertNoApprovalTool(tools);
 
+  // ⚠️ SOUS `desactive`, les ports d'AGENTS ne sont même pas transmis : la
+  // politique les retire, donc les construire n'ouvrirait rien — et un test
+  // vérifie que les DÉFINITIONS restent, elles aussi, dans `REMOTE_SAFE_TOOLS`.
+  const actifs = options.remoteAgents;
+
   const customTools = buildRemoteRunTools({
     conversationId: options.conversationId,
     ...(options.images ? { images: options.images } : {}),
     ...(options.files ? { files: options.files } : {}),
     ...(options.vision ? { vision: options.vision } : {}),
     ...(options.onFileProduced ? { onFileProduced: options.onFileProduced } : {}),
+    ...(actifs && options.agents ? { agents: options.agents } : {}),
+    ...(actifs && options.secrets ? { secrets: options.secrets } : {}),
+    ...(actifs && options.delegation ? { delegation: options.delegation } : {}),
+    ...(actifs && options.heritage ? { heritage: options.heritage } : {}),
+    ...(actifs && options.conversationArchive
+      ? { conversationArchive: options.conversationArchive }
+      : {}),
+    ...(actifs && options.librarian ? { librarian: options.librarian } : {}),
+    ...(actifs && options.filesSend ? { filesSend: options.filesSend } : {}),
+    ...(actifs && options.onFileSent ? { onFileSent: options.onFileSent } : {}),
   });
+  assertNoApprovalToolDefinition(customTools);
 
-  // ⚠️ ÉCART DIT, JAMAIS SILENCIEUX : avec `remoteAgents = actives`, la politique
-  // autorise aussi des outils qu'un run ÉPHÉMÈRE distant n'instancie pas encore
-  // (délégation, coffre, libraire, archive, envoi de fichier : ils supposent un
-  // état de conversation persistant). Le modèle ne les voit pas — le SDK ne
-  // registre que les définitions fournies — et on le JOURNALISE pour que l'écart
-  // ne devienne pas un mystère.
+  // ⚠️ ÉCART DIT, JAMAIS SILENCIEUX : la politique peut autoriser un outil que
+  // ce run n'instancie pas (port absent — pas de coffre, pas de libraire
+  // configuré, pas de service de délégation). Le modèle ne le voit pas — le SDK
+  // ne registre que les définitions fournies — et on le JOURNALISE pour que
+  // l'écart ne devienne pas un mystère.
+  //
+  // ⚠️ Les BUILTINS (`read`, `ls`, `grep`, `find`) ne sont JAMAIS « manquants » :
+  // ils sont fournis par le SDK lui-même dès qu'ils figurent dans l'allowlist
+  // (`node_modules/@earendil-works/…/core/agent-session.js`, outillage natif).
+  // Les compter comme manquants rendait ce journal FAUX.
   const fournis = new Set(customTools.map((tool) => (tool as { name?: string }).name));
-  const manquants = tools.filter((tool) => !fournis.has(tool));
+  const builtins = new Set<string>(READ_ONLY_TOOLS);
+  const manquants = tools.filter((tool) => !fournis.has(tool) && !builtins.has(tool));
   if (manquants.length > 0) {
     options.logger?.info("chat.remote.tools.unimplemented", {
       conversation: options.conversationId,

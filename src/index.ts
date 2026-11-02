@@ -61,6 +61,7 @@ import {
 } from "./comfy/index.js";
 import { createFilesService, createGeneratedImageFiles, FilesStore } from "./files/index.js";
 import {
+  CHAT_JOB_REPORT_TIMEOUT_MS,
   CHAT_JUDGE_SYSTEM_PROMPT,
   CHAT_JUDGE_TIMEOUT_MS,
   CHAT_REPLY_SYSTEM_PROMPT,
@@ -72,11 +73,13 @@ import {
   type ChatReplyJudge,
   type RemoteMessage,
   buildJudgePrompt,
+  createChannelAwareWaker,
   createRemoteReplyGenerator,
   effectiveQuoteAuthor,
   effectiveReplyStyle,
   parseJudgeAnswer,
   mirrorPlatformOf,
+  getAdapter,
   runPlatformOf,
   registerAdapterProvider,
 } from "./chat/index.js";
@@ -172,7 +175,7 @@ import {
   SourcesService,
   SourcesStore,
 } from "./sources/index.js";
-import { createPiHost, createRemoteRunTools, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -1205,6 +1208,15 @@ async function main(): Promise<void> {
   let heritageStore: HeritageStore | undefined;
   let conversationArchive: ConversationArchiveStore | undefined;
   let librarianShots: LibrarianShotsStore | undefined;
+  /**
+   * Ports du LIBRAIRE pour un run DISTANT (posés quand la porte GPU est passée).
+   *
+   * ⚠️ Pourquoi un porteur MUTABLE plutôt que la valeur au démarrage : le run
+   * distant construit ses outils à CHAQUE réponse, et le client d'archivage est
+   * créé DANS le bloc de la porte GPU (const local). Le run lit donc ce porteur
+   * au moment de la réponse, jamais à la construction du générateur.
+   */
+  let remoteLibrarian: RemoteRunLibrarianPorts | undefined;
   /** Bus de diffusion des images générées (posé quand le transport démarre). */
   let imagesGateway: ImagesGatewayPort | undefined;
   let transport: Transport | undefined;
@@ -1347,6 +1359,44 @@ async function main(): Promise<void> {
     });
 
   /**
+   * PUBLICATION d'un texte (et, facultativement, d'un fichier du store) dans un
+   * CANAL distant — Mattermost ou Discord, selon l'identifiant de conversation.
+   *
+   * ⚠️ Un seul chemin pour les deux usages qui doivent ATTEINDRE la personne du
+   * canal : le RAPPORT d'un job (`createChannelAwareWaker`, ci-dessous) et le
+   * FICHIER envoyé par `envoyer_fichier`. La plateforme est déduite de
+   * l'identifiant miroir (`mm-…`/`dc-…`) : un run né dans un salon Discord poste
+   * sur Discord même si l'interface affiche Mattermost (lot 21).
+   *
+   * ⚠️ Lève quand l'envoi est impossible (plateforme inconnue, adaptateur sans
+   * `send`, canal absent du miroir) : l'appelant journalise — jamais un échec
+   * silencieux qui laisserait quelqu'un attendre.
+   */
+  const envoyerDansCanal = async (
+    conversationId: string,
+    text: string,
+    fichiers?: readonly string[],
+  ): Promise<void> => {
+    const plateforme = mirrorPlatformOf(conversationId);
+    if (!plateforme) {
+      throw new Error(
+        `Conversation « ${conversationId} » : la plateforme du canal est inconnue.`,
+      );
+    }
+    const adapter = getAdapter(plateforme);
+    if (!adapter.send) {
+      throw new Error(
+        `La plateforme « ${plateforme} » n'accepte aucun envoi de message.`,
+      );
+    }
+    await adapter.send(conversationId, {
+      kind: "texte",
+      text,
+      ...(fichiers && fichiers.length > 0 ? { fichiers } : {}),
+    });
+  };
+
+  /**
    * RÉDACTEUR d'une réponse distante — **COMMUN aux plateformes** (lot 21).
    *
    * ⚠️ Mêmes PORTES que le run local (`createRemoteRunTools` recalculé à chaque réponse),
@@ -1399,6 +1449,35 @@ async function main(): Promise<void> {
           imagesSupported: () => effectiveLlmConfig(config).light.vision,
         },
         onFileProduced,
+        // ⚠️ OUTILS D'AGENTS (uniquement sous `chat.remoteAgents = actives`) :
+        // `createRemoteRunTools` ne les construit QUE dans ce cas, même si les
+        // ports sont toujours fournis. Ils réutilisent les services du host local
+        // (annuaire, coffre, délégation, archive, libraire) : aucune seconde
+        // implémentation, donc aucun garde-fou parallèle à maintenir.
+        ...(agentDirectory ? { agents: agentDirectory } : {}),
+        ...(secretStore ? { secrets: secretStore } : {}),
+        // ⚠️ DÉLÉGATION : les jobs créés depuis un canal sont rattachés au CANAL
+        // (`channelScopedDelegation`, `src/pi/sdk/remote-run-tools.ts`) et leur
+        // résultat y est PUBLIÉ (`createChannelAwareWaker`, plus bas).
+        ...(delegation ? { delegation } : {}),
+        ...(heritageStore ? { heritage: heritageStore } : {}),
+        ...(conversationArchive ? { conversationArchive } : {}),
+        ...(remoteLibrarian ? { librarian: remoteLibrarian } : {}),
+        // ⚠️ `envoyer_fichier` : le fichier doit ARRIVER DANS LE CANAL, pas
+        // seulement dans l'interface web — sans post, l'outil ne servirait à rien
+        // pour la personne qui parle dans le canal.
+        filesSend: filesService,
+        onFileSent: (file) => {
+          void envoyerDansCanal(conversationId, `Fichier : « ${file.name} »`, [file.id]).catch(
+            (error: unknown) => {
+              logger.warn("chat.file_sent.failed", {
+                conversation: conversationId,
+                fichier: file.id,
+                error: messageOf(error),
+              });
+            },
+          );
+        },
         logger,
       }),
     createWriter: (run) =>
@@ -1913,6 +1992,24 @@ async function main(): Promise<void> {
       }
     };
 
+    // ⚠️ LIBRAIRE D'UN RUN DISTANT : MÊMES ports que le host local (client,
+    // archivage de fond, captures, stockage), avec les MÊMES bornes. La seule
+    // différence est la conversation FORCÉE au canal (faite par
+    // `buildRemoteRunTools`) : une capture doit être enregistrée dans le fil du
+    // canal, pas sous l'identifiant éphémère du run.
+    remoteLibrarian = librarianConfigured
+      ? {
+          client: librarianClient,
+          archive: librarianArchive,
+          screenshot: librarianClient,
+          shots: librarianShots,
+          onShot: (view: LibrarianShotView) => emitLibrarianShot(view),
+          captureEnabled: () => config.getString("librarian.screenshot") === "on",
+          // ⚠️ Capacité VISION relue à chaque capture (le modèle peut changer à chaud).
+          receivesImages: () => effectiveLlmConfig(config).light.vision,
+        }
+      : undefined;
+
     // Diffusion des IMAGES GÉNÉRÉES vers l'UI (trame de contrôle `image`). Les
     // abonnés sont posés par le transport WS ; un client en échec ne doit jamais
     // interrompre les autres. ⚠️ Seules des métadonnées et un chemin SAME-ORIGIN
@@ -2058,12 +2155,41 @@ async function main(): Promise<void> {
       reactions: reactionStore,
       logger,
     });
-    delegation.setWaker(host);
-    librarianArchive.setWaker(host);
+    // ⚠️ RÉVEIL DES JOBS : un job terminé doit être ANNONCÉ LÀ OÙ SON AUTEUR
+    // ATTEND. Le réveil historique (`host`) ne connaît que les conversations
+    // LOCALES : il REFUSE une session qu'il n'a pas ouverte (« Session inconnue. »,
+    // `src/pi/sdk-host.ts:2295`), et une conversation de canal n'en est pas une.
+    // Le réveil composite garde donc le host à l'IDENTIQUE pour le local et
+    // PUBLIE dans le canal le rapport d'un job rattaché à un canal
+    // (`createChannelAwareWaker`, `src/chat/reply/channel-waker.ts`) : sans lui,
+    // un `delegate` lancé depuis Mattermost/Discord produirait un job dont
+    // PERSONNE ne verrait jamais le résultat.
+    const jobReportWaker = createChannelAwareWaker({
+      fallback: host,
+      // ⚠️ Le rapport est un PROMPT technique (`buildBatchReportPrompt`) : on le
+      // fait résumer par le léger avant publication, avec le prompt du rédacteur
+      // de canal — un rapport brut dans un canal serait illisible.
+      summarize: (report) =>
+        chatWriter(
+          CHAT_REPLY_SYSTEM_PROMPT,
+          CHAT_JOB_REPORT_TIMEOUT_MS,
+          "rapport d'arrière-plan",
+        )(report),
+      post: (conversationId, text) => envoyerDansCanal(conversationId, text),
+      logger,
+    });
+    delegation.setWaker(jobReportWaker);
+    // ⚠️ Même réveil pour l'ARCHIVAGE du libraire : `archive_libraire` rend la
+    // main tout de suite et son issue est rapportée plus tard — dans le canal
+    // quand l'archivage a été demandé depuis un canal.
+    librarianArchive.setWaker(jobReportWaker);
     // Réveil du modèle en fin de commande VALIDÉE : rapport synthétique portant
     // stdout/stderr/code de sortie, corrélé par `approval_id` (éphémère côté
     // humain : ni transcript, ni snapshot, ni rejeu, ni mémoire).
-    agentExecution?.setWaker(host);
+    // ⚠️ Aucune commande ne peut être approuvée depuis un canal (les outils à
+    // approbation sont retirés de la politique distante), donc ce réveil ne
+    // concerne en pratique que les conversations locales.
+    agentExecution?.setWaker(jobReportWaker);
 
     host.subscribeAll((event) => {
       if (event.type === "state") {

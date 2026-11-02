@@ -133,6 +133,7 @@ export {
 } from "./sync/service.js";
 export type { ChatSyncChannel, ChatSyncPlatform } from "./sync/platform.js";
 export {
+  CHAT_JOB_REPORT_TIMEOUT_MS,
   CHAT_JUDGE_SYSTEM_PROMPT,
   CHAT_REPLY_SYSTEM_PROMPT,
   CHAT_JUDGE_TIMEOUT_MS,
@@ -150,6 +151,13 @@ export {
   type RemoteReplyOutcome,
   type ReplyRun,
 } from "./reply/generate.js";
+export {
+  CHANNEL_REPORT_MAX_CHARS,
+  createChannelAwareWaker,
+  reportFallbackText,
+  type ChannelWakerLogger,
+  type ChannelWakerOptions,
+} from "./reply/channel-waker.js";
 export {
   REPLY_MAX_CONCURRENT,
   REPLY_MAX_QUEUE,

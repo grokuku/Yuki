@@ -82,6 +82,16 @@ export interface LibrarianToolsConfig {
    * reste affichée à l'humain, et le motif est écrit dans le résultat.
    */
   receivesImages?: () => boolean;
+  /**
+   * Conversation FORCÉE (run distant : le canal). Absente ⇒ l'identifiant est lu
+   * du contexte de l'outil (host local, comportement historique).
+   *
+   * ⚠️ La session d'un run distant est ÉPHÉMÈRE : sans ce forçage, une capture
+   * serait enregistrée sous un identifiant de conversation fantôme (jamais
+   * listable, jamais restaurée dans le fil) et un archivage lancé verrait son
+   * résultat livré à une session que personne ne lit.
+   */
+  sessionId?: () => string | undefined;
 }
 
 /** Identifiant de la session (conversation) courante, ou `undefined`. */
@@ -312,7 +322,7 @@ export function createLibrarianTools(config: LibrarianToolsConfig): ToolDefiniti
         return { content: [{ type: "text", text: JSON.stringify(payload) }], details: payload };
       }
 
-      const sessionId = sessionIdFromContext(ctx);
+      const sessionId = config.sessionId?.() ?? sessionIdFromContext(ctx);
       const outcome = config.archive.schedule(
         {
           name: nameCheck.value,
@@ -441,7 +451,7 @@ export function createLibrarianTools(config: LibrarianToolsConfig): ToolDefiniti
           // la capture, sinon l'image ne pourrait pas être RESTAURÉE dans son fil
           // après un rechargement (elle est conservée 30 jours, comme une pièce
           // jointe).
-          const sessionId = sessionIdFromContext(ctx);
+          const sessionId = config.sessionId?.() ?? sessionIdFromContext(ctx);
           const record = shotsPort.save({
             data: image.bytes,
             mimeType,
