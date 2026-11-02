@@ -25,6 +25,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { MattermostChatAdapter } from "../../src/chat/mattermost/adapter.js";
+import { MM_DEFAULT_MAX_POST_CHARS, fitMattermostContent } from "../../src/chat/mattermost/adapter.js";
 import { MattermostSocket } from "../../src/chat/mattermost/ws.js";
 import { ChatMirrorStore } from "../../src/chat/mirror/store.js";
 import { conversationIdOfChannel } from "../../src/chat/mirror/ingest.js";
@@ -416,5 +417,168 @@ describe("adaptateur — ingestion, anti-boucle et réponse dans le fil", () => 
     const status = adapter.status();
     expect(JSON.stringify(status)).not.toContain(TOKEN);
     expect(JSON.stringify(status)).not.toContain("127.0.0.1");
+  });
+});
+
+describe("D1 — le BACKFILL ne rejoue pas l'historique dans le moteur de réponse", () => {
+  /** Trois mentions de l'HISTORIQUE (elles datent de plusieurs jours). */
+  function historique(): Record<string, unknown>[] {
+    return [1, 2, 3].map((n) => ({
+      id: `vieux-${n}`,
+      channel_id: CHANNEL,
+      user_id: "humain-1",
+      message: `@yuki question ${n} d'il y a deux semaines`,
+      create_at: 1_699_000_000_000 + n,
+    }));
+  }
+
+  it("N mentions de l'historique ⇒ ZÉRO run, puis UN message temps réel ⇒ UN run (mode `tout`)", async () => {
+    const fixture = await startFixture({ posts: historique() });
+    const store = openStore();
+    // ⚠️ État RÉEL d'un redémarrage : le canal est déjà connu AVEC le mode `tout`.
+    store.ensureConversation({
+      conversationId: CONVERSATION,
+      platform: "mattermost",
+      remoteId: CHANNEL,
+      title: "Général",
+    });
+    store.setReplyMode(CONVERSATION, "tout");
+    const demandes: string[] = [];
+    const adapter = new MattermostChatAdapter({
+      baseUrl: () => fixture.baseUrl,
+      token: () => TOKEN,
+      store,
+      pollIntervalMs: 0,
+      generateReply: async ({ message }) => {
+        demandes.push(message.remoteId);
+        return "bonjour";
+      },
+    });
+    cleanups.push(() => adapter.disconnect());
+    // ⚠️ L'ABONNÉ D'INTERFACE doit recevoir l'historique, LUI : c'est ce qui distingue
+    // « on ne répond pas » de « on ne montre rien ».
+    const diffuses: string[] = [];
+    adapter.subscribe(CONVERSATION, (item) => diffuses.push(item.remoteId));
+    await adapter.connect();
+    await waitFor(() => adapter.status().etat === "on", "la connexion temps réel");
+    await waitFor(() => store.messages(CONVERSATION).length === 3, "le backfill des trois mentions");
+
+    // ① L'HISTORIQUE est VISIBLE (le miroir ET l'abonné le reçoivent)…
+    expect(store.messages(CONVERSATION).map((item) => item.remoteId)).toEqual([
+      "vieux-1",
+      "vieux-2",
+      "vieux-3",
+    ]);
+    // … et il n'a lancé AUCUN run, même en mode « répondre à tous ».
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(diffuses).toEqual(["vieux-1", "vieux-2", "vieux-3"]);
+    expect(fixture.created).toHaveLength(0);
+    expect(demandes).toEqual([]);
+
+    // ② Un message TEMPS RÉEL, lui, est servi UNE fois.
+    fixture.broadcast("posted", {
+      id: "temps-reel",
+      channel_id: CHANNEL,
+      user_id: "humain-1",
+      message: "@yuki bonjour",
+      create_at: 1_700_000_100_000,
+    });
+    await waitFor(() => demandes.length === 1, "la réponse au message temps réel");
+    expect(demandes).toEqual(["temps-reel"]);
+  });
+
+  it("N messages temps réel SIMULTANÉS ⇒ jamais plus de 2 rédactions à la fois (borne dure)", async () => {
+    const fixture = await startFixture();
+    const store = openStore();
+    store.ensureConversation({
+      conversationId: CONVERSATION,
+      platform: "mattermost",
+      remoteId: CHANNEL,
+      title: "Général",
+    });
+    store.setReplyMode(CONVERSATION, "tout");
+    let enCours = 0;
+    let maximum = 0;
+    let liberer: (() => void) | undefined;
+    const porte = new Promise<void>((resolve) => {
+      liberer = resolve;
+    });
+    const adapter = new MattermostChatAdapter({
+      baseUrl: () => fixture.baseUrl,
+      token: () => TOKEN,
+      store,
+      pollIntervalMs: 0,
+      generateReply: async () => {
+        enCours += 1;
+        maximum = Math.max(maximum, enCours);
+        await porte;
+        enCours -= 1;
+        return "bonjour";
+      },
+    });
+    cleanups.push(() => adapter.disconnect());
+    await adapter.connect();
+    await waitFor(() => adapter.status().etat === "on", "la connexion temps réel");
+
+    for (let n = 1; n <= 5; n += 1) {
+      fixture.broadcast("posted", {
+        id: `flot-${n}`,
+        channel_id: CHANNEL,
+        user_id: "humain-1",
+        message: `message ${n}`,
+        create_at: 1_700_000_200_000 + n,
+      });
+    }
+    await waitFor(() => enCours === 2, "les deux rédactions simultanées");
+    // ⚠️ La borne BLOQUE : les trois autres attendent, aucune ne démarre.
+    expect(adapter.pendingReplies).toBe(2);
+    expect(fixture.created).toHaveLength(0);
+
+    liberer?.();
+    await waitFor(() => fixture.created.length === 5, "les cinq réponses publiées");
+    // ⚠️ JAMAIS plus de deux runs simultanés, sur cinq messages arrivés ensemble.
+    expect(maximum).toBe(2);
+  });
+});
+
+describe("D4 — troncature dite côté Mattermost (symétrie avec Discord)", () => {
+  it("`fitMattermostContent` coupe AVANT la limite et le DIT (suffixe compté dedans)", () => {
+    const court = fitMattermostContent("bonjour", 100);
+    expect(court).toEqual({ texte: "bonjour", tronque: false });
+
+    const long = fitMattermostContent("a".repeat(200), 100);
+    expect(long.tronque).toBe(true);
+    // ⚠️ La coupe + le suffixe tiennent DANS la limite : sinon le `400` reviendrait.
+    expect([...long.texte].length).toBe(100);
+    expect(long.texte).toContain("message tronqué");
+    expect(MM_DEFAULT_MAX_POST_CHARS).toBe(16_383);
+  });
+
+  it("un envoi trop long part TRONQUÉ (et annoncé), jamais perdu en `400`", async () => {
+    const fixture = await startFixture();
+    const store = openStore();
+    store.ensureConversation({
+      conversationId: CONVERSATION,
+      platform: "mattermost",
+      remoteId: CHANNEL,
+      title: "Général",
+    });
+    const adapter = new MattermostChatAdapter({
+      baseUrl: () => fixture.baseUrl,
+      token: () => TOKEN,
+      store,
+      pollIntervalMs: 0,
+      // Borne BASSE pour rendre le test court : c'est la même mécanique qu'en production.
+      maxPostChars: () => 200,
+    });
+    cleanups.push(() => adapter.disconnect());
+    await adapter.send(CONVERSATION, { kind: "texte", text: "b".repeat(5_000) });
+
+    expect(fixture.created).toHaveLength(1);
+    const message = String(fixture.created[0]?.message ?? "");
+    expect([...message].length).toBe(200);
+    expect(message).toContain("message tronqué");
+    // ⚠️ TRONCATURE DITE : elle remonte par le statut (`raison`), elle n'est pas silencieuse.
+    expect(String(adapter.status().raison)).toContain("tronquée");
   });
 });

@@ -64,7 +64,6 @@ async function startHarness(processEnv: Record<string, string> = {}): Promise<Ha
   const service = new ChatService({
     mode: () => runtime.getString("chat.mode"),
     remoteAgents: () => runtime.getString("chat.remoteAgents"),
-    remoteMemory: () => runtime.getString("chat.remoteMemory"),
   });
   const server = createServer({
     env,
@@ -107,12 +106,12 @@ describe("GET /api/chat/status", () => {
       mode: string;
       plateforme: { etat: string; raison?: string };
       creation: { autorisee: boolean; raison?: string };
-      distant: { agents: string; memoire: string };
+      distant: { agents: string };
     };
     expect(body.mode).toBe("local");
     expect(body.plateforme.etat).toBe("on");
     expect(body.creation).toEqual({ autorisee: true });
-    expect(body.distant).toEqual({ agents: "desactive", memoire: "desactive" });
+    expect(body.distant).toEqual({ agents: "desactive" });
   });
 
   it("est CÂBLÉE sur `chat.mode` : un changement du réglage change la réponse", async () => {

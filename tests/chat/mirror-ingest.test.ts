@@ -352,3 +352,32 @@ describe("conversations exposées — lecture seule, run possible", () => {
     expect(message.role).toBe("user");
   });
 });
+
+describe("pièces jointes — un post avec `file_ids` entre dans le miroir AVEC ses fichiers", () => {
+  it("un post avec `file_ids` entre dans le miroir AVEC ses pièces jointes", () => {
+    const { store, conversationId } = openStore();
+    const message = postToRemoteMessage(post("p1", { file_ids: ["f-1", "f-2"] }), {
+      platform: "mattermost",
+      conversationId,
+    });
+    expect(message.attachments).toEqual([
+      { id: "f-1", nom: "f-1" },
+      { id: "f-2", nom: "f-2" },
+    ]);
+    // Et elles SURVIVENT au rechargement (sinon l'image serait oubliée au redémarrage).
+    store.upsert(message);
+    const relu = ChatMirrorStore.open({ indexPath: store.indexPath, messagesDir: store.messagesDir });
+    expect(relu.message(conversationId, "p1")?.attachments?.map((item) => item.id)).toEqual([
+      "f-1",
+      "f-2",
+    ]);
+  });
+
+  it("un post SANS `file_ids` n'a aucune pièce jointe (pas de tableau vide inventé)", () => {
+    const message = postToRemoteMessage(post("p2"), {
+      platform: "mattermost",
+      conversationId: conversationIdOfChannel("canal-1"),
+    });
+    expect(message).not.toHaveProperty("attachments");
+  });
+});

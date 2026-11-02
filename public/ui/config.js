@@ -914,7 +914,7 @@ const secretsRoot = document.getElementById("secrets-root");
 const imagesRoot = document.getElementById("images-root");
 /** Panneau des SOURCES (programmes qui réveillent Yuki) — monté par id. */
 const sourcesRoot = document.getElementById("sources-root");
-/** Conteneur du panneau « Discussions » (Mattermost), dans l'onglet Conversation. */
+/** Conteneur du panneau « Discussions » (Mattermost ET Discord), onglet Conversation. */
 const chatRoot = document.getElementById("chat-root");
 /** Panneau de la personnalité — monté par id. */
 const personalityRoot = document.getElementById("personality-root");
@@ -1876,7 +1876,7 @@ void (async () => {
     if (sourcesRoot) {
       initSourcesPanel({ root: sourcesRoot, HolafFetch, HolafModal });
     }
-    // Panneau « Discussions » (Mattermost) : URL, jeton saisi une fois, état de la
+    // Panneau « Discussions » (Mattermost, Discord) : jeton saisi une fois, état de la
     // connexion, backfill 2 semaines, canaux suivis. Composant autonome monté par id.
     if (chatRoot) {
       initChatPanel({ root: chatRoot, HolafModal });

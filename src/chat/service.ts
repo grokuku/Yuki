@@ -33,17 +33,11 @@ export interface ChatServiceOptions {
    * la sécurité est le DÉFAUT, jamais l'inverse.
    */
   remoteAgents?: () => string;
-  /**
-   * Lit `chat.remoteMemory` (`desactive` | `actives`). Absent = `desactive`.
-   * ⚠️ Réglage seul au lot 1 : la mémoire des conversations distantes n'est pas
-   * branchée (lot 2/3).
-   */
-  remoteMemory?: () => string;
   /** Miroir des canaux synchronisés. Absent = miroir VIDE (état du lot 1). */
   mirror?: ChatMirror;
 }
 
-/** Mode d'une capacité distante (agents, mémoire). */
+/** Mode d'une capacité distante (agents). */
 export type ChatRemoteCapability = "desactive" | "actives";
 
 /** Vue d'état consommée par l'interface (`GET /api/chat/status`). */
@@ -54,8 +48,13 @@ export interface ChatStatusView {
    * Capacités des conversations DISTANTES — lues dans la configuration, jamais
    * devinées. Sert à l'interface pour DIRE ce qui est actif (et pas seulement à
    * le cacher).
+   *
+   * ⚠️ Il n'y a PLUS de `memoire` ici : la mémoire durable d'un canal n'est pas
+   * branchée, et `chat.remoteMemory` a été RETIRÉ (réglage sans consommateur =
+   * mensonge d'interface). Un champ d'état qui afficherait « désactivée » sans
+   * que rien ne puisse l'activer serait le même mensonge, une couche plus bas.
    */
-  distant: { agents: ChatRemoteCapability; memoire: ChatRemoteCapability };
+  distant: { agents: ChatRemoteCapability };
   /**
    * Création d'une conversation LOCALE.
    *
@@ -73,8 +72,9 @@ const CREATION_REFUSALS: Record<Exclude<ChatMode, "local">, string> = {
     "la création d'une conversation locale est désactivée. Écrivez dans un canal " +
     "Mattermost : Yuki y répondra selon le mode de réponse du canal.",
   discord:
-    "Discord n'est pas encore configuré — ce mode ne fait rien pour l'instant : " +
-    "la création d'une conversation locale est désactivée.",
+    "En mode Discord, les conversations viennent des salons synchronisés : la création " +
+    "d'une conversation locale est désactivée. Écrivez dans un salon Discord : Yuki y " +
+    "répondra selon le mode de réponse du salon (par défaut, seulement si elle est citée).",
 };
 
 /**
@@ -97,24 +97,17 @@ function normalizeMode(raw: string): ChatMode {
 export class ChatService {
   private readonly readMode: () => string;
   private readonly readRemoteAgents: () => string;
-  private readonly readRemoteMemory: () => string;
   private readonly mirror: ChatMirror;
 
   constructor(options: ChatServiceOptions) {
     this.readMode = options.mode;
     this.readRemoteAgents = options.remoteAgents ?? (() => "desactive");
-    this.readRemoteMemory = options.remoteMemory ?? (() => "desactive");
     this.mirror = options.mirror ?? emptyChatMirror();
   }
 
   /** `chat.remoteAgents` : les agents sont-ils autorisés sur une conversation distante ? */
   remoteAgents(): ChatRemoteCapability {
     return this.readRemoteAgents() === "actives" ? "actives" : "desactive";
-  }
-
-  /** `chat.remoteMemory` : la mémoire durable est-elle autorisée en mode distant ? */
-  remoteMemory(): ChatRemoteCapability {
-    return this.readRemoteMemory() === "actives" ? "actives" : "desactive";
   }
 
   /** Mode courant (relu à chaque appel : changement à chaud). */
@@ -165,7 +158,7 @@ export class ChatService {
       mode: this.mode(),
       plateforme: this.platformStatus(),
       creation: refusal === null ? { autorisee: true } : { autorisee: false, raison: refusal },
-      distant: { agents: this.remoteAgents(), memoire: this.remoteMemory() },
+      distant: { agents: this.remoteAgents() },
     };
   }
 

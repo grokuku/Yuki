@@ -4,7 +4,12 @@
  * ⚠️ Même chemin ISOLÉ que le récapitulatif et l'extracteur de mémoire : chaque appel
  * ouvre une session ÉPHÉMÈRE EN MÉMOIRE (`createEphemeralSession`). Le prompt ne touche
  * JAMAIS la session de l'utilisateur : il n'apparaît ni dans son historique, ni dans son
- * transcript. Aucun outil n'est exposé — le modèle ne fait que RÉDIGER.
+ * transcript.
+ *
+ * ⚠️ OUTILS : aucun par DÉFAUT (récapitulatif, juge, extracteur de mémoire ne font que
+ * RÉDIGER). Le run d'une réponse dans un canal distant, lui, reçoit l'allowlist de sa
+ * POLITIQUE (`tools`) et les définitions correspondantes (`customTools`) : c'est ce qui
+ * rend `generer_image` atteignable depuis Mattermost.
  *
  * Ce module existe pour que plusieurs usages (« récapituler », « juger un message
  * distant », « rédiger une réponse dans un canal ») partagent EXACTEMENT le même chemin
@@ -14,12 +19,23 @@
  */
 
 import { contentTextFromMessage, type RawAgentMessage } from "../events.js";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { FileImageContent } from "../../files/types.js";
 import type { PiLogger, PiThinkingLevel } from "../types.js";
 import { getSharedModelRuntime, liveValue, resolveSdkModel } from "./model-runtime.js";
 import { createEphemeralSession } from "./session-factory.js";
 
-/** Écrivain bas niveau : `prompt → texte du modèle`. */
-export type SdkPromptWriter = (prompt: string) => Promise<string>;
+/**
+ * Écrivain bas niveau : `prompt → texte du modèle`.
+ *
+ * ⚠️ `images` (facultatif) joint des pièces jointes au MÊME tour : c'est ce qui permet
+ * au rédacteur d'un canal distant de VOIR une image postée sur Mattermost. Aucun
+ * changement pour un message texte (les options du prompt restent alors identiques).
+ */
+export type SdkPromptWriter = (
+  prompt: string,
+  options?: { images?: readonly FileImageContent[] },
+) => Promise<string>;
 
 export interface SdkPromptWriterConfig {
   cwd: string;
@@ -36,6 +52,30 @@ export interface SdkPromptWriterConfig {
   logger: PiLogger;
   /** Libellé de l'usage dans les journaux et les erreurs (`récapitulatif`, `juge`…). */
   label: string;
+  /**
+   * ALLOWLIST d'outils du run, RELUE à chaque appel.
+   *
+   * ⚠️ C'est ici que passe la POLITIQUE (`toolAllowlistForChat`,
+   * `src/llm/tool-policy.ts`) : un run distant reçoit la sienne, calculée par le
+   * câblage. Absent ⇒ aucun outil (rédacteur de récapitulatif, juge, extracteur
+   * de mémoire : ces usages ne doivent RIEN exécuter).
+   */
+  tools?: () => readonly string[];
+  /**
+   * DÉFINITIONS des outils de l'allowlist, RELUES à chaque appel.
+   *
+   * ⚠️ Le SDK Pi FILTRE ces définitions par l'allowlist
+   * (`dist/core/agent-session.js:_refreshToolRegistry`) : une définition absente
+   * de `tools` n'est jamais exposée au modèle. Le type est volontairement
+   * OPAQUE (`unknown`) : aucun type du SDK ne traverse la façade `src/pi`.
+   */
+  customTools?: () => readonly unknown[];
+  /**
+   * Fabrique de session éphémère. Injectable pour les TESTS (défaut :
+   * `createEphemeralSession`). Permet de vérifier QUELLE allowlist et QUELS
+   * outils sont réellement passés au SDK, sans modèle ni réseau.
+   */
+  createSession?: typeof createEphemeralSession;
 }
 
 /**
@@ -46,7 +86,10 @@ export interface SdkPromptWriterConfig {
  * comme si elle existait).
  */
 export function createSdkPromptWriter(config: SdkPromptWriterConfig): SdkPromptWriter {
-  return async (prompt: string): Promise<string> => {
+  return async (
+    prompt: string,
+    options: { images?: readonly FileImageContent[] } = {},
+  ): Promise<string> => {
     const runtime = await getSharedModelRuntime({
       authPath: config.authPath,
       modelsPath: config.modelsPath,
@@ -60,14 +103,17 @@ export function createSdkPromptWriter(config: SdkPromptWriterConfig): SdkPromptW
       });
       throw new Error(`Modèle de ${config.label} introuvable : ${modelReference}`);
     }
-    const ephemeral = await createEphemeralSession({
+    const ephemeral = await (config.createSession ?? createEphemeralSession)({
       cwd: config.cwd,
       agentDir: config.agentDir,
       systemPrompt: config.systemPrompt,
       modelRuntime: runtime,
       model,
       thinkingLevel: config.thinking,
-      tools: [],
+      // ⚠️ POLITIQUE DU RUN : vide par défaut (récapitulatif, juge, mémoire
+      // n'agissent pas). Un run distant reçoit celle de son origine.
+      tools: config.tools?.() ?? [],
+      customTools: (config.customTools?.() ?? []) as readonly ToolDefinition[],
     });
     const { session } = ephemeral;
 
@@ -98,8 +144,22 @@ export function createSdkPromptWriter(config: SdkPromptWriterConfig): SdkPromptW
     }, Math.max(1, config.timeoutMs()));
     timer.unref?.();
 
+    // ⚠️ MÊME forme `ImageContent` que les autres chemins (`sdk-host.ts`). Quand le
+    // modèle est déclaré SANS vision (`llm.<rôle>.vision = non`), le SDK remplace
+    // l'image par une mention explicite : rien n'est jeté en silence.
+    const images =
+      options.images !== undefined && options.images.length > 0
+        ? options.images.map((image) => ({
+            type: "image" as const,
+            data: image.data,
+            mimeType: image.mimeType,
+          }))
+        : undefined;
     try {
-      await session.prompt(prompt, { expandPromptTemplates: false });
+      await session.prompt(prompt, {
+        expandPromptTemplates: false,
+        ...(images !== undefined ? { images } : {}),
+      });
     } finally {
       clearTimeout(timer);
       unsubscribe();

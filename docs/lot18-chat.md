@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | **Local** (défaut, `chat.mode = local`) | conversations de Yuki, comportement **inchangé** | liste des sessions Pi |
 | **Mattermost** | canaux **synchronisés** (lecture seule côté interface web) | liste des canaux suivis + leur fil |
-| **Discord** | **stub honnête** : « Discord n'est pas encore configuré. » | aucune conversation, création désactivée |
+| **Discord** | **LIVRÉ au lot 21** (`docs/lot21-chat-discord.md`) : mêmes règles, client REST + passerelle | liste des salons suivis + leur fil |
 
 ⚠️ **`chat.mode` ne filtre QUE la vue.** La synchronisation démarre dès que la
 plateforme est **configurée** (URL + jeton), même si l'utilisateur regarde le mode
@@ -221,7 +221,7 @@ la ligne d'erreur dit précisément ce qui manque (URL, jeton, ou refus du serve
 | Limite | Pourquoi |
 | --- | --- |
 | **Aucun relais d'approbations** dans un canal | lot suivant : `ChatApprovalRequest` / `ChatApprovalDecision` existent, rien n'est branché |
-| **Aucune mémoire durable** des conversations distantes | `chat.remoteMemory` existe, reste `desactive` (réversible) |
+| **Aucune mémoire durable** des conversations distantes | pas branchée, donc **aucun réglage** : `chat.remoteMemory` a été retiré (il n'était lu que pour l'affichage) |
 | Backfill **borné** à 2 semaines / 1 000 messages | choix utilisateur ; le reste vit sur Mattermost, et l'interface le dit |
 | `since` **non paginable** (API) | si un canal a plus de 1 000 messages modifiés dans la fenêtre, le surplus n'est pas récupéré et le bandeau s'affiche |
 | Aucune vérification contre un **vrai** serveur Mattermost | pas d'instance accessible ici ; les tests rejouent le contrat de l'API sur des serveurs fixtures |
@@ -231,7 +231,7 @@ la ligne d'erreur dit précisément ce qui manque (URL, jeton, ou refus du serve
 
 | Sujet | Fichier |
 | --- | --- |
-| registre, stub Discord, inconnu propre | `tests/chat/adapters.test.ts` |
+| registre, plateformes enregistrées par fournisseur, inconnu propre | `tests/chat/adapters.test.ts` |
 | identifiants `mm-…`/`dc-…`, auteur + parent conservés | `tests/chat/mirror.test.ts` |
 | mode lu à chaud, refus de création, capacités distantes | `tests/chat/service.test.ts` |
 | **client REST** : `me`, canaux, **pagination sans perte sur serveur qui tronque**, `since`, `429`, jeton jamais dans une erreur | `tests/chat/mattermost-client.test.ts` |
@@ -241,7 +241,7 @@ la ligne d'erreur dit précisément ce qui manque (URL, jeton, ou refus du serve
 | **trois modes** : `tout`, `mention` (cas pièges), `auto` (un seul jugement) | `tests/chat/reply-modes.test.ts` |
 | **routes** : URL validée, jeton jamais relu, refus explicites, mode par canal | `tests/chat/chat-api.test.ts` |
 | `YUKI_CHAT_` accepté au coffre, **non** référençable en commande | `tests/secrets/references.test.ts` |
-| `chat.mode` / `chat.remoteAgents` / `chat.remoteMemory` | `tests/config/schema-chat.test.ts` |
+| `chat.mode` / `chat.remoteAgents` | `tests/config/schema-chat.test.ts` |
 | politique d'outils par mode | `tests/llm/tool-policy-chat.test.ts` |
 | trame `sessions`, sélection de miroir, refus d'écriture | `tests/gateway/ws/chat-remote.test.ts` |
 

@@ -40,6 +40,11 @@ export const CHAT_REPLY_SYSTEM_PROMPT = [
   "Si tu ne sais pas, tu le dis simplement. Tu ne prétends jamais avoir fait une action",
   "que tu n'as pas faite. Tu ne révèles aucun secret, aucun jeton, aucun chemin interne.",
   "Tu n'écris qu'un seul message, sans balise ni bloc de code si ce n'est pas nécessaire.",
+  "",
+  "Depuis ce canal, certaines actions sont IMPOSSIBLES : exécuter une commande sur une",
+  "machine, transférer un fichier, demander un secret. Elles exigent une validation",
+  "humaine qui s'affiche uniquement dans l'interface web et ne peut pas être donnée",
+  "ici. Si on te les demande, tu le dis clairement au lieu d'attendre ou d'inventer.",
 ].join("\n");
 
 /**
@@ -125,6 +130,12 @@ export function buildReplyPrompt(input: {
   message: RemoteMessage;
   botName?: string;
   maxChars?: number;
+  /**
+   * Pièces jointes qui n'ont PAS pu être transmises (fichier non image, trop lourd,
+   * illisible). ⚠️ Elles sont DITES au rédacteur : sans cela il répondrait comme si le
+   * message n'en portait aucune, alors que l'humain croit avoir joint une image.
+   */
+  notes?: readonly string[];
 }): string {
   const maxChars = input.maxChars ?? CHAT_REPLY_TRANSCRIPT_MAX_CHARS;
   const lines: string[] = [];
@@ -147,6 +158,13 @@ export function buildReplyPrompt(input: {
   }
   for (const line of kept.reverse()) lines.push(line);
   if (kept.length === 0) lines.push("(aucun message précédent)");
+
+  const notes = (input.notes ?? []).filter((note) => note.trim() !== "");
+  if (notes.length > 0) {
+    lines.push("");
+    lines.push("Pièces jointes du message (NON transmises au modèle) :");
+    for (const note of notes) lines.push(`- ${note}`);
+  }
 
   lines.push("");
   lines.push(`Message auquel tu dois répondre — ${authorLabel(input.message)} :`);

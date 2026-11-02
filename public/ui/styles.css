@@ -840,6 +840,17 @@ a.pill:hover {
   color: var(--muted);
 }
 
+/* Sous-libellé d'un réglage groupé (quand / comment / citer) : même gabarit que
+ * `.ctx-menu__label` mais plus discret, pour que le GROUPE reste lisible d'un coup
+ * d'œil sans empiler trois titres majuscules. */
+.ctx-menu__label--sub {
+  padding-top: 2px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  font-style: italic;
+}
+
 .ctx-menu__item--radio {
   display: flex;
   align-items: baseline;

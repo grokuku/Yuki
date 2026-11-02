@@ -19,7 +19,7 @@
  *  3. jamais si le canal n'est PAS en `auto` (le juge n'est même pas appelé).
  */
 
-import type { ChatReplyMode, RemoteMessage } from "../types.js";
+import type { ChatQuoteAuthor, ChatReplyMode, ChatReplyStyle, RemoteMessage, RemotePlatform } from "../types.js";
 import { isOwnMessage } from "../mirror/ingest.js";
 
 /**
@@ -31,12 +31,155 @@ import { isOwnMessage } from "../mirror/ingest.js";
  */
 export const DEFAULT_REPLY_MODE: ChatReplyMode = "mention";
 
+/**
+ * Défaut de `replyMode` PAR PLATEFORME.
+ *
+ * ⚠️ Discord est explicitement à `mention` (décision du lot 21) : un bot dans un serveur
+ * ACTIF qui répondrait à tous les messages y serait insupportable — et Discord n'a pas
+ * de « fil par défaut » : chaque réponse non sollicitée crée un bruit visible par tout le
+ * serveur. Mattermost garde son défaut du lot 18 (`DEFAULT_REPLY_MODE`).
+ *
+ * ⚠️ Le défaut est RÉSOLU PAR PLATEFORME, et non écrit en dur dans chaque adaptateur :
+ * c'est ce qui permet aux deux valeurs de diverger (elles sont d'ailleurs IDENTIQUES
+ * aujourd'hui — la structure existe pour que le jour où l'une change, l'autre ne suive pas
+ * par accident).
+ */
+export const DEFAULT_REPLY_MODE_BY_PLATFORM: Readonly<Record<RemotePlatform, ChatReplyMode>> = {
+  mattermost: DEFAULT_REPLY_MODE,
+  discord: "mention",
+};
+
+/** Défaut EFFECTIF de `replyMode` pour une plateforme (jamais `undefined`). */
+export function defaultReplyModeFor(platform: RemotePlatform): ChatReplyMode {
+  return DEFAULT_REPLY_MODE_BY_PLATFORM[platform] ?? DEFAULT_REPLY_MODE;
+}
+
 /** Libellés français des modes (interface : clic droit sur un canal). */
 export const REPLY_MODE_LABELS: Record<ChatReplyMode, string> = {
   tout: "Répondre à tous les messages",
   auto: "Répondre quand on s'adresse à Yuki (jugé par le modèle)",
   mention: "Répondre seulement si Yuki est citée",
 };
+
+/** Libellés français des styles de réponse (interface : clic droit sur un canal). */
+export const REPLY_STYLE_LABELS: Record<ChatReplyStyle, string> = {
+  fil: "Réponse dans le fil",
+  nouveau: "Nouveau message (à la racine du canal)",
+};
+
+/** Libellés français de la citation d'auteur (interface : clic droit sur un canal). */
+export const QUOTE_AUTHOR_LABELS: Record<ChatQuoteAuthor, string> = {
+  oui: "Citer l'auteur du message",
+  non: "Ne pas citer l'auteur",
+};
+
+/** Nombre maximal de LIGNES reprises dans une citation (borne : jamais un pavé). */
+export const REPLY_QUOTE_MAX_LINES = 3;
+
+/** Nombre maximal de CARACTÈRES repris dans une citation (borne de coût et de bruit). */
+export const REPLY_QUOTE_MAX_CHARS = 240;
+
+/**
+ * Caractères Markdown neutralisés dans une citation.
+ *
+ * ⚠️ Raison exacte : le texte cité vient d'un TIERS. Sans échappement, un message qui
+ * contient `# titre`, `[texte](url)`, `**gras**` ou une clôture de bloc de code
+ * changerait la FORME du message de Yuki. On rend donc le texte cité littéral, ligne
+ * par ligne, dans un bloc `> …` — ce qui reste toujours rendu par Mattermost.
+ */
+const MARKDOWN_SIGNIFICANT = /[\\`*_{}[\]()#+!|<>~]/g;
+
+/** Retire les caractères de contrôle (jamais de saut de ligne vertical dans une citation). */
+function stripControlChars(text: string): string {
+  return text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+}
+
+/**
+ * Neutralise un fragment de texte pour une citation Markdown.
+ *
+ * ⚠️ Les `@` reçoivent un espace de largeur nulle : sans cela, citer `@channel` ou
+ * `@ici` RELANCERAIT une notification en citant un message — ce serait une injection
+ * de mention, pas une citation.
+ */
+function escapeQuoted(text: string): string {
+  return stripControlChars(text)
+    .replace(MARKDOWN_SIGNIFICANT, (char) => `\\${char}`)
+    .replace(/@/g, "@\u200B");
+}
+
+/**
+ * Message d'ORIGINE auquel une réponse doit se rattacher : `undefined` (= racine du
+ * canal) ou l'identifiant de la RACINE du fil.
+ *
+ * ⚠️ Deux pièges traités ici :
+ *  1. `nouveau` ⇒ **aucun** `root_id`, même si le message d'origine est dans un fil ;
+ *  2. `fil` ⇒ la RACINE (`threadRootId`), **jamais le message lui-même** : répondre à
+ *     une réponse de fil avec `root_id` = ce message créerait un fil IMBRIQUÉ, que
+ *     Mattermost n'affiche pas comme une réponse du fil d'origine.
+ */
+export function rootIdForReply(input: {
+  replyStyle: ChatReplyStyle;
+  message: Pick<RemoteMessage, "remoteId" | "threadRootId">;
+}): string | undefined {
+  if (input.replyStyle === "nouveau") return undefined;
+  const root = input.message.threadRootId;
+  return root !== undefined && root !== "" ? root : input.message.remoteId;
+}
+
+/**
+ * Citation de l'auteur, en Markdown `>` (toujours rendu par Mattermost).
+ *
+ * Format : `> **@auteur** a écrit :` puis les premières lignes du message, bornées.
+ *
+ * @param options.maxLines nombre de lignes reprises (défaut `REPLY_QUOTE_MAX_LINES`).
+ * @param options.maxChars longueur maximale (défaut `REPLY_QUOTE_MAX_CHARS`).
+ */
+export function quotePrefixOf(
+  message: Pick<RemoteMessage, "author" | "text">,
+  options: { maxLines?: number; maxChars?: number } = {},
+): string {
+  const maxLines = Math.max(1, options.maxLines ?? REPLY_QUOTE_MAX_LINES);
+  const maxChars = Math.max(1, options.maxChars ?? REPLY_QUOTE_MAX_CHARS);
+  const auteur = (message.author.nom ?? "").trim() || message.author.id;
+  const lignes = stripControlChars(message.text ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "")
+    .slice(0, maxLines);
+  const corpsBrut = lignes.join("\n");
+  const corps =
+    corpsBrut.length > maxChars ? `${corpsBrut.slice(0, Math.max(1, maxChars - 1))}…` : corpsBrut;
+  const entete = `> **@${escapeQuoted(auteur)}** a écrit :`;
+  if (corps === "") return entete;
+  const cite = corps
+    .split("\n")
+    .map((line) => `> ${escapeQuoted(line)}`)
+    .join("\n");
+  return `${entete}\n${cite}`;
+}
+
+/**
+ * Compose le texte PUBLIÉ : citation (si demandée) puis réponse.
+ *
+ * ⚠️ `quoteAuthor = "non"` rend le texte EXACTEMENT tel quel — c'est le comportement
+ * observé en production, et il ne change pas tant que l'utilisateur ne demande rien.
+ */
+export function composeReplyText(input: {
+  text: string;
+  message: Pick<RemoteMessage, "author" | "text">;
+  quoteAuthor: ChatQuoteAuthor;
+  maxLines?: number;
+  maxChars?: number;
+}): string {
+  if (input.quoteAuthor !== "oui") return input.text;
+  const prefixe = quotePrefixOf(input.message, {
+    ...(input.maxLines !== undefined ? { maxLines: input.maxLines } : {}),
+    ...(input.maxChars !== undefined ? { maxChars: input.maxChars } : {}),
+  });
+  const corps = input.text.trim();
+  return corps === "" ? prefixe : `${prefixe}\n\n${corps}`;
+}
 
 /** Juge `auto` : rend `true` si le message s'adresse à Yuki. */
 export type ChatReplyJudge = (input: {
@@ -145,12 +288,25 @@ export interface DecideReplyInput {
 /**
  * Décide si Yuki répond à un message.
  *
- * ⚠️ L'ordre importe : l'anti-boucle est évalué AVANT le mode. Un message du bot
- * ne sera donc jamais jugé (borne n°1) ni renvoyé, même en mode `tout`.
+ * ⚠️ L'ordre importe : l'anti-boucle est évaluée AVANT le mode. Un message de robot
+ * — Yuki ou n'importe quel AUTRE bot — ne sera donc jamais jugé (borne n°1) ni renvoyé,
+ * même en mode `tout`. Sans le premier test, deux bots se répondraient indéfiniment.
  */
 export async function decideReply(input: DecideReplyInput): Promise<ReplyDecision> {
   const { message, replyMode } = input;
-  // 1. ANTI-BOUCLE — prime sur tout le reste.
+  // 0. ANTI-BOUCLE — un ROBOT, QUEL QU'IL SOIT, ne reçoit jamais de réponse.
+  // ⚠️ `estBot` est calculé à l'ingestion (`src/chat/mirror/ingest.ts`) : il couvre
+  // `author.bot` chez Discord (un AUTRE bot) et l'identifiant du bot de Yuki. Le cas
+  // « Yuki elle-même » est ainsi déjà couvert ici ; `isOwnMessage` reste en second filet
+  // pour un message ingéré AVANT que le miroir ne connaisse l'identifiant du bot.
+  if (message.author.estBot === true) {
+    return {
+      repondre: false,
+      raison: "auteur_bot",
+      detail: "Message envoyé par un robot : aucune réponse (anti-boucle).",
+    };
+  }
+  // 1. ANTI-BOUCLE (second filet) — Yuki elle-même, quand `estBot` n'a pas pu être posé.
   if (isOwnMessage(message, input.botUserId)) {
     return {
       repondre: false,

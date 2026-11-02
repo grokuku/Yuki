@@ -145,6 +145,16 @@ export interface ImageToolPort {
    * aucune copie (host nu, tests) et le résultat ne promet rien.
    */
   archive?: GeneratedImageFilesPort;
+  /**
+   * Conversation FORCÉE (run distant : la session est ÉPHÉMÈRE et ne désigne
+   * aucun fil). Absent ⇒ la conversation est lue dans le contexte de l'outil
+   * (session légère persistante, où les deux coïncident).
+   *
+   * ⚠️ Sans ce forçage, l'image générée serait copiée dans une conversation
+   * FANTÔME (identifiant de session jetable) : elle ne serait ni listable ni
+   * envoyable, et l'utilisateur du canal ne la verrait jamais.
+   */
+  sessionId?: () => string | undefined;
 }
 
 /** Identifiant de la session (conversation) courante, ou `undefined`. */
@@ -156,6 +166,16 @@ function sessionIdFromContext(ctx: ExtensionContext | undefined): string | undef
   } catch {
     return undefined;
   }
+}
+
+/** Résout la conversation : l'ID FORCÉ prime, sinon celui du contexte de l'outil. */
+function resolveSessionId(
+  ctx: ExtensionContext | undefined,
+  port: { sessionId?: () => string | undefined },
+): string | undefined {
+  const forced = port.sessionId?.();
+  if (forced && forced.length > 0) return forced;
+  return sessionIdFromContext(ctx);
 }
 
 /** Dimensions lisibles (jamais inventées : `undefined` si inconnues). */
@@ -339,7 +359,7 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
         typeof input.style === "string" && input.style.trim() !== ""
           ? input.style.trim()
           : undefined;
-      const sessionId = sessionIdFromContext(ctx);
+      const sessionId = resolveSessionId(ctx, port);
 
       // ⚠️ Lecture LOCALE du store : aucune I/O réseau, aucun appel modèle, donc
       // aucune attente et aucun coût (c'est ce que dit la description).
@@ -512,7 +532,7 @@ export function createImageTools(port: ImageToolPort): ToolDefinition[] {
         typeof input.ratio === "string" && input.ratio.trim() !== ""
           ? input.ratio.trim()
           : undefined;
-      const sessionId = sessionIdFromContext(ctx);
+      const sessionId = resolveSessionId(ctx, port);
 
       try {
         const image = await port.generate({

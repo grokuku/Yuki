@@ -470,9 +470,12 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // mais `generer_image` et l'ANALYSE D'IMAGE restent disponibles (demande
   // explicite : « générer et analyser des images sur mattermost »).
   // La politique correspondante est `toolAllowlistForChat`
-  // (`src/llm/tool-policy.ts`) ; elle sera BRANCHÉE quand les runs distants
-  // existeront (lot 2/3) — aujourd'hui le seul run est local, lui appliquer la
-  // restriction casserait l'usage courant.
+  // (`src/llm/tool-policy.ts`) : elle est BRANCHÉE sur le run distant depuis le
+  // lot 20 (`src/chat/reply/generate.ts`). Elle est relue à CHAQUE réponse
+  // (`apply: hot`) : changer `remoteAgents` s'applique à la réponse suivante.
+  // ⚠️ `actives` n'ouvre JAMAIS un outil qui exige une approbation : une
+  // approbation s'affiche dans l'interface WEB et ne peut pas être donnée
+  // depuis un canal — ces outils sont retirés de la politique distante.
   "chat.remoteAgents": {
     type: "enum",
     enum: ["desactive", "actives"],
@@ -480,16 +483,37 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_CHAT_REMOTE_AGENTS",
   },
-  // ⚠️ MÉMOIRE DURABLE : NON en mode distant pour commencer (choix utilisateur),
-  // mais DÉFAUT RÉVERSIBLE — c'est un réglage, pas une décision codée en dur.
-  // Au lot 1, le champ et son défaut existent ; la mémoire n'est PAS branchée sur
-  // les conversations distantes (lot 2/3).
-  "chat.remoteMemory": {
-    type: "enum",
-    enum: ["desactive", "actives"],
-    default: "desactive",
+  // ⚠️ MÉMOIRE DURABLE : elle n'est PAS branchée sur les conversations
+  // distantes, et il n'y a donc AUCUN réglage. `chat.remoteMemory` a existé au
+  // lot 18 : il n'était lu que pour l'AFFICHAGE, aucun consommateur ne s'en
+  // servait — un interrupteur qui ne fait rien est un mensonge d'interface, il
+  // a été RETIRÉ. Le jour où la mémoire distante sera branchée, le réglage
+  // reviendra EN MÊME TEMPS que son consommateur.
+  // --- Discord (lot 21) ----------------------------------------------------
+  // ⚠️ Champs SCALAIRES seulement (`FieldType` = `string | int | enum`) : la liste des
+  // salons suivis n'est pas un réglage, c'est le MIROIR (`chat-mirror.json`).
+  //
+  // Serveur à suivre. `allowEmpty` : la chaîne vide a un SENS ("tous les serveurs où le
+  // bot est présent") et c'est le défaut — un identifiant obligatoire rendrait le bot
+  // muet tant que l'utilisateur n'aurait pas trouvé son identifiant de serveur.
+  "chat.discord.guildId": {
+    type: "string",
+    default: "",
+    allowEmpty: true,
     apply: "hot",
-    env: "YUKI_CHAT_REMOTE_MEMORY",
+    env: "YUKI_CHAT_DISCORD_GUILD_ID",
+  },
+  // ⚠️ Borne d'ENVOI par fichier, appliquée AVANT tout appel réseau. Discord accepte
+  // 20 Mio par défaut (davantage avec le boost du serveur) et une requête de 25 Mio au
+  // maximum : on reste SOUS (8 Mio par défaut) parce qu'un envoi raté coûte une réponse
+  // perdue, et on plafonne à 25 Mio (`DISCORD_MAX_UPLOAD_CEILING`).
+  "chat.discord.maxUploadBytes": {
+    type: "int",
+    default: 8 * 1024 * 1024,
+    min: 1,
+    max: 25 * 1024 * 1024,
+    apply: "hot",
+    env: "YUKI_CHAT_DISCORD_MAX_UPLOAD_BYTES",
   },
 
   // --- Transport temps réel ------------------------------------------------

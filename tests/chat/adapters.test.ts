@@ -3,10 +3,12 @@
  *
  * Ce que ce fichier prouve :
  *  - `local` existe et se décrit par la MÊME interface que les plateformes ;
- *  - `discord` est un STUB qui DIT qu'il n'est pas configuré (raison exacte) ;
- *  - `mattermost` n'a AUCUN adaptateur à ce lot (aucun client) — et la lecture
- *    échoue PROPREMENT (erreur typée), jamais un `undefined` silencieux ;
- *  - `listPlatforms()` ne annonce que ce qui existe réellement.
+ *  - `mattermost` et `discord` sont enregistrés par un FOURNISSEUR (au démarrage du
+ *    serveur, `src/index.ts`) : hors démarrage, la lecture échoue PROPREMENT (erreur
+ *    typée) au lieu de rendre un adaptateur muet qui mentirait sur son état ;
+ *  - `registerAdapterProvider` / `unregisterAdapter` font apparaître et disparaître une
+ *    plateforme de `listPlatforms()` ;
+ *  - le mode distant expose le CONTRAT COMPLET, `send()` compris (lot 2 et lot 21).
  *
  * ⚠️ Ces tests ÉCHOUENT sur le code d'origine (`src/chat/` n'y existe pas :
  * l'import lève « Cannot find module »).
@@ -16,11 +18,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   ChatAdapterError,
-  DISCORD_NOT_CONFIGURED_REASON,
   LOCAL_MODE_REASON,
+  registerAdapterProvider,
+  unregisterAdapter,
   getAdapter,
   listPlatforms,
 } from "../../src/chat/index.js";
+import type { ChatAdapter, ChatAdapterStatus } from "../../src/chat/index.js";
 
 describe("registre — résolution par plateforme", () => {
   it("`local` existe et déclare que le mode local n'est PAS distant", () => {
@@ -31,24 +35,20 @@ describe("registre — résolution par plateforme", () => {
     return expect(adapter.listConversations()).resolves.toEqual([]);
   });
 
-  it("`discord` renvoie le stub avec une raison EXACTE", () => {
-    const adapter = getAdapter("discord");
-    expect(adapter.platform).toBe("discord");
-    expect(adapter.status()).toEqual({
-      etat: "off",
-      raison: "Discord n'est pas encore configuré.",
-    });
-    expect(DISCORD_NOT_CONFIGURED_REASON).toBe("Discord n'est pas encore configuré.");
-  });
-
-  it("le stub Discord n'écrit jamais rien (aucun `send`)", () => {
-    const adapter = getAdapter("discord");
-    expect(adapter.send).toBeUndefined();
-    // Les lectures rendent VIDE sans lever : l'interface affiche son bandeau.
-    return Promise.all([
-      expect(adapter.listConversations()).resolves.toEqual([]),
-      expect(adapter.fetchMessages("dc-1")).resolves.toEqual({ messages: [] }),
-    ]);
+  it("`discord` n'existe qu'une fois son FOURNISSEUR enregistré (comme Mattermost)", () => {
+    // ⚠️ Lot 21 : Discord est LIVRÉ, mais son adaptateur a besoin du miroir et du coffre.
+    // L'enregistrer à l'import obligerait à importer la moitié du programme ici — et
+    // rendrait `getAdapter("discord")` vrai même dans un processus où rien n'est câblé.
+    expect(() => getAdapter("discord")).toThrow(ChatAdapterError);
+    const factice = fakeAdapter("discord");
+    registerAdapterProvider("discord", () => factice);
+    try {
+      expect(getAdapter("discord")).toBe(factice);
+      expect(listPlatforms()).toContain("discord");
+    } finally {
+      unregisterAdapter("discord");
+    }
+    expect(() => getAdapter("discord")).toThrow(ChatAdapterError);
   });
 
   it("un adaptateur inconnu échoue PROPREMENT (erreur typée, pas `undefined`)", () => {
@@ -61,8 +61,24 @@ describe("registre — résolution par plateforme", () => {
     }
   });
 
-  it("`listPlatforms()` n'annonce que ce qui existe (Mattermost absent au lot 1)", () => {
-    expect(listPlatforms()).toEqual(["local", "discord"]);
+  it("`listPlatforms()` n'annonce que ce qui existe RÉELLEMENT dans ce processus", () => {
+    // Aucun fournisseur n'est enregistré ici (le serveur les enregistre au démarrage) :
+    // seules les plateformes autonomes sont annoncées.
+    expect(listPlatforms()).toEqual(["local"]);
     expect(listPlatforms()).not.toContain("mattermost");
+    expect(listPlatforms()).not.toContain("discord");
   });
 });
+
+/** Adaptateur FACTICE : décrit l'état qu'on lui demande, n'écrit jamais rien. */
+function fakeAdapter(platform: "discord" | "mattermost"): ChatAdapter {
+  return {
+    platform,
+    connect: async () => undefined,
+    disconnect: async () => undefined,
+    status: (): ChatAdapterStatus => ({ etat: "off", raison: "factice" }),
+    listConversations: async () => [],
+    fetchMessages: async () => ({ messages: [] }),
+    subscribe: () => () => undefined,
+  };
+}

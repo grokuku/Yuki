@@ -67,14 +67,26 @@ import {
   CHAT_REPLY_TIMEOUT_MS,
   ChatMirrorStore,
   ChatService,
+  MattermostAttachmentCache,
   MattermostChatAdapter,
+  type ChatReplyJudge,
+  type RemoteMessage,
   buildJudgePrompt,
-  buildReplyPrompt,
+  createRemoteReplyGenerator,
+  effectiveQuoteAuthor,
+  effectiveReplyStyle,
   parseJudgeAnswer,
+  mirrorPlatformOf,
+  runPlatformOf,
   registerAdapterProvider,
 } from "./chat/index.js";
-import { MATTERMOST_TOKEN_SECRET_NAME } from "./secrets/references.js";
-import type { ChatMattermostPort } from "./gateway/routes/chat.js";
+import { MM_MAX_DOWNLOAD_BYTES } from "./chat/mattermost/types.js";
+import { DiscordChatAdapter, discordAttachmentPort } from "./chat/discord/adapter.js";
+import { ChatAttachmentCache } from "./chat/attachments.js";
+import { DISCORD_MAX_DOWNLOAD_BYTES } from "./chat/discord/types.js";
+import { prepareMessageImages } from "./chat/mattermost/attachments.js";
+import { DISCORD_TOKEN_SECRET_NAME, MATTERMOST_TOKEN_SECRET_NAME } from "./secrets/references.js";
+import type { ChatDiscordPort, ChatMattermostPort } from "./gateway/routes/chat.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
 import { createDelegationService, type DelegationService } from "./delegation/index.js";
@@ -115,9 +127,12 @@ import {
   resolveModelsFrom,
   resolveProvidersFrom,
   toolAllowlist,
+  toolAllowlistForChat,
+  type ChatOriginMode,
   type EffectiveLlmConfig,
   type LlmConfig,
   type ThinkingLevelName,
+  type ToolAllowlistOptions,
 } from "./llm/index.js";
 import {
   createLibrarianArchiveService,
@@ -157,7 +172,7 @@ import {
   SourcesService,
   SourcesStore,
 } from "./sources/index.js";
-import { createPiHost, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -1243,14 +1258,80 @@ async function main(): Promise<void> {
   });
 
   /**
+   * Libraire CONFIGURÉ (URL de base renseignée) et CAPTURES de pages web activées.
+   *
+   * ⚠️ Lus À CHAUD ici : `lightToolOptions` est partagée par le host local (créé au
+   * démarrage, porte GPU) et par un run distant (calculé à chaque réponse). Au
+   * démarrage, ces deux lectures donnent EXACTEMENT les valeurs figées utilisées par
+   * le host : la politique locale ne change pas d'un élément.
+   */
+  const librarianConfiguredNow = (): boolean =>
+    config.getString("librarian.baseUrl").trim() !== "";
+  const librarianCaptureEnabledNow = (): boolean =>
+    librarianConfiguredNow() && config.getString("librarian.screenshot") === "on";
+
+  /**
+   * Options de POLITIQUE d'outils du rôle LÉGER — UNE SEULE source.
+   *
+   * ⚠️ Utilisée à l'IDENTIQUE par le host de la conversation locale (`createPiHost`,
+   * plus bas) et par un run DISTANT (réponse publiée dans un canal). Ajouter un outil
+   * ici l'ajoute aux deux ; oublier de le retirer là-bas n'est pas possible, il n'y a
+   * pas de seconde liste. Le calcul final reste `toolAllowlistForChat`
+   * (`src/llm/tool-policy.ts`), qui RETIRE de tout run distant les outils exigeant une
+   * approbation humaine (impossible à donner depuis un canal).
+   */
+  const lightToolOptions = (): ToolAllowlistOptions => ({
+    delegationEnabled: heavyAvailableAtStart,
+    // ⚠️ INVERSION DES RÔLES : le LÉGER n'a AUCUN outil d'action. Il garde
+    // la lecture, la conversation, la délégation, l'annuaire des agents,
+    // l'archive et le libraire (consultation). `run_command` et
+    // `capturer_ecran` sont portés par le worker lourd (voir plus haut).
+    // ⚠️ Indépendant de l'exécution : consulter les agents n'est pas
+    // exécuter. Actif dès que le registre d'agents existe.
+    directoryEnabled: agentDirectory !== undefined,
+    // Secrets : consulter les NOMS (jamais les valeurs) pour savoir quoi
+    // référencer en délégation. Actif dès que le coffre est initialisé.
+    secretsEnabled: secretStore !== undefined,
+    // DEMANDE de secret (`demander_secret`) : ouvre une fenêtre de saisie
+    // DANS la conversation. Actif dès que le service d'exécution expose le
+    // port de demande (le coffre doit être utilisable).
+    secretRequestsEnabled: agentExecution !== undefined,
+    // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
+    heritageEnabled: true,
+    // Archive des conversations mises de côté : recherche PLEIN TEXTE en
+    // LECTURE SEULE, sur demande EXPLICITE de l'utilisateur.
+    conversationArchiveEnabled: conversationArchive !== undefined,
+    // Libraire : quatre outils + capture (selon l'URL et le réglage au
+    // démarrage ; décision prise à la création du host).
+    librarianEnabled: librarianConfiguredNow(),
+    librarianCaptureEnabled: librarianCaptureEnabledNow(),
+    // FICHIERS : `envoyer_fichier` (Yuki RENVOIE un fichier de la
+    // conversation). Toujours actif : le stockage existe dès le démarrage.
+    filesEnabled: true,
+    // IMAGES générées : l'outil `generer_image` est TOUJOURS proposé (il
+    // refuse explicitement tant qu'aucune URL de serveur n'est configurée,
+    // avec la marche à suivre) — configurer ComfyUI ne demande donc aucun
+    // redémarrage.
+    imagesEnabled: true,
+  });
+
+  /**
    * Écrivain d'un canal distant (JUGE du mode `auto`, RÉDACTEUR de la réponse).
    *
    * ⚠️ Modèle LÉGER et réflexion `off` : juger un message ou rédiger trois phrases
    * n'est pas une tâche de raisonnement long. `timeoutMs` est BORNÉ par usage (un juge
    * lent retarderait la réponse au message). Modèle introuvable ⇒ l'écrivain LÈVE, et
    * l'appelant le traduit en refus explicite (jamais une réponse vide publiée).
+   *
+   * ⚠️ `run` (facultatif) porte la POLITIQUE et les OUTILS du run : seul le
+   * RÉDACTEUR d'une réponse en reçoit — le juge n'exécute rien.
    */
-  const chatWriter = (systemPrompt: string, timeoutMs: number, label: string) =>
+  const chatWriter = (
+    systemPrompt: string,
+    timeoutMs: number,
+    label: string,
+    run?: { tools: () => readonly string[]; customTools: () => readonly unknown[] },
+  ) =>
     createSdkPromptWriter({
       cwd: env.piCwd,
       agentDir: env.piAgentDir,
@@ -1262,53 +1343,176 @@ async function main(): Promise<void> {
       timeoutMs: () => timeoutMs,
       logger,
       label,
+      ...(run ? { tools: run.tools, customTools: run.customTools } : {}),
     });
+
+  /**
+   * RÉDACTEUR d'une réponse distante — **COMMUN aux plateformes** (lot 21).
+   *
+   * ⚠️ Mêmes PORTES que le run local (`createRemoteRunTools` recalculé à chaque réponse),
+   * même prompt, même politique d'outils : une seconde fabrique pour Discord aurait
+   * dupliqué la politique d'outils, c'est-à-dire la seule chose qui décide de ce qu'un run
+   * distant a le droit d'appeler.
+   */
+  const chatReplyGenerator = createRemoteReplyGenerator({
+    available: () => resolveAvail().isAvailable("light"),
+    // ⚠️ Le nom du bot dépend de la PLATEFORME DU RUN (celle de la conversation), pas de
+    // `chat.mode` : un salon Discord doit s'entendre appeler par le pseudo du bot Discord
+    // même quand l'interface regarde Mattermost (`runPlatformOf`, `src/chat/reply/generate.ts`).
+    botName: (conversationId) =>
+      chatMirror.bot(mirrorPlatformOf(conversationId) ?? "mattermost").username ?? "Yuki",
+    // ⚠️ POLITIQUE PAR PLATEFORME : `toolAllowlistForChat` selon la plateforme DU RUN et
+    // `chat.remoteAgents`, à partir des MÊMES options que le host local. Ce n'est pas
+    // `chat.mode` qui décide : un run né dans un salon Discord reste un run DISTANT même
+    // si l'interface affiche Mattermost (et inversement). Les outils à approbation en
+    // sont RETIRÉS : une approbation s'affiche dans l'interface web, jamais dans le canal
+    // (`REMOTE_APPROVAL_REFUSAL`).
+    runTools: (conversationId, onFileProduced) =>
+      createRemoteRunTools({
+        conversationId,
+        chatMode: runPlatformOf(conversationId, config.getString("chat.mode") as ChatOriginMode),
+        remoteAgents: config.getString("chat.remoteAgents") === "actives",
+        lightOptions: lightToolOptions,
+        // MÊMES ports d'image que le host local : le générateur ComfyUI et la
+        // copie de l'image dans le store des fichiers de la conversation (le canal).
+        // ⚠️ Pas d'`onImage` : l'image d'un run distant part sur le CANAL, pas dans
+        // le fil de l'interface web (aucune conversation web n'est concernée).
+        images: {
+          generate: comfyGenerator.generate,
+          archive: generatedImageFiles,
+          workflows: {
+            candidates: () => comfyWorkflows.candidates(),
+            documentationOf: (name: string) => comfyWorkflows.get(name)?.documentation ?? "",
+          },
+          // ⚠️ Capacité VISION relue à CHAQUE appel : sans « image » dans `input`, le
+          // SDK remplacerait l'image jointe par « (tool image omitted…) » et le modèle
+          // croirait l'avoir vue.
+          receivesImages: () => effectiveLlmConfig(config).light.vision,
+        },
+        // MÊME port de fichiers que le host local : `lister_fichiers`/`lire_fichier`
+        // travaillent sur la conversation FORCÉE (le canal), jamais sur la session
+        // éphémère du run.
+        files: filesService,
+        vision: {
+          // Référence RELUE à chaud (le modèle peut changer sans redémarrage).
+          modelLabel: liveLightReference,
+          imagesSupported: () => effectiveLlmConfig(config).light.vision,
+        },
+        onFileProduced,
+        logger,
+      }),
+    createWriter: (run) =>
+      chatWriter(
+        CHAT_REPLY_SYSTEM_PROMPT,
+        // ⚠️ Une GÉNÉRATION d'image peut durer jusqu'à `images.timeoutMs` (180 s par
+        // défaut) : le délai du rédacteur doit la COUVRIR, sinon le run serait
+        // interrompu en pleine génération et le canal n'aurait aucune réponse. Le
+        // délai est donc « rédaction + génération », relu à chaque réponse.
+        CHAT_REPLY_TIMEOUT_MS + config.getNumber("images.timeoutMs"),
+        "réponse",
+        run,
+      ),
+  });
+
+  /**
+   * PIÈCES JOINTES entrantes préparées pour le MODÈLE — **COMMUN aux plateformes**.
+   *
+   * ⚠️ Seul le CACHE change (chaque plateforme télécharge à sa façon) : la politique de
+   * vision, les bornes et les `notes` sont ceux de `src/chat/attachments.ts`.
+   */
+  const readChatImages = async (
+    cache: ChatAttachmentCache,
+    input: { conversationId: string; message: RemoteMessage },
+  ) => {
+    const prepared = await prepareMessageImages({
+      cache,
+      conversationId: input.conversationId,
+      message: input.message,
+      maxBytes: config.getNumber("files.imageMaxBytes"),
+      maxWireBytes: config.getNumber("files.imageMaxWireBytes"),
+      resize: sdkVisionImageResizer,
+    });
+    if (prepared.notes.length > 0) {
+      logger.warn("chat.attachments.skipped", {
+        conversation: input.conversationId,
+        notes: prepared.notes.length,
+      });
+    }
+    return prepared;
+  };
+
+  /**
+   * JUGE du mode `auto` — **COMMUN aux plateformes** (lot 21).
+   *
+   * ⚠️ Un seul juge pour Mattermost ET Discord : la décision « ce message s'adresse-t-il à
+   * Yuki ? » est la même, et en écrire deux aurait fait diverger le prompt et le modèle.
+   */
+  const chatJudge: ChatReplyJudge = async ({ message, channelTitle }) => {
+    if (!resolveAvail().isAvailable("light")) return false;
+    const writer = chatWriter(CHAT_JUDGE_SYSTEM_PROMPT, CHAT_JUDGE_TIMEOUT_MS, "juge");
+    const answer = await writer(
+      buildJudgePrompt({
+        channelTitle,
+        message,
+        recent: chatMirror
+          .messages(message.conversationId)
+          .filter((item) => item.remoteId !== message.remoteId)
+          .slice(-4),
+      }),
+    );
+    return parseJudgeAnswer(answer);
+  };
 
   // Client MATTERMOST (lot 2) : REST + temps réel + miroir. ⚠️ Le JETON ne sort
   // JAMAIS d'ici (coffre `YUKI_CHAT_MATTERMOST`, lu à chaque appel) et il n'est ni
   // journalisé ni renvoyé par une route.
-  const mattermost = new MattermostChatAdapter({
+  const mattermost: MattermostChatAdapter = new MattermostChatAdapter({
     baseUrl: () => chatMirror.baseUrl(),
     token: () => secretStore?.lookup(MATTERMOST_TOKEN_SECRET_NAME),
     store: chatMirror,
     logger,
+    // ⚠️ PIÈCES JOINTES : le store de Yuki est la SEULE source d'octets d'un envoi
+    // (aucune lecture disque directe). C'est lui qui porte l'image produite par
+    // `generer_image` (copiée dans le store, `src/files/generated.ts`).
+    files: filesStore,
+    // ⚠️ Borne d'envoi : `MM_MAX_UPLOAD_BYTES` (100 Mo = défaut Mattermost depuis la
+    // 5.33). Une instance bridée refuse en `413` : ce refus est ANNONCÉ dans le canal,
+    // jamais contourné, et le texte part quand même.
     // Le générateur et le juge ne sont câblés que si un modèle léger est disponible :
     // sans lui, la décision `auto` rend « juge indisponible » et le rédacteur refuse
     // explicitement — on ne publie jamais une réponse inventée.
-    judge: async ({ message, channelTitle }) => {
-      if (!resolveAvail().isAvailable("light")) return false;
-      const writer = chatWriter(CHAT_JUDGE_SYSTEM_PROMPT, CHAT_JUDGE_TIMEOUT_MS, "juge");
-      const answer = await writer(
-        buildJudgePrompt({
-          channelTitle,
-          message,
-          recent: chatMirror
-            .messages(message.conversationId)
-            .filter((item) => item.remoteId !== message.remoteId)
-            .slice(-4),
-        }),
-      );
-      return parseJudgeAnswer(answer);
-    },
-    generateReply: async ({ channelTitle, transcript, message }) => {
-      if (!resolveAvail().isAvailable("light")) {
-        throw new Error(
-          "Aucun modèle léger disponible : Yuki ne peut pas rédiger de réponse.",
-        );
-      }
-      const writer = chatWriter(CHAT_REPLY_SYSTEM_PROMPT, CHAT_REPLY_TIMEOUT_MS, "réponse");
-      return writer(
-        buildReplyPrompt({
-          channelTitle,
-          transcript,
-          message,
-          botName: chatMirror.bot().username ?? "Yuki",
-        }),
-      );
-    },
+    judge: chatJudge,
+    // RÉDACTION avec OUTILS (lot 20) : le câblage vit dans
+    // `createRemoteReplyGenerator` (testable de bout en bout). Ici, on ne fournit
+    // que les PORTES : disponibilité du modèle, nom du bot, POLITIQUE du run
+    // (recalculée à chaque réponse) et écrivain SDK.
+    generateReply: chatReplyGenerator,
+    // ⚠️ IMAGES ENTRANTES : téléchargées SEULEMENT ici (à la demande), jamais pendant la
+    // synchronisation, et seulement si le fichier est référencé par un message de CE
+    // canal (garde de sûreté de `MattermostAttachmentCache`). La politique de vision est
+    // celle, PARTAGÉE, de `src/files/vision.ts`.
+    readImages: (input) => readChatImages(mattermostAttachments, input),
   });
   // Le registre rend l'adaptateur au transport et à `GET /api/chat/status`.
   registerAdapterProvider("mattermost", () => mattermost);
+
+  /**
+   * CACHE des PIÈCES JOINTES Mattermost (téléchargement À LA DEMANDE).
+   *
+   * ⚠️ UNE seule instance, qui réutilise le client REST de l'adaptateur : même débit,
+   * même backoff, et un même `file_id` n'est téléchargé qu'UNE fois (bornes mémoire :
+   * 32 pièces / 48 Mio). La garde d'appartenance (le fichier doit être référencé par un
+   * message d'un canal SUIVI) est revérifiée à chaque lecture, cache compris.
+   */
+  const mattermostAttachments: MattermostAttachmentCache = new MattermostAttachmentCache({
+    client: mattermost.rest,
+    store: chatMirror,
+    logger,
+    // ⚠️ Borne de TÉLÉCHARGEMENT (20 Mio par défaut) : c'est elle qui évite d'accumuler
+    // un fichier démesuré en mémoire. La politique de VISION borne ensuite ce qui part
+    // réellement au modèle (`files.imageMaxBytes` / `files.imageMaxWireBytes`).
+    maxBytes: () => MM_MAX_DOWNLOAD_BYTES,
+  });
 
   /**
    * Port MATTERMOST de la page `/config → Discussions`.
@@ -1342,6 +1546,9 @@ async function main(): Promise<void> {
           titre: record.title,
           messageCount: record.messageCount,
           ...(record.replyMode !== undefined ? { replyMode: record.replyMode } : {}),
+          // ⚠️ Valeurs EFFECTIVES : l'interface coche l'option réellement active.
+          replyStyle: effectiveReplyStyle(record),
+          quoteAuthor: effectiveQuoteAuthor(record),
           backfillFait: record.backfillDone,
           historiqueAnterieur:
             record.historiqueAnterieur === true || record.borneAtteinte === true,
@@ -1354,12 +1561,102 @@ async function main(): Promise<void> {
         canaux,
       };
     },
-    replyMode: (conversationId) => mattermost.replyMode(conversationId),
-    setReplyMode: (conversationId, mode) => {
-      if (!chatMirror.record(conversationId)) return false;
-      chatMirror.setReplyMode(conversationId, mode);
-      return true;
+    replySettings: (conversationId) => mattermost.replySettings(conversationId),
+    applyReplySettings: (conversationId, patch) =>
+      chatMirror.setReplySettings(conversationId, patch),
+  };
+
+  // Client DISCORD (lot 21) : REST + passerelle + miroir, MÊME modèle que Mattermost.
+  // ⚠️ Le JETON ne sort JAMAIS d'ici (coffre `YUKI_CHAT_DISCORD`, lu à chaque appel) : il
+  // n'est ni journalisé, ni renvoyé par une route, ni envoyé au CDN lors d'un
+  // téléchargement de pièce jointe.
+  const discord: DiscordChatAdapter = new DiscordChatAdapter({
+    token: () => secretStore?.lookup(DISCORD_TOKEN_SECRET_NAME),
+    store: chatMirror,
+    logger,
+    // Serveur suivi : `""` = tous les serveurs du bot (défaut, voir le schéma).
+    guildId: () => config.getString("chat.discord.guildId"),
+    // ⚠️ Borne d'ENVOI par fichier, relue à chaque message (défaut 8 Mio, plafond 25 Mio).
+    maxUploadBytes: () => config.getNumber("chat.discord.maxUploadBytes"),
+    // ⚠️ MÊMES fabriques que Mattermost : un générateur par plateforme aurait dupliqué la
+    // politique d'outils et le prompt.
+    judge: chatJudge,
+    generateReply: chatReplyGenerator,
+    files: filesStore,
+    readImages: (input) => readChatImages(discordAttachments, input),
+  });
+  registerAdapterProvider("discord", () => discord);
+
+  /**
+   * CACHE des PIÈCES JOINTES Discord (téléchargement À LA DEMANDE).
+   *
+   * ⚠️ Aucun appel d'API pour LISTER : Discord fournit le nom, la taille, le type et
+   * l'URL dans le message. Le téléchargement se fait sur le CDN, SANS le jeton, et
+   * seulement pour un fichier déjà référencé par un message d'un canal suivi.
+   */
+  const discordAttachments: ChatAttachmentCache = new ChatAttachmentCache({
+    port: discordAttachmentPort(discord.rest),
+    store: chatMirror,
+    logger,
+    maxBytes: () => DISCORD_MAX_DOWNLOAD_BYTES,
+  });
+
+  /**
+   * Port DISCORD de la page `/config → Discussions`.
+   *
+   * ⚠️ Comme pour Mattermost : le jeton est ÉCRIT ici et n'en ressort jamais
+   * (`tokenConfigured()` est un booléen). Les réglages scalaires (serveur, borne d'envoi)
+   * vivent dans la configuration, pas dans le miroir.
+   */
+  const discordPort: ChatDiscordPort = {
+    guildId: () => config.getString("chat.discord.guildId"),
+    saveGuildId: (guildId) => {
+      config.update({ "chat.discord.guildId": guildId });
     },
+    maxUploadBytes: () => config.getNumber("chat.discord.maxUploadBytes"),
+    saveMaxUploadBytes: (bytes) => {
+      config.update({ "chat.discord.maxUploadBytes": Math.trunc(bytes) });
+    },
+    tokenConfigured: () => secretStore?.has(DISCORD_TOKEN_SECRET_NAME) === true,
+    saveToken: (token) => {
+      if (!secretStore) {
+        throw new Error(
+          "Le coffre de secrets n'est pas disponible : le jeton Discord ne peut pas être " +
+            "enregistré (redémarrez avec le volume `state` accessible).",
+        );
+      }
+      secretStore.set(DISCORD_TOKEN_SECRET_NAME, token, "Jeton du bot Discord");
+      refreshSecretValues();
+    },
+    connect: () => discord.connect(),
+    view: () => {
+      const canaux = Object.entries(chatMirror.records())
+        .filter(([, record]) => record.platform === "discord")
+        .map(([id, record]) => ({
+          id,
+          titre: record.title,
+          messageCount: record.messageCount,
+          ...(record.replyMode !== undefined ? { replyMode: record.replyMode } : {}),
+          replyStyle: effectiveReplyStyle(record),
+          quoteAuthor: effectiveQuoteAuthor(record),
+          backfillFait: record.backfillDone,
+          historiqueAnterieur:
+            record.historiqueAnterieur === true || record.borneAtteinte === true,
+        }));
+      const intent = discord.messageContentIntent();
+      return {
+        guildId: config.getString("chat.discord.guildId"),
+        maxUploadBytes: config.getNumber("chat.discord.maxUploadBytes"),
+        intentMessageContent: intent === undefined ? null : intent,
+        jetonEnregistre: secretStore?.has(DISCORD_TOKEN_SECRET_NAME) === true,
+        plateforme: discord.status(),
+        synchronisation: discord.syncStatus(),
+        canaux,
+      };
+    },
+    replySettings: (conversationId) => discord.replySettings(conversationId),
+    applyReplySettings: (conversationId, patch) =>
+      chatMirror.setReplySettings(conversationId, patch),
   };
 
   // Service de DISCUSSION : lit le mode (`chat.mode`, apply hot) et sert le miroir en
@@ -1368,7 +1665,6 @@ async function main(): Promise<void> {
   const chatService = new ChatService({
     mode: () => config.getString("chat.mode"),
     remoteAgents: () => config.getString("chat.remoteAgents"),
-    remoteMemory: () => config.getString("chat.remoteMemory"),
     mirror: chatMirror,
   });
 
@@ -1674,39 +1970,13 @@ async function main(): Promise<void> {
       modelsConfig: buildModelsConfigFrom(effective),
       model: lightRef,
       thinking: lightThinking,
-      tools: toolAllowlist("light", {
-        delegationEnabled: heavyAvailableAtStart,
-        // ⚠️ INVERSION DES RÔLES : le LÉGER n'a AUCUN outil d'action. Il garde
-        // la lecture, la conversation, la délégation, l'annuaire des agents,
-        // l'archive et le libraire (consultation). `run_command` et
-        // `capturer_ecran` sont portés par le worker lourd (voir plus haut).
-        // ⚠️ Indépendant de l'exécution : consulter les agents n'est pas
-        // exécuter. Actif dès que le registre d'agents existe.
-        directoryEnabled: agentDirectory !== undefined,
-        // Secrets : consulter les NOMS (jamais les valeurs) pour savoir quoi
-        // référencer en délégation. Actif dès que le coffre est initialisé.
-        secretsEnabled: secretStore !== undefined,
-        // DEMANDE de secret (`demander_secret`) : ouvre une fenêtre de saisie
-        // DANS la conversation. Actif dès que le service d'exécution expose le
-        // port de demande (le coffre doit être utilisable).
-        secretRequestsEnabled: agentExecution !== undefined,
-        // Lot 13 : l'archive « vie antérieure » est consultable à la demande.
-        heritageEnabled: true,
-        // Archive des conversations mises de côté : recherche PLEIN TEXTE en
-        // LECTURE SEULE, sur demande EXPLICITE de l'utilisateur.
-        conversationArchiveEnabled: conversationArchive !== undefined,
-        // Libraire : quatre outils + capture (selon l'URL et le réglage au
-        // démarrage ; décision prise à la création du host).
-        librarianEnabled: librarianConfigured,
-        librarianCaptureEnabled: librarianCaptureEnabledAtStart,
-        // FICHIERS : `envoyer_fichier` (Yuki RENVOIE un fichier de la
-        // conversation). Toujours actif : le stockage existe dès le démarrage.
-        filesEnabled: true,
-        // IMAGES générées : l'outil `generer_image` est TOUJOURS proposé (il
-        // refuse explicitement tant qu'aucune URL de serveur n'est configurée,
-        // avec la marche à suivre) — configurer ComfyUI ne demande donc aucun
-        // redémarrage.
-        imagesEnabled: true,
+      // ⚠️ MÊME CALCUL QUE LE RUN DISTANT (`createRemoteRunTools`) : une seule
+      // fonction d'options (`lightToolOptions`) et une seule politique
+      // (`toolAllowlistForChat`). Le host est la conversation LOCALE : il passe
+      // donc `local`, et sa liste est, élément pour élément, celle d'avant.
+      tools: toolAllowlistForChat("light", lightToolOptions(), {
+        chatMode: "local",
+        remoteAgents: false,
       }),
       ...(heavyAvailableAtStart ? { delegation } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
@@ -2101,7 +2371,7 @@ async function main(): Promise<void> {
       // `X-Yuki-Config: 1`) — mode, état de la plateforme, état Mattermost, motif de
       // refus de création ; plus l'URL du serveur, le JETON (écriture seule, une fois) et
       // le mode de réponse PAR CANAL. ⚠️ Jamais un jeton en réponse.
-      chat: { service: chatService, mattermost: mattermostPort, logger },
+      chat: { service: chatService, mattermost: mattermostPort, discord: discordPort, logger },
       // Administration de la mémoire (archivage récupérable) : disponible
       // uniquement quand le service mémoire existe (porte passée).
       ...(memoryService ? { memory: { admin: memoryService, logger } } : {}),
@@ -2172,6 +2442,7 @@ async function main(): Promise<void> {
       // DISCUSSIONS : plus aucune reconnexion ni rattrapage après l'arrêt (aucune
       // écriture tardive dans le miroir, aucune socket orpheline).
       await mattermost.disconnect();
+      await discord.disconnect();
       // SOURCES : plus aucun suivi de run après l'arrêt (aucune écriture tardive
       // dans la boîte de notifications).
       sourcesService.detach();
@@ -2207,6 +2478,15 @@ async function main(): Promise<void> {
   if (chatMirror.baseUrl() !== "" && secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true) {
     void mattermost.connect().catch((error: unknown) => {
       logger.warn("chat.mattermost.connect_failed", { error: messageOf(error) });
+    });
+  }
+
+  // DISCORD (lot 21) — même règle : la synchronisation démarre dès que le JETON est au
+  // coffre, indépendamment du mode affiché. ⚠️ Aucune condition sur `guildId` : vide
+  // signifie « tous les serveurs du bot » (voir `DiscordAdapterDeps.guildId`).
+  if (secretStore?.has(DISCORD_TOKEN_SECRET_NAME) === true) {
+    void discord.connect().catch((error: unknown) => {
+      logger.warn("chat.discord.connect_failed", { error: messageOf(error) });
     });
   }
 

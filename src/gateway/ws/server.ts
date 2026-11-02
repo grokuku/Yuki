@@ -1052,6 +1052,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         readOnly: conversation.readOnly,
         canRun: conversation.canRun,
         ...(conversation.replyMode ? { replyMode: conversation.replyMode } : {}),
+        ...(conversation.replyStyle ? { replyStyle: conversation.replyStyle } : {}),
+        ...(conversation.quoteAuthor ? { quoteAuthor: conversation.quoteAuthor } : {}),
         title: conversation.title,
         ...(conversation.updatedAt ? { updatedAt: conversation.updatedAt } : {}),
         messageCount: conversation.messageCount,

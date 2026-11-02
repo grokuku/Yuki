@@ -7,8 +7,8 @@
  *  - le statut ne porte NI secret NI URL, seulement un état et une raison ;
  *  - en mode distant, la CRÉATION est refusée avec un motif lisible — le même
  *    que celui opposé au transport ;
- *  - `chat.remoteAgents` / `chat.remoteMemory` sont LUS (défaut `desactive`) :
- *    ce sont des réglages, pas des constantes cachées.
+ *  - `chat.remoteAgents` est LU (défaut `desactive`) : c'est un réglage, pas une
+ *    constante cachée ; `chat.remoteMemory` a été RETIRÉ (aucun consommateur).
  *
  * ⚠️ Échoue sur le code d'origine : `src/chat/` n'y existe pas.
  */
@@ -61,10 +61,11 @@ describe("mode de discussion — lu à chaud, jamais deviné", () => {
     expect(status.plateforme.etat).toBe("off");
     expect(status.plateforme.raison).toContain("/config → Discussions");
     setMode("discord");
-    expect(service.status().plateforme).toMatchObject({
-      etat: "off",
-      raison: "Discord n'est pas encore configuré.",
-    });
+    // ⚠️ Lot 21 : Discord est LIVRÉ, mais comme Mattermost son fournisseur d'adaptateur
+    // est enregistré au démarrage du serveur. Sans lui, l'état est `off` et le motif DIT
+    // QUOI FAIRE (jeton + intent MESSAGE_CONTENT).
+    expect(service.status().plateforme.etat).toBe("off");
+    expect(service.status().plateforme.raison).toContain("/config → Discussions");
   });
 });
 
@@ -77,27 +78,32 @@ describe("mode distant — création refusée avec un motif lisible", () => {
     expect(service.isRemote()).toBe(true);
   });
 
-  it("Discord : refus explicite (« pas encore configuré »)", () => {
+  it("Discord : refus explicite (la liste vient des salons synchronisés)", () => {
     const { service } = serviceWith("discord");
-    expect(service.creationRefusal()).toContain("Discord n'est pas encore configuré");
-    expect(service.status().creation.autorisee).toBe(false);
+    // ⚠️ Lot 21 : le motif ne dit plus « pas encore configuré » (ce serait faux) mais
+    // POURQUOI la création locale n'a pas de sens, et ce qu'il faut faire à la place.
+    const refusal = service.creationRefusal();
+    expect(refusal).toContain("création d'une conversation locale est désactivée");
+    expect(refusal).toContain("seulement si elle est citée");
+    expect(service.status().creation).toEqual({ autorisee: false, raison: refusal });
   });
 });
 
-describe("capacités distantes — réglages lus, défaut SÉCURISÉ", () => {
-  it("agents et mémoire sont DÉSACTIVÉS par défaut", () => {
+describe("capacités distantes — réglage lu, défaut SÉCURISÉ", () => {
+  it("les agents sont DÉSACTIVÉS par défaut, et la mémoire n'est plus une clé du statut", () => {
     const { service } = serviceWith("mattermost");
     expect(service.remoteAgents()).toBe("desactive");
-    expect(service.remoteMemory()).toBe("desactive");
-    expect(service.status().distant).toEqual({ agents: "desactive", memoire: "desactive" });
+    expect(service.status().distant).toEqual({ agents: "desactive" });
+    // ⚠️ `memoire` a disparu avec `chat.remoteMemory` : un champ d'état qui afficherait
+    // « désactivée » sans que rien ne puisse l'activer serait un mensonge de plus.
+    expect("memoire" in service.status().distant).toBe(false);
   });
 
-  it("les deux réglages sont réellement LUS (ce ne sont pas des constantes)", () => {
+  it("le réglage est réellement LU (ce n'est pas une constante)", () => {
     const { service } = serviceWith("mattermost", {
       remoteAgents: () => "actives",
-      remoteMemory: () => "actives",
     });
-    expect(service.status().distant).toEqual({ agents: "actives", memoire: "actives" });
+    expect(service.status().distant).toEqual({ agents: "actives" });
   });
 
   it("une valeur inattendue retombe sur `desactive` (jamais une activation par accident)", () => {

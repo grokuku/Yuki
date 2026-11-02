@@ -5,13 +5,13 @@
  * synchronisation, aucun stockage, aucune I/O : c'est le point d'entrée que le
  * reste du programme interroge (`getAdapter`, `listPlatforms`).
  *
- * ⚠️ Les adaptateurs LIVRÉS sont enregistrés à l'import du module (local,
- * discord) pour que `getAdapter` fonctionne sans cérémonie d'initialisation.
- * Une plateforme NON enregistrée lève `ChatAdapterError` (`unknown_platform`) :
- * jamais un `undefined` silencieux qui planterait trois appels plus loin.
+ * ⚠️ Seul l'adaptateur LOCAL est enregistré à l'import : il n'a besoin de rien. Mattermost
+ * et Discord sont enregistrés par un FOURNISSEUR au démarrage du serveur (`src/index.ts`),
+ * parce qu'il leur faut le miroir, le coffre et la configuration.
+ * Une plateforme NON enregistrée lève `ChatAdapterError` (`unknown_platform`) : jamais un
+ * `undefined` silencieux qui planterait trois appels plus loin.
  */
 
-import { DiscordChatAdapter } from "./discord/adapter.js";
 import { LocalChatAdapter } from "./local-adapter.js";
 import { CHAT_MODES, type ChatAdapter, type ChatMode } from "./types.js";
 
@@ -89,9 +89,7 @@ export function listPlatforms(): ChatMode[] {
 /**
  * Enregistrement des adaptateurs LIVRÉS.
  *
- * `local` et `discord` sont autonomes : ils n'ont besoin de rien. Mattermost est
- * enregistré par un FOURNISSEUR au démarrage du serveur (`src/index.ts`) : il lui faut
- * le miroir, le coffre et la configuration.
+ * `local` est autonome. Mattermost (lot 2) et Discord (lot 21) sont enregistrés par un
+ * FOURNISSEUR au démarrage du serveur (`src/index.ts`).
  */
 registerAdapter(new LocalChatAdapter());
-registerAdapter(new DiscordChatAdapter());

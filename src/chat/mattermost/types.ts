@@ -36,6 +36,49 @@ export const MM_SLOW_WINDOW_MS = 60_000;
 /** Borne documentaire de `?since=` : au-delà, le serveur ne rend que 1000 posts. */
 export const MM_SINCE_MAX_POSTS = 1_000;
 
+/**
+ * Taille maximale d'un fichier ACCEPTÉ PAR DÉFAUT par un serveur Mattermost.
+ *
+ * ⚠️ Vérifié : le défaut de `FileSettings.MaxFileSize` est passé de 50 Mo à **100 Mo**
+ * (mattermost/mattermost#16664, livré par #16668). Une instance ancienne ou bridée peut
+ * être plus basse : un `413` du serveur est alors ANNONCÉ tel quel (jamais contourné,
+ * jamais tronqué). Cette constante est notre borne d'ENVOI, avant tout appel réseau.
+ */
+export const MM_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Taille maximale d'un fichier TÉLÉCHARGÉ (pièce jointe d'un message).
+ *
+ * ⚠️ Bien plus basse que la borne d'envoi : on ne télécharge pas 100 Mo pour les donner
+ * à un modèle de vision, qui n'en verrait de toute façon qu'une version réduite.
+ */
+export const MM_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Un fichier Mattermost (`FileInfo` de l'API v4).
+ *
+ * ⚠️ `POST /api/v4/files` rend `{ file_infos: [...] }` ; `GET /api/v4/files/<id>/info`
+ * rend UN objet de cette forme.
+ */
+export interface MattermostFileInfo {
+  id: string;
+  name?: string;
+  /** Taille en OCTETS. */
+  size?: number;
+  mime_type?: string;
+  extension?: string;
+  create_at?: number;
+  update_at?: number;
+  /** Horodatage de suppression (0 = vivant), en ms Unix. */
+  delete_at?: number;
+}
+
+/** Réponse de `POST /api/v4/files`. */
+export interface MattermostFileUploadResponse {
+  file_infos?: MattermostFileInfo[];
+  client_ids?: string[];
+}
+
 /** Un post Mattermost (charge utile REST `Post`, champs utilisés seulement). */
 export interface MattermostPost {
   id: string;

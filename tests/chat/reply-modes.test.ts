@@ -90,6 +90,30 @@ describe("anti-boucle — la règle qui prime sur les trois modes", () => {
     });
   }
 
+  it("un AUTRE robot ne reçoit AUCUNE réponse, même en mode `tout` (anti-boucle bot↔bot)", async () => {
+    // ⚠️ D2 : `decideReply` ne lisait jamais `message.author.estBot`. Un second bot dans
+    // le salon, en mode « répondre à tous », obtenait donc une réponse — et deux robots
+    // pouvaient se répondre indéfiniment.
+    for (const mode of ["tout", "mention", "auto"] as const) {
+      let juge = 0;
+      const decision = await decideReply({
+        message: message("@yuki regarde mon rapport", { auteur: "autre-bot", estBot: true }),
+        replyMode: mode,
+        // ⚠️ L'identifiant du bot de Yuki est CONNU : ce n'est donc PAS elle.
+        botUserId: BOT_ID,
+        aliases: ALIASES,
+        judge: async () => {
+          juge += 1;
+          return true;
+        },
+      });
+      expect(decision).toMatchObject({ repondre: false, raison: "auteur_bot" });
+      expect(decision.detail).toContain("robot");
+      // ⚠️ Le juge n'est même pas appelé : la décision est prise AVANT le mode.
+      expect(juge).toBe(0);
+    }
+  });
+
   it("un message SUPPRIMÉ ne déclenche rien (même en mode `tout`)", async () => {
     const supprime = { ...message("bonjour"), deleted: true as const };
     const decision = await decideReply({

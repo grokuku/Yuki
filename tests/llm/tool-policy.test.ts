@@ -17,7 +17,11 @@ import {
   buildModelsConfigFrom,
   DEFAULT_EFFECTIVE_LLM_CONFIG,
   containsForbiddenTool,
+  APPROVAL_REQUIRED_TOOLS,
+  approvalRequiredTools,
+  REMOTE_SAFE_TOOLS,
   toolAllowlist,
+  toolAllowlistForChat,
 } from "../../src/llm/index.js";
 import { readFileSync } from "node:fs";
 
@@ -303,5 +307,116 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     // Le lourd n'a JAMAIS les outils du libraire.
     const heavyLibrarian = toolAllowlist("heavy", { librarianEnabled: true });
     for (const name of LIBRARIAN_TOOLS) expect(heavyLibrarian).not.toContain(name);
+  });
+});
+
+describe("llm — politique d'outils d'un run DISTANT (branchée par `toolAllowlistForChat`)", () => {
+  /** Options du host LOCAL, telles que `lightToolOptions` les compose. */
+  const lightOptions = {
+    delegationEnabled: true,
+    directoryEnabled: true,
+    secretsEnabled: true,
+    secretRequestsEnabled: true,
+    heritageEnabled: true,
+    conversationArchiveEnabled: true,
+    librarianEnabled: true,
+    librarianCaptureEnabled: true,
+    filesEnabled: true,
+    imagesEnabled: true,
+  } as const;
+
+  it("mode LOCAL : la liste est, élément pour élément, celle d'avant", () => {
+    // Non-régression : le mode local passe par le même calcul mais rend
+    // EXACTEMENT `toolAllowlist`, sans filtrage ni réordonnancement.
+    for (const role of ["light", "heavy"] as const) {
+      expect(
+        toolAllowlistForChat(role, lightOptions, { chatMode: "local", remoteAgents: false }),
+      ).toEqual(toolAllowlist(role, lightOptions));
+      expect(
+        toolAllowlistForChat(role, lightOptions, { chatMode: "local", remoteAgents: true }),
+      ).toEqual(toolAllowlist(role, lightOptions));
+    }
+  });
+
+  it("agents DÉSACTIVÉS : image + lecture seulement, jamais un outil d'action", () => {
+    const tools = toolAllowlistForChat("light", lightOptions, {
+      chatMode: "mattermost",
+      remoteAgents: false,
+    });
+    expect(tools).toEqual([...REMOTE_SAFE_TOOLS]);
+    // Les quatre outils que l'utilisateur a exigés depuis Mattermost.
+    expect(tools).toEqual(
+      expect.arrayContaining([
+        "generer_image",
+        "consulter_workflow",
+        "lister_fichiers",
+        "lire_fichier",
+      ]),
+    );
+    for (const absent of [
+      "delegate",
+      "run_command",
+      "capturer_ecran",
+      "recuperer_fichier",
+      "deposer_fichier",
+      "demander_secret",
+      "lister_secrets",
+      "envoyer_fichier",
+      "read",
+      "ls",
+      "grep",
+      "find",
+    ]) {
+      expect(tools, absent).not.toContain(absent);
+    }
+    // Le RÔLE LOURD n'obtient RIEN en distant (aucun run lourd n'en naît).
+    expect(
+      toolAllowlistForChat("heavy", lightOptions, { chatMode: "mattermost", remoteAgents: false }),
+    ).toEqual([]);
+  });
+
+  it("agents ACTIVÉS : toute la politique locale, MOINS les outils à approbation", () => {
+    const tools = toolAllowlistForChat("light", lightOptions, {
+      chatMode: "mattermost",
+      remoteAgents: true,
+    });
+    const local = toolAllowlist("light", lightOptions);
+    // « Complète » = la liste locale (dans son ordre), PLUS les outils sûrs qu'elle
+    // ne porte pas encore (le léger local lit le store via `envoyer_fichier`, un run
+    // distant n'a que `lire_fichier` pour voir une image), MOINS ceux qui exigent
+    // une approbation humaine.
+    const attendu = [...local];
+    for (const name of REMOTE_SAFE_TOOLS) if (!attendu.includes(name)) attendu.push(name);
+    expect(tools).toEqual(attendu.filter((tool) => !APPROVAL_REQUIRED_TOOLS.includes(tool)));
+    // Et il en reste vraiment quelque chose de plus que la liste sûre.
+    expect(tools).toEqual(
+      expect.arrayContaining(["delegate", "lister_agents", "lister_secrets", "envoyer_fichier"]),
+    );
+    expect(tools).not.toContain("demander_secret");
+    // Les outils image/lecture restent là dans les deux modes.
+    for (const name of REMOTE_SAFE_TOOLS) expect(tools).toContain(name);
+  });
+
+  it("AUCUN outil de la politique distante n'exige une approbation (garde-fou)", () => {
+    // ⚠️ Ce test échoue si quelqu'un ajoute un jour un outil à approbation dans
+    // `REMOTE_SAFE_TOOLS` — ou oublie le filtre de la branche `actives`.
+    expect(APPROVAL_REQUIRED_TOOLS.length).toBeGreaterThan(0);
+    // La liste est bien celle des outils qui passent par `ApprovalRegistry` ou par
+    // une fenêtre de saisie de l'interface web.
+    expect([...APPROVAL_REQUIRED_TOOLS].sort()).toEqual([
+      "capturer_ecran",
+      "demander_secret",
+      "deposer_fichier",
+      "recuperer_fichier",
+      "run_command",
+    ]);
+    expect(approvalRequiredTools([...REMOTE_SAFE_TOOLS])).toEqual([]);
+    for (const chatMode of ["mattermost", "discord"] as const) {
+      for (const remoteAgents of [true, false]) {
+        const tools = toolAllowlistForChat("light", lightOptions, { chatMode, remoteAgents });
+        expect(approvalRequiredTools(tools)).toEqual([]);
+        expect(approvalRequiredTools(toolAllowlistForChat("heavy", lightOptions, { chatMode, remoteAgents }))).toEqual([]);
+      }
+    }
   });
 });

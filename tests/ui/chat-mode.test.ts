@@ -71,8 +71,10 @@ describe("badge d'état — ● / ◐ / ○ et la raison en `title`", () => {
   });
 
   it("le `title` porte la raison EXACTE du serveur (jamais « erreur »)", () => {
-    const badge = badgeFor(remoteStatus("discord", "off", "Discord n'est pas encore configuré."));
-    expect(badge.title).toBe("Discord n'est pas encore configuré.");
+    const badge = badgeFor(remoteStatus("discord", "off", "Discord n'est pas configuré."));
+    // ⚠️ Le `title` est la raison du SERVEUR, recopiée telle quelle : aucune reformulation
+    // côté interface (elle afficherait sinon un motif qui n'existe plus au lot 21).
+    expect(badge.title).toBe("Discord n'est pas configuré.");
     expect(badge.glyph).toBe("○");
   });
 
@@ -104,8 +106,11 @@ describe("création désactivée — décision du SERVEUR, relayée", () => {
   it("état vide / bandeau par mode : Mattermost n'a aucun canal, Discord n'est pas configuré", () => {
     expect(modeNotice(remoteStatus("mattermost"))).toMatchObject({ kind: "vide" });
     expect(modeNotice(remoteStatus("mattermost"))?.titre).toContain("Aucun canal synchronisé");
-    expect(modeNotice(remoteStatus("discord"))).toMatchObject({ kind: "bandeau" });
-    expect(modeNotice(remoteStatus("discord"))?.detail).toContain("ne fait rien pour l'instant");
+    // ⚠️ Lot 21 : Discord est LIVRÉ. Le bandeau « ne fait rien pour l'instant » serait
+    // faux ; l'état vide DIT quoi faire (jeton + intent MESSAGE_CONTENT).
+    expect(modeNotice(remoteStatus("discord"))).toMatchObject({ kind: "vide" });
+    expect(modeNotice(remoteStatus("discord"))?.titre).toContain("Aucun salon synchronisé");
+    expect(modeNotice(remoteStatus("discord"))?.detail).toContain("MESSAGE_CONTENT");
     // Mode local : AUCUN état vide ajouté (comportement strictement inchangé).
     expect(modeNotice({ mode: "local", creation: { autorisee: true } })).toBeNull();
   });

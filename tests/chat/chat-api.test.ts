@@ -16,7 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ChatService } from "../../src/chat/index.js";
-import type { ChatReplyMode } from "../../src/chat/types.js";
+import type { ChatQuoteAuthor, ChatReplyMode, ChatReplyStyle } from "../../src/chat/types.js";
 import {
   handleChatRequest,
   type ChatMattermostPort,
@@ -32,6 +32,8 @@ function spyPort(overrides: Partial<ChatMattermostPort> = {}) {
     token: false,
     connected: 0,
     modes: new Map<string, ChatReplyMode>(),
+    styles: new Map<string, ChatReplyStyle>(),
+    quotes: new Map<string, ChatQuoteAuthor>(),
     canaux: ["mm-canal-1"],
   };
   const view = (): ChatMattermostView => ({
@@ -44,11 +46,13 @@ function spyPort(overrides: Partial<ChatMattermostPort> = {}) {
       backfill: { fait: false, imports: 0, borneAtteinte: false },
       rattrapageActif: false,
     },
-    canaux: [...state.modes].map(([id, mode]) => ({
+    canaux: state.canaux.map((id) => ({
       id,
       titre: id,
       messageCount: 1,
-      replyMode: mode,
+      ...(state.modes.has(id) ? { replyMode: state.modes.get(id) } : {}),
+      replyStyle: state.styles.get(id) ?? "fil",
+      quoteAuthor: state.quotes.get(id) ?? "non",
       backfillFait: true,
       historiqueAnterieur: false,
     })),
@@ -67,11 +71,28 @@ function spyPort(overrides: Partial<ChatMattermostPort> = {}) {
       state.connected += 1;
     },
     view,
-    replyMode: (conversationId) => state.modes.get(conversationId),
-    setReplyMode: (conversationId, mode) => {
+    replySettings: (conversationId) =>
+      state.canaux.includes(conversationId)
+        ? {
+            ...(state.modes.has(conversationId) ? { replyMode: state.modes.get(conversationId) } : {}),
+            replyStyle: state.styles.get(conversationId) ?? "fil",
+            quoteAuthor: state.quotes.get(conversationId) ?? "non",
+          }
+        : undefined,
+    applyReplySettings: (conversationId, patch) => {
       if (!state.canaux.includes(conversationId)) return false;
-      if (mode === undefined) state.modes.delete(conversationId);
-      else state.modes.set(conversationId, mode);
+      if (patch.replyMode !== undefined) {
+        if (patch.replyMode === null) state.modes.delete(conversationId);
+        else state.modes.set(conversationId, patch.replyMode);
+      }
+      if (patch.replyStyle !== undefined) {
+        if (patch.replyStyle === null) state.styles.delete(conversationId);
+        else state.styles.set(conversationId, patch.replyStyle);
+      }
+      if (patch.quoteAuthor !== undefined) {
+        if (patch.quoteAuthor === null) state.quotes.delete(conversationId);
+        else state.quotes.set(conversationId, patch.quoteAuthor);
+      }
       return true;
     },
     ...overrides,
@@ -237,6 +258,73 @@ describe("mode de réponse — par canal", () => {
     const { port } = spyPort();
     const response = await call("PATCH", "/api/chat/conversations/mm-inconnu", { replyMode: "tout" }, port);
     expect(response.status).toBe(404);
+  });
+});
+
+describe("comment répondre — style et citation, par canal (même route)", () => {
+  it("enregistre `replyStyle` et `quoteAuthor` et les rend dans la réponse et dans l'état", async () => {
+    const { port, state } = spyPort();
+    const response = await call(
+      "PATCH",
+      "/api/chat/conversations/mm-canal-1",
+      { replyStyle: "nouveau", quoteAuthor: "oui" },
+      port,
+    );
+    expect(response.status).toBe(200);
+    expect(state.styles.get("mm-canal-1")).toBe("nouveau");
+    expect(state.quotes.get("mm-canal-1")).toBe("oui");
+    const corps = response.body as {
+      reglages: { replyStyle: string; quoteAuthor: string };
+      mattermost: ChatMattermostView;
+    };
+    expect(corps.reglages).toMatchObject({ replyStyle: "nouveau", quoteAuthor: "oui" });
+    const canal = corps.mattermost.canaux[0];
+    expect(canal?.replyStyle).toBe("nouveau");
+    expect(canal?.quoteAuthor).toBe("oui");
+  });
+
+  it("un sous-ensemble n'écrase pas les autres réglages", async () => {
+    const { port, state } = spyPort();
+    await call("PATCH", "/api/chat/conversations/mm-canal-1", { replyMode: "tout" }, port);
+    await call("PATCH", "/api/chat/conversations/mm-canal-1", { quoteAuthor: "oui" }, port);
+    expect(state.modes.get("mm-canal-1")).toBe("tout");
+    expect(state.quotes.get("mm-canal-1")).toBe("oui");
+  });
+
+  it("`null` remet le réglage à son défaut (le défaut est celui du moteur, pas de l'API)", async () => {
+    const { port, state } = spyPort();
+    await call("PATCH", "/api/chat/conversations/mm-canal-1", { replyStyle: "nouveau" }, port);
+    const response = await call(
+      "PATCH",
+      "/api/chat/conversations/mm-canal-1",
+      { replyStyle: null, quoteAuthor: null },
+      port,
+    );
+    expect(response.status).toBe(200);
+    expect(state.styles.size).toBe(0);
+    expect(state.quotes.size).toBe(0);
+    const corps = response.body as { reglages: { replyStyle: string; quoteAuthor: string } };
+    expect(corps.reglages.replyStyle).toBe("fil");
+    expect(corps.reglages.quoteAuthor).toBe("non");
+  });
+
+  it("REFUS explicite d'une valeur inconnue, et rien n'est appliqué", async () => {
+    const { port, state } = spyPort();
+    for (const corps of [
+      { replyStyle: "imbrique" },
+      { quoteAuthor: "peut-etre" },
+      { replyStyle: 42 },
+      { replyMode: "tout", replyStyle: "imbrique" },
+    ]) {
+      const response = await call("PATCH", "/api/chat/conversations/mm-canal-1", corps, port);
+      expect(response.status).toBe(400);
+      expect(JSON.stringify(response.body)).toContain("replyStyle");
+    }
+    expect(state.styles.size).toBe(0);
+    expect(state.quotes.size).toBe(0);
+    // Un corps VIDE n'applique rien non plus (il n'y aurait rien à faire).
+    const vide = await call("PATCH", "/api/chat/conversations/mm-canal-1", {}, port);
+    expect(vide.status).toBe(400);
   });
 });
 

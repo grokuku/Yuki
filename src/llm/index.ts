@@ -53,12 +53,18 @@ export {
   READ_ONLY_TOOLS,
   SECRET_DIRECTORY_TOOLS,
   SECRET_REQUEST_TOOLS,
+  APPROVAL_REQUIRED_TOOLS,
+  approvalRequiredTools,
+  REMOTE_SAFE_TOOLS,
   toolAllowlist,
+  toolAllowlistForChat,
   TOOL_POLICY,
 } from "./tool-policy.js";
 export type {
   AgentDirectoryToolName,
   BuiltinToolName,
+  ChatOriginMode,
+  ChatToolPolicyOptions,
   ConversationArchiveToolName,
   CustomToolName,
   DelegateToolName,

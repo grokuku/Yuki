@@ -38,9 +38,17 @@ import {
 import { dirname, join } from "node:path";
 
 import {
+  CHAT_QUOTE_AUTHORS,
   CHAT_REPLY_MODES,
+  CHAT_REPLY_STYLES,
+  DEFAULT_QUOTE_AUTHOR,
+  DEFAULT_REPLY_STYLE,
   REMOTE_PLATFORMS,
+  type ChatQuoteAuthor,
   type ChatReplyMode,
+  type ChatReplySettingsPatch,
+  type ChatReplyStyle,
+  type RemoteAttachment,
   type RemoteConversation,
   type RemoteMessage,
   type RemotePlatform,
@@ -61,8 +69,28 @@ export const MAX_MESSAGE_BYTES = 16 * 1024;
 /** Mention ajoutée à un message tronqué (jamais une coupe silencieuse). */
 export const TRUNCATION_SUFFIX = " [… message tronqué : 16 Kio dépassés]";
 
-/** Mention ajoutée à un message supprimé chez la plateforme. */
+/**
+ * Mention ajoutée à un message supprimé chez Mattermost.
+ *
+ * ⚠️ Conservée telle quelle (valeur ET nom) : des miroirs existants et des tests la
+ * portent. La mention PUBLIÉE est désormais calculée par `deletedNoticeOf(platform)`.
+ */
 export const DELETED_NOTICE = "(supprimé sur Mattermost)";
+
+/**
+ * Mention « supprimé » d'une plateforme.
+ *
+ * ⚠️ Pourquoi une fonction : le texte est MONTRÉ à l'utilisateur et dans le prompt du
+ * modèle. Écrire « supprimé sur Mattermost » sur un message Discord serait faux.
+ */
+export function deletedNoticeOf(platform: RemotePlatform): string {
+  return platform === "discord" ? "(supprimé sur Discord)" : DELETED_NOTICE;
+}
+
+/** `true` si ce texte EST la mention de suppression d'une plateforme (jamais un contenu). */
+export function isDeletedNotice(text: string): boolean {
+  return text === DELETED_NOTICE || text === deletedNoticeOf("discord");
+}
 
 /** Journal minimal (le logger d'observabilité le satisfait). */
 export interface ChatMirrorLogger {
@@ -88,6 +116,16 @@ export interface ChatMirrorConversationRecord {
   historiqueAnterieur?: boolean;
   /** Mode de réponse du canal (`tout` | `auto` | `mention`). Absent = non choisi. */
   replyMode?: ChatReplyMode;
+  /**
+   * COMMENT répondre (`fil` | `nouveau`). Absent = jamais choisi ⇒ `fil`.
+   *
+   * ⚠️ Un miroir écrit par une version antérieure n'a pas cette clé : le défaut est
+   * appliqué à la LECTURE (`effectiveReplyStyle`), jamais en réécrivant le fichier —
+   * un miroir existant ne doit jamais être « cassé » par une montée de version.
+   */
+  replyStyle?: ChatReplyStyle;
+  /** Citer l'auteur (`oui` | `non`). Absent = jamais choisi ⇒ `non`. */
+  quoteAuthor?: ChatQuoteAuthor;
   /** Nombre de messages trop longs (marqués « tronqué »). */
   tronques?: number;
   /** `true` quand la borne de 20 000 messages est atteinte (plus rien n'est ajouté). */
@@ -100,8 +138,20 @@ export interface ChatMirrorConversationRecord {
 export interface ChatMirrorIndexFile {
   schemaVersion: number;
   settings: { baseUrl?: string };
+  /**
+   * Identité du bot Mattermost (champs HISTORIQUES, conservés tels quels : un miroir
+   * écrit par une version antérieure doit rester lisible sans migration).
+   */
   botUserId?: string;
   botUsername?: string;
+  /**
+   * Identité du bot PAR PLATEFORME (lot 21).
+   *
+   * ⚠️ Nécessaire dès qu'il y a DEUX plateformes : un seul `botUserId` ferait passer les
+   * messages de Yuki sur Discord pour ceux d'un humain (ou l'inverse), et l'anti-boucle
+   * dépend de cette identité.
+   */
+  bots?: Partial<Record<RemotePlatform, { id?: string; username?: string }>>;
   conversations: Record<string, ChatMirrorConversationRecord>;
 }
 
@@ -163,6 +213,10 @@ export class ChatMirrorStore implements ChatMirror {
       // ⚠️ Un canal miroir PEUT produire un run : il répond aux messages.
       canRun: true,
       ...(record.replyMode !== undefined ? { replyMode: record.replyMode } : {}),
+      // ⚠️ Valeurs EFFECTIVES (défauts appliqués) : l'interface coche l'option
+      // réellement active, sans garder d'état local qui divergerait du serveur.
+      replyStyle: effectiveReplyStyle(record),
+      quoteAuthor: effectiveQuoteAuthor(record),
     }));
   }
 
@@ -205,9 +259,21 @@ export class ChatMirrorStore implements ChatMirror {
     return this.index.settings.baseUrl ?? "";
   }
 
-  /** Identité du bot connue (`users/me`). */
-  bot(): { id?: string; username?: string } {
-    return { id: this.index.botUserId, username: this.index.botUsername };
+  /**
+   * Identité du bot connue pour une PLATEFORME (`users/me`).
+   *
+   * ⚠️ Défaut `mattermost` : c'est la plateforme livrée au lot 18, dont l'identité vit
+   * dans les champs historiques `botUserId`/`botUsername`.
+   */
+  bot(platform: RemotePlatform = "mattermost"): { id?: string; username?: string } {
+    const stored = this.index.bots?.[platform];
+    if (stored) {
+      return { id: stored.id, username: stored.username };
+    }
+    if (platform === "mattermost") {
+      return { id: this.index.botUserId, username: this.index.botUsername };
+    }
+    return { id: undefined, username: undefined };
   }
 
   /**
@@ -295,10 +361,25 @@ export class ChatMirrorStore implements ChatMirror {
     this.persistIndex();
   }
 
-  /** Enregistre l'identité du bot (`users/me`). */
-  setBot(identity: { id?: string; username?: string }): void {
-    if (identity.id !== undefined) this.index.botUserId = identity.id;
-    if (identity.username !== undefined) this.index.botUsername = identity.username;
+  /**
+   * Enregistre l'identité du bot (`users/me`) pour une PLATEFORME.
+   *
+   * ⚠️ Pour Mattermost, les champs HISTORIQUES restent écrits : une version antérieure de
+   * Yuki (ou un outil de diagnostic) continue de lire l'identité au même endroit.
+   */
+  setBot(identity: { id?: string; username?: string }, platform: RemotePlatform = "mattermost"): void {
+    const bots = { ...(this.index.bots ?? {}) };
+    const previous = bots[platform] ?? {};
+    bots[platform] = {
+      ...previous,
+      ...(identity.id !== undefined ? { id: identity.id } : {}),
+      ...(identity.username !== undefined ? { username: identity.username } : {}),
+    };
+    this.index.bots = bots;
+    if (platform === "mattermost") {
+      if (identity.id !== undefined) this.index.botUserId = identity.id;
+      if (identity.username !== undefined) this.index.botUsername = identity.username;
+    }
     this.persistIndex();
   }
 
@@ -349,6 +430,95 @@ export class ChatMirrorStore implements ChatMirror {
     else record.replyMode = mode;
     this.persistIndex();
     this.notifyChange(conversationId);
+  }
+
+  /** Style de réponse d'un canal (`fil` | `nouveau`), persisté (`undefined` = défaut). */
+  setReplyStyle(conversationId: string, style: ChatReplyStyle | undefined): void {
+    const record = this.index.conversations[conversationId];
+    if (!record) return;
+    if (style === undefined) delete record.replyStyle;
+    else record.replyStyle = style;
+    this.persistIndex();
+    this.notifyChange(conversationId);
+  }
+
+  /** Citation de l'auteur (`oui` | `non`), persistée (`undefined` = défaut). */
+  setQuoteAuthor(conversationId: string, quote: ChatQuoteAuthor | undefined): void {
+    const record = this.index.conversations[conversationId];
+    if (!record) return;
+    if (quote === undefined) delete record.quoteAuthor;
+    else record.quoteAuthor = quote;
+    this.persistIndex();
+    this.notifyChange(conversationId);
+  }
+
+  /**
+   * Applique un SOUS-ENSEMBLE de réglages de réponse en UNE écriture d'index.
+   *
+   * @returns `false` quand le canal n'est pas (encore) dans le miroir : l'appelant
+   *   répond alors 404, jamais un succès supposé.
+   */
+  setReplySettings(conversationId: string, patch: ChatReplySettingsPatch): boolean {
+    const record = this.index.conversations[conversationId];
+    if (!record) return false;
+    if (patch.replyMode !== undefined) {
+      if (patch.replyMode === null) delete record.replyMode;
+      else record.replyMode = patch.replyMode;
+    }
+    if (patch.replyStyle !== undefined) {
+      if (patch.replyStyle === null) delete record.replyStyle;
+      else record.replyStyle = patch.replyStyle;
+    }
+    if (patch.quoteAuthor !== undefined) {
+      if (patch.quoteAuthor === null) delete record.quoteAuthor;
+      else record.quoteAuthor = patch.quoteAuthor;
+    }
+    this.persistIndex();
+    this.notifyChange(conversationId);
+    return true;
+  }
+
+  /**
+   * Pièce jointe d'un canal miroir : le message qui la porte, ou `undefined`.
+   *
+   * ⚠️ Sert à la garde de SÛRETÉ du téléchargement : un `file_id` deviné ne doit
+   * jamais permettre de lire un fichier d'un canal qu'on ne suit pas.
+   */
+  attachmentMessage(conversationId: string, fileId: string): RemoteMessage | undefined {
+    if (typeof fileId !== "string" || fileId === "") return undefined;
+    for (const message of this.loaded.get(conversationId)?.values() ?? []) {
+      if (message.attachments?.some((attachment) => attachment.id === fileId) === true) {
+        return message;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Met à jour les MÉTADONNÉES d'une pièce jointe (nom, taille, type) sur le message
+   * qui la porte, et le persiste.
+   *
+   * ⚠️ Appelé seulement À LA DEMANDE (lecture d'une image), jamais pendant la
+   * synchronisation : `GET /files/<id>/info` coûterait un appel par fichier.
+   */
+  setAttachmentMeta(
+    conversationId: string,
+    fileId: string,
+    meta: { nom?: string; taille?: number; mime?: string },
+  ): boolean {
+    const message = this.attachmentMessage(conversationId, fileId);
+    if (!message || message.attachments === undefined) return false;
+    const attachments = message.attachments.map((attachment) =>
+      attachment.id === fileId
+        ? {
+            ...attachment,
+            ...(meta.nom !== undefined && meta.nom !== "" ? { nom: meta.nom } : {}),
+            ...(meta.taille !== undefined ? { taille: meta.taille } : {}),
+            ...(meta.mime !== undefined && meta.mime !== "" ? { mime: meta.mime } : {}),
+          }
+        : attachment,
+    );
+    return this.update({ ...message, attachments }) !== "borne";
   }
 
   /** Curseur de reprise d'un canal (instant ISO du dernier message ingéré). */
@@ -461,6 +631,7 @@ export class ChatMirrorStore implements ChatMirror {
         settings: typeof raw.settings === "object" && raw.settings !== null ? { ...raw.settings } : {},
         ...(typeof raw.botUserId === "string" ? { botUserId: raw.botUserId } : {}),
         ...(typeof raw.botUsername === "string" ? { botUsername: raw.botUsername } : {}),
+        ...(sanitizeBots(raw.bots) !== undefined ? { bots: sanitizeBots(raw.bots) } : {}),
         conversations,
       };
     } catch (error) {
@@ -520,6 +691,49 @@ export class ChatMirrorStore implements ChatMirror {
   }
 }
 
+/**
+ * Identités de bot relues d'un index (champs invalides ignorés, jamais une exception).
+ *
+ * ⚠️ Rend `undefined` quand rien d'exploitable n'est présent : l'index garde alors sa
+ * forme historique et n'est pas réécrit avec un objet vide.
+ */
+function sanitizeBots(
+  raw: unknown,
+): Partial<Record<RemotePlatform, { id?: string; username?: string }>> | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const out: Partial<Record<RemotePlatform, { id?: string; username?: string }>> = {};
+  for (const platform of REMOTE_PLATFORMS) {
+    const value = (raw as Record<string, unknown>)[platform];
+    if (typeof value !== "object" || value === null) continue;
+    const candidate = value as { id?: unknown; username?: unknown };
+    const id = typeof candidate.id === "string" && candidate.id !== "" ? candidate.id : undefined;
+    const username =
+      typeof candidate.username === "string" && candidate.username !== ""
+        ? candidate.username
+        : undefined;
+    if (id === undefined && username === undefined) continue;
+    out[platform] = { ...(id !== undefined ? { id } : {}), ...(username !== undefined ? { username } : {}) };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Style de réponse EFFECTIF d'un enregistrement de miroir.
+ *
+ * ⚠️ C'est ici — et nulle part ailleurs — que le défaut s'applique : un miroir écrit
+ * avant l'ajout de `replyStyle` n'a pas la clé, et il reste parfaitement lisible.
+ */
+export function effectiveReplyStyle(record: { replyStyle?: ChatReplyStyle } | undefined): ChatReplyStyle {
+  return record?.replyStyle ?? DEFAULT_REPLY_STYLE;
+}
+
+/** Citation de l'auteur EFFECTIVE d'un enregistrement de miroir (défaut `non`). */
+export function effectiveQuoteAuthor(
+  record: { quoteAuthor?: ChatQuoteAuthor } | undefined,
+): ChatQuoteAuthor {
+  return record?.quoteAuthor ?? DEFAULT_QUOTE_AUTHOR;
+}
+
 /** Tronque une chaîne UTF-8 sans couper un caractère en deux. */
 export function truncateUtf8(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
@@ -547,6 +761,17 @@ function sanitizeRecord(value: unknown): ChatMirrorConversationRecord | null {
     typeof raw.replyMode === "string" && (CHAT_REPLY_MODES as readonly string[]).includes(raw.replyMode)
       ? (raw.replyMode as ChatReplyMode)
       : undefined;
+  // ⚠️ Valeur INCONNUE = clé IGNORÉE (donc défaut à la lecture), jamais une valeur
+  // devinée : un fichier trafiqué ne peut pas faire prendre un style inédit.
+  const replyStyle =
+    typeof raw.replyStyle === "string" && (CHAT_REPLY_STYLES as readonly string[]).includes(raw.replyStyle)
+      ? (raw.replyStyle as ChatReplyStyle)
+      : undefined;
+  const quoteAuthor =
+    typeof raw.quoteAuthor === "string" &&
+    (CHAT_QUOTE_AUTHORS as readonly string[]).includes(raw.quoteAuthor)
+      ? (raw.quoteAuthor as ChatQuoteAuthor)
+      : undefined;
   return {
     platform: platform as RemotePlatform,
     remoteId: raw.remoteId,
@@ -557,6 +782,8 @@ function sanitizeRecord(value: unknown): ChatMirrorConversationRecord | null {
     ...(typeof raw.backfillDepuis === "string" ? { backfillDepuis: raw.backfillDepuis } : {}),
     ...(raw.historiqueAnterieur === true ? { historiqueAnterieur: true } : {}),
     ...(replyMode !== undefined ? { replyMode } : {}),
+    ...(replyStyle !== undefined ? { replyStyle } : {}),
+    ...(quoteAuthor !== undefined ? { quoteAuthor } : {}),
     ...(typeof raw.tronques === "number" ? { tronques: raw.tronques } : {}),
     ...(raw.borneAtteinte === true ? { borneAtteinte: true } : {}),
     ...(typeof raw.dernierMessage === "string" ? { dernierMessage: raw.dernierMessage } : {}),
@@ -585,6 +812,33 @@ function sanitizeMessage(line: string): RemoteMessage | null {
           estBot: raw.author.estBot === true,
         }
       : { id: "inconnu", nom: "inconnu", estBot: false };
+  // ⚠️ Les PIÈCES JOINTES survivent au redémarrage : sans cela, une image postée sur
+  // Mattermost serait « oubliée » au rechargement (son `file_id` n'existerait plus nulle
+  // part) et ne pourrait plus jamais être montrée au modèle.
+  const attachments = Array.isArray(raw.attachments)
+    ? raw.attachments.flatMap((value) => {
+        if (typeof value !== "object" || value === null) return [];
+        const candidate = value as Partial<RemoteAttachment>;
+        if (typeof candidate.id !== "string" || candidate.id === "") return [];
+        return [
+          {
+            id: candidate.id,
+            nom: typeof candidate.nom === "string" && candidate.nom !== "" ? candidate.nom : candidate.id,
+            ...(typeof candidate.taille === "number" && candidate.taille >= 0
+              ? { taille: candidate.taille }
+              : {}),
+            ...(typeof candidate.mime === "string" && candidate.mime !== ""
+              ? { mime: candidate.mime }
+              : {}),
+            // ⚠️ L'URL de contenu d'une pièce jointe Discord est SIGNÉE : elle survit au
+            // redémarrage, sinon l'image d'un message ancien ne serait plus téléchargeable.
+            ...(typeof candidate.url === "string" && candidate.url !== ""
+              ? { url: candidate.url }
+              : {}),
+          },
+        ];
+      })
+    : [];
   return {
     remoteId: raw.remoteId,
     conversationId: raw.conversationId,
@@ -595,5 +849,6 @@ function sanitizeMessage(line: string): RemoteMessage | null {
     sentAt: raw.sentAt,
     ...(typeof raw.editedAt === "string" ? { editedAt: raw.editedAt } : {}),
     ...(raw.deleted === true ? { deleted: true } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
   };
 }

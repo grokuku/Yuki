@@ -30,12 +30,16 @@ import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { HolafIcons } from "./vendor/holaf/holaf-icons.js";
 import { attachLongPress } from "./long-press.js";
 import {
+  QUOTE_AUTHOR_OPTIONS,
   REPLY_MODE_OPTIONS,
+  REPLY_STYLE_OPTIONS,
   creationRefusal,
   initChatModeSelector,
   modeNotice,
+  quoteAuthorLabel,
   replyModeLabel,
-  saveReplyMode,
+  replyStyleLabel,
+  saveReplySettings,
 } from "./chat-mode.js";
 import {
   composeConversationLabel,
@@ -303,9 +307,14 @@ export function initSessionsPanel(deps) {
   let menuTargetId = null;
   let pinItem = null;
   let recapItem = null;
-  /** Bloc « mode de réponse » du menu contextuel (canaux distants seulement). */
+  /** Bloc « réglages de réponse » du menu contextuel (canaux distants seulement). */
   let replyBlock = null;
+  /** Entrées radio du QUAND répondre, par mode. */
   const replyItems = new Map();
+  /** Entrées radio du COMMENT répondre (fil / nouveau message). */
+  const styleItems = new Map();
+  /** Entrées radio de la CITATION de l'auteur (oui / non). */
+  const quoteItems = new Map();
   /** Cibles de rendu : la barre latérale (`rail`) + les menus téléphone (`menu`). */
   const targets = [];
 
@@ -436,12 +445,19 @@ export function initSessionsPanel(deps) {
       const distant = cible && cible.kind === "remote";
       replyBlock.hidden = !distant;
       if (distant) {
-        const courant = cible.replyMode ?? "mention";
+        // ⚠️ L'ÉTAT VIENT DU SERVEUR (trame `sessions`), jamais d'une mémoire locale :
+        // un rechargement ou un autre onglet ne peut pas faire cocher la mauvaise option.
+        const modeCourant = cible.replyMode ?? "mention";
+        const styleCourant = cible.replyStyle ?? "fil";
+        const quoteCourant = cible.quoteAuthor ?? "non";
         for (const [mode, item] of replyItems) {
-          const actif = mode === courant;
-          item.classList.toggle("ctx-menu__item--active", actif);
-          item.setAttribute("aria-checked", actif ? "true" : "false");
-          item.textContent = `${actif ? "● " : "○ "}${replyModeLabel(mode)}`;
+          marquerRadio(item, mode === modeCourant, replyModeLabel(mode));
+        }
+        for (const [style, item] of styleItems) {
+          marquerRadio(item, style === styleCourant, replyStyleLabel(style));
+        }
+        for (const [quote, item] of quoteItems) {
+          marquerRadio(item, quote === quoteCourant, quoteAuthorLabel(quote));
         }
       }
     }
@@ -463,6 +479,18 @@ export function initSessionsPanel(deps) {
     }
     menu.style.left = `${Math.round(left)}px`;
     menu.style.top = `${Math.round(top)}px`;
+  }
+
+  /**
+   * Marque une entrée radio comme active (point + gras + `aria-checked`).
+   *
+   * ⚠️ Le texte est réécrit ENTIÈREMENT (`textContent`) : c'est du DOM pur, jamais du
+   * HTML interprété, et l'état coché reste lisible sans la couleur.
+   */
+  function marquerRadio(item, actif, label) {
+    item.classList.toggle("ctx-menu__item--active", actif);
+    item.setAttribute("aria-checked", actif ? "true" : "false");
+    item.textContent = `${actif ? "● " : "○ "}${label}`;
   }
 
   function buildMenu() {
@@ -567,38 +595,49 @@ export function initSessionsPanel(deps) {
       if (id) void confirmDelete(id);
     });
 
-    // ─── MODE DE RÉPONSE du canal distant (`tout` / `auto` / `mention`) ────
-    // ⚠️ Réglage PAR CANAL, persisté côté serveur (`chat-mirror.json`) : il survit au
-    // redémarrage et s'applique à la synchronisation, pas seulement à l'affichage.
+    // ─── RÉGLAGES DE RÉPONSE du canal distant ───────────────────────────────
+    // Trois réglages PAR CANAL, persistés côté serveur (`chat-mirror.json`) : ils
+    // survivent au redémarrage et s'appliquent à la synchronisation, pas seulement à
+    // l'affichage.
+    //  - QUAND répondre : `tout` / `auto` / `mention` ;
+    //  - COMMENT répondre : `fil` / `nouveau` (racine du canal) ;
+    //  - CITER l'auteur : `oui` / `non`.
     replyBlock = el("div", { class: "ctx-menu__group", role: "group" });
     replyBlock.hidden = true;
-    replyBlock.setAttribute("aria-label", "Mode de réponse du canal");
-    const replyTitle = el(
-      "p",
-      { class: "ctx-menu__label" },
-      "Réponses de Yuki dans ce canal",
+    replyBlock.setAttribute("aria-label", "Réglages de réponse du canal");
+    replyBlock.append(el("p", { class: "ctx-menu__label" }, "Réponses de Yuki dans ce canal"));
+
+    const ajouterGroupe = (titre, options, cle, map, appliquer) => {
+      replyBlock.append(el("p", { class: "ctx-menu__label ctx-menu__label--sub" }, titre));
+      for (const option of options) {
+        const item = el(
+          "button",
+          {
+            class: "ctx-menu__item",
+            type: "button",
+            role: "menuitemradio",
+            "aria-checked": "false",
+            title: option.title,
+          },
+          option.label,
+        );
+        item.addEventListener("click", () => {
+          const id = menuTargetId;
+          closeMenu();
+          if (id) void appliquer(id, option[cle]);
+        });
+        map.set(option[cle], item);
+        replyBlock.append(item);
+      }
+    };
+
+    ajouterGroupe("Quand répondre", REPLY_MODE_OPTIONS, "mode", replyItems, applyReplyMode);
+    ajouterGroupe("Comment répondre", REPLY_STYLE_OPTIONS, "style", styleItems, (id, style) =>
+      applyReplySettings(id, { replyStyle: style }),
     );
-    replyBlock.append(replyTitle);
-    for (const option of REPLY_MODE_OPTIONS) {
-      const item = el(
-        "button",
-        {
-          class: "ctx-menu__item",
-          type: "button",
-          role: "menuitemradio",
-          "aria-checked": "false",
-          title: option.title,
-        },
-        option.label,
-      );
-      item.addEventListener("click", () => {
-        const id = menuTargetId;
-        closeMenu();
-        if (id) void applyReplyMode(id, option.mode);
-      });
-      replyItems.set(option.mode, item);
-      replyBlock.append(item);
-    }
+    ajouterGroupe("Citer l'auteur", QUOTE_AUTHOR_OPTIONS, "quote", quoteItems, (id, quote) =>
+      applyReplySettings(id, { quoteAuthor: quote }),
+    );
 
     menu.append(
       rename,
@@ -644,25 +683,35 @@ export function initSessionsPanel(deps) {
   }
 
   /**
-   * Applique un mode de RÉPONSE à un canal distant (`PATCH /api/chat/conversations/<id>`).
-   *
+   * Applique un mode de réponse (« quand ») à un canal distant.
    * ⚠️ L'échec est DIT (modale), jamais avalé : l'utilisateur doit savoir que le canal
    * ne répondra pas comme il l'a demandé.
    */
   async function applyReplyMode(id, mode) {
+    return applyReplySettings(id, { replyMode: mode });
+  }
+
+  /**
+   * Applique des réglages de réponse (`quand`, `comment`, citation) à un canal distant
+   * (`PATCH /api/chat/conversations/<id>` — la MÊME route, étendue).
+   *
+   * ⚠️ Rien n'est mis à jour localement : `onReplyMode` demande la liste au serveur, qui
+   * est AUTORITAIRE. Aucun rechargement de page, aucun HTML interprété.
+   */
+  async function applyReplySettings(id, patch) {
     try {
-      await saveReplyMode(id, mode, doFetch);
+      await saveReplySettings(id, patch, doFetch);
     } catch (error) {
       await modal.alert(
-        "Mode de réponse non enregistré",
-        `Le mode de réponse de ce canal n'a pas pu être enregistré : ${
+        "Réglage non enregistré",
+        `Le réglage de réponse de ce canal n'a pas pu être enregistré : ${
           error instanceof Error ? error.message : String(error)
         }`,
         { okText: "Compris" },
       );
       return;
     }
-    onReplyMode(id, mode);
+    onReplyMode(id);
   }
 
   async function confirmSetAside(id) {

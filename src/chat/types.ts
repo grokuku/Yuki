@@ -17,6 +17,8 @@
  * comme dans Mattermost, sans changer de modèle plus tard.
  */
 
+import type { FileImageContent } from "../files/types.js";
+
 /** Plateformes (et mode local) connus du registre. */
 export const CHAT_MODES = ["local", "mattermost", "discord"] as const;
 export type ChatMode = (typeof CHAT_MODES)[number];
@@ -38,6 +40,57 @@ export type RemotePlatform = (typeof REMOTE_PLATFORMS)[number];
  */
 export const CHAT_REPLY_MODES = ["tout", "auto", "mention"] as const;
 export type ChatReplyMode = (typeof CHAT_REPLY_MODES)[number];
+
+/**
+ * COMMENT répondre, **par canal** (choix utilisateur du 2026-11-01) :
+ *  - `fil`     → la réponse part DANS le fil du message (comportement historique) ;
+ *  - `nouveau` → la réponse est un NOUVEAU message à la racine du canal, même si le
+ *                message d'origine était dans un fil.
+ *
+ * ⚠️ `fil` est le défaut : il reproduit exactement ce qui a été vu en production, et
+ * on ne change pas un comportement observé sans le dire.
+ */
+export const CHAT_REPLY_STYLES = ["fil", "nouveau"] as const;
+export type ChatReplyStyle = (typeof CHAT_REPLY_STYLES)[number];
+
+/**
+ * CITER l'auteur du message auquel on répond (`oui` / `non`, **par canal**).
+ *
+ * ⚠️ `non` est le défaut : le comportement observé en production ne citait personne.
+ */
+export const CHAT_QUOTE_AUTHORS = ["oui", "non"] as const;
+export type ChatQuoteAuthor = (typeof CHAT_QUOTE_AUTHORS)[number];
+
+/** Valeur de `replyStyle` quand le canal n'a rien choisi (comportement historique). */
+export const DEFAULT_REPLY_STYLE: ChatReplyStyle = "fil";
+
+/** Valeur de `quoteAuthor` quand le canal n'a rien choisi (aucune citation). */
+export const DEFAULT_QUOTE_AUTHOR: ChatQuoteAuthor = "non";
+
+/**
+ * Réglages de RÉPONSE d'un canal, tels qu'ils sont RENDUS à l'interface.
+ *
+ * ⚠️ `replyStyle` et `quoteAuthor` sont TOUJOURS renseignés (valeurs effectives) :
+ * l'interface n'a aucun défaut à deviner. `replyMode` reste absent quand rien n'a été
+ * choisi (son défaut appartient au moteur de réponse, `DEFAULT_REPLY_MODE`).
+ */
+export interface ChatReplySettings {
+  replyMode?: ChatReplyMode;
+  replyStyle: ChatReplyStyle;
+  quoteAuthor: ChatQuoteAuthor;
+}
+
+/**
+ * Sous-ensemble de réglages à MODIFIER (`null` = revenir au défaut).
+ *
+ * ⚠️ Un champ ABSENT n'est pas touché : la route PATCH peut donc n'envoyer qu'un
+ * seul réglage sans écraser les autres.
+ */
+export interface ChatReplySettingsPatch {
+  replyMode?: ChatReplyMode | null;
+  replyStyle?: ChatReplyStyle | null;
+  quoteAuthor?: ChatQuoteAuthor | null;
+}
 
 /** État d'une plateforme, lu par l'interface (badge ● / ◐ / ○). */
 export type ChatStateCode = "on" | "connexion" | "off";
@@ -86,6 +139,17 @@ export interface RemoteConversation {
    */
   replyMode?: ChatReplyMode;
   /**
+   * COMMENT répondre dans ce canal (`fil` | `nouveau`). **Toujours** renseigné
+   * (défaut `fil` appliqué à la lecture) : l'interface coche ainsi l'option
+   * réellement active, sans état local qui divergerait du serveur.
+   */
+  replyStyle?: ChatReplyStyle;
+  /**
+   * Citer l'auteur du message auquel on répond (`oui` | `non`). **Toujours**
+   * renseigné (défaut `non`), pour la même raison que `replyStyle`.
+   */
+  quoteAuthor?: ChatQuoteAuthor;
+  /**
    * ⚠️ `true` : la conversation PEUT produire un RUN côté Yuki (elle répond aux
    * messages reçus, donc elle peut appeler des outils et demander des
    * approbations). Sans ce champ, `readOnly` laisserait croire qu'un miroir est
@@ -104,14 +168,38 @@ export interface RemoteAuthor {
   estBot: boolean;
 }
 
-/** Pièce jointe d'un message distant (métadonnées seules). */
+/** Pièce jointe d'un message distant (métadonnées seules).
+ *
+ * ⚠️ Aucun octet ici : le CONTENU n'est téléchargé qu'À LA DEMANDE, jamais pendant la
+ * synchronisation (un backfill de 1 000 messages déclencherait des milliers d'appels).
+ */
 export interface RemoteAttachment {
+  /** Identifiant chez la plateforme (`file_id` Mattermost) — sert au téléchargement. */
   id: string;
+  /**
+   * Nom d'affichage.
+   *
+   * ⚠️ Un post Mattermost ne transporte QUE des identifiants (`file_ids`) : le nom
+   * n'est pas connu à l'ingestion. Il vaut donc l'identifiant, puis il est renseigné
+   * à la DEMANDE (`GET /files/<id>/info`) — jamais pendant la synchronisation, qui ne
+   * doit pas déclencher un appel par fichier.
+   */
   nom: string;
   /** Taille en octets, si la plateforme la donne. */
   taille?: number;
   /** Type MIME, si la plateforme le donne. */
   mime?: string;
+  /**
+   * URL de CONTENU fournie par la plateforme (Discord), quand elle en donne une.
+   *
+   * ⚠️ Chez Discord elle est SIGNÉE et EXPIRANTE. Elle n'est jamais demandée à
+   * l'appelant : elle est relue dans le MIROIR, et seul un fichier déjà référencé par un
+   * message d'un canal SUIVI peut être téléchargé. Une URL fournie de l'extérieur ne
+   * déclenche AUCUNE requête (garde d'appartenance).
+   *
+   * ⚠️ Absente pour Mattermost : un post n'y transporte que des `file_ids`.
+   */
+  url?: string;
 }
 
 /**
@@ -198,7 +286,20 @@ export interface ChatApprovalRequest {
  * pour que le relais d'approbations (lot 3) n'invente pas un second canal.
  */
 export type ChatOutboundMessage =
-  | { kind: "texte"; text: string; threadRootId?: string }
+  | {
+      kind: "texte";
+      text: string;
+      threadRootId?: string;
+      /**
+       * Identifiants de fichiers du STORE de Yuki à joindre au message.
+       *
+       * ⚠️ Ce sont des identifiants `src/files` (jamais des chemins) : la plateforme
+       * lève les octets par son port de fichiers, sans lire le disque. Un fichier
+       * refusé (absent, expiré, trop lourd) n'empêche PAS le texte de partir — il est
+       * ANNONCÉ (journal + raison visible).
+       */
+      fichiers?: readonly string[];
+    }
   | { kind: "approbation"; approval: ChatApprovalRequest; threadRootId?: string }
   | {
       /** Résultat d'une action approuvée (compte rendu lisible côté plateforme). */
@@ -274,3 +375,33 @@ export interface ChatAdapter {
   /** Abonnement aux CHANGEMENTS D'ÉTAT de la plateforme, si elle sait le faire. */
   subscribeState?(listener: (status: ChatAdapterStatus) => void): () => void;
 }
+
+/**
+ * Générateur de RÉPONSE d'un canal distant : `transcript + message → texte`
+ * (injecté par le câblage, jamais deviné par l'adaptateur).
+ *
+ * ⚠️ COMMUN aux plateformes : Mattermost et Discord reçoivent EXACTEMENT la même
+ * fabrique (`createRemoteReplyGenerator`, `src/chat/reply/generate.ts`). Un générateur
+ * par plateforme aurait dupliqué la politique d'outils et le prompt.
+ *
+ * ⚠️ Il peut aussi rendre des FICHIERS à joindre : un run distant peut GÉNÉRER UNE IMAGE
+ * (`generer_image`), et cette image doit arriver dans le canal. Les identifiants sont
+ * ceux du STORE de Yuki (jamais un chemin disque) : chaque adaptateur lève les octets par
+ * son port de fichiers, puis les joint selon SA mécanique (Mattermost : `POST /files`
+ * puis `file_ids` ; Discord : multipart dans le même appel).
+ */
+export type ChatReplyGenerator = (input: {
+  channelTitle: string;
+  transcript: readonly RemoteMessage[];
+  message: RemoteMessage;
+  /**
+   * IMAGES de pièces jointes du message (déjà bornées par la politique de vision).
+   * ⚠️ Absent = message sans image, ou vision indisponible : le prompt reste du texte.
+   */
+  images?: readonly FileImageContent[];
+  /**
+   * Ce qui n'a PAS pu être joint (fichier non image, trop lourd, illisible) — phrases
+   * françaises transmises au rédacteur pour qu'il réponde en connaissance de cause.
+   */
+  notes?: readonly string[];
+}) => Promise<string | { text: string; fichiers?: readonly string[] }>;

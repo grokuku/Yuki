@@ -20,6 +20,8 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/model-runtime.ts",
   "src/pi/sdk/session-factory.ts",
   "src/pi/sdk/heavy-worker.ts",
+  "src/pi/sdk/prompt-writer.ts",
+  "src/pi/sdk/remote-run-tools.ts",
   "src/pi/sdk/delegate-tools.ts",
   "src/pi/sdk/execution-tools.ts",
   "src/pi/sdk/memory-extension.ts",

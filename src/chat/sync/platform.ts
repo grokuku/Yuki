@@ -22,6 +22,15 @@ export interface ChatSyncChannel {
 /** Ce que le service de synchronisation attend d'une plateforme. */
 export interface ChatSyncPlatform {
   /**
+   * Plateforme servie (`mattermost` | `discord`).
+   *
+   * ⚠️ Sert à ranger l'IDENTITÉ du bot au bon endroit (`ChatMirrorStore.setBot(…, plateforme)`).
+   * Absent = `mattermost` (comportement du lot 18, quand il n'y en avait qu'une) : sans ce
+   * champ, le bot Discord écraserait l'identité Mattermost et l'anti-boucle de l'autre
+   * plateforme se tromperait d'auteur.
+   */
+  readonly platform?: RemotePlatform;
+  /**
    * Identité du compte Yuki chez la plateforme (`users/me`).
    *
    * ⚠️ Le port n'expose VOLONTAIREMENT ni `connect()` ni `disconnect()` : la

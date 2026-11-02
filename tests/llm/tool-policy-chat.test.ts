@@ -10,8 +10,10 @@
  *  - mode distant + agents désactivés ⇒ jeu FERMÉ : images + lecture/analyse
  *    d'image, RIEN d'autre (ni lecture disque, ni délégation, ni transfert, ni
  *    commande, ni secret) ;
- *  - mode distant + agents activés ⇒ politique pleine (le relais d'approbations
- *    du lot 3 devient indispensable).
+ *  - mode distant + agents activés ⇒ politique du rôle léger, PLUS les outils
+ *    sûrs (image/lecture) qu'elle ne porte pas, MOINS les outils qui exigent une
+ *    approbation humaine (impossible à donner depuis un canal) — et le rôle lourd
+ *    n'a RIEN (aucun run lourd ne naît d'un canal).
  *
  * ⚠️ Échoue sur le code d'origine : `toolAllowlistForChat` n'existe pas.
  */
@@ -117,20 +119,31 @@ describe("mode distant, agents DÉSACTIVÉS (défaut) — jeu fermé", () => {
   });
 });
 
-describe("mode distant, agents ACTIVÉS — politique pleine", () => {
-  it("rend la politique du rôle (le relais d'approbations devient obligatoire)", () => {
+describe("mode distant, agents ACTIVÉS — politique du rôle, bornée par les approbations", () => {
+  it("rend la politique locale du léger, PLUS les outils sûrs, MOINS ceux à approbation", () => {
     const light = toolAllowlistForChat("light", FULL_OPTIONS, {
       chatMode: "mattermost",
       remoteAgents: true,
     });
-    expect(light).toEqual(toolAllowlist("light", FULL_OPTIONS));
+    // La délégation et les outils de consultation reviennent…
     expect(light).toContain("delegate");
-    // L'exécution reste portée par le rôle LOURD (inversion des rôles).
-    const heavy = toolAllowlistForChat("heavy", FULL_OPTIONS, {
-      chatMode: "mattermost",
-      remoteAgents: true,
-    });
-    expect(heavy).toEqual(toolAllowlist("heavy", FULL_OPTIONS));
-    expect(heavy).toContain("run_command");
+    expect(light).toContain("lister_agents");
+    expect(light).toContain("lister_secrets");
+    expect(light).toContain("envoyer_fichier");
+    // … les outils image/lecture du canal restent là (le léger local lit via
+    // `envoyer_fichier`, un run distant n'a que `lire_fichier` pour voir une image)…
+    for (const name of REMOTE_SAFE_TOOLS) expect(light).toContain(name);
+    // … et AUCUN outil qui exige une approbation humaine n'est exposé : une
+    // approbation s'affiche dans l'interface web, jamais dans un canal.
+    expect(light).not.toContain("demander_secret");
+    expect(containsForbiddenTool(light)).toBe(false);
+  });
+
+  it("le worker LOURD n'expose RIEN, même agents activés (aucun run lourd depuis un canal)", () => {
+    // ⚠️ Décision : un run lourd né d'un canal laisserait ses validations
+    // humaines dans une conversation que personne ne regarde. On ne le crée pas.
+    expect(
+      toolAllowlistForChat("heavy", FULL_OPTIONS, { chatMode: "mattermost", remoteAgents: true }),
+    ).toEqual([]);
   });
 });

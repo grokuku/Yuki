@@ -23,12 +23,16 @@
 import {
   isMattermostPost,
   messageOf,
+  MM_MAX_DOWNLOAD_BYTES,
   MM_MAX_PER_PAGE,
   MM_MAX_RETRIES,
+  MM_MAX_UPLOAD_BYTES,
   MM_MIN_REQUEST_INTERVAL_MS,
   MM_SINCE_MAX_POSTS,
   MM_SLOW_WINDOW_MS,
   type MattermostChannel,
+  type MattermostFileInfo,
+  type MattermostFileUploadResponse,
   type MattermostPost,
   type MattermostPostList,
   type MattermostTeam,
@@ -49,7 +53,9 @@ export type MattermostApiErrorCode =
   | "network"
   | "http"
   | "rate_limited"
-  | "bad_response";
+  | "bad_response"
+  /** Fichier trop lourd pour NOTRE borne (avant tout appel réseau), ou refusé (413). */
+  | "too_large";
 
 /** Erreur d'API : porte un code, un statut HTTP et un message en français. */
 export class MattermostApiError extends Error {
@@ -358,12 +364,21 @@ export class MattermostClient {
     channelId: string;
     message: string;
     rootId?: string;
+    /**
+     * Identifiants de fichiers DÉJÀ TÉLÉVERSÉS (`POST /files`) à joindre au post.
+     *
+     * ⚠️ Un `file_id` n'appartient PAS à un canal tant qu'aucun post ne le porte :
+     * l'ordre est donc TOUJOURS `POST /files` puis `POST /posts` avec `file_ids`.
+     */
+    fileIds?: readonly string[];
   }): Promise<MattermostPost> {
     const body: Record<string, unknown> = {
       channel_id: input.channelId,
       message: input.message,
     };
     if (input.rootId !== undefined && input.rootId !== "") body.root_id = input.rootId;
+    const fileIds = (input.fileIds ?? []).filter((id) => typeof id === "string" && id !== "");
+    if (fileIds.length > 0) body.file_ids = [...fileIds];
     const post = await this.request<MattermostPost>("POST", "/posts", body);
     if (!isMattermostPost(post)) {
       throw new MattermostApiError(
@@ -372,6 +387,141 @@ export class MattermostClient {
       );
     }
     return post;
+  }
+
+  /**
+   * `POST /files` — téléverse UN fichier dans un canal (multipart/form-data).
+   *
+   * ⚠️ Vérifié dans la doc archivée (`mattermost-upload-file`) : la requête est un
+   * `multipart/form-data` portant `channel_id` et le fichier (`files`), et la réponse
+   * rend `{ file_infos: [...] }`. Le fichier n'est rattaché à un message qu'à l'appel
+   * suivant (`createPost` avec `file_ids`).
+   *
+   * ⚠️ BORNE AVANT RÉSEAU : au-delà de `maxBytes` (défaut `MM_MAX_UPLOAD_BYTES`, 100 Mo =
+   * défaut Mattermost), on REFUSE explicitement — jamais une troncature, jamais un envoi
+   * partiel. Un `413` du serveur (instance bridée) remonte comme `too_large`.
+   */
+  async uploadFile(input: {
+    channelId: string;
+    filename: string;
+    mimeType?: string;
+    bytes: Uint8Array;
+    maxBytes?: number;
+  }): Promise<MattermostFileInfo> {
+    const limite = Math.max(1, Math.trunc(input.maxBytes ?? MM_MAX_UPLOAD_BYTES));
+    const taille = input.bytes.length;
+    if (taille <= 0) {
+      throw new MattermostApiError("too_large", "Le fichier à joindre est vide : rien n'est envoyé.");
+    }
+    if (taille > limite) {
+      throw new MattermostApiError(
+        "too_large",
+        `Le fichier « ${input.filename} » (${taille} octets) dépasse la borne d'envoi ` +
+          `(${limite} octets) : il n'est pas envoyé.`,
+      );
+    }
+    // ⚠️ Un nom de fichier vient d'ailleurs : on retire guillemets, retours à la ligne et
+    // séparateurs de chemin, qui casseraient l'en-tête multipart.
+    const nom = (input.filename || "fichier")
+      .replace(/[\r\n"\\/]/g, "_")
+      .slice(0, 200);
+    const type = input.mimeType !== undefined && input.mimeType !== ""
+      ? input.mimeType
+      : "application/octet-stream";
+    const response = await this.perform("POST", "/files", () => {
+      const form = new FormData();
+      form.append("channel_id", input.channelId);
+      form.append("files", new Blob([input.bytes], { type }), nom);
+      // ⚠️ AUCUN `content-type` manuel : `fetch` pose lui-même la frontière multipart.
+      return { headers: { accept: "application/json" }, body: form };
+    });
+    const payload = (await this.parseJson<MattermostFileUploadResponse>("/files", response)) ?? {};
+    const info = Array.isArray(payload.file_infos) ? payload.file_infos[0] : undefined;
+    if (!info || typeof info.id !== "string" || info.id === "") {
+      throw new MattermostApiError(
+        "bad_response",
+        "Mattermost n'a pas renvoyé l'identifiant du fichier téléversé : l'envoi n'est pas confirmé.",
+      );
+    }
+    return info;
+  }
+
+  /** `GET /files/<id>/info` — métadonnées d'un fichier (jamais son contenu). */
+  async fileInfo(fileId: string): Promise<MattermostFileInfo> {
+    const info = await this.request<MattermostFileInfo>(
+      "GET",
+      `/files/${encodeURIComponent(fileId)}/info`,
+    );
+    if (typeof info?.id !== "string" || info.id === "") {
+      throw new MattermostApiError(
+        "bad_response",
+        "Mattermost n'a pas renvoyé les métadonnées de ce fichier.",
+      );
+    }
+    return info;
+  }
+
+  /**
+   * `GET /files/<id>` — TÉLÉCHARGE les octets d'un fichier.
+   *
+   * ⚠️ Lecture BORNÉE : dès que `maxBytes` est dépassé (défaut
+   * `MM_MAX_DOWNLOAD_BYTES`, 20 Mio), la connexion est coupée et l'appel LÈVE
+   * `too_large`. Jamais d'accumulation sans plafond dans la mémoire du processus.
+   */
+  async downloadFile(fileId: string, options: { maxBytes?: number } = {}): Promise<Buffer> {
+    const limite = Math.max(1, Math.trunc(options.maxBytes ?? MM_MAX_DOWNLOAD_BYTES));
+    const path = `/files/${encodeURIComponent(fileId)}`;
+    const response = await this.perform("GET", path, () => ({
+      headers: { accept: "*/*" },
+    }));
+    const annonce = Number(response.headers.get("content-length") ?? "");
+    if (Number.isFinite(annonce) && annonce > limite) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new MattermostApiError(
+        "too_large",
+        `Ce fichier (${annonce} octets) dépasse la borne de téléchargement (${limite} octets) : ` +
+          "il n'est pas lu.",
+      );
+    }
+    const trop = () =>
+      new MattermostApiError(
+        "too_large",
+        `Ce fichier dépasse la borne de téléchargement (${limite} octets) : il n'est pas lu.`,
+      );
+    if (!response.body) {
+      const buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length > limite) throw trop();
+      return buffer;
+    }
+    const reader = response.body.getReader();
+    const morceaux: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === undefined) continue;
+      total += value.byteLength;
+      if (total > limite) {
+        void reader.cancel().catch(() => undefined);
+        throw trop();
+      }
+      morceaux.push(Buffer.from(value));
+    }
+    return Buffer.concat(morceaux, total);
+  }
+
+  /** Corps JSON d'une réponse déjà obtenue (vide ⇒ `undefined`, illisible ⇒ erreur). */
+  private async parseJson<T>(path: string, response: Response): Promise<T | undefined> {
+    const text = await response.text();
+    if (text.trim() === "") return undefined;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new MattermostApiError(
+        "bad_response",
+        `Mattermost a renvoyé une réponse illisible (POST ${path}).`,
+      );
+    }
   }
 
   /**
@@ -386,6 +536,44 @@ export class MattermostClient {
     body?: unknown,
     options: { params?: Record<string, string | number> } = {},
   ): Promise<T> {
+    const response = await this.perform(
+      method,
+      path,
+      () => ({
+        headers: {
+          accept: "application/json",
+          ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      }),
+      options,
+    );
+    if (response.status === 204) return undefined as T;
+    const text = await response.text();
+    if (text.trim() === "") return undefined as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new MattermostApiError(
+        "bad_response",
+        `Mattermost a renvoyé une réponse illisible (${method} ${path}).`,
+      );
+    }
+  }
+
+  /**
+   * Exécute UNE requête (débit, `429`, erreurs HTTP) et rend la réponse BRUTE.
+   *
+   * ⚠️ Factorisé à dessein : l'upload multipart et le téléchargement binaire passent
+   * ainsi par le MÊME débit, le MÊME backoff et la MÊME règle « le jeton ne quitte ce
+   * module que dans l'en-tête `Authorization` ». Une seconde boucle aurait divergé.
+   */
+  private async perform(
+    method: "GET" | "POST",
+    path: string,
+    build: () => { headers: Record<string, string>; body?: NonNullable<RequestInit["body"]> },
+    options: { params?: Record<string, string | number> } = {},
+  ): Promise<Response> {
     const token = this.tokenFactory()?.trim() ?? "";
     if (token === "") {
       throw new MattermostApiError(
@@ -403,16 +591,13 @@ export class MattermostClient {
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       await this.throttle();
       this.requests += 1;
+      const built = build();
       let response: Response;
       try {
         response = await this.doFetch(url.toString(), {
           method,
-          headers: {
-            authorization: `Bearer ${token}`,
-            accept: "application/json",
-            ...(body !== undefined ? { "content-type": "application/json" } : {}),
-          },
-          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+          headers: { authorization: `Bearer ${token}`, ...built.headers },
+          ...(built.body !== undefined ? { body: built.body } : {}),
         });
       } catch (error) {
         // ⚠️ On ne recopie QUE le message : l'URL complète et le jeton restent ici.
@@ -440,6 +625,9 @@ export class MattermostClient {
           retryAfterMs,
         });
         if (attempt === this.maxRetries) break;
+        // ⚠️ La réponse précédente n'est pas lue : on la LIBÈRE (un téléchargement
+        // abandonné ne doit pas garder la connexion ouverte).
+        void response.body?.cancel().catch(() => undefined);
         await this.sleep(retryAfterMs);
         continue;
       }
@@ -456,18 +644,7 @@ export class MattermostClient {
       // ⚠️ Le statut « ralenti » N'EST PAS effacé par un succès : il retombe tout seul
       // au bout de `MM_SLOW_WINDOW_MS`. Sinon, un aller-retour 429 puis 200 ferait
       // clignoter le badge et l'utilisateur ne verrait jamais le ralentissement.
-
-      if (response.status === 204) return undefined as T;
-      const text = await response.text();
-      if (text.trim() === "") return undefined as T;
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        throw new MattermostApiError(
-          "bad_response",
-          `Mattermost a renvoyé une réponse illisible (${method} ${path}).`,
-        );
-      }
+      return response;
     }
     throw (
       lastError ??

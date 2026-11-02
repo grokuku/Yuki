@@ -16,7 +16,7 @@ import type {
 } from "../../pi/types.js";
 import type { ComfyFinalPromptText, ComfyImageView } from "../../comfy/types.js";
 import type { WireFile } from "../../files/types.js";
-import type { ChatMode, ChatReplyMode } from "../../chat/types.js";
+import type { ChatMode, ChatQuoteAuthor, ChatReplyMode, ChatReplyStyle } from "../../chat/types.js";
 import { isAgentLevel, type AgentLevel } from "../../agents/types.js";
 import type {
   CapturedScreenshotView,
@@ -177,6 +177,13 @@ export interface WireSession {
   canRun: boolean;
   /** Mode de RÉPONSE du canal distant (`tout` | `auto` | `mention`), si connu. */
   replyMode?: ChatReplyMode;
+  /**
+   * COMMENT Yuki répond dans ce canal (`fil` | `nouveau`) — valeur EFFECTIVE
+   * (défaut `fil`). L'interface coche cette option, sans état local.
+   */
+  replyStyle?: ChatReplyStyle;
+  /** Cite-t-elle l'auteur (`oui` | `non`) — valeur EFFECTIVE (défaut `non`). */
+  quoteAuthor?: ChatQuoteAuthor;
   /** Titre PRÊT À L'EMPLOI (jamais vide : repli géré côté serveur). */
   title: string;
   /** Date de dernière activité (ISO), si connue. */

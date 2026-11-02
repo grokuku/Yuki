@@ -4,8 +4,9 @@
  * Ce que ce fichier verrouille :
  *  - `chat.mode` est un ENUM `local | mattermost | discord`, défaut `local`,
  *    `apply: hot` (le mode est relu à chaque appel, aucun redémarrage) ;
- *  - `chat.remoteAgents` et `chat.remoteMemory` existent, avec le défaut
- *    SÉCURISÉ `desactive` (exigence utilisateur) et restent RÉVERSIBLES ;
+ *  - `chat.remoteAgents` existe, avec le défaut SÉCURISÉ `desactive` (exigence
+ *    utilisateur) et reste RÉVERSIBLE ;
+ *  - `chat.remoteMemory` n'existe PLUS (retiré : il n'avait aucun consommateur) ;
  *  - aucune valeur hors énumération n'est acceptée, et un booléen est refusé
  *    (`FieldType` n'en connaît pas).
  *
@@ -56,14 +57,11 @@ describe("capacités distantes — désactivées par défaut", () => {
     expect(validateField("chat.remoteAgents", true).ok).toBe(false);
   });
 
-  it("`chat.remoteMemory` : même forme — la mémoire reste une POSSIBILITÉ réversible", () => {
-    const descriptor = CONFIG_SCHEMA["chat.remoteMemory"] as FieldDescriptor | undefined;
-    expect(descriptor?.type).toBe("enum");
-    expect(descriptor?.enum).toEqual(["desactive", "actives"]);
-    expect(descriptor?.default).toBe("desactive");
-    expect(validateField("chat.remoteMemory", "actives")).toEqual({
-      ok: true,
-      value: "actives",
-    });
+  it("`chat.remoteMemory` N'EXISTE PLUS : un réglage sans consommateur est un mensonge", () => {
+    // ⚠️ Avant D6, ce champ existait et n'était lu que pour l'AFFICHAGE : aucun code ne
+    // s'en servait. On ne garde pas un interrupteur qui ne fait rien — il reviendra avec
+    // son consommateur, le jour où la mémoire distante sera branchée.
+    expect(CONFIG_SCHEMA["chat.remoteMemory"]).toBeUndefined();
+    expect(validateField("chat.remoteMemory", "actives").ok).toBe(false);
   });
 });

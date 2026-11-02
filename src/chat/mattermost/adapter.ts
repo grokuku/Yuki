@@ -9,13 +9,15 @@
  *
  * ⚠️ CE QUE CET ADAPTATEUR NE FAIT PAS (limites assumées, dites dans la doc) :
  *  - aucun relais d'APPROBATION (lot 3 : les types existent, rien n'est branché) ;
- *  - aucune MÉMOIRE durable (`chat.remoteMemory` reste `desactive`) ;
+ *  - aucune MÉMOIRE durable (aucun réglage : `chat.remoteMemory` a été retiré) ;
  *  - aucun jeton vers un navigateur (il ne quitte jamais le serveur).
  *
- * ⚠️ ANTI-BOUCLE : un message dont l'auteur est `botUserId` ne déclenche jamais de
- * réponse. Le contrôle est fait DEUX fois — ici (avant de solliciter le générateur)
- * et dans `decideReply` (règle qui prime sur le mode) — parce qu'une boucle de
- * réponse est le seul défaut capable de saturer un canal sans intervention humaine.
+ * ⚠️ ANTI-BOUCLE : un message dont l'auteur est un ROBOT (Yuki ou un autre bot,
+ * `author.estBot`) ne déclenche jamais de réponse. Le contrôle est fait DEUX fois — dans
+ * `decideReply` (règle qui prime sur le mode) et par `isOwnMessage` (second filet pour un
+ * message ingéré avant que le miroir ne connaisse l'identifiant du bot) — parce qu'une
+ * boucle de réponse est le seul défaut capable de saturer un canal sans intervention
+ * humaine.
  */
 
 import { MattermostClient, type MattermostClientLogger } from "./client.js";
@@ -26,16 +28,26 @@ import {
   postToRemoteMessage,
   type IngestContext,
 } from "../mirror/ingest.js";
-import type { MattermostPost, MattermostUser } from "./types.js";
-import { MAX_MIRRORED_CONVERSATIONS, type ChatMirrorStore } from "../mirror/store.js";
+import { MM_MAX_UPLOAD_BYTES, type MattermostPost, type MattermostUser } from "./types.js";
+import type { FileImageContent, FilesPort } from "../../files/types.js";
+import {
+  MAX_MIRRORED_CONVERSATIONS,
+  effectiveQuoteAuthor,
+  effectiveReplyStyle,
+  type ChatMirrorStore,
+} from "../mirror/store.js";
 import { mirrorPlatformOf } from "../mirror.js";
+import { ReplyLimiter } from "../reply/limiter.js";
 import {
   DEFAULT_REPLY_MODE,
   botAliases,
+  composeReplyText,
   decideReply,
+  rootIdForReply,
   type ChatReplyJudge,
 } from "../reply/responder.js";
 import { ChatSyncService } from "../sync/service.js";
+import type { ChatSyncDelivery } from "../sync/service.js";
 import type { ChatSyncChannel, ChatSyncPlatform } from "../sync/platform.js";
 import {
   CHAT_REPLY_MODES,
@@ -45,6 +57,7 @@ import {
   type ChatFetchPage,
   type ChatOutboundMessage,
   type ChatReplyMode,
+  type ChatReplySettings,
   type RemoteConversation,
   type RemoteMessage,
 } from "../types.js";
@@ -54,12 +67,30 @@ export const MATTERMOST_NOT_CONFIGURED_REASON =
   "Mattermost n'est pas configuré : renseignez l'URL du serveur et le jeton du bot " +
   "dans /config → Discussions.";
 
-/** Générateur de réponse : `transcript + message → texte` (injecté, jamais deviné). */
+/**
+ * Générateur de réponse : `transcript + message → texte` (injecté, jamais deviné).
+ *
+ * ⚠️ Il peut aussi rendre des FICHIERS à joindre : le run distant peut GÉNÉRER UNE
+ * IMAGE (`generer_image`), et cette image doit arriver dans le canal. Les identifiants
+ * sont ceux du STORE de Yuki : l'adaptateur lève les octets par son port de fichiers,
+ * les téléverse (`POST /files`) puis les attache au post (`file_ids`). La forme texte
+ * nue reste acceptée (aucun fichier produit) — c'est le cas d'un message ordinaire.
+ */
 export type MattermostReplyGenerator = (input: {
   channelTitle: string;
   transcript: readonly RemoteMessage[];
   message: RemoteMessage;
-}) => Promise<string>;
+  /**
+   * IMAGES de pièces jointes du message (déjà bornées par la politique de vision).
+   * ⚠️ Absent = message sans image, ou vision indisponible : le prompt reste du texte.
+   */
+  images?: readonly FileImageContent[];
+  /**
+   * Ce qui n'a PAS pu être joint (fichier non image, trop lourd, illisible) — phrases
+   * françaises, transmises au rédacteur pour qu'il réponde en connaissance de cause.
+   */
+  notes?: readonly string[];
+}) => Promise<string | { text: string; fichiers?: readonly string[] }>;
 
 /** Ce dont l'adaptateur a besoin du reste du programme (aucun secret en dur). */
 export interface MattermostAdapterDeps {
@@ -86,6 +117,32 @@ export interface MattermostAdapterDeps {
   generateReply?: MattermostReplyGenerator;
   /** Juge du mode `auto` (`undefined` ⇒ mode `auto` indisponible, et c'est DIT). */
   judge?: ChatReplyJudge;
+  /**
+   * STORE DES FICHIERS de Yuki — sert à JOINDRE une image (ou un fichier) à un message
+   * publié. ⚠️ Aucun accès disque direct : uniquement `get`/`readBytes`.
+   */
+  files?: Pick<FilesPort, "get" | "readBytes">;
+  /** Borne d'envoi par fichier (octets), relue à chaque message (défaut 100 Mo). */
+  maxUploadBytes?: () => number;
+  /**
+   * Borne d'un MESSAGE publié (caractères), relue à chaque envoi.
+   *
+   * ⚠️ Mattermost REFUSE (`400`) un message plus long que `ServiceSettings.MaxPostSize`
+   * — et le POST entier est perdu, donc la réponse entière. Le défaut est prudent
+   * (16 383 caractères, valeur par défaut du serveur) ; une instance configurée autrement
+   * peut être desserrée en injectant cette fabrique.
+   */
+  maxPostChars?: () => number;
+  /**
+   * Prépare les IMAGES des pièces jointes du message déclencheur pour le modèle.
+   *
+   * ⚠️ Injecté par le câblage (cache + politique de vision partagée). Absent ⇒ aucune
+   * image n'est transmise, et ce n'est pas une erreur : un message texte n'en a pas.
+   */
+  readImages?: (input: {
+    conversationId: string;
+    message: RemoteMessage;
+  }) => Promise<{ images: FileImageContent[]; notes: string[] }>;
   /** Nombre maximal de canaux suivis (défaut 50 : borne du miroir). */
   maxChannels?: number;
   /** Période du rattrapage REST (défaut 60 s). */
@@ -103,11 +160,29 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   private readonly jugees = new Set<string>();
   private realTimeListener: ((message: RemoteMessage) => void) | null = null;
   private derniereErreur: string | undefined;
+  /**
+   * AVERTISSEMENT du dernier envoi (pièce jointe refusée), distinct de `derniereErreur` :
+   * un échec d'upload ne fait PAS échouer la réponse, et il ne doit pas être effacé par
+   * le succès du texte qui, lui, est bien parti.
+   */
+  private derniereAvertissement: string | undefined;
   private identite: { id: string; username?: string; displayName?: string } | null = null;
-  private reponsesEnCours = 0;
+  /**
+   * BORNE des réponses simultanées (⚠️ elle BLOQUE, elle ne compte pas).
+   *
+   * Au-delà de `REPLY_MAX_CONCURRENT` rédactions en cours, les messages attendent dans
+   * une file bornée ; au-delà de la file, le refus est EXPLICITE et journalisé.
+   */
+  private readonly reponses: ReplyLimiter;
 
   constructor(deps: MattermostAdapterDeps) {
     this.deps = deps;
+    // ⚠️ Construit ICI (jamais par initialisation de champ) : la borne journalise et lit
+    // `deps`, qui n'est affecté qu'à l'entrée du constructeur.
+    this.reponses = new ReplyLimiter({
+      plateforme: "mattermost",
+      ...(deps.logger ? { logger: deps.logger } : {}),
+    });
     this.client = new MattermostClient({
       baseUrl: deps.baseUrl,
       token: deps.token,
@@ -130,8 +205,17 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       ...(deps.logger ? { logger: deps.logger } : {}),
       ...(deps.now ? { now: deps.now } : {}),
       ...(deps.pollIntervalMs !== undefined ? { pollIntervalMs: deps.pollIntervalMs } : {}),
-      onMessage: (message) => this.onNewMessage(message),
+      onMessage: (message, delivery) => this.onNewMessage(message, delivery),
     });
+  }
+
+  /**
+   * Client REST sous-jacent, exposé en LECTURE pour que le câblage partage le MÊME débit
+   * (téléchargement des pièces jointes). ⚠️ Il ne porte aucun état secret relisible : le
+   * jeton n'est qu'une FABRIQUE lue à chaque appel, jamais une valeur stockée ici.
+   */
+  get rest(): MattermostClient {
+    return this.client;
   }
 
   // ─── Contrat `ChatAdapter` ────────────────────────────────────────────────
@@ -158,6 +242,7 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     const socketStatus = this.socket.status();
     if (socketStatus.derniereErreur !== undefined) raisons.push(socketStatus.derniereErreur);
     if (this.derniereErreur !== undefined) raisons.push(this.derniereErreur);
+    if (this.derniereAvertissement !== undefined) raisons.push(this.derniereAvertissement);
     const synchro = this.sync.status();
     // ⚠️ « Connecté » exige l'authentification temps réel ET une synchronisation
     // démarrée : un canal suivi sans temps réel reste ◐ (« connexion »), pas ●.
@@ -197,9 +282,12 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   /**
    * Envoi d'un message sur le canal (`POST /api/v4/posts`).
    *
-   * ⚠️ `root_id` : une réponse à un message de FIL repart DANS ce fil ; une réponse à
-   * un message racine ouvre un fil SOUS lui — sans quoi le mode « répondre à tous »
-   * noierait le canal.
+   * ⚠️ `root_id` : c'est l'APPELANT qui le choisit (`rootIdForReply`, selon `replyStyle`
+   * du canal). Une réponse à un message racine ouvre un fil SOUS lui — sans quoi le mode
+   * « répondre à tous » noierait le canal — et un fil existant repart de SA RACINE.
+   *
+   * ⚠️ `fichiers` : identifiants du store de Yuki. Chacun est téléversé AVANT le post
+   * (`POST /files`), puis attaché par `file_ids`. Un refus n'annule pas le texte.
    */
   async send(conversationId: string, message: ChatOutboundMessage): Promise<RemoteMessage> {
     const conversation = this.deps.store.conversations().find((item) => item.id === conversationId);
@@ -216,12 +304,47 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
           "(il arrive au lot suivant).",
       );
     }
+    // ⚠️ PIÈCES JOINTES : `POST /files` (une par fichier) PUIS `POST /posts` avec
+    // `file_ids`. Un fichier refusé n'empêche PAS le texte de partir — mais l'échec est
+    // VISIBLE (journal + raison remontée par `status()` + ligne dans le message publié),
+    // parce que la personne qui a demandé l'image doit savoir qu'elle n'arrive pas.
+    const fileIds: string[] = [];
+    const echecs: string[] = [];
+    for (const fichier of message.fichiers ?? []) {
+      const joint = await this.joindreFichier(conversation.remoteId, fichier);
+      if (joint.ok) fileIds.push(joint.id);
+      else echecs.push(joint.raison);
+    }
+    // ⚠️ AVERTISSEMENTS, pas une erreur : le texte part quand même. Champ SÉPARÉ pour
+    // qu'un envoi réussi de la réponse n'efface pas silencieusement ces incidents.
+    const avertissements: string[] = [];
+    if (echecs.length > 0) avertissements.push(`Pièce jointe non envoyée : ${echecs.join(" ")}`);
+    const complet =
+      echecs.length > 0
+        ? `${message.text}${message.text.trim() === "" ? "" : "\n\n"}_(${echecs.join(" ")})_`
+        : message.text;
+    // ⚠️ BORNE D'ENVOI, SYMÉTRIQUE de Discord : Mattermost répond `400` à un message plus
+    // long que `MaxPostSize`, et le POST entier est perdu — donc la réponse entière. On
+    // tronque donc AVANT l'appel, et on le DIT (suffixe + avertissement + journal).
+    const borne = Math.max(1, Math.trunc(this.deps.maxPostChars?.() ?? MM_DEFAULT_MAX_POST_CHARS));
+    const { texte, tronque } = fitMattermostContent(complet, borne);
+    if (tronque) {
+      avertissements.push(`Réponse tronquée à ${borne} caractères (limite du serveur Mattermost).`);
+      this.deps.logger?.warn("chat.mattermost.reply.truncated", {
+        conversation: conversationId,
+        limite: borne,
+        longueur: [...complet].length,
+      });
+    }
+    this.derniereAvertissement =
+      avertissements.length > 0 ? avertissements.join(" ") : undefined;
     const post = await this.client.createPost({
       channelId: conversation.remoteId,
-      message: message.text,
+      message: texte,
       ...(message.threadRootId !== undefined && message.threadRootId !== ""
         ? { rootId: message.threadRootId }
         : {}),
+      ...(fileIds.length > 0 ? { fileIds } : {}),
     });
     // Le message envoyé entre dans le miroir comme n'importe quel autre : il sera
     // relu (donc affiché) et il ne déclenchera AUCUNE réponse (auteur = bot).
@@ -238,9 +361,64 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         estBot: true,
       },
       role: "assistant",
-      text: message.text,
+      text: texte,
       sentAt: new Date(this.deps.now?.() ?? Date.now()).toISOString(),
     };
+  }
+
+  /**
+   * Téléverse UN fichier du store Yuki vers Mattermost et rend son `file_id`.
+   *
+   * ⚠️ ÉCHEC NON FATAL : un refus rend une RAISON en français (jamais un jeton, jamais un
+   * chemin disque). L'appelant publie quand même le texte et signale l'échec.
+   */
+  private async joindreFichier(
+    channelId: string,
+    fileId: string,
+  ): Promise<{ ok: true; id: string } | { ok: false; raison: string }> {
+    if (!this.deps.files) {
+      return {
+        ok: false,
+        raison: "le service de fichiers de Yuki n'est pas disponible dans ce processus",
+      };
+    }
+    const record = this.deps.files.get(fileId);
+    if (!record) {
+      return { ok: false, raison: `le fichier « ${fileId} » est introuvable ou expiré` };
+    }
+    const bytes = this.deps.files.readBytes(fileId);
+    if (!bytes) {
+      return { ok: false, raison: `les octets du fichier « ${record.name} » sont illisibles` };
+    }
+    const borne = Math.max(1, Math.trunc(this.deps.maxUploadBytes?.() ?? MM_MAX_UPLOAD_BYTES));
+    if (bytes.length > borne) {
+      // ⚠️ REFUS EXPLICITE avant tout appel réseau : jamais de troncature silencieuse.
+      return {
+        ok: false,
+        raison:
+          `« ${record.name} » (${bytes.length} octets) dépasse la borne d'envoi ` +
+          `(${borne} octets)`,
+      };
+    }
+    try {
+      const info = await this.client.uploadFile({
+        channelId,
+        filename: record.name,
+        mimeType: record.mimeType,
+        bytes,
+        maxBytes: borne,
+      });
+      return { ok: true, id: info.id };
+    } catch (error) {
+      // ⚠️ Le message d'erreur du client ne contient NI jeton NI URL complète.
+      const message = error instanceof Error ? error.message : String(error);
+      this.deps.logger?.warn("chat.mattermost.upload.failed", {
+        file: fileId,
+        bytes: bytes.length,
+        error: message,
+      });
+      return { ok: false, raison: `« ${record.name} » n'a pas pu être envoyé (${message})` };
+    }
   }
 
   /** Abonnement aux nouveaux messages d'UNE conversation miroir. */
@@ -404,8 +582,15 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     return undefined;
   }
 
-  /** Nouveau message : diffusion aux abonnés, puis moteur de RÉPONSE. */
-  private onNewMessage(message: RemoteMessage): void {
+  /**
+   * Nouveau message : diffusion aux abonnés, puis moteur de RÉPONSE.
+   *
+   * ⚠️ `historique: true` (backfill) : le message est DIFFUSÉ quand même (l'interface doit
+   * voir l'historique) mais `maybeReply` est SAUTÉ. Sans cette étiquette, le premier
+   * branchement répondrait aux mentions des deux dernières semaines — en mode `tout`,
+   * jusqu'à mille runs d'un coup.
+   */
+  private onNewMessage(message: RemoteMessage, delivery: ChatSyncDelivery = { historique: false }): void {
     for (const listener of this.listeners.get(message.conversationId) ?? []) {
       try {
         listener(message);
@@ -415,7 +600,15 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         });
       }
     }
-    void this.maybeReply(message);
+    if (delivery.historique) return;
+    // ⚠️ Jamais un rejet non traité : un juge ou un store défaillant ne doit pas faire
+    // tomber le processus à cause d'une réponse.
+    void this.maybeReply(message).catch((error: unknown) => {
+      this.deps.logger?.warn("chat.mattermost.reply_failed", {
+        conversation: message.conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   /**
@@ -452,7 +645,15 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     await this.produceReply(message, record.title);
   }
 
-  /** Génère puis publie la réponse (dans le fil du message déclencheur). */
+  /**
+   * Génère puis publie la réponse — SOUS LA BORNE des réponses simultanées.
+   *
+   * ⚠️ La borne est posée ICI, pas dans `maybeReply` : c'est ce qui empêche un canal
+   * actif de lancer des dizaines de runs (`generer_image` compris) en même temps.
+   * Au-delà de `REPLY_MAX_CONCURRENT` rédactions, le message ATTEND dans une file bornée ;
+   * au-delà de la file, le refus est JOURNALISÉ et REMONTÉ (`derniereErreur`) — jamais un
+   * silence.
+   */
   private async produceReply(message: RemoteMessage, channelTitle: string): Promise<void> {
     if (!this.deps.generateReply) {
       this.derniereErreur =
@@ -463,19 +664,59 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       });
       return;
     }
-    this.reponsesEnCours += 1;
+    const avant = this.reponses.refuseesCount;
+    await this.reponses.run(() => this.redigerEtPublier(message, channelTitle));
+    if (this.reponses.refuseesCount > avant) {
+      this.derniereErreur =
+        "Trop de réponses en attente sur ce canal : la file est pleine, un message est " +
+        "resté sans réponse.";
+    }
+  }
+
+  /** Rédaction + publication d'UNE réponse (appelée seulement avec une place RÉSERVÉE). */
+  private async redigerEtPublier(message: RemoteMessage, channelTitle: string): Promise<void> {
+    if (!this.deps.generateReply) return;
     try {
       const transcript = this.deps.store.messages(message.conversationId);
-      const text = (await this.deps.generateReply({ channelTitle, transcript, message })).trim();
+      // ⚠️ PIÈCES JOINTES du message déclencheur : préparées ICI, à la demande (jamais
+      // pendant la synchronisation), par la politique de vision partagée. Ce qui n'a pas
+      // pu être joint est transmis au rédacteur (`notes`) : jamais un silence.
+      const joints = this.deps.readImages
+        ? await this.deps.readImages({ conversationId: message.conversationId, message })
+        : { images: [], notes: [] };
+      const brut = await this.deps.generateReply({
+        channelTitle,
+        transcript,
+        message,
+        ...(joints.images.length > 0 ? { images: joints.images } : {}),
+        ...(joints.notes.length > 0 ? { notes: joints.notes } : {}),
+      });
+      // ⚠️ Le générateur peut rendre des FICHIERS en plus du texte (image GÉNÉRÉE par le
+      // run : `generer_image`). Ils partent dans le MÊME post, par `file_ids` — sans
+      // cela l'image resterait dans le store et n'arriverait jamais dans le canal.
+      const reponse = typeof brut === "string" ? { text: brut } : brut;
+      const text = reponse.text.trim();
       if (text === "") {
         this.derniereErreur = "Le générateur n'a produit aucun texte : rien n'a été publié.";
         return;
       }
-      const rootId =
-        message.threadRootId !== undefined && message.threadRootId !== ""
-          ? message.threadRootId
-          : message.remoteId;
-      await this.send(message.conversationId, { kind: "texte", text, threadRootId: rootId });
+      // ⚠️ COMMENT répondre : réglage PAR CANAL, persisté. `fil` (défaut) repart de la
+      // RACINE du fil — jamais du message lui-même, sinon Mattermost créerait un fil
+      // imbriqué ; `nouveau` n'envoie AUCUN `root_id`, même sur un message de fil.
+      const record = this.deps.store.record(message.conversationId);
+      const rootId = rootIdForReply({ replyStyle: effectiveReplyStyle(record), message });
+      const texte = composeReplyText({
+        text,
+        message,
+        quoteAuthor: effectiveQuoteAuthor(record),
+      });
+      const fichiers = reponse.fichiers ?? [];
+      await this.send(message.conversationId, {
+        kind: "texte",
+        text: texte,
+        ...(rootId !== undefined ? { threadRootId: rootId } : {}),
+        ...(fichiers.length > 0 ? { fichiers } : {}),
+      });
       this.derniereErreur = undefined;
     } catch (error) {
       // ⚠️ ÉCHEC VISIBLE : jamais silencieux.
@@ -487,8 +728,6 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         conversation: message.conversationId,
         error: error instanceof Error ? error.message : String(error),
       });
-    } finally {
-      this.reponsesEnCours -= 1;
     }
   }
 
@@ -503,12 +742,29 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
 
   /** Nombre de réponses en cours de rédaction (mesure, tests). */
   get pendingReplies(): number {
-    return this.reponsesEnCours;
+    return this.reponses.enCours;
   }
 
   /** Mode de réponse persisté d'un canal, ou `undefined`. */
   replyMode(conversationId: string): ChatReplyMode | undefined {
     return normalizeReplyMode(this.deps.store.record(conversationId)?.replyMode);
+  }
+
+  /**
+   * Réglages de réponse EFFECTIFS d'un canal (mode, style, citation).
+   *
+   * ⚠️ `undefined` quand le canal n'est pas dans le miroir : l'appelant répond alors 404
+   * plutôt que d'inventer des réglages.
+   */
+  replySettings(conversationId: string): ChatReplySettings | undefined {
+    const record = this.deps.store.record(conversationId);
+    if (!record) return undefined;
+    const mode = normalizeReplyMode(record.replyMode);
+    return {
+      ...(mode !== undefined ? { replyMode: mode } : {}),
+      replyStyle: effectiveReplyStyle(record),
+      quoteAuthor: effectiveQuoteAuthor(record),
+    };
   }
 
   /** Démarre explicitement la synchronisation (bouton « Se connecter »). */
@@ -532,4 +788,33 @@ export function normalizeReplyMode(value: unknown): ChatReplyMode | undefined {
 /** Plateforme d'un identifiant miroir (`mm-…` ⇒ `mattermost`). */
 export function isMattermostConversation(conversationId: string): boolean {
   return mirrorPlatformOf(conversationId) === "mattermost";
+}
+
+/**
+ * Borne d'un message publié par DÉFAUT (caractères).
+ *
+ * ⚠️ 16 383 = valeur par défaut de `ServiceSettings.MaxPostSize` côté serveur. Une
+ * instance bridée plus bas renverrait `400` : la réponse ENTIÈRE serait perdue. On reste
+ * donc SOUS la limite par défaut, et on l'annonce quand on coupe.
+ */
+export const MM_DEFAULT_MAX_POST_CHARS = 16_383;
+
+/**
+ * Tronque un texte à la limite de Mattermost **en le DISANT**.
+ *
+ * ⚠️ Symétrique de `fitDiscordContent` (`src/chat/discord/adapter.ts`) : une troncature
+ * silencieuse laisserait croire que la réponse est complète. Le suffixe est compté DANS
+ * la limite, sinon le message resterait trop long et le `400` reviendrait.
+ */
+export function fitMattermostContent(
+  text: string,
+  maxChars: number = MM_DEFAULT_MAX_POST_CHARS,
+): { texte: string; tronque: boolean } {
+  const limite = Math.max(1, Math.trunc(maxChars));
+  // Comptage par POINTS DE CODE (un emoji ne compte pas double à la coupe).
+  const caracteres = [...text];
+  if (caracteres.length <= limite) return { texte: text, tronque: false };
+  const suffixe = ` [… message tronqué : limite Mattermost de ${limite} caractères]`;
+  const garde = Math.max(0, limite - [...suffixe].length);
+  return { texte: `${caracteres.slice(0, garde).join("")}${suffixe}`, tronque: true };
 }

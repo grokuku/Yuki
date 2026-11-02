@@ -617,36 +617,84 @@ export const REMOTE_SAFE_TOOLS: readonly CustomToolName[] = [
 export interface ChatToolPolicyOptions {
   /** Origine du run : le mode de discussion de la conversation déclencheuse. */
   chatMode: ChatOriginMode;
-  /** `chat.remoteAgents` : `true` ⇒ politique PLEINE (le relais d'approbations du lot 3 devient obligatoire). */
+  /** `chat.remoteAgents` : `true` ⇒ politique du rôle (complète), hors outils à approbation. */
   remoteAgents: boolean;
+}
+
+/**
+ * OUTILS QUI EXIGENT UNE APPROBATION HUMAINE (ou une saisie humaine).
+ *
+ * ⚠️ POURQUOI CETTE LISTE EXISTE : l'approbation s'affiche dans l'interface
+ * WEB (`ApprovalRegistry` → trame WS de la conversation qui a demandé) et la
+ * saisie de `demander_secret` s'ouvre aussi dans l'interface web. Une personne
+ * qui parle à Yuki depuis un canal Mattermost ne voit NI l'une NI l'autre : un
+ * run distant qui exposerait un de ces outils resterait en attente d'une
+ * décision que personne ne peut prendre **depuis ce canal**.
+ *
+ * Preuves, outil par outil :
+ *  - `run_command` / `capturer_ecran` / `recuperer_fichier` / `deposer_fichier` :
+ *    `AgentExecutionService.authorize` (`src/agents/execution.ts:1147-1175`) et
+ *    `authorizeTransfer` (`src/agents/execution.ts:1084`) créent une demande dans
+ *    `ApprovalRegistry` dès que le niveau de l'agent l'exige (niveau 2, ou
+ *    niveau 3 pour une commande destructrice) ;
+ *  - `demander_secret` : ouvre une fenêtre de saisie DANS la conversation web
+ *    (`src/pi/sdk/execution-tools.ts`, `createSecretRequestTool`).
+ *
+ * ⚠️ Les quatre outils de `REMOTE_SAFE_TOOLS` (`generer_image`,
+ * `consulter_workflow`, `lister_fichiers`, `lire_fichier`) n'y figurent pas et
+ * n'en dépendent pas : ils ne demandent AUCUNE validation. Un test le vérifie
+ * (`tests/llm/tool-policy.test.ts`) pour qu'un ajout futur ne passe pas
+ * inaperçu.
+ */
+export const APPROVAL_REQUIRED_TOOLS: readonly string[] = [
+  "run_command",
+  "capturer_ecran",
+  "recuperer_fichier",
+  "deposer_fichier",
+  "demander_secret",
+];
+
+/** Sous-ensemble d'une allowlist qui exige une approbation (jamais silencieux). */
+export function approvalRequiredTools(tools: readonly string[]): string[] {
+  return tools.filter((tool) => APPROVAL_REQUIRED_TOOLS.includes(tool));
 }
 
 /**
  * Allowlist d'un run, selon l'ORIGINE du run.
  *
- * - mode `local` (défaut) : politique du rôle, STRICTEMENT inchangée ;
- * - mode distant + agents ACTIVÉS : politique du rôle (le relais d'approbations
- *   du lot 3 est alors indispensable — une action sans validation serait
- *   déclenchée par un tiers) ;
+ * - mode `local` (défaut) : politique du rôle, STRICTEMENT inchangée — c'est le
+ *   même appel, donc la même liste, élément pour élément ;
  * - mode distant + agents DÉSACTIVÉS (défaut) : `REMOTE_SAFE_TOOLS` pour le rôle
- *   léger, et RIEN pour le rôle lourd (sans délégation, aucun run lourd ne peut
- *   naître d'une conversation distante).
+ *   léger (image + lecture), et RIEN pour le rôle lourd ;
+ * - mode distant + agents ACTIVÉS : la politique du rôle léger, PLUS les outils
+ *   de `REMOTE_SAFE_TOOLS` qu'elle ne porte pas (le léger local ne lit pas le
+ *   store de fichiers : dans un canal, si — c'est son seul moyen de voir une
+ *   image jointe) ;
+ * - et dans TOUS les cas distants, `APPROVAL_REQUIRED_TOOLS` est RETIRÉ : une
+ *   approbation s'affiche dans l'interface web et ne peut pas être donnée
+ *   depuis un canal ⇒ refus AVANT exécution, jamais un run en attente.
  *
- * ⚠️ Ce calcul n'est PAS encore branché sur le SDK : au lot 1, le seul run
- * existant est celui de la conversation locale, et lui appliquer la restriction
- * distante casserait l'usage courant. Le branchement appartient au lot 2/3,
- * quand un run pourra naître d'un canal.
+ * ⚠️ Aucun run LOURD ne naît d'une conversation distante : le worker lourd n'y
+ * est jamais créé, sa politique n'a donc pas lieu d'être calculée ici.
+ *
+ * ⚠️ Le filtrage n'est pas une politesse : c'est le seul endroit qui décide de
+ * ce qu'un run distant peut appeler. Le run distant (canal) passe par cette
+ * fonction, jamais par une liste écrite sur place.
  */
 export function toolAllowlistForChat(
   role: LlmRole,
   options: ToolAllowlistOptions,
   chat: ChatToolPolicyOptions,
 ): string[] {
-  if (chat.chatMode === "local" || chat.remoteAgents) {
+  if (chat.chatMode === "local") {
     return toolAllowlist(role, options);
   }
   if (role !== "light") return [];
-  return [...REMOTE_SAFE_TOOLS];
+  const merged = chat.remoteAgents ? [...toolAllowlist(role, options)] : [];
+  for (const tool of REMOTE_SAFE_TOOLS) {
+    if (!merged.includes(tool)) merged.push(tool);
+  }
+  return merged.filter((tool) => !APPROVAL_REQUIRED_TOOLS.includes(tool));
 }
 
 /** Outils d'écriture/exécution explicitement interdits au Lot 2. */

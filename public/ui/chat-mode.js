@@ -23,12 +23,15 @@ export const CHAT_MODE_OPTIONS = [
   {
     mode: "mattermost",
     label: "Mattermost",
-    title: "Canaux Mattermost. La synchronisation n'est pas encore disponible.",
+    title:
+      "Canaux Mattermost du bot : configuration, jeton et état dans /config → Discussions.",
   },
   {
     mode: "discord",
     label: "Discord",
-    title: "Discord — pas encore configuré.",
+    title:
+      "Salons Discord du bot : configuration, jeton et état dans /config → Discussions. " +
+      "L'intent MESSAGE_CONTENT doit être activé dans le portail développeur.",
   },
 ];
 
@@ -63,6 +66,81 @@ export const REPLY_MODE_OPTIONS = [
 export function replyModeLabel(mode) {
   const option = REPLY_MODE_OPTIONS.find((item) => item.mode === mode);
   return option ? option.label : String(mode ?? "");
+}
+
+/**
+ * COMMENT répondre dans un canal distant (`fil` | `nouveau`), dans l'ordre d'affichage.
+ *
+ * ⚠️ `fil` est le DÉFAUT côté serveur (`DEFAULT_REPLY_STYLE`, `src/chat/types.ts`) :
+ * c'est le comportement historique, et le libellé le dit.
+ */
+export const REPLY_STYLE_OPTIONS = [
+  {
+    style: "fil",
+    label: "Réponse dans le fil",
+    title:
+      "La réponse se place dans le fil du message (comportement par défaut). " +
+      "Si le message est déjà dans un fil, la réponse reste dans CE fil.",
+  },
+  {
+    style: "nouveau",
+    label: "Nouveau message",
+    title:
+      "La réponse est publiée comme un nouveau message à la racine du canal, " +
+      "même si le message d'origine était dans un fil.",
+  },
+];
+
+/**
+ * Citer (ou non) l'auteur du message auquel Yuki répond.
+ *
+ * ⚠️ `non` est le DÉFAUT côté serveur (`DEFAULT_QUOTE_AUTHOR`) : aucune citation n'est
+ * ajoutée tant que l'utilisateur ne le demande pas.
+ */
+export const QUOTE_AUTHOR_OPTIONS = [
+  { quote: "oui", label: "Citer l'auteur", title: "La réponse commence par une citation de l'auteur du message." },
+  { quote: "non", label: "Ne pas citer l'auteur", title: "La réponse ne cite personne (comportement par défaut)." },
+];
+
+/** Libellé d'un style de réponse (`style` inconnu ⇒ la valeur brute). */
+export function replyStyleLabel(style) {
+  const option = REPLY_STYLE_OPTIONS.find((item) => item.style === style);
+  return option ? option.label : String(style ?? "");
+}
+
+/** Libellé d'un réglage de citation (`quote` inconnu ⇒ la valeur brute). */
+export function quoteAuthorLabel(quote) {
+  const option = QUOTE_AUTHOR_OPTIONS.find((item) => item.quote === quote);
+  return option ? option.label : String(quote ?? "");
+}
+
+/**
+ * Enregistre les réglages de RÉPONSE d'un canal distant
+ * (`PATCH /api/chat/conversations/<id>`).
+ *
+ * ⚠️ Un seul point d'écriture : la route accepte n'importe quel SOUS-ENSEMBLE de
+ * `{ replyMode, replyStyle, quoteAuthor }` (`null` = revenir au défaut). L'appelant
+ * n'envoie que ce qu'il change, le serveur n'écrase pas le reste. Le corps est bâti par
+ * `JSON.stringify` : aucune concaténation de HTML, aucun nœud construit à la main.
+ */
+export async function saveReplySettings(conversationId, patch, fetchImpl) {
+  const doFetch = fetchImpl ?? ((url, init) => fetch(url, init));
+  const response = await doFetch(`/api/chat/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "PATCH",
+    headers: WRITE_HEADERS,
+    body: JSON.stringify(patch ?? {}),
+  });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = typeof body?.message === "string" ? body.message : "";
+    } catch {
+      // Corps illisible : on garde le code HTTP, jamais un succès supposé.
+    }
+    throw new Error(detail !== "" ? detail : `HTTP ${response.status}`);
+  }
+  return response.json();
 }
 
 /** Enregistre le mode de RÉPONSE d'un canal distant (`PATCH /api/chat/conversations/<id>`). */
@@ -142,16 +220,19 @@ export function modeNotice(status) {
       kind: "vide",
       titre: "Aucun canal synchronisé.",
       detail:
-        "La connexion à Mattermost (configuration puis synchronisation des " +
-        "canaux, deux semaines d'historique) arrive au prochain lot : ce mode " +
-        "n'affiche encore aucun canal.",
+        "Renseignez l'URL du serveur et le jeton du bot dans /config → Discussions, puis " +
+        "cliquez sur « Se connecter » : les canaux et deux semaines d'historique seront " +
+        "alors importés.",
     };
   }
   if (mode === "discord") {
     return {
-      kind: "bandeau",
-      titre: "Discord n'est pas encore configuré.",
-      detail: "Ce mode ne fait rien pour l'instant : la création y est désactivée.",
+      kind: "vide",
+      titre: "Aucun salon synchronisé.",
+      detail:
+        "Enregistrez le jeton du bot Discord dans /config → Discussions (et activez " +
+        "l'intent MESSAGE_CONTENT dans le portail développeur), puis cliquez sur " +
+        "« Se connecter » : les salons texte du serveur seront importés.",
     };
   }
   return null;

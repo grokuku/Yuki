@@ -21,6 +21,14 @@
  * canal depuis le CURSEUR persisté. Le temps réel peut être coupé ; les messages ne
  * sont jamais perdus pour autant, et l'idempotence du miroir rend le double chemin
  * inoffensif.
+ *
+ * ⚠️ HISTORIQUE ≠ TEMPS RÉEL (`ChatSyncDelivery.historique`) : le backfill rejoue
+ * jusqu'à 1 000 messages par canal, dont des mentions vieilles de deux semaines. Le
+ * message est TOUJOURS livré (l'interface doit voir l'historique), mais il est étiqueté
+ * `historique: true` pour que le moteur de RÉPONSE s'abstienne : sans cette étiquette,
+ * le premier branchement répondrait à quatorze jours de mentions. Le RATTRAPAGE, lui,
+ * n'est PAS de l'historique : ce sont des messages récents que le temps réel a manqués,
+ * ils méritent une réponse.
  */
 
 import type { ChatSyncPlatform } from "./platform.js";
@@ -42,6 +50,18 @@ export const BACKFILL_MAX_MESSAGES = 1_000;
 /** Période du rattrapage REST (filet de sécurité du temps réel). */
 export const DEFAULT_POLL_INTERVAL_MS = 60_000;
 
+/**
+ * PROVENANCE d'une livraison.
+ *
+ * ⚠️ `historique` n'est pas décoratif : c'est la seule chose qui distingue une mention
+ * de la semaine dernière (backfill) d'un message qui vient d'arriver (temps réel ou
+ * rattrapage). Elle décide, et elle seule, si le moteur de réponse a le droit de courir.
+ */
+export interface ChatSyncDelivery {
+  /** `true` quand le message est rejoué par le backfill initial. */
+  historique: boolean;
+}
+
 export interface ChatSyncOptions {
   platform: ChatSyncPlatform;
   store: ChatMirrorStore;
@@ -54,10 +74,14 @@ export interface ChatSyncOptions {
   /** Borne dure de messages par canal (défaut 1 000). */
   backfillMaxMessages?: number;
   /**
-   * Appelé pour CHAQUE message nouvellement inséré (temps réel ET rattrapage).
-   * C'est le point d'entrée du moteur de réponse, jamais un envoi direct.
+   * Appelé pour CHAQUE message nouvellement inséré (temps réel, rattrapage ET backfill).
+   * C'est le point d'entrée des abonnés ET du moteur de réponse, jamais un envoi direct.
+   *
+   * ⚠️ Le second argument dit d'où vient le message : `historique: true` = rejoué par
+   * le backfill. L'abonné d'interface le diffuse quand même ; SEUL le moteur de réponse
+   * doit s'abstenir.
    */
-  onMessage?: (message: RemoteMessage) => void;
+  onMessage?: (message: RemoteMessage, delivery: ChatSyncDelivery) => void;
   /** Planificateur injectable (tests) — par défaut `setTimeout`. */
   schedule?: (callback: () => void, delayMs: number) => unknown;
   cancel?: (handle: unknown) => void;
@@ -190,7 +214,11 @@ export class ChatSyncService {
   private async run(): Promise<void> {
     try {
       const identity = await this.options.platform.identity();
-      this.store.setBot({ id: identity.id, ...(identity.username ? { username: identity.username } : {}) });
+      this.store.setBot(
+        { id: identity.id, ...(identity.username ? { username: identity.username } : {}) },
+        // ⚠️ Identité rangée PAR PLATEFORME : deux plateformes, deux bots, deux identités.
+        this.options.platform.platform ?? "mattermost",
+      );
     } catch (error) {
       this.fail(error);
       return;
@@ -204,7 +232,10 @@ export class ChatSyncService {
 
     try {
       this.unsubscribe?.();
-      this.unsubscribe = this.options.platform.subscribePosts((message) => this.deliver(message));
+      this.unsubscribe = this.options.platform.subscribePosts((message) =>
+        // ⚠️ TEMPS RÉEL : jamais de l'historique, donc le moteur de réponse est autorisé.
+        this.deliver(message, { historique: false }),
+      );
     } catch (error) {
       this.fail(error);
     }
@@ -232,7 +263,8 @@ export class ChatSyncService {
         const page = await this.options.platform.postsSince(channel.remoteId, since);
         const kept = page.messages.slice(-this.backfillMaxMessages);
         for (const message of kept) {
-          const outcome = this.ingest(message, conversationId);
+          // ⚠️ HISTORIQUE : livré aux abonnés, JAMAIS soumis au moteur de réponse.
+          const outcome = this.ingest(message, conversationId, true);
           if (outcome === "insere") this.imports += 1;
         }
         this.store.markBackfill(conversationId, {
@@ -262,7 +294,9 @@ export class ChatSyncService {
       if (since === undefined) continue;
       try {
         const page = await this.options.platform.postsSince(record.remoteId, since);
-        for (const message of page.messages) this.ingest(message, conversationId);
+        // ⚠️ PAS de l'historique : le rattrapage ramène des messages RÉCENTS que le temps
+        // réel a manqués. Ils méritent une réponse comme les autres.
+        for (const message of page.messages) this.ingest(message, conversationId, false);
         if (page.historiqueAnterieur && record.historiqueAnterieur !== true) {
           this.store.markBackfill(conversationId, {
             depuis: record.backfillDepuis ?? since,
@@ -293,21 +327,31 @@ export class ChatSyncService {
     this.timer = this.schedule(tick, this.pollIntervalMs);
   }
 
-  /** Ingère un message et prévient l'observateur (jamais un envoi direct). */
-  private ingest(message: RemoteMessage, conversationId: string): "insere" | "mis_a_jour" | "doublon" | "ignore" | "borne" {
+  /**
+   * Ingère un message et prévient l'observateur (jamais un envoi direct).
+   *
+   * ⚠️ `historique` traverse TOUTE la chaîne (ingest → deliver → `onMessage`) : c'est le
+   * seul moyen pour que l'étiquette ne se perde pas en chemin.
+   */
+  private ingest(
+    message: RemoteMessage,
+    conversationId: string,
+    historique: boolean,
+  ): "insere" | "mis_a_jour" | "doublon" | "ignore" | "borne" {
     if (message.conversationId !== conversationId) {
       message = { ...message, conversationId };
     }
     const outcome = this.store.upsert(message, {
       update: this.store.has(conversationId, message.remoteId),
     });
-    if (outcome === "insere") this.deliver(message);
+    // ⚠️ Seule une INSERTION est livrée : une édition ne redéclenche rien.
+    if (outcome === "insere") this.deliver(message, { historique });
     return outcome;
   }
 
-  private deliver(message: RemoteMessage): void {
+  private deliver(message: RemoteMessage, delivery: ChatSyncDelivery): void {
     try {
-      this.options.onMessage?.(message);
+      this.options.onMessage?.(message, delivery);
     } catch (error) {
       this.options.logger?.warn("chat.sync.consumer_failed", {
         error: error instanceof Error ? error.message : String(error),

@@ -228,6 +228,46 @@ describe("rattrapage — reprise au CURSEUR, sans doublon", () => {
     expect(store.messages("mm-c1")).toHaveLength(2);
   });
 
+  it("le backfill est étiqueté `historique: true`, le temps réel NON (D1)", async () => {
+    const store = openStore();
+    const platform = new FakePlatform([channel("c1")]);
+    platform.posts.set("c1", [
+      message("mm-c1", "vieux-1", new Date(NOW - 5_000).toISOString()),
+      message("mm-c1", "vieux-2", new Date(NOW - 4_000).toISOString()),
+    ]);
+    const livraisons: Array<{ id: string; historique: boolean }> = [];
+    const service = new ChatSyncService({
+      platform,
+      store,
+      now: () => NOW,
+      pollIntervalMs: 0,
+      onMessage: (item, delivery) => livraisons.push({ id: item.remoteId, historique: delivery.historique }),
+    });
+    await service.start();
+
+    // ① BACKFILL : les messages sont LIVRÉS (l'interface doit voir l'historique) mais
+    // étiquetés, pour que le moteur de réponse s'abstienne.
+    expect(livraisons).toEqual([
+      { id: "vieux-1", historique: true },
+      { id: "vieux-2", historique: true },
+    ]);
+    expect(store.messages("mm-c1")).toHaveLength(2);
+
+    // ② TEMPS RÉEL : pas d'étiquette, donc le moteur de réponse a le droit de courir.
+    const pousse = message("mm-c1", "temps-reel", new Date(NOW).toISOString());
+    store.upsert(pousse);
+    platform.push(pousse);
+    expect(livraisons.at(-1)).toEqual({ id: "temps-reel", historique: false });
+
+    // ③ RATTRAPAGE : ce sont des messages RÉCENTS manqués par le temps réel — ils ne sont
+    // PAS de l'historique, sinon un message reçu pendant une coupure n'aurait jamais de
+    // réponse.
+    const rate = message("mm-c1", "rattrape", new Date(NOW + 1_000).toISOString());
+    platform.posts.set("c1", [rate]);
+    await service.pollOnce();
+    expect(livraisons.at(-1)).toEqual({ id: "rattrape", historique: false });
+  });
+
   it("le temps réel pousse un message : il est annoncé UNE fois, et le rattrapage n'en rajoute pas", async () => {
     const store = openStore();
     const platform = new FakePlatform([channel("c1")]);

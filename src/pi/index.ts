@@ -95,3 +95,11 @@ export { createSdkLibrarianSynthesizer } from "./sdk/librarian-synthesizer.js";
 export type { SdkLibrarianSynthesizerConfig } from "./sdk/librarian-synthesizer.js";
 
 export { sanitizeErrorText } from "./events.js";
+
+// RUN DISTANT (canal) : jeu d'outils d'une réponse rédigée hors de la
+// conversation locale. Port PUR : la politique vient de `toolAllowlistForChat`
+// et les définitions restent OPAQUES (`unknown[]`) — aucun type du SDK ne
+// traverse cette façade.
+export { assertNoApprovalTool, createRemoteRunTools, REMOTE_APPROVAL_REFUSAL } from "./chat-run.js";
+export type { RemoteRunTools, RemoteRunToolsOptions } from "./chat-run.js";
+export type { RemoteRunImagePorts, RemoteRunVision } from "./sdk/remote-run-tools.js";
