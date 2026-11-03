@@ -218,9 +218,19 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "restart",
     env: "YUKI_HEAVY_IDLE_TIMEOUT_MS",
   },
+  // Plafond de SÉCURITÉ d'un job lourd (génération + rédaction + publication).
+  // ⚠️ Il doit RESTER AU-DESSUS du plafond de la génération d'image
+  // (`images.timeoutMs`, 3 600 000 ms = 1 h) + la rédaction du rapport et sa
+  // publication : 75 min laissent 15 min au-delà de la génération. Un job coupé
+  // ici est coupé par une limite PLUS LARGE que celle de la génération, sans
+  // explication possible (le rapport ne pourrait plus dire ce qui s'est passé).
+  // ⚠️ Il doit AUSSI rester au-dessus de la borne du TOUR de canal
+  // (`CHAT_REPLY_TIMEOUT_MS` + `images.timeoutMs` = 61 min 30 s) et du chien de
+  // garde d'outil dérivé (plafond + 60 s).
+  // ⚠️ La chaîne complète est vérifiée par `tests/config/bornes-generation.test.ts`.
   "delegation.totalTimeoutMs": {
     type: "int",
-    default: 1_200_000,
+    default: 4_500_000,
     min: 1,
     apply: "restart",
     env: "YUKI_HEAVY_TOTAL_TIMEOUT_MS",
@@ -502,8 +512,8 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // TOUR qui est relevée jusqu'à sa borne déclarée (`channelTurnTimeoutMs`,
   // `src/llm/tool-policy.ts`, appliquée par `src/index.ts`). Ce correctif ne
   // dépend QUE de l'absence de `delegate` : « agents non + outils oui » laisse
-  // donc `generer_image` s'exécuter inline, avec la borne relevée à 180 s
-  // (`images.timeoutMs`).
+  // donc `generer_image` s'exécuter inline, avec la borne relevée à 1 h
+  // (`images.timeoutMs`, 3 600 000 ms).
   "chat.remoteAgents": {
     type: "enum",
     enum: ["desactive", "actives"],
@@ -937,13 +947,31 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_IMAGES_HEIGHT",
   },
-  // Délai MAXIMAL d'une génération (10 s à 3 min en pratique). Au-delà, l'attente
-  // s'arrête et le message dit de vérifier la file du serveur : jamais de blocage.
+  // PLAFOND DE SÉCURITÉ d'une génération (ms) — 1 HEURE par défaut.
+  //
+  // ⚠️ Ce n'est PLUS le mécanisme d'arrêt : c'est la SURVEILLANCE D'ÉTAT qui
+  // décide (`GET /queue`, `src/comfy/client.ts`) — tant que ComfyUI déclare le
+  // travail dans sa file (`queue_running`/`queue_pending`), l'attente continue ;
+  // dès qu'il en disparaît sans résultat, l'échec est constaté en 30 s. Ce
+  // plafond n'est qu'un FILET pour le cas RARISSIME d'un travail orphelin
+  // (serveur figé) : s'il coupe, c'est un BLOCAGE, pas une lenteur.
+  // ⚠️ Il doit rester SOUS le chien de garde dérivé (`resolveToolWatchdogMs` :
+  // plafond + 60 s), SOUS la borne du tour de canal (`CHAT_REPLY_TIMEOUT_MS` +
+  // plafond) et SOUS `delegation.totalTimeoutMs` (75 min) : une borne plus
+  // courte en amont ferait échouer la génération « sans raison visible ».
+  // ⚠️ `max` à 2 h : il doit DÉPASSER le défaut (un défaut au maximum
+  // interdirait de régler plus haut, et un défaut au plafond est incohérent),
+  // et 2 h laissent la place à un workflow VIDÉO lourd (~10 min de calcul par
+  // vidéo, plusieurs passes) sans autoriser une attente déraisonnable.
+  // ⚠️ Au-delà de 61 min, la CHAÎNE doit suivre : `delegation.totalTimeoutMs`
+  // (75 min par défaut, appliqué au REDÉMARRAGE) et le chien de garde (dérivé, à
+  // chaud). Un plafond réglé à 2 h sans relever la borne du job ferait couper le
+  // job par sa propre limite totale — plus courte que le plafond.
   "images.timeoutMs": {
     type: "int",
-    default: 180_000,
+    default: 3_600_000,
     min: 10_000,
-    max: 600_000,
+    max: 7_200_000,
     apply: "hot",
     env: "YUKI_IMAGES_TIMEOUT_MS",
   },

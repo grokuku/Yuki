@@ -74,11 +74,15 @@ export const ACK_FALLBACK_TEXTS: Readonly<Record<string, readonly string[]>> = {
     "C'est parti.",
     "Je lance la génération.",
     "Deux secondes, ça arrive.",
-    // ⚠️ BORNE DÉCLARÉE (`images.timeoutMs` = 180 s) : sous `chat.remoteAgents =
-    // desactive`, la génération s'exécute DANS le tour — la personne doit savoir
-    // qu'elle attendra. Ce n'est pas une promesse de RÉSULTAT (le badge
-    // anti-mensonge existe déjà), c'est la durée réelle de l'action.
-    "Ça peut prendre jusqu'à trois minutes.",
+    // ⚠️ DURÉE RÉELLE de l'action : sous `chat.remoteAgents = desactive`, la
+    // génération s'exécute DANS le tour — la personne doit savoir qu'elle
+    // attendra. Ce n'est pas une promesse de RÉSULTAT (le badge anti-mensonge
+    // existe déjà), c'est la durée de l'action.
+    // ⚠️ On n'annonce PAS le plafond (`images.timeoutMs`, 1 h) : c'est le
+    // maximum théorique (filet pour un travail ORPHELIN), pas la durée d'une
+    // génération ordinaire (10 s à quelques minutes). Annoncer 1 h ferait
+    // attendre pour rien. « Plusieurs minutes » reste VRAI en dessous du plafond.
+    "Ça peut prendre plusieurs minutes.",
     "Je m'en occupe.",
     "Ok, je génère ça.",
   ],
@@ -204,12 +208,15 @@ export function ackRuleFor(tools: readonly string[] = ACK_TOOLS): string {
 
   const liste = cites.map((tool) => `\`${tool}\``).join(", ");
   /**
-   * ⚠️ DURÉE DITE QUAND ELLE EST CONNUE, JAMAIS DEVINÉE : une génération d'image a une
-   * durée maximale annoncée de trois minutes (`images.timeoutMs`, 180 s,
-   * `src/config/schema.ts:899-905`). Sous `chat.remoteAgents = desactive`, l'appel
-   * s'exécute dans le tour (sa durée maximale est relevée) : la personne du canal doit
-   * donc savoir qu'elle attendra jusqu'à trois minutes — annoncé en même temps que
+   * ⚠️ DURÉE DITE QUAND ELLE EST CONNUE, JAMAIS DEVINÉE : une génération d'image
+   * dure plusieurs minutes (plafond de sécurité `images.timeoutMs` = 1 h,
+   * `src/config/schema.ts:970-977` ; le serveur ComfyUI est interrogé sur son état
+   * pendant l'attente, `src/comfy/client.ts`). Sous `chat.remoteAgents =
+   * desactive`, l'appel s'exécute dans le tour (sa durée maximale est relevée) : la
+   * personne du canal doit donc savoir qu'elle attendra — annoncé en même temps que
    * l'action, pas après.
+   * ⚠️ On annonce « plusieurs minutes », jamais le plafond : le plafond est un
+   * maximum théorique, pas la durée d'une génération ordinaire.
    *
    * ⚠️ La consigne ne cite AUCUN nom de réglage (`images.timeoutMs`) : le modèle
    * recopie parfois ses consignes mot pour mot, et une personne du canal n'a rien à
@@ -217,9 +224,10 @@ export function ackRuleFor(tools: readonly string[] = ACK_TOOLS): string {
    */
   const dureeImage = cites.includes("generer_image")
     ? [
-        "- Une GÉNÉRATION D'IMAGE peut durer jusqu'à trois minutes :",
-        "  quand tu la lances toi-même, DIS-LE dans ton accusé (« ça peut prendre jusqu'à",
-        "  trois minutes »). Ce n'est pas une estimation : c'est la durée annoncée.",
+        "- Une GÉNÉRATION D'IMAGE prend PLUSIEURS MINUTES :",
+        "  quand tu la lances toi-même, DIS-LE dans ton accusé (« ça peut prendre",
+        "  plusieurs minutes »). N'annonce pas de chiffre plus précis : la durée dépend",
+        "  du serveur, et une promesse d'heure serait une invention.",
       ]
     : [];
   return [

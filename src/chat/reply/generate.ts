@@ -188,7 +188,7 @@ export function createRemoteReplyGenerator(
 
     // ⚠️ FICHIERS PRODUITS par CE run (image générée, copiée dans le store par
     // `generer_image`). Chacun part IMMÉDIATEMENT dans le canal (lot 2) : il n'est
-    // plus réattaché à la réponse finale, qui arrive parfois trois minutes après.
+    // plus réattaché à la réponse finale, qui arrive parfois plusieurs minutes après.
     const produits: string[] = [];
     // La progression est créée APRÈS la politique (elle a besoin de son allowlist),
     // mais `onFileProduced` ne tire que PENDANT le run : la fermeture est donc

@@ -355,7 +355,7 @@ export class ReplyProgress {
    * Un FICHIER vient d'être produit : il part IMMÉDIATEMENT, une seule fois.
    *
    * ⚠️ C'est ce qui remplace le réattachement à la réponse finale : l'image
-   * arrive quand elle existe, pas à la fin d'un tour qui peut durer trois minutes.
+   * arrive quand elle existe, pas à la fin d'un tour qui peut durer plusieurs minutes.
    */
   publierFichier(fileId: string, texte: string = PROGRESS_IMAGE_TEXT): void {
     if (fileId.trim() === "" || this.fichiersPublies.includes(fileId)) return;

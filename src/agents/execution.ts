@@ -496,9 +496,10 @@ export const MIN_COMMAND_TIMEOUT_MS = 1_000;
  * `timeout_ms` de `run_command`), mais dans cette borne : sans plafond, un
  * modèle qui écrit `3600000` monopoliserait un worker pendant une heure.
  *
- * ⚠️ Il reste SOUS `delegation.totalTimeoutMs` (1_200_000 ms = 20 min,
+ * ⚠️ Il reste SOUS `delegation.totalTimeoutMs` (4_500_000 ms = 75 min,
  * `src/config/schema.ts`), et sous le chien de garde d'outil du worker lourd
- * (`DEFAULT_TOOL_WATCHDOG_MS` = 16 min, `src/pi/sdk/heavy-worker.ts`) : une
+ * (DÉRIVÉ du plafond de génération : `resolveToolWatchdogMs`, plancher
+ * `DEFAULT_TOOL_WATCHDOG_MS` = 16 min, `src/pi/sdk/heavy-worker.ts`) : une
  * commande ne peut pas survivre à la borne du job qui la porte — sinon elle
  * serait coupée par une limite PLUS LARGE que la sienne, sans explication.
  */

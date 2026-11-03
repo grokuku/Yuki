@@ -348,7 +348,7 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
   }
 
   // ⚠️ OUTILS LONGS REFUSÉS (lot 23) : un run de CANAL est borné par
-  // `CHAT_REPLY_TIMEOUT_MS` (90 s) alors que `generer_image` peut prendre 180 s.
+  // `CHAT_REPLY_TIMEOUT_MS` (90 s) alors que `generer_image` peut prendre 1 h.
   // Le refus est porté par l'OUTIL (`LONG_RUNNING_TOOLS`, `src/llm/tool-policy.ts`) :
   // c'est le seul endroit où le modèle ne peut pas l'ignorer. ⚠️ Le refus ne
   // renvoie vers `delegate` QUE si la délégation existe dans ce run (sous

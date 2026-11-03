@@ -23,6 +23,13 @@
  *                                 → les OCTETS de l'image (`image/png`).
  *  4. `GET  /system_stats`       → `{ system: { comfyui_version, … }, devices: […] }`
  *                                  (bouton « Tester la connexion »).
+ *  5. `GET  /queue`              → `{ queue_running: [...], queue_pending: [...] }`
+ *                                  (SURVEILLANCE : le serveur DIT s'il travaille
+ *                                  encore sur notre prompt). Chaque entrée est
+ *                                  l'élément de file de ComfyUI ; le `prompt_id`
+ *                                  est lu sur les DEUX formes connues (tableau
+ *                                  `[number, prompt_id, …]` ou objet
+ *                                  `{ prompt_id }`) — voir `promptIdsOfQueue`.
  *
  * ⚠️ `SaveImage` ET `PreviewImage` renvoient la MÊME forme d'historique
  * (`nodes.py` : `PreviewImage(SaveImage)` réutilise `save_images`, qui renvoie
@@ -37,6 +44,26 @@
  * complète a le sien) : aucune attente infinie. Les échecs rapportent la cause
  * RÉELLEMENT observée (statut HTTP, message du serveur, code réseau), traduite
  * en français — jamais une cause inventée.
+ *
+ * ⚠️⚠️ L'ARRÊT NE SE DÉCIDE PAS SUR UN MINUTEUR, MAIS SUR L'ÉTAT DU SERVEUR
+ * (2026-11-03). Un délai fixe est toujours faux : trop court, il coupe un calcul
+ * LÉGITIME (une vidéo de dix minutes) ; trop long, il fait attendre sur un job
+ * MORT. ComfyUI expose sa file (`GET /queue`) : on la LUI DEMANDE.
+ *
+ *  1. le travail est dans `queue_running` **ou** `queue_pending` ⇒ le serveur
+ *     travaille POUR NOUS : aucun arrêt (seul le PLAFOND DE SÉCURITÉ,
+ *     `generationTimeoutMs`, peut encore couper — il est très haut, réglable) ;
+ *  2. le travail a DISPARU de la file ⇒ on vérifie `/history` :
+ *     · présent ⇒ c'est fini (succès, ou `status_str = "error"` lu plus bas) ;
+ *     · absent ⇒ il est mort sans résultat : on accorde une GRÂCE
+ *       (`jobGraceMs`, 30 s — course connue de ComfyUI entre la sortie de file
+ *       et l'écriture de l'historique), puis on ÉCHOUE en le disant ;
+ *  3. `/queue` indisponible (proxy, version ancienne) ⇒ repli DOCUMENTÉ sur
+ *     `/history` seul, borné par le plafond de sécurité — la surveillance ne
+ *     peut pas être pire qu'avant, et le journal dit pourquoi.
+ *
+ * ⚠️ Le `prompt_id` rendu par `POST /prompt` est conservé de bout en bout : c'est
+ * lui qui permet d'interroger `/queue` ET `/history` pour CE travail.
  */
 
 import type {
@@ -48,12 +75,39 @@ import type {
 } from "./types.js";
 import { ComfyError } from "./types.js";
 
-/** Délai d'UNE requête HTTP vers ComfyUI (soumise, historique, image). */
+/** Délai d'UNE requête HTTP vers ComfyUI (soumise, file, historique, image). */
 export const DEFAULT_COMFY_REQUEST_TIMEOUT_MS = 20_000;
-/** Délai MAXIMAL d'une génération complète (10 s à 3 min en pratique). */
-export const DEFAULT_COMFY_GENERATION_TIMEOUT_MS = 180_000;
-/** Intervalle entre deux lectures de l'historique. */
+/**
+ * PLAFOND DE SÉCURITÉ d'une génération complète (ms) — 1 HEURE.
+ *
+ * ⚠️ Ce n'est PAS le mécanisme d'arrêt (voir le commentaire d'en-tête) : c'est le
+ * filet de dernier recours, pour qu'un travail qui resterait EN FILE
+ * ÉTERNELLEMENT (serveur bloqué, job orphelin) ne tienne pas une place
+ * indéfiniment. Il est réglable (`images.timeoutMs`) et doit rester SOUS
+ * `toolWatchdogMs` (dérivé : plafond + 60 s), SOUS la borne du tour de canal
+ * (`CHAT_REPLY_TIMEOUT_MS` + plafond) et sous `delegation.totalTimeoutMs`
+ * (`src/config/schema.ts`).
+ */
+export const DEFAULT_COMFY_GENERATION_TIMEOUT_MS = 3_600_000;
+/** Intervalle entre deux lectures de l'état (file + historique). */
 export const DEFAULT_COMFY_POLL_INTERVAL_MS = 1_000;
+/**
+ * GRÂCE accordée après la DISPARITION du travail de la file, avant de conclure
+ * qu'il est mort sans résultat (ms).
+ *
+ * ⚠️ POURQUOI 30 s : ComfyUI écrit l'entrée `/history` APRÈS avoir retiré le
+ * travail de la file — l'ordre n'est pas garanti à la milliseconde. Sans cette
+ * grâce, une génération RÉUSSIE serait déclarée morte entre les deux. 30 s est
+ * très au-dessus de cette course, et très en dessous de ce qu'une personne
+ * attend avant de renoncer : un job fantôme est détecté en 30 s, pas au plafond.
+ */
+export const DEFAULT_COMFY_JOB_GRACE_MS = 30_000;
+/**
+ * Échecs CONSÉCUTIFS de surveillance tolérés avant d'abandonner (serveur qui
+ * hoquette, requête qui expire). Au-delà, l'erreur RÉELLE est remontée : jamais
+ * un abandon silencieux, jamais une attente qui se prolonge sur un serveur mort.
+ */
+export const MAX_COMFY_MONITOR_FAILURES = 3;
 /** Plafond des octets récupérés pour une image générée. */
 export const MAX_COMFY_IMAGE_BYTES = 24 * 1024 * 1024;
 
@@ -67,11 +121,24 @@ export const MAX_COMFY_IMAGE_BYTES = 24 * 1024 * 1024;
  */
 export const MAX_FINAL_PROMPT_CHARS = 8_000;
 
+/** État du travail tel que le SERVEUR le décrit (`GET /queue`). */
+export type ComfyJobState =
+  /** `queue_running` : le serveur l'exécute en ce moment. */
+  | "running"
+  /** `queue_pending` : accepté, en attente d'un emplacement. */
+  | "pending"
+  /** Ni dans `/queue` ni dans `/history` ⇒ mort sans résultat (après la grâce). */
+  | "absent"
+  /** `/queue` indisponible : l'état n'est pas observable (repli sur `/history`). */
+  | "unknown";
+
 /** Étape observée d'une génération (progression rapportée à l'outil). */
 export interface ComfyProgress {
   phase: "submitted" | "waiting" | "downloading";
   promptId: string;
   elapsedMs: number;
+  /** Ce que le SERVEUR dit du travail au moment du rapport (absent hors attente). */
+  state?: ComfyJobState;
 }
 
 /** Référence d'une image produite (ce que `outputs[…]` porte réellement). */
@@ -124,14 +191,70 @@ export interface ComfyClientOptions {
   fetchImpl?: typeof fetch;
   logger?: ComfyLogger;
   requestTimeoutMs?: number;
-  /** Délai global d'une génération (lu à chaud : réglable sans redémarrage). */
+  /**
+   * PLAFOND DE SÉCURITÉ d'une génération (lu à chaud : réglable sans
+   * redémarrage). ⚠️ Ce n'est pas le mécanisme d'arrêt : c'est `GET /queue` qui
+   * dit si le serveur travaille encore (voir `generate`).
+   */
   generationTimeoutMs?: () => number;
   pollIntervalMs?: number;
+  /** Grâce après disparition de la file, avant de conclure à un échec (ms). */
+  jobGraceMs?: number;
   now?: () => number;
 }
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Durée LISIBLE par un humain (jamais « 3600000 ms » dans un message). */
+export function durationText(ms: number): string {
+  const value = Math.max(0, Math.round(ms));
+  if (value < 1_000) return `${value} ms`;
+  if (value < 60_000) return `${Math.round(value / 1_000)} s`;
+  // ⚠️ Une HEURE PLEINE se dit « 1 heure », jamais « 60 min » : c'est la valeur
+  // du plafond par défaut, et le message doit être lisible tel quel.
+  if (value >= 3_600_000 && value % 60_000 === 0) {
+    const minutes = value / 60_000;
+    if (minutes % 60 === 0) {
+      const heures = minutes / 60;
+      return `${heures} heure${heures > 1 ? "s" : ""}`;
+    }
+  }
+  const minutes = Math.round((value / 60_000) * 10) / 10;
+  return `${minutes} min`;
+}
+
+/**
+ * Identifiants de prompt d'une liste de `/queue` (`queue_running`/
+ * `queue_pending`).
+ *
+ * ⚠️ DEUX FORMES CONNUES, aucune devinée : l'entrée de file de ComfyUI est un
+ * TABLEAU `[number, prompt_id, prompt, extra_data, outputs_to_execute]`
+ * (`QueueItem`, sérialisé en tableau JSON) ou, selon la version, un OBJET portant
+ * `prompt_id`. Une entrée d'une autre forme est IGNORÉE (elle ne peut pas être
+ * notre prompt) — jamais une exception : une forme inattendue ne doit pas faire
+ * croire que le serveur a perdu le travail.
+ */
+export function promptIdsOfQueue(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string") {
+      if (item.trim() !== "") out.push(item.trim());
+      continue;
+    }
+    if (Array.isArray(item)) {
+      const second = item[1];
+      if (typeof second === "string" && second.trim() !== "") out.push(second.trim());
+      continue;
+    }
+    if (item && typeof item === "object") {
+      const promptId = (item as Record<string, unknown>).prompt_id;
+      if (typeof promptId === "string" && promptId.trim() !== "") out.push(promptId.trim());
+    }
+  }
+  return out;
 }
 
 /** Code système d'une erreur réseau (undici : `error.cause.code`). */
@@ -303,6 +426,7 @@ export class ComfyClient {
   private readonly requestTimeoutMs: number;
   private readonly generationTimeoutMs: () => number;
   private readonly pollIntervalMs: number;
+  private readonly jobGraceMs: number;
   private readonly now: () => number;
 
   constructor(options: ComfyClientOptions) {
@@ -313,6 +437,7 @@ export class ComfyClient {
     this.generationTimeoutMs =
       options.generationTimeoutMs ?? (() => DEFAULT_COMFY_GENERATION_TIMEOUT_MS);
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_COMFY_POLL_INTERVAL_MS;
+    this.jobGraceMs = Math.max(0, Math.trunc(options.jobGraceMs ?? DEFAULT_COMFY_JOB_GRACE_MS));
     this.now = options.now ?? Date.now;
   }
 
@@ -425,6 +550,45 @@ export class ComfyClient {
     return { ...(version !== undefined ? { version } : {}), devices };
   }
 
+  /**
+   * Un échec de SURVEILLANCE doit-il être retenté ?
+   *
+   * ⚠️ RÈGLE TRANCHÉE : une erreur PASSAGÈRE (serveur injoignable, requête
+   * expirée) est retentée `MAX_COMFY_MONITOR_FAILURES` fois CONSÉCUTIVES (elle
+   * est journalisée à chaque fois) ; au-delà, l'erreur RÉELLE est remontée (une
+   * image n'est jamais déclarée générée sur un serveur muet).
+   *
+   * ⚠️ Une annulation n'est JAMAIS retentée, et une erreur de configuration non
+   * plus. Quand `allowUnsupported` est vrai (appel `/queue`), une réponse non
+   * exploitable rend `"unsupported"` : l'appelant bascule sur `/history` seul
+   * plutôt que d'échouer (le repli est journalisé).
+   */
+  private tolerateMonitorFailure(
+    error: unknown,
+    failures: number,
+    promptId: string,
+    allowUnsupported = false,
+  ): number | "unsupported" {
+    if (error instanceof ComfyError && error.code === "cancelled") throw error;
+    const unsupported =
+      error instanceof ComfyError &&
+      (error.code === "http_error" || error.code === "invalid_response");
+    if (allowUnsupported && unsupported) return "unsupported";
+    const transient =
+      !(error instanceof ComfyError) ||
+      error.code === "unreachable" ||
+      error.code === "timeout";
+    const next = failures + 1;
+    if (!transient || next >= MAX_COMFY_MONITOR_FAILURES) throw error;
+    this.logger?.warn("comfy.monitor.retry", {
+      promptId,
+      failures: next,
+      max: MAX_COMFY_MONITOR_FAILURES,
+      error: messageOf(error),
+    });
+    return next;
+  }
+
   /** `POST /prompt` — soumet le graphe, renvoie l'identifiant du prompt. */
   async submit(
     workflow: Record<string, unknown>,
@@ -482,6 +646,52 @@ export class ComfyClient {
     return entry === undefined ? null : entry;
   }
 
+  /**
+   * `GET /queue` — l'état de la file, réduit aux IDENTIFIANTS de prompt.
+   *
+   * ⚠️ Forme de réponse (documentée, jamais devinée) :
+   * `{ "queue_running": [ … ], "queue_pending": [ … ] }` — deux LISTES. Chaque
+   * élément est l'entrée de file de ComfyUI ; selon la version c'est un TABLEAU
+   * `[number, prompt_id, prompt, extra_data, outputs_to_execute]` ou un OBJET
+   * portant `prompt_id`. Les deux formes sont lues (`promptIdsOfQueue`) : une
+   * forme inconnue rend une liste VIDE, jamais une erreur de type.
+   */
+  async queue(
+    signal?: AbortSignal,
+  ): Promise<{ running: string[]; pending: string[] }> {
+    const { base, headers } = this.endpoint();
+    const url = `${base}/queue`;
+    const response = await this.request(url, { method: "GET", headers }, signal, "application/json");
+    if (!response.ok) throw await this.failure(response, url);
+    const text = await response.text();
+    const parsed = parseJsonOrNull(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new ComfyError(
+        "invalid_response",
+        `La file de ComfyUI n'est pas un objet JSON (${url}). Réponse : ${text.slice(0, 120)}`,
+        { status: response.status },
+      );
+    }
+    const root = parsed as Record<string, unknown>;
+    return {
+      running: promptIdsOfQueue(root.queue_running),
+      pending: promptIdsOfQueue(root.queue_pending),
+    };
+  }
+
+  /**
+   * Ce que le SERVEUR dit de NOTRE travail : en cours, en attente, ou absent.
+   *
+   * ⚠️ `absent` n'est PAS un échec en soi : c'est le signal qui déclenche la
+   * fenêtre de grâce (l'historique peut se remplir juste après la sortie de file).
+   */
+  private async jobState(promptId: string, signal?: AbortSignal): Promise<ComfyJobState> {
+    const queue = await this.queue(signal);
+    if (queue.running.includes(promptId)) return "running";
+    if (queue.pending.includes(promptId)) return "pending";
+    return "absent";
+  }
+
   /** `GET /view` — octets de l'image produite. */
   async view(ref: ComfyImageRef, signal?: AbortSignal): Promise<ComfyImageBytes> {
     const { base, headers } = this.endpoint();
@@ -533,11 +743,21 @@ export class ComfyClient {
   }
 
   /**
-   * Soumet, ATTEND (délai borné, sondage de l'historique) puis récupère l'image.
+   * Soumet, SURVEILLE l'ÉTAT du serveur jusqu'à la fin, puis récupère l'image.
    *
    * ⚠️ L'attente est découpée en requêtes COURTES (sondage) : aucune connexion
    * n'est tenue ouverte pendant des minutes, et l'annulation du tour interrompt
    * la boucle.
+   *
+   * ⚠️⚠️ L'ARRÊT SE DÉCIDE SUR L'ÉTAT, PAS SUR UN MINUTEUR (2026-11-03) :
+   *  - le travail est dans `/queue` (`queue_running` ou `queue_pending`) ⇒ le
+   *    serveur travaille POUR NOUS, aucune coupure (10 min de vidéo passent) ;
+   *  - il en a DISPARU et `/history` ne le connaît pas encore ⇒ fenêtre de
+   *    grâce (`jobGraceMs`, 30 s) puis échec explicite (`job_lost`) ;
+   *  - il en a disparu ET `/history` le connaît ⇒ terminé (succès ou erreur) ;
+   *  - `/queue` inexploitable ⇒ repli documenté sur `/history` seul, borné par
+   *    le PLAFOND DE SÉCURITÉ (`generationTimeoutMs`) — jamais une attente
+   *    infinie, jamais un arrêt silencieux.
    */
   async generate(
     workflow: Record<string, unknown>,
@@ -549,28 +769,120 @@ export class ComfyClient {
     } = {},
   ): Promise<ComfyImageBytes> {
     const startedAt = this.now();
-    const timeoutMs = Math.max(1_000, this.generationTimeoutMs());
+    // ⚠️ PLAFOND DE SÉCURITÉ (et non mécanisme d'arrêt) : relu à CHAQUE
+    // GÉNÉRATION (un changement dans `/config` s'applique donc à la suivante).
+    const ceilingMs = Math.max(1_000, Math.trunc(this.generationTimeoutMs()));
     const promptId = await this.submit(workflow, options.signal);
     options.onProgress?.({ phase: "submitted", promptId, elapsedMs: this.now() - startedAt });
 
     let entry: unknown | null = null;
+    /** Début de la fenêtre de GRÂCE après disparition de la file, ou `undefined`. */
+    let missingSince: number | undefined;
+    /** `/queue` inexploitable ⇒ on ne le redemande plus et on le DIT une fois. */
+    let queueUnavailable = false;
+    /** Échecs consécutifs de surveillance (requête expirée, serveur injoignable). */
+    let failures = 0;
+    let lastState: ComfyJobState = "unknown";
+
     for (;;) {
       if (options.signal?.aborted) {
         throw new ComfyError("cancelled", "Génération d'image annulée.");
       }
-      entry = await this.history(promptId, options.signal);
+
+      // ① RÉSULTAT — la seule preuve d'une fin : ComfyUI a écrit l'historique.
+      try {
+        entry = await this.history(promptId, options.signal);
+        failures = 0;
+      } catch (error) {
+        const outcome = this.tolerateMonitorFailure(error, failures, promptId);
+        failures = outcome === "unsupported" ? failures : outcome;
+        entry = null;
+      }
       if (entry !== null) break;
-      const elapsed = this.now() - startedAt;
-      if (elapsed >= timeoutMs) {
+
+      // ② ÉTAT — le serveur travaille-t-il ENCORE sur ce prompt ?
+      if (!queueUnavailable) {
+        try {
+          lastState = await this.jobState(promptId, options.signal);
+          failures = 0;
+        } catch (error) {
+          const reason = this.tolerateMonitorFailure(error, failures, promptId, true);
+          if (reason === "unsupported") {
+            // Repli DOCUMENTÉ : `/history` seul + plafond de sécurité (le
+            // comportement d'avant), et le journal dit POURQUOI.
+            queueUnavailable = true;
+            this.logger?.warn("comfy.queue.unavailable", {
+              promptId,
+              reason:
+                "GET /queue n'est pas exploitable sur ce serveur : la surveillance " +
+                "se replie sur /history, bornée par le plafond de sécurité",
+              error: messageOf(error),
+            });
+          } else {
+            failures = reason;
+          }
+          lastState = "unknown";
+        }
+      }
+
+      const now = this.now();
+      if (lastState === "running" || lastState === "pending") {
+        // ⚠️ PREUVE que le serveur travaille : la disparition est ANNULÉE (un
+        // travail remis en file ne repart pas de zéro dans notre compte).
+        if (missingSince !== undefined) {
+          this.logger?.info("comfy.job.requeued", { promptId, state: lastState });
+        }
+        missingSince = undefined;
+      } else if (lastState === "absent") {
+        if (missingSince === undefined) {
+          missingSince = now;
+          this.logger?.warn("comfy.job.missing", {
+            promptId,
+            graceMs: this.jobGraceMs,
+            reason:
+              "le travail n'est plus dans la file et l'historique ne le connaît pas " +
+              "encore : fenêtre de grâce avant de conclure à un échec",
+          });
+        } else if (now - missingSince >= this.jobGraceMs) {
+          throw new ComfyError(
+            "job_lost",
+            `Le travail (prompt ${promptId}) a DISPARU de la file de ComfyUI sans laisser ` +
+              `de résultat : ${durationText(this.jobGraceMs)} après sa disparition, ` +
+              "l'historique ne le connaît toujours pas. Causes possibles : travail " +
+              "annulé sur le serveur, ou serveur redémarré pendant le calcul. Rien n'a " +
+              "été produit.",
+          );
+        }
+      }
+
+      // ③ PLAFOND DE SÉCURITÉ — filet de dernier recours, TOUJOURS annoncé.
+      const elapsed = now - startedAt;
+      if (elapsed >= ceilingMs) {
         throw new ComfyError(
           "timeout",
-          `La génération n'a pas abouti en ${Math.round(timeoutMs / 1000)} s ` +
-            `(prompt ${promptId}). Elle est peut-être encore en file sur ComfyUI : ` +
-            "vérifiez la file du serveur avant de relancer.",
+          lastState === "running" || lastState === "pending"
+            ? `La génération a été arrêtée au PLAFOND DE SÉCURITÉ ` +
+                `(${durationText(ceilingMs)}) : ComfyUI la signalait ENCORE EN COURS ` +
+                `après ${durationText(ceilingMs)} (prompt ${promptId}). C'est un cas ` +
+                "RARISSIME : une génération ordinaire prend quelques minutes, et elle " +
+                "n'est JAMAIS coupée tant que le serveur la déclare dans sa file. Si ce " +
+                "plafond coupe, c'est donc un BLOCAGE (travail orphelin, file figée), " +
+                "pas une lenteur. Elle n'est pas perdue : le calcul continue peut-être " +
+                "sur le serveur. Vérifiez la file du serveur, puis relancez. Relevez le " +
+                "plafond (Paramètres → Images → délai maximal d'une génération) " +
+                "seulement si ce travail doit légitimement durer plus longtemps."
+            : `La génération n'a pas abouti en ${durationText(ceilingMs)} ` +
+                `(prompt ${promptId}). Elle est peut-être encore en file sur ComfyUI : ` +
+                "vérifiez la file du serveur avant de relancer.",
         );
       }
-      options.onProgress?.({ phase: "waiting", promptId, elapsedMs: elapsed });
-      await sleep(Math.min(this.pollIntervalMs, Math.max(100, timeoutMs - elapsed)), options.signal);
+      options.onProgress?.({ phase: "waiting", promptId, elapsedMs: elapsed, state: lastState });
+      // ⚠️ La pause est bornée par ce qui reste AVANT la première échéance
+      // (plafond, ou fin de la grâce) : on ne dépasse pas de plusieurs secondes.
+      const untilGrace =
+        missingSince === undefined ? Number.POSITIVE_INFINITY : missingSince + this.jobGraceMs - now;
+      const wait = Math.max(1, Math.min(this.pollIntervalMs, ceilingMs - elapsed, untilGrace));
+      await sleep(wait, options.signal);
     }
 
     const parsed = parseHistoryEntry(entry);

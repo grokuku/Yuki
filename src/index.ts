@@ -176,7 +176,7 @@ import {
   SourcesService,
   SourcesStore,
 } from "./sources/index.js";
-import { createPiHost, createRemoteRunTools, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -1126,7 +1126,11 @@ async function main(): Promise<void> {
       apiKey: config.getString("images.apiKey"),
     }),
     logger,
-    // Délai de la génération COMPLÈTE, réglable à chaud (10 s à 10 min).
+    // ⚠️ PLAFOND DE SÉCURITÉ de la génération, réglable à chaud (10 s à 2 h,
+    // 1 h par défaut) : ce n'est PAS le mécanisme d'arrêt — le client demande
+    // à ComfyUI l'état de sa file (`GET /queue`) et attend tant que le serveur
+    // dit qu'il travaille (une vidéo de 10 min passe donc). Un travail qui
+    // DISPARAÎT de la file sans résultat est constaté en 30 s, pas au plafond.
     generationTimeoutMs: () => config.getNumber("images.timeoutMs"),
   });
   const comfyGenerator = createComfyGenerator({
@@ -1595,7 +1599,8 @@ async function main(): Promise<void> {
         CHAT_REPLY_SYSTEM_PROMPT,
         // ⚠️ BORNE DU TOUR, dérivée de la POLITIQUE du run (relue à chaque réponse) :
         //  - base = « rédaction (`CHAT_REPLY_TIMEOUT_MS`) + une génération
-        //    (`images.timeoutMs`) », comme avant ;
+        //    (`images.timeoutMs`, plafond de sécurité relu à chaque réponse) », comme
+        //    avant — la valeur suit donc un changement dans `/config` ;
         //  - relevée au moins jusqu'à la borne des outils longs AUTORISÉS INLINE,
         //    calculée par `createRemoteRunTools` (`channelTurnTimeoutMs`,
         //    `src/llm/tool-policy.ts`) : sous `chat.remoteAgents = desactive` (le
@@ -1941,6 +1946,14 @@ async function main(): Promise<void> {
       imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes"),
       idleTimeoutMs,
       totalTimeoutMs,
+      // ⚠️ CHIEN DE GARDE DÉRIVÉ du plafond de génération RÉEL (relu à chaque job) :
+      // une génération peut durer `images.timeoutMs` (1 h par défaut) pendant
+      // laquelle la session n'émet AUCUN événement. Un chien de garde fixe à 16 min
+      // deviendrait plus COURT que le plafond dès que celui-ci est relevé (vidéo) :
+      // il tuerait alors le job AVANT la fin de la génération, sans explication.
+      // `resolveToolWatchdogMs` garantit « plafond de génération + marge », sans
+      // dépendre de la vigilance de qui règle les valeurs.
+      toolWatchdogMs: () => resolveToolWatchdogMs(config.getNumber("images.timeoutMs")),
       logger,
     });
     delegation = createDelegationService({

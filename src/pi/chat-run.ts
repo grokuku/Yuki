@@ -107,7 +107,7 @@ export interface RemoteRunTools {
    * (groupe `agents` ouvert), les outils longs sont REFUSÉS (donc coût zéro), et
    * en LOCAL ce champ n'est jamais lu (le host n'a pas de borne de tour).
    * ⚠️ Sans `delegate`, `generer_image` peut s'exécuter inline : la borne du tour
-   * doit alors valoir AU MOINS `images.timeoutMs` (180 s), sinon la génération
+   * doit alors valoir AU MOINS `images.timeoutMs` (1 h), sinon la génération
    * serait coupée en plein vol — le défaut même que le refus prétendait fermer.
    * ⚠️ INDÉPENDANT des deux réglages : c'est l'ABSENCE de `delegate` qui décide,
    * pas la valeur de `chat.remoteTools`.
@@ -322,7 +322,7 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
   // quand `delegate` n'existe pas (groupe `agents` fermé — le DÉFAUT), le
   // garde-fou ne refuse PAS `generer_image` (`guardLongToolsInChannel`) s'il est
   // ouvert par `chat.remoteTools`. Un tour de canal vaut `CHAT_REPLY_TIMEOUT_MS`
-  // (90 s) alors que la génération peut durer `images.timeoutMs` (180 s) : la
+  // (90 s) alors que la génération peut durer `images.timeoutMs` (1 h) : la
   // borne est donc DÉRIVÉE des outils longs réellement construits, jamais devinée.
   // Avec `delegate`, tous les outils longs sont refusés inline ⇒ budget 0 (la
   // borne de base reste inchangée).

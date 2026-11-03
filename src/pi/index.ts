@@ -66,8 +66,10 @@ export {
 // ---------------------------------------------------------------------------
 export {
   DEFAULT_TOOL_WATCHDOG_MS,
+  TOOL_WATCHDOG_MARGIN_MS,
   createSdkHeavyWorker,
   idleTimeoutError,
+  resolveToolWatchdogMs,
   toolWatchdogError,
   totalTimeoutError,
   truncateCause,

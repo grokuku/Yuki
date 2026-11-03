@@ -216,7 +216,20 @@ const GROUPS = [
       { path: "delegation.maxConcurrent", label: "Jobs simultanés", kind: "number", min: 1 },
       { path: "delegation.maxQueue", label: "Taille de la file", kind: "number", min: 0 },
       { path: "delegation.idleTimeoutMs", label: "Timeout d'inactivité (ms)", kind: "number", min: 1 },
-      { path: "delegation.totalTimeoutMs", label: "Timeout global (ms)", kind: "number", min: 1 },
+      // ⚠️ Doit RESTER au-dessus du plafond de génération d'image (`images.timeoutMs`,
+      // 1 h par défaut) + la rédaction et la publication du rapport : un job coupé
+      // ici serait coupé par une limite plus LARGE que la génération, sans explication.
+      {
+        path: "delegation.totalTimeoutMs",
+        label: "Durée maximale d'un job (ms)",
+        kind: "number",
+        min: 1,
+        helper:
+          "Durée maximale d'un travail délégué, rédaction et publication du " +
+          "rapport comprises. Défaut 4 500 000 ms (75 minutes) : elle doit " +
+          "rester au-dessus du plafond d'une génération (onglet Images) et de " +
+          "la rédaction. Appliquée au redémarrage.",
+      },
     ],
   },
   {
@@ -740,16 +753,24 @@ const GROUPS = [
       },
       {
         path: "images.timeoutMs",
-        label: "Délai maximal d'une génération (ms)",
+        // ⚠️ Le libellé garde le mot « délai » (contrat d'interface vérifié par
+        // `_tools/e2e-image.mjs`) et dit ce que la valeur EST : un plafond.
+        label: "Délai maximal d'une génération — plafond de sécurité (ms)",
         kind: "number",
         min: 10000,
-        max: 600000,
-        // ⚠️ PAS `advanced` : dans l'onglet « Images », le délai est un réglage
+        // ⚠️ Doit RESTER au-dessus du défaut (3 600 000) : sinon on ne peut pas
+        // régler plus haut, et un défaut au maximum serait incohérent.
+        max: 7200000,
+        // ⚠️ PAS `advanced` : dans l'onglet « Images », le plafond est un réglage
         // d'image comme les autres — il doit être VISIBLE sans déplier « Avancé ».
         helper:
-          "Au-delà, l'attente s'arrête et le message dit de vérifier la file du " +
-          "serveur : la conversation n'est jamais bloquée. Défaut 180 000 ms " +
-          "(3 minutes).",
+          "Filet de dernier recours, pas le mécanisme d'arrêt : Yuki demande à " +
+          "ComfyUI l'état de sa file et attend tant que le serveur travaille " +
+          "(une vidéo de 10 minutes passe donc, comme une génération d'une heure). " +
+          "Un travail qui DISPARAÎT de la file sans résultat est constaté en 30 " +
+          "secondes. Défaut 3 600 000 ms (1 heure), maximum 7 200 000 (2 heures). " +
+          "Au-delà de 61 minutes, relevez aussi « Durée maximale d'un job » " +
+          "(onglet Conversation, appliquée au redémarrage).",
       },
     ],
   },
@@ -785,7 +806,7 @@ const FIELD_DEFAULTS = {
   "delegation.maxConcurrent": 3,
   "delegation.maxQueue": 10,
   "delegation.idleTimeoutMs": 120000,
-  "delegation.totalTimeoutMs": 1200000,
+  "delegation.totalTimeoutMs": 4500000,
   "gpu.profile": "",
   "gpu.compatMode": "strict",
   "gpu.minDriver": 580,
@@ -832,7 +853,7 @@ const FIELD_DEFAULTS = {
   "images.baseUrl": "",
   "images.width": 1024,
   "images.height": 1024,
-  "images.timeoutMs": 180000,
+  "images.timeoutMs": 3600000,
 };
 
 /**

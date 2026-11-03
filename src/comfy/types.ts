@@ -42,6 +42,8 @@ export type ComfyConfigProvider = () => ComfyConfig;
  *  - `invalid_response` : réponse inattendue (JSON ou type d'image) ;
  *  - `invalid_prompt` : ComfyUI a REFUSÉ le graphe (`error`/`node_errors`) ;
  *  - `execution_failed` : l'exécution a échoué côté ComfyUI (`status.error`) ;
+ *  - `job_lost` : le travail a DISPARU de la file (et de l'historique) après la
+ *    fenêtre de grâce (annulé sur le serveur, ou serveur redémarré) ;
  *  - `no_image` : l'exécution a réussi sans produire d'image ;
  *  - `image_too_large` : image au-delà du plafond de conservation ;
  *  - `scene_too_long` : scène au-delà de la borne (refus, jamais de coupe) ;
@@ -61,6 +63,7 @@ export type ComfyErrorCode =
   | "invalid_response"
   | "invalid_prompt"
   | "execution_failed"
+  | "job_lost"
   | "no_image"
   | "image_too_large"
   | "scene_too_long"

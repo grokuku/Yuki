@@ -49,7 +49,13 @@ interface Env {
 
 function makeEnv(
   createSession: unknown,
-  timeouts: { idleTimeoutMs: number; totalTimeoutMs: number; toolWatchdogMs: number },
+  timeouts: {
+    idleTimeoutMs: number;
+    totalTimeoutMs: number;
+    /** ⚠️ Un FOURNISSEUR est accepté : le câblage y met une valeur dérivée du
+     * plafond de génération (`resolveToolWatchdogMs`), relue à chaque job. */
+    toolWatchdogMs: number | (() => number);
+  },
 ): Env {
   const root = mkdtempSync(join(tmpdir(), "yuki-heavy-watchdog-"));
   tempDirs.push(root);
@@ -182,6 +188,31 @@ describe("worker lourd — outil long et outil qui ne rend jamais", () => {
     expect(message).toContain("run_command");
     expect(message).toContain("n'a pas rendu la main");
     expect(message).toContain("état final n'est pas connu");
+  });
+
+  it("le chien de garde peut être un FOURNISSEUR, relu à chaque job (il suit le plafond de génération)", async () => {
+    // Un outil de 300 ms : avec un chien de garde FIXE de 100 ms, le job
+    // échouerait. Le FOURNISSEUR rend 5 s ⇒ l'outil aboutit.
+    const { factory } = scriptedSession(async (emit, aborted) => {
+      emit({ type: "tool_execution_start", toolName: "generer_image" });
+      await wait(300);
+      if (aborted()) return;
+      emit({ type: "tool_execution_end", toolName: "generer_image" });
+      emit(assistantText("Image produite."));
+    });
+    const env = makeEnv(factory, {
+      idleTimeoutMs: 60_000,
+      totalTimeoutMs: 30_000,
+      toolWatchdogMs: () => 5_000,
+    });
+    const result = await env.worker
+      .run({ jobId: "job-fournisseur", task: "Générer.", lightSessionId: "sess-1" } as never)
+      .promise;
+
+    expect(result.status).toBe("completed");
+    // ⚠️ Le FOURNISSEUR est bien appelé (un nombre fixe aurait tué le job à 0 ms,
+    // la fonction n'étant alors pas une durée).
+    expect(result.status === "completed" ? result.text : "").toContain("Image produite.");
   });
 
   it("les motifs de dépassement portent leur EXPLICATION (plus de « timeout » nu)", () => {

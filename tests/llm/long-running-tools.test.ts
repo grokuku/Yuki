@@ -3,8 +3,8 @@
  *
  * ⚠️ LE DÉFAUT QUE CE FICHIER VERROUILLE (2026-11-02) : un run de canal est borné
  * par `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts:72`) alors que
- * `generer_image` peut prendre `images.timeoutMs` (180 s,
- * `src/config/schema.ts:899-905`). L'appel inline était donc coupé EN PLEIN VOL,
+ * `generer_image` peut prendre `images.timeoutMs` (1 h,
+ * `src/config/schema.ts:960-969`). L'appel inline était donc coupé EN PLEIN VOL,
  * sans message : la personne du canal attendait une image qui n'arriverait
  * jamais. Le modèle ne pouvait pas le savoir (le prompt ne dit rien de la borne).
  *
@@ -52,7 +52,10 @@ const PNG = Buffer.from(
 
 /** Ensemble ATTENDU, borne par borne (garde : toute entrée en plus ou en moins casse). */
 const ATTENDUS: ReadonlyArray<{ name: string; seconds: number }> = [
-  { name: "generer_image", seconds: 180 },
+  // 3 600 s = PLAFOND de sécurité de `images.timeoutMs` (1 h) : l'attente suit
+  // l'état du serveur ComfyUI, ce plafond n'est que le filet de dernier recours
+  // (cas rarissime d'un travail orphelin : un blocage, pas une lenteur).
+  { name: "generer_image", seconds: 3_600 },
   { name: "run_command", seconds: 60 },
   { name: "recuperer_fichier", seconds: 120 },
   { name: "deposer_fichier", seconds: 120 },
@@ -154,7 +157,7 @@ describe("LONG_RUNNING_TOOLS — déclaration mesurée", () => {
     );
     const perimetre = new Set<string>([...REMOTE_SAFE_TOOLS, ...politiqueActifs]);
     const atteignables = [...perimetre].filter((nom) => longRunningTool(nom) !== undefined);
-    // `generer_image` (180 s) et `capture_libraire` (30 s) : les deux seuls outils
+    // `generer_image` (1 h) et `capture_libraire` (30 s) : les deux seuls outils
     // longs atteignables depuis un canal. Aucun ne doit échapper au refus.
     expect(atteignables.sort()).toEqual(["capture_libraire", "generer_image"]);
     // Et ils le sont VRAIMENT : les deux passent par le garde-fou.
@@ -176,7 +179,8 @@ describe("LONG_RUNNING_TOOLS — déclaration mesurée", () => {
   it("le refus est ACTIONNABLE : borne, raison, `delegate` et chemin d'activation", () => {
     const message = longToolInlineRefusal("generer_image");
     expect(message).toContain("generer_image");
-    expect(message).toContain("180 s");
+    // ⚠️ Durée LISIBLE : un canal ne doit pas lire « 3600 s ».
+    expect(message).toContain("1 heure");
     expect(message).toContain("delegate");
     // ⚠️ Dire « la délégation est désactivée » sans dire OÙ l'activer ne suffit pas.
     expect(message).toContain(REMOTE_AGENTS_SETTING_PATH);
@@ -193,7 +197,7 @@ describe("LONG_RUNNING_TOOLS — déclaration mesurée", () => {
   });
 
   it("la borne du tour est RELEVÉE quand un outil long est autorisé inline", () => {
-    // `CHAT_REPLY_TIMEOUT_MS` (90 s) < `images.timeoutMs` (180 s) : sans levée, la
+    // `CHAT_REPLY_TIMEOUT_MS` (90 s) < `images.timeoutMs` (1 h) : sans levée, la
     // génération serait coupée en plein vol.
     expect(
       channelTurnTimeoutMs({
@@ -201,11 +205,20 @@ describe("LONG_RUNNING_TOOLS — déclaration mesurée", () => {
         delegationAvailable: false,
         baseMs: CHAT_REPLY_TIMEOUT_MS,
       }),
-    ).toBe(180_000);
+    ).toBe(3_600_000);
     // Base plus grande ⇒ elle gagne (jamais une borne plus courte qu'avant).
     expect(
+      channelTurnTimeoutMs({
+        tools: ["generer_image"],
+        delegationAvailable: false,
+        baseMs: 4_000_000,
+      }),
+    ).toBe(4_000_000);
+    // Base plus PETITE que la durée déclarée de l'outil ⇒ c'est l'outil qui
+    // commande (sinon la génération serait coupée en plein vol).
+    expect(
       channelTurnTimeoutMs({ tools: ["generer_image"], delegationAvailable: false, baseMs: 270_000 }),
-    ).toBe(270_000);
+    ).toBe(3_600_000);
     // Délégation disponible ⇒ rien n'est autorisé inline ⇒ base inchangée.
     expect(
       channelTurnTimeoutMs({ tools: ["generer_image"], delegationAvailable: true, baseMs: 90_000 }),
@@ -236,7 +249,7 @@ describe("refus de l'appel INLINE dans un run de CANAL", () => {
     const resultat = await generer!.execute("appel-1", { scene: "un chat" }, undefined, undefined, CTX);
     expect(marque.appels).toBe(0);
     const texte = resultat.content.map((bloc) => bloc.text ?? "").join("");
-    expect(texte).toContain("180 s");
+    expect(texte).toContain("1 heure");
     expect(texte).toContain("delegate");
     // ⚠️ Le chemin EXACT de configuration est nommé (libellé de l'interface).
     expect(texte).toContain(REMOTE_AGENTS_SETTING_PATH);
@@ -270,7 +283,7 @@ describe("refus de l'appel INLINE dans un run de CANAL", () => {
       lightOptions: () => ({ imagesEnabled: true }),
       images: imagePort({ appels: 0 }),
     });
-    expect(run.inlineLongToolBudgetMs).toBeGreaterThanOrEqual(180_000);
+    expect(run.inlineLongToolBudgetMs).toBeGreaterThanOrEqual(3_600_000);
   });
 
   it("le refus ne touche QUE les outils longs : `consulter_workflow` reste appelable", async () => {

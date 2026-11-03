@@ -4,8 +4,8 @@
  *
  * ⚠️ LE TROU QUE CE MODULE FERME (2026-11-02) : un run de canal est borné par
  * `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts:72`) alors que
- * `generer_image` peut prendre jusqu'à `images.timeoutMs` (180 s,
- * `src/config/schema.ts:899-905`). L'appel était donc coupé EN PLEIN VOL : pas
+ * `generer_image` peut prendre jusqu'à `images.timeoutMs` (1 h,
+ * `src/config/schema.ts:970-977`). L'appel était donc coupé EN PLEIN VOL : pas
  * d'image, pas de message, et une personne dans le canal qui attend. Le modèle
  * ne pouvait pas le savoir — le prompt ne dit rien de la borne du tour.
  *

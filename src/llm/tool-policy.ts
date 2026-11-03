@@ -434,7 +434,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // ⚠️ IMAGES : le lourd PORTE la génération (lot 23).
     //
     // Pourquoi pas le léger ? Une génération prend jusqu'à `images.timeoutMs`
-    // (180 s, `src/config/schema.ts`) alors qu'un run de CANAL est borné par
+    // (1 h par défaut, `src/config/schema.ts`) alors qu'un run de CANAL est borné par
     // `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts`) : l'image était
     // avortée en plein vol, sans message. Le job, lui, n'a pas de borne de tour.
     // Le léger GARDE ses outils d'image (`light.images` ci-dessus) pour le mode
@@ -814,8 +814,8 @@ export function approvalRequiredTools(tools: readonly string[]): string[] {
  *
  * ⚠️ POURQUOI CETTE LISTE EXISTE (2026-11-02) : un run de CANAL est borné par
  * `CHAT_REPLY_TIMEOUT_MS` (90 s, `src/chat/reply/prompt.ts:72`) alors qu'une
- * génération d'image peut prendre 180 s (`images.timeoutMs`,
- * `src/config/schema.ts:899-905`) : l'appel était coupé EN PLEIN VOL, sans
+ * génération d'image peut prendre 1 h (`images.timeoutMs`,
+ * `src/config/schema.ts:970-977`) : l'appel était coupé EN PLEIN VOL, sans
  * message, et la personne du canal restait sans réponse. Un outil long appelé
  * INLINE dans un canal est donc REFUSÉ — mais SEULEMENT quand `delegate` existe
  * (`chat.remoteAgents = actives`) : sans délégation, refuser supprimerait la
@@ -838,11 +838,18 @@ export interface LongRunningTool {
 }
 
 export const LONG_RUNNING_TOOLS: readonly LongRunningTool[] = [
-  // 180 s — `images.timeoutMs` (défaut 180_000, max 600_000).
+  // 3 600 s — PLAFOND de sécurité de `images.timeoutMs` (défaut 3 600 000 ms =
+  // 1 h, max 7 200 000). ⚠️ Ce n'est pas un délai fixe de calcul : le client
+  // ComfyUI surveille l'état du serveur (`GET /queue`) et attend tant que le
+  // serveur dit qu'il travaille (`src/comfy/client.ts`) ; le plafond n'est que
+  // le filet de dernier recours, pour un travail ORPHELIN (blocage, pas lenteur).
+  // Une vidéo de ~10 min de calcul passe donc — et une génération de 50 min
+  // aussi, tant que le serveur la dit en cours.
   {
     name: "generer_image",
-    seconds: 180,
-    source: "src/config/schema.ts:899-905 (images.timeoutMs = 180_000)",
+    seconds: 3_600,
+    source:
+      "src/config/schema.ts:970-977 (images.timeoutMs = 3_600_000, max 7_200_000)",
   },
   // 60 s — délai d'une commande déléguée (DÉFAUT ; le modèle peut demander
   // jusqu'à `MAX_COMMAND_TIMEOUT_MS` = 900 s pour une action longue).
@@ -887,6 +894,24 @@ export const LONG_RUNNING_TOOLS: readonly LongRunningTool[] = [
 /** Fiche de l'outil long nommé (`undefined` s'il n'est pas déclaré long). */
 export function longRunningTool(name: string): LongRunningTool | undefined {
   return LONG_RUNNING_TOOLS.find((tool) => tool.name === name);
+}
+
+/**
+ * Durée LISIBLE par une personne, à partir des secondes mesurées.
+ *
+ * ⚠️ POURQUOI : le refus est recopié par le modèle et lu par une personne du
+ * canal. « peut prendre jusqu'à 3600 s » ne se lit pas ; « 1 heure » si.
+ * Les durées courtes restent en secondes (« 30 s »), c'est leur unité naturelle.
+ */
+export function humanToolDuration(seconds: number): string {
+  // ⚠️ Une HEURE PLEINE se dit en heures : « 60 minutes » se lit mal et le
+  // plafond de génération vaut exactement 1 h (3 600 s).
+  if (seconds >= 3_600 && seconds % 3_600 === 0) {
+    const heures = seconds / 3_600;
+    return `${heures} heure${heures > 1 ? "s" : ""}`;
+  }
+  if (seconds >= 120 && seconds % 60 === 0) return `${seconds / 60} minutes`;
+  return `${seconds} s`;
 }
 
 /**
@@ -935,7 +960,7 @@ export function longToolInlineRefusal(
    * modèle le cite, la personne du canal lit une phrase qui a du sens.
    */
   return (
-    `« ${info.name} » peut prendre jusqu'à ${info.seconds} s : c'est trop long pour être `
+    `« ${info.name} » peut prendre jusqu'à ${humanToolDuration(info.seconds)} : c'est trop long pour être `
     + "fait pendant un échange dans un canal, où le travail serait interrompu en plein vol, "
     + "sans résultat ni message (c'est déjà arrivé). Rien n'a été lancé. "
     + "Relance-la avec l'outil `delegate` : le travail se fait en arrière-plan, sans "
@@ -951,9 +976,12 @@ export function longToolInlineRefusal(
  * BORNE (ms) du tour d'un CANAL, quand des outils longs sont AUTORISÉS inline.
  *
  * ⚠️ POURQUOI ELLE EXISTE : `CHAT_REPLY_TIMEOUT_MS` (90 s,
- * `src/chat/reply/prompt.ts:72`) est PLUS COURT que `images.timeoutMs` (180 s,
- * `src/config/schema.ts:899-905`). Autoriser `generer_image` inline sans relever
+ * `src/chat/reply/prompt.ts:72`) est PLUS COURT que `images.timeoutMs` (1 h,
+ * `src/config/schema.ts:970-977`). Autoriser `generer_image` inline sans relever
  * la borne ne ferait que déplacer le défaut : l'appel serait coupé en plein vol.
+ * ⚠️ Le câblage (`src/index.ts`) passe une base déjà dérivée du RÉGLAGE COURANT
+ * (`CHAT_REPLY_TIMEOUT_MS + images.timeoutMs`) : la levée suit donc à chaud un
+ * changement du plafond, et la valeur ci-dessous ne sert que de PLANCHER.
  *
  * Règle : `max(borne de base, borne des outils longs autorisés)`. Sous
  * `chat.remoteAgents = actives`, tous les outils longs sont refusés inline ⇒

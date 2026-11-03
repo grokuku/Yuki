@@ -75,16 +75,56 @@ export function truncateCause(text: string, max = MAX_CAUSE_CHARS): string {
 }
 
 /**
- * CHIEN DE GARDE d'un OUTIL (ms) — 16 minutes.
+ * CHIEN DE GARDE d'un OUTIL (ms) — 16 minutes (valeur PLANCHER).
  *
- * ⚠️ Il doit rester AU-DESSUS du plus long délai de commande possible
+ * ⚠️ Ce n'est QUE le plancher de `resolveToolWatchdogMs` : avec le plafond de
+ * génération par défaut (1 h), le chien de garde RÉELLEMENT appliqué vaut
+ * 3 660 000 ms (plafond + `TOOL_WATCHDOG_MARGIN_MS`), donc toujours AU-DESSUS
+ * de `images.timeoutMs`.
+ *
+ * ⚠️ Ce plancher reste nécessaire pour le plus long délai de commande possible
  * (`MAX_COMMAND_TIMEOUT_MS` = 900 s + `COMMAND_SAFETY_MARGIN_MS` = 30 s d'attente
- * côté Yuki, `src/agents/execution.ts` / `src/agents/connection.ts`), et
- * AU-DESSOUS de `delegation.totalTimeoutMs` (20 min par défaut,
- * `src/config/schema.ts`) : le chien de garde est donc le PREMIER à parler quand
- * un outil ne rend jamais la main.
+ * côté Yuki, `src/agents/execution.ts` / `src/agents/connection.ts`) : une
+ * commande ne peut pas être tuée par le chien de garde AVANT sa propre borne.
+ *
+ * ⚠️ Le chien de garde RÉELLEMENT appliqué est calculé par
+ * `resolveToolWatchdogMs` à partir du plafond de génération courant, et passé
+ * par `src/index.ts` (relu à chaque job). Relever `images.timeoutMs` sans
+ * relever le chien de garde était le piège à éviter : il se relève TOUT SEUL.
+ * ⚠️ Et il doit rester AU-DESSOUS de `delegation.totalTimeoutMs` (75 min,
+ * 4_500_000 ms, `src/config/schema.ts`) comme de la borne du tour de canal
+ * (61 min 30 s) : le chien de garde est donc le PREMIER à parler quand un outil
+ * ne rend jamais la main.
  */
 export const DEFAULT_TOOL_WATCHDOG_MS = 960_000;
+
+/**
+ * MARGE entre le plafond de génération et le chien de garde (ms).
+ *
+ * ⚠️ Elle n'est pas décorative : la génération rend la main à son plafond, puis
+ * il faut encore TÉLÉCHARGER le fichier et l'enregistrer. Sans marge, le chien
+ * de garde couperait le job exactement au moment où la génération finit.
+ */
+export const TOOL_WATCHDOG_MARGIN_MS = 60_000;
+
+/**
+ * Chien de garde EFFECTIF : jamais sous `DEFAULT_TOOL_WATCHDOG_MS`, et toujours
+ * `marge` au-dessus du plafond de génération configuré.
+ *
+ * ⚠️ C'est ce qui fait tenir l'invariant « aucune limite ne coupe un travail
+ * encore légitime » SANS dépendre de la vigilance de qui règle les valeurs :
+ * relever `images.timeoutMs` dans `/config` relève le chien de garde du job
+ * suivant, à chaud.
+ */
+export function resolveToolWatchdogMs(
+  generationCeilingMs: number,
+  baseMs: number = DEFAULT_TOOL_WATCHDOG_MS,
+): number {
+  const ceiling = Number.isFinite(generationCeilingMs)
+    ? Math.max(0, Math.trunc(generationCeilingMs))
+    : 0;
+  return Math.max(baseMs, ceiling + TOOL_WATCHDOG_MARGIN_MS);
+}
 
 /** Secondes lisibles d'une durée (jamais 0). */
 function secondsUntil(ms: number): number {
@@ -179,7 +219,7 @@ export interface SdkHeavyWorkerConfig {
    * `generer_image` et `consulter_workflow`.
    *
    * ⚠️ POURQUOI LE LOURD LES PORTE (lot 23) : une génération prend jusqu'à
-   * `images.timeoutMs` (180 s par défaut), alors qu'un run de CANAL est borné
+   * `images.timeoutMs` (1 h par défaut), alors qu'un run de CANAL est borné
    * (`CHAT_REPLY_TIMEOUT_MS`, 90 s) ⇒ l'image y était avortée en plein vol, SANS
    * message. Le job, lui, n'a pas de borne de tour : c'est donc sa place.
    *
@@ -212,6 +252,10 @@ export interface SdkHeavyWorkerConfig {
    * d'outil peut rester sans rendre la main (ms). Défaut
    * `DEFAULT_TOOL_WATCHDOG_MS` (16 min).
    *
+   * ⚠️ Un FOURNISSEUR est accepté (et attendu du câblage) : il est relu à chaque
+   * job, ce qui permet au chien de garde de suivre `images.timeoutMs` à chaud
+   * (`resolveToolWatchdogMs`) sans redémarrage.
+   *
    * ⚠️ POURQUOI IL EXISTE (production, 2026-11-02) : pendant qu'un outil
    * s'exécute, la session n'émet AUCUN événement — et le délai d'INACTIVITÉ
    * (`idleTimeoutMs`, 120 s) abattait donc tout job lançant une commande un peu
@@ -220,7 +264,7 @@ export interface SdkHeavyWorkerConfig {
    * borne : un outil qui ne rend jamais fait ÉCHOUER le job PROPREMENT, avec un
    * message nommant l'outil et la durée, au lieu de le laisser bloqué.
    */
-  toolWatchdogMs?: number;
+  toolWatchdogMs?: number | (() => number);
   logger: PiLogger;
 }
 
@@ -327,7 +371,7 @@ export function buildHeavyActionTools(
       }),
     );
   }
-  // ⚠️ IMAGES : la génération est une ACTION LONGUE (jusqu'à 180 s), donc sans
+  // ⚠️ IMAGES : la génération est une ACTION LONGUE (jusqu'à 1 h), donc sans
   // place dans un tour de canal mais parfaitement à sa place dans un job. La
   // conversation est FORCÉE à celle du léger : l'image est copiée dans le store
   // du CANAL, et l'identifiant produit REMONTE au rapport par `onFileProduced`.
@@ -680,7 +724,17 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     let toolsInFlight = 0;
     let lastToolName = "";
     let toolWatchdog: NodeJS.Timeout | undefined;
-    const toolWatchdogMs = config.toolWatchdogMs ?? DEFAULT_TOOL_WATCHDOG_MS;
+    // ⚠️ Peut être un NOMBRE ou un FOURNISSEUR (relu à chaque job) : le câblage
+    // (`src/index.ts`) y met `resolveToolWatchdogMs(images.timeoutMs)`, qui suit
+    // donc à chaud le plafond de génération.
+    const toolWatchdogMs = Math.max(
+      1,
+      Math.trunc(
+        typeof config.toolWatchdogMs === "function"
+          ? config.toolWatchdogMs()
+          : (config.toolWatchdogMs ?? DEFAULT_TOOL_WATCHDOG_MS),
+      ),
+    );
     const clearToolWatchdog = (): void => {
       if (toolWatchdog) {
         clearTimeout(toolWatchdog);
