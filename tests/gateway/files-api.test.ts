@@ -54,6 +54,65 @@ async function* body(text: string): AsyncGenerator<Uint8Array> {
   yield new Uint8Array(Buffer.from(text, "utf8"));
 }
 
+/**
+ * ⚠️ Marqueur de CONTENU des fichiers de test.
+ *
+ * Il contient des caractères HORS de `[0-9a-f]` : or un identifiant de fichier est
+ * un hexadécimal ALÉATOIRE de 32 caractères (`src/files/store.ts:82` `ID_RE`,
+ * `src/files/store.ts:136` `randomBytes(16).toString("hex")`). Un marqueur
+ * contenant au moins un caractère hors de cet alphabet NE PEUT DONC PAS apparaître
+ * dans un id — ce que ne garantissait pas l'ancienne assertion, qui cherchait une
+ * sous-chaîne de 3 caractères HEXADÉCIMAUX et échouait donc au hasard dès qu'un id
+ * la tirait (cas réel : `e8f38eb4ee7fafaec11abc8e9f68e2a`).
+ *
+ * Vérifié absent des autres champs renvoyés : `name` (`a.txt`), `mimeType`
+ * (`text/plain`), `kind`, `url` (`/fichiers/<id>.txt`), `createdAt`/`expiresAt`
+ * (ISO), `bytes` (nombre) et `limits.note` — cf. `src/files/types.ts:73` pour la
+ * vue et `src/gateway/routes/files.ts:168` pour la réponse de liste.
+ */
+const CONTENU = "CONTENU-SECRET-DU-FICHIER";
+
+/**
+ * Champs qui PORTERAIENT le contenu s'il fuyait dans une réponse. La vérification
+ * est STRUCTURELLE (présence de la clé), donc indépendante de toute valeur :
+ * un contenu encodé en base64 ne contiendrait jamais le marqueur littéral.
+ */
+const CHAMPS_DE_CONTENU = [
+  "content",
+  "contents",
+  "text",
+  "body",
+  "data",
+  "buffer",
+  "base64",
+  "blob",
+];
+
+/** Chemins (`files[0].content`, …) des champs de contenu trouvés dans une charge utile. */
+function champsDeContenu(value: unknown, prefix = ""): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => champsDeContenu(item, `${prefix}[${index}]`));
+  }
+  if (value === null || typeof value !== "object") return [];
+  const sep = prefix === "" ? "" : ".";
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) =>
+    CHAMPS_DE_CONTENU.includes(key)
+      ? [`${prefix}${sep}${key}`]
+      : champsDeContenu(child, `${prefix}${sep}${key}`),
+  );
+}
+
+/**
+ * Prouve qu'une réponse ne transporte AUCUN contenu, de deux façons INDÉPENDANTES :
+ * ① le marqueur est absent de la sérialisation (il ne peut pas venir d'un id) ;
+ * ② aucun CHAMP de contenu n'existe, quelle que soit sa valeur (le vrai filet :
+ *    c'est ce qui attrape un contenu qui serait renvoyé encodé ou sous un autre nom).
+ */
+function expectAucunContenu(payload: unknown): void {
+  expect(JSON.stringify(payload)).not.toContain(CONTENU);
+  expect(champsDeContenu(payload)).toEqual([]);
+}
+
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
   "base64",
@@ -64,7 +123,7 @@ describe("dépôt d'un fichier (POST /api/files)", () => {
     const { deps } = makeDeps();
     const response = await handleFilesUpload({
       headers: { "x-yuki-filename": encodeURIComponent("notes.txt"), "content-type": "text/plain" },
-      stream: body("bonjour"),
+      stream: body(CONTENU),
       deps,
     });
     expect(response.status).toBe(201);
@@ -73,8 +132,8 @@ describe("dépôt d'un fichier (POST /api/files)", () => {
     expect(file.kind).toBe("text");
     expect(file.readable).toBe(true);
     expect(file.url).toBe(`/fichiers/${String(file.id)}.txt`);
-    // ⚠️ Aucun contenu dans la réponse HTTP du dépôt.
-    expect(JSON.stringify(response.body)).not.toContain("bonjour");
+    // ⚠️ Aucun contenu dans la réponse HTTP du dépôt (marqueur + structure).
+    expectAucunContenu(response.body);
   });
 
   it("refuse SANS nom (jamais un fichier anonyme)", async () => {
@@ -190,13 +249,14 @@ describe("service same-origin (/fichiers/<id>.<ext>)", () => {
 describe("API de gestion (liste, suppression)", () => {
   it("liste les fichiers d'UNE conversation (métadonnées seules)", async () => {
     const { deps, store } = makeDeps();
-    const stored = await store.saveBytes(new Uint8Array(Buffer.from("abc")), {
+    const stored = await store.saveBytes(new Uint8Array(Buffer.from(CONTENU)), {
       name: "a.txt",
       mimeType: "text/plain",
       origin: "user",
       sessionId: "sess-1",
     });
     expect(stored.ok).toBe(true);
+    if (!stored.ok) return;
     const response = handleFilesApiRequest({
       method: "GET",
       path: "/api/files?session=sess-1",
@@ -207,7 +267,19 @@ describe("API de gestion (liste, suppression)", () => {
     const payload = response.body as { files: Array<{ name: string }>; count: number };
     expect(payload.count).toBe(1);
     expect(payload.files[0]?.name).toBe("a.txt");
-    expect(JSON.stringify(response.body)).not.toContain("abc");
+    // ⚠️ La liste ne renvoie QUE des métadonnées : le contenu (marqueur) est
+    // absent, ET aucun champ de contenu n'existe. Assertion insensible au tirage
+    // aléatoire de l'identifiant (voir CONTENU).
+    expectAucunContenu(response.body);
+    // …et le fichier CONTIENT bien ce contenu : sinon l'assertion ci-dessus ne
+    // prouverait rien (elle passerait même si le fichier était vide).
+    const served = handleFilesServeRequest({
+      method: "GET",
+      path: `/fichiers/${stored.record.id}.txt`,
+      deps,
+    });
+    expect(served.status).toBe(200);
+    expect(Buffer.from(served.body as Buffer).toString("utf8")).toBe(CONTENU);
     // Une session inconnue ne renvoie rien (jamais les fichiers des autres).
     const other = handleFilesApiRequest({
       method: "GET",
