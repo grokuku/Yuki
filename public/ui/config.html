@@ -87,6 +87,23 @@
           >
             Conversation<span class="config-tab__dot" aria-hidden="true"></span>
           </button>
+          <!--
+            DÉCLENCHEURS (lot 26, lot 3) — onglet DÉDIÉ. Le panneau vivait en BAS
+            de « Conversation » : il fallait faire défiler quatre écrans pour le
+            trouver, et rien n'indiquait qu'un déclencheur muet l'était. La page
+            de gestion (trois sections + journal) a donc son onglet.
+          -->
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
+            id="tab-declencheurs"
+            aria-selected="false"
+            aria-controls="panel-declencheurs"
+            tabindex="-1"
+          >
+            Déclencheurs<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
           <button
             class="config-tab"
             type="button"
@@ -186,23 +203,39 @@
           >
             <div id="group-conversation" class="config-groups"></div>
             <!--
-              SOURCES — programmes autorisés à RÉVEILLER Yuki (agrégateur de news,
-              client de messagerie, script maison…). Composant autonome monté par id
-              (`sources-panel.js`) : tableau (nom, où, tour, notifier, dernier appel),
-              création/modification dans une `HolafModal`, jeton affiché UNE SEULE
-              FOIS. ⚠️ Aucun onglet nouveau (les 9 onglets sont verrouillés par un
-              test) et aucun style inline (CSP `style-src 'self'`).
-            -->
-            <div id="sources-root"></div>
-            <!--
               DISCUSSIONS (lot 18, lot 2) — branchement d'un serveur MATTERMOST :
               URL, jeton du bot (saisi UNE SEULE FOIS, jamais réaffiché), état de la
               connexion, avancement du backfill (2 semaines) et canaux suivis.
               Composant autonome monté par id (`chat-panel.js`).
-              ⚠️ Aucun onglet nouveau (les 9 onglets sont verrouillés par un test) et
-              aucun style inline (CSP `style-src 'self'`).
+              ⚠️ Aucun style inline (CSP `style-src 'self'`).
             -->
             <div id="chat-root"></div>
+          </section>
+          <!--
+            DÉCLENCHEURS — la PAGE DE GESTION (lot 26, lot 3).
+
+            Une section « Déclencheurs » = un programme qui réveille Yuki (webhook
+            authentifié) ou une horloge (expression cron). Trois sections :
+            Permanents · Temporaires · En sommeil ; colonnes dont ⚠️ « dernier
+            passage » ; un 4ᵉ volet replié, le JOURNAL. Composant autonome monté par
+            id (`sources-panel.js`), règles pures dans `declencheurs-vue.js`.
+
+            ⚠️ Ancre `#declencheurs` (`ANCRES_PROFONDES` de `config.js`) : c'est
+            elle que vise le bouton « Gérer les déclencheurs » de la boîte de
+            notifications (`index.html`). Aucun style inline (CSP).
+          -->
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-declencheurs"
+            aria-labelledby="tab-declencheurs"
+            tabindex="0"
+            hidden
+          >
+            <!-- Borne d'injection du bloc <sources> (groupe `sources`). -->
+            <div id="group-declencheurs" class="config-groups"></div>
+            <!-- La page de gestion (trois sections + journal). -->
+            <div id="sources-root"></div>
           </section>
           <section
             class="config-panel"

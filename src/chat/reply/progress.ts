@@ -140,6 +140,18 @@ export const PROGRESS_SUPPRESSED_TEXT =
   "(d'autres résultats intermédiaires ont été omis pour ne pas noyer le canal.)";
 
 /**
+ * NATURE d'une publication portée par `envoyer_message` (demande du 2026-11-04 :
+ * réponse étalée sur plusieurs messages, envoyés PENDANT le tour).
+ *
+ * ⚠️ Ce n'est ni un accusé, ni un résultat d'outil : c'est le CORPS de la réponse,
+ * découpé par le modèle lui-même. Il ne compte donc PAS dans le plafond des lignes
+ * de résultat (`PROGRESS_MAX_RESULTS`) : le plafond des messages est celui de
+ * l'outil (`ENVOYER_MESSAGE_MAX_PAR_TOUR`), sinon 3 messages suffiraient à faire
+ * taire la progression d'un tour de 20 messages.
+ */
+export const PROGRESS_MESSAGE_TOOL = "envoyer_message";
+
+/**
  * Ligne d'ÉCHEC d'un outil — DÉTERMINISTE (même cause ⇒ même phrase).
  *
  * ⚠️ Elle est publiée UNE SEULE fois par outil (`echecs`) et ne promet rien : elle
@@ -232,6 +244,14 @@ export class ReplyProgress {
   private readonly echecs = new Set<string>();
   /** Fichiers DÉJÀ publiés (jamais réattachés à la réponse finale). */
   private readonly fichiersPublies: string[] = [];
+  /**
+   * Textes DÉJÀ publiés par `envoyer_message` dans ce tour (`retirerMessagesEnvoyes`).
+   *
+   * ⚠️ C'est le DRAPEAU « j'ai déjà parlé » de la réponse finale : sans lui, un tour
+   * qui a étalé sa réponse sur 20 messages la republierait ENTIÈRE à la fin — le même
+   * défaut que le double accusé, en pire (20 messages dupliqués d'un coup).
+   */
+  private readonly messagesEnvoyes: string[] = [];
   /** Début du dernier appel de chaque outil (mesure de durée, pas d'estimation). */
   private readonly debuts = new Map<string, number>();
   /** Rotation du repli : incrémentée à chaque accusé de repli. */
@@ -279,6 +299,55 @@ export class ReplyProgress {
   /** Nombre de lignes omises par le plafond (mesure). */
   get resultatsOmis(): number {
     return this.omis;
+  }
+
+  /** Nombre de messages publiés par `envoyer_message` (mesure). */
+  get nombreMessagesEnvoyes(): number {
+    return this.messagesEnvoyes.length;
+  }
+
+  /**
+   * Publie UN message demandé par le modèle (`envoyer_message`) et attend qu'il soit
+   * parti.
+   *
+   * ⚠️ MÊME FILE que l'accusé, l'image et les résultats : aucune seconde voie de
+   * publication, donc aucun `send` simultané et l'ordre des appels est l'ordre
+   * d'arrivée. L'attente est nécessaire : le résultat de l'outil ne doit pas dire
+   * « envoyé » avant que la plateforme ait accepté le message (une erreur remonte
+   * donc au modèle au lieu d'être avalée).
+   *
+   * ⚠️ Le texte est retenu SEULEMENT s'il est réellement parti : un envoi en échec
+   * laisse le texte dans la réponse finale (sinon il serait perdu).
+   */
+  async envoyerTexte(texte: string): Promise<void> {
+    // ⚠️ Run DÉJÀ clos : on LÈVE au lieu de laisser l'appelant attendre une publication
+    // qui ne partira jamais (`enfiler` refuse alors silencieusement, par sécurité).
+    if (this.clos) {
+      throw new Error(
+        "La réponse est déjà close : ce message n'a pas été publié.",
+      );
+    }
+    let resoudre: (() => void) | undefined;
+    let rejeter: ((error: unknown) => void) | undefined;
+    const fin = new Promise<void>((resolve, reject) => {
+      resoudre = resolve;
+      rejeter = reject;
+    });
+    this.enfiler(
+      async () => {
+        try {
+          await this.publier({ text: texte });
+          this.messagesEnvoyes.push(texte);
+          resoudre?.();
+        } catch (error) {
+          rejeter?.(error);
+          // ⚠️ On relance : le vidage de la file journalise l'échec et continue.
+          throw error;
+        }
+      },
+      { outil: PROGRESS_MESSAGE_TOOL, role: "resultat" },
+    );
+    return fin;
   }
 
   /**
@@ -450,6 +519,39 @@ export class ReplyProgress {
       lignes.splice(debut, 1);
     }
     return lignes.join("\n").trim();
+  }
+
+  /**
+   * Retire du texte FINAL ce qui a DÉJÀ été publié par `envoyer_message`.
+   *
+   * ⚠️ POURQUOI (le piège qui reviendra) : c'est exactement le double accusé, en
+   * grand. Un modèle qui étale « 3 / 1 / 4 / 1 / 5… » sur 20 messages a tendance à
+   * redonner l'intégralité à la fin ; sans ce nettoyage, la personne relit tout en
+   * double APRÈS l'avoir lu. On retire donc les LIGNES dont la forme comparable est
+   * celle d'un message déjà envoyé (ou d'une ligne d'un message déjà envoyé) — rien
+   * d'autre : une ligne nouvelle est publiée VERBATIM.
+   *
+   * ⚠️ Comparaison NORMALISÉE (casse, accents, ponctuation) comme `retirerAck` :
+   * « 3 » et « 3. » sont le MÊME message pour qui lit. ⚠️ Reste vide ⇒ chaîne vide :
+   * l'appelant ne publie AUCUNE réponse finale (rien à ajouter, ou tout a été dit).
+   */
+  retirerMessagesEnvoyes(texte: string): string {
+    if (this.messagesEnvoyes.length === 0) return texte;
+    const deja = new Set<string>();
+    for (const envoyee of this.messagesEnvoyes) {
+      for (const ligne of envoyee.split(/\r?\n/u)) {
+        const forme = normaliserPourAccuse(ligne);
+        if (forme !== "") deja.add(forme);
+      }
+    }
+    if (deja.size === 0) return texte;
+    const gardees = texte
+      .split(/\r?\n/u)
+      .filter((ligne) => {
+        if (ligne.trim() === "") return true;
+        return !deja.has(normaliserPourAccuse(ligne));
+      });
+    return gardees.join("\n").replace(/\n{3,}/gu, "\n\n").trim();
   }
 
   /** Fichiers à joindre à la réponse finale : ceux qui ne sont PAS déjà partis. */

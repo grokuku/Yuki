@@ -39,6 +39,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { MattermostChatAdapter } from "../../src/chat/mattermost/adapter.js";
 import { createRemoteReplyGenerator, CHAT_REPLY_SYSTEM_PROMPT } from "../../src/chat/index.js";
 import { createChannelPostPort } from "../../src/chat/index.js";
+import { createReplyMessagePort } from "../../src/chat/index.js";
 import { conversationIdOfChannel } from "../../src/chat/mirror/ingest.js";
 import { ChatMirrorStore } from "../../src/chat/mirror/store.js";
 import type { ComfyImageView, GeneratedImage } from "../../src/comfy/index.js";
@@ -351,7 +352,7 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
       // ⚠️ Le nom dépend de la PLATEFORME DU RUN : ici un canal Mattermost.
       botName: () => "Yuki",
       // ② LA POLITIQUE : recalculée comme en production, pour l'origine Mattermost.
-      runTools: (conversationId, onFileProduced) =>
+      runTools: (conversationId, onFileProduced, contexte) =>
         createRemoteRunTools({
           conversationId,
           chatMode: "mattermost",
@@ -409,6 +410,18 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
           // outil que le run ne construit pas, et la parité testée plus bas serait
           // fausse pour une raison de câblage de test, pas de politique.
           filesSend: depot.service,
+          // ⚠️ ENVOI DE MESSAGE (`envoyer_message`, lot 27) : même raison que
+          // `publier_dans_canal` ci-dessus — la politique le donne toujours au run
+          // (groupe `toujours`), donc ce mini-câblage doit fournir son PORT, sinon la
+          // parité politique ↔ définitions serait fausse pour une raison de test.
+          ...(contexte.publierMessage !== undefined
+            ? {
+                messages: createReplyMessagePort({
+                  plateforme: "mattermost",
+                  publier: contexte.publierMessage,
+                }),
+              }
+            : {}),
           onFileProduced,
           logger,
         }),

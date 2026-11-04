@@ -110,6 +110,14 @@
   display: none;
 }
 
+/* ⚠️ Lot 26 — visibilité SILENCIEUSE : les réglages de destination, de tour et de
+   notification sont MASQUÉS (`hidden`) quand le contenu ne doit apparaître nulle
+   part. Cette règle est INDISPENSABLE : le `[hidden]` du navigateur perd contre
+   `display: flex` (`.config-label` ci-dessous). */
+.source-form [hidden] {
+  display: none;
+}
+
 .config-label {
   display: flex;
   align-items: center;
@@ -1465,4 +1473,213 @@
 
 .chat-panel__channel-name {
   font-weight: 600;
+}
+
+/* ─── Page de gestion des DÉCLENCHEURS (lot 26, lot 3) ───────────────────────
+ * Onglet `/config#declencheurs` : trois sections (permanents / temporaires / en
+ * sommeil), colonnes dont « dernier passage », 4ᵉ volet journal replié.
+ * Aucun style inline : tout est ici (CSP `style-src 'self'`). */
+.declencheurs-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.declencheurs-section__title {
+  font-size: 15px;
+}
+
+/* Un temporaire éteint garde 7 jours : la section le dit visuellement sans
+   couleur d'alerte (il n'y a pas de faute, seulement un déclencheur éteint). */
+.declencheurs-section--sommeil .declencheurs-section__title,
+.declencheurs-section--temporaires .declencheurs-section__title {
+  color: var(--muted);
+}
+
+.declencheurs-vide {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.declencheurs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.declencheurs-table th,
+.declencheurs-table td {
+  padding: 7px 9px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.declencheurs-table thead th {
+  border-top: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.declencheurs-nom {
+  display: block;
+  font-weight: 600;
+}
+
+/* Note de la première colonne : visibilité + destination (aucune colonne de plus). */
+.declencheurs-nom__note {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ⚠️ La colonne critique : sans elle, une source muette depuis trois jours est
+   indistinguable d'une source qui travaille. */
+.declencheurs-dernier-passage {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.declencheurs-quand,
+.declencheurs-resultat,
+.declencheurs-etat {
+  max-width: 320px;
+}
+
+.declencheurs-resultat__texte {
+  display: block;
+}
+
+.declencheurs-resultat__lien {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+.declencheurs-tours,
+.declencheurs-jetons {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.declencheurs-preauth {
+  color: var(--muted);
+}
+
+/* ④ Le journal : replié par défaut (`<details>`), borné, filtrable. */
+.declencheurs-journal__summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.declencheurs-journal__filtres {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.declencheurs-journal__items {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.declencheurs-journal__item {
+  line-height: 1.45;
+}
+
+.declencheurs-journal__resume {
+  display: block;
+  font-variant-numeric: tabular-nums;
+}
+
+.declencheurs-journal__texte {
+  display: block;
+  margin-top: 2px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.declencheurs-journal__tronque {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.declencheurs-journal__item--echec .declencheurs-journal__resume,
+.declencheurs-journal__item--echec .declencheurs-journal__texte {
+  color: var(--danger, #d9534f);
+}
+
+/* ── PRÉ-AUTORISATIONS (lot 26, lot 4/4) ─────────────────────────────────────
+   ⚠️ C'est un réglage de SÉCURITÉ : la phrase de risque doit être impossible à
+   manquer (bordure + fond d'alerte), et l'état d'une autorisation doit se lire
+   d'un coup d'œil (consommée / expirée / révoquée). */
+.preauth-section {
+  margin-top: 16px;
+}
+
+.preauth-risque {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--danger, #d9534f);
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.preauth-personnel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.preauth-table {
+  margin-top: 10px;
+}
+
+.preauth-table td {
+  vertical-align: top;
+}
+
+.preauth-row--active th,
+.preauth-row--active td {
+  font-weight: 600;
+}
+
+.preauth-row--consommee,
+.preauth-row--expiree,
+.preauth-row--revoquee {
+  color: var(--muted);
+}
+
+/* Case à cocher « destructeur » : la ligne entière est cliquable. */
+.config-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.config-check input[type="checkbox"] {
+  margin-top: 2px;
 }

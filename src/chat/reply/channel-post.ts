@@ -116,6 +116,41 @@ export function normaliserNomCanal(value: string): string {
 }
 
 /**
+ * Coupe `texte` aux BORNES de la plateforme — troncature TOUJOURS dite.
+ *
+ * ⚠️ Fonction PARTAGÉE, et c'est le point : `publier_dans_canal` (autre canal) et
+ * `envoyer_message` (conversation courante) appliquent les MÊMES bornes, avec la
+ * même mention de troncature. Deux implémentations divergeraient au premier
+ * changement de limite, et le modèle croirait selon l'outil avoir tout publié.
+ *
+ * ⚠️ Bornes RÉUTILISÉES, jamais réécrites : `fitMattermostContent`
+ * (`src/chat/mattermost/adapter.ts`) et `fitDiscordContent`
+ * (`src/chat/discord/adapter.ts`).
+ */
+export function couperPourPlateforme(
+  plateforme: RemotePlatform,
+  texte: string,
+  maxChars?: number,
+): { texte: string; tronque: boolean; limite: number } {
+  if (plateforme === "discord") {
+    // ⚠️ Discord n'a pas de borne configurable : sa limite est un fait d'API.
+    const ajuste = fitDiscordContent(texte);
+    return {
+      texte: ajuste,
+      tronque: ajuste !== texte,
+      limite: DISCORD_MAX_CONTENT_CHARS,
+    };
+  }
+  const lue = maxChars;
+  const limite =
+    lue !== undefined && Number.isFinite(lue) && lue > 0
+      ? Math.trunc(lue)
+      : MM_DEFAULT_MAX_POST_CHARS;
+  const coupe = fitMattermostContent(texte, limite);
+  return { texte: coupe.texte, tronque: coupe.tronque, limite };
+}
+
+/**
  * Résout un canal par NOM ou par IDENTIFIANT.
  *
  * Règles, dans cet ordre : identifiant exact → nom exact → UN SEUL nom qui contient la
@@ -170,12 +205,6 @@ export function createChannelPostPort(options: ChannelPostPortOptions): ChannelP
   const canaux = (): ChannelPostChannel[] =>
     options.canaux().filter((canal) => canal.plateforme === options.plateforme);
 
-  const borne = (plateforme: RemotePlatform): number => {
-    const lue = options.maxChars?.(plateforme);
-    if (lue !== undefined && Number.isFinite(lue) && lue > 0) return Math.trunc(lue);
-    return plateforme === "discord" ? DISCORD_MAX_CONTENT_CHARS : MM_DEFAULT_MAX_POST_CHARS;
-  };
-
   return {
     canaux,
     publier: async ({ canal, texte, filDe, fichierIds }): Promise<ChannelPostOutcome> => {
@@ -215,14 +244,12 @@ export function createChannelPostPort(options: ChannelPostPortOptions): ChannelP
 
       // ⚠️ Borne appliquée AVANT l'appel : la plateforme refuserait le message entier
       // (`400`/`2000` caractères), donc la publication complète serait perdue.
-      const limite = borne(options.plateforme);
-      const coupe =
-        options.plateforme === "discord"
-          ? (() => {
-              const ajuste = fitDiscordContent(texte);
-              return { texte: ajuste, tronque: ajuste !== texte };
-            })()
-          : fitMattermostContent(texte, limite);
+      const coupe = couperPourPlateforme(
+        options.plateforme,
+        texte,
+        options.maxChars?.(options.plateforme),
+      );
+      const limite = coupe.limite;
 
       // ⚠️ BORNES FICHIERS, AVANT tout appel réseau : un binaire ne se tronque pas,
       // donc un dépassement est un REFUS explicite (jamais un envoi partiel).

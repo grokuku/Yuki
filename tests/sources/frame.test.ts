@@ -15,6 +15,7 @@ import { EXCLUDED_FRAME_TAGS, sanitizeMemoryText } from "../../src/memory/filter
 import {
   ORIGIN_SOURCE,
   SOURCES_REMINDER,
+  SOURCES_SILENCE_REMINDER,
   SOURCES_TAG,
   frameSources,
   stripSourcesBlock,
@@ -170,5 +171,34 @@ describe("stripSourcesBlock — retrait du bloc (transcript, archive, mémoire)"
   it("ne touche PAS un texte qui commence par `<sources>` sans le bloc complet", () => {
     const text = "<sources> sans fermeture";
     expect(stripSourcesBlock(text)).toBe(text);
+  });
+});
+
+describe("déclencheur SILENCIEUX — rappel « réponds exactement RIEN » (lot 26)", () => {
+  it("ajoute le rappel de silence APRÈS le rappel de sécurité (option `silence`)", () => {
+    const block = frameSources(
+      [{ nom: "veille", recu: "2026-11-04T06:00:00.000Z", texte: "trois articles" }],
+      { promptTotalChars: 4_000, silence: true },
+    ) as string;
+    expect(block).toContain(SOURCES_REMINDER);
+    expect(block).toContain(SOURCES_SILENCE_REMINDER);
+    expect(block).toContain("RIEN");
+    // Un déclencheur VISIBLE n'a pas ce rappel : aucune réponse imposée.
+    const visible = frameSources(
+      [{ nom: "veille", recu: "2026-11-04T06:00:00.000Z", texte: "trois articles" }],
+      { promptTotalChars: 4_000 },
+    ) as string;
+    expect(visible).not.toContain(SOURCES_SILENCE_REMINDER);
+  });
+
+  it("le bloc silencieux se retire ENTIÈREMENT (transcript, archive, mémoire)", () => {
+    const block = frameSources(
+      [{ nom: "veille", recu: "2026-11-04T06:00:00.000Z", texte: "trois articles" }],
+      { promptTotalChars: 4_000, silence: true },
+    ) as string;
+    const message = "[2026-11-04 08:00] Tu as du nouveau ?";
+    expect(stripSourcesBlock(`${block}\n\n${message}`)).toBe(message);
+    // Aucun rappel ne survit : rien ne doit entrer en mémoire.
+    expect(sanitizeMemoryText(block)).toBe("");
   });
 });

@@ -130,6 +130,20 @@ export type ChannelPostToolName = "publier_dans_canal";
 export type FilesToolName = "envoyer_fichier";
 
 /**
+ * Outil custom d'ENVOI DE MESSAGE dans la conversation COURANTE (`envoyer_message`).
+ *
+ * ⚠️ RÉPONSE EN PLUSIEURS MESSAGES (demande utilisateur du 2026-11-04 : « PI jusqu'à
+ * la 20ᵉ décimale, une décimale par message ») : chaque appel publie un message
+ * PENDANT le tour, sans minuteur ni second tour. Il ne touche à aucune machine — il
+ * ne demande donc AUCUNE approbation et ne dépend d'aucun réglage d'accès distant.
+ *
+ * ⚠️ Contrairement à `publier_dans_canal` (capacité des RUNS DE CANAL), celui-ci est
+ * aussi un outil du LÉGER LOCAL : le fil « Déclencheurs » est une session locale
+ * (`src/sources/service.ts`), et une réponse étalée y serait sinon impossible.
+ */
+export type MessageToolName = "envoyer_message";
+
+/**
  * Outils custom de TRANSFERT DE FICHIERS vers/depuis une machine appairée
  * (capacité `files`). `recuperer_fichier` fait LIRE un fichier distant et le
  * dépose sur le DISQUE de Yuki ; `deposer_fichier` envoie un fichier de Yuki sur
@@ -170,6 +184,7 @@ export type CustomToolName =
   | LibrarianToolName
   | FilesToolName
   | ChannelPostToolName
+  | MessageToolName
   | FileTransferToolName
   | FileListToolName
   | FileReadToolName
@@ -201,6 +216,8 @@ export interface ToolPolicyEntry {
   readonly librarianCapture: readonly LibrarianToolName[];
   /** Outils d'ENVOI de fichier par Yuki (`envoyer_fichier`). */
   readonly files: readonly FilesToolName[];
+  /** Outil d'ENVOI DE MESSAGE dans la conversation courante (`envoyer_message`). */
+  readonly messages: readonly MessageToolName[];
   /** Outils de TRANSFERT de fichiers vers/depuis une machine (`files`). */
   readonly fileTransfer: readonly FileTransferToolName[];
   // ⚠️ AUCUNE CATÉGORIE DE PUBLICATION INTER-CANAL, À DESSEIN : dans un canal il n'y a
@@ -339,6 +356,16 @@ export const LIBRARIAN_CAPTURE_TOOLS: readonly LibrarianToolName[] = [
 export const FILES_TOOLS: readonly FilesToolName[] = ["envoyer_fichier"];
 
 /**
+ * Outil d'ENVOI DE MESSAGE (`envoyer_message`).
+ *
+ * ⚠️ Publié dans la conversation COURANTE, par le chemin de publication ordinaire
+ * (`ReplyProgress` en canal, `PiHost.publierMessage` en local) : aucun second chemin.
+ * ⚠️ Le LOURD ne l'a pas (`TOOL_POLICY.heavy.messages`) : la publication d'un message
+ * est celle de Yuki, et l'invariant « un seul rédacteur » reste intact.
+ */
+export const MESSAGE_TOOLS: readonly MessageToolName[] = ["envoyer_message"];
+
+/**
  * Outils de TRANSFERT de fichiers (capacité `files`). Exposés quand le service
  * de transfert existe et que l'exécution n'est pas désactivée. ⚠️ Le lourd les
  * porte ; le léger, non (il converse, il n'agit pas sur une machine).
@@ -382,6 +409,11 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // Fichiers : Yuki peut RENVOYER un fichier de la conversation (le lourd
     // n'écrit qu'à l'utilisateur : il n'envoie pas de fichier).
     files: FILES_TOOLS,
+    // ⚠️ ENVOI DE MESSAGE (`envoyer_message`) : le léger PORTE la publication, en local
+    // comme en canal. C'est lui qui converse, donc lui qui décide de dire une chose en
+    // un message ou en vingt. Le LOURD ne l'a pas (`messages: []` ci-dessous) :
+    // invariant « un seul rédacteur » (`docs/lot18-chat.md`).
+    messages: MESSAGE_TOOLS,
     // ⚠️ Le LÉGER ne transfère PAS de fichiers depuis/vers une machine : il
     // délègue au worker lourd.
     fileTransfer: [],
@@ -423,6 +455,7 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     librarian: [],
     librarianCapture: [],
     files: [],
+    messages: [],
     // ⚠️ Le worker lourd TRANFÈRE les fichiers : c'est lui qui agit sur une
     // machine. Mêmes garde-fous par agent que `run_command`.
     fileTransfer: FILE_TRANSFER_TOOLS,
@@ -431,6 +464,9 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // ⚠️ Le worker lourd LIT le contenu : sans `lire_fichier`, il savait qu'une image
     // existait sans pouvoir la voir (l'utilisateur restait dans la boucle).
     fileRead: FILE_READ_TOOLS,
+    // ⚠️ AUCUN OUTIL DE PUBLICATION DE MESSAGE au worker lourd : il AGIT sur une
+    // machine, il ne parle pas dans la conversation. Son résultat revient par le
+    // rapport du job (`HeavyRunResult`), et c'est le tour de Yuki qui le publie.
     // ⚠️ IMAGES : le lourd PORTE la génération (lot 23).
     //
     // Pourquoi pas le léger ? Une génération prend jusqu'à `images.timeoutMs`
@@ -532,6 +568,12 @@ export interface ToolAllowlistOptions {
    */
   fileReadEnabled?: boolean;
   /**
+   * Active l'outil d'ENVOI DE MESSAGE `envoyer_message`. DÉSACTIVÉ par défaut : seul
+   * le câblage l'active (le host local et les runs de canal le portent toujours ; un
+   * worker lourd ne peut pas l'obtenir).
+   */
+  messagesEnabled?: boolean;
+  /**
    * Active l'outil de génération d'image `generer_image` (serveur ComfyUI).
    * DÉSACTIVÉ par défaut : seul le câblage l'active, quand le générateur existe.
    */
@@ -566,6 +608,7 @@ export function toolAllowlist(
     (options.librarianCaptureEnabled ?? false) &&
     entry.librarianCapture.length > 0;
   const filesEnabled = (options.filesEnabled ?? false) && entry.files.length > 0;
+  const messagesEnabled = (options.messagesEnabled ?? false) && entry.messages.length > 0;
   const fileTransferEnabled =
     (options.fileTransferEnabled ?? false) && entry.fileTransfer.length > 0;
   const fileListEnabled =
@@ -606,6 +649,9 @@ export function toolAllowlist(
   }
   if (filesEnabled) {
     tools.push(...entry.files);
+  }
+  if (messagesEnabled) {
+    tools.push(...entry.messages);
   }
   if (fileTransferEnabled) {
     tools.push(...entry.fileTransfer);
@@ -682,6 +728,10 @@ export type RemoteToolGroup = "agents" | "outils" | "toujours" | "jamais";
  * ⚠️ `publier_dans_canal` est dans `toujours` : un MESSAGE, pas une action sur
  * une machine (décision A, 2026-11-02). Le périmètre (canaux SUIVIS, même
  * plateforme) est tenu par le PORT, jamais par l'allowlist.
+ *
+ * ⚠️ `envoyer_message` est dans `toujours` pour la même raison (un message dans la
+ * conversation COURANTE) : il ne sort pas du fil où Yuki répond, donc aucun réglage
+ * d'accès distant n'a de sens pour lui.
  */
 export const REMOTE_TOOL_GROUP_OF: Readonly<Record<CustomToolName, RemoteToolGroup>> = {
   // ── groupe AGENTS (`chat.remoteAgents`) ────────────────────────────────
@@ -707,6 +757,7 @@ export const REMOTE_TOOL_GROUP_OF: Readonly<Record<CustomToolName, RemoteToolGro
   lister_fichiers: "toujours",
   lire_fichier: "toujours",
   publier_dans_canal: "toujours",
+  envoyer_message: "toujours",
   envoyer_fichier: "toujours",
   // ── groupe JAMAIS (approbation impossible depuis un canal) ────────────
   run_command: "jamais",

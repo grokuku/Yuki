@@ -238,6 +238,23 @@ describe("outils d'action du worker lourd — rattachement de la validation", ()
     expect(calls[0]?.sessionId).toBe(CONVERSATION);
   });
 
+  it("PROPAGE l'ORIGINE de la tâche de fond jusqu'au service d'exécution", async () => {
+    // ⚠️ LOT 4/4 : sans ce NOM, le garde-fou ne saurait pas QUELLE
+    // pré-autorisation s'applique — une tâche de fond ne pourrait jamais agir.
+    const { service, calls } = stubExecution();
+    const tools = buildHeavyActionTools({ execution: service }, CONVERSATION, undefined, undefined, "declencheur:veille");
+    const runCommand = tools.find((tool) => tool.name === "run_command") as unknown as AnyTool;
+    await invoke(runCommand, { agent_id: "nuc00", command: "df -h" }, ephemeralCtx);
+    expect(calls[0]?.origin).toBe("declencheur:veille");
+
+    // Un tour HUMAIN garde le nom de l'outil : la porte des pré-autorisations
+    // reste fermée (l'origine n'est pas « declencheur »).
+    const humain = buildHeavyActionTools({ execution: service }, CONVERSATION);
+    const runHumain = humain.find((tool) => tool.name === "run_command") as unknown as AnyTool;
+    await invoke(runHumain, { agent_id: "nuc00", command: "df -h" }, ephemeralCtx);
+    expect(calls[1]?.origin).toBe("run_command");
+  });
+
   it("DÉTECTION DE L'ANCIEN COMPORTEMENT : sans ID forcé, l'outil prend l'ID du contexte (éphémère)", async () => {
     const { service, calls } = stubExecution();
     // C'est EXACTEMENT ce que faisait l'ancien câblage (contexte seul) : le

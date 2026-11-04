@@ -102,6 +102,63 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * ⚠️ LOT 26 (moteur horloge) — un job né d'un DÉCLENCHEUR PLANIFIÉ ne réveille
+ * PAS le léger : son résultat part par le port `declencheurs`, qui publie dans le
+ * fil local « Déclencheurs » (ou se tait, ou éteint le déclencheur).
+ *
+ * ⚠️ Échoue sur le code d'origine : `setDeclencheurs` et la bifurcation par
+ * `origin === "declencheur"` n'existent pas (le rapport réveillerait le léger).
+ */
+describe("delegation — résultat d'un DÉCLENCHEUR publié sans tour de conversation", () => {
+  it("un job `declencheur` ne réveille PAS le léger et part au port des déclencheurs", async () => {
+    const h = makeHarness();
+    const recus: Array<{ id: string; status: string; text?: string }> = [];
+    h.service.setDeclencheurs({
+      recevoirResultat: (record) => {
+        recus.push({
+          id: record.id,
+          status: record.status,
+          ...(record.result.text !== undefined ? { text: record.result.text } : {}),
+        });
+      },
+    });
+    h.worker.push({ autoMs: 5, result: { status: "completed", text: "disque à 96 %" } });
+    const outcome = await h.service.delegate({
+      task: "surveille le disque",
+      lightSessionId: "session-declencheurs",
+      origin: "declencheur",
+    });
+    expect(outcome.status).toBe("dispatched");
+    await wait(20);
+    h.flush();
+
+    // ⚠️ AUCUN réveil du léger : personne n'a besoin d'un tour de conversation.
+    expect(h.reports).toEqual([]);
+    // Le RÉSULTAT est arrivé au port des déclencheurs.
+    expect(recus).toHaveLength(1);
+    expect(recus[0]?.status).toBe("completed");
+    expect(recus[0]?.text).toContain("disque à 96 %");
+  });
+
+  it("les jobs d'origine UTILISATEUR continuent de réveiller le léger (aucune régression)", async () => {
+    const h = makeHarness();
+    const recus: string[] = [];
+    h.service.setDeclencheurs({
+      recevoirResultat: (record) => {
+        recus.push(record.id);
+      },
+    });
+    h.worker.push({ autoMs: 5, result: { status: "completed", text: "fait" } });
+    await h.service.delegate({ task: "tâche", lightSessionId: "sess-1" });
+    await wait(20);
+    h.flush();
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]?.text).toContain("fait");
+    expect(recus).toEqual([]);
+  });
+});
+
 describe("delegation — E4 : non bloquant par défaut (ticket immédiat)", () => {
   it("sans `background` : rend la main IMMÉDIATEMENT avec un ticket de LANCEMENT", async () => {
     const h = makeHarness();

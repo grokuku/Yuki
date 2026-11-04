@@ -165,7 +165,7 @@ const WORK_SESSION = workSession.sessionId;
 /** Sources de démonstration (jetons stables pour le scénario). */
 function declare(
   nom: string,
-  settings: { tour: "lancer" | "stocker"; conversation: string; consigne: string },
+  settings: { tour: "lancer" | "stocker"; destination: string; consigne: string },
 ): void {
   if (!sourcesStore.has(nom)) {
     sourcesStore.create(nom, settings);
@@ -175,14 +175,16 @@ function declare(
 // `veille` : destination DÉSIGNÉE explicitement (⚠️ le programme extérieur, lui,
 // n'envoie que `lancer` — c'est la CONFIGURATION qui porte le fil).
 declare("veille", {
+  visibilite: "visible",
   tour: "lancer",
-  conversation: WORK_SESSION,
+  destination: WORK_SESSION,
   consigne: "si rien d'anormal, ne dis rien",
 });
 // `mail` : aucune destination (elle stocke) — elle sert à la boîte et au compteur.
 declare("mail", {
+  visibilite: "visible",
   tour: "stocker",
-  conversation: "aucune",
+  destination: "aucune",
   consigne: "préviens-moi seulement si le message est urgent",
 });
 
@@ -237,11 +239,12 @@ const server = createHttpServer((req, res) => {
         workSession: WORK_SESSION,
         sources: sourcesStore.list().map((record) => ({
           nom: record.nom,
-          conversation: record.conversation,
+          visibilite: record.visibilite,
+          destination: record.destination,
           sessionId: record.sessionId ?? null,
         })),
         entries: sourcesInbox.size,
-        nonLus: sourcesInbox.unreadCount(),
+        nonLus: sourcesInbox.alertCount(),
         inbox: sourcesInbox.list().map((entry) => ({
           id: entry.id,
           source: entry.source,

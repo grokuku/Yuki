@@ -46,6 +46,25 @@ export interface PiHost {
   /** Interrompt le run en vol (ou un run précis) et vide la file. Idempotent. */
   abort(sessionId: string, runId?: string): Promise<void>;
 
+  /**
+   * ⚠️ LOT 26 — PUBLIE un message ASSISTANT dans une conversation LOCALE **sans
+   * tour de modèle** (aucune génération, aucun prompt).
+   *
+   * Usage : le résultat d'une tâche de fond née d'un DÉCLENCHEUR PLANIFIÉ. Le
+   * worker lourd a déjà produit le texte ; le faire passer par un tour du léger
+   * serait un détour (et un second rédacteur inutile).
+   *
+   * Ce que fait la méthode : le message est PERSISTÉ dans le JSONL de la session
+   * (`appendMessage`), versé au transcript et ANNONCÉ par les trames habituelles
+   * (`run_started` → `delta` → `run_finished`), donc affiché comme une réponse
+   * normale — rechargement compris. Le texte est publié TEL QUEL (déjà filtré par
+   * l'appelant : marqueur `DÉSACTIVER` retiré).
+   *
+   * ⚠️ Optionnel pour rester rétro-compatible avec les doubles de test : sans
+   * lui, un résultat de déclencheur ne peut pas être publié (l'appelant le DIT).
+   */
+  publierMessage?(sessionId: string, texte: string): Promise<void>;
+
   /** S'abonne aux événements d'une session. Renvoie la fonction de désabonnement. */
   subscribe(sessionId: string, listener: PiEventListener): () => void;
   /** S'abonne à tous les événements, toutes sessions confondues (transport). */

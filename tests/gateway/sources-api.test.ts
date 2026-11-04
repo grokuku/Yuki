@@ -35,6 +35,7 @@ import { handleSourcesRequest, isSourcesPath } from "../../src/gateway/routes/so
 import type { GpuReport } from "../../src/types/gpu.js";
 import type { Env } from "../../src/config/env.js";
 import { SourcesInbox } from "../../src/sources/inbox.js";
+import { DeclencheurJournal } from "../../src/sources/journal.js";
 import { SourcesService, type SourcesHostEvent, type SourcesWaker } from "../../src/sources/service.js";
 import { SourcesStore } from "../../src/sources/store.js";
 import { sourceTokenName } from "../../src/sources/types.js";
@@ -261,7 +262,7 @@ describe("API sources — authentification et erreurs", () => {
 
   it("202 {started} pour un message `lancer` en conversation courante", async () => {
     const { service, store, waker } = makeRig();
-    store.update("news", { tour: "lancer", conversation: "courante" });
+    store.update("news", { tour: "lancer", destination: "courante" });
     const response = await request(service, {
       method: "POST",
       path: "/api/sources/news/messages",
@@ -275,7 +276,7 @@ describe("API sources — authentification et erreurs", () => {
 
   it("202 {stored, raison} quand le modèle est indisponible (LLM_UNAVAILABLE)", async () => {
     const { service, store, waker } = makeRig();
-    store.update("news", { tour: "lancer", conversation: "courante" });
+    store.update("news", { tour: "lancer", destination: "courante" });
     (waker as unknown as { send: () => never }).send = () => {
       throw Object.assign(new Error("pas de modèle"), { code: "LLM_UNAVAILABLE" });
     };
@@ -293,7 +294,7 @@ describe("API sources — authentification et erreurs", () => {
 
   it("200 + duplicate:true au renvoi du même (source, id), sans second tour", async () => {
     const { service, store, waker } = makeRig();
-    store.update("news", { tour: "lancer", conversation: "courante" });
+    store.update("news", { tour: "lancer", destination: "courante" });
     const headers = { "content-type": "application/json", authorization: "Bearer jeton-news" };
     const first = await request(service, {
       method: "POST",
@@ -392,8 +393,18 @@ describe("API sources — administration (mêmes gardes que /api/config)", () =>
     expect(created.status).toBe(201);
     // ⚠️ Une source NEUVE n'a AUCUNE destination (`aucune`) : elle ne démarre rien
     // tant que l'utilisateur n'a pas choisi un fil dans `/config`.
+    // ⚠️ v2 : sans `visibilite` explicite et sans réglage du modèle v1, la source
+    // est SILENCIEUSE (et ne notifie donc jamais).
     expect(created.body).toMatchObject({
-      source: { nom: "veille", tour: "stocker", conversation: "aucune", notifier: true },
+      source: {
+        nom: "veille",
+        visibilite: "silencieux",
+        declencheur: { type: "webhook" },
+        tour: "stocker",
+        destination: "aucune",
+        notifier: false,
+        preAutorisations: [],
+      },
     });
   });
 
@@ -509,7 +520,8 @@ describe("API sources — boîte « Notifications »", () => {
     });
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
-      nonLus: 1,
+      // ⚠️ `nonLus` ne compte QUE les échecs et alertes : une réception vaut 0.
+      nonLus: 0,
       limite: 200,
       entries: [{ source: "news", titre: "Matin", etat: "recu", lu: false }],
     });
@@ -567,5 +579,218 @@ describe("API sources — boîte « Notifications »", () => {
     expect(waker.sends).toHaveLength(2);
     expect(waker.sends[0].sessionId).toBe("session-creee");
     expect(waker.sends[1].sessionId).toBe("session-creee");
+  });
+});
+
+const GUARD_V2 = { "x-yuki-config": "1", "content-type": "application/json" };
+
+describe("API sources — modèle v2 (visibilité) et journal des déclencheurs", () => {
+  it("PATCH `visibilite` bascule la sortie et force notifier=false en silencieux", async () => {
+    const { service } = makeRig();
+    const silent = await request(service, {
+      method: "PATCH",
+      path: "/api/sources/news",
+      headers: GUARD_V2,
+      body: JSON.stringify({ visibilite: "silencieux", notifier: true }),
+    });
+    expect(silent.status).toBe(200);
+    expect(silent.body).toMatchObject({ source: { visibilite: "silencieux", notifier: false } });
+
+    const visible = await request(service, {
+      method: "PATCH",
+      path: "/api/sources/news",
+      headers: GUARD_V2,
+      body: JSON.stringify({ visibilite: "visible", notifier: true }),
+    });
+    expect(visible.status).toBe(200);
+    expect(visible.body).toMatchObject({ source: { visibilite: "visible", notifier: true } });
+  });
+
+  it("refuse une visibilité inconnue (400 explicite, aucun repli muet)", async () => {
+    const { service } = makeRig();
+    const response = await request(service, {
+      method: "PATCH",
+      path: "/api/sources/news",
+      headers: GUARD_V2,
+      body: JSON.stringify({ visibilite: "peut-etre" }),
+    });
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ code: "invalid_visibilite" });
+  });
+
+  it("accepte encore `conversation` comme ALIAS de `destination` (programmes du lot 17)", async () => {
+    const { service } = makeRig();
+    const response = await request(service, {
+      method: "PATCH",
+      path: "/api/sources/news",
+      headers: GUARD_V2,
+      body: JSON.stringify({ conversation: "nouvelle" }),
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ source: { destination: "nouvelle" } });
+  });
+
+  it("GET /api/sources/journal est GARDÉ et rend les événements (jamais en conversation)", async () => {
+    const { dir, service } = makeRig();
+    const journalPath = join(dir, "declencheurs-journal.jsonl");
+    const journal = DeclencheurJournal.open({ path: journalPath });
+    journal.append({ event: "recu", source: "news", texte: "contenu reçu", octets: 12 });
+    journal.append({ event: "silence", source: "news" });
+
+    const anonymous = await handleSourcesRequest({
+      method: "GET",
+      path: "/api/sources/journal",
+      headers: {},
+      body: "",
+      deps: { service, logger },
+    });
+    expect(anonymous.status).toBe(403);
+
+    const response = await handleSourcesRequest({
+      method: "GET",
+      path: "/api/sources/journal?limite=5",
+      headers: { "x-yuki-config": "1" },
+      body: "",
+      deps: { service, logger, journal },
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ limite: 5 });
+    const evenements = (response.body as { evenements: Array<{ event: string }> }).evenements;
+    // Les plus récents d'abord.
+    expect(evenements.map((event) => event.event)).toEqual(["silence", "recu"]);
+  });
+});
+
+/**
+ * MOTEUR HORLOGE (lot 26, lot 2) — création d'un déclencheur `planning` et
+ * APERÇU du prochain passage.
+ *
+ * ⚠️ Ces tests ÉCHOUENT sur le code d'origine : `declencheur.type = "planning"`
+ * n'existait pas (`git show HEAD:src/sources/types.ts`) et la route
+ * `/api/sources/apercu` n'existait pas (404).
+ */
+describe("API sources — déclencheur planifié (moteur horloge)", () => {
+  const GARDE = { "x-yuki-config": "1", "content-type": "application/json" };
+
+  it("crée un déclencheur `planning` et PERSISTE son prochain passage", async () => {
+    const rig = makeRig();
+    const response = await request(rig.service, {
+      method: "POST",
+      path: "/api/sources",
+      headers: GARDE,
+      body: JSON.stringify({
+        nom: "matin",
+        declencheur: { type: "planning", expression: "0 9 * * 1-5", fuseau: "Europe/Paris" },
+      }),
+    });
+    expect(response.status).toBe(201);
+    const source = (response.body as { source: Record<string, unknown> }).source;
+    expect(source["declencheur"]).toEqual({
+      type: "planning",
+      expression: "0 9 * * 1-5",
+      fuseau: "Europe/Paris",
+    });
+    // ⚠️ Le prochain passage est calculé et PERSISTÉ (reprise après redémarrage).
+    expect(typeof source["prochainPassage"]).toBe("string");
+    expect(rig.store.get("matin")?.prochainPassage).toBe(source["prochainPassage"]);
+    expect(source["actif"]).toBe(true);
+    expect(source["plafondMs"]).toBe(10 * 60 * 1000);
+    expect(source["maxToursParJour"]).toBe(200);
+  });
+
+  it("REFUSE une expression invalide avec la raison (aucun repli silencieux)", async () => {
+    const rig = makeRig();
+    const response = await request(rig.service, {
+      method: "POST",
+      path: "/api/sources",
+      headers: GARDE,
+      body: JSON.stringify({
+        nom: "interdit",
+        declencheur: { type: "planning", expression: "0 0 L * *", fuseau: "Europe/Paris" },
+      }),
+    });
+    expect(response.status).toBe(400);
+    const body = response.body as { message?: string; code?: string };
+    expect(body.code).toBe("invalid_expression");
+    expect(body.message).toContain("« L » (dernier jour du mois) n'est pas supporté");
+    // Aucune source n'a été créée.
+    expect(rig.store.has("interdit")).toBe(false);
+  });
+
+  it("REFUSE un fuseau inconnu", async () => {
+    const rig = makeRig();
+    const response = await request(rig.service, {
+      method: "POST",
+      path: "/api/sources",
+      headers: GARDE,
+      body: JSON.stringify({
+        nom: "fuseau",
+        declencheur: { type: "planning", expression: "0 9 * * *", fuseau: "Mars/Olympus" },
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect((response.body as { code?: string }).code).toBe("invalid_fuseau");
+  });
+
+  it("l'APERÇU rend les prochains passages, et la raison d'une expression impossible", async () => {
+    const rig = makeRig();
+    const garde = await request(rig.service, {
+      method: "GET",
+      path: "/api/sources/apercu?expression=0+9+*+*+*&fuseau=Europe/Paris",
+      headers: {},
+    });
+    // ⚠️ Lecture GARDÉE : l'aperçu révèle une expression de déclencheur.
+    expect(garde.status).toBe(403);
+
+    const ok = await request(rig.service, {
+      method: "GET",
+      path: `/api/sources/apercu?expression=${encodeURIComponent("0 9 * * *")}&fuseau=Europe/Paris&combien=2&depuis=2026-06-01T00:00:00Z`,
+      headers: { "x-yuki-config": "1" },
+    });
+    expect(ok.status).toBe(200);
+    const body = ok.body as { passages: string[]; fuseau: string; raison?: string };
+    expect(body.fuseau).toBe("Europe/Paris");
+    expect(body.passages).toEqual([
+      "2026-06-01T07:00:00.000Z",
+      "2026-06-02T07:00:00.000Z",
+    ]);
+
+    const impossible = await request(rig.service, {
+      method: "GET",
+      path: `/api/sources/apercu?expression=${encodeURIComponent("0 0 31 2 *")}&fuseau=Europe/Paris`,
+      headers: { "x-yuki-config": "1" },
+    });
+    expect(impossible.status).toBe(200);
+    const ko = impossible.body as { passages: string[]; raison?: string; code?: string };
+    expect(ko.passages).toEqual([]);
+    expect(ko.code).toBe("aucune_occurrence");
+    expect(ko.raison).toContain("Aucune occurrence");
+  });
+
+  it("PATCH accepte `actif`, `chevauchement`, `rattrapage` et le plafond borné", async () => {
+    const rig = makeRig();
+    rig.store.create("planifie", {
+      declencheur: { type: "planning", expression: "0 9 * * *", fuseau: "Europe/Paris" },
+    } as never);
+    const response = await request(rig.service, {
+      method: "PATCH",
+      path: "/api/sources/planifie",
+      headers: GARDE,
+      body: JSON.stringify({
+        chevauchement: "remplacer",
+        rattrapage: "sauter",
+        plafondMs: 900_000,
+        maxToursParJour: 12,
+        actif: false,
+      }),
+    });
+    expect(response.status).toBe(200);
+    const source = (response.body as { source: Record<string, unknown> }).source;
+    expect(source["chevauchement"]).toBe("remplacer");
+    expect(source["rattrapage"]).toBe("sauter");
+    expect(source["plafondMs"]).toBe(900_000);
+    expect(source["maxToursParJour"]).toBe(12);
+    expect(source["actif"]).toBe(false);
+    expect(source["etat"]).toBe("suspendu");
   });
 });

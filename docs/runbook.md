@@ -1020,3 +1020,35 @@ Garde-fous (inchangés) : chemin **relatif refusé**, agent **hors ligne** refus
 `run_command` + `scp`/`rsync`), écriture **atomique** côté machine (`.part` +
 renommage) avec empreinte SHA-256 vérifiée, et **aucun écrasement silencieux**.
 
+
+## 14. Déclencheurs et pré-autorisations (tâches de fond)
+
+Une tâche de fond née d'un **déclencheur** ne peut pas demander de validation
+humaine : personne ne lit la conversation à 3 h du matin, et l'approbation expire
+en **5 minutes** (`APPROVAL_TTL_MS`, `src/agents/approvals.ts`).
+
+- **Sans pré-autorisation** : `run_command` renvoie `awaiting_validation`, la
+  commande **n'est pas exécutée**, et le message dit qu'aucune approbation ne
+  peut arriver. Rien n'est bloqué : le tour continue.
+- **Avec pré-autorisation** (`/config` → onglet **Déclencheurs** → volet
+  « Pré-autorisations ») : la commande déclarée (exacte ou préfixe) sur la
+  machine déclarée s'exécute **sans validation**, **une seule fois**, jusqu'à
+  l'expiration (30 jours par défaut, 90 au maximum).
+
+Fichier d'état : `<state>/preautorisations.json`
+(`YUKI_PREAUTORISATIONS_PATH`). Journal des consommations et des refus :
+`<state>/declencheurs-journal.jsonl`, types `preautorisation` et `refus`.
+
+| Ce qui arrive | Ce que ça veut dire |
+| --- | --- |
+| « Pré-autorisation REFUSÉE : EXPIRÉE » | recréer l'autorisation (durée) |
+| « … ne correspond à AUCUN motif » | la commande n'est pas exactement celle déclarée (ou ne commence pas par le préfixe) |
+| « … RÉVOQUÉE » | elle a été révoquée depuis la page de gestion |
+| « … n'a aucune autorisation pour cet agent » | l'autorisation vise une AUTRE machine |
+| « … DESTRUCTRICE » | la commande est classée destructrice : cocher « autoriser les commandes destructrices » |
+| `awaiting_validation` sur une tâche de fond | aucune autorisation pour ce déclencheur (ou elle est déjà consommée) |
+
+⚠️ **Aucun joker** (`*`) n'est accepté : la portée est toujours un déclencheur,
+un agent et un motif. Révoquer une autorisation prend un clic, et **la commande
+suivante sera refusée** (pas « en attente ») si une autorisation existe pour le
+déclencheur mais ne la couvre pas.

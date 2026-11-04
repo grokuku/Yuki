@@ -243,8 +243,9 @@ describe("SourcesService — authentification par jeton de source", () => {
     expect(delivery.entree?.lu).toBe(false);
     expect(delivery.entree?.etat).toBe("recu");
     expect(delivery.entree?.titre).toBe("Matin");
-    expect(h.inbox.unreadCount()).
-toBe(1);
+    // ⚠️ Lot 26 : une RÉCEPTION ne compte plus dans la pastille (échecs et alertes
+    // seulement) — l'entrée reste non lue, mais `alertCount` = 0.
+    expect(h.inbox.alertCount()).toBe(0);
     // `stocker` ne déclenche AUCUN tour.
     expect(h.waker.sends).toEqual([]);
   });
@@ -253,7 +254,7 @@ toBe(1);
 describe("SourcesService — idempotence (source, id)", () => {
   it("un renvoi du même identifiant rend `duplicate` SANS second tour", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "courante" });
+    declare(h, "news", { tour: "lancer", destination: "courante" });
     const first = await h.push("news", { id: "m1", texte: "bonjour" });
     expect(first.outcome).toBe("started");
     expect(h.waker.sends).toHaveLength(1);
@@ -352,7 +353,7 @@ describe("SourcesService — drain GROUPÉ et réponse attachée", () => {
 describe("SourcesService — tour `lancer`", () => {
   it("démarre UN tour dans la conversation courante", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "courante" });
+    declare(h, "news", { tour: "lancer", destination: "courante" });
     const delivery = await h.push("news", { id: "m1", texte: "urgent" });
     expect(delivery.outcome).toBe("started");
     expect(delivery.raison).toBeUndefined();
@@ -364,7 +365,7 @@ describe("SourcesService — tour `lancer`", () => {
 
   it("LLM_UNAVAILABLE ⇒ l'entrée est STOCKÉE avec la raison exacte", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "courante" });
+    declare(h, "news", { tour: "lancer", destination: "courante" });
     h.waker.failWith = { code: "LLM_UNAVAILABLE" };
     const delivery = await h.push("news", { id: "m1", texte: "urgent" });
     expect(delivery.outcome).toBe("stored");
@@ -381,7 +382,7 @@ describe("SourcesService — tour `lancer`", () => {
 
   it("PI_NOT_READY ⇒ stocké aussi, avec la raison exacte", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "courante" });
+    declare(h, "news", { tour: "lancer", destination: "courante" });
     h.waker.failWith = { code: "PI_NOT_READY" };
     const delivery = await h.push("news", { id: "m1", texte: "urgent" });
     expect(delivery.outcome).toBe("stored");
@@ -393,7 +394,7 @@ describe("SourcesService — tour `lancer`", () => {
 
   it("aucune conversation ouverte ⇒ stocké avec la raison (aucun fil créé)", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "courante" });
+    declare(h, "news", { tour: "lancer", destination: "courante" });
     h.waker.setCurrent(undefined);
     const delivery = await h.push("news", { id: "m1", texte: "urgent" });
     expect(delivery.outcome).toBe("stored");
@@ -403,7 +404,7 @@ describe("SourcesService — tour `lancer`", () => {
 
   it("⚠️ `nouvelle` CRÉE un fil de source par message, VISIBLE dans la liste, et lance", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "nouvelle" });
+    declare(h, "news", { tour: "lancer", destination: "nouvelle" });
 
     const first = await h.push("news", { id: "m1", texte: "urgent" });
     expect(first.outcome).toBe("started");
@@ -421,7 +422,7 @@ describe("SourcesService — tour `lancer`", () => {
 
   it("`source` sans fil dédié CRÉE le fil de la source (visible) et lance dedans", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "source" });
+    declare(h, "news", { tour: "lancer", destination: "source" });
     const delivery = await h.push("news", { id: "m1", texte: "urgent" });
     expect(delivery.outcome).toBe("started");
     expect(h.waker.newSessions).toBe(1);
@@ -458,7 +459,7 @@ describe("SourcesService — destination configurée (règles « C » et « A »
 
   it("le FIL DÉSIGNÉ dans la configuration reçoit le tour (jamais le client)", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "session-42" });
+    declare(h, "news", { tour: "lancer", destination: "session-42" });
     h.waker.knownSessions.add("session-42");
     const delivery = await h.push("news", { id: "m1", texte: "urgent" });
     expect(delivery.outcome).toBe("started");
@@ -469,10 +470,10 @@ describe("SourcesService — destination configurée (règles « C » et « A »
 
   it("un client extérieur ne peut PAS désigner un fil (400 explicite)", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "session-42" });
+    declare(h, "news", { tour: "lancer", destination: "session-42" });
     await expect(
-      h.push("news", { id: "m9", texte: "x", conversation: "session-42" }),
-    ).rejects.toMatchObject({ status: 400, code: "invalid_conversation" });
+      h.push("news", { id: "m9", texte: "x", destination: "session-42" }),
+    ).rejects.toMatchObject({ status: 400, code: "invalid_destination" });
     // La tentative refusée n'a créé ni entrée ni tour.
     expect(h.inbox.size).toBe(0);
     expect(h.waker.sends).toEqual([]);
@@ -480,7 +481,7 @@ describe("SourcesService — destination configurée (règles « C » et « A »
 
   it("⚠️ le FOCUS de l'utilisateur est RESTAURÉ après la création du fil", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "source" });
+    declare(h, "news", { tour: "lancer", destination: "source" });
     h.waker.setCurrent("session-ouverte");
     await h.push("news", { id: "m1", texte: "urgent" });
     // `newSession` a créé le fil de la source…
@@ -494,12 +495,12 @@ describe("SourcesService — destination configurée (règles « C » et « A »
 describe("SourcesService — ④ le fil visé a disparu ailleurs", () => {
   it("un fil DÉSIGNÉ disparu ⇒ bascule en « nouvelle conversation », motif LISIBLE", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "session-42" });
+    declare(h, "news", { tour: "lancer", destination: "session-42" });
     h.waker.forgetSession("session-42");
 
     const delivery = await h.push("news", { id: "m1", texte: "urgent" });
     // La source a BASCULÉ (persisté) : plus aucune écriture dans le vide.
-    expect(h.store.get("news")?.conversation).toBe("nouvelle");
+    expect(h.store.get("news")?.destination).toBe("nouvelle");
     // Le message n'a pas échoué en silence : il est parti dans un fil NEUF.
     expect(delivery.outcome).toBe("started");
     expect(h.waker.newSessions).toBe(1);
@@ -511,7 +512,7 @@ describe("SourcesService — ④ le fil visé a disparu ailleurs", () => {
 
   it("un fil DÉDIÉ disparu ⇒ oublié, nouveau fil VISIBLE, motif dans l'entrée", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "source" });
+    declare(h, "news", { tour: "lancer", destination: "source" });
     await h.push("news", { id: "m1", texte: "premier" });
     const first = h.store.get("news")?.sessionId as string;
     // Le fil est supprimé AILLEURS (autre onglet, autre instance…).
@@ -527,7 +528,7 @@ describe("SourcesService — ④ le fil visé a disparu ailleurs", () => {
 
   it("aucun échec muet : si le host ne sait rien, on n'invente pas de bascule", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "courante" });
+    declare(h, "news", { tour: "lancer", destination: "courante" });
     // Un host qui ne sait NI lister NI retrouver un fichier ne peut pas conclure.
     const blind: SourcesWaker = {
       currentSessionId: () => h.waker.currentSessionId(),
@@ -539,25 +540,25 @@ describe("SourcesService — ④ le fil visé a disparu ailleurs", () => {
     h.service.setWaker(blind);
     const delivery = await h.push("news", { id: "m1", texte: "urgent" });
     expect(delivery.outcome).toBe("started");
-    expect(h.store.get("news")?.conversation).toBe("courante");
+    expect(h.store.get("news")?.destination).toBe("courante");
   });
 });
 
 describe("SourcesService — ③ suppression d'un fil qui reçoit des sources", () => {
   it("liste les sources du fil, puis les RÉAFFECTE (aucune suppression)", async () => {
     const h = harness();
-    declare(h, "designee", { tour: "stocker", conversation: "session-42" });
-    declare(h, "dediee", { tour: "stocker", conversation: "source" });
+    declare(h, "designee", { tour: "stocker", destination: "session-42" });
+    declare(h, "dediee", { tour: "stocker", destination: "source" });
     h.store.setSession("dediee", "session-42");
-    declare(h, "ailleurs", { tour: "stocker", conversation: "session-99" });
+    declare(h, "ailleurs", { tour: "stocker", destination: "session-99" });
 
     expect(h.service.sourcesForSession("session-42").sort()).toEqual(["dediee", "designee"]);
 
     const noms = h.service.detachSession("session-42");
     expect([...noms].sort()).toEqual(["dediee", "designee"]);
     // ⚠️ Les sources EXISTENT toujours, réaffectées, jamais supprimées.
-    expect(h.service.get("designee")?.conversation).toBe("nouvelle");
-    expect(h.service.get("dediee")?.conversation).toBe("nouvelle");
+    expect(h.service.get("designee")?.destination).toBe("nouvelle");
+    expect(h.service.get("dediee")?.destination).toBe("nouvelle");
     // …et la boîte le DIT (une entrée d'alerte par source concernée).
     const alertes = h.inbox.list().filter((entry) => entry.etat === "alerte");
     expect(alertes).toHaveLength(2);
@@ -675,7 +676,7 @@ describe("SourcesService — notification de l'appareil (`notifier`)", () => {
 describe("SourcesService — journal d'audit (aucun contenu)", () => {
   it("journalise source + identifiant + état, jamais le contenu ni le jeton", async () => {
     const h = harness();
-    declare(h, "news", { tour: "lancer", conversation: "courante" });
+    declare(h, "news", { tour: "lancer", destination: "courante" });
     await h.push("news", { id: "m1", texte: "CONTENU-CONFIDENTIEL-42" });
     const serialized = JSON.stringify(h.logs);
     expect(serialized).not.toContain("CONTENU-CONFIDENTIEL-42");

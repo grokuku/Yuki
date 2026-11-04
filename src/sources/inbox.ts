@@ -202,9 +202,18 @@ export class SourcesInbox {
     return found ? { ...found } : undefined;
   }
 
-  /** Nombre d'entrées NON LUES (compteur de l'en-tête). */
-  unreadCount(): number {
-    return this.entries.filter((entry) => !entry.lu).length;
+  /**
+   * Nombre d'ALERTES non lues : `echec` + `alerte` seulement.
+   *
+   * ⚠️ Changement de SENS (lot 26) : une RÉCEPTION ne compte plus dans la
+   * pastille. Un déclencheur silencieux ne produit aucune entrée, et un message
+   * reçu sans problème n'appelle aucune action de l'utilisateur — seuls les
+   * ÉCHECS et les alertes méritent son attention.
+   */
+  alertCount(): number {
+    return this.entries.filter(
+      (entry) => !entry.lu && (entry.etat === "echec" || entry.etat === "alerte"),
+    ).length;
   }
 
   /**

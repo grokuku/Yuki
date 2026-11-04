@@ -277,7 +277,7 @@ try {
   });
   check("message `stocker` accepté (202)", stored.status === 202, JSON.stringify(stored.data?.stored));
 
-  /* ── 1) Téléphone 390×844 : compteur de non-lus dans l'en-tête ─────────── */
+  /* ── 1) Téléphone 390×844 : pastille d'ÉCHECS dans l'en-tête ───────────── */
   await setViewport(390, 844, { mobile: true });
   await navigate(server.base + "/");
 
@@ -293,13 +293,13 @@ try {
     };
   })()`);
   check(
-    "compteur de non-lus visible dans l'en-tête (1)",
-    Boolean(counter && counter.visible && counter.count === "1" && !counter.countHidden),
+    "le bouton Notifications est là, mais la pastille NE COMPTE PLUS les réceptions",
+    Boolean(counter && counter.visible && counter.count === "0" && counter.countHidden),
     JSON.stringify(counter),
   );
   check(
-    "le compteur est annoncé (aria-label)",
-    Boolean(counter && /1 non lue/.test(counter.ariaLabel ?? "")),
+    "le compteur est annoncé comme une alerte (aria-label)",
+    Boolean(counter && /aucun échec/i.test(counter.ariaLabel ?? "")),
     counter?.ariaLabel ?? "",
   );
 
@@ -446,7 +446,8 @@ try {
 
   /* ── 6) /config : section « Sources » (tableau + jeton + borne) ─────────── */
   await setViewport(1280, 1000);
-  await navigate(server.base + "/config#conversation");
+  // ⚠️ Lot 26, lot 3 : le panneau des sources a SON onglet et son ancre.
+  await navigate(server.base + "/config#declencheurs");
   const configPanel = await evaluate(`(() => {
     const root = document.getElementById("sources-root");
     if (!root) return null;
@@ -456,7 +457,7 @@ try {
     );
     const buttons = [...root.querySelectorAll("button")].map((b) => (b.textContent || "").trim());
     // La borne d'injection du bloc <sources> est réglable dans le même onglet.
-    const tab = document.getElementById("panel-conversation");
+    const tab = document.getElementById("panel-declencheurs");
     const bound = (tab?.textContent ?? "").includes("Notifications transmises au modèle en un tour");
     // ⚠️ Périmètre = LA SECTION DES SOURCES : la brique vendorisee tokens pose
     // des variables de thème sur <html> (comportement préexistant, hors sujet).
@@ -487,7 +488,7 @@ try {
     JSON.stringify(configPanel?.buttons),
   );
   check(
-    "/config : la borne d'injection des notifications est réglable dans l'onglet Conversation",
+    "/config : la borne d'injection des notifications est réglable dans l'onglet Déclencheurs",
     configPanel?.bound === true,
   );
   check(
@@ -554,7 +555,7 @@ try {
   const mailSaved = stateSaved.sources.find((source) => source.nom === "mail");
   check(
     "⚠️ le fil choisi est ENREGISTRÉ côté serveur (jamais envoyé par le programme)",
-    picked === true && saved === true && mailSaved?.conversation === stateConfig.workSession,
+    picked === true && saved === true && mailSaved?.destination === stateConfig.workSession,
     JSON.stringify(mailSaved),
   );
 
@@ -666,7 +667,7 @@ try {
   const alertEntry = (stateAfter.inbox || []).find((entry) => entry.etat === "alerte");
   check(
     "⚠️ « supprimer quand même » : le fil disparaît, la SOURCE est CONSERVÉE",
-    chosen === true && submitted === true && Boolean(veille) && veille.conversation === "nouvelle",
+    chosen === true && submitted === true && Boolean(veille) && veille.destination === "nouvelle",
     JSON.stringify(veille),
   );
   check(
@@ -702,7 +703,7 @@ try {
       Boolean(lastSend) &&
       lastSend.sessionId !== stateBefore.workSession &&
       stateRelance.sends.length === stateBefore.sends.length + 1,
-    JSON.stringify({ status: relance.status, lastSend, conversation: veilleAfter?.conversation }),
+    JSON.stringify({ status: relance.status, lastSend, destination: veilleAfter?.destination }),
   );
   // L'AVIS est VISIBLE dans la boîte (état « alerte », texte déplié : ce n'est pas
   // un message reçu, il n'a rien à cacher).

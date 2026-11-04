@@ -168,18 +168,21 @@ describe("UI statique servie par le gateway", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
-  it("organise /config en 9 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
+  it("organise /config en 10 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
 
     // Barre d'onglets accessible.
     expect(body).toContain('role="tablist"');
     expect(body).toMatch(/role="tablist"[^>]*aria-label="/);
 
-    // Les 9 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
+    // Les 10 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
+    // ⚠️ « Déclencheurs » (lot 26, lot 3) est le 10ᵉ : la page de gestion des
+    // sources n'est plus enterrée en bas de « Conversation ».
     const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
     expect(tabLabels).toEqual([
       "Modèles",
       "Conversation",
+      "Déclencheurs",
       "Personnalité",
       "Voix",
       "Images",
@@ -194,8 +197,8 @@ describe("UI statique servie par le gateway", () => {
     // (aria-labelledby).
     const tabTags = [...body.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
     const panelTags = [...body.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((m) => m[0]);
-    expect(tabTags.length).toBe(9);
-    expect(panelTags.length).toBe(9);
+    expect(tabTags.length).toBe(10);
+    expect(panelTags.length).toBe(10);
     for (const tag of tabTags) {
       const id = tag.match(/id="([^"]+)"/)?.[1];
       const controls = tag.match(/aria-controls="([^"]+)"/)?.[1];
@@ -863,16 +866,17 @@ describe("Panneau Personnalité — section « Règles strictes » (éditées pa
     }
   });
 
-  it("le markup /config garde exactement 9 onglets (aucun onglet Règles ajouté)", async () => {
+  it("le markup /config garde exactement 10 onglets (aucun onglet Règles ajouté)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
+    // 9 onglets historiques + « Déclencheurs » (lot 26, lot 3) : aucun autre.
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(10);
     expect(body).toContain('id="personality-root"');
     expect(body).not.toMatch(/\sstyle=/);
   });
 });
 
 describe("Libraire de Pi-Web — section /config et test de connexion (sans nouvel onglet)", () => {
-  it("ajoute la section « Libraire » à l'onglet Système existant (9 onglets inchangés)", async () => {
+  it("ajoute la section « Libraire » à l'onglet Système existant (10 onglets inchangés)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     // Groupe de champs dans l'onglet Système (aucun nouvel onglet).
     expect(js).toContain('id: "librarian"');
@@ -894,9 +898,9 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     expect(js).not.toContain("innerHTML");
     expect(js).not.toContain(".style.");
     expect(js).not.toContain('setAttribute("style"');
-    // Le markup garde exactement 9 onglets (verrou existant).
+    // Le markup garde exactement 10 onglets (verrou existant, « Déclencheurs » inclus).
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(10);
     expect(body).toContain('id="group-systeme"');
   });
 });
@@ -917,7 +921,7 @@ describe("Images générées (ComfyUI) — onglet dédié « Images » et servic
     const images = body.slice(body.indexOf('id="panel-images"'), body.indexOf('id="panel-agents"'));
     expect(images).toContain('id="group-images"');
     expect(images).toContain('id="images-root"');
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(10);
     // CSP : aucun style inline dans le markup.
     expect(body).not.toMatch(/\sstyle=/);
   });

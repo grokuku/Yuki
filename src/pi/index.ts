@@ -134,3 +134,11 @@ export type {
   ChannelPostPort,
   ChannelPostRequest,
 } from "./sdk/channel-post-tool.js";
+// Envoi de message DANS la conversation courante (`envoyer_message`, 2026-11-04) :
+// types seulement — l'outil est construit par `buildRemoteRunTools` (run de canal)
+// et par le host local (`src/pi/sdk-host.ts`).
+export type {
+  MessageSendOutcome,
+  MessageSendPort,
+  MessageSendRequest,
+} from "./sdk/send-message-tool.js";

@@ -50,11 +50,11 @@
           aria-pressed="false"
           hidden
         >Activer les notifications</button>
-        <!-- NOTIFICATIONS DES SOURCES : compteur de non-lus dans l'en-tête.
-             Les messages envoyés par un programme branché (veille, messagerie…)
-             ne sont PAS des bulles dans un fil : ils s'empilent dans la section
-             dédiée ci-dessous. Le bouton est révélé par `notifications-panel.js`
-             (compteur à zéro = pastille masquée). -->
+        <!-- NOTIFICATIONS DES SOURCES : compteur d'ÉCHECS ET D'ALERTES dans
+             l'en-tête. ⚠️ Une réception ne compte plus (lot 26) : un déclencheur
+             silencieux n'écrit rien ici, et un message reçu sans problème
+             n'appelle aucune action. Le bouton est révélé par
+             `notifications-panel.js` (compteur à zéro = pastille masquée). -->
         <button
           id="sources-notifs-toggle"
           class="pill notifs-toggle"
@@ -343,6 +343,15 @@
         <header class="notifs__head">
           <h2 class="notifs__title">Notifications</h2>
           <span id="sources-notifs-summary" class="notifs__summary" role="status"></span>
+          <!-- ⚠️ La pastille ne compte plus les RÉCEPTIONS : seulement les échecs
+               et les alertes (lot 26). Le lien mène à la PAGE DE GESTION des
+               déclencheurs (lot 3) : onglet dédié « Déclencheurs », ancre
+               `#declencheurs` (`ANCRES_PROFONDES` de `config.js`). -->
+          <a
+            id="sources-notifs-manage"
+            class="button button--ghost button--small"
+            href="/config#declencheurs"
+          >Gérer les déclencheurs</a>
           <button
             id="sources-notifs-readall"
             class="button button--ghost button--small"

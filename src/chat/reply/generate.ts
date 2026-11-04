@@ -141,6 +141,15 @@ export interface RemoteReplyInput {
 export interface ReplyRunContext {
   origine: "message" | "job";
   channelPosts: ChannelPostRecorder;
+  /**
+   * PUBLIE un message DANS la conversation de ce tour (`envoyer_message`).
+   *
+   * ⚠️ Fourni par le générateur, jamais recopié côté câblage : c'est ce qui garantit
+   * que les messages de l'outil passent par la MÊME `ReplyProgress` (même file, même
+   * ancrage au fil) que l'accusé et la réponse finale. Absent ⇒ l'outil n'est pas
+   * construit (aucun second chemin de publication).
+   */
+  publierMessage?: (texte: string) => Promise<void>;
 }
 
 /** Sortie : texte seul, ou texte + identifiants de fichiers à joindre. */
@@ -208,7 +217,27 @@ export function createRemoteReplyGenerator(
         produits.push(fileId);
         progress?.publierFichier(fileId);
       },
-      { origine, channelPosts },
+      {
+        origine,
+        channelPosts,
+        // ⚠️ ENVOI DE MESSAGE (`envoyer_message`, 2026-11-04) : la publication passe
+        // par la `ReplyProgress` de CE tour (créée juste après — d'où la fermeture
+        // tardive), donc par la MÊME file sérialisée et le MÊME ancrage au fil que
+        // l'accusé et la réponse. Si la progression n'existe pas (aucun `publier`),
+        // la fonction lève : on ne prétend jamais avoir publié.
+        ...(input.publier !== undefined
+          ? {
+              publierMessage: async (texte: string): Promise<void> => {
+                if (progress === undefined) {
+                  throw new Error(
+                    "Publication impossible : aucune progression de réponse n'est active.",
+                  );
+                }
+                await progress.envoyerTexte(texte);
+              },
+            }
+          : {}),
+      },
     );
     if (input.publier !== undefined) {
       const conversationId = input.message.conversationId;
@@ -293,7 +322,14 @@ export function createRemoteReplyGenerator(
 
     // ⚠️ La ligne d'accusé a DÉJÀ été publiée : la laisser dans le corps la
     // dupliquerait à chaque tour. On ne retire QUE cette ligne-là (égalité stricte).
-    const corps = progression !== undefined ? progression.retirerAck(brut) : brut;
+    const sansAck = progression !== undefined ? progression.retirerAck(brut) : brut;
+    // ⚠️ MÊME PROBLÈME, EN PLUS GRAND (2026-11-04) : les messages déjà publiés par
+    // `envoyer_message` ne doivent pas être republiés à la fin. C'est le drapeau
+    // « j'ai déjà parlé » (compté par `ReplyProgress`) consulté ICI : si tout a été
+    // dit, la réponse finale est vide et RIEN ne part (l'adaptateur sait qu'un tour
+    // qui a déjà publié n'a pas besoin d'un second texte).
+    const corps =
+      progression !== undefined ? progression.retirerMessagesEnvoyes(sansAck) : sansAck;
     const agrege = progression?.resume();
     const texte =
       agrege === undefined

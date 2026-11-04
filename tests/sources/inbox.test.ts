@@ -65,15 +65,30 @@ describe("SourcesInbox — entrées, états et non-lus", () => {
     expect(entries.map((entry) => entry.texte)).toEqual(["deuxième", "premier"]);
     expect(entries[0].etat).toBe("recu");
     expect(entries[0].lu).toBe(false);
-    expect(inbox.unreadCount()).toBe(2);
+    // ⚠️ Lot 26 : une RÉCEPTION ne compte plus dans la pastille (seuls les échecs
+    // et les alertes comptent) — l'entrée reste non lue, mais `alertCount` = 0.
+    expect(entries[0].lu).toBe(false);
+    expect(inbox.alertCount()).toBe(0);
   });
 
   it("marque une entrée lue (compteur) et refuse un identifiant inconnu sans lever", () => {
     const { inbox } = makeInbox();
     const entry = add(inbox, "coucou");
     expect(inbox.markRead(entry.id)?.lu).toBe(true);
-    expect(inbox.unreadCount()).toBe(0);
+    expect(inbox.alertCount()).toBe(0);
     expect(inbox.markRead("inconnue")).toBeUndefined();
+  });
+
+  it("ne compte dans la pastille QUE les échecs et les alertes non lues", () => {
+    const { inbox } = makeInbox();
+    add(inbox, "reçu normal");
+    const echec = inbox.add({ source: "news", texte: "échec", titre: "", octets: 4, enAttente: false, etat: "echec" });
+    const alerte = inbox.add({ source: "news", texte: "avis", titre: "Fil supprimé", octets: 3, enAttente: false, etat: "alerte" });
+    expect(inbox.alertCount()).toBe(2);
+    inbox.markRead(echec.id);
+    expect(inbox.alertCount()).toBe(1);
+    inbox.markRead(alerte.id);
+    expect(inbox.alertCount()).toBe(0);
   });
 
   it("attache la RÉPONSE de Yuki à la même entrée et passe l'état à « traite »", () => {

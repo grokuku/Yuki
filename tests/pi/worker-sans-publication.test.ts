@@ -53,6 +53,12 @@ const CONVERSATION = "mm-canal-general";
 const EPHEMERAL = "session-ephemere-du-job";
 const FICHIER = "0123456789abcdef0123456789abcdef";
 const OUTIL_PUBLICATION = "publier_dans_canal";
+/**
+ * ⚠️ Second outil de publication (lot 27, 2026-11-04) : `envoyer_message` écrit DANS la
+ * conversation courante. Le worker lourd ne doit pas l'avoir non plus — une réponse
+ * étalée sur plusieurs messages est une parole de Yuki, pas un compte rendu d'action.
+ */
+const OUTIL_MESSAGE = "envoyer_message";
 
 const tempDirs: string[] = [];
 
@@ -79,6 +85,9 @@ const TOUT_ACTIVE: ToolAllowlistOptions = {
   fileListEnabled: true,
   fileReadEnabled: true,
   imagesEnabled: true,
+  // ⚠️ Même `messagesEnabled` demandé explicitement : la publication d'un message
+  // reste celle du tour de Yuki, jamais celle du worker.
+  messagesEnabled: true,
 };
 
 /**
@@ -98,6 +107,14 @@ describe("① politique du worker lourd — aucun outil de publication", () => {
     // ⚠️ Toutes les capacités activées : aucune ne doit ouvrir la publication.
     expect(toolAllowlist("heavy", TOUT_ACTIVE)).not.toContain(OUTIL_PUBLICATION);
     expect(toolAllowlist("heavy", AVEC_ANCIENNE_OPTION)).not.toContain(OUTIL_PUBLICATION);
+  });
+
+  it("`envoyer_message` n'est PAS dans l'allowlist du rôle lourd, même demandé", () => {
+    // ⚠️ Réponse étalée sur plusieurs messages : c'est une parole de Yuki dans la
+    // conversation, donc jamais une capacité du worker (« un seul rédacteur »).
+    expect(toolAllowlist("heavy", TOUT_ACTIVE)).not.toContain(OUTIL_MESSAGE);
+    // Non-régression : le rôle LÉGER, lui, l'a bien (c'est lui qui converse).
+    expect(toolAllowlist("light", TOUT_ACTIVE)).toContain(OUTIL_MESSAGE);
   });
 
   it("la politique lourde n'a même plus de catégorie de publication", () => {
@@ -127,6 +144,8 @@ describe("① politique du worker lourd — aucun outil de publication", () => {
     expect(noms).toContain("consulter_workflow");
     // …et la publication n'y est PLUS, même avec une conversation de canal.
     expect(noms).not.toContain(OUTIL_PUBLICATION);
+    // Ni l'envoi de message dans la conversation (lot 27).
+    expect(noms).not.toContain(OUTIL_MESSAGE);
   });
 });
 
@@ -174,6 +193,10 @@ function modeleSimule(recu: Recu) {
           const publier = tools.find((tool) => tool.name === OUTIL_PUBLICATION);
           if (publier) {
             throw new Error("le worker ne doit recevoir AUCUN outil de publication");
+          }
+          // ⚠️ Même garantie pour l'envoi de message dans la conversation.
+          if (tools.find((tool) => tool.name === OUTIL_MESSAGE)) {
+            throw new Error("le worker ne doit recevoir AUCUN outil d'envoi de message");
           }
           for (const listener of listeners) {
             listener({

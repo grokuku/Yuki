@@ -84,6 +84,17 @@ export interface ActionToolOptions {
    * persistante, où les deux coïncident).
    */
   approvalSessionId?: () => string | undefined;
+  /**
+   * ORIGINE du tour qui exécute l'outil (`user`, `declencheur:<nom>`…), lue à
+   * CHAQUE appel (un worker peut servir plusieurs jobs).
+   *
+   * ⚠️ Elle est transmise TELLE QUELLE au service d'exécution, donc jusqu'au
+   * garde-fou D118 : c'est ce qui permet à une TÂCHE DE FOND d'origine
+   * `declencheur:<nom>` de consommer une pré-autorisation, et à un tour humain
+   * de ne jamais en consommer. Absente ⇒ repli sur le nom de l'outil
+   * (`run_command`), comportement historique.
+   */
+  origine?: () => string | undefined;
 }
 
 /**
@@ -206,7 +217,10 @@ export function createExecutionTools(
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(sessionId !== undefined ? { sessionId } : {}),
-        origin: "run_command",
+        // ⚠️ L'ORIGINE du tour passe jusqu'au garde-fou (pré-autorisations) :
+        // nom de l'outil pour un tour humain, `declencheur:<nom>` pour une tâche
+        // de fond. Sans ce nom, aucune autorisation ne peut être retrouvée.
+        origin: options?.origine?.() ?? "run_command",
       });
       const text =
         outcome.status === "completed" && outcome.framed

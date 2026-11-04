@@ -47,6 +47,10 @@ const SDK_ALLOWLIST = [
   // que les DÉFINITIONS d'outils — c'est le seul endroit où l'outil peut refuser
   // lui-même, et il n'expose aucun type du SDK hors de `src/pi/**`.
   "src/pi/sdk/long-tool-guard.ts",
+  // ⚠️ ENVOI DE MESSAGE dans la conversation courante (`envoyer_message`, lot 27) :
+  // définition d'outil seulement — elle ne laisse passer ni type du SDK ni celui de
+  // typebox hors de `src/pi/**` (la façade n'exporte que ses types à elle).
+  "src/pi/sdk/send-message-tool.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =

@@ -39,6 +39,7 @@ import {
   localIpAddresses,
   maxSizeBytesFromMb,
   PairingManager,
+  PreAutorisationStore,
   serverCertificateNames,
   startAgentsServer,
   uncoveredLocalAddresses,
@@ -76,6 +77,7 @@ import {
   createChannelAwareWaker,
   createChannelPostPort,
   createRemoteReplyGenerator,
+  createReplyMessagePort,
   effectiveQuoteAuthor,
   effectiveReplyStyle,
   parseJudgeAnswer,
@@ -172,6 +174,9 @@ import {
 } from "./reactions/index.js";
 import { RulesStore } from "./rules/index.js";
 import {
+  DeclencheurBalayeur,
+  DeclencheurJournal,
+  ORIGINE_HORLOGE,
   SourcesInbox,
   SourcesService,
   SourcesStore,
@@ -960,16 +965,42 @@ async function main(): Promise<void> {
   // --- SOURCES : programmes extérieurs qui réveillent Yuki -------------------
   // ⚠️ Deux fichiers JSON DÉDIÉS du volume `state`, JAMAIS dans `config.json`
   // (la configuration n'accepte qu'un patch PLAT de scalaires) :
-  //   - `sources.json`       : les sources (nom, consigne, où, tour, notifier) ;
+  //   - `sources.json`       : les déclencheurs, modèle **v2** (`visibilite`,
+  //     `declencheur`, `destination`…). Un fichier v1 est migré en `visible`
+  //     après sauvegarde `sources.json.v1.bak` (voir `src/sources/store.ts`) ;
   //   - `sources-inbox.json` : la boîte « Notifications » (≤ 200 entrées, refus
   //     explicite au-delà) + la mémoire d'idempotence `(source, id)` de 7 jours.
+  // Plus un JOURNAL append-only (`declencheurs-journal.jsonl`) : la seule trace
+  // des contenus reçus par un déclencheur SILENCIEUX (jamais dans l'UI).
   // Le service est créé AVANT la porte GPU : gérer une source et lire la boîte ne
   // demandent aucun modèle (le host est branché plus bas par `setWaker`).
   const sourcesStore = new SourcesStore({ path: env.sourcesStorePath, logger });
   const sourcesInbox = new SourcesInbox({ path: env.sourcesInboxPath, logger });
+  const declencheursJournal = DeclencheurJournal.open({
+    path: env.declencheursJournalPath,
+    logger,
+  });
+  // --- PRÉ-AUTORISATIONS (lot 26, lot 4/4) ------------------------------------
+  // ⚠️ Fichier DÉDIÉ du volume `state` (`preautorisations.json`) : ce qu'un
+  // DÉCLENCHEUR peut exécuter SANS validation humaine. Il écrit ses
+  // consommations dans le JOURNAL des déclencheurs (créé juste au-dessus), ce qui
+  // explique qu'il soit construit APRÈS le service d'exécution et branché par
+  // `setPreAutorisations` (comme `setWaker`).
+  const preAutorisationsStore = new PreAutorisationStore({
+    path: env.preAutorisationsPath,
+    logger,
+    journal: declencheursJournal,
+  });
+  agentExecution?.setPreAutorisations(preAutorisationsStore);
+  logger.info("agents.preautorisations.ready", {
+    path: env.preAutorisationsPath,
+    preautorisations: preAutorisationsStore.size,
+  });
+
   const sourcesService = new SourcesService({
     store: sourcesStore,
     inbox: sourcesInbox,
+    journal: declencheursJournal,
     logger,
     // Le coffre porte les JETONS (`YUKI_SOURCE_<NOM>`), jamais le fichier JSON.
     ...(secretStore ? { tokens: secretStore } : {}),
@@ -989,12 +1020,19 @@ async function main(): Promise<void> {
   logger.info("sources.ready", {
     store: env.sourcesStorePath,
     inbox: env.sourcesInboxPath,
+    journal: env.declencheursJournalPath,
     sources: sourcesStore.size,
     entries: sourcesInbox.size,
   });
 
   /** Balayage périodique de la RÉTENTION du volume `state` (voir plus bas). */
   let filesPurgeTimer: ReturnType<typeof setInterval> | undefined;
+
+  /**
+   * ⚠️ MOTEUR HORLOGE (lot 2) : le balayeur des déclencheurs `planning`.
+   * Créé quand le host est prêt (voir plus bas), arrêté à l'arrêt gracieux.
+   */
+  let declencheursBalayeur: DeclencheurBalayeur | undefined;
 
   // --- Fichiers échangés (l'utilisateur → Yuki, Yuki → l'utilisateur) -------
   // ⚠️ Créé AVANT la porte GPU : le dépôt et le téléchargement restent
@@ -1330,6 +1368,13 @@ async function main(): Promise<void> {
     // avec la marche à suivre) — configurer ComfyUI ne demande donc aucun
     // redémarrage.
     imagesEnabled: true,
+    // ⚠️ ENVOI DE MESSAGE (`envoyer_message`, 2026-11-04) : TOUJOURS actif. Il publie
+    // dans la conversation où Yuki répond, par le chemin de publication ordinaire
+    // (`ReplyProgress` en canal, `publierMessage` en local) — il n'ouvre rien et ne
+    // touche à aucune machine. C'est lui qui permet une réponse étalée sur plusieurs
+    // messages successifs (« une décimale par message »), y compris dans le fil
+    // « Déclencheurs », qui est une session LOCALE.
+    messagesEnabled: true,
   });
 
   /**
@@ -1536,6 +1581,25 @@ async function main(): Promise<void> {
               (config.getString("chat.mode") === "discord" ? "discord" : "mattermost"),
           ),
         ),
+        // ⚠️ ENVOI DE MESSAGE DANS CE CANAL (`envoyer_message`, 2026-11-04) : même
+        // chemin de publication que l'accusé, l'image et la réponse finale —
+        // `contexte.publierMessage` est la `ReplyProgress` du tour (file sérialisée,
+        // ancrage au fil). Ce module ne fait qu'appliquer la BORNE de la plateforme
+        // (la même que `publier_dans_canal`, `couperPourPlateforme`) puis publier.
+        // ⚠️ Sans `publierMessage` (appelant sans publication intermédiaire), le port
+        // n'est pas construit : la politique le signale comme non implémenté au lieu
+        // de laisser un outil promettre une publication qui n'existe pas.
+        ...(contexte.publierMessage !== undefined
+          ? {
+              messages: createReplyMessagePort({
+                plateforme:
+                  mirrorPlatformOf(conversationId) ??
+                  (config.getString("chat.mode") === "discord" ? "discord" : "mattermost"),
+                publier: contexte.publierMessage,
+                logger,
+              }),
+            }
+          : {}),
         // MÊMES ports d'image que le host local : le générateur ComfyUI et la
         // copie de l'image dans le store des fichiers de la conversation (le canal).
         // ⚠️ Pas d'`onImage` : l'image d'un run distant part sur le CANAL, pas dans
@@ -2398,6 +2462,73 @@ async function main(): Promise<void> {
     // suivi des réponses (attachées aux entrées de la boîte, jamais dans un fil).
     sourcesService.setWaker(host);
 
+    // MOTEUR HORLOGE (lot 2) — UN SEUL `setInterval` de 30 s (`DeclencheurBalayeur`),
+    // démarré SEULEMENT quand un host existe : sans modèle, un passage planifié
+    // n'aurait personne à réveiller (il serait journalisé `echec` à chaque tir).
+    // ⚠️ L'état (`prochainPassage`, `dernierPassage`, `actif`, `toursDuJour`) est
+    // PERSISTÉ dans `sources.json` : le premier balayage traite un passage manqué
+    // pendant l'arrêt (règle de rattrapage : une fois si < 1 h, sinon sauté).
+    // ⚠️ MOTEUR HORLOGE — LE DÉCLENCHEUR CRÉE **DIRECTEMENT UN JOB LOURD**
+    // (décision 2026-11-04) : pas de tour de conversation, pas de délégation
+    // depuis le rôle léger (qui n'a aucun outil d'action). Le worker lourd a déjà
+    // tout ; son résultat est publié dans le fil « Déclencheurs » par
+    // `host.publierMessage` (message assistant persisté, sans tour de modèle).
+    // ⚠️ Un job ne peut PAS créer de déclencheur : le worker lourd n'a aucun outil
+    // pour cela (anti-enchaînement structurel).
+    if (delegation) {
+      const serviceDelegation = delegation;
+      sourcesService.setDeclencheurPorts({
+        jobs: {
+          delegate: (request) =>
+            serviceDelegation.delegate({
+              task: request.task,
+              ...(request.context !== undefined ? { context: request.context } : {}),
+              background: request.background !== false,
+              lightSessionId: request.lightSessionId,
+              ...(request.origin !== undefined ? { origin: request.origin } : {}),
+            }),
+          cancelJob: (jobId) => serviceDelegation.cancelJob(jobId),
+        },
+        publication: {
+          publier: async (sessionId, texte) => {
+            if (!host) throw new Error("Le host Pi n'est pas disponible.");
+            if (typeof host.publierMessage !== "function") {
+              throw new Error(
+                "Ce host ne sait pas publier dans une conversation sans tour de modèle.",
+              );
+            }
+            await host.publierMessage(sessionId, texte);
+          },
+        },
+      });
+      // Le RÉSULTAT d'un job de déclencheur ne réveille PAS le léger : il part
+      // par le port des déclencheurs (publier / se taire / éteindre).
+      serviceDelegation.setDeclencheurs({
+        recevoirResultat: (record) => sourcesService.recevoirResultat(record),
+      });
+    }
+
+    declencheursBalayeur = new DeclencheurBalayeur({
+      store: sourcesStore,
+      journal: declencheursJournal,
+      logger,
+      now: () => Date.now(),
+      run: (nom, options) =>
+        sourcesService.declencher(nom, {
+          origine: ORIGINE_HORLOGE,
+          ...(options.planifie !== undefined ? { planifie: options.planifie } : {}),
+          plafondMs: options.plafondMs,
+          signal: options.signal,
+        }),
+    });
+    declencheursBalayeur.start();
+    logger.info("sources.balayeur.started", {
+      interval_ms: 30_000,
+      planifies: sourcesStore
+        .list()
+        .filter((record) => record.declencheur.type === "planning").length,
+    });
+
     // --- Providers / modèles LLM : rechargement À CHAUD (`apply: hot`) ------
     // Un changement de FOURNISSEUR (`baseUrl`/`api`), de modèle, de réflexion ou
     // de clé ne doit PLUS exiger de redémarrage. On observe le store : dès qu'un
@@ -2680,7 +2811,16 @@ async function main(): Promise<void> {
       // + boîte « Notifications ». Mêmes garde-fous que `/api/config` pour les
       // écritures d'administration ; le jeton de chaque source authentifie les
       // messages poussés par les programmes extérieurs.
-      sources: { service: sourcesService, logger },
+      sources: {
+        service: sourcesService,
+        logger,
+        journal: declencheursJournal,
+        // PRÉ-AUTORISATIONS (lot 4/4) : registre persisté + annuaire des agents,
+        // pour que la page de gestion propose une MACHINE précise (jamais un
+        // champ libre où l'on taperait un identifiant au hasard).
+        preAutorisations: preAutorisationsStore,
+        ...(agentStoreRef ? { agents: agentStoreRef } : {}),
+      },
       // DISCUSSIONS : `GET /api/chat/status` (lecture GARDÉE par l'en-tête
       // `X-Yuki-Config: 1`) — mode, état de la plateforme, état Mattermost, motif de
       // refus de création ; plus l'URL du serveur, le JETON (écriture seule, une fois) et
@@ -2749,6 +2889,10 @@ async function main(): Promise<void> {
       // Rétention des fichiers : plus aucun balayage après l'arrêt.
       if (filesPurgeTimer) clearInterval(filesPurgeTimer);
       filesPurgeTimer = undefined;
+      // MOTEUR HORLOGE : plus aucun passage planifié, et les tours en vol sont
+      // abandonnés (l'état reste persisté dans `sources.json`).
+      declencheursBalayeur?.stop();
+      declencheursBalayeur = undefined;
       stopLlmHotReload?.();
       stopLlmHotReload = undefined;
       stopPushTriggers?.();

@@ -193,6 +193,7 @@ export {
   PROGRESS_LONG_TOOL_MS,
   PROGRESS_LONG_TOOL_TEXT,
   PROGRESS_MAX_RESULTS,
+  PROGRESS_MESSAGE_TOOL,
   PROGRESS_SUPPRESSED_TEXT,
   ReplyProgress,
   progressErrorText,
@@ -230,11 +231,16 @@ export {
   FICHIER_AUTRE_CONVERSATION_RAISON,
   FICHIER_AUTRE_PLATEFORME_RAISON,
   FICHIER_INDISPONIBLE_RAISON,
+  couperPourPlateforme,
   createChannelPostPort,
   normaliserNomCanal,
   resoudreCanal,
   type ChannelPostPortOptions,
 } from "./reply/channel-post.js";
+export {
+  createReplyMessagePort,
+  type ReplyMessagePortOptions,
+} from "./reply/message-send.js";
 export {
   MIRROR_ID_PREFIX,
   emptyChatMirror,

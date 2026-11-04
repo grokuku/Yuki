@@ -60,6 +60,7 @@ import type { SecretDirectoryPort } from "../../secrets/directory.js";
 import { createDelegateTools, createRunContextTracker } from "./delegate-tools.js";
 import { createAgentDirectoryTools, createSecretTools } from "./execution-tools.js";
 import { createChannelPostTool, type ChannelPostPort } from "./channel-post-tool.js";
+import { createSendMessageTools, type MessageSendPort } from "./send-message-tool.js";
 import { guardLongToolsInChannel } from "./long-tool-guard.js";
 
 export type { ChannelPostPort };
@@ -120,6 +121,15 @@ export interface RemoteRunToolPorts {
    * jamais par le modèle.
    */
   channels?: ChannelPostPort;
+  /**
+   * Port d'ENVOI DE MESSAGE DANS LA CONVERSATION COURANTE (`envoyer_message`).
+   *
+   * ⚠️ Il publie par `ReplyProgress` (fourni par l'appelant), donc dans la MÊME file
+   * que l'accusé et la réponse finale : aucun second chemin de publication, aucun
+   * `send` simultané. Absent ⇒ pas d'outil (le journal des outils « manquants » le
+   * dit, jamais un silence).
+   */
+  messages?: MessageSendPort;
   /**
    * Fichier produit par le run et COPIÉ dans le store des fichiers : image générée
    * (`generer_image`) ou capture de page web (`capture_libraire`).
@@ -325,6 +335,17 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
     // fichiers, résolus et VALIDÉS par le port (appartenance à la conversation
     // source, même plateforme, bornes) — jamais des chemins, jamais des octets.
     tools.push(...createChannelPostTool(ports.channels));
+  }
+
+  if (ports.messages) {
+    // ⚠️ RÉPONSE EN PLUSIEURS MESSAGES (2026-11-04) : l'outil publie UN message dans
+    // la conversation COURANTE (le canal), par `ReplyProgress` — la même file que
+    // l'accusé et la réponse finale. Aucun plafond de "résultats" ici : c'est
+    // l'outil qui borne (20 messages par tour), sinon 3 messages suffiraient à faire
+    // taire la progression d'un tour de 20.
+    tools.push(
+      ...createSendMessageTools(ports.messages, { sessionId: conversation }),
+    );
   }
 
   if (ports.filesSend) {

@@ -102,6 +102,10 @@ import type {
 } from "../memory/conversation-archive.js";
 import { createLibrarianTools } from "./sdk/librarian-tools.js";
 import { createSendFileTools } from "./sdk/send-file-tool.js";
+import {
+  createSendMessageTools,
+  type MessageSendOutcome,
+} from "./sdk/send-message-tool.js";
 import { createImageTools } from "./sdk/image-tools.js";
 import { createImageStylesExtensionFactory } from "./sdk/image-styles-extension.js";
 import { createImageBudgetExtensionFactory } from "./sdk/image-budget-extension.js";
@@ -1985,6 +1989,47 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // modèle : l'outil ne connaît que les fichiers rattachés à ce fil.
       customTools.push(...createSendFileTools(options.files));
     }
+    // ⚠️ ENVOI DE MESSAGE (`envoyer_message`, 2026-11-04) : Yuki répond en PLUSIEURS
+    // messages SUCCESSIFS, publiés PENDANT son tour — sans minuteur, sans second tour.
+    // ⚠️ En LOCAL l'outil existe AUSSI, et c'est nécessaire : le fil « Déclencheurs »
+    // EST une session locale (le déclencheur silencieux réveille le host,
+    // `src/sources/service.ts`), et l'interface affiche un message par bulle. Sans lui,
+    // une réponse étalée y serait impossible.
+    // ⚠️ UN SEUL chemin d'écriture : `publierDansSession` — le MÊME que le résultat d'un
+    // déclencheur planifié (`PiHost.publierMessage`), donc même persistance, mêmes
+    // trames, même ordre. Aucune file supplémentaire (le host écrit dans SA session).
+    customTools.push(
+      ...createSendMessageTools({
+        envoyer: async ({ texte, sessionId }): Promise<MessageSendOutcome> => {
+          const record = recordFor(sessionId);
+          if (!record) {
+            return {
+              ok: false,
+              raison:
+                "Aucune conversation courante n'est identifiée : rien n'a été publié.",
+            };
+          }
+          try {
+            publierDansSession(record, texte);
+          } catch (error) {
+            return {
+              ok: false,
+              raison: error instanceof Error ? error.message : String(error),
+            };
+          }
+          // ⚠️ Aucune borne de plateforme en local : le message est stocké tel quel.
+          return { ok: true, tronque: false };
+        },
+        // ⚠️ CLÉ DU TOUR (plafond de 20 messages) : en local, ces outils sont partagés
+        // par TOUTES les conversations (`createPiHost` ne les construit qu'une fois).
+        // Sans cette clé, le plafond serait « 20 messages pour la vie du processus ».
+        tour: (sessionId) => {
+          const record = recordFor(sessionId);
+          if (!record) return undefined;
+          return `${record.sessionId}:${record.currentRun?.runId ?? "idle"}`;
+        },
+      }),
+    );
     if (options.images) {
       // IMAGES : `generer_image` décrit une SCÈNE (texte libre, sans style), le
       // générateur choisit le workflow par proximité, l'image revient AU MODÈLE
@@ -2195,6 +2240,73 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     return buildState(record);
   }
 
+  /**
+   * Écrit un message ASSISTANT dans une conversation LOCALE, SANS tour de modèle.
+   *
+   * ⚠️ UN SEUL chemin d'écriture, partagé par :
+   *  - `publierMessage` (résultat d'un déclencheur planifié, lot 26) ;
+   *  - l'outil `envoyer_message` (réponse en plusieurs messages successifs, lot 27),
+   *    qui publie PENDANT le tour.
+   *
+   * Ce que fait l'écriture : le message est PERSISTÉ (`appendMessage`, rôle
+   * `assistant`, donc relisible et réactivable), versé au transcript, et ANNONCÉ par
+   * les trames habituelles (`run_started` → `delta` → `run_finished`, SANS `userText` :
+   * ce n'est pas une parole de l'utilisateur). Dupliquer ce corps de fonction aurait
+   * fait diverger l'ordre des trames entre les deux appelants.
+   *
+   * ⚠️ Lève une `PiHostError` si la persistance échoue : l'appelant ne doit JAMAIS
+   * croire avoir publié un message que le rechargement ne retrouverait pas.
+   */
+  function publierDansSession(record: SessionRecord, corps: string): void {
+    const at = Date.now();
+    let entryId: string | undefined;
+    try {
+      entryId = record.session.sessionManager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: corps }],
+      } as unknown as Parameters<typeof record.session.sessionManager.appendMessage>[0]);
+    } catch (error) {
+      logger.warn("pi.publier.persist_failed", {
+        session_id: record.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new PiHostError(
+        "PI_SESSION_ERROR",
+        `Publication impossible dans cette conversation : ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { sessionId: record.sessionId },
+      );
+    }
+    const entry: TranscriptEntry = {
+      role: "assistant",
+      text: corps,
+      timestamp: at,
+      ...(typeof entryId === "string" && entryId !== "" ? { id: entryId } : {}),
+    };
+    record.transcript.push(entry);
+    const runId = newRunId();
+    emitEvent({ type: "run_started", sessionId: record.sessionId, runId });
+    emitEvent({
+      type: "delta",
+      sessionId: record.sessionId,
+      runId,
+      channel: "content",
+      text: corps,
+    });
+    emitEvent({
+      type: "run_finished",
+      sessionId: record.sessionId,
+      runId,
+      reason: "done",
+      ...(entry.id !== undefined ? { entryId: entry.id } : {}),
+    });
+    logger.info("pi.publier.published", {
+      session_id: record.sessionId,
+      chars: corps.length,
+    });
+  }
+
   const host: PiHost = {
     async start(): Promise<void> {
       if (ready) return;
@@ -2361,6 +2473,33 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       }
       void startRun(record, run);
       return { runId, sessionId: record.sessionId, queued: false };
+    },
+
+    /**
+     * ⚠️ LOT 26 — publie un message ASSISTANT sans tour de modèle (résultat d'un
+     * déclencheur planifié). Persisté dans le JSONL (`appendMessage`), versé au
+     * transcript, ANNONCÉ par les trames habituelles : l'interface affiche une
+     * réponse normale, et un rechargement la retrouve.
+     *
+     * ⚠️ DEPUIS LE LOT 27 (2026-11-04), c'est aussi le chemin de `envoyer_message` : le
+     * corps est écrit par `publierDansSession` (une seule implémentation, donc un seul
+     * ordre de trames et une seule persistance, que l'appelant soit le résultat d'un
+     * déclencheur ou un message du modèle).
+     */
+    async publierMessage(sessionId: string, texte: string): Promise<void> {
+      const record = recordFor(sessionId);
+      if (!record) {
+        throw new PiHostError("PI_SESSION_ERROR", "Session inconnue.", { sessionId });
+      }
+      const corps = typeof texte === "string" ? texte.trim() : "";
+      if (corps === "") {
+        throw new PiHostError(
+          "PI_SESSION_ERROR",
+          "Message vide : rien à publier.",
+          { sessionId },
+        );
+      }
+      publierDansSession(record, corps);
     },
 
     async abort(sessionId: string, runId?: string): Promise<void> {

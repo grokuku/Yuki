@@ -1,10 +1,15 @@
 /**
  * Section « NOTIFICATIONS » de la page de discussion (`/`).
  *
- * ⚠️ DÉCISION UTILISATEUR : les messages envoyés par une SOURCE (agrégateur de
- * news, client de messagerie, n'importe quel programme branché) ne sont PAS des
- * bulles dans un fil. Ils s'empilent ICI :
- *   - compteur de NON-LUS dans l'en-tête ;
+ * ⚠️ Lot 26 — CE QUE CETTE BOÎTE COMPTE A CHANGÉ : la pastille ne compte plus les
+ * RÉCEPTIONS, seulement les ÉCHECS et les ALERTES. Un déclencheur SILENCIEUX
+ * (le défaut) n'écrit JAMAIS ici : son contenu reçu n'apparaît nulle part, seul
+ * son résultat est publié dans le fil « Déclencheurs ».
+ *
+ * ⚠️ DÉCISION UTILISATEUR : les messages envoyés par une SOURCE en mode VISIBLE
+ * (agrégateur de news, client de messagerie, n'importe quel programme branché) ne
+ * sont PAS des bulles dans un fil. Ils s'empilent ICI :
+ *   - compteur d'ÉCHECS / ALERTES dans l'en-tête ;
  *   - une entrée = source + heure + titre + ÉTAT (reçu / traité / en échec) ;
  *   - contenu REPLIÉ par défaut (jamais déversé à l'écran) ;
  *   - la RÉPONSE de Yuki est affichée dans la MÊME entrée ;
@@ -108,6 +113,7 @@ export function initSourcesNotifications({
   const doFetch = fetchImpl ?? ((url, init) => fetch(url, init));
 
   function updateCounter() {
+    // ⚠️ `nonLus` vient du serveur et ne compte QUE les échecs et les alertes.
     if (count) {
       count.textContent = String(state.nonLus);
       count.hidden = state.nonLus === 0;
@@ -116,16 +122,16 @@ export function initSourcesNotifications({
       button.setAttribute(
         "aria-label",
         state.nonLus === 0
-          ? "Notifications (aucune non lue)"
-          : `Notifications (${state.nonLus} non lue${state.nonLus > 1 ? "s" : ""})`,
+          ? "Alertes des déclencheurs (aucun échec)"
+          : `Alertes des déclencheurs (${state.nonLus} échec${state.nonLus > 1 ? "s" : ""} ou alerte${state.nonLus > 1 ? "s" : ""})`,
       );
       button.classList.toggle("has-unread", state.nonLus > 0);
     }
     if (summary) {
       summary.textContent =
         state.nonLus === 0
-          ? `${state.entries.length} entrée${state.entries.length > 1 ? "s" : ""} · à jour`
-          : `${state.nonLus} non lue${state.nonLus > 1 ? "s" : ""} sur ${state.entries.length}`;
+          ? `${state.entries.length} entrée${state.entries.length > 1 ? "s" : ""} · aucun échec`
+          : `${state.nonLus} échec${state.nonLus > 1 ? "s" : ""} ou alerte${state.nonLus > 1 ? "s" : ""} sur ${state.entries.length}`;
     }
   }
 
@@ -227,8 +233,10 @@ export function initSourcesNotifications({
         h("p", {
           class: "notifs__empty",
           text:
-            "Aucune notification. Les messages envoyés par vos sources (veille, " +
-            "messagerie…) s'empileront ici — jamais dans une conversation.",
+            "Aucun échec, aucune alerte. ⚠️ Le contenu reçu par un déclencheur " +
+            "silencieux n'apparaît jamais ici : seul son résultat peut être publié " +
+            "dans le fil « Déclencheurs ». Les messages d'un déclencheur VISIBLE " +
+            "s'empilent ici — jamais dans une conversation.",
         }),
       );
     } else {

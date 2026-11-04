@@ -316,6 +316,37 @@ export type {
   ScreenshotViewEvent,
 } from "./execution.js";
 
+// PRÉ-AUTORISATIONS des tâches de fond (lot 26, lot 4/4) : ce qu'un DÉCLENCHEUR
+// peut exécuter SANS validation humaine. ⚠️ Jamais de joker, expirantes, une
+// consommation = une exécution.
+export {
+  declencheurDeLOrigine,
+  DUREE_DEFAUT_JOURS,
+  DUREE_MAX_JOURS,
+  estOrigineDeclencheur,
+  etatPreAutorisation,
+  MAX_PREAUTORISATIONS,
+  MOTIFS_PROPOSES,
+  motifCorrespond,
+  ORIGINE_DECLENCHEUR,
+  origineDeclencheur,
+  PreAutorisationError,
+  PreAutorisationStore,
+  PREAUTORISATION_SCHEMA_VERSION,
+  texteMotif,
+  texteRisque,
+} from "./preautorisations.js";
+export type {
+  DemandeConsommation,
+  EtatPreAutorisation,
+  MotifPropose,
+  PorteeMotif,
+  PreAutorisation,
+  PreAutorisationJournal,
+  PreAutorisationPort,
+  ResultatConsommation,
+} from "./preautorisations.js";
+
 // VERROU des agents « matériel sensible » : état ÉPHÉMÈRE (en mémoire), séparé
 // du niveau de garde-fou (le reverrouillage n'écrit RIEN dans `agents.jsonl`).
 export {

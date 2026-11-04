@@ -71,6 +71,7 @@ commodité (copie `.env` + attente de `/health/live`).
 | [`docs/lot1.md`](docs/lot1.md) | Spécification validée du Lot 1 (noyau texte) et critères d'acceptation |
 | [`docs/lot2.md`](docs/lot2.md) | Spécification validée du Lot 2 (multi-LLM, `delegate`, JobStore) |
 | [`docs/lot11.md`](docs/lot11.md) | Spécification validée du Lot 11 (paramétrage web, clés LLM à chaud, `models.json` généré) |
+| [`docs/lot26-declencheurs.md`](docs/lot26-declencheurs.md) | Déclencheurs v2 : visibilité **silencieuse** par défaut, fil « Déclencheurs », journal, migration `sources.json` v1 → v2 |
 | [`docs/architecture.md`](docs/architecture.md) | Vue d'ensemble et carte des 11 lots (chemin critique) |
 | [`docs/versions.md`](docs/versions.md) | Versions verrouillées (audit daté) |
 | [`docs/runbook.md`](docs/runbook.md) | Démarrer, observer, changer de GPU, dépanner |

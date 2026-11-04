@@ -91,6 +91,10 @@ describe("createRemoteReplyGenerator — le prompt nomme le bot de SA plateforme
     expect([...outils].sort()).toEqual([
       "consulter_workflow",
       "envoyer_fichier",
+      // ⚠️ Réponse en plusieurs messages (`envoyer_message`, 2026-11-04) : groupe
+      // `toujours` — la publication dans la conversation courante ne dépend d'aucun
+      // réglage d'accès distant.
+      "envoyer_message",
       "generer_image",
       "lire_fichier",
       "lister_fichiers",

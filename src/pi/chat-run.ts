@@ -33,6 +33,7 @@ import {
   type RemoteRunLibrarianPorts,
   type RemoteRunVision,
 } from "./sdk/remote-run-tools.js";
+import type { MessageSendPort } from "./sdk/send-message-tool.js";
 
 export interface RemoteRunToolsOptions {
   /** Conversation (canal distant) : les fichiers du run y sont rattachés. */
@@ -92,6 +93,14 @@ export interface RemoteRunToolsOptions {
    * suivis, plateforme du run) est tenu par le port, pas par l'allowlist.
    */
   channels?: ChannelPostPort;
+  /**
+   * Envoi de message DANS la conversation courante (`envoyer_message`, 2026-11-04).
+   *
+   * ⚠️ Groupe `toujours` : un message ne touche à aucune machine, donc il ne dépend
+   * ni de `chat.remoteAgents` ni de `chat.remoteTools` — comme `publier_dans_canal`.
+   * Le port publie par `ReplyProgress` (le canal), jamais par un second chemin.
+   */
+  messages?: MessageSendPort;
   logger?: PiLogger;
 }
 
@@ -243,6 +252,10 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
     // `actives` ferait diverger la politique de l'implémentation (l'écart est
     // journalisé, mais autant ne pas l'avoir).
     ...(options.channels ? { channels: options.channels } : {}),
+    // ⚠️ ENVOI DE MESSAGE (`envoyer_message`) : groupe `toujours`, donc transmis hors
+    // de tout bloc de réglage — sinon la politique (qui pousse le socle incondition-
+    // nellement) autoriserait un outil que ce run n'instancie pas.
+    ...(options.messages ? { messages: options.messages } : {}),
     ...(actifs && options.agents ? { agents: options.agents } : {}),
     ...(actifs && options.secrets ? { secrets: options.secrets } : {}),
     ...(actifs && options.delegation ? { delegation: options.delegation } : {}),

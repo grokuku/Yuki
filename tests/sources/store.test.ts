@@ -39,17 +39,40 @@ function makeStore(now?: () => number): { store: SourcesStore; path: string } {
 }
 
 describe("SourcesStore — création et persistance", () => {
-  it("crée une source avec des réglages par défaut SÛRS (stocker, aucune destination)", () => {
+  it("crée une source avec des réglages par défaut SÛRS (SILENCIEUX, aucune destination)", () => {
     const { store } = makeStore();
     const source = store.create("agregateur");
     expect(source.nom).toBe("agregateur");
+    // ⚠️ v2 : le DÉFAUT est SILENCIEUX — le contenu reçu n'apparaît nulle part,
+    // seul le résultat est publié dans le fil « Déclencheurs ».
+    expect(source.visibilite).toBe("silencieux");
+    expect(source.declencheur).toEqual({ type: "webhook" });
+    // Champs RÉSERVÉS au lot 2 : déclarés, non câblés.
+    expect(source.preAutorisations).toEqual([]);
     // Par défaut : on n'interrompt PAS Yuki (aucun tour non demandé)…
     expect(source.tour).toBe("stocker");
     // …et surtout : AUCUNE destination. Une source neuve n'écrit nulle part tant
     // que l'utilisateur n'a pas choisi un fil (règle « C »).
-    expect(source.conversation).toBe("aucune");
-    expect(source.notifier).toBe(true);
+    expect(source.destination).toBe("aucune");
+    // ⚠️ Un déclencheur silencieux ne notifie JAMAIS (aucun Web Push).
+    expect(source.notifier).toBe(false);
     expect(source.consigne).toBe("");
+  });
+
+  it("un réglage du modèle v1 (tour/destination/notifier) SANS visibilité reste VISIBLE", () => {
+    const { store } = makeStore();
+    const source = store.create("veille", { tour: "lancer", destination: "courante", notifier: true });
+    expect(source.visibilite).toBe("visible");
+    expect(source.notifier).toBe(true);
+  });
+
+  it("force notifier=false dès que la visibilité est silencieuse", () => {
+    const { store } = makeStore();
+    const source = store.create("veille", { visibilite: "silencieux", notifier: true });
+    expect(source.notifier).toBe(false);
+    const updated = store.update("veille", { visibilite: "visible", notifier: true });
+    expect(updated.notifier).toBe(true);
+    expect(store.update("veille", { visibilite: "silencieux" }).notifier).toBe(false);
   });
 
   it("persiste sur disque en 0600 et relit à l'identique", () => {
@@ -124,24 +147,24 @@ describe("SourcesStore — validation", () => {
       expect(() => validateConversation(invalid)).toThrow(/Destination invalide/);
     }
     const { store } = makeStore();
-    expect(() => store.create("news", { conversation: "a b" })).toThrow(/Destination invalide/);
-    expect(store.create("veille", { conversation: "session-42" }).conversation).toBe("session-42");
+    expect(() => store.create("news", { destination: "a b" })).toThrow(/Destination invalide/);
+    expect(store.create("veille", { destination: "session-42" }).destination).toBe("session-42");
   });
 
   it("changer de destination OUBLIE le fil dédié mémorisé (aucun héritage silencieux)", () => {
     const { store } = makeStore();
-    store.create("news", { conversation: "source" });
+    store.create("news", { destination: "source" });
     store.setSession("news", "fil-dedie");
     expect(store.get("news")?.sessionId).toBe("fil-dedie");
     // La destination change : l'ancienne ne doit pas continuer de recevoir.
-    const updated = store.update("news", { conversation: "session-autre" });
-    expect(updated.conversation).toBe("session-autre");
+    const updated = store.update("news", { destination: "session-autre" });
+    expect(updated.destination).toBe("session-autre");
     expect(updated.sessionId).toBeUndefined();
   });
 
   it("PATCH partiel : un champ absent n'est pas modifié, un champ invalide est REFUSÉ", () => {
     const { store } = makeStore();
-    store.create("news", { tour: "lancer", conversation: "courante" });
+    store.create("news", { tour: "lancer", destination: "courante" });
     const updated = store.update("news", { notifier: false });
     expect(updated.tour).toBe("lancer");
     expect(updated.notifier).toBe(false);
@@ -165,10 +188,10 @@ describe("SourcesStore — mémoire de la conversation dédiée", () => {
 
   it("retrouve les sources qui postent dans un fil (modale de suppression)", () => {
     const { store } = makeStore();
-    store.create("designee", { conversation: "session-42" });
-    store.create("dediee", { conversation: "source" });
+    store.create("designee", { destination: "session-42" });
+    store.create("dediee", { destination: "source" });
     store.setSession("dediee", "session-42");
-    store.create("ailleurs", { conversation: "session-99" });
+    store.create("ailleurs", { destination: "session-99" });
     expect(store.forSession("session-42").map((r) => r.nom).sort()).toEqual([
       "dediee",
       "designee",
@@ -178,14 +201,14 @@ describe("SourcesStore — mémoire de la conversation dédiée", () => {
 
   it("⚠️ la suppression d'un fil RÉAFFECTE ses sources (jamais supprimées)", () => {
     const { store } = makeStore();
-    store.create("designee", { conversation: "session-42" });
-    store.create("dediee", { conversation: "source" });
+    store.create("designee", { destination: "session-42" });
+    store.create("dediee", { destination: "source" });
     store.setSession("dediee", "session-42");
     const affected = store.detachSession("session-42");
     expect(affected.map((r) => r.nom).sort()).toEqual(["dediee", "designee"]);
     // Les sources EXISTENT toujours, en « nouvelle conversation à chaque fois ».
     for (const nom of ["dediee", "designee"]) {
-      expect(store.get(nom)?.conversation).toBe("nouvelle");
+      expect(store.get(nom)?.destination).toBe("nouvelle");
       expect(store.get(nom)?.sessionId).toBeUndefined();
     }
     // Un second appel est un no-op (idempotent).

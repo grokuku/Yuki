@@ -42,6 +42,12 @@ import type {
 import { TIMEOUT_CODES, type TimeoutCode } from "./ports.js";
 import { buildBatchReportPrompt } from "./report.js";
 import { MAX_PENDING_STEERS } from "./steer.js";
+// ⚠️ ORIGINE d'un job créé par un DÉCLENCHEUR PLANIFIÉ (lot 26) : source UNIQUE
+// dans le domaine des déclencheurs. Elle marque le job ET son rapport — c'est
+// tout : son résultat est publié dans le fil local « Déclencheurs » par le port
+// `declencheurs`, sans réveiller le léger. Un job ne peut PAS créer de
+// déclencheur (le worker lourd n'a aucun outil pour cela).
+import { ORIGIN_DECLENCHEUR } from "../sources/frame.js";
 
 export const DEFAULT_DEADLINE_MS = 1_500;
 export const MIN_DEADLINE_MS = 200;
@@ -51,6 +57,16 @@ export const ORIGIN_JOB_REPORT = "job_report";
 export const ORIGIN_USER = "user";
 /** Taille maximale de l'extrait de progression porté par une trame d'activité. */
 export const ACTIVITY_DETAIL_MAX = 280;
+
+/**
+ * `true` si l'origine d'un job vient d'un DÉCLENCHEUR — forme courte historique
+ * (`declencheur`) ou forme NOMMÉE du lot 4/4 (`declencheur:<nom>`, qui porte le
+ * nom jusqu'au garde-fou des pré-autorisations).
+ */
+export function estJobDeclencheur(origine: string | undefined): boolean {
+  if (typeof origine !== "string") return false;
+  return origine === ORIGIN_DECLENCHEUR || origine.startsWith(`${ORIGIN_DECLENCHEUR}:`);
+}
 /**
  * E4 — Fenêtre de LOTISSEMENT des résultats (ms). FIXE : déclenchée par le
  * PREMIER résultat et NON repoussée (≠ debounce) ⇒ la latence est bornée.
@@ -136,6 +152,12 @@ export interface DelegationServiceOptions {
   waker?: LightWaker;
   /** Réservé Lot 10 : canal de notification sortant. */
   reporter?: JobReporter;
+  /**
+   * ⚠️ LOT 26 — DÉCLENCHEURS PLANIFIÉS : un job né d'un déclencheur (`origin`
+   * `declencheur`) ne réveille PAS le léger. Son résultat est publié par CE port
+   * dans le fil local « Déclencheurs » (`SourcesService.recevoirResultat`).
+   */
+  declencheurs?: DeclencheursPort;
   idleTimeoutMs: number;
   totalTimeoutMs: number;
   inlineMaxBytes?: number;
@@ -148,6 +170,15 @@ export interface DelegationServiceOptions {
   /** Horloges injectables (tests déterministes). */
   setTimeoutFn?: (fn: () => void, ms: number) => unknown;
   clearTimeoutFn?: (timer: unknown) => void;
+}
+
+/**
+ * Port des DÉCLENCHEURS : reçoit le job TERMINÉ, sans passer par un tour de
+ * conversation. Le port décide de publier, de se taire (`RIEN`) ou d'éteindre le
+ * déclencheur (`DÉSACTIVER`) — la politique vit dans `src/sources/service.ts`.
+ */
+export interface DeclencheursPort {
+  recevoirResultat(record: JobRecord): Promise<void> | void;
 }
 
 interface Completion {
@@ -173,6 +204,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   private readonly clearTimeoutFn: (timer: unknown) => void;
 
   private waker?: LightWaker;
+  private declencheurs?: DeclencheursPort;
   private readonly listeners = new Set<(event: PiEvent) => void>();
   private readonly completions = new Map<string, Completion>();
   private readonly handles = new Map<string, HeavyRunHandle>();
@@ -218,6 +250,14 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   /** Renseigne le réveil du léger une fois le host construit. */
   setWaker(waker: LightWaker): void {
     this.waker = waker;
+  }
+
+  /**
+   * Renseigne le port des DÉCLENCHEURS (résultat d'un job planifié publié sans
+   * tour de conversation).
+   */
+  setDeclencheurs(port: DeclencheursPort): void {
+    this.declencheurs = port;
   }
 
   /** Publie tous les événements (phases + lifecycle) sur le bus Pi. */
@@ -675,6 +715,11 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       idleTimeoutMs: this.idleTimeoutMs,
       totalTimeoutMs: this.totalTimeoutMs,
       ...(record.context !== undefined ? { context: record.context } : {}),
+      // ⚠️ TÂCHE DE FOND née d'un DÉCLENCHEUR : l'origine (avec le NOM du
+      // déclencheur) descend jusqu'aux outils d'action, donc jusqu'au garde-fou
+      // qui décide si une PRÉ-AUTORISATION s'applique. Un job humain ne la
+      // reçoit pas : rien ne change pour lui.
+      ...(estJobDeclencheur(record.origin) ? { origine: record.origin } : {}),
       ...(bufferedSteers && bufferedSteers.length > 0
         ? { initialSteers: bufferedSteers }
         : {}),
@@ -869,7 +914,34 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     );
 
     let runId: string | undefined;
-    if (this.waker) {
+    // ⚠️ JOB NÉ D'UN DÉCLENCHEUR PLANIFIÉ (`origin: "declencheur"` ou, depuis le
+    // lot 4/4, `"declencheur:<nom>"`) : il ne réveille PAS le léger (aucun tour de
+    // conversation). Son résultat part par le port des déclencheurs, qui décide de
+    // publier / se taire / éteindre (`RIEN`, `DÉSACTIVER`). Les autres jobs suivent
+    // le chemin historique ci-dessous.
+    const planifies = records.filter((record) => estJobDeclencheur(record.origin));
+    const autres = records.filter((record) => !estJobDeclencheur(record.origin));
+    if (planifies.length > 0 && !this.declencheurs) {
+      // ⚠️ Aucun port : le résultat d'un déclencheur ne peut être publié nulle part.
+      // On le DIT (jamais de perte silencieuse) — le chemin est câblé au démarrage
+      // (`src/index.ts`, `SourcesService.setDeclencheurPorts`).
+      this.logger.warn("delegation.declencheur.no_port", { jobs: planifies.length });
+    }
+    if (planifies.length > 0 && this.declencheurs) {
+      for (const record of planifies) {
+        void Promise.resolve(this.declencheurs.recevoirResultat(record)).catch(
+          (error: unknown) => {
+            this.logger.warn("delegation.declencheur.publish_failed", {
+              job_id: record.id,
+              error: sanitizeErrorText(
+                error instanceof Error ? error.message : String(error),
+              ),
+            });
+          },
+        );
+      }
+    }
+    if (this.waker && autres.length > 0) {
       // ⚠️ FICHIERS DU LOT : réunis dans l'ordre des jobs et dédupliqués. Le
       // réveil de CANAL les joint au message publié ; sans eux, une image
       // déléguée ne serait jamais visible (le rapport ne porte que du texte).
@@ -878,7 +950,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       // le rapport d'un canal est RÉSUMÉ avant publication, et un repli perdu au
       // résumé serait un repli silencieux. Le réveil de canal les ajoute APRÈS.
       const replis: string[] = [];
-      for (const record of records) {
+      for (const record of autres) {
         for (const id of record.result.fichiers ?? []) {
           if (!fichiers.includes(id)) fichiers.push(id);
         }
@@ -890,7 +962,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       try {
         const handle = this.waker.send(
           sessionId,
-          buildBatchReportPrompt(records),
+          buildBatchReportPrompt(autres),
           {
             origin: ORIGIN_JOB_REPORT,
             jobId: head.id,

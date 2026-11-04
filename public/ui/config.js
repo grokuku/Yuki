@@ -865,10 +865,14 @@ const TABS = [
   { id: "modeles", groups: ["llm-light", "llm-heavy"] },
   {
     id: "conversation",
-    // `sources` = borne d'injection du bloc `<sources>` (les SOURCES elles-mêmes
-    // vivent dans `sources.json` et sont gérées par le panneau `sources-root`).
-    groups: ["delegation", "prompts", "memoire", "fichiers", "sources"],
+    groups: ["delegation", "prompts", "memoire", "fichiers"],
   },
+  // DÉCLENCHEURS (lot 26, lot 3) : onglet DÉDIÉ à la page de gestion — trois
+  // sections (permanents / temporaires / en sommeil), colonne « dernier passage »
+  // et journal replié. Le groupe `sources` est la BORNE d'injection du bloc
+  // `<sources>` ; les déclencheurs eux-mêmes vivent dans `sources.json` et sont
+  // gérés par le panneau `sources-root` (même onglet).
+  { id: "declencheurs", groups: ["sources"] },
   { id: "personnalite", groups: [] },
   { id: "voix", groups: ["tts"] },
   // IMAGES générées (ComfyUI) : onglet PROPRE, nommé « Images ». Le panneau des
@@ -943,6 +947,8 @@ const personalityRoot = document.getElementById("personality-root");
 let voicesPanel = null;
 /** Panneau des workflows d'images — instancié après le premier chargement. */
 let imagesPanel = null;
+/** Page de gestion des DÉCLENCHEURS — onglet « Déclencheurs ». */
+let sourcesPanel = null;
 
 function h(tag, props = {}, children = []) {
   const el = document.createElement(tag);
@@ -1369,6 +1375,13 @@ function refreshVisibility() {
 const ANCRES_PROFONDES = new Map([
   [REMOTE_AGENTS_ANCHOR, "conversation"],
   [REMOTE_TOOLS_ANCHOR, "conversation"],
+  // ⚠️ Lot 26, lot 3 — la page de gestion des déclencheurs a son onglet. Ces
+  // ancres y mènent : `#declencheurs` (lien de la boîte de notifications),
+  // `#sources` (ancien lien : on ne le casse pas) et `#journal-declencheurs`
+  // (volet journal, visé par la colonne « dernier résultat »).
+  ["declencheurs", "declencheurs"],
+  ["sources", "declencheurs"],
+  ["journal-declencheurs", "declencheurs"],
 ]);
 
 /** Identifiant d'onglet valide déduit du hash courant, sinon `null`. */
@@ -1424,6 +1437,9 @@ function selectTab(tabId, { focus = false, updateHash = false } = {}) {
   // la liste à chaque affichage de l'onglet Images (lecture seule, aucun effet
   // de bord).
   if (tabId === "images") void imagesPanel?.refresh?.();
+  // Les déclencheurs travaillent en arrière-plan (horloge) : on relit leur page à
+  // chaque affichage de l'onglet, sinon « dernier passage » resterait figé.
+  if (tabId === "declencheurs") void sourcesPanel?.refresh?.();
   if (updateHash && location.hash !== `#${tabId}`) {
     history.replaceState(null, "", `#${tabId}`);
   }
@@ -1934,7 +1950,7 @@ void (async () => {
     // (nom + jeton du coffre + trois réglages indépendants + consigne libre).
     // ⚠️ Le jeton n'est affiché qu'UNE fois, à sa création.
     if (sourcesRoot) {
-      initSourcesPanel({ root: sourcesRoot, HolafFetch, HolafModal });
+      sourcesPanel = initSourcesPanel({ root: sourcesRoot, HolafFetch, HolafModal });
     }
     // Panneau « Discussions » (Mattermost, Discord) : jeton saisi une fois, état de la
     // connexion, backfill 2 semaines, canaux suivis. Composant autonome monté par id.

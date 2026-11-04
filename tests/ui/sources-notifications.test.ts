@@ -40,6 +40,8 @@ const CONFIG_HTML = read("config.html");
 const CONFIG_JS = read("config.js");
 const SESSIONS_PANEL = read("sessions-panel.js");
 const STYLES = read("styles.css");
+const CONFIG_CSS = read("config.css");
+const VUE_DECLENCHEURS = read("declencheurs-vue.js");
 
 /**
  * Code SANS ses commentaires : les garde-fous portent sur le CODE, pas sur la
@@ -172,16 +174,18 @@ describe("suppression d'un fil qui reçoit des sources (point ③)", () => {
 });
 
 describe("page /config — section « Sources »", () => {
-  it("le conteneur est monté dans un onglet EXISTANT (aucun onglet nouveau)", () => {
+  it("le conteneur est monté dans l'onglet DÉDIÉ « Déclencheurs » (lot 3)", () => {
     expect(CONFIG_HTML).toContain('id="sources-root"');
-    // Les neuf onglets restent EXACTEMENT les mêmes (verrouillés par
-    // `tests/integration/static-ui.test.ts`).
+    // Le panneau vit désormais dans SON onglet (il était enterré en bas de
+    // « Conversation » : ~4 écrans de défilement). Les dix onglets sont
+    // verrouillés par `tests/integration/static-ui.test.ts`.
     const tabLabels = [...CONFIG_HTML.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) =>
       m[1].trim(),
     );
     expect(tabLabels).toEqual([
       "Modèles",
       "Conversation",
+      "Déclencheurs",
       "Personnalité",
       "Voix",
       "Images",
@@ -190,7 +194,19 @@ describe("page /config — section « Sources »", () => {
       "Système",
       "Maintenance",
     ]);
-    // Monté par id depuis `config.js`, dans l'onglet Conversation.
+    // ⚠️ `#sources-root` est dans le panneau « Déclencheurs », PAS dans
+    // « Conversation » (c'est toute la correction du lot 3).
+    const conversation = CONFIG_HTML.slice(
+      CONFIG_HTML.indexOf('id="panel-conversation"'),
+      CONFIG_HTML.indexOf('id="panel-declencheurs"'),
+    );
+    expect(conversation).not.toContain('id="sources-root"');
+    const declencheurs = CONFIG_HTML.slice(
+      CONFIG_HTML.indexOf('id="panel-declencheurs"'),
+      CONFIG_HTML.indexOf('id="panel-personnalite"'),
+    );
+    expect(declencheurs).toContain('id="sources-root"');
+    // Monté par id depuis `config.js`.
     expect(CONFIG_JS).toContain("initSourcesPanel(");
     expect(CONFIG_JS).toContain('document.getElementById("sources-root")');
   });
@@ -217,5 +233,101 @@ describe("page /config — section « Sources »", () => {
   it("la borne d'injection du bloc <sources> est réglable dans /config", () => {
     expect(CONFIG_JS).toContain('"sources.promptTotalChars"');
     expect(CONFIG_JS).toContain('"sources"');
+  });
+});
+
+describe("lot 26 — visibilité SILENCIEUSE et pastille d'échecs", () => {
+  it("le panneau `/config` offre le réglage `visibilite` et DIT ce que fait « silencieux »", () => {
+    expect(SOURCES_PANEL).toContain('"source-visibilite"');
+    expect(SOURCES_PANEL).toContain('"silencieux", "Silencieux');
+    expect(SOURCES_PANEL).toContain('"visible", "Visible');
+    // Le texte doit dire l'essentiel : contenu invisible, seul le résultat.
+    expect(SOURCES_PANEL).toContain("n'apparaît NULLE PART");
+    expect(SOURCES_PANEL).toContain("RIEN");
+    expect(SOURCES_PANEL).toContain("Déclencheurs");
+    // En silencieux, destination / tour / notification sont masqués ET désactivés.
+    expect(code(SOURCES_PANEL)).toContain("estSilencieux(");
+    expect(code(SOURCES_PANEL)).toContain(".hidden = silencieux");
+    expect(code(SOURCES_PANEL)).toContain(".disabled = silencieux");
+    // Le corps envoyé à l'API porte `destination` (modèle v2), plus `conversation`.
+    // ⚠️ `hidden` doit GAGNER sur `display: flex` (`.config-label`), sinon les
+    // réglages resteraient visibles malgré l'attribut.
+    expect(CONFIG_CSS).toContain(".source-form [hidden]");
+    expect(code(SOURCES_PANEL)).toContain("destination: values.destination");
+    expect(code(SOURCES_PANEL)).toContain("visibilite: values.visibilite");
+    expect(code(SOURCES_PANEL)).not.toContain("conversation: values");
+  });
+
+  it("la pastille ne compte que les échecs et les alertes", () => {
+    expect(NOTIFICATIONS).toContain("ne compte plus les");
+    expect(NOTIFICATIONS).toContain("échecs et les alertes");
+    // Les libellés d'en-tête ne parlent plus de « non lues » mais d'échecs.
+    expect(code(NOTIFICATIONS)).toContain("Alertes des déclencheurs");
+    expect(code(NOTIFICATIONS)).toContain("aucun échec");
+    // `nonLus` vient du serveur : l'interface ne le recalcule pas.
+    expect(code(NOTIFICATIONS)).toContain("state.nonLus = Number.isFinite(data?.nonLus)");
+  });
+
+  it("la section Notifications porte un LIEN vers la page de gestion (ancre #declencheurs)", () => {
+    expect(INDEX).toContain('id="sources-notifs-manage"');
+    // ⚠️ Le lien vise l'ONGLET dédié (lot 3). L'ancienne ancre `#sources` reste
+    // acceptée par `ANCRES_PROFONDES` mais n'est plus celle qu'on affiche.
+    expect(INDEX).toContain('href="/config#declencheurs"');
+    expect(INDEX).not.toContain('href="/config#sources"');
+    expect(INDEX).toContain("Gérer les déclencheurs");
+    // L'ancre profonde est bien déclarée côté page de configuration.
+    expect(CONFIG_JS).toContain('["declencheurs", "declencheurs"]');
+  });
+});
+
+/**
+ * MOTEUR HORLOGE (lot 26, lot 2) — le panneau doit permettre de RÉGLER un
+ * déclencheur planifié et d'en voir le PROCHAIN PASSAGE.
+ *
+ * ⚠️ Ces assertions ÉCHOUENT sur le code d'origine : le panneau ne connaissait
+ * que `webhook` (aucun champ d'expression, aucun aperçu).
+ */
+describe("sources-panel.js — déclencheur planifié (moteur horloge)", () => {
+  it("propose le TYPE de déclencheur et les réglages d'horloge", () => {
+    const source = code(SOURCES_PANEL);
+    expect(source).toContain('id: "source-declencheur"');
+    expect(source).toContain("webhook");
+    expect(source).toContain("planning");
+    expect(source).toContain('id: "source-expression"');
+    expect(source).toContain('id: "source-fuseau"');
+    // Valeur par défaut du fuseau : Europe/Paris (jamais celui du serveur).
+    expect(SOURCES_PANEL).toContain("Europe/Paris");
+    // Garde-fou et chevauchement réglables.
+    expect(source).toContain('id: "source-chevauchement"');
+    expect(source).toContain('id: "source-rattrapage"');
+    expect(source).toContain('id: "source-plafond"');
+    expect(source).toContain('id: "source-max-tours"');
+    expect(source).toContain('id: "source-actif"');
+  });
+
+  it("affiche un APERÇU du prochain passage via la route dédiée", () => {
+    const source = code(SOURCES_PANEL);
+    // ⚠️ Route GARDÉE (même en-tête que le reste de l'administration).
+    expect(source).toContain("/api/sources/apercu?");
+    expect(source).toContain("JSON_HEADERS");
+    expect(source).toContain("Aperçu du prochain passage");
+    expect(source).toContain("data?.raison");
+  });
+
+  it("envoie `declencheur` dans le corps de création ET de modification", () => {
+    const source = code(SOURCES_PANEL);
+    expect(source).toContain('type: "planning"');
+    expect(source).toContain("declencheur: values.declencheur");
+    expect(source).toContain("plafondMs: values.plafondMs");
+  });
+
+  it("la liste montre le déclencheur, le prochain passage et la mise en veille", () => {
+    // ⚠️ Lot 3 : ces textes vivent désormais dans `declencheurs-vue.js` (règles
+    // pures, testées sans navigateur) et non plus dans le panneau.
+    const vue = VUE_DECLENCHEURS;
+    expect(vue).toContain("prochain passage");
+    expect(vue).toContain("en sommeil");
+    expect(vue).toContain("raisonInactive");
+    expect(SOURCES_PANEL).toContain("texteEtat(");
   });
 });

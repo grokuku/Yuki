@@ -321,9 +321,19 @@ export function buildHeavyActionTools(
    * jamais : elle serait invisible pour la personne qui a demandé la tâche.
    */
   onFileProduced?: (fileId: string) => void,
+  /**
+   * ORIGINE du job (`declencheur:<nom>` pour une tâche de fond née d'un
+   * déclencheur, absente sinon). 
+   *
+   * ⚠️ Elle est transmise aux outils d'ACTION, donc au garde-fou : c'est ce qui
+   * permet à une tâche de fond de consommer une PRÉ-AUTORISATION (lot 26, lot
+   * 4/4). Absente ⇒ un tour humain, qui ne consomme jamais rien.
+   */
+  origine?: string,
 ): ToolDefinition[] {
   const options: ActionToolOptions = {
     approvalSessionId: () => lightSessionId,
+    ...(origine !== undefined ? { origine: () => origine } : {}),
   };
   const tools: ToolDefinition[] = [];
   if (config.execution) tools.push(...createExecutionTools(config.execution, options));
@@ -647,6 +657,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
           imagesSupported: sdkModelSupportsImages(model),
         },
         onFileProduced,
+        request.origine,
       );
       ephemeral = await (config.createSession ?? createEphemeralSession)({
         cwd: config.cwd,

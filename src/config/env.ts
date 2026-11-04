@@ -181,6 +181,23 @@ export interface Env {
    * `YUKI_SOURCES_INBOX_PATH`.
    */
   sourcesInboxPath: string;
+  /**
+   * JOURNAL des déclencheurs silencieux (volume `state`,
+   * `declencheurs-journal.jsonl`). ⚠️ Append-only, contenu borné à 8 000
+   * caractères, purge à 30 jours. Il ne s'affiche JAMAIS dans l'interface de
+   * conversation : c'est la seule trace d'un contenu reçu en mode silencieux.
+   * Surcharge : `YUKI_DECLENCHEURS_JOURNAL_PATH`.
+   */
+  declencheursJournalPath: string;
+  /**
+   * PRÉ-AUTORISATIONS des tâches de fond (volume `state`,
+   * `preautorisations.json`). ⚠️ Fichier DÉDIÉ : ni `config.json` (patch plat de
+   * scalaires) ni `sources.json` (cycles de vie différents). Il porte ce qu'un
+   * déclencheur peut exécuter SANS validation humaine : déclencheur, agent,
+   * motif exact ou préfixe déclaré, expiration, consommation.
+   * Surcharge : `YUKI_PREAUTORISATIONS_PATH`.
+   */
+  preAutorisationsPath: string;
   // --- Discussions distantes (Lot 18, lot 2) ---
   /**
    * INDEX du MIROIR des canaux distants (volume `state`, `chat-mirror.json`).
@@ -466,6 +483,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_SOURCES_INBOX_PATH",
       `${mountPoints.state}/sources-inbox.json`,
+    ),
+    declencheursJournalPath: getString(
+      env,
+      "YUKI_DECLENCHEURS_JOURNAL_PATH",
+      `${mountPoints.state}/declencheurs-journal.jsonl`,
+    ),
+    preAutorisationsPath: getString(
+      env,
+      "YUKI_PREAUTORISATIONS_PATH",
+      `${mountPoints.state}/preautorisations.json`,
     ),
     chatMirrorPath: getString(
       env,

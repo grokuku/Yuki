@@ -37,6 +37,16 @@ export interface HeavyRunRequest {
   initialSteers?: readonly string[];
   /** Session légère propriétaire (instrumentation / corrélation). */
   lightSessionId: string;
+  /**
+   * ORIGINE du job (`user` par défaut, `declencheur:<nom>` pour une tâche de
+   * fond née d'un déclencheur).
+   *
+   * ⚠️ Elle est transmise TELLE QUELLE aux outils d'action du worker
+   * (`run_command`), donc jusqu'au garde-fou D118 : c'est ce qui permet à une
+   * tâche de fond de consommer une PRÉ-AUTORISATION (lot 26, lot 4/4), et à un
+   * tour humain de ne JAMAIS en consommer (l'origine n'est pas « declencheur »).
+   */
+  origine?: string;
   /** Durée d'inactivité maximale (sans événement) avant abort. */
   idleTimeoutMs: number;
   /** Durée totale maximale avant abort. */

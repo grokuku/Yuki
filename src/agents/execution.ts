@@ -19,6 +19,11 @@
  */
 
 import type { ApprovalRegistry, PendingApproval } from "./approvals.js";
+import {
+  declencheurDeLOrigine,
+  estOrigineDeclencheur,
+  type PreAutorisationPort,
+} from "./preautorisations.js";
 import type { AgentHub } from "./connection.js";
 import { isChannelError } from "./errors.js";
 import { destructiveLabels, evaluateDestructive } from "./destructive.js";
@@ -478,6 +483,17 @@ export interface ExecutionServiceOptions {
    * à zéro le compte d'inactivité (`touch`).
    */
   lock?: AgentLockPort;
+  /**
+   * Registre des PRÉ-AUTORISATIONS (lot 26, lot 4/4) : ce qu'une tâche de fond
+   * née d'un DÉCLENCHEUR peut exécuter SANS validation humaine.
+   *
+   * ⚠️ Absent ⇒ aucune pré-autorisation n'existe : une commande de tâche de fond
+   * demande une validation humaine et expire, exactement comme avant.
+   *
+   * ⚠️ Il est branché APRÈS la construction (`setPreAutorisations`) : le registre
+   * dépend du journal des déclencheurs, créé plus tard au démarrage.
+   */
+  preAutorisations?: PreAutorisationPort;
 }
 
 /** Timeout par défaut d'une commande (ms). */
@@ -586,6 +602,34 @@ type GuardDecision =
   | { kind: "refuse"; message: string }
   | { kind: "awaiting"; approval: PendingApproval };
 
+/**
+ * Message rendu au modèle quand une validation humaine est demandée.
+ *
+ * ⚠️ LOT 4/4 : une commande émise par une TÂCHE DE FOND (`origine =
+ * "declencheur:<nom>"`) ne peut PAS obtenir d'approbation — personne ne lit la
+ * conversation à 3 h du matin, et la demande expire en 5 minutes. On le dit
+ * explicitement, et on donne le remède (une pré-autorisation déclarée à la
+ * création du déclencheur). Sans cette phrase, le modèle conclut à un simple
+ * « en attente » et réessaie indéfiniment.
+ */
+export function messageAttenteValidation(origine?: string): string {
+  const base =
+    "Validation humaine requise : la commande n'a PAS été exécutée. " +
+    "Une demande d'approbation s'affiche dans la conversation : un humain doit " +
+    "valider ou refuser. Une fois validée, la commande s'exécute automatiquement.";
+  if (!estOrigineDeclencheur(origine)) return base;
+  const nom = declencheurDeLOrigine(origine);
+  const qui = nom !== undefined ? `« ${nom} »` : "cette tâche de fond";
+  return (
+    base +
+    ` ⚠️ ATTENTION : cette commande vient d'une TÂCHE DE FOND (déclencheur ${qui}). ` +
+    "Personne ne peut valider à sa place : la demande expirera en 5 minutes et la " +
+    "commande ne sera JAMAIS exécutée. Pour qu'une tâche de fond puisse agir sans " +
+    "humain, déclarez une PRÉ-AUTORISATION pour ce déclencheur dans la page de gestion " +
+    "(/config, onglet « Déclencheurs »). Ce n'est pas un incident : c'est le garde-fou."
+  );
+}
+
 let commandSeq = 0;
 
 function defaultCommandId(): string {
@@ -605,6 +649,11 @@ export class AgentExecutionService implements ExecutionServicePort {
   private readonly secrets?: SecretLookupPort;
   private readonly secretRequests?: SecretRequestRegistry;
   private readonly lock?: AgentLockPort;
+  /**
+   * Registre des PRÉ-AUTORISATIONS (mutable : branché après construction, quand
+   * le journal des déclencheurs existe). `undefined` ⇒ aucune autorisation.
+   */
+  private preAutorisations?: PreAutorisationPort;
 
   constructor(options: ExecutionServiceOptions) {
     this.store = options.store;
@@ -618,6 +667,16 @@ export class AgentExecutionService implements ExecutionServicePort {
     this.secrets = options.secrets;
     this.secretRequests = options.secretRequests;
     this.lock = options.lock;
+    this.preAutorisations = options.preAutorisations;
+  }
+
+  /**
+   * Branche le registre des PRÉ-AUTORISATIONS (comme `setWaker`) : il est créé
+   * plus tard que ce service au démarrage, parce qu'il écrit ses consommations
+   * dans le JOURNAL des déclencheurs.
+   */
+  setPreAutorisations(port: PreAutorisationPort): void {
+    this.preAutorisations = port;
   }
 
   /**
@@ -679,10 +738,7 @@ export class AgentExecutionService implements ExecutionServicePort {
           destructiveIds: verdict.ids,
           exitCode: null,
           approvalId: decision.approval.id,
-          message:
-            "Validation humaine requise : la commande n'a PAS été exécutée. " +
-            "Une demande d'approbation s'affiche dans la conversation : un humain doit " +
-            "valider ou refuser. Une fois validée, la commande s'exécute automatiquement.",
+          message: messageAttenteValidation(request.origin),
         };
       }
     }
@@ -1263,29 +1319,103 @@ export class AgentExecutionService implements ExecutionServicePort {
     }
     const needsApproval =
       record.level === "always" || (record.level === "destructive" && verdict.destructive);
-    if (needsApproval && !this.approvals.consume(record.agentId, command)) {
-      const pending = this.approvals.request({
-        agentId: record.agentId,
-        command,
-        destructive: verdict.destructive,
-        destructiveIds: verdict.ids,
-        ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
-        ...(request.shell !== undefined ? { shell: request.shell } : {}),
-        ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
-        ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
-        ...(request.origin !== undefined ? { origin: request.origin } : {}),
-      });
-      this.logger.info("agents.exec.awaiting_validation", {
+    if (!needsApproval) return { kind: "proceed" };
+    // Validation DÉJÀ accordée pour cette commande exacte (ticket à usage unique).
+    if (this.approvals.consume(record.agentId, command)) return { kind: "proceed" };
+
+    // ⚠️ PRÉ-AUTORISATION (lot 4/4) — évaluée AVANT `approvals.request`, et
+    // UNIQUEMENT pour une origine de DÉCLENCHEUR. Un tour humain ou un rapport
+    // de job ne peut donc JAMAIS ouvrir cette porte : la condition est sur
+    // l'ORIGINE, pas sur le contenu de la demande.
+    const preAutorisation = this.consommerPreAutorisation(record, command, verdict, request.origin);
+    if (preAutorisation?.kind === "refus") {
+      this.logger.info("agents.exec.preautorisation.refus", {
         agent_id: record.agentId,
         agent_name: record.name || null,
-        approval_id: pending.id,
-        session_id: pending.sessionId ?? null,
-        destructive: verdict.destructive,
-        level: record.level,
+        origin: request.origin ?? null,
       });
-      return { kind: "awaiting", approval: pending };
+      return { kind: "refuse", message: preAutorisation.raison };
     }
-    return { kind: "proceed" };
+    if (preAutorisation?.kind === "consommee") {
+      this.logger.info("agents.exec.preautorisation.consommee", {
+        agent_id: record.agentId,
+        agent_name: record.name || null,
+        preautorisation_id: preAutorisation.id,
+        motif: preAutorisation.motif,
+        portee: preAutorisation.portee,
+        origin: request.origin ?? null,
+      });
+      return { kind: "proceed" };
+    }
+
+    const pending = this.approvals.request({
+      agentId: record.agentId,
+      command,
+      destructive: verdict.destructive,
+      destructiveIds: verdict.ids,
+      ...(request.sessionId !== undefined ? { sessionId: request.sessionId } : {}),
+      ...(request.shell !== undefined ? { shell: request.shell } : {}),
+      ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
+      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+      ...(request.origin !== undefined ? { origin: request.origin } : {}),
+    });
+    this.logger.info("agents.exec.awaiting_validation", {
+      agent_id: record.agentId,
+      agent_name: record.name || null,
+      approval_id: pending.id,
+      session_id: pending.sessionId ?? null,
+      destructive: verdict.destructive,
+      level: record.level,
+      origin: request.origin ?? null,
+    });
+    return { kind: "awaiting", approval: pending };
+  }
+
+  /**
+   * Cherche et CONSOMME une pré-autorisation pour cette commande.
+   *
+   * ⚠️ Trois conditions cumulatives, dans cet ordre :
+   *  1. l'origine du tour est `declencheur:<nom>` (sinon `undefined` : la porte
+   *     n'est même pas regardée) ;
+   *  2. le nom du DÉCLENCHEUR est présent (sans lui, on ne saurait pas QUELLE
+   *     autorisation s'applique — donc aucune) ;
+   *  3. le registre répond `consommee`. `aucune` ⇒ comportement historique,
+   *     `refus` ⇒ la commande ne part PAS (le doute vaut refus).
+   */
+  private consommerPreAutorisation(
+    record: AgentRecord,
+    command: string,
+    verdict: { destructive: boolean },
+    origine: string | undefined,
+  ):
+    | { kind: "consommee"; id: string; motif: string; portee: "exacte" | "prefixe" }
+    | { kind: "refus"; raison: string }
+    | { kind: "aucune" }
+    | undefined {
+    if (!this.preAutorisations) return undefined;
+    if (!estOrigineDeclencheur(origine)) return undefined;
+    const declencheur = declencheurDeLOrigine(origine);
+    if (declencheur === undefined) return undefined;
+    try {
+      return this.preAutorisations.consommer({
+        declencheur,
+        agentId: record.agentId,
+        commande: command,
+        destructif: verdict.destructive,
+      });
+    } catch (error) {
+      // ⚠️ Une erreur du registre ne doit JAMAIS ouvrir la porte : on refuse.
+      this.logger.warn("agents.preautorisation.error", {
+        agent_id: record.agentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        kind: "refus",
+        raison:
+          "Pré-autorisation INDISPONIBLE (erreur interne du registre) : par prudence, " +
+          "rien n'est exécuté.",
+      };
+    }
   }
 
   // ── Capture d'écran (image ÉPHÉMÈRE, jamais dans l'historique) ──────────
