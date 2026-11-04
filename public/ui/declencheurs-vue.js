@@ -71,6 +71,11 @@ export const EVENEMENTS_JOURNAL = [
   ["desactive", "Désactivations"],
   ["refus", "Refus de déclenchement"],
   ["preautorisation", "Pré-autorisations consommées"],
+  // ⚠️ LOT 28 — envois programmés (« poste cette image à 16h10 »).
+  ["envoi_programme", "Envois programmés"],
+  ["envoi_publie", "Envois publiés"],
+  ["envoi_annule", "Envois annulés"],
+  ["envoi_echec", "Envois échoués"],
 ];
 
 /** Ancre du volet « journal » (lien depuis la colonne « dernier résultat »). */
@@ -78,6 +83,16 @@ export const ANCRE_JOURNAL = "journal-declencheurs";
 
 /** Ancre du volet « pré-autorisations » (lot 4/4). */
 export const ANCRE_PREAUTORISATIONS = "preautorisations-declencheurs";
+
+/**
+ * Ancre du volet « ENVOIS PROGRAMMÉS » (lot 28).
+ *
+ * ⚠️ C'est une SECTION À PART, et non une sous-partie de « Temporaires » : un envoi
+ * programmé n'est pas un déclencheur (il ne réveille aucun modèle), il a ses propres
+ * bornes, et c'est la SEULE liste où l'on clique « Annuler » — la mélanger aux
+ * déclencheurs ferait croire qu'on peut aussi annuler un planning.
+ */
+export const ANCRE_ENVOIS_PROGRAMMES = "envois-programmes";
 
 /**
  * Bornes du volet journal. ⚠️ Le journal n'est JAMAIS chargé en entier : on
@@ -379,6 +394,105 @@ export function resumerEvenement(evenement) {
   }
   if (typeof evenement?.octets === "number") morceaux.push(`${evenement.octets} octets`);
   return morceaux.join(" · ");
+}
+
+// ── ENVOIS PROGRAMMÉS (lot 28) ──────────────────────────────────────────────
+
+/**
+ * Libellés d'état d'un envoi programmé.
+ *
+ * ⚠️ « parti » et « échoué » ne sont jamais fondus dans un « terminé » : la personne
+ * doit pouvoir constater qu'un message EST parti (ou qu'il n'est PAS parti) avant de
+ * reprogrammer. Un échec porte toujours sa raison à côté.
+ */
+export const ETATS_ENVOI = [
+  ["en_attente", "en attente"],
+  ["en_cours", "en cours d'envoi"],
+  ["envoye", "envoyé"],
+  ["echoue", "échoué"],
+  ["annule", "annulé"],
+];
+
+/** Libellé lisible d'un état d'envoi (slug inconnu ⇒ rendu tel quel). */
+export function libelleEtatEnvoi(etat) {
+  const trouve = ETATS_ENVOI.find(([slug]) => slug === etat);
+  return trouve ? trouve[1] : String(etat ?? "?");
+}
+
+/** `true` si l'envoi peut encore être ANNULÉ (bouton proposé). */
+export function envoiAnnulable(envoi) {
+  return envoi?.etat === "en_attente";
+}
+
+/**
+ * Quand l'envoi partira (ou est parti) — ⚠️ l'instant EFFECTIF est affiché tel que le
+ * serveur l'a calculé (`quandLisible`, fuseau compris), jamais recalculé par le
+ * navigateur : le fuseau du navigateur n'est pas celui de Yuki.
+ */
+export function texteQuandEnvoi(envoi) {
+  const quand = typeof envoi?.quandLisible === "string" ? envoi.quandLisible : "";
+  const heure = typeof envoi?.quand === "string" ? envoi.quand : "";
+  const base = quand !== "" ? quand : dateHeureFr(heure);
+  if (envoi?.etat === "envoye" && typeof envoi?.envoyeLe === "string" && envoi.envoyeLe !== "") {
+    return `${base} — parti le ${dateHeureFr(envoi.envoyeLe)}`;
+  }
+  if (envoi?.etat === "echoue") return `${base} — n'est PAS parti`;
+  if (envoi?.etat === "annule") return `${base} — annulé avant l'envoi`;
+  return base;
+}
+
+/** Destination lisible d'un envoi (canal ou conversation locale). */
+export function texteCibleEnvoi(envoi) {
+  const cible = envoi?.cible;
+  if (!cible || typeof cible !== "object") return "?";
+  if (typeof cible.libelle === "string" && cible.libelle !== "") return cible.libelle;
+  if (cible.type === "canal") return String(cible.conversationId ?? "canal inconnu");
+  return "conversation locale";
+}
+
+/** Résumé BORNÉ du texte, avec la troncature DITE (jamais un texte coupé en silence). */
+export function texteResumeEnvoi(envoi, max = 140) {
+  const texte = typeof envoi?.texte === "string" ? envoi.texte.replace(/\s+/gu, " ").trim() : "";
+  if (texte === "") return "(texte vide)";
+  const coupe = texte.length > max ? `${texte.slice(0, max)}…` : texte;
+  return envoi?.texteTronque === true ? `${coupe} (résumé borné par le serveur)` : coupe;
+}
+
+/**
+ * Compteur affiché en tête du volet : « 2 en attente · maximum 20 · horizon 30 jours ».
+ *
+ * ⚠️ Le plafond est TOUJOURS affiché (même à 0 en attente) : sans lui, une personne qui
+ * programme son 20ᵉ envoi ne comprend pas le refus du modèle.
+ */
+export function texteCompteEnvois(donnees) {
+  const enAttente = entierPositif(donnees?.enAttente);
+  const maximum = entierPositif(donnees?.maximumEnAttente);
+  const horizon = entierPositif(donnees?.horizonJours);
+  const minimum = entierPositif(donnees?.delaiMinSecondes);
+  const morceaux = [`${enAttente} en attente`];
+  if (maximum > 0) morceaux.push(`maximum ${maximum}`);
+  if (horizon > 0) morceaux.push(`horizon ${horizon} jours`);
+  if (minimum > 0) morceaux.push(`au moins ${minimum} s d'avance`);
+  return morceaux.join(" · ");
+}
+
+/**
+ * Envois à AFFICHER : les en attente d'abord (les plus proches en tête), puis les
+ * terminés (les plus récents d'abord). ⚠️ Rien n'est masqué : un envoi échoué ou annulé
+ * reste listé, avec sa raison — la rétention de 7 jours côté serveur fait la place.
+ */
+export function trierEnvois(envois) {
+  const liste = Array.isArray(envois) ? envois.filter((envoi) => envoi && envoi.id) : [];
+  const attente = liste
+    .filter((envoi) => envoi.etat === "en_attente" || envoi.etat === "en_cours")
+    .sort((a, b) => Date.parse(a.quand) - Date.parse(b.quand));
+  const termines = liste
+    .filter((envoi) => envoi.etat !== "en_attente" && envoi.etat !== "en_cours")
+    .sort(
+      (a, b) =>
+        Date.parse(b.envoyeLe ?? b.quand ?? 0) - Date.parse(a.envoyeLe ?? a.quand ?? 0),
+    );
+  return [...attente, ...termines];
 }
 
 /** Lien vers le volet journal, filtré sur une source (ancre + `data-source`). */

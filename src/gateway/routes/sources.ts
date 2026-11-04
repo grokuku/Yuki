@@ -69,6 +69,13 @@ import {
   type SourcesLogger,
   type SourcesService,
 } from "../../sources/index.js";
+import {
+  DELAI_MIN_MS,
+  HORIZON_MAX_MS,
+  MAX_ENVOIS_EN_ATTENTE,
+  formaterInstantEnvoi,
+  type EnvoiProgramme,
+} from "../../chat/envois/index.js";
 import { requireWriteGuards } from "./config.js";
 import {
   DUREE_DEFAUT_JOURS,
@@ -122,6 +129,18 @@ export interface SourcesApiDeps {
    */
   journal?: {
     recent(limit?: number, filter?: DeclencheurJournalFilter): DeclencheurJournalRecord[];
+  };
+  /**
+   * ENVOIS PROGRAMMÉS (lot 28) : `programmer_envoi` côté conversation, annulation
+   * côté page de gestion.
+   *
+   * ⚠️ Absent ⇒ `GET` rend une liste VIDE et l'annulation est refusée (503) : on
+   * n'invente jamais un envoi qu'on ne pourrait pas annuler — une bombe à retardement
+   * invisible serait pire que l'absence de la fonction.
+   */
+  envois?: {
+    lister(): readonly EnvoiProgramme[];
+    annuler(id: string): { ok: true; envoi: EnvoiProgramme } | { ok: false; raison: string };
   };
   /**
    * REGISTRE des PRÉ-AUTORISATIONS (lot 26, lot 4/4).
@@ -376,6 +395,14 @@ export async function handleSourcesRequest(
       });
     }
 
+    // ── ENVOIS PROGRAMMÉS (lot 28) ─────────────────────────────────────────
+    // ⚠️ Lecture GARDÉE, comme le journal : un envoi programmé porte le TEXTE exact
+    // qui partira dans un canal — et c'est la seule façon de l'ANNULER avant l'heure.
+    // Une liste invisible serait une bombe à retardement : d'où cette route.
+    if (parts[0] === "envois") {
+      return handleEnvois(input, parts);
+    }
+
     // ── PRÉ-AUTORISATIONS (lot 26, lot 4/4) ────────────────────────────────
     // ⚠️ TOUTES ces routes sont GARDÉES (`X-Yuki-Config: 1` + `Origin`/`Host`) :
     // une pré-autorisation dit quelles commandes tourneront SANS validation
@@ -556,6 +583,101 @@ export async function handleSourcesRequest(
   } catch (error) {
     return errorBody(error);
   }
+}
+
+/** Nombre de caractères du texte rendu par `GET /api/sources/envois`. */
+const ENVOI_RESUME_CHARS = 400;
+
+/** Vue PUBLIQUE d'un envoi programmé (aucun champ interne, texte BORNÉ). */
+function envoiBody(envoi: EnvoiProgramme): Record<string, unknown> {
+  const quand = Date.parse(envoi.quand);
+  const cible =
+    envoi.cible.type === "canal"
+      ? {
+          type: "canal",
+          conversationId: envoi.cible.conversationId,
+          plateforme: envoi.cible.plateforme,
+          libelle: envoi.cible.titre ?? envoi.cible.conversationId,
+        }
+      : {
+          type: "local",
+          sessionId: envoi.cible.sessionId,
+          libelle: envoi.cible.titre ?? "conversation locale",
+        };
+  return {
+    id: envoi.id,
+    creeLe: envoi.creeLe,
+    quand: envoi.quand,
+    quandLisible: Number.isFinite(quand) ? formaterInstantEnvoi(quand) : envoi.quand,
+    // ⚠️ RÉSUMÉ borné : la page de gestion n'a pas à afficher 40 000 caractères, mais
+    // la troncature est DITE (`texteTronque`).
+    texte: envoi.texte.length > ENVOI_RESUME_CHARS ? envoi.texte.slice(0, ENVOI_RESUME_CHARS) : envoi.texte,
+    texteTronque: envoi.texte.length > ENVOI_RESUME_CHARS,
+    ...(envoi.fichierIds !== undefined ? { fichiers: envoi.fichierIds.length } : {}),
+    cible,
+    etat: envoi.etat,
+    tentatives: envoi.tentatives,
+    ...(envoi.envoyeLe !== undefined ? { envoyeLe: envoi.envoyeLe } : {}),
+    ...(envoi.raison !== undefined ? { raison: envoi.raison } : {}),
+    ...(envoi.source !== undefined ? { source: envoi.source } : {}),
+  };
+}
+
+/**
+ * Routes des ENVOIS PROGRAMMÉS (lot 28).
+ *
+ *   GET    /api/sources/envois        → la liste, les bornes, le compte en attente
+ *   DELETE /api/sources/envois/<id>   → ANNULATION (refus explicite si déjà parti)
+ *
+ * ⚠️ Toute mutation est GARDÉE (`X-Yuki-Config: 1` + `Origin`/`Host`) : annuler un
+ * envoi programmé modifie ce qui sera publié dans un canal.
+ */
+function handleEnvois(input: SourcesRequestInput, parts: string[]): SourcesHttpResponse {
+  const { method, deps } = input;
+  const guard = requireWriteGuards(input.headers);
+  if (guard) return { status: guard.status, body: guard.body, headers: guard.headers };
+
+  const service = deps.envois;
+  const bornes = {
+    maximumEnAttente: MAX_ENVOIS_EN_ATTENTE,
+    horizonJours: Math.round(HORIZON_MAX_MS / 86_400_000),
+    delaiMinSecondes: Math.round(DELAI_MIN_MS / 1000),
+  };
+
+  // `/api/sources/envois/<id>` — ANNULATION uniquement.
+  if (parts.length === 2) {
+    if (method !== "DELETE") return json(405, { error: "method_not_allowed", method });
+    if (!service) {
+      return json(503, {
+        error: "envois_unavailable",
+        code: "envois_unavailable",
+        message: "Les envois programmés ne sont pas câblés sur cette instance.",
+      });
+    }
+    const id = decodeURIComponent(parts[1] as string);
+    const issue = service.annuler(id);
+    if (!issue.ok) {
+      return json(409, {
+        error: "envoi_not_cancellable",
+        code: "envoi_not_cancellable",
+        message: issue.raison,
+      });
+    }
+    return json(200, { annule: true, envoi: envoiBody(issue.envoi) });
+  }
+
+  if (parts.length !== 1) {
+    return json(404, { error: "not_found", path: input.path });
+  }
+  if (method !== "GET" && method !== "HEAD") {
+    return json(405, { error: "method_not_allowed", method });
+  }
+  const liste = service?.lister() ?? [];
+  return json(200, {
+    envois: liste.map(envoiBody),
+    enAttente: liste.filter((envoi) => envoi.etat === "en_attente").length,
+    ...bornes,
+  });
 }
 
 /**

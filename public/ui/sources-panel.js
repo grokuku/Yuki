@@ -56,6 +56,7 @@
  */
 
 import {
+  ANCRE_ENVOIS_PROGRAMMES,
   ANCRE_JOURNAL,
   ANCRE_PREAUTORISATIONS,
   EVENEMENTS_JOURNAL,
@@ -73,6 +74,13 @@ import {
   texteQuand,
   texteTours,
   filtrerJournal,
+  envoiAnnulable,
+  libelleEtatEnvoi,
+  texteCibleEnvoi,
+  texteCompteEnvois,
+  texteQuandEnvoi,
+  texteResumeEnvoi,
+  trierEnvois,
 } from "./declencheurs-vue.js";
 import {
   DUREE_DEFAUT_JOURS,
@@ -693,6 +701,10 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     preAutorisationsErreur: "",
     motifs: [],
     agents: [],
+    /** ENVOIS PROGRAMMÉS (lot 28) : liste, bornes du serveur, erreur de lecture. */
+    envois: [],
+    envoisBornes: {},
+    envoisErreur: "",
   };
 
   const errorEl = h("p", { class: "config-error", hidden: true, role: "alert" });
@@ -1104,6 +1116,9 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     // Les PRÉ-AUTORISATIONS sont chargées d'office : leur bandeau d'état est
     // visible dans la section repliée, et une liste vide doit s'y lire.
     await chargerPreAutorisations();
+    // ENVOIS PROGRAMMÉS : chargés d'office — le compteur « N en attente » est visible
+    // dans la section repliée, et c'est lui qui prévient qu'un message va partir.
+    await chargerEnvois();
   }
 
   // ── ⑤ PRÉ-AUTORISATIONS (lot 26, lot 4/4) ─────────────────────────────────
@@ -1467,6 +1482,173 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     ],
   );
 
+  // ── ⑥ ENVOIS PROGRAMMÉS (lot 28) ─────────────────────────────────────────
+  //
+  // ⚠️ POURQUOI CE VOLET EXISTE : un envoi programmé est un message qui partira
+  // TOUT SEUL à une heure donnée. S'il n'est pas affiché, personne ne peut savoir
+  // qu'un message va partir dans un canal — ni l'annuler. C'est la seule raison
+  // d'être de cette liste, et c'est pour cela que « Annuler » y est toujours
+  // proposé tant que l'heure n'est pas passée.
+  const envoisListeEl = h("div", { class: "declencheurs-journal__liste" });
+  const envoisEtatEl = h("p", { class: "config-helper", role: "status" });
+
+  async function chargerEnvois() {
+    try {
+      const data = await HolafFetch.get("/api/sources/envois", { headers: JSON_HEADERS });
+      state.envois = Array.isArray(data?.envois) ? data.envois : [];
+      state.envoisBornes = {
+        enAttente: data?.enAttente,
+        maximumEnAttente: data?.maximumEnAttente,
+        horizonJours: data?.horizonJours,
+        delaiMinSecondes: data?.delaiMinSecondes,
+      };
+      state.envoisErreur = "";
+    } catch (error) {
+      state.envois = [];
+      state.envoisBornes = {};
+      state.envoisErreur = apiMessage(error, "Impossible de lire les envois programmés.");
+    }
+    renderEnvois();
+  }
+
+  function renderEnvois() {
+    envoisListeEl.textContent = "";
+    envoisEtatEl.textContent =
+      state.envoisErreur !== ""
+        ? state.envoisErreur
+        : texteCompteEnvois({
+            ...state.envoisBornes,
+            enAttente:
+              typeof state.envoisBornes.enAttente === "number"
+                ? state.envoisBornes.enAttente
+                : state.envois.filter((envoi) => envoi.etat === "en_attente").length,
+          });
+    const liste = trierEnvois(state.envois);
+    if (liste.length === 0) {
+      envoisListeEl.append(
+        h("p", {
+          class: "config-helper",
+          text:
+            "Aucun envoi programmé. Yuki en crée un quand on lui demande de publier " +
+            "« plus tard » (« poste cette image à 16h10 ») : le texte est figé, aucun " +
+            "modèle n'est appelé à l'heure dite.",
+        }),
+      );
+      return;
+    }
+    envoisListeEl.append(
+      h("table", { class: "sources-table declencheurs-table envois-table" }, [
+        h("thead", {}, [
+          h("tr", {}, [
+            h("th", { scope: "col", text: "Quand" }),
+            h("th", { scope: "col", text: "Message" }),
+            h("th", { scope: "col", text: "Destination" }),
+            h("th", { scope: "col", text: "État" }),
+            h("th", { scope: "col", text: "Action" }),
+          ]),
+        ]),
+        h(
+          "tbody",
+          {},
+          liste.map((envoi) =>
+            h("tr", { class: `envois-row envois-row--${envoi.etat}` }, [
+              h("td", { class: "envois-quand", text: texteQuandEnvoi(envoi) }),
+              h("td", { class: "envois-message" }, [
+                h("span", { class: "envois-message__texte", text: texteResumeEnvoi(envoi) }),
+                ...(typeof envoi.fichiers === "number" && envoi.fichiers > 0
+                  ? [
+                      h("span", {
+                        class: "declencheurs-nom__note",
+                        text: `${envoi.fichiers} pièce(s) jointe(s)`,
+                      }),
+                    ]
+                  : []),
+              ]),
+              h("td", { text: texteCibleEnvoi(envoi) }),
+              h("td", { class: "envois-etat" }, [
+                h("span", { text: libelleEtatEnvoi(envoi.etat) }),
+                ...(typeof envoi.raison === "string" && envoi.raison !== ""
+                  ? [h("span", { class: "declencheurs-nom__note", text: envoi.raison })]
+                  : []),
+              ]),
+              h("td", { class: "sources-table__actions" }, [
+                ...(envoiAnnulable(envoi)
+                  ? [
+                      h("button", {
+                        class: "button button--danger button--small",
+                        type: "button",
+                        text: "Annuler",
+                        on: () => void annulerEnvoi(envoi),
+                      }),
+                    ]
+                  : [h("span", { class: "config-helper", text: "—" })]),
+              ]),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  /**
+   * Annulation : confirmation EXPLICITE par `HolafModal` (jamais la boîte native).
+   *
+   * ⚠️ Le message de confirmation dit CE QUI ne partira pas : annuler un envoi est
+   * irréversible (il n'y a pas de « reprogrammer » d'un clic), et une confirmation
+   * vague ferait cliquer deux fois.
+   */
+  async function annulerEnvoi(envoi) {
+    const confirme = await HolafModal.confirm(
+      "Annuler cet envoi programmé ?",
+      `Le message ne partira pas dans ${texteCibleEnvoi(envoi)} à l'heure prévue ` +
+        `(${texteQuandEnvoi(envoi)}). Son texte restera dans le journal des ` +
+        "déclencheurs, mais il n'est pas possible de le rétablir : il faut le " +
+        "reprogrammer (en le demandant à Yuki) si le message est toujours d'actualité.",
+      { danger: true, confirmText: "Annuler l'envoi" },
+    );
+    if (!confirme) return;
+    await act("Envoi annulé : il ne partira pas.", async () => {
+      await HolafFetch.delete(`/api/sources/envois/${encodeURIComponent(envoi.id)}`, {
+        headers: WRITE_HEADERS,
+      });
+    });
+    await chargerEnvois();
+  }
+
+  const envoisDetails = h(
+    "details",
+    { class: "config-group declencheurs-journal envois-section", id: ANCRE_ENVOIS_PROGRAMMES },
+    [
+      h("summary", {
+        class: "declencheurs-journal__summary",
+        text: "Envois programmés (messages qui partiront à une heure précise)",
+      }),
+      h("p", {
+        class: "config-helper",
+        text:
+          "Quand vous demandez à Yuki de publier « plus tard » (« poste cette image à " +
+          "16h10 »), elle programme un envoi : le texte est FIGÉ, aucun modèle n'est " +
+          "appelé à l'heure dite, et la publication passe par le même chemin que ses " +
+          "autres messages. Un envoi survit à un redémarrage ; s'il est manqué de plus " +
+          "d'une heure, il est marqué ÉCHOUÉ au lieu d'être publié en retard, et sa " +
+          "raison est écrite ici. L'historique est conservé 7 jours.",
+      }),
+      envoisEtatEl,
+      envoisListeEl,
+      h("div", { class: "config-actions" }, [
+        h("button", {
+          class: "button button--ghost button--small",
+          type: "button",
+          text: "Rafraîchir",
+          on: () => void chargerEnvois(),
+        }),
+      ]),
+    ],
+  );
+  envoisDetails.addEventListener("toggle", () => {
+    if (envoisDetails.open) void chargerEnvois();
+  });
+
   // ── ③ Le 4ᵉ volet, le JOURNAL (replié par défaut) ────────────────────────
   const journalTypeSelect = h("select", {
     class: "config-select",
@@ -1573,6 +1755,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
       }),
       errorEl,
       sectionsEl,
+      envoisDetails,
       preauthDetails,
       journalDetails,
       statusEl,

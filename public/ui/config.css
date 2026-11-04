@@ -1683,3 +1683,44 @@
 .config-check input[type="checkbox"] {
   margin-top: 2px;
 }
+
+/* ── ENVOIS PROGRAMMÉS (lot 28) ──────────────────────────────────────────────
+   ⚠️ Un envoi programmé est un message qui partira TOUT SEUL : sa ligne doit se
+   lire d'un coup d'œil (quand · quoi · où · état), et l'action « Annuler » doit
+   rester visible même quand le texte du message est long. */
+.envois-section {
+  margin-top: 16px;
+}
+
+.envois-table {
+  margin-top: 10px;
+}
+
+.envois-table td {
+  vertical-align: top;
+}
+
+.envois-quand {
+  white-space: nowrap;
+}
+
+.envois-message__texte {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.envois-etat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Un envoi ÉCHOUÉ se voit : c'est une publication qui n'a PAS eu lieu. */
+.envois-row--echoue .envois-etat {
+  color: var(--danger, #d9534f);
+}
+
+/* Un envoi ANNULÉ n'est plus qu'une trace : il reste lisible, sans appeler l'action. */
+.envois-row--annule {
+  color: var(--muted);
+}

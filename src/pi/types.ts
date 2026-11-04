@@ -34,6 +34,7 @@ import type {
   ComfyImageView,
 } from "../comfy/index.js";
 import type { FilesSendPort } from "../files/types.js";
+import type { ScheduledSendPort } from "./sdk/scheduled-send-tool.js";
 import type { GeneratedImageFilesPort } from "../files/generated.js";
 import type { ModelsConfig } from "../llm/models.js";
 
@@ -200,6 +201,16 @@ export interface PiHostOptions {
    * Absent ⇒ aucun outil (tests, host nu).
    */
   files?: FilesSendPort;
+  /**
+   * ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28) : Yuki publie un message PLUS TARD,
+   * texte FIGÉ, dans cette conversation ou dans un canal suivi.
+   *
+   * ⚠️ Aucun modèle n'est appelé à l'heure dite et aucune machine n'est touchée : c'est
+   * un message, pas une action. Le port porte les BORNES (délai minimal 30 s, horizon
+   * 30 jours, 20 envois en attente) et la persistance — l'outil ne décide de rien.
+   * Absent ⇒ aucun outil (host nu, tests).
+   */
+  envoisProgrammes?: ScheduledSendPort;
   /**
    * IMAGES GÉNÉRÉES (serveur ComfyUI). Présent ⇒ la façade expose l'outil
    * `generer_image` (Yuki génère une image, la VOIT et peut régénérer) et

@@ -371,6 +371,11 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
             ],
             envoyer: async () => undefined,
           }),
+          // ⚠️ ENVOI PROGRAMMÉ (lot 28) : le socle `toujours` de la politique pousse
+          // `programmer_envoi` quel que soit le réglage — ce mini-composition root doit
+          // donc fournir le port comme le vrai, sinon la parité
+          // politique ↔ définitions (assertion plus bas) deviendrait fausse.
+          envoisProgrammes: { programmer: async () => ({ ok: false, raison: "test" }) },
           images: {
             // Générateur ComfyUI SIMULÉ : il écrit dans le VRAI store d'images et
             // rend exactement ce que rend le générateur réel.

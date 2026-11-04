@@ -71,7 +71,20 @@ export type DeclencheurEvent =
    * Le champ `preAutorisation` porte l'outil concerné. La valeur existe dès le
    * lot 3 pour que la page de gestion puisse la FILTRER sans nouvelle version.
    */
-  | "preautorisation";
+  | "preautorisation"
+  /**
+   * ⚠️ LOT 28 — ENVOIS PROGRAMMÉS (`programmer_envoi`) : un message PROGRAMMÉ
+   * (`envoi_programme`), PUBLIÉ à l'heure dite (`envoi_publie`), ANNULÉ depuis la
+   * page de gestion (`envoi_annule`) ou ÉCHOUÉ (cible disparue, retard trop grand,
+   * fichier refusé — `envoi_echec`). Le champ `envoi` porte l'identifiant.
+   *
+   * ⚠️ Une seule trace pour les deux mécanismes : c'est le même fichier que les
+   * déclencheurs, donc un seul endroit à consulter quand quelque chose ne part pas.
+   */
+  | "envoi_programme"
+  | "envoi_publie"
+  | "envoi_annule"
+  | "envoi_echec";
 
 /** Tous les événements connus, dans l'ordre d'affichage de la page de gestion. */
 export const DECLENCHEUR_EVENTS: readonly DeclencheurEvent[] = [
@@ -84,6 +97,10 @@ export const DECLENCHEUR_EVENTS: readonly DeclencheurEvent[] = [
   "desactive",
   "refus",
   "preautorisation",
+  "envoi_programme",
+  "envoi_publie",
+  "envoi_annule",
+  "envoi_echec",
 ];
 
 /** Filtre de lecture du journal (⚠️ borné : jamais tout le fichier). */
@@ -121,6 +138,12 @@ export interface DeclencheurJournalRecord {
    * est lu dès le lot 3 pour que la page de gestion offre sa colonne et son filtre.
    */
   preAutorisation?: string;
+  /**
+   * ⚠️ LOT 28 — identifiant de l'ENVOI PROGRAMMÉ concerné (`mm…`). Permet de relier
+   * les quatre lignes d'un même envoi (programmé → publié/annulé/échoué) sans
+   * recopier son texte.
+   */
+  envoi?: string;
 }
 
 /** Journal minimal (le logger d'observabilité le satisfait). */
@@ -216,6 +239,8 @@ export class DeclencheurJournal {
       raison?: string;
       sessionId?: string;
       preAutorisation?: string;
+      /** ⚠️ LOT 28 — identifiant de l'envoi programmé concerné. */
+      envoi?: string;
       ts?: string;
     },
   ): DeclencheurJournalRecord {
@@ -230,6 +255,7 @@ export class DeclencheurJournal {
       ...(input.preAutorisation !== undefined && input.preAutorisation !== ""
         ? { preAutorisation: input.preAutorisation }
         : {}),
+      ...(input.envoi !== undefined && input.envoi !== "" ? { envoi: input.envoi } : {}),
     };
     try {
       mkdirSync(dirname(this.path), { recursive: true });
@@ -388,7 +414,11 @@ function parseRecord(line: string): DeclencheurJournalRecord | undefined {
     event !== "plafond" &&
     event !== "desactive" &&
     event !== "refus" &&
-    event !== "preautorisation"
+    event !== "preautorisation" &&
+    event !== "envoi_programme" &&
+    event !== "envoi_publie" &&
+    event !== "envoi_annule" &&
+    event !== "envoi_echec"
   ) {
     return undefined;
   }
@@ -404,5 +434,6 @@ function parseRecord(line: string): DeclencheurJournalRecord | undefined {
     ...(typeof raw["preAutorisation"] === "string"
       ? { preAutorisation: raw["preAutorisation"] }
       : {}),
+    ...(typeof raw["envoi"] === "string" && raw["envoi"] !== "" ? { envoi: raw["envoi"] } : {}),
   };
 }

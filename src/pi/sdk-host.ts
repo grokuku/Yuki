@@ -106,6 +106,10 @@ import {
   createSendMessageTools,
   type MessageSendOutcome,
 } from "./sdk/send-message-tool.js";
+import {
+  createScheduledSendTools,
+  sessionIdFromContext as sessionIdOfContext,
+} from "./sdk/scheduled-send-tool.js";
 import { createImageTools } from "./sdk/image-tools.js";
 import { createImageStylesExtensionFactory } from "./sdk/image-styles-extension.js";
 import { createImageBudgetExtensionFactory } from "./sdk/image-budget-extension.js";
@@ -2030,6 +2034,22 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         },
       }),
     );
+    // ⚠️ ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28) : « poste cette image à 16h10 ».
+    // En LOCAL l'outil existe aussi — c'est le fil d'où la demande est faite, donc la
+    // cible par défaut. Une cible LOCALE ne porte que du TEXTE (aucun port de fichier
+    // dans une session locale) : demander des pièces jointes y est refusé par le port.
+    if (options.envoisProgrammes) {
+      customTools.push(
+        ...createScheduledSendTools(options.envoisProgrammes, {
+          // La session de l'outil : elle change à chaque appel (le host partage ses
+          // outils entre TOUTES les conversations, `createPiHost`).
+          conversation: (ctx) => {
+            const session = ctx === undefined ? undefined : sessionIdOfContext(ctx);
+            return session === undefined ? {} : { session };
+          },
+        }),
+      );
+    }
     if (options.images) {
       // IMAGES : `generer_image` décrit une SCÈNE (texte libre, sans style), le
       // générateur choisit le workflow par proximité, l'image revient AU MODÈLE

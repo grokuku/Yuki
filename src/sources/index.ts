@@ -106,6 +106,7 @@ export type {
   BalayeurStore,
   DeclencheurBalayeurOptions,
   DeclencheurRunner,
+  EnvoisProgrammesRunner,
 } from "./scheduler.js";
 
 export {

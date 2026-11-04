@@ -61,6 +61,7 @@ import { createDelegateTools, createRunContextTracker } from "./delegate-tools.j
 import { createAgentDirectoryTools, createSecretTools } from "./execution-tools.js";
 import { createChannelPostTool, type ChannelPostPort } from "./channel-post-tool.js";
 import { createSendMessageTools, type MessageSendPort } from "./send-message-tool.js";
+import { createScheduledSendTools, type ScheduledSendPort } from "./scheduled-send-tool.js";
 import { guardLongToolsInChannel } from "./long-tool-guard.js";
 
 export type { ChannelPostPort };
@@ -130,6 +131,16 @@ export interface RemoteRunToolPorts {
    * dit, jamais un silence).
    */
   messages?: MessageSendPort;
+  /**
+   * Port d'ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28) : publier un message PLUS TARD,
+   * texte figé, sans réveiller aucun modèle à l'heure dite.
+   *
+   * ⚠️ Le texte d'un run est FIGÉ au moment de l'appel : l'outil ne peut donc pas
+   * publier autre chose que ce que le modèle vient d'écrire, et il ne peut pas
+   * s'auto-relancer à une heure choisie par lui. La cible par défaut est CETTE
+   * conversation (le canal du run), comme `envoyer_message`.
+   */
+  envoisProgrammes?: ScheduledSendPort;
   /**
    * Fichier produit par le run et COPIÉ dans le store des fichiers : image générée
    * (`generer_image`) ou capture de page web (`capture_libraire`).
@@ -345,6 +356,16 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
     // taire la progression d'un tour de 20.
     tools.push(
       ...createSendMessageTools(ports.messages, { sessionId: conversation }),
+    );
+  }
+
+  if (ports.envoisProgrammes) {
+    // ⚠️ ENVOI PROGRAMMÉ (lot 28) : la conversation est FORCÉE sur le canal du run —
+    // c'est la cible par défaut, et le modèle n'a aucun moyen de la changer (un canal
+    // explicite reste borné par le port : canaux SUIVIS, même plateforme).
+    const envois = ports.envoisProgrammes;
+    tools.push(
+      ...createScheduledSendTools(envois, { conversation: () => ({ canal: conversation() }) }),
     );
   }
 

@@ -181,6 +181,33 @@ export {
   type ChannelPostRecorder,
 } from "./reply/channel-post-recorder.js";
 export { ConversationSendQueue } from "./reply/send-queue.js";
+// ENVOIS PROGRAMMÉS (lot 28) : « poste cette image à 16h10 ». Le service porte les
+// bornes et la persistance ; le balayeur des déclencheurs l'exécute (`executerDus`).
+export {
+  DELAI_MIN_MS,
+  ENVOIS_PROGRAMMES_FILE,
+  HORIZON_MAX_MS,
+  MAX_ENVOIS_EN_ATTENTE,
+  RATTRAPAGE_MAX_ENVOI_MS,
+  EnvoisProgrammesService,
+  EnvoisProgrammesStore,
+  FUSEAU_ENVOIS,
+  QUAND_FORMES_ATTENDUES,
+  analyserQuand,
+  formaterInstantEnvoi,
+  libelleCible,
+} from "./envois/index.js";
+export type {
+  CibleEnvoi,
+  EnvoiJournalEvent,
+  EnvoiProgramme,
+  EnvoisJournalPort,
+  EnvoisProgrammesServiceOptions,
+  EnvoisProgrammesStoreOptions,
+  EtatEnvoi,
+  ProgrammationInput,
+  ProgrammationOutcome,
+} from "./envois/index.js";
 export {
   REPLY_MAX_CONCURRENT,
   REPLY_MAX_QUEUE,

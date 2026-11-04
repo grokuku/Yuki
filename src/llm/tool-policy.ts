@@ -144,6 +144,21 @@ export type FilesToolName = "envoyer_fichier";
 export type MessageToolName = "envoyer_message";
 
 /**
+ * Outil custom d'ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28).
+ *
+ * ⚠️ « Poste cette image à 16h10 » n'était pas réalisable : Yuki a répondu en
+ * production qu'elle n'avait « pas de minuteur » (2026-11-04). C'est vrai POUR LE
+ * MODÈLE et faux pour le système — le planificateur existe (lot 2) et cet outil est
+ * son unique porte d'entrée côté conversation.
+ *
+ * ⚠️ Il ne touche à AUCUNE machine et n'appelle AUCUN modèle à l'heure dite (le texte
+ * est FIGÉ) : il est donc dans le groupe `toujours` et ne dépend d'aucun réglage
+ * d'accès distant. Le LOURD ne l'a pas (`envoisProgrammes: []`) : programmer une
+ * publication est un acte de RÉDACTEUR (invariant « un seul rédacteur »).
+ */
+export type EnvoiProgrammeToolName = "programmer_envoi";
+
+/**
  * Outils custom de TRANSFERT DE FICHIERS vers/depuis une machine appairée
  * (capacité `files`). `recuperer_fichier` fait LIRE un fichier distant et le
  * dépose sur le DISQUE de Yuki ; `deposer_fichier` envoie un fichier de Yuki sur
@@ -185,6 +200,7 @@ export type CustomToolName =
   | FilesToolName
   | ChannelPostToolName
   | MessageToolName
+  | EnvoiProgrammeToolName
   | FileTransferToolName
   | FileListToolName
   | FileReadToolName
@@ -218,6 +234,8 @@ export interface ToolPolicyEntry {
   readonly files: readonly FilesToolName[];
   /** Outil d'ENVOI DE MESSAGE dans la conversation courante (`envoyer_message`). */
   readonly messages: readonly MessageToolName[];
+  /** Outil d'ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28). */
+  readonly envoisProgrammes: readonly EnvoiProgrammeToolName[];
   /** Outils de TRANSFERT de fichiers vers/depuis une machine (`files`). */
   readonly fileTransfer: readonly FileTransferToolName[];
   // ⚠️ AUCUNE CATÉGORIE DE PUBLICATION INTER-CANAL, À DESSEIN : dans un canal il n'y a
@@ -366,6 +384,13 @@ export const FILES_TOOLS: readonly FilesToolName[] = ["envoyer_fichier"];
 export const MESSAGE_TOOLS: readonly MessageToolName[] = ["envoyer_message"];
 
 /**
+ * Outil d'ENVOI PROGRAMMÉ (`programmer_envoi`). Porté par le LÉGER seul — c'est lui qui
+ * converse, donc lui qui sait qu'on lui a demandé « plus tard ». Le worker lourd ne
+ * l'a pas : il exécute, il ne publie pas (invariant « un seul rédacteur »).
+ */
+export const ENVOI_PROGRAMME_TOOLS: readonly EnvoiProgrammeToolName[] = ["programmer_envoi"];
+
+/**
  * Outils de TRANSFERT de fichiers (capacité `files`). Exposés quand le service
  * de transfert existe et que l'exécution n'est pas désactivée. ⚠️ Le lourd les
  * porte ; le léger, non (il converse, il n'agit pas sur une machine).
@@ -414,6 +439,10 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // un message ou en vingt. Le LOURD ne l'a pas (`messages: []` ci-dessous) :
     // invariant « un seul rédacteur » (`docs/lot18-chat.md`).
     messages: MESSAGE_TOOLS,
+    // ⚠️ ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28) : le léger seul. Programmer une
+    // publication est un acte de RÉDACTEUR ; le lourd ne parle pas dans la
+    // conversation, donc il ne programme rien (même invariant que `messages`).
+    envoisProgrammes: ENVOI_PROGRAMME_TOOLS,
     // ⚠️ Le LÉGER ne transfère PAS de fichiers depuis/vers une machine : il
     // délègue au worker lourd.
     fileTransfer: [],
@@ -456,6 +485,8 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     librarianCapture: [],
     files: [],
     messages: [],
+    // ⚠️ Le worker LOURD ne programme AUCUN envoi : publier est le fait du rédacteur.
+    envoisProgrammes: [],
     // ⚠️ Le worker lourd TRANFÈRE les fichiers : c'est lui qui agit sur une
     // machine. Mêmes garde-fous par agent que `run_command`.
     fileTransfer: FILE_TRANSFER_TOOLS,
@@ -574,6 +605,12 @@ export interface ToolAllowlistOptions {
    */
   messagesEnabled?: boolean;
   /**
+   * Active l'outil d'ENVOI PROGRAMMÉ `programmer_envoi` (lot 28). DÉSACTIVÉ par défaut :
+   * seul le câblage l'active (le host local et les runs de canal le portent ; un worker
+   * lourd ne peut pas l'obtenir).
+   */
+  envoisProgrammesEnabled?: boolean;
+  /**
    * Active l'outil de génération d'image `generer_image` (serveur ComfyUI).
    * DÉSACTIVÉ par défaut : seul le câblage l'active, quand le générateur existe.
    */
@@ -609,6 +646,8 @@ export function toolAllowlist(
     entry.librarianCapture.length > 0;
   const filesEnabled = (options.filesEnabled ?? false) && entry.files.length > 0;
   const messagesEnabled = (options.messagesEnabled ?? false) && entry.messages.length > 0;
+  const envoisProgrammesEnabled =
+    (options.envoisProgrammesEnabled ?? false) && entry.envoisProgrammes.length > 0;
   const fileTransferEnabled =
     (options.fileTransferEnabled ?? false) && entry.fileTransfer.length > 0;
   const fileListEnabled =
@@ -652,6 +691,9 @@ export function toolAllowlist(
   }
   if (messagesEnabled) {
     tools.push(...entry.messages);
+  }
+  if (envoisProgrammesEnabled) {
+    tools.push(...entry.envoisProgrammes);
   }
   if (fileTransferEnabled) {
     tools.push(...entry.fileTransfer);
@@ -758,6 +800,11 @@ export const REMOTE_TOOL_GROUP_OF: Readonly<Record<CustomToolName, RemoteToolGro
   lire_fichier: "toujours",
   publier_dans_canal: "toujours",
   envoyer_message: "toujours",
+  // ⚠️ ENVOI PROGRAMMÉ (lot 28) : un MESSAGE qui partira plus tard, dans une
+  // conversation que Yuki a déjà le droit d'écrire (canaux SUIVIS tenus par le PORT,
+  // comme `publier_dans_canal`). Aucune machine, aucun modèle à l'heure dite ⇒ aucun
+  // réglage d'accès distant n'a de sens pour lui.
+  programmer_envoi: "toujours",
   envoyer_fichier: "toujours",
   // ── groupe JAMAIS (approbation impossible depuis un canal) ────────────
   run_command: "jamais",

@@ -83,3 +83,26 @@ t'en servir :
   puis la commande **s'exécute automatiquement**.
 - `lister_secrets()` donne les **noms** des secrets déjà enregistrés (jamais les
   valeurs).
+
+### Publier plus tard (`programmer_envoi`)
+
+⚠️ Quand on te demande de publier **à une heure précise** (« poste cette image à
+16h10 », « envoie ça demain matin », « dans une heure »), utilise
+`programmer_envoi(quand, texte, canal?, fichier_ids?)`.
+
+- ⚠️ **N'invente jamais un minuteur** et **ne promets jamais** une publication que
+  tu ne peux pas programmer. ⚠️ Tu n'as pas à dire que tu « n'as pas de minuteur » :
+  si l'outil est dans ta liste, tu **programmes**, et tu annonces l'heure à laquelle
+  le message partira (l'outil te rend l'heure **effective**).
+- Le texte est **figé** : il partira tel que tu l'écris maintenant, **aucun modèle
+  n'est appelé** à l'heure dite. Écris-le donc comme s'il partait tout de suite.
+- `quand` accepte un **délai** (« dans 30 min », « dans 2 h », « dans 3 jours ») ou
+  une **heure** (« 16:10 » pour aujourd'hui, ou une date ISO complète).
+- `canal` est **facultatif** : omis, le message part dans la conversation courante ;
+  fourni, il désigne un canal **suivi**. `fichier_ids` joint des fichiers de cette
+  conversation (trois au plus, et seulement vers un canal).
+- Bornes : au moins **30 secondes** d'avance, **30 jours** au plus, **20 envois** en
+  attente au total. Un refus dit toujours **pourquoi**.
+- Un envoi programmé est **visible et annulable** dans Configuration → Déclencheurs
+  → « Envois programmés ». ⚠️ Tu ne peux pas l'annuler toi-même : dis à la personne
+  où le faire si elle change d'avis.

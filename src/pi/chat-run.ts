@@ -34,6 +34,7 @@ import {
   type RemoteRunVision,
 } from "./sdk/remote-run-tools.js";
 import type { MessageSendPort } from "./sdk/send-message-tool.js";
+import type { ScheduledSendPort } from "./sdk/scheduled-send-tool.js";
 
 export interface RemoteRunToolsOptions {
   /** Conversation (canal distant) : les fichiers du run y sont rattachés. */
@@ -101,6 +102,13 @@ export interface RemoteRunToolsOptions {
    * Le port publie par `ReplyProgress` (le canal), jamais par un second chemin.
    */
   messages?: MessageSendPort;
+  /**
+   * Envoi PROGRAMMÉ (`programmer_envoi`, lot 28) : publier un message plus tard.
+   *
+   * ⚠️ Groupe `toujours` : aucun modèle n'est appelé à l'heure dite et aucune machine
+   * n'est touchée — comme `envoyer_message`. Le port porte les bornes et la persistance.
+   */
+  envoisProgrammes?: ScheduledSendPort;
   logger?: PiLogger;
 }
 
@@ -256,6 +264,9 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
     // de tout bloc de réglage — sinon la politique (qui pousse le socle incondition-
     // nellement) autoriserait un outil que ce run n'instancie pas.
     ...(options.messages ? { messages: options.messages } : {}),
+    // ⚠️ ENVOI PROGRAMMÉ (`programmer_envoi`) : même raison que `envoyer_message` —
+    // groupe `toujours`, donc transmis hors de tout bloc de réglage.
+    ...(options.envoisProgrammes ? { envoisProgrammes: options.envoisProgrammes } : {}),
     ...(actifs && options.agents ? { agents: options.agents } : {}),
     ...(actifs && options.secrets ? { secrets: options.secrets } : {}),
     ...(actifs && options.delegation ? { delegation: options.delegation } : {}),

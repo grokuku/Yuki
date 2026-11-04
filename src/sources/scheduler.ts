@@ -77,12 +77,31 @@ export interface BalayeurStore {
   incrementerTour(nom: string, jour: string): number;
 }
 
+/**
+ * Port des ENVOIS PROGRAMMÉS (lot 28).
+ *
+ * ⚠️ POURQUOI ICI, ET PAS UN SECOND MINUTEUR : le balayeur est LE rythme du processus
+ * (un seul `setInterval`, 30 s). Un envoi programmé a exactement la même nature qu'un
+ * passage planifié — « quelque chose est dû à cet instant » — donc il est exécuté par
+ * le même tick. Un second ordonnanceur aurait donné deux rythmes, deux arrêts à gérer
+ * et un risque de double publication à la reprise.
+ *
+ * ⚠️ `executerDus` ne doit JAMAIS lever : le balayeur doit continuer à balayer même si
+ * un envoi échoue (le service persiste et journalise l'échec de son côté).
+ */
+export interface EnvoisProgrammesRunner {
+  /** Publie les envois dont l'heure est passée. Rend le nombre publié (mesure). */
+  executerDus(maintenant: number): Promise<number>;
+}
+
 export interface DeclencheurBalayeurOptions {
   store: BalayeurStore;
   run: DeclencheurRunner;
   logger: BalayeurLogger;
   /** Journal des déclencheurs (absent ⇒ aucune trace, le balayeur fonctionne). */
   journal?: Pick<DeclencheurJournal, "append">;
+  /** Envois programmés (lot 28). Absent ⇒ aucun envoi n'est exécuté par ce balayeur. */
+  envoisProgrammes?: EnvoisProgrammesRunner;
   /** Horloge injectable (tests). */
   now?: () => number;
   /** Planificateur périodique injectable (tests). */
@@ -202,6 +221,20 @@ export class DeclencheurBalayeur {
     this.balayageEnCours = true;
     try {
       const maintenant = this.now();
+      // ⚠️ ENVOIS PROGRAMMÉS D'ABORD (lot 28) : ce sont des publications à une heure
+      // précise, indépendantes des déclencheurs. Ils passent par CE tick, donc par le
+      // seul `setInterval` du processus — et ils sont exécutés même quand aucun
+      // déclencheur n'est défini.
+      if (this.options.envoisProgrammes) {
+        try {
+          await this.options.envoisProgrammes.executerDus(maintenant);
+        } catch (error) {
+          // ⚠️ Un envoi en échec ne doit pas empêcher les déclencheurs d'être balayés.
+          this.options.logger.warn("sources.balayeur.envois_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       for (const record of this.options.store.list()) {
         if (record.declencheur.type !== "planning") continue;
         if (record.actif === false) continue;

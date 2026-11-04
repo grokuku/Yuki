@@ -136,7 +136,8 @@ export function validateSourceName(value: unknown): string {
   if (RESERVED_SOURCE_NAMES.includes(nom)) {
     throw new SourceValidationError(
       "reserved_source_name",
-      `Le nom « ${nom} » est réservé par l'API (boîte de notifications). Choisissez-en un autre.`,
+      `Le nom « ${nom} » est réservé par l'API (boîte de notifications, envois ` +
+        "programmés). Choisissez-en un autre.",
     );
   }
   return nom;

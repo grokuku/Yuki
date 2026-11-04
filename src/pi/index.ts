@@ -142,3 +142,10 @@ export type {
   MessageSendPort,
   MessageSendRequest,
 } from "./sdk/send-message-tool.js";
+// Envoi PROGRAMMÉ (`programmer_envoi`, lot 28) : types seulement — l'outil est
+// construit par `buildRemoteRunTools` (canal) et par le host local (`src/pi/sdk-host.ts`).
+export type {
+  ScheduledSendOutcome,
+  ScheduledSendPort,
+  ScheduledSendRequest,
+} from "./sdk/scheduled-send-tool.js";

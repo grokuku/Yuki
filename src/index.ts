@@ -71,6 +71,8 @@ import {
   MattermostAttachmentCache,
   MattermostChatAdapter,
   type ChatReplyJudge,
+  type CibleEnvoi,
+  type ProgrammationInput,
   type RemoteMessage,
   type RemotePlatform,
   buildJudgePrompt,
@@ -78,6 +80,8 @@ import {
   createChannelPostPort,
   createRemoteReplyGenerator,
   createReplyMessagePort,
+  EnvoisProgrammesService,
+  EnvoisProgrammesStore,
   effectiveQuoteAuthor,
   effectiveReplyStyle,
   parseJudgeAnswer,
@@ -1375,6 +1379,11 @@ async function main(): Promise<void> {
     // messages successifs (« une décimale par message »), y compris dans le fil
     // « Déclencheurs », qui est une session LOCALE.
     messagesEnabled: true,
+    // ⚠️ ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28) : TOUJOURS actif, pour la même
+    // raison que `envoyer_message` — c'est un message, pas une action. C'est l'outil
+    // qui manquait quand Yuki a répondu « je n'ai pas de minuteur » (2026-11-04) : le
+    // planificateur existait déjà (lot 2), il n'avait pas de porte d'entrée.
+    envoisProgrammesEnabled: true,
   });
 
   /**
@@ -1494,12 +1503,22 @@ async function main(): Promise<void> {
    * volé ailleurs est refusé, et les conversations LOCALES restent hors de portée).
    */
   const portDePublication = (
-    conversationSource: string,
+    /**
+     * Conversation PROPRIÉTAIRE des fichiers joints, ou `undefined`.
+     *
+     * ⚠️ `undefined` = AUCUN contrôle d'appartenance, et c'est réservé à UN cas : la
+     * publication d'un ENVOI PROGRAMMÉ (`publierEnvoiProgramme`, plus bas). Les
+     * fichiers y ont été validés à la PROGRAMMATION (conversation source du run,
+     * plateforme, taille), et à l'heure dite il n'y a plus de run — la cible n'est donc
+     * pas la conversation d'origine. Les enregistrements ne peuvent venir que du
+     * service (`envois-programmes.json`, écrit par le serveur seul).
+     */
+    conversationSource: string | undefined,
     plateforme: RemotePlatform,
   ) =>
     createChannelPostPort({
       plateforme,
-      conversationSource,
+      ...(conversationSource !== undefined ? { conversationSource } : {}),
       canaux: () =>
         chatMirror.conversations().map((conversation) => ({
           conversationId: conversation.id,
@@ -1521,6 +1540,85 @@ async function main(): Promise<void> {
       filConnu: (cible, racine) => chatMirror.has(cible, racine),
       logger,
     });
+
+  // --- ENVOIS PROGRAMMÉS (lot 28) : « poste cette image à 16h10 » -------------
+  // ⚠️ CE QUE CE BLOC FERME (production, 2026-11-04 15:54) : Yuki a répondu qu'elle ne
+  // pouvait pas programmer une publication « car je n'ai pas de minuteur ». C'était
+  // exact pour elle — le planificateur existe depuis le lot 2 — et cet outil est sa
+  // seule porte d'entrée. Aucun second ordonnanceur n'est créé : c'est le balayeur des
+  // déclencheurs (`DeclencheurBalayeur`, plus bas) qui appelle `executerDus`.
+  const envoisProgrammesStore = EnvoisProgrammesStore.open({
+    path: env.envoisProgrammesPath,
+    logger,
+  });
+  /**
+   * PUBLICATION d'un envoi dû — ⚠️ LE MÊME CHEMIN que les autres messages :
+   *  - CANAL : `createChannelPostPort` + `envoyerDansCanal` (donc `adapter.send` et sa
+   *    file PAR CONVERSATION, `src/chat/reply/send-queue.ts:22`) — le point
+   *    d'étranglement exact de la `ReplyProgress` d'un tour, bornes de plateforme
+   *    comprises (`couperPourPlateforme`) ;
+   *  - LOCAL : `PiHost.publierMessage`, le chemin de `envoyer_message` en local
+   *    (`src/pi/sdk-host.ts:2489`).
+   * Elle LÈVE en cas d'échec : le service en fait un échec PERSISTÉ et JOURNALISÉ,
+   * jamais une perte silencieuse (canal quitté, fil supprimé, session disparue).
+   */
+  const publierEnvoiProgramme = async (input: {
+    cible: CibleEnvoi;
+    texte: string;
+    fichierIds?: readonly string[];
+  }): Promise<void> => {
+    if (input.cible.type === "local") {
+      if (!host) {
+        throw new Error("Le host Pi n'est pas disponible : l'envoi n'a pas pu être publié.");
+      }
+      if (typeof host.publierMessage !== "function") {
+        throw new Error(
+          "Ce host ne sait pas publier dans une conversation sans tour de modèle : " +
+            "l'envoi programmé n'a pas pu partir.",
+        );
+      }
+      await host.publierMessage(input.cible.sessionId, input.texte);
+      return;
+    }
+    // ⚠️ `conversationSource: undefined` : l'appartenance des fichiers a été vérifiée à
+    // la PROGRAMMATION. Revalider ici contre la cible refuserait tout fichier produit
+    // dans la conversation d'origine (le cas d'usage : une image générée ici, publiée
+    // dans « L'Imagerie »).
+    const port = portDePublication(undefined, input.cible.plateforme);
+    const issue = await port.publier({
+      canal: input.cible.conversationId,
+      texte: input.texte,
+      ...(input.fichierIds !== undefined && input.fichierIds.length > 0
+        ? { fichierIds: input.fichierIds }
+        : {}),
+    });
+    if (!issue.ok) throw new Error(issue.raison);
+  };
+  const envoisProgrammes = new EnvoisProgrammesService({
+    store: envoisProgrammesStore,
+    journal: declencheursJournal,
+    // Canaux SUIVIS relus à chaque programmation (`apply: hot`) : le périmètre est le
+    // même que `publier_dans_canal`, et il est tenu côté serveur.
+    canaux: () =>
+      chatMirror.conversations().map((conversation) => ({
+        conversationId: conversation.id,
+        titre: conversation.title,
+        plateforme: conversation.platform,
+      })),
+    fichier: (fichierId) => filesStore.get(fichierId),
+    maxFichierBytes: () => config.getNumber("files.maxFileBytes"),
+    publier: publierEnvoiProgramme,
+    logger,
+  });
+  /** Port rendu aux OUTILS (host local et runs de canal) : programmer, rien de plus. */
+  const portEnvoisProgrammes = {
+    programmer: async (request: ProgrammationInput) => envoisProgrammes.programmer(request),
+  };
+  logger.info("envois.ready", {
+    store: env.envoisProgrammesPath,
+    en_attente: envoisProgrammes.enAttente,
+    connus: envoisProgrammes.lister().length,
+  });
 
   /**
    * RÉDACTEUR d'une réponse distante — **COMMUN aux plateformes** (lot 21).
@@ -1586,6 +1684,11 @@ async function main(): Promise<void> {
         // `contexte.publierMessage` est la `ReplyProgress` du tour (file sérialisée,
         // ancrage au fil). Ce module ne fait qu'appliquer la BORNE de la plateforme
         // (la même que `publier_dans_canal`, `couperPourPlateforme`) puis publier.
+        // ⚠️ ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28) : le canal du run est la
+        // cible par défaut, et le port borne tout (30 s minimum, 30 jours, 20 en
+        // attente, canaux SUIVIS) — le modèle ne peut pas le contourner. Aucun modèle
+        // n'est appelé à l'heure dite : le texte est FIGÉ.
+        envoisProgrammes: portEnvoisProgrammes,
         // ⚠️ Sans `publierMessage` (appelant sans publication intermédiaire), le port
         // n'est pas construit : la politique le signale comme non implémenté au lieu
         // de laisser un outil promettre une publication qui n'existe pas.
@@ -2382,6 +2485,10 @@ async function main(): Promise<void> {
       // `<sources>` au DÉBUT de chaque tour (jamais pendant) et le fusionne dans
       // l'envoi de ce tour — un seul `send`, donc pas de rafale de tours.
       sources: sourcesService,
+      // ⚠️ ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28) : depuis la conversation LOCALE
+      // aussi — c'est même le cas le plus fréquent (« poste ça à 16h10 » se dit dans le
+      // fil, même si la publication vise un canal).
+      envoisProgrammes: portEnvoisProgrammes,
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,
@@ -2511,6 +2618,13 @@ async function main(): Promise<void> {
     declencheursBalayeur = new DeclencheurBalayeur({
       store: sourcesStore,
       journal: declencheursJournal,
+      // ⚠️ ENVOIS PROGRAMMÉS (lot 28) : exécutés par CE balayeur, jamais par un second
+      // `setInterval` — un seul ordonnanceur dans le processus, donc un seul rythme et
+      // un seul endroit à arrêter. Le retard est rattrapé une fois si < 1 h, sinon
+      // l'envoi est marqué ÉCHOUÉ avec sa raison (jamais publié en retard en silence).
+      envoisProgrammes: {
+        executerDus: (maintenant) => envoisProgrammes.executerDus(maintenant),
+      },
       logger,
       now: () => Date.now(),
       run: (nom, options) =>
@@ -2819,6 +2933,10 @@ async function main(): Promise<void> {
         // pour que la page de gestion propose une MACHINE précise (jamais un
         // champ libre où l'on taperait un identifiant au hasard).
         preAutorisations: preAutorisationsStore,
+        // ENVOIS PROGRAMMÉS (lot 28) : la page de gestion les AFFICHE et les ANNULE.
+        // ⚠️ Une liste invisible serait une bombe à retardement : c'est cette route qui
+        // rend la fonction utilisable par une personne, pas seulement par le modèle.
+        envois: envoisProgrammes,
         ...(agentStoreRef ? { agents: agentStoreRef } : {}),
       },
       // DISCUSSIONS : `GET /api/chat/status` (lecture GARDÉE par l'en-tête

@@ -40,10 +40,12 @@ import { SOURCE_TOKEN_NAME_PREFIX } from "../secrets/references.js";
 export const SOURCE_NAME_PATTERN = /^[a-z0-9_-]{1,32}$/;
 
 /**
- * Noms RÉSERVÉS par l'API : `/api/sources/inbox…` est la boîte de notifications,
- * une source ne peut donc pas s'appeler `inbox` (sinon collision de route).
+ * Noms RÉSERVÉS par l'API : `/api/sources/inbox…` est la boîte de notifications et
+ * `/api/sources/envois…` l'API des envois programmés (lot 28), une source ne peut donc
+ * pas s'appeler `inbox` ni `envois` (sinon collision de route : `DELETE
+ * /api/sources/envois` supprimerait la source au lieu d'annuler un envoi).
  */
-export const RESERVED_SOURCE_NAMES: readonly string[] = ["inbox"];
+export const RESERVED_SOURCE_NAMES: readonly string[] = ["inbox", "envois"];
 
 /** Nombre maximal de sources déclarées (au-delà : refus explicite). */
 export const MAX_SOURCES = 20;

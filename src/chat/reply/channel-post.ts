@@ -304,6 +304,20 @@ export function createChannelPostPort(options: ChannelPostPortOptions): ChannelP
 }
 
 /**
+ * Ce que la VALIDATION des fichiers a besoin de savoir (sous-ensemble du port).
+ *
+ * ⚠️ Type NARROW à dessein : la même validation sert à `publier_dans_canal` et aux
+ * ENVOIS PROGRAMMÉS (`src/chat/envois/service.ts`, lot 28) — un second contrôle
+ * écrit ailleurs divergerait au premier changement de borne.
+ */
+export interface ValidationFichiersOptions {
+  plateforme: RemotePlatform;
+  conversationSource?: string;
+  fichier?: (fichierId: string) => { sessionId?: string; name: string; bytes: number } | null;
+  maxFichierBytes?: () => number;
+}
+
+/**
  * VALIDE les fichiers demandés : propriété, plateforme, taille, nombre.
  *
  * ⚠️ Tout est vérifié AVANT l'appel réseau : un refus ici ne publie RIEN (ni texte,
@@ -312,10 +326,14 @@ export function createChannelPostPort(options: ChannelPostPortOptions): ChannelP
  * ⚠️ L'ORDRE des contrôles est celui du DROIT : nombre (le modèle s'est trompé
  * d'outil) → résolution (le fichier existe-t-il ?) → propriété (fuite possible ?) →
  * plateforme → taille. Le premier refus est le plus utile à lire.
+ *
+ * ⚠️ EXPORTÉE (lot 28) : un ENVOI PROGRAMMÉ joint les mêmes fichiers que
+ * `publier_dans_canal` et doit donc passer EXACTEMENT les mêmes contrôles, au moment
+ * où il est programmé (à l'heure dite, il n'y a plus de run pour les revalider).
  */
-function validerFichiers(
+export function validerFichiers(
   demandes: readonly string[] | undefined,
-  options: ChannelPostPortOptions,
+  options: ValidationFichiersOptions,
 ): { ok: true; ids: string[] } | { ok: false; raison: string } {
   if (demandes === undefined || demandes.length === 0) return { ok: true, ids: [] };
   const ids = demandes.map((id) => (typeof id === "string" ? id.trim() : "")).filter((id) => id !== "");

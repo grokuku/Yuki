@@ -198,6 +198,16 @@ export interface Env {
    * Surcharge : `YUKI_PREAUTORISATIONS_PATH`.
    */
   preAutorisationsPath: string;
+  /**
+   * ENVOIS PROGRAMMÉS (volume `state`, `envois-programmes.json`) — lot 28.
+   *
+   * ⚠️ Fichier DÉDIÉ, ni `config.json` (patch plat de scalaires) ni `sources.json`
+   * (un envoi n'est pas un déclencheur : pas de jeton, pas de consigne, et il QUITTE
+   * l'attente une fois parti). C'est lui qui rend un envoi programmé PERSISTANT : il
+   * survit à un redémarrage (reprise par le balayeur existant).
+   * Surcharge : `YUKI_ENVOIS_PROGRAMMES_PATH`.
+   */
+  envoisProgrammesPath: string;
   // --- Discussions distantes (Lot 18, lot 2) ---
   /**
    * INDEX du MIROIR des canaux distants (volume `state`, `chat-mirror.json`).
@@ -493,6 +503,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_PREAUTORISATIONS_PATH",
       `${mountPoints.state}/preautorisations.json`,
+    ),
+    envoisProgrammesPath: getString(
+      env,
+      "YUKI_ENVOIS_PROGRAMMES_PATH",
+      `${mountPoints.state}/envois-programmes.json`,
     ),
     chatMirrorPath: getString(
       env,

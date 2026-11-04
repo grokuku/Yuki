@@ -23,6 +23,7 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/prompt-writer.ts",
   "src/pi/sdk/remote-run-tools.ts",
   "src/pi/sdk/channel-post-tool.ts",
+  "src/pi/sdk/scheduled-send-tool.ts",
   "src/pi/sdk/delegate-tools.ts",
   "src/pi/sdk/execution-tools.ts",
   "src/pi/sdk/memory-extension.ts",

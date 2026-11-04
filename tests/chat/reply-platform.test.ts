@@ -98,6 +98,10 @@ describe("createRemoteReplyGenerator — le prompt nomme le bot de SA plateforme
       "generer_image",
       "lire_fichier",
       "lister_fichiers",
+      // ⚠️ Envoi PROGRAMMÉ (`programmer_envoi`, lot 28) : même groupe `toujours` —
+      // programmer une publication ne touche à aucune machine et n'appelle aucun
+      // modèle à l'heure dite.
+      "programmer_envoi",
       // ⚠️ Publication inter-canal : un MESSAGE, pas une action sur une machine ⇒
       // aucune approbation, donc présent quel que soit le réglage (décision A).
       "publier_dans_canal",
