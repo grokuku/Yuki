@@ -300,7 +300,14 @@ export class EnvoisProgrammesService {
       };
     }
 
-    const cibleLisible = libelleCible(cible.cible, input.conversation.canal);
+    // ⚠️ La conversation COURANTE est celle du run : un CANAL pour un run de canal, une
+    // SESSION pour le mode local (fil web, « Déclencheurs »). Sans la session, une
+    // programmation faite depuis le fil local s'annonçait « conversation 1a2b3c4d… »
+    // au lieu de « cette conversation » — le modèle ne pouvait pas confirmer la cible.
+    const cibleLisible = libelleCible(
+      cible.cible,
+      input.conversation.canal ?? input.conversation.session,
+    );
     this.journaliser({
       event: "envoi_programme",
       source: cibleLisible,

@@ -52,8 +52,22 @@ export interface FieldDescriptor {
    * la chaîne vide (« voix par défaut », spec Lot 7 §9.1).
    */
   readonly allowEmpty?: true;
+  /**
+   * Message de refus SPÉCIFIQUE quand `""` est envoyé (type `string` sans
+   * `allowEmpty`). Sert à dire l'ACTION à faire plutôt qu'un refus sec : un
+   * prompt système vide prive le modèle de toute consigne, et l'utilisateur qui
+   * a cliqué « Réinitialiser au défaut » doit comprendre que le défaut existe.
+   */
+  readonly emptyMessage?: string;
   /** Champ secret : jamais sérialisé en clair, masqué dans l'API. */
   readonly secret?: true;
+  /**
+   * Le texte doit être un fuseau IANA accepté par `Intl` (`Europe/Paris`,
+   * `UTC`…). Refusé sinon (`invalid_timezone`) : un fuseau inventé ferait
+   * silencieusement retomber tous les horodatages sur UTC, donc afficher une
+   * heure FAUSSE sans le dire.
+   */
+  readonly ianaTimeZone?: true;
   /** Variable d'environnement qui surcharge ce champ (si définie et non vide). */
   readonly env?: string;
 }
@@ -260,8 +274,25 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   },
 
   // --- Prompts système (défaut affiné depuis les fichiers livrés) ----------
-  "prompts.light": { type: "string", default: "", apply: "restart" },
-  "prompts.heavy": { type: "string", default: "", apply: "restart" },
+  // ⚠️ Ces deux champs n'ont PAS `allowEmpty` : un prompt VIDE est refusé. Un
+  // prompt vide = aucune consigne pour le modèle, donc un comportement qui se
+  // dégrade silencieusement alors que l'utilisateur croit avoir « remis le
+  // défaut ». `null` (bouton « Réinitialiser au défaut ») efface la surcharge
+  // enregistrée et le fichier livré redevient effectif (`src/config/runtime.ts`).
+  "prompts.light": {
+    type: "string",
+    default: "",
+    apply: "restart",
+    emptyMessage:
+      "Le prompt système ne peut pas être vide. Cliquez sur « Réinitialiser au défaut » pour revenir au prompt livré (config/pi/system-prompt.md).",
+  },
+  "prompts.heavy": {
+    type: "string",
+    default: "",
+    apply: "restart",
+    emptyMessage:
+      "Le prompt système ne peut pas être vide. Cliquez sur « Réinitialiser au défaut » pour revenir au prompt livré (config/pi/system-prompt-heavy.md).",
+  },
 
   // --- TTS / voix (Lot 7) --------------------------------------------------
   // ⚠️ `FieldType` = `string | int | enum` : AUCUN booléen. L'activation est
@@ -975,6 +1006,25 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
     env: "YUKI_IMAGES_TIMEOUT_MS",
   },
+
+  // --- Interface : fuseau des HORODATAGES ----------------------------------
+  // ⚠️ Demande utilisateur du 2026-11-04 : « passer tous les horodatages en UTC
+  // (Mattermost est en UTC, pas le reste) ». Un même événement s'affichait dans
+  // TROIS fuseaux (canal distant, prompt, navigateur) : impossible à corréler.
+  // Ce champ est le SEUL fuseau des horodatages `src/pi/timestamp.ts` :
+  // prompts (`[horodatage] … (UTC)`), fils de canal, interface, journal.
+  // ⚠️ Il ne touche PAS la PLANIFICATION : un déclencheur `0 9 * * *` continue
+  // de tirer à 9 h dans SON fuseau (`src/sources/cron.ts`), et l'interprétation
+  // d'un envoi programmé garde le sien (`src/chat/envois/quand.ts`).
+  // ⚠️ `apply: hot` : la valeur est relue à chaque formatage (aucun
+  // redémarrage) ; l'interface est prévenue par la trame `time_zone`.
+  "ui.timeZone": {
+    type: "string",
+    default: "UTC",
+    apply: "hot",
+    ianaTimeZone: true,
+    env: "YUKI_UI_TIME_ZONE",
+  },
 };
 
 /** Ordre stable des chemins (déterminisme des réponses / journaux). */
@@ -1070,10 +1120,34 @@ export function validateDescriptor(
       ok: false,
       code: "empty_value",
       message:
+        descriptor.emptyMessage ??
         "Ce champ ne peut pas être vide. Utilisez null pour rétablir la valeur par défaut.",
     };
   }
+  if (descriptor.ianaTimeZone === true && !isKnownTimeZone(trimmed)) {
+    return {
+      ok: false,
+      code: "invalid_timezone",
+      message:
+        `Fuseau horaire inconnu : « ${trimmed} ». Attendu un nom IANA, ` +
+        "par exemple UTC, Europe/Paris, America/New_York.",
+    };
+  }
   return { ok: true, value: trimmed };
+}
+
+/**
+ * `true` si `Intl` accepte ce fuseau. Aucune dépendance à `node:fs` ni au SDK :
+ * `Intl` fait partie de la plateforme, et `new Intl.DateTimeFormat` LÈVE sur un
+ * nom inconnu — c'est ce comportement qui sert de test de validité.
+ */
+function isKnownTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Valide une valeur brute par chemin ; `unknown_field` si le chemin est inconnu. */

@@ -119,15 +119,21 @@ export function createScheduledSendTools(
 ): ToolDefinition[] {
   const tool = defineTool({
     name: "programmer_envoi",
-    label: "Programmer un envoi (publier plus tard)",
+    label: "Programmer un envoi (publier ou rappeler plus tard)",
     description:
       "Programme l'envoi d'un message à une heure PRÉCISE, dans cette conversation ou " +
       "dans un canal SUIVI. Le texte est FIGÉ : aucun modèle ne sera appelé à l'heure " +
       "dite, le message partira tel que tu l'écris maintenant. " +
-      "Utilise-le dès qu'on te demande de publier « plus tard », « à 16h10 », « dans une " +
-      "heure », « demain matin » : n'invente JAMAIS un minuteur, ne promets jamais une " +
-      "publication que tu ne peux pas programmer, et ne dis pas que tu n'as pas de " +
-      "minuteur — si cet outil est dans ta liste, tu peux programmer, et tu le fais. " +
+      "Sert à DEUX formulations, qui sont la MÊME capacité : PUBLIER plus tard " +
+      "(« poste cette image à 16h10 », « envoie ça demain matin », « dans une heure ») " +
+      "et RAPPELER (« rappelle-moi dans 3 heures », « écris-moi à 18 h ») — un rappel " +
+      "est un envoi programmé, tu n'as besoin d'aucun minuteur pour cela. " +
+      "Utilise-le dès qu'on te demande d'écrire plus tard : n'invente JAMAIS un " +
+      "minuteur, ne promets jamais une publication que tu ne peux pas programmer, ne " +
+      "dis JAMAIS que tu n'as pas de minuteur, que tu ne peux pas attendre, ni que tu " +
+      "ne peux pas programmer de rappel — si cet outil est dans ta liste, tu peux " +
+      "programmer, et tu le fais. Ne propose pas non plus de contournement (un minuteur " +
+      "sur une machine ou un téléphone) : il est inutile. " +
       "`quand` accepte un DÉLAI (« dans 30 min », « dans 2 h », « dans 3 jours ») ou une " +
       "HEURE (« 16:10 » pour aujourd'hui, ou une date ISO comme " +
       "« 2026-11-04T16:10:00+01:00 »). " +
@@ -140,22 +146,25 @@ export function createScheduledSendTools(
       "permanence dans Configuration → Déclencheurs → « Envois programmés ».",
     promptSnippet:
       "programmer_envoi(quand, texte, canal?, fichier_ids?) — publie un message PLUS " +
-      "TARD (texte figé, aucun modèle appelé à l'heure dite)",
+      "TARD ou te RAPPELLE quelque chose à une heure dite (texte figé, aucun modèle " +
+      "appelé à l'heure dite)",
     parameters: Type.Object({
       quand: Type.String({
         maxLength: 100,
         description:
           "Moment de l'envoi : un DÉLAI (« dans 30 min », « dans 2 h », « dans 3 jours ») " +
           "ou une HEURE (« 16:10 » pour aujourd'hui, une date ISO comme " +
-          "« 2026-11-04T16:10:00+01:00 »). L'heure dite est celle de Yuki " +
+          "« 2026-11-04T16:10:00+01:00 »). Pour un RAPPEL (« dans 3 heures »), c'est le " +
+          "délai demandé. L'heure dite est celle de Yuki " +
           "(Europe/Paris) quand aucun fuseau n'est précisé.",
       }),
       texte: Type.String({
         maxLength: ENVOYER_MESSAGE_MAX_CHARS,
         description:
           "Texte EXACT du message qui partira à l'heure dite. Il est FIGÉ : écris-le " +
-          "comme s'il partait maintenant. Au-delà de la limite de la plateforme, il est " +
-          "tronqué avec une mention explicite (et c'est dit dans le résultat).",
+          "comme s'il partait maintenant — pour un RAPPEL, écris directement le rappel " +
+          "(« Il est 18 h : sors le linge »). Au-delà de la limite de la plateforme, il " +
+          "est tronqué avec une mention explicite (et c'est dit dans le résultat).",
       }),
       canal: Type.Optional(
         Type.String({

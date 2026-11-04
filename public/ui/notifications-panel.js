@@ -31,6 +31,8 @@
  * `styles.css`.
  */
 
+import { formatDayMonthHourFr } from "./horodatage.js";
+
 /** Rythme de relecture de la boîte (le serveur reste la source de vérité). */
 export const POLL_INTERVAL_MS = 15_000;
 
@@ -67,16 +69,12 @@ function h(tag, props = {}, children = []) {
   return el;
 }
 
+/** Horodatage lisible — fuseau `ui.timeZone` (défaut UTC), suffixé. */
 function formatDate(iso) {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return String(iso);
-  return date.toLocaleString("fr-FR", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDayMonthHourFr(date);
 }
 
 function formatBytes(bytes) {

@@ -880,9 +880,12 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     // Groupe de champs dans l'onglet Système (aucun nouvel onglet).
     expect(js).toContain('id: "librarian"');
-    // ⚠️ Le groupe « notifications » (PWA + Web Push) a rejoint l'onglet Système ;
-    // la section « Images » (ComfyUI) a désormais son ONGLET PROPRE.
-    expect(js).toContain('groups: ["gpu", "transport", "librarian", "notifications"]');
+    // ⚠️ Le groupe « notifications » (PWA + Web Push) et le groupe « affichage »
+    // (fuseau des horodatages, `ui.timeZone`) ont rejoint l'onglet Système ; la
+    // section « Images » (ComfyUI) a désormais son ONGLET PROPRE.
+    expect(js).toContain(
+      'groups: ["gpu", "transport", "affichage", "librarian", "notifications"]',
+    );
     for (const path of ["librarian.baseUrl", "librarian.agentToken", "librarian.apiKey"]) {
       expect(js, path).toContain(`path: "${path}"`);
     }

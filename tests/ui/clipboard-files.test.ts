@@ -11,15 +11,32 @@
  * avec des objets injectés (aucun navigateur).
  */
 
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   filesFromClipboard,
   namePastedFile,
 } from "../../public/ui/clipboard-files.js";
+import { DEFAULT_TIME_ZONE, setTimeZone } from "../../public/ui/horodatage.js";
 
-/** Instant FIGÉ : aucun test ne doit dépendre de l'horloge réelle. */
-const NOW = new Date(2026, 9, 29, 15, 4, 6);
+/**
+ * Instant FIGÉ, exprimé en UTC : `2026-10-29T15:04:06Z` ⇒ le nom doit porter
+ * `20261029-150406` **quel que soit le fuseau du process**.
+ *
+ * ⚠️ ÉCRIT EN UTC ET NON `new Date(2026, 9, 29, 15, 4, 6)` : le constructeur à
+ * composantes est LOCAL, donc l'ancien test passait sous n'importe quel `TZ` et
+ * ne prouvait rien (il construisait l'instant avec le même fuseau que le code
+ * fautif).
+ */
+const NOW = new Date("2026-10-29T15:04:06.000Z");
+
+afterEach(() => {
+  // Le fuseau est un état de MODULE de `horodatage.js` : on le remet au défaut.
+  setTimeZone(DEFAULT_TIME_ZONE);
+});
 
 /** Faux fichier minimal (le module ne lit que `name`, `type`, `size`…). */
 function fakeFile(name: string, type: string, size = 12): File {
@@ -71,8 +88,9 @@ describe("nom d'un fichier collé", () => {
     );
   });
 
-  it("horodate en heure LOCALE sur deux chiffres (nom triable)", () => {
-    const tôt = new Date(2026, 0, 2, 3, 4, 5);
+  it("horodate en UTC sur deux chiffres (nom triable)", () => {
+    // Instant fixe écrit en UTC : 03:04:05 UTC, jamais « 03:04:05 local ».
+    const tôt = new Date("2026-01-02T03:04:05.000Z");
     expect(namePastedFile(fakeFile("", "image/png"), { now: tôt })).toBe(
       "collé-20260102-030405.png",
     );
@@ -81,6 +99,78 @@ describe("nom d'un fichier collé", () => {
       "collé-00000000-000000.png",
     );
   });
+
+  it("suit le fuseau RÉGLÉ (`ui.timeZone`) sans changer de format", () => {
+    // Même instant, fuseau d'affichage à Paris : 16:04 (CET, l'heure d'été a pris
+    // fin le 25 octobre 2026).
+    setTimeZone("Europe/Paris");
+    expect(namePastedFile(fakeFile("", "image/png"), { now: NOW })).toBe(
+      "collé-20261029-160406.png",
+    );
+    // Préfixe, séparateur et extension inchangés : seul le fuseau a bougé.
+    expect(namePastedFile(fakeFile("", "image/png"), { now: NOW })).toMatch(
+      /^collé-\d{8}-\d{6}\.png$/,
+    );
+  });
+});
+
+/**
+ * ⚠️ POURQUOI UN PROCESSUS SÉPARÉ : Node fige son fuseau au PREMIER usage de
+ * `Date`/`Intl` ; écrire `process.env.TZ` au milieu d'un test n'a aucun effet.
+ * On lance donc un vrai `node` avec `TZ=Asia/Tokyo` (même méthode que
+ * `tests/pi/timestamp-utc.test.ts:86-100`) et on lit le nom produit.
+ *
+ * ⚠️ ÉCHEC SUR L'ORIGINE (mesuré) : l'ancien `stampOf` (`getFullYear()`,
+ * `getHours()`…) rendait `20261030-000406` sous `TZ=Asia/Tokyo` — le nom d'image
+ * contredisait de 9 h l'horodatage UTC affiché à côté.
+ */
+const ROOT = fileURLToPath(new URL("../../", import.meta.url));
+
+const SCRIPT = `
+const { namePastedFile } = await import(${JSON.stringify(`${ROOT}public/ui/clipboard-files.js`)});
+const at = new Date("2026-10-29T15:04:06.000Z");
+const name = namePastedFile({ name: "", type: "image/png" }, { now: at });
+process.stdout.write(
+  JSON.stringify({
+    fuseauProcess: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    heureProcess: new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit" }).format(at),
+    name,
+  }),
+);
+`;
+
+interface ChildResult {
+  fuseauProcess: string;
+  heureProcess: string;
+  name: string;
+}
+
+function runUnder(timeZone: string): ChildResult {
+  const out = execFileSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "-e", SCRIPT],
+    {
+      cwd: ROOT,
+      env: { ...process.env, TZ: timeZone },
+      encoding: "utf8",
+      timeout: 60_000,
+    },
+  );
+  return JSON.parse(out) as ChildResult;
+}
+
+describe("nom d'un fichier collé — indépendant du fuseau du PROCESS", () => {
+  for (const tz of ["Asia/Tokyo", "America/New_York"]) {
+    it(`porte la date/heure UTC de l'instant avec TZ=${tz}`, () => {
+      const result = runUnder(tz);
+      // Le fuseau du process a bien CHANGÉ : sans cela, le test ne prouverait rien.
+      expect(result.fuseauProcess).toBe(tz);
+      expect(result.heureProcess).not.toBe("15:04");
+      // Même format, même instant, fuseau imposé par `ui.timeZone` (défaut UTC).
+      expect(result.name).toBe("collé-20261029-150406.png");
+      expect(result.name).toMatch(/^collé-\d{8}-\d{6}\.png$/);
+    });
+  }
 });
 
 describe("fichiers d'un presse-papiers", () => {

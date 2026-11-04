@@ -107,6 +107,7 @@ import {
   startServer,
 } from "./gateway/server.js";
 import { createWsTransport, type AgentsGatewayPort } from "./gateway/ws/server.js";
+import { effectiveTimeZone } from "./pi/timestamp.js";
 import type {
   CapturedScreenshotView,
   ScreenshotGatewayPort,
@@ -131,6 +132,7 @@ import { JobQueue, JobStore } from "./jobs/index.js";
 import {
   HEAVY_SYSTEM_PROMPT_FALLBACK,
   appendVoiceInstruction,
+  avertirSiPromptLegerIncomplet,
   buildModelsConfigFrom,
   evaluateMissingKeyPolicy,
   resolveAvailability,
@@ -1270,6 +1272,20 @@ async function main(): Promise<void> {
   let delegation: DelegationService | undefined;
   /** Désabonnement du rechargement À CHAUD des modèles LLM (voir plus bas). */
   let stopLlmHotReload: (() => void) | undefined;
+  /** Désabonnement de l'annonce du FUSEAU des horodatages (voir plus bas). */
+  let stopTimeZoneReload: (() => void) | undefined;
+
+  /**
+   * FUSEAU des horodatages — POINT UNIQUE côté serveur (réglage `ui.timeZone`,
+   * défaut `UTC`).
+   *
+   * ⚠️ Relu À CHAQUE appel (`apply: hot`) : prompts locaux, fils de canal,
+   * préfixes stockés, trames `welcome`/`time_zone`. Jamais le fuseau du PROCESS
+   * (le conteneur peut être en UTC ou non) : `src/pi/timestamp.ts` reçoit
+   * toujours ce fuseau explicitement.
+   */
+  const fuseauHorodatage = (): string =>
+    effectiveTimeZone(config.getString("ui.timeZone"));
   /** Désabonnement des DÉCLENCHEURS de notification (voir plus bas). */
   let stopPushTriggers: (() => void) | undefined;
 
@@ -1630,6 +1646,10 @@ async function main(): Promise<void> {
    */
   const chatReplyGenerator = createRemoteReplyGenerator({
     available: () => resolveAvail().isAvailable("light"),
+    // ⚠️ FUSEAU des horodatages du fil de canal (`ui.timeZone`, défaut UTC),
+    // relu à chaque réponse : le prompt ne dépend pas du fuseau du process et
+    // reste comparable à Mattermost.
+    timeZone: fuseauHorodatage,
     // ⚠️ Le nom du bot dépend de la PLATEFORME DU RUN (celle de la conversation), pas de
     // `chat.mode` : un salon Discord doit s'entendre appeler par le pseudo du bot Discord
     // même quand l'interface regarde Mattermost (`runPlatformOf`, `src/chat/reply/generate.ts`).
@@ -2388,15 +2408,24 @@ async function main(): Promise<void> {
       }
     };
 
+    // ⚠️ PROMPT ENREGISTRÉ vs PROMPT LIVRÉ (`src/config/runtime.ts`) : `prompts.light` est
+    // éditable dans Configuration et sa valeur ENREGISTRÉE l'emporte sur
+    // `config/pi/system-prompt.md`. Un prompt sauvegardé AVANT le lot 28 ne parle donc pas
+    // de `programmer_envoi` : le modèle suit la consigne la plus ancienne et affirme une
+    // incapacité qui est fausse (« je n'ai pas de minuteur », production 2026-11-04),
+    // pendant qu'un run de canal publie à l'heure dite. On le DIT au démarrage — jamais de
+    // réécriture silencieuse du texte de l'utilisateur.
+    const promptLeger = config.getString("prompts.light");
+    // ⚠️ Un avertissement doit dire QUOI FAIRE (sinon c'est du bruit) : l'origine et
+    // l'action sont dans les champs. Deux cas signalés : prompt VIDE (aucune
+    // consigne) et prompt enregistré qui CONTREDIT une capacité (`programmer_envoi`).
+    avertirSiPromptLegerIncomplet(logger, promptLeger, config.originOf("prompts.light"));
     host = createPiHost({
       agentDir: env.piAgentDir,
       cwd: env.piCwd,
       home: env.piHome,
       sessionsDir: env.piSessionsDir,
-      systemPrompt: appendVoiceInstruction(
-        config.getString("prompts.light"),
-        isTtsEnabled(config),
-      ),
+      systemPrompt: appendVoiceInstruction(promptLeger, isTtsEnabled(config)),
       settingsSeedPath: env.piSettingsSeedPath,
       modelsConfig: buildModelsConfigFrom(effective),
       model: lightRef,
@@ -2720,6 +2749,10 @@ async function main(): Promise<void> {
       serverVersion: env.version,
       replayBufferSize: config.getNumber("transport.replayBuffer"),
       replayBufferBytes: config.getNumber("transport.replayBytes"),
+      // ⚠️ FUSEAU DES HORODATAGES (`ui.timeZone`, défaut UTC) : il remplace le
+      // fuseau du NAVIGATEUR que portait la trame `message` (`tz`). Une seule
+      // autorité pour les prompts, le fil de canal et la trame `welcome`.
+      timeZone: { current: fuseauHorodatage },
       // « Continuer dans une conversation dédiée » : appel LLM ISOLÉ (session
       // éphémère en mémoire) NOURRI avec le transcript, sur le compte LOURD
       // quand il est disponible — appel LONG et exigeant, qui ne doit pas
@@ -2830,6 +2863,20 @@ async function main(): Promise<void> {
     stopPushTriggers = pushService?.bind({
       host,
       ...(agentExecution ? { approvals: agentExecution } : {}),
+    });
+
+    // ⚠️ FUSEAU DES HORODATAGES : on ANNONCE le changement aux clients
+    // connectés (`time_zone`), sinon l'interface garderait l'ancien fuseau
+    // jusqu'au prochain rechargement — alors que le serveur, lui, écrit déjà les
+    // prompts dans le nouveau. Deux fuseaux pour un même instant : exactement le
+    // défaut qu'on ferme.
+    let fuseauCourant = fuseauHorodatage();
+    stopTimeZoneReload = config.subscribe(() => {
+      const suivant = fuseauHorodatage();
+      if (suivant === fuseauCourant) return;
+      fuseauCourant = suivant;
+      transport?.notifyTimeZone?.(suivant);
+      logger.info("ui.timezone.changed", { timeZone: suivant });
     });
   }
 
@@ -3013,6 +3060,8 @@ async function main(): Promise<void> {
       declencheursBalayeur = undefined;
       stopLlmHotReload?.();
       stopLlmHotReload = undefined;
+      stopTimeZoneReload?.();
+      stopTimeZoneReload = undefined;
       stopPushTriggers?.();
       stopPushTriggers = undefined;
       // DISCUSSIONS : plus aucune reconnexion ni rattrapage après l'arrêt (aucune

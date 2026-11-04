@@ -14,7 +14,10 @@ import {
   HEAVY_NO_USER_MARKER,
   HEAVY_SECRET_MARKER,
   HEAVY_SYSTEM_PROMPT_FALLBACK,
+  SCHEDULED_SEND_MARKER,
+  SCHEDULED_SEND_REMINDER_MARKER,
   SECRET_REQUEST_MARKER,
+  consigneEnvoiProgrammeAbsente,
   VOICE_SPEECH_INSTRUCTION,
   appendVoiceInstruction,
 } from "../../src/llm/prompts.js";
@@ -92,6 +95,27 @@ describe("prompts de CONFIG — la capacité « demander un secret » est décri
   it("le prompt LOURD décrit le flux `awaiting_secret` (référence manquante)", () => {
     expect(heavy).toContain(HEAVY_SECRET_MARKER);
     expect(heavy).toContain("YUKI_SECRET_");
+  });
+
+  it("⚠️ le prompt LÉGER décrit `programmer_envoi` ET rattache le RAPPEL à l'outil", () => {
+    // Sans le marqueur, Yuki nie une capacité qu'elle A (« je n'ai pas de minuteur »,
+    // production 2026-11-04) ; sans le mot « rappelle-moi », la demande la plus courante
+    // (« rappelle-moi dans 3 h ») ne trouve aucun outil et elle répond « je ne peux pas
+    // programmer de rappel ».
+    expect(light).toContain(SCHEDULED_SEND_MARKER);
+    expect(light).toContain(SCHEDULED_SEND_REMINDER_MARKER);
+    // Le WORKER LOURD n'a pas l'outil : son prompt ne doit pas le proposer.
+    expect(heavy).not.toContain(SCHEDULED_SEND_MARKER);
+  });
+
+  it("un prompt ENREGISTRÉ sans la consigne est SIGNALÉ (jamais réécrit)", () => {
+    // `prompts.light` éditable + valeur enregistrée prioritaire (src/config/runtime.ts) :
+    // un prompt sauvé avant le lot 28 garde l'ancienne consigne. On le détecte.
+    expect(consigneEnvoiProgrammeAbsente(light)).toBe(false);
+    expect(consigneEnvoiProgrammeAbsente("Tu es Yuki, tu n'as pas de minuteur.")).toBe(true);
+    // Un champ vide n'est pas une anomalie : le défaut livré s'applique alors.
+    expect(consigneEnvoiProgrammeAbsente("")).toBe(false);
+    expect(consigneEnvoiProgrammeAbsente("   ")).toBe(false);
   });
 });
 

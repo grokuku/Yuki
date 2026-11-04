@@ -17,6 +17,8 @@
  * — tout le CSS vit dans `config.css`. DOM construit avec `createElement`.
  */
 
+import { formatDateTimeFr } from "./horodatage.js";
+
 const JSON_HEADERS = { accept: "application/json" };
 /** En-tête d'écriture exigé par les routes protégées (même que `/api/config`). */
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-config": "1" };
@@ -40,11 +42,12 @@ function h(tag, props = {}, children = []) {
   return el;
 }
 
+/** Horodatage lisible — fuseau `ui.timeZone` (défaut UTC), suffixé, jamais celui du navigateur. */
 function formatDate(iso) {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return String(iso);
-  return date.toLocaleString("fr-FR");
+  return formatDateTimeFr(date);
 }
 
 function apiMessage(error, fallback) {

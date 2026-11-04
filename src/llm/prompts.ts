@@ -31,6 +31,67 @@ export const SECRET_REQUEST_MARKER = "demander_secret";
 /** Le prompt LOURD DOIT décrire le flux sur référence manquante (`awaiting_secret`). */
 export const HEAVY_SECRET_MARKER = "awaiting_secret";
 
+/**
+ * Le prompt LÉGER DOIT décrire l'ENVOI PROGRAMMÉ (`programmer_envoi`).
+ *
+ * ⚠️ Sans ce marqueur, Yuki affirme une incapacité qui est FAUSSE (« je n'ai pas de
+ * minuteur, je ne peux pas programmer de rappel ») alors que l'outil est dans sa liste
+ * — panne de production du 2026-11-04 : la même personne a vu, dans la même heure, un
+ * refus sur l'interface web et un message publié à l'heure dite sur Mattermost.
+ */
+export const SCHEDULED_SEND_MARKER = "programmer_envoi";
+
+/**
+ * ⚠️ Le prompt LÉGER doit aussi rattacher le RAPPEL à cet outil (« rappelle-moi dans
+ * 3 heures » est un envoi programmé). C'est la formulation réellement employée par la
+ * personne — et celle sur laquelle Yuki a répondu « je ne peux pas programmer de
+ * rappel, point final ».
+ */
+export const SCHEDULED_SEND_REMINDER_MARKER = "rappelle-moi";
+
+/**
+ * Le prompt effectif est-il PRIVÉ de la consigne d'envoi programmé ?
+ *
+ * ⚠️ `prompts.light` est ÉDITABLE dans Configuration et sa valeur ENREGISTRÉE l'emporte
+ * sur le fichier livré (`src/config/runtime.ts`, défaut lu depuis
+ * `config/pi/system-prompt.md`) : un prompt sauvegardé avant l'ajout de l'outil garde
+ * donc l'ancienne consigne, et le modèle suit la plus ancienne. On le SIGNALE au
+ * démarrage (jamais de réécriture silencieuse du texte de l'utilisateur).
+ */
+export function consigneEnvoiProgrammeAbsente(prompt: string): boolean {
+  return prompt.trim() !== "" && !prompt.includes(SCHEDULED_SEND_MARKER);
+}
+
+/**
+ * Le prompt effectif est-il VIDE ?
+ *
+ * ⚠️ Un prompt vide n'est pas « le défaut » : c'est un modèle SANS AUCUNE
+ * consigne. Le gateway refuse `""` (`empty_value`, `src/config/schema.ts`) et
+ * l'UI refuse d'enregistrer un champ vidé, mais le cas reste atteignable si le
+ * FICHIER LIVRÉ est absent ou vide (`readTextFile` rend `""`,
+ * `src/config/runtime.ts`) : on le SIGNALE au démarrage au lieu de laisser le
+ * comportement se dégrader en silence.
+ */
+export function promptVide(prompt: string): boolean {
+  return prompt.trim() === "";
+}
+
+/**
+ * Diagnostic ACTIONNABLE du prompt léger effectif : ce qui manque, et quoi faire.
+ *
+ * `null` = rien à signaler. Les deux cas connus :
+ *  - `"vide"` : aucune consigne du tout ;
+ *  - `"sans_envoi_programme"` : prompt enregistré qui CONTREDIT une capacité
+ *    réelle (`programmer_envoi`) — le modèle nie savoir programmer un envoi.
+ */
+export type PromptLegerDiagnostic = "vide" | "sans_envoi_programme" | null;
+
+export function diagnostiquerPromptLeger(prompt: string): PromptLegerDiagnostic {
+  if (promptVide(prompt)) return "vide";
+  if (consigneEnvoiProgrammeAbsente(prompt)) return "sans_envoi_programme";
+  return null;
+}
+
 /** Prompt système du lourd, utilisé si le fichier est absent/vide. */
 export const HEAVY_SYSTEM_PROMPT_FALLBACK = `# Yuki — worker lourd
 
@@ -105,4 +166,50 @@ export function appendVoiceInstruction(
   return base.length > 0
     ? `${base}\n\n${VOICE_SPEECH_INSTRUCTION}`
     : VOICE_SPEECH_INSTRUCTION;
+}
+
+/** Journal minimal accepté par `avertirSiPromptLegerIncomplet` (testable sans logger). */
+export interface PromptWarnerLike {
+  warn(message: string, fields?: Record<string, unknown>): void;
+}
+
+/** Remède affiché dans l'avertissement : où cliquer, en français. */
+export const PROMPT_LIGHT_RESET_HINT =
+  "Configuration → onglet Conversation → Prompt système — léger → « Réinitialiser au défaut »";
+
+/**
+ * Signale au DÉMARRAGE que le prompt léger effectif est inutilisable ou qu'il
+ * CONTREDIT une capacité réelle. **Aucune réécriture** du texte de l'utilisateur :
+ * on se contente de dire quoi faire (un avertissement sans action est du bruit).
+ *
+ * @param origine `config.originOf("prompts.light")` : `default` | `store` | `env`.
+ * @returns le diagnostic émis (`null` = rien à signaler).
+ */
+export function avertirSiPromptLegerIncomplet(
+  logger: PromptWarnerLike,
+  prompt: string,
+  origine: string,
+): PromptLegerDiagnostic {
+  const diagnostic = diagnostiquerPromptLeger(prompt);
+  if (diagnostic === "vide") {
+    logger.warn("pi.prompt.vide", {
+      champ: "prompts.light",
+      origine,
+      consequence:
+        "le modèle tourne SANS AUCUNE consigne (ni identité, ni outils, ni capacité d'envoi programmé)",
+      action: `restaurer le prompt livré (${PROMPT_LIGHT_RESET_HINT}) puis vérifier que config/pi/system-prompt.md existe et n'est pas vide`,
+    });
+    return diagnostic;
+  }
+  if (diagnostic === "sans_envoi_programme") {
+    logger.warn("pi.prompt.envois_programmes_absents", {
+      champ: "prompts.light",
+      origine,
+      reference: "config/pi/system-prompt.md",
+      consequence: "le modèle peut nier savoir programmer un envoi ou un rappel",
+      action: `réinitialiser au défaut (${PROMPT_LIGHT_RESET_HINT}), ou ajouter la consigne « ${SCHEDULED_SEND_MARKER} » au prompt personnalisé`,
+    });
+    return diagnostic;
+  }
+  return null;
 }

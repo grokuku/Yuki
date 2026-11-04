@@ -56,6 +56,12 @@ import {
 } from "./activity.js";
 import { liveRunMetricsText, runMetricsText } from "./run-stats.js";
 import { initSourcesNotifications } from "./notifications-panel.js";
+import {
+  dayKeyOf as cleDeJour,
+  formatDayFr,
+  formatHourFr,
+  setTimeZone,
+} from "./horodatage.js";
 
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
@@ -1162,40 +1168,25 @@ sessionActions = createSessionActions({ send: sendRaw, modal: HolafModal });
 /* ─── Horodatage de l'interface ───────────────────────────────────────────
  * L'heure « juste HH:mm » est affichée PETITE et discrète sur la ligne de
  * métadonnées de chaque message ; la date complète n'apparaît QUE dans le
- * séparateur de jour (`Intl.DateTimeFormat("fr-FR")`). Rendu fidèle à la
- * maquette validée (chat-layout) : trait interrompu autour d'un libellé centré.
+ * séparateur de jour. Rendu fidèle à la maquette validée (chat-layout) : trait
+ * interrompu autour d'un libellé centré.
  *
- * Le fuseau utilisé est celui du NAVIGATEUR : on le transmet au serveur (trame
- * `message`, champ `tz`) pour que le préfixe STOCKÉ soit, lui aussi, daté dans
- * l'heure locale de l'utilisateur (même si le conteneur tourne en UTC). */
-const hourFormatter = new Intl.DateTimeFormat("fr-FR", {
-  hour: "2-digit",
-  minute: "2-digit",
-});
-const dayFormatter = new Intl.DateTimeFormat("fr-FR", {
-  weekday: "long",
-  day: "numeric",
-  month: "long",
-  year: "numeric",
-});
-const CLIENT_TIME_ZONE = (() => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
-  } catch {
-    return null;
-  }
-})();
+ * ⚠️ FUSEAU (2026-11-04) : toutes les dates sont rendues dans le fuseau du
+ * réglage `/config` `ui.timeZone` (défaut **UTC**), jamais celui du navigateur :
+ * c'est lui qui faisait afficher une heure différente de Mattermost (UTC) pour
+ * le même message. Le fuseau vient du SERVEUR (`welcome.timeZone`, puis trame de
+ * contrôle `time_zone`) et s'applique à chaud (`reafficherHorodatages`).
+ */
 
 /** Instant exploitable (ms Unix positif), sinon `false`. */
 function isTimestamp(ts) {
   return typeof ts === "number" && Number.isFinite(ts) && ts > 0;
 }
 
-/** Clé de jour LOCALE (comparaison des séparateurs), ou `null` si pas d'heure. */
+/** Clé de jour dans le fuseau configuré, ou `null` si pas d'heure. */
 function dayKeyOf(ts) {
   if (!isTimestamp(ts)) return null;
-  const date = new Date(ts);
-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+  return cleDeJour(new Date(ts));
 }
 
 /* Dernière clé de jour rendue (le séparateur ne se répète pas dans un même
@@ -1224,7 +1215,30 @@ function ensureDaySeparator(ts, before = null) {
   const key = dayKeyOf(ts);
   if (key === null || key === lastDayKey) return;
   lastDayKey = key;
-  appendDaySeparator(dayFormatter.format(new Date(ts)), before);
+  appendDaySeparator(formatDayFr(new Date(ts)), before);
+}
+
+/**
+ * RÉAFFICHE tous les horodatages du fil avec le fuseau COURANT, sans rechargement.
+ *
+ * ⚠️ Appelée quand le réglage `ui.timeZone` change (trame de contrôle
+ * `time_zone`) : le SERVEUR date déjà les prompts dans le nouveau fuseau ; laisser
+ * l'ancien à l'écran suffirait à récréer deux heures pour un même message.
+ *
+ * Les séparateurs de jour sont RECONSTRUITS (le jour d'un instant change avec le
+ * fuseau) et les heures réécrites. Aucun autre état du fil n'est touché.
+ */
+function reafficherHorodatages() {
+  const messages = [...els.conversation.querySelectorAll("[data-ts]")];
+  if (messages.length === 0) return;
+  for (const sep of [...els.conversation.querySelectorAll(".daysep")]) sep.remove();
+  lastDayKey = null;
+  for (const node of messages) {
+    const ts = Number(node.dataset.ts);
+    if (!isTimestamp(ts)) continue;
+    ensureDaySeparator(ts, node);
+    setMessageTime(node, ts, node.querySelector(".message__head--end") !== null);
+  }
 }
 
 /**
@@ -1287,7 +1301,7 @@ function setMessageTime(element, ts, alignEnd) {
     time.className = "message__time";
     head.appendChild(time);
   }
-  time.textContent = hourFormatter.format(new Date(ts));
+  time.textContent = formatHourFr(new Date(ts));
 }
 
 /**
@@ -1758,6 +1772,10 @@ function handleFrame(frame) {
   if (sessionActions && sessionActions.handleFrame(frame)) return;
 
   if (type === "welcome") {
+    // ⚠️ FUSEAU des horodatages : le serveur est la SEULE autorité (réglage
+    // `ui.timeZone`, défaut UTC). Absent (serveur ancien) ⇒ `UTC` par défaut du
+    // module — jamais le fuseau du navigateur.
+    if (typeof frame.timeZone === "string") setTimeZone(frame.timeZone);
     if (frame.sessionId) sessionId = frame.sessionId;
     // Un `welcome { resumed: true }` acquitte notre `resume` : le rejeu (ou le
     // snapshot) suit, on autorise une nouvelle demande si un trou apparaissait.
@@ -1781,6 +1799,14 @@ function handleFrame(frame) {
     // Mode de discussion : relu à CHAQUE connexion (il a pu changer pendant la
     // coupure, ou depuis un autre onglet / la page `/config`).
     void refreshChatStatus();
+    return;
+  }
+  if (type === "time_zone") {
+    // Changement À CHAUD du fuseau (`/config` → `ui.timeZone`) : on réaffiche.
+    if (typeof frame.timeZone === "string") {
+      setTimeZone(frame.timeZone);
+      reafficherHorodatages();
+    }
     return;
   }
   if (type === "pong" || type === "bye") return;
@@ -2630,14 +2656,14 @@ function sendMessage() {
   // vidée (ils restent stockés et rattachés à la conversation côté serveur).
   pendingFiles.clear();
   refreshPendingFiles();
-  // Le fuseau du navigateur part avec le message : le préfixe STOCKÉ est ainsi
-  // daté dans l'heure locale de l'utilisateur (le conteneur peut être en UTC).
+  // ⚠️ Plus de champ `tz` : le fuseau des horodatages est un RÉGLAGE serveur
+  // (`ui.timeZone`, défaut UTC). Envoyer celui du navigateur datait les prompts
+  // dans l'heure de la machine, donc différemment de Mattermost (UTC).
   if (
     !sendRaw({
       type: "message",
       clientMsgId,
       text,
-      ...(CLIENT_TIME_ZONE ? { tz: CLIENT_TIME_ZONE } : {}),
       ...(attached.length > 0 ? { files: attached.map((file) => file.id) } : {}),
     })
   ) {

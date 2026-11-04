@@ -95,7 +95,9 @@ describe("formatage (compteur, initiales, date)", () => {
 
   it("heure du menu téléphone : HH:mm aujourd'hui, date courte sinon", () => {
     const now = new Date("2026-10-23T15:00:00.000Z");
-    expect(formatHour("2026-10-23T12:34:00.000Z", now)).toMatch(/^\d{2}:\d{2}$/);
+    // ⚠️ Le suffixe de FUSEAU est obligatoire (« 12:34 UTC ») : une heure seule
+    // est ambiguë dès qu'un canal distant (Mattermost, en UTC) est comparé.
+    expect(formatHour("2026-10-23T12:34:00.000Z", now)).toBe("12:34 UTC");
     expect(formatHour("2026-10-08T10:00:00.000Z", now)).toMatch(/oct/);
     expect(formatHour(undefined, now)).toBe("");
     expect(formatHour("pas une date", now)).toBe("");

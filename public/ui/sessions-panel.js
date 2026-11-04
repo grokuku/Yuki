@@ -29,6 +29,7 @@
 import { HolafModal } from "./vendor/holaf/holaf-modal.js";
 import { HolafIcons } from "./vendor/holaf/holaf-icons.js";
 import { attachLongPress } from "./long-press.js";
+import { formatHourFr, formatMonthDayFr, isSameDay } from "./horodatage.js";
 import {
   QUOTE_AUTHOR_OPTIONS,
   REPLY_MODE_OPTIONS,
@@ -151,16 +152,18 @@ export function initialsFor(title) {
   return `${first}${second}`.toUpperCase();
 }
 
-/** Date courte localisée (« 8 oct. »), chaîne vide si inconnue/illisible. */
+/**
+ * Date courte (« 8 oct. »), chaîne vide si inconnue/illisible.
+ *
+ * ⚠️ Fuseau `ui.timeZone` (défaut UTC) : la date d'un message est celle que le
+ * canal distant affiche (Mattermost est en UTC), jamais celle du navigateur.
+ */
 export function formatDate(iso) {
   if (!iso) return "";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   try {
-    return new Intl.DateTimeFormat("fr-FR", {
-      day: "numeric",
-      month: "short",
-    }).format(date);
+    return formatMonthDayFr(date);
   } catch {
     return "";
   }
@@ -177,16 +180,12 @@ export function formatHour(iso, now = new Date()) {
   if (!iso) return "";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  if (!sameDay) return formatDate(iso);
+  // ⚠️ Même fuseau pour la comparaison de jour ET le rendu (`ui.timeZone`, défaut
+  // UTC) : comparer des jours « locaux » à une heure « UTC » ferait basculer
+  // l'affichage d'un cran autour de minuit.
+  if (!isSameDay(date, now)) return formatDate(iso);
   try {
-    return new Intl.DateTimeFormat("fr-FR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(date);
+    return formatHourFr(date);
   } catch {
     return "";
   }

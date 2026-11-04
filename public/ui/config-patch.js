@@ -106,6 +106,82 @@ export function coerceFieldValue(field, value) {
 }
 
 /**
+ * Valeur à réécrire dans le contrôle lors d'un « Réinitialiser au défaut ».
+ *
+ * Ordre de priorité :
+ *  1. `default` du snapshot servi par `GET /api/config` — SEULE source exacte :
+ *     pour `prompts.light` / `prompts.heavy` le défaut est le CONTENU DU FICHIER
+ *     LIVRÉ (`src/config/runtime.ts`, `readTextFile(env.piSystemPromptPath)`),
+ *     que le navigateur ne peut pas deviner ;
+ *  2. à défaut, le miroir `FIELD_DEFAULTS` (gateway ancien) — il ne contient
+ *     VOLONTAIREMENT aucune entrée pour les prompts.
+ *
+ * ⚠️ `undefined` = défaut inconnu du client (jamais une chaîne vide par
+ * défaut) : le bouton reste utile quand une surcharge existe, car il l'EFFACE
+ * côté serveur (`null`) et le défaut s'applique alors sans être connu du client.
+ */
+export function resetValueFor(field, entry, mirror = {}) {
+  if (entry && typeof entry === "object") {
+    const served = entry.default;
+    if (served !== undefined && served !== null) return served;
+  }
+  if (field && Object.prototype.hasOwnProperty.call(mirror, field.path)) {
+    return mirror[field.path];
+  }
+  return undefined;
+}
+
+/**
+ * Libellé d'ORIGINE (③) : ce qui est réellement actif pour ce champ.
+ *
+ * `null` = rien à affirmer (verrouillé par l'environnement : la valeur ne vient
+ * ni du défaut ni d'une surcharge enregistrée ; ou origine inconnue).
+ */
+export function originLabel(entry) {
+  if (!entry || entry.lockedByEnv) return null;
+  if (entry.origin === "store") return "personnalisé";
+  if (entry.origin === "default") return "valeur par défaut";
+  return null;
+}
+
+/**
+ * Refus EXPLICITE d'un champ TEXTE vidé alors qu'un défaut NON VIDE existe.
+ *
+ * ⚠️ Pourquoi côté client : le prompt système est un texte long ; le vider par
+ * inadvertance (sélection + touche Retour arrière) puis enregistrer laissait le
+ * modèle sans aucune consigne. Le gateway refuse déjà `""` (`empty_value`,
+ * `src/config/schema.ts`) — on le dit AVANT l'envoi, avec l'action à faire, au
+ * lieu d'un aller-retour réseau et d'un message sous le contrôle.
+ *
+ * Seuls les champs dont le défaut RÉEL est non vide sont concernés (`default`
+ * servi par `GET /api/config`) : un champ dont le défaut est la chaîne vide
+ * (`gpu.profile`, `librarian.baseUrl`, …) peut légitimement être vidé.
+ *
+ * @returns {Array<{ path: string, code: string, message: string }>}
+ */
+export function emptyValueRefusals({ allFields, state, labels = new Map() }) {
+  const refusals = [];
+  for (const field of allFields) {
+    if (field.kind === "secret") continue;
+    const entry = state.fields[field.path];
+    if (!entry || entry.lockedByEnv) continue;
+    if (state.pendingResets.has(field.path)) continue;
+    const fallback = entry.default;
+    if (typeof fallback !== "string" || fallback.trim() === "") continue;
+    const control = state.inputs.get(field.path);
+    if (!control) continue;
+    if (String(control.value).trim() !== "") continue;
+    const label = labels.get(field.path) ?? field.label ?? field.path;
+    refusals.push({
+      path: field.path,
+      code: "empty_value",
+      message: `« ${label} » ne peut pas être vide : sans valeur, le défaut livré ne s'applique pas. Cliquez sur « Réinitialiser au défaut » pour le restaurer.`,
+    });
+  }
+  return refusals;
+}
+
+/**
  * Construit le patch des champs modifiés. `state` est l'état partagé de
  * `config.js` (`fields`, `secretState`, `pendingResets`, `inputs`, `initial`).
  * Seuls les champs **réellement modifiés** sont inclus ; un champ verrouillé par

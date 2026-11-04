@@ -90,6 +90,17 @@ export interface RemoteReplyGeneratorOptions {
   /** Écrivain SDK, construit avec le run (la politique y entre). */
   createWriter: (run: ReplyRun) => SdkPromptWriter;
   /**
+   * FUSEAU des horodatages du prompt (réglage `/config` `ui.timeZone`, défaut
+   * `UTC`), relu à CHAQUE réponse (`apply: hot`).
+   *
+   * ⚠️ Sans lui, `buildReplyPrompt` retombait sur le fuseau du PROCESS : un
+   * conteneur en UTC et un hôte en `Europe/Paris` dataient le même fil
+   * différemment — et différemment de Mattermost, qui est en UTC.
+   *
+   * Absent ⇒ `UTC` (`src/pi/timestamp.ts`).
+   */
+  timeZone?: () => string;
+  /**
    * Journal de la PROGRESSION (facultatif).
    *
    * ⚠️ Il sert à MESURER l'accusé en production : `chat.progress.ack` porte sa SOURCE
@@ -295,6 +306,9 @@ export function createRemoteReplyGenerator(
       transcript: input.transcript,
       message: input.message,
       botName: options.botName(input.message.conversationId),
+      // ⚠️ Fuseau EXPLICITE (`ui.timeZone`, défaut UTC) : le prompt ne dépend
+      // jamais du fuseau du process.
+      ...(options.timeZone !== undefined ? { timeZone: options.timeZone() } : {}),
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
       // ⚠️ ORIGINE et FICHIERS du job : sans eux, Yuki lit un rapport qui parle
       // d'une image qu'elle ne peut ni nommer ni publier.

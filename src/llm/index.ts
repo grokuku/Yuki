@@ -107,11 +107,18 @@ export type {
 
 export {
   appendVoiceInstruction,
+  avertirSiPromptLegerIncomplet,
+  consigneEnvoiProgrammeAbsente,
   DELEGATION_INSTRUCTION,
+  diagnostiquerPromptLeger,
+  promptVide,
   DELEGATION_MARKER,
   HEAVY_NO_USER_MARKER,
   HEAVY_SECRET_MARKER,
   HEAVY_SYSTEM_PROMPT_FALLBACK,
+  PROMPT_LIGHT_RESET_HINT,
+  SCHEDULED_SEND_MARKER,
+  SCHEDULED_SEND_REMINDER_MARKER,
   SECRET_REQUEST_MARKER,
   VOICE_SPEECH_INSTRUCTION,
 } from "./prompts.js";

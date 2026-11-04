@@ -267,7 +267,7 @@ function isSyntheticUserText(
  * Miroir EXACT du transcript temps réel (`SessionRecord.transcript`) :
  *   - seules les entrées `type:"message"` de rôle `user`/`assistant` comptent ;
  *   - le texte est le CONTENU seul (les blocs `thinking` sont exclus) ;
- *   - le préfixe d'horodatage `[horodatage] … (heure locale)` d'un message
+ *   - le préfixe d'horodatage `[horodatage] … (UTC)` d'un message
  *     utilisateur est MASQUÉ (en stockage il est conservé ; voir timestamp.ts) ;
  *   - `timestamp` (ms Unix) est repris du message quand il est présent, afin
  *     que l'UI puisse afficher l'heure — y compris après restauration ;

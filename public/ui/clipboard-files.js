@@ -14,6 +14,12 @@
 //
 // Aucun DOM ici : les tests unitaires (`tests/ui/clipboard-files.test.ts`)
 // importent ce module tel quel.
+//
+// ⚠️ L'horodatage du nom fabriqué vient de `./horodatage.js` (`compactStampOf`) :
+// même fuseau (`ui.timeZone`, défaut `UTC`) que TOUT le reste de l'interface —
+// le nom ne doit jamais contredire l'heure affichée à côté.
+
+import { compactStampOf } from "./horodatage.js";
 
 /** Extension déduite du type MIME (aucune invention : le repli est `bin`). */
 const MIME_EXTENSIONS = new Map([
@@ -55,33 +61,14 @@ function hasUsableName(name) {
   return /^[a-z0-9]{1,10}$/i.test(base.slice(dot + 1));
 }
 
-/** Deux chiffres (`7` → `07`). */
-function pad2(value) {
-  return String(value).padStart(2, "0");
-}
-
-/**
- * Horodatage local compact `AAAAMMJJ-HHMMSS` (lisible tel quel par l'humain,
- * et trié dans l'ordre chronologique).
- *
- * @param {number|Date} now instant choisi (injecté : aucun test ne dépend de
- *   l'horloge réelle).
- */
-function stampOf(now) {
-  const at = now instanceof Date ? now : new Date(Number(now));
-  if (Number.isNaN(at.getTime())) return "00000000-000000";
-  return (
-    `${at.getFullYear()}${pad2(at.getMonth() + 1)}${pad2(at.getDate())}` +
-    `-${pad2(at.getHours())}${pad2(at.getMinutes())}${pad2(at.getSeconds())}`
-  );
-}
-
 /**
  * Nom lisible d'un fichier collé : le nom d'origine est CONSERVÉ dès qu'il est
  * exploitable, sinon un nom daté est fabriqué (`collé-AAAAMMJJ-HHMMSS.<ext>`).
  *
  * ⚠️ Les ACCENTS sont conservés (« collé ») : l'envoi pourcent-encode le nom
  * (`encodeURIComponent`), le serveur le décode, rien n'est perdu.
+ * ⚠️ L'horodatage est celui de `compactStampOf` : fuseau `ui.timeZone` (défaut
+ * `UTC`), JAMAIS celui du navigateur. Format inchangé, seul le fuseau change.
  *
  * @param {File} file fichier collé.
  * @param {{ now?: number|Date }} [options] instant de référence (injectable).
@@ -90,7 +77,7 @@ function stampOf(now) {
 export function namePastedFile(file, { now = Date.now() } = {}) {
   const existing = String(file?.name ?? "").trim();
   if (hasUsableName(existing)) return existing;
-  return `collé-${stampOf(now)}.${extensionForType(file?.type)}`;
+  return `collé-${compactStampOf(now)}.${extensionForType(file?.type)}`;
 }
 
 /**

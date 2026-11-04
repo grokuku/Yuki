@@ -89,11 +89,13 @@ autres échecs portent sur la constante neuve (`CHAT_PARTIAL_HISTORY_NOTICE` vau
 
 ## Invérifiable ici
 
-- **Le fuseau réel en production.** Le chemin d'un run de canal n'a **aucun navigateur**
-  pour transmettre son fuseau (`timezone` n'existe que sur le prompt local,
-  `src/pi/types.ts:342`) : le fil est donc formaté dans le fuseau du **process Node**. Un
-  conteneur en UTC afficherait des heures UTC étiquetées « heure locale » — c'est le
-  même repli que les prompts locaux, pas un nouveau piège, mais il n'est pas corrigé ici.
+- ~~**Le fuseau réel en production.**~~ **CORRIGÉ le 2026-11-04** (« tous les
+  horodatages en UTC ») : le fil n'est plus formaté dans le fuseau du process mais dans
+  le fuseau du réglage `/config` **`ui.timeZone`** (défaut **UTC**, le fuseau de
+  Mattermost), passé **explicitement** à `Intl` (`src/pi/timestamp.ts`). La
+  planification, elle, garde le fuseau de **chaque déclencheur** (`src/sources/cron.ts`),
+  et un envoi programmé celui de l'envoi (`src/chat/envois/quand.ts`). Voir
+  [`runbook.md`](runbook.md) §2.2.
 - **Le comportement du modèle devant des heures** : aucun test ne dit qu'il en tirera
   « ce matin » ou « il y a trois minutes ». On prouve que l'information est **présente et
   lisible**, pas qu'elle est exploitée.

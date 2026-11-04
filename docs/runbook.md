@@ -144,6 +144,23 @@ Pour observer un envoi : les événements `sources.*` du journal ci-dessus
 correspondante dans la section **« Notifications »** de la page `/` (état
 `reçu` / `traité` / `en échec` / `alerte`).
 
+### 2.2 Horodatages : UTC partout, SAUF la planification
+
+**Tous les horodatages sont en UTC** (réglage `/config` → Système → *Affichage —
+fuseau des horodatages*, `ui.timeZone`, défaut `UTC`) : les repères des prompts
+(`[horodatage] … (UTC)`), les heures du fil de canal, l'interface, le journal et
+les logs. Mattermost est en UTC : les deux affichent donc la MÊME heure pour un
+même message. Le fuseau est passé **explicitement** à chaque formatage
+(`src/pi/timestamp.ts`, miroir navigateur `public/ui/horodatage.js`) — jamais
+celui du process ni celui du navigateur. Le suffixe est toujours affiché
+(`15:39 UTC`) : une heure seule est ambiguë.
+
+**Exception : la PLANIFICATION** suit le fuseau de **chaque déclencheur**
+(`src/sources/cron.ts`) — « tous les jours à 9 h » reste **9 h locales** — et un
+envoi programmé garde le fuseau de l'envoi (`src/chat/envois/quand.ts`). Les
+instants stockés (`prochainPassage`, `creeLe`, `envoyeLe`…) sont en ISO UTC :
+seul l'AFFICHAGE a changé, aucun instant n'a été décalé.
+
 ## 3. Rapport GPU sans serveur
 
 ```bash

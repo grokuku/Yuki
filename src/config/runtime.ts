@@ -55,6 +55,16 @@ export class LockedByEnvError extends Error {
 /** Feuille « valeur » (non secrète). */
 export interface ValueFieldSnapshot {
   value: string | number;
+  /**
+   * Valeur par DÉFAUT réellement appliquée si aucune surcharge n'était
+   * enregistrée : pour `prompts.light` / `prompts.heavy`, c'est le CONTENU DU
+   * FICHIER LIVRÉ (jamais `""` quand le fichier existe).
+   *
+   * ⚠️ Sans elle, l'UI ne pouvait deviner le défaut que par un miroir codé en
+   * dur où les prompts valaient `""` : « Réinitialiser au défaut » vidait donc
+   * la zone de texte au lieu de restaurer le prompt livré.
+   */
+  default: string | number;
   origin: Origin;
   apply: ApplyKind;
   lockedByEnv?: string;
@@ -270,6 +280,7 @@ export class ConfigRuntime {
       } else {
         fields[path] = {
           value: this.get(path),
+          default: this.defaults[path] ?? "",
           origin,
           apply: descriptor.apply,
           ...(lockedByEnv ? { lockedByEnv } : {}),

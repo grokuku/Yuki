@@ -243,7 +243,7 @@ export class MemoryService implements MemoryPort, MemoryAdminPort {
   async recall(query: string): Promise<MemoryRecallResult> {
     const started = this.now();
     // ⚠️ La requête est le TEXTE UTILISATEUR STOCKÉ, préfixé du repère temporel
-    // `[horodatage] YYYY-MM-DD HH:mm (heure locale)` ajouté par
+    // `[horodatage] YYYY-MM-DD HH:mm (UTC)` ajouté par
     // `buildStoredUserText`. Ce préfixe est une MÉTADONNÉE, PAS une requête :
     // `buildMatchQuery` ne retient que les 8 PREMIERS termes et le préfixe en
     // consomme 8 à lui seul (année, mois, jour, heures, minutes, « horodatage »,

@@ -357,9 +357,12 @@ export interface SendOptions {
   /** Job d'arrière-plan à l'origine du message (corrélation). */
   jobId?: string;
   /**
-   * Fuseau horaire IANA du CLIENT (ex. `Europe/Paris`). Sert à horodater le
-   * message dans l'heure LOCALE de l'utilisateur quand le conteneur tourne en
-   * UTC. Absent/invalide ⇒ fuseau du process Node.
+   * Fuseau IANA du RÉGLAGE `/config` `ui.timeZone` (défaut `UTC`), transmis par
+   * le gateway : il date le préfixe `[horodatage]` du message STOCKÉ.
+   *
+   * ⚠️ Ce n'est PAS le fuseau du navigateur (comportement d'avant le
+   * 2026-11-04) : un même message doit afficher la même heure que Mattermost, qui
+   * est en UTC. Absent/invalide ⇒ `UTC` (jamais le fuseau du process).
    */
   timezone?: string;
   /**

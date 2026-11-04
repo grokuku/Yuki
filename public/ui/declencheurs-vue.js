@@ -19,9 +19,10 @@
  *      destination supprimée…). ⚠️ AUCUNE disparition silencieuse : une source
  *      éteinte reste listée ici, indéfiniment.
  *
- * Aucun import, aucun accès à `document` : ce module est chargé aussi bien par
- * la page `/config` que par les tests.
+ * ⚠️ Seul import : `./horodatage.js` (formatage des instants, fuseau `ui.timeZone`),
+ * qui n'a lui-même aucune dépendance — le module reste chargeable par les tests.
  */
+import { formatDateTimeFr } from "./horodatage.js";
 
 /** Nombre de jours pendant lesquels un déclencheur TEMPORAIRE éteint reste listé. */
 export const JOURS_VISIBILITE_TEMPORAIRE = 7;
@@ -118,7 +119,10 @@ export function dateHeureFr(iso) {
   if (iso === undefined || iso === null || iso === "") return "";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return String(iso);
-  return date.toLocaleString("fr-FR");
+  // ⚠️ Fuseau `ui.timeZone` (défaut UTC), suffixé : l'instant d'un passage est le
+  // MÊME que celui qu'affiche le canal distant (Mattermost, en UTC). La
+  // PLANIFICATION, elle, garde le fuseau de chaque déclencheur (colonne « quand »).
+  return formatDateTimeFr(date);
 }
 
 /** `true` si l'instant est dans la fenêtre (jours) qui précède `maintenant`. */

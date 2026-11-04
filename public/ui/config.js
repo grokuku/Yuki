@@ -34,8 +34,17 @@ import { initPersonalityPanel } from './personality-panel.js';
 import { initSecretsPanel } from './secrets-panel.js';
 import { initSourcesPanel } from './sources-panel.js';
 import { initChatPanel, REMOTE_AGENTS_ANCHOR, REMOTE_TOOLS_ANCHOR } from './chat-panel.js';
-import { buildConfigPatch, engineFieldState, presentConfigSaveError, presentRestartRefusal } from './config-patch.js';
+import {
+  buildConfigPatch,
+  emptyValueRefusals,
+  engineFieldState,
+  originLabel,
+  presentConfigSaveError,
+  presentRestartRefusal,
+  resetValueFor,
+} from './config-patch.js';
 import { initTheme } from './theme.js';
+import { setTimeZone } from './horodatage.js';
 import { createTtsPlayer } from './tts-player.js';
 import { initTtsAssistant } from './tts-assistant.js';
 import { initVoicesPanel } from './voices-panel.js';
@@ -267,9 +276,26 @@ const GROUPS = [
     title: "Prompts système",
     // Bloc LECTURE SEULE : l'instruction vocale réellement injectée (volet 1).
     voiceInstruction: true,
+    // ⚠️ DIT explicitement ce qui n'est PAS réglable ici : sans cette phrase,
+    // l'utilisateur cherche à régler aussi le prompt des réponses publiées dans
+    // un canal (Mattermost / Discord) et croit qu'il a été ignoré.
+    note:
+      "Ces deux prompts sont ceux du chat LOCAL (et du worker lourd). Le prompt des réponses PUBLIÉES DANS UN CANAL (Mattermost, Discord) n'est PAS réglable ici : c'est une constante du code (src/chat/reply/prompt.ts), pour que le mode « auto » reste borné.",
     fields: [
-      { path: "prompts.light", label: "Prompt système — léger", kind: "textarea" },
-      { path: "prompts.heavy", label: "Prompt système — lourd", kind: "textarea" },
+      {
+        path: "prompts.light",
+        label: "Prompt système — léger",
+        kind: "textarea",
+        helper:
+          "Un champ vide est REFUSÉ : sans consigne, le modèle n'a plus de cadre. « Réinitialiser au défaut » réécrit le prompt LIVRÉ (config/pi/system-prompt.md).",
+      },
+      {
+        path: "prompts.heavy",
+        label: "Prompt système — lourd",
+        kind: "textarea",
+        helper:
+          "Utilisé par le worker lourd (tâche déléguée). Un champ vide est REFUSÉ ; « Réinitialiser au défaut » réécrit le prompt LIVRÉ (config/pi/system-prompt-heavy.md).",
+      },
     ],
   },
   {
@@ -461,6 +487,26 @@ const GROUPS = [
     fields: [
       { path: "transport.replayBuffer", label: "Buffer de rejeu (trames)", kind: "number", min: 1 },
       { path: "transport.replayBytes", label: "Buffer de rejeu (octets)", kind: "number", min: 1 },
+    ],
+  },
+  {
+    id: "affichage",
+    title: "Affichage — fuseau des horodatages",
+    fields: [
+      {
+        path: "ui.timeZone",
+        label: "Fuseau horaire des horodatages",
+        kind: "text",
+        helper:
+          "Fuseau IANA utilisé pour TOUS les horodatages : les repères des prompts " +
+          "(« [horodatage] … (UTC) »), les heures du fil de canal, l'interface et le " +
+          "journal. Défaut « UTC » — c'est le fuseau de Mattermost, donc les deux " +
+          "affichent la MÊME heure pour un même message. Exemples : UTC, " +
+          "Europe/Paris, America/New_York. ⚠️ Un nom inconnu est REFUSÉ (il ferait " +
+          "afficher une heure fausse sans le dire). ⚠️ La PLANIFICATION n'est pas " +
+          "concernée : un déclencheur « tous les jours à 9 h » tire à 9 h dans SON " +
+          "fuseau, et un envoi programmé dans celui de l'envoi. Appliqué à chaud.",
+      },
     ],
   },
   {
@@ -810,8 +856,13 @@ const FIELD_DEFAULTS = {
   "gpu.profile": "",
   "gpu.compatMode": "strict",
   "gpu.minDriver": 580,
-  "prompts.light": "",
-  "prompts.heavy": "",
+  // ⚠️ `prompts.light` / `prompts.heavy` n'ont PAS d'entrée ici VOLONTAIREMENT :
+  // leur défaut réel est le CONTENU DU FICHIER LIVRÉ (`config/pi/system-prompt.md`),
+  // que le navigateur ne connaît pas. Il est servi par `GET /api/config`
+  // (`fields["prompts.light"].default`, voir `src/config/runtime.ts`) et c'est
+  // LUI que « Réinitialiser au défaut » réécrit. Une entrée `""` ici vidait la
+  // zone de texte : c'était le défaut signalé (« si je fais réinitialiser au
+  // défaut, c'est vide »).
   "memory.enabled": "on",
   "memory.recall.topK": 5,
   "memory.recall.budgetChars": 8000,
@@ -833,6 +884,9 @@ const FIELD_DEFAULTS = {
   "tts.volume": 100,
   "transport.replayBuffer": 1000,
   "transport.replayBytes": 5000000,
+  // Fuseau des horodatages (réglage `ui.timeZone`) : **UTC** par défaut, comme
+  // Mattermost — c'est ce qui rend les deux affichages corrélables.
+  "ui.timeZone": "UTC",
   "push.enabled": "on",
   "push.contact": "mailto:yuki@localhost",
   "agents.serverName": "",
@@ -882,7 +936,9 @@ const TABS = [
   { id: "images", groups: ["images"] },
   { id: "agents", groups: ["agents-acces"] },
   { id: "secrets", groups: [] },
-  { id: "systeme", groups: ["gpu", "transport", "librarian", "notifications"] },
+  // « Affichage » (fuseau des horodatages) est un réglage d'INTERFACE : il vit
+  // dans « Système », jamais dans un onglet de contenu.
+  { id: "systeme", groups: ["gpu", "transport", "affichage", "librarian", "notifications"] },
   { id: "maintenance", groups: [] },
 ];
 
@@ -976,6 +1032,25 @@ function lockedBadge(variable) {
     class: "badge badge--locked",
     text: `Verrouillé par l'environnement (${variable})`,
   });
+}
+
+/**
+ * Badge d'ORIGINE (③) : rend visible ce qui est réellement actif.
+ *
+ *  - « valeur par défaut » : rien n'est enregistré, le défaut s'applique (pour un
+ *    prompt : le fichier livré, `config/pi/system-prompt.md`) ;
+ *  - « personnalisé » : une valeur ENREGISTRÉE l'emporte sur le défaut livré.
+ *
+ * ⚠️ C'est la seule façon de distinguer les deux cas à l'écran : le contrôle
+ * affiche la valeur effective dans les deux cas, et une valeur enregistrée qui
+ * copie le défaut est indiscernable sans ce badge.
+ */
+function originBadge(entry) {
+  // Verrouillé par l'environnement : `lockedBadge` le dit déjà (valeur imposée).
+  const label = originLabel(entry);
+  if (label === null) return null;
+  const modifier = entry.origin === "store" ? "store" : "default";
+  return h("span", { class: `badge badge--origin-${modifier}`, text: label });
 }
 
 function renderSelect(field, entry) {
@@ -1075,32 +1150,60 @@ function renderSecret(field, entry) {
   return container;
 }
 
-/** Libellé lisible d'une valeur (mappe les options des `<select>`). */
+/** Libellé lisible d'une valeur (mappe les options des `<select>`).
+ *
+ * ⚠️ Un prompt système livré fait des milliers de caractères : l'afficher ENTIER
+ * dans l'aide « Valeur par défaut : … » noierait la page. On tronque (aperçu sur
+ * une ligne + nombre de caractères), la valeur réelle restant celle écrite dans
+ * le contrôle par « Réinitialiser au défaut ».
+ */
 function valueLabel(field, value) {
   if (field.kind === "select" && Array.isArray(field.options)) {
     const found = field.options.find(([v]) => String(v) === String(value));
     if (found) return found[1];
   }
   const text = String(value ?? "");
-  return text === "" ? "∅ (vide)" : text;
+  if (text === "") return "∅ (vide)";
+  if (field.kind === "textarea" || text.length > 96) {
+    const preview = text.replace(/\s+/g, " ").trim().slice(0, 60);
+    return `${preview}… (${text.length} caractères)`;
+  }
+  return text;
 }
 
 /**
- * Valeur par défaut d'un champ (via `FIELD_DEFAULTS`), affichée en clair et
- * injectable dans le contrôle. `undefined` si le champ n'a pas de défaut connu
- * (les champs secrets n'en ont jamais).
+ * Valeur par défaut RÉELLE d'un champ, utilisée par l'aide « Valeur par défaut »
+ * et par « Réinitialiser au défaut ».
+ *
+ * Ordre de priorité :
+ *  1. `default` servi par `GET /api/config` — c'est la SEULE source exacte, car
+ *     pour `prompts.light` / `prompts.heavy` le défaut est le CONTENU DU FICHIER
+ *     LIVRÉ (`src/config/runtime.ts`, `readTextFile(env.piSystemPromptPath)`),
+ *     que le navigateur ne peut pas deviner ;
+ *  2. à défaut, le miroir `FIELD_DEFAULTS` (gateway ancien), qui ne couvre pas
+ *     les prompts précisément parce qu'il ne peut pas les connaître.
+ *
+ * `undefined` = défaut inconnu du client (le bouton reste utile si une
+ * surcharge existe : il l'efface côté serveur).
  */
 function fieldDefault(field) {
-  return Object.prototype.hasOwnProperty.call(FIELD_DEFAULTS, field.path)
-    ? FIELD_DEFAULTS[field.path]
-    : undefined;
+  return resetValueFor(field, state.fields[field.path], FIELD_DEFAULTS);
 }
 
 /**
- * « Réinitialiser au défaut » : restaure la valeur PAR DÉFAUT dans le contrôle
- * et, si une surcharge existe (`origin === "store"`), demande au serveur de
- * l'effacer (`null` dans le patch via `pendingResets`). Si le champ est déjà au
- * défaut, la remise à zéro reste purement locale (aucun envoi inutile).
+ * « Réinitialiser au défaut » : restaure la valeur PAR DÉFAUT **réelle** dans le
+ * contrôle et, si une surcharge existe (`origin === "store"`), demande au
+ * serveur de l'effacer (`null` dans le patch via `pendingResets`).
+ *
+ * ⚠️ DÉCISION : on **efface la surcharge enregistrée** au lieu de réécrire le
+ * défaut dans le store. Pourquoi :
+ *  - le défaut des prompts est le contenu d'un fichier LIVRÉ (mis à jour avec
+ *    l'image) ; le recopier dans le store figerait une copie Périmée, exactement
+ *    la panne signalée (un prompt sauvegardé garde l'ancienne consigne) ;
+ *  - le store reste minimal (état « par défaut » = absence de clé), et le
+ *    fichier livré redevient effectif au prochain démarrage.
+ * Le contrôle est donc rempli avec le défaut **servi par le serveur** :
+ * l'affichage dit la vérité immédiatement, sans attendre le rechargement.
  */
 function resetField(field, control, entry) {
   const fallback = fieldDefault(field);
@@ -1123,6 +1226,14 @@ function renderField(field) {
 
   const label = h("label", { class: "config-label" }, [field.label]);
   if (field.kind !== "secret") label.append(applyBadge(entry.apply));
+  // ⚠️ ÉTAT VISIBLE (③) : l'utilisateur doit savoir si ce qu'il voit est le
+  // défaut livré ou SA valeur. Sans ce badge, un prompt personnalisé (ou vide)
+  // est indistinguable du prompt livré — c'est ce qui a fait croire à une
+  // « réinitialisation » réussie alors que la consigne n'était plus là.
+  if (field.kind !== "secret") {
+    const origin = originBadge(entry);
+    if (origin) label.append(origin);
+  }
   if (entry.lockedByEnv) label.append(lockedBadge(entry.lockedByEnv));
   row.append(label);
 
@@ -1173,12 +1284,18 @@ function renderField(field) {
     // champs qui ont un défaut (auparavant réservé aux textarea).
     const defaults = h("div", { class: "config-reset" });
     const fallback = fieldDefault(field);
-    if (!entry.lockedByEnv && fallback !== undefined) {
+    // ⚠️ Le bouton existe aussi quand le défaut n'est pas connu du client (miroir
+    // absent + gateway ancien) mais qu'une SURCHARGE existe : le clic l'efface
+    // alors côté serveur (`null`), donc le défaut s'applique quand même.
+    if (!entry.lockedByEnv && (fallback !== undefined || entry.origin === "store")) {
       if (entry.origin === "store") {
         defaults.append(
           h("p", {
             class: "config-helper",
-            text: `Valeur enregistrée (surcharge le défaut : ${valueLabel(field, fallback)}).`,
+            text:
+              fallback !== undefined
+                ? `Valeur personnalisée enregistrée : elle surcharge le défaut : ${valueLabel(field, fallback)}.`
+                : "Valeur personnalisée enregistrée (surcharge le défaut).",
           }),
         );
       } else if (entry.origin === "default") {
@@ -1276,6 +1393,10 @@ function render() {
       head.append(h("div", { class: "config-secret" }, [test, status]));
     }
     section.append(head);
+    // Note de GROUPE (ex. ce qui n'est PAS réglable dans cet onglet).
+    if (group.note) {
+      section.append(h("p", { class: "config-helper config-group__note", text: group.note }));
+    }
     // Rendu EAGER : les champs « essentiels » sont directement dans la section ;
     // les champs `advanced` sont regroupés dans un repli `<details>` DISTINCT
     // (classe `config-advanced`, jamais `tts-details`) — masqué, jamais retiré.
@@ -1526,6 +1647,12 @@ async function load() {
 
 function applySnapshot(body) {
   state.fields = body.fields ?? {};
+  // ⚠️ FUSEAU DES HORODATAGES (réglage `ui.timeZone`, défaut UTC) : cette page
+  // affiche aussi des dates (déclencheurs, pré-autorisations, agents, secrets).
+  // Elles suivent la MÊME autorité que la conversation — jamais le fuseau du
+  // navigateur. `setTimeZone` retombe sur UTC si la valeur manque ou est illisible.
+  const fuseau = state.fields["ui.timeZone"]?.value;
+  setTimeZone(typeof fuseau === "string" ? fuseau : undefined);
   state.status = body.status ?? state.status;
   // Le champ n'est présent qu'en réponse à `GET/PUT /api/config` : on ne
   // l'efface pas si une réponse ne le porte pas (robustesse).
@@ -1543,6 +1670,15 @@ function applySnapshot(body) {
 async function save(flow = "config-save") {
   saveStatus.textContent = "Enregistrement…";
   globalError.hidden = true;
+  // ⚠️ REFUS AVANT ENVOI : un champ texte vidé alors qu'un défaut non vide
+  // existe (prompts système) n'est JAMAIS persisté — le modèle se retrouverait
+  // sans consigne, silencieusement. L'utilisateur voit quoi faire.
+  const refusals = emptyValueRefusals({ allFields: ALL_FIELDS, state, labels: LABELS });
+  if (refusals.length > 0) {
+    showFieldErrors(refusals);
+    saveStatus.textContent = refusals.map((refusal) => refusal.message).join(" ");
+    return false;
+  }
   try {
     // Corps JSON envoyé en objet : la brique le sérialise et pose le
     // Content-Type ; les en-têtes maison (WRITE_HEADERS) sont préservés.

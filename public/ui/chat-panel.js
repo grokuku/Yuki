@@ -28,6 +28,7 @@
  */
 
 import { badgeFor } from "./chat-mode.js";
+import { formatDateTimeFr } from "./horodatage.js";
 
 /** En-tête exigé par les routes de discussion (lecture ET écriture). */
 const READ_HEADERS = { accept: "application/json", "x-yuki-config": "1" };
@@ -51,11 +52,12 @@ function h(tag, props = {}, children = []) {
   return el;
 }
 
+/** Horodatage lisible — fuseau `ui.timeZone` (défaut UTC), suffixé, jamais celui du navigateur. */
 function formatDate(iso) {
   if (!iso) return "—";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return String(iso);
-  return date.toLocaleString("fr-FR");
+  return formatDateTimeFr(date);
 }
 
 /** Message d'erreur rendu par le serveur (français), sinon le code HTTP. */

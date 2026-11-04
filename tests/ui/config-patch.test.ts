@@ -13,11 +13,14 @@ import { describe, expect, it } from "vitest";
 import {
   buildConfigPatch,
   coerceFieldValue,
+  emptyValueRefusals,
   engineFieldState,
   engineSupportsEmotion,
   engineSupportsSpeed,
+  originLabel,
   presentConfigSaveError,
   presentRestartRefusal,
+  resetValueFor,
 } from "../../public/ui/config-patch.js";
 import {
   engineSupportsEmotion as adapterSupportsEmotion,
@@ -369,5 +372,116 @@ describe("engineFieldState — débit et émotion selon `tts.engine`", () => {
     state.initial.set("tts.speed", 100);
     const patch = buildConfigPatch({ allFields: [NUMBER_FIELD], state });
     expect(patch).toEqual({ "tts.speed": 133 });
+  });
+});
+
+/**
+ * « RÉINITIALISER AU DÉFAUT » — le défaut RÉEL, jamais la chaîne vide.
+ *
+ * Défaut signalé (2026-11-04) : sur « Prompt système — léger », le bouton
+ * laissait la zone de texte VIDE, parce que le miroir UI `FIELD_DEFAULTS`
+ * déclarait `"prompts.light": ""` alors que le défaut est le CONTENU DU FICHIER
+ * LIVRÉ, que seul le serveur connaît. Un prompt vide = aucune consigne pour le
+ * modèle, donc une dégradation SILENCIEUSE.
+ */
+describe("resetValueFor — « Réinitialiser au défaut » écrit le défaut réel", () => {
+  const LIVRE = "# Yuki — prompt livré\nTu utilises `programmer_envoi`.\n";
+
+  it("⚠️ un prompt PERSONNALISÉ est remplacé par le prompt LIVRÉ (jamais par du vide)", () => {
+    // Instantané servi par `GET /api/config` (champ `default`, src/config/runtime.ts).
+    const entry = { value: "ma consigne perso", origin: "store", default: LIVRE };
+    const value = resetValueFor(TEXTAREA_FIELD, entry, {});
+    expect(value).toBe(LIVRE);
+    expect(String(value).trim()).not.toBe("");
+  });
+
+  it("le miroir ne connaît PAS les prompts : sans défaut servi, on n'écrit RIEN", () => {
+    // Ancien gateway (pas de champ `default`) : mieux vaut ne rien écrire et
+    // effacer la surcharge côté serveur que poser une chaîne vide.
+    const entry = { value: "ma consigne perso", origin: "store" };
+    expect(resetValueFor(TEXTAREA_FIELD, entry, {})).toBeUndefined();
+  });
+
+  it("le miroir reste utilisé pour les autres champs (gateway ancien)", () => {
+    const mirror = { "gpu.minDriver": 580, "tts.speed": 100 };
+    expect(resetValueFor({ path: "gpu.minDriver", kind: "number" }, undefined, mirror)).toBe(580);
+    expect(resetValueFor({ path: "tts.speed", kind: "range" }, { value: 40 }, mirror)).toBe(100);
+  });
+
+  it("NON-RÉGRESSION : tout champ du miroir à défaut non vide le restaure", () => {
+    // Le même bouton est rendu pour TOUS les champs (auparavant réservé aux
+    // textarea) : si un défaut du miroir est vidé par erreur, ce test le dit.
+    const mirror: Record<string, string | number> = {
+      "llm.light.model": "gemma4:31b",
+      "llm.light.baseUrl": "https://ollama.com/v1",
+      "gpu.minDriver": 580,
+      "tts.speed": 100,
+      "tts.language": "fr",
+    };
+    for (const [path, expected] of Object.entries(mirror)) {
+      const field = { path, kind: "text" };
+      expect(resetValueFor(field, { value: "autre", origin: "store" }, mirror), path).toBe(
+        expected,
+      );
+    }
+  });
+});
+
+describe("originLabel — rendre visible ce qui est actif (③)", () => {
+  it("« valeur par défaut » vs « personnalisé »", () => {
+    expect(originLabel({ value: "P", origin: "default" })).toBe("valeur par défaut");
+    expect(originLabel({ value: "ma consigne", origin: "store" })).toBe("personnalisé");
+  });
+
+  it("verrouillé par l'environnement ou origine inconnue : aucune affirmation", () => {
+    expect(originLabel({ value: "x", origin: "env", lockedByEnv: "YUKI_PROMPT" })).toBeNull();
+    expect(originLabel({ value: "x", origin: "inconnue" })).toBeNull();
+    expect(originLabel(undefined)).toBeNull();
+  });
+});
+
+describe("emptyValueRefusals — un prompt vidé est REFUSÉ avant envoi", () => {
+  const LIVRE = "# Yuki — prompt livré";
+
+  it("prompt vidé alors qu'un défaut non vide existe ⇒ refus explicite", () => {
+    const state = makeState();
+    state.fields["prompts.light"] = { value: LIVRE, origin: "store", default: LIVRE };
+    state.inputs.set("prompts.light", { value: "   " });
+    const refusals = emptyValueRefusals({ allFields: [TEXTAREA_FIELD], state });
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toMatchObject({ path: "prompts.light", code: "empty_value" });
+    expect(refusals[0].message).toContain("Réinitialiser au défaut");
+  });
+
+  it("un champ dont le DÉFAUT est vide peut être vidé (aucun faux refus)", () => {
+    const field = { path: "librarian.baseUrl", kind: "text" };
+    const state = makeState();
+    state.fields["librarian.baseUrl"] = { value: "http://x", origin: "store", default: "" };
+    state.inputs.set("librarian.baseUrl", { value: "" });
+    expect(emptyValueRefusals({ allFields: [field], state })).toEqual([]);
+  });
+
+  it("un reset en attente n'est pas un champ vidé (patch `null`, pas de refus)", () => {
+    const state = makeState();
+    state.fields["prompts.light"] = { value: LIVRE, origin: "store", default: LIVRE };
+    state.inputs.set("prompts.light", { value: "" });
+    state.pendingResets.add("prompts.light");
+    expect(emptyValueRefusals({ allFields: [TEXTAREA_FIELD], state })).toEqual([]);
+    // Et le patch porte bien `null` (effacement) : la chaîne vide n'est JAMAIS envoyée.
+    expect(buildConfigPatch({ allFields: [TEXTAREA_FIELD], state })).toEqual({
+      "prompts.light": null,
+    });
+  });
+
+  it("un contrôle verrouillé par l'environnement n'est jamais refusé (rien n'est envoyé)", () => {
+    const state = makeState();
+    state.fields["prompts.light"] = {
+      value: LIVRE,
+      origin: "env",
+      default: LIVRE,
+      lockedByEnv: "YUKI_PROMPT",
+    };
+    state.inputs.set("prompts.light", { value: "" });
+    expect(emptyValueRefusals({ allFields: [TEXTAREA_FIELD], state })).toEqual([]);
   });
 });

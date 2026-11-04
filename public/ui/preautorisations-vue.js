@@ -11,8 +11,11 @@
  * (`GET /api/sources/preautorisations` → `motifs`). Une seule copie, donc pas de
  * dérive entre ce que la page propose et ce que le serveur accepte.
  *
- * Aucun import, aucun accès à `document`.
+ * Aucun accès à `document` ; le seul import est `./horodatage.js` (formatage des
+ * instants), lui-même sans dépendance.
  */
+
+import { formatDateTimeFr } from "./horodatage.js";
 
 /** Durée de vie par défaut (jours) — la même valeur que le serveur. */
 export const DUREE_DEFAUT_JOURS = 30;
@@ -60,7 +63,8 @@ export function dateHeureFr(iso) {
   if (iso === undefined || iso === null || iso === "") return "";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return String(iso);
-  return date.toLocaleString("fr-FR");
+  // ⚠️ Fuseau `ui.timeZone` (défaut UTC), suffixé — jamais celui du navigateur.
+  return formatDateTimeFr(date);
 }
 
 /**

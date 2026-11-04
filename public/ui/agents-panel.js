@@ -23,6 +23,7 @@
  */
 
 import { unlockAgentWithPassword } from './password-modal.js';
+import { formatDateTimeFr } from "./horodatage.js";
 
 const JSON_HEADERS = { accept: "application/json" };
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-agents": "1" };
@@ -73,11 +74,12 @@ function shortCommand(command, max = 80) {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
+/** Horodatage lisible — fuseau `ui.timeZone` (défaut UTC), suffixé, jamais celui du navigateur. */
 function formatDate(iso) {
   if (!iso) return "jamais";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return String(iso);
-  return date.toLocaleString("fr-FR");
+  return formatDateTimeFr(date);
 }
 
 function apiMessage(error, fallback) {

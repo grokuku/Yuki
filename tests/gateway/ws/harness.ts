@@ -57,6 +57,11 @@ export interface HarnessOptions extends FakePiHostOptions {
    * historique (les images partent).
    */
   vision?: { conversationReceivesImages: () => boolean };
+  /**
+   * FUSEAU des horodatages (réglage `/config` `ui.timeZone`). Absent ⇒ `UTC`
+   * (comportement de production par défaut).
+   */
+  timeZone?: { current: () => string };
 }
 
 export interface Harness {
@@ -90,6 +95,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.sources ? { sources: options.sources } : {}),
     ...(options.chat ? { chat: options.chat } : {}),
     ...(options.vision ? { vision: options.vision } : {}),
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
   });
   const server = createHttpServer((_req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });

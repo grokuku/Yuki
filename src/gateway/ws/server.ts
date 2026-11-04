@@ -16,6 +16,7 @@ import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { toPiHostError } from "../../pi/errors.js";
+import { DEFAULT_TIME_ZONE } from "../../pi/timestamp.js";
 import { PHASE, type PiEvent, type PiHost } from "../../pi/index.js";
 import type { SessionPinStore } from "../../pi/session-pins.js";
 import { ORIGIN_RECAP } from "../../pi/synthetic.js";
@@ -198,6 +199,17 @@ export interface WsTransportOptions {
    * strictement inchangé).
    */
   chat?: ChatGatewayPort;
+  /**
+   * FUSEAU des horodatages (réglage `/config` `ui.timeZone`, défaut `UTC`).
+   *
+   * ⚠️ Il remplace le fuseau du NAVIGATEUR que la trame `message` transportait
+   * (`tz`) : c'était lui qui datait les prompts dans l'heure locale de la
+   * machine, alors que Mattermost est en UTC — deux heures pour un même
+   * événement. Le champ `tz` reste ACCEPTÉ (client déjà chargé) mais IGNORÉ.
+   *
+   * Absent ⇒ `UTC` : aucun chemin ne retombe sur le fuseau du process.
+   */
+  timeZone?: { current: () => string };
 }
 
 /**
@@ -494,6 +506,19 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const agentTransfers = options.agentTransfers;
   const sourcesPort = options.sources;
   const chatPort = options.chat;
+  const timeZonePort = options.timeZone;
+
+  /**
+   * Fuseau EFFECTIF des horodatages, relu à CHAQUE usage (`apply: hot`).
+   *
+   * ⚠️ `UTC` par défaut : le fuseau du PROCESS n'est jamais consulté (un
+   * conteneur peut être en UTC ou non), et le fuseau du NAVIGATEUR ne l'est plus
+   * non plus (il rendait Yuki incohérente avec Mattermost).
+   */
+  function currentTimeZone(): string {
+    const zone = timeZonePort?.current();
+    return zone !== undefined && zone !== "" ? zone : DEFAULT_TIME_ZONE;
+  }
 
   /**
    * État de session ENRICHI des réactions courantes (aucune copie inutile quand
@@ -1235,7 +1260,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // Connexion neuve : le focus affiché est celui de l'hôte (aucun miroir).
     client.focusedId = undefined;
     subscribeFocused(client);
-    sendDirect(client, { type: "welcome", serverVersion, resumed });
+    sendDirect(client, {
+      type: "welcome",
+      serverVersion,
+      resumed,
+      timeZone: currentTimeZone(),
+    });
     await sendSessions(client);
     // État initial des agents (encart de la barre latérale), à la connexion.
     sendAgents(client);
@@ -1262,7 +1292,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // miroir, qui n'a pas de session Pi. Sans cette branche, l'utilisateur
     // recevrait « Conversation introuvable » à chaque reconnexion.
     if (isMirrorConversationId(target)) {
-      sendDirect(client, { type: "welcome", serverVersion, resumed: false });
+      sendDirect(client, {
+        type: "welcome",
+        serverVersion,
+        resumed: false,
+        timeZone: currentTimeZone(),
+      });
       await handleSelectRemote(client, target);
       sendAgents(client);
       return;
@@ -1307,6 +1342,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       serverVersion,
       resumed: true,
       replayFrom: message.fromSeq,
+      timeZone: currentTimeZone(),
     });
     if (result.mode === "snapshot") {
       const frame = sendDirect(client, snapshotMessage(result.snapshot));
@@ -2117,15 +2153,17 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
     let handle;
     try {
+      // ⚠️ FUSEAU DU PRÉFIXE STOCKÉ (réglage `ui.timeZone`, défaut `UTC`) : plus
+      // jamais celui du navigateur (`message.tz`, toléré et ignoré). Mattermost
+      // est en UTC ; trois fuseaux pour un même message rendaient la corrélation
+      // impossible.
       handle = host.send(
         sessionId,
         text,
-        message.tz === undefined && images === undefined
-          ? undefined
-          : {
-              ...(message.tz !== undefined ? { timezone: message.tz } : {}),
-              ...(images !== undefined ? { images } : {}),
-            },
+        {
+          timezone: currentTimeZone(),
+          ...(images !== undefined ? { images } : {}),
+        },
       );
     } catch (error) {
       const piError = toPiHostError(error, { sessionId, logger });
@@ -2332,6 +2370,20 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
     clientCount(): number {
       return clients.size;
+    },
+
+    /**
+     * Diffuse le nouveau FUSEAU des horodatages à TOUS les clients connectés.
+     *
+     * ⚠️ Trame de CONTRÔLE (`time_zone`) : aucun `seq` consommé, jamais
+     * bufferisée, donc absente du rejeu et des snapshots. L'interface réaffiche
+     * immédiatement heures et séparateurs de jour avec le nouveau fuseau.
+     */
+    notifyTimeZone(timeZone: string): void {
+      for (const client of clients) {
+        if (client.ws.readyState !== WebSocket.OPEN) continue;
+        sendDirect(client, { type: "time_zone", timeZone });
+      }
     },
 
     presenceView(): PresenceView[] {

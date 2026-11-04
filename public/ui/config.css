@@ -211,6 +211,23 @@
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
 
+/* Origine d'un champ (③) : « valeur par défaut » vs « personnalisé ». */
+.badge--origin-default {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.badge--origin-store {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  font-weight: 600;
+}
+
+/* Note d'un groupe de champs (ex. ce qui n'est PAS réglable dans l'onglet). */
+.config-group__note {
+  margin: 0 0 10px;
+}
+
 .config-secret {
   display: flex;
   align-items: center;

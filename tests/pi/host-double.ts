@@ -283,7 +283,16 @@ export class FakePiHost implements PiHost {
     return this.buildState();
   }
 
+  /**
+   * Options RÉELLEMENT reçues par `send` (une entrée par envoi).
+   *
+   * ⚠️ Sert à vérifier ce que le gateway TRANSMET au host — en particulier le
+   * fuseau des horodatages (`timezone`), qui ne doit jamais venir du navigateur.
+   */
+  readonly sentOptions: Array<SendOptions | undefined> = [];
+
   send(sessionId: string, text: string, opts?: SendOptions): RunHandle {
+    this.sentOptions.push(opts);
     if (!this.ready) {
       throw new Error("PI_NOT_READY");
     }

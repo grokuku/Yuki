@@ -37,6 +37,7 @@
 // L'état verrouillé est DISTINCT du niveau : il ne le modifie JAMAIS.
 
 import { attachLongPress } from "./long-press.js";
+import { formatHourFr, formatMonthDayFr, isSameDay } from "./horodatage.js";
 
 /** Libellés COURTS de niveau pour l'encart (le détail vit dans /config). */
 const LEVEL_LABELS = {
@@ -188,23 +189,12 @@ export function agentLastSeenLabel(lastSeen, now = new Date()) {
   }
   const date = new Date(lastSeen);
   if (Number.isNaN(date.getTime())) return "jamais connecté";
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
+  // ⚠️ Fuseau `ui.timeZone` (défaut UTC) pour le RENDU **et** pour la comparaison
+  // de jour : comparer un jour « local » à une heure « UTC » daterait mal la
+  // présence autour de minuit.
   try {
-    if (sameDay) {
-      const hour = new Intl.DateTimeFormat("fr-FR", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(date);
-      return `vu à ${hour}`;
-    }
-    const day = new Intl.DateTimeFormat("fr-FR", {
-      day: "numeric",
-      month: "short",
-    }).format(date);
-    return `vu le ${day}`;
+    if (isSameDay(date, now)) return `vu à ${formatHourFr(date)}`;
+    return `vu le ${formatMonthDayFr(date)}`;
   } catch {
     return "jamais connecté";
   }

@@ -110,6 +110,12 @@ describe("horodatage des lignes du fil", () => {
     expect(formatLineTimestamp("2026-11-02T10:46:00.000Z", "UTC")).toBe("[02/11 10:46]");
   });
 
+  it("sans fuseau demandé, rend l'UTC (jamais le fuseau du process)", () => {
+    // ⚠️ Le défaut est `ui.timeZone` côté serveur (`UTC` par défaut) : un appel
+    // direct sans fuseau ne doit pas basculer sur l'heure de la machine.
+    expect(formatLineTimestamp("2026-11-02T10:46:00.000Z")).toBe("[02/11 10:46]");
+  });
+
   it("n'invente JAMAIS une heure pour un instant illisible", () => {
     expect(formatLineTimestamp("pas une date")).toBe("[horodatage inconnu]");
     const prompt = buildReplyPrompt({
@@ -131,7 +137,9 @@ describe("notion de présent", () => {
       now: new Date("2026-11-02T15:12:00.000Z"),
       timeZone: "UTC",
     });
-    expect(prompt).toContain("Heure courante : [horodatage] 2026-11-02 15:12 (heure locale)");
+    // ⚠️ Suffixe du FUSEAU EXPLICITE (défaut UTC) : le prompt ne dépend jamais du
+    // fuseau du process, ni de celui d'un navigateur.
+    expect(prompt).toContain("Heure courante : [horodatage] 2026-11-02 15:12 (UTC)");
     // Le repère est AVANT le fil : il sert de point de comparaison aux lignes.
     expect(prompt.indexOf("Heure courante")).toBeLessThan(prompt.indexOf("Fil récent"));
   });

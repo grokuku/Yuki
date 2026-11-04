@@ -42,6 +42,12 @@ export type ClientMessage =
       type: "message";
       clientMsgId: string;
       text: string;
+      /**
+       * ⚠️ OBSOLÈTE, TOLÉRÉ, IGNORÉ : fuseau du navigateur. Le préfixe d'horodatage
+       * STOCKÉ suit désormais le réglage `ui.timeZone` (défaut `UTC`), seul moyen
+       * d'afficher la même heure que Mattermost. Un client déjà chargé peut encore
+       * l'envoyer : il n'a aucun effet (jamais une erreur).
+       */
       tz?: string;
       files?: string[];
     }
@@ -238,7 +244,20 @@ export interface WireAgent {
 
 /** Corps d'une trame serveur → client. */
 export type ServerMessage =
-  | { type: "welcome"; serverVersion: string; resumed: boolean; replayFrom?: number }
+  | {
+      type: "welcome";
+      serverVersion: string;
+      resumed: boolean;
+      replayFrom?: number;
+      /**
+       * FUSEAU des horodatages (réglage `ui.timeZone`, défaut `UTC`).
+       *
+       * ⚠️ L'interface formate TOUTES ses dates avec ce fuseau, JAMAIS avec
+       * celui du navigateur : c'est ce dernier qui faisait diverger Yuki de
+       * Mattermost (UTC). Absent (client ou serveur ancien) ⇒ `UTC`.
+       */
+      timeZone?: string;
+    }
   | { type: "accepted"; clientMsgId: string; runId: string; queued: boolean }
   | { type: "state"; state: PiSessionStateName; activeRunId?: string }
   | { type: "run_started"; runId: string; userText?: string; origin?: string; jobId?: string }
@@ -611,6 +630,14 @@ export type ServerMessage =
       finalPrompt: ComfyFinalPromptText;
     }
   | { type: "pong"; t: number }
+  /**
+   * Changement du FUSEAU des horodatages (réglage `ui.timeZone` modifié dans
+   * `/config`). Trame de CONTRÔLE : aucun `seq` consommé, jamais bufferisée.
+   *
+   * ⚠️ L'interface réaffiche ses horodatages avec le nouveau fuseau SANS
+   * rechargement (heures des messages + séparateurs de jour).
+   */
+  | { type: "time_zone"; timeZone: string }
   | { type: "bye"; reason: string };
 
 /** Résultat éphémère d'une commande approuvée, rendu à l'interface. */

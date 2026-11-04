@@ -360,15 +360,17 @@ check(
 );
 
 check(
-  "heures utilisateur « juste HH:mm » (15:39, 16:12, 09:05)",
-  JSON.stringify(a.userTimes) === JSON.stringify(["15:39", "16:12", "09:05"]),
+  // ⚠️ Depuis le 2026-11-04, l'heure porte TOUJOURS le fuseau (« 15:39 UTC ») : une
+  // heure seule est ambiguë dès qu'on la compare au canal distant (Mattermost, UTC).
+  "heures utilisateur « HH:mm UTC » (15:39, 16:12, 09:05)",
+  JSON.stringify(a.userTimes) === JSON.stringify(["15:39 UTC", "16:12 UTC", "09:05 UTC"]),
   JSON.stringify(a.userTimes),
 );
 check("heure utilisateur alignée à droite (bord extérieur)", a.userEnd && a.textAlign === "right", `${a.textAlign}`);
 check("chiffres à largeur fixe (tabular-nums)", a.tabular === "tabular-nums", String(a.tabular));
 check(
-  "heures assistant (15:41, 16:14, 09:07)",
-  JSON.stringify(a.asstTimes) === JSON.stringify(["15:41", "16:14", "09:07"]),
+  "heures assistant (« HH:mm UTC » : 15:41, 16:14, 09:07)",
+  JSON.stringify(a.asstTimes) === JSON.stringify(["15:41 UTC", "16:14 UTC", "09:07 UTC"]),
   JSON.stringify(a.asstTimes),
 );
 
@@ -471,7 +473,11 @@ check(
   `droite=[${a.asstRightMargins.map((v) => v.toFixed(1)).join(", ")}] px`,
 );
 
-check("AUCUNE date sur les bulles (seulement l'heure)", a.userTimes.every((t) => /^\d{2}:\d{2}$/.test(t)));
+// ⚠️ Depuis le 2026-11-04 l'heure porte TOUJOURS le fuseau (« 15:39 UTC ») : une heure
+// seule est ambiguë dès qu'on la compare à un canal distant (Mattermost, en UTC).
+// Reste vrai : aucune DATE sur les bulles (la date vit dans le séparateur de jour).
+const HEURE_UTC = /^\d{2}:\d{2} UTC$/;
+check("AUCUNE date sur les bulles (heure seule + fuseau)", a.userTimes.every((t) => HEURE_UTC.test(t)));
 check("le préfixe [horodatage] est MASQUÉ à l'affichage", a.hasPrefix === false);
 // Le seul `[style]` attendu est le <html> racine : les variables de thème y
 // sont posées par CSSOM (`element.style.setProperty`), PRÉEXISTANT et sans
@@ -509,7 +515,7 @@ await openThread(FIL_B, 1);
 await sleep(400);
 const b = await threadState();
 check("BASCULE : le fil B affiche 1 séparateur (jeudi 1 octobre 2026)", b.seps.length === 1 && b.seps[0]?.text === "jeudi 1 octobre 2026", JSON.stringify(b.seps.map((s) => s.text)));
-check("BASCULE : heures du fil B (10:30 / 10:31)", JSON.stringify(b.userTimes) === JSON.stringify(["10:30"]) && JSON.stringify(b.asstTimes) === JSON.stringify(["10:31"]), JSON.stringify([b.userTimes, b.asstTimes]));
+check("BASCULE : heures du fil B (10:30 / 10:31 UTC)", JSON.stringify(b.userTimes) === JSON.stringify(["10:30 UTC"]) && JSON.stringify(b.asstTimes) === JSON.stringify(["10:31 UTC"]), JSON.stringify([b.userTimes, b.asstTimes]));
 check("BASCULE : préfixe toujours masqué", b.hasPrefix === false);
 check("BASCULE : fil B sans statistiques ⇒ AUCUN pied", b.asstFooters === 0, `${b.asstFooters} pied(s)`);
 
@@ -534,7 +540,7 @@ const live = await evaluate(`(() => {
     time: last?.querySelector('.message__time')?.textContent ?? null,
   };
 })()`);
-check("LIVE : un nouveau message utilisateur horodaté apparaît immédiatement", live.count === 4 && /^\d{2}:\d{2}$/.test(live.time ?? ""), `${live.count} message(s), heure ${live.time}`);
+check("LIVE : un nouveau message utilisateur horodaté apparaît immédiatement", live.count === 4 && HEURE_UTC.test(live.time ?? ""), `${live.count} message(s), heure ${live.time}`);
 
 // Le run live se termine et pose un pied TECHNIQUE au message assistant
 // (« total … ms » au minimum, TTFT/tok selon la réponse). On l'attend, puis on

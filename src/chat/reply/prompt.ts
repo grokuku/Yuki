@@ -19,7 +19,7 @@
  * dernière » sans voir celle produite trois minutes plus tard. Depuis ce lot :
  *   - chaque ligne du fil porte `[JJ/MM HH:mm]` (date ET heure, compact) ;
  *   - le prompt porte l'HEURE COURANTE au même format que les prompts locaux
- *     (`[horodatage] AAAA-MM-JJ HH:mm (heure locale)`, `src/pi/timestamp.ts:92`) ;
+ *     (`[horodatage] AAAA-MM-JJ HH:mm (UTC)`, `src/pi/timestamp.ts`) ;
  *   - quand la fenêtre coupe, une mention DIT que l'historique est partiel.
  *
  * ⚠️ Pourquoi l'heure courante est en TÊTE DE FIL et non dans le prompt système :
@@ -91,13 +91,17 @@ export const CHAT_REPLY_SYSTEM_PROMPT = [
   "CANAL plus tard, quand la tâche sera réellement terminée : tu ne l'annonces jamais",
   "comme faite avant de l'avoir reçu.",
   "",
-  "⚠️ PUBLIER PLUS TARD : si l'on te demande de publier à une heure précise (« poste",
-  "cette image à 16h10 », « envoie ça demain matin »), tu utilises l'outil",
-  "`programmer_envoi` — le texte que tu écris est FIGÉ et partira tout seul à l'heure",
-  "dite, sans qu'aucun modèle soit appelé. Tu ne dis donc JAMAIS que tu n'as pas de",
-  "minuteur, que tu ne peux pas attendre, ni qu'il faut te relancer à ce moment-là :",
-  "tu programmes, tu annonces l'heure à laquelle le message partira (l'outil te rend",
-  "l'heure effective), et c'est tout. Tu n'inventes pas non plus de minuteur toi-même.",
+  "⚠️ PUBLIER OU RAPPELER PLUS TARD : si l'on te demande d'écrire à une heure",
+  "précise (« poste cette image à 16h10 », « envoie ça demain matin ») ou de RAPPELER",
+  "(« rappelle-moi dans 3 heures », « écris-moi à 18 h »), tu utilises l'outil",
+  "`programmer_envoi` — c'est la MÊME capacité : le texte que tu écris est FIGÉ et",
+  "partira tout seul à l'heure dite, sans qu'aucun modèle soit appelé. Tu ne dis donc",
+  "JAMAIS que tu n'as pas de minuteur, que tu ne peux pas attendre, ni qu'il faut te",
+  "relancer à ce moment-là : tu programmes, tu annonces l'heure à laquelle le message",
+  "partira (l'outil te rend l'heure effective), et c'est tout. Tu n'inventes pas non",
+  "plus de minuteur toi-même, et tu ne proposes AUCUN contournement (« mets un",
+  "minuteur sur ton téléphone », « pose un rappel sur une de tes machines ») : ils sont",
+  "inutiles, puisque tu sais le faire toi-même.",
   "",
   "⚠️ Tu ne parles JAMAIS de la mécanique qui fait tourner Yuki : durées techniques,",
   "limites internes, outils d'arrière-plan, raisons d'un refus. Ce sont des détails",
@@ -189,7 +193,8 @@ function bodyOf(message: RemoteMessage): string {
  * Repère COMPACT d'une ligne de fil : `[JJ/MM HH:mm]`.
  *
  * ⚠️ Même horloge et même fuseau que les prompts locaux : `formatCompactDateTime`
- * (`src/pi/timestamp.ts:81`) rend `AAAA-MM-JJ HH:mm` avec `Intl` et le fuseau demandé.
+ * (`src/pi/timestamp.ts`) rend `AAAA-MM-JJ HH:mm` avec `Intl` et le fuseau demandé
+ * (`ui.timeZone`, défaut UTC — jamais celui du process ni du navigateur).
  * On en dérive la forme courte — la fenêtre de 6 000 caractères est déjà serrée, et
  * chaque ligne paie son horodatage (il entre dans le décompte, voir `buildReplyPrompt`).
  *
@@ -258,7 +263,8 @@ export function parseJudgeAnswer(text: string): boolean {
  * @param input.maxChars budget de caractères du fil, horodatages et retours à la ligne
  *   compris (défaut `CHAT_REPLY_TRANSCRIPT_MAX_CHARS`).
  * @param input.now instant courant (défaut : maintenant) — injecté par les tests.
- * @param input.timeZone fuseau IANA ; absent ⇒ fuseau du process Node.
+ * @param input.timeZone fuseau IANA du réglage `ui.timeZone` ; absent ⇒ `UTC`
+ *   (jamais le fuseau du process Node : il change d'un conteneur à l'autre).
  */
 export function buildReplyPrompt(input: {
   channelTitle: string;

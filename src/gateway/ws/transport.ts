@@ -48,6 +48,14 @@ export interface Transport {
    * reste correcte (aucun client « regarde » ⇒ on notifie).
    */
   presenceView?(): PresenceView[];
+  /**
+   * Annonce un nouveau FUSEAU des horodatages (réglage `ui.timeZone`).
+   *
+   * ⚠️ Appliqué À CHAUD : l'interface réaffiche ses dates sans rechargement. Un
+   * transport qui ne sait pas le faire l'omet — l'interface garde alors le
+   * fuseau reçu dans `welcome` (correct au prochain rechargement).
+   */
+  notifyTimeZone?(timeZone: string): void;
   stats(): TransportStats;
   /** Ferme proprement toutes les connexions avant `server.close()`. */
   close(): Promise<void>;

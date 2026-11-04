@@ -45,6 +45,8 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 
+import { formatDateTimeFr } from "../pi/timestamp.js";
+
 /** Version du fichier (`preautorisations.json`). */
 export const PREAUTORISATION_SCHEMA_VERSION = 1;
 
@@ -357,15 +359,23 @@ export function texteRisque(input: {
   );
 }
 
-/** Instant lisible en français (jamais une exception sur une date illisible). */
-function dateLisible(iso: string, maintenant?: number): string {
+/**
+ * Instant lisible en français (jamais une exception sur une date illisible).
+ *
+ * ⚠️ Rendu par le POINT DE VÉRITÉ `src/pi/timestamp.ts`, donc dans le fuseau du
+ * réglage `ui.timeZone` (défaut UTC) et TOUJOURS suffixé (`08/11/2026 15:39 UTC`) :
+ * la même autorisation lue depuis l'interface et depuis un canal distant ne peut
+ * pas afficher deux heures.
+ */
+function dateLisible(iso: string, maintenant?: number, timeZone?: string): string {
   const at = Date.parse(iso);
   if (!Number.isFinite(at)) return iso;
   const d = new Date(at);
+  const texte = formatDateTimeFr(d, timeZone);
   if (maintenant !== undefined && Number.isFinite(maintenant) && at <= maintenant) {
-    return `${d.toLocaleString("fr-FR")} (déjà expirée)`;
+    return `${texte} (déjà expirée)`;
   }
-  return d.toLocaleString("fr-FR");
+  return texte;
 }
 
 /** Demande de consommation présentée par le garde-fou (`authorize`). */
