@@ -52,6 +52,9 @@ const SDK_ALLOWLIST = [
   // définition d'outil seulement — elle ne laisse passer ni type du SDK ni celui de
   // typebox hors de `src/pi/**` (la façade n'exporte que ses types à elle).
   "src/pi/sdk/send-message-tool.ts",
+  // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : définition d'outil seulement — même
+  // périmètre étroit que `scheduled-send-tool.ts` (aucun type du SDK hors de `src/pi/**`).
+  "src/pi/sdk/planifier-tache-tool.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =

@@ -374,7 +374,10 @@ describe("moteur horloge — résultat du job", () => {
     expect((h.store.get("veille") as SourceRecord).actif).toBe(false);
   });
 
-  it("un job en échec n'est jamais publié : journal `echec` avec la raison", async () => {
+  it("⚠️ LOT 31 — un job en échec est PUBLIÉ (jamais muet), et journalisé avec la raison", async () => {
+    // ⚠️ CE TEST A CHANGÉ DE SENS AU LOT 31 : l'échec n'est plus seulement journalisé.
+    // Laisser un déclencheur échouer en silence faisait croire que « tout allait bien »
+    // alors que rien ne tournait. L'échec est désormais dit une fois par série.
     const h = harnais();
     const jobId = await lancer(h);
     await h.service.recevoirResultat({
@@ -382,7 +385,8 @@ describe("moteur horloge — résultat du job", () => {
       status: "failed",
       error: { message: "agent hors ligne" },
     });
-    expect(h.publication.publies).toEqual([]);
+    expect(h.publication.publies).toHaveLength(1);
+    expect(h.publication.publies[0]?.texte).toContain("agent hors ligne");
     const echec = h.evenements().find((event) => event.event === "echec");
     expect(echec?.raison).toContain("agent hors ligne");
   });
@@ -550,7 +554,10 @@ describe("balayeur — plafond d'exécution", () => {
     const plafond = h.evenements().find((event) => event.event === "plafond");
     expect(plafond?.raison).toContain("Plafond d'exécution atteint");
     expect(h.balayeur.enCours("veille")).toBe(false);
-    expect(h.publication.publies).toEqual([]);
+    // ⚠️ LOT 31 : un plafond atteint est un ÉCHEC du point de vue de la personne — il
+    // est publié (et consolidé si le même échec se répète).
+    expect(h.publication.publies).toHaveLength(1);
+    expect(h.publication.publies[0]?.texte).toContain("Plafond d'exécution atteint");
   });
 });
 

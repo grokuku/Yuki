@@ -62,6 +62,10 @@ import { createAgentDirectoryTools, createSecretTools } from "./execution-tools.
 import { createChannelPostTool, type ChannelPostPort } from "./channel-post-tool.js";
 import { createSendMessageTools, type MessageSendPort } from "./send-message-tool.js";
 import { createScheduledSendTools, type ScheduledSendPort } from "./scheduled-send-tool.js";
+import {
+  createPlanifierTacheTools,
+  type PlanifierTachePort,
+} from "./planifier-tache-tool.js";
 import { guardLongToolsInChannel } from "./long-tool-guard.js";
 
 export type { ChannelPostPort };
@@ -141,6 +145,17 @@ export interface RemoteRunToolPorts {
    * conversation (le canal du run), comme `envoyer_message`.
    */
   envoisProgrammes?: ScheduledSendPort;
+  /**
+   * Port de TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : faire AGIR un LLM à une heure
+   * dite (instruction exécutée par le worker lourd, résultat publié).
+   *
+   * ⚠️ Depuis un CANAL il n'y a pas de conversation LOCALE à qui rendre le résultat : la
+   * tâche est créée sans cible et son résultat tombe dans le fil « Déclencheurs » (le
+   * repli est DIT au modèle, qui ne peut donc pas promettre une réponse dans le canal).
+   * ⚠️ L'outil n'est exposé que si le port ET la conversation existent : laisser un outil
+   * dans l'allowlist sans définition ferait échouer l'appel côté SDK.
+   */
+  planifierTache?: PlanifierTachePort;
   /**
    * Fichier produit par le run et COPIÉ dans le store des fichiers : image générée
    * (`generer_image`) ou capture de page web (`capture_libraire`).
@@ -366,6 +381,16 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
     const envois = ports.envoisProgrammes;
     tools.push(
       ...createScheduledSendTools(envois, { conversation: () => ({ canal: conversation() }) }),
+    );
+  }
+
+  if (ports.planifierTache) {
+    // ⚠️ TÂCHE PLANIFIÉE (lot 31) : aucun canal à forcer — la cible d'un résultat de
+    // tâche est une conversation LOCALE (le fil « Déclencheurs » en repli), jamais un
+    // canal. On ne transmet donc AUCUNE conversation : le port le dit dans sa réponse.
+    const planificateur = ports.planifierTache;
+    tools.push(
+      ...createPlanifierTacheTools(planificateur, { conversation: () => ({}) }),
     );
   }
 

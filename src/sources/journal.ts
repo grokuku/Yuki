@@ -84,7 +84,14 @@ export type DeclencheurEvent =
   | "envoi_programme"
   | "envoi_publie"
   | "envoi_annule"
-  | "envoi_echec";
+  | "envoi_echec"
+  /**
+   * ⚠️ LOT 31 — TÂCHE PLANIFIÉE (`planifier_tache`) : une DEMANDE a été programmée
+   * (`tache_planifiee`), ou bien une série d'échecs vient d'être CONSOLIDÉE
+   * (`tache_consolidee`, une seule ligne publiée pour N tentatives identiques).
+   */
+  | "tache_planifiee"
+  | "tache_consolidee";
 
 /** Tous les événements connus, dans l'ordre d'affichage de la page de gestion. */
 export const DECLENCHEUR_EVENTS: readonly DeclencheurEvent[] = [
@@ -101,6 +108,8 @@ export const DECLENCHEUR_EVENTS: readonly DeclencheurEvent[] = [
   "envoi_publie",
   "envoi_annule",
   "envoi_echec",
+  "tache_planifiee",
+  "tache_consolidee",
 ];
 
 /** Filtre de lecture du journal (⚠️ borné : jamais tout le fichier). */

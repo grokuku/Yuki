@@ -45,23 +45,35 @@ import {
   DEFAULT_SOURCE_VISIBILITE,
   isSourceChevauchement,
   isSourceDeclencheurPlanning,
+  isSourceDeclencheurPonctuel,
   isSourceDeclencheurWebhook,
   isSourceDestination,
   isSourceRattrapage,
   isSourceSessionTarget,
   isSourceVisibilite,
   MAX_CONSIGNE_CHARS,
+  MAX_ETAPES_CHAINE,
+  MAX_FICHIERS_ETAPE,
+  MAX_INSTRUCTION_TACHE_CHARS,
+  MAX_OCCURRENCES,
   MAX_PLAFOND_MS,
   MAX_SOURCES,
+  MAX_TACHES_PONCTUELLES,
+  MAX_TEXTE_ETAPE_CHARS,
   MAX_TOURS_PAR_JOUR_LIMITE,
+  MIN_ETAPES_CHAINE,
+  MIN_OCCURRENCES,
   MIN_PLAFOND_MS,
   RESERVED_SOURCE_NAMES,
   SOURCE_NAME_PATTERN,
+  type ResultatEtape,
+  type SourceChaine,
   type SourceChevauchement,
   type SourceConversation,
   type SourceDeclencheur,
   type SourceRattrapage,
   type SourceRecord,
+  type SourceSerieEchecs,
   type SourceSettingsInput,
   type SourceTurn,
   type SourceView,
@@ -120,6 +132,43 @@ export class SourcesFullError extends Error {
   }
 }
 
+/**
+ * BORNE DES TÂCHES PONCTUELLES atteinte (lot 31).
+ *
+ * ⚠️ Erreur DISTINCTE de `SourcesFullError` : le message doit dire QUELLE borne est
+ * atteinte, sinon l'utilisateur supprimerait un déclencheur durable sans effet.
+ */
+export class TachesPonctuellesFullError extends Error {
+  override readonly name = "TachesPonctuellesFullError";
+  constructor(readonly limit: number) {
+    super(
+      `Le nombre maximal de tâches ponctuelles est atteint (${limit}). Attends qu'une ` +
+        "tâche s'exécute (elle s'éteint toute seule), ou supprime-en une dans " +
+        "Configuration → Déclencheurs.",
+    );
+  }
+}
+
+/**
+ * Création d'une CHAÎNE REFUSÉE faute de place (lot 33).
+ *
+ * ⚠️ Erreur DISTINCTE de `SourcesFullError` : le message doit dire COMBIEN de places il
+ * reste et COMBIEN d'étapes ont été demandées, sinon on ne comprend pas pourquoi AUCUNE
+ * étape n'a été créée (la création est atomique : tout ou rien).
+ */
+export class ChainesFullError extends Error {
+  override readonly name = "ChainesFullError";
+  constructor(
+    readonly placesRestantes: number,
+    readonly demandees: number,
+  ) {
+    super(
+      `Chaîne refusée : il reste ${placesRestantes} place(s) de déclencheur et la chaîne ` +
+        `en demande ${demandees}. Rien n'a été créé : supprime un déclencheur ou réduis la chaîne.`,
+    );
+  }
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -148,12 +197,61 @@ function isTurn(value: unknown): value is SourceTurn {
 }
 
 /**
+ * SLUG d'un libellé libre, utilisable comme nom de source (lot 31).
+ *
+ * ⚠️ POURQUOI UN SLUG PLUTÔT QUE LE LIBELLÉ BRUT : le `nom` sert d'identifiant stable
+ * (URL `DELETE /api/sources/<nom>`, indexation des pré-autorisations, nom du secret de
+ * coffre). Il doit donc être borné (`SOURCE_NAME_PATTERN`, 32 caractères) et ne pas
+ * dépendre des accents ou de la ponctuation. Le libellé HUMAIN est conservé à côté
+ * (`libelle`) et c'est lui que l'interface affiche.
+ *
+ * « Résumé du journal ! » ⇒ `resume-du-journal`. Un libellé entièrement composé de
+ * caractères refusés rend `tache` (jamais un nom vide).
+ */
+export function slugifierNomTache(libelle: string): string {
+  const base = (typeof libelle === "string" ? libelle : "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    // ⚠️ 24 caractères : il doit rester la place du suffixe de déduplication (`-12`).
+    .slice(0, 24)
+    .replace(/-+$/g, "");
+  if (base === "") return "tache";
+  // ⚠️ `inbox` et `envois` sont RÉSERVÉS par l'API : un libellé qui tombe dessus doit
+  // être décalé, sinon la tâche serait impossible à créer (et l'erreur incompréhensible).
+  if (RESERVED_SOURCE_NAMES.includes(base)) return `${base}-tache`;
+  return base;
+}
+
+/**
  * Normalise un déclencheur RELU (fichier existant) — ⚠️ sans perdre une
  * planification : un `planning` valide est conservé tel quel ; un `planning`
  * illisible retombe sur `webhook` **et le dit** (jamais un déclencheur muet).
+ *
+ * ⚠️ LOT 31 : un `ponctuel` dont la date est illisible est traité de la même façon —
+ * mais il est d'abord RAMENÉ À L'ÉTAT « éteint » par le balayeur (aucune tâche ne peut
+ * tirer sans date).
  */
 function storedDeclencheur(value: unknown, logger?: SourcesStoreLogger): SourceDeclencheur {
   if (isSourceDeclencheurWebhook(value)) return { type: "webhook" };
+  if (isSourceDeclencheurPonctuel(value)) {
+    const at = Date.parse(value.a);
+    if (Number.isFinite(at)) {
+      let fuseau = DEFAULT_FUSEAU;
+      if (value.fuseau !== undefined) {
+        try {
+          fuseau = validateFuseau(value.fuseau, DEFAULT_FUSEAU);
+        } catch {
+          fuseau = DEFAULT_FUSEAU;
+        }
+      }
+      return { type: "ponctuel", a: new Date(at).toISOString(), fuseau };
+    }
+    logger?.warn("sources.store.declencheur.invalid", { raison: "date ponctuelle illisible" });
+    return { ...DEFAULT_SOURCE_DECLENCHEUR };
+  }
   if (isSourceDeclencheurPlanning(value)) {
     try {
       const expression = parseCron(value.expression).source;
@@ -244,10 +342,96 @@ function normalizeRecord(
     ...(storedJetons(entry["jetonsCumules"]) !== undefined
       ? { jetonsCumules: storedJetons(entry["jetonsCumules"]) }
       : {}),
+    // ── LOT 31/32 : champs relus avec leur TYPE vérifié (jamais une chaîne dans un
+    // compteur, jamais une série d'échecs à moitié lue).
+    ...(storedOccurrences(entry["occurrencesFaites"]) !== undefined
+      ? { occurrencesFaites: storedOccurrences(entry["occurrencesFaites"]) }
+      : {}),
+    ...(storedOccurrences(entry["occurrencesMax"]) !== undefined
+      ? { occurrencesMax: storedOccurrences(entry["occurrencesMax"]) }
+      : {}),
+    ...(storedIso(entry["jusquAu"]) !== undefined ? { jusquAu: storedIso(entry["jusquAu"]) } : {}),
+    ...(storedSerieEchecs(entry["serieEchecs"]) !== undefined
+      ? { serieEchecs: storedSerieEchecs(entry["serieEchecs"]) }
+      : {}),
+    // ── LOT 33 : chaîne d'étapes + résultat conservé pour l'étape suivante.
+    ...(storedChaine(entry["chaine"]) !== undefined ? { chaine: storedChaine(entry["chaine"]) } : {}),
+    ...(storedResultatEtape(entry["resultatEtape"]) !== undefined
+      ? { resultatEtape: storedResultatEtape(entry["resultatEtape"]) }
+      : {}),
+    ...(typeof entry["libelle"] === "string" && entry["libelle"].trim() !== ""
+      ? { libelle: entry["libelle"].trim() }
+      : {}),
+    ...(entry["perso"] === true ? { perso: true } : {}),
     cree: typeof entry["cree"] === "string" ? entry["cree"] : "",
     maj: typeof entry["maj"] === "string" ? entry["maj"] : "",
   });
   return next as unknown as SourceRecord;
+}
+
+/** Entier positif relu d'un compteur (`occurrencesFaites`, `occurrencesMax`). */
+function storedOccurrences(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.trunc(value));
+}
+
+/** Instant ISO relu (`jusquAu`), ou `undefined` s'il est illisible. */
+function storedIso(value: unknown): string | undefined {
+  if (typeof value !== "string" || value === "") return undefined;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? new Date(at).toISOString() : undefined;
+}
+
+/**
+ * Chaîne relue : un `id` non vide et un rang d'étape entier ≥ 1, sinon `undefined`.
+ *
+ * ⚠️ Une appartenance à moitié lue (`{ id }` sans `etape`) est JETÉE : elle ferait
+ * croire à une étape intermédiaire et l'affichage mentirait sur l'ordre.
+ */
+function storedChaine(value: unknown): SourceChaine | undefined {
+  const raw = asObject(value);
+  if (!raw) return undefined;
+  const id = typeof raw["id"] === "string" ? raw["id"].trim() : "";
+  const etape = raw["etape"];
+  if (id === "" || typeof etape !== "number" || !Number.isInteger(etape) || etape < 1) {
+    return undefined;
+  }
+  const apres = typeof raw["apres"] === "string" && raw["apres"].trim() !== "" ? raw["apres"].trim() : undefined;
+  return { id, etape, ...(apres !== undefined ? { apres } : {}) };
+}
+
+/**
+ * Résultat d'étape relu — et REBORNÉ à la lecture (un fichier écrit à la main ne doit pas
+ * injecter 50 000 caractères dans le prompt de la tâche suivante).
+ */
+function storedResultatEtape(value: unknown): ResultatEtape | undefined {
+  const raw = asObject(value);
+  if (!raw) return undefined;
+  const at = storedIso(raw["at"]);
+  if (at === undefined) return undefined;
+  const jobId = typeof raw["jobId"] === "string" ? raw["jobId"] : "";
+  const texteBrut = typeof raw["texte"] === "string" ? raw["texte"] : "";
+  const texte =
+    texteBrut.length > MAX_TEXTE_ETAPE_CHARS ? texteBrut.slice(0, MAX_TEXTE_ETAPE_CHARS) : texteBrut;
+  const fichiers = Array.isArray(raw["fichiers"])
+    ? raw["fichiers"]
+        .filter((id): id is string => typeof id === "string" && id.trim() !== "")
+        .slice(0, MAX_FICHIERS_ETAPE)
+    : [];
+  return { jobId, texte, fichiers, at };
+}
+
+/** Série d'échecs relue : trois champs cohérents, sinon `undefined` (jamais à moitié). */
+function storedSerieEchecs(value: unknown): SourceSerieEchecs | undefined {
+  const raw = asObject(value);
+  if (!raw) return undefined;
+  const raison = raw["raison"];
+  const debut = storedIso(raw["debut"]);
+  const tentatives = storedOccurrences(raw["tentatives"]);
+  if (typeof raison !== "string" || debut === undefined || tentatives === undefined) {
+    return undefined;
+  }
+  return { raison, debut, tentatives: Math.max(1, tentatives) };
 }
 
 /**
@@ -286,11 +470,31 @@ function storedJetons(value: unknown): { entree: number; sortie: number } | unde
  */
 export function validateDeclencheur(value: unknown): SourceDeclencheur {
   if (isSourceDeclencheurWebhook(value)) return { type: "webhook" };
+  if (isSourceDeclencheurPonctuel(value)) {
+    const at = Date.parse(value.a);
+    if (!Number.isFinite(at)) {
+      throw new SourceValidationError(
+        "invalid_declencheur",
+        `Date de tâche ponctuelle illisible : « ${value.a} ». Un instant ISO est attendu.`,
+      );
+    }
+    let fuseau = DEFAULT_FUSEAU;
+    try {
+      fuseau = validateFuseau(value.fuseau ?? DEFAULT_FUSEAU, DEFAULT_FUSEAU);
+    } catch (error) {
+      throw new SourceValidationError(
+        "invalid_fuseau",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    return { type: "ponctuel", a: new Date(at).toISOString(), fuseau };
+  }
   if (!isSourceDeclencheurPlanning(value)) {
     throw new SourceValidationError(
       "invalid_declencheur",
-      'Déclencheur invalide : « { type: "webhook" } » ou ' +
-        '« { type: "planning", expression, fuseau } » attendu.',
+      'Déclencheur invalide : « { type: "webhook" } », ' +
+        '« { type: "planning", expression, fuseau } » ou ' +
+        '« { type: "ponctuel", a } » attendu.',
     );
   }
   let expression: string;
@@ -364,6 +568,38 @@ function validateMaxTours(value: unknown): number {
 }
 
 /**
+ * Fin de récurrence par NOMBRE de passages VALIDÉE (1 à 10 000, lot 32).
+ *
+ * ⚠️ `null` est REFUSÉ comme « valeur absente déguisée » : pour retirer une fin de
+ * récurrence, l'appelant envoie une chaîne vide dans l'API (`PUT /api/sources/:nom`) et
+ * c'est la route qui traduit.
+ */
+function validateOccurrencesMax(value: unknown): number {
+  const nombre = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isInteger(nombre) || nombre < MIN_OCCURRENCES || nombre > MAX_OCCURRENCES) {
+    throw new SourceValidationError(
+      "invalid_occurrences_max",
+      `Fin de récurrence invalide : nombre entier de ${MIN_OCCURRENCES} à ${MAX_OCCURRENCES} ` +
+        "passages attendu.",
+    );
+  }
+  return nombre;
+}
+
+/** Fin de récurrence par DATE validée (ISO, lot 32). */
+function validateJusquAu(value: unknown): string {
+  const texte = typeof value === "string" ? value.trim() : "";
+  const at = texte === "" ? Number.NaN : Date.parse(texte);
+  if (!Number.isFinite(at)) {
+    throw new SourceValidationError(
+      "invalid_jusqu_au",
+      `Date de fin de récurrence illisible : « ${texte} ». Un instant ISO est attendu.`,
+    );
+  }
+  return new Date(at).toISOString();
+}
+
+/**
  * Valide une DESTINATION. Trois modes acceptés, ou l'identifiant d'une conversation
  * existante (choisi par l'utilisateur dans `/config` : jamais un texte libre).
  *
@@ -389,16 +625,22 @@ function storedConversation(value: unknown): SourceConversation {
   return isSourceDestination(value) || isSourceSessionTarget(value) ? value : "aucune";
 }
 
-/** Valide une consigne libre (texte borné, jamais un secret). */
-function validateConsigne(value: unknown): string {
+/**
+ * Valide une consigne libre (texte borné, jamais un secret).
+ *
+ * ⚠️ La BORNE dépend du TYPE (lot 31) : une tâche ponctuelle porte une DEMANDE complète
+ * (`MAX_INSTRUCTION_TACHE_CHARS`, 4 000), un déclencheur durable une consigne de
+ * surveillance (`MAX_CONSIGNE_CHARS`, 2 000). Une seule fonction, deux bornes explicites.
+ */
+function validateConsigne(value: unknown, maxChars: number = MAX_CONSIGNE_CHARS): string {
   if (typeof value !== "string") {
     throw new SourceValidationError("invalid_consigne", "La consigne doit être un texte.");
   }
   const consigne = value.replace(/\r\n?/g, "\n").trim();
-  if (consigne.length > MAX_CONSIGNE_CHARS) {
+  if (consigne.length > maxChars) {
     throw new SourceValidationError(
       "consigne_too_long",
-      `Consigne trop longue : ${consigne.length} caractères, maximum ${MAX_CONSIGNE_CHARS}.`,
+      `Consigne trop longue : ${consigne.length} caractères, maximum ${maxChars}.`,
     );
   }
   return consigne;
@@ -436,6 +678,22 @@ export class SourcesStore {
   /** Nombre de sources déclarées. */
   get size(): number {
     return this.records.length;
+  }
+
+  /**
+   * Nombre de DÉCLENCHEURS DURABLES (`webhook` + `planning`) — ceux que borne
+   * `MAX_SOURCES`.
+   *
+   * ⚠️ LOT 31 : une tâche PONCTUELLE ne se compte PAS ici ; elle s'éteint après son
+   * tir et a sa propre borne (`MAX_TACHES_PONCTUELLES`).
+   */
+  get sourcesDurables(): number {
+    return this.records.filter((record) => record.declencheur.type !== "ponctuel").length;
+  }
+
+  /** Nombre de tâches PONCTUELLES persistées (vivantes ou terminées non purgées). */
+  get tachesPonctuelles(): number {
+    return this.records.filter((record) => record.declencheur.type === "ponctuel").length;
   }
 
   /** Chemin de la sauvegarde v1 (écrite une seule fois, lors de la migration). */
@@ -577,8 +835,212 @@ export class SourcesStore {
   }
 
   /**
+   * Nom LIBRE dérivé d'un libellé : `resume-du-journal`, puis `resume-du-journal-2`,
+   * `-3`… ⚠️ Jamais un écrasement : deux tâches demandées le même jour avec le même
+   * libellé coexistent, chacune avec son nom.
+   */
+  nomLibrePour(libelle: string): string {
+    const base = slugifierNomTache(libelle);
+    if (!this.has(base)) return base;
+    for (let rang = 2; rang < 1_000; rang += 1) {
+      const suffixe = `-${rang}`;
+      const candidat = `${base.slice(0, 32 - suffixe.length).replace(/-+$/g, "")}${suffixe}`;
+      if (!this.has(candidat)) return candidat;
+    }
+    // ⚠️ Inatteignable en pratique (borne `MAX_TACHES_PONCTUELLES`), mais on ne renvoie
+    // jamais un nom déjà pris : un nom horodaté est toujours libre.
+    return `tache-${Date.now().toString(36)}`.slice(0, 32);
+  }
+
+  /**
+   * Nom LIBRE dérivé d'un libellé, en tenant compte des noms DÉJÀ RÉSERVÉS dans le lot
+   * en cours de construction (création d'une chaîne : deux étapes ne peuvent pas porter
+   * le même nom).
+   */
+  private nomLibreParmi(libelle: string, pris: Set<string>): string {
+    const base = slugifierNomTache(libelle);
+    if (!this.has(base) && !pris.has(base)) return base;
+    for (let rang = 2; rang < 1_000; rang += 1) {
+      const suffixe = `-${rang}`;
+      const candidat = `${base.slice(0, 32 - suffixe.length).replace(/-+$/g, "")}${suffixe}`;
+      if (!this.has(candidat) && !pris.has(candidat)) return candidat;
+    }
+    return `tache-${Date.now().toString(36)}`.slice(0, 32);
+  }
+
+  /**
+   * Crée une CHAÎNE D'ÉTAPES — **ATOMIQUE** : tout ou rien.
+   *
+   * ⚠️ POURQUOI ATOMIQUE : une chaîne à moitié créée (étape 1 présente, étape 3 refusée)
+   * serait pire qu'aucune chaîne — l'étape 1 enverrait son résultat à personne et la
+   * personne croirait la chaîne en place. Toutes les validations et le QUOTA sont donc
+   * vérifiés AVANT la moindre écriture, puis les étapes sont poussées en UNE fois.
+   *
+   * ⚠️ Chaque étape est un `planning` NORMAL (cron + fuseau) : elle consomme une place de
+   * `MAX_SOURCES`. Une chaîne de 3 étapes sur 1 place libre crée donc 0 étape.
+   */
+  createChaine(input: {
+    id: string;
+    libelle?: string;
+    etapes: Array<{
+      libelle: string;
+      consigne: string;
+      declencheur: SourceDeclencheur;
+      occurrencesMax?: number;
+      jusquAu?: string;
+    }>;
+  }): SourceRecord[] {
+    const etapes = Array.isArray(input.etapes) ? input.etapes : [];
+    if (etapes.length < MIN_ETAPES_CHAINE || etapes.length > MAX_ETAPES_CHAINE) {
+      throw new SourceValidationError(
+        "invalid_chaine",
+        `Chaîne invalide : de ${MIN_ETAPES_CHAINE} à ${MAX_ETAPES_CHAINE} étapes attendues ` +
+          `(reçu : ${etapes.length}).`,
+      );
+    }
+    const id = typeof input.id === "string" ? input.id.trim() : "";
+    if (id === "") {
+      throw new SourceValidationError("invalid_chaine", "Chaîne invalide : identifiant manquant.");
+    }
+    // ① VALIDATION COMPLÈTE (déclencheur, consigne, bornes) — aucune écriture encore.
+    const prepares = etapes.map((etape, index) => {
+      const declencheur = validateDeclencheur(etape.declencheur);
+      if (declencheur.type !== "planning") {
+        throw new SourceValidationError(
+          "invalid_chaine",
+          `Étape ${index + 1} : un déclencheur « planning » (expression + fuseau) est attendu — ` +
+            "une étape de chaîne a un HORAIRE.",
+        );
+      }
+      const libelle = typeof etape.libelle === "string" ? etape.libelle.trim() : "";
+      // La consigne d'une étape est bornée comme celle d'un déclencheur durable.
+      const consigne = validateConsigne(etape.consigne, MAX_CONSIGNE_CHARS);
+      const occurrencesMax =
+        etape.occurrencesMax !== undefined ? validateOccurrencesMax(etape.occurrencesMax) : undefined;
+      const jusquAu = etape.jusquAu !== undefined ? validateJusquAu(etape.jusquAu) : undefined;
+      return { libelle, consigne, declencheur, occurrencesMax, jusquAu, index };
+    });
+    // ② QUOTA : les étapes sont des déclencheurs DURABLES.
+    const places = Math.max(0, MAX_SOURCES - this.sourcesDurables);
+    if (prepares.length > places) {
+      throw new ChainesFullError(places, prepares.length);
+    }
+    // ③ NOMS : slugifiés, dédupliqués entre eux ET par rapport au registre existant.
+    const pris = new Set<string>();
+    const noms = prepares.map((etape) => {
+      const nom = this.nomLibreParmi(etape.libelle, pris);
+      pris.add(nom);
+      return nom;
+    });
+    // ④ CONSTRUCTION en mémoire, puis UNE SEULE écriture (atomicité réelle).
+    const at = new Date(this.now()).toISOString();
+    const records = prepares.map((etape, index) =>
+      this.construire(
+        noms[index] as string,
+        {
+          declencheur: etape.declencheur,
+          consigne: etape.consigne,
+          // ⚠️ SILENCIEUX : c'est le RÉSULTAT qui est publié, jamais le contenu reçu.
+          visibilite: "silencieux",
+          ...(etape.libelle !== "" ? { libelle: etape.libelle } : {}),
+          ...(etape.occurrencesMax !== undefined ? { occurrencesMax: etape.occurrencesMax } : {}),
+          ...(etape.jusquAu !== undefined ? { jusquAu: etape.jusquAu } : {}),
+          chaine: {
+            id,
+            etape: index + 1,
+            ...(index > 0 ? { apres: noms[index - 1] as string } : {}),
+          },
+        },
+        at,
+      ),
+    );
+    this.records.push(...records);
+    this.persist();
+    return records.map((record) => ({ ...record }));
+  }
+
+  /** Étapes d'une chaîne, DANS L'ORDRE (rang croissant). */
+  etapesDeChaine(id: string): SourceRecord[] {
+    return this.records
+      .filter((record) => record.chaine?.id === id)
+      .sort((a, b) => (a.chaine?.etape ?? 0) - (b.chaine?.etape ?? 0));
+  }
+
+  /**
+   * Écrit le RÉSULTAT d'une étape, conservé pour la suivante (lot 33) — BORNÉ.
+   *
+   * ⚠️ Appelé APRÈS la publication : le texte conservé est celui que la personne a lu
+   * (hors marqueurs de fichiers), et les identifiants de fichiers sont ceux du store de
+   * la conversation, que le worker suivant ouvre avec `lire_fichier`.
+   */
+  enregistrerResultatEtape(
+    nom: string,
+    resultat: { jobId: string; texte: string; fichiers: readonly string[]; at: string },
+  ): SourceRecord | undefined {
+    const record = this.records.find((entry) => entry.nom === nom);
+    if (!record) return undefined;
+    const texte = typeof resultat.texte === "string" ? resultat.texte : "";
+    record.resultatEtape = {
+      jobId: typeof resultat.jobId === "string" ? resultat.jobId : "",
+      texte: texte.length > MAX_TEXTE_ETAPE_CHARS ? texte.slice(0, MAX_TEXTE_ETAPE_CHARS) : texte,
+      fichiers: (resultat.fichiers ?? [])
+        .filter((fichier) => typeof fichier === "string" && fichier.trim() !== "")
+        .slice(0, MAX_FICHIERS_ETAPE),
+      at: resultat.at,
+    };
+    this.persist();
+    return { ...record };
+  }
+
+  /**
+   * Purge les chaînes ENTIÈREMENT terminées dont la dernière modification est plus
+   * ancienne que `jours` — et **jamais** une étape en attente.
+   *
+   * ⚠️ RÈGLE ABSOLUE : une étape `actif !== false` n'est JAMAIS purgée (elle doit
+   * encore tirer), et une étape dont la chaîne compte encore une étape active non plus
+   * (la purger rendrait la suivante orpheline). Une chaîne incomplète (étape supprimée à
+   * la main) n'est pas purgée tant qu'une étape reste active.
+   *
+   * ⚠️ Aucun minuteur ne l'appelle automatiquement : une source éteinte reste listée
+   * indéfiniment, c'est la règle d'affichage. Cette méthode existe pour une purger
+   * EXPLICITE (exploitation, test) et n'efface que des chaînes mortes.
+   */
+  purgerChainesTerminees(jours = 30): string[] {
+    const retard = Math.max(1, Math.trunc(jours)) * 86_400_000;
+    const maintenant = this.now();
+    const parChaine = new Map<string, SourceRecord[]>();
+    for (const record of this.records) {
+      if (record.chaine === undefined) continue;
+      const liste = parChaine.get(record.chaine.id) ?? [];
+      liste.push(record);
+      parChaine.set(record.chaine.id, liste);
+    }
+    const retires: string[] = [];
+    for (const etapes of parChaine.values()) {
+      // ⚠️ Une seule étape encore armée ⇒ on ne touche à RIEN.
+      if (etapes.some((etape) => etape.actif !== false)) continue;
+      const plusRecent = Math.max(
+        ...etapes.map((etape) => {
+          const at = Date.parse(etape.maj);
+          return Number.isFinite(at) ? at : maintenant;
+        }),
+      );
+      if (maintenant - plusRecent < retard) continue;
+      for (const etape of etapes) retires.push(etape.nom);
+    }
+    if (retires.length === 0) return [];
+    this.records = this.records.filter((record) => !retires.includes(record.nom));
+    this.persist();
+    return retires;
+  }
+
+  /**
    * Crée une source. ⚠️ REFUS explicite au-delà de `MAX_SOURCES` (`SourcesFullError`)
    * et sur un nom déjà utilisé (`SourceValidationError`).
+   *
+   * ⚠️ LOT 31 : le QUOTA dépend du TYPE — les tâches ponctuelles ont leur propre borne
+   * (`TachesPonctuellesFullError`), elles ne consomment pas une place de déclencheur
+   * durable.
    */
   create(nom: string, settings: SourceSettingsInput = {}): SourceRecord {
     const name = validateSourceName(nom);
@@ -588,8 +1050,33 @@ export class SourcesStore {
         `Une source « ${name} » existe déjà. Modifiez-la plutôt que de la recréer.`,
       );
     }
-    if (this.records.length >= MAX_SOURCES) throw new SourcesFullError(MAX_SOURCES);
+    // ⚠️ Le déclencheur est validé AVANT le quota : c'est son TYPE qui choisit la borne.
+    const declencheur =
+      settings.declencheur !== undefined
+        ? validateDeclencheur(settings.declencheur)
+        : { ...DEFAULT_SOURCE_DECLENCHEUR };
+    if (declencheur.type === "ponctuel") {
+      if (this.tachesPonctuelles >= MAX_TACHES_PONCTUELLES) {
+        throw new TachesPonctuellesFullError(MAX_TACHES_PONCTUELLES);
+      }
+    } else if (this.sourcesDurables >= MAX_SOURCES) {
+      throw new SourcesFullError(MAX_SOURCES);
+    }
     const at = new Date(this.now()).toISOString();
+    const record = this.construire(name, settings, at);
+    this.records.push(record);
+    this.persist();
+    return { ...record };
+  }
+
+  /**
+   * Construit un enregistrement SANS le persister (création simple ou étape de chaîne).
+   *
+   * ⚠️ Extrait de `create` pour que `createChaine` puisse bâtir TOUTES ses étapes puis
+   * les publier en UNE écriture : c'est ce qui rend la création d'une chaîne ATOMIQUE
+   * (aucune étape à moitié créée si la dernière est refusée).
+   */
+  private construire(nom: string, settings: SourceSettingsInput, at: string): SourceRecord {
     // ⚠️ Même règle que la MIGRATION : si l'appelant fournit un réglage du modèle
     // v1 (`tour`, `destination`/`conversation`, `notifier`) SANS dire la
     // visibilité, la source reste VISIBLE — on ne change jamais son comportement
@@ -606,13 +1093,20 @@ export class SourcesStore {
         'Visibilité invalide : "silencieux" ou "visible" attendu.',
       );
     }
+    const declencheur =
+      settings.declencheur !== undefined
+        ? validateDeclencheur(settings.declencheur)
+        : { ...DEFAULT_SOURCE_DECLENCHEUR };
     const record: SourceRecord = {
-      nom: name,
-      declencheur:
-        settings.declencheur !== undefined
-          ? validateDeclencheur(settings.declencheur)
-          : { ...DEFAULT_SOURCE_DECLENCHEUR },
-      consigne: settings.consigne !== undefined ? validateConsigne(settings.consigne) : "",
+      nom,
+      declencheur,
+      consigne:
+        settings.consigne !== undefined
+          ? validateConsigne(
+              settings.consigne,
+              declencheur.type === "ponctuel" ? MAX_INSTRUCTION_TACHE_CHARS : MAX_CONSIGNE_CHARS,
+            )
+          : "",
       visibilite,
       destination:
         settings.destination !== undefined ? validateConversation(settings.destination) : "aucune",
@@ -637,12 +1131,24 @@ export class SourcesStore {
           : DEFAULT_MAX_TOURS_PAR_JOUR,
       actif: settings.actif !== false,
       etat: settings.actif === false ? "suspendu" : "actif",
+      ...(settings.libelle !== undefined && settings.libelle.trim() !== ""
+        ? { libelle: settings.libelle.trim() }
+        : {}),
+      ...(settings.perso === true ? { perso: true } : {}),
+      ...(settings.occurrencesMax !== undefined && settings.occurrencesMax !== null
+        ? { occurrencesMax: validateOccurrencesMax(settings.occurrencesMax) }
+        : {}),
+      ...(settings.jusquAu !== undefined && settings.jusquAu !== null
+        ? { jusquAu: validateJusquAu(settings.jusquAu) }
+        : {}),
+      ...(settings.occurrencesFaites !== undefined
+        ? { occurrencesFaites: Math.max(0, Math.trunc(settings.occurrencesFaites)) }
+        : {}),
+      ...(settings.chaine !== undefined ? { chaine: settings.chaine } : {}),
       cree: at,
       maj: at,
     };
-    this.records.push(record);
-    this.persist();
-    return { ...record };
+    return record;
   }
 
   /**
@@ -709,10 +1215,29 @@ export class SourcesStore {
         (declencheur.type === "planning" &&
           (record.declencheur.type !== "planning" ||
             declencheur.expression !== record.declencheur.expression ||
-            declencheur.fuseau !== record.declencheur.fuseau)));
+            declencheur.fuseau !== record.declencheur.fuseau)) ||
+        (declencheur.type === "ponctuel" &&
+          (record.declencheur.type !== "ponctuel" || declencheur.a !== record.declencheur.a)));
+    const occurrencesMax =
+      settings.occurrencesMax !== undefined && settings.occurrencesMax !== null
+        ? validateOccurrencesMax(settings.occurrencesMax)
+        : undefined;
+    const jusquAu =
+      settings.jusquAu !== undefined && settings.jusquAu !== null
+        ? validateJusquAu(settings.jusquAu)
+        : undefined;
     const next: SourceRecord = {
       ...record,
-      ...(settings.consigne !== undefined ? { consigne: validateConsigne(settings.consigne) } : {}),
+      ...(settings.consigne !== undefined
+        ? {
+            consigne: validateConsigne(
+              settings.consigne,
+              (declencheur ?? record.declencheur).type === "ponctuel"
+                ? MAX_INSTRUCTION_TACHE_CHARS
+                : MAX_CONSIGNE_CHARS,
+            ),
+          }
+        : {}),
       ...(destination !== undefined ? { destination } : {}),
       ...(settings.tour !== undefined ? { tour: settings.tour } : {}),
       ...(settings.visibilite !== undefined ? { visibilite } : {}),
@@ -721,13 +1246,27 @@ export class SourcesStore {
       ...(rattrapage !== undefined ? { rattrapage } : {}),
       ...(plafondMs !== undefined ? { plafondMs } : {}),
       ...(maxToursParJour !== undefined ? { maxToursParJour } : {}),
+      ...(occurrencesMax !== undefined ? { occurrencesMax } : {}),
+      ...(jusquAu !== undefined ? { jusquAu } : {}),
+      ...(settings.libelle !== undefined && settings.libelle.trim() !== ""
+        ? { libelle: settings.libelle.trim() }
+        : {}),
+      ...(settings.perso !== undefined ? { perso: settings.perso === true } : {}),
       notifier:
         visibilite === "silencieux" ? false : (settings.notifier ?? record.notifier) === true,
       maj: new Date(this.now()).toISOString(),
     };
     if (changedTarget) delete next.sessionId;
+    // ⚠️ LOT 32 — `null` RETIRE la fin de récurrence (l'API traduit une chaîne vide en
+    // `null`) : sans cette branche, on ne pourrait jamais revenir à « sans fin ».
+    if (settings.occurrencesMax === null) delete next.occurrencesMax;
+    if (settings.jusquAu === null) delete next.jusquAu;
     if (declencheurChange) {
       delete next.prochainPassage;
+      // ⚠️ LOT 32 — LE COMPTEUR EST INVALIDÉ quand le DÉCLENCHEUR CHANGE : « 12/14
+      // passages » décrit l'ancien programme, pas le nouveau. Le garder ferait croire
+      // à une récurrence déjà presque terminée.
+      delete next.occurrencesFaites;
       if (declencheur?.type !== "planning") delete next.toursDuJour;
     }
     // Réactivation : la raison de suspension est effacée et le passage réarmé.
@@ -852,6 +1391,62 @@ export class SourcesStore {
     record.toursDuJour = { jour, compte };
     this.persist();
     return compte;
+  }
+
+  /**
+   * Compte un passage RÉELLEMENT TIRÉ (lot 32) et rend le total.
+   *
+   * ⚠️ Appelé UNIQUEMENT quand un tour a démarré : un SAUT (chevauchement, garde-fou,
+   * rattrapage refusé) n'incrémente jamais ce compteur — sinon « 14/14 passages »
+   * s'afficherait alors que Yuki n'a rien exécuté.
+   *
+   * ⚠️ Persisté AVANT l'exécution du tour (comme le réarmement) : un plantage pendant
+   * le tour ne le fait pas repartir de zéro au redémarrage.
+   */
+  incrementerOccurrence(nom: string): number {
+    const record = this.records.find((entry) => entry.nom === nom);
+    if (!record) return 0;
+    const compte = (record.occurrencesFaites ?? 0) + 1;
+    record.occurrencesFaites = compte;
+    this.persist();
+    return compte;
+  }
+
+  /**
+   * Note un ÉCHEC dans la série en cours (lot 31).
+   *
+   * ⚠️ Même raison que la série ⇒ `tentatives + 1` (aucune nouvelle ligne à publier) ;
+   * raison DIFFÉRENTE, ou aucune série en cours ⇒ nouvelle série (elle, elle sera
+   * publiée). Renvoie la série à jour ET `true` si c'est un NOUVEL échec distinct.
+   */
+  noterEchec(nom: string, raison: string): { serie: SourceSerieEchecs; nouveau: boolean } | undefined {
+    const record = this.records.find((entry) => entry.nom === nom);
+    if (!record) return undefined;
+    const at = new Date(this.now()).toISOString();
+    const courante = record.serieEchecs;
+    if (courante !== undefined && courante.raison === raison) {
+      courante.tentatives += 1;
+      this.persist();
+      return { serie: { ...courante }, nouveau: false };
+    }
+    const serie: SourceSerieEchecs = { raison, debut: at, tentatives: 1 };
+    record.serieEchecs = serie;
+    this.persist();
+    return { serie: { ...serie }, nouveau: true };
+  }
+
+  /**
+   * Efface la série d'échecs (retour à la NORMALE) et rend celle qui vient d'être
+   * refermée — l'appelant la publie : un retour à la normale ne doit jamais être muet.
+   */
+  effacerEchecs(nom: string): SourceSerieEchecs | undefined {
+    const record = this.records.find((entry) => entry.nom === nom);
+    if (!record) return undefined;
+    const serie = record.serieEchecs;
+    if (serie === undefined) return undefined;
+    delete record.serieEchecs;
+    this.persist();
+    return { ...serie };
   }
 
   /**

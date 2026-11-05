@@ -155,6 +155,8 @@ import {
 } from "./librarian/index.js";
 import { collectSecretValues, createLogger } from "./observability/logger.js";
 import {
+  ConsolidationArchiveStore,
+  ConsolidationHebdo,
   ConversationArchiveStore,
   HeritageAdminService,
   HeritageStore,
@@ -162,6 +164,7 @@ import {
   MemoryService,
   MemoryStore,
   REACTIONS_SOURCE,
+  contexteModeleDepuisFichier,
   memoryWriteModelReference,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
@@ -186,8 +189,9 @@ import {
   SourcesInbox,
   SourcesService,
   SourcesStore,
+  type PlanificationTacheInput,
 } from "./sources/index.js";
-import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -1039,6 +1043,11 @@ async function main(): Promise<void> {
    * Créé quand le host est prêt (voir plus bas), arrêté à l'arrêt gracieux.
    */
   let declencheursBalayeur: DeclencheurBalayeur | undefined;
+  /**
+   * Consolidation HEBDOMADAIRE de la mémoire (lot 29) : déclenchée par le
+   * balayeur existant, jamais par un second `setInterval`.
+   */
+  let consolidationHebdo: ConsolidationHebdo | undefined;
 
   // --- Fichiers échangés (l'utilisateur → Yuki, Yuki → l'utilisateur) -------
   // ⚠️ Créé AVANT la porte GPU : le dépôt et le téléchargement restent
@@ -1400,6 +1409,12 @@ async function main(): Promise<void> {
     // qui manquait quand Yuki a répondu « je n'ai pas de minuteur » (2026-11-04) : le
     // planificateur existait déjà (lot 2), il n'avait pas de porte d'entrée.
     envoisProgrammesEnabled: true,
+    // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : TOUJOURS actif — « à 8 h, résume-moi
+    // le journal » n'était jusqu'ici qu'un envoi de texte figé. L'outil ne fait rien
+    // maintenant : il programme une DEMANDE que le worker lourd exécutera à l'heure dite.
+    // ⚠️ Le worker lourd ne l'obtient pas (`TOOL_POLICY.heavy.planifierTaches: []`) : une
+    // tâche de fond ne programme pas de tâche de fond.
+    planifierTacheEnabled: true,
   });
 
   /**
@@ -1630,6 +1645,15 @@ async function main(): Promise<void> {
   const portEnvoisProgrammes = {
     programmer: async (request: ProgrammationInput) => envoisProgrammes.programmer(request),
   };
+  /**
+   * Port rendu à l'OUTIL `planifier_tache` (lot 31) : programmer une TÂCHE que le worker
+   * lourd exécutera à l'heure dite. Le service tient toutes les bornes (30 s, 30 jours,
+   * quota), le nom slugifié et la cible — l'outil ne décide de rien.
+   */
+  const portPlanificationTache = {
+    planifier: async (request: PlanificationTacheInput) =>
+      sourcesService.planifierTache(request),
+  };
   logger.info("envois.ready", {
     store: env.envoisProgrammesPath,
     en_attente: envoisProgrammes.enAttente,
@@ -1709,6 +1733,11 @@ async function main(): Promise<void> {
         // attente, canaux SUIVIS) — le modèle ne peut pas le contourner. Aucun modèle
         // n'est appelé à l'heure dite : le texte est FIGÉ.
         envoisProgrammes: portEnvoisProgrammes,
+        // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : groupe `toujours`. Depuis un
+        // CANAL il n'y a pas de conversation locale à qui rendre le résultat ⇒ la tâche
+        // est créée sans cible et son résultat tombe dans le fil « Déclencheurs » (le port
+        // le DIT au modèle, qui ne peut donc pas promettre une réponse dans le canal).
+        planifierTache: portPlanificationTache,
         // ⚠️ Sans `publierMessage` (appelant sans publication intermédiaire), le port
         // n'est pas construit : la politique le signale comme non implémenté au lieu
         // de laisser un outil promettre une publication qui n'existe pas.
@@ -1913,6 +1942,20 @@ async function main(): Promise<void> {
    * booléen, jamais la valeur, jamais un préfixe. Une fois enregistré, le jeton ne peut
    * plus être relu depuis l'interface — seulement remplacé.
    */
+  /**
+   * EFFACE un jeton du coffre (débranchement / suppression d'une connexion).
+   *
+   * ⚠️ Le coffre SAIT supprimer (`SecretStore.delete`, `src/secrets/store.ts:146`) :
+   * aucune extension d'API n'a été nécessaire. L'erreur d'un coffre verrouillé est
+   * PROPAGÉE (la route la rend en 502) : on ne prétend jamais avoir effacé un jeton
+   * qu'on n'a pas pu effacer.
+   */
+  const effacerJeton = (nom: string): void => {
+    if (!secretStore) return;
+    // `delete` lève si le coffre est verrouillé : c'est voulu, et remonté plus haut.
+    if (secretStore.delete(nom)) refreshSecretValues();
+  };
+
   const mattermostPort: ChatMattermostPort = {
     baseUrl: () => chatMirror.baseUrl(),
     tokenConfigured: () => secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true,
@@ -1930,6 +1973,15 @@ async function main(): Promise<void> {
       refreshSecretValues();
     },
     connect: () => mattermost.connect(),
+    // ⚠️ DÉBRANCHER : la synchro s'arrête POUR DE VRAI (WebSocket fermé, balayeur
+    // arrêté — `adapter.disconnect()`), puis le jeton est effacé du coffre. Le miroir
+    // n'est PAS touché : ses conversations restent lisibles, et remettre le jeton suffit.
+    deconnecter: async () => {
+      await mattermost.disconnect();
+      effacerJeton(MATTERMOST_TOKEN_SECRET_NAME);
+    },
+    miroir: () => chatMirror.statsOf("mattermost"),
+    supprimerMiroir: () => chatMirror.purgePlatform("mattermost"),
     view: () => {
       const canaux = Object.entries(chatMirror.records())
         .filter(([, record]) => record.platform === "mattermost")
@@ -1950,6 +2002,7 @@ async function main(): Promise<void> {
         jetonEnregistre: secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true,
         plateforme: mattermost.status(),
         synchronisation: mattermost.syncStatus(),
+        miroir: chatMirror.statsOf("mattermost"),
         canaux,
       };
     },
@@ -2021,6 +2074,14 @@ async function main(): Promise<void> {
       refreshSecretValues();
     },
     connect: () => discord.connect(),
+    // ⚠️ MÊME contrat que Mattermost : la synchro s'arrête (passerelle fermée, balayeur
+    // arrêté), le jeton est effacé, le miroir reste.
+    deconnecter: async () => {
+      await discord.disconnect();
+      effacerJeton(DISCORD_TOKEN_SECRET_NAME);
+    },
+    miroir: () => chatMirror.statsOf("discord"),
+    supprimerMiroir: () => chatMirror.purgePlatform("discord"),
     view: () => {
       const canaux = Object.entries(chatMirror.records())
         .filter(([, record]) => record.platform === "discord")
@@ -2043,6 +2104,7 @@ async function main(): Promise<void> {
         jetonEnregistre: secretStore?.has(DISCORD_TOKEN_SECRET_NAME) === true,
         plateforme: discord.status(),
         synchronisation: discord.syncStatus(),
+        miroir: chatMirror.statsOf("discord"),
         canaux,
       };
     },
@@ -2201,6 +2263,60 @@ async function main(): Promise<void> {
       store: env.memoryStorePath,
       index: env.memoryIndexPath,
       write_role: heavyAvailableAtStart ? "heavy" : "light",
+    });
+
+    // CONSOLIDATION HEBDOMADAIRE (lot 29) — ⚠️ MODÈLE LOURD IMPOSÉ, SANS REPLI.
+    // L'extracteur vise `liveHeavyReference()` : si le lourd est indisponible, la
+    // passe est REFUSÉE (et le dit dans son rapport), elle n'est jamais confiée au
+    // léger. Session éphémère SANS OUTIL (`tools: []`) : anti-récursion.
+    const consolidationArchive = new ConsolidationArchiveStore({
+      dir: env.memoryConsolidationDir,
+      logger,
+    });
+    consolidationHebdo = new ConsolidationHebdo({
+      store: memoryStore,
+      index: memoryIndex,
+      logger,
+      archive: consolidationArchive,
+      statePath: env.memoryConsolidationStatePath,
+      settings: () => ({
+        enabled: config.getString("memory.consolidation.enabled") === "on",
+        cron: config.getString("memory.consolidation.cron"),
+        // ⚠️ Fuseau LU, jamais supposé : « 3 h de Paris » = `Europe/Paris`.
+        fuseau: config.getString("memory.consolidation.timeZone"),
+        budgetTokens: config.getNumber("memory.consolidation.budgetTokens"),
+        retention: config.getNumber("memory.consolidation.retention"),
+      }),
+      extractor: () =>
+        createSdkConsolidationHebdoExtractor({
+          cwd: env.piCwd,
+          agentDir: env.piAgentDir,
+          authPath: join(env.piAgentDir, "auth.json"),
+          modelsPath,
+          modelReference: liveHeavyReference,
+          // Réponse JSON stricte : pas de raisonnement (coût et latence inutiles).
+          thinking: "off",
+          // Une passe peut traiter un lot volumineux : délai GÉNÉREUX, jamais 30 s.
+          timeoutMs: () => Math.max(180_000, config.getNumber("memory.extract.timeoutMs")),
+          logger,
+        }),
+      // ⚠️ Contexte du modèle LOURD **réellement configuré**, LU dans `models.json`
+      // (amendement ①) ; repli explicite sur la fiche en mémoire si le fichier est
+      // illisible — jamais un 1 M codé en dur.
+      contexteModele: () =>
+        contexteModeleDepuisFichier(modelsPath, liveHeavyReference()) ??
+        resolveModelsFrom(effectiveLlmConfig(config)).heavy.contextWindow,
+    });
+    logger.info("memory.consolidation.ready", {
+      cron: config.getString("memory.consolidation.cron"),
+      fuseau: config.getString("memory.consolidation.timeZone"),
+      budget_tokens: config.getNumber("memory.consolidation.budgetTokens"),
+      retention: config.getNumber("memory.consolidation.retention"),
+      contexte_modele:
+        contexteModeleDepuisFichier(modelsPath, liveHeavyReference()) ??
+        resolveModelsFrom(effectiveLlmConfig(config)).heavy.contextWindow,
+      archive_dir: consolidationArchive.dirPath,
+      modele: liveHeavyReference(),
     });
 
     // Lot 13 : archive « vie antérieure » — dossier SÉPARÉ du store de mémoire,
@@ -2518,6 +2634,10 @@ async function main(): Promise<void> {
       // aussi — c'est même le cas le plus fréquent (« poste ça à 16h10 » se dit dans le
       // fil, même si la publication vise un canal).
       envoisProgrammes: portEnvoisProgrammes,
+      // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : « à 8 h, résume-moi le journal ».
+      // Le résultat revient dans CETTE conversation (elle existe encore), et le fil n'est
+      // jamais renommé « Déclencheurs » (`perso`).
+      planifierTache: portPlanificationTache,
       eventSource: delegation,
       llmAvailable: () => resolveAvail().isAvailable("light"),
       memory: memoryService,
@@ -2626,16 +2746,25 @@ async function main(): Promise<void> {
           cancelJob: (jobId) => serviceDelegation.cancelJob(jobId),
         },
         publication: {
-          publier: async (sessionId, texte) => {
+          // ⚠️ LOT 31 — les FICHIERS du résultat voyagent DANS LE TEXTE (marqueurs
+          // `[fichier] …` ajoutés par le service) : c'est ce qui rend la carte du
+          // résultat cliquable et la fait survivre au rechargement. Le troisième argument
+          // porte la même information sous forme structurée, pour un rendu natif futur ;
+          // `publierMessage` n'en a pas besoin (il persiste le texte tel quel).
+          publier: async (sessionId, texte, fichiers) => {
             if (!host) throw new Error("Le host Pi n'est pas disponible.");
             if (typeof host.publierMessage !== "function") {
               throw new Error(
                 "Ce host ne sait pas publier dans une conversation sans tour de modèle.",
               );
             }
+            void fichiers;
             await host.publierMessage(sessionId, texte);
           },
         },
+        // ⚠️ LOT 31 — MÉTADONNÉES des fichiers du résultat : c'est le service qui rend les
+        // marqueurs `[fichier] <id> <nom> (<n> octets)`, donc la carte cliquable.
+        fichier: (fichierId) => filesStore.get(fichierId),
       });
       // Le RÉSULTAT d'un job de déclencheur ne réveille PAS le léger : il part
       // par le port des déclencheurs (publier / se taire / éteindre).
@@ -2654,6 +2783,12 @@ async function main(): Promise<void> {
       envoisProgrammes: {
         executerDus: (maintenant) => envoisProgrammes.executerDus(maintenant),
       },
+      // ⚠️ CONSOLIDATION HEBDOMADAIRE (lot 29) : port branché sur CE balayeur.
+      // Aucun second `setInterval`, aucune `SourceRecord` : la passe est un
+      // rendez-vous planifié, pas une source.
+      passeHebdo: {
+        executerSiDu: (maintenant) => consolidationHebdo?.executerSiDu(maintenant) ?? Promise.resolve(),
+      },
       logger,
       now: () => Date.now(),
       run: (nom, options) =>
@@ -2662,6 +2797,9 @@ async function main(): Promise<void> {
           ...(options.planifie !== undefined ? { planifie: options.planifie } : {}),
           plafondMs: options.plafondMs,
           signal: options.signal,
+          // ⚠️ LOT 31 : le balayeur a DÉJÀ désarmé la tâche ponctuelle (un plantage ne la
+          // rejoue pas) — sans ce drapeau, `declencher` la refuserait comme « en veille ».
+          ...(options.desarmementPrealable === true ? { desarmementPrealable: true } : {}),
         }),
     });
     declencheursBalayeur.start();
@@ -2990,10 +3128,28 @@ async function main(): Promise<void> {
       // `X-Yuki-Config: 1`) — mode, état de la plateforme, état Mattermost, motif de
       // refus de création ; plus l'URL du serveur, le JETON (écriture seule, une fois) et
       // le mode de réponse PAR CANAL. ⚠️ Jamais un jeton en réponse.
-      chat: { service: chatService, mattermost: mattermostPort, discord: discordPort, logger },
+      chat: {
+        service: chatService,
+        mattermost: mattermostPort,
+        discord: discordPort,
+        logger,
+        // ⚠️ RETOMBÉE DU MODE après suppression d'un miroir : `chat.mode` est un réglage
+        // `apply: hot`, on l'écrit par le MÊME chemin que `PUT /api/config`.
+        saveMode: (mode: string) => {
+          config.update({ "chat.mode": mode });
+        },
+      },
       // Administration de la mémoire (archivage récupérable) : disponible
       // uniquement quand le service mémoire existe (porte passée).
-      ...(memoryService ? { memory: { admin: memoryService, logger } } : {}),
+      ...(memoryService
+        ? {
+            memory: {
+              admin: memoryService,
+              logger,
+              ...(consolidationHebdo ? { consolidation: consolidationHebdo } : {}),
+            },
+          }
+        : {}),
       // Administration de l'archive « vie antérieure » : INTERFACE uniquement.
       // RÉUTILISE le HeritageStore de LECTURE SEULE (l'outil du modèle reste
       // inchangé) ; disponible quand l'archive a été mise en place (porte passée).

@@ -56,6 +56,7 @@ import type { IncomingHttpHeaders } from "node:http";
 
 import {
   apercuCron,
+  ChainesFullError,
   DECLENCHEUR_EVENTS,
   isDeclencheurEvent,
   SourceApiError,
@@ -65,6 +66,7 @@ import {
   type DeclencheurJournalFilter,
   type DeclencheurJournalRecord,
   type SourceOpenResult,
+  type SourceChaineInput,
   type SourceSettingsInput,
   type SourcesLogger,
   type SourcesService,
@@ -223,6 +225,17 @@ function errorBody(error: unknown): SourcesHttpResponse {
       limit: error.limit,
     });
   }
+  // ⚠️ LOT 33 — chaîne refusée faute de place : 429, avec les DEUX nombres. Le message dit
+  // déjà « rien n'a été créé » (la création est atomique).
+  if (error instanceof ChainesFullError) {
+    return json(429, {
+      error: "chaines_full",
+      code: "chaines_full",
+      message: error.message,
+      placesRestantes: error.placesRestantes,
+      demandees: error.demandees,
+    });
+  }
   throw error;
 }
 
@@ -360,6 +373,17 @@ function settingsFrom(body: unknown): SourceSettingsInput {
   if (raw["actif"] !== undefined) {
     settings.actif = raw["actif"] as SourceSettingsInput["actif"];
   }
+  // ⚠️ FIN DE RÉCURRENCE (lot 32) : une CHAÎNE VIDE (ou `null`) RETIRE la borne —
+  // sinon on ne pourrait jamais revenir à « sans fin ». Toute autre valeur est transmise
+  // TELLE QUELLE au store, seule autorité de validation (1–10 000, ISO lisible).
+  if (raw["occurrencesMax"] !== undefined) {
+    const valeur = raw["occurrencesMax"];
+    settings.occurrencesMax = valeur === "" || valeur === null ? null : (valeur as number);
+  }
+  if (raw["jusquAu"] !== undefined) {
+    const valeur = raw["jusquAu"];
+    settings.jusquAu = valeur === "" || valeur === null ? null : String(valeur);
+  }
   return settings;
 }
 
@@ -440,6 +464,39 @@ export async function handleSourcesRequest(
       // `await` OBLIGATOIRE : sans lui, une erreur du handler sortirait du
       // `try/catch` ci-dessous et deviendrait un rejet de promesse.
       return await handleInbox(input, parts);
+    }
+
+    // ── CHAÎNES D'ÉTAPES (lot 33) ───────────────────────────────────────────
+    // ⚠️ UN SEUL appel avec `etapes[]`, ATOMIQUE (tout ou rien) : si la place manque
+    // (3 étapes demandées, 1 place), AUCUNE n'est créée et la réponse le dit (429).
+    // Chaque étape devient un déclencheur `planning` ordinaire, avec SON nom (celui qui
+    // porte les pré-autorisations).
+    if (parts.length === 1 && parts[0] === "chaines") {
+      if (method !== "POST") return json(405, { error: "method_not_allowed", method });
+      const guard = requireWriteGuards(input.headers);
+      if (guard) return { status: guard.status, body: guard.body, headers: guard.headers };
+      const body = parseJsonBody(input.body);
+      const brut = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+      const champs = brut as Record<string, unknown>;
+      const issue = deps.service.creerChaine({
+        ...(typeof champs["libelle"] === "string" ? { libelle: champs["libelle"] } : {}),
+        etapes: Array.isArray(champs["etapes"])
+          ? (champs["etapes"] as SourceChaineInput["etapes"])
+          : [],
+      });
+      if (!issue.ok) {
+        // ⚠️ Place insuffisante ⇒ 429 (comme `sources_full`), avec les DEUX nombres : on ne
+        // renvoie pas la personne vers un 400 « invalide » alors que sa chaîne est valide.
+        const code = issue.code ?? "invalid_chaine";
+        return json(code === "chaines_full" ? 429 : 400, {
+          error: code,
+          code,
+          message: issue.raison,
+          ...(issue.placesRestantes !== undefined ? { placesRestantes: issue.placesRestantes } : {}),
+          ...(issue.demandees !== undefined ? { demandees: issue.demandees } : {}),
+        });
+      }
+      return json(201, { chaineId: issue.chaineId, etapes: issue.etapes });
     }
 
     // ── Message poussé par une source (authentification par JETON) ─────────

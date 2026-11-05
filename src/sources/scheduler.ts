@@ -36,6 +36,7 @@ import { jourLocal, parseCron, prochainPassage } from "./cron.js";
 import type { DeclencheurJournal } from "./journal.js";
 import { ORIGINE_HORLOGE, type DeclenchementResult, type DeclenchementFin } from "./service.js";
 import {
+  DEFAULT_FUSEAU,
   DEFAULT_MAX_TOURS_PAR_JOUR,
   DEFAULT_PLAFOND_MS,
   RATTRAPAGE_MAX_MS,
@@ -62,6 +63,11 @@ export type DeclencheurRunner = (
     planifie?: number;
     plafondMs: number;
     signal: AbortSignal;
+    /**
+     * ⚠️ LOT 31 — la tâche ponctuelle a été DÉSARMÉE PAR LE BALAYEUR avant ce lancement
+     * (un plantage ne doit pas la rejouer). Ce drapeau évite le refus « en veille ».
+     */
+    desarmementPrealable?: boolean;
   },
 ) => Promise<DeclenchementResult>;
 
@@ -75,6 +81,11 @@ export interface BalayeurStore {
   ): SourceRecord | undefined;
   setActif(nom: string, actif: boolean, raison?: string): SourceRecord | undefined;
   incrementerTour(nom: string, jour: string): number;
+  /**
+   * ⚠️ LOT 32 — compte un passage RÉELLEMENT TIRÉ (jamais un saut) et rend le total.
+   * Persisté : c'est ce qui rend « reste 6/14 » vrai après un redémarrage.
+   */
+  incrementerOccurrence(nom: string): number;
 }
 
 /**
@@ -94,6 +105,22 @@ export interface EnvoisProgrammesRunner {
   executerDus(maintenant: number): Promise<number>;
 }
 
+/**
+ * Port de la CONSOLIDATION HEBDOMADAIRE de la mémoire (lot 29).
+ *
+ * ⚠️ MÊME RAISON D'ÊTRE QUE LES ENVOIS PROGRAMMÉS : la passe est un rendez-vous
+ * planifié (« le dimanche à 3 h, heure de Paris »). Elle est donc décidée par CE
+ * balayeur — un seul `setInterval` dans le processus, aucun `SourceRecord`
+ * (elle n'a ni tâche déléguée, ni publication dans un fil).
+ *
+ * ⚠️ La méthode est appelée à CHAQUE tick et doit rendre la main VITE : la passe
+ * elle-même est longue (`await` interne interdit), et son verrou `enCours`
+ * empêche deux exécutions simultanées.
+ */
+export interface PasseHebdoRunner {
+  executerSiDu(maintenant: number): Promise<void>;
+}
+
 export interface DeclencheurBalayeurOptions {
   store: BalayeurStore;
   run: DeclencheurRunner;
@@ -102,6 +129,8 @@ export interface DeclencheurBalayeurOptions {
   journal?: Pick<DeclencheurJournal, "append">;
   /** Envois programmés (lot 28). Absent ⇒ aucun envoi n'est exécuté par ce balayeur. */
   envoisProgrammes?: EnvoisProgrammesRunner;
+  /** Consolidation hebdomadaire de la mémoire (lot 29). Absent ⇒ rien n'est planifié. */
+  passeHebdo?: PasseHebdoRunner;
   /** Horloge injectable (tests). */
   now?: () => number;
   /** Planificateur périodique injectable (tests). */
@@ -119,7 +148,46 @@ export interface DeclencheurBalayeurOptions {
   origine?: string;
 }
 
-/** Raison LISIBLE d'une suspension par le garde-fou quotidien. */
+/**
+ * Raison persistée pendant l'exécution d'une tâche ponctuelle.
+ *
+ * ⚠️ C'est le texte que lit la page de gestion si le processus meurt pendant l'exécution
+ * (le motif final « terminée : … »/« échouée : … » est écrit à la fin). Il dit ce qui
+ * s'est RÉELLEMENT passé, pas « en cours » sans plus.
+ */
+export const RAISON_TACHE_EN_COURS = "en cours d'exécution (désarmée avant lancement)";
+
+/**
+ * Raison LISIBLE de l'extinction par FIN DE RÉCURRENCE (lot 32).
+ *
+ * ⚠️ Même canal que `DÉSACTIVER` (`setActif(false, raison)` + journal `desactive`) : la
+ * page de gestion affiche donc cette phrase à côté de l'état, et l'utilisateur sait
+ * POURQUOI le déclencheur s'est arrêté.
+ */
+export function raisonFinOccurrences(faites: number, max: number): string {
+  return `terminée : ${faites}/${max} passages`;
+}
+
+/** Raison LISIBLE de l'extinction par DATE de fin (`jusquAu`, lot 32). */
+export function raisonFinDate(instant: number, fuseau: string | undefined): string {
+  return `terminée : fin prévue le ${dateLongue(instant, fuseau)}`;
+}
+
+/** Date longue en français (« 19 novembre 2026 »), dans le fuseau du déclencheur. */
+function dateLongue(instant: number, fuseau: string | undefined): string {
+  try {
+    return new Intl.DateTimeFormat("fr-FR", {
+      timeZone: fuseau ?? DEFAULT_FUSEAU,
+      dateStyle: "long",
+    }).format(new Date(instant));
+  } catch {
+    return new Date(instant).toISOString();
+  }
+}
+
+/**
+ * Raison LISIBLE d'une suspension par le garde-fou quotidien.
+ */
 export function raisonGardeFouQuotidien(max: number, jour: string): string {
   return (
     `Nombre maximal de tours par jour atteint (${max} le ${jour}) : le déclencheur ` +
@@ -235,10 +303,25 @@ export class DeclencheurBalayeur {
           });
         }
       }
+      // ⚠️ CONSOLIDATION HEBDOMADAIRE (lot 29) : décidée ici, JAMAIS attendue. Une
+      // passe peut durer plusieurs minutes (plusieurs appels au modèle lourd) :
+      // l'attendre retarderait tous les déclencheurs planifiés du même tick.
+      // Le verrou `enCours` de la passe garantit qu'un seul travail tourne.
+      if (this.options.passeHebdo) {
+        void this.options.passeHebdo.executerSiDu(maintenant).catch((error: unknown) => {
+          this.options.logger.warn("sources.balayeur.passe_hebdo_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
       for (const record of this.options.store.list()) {
-        if (record.declencheur.type !== "planning") continue;
         if (record.actif === false) continue;
-        await this.balayer(record, maintenant);
+        if (record.declencheur.type === "planning") await this.balayer(record, maintenant);
+        // ⚠️ LOT 31 — TÂCHE PONCTUELLE (`planifier_tache`) : un SEUL passage, à un instant
+        // absolu. Elle est balayée par CE tick (aucun second ordonnanceur).
+        else if (record.declencheur.type === "ponctuel") {
+          await this.balayerPonctuel(record, maintenant);
+        }
       }
     } catch (error) {
       this.options.logger.warn("sources.balayeur.tick_failed", {
@@ -277,7 +360,24 @@ export class DeclencheurBalayeur {
     // ② Pas encore l'heure.
     if (maintenant < arme) return;
 
-    // ③ L'heure est passée : on RÉARME d'abord (un plantage ne double pas le tir).
+    // ③ L'heure est passée. ⚠️ FIN DE RÉCURRENCE (lot 32) AVANT le réarmement : quand la
+    // récurrence est finie, on ne réécrit NI `dernierPassage` (le passage n'a pas eu lieu)
+    // NI `prochainPassage`.
+    // Deux formes indépendantes :
+    //   • `occurrencesMax` : le compteur est PERSISTÉ et ne compte que les passages
+    //     réellement tirés (jamais un saut) ; dès qu'il a atteint le maximum, plus aucun
+    //     passage ne part ;
+    //   • `jusquAu` : passé cet instant, plus aucun passage ne part.
+    // ⚠️ L'extinction passe par `setActif(false, raison)` + journal `desactive` — le
+    // MÊME canal que `DÉSACTIVER`, donc la même visibilité dans `/config`.
+    const fin = this.finDeRecurrence(record, maintenant, fuseau);
+    if (fin !== undefined) {
+      this.options.store.setActif(nom, false, fin);
+      this.journaler("desactive", nom, fin);
+      return;
+    }
+
+    // ③ ter On RÉARME ensuite (un plantage ne double pas le tir).
     const retard = maintenant - arme;
     const suivant = this.calculer(calendrier, fuseau, maintenant, nom);
     this.options.store.markPlanification(nom, {
@@ -340,8 +440,123 @@ export class DeclencheurBalayeur {
     await this.lancer(record, arme);
   }
 
+  /**
+   * Fin de récurrence ATTEINTE ? Rend la raison LISIBLE de l'extinction, ou `undefined`.
+   *
+   * ⚠️ `occurrencesMax` : on compare le compteur DÉJÀ persisté — celui du passage qui
+   * vient de se terminer. Incrémenter ici compterait aussi les passages SAUTÉS (le
+   * réarmement précède les règles de rattrapage et de chevauchement), ce qui afficherait
+   * « 14/14 passages » alors que Yuki n'a rien exécuté : le compteur est incrémenté au
+   * seul endroit où le passage est réellement lancé.
+   */
+  private finDeRecurrence(
+    record: SourceRecord,
+    maintenant: number,
+    fuseau: string,
+  ): string | undefined {
+    const max = record.occurrencesMax;
+    if (typeof max === "number" && Number.isFinite(max) && max >= 1) {
+      const faites = Math.max(0, Math.trunc(record.occurrencesFaites ?? 0));
+      if (faites >= Math.trunc(max)) return raisonFinOccurrences(faites, Math.trunc(max));
+    }
+    if (typeof record.jusquAu === "string" && record.jusquAu !== "") {
+      const limite = this.instant(record.jusquAu);
+      if (limite !== undefined && maintenant > limite) {
+        return raisonFinDate(limite, fuseau);
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * UN passage de tâche PONCTUELLE (lot 31).
+   *
+   * ⚠️ ORDRE CRITIQUE : **désarmer AVANT de lancer**. Le motif est persisté
+   * (`setActif(false, …)`) AVANT l'appel au runner : si le processus meurt pendant
+   * l'exécution, le redémarrage ne trouve plus de tâche active et ne la rejoue donc pas.
+   * À la fin, le motif devient « terminée : <heure> » ou « échouée : <raison> » — le même
+   * canal que `DÉSACTIVER`, donc la même visibilité dans `/config`.
+   *
+   * ⚠️ Une échéance manquée de plus de `RATTRAPAGE_MAX_MS` (1 h, machine arrêtée) n'est
+   * PAS exécutée en retard : une tâche ponctuelle dit quelque chose de daté (« le résumé
+   * du journal de 7 h »), la rejouer à 15 h tromperait. Elle est dite « non exécutée ».
+   */
+  private async balayerPonctuel(record: SourceRecord, maintenant: number): Promise<void> {
+    if (record.declencheur.type !== "ponctuel") return;
+    const nom = record.nom;
+    const echeance = this.instant(record.declencheur.a);
+    if (echeance === undefined) {
+      const raison = `Date de la tâche illisible (« ${record.declencheur.a} ») : elle ne peut pas être exécutée.`;
+      this.options.store.setActif(nom, false, raison);
+      this.journaler("desactive", nom, raison);
+      return;
+    }
+    if (maintenant < echeance) return;
+
+    const heure = this.heureLisible(echeance, record.declencheur.fuseau);
+    const retard = maintenant - echeance;
+    // ⚠️ DÉSARMER D'ABORD (voir le commentaire du dessus), puis décider.
+    this.options.store.setActif(nom, false, RAISON_TACHE_EN_COURS);
+
+    if (retard > RATTRAPAGE_MAX_MS) {
+      const raison =
+        `non exécutée : l'échéance du ${heure} est passée depuis ` +
+        `${Math.round(retard / 60_000)} min (maximum exécutable en retard : ` +
+        `${Math.round(RATTRAPAGE_MAX_MS / 60_000)} min).`;
+      this.journaler("saut", nom, raison);
+      this.options.store.setActif(nom, false, raison);
+      this.journaler("desactive", nom, raison);
+      return;
+    }
+
+    const resultat = await this.lancer(record, echeance, { desarmementPrealable: true });
+    if (resultat.outcome !== "started" || resultat.fin === undefined) {
+      const raison = `échouée : ${resultat.raison ?? "elle n'a pas pu démarrer."}`;
+      this.options.store.setActif(nom, false, raison);
+      this.journaler("desactive", nom, raison);
+      return;
+    }
+    // ⚠️ Le motif définitif attend la VRAIE fin (résultat du worker), sans bloquer le
+    // tick : le balayeur ne s'arrête pas sur une tâche de fond.
+    void resultat.fin
+      .then((fin) => {
+        const raison =
+          fin.reason === "done"
+            ? `terminée : ${heure}`
+            : `échouée : ${
+                fin.plafond
+                  ? "plafond d'exécution atteint (voir la conversation)"
+                  : "la tâche de fond n'a pas abouti (voir la conversation)"
+              }`;
+        this.options.store.setActif(nom, false, raison);
+        this.journaler("desactive", nom, raison);
+      })
+      .catch(() => undefined);
+  }
+
+  /** Heure lisible (« 4 novembre 2026 à 08:00 ») d'une échéance, dans son fuseau. */
+  private heureLisible(instant: number, fuseau: string | undefined): string {
+    try {
+      return new Intl.DateTimeFormat("fr-FR", {
+        timeZone: fuseau ?? DEFAULT_FUSEAU,
+        dateStyle: "long",
+        timeStyle: "short",
+      }).format(new Date(instant));
+    } catch {
+      return new Date(instant).toISOString();
+    }
+  }
+
   /** Lance un tour et retient sa place jusqu'à sa VRAIE fin (ou le plafond). */
-  private async lancer(record: SourceRecord, arme: number): Promise<void> {
+  private async lancer(
+    record: SourceRecord,
+    arme: number,
+    options: { desarmementPrealable?: boolean } = {},
+  ): Promise<{
+    outcome: DeclenchementResult["outcome"];
+    raison?: string;
+    fin?: Promise<DeclenchementFin>;
+  }> {
     const nom = record.nom;
     const plafondMs = Math.max(60_000, record.plafondMs ?? DEFAULT_PLAFOND_MS);
     const controller = new AbortController();
@@ -363,18 +578,23 @@ export class DeclencheurBalayeur {
         planifie: arme,
         plafondMs,
         signal: controller.signal,
+        ...(options.desarmementPrealable === true ? { desarmementPrealable: true } : {}),
       });
     } catch (error) {
       this.clearTimeoutFn(minuteur);
-      this.journaler("echec", nom, `Le passage n'a pas pu démarrer : ${messageOf(error)}`);
-      return;
+      const raison = `Le passage n'a pas pu démarrer : ${messageOf(error)}`;
+      this.journaler("echec", nom, raison);
+      return { outcome: "failed", raison };
     }
     if (resultat.outcome !== "started") {
       this.clearTimeoutFn(minuteur);
       if (resultat.outcome === "failed") {
         this.journaler("echec", nom, resultat.raison ?? "Le passage n'a pas pu démarrer.");
       }
-      return;
+      return {
+        outcome: resultat.outcome,
+        ...(resultat.raison !== undefined ? { raison: resultat.raison } : {}),
+      };
     }
     // ⚠️ Filet : si le host ne rend jamais `run_finished` (abort non appliqué),
     // la place est libérée après le plafond + une grâce — jamais un blocage muet.
@@ -402,11 +622,24 @@ export class DeclencheurBalayeur {
         if (this.enVol.get(nom) === tour) this.enVol.delete(nom);
         this.options.logger.info("sources.balayeur.tour.termine", { source: nom });
       });
+    // ⚠️ LOT 32 — LE COMPTEUR DE PASSAGES (persisté) n'est incrémenté ICI qu'une fois
+    // le tour RÉELLEMENT lancé : un saut (rattrapage refusé, chevauchement, garde-fou)
+    // n'a jamais compté. Il est écrit avant la fin du tour : un plantage ne le remet pas
+    // à zéro au redémarrage.
+    if (record.declencheur.type === "planning") {
+      const compte = this.options.store.incrementerOccurrence(nom);
+      this.options.logger.info("sources.balayeur.passage.compte", {
+        source: nom,
+        occurrences: compte,
+        ...(record.occurrencesMax !== undefined ? { maximum: record.occurrencesMax } : {}),
+      });
+    }
     this.options.logger.info("sources.balayeur.tour.lance", {
       source: nom,
       planifie: new Date(arme).toISOString(),
       plafond_ms: plafondMs,
     });
+    return { outcome: "started", fin };
   }
 
   /** Prochain passage calculé, ou suspension EXPLICITE si l'expression est impossible. */

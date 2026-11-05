@@ -38,6 +38,7 @@ function spyDiscord(overrides: Partial<ChatDiscordPort> = {}) {
     maxUploadBytes: 8 * 1024 * 1024,
     token: false,
     connected: 0,
+    deconnected: 0,
     modes: new Map<string, ChatReplyMode>(),
   };
   const view = (): ChatDiscordView => ({
@@ -53,6 +54,7 @@ function spyDiscord(overrides: Partial<ChatDiscordPort> = {}) {
       backfill: { fait: false, imports: 0, borneAtteinte: false },
       rattrapageActif: false,
     },
+    miroir: { conversations: 1, messages: 2, octets: 128 },
     canaux: [
       {
         id: "dc-canal-1",
@@ -83,6 +85,13 @@ function spyDiscord(overrides: Partial<ChatDiscordPort> = {}) {
     connect: async () => {
       state.connected += 1;
     },
+    // ⚠️ Le débranchement efface le jeton et arrête la synchro : le miroir reste.
+    deconnecter: async () => {
+      state.token = false;
+      state.deconnected = (state.deconnected ?? 0) + 1;
+    },
+    miroir: () => ({ conversations: 0, messages: 0, octets: 0 }),
+    supprimerMiroir: () => ({ conversations: 0, messages: 0, octets: 0 }),
     view,
     replySettings: (conversationId) =>
       conversationId === "dc-canal-1"
@@ -117,6 +126,7 @@ function spyMattermost(): ChatMattermostPort {
       backfill: { fait: false, imports: 0, borneAtteinte: false },
       rattrapageActif: false,
     },
+    miroir: { conversations: 0, messages: 0, octets: 0 },
     canaux: [],
   });
   return {
@@ -125,6 +135,9 @@ function spyMattermost(): ChatMattermostPort {
     tokenConfigured: () => false,
     saveToken: () => undefined,
     connect: async () => undefined,
+    deconnecter: async () => undefined,
+    miroir: () => ({ conversations: 0, messages: 0, octets: 0 }),
+    supprimerMiroir: () => ({ conversations: 0, messages: 0, octets: 0 }),
     view,
     replySettings: () => undefined,
     applyReplySettings: () => false,

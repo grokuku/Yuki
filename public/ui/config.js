@@ -360,6 +360,58 @@ const GROUPS = [
         advanced: true,
         helper: "Hors chemin de réponse : n'affecte jamais le temps de réponse visible.",
       },
+      {
+        path: "memory.consolidation.enabled",
+        label: "Consolidation hebdomadaire",
+        kind: "select",
+        options: [
+          ["on", "activée"],
+          ["off", "désactivée"],
+        ],
+        helper:
+          "Une passe relit TOUTE la mémoire avec le modèle LOURD : elle fusionne les doublons, corrige et " +
+          "supprime ce qui est transitoire. Chaque passe est archivée (versions restaurables ci-dessous).",
+      },
+      {
+        path: "memory.consolidation.cron",
+        label: "Quand (expression cron)",
+        kind: "text",
+        advanced: true,
+        helper:
+          "5 champs « minute heure jour-du-mois mois jour-de-semaine ». Défaut « 0 3 * * 0 » = dimanche " +
+          "03:00 dans le fuseau ci-dessous. Un passage manqué est rattrapé UNE fois s'il a moins de 24 h.",
+      },
+      {
+        path: "memory.consolidation.timeZone",
+        label: "Fuseau de la planification",
+        kind: "text",
+        advanced: true,
+        helper:
+          "Fuseau IANA de l'heure de la passe (défaut Europe/Paris = « 3 h du matin à Paris »). " +
+          "⚠️ Distinct du fuseau d'AFFICHAGE des horodatages, qui reste UTC.",
+      },
+      {
+        path: "memory.consolidation.budgetTokens",
+        label: "Budget de tokens par passe",
+        kind: "number",
+        min: 1000,
+        max: 2000000,
+        advanced: true,
+        helper:
+          "Plafond du volume envoyé au modèle. Il ne dépasse jamais le contexte réel du modèle lourd. " +
+          "Si toute la mémoire tient dedans, elle est traitée en UN SEUL lot.",
+      },
+      {
+        path: "memory.consolidation.retention",
+        label: "Versions conservées",
+        kind: "number",
+        min: 1,
+        max: 100,
+        advanced: true,
+        helper:
+          "Nombre d'archives de consolidation gardées (12 ≈ 3 mois). Au-delà, la plus ancienne est purgée " +
+          "et la purge est journalisée.",
+      },
     ],
   },
   {
@@ -869,6 +921,11 @@ const FIELD_DEFAULTS = {
   "memory.recall.timeoutMs": 400,
   "memory.extract.maxItems": 3,
   "memory.extract.timeoutMs": 30000,
+  "memory.consolidation.enabled": "on",
+  "memory.consolidation.cron": "0 3 * * 0",
+  "memory.consolidation.timeZone": "Europe/Paris",
+  "memory.consolidation.budgetTokens": 200000,
+  "memory.consolidation.retention": 12,
   "tts.enabled": "off",
   "tts.engine": "chatterbox",
   "tts.baseUrl": "http://tts:8081",

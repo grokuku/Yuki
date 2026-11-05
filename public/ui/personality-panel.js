@@ -120,6 +120,8 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     memoryRecent: [],
     memoryStatus: "",
     memoryLoaded: false,
+    // Consolidation hebdomadaire (lot 29) : état, dernier rapport et VERSIONS.
+    memoryConsolidation: null,
     // Règles strictes (éditées UNIQUEMENT par l'utilisateur) — séparées.
     rules: {
       text: "",
@@ -176,11 +178,18 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
       state.memoryArchiveDir = typeof body?.archiveDir === "string" ? body.archiveDir : "";
       // Aperçu des souvenirs récents (données RÉELLES du store, jamais des fausses).
       state.memoryRecent = Array.isArray(body?.recent) ? body.recent : [];
+      // Consolidation hebdomadaire : réglages effectifs, dernier rapport et
+      // versions archivées. Absente ⇒ la section « versions » n'est pas rendue.
+      state.memoryConsolidation =
+        body && typeof body.consolidation === "object" && body.consolidation !== null
+          ? body.consolidation
+          : null;
       state.memoryLoaded = true;
     } catch {
       // La mémoire n'est pas disponible (porte non passée) : le bloc reste discret.
       state.memoryArchiveDir = "";
       state.memoryRecent = [];
+      state.memoryConsolidation = null;
       state.memoryLoaded = false;
     }
     render();
@@ -692,6 +701,140 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     return details;
   }
 
+  /** Date lisible d'une version : `AAAA-MM-JJ HH:MM` (fuseau de la planification). */
+  function versionDateLabel(version) {
+    const nom = String(version?.nom ?? "");
+    const match = /^(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})/.exec(nom);
+    return match ? `${match[1]} ${match[2]}:${match[3]}` : nom;
+  }
+
+  /**
+   * RESTAURE une version de la mémoire (amendement ②).
+   * ⚠️ Confirmation via HolafModal : le libellé dit CE QUI sera remplacé et ce
+   * qui ne l'est PAS. La restauration est atomique côté serveur et reconstruit
+   * l'index de recherche.
+   */
+  async function restaurerVersion(version) {
+    const quand = versionDateLabel(version);
+    const confirmed = await HolafModal.confirm(
+      "Restaurer cette version de la mémoire ?",
+      `La mémoire ACTUELLE sera remplacée par son état du ${quand} ` +
+        `(${version?.entreesAvant ?? "?"} souvenir(s)). L'index de recherche sera reconstruit. ` +
+        "Ce n'est PAS une suppression : l'état actuel reste archivé dans une version.",
+      { danger: true, confirmText: "Restaurer cette version", cancelText: "Annuler" },
+    );
+    if (!confirmed) return;
+    state.memoryStatus = "Restauration…";
+    if (state.memoryStatusEl) state.memoryStatusEl.textContent = state.memoryStatus;
+    try {
+      const body = await HolafFetch.post(
+        "/api/memory/versions/" + encodeURIComponent(String(version?.nom ?? "")) + "/restore",
+        { headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "memory-version-restore" } },
+      );
+      state.memoryStatus = body?.message ?? "Mémoire restaurée.";
+      await loadMemory();
+    } catch (error) {
+      state.memoryStatus = apiMessage(error, "Restauration impossible.");
+    }
+    if (state.memoryStatusEl) state.memoryStatusEl.textContent = state.memoryStatus;
+  }
+
+  /** Résumé lisible d'un rapport de consolidation (mesures comprises). */
+  function renderMemoryReport(rapport) {
+    const details = h("details", { class: "personality-memory__report" }, [
+      h("summary", { text: "Dernière passe de consolidation" }),
+    ]);
+    const quand = String(rapport?.at ?? "");
+    const lignes = [
+      `Passe du ${quand || "?"}${rapport?.version ? ` (version ${rapport.version})` : ""}.`,
+      `${rapport?.entrees ?? 0} entrée(s), ${rapport?.caracteres ?? 0} caractère(s).`,
+      `Tokens estimés : ${rapport?.tokensEstimes ?? 0} (${rapport?.mesure?.hypothese ?? "hypothèse inconnue"}).`,
+      `Contexte du modèle lourd : ${rapport?.contexteModele ?? 0} tokens ; budget retenu : ${rapport?.budgetTokens ?? 0}.`,
+      `${rapport?.lots ?? 0} lot(s), ${rapport?.pourcentContexte ?? 0} % du contexte utilisé.`,
+      `Entrées non examinées (plafond de sécurité) : ${rapport?.nonExaminees ?? 0}.`,
+      `Résultat : ${rapport?.entreesAvant ?? 0} → ${rapport?.entreesApres ?? 0} entrée(s), ` +
+        `${rapport?.operations ?? 0} opération(s) appliquée(s), ${rapport?.signalements ?? 0} signalement(s).`,
+    ];
+    if (rapport?.refus) {
+      lignes.push(`⚠️ Passe REFUSÉE (aucune modification) : ${rapport.refus}`);
+    }
+    const liste = h("ul", { class: "personality-help" });
+    for (const ligne of lignes) liste.append(h("li", { text: ligne }));
+    details.append(liste);
+    return details;
+  }
+
+  /**
+   * Bloc « Versions de la mémoire » (amendement ②) : liste des archives de la
+   * consolidation hebdomadaire, avec TÉLÉCHARGEMENT et RESTAURATION.
+   * Aucun style inline, aucune écriture de HTML brut (CSP stricte).
+   */
+  function renderMemoryVersions() {
+    const consolidation = state.memoryConsolidation;
+    if (!consolidation) return null;
+    const versions = Array.isArray(consolidation.versions) ? consolidation.versions : [];
+    const block = h("section", { class: "personality-memory__versions" });
+    block.append(
+      h("h4", { class: "personality-memory__versions-title", text: "Versions de la mémoire" }),
+    );
+    block.append(
+      h("p", {
+        class: "config-helper",
+        text:
+          "Chaque passe de consolidation archive l'état d'AVANT dans un dossier daté " +
+          `(${consolidation.archiveDir || "memory-archive/consolidation"}). Vous pouvez la ` +
+          "TÉLÉCHARGER (fichier memory.jsonl) ou RESTAURER cet état : rien n'est perdu.",
+      }),
+    );
+    const prochain = consolidation.prochainPassage
+      ? `Prochaine passe : ${String(consolidation.prochainPassage)} (${consolidation.fuseau}, ${consolidation.cron}).`
+      : `Aucune passe armée pour l'instant (${consolidation.fuseau}, ${consolidation.cron}).`;
+    block.append(h("p", { class: "config-helper", text: prochain }));
+    if (consolidation.dernierRapport) {
+      block.append(renderMemoryReport(consolidation.dernierRapport));
+    }
+    if (versions.length === 0) {
+      block.append(
+        h("p", {
+          class: "config-helper personality-memory__versions-empty",
+          text: "Aucune passe archivée pour l'instant : la première version apparaîtra après la prochaine consolidation.",
+        }),
+      );
+      return block;
+    }
+    const liste = h("ul", { class: "personality-memory__versions-list" });
+    for (const version of versions) {
+      const row = h("li", { class: "personality-memory__versions-item" });
+      row.append(
+        h("span", { class: "personality-memory__versions-date", text: versionDateLabel(version) }),
+      );
+      row.append(
+        h("span", {
+          class: "config-helper",
+          text:
+            `${version?.entreesAvant ?? 0} → ${version?.entreesApres ?? 0} entrée(s), ` +
+            `${version?.operations ?? 0} opération(s)`,
+        }),
+      );
+      const lien = h("a", {
+        class: "button button--ghost button--small",
+        href: "/api/memory/versions/" + encodeURIComponent(String(version?.nom ?? "")) + "/download",
+        download: `memoire-${String(version?.nom ?? "version")}.jsonl`,
+        text: "Télécharger",
+      });
+      const restore = h("button", {
+        class: "button button--danger button--small",
+        type: "button",
+        text: "Restaurer",
+      });
+      restore.addEventListener("click", () => void restaurerVersion(version));
+      row.append(h("div", { class: "personality-memory__actions" }, [lien, restore]));
+      liste.append(row);
+    }
+    block.append(liste);
+    return block;
+  }
+
   /**
    * Bloc « Mémoire durable », VISUELLEMENT DISTINCT du formulaire de personnalité
    * (encadré dédié, bouton de danger) : on ne veut pas cliquer dessus par erreur.
@@ -745,6 +888,8 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     state.memoryStatusEl.textContent = state.memoryStatus;
     actions.append(state.memoryStatusEl);
     block.append(actions);
+    const versions = renderMemoryVersions();
+    if (versions) block.append(versions);
     return block;
   }
 

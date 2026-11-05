@@ -108,6 +108,55 @@ export const MESSAGE_CONTENT_OK = "Intent MESSAGE_CONTENT : activé.";
 export const MESSAGE_CONTENT_UNKNOWN =
   "Intent MESSAGE_CONTENT : pas encore vérifié (lancez la connexion pour le savoir).";
 
+/**
+ * Nombre lisible d'octets (français, une décimale).
+ *
+ * ⚠️ Sert à AFFICHER l'ampleur de ce qu'une suppression ferait perdre — jamais à décider.
+ */
+export function formatOctets(octets) {
+  const n = Number.isFinite(octets) ? Math.max(0, Math.trunc(octets)) : 0;
+  if (n < 1024) return `${n} octet${n > 1 ? "s" : ""}`;
+  const ko = n / 1024;
+  if (ko < 1024) return `${ko.toFixed(1).replace(".", ",")} Kio`;
+  return `${(ko / 1024).toFixed(1).replace(".", ",")} Mio`;
+}
+
+/** Phrase de confirmation de la case à cocher (saisie EXPLICITE, pas un simple « OK »). */
+export const CONFIRMATION_SUPPRESSION =
+  "Je comprends que ces conversations seront effacées définitivement et ne pourront " +
+  "pas être récupérées.";
+
+/**
+ * Texte affiché AVANT de supprimer : ce qui sera perdu, en clair.
+ *
+ * ⚠️ On ne demande pas de confirmer une destruction sans en montrer l'ampleur : nombre de
+ * conversations, nombre de messages, taille du miroir.
+ */
+export function texteSuppression(platform, miroir) {
+  const nom = platform === "discord" ? "Discord" : "Mattermost";
+  const conversations = Number(miroir?.conversations ?? 0);
+  const messages = Number(miroir?.messages ?? 0);
+  const octets = Number(miroir?.octets ?? 0);
+  return (
+    `La connexion ${nom} sera supprimée : ${conversations} ` +
+    `conversation${conversations > 1 ? "s" : ""} et ${messages} ` +
+    `message${messages > 1 ? "s" : ""} du miroir (${formatOctets(octets)}) seront ` +
+    "effacés, ainsi que le jeton du bot dans le coffre."
+  );
+}
+
+/** Texte du débranchement (action NON destructive : le miroir reste). */
+export function texteDebranchement(platform, miroir) {
+  const nom = platform === "discord" ? "Discord" : "Mattermost";
+  const conversations = Number(miroir?.conversations ?? 0);
+  return (
+    `Débrancher ${nom} ? Le jeton du bot sera effacé et la synchronisation arrêtée. ` +
+    `Les ${conversations} conversation${conversations > 1 ? "s" : ""} déjà importée` +
+    `${conversations > 1 ? "s" : ""} resteront lisibles dans leur onglet : il suffira de ` +
+    "remettre le jeton pour repartir."
+  );
+}
+
 /** Description d'une plateforme : ce qui la distingue, rien de plus. */
 const PLATFORMS = [
   {
@@ -451,7 +500,7 @@ export function initChatPanel(deps) {
 
   /** Une section par plateforme, construite par la MÊME fabrique. */
   const platforms = PLATFORMS.map((description) =>
-    renderPlatform({ description, request, report, shared, refresh }),
+    renderPlatform({ description, request, report, shared, refresh, modal }),
   );
 
   /**
@@ -516,7 +565,7 @@ export function initChatPanel(deps) {
  * ici UNE fois. Les `extraFields` sont la seule différence : URL du serveur pour Mattermost,
  * serveur suivi + borne d'envoi pour Discord.
  */
-function renderPlatform({ description, request, report, shared, refresh }) {
+function renderPlatform({ description, request, report, shared, refresh, modal }) {
   const platform = description.id;
   const section = h("section", { class: "config-group" });
   const title = h("h2", { class: "config-group__title", text: description.titre });
@@ -722,6 +771,145 @@ function renderPlatform({ description, request, report, shared, refresh }) {
   bannerLine.hidden = true;
   const channelsList = h("ul", { class: "chat-panel__channels" });
 
+  // ─── Débrancher / Supprimer la connexion (lot 30) ──────────────────────────
+  // ⚠️ DEUX actions DISTINCTES, jamais une seule :
+  //  · Débrancher = jeton effacé + synchro arrêtée, MIROIR CONSERVÉ (réversible) ;
+  //  · Supprimer  = jeton ET miroir effacés (DESTRUCTIF, IRRÉVERSIBLE) — confirmation
+  //    FORTE : compteurs affichés + case à cocher explicite (`HolafModal`, jamais
+  //    `window.confirm`).
+  const disconnectButton = h("button", {
+    class: "button button--ghost button--small",
+    type: "button",
+    text: "Débrancher",
+  });
+  const removeButton = h("button", {
+    class: "button button--stop button--small",
+    type: "button",
+    text: "Supprimer la connexion",
+  });
+  const dangerActions = h("div", { class: "config-actions" }, [disconnectButton, removeButton]);
+  const dangerRow = h("div", { class: "chat-panel__field" }, [
+    h("h3", { class: "config-group__title", text: "Connexion" }),
+    dangerActions,
+    h("p", {
+      class: "config-helper",
+      text:
+        "« Débrancher » efface le jeton et arrête la synchronisation : les conversations " +
+        "déjà importées restent lisibles, et remettre le jeton suffit à repartir. " +
+        "« Supprimer la connexion » efface AUSSI ces conversations (action destructive, " +
+        "irréversible).",
+    }),
+  ]);
+
+  /** Vue courante de CETTE plateforme (ce que l'utilisateur vient de lire). */
+  function vueCourante() {
+    return shared.state?.[platform] ?? {};
+  }
+
+  /**
+   * Confirmation FORTE d'une suppression : compteurs + CASE À COCHER explicite.
+   *
+   * ⚠️ Pas un simple « OK » : le bouton destructeur reste DÉSACTIVÉ tant que la case
+   * n'est pas cochée (et `onClick` refuse de toute façon), et le texte dit ce qui sera
+   * perdu (`texteSuppression`).
+   *
+   * @returns `true` seulement si l'utilisateur a coché la case puis confirmé.
+   */
+  async function confirmerSuppression(miroir) {
+    if (!modal?.open) {
+      // ⚠️ Sans modale, aucune confirmation possible : on REFUSE, on ne dégrade pas en
+      // action destructive silencieuse.
+      setError(
+        "Suppression impossible : la fenêtre de confirmation n'est pas disponible dans " +
+          "cette page. Rechargez /config.",
+      );
+      return false;
+    }
+    const idCase = `chat-${platform}-confirme-suppression`;
+    const laCase = h("input", { type: "checkbox", id: idCase });
+    const corps = h("div", { class: "chat-panel__danger" }, [
+      h("p", { text: texteSuppression(platform, miroir) }),
+      h("p", {
+        class: "config-error",
+        text:
+          "Cette action est IRRÉVERSIBLE : le miroir (les fichiers des conversations) et " +
+          "le jeton du bot seront effacés, sans corbeille.",
+      }),
+      h("label", { class: "config-label", for: idCase }, [laCase, ` ${CONFIRMATION_SUPPRESSION}`]),
+    ]);
+    return new Promise((resolve) => {
+      modal.open({
+        title: "Supprimer la connexion",
+        size: "sm",
+        content: corps,
+        closeOnOverlay: false,
+        buttons: [
+          { text: "Annuler", value: false, type: "cancel", guard: false },
+          {
+            text: "Supprimer définitivement",
+            value: true,
+            type: "danger",
+            // Double garde : le bouton est désactivé, et le clic refuse tant que la
+            // case n'est pas cochée.
+            onClick: () => laCase.checked === true,
+          },
+        ],
+        onOpen: (ctrl) => {
+          const bouton = ctrl?.footer?.querySelector?.(".holaf-modal-btn-danger") ?? null;
+          if (!bouton) return;
+          bouton.disabled = true;
+          laCase.addEventListener("change", () => {
+            bouton.disabled = laCase.checked !== true;
+          });
+        },
+        onClose: (resultat) => resolve(resultat === true),
+      });
+    });
+  }
+
+  disconnectButton.addEventListener("click", () => {
+    void (async () => {
+      const confirme = modal?.confirm
+        ? await modal.confirm("Débrancher la connexion", texteDebranchement(platform, vueCourante().miroir), {
+            confirmText: "Débrancher",
+          })
+        : true;
+      if (!confirme) return;
+      try {
+        await request(`/api/chat/${platform}/connexion`, {
+          method: "DELETE",
+          headers: WRITE_HEADERS,
+        });
+        // ⚠️ Le panneau se met à jour : état `off`, champs vidés, compteurs relus.
+        tokenInput.value = "";
+        await refreshSelf();
+      } catch (error) {
+        await report(setError, "Débranchement impossible", error);
+      }
+    })();
+  });
+
+  removeButton.addEventListener("click", () => {
+    void (async () => {
+      const miroir = vueCourante().miroir ?? {};
+      const confirme = await confirmerSuppression(miroir);
+      if (!confirme) return;
+      try {
+        await request(`/api/chat/${platform}/miroir`, {
+          method: "DELETE",
+          headers: WRITE_HEADERS,
+          // ⚠️ Le serveur REFUSE sans cette confirmation : un simple DELETE ne suffit
+          // jamais à détruire un miroir.
+          body: JSON.stringify({ confirmation: true }),
+        });
+        tokenInput.value = "";
+        await refreshSelf();
+      } catch (error) {
+        await report(setError, "Suppression impossible", error);
+      }
+    })();
+  });
+
   section.append(
     title,
     intro,
@@ -731,6 +919,7 @@ function renderPlatform({ description, request, report, shared, refresh }) {
     ...(extraRow !== null ? [extraRow] : []),
     tokenRow,
     connectRow,
+    dangerRow,
     backfillLine,
     bannerLine,
     h("h3", { class: "config-group__title", text: "Canaux suivis" }),

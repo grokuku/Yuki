@@ -9,6 +9,12 @@
  *   POST  /api/chat/<plateforme>/jeton     → { jeton } : écrit le jeton dans le coffre,
  *                                            ⚠️ affiché UNE SEULE FOIS, jamais relu
  *   POST  /api/chat/<plateforme>/connexion → démarre la synchronisation
+ *   DELETE /api/chat/<plateforme>/connexion → DÉBRANCHE : efface le jeton du coffre et
+ *                                            ARRÊTE la synchronisation — ⚠️ le miroir
+ *                                            RESTE (conversations lisibles, réversible)
+ *   DELETE /api/chat/<plateforme>/miroir    → SUPPRIME : jeton ET miroir de CETTE
+ *                                            plateforme. ⚠️ DESTRUCTIF, IRRÉVERSIBLE :
+ *                                            exige `{"confirmation": true}` dans le corps
  *   PATCH /api/chat/conversations/<id>     → { replyMode?, replyStyle?, quoteAuthor? } par canal
  *                                            (`tout`/`auto`/`mention`, `fil`/`nouveau`, `oui`/`non`)
  *
@@ -39,8 +45,9 @@ import type {
   ChatStatusView,
   ChatSyncStatus,
 } from "../../chat/index.js";
+import type { ChatMirrorStats } from "../../chat/mirror/store.js";
 import { CHAT_QUOTE_AUTHORS, CHAT_REPLY_MODES, CHAT_REPLY_STYLES } from "../../chat/types.js";
-import type { RemotePlatform } from "../../chat/types.js";
+import type { ChatMode, RemotePlatform } from "../../chat/types.js";
 import { requireWriteGuards } from "./config.js";
 
 /** Canal suivi, tel que la page `/config` doit le montrer. */
@@ -69,6 +76,13 @@ export interface ChatPlatformView {
   plateforme: ChatAdapterStatus;
   /** Avancement de la synchronisation (canaux, backfill, dernière erreur). */
   synchronisation: ChatSyncStatus;
+  /**
+   * Empreinte du miroir de CETTE plateforme (conversations, messages, octets).
+   *
+   * ⚠️ Affichée AVANT la confirmation de « Supprimer la connexion » : on ne demande pas
+   * de confirmer une destruction sans en montrer l'ampleur.
+   */
+  miroir: ChatMirrorStats;
   /** Canaux suivis. */
   canaux: ChatPlatformChannelView[];
 }
@@ -113,6 +127,24 @@ export interface ChatPlatformPort {
   saveToken(token: string): void;
   /** Démarre la synchronisation (identité, canaux, backfill, temps réel, rattrapage). */
   connect(): Promise<void>;
+  /**
+   * DÉBRANCHE : efface le jeton du coffre et ARRÊTE la synchronisation (WebSocket fermé,
+   * balayeur arrêté).
+   *
+   * ⚠️ Le MIROIR n'est PAS touché : les conversations déjà importées restent lisibles.
+   * C'est ce qui distingue « débrancher » (réversible : remettre le jeton) de
+   * « supprimer » (`supprimerMiroir`), destructif et irréversible.
+   */
+  deconnecter(): Promise<void>;
+  /** Empreinte du miroir de cette plateforme (ce qu'une suppression ferait perdre). */
+  miroir(): ChatMirrorStats;
+  /**
+   * SUPPRIME le miroir de CETTE plateforme (index + fichiers `.jsonl`).
+   *
+   * ⚠️ Confiné : seules les conversations dont l'index dit `platform === <cette
+   * plateforme>` sont effacées ; un identifiant `mm-…` n'emporte jamais un `dc-…`.
+   */
+  supprimerMiroir(): ChatMirrorStats;
   /** État complet (voir `ChatPlatformView`). */
   view(): ChatPlatformView;
   /** Réglages de réponse EFFECTIFS d'un canal (mode, style, citation), ou `undefined`. */
@@ -151,6 +183,8 @@ export interface ChatDiscordPort extends ChatPlatformPort {
 export interface ChatApiLogger {
   error(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
+  /** Débranchement / suppression : une TRACE est due, sans aucun secret. */
+  info(message: string, fields?: Record<string, unknown>): void;
 }
 
 export interface ChatApiDeps {
@@ -161,6 +195,14 @@ export interface ChatApiDeps {
   discord?: ChatDiscordPort;
   /** Journal des échecs d'écriture HTTP (jamais un jeton, jamais une URL complète). */
   logger?: ChatApiLogger;
+  /**
+   * Écrit `chat.mode` (réglage `apply: hot`).
+   *
+   * ⚠️ Appelé APRÈS la suppression d'un miroir quand le mode courant désignait la
+   * plateforme supprimée : sans cette retombée sur `local`, l'interface afficherait un
+   * mode MORT (plus aucune conversation à lister).
+   */
+  saveMode?: (mode: ChatMode) => void;
 }
 
 export interface ChatHttpResponse {
@@ -373,15 +415,50 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
 
   const connectMatch = /^\/api\/chat\/(mattermost|discord)\/connexion$/.exec(path);
   if (connectMatch) {
-    if (verb !== "POST") {
-      return json(405, {
-        error: "method_not_allowed",
-        message: "Utilisez POST pour lancer la connexion à la plateforme.",
-      });
-    }
     const platform = connectMatch[1] as RemotePlatform;
     const port = portOf(deps, platform);
     if (!port) return notWired(platform);
+
+    // ─── DÉBRANCHER (DELETE) ─────────────────────────────────────────────
+    // ⚠️ EFFACE le jeton et ARRÊTE la synchronisation. ⚠️ Le miroir RESTE : les
+    // conversations déjà importées demeurent lisibles, et remettre le jeton suffit à
+    // repartir. C'est l'action NON destructive — « supprimer » est juste en dessous.
+    if (verb === "DELETE") {
+      try {
+        await port.deconnecter();
+      } catch (error) {
+        return json(502, {
+          error: "deconnexion_impossible",
+          message:
+            `La déconnexion de ${platform === "discord" ? "Discord" : "Mattermost"} a ` +
+            `échoué : ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+      const miroir = port.miroir();
+      // Journal SANS secret : la plateforme, et ce qui reste dans le miroir.
+      deps.logger?.info("chat.platform_disconnected", {
+        plateforme: platform,
+        conversationsConservees: miroir.conversations,
+        messagesConserves: miroir.messages,
+      });
+      return json(200, {
+        ok: true,
+        deconnecte: true,
+        miroirConserve: miroir,
+        ...(platform === "discord"
+          ? { discord: (port as ChatDiscordPort).view() }
+          : { mattermost: (port as ChatMattermostPort).view() }),
+      });
+    }
+
+    if (verb !== "POST") {
+      return json(405, {
+        error: "method_not_allowed",
+        message:
+          "Utilisez POST pour lancer la connexion à la plateforme, ou DELETE pour la " +
+          "débrancher (le jeton est effacé, le miroir est conservé).",
+      });
+    }
     const body = parseBody(input.body);
     // L'URL (Mattermost) peut être fournie dans le même geste (bouton « Se connecter »).
     if (
@@ -424,6 +501,73 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
     }
     return json(200, {
       ok: true,
+      ...(platform === "discord"
+        ? { discord: (port as ChatDiscordPort).view() }
+        : { mattermost: (port as ChatMattermostPort).view() }),
+    });
+  }
+
+  // ─── SUPPRIMER la connexion (jeton ET miroir) ────────────────────────────
+  const mirrorMatch = /^\/api\/chat\/(mattermost|discord)\/miroir$/.exec(path);
+  if (mirrorMatch) {
+    if (verb !== "DELETE") {
+      return json(405, {
+        error: "method_not_allowed",
+        message:
+          "Utilisez DELETE pour supprimer le miroir d'une plateforme (action destructive).",
+      });
+    }
+    const platform = mirrorMatch[1] as RemotePlatform;
+    const port = portOf(deps, platform);
+    if (!port) return notWired(platform);
+    // ⚠️ CONFIRMATION OBLIGATOIRE : `{"confirmation": true}`. Un corps absent, vide ou
+    // portant autre chose est un REFUS — jamais une supposition (« il a cliqué, donc il
+    // veut tout perdre »). L'interface envoie ce champ après une case cochée ET le
+    // décompte de ce qui sera perdu.
+    const body = parseBody(input.body);
+    if (!body || body.confirmation !== true) {
+      return json(400, {
+        error: "confirmation_requise",
+        message:
+          "Supprimer une connexion est IRRÉVERSIBLE : renvoyez `{\"confirmation\": true}` " +
+          "après avoir coché la case de confirmation. Les conversations miroir et le " +
+          "jeton de cette plateforme seront effacés définitivement.",
+      });
+    }
+    const avant = port.miroir();
+    let supprime: ChatMirrorStats;
+    try {
+      // ⚠️ Le jeton d'abord (sinon la synchro pourrait réécrire un miroir qu'on efface),
+      // puis le miroir. `deconnecter` est idempotent : l'appeler sur une plateforme déjà
+      // débranchée ne fait rien de plus.
+      await port.deconnecter();
+      supprime = port.supprimerMiroir();
+    } catch (error) {
+      return json(500, {
+        error: "suppression_impossible",
+        message:
+          `La suppression du miroir ${platform === "discord" ? "Discord" : "Mattermost"} ` +
+          `a échoué : ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    // ⚠️ RETOMBÉE DU MODE : si `chat.mode` désignait la plateforme qu'on vient de vider,
+    // le laisser tel quel afficherait un mode MORT (aucune conversation à lister).
+    const modeCourant = deps.service.status().mode;
+    const bascule = modeCourant === platform && deps.saveMode !== undefined;
+    if (bascule) deps.saveMode?.("local");
+    deps.logger?.info("chat.platform_removed", {
+      plateforme: platform,
+      conversations: supprime.conversations,
+      messages: supprime.messages,
+      octets: supprime.octets,
+      modeAvant: modeCourant,
+      modeApres: bascule ? "local" : modeCourant,
+    });
+    return json(200, {
+      ok: true,
+      supprime,
+      avant,
+      mode: bascule ? "local" : modeCourant,
       ...(platform === "discord"
         ? { discord: (port as ChatDiscordPort).view() }
         : { mattermost: (port as ChatMattermostPort).view() }),

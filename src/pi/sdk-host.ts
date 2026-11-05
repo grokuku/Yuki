@@ -110,6 +110,7 @@ import {
   createScheduledSendTools,
   sessionIdFromContext as sessionIdOfContext,
 } from "./sdk/scheduled-send-tool.js";
+import { createPlanifierTacheTools } from "./sdk/planifier-tache-tool.js";
 import { createImageTools } from "./sdk/image-tools.js";
 import { createImageStylesExtensionFactory } from "./sdk/image-styles-extension.js";
 import { createImageBudgetExtensionFactory } from "./sdk/image-budget-extension.js";
@@ -2043,6 +2044,22 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
         ...createScheduledSendTools(options.envoisProgrammes, {
           // La session de l'outil : elle change à chaque appel (le host partage ses
           // outils entre TOUTES les conversations, `createPiHost`).
+          conversation: (ctx) => {
+            const session = ctx === undefined ? undefined : sessionIdOfContext(ctx);
+            return session === undefined ? {} : { session };
+          },
+        }),
+      );
+    }
+    // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : « à 8 h, résume-moi le journal ».
+    // ⚠️ EN LOCAL SEULEMENT : le résultat est publié dans la conversation demandeuse, qui
+    // est une SESSION locale. Un run de CANAL n'a pas de session de ce type — l'outil n'y
+    // est donc pas construit, plutôt que de promettre une destination qui n'existe pas.
+    if (options.planifierTache) {
+      customTools.push(
+        ...createPlanifierTacheTools(options.planifierTache, {
+          // La session de l'outil change à chaque appel (le host partage ses outils
+          // entre TOUTES les conversations, `createPiHost`).
           conversation: (ctx) => {
             const session = ctx === undefined ? undefined : sessionIdOfContext(ctx);
             return session === undefined ? {} : { session };

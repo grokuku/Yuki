@@ -316,6 +316,14 @@ a.pill:hover {
   overflow: hidden;
 }
 
+/* ⚠️ Lot 30 : le sélecteur n'est affiché que s'il y a AU MOINS DEUX types de
+ * discussion actifs. `[hidden]` doit gagner contre `display: flex` ci-dessus
+ * (sinon l'attribut n'a aucun effet) : sélecteur MASQUÉ, pas grisé. */
+.chat-mode[hidden],
+.sidebar__mode[hidden] {
+  display: none;
+}
+
 .chat-mode__btn {
   flex: 1 1 auto;
   min-width: 0;

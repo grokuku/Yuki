@@ -16,7 +16,12 @@ import {
   registerServiceWorker,
 } from "./push.js";
 import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
-import { creationRefusal, fetchChatStatus, saveChatMode } from "./chat-mode.js";
+import {
+  creationRefusal,
+  fetchChatStatus,
+  resolveActiveMode,
+  saveChatMode,
+} from "./chat-mode.js";
 import {
   UNREAD_STORAGE_KEY,
   addUnread,
@@ -569,10 +574,48 @@ function requestNew() {
 /** Phrase d'aide par défaut de l'état vide (markup de `index.html`). */
 const EMPTY_HINT_DEFAULT = "Sélectionnez une conversation ou créez-en une.";
 
+/** Une bascule AUTOMATIQUE de mode est-elle en cours ? (jamais deux PUT concurrents) */
+let basculeModeEnCours = false;
+
+/**
+ * BASCULE AUTOMATIQUE quand le mode courant n'est plus actif.
+ *
+ * ⚠️ Cas couvert (demande du 2026-11-05) : `chat.mode = mattermost` et la connexion
+ * Mattermost est débranchée/supprimée ⇒ sans bascule, l'interface resterait sur un mode
+ * MORT (aucune conversation à lister, sélecteur masqué). On redemande donc le seul mode
+ * encore actif (`local` en général), par le MÊME chemin que le clic sur le sélecteur
+ * (`PUT /api/config`) : le serveur reste l'autorité.
+ *
+ * ⚠️ La trame `sessions` n'est pas touchée directement : `chat_refresh` la redemande au
+ * serveur, exactement comme après un clic — aucune liste fabriquée localement.
+ */
+async function enforceActiveMode(status) {
+  const cible = resolveActiveMode(status);
+  if (cible === null || basculeModeEnCours) return;
+  basculeModeEnCours = true;
+  try {
+    const frais = await saveChatMode(cible);
+    applyChatStatus(frais);
+    sendRaw({ type: "chat_refresh" });
+  } catch (error) {
+    // Refus du serveur : on ne boucle pas et on ne prétend rien (le statut suivant,
+    // relu à la prochaine occasion, redira la vérité).
+    console.warn(
+      "[chat-mode] bascule automatique refusée :",
+      error instanceof Error ? error.message : String(error),
+    );
+  } finally {
+    basculeModeEnCours = false;
+  }
+}
+
 /** Reflète l'état du mode dans le panneau, le bouton de l'état vide et la liste. */
 function applyChatStatus(status) {
   chatStatus = status && typeof status === "object" ? status : null;
   sessionsPanel.setChatMode(chatStatus);
+  // ⚠️ Masquer le sélecteur ne suffit pas : si le mode courant n'est plus actif, on
+  // BASCULE (sinon on afficherait un mode mort sans même son sélecteur).
+  void enforceActiveMode(chatStatus);
   const refusal = newConversationRefusal();
   if (els.emptyNew) {
     els.emptyNew.disabled = refusal !== null;

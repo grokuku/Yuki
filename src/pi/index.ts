@@ -83,7 +83,12 @@ export type {
 
 // Lot 12 — mémoire durable : extracteur SDK (session éphémère isolée). Le port
 // renvoyé (`MemoryExtractor`) est PUR : aucun type du SDK ne traverse la façade.
-export { createSdkMemoryExtractor } from "./sdk/memory-extractor.js";
+export {
+  CONSOLIDATION_HEBDO_SYSTEM_PROMPT,
+  CONSOLIDATION_HEBDO_TOOLS,
+  createSdkConsolidationHebdoExtractor,
+  createSdkMemoryExtractor,
+} from "./sdk/memory-extractor.js";
 export type { SdkMemoryExtractorConfig } from "./sdk/memory-extractor.js";
 
 // VISION — réduction À LA VOLÉE des images envoyées au modèle. Le port rendu

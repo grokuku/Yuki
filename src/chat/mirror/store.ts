@@ -33,6 +33,8 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -158,6 +160,22 @@ export interface ChatMirrorIndexFile {
 
 /** Résultat d'une écriture dans le miroir. */
 export type ChatMirrorWriteOutcome = "insere" | "mis_a_jour" | "doublon" | "borne";
+
+/**
+ * EMPREINTE d'une plateforme dans le miroir — ce qu'une suppression ferait perdre.
+ *
+ * ⚠️ Affichée AVANT la confirmation (`/config` → « Discussions — Mattermost » /
+ * « Discussions — Discord ») : on ne demande pas de confirmer une destruction sans
+ * en montrer l'ampleur. Aucune donnée secrète : trois nombres.
+ */
+export interface ChatMirrorStats {
+  /** Conversations (canaux / salons) appartenant à cette plateforme. */
+  conversations: number;
+  /** Messages conservés (somme des `messageCount` de l'index). */
+  messages: number;
+  /** Taille cumulée des fichiers `.jsonl` de cette plateforme (octets). */
+  octets: number;
+}
 
 export interface ChatMirrorStoreOptions {
   /** Chemin de l'index (`<state>/chat-mirror.json`). */
@@ -665,6 +683,88 @@ export class ChatMirrorStore implements ChatMirror {
   forget(conversationId: string): void {
     delete this.index.conversations[conversationId];
     this.persistIndex();
+  }
+
+  /**
+   * Empreinte d'UNE plateforme : nombre de conversations, de messages et octets.
+   *
+   * ⚠️ Sert à AFFICHER ce qu'une suppression ferait perdre, et à vérifier, après coup,
+   * qu'elle n'a rien laissé. Lecture seule : aucun fichier n'est ouvert en écriture.
+   */
+  statsOf(platform: RemotePlatform): ChatMirrorStats {
+    let conversations = 0;
+    let messages = 0;
+    let octets = 0;
+    for (const [conversationId, record] of Object.entries(this.index.conversations)) {
+      if (record.platform !== platform) continue;
+      conversations += 1;
+      messages += Math.max(0, Math.trunc(record.messageCount));
+      octets += this.fileSizeOf(conversationId);
+    }
+    return { conversations, messages, octets };
+  }
+
+  /**
+   * SUPPRIME DÉFINITIVEMENT les conversations miroir d'UNE plateforme.
+   *
+   * ⚠️ DESTRUCTIF ET IRRÉVERSIBLE : les lignes de l'index et les fichiers `.jsonl`
+   * sont effacés (aucune corbeille — c'est le sens de l'action « supprimer la
+   * connexion » par opposition à « débrancher », qui ne touche à rien).
+   *
+   * ⚠️ CONFINEMENT DOUBLE :
+   *  ① on ne touche QUE les conversations dont l'index dit `platform === platform` —
+   *    un identifiant `mm-…` ne peut donc pas emporter un `dc-…` ;
+   *  ② chaque chemin est construit par `fileOf` (nom réduit à `[A-Za-z0-9_-]`, puis
+   *    `join(messagesDir, …)`) : aucune traversée `../` n'est possible, même si
+   *    l'index avait été modifié à la main.
+   *
+   * @returns ce qui a été effacé (à journaliser : sans secret, et utile au test).
+   */
+  purgePlatform(platform: RemotePlatform): ChatMirrorStats {
+    const supprime: ChatMirrorStats = { conversations: 0, messages: 0, octets: 0 };
+    const ids = Object.entries(this.index.conversations)
+      .filter(([, record]) => record.platform === platform)
+      .map(([conversationId]) => conversationId);
+    for (const conversationId of ids) {
+      const record = this.index.conversations[conversationId];
+      const file = this.fileOf(conversationId);
+      const taille = this.fileSizeOf(conversationId);
+      try {
+        unlinkSync(file);
+      } catch (error) {
+        // Un fichier déjà absent n'est pas un échec ; tout autre refus est JOURNALISÉ
+        // mais n'interrompt pas la purge des autres conversations.
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") {
+          this.logger?.warn("chat.mirror.purge_failed", {
+            conversation: conversationId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+      }
+      supprime.conversations += 1;
+      supprime.messages += Math.max(0, Math.trunc(record?.messageCount ?? 0));
+      supprime.octets += taille;
+      this.loaded.delete(conversationId);
+      this.seen.delete(conversationId);
+      delete this.index.conversations[conversationId];
+    }
+    // L'annuaire des noms ne garde rien de la plateforme effacée : un nom d'auteur
+    // sans conversation serait une donnée résiduelle de ce qu'on vient de détruire.
+    this.authorNames.purge(platform);
+    this.persistIndex();
+    if (supprime.conversations > 0) this.notifyChange();
+    return supprime;
+  }
+
+  /** Taille du fichier de messages d'une conversation (0 si absent/illisible). */
+  private fileSizeOf(conversationId: string): number {
+    try {
+      return statSync(this.fileOf(conversationId)).size;
+    } catch {
+      return 0;
+    }
   }
 
   // ─── Interne ─────────────────────────────────────────────────────────────

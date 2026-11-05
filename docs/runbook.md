@@ -1069,3 +1069,48 @@ Fichier d'état : `<state>/preautorisations.json`
 un agent et un motif. Révoquer une autorisation prend un clic, et **la commande
 suivante sera refusée** (pas « en attente ») si une autorisation existe pour le
 déclencheur mais ne la couvre pas.
+
+## 15. Consolidation hebdomadaire de la mémoire (lot 29)
+
+**Ce qui se passe tout seul** : chaque dimanche à **03:00 (Europe/Paris)**, une
+passe relit la mémoire durable avec le **modèle lourd** et la nettoie (doublons
+fusionnés, entrées corrigées, transitoire supprimé, contradictions signalées).
+Réglages : `/config` → **Mémoire durable** → champs `memory.consolidation.*`.
+
+**Où sont les archives** : `<state>/memory-archive/consolidation/<AAAA-MM-JJ_HHMM>/`
+
+| Fichier | Contenu |
+| --- | --- |
+| `memory.jsonl` | l'état **AVANT** la passe (lisible, restaurable à l'octet) |
+| `operations.json` | les opérations réellement appliquées (ou le refus) |
+| `rapport.json` | la mesure : entrées, caractères, **tokens estimés**, contexte du modèle, budget, lots, % du contexte, non examinées |
+
+**Restaurer une version** (deux chemins, même mécanisme atomique `tmp` +
+`renameSync` + reconstruction de l'index FTS5) :
+
+1. `/config` → **Personnalité** → bloc **Mémoire durable** → liste
+   **« Versions de la mémoire »** → **Restaurer** (confirmation `HolafModal`),
+   ou **Télécharger** pour récupérer le `memory.jsonl` ;
+2. en ligne de commande, sans interface : copier le `memory.jsonl` de la version
+   choisie sur `<state>/memory.jsonl`, puis redémarrer Yuki (l'index dérivé est
+   reconstruit au démarrage). ⚠️ Arrêter Yuki d'abord : le fichier est la source
+   de vérité.
+
+**Diagnostic** (journaux, préfixe `memory.consolidation.*`) :
+
+| Message | Signification |
+| --- | --- |
+| `memory.consolidation.debut` / `.fin` | mesure et résultat (tokens, budget, lots, %, version) |
+| `memory.consolidation.saut` | retard > 24 h, verrou `enCours`, ou passe déjà en cours |
+| `memory.consolidation.refus` | réponse du modèle non conforme : **aucune modification** (rapport dans la version) |
+| `memory.consolidation.version.purged` | rétention atteinte : la plus ancienne version est supprimée |
+| `memory.consolidation.verrou.orphelin` | verrou laissé par un processus tué : ignoré (passe autorisée) |
+
+**Fichiers d'état** : `<state>/memory-consolidation.json` (prochain passage +
+verrou), `<state>/memory-archive/consolidation/**` (versions). Surcharges :
+`YUKI_MEMORY_CONSOLIDATION_DIR`, `YUKI_MEMORY_CONSOLIDATION_STATE_PATH`.
+
+⚠️ **Rien n'est supprimé sans trace** : une suppression de souvenir laisse une
+ligne `delete` dans le journal append-only, et l'état d'avant est dans la
+version. Si le modèle lourd est indisponible, la passe est **refusée** (aucun
+repli sur le modèle léger).

@@ -98,6 +98,11 @@ describe("createRemoteReplyGenerator — le prompt nomme le bot de SA plateforme
       "generer_image",
       "lire_fichier",
       "lister_fichiers",
+      // ⚠️ Tâche PLANIFIÉE (`planifier_tache`, lot 31) : groupe `toujours` — elle ne
+      // touche à rien MAINTENANT (le travail se fait à l'heure dite, dans un worker sans
+      // pré-autorisation). Depuis un canal, son résultat tombe dans le fil
+      // « Déclencheurs » : le port le dit au modèle.
+      "planifier_tache",
       // ⚠️ Envoi PROGRAMMÉ (`programmer_envoi`, lot 28) : même groupe `toujours` —
       // programmer une publication ne touche à aucune machine et n'appelle aucun
       // modèle à l'heure dite.

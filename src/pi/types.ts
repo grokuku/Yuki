@@ -35,6 +35,7 @@ import type {
 } from "../comfy/index.js";
 import type { FilesSendPort } from "../files/types.js";
 import type { ScheduledSendPort } from "./sdk/scheduled-send-tool.js";
+import type { PlanifierTachePort } from "./sdk/planifier-tache-tool.js";
 import type { GeneratedImageFilesPort } from "../files/generated.js";
 import type { ModelsConfig } from "../llm/models.js";
 
@@ -211,6 +212,17 @@ export interface PiHostOptions {
    * Absent ⇒ aucun outil (host nu, tests).
    */
   envoisProgrammes?: ScheduledSendPort;
+  /**
+   * TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : Yuki fait AGIR un LLM à une heure dite
+   * (l'instruction est une DEMANDE exécutée par le worker lourd, dont le RÉSULTAT est
+   * publié dans la conversation demandeuse).
+   *
+   * ⚠️ À ne pas confondre avec `envoisProgrammes` : là-bas le texte est FIGÉ et aucun
+   * modèle n'est appelé ; ici la tâche est EXÉCUTÉE. Le port porte les bornes (30 s,
+   * 30 jours, quota), le nom slugifié et la cible — l'outil ne décide de rien.
+   * Absent ⇒ aucun outil (host nu, tests, runs de canal).
+   */
+  planifierTache?: PlanifierTachePort;
   /**
    * IMAGES GÉNÉRÉES (serveur ComfyUI). Présent ⇒ la façade expose l'outil
    * `generer_image` (Yuki génère une image, la VOIT et peut régénérer) et

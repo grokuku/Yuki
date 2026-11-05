@@ -173,9 +173,20 @@ export function estAutoTerminant(source) {
   return estPlanningPonctuel(source);
 }
 
+/**
+ * `true` si le déclencheur est une TÂCHE PONCTUELLE (lot 31, `declencheur.type:
+ * "ponctuel"`) : un rendez-vous UNIQUE qui s'éteint après son tir.
+ *
+ * ⚠️ À ne pas confondre avec `estPlanningPonctuel` (un cron dont la DATE ne revient
+ * pas) : ici il n'y a AUCUNE expression, seulement un instant absolu.
+ */
+export function estTachePonctuelle(source) {
+  return source?.declencheur?.type === "ponctuel";
+}
+
 /** `true` si le déclencheur est TEMPORAIRE (ponctuel ou auto-terminant). */
 export function estTemporaire(source) {
-  return estPlanningPonctuel(source) || estAutoTerminant(source);
+  return estPlanningPonctuel(source) || estTachePonctuelle(source) || estAutoTerminant(source);
 }
 
 /** Instant de mise en veille connu (⚠️ repli sur `maj`, puis `undefined`). */
@@ -232,11 +243,143 @@ export function grouperParSection(sources, options = {}) {
   return groupes;
 }
 
+// ── CHAÎNES D'ÉTAPES (lot 33) ───────────────────────────────────────────────
+
+/**
+ * Regroupe les fiches en CHAÎNES et en déclencheurs ISOLÉS.
+ *
+ * ⚠️ Une carte par chaîne, étapes DANS L'ORDRE (`chaine.etape`). Les noms d'étapes sont
+ * affichés par le panneau : c'est eux qui portent les pré-autorisations, les cacher
+ * rendrait la page incapable de dire quelle autorisation s'applique à quel horaire.
+ *
+ * ⚠️ Fonction PURE, à côté de `grouperParSection` : les trois sections historiques
+ * gardent leur sémantique (un temporaire éteint reste 7 jours, etc.) ; la chaîne est une
+ * vue ORTHOGONALE — une étape éteinte reste une étape de sa chaîne, jamais une ligne
+ * orpheline.
+ *
+ * @param {any[]} sources fiches renvoyées par `GET /api/sources`
+ * @returns {{chaines: Array<{id: string, titre: string, etapes: any[]}>, isolees: any[]}}
+ */
+export function grouperParChaine(sources) {
+  const liste = Array.isArray(sources) ? sources.filter((source) => source && source.nom) : [];
+  const groupes = new Map();
+  const isolees = [];
+  for (const source of liste) {
+    const chaine = source.chaine;
+    if (!chaine || typeof chaine.id !== "string" || chaine.id === "") {
+      isolees.push(source);
+      continue;
+    }
+    let groupe = groupes.get(chaine.id);
+    if (groupe === undefined) {
+      groupe = { id: chaine.id, titre: "", etapes: [] };
+      groupes.set(chaine.id, groupe);
+    }
+    groupe.etapes.push(source);
+  }
+  const chaines = [...groupes.values()];
+  for (const groupe of chaines) {
+    groupe.etapes.sort(
+      (a, b) => (Number(a.chaine?.etape) || 0) - (Number(b.chaine?.etape) || 0),
+    );
+    const premiere = groupe.etapes[0];
+    // Le titre vient de la PREMIÈRE étape : c'est ce que la personne a nommé.
+    groupe.titre =
+      premiere !== undefined
+        ? String(premiere.libelle ?? premiere.nom ?? groupe.id)
+        : groupe.id;
+  }
+  chaines.sort((a, b) => a.titre.localeCompare(b.titre, "fr"));
+  return { chaines, isolees };
+}
+
+/**
+ * État d'une étape de chaîne : « faite », « en attente », « annulée : … ».
+ *
+ * ⚠️ L'état vient du STORE (compteur/résultat/raison), jamais d'une déduction sur
+ * l'heure : une étape qui a tiré mais dont le résultat a été supprimé reste « en
+ * attente » — c'est la vérité de ce que la suivante pourra relire.
+ */
+export function etatEtape(source) {
+  if (!source?.chaine) return "hors chaîne";
+  if (source.actif === false) {
+    const raison =
+      typeof source.raisonInactive === "string" && source.raisonInactive !== ""
+        ? source.raisonInactive
+        : "éteinte";
+    return raison;
+  }
+  const at = source?.resultatEtape?.at;
+  if (typeof at === "string" && at !== "") return `faite le ${dateHeureFr(at)}`;
+  return "en attente";
+}
+
+/** Résumé BORNÉ du résultat d'une étape (texte + nombre de fichiers), jamais inventé. */
+export function texteResultatEtape(source, max = 140) {
+  const resultat = source?.resultatEtape;
+  if (!resultat || typeof resultat !== "object") return "";
+  const texte =
+    typeof resultat.texte === "string" ? resultat.texte.replace(/\s+/gu, " ").trim() : "";
+  const fichiers = Array.isArray(resultat.fichiers) ? resultat.fichiers.length : 0;
+  const morceaux = [];
+  if (texte !== "") {
+    morceaux.push(texte.length > max ? `${texte.slice(0, max)}…` : texte);
+  }
+  if (fichiers > 0) morceaux.push(`${fichiers} fichier(s)`);
+  return morceaux.join(" · ");
+}
+
 // ── Colonnes ────────────────────────────────────────────────────────────────
+
+/**
+ * ⚠️ LOT 32 — FIN DE RÉCURRENCE affichée (« reste 6/14 », « jusqu'au … »).
+ *
+ * ⚠️ Deux formes, indépendantes : `occurrencesMax` (compteur de passages RÉELLEMENT
+ * tirés, persisté) et `jusquAu` (date). Le compteur ne compte JAMAIS un saut — c'est
+ * pourquoi la page relit `occurrencesFaites` au lieu de déduire d'un horaire.
+ *
+ * @param {any} source fiche renvoyée par `GET /api/sources`
+ * @returns {string} texte court, ou chaîne vide quand aucune fin n'est prévue
+ */
+export function texteOccurrences(source) {
+  const max = entierPositif(source?.occurrencesMax);
+  if (max > 0) {
+    const faites = entierPositif(source?.occurrencesFaites);
+    const reste = Math.max(0, max - faites);
+    if (reste === 0) return `terminée (${faites}/${max} passages)`;
+    return `reste ${reste}/${max}`;
+  }
+  const jusquAu = source?.jusquAu;
+  if (typeof jusquAu === "string" && jusquAu !== "") {
+    return `fin prévue le ${dateHeureFr(jusquAu)}`;
+  }
+  return "";
+}
 
 /** « Quand » : type + expression lisible ET le PROCHAIN passage. */
 export function texteQuand(source) {
+  const base = texteQuandBase(source);
+  const suites = [
+    texteOccurrences(source),
+    // ⚠️ LOT 33 — une étape de chaîne dit son rang ET son nom complet reste visible
+    // (c'est le nom qui porte les pré-autorisations).
+    typeof source?.chaine?.etape === "number"
+      ? `chaîne « ${source.chaine.id} », étape ${source.chaine.etape}`
+      : "",
+  ].filter((morceau) => morceau !== "");
+  return suites.length === 0 ? base : `${base} · ${suites.join(" · ")}`;
+}
+
+function texteQuandBase(source) {
   const declencheur = source?.declencheur ?? { type: "webhook" };
+  // ⚠️ LOT 31 — TÂCHE PONCTUELLE : un instant ABSOLU, aucune expression cron. Dire
+  // « webhook » ici serait faux, et ferait croire qu'un programme extérieur l'appelle.
+  if (declencheur.type === "ponctuel") {
+    const quand = dateHeureFr(declencheur.a);
+    return source?.actif === false
+      ? `tâche ponctuelle — ${quand} (exécutée)`
+      : `tâche ponctuelle — ${quand}`;
+  }
   if (declencheur.type !== "planning") return "webhook (à chaque envoi du programme)";
   const expression = declencheur.expression ?? "";
   const fuseau = declencheur.fuseau ?? "Europe/Paris";
@@ -248,6 +391,11 @@ export function texteQuand(source) {
 
 /** Prochain passage (⚠️ « aucun » quand il n'y en a pas, jamais une case vide). */
 export function texteProchainPassage(source) {
+  if (source?.declencheur?.type === "ponctuel") {
+    if (source?.actif === false) return "aucun (tâche exécutée)";
+    const quand = source?.declencheur?.a;
+    return typeof quand === "string" && quand !== "" ? dateHeureFr(quand) : "non calculé";
+  }
   if (source?.actif === false) return "aucun (déclencheur éteint)";
   if (source?.declencheur?.type !== "planning") return "sans objet (webhook)";
   const prochain = source?.prochainPassage;

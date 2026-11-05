@@ -19,6 +19,22 @@ export const MEMORY_EXTRACTOR_SYSTEM_PROMPT =
   "Tu es le module de mémoire durable de Yuki. Tu réponds UNIQUEMENT par un " +
   "tableau JSON en français, sans aucun autre texte, sans balise de code.";
 
+/**
+ * Prompt système de la CONSOLIDATION HEBDOMADAIRE (lot 29) : la réponse est un
+ * OBJET JSON (`{"version":1,"lot":n,"operations":[…]}`), jamais un tableau.
+ */
+export const CONSOLIDATION_HEBDO_SYSTEM_PROMPT =
+  "Tu es le module de consolidation hebdomadaire de la mémoire durable de Yuki. " +
+  "Tu réponds UNIQUEMENT par un objet JSON en français, sans aucun autre texte, " +
+  "sans balise de code.";
+
+/**
+ * ⚠️ ANTI-RÉCURSION : la passe de consolidation hebdomadaire n'a AUCUN outil.
+ * `delegate` (délégation au worker lourd) est donc structurellement impossible :
+ * une passe de mémoire ne peut pas lancer de tâche, ni écrire ailleurs.
+ */
+export const CONSOLIDATION_HEBDO_TOOLS: readonly string[] = Object.freeze([]);
+
 export interface SdkMemoryExtractorConfig {
   cwd: string;
   agentDir: string;
@@ -33,6 +49,8 @@ export interface SdkMemoryExtractorConfig {
   tools?: readonly string[];
   /** Délai maximal d'une extraction (ms), lu à chaud : au-delà, on interrompt. */
   timeoutMs: () => number;
+  /** Prompt système de la session éphémère (défaut : extraction par tour). */
+  systemPrompt?: string;
   logger: PiLogger;
 }
 
@@ -56,7 +74,7 @@ export function createSdkMemoryExtractor(
     const ephemeral = await createEphemeralSession({
       cwd: config.cwd,
       agentDir: config.agentDir,
-      systemPrompt: MEMORY_EXTRACTOR_SYSTEM_PROMPT,
+      systemPrompt: config.systemPrompt ?? MEMORY_EXTRACTOR_SYSTEM_PROMPT,
       modelRuntime: runtime,
       model,
       thinkingLevel: config.thinking,
@@ -100,4 +118,23 @@ export function createSdkMemoryExtractor(
     }
     return lastText || currentText;
   };
+}
+
+/**
+ * Extracteur de la CONSOLIDATION HEBDOMADAIRE (lot 29) : même session éphémère,
+ * même isolation, mais **AUCUN OUTIL** (`CONSOLIDATION_HEBDO_TOOLS`) et le
+ * prompt système de l'objet JSON.
+ *
+ * ⚠️ Le modèle est celui qu'on lui passe (`modelReference`), et l'appelant
+ * fournit le LOURD imposé, SANS repli sur le léger.
+ */
+export function createSdkConsolidationHebdoExtractor(
+  config: Omit<SdkMemoryExtractorConfig, "tools" | "systemPrompt">,
+): MemoryExtractor {
+  return createSdkMemoryExtractor({
+    ...config,
+    // ⚠️ `tools: []` et rien d'autre : ni `delegate`, ni écriture. Anti-récursion.
+    tools: [],
+    systemPrompt: CONSOLIDATION_HEBDO_SYSTEM_PROMPT,
+  });
 }

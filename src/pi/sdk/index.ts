@@ -60,7 +60,10 @@ export {
   type PersonalityExtensionOptions,
 } from "./personality-extension.js";
 export {
+  CONSOLIDATION_HEBDO_SYSTEM_PROMPT,
+  CONSOLIDATION_HEBDO_TOOLS,
   MEMORY_EXTRACTOR_SYSTEM_PROMPT,
+  createSdkConsolidationHebdoExtractor,
   createSdkMemoryExtractor,
   type SdkMemoryExtractorConfig,
 } from "./memory-extractor.js";

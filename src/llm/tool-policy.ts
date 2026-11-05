@@ -144,6 +144,22 @@ export type FilesToolName = "envoyer_fichier";
 export type MessageToolName = "envoyer_message";
 
 /**
+ * Outil custom de TÂCHE PLANIFIÉE (`planifier_tache`, lot 31).
+ *
+ * ⚠️ DISTINCT de `programmer_envoi` : là-bas un texte FIGÉ part à l'heure dite, ici un
+ * LLM est RÉVEILLÉ pour AGIR (image, commande via un agent, recherche…) et son résultat
+ * est publié. C'est la différence entre « poste ce message » et « débrouille-toi ».
+ *
+ * ⚠️ Porté par le LÉGER seul : c'est lui qui converse, donc lui qui reçoit la demande.
+ * Le LOURD ne l'a pas (`planifierTaches: []`) — une tâche de fond ne programme pas de
+ * tâche de fond (même anti-enchaînement que `delegate`).
+ *
+ * ⚠️ Il ne touche à AUCUNE machine MAINTENANT (le travail se fait à l'heure dite, dans un
+ * worker qui a ses propres garde-fous) : il est donc dans le groupe `toujours`.
+ */
+export type PlanifierTacheToolName = "planifier_tache";
+
+/**
  * Outil custom d'ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28).
  *
  * ⚠️ « Poste cette image à 16h10 » n'était pas réalisable : Yuki a répondu en
@@ -201,6 +217,7 @@ export type CustomToolName =
   | ChannelPostToolName
   | MessageToolName
   | EnvoiProgrammeToolName
+  | PlanifierTacheToolName
   | FileTransferToolName
   | FileListToolName
   | FileReadToolName
@@ -236,6 +253,8 @@ export interface ToolPolicyEntry {
   readonly messages: readonly MessageToolName[];
   /** Outil d'ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28). */
   readonly envoisProgrammes: readonly EnvoiProgrammeToolName[];
+  /** Outil de TÂCHE PLANIFIÉE (`planifier_tache`, lot 31). */
+  readonly planifierTaches: readonly PlanifierTacheToolName[];
   /** Outils de TRANSFERT de fichiers vers/depuis une machine (`files`). */
   readonly fileTransfer: readonly FileTransferToolName[];
   // ⚠️ AUCUNE CATÉGORIE DE PUBLICATION INTER-CANAL, À DESSEIN : dans un canal il n'y a
@@ -391,6 +410,12 @@ export const MESSAGE_TOOLS: readonly MessageToolName[] = ["envoyer_message"];
 export const ENVOI_PROGRAMME_TOOLS: readonly EnvoiProgrammeToolName[] = ["programmer_envoi"];
 
 /**
+ * Outil de TÂCHE PLANIFIÉE (`planifier_tache`, lot 31). Porté par le LÉGER seul — le
+ * worker lourd EXÉCUTE, il ne programme rien.
+ */
+export const PLANIFIER_TACHE_TOOLS: readonly PlanifierTacheToolName[] = ["planifier_tache"];
+
+/**
  * Outils de TRANSFERT de fichiers (capacité `files`). Exposés quand le service
  * de transfert existe et que l'exécution n'est pas désactivée. ⚠️ Le lourd les
  * porte ; le léger, non (il converse, il n'agit pas sur une machine).
@@ -443,6 +468,11 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // publication est un acte de RÉDACTEUR ; le lourd ne parle pas dans la
     // conversation, donc il ne programme rien (même invariant que `messages`).
     envoisProgrammes: ENVOI_PROGRAMME_TOOLS,
+    // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : le léger seul. Comme
+    // `programmer_envoi`, c'est un acte de RÉDACTEUR ; à la différence de lui, la tâche
+    // fait AGIR un worker à l'heure dite — mais ce worker est celui de la délégation, avec
+    // ses propres garde-fous, et aucune pré-autorisation n'est transmise.
+    planifierTaches: PLANIFIER_TACHE_TOOLS,
     // ⚠️ Le LÉGER ne transfère PAS de fichiers depuis/vers une machine : il
     // délègue au worker lourd.
     fileTransfer: [],
@@ -487,6 +517,9 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     messages: [],
     // ⚠️ Le worker LOURD ne programme AUCUN envoi : publier est le fait du rédacteur.
     envoisProgrammes: [],
+    // ⚠️ Et il ne programme AUCUNE tâche : une tâche de fond qui en programmerait une
+    // autre ouvrirait une chaîne sans fin (même raison que `canDelegate: false`).
+    planifierTaches: [],
     // ⚠️ Le worker lourd TRANFÈRE les fichiers : c'est lui qui agit sur une
     // machine. Mêmes garde-fous par agent que `run_command`.
     fileTransfer: FILE_TRANSFER_TOOLS,
@@ -611,6 +644,12 @@ export interface ToolAllowlistOptions {
    */
   envoisProgrammesEnabled?: boolean;
   /**
+   * Active l'outil de TÂCHE PLANIFIÉE `planifier_tache` (lot 31). DÉSACTIVÉ par défaut :
+   * seul le câblage l'active (le host local le porte ; un worker lourd ne peut pas
+   * l'obtenir).
+   */
+  planifierTacheEnabled?: boolean;
+  /**
    * Active l'outil de génération d'image `generer_image` (serveur ComfyUI).
    * DÉSACTIVÉ par défaut : seul le câblage l'active, quand le générateur existe.
    */
@@ -648,6 +687,8 @@ export function toolAllowlist(
   const messagesEnabled = (options.messagesEnabled ?? false) && entry.messages.length > 0;
   const envoisProgrammesEnabled =
     (options.envoisProgrammesEnabled ?? false) && entry.envoisProgrammes.length > 0;
+  const planifierTacheEnabled =
+    (options.planifierTacheEnabled ?? false) && entry.planifierTaches.length > 0;
   const fileTransferEnabled =
     (options.fileTransferEnabled ?? false) && entry.fileTransfer.length > 0;
   const fileListEnabled =
@@ -694,6 +735,9 @@ export function toolAllowlist(
   }
   if (envoisProgrammesEnabled) {
     tools.push(...entry.envoisProgrammes);
+  }
+  if (planifierTacheEnabled) {
+    tools.push(...entry.planifierTaches);
   }
   if (fileTransferEnabled) {
     tools.push(...entry.fileTransfer);
@@ -805,6 +849,10 @@ export const REMOTE_TOOL_GROUP_OF: Readonly<Record<CustomToolName, RemoteToolGro
   // comme `publier_dans_canal`). Aucune machine, aucun modèle à l'heure dite ⇒ aucun
   // réglage d'accès distant n'a de sens pour lui.
   programmer_envoi: "toujours",
+  // ⚠️ TÂCHE PLANIFIÉE (lot 31) : elle ne touche à rien MAINTENANT et le travail se fait
+  // dans un worker qui a ses propres garde-fous (et aucune pré-autorisation transmise) ⇒
+  // aucun réglage d'accès distant n'a de sens pour elle.
+  planifier_tache: "toujours",
   envoyer_fichier: "toujours",
   // ── groupe JAMAIS (approbation impossible depuis un canal) ────────────
   run_command: "jamais",

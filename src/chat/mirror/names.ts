@@ -150,6 +150,22 @@ export class AuthorDirectory {
     return changes;
   }
 
+  /**
+   * OUBLIE tous les noms d'UNE plateforme (suppression du miroir de cette plateforme).
+   *
+   * ⚠️ Persiste seulement s'il y avait quelque chose à oublier : un annuaire déjà vide
+   * ne doit pas être réécrit (ni créer de fichier) pour rien.
+   *
+   * @returns le nombre d'entrées oubliées.
+   */
+  purge(platform: RemotePlatform): number {
+    const prefix = `${platform}\u0000`;
+    const cles = [...this.noms.keys()].filter((key) => key.startsWith(prefix));
+    for (const key of cles) this.noms.delete(key);
+    if (cles.length > 0) this.save();
+    return cles.length;
+  }
+
   /** Évince les entrées les plus anciennes au-delà de la borne (jamais d'erreur). */
   private evict(): void {
     while (this.noms.size > this.max) {

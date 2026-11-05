@@ -26,7 +26,16 @@ export {
   DEFAULT_SOURCE_RATTRAPAGE,
   DEFAULT_SOURCE_VISIBILITE,
   MAX_CONSIGNE_CHARS,
+  MAX_ETAPES_CHAINE,
+  MAX_FICHIERS_ETAPE,
   MAX_INBOX_ENTRIES,
+  MAX_INSTRUCTION_TACHE_CHARS,
+  MAX_OCCURRENCES,
+  MAX_TACHES_PONCTUELLES,
+  MAX_TEXTE_ETAPE_CHARS,
+  MIN_ETAPES_CHAINE,
+  MIN_OCCURRENCES,
+  isSourceDeclencheurPonctuel,
   MAX_PLAFOND_MS,
   MAX_REPLY_CHARS,
   MAX_SOURCES,
@@ -56,7 +65,13 @@ export type {
   SourceConversationView,
   SourceDeclencheur,
   SourceDeclencheurPlanning,
+  SourceDeclencheurPonctuel,
   SourceDeclencheurType,
+  SourceChaine,
+  SourceChaineInput,
+  SourceEtapeInput,
+  ResultatEtape,
+  SourceSerieEchecs,
   SourceDeclencheurWebhook,
   SourceDelivery,
   SourceDestination,
@@ -99,6 +114,9 @@ export {
   BALAYAGE_INTERVAL_MS,
   DeclencheurBalayeur,
   GRACE_APRES_ABORT_MS,
+  RAISON_TACHE_EN_COURS,
+  raisonFinDate,
+  raisonFinOccurrences,
   raisonGardeFouQuotidien,
 } from "./scheduler.js";
 export type {
@@ -107,6 +125,7 @@ export type {
   DeclencheurBalayeurOptions,
   DeclencheurRunner,
   EnvoisProgrammesRunner,
+  PasseHebdoRunner,
 } from "./scheduler.js";
 
 export {
@@ -127,9 +146,12 @@ export {
   SOURCES_STORE_BACKUP_SUFFIX,
   SOURCES_STORE_LEGACY_VERSION,
   SOURCES_STORE_SCHEMA_VERSION,
+  ChainesFullError,
   SourcesFullError,
   SourcesStore,
   SourceValidationError,
+  TachesPonctuellesFullError,
+  slugifierNomTache,
   validateConversation,
   validateDeclencheur,
   validateSourceName,
@@ -173,12 +195,30 @@ export {
   validateMessage,
 } from "./service.js";
 export { tacheDeDeclencheur } from "./service.js";
+export type { PlanificationTacheOutcome } from "./service.js";
+export {
+  MAX_LIBELLE_TACHE_CHARS,
+  RAISON_INSTRUCTION_TROP_LONGUE,
+  RAISON_INSTRUCTION_VIDE,
+  RAISON_TACHE_DELAI_MIN,
+  RAISON_TACHE_HORIZON,
+  RAISON_TACHE_PASSEE,
+  libelleDeTache,
+  tachePonctuelle,
+  validerPlanificationTache,
+} from "./taches.js";
+export type {
+  PlanificationTacheInput,
+  PlanificationValidee,
+  ValidationPlanification,
+} from "./taches.js";
 export type {
   DeclenchementFin,
   DeclenchementOptions,
   DeclenchementResult,
   DeclencheurJobsPort,
   DeclencheurPublicationPort,
+  FichierPublie,
   SourceOpenResult,
   SourcesHostEvent,
   SourcesLogger,

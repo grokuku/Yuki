@@ -63,6 +63,8 @@ import {
   EVENEMENTS_JOURNAL,
   JOURNAL_LIMITE,
   JOURNAL_LIMITE_MAX,
+  etatEtape,
+  grouperParChaine,
   grouperParSection,
   lienJournal,
   resumerEvenement,
@@ -73,6 +75,7 @@ import {
   texteJournalBorne,
   textePreAutorisations,
   texteQuand,
+  texteResultatEtape,
   texteTours,
   filtrerJournal,
   envoiAnnulable,
@@ -240,6 +243,8 @@ function sourceForm({
   plafondMs,
   maxToursParJour,
   actif,
+  occurrencesMax,
+  jusquAu,
   onApercu,
 }) {
   const nomInput = h("input", {
@@ -506,6 +511,57 @@ function sourceForm({
     id: "source-actif",
   });
   actifInput.checked = actif !== false;
+
+  // ⚠️ LOT 32 — FIN DE RÉCURRENCE (deux champs, deux formes indépendantes).
+  // Vide = aucune fin. La date est un INSTANT ISO avec fuseau (« 2026-11-19T23:00:00Z ») :
+  // on ne devine pas le fuseau du navigateur, qui n'est pas celui du serveur.
+  const jusquAuInput = h("input", {
+    class: "config-input",
+    type: "text",
+    id: "source-jusqu-au",
+    autocomplete: "off",
+    spellcheck: "false",
+    placeholder: "2026-11-19T23:00:00Z",
+    value: typeof jusquAu === "string" ? jusquAu : "",
+    "aria-label": "Date de fin de récurrence (instant ISO)",
+  });
+  const jusquAuLabel = h("label", {
+    class: "config-label",
+    for: "source-jusqu-au",
+    text: "Fin de récurrence par DATE (facultative)",
+  });
+  const jusquAuHelper = h("p", {
+    class: "config-helper",
+    text:
+      "Instant ISO avec son fuseau (« 2026-11-19T23:00:00Z » ou « +01:00 »). Passé cet " +
+      "instant, plus aucun passage n'est tiré et le déclencheur s'éteint avec la raison " +
+      "« terminée : fin prévue le … ». Vide = aucune fin.",
+  });
+  const occurrencesInput = h("input", {
+    class: "config-input",
+    type: "number",
+    id: "source-occurrences-max",
+    min: "1",
+    max: "10000",
+    step: "1",
+    value:
+      typeof occurrencesMax === "number" && Number.isFinite(occurrencesMax)
+        ? String(Math.trunc(occurrencesMax))
+        : "",
+    "aria-label": "Nombre maximal de passages",
+  });
+  const occurrencesLabel = h("label", {
+    class: "config-label",
+    for: "source-occurrences-max",
+    text: "Fin de récurrence par NOMBRE de passages (1 à 10 000)",
+  });
+  const occurrencesHelper = h("p", {
+    class: "config-helper",
+    text:
+      "Compte les passages RÉELLEMENT TIRÉS : un saut (rattrapage refusé, chevauchement) " +
+      "ne compte pas. À l'échéance, le déclencheur s'éteint avec « terminée : 14/14 " +
+      "passages ». Vide = aucune fin.",
+  });
   const actifLabel = h("label", { class: "config-label source-form__check" }, [
     actifInput,
     h("span", { text: " Déclencheur actif (décochez pour le mettre en veille)" }),
@@ -602,6 +658,15 @@ function sourceForm({
     fuseauHelper,
     apercuActions,
     apercuEl,
+    // ⚠️ LOT 32 — FIN DE RÉCURRENCE : deux formes INDÉPENDANTES, avec des champs vides
+    // = aucune fin. La borne par NOMBRE compte les passages RÉELLEMENT tirés (jamais les
+    // sauts) ; la borne par DATE éteint le déclencheur passé cet instant.
+    jusquAuLabel,
+    jusquAuInput,
+    jusquAuHelper,
+    occurrencesLabel,
+    occurrencesInput,
+    occurrencesHelper,
     actifLabel,
     chevauchementLabel,
     chevauchementSelect,
@@ -682,6 +747,10 @@ function sourceForm({
       plafondMs: minutesDe(plafondInput.value),
       maxToursParJour: entierDe(maxToursInput.value, 200),
       actif: actifInput.checked,
+      // ⚠️ LOT 32 — `null` RETIRE la borne (l'API traduit `null`/"" en suppression) :
+      // un champ vidé doit RÉELLEMENT retirer la fin de récurrence, pas la laisser en place.
+      occurrencesMax: occurrencesInput.value.trim() === "" ? null : entierDe(occurrencesInput.value, 0) || null,
+      jusquAu: jusquAuInput.value.trim() === "" ? null : jusquAuInput.value.trim(),
     }),
   };
 }
@@ -839,6 +908,8 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
       plafondMs: source.plafondMs,
       maxToursParJour: source.maxToursParJour,
       actif: source.actif,
+      occurrencesMax: source.occurrencesMax,
+      jusquAu: source.jusquAu,
       nomReadonly: true,
       conversations: state.conversations,
       onApercu: demanderApercu,
@@ -872,6 +943,9 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
             plafondMs: values.plafondMs,
             maxToursParJour: values.maxToursParJour,
             actif: values.actif,
+            // ⚠️ LOT 32 — transmis TELLES QUELLES (`null` = retirer).
+            occurrencesMax: values.occurrencesMax,
+            jusquAu: values.jusquAu,
           },
         });
         ctrl.close();
@@ -1004,7 +1078,12 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
   /** Les TROIS sections — toujours rendues, même vides (aucune disparition muette). */
   function renderSections() {
     sectionsEl.textContent = "";
-    for (const groupe of grouperParSection(state.sources)) {
+    // ⚠️ LOT 33 — les étapes de chaîne ne sont PAS rendues en lignes isolées : elles ont
+    // leur CARTE (une par chaîne, étapes dans l'ordre), où leur nom ET leur état restent
+    // visibles. Les trois sections historiques ne décrivent donc que les déclencheurs
+    // isolés — aucun n'est perdu : `isolees` + les cartes = toutes les fiches.
+    const { chaines, isolees } = grouperParChaine(state.sources);
+    for (const groupe of grouperParSection(isolees)) {
       const section = h(
         "section",
         { class: `config-group declencheurs-section declencheurs-section--${groupe.id}` },
@@ -1029,6 +1108,69 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
       );
       sectionsEl.append(section);
     }
+    if (chaines.length > 0) sectionsEl.append(renderChaines(chaines));
+  }
+
+  /**
+   * Une CARTE par chaîne (lot 33) : étapes dans l'ordre, avec leur NOM (celui qui porte
+   * les pré-autorisations), leur libellé, leur état et le résumé de leur résultat.
+   *
+   * ⚠️ Un groupe de chaîne n'est pas une section de plus : c'est la seule vue où l'on
+   * peut vérifier l'ordre et voir qu'une étape est « annulée : … » sans chercher sa ligne
+   * dans trois tableaux.
+   */
+  function renderChaines(chaines) {
+    return h("section", { class: "config-group declencheurs-chaines" }, [
+      h("div", { class: "config-group__head" }, [
+        h("h3", {
+          class: "config-group__title declencheurs-section__title",
+          text: `Chaînes d'étapes (${chaines.length})`,
+        }),
+      ]),
+      h("p", {
+        class: "config-helper",
+        text:
+          "Une chaîne enchaîne des étapes : l'étape 2 reçoit le RÉSULTAT de l'étape 1 " +
+          "(texte et fichiers). Si une étape échoue, les suivantes ne partent pas et une " +
+          "seule ligne le dit. Le NOM de chaque étape porte ses pré-autorisations.",
+      }),
+      ...chaines.map((chaine) =>
+        h("div", { class: "declencheurs-chaine" }, [
+          h("h4", {
+            class: "declencheurs-chaine__titre",
+            text: `${chaine.titre} — ${chaine.etapes.length} étape(s)`,
+          }),
+          h(
+            "ol",
+            { class: "declencheurs-chaine__etapes" },
+            chaine.etapes.map((etape) =>
+              h("li", { class: "declencheurs-chaine__etape" }, [
+                h("span", { class: "declencheurs-chaine__nom", text: etape.nom }),
+                ...(typeof etape.libelle === "string" && etape.libelle !== ""
+                  ? [h("span", { class: "declencheurs-chaine__libelle", text: etape.libelle })]
+                  : []),
+                h("span", { class: "declencheurs-chaine__quand", text: texteQuand(etape) }),
+                h("span", { class: "declencheurs-chaine__etat", text: etatEtape(etape) }),
+                ...(texteResultatEtape(etape) !== ""
+                  ? [
+                      h("span", {
+                        class: "declencheurs-chaine__resultat",
+                        text: texteResultatEtape(etape),
+                      }),
+                    ]
+                  : []),
+                h("button", {
+                  class: "button button--ghost button--small",
+                  type: "button",
+                  text: "Réglages",
+                  on: () => openEdit(etape),
+                }),
+              ]),
+            ),
+          ),
+        ]),
+      ),
+    ]);
   }
 
   /** Journal BORNÉ et FILTRABLE (⚠️ jamais tout le fichier d'un coup). */

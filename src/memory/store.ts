@@ -371,6 +371,22 @@ export class MemoryStore {
   }
 
   /**
+   * Relit le journal depuis le DISQUE et reprojette l'état.
+   *
+   * ⚠️ Réservé aux écritures ATOMIQUES faites hors du store (consolidation
+   * hebdomadaire, restauration d'une version) : le fichier a été remplacé
+   * (`renameSync`), la projection en RAM est donc périmée. Un changement `reset`
+   * est diffusé pour que l'index DÉRIVÉ reparte vide — l'appelant le reconstruit
+   * ensuite depuis les entrées relues (`MemoryIndex.rebuild`).
+   */
+  reload(): void {
+    this.byId.clear();
+    this.fingerprints.clear();
+    this.replayFromDisk();
+    this.emit({ type: "reset" });
+  }
+
+  /**
    * Ajoute un souvenir. Idempotent : si un souvenir identique (au repli
    * casse/accents/espaces près) existe déjà, aucune ligne n'est écrite.
    */

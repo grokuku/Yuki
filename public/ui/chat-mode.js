@@ -355,6 +355,74 @@ export function modeNotice(status, etatListe) {
   return noticeVide(mode);
 }
 
+/**
+ * MODES DE DISCUSSION RÉELLEMENT ACTIFS, dans l'ordre du sélecteur.
+ *
+ * ⚠️ DÉFINITION TRANCHÉE (2026-11-05) — **un type de discussion est actif quand il y a
+ * quelque chose à y faire ou à y lire** :
+ *  - `local` est TOUJOURS actif (les conversations de Yuki existent même à zéro) ;
+ *  - une plateforme est active si un **jeton est enregistré au coffre**
+ *    (`jetonEnregistre === true` : on peut s'y connecter, ou il ne manque que l'URL) **ou
+ *    si son miroir contient au moins une conversation** (`canaux.length > 0` : même
+ *    débranchée, les conversations importées restent lisibles).
+ *
+ * ⚠️ POURQUOI PAS « `plateforme.etat === "on"` » (connectée seulement) : une plateforme
+ * configurée mais momentanément en erreur (jeton refusé, serveur injoignable, redémarrage)
+ * est exactement le moment où l'on veut GARDER son onglet pour y lire la raison et la
+ * réparer. Inversement, « configurée mais déconnectée » garde ses conversations miroir :
+ * les masquer rendrait ces conversations inaccessibles depuis l'interface.
+ *
+ * @param {unknown} status corps de `GET /api/chat/status`.
+ * @returns {string[]} modes actifs (au moins `["local"]`).
+ */
+export function modesActifs(status) {
+  const actifs = ["local"];
+  for (const platform of ["mattermost", "discord"]) {
+    const vue = status?.[platform];
+    if (!vue || typeof vue !== "object") continue;
+    const jeton = vue.jetonEnregistre === true;
+    const canaux = Array.isArray(vue.canaux) ? vue.canaux.length : 0;
+    if (jeton || canaux > 0) actifs.push(platform);
+  }
+  return actifs;
+}
+
+/**
+ * Le SÉLECTEUR DE MODE doit-il être visible ?
+ *
+ * ⚠️ Règle demandée le 2026-11-05 : il ne s'affiche que s'il y a **au moins DEUX types de
+ * discussion actifs**. Avec un seul, il n'y a aucun choix à faire : le sélecteur est
+ * MASQUÉ (pas « désactivé » — un bouton grisé serait un espace perdu et une question
+ * sans réponse).
+ *
+ * ⚠️ État INCONNU (`status` absent : gateway injoignable) ⇒ visible. Ne rien savoir n'est
+ * pas une raison de retirer un contrôle : le masquer affirmerait « un seul type actif »,
+ * ce qu'on ne sait pas.
+ */
+export function selectorVisible(status) {
+  if (!status || typeof status !== "object") return true;
+  return modesActifs(status).length >= 2;
+}
+
+/**
+ * Mode sur lequel BASCULER quand le mode courant n'est plus actif, ou `null`.
+ *
+ * ⚠️ Cas réel : `chat.mode = mattermost` et la connexion est supprimée ⇒ sans bascule,
+ * l'interface afficherait un mode MORT (aucune conversation à lister). On retombe sur
+ * `local`, qui est toujours actif ; sinon sur le premier mode encore actif.
+ *
+ * ⚠️ Cette fonction ne DÉCIDE rien côté serveur : elle rend le mode à demander, et
+ * l'appelant l'écrit par `saveChatMode` (`PUT /api/config`). Le serveur reste l'autorité.
+ */
+export function resolveActiveMode(status) {
+  if (!status || typeof status !== "object") return null;
+  const actifs = modesActifs(status);
+  const courant = status.mode;
+  if (typeof courant === "string" && actifs.includes(courant)) return null;
+  if (actifs.includes("local")) return "local";
+  return actifs[0] ?? null;
+}
+
 /** En-têtes d'écriture de configuration (mêmes que la page `/config`). */
 const WRITE_HEADERS = {
   "content-type": "application/json",
@@ -459,8 +527,17 @@ export function initChatModeSelector(deps) {
 
   function update(status) {
     const mode = status?.mode;
+    const actifs = modesActifs(status);
+    const visible = selectorVisible(status);
+    // ⚠️ MASQUÉ, pas désactivé : aucun espace vide, aucun bouton inutile. Le conteneur
+    // entier (`root` = `.sidebar__mode`) est retiré du flux, pas seulement grisé.
+    root.hidden = !visible;
+    group.hidden = !visible;
     for (const [value, button] of buttons) {
       const pressed = value === mode;
+      // ⚠️ Un mode INACTIF n'apparaît pas non plus DANS le sélecteur : c'est le but
+      // (« s'il n'y a que 2 types actifs dont aucun Discord, Discord n'apparaît plus »).
+      button.hidden = !actifs.includes(value);
       button.setAttribute("aria-pressed", pressed ? "true" : "false");
       button.classList.toggle("chat-mode__btn--active", pressed);
     }

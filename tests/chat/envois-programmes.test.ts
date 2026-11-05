@@ -583,6 +583,9 @@ describe("envois programmés — c'est le BALAYEUR EXISTANT qui les exécute", (
         markPlanification: () => record,
         setActif: () => record,
         incrementerTour: () => 1,
+        // Le port du balayeur compte aussi les passages tirés (lot 32) : ce double ne
+        // s'en sert pas, mais il doit satisfaire le contrat.
+        incrementerOccurrence: () => 1,
       },
       // Le run des déclencheurs n'est jamais appelé ici (aucun planning).
       run: async () => ({ outcome: "failed", raison: "sans objet" }) as never,
@@ -627,6 +630,9 @@ describe("envois programmés — c'est le BALAYEUR EXISTANT qui les exécute", (
         markPlanification: () => record,
         setActif: () => record,
         incrementerTour: () => 1,
+        // Le port du balayeur compte aussi les passages tirés (lot 32) : ce double ne
+        // s'en sert pas, mais il doit satisfaire le contrat.
+        incrementerOccurrence: () => 1,
       },
       run: async () => ({ outcome: "failed" }) as never,
       logger,

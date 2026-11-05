@@ -376,6 +376,13 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
           // donc fournir le port comme le vrai, sinon la parité
           // politique ↔ définitions (assertion plus bas) deviendrait fausse.
           envoisProgrammes: { programmer: async () => ({ ok: false, raison: "test" }) },
+          // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : MÊME raison — le socle
+          // `toujours` la pousse dans toute conversation distante, donc le port doit
+          // exister ici aussi, sans quoi la parité politique ↔ définitions serait fausse
+          // pour une raison de câblage de TEST.
+          planifierTache: {
+            planifier: async () => ({ ok: false, raison: "test" }),
+          },
           images: {
             // Générateur ComfyUI SIMULÉ : il écrit dans le VRAI store d'images et
             // rend exactement ce que rend le générateur réel.

@@ -37,6 +37,7 @@ import {
   dateHeureFr,
   eteintRecemment,
   filtrerJournal,
+  estTachePonctuelle,
   grouperParSection,
   jamaisPasse,
   libelleEvenement,
@@ -390,5 +391,37 @@ describe("déclencheurs — l'onglet DÉDIÉ et l'ancre", () => {
       expect(sansCommentaires).not.toMatch(/["']style["']\s*:/);
       expect(sansCommentaires).not.toMatch(/\sstyle=/);
     }
+  });
+});
+
+// ── LOT 31 : tâche ponctuelle (`declencheur.type: "ponctuel"`) ──────────────
+
+describe("déclencheurs — une TÂCHE PONCTUELLE n'est jamais présentée comme un webhook", () => {
+  const tache = (extra: Record<string, unknown> = {}) => ({
+    nom: "resume-du-journal",
+    libelle: "Résumé du journal",
+    declencheur: { type: "ponctuel", a: "2026-11-05T07:00:00.000Z", fuseau: "Europe/Paris" },
+    visibilite: "silencieux",
+    actif: true,
+    cree: "2026-11-04T16:00:00.000Z",
+    maj: "2026-11-04T16:00:00.000Z",
+    ...extra,
+  });
+
+  it("reconnaît le type et le classe en TEMPORAIRES", () => {
+    expect(estTachePonctuelle(tache())).toBe(true);
+    expect(estTachePonctuelle(webhook())).toBe(false);
+    expect(classerSource(tache())).toBe("temporaires");
+  });
+
+  it("affiche l'INSTANT ABSOLU (jamais « webhook »)", () => {
+    const quand = texteQuand(tache());
+    expect(quand).toContain("tâche ponctuelle");
+    expect(quand).toContain(dateHeureFr("2026-11-05T07:00:00.000Z"));
+    expect(quand).not.toContain("webhook");
+    // Une fois exécutée, elle le DIT (le motif d'extinction reste lisible).
+    expect(texteQuand(tache({ actif: false }))).toContain("exécutée");
+    expect(texteProchainPassage(tache({ actif: false }))).toContain("tâche exécutée");
+    expect(texteProchainPassage(tache())).toBe(dateHeureFr("2026-11-05T07:00:00.000Z"));
   });
 });

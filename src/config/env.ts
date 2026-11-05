@@ -60,6 +60,19 @@ export interface Env {
   /** Fichier SQLite de l'index FTS5 (DÉRIVÉ, reconstructible). */
   memoryIndexPath: string;
   /**
+   * Dossier des VERSIONS de la consolidation hebdomadaire (lot 29) :
+   * `<state>/memory-archive/consolidation/<AAAA-MM-JJ_HHMM>/`. Chaque passe y
+   * dépose `memory.jsonl` (état AVANT), `operations.json` et `rapport.json`.
+   * Surcharge : `YUKI_MEMORY_CONSOLIDATION_DIR`.
+   */
+  memoryConsolidationDir: string;
+  /**
+   * Fichier JSON de l'ÉTAT de la consolidation hebdomadaire (armement du
+   * prochain passage + verrou `enCours`). Surcharge :
+   * `YUKI_MEMORY_CONSOLIDATION_STATE_PATH`.
+   */
+  memoryConsolidationStatePath: string;
+  /**
    * Dossier de l'archive « vie antérieure » (volume `state`, Lot 13) : séparé du
    * store de mémoire, jamais fusionné. Surcharge : `YUKI_HERITAGE_DIR`.
    */
@@ -390,6 +403,16 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_MEMORY_INDEX_PATH",
       `${mountPoints.state}/memory-index.sqlite`,
+    ),
+    memoryConsolidationDir: getString(
+      env,
+      "YUKI_MEMORY_CONSOLIDATION_DIR",
+      `${mountPoints.state}/memory-archive/consolidation`,
+    ),
+    memoryConsolidationStatePath: getString(
+      env,
+      "YUKI_MEMORY_CONSOLIDATION_STATE_PATH",
+      `${mountPoints.state}/memory-consolidation.json`,
     ),
     heritageDir: getString(
       env,

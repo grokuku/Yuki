@@ -477,6 +477,51 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_MEMORY_SET_ASIDE_MAX_CHUNKS",
   },
 
+  // --- Consolidation HEBDOMADAIRE de la mémoire (lot 29) -------------------
+  // ⚠️ Le fuseau est un réglage À PART de `ui.timeZone` (qui reste UTC) : la
+  // planification hebdomadaire vise une heure de PARIS (« 3 h du matin »),
+  // l'affichage des horodatages reste corrélable à Mattermost.
+  "memory.consolidation.enabled": {
+    type: "enum",
+    enum: ["off", "on"],
+    default: "on",
+    apply: "hot",
+    env: "YUKI_MEMORY_CONSOLIDATION_ENABLED",
+  },
+  "memory.consolidation.cron": {
+    type: "string",
+    default: "0 3 * * 0",
+    apply: "hot",
+    env: "YUKI_MEMORY_CONSOLIDATION_CRON",
+  },
+  "memory.consolidation.timeZone": {
+    type: "string",
+    default: "Europe/Paris",
+    apply: "hot",
+    ianaTimeZone: true,
+    env: "YUKI_MEMORY_CONSOLIDATION_TIME_ZONE",
+  },
+  // Budget de tokens d'UNE passe : plafonné par le contexte du modèle lourd lu
+  // à l'exécution. Volontairement modeste par défaut (un appel géant est lent,
+  // cher, et la qualité se dégrade sur de très longs contextes).
+  "memory.consolidation.budgetTokens": {
+    type: "int",
+    default: 200_000,
+    min: 1_000,
+    max: 2_000_000,
+    apply: "hot",
+    env: "YUKI_MEMORY_CONSOLIDATION_BUDGET_TOKENS",
+  },
+  // Nombre de versions d'archive conservées (12 ≈ 3 mois à une passe/semaine).
+  "memory.consolidation.retention": {
+    type: "int",
+    default: 12,
+    min: 1,
+    max: 100,
+    apply: "hot",
+    env: "YUKI_MEMORY_CONSOLIDATION_RETENTION",
+  },
+
   // --- Récapitulatif « conversation dédiée » -------------------------------
   // Appel LLM LONG (récapitulatif exhaustif d'une conversation) : délai
   // GÉNÉREUX à dessein. Au-delà, on interrompt et on l'annonce honnêtement

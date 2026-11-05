@@ -794,3 +794,127 @@ describe("API sources — déclencheur planifié (moteur horloge)", () => {
     expect(source["etat"]).toBe("suspendu");
   });
 });
+
+/**
+ * LOTS 32 et 33 — fin de récurrence réglable et chaînes d'étapes ATOMIQUES.
+ *
+ * ⚠️ Ces tests ÉCHOUENT sur le code d'origine : la route `/api/sources/chaines`
+ * n'existe pas (404 sur le nom de source « chaines »), et `settingsFrom` ne transmet ni
+ * `occurrencesMax` ni `jusquAu` (le store les validait sans qu'on pût les régler).
+ */
+describe("API sources — fin de récurrence (lot 32) et chaînes (lot 33)", () => {
+  const GARDE = { "x-yuki-config": "1", "content-type": "application/json" };
+
+  it("PATCH règle `occurrencesMax` et `jusquAu`, et une CHAÎNE VIDE les retire", async () => {
+    const rig = makeRig();
+    rig.store.create("planifie", {
+      declencheur: { type: "planning", expression: "0 9 * * *", fuseau: "Europe/Paris" },
+    } as never);
+    const pose = await request(rig.service, {
+      method: "PATCH",
+      path: "/api/sources/planifie",
+      headers: GARDE,
+      body: JSON.stringify({ occurrencesMax: 14, jusquAu: "2026-11-19T23:00:00Z" }),
+    });
+    expect(pose.status).toBe(200);
+    const source = (pose.body as { source: Record<string, unknown> }).source;
+    expect(source["occurrencesMax"]).toBe(14);
+    expect(source["jusquAu"]).toBe("2026-11-19T23:00:00.000Z");
+
+    const retire = await request(rig.service, {
+      method: "PATCH",
+      path: "/api/sources/planifie",
+      headers: GARDE,
+      body: JSON.stringify({ occurrencesMax: "", jusquAu: "" }),
+    });
+    expect(retire.status).toBe(200);
+    const apres = (retire.body as { source: Record<string, unknown> }).source;
+    expect(apres["occurrencesMax"]).toBeUndefined();
+    expect(apres["jusquAu"]).toBeUndefined();
+  });
+
+  it("POST /api/sources/chaines crée les étapes DANS L'ORDRE et les expose", async () => {
+    const rig = makeRig();
+    const response = await request(rig.service, {
+      method: "POST",
+      path: "/api/sources/chaines",
+      headers: GARDE,
+      body: JSON.stringify({
+        libelle: "Veille quotidienne",
+        etapes: [
+          {
+            libelle: "Collecte",
+            consigne: "Collecte",
+            declencheur: { type: "planning", expression: "0 7 * * *", fuseau: "Europe/Paris" },
+          },
+          {
+            libelle: "Analyse",
+            consigne: "Analyse",
+            declencheur: { type: "planning", expression: "0 8 * * *", fuseau: "Europe/Paris" },
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(201);
+    const body = response.body as { chaineId: string; etapes: Array<{ nom: string }> };
+    expect(body.etapes.map((etape) => etape.nom)).toEqual(["collecte", "analyse"]);
+    // La liste les expose avec leur appartenance (l'UI en fait une carte).
+    const liste = await request(rig.service, {
+      method: "GET",
+      path: "/api/sources",
+      headers: { "x-yuki-config": "1" },
+    });
+    const sources = (liste.body as { sources: Array<Record<string, unknown>> }).sources;
+    const collecte = sources.find((source) => source["nom"] === "collecte") as
+      | Record<string, unknown>
+      | undefined;
+    expect(collecte?.["chaine"]).toEqual({ id: body.chaineId, etape: 1 });
+    const analyse = sources.find((source) => source["nom"] === "analyse") as
+      | Record<string, unknown>
+      | undefined;
+    expect(analyse?.["chaine"]).toEqual({
+      id: body.chaineId,
+      etape: 2,
+      apres: "collecte",
+    });
+  });
+
+  it("⚠️ place insuffisante ⇒ 429 et AUCUNE étape créée (atomique)", async () => {
+    const rig = makeRig();
+    // Le harnais déclare déjà deux sources : on complète jusqu'à UNE place libre.
+    let rang = 0;
+    while (rig.store.sourcesDurables < 19) {
+      rig.store.create(`dur-${rang}`, {});
+      rang += 1;
+    }
+    const avant = rig.store.size;
+    const response = await request(rig.service, {
+      method: "POST",
+      path: "/api/sources/chaines",
+      headers: GARDE,
+      body: JSON.stringify({
+        etapes: [
+          { libelle: "Un", consigne: "x", declencheur: { type: "planning", expression: "0 7 * * *", fuseau: "Europe/Paris" } },
+          { libelle: "Deux", consigne: "y", declencheur: { type: "planning", expression: "0 8 * * *", fuseau: "Europe/Paris" } },
+        ],
+      }),
+    });
+    expect(response.status).toBe(429);
+    const body = response.body as { error: string; placesRestantes: number; demandees: number };
+    expect(body.error).toBe("chaines_full");
+    expect(body.placesRestantes).toBe(1);
+    expect(body.demandees).toBe(2);
+    expect(rig.store.size).toBe(avant);
+  });
+
+  it("la route des chaînes est GARDÉE comme le reste de l'administration", async () => {
+    const rig = makeRig();
+    const response = await request(rig.service, {
+      method: "POST",
+      path: "/api/sources/chaines",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ etapes: [] }),
+    });
+    expect(response.status).toBe(403);
+  });
+});

@@ -40,15 +40,56 @@ import { SOURCE_TOKEN_NAME_PREFIX } from "../secrets/references.js";
 export const SOURCE_NAME_PATTERN = /^[a-z0-9_-]{1,32}$/;
 
 /**
- * Noms RÉSERVÉS par l'API : `/api/sources/inbox…` est la boîte de notifications et
- * `/api/sources/envois…` l'API des envois programmés (lot 28), une source ne peut donc
- * pas s'appeler `inbox` ni `envois` (sinon collision de route : `DELETE
- * /api/sources/envois` supprimerait la source au lieu d'annuler un envoi).
+ * Noms RÉSERVÉS par l'API : `/api/sources/inbox…` est la boîte de notifications,
+ * `/api/sources/envois…` l'API des envois programmés (lot 28) et
+ * `/api/sources/chaines` la création d'une CHAÎNE d'étapes (lot 33). Une source ne peut
+ * donc pas porter ces noms (sinon collision de route : `DELETE /api/sources/envois`
+ * supprimerait la source au lieu d'annuler un envoi).
  */
-export const RESERVED_SOURCE_NAMES: readonly string[] = ["inbox", "envois"];
+export const RESERVED_SOURCE_NAMES: readonly string[] = ["inbox", "envois", "chaines"];
 
 /** Nombre maximal de sources déclarées (au-delà : refus explicite). */
 export const MAX_SOURCES = 20;
+
+/**
+ * Nombre maximal de TÂCHES PONCTUELLES (`declencheur.type === "ponctuel"`, lot 31).
+ *
+ * ⚠️ BORNE SÉPARÉE, ET C'EST VOULU : `MAX_SOURCES` compte les DÉCLENCHEURS DURABLES
+ * (webhook, planning). Une tâche ponctuelle est un rendez-vous qui s'éteint APRÈS son
+ * tir — la compter dans le même quota empêcherait d'en programmer une seule quand les
+ * 20 déclencheurs durables sont pris, et inversement un utilisateur qui programme 20
+ * rappels n'aurait plus le droit à aucun déclencheur.
+ */
+export const MAX_TACHES_PONCTUELLES = 20;
+
+/** Borne BASSE de la fin de récurrence par NOMBRE de passages (lot 32). */
+export const MIN_OCCURRENCES = 1;
+
+/** Borne HAUTE de la fin de récurrence par NOMBRE de passages (lot 32, 1–10 000). */
+export const MAX_OCCURRENCES = 10_000;
+
+/**
+ * Nombre maximal d'ÉTAPES d'une chaîne (lot 33).
+ *
+ * ⚠️ Chaque étape est un déclencheur DURABLE (`planning`) : elle consomme une place de
+ * `MAX_SOURCES`. La borne est donc basse (cinq) — une chaîne plus longue prendrait le
+ * quart du registre et il ne resterait plus de place pour une surveillance.
+ */
+export const MAX_ETAPES_CHAINE = 5;
+
+/** Nombre minimal d'étapes d'une chaîne (une « chaîne » d'une étape n'en est pas une). */
+export const MIN_ETAPES_CHAINE = 2;
+
+/**
+ * Longueur maximale du TEXTE d'un résultat d'étape conservé pour la suivante (caractères).
+ *
+ * ⚠️ Ce texte est réinjecté dans le contexte du worker de l'étape suivante : le borner
+ * empêche qu'une réponse de 40 000 caractères ne fasse exploser chaque prompt suivant.
+ */
+export const MAX_TEXTE_ETAPE_CHARS = 2_000;
+
+/** Nombre maximal d'identifiants de fichiers transmis à l'étape suivante. */
+export const MAX_FICHIERS_ETAPE = 8;
 
 /** Plafond d'entrées de la boîte : au-delà, REFUS explicite (jamais de perte). */
 export const MAX_INBOX_ENTRIES = 200;
@@ -64,6 +105,16 @@ export const MAX_TITRE_CHARS = 200;
 
 /** Longueur maximale de la CONSIGNE libre d'une source (caractères). */
 export const MAX_CONSIGNE_CHARS = 2_000;
+
+/**
+ * Longueur maximale de l'INSTRUCTION d'une tâche ponctuelle (caractères, lot 31).
+ *
+ * ⚠️ Plus large que `MAX_CONSIGNE_CHARS` : une tâche ponctuelle porte une DEMANDE
+ * complète (« génère une image de … puis poste-la dans … »), pas un rappel d'une ligne.
+ * La borne existe quand même : elle est persistée dans `sources.json` et recopiée dans
+ * chaque prompt du worker.
+ */
+export const MAX_INSTRUCTION_TACHE_CHARS = 4_000;
 
 /** Appels autorisés par minute ET par source (au-delà : 429 explicite). */
 export const SOURCE_RATE_LIMIT_PER_MINUTE = 30;
@@ -172,7 +223,7 @@ export function isSourceVisibilite(value: unknown): value is SourceVisibilite {
  *    DÉCLENCHEUR (`fuseau`, `Europe/Paris` par défaut) — ⚠️ jamais celui du
  *    process (en conteneur c'est UTC).
  */
-export type SourceDeclencheurType = "webhook" | "planning";
+export type SourceDeclencheurType = "webhook" | "planning" | "ponctuel";
 
 /** Déclencheur par PROGRAMME extérieur (poussée HTTP authentifiée). */
 export interface SourceDeclencheurWebhook {
@@ -188,8 +239,29 @@ export interface SourceDeclencheurPlanning {
   fuseau: string;
 }
 
+/**
+ * Déclencheur PONCTUEL (lot 31) : UN SEUL passage, à un instant ABSOLU.
+ *
+ * ⚠️ C'est ce qui distingue `planifier_tache` de `programmer_envoi` : ici, un LLM est
+ * RÉVEILLÉ à l'heure dite pour AGIR (image, commande via un agent, recherche…), alors
+ * que `programmer_envoi` publie un texte DÉJÀ écrit, sans appeler aucun modèle.
+ *
+ * ⚠️ La tâche est DÉSARMÉE AVANT d'être lancée (`actif: false`) : un plantage pendant
+ * l'exécution ne provoque pas un second tir au redémarrage.
+ */
+export interface SourceDeclencheurPonctuel {
+  type: "ponctuel";
+  /** Instant ISO du passage UNIQUE. */
+  a: string;
+  /** Fuseau de lecture (affichage, cohérence) — `Europe/Paris` par défaut. */
+  fuseau?: string;
+}
+
 /** Forme du déclencheur persisté (union discriminée par `type`). */
-export type SourceDeclencheur = SourceDeclencheurWebhook | SourceDeclencheurPlanning;
+export type SourceDeclencheur =
+  | SourceDeclencheurWebhook
+  | SourceDeclencheurPlanning
+  | SourceDeclencheurPonctuel;
 
 /** Fuseau par défaut d'un déclencheur planifié. */
 export const DEFAULT_FUSEAU = "Europe/Paris";
@@ -221,9 +293,25 @@ export function isSourceDeclencheurPlanning(value: unknown): value is SourceDecl
   );
 }
 
-/** Vrai si la valeur est un déclencheur connu (`webhook` ou `planning`). */
+/** Vrai si la valeur a la FORME d'un déclencheur `ponctuel` (⚠️ la DATE est validée à part). */
+export function isSourceDeclencheurPonctuel(value: unknown): value is SourceDeclencheurPonctuel {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    (value as { type?: unknown }).type === "ponctuel" &&
+    typeof (value as { a?: unknown }).a === "string" &&
+    ((value as { fuseau?: unknown }).fuseau === undefined ||
+      typeof (value as { fuseau?: unknown }).fuseau === "string")
+  );
+}
+
+/** Vrai si la valeur est un déclencheur connu (`webhook`, `planning` ou `ponctuel`). */
 export function isSourceDeclencheur(value: unknown): value is SourceDeclencheur {
-  return isSourceDeclencheurWebhook(value) || isSourceDeclencheurPlanning(value);
+  return (
+    isSourceDeclencheurWebhook(value) ||
+    isSourceDeclencheurPlanning(value) ||
+    isSourceDeclencheurPonctuel(value)
+  );
 }
 
 /**
@@ -381,6 +469,116 @@ export interface SourceRecord {
   cree: string;
   /** Instant ISO de la dernière modification des réglages. */
   maj: string;
+  /**
+   * LIBELLÉ HUMAIN de la tâche ponctuelle (lot 31) : ce que l'utilisateur a écrit
+   * (« résumé du journal »). ⚠️ `nom` est un SLUG dédupliqué (technique : URL, pré-
+   * autorisations) — l'interface affiche `libelle` quand il existe.
+   */
+  libelle?: string;
+  /**
+   * `true` quand la cible est la CONVERSATION DEMANDEUSE (tâche ponctuelle) : elle ne
+   * doit JAMAIS être renommée « Déclencheurs » — ce n'est pas le fil de Yuki.
+   */
+  perso?: boolean;
+  /**
+   * Nombre de passages RÉELLEMENT TIRÉS (lot 32) — ⚠️ jamais les sauts.
+   * Persisté : un redémarrage ne remet pas le compteur à zéro.
+   */
+  occurrencesFaites?: number;
+  /** Nombre maximal de passages tirés avant extinction automatique (lot 32, 1–10 000). */
+  occurrencesMax?: number;
+  /** Instant ISO au-delà duquel plus aucun passage n'est tiré (lot 32). */
+  jusquAu?: string;
+  /**
+   * ⚠️ LOT 33 — APPARTENANCE À UNE CHAÎNE D'ÉTAPES.
+   *
+   * Une chaîne est un ENSEMBLE de `SourceRecord` ordinaires (mêmes bornes, mêmes
+   * pré-autorisations, même journal) qui partagent `chaine.id` et savent quelle étape
+   * ils sont. Il n'y a PAS de type « chaîne » à part : une étape est un déclencheur
+   * `planning` normal, ce qui lui donne gratuitement le cron, le fuseau, les quotas,
+   * les pré-autorisations (indexées par son NOM) et la page de gestion.
+   */
+  chaine?: SourceChaine;
+  /**
+   * ⚠️ LOT 33 — RÉSULTAT de la dernière exécution de cette étape, conservé pour la
+   * suivante (texte borné + identifiants de fichiers ≤ 8). Écrit APRÈS publication.
+   */
+  resultatEtape?: ResultatEtape;
+  /**
+   * SÉRIE D'ÉCHECS EN COURS (lot 31) : même échec, même raison, d'affilée.
+   *
+   * ⚠️ Sert à CONSOLIDER : le premier échec d'une série est publié, les suivants
+   * identiques ne produisent pas une ligne de plus, et le RETOUR À LA NORMALE (ou le
+   * changement de raison) est publié. Jamais de silence, jamais de rafale.
+   */
+  serieEchecs?: SourceSerieEchecs;
+}
+
+/**
+ * Appartenance d'un déclencheur à une CHAÎNE d'étapes (lot 33).
+ *
+ * ⭐️ `apres` porte le NOM de l'étape précédente (et non son numéro) : c'est ce nom qui
+ * désigne le `SourceRecord` dont on relit le `resultatEtape`, et c'est aussi lui qui
+ * porte les pré-autorisations — le relais comme l'affichage parlent donc la même
+ * langue. `undefined` sur la première étape.
+ */
+export interface SourceChaine {
+  /** Identifiant de la chaîne, commun à toutes ses étapes. */
+  id: string;
+  /** Rang de l'étape (1 = première). */
+  etape: number;
+  /** Nom de l'étape PRÉCÉDENTE (absente pour l'étape 1). */
+  apres?: string;
+}
+
+/**
+ * Résultat d'une étape, conservé pour la suivante (voir `SourceRecord.resultatEtape`).
+ *
+ * ⚠️ BORNÉ À L'ÉCRITURE (store) : texte ≤ `MAX_TEXTE_ETAPE_CHARS`, fichiers ≤
+ * `MAX_FICHIERS_ETAPE`. Ce résultat est RÉINJECTÉ dans le contexte du worker suivant :
+ * sans borne, une réponse longue ferait grossir chaque prompt de la chaîne.
+ */
+export interface ResultatEtape {
+  /** Job de fond qui a produit ce résultat (diagnostic, jamais un identifiant de fil). */
+  jobId: string;
+  /** Texte produit (sans les marqueurs de fichiers), borné. */
+  texte: string;
+  /** Identifiants des fichiers produits (l'étape suivante les ouvre avec `lire_fichier`). */
+  fichiers: string[];
+  /** Instant ISO de l'écriture du résultat. */
+  at: string;
+}
+
+/** Une étape DEMANDÉE lors de la création d'une chaîne (`POST /api/sources/chaines`). */
+export interface SourceEtapeInput {
+  /** Libellé HUMAIN de l'étape (nom slugifié et dédupliqué côté store). */
+  libelle: string;
+  /** Consigne (donnée de prompt) — jamais du code. */
+  consigne: string;
+  /** Déclencheur de l'étape (⚠️ `planning` uniquement : une étape a un horaire). */
+  declencheur: SourceDeclencheur;
+  /** Fin de récurrence FACULTATIVE de cette étape (une étape peut ne tirer qu'une fois). */
+  occurrencesMax?: number;
+  /** Date de fin de récurrence FACULTATIVE de cette étape. */
+  jusquAu?: string;
+}
+
+/** Demande de création d'une chaîne (ATOMIQUE : tout ou rien). */
+export interface SourceChaineInput {
+  /** Libellé de la chaîne (affiché en tête de carte), facultatif. */
+  libelle?: string;
+  /** Étapes, dans l'ordre (`MIN_ETAPES_CHAINE` à `MAX_ETAPES_CHAINE`). */
+  etapes: SourceEtapeInput[];
+}
+
+/** Série d'échecs consécutifs d'un déclencheur (voir `SourceRecord.serieEchecs`). */
+export interface SourceSerieEchecs {
+  /** Raison EXACTE du premier échec de la série (comparée telle quelle). */
+  raison: string;
+  /** Instant ISO du premier échec de la série. */
+  debut: string;
+  /** Nombre de tentatives en échec DANS cette série (1 au premier échec). */
+  tentatives: number;
 }
 
 /** Vue PUBLIQUE d'une source (aucun jeton, aucune valeur de coffre). */
@@ -453,13 +651,32 @@ export interface SourceSettingsInput {
   destination?: SourceConversation;
   tour?: SourceTurn;
   notifier?: boolean;
-  /** Type de déclencheur (`webhook` ou `planning` + expression + fuseau). */
+  /** Type de déclencheur (`webhook`, `planning` + expression + fuseau, `ponctuel`). */
   declencheur?: SourceDeclencheur;
   chevauchement?: SourceChevauchement;
   rattrapage?: SourceRattrapage;
   plafondMs?: number;
   maxToursParJour?: number;
   actif?: boolean;
+  /** Libellé HUMAIN affiché (tâche ponctuelle, lot 31). */
+  libelle?: string;
+  /** Cible = conversation demandeuse, jamais renommée (tâche ponctuelle). */
+  perso?: boolean;
+  /** Nombre de passages déjà tirés (lot 32 — remis à zéro si le déclencheur change). */
+  occurrencesFaites?: number;
+  /**
+   * Fin de récurrence par NOMBRE de passages (1–10 000, lot 32).
+   * ⚠️ `null` = RETIRER la fin de récurrence (l'API traduit une chaîne vide en `null`) ;
+   * absent = ne pas y toucher.
+   */
+  occurrencesMax?: number | null;
+  /** Fin de récurrence par DATE (ISO, lot 32). `null` = retirer, absent = ne pas toucher. */
+  jusquAu?: string | null;
+  /**
+   * Appartenance à une CHAÎNE (lot 33) — ⚠️ réservée à `SourcesStore.createChaine`.
+   * Un appel direct à `create` avec ce champ n'est pas une voie publique.
+   */
+  chaine?: SourceChaine;
 }
 
 /** Message reçu d'une source (corps JSON validé). */

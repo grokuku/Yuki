@@ -1071,6 +1071,62 @@
   gap: 6px;
 }
 
+/* VERSIONS de la mémoire (consolidation hebdomadaire, lot 29) : liste datée avec
+   téléchargement et restauration. Aucun style inline (CSP `style-src 'self'`). */
+.personality-memory__versions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.personality-memory__versions-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.personality-memory__versions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.personality-memory__versions-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+}
+
+.personality-memory__versions-date {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.personality-memory__report {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+}
+
+.personality-memory__report > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
 /* Bloc « Vie antérieure » : édition de l'archive, VISUELLEMENT DISTINCT du
    formulaire de personnalité ET du bloc « Mémoire durable ». Aucun style inline
    (CSP `style-src 'self'`). */
@@ -1740,4 +1796,54 @@
 /* Un envoi ANNULÉ n'est plus qu'une trace : il reste lisible, sans appeler l'action. */
 .envois-row--annule {
   color: var(--muted);
+}
+
+/* ── CHAÎNES D'ÉTAPES (lot 33) ─────────────────────────────────────────────── */
+/* Une carte par chaîne : les étapes s'y lisent DANS L'ORDRE, avec leur nom (celui
+   qui porte les pré-autorisations) et leur état. */
+.declencheurs-chaines {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.declencheurs-chaine {
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.declencheurs-chaine__titre {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.declencheurs-chaine__etapes {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.declencheurs-chaine__etape {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.declencheurs-chaine__nom {
+  font-family: var(--mono, monospace);
+  font-weight: 600;
+}
+
+.declencheurs-chaine__libelle,
+.declencheurs-chaine__quand,
+.declencheurs-chaine__resultat {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.declencheurs-chaine__etat {
+  font-size: 0.85rem;
 }

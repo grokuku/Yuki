@@ -47,11 +47,18 @@ import {
   ORIGIN_SOURCE,
   separerMarqueurDesactivation,
 } from "./frame.js";
+import { formatFileMarker } from "../files/frame.js";
 import { parseCron, prochainPassage } from "./cron.js";
 import { InboxFullError, SourcesInbox } from "./inbox.js";
 import type { DeclencheurJournal } from "./journal.js";
-import { SourcesStore } from "./store.js";
+import { ChainesFullError, SourcesStore } from "./store.js";
 import {
+  tachePonctuelle,
+  validerPlanificationTache,
+  type PlanificationTacheInput,
+} from "./taches.js";
+import {
+  DEFAULT_FUSEAU,
   DEFAULT_PLAFOND_MS,
   DECLENCHEURS_SESSION_TITLE,
   isSourceDestination,
@@ -64,6 +71,7 @@ import {
   SOURCE_RATE_LIMIT_PER_MINUTE,
   sourceTokenName,
   type InboxEntry,
+  type SourceChaineInput,
   type SourceConversation,
   type SourceConversationView,
   type SourceDelivery,
@@ -154,6 +162,21 @@ export interface DeclencheurJobsPort {
 }
 
 /**
+ * Fichier joint à une publication de déclencheur (métadonnées SEULES).
+ *
+ * ⚠️ Les marqueurs `[fichier] <id> <nom> (<n> octets)` sont rendus par le SERVICE
+ * (`formatFileMarker`, `src/files/frame.ts:63`) et APPENDÉS au texte publié : c'est ce
+ * qui rend la carte CLIQUABLE et la fait SURVIVRE au rechargement. Le port reçoit la
+ * liste en plus du texte pour un rendu natif éventuel — jamais pour remplacer les
+ * marqueurs.
+ */
+export interface FichierPublie {
+  id: string;
+  nom: string;
+  octets: number;
+}
+
+/**
  * Port de PUBLICATION du résultat d'une tâche dans une conversation LOCALE,
  * sans tour de modèle (`PiHost.publierMessage`).
  *
@@ -161,7 +184,11 @@ export interface DeclencheurJobsPort {
  * ici on écrit dans un fil local, comme le fait déjà Yuki en répondant.
  */
 export interface DeclencheurPublicationPort {
-  publier(sessionId: string, texte: string): Promise<void>;
+  publier(
+    sessionId: string,
+    texte: string,
+    fichiers?: readonly FichierPublie[],
+  ): Promise<void>;
 }
 
 /** Port étroit vers le COFFRE (les jetons n'en sortent que par `lookup`). */
@@ -197,6 +224,12 @@ export interface SourcesServiceOptions {
   jobs?: DeclencheurJobsPort;
   /** ⚠️ LOT 2 — publication du résultat du job dans le fil « Déclencheurs ». */
   publication?: DeclencheurPublicationPort;
+  /**
+   * Résolution SERVEUR d'un fichier du store (métadonnées seules), pour joindre au
+   * résultat les marqueurs `[fichier] …`. Absent ⇒ le service DIT qu'un fichier n'a pas
+   * pu être nommé (jamais un marqueur inventé).
+   */
+  fichier?: (fichierId: string) => { name: string; bytes: number } | null;
   now?: () => number;
 }
 
@@ -227,6 +260,14 @@ export interface DeclenchementOptions {
   plafondMs?: number;
   /** Abandon décidé par le balayeur (chevauchement `remplacer`, arrêt du service). */
   signal?: AbortSignal;
+  /**
+   * ⚠️ LOT 31 — le balayeur a DÉJÀ désarmé la tâche ponctuelle (`actif: false`) AVANT de
+   * la lancer, pour qu'un plantage ne la rejoue pas. Sans ce drapeau, `declencher`
+   * refuserait le passage au titre de « en veille » et la tâche ne s'exécuterait jamais.
+   * ⚠️ Réservé au balayeur : un appelant qui le forgerait ne contournerait qu'un
+   * interrupteur qu'il contrôle déjà.
+   */
+  desarmementPrealable?: boolean;
 }
 
 /** Issue d'un tour de déclencheur (ce que le balayeur attend). */
@@ -251,6 +292,27 @@ export interface DeclenchementResult {
   fin: Promise<DeclenchementFin>;
 }
 
+/**
+ * Issue d'une demande de tâche planifiée (`planifier_tache`, lot 31).
+ *
+ * ⚠️ Toujours DITE : le modèle répète l'instant EFFECTIF (date complète), le nom retenu
+ * et la cible — sans quoi il annoncerait « c'est programmé » sans que la personne puisse
+ * vérifier ni l'heure, ni le fil où le résultat arrivera.
+ */
+export type PlanificationTacheOutcome =
+  | {
+      ok: true;
+      /** Nom SLUGIFIÉ et dédupliqué (identifiant stable de la tâche). */
+      nom: string;
+      /** Libellé HUMAIN (celui que l'interface affiche). */
+      libelle: string;
+      /** Instant effectif, en français, DATE COMPLÈTE et fuseau compris. */
+      quandLisible: string;
+      /** Où le résultat sera publié (« cette conversation », « le fil … »). */
+      cibleLisible: string;
+    }
+  | { ok: false; raison: string };
+
 /** Motif persisté quand `DÉSACTIVER` éteint le déclencheur (visible dans `/config`). */
 export const RAISON_DESACTIVATION =
   "Mise en veille demandée par Yuki (`DÉSACTIVER` en fin de réponse). Réactivez le " +
@@ -258,6 +320,37 @@ export const RAISON_DESACTIVATION =
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Ce qu'une étape de chaîne trouve en arrivant (voir `SourcesService.verdictChaine`). */
+type VerdictChaine =
+  | { kind: "prete"; relais?: { nom: string; texte: string; fichiers: string[] } }
+  | { kind: "attente"; raison: string }
+  | { kind: "rompue"; raison: string };
+
+/**
+ * BLOC DE RELAIS ajouté au contexte de l'étape suivante (lot 33).
+ *
+ * ⚠️ Sans ce bloc, l'étape 2 ne saurait rien de ce qu'a produit l'étape 1 : elle
+ * relancerait sa consigne à l'aveugle. Le texte est borné à l'ÉCRITURE (`resultatEtape`,
+ * 2 000 caractères) et les identifiants de fichiers sont nommés explicitement pour que le
+ * worker lourd sache quoi ouvrir avec `lire_fichier`.
+ */
+function relaisDeChaine(
+  relais: { nom: string; texte: string; fichiers: string[] } | undefined,
+): string {
+  if (relais === undefined) return "";
+  const texte =
+    relais.texte.trim() === "" ? "(l'étape précédente n'a produit aucun texte)" : relais.texte;
+  const fichiers =
+    relais.fichiers.length === 0
+      ? ""
+      : "\n\nFichiers produits par l'étape précédente (ouvre-les avec l'outil `lire_fichier`) : " +
+        relais.fichiers.map((id) => `\`${id}\``).join(", ");
+  return (
+    `\n\nRÉSULTAT DE L'ÉTAPE PRÉCÉDENTE « ${relais.nom} », transmis par la chaîne :\n` +
+    `${texte}${fichiers}`
+  );
 }
 
 /** Suivi d'un run : entrées à créditer, texte accumulé, nature du tour. */
@@ -290,6 +383,44 @@ function duree(ms: number): string {
     return `${Number.isInteger(minutes) ? minutes : minutes.toFixed(1)} min`;
   }
   return `${Math.max(1, Math.round(ms / 1000))} s`;
+}
+
+/**
+ * Instant lisible d'une étape (« 19 novembre 2026 à 09:00 »), dans SON fuseau.
+ *
+ * ⚠️ Jamais le fuseau du processus (un conteneur est en UTC) : la personne a réglé
+ * l'étape dans un fuseau nommé, c'est celui-là qu'elle doit relire.
+ */
+function formaterInstantEtape(at: number, fuseau: string | undefined): string {
+  try {
+    return new Intl.DateTimeFormat("fr-FR", {
+      timeZone: fuseau ?? DEFAULT_FUSEAU,
+      dateStyle: "long",
+      timeStyle: "short",
+    }).format(new Date(at));
+  } catch {
+    return new Date(at).toISOString();
+  }
+}
+
+/**
+ * Heure locale COURTE (« 14:32 ») d'un instant ISO, dans le fuseau des déclencheurs.
+ *
+ * ⚠️ Utilisée dans les lignes d'échec consolidées : « en échec depuis 14:32 » se lit
+ * mieux qu'une date ISO, et c'est l'heure que la personne a sous les yeux.
+ */
+function heureCourte(iso: string): string {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return iso;
+  try {
+    return new Intl.DateTimeFormat("fr-FR", {
+      timeZone: DEFAULT_FUSEAU,
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(at));
+  } catch {
+    return new Date(at).toISOString();
+  }
 }
 
 /** Code d'erreur du host (`PI_NOT_READY`, `LLM_UNAVAILABLE`…) s'il est connu. */
@@ -418,6 +549,8 @@ export class SourcesService {
   private jobs?: DeclencheurJobsPort;
   /** Port de publication dans le fil local (lot 2). */
   private publication?: DeclencheurPublicationPort;
+  /** Résolution des métadonnées d'un fichier du store (marqueurs `[fichier]`). */
+  private fichierPort?: (fichierId: string) => { name: string; bytes: number } | null;
   /** Jobs de déclencheur en vol : `jobId → suivi` (résultat, place, issue). */
   private readonly jobsEnVol = new Map<
     string,
@@ -425,6 +558,8 @@ export class SourcesService {
       nom: string;
       sessionId: string;
       candidat: boolean;
+      /** ⚠️ LOT 31 : cible = conversation DEMANDEUSE ⇒ jamais renommée, jamais « Déclencheurs ». */
+      perso: boolean;
       planifie?: number;
       resolve: (fin: DeclenchementFin) => void;
     }
@@ -452,6 +587,7 @@ export class SourcesService {
     this.journal = options.journal;
     this.jobs = options.jobs;
     this.publication = options.publication;
+    this.fichierPort = options.fichier;
     this.now = options.now ?? Date.now;
   }
 
@@ -462,9 +598,14 @@ export class SourcesService {
   setDeclencheurPorts(ports: {
     jobs?: DeclencheurJobsPort;
     publication?: DeclencheurPublicationPort;
+    /** Résolution des métadonnées d'un fichier (marqueurs `[fichier]`, lot 31). */
+    fichier?: (fichierId: string) => { name: string; bytes: number } | null;
   }): void {
     if (ports.jobs) this.jobs = ports.jobs;
     if (ports.publication) this.publication = ports.publication;
+    // ⚠️ Le store des fichiers est créé APRÈS le service (`src/index.ts`) : il est donc
+    // posé ici, comme les ports du moteur horloge.
+    if (ports.fichier) this.fichierPort = ports.fichier;
   }
 
   /**
@@ -838,6 +979,158 @@ export class SourcesService {
     return { outcome: "failed", raison };
   }
 
+  // ── TÂCHES PLANIFIÉES (lot 31) : `planifier_tache` ──────────────────────
+
+  /**
+   * Programme UNE tâche : un LLM sera réveillé à l'heure dite pour AGIR.
+   *
+   * ⚠️ Ce n'est PAS `programmer_envoi` : ici l'instruction est une DEMANDE exécutée par
+   * le worker lourd (image, commande via un agent, recherche…), dont le RÉSULTAT est
+   * publié ; là-bas, un texte DÉJÀ ÉCRIT part tel quel, sans aucun modèle.
+   *
+   * ⚠️ 1 APPEL = 1 TÂCHE (le nom est SLUGIFIÉ et DÉDUPLIQUÉ ici : deux demandes avec le
+   * même libellé coexistent, `resume-du-journal` et `resume-du-journal-2`).
+   *
+   * ⚠️ La cible est la CONVERSATION DEMANDEUSE (`perso: true`) : son résultat arrive là
+   * où la demande a été faite, et le fil n'est JAMAIS renommé « Déclencheurs ». Si elle
+   * a disparu entre-temps, le résultat tombe dans « Déclencheurs » (jamais nulle part).
+   */
+  planifierTache(input: PlanificationTacheInput): PlanificationTacheOutcome {
+    const verdict = validerPlanificationTache(input, this.now());
+    if (!verdict.ok) return verdict;
+    const session = (input.conversation.session ?? "").trim();
+    const nom = this.store.nomLibrePour(verdict.libelle);
+    try {
+      this.store.create(nom, {
+        declencheur: {
+          type: "ponctuel",
+          a: new Date(verdict.at).toISOString(),
+          fuseau: verdict.fuseau,
+        },
+        consigne: verdict.instruction,
+        // ⚠️ SILENCIEUX : la sortie d'une tâche n'est pas une notification de source ;
+        // seule la publication du résultat compte (`destination`/`tour` sans effet).
+        visibilite: "silencieux",
+        libelle: verdict.libelle,
+        perso: true,
+      });
+    } catch (error) {
+      return { ok: false, raison: messageOf(error) };
+    }
+    if (session !== "") this.store.setSession(nom, session);
+    this.journal?.append({
+      event: "tache_planifiee",
+      source: nom,
+      texte: verdict.instruction,
+      raison: `Tâche demandée pour ${new Date(verdict.at).toISOString()}`,
+    });
+    this.logger.info("sources.tache.planifiee", {
+      source: nom,
+      quand: new Date(verdict.at).toISOString(),
+      cible: session !== "" ? "conversation" : "declencheurs",
+    });
+    return {
+      ok: true,
+      nom,
+      libelle: verdict.libelle,
+      quandLisible: verdict.quandLisible,
+      cibleLisible: session !== "" ? "cette conversation" : "le fil « Déclencheurs »",
+    };
+  }
+
+  /**
+   * Crée une CHAÎNE D'ÉTAPES (lot 33) — **ATOMIQUE** : tout ou rien.
+   *
+   * ⚠️ UN SEUL appel pour la chaîne entière, jamais une boucle d'appels : si la place
+   * manque (3 étapes demandées, 1 place libre), **AUCUNE** étape n'est créée. Le store
+   * vérifie quotas et noms AVANT la moindre écriture (`SourcesStore.createChaine`).
+   *
+   * ⚠️ Chaque étape est un déclencheur `planning` ORDINAIRE : elle garde son nom (c'est
+   * lui qui porte les pré-autorisations), son cron, son fuseau, son journal. La chaîne
+   * n'ajoute que l'appartenance (`chaine {id, etape, apres}`) et le relais du résultat.
+   */
+  creerChaine(input: SourceChaineInput):
+    | {
+        ok: true;
+        chaineId: string;
+        etapes: Array<{ nom: string; libelle: string; quandLisible: string }>;
+      }
+    | {
+        ok: false;
+        raison: string;
+        /** Code stable (`chaines_full` : la place manque, RIEN n'a été créé). */
+        code?: string;
+        placesRestantes?: number;
+        demandees?: number;
+      } {
+    const etapes = Array.isArray(input?.etapes) ? input.etapes : [];
+    const chaineId = `chaine-${randomBytes(3).toString("hex")}`;
+    try {
+      const records = this.store.createChaine({
+        id: chaineId,
+        ...(typeof input?.libelle === "string" && input.libelle.trim() !== ""
+          ? { libelle: input.libelle.trim() }
+          : {}),
+        etapes: etapes.map((etape) => ({
+          libelle: typeof etape?.libelle === "string" ? etape.libelle : "",
+          consigne: typeof etape?.consigne === "string" ? etape.consigne : "",
+          declencheur: etape?.declencheur as SourceRecord["declencheur"],
+          ...(etape?.occurrencesMax !== undefined ? { occurrencesMax: etape.occurrencesMax } : {}),
+          ...(etape?.jusquAu !== undefined ? { jusquAu: etape.jusquAu } : {}),
+        })),
+      });
+      this.journal?.append({
+        event: "tache_planifiee",
+        source: chaineId,
+        raison: `Chaîne créée avec ${records.length} étape(s) : ${records
+          .map((record) => record.nom)
+          .join(" → ")}`,
+      });
+      this.logger.info("sources.chaine.creee", {
+        chaine: chaineId,
+        etapes: records.map((record) => record.nom),
+      });
+      return {
+        ok: true,
+        chaineId,
+        etapes: records.map((record) => ({
+          nom: record.nom,
+          libelle: record.libelle ?? record.nom,
+          quandLisible: this.prochainPassageLisible(record),
+        })),
+      };
+    } catch (error) {
+      // ⚠️ Le REFUS DE PLACE (borne du registre) est PORTÉ par l'issue, pas seulement par le
+      // message : la route le traduit en 429 `chaines_full` avec les deux nombres
+      // (restantes / demandées). Le message dit déjà « rien n'a été créé » — le noyer dans
+      // un 400 ferait perdre cette information.
+      if (error instanceof ChainesFullError) {
+        return {
+          ok: false,
+          raison: messageOf(error),
+          code: "chaines_full",
+          placesRestantes: error.placesRestantes,
+          demandees: error.demandees,
+        };
+      }
+      return { ok: false, raison: messageOf(error) };
+    }
+  }
+
+  /** Prochain passage d'une étape, en français (⚠️ jamais une date inventée). */
+  private prochainPassageLisible(record: SourceRecord): string {
+    if (record.declencheur.type !== "planning") {
+      return record.declencheur.type === "ponctuel" ? record.declencheur.a : "sans horaire";
+    }
+    try {
+      const calendrier = parseCron(record.declencheur.expression);
+      const suivant = prochainPassage(calendrier, this.now(), record.declencheur.fuseau);
+      return formaterInstantEtape(suivant, record.declencheur.fuseau);
+    } catch {
+      return "non calculé";
+    }
+  }
+
   // ── MOTEUR HORLOGE (lot 2) : un passage PLANIFIÉ ──────────────────────────
 
   /**
@@ -879,14 +1172,14 @@ export class SourcesService {
     }
     const record = this.store.get(nom);
     if (!record) return refus(`Déclencheur inconnu : « ${nom} ».`);
-    if (record.actif === false) {
+    if (record.actif === false && options.desarmementPrealable !== true) {
       return refus(
         `Le déclencheur « ${nom} » est en veille${
           record.raisonInactive ? ` (${record.raisonInactive})` : ""
         } : aucun passage.`,
       );
     }
-    if (record.declencheur.type !== "planning") {
+    if (record.declencheur.type === "webhook") {
       return refus(
         `Le déclencheur « ${nom} » n'est pas planifié (type « webhook ») : ` +
           "l'horloge ne le déclenche pas.",
@@ -900,7 +1193,12 @@ export class SourcesService {
       this.journal?.append({ event: "echec", source: nom, raison });
       return { outcome: "failed", raison, fin: Promise.resolve({ reason: "error", texte: "" }) };
     }
-    const target = await this.declencheursTarget();
+    // ⚠️ CIBLE (lot 31) : une TÂCHE PONCTUELLE répond dans la CONVERSATION DEMANDEUSE
+    // tant qu'elle existe (`perso`) ; un déclencheur durable publie dans le fil
+    // « Déclencheurs ». Si la conversation a disparu, on retombe sur « Déclencheurs » —
+    // le résultat ne se perd jamais, et on ne le dit pas moins.
+    const cible = await this.cibleDePassage(record);
+    const target = cible.target;
     if (target.raison !== undefined || target.sessionId === undefined) {
       const raison =
         target.raison ?? "Aucune conversation « Déclencheurs » disponible : rien n'a été lancé.";
@@ -914,28 +1212,66 @@ export class SourcesService {
       return { outcome: "refuse", raison, fin: Promise.resolve({ reason: "abort", texte: "" }) };
     }
 
-    const { expression, fuseau } = record.declencheur;
+    // ⚠️ LOT 33 — RELAIS DE CHAÎNE : une étape ne part JAMAIS orpheline.
+    //  • `rompue` (étape précédente supprimée ou éteinte) ⇒ CASCADE de cette étape et des
+    //    suivantes, raison LISIBLE persistée, UN SEUL message ;
+    //  • `attente` (la précédente n'a pas encore produit de résultat) ⇒ rien ne part, et
+    //    on ne casse rien : le prochain tick réessaiera ;
+    //  • `prete` ⇒ le texte ET les identifiants de fichiers de la précédente entrent dans
+    //    le contexte du worker (il les ouvre avec `lire_fichier`).
+    const verdict = this.verdictChaine(record);
+    if (verdict.kind !== "prete") {
+      if (verdict.kind === "rompue") {
+        await this.arreterChaine(
+          record,
+          { sessionId: target.sessionId, candidat: target.candidate === true, perso: cible.perso },
+          { raison: verdict.raison, echec: false },
+        );
+      }
+      await this.releaseCandidate(target.candidate === true ? target.sessionId : undefined);
+      this.journal?.append({ event: "refus", source: nom, raison: verdict.raison });
+      this.logger.info("sources.chaine.etape.refusee", { source: nom, raison: verdict.raison });
+      return {
+        outcome: "refuse",
+        raison: verdict.raison,
+        fin: Promise.resolve({ reason: "refuse", texte: "" }),
+      };
+    }
+
+    // ⚠️ CONTENU et TÂCHE dépendent du type (lot 31) : une surveillance récurrente peut
+    // répondre `RIEN` / `DÉSACTIVER` ; une tâche PONCTUELLE a été DEMANDÉE, elle doit
+    // rendre compte (aucun silence possible).
+    const ponctuelle = record.declencheur.type === "ponctuel";
+    const fuseau =
+      record.declencheur.type === "planning"
+        ? record.declencheur.fuseau
+        : record.declencheur.fuseau ?? DEFAULT_FUSEAU;
     const planifie = options.planifie;
     const quand =
       planifie !== undefined ? new Date(planifie).toISOString() : new Date(this.now()).toISOString();
-    // Contenu TRANSMIS (DONNÉE encadrée) : le réveil lui-même, jamais une instruction.
-    const contenu =
-      `Réveil planifié du déclencheur « ${nom} » : expression « ${expression} » ` +
-      `(fuseau ${fuseau}), passage prévu à ${quand}. ` +
-      "Aucun contenu extérieur n'a été reçu : ce réveil vient de l'HORLOGE de Yuki.";
+    const contenu = ponctuelle
+      ? `Tâche planifiée « ${record.libelle ?? nom} » demandée pour le ${quand}. ` +
+        "Aucun contenu extérieur n'a été reçu : cette demande vient de l'utilisateur."
+      : `Réveil planifié du déclencheur « ${nom} » : expression « ` +
+        `${record.declencheur.type === "planning" ? record.declencheur.expression : ""} » ` +
+        `(fuseau ${fuseau}), passage prévu à ${quand}. ` +
+        "Aucun contenu extérieur n'a été reçu : ce réveil vient de l'HORLOGE de Yuki." +
+        relaisDeChaine(verdict.relais);
     const octets = Buffer.byteLength(contenu, "utf8");
     const contexte = frameSources(
       [
         {
           nom,
           recu: quand,
-          titre: "Réveil planifié",
+          titre: ponctuelle ? "Tâche planifiée" : "Réveil planifié",
           ...(record.consigne !== "" ? { consigne: record.consigne } : {}),
           texte: contenu,
           octets,
         },
       ],
-      { promptTotalChars: this.promptTotalChars(), silence: true, desactivation: true },
+      ponctuelle
+        ? { promptTotalChars: this.promptTotalChars() }
+        : { promptTotalChars: this.promptTotalChars(), silence: true, desactivation: true },
     );
     if (contexte === undefined) {
       await this.releaseCandidate(target.candidate === true ? target.sessionId : undefined);
@@ -949,7 +1285,20 @@ export class SourcesService {
     const fin = new Promise<DeclenchementFin>((resolve) => {
       resoudre = resolve;
     });
-    const tache = tacheDeDeclencheur({ nom, expression, fuseau, consigne: record.consigne, quand });
+    const tache = ponctuelle
+      ? tachePonctuelle({
+          nom,
+          libelle: record.libelle ?? nom,
+          instruction: record.consigne,
+          quand,
+        })
+      : tacheDeDeclencheur({
+          nom,
+          expression: record.declencheur.type === "planning" ? record.declencheur.expression : "",
+          fuseau,
+          consigne: record.consigne,
+          quand,
+        });
     try {
       const issue = await jobs.delegate({
         task: tache,
@@ -968,12 +1317,16 @@ export class SourcesService {
       });
       const jobId = typeof issue.job_id === "string" ? issue.job_id : undefined;
       if (jobId === undefined) {
-        await this.releaseCandidate(target.candidate === true ? target.sessionId : undefined);
         const raison =
           `La tâche de fond n'a pas été lancée (${issue.status}` +
           `${issue.reason ? ` : ${issue.reason}` : ""}). Le passage est perdu et sera ` +
           "réarmé au prochain tour d'horloge.";
         this.journal?.append({ event: "echec", source: nom, raison });
+        await this.publierEchec(nom, raison, {
+          sessionId: target.sessionId,
+          candidat: target.candidate === true,
+          perso: cible.perso,
+        });
         resoudre({ reason: "error", texte: "" });
         return { outcome: "failed", raison, fin };
       }
@@ -981,6 +1334,7 @@ export class SourcesService {
         nom,
         sessionId: target.sessionId,
         candidat: target.candidate === true,
+        perso: cible.perso,
         ...(planifie !== undefined ? { planifie } : {}),
         resolve: resoudre,
       });
@@ -1001,9 +1355,13 @@ export class SourcesService {
       });
       return { outcome: "started", runId: jobId, sessionId: target.sessionId, fin };
     } catch (error) {
-      await this.releaseCandidate(target.candidate === true ? target.sessionId : undefined);
       const raison = `La tâche de fond n'a pas pu être lancée : ${messageOf(error)}`;
       this.journal?.append({ event: "echec", source: nom, raison });
+      await this.publierEchec(nom, raison, {
+        sessionId: target.sessionId,
+        candidat: target.candidate === true,
+        perso: cible.perso,
+      });
       resoudre({ reason: "error", texte: "" });
       return { outcome: "failed", raison, fin };
     }
@@ -1027,46 +1385,179 @@ export class SourcesService {
       ? `Plafond d'exécution atteint (${duree(plafondMs)}) : la tâche de fond a été ANNULÉE.`
       : "Tâche de fond annulée (arrêt du balayeur).";
     this.journal?.append({ event: plafond ? "plafond" : "saut", source: suivi.nom, raison });
-    await this.releaseCandidate(suivi.candidat ? suivi.sessionId : undefined);
+    // ⚠️ LOT 31 : une annulation par le PLAFOND est un ÉCHEC du point de vue de la
+    // personne — elle est publiée (et consolidée si elle se répète). Un arrêt ordonné du
+    // balayeur, non : c'est nous qui coupons, pas la tâche qui rate.
+    if (plafond) await this.publierEchec(suivi.nom, raison, suivi);
+    else await this.releaseCandidate(suivi.candidat ? suivi.sessionId : undefined);
     suivi.resolve({ reason: "abort", texte: "", ...(plafond ? { plafond: true } : {}) });
+  }
+
+  /**
+   * Verdict de RELAIS d'une étape de chaîne (lot 33).
+   *
+   * ⚠️ Trois issues, jamais une quatrième : `prete` (la précédente a un résultat),
+   * `attente` (elle n'en a pas encore — on ne casse rien, le prochain tick réessaiera) et
+   * `rompue` (elle a été supprimée ou éteinte — l'étape est orpheline, d'où la CASCADE).
+   */
+  private verdictChaine(record: SourceRecord): VerdictChaine {
+    const chaine = record.chaine;
+    if (chaine === undefined || chaine.etape <= 1) return { kind: "prete" };
+    const etapes = this.store.etapesDeChaine(chaine.id);
+    const nomPrecedent =
+      chaine.apres ??
+      etapes.find((etape) => etape.chaine?.etape === chaine.etape - 1)?.nom ??
+      `étape ${chaine.etape - 1}`;
+    const precedent = this.store.get(nomPrecedent);
+    if (!precedent) {
+      return {
+        kind: "rompue",
+        raison: `l'étape précédente « ${nomPrecedent} » n'existe plus`,
+      };
+    }
+    if (precedent.actif === false) {
+      return {
+        kind: "rompue",
+        raison: `l'étape précédente « ${nomPrecedent} » a été éteinte${
+          precedent.raisonInactive !== undefined ? ` (${precedent.raisonInactive})` : ""
+        }`,
+      };
+    }
+    const resultat = precedent.resultatEtape;
+    if (resultat === undefined) {
+      return {
+        kind: "attente",
+        raison:
+          `L'étape précédente « ${nomPrecedent} » n'a pas encore produit de résultat : ` +
+          `l'étape ${chaine.etape} attend son tour (aucun passage lancé).`,
+      };
+    }
+    return {
+      kind: "prete",
+      relais: { nom: nomPrecedent, texte: resultat.texte, fichiers: resultat.fichiers },
+    };
+  }
+
+  /**
+   * ARRÊTE une chaîne — **UNE SEULE fois**, **UN SEUL message** (lot 33).
+   *
+   * ⚠️ Décision utilisateur : un échec d'étape ne produit pas une notification par étape.
+   * La première étape en faute est dite « échouée », les suivantes « annulées », et la
+   * personne reçoit une ligne unique qui dit ce qui n'a PAS été envoyé.
+   *
+   * ⚠️ `echec: false` sert à l'interruption par la main (étape supprimée ou éteinte) :
+   * l'étape courante n'a pas échoué, elle est simplement annulée avec sa raison.
+   */
+  private async arreterChaine(
+    record: SourceRecord,
+    suivi: { sessionId: string; candidat: boolean; perso: boolean },
+    options: { raison: string; echec: boolean },
+  ): Promise<void> {
+    const chaine = record.chaine;
+    if (chaine === undefined) return;
+    const libelle = this.libelleDe(record.nom);
+    const motifCourant = options.echec
+      ? `échouée : ${options.raison}`
+      : `annulée : ${options.raison}`;
+    this.store.setActif(record.nom, false, motifCourant);
+    this.journal?.append({ event: "desactive", source: record.nom, raison: motifCourant });
+    const motifSuivantes = options.echec
+      ? `annulée : l'étape « ${libelle} » a échoué`
+      : `annulée : ${options.raison}`;
+    const annulees: number[] = [];
+    for (const etape of this.store.etapesDeChaine(chaine.id)) {
+      if ((etape.chaine?.etape ?? 0) <= chaine.etape) continue;
+      if (etape.actif === false) continue;
+      this.store.setActif(etape.nom, false, motifSuivantes);
+      this.journal?.append({ event: "desactive", source: etape.nom, raison: motifSuivantes });
+      annulees.push(etape.chaine?.etape ?? 0);
+    }
+    const entete = options.echec
+      ? `⚠️ ${libelle} — étape ${chaine.etape} échouée (${options.raison}).`
+      : `⚠️ ${libelle} — étape ${chaine.etape} non exécutée : ${options.raison}.`;
+    const suite =
+      annulees.length === 0
+        ? " Aucune étape suivante : rien d'autre n'a été envoyé."
+        : annulees.length === 1
+          ? ` Étape ${annulees[0]} annulée, rien n'a été envoyé.`
+          : ` Étapes ${annulees.slice(0, -1).join(", ")} et ${annulees[annulees.length - 1]} ` +
+            "annulées, rien n'a été envoyé.";
+    this.logger.warn("sources.chaine.arretee", {
+      source: record.nom,
+      chaine: chaine.id,
+      etape: chaine.etape,
+      annulees,
+    });
+    await this.publierDansSuivi(suivi, record.nom, `${entete}${suite}`);
   }
 
   /**
    * RÉSULTAT d'une tâche de fond née d'un DÉCLENCHEUR (port `declencheurs` du
    * service de délégation, `src/delegation/service.ts`).
    *
-   * ⚠️ C'est ici que se décident les trois issues, sans tour de conversation :
-   *  - `RIEN` ⇒ **rien n'est publié** (journal `silence`, fil candidat supprimé) ;
+   * ⚠️ C'est ici que se décident les issues, sans tour de conversation :
+   *  - `RIEN` ⇒ **rien n'est publié** (journal `silence`, fil candidat supprimé) —
+   *    pour une SURVEILLANCE seulement : une tâche PONCTUELLE a été demandée, elle rend
+   *    toujours compte (lot 31) ;
    *  - `DÉSACTIVER` en dernière ligne ⇒ marqueur RETIRÉ, `actif = false`, raison
    *    persistée, puis publication du texte restant (s'il en reste) ;
-   *  - sinon ⇒ le texte est publié TELLE QUELLE dans le fil « Déclencheurs ».
+   *  - sinon ⇒ le texte est publié TELLE QUELLE, **avec les marqueurs de ses fichiers**
+   *    (`[fichier] <id> <nom> (<n> octets)`) pour que la carte soit cliquable.
+   *
+   * ⚠️ LOT 31 — UN ÉCHEC EST TOUJOURS PUBLIÉ (avant, il n'était que journalisé : la
+   * personne voyait une tâche ne rien faire, sans jamais savoir pourquoi). Les échecs
+   * sont CONSOLIDÉS : le premier d'une série publie une ligne, les suivants IDENTIQUES
+   * n'en publient pas une de plus, et le RETOUR À LA NORMALE est publié avec le compte.
    */
   async recevoirResultat(job: {
     id: string;
     status: string;
-    result?: { text?: string; partial?: string; usage?: { input?: number; output?: number } };
+    result?: {
+      text?: string;
+      partial?: string;
+      usage?: { input?: number; output?: number };
+      /** Fichiers produits par la tâche (identifiants du store de la conversation). */
+      fichiers?: readonly string[];
+    };
     error?: { message?: string };
   }): Promise<void> {
     const suivi = this.jobsEnVol.get(job.id);
     if (!suivi) return;
     this.jobsEnVol.delete(job.id);
     const nom = suivi.nom;
+    const record = this.store.get(nom);
+    const ponctuelle = record?.declencheur.type === "ponctuel";
     // ⚠️ Jetons CUMULÉS du déclencheur : la page de gestion les affiche. On ne
     // compte que ce que le job RAPPORTE (`usage`), jamais une estimation — et un
     // job qui n'en rapporte pas laisse le compteur intact (jamais « 0 » inventé).
     this.store.cumulerJetons(nom, job.result?.usage);
+
+    // ① ÉCHEC (ou annulation) : la personne doit le SAVOIR, une fois par série.
     if (job.status !== "completed") {
       const raison =
         job.status === "cancelled"
-          ? "La tâche de fond a été annulée : rien n'a été publié."
+          ? "La tâche de fond a été annulée."
           : `La tâche de fond a échoué${
               job.error?.message ? ` : ${job.error.message}` : ` (statut « ${job.status} »)`
-            } : rien n'a été publié.`;
+            }.`;
       this.journal?.append({ event: "echec", source: nom, raison });
-      await this.releaseCandidate(suivi.candidat ? suivi.sessionId : undefined);
+      // ⚠️ LOT 33 — ÉCHEC DANS UNE CHAÎNE : CASCADE, et **UN SEUL** message.
+      // Décision utilisateur (A) : l'étape 1 en échec ⇒ les suivantes ne partent PAS.
+      // Pas une notification par étape : une ligne qui dit l'étape fautive et ce qui n'a
+      // PAS été envoyé.
+      if (record?.chaine !== undefined) {
+        const courte =
+          job.status === "cancelled"
+            ? "la tâche de fond a été annulée"
+            : (job.error?.message ?? `statut « ${job.status} »`);
+        await this.arreterChaine(record, suivi, { raison: courte, echec: true });
+      } else {
+        await this.publierEchec(nom, raison, suivi);
+      }
       suivi.resolve({ reason: job.status === "cancelled" ? "abort" : "error", texte: "" });
       return;
     }
+
     const brut = job.result?.text ?? job.result?.partial ?? "";
     const { texte, desactive } = separerMarqueurDesactivation(brut);
     if (desactive) {
@@ -1074,37 +1565,204 @@ export class SourcesService {
       this.journal?.append({ event: "desactive", source: nom, raison: RAISON_DESACTIVATION });
       this.logger.info("sources.declencheur.desactive", { source: nom });
     }
-    if (texte.trim() === "" || isSilenceReply(texte)) {
+    // ② RIEN : silence SEULEMENT pour une surveillance. Une tâche ponctuelle rend
+    // toujours compte — son résultat, même vide, est DIT (elle a été demandée).
+    if (!ponctuelle && (texte.trim() === "" || isSilenceReply(texte))) {
       this.journal?.append({
         event: "silence",
         source: nom,
         ...(desactive ? { raison: "desactive" } : {}),
       });
+      // ⚠️ LOT 33 — même une étape SILENCIEUSE laisse un résultat (vide) à la suivante :
+      // sinon l'étape 2 attendrait éternellement un relais qui n'arrivera jamais.
+      this.noterResultatEtape(nom, record, job.id, "", []);
       await this.releaseCandidate(suivi.candidat ? suivi.sessionId : undefined);
       suivi.resolve({ reason: "done", texte: "", ...(desactive ? { desactive: true } : {}) });
       return;
     }
+    const corps = texte.trim() === "" ? "La tâche s'est terminée sans texte de réponse." : texte;
+
+    // ③ RETOUR À LA NORMALE : s'il y a eu des échecs, ils sont CLOS et le compte est dit.
+    const serieClose = this.store.effacerEchecs(nom);
+    if (serieClose !== undefined) {
+      await this.publierDansSuivi(
+        suivi,
+        nom,
+        `✅ ${this.libelleDe(nom)} : retour à la normale, après ${serieClose.tentatives} ` +
+          `tentative(s) en échec depuis ${heureCourte(serieClose.debut)}.`,
+      );
+    }
+
+    // ④ RÉSULTAT + MARQUEURS DE FICHIERS : sans eux, une image produite resterait
+    // invisible et la carte du résultat ne s'afficherait pas.
+    const { fichiers, manquants } = this.marqueursDeFichiers(job.result?.fichiers);
+    const avecFichiers =
+      fichiers.length > 0
+        ? `${corps}\n\n${fichiers
+            .map((fichier) => formatFileMarker({ id: fichier.id, name: fichier.nom, bytes: fichier.octets }))
+            .join("\n")}`
+        : corps;
+    const final =
+      manquants === 0
+        ? avecFichiers
+        : `${avecFichiers}\n\n⚠️ ${manquants} fichier(s) produit(s) n'ont pas pu être joint(s) : ` +
+          "leur fiche est introuvable dans le store de cette conversation.";
+    const publie = await this.publierDansSuivi(suivi, nom, final, fichiers);
+    if (!publie) {
+      suivi.resolve({ reason: "error", texte: "" });
+      return;
+    }
+    // ⚠️ LOT 33 — LE RELAIS : le résultat est PERSISTÉ APRÈS la publication, borné, avec
+    // les identifiants de fichiers. C'est ce que l'étape suivante relira (texte + ids)
+    // pour ne pas repartir de zéro. Écrit après publication : on ne transmet que ce que
+    // la personne a réellement lu.
+    this.noterResultatEtape(nom, record, job.id, corps, job.result?.fichiers ?? []);
+    suivi.resolve({ reason: "done", texte: final, ...(desactive ? { desactive: true } : {}) });
+  }
+
+  /**
+   * Écrit `resultatEtape` pour une étape de chaîne (lot 33) — no-op hors chaîne.
+   *
+   * ⚠️ Bornage fait par le store (`MAX_TEXTE_ETAPE_CHARS`, `MAX_FICHIERS_ETAPE`) : le
+   * relais ne peut pas faire grossir indéfiniment les prompts suivants.
+   */
+  private noterResultatEtape(
+    nom: string,
+    record: SourceRecord | undefined,
+    jobId: string,
+    texte: string,
+    fichiers: readonly string[],
+  ): void {
+    if (record?.chaine === undefined) return;
+    this.store.enregistrerResultatEtape(nom, {
+      jobId,
+      texte,
+      fichiers,
+      at: new Date(this.now()).toISOString(),
+    });
+    this.logger.info("sources.chaine.resultat.enregistre", {
+      source: nom,
+      chaine: record.chaine.id,
+      etape: record.chaine.etape,
+      fichiers: fichiers.length,
+      caracteres: texte.length,
+    });
+  }
+
+  /** Libellé humain d'un déclencheur (le nom est un slug technique). */
+  private libelleDe(nom: string): string {
+    const record = this.store.get(nom);
+    const libelle = record?.libelle ?? "";
+    return libelle !== "" ? libelle : nom;
+  }
+
+  /**
+   * Fichiers d'un résultat, prêts à être publiés : métadonnées résolues (le port ne
+   * reçoit jamais autre chose), et compte de ceux qui n'ont PAS pu être nommés.
+   *
+   * ⚠️ Un identifiant inconnu n'est jamais remplacé par un marqueur inventé (la carte
+   * afficherait un nom faux) : il est COMPTÉ, et le texte le dit.
+   */
+  private marqueursDeFichiers(ids: readonly string[] | undefined): {
+    fichiers: FichierPublie[];
+    manquants: number;
+  } {
+    const fichiers: FichierPublie[] = [];
+    let manquants = 0;
+    for (const id of ids ?? []) {
+      const brut = typeof id === "string" ? id.trim() : "";
+      if (brut === "") continue;
+      const meta = this.fichierPort?.(brut);
+      if (!meta) {
+        manquants += 1;
+        continue;
+      }
+      fichiers.push({ id: brut, nom: meta.name, octets: meta.bytes });
+    }
+    return { fichiers, manquants };
+  }
+
+  /**
+   * Publie une ligne d'ÉCHEC — consolidée (décision utilisateur : « B »).
+   *
+   * ⚠️ Le MÊME échec, avec la MÊME raison, EN SÉRIE ⇒ **une seule ligne** : la première.
+   * Les suivantes ne publient rien de plus (elles comptent, et le compte sera dit à la
+   * clôture). Un échec DISTINCT (raison différente) ouvre une NOUVELLE série, donc une
+   * nouvelle ligne. Jamais de silence total : la série a toujours été annoncée, et sa
+   * clôture l'est aussi.
+   *
+   * ⚠️ Le port de publication ne sait pas MODIFIER un message (`publierMessage` ajoute
+   * un message, `src/pi/sdk-host.ts:2509`) : on applique donc la variante « ouverture +
+   * clôture » — l'ouverture dit l'heure du premier échec, la clôture dit le nombre de
+   * tentatives.
+   */
+  private async publierEchec(
+    nom: string,
+    raison: string,
+    suivi: { sessionId: string; candidat: boolean; perso: boolean },
+  ): Promise<void> {
+    const serie = this.store.noterEchec(nom, raison);
+    if (serie === undefined) return;
+    if (!serie.nouveau) {
+      this.logger.info("sources.tache.echec.consolide", {
+        source: nom,
+        tentatives: serie.serie.tentatives,
+      });
+      this.journal?.append({
+        event: "tache_consolidee",
+        source: nom,
+        raison: `Tentative ${serie.serie.tentatives} du même échec : aucune ligne de plus.`,
+      });
+      return;
+    }
+    await this.publierDansSuivi(
+      suivi,
+      nom,
+      `⚠️ ${this.libelleDe(nom)} : ${raison} En échec depuis ${heureCourte(serie.serie.debut)} · ` +
+        `tentative 1.`,
+    );
+  }
+
+  /**
+   * Publie un texte dans le fil du passage et JOURNALISE. Rend `false` quand rien n'a
+   * pu être publié (aucun port, erreur) — l'appelant décide alors de l'issue.
+   *
+   * ⚠️ Le fil CANDIDAT devient « Déclencheurs » au premier texte publié (mémorisé +
+   * nommé). ⚠️ Une cible `perso` (conversation demandeuse) n'est JAMAIS renommée : c'est
+   * la conversation de quelqu'un, pas le fil de Yuki.
+   */
+  private async publierDansSuivi(
+    suivi: { sessionId: string; candidat: boolean; perso: boolean },
+    nom: string,
+    texte: string,
+    fichiers?: readonly FichierPublie[],
+  ): Promise<boolean> {
     const publication = this.publication;
     if (!publication) {
       const raison =
         "Le résultat n'a pas pu être publié : aucun port de publication n'est câblé sur " +
         "cette instance.";
       this.journal?.append({ event: "echec", source: nom, raison });
-      await this.releaseCandidate(suivi.candidat ? suivi.sessionId : undefined);
-      suivi.resolve({ reason: "error", texte: "" });
-      return;
+      this.logger.warn("sources.declencheur.publication.absente", { source: nom });
+      return false;
     }
     try {
-      await publication.publier(suivi.sessionId, texte);
+      await publication.publier(
+        suivi.sessionId,
+        texte,
+        fichiers !== undefined && fichiers.length > 0 ? fichiers : undefined,
+      );
     } catch (error) {
-      const raison = `Publication impossible dans le fil « Déclencheurs » : ${messageOf(error)}`;
+      const raison = `Publication impossible dans le fil du résultat : ${messageOf(error)}`;
       this.journal?.append({ event: "echec", source: nom, raison });
-      await this.releaseCandidate(suivi.candidat ? suivi.sessionId : undefined);
-      suivi.resolve({ reason: "error", texte: "" });
-      return;
+      this.logger.warn("sources.declencheur.publication.failed", {
+        source: nom,
+        error: messageOf(error),
+      });
+      return false;
     }
     // Le fil candidat devient « Déclencheurs » : il est mémorisé et nommé.
-    if (this.store.getDeclencheursSession() !== suivi.sessionId) {
+    if (!suivi.perso && this.store.getDeclencheursSession() !== suivi.sessionId) {
       this.store.setDeclencheursSession(suivi.sessionId);
       this.silentCandidate = undefined;
       const renamed = this.waker?.renameSession?.(suivi.sessionId, DECLENCHEURS_SESSION_TITLE);
@@ -1114,18 +1772,45 @@ export class SourcesService {
         });
       }
     }
-    this.journal?.append({
-      event: "publie",
-      source: nom,
-      texte,
-      sessionId: suivi.sessionId,
-    });
+    this.journal?.append({ event: "publie", source: nom, texte, sessionId: suivi.sessionId });
     this.logger.info("sources.declencheur.job.publie", {
       source: nom,
-      job_id: job.id,
       session_id: suivi.sessionId,
+      fichiers: fichiers?.length ?? 0,
     });
-    suivi.resolve({ reason: "done", texte, ...(desactive ? { desactive: true } : {}) });
+    return true;
+  }
+
+  /**
+   * Fil visé par un passage : la CONVERSATION DEMANDEUSE pour une tâche ponctuelle
+   * (tant qu'elle existe), le fil « Déclencheurs » sinon.
+   *
+   * ⚠️ Lot 31 — POURQUOI LA CONVERSATION DEMANDEUSE : « résume le journal pour moi »
+   * demandé dans un fil doit revenir DANS ce fil. Publier dans un fil partagé
+   * « Déclencheurs » ferait perdre le fil de la discussion, et la personne ne verrait pas
+   * la réponse là où elle l'attend.
+   *
+   * ⚠️ `perso` est renvoyé : ce fil n'est PAS le fil de Yuki, il ne doit jamais être
+   * renommé « Déclencheurs » (ce serait renommer la conversation de quelqu'un).
+   */
+  private async cibleDePassage(
+    record: SourceRecord,
+  ): Promise<{
+    target: { sessionId?: string; raison?: string; candidate?: boolean };
+    perso: boolean;
+  }> {
+    if (record.declencheur.type === "ponctuel" && record.sessionId !== undefined) {
+      const alive = await this.sessionAlive(record.sessionId);
+      if (alive === true) {
+        return { target: { sessionId: record.sessionId }, perso: record.perso === true };
+      }
+      // ⚠️ Disparue : on l'oublie et on le dit — le résultat ira dans « Déclencheurs ».
+      if (alive === false) {
+        this.store.setSession(record.nom, undefined);
+        this.logger.warn("sources.tache.conversation.vanished", { source: record.nom });
+      }
+    }
+    return { target: await this.declencheursTarget(), perso: false };
   }
 
   /**

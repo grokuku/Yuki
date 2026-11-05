@@ -35,6 +35,7 @@ import {
 } from "./sdk/remote-run-tools.js";
 import type { MessageSendPort } from "./sdk/send-message-tool.js";
 import type { ScheduledSendPort } from "./sdk/scheduled-send-tool.js";
+import type { PlanifierTachePort } from "./sdk/planifier-tache-tool.js";
 
 export interface RemoteRunToolsOptions {
   /** Conversation (canal distant) : les fichiers du run y sont rattachés. */
@@ -109,6 +110,14 @@ export interface RemoteRunToolsOptions {
    * n'est touchée — comme `envoyer_message`. Le port porte les bornes et la persistance.
    */
   envoisProgrammes?: ScheduledSendPort;
+  /**
+   * Tâche PLANIFIÉE (`planifier_tache`, lot 31) : faire AGIR un LLM à une heure dite.
+   *
+   * ⚠️ Groupe `toujours` : l'outil ne touche à rien MAINTENANT (le travail se fait à
+   * l'heure dite, dans un worker avec ses propres garde-fous, sans pré-autorisation) —
+   * comme `envoyer_message` et `programmer_envoi`.
+   */
+  planifierTache?: PlanifierTachePort;
   logger?: PiLogger;
 }
 
@@ -267,6 +276,8 @@ export function createRemoteRunTools(options: RemoteRunToolsOptions): RemoteRunT
     // ⚠️ ENVOI PROGRAMMÉ (`programmer_envoi`) : même raison que `envoyer_message` —
     // groupe `toujours`, donc transmis hors de tout bloc de réglage.
     ...(options.envoisProgrammes ? { envoisProgrammes: options.envoisProgrammes } : {}),
+    // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : même raison — groupe `toujours`.
+    ...(options.planifierTache ? { planifierTache: options.planifierTache } : {}),
     ...(actifs && options.agents ? { agents: options.agents } : {}),
     ...(actifs && options.secrets ? { secrets: options.secrets } : {}),
     ...(actifs && options.delegation ? { delegation: options.delegation } : {}),

@@ -303,6 +303,12 @@ describe("sources-panel.js — déclencheur planifié (moteur horloge)", () => {
     expect(source).toContain('id: "source-plafond"');
     expect(source).toContain('id: "source-max-tours"');
     expect(source).toContain('id: "source-actif"');
+    // ⚠️ LOT 32 — FIN DE RÉCURRENCE : les deux formes sont réglables dans le formulaire
+    // (date ISO et nombre de passages). Mise à jour du verrou EN CONNAISSANCE DE CAUSE :
+    // sans ces deux champs, le formulaire ne permettrait pas d'armer une fin de
+    // récurrence, et les deux bornes déjà persistées resteraient invisibles.
+    expect(source).toContain('id: "source-jusqu-au"');
+    expect(source).toContain('id: "source-occurrences-max"');
   });
 
   it("affiche un APERÇU du prochain passage via la route dédiée", () => {

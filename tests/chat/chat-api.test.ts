@@ -31,6 +31,7 @@ function spyPort(overrides: Partial<ChatMattermostPort> = {}) {
     baseUrl: "",
     token: false,
     connected: 0,
+    deconnected: 0,
     modes: new Map<string, ChatReplyMode>(),
     styles: new Map<string, ChatReplyStyle>(),
     quotes: new Map<string, ChatQuoteAuthor>(),
@@ -46,6 +47,7 @@ function spyPort(overrides: Partial<ChatMattermostPort> = {}) {
       backfill: { fait: false, imports: 0, borneAtteinte: false },
       rattrapageActif: false,
     },
+    miroir: { conversations: state.canaux.length, messages: state.canaux.length, octets: 0 },
     canaux: state.canaux.map((id) => ({
       id,
       titre: id,
@@ -70,6 +72,13 @@ function spyPort(overrides: Partial<ChatMattermostPort> = {}) {
     connect: async () => {
       state.connected += 1;
     },
+    // ⚠️ Débrancher = jeton effacé + synchro arrêtée ; le miroir reste (réversible).
+    deconnecter: async () => {
+      state.token = false;
+      state.deconnected += 1;
+    },
+    miroir: () => ({ conversations: 0, messages: 0, octets: 0 }),
+    supprimerMiroir: () => ({ conversations: 0, messages: 0, octets: 0 }),
     view,
     replySettings: (conversationId) =>
       state.canaux.includes(conversationId)
@@ -342,6 +351,9 @@ describe("état — jamais un jeton", () => {
     expect(Object.keys(body.mattermost).sort()).toEqual([
       "canaux",
       "jetonEnregistre",
+      // Lot 30 : empreinte du miroir (conversations, messages, octets) — affichée
+      // AVANT la confirmation d'une suppression. Trois NOMBRES, jamais un secret.
+      "miroir",
       "plateforme",
       "synchronisation",
       "url",
