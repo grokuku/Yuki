@@ -5,6 +5,8 @@
 // `snapshot` lorsque la fenêtre de rejeu est dépassée ou à la reconnexion.
 
 import { getTheme, initTheme, setTheme } from "./theme.js";
+import { HolafFetch } from "./vendor/holaf/holaf-fetch.js";
+import { initAvatar } from "./avatar.js";
 import { createMarkdownRenderer } from "./markdown.js";
 import { decodeTtsFrame } from "./tts-frames.js";
 import { createTtsPlayer } from "./tts-player.js";
@@ -71,6 +73,11 @@ import {
 // Thème (dropdown + bascule) : applique le choix persisté ou le réglage
 // système, et câble les contrôles de la topbar.
 initTheme();
+
+/* AVATAR de Yuki : l'état vient du serveur (`GET /api/avatar`) et s'applique
+ * aux emplacements de la coquille (barre du haut, état vide) ainsi qu'au
+ * favicon. Sans avatar, rien ne change : le flocon ❄️ reste affiché. */
+void initAvatar({ HolafFetch });
 
 const CLIENT_VERSION = "1";
 const MAX_RECONNECT_DELAY_MS = 8000;

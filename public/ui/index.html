@@ -16,6 +16,10 @@
          bloquerait le manifeste (le service worker reste couvert par
          `script-src 'self'`). -->
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- FAVICON : servi par le gateway (`/favicon.ico` = l'avatar de Yuki s'il
+         existe, sinon l'icône PWA livrée). `app.js` remplace le `href` par
+         `/favicon.ico?v=<sha>` à chaque changement, SANS rechargement. -->
+    <link id="favicon" rel="icon" href="/favicon.ico" />
     <meta name="theme-color" content="#0e1116" />
     <link rel="stylesheet" href="/ui/styles.css" />
     <link rel="stylesheet" href="/ui/themes.css" />
@@ -24,7 +28,17 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="brand">Yuki</div>
+      <!--
+        B — l'avatar de Yuki dans la barre du haut, AVANT son nom (24 px).
+        `hidden` par défaut : `avatar.js` le révèle quand un avatar existe (le
+        flocon/le nom restent le repli). Sur TÉLÉPHONE le nom est masqué mais
+        l'avatar RESTE visible (22 px) : c'est le seul endroit où il apparaît
+        dans la coquille mobile.
+      -->
+      <div class="brand">
+        <img id="brand-avatar" class="avatar avatar--brand" alt="" data-avatar-image hidden />
+        <span class="brand__name">Yuki</span>
+      </div>
       <div class="status">
         <a class="pill topbar__config" href="/config">Configuration</a>
         <span id="connection" class="pill pill--offline">hors ligne</span>
@@ -245,7 +259,15 @@
         <!-- État « aucune conversation ouverte » (même coquille : barre du haut
              et barre latérale restent visibles). Jamais une erreur : on le dit. -->
         <section id="empty-state" class="empty-state">
-          <div class="empty-state__logo" aria-hidden="true">❄️</div>
+          <!--
+            A — l'avatar de Yuki à la place du flocon, dans le même cercle de
+            76 px. Repli : le flocon reste affiché tant qu'aucun avatar n'est
+            défini (`avatar.js` bascule l'un vers l'autre, jamais les deux).
+          -->
+          <div class="empty-state__logo" aria-hidden="true">
+            <span class="empty-state__glyphe" data-avatar-fallback>❄️</span>
+            <img id="empty-avatar" class="avatar avatar--logo" alt="" data-avatar-image hidden />
+          </div>
           <div class="empty-state__name">Yuki</div>
           <p class="empty-state__hint">Sélectionnez une conversation ou créez-en une.</p>
           <button id="empty-new" class="button" type="button">Nouvelle conversation</button>

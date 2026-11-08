@@ -16,6 +16,8 @@
  * modification s'applique à chaud, sans redémarrage.
  */
 
+import { creerSectionAvatar } from "./avatar.js";
+
 const JSON_HEADERS = { accept: "application/json" };
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-config": "1" };
 
@@ -105,6 +107,9 @@ const RULES_HELP = [
 ];
 
 export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
+  // Section AVATAR : montée UNE fois (son état — aperçu, boutons — survit aux
+  // re-rendus du panneau), réinsérée à chaque `render()`.
+  const avatarSection = creerSectionAvatar({ HolafFetch, HolafModal });
   const state = {
     text: "",
     chars: 0,
@@ -1068,6 +1073,10 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
         h("h2", { class: "config-group__title", text: "Personnalité de Yuki" }),
       ]),
     );
+
+    // L'avatar est une DONNÉE D'IDENTITÉ : il ouvre l'onglet, avant les
+    // textes. C'est aussi le seul endroit où il se règle.
+    wrap.append(avatarSection.element);
 
     // Les règles strictes précèdent la personnalité (nature différente : des
     // consignes posées par l'utilisateur, injectées AVANT l'identité).

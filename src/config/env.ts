@@ -140,6 +140,13 @@ export interface Env {
    * pourquoi le plafond de taille existe. Surcharge : `YUKI_FILES_DIR`.
    */
   filesDir: string;
+  /**
+   * Répertoire PERSISTANT de l'AVATAR de Yuki (volume `state`, `avatar/`).
+   * ⚠️ HORS du magasin de fichiers : celui-ci applique une rétention (purge
+   * réelle à 30 jours), que l'image de marque ne doit jamais subir. Surcharge :
+   * `YUKI_AVATAR_DIR`.
+   */
+  avatarDir: string;
   /** Registre persistant des transferts de fichiers agent (`transfers.json`). */
   agentTransfersPath: string;
   /**
@@ -483,6 +490,8 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       `${mountPoints.state}/reactions.jsonl`,
     ),
     filesDir: getString(env, "YUKI_FILES_DIR", `${mountPoints.state}/files`),
+    // ⚠️ AVATAR : dossier DÉDIÉ, sans aucune rétention (voir docs/lot34-avatar.md).
+    avatarDir: getString(env, "YUKI_AVATAR_DIR", `${mountPoints.state}/avatar`),
     // ⚠️ Registre PERSISTANT des transferts de fichiers en cours (reprise après
     // coupure). Sur le volume `state` : il survit à un redémarrage du gateway.
     agentTransfersPath: getString(

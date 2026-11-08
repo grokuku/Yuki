@@ -105,6 +105,17 @@ import {
   isFilesServePath,
   type FilesApiDeps,
 } from "./routes/files.js";
+import {
+  FAVICON_FALLBACK_PATH,
+  handleAvatarApiRequest,
+  handleAvatarServeRequest,
+  handleFaviconRequest,
+  isAvatarApiPath,
+  isAvatarServePath,
+  isFaviconPath,
+  type AvatarApiDeps,
+} from "./routes/avatar.js";
+import { AVATAR_MAX_BYTES } from "../identity/avatar.js";
 import { versionInfo } from "./routes/version.js";
 
 export interface AppContext {
@@ -172,6 +183,11 @@ export interface AppContext {
    * same-origin (`/fichiers/<id>.<ext>`). Absent ⇒ ces routes → 404.
    */
   files?: FilesApiDeps;
+  /**
+   * AVATAR de Yuki : image PERSISTANTE (`/avatar`, `/favicon.ico`) et API
+   * (`/api/avatar`). Absent ⇒ ces routes → 404 et l'UI garde le flocon.
+   */
+  avatar?: AvatarApiDeps;
   /**
    * Images générées via ComfyUI : import des workflows (`POST /api/images/…`),
    * bouton de test et SERVICE same-origin (`/images/<id>.<ext>`). Absent ⇒ ces
@@ -690,6 +706,7 @@ export function createApp(context: AppContext): RequestListener {
     heritage,
     captures,
     files,
+    avatar,
     images,
   } = context;
 
@@ -1010,6 +1027,86 @@ export function createApp(context: AppContext): RequestListener {
         handleFilesApiRequest({ method, path, headers: req.headers, deps: files }),
         headOnly,
       );
+      return;
+    }
+
+    if (avatar && isAvatarServePath(path)) {
+      // SERVICE same-origin de l'avatar : `img-src 'self'` le couvre déjà,
+      // aucune directive CSP n'est élargie, aucun `blob:` n'est nécessaire.
+      const result = handleAvatarServeRequest({ method, deps: avatar });
+      writeResponse(
+        res,
+        { status: result.status, body: result.body, headers: result.headers },
+        headOnly,
+      );
+      return;
+    }
+
+    if (avatar && isFaviconPath(path)) {
+      // ⚠️ Beaucoup de navigateurs demandent `/favicon.ico` d'eux-mêmes : la
+      // route existe même sans déclaration dans le HTML. Le repli est l'icône
+      // PWA livrée, résolue par le service statique (garde-fou anti-traversée).
+      const fallback = resolveStaticRequest({ publicDir }, FAVICON_FALLBACK_PATH);
+      const result = handleFaviconRequest({
+        method,
+        deps: avatar,
+        fallback: fallback ? { body: fallback.body, headers: fallback.headers } : null,
+      });
+      writeResponse(
+        res,
+        { status: result.status, body: result.body, headers: result.headers },
+        headOnly,
+      );
+      return;
+    }
+
+    if (avatar && isAvatarApiPath(path)) {
+      void (async () => {
+        // `POST` reçoit les OCTETS BRUTS de l'image (aucun multipart).
+        let body: Buffer = Buffer.alloc(0);
+        if (method === "POST") {
+          body = await readBodyBinary(req, AVATAR_MAX_BYTES);
+        }
+        return handleAvatarApiRequest({
+          method,
+          headers: req.headers,
+          body,
+          deps: avatar,
+        });
+      })()
+        .then((response) => {
+          writeResponse(
+            res,
+            { status: response.status, body: response.body, headers: response.headers },
+            headOnly,
+          );
+        })
+        .catch((error: unknown) => {
+          if (error instanceof BodyTooLargeError) {
+            writeResponse(
+              res,
+              {
+                status: 413,
+                body: {
+                  error: "body_too_large",
+                  code: "body_too_large",
+                  message: `Image refusée : le corps dépasse la limite de ${AVATAR_MAX_BYTES} octets.`,
+                },
+              },
+              headOnly,
+            );
+            return;
+          }
+          avatar.logger?.error("avatar.request.failed", {
+            error: error instanceof Error ? error.message : String(error),
+            path,
+          });
+          if (!res.headersSent) {
+            writeResponse(res, { status: 500, body: { error: "internal_error" } }, headOnly);
+          } else {
+            res.end();
+          }
+        });
       return;
     }
 

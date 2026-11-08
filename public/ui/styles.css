@@ -58,8 +58,38 @@ body {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+/* ─── AVATAR de Yuki ──────────────────────────────────────────────────────
+ * Un seul composant visuel, trois tailles : 24 px dans la barre du haut,
+ * 76 px dans l'état vide, 48 px dans les réglages. Toujours un CERCLE et
+ * jamais une image déformée (`object-fit: cover`). `img-src 'self'` couvre
+ * `/avatar` : aucune directive CSP n'est élargie. */
+.avatar {
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--panel-2);
+}
+
+.avatar[hidden] {
+  display: none;
+}
+
+.avatar--brand {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+}
+
+.avatar--logo {
+  width: 100%;
+  height: 100%;
 }
 
 .status {
@@ -966,6 +996,8 @@ a.pill:hover {
   width: 76px;
   height: 76px;
   border-radius: 50%;
+  /* L'avatar remplit le cercle : le débordement hors du disque est CLIPPÉ. */
+  overflow: hidden;
   font-size: 40px;
   line-height: 1;
   background: var(--panel-2);
@@ -2940,8 +2972,24 @@ h6.md-heading {
   /* Barre du haut compacte : une seule rangée de taille réduite (les
      informations — connexion, état, badge anti-mensonge, file, notifications,
      thème, voix — restent TOUTES présentes ; rien n'est retiré). */
+  /* B — en téléphone le NOM disparaît (barre compacte) mais l'AVATAR reste :
+     c'est le seul endroit où il est visible sur le téléphone de l'utilisateur.
+     Sans avatar, toute la marque est masquée : aucun trou dans la barre. */
   .brand {
     display: none;
+  }
+
+  .brand__name {
+    display: none;
+  }
+
+  body.has-avatar .brand {
+    display: flex;
+  }
+
+  .avatar--brand {
+    width: 22px;
+    height: 22px;
   }
 
   /* Le lien « Configuration » de la barre du haut est REDONDANT sur téléphone :

@@ -61,6 +61,7 @@ import {
   type ImagesGatewayPort,
 } from "./comfy/index.js";
 import { createFilesService, createGeneratedImageFiles, FilesStore } from "./files/index.js";
+import { AvatarStore } from "./identity/avatar.js";
 import {
   CHAT_JUDGE_SYSTEM_PROMPT,
   CHAT_JUDGE_TIMEOUT_MS,
@@ -1064,6 +1065,11 @@ async function main(): Promise<void> {
     retentionDays: () => config.getNumber("files.retentionDays"),
   });
   filesStore.ensureLayout();
+  // --- AVATAR de Yuki ---------------------------------------------------------
+  // ⚠️ PERSISTANT et HORS du magasin de fichiers : `filesStore` purge réellement
+  // (rétention de 30 jours par défaut), une image de marque ne doit pas subir
+  // cette règle. `state/avatar/` ne connaît donc AUCUNE expiration.
+  const avatarStore = new AvatarStore({ dir: env.avatarDir });
   // Purge RÉELLE au démarrage : un fichier expiré pendant l'arrêt est supprimé
   // avec son analyse (le plafond ne sert à rien si l'expiré reste).
   const purgedFilesAtStart = filesStore.purgeExpired();
@@ -3186,6 +3192,9 @@ async function main(): Promise<void> {
       // SERVICE same-origin (`/fichiers/<id>.<ext>`). Disponible même en mode
       // dégradé : stocker et télécharger ne demande aucun modèle.
       files: { service: filesService, logger },
+      // AVATAR : image PERSISTANTE servie same-origin (`/avatar`), API
+      // (`/api/avatar`) et favicon (`/favicon.ico`). Hors du magasin de fichiers.
+      avatar: { store: avatarStore, logger },
       // IMAGES générées : import des workflows, bouton de test et SERVICE
       // same-origin (`/images/<id>.<ext>`). Disponible même en mode dégradé :
       // importer un workflow et tester le serveur ne demande aucun modèle.

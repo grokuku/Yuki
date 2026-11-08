@@ -1847,3 +1847,129 @@
 .declencheurs-chaine__etat {
   font-size: 0.85rem;
 }
+
+/* ─── AVATAR de Yuki (onglet Personnalité) ────────────────────────────────
+ * Aperçu 48 px dans un cercle, éditeur de recadrage dans une HolafModal.
+ * Aucun style inline (CSP `style-src 'self'`) : tout est ici. */
+.avatar--reglages {
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border, #262b38);
+}
+
+.avatar-section__ligne {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.avatar-section__apercu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  overflow: hidden;
+  font-size: 26px;
+  line-height: 1;
+  background: var(--panel-2, #1e2230);
+  border: 1px solid var(--border, #262b38);
+}
+
+.avatar-section__glyphe[hidden],
+.avatar-section__apercu .avatar[hidden] {
+  display: none;
+}
+
+.avatar-section__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.avatar-section__statut {
+  margin: 4px 0 0;
+  color: var(--muted, #8b93a7);
+  font-size: 0.85rem;
+}
+
+/* Éditeur de recadrage — le masque circulaire est un CLIP CSS : le canvas
+ * dessine le carré de recadrage, le disque coupe les quatre coins. */
+.avatar-editor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.avatar-editor__apercu {
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1px solid var(--border, #262b38);
+  background: var(--panel-2, #1e2230);
+  flex: 0 0 auto;
+}
+
+.avatar-editor__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* ⚠️ Le doigt ne fait pas défiler la page : il déplace/pince l'image. */
+  touch-action: none;
+  cursor: grab;
+}
+
+.avatar-editor__canvas:focus-visible {
+  outline: 2px solid var(--accent, #5b8cff);
+  outline-offset: -2px;
+}
+
+.avatar-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar-editor__zoom {
+  min-width: 36px;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.avatar-editor__aide {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--muted, #8b93a7);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.avatar-editor__choix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.avatar-editor__statut {
+  margin: 0;
+  color: var(--muted, #8b93a7);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.avatar-editor__erreur {
+  margin: 0;
+  color: var(--danger, #ff6b6b);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.avatar-editor__erreur[hidden] {
+  display: none;
+}
