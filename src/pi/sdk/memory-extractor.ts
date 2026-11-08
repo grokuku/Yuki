@@ -44,7 +44,7 @@ export interface SdkMemoryExtractorConfig {
    *  Une FONCTION est relue à chaque extraction ⇒ un changement de modèle
    *  (`apply: hot`) s'applique sans redémarrage. */
   modelReference: string | (() => string);
-  thinking: PiThinkingLevel;
+  thinking: PiThinkingLevel | (() => PiThinkingLevel);
   /** Allowlist d'outils (défaut : aucun). */
   tools?: readonly string[];
   /** Délai maximal d'une extraction (ms), lu à chaud : au-delà, on interrompt. */
@@ -71,13 +71,15 @@ export function createSdkMemoryExtractor(
       });
       return "";
     }
+    const resolvedThinking =
+      typeof config.thinking === "function" ? config.thinking() : config.thinking;
     const ephemeral = await createEphemeralSession({
       cwd: config.cwd,
       agentDir: config.agentDir,
       systemPrompt: config.systemPrompt ?? MEMORY_EXTRACTOR_SYSTEM_PROMPT,
       modelRuntime: runtime,
       model,
-      thinkingLevel: config.thinking,
+      thinkingLevel: resolvedThinking,
       tools: config.tools ?? [],
     });
     const { session } = ephemeral;

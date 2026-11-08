@@ -6,6 +6,10 @@
  * qu'aucune VALEUR ne peut sortir (la vue publique ne la porte pas).
  */
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,6 +17,7 @@ import {
   createSecretTools,
 } from "../../src/pi/sdk/execution-tools.js";
 import { SECRET_LIST_TAG, type SecretDirectoryPort } from "../../src/secrets/directory.js";
+import { SecretStore } from "../../src/secrets/store.js";
 import type {
   DirectSecretRequestInput,
   SecretRequestToolOutcome,
@@ -85,6 +90,34 @@ describe("lister_secrets — NOMS seulement", () => {
     const { text, details } = await call(tool);
     expect(text).toContain("illisible");
     expect(details).toEqual({ status: "error" });
+  });
+
+  it("les ALIAS de clés LLM (env) ne sont JAMAIS des secrets du coffre", async () => {
+    // ⚠️ Lot 33 : `YUKI_LLM_DISCUSSION_API_KEY` / `YUKI_LLM_TRAVAIL_API_KEY` sont
+    // des ALIAS de LECTURE, pas des entrées du coffre. `lister_secrets` lit le
+    // coffre, donc ne doit jamais les proposer — même présents dans
+    // l'environnement, et jamais leur valeur.
+    const dir = mkdtempSync(join(tmpdir(), "yuki-secret-alias-"));
+    try {
+      const store = new SecretStore({
+        path: join(dir, "secrets.vault.json"),
+        env: {
+          YUKI_VAULT_KEY: "cle-maitre-de-test",
+          YUKI_LLM_DISCUSSION_API_KEY: "alias-light-valeur",
+          YUKI_LLM_TRAVAIL_API_KEY: "alias-heavy-valeur",
+        },
+      });
+      const tool = createSecretTools(store)[0] as SecretTool;
+      const { text, details } = await call(tool);
+      expect(details).toEqual({ status: "ok", count: 0 });
+      expect(text).toContain("(aucun secret enregistré)");
+      expect(text).not.toContain("YUKI_LLM_DISCUSSION_API_KEY");
+      expect(text).not.toContain("YUKI_LLM_TRAVAIL_API_KEY");
+      expect(text).not.toContain("alias-light-valeur");
+      expect(text).not.toContain("alias-heavy-valeur");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -9,6 +9,7 @@ export {
   HEAVY_PROVIDER,
   LIGHT_PROVIDER,
   LLM_ENV,
+  LLM_ENV_ALIAS,
   LLM_ROLES,
   PROVIDERS,
   providerForRole,

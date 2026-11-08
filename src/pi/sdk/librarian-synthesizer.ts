@@ -26,7 +26,7 @@ export interface SdkLibrarianSynthesizerConfig {
   /** Référence `provider/modelId` utilisée (ex. le léger). Une FONCTION est
    *  relue à chaque synthèse ⇒ changement de modèle à chaud sans redémarrage. */
   modelReference: string | (() => string);
-  thinking: PiThinkingLevel;
+  thinking: PiThinkingLevel | (() => PiThinkingLevel);
   /** Délai maximal d'une synthèse (ms), lu à chaud. */
   timeoutMs: () => number;
   systemPrompt: string;
@@ -50,13 +50,15 @@ export function createSdkLibrarianSynthesizer(
       });
       return "";
     }
+    const resolvedThinking =
+      typeof config.thinking === "function" ? config.thinking() : config.thinking;
     const ephemeral = await createEphemeralSession({
       cwd: config.cwd,
       agentDir: config.agentDir,
       systemPrompt: config.systemPrompt,
       modelRuntime: runtime,
       model,
-      thinkingLevel: config.thinking,
+      thinkingLevel: resolvedThinking,
       tools: [],
     });
     const { session } = ephemeral;

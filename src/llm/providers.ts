@@ -69,6 +69,12 @@ export const LLM_ENV: Readonly<Record<LlmRole, RoleEnvNames>> = {
   },
 };
 
+/** Alias DÉPRÉCIÉS (lecture seule) — utilisés si le canonique manque. */
+export const LLM_ENV_ALIAS: Readonly<Record<LlmRole, string>> = {
+  light: "YUKI_LLM_DISCUSSION_API_KEY",
+  heavy: "YUKI_LLM_TRAVAIL_API_KEY",
+};
+
 export const LIGHT_PROVIDER: ProviderSpec = {
   id: "llm-light",
   name: "LLM léger",
@@ -117,10 +123,19 @@ export function readEnvString(
 export function resolveProviders(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<LlmRole, ProviderSpec> {
+  const keyEnvFor = (role: LlmRole): string => {
+    const canonical = LLM_ENV[role].apiKey;
+    const rawCanonical = env[canonical];
+    if (typeof rawCanonical === "string" && rawCanonical.trim() !== "") return canonical;
+    const alias = LLM_ENV_ALIAS[role];
+    const rawAlias = env[alias];
+    if (typeof rawAlias === "string" && rawAlias.trim() !== "") return alias;
+    return canonical;
+  };
   const build = (role: LlmRole, base: ProviderSpec): ProviderSpec => {
     const api = (readEnvString(env, LLM_ENV[role].api) ?? base.api) as LlmApi;
     const baseUrl = readEnvString(env, LLM_ENV[role].baseUrl) ?? base.baseUrl;
-    return { ...base, api, baseUrl };
+    return { ...base, api, baseUrl, keyEnv: keyEnvFor(role) };
   };
   return {
     light: build("light", LIGHT_PROVIDER),

@@ -20,6 +20,13 @@ export interface MemoryWriteModelRoles {
   heavyRef: string;
   /** Référence `provider/modelId` du compte léger (repli). */
   lightRef: string;
+  /** Logger pour journaliser un repli (optionnel). */
+  logger?: {
+    warn(message: string, fields?: Record<string, unknown>): void;
+    info?(message: string, fields?: Record<string, unknown>): void;
+  };
+  /** Nom de l'usage déclenchant ce repli (pour le journal). */
+  usage?: string;
 }
 
 /**
@@ -27,5 +34,15 @@ export interface MemoryWriteModelRoles {
  * Le lourd est préféré dès qu'il est disponible, sinon on retombe sur le léger.
  */
 export function memoryWriteModelReference(roles: MemoryWriteModelRoles): string {
-  return roles.heavyAvailable ? roles.heavyRef : roles.lightRef;
+  if (roles.heavyAvailable) return roles.heavyRef;
+  const log = roles.logger?.warn ?? roles.logger?.info;
+  if (log) {
+    log("llm.fallback", {
+      usage: roles.usage ?? "travail-de-fond",
+      de: "heavy",
+      vers: "light",
+      raison: "modèle de travail indisponible",
+    });
+  }
+  return roles.lightRef;
 }

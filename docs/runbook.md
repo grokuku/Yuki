@@ -450,6 +450,26 @@ ollamacloud) : un **léger** (`gemma4:31b`) qui mène la conversation et un
 arrière-plan. Le léger peut déléguer via l'outil `delegate`. Le nommage est
 **neutre par rôle** (`llm-light` / `llm-heavy`).
 
+### Les huit usages des deux modèles (Lot 33)
+
+⚠️ Une seule table fait foi. « Réflexion » = niveau RÉELLEMENT transmis au
+modèle pour cet appel, jamais une supposition : il est lu à chaud dans
+`llm.<role>.thinking` (défaut `off` pour `light`, `high` pour `heavy`).
+
+| # | usage | rôle | réflexion | repli | fichier:ligne |
+| --- | --- | --- | --- | --- | --- |
+| 1 | conversation (interface) | discussion | `llm.light.thinking` | aucun — le léger est requis | `src/index.ts:2565` |
+| 2 | juge du mode `auto` | discussion | **`off` figé — exception assumée** (exécuté à chaque message) | aucun — léger indisponible ⇒ ne répond pas | `src/index.ts:1464` · appel `:1875` |
+| 3 | rédacteur de canal | discussion | **`off` figé** (même fabrique que le juge) | aucun — modèle introuvable ⇒ refus explicite | `src/index.ts:1816` · fabrique `:1464` |
+| 4 | worker (tâche déléguée) | travail | `llm.heavy.thinking` | aucun — `delegate` refuse (`heavy_unavailable`) quand le lourd manque | `src/index.ts:2144-2145` · `src/delegation/service.ts:305-307` |
+| 5 | extraction mémoire | travail | `llm.heavy.thinking`, sinon `llm.light.thinking` | **léger** (`memoryWriteModelReference`) | `src/index.ts:2227-2237` · `:2251-2254` · `src/memory/write-model.ts:36-48` |
+| 6 | consolidation hebdo de la mémoire | travail | `llm.heavy.thinking` | **aucun — lourd imposé** (passe REFUSÉE si le lourd manque) | `src/index.ts:2303-2305` · `src/memory/consolidation-hebdo.ts:437` |
+| 7 | synthèse du libraire | travail | `llm.heavy.thinking`, sinon `llm.light.thinking` | **léger** (`memoryWriteModelReference`) | `src/index.ts:2380-2391` |
+| 8 | récapitulatif | travail | `llm.heavy.thinking`, sinon `llm.light.thinking` | **léger** (`memoryWriteModelReference`) | `src/index.ts:2925-2938` |
+
+Chaque repli vers le léger journalise **`llm.fallback { usage, de, vers, raison }`**
+(`src/memory/write-model.ts:36-48`) — jamais un contenu ni une clé.
+
 ### Changer de fournisseur / de modèle (page `/config`)
 
 Depuis le Lot 11, **plus aucun fichier à éditer**. Ouvrez `/config` et réglez,

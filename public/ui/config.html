@@ -191,6 +191,15 @@
             aria-labelledby="tab-modeles"
             tabindex="0"
           >
+            <!-- ⚠️ BANDEAU CONDITIONNEL (rôle TRAVAIL) : masqué tant que la clé
+                 du modèle de travail est présente. Jamais un toast, jamais
+                 de markup : seul `textContent` est écrit par `config.js`
+                 (`updateAvailability`), donc aucun markup dynamique. -->
+            <p
+              id="work-model-notice"
+              class="config-banner config-banner--warn"
+              hidden
+            ></p>
             <div id="group-modeles" class="config-groups"></div>
           </section>
           <section

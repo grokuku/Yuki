@@ -23,7 +23,7 @@ export interface SdkRecapWriterConfig {
    * s'applique sans redémarrage.
    */
   modelReference: string | (() => string);
-  thinking: PiThinkingLevel;
+  thinking: PiThinkingLevel | (() => PiThinkingLevel);
   /** Délai maximal d'un récapitulatif (ms), lu à chaud : au-delà, on interrompt. */
   timeoutMs: () => number;
   logger: PiLogger;

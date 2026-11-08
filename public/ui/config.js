@@ -48,6 +48,10 @@ import { setTimeZone } from './horodatage.js';
 import { createTtsPlayer } from './tts-player.js';
 import { initTtsAssistant } from './tts-assistant.js';
 import { initVoicesPanel } from './voices-panel.js';
+import {
+  MODELE_DISCUSSION_INTRO,
+  bandeauTravail,
+} from './modeles-aide.js';
 
 HolafModal.configure({ injectStyles: false });
 
@@ -172,8 +176,11 @@ const OPTIONS = {
 const GROUPS = [
   {
     id: "llm-light",
-    title: "LLM léger",
+    title: "Modèle de discussion",
     role: "light",
+    // ⚠️ Texte d'AIDE de l'onglet, pas un libellé de clé : il n'explique que
+    // la RÉPARTITION des rôles. Une phrase, sous le titre du premier groupe.
+    intro: MODELE_DISCUSSION_INTRO,
     fields: [
       { path: "llm.light.baseUrl", label: "URL de base", kind: "text" },
       { path: "llm.light.apiKey", label: "Clé d'API", kind: "secret" },
@@ -195,7 +202,7 @@ const GROUPS = [
   },
   {
     id: "llm-heavy",
-    title: "LLM lourd",
+    title: "Modèle de travail",
     role: "heavy",
     fields: [
       { path: "llm.heavy.baseUrl", label: "URL de base", kind: "text" },
@@ -1031,6 +1038,12 @@ const saveStatus = document.getElementById("save-status");
 const saveDirty = document.getElementById("save-dirty");
 const globalError = document.getElementById("global-error");
 const availabilityEl = document.getElementById("availability");
+/**
+ * Bandeau de l'onglet **Modèles** : rôle TRAVAIL indisponible. Élément STATIQUE
+ * de `config.html` (CSP inchangée, pas de création de markup) ; seul son
+ * `textContent` et son attribut `hidden` changent.
+ */
+const workModelNoticeEl = document.getElementById("work-model-notice");
 const appliedEl = document.getElementById("applied");
 const appliedHot = document.getElementById("applied-hot");
 const appliedRestart = document.getElementById("applied-restart");
@@ -1450,6 +1463,12 @@ function render() {
       head.append(h("div", { class: "config-secret" }, [test, status]));
     }
     section.append(head);
+    // Texte d'aide du GROUPE (une phrase) : il explique le RÔLE, jamais une clé.
+    if (typeof group.intro === "string" && group.intro !== "") {
+      section.append(
+        h("p", { class: "config-helper config-group__intro", text: group.intro }),
+      );
+    }
     // Note de GROUPE (ex. ce qui n'est PAS réglable dans cet onglet).
     if (group.note) {
       section.append(h("p", { class: "config-helper config-group__note", text: group.note }));
@@ -2006,6 +2025,15 @@ function updateAvailability() {
     availabilityEl.className = "config-banner config-banner--warn";
   } else {
     availabilityEl.hidden = true;
+  }
+  // ⚠️ Rôle TRAVAIL indisponible (présence de clé, MÊME mesure que
+  // `src/llm/availability.ts:63-69` : seule la présence compte, aucun appel
+  // réseau). Le bandeau est MASQUÉ dès que la clé est là : conditionnel, jamais
+  // permanent. `textContent` uniquement (aucun markup injecté, CSP inchangée).
+  if (workModelNoticeEl) {
+    const bandeau = bandeauTravail(heavyKey);
+    workModelNoticeEl.hidden = bandeau.hidden;
+    workModelNoticeEl.textContent = bandeau.texte;
   }
 }
 

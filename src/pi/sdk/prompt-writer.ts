@@ -75,7 +75,7 @@ export interface SdkPromptWriterConfig {
   systemPrompt: string;
   /** Référence `provider/modelId`, relue à chaque appel (`apply: hot`). */
   modelReference: string | (() => string);
-  thinking: PiThinkingLevel;
+  thinking: PiThinkingLevel | (() => PiThinkingLevel);
   /** Délai maximal d'un appel (ms), lu à chaud : au-delà, on interrompt. */
   timeoutMs: () => number;
   logger: PiLogger;
@@ -158,7 +158,10 @@ export function createSdkPromptWriter(config: SdkPromptWriterConfig): SdkPromptW
       systemPrompt: config.systemPrompt,
       modelRuntime: runtime,
       model,
-      thinkingLevel: config.thinking,
+      thinkingLevel:
+        typeof config.thinking === "function"
+          ? (config.thinking as () => PiThinkingLevel)()
+          : config.thinking,
       // ⚠️ POLITIQUE DU RUN : vide par défaut (récapitulatif, juge, mémoire
       // n'agissent pas). Un run distant reçoit celle de son origine.
       tools: config.tools?.() ?? [],

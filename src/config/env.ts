@@ -332,6 +332,19 @@ export function readConfigEnvOverrides(
       out[path] = raw;
     }
   }
+  // Alias dépréciés (lecture seule) pour les clés d'API LLM. Le canonique
+  // (`CONFIG_SCHEMA[path].env`, ex. `YUKI_LLM_LIGHT_API_KEY`) reste PRIORITAIRE :
+  // `out[path]` n'a été posé ci-dessus que si la variable canonique est définie
+  // ET non vide (une variable vide n'est jamais une surcharge).
+  const aliasMap: Record<string, string> = {
+    "llm.light.apiKey": "YUKI_LLM_DISCUSSION_API_KEY",
+    "llm.heavy.apiKey": "YUKI_LLM_TRAVAIL_API_KEY",
+  };
+  for (const [path, aliasEnv] of Object.entries(aliasMap)) {
+    if (path in out) continue;
+    const raw = processEnv[aliasEnv];
+    if (typeof raw === "string" && raw.trim() !== "") out[path] = raw;
+  }
   return out;
 }
 

@@ -400,6 +400,8 @@ async function main(): Promise<void> {
     resolveModelsFrom(effectiveLlmConfig(config)).heavy.reference;
   const liveHeavyThinking = (): PiThinkingLevel =>
     effectiveLlmConfig(config).heavy.thinking;
+  const liveLightThinking = (): PiThinkingLevel =>
+    effectiveLlmConfig(config).light.thinking;
   const heavyAvailableAtStart = availabilityAtStart.isAvailable("heavy");
 
   const volumes = inspectMountPoints(mountPoints(env));
@@ -2227,6 +2229,8 @@ async function main(): Promise<void> {
         heavyAvailable: resolveAvail().isAvailable("heavy"),
         heavyRef: liveHeavyReference(),
         lightRef: liveLightReference(),
+        logger,
+        usage: "extraction memoire",
       });
     memoryService = new MemoryService({
       store: memoryStore,
@@ -2244,7 +2248,10 @@ async function main(): Promise<void> {
         authPath: join(env.piAgentDir, "auth.json"),
         modelsPath,
         modelReference: memoryWriteRef,
-        thinking: "off",
+        thinking: () =>
+          resolveAvail().isAvailable("heavy")
+            ? liveHeavyThinking()
+            : liveLightThinking(),
         timeoutMs: () => config.getNumber("memory.extract.timeoutMs"),
         logger,
       }),
@@ -2294,8 +2301,10 @@ async function main(): Promise<void> {
           authPath: join(env.piAgentDir, "auth.json"),
           modelsPath,
           modelReference: liveHeavyReference,
-          // Réponse JSON stricte : pas de raisonnement (coût et latence inutiles).
-          thinking: "off",
+          // ⚠️ Consolidation HEBDOMADAIRE : le LOURD est IMPOSÉ (aucun repli),
+          // mais sa réflexion suit `llm.heavy.thinking` — jamais un `off` figé
+          // (le défaut du rôle est `high`, voir `src/config/schema.ts`).
+          thinking: liveHeavyThinking,
           // Une passe peut traiter un lot volumineux : délai GÉNÉREUX, jamais 30 s.
           timeoutMs: () => Math.max(180_000, config.getNumber("memory.extract.timeoutMs")),
           logger,
@@ -2369,8 +2378,18 @@ async function main(): Promise<void> {
         agentDir: env.piAgentDir,
         authPath: join(env.piAgentDir, "auth.json"),
         modelsPath,
-        modelReference: liveLightReference,
-        thinking: "off",
+        modelReference: () =>
+          memoryWriteModelReference({
+            heavyAvailable: resolveAvail().isAvailable("heavy"),
+            heavyRef: liveHeavyReference(),
+            lightRef: liveLightReference(),
+            logger,
+            usage: "synthese libraire",
+          }),
+        thinking: () =>
+          resolveAvail().isAvailable("heavy")
+            ? liveHeavyThinking()
+            : liveLightThinking(),
         timeoutMs: () => config.getNumber("librarian.archiveTimeoutMs"),
         systemPrompt: LIBRARIAN_SYNTHESIZER_SYSTEM_PROMPT,
         logger,
@@ -2909,11 +2928,16 @@ async function main(): Promise<void> {
               heavyAvailable: resolveAvail().isAvailable("heavy"),
               heavyRef: liveHeavyReference(),
               lightRef: liveLightReference(),
+              logger,
+              usage: "recapitulatif",
             }),
-          // Récapituler est une tâche de FIDÉLITÉ (restitution), pas de
-          // raisonnement : le niveau de réflexion reste « off » pour être
-          // compatible avec les DEUX modèles et borné en durée.
-          thinking: "off",
+          // Récapituler est une tâche de FIDÉLITÉ (restitution) : la réflexion
+          // suit `llm.<role>.thinking` du modèle RÉELLEMENT retenu (lourd, ou
+          // léger en repli) — jamais un `off` figé.
+          thinking: () =>
+            resolveAvail().isAvailable("heavy")
+              ? liveHeavyThinking()
+              : liveLightThinking(),
           timeoutMs: () => config.getNumber("recap.timeoutMs"),
           logger,
         }),
