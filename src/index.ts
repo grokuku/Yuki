@@ -51,6 +51,7 @@ import { SecretRequestRegistry } from "./secrets/requests.js";
 import { SecretStore } from "./secrets/store.js";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
+import { preparerMultiBot } from "./bots/index.js";
 import {
   ComfyClient,
   ComfyWorkflowStore,
@@ -259,7 +260,14 @@ function effectiveLlmConfig(config: ConfigRuntime): EffectiveLlmConfig {
 
 async function main(): Promise<void> {
   // --- (1) Configuration : store + env + défauts ----------------------------
-  const env = loadEnv();
+  const envBrut = loadEnv();
+  // MULTI-BOT (lot 35a) — lit `state/bots.json`, migre la disposition mono-bot
+  // si nécessaire, puis renvoie l'`Env` EFFECTIF (chemins du bot actif).
+  // ⚠️ Peut REFUSER le démarrage (`DemarrageRefuseError` : MIGRATION_PARTIELLE,
+  // MIGRATION_ECHOUEE, REGISTRE_INVALIDE) : jamais de fonctionnement à moitié
+  // migré. Rien de VISIBLE ne change : seuls les chemins changent.
+  const bots = preparerMultiBot(envBrut);
+  const env = bots.env;
   const config = createConfigRuntime({
     env,
     promptDefaults: {
@@ -286,6 +294,24 @@ async function main(): Promise<void> {
     level: env.logLevel,
     secretValues,
   });
+
+  // --- MULTI-BOT (lot 35a) : ce que le démarrage doit DIRE -------------------
+  // Aucune fonction visible : uniquement du journal (migration effectuée,
+  // surcharges de déploiement ignorées, bot actif).
+  for (const avertissement of bots.avertissements) {
+    logger.warn("bots.avertissement", { detail: avertissement });
+  }
+  if (bots.mode === "multi" && bots.bot !== null) {
+    logger.info("bots.actif", {
+      bot: bots.bot.id,
+      ordre: bots.bot.ordre,
+      migration: bots.migration,
+      racine: bots.chemins?.racine ?? null,
+      sessions: bots.chemins?.sessions ?? null,
+    });
+  } else {
+    logger.info("bots.mono", { migration: bots.migration });
+  }
 
   // --- Détection précoce des volumes `rw` non inscriptibles ------------------
   // Une cause système (montage `ro`, permissions, volume absent) ne se
