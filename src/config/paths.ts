@@ -41,6 +41,25 @@ export function resolveConfigStorePath(
   return trimmed && trimmed.length > 0 ? trimmed : `${stateDir}/config.json`;
 }
 
+/** Nom du fichier d'OVERLAY de configuration d'un bot (lot 35b). */
+export const CONFIG_OVERLAY_FILE_NAME = "config.overlay.json";
+
+/**
+ * Résout le chemin de l'overlay de configuration d'un bot :
+ * `<state>/bots/<botId>/config.overlay.json`.
+ *
+ * ⚠️ SECOND store, **jamais imbriqué** dans `config.json` : le store commun reste
+ * la configuration de l'INSTANCE (fichier unique, partagé), l'overlay porte les
+ * valeurs du BOT ACTIF. Deux fichiers distincts ⇒ une écriture de l'un ne peut
+ * pas corrompre l'autre, et un retour à l'état antérieur se fait bot par bot.
+ *
+ * Le sous-dossier `bots` est la CONVENTION du lot 35a
+ * (`src/bots/paths.ts:21`, `SOUS_DOSSIER_BOTS`) : même racine, même bot.
+ */
+export function resolveConfigOverlayPath(stateDir: string, botId: string): string {
+  return `${stateDir}/bots/${botId}/${CONFIG_OVERLAY_FILE_NAME}`;
+}
+
 /** Définit les cinq points de montage (volumes nommés), dans un ordre stable. */
 export function mountPoints(env: Env): MountPoint[] {
   return [

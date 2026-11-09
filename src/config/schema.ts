@@ -36,7 +36,8 @@ export type CompatMode = "strict" | "auto-degrade";
 /** Politique en cas de clé LLM manquante (aligné sur `src/llm/availability`). */
 export type LlmMissingKeyMode = "degrade" | "refuse";
 
-export interface FieldDescriptor {
+/** Champs COMMUNS aux trois portées (aucun ne dépend de la portée). */
+interface DescripteurCommun {
   readonly type: FieldType;
   /** Valeur par défaut (code). Les prompts sont affinés depuis les fichiers. */
   readonly default: string | number;
@@ -68,9 +69,61 @@ export interface FieldDescriptor {
    * heure FAUSSE sans le dire.
    */
   readonly ianaTimeZone?: true;
+}
+
+/** Portée d'un réglage (lot 35b) : OBLIGATOIRE sur chaque clé. */
+export type FieldScope = "instance" | "bot" | "mixte";
+
+/** Mode de fusion d'une clé `mixte`. */
+export type MixteMerge = "surcharge" | "et";
+
+/**
+ * Clé d'INSTANCE : réglage de l'installation (LLM, GPU, délégation, libraire,
+ * fichiers, agents, audit…) ⇒ store COMMUN `config.json`. Seule portée qui
+ * accepte une variable d'environnement.
+ */
+export interface InstanceFieldDescriptor extends DescripteurCommun {
+  readonly scope: "instance";
   /** Variable d'environnement qui surcharge ce champ (si définie et non vide). */
   readonly env?: string;
+  readonly mixteMerge?: never;
 }
+
+/**
+ * Clé de BOT : réglage d'UN bot (mode de conversation, voix, mémoire du bot,
+ * capacités distantes…) ⇒ **overlay du bot actif**
+ * (`<state>/bots/<id>/config.overlay.json`). Le store commun ne sert que de
+ * valeur de repli (héritage d'avant le lot 35b).
+ *
+ * ⚠️ `env` est INTERDIT ici, et c'est le COMPILATEUR qui le dit : une variable
+ * d'environnement est une valeur d'INSTALLATION, elle ne peut pas désigner
+ * « le bot actif » (un déploiement à deux bots n'aurait aucun moyen de
+ * distinguer les deux valeurs).
+ */
+export interface BotFieldDescriptor extends DescripteurCommun {
+  readonly scope: "bot";
+  readonly env?: never;
+  readonly mixteMerge?: never;
+}
+
+/**
+ * Clé MIXTE : la valeur dépend des DEUX côtés, et la fusion est déclarée
+ * (`mixteMerge`, obligatoire) — jamais devinée :
+ *  - `surcharge` : l'overlay du bot REMPLACE la valeur commune ;
+ *  - `et` : conjonction (restriction) ; réservé aux enums `off|on`.
+ * ⚠️ `env` INTERDIT (même raison que pour une clé de bot).
+ */
+export interface MixteFieldDescriptor extends DescripteurCommun {
+  readonly scope: "mixte";
+  readonly mixteMerge: MixteMerge;
+  readonly env?: never;
+}
+
+/** Descripteur d'un champ, discriminé par sa PORTÉE. */
+export type FieldDescriptor =
+  | InstanceFieldDescriptor
+  | BotFieldDescriptor
+  | MixteFieldDescriptor;
 
 /** Profils GPU acceptés (chaîne vide = résolution automatique). */
 export const GPU_PROFILES = ["", "confort", "compact", "repli", "texte-seul"] as const;
@@ -89,6 +142,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // + l'abonnement `config.subscribe` de `src/index.ts`. La bascule a lieu
   // ENTRE deux runs : un run EN VOL garde son fournisseur d'origine.
   "llm.light.api": {
+    scope: "instance",
     type: "enum",
     enum: ["openai-completions"],
     default: "openai-completions",
@@ -96,6 +150,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_LLM_LIGHT_API",
   },
   "llm.light.baseUrl": {
+    scope: "instance",
     type: "string",
     default: "https://ollama.com/v1",
     apply: "hot",
@@ -107,12 +162,14 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // dans `src/index.ts`). Les runs EN COURS gardent leur modèle d'origine
   // (la bascule n'a lieu qu'entre deux runs).
   "llm.light.model": {
+    scope: "instance",
     type: "string",
     default: "gemma4:31b",
     apply: "hot",
     env: "YUKI_LLM_LIGHT_MODEL",
   },
   "llm.light.thinking": {
+    scope: "instance",
     type: "enum",
     enum: THINKING_LEVELS,
     default: "off",
@@ -128,12 +185,14 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // un changement réécrit `models.json` et rafraîchit le runtime partagé, sans
   // redémarrage (même mécanique que `llm.<role>.model`).
   "llm.light.vision": {
+    scope: "instance",
     type: "enum",
     enum: ["oui", "non"],
     default: "oui",
     apply: "hot",
   },
   "llm.light.apiKey": {
+    scope: "instance",
     type: "string",
     default: "",
     apply: "hot",
@@ -147,6 +206,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // partagé (rafraîchi en place) au démarrage de chaque job ; un job EN VOL
   // garde son fournisseur d'origine.
   "llm.heavy.api": {
+    scope: "instance",
     type: "enum",
     enum: ["openai-completions"],
     default: "openai-completions",
@@ -154,6 +214,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_LLM_HEAVY_API",
   },
   "llm.heavy.baseUrl": {
+    scope: "instance",
     type: "string",
     default: "https://ollama.com/v1",
     apply: "hot",
@@ -164,12 +225,14 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // courante au démarrage du job (voir `SdkHeavyWorkerConfig.modelReference`),
   // donc un changement s'applique aux NOUVEAUX jobs sans redémarrage.
   "llm.heavy.model": {
+    scope: "instance",
     type: "string",
     default: "deepseek-v4.1-flash",
     apply: "hot",
     env: "YUKI_LLM_HEAVY_MODEL",
   },
   "llm.heavy.thinking": {
+    scope: "instance",
     type: "enum",
     enum: THINKING_LEVELS,
     default: "high",
@@ -183,12 +246,14 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // multimodal ; si le fournisseur le refuse, la réponse est une ERREUR de
   // modèle visible, pas un silence.
   "llm.heavy.vision": {
+    scope: "instance",
     type: "enum",
     enum: ["oui", "non"],
     default: "oui",
     apply: "hot",
   },
   "llm.heavy.apiKey": {
+    scope: "instance",
     type: "string",
     default: "",
     apply: "hot",
@@ -196,6 +261,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_LLM_HEAVY_API_KEY",
   },
   "llm.missingKeyMode": {
+    scope: "instance",
     type: "enum",
     enum: ["degrade", "refuse"],
     default: "degrade",
@@ -205,6 +271,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
 
   // --- Délégation ----------------------------------------------------------
   "delegation.defaultDeadlineMs": {
+    scope: "instance",
     type: "int",
     default: 1_500,
     min: 200,
@@ -212,6 +279,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     apply: "hot",
   },
   "delegation.maxConcurrent": {
+    scope: "instance",
     type: "int",
     default: 3,
     min: 1,
@@ -219,6 +287,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_HEAVY_MAX_CONCURRENT",
   },
   "delegation.maxQueue": {
+    scope: "instance",
     type: "int",
     default: 10,
     min: 0,
@@ -226,6 +295,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_HEAVY_MAX_QUEUE",
   },
   "delegation.idleTimeoutMs": {
+    scope: "instance",
     type: "int",
     default: 120_000,
     min: 1,
@@ -243,6 +313,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // garde d'outil dérivé (plafond + 60 s).
   // ⚠️ La chaîne complète est vérifiée par `tests/config/bornes-generation.test.ts`.
   "delegation.totalTimeoutMs": {
+    scope: "instance",
     type: "int",
     default: 4_500_000,
     min: 1,
@@ -252,6 +323,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
 
   // --- GPU -----------------------------------------------------------------
   "gpu.compatMode": {
+    scope: "instance",
     type: "enum",
     enum: ["strict", "auto-degrade"],
     default: "strict",
@@ -259,6 +331,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_COMPAT_MODE",
   },
   "gpu.profile": {
+    scope: "instance",
     type: "enum",
     enum: GPU_PROFILES,
     default: "",
@@ -266,6 +339,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_PROFILE",
   },
   "gpu.minDriver": {
+    scope: "instance",
     type: "int",
     default: 580,
     min: 1,
@@ -280,6 +354,8 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // défaut ». `null` (bouton « Réinitialiser au défaut ») efface la surcharge
   // enregistrée et le fichier livré redevient effectif (`src/config/runtime.ts`).
   "prompts.light": {
+    scope: "mixte",
+    mixteMerge: "surcharge",
     type: "string",
     default: "",
     apply: "restart",
@@ -287,6 +363,8 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
       "Le prompt système ne peut pas être vide. Cliquez sur « Réinitialiser au défaut » pour revenir au prompt livré (config/pi/system-prompt.md).",
   },
   "prompts.heavy": {
+    scope: "mixte",
+    mixteMerge: "surcharge",
     type: "string",
     default: "",
     apply: "restart",
@@ -299,13 +377,15 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // donc un enum `off|on` (spec §9.1). Les grandeurs réelles (`exaggeration`,
   // `cfg`, défauts 0.5) sont des ENTIERS EN POUR-MILLE (0–1500).
   "tts.enabled": {
+    scope: "mixte",
+    mixteMerge: "et",
     type: "enum",
     enum: ["off", "on"],
     default: "off",
     apply: "restart",
-    env: "YUKI_TTS_ENABLED",
   },
   "tts.engine": {
+    scope: "instance",
     type: "enum",
     enum: ["chatterbox", "qwen3-tts", "cosyvoice3", "kokoro", "sanotts"],
     default: "chatterbox",
@@ -313,12 +393,14 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_TTS_ENGINE",
   },
   "tts.baseUrl": {
+    scope: "instance",
     type: "string",
     default: "http://tts:8081",
     apply: "restart",
     env: "YUKI_TTS_BASE_URL",
   },
   "tts.language": {
+    scope: "instance",
     type: "enum",
     enum: ["fr"],
     default: "fr",
@@ -328,44 +410,47 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // Id de voix du registre (§10.1). Liste DYNAMIQUE ⇒ `string` (jamais un enum
   // statique). La chaîne vide = voix par défaut (preset « factory »).
   "tts.voice": {
+    scope: "bot",
     type: "string",
     default: "",
     allowEmpty: true,
     apply: "hot",
-    env: "YUKI_TTS_VOICE",
   },
   "tts.emotion": {
+    scope: "bot",
     type: "enum",
     enum: ["neutre", "expressive", "dramatique", "personnalisee"],
     default: "neutre",
     apply: "hot",
-    env: "YUKI_TTS_EMOTION",
   },
   "tts.speed": {
+    scope: "bot",
     type: "int",
     default: 100,
     min: 50,
     max: 200,
     apply: "hot",
-    env: "YUKI_TTS_SPEED",
   },
   "tts.exaggeration": {
+    scope: "bot",
     type: "int",
     default: 500,
     min: 0,
     max: 1500,
     apply: "hot",
-    env: "YUKI_TTS_EXAGGERATION",
   },
   "tts.cfg": {
+    scope: "bot",
     type: "int",
     default: 500,
     min: 0,
     max: 1500,
     apply: "hot",
-    env: "YUKI_TTS_CFG",
   },
   "tts.prefetchDepth": {
+    // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
+    // `docs/lot35b-multibot-overlay.md`, §« les 8 cas douteux »).
+    scope: "instance",
     type: "int",
     default: 2,
     min: 0,
@@ -374,6 +459,9 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_TTS_PREFETCH",
   },
   "tts.minSentenceChars": {
+    // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
+    // `docs/lot35b-multibot-overlay.md`, §« les 8 cas douteux »).
+    scope: "instance",
     type: "int",
     default: 24,
     min: 8,
@@ -382,6 +470,9 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_TTS_MIN_SENTENCE",
   },
   "tts.maxSentenceChars": {
+    // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
+    // `docs/lot35b-multibot-overlay.md`, §« les 8 cas douteux »).
+    scope: "instance",
     type: "int",
     default: 240,
     min: 40,
@@ -390,6 +481,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_TTS_MAX_SENTENCE",
   },
   "tts.timeoutMs": {
+    scope: "instance",
     type: "int",
     default: 15_000,
     min: 1_000,
@@ -398,6 +490,9 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_TTS_TIMEOUT_MS",
   },
   "tts.volume": {
+    // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
+    // `docs/lot35b-multibot-overlay.md`, §« les 8 cas douteux »).
+    scope: "instance",
     type: "int",
     default: 100,
     min: 0,
@@ -411,70 +506,70 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // Les bornes du rappel sont des entiers ; le budget en caractères et le
   // timeout bornent le coût SUR LE CHEMIN CRITIQUE (TTFT).
   "memory.enabled": {
+    scope: "bot",
     type: "enum",
     enum: ["off", "on"],
     default: "on",
     apply: "hot",
-    env: "YUKI_MEMORY_ENABLED",
   },
   "memory.recall.topK": {
+    scope: "bot",
     type: "int",
     default: 5,
     min: 0,
     max: 20,
     apply: "hot",
-    env: "YUKI_MEMORY_TOP_K",
   },
   "memory.recall.budgetChars": {
+    scope: "bot",
     type: "int",
     default: 8_000,
     min: 0,
     max: 40_000,
     apply: "hot",
-    env: "YUKI_MEMORY_BUDGET_CHARS",
   },
   "memory.recall.timeoutMs": {
+    scope: "bot",
     type: "int",
     default: 400,
     min: 20,
     max: 5_000,
     apply: "hot",
-    env: "YUKI_MEMORY_TIMEOUT_MS",
   },
   "memory.extract.maxItems": {
+    scope: "bot",
     type: "int",
     default: 3,
     min: 0,
     max: 10,
     apply: "hot",
-    env: "YUKI_MEMORY_MAX_ITEMS",
   },
   "memory.extract.timeoutMs": {
+    scope: "bot",
     type: "int",
     default: 30_000,
     min: 1_000,
     max: 300_000,
     apply: "hot",
-    env: "YUKI_MEMORY_EXTRACT_TIMEOUT_MS",
   },
   // Passe de SOLIDIFICATION déclenchée par la mise de côté d'une conversation :
   // la conversation est relue ENTIÈRE, mais BORNÉE (taille d'un appel + nombre
   // d'appels) — relire tout ne doit pas coûter un nombre illimité d'appels.
   "memory.setAside.maxChars": {
+    scope: "bot",
     type: "int",
     default: 24_000,
     min: 1_000,
     max: 120_000,
     apply: "hot",
-    env: "YUKI_MEMORY_SET_ASIDE_MAX_CHARS",
   },
   "memory.setAside.maxChunks": {
+    scope: "bot",
     type: "int",
     default: 2,
     min: 1,
     max: 6,
     apply: "hot",
-    env: "YUKI_MEMORY_SET_ASIDE_MAX_CHUNKS",
   },
 
   // --- Consolidation HEBDOMADAIRE de la mémoire (lot 29) -------------------
@@ -482,19 +577,26 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // planification hebdomadaire vise une heure de PARIS (« 3 h du matin »),
   // l'affichage des horodatages reste corrélable à Mattermost.
   "memory.consolidation.enabled": {
+    scope: "mixte",
+    mixteMerge: "et",
     type: "enum",
     enum: ["off", "on"],
     default: "on",
     apply: "hot",
-    env: "YUKI_MEMORY_CONSOLIDATION_ENABLED",
   },
   "memory.consolidation.cron": {
+    // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
+    // `docs/lot35b-multibot-overlay.md`, §« les 8 cas douteux »).
+    scope: "instance",
     type: "string",
     default: "0 3 * * 0",
     apply: "hot",
     env: "YUKI_MEMORY_CONSOLIDATION_CRON",
   },
   "memory.consolidation.timeZone": {
+    // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
+    // `docs/lot35b-multibot-overlay.md`, §« les 8 cas douteux »).
+    scope: "instance",
     type: "string",
     default: "Europe/Paris",
     apply: "hot",
@@ -505,6 +607,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // à l'exécution. Volontairement modeste par défaut (un appel géant est lent,
   // cher, et la qualité se dégrade sur de très longs contextes).
   "memory.consolidation.budgetTokens": {
+    scope: "instance",
     type: "int",
     default: 200_000,
     min: 1_000,
@@ -514,6 +617,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   },
   // Nombre de versions d'archive conservées (12 ≈ 3 mois à une passe/semaine).
   "memory.consolidation.retention": {
+    scope: "instance",
     type: "int",
     default: 12,
     min: 1,
@@ -527,6 +631,9 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // GÉNÉREUX à dessein. Au-delà, on interrompt et on l'annonce honnêtement
   // (aucune conversation n'est créée).
   "recap.timeoutMs": {
+    // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
+    // `docs/lot35b-multibot-overlay.md`, §« les 8 cas douteux »).
+    scope: "instance",
     type: "int",
     default: 180_000,
     min: 5_000,
@@ -544,11 +651,11 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // `GET /api/chat/status` et le sélecteur de la barre latérale suivent
   // immédiatement un changement — sans redémarrage, sans reconnexion.
   "chat.mode": {
+    scope: "bot",
     type: "enum",
     enum: ["local", "mattermost", "discord"],
     default: "local",
     apply: "hot",
-    env: "YUKI_CHAT_MODE",
   },
   // ⚠️ SÉCURITÉ (exigence utilisateur du 2026-11-01) : en mode DISTANT, l'accès aux
   // AGENTS est DÉSACTIVÉ PAR DÉFAUT. Depuis le 2026-11-02 il y a DEUX réglages
@@ -591,11 +698,11 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // donc `generer_image` s'exécuter inline, avec la borne relevée à 1 h
   // (`images.timeoutMs`, 3 600 000 ms).
   "chat.remoteAgents": {
+    scope: "bot",
     type: "enum",
     enum: ["desactive", "actives"],
     default: "desactive",
     apply: "hot",
-    env: "YUKI_CHAT_REMOTE_AGENTS",
   },
   // ⚠️ SECOND RÉGLAGE, INDÉPENDANT (demande utilisateur du 2026-11-02 : « images oui,
   // agents non » était impossible avec un seul interrupteur).
@@ -613,11 +720,11 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // générer des images, d'interroger le libraire et de lire les archives. Aucune
   // machine n'est atteinte, mais cela consomme du GPU et du temps de Yuki.
   "chat.remoteTools": {
+    scope: "bot",
     type: "enum",
     enum: ["desactive", "actives"],
     default: "desactive",
     apply: "hot",
-    env: "YUKI_CHAT_REMOTE_TOOLS",
   },
   // ⚠️ MÉMOIRE DURABLE : elle n'est PAS branchée sur les conversations
   // distantes, et il n'y a donc AUCUN réglage. `chat.remoteMemory` a existé au
@@ -633,27 +740,28 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // bot est présent") et c'est le défaut — un identifiant obligatoire rendrait le bot
   // muet tant que l'utilisateur n'aurait pas trouvé son identifiant de serveur.
   "chat.discord.guildId": {
+    scope: "bot",
     type: "string",
     default: "",
     allowEmpty: true,
     apply: "hot",
-    env: "YUKI_CHAT_DISCORD_GUILD_ID",
   },
   // ⚠️ Borne d'ENVOI par fichier, appliquée AVANT tout appel réseau. Discord accepte
   // 20 Mio par défaut (davantage avec le boost du serveur) et une requête de 25 Mio au
   // maximum : on reste SOUS (8 Mio par défaut) parce qu'un envoi raté coûte une réponse
   // perdue, et on plafonne à 25 Mio (`DISCORD_MAX_UPLOAD_CEILING`).
   "chat.discord.maxUploadBytes": {
+    scope: "bot",
     type: "int",
     default: 8 * 1024 * 1024,
     min: 1,
     max: 25 * 1024 * 1024,
     apply: "hot",
-    env: "YUKI_CHAT_DISCORD_MAX_UPLOAD_BYTES",
   },
 
   // --- Transport temps réel ------------------------------------------------
   "transport.replayBuffer": {
+    scope: "instance",
     type: "int",
     default: 1_000,
     min: 1,
@@ -661,6 +769,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_WS_REPLAY_BUFFER",
   },
   "transport.replayBytes": {
+    scope: "instance",
     type: "int",
     default: 5_000_000,
     min: 1,
@@ -674,16 +783,18 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // appareil n'est abonné (l'abonnement navigateur EST l'opt-in explicite).
   // `apply: hot` : le service relit ce réglage à chaque événement.
   "push.enabled": {
+    scope: "mixte",
+    mixteMerge: "et",
     type: "enum",
     enum: ["off", "on"],
     default: "on",
     apply: "hot",
-    env: "YUKI_PUSH_ENABLED",
   },
   // Sujet VAPID (`sub` du JWT, RFC 8292) : un `mailto:` ou une URL de contact.
   // Certains services de push refusent une valeur vide ; on fournit un défaut
   // neutre, sans prétendre à une adresse existante.
   "push.contact": {
+    scope: "instance",
     type: "string",
     default: "mailto:yuki@localhost",
     apply: "hot",
@@ -696,6 +807,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // Le canal « machines » est LAN uniquement (D116) ; le port et l'hôte sont
   // des valeurs de DÉPLOIEMENT, sans fait d'infra fiable (docs/lot4.md §13).
   "agents.bindHost": {
+    scope: "instance",
     type: "string",
     default: "0.0.0.0",
     apply: "restart",
@@ -711,6 +823,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // régénère le certificat serveur et recharge le contexte TLS du port machines
   // à chaud (`server.setSecureContext`), sans redémarrer le gateway.
   "agents.serverName": {
+    scope: "instance",
     type: "string",
     default: "",
     allowEmpty: true,
@@ -718,6 +831,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_AGENTS_SERVER_NAME",
   },
   "agents.port": {
+    scope: "instance",
     type: "int",
     default: 9443,
     min: 1,
@@ -728,6 +842,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // Niveau de confirmation PAR AGENT (D118). Défaut = validation des
   // commandes destructrices (niveau 3), le plus raisonnable en LAN.
   "agents.defaultLevel": {
+    scope: "instance",
     type: "enum",
     enum: ["disabled", "always", "destructive", "never"],
     default: "destructive",
@@ -739,6 +854,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // Commande + machine + horodatage + code de sortie ; JAMAIS la sortie
   // complète. Rétention en jours, rotation par taille (Mo).
   "audit.retentionDays": {
+    scope: "instance",
     type: "int",
     default: 30,
     min: 1,
@@ -747,6 +863,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_AUDIT_RETENTION_DAYS",
   },
   "audit.maxSizeMb": {
+    scope: "instance",
     type: "int",
     default: 16,
     min: 1,
@@ -767,6 +884,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // des OUTILS est fixée à la création du host : renseigner l'URL pour la première
   // fois nécessite un redémarrage du gateway.
   "librarian.baseUrl": {
+    scope: "instance",
     type: "string",
     default: "",
     allowEmpty: true,
@@ -774,6 +892,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_LIBRARIAN_BASE_URL",
   },
   "librarian.agentToken": {
+    scope: "instance",
     type: "string",
     default: "",
     // ⚠️ FACULTATIF : `allowEmpty` autorise la chaîne vide (sinon « clé non
@@ -784,6 +903,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_LIBRARIAN_AGENT_TOKEN",
   },
   "librarian.apiKey": {
+    scope: "instance",
     type: "string",
     default: "",
     apply: "hot",
@@ -794,6 +914,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // (pas de booléen : `FieldType` = `string | int | enum`). `hot` : l'outil
   // relit ce réglage à chaque appel (le refus est explicite si désactivé).
   "librarian.screenshot": {
+    scope: "instance",
     type: "enum",
     enum: ["off", "on"],
     default: "on",
@@ -801,6 +922,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_LIBRARIAN_SCREENSHOT",
   },
   "librarian.archiveTimeoutMs": {
+    scope: "instance",
     type: "int",
     default: 30_000,
     min: 1_000,
@@ -815,6 +937,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // chaque dépôt (aucun redémarrage nécessaire pour un changement).
   // `maxFileBytes` : 2 Gio par défaut (8 Gio maximum autorisé).
   "files.maxFileBytes": {
+    scope: "instance",
     type: "int",
     default: 2_147_483_648,
     min: 1_048_576,
@@ -833,6 +956,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // ou rendrait l'image illisible : jamais de troncature, jamais d'envoi muet
   // d'une image démesurée. L'original stocké, lui, n'est jamais transformé.
   "files.imageMaxBytes": {
+    scope: "instance",
     type: "int",
     default: 3_500_000,
     min: 1,
@@ -857,6 +981,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // 1 000 est le plancher : en dessous, aucune capture n'est lisible et TOUT
   // serait refusé — c'est légal (comme `files.imageMaxBytes: 1`) mais absurde.
   "files.imageMaxWireBytes": {
+    scope: "instance",
     type: "int",
     default: 700_000,
     min: 1_000,
@@ -884,6 +1009,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // au-delà, une image supplémentaire est retirée AVANT l'appel, jamais après
   // l'échec. 0 (ou moins) ⇒ pas de borne (comportement antérieur, déconseillé).
   "files.imageRequestBudgetBytes": {
+    scope: "instance",
     type: "int",
     default: 1_500_000,
     min: 1_000,
@@ -893,6 +1019,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   },
   // Rétention : au-delà, le FICHIER et son ANALYSE sont supprimés (purge réelle).
   "files.retentionDays": {
+    scope: "instance",
     type: "int",
     default: 30,
     min: 1,
@@ -902,6 +1029,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   },
   // Nombre maximal de fichiers joints à UN message (au-delà : refus explicite).
   "files.maxAttachments": {
+    scope: "instance",
     type: "int",
     default: 5,
     min: 1,
@@ -912,6 +1040,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // BORNE d'injection au modèle, PAR fichier (un fichier énorme ne part jamais
   // entier : la troncature est dite dans le bloc `<fichiers>`).
   "files.promptChars": {
+    scope: "instance",
     type: "int",
     default: 12_000,
     min: 1_000,
@@ -921,6 +1050,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   },
   // BORNE d'injection au modèle pour TOUS les fichiers d'un même message.
   "files.promptTotalChars": {
+    scope: "instance",
     type: "int",
     default: 24_000,
     min: 1_000,
@@ -937,6 +1067,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // REFUSÉ avec un message qui dit d'utiliser `run_command` (un transfert de
   // plusieurs Gio bloquerait le tour du modèle).
   "files.agentMaxBytes": {
+    scope: "instance",
     type: "int",
     default: 268_435_456,
     min: 1_048_576,
@@ -947,6 +1078,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // `agentChunkBytes` : taille BINAIRE d'un morceau (192 Kio ⇒ ~256 Kio en
   // base64, très en dessous de la trame max 8 Mio).
   "files.agentChunkBytes": {
+    scope: "instance",
     type: "int",
     default: 196_608,
     min: 16_384,
@@ -956,6 +1088,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   },
   // `agentTimeoutMs` : délai INACTIF maximal d'un transfert (sans trame reçue).
   "files.agentTimeoutMs": {
+    scope: "instance",
     type: "int",
     default: 120_000,
     min: 5_000,
@@ -971,6 +1104,9 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // d'injection est un scalaire — elle borne le bloc `<sources>` transmis au
   // modèle au début d'un tour (drain groupé).
   "sources.promptTotalChars": {
+    // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
+    // `docs/lot35b-multibot-overlay.md`, §« les 8 cas douteux »).
+    scope: "instance",
     type: "int",
     default: 4_000,
     min: 500,
@@ -988,6 +1124,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // volume `state` (`${state}/comfy/workflows.json`) — un graphe pèse des dizaines
   // de Ko et `PUT /api/config` n'accepte qu'un patch PLAT de scalaires.
   "images.baseUrl": {
+    scope: "instance",
     type: "string",
     default: "",
     allowEmpty: true,
@@ -998,6 +1135,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // ⚠️ Envoyé en `Authorization: Bearer …`, JAMAIS journalisé, JAMAIS renvoyé
   // par l'API (masqué comme les autres champs `secret`).
   "images.apiKey": {
+    scope: "instance",
     type: "string",
     default: "",
     apply: "hot",
@@ -1008,6 +1146,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // chaque génération). Les workflows qui ne portent pas ces étiquettes les
   // ignorent : ces valeurs ne sont jamais imposées à un graphe qui ne les demande pas.
   "images.width": {
+    scope: "instance",
     type: "int",
     default: 1_024,
     min: 64,
@@ -1016,6 +1155,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_IMAGES_WIDTH",
   },
   "images.height": {
+    scope: "instance",
     type: "int",
     default: 1_024,
     min: 64,
@@ -1044,6 +1184,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // chaud). Un plafond réglé à 2 h sans relever la borne du job ferait couper le
   // job par sa propre limite totale — plus courte que le plafond.
   "images.timeoutMs": {
+    scope: "instance",
     type: "int",
     default: 3_600_000,
     min: 10_000,
@@ -1064,6 +1205,7 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // ⚠️ `apply: hot` : la valeur est relue à chaque formatage (aucun
   // redémarrage) ; l'interface est prévenue par la trame `time_zone`.
   "ui.timeZone": {
+    scope: "instance",
     type: "string",
     default: "UTC",
     apply: "hot",
@@ -1074,6 +1216,44 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
 
 /** Ordre stable des chemins (déterminisme des réponses / journaux). */
 export const CONFIG_PATHS: readonly string[] = Object.keys(CONFIG_SCHEMA);
+
+/**
+ * Variables d'environnement RETIRÉES au lot 35b : `variable` → chemin du champ.
+ *
+ * ⚠️ RUPTURE DE DÉPLOIEMENT ASSUMÉE : ces 21 variables portaient des clés
+ * `bot`/`mixte`. Une variable d'environnement est une valeur d'INSTALLATION —
+ * elle ne peut pas désigner « le bot actif » : la garde de compilation interdit
+ * désormais `env` sur ces portées (`schema.ts:BotFieldDescriptor`). Un
+ * déploiement qui les définit encore ne doit pas croire qu'elles agissent :
+ * elles sont ANNONCÉES au démarrage (`ConfigRuntime.warnings`), jamais
+ * supprimées en silence.
+ *
+ * Le remplacement est le réglage lui-même (page `/config` pour les clés
+ * d'instance et de bot à ce stade), ou `config.overlay.json` du bot.
+ */
+export const VARIABLES_ENV_RETIREES: Readonly<Record<string, string>> = {
+  YUKI_TTS_ENABLED: "tts.enabled",
+  YUKI_TTS_VOICE: "tts.voice",
+  YUKI_TTS_EMOTION: "tts.emotion",
+  YUKI_TTS_SPEED: "tts.speed",
+  YUKI_TTS_EXAGGERATION: "tts.exaggeration",
+  YUKI_TTS_CFG: "tts.cfg",
+  YUKI_MEMORY_ENABLED: "memory.enabled",
+  YUKI_MEMORY_TOP_K: "memory.recall.topK",
+  YUKI_MEMORY_BUDGET_CHARS: "memory.recall.budgetChars",
+  YUKI_MEMORY_TIMEOUT_MS: "memory.recall.timeoutMs",
+  YUKI_MEMORY_MAX_ITEMS: "memory.extract.maxItems",
+  YUKI_MEMORY_EXTRACT_TIMEOUT_MS: "memory.extract.timeoutMs",
+  YUKI_MEMORY_SET_ASIDE_MAX_CHARS: "memory.setAside.maxChars",
+  YUKI_MEMORY_SET_ASIDE_MAX_CHUNKS: "memory.setAside.maxChunks",
+  YUKI_MEMORY_CONSOLIDATION_ENABLED: "memory.consolidation.enabled",
+  YUKI_CHAT_MODE: "chat.mode",
+  YUKI_CHAT_REMOTE_AGENTS: "chat.remoteAgents",
+  YUKI_CHAT_REMOTE_TOOLS: "chat.remoteTools",
+  YUKI_CHAT_DISCORD_GUILD_ID: "chat.discord.guildId",
+  YUKI_CHAT_DISCORD_MAX_UPLOAD_BYTES: "chat.discord.maxUploadBytes",
+  YUKI_PUSH_ENABLED: "push.enabled",
+};
 
 export function descriptorOf(path: string): FieldDescriptor | undefined {
   return CONFIG_SCHEMA[path];

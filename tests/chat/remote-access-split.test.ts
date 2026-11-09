@@ -440,18 +440,21 @@ describe("⑤ `GET /api/chat/status` expose LES DEUX valeurs", () => {
 });
 
 describe("⑤ schéma — `chat.remoteTools`", () => {
-  it("enum `desactive|actives`, défaut `desactive`, hot, surchargeable par l'environnement", () => {
+  it("enum `desactive|actives`, défaut `desactive`, hot — clé de BOT, donc SANS variable d'environnement (lot 35b)", () => {
     const descriptor = CONFIG_SCHEMA["chat.remoteTools"];
     expect(descriptor).toBeDefined();
     expect(descriptor?.type).toBe("enum");
     expect(descriptor?.enum).toEqual(["desactive", "actives"]);
     expect(descriptor?.default).toBe("desactive");
     expect(descriptor?.apply).toBe("hot");
-    expect(descriptor?.env).toBe("YUKI_CHAT_REMOTE_TOOLS");
+    // ⚠️ RUPTURE ASSUMÉE du lot 35b : `YUKI_CHAT_REMOTE_TOOLS` est RETIRÉE (une
+    // variable d'environnement ne peut pas désigner « le bot actif »).
+    expect(descriptor?.scope).toBe("bot");
+    expect(descriptor?.env).toBeUndefined();
     expect(validateField("chat.remoteTools", "actives")).toEqual({ ok: true, value: "actives" });
     expect(validateField("chat.remoteTools", true).ok).toBe(false);
     expect(readConfigEnvOverrides({ YUKI_CHAT_REMOTE_TOOLS: "actives" })["chat.remoteTools"]).toBe(
-      "actives",
+      undefined,
     );
   });
 

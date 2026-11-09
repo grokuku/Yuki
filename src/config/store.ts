@@ -81,6 +81,37 @@ function writeReason(error: unknown): { reason: string; code: string | undefined
   return { reason: (code !== undefined ? reasons[code] : undefined) ?? messageOf(error), code };
 }
 
+/**
+ * Écrit `payload` de façon ATOMIQUE (`tmp` + `rename`) en mode 0600, dossier
+ * parent créé au besoin. Le `rename` sur le même système de fichiers garantit
+ * qu'un lecteur ne voit jamais un fichier partiel.
+ *
+ * Factorisé (lot 35b) : le store commun ET l'overlay de bot écrivent par ce
+ * MÊME chemin — une seule mécanique d'écriture, donc une seule façon d'échouer
+ * (et la même `ConfigStoreWriteError`, explicite, pour les deux).
+ */
+export function writeFileAtomic0600(path: string, payload: string): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+    writeFileSync(tmp, payload, { mode: 0o600 });
+    try {
+      chmodSync(tmp, 0o600);
+    } catch {
+      // Meilleur effort : la création avec `mode` a déjà tenté le 0600.
+    }
+    renameSync(tmp, path);
+    try {
+      chmodSync(path, 0o600);
+    } catch {
+      // Meilleur effort.
+    }
+  } catch (error) {
+    const { reason, code } = writeReason(error);
+    throw new ConfigStoreWriteError(path, reason, code, error);
+  }
+}
+
 /** Accès fichier au store de configuration. */
 export class ConfigStore {
   constructor(readonly path: string) {}
@@ -131,34 +162,14 @@ export class ConfigStore {
   }
 
   /**
-   * Écrit le store de façon atomique et en 0600. Le dossier parent est créé au
-   * besoin. Le `rename` sur le même système de fichiers garantit qu'un lecteur
-   * ne voit jamais un fichier partiel.
+   * Écrit le store de façon atomique et en 0600 (voir `writeFileAtomic0600`).
    */
   write(values: Record<string, unknown>): void {
-    try {
-      mkdirSync(dirname(this.path), { recursive: true });
-      const tmp = `${this.path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-      const payload = `${JSON.stringify(
-        { schemaVersion: CONFIG_STORE_SCHEMA_VERSION, values },
-        null,
-        2,
-      )}\n`;
-      writeFileSync(tmp, payload, { mode: 0o600 });
-      try {
-        chmodSync(tmp, 0o600);
-      } catch {
-        // Meilleur effort : la création avec `mode` a déjà tenté le 0600.
-      }
-      renameSync(tmp, this.path);
-      try {
-        chmodSync(this.path, 0o600);
-      } catch {
-        // Meilleur effort.
-      }
-    } catch (error) {
-      const { reason, code } = writeReason(error);
-      throw new ConfigStoreWriteError(this.path, reason, code, error);
-    }
+    const payload = `${JSON.stringify(
+      { schemaVersion: CONFIG_STORE_SCHEMA_VERSION, values },
+      null,
+      2,
+    )}\n`;
+    writeFileAtomic0600(this.path, payload);
   }
 }

@@ -1,0 +1,217 @@
+/**
+ * VERROU DE CLASSIFICATION de la configuration (lot 35b, sous-lot 1b-2).
+ *
+ * Ce que ce fichier verrouille :
+ *  - `CONFIG_PATHS.length === 89` (aucune clé ajoutée ni perdue par accident) ;
+ *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 66 / 18 / 5 ;
+ *  - `env` INTERDIT hors `scope: "instance"` (garde de compilation, doublée ici
+ *    d'un contrôle à l'exécution : la table est une donnée, pas un type) ;
+ *  - `mixte` ⇒ `mixteMerge` DÉCLARÉ, et `et` uniquement sur des enums `off|on` ;
+ *  - les 21 variables d'environnement RETIRÉES sont annoncées et réellement
+ *    inactives ;
+ *  - `BOT_ID_DEFAUT` reste égal à `BOT_YUKI` (le bot actif du registre).
+ *
+ * ⚠️ Échoue sur le code d'origine : `FieldDescriptor` n'y porte aucun `scope`,
+ * et les 21 variables y sont encore actives.
+ */
+
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { BOT_YUKI } from "../../src/bots/registry.js";
+import { readConfigEnvOverrides } from "../../src/config/env.js";
+import { BOT_ID_DEFAUT } from "../../src/config/overlay.js";
+import {
+  CONFIG_PATHS,
+  CONFIG_SCHEMA,
+  VARIABLES_ENV_RETIREES,
+  type FieldDescriptor,
+  type FieldScope,
+} from "../../src/config/schema.js";
+
+const PORTEES: readonly FieldScope[] = ["instance", "bot", "mixte"];
+
+function descriptor(path: string): FieldDescriptor {
+  const found = CONFIG_SCHEMA[path];
+  expect(found, path).toBeDefined();
+  return found as FieldDescriptor;
+}
+
+describe("① la table des clés", () => {
+  it("déclare EXACTEMENT 89 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(89);
+    expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
+  });
+
+  it("chaque clé porte une portée VALIDE", () => {
+    for (const path of CONFIG_PATHS) {
+      expect(PORTEES, path).toContain(descriptor(path).scope);
+    }
+  });
+
+  it("répartition : 66 `instance` / 18 `bot` / 5 `mixte`", () => {
+    const compte = { instance: 0, bot: 0, mixte: 0 };
+    for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
+    expect(compte).toEqual({ instance: 66, bot: 18, mixte: 5 });
+  });
+});
+
+describe("② `scope` ≠ `instance` ⇒ AUCUNE variable d'environnement", () => {
+  it("aucune clé `bot`/`mixte` ne déclare `env` (contrôle à l'exécution)", () => {
+    const fautives = CONFIG_PATHS.filter((path) => {
+      const d = descriptor(path);
+      return d.scope !== "instance" && d.env !== undefined;
+    });
+    expect(fautives).toEqual([]);
+  });
+
+  it("les 21 variables retirées ne surchargent PLUS rien", () => {
+    expect(Object.keys(VARIABLES_ENV_RETIREES).length).toBe(21);
+    const processEnv: NodeJS.ProcessEnv = {};
+    for (const [variable, path] of Object.entries(VARIABLES_ENV_RETIREES)) {
+      expect(descriptor(path).scope, `${variable} → ${path}`).not.toBe("instance");
+      expect(descriptor(path).env, `${variable} → ${path}`).toBeUndefined();
+      processEnv[variable] = "on";
+    }
+    const overrides = readConfigEnvOverrides(processEnv);
+    for (const path of Object.values(VARIABLES_ENV_RETIREES)) {
+      expect(overrides[path], path).toBeUndefined();
+    }
+  });
+
+  it("une clé `instance` PEUT toujours être verrouillée par l'environnement", () => {
+    expect(CONFIG_SCHEMA["llm.light.model"]?.env).toBe("YUKI_LLM_LIGHT_MODEL");
+    expect(CONFIG_SCHEMA["llm.light.apiKey"]?.env).toBe("YUKI_LLM_LIGHT_API_KEY");
+  });
+});
+
+describe("③ la fusion d'une clé `mixte` est DÉCLARÉE, jamais devinée", () => {
+  it("`mixte` ⇒ `mixteMerge` présent et valide", () => {
+    for (const path of CONFIG_PATHS) {
+      const d = descriptor(path);
+      if (d.scope !== "mixte") {
+        expect(d.mixteMerge, path).toBeUndefined();
+        continue;
+      }
+      expect(["surcharge", "et"], path).toContain(d.mixteMerge);
+    }
+  });
+
+  it("les 5 clés `mixte` sont celles établies (3 `et`, 2 `surcharge`)", () => {
+    const mixte = CONFIG_PATHS.filter((path) => descriptor(path).scope === "mixte");
+    expect(mixte.sort()).toEqual(
+      [
+        "memory.consolidation.enabled",
+        "prompts.heavy",
+        "prompts.light",
+        "push.enabled",
+        "tts.enabled",
+      ].sort(),
+    );
+    const parFusion = (fusion: string) =>
+      mixte.filter((path) => descriptor(path).mixteMerge === fusion).sort();
+    expect(parFusion("et")).toEqual([
+      "memory.consolidation.enabled",
+      "push.enabled",
+      "tts.enabled",
+    ]);
+    expect(parFusion("surcharge")).toEqual(["prompts.heavy", "prompts.light"]);
+  });
+
+  it("`et` n'est utilisé que sur un enum `off|on` (la conjonction n'a pas d'autre sens)", () => {
+    for (const path of CONFIG_PATHS) {
+      const d = descriptor(path);
+      if (d.mixteMerge !== "et") continue;
+      expect(d.type, path).toBe("enum");
+      expect(d.enum, path).toEqual(["off", "on"]);
+    }
+  });
+});
+
+describe("④ le merge est le CHEMIN DE LECTURE UNIQUE", () => {
+  /** Tous les .ts de `src/` (chemins relatifs à la racine du dépôt). */
+  function fichiersSrc(prefixe = "src"): string[] {
+    const out: string[] = [];
+    for (const entree of readdirSync(prefixe, { withFileTypes: true })) {
+      const chemin = join(prefixe, entree.name);
+      if (entree.isDirectory()) out.push(...fichiersSrc(chemin));
+      else if (entree.name.endsWith(".ts")) out.push(chemin);
+    }
+    return out;
+  }
+
+  /**
+   * Source SANS commentaires : un commentaire qui CITE un symbole n'est pas un
+   * usage (et c'est exactement ce qui a motivé ce garde-fou).
+   */
+  function sansCommentaires(source: string): string {
+    return source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|\s)\/\/[^\n]*/g, "$1");
+  }
+
+  it("`ConfigStore` n'est instancié QUE par le runtime de configuration", () => {
+    // ⚠️ Un second `new ConfigStore(...)` lirait `config.json` sans l'overlay du
+    // bot : la clé de bot serait ignorée en SILENCE. C'est LE défaut à éviter.
+    const fautifs = fichiersSrc().filter(
+      (fichier) =>
+        fichier !== join("src", "config", "runtime.ts") &&
+        /new ConfigStore\(/.test(sansCommentaires(readFileSync(fichier, "utf8"))),
+    );
+    expect(fautifs).toEqual([]);
+  });
+
+  it("le schéma (`CONFIG_SCHEMA` / `descriptorOf`) n'est manipulé que dans `src/config/`", () => {
+    const fautifs = fichiersSrc().filter(
+      (fichier) =>
+        !fichier.startsWith(join("src", "config")) &&
+        /\bCONFIG_SCHEMA\b|\bdescriptorOf\(/.test(
+          sansCommentaires(readFileSync(fichier, "utf8")),
+        ),
+    );
+    expect(fautifs).toEqual([]);
+  });
+
+  it("aucun fichier hors `src/config/` ne lit `configStorePath` (fichier du store commun)", () => {
+    const fautifs = fichiersSrc().filter(
+      (fichier) =>
+        !fichier.startsWith(join("src", "config")) &&
+        /configStorePath/.test(sansCommentaires(readFileSync(fichier, "utf8"))),
+    );
+    expect(fautifs).toEqual([]);
+  });
+});
+
+describe("⑤ le bot actif de l'overlay", () => {
+  it("`BOT_ID_DEFAUT` reste égal à `BOT_YUKI`", () => {
+    expect(BOT_ID_DEFAUT).toBe(BOT_YUKI);
+  });
+
+  it("les 18 clés `bot` sont celles établies (conversation, voix, mémoire du bot)", () => {
+    const bot = CONFIG_PATHS.filter((path) => descriptor(path).scope === "bot");
+    expect(bot.sort()).toEqual(
+      [
+        "chat.discord.guildId",
+        "chat.discord.maxUploadBytes",
+        "chat.mode",
+        "chat.remoteAgents",
+        "chat.remoteTools",
+        "memory.enabled",
+        "memory.extract.maxItems",
+        "memory.extract.timeoutMs",
+        "memory.recall.budgetChars",
+        "memory.recall.timeoutMs",
+        "memory.recall.topK",
+        "memory.setAside.maxChars",
+        "memory.setAside.maxChunks",
+        "tts.cfg",
+        "tts.emotion",
+        "tts.exaggeration",
+        "tts.speed",
+        "tts.voice",
+      ].sort(),
+    );
+  });
+});

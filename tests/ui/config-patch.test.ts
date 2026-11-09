@@ -195,21 +195,24 @@ describe("presentConfigSaveError — cause réelle, jamais générique", () => {
       httpError(400, {
         error: "locked_by_env",
         code: "locked_by_env",
-        variable: "YUKI_TTS_SPEED",
+        // ⚠️ Exemple pris sur une clé d'INSTANCE : depuis le lot 35b, une clé de
+        // bot (`tts.*` par exemple) ne peut plus être verrouillée par
+        // l'environnement (garde de compilation dans `src/config/schema.ts`).
+        variable: "YUKI_LLM_LIGHT_MODEL",
         fields: [
           {
-            path: "tts.speed",
+            path: "llm.light.model",
             code: "locked_by_env",
-            message: "Champ verrouillé par l'environnement (YUKI_TTS_SPEED).",
+            message: "Champ verrouillé par l'environnement (YUKI_LLM_LIGHT_MODEL).",
           },
         ],
       }),
       LABELS,
     );
     expect(summary).toContain("locked_by_env");
-    expect(summary).toContain("YUKI_TTS_SPEED");
+    expect(summary).toContain("YUKI_LLM_LIGHT_MODEL");
     expect(summary).toContain("variable d'environnement");
-    expect(fields[0]?.path).toBe("tts.speed");
+    expect(fields[0]?.path).toBe("llm.light.model");
   });
 
   it("bad_origin (sans champ) : reprend le message réel du serveur", () => {

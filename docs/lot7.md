@@ -670,15 +670,15 @@ pour-mille** (0–1500), convertis à la lecture (`value / 1000`).
 
 | Champ | Type | Enum / bornes | Défaut | `apply` | Env |
 | --- | --- | --- | --- | --- | --- |
-| `tts.enabled` | `enum` | `["off","on"]` | `off` | `restart` | `YUKI_TTS_ENABLED` |
+| `tts.enabled` | `enum` | `["off","on"]` | `off` | `restart` | ⚠️ retirée (lot 35b), clé `mixte` |
 | `tts.engine` | `enum` | `["chatterbox","qwen3-tts","cosyvoice3","kokoro","sanotts"]` | `chatterbox` | `restart` | `YUKI_TTS_ENGINE` |
 | `tts.baseUrl` | `string` | — | `http://tts:8081` | `restart` | `YUKI_TTS_BASE_URL` |
 | `tts.language` | `enum` | `["fr"]` | `fr` | `restart` | `YUKI_TTS_LANGUAGE` |
-| `tts.voice` | `string` | id de voix (§10.1) ; `""` = **voix par défaut** (preset) | `""` | `hot` | `YUKI_TTS_VOICE` |
-| `tts.emotion` | `enum` | `["neutre","expressive","dramatique","personnalisee"]` | `neutre` | `hot` | `YUKI_TTS_EMOTION` |
-| `tts.speed` | `int` | `min 50`, `max 200` (% du débit) | `100` | `hot` | `YUKI_TTS_SPEED` |
-| `tts.exaggeration` | `int` | `min 0`, `max 1500` (pour-mille → `0.0–1.5`) | `500` | `hot` | `YUKI_TTS_EXAGGERATION` |
-| `tts.cfg` | `int` | `min 0`, `max 1500` (pour-mille → `0.0–1.5`) | `500` | `hot` | `YUKI_TTS_CFG` |
+| `tts.voice` | `string` | id de voix (§10.1) ; `""` = **voix par défaut** (preset) | `""` | `hot` | ⚠️ retirée (lot 35b), clé `bot` |
+| `tts.emotion` | `enum` | `["neutre","expressive","dramatique","personnalisee"]` | `neutre` | `hot` | ⚠️ retirée (lot 35b), clé `bot` |
+| `tts.speed` | `int` | `min 50`, `max 200` (% du débit) | `100` | `hot` | ⚠️ retirée (lot 35b), clé `bot` |
+| `tts.exaggeration` | `int` | `min 0`, `max 1500` (pour-mille → `0.0–1.5`) | `500` | `hot` | ⚠️ retirée (lot 35b), clé `bot` |
+| `tts.cfg` | `int` | `min 0`, `max 1500` (pour-mille → `0.0–1.5`) | `500` | `hot` | ⚠️ retirée (lot 35b), clé `bot` |
 | `tts.prefetchDepth` | `int` | `min 0`, `max 2` | `2` | `hot` | `YUKI_TTS_PREFETCH` |
 | `tts.minSentenceChars` | `int` | `min 8`, `max 500` | `24` | `hot` | `YUKI_TTS_MIN_SENTENCE` |
 | `tts.maxSentenceChars` | `int` | `min 40`, `max 2000` | `240` | `hot` | `YUKI_TTS_MAX_SENTENCE` |
@@ -689,6 +689,14 @@ pour-mille** (0–1500), convertis à la lecture (`value / 1000`).
 prefetch, bornes) ; `restart` = nécessite un redémarrage (activation, moteur,
 URL, langue). **Pourquoi** : changer d'`engine` ou activer le TTS suppose que le
 service `tts` soit là → pas de bascule à chaud.
+
+> ⚠️ **MAJ lot 35b (multi-bot)** : les variables `YUKI_TTS_ENABLED`,
+> `YUKI_TTS_VOICE`, `YUKI_TTS_EMOTION`, `YUKI_TTS_SPEED`, `YUKI_TTS_EXAGGERATION`
+> et `YUKI_TTS_CFG` sont **RETIRÉES** : ces six champs sont des clés de **bot**
+> (`scope: "bot"`/`"mixte"`), et une variable d'environnement ne peut pas
+> désigner « le bot actif ». Un déploiement qui les définit encore ne doit pas
+> croire qu'elles agissent : le gateway les **annonce au démarrage** et n'en
+> tient plus compte. Voir `docs/lot35b-multibot-overlay.md`.
 
 > `tts.voiceRef` (chemin/borné, version antérieure) est **remplacé** par
 > `tts.voice` (identifiant de voix du **registre** §10.1). Le chemin physique de

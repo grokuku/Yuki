@@ -8,14 +8,21 @@
  *    utilisateur) et reste RÉVERSIBLE ;
  *  - `chat.remoteMemory` n'existe PLUS (retiré : il n'avait aucun consommateur) ;
  *  - aucune valeur hors énumération n'est acceptée, et un booléen est refusé
- *    (`FieldType` n'en connaît pas).
+ *    (`FieldType` n'en connaît pas) ;
+ *  - ⚠️ lot 35b : les clés de `chat.*` sont des clés de **BOT** (`scope: "bot"`),
+ *    donc SANS variable d'environnement — `YUKI_CHAT_MODE` est RETIRÉE.
  *
  * ⚠️ Échoue sur le code d'origine : `chat.mode` n'existe pas dans la table.
  */
 
 import { describe, expect, it } from "vitest";
 
-import { CONFIG_SCHEMA, validateField, type FieldDescriptor } from "../../src/config/schema.js";
+import {
+  CONFIG_SCHEMA,
+  VARIABLES_ENV_RETIREES,
+  validateField,
+  type FieldDescriptor,
+} from "../../src/config/schema.js";
 import { readConfigEnvOverrides } from "../../src/config/env.js";
 
 describe("chat.mode", () => {
@@ -37,9 +44,14 @@ describe("chat.mode", () => {
     expect(validateField("chat.mode", "").ok).toBe(false);
   });
 
-  it("se surcharge par l'environnement (`YUKI_CHAT_MODE`)", () => {
-    const overrides = readConfigEnvOverrides({ YUKI_CHAT_MODE: "mattermost" });
-    expect(overrides["chat.mode"]).toBe("mattermost");
+  it("n'est PLUS surchargeable par l'environnement (`YUKI_CHAT_MODE` RETIRÉE, lot 35b)", () => {
+    // ⚠️ RUPTURE ASSUMÉE du lot 35b : `chat.mode` est une clé de BOT. Une variable
+    // d'environnement est une valeur d'INSTALLATION : elle ne peut pas désigner
+    // « le bot actif ». La garde de compilation interdit `env` sur `scope: "bot"`.
+    expect(CONFIG_SCHEMA["chat.mode"]?.scope).toBe("bot");
+    expect(CONFIG_SCHEMA["chat.mode"]?.env).toBeUndefined();
+    expect(readConfigEnvOverrides({ YUKI_CHAT_MODE: "mattermost" })["chat.mode"]).toBeUndefined();
+    expect(VARIABLES_ENV_RETIREES["YUKI_CHAT_MODE"]).toBe("chat.mode");
   });
 });
 

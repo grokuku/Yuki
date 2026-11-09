@@ -51,7 +51,7 @@ import { SecretRequestRegistry } from "./secrets/requests.js";
 import { SecretStore } from "./secrets/store.js";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
-import { preparerMultiBot } from "./bots/index.js";
+import { BOT_YUKI, preparerMultiBot } from "./bots/index.js";
 import {
   ComfyClient,
   ComfyWorkflowStore,
@@ -270,6 +270,11 @@ async function main(): Promise<void> {
   const env = bots.env;
   const config = createConfigRuntime({
     env,
+    // MULTI-BOT (lot 35b) : la configuration du BOT ACTIF vit dans son overlay
+    // (`<state>/bots/<id>/config.overlay.json`) ; le store commun reste la
+    // configuration d'INSTANCE. En mode mono-bot historique (`bots.bot` nul), le
+    // bot actif est `yuki` — même chemin, donc aucun changement de comportement.
+    botId: bots.bot?.id ?? BOT_YUKI,
     promptDefaults: {
       light: loadTextFile(env.piSystemPromptPath, FALLBACK_SYSTEM_PROMPT),
       heavy: loadTextFile(env.piHeavySystemPromptPath, HEAVY_SYSTEM_PROMPT_FALLBACK),

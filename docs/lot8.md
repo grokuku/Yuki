@@ -1443,6 +1443,14 @@ Mécanismes **vérifiés** :
 `tests/gateway/config-api.test.ts`). ⇒ **le chemin de code d'enregistrement de
 `tts.speed` fonctionne** ; l'échec observé dépend de l'environnement/UI réels.
 
+> ⚠️ **MAJ lot 35b (multi-bot)** : le verrou d'environnement décrit ci-dessus
+> **n'existe plus pour `tts.speed`** — c'est une clé de **bot**, et `env` y est
+> désormais interdit (garde de compilation, `src/config/schema.ts`).
+> `YUKI_TTS_SPEED` est **RETIRÉE** et **annoncée** au démarrage si un
+> déploiement la définit encore ; le verrou d'environnement reste entier pour
+> les clés d'**instance** (ex. `YUKI_LLM_LIGHT_MODEL`). Voir
+> `docs/lot35b-multibot-overlay.md`.
+
 **À demander à l'utilisateur (2-3 questions) :**
 
 1. le **message exact** affiché (sous le champ « Débit » et/ou près du bouton

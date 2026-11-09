@@ -1,14 +1,21 @@
 /**
  * Runtime de configuration (Lot 11).
  *
- * Combine **store** + **environnement** + **défauts du code** selon la
- * précédence `défauts < store < env`. L'environnement ne participe que s'il est
- * explicitement défini ET non vide ; dans ce cas le champ est **verrouillé**
- * (`origin: "env"`) et un `PUT` le visant est refusé (`locked_by_env`).
+ * Combine **store commun** + **overlay du bot actif** + **environnement** +
+ * **défauts du code** selon la précédence
+ * `défauts < store commun < overlay du bot < env`. L'environnement ne participe
+ * que s'il est explicitement défini ET non vide ; dans ce cas le champ est
+ * **verrouillé** (`origin: "env"`) et un `PUT` le visant est refusé
+ * (`locked_by_env`).
  *
- * Expose `get()` / `update(patch)` / `subscribe()`, le **pont des clés** vers
- * `process.env` (pour que le SDK résolve `$YUKI_LLM_*_API_KEY`) et les valeurs à
- * masquer pour le logger.
+ * ⚠️ MULTI-BOT (lot 35b) : le merge vit ICI et NULLE PART ailleurs. Tous les
+ * appelants (225 références, 27 fichiers) passent par `get()` : il n'existe
+ * aucun autre chemin de lecture de la configuration. Un appelant qui lirait le
+ * store commun directement verrait une valeur FAUSSE (sans l'overlay du bot).
+ *
+ * Expose `get()` / `update(patch, options)` / `subscribe()`, le **pont des clés**
+ * vers `process.env` (pour que le SDK résolve `$YUKI_LLM_*_API_KEY`) et les
+ * valeurs à masquer pour le logger.
  *
  * Aucun import SDK/typebox.
  */
@@ -16,9 +23,12 @@
 import { readFileSync } from "node:fs";
 
 import { EnvError, type Env, readConfigEnvOverrides } from "./env.js";
+import { BOT_ID_DEFAUT, ConfigOverlayStore } from "./overlay.js";
+import { resolveConfigOverlayPath } from "./paths.js";
 import {
   CONFIG_PATHS,
   CONFIG_SCHEMA,
+  VARIABLES_ENV_RETIREES,
   descriptorOf,
   envNameOf,
   isSecretPath,
@@ -102,14 +112,44 @@ export interface ConfigUpdateResult {
   changes: ConfigChange[];
 }
 
+/**
+ * Valeurs de l'enum `off|on` (aucun booléen dans `FieldType`). Une clé `mixte`
+ * de fusion `et` est TOUJOURS un enum `off|on` (vérifié par un test de verrou) :
+ * la conjonction s'exprime donc sans conversion.
+ */
+const ACTIF = "on";
+const INACTIF = "off";
+
 export interface ConfigRuntimeOptions {
   env: Env;
-  /** Store injectable (tests). Défaut : chemin résolu depuis `env`. */
+  /** Store commun injectable (tests). Défaut : chemin résolu depuis `env`. */
   store?: ConfigStore;
+  /**
+   * Overlay du bot actif, injectable (tests). Défaut :
+   * `<state>/bots/<botId>/config.overlay.json` (`resolveConfigOverlayPath`).
+   */
+  overlay?: ConfigOverlayStore;
+  /** Identifiant du bot ACTIF (défaut `BOT_ID_DEFAUT`, soit `yuki`). */
+  botId?: string;
   /** Environnement source (tests). Défaut : `process.env`. */
   processEnv?: NodeJS.ProcessEnv;
   /** Défauts des prompts (contenu des fichiers livrés). */
   promptDefaults?: { light: string; heavy: string };
+}
+
+/**
+ * Portée d'ÉCRITURE d'un patch (lot 35b).
+ *  - `"auto"` (défaut) : `scope: "bot"`/`"mixte"` → overlay du bot actif ;
+ *    `scope: "instance"` → store commun. C'est la portée par DÉFAUT : elle ne
+ *    change rien de visible (mêmes valeurs effectives qu'avant le lot).
+ *  - `"instance"` : store commun, quelle que soit la portée du champ (réglage
+ *    d'instance, écrit par l'écran d'instance ; c'est aussi le SEUL moyen
+ *    d'écrire le côté « instance » d'une clé `mixte`).
+ *  - `"bot"` : overlay du bot actif pour les clés `bot`/`mixte` ; une clé
+ *    `instance` n'a AUCUN équivalent par bot et reste donc dans le store commun.
+ */
+export interface ConfigUpdateOptions {
+  portee?: "auto" | "instance" | "bot";
 }
 
 /** Masque une valeur secrète : 4 derniers caractères précédés de `••••`. */
@@ -130,12 +170,18 @@ function readTextFile(path: string): string {
 /** Runtime de configuration : point d'accès unique aux valeurs effectives. */
 export class ConfigRuntime {
   private readonly store: ConfigStore;
+  /** Overlay du BOT ACTIF (second store, jamais imbriqué dans `config.json`). */
+  private readonly overlay: ConfigOverlayStore;
+  /** Identifiant du bot actif dont l'overlay est appliqué. */
+  readonly botId: string;
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly defaults: Record<string, string | number> = {};
   /** Surccharges d'environnement validées (chemin → valeur). */
   private readonly envValues: Record<string, string | number> = {};
-  /** Valeurs stockées validées (sparse). */
+  /** Valeurs du store COMMUN validées (sparse) — portée « instance ». */
   private values: Record<string, string | number> = {};
+  /** Valeurs de l'OVERLAY du bot actif validées (sparse). */
+  private overlayValues: Record<string, string | number> = {};
   private readonly listeners = new Set<() => void>();
 
   /** Replis rencontrés au chargement (journalisés après création du logger). */
@@ -143,6 +189,12 @@ export class ConfigRuntime {
 
   constructor(options: ConfigRuntimeOptions) {
     this.store = options.store ?? new ConfigStore(options.env.configStorePath);
+    this.botId = options.botId ?? BOT_ID_DEFAUT;
+    this.overlay =
+      options.overlay ??
+      new ConfigOverlayStore(
+        resolveConfigOverlayPath(options.env.mountPoints.state, this.botId),
+      );
     this.processEnv = options.processEnv ?? process.env;
 
     // Défauts du code + affinage des prompts depuis les fichiers livrés.
@@ -155,6 +207,18 @@ export class ConfigRuntime {
     if (heavy.length > 0) this.defaults["prompts.heavy"] = heavy;
 
     // Surcharges d'environnement (validées strictement : erreur explicite).
+    // ⚠️ Les variables RETIRÉES au lot 35b n'agissent plus : on le DIT (une
+    // variable d'environnement qui n'agit pas doit être annoncée, jamais
+    // supprimée en silence).
+    for (const [variable, path] of Object.entries(VARIABLES_ENV_RETIREES)) {
+      const raw = this.processEnv[variable];
+      if (typeof raw !== "string" || raw.trim() === "") continue;
+      this.warnings.push(
+        `variable d'environnement RETIRÉE (lot 35b, sans effet) : ${variable} ` +
+          `— réglez « ${path} » depuis la page /config (ou l'overlay du bot) : ` +
+          "une clé de bot ne peut pas être fixée par l'environnement.",
+      );
+    }
     const rawEnv = readConfigEnvOverrides(this.processEnv);
     for (const [path, raw] of Object.entries(rawEnv)) {
       const result = validateField(path, raw);
@@ -185,13 +249,70 @@ export class ConfigRuntime {
       }
       this.values[path] = result.value;
     }
+
+    // Overlay du BOT ACTIF (validé ; une entrée invalide est ignorée et DITE).
+    // ⚠️ Un fichier d'overlay est CONSERVÉ tel quel quand il est illisible : un
+    // refus de lecture (EACCES) ne doit jamais effacer la configuration du bot.
+    const overlaid = this.overlay.load();
+    if (overlaid.source === "invalid") {
+      this.warnings.push(
+        `overlay de configuration du bot « ${this.botId} » illisible ` +
+          `(${overlaid.error ?? "inconnu"}) — aucune surcharge appliquée, fichier conservé`,
+      );
+    }
+    for (const [path, raw] of Object.entries(overlaid.values)) {
+      const descriptor = descriptorOf(path);
+      if (!descriptor) {
+        this.warnings.push(`champ d'overlay inconnu ignoré : ${path}`);
+        continue;
+      }
+      if (descriptor.scope === "instance") {
+        this.warnings.push(
+          `champ d'INSTANCE présent dans l'overlay du bot « ${this.botId} » ignoré : ${path}` +
+            " (un réglage d'instance se règle dans le store commun, pas par bot)",
+        );
+        continue;
+      }
+      const result = validateField(path, raw);
+      if (!result.ok) {
+        this.warnings.push(
+          `valeur d'overlay invalide pour ${path} (${result.message})`,
+        );
+        continue;
+      }
+      this.overlayValues[path] = result.value;
+    }
   }
 
-  /** Valeur effective d'un champ. */
+  /** Chemin du fichier d'overlay du bot actif (journaux, diagnostic, tests). */
+  get overlayPath(): string {
+    return this.overlay.path;
+  }
+
+  /**
+   * Valeur effective d'un champ — ⚠️ CHEMIN DE LECTURE UNIQUE du produit.
+   *
+   * Précédence : `env > overlay du bot > store commun > défaut`.
+   *
+   * Deux portées de fusion :
+   *  - `bot` et `mixte`+`surcharge` : l'overlay PRIME, le store commun sert de
+   *    valeur de repli (une valeur héritée d'avant le lot reste donc effective) ;
+   *  - `mixte`+`et` : **conjonction** (restriction). Le côté EXPLICITEMENT
+   *    renseigné doit valoir `on` : instance `off` ⇒ `off` même si le bot est
+   *    `on`. Un côté ABSENT n'impose rien (neutre = `on`) — sans quoi une clé
+   *    jamais réglée deviendrait `off` par accident, ou activer la voix depuis
+   *    `/config` n'aurait plus d'effet (le côté instance restant au défaut).
+   *    Les DEUX côtés absents ⇒ défaut du schéma (comportement d'avant le lot).
+   */
   get(path: string): string | number {
     if (path in this.envValues) return this.envValues[path] as string | number;
-    if (path in this.values) return this.values[path] as string | number;
-    return this.defaults[path] ?? "";
+    const descriptor = descriptorOf(path);
+    if (!descriptor) return this.valeurCommune(path);
+    if (descriptor.scope === "instance") return this.valeurCommune(path);
+    if (descriptor.scope === "mixte" && descriptor.mixteMerge === "et") {
+      return this.valeurConjonction(path);
+    }
+    return this.valeurBot(path);
   }
 
   getString(path: string): string {
@@ -203,11 +324,38 @@ export class ConfigRuntime {
     return typeof value === "number" ? value : Number.parseInt(String(value), 10);
   }
 
-  /** Origine effective d'un champ. */
+  /** Origine effective d'un champ (l'overlay du bot compte comme « store »). */
   originOf(path: string): Origin {
     if (path in this.envValues) return "env";
-    if (path in this.values) return "store";
+    const descriptor = descriptorOf(path);
+    if (descriptor?.scope === "instance") {
+      return path in this.values ? "store" : "default";
+    }
+    if (path in this.overlayValues || path in this.values) return "store";
     return "default";
+  }
+
+  /** Valeur du store COMMUN (côté « instance »), sans overlay ni env. */
+  private valeurCommune(path: string): string | number {
+    if (path in this.values) return this.values[path] as string | number;
+    return this.defaults[path] ?? "";
+  }
+
+  /** Valeur d'une clé de BOT : overlay d'abord, store commun en repli. */
+  private valeurBot(path: string): string | number {
+    if (path in this.overlayValues) return this.overlayValues[path] as string | number;
+    return this.valeurCommune(path);
+  }
+
+  /** Valeur d'une clé `mixte` + `mixteMerge: "et"` : CONJONCTION des deux côtés. */
+  private valeurConjonction(path: string): string | number {
+    const commun = path in this.values ? this.values[path] : undefined;
+    const bot = path in this.overlayValues ? this.overlayValues[path] : undefined;
+    if (commun === undefined && bot === undefined) return this.valeurCommune(path);
+    const estActif = (valeur: string | number) => valeur === ACTIF;
+    const instanceActive = commun === undefined ? true : estActif(commun);
+    const botActif = bot === undefined ? true : estActif(bot);
+    return instanceActive && botActif ? ACTIF : INACTIF;
   }
 
   isLockedByEnv(path: string): boolean {
@@ -240,7 +388,13 @@ export class ConfigRuntime {
     }
   }
 
-  /** Le store ne contient-il aucune valeur saisie ? */
+  /**
+   * Le store ne contient-il aucune valeur saisie ?
+   *
+   * ⚠️ On ne regarde QUE le store COMMUN : ce prédicat sert à l'import unique de
+   * `models.json` (réglages d'INSTANCE). Un overlay de bot, même rempli, ne doit
+   * pas empêcher cet import-là.
+   */
   isStoreEmpty(): boolean {
     return Object.keys(this.values).length === 0;
   }
@@ -298,12 +452,28 @@ export class ConfigRuntime {
    *  - chaîne non vide = remplacer ;
    *  - `null` = effacer (retour au défaut) ;
    *  - chaîne vide/espaces = erreur de validation.
+   *
+   * ⚠️ MULTI-BOT (lot 35b) : l'écriture est AIGUILLÉE par la portée du champ
+   * (`options.portee`, défaut `"auto"`). Une clé `bot`/`mixte` va dans l'overlay
+   * du bot ACTIF ; une clé `instance` va dans le store COMMUN. Aucune clé n'est
+   * jamais écrite dans les deux à la fois, et `config.json` ne reçoit jamais une
+   * clé de bot.
+   *
+   * ⚠️ `null` sur une clé écrite en overlay efface AUSSI la même clé du store
+   * commun quand elle y traînait (valeur héritée d'avant le lot, ou côté
+   * « instance » d'une clé mixte) : « Réinitialiser au défaut » doit rendre le
+   * DÉFAUT, pas la valeur stockée d'à côté.
    */
-  update(patch: Record<string, unknown>): ConfigUpdateResult {
+  update(
+    patch: Record<string, unknown>,
+    options: ConfigUpdateOptions = {},
+  ): ConfigUpdateResult {
+    const portee = options.portee ?? "auto";
     const locked: Array<{ path: string; variable: string }> = [];
     const errors: FieldError[] = [];
     const changes: ConfigChange[] = [];
-    const next: Record<string, string | number> = { ...this.values };
+    const nextCommon: Record<string, string | number> = { ...this.values };
+    const nextOverlay: Record<string, string | number> = { ...this.overlayValues };
 
     for (const [path, raw] of Object.entries(patch)) {
       const descriptor = descriptorOf(path);
@@ -320,10 +490,21 @@ export class ConfigRuntime {
         continue;
       }
 
+      const versOverlay = portee !== "instance" && descriptor.scope !== "instance";
+      const cible = versOverlay ? nextOverlay : nextCommon;
+      const before = this.get(path);
+
       if (raw === null) {
-        if (path in next) {
-          const before = this.effectiveValue(path);
-          delete next[path];
+        let efface = false;
+        if (path in cible) {
+          delete cible[path];
+          efface = true;
+        }
+        if (versOverlay && path in nextCommon) {
+          delete nextCommon[path];
+          efface = true;
+        }
+        if (efface) {
           changes.push({
             path,
             secret: Boolean(descriptor.secret),
@@ -339,9 +520,8 @@ export class ConfigRuntime {
         errors.push({ path, code: result.code, message: result.message });
         continue;
       }
-      if (path in next && next[path] === result.value) continue;
-      const before = this.effectiveValue(path);
-      next[path] = result.value;
+      if (path in cible && cible[path] === result.value) continue;
+      cible[path] = result.value;
       changes.push({
         path,
         secret: Boolean(descriptor.secret),
@@ -354,8 +534,12 @@ export class ConfigRuntime {
     if (errors.length > 0) throw new ConfigValidationError(errors);
 
     if (changes.length > 0) {
-      this.store.write(next);
-      this.values = next;
+      // Chaque store n'est réécrit QUE s'il a changé : un patch de clés `bot`
+      // ne fait pas clignoter `config.json`, et réciproquement.
+      if (!memeContenu(nextCommon, this.values)) this.store.write(nextCommon);
+      if (!memeContenu(nextOverlay, this.overlayValues)) this.overlay.write(nextOverlay);
+      this.values = nextCommon;
+      this.overlayValues = nextOverlay;
       this.bridgeSecrets();
       this.emit();
     }
@@ -419,12 +603,6 @@ export class ConfigRuntime {
     return imported;
   }
 
-  private effectiveValue(path: string): string | number {
-    if (path in this.envValues) return this.envValues[path] as string | number;
-    if (path in this.values) return this.values[path] as string | number;
-    return this.defaults[path] ?? "";
-  }
-
   private auditValue(
     descriptor: FieldDescriptor,
     value: string | number,
@@ -435,6 +613,16 @@ export class ConfigRuntime {
     }
     return text.length > 0 ? text : null;
   }
+}
+
+/** Deux magasins plats portent-ils EXACTEMENT le même contenu ? */
+function memeContenu(
+  a: Readonly<Record<string, string | number>>,
+  b: Readonly<Record<string, string | number>>,
+): boolean {
+  const clesA = Object.keys(a);
+  if (clesA.length !== Object.keys(b).length) return false;
+  return clesA.every((cle) => cle in b && a[cle] === b[cle]);
 }
 
 /** Fabrique du runtime de configuration. */
