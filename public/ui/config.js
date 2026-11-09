@@ -1,11 +1,19 @@
 /**
- * Page « Configuration » — vanilla, `type="module"`, aucune chaîne de build.
+ * LES DEUX PAGES DE CONFIGURATION — vanilla, `type="module"`, aucune chaîne de
+ * build. UN SEUL module pour DEUX pages (lot 35d, sous-lot 1b-4) :
  *
- * - lit `GET /api/config` (valeurs effectives, clés masquées) ;
- * - écrit via `PUT /api/config` (en-tête `X-Yuki-Config: 1`) ET, pour les
- *   réglages propres au bot actif, via `PUT /api/bots/<id>/config` : une même
- *   barre « Enregistrer » peut donc produire DEUX écritures, une par portée
- *   (lot 35b, sous-lot 1b-3) ;
+ *  - **Instance** (`/config`, `config.html`) : ce qui est commun à toute
+ *    l'installation — 7 onglets ;
+ *  - **Bot** (`/bots?b=<slug>`, `bots.html`) : ce qui est propre à UN bot —
+ *    6 onglets, avec un sélecteur de bot.
+ *
+ * La page est déclarée par `data-config-page` sur `<body>` : elle décide des
+ * onglets, des groupes rendus et de la DESTINATION des écritures.
+ *
+ * - lit `GET /api/config` (Instance) ou `GET /api/bots/<id>/config` (Bot) ;
+ * - écrit via `PUT /api/config` (Instance : clés `instance` + côté instance des
+ *   clés `mixte`) ou `PUT /api/bots/<id>/config` (Bot : clés `bot` + côté bot
+ *   des clés `mixte`) — jamais les deux sur la même page ;
  * - teste une connexion LLM via `POST /api/config/llm/test` ;
  * - affiche l'état réel (`status.lightKey/heavyKey/ready`, poll `/health/ready`).
  *
@@ -36,7 +44,7 @@ import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
 import { initSecretsPanel } from './secrets-panel.js';
 import { initSourcesPanel } from './sources-panel.js';
-import { initChatPanel, REMOTE_AGENTS_ANCHOR, REMOTE_TOOLS_ANCHOR } from './chat-panel.js';
+import { initChatPanel } from './chat-panel.js';
 import {
   buildConfigPatch,
   emptyValueRefusals,
@@ -47,16 +55,26 @@ import {
   resetValueFor,
   splitConfigPatchByScope,
 } from './config-patch.js';
-import { cheminConfigBot, idBotActif } from './bots-api.js';
+import { cheminConfigBot, listerBots } from './bots-api.js';
+import {
+  ANCRES_PROFONDES as ANCRES_PROFONDES_PAR_PAGE,
+  champsDePage,
+  demandeChangementBot,
+  groupesDePage,
+  groupesParOnglet,
+  ligneDePage,
+  modaleAjoutBot,
+  ongletDuHash,
+  ongletsDePage,
+  pageConnue,
+} from './config-pages.js';
+import { ALL_FIELDS, FIELD_DEFAULTS, GROUPS, LABELS } from './config-fields.js';
 import { initTheme } from './theme.js';
 import { setTimeZone } from './horodatage.js';
 import { createTtsPlayer } from './tts-player.js';
 import { initTtsAssistant } from './tts-assistant.js';
 import { initVoicesPanel } from './voices-panel.js';
-import {
-  MODELE_DISCUSSION_INTRO,
-  bandeauTravail,
-} from './modeles-aide.js';
+import { bandeauTravail } from './modeles-aide.js';
 
 HolafModal.configure({ injectStyles: false });
 
@@ -126,896 +144,30 @@ const RESTART_POLL_MS = 1000;
 /** Délai maximal d'attente du retour du gateway avant d'annoncer l'échec. */
 const RESTART_TIMEOUT_MS = 90_000;
 
-const OPTIONS = {
-  api: [["openai-completions", "openai-completions"]],
-  thinking: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((v) => [v, v]),
-  profiles: [
-    ["", "∅ (auto)"],
-    ["confort", "confort"],
-    ["compact", "compact"],
-    ["repli", "repli"],
-    ["texte-seul", "texte-seul"],
-  ],
-  compat: [
-    ["strict", "strict"],
-    ["auto-degrade", "auto-degrade"],
-  ],
-  missingKey: [
-    ["degrade", "degrade"],
-    ["refuse", "refuse"],
-  ],
-  // ⚠️ CAPACITÉ VISION : une DÉCLARATION, pas une mesure. Aucune API ne publie
-  // « ce modèle voit les images » : c'est à l'utilisateur de le dire, et ce
-  // réglage produit `input` dans `models.json`. « non » ⇒ les images ne sont pas
-  // envoyées au modèle (et le résultat d'un outil le DIT, jamais de silence).
-  vision: [
-    ["oui", "oui — le modèle voit les images"],
-    ["non", "non — pas d'image envoyée au modèle"],
-  ],
-  // Lot 7 — TTS / voix.
-  ttsEnabled: [
-    ["off", "désactivé"],
-    ["on", "activé"],
-  ],
-  ttsEngine: [
-    ["chatterbox", "chatterbox"],
-    ["qwen3-tts", "qwen3-tts"],
-    ["cosyvoice3", "cosyvoice3"],
-    ["kokoro", "kokoro"],
-    ["sanotts", "sanotts"],
-  ],
-  ttsLanguage: [["fr", "français (fr)"]],
-  ttsEmotion: [
-    ["neutre", "neutre"],
-    ["expressive", "expressive"],
-    ["dramatique", "dramatique"],
-    ["personnalisee", "personnalisée"],
-  ],
-  // Notifications (PWA + Web Push).
-  pushEnabled: [
-    ["on", "activées"],
-    ["off", "désactivées"],
-  ],
-};
+/**
+ * PAGE COURANTE — déclarée par le markup (`<body data-config-page="…">`).
+ *
+ * ⚠️ Une page INCONNUE retombe sur « instance » : c'est la page historique,
+ * celle dont tous les réglages vivaient là avant la scission. Un repli sur
+ * « bot » demanderait un identifiant de bot que rien ne fournit.
+ */
+const PAGE = pageConnue(document.body?.dataset?.configPage)
+  ? document.body.dataset.configPage
+  : "instance";
 
-const GROUPS = [
-  {
-    id: "llm-light",
-    title: "Modèle de discussion",
-    role: "light",
-    // ⚠️ Texte d'AIDE de l'onglet, pas un libellé de clé : il n'explique que
-    // la RÉPARTITION des rôles. Une phrase, sous le titre du premier groupe.
-    intro: MODELE_DISCUSSION_INTRO,
-    fields: [
-      { path: "llm.light.baseUrl", label: "URL de base", kind: "text" },
-      { path: "llm.light.apiKey", label: "Clé d'API", kind: "secret" },
-      { path: "llm.light.model", label: "Modèle", kind: "text" },
-      {
-        path: "llm.light.vision",
-        label: "Reçoit les images (vision)",
-        kind: "select",
-        options: OPTIONS.vision,
-        helper:
-          "Déclaration, pas une mesure : aucun fournisseur ne publie si un modèle " +
-          "voit les images. « non » ⇒ Yuki n'envoie AUCUNE image à ce modèle " +
-          "(pièces jointes comme captures) ; « oui » ⇒ les images partent en pièce " +
-          "jointe. Appliqué à chaud.",
-      },
-      { path: "llm.light.api", label: "Dialecte d'API", kind: "select", options: OPTIONS.api },
-      { path: "llm.light.thinking", label: "Réflexion (thinking)", kind: "select", options: OPTIONS.thinking },
-    ],
-  },
-  {
-    id: "llm-heavy",
-    title: "Modèle de travail",
-    role: "heavy",
-    fields: [
-      { path: "llm.heavy.baseUrl", label: "URL de base", kind: "text" },
-      { path: "llm.heavy.apiKey", label: "Clé d'API", kind: "secret" },
-      { path: "llm.heavy.model", label: "Modèle", kind: "text" },
-      {
-        path: "llm.heavy.vision",
-        label: "Reçoit les images (vision)",
-        kind: "select",
-        options: OPTIONS.vision,
-        helper:
-          "Déclaration, pas une mesure : aucun fournisseur ne publie si un modèle " +
-          "voit les images. « oui » ⇒ une image récupérée d'une machine " +
-          "(`recuperer_fichier`) est jointe au worker ; « non » ⇒ elle n'est PAS " +
-          "envoyée et le résultat de l'outil le dit. Appliqué à chaud (job suivant).",
-      },
-      { path: "llm.heavy.api", label: "Dialecte d'API", kind: "select", options: OPTIONS.api },
-      { path: "llm.heavy.thinking", label: "Réflexion (thinking)", kind: "select", options: OPTIONS.thinking },
-    ],
-  },
-  {
-    id: "delegation",
-    title: "Délégation",
-    fields: [
-      { path: "llm.missingKeyMode", label: "Politique si clé manquante", kind: "select", options: OPTIONS.missingKey },
-      { path: "delegation.defaultDeadlineMs", label: "Attente inline par défaut (ms)", kind: "number", min: 200, max: 60000 },
-      { path: "delegation.maxConcurrent", label: "Jobs simultanés", kind: "number", min: 1 },
-      { path: "delegation.maxQueue", label: "Taille de la file", kind: "number", min: 0 },
-      { path: "delegation.idleTimeoutMs", label: "Timeout d'inactivité (ms)", kind: "number", min: 1 },
-      // ⚠️ Doit RESTER au-dessus du plafond de génération d'image (`images.timeoutMs`,
-      // 1 h par défaut) + la rédaction et la publication du rapport : un job coupé
-      // ici serait coupé par une limite plus LARGE que la génération, sans explication.
-      {
-        path: "delegation.totalTimeoutMs",
-        label: "Durée maximale d'un job (ms)",
-        kind: "number",
-        min: 1,
-        helper:
-          "Durée maximale d'un travail délégué, rédaction et publication du " +
-          "rapport comprises. Défaut 4 500 000 ms (75 minutes) : elle doit " +
-          "rester au-dessus du plafond d'une génération (onglet Images) et de " +
-          "la rédaction. Appliquée au redémarrage.",
-      },
-    ],
-  },
-  {
-    id: "gpu",
-    title: "GPU",
-    fields: [
-      { path: "gpu.profile", label: "Profil forcé", kind: "select", options: OPTIONS.profiles },
-      { path: "gpu.compatMode", label: "Mode de compatibilité", kind: "select", options: OPTIONS.compat },
-      { path: "gpu.minDriver", label: "Driver NVIDIA minimal (majeure)", kind: "number", min: 1 },
-    ],
-  },
-  {
-    id: "notifications",
-    title: "Notifications (appareils)",
-    fields: [
-      {
-        path: "push.enabled",
-        label: "Activer les notifications",
-        kind: "select",
-        options: OPTIONS.pushEnabled,
-        helper:
-          "Interrupteur GLOBAL du serveur. Chaque appareil s'abonne séparément depuis le bouton « Notifications » de la barre du haut (chat) : accepter la permission du navigateur EST l'opt-in. Désactiver ici coupe les envois pour TOUS les appareils.",
-      },
-      {
-        path: "push.contact",
-        label: "Contact VAPID (mailto: ou URL)",
-        kind: "text",
-        helper:
-          "Sujet (sub) du JWT VAPID, exigé par certains services de push. Une adresse de contact suffit ; elle n'est pas vérifiée.",
-      },
-    ],
-  },
-  {
-    id: "prompts",
-    title: "Prompts système",
-    // Bloc LECTURE SEULE : l'instruction vocale réellement injectée (volet 1).
-    voiceInstruction: true,
-    // ⚠️ DIT explicitement ce qui n'est PAS réglable ici : sans cette phrase,
-    // l'utilisateur cherche à régler aussi le prompt des réponses publiées dans
-    // un canal (Mattermost / Discord) et croit qu'il a été ignoré.
-    note:
-      "Ces deux prompts sont ceux du chat LOCAL (et du worker lourd). Le prompt des réponses PUBLIÉES DANS UN CANAL (Mattermost, Discord) n'est PAS réglable ici : c'est une constante du code (src/chat/reply/prompt.ts), pour que le mode « auto » reste borné.",
-    fields: [
-      {
-        path: "prompts.light",
-        label: "Prompt système — léger",
-        kind: "textarea",
-        helper:
-          "Un champ vide est REFUSÉ : sans consigne, le modèle n'a plus de cadre. « Réinitialiser au défaut » réécrit le prompt LIVRÉ (config/pi/system-prompt.md).",
-      },
-      {
-        path: "prompts.heavy",
-        label: "Prompt système — lourd",
-        kind: "textarea",
-        helper:
-          "Utilisé par le worker lourd (tâche déléguée). Un champ vide est REFUSÉ ; « Réinitialiser au défaut » réécrit le prompt LIVRÉ (config/pi/system-prompt-heavy.md).",
-      },
-    ],
-  },
-  {
-    id: "memoire",
-    title: "Mémoire durable",
-    fields: [
-      {
-        path: "memory.enabled",
-        label: "Activer la mémoire",
-        kind: "select",
-        options: [
-          ["on", "activée"],
-          ["off", "désactivée"],
-        ],
-        helper:
-          "Yuki retient automatiquement vos préférences et faits durables, et les rappelle avant chaque réponse. Aucun bouton : tout est automatique.",
-      },
-      {
-        path: "memory.recall.topK",
-        label: "Souvenirs rappelés (top-k)",
-        kind: "number",
-        min: 0,
-        max: 20,
-        helper:
-          "Nombre maximal de souvenirs pertinents injectés avant une réponse. Petit par construction (coût sur le temps de première réponse).",
-      },
-      {
-        path: "memory.recall.budgetChars",
-        label: "Budget de rappel (caractères)",
-        kind: "number",
-        min: 0,
-        max: 40000,
-        advanced: true,
-        helper: "Taille maximale du bloc de souvenirs injecté (0 = aucun rappel).",
-      },
-      {
-        path: "memory.recall.timeoutMs",
-        label: "Délai maximal du rappel (ms)",
-        kind: "number",
-        min: 20,
-        max: 5000,
-        advanced: true,
-        helper:
-          "Au-delà, la réponse part SANS mémoire (dégradation gracieuse). N'allonge jamais l'attente.",
-      },
-      {
-        path: "memory.extract.maxItems",
-        label: "Souvenirs extraits par tour",
-        kind: "number",
-        min: 0,
-        max: 10,
-        advanced: true,
-        helper:
-          "Nombre maximal de souvenirs durables extraits d'un échange (0 = écriture désactivée).",
-      },
-      {
-        path: "memory.extract.timeoutMs",
-        label: "Délai maximal d'extraction (ms)",
-        kind: "number",
-        min: 1000,
-        max: 300000,
-        advanced: true,
-        helper: "Hors chemin de réponse : n'affecte jamais le temps de réponse visible.",
-      },
-      {
-        path: "memory.consolidation.enabled",
-        label: "Consolidation hebdomadaire",
-        kind: "select",
-        options: [
-          ["on", "activée"],
-          ["off", "désactivée"],
-        ],
-        helper:
-          "Une passe relit TOUTE la mémoire avec le modèle LOURD : elle fusionne les doublons, corrige et " +
-          "supprime ce qui est transitoire. Chaque passe est archivée (versions restaurables ci-dessous).",
-      },
-      {
-        path: "memory.consolidation.cron",
-        label: "Quand (expression cron)",
-        kind: "text",
-        advanced: true,
-        helper:
-          "5 champs « minute heure jour-du-mois mois jour-de-semaine ». Défaut « 0 3 * * 0 » = dimanche " +
-          "03:00 dans le fuseau ci-dessous. Un passage manqué est rattrapé UNE fois s'il a moins de 24 h.",
-      },
-      {
-        path: "memory.consolidation.timeZone",
-        label: "Fuseau de la planification",
-        kind: "text",
-        advanced: true,
-        helper:
-          "Fuseau IANA de l'heure de la passe (défaut Europe/Paris = « 3 h du matin à Paris »). " +
-          "⚠️ Distinct du fuseau d'AFFICHAGE des horodatages, qui reste UTC.",
-      },
-      {
-        path: "memory.consolidation.budgetTokens",
-        label: "Budget de tokens par passe",
-        kind: "number",
-        min: 1000,
-        max: 2000000,
-        advanced: true,
-        helper:
-          "Plafond du volume envoyé au modèle. Il ne dépasse jamais le contexte réel du modèle lourd. " +
-          "Si toute la mémoire tient dedans, elle est traitée en UN SEUL lot.",
-      },
-      {
-        path: "memory.consolidation.retention",
-        label: "Versions conservées",
-        kind: "number",
-        min: 1,
-        max: 100,
-        advanced: true,
-        helper:
-          "Nombre d'archives de consolidation gardées (12 ≈ 3 mois). Au-delà, la plus ancienne est purgée " +
-          "et la purge est journalisée.",
-      },
-    ],
-  },
-  {
-    id: "tts",
-    title: "Réglages de la voix",
-    fields: [
-      // — Zone ③ : les 6 réglages ESSENTIELS (visibles sans clic) —
-      {
-        path: "tts.enabled",
-        label: "Activer la voix",
-        kind: "select",
-        options: OPTIONS.ttsEnabled,
-        helper: "Active la synthèse vocale. Prise en compte après un redémarrage de Yuki.",
-      },
-      {
-        path: "tts.engine",
-        label: "Moteur de synthèse",
-        kind: "select",
-        options: OPTIONS.ttsEngine,
-        helper: "Moteur qui prononce le texte. Certains réglages ne s'appliquent qu'à certains moteurs.",
-      },
-      {
-        path: "tts.language",
-        label: "Langue",
-        kind: "select",
-        options: OPTIONS.ttsLanguage,
-        helper: "Langue de la voix.",
-      },
-      {
-        path: "tts.emotion",
-        label: "Émotion",
-        kind: "select",
-        options: OPTIONS.ttsEmotion,
-        helper: "Intonation générale. « personnalisée » active les curseurs d'exagération et de guidage (zone « Avancé »).",
-      },
-      {
-        path: "tts.speed",
-        label: "Débit de parole (%)",
-        kind: "number",
-        min: 50,
-        max: 200,
-        helper: "Vitesse de la parole en pourcentage (100 = normal).",
-      },
-      {
-        path: "tts.volume",
-        label: "Volume de lecture (%)",
-        kind: "number",
-        min: 0,
-        max: 100,
-        helper: "Volume de lecture côté navigateur (100 = maximum).",
-      },
-      // ⚠️ `tts.voice` n'est PLUS un champ texte ici : la bibliothèque de voix
-      // (zone ②, `voices-panel.js`) en est l'unique contrôle et l'écrit tout de suite.
-      // — Zone ④ : le technique, replié sous « Avancé » —
-      {
-        path: "tts.baseUrl",
-        label: "Adresse du moteur (avancé)",
-        kind: "text",
-        advanced: true,
-        helper: "Adresse du service TTS dans le réseau Docker. À ne changer que si vous relocalisez le moteur.",
-      },
-      {
-        path: "tts.exaggeration",
-        label: "Exagération (pour-mille)",
-        kind: "range",
-        min: 0,
-        max: 1500,
-        step: 10,
-        advanced: true,
-        revealWhen: { path: "tts.emotion", equals: "personnalisee" },
-        helper: "Force d'expression (500 = neutre). N'agit qu'avec une émotion « personnalisée » et un moteur compatible.",
-      },
-      {
-        path: "tts.cfg",
-        label: "Contrôle de guidage (CFG)",
-        kind: "range",
-        min: 0,
-        max: 1500,
-        step: 10,
-        advanced: true,
-        revealWhen: { path: "tts.emotion", equals: "personnalisee" },
-        helper: "Fidélité au style demandé (500 = neutre). N'agit qu'avec une émotion « personnalisée » et un moteur compatible.",
-      },
-      {
-        path: "tts.prefetchDepth",
-        label: "Préchargement (phrases d'avance)",
-        kind: "number",
-        min: 0,
-        max: 2,
-        advanced: true,
-        helper: "Nombre de phrases synthétisées à l'avance pour réduire l'attente entre les phrases.",
-      },
-      {
-        path: "tts.minSentenceChars",
-        label: "Découpe — longueur minimale d'une phrase",
-        kind: "number",
-        min: 8,
-        max: 500,
-        advanced: true,
-        helper: "En deçà, un fragment n'est pas découpé seul.",
-      },
-      {
-        path: "tts.maxSentenceChars",
-        label: "Découpe — longueur maximale d'une phrase",
-        kind: "number",
-        min: 40,
-        max: 2000,
-        advanced: true,
-        helper: "Au-delà, la phrase est coupée pour être synthétisée par morceaux.",
-      },
-      {
-        path: "tts.timeoutMs",
-        label: "Délai maximal de synthèse (ms)",
-        kind: "number",
-        min: 1000,
-        max: 120000,
-        advanced: true,
-        helper: "Au-delà, la synthèse est abandonnée (le moteur est peut-être bloqué).",
-      },
-    ],
-  },
-  {
-    id: "transport",
-    title: "Transport temps réel",
-    fields: [
-      { path: "transport.replayBuffer", label: "Buffer de rejeu (trames)", kind: "number", min: 1 },
-      { path: "transport.replayBytes", label: "Buffer de rejeu (octets)", kind: "number", min: 1 },
-    ],
-  },
-  {
-    id: "affichage",
-    title: "Affichage — fuseau des horodatages",
-    fields: [
-      {
-        path: "ui.timeZone",
-        label: "Fuseau horaire des horodatages",
-        kind: "text",
-        helper:
-          "Fuseau IANA utilisé pour TOUS les horodatages : les repères des prompts " +
-          "(« [horodatage] … (UTC) »), les heures du fil de canal, l'interface et le " +
-          "journal. Défaut « UTC » — c'est le fuseau de Mattermost, donc les deux " +
-          "affichent la MÊME heure pour un même message. Exemples : UTC, " +
-          "Europe/Paris, America/New_York. ⚠️ Un nom inconnu est REFUSÉ (il ferait " +
-          "afficher une heure fausse sans le dire). ⚠️ La PLANIFICATION n'est pas " +
-          "concernée : un déclencheur « tous les jours à 9 h » tire à 9 h dans SON " +
-          "fuseau, et un envoi programmé dans celui de l'envoi. Appliqué à chaud.",
-      },
-    ],
-  },
-  {
-    id: "agents-acces",
-    title: "Accès des agents",
-    fields: [
-      {
-        path: "agents.serverName",
-        label: "Adresse ou nom que vos agents utilisent",
-        kind: "text",
-        helper:
-          "Adresse ou nom que vos agents utilisent pour joindre Yuki " +
-          "(ex. 10.10.0.5 ou yuki.lan). Cette valeur est inscrite dans le " +
-          "certificat serveur de Yuki, sinon vos agents ne peuvent pas vérifier " +
-          "le certificat par l'adresse réseau. Plusieurs valeurs possibles, " +
-          "séparées par des virgules. ⚠️ Yuki tourne dans un conteneur : elle ne " +
-          "peut pas deviner l'adresse de l'hôte, il faut la déclarer ici. " +
-          "Modification appliquée à chaud (certificat régénéré sans redémarrage).",
-      },
-    ],
-  },
-  {
-    id: "librarian",
-    title: "Libraire (recherche documentaire et web)",
-    // Bouton « Tester la connexion » dédié (route `POST /api/config/librarian/test`).
-    test: "librarian",
-    fields: [
-      {
-        path: "librarian.baseUrl",
-        label: "URL de base du libraire",
-        kind: "text",
-        helper:
-          "Adresse de Libry, selon votre réseau : même réseau Docker " +
-          "(http://pi-web:3000), même machine (http://<ip>:3005), ou accès public " +
-          "(https://pi.holaf.fr). ⚠️ Vide = libraire non configuré : les outils " +
-          "ne sont alors pas proposés au modèle. Renseigner l'URL prend effet au " +
-          "prochain redémarrage (l'URL elle-même est ensuite modifiable à chaud).",
-      },
-      {
-        path: "librarian.apiKey",
-        label: "Clé libraire (recommandée)",
-        kind: "secret",
-        helper:
-          "⚠️ SEUL champ requis pour l'authentification auprès de Libry. Secret " +
-          "« lib-… » envoyé dans l'en-tête X-API-Key (et/ou Authorization). " +
-          "Jamais réaffiché en clair.",
-      },
-      {
-        path: "librarian.screenshot",
-        label: "Capture de pages web",
-        kind: "select",
-        options: OPTIONS.ttsEnabled,
-        helper:
-          "Active l'outil « capture_libraire » : Libry capture une page web " +
-          "(Chromium headless) et l'image est transmise à Yuki puis affichée dans " +
-          "la conversation. ⚠️ Seules les URL http/https publiques sont " +
-          "capturables.",
-      },
-      {
-        path: "librarian.agentToken",
-        label: "Jeton agent (facultatif)",
-        kind: "secret",
-        advanced: true,
-        helper:
-          "Facultatif (compatibilité). Renseigné, il est envoyé dans l'en-tête " +
-          "Authorization ; vide, il n'est ni exigé ni envoyé — c'est la CLÉ " +
-          "libraire ci-dessus qui authentifie. Jamais réaffiché en clair.",
-      },
-      {
-        path: "librarian.archiveTimeoutMs",
-        label: "Délai maximal de rédaction d'archive (ms)",
-        kind: "number",
-        min: 1000,
-        max: 300000,
-        advanced: true,
-        helper:
-          "Délai au-delà duquel la rédaction de la synthèse d'archivage est " +
-          "abandonnée (l'échec est rapporté dans la conversation).",
-      },
-    ],
-  },
-  {
-    id: "fichiers",
-    title: "Fichiers échangés",
-    fields: [
-      {
-        path: "files.maxFileBytes",
-        label: "Taille maximale par fichier (octets)",
-        kind: "number",
-        min: 1048576,
-        max: 8589934592,
-        helper:
-          "Plafond d'un fichier envoyé. Défaut 2 147 483 648 octets (2 Gio). " +
-          "⚠️ Les fichiers vivent sur le MÊME volume que la configuration, la " +
-          "mémoire et les conversations : un fichier démesuré remplirait le " +
-          "disque et arrêterait Yuki. Au-delà du plafond, l'envoi est REFUSÉ " +
-          "explicitement (rien n'est conservé).",
-      },
-      {
-        path: "files.imageMaxBytes",
-        label: "Taille maximale du FICHIER image transmis au modèle (octets)",
-        kind: "number",
-        min: 1,
-        max: 20000000,
-        helper:
-          "Garde-fou de VISION sur les octets du FICHIER : au-delà, l'image est " +
-          "RÉDUITE à la volée (côté max 2 000 px, côté min lisible 700 px) — " +
-          "l'original enregistré, lui, n'est jamais modifié. ⚠️ Ce plafond ne " +
-          "borne PAS ce qui part sur le fil (le base64 pèse ×1,33) : voir le " +
-          "plafond TRANSMIS ci-dessous.",
-      },
-      {
-        path: "files.imageMaxWireBytes",
-        label: "Taille maximale TRANSMISE d'une image (octets base64)",
-        kind: "number",
-        min: 100000,
-        max: 20000000,
-        helper:
-          "⚠️ La borne qui compte : le base64 pèse ×1,33 sur le fichier, et " +
-          "c'est ce volume que le fournisseur refuse (`500 request entity too " +
-          "large`). Défaut 700 000 octets (~0,7 Mo transmis). Au-delà, l'image " +
-          "est RÉDUITE davantage : d'abord par le CÔTÉ, puis par RÉ-ENCODAGE " +
-          "(JPEG) quand un PNG reste trop lourd — c'est ce ré-encodage qui fait " +
-          "passer une capture de 2,9 Mo à ~0,5 Mo. Si elle ne peut pas l'être " +
-          "sans devenir illisible, le message est REFUSÉ explicitement, AVANT " +
-          "l'appel au fournisseur.",
-      },
-      {
-        path: "files.imageRequestBudgetBytes",
-        label: "Total maximal d'images TRANSMISES par requête (octets base64)",
-        kind: "number",
-        min: 1000,
-        max: 60000000,
-        helper:
-          "⚠️ Le plafond d'UNE image ne suffit pas : l'historique entier repart " +
-          "à CHAQUE tour, donc chaque image déjà vue repartait aussi. Ce plafond " +
-          "borne le TOTAL des images d'une requête. Défaut 1 500 000 octets " +
-          "(~1,5 Mo transmis, soit deux images pleines). Au-delà, les images les " +
-          "plus ANCIENNES sont retirées AVANT l'appel et remplacées par un texte " +
-          "qui dit la vérité (« déjà vue, relis-la avec lire_fichier ») : la " +
-          "vision reste active, seule la répétition disparaît. 0 ⇒ pas de borne " +
-          "(déconseillé : c'est ce qui produisait `500 request entity too large`).",
-      },
-      {
-        path: "files.agentMaxBytes",
-        label: "Transfert machine : plafond par transfert (octets)",
-        kind: "number",
-        min: 1048576,
-        max: 8589934592,
-        advanced: true,
-        helper:
-          "Plafond d'un fichier transféré vers ou depuis une machine appairée " +
-          "(agent d'exécution). Défaut 268 435 456 octets (256 Mio). Au-delà, le " +
-          "transfert est REFUSÉ avec un message qui dit d'utiliser run_command " +
-          "(scp, rsync, tar…) : un transfert de plusieurs Gio bloquerait le tour " +
-          "du modèle des minutes durant.",
-      },
-      {
-        path: "files.agentChunkBytes",
-        label: "Transfert machine : taille d'un morceau (octets)",
-        kind: "number",
-        min: 16384,
-        max: 4194304,
-        advanced: true,
-        helper:
-          "Taille binaire d'un morceau de transfert. Défaut 196 608 octets " +
-          "(192 Kio, ~256 Kio en base64) : très en dessous de la trame maximale " +
-          "du canal (8 Mio).",
-      },
-      {
-        path: "files.agentTimeoutMs",
-        label: "Transfert machine : délai maximal (ms)",
-        kind: "number",
-        min: 5000,
-        max: 3600000,
-        advanced: true,
-        helper:
-          "Délai au-delà duquel un transfert sans aucune trame reçue est " +
-          "considéré comme interrompu. Une seule reprise est tentée à la " +
-          "reconnexion ; au-delà, l'échec est dit (jamais un succès partiel).",
-      },
-      {
-        path: "files.retentionDays",
-        label: "Rétention des fichiers (jours)",
-        kind: "number",
-        min: 1,
-        max: 3650,
-        helper:
-          "Durée de conservation d'un fichier ET de son analyse. À l'échéance, " +
-          "les deux sont SUPPRIMÉS du disque (purge réelle, vérifiée au " +
-          "démarrage puis toutes les 10 minutes).",
-      },
-      {
-        path: "files.maxAttachments",
-        label: "Fichiers joints par message (maximum)",
-        kind: "number",
-        min: 1,
-        max: 20,
-        helper:
-          "Nombre maximal de fichiers envoyés avec un même message. Au-delà, " +
-          "les fichiers en trop ne sont PAS joints et l'interface le dit.",
-      },
-      {
-        path: "files.promptChars",
-        label: "Contenu transmis au modèle par fichier (caractères)",
-        kind: "number",
-        min: 1000,
-        max: 100000,
-        helper:
-          "BORNE d'injection : un fichier n'est jamais transmis en entier. " +
-          "Au-delà, le modèle reçoit le début du texte et lit explicitement que " +
-          "le contenu est tronqué (le fichier complet reste stocké et " +
-          "téléchargeable).",
-      },
-      {
-        path: "files.promptTotalChars",
-        label: "Contenu transmis au modèle par message (caractères)",
-        kind: "number",
-        min: 1000,
-        max: 400000,
-        advanced: true,
-        helper:
-          "BORNE TOTALE : somme des contenus de TOUS les fichiers d'un message. " +
-          "Les fichiers qui ne tiennent plus sont déclarés NON transmis (le " +
-          "modèle le lit, rien n'est omis en silence).",
-      },
-    ],
-  },
-  {
-    id: "sources",
-    title: "Notifications des sources (borne d'injection)",
-    fields: [
-      {
-        path: "sources.promptTotalChars",
-        label: "Notifications transmises au modèle en un tour (caractères)",
-        kind: "number",
-        min: 500,
-        max: 40000,
-        helper:
-          "BORNE d'injection du bloc <sources> : les notifications en attente " +
-          "partent GROUPÉES au début du prochain tour, jamais pendant. Au-delà de " +
-          "cette borne, une entrée est déclarée NON transmise (le modèle le lit) " +
-          "et son contenu entier reste dans la boîte de notifications.",
-      },
-    ],
-  },
-  {
-    id: "images",
-    title: "Serveur et réglages d'images (ComfyUI)",
-    // Bouton « Tester la connexion » dédié (route `POST /api/images/test`) : il
-    // interroge `GET /system_stats` avec l'URL et la clé SAISIES, sans rien
-    // enregistrer.
-    test: "images",
-    fields: [
-      {
-        path: "images.baseUrl",
-        label: "URL du serveur ComfyUI",
-        kind: "text",
-        helper:
-          "Adresse du serveur ComfyUI, ex. http://10.10.0.5:8188. ⚠️ Vide = aucun " +
-          "serveur : l'outil de génération d'image refuse explicitement, avec la " +
-          "marche à suivre. Modifiable À CHAUD : aucun redémarrage n'est nécessaire.",
-      },
-      {
-        path: "images.apiKey",
-        label: "Clé du serveur (facultative)",
-        kind: "secret",
-        helper:
-          "Uniquement si votre ComfyUI est derrière un reverse-proxy authentifié " +
-          "(envoyée en Authorization: Bearer). ⚠️ Jamais réaffichée en clair, " +
-          "jamais journalisée, jamais transmise au modèle.",
-      },
-      {
-        path: "images.width",
-        label: "Largeur demandée (pixels)",
-        kind: "number",
-        min: 64,
-        max: 4096,
-        helper:
-          "Écrite dans le nœud étiqueté YUKI_WIDTH, si le workflow en a un. Les " +
-          "workflows qui ne portent pas cette étiquette l'ignorent.",
-      },
-      {
-        path: "images.height",
-        label: "Hauteur demandée (pixels)",
-        kind: "number",
-        min: 64,
-        max: 4096,
-        helper: "Écrite dans le nœud étiqueté YUKI_HEIGHT, si le workflow en a un.",
-      },
-      {
-        path: "images.timeoutMs",
-        // ⚠️ Le libellé garde le mot « délai » (contrat d'interface vérifié par
-        // `_tools/e2e-image.mjs`) et dit ce que la valeur EST : un plafond.
-        label: "Délai maximal d'une génération — plafond de sécurité (ms)",
-        kind: "number",
-        min: 10000,
-        // ⚠️ Doit RESTER au-dessus du défaut (3 600 000) : sinon on ne peut pas
-        // régler plus haut, et un défaut au maximum serait incohérent.
-        max: 7200000,
-        // ⚠️ PAS `advanced` : dans l'onglet « Images », le plafond est un réglage
-        // d'image comme les autres — il doit être VISIBLE sans déplier « Avancé ».
-        helper:
-          "Filet de dernier recours, pas le mécanisme d'arrêt : Yuki demande à " +
-          "ComfyUI l'état de sa file et attend tant que le serveur travaille " +
-          "(une vidéo de 10 minutes passe donc, comme une génération d'une heure). " +
-          "Un travail qui DISPARAÎT de la file sans résultat est constaté en 30 " +
-          "secondes. Défaut 3 600 000 ms (1 heure), maximum 7 200 000 (2 heures). " +
-          "Au-delà de 61 minutes, relevez aussi « Durée maximale d'un job » " +
-          "(onglet Conversation, appliquée au redémarrage).",
-      },
-    ],
-  },
-];
-
-const ALL_FIELDS = GROUPS.flatMap((group) => group.fields);
-const LABELS = new Map(ALL_FIELDS.map((field) => [field.path, field.label]));
-// `tts.voice` n'est plus un champ du groupe (la bibliothèque de la zone ② en est
-// l'unique contrôle), mais son libellé reste utile pour les messages d'erreur.
-LABELS.set("tts.voice", "Voix active");
+/** `true` sur la page d'un bot (`/bots`). */
+const PAGE_BOT = PAGE === "bot";
 
 /**
- * Valeurs par défaut des champs — **miroir UI** de `src/config/schema.ts`.
- * Sert UNIQUEMENT à l'aide « Valeur par défaut : X. » et au bouton
- * « Réinitialiser au défaut ». Le reset lui-même envoie `null` au serveur (qui
- * applique SON défaut) : cette table ne fige donc rien côté serveur, elle rend
- * seulement le contrôle cohérent immédiatement. Tenir synchronisée avec le
- * schéma (aucun accès au schéma depuis le navigateur).
+ * Bot AFFICHÉ (page Bot uniquement) : renseigné par `resoudreBot()` avant le
+ * premier chargement. Sert à lire ET à écrire la configuration de CE bot.
  */
-const FIELD_DEFAULTS = {
-  "llm.light.baseUrl": "https://ollama.com/v1",
-  "llm.light.model": "gemma4:31b",
-  "llm.light.vision": "oui",
-  "llm.light.api": "openai-completions",
-  "llm.light.thinking": "off",
-  "llm.heavy.baseUrl": "https://ollama.com/v1",
-  "llm.heavy.model": "deepseek-v4.1-flash",
-  "llm.heavy.vision": "oui",
-  "llm.heavy.api": "openai-completions",
-  "llm.heavy.thinking": "high",
-  "llm.missingKeyMode": "degrade",
-  "delegation.defaultDeadlineMs": 1500,
-  "delegation.maxConcurrent": 3,
-  "delegation.maxQueue": 10,
-  "delegation.idleTimeoutMs": 120000,
-  "delegation.totalTimeoutMs": 4500000,
-  "gpu.profile": "",
-  "gpu.compatMode": "strict",
-  "gpu.minDriver": 580,
-  // ⚠️ `prompts.light` / `prompts.heavy` n'ont PAS d'entrée ici VOLONTAIREMENT :
-  // leur défaut réel est le CONTENU DU FICHIER LIVRÉ (`config/pi/system-prompt.md`),
-  // que le navigateur ne connaît pas. Il est servi par `GET /api/config`
-  // (`fields["prompts.light"].default`, voir `src/config/runtime.ts`) et c'est
-  // LUI que « Réinitialiser au défaut » réécrit. Une entrée `""` ici vidait la
-  // zone de texte : c'était le défaut signalé (« si je fais réinitialiser au
-  // défaut, c'est vide »).
-  "memory.enabled": "on",
-  "memory.recall.topK": 5,
-  "memory.recall.budgetChars": 8000,
-  "memory.recall.timeoutMs": 400,
-  "memory.extract.maxItems": 3,
-  "memory.extract.timeoutMs": 30000,
-  "memory.consolidation.enabled": "on",
-  "memory.consolidation.cron": "0 3 * * 0",
-  "memory.consolidation.timeZone": "Europe/Paris",
-  "memory.consolidation.budgetTokens": 200000,
-  "memory.consolidation.retention": 12,
-  "tts.enabled": "off",
-  "tts.engine": "chatterbox",
-  "tts.baseUrl": "http://tts:8081",
-  "tts.language": "fr",
-  "tts.emotion": "neutre",
-  "tts.speed": 100,
-  "tts.exaggeration": 500,
-  "tts.cfg": 500,
-  "tts.prefetchDepth": 2,
-  "tts.minSentenceChars": 24,
-  "tts.maxSentenceChars": 240,
-  "tts.timeoutMs": 15000,
-  "tts.volume": 100,
-  "transport.replayBuffer": 1000,
-  "transport.replayBytes": 5000000,
-  // Fuseau des horodatages (réglage `ui.timeZone`) : **UTC** par défaut, comme
-  // Mattermost — c'est ce qui rend les deux affichages corrélables.
-  "ui.timeZone": "UTC",
-  "push.enabled": "on",
-  "push.contact": "mailto:yuki@localhost",
-  "agents.serverName": "",
-  "librarian.baseUrl": "",
-  "librarian.screenshot": "on",
-  "librarian.archiveTimeoutMs": 30000,
-  "files.maxFileBytes": 2147483648,
-  "files.agentMaxBytes": 268435456,
-  "files.agentChunkBytes": 196608,
-  "files.agentTimeoutMs": 120000,
-  "files.imageMaxBytes": 3500000,
-  "files.imageMaxWireBytes": 700000,
-  "files.imageRequestBudgetBytes": 1500000,
-  "files.retentionDays": 30,
-  "files.maxAttachments": 5,
-  "files.promptChars": 12000,
-  "files.promptTotalChars": 24000,
-  "images.baseUrl": "",
-  "images.width": 1024,
-  "images.height": 1024,
-  "images.timeoutMs": 3600000,
-};
+let botCourant = null;
+/** Liste `{ id, nom, profil, actif, ordre }` des bots connus. */
+let botsConnus = [];
 
-/**
- * Onglets de la page (9 sections) et répartition des groupes de champs.
- * Le rendu reste EAGER : le contenu de chaque onglet est construit dans le DOM
- * dès le chargement ; l'onglet actif n'est qu'une question de `hidden`.
- */
-const TABS = [
-  { id: "modeles", groups: ["llm-light", "llm-heavy"] },
-  {
-    id: "conversation",
-    groups: ["delegation", "prompts", "memoire", "fichiers"],
-  },
-  // DÉCLENCHEURS (lot 26, lot 3) : onglet DÉDIÉ à la page de gestion — trois
-  // sections (permanents / temporaires / en sommeil), colonne « dernier passage »
-  // et journal replié. Le groupe `sources` est la BORNE d'injection du bloc
-  // `<sources>` ; les déclencheurs eux-mêmes vivent dans `sources.json` et sont
-  // gérés par le panneau `sources-root` (même onglet).
-  { id: "declencheurs", groups: ["sources"] },
-  { id: "personnalite", groups: [] },
-  { id: "voix", groups: ["tts"] },
-  // IMAGES générées (ComfyUI) : onglet PROPRE, nommé « Images ». Le panneau des
-  // workflows n'est plus noyé en bas de « Système » (il y était introuvable).
-  // ⚠️ Les WORKFLOWS ne sont pas des champs de configuration (fichier séparé,
-  // potentiellement volumineux) : le panneau `images-panel.js` les gère.
-  { id: "images", groups: ["images"] },
-  { id: "agents", groups: ["agents-acces"] },
-  { id: "secrets", groups: [] },
-  // « Affichage » (fuseau des horodatages) est un réglage d'INTERFACE : il vit
-  // dans « Système », jamais dans un onglet de contenu.
-  { id: "systeme", groups: ["gpu", "transport", "affichage", "librarian", "notifications"] },
-  { id: "maintenance", groups: [] },
-];
-
-/** Groupe de champs → identifiant d'onglet qui le contient. */
-const TAB_BY_GROUP = new Map();
-for (const tab of TABS) {
-  for (const groupId of tab.groups) TAB_BY_GROUP.set(groupId, tab.id);
-}
+/** Slug de bot par défaut quand l'URL en désigne un inconnu (repli silencieux). */
+const BOT_REPLI = "yuki";
 
 const state = {
   fields: {},
@@ -1033,7 +185,14 @@ const state = {
   /** Note « sans effet avec ce moteur » par champ (voir `refreshEngineFields`). */
   engineNotes: new Map(),
   healthReady: false,
+  /** `true` si au moins un contrôle de la page diffère de sa valeur enregistrée. */
+  sale: false,
 };
+
+/** Des modifications sont-elles en attente sur cette page ? */
+function estSale() {
+  return state.sale === true;
+}
 
 const tablistEl = document.querySelector('.config-tablist[role="tablist"]');
 const tabButtons = [...document.querySelectorAll('[role="tab"]')];
@@ -1074,12 +233,32 @@ const sourcesRoot = document.getElementById("sources-root");
 const chatRoot = document.getElementById("chat-root");
 /** Panneau de la personnalité — monté par id. */
 const personalityRoot = document.getElementById("personality-root");
+/** Ligne d'explication SOUS le titre (④ : où est allé ce qui a déménagé). */
+const pageLigneEl = document.getElementById("page-ligne");
+/** Bouton « ＋ » d'ajout de bot (page Bot) : modale « bientôt disponible ». */
+const botAddButton = document.getElementById("bot-add");
+/** Sélecteur de bot (page Bot) — état porté par `?b=<slug>`. */
+const botSelect = document.getElementById("bot-select");
+/** Bandeau d'honnêteté (page Bot) : ce qui n'est pas éditable pour ce bot. */
+const botNoticeEl = document.getElementById("bot-notice");
+/** Zone « Général » d'un bot (nom, slug, profil, avatar, zone de danger). */
+const botGeneralRoot = document.getElementById("bot-general-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
 let voicesPanel = null;
 /** Panneau des workflows d'images — instancié après le premier chargement. */
 let imagesPanel = null;
-/** Page de gestion des DÉCLENCHEURS — onglet « Déclencheurs ». */
+/** Page de gestion des DÉCLENCHEURS — onglet « Déclencheurs » (page Bot). */
 let sourcesPanel = null;
+
+/**
+ * Onglet qui porte chaque groupe SUR CETTE PAGE (page → groupe → onglet).
+ * Sert aux pastilles « modifications non enregistrées » et au rendu : un groupe
+ * absent de cette table n'a RIEN à faire ici (aucune clé de la portée de la
+ * page).
+ */
+const ONGLET_PAR_GROUPE = new Map(
+  groupesDePage(PAGE, GROUPS).map((group) => [group.id, group.tabs[PAGE]]),
+);
 
 function h(tag, props = {}, children = []) {
   const el = document.createElement(tag);
@@ -1430,78 +609,125 @@ function renderVoiceInstruction() {
   return block;
 }
 
-function render() {
-  const containers = new Map();
-  for (const tab of TABS) {
-    const container = document.getElementById(`group-${tab.id}`);
-    if (container) {
-      container.textContent = "";
-      containers.set(tab.id, container);
-    }
+/**
+ * ENCART DE RENVOI (④) — dit où est allé un réglage déplacé, AVEC un lien.
+ *
+ * ⚠️ Un groupe peut avoir perdu des champs au profit de l'AUTRE page (clé
+ * `mixte` : valeur commune ici, surcharge là-bas ; clé d'une autre portée :
+ * page d'en face). Sans cet encart, l'utilisateur cherche un champ qui n'est
+ * plus là et croit qu'il a disparu. `textContent` + un `<a>` : aucun markup
+ * dynamique, CSP inchangée.
+ */
+function renderRenvoi(renvoi) {
+  if (!renvoi || typeof renvoi.texte !== "string" || renvoi.texte === "") return null;
+  const block = h("p", { class: "config-helper config-renvoi" }, [renvoi.texte]);
+  const lien = renvoi.lien;
+  if (lien && typeof lien.href === "string" && lien.href !== "") {
+    block.append(" ");
+    block.append(
+      h("a", { class: "config-renvoi__lien", href: lien.href }, [lien.libelle ?? lien.href]),
+    );
   }
-  for (const group of GROUPS) {
-    const tabId = TAB_BY_GROUP.get(group.id);
-    const container = containers.get(tabId) ?? containers.get("modeles");
+  return block;
+}
+
+/**
+ * Rendu EAGER de la page courante : un conteneur `#group-<onglet>` par onglet
+ * qui porte des champs, et les champs filtrés par PORTÉE.
+ *
+ * ⚠️ Ce n'est plus « tous les groupes dans tous les onglets » : depuis la
+ * scission Instance / Bot, un groupe peut avoir des clés des deux côtés
+ * (`tts`, `memoire`, `prompts`, `notifications`). La portée de CHAQUE clé (lue
+ * dans le snapshot du serveur) décide : la page Instance ne rend que
+ * `instance`/`mixte`, la page Bot que `bot`/`mixte`. Une clé `mixte` apparaît
+ * donc UNE fois par page, jamais deux.
+ */
+function render() {
+  const scopes = scopesOfState();
+  const parOnglet = groupesParOnglet(PAGE, GROUPS);
+  const containers = new Map();
+  for (const onglet of ongletsDePage(PAGE)) {
+    const container = document.getElementById(`group-${onglet.id}`);
     if (!container) continue;
-    const section = h("section", { class: "config-group" });
-    const status = h("span", { class: "config-helper" });
-    const head = h("div", { class: "config-group__head" }, [
-      h("h2", { class: "config-group__title", text: group.title }),
-    ]);
-    if (group.role) {
-      const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
-      test.addEventListener("click", () => testConnection(group.role, status));
-      head.append(h("div", { class: "config-secret" }, [test, status]));
-    } else if (group.test === "images") {
-      // Bouton de test DÉDIÉ au serveur d'images (route `/api/images/test`) : il
-      // interroge `GET /system_stats` avec les valeurs SAISIES (pas encore
-      // enregistrées), sans rien écrire.
-      const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
-      test.addEventListener("click", () => testImagesConnection(status));
-      head.append(h("div", { class: "config-secret" }, [test, status]));
-    } else if (group.test === "librarian") {
-      // Bouton de test DÉDIÉ au libraire (route `/api/config/librarian/test`) :
-      // il appelle `GET {base}/api/librarian/status` et affiche un résultat
-      // honnête et distinct (joignable, auth refusée, web indisponible, injoignable).
-      const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
-      test.addEventListener("click", () => testLibrarianConnection(status));
-      head.append(h("div", { class: "config-secret" }, [test, status]));
+    container.textContent = "";
+    containers.set(onglet.id, container);
+  }
+  for (const [ongletId, groupes] of Object.entries(parOnglet)) {
+    const container = containers.get(ongletId);
+    // Pas de conteneur = l'onglet ne porte que des composants autonomes
+    // (Secrets, Maintenance, Plateformes…) : rien à rendre ici.
+    if (!container) continue;
+    for (const group of groupes) {
+      const champs = champsDePage(PAGE, group, scopes);
+      if (champs.length === 0) continue;
+      container.append(renderGroup(group, champs));
     }
-    section.append(head);
-    // Texte d'aide du GROUPE (une phrase) : il explique le RÔLE, jamais une clé.
-    if (typeof group.intro === "string" && group.intro !== "") {
-      section.append(
-        h("p", { class: "config-helper config-group__intro", text: group.intro }),
-      );
-    }
-    // Note de GROUPE (ex. ce qui n'est PAS réglable dans cet onglet).
-    if (group.note) {
-      section.append(h("p", { class: "config-helper config-group__note", text: group.note }));
-    }
-    // Rendu EAGER : les champs « essentiels » sont directement dans la section ;
-    // les champs `advanced` sont regroupés dans un repli `<details>` DISTINCT
-    // (classe `config-advanced`, jamais `tts-details`) — masqué, jamais retiré.
-    const advanced = [];
-    for (const field of group.fields) {
-      if (field.advanced) advanced.push(renderField(field));
-      else section.append(renderField(field));
-    }
-    if (advanced.length > 0) {
-      section.append(
-        h("details", { class: "config-advanced" }, [
-          h("summary", { class: "config-advanced__summary", text: "Avancé" }),
-          h("div", { class: "config-advanced__body" }, advanced),
-        ]),
-      );
-    }
-    if (group.voiceInstruction) {
-      section.append(renderVoiceInstruction());
-    }
-    container.append(section);
   }
   refreshVisibility();
   refreshEngineFields();
   updateDirtyIndicators();
+}
+
+/** Une section de champs (groupe) — bouton de test, aide, repli « Avancé ». */
+function renderGroup(group, champs) {
+  const section = h("section", { class: "config-group" });
+  const status = h("span", { class: "config-helper" });
+  const head = h("div", { class: "config-group__head" }, [
+    h("h2", { class: "config-group__title", text: group.title }),
+  ]);
+  if (group.role) {
+    const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
+    test.addEventListener("click", () => testConnection(group.role, status));
+    head.append(h("div", { class: "config-secret" }, [test, status]));
+  } else if (group.test === "images") {
+    // Bouton de test DÉDIÉ au serveur d'images (route `/api/images/test`) : il
+    // interroge `GET /system_stats` avec les valeurs SAISIES (pas encore
+    // enregistrées), sans rien écrire.
+    const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
+    test.addEventListener("click", () => testImagesConnection(status));
+    head.append(h("div", { class: "config-secret" }, [test, status]));
+  } else if (group.test === "librarian") {
+    // Bouton de test DÉDIÉ au libraire (route `/api/config/librarian/test`) :
+    // il appelle `GET {base}/api/librarian/status` et affiche un résultat
+    // honnête et distinct (joignable, auth refusée, web indisponible, injoignable).
+    const test = h("button", { class: "button button--ghost button--small", type: "button", text: "Tester la connexion" });
+    test.addEventListener("click", () => testLibrarianConnection(status));
+    head.append(h("div", { class: "config-secret" }, [test, status]));
+  }
+  section.append(head);
+  // Texte d'aide du GROUPE (une phrase) : il explique le RÔLE, jamais une clé.
+  if (typeof group.intro === "string" && group.intro !== "") {
+    section.append(
+      h("p", { class: "config-helper config-group__intro", text: group.intro }),
+    );
+  }
+  // Note de GROUPE (ex. ce qui n'est PAS réglable dans cet onglet).
+  if (group.note) {
+    section.append(h("p", { class: "config-helper config-group__note", text: group.note }));
+  }
+  // ENCART DE RENVOI : où est allé ce qui n'est pas ici.
+  const renvoi = renderRenvoi(group.renvoi?.[PAGE]);
+  if (renvoi) section.append(renvoi);
+  // Rendu EAGER : les champs « essentiels » sont directement dans la section ;
+  // les champs `advanced` sont regroupés dans un repli `<details>` DISTINCT
+  // (classe `config-advanced`, jamais `tts-details`) — masqué, jamais retiré.
+  const advanced = [];
+  for (const field of champs) {
+    if (field.advanced) advanced.push(renderField(field));
+    else section.append(renderField(field));
+  }
+  if (advanced.length > 0) {
+    section.append(
+      h("details", { class: "config-advanced" }, [
+        h("summary", { class: "config-advanced__summary", text: "Avancé" }),
+        h("div", { class: "config-advanced__body" }, advanced),
+      ]),
+    );
+  }
+  if (group.voiceInstruction) {
+    section.append(renderVoiceInstruction());
+  }
+  return section;
 }
 
 /**
@@ -1560,38 +786,21 @@ function refreshVisibility() {
 }
 
 /**
- * ANCRES PROFONDES : id d'un CONTRÔLE de la page → onglet qui le contient.
+ * ANCRES PROFONDES de la page — table déclarée dans `config-pages.js` (module
+ * pur, testé) : id d'un CONTRÔLE → onglet qui le contient.
  *
- * ⚠️ `/config#chat-remote-agents` doit ouvrir « Conversation » et défiler jusqu'au
- * réglage « Agents distants » : ce contrôle vit à ~5 800 px du haut, et le message de
- * refus de Yuki nomme ce chemin — sans ancre, on ne le trouve pas.
- *
- * ⚠️ DEUX ancres depuis le 2026-11-02 : « Agents distants » ET « Outils distants ».
- * Chacune ouvre « Conversation » ; elles ne désignent pas la même section, donc
- * elles ne peuvent pas partager un seul id.
- *
- * ⚠️ La correspondance se fait par ID D'ÉLÉMENT, jamais par GROUPE de champs : la
- * tentative précédente par groupe (`#group-images`) envoyait les champs dans le
- * mauvais onglet. Une ancre inconnue retombe sur le comportement d'origine (« Modèles »).
+ * ⚠️ Depuis le sous-lot 1b-4, `/bots?b=<slug>#chat-remote-agents` doit ouvrir
+ * « Plateformes » (le panneau des discussions y vit) et `#declencheurs` ouvre la
+ * page de gestion des sources. La correspondance se fait par ID D'ÉLÉMENT,
+ * jamais par GROUPE de champs. Une ancre inconnue retombe sur le premier onglet.
  */
-const ANCRES_PROFONDES = new Map([
-  [REMOTE_AGENTS_ANCHOR, "conversation"],
-  [REMOTE_TOOLS_ANCHOR, "conversation"],
-  // ⚠️ Lot 26, lot 3 — la page de gestion des déclencheurs a son onglet. Ces
-  // ancres y mènent : `#declencheurs` (lien de la boîte de notifications),
-  // `#sources` (ancien lien : on ne le casse pas) et `#journal-declencheurs`
-  // (volet journal, visé par la colonne « dernier résultat »).
-  ["declencheurs", "declencheurs"],
-  ["sources", "declencheurs"],
-  ["journal-declencheurs", "declencheurs"],
-]);
+const ANCRES_PROFONDES = new Map(
+  (ANCRES_PROFONDES_PAR_PAGE[PAGE] ?? []).map(([cle, onglet]) => [cle, onglet]),
+);
 
 /** Identifiant d'onglet valide déduit du hash courant, sinon `null`. */
 function tabFromHash() {
-  const raw = location.hash.replace(/^#/, "");
-  if (TABS.some((tab) => tab.id === raw)) return raw;
-  // Ancre profonde : c'est l'ONGLET qui la contient qui doit s'ouvrir.
-  return ANCRES_PROFONDES.get(raw) ?? null;
+  return ongletDuHash(PAGE, location.hash);
 }
 
 /**
@@ -1617,7 +826,7 @@ function revealHashTarget() {
  * peuvent dépendre d'un champ d'un autre onglet.
  */
 function activateTab(tabId, { focus = false } = {}) {
-  if (!TABS.some((tab) => tab.id === tabId)) return;
+  if (!ongletsDePage(PAGE).some((onglet) => onglet.id === tabId)) return;
   for (const button of tabButtons) {
     const active = button.getAttribute("aria-controls") === `panel-${tabId}`;
     button.setAttribute("aria-selected", active ? "true" : "false");
@@ -1633,7 +842,7 @@ function activateTab(tabId, { focus = false } = {}) {
  * (`replaceState`, donc pas d'entrée de navigation par onglet).
  */
 function selectTab(tabId, { focus = false, updateHash = false } = {}) {
-  if (!TABS.some((tab) => tab.id === tabId)) return;
+  if (!ongletsDePage(PAGE).some((onglet) => onglet.id === tabId)) return;
   activateTab(tabId, { focus });
   // Les workflows d'images peuvent avoir changé hors de cette page : on relit
   // la liste à chaque affichage de l'onglet Images (lecture seule, aucun effet
@@ -1671,8 +880,11 @@ function isFieldDirty(field) {
 function updateDirtyIndicators() {
   const dirtyTabs = new Set();
   let anyDirty = false;
-  for (const group of GROUPS) {
-    const tabId = TAB_BY_GROUP.get(group.id);
+  // ⚠️ Seuls les groupes RENDUS sur cette page comptent : les champs de l'autre
+  // page n'ont pas de contrôle ici (`isFieldDirty` renverrait `false`, mais le
+  // parcours serait trompeur si un groupe était un jour déplacé).
+  for (const group of groupesDePage(PAGE, GROUPS)) {
+    const tabId = ONGLET_PAR_GROUPE.get(group.id);
     for (const field of group.fields) {
       if (isFieldDirty(field)) {
         anyDirty = true;
@@ -1680,6 +892,7 @@ function updateDirtyIndicators() {
       }
     }
   }
+  state.sale = anyDirty;
   if (saveDirty) saveDirty.hidden = !anyDirty;
   for (const button of tabButtons) {
     const tabId = button.getAttribute("aria-controls").replace(/^panel-/, "");
@@ -1731,8 +944,19 @@ function scopesOfState() {
   return scopes;
 }
 
+/**
+ * Lit les valeurs EFFECTIVES de la page courante.
+ *
+ * - Instance : `GET /api/config` (store commun + côté instance des clés mixtes) ;
+ * - Bot : `GET /api/bots/<id>/config` (overlay du bot affiché + côté bot des
+ *   clés mixtes). Un bot inconnu répond 404 `bot_not_found` : on ne l'affiche
+ *   jamais comme un succès.
+ */
 async function load() {
-  const body = await HolafFetch.get("/api/config", {
+  const url = PAGE_BOT
+    ? cheminConfigBot(botCourant?.id ?? BOT_REPLI)
+    : "/api/config";
+  const body = await HolafFetch.get(url, {
     headers: { accept: "application/json" },
   });
   applySnapshot(body);
@@ -1774,24 +998,28 @@ async function save(flow = "config-save") {
     return false;
   }
   try {
-    // ⚠️ DEUX ÉCRITURES MAXIMUM (lot 35b, sous-lot 1b-3) : la portée de chaque
-    // champ décide de la route. Un réglage d'instance (et le côté INSTANCE d'un
-    // réglage mixte) va sur `PUT /api/config` ; un réglage propre au bot actif
-    // va sur `PUT /api/bots/<id>/config`. Envoyer une clé de bot à
-    // `/api/config` est REFUSÉ par le serveur (`bot_scoped_field`).
-    const split = splitConfigPatchByScope(buildPatch(), scopesOfState());
+    // ⚠️ UNE SEULE ÉCRITURE PAR PAGE, et sa DESTINATION dépend de la page :
+    //  - page **Instance** : `PUT /api/config` — clés `instance` et côté
+    //    INSTANCE des clés `mixte` (découpage de `config-patch.js`) ;
+    //  - page **Bot** : `PUT /api/bots/<id>/config` — TOUT le patch y va : la
+    //    page ne rend que des clés `bot`/`mixte`, et une clé `mixte` doit
+    //    écrire son côté BOT (`portee: "bot"`). Envoyer un côté bot à
+    //    `/api/config` est REFUSÉ par le serveur (`bot_scoped_field`).
+    const patch = buildPatch();
     const ecritures = [];
-    if (Object.keys(split.instance).length > 0 || Object.keys(split.bot).length === 0) {
+    if (PAGE_BOT) {
       ecritures.push({
-        url: "/api/config",
-        body: split.instance,
+        url: cheminConfigBot(botCourant?.id ?? BOT_REPLI),
+        body: patch,
       });
-    }
-    if (Object.keys(split.bot).length > 0) {
-      ecritures.push({
-        url: cheminConfigBot(await idBotActif()),
-        body: split.bot,
-      });
+    } else {
+      const split = splitConfigPatchByScope(patch, scopesOfState());
+      if (Object.keys(split.instance).length > 0 || Object.keys(split.bot).length === 0) {
+        ecritures.push({
+          url: "/api/config",
+          body: split.instance,
+        });
+      }
     }
     let body = null;
     const applied = { hot: [], restart: [] };
@@ -2053,6 +1281,7 @@ async function restart() {
 }
 
 function setPill(el, ok, onText, offText) {
+  if (!el) return;
   el.textContent = ok ? onText : offText;
   el.classList.toggle("pill--online", ok);
   el.classList.toggle("pill--offline", !ok);
@@ -2064,6 +1293,10 @@ function updateAvailability() {
   setPill(heavyPill, heavyKey, "clé lourde OK", "clé lourde manquante");
   const conversationOk = lightKey && state.healthReady;
   setPill(readyPill, conversationOk, "prêt", "non prêt");
+  // ⚠️ Les pastilles et le bandeau de disponibilité n'existent que sur la page
+  // Instance : la page Bot n'affiche pas la préparation du gateway (elle est
+  // commune aux deux pages, donc sans objet par bot).
+  if (!availabilityEl) return;
   if (!lightKey) {
     availabilityEl.textContent =
       "La conversation est indisponible — saisissez une clé LLM légère ci-dessous.";
@@ -2091,19 +1324,273 @@ async function pollHealth() {
   } catch {
     state.healthReady = false;
   }
-  if (!state.healthReady && state.status.lightKey) {
-    availabilityEl.textContent =
-      "Le service n'est pas encore prêt (profil GPU ou PiHost). Vérifiez /health.";
-    availabilityEl.hidden = false;
-    availabilityEl.className = "config-banner config-banner--warn";
-  } else if (state.healthReady) {
-    availabilityEl.hidden = true;
+  if (availabilityEl) {
+    if (!state.healthReady && state.status.lightKey) {
+      availabilityEl.textContent =
+        "Le service n'est pas encore prêt (profil GPU ou PiHost). Vérifiez /health.";
+      availabilityEl.hidden = false;
+      availabilityEl.className = "config-banner config-banner--warn";
+    } else if (state.healthReady) {
+      availabilityEl.hidden = true;
+    }
   }
   updateAvailability();
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * PAGE BOT — sélecteur, identité et honnêteté sur ce qui n'est pas éditable
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Résout le bot AFFICHÉ depuis `?b=<slug>`.
+ *
+ * ⚠️ Un slug INCONNU retombe sur `yuki` SANS erreur visible : une URL partagée
+ * qui désigne un bot supprimé doit rester utilisable (elle ouvre le bot
+ * historique), pas afficher un écran mort. Sans `?b=`, on prend le bot ACTIF
+ * (c'est lui que l'instance utilise réellement).
+ */
+async function resoudreBot() {
+  botsConnus = await listerBots();
+  const demande = new URLSearchParams(location.search).get("b");
+  const parId = (id) => botsConnus.find((bot) => bot.id === id) ?? null;
+  const actif = botsConnus.find((bot) => bot.actif === true) ?? null;
+  let choisi;
+  if (typeof demande === "string" && demande !== "") {
+    choisi = parId(demande) ?? parId(BOT_REPLI) ?? actif ?? botsConnus[0] ?? null;
+  } else {
+    choisi = actif ?? parId(BOT_REPLI) ?? botsConnus[0] ?? null;
+  }
+  botCourant = choisi;
+  if (botCourant) {
+    // ⚠️ L'URL est RÉÉCRITE avec le bot effectivement affiché : elle reste
+    // partageable et un rechargement retombe sur le même bot.
+    const url = new URL(location.href);
+    url.searchParams.set("b", botCourant.id);
+    history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+  return botCourant;
+}
+
+/** `true` si le bot affiché est le bot ACTIF de l'instance. */
+function botAfficheEstActif() {
+  if (!botCourant) return false;
+  const actif = botsConnus.find((bot) => bot.actif === true);
+  return Boolean(actif && actif.id === botCourant.id);
+}
+
+/** URL de la page d'un bot (état partageable, rechargement sûr). */
+function urlBot(botId, hash = "") {
+  return `/bots?b=${encodeURIComponent(botId)}${hash}`;
+}
+
+/** Une ligne « libellé : valeur » en LECTURE SEULE (identité du bot). */
+function ligneLecture(texte, valeur) {
+  const row = h("div", { class: "config-row bot-info" });
+  row.append(h("span", { class: "config-label", text: texte }));
+  row.append(h("span", { class: "bot-info__valeur", text: valeur }));
+  return row;
+}
+
+/**
+ * Zone « Général » d'un bot : nom, slug, profil, avatar et zone de danger.
+ *
+ * ⚠️ LECTURE SEULE et AUCUN bouton de suppression : renommer ou supprimer un
+ * bot doit déplacer ses dossiers, ses chemins et ses conversations. Le faire à
+ * moitié laisserait une instance incohérente — c'est un lot ultérieur, et la
+ * zone de danger le DIT au lieu de proposer un bouton inerte.
+ */
+function renderBotGeneral() {
+  if (!botGeneralRoot) return;
+  botGeneralRoot.textContent = "";
+  const bot = botCourant;
+  if (!bot) {
+    botGeneralRoot.append(
+      h("p", { class: "config-helper", text: "Aucun bot lisible : la liste des bots est indisponible." }),
+    );
+    return;
+  }
+  const identite = h("section", { class: "config-group" });
+  identite.append(
+    h("div", { class: "config-group__head" }, [
+      h("h2", { class: "config-group__title", text: "Identité du bot" }),
+    ]),
+  );
+  identite.append(
+    h("p", {
+      class: "config-helper",
+      text:
+        "Informations en LECTURE SEULE. Renommer un bot, changer son profil ou " +
+        "son avatar depuis cette page arrive dans un lot ultérieur : ces " +
+        "changements déplacent les dossiers et les chemins du bot.",
+    }),
+  );
+  identite.append(ligneLecture("Nom", bot.nom ?? bot.id));
+  identite.append(ligneLecture("Identifiant (slug)", bot.id));
+  identite.append(ligneLecture("Profil", bot.profil ?? "—"));
+  identite.append(ligneLecture("État", bot.actif === true ? "actif" : "inactif"));
+  const avatarRow = h("div", { class: "config-row bot-info" });
+  avatarRow.append(h("span", { class: "config-label", text: "Avatar" }));
+  const avatar = h("img", {
+    class: "bot-avatar",
+    src: "/avatar",
+    alt: "Avatar de Yuki",
+    width: "64",
+    height: "64",
+  });
+  // Aucun avatar déposé ⇒ `/avatar` répond 404 : on l'annonce en texte plutôt
+  // que de laisser une image cassée (aucun style inline, CSP inchangée).
+  avatar.addEventListener("error", () => {
+    avatar.hidden = true;
+    remplacement.hidden = false;
+  });
+  const remplacement = h("span", {
+    class: "bot-info__valeur",
+    text: "aucun avatar (flocon par défaut)",
+    hidden: "hidden",
+  });
+  avatarRow.append(avatar, remplacement);
+  identite.append(avatarRow);
+  botGeneralRoot.append(identite);
+
+  const danger = h("section", { class: "config-group bot-danger" });
+  danger.append(
+    h("div", { class: "config-group__head" }, [
+      h("h2", { class: "config-group__title", text: "Zone de danger" }),
+    ]),
+  );
+  danger.append(
+    h("p", {
+      class: "config-helper",
+      text:
+        "La suppression d'un bot n'est PAS disponible ici : elle doit d'abord " +
+        "archiver ses données et réaffecter ses conversations et ses " +
+        "déclencheurs. Elle arrive dans un lot ultérieur — aucun bouton n'est " +
+        "affiché tant que ce n'est pas vrai.",
+    }),
+  );
+  botGeneralRoot.append(danger);
+}
+
+/**
+ * Bandeau d'HONNÊTETÉ : les sections qui lisent encore le bot ACTIF
+ * (personnalité, voix, plateformes, déclencheurs) ne sont pas éditables pour un
+ * autre bot. Mieux vaut le dire que d'enregistrer au mauvais endroit.
+ */
+function afficherBandeauBot() {
+  if (!botNoticeEl) return;
+  if (!botCourant || botAfficheEstActif()) {
+    botNoticeEl.hidden = true;
+    botNoticeEl.textContent = "";
+    return;
+  }
+  const actif = botsConnus.find((bot) => bot.actif === true);
+  botNoticeEl.hidden = false;
+  botNoticeEl.textContent =
+    `Ce bot n'est pas le bot ACTIF de l'instance (${actif?.id ?? "aucun"}). ` +
+    "Ses réglages de configuration s'affichent et s'enregistrent bien sur LUI, " +
+    "mais la personnalité, la voix, les plateformes et les déclencheurs restent " +
+    "ceux du bot actif : ils ne sont donc pas modifiables ici (leur édition par " +
+    "bot est un lot ultérieur).";
+}
+
+/**
+ * Modale à TROIS CHOIX (HolafModal) — jamais une confirmation native du
+ * navigateur.
+ * Résout `"enregistrer" | "abandonner" | "rester"` ; une fermeture par ✕ ou
+ * Échap vaut « rester » (choix sûr : on ne perd rien, on ne change rien).
+ */
+function ouvrirChoix(spec) {
+  return new Promise((resolve) => {
+    const contenu = h("div", {}, [
+      h("p", { class: "holaf-modal-message", text: spec.message }),
+    ]);
+    HolafModal.open({
+      title: spec.titre,
+      size: "sm",
+      content: contenu,
+      buttons: spec.boutons.map((bouton) => ({
+        text: bouton.text,
+        value: bouton.value,
+        type: bouton.type,
+        guard: false,
+        autoFocus: bouton.value === "enregistrer",
+      })),
+      closeOnOverlay: false,
+      _onResolve: (valeur) => resolve(typeof valeur === "string" ? valeur : "rester"),
+    });
+  });
+}
+
+/**
+ * Changement de bot depuis le sélecteur — l'URL est l'ÉTAT (`?b=<slug>`).
+ *
+ * ⚠️ Des modifications non enregistrées ouvrent une modale à TROIS CHOIX :
+ * enregistrer, abandonner, ou RESTER sur le bot courant. On ne jette JAMAIS une
+ * saisie en silence, et on ne change jamais de bot sans le dire.
+ */
+async function changerDeBot(cible) {
+  if (!botSelect) return;
+  const id = typeof cible === "string" ? cible : "";
+  if (id === "" || id === botCourant?.id) {
+    botSelect.value = botCourant?.id ?? "";
+    return;
+  }
+  const demande = demandeChangementBot({
+    sale: estSale(),
+    botActuel: botCourant?.id,
+    botVise: id,
+  });
+  if (demande) {
+    // ⚠️ Le sélecteur REVIENT tout de suite sur le bot affiché : tant que la
+    // question n'est pas tranchée, on ne montre pas un bot qu'on n'a pas ouvert.
+    botSelect.value = botCourant?.id ?? "";
+    const choix = await ouvrirChoix(demande);
+    if (choix === "rester") return;
+    if (choix === "enregistrer") {
+      const ok = await save("changement-bot");
+      if (!ok) {
+        // L'enregistrement a échoué : on reste, l'erreur est affichée.
+        botSelect.value = botCourant?.id ?? "";
+        return;
+      }
+    }
+    // « abandonner » : rien n'est écrit, la navigation jette les saisies.
+  }
+  // Navigation COMPLÈTE : l'état de l'autre bot est relu de zéro (aucun
+  // résidu de formulaire de l'ancien bot).
+  location.assign(urlBot(id, location.hash));
+}
+
+/** Remplit le sélecteur de bot et l'ouvre sur le bot affiché. */
+function cablerSelecteurBot() {
+  if (!botSelect) return;
+  botSelect.textContent = "";
+  for (const bot of botsConnus) {
+    const libelle = bot.nom && bot.nom !== bot.id ? `${bot.nom} (${bot.id})` : bot.id;
+    const option = h("option", { value: bot.id, text: libelle });
+    if (bot.id === botCourant?.id) option.selected = true;
+    botSelect.append(option);
+  }
+  botSelect.disabled = botsConnus.length === 0;
+  botSelect.addEventListener("change", () => void changerDeBot(botSelect.value));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * CÂBLAGE
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
 saveButton.addEventListener("click", () => void save());
-restartButton.addEventListener("click", () => void restart());
+// Le redémarrage n'existe que sur la page Instance (onglet Maintenance).
+if (restartButton) restartButton.addEventListener("click", () => void restart());
+
+if (botAddButton) {
+  // ⚠️ « ＋ » : l'écran d'AJOUT est un lot ultérieur. La modale le DIT — elle ne
+  // crée rien et ne promet rien.
+  botAddButton.addEventListener("click", () => {
+    const spec = modaleAjoutBot();
+    void HolafModal.alert(spec.titre, spec.message, { okText: spec.okText });
+  });
+}
 
 // Navigation par onglets : clic, clavier (flèches + Home/End, activation au
 // focus), et hash (`#voix`, etc.) pour les liens directs et back/forward.
@@ -2138,22 +1625,46 @@ if (tablistEl) {
   });
 }
 window.addEventListener("hashchange", () => {
-  selectTab(tabFromHash() ?? "modeles");
+  selectTab(tabFromHash() ?? premierOnglet());
   revealHashTarget();
 });
 
-// Onglet initial : celui du hash, sinon « Modèles ». Appliqué avant le
-// chargement des données pour que le bon panneau soit visible sans latence.
-selectTab(tabFromHash() ?? "modeles");
+/** Onglet d'ouverture par défaut : le premier de la page (Instance : Modèles). */
+function premierOnglet() {
+  return ongletsDePage(PAGE)[0]?.id ?? "modeles";
+}
+
+// Ligne d'explication SOUS le titre (④) : elle dit où est allé ce qui a
+// déménagé. Une seule source de vérité (`config-pages.js`).
+if (pageLigneEl) pageLigneEl.textContent = ligneDePage(PAGE);
+
+// Onglet initial : celui du hash, sinon le premier de la page. Appliqué avant
+// le chargement des données pour que le bon panneau soit visible sans latence.
+selectTab(tabFromHash() ?? premierOnglet());
 
 void (async () => {
   try {
+    // PAGE BOT : le bot affiché doit être connu AVANT toute lecture ou écriture
+    // (c'est lui qui décide de la route `GET/PUT /api/bots/<id>/config`).
+    if (PAGE_BOT) {
+      await resoudreBot();
+      cablerSelecteurBot();
+      renderBotGeneral();
+      afficherBandeauBot();
+      selectTab(tabFromHash() ?? premierOnglet());
+    }
     await load();
     await pollHealth();
     // Un seul lecteur Web Audio est partagé (voix + assistant) : la lecture
     // nécessite un geste utilisateur, on `resume()` le contexte au clic.
     const player = createTtsPlayer();
-    if (voicesRoot) {
+    // ⚠️ Les composants autonomes qui lisent le bot ACTIF (personnalité, voix,
+    // plateformes, déclencheurs) ne sont montés que si le bot affiché EST le bot
+    // actif : sinon ils afficheraient les données d'un autre bot et
+    // enregistreraient chez lui (`bots-api.js` : `idBotActif`). Le bandeau
+    // `#bot-notice` explique l'absence.
+    const panneauxDuBotActif = !PAGE_BOT || botAfficheEstActif();
+    if (voicesRoot && panneauxDuBotActif) {
       voicesPanel = initVoicesPanel({
         root: voicesRoot,
         HolafFetch,
@@ -2174,7 +1685,7 @@ void (async () => {
     // id. La zone ① (bandeau d'état) vit dans `#tts-assistant-root` et la zone
     // ⑤ (technique repliée) dans `#tts-engine-root` : deux emplacements, UN
     // SEUL composant, jamais dupliqué.
-    if (ttsAssistantRoot) {
+    if (panneauxDuBotActif && ttsAssistantRoot) {
       initTtsAssistant(ttsAssistantRoot, {
         HolafFetch,
         HolafModal,
@@ -2194,34 +1705,34 @@ void (async () => {
     // Section « Mot de passe d'instance » : UN SEUL mot de passe pour toute
     // l'instance (haché scrypt), qui déverrouille les agents « matériel
     // sensible ». Aucune valeur n'est jamais réaffichée.
-    if (instancePasswordRoot) {
+    if (panneauxDuBotActif && instancePasswordRoot) {
       initInstancePasswordPanel({ root: instancePasswordRoot, HolafFetch, HolafModal });
     }
     // Panneau des agents d'exécution (Lot 4, B5) : liste, état, niveau,
     // privilège, « matériel sensible » (verrou), suppression (HolafModal) et
     // validations en attente.
-    if (agentsRoot) {
+    if (panneauxDuBotActif && agentsRoot) {
       initAgentsPanel({ root: agentsRoot, HolafFetch, HolafModal });
     }
     // Panneau des secrets : coffre chiffré (noms seulement), ajout/modification/
     // suppression à chaud. Aucune valeur n'est jamais réaffichée.
-    if (secretsRoot) {
+    if (panneauxDuBotActif && secretsRoot) {
       initSecretsPanel({ root: secretsRoot, HolafFetch, HolafModal });
     }
     // Panneau des IMAGES générées : import des workflows (format API), étiquettes
     // trouvées / manquantes, « par défaut », suppression. Composant autonome.
-    if (imagesRoot) {
+    if (panneauxDuBotActif && imagesRoot) {
       imagesPanel = initImagesPanel({ root: imagesRoot, HolafFetch, HolafModal });
     }
     // Panneau des SOURCES : programmes extérieurs autorisés à réveiller Yuki
     // (nom + jeton du coffre + trois réglages indépendants + consigne libre).
     // ⚠️ Le jeton n'est affiché qu'UNE fois, à sa création.
-    if (sourcesRoot) {
+    if (panneauxDuBotActif && sourcesRoot) {
       sourcesPanel = initSourcesPanel({ root: sourcesRoot, HolafFetch, HolafModal });
     }
     // Panneau « Discussions » (Mattermost, Discord) : jeton saisi une fois, état de la
     // connexion, backfill 2 semaines, canaux suivis. Composant autonome monté par id.
-    if (chatRoot) {
+    if (panneauxDuBotActif && chatRoot) {
       initChatPanel({
         root: chatRoot,
         HolafModal,
@@ -2236,7 +1747,7 @@ void (async () => {
     }
     // Panneau de la personnalité : édition, enregistrement, retour arrière,
     // historique. Composant autonome monté par id.
-    if (personalityRoot) {
+    if (panneauxDuBotActif && personalityRoot) {
       initPersonalityPanel({ root: personalityRoot, HolafFetch, HolafModal });
     }
     setInterval(() => void pollHealth(), 5000);

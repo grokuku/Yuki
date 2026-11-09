@@ -41,6 +41,15 @@ const gate = runGate(
  */
 const comfyDir = mkdtempSync(join(tmpdir(), "yuki-static-ui-comfy-"));
 
+/**
+ * ⚠️ DEUX PAGES depuis le sous-lot 1b-4 (scission Instance / Bot) :
+ *   - `/config` = les réglages COMMUNS (7 onglets) ;
+ *   - `/bots`   = les réglages d'UN bot (6 onglets, `?b=<slug>`).
+ * Le CATALOGUE des champs a quitté `config.js` pour `config-fields.js` (module
+ * pur, testable sans navigateur) : les assertions de libellé le visent là-bas.
+ */
+const CATALOGUE = "/ui/config-fields.js";
+
 const server = createServer({
   env,
   report: gate.report,
@@ -168,23 +177,21 @@ describe("UI statique servie par le gateway", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
-  it("organise /config en 10 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
+  it("la page INSTANCE organise /config en 7 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
 
     // Barre d'onglets accessible.
     expect(body).toContain('role="tablist"');
     expect(body).toMatch(/role="tablist"[^>]*aria-label="/);
 
-    // Les 10 libellés d'onglets validés, dans l'ordre, portés par des role="tab".
-    // ⚠️ « Déclencheurs » (lot 26, lot 3) est le 10ᵉ : la page de gestion des
-    // sources n'est plus enterrée en bas de « Conversation ».
+    // Les 7 libellés de la page INSTANCE, dans l'ordre, portés par des role="tab".
+    // ⚠️ « Conversation », « Déclencheurs », « Personnalité » et « Voix » ont
+    // QUITTÉ cette page (sous-lot 1b-4) : « Conversation » a éclaté en
+    // « Exécution » (délégation + fichiers), le reste vit sur `/bots`.
     const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
     expect(tabLabels).toEqual([
       "Modèles",
-      "Conversation",
-      "Déclencheurs",
-      "Personnalité",
-      "Voix",
+      "Exécution",
       "Images",
       "Agents",
       "Secrets",
@@ -197,8 +204,8 @@ describe("UI statique servie par le gateway", () => {
     // (aria-labelledby).
     const tabTags = [...body.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
     const panelTags = [...body.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((m) => m[0]);
-    expect(tabTags.length).toBe(10);
-    expect(panelTags.length).toBe(10);
+    expect(tabTags.length).toBe(7);
+    expect(panelTags.length).toBe(7);
     for (const tag of tabTags) {
       const id = tag.match(/id="([^"]+)"/)?.[1];
       const controls = tag.match(/aria-controls="([^"]+)"/)?.[1];
@@ -215,7 +222,9 @@ describe("UI statique servie par le gateway", () => {
     // Rendu EAGER : les conteneurs de groupes des onglets existent dans le
     // markup (les lignes sont construites côté JS au chargement). Le panneau
     // Agents monte son composant dans `agents-root`.
-    for (const id of ["group-modeles", "group-conversation", "group-voix", "group-images", "images-root", "group-systeme", "agents-root", "personality-root", "secrets-root"]) {
+    // ⚠️ `personality-root` et `voices-root` ont QUITTÉ cette page : ils vivent
+    // dans `bots.html` (onglets « Personnalité » et « Voix » de la page du bot).
+    for (const id of ["group-modeles", "group-execution", "group-images", "images-root", "group-systeme", "agents-root", "secrets-root", "tts-assistant-root"]) {
       expect(body).toContain(`id="${id}"`);
     }
 
@@ -227,12 +236,62 @@ describe("UI statique servie par le gateway", () => {
     expect(body).toContain("Modifications non enregistrées");
 
     // Les ids historiques restent présents (tests/E2E s'y appuient).
-    for (const id of ["groups", "voices-root", "applied", "restart", "availability", "global-error"]) {
+    for (const id of ["groups", "applied", "restart", "availability", "global-error"]) {
       expect(body).toContain(`id="${id}"`);
     }
 
     // CSP : toujours aucun style inline dans le markup des onglets.
     expect(body).not.toMatch(/\sstyle=/);
+  });
+
+  it("la page BOT (/bots) est servie avec les mêmes gardes et 6 onglets", async () => {
+    const response = await fetch(`${baseUrl}/bots`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    const body = await response.text();
+
+    // ⚠️ La page se DÉCLARE comme page de bot : c'est ce que lit `config.js`
+    // pour choisir ses onglets, ses groupes et sa route d'écriture.
+    expect(body).toContain('data-config-page="bot"');
+    expect(body).toContain("/ui/config.js");
+
+    // Les 6 libellés de la page BOT, dans l'ordre.
+    const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
+    expect(tabLabels).toEqual([
+      "Général",
+      "Personnalité",
+      "Voix",
+      "Mémoire",
+      "Plateformes",
+      "Déclencheurs",
+    ]);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(6);
+    expect([...body.matchAll(/role="tabpanel"/g)].length).toBe(6);
+
+    // Sélecteur de bot (③) : `<select>` natif + bouton « ＋ » (modale « bientôt
+    // disponible » — l'écran d'ajout est un lot ultérieur).
+    expect(body).toContain('id="bot-select"');
+    expect(body).toContain('id="bot-add"');
+    // Les composants autonomes qui lisent le bot ACTIF sont montés ici.
+    for (const id of ["bot-general-root", "personality-root", "voices-root", "chat-root", "sources-root"]) {
+      expect(body, id).toContain(`id="${id}"`);
+    }
+    // Conteneurs des groupes (rendu EAGER).
+    for (const id of ["group-general", "group-personnalite", "group-voix", "group-memoire"]) {
+      expect(body, id).toContain(`id="${id}"`);
+    }
+    // Un SEUL enregistrement global, la même barre persistante.
+    expect(body.match(/id="save"/g)?.length).toBe(1);
+    expect(body).toContain('id="save-dirty"');
+    // CSP : aucun style inline.
+    expect(body).not.toMatch(/\sstyle=/);
+
+    // La page Instance reste servie et garde son marqueur.
+    const instance = await (await fetch(`${baseUrl}/config`)).text();
+    expect(instance).toContain('data-config-page="instance"');
   });
 
   it("HEAD / répond sans corps", async () => {
@@ -442,9 +501,14 @@ describe("UI TTS (Lot C) — assets, contrôle topbar et panneau des voix", () =
     expect(js).not.toMatch(/new Audio\(|<audio/);
   });
 
-  it("monte le panneau des voix sur /config (racine + appel /api/voices)", async () => {
-    const body = await (await fetch(`${baseUrl}/config`)).text();
+  it("monte le panneau des voix sur la page du BOT (racine + appel /api/voices)", async () => {
+    // ⚠️ La voix est un réglage PAR BOT : depuis le sous-lot 1b-4 elle a quitté
+    // `/config` pour l'onglet « Voix » de `/bots`.
+    const body = await (await fetch(`${baseUrl}/bots`)).text();
     expect(body).toContain('id="voices-root"');
+    expect(body).toContain('id="panel-voix"');
+    const instance = await (await fetch(`${baseUrl}/config`)).text();
+    expect(instance).not.toContain('id="voices-root"');
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     expect(js).toContain("initVoicesPanel");
     const panel = await (await fetch(`${baseUrl}/ui/voices-panel.js`)).text();
@@ -468,11 +532,16 @@ describe("Assistant de mise en route du TTS (Lot 8)", () => {
 
     const body = await (await fetch(`${baseUrl}/config`)).text();
     // Conteneur de montage (composant autonome monté par id) + feuille de style.
+    // ⚠️ Les zones ① (état) et ⑤ (moteur) de l'assistant restent sur la page
+    // INSTANCE (onglet Système) : le MOTEUR est commun ; la VOIX est par bot.
     expect(body).toContain('id="tts-assistant-root"');
+    expect(body).toContain('id="tts-engine-root"');
     expect(body).toContain("/ui/tts-assistant.css");
-    // La structure d'onglets et les ids existants restent intacts.
-    expect(body).toContain('id="voices-root"');
-    expect(body).toContain('id="panel-voix"');
+    expect(body).toContain('id="panel-systeme"');
+    // La bibliothèque des voix, elle, est sur la page du bot.
+    const bots = await (await fetch(`${baseUrl}/bots`)).text();
+    expect(bots).toContain('id="voices-root"');
+    expect(bots).toContain('id="panel-voix"');
     // CSP : toujours aucun style inline dans le markup.
     expect(body).not.toMatch(/\sstyle=/);
   });
@@ -516,12 +585,13 @@ describe("Assistant de mise en route du TTS (Lot 8)", () => {
 describe("Onglet Voix simplifié — structure, doublons et place réservée (refonte UX)", () => {
   it("regroupe les champs techniques dans un repli `config-advanced` distinct (zone ④)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
     // Repli « Avancé » avec une classe DISTINCTE de `tts-details`.
     expect(js).toContain("config-advanced");
     expect(js).toContain('text: "Avancé"');
     expect(js).not.toContain('class: "tts-details"');
-    // Titre de la zone ③.
-    expect(js).toContain("Réglages de la voix");
+    // Titre de la zone ③ (déclaré dans le CATALOGUE, pas dans le rendu).
+    expect(champs).toContain("Réglages de la voix");
     // Les libellés validés (les mots-clés des sélecteurs E2E restent présents).
     for (const label of [
       "Activer la voix",
@@ -533,15 +603,17 @@ describe("Onglet Voix simplifié — structure, doublons et place réservée (re
       "Contrôle de guidage (CFG)",
       "Adresse du moteur (avancé)",
     ]) {
-      expect(js, label).toContain(label);
+      expect(champs, label).toContain(label);
     }
   });
 
   it("`tts.voice` n'est plus un champ texte (le select de la bibliothèque est l'unique contrôle)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     expect(js).not.toContain("Voix (identifiant du registre)");
-    // Le libellé reste connu pour les messages (pastille/erreurs).
-    expect(js).toContain('LABELS.set("tts.voice"');
+    // Le libellé reste connu pour les messages (pastille/erreurs) — dans le
+    // CATALOGUE, qui a quitté `config.js` au sous-lot 1b-4.
+    const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
+    expect(champs).toContain('LABELS.set("tts.voice"');
     // Le panneau des voix reste l'unique écrivain immédiat de `tts.voice`.
     const panel = await (await fetch(`${baseUrl}/ui/voices-panel.js`)).text();
     expect(panel).toContain('body: { "tts.voice": id ?? "" }');
@@ -608,14 +680,17 @@ describe("Onglet Voix simplifié — structure, doublons et place réservée (re
 
   it("généralise « Réinitialiser au défaut » et affiche la valeur par défaut", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
     expect(js).toContain("FIELD_DEFAULTS");
+    expect(champs).toContain("FIELD_DEFAULTS");
     expect(js).toContain('text: "Réinitialiser au défaut"');
     expect(js).toContain("Valeur par défaut :");
     expect(js).toContain("surcharge le défaut :");
     // Généralisé à TOUS les groupes (plus seulement les textarea).
     expect(js).toContain("function resetField(");
-    expect(js).toContain('"gpu.minDriver": 580');
-    expect(js).toContain('"tts.speed": 100');
+    // Le miroir des défauts a suivi le catalogue (`config-fields.js`).
+    expect(champs).toContain('"gpu.minDriver": 580');
+    expect(champs).toContain('"tts.speed": 100');
   });
 });
 
@@ -734,15 +809,18 @@ describe("Icônes SVG colorables (currentColor / --icon-color)", () => {
 });
 
 describe("Instruction de voix visible dans /config (volet 1 — chat oral)", () => {
-  it("config.js affiche le bloc LECTURE SEULE dans l'onglet Conversation", async () => {
+  it("config.js affiche le bloc LECTURE SEULE dans le groupe des prompts", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     // Rendu du bloc + alimentation par le serveur (texte réellement injecté).
     expect(js).toContain("renderVoiceInstruction");
     expect(js).toContain("voiceInstruction");
     expect(js).toContain("config-voice-instruction__text");
-    // Placé dans le groupe des prompts (onglet Conversation).
-    expect(js).toContain('id: "prompts"');
-    expect(js).toContain("conversation");
+    // Placé dans le groupe des prompts. ⚠️ Depuis le sous-lot 1b-4 ce groupe est
+    // rendu sur l'onglet « Modèles » de la page INSTANCE (valeur COMMUNE) et sur
+    // l'onglet « Personnalité » de la page du BOT (surcharge).
+    const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
+    expect(champs).toContain('id: "prompts"');
+    expect(champs).toContain('tabs: { instance: "modeles", bot: "personnalite" }');
     // Explicitement conditionné à la voix active.
     expect(js).toContain("tts.enabled = on");
   });
@@ -866,45 +944,54 @@ describe("Panneau Personnalité — section « Règles strictes » (éditées pa
     }
   });
 
-  it("le markup /config garde exactement 10 onglets (aucun onglet Règles ajouté)", async () => {
+  it("le markup de la page Instance garde exactement 7 onglets (aucun onglet Règles ajouté)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    // 9 onglets historiques + « Déclencheurs » (lot 26, lot 3) : aucun autre.
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(10);
-    expect(body).toContain('id="personality-root"');
+    // ⚠️ 7 onglets depuis la scission Instance / Bot (sous-lot 1b-4) : aucun autre.
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    // Le panneau de la personnalité a quitté /config pour la page du BOT : le
+    // contenu (règles, archive, mémoire) reste livré, mais sur `/bots`.
+    const bots = await (await fetch(`${baseUrl}/bots`)).text();
+    expect(bots).toContain('id="personality-root"');
+    expect(bots).toContain('id="tab-personnalite"');
     expect(body).not.toMatch(/\sstyle=/);
   });
 });
 
 describe("Libraire de Pi-Web — section /config et test de connexion (sans nouvel onglet)", () => {
-  it("ajoute la section « Libraire » à l'onglet Système existant (10 onglets inchangés)", async () => {
+  it("ajoute la section « Libraire » à l'onglet Système existant (7 onglets, aucun ajouté)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
-    // Groupe de champs dans l'onglet Système (aucun nouvel onglet).
-    expect(js).toContain('id: "librarian"');
+    const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
+    // Groupe de champs dans l'onglet Système (aucun nouvel onglet). ⚠️ Le
+    // catalogue a quitté `config.js` : il est servi par `config-fields.js`.
+    expect(champs).toContain('id: "librarian"');
+    expect(champs).toContain('tabs: { instance: "systeme" }');
     // ⚠️ Le groupe « notifications » (PWA + Web Push) et le groupe « affichage »
     // (fuseau des horodatages, `ui.timeZone`) ont rejoint l'onglet Système ; la
-    // section « Images » (ComfyUI) a désormais son ONGLET PROPRE.
-    expect(js).toContain(
-      'groups: ["gpu", "transport", "affichage", "librarian", "notifications"]',
-    );
+    // section « Images » (ComfyUI) a son ONGLET PROPRE. Le rattachement se lit
+    // désormais dans `config-pages.js` (7 onglets de la page Instance).
+    expect(js).toContain("groupesParOnglet(PAGE, GROUPS)");
     for (const path of ["librarian.baseUrl", "librarian.agentToken", "librarian.apiKey"]) {
-      expect(js, path).toContain(`path: "${path}"`);
+      expect(champs, path).toContain(`path: "${path}"`);
     }
-    // Aide en français : les TROIS cas réseau.
-    expect(js).toContain("http://pi-web:3000");
-    expect(js).toContain("http://<ip>:3005");
-    expect(js).toContain("https://pi.holaf.fr");
+    // Aide en français : les TROIS cas réseau (déclarés dans le CATALOGUE).
+    expect(champs).toContain("http://pi-web:3000");
+    expect(champs).toContain("http://<ip>:3005");
+    expect(champs).toContain("https://pi.holaf.fr");
     // Bouton « Tester la connexion » : route dédiée, résultat servi par le serveur.
     expect(js).toContain("testLibrarianConnection");
     expect(js).toContain("/api/config/librarian/test");
-    expect(js).toContain('test: "librarian"');
+    expect(champs).toContain('test: "librarian"');
     // CSP stricte : aucune injection HTML, aucun style inline.
     expect(js).not.toContain("innerHTML");
     expect(js).not.toContain(".style.");
     expect(js).not.toContain('setAttribute("style"');
-    // Le markup garde exactement 10 onglets (verrou existant, « Déclencheurs » inclus).
+    // Le markup garde exactement 7 onglets (verrou de la page Instance).
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(10);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
     expect(body).toContain('id="group-systeme"');
+    // La borne d'injection des sources est un réglage COMMUN (portée instance) :
+    // elle vit dans « Système », avec un renvoi vers la page du bot.
+    expect(champs).toContain('path: "sources.promptTotalChars"');
   });
 });
 
@@ -924,32 +1011,39 @@ describe("Images générées (ComfyUI) — onglet dédié « Images » et servic
     const images = body.slice(body.indexOf('id="panel-images"'), body.indexOf('id="panel-agents"'));
     expect(images).toContain('id="group-images"');
     expect(images).toContain('id="images-root"');
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(10);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
     // CSP : aucun style inline dans le markup.
     expect(body).not.toMatch(/\sstyle=/);
   });
 
   it("le groupe de champs « images » est rattaché à l'onglet « images »", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
-    expect(js).toContain('{ id: "images", groups: ["images"] }');
+    const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
+    // ⚠️ Le catalogue déclare désormais l'ONGLET PAR PAGE (`tabs`), plus une
+    // liste d'onglets par groupe.
+    expect(champs).toContain('id: "images"');
+    expect(champs).toContain('tabs: { instance: "images" }');
     // La liste des workflows est relue à CHAQUE affichage de l'onglet.
     expect(js).toContain('if (tabId === "images")');
   });
 
   it("déclare les champs du serveur et un bouton de test dédié (route ComfyUI)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
-    expect(js).toContain('id: "images"');
+    const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
+    expect(champs).toContain('id: "images"');
     for (const path of ["images.baseUrl", "images.apiKey", "images.width", "images.height"]) {
-      expect(js, path).toContain(`path: "${path}"`);
+      expect(champs, path).toContain(`path: "${path}"`);
     }
-    expect(js).toContain('test: "images"');
+    expect(champs).toContain('test: "images"');
     expect(js).toContain("/api/images/test");
     expect(js).toContain("initImagesPanel");
     // La clé est un champ SECRET (jamais réaffichée en clair).
-    expect(js).toMatch(/path: "images\.apiKey",\s*\n\s*label: [^\n]+,\s*\n\s*kind: "secret"/);
-    // CSP stricte côté page.
-    expect(js).not.toContain("innerHTML");
-    expect(js).not.toContain(".style.");
+    expect(champs).toMatch(/path: "images\.apiKey",\s*\n\s*label: [^\n]+,\s*\n\s*kind: "secret"/);
+    // CSP stricte côté page (LES DEUX fichiers servis).
+    for (const source of [js, champs]) {
+      expect(source).not.toContain("innerHTML");
+      expect(source).not.toContain(".style.");
+    }
   });
 
   it("sert le panneau des workflows (import au format API, sans injection HTML)", async () => {

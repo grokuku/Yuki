@@ -444,10 +444,13 @@ try {
   );
   const shotDesktop = await screenshot("sources-notifications-bureau");
 
-  /* ── 6) /config : section « Sources » (tableau + jeton + borne) ─────────── */
+  /* ── 6) Page du BOT : section « Sources » (tableau + jeton) ─────────────── */
   await setViewport(1280, 1000);
   // ⚠️ Lot 26, lot 3 : le panneau des sources a SON onglet et son ancre.
-  await navigate(server.base + "/config#declencheurs");
+  // ⚠️ Sous-lot 1b-4 (deux pages) : les déclencheurs appartiennent à UN bot
+  // (`sources.json` par bot) ⇒ la page de gestion vit sur `/bots`, plus sur
+  // `/config`. `?b=yuki` = le bot historique.
+  await navigate(server.base + "/bots?b=yuki#declencheurs");
   const configPanel = await evaluate(`(() => {
     const root = document.getElementById("sources-root");
     if (!root) return null;
@@ -456,18 +459,16 @@ try {
       (r.textContent || "").replace(/\\s+/g, " ").trim(),
     );
     const buttons = [...root.querySelectorAll("button")].map((b) => (b.textContent || "").trim());
-    // La borne d'injection du bloc <sources> est réglable dans le même onglet.
-    const tab = document.getElementById("panel-declencheurs");
-    const bound = (tab?.textContent ?? "").includes("Notifications transmises au modèle en un tour");
     // ⚠️ Périmètre = LA SECTION DES SOURCES : la brique vendorisee tokens pose
     // des variables de thème sur <html> (comportement préexistant, hors sujet).
     const styled = [...root.querySelectorAll("[style]")].map(
       (el) => el.tagName + "." + el.className,
     );
-    return { rows, buttons, bound, styleAttrs: styled.length, styled };
+    const tabs = [...document.querySelectorAll('[role=tab]')].map((b) => b.textContent.trim());
+    return { rows, buttons, tabs, styleAttrs: styled.length, styled };
   })()`);
   check(
-    "/config : le tableau des sources liste les deux sources",
+    "[/bots] le tableau des sources liste les deux sources",
     Boolean(
       configPanel &&
         configPanel.rows.length === 2 &&
@@ -477,7 +478,7 @@ try {
     JSON.stringify(configPanel?.rows),
   );
   check(
-    "/config : les actions attendues sont là (réglages, jeton, suppression)",
+    "[/bots] les actions attendues sont là (réglages, jeton, suppression)",
     Boolean(
       configPanel &&
         configPanel.buttons.some((label) => label.includes("Réglages")) &&
@@ -488,14 +489,38 @@ try {
     JSON.stringify(configPanel?.buttons),
   );
   check(
-    "/config : la borne d'injection des notifications est réglable dans l'onglet Déclencheurs",
-    configPanel?.bound === true,
+    "[/bots] les six onglets de la page du bot sont là",
+    JSON.stringify(configPanel?.tabs) ===
+      JSON.stringify(["Général", "Personnalité", "Voix", "Mémoire", "Plateformes", "Déclencheurs"]),
+    JSON.stringify(configPanel?.tabs),
   );
   check(
-    "/config : aucun attribut style dans la section des sources (CSP)",
+    "[/bots] aucun attribut style dans la section des sources (CSP)",
     configPanel?.styleAttrs === 0,
     JSON.stringify(configPanel?.styled),
   );
+
+  // ⚠️ La BORNE d'injection du bloc <sources> est une clé de portée `instance` :
+  // elle reste sur la page Instance (onglet « Système »), avec un encart de
+  // renvoi vers la page du bot. On la vérifie LÀ où elle est.
+  await navigate(server.base + "/config#systeme");
+  const borne = await evaluate(`(() => {
+    const panel = document.getElementById("panel-systeme");
+    const texte = (panel?.textContent ?? "").includes("Notifications transmises au modèle en un tour");
+    const renvoi = (panel?.textContent ?? "").includes("Les déclencheurs d'un bot");
+    return { texte, renvoi };
+  })()`);
+  check(
+    "[/config#systeme] la borne d'injection des notifications est réglable (Instance)",
+    borne?.texte === true,
+    JSON.stringify(borne),
+  );
+  check(
+    "[/config#systeme] encart de renvoi vers la page du bot (④)",
+    borne?.renvoi === true,
+    JSON.stringify(borne),
+  );
+  await navigate(server.base + "/bots?b=yuki#declencheurs");
   const shotConfig = await screenshot("sources-config");
 
   /* ── 6bis) ⚠️ « Envoyer dans : » — l'utilisateur désigne un FIL PRÉCIS ──── */
@@ -523,7 +548,7 @@ try {
     };
   })()`);
   check(
-    "⚠️ /config → Sources : le sélecteur « Envoyer dans : » propose les CONVERSATIONS",
+    "⚠️ /bots → Déclencheurs : le sélecteur « Envoyer dans : » propose les CONVERSATIONS",
     Boolean(
       destinationUi &&
         destinationUi.label.includes("Envoyer dans") &&

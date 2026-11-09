@@ -237,10 +237,10 @@
             <a class="mnav-panel__action" href="/config">Ouvrir</a>
           </header>
           <div class="mnav-panel__body mnav-list">
-            <a class="mnav-item" href="/config#personnalite">Personnalité &amp; règles</a>
-            <a class="mnav-item" href="/config#conversation">Mémoire durable</a>
+            <a class="mnav-item" href="/bots?b=yuki#personnalite">Personnalité &amp; règles</a>
+            <a class="mnav-item" href="/bots?b=yuki#memoire">Mémoire durable</a>
             <a class="mnav-item" href="/config#secrets">Coffre de secrets</a>
-            <a class="mnav-item" href="/config#voix">Voix (TTS)</a>
+            <a class="mnav-item" href="/bots?b=yuki#voix">Voix (TTS)</a>
             <button class="mnav-item" type="button" data-action="theme">
               <span class="mnav-item__label">Thème</span>
               <span class="mnav-item__value" data-theme-value></span>
@@ -367,12 +367,15 @@
           <span id="sources-notifs-summary" class="notifs__summary" role="status"></span>
           <!-- ⚠️ La pastille ne compte plus les RÉCEPTIONS : seulement les échecs
                et les alertes (lot 26). Le lien mène à la PAGE DE GESTION des
-               déclencheurs (lot 3) : onglet dédié « Déclencheurs », ancre
-               `#declencheurs` (`ANCRES_PROFONDES` de `config.js`). -->
+               déclencheurs (lot 3) : onglet dédié « Déclencheurs ». Depuis le
+               sous-lot 1b-4 cet onglet vit sur la page du BOT (`/bots`), d'où
+               `?b=yuki` : les déclencheurs appartiennent à un bot (`sources.json`
+               par bot). Ancre `#declencheurs` (`ANCRES_PROFONDES` de
+               `config-pages.js`). -->
           <a
             id="sources-notifs-manage"
             class="button button--ghost button--small"
-            href="/config#declencheurs"
+            href="/bots?b=yuki#declencheurs"
           >Gérer les déclencheurs</a>
           <button
             id="sources-notifs-readall"

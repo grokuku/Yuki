@@ -209,11 +209,18 @@ describe("CSP — élargissement minimal et prouvé", () => {
 
 describe("Réglage des notifications dans /config", () => {
   it("expose push.enabled (enum off|on) et push.contact dans l'onglet Système", async () => {
-    const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
+    // ⚠️ Le CATALOGUE des champs a quitté `config.js` pour `config-fields.js` au
+    // sous-lot 1b-4 (module pur) ; les gardes sont inchangées.
+    const js =
+      (await (await fetch(`${baseUrl}/ui/config.js`)).text()) +
+      (await (await fetch(`${baseUrl}/ui/config-fields.js`)).text());
     expect(js).toContain('path: "push.enabled"');
     expect(js).toContain('path: "push.contact"');
     expect(js).toContain('"notifications"');
     expect(js).toContain('"push.enabled": "on"');
+    // `push.enabled` est MIXTE : il apparaît sur l'onglet Système (Instance) ET
+    // dans « Général » de la page du bot (surcharge par bot).
+    expect(js).toContain('tabs: { instance: "systeme", bot: "general" }');
     expect(js).not.toContain("innerHTML");
   });
 });

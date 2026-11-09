@@ -200,7 +200,9 @@ async function shot(name) {
 }
 
 /* ═══════════════ 1) L'aperçu affiche les données RÉELLES ═══════════════ */
-await navigate(`${server.base}/config#personnalite`);
+/* ⚠️ Sous-lot 1b-4 (deux pages) : la personnalité est un réglage PAR BOT,
+   sa page est `/bots` (onglet « Personnalité »). */
+await navigate(`${server.base}/bots?b=yuki#personnalite`);
 const preview = await evaluate(`(() => {
   const mem = document.querySelector('.personality-memory');
   const details = mem?.querySelector('.personality-memory__recent');
@@ -222,24 +224,24 @@ const preview = await evaluate(`(() => {
     styleAttrs: document.body.querySelectorAll('[style]').length,
   };
 })()`);
-check("[/config#personnalite] bloc mémoire présent", preview.hasBlock === true);
-check("[/config#personnalite] aperçu replié présent", preview.hasDetails === true);
-check("[/config#personnalite] titre d'aperçu avec le compte RÉEL", /Souvenirs récents \(2\)/.test(preview.summary), preview.summary);
-check("[/config#personnalite] DEUX lignes de souvenirs (données du store)", preview.rows === 2, String(preview.rows));
-check("[/config#personnalite] la ligne porte une DATE", /^\d{4}-\d{2}-\d{2}/.test(preview.first?.date ?? ""), preview.first?.date);
+check("[/bots#personnalite] bloc mémoire présent", preview.hasBlock === true);
+check("[/bots#personnalite] aperçu replié présent", preview.hasDetails === true);
+check("[/bots#personnalite] titre d'aperçu avec le compte RÉEL", /Souvenirs récents \(2\)/.test(preview.summary), preview.summary);
+check("[/bots#personnalite] DEUX lignes de souvenirs (données du store)", preview.rows === 2, String(preview.rows));
+check("[/bots#personnalite] la ligne porte une DATE", /^\d{4}-\d{2}-\d{2}/.test(preview.first?.date ?? ""), preview.first?.date);
 check(
-  "[/config#personnalite] la ligne porte une CATÉGORIE",
+  "[/bots#personnalite] la ligne porte une CATÉGORIE",
   ["preference", "fait", "decision", "projet", "relation", "autre"].includes(preview.first?.cat ?? ""),
   preview.first?.cat,
 );
 check(
-  "[/config#personnalite] la ligne porte le CONTENU réel",
+  "[/bots#personnalite] la ligne porte le CONTENU réel",
   [SEED_A, SEED_B].includes(preview.first?.text ?? ""),
   preview.first?.text,
 );
-check("[/config#personnalite] la ligne porte la JUSTIFICATION", /Pourquoi :/.test(preview.first?.why ?? ""), preview.first?.why);
-check("[/config#personnalite] action « Mettre de côté »", preview.first?.buttons.includes("Mettre de côté") === true, JSON.stringify(preview.first?.buttons));
-check("[/config#personnalite] aucun style= inline (CSP)", preview.styleAttrs === 0, String(preview.styleAttrs));
+check("[/bots#personnalite] la ligne porte la JUSTIFICATION", /Pourquoi :/.test(preview.first?.why ?? ""), preview.first?.why);
+check("[/bots#personnalite] action « Mettre de côté »", preview.first?.buttons.includes("Mettre de côté") === true, JSON.stringify(preview.first?.buttons));
+check("[/bots#personnalite] aucun style= inline (CSP)", preview.styleAttrs === 0, String(preview.styleAttrs));
 await shot("memory-preview-list");
 
 /* ═══════════════ 2) Mise de côté via HolafModal ═══════════════ */
@@ -256,9 +258,9 @@ const modal = await evaluate(`(() => {
   const danger = [...document.querySelectorAll('.holaf-modal-btn')].find((b) => b.textContent === 'Mettre de côté');
   return { title, message, hasDanger: !!danger, dangerClass: danger?.className ?? '' };
 })()`);
-check("[/config#personnalite] confirmation via HolafModal", modal.title.length > 0, modal.title);
-check("[/config#personnalite] libellé explicite (mise de côté récupérable)", /récup|mis de côté|mise de côté/i.test(modal.title + " " + modal.message), modal.message.slice(0, 160));
-check("[/config#personnalite] bouton de danger « Mettre de côté »", modal.hasDanger === true && /danger/.test(modal.dangerClass), modal.dangerClass);
+check("[/bots#personnalite] confirmation via HolafModal", modal.title.length > 0, modal.title);
+check("[/bots#personnalite] libellé explicite (mise de côté récupérable)", /récup|mis de côté|mise de côté/i.test(modal.title + " " + modal.message), modal.message.slice(0, 160));
+check("[/bots#personnalite] bouton de danger « Mettre de côté »", modal.hasDanger === true && /danger/.test(modal.dangerClass), modal.dangerClass);
 await shot("memory-preview-modal");
 
 await evaluate(`(() => { [...document.querySelectorAll('.holaf-modal-btn')].find((b) => b.textContent === 'Mettre de côté')?.click(); })()`);
@@ -272,10 +274,10 @@ const afterSetAside = await evaluate(`(() => {
     styleAttrs: document.body.querySelectorAll('[style]').length,
   };
 })()`);
-check("[/config#personnalite] retour visuel : « récupérable »", /récup/i.test(afterSetAside.status), afterSetAside.status.slice(0, 200));
-check("[/config#personnalite] l'aperçu passe à UNE ligne", afterSetAside.rows === 1, String(afterSetAside.rows));
-check("[/config#personnalite] le compte mémoire est cohérent", /1 souvenir/.test(afterSetAside.count), afterSetAside.count);
-check("[/config#personnalite] aucune style= inline après mise de côté", afterSetAside.styleAttrs === 0, String(afterSetAside.styleAttrs));
+check("[/bots#personnalite] retour visuel : « récupérable »", /récup/i.test(afterSetAside.status), afterSetAside.status.slice(0, 200));
+check("[/bots#personnalite] l'aperçu passe à UNE ligne", afterSetAside.rows === 1, String(afterSetAside.rows));
+check("[/bots#personnalite] le compte mémoire est cohérent", /1 souvenir/.test(afterSetAside.count), afterSetAside.count);
+check("[/bots#personnalite] aucune style= inline après mise de côté", afterSetAside.styleAttrs === 0, String(afterSetAside.styleAttrs));
 await shot("memory-preview-after");
 
 /* ═══════════════ 3) Preuves DISQUE : mise de côté récupérable ═══════════════ */

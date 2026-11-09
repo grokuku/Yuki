@@ -21,10 +21,11 @@ import {
   bandeauTravail,
 } from "../../public/ui/modeles-aide.js";
 
-const CONFIG_JS = readFileSync(
-  join(process.cwd(), "public", "ui", "config.js"),
-  "utf8",
-);
+// ⚠️ Le CATALOGUE des champs a quitté `config.js` pour `config-fields.js` au
+// sous-lot 1b-4 : on lit les DEUX (aucune assertion relâchée).
+const CONFIG_JS =
+  readFileSync(join(process.cwd(), "public", "ui", "config.js"), "utf8") +
+  readFileSync(join(process.cwd(), "public", "ui", "config-fields.js"), "utf8");
 const CONFIG_HTML = readFileSync(
   join(process.cwd(), "public", "ui", "config.html"),
   "utf8",

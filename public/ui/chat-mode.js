@@ -21,23 +21,23 @@
 import { cheminConfigBot, idBotActif } from "./bots-api.js";
 
 /**
- * CHEMIN EXACT du réglage de chaque plateforme, dans `/config`.
+ * CHEMIN EXACT du réglage de chaque plateforme.
  *
- * ⚠️ Les MOTS sont ceux de la page elle-même : l'onglet s'appelle
- * « Conversation » et la SECTION « Discussions — Mattermost » / « Discussions —
- * Discord » (`public/ui/chat-panel.js`, titres des panneaux). C'est vérifiable par
- * ancre : `/config#chat-remote-agents` ouvre cet onglet puis défile jusqu'au
- * réglage (`ANCRES_PROFONDES`, `public/ui/config.js:1348`).
+ * ⚠️ Depuis le sous-lot 1b-4 (deux pages), ce réglage vit sur la page du BOT :
+ * `/bots?b=<slug>`, onglet « Plateformes », SECTION « Discussions — Mattermost »
+ * / « Discussions — Discord » (`public/ui/chat-panel.js`, titres des panneaux).
+ * C'est vérifiable par ancre : `#chat-remote-agents` ouvre cet onglet puis
+ * défile jusqu'au réglage (`ANCRES_PROFONDES`, `public/ui/config-pages.js`).
  *
  * ⚠️ Un chemin approximatif (« … → « Discussions » ») envoie l'utilisateur
  * chercher une section qui n'existe pas : c'est le défaut corrigé le 2026-11-02.
  * Les textes ci-dessous n'écrivent donc JAMAIS « Discussions » sans la
  * plateforme — un test verrouille l'égalité.
  */
-export const CHEMIN_MATTERMOST = "/config → Conversation → « Discussions — Mattermost »";
+export const CHEMIN_MATTERMOST = "/bots?b=yuki → Plateformes → « Discussions — Mattermost »";
 
-/** Chemin exact de la section Discord (`/config`, onglet « Conversation »). */
-export const CHEMIN_DISCORD = "/config → Conversation → « Discussions — Discord »";
+/** Chemin exact de la section Discord (page du bot, onglet « Plateformes »). */
+export const CHEMIN_DISCORD = "/bots?b=yuki → Plateformes → « Discussions — Discord »";
 
 /** Les trois modes proposés, dans l'ordre d'affichage. */
 export const CHAT_MODE_OPTIONS = [

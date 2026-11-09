@@ -82,6 +82,12 @@ export function resolveStaticRequest(
     relative = "index.html";
   } else if (pathname === "/config" || pathname === "/config.html") {
     relative = "config.html";
+  } else if (pathname === "/bots" || pathname === "/bots.html") {
+    // ⚠️ DEUX PAGES depuis le sous-lot 1b-4 (scission Instance / Bot) :
+    // `/config` porte les réglages COMMUNS, `/bots` ceux d'UN bot (`?b=<slug>`).
+    // Servie à la racine pour que `?b=` et `#<ancre>` restent des liens
+    // partageables ; le service worker (`sw.js`, portée `/`) couvre les deux.
+    relative = "bots.html";
   } else if (pathname === "/manifest.webmanifest") {
     // PWA : le manifeste doit être servi à la RACINE (sa `scope`), pas sous
     // `/ui/`. `manifest-src 'self'` l'autorise (voir STATIC_SECURITY_HEADERS).

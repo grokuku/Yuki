@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Yuki — Configuration</title>
+    <title>Yuki — Configuration de l'instance</title>
     <link rel="stylesheet" href="/ui/styles.css" />
     <link rel="stylesheet" href="/ui/themes.css" />
     <link rel="stylesheet" href="/ui/config.css" />
@@ -13,9 +13,9 @@
     <!-- HolafModal — CSS extrait via getCss(), servi statiquement (CSP style-src 'self'). -->
     <link rel="stylesheet" href="/ui/vendor/holaf/holaf-modal.css" />
   </head>
-  <body>
+  <body data-config-page="instance">
     <header class="topbar">
-      <div class="brand"><a class="brand__link" href="/">Yuki</a> — Configuration</div>
+      <div class="brand"><a class="brand__link" href="/">Yuki</a> — Configuration de l'instance</div>
       <div class="status">
         <!-- Flèche monochrome rendue par la brique holaf-lib `icons` via
              `theme.js` (`HolafIcons.render("arrow-left")`), classe
@@ -26,6 +26,9 @@
           <span class="nav-back__icon" aria-hidden="true"></span>
           Retour à la discussion
         </a>
+        <!-- Deux pages depuis le sous-lot 1b-4 : /config = INSTANCE, /bots = BOT.
+             Ce lien mène à la page du bot (état porté par `?b=<slug>`). -->
+        <a class="nav-back nav-back--bots" href="/bots">Page du bot</a>
         <span id="ready" class="pill pill--offline">vérification…</span>
         <span id="light-key" class="pill">clé légère ?</span>
         <span id="heavy-key" class="pill">clé lourde ?</span>
@@ -47,6 +50,10 @@
     </header>
 
     <main class="config">
+      <!-- Ligne d'explication SOUS le titre (lot 35d, ④) : elle dit ce qui reste
+           commun et où est allé ce qui a déménagé. Remplie par `config.js`
+           (`config-pages.js` = source unique), jamais un texte figé ici. -->
+      <p id="page-ligne" class="config-page-line"></p>
       <p class="config-intro">
         Ces valeurs sont enregistrées sur le serveur. Un champ avec
         <span class="badge badge--hot">à chaud</span> s'applique immédiatement ;
@@ -63,8 +70,21 @@
         `#groups` reste le conteneur des panneaux (des tests/E2E s'y appuient).
         Aucun style inline : l'onglet actif est piloté par `aria-selected`.
       -->
+      <!--
+        LA PAGE « INSTANCE » (lot 35d, sous-lot 1b-4) — 7 onglets.
+        ⚠️ Ce qui est PROPRE À UN BOT n'est plus ici : il vit sur `/bots`
+        (`bots.html`). Les onglets « Déclencheurs », « Personnalité » et « Voix »
+        ont quitté cette page ; « Conversation » a éclaté en « Exécution »
+        (délégation + fichiers) et en réglages de bot (mémoire, plateformes).
+        Chaque encart de renvoi des groupes dit où est allé le reste.
+
+        Barre d'onglets + panneaux (rendu EAGER : chaque panneau contient ses
+        lignes dans le DOM dès le chargement, masquées par l'attribut `hidden`).
+        `#groups` reste le conteneur des panneaux (des tests/E2E s'y appuient).
+        Aucun style inline : l'onglet actif est piloté par `aria-selected`.
+      -->
       <div class="config-tabs">
-        <div class="config-tablist" role="tablist" aria-label="Sections de configuration">
+        <div class="config-tablist" role="tablist" aria-label="Sections de configuration de l'instance">
           <button
             class="config-tab"
             type="button"
@@ -76,55 +96,22 @@
           >
             Modèles<span class="config-tab__dot" aria-hidden="true"></span>
           </button>
-          <button
-            class="config-tab"
-            type="button"
-            role="tab"
-            id="tab-conversation"
-            aria-selected="false"
-            aria-controls="panel-conversation"
-            tabindex="-1"
-          >
-            Conversation<span class="config-tab__dot" aria-hidden="true"></span>
-          </button>
           <!--
-            DÉCLENCHEURS (lot 26, lot 3) — onglet DÉDIÉ. Le panneau vivait en BAS
-            de « Conversation » : il fallait faire défiler quatre écrans pour le
-            trouver, et rien n'indiquait qu'un déclencheur muet l'était. La page
-            de gestion (trois sections + journal) a donc son onglet.
+            EXÉCUTION (ancien « Conversation ») : ce qui concerne l'EXÉCUTION des
+            tours — délégation au worker lourd (`delegation`), politique de clé
+            manquante et fichiers échangés (`fichiers`). La MÉMOIRE DURABLE et les
+            PLATEFORMES (Mattermost, Discord) sont propres à un bot : page Bot.
           -->
           <button
             class="config-tab"
             type="button"
             role="tab"
-            id="tab-declencheurs"
+            id="tab-execution"
             aria-selected="false"
-            aria-controls="panel-declencheurs"
+            aria-controls="panel-execution"
             tabindex="-1"
           >
-            Déclencheurs<span class="config-tab__dot" aria-hidden="true"></span>
-          </button>
-          <button
-            class="config-tab"
-            type="button"
-            role="tab"
-            id="tab-personnalite"
-            aria-selected="false"
-            aria-controls="panel-personnalite"
-            tabindex="-1"
-          >
-            Personnalité<span class="config-tab__dot" aria-hidden="true"></span>
-          </button>
-          <button
-            class="config-tab"
-            type="button"
-            role="tab"
-            id="tab-voix"
-            aria-selected="false"
-            aria-controls="panel-voix"
-            tabindex="-1"
-          >
-            Voix<span class="config-tab__dot" aria-hidden="true"></span>
+            Exécution<span class="config-tab__dot" aria-hidden="true"></span>
           </button>
           <button
             class="config-tab"
@@ -205,91 +192,12 @@
           <section
             class="config-panel"
             role="tabpanel"
-            id="panel-conversation"
-            aria-labelledby="tab-conversation"
+            id="panel-execution"
+            aria-labelledby="tab-execution"
             tabindex="0"
             hidden
           >
-            <div id="group-conversation" class="config-groups"></div>
-            <!--
-              DISCUSSIONS (lot 18, lot 2) — branchement d'un serveur MATTERMOST :
-              URL, jeton du bot (saisi UNE SEULE FOIS, jamais réaffiché), état de la
-              connexion, avancement du backfill (2 semaines) et canaux suivis.
-              Composant autonome monté par id (`chat-panel.js`).
-              ⚠️ Aucun style inline (CSP `style-src 'self'`).
-            -->
-            <div id="chat-root"></div>
-          </section>
-          <!--
-            DÉCLENCHEURS — la PAGE DE GESTION (lot 26, lot 3).
-
-            Une section « Déclencheurs » = un programme qui réveille Yuki (webhook
-            authentifié) ou une horloge (expression cron). Trois sections :
-            Permanents · Temporaires · En sommeil ; colonnes dont ⚠️ « dernier
-            passage » ; un 4ᵉ volet replié, le JOURNAL. Composant autonome monté par
-            id (`sources-panel.js`), règles pures dans `declencheurs-vue.js`.
-
-            ⚠️ Ancre `#declencheurs` (`ANCRES_PROFONDES` de `config.js`) : c'est
-            elle que vise le bouton « Gérer les déclencheurs » de la boîte de
-            notifications (`index.html`). Aucun style inline (CSP).
-          -->
-          <section
-            class="config-panel"
-            role="tabpanel"
-            id="panel-declencheurs"
-            aria-labelledby="tab-declencheurs"
-            tabindex="0"
-            hidden
-          >
-            <!-- Borne d'injection du bloc <sources> (groupe `sources`). -->
-            <div id="group-declencheurs" class="config-groups"></div>
-            <!-- La page de gestion (trois sections + journal). -->
-            <div id="sources-root"></div>
-          </section>
-          <section
-            class="config-panel"
-            role="tabpanel"
-            id="panel-personnalite"
-            aria-labelledby="tab-personnalite"
-            tabindex="0"
-            hidden
-          >
-            <!--
-              Onglet « Personnalité » : texte Markdown éditable, versionné.
-              Composant autonome monté par id (`personality-panel.js`), aucun
-              style inline (CSP `style-src 'self'`).
-            -->
-            <div id="personality-root"></div>
-          </section>
-          <section
-            class="config-panel"
-            role="tabpanel"
-            id="panel-voix"
-            aria-labelledby="tab-voix"
-            tabindex="0"
-            hidden
-          >
-            <!--
-              Onglet « Voix » — 5 zones (refonte UX, lot de simplification) :
-                ① État de la voix         → #tts-assistant-root (bandeau compact)
-                ② Ma voix                 → #voices-root (bibliothèque des voix)
-                ③ Réglages de la voix     → #group-voix (6 réglages essentiels)
-                ④ ▸ Avancé                → replié DANS #group-voix (voir config.js)
-                ⑤ ▸ Moteur TTS et modèles → #tts-engine-root (zone technique repliée)
-
-              ⚠️ Le rendu reste EAGER : toutes les lignes sont dans le DOM dès le
-              chargement et un <details> masque SANS retirer. L'assistant (zone ①
-              et zone ⑤) est un composant autonome monté par id, jamais dupliqué.
-              Aucun style inline (CSP `style-src 'self'`).
-            -->
-            <!-- ① État de la voix : assistant monté par id (bandeau + carte d'état). -->
-            <div id="tts-assistant-root"></div>
-            <!-- ② Ma voix : sélecteur de voix active + bibliothèque + clonage. -->
-            <div id="voices-root"></div>
-            <!-- ③ Réglages de la voix (essentiels) + ④ « Avancé » (replié). -->
-            <div id="group-voix" class="config-groups"></div>
-            <!-- ⑤ Moteur TTS et modèles : zone technique repliée, montée par l'assistant. -->
-            <div id="tts-engine-root"></div>
+            <div id="group-execution" class="config-groups"></div>
           </section>
           <section
             class="config-panel"
@@ -304,10 +212,10 @@
               vit ICI, dans un onglet PROPRE et nommé : elle n'est plus une section
               noyée en bas de l'onglet « Système » (c'était introuvable).
 
-                ➀ Serveur et réglages   → #group-images (URL, clé facultative,
+                ① Serveur et réglages   → #group-images (URL, clé facultative,
                   largeur, hauteur, délai) + bouton « Tester la connexion »,
                   rendus par la mécanique de configuration commune.
-                ➁ Workflows importés    → #images-root (composant autonome monté
+                ② Workflows importés    → #images-root (composant autonome monté
                   par id, `images-panel.js` : liste, bouton « Éditer » par
                   workflow, import au format API, état vide explicite).
 
@@ -368,7 +276,27 @@
             tabindex="0"
             hidden
           >
+            <!--
+              ONGLET « SYSTÈME » — les réglages COMMUNS qui n'ont pas d'onglet
+              propre : GPU, transport temps réel, fuseau des horodatages,
+              libraire, notifications des appareils, et depuis le sous-lot 1b-4
+              les clés TECHNIQUES de la voix (`tts.engine`, adresse, langue,
+              découpe, délais) ainsi que la PLANIFICATION de la consolidation
+              mémoire et la BORNE d'injection des notifications de sources.
+
+              ⚠️ Chaque groupe concerné porte un ENCART DE RENVOI vers la page
+              du bot : le moteur TTS est commun, la voix ne l'est pas.
+            -->
             <div id="group-systeme" class="config-groups"></div>
+            <!--
+              VOIX — zones ① (état) et ⑤ (moteur et modèles) de l'assistant.
+              ⚠️ Depuis le sous-lot 1b-4, la VOIX d'un bot (voix active, émotion,
+              débit, exagération, guidage) se règle sur `/bots` ; ce qui reste ici
+              est le MOTEUR et ses délais, communs à l'instance. Composant
+              autonome monté par id, jamais dupliqué (zone ⑤ via `engineRoot`).
+            -->
+            <div id="tts-assistant-root"></div>
+            <div id="tts-engine-root"></div>
           </section>
           <section
             class="config-panel"

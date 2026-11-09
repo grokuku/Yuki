@@ -36,8 +36,15 @@ const NOTIFICATIONS = read("notifications-panel.js");
 const SOURCES_PANEL = read("sources-panel.js");
 const APP = read("app.js");
 const INDEX = read("index.html");
+/**
+ * ⚠️ DEUX PAGES depuis le sous-lot 1b-4 : la page de gestion des DÉCLENCHEURS a
+ * quitté `/config` pour la page du BOT (`/bots`), parce que chaque bot a SON
+ * `sources.json`. Les assertions ci-dessous visent donc le bon fichier.
+ */
 const CONFIG_HTML = read("config.html");
+const BOTS_HTML = read("bots.html");
 const CONFIG_JS = read("config.js");
+const CONFIG_PAGES = read("config-pages.js");
 const SESSIONS_PANEL = read("sessions-panel.js");
 const STYLES = read("styles.css");
 const CONFIG_CSS = read("config.css");
@@ -173,40 +180,38 @@ describe("suppression d'un fil qui reçoit des sources (point ③)", () => {
   });
 });
 
-describe("page /config — section « Sources »", () => {
-  it("le conteneur est monté dans l'onglet DÉDIÉ « Déclencheurs » (lot 3)", () => {
-    expect(CONFIG_HTML).toContain('id="sources-root"');
-    // Le panneau vit désormais dans SON onglet (il était enterré en bas de
-    // « Conversation » : ~4 écrans de défilement). Les dix onglets sont
-    // verrouillés par `tests/integration/static-ui.test.ts`.
-    const tabLabels = [...CONFIG_HTML.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) =>
+describe("page du BOT — section « Sources »", () => {
+  it("le conteneur est monté dans l'onglet DÉDIÉ « Déclencheurs » de /bots (lot 3, déplacé en 1b-4)", () => {
+    // ⚠️ Les déclencheurs appartiennent à UN bot (`sources.json` par bot) : la
+    // page de gestion a suivi la scission Instance / Bot et vit désormais sur
+    // `/bots`. Les six onglets sont verrouillés par
+    // `tests/ui/config-pages.test.ts`.
+    const tabLabels = [...BOTS_HTML.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) =>
       m[1].trim(),
     );
     expect(tabLabels).toEqual([
-      "Modèles",
-      "Conversation",
-      "Déclencheurs",
+      "Général",
       "Personnalité",
       "Voix",
-      "Images",
-      "Agents",
-      "Secrets",
-      "Système",
-      "Maintenance",
+      "Mémoire",
+      "Plateformes",
+      "Déclencheurs",
     ]);
-    // ⚠️ `#sources-root` est dans le panneau « Déclencheurs », PAS dans
-    // « Conversation » (c'est toute la correction du lot 3).
-    const conversation = CONFIG_HTML.slice(
-      CONFIG_HTML.indexOf('id="panel-conversation"'),
-      CONFIG_HTML.indexOf('id="panel-declencheurs"'),
-    );
-    expect(conversation).not.toContain('id="sources-root"');
-    const declencheurs = CONFIG_HTML.slice(
-      CONFIG_HTML.indexOf('id="panel-declencheurs"'),
-      CONFIG_HTML.indexOf('id="panel-personnalite"'),
+    // ⚠️ `#sources-root` est dans le panneau « Déclencheurs », et PAS dans un
+    // autre panneau (c'est la correction du lot 3, conservée au déplacement).
+    expect(BOTS_HTML).toContain('id="sources-root"');
+    const declencheurs = BOTS_HTML.slice(
+      BOTS_HTML.indexOf('id="panel-declencheurs"'),
+      BOTS_HTML.indexOf("</main>"),
     );
     expect(declencheurs).toContain('id="sources-root"');
-    // Monté par id depuis `config.js`.
+    expect(BOTS_HTML.slice(0, BOTS_HTML.indexOf('id="panel-declencheurs"'))).not.toContain(
+      'id="sources-root"',
+    );
+    // La page Instance ne le porte plus.
+    expect(CONFIG_HTML).not.toContain('id="sources-root"');
+    expect(CONFIG_HTML).not.toContain('id="tab-declencheurs"');
+    // Monté par id depuis `config.js` (le MÊME module sert les deux pages).
     expect(CONFIG_JS).toContain("initSourcesPanel(");
     expect(CONFIG_JS).toContain('document.getElementById("sources-root")');
   });
@@ -230,9 +235,14 @@ describe("page /config — section « Sources »", () => {
     expect(SOURCES_PANEL).toContain("ne sera plus jamais affiché");
   });
 
-  it("la borne d'injection du bloc <sources> est réglable dans /config", () => {
-    expect(CONFIG_JS).toContain('"sources.promptTotalChars"');
-    expect(CONFIG_JS).toContain('"sources"');
+  it("la borne d'injection du bloc <sources> est réglable (Instance · Système)", () => {
+    // ⚠️ `sources.promptTotalChars` est de portée `instance` : elle RESTE sur la
+    // page Instance (onglet « Système »), avec un encart de renvoi vers la page
+    // du bot. Ce n'est plus dans l'onglet « Déclencheurs » (qui est par bot).
+    const champs = read("config-fields.js");
+    expect(champs).toContain('"sources.promptTotalChars"');
+    expect(champs).toContain('tabs: { instance: "systeme" }');
+    expect(CONFIG_JS).not.toContain('panel-declencheurs"');
   });
 });
 
@@ -272,11 +282,14 @@ describe("lot 26 — visibilité SILENCIEUSE et pastille d'échecs", () => {
     expect(INDEX).toContain('id="sources-notifs-manage"');
     // ⚠️ Le lien vise l'ONGLET dédié (lot 3). L'ancienne ancre `#sources` reste
     // acceptée par `ANCRES_PROFONDES` mais n'est plus celle qu'on affiche.
-    expect(INDEX).toContain('href="/config#declencheurs"');
+    // ⚠️ La page visée a changé au sous-lot 1b-4 : les déclencheurs d'un bot
+    // sont sur SA page, d'où `?b=yuki` (bot historique).
+    expect(INDEX).toContain('href="/bots?b=yuki#declencheurs"');
+    expect(INDEX).not.toContain('href="/config#declencheurs"');
     expect(INDEX).not.toContain('href="/config#sources"');
     expect(INDEX).toContain("Gérer les déclencheurs");
-    // L'ancre profonde est bien déclarée côté page de configuration.
-    expect(CONFIG_JS).toContain('["declencheurs", "declencheurs"]');
+    // L'ancre profonde est bien déclarée pour la page du bot (`config-pages.js`).
+    expect(CONFIG_PAGES).toContain('["declencheurs", "declencheurs"]');
   });
 });
 

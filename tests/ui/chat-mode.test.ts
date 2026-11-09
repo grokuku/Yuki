@@ -157,9 +157,9 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
     const avis = modeNotice(MATTERMOST_CINQ_CANAUX, { nombre: 0, connue: true });
     expect(avis).toMatchObject({ kind: "vide" });
     expect(avis?.titre).toBe("Aucun canal synchronisé.");
-    // ⚠️ Les MOTS de l'interface : onglet « Conversation », SECTION
+    // ⚠️ Les MOTS de l'interface : page du BOT, onglet « Plateformes », SECTION
     // « Discussions — Mattermost » (jamais « Discussions » seul).
-    expect(avis?.detail).toContain("/config → Conversation → « Discussions — Mattermost »");
+    expect(avis?.detail).toContain("/bots?b=yuki → Plateformes → « Discussions — Mattermost »");
     // ⚠️ Jamais la SECTION SEULE (« Discussions »), qui n'existe pas dans l'UI.
     expect(avis?.detail).not.toContain("« Discussions »");
     // Et le chemin Discord, lui, nomme la section Discord.
@@ -167,15 +167,17 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
       { mode: "discord", plateforme: { etat: "on" }, creation: { autorisee: false, raison: "x" } },
       { nombre: 0, connue: true },
     );
-    expect(salons?.detail).toContain("/config → Conversation → « Discussions — Discord »");
+    expect(salons?.detail).toContain("/bots?b=yuki → Plateformes → « Discussions — Discord »");
     expect(salons?.detail).not.toContain("« Discussions »");
     // Et le MODE LOCAL n'ajoute toujours rien (comportement inchangé).
     expect(modeNotice({ mode: "local" }, { nombre: 0, connue: true })).toBeNull();
   });
 
-  it("le chemin est celui de l'UI RÉELLE (onglet « Conversation », sections nommées)", () => {
-    expect(CHEMIN_MATTERMOST).toBe("/config → Conversation → « Discussions — Mattermost »");
-    expect(CHEMIN_DISCORD).toBe("/config → Conversation → « Discussions — Discord »");
+  it("le chemin est celui de l'UI RÉELLE (onglet « Plateformes », sections nommées)", () => {
+    expect(CHEMIN_MATTERMOST).toBe("/bots?b=yuki → Plateformes → « Discussions — Mattermost »");
+    expect(CHEMIN_DISCORD).toBe("/bots?b=yuki → Plateformes → « Discussions — Discord »");
+    // ⚠️ L'onglet nommé EXISTE : la page du bot le déclare (sous-lot 1b-4).
+    expect(read("bots.html")).toContain('id="tab-plateformes"');
     // Les deux sections existent VRAIMENT sous ces noms (`public/ui/chat-panel.js`).
     const panneau = read("chat-panel.js");
     expect(panneau).toContain('titre: "Discussions — Mattermost"');
@@ -196,7 +198,7 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
           etat: "off",
           raison:
             "Mattermost n'est pas configuré : renseignez l'URL du serveur et le jeton du bot " +
-            "dans /config → Conversation → « Discussions — Mattermost ».",
+            "dans /bots?b=yuki → Plateformes → « Discussions — Mattermost ».",
         },
         creation: { autorisee: false, raison: "La création est désactivée." },
       },

@@ -58,10 +58,17 @@ describe("réglage `llm.<role>.vision` — exposé, à chaud, et DÉCLARATIF", (
   });
 
   it("est proposé dans l'interface /config de l'onglet « Modèles »", () => {
-    const ui = readFileSync("public/ui/config.js", "utf8");
+    // ⚠️ Le CATALOGUE des champs (libellés compris) a quitté `config.js` pour
+    // `config-fields.js` au sous-lot 1b-4 : les deux fichiers sont servis à la
+    // page Instance, on les lit donc tous les deux (garde inchangée).
+    const ui =
+      readFileSync("public/ui/config.js", "utf8") +
+      readFileSync("public/ui/config-fields.js", "utf8");
     expect(ui).toContain("llm.light.vision");
     expect(ui).toContain("llm.heavy.vision");
     expect(ui).toContain("Reçoit les images (vision)");
+    // Et le groupe concerné est bien rendu sur l'onglet « Modèles ».
+    expect(ui).toContain('tabs: { instance: "modeles" }');
   });
 
   it("produit `input` dans models.json : « non » ⇒ texte seul", () => {

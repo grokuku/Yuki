@@ -676,8 +676,11 @@ await sleep(200);
 await shot("chat-empty-reply");
 
 /* ═══════════════════════ Page /config ════════════════════════════════════ */
-console.log("\n═══ PAGE /config ═══");
-await navigate(BASE + "/config");
+console.log("\n═══ PAGE DU BOT (/bots) + PAGE INSTANCE (/config) ═══");
+/* ⚠️ Sous-lot 1b-4 (deux pages) : la VOIX est un réglage PAR BOT (page `/bots`,
+   onglet « Voix ») ; le MOTEUR, la langue et les délais sont communs (page
+   Instance, onglet « Système »). `?b=yuki` = le bot historique. */
+await navigate(BASE + "/bots?b=yuki");
 
 const READ_CONFIG = `(() => {
   const root = document.getElementById("voices-root");
@@ -700,25 +703,38 @@ const READ_CONFIG = `(() => {
 })()`;
 
 s = await evaluate(READ_CONFIG);
-check("[/config] racine du panneau des voix présente", s.hasRoot && s.hasSelect);
+check("[/bots] racine du panneau des voix présente", s.hasRoot && s.hasSelect);
 check(
-  "[/config] le sélecteur inclut la voix par défaut + le preset du registre",
+  "[/bots] le sélecteur inclut la voix par défaut + le preset du registre",
   s.options.some((o) => o.value === "") && s.options.some((o) => o.value === "camille"),
   JSON.stringify(s.options),
 );
 check(
-  "[/config] la liste montre le preset avec badge « prédéfinie » et bouton « Écouter »",
+  "[/bots] la liste montre le preset avec badge « prédéfinie » et bouton « Écouter »",
   s.rows.length >= 1 &&
     s.rows[0].label === "Camille (FR)" &&
     s.rows[0].badges.includes("prédéfinie") &&
     s.rows[0].buttons.includes("Écouter"),
   JSON.stringify(s.rows),
 );
-check("[/config] aucune balise <audio> (Web Audio obligatoire)", s.audioTags === 0);
-check("[/config] zéro <style> injecté et zéro style inline dans le corps (avant modale)",
+check("[/bots] aucune balise <audio> (Web Audio obligatoire)", s.audioTags === 0);
+check("[/bots] zéro <style> injecté et zéro style inline dans le corps (avant modale)",
   s.styleElems === 0 && s.styleAttrs === 0, `style=${s.styleElems} attrs=${s.styleAttrs}`);
 
-/* — Sélection de la voix active → PUT /api/config { tts.voice } — */
+/* — Sélection de la voix active → PUT /api/bots/yuki/config { tts.voice } — */
+// ⚠️ On ne peut PAS distinguer les deux routes par la VALEUR relue : le snapshot
+// d'instance fusionne déjà l'overlay du bot ACTIF (ici `yuki`). On ESPIONNE donc
+// `fetch` pour prouver la route réellement appelée.
+await evaluate(`(() => {
+  window.__puts = [];
+  const original = window.fetch;
+  window.fetch = (url, init) => {
+    if (init && String(init.method || "").toUpperCase() === "PUT") {
+      window.__puts.push(String(url));
+    }
+    return original(url, init);
+  };
+})()`);
 await evaluate(`(() => {
   const sel = document.getElementById("voices-select");
   sel.value = "camille";
@@ -726,13 +742,19 @@ await evaluate(`(() => {
 })()`);
 await sleep(600);
 const savedVoice = await evaluate(
-  `fetch("/api/config").then((r) => r.json()).then((b) => b.fields["tts.voice"].value)`,
+  `fetch("/api/bots/yuki/config").then((r) => r.json()).then((b) => ({
+     bot: b.fields["tts.voice"].value,
+     instance: null,
+   }))`,
   true,
 );
+const voixPuts = await evaluate(`window.__puts.slice()`);
 check(
-  "[/config] choisir une voix écrit tts.voice côté serveur (PUT /api/config)",
-  savedVoice === "camille",
-  `tts.voice=${JSON.stringify(savedVoice)}`,
+  "[/bots] choisir une voix écrit tts.voice sur la route du BOT (PUT /api/bots/yuki/config)",
+  savedVoice?.bot === "camille" &&
+    voixPuts.length === 1 &&
+    voixPuts[0] === "/api/bots/yuki/config",
+  `overlay=${JSON.stringify(savedVoice?.bot)} puts=${JSON.stringify(voixPuts)}`,
 );
 
 /* — Révélation des curseurs d'émotion (« personnalisee ») — */
@@ -756,7 +778,7 @@ const emotionReveal = await evaluate(`(() => {
   return { before, after, back };
 })()`);
 check(
-  "[/config] émotion=custom révèle les curseurs exaggeration/CFG, puis les masque",
+  "[/bots] émotion=custom révèle les curseurs exaggeration/CFG, puis les masque",
   emotionReveal.before.exag === true &&
     emotionReveal.after.exag === false &&
     emotionReveal.after.cfg === false &&
@@ -764,68 +786,103 @@ check(
   JSON.stringify(emotionReveal),
 );
 
-/* — Honnêteté : « Débit (%) » suit la capacité réelle du moteur choisi — */
-const speedByEngine = await evaluate(`(() => {
-  const rows = [...document.querySelectorAll("#groups .config-row")];
+/* — Honnêteté : « Débit (%) » suit la capacité réelle du moteur choisi —
+ *
+ * ⚠️ Sous-lot 1b-4 : le MOTEUR (`tts.engine`, portée instance) et le DÉBIT
+ * (`tts.speed`, portée bot) ne sont PLUS sur la même page. Le moteur se règle
+ * sur `/config#systeme`, le débit se lit sur `/bots#voix`. On règle donc le
+ * moteur par l'API (comme le ferait le select de la page Instance), puis on
+ * RECHARGE la page du bot et on mesure le champ « Débit » — le garde-fou
+ * (grisé + note « Sans effet ») est conservé à l'identique.
+ */
+async function reglerMoteur(value) {
+  await fetch(BASE + "/api/config", {
+    method: "PUT",
+    headers: { "content-type": "application/json", "x-yuki-config": "1" },
+    body: JSON.stringify({ "tts.engine": value }),
+  });
+}
+
+const SPEED_STATE = `(() => {
+  const rows = [...document.querySelectorAll("#group-voix .config-row")];
   const byLabel = (label) => rows.find((r) => r.querySelector('.config-label')?.textContent?.includes(label));
-  const engine = byLabel("Moteur")?.querySelector("select");
   const speedRow = byLabel("Débit");
-  const speedInput = speedRow?.querySelector("input");
-  const noteText = () => {
-    const note = speedRow?.querySelector(".config-engine-note");
-    return note && !note.hidden ? note.textContent : "";
-  };
-  const setEngine = (value) => {
-    engine.value = value;
-    engine.dispatchEvent(new Event("input"));
-    engine.dispatchEvent(new Event("change"));
-  };
-  const initial = engine.value;
-  setEngine("chatterbox");
-  const chatterbox = { disabled: speedInput.disabled, note: noteText() };
-  setEngine("kokoro");
-  const kokoro = { disabled: speedInput.disabled, note: noteText() };
-  setEngine("qwen3-tts");
-  const qwen = { disabled: speedInput.disabled, note: noteText() };
-  setEngine(initial);
+  const input = speedRow?.querySelector("input");
+  const note = speedRow?.querySelector(".config-engine-note");
   return {
-    initial,
-    chatterbox,
-    kokoro,
-    qwen,
-    restoredEngine: engine.value,
-    restoredDisabled: speedInput.disabled,
+    present: Boolean(speedRow),
+    disabled: Boolean(input?.disabled),
+    note: note && !note.hidden ? note.textContent : "",
+    // Le MOTEUR n'est PAS réglable depuis la page du bot (portée instance).
+    engineSelectOnBotPage: Boolean(byLabel("Moteur de synthèse")),
+  };
+})()`;
+
+const etatInitial = await (await fetch(BASE + "/api/config")).json();
+const moteurInitial = etatInitial.fields["tts.engine"].value;
+const mesures = {};
+for (const moteur of ["chatterbox", "kokoro", "qwen3-tts"]) {
+  await reglerMoteur(moteur);
+  await gotoVoixBot();
+  mesures[moteur] = await evaluate(SPEED_STATE);
+}
+await reglerMoteur(moteurInitial);
+await gotoVoixBot();
+const restaure = await evaluate(SPEED_STATE);
+check(
+  "[/bots] « Débit » grisé + note pour chatterbox/qwen3-tts, actif pour kokoro (suit le moteur)",
+  mesures.chatterbox.disabled === true &&
+    /Sans effet/.test(mesures.chatterbox.note) &&
+    mesures.kokoro.disabled === false &&
+    mesures.kokoro.note === "" &&
+    mesures["qwen3-tts"].disabled === true &&
+    /Sans effet/.test(mesures["qwen3-tts"].note) &&
+    restaure.disabled === (moteurInitial !== "kokoro"),
+  JSON.stringify({ mesures, restaure, moteurInitial }),
+);
+check(
+  "[/bots] le MOTEUR n'est PAS sur la page du bot (il est commun : /config#systeme)",
+  mesures.chatterbox.engineSelectOnBotPage === false,
+  JSON.stringify(mesures.chatterbox),
+);
+await navigate(BASE + "/config#systeme");
+const moteurSurInstance = await evaluate(`(() => {
+  const rows = [...document.querySelectorAll("#group-systeme .config-row")];
+  const row = rows.find((r) => r.querySelector('.config-label')?.textContent?.includes("Moteur de synthèse"));
+  return {
+    present: Boolean(row),
+    options: row ? [...row.querySelectorAll("option")].map((o) => o.value) : [],
   };
 })()`);
 check(
-  "[/config] « Débit » grisé + note pour chatterbox/qwen3-tts, actif pour kokoro (suit le moteur)",
-  speedByEngine.chatterbox.disabled === true &&
-    /Sans effet/.test(speedByEngine.chatterbox.note) &&
-    speedByEngine.kokoro.disabled === false &&
-    speedByEngine.kokoro.note === "" &&
-    speedByEngine.qwen.disabled === true &&
-    /Sans effet/.test(speedByEngine.qwen.note) &&
-    speedByEngine.restoredEngine === speedByEngine.initial &&
-    speedByEngine.restoredDisabled === true,
-  JSON.stringify(speedByEngine),
+  "[/config#systeme] le MOTEUR est bien sur l'onglet Système (5 moteurs) + encart de renvoi vers « Bot · Voix »",
+  moteurSurInstance.present === true &&
+    moteurSurInstance.options.length === 5 &&
+    (await evaluate(`[...document.querySelectorAll('#panel-systeme .config-renvoi__lien')].some((a) => a.getAttribute('href') === '/bots#voix')`)) === true,
+  JSON.stringify(moteurSurInstance),
 );
+await navigate(BASE + "/bots?b=yuki#voix");
 
 /* — Onglets : bascule au clic, navigation clavier, routage par hash — */
+// ⚠️ Page du BOT : l'onglet par défaut est « Général » et les six onglets sont
+// Général · Personnalité · Voix · Mémoire · Plateformes · Déclencheurs.
+await evaluate(`document.getElementById('tab-general').click()`);
+await sleep(150);
 const tabClick = await evaluate(`(() => {
   const tabs = [...document.querySelectorAll('[role=tab]')];
   const active = () => tabs.find((t) => t.getAttribute('aria-selected') === 'true')?.id;
   const visible = (id) => !document.getElementById(id)?.hidden;
-  const before = { active: active(), modeles: visible('panel-modeles'), voix: visible('panel-voix'), hash: location.hash };
+  const before = { active: active(), general: visible('panel-general'), voix: visible('panel-voix'), hash: location.hash };
   document.getElementById('tab-voix').click();
   return {
     before,
-    after: { active: active(), modeles: visible('panel-modeles'), voix: visible('panel-voix'), hash: location.hash },
+    after: { active: active(), general: visible('panel-general'), voix: visible('panel-voix'), hash: location.hash },
   };
 })()`);
 check(
-  "[/config] clic « Voix » → panneau Voix visible, Modèles masqué, hash = #voix",
-  tabClick.before.active === "tab-modeles" && tabClick.before.modeles === true && tabClick.before.voix === false &&
-    tabClick.after.active === "tab-voix" && tabClick.after.modeles === false && tabClick.after.voix === true &&
+  "[/bots] clic « Voix » → panneau Voix visible, Général masqué, hash = #voix",
+  tabClick.before.active === "tab-general" && tabClick.before.general === true && tabClick.before.voix === false &&
+    tabClick.after.active === "tab-voix" && tabClick.after.general === false && tabClick.after.voix === true &&
     tabClick.after.hash === "#voix",
   JSON.stringify(tabClick),
 );
@@ -904,7 +961,7 @@ const tabKey = await evaluate(`(() => {
   };
 })()`);
 check(
-  "[/config] flèches ←/→ + enroulement + Home/End changent d'onglet (roving tabindex, ARIA, focus, activation au focus)",
+  "[/bots] flèches ←/→ + enroulement + Home/End changent d'onglet (roving tabindex, ARIA, focus, activation au focus)",
   tabKey.left.active === tabKey.leftExpected && tabKey.left.focus === tabKey.leftExpected &&
     tabKey.right.active === tabKey.start && tabKey.right.focus === tabKey.start &&
     tabKey.wrapLeft.active === tabKey.lastId && tabKey.wrapLeft.focus === tabKey.lastId &&
@@ -939,40 +996,47 @@ const iconColor = await evaluate(`(() => {
   };
 })()`);
 check(
-  "[/config] icône : `--icon-color` (accent) distincte du texte + `stroke=currentColor`, 0 style inline",
+  "[/bots] icône : `--icon-color` (accent) distincte du texte + `stroke=currentColor`, 0 style inline",
   iconColor.stroke === "currentColor" && iconColor.dark.icon !== iconColor.dark.text &&
     iconColor.styleAttrs === 0,
   JSON.stringify(iconColor),
 );
 check(
-  "[/config] icônes : couleur pilotée par le thème (data-theme), sans style inline",
+  "[/bots] icônes : couleur pilotée par le thème (data-theme), sans style inline",
   iconColor.dark.icon !== iconColor.light.icon && iconColor.dark.text !== iconColor.light.text &&
     iconColor.styleAttrs === 0,
   JSON.stringify({ dark: iconColor.dark, light: iconColor.light }),
 );
 
-/* — Routage par hash : ouverture directe de /config#voix. — */
-// Passe par un autre document d'abord : /config → /config#voix serait une
+/* — Routage par hash : ouverture directe de /bots?b=yuki#voix. — */
+// Passe par un autre document d'abord : /bots → /bots#voix serait une
 // navigation même-document (pas de rechargement, donc pas de test du hash
 // à l'init).
 await navigate(BASE + "/");
-await navigate(BASE + "/config#voix");
+await navigate(BASE + "/bots?b=yuki#voix");
 const deepLink = await evaluate(`(() => ({
   active: [...document.querySelectorAll('[role=tab]')].find((t) => t.getAttribute('aria-selected') === 'true')?.id,
   voixVisible: !document.getElementById('panel-voix')?.hidden,
-  modelesVisible: !document.getElementById('panel-modeles')?.hidden,
+  generalVisible: !document.getElementById('panel-general')?.hidden,
+  bot: document.getElementById('bot-select')?.value,
+  search: location.search,
 }))()`);
 check(
-  "[/config#voix] ouverture directe sur l'onglet Voix",
-  deepLink.active === "tab-voix" && deepLink.voixVisible === true && deepLink.modelesVisible === false,
+  "[/bots#voix] ouverture directe sur l'onglet Voix (bot yuki)",
+  deepLink.active === "tab-voix" && deepLink.voixVisible === true &&
+    deepLink.generalVisible === false && deepLink.bot === "yuki" && deepLink.search === "?b=yuki",
   JSON.stringify(deepLink),
 );
 
 /* — Pastille/indicateur « non enregistré » sur un onglet MASQUÉ — */
+// ⚠️ Sur la page INSTANCE (le champ « URL de base » du modèle y vit) : on ouvre
+// l'onglet « Images » pour que l'onglet « Modèles » soit MASQUÉ au moment de la
+// mesure (c'est tout l'objet du garde-fou).
+await navigate(BASE + "/config#images");
 const dirtyCheck = await evaluate(`(() => {
   const modelesTab = document.getElementById('tab-modeles');
   const indicator = document.getElementById('save-dirty');
-  // Modèle actif : Voix. On modifie un champ de l'onglet Modèles (masqué).
+  // Onglet actif : Images. On modifie un champ de l'onglet Modèles (masqué).
   const rows = [...document.querySelectorAll('#groups .config-row')];
   const row = rows.find((r) => r.querySelector('.config-label')?.textContent?.includes('URL de base'));
   const input = row.querySelector('input');
@@ -996,6 +1060,19 @@ check(
 );
 
 /* — Enregistrement d'un champ NUMÉRIQUE via le bouton « Enregistrer » — */
+// ⚠️ Sur la page du BOT (le « Débit » est un réglage par bot) : l'écriture part
+// sur `PUT /api/bots/yuki/config`, PAS sur `/api/config`.
+await gotoVoixBot();
+await evaluate(`(() => {
+  window.__puts = [];
+  const original = window.fetch;
+  window.fetch = (url, init) => {
+    if (init && String(init.method || "").toUpperCase() === "PUT") {
+      window.__puts.push(String(url));
+    }
+    return original(url, init);
+  };
+})()`);
 await evaluate(`(() => {
   const rows = [...document.querySelectorAll('#groups .config-row')];
   const row = rows.find((r) => r.querySelector('.config-label')?.textContent?.includes('Débit'));
@@ -1007,8 +1084,9 @@ await evaluate(`(() => {
 })()`);
 await sleep(900);
 const numericSave = await evaluate(
-  `fetch("/api/config").then((r) => r.json()).then((b) => ({
-    speed: b.fields["tts.speed"].value,
+  `fetch("/api/bots/yuki/config").then((r) => r.json()).then((bot) => ({
+    speed: bot.fields["tts.speed"].value,
+    puts: window.__puts.slice(),
     status: document.getElementById("save-status").textContent,
     globalError: document.getElementById("global-error").hidden
       ? "" : document.getElementById("global-error").textContent,
@@ -1016,8 +1094,11 @@ const numericSave = await evaluate(
   true,
 );
 check(
-  "[/config] « Enregistrer » d'un champ numérique (Débit) → persistance, aucun message d'erreur",
-  numericSave.speed === 133 && /Enregistré/.test(numericSave.status) && numericSave.globalError === "",
+  "[/bots] « Enregistrer » d'un champ numérique (Débit) → persistance sur le BOT, une SEULE route",
+  numericSave.speed === 133 &&
+    numericSave.puts.length === 1 &&
+    numericSave.puts[0] === "/api/bots/yuki/config" &&
+    /Enregistré/.test(numericSave.status) && numericSave.globalError === "",
   JSON.stringify(numericSave),
 );
 
@@ -1058,7 +1139,7 @@ let modal = await evaluate(`(() => ({
   inlineStyles: document.querySelectorAll(".holaf-modal-root [style]").length,
 }))()`);
 check(
-  "[/config] « Cloner une voix » ouvre une modale HolafModal avec champ fichier + libellé",
+  "[/bots] « Cloner une voix » ouvre une modale HolafModal avec champ fichier + libellé",
   modal.open && modal.hasFile && modal.hasLabel,
   JSON.stringify(modal),
 );
@@ -1071,7 +1152,7 @@ const afterGuard = await evaluate(`(() => ({
   message: document.querySelector(".holaf-modal-root .config-helper[role=status]")?.textContent ?? "",
 }))()`);
 check(
-  "[/config] création sans fichier → refus explicite, modale maintenue ouverte",
+  "[/bots] création sans fichier → refus explicite, modale maintenue ouverte",
   afterGuard.open && /Fichier WAV requis/.test(afterGuard.message),
   JSON.stringify(afterGuard),
 );
@@ -1081,11 +1162,22 @@ await shot("config-clone-modal");
 await evaluate(`document.querySelector(".holaf-modal-btn-cancel")?.click()`);
 await sleep(200);
 const closed = await evaluate(`!document.querySelector(".holaf-modal-root")`);
-check("[/config] la modale se ferme (Annuler)", closed === true);
+check("[/bots] la modale se ferme (Annuler)", closed === true);
 
-/* ══════════════════ Onglet Voix simplifié — 5 zones (refonte UX) ═══════════ */
-console.log("\n═══ ONGLET VOIX SIMPLIFIÉ ═══");
-await gotoAssistant();
+/* ══════ Onglet « Voix » du bot + MOTEUR de l'Instance — 5 zones ═══════════
+ *
+ * ⚠️ Sous-lot 1b-4 (deux pages) : les 5 zones de la refonte UX sont désormais
+ * réparties entre DEUX pages, selon la PORTÉE de chaque clé :
+ *
+ *   page du BOT (/bots, onglet « Voix »)     page INSTANCE (/config, « Système »)
+ *   ─────────────────────────────────────    ──────────────────────────────────
+ *   ② Ma voix   → #voices-root               ① État de la voix → #tts-assistant-root
+ *   ③ Réglages  → #group-voix (bot)          ⑤ Moteur et modèles → #tts-engine-root
+ *   ④ Avancé    → #group-voix (bot)          ③ (suite) → #group-systeme (moteur,
+ *                                                          langue, volume, délais)
+ */
+console.log("\n═══ ONGLET « VOIX » (BOT) + MOTEUR (INSTANCE) ═══");
+await gotoVoixBot();
 
 const VOICE_ZONES = `(() => {
   const panel = document.getElementById("panel-voix");
@@ -1097,60 +1189,48 @@ const VOICE_ZONES = `(() => {
     const wrap = row.closest("details.config-advanced");
     return !wrap || wrap.open;
   };
-  const engineZone = panel.querySelector(":scope > #tts-engine-root > details.config-advanced");
   const advanced = panel.querySelector("#group-voix details.config-advanced");
   return {
-    hasMounts: !!document.getElementById("tts-assistant-root") &&
-      !!document.getElementById("voices-root") &&
-      !!document.getElementById("group-voix") &&
-      !!document.getElementById("tts-engine-root"),
-    engineClosed: engineZone ? engineZone.open === false : null,
+    hasMounts: !!document.getElementById("voices-root") && !!document.getElementById("group-voix"),
+    // ⚠️ L'assistant (zones ① et ⑤) est sur la page INSTANCE : il ne doit PAS
+    // apparaître ici (le moteur est commun, la voix ne l'est pas).
+    assistantAbsent: !document.getElementById("tts-assistant-root") &&
+      !document.getElementById("tts-engine-root"),
     advancedClosed: advanced ? advanced.open === false : null,
     advancedSummary: advanced?.querySelector("summary")?.textContent ?? "",
-    essentials: ["Activer la voix", "Moteur de synthèse", "Langue", "Émotion", "Débit de parole", "Volume de lecture"]
+    essentials: ["Activer la voix", "Émotion", "Débit de parole"]
       .map((label) => ({ label, visible: visibleWithoutClick(label) })),
     voiceTextField: !!rowByLabel("Voix (identifiant du registre)"),
     voiceSelect: !!document.getElementById("voices-select"),
-    downloads: (() => {
-      const el = document.getElementById("tts-downloads-root");
-      return el
-        ? { present: true, empty: el.childNodes.length === 0, rows: el.querySelectorAll(".tts-dl__item").length }
-        : { present: false, empty: false, rows: 0 };
-    })(),
     styleElems: panel.querySelectorAll("style").length,
     styleAttrs: panel.querySelectorAll("[style]").length,
   };
 })()`;
 
 const z = await evaluate(VOICE_ZONES);
-check("[/config] zone Voix : les 4 points de montage existent (① ② ③④ ⑤)", z.hasMounts, JSON.stringify({ hasMounts: z.hasMounts }));
+check("[/bots] zone Voix : les points de montage du bot existent (② ③④)", z.hasMounts, JSON.stringify({ hasMounts: z.hasMounts }));
 check(
-  "[/config] zone ③ : les 6 réglages essentiels sont VISIBLES sans clic",
+  "[/bots] ni assistant ni moteur sur la page du bot (ils sont sur l'Instance)",
+  z.assistantAbsent === true,
+  JSON.stringify({ assistantAbsent: z.assistantAbsent }),
+);
+check(
+  "[/bots] zone ③ : les réglages du bot VISIBLES sans clic (activer, émotion, débit)",
   z.essentials.every((e) => e.visible),
   JSON.stringify(z.essentials),
 );
 check(
-  "[/config] zone ④ : repli « Avancé » replié par défaut (classe DISTINCTE `config-advanced`)",
+  "[/bots] zone ④ : repli « Avancé » replié par défaut (classe DISTINCTE `config-advanced`)",
   z.advancedClosed === true && /Avancé/.test(z.advancedSummary),
   JSON.stringify({ closed: z.advancedClosed, summary: z.advancedSummary }),
 );
 check(
-  "[/config] zone ⑤ : « Moteur TTS et modèles » est replié par défaut",
-  z.engineClosed === true,
-  JSON.stringify({ engineClosed: z.engineClosed }),
-);
-check(
-  "[/config] doublon supprimé : plus de champ texte `tts.voice`, le select de la bibliothèque subsiste",
+  "[/bots] doublon supprimé : plus de champ texte `tts.voice`, le select de la bibliothèque subsiste",
   z.voiceTextField === false && z.voiceSelect === true,
   JSON.stringify({ voiceTextField: z.voiceTextField, voiceSelect: z.voiceSelect }),
 );
 check(
-  "[/config] UI de téléchargement LIVRÉE : #tts-downloads-root présent et peuplé (catalogue)",
-  z.downloads.present === true && z.downloads.empty === false && z.downloads.rows === 4,
-  JSON.stringify(z.downloads),
-);
-check(
-  "[/config] onglet Voix : zéro <style> / attribut style",
+  "[/bots] onglet Voix : zéro <style> / attribut style",
   z.styleElems === 0 && z.styleAttrs === 0,
   `style=${z.styleElems} attrs=${z.styleAttrs}`,
 );
@@ -1159,7 +1239,7 @@ await evaluate(`document.getElementById("group-voix").scrollIntoView({ block: "s
 await sleep(150);
 await shot("config-voix-reglages-essentiels");
 
-/* — Le repli ④ « Avancé » ouvert révèle les champs techniques (zone ④). — */
+/* — Le repli ④ « Avancé » du BOT : exagération + guidage (émotion seule). — */
 const openedAdvanced = await evaluate(`(() => {
   const details = document.querySelector("#group-voix details.config-advanced");
   details.open = true;
@@ -1171,13 +1251,11 @@ const openedAdvanced = await evaluate(`(() => {
   };
 })()`);
 check(
-  "[/config] zone ④ dépliée → champs techniques présents (adresse, préchargement, découpe, délai)",
+  "[/bots] zone ④ dépliée → champs AVANCÉS DU BOT (exagération, guidage)",
   openedAdvanced.open &&
-    openedAdvanced.rowCount >= 5 &&
-    openedAdvanced.labels.some((l) => /Adresse du moteur/.test(l)) &&
-    openedAdvanced.labels.some((l) => /Préchargement/.test(l)) &&
-    openedAdvanced.labels.some((l) => /Découpe/.test(l)) &&
-    openedAdvanced.labels.some((l) => /Délai maximal/.test(l)),
+    openedAdvanced.rowCount === 2 &&
+    openedAdvanced.labels.some((l) => /Exagération/.test(l)) &&
+    openedAdvanced.labels.some((l) => /guidage/.test(l)),
   JSON.stringify(openedAdvanced),
 );
 await sleep(150);
@@ -1186,6 +1264,101 @@ await sleep(150);
 await shot("config-voix-zones-avance");
 await evaluate(`document.querySelector("#group-voix details.config-advanced").open = false`);
 
+/* — Côté INSTANCE : les 9 clés techniques et l'assistant (zones ① et ⑤). — */
+await gotoAssistant();
+const zInstance = await evaluate(`(() => {
+  const panel = document.getElementById("panel-systeme");
+  const rows = [...document.querySelectorAll("#group-systeme .config-row")];
+  const rowByLabel = (label) => rows.find((r) => r.querySelector(".config-label")?.textContent?.includes(label));
+  const visibleWithoutClick = (label) => {
+    const row = rowByLabel(label);
+    if (!row || row.hidden) return false;
+    const wrap = row.closest("details.config-advanced");
+    return !wrap || wrap.open;
+  };
+  const engineZone = panel.querySelector(":scope > #tts-engine-root > details.config-advanced");
+  const advanced = panel.querySelector("#group-systeme details.config-advanced");
+  return {
+    hasMounts: !!document.getElementById("tts-assistant-root") && !!document.getElementById("tts-engine-root"),
+    engineClosed: engineZone ? engineZone.open === false : null,
+    advancedClosed: advanced ? advanced.open === false : null,
+    essentials: ["Activer la voix", "Moteur de synthèse", "Langue", "Volume de lecture"]
+      .map((label) => ({ label, visible: visibleWithoutClick(label) })),
+    downloads: (() => {
+      const el = document.getElementById("tts-downloads-root");
+      return el
+        ? { present: true, empty: el.childNodes.length === 0, rows: el.querySelectorAll(".tts-dl__item").length }
+        : { present: false, empty: false, rows: 0 };
+    })(),
+    styleElems: panel.querySelectorAll("style").length,
+    styleAttrs: panel.querySelectorAll("[style]").length,
+  };
+})()`);
+check(
+  "[/config#systeme] assistant monté (zones ① et ⑤) sur la page Instance",
+  zInstance.hasMounts === true,
+  JSON.stringify({ hasMounts: zInstance.hasMounts }),
+);
+check(
+  "[/config#systeme] zone ③ (côté instance) : activer, moteur, langue, volume VISIBLES sans clic",
+  zInstance.essentials.every((e) => e.visible),
+  JSON.stringify(zInstance.essentials),
+);
+check(
+  "[/config#systeme] zone ④ : repli « Avancé » replié par défaut",
+  zInstance.advancedClosed === true,
+  JSON.stringify({ closed: zInstance.advancedClosed }),
+);
+check(
+  "[/config#systeme] zone ⑤ : « Moteur TTS et modèles » est replié par défaut",
+  zInstance.engineClosed === true,
+  JSON.stringify({ engineClosed: zInstance.engineClosed }),
+);
+check(
+  "[/config#systeme] UI de téléchargement LIVRÉE : #tts-downloads-root présent et peuplé (catalogue)",
+  zInstance.downloads.present === true && zInstance.downloads.empty === false && zInstance.downloads.rows === 4,
+  JSON.stringify(zInstance.downloads),
+);
+check(
+  "[/config#systeme] zéro <style> / attribut style",
+  zInstance.styleElems === 0 && zInstance.styleAttrs === 0,
+  `style=${zInstance.styleElems} attrs=${zInstance.styleAttrs}`,
+);
+
+/* — Le repli technique de l'Instance : adresse, préchargement, découpe, délai. — */
+const openedAdvancedInstance = await evaluate(`(() => {
+  // ⚠️ « Système » porte PLUSIEURS groupes avec un repli « Avancé » : on vise
+  // celui du groupe « Réglages de la voix » (les clés TECHNIQUES de la voix).
+  const section = [...document.querySelectorAll("#group-systeme .config-group")].find((s) =>
+    s.querySelector(".config-group__title")?.textContent?.includes("Réglages de la voix"),
+  );
+  const details = section.querySelector("details.config-advanced");
+  details.open = true;
+  const rows = [...details.querySelectorAll(".config-row")];
+  return {
+    open: details.open,
+    rowCount: rows.length,
+    labels: rows.map((r) => r.querySelector(".config-label")?.textContent ?? ""),
+  };
+})()`);
+check(
+  "[/config#systeme] zone ④ dépliée → champs techniques COMMUNS (adresse, préchargement, découpe, délai)",
+  openedAdvancedInstance.open &&
+    openedAdvancedInstance.rowCount >= 5 &&
+    openedAdvancedInstance.labels.some((l) => /Adresse du moteur/.test(l)) &&
+    openedAdvancedInstance.labels.some((l) => /Préchargement/.test(l)) &&
+    openedAdvancedInstance.labels.some((l) => /Découpe/.test(l)) &&
+    openedAdvancedInstance.labels.some((l) => /Délai maximal/.test(l)),
+  JSON.stringify(openedAdvancedInstance),
+);
+await evaluate(`(() => {
+  const section = [...document.querySelectorAll("#group-systeme .config-group")].find((s) =>
+    s.querySelector(".config-group__title")?.textContent?.includes("Réglages de la voix"),
+  );
+  const details = section?.querySelector("details.config-advanced");
+  if (details) details.open = false;
+})()`);
+
 /* — Le repli ⑤ ouvert révèle bien son contenu (masqué, jamais retiré). — */
 const openedEngine = await evaluate(`(() => {
   const details = document.querySelector("#tts-engine-root > details.config-advanced");
@@ -1193,18 +1366,18 @@ const openedEngine = await evaluate(`(() => {
   return {
     open: details.open,
     hasDownloads: !!document.getElementById("tts-downloads-root"),
-    hasEngineConfig: !!document.querySelector("#panel-voix .tts-engine-config"),
-    hasManual: !!document.querySelector("#panel-voix .tts-assistant__manual"),
-    hasModelsDir: !!document.querySelector("#panel-voix .tts-models-dir"),
+    hasEngineConfig: !!document.querySelector("#panel-systeme .tts-engine-config"),
+    hasManual: !!document.querySelector("#panel-systeme .tts-assistant__manual"),
+    hasModelsDir: !!document.querySelector("#panel-systeme .tts-models-dir"),
   };
 })()`);
 check(
-  "[/config] zone ⑤ dépliée → disque + config moteur + manuel + place téléchargement présents",
+  "[/config#systeme] zone ⑤ dépliée → disque + config moteur + manuel + place téléchargement présents",
   openedEngine.open && openedEngine.hasDownloads && openedEngine.hasEngineConfig && openedEngine.hasManual && openedEngine.hasModelsDir,
   JSON.stringify(openedEngine),
 );
 await sleep(150);
-await evaluate(`document.querySelector("#tts-engine-root > details.config-advanced").scrollIntoView({ block: "start" })`);
+await evaluate(`document.querySelector("#tts-engine-root > details.config-advanced")?.scrollIntoView({ block: "start" })`);
 await sleep(150);
 await shot("config-voix-zones-technique");
 
@@ -1423,7 +1596,7 @@ const baseStatus = await evaluate(
 );
 await gotoAssistant();
 const editorBefore = await evaluate(`(() => {
-  const cards = [...document.querySelectorAll("#panel-voix .tts-engine-config .tts-engine-config__model")];
+  const cards = [...document.querySelectorAll(".tts-engine-config .tts-engine-config__model")];
   return cards.map((c) => {
     const s = [...c.querySelectorAll("select")];
     return { id: c.querySelector("input")?.value, family: s[0]?.value, task: s[1]?.value, mode: s[2]?.value, path: s[3]?.value };
@@ -1506,7 +1679,7 @@ await evaluate(
 );
 await gotoAssistant();
 const READ_EDITOR_MODELS = `(() => {
-  const cards = [...document.querySelectorAll("#panel-voix .tts-engine-config .tts-engine-config__model")];
+  const cards = [...document.querySelectorAll(".tts-engine-config .tts-engine-config__model")];
   return cards.map((c) => {
     const s = [...c.querySelectorAll("select")];
     return { id: c.querySelector("input")?.value, family: s[0]?.value, task: s[1]?.value, mode: s[2]?.value, path: s[3]?.value };
@@ -1591,7 +1764,7 @@ check(
 
 /* — 4) ENREGISTRER la configuration du moteur. — */
 await evaluate(`(() => {
-  const save = [...document.querySelectorAll("#panel-voix .tts-engine-config button")].find((b) => b.textContent.includes("Enregistrer la configuration du moteur"));
+  const save = [...document.querySelectorAll(".tts-engine-config button")].find((b) => b.textContent.includes("Enregistrer la configuration du moteur"));
   save?.click();
 })()`);
 await sleep(250);
@@ -1652,8 +1825,8 @@ writeFileSync(
 );
 await gotoAssistant();
 const incoherentView = await evaluate(`(() => {
-  const warn = document.querySelector("#panel-voix .tts-engine-config__coherence");
-  const card = document.querySelector("#panel-voix .tts-engine-config__model");
+  const warn = document.querySelector(".tts-engine-config__coherence");
+  const card = document.querySelector(".tts-engine-config__model");
   const selects = card ? [...card.querySelectorAll("select")] : [];
   return {
     hasWarn: !!warn,
@@ -1672,7 +1845,7 @@ check(
 await shot("config-engine-incoherent");
 // Réparation : on corrige la famille dans l'éditeur puis on enregistre.
 await evaluate(`(() => {
-  const card = document.querySelector("#panel-voix .tts-engine-config__model");
+  const card = document.querySelector(".tts-engine-config__model");
   const select = card?.querySelectorAll("select")[0];
   if (select) {
     select.value = "chatterbox";
@@ -1681,7 +1854,7 @@ await evaluate(`(() => {
 })()`);
 await sleep(150);
 await evaluate(`(() => {
-  const save = [...document.querySelectorAll("#panel-voix .tts-engine-config button")].find(
+  const save = [...document.querySelectorAll(".tts-engine-config button")].find(
     (b) => b.textContent.includes("Enregistrer la configuration du moteur"),
   );
   save?.click();
@@ -1715,9 +1888,10 @@ console.log("\n═══ ASSISTANT TTS (Lot 8) ═══");
 
 const READ_ASSISTANT = `(() => {
   const mount = document.getElementById("tts-assistant-root");
-  // La zone ⑤ (technique) vit dans #tts-engine-root, dans le même #panel-voix :
-  // on interroge le panneau ENTIER pour couvrir les deux points de montage.
-  const root = document.getElementById("panel-voix");
+  // La zone ⑤ (technique) vit dans #tts-engine-root : depuis le sous-lot 1b-4,
+  // les deux points de montage sont sur la page INSTANCE (onglet « Système »),
+  // le moteur étant commun. On interroge le panneau ENTIER.
+  const root = document.getElementById("panel-systeme");
   if (!mount || !root) return { hasRoot: false };
   const details = [...root.querySelectorAll(".tts-details")].find(
     (d) => !d.classList.contains("tts-details--engine"),
@@ -1746,9 +1920,20 @@ const READ_ASSISTANT = `(() => {
 })()`;
 
 // Query-string pour forcer une NAVIGATION COMPLÈTE (un simple hash ne recharge pas).
+/**
+ * L'assistant TTS (zones ① état et ⑤ moteur) vit sur la page INSTANCE, onglet
+ * « Système » : le moteur est COMMUN, la voix d'un bot ne l'est pas
+ * (sous-lot 1b-4, deux pages).
+ */
 async function gotoAssistant() {
-  await navigate(BASE + "/config?t=" + Date.now() + "#voix");
+  await navigate(BASE + "/config?t=" + Date.now() + "#systeme");
   await sleep(300);
+}
+
+/** La VOIX (bibliothèque + réglages du bot) vit sur la page du BOT. */
+async function gotoVoixBot() {
+  await navigate(BASE + "/bots?b=yuki&t=" + Date.now() + "#voix");
+  await sleep(400);
 }
 
 function setEnabled(value) {
@@ -1850,14 +2035,16 @@ await shot("config-assistant-off");
 /* — « Activer la voix » : chemin d'écriture UNIQUE (enregistrement global),
  *   AUCUN redémarrage silencieux, guidage explicite vers Maintenance. — */
 await evaluate(
-  `(() => { const b = [...document.querySelectorAll("#panel-voix button")].find((x) => x.textContent === "Activer la voix"); b?.click(); })()`,
+  `(() => { const b = [...document.querySelectorAll("#panel-systeme button")].find((x) => x.textContent === "Activer la voix"); b?.click(); })()`,
 );
 await sleep(1200);
 const enableResult = await evaluate(`(() => ({
   modal: !!document.querySelector(".holaf-modal-root"),
-  cardStatus: document.querySelector("#panel-voix .tts-card__action-status")?.textContent ?? "",
+  cardStatus: document.querySelector(".tts-card__action-status")?.textContent ?? "",
   selectValue: (() => {
-    const rows = [...document.querySelectorAll("#group-voix .config-row")];
+    // Sur la page INSTANCE, le groupe des réglages de la voix est rendu dans
+    // #group-systeme (le côté bot de tts.enabled est sur /bots).
+    const rows = [...document.querySelectorAll("#group-systeme .config-row")];
     const row = rows.find((r) => r.querySelector(".config-label")?.textContent?.includes("Activer la voix"));
     return row?.querySelector("select")?.value ?? null;
   })(),
@@ -1895,12 +2082,12 @@ await evaluate(
   `(() => { const t = document.getElementById("tts-test-text"); t.value = "Bonjour, ceci est un test."; t.dispatchEvent(new Event("input")); })()`,
 );
 await evaluate(
-  `(() => { const b = [...document.querySelectorAll("#panel-voix button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
+  `(() => { const b = [...document.querySelectorAll("#panel-systeme button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
 );
 await sleep(1500);
 const testResult = await evaluate(`(() => ({
-  text: document.querySelector("#panel-voix .tts-test__feedback")?.textContent ?? "",
-  error: !!document.querySelector("#panel-voix .tts-test__error"),
+  text: document.querySelector(".tts-test__feedback")?.textContent ?? "",
+  error: !!document.querySelector(".tts-test__error"),
 }))()`);
 check(
   "[/config] « Tester la voix » → WAV reçu, voix/moteur/référence réellement utilisés affichés",
@@ -1917,11 +2104,11 @@ await evaluate(
   `(() => { const t = document.getElementById("tts-test-text"); t.value = "x".repeat(600); t.dispatchEvent(new Event("input")); })()`,
 );
 await evaluate(
-  `(() => { const b = [...document.querySelectorAll("#panel-voix button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
+  `(() => { const b = [...document.querySelectorAll("#panel-systeme button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
 );
 await sleep(300);
 const tooLongMessage = await evaluate(
-  `document.querySelector("#panel-voix .tts-test__error")?.textContent ?? ""`,
+  `document.querySelector(".tts-test__error")?.textContent ?? ""`,
 );
 check(
   "[/config] texte > 500 caractères → refus explicite côté client",
@@ -1948,12 +2135,12 @@ await evaluate(
   `(() => { const t = document.getElementById("tts-test-text"); t.value = "Bonjour."; t.dispatchEvent(new Event("input")); })()`,
 );
 await evaluate(
-  `(() => { const b = [...document.querySelectorAll("#panel-voix button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
+  `(() => { const b = [...document.querySelectorAll("#panel-systeme button")].find((x) => x.textContent === "Tester la voix"); b?.click(); })()`,
 );
 await sleep(1500);
 const unknownShapeTest = await evaluate(`(() => ({
-  text: document.querySelector("#panel-voix .tts-test__feedback")?.textContent ?? "",
-  error: !!document.querySelector("#panel-voix .tts-test__error"),
+  text: document.querySelector(".tts-test__feedback")?.textContent ?? "",
+  error: !!document.querySelector(".tts-test__error"),
 }))()`);
 check(
   "[/config] /health SANS `ready` → le test de synthèse reste UTILISABLE (preuve réelle)",
@@ -1983,7 +2170,7 @@ for (const preset of ["amethyste-dark", "amethyste-light", "emeraude-dark", "eme
 writeTtsState({ kind: "ready", modelCount: 2 });
 await gotoAssistant();
 const engineEditor = await evaluate(`(() => {
-  const body = document.querySelector("#panel-voix .tts-engine-config");
+  const body = document.querySelector(".tts-engine-config");
   if (!body) return { hasSection: false };
   const add = [...body.querySelectorAll("button")].find((b) => b.textContent === "Ajouter un modèle");
   if (!add) return { hasSection: true, hasAdd: false };
@@ -2049,11 +2236,11 @@ const narrow = await evaluate(`(() => {
     flexWrap: cs.flexWrap,
     overflowX: cs.overflowX,
     scrollable: list.scrollWidth > list.clientWidth,
-    activeVisible: !document.getElementById('panel-voix')?.hidden,
+    activeVisible: [...document.querySelectorAll('[role=tabpanel]')].filter((p) => !p.hidden).length === 1,
   };
 })()`);
 check(
-  "[/config] petit écran : tablist en défilement horizontal (nowrap + overflow-x:auto)",
+  "[/config#systeme] petit écran : tablist en défilement horizontal (nowrap + overflow-x:auto)",
   narrow.flexWrap === "nowrap" && narrow.overflowX === "auto" && narrow.scrollable === true,
   JSON.stringify(narrow),
 );

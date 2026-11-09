@@ -26,9 +26,15 @@ function fichier(nom: string): string {
   return readFileSync(join(PUBLIC, nom), "utf8");
 }
 
+/* ⚠️ Depuis le sous-lot 1b-4, le CATALOGUE des champs (groupes, libellés,
+ * miroir des défauts) a été extrait de `config.js` vers `config-fields.js`
+ * (module pur, importable sans DOM) : les assertions de contenu lisent donc
+ * les DEUX fichiers, sans rien relâcher. */
+const CONFIG_CATALOGUE = fichier("config-fields.js");
+
 describe("réglages de la consolidation dans /config", () => {
   it("les cinq champs sont dans le groupe « Mémoire durable »", () => {
-    const source = fichier("config.js");
+    const source = fichier("config.js") + CONFIG_CATALOGUE;
     for (const chemin of [
       "memory.consolidation.enabled",
       "memory.consolidation.cron",
@@ -43,7 +49,7 @@ describe("réglages de la consolidation dans /config", () => {
   });
 
   it("le miroir FIELD_DEFAULTS porte les mêmes défauts que le schéma", () => {
-    const source = fichier("config.js");
+    const source = fichier("config.js") + CONFIG_CATALOGUE;
     expect(source).toContain('"memory.consolidation.enabled": "on"');
     expect(source).toContain('"memory.consolidation.cron": "0 3 * * 0"');
     expect(source).toContain('"memory.consolidation.timeZone": "Europe/Paris"');

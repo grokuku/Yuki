@@ -19,10 +19,11 @@ import { describe, expect, it } from "vitest";
 
 import { CONFIG_SCHEMA } from "../../src/config/schema.js";
 
-const CONFIG_JS = readFileSync(
-  join(process.cwd(), "public", "ui", "config.js"),
-  "utf8",
-);
+// ⚠️ Le CATALOGUE des champs a quitté `config.js` pour `config-fields.js` au
+// sous-lot 1b-4 : on lit les DEUX (aucune assertion relâchée).
+const CONFIG_JS =
+  readFileSync(join(process.cwd(), "public", "ui", "config.js"), "utf8") +
+  readFileSync(join(process.cwd(), "public", "ui", "config-fields.js"), "utf8");
 const APP_JS = readFileSync(join(process.cwd(), "public", "ui", "app.js"), "utf8");
 
 describe("page /config — fuseau des horodatages", () => {

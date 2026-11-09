@@ -58,7 +58,14 @@ const lire = (nom: string): string => readFileSync(join(UI, nom), "utf8");
 
 const PANNEAU = lire("sources-panel.js");
 const CONFIG_HTML = lire("config.html");
+/**
+ * ⚠️ Depuis le sous-lot 1b-4 (deux pages), la page de gestion des déclencheurs a
+ * quitté `/config` pour la page du BOT (`/bots`) : chaque bot a SON
+ * `sources.json`. Les règles pures, elles, n'ont pas bougé.
+ */
+const BOTS_HTML = lire("bots.html");
 const CONFIG_JS = lire("config.js");
+const CONFIG_PAGES = lire("config-pages.js");
 const CONFIG_CSS = lire("config.css");
 const INDEX = lire("index.html");
 
@@ -356,30 +363,39 @@ describe("déclencheurs — ⚠️ un TEMPORAIRE éteint reste visible 7 jours",
 });
 
 describe("déclencheurs — l'onglet DÉDIÉ et l'ancre", () => {
-  it("le panneau vit dans le panneau « Déclencheurs » de /config", () => {
-    expect(CONFIG_HTML).toContain('id="tab-declencheurs"');
-    expect(CONFIG_HTML).toContain('aria-controls="panel-declencheurs"');
-    const panneau = CONFIG_HTML.slice(
-      CONFIG_HTML.indexOf('id="panel-declencheurs"'),
-      CONFIG_HTML.indexOf('id="panel-personnalite"'),
+  it("le panneau vit dans le panneau « Déclencheurs » de la page du BOT", () => {
+    expect(BOTS_HTML).toContain('id="tab-declencheurs"');
+    expect(BOTS_HTML).toContain('aria-controls="panel-declencheurs"');
+    const panneau = BOTS_HTML.slice(
+      BOTS_HTML.indexOf('id="panel-declencheurs"'),
+      BOTS_HTML.indexOf("</main>"),
     );
     expect(panneau).toContain('id="sources-root"');
-    expect(CONFIG_HTML.indexOf('id="panel-declencheurs"')).toBeGreaterThan(
-      CONFIG_HTML.indexOf('id="panel-conversation"'),
+    // Il est le DERNIER onglet de la page (après « Plateformes »).
+    expect(BOTS_HTML.indexOf('id="panel-declencheurs"')).toBeGreaterThan(
+      BOTS_HTML.indexOf('id="panel-plateformes"'),
     );
+    // Et il n'est plus sur la page Instance.
+    expect(CONFIG_HTML).not.toContain('id="tab-declencheurs"');
   });
 
   it("déclare l'ancre `#declencheurs` (et garde `#sources` et le journal)", () => {
-    expect(CONFIG_JS).toContain('["declencheurs", "declencheurs"]');
-    expect(CONFIG_JS).toContain('["sources", "declencheurs"]');
-    expect(CONFIG_JS).toContain(`["${ANCRE_JOURNAL}", "declencheurs"]`);
+    // La table d'ancres est déclarée dans le module PUR `config-pages.js` (par
+    // page) et consommée par `config.js`.
+    expect(CONFIG_PAGES).toContain('["declencheurs", "declencheurs"]');
+    expect(CONFIG_PAGES).toContain('["sources", "declencheurs"]');
+    expect(CONFIG_PAGES).toContain(`["${ANCRE_JOURNAL}", "declencheurs"]`);
+    expect(CONFIG_JS).toContain("ongletDuHash(PAGE, location.hash)");
   });
 
   it("⚠️ le lien de la pastille est COHÉRENT avec l'ancre", () => {
-    expect(INDEX).toContain('href="/config#declencheurs"');
+    // ⚠️ Le lien vise la page du BOT depuis le sous-lot 1b-4 (les déclencheurs
+    // appartiennent à un bot) ; `?b=yuki` = le bot historique.
+    expect(INDEX).toContain('href="/bots?b=yuki#declencheurs"');
+    expect(INDEX).not.toContain('href="/config#declencheurs"');
     expect(INDEX).not.toContain('href="/config#sources"');
-    // L'ancre visée EXISTE dans le markup (sinon `revealHashTarget` échoue).
-    expect(CONFIG_HTML).toContain('id="tab-declencheurs"');
+    // L'onglet visé EXISTE dans le markup (sinon l'ancre tombe dans le vide).
+    expect(BOTS_HTML).toContain('id="tab-declencheurs"');
   });
 
   it("aucun style inline, aucun innerHTML dans la page de gestion", () => {

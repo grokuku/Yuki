@@ -29,7 +29,9 @@ import { describe, expect, it } from "vitest";
 const UI = join(process.cwd(), "public", "ui");
 const lire = (nom: string): string => readFileSync(join(UI, nom), "utf8");
 
-const CONFIG_JS = lire("config.js");
+// ⚠️ Le CATALOGUE (groupes, libellés, miroir des défauts) a quitté `config.js`
+// pour `config-fields.js` au sous-lot 1b-4 : on lit les DEUX.
+const CONFIG_JS = lire("config.js") + lire("config-fields.js");
 const CONFIG_CSS = lire("config.css");
 
 describe("« Réinitialiser au défaut » — câblage de la page /config", () => {

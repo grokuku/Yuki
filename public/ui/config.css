@@ -1973,3 +1973,97 @@
 .avatar-editor__erreur[hidden] {
   display: none;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * DEUX PAGES (lot 35d, sous-lot 1b-4) — /config = Instance, /bots = Bot
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Ligne d'explication SOUS le titre de la page (④) : elle dit ce qui reste
+ * commun et où est allé ce qui a déménagé. Remplie par `config.js`. */
+.config-page-line {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  max-width: 100ch;
+}
+
+.config-page-line:empty {
+  display: none;
+}
+
+/* ENCART DE RENVOI : « ce réglage est sur l'autre page, voici le lien ».
+ * Un cadre discret pour qu'il se voie sans crier (le champ, lui, n'est plus là). */
+.config-renvoi {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  padding: 6px 0 6px 10px;
+  margin: 4px 0 12px;
+  max-width: 100ch;
+}
+
+.config-renvoi__lien {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.config-renvoi__lien:hover {
+  color: var(--text);
+}
+
+/* Sélecteur de bot (③) — `<select>` natif + bouton « ＋ ». */
+.bot-selecteur {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+
+.bot-selecteur__label {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.bot-selecteur__select {
+  min-width: 220px;
+  max-width: 340px;
+}
+
+.bot-selecteur__add {
+  font-size: 1rem;
+  line-height: 1;
+  padding: 4px 10px;
+}
+
+/* Zone « Général » d'un bot : informations en LECTURE SEULE. */
+.bot-info {
+  align-items: baseline;
+}
+
+.bot-info__valeur {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+.bot-info__valeur[hidden] {
+  display: none;
+}
+
+.bot-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  background: var(--panel-2);
+}
+
+/* Zone de danger : dit ce qui n'est PAS possible, sans bouton inerte. */
+.bot-danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.bot-danger .config-group__title {
+  color: var(--danger);
+}

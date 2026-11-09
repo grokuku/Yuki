@@ -205,7 +205,9 @@ async function shot(name) {
 }
 
 /* ═══════════════════════ 1) Bloc affiché, distinct ═══════════════════════ */
-await navigate(`${server.base}/config#personnalite`);
+/* ⚠️ Sous-lot 1b-4 (deux pages) : la personnalité est un réglage PAR BOT, sa
+   page est `/bots` (onglet « Personnalité »). `?b=yuki` = le bot historique. */
+await navigate(`${server.base}/bots?b=yuki#personnalite`);
 const block = await evaluate(`(() => {
   const active = [...document.querySelectorAll('[role=tab]')].find((t) => t.getAttribute('aria-selected') === 'true')?.id;
   const panel = document.getElementById('panel-personnalite');
@@ -221,13 +223,13 @@ const block = await evaluate(`(() => {
     styleAttrs: document.body.querySelectorAll('[style]').length,
   };
 })()`);
-check("[/config#personnalite] onglet actif et panneau visible", block.active === "tab-personnalite" && block.visible === true, JSON.stringify(block).slice(0, 200));
-check("[/config#personnalite] bloc mémoire présent et distinct", block.hasBlock === true);
-check("[/config#personnalite] titre « Mémoire durable »", block.title === "Mémoire durable", block.title);
-check("[/config#personnalite] avertissement : personnalité NON touchée", /personnalit/i.test(block.warning) && /vie antérieure/i.test(block.warning), block.warning.slice(0, 180));
-check("[/config#personnalite] bouton « Réinitialiser la mémoire »", block.button.includes("Réinitialiser la mémoire"), JSON.stringify(block.button));
-check("[/config#personnalite] 2 souvenirs annoncés", /2 souvenir/.test(block.count), block.count);
-check("[/config#personnalite] aucune style= inline (CSP)", block.styleAttrs === 0, String(block.styleAttrs));
+check("[/bots#personnalite] onglet actif et panneau visible", block.active === "tab-personnalite" && block.visible === true, JSON.stringify(block).slice(0, 200));
+check("[/bots#personnalite] bloc mémoire présent et distinct", block.hasBlock === true);
+check("[/bots#personnalite] titre « Mémoire durable »", block.title === "Mémoire durable", block.title);
+check("[/bots#personnalite] avertissement : personnalité NON touchée", /personnalit/i.test(block.warning) && /vie antérieure/i.test(block.warning), block.warning.slice(0, 180));
+check("[/bots#personnalite] bouton « Réinitialiser la mémoire »", block.button.includes("Réinitialiser la mémoire"), JSON.stringify(block.button));
+check("[/bots#personnalite] 2 souvenirs annoncés", /2 souvenir/.test(block.count), block.count);
+check("[/bots#personnalite] aucune style= inline (CSP)", block.styleAttrs === 0, String(block.styleAttrs));
 await shot("memory-e2e-block");
 
 /* ═══════════════ 2) Modale HolafModal + libellé explicite ═══════════════ */
@@ -239,10 +241,10 @@ const modal = await evaluate(`(() => {
   const danger = [...document.querySelectorAll('.holaf-modal-btn')].find((b) => b.textContent === 'Archiver et réinitialiser');
   return { title, message, hasDanger: !!danger, dangerClass: danger?.className ?? '' };
 })()`);
-check("[/config#personnalite] confirmation via HolafModal (pas window.confirm)", modal.title.length > 0, modal.title);
-check("[/config#personnalite] libellé de modale explicite (archivage)", /archiv/i.test(modal.title + " " + modal.message), modal.title);
-check("[/config#personnalite] la modale dit OÙ (dossier memory-archive)", /memory-archive/.test(modal.message), modal.message.slice(0, 200));
-check("[/config#personnalite] bouton de danger « Archiver et réinitialiser »", modal.hasDanger === true && /danger/.test(modal.dangerClass), modal.dangerClass);
+check("[/bots#personnalite] confirmation via HolafModal (pas window.confirm)", modal.title.length > 0, modal.title);
+check("[/bots#personnalite] libellé de modale explicite (archivage)", /archiv/i.test(modal.title + " " + modal.message), modal.title);
+check("[/bots#personnalite] la modale dit OÙ (dossier memory-archive)", /memory-archive/.test(modal.message), modal.message.slice(0, 200));
+check("[/bots#personnalite] bouton de danger « Archiver et réinitialiser »", modal.hasDanger === true && /danger/.test(modal.dangerClass), modal.dangerClass);
 await shot("memory-e2e-modal");
 
 /* ═══════════════════ 3) Confirmation ⇒ archivage réel ═══════════════════ */
@@ -256,9 +258,9 @@ const after = await evaluate(`(() => {
     styleAttrs: document.body.querySelectorAll('[style]').length,
   };
 })()`);
-check("[/config#personnalite] retour visuel : archive + destination", /archiv/i.test(after.status) && /memory-archive/.test(after.status), after.status.slice(0, 200));
-check("[/config#personnalite] bouton désactivé (mémoire vide)", after.buttonDisabled === true);
-check("[/config#personnalite] aucune style= inline après archivage", after.styleAttrs === 0, String(after.styleAttrs));
+check("[/bots#personnalite] retour visuel : archive + destination", /archiv/i.test(after.status) && /memory-archive/.test(after.status), after.status.slice(0, 200));
+check("[/bots#personnalite] bouton désactivé (mémoire vide)", after.buttonDisabled === true);
+check("[/bots#personnalite] aucune style= inline après archivage", after.styleAttrs === 0, String(after.styleAttrs));
 await shot("memory-e2e-after");
 
 const apiState = await fetch(`${server.base}/api/memory`).then((r) => r.json());

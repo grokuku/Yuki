@@ -407,21 +407,30 @@ describe("deux réglages, DEUX contrôles (agents / outils)", () => {
     expect(REMOTE_TOOLS_HELP).toContain("approbation");
   });
 
-  it("l'ancre `/config#chat-remote-tools` ouvre aussi l'onglet « Conversation »", () => {
-    const source = lire("public/ui/config.js");
-    expect(source).toContain(`[REMOTE_TOOLS_ANCHOR, "conversation"]`);
+  it("l'ancre `#chat-remote-tools` ouvre aussi l'onglet « Plateformes »", () => {
+    // ⚠️ Depuis le sous-lot 1b-4 (deux pages), le panneau des discussions vit
+    // sur la page du BOT, onglet « Plateformes ». La table d'ancres est dans le
+    // module PUR `config-pages.js` (testable sans navigateur).
+    const source = lire("public/ui/config-pages.js");
+    expect(source).toContain(`["${REMOTE_TOOLS_ANCHOR}", "plateformes"]`);
   });
 });
 
 // ─── ③ L'ancre qui rend le contrôle trouvable ──────────────────────────────
 
-describe("ancre `/config#chat-remote-agents`", () => {
-  it("`tabFromHash` reconnaît l'ancre et ouvre l'onglet « Conversation »", () => {
+describe("ancre `#chat-remote-agents` (page du bot)", () => {
+  it("`ongletDuHash` reconnaît l'ancre et ouvre l'onglet « Plateformes »", () => {
     const source = lire("public/ui/config.js");
+    const pages = lire("public/ui/config-pages.js");
     // ⚠️ Depuis le découpage des deux accès (2026-11-02), la table porte AUSSI
     // l'ancre `chat-remote-tools` : on vérifie l'ENTRÉE, pas la forme de la ligne.
-    expect(source).toContain(`[REMOTE_AGENTS_ANCHOR, "conversation"]`);
-    expect(source).toContain("return ANCRES_PROFONDES.get(raw) ?? null;");
+    // ⚠️ Depuis le sous-lot 1b-4, l'onglet visé est « Plateformes » (page du bot) :
+    // le panneau des discussions a quitté l'ancien onglet « Conversation ».
+    expect(pages).toContain(`["${REMOTE_AGENTS_ANCHOR}", "plateformes"]`);
+    expect(pages).toContain("export function ongletDuHash(");
+    expect(source).toContain("return ongletDuHash(PAGE, location.hash);");
+    // Une ancre inconnue ne casse rien : l'appelant retombe sur le premier onglet.
+    expect(source).toContain("selectTab(tabFromHash() ?? premierOnglet());");
     // Le défilement est SÉPARÉ de la sélection d'onglet (et tolère l'absence de l'élément).
     expect(source).toContain("function revealHashTarget()");
     expect(source).toContain("typeof target.scrollIntoView !== \"function\"");
@@ -434,16 +443,19 @@ describe("ancre `/config#chat-remote-agents`", () => {
     expect(source).toContain("onFirstRender: () => revealHashTarget()");
   });
 
-  it("la cible est bien dans le panneau « Conversation », en fin d'onglet", () => {
-    const html = lire("public/ui/config.html");
-    const panneau = html.indexOf('id="panel-conversation"');
-    const finPanneau = html.indexOf('id="panel-personnalite"');
+  it("la cible est bien dans le panneau « Plateformes » de la page du BOT", () => {
+    const html = lire("public/ui/bots.html");
+    const panneau = html.indexOf('id="panel-plateformes"');
+    const debutPanneau = html.indexOf('id="panel-plateformes"');
+    const finPanneau = html.indexOf('id="panel-declencheurs"');
     const chatRoot = html.indexOf('id="chat-root"');
     expect(panneau).toBeGreaterThan(-1);
-    expect(finPanneau).toBeGreaterThan(panneau);
-    // `#chat-root` (qui porte le contrôle « Agents distants ») est DANS ce panneau :
-    // l'ancre ne peut donc pas envoyer les champs dans un autre onglet.
-    expect(chatRoot).toBeGreaterThan(panneau);
+    expect(finPanneau).toBeGreaterThan(debutPanneau);
+    // ⚠️ `#chat-root` (qui porte le contrôle « Agents distants ») est DANS ce
+    // panneau — il était dans « Conversation » de `/config` avant le sous-lot 1b-4.
+    expect(chatRoot).toBeGreaterThan(debutPanneau);
     expect(chatRoot).toBeLessThan(finPanneau);
+    // Et il n'est PLUS sur la page Instance.
+    expect(lire("public/ui/config.html")).not.toContain('id="chat-root"');
   });
 });

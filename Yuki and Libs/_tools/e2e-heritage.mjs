@@ -253,26 +253,28 @@ function fillEditor(titre, categorie, texte) {
 }
 
 /* ═══════════════════════ 1) Section affichée, distincte ══════════════════ */
-await navigate(`${server.base}/config#personnalite`);
+/* ⚠️ Sous-lot 1b-4 (deux pages) : la personnalité est un réglage PAR BOT,
+   sa page est `/bots` (onglet « Personnalité »). */
+await navigate(`${server.base}/bots?b=yuki#personnalite`);
 const initial = await heritageState();
-check("[/config#personnalite] section « Vie antérieure » présente", initial.hasSection === true);
-check("[/config#personnalite] titre « Vie antérieure »", initial.title === "Vie antérieure", initial.title);
-check("[/config#personnalite] rappel : archive jamais fusionnée", /JAMAIS fusionnée/i.test(initial.help) && /vie antérieure/i.test(initial.help), initial.help.slice(0, 160));
-check("[/config#personnalite] rappel : lecture seule du modèle", /lecture seule/i.test(initial.help), initial.help.slice(0, 200));
-check("[/config#personnalite] une entrée de départ listée", initial.titles.includes("Identité (SOUL.md)"), JSON.stringify(initial.titles));
-check("[/config#personnalite] aucune style= inline (CSP)", initial.styleAttrs === 0, String(initial.styleAttrs));
+check("[/bots#personnalite] section « Vie antérieure » présente", initial.hasSection === true);
+check("[/bots#personnalite] titre « Vie antérieure »", initial.title === "Vie antérieure", initial.title);
+check("[/bots#personnalite] rappel : archive jamais fusionnée", /JAMAIS fusionnée/i.test(initial.help) && /vie antérieure/i.test(initial.help), initial.help.slice(0, 160));
+check("[/bots#personnalite] rappel : lecture seule du modèle", /lecture seule/i.test(initial.help), initial.help.slice(0, 200));
+check("[/bots#personnalite] une entrée de départ listée", initial.titles.includes("Identité (SOUL.md)"), JSON.stringify(initial.titles));
+check("[/bots#personnalite] aucune style= inline (CSP)", initial.styleAttrs === 0, String(initial.styleAttrs));
 await shot("heritage-e2e-block");
 
 /* ═══════════════════════════ 2) AJOUT d'une entrée ═══════════════════════ */
 await clickHeritage("Ajouter une entrée");
 await sleep(300);
 const addOpen = await heritageState();
-check("[/config#personnalite] l'éditeur d'ajout s'ouvre", addOpen.hasEditor === true);
+check("[/bots#personnalite] l'éditeur d'ajout s'ouvre", addOpen.hasEditor === true);
 await fillEditor(ADD_TITRE, "reves", "Voir les aurores boréales.");
 await clickHeritage("Ajouter à l'archive");
 await sleep(900);
 const afterAdd = await heritageState();
-check("[/config#personnalite] l'entrée ajoutée apparaît", afterAdd.titles.includes(ADD_TITRE), JSON.stringify(afterAdd.titles));
+check("[/bots#personnalite] l'entrée ajoutée apparaît", afterAdd.titles.includes(ADD_TITRE), JSON.stringify(afterAdd.titles));
 const addedFile = join(HERITAGE_DIR, "entries", `${ADD_SLUG}.json`);
 const addedRaw = readFileSync(addedFile, "utf8");
 check("[disque] l'entrée ajoutée porte l'étiquette « ne pas fusionner »", addedRaw.includes("vie antérieure — ne pas fusionner"));
@@ -283,7 +285,7 @@ await shot("heritage-e2e-add");
 await clickRow("Identité (SOUL.md)", "Éditer");
 await sleep(800);
 const editOpen = await heritageState();
-check("[/config#personnalite] l'éditeur s'ouvre sur l'entrée", editOpen.hasEditor === true);
+check("[/bots#personnalite] l'éditeur s'ouvre sur l'entrée", editOpen.hasEditor === true);
 await fillEditor("Identité (SOUL.md)", "identite", "SOUL modifié via l'interface.");
 await clickHeritage("Enregistrer");
 await sleep(900);
@@ -303,14 +305,14 @@ const modal = await evaluate(`(() => {
   const confirm = [...document.querySelectorAll('.holaf-modal-btn')].find((b) => b.textContent === 'Mettre de côté');
   return { title, message, hasConfirm: !!confirm, cls: confirm?.className ?? '' };
 })()`);
-check("[/config#personnalite] confirmation via HolafModal (pas window.confirm)", modal.title.length > 0, modal.title);
-check("[/config#personnalite] libellé explicite (récupérable, deleted/)", /deleted/.test(modal.message) && /récupérable/i.test(modal.message), modal.message.slice(0, 200));
-check("[/config#personnalite] bouton de danger « Mettre de côté »", modal.hasConfirm && /danger/.test(modal.cls), modal.cls);
+check("[/bots#personnalite] confirmation via HolafModal (pas window.confirm)", modal.title.length > 0, modal.title);
+check("[/bots#personnalite] libellé explicite (récupérable, deleted/)", /deleted/.test(modal.message) && /récupérable/i.test(modal.message), modal.message.slice(0, 200));
+check("[/bots#personnalite] bouton de danger « Mettre de côté »", modal.hasConfirm && /danger/.test(modal.cls), modal.cls);
 await shot("heritage-e2e-modal");
 await evaluate(`(() => { [...document.querySelectorAll('.holaf-modal-btn')].find((b) => b.textContent === 'Mettre de côté')?.click(); })()`);
 await sleep(1200);
 const afterDelete = await heritageState();
-check("[/config#personnalite] l'entrée retirée n'est plus listée", !afterDelete.titles.includes(ADD_TITRE), JSON.stringify(afterDelete.titles));
+check("[/bots#personnalite] l'entrée retirée n'est plus listée", !afterDelete.titles.includes(ADD_TITRE), JSON.stringify(afterDelete.titles));
 check("[disque] l'entrée est MISE DE CÔTÉ (deleted/), pas détruite", readdirSync(join(HERITAGE_DIR, "deleted")).length === 1);
 await shot("heritage-e2e-after");
 
