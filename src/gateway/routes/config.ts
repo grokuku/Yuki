@@ -23,8 +23,14 @@ import type { IncomingHttpHeaders } from "node:http";
 import {
   ConfigValidationError,
   LockedByEnvError,
+  ScopedFieldError,
   type ConfigRuntime,
 } from "../../config/runtime.js";
+import {
+  BOT_YUKI,
+  type BotRecord,
+  type RegistreBots,
+} from "../../bots/registry.js";
 import {
   LibrarianClient,
   LIBRARIAN_ERROR_MESSAGES,
@@ -88,6 +94,13 @@ export interface ConfigApiDeps {
    * (log/audit) soit masquée elle aussi.
    */
   onSecretSeen?: (value: string) => void;
+  /**
+   * BOTS de l'instance (lot 35b, sous-lot 1b-3) : registre lu au démarrage.
+   * `registre: null` = mode mono-bot historique (aucun `bots.json`) ⇒ la seule
+   * route `/api/bots` répond la liste `yuki` et `/api/bots/yuki/config`
+   * fonctionne. Absent (tests, gateway dégradé) ⇒ même repli.
+   */
+  bots?: { registre?: RegistreBots | null };
 }
 
 export interface ConfigHttpResponse {
@@ -262,7 +275,12 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
   }
 
   try {
-    const result = input.deps.runtime.update(patch as Record<string, unknown>);
+    // ÉCRAN D'INSTANCE : les réglages d'instance ET le côté INSTANCE des clés
+    // mixtes ; une clé propre à un bot est REFUSÉE (`bot_scoped_field`).
+    const result = input.deps.runtime.update(patch as Record<string, unknown>, {
+      portee: "instance",
+      refuser: "bot",
+    });
     audit(input.deps, result.changes, flow);
     return json(200, {
       fields: result.fields,
@@ -271,49 +289,69 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
       voiceInstruction: VOICE_SPEECH_INSTRUCTION,
     });
   } catch (error) {
-    if (error instanceof LockedByEnvError) {
-      const variable = error.locked[0]?.variable;
-      return json(400, {
-        error: "locked_by_env",
+    return configWriteError(input.deps, error);
+  }
+}
+
+/**
+ * Traduit une erreur d'écriture de configuration en réponse HTTP. Partagé par
+ * les DEUX écrans (`/api/config` et `/api/bots/<id>/config`) : un même refus
+ * doit se lire de la même façon.
+ */
+function configWriteError(
+  deps: ConfigApiDeps,
+  error: unknown,
+): ConfigHttpResponse {
+  if (error instanceof ScopedFieldError) {
+    return json(400, {
+      error: error.code,
+      code: error.code,
+      fields: error.fields,
+      message: error.message,
+    });
+  }
+  if (error instanceof LockedByEnvError) {
+    const variable = error.locked[0]?.variable;
+    return json(400, {
+      error: "locked_by_env",
+      code: "locked_by_env",
+      ...(variable ? { variable } : {}),
+      fields: error.locked.map((entry) => ({
+        path: entry.path,
         code: "locked_by_env",
-        ...(variable ? { variable } : {}),
-        fields: error.locked.map((entry) => ({
-          path: entry.path,
-          code: "locked_by_env",
-          message: `Champ verrouillé par l'environnement (${entry.variable}).`,
-        })),
-      });
-    }
-    if (error instanceof ConfigValidationError) {
-      return json(400, { error: "invalid_config", fields: error.fields });
-    }
-    if (error instanceof ConfigStoreWriteError) {
-      // Cause journalisée ET renvoyée : un 500 muet rendrait le diagnostic
-      // impossible (volume `state` non inscriptible, disque plein…).
-      input.deps.logger.error("config.store.write_failed", {
-        field: "store",
+        message: `Champ verrouillé par l'environnement (${entry.variable}).`,
+      })),
+    });
+  }
+  if (error instanceof ConfigValidationError) {
+    return json(400, { error: "invalid_config", fields: error.fields });
+  }
+  if (error instanceof ConfigStoreWriteError) {
+    // Cause journalisée ET renvoyée : un 500 muet rendrait le diagnostic
+    // impossible (volume `state` non inscriptible, disque plein…).
+    deps.logger.error("config.store.write_failed", {
+      field: "store",
+      path: error.path,
+      code: error.code,
+      reason: error.reason,
+      error: error.cause instanceof Error ? error.cause.message : String(error.cause),
+    });
+    return json(500, {
+      error: "config_store_unwritable",
+      code: "config_store_unwritable",
+      path: error.path,
+      // Le conseil dépend de la CAUSE RÉELLE (code système) : « :ro » pour
+      // EROFS, permissions pour EACCES/EPERM, absent pour ENOENT, honnête
+      // (avec le code brut) sinon. Jamais de `chown` quand le montage est ro.
+      message: `${error.message} ${describeWriteFailure({
+        volume: "state",
         path: error.path,
         code: error.code,
-        reason: error.reason,
-        error: error.cause instanceof Error ? error.cause.message : String(error.cause),
-      });
-      return json(500, {
-        error: "config_store_unwritable",
-        code: "config_store_unwritable",
-        path: error.path,
-        // Le conseil dépend de la CAUSE RÉELLE (code système) : « :ro » pour
-        // EROFS, permissions pour EACCES/EPERM, absent pour ENOENT, honnête
-        // (avec le code brut) sinon. Jamais de `chown` quand le montage est ro.
-        message: `${error.message} ${describeWriteFailure({
-          volume: "state",
-          path: error.path,
-          code: error.code,
-          service: "gateway",
-        })}`,
-      });
-    }
-    throw error;
+        service: "gateway",
+      })}`,
+    });
   }
+  throw error;
 }
 
 async function handleLlmTest(input: ConfigRequestInput): Promise<ConfigHttpResponse> {
@@ -521,9 +559,155 @@ async function handleLibrarianTest(
   }
 }
 
-/** Vrai si le chemin relève de l'API de configuration. */
+/** Vrai si le chemin relève de l'API de configuration (instance OU bot). */
 export function isConfigPath(path: string): boolean {
-  return path === "/api/config" || path.startsWith("/api/config/");
+  return (
+    path === "/api/config" ||
+    path.startsWith("/api/config/") ||
+    path === "/api/bots" ||
+    path.startsWith("/api/bots/")
+  );
+}
+
+// ── BOTS : liste et configuration d'UN bot (lot 35b, sous-lot 1b-3) ─────────
+
+/** Forme minimale d'un bot exposée par `GET /api/bots`. */
+export interface BotListing {
+  id: string;
+  nom: string;
+  profil: string;
+  actif: boolean;
+  ordre: number;
+}
+
+/**
+ * Bots connus de l'instance, triés par `ordre`. En mode mono-bot historique
+ * (aucun `bots.json`), le seul bot est celui que le runtime applique déjà.
+ */
+function botsConnus(deps: ConfigApiDeps): BotListing[] {
+  const registre = deps.bots?.registre;
+  const entrees: BotRecord[] = registre ? [...registre.bots] : [];
+  if (entrees.length === 0) {
+    return [
+      {
+        id: deps.runtime.botId,
+        nom: deps.runtime.botId === BOT_YUKI ? "Yuki" : deps.runtime.botId,
+        profil: "complet",
+        actif: true,
+        ordre: 0,
+      },
+    ];
+  }
+  return entrees
+    .sort((a, b) => a.ordre - b.ordre)
+    .map((bot) => ({
+      id: bot.id,
+      nom: bot.nom,
+      profil: bot.profil,
+      actif: bot.actif,
+      ordre: bot.ordre,
+    }));
+}
+
+/** Bot demandé, ou `null` s'il n'existe pas. */
+function botDemande(deps: ConfigApiDeps, botId: string): BotListing | null {
+  return botsConnus(deps).find((bot) => bot.id === botId) ?? null;
+}
+
+/** 404 qui NOMME l'identifiant refusé (jamais un 404 muet). */
+function botInconnu(botId: string): ConfigHttpResponse {
+  return json(404, {
+    error: "bot_not_found",
+    code: "bot_not_found",
+    botId,
+    message: `Bot inconnu : « ${botId} ».`,
+  });
+}
+
+/**
+ * `GET /api/bots` — liste des bots (`id`, `nom`, `profil`, `actif`, `ordre`).
+ * Sert au sélecteur de la page d'un bot.
+ */
+function handleBotsList(deps: ConfigApiDeps): ConfigHttpResponse {
+  return json(200, { bots: botsConnus(deps) });
+}
+
+/** `GET /api/bots/<id>/config` — valeurs effectives du bot demandé. */
+function handleBotGet(deps: ConfigApiDeps, botId: string): ConfigHttpResponse {
+  const snapshot = deps.runtime.snapshotPour(botId);
+  return json(200, {
+    bot: { id: botId },
+    fields: snapshot.fields,
+    status: snapshot.status,
+    voiceInstruction: VOICE_SPEECH_INSTRUCTION,
+  });
+}
+
+/**
+ * `PUT /api/bots/<id>/config` — écrit les réglages du bot demandé.
+ *
+ * ⚠️ REFUS CROISÉ : une clé `instance` est refusée (`instance_scoped_field`).
+ * ⚠️ Une clé `mixte` écrit son côté BOT (`portee: "bot"`) — le côté instance
+ * reste sur `PUT /api/config`.
+ */
+function handleBotPut(
+  input: ConfigRequestInput,
+  botId: string,
+): ConfigHttpResponse {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+  const flow = configWriteFlow(input.headers);
+
+  let patch: unknown;
+  try {
+    patch = input.body.trim() === "" ? {} : JSON.parse(input.body);
+  } catch {
+    return json(400, {
+      error: "invalid_json",
+      fields: [{ path: "", code: "invalid_json", message: "Corps JSON invalide." }],
+    });
+  }
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+    return json(400, {
+      error: "invalid_body",
+      fields: [
+        {
+          path: "",
+          code: "invalid_body",
+          message: "Objet JSON attendu (patch de champs).",
+        },
+      ],
+    });
+  }
+
+  try {
+    const result = input.deps.runtime.updatePour(
+      botId,
+      patch as Record<string, unknown>,
+      { portee: "bot", refuser: "instance" },
+    );
+    audit(input.deps, result.changes, flow);
+    return json(200, {
+      bot: { id: botId },
+      fields: result.fields,
+      status: result.status,
+      applied: result.applied,
+      voiceInstruction: VOICE_SPEECH_INSTRUCTION,
+    });
+  } catch (error) {
+    return configWriteError(input.deps, error);
+  }
+}
+
+/** Chemin `/api/bots/<id>/config` → identifiant de bot, ou `null`. */
+function botIdOfPath(path: string): string | null {
+  const match = /^\/api\/bots\/([^/]+)\/config$/.exec(path);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1] as string);
+  } catch {
+    return null;
+  }
 }
 
 // ── Mot de passe d'INSTANCE (déverrouillage des agents sensibles) ───────────
@@ -687,6 +871,24 @@ export async function handleConfigRequest(
     if (method === "POST") return handlePasswordSet(input);
     if (method === "DELETE") return handlePasswordClear(input);
     return json(405, { error: "method_not_allowed", method });
+  }
+
+  // ── BOTS (lot 35b, sous-lot 1b-3) ────────────────────────────────────────
+  if (path === "/api/bots") {
+    if (method === "GET" || method === "HEAD") return handleBotsList(input.deps);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  const botId = botIdOfPath(path);
+  if (botId !== null) {
+    // ⚠️ Bot INCONNU ⇒ 404 qui NOMME l'identifiant (jamais une écriture dans un
+    // dossier inventé, jamais un 404 muet).
+    if (!botDemande(input.deps, botId)) return botInconnu(botId);
+    if (method === "GET" || method === "HEAD") return handleBotGet(input.deps, botId);
+    if (method === "PUT") return handleBotPut(input, botId);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  if (path.startsWith("/api/bots/")) {
+    return json(404, { error: "not_found", path });
   }
   return json(404, { error: "not_found", path });
 }

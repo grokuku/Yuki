@@ -2,7 +2,10 @@
  * Page « Configuration » — vanilla, `type="module"`, aucune chaîne de build.
  *
  * - lit `GET /api/config` (valeurs effectives, clés masquées) ;
- * - écrit via `PUT /api/config` (en-tête `X-Yuki-Config: 1`) ;
+ * - écrit via `PUT /api/config` (en-tête `X-Yuki-Config: 1`) ET, pour les
+ *   réglages propres au bot actif, via `PUT /api/bots/<id>/config` : une même
+ *   barre « Enregistrer » peut donc produire DEUX écritures, une par portée
+ *   (lot 35b, sous-lot 1b-3) ;
  * - teste une connexion LLM via `POST /api/config/llm/test` ;
  * - affiche l'état réel (`status.lightKey/heavyKey/ready`, poll `/health/ready`).
  *
@@ -42,7 +45,9 @@ import {
   presentConfigSaveError,
   presentRestartRefusal,
   resetValueFor,
+  splitConfigPatchByScope,
 } from './config-patch.js';
+import { cheminConfigBot, idBotActif } from './bots-api.js';
 import { initTheme } from './theme.js';
 import { setTimeZone } from './horodatage.js';
 import { createTtsPlayer } from './tts-player.js';
@@ -1713,6 +1718,19 @@ function buildPatch() {
   return buildConfigPatch({ allFields: ALL_FIELDS, state });
 }
 
+/**
+ * PORTÉE de chaque champ, telle que le serveur la déclare (`scope` du snapshot).
+ * Sert au découpage du patch : l'écran d'instance n'écrit que les clés
+ * `instance`/`mixte`, les clés propres à un bot partent sur la route du bot.
+ */
+function scopesOfState() {
+  const scopes = {};
+  for (const [path, entry] of Object.entries(state.fields)) {
+    if (entry && typeof entry.scope === 'string') scopes[path] = entry.scope;
+  }
+  return scopes;
+}
+
 async function load() {
   const body = await HolafFetch.get("/api/config", {
     headers: { accept: "application/json" },
@@ -1756,15 +1774,43 @@ async function save(flow = "config-save") {
     return false;
   }
   try {
-    // Corps JSON envoyé en objet : la brique le sérialise et pose le
-    // Content-Type ; les en-têtes maison (WRITE_HEADERS) sont préservés.
-    const body = await HolafFetch.put("/api/config", {
-      headers: writeHeaders(flow),
-      body: buildPatch(),
-    });
-    applySnapshot(body);
+    // ⚠️ DEUX ÉCRITURES MAXIMUM (lot 35b, sous-lot 1b-3) : la portée de chaque
+    // champ décide de la route. Un réglage d'instance (et le côté INSTANCE d'un
+    // réglage mixte) va sur `PUT /api/config` ; un réglage propre au bot actif
+    // va sur `PUT /api/bots/<id>/config`. Envoyer une clé de bot à
+    // `/api/config` est REFUSÉ par le serveur (`bot_scoped_field`).
+    const split = splitConfigPatchByScope(buildPatch(), scopesOfState());
+    const ecritures = [];
+    if (Object.keys(split.instance).length > 0 || Object.keys(split.bot).length === 0) {
+      ecritures.push({
+        url: "/api/config",
+        body: split.instance,
+      });
+    }
+    if (Object.keys(split.bot).length > 0) {
+      ecritures.push({
+        url: cheminConfigBot(await idBotActif()),
+        body: split.bot,
+      });
+    }
+    let body = null;
+    const applied = { hot: [], restart: [] };
+    for (const ecriture of ecritures) {
+      // Corps JSON envoyé en objet : la brique le sérialise et pose le
+      // Content-Type ; les en-têtes maison (WRITE_HEADERS) sont préservés.
+      body = await HolafFetch.put(ecriture.url, {
+        headers: writeHeaders(flow),
+        body: ecriture.body,
+      });
+      const partiel = body?.applied ?? {};
+      for (const path of Array.isArray(partiel.hot) ? partiel.hot : []) applied.hot.push(path);
+      for (const path of Array.isArray(partiel.restart) ? partiel.restart : []) {
+        applied.restart.push(path);
+      }
+    }
+    applySnapshot(body ?? {});
     render();
-    showApplied(body.applied ?? { hot: [], restart: [] });
+    showApplied(applied);
     saveStatus.textContent = "Enregistré.";
     // La voix active a pu changer côté formulaire : resynchronise le panneau.
     void voicesPanel?.refresh();

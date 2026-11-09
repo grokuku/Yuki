@@ -36,6 +36,11 @@ export const CONFIG_ERROR_HELP = {
   invalid_json: "Le corps de la requête n'est pas un JSON valide (bug client).",
   invalid_body: "Le corps de la requête n'est pas un objet JSON (patch de champs attendu).",
   internal_error: "Le gateway a rencontré une erreur interne : consultez ses journaux.",
+  bot_scoped_field:
+    "Ce réglage est propre à un bot : il se règle sur la page du bot (/bots), pas sur celle de l'instance.",
+  instance_scoped_field:
+    "Ce réglage appartient à l'instance : il se règle sur la page de configuration (/config), pas par bot.",
+  bot_not_found: "Le bot demandé n'existe pas sur cette instance.",
 };
 
 /**
@@ -224,6 +229,33 @@ export function buildConfigPatch({ allFields, state }) {
     }
   }
   return patch;
+}
+
+/**
+ * Découpe un patch de configuration en DEUX écritures (lot 35b, sous-lot 1b-3).
+ *
+ * Depuis le découpage Instance/Bot, un réglage a une PORTÉE (`scope` du
+ * snapshot) et chaque écran n'a le droit d'écrire que la sienne :
+ *  - `instance` : clés `instance` **et** `mixte` ⇒ `PUT /api/config` (le côté
+ *    INSTANCE d'une clé mixte) ;
+ *  - `bot` : clés propres au bot ⇒ `PUT /api/bots/<id>/config`.
+ *
+ * ⚠️ Une portée INCONNUE (snapshot d'un gateway antérieur au découpage) part
+ * côté INSTANCE : c'est là que vivaient TOUS les réglages avant ce lot, donc le
+ * seul repli qui ne perde pas une valeur en silence.
+ *
+ * @param {Record<string, unknown>} patch
+ * @param {Record<string, string>} scopes  chemin → `"instance" | "bot" | "mixte"`
+ * @returns {{ instance: Record<string, unknown>, bot: Record<string, unknown> }}
+ */
+export function splitConfigPatchByScope(patch, scopes = {}) {
+  const instance = {};
+  const bot = {};
+  for (const [path, value] of Object.entries(patch ?? {})) {
+    if (scopes[path] === "bot") bot[path] = value;
+    else instance[path] = value;
+  }
+  return { instance, bot };
 }
 
 /** Sélectionne la chaîne non vide parmi des candidats (sinon `null`). */

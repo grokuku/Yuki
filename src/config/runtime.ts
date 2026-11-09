@@ -35,6 +35,7 @@ import {
   validateField,
   type ApplyKind,
   type FieldDescriptor,
+  type FieldScope,
   type Origin,
 } from "./schema.js";
 import { ConfigStore } from "./store.js";
@@ -62,9 +63,44 @@ export class LockedByEnvError extends Error {
   }
 }
 
+/**
+ * Code de refus CROISÉ entre les deux écrans (lot 35b, sous-lot 1b-3).
+ *  - `bot_scoped_field` : une clé `bot` présentée à `PUT /api/config` ;
+ *  - `instance_scoped_field` : une clé `instance` présentée à
+ *    `PUT /api/bots/<id>/config`.
+ */
+export type ConfigScopeRefusal = "bot_scoped_field" | "instance_scoped_field";
+
+/**
+ * REFUS CROISÉ : le champ existe, mais il n'appartient pas à la portée de
+ * l'écran qui l'écrit. ⚠️ Ce n'est PAS une erreur de validation : toutes les
+ * clés fautives sont réunies dans `fields`, comme `ConfigValidationError`, pour
+ * que l'interface puisse les désigner une par une.
+ */
+export class ScopedFieldError extends Error {
+  override readonly name = "ScopedFieldError";
+  constructor(
+    readonly code: ConfigScopeRefusal,
+    readonly fields: FieldError[],
+  ) {
+    super(
+      code === "bot_scoped_field"
+        ? "Réglage propre à un bot : il se règle sur la page du bot, pas sur celle de l'instance."
+        : "Réglage d'instance : il se règle sur la page de l'instance, pas par bot.",
+    );
+  }
+}
+
 /** Feuille « valeur » (non secrète). */
 export interface ValueFieldSnapshot {
   value: string | number;
+  /**
+   * PORTÉE du réglage (lot 35b) : l'interface en a besoin pour envoyer chaque
+   * clé à la BONNE route (`/api/config` pour `instance`/`mixte`,
+   * `/api/bots/<id>/config` pour `bot`). Sans elle, la page ne pourrait pas
+   * découper son patch en deux écritures.
+   */
+  scope: FieldScope;
   /**
    * Valeur par DÉFAUT réellement appliquée si aucune surcharge n'était
    * enregistrée : pour `prompts.light` / `prompts.heavy`, c'est le CONTENU DU
@@ -85,6 +121,8 @@ export interface SecretFieldSnapshot {
   configured: boolean;
   source: Origin;
   masked: string | null;
+  /** Portée du réglage (voir `ValueFieldSnapshot.scope`). */
+  scope: FieldScope;
   lockedByEnv?: string;
 }
 
@@ -150,6 +188,32 @@ export interface ConfigRuntimeOptions {
  */
 export interface ConfigUpdateOptions {
   portee?: "auto" | "instance" | "bot";
+  /**
+   * PORTÉE INTERDITE : refuse toute clé de cette portée. C'est le REFUS CROISÉ
+   * entre les deux écrans (lot 35b, sous-lot 1b-3) :
+   *  - `PUT /api/config` (écran d'INSTANCE) passe `refuser: "bot"` ⇒ une clé
+   *    `bot` est refusée (`bot_scoped_field`) ;
+   *  - `PUT /api/bots/<id>/config` (écran d'un BOT) passe
+   *    `refuser: "instance"` ⇒ une clé `instance` est refusée
+   *    (`instance_scoped_field`).
+   * ⚠️ Une clé `mixte` n'est JAMAIS refusée : elle a un côté sur chaque écran,
+   * et c'est `portee` qui décide lequel est écrit.
+   */
+  refuser?: "bot" | "instance";
+}
+
+/**
+ * CIBLE d'écriture/lecture : l'overlay d'UN bot.
+ *
+ * ⚠️ Le bot ACTIF est le seul dont les valeurs sont tenues en mémoire
+ * (`overlayValues`) et rediffusées aux abonnés ; l'overlay d'un autre bot est
+ * lu et écrit sur disque à la demande, sans toucher à l'état du bot actif.
+ */
+interface CibleBot {
+  readonly botId: string;
+  readonly actif: boolean;
+  readonly values: Record<string, string | number>;
+  readonly store: ConfigOverlayStore;
 }
 
 /** Masque une valeur secrète : 4 derniers caractères précédés de `••••`. */
@@ -174,6 +238,12 @@ export class ConfigRuntime {
   private readonly overlay: ConfigOverlayStore;
   /** Identifiant du bot actif dont l'overlay est appliqué. */
   readonly botId: string;
+  /**
+   * Volume `state` : racine des overlays PAR BOT
+   * (`<state>/bots/<id>/config.overlay.json`). Sert à atteindre l'overlay d'un
+   * bot NON actif depuis les routes `/api/bots/<id>/config`.
+   */
+  private readonly stateDir: string;
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly defaults: Record<string, string | number> = {};
   /** Surccharges d'environnement validées (chemin → valeur). */
@@ -190,6 +260,7 @@ export class ConfigRuntime {
   constructor(options: ConfigRuntimeOptions) {
     this.store = options.store ?? new ConfigStore(options.env.configStorePath);
     this.botId = options.botId ?? BOT_ID_DEFAUT;
+    this.stateDir = options.env.mountPoints.state;
     this.overlay =
       options.overlay ??
       new ConfigOverlayStore(
@@ -305,14 +376,22 @@ export class ConfigRuntime {
    *    Les DEUX côtés absents ⇒ défaut du schéma (comportement d'avant le lot).
    */
   get(path: string): string | number {
+    return this.effectif(path, this.overlayValues);
+  }
+
+  /** Valeur effective d'un champ POUR UN OVERLAY DONNÉ (même fusion, une fois). */
+  private effectif(
+    path: string,
+    overlay: Readonly<Record<string, string | number>>,
+  ): string | number {
     if (path in this.envValues) return this.envValues[path] as string | number;
     const descriptor = descriptorOf(path);
     if (!descriptor) return this.valeurCommune(path);
     if (descriptor.scope === "instance") return this.valeurCommune(path);
     if (descriptor.scope === "mixte" && descriptor.mixteMerge === "et") {
-      return this.valeurConjonction(path);
+      return this.valeurConjonction(path, overlay);
     }
-    return this.valeurBot(path);
+    return this.valeurBot(path, overlay);
   }
 
   getString(path: string): string {
@@ -326,12 +405,19 @@ export class ConfigRuntime {
 
   /** Origine effective d'un champ (l'overlay du bot compte comme « store »). */
   originOf(path: string): Origin {
+    return this.origine(path, this.overlayValues);
+  }
+
+  private origine(
+    path: string,
+    overlay: Readonly<Record<string, string | number>>,
+  ): Origin {
     if (path in this.envValues) return "env";
     const descriptor = descriptorOf(path);
     if (descriptor?.scope === "instance") {
       return path in this.values ? "store" : "default";
     }
-    if (path in this.overlayValues || path in this.values) return "store";
+    if (path in overlay || path in this.values) return "store";
     return "default";
   }
 
@@ -342,15 +428,21 @@ export class ConfigRuntime {
   }
 
   /** Valeur d'une clé de BOT : overlay d'abord, store commun en repli. */
-  private valeurBot(path: string): string | number {
-    if (path in this.overlayValues) return this.overlayValues[path] as string | number;
+  private valeurBot(
+    path: string,
+    overlay: Readonly<Record<string, string | number>>,
+  ): string | number {
+    if (path in overlay) return overlay[path] as string | number;
     return this.valeurCommune(path);
   }
 
   /** Valeur d'une clé `mixte` + `mixteMerge: "et"` : CONJONCTION des deux côtés. */
-  private valeurConjonction(path: string): string | number {
+  private valeurConjonction(
+    path: string,
+    overlay: Readonly<Record<string, string | number>>,
+  ): string | number {
     const commun = path in this.values ? this.values[path] : undefined;
-    const bot = path in this.overlayValues ? this.overlayValues[path] : undefined;
+    const bot = path in overlay ? overlay[path] : undefined;
     if (commun === undefined && bot === undefined) return this.valeurCommune(path);
     const estActif = (valeur: string | number) => valeur === ACTIF;
     const instanceActive = commun === undefined ? true : estActif(commun);
@@ -418,25 +510,79 @@ export class ConfigRuntime {
 
   /** Instantané exposé par `GET /api/config` (aucune clé en clair). */
   snapshot(): ConfigSnapshot {
+    return this.instantane(this.overlayValues);
+  }
+
+  /**
+   * Instantané des valeurs effectives POUR UN BOT DONNÉ
+   * (`GET /api/bots/<id>/config`). Même fusion que `get()`, mais l'overlay lu
+   * est celui du bot demandé — le bot ACTIF passe par l'état en mémoire.
+   */
+  snapshotPour(botId: string): ConfigSnapshot {
+    return this.instantane(this.cible(botId).values);
+  }
+
+  /** Cible d'écriture/lecture de l'overlay d'un bot (`actif` ou non). */
+  private cible(botId: string): CibleBot {
+    if (botId === this.botId) {
+      return {
+        botId,
+        actif: true,
+        values: this.overlayValues,
+        store: this.overlay,
+      };
+    }
+    const store = new ConfigOverlayStore(
+      resolveConfigOverlayPath(this.stateDir, botId),
+    );
+    return { botId, actif: false, values: this.lireOverlay(store), store };
+  }
+
+  /**
+   * Lit et VALIDE l'overlay d'un bot NON actif. Même tolérance que le
+   * démarrage : une entrée inconnue, d'instance ou invalide est IGNORÉE (le
+   * fichier n'est jamais réécrit ici) — la lecture ne doit jamais échouer.
+   */
+  private lireOverlay(
+    store: ConfigOverlayStore,
+  ): Record<string, string | number> {
+    const values: Record<string, string | number> = {};
+    const loaded = store.load();
+    if (loaded.source !== "file") return values;
+    for (const [path, raw] of Object.entries(loaded.values)) {
+      const descriptor = descriptorOf(path);
+      if (!descriptor || descriptor.scope === "instance") continue;
+      const result = validateField(path, raw);
+      if (!result.ok) continue;
+      values[path] = result.value;
+    }
+    return values;
+  }
+
+  private instantane(
+    overlay: Readonly<Record<string, string | number>>,
+  ): ConfigSnapshot {
     const fields: Record<string, ConfigFieldSnapshot> = {};
     for (const path of CONFIG_PATHS) {
       const descriptor = CONFIG_SCHEMA[path] as FieldDescriptor;
-      const origin = this.originOf(path);
+      const origin = this.origine(path, overlay);
       const lockedByEnv = this.isLockedByEnv(path) ? envNameOf(path) : undefined;
       if (descriptor.secret) {
-        const value = this.getString(path).trim();
+        const value = String(this.effectif(path, overlay)).trim();
         fields[path] = {
           configured: value.length > 0,
           source: origin,
           masked: value.length > 0 ? maskSecret(value) : null,
+          scope: descriptor.scope,
           ...(lockedByEnv ? { lockedByEnv } : {}),
         };
       } else {
         fields[path] = {
-          value: this.get(path),
+          value: this.effectif(path, overlay),
           default: this.defaults[path] ?? "",
           origin,
           apply: descriptor.apply,
+          scope: descriptor.scope,
           ...(lockedByEnv ? { lockedByEnv } : {}),
         };
       }
@@ -468,12 +614,34 @@ export class ConfigRuntime {
     patch: Record<string, unknown>,
     options: ConfigUpdateOptions = {},
   ): ConfigUpdateResult {
+    return this.ecrire(patch, options, this.cible(this.botId));
+  }
+
+  /**
+   * Applique un patch aux réglages d'un BOT DONNÉ (`PUT /api/bots/<id>/config`).
+   * Même fusion et même écriture que `update()`, mais l'overlay visé est celui
+   * du bot demandé (écrit sur disque s'il n'est pas le bot actif).
+   */
+  updatePour(
+    botId: string,
+    patch: Record<string, unknown>,
+    options: ConfigUpdateOptions = {},
+  ): ConfigUpdateResult {
+    return this.ecrire(patch, options, this.cible(botId));
+  }
+
+  private ecrire(
+    patch: Record<string, unknown>,
+    options: ConfigUpdateOptions,
+    cible: CibleBot,
+  ): ConfigUpdateResult {
     const portee = options.portee ?? "auto";
     const locked: Array<{ path: string; variable: string }> = [];
     const errors: FieldError[] = [];
+    const scoped: FieldError[] = [];
     const changes: ConfigChange[] = [];
     const nextCommon: Record<string, string | number> = { ...this.values };
-    const nextOverlay: Record<string, string | number> = { ...this.overlayValues };
+    const nextOverlay: Record<string, string | number> = { ...cible.values };
 
     for (const [path, raw] of Object.entries(patch)) {
       const descriptor = descriptorOf(path);
@@ -485,19 +653,34 @@ export class ConfigRuntime {
         });
         continue;
       }
+      // REFUS CROISÉ : une clé d'une AUTRE portée que l'écran appelant. Une clé
+      // `mixte` n'est jamais refusée (elle a un côté sur chaque écran).
+      if (options.refuser !== undefined && descriptor.scope === options.refuser) {
+        const code =
+          options.refuser === "bot" ? "bot_scoped_field" : "instance_scoped_field";
+        scoped.push({
+          path,
+          code,
+          message:
+            descriptor.scope === "bot"
+              ? `« ${path} » est un réglage propre à un bot : réglez-le sur la page du bot.`
+              : `« ${path} » est un réglage d'instance : réglez-le sur la page de l'instance.`,
+        });
+        continue;
+      }
       if (this.isLockedByEnv(path)) {
         locked.push({ path, variable: envNameOf(path) ?? path });
         continue;
       }
 
       const versOverlay = portee !== "instance" && descriptor.scope !== "instance";
-      const cible = versOverlay ? nextOverlay : nextCommon;
-      const before = this.get(path);
+      const magasin = versOverlay ? nextOverlay : nextCommon;
+      const before = this.effectif(path, cible.values);
 
       if (raw === null) {
         let efface = false;
-        if (path in cible) {
-          delete cible[path];
+        if (path in magasin) {
+          delete magasin[path];
           efface = true;
         }
         if (versOverlay && path in nextCommon) {
@@ -520,8 +703,8 @@ export class ConfigRuntime {
         errors.push({ path, code: result.code, message: result.message });
         continue;
       }
-      if (path in cible && cible[path] === result.value) continue;
-      cible[path] = result.value;
+      if (path in magasin && magasin[path] === result.value) continue;
+      magasin[path] = result.value;
       changes.push({
         path,
         secret: Boolean(descriptor.secret),
@@ -530,18 +713,32 @@ export class ConfigRuntime {
       });
     }
 
+    // Le refus croisé passe AVANT les erreurs de valeur : c'est un problème de
+    // ROUTE, pas de contenu (l'utilisateur doit changer d'écran, pas de valeur).
+    if (scoped.length > 0) {
+      throw new ScopedFieldError(
+        options.refuser === "bot" ? "bot_scoped_field" : "instance_scoped_field",
+        scoped,
+      );
+    }
     if (locked.length > 0) throw new LockedByEnvError(locked);
     if (errors.length > 0) throw new ConfigValidationError(errors);
 
     if (changes.length > 0) {
       // Chaque store n'est réécrit QUE s'il a changé : un patch de clés `bot`
       // ne fait pas clignoter `config.json`, et réciproquement.
-      if (!memeContenu(nextCommon, this.values)) this.store.write(nextCommon);
-      if (!memeContenu(nextOverlay, this.overlayValues)) this.overlay.write(nextOverlay);
-      this.values = nextCommon;
-      this.overlayValues = nextOverlay;
-      this.bridgeSecrets();
-      this.emit();
+      const communChange = !memeContenu(nextCommon, this.values);
+      const overlayChange = !memeContenu(nextOverlay, cible.values);
+      if (communChange) this.store.write(nextCommon);
+      if (overlayChange) cible.store.write(nextOverlay);
+      if (communChange) this.values = nextCommon;
+      // ⚠️ L'overlay d'un bot NON actif n'entre jamais dans l'état en mémoire :
+      // il n'est pas appliqué à cette instance, donc rien à rediffuser.
+      if (overlayChange && cible.actif) this.overlayValues = nextOverlay;
+      if (communChange || (overlayChange && cible.actif)) {
+        this.bridgeSecrets();
+        this.emit();
+      }
     }
 
     const applied = {
@@ -552,7 +749,11 @@ export class ConfigRuntime {
         .filter((change) => descriptorOf(change.path)?.apply === "restart")
         .map((change) => change.path),
     };
-    const snapshot = this.snapshot();
+    // La réponse décrit le bot VISÉ : l'état en mémoire pour le bot actif,
+    // l'overlay tout juste écrit pour un autre bot.
+    const snapshot = this.instantane(
+      cible.actif ? this.overlayValues : nextOverlay,
+    );
     return { fields: snapshot.fields, status: snapshot.status, applied, changes };
   }
 

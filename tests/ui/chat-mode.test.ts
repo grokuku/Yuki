@@ -9,8 +9,8 @@
  *  - les TROIS chemins de clic (barre latérale, menu téléphone, bouton de l'état
  *    vide) passent par le MÊME garde-fou : `{ type: "new" }` n'est envoyé qu'à un
  *    seul endroit dans `app.js` ;
- *  - l'état du mode est PERSISTÉ CÔTÉ SERVEUR (`PUT /api/config`), jamais en
- *    `localStorage` ;
+ *  - l'état du mode est PERSISTÉ CÔTÉ SERVEUR (`PUT /api/bots/<id>/config`),
+ *    jamais en `localStorage` ;
  *  - CSP inchangée : aucun `innerHTML`, aucune ressource externe.
  *
  * ⚠️ Échoue sur le code d'origine : `public/ui/chat-mode.js` n'existe pas.
@@ -259,11 +259,22 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
 });
 
 describe("persistance CÔTÉ SERVEUR", () => {
-  it("écrit `chat.mode` par `PUT /api/config` (en-tête X-Yuki-Config) puis relit l'état", async () => {
+  it("écrit `chat.mode` sur la route du BOT ACTIF puis relit l'état", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
-      if (url === "/api/config") {
+      if (url === "/api/bots") {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            bots: [
+              { id: "yuki", nom: "Yuki", profil: "complet", actif: true, ordre: 0 },
+            ],
+          }),
+        };
+      }
+      if (url === "/api/bots/yuki/config") {
         return { ok: true, status: 200, json: async () => ({ applied: { hot: ["chat.mode"] } }) };
       }
       return { ok: true, status: 200, json: async () => remoteStatus("mattermost") };
@@ -271,7 +282,10 @@ describe("persistance CÔTÉ SERVEUR", () => {
     const status = await saveChatMode("mattermost", fetchImpl);
     expect(status.mode).toBe("mattermost");
 
-    const write = calls.find((call) => call.url === "/api/config");
+    // ⚠️ `chat.mode` est un réglage PROPRE AU BOT : `PUT /api/config` le refuse
+    // (`bot_scoped_field`). L'unique écriture vise donc la route du bot actif.
+    expect(calls.some((call) => call.url === "/api/config")).toBe(false);
+    const write = calls.find((call) => call.url === "/api/bots/yuki/config");
     expect(write?.init?.method).toBe("PUT");
     expect((write?.init?.headers as Record<string, string>)["x-yuki-config"]).toBe("1");
     expect(JSON.parse(String(write?.init?.body))).toEqual({ "chat.mode": "mattermost" });

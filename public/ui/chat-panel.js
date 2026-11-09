@@ -28,6 +28,7 @@
  */
 
 import { badgeFor } from "./chat-mode.js";
+import { cheminConfigBot, idBotActif } from "./bots-api.js";
 import { formatDateTimeFr } from "./horodatage.js";
 
 /** En-tête exigé par les routes de discussion (lecture ET écriture). */
@@ -303,10 +304,13 @@ function renderRemoteSwitch({
         return;
       }
       try {
-        // ⚠️ `PUT /api/config` (même route que les autres réglages) : la valeur est
-        // validée par le schéma serveur, appliquée à chaud (`apply: hot`). L'en-tête
-        // de FLUX est le même diagnostic que la page Configuration.
-        await request("/api/config", {
+        // ⚠️ RÉGLAGE PROPRE AU BOT ACTIF (`chat.remoteAgents`/`chat.remoteTools`) :
+        // il s'écrit sur la route DE CE BOT, jamais sur `/api/config` (qui le
+        // refuse : `bot_scoped_field`). La valeur est validée par le schéma
+        // serveur et appliquée à chaud (`apply: hot`). L'en-tête de FLUX est le
+        // même diagnostic que la page Configuration.
+        const botId = await idBotActif();
+        await request(cheminConfigBot(botId), {
           method: "PUT",
           headers: {
             "content-type": "application/json",

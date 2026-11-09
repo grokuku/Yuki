@@ -458,7 +458,13 @@ describe("POST /api/config/llm/test", () => {
   });
 });
 
-describe("PUT /api/config — patch produit par l'UI (`buildConfigPatch`)", () => {
+/**
+ * ⚠️ `tts.speed` est un réglage PROPRE AU BOT (`scope: "bot"`) : depuis le
+ * découpage Instance/Bot (lot 35b, sous-lot 1b-3), il s'écrit sur
+ * `PUT /api/bots/yuki/config`. `PUT /api/config` le REFUSE désormais
+ * (`bot_scoped_field`) — c'est le refus croisé, vérifié plus bas.
+ */
+describe("PUT /api/bots/yuki/config — patch produit par l'UI (`buildConfigPatch`)", () => {
   it("un débit modifié (n° correctement typé) → 200 et persisté", async () => {
     const { baseUrl } = await startHarness();
     const patch = buildConfigPatch({
@@ -472,7 +478,7 @@ describe("PUT /api/config — patch produit par l'UI (`buildConfigPatch`)", () =
       },
     });
     expect(patch).toEqual({ "tts.speed": 150 });
-    const response = await fetch(`${baseUrl}/api/config`, {
+    const response = await fetch(`${baseUrl}/api/bots/yuki/config`, {
       method: "PUT",
       headers: WRITE_HEADERS,
       body: JSON.stringify(patch),
@@ -490,7 +496,7 @@ describe("PUT /api/config — patch produit par l'UI (`buildConfigPatch`)", () =
     // Établit que le soupçon « le patch en chaîne fait échouer l'enregistrement »
     // est FAUX : le schéma coerce les chaînes numériques (`validateDescriptor`).
     const { baseUrl } = await startHarness();
-    const response = await fetch(`${baseUrl}/api/config`, {
+    const response = await fetch(`${baseUrl}/api/bots/yuki/config`, {
       method: "PUT",
       headers: WRITE_HEADERS,
       body: JSON.stringify({ "tts.speed": "150" }),
@@ -514,7 +520,7 @@ describe("PUT /api/config — patch produit par l'UI (`buildConfigPatch`)", () =
         initial: new Map([["tts.speed", 100]]),
       },
     });
-    const response = await fetch(`${baseUrl}/api/config`, {
+    const response = await fetch(`${baseUrl}/api/bots/yuki/config`, {
       method: "PUT",
       headers: WRITE_HEADERS,
       body: JSON.stringify(patch),

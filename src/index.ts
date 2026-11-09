@@ -3164,6 +3164,10 @@ async function main(): Promise<void> {
                 .length
             : 0,
         onSecretSeen: rememberSecretValue,
+        // BOTS (lot 35b, sous-lot 1b-3) : `GET /api/bots` et
+        // `/api/bots/<id>/config`. Le registre lu au démarrage dit QUELS bots
+        // existent (`null` en mode mono-bot historique ⇒ « yuki » seul).
+        bots: { registre: bots.registre },
       },
       personality: { store: personalityStore, logger },
       rules: { store: rulesStore, logger },
@@ -3194,10 +3198,11 @@ async function main(): Promise<void> {
         mattermost: mattermostPort,
         discord: discordPort,
         logger,
-        // ⚠️ RETOMBÉE DU MODE après suppression d'un miroir : `chat.mode` est un réglage
-        // `apply: hot`, on l'écrit par le MÊME chemin que `PUT /api/config`.
+        // ⚠️ RETOMBÉE DU MODE après suppression d'un miroir : `chat.mode` est un
+        // réglage PROPRE AU BOT ACTIF (`scope: "bot"`, `apply: hot`) — il s'écrit
+        // donc dans l'overlay du bot actif, jamais dans `config.json` d'instance.
         saveMode: (mode: string) => {
-          config.update({ "chat.mode": mode });
+          config.update({ "chat.mode": mode }, { portee: "bot" });
         },
       },
       // Administration de la mémoire (archivage récupérable) : disponible

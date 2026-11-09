@@ -6,12 +6,19 @@
  *
  * ⚠️ Ce module ne parle à AUCUNE plateforme : il lit `GET /api/chat/status` par
  * le gateway (CSP stricte : aucun appel navigateur vers un service distant) et
- * écrit le mode choisi par `PUT /api/config` (en-tête `X-Yuki-Config: 1`). L'état
- * est donc **persisté côté serveur**, pas dans le navigateur.
+ * écrit le mode choisi par `PUT /api/bots/<id>/config` (en-tête
+ * `X-Yuki-Config: 1`). L'état est donc **persisté côté serveur**, pas dans le
+ * navigateur.
+ *
+ * ⚠️ MULTI-BOT (lot 35b, sous-lot 1b-3) : `chat.mode` est un réglage PROPRE AU
+ * BOT ACTIF. `PUT /api/config` le REFUSE désormais (`bot_scoped_field`) : le
+ * mode s'écrit sur la route du bot actif, résolue par `GET /api/bots`.
  *
  * ⚠️ Rendu PUREMENT DOM (`createElement`), aucune injection HTML directe, aucun
  * style en ligne : la CSP `style-src 'self'` reste inchangée.
  */
+
+import { cheminConfigBot, idBotActif } from "./bots-api.js";
 
 /**
  * CHEMIN EXACT du réglage de chaque plateforme, dans `/config`.
@@ -412,7 +419,8 @@ export function selectorVisible(status) {
  * `local`, qui est toujours actif ; sinon sur le premier mode encore actif.
  *
  * ⚠️ Cette fonction ne DÉCIDE rien côté serveur : elle rend le mode à demander, et
- * l'appelant l'écrit par `saveChatMode` (`PUT /api/config`). Le serveur reste l'autorité.
+ * l'appelant l'écrit par `saveChatMode` (`PUT /api/bots/<id>/config`). Le serveur
+ * reste l'autorité.
  */
 export function resolveActiveMode(status) {
   if (!status || typeof status !== "object") return null;
@@ -444,15 +452,19 @@ export async function fetchChatStatus(fetchImpl) {
 }
 
 /**
- * Enregistre le mode choisi (`PUT /api/config`) puis rend l'état relu.
+ * Enregistre le mode choisi (`PUT /api/bots/<id>/config`) puis rend l'état relu.
  *
- * ⚠️ Le mode est un réglage du serveur (`chat.mode`, `apply: hot`) : un autre
- * onglet voit le changement au rechargement, et le serveur refuse de son côté
- * toute création en mode distant.
+ * ⚠️ Le mode est un réglage du serveur (`chat.mode`, `apply: hot`) et il est
+ * PROPRE AU BOT ACTIF : la route est donc celle de ce bot, jamais `/api/config`
+ * (qui répondrait `bot_scoped_field`).
+ *
+ * ⚠️ Un autre onglet voit le changement au rechargement, et le serveur refuse
+ * de son côté toute création en mode distant.
  */
 export async function saveChatMode(mode, fetchImpl) {
   const doFetch = fetchImpl ?? ((url, init) => fetch(url, init));
-  const response = await doFetch("/api/config", {
+  const botId = await idBotActif(fetchImpl);
+  const response = await doFetch(cheminConfigBot(botId), {
     method: "PUT",
     headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "chat-mode" },
     body: JSON.stringify({ "chat.mode": mode }),

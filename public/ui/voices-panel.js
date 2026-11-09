@@ -3,7 +3,7 @@
  *
  * Fonctions :
  *   - lister les voix du registre (`GET /api/voices`) ;
- *   - choisir la voix active (`PUT /api/config` → `tts.voice`, `hot`) ;
+ *   - choisir la voix active (`PUT /api/bots/<id>/config` → `tts.voice`, `hot`) ;
  *   - écouter un échantillon (`GET /api/voices/{id}/sample`) et un aperçu de
  *     synthèse (`POST /api/voices/{id}/preview`) — **par Web Audio**
  *     (`fetch` + `decodeAudioData`) ; `<audio src>` est interdit par la CSP ;
@@ -15,6 +15,8 @@
  * CSP (`style-src 'self'`) : aucun `<style>` injecté, aucun `style=` — tout le
  * CSS vit dans `config.css` / `holaf-modal.css` (servis par `<link>`).
  */
+
+import { cheminConfigBot, idBotActif } from "./bots-api.js";
 
 const JSON_HEADERS = { accept: "application/json" };
 const WRITE_HEADERS = { "x-yuki-config": "1" };
@@ -271,7 +273,10 @@ export function initVoicesPanel(deps) {
     busy = true;
     setStatus("Enregistrement de la voix active…");
     try {
-      await HolafFetch.put("/api/config", {
+      // ⚠️ `tts.voice` est un réglage PROPRE AU BOT ACTIF : il s'écrit sur la
+      // route de ce bot (`PUT /api/config` le refuse : `bot_scoped_field`).
+      const botId = await idBotActif();
+      await HolafFetch.put(cheminConfigBot(botId), {
         headers: WRITE_HEADERS,
         body: { "tts.voice": id ?? "" },
       });
