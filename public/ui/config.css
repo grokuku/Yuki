@@ -732,6 +732,35 @@
   cursor: pointer;
 }
 
+/* ─── Bots autorisés (lot 35g) — VISIBILITÉ de l'agent ────────────────────
+ * Une case par bot de l'instance (liste lue sur `GET /api/bots`). Décocher TOUT
+ * neutralise l'agent : il reste listé (trace conservée) mais injoignable. */
+.agent-bots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.agent-bots__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.agent-bots__input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* État VERROUILLÉ/DÉVERROUILLÉ + action (déverrouiller / reverrouiller). */
 .agent-lock {
   display: flex;

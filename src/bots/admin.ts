@@ -27,12 +27,13 @@
  * ⚠️ Les SESSIONS Pi ne sont jamais copiées non plus : elles vivent sur un
  * AUTRE volume (`<pi>/agent/sessions/<slug>`), hors de ce module.
  *
- * ## ⚠️ Point d'extension — « agents autorisés »
+ * ## Agents autorisés (lot 35g)
  * La décision utilisateur est que les agents sont GLOBAUX et que chaque agent
- * portera la LISTE des bots autorisés à l'utiliser. Ce champ n'existe pas
- * encore : `supprimerBot` accepte donc un rappel `retirerDesListesDAgents` qui
- * sera branché le jour où le champ existera. **Rien n'est inventé ici** : sans
- * rappel, la suppression ne touche à aucune liste d'agents.
+ * porte la LISTE des bots autorisés à l'utiliser (`AgentRecord.bots`).
+ * `supprimerBot` accepte donc un rappel `retirerDesListesDAgents` : il est
+ * FOURNI par le câblage (`src/index.ts`) et retire l'identifiant supprimé de
+ * toutes les listes, SANS jamais supprimer d'agent. Sans rappel, la suppression
+ * ne touche à aucune liste d'agents.
  *
  * Aucun import SDK/typebox.
  */
@@ -54,6 +55,7 @@ import { ConfigOverlayStore } from "../config/overlay.js";
 import { resolveConfigOverlayPath } from "../config/paths.js";
 
 import {
+  MAX_BOTS,
   PROFILS_BOT,
   ecrireRegistreBots,
   estSlugBot,
@@ -64,8 +66,12 @@ import {
 } from "./registry.js";
 import { SOUS_DOSSIER_BOTS } from "./paths.js";
 
-/** Nombre MAXIMAL de bots d'une instance (`409 max_bots` au-delà). */
-export const MAX_BOTS = 6;
+/**
+ * Nombre MAXIMAL de bots d'une instance (`409 max_bots` au-delà).
+ * ⚠️ Ré-exporté depuis `registry.ts` (source unique, partagée avec le domaine
+ * `agents` qui borne la liste des bots autorisés d'un agent).
+ */
+export { MAX_BOTS };
 
 /** Longueur maximale du NOM affiché d'un bot (1..40). */
 export const NOM_BOT_MAX = 40;
@@ -479,13 +485,23 @@ export interface OptionsSuppressionBot {
   botId: string;
   maintenant?: number;
   /**
-   * POINT D'EXTENSION — « agents autorisés ».
-   * ⚠️ Sera appelé avec l'identifiant supprimé le jour où les agents porteront
-   * la LISTE des bots autorisés (décision utilisateur : agents GLOBAUX, chaque
-   * agent a une liste). Tant que le champ n'existe pas, aucun appelant ne le
-   * fournit : la suppression ne touche alors à AUCUNE liste d'agents.
+   * DÉTACHEMENT DES AGENTS (lot 35g). Appelé avec l'identifiant supprimé pour
+   * le RETIRER de la liste `bots` de chaque agent (`AgentStore.retirerBotDesListes`).
+   *
+   * ⚠️ Le rappel renvoie le NOMBRE d'agents modifiés (journalisé
+   * `bot.agents.detached`). Les agents eux-mêmes ne sont JAMAIS supprimés : un
+   * agent qui n'a plus aucun bot reste listé et devient simplement injoignable.
+   *
+   * ⚠️ Si le nettoyage ÉCHOUE, la suppression du bot aboutit quand même (un
+   * nettoyage ne doit pas annuler une suppression déjà écrite) : l'échec est
+   * journalisé (`bot.agents.detach_failed`).
    */
-  retirerDesListesDAgents?: (botId: string) => void;
+  retirerDesListesDAgents?: (botId: string) => number | void;
+  /** Journal (le logger d'observabilité le satisfait). */
+  logger?: {
+    info(message: string, fields?: Record<string, unknown>): void;
+    warn(message: string, fields?: Record<string, unknown>): void;
+  };
 }
 
 export interface ResultatSuppressionBot {
@@ -595,8 +611,24 @@ export function supprimerBot(options: OptionsSuppressionBot): ResultatSuppressio
     }
     throw traduireErreurFichier(error, "La suppression du bot a échoué");
   }
-  // POINT D'EXTENSION (voir `OptionsSuppressionBot.retirerDesListesDAgents`).
-  options.retirerDesListesDAgents?.(botId);
+  // DÉTACHEMENT DES AGENTS (voir `OptionsSuppressionBot.retirerDesListesDAgents`).
+  // ⚠️ Jamais bloquant : le bot est DÉJÀ supprimé (dossier déplacé, registre
+  // écrit) ; un échec de nettoyage serait un mensonge si on le renvoyait en
+  // erreur à l'appelant. On journalise, et la suppression reste valable.
+  if (options.retirerDesListesDAgents) {
+    try {
+      const nombre = options.retirerDesListesDAgents(botId);
+      options.logger?.info("bot.agents.detached", {
+        bot: botId,
+        agents: typeof nombre === "number" ? nombre : null,
+      });
+    } catch (error) {
+      options.logger?.warn("bot.agents.detach_failed", {
+        bot: botId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   return {
     registre: suivant,
     archive,

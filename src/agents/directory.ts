@@ -25,6 +25,7 @@ import type { AgentLockPort } from "./lock.js";
 import type { AgentHistoryEntry } from "./output.js";
 import type { AgentStore } from "./store.js";
 import type { AgentLevel, AgentPrivilege, AgentRecord } from "./types.js";
+import { agentAutorisePourBot } from "./types.js";
 
 export interface DirectoryLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
@@ -115,6 +116,15 @@ export interface AgentDirectoryServiceOptions {
    * n'est jamais signalé verrouillé (comportement historique).
    */
   lock?: Pick<AgentLockPort, "isLocked"> & { isSensitive?(agentId: string): boolean };
+  /**
+   * BOT DU RUN (lot 35g) — les agents qu'il ne voit pas n'apparaissent NI dans
+   * `list()` NI dans `find()`.
+   *
+   * ⚠️ La valeur vient du démarrage (`bots.bot?.id ?? "yuki"`), JAMAIS d'une
+   * demande du modèle ou d'un corps de requête. Par défaut : `"yuki"` (mode
+   * mono-bot historique ⇒ comportement d'avant, à l'identique).
+   */
+  botCourant?: () => string;
   logger?: DirectoryLogger;
 }
 
@@ -153,6 +163,7 @@ export class AgentDirectoryService implements AgentDirectoryPort {
   private readonly hub: Pick<AgentHub, "isOnline"> & Partial<Pick<AgentHub, "caps">>;
   private readonly audit: Pick<AuditLog, "recent">;
   private readonly lock?: AgentDirectoryServiceOptions["lock"];
+  private readonly botCourant: () => string;
   private readonly logger?: DirectoryLogger;
 
   constructor(options: AgentDirectoryServiceOptions) {
@@ -160,6 +171,7 @@ export class AgentDirectoryService implements AgentDirectoryPort {
     this.hub = options.hub;
     this.audit = options.audit;
     this.lock = options.lock;
+    this.botCourant = options.botCourant ?? (() => "yuki");
     this.logger = options.logger;
   }
 
@@ -169,9 +181,10 @@ export class AgentDirectoryService implements AgentDirectoryPort {
   }
 
   list(): AgentSummary[] {
+    const bot = this.botCourant();
     return this.store
       .list()
-      .filter((record) => !record.revoked)
+      .filter((record) => !record.revoked && agentAutorisePourBot(record, bot))
       .map((record) =>
         toSummary(
           record,
@@ -185,6 +198,11 @@ export class AgentDirectoryService implements AgentDirectoryPort {
   find(identifier: string): AgentSummary | undefined {
     const record = this.store.resolve(identifier);
     if (!record || record.revoked) return undefined;
+    // ⚠️ Redondant avec `store.resolve` À DESSEIN : le store peut être construit
+    // sans bot courant (tests, doubles), et une seule règle (`agentAutorisePourBot`)
+    // rend les deux chemins équivalents — jamais un agent caché de la liste mais
+    // joignable par son identifiant.
+    if (!agentAutorisePourBot(record, this.botCourant())) return undefined;
     return toSummary(
       record,
       this.hub.isOnline(record.agentId),

@@ -30,7 +30,13 @@ import { AgentError } from "../../agents/errors.js";
 import type { AgentLockService } from "../../agents/lock.js";
 import type { PairingManager } from "../../agents/pairing.js";
 import type { AgentStore } from "../../agents/store.js";
-import { isAgentLevel, isAgentPrivilege, type AgentLevel, type AgentPrivilege } from "../../agents/types.js";
+import {
+  AGENT_BOT_PAR_DEFAUT,
+  isAgentLevel,
+  isAgentPrivilege,
+  type AgentLevel,
+  type AgentPrivilege,
+} from "../../agents/types.js";
 import type { Logger } from "../../observability/logger.js";
 
 export const AGENTS_WRITE_HEADER = "x-yuki-agents";
@@ -155,6 +161,10 @@ function serialize(
     online: deps.hub?.isOnline(record.agentId) ?? false,
     sensitive: record.sensitive === true,
     locked: lockStatus ? lockStatus.locked : false,
+    // VISIBILITÉ (lot 35g) : la liste des bots autorisés est rendue TELLE QUELLE
+    // (`[]` = agent neutralisé, listé mais injoignable). Un journal antérieur au
+    // champ est lu comme `["yuki"]` — jamais une liste vide implicite.
+    bots: Array.isArray(record.bots) ? [...record.bots] : [AGENT_BOT_PAR_DEFAUT],
     ...(lockStatus?.remainingMs !== undefined
       ? { unlockRemainingMs: lockStatus.remainingMs }
       : {}),
@@ -313,11 +323,13 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
     privilege?: AgentPrivilege;
     name?: string;
     sensitive?: boolean;
+    bots?: string[];
   } = {};
   const level = body.value["level"];
   const privilege = body.value["privilege"];
   const name = body.value["name"];
   const sensitive = body.value["sensitive"];
+  const bots = body.value["bots"];
   if (level !== undefined) {
     if (!isAgentLevel(level)) {
       return json(400, { error: "invalid_level", code: "invalid_level", message: "Niveau invalide." });
@@ -356,6 +368,19 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
     }
     patch.sensitive = sensitive;
   }
+  if (bots !== undefined) {
+    // ⚠️ La FORME (tableau d'identifiants de bots, sans doublon, ≤ MAX_BOTS) est
+    // validée par le store (`normaliserBotsAgent`), avec un message qui nomme la
+    // borne. Ici on ne refuse que le TYPE, pour un message d'API clair.
+    if (!Array.isArray(bots) || bots.some((id) => typeof id !== "string")) {
+      return json(400, {
+        error: "invalid_bots",
+        code: "invalid_bots",
+        message: "Liste de bots autorisés : tableau d'identifiants de bots attendu.",
+      });
+    }
+    patch.bots = bots as string[];
+  }
   try {
     const record = input.deps.store.configure(agentId, patch);
     input.deps.logger.info("agents.configured", {
@@ -364,6 +389,7 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
       level: record.level,
       privilege: record.privilege,
       sensitive: record.sensitive,
+      bots: record.bots,
     });
     // ⚠️ Décocher « matériel sensible » ne doit pas laisser un déverrouillage
     // fantôme en mémoire pour un agent redevenu ordinaire.
@@ -375,6 +401,9 @@ function handlePatch(input: AgentsRequestInput, agentId: string): AgentsHttpResp
         return json(409, { error: error.code, code: error.code, message: error.message });
       }
       if (error.code === "INVALID_AGENT_NAME" || error.code === "INVALID_SENSITIVE") {
+        return json(400, { error: error.code, code: error.code, message: error.message });
+      }
+      if (error.code === "INVALID_BOTS") {
         return json(400, { error: error.code, code: error.code, message: error.message });
       }
       // ⚠️ Coche « matériel sensible » sans mot de passe d'instance : CONFLIT

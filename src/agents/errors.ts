@@ -13,6 +13,13 @@ export type AgentErrorCode =
   /** Indicateur « matériel sensible » : booléen attendu. */
   | "INVALID_SENSITIVE"
   /**
+   * Liste des bots autorisés (lot 35g) invalide : tableau d'identifiants de bots
+   * attendu, sans doublon, borné à `MAX_BOTS`. `[]` est VALIDE (= neutralisé).
+   */
+  | "INVALID_BOTS"
+  /** Identifiant de bot vide à l'écriture ou au retrait. */
+  | "INVALID_BOT_ID"
+  /**
    * Coche « matériel sensible » REFUSÉE : aucun mot de passe d'instance n'est
    * défini, donc aucun déverrouillage ne serait possible (agent inutilisable
    * pour toujours). Le message dit quoi faire avant de recocher.

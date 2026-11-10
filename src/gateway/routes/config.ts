@@ -113,11 +113,12 @@ export interface ConfigApiDeps {
     registre?: RegistreBots | null;
     stateDir?: string;
     /**
-     * POINT D'EXTENSION « agents autorisés » (`src/bots/admin.ts`) : appelé avec
-     * l'identifiant d'un bot SUPPRIMÉ, pour le retirer des listes d'agents. Le
-     * champ n'existe pas encore ⇒ rien n'est branché ici.
+     * DÉTACHEMENT DES AGENTS (lot 35g, `src/bots/admin.ts`) : appelé avec
+     * l'identifiant d'un bot SUPPRIMÉ, pour le retirer de la liste `bots` de
+     * chaque agent. Renvoie le nombre d'agents modifiés (journalisé
+     * `bot.agents.detached`). Les agents eux-mêmes ne sont jamais supprimés.
      */
-    retirerDesListesDAgents?: (botId: string) => void;
+    retirerDesListesDAgents?: (botId: string) => number | void;
   };
 }
 
@@ -870,6 +871,7 @@ function handleBotsDelete(
       stateDir,
       registre,
       botId,
+      logger: deps.logger,
       ...(deps.bots?.retirerDesListesDAgents
         ? { retirerDesListesDAgents: deps.bots.retirerDesListesDAgents }
         : {}),

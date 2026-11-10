@@ -15,9 +15,11 @@
  *  - `echanges` (paires de bots) est VIDE : le garde-fou d'une paire est
  *    uniquement son bouton `actif` (aucun plafond, aucun frein) — il sera
  *    rempli au lot des canaux, pas ici ;
- *  - ⚠️ AUCUNE limite `MAX_BOTS` ici : le plafond (6) est appliqué par la
- *    CRÉATION (`src/bots/admin.ts`), pas par la lecture du registre — un
- *    registre existant qui en contiendrait davantage reste lisible.
+ *  - ⚠️ AUCUNE limite imposée à la LECTURE du registre : le plafond `MAX_BOTS`
+ *    (6) est VÉRIFIÉ à la CRÉATION (`src/bots/admin.ts`) — un registre existant
+ *    qui en contiendrait davantage reste lisible. La CONSTANTE vit ici (et non
+ *    dans `admin.ts`) pour que le domaine `agents` puisse borner la liste des
+ *    bots d'un agent SANS importer le module d'administration (pas de cycle).
  *
  * Aucun import SDK/typebox.
  */
@@ -41,6 +43,9 @@ export const REGISTRE_BOTS_FICHIER = "bots.json";
 
 /** Identifiant du bot historique : c'est LUI qui est actif à la fin du lot 35a. */
 export const BOT_YUKI = "yuki";
+
+/** Nombre MAXIMAL de bots d'une instance (`409 max_bots` au-delà). */
+export const MAX_BOTS = 6;
 
 /**
  * Forme d'un identifiant de bot : minuscules, chiffres, `_` et `-`. Il sert de

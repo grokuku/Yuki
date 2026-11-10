@@ -17,10 +17,12 @@ export { AgentError, PairError, pairCodeOf } from "./errors.js";
 export type { AgentErrorCode, PairErrorCode } from "./errors.js";
 
 export {
+  AGENT_BOT_PAR_DEFAUT,
   AGENT_LEVELS,
   AGENT_NAME_MAX_LENGTH,
   AGENT_PRIVILEGES,
   AGENT_SCHEMA_VERSION,
+  agentAutorisePourBot,
   isAgentLevel,
   isAgentPrivilege,
   isValidAgentName,
@@ -35,7 +37,13 @@ export type {
   AgentRecord,
 } from "./types.js";
 
-export { AgentStore, applyAgentEvent, DEFAULT_ENABLED_LEVEL, normalizeAgentName } from "./store.js";
+export {
+  AgentStore,
+  applyAgentEvent,
+  DEFAULT_ENABLED_LEVEL,
+  normalizeAgentName,
+  normaliserBotsAgent,
+} from "./store.js";
 export type { AgentLogger, AgentStoreOptions } from "./store.js";
 
 export { AuditLog, maxSizeBytesFromMb } from "./audit.js";
@@ -283,6 +291,7 @@ export type {
 
 export {
   AgentExecutionService,
+  agentNonAutoriseMessage,
   DEFAULT_COMMAND_TIMEOUT_MS,
   DEFAULT_SCREENSHOT_TIMEOUT_MS,
   interruptionMessage,
@@ -295,6 +304,7 @@ export {
   timeoutWithoutResultMessage,
 } from "./execution.js";
 export type {
+  AgentRefusalCode,
   ApprovalDecisionOutcome,
   ApprovalGatewayPort,
   ApprovalResultWaker,

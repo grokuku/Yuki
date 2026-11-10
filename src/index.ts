@@ -338,6 +338,15 @@ async function main(): Promise<void> {
     worker_lourd: workerLourdAutorise(profilBot),
   });
 
+  // --- VISIBILITÉ DES AGENTS (lot 35g) : le BOT DU RUN ----------------------
+  // ⚠️ L'identité du bot qui décide de la visibilité des agents vient d'ICI,
+  // UNE fois au démarrage (`state/bots.json`), JAMAIS d'un corps de requête, d'un
+  // argument d'outil ou d'un message : sinon un appelant choisirait son identité
+  // et verrait les agents des autres bots. Mono-bot historique ⇒ `yuki`.
+  const botDuRun: string = bots.bot?.id ?? BOT_YUKI;
+  const botCourant = (): string => botDuRun;
+  logger.info("agents.visibilite.bot", { bot: botDuRun });
+
   // --- Détection précoce des volumes `rw` non inscriptibles ------------------
   // Une cause système (montage `ro`, permissions, volume absent) ne se
   // manifesterait sinon qu'à la première écriture — et le store de config n'est
@@ -562,6 +571,10 @@ async function main(): Promise<void> {
         privilege: "normal",
       },
       logger,
+      // ⚠️ VISIBILITÉ DES AGENTS (lot 35g) : le bot du RUN décide quels agents
+      // sont visibles (`AgentRecord.bots`). C'est ce qui rend `store.resolve`
+      // capable de refuser un identifiant forgé.
+      botCourant,
       // ⚠️ PIÈGE : cocher « matériel sensible » SANS mot de passe d'instance
       // rendrait l'agent inutilisable POUR TOUJOURS ⇒ la coche est REFUSÉE.
       canMarkSensitive: () => instancePassword?.isConfigured() === true,
@@ -623,8 +636,12 @@ async function main(): Promise<void> {
     // (`disabled` ⇄ niveau précédent) + abonnement aux changements. On ne
     // diffuse JAMAIS le secret : ici, un simple résumé.
     agentsGateway = {
+      // ⚠️ VISIBILITÉ (lot 35g) : la barre latérale ne reçoit QUE les agents
+      // autorisés pour le bot du run (le filtre est SERVEUR : une trame ne peut
+      // pas être gonflée côté navigateur). `bots` est joint pour que l'interface
+      // puisse appliquer la même règle en défense supplémentaire.
       list: () =>
-        agentStore.list().map((record) => {
+        agentStore.listPourBot(botDuRun).map((record) => {
           const lockStatus = agentLock?.status(record.agentId);
           return {
             agentId: record.agentId,
@@ -636,11 +653,13 @@ async function main(): Promise<void> {
             // État SÉPARÉ du niveau : `sensitive` = réglage, `locked` = éphémère.
             sensitive: record.sensitive === true,
             locked: lockStatus ? lockStatus.locked : false,
+            bots: Array.isArray(record.bots) ? [...record.bots] : [BOT_YUKI],
             ...(lockStatus?.remainingMs !== undefined
               ? { unlockRemainingMs: lockStatus.remainingMs }
               : {}),
           };
         }),
+      botActif: () => botDuRun,
       setEnabled: (agentId, enabled) => {
         agentStore.setEnabled(agentId, enabled);
       },
@@ -670,6 +689,10 @@ async function main(): Promise<void> {
       audit: auditLog,
       approvals,
       logger,
+      // ⚠️ VISIBILITÉ (lot 35g) : 3ᵉ point de filtrage — un agent hors de la
+      // liste du bot du run est refusé `agent_not_allowed`, même par un
+      // identifiant forgé.
+      botCourant,
       ...(secretStore ? { secrets: secretStore } : {}),
       secretRequests,
       ...(agentLock ? { lock: agentLock } : {}),
@@ -683,6 +706,9 @@ async function main(): Promise<void> {
       store: agentStore,
       hub: agentHub,
       audit: auditLog,
+      // ⚠️ VISIBILITÉ (lot 35g) : `lister_agents`/`etat_agent` ne citent QUE les
+      // agents autorisés pour le bot du run.
+      botCourant,
       ...(agentLock ? { lock: agentLock } : {}),
       logger,
     });
@@ -3243,9 +3269,16 @@ async function main(): Promise<void> {
         // ⚠️ LOT 35e : les mêmes routes servent l'ADMINISTRATION (créer,
         // cloner, supprimer) — `stateDir` est le volume `state` et le registre
         // en mémoire est REMPLACÉ après chaque écriture (deps mutables).
-        // POINT D'EXTENSION : `retirerDesListesDAgents` sera branché quand les
-        // agents porteront la liste de leurs bots autorisés (rien n'est inventé ici).
-        bots: { registre: bots.registre, stateDir: env.mountPoints.state },
+        // AGENTS ↔ BOTS (lot 35g) : la suppression d'un bot le RETIRE de la
+        // liste `bots` de chaque agent (les agents, eux, restent configurés).
+        // ⚠️ Le compteur renvoyé est journalisé `bot.agents.detached` par
+        // `supprimerBot` ; un échec n'annule PAS la suppression.
+        bots: {
+          registre: bots.registre,
+          stateDir: env.mountPoints.state,
+          retirerDesListesDAgents: (botId: string) =>
+            agentStoreRef ? agentStoreRef.retirerBotDesListes(botId).length : 0,
+        },
       },
       personality: { store: personalityStore, logger },
       rules: { store: rulesStore, logger },

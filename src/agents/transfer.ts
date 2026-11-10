@@ -227,7 +227,15 @@ export interface TransferServiceOptions {
     command: string;
     origin: string;
     sessionId?: string;
-  }) => { kind: "proceed" } | { kind: "refuse"; message: string } | { kind: "awaiting"; approvalId: string };
+  }) =>
+    | { kind: "proceed" }
+    | {
+        kind: "refuse";
+        message: string;
+        /** Motif MACHINE du refus (ex. `agent_not_allowed`, lot 35g). */
+        code?: string;
+      }
+    | { kind: "awaiting"; approvalId: string };
 }
 
 let transferSeq = 0;
@@ -548,7 +556,10 @@ export class AgentFileTransferService implements TransferServicePort {
   private resolveAgent(
     requested: string,
   ): { agentId: string; agentName: string } | TransferRefusal {
-    const record = this.store.resolve(requested);
+    // ⚠️ `resolveBrut` : un agent EXISTANT mais invisible pour ce bot doit être
+    // refusé `agent_not_allowed` par `authorizeTransfer` (« inconnu » ferait
+    // croire à une panne), jamais confondu avec un identifiant inexistant.
+    const record = this.store.resolveBrut(requested);
     if (!record) {
       return new TransferRefusal(
         "refused",
@@ -600,7 +611,7 @@ export class AgentFileTransferService implements TransferServicePort {
       ...(sessionId !== undefined ? { sessionId } : {}),
     });
     if (decision?.kind === "refuse") {
-      throw new TransferRefusal("refused", decision.message, "guard_refused");
+      throw new TransferRefusal("refused", decision.message, decision.code ?? "guard_refused");
     }
     if (decision?.kind === "awaiting") {
       throw new TransferRefusal(

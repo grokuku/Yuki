@@ -110,6 +110,27 @@ export function isAgentEnabled(agent) {
 }
 
 /**
+ * Agents VISIBLES par un bot (lot 35g) — filtre d'AFFICHAGE de la barre latérale.
+ *
+ * ⚠️ Le serveur filtre DÉJÀ la trame `agents` (`AgentStore.listPourBot`) : ce
+ * filtre est une DÉFENSE SUPPLÉMENTAIRE (même règle `bots.includes(bot)`, une
+ * seule vérité). Un agent SANS champ `bots` (serveur plus ancien) reste affiché :
+ * on ne cache jamais par ignorance.
+ *
+ * `botId` absent/invalide ⇒ aucun filtrage (comportement d'avant).
+ */
+export function agentsVisiblesPourBot(agents, botId) {
+  const liste = Array.isArray(agents) ? agents : [];
+  if (typeof botId !== "string" || botId === "") return liste;
+  return liste.filter((agent) => {
+    if (!agent || !agent.agentId) return false;
+    const bots = Array.isArray(agent.bots) ? agent.bots : null;
+    if (bots === null) return true;
+    return bots.includes(botId);
+  });
+}
+
+/**
  * `true` si l'agent est sensible ET VERROUILLÉ (matériel sensible).
  *
  * ⚠️ État SÉPARÉ du niveau : un agent verrouillé peut très bien être au niveau
@@ -228,7 +249,7 @@ function el(tag, attrs = {}, text) {
  * @param {Array<{list: HTMLElement, empty?: HTMLElement}>} [deps.extraTargets]
  *   cibles SUPPLÉMENTAIRES (menu téléphone « Agents ») : même état, même menu de
  *   niveau, avec la dernière activité et le niveau de garde-fou en pastille.
- * @returns {{ element: HTMLElement, update(agents: unknown): void, closeMenu(): void }}
+ * @returns {{ element: HTMLElement, update(agents: unknown, botId?: string): void, closeMenu(): void }}
  */
 export function initSidebarAgents(deps = {}) {
   const onToggle = deps.onToggle ?? (() => undefined);
@@ -588,11 +609,14 @@ export function initSidebarAgents(deps = {}) {
     }
   }
 
-  function update(agents) {
+  function update(agents, botId) {
     const list0 = Array.isArray(agents) ? agents : [];
+    // ⚠️ VISIBILITÉ (lot 35g) : un agent qu'un bot ne peut pas utiliser ne doit
+    // pas apparaître dans SA barre (le serveur filtre déjà ; on ne s'y fie pas).
+    const autorises = agentsVisiblesPourBot(list0, botId);
     // Les agents RÉVOQUÉS ne se pilotent pas ici (ils ne peuvent plus se
     // connecter) : leur gestion (restaurer / supprimer) vit dans /config.
-    const visible = list0.filter((agent) => agent && !agent.revoked);
+    const visible = autorises.filter((agent) => agent && !agent.revoked);
     updateAgentState(visible);
     // ⚠️ Un rafraîchissement du registre (trame `agents` : un agent se connecte,
     // passe en ligne/hors ligne, change de niveau…) ne doit PAS détruire un menu
@@ -620,7 +644,15 @@ export function initSidebarAgents(deps = {}) {
     for (const target of targets) {
       target.list.replaceChildren();
       for (const agent of visible) target.list.append(renderAgent(agent, target.variant));
-      if (target.empty) target.empty.hidden = visible.length > 0;
+      if (target.empty) {
+        // ⚠️ Dire la VRAIE raison : « aucun agent appairé » serait faux si des
+        // agents existent mais ne sont pas autorisés pour ce bot.
+        const filtres = list0.length > 0 && visible.length === 0;
+        target.empty.textContent = filtres
+          ? "Aucun agent autorisé pour ce bot."
+          : "Aucun agent appairé.";
+        target.empty.hidden = visible.length > 0;
+      }
     }
 
     count.textContent = visible.length > 0 ? String(visible.length) : "";

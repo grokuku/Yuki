@@ -23,6 +23,7 @@
  */
 
 import { unlockAgentWithPassword } from './password-modal.js';
+import { listerBots } from './bots-api.js';
 import { formatDateTimeFr } from "./horodatage.js";
 
 const JSON_HEADERS = { accept: "application/json" };
@@ -106,7 +107,19 @@ function identityNode(agentId, label) {
 }
 
 export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
-  const state = { agents: [], approvals: [], history: new Map(), error: "", pairStatus: "" };
+  const state = {
+    agents: [],
+    approvals: [],
+    history: new Map(),
+    error: "",
+    pairStatus: "",
+    /**
+     * Bots de l'instance (lot 35g) — liste RÉELLE lue sur `GET /api/bots`.
+     * ⚠️ Jamais codée en dur : un bot ajouté/supprimé doit apparaître/disparaître
+     * des cases à cocher sans toucher au code.
+     */
+    bots: [],
+  };
 
   /** Nom affichable d'un agent à partir de son ID (repli : l'ID lui-même). */
   function nameOf(agentId) {
@@ -117,14 +130,19 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
   async function load() {
     state.error = "";
     try {
-      const [list, approvals] = await Promise.all([
+      // Les BOTS viennent de la même source que le reste de l'interface
+      // (`GET /api/bots`, `bots-api.js`) : repli sur `yuki` si la liste est
+      // illisible, jamais une liste codée en dur ici.
+      const [list, approvals, bots] = await Promise.all([
         HolafFetch.get("/api/agents", { headers: JSON_HEADERS }),
         HolafFetch.get("/api/agents/approvals", { headers: JSON_HEADERS }).catch(() => ({
           approvals: [],
         })),
+        listerBots(),
       ]);
       state.agents = Array.isArray(list?.agents) ? list.agents : [];
       state.approvals = Array.isArray(approvals?.approvals) ? approvals.approvals : [];
+      state.bots = Array.isArray(bots) ? bots : [];
       // Historique par agent (petit, jamais la sortie).
       state.history = new Map();
       await Promise.all(
@@ -385,6 +403,80 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
     }
   }
 
+  /**
+   * Cases « bots autorisés » (lot 35g). Une case par bot de l'INSTANCE (liste
+   * lue sur `GET /api/bots`, jamais codée en dur).
+   *
+   * ⚠️ L'agent est GLOBAL : ce n'est pas un « bot propriétaire » mais la LISTE
+   * des bots qui le voient. Le serveur reste la source de vérité (format des
+   * identifiants et borne `MAX_BOTS`) : on affiche son message tel quel et on
+   * REMET les cases à l'état réel en cas d'échec (jamais une case qui ment).
+   */
+  function renderBotsField(agent, statusEl) {
+    const autorises = Array.isArray(agent.bots) ? agent.bots : [];
+    const fieldset = h("fieldset", { class: "agent-bots" });
+    fieldset.append(
+      h("legend", { class: "agent-field__label", text: "Bots autorisés à utiliser cet agent" }),
+    );
+
+    if (state.bots.length === 0) {
+      fieldset.append(
+        h("p", {
+          class: "config-helper",
+          text: "Liste des bots indisponible : impossible de régler la visibilité pour le moment.",
+        }),
+      );
+      return fieldset;
+    }
+
+    const inputs = new Map();
+    for (const bot of state.bots) {
+      const inputId = `agent-bots-${agent.agentId}-${bot.id}`;
+      const input = h("input", {
+        id: inputId,
+        class: "agent-bots__input",
+        type: "checkbox",
+      });
+      input.checked = autorises.includes(bot.id);
+      inputs.set(bot.id, input);
+      input.addEventListener("change", () => {
+        const wanted = state.bots
+          .filter((entree) => inputs.get(entree.id)?.checked === true)
+          .map((entree) => entree.id);
+        void (async () => {
+          const ok = await patchAgent(agent.agentId, { bots: wanted }, statusEl);
+          // Échec (ex. borne dépassée) : les cases reprennent l'état RÉEL.
+          if (!ok) {
+            for (const [id, champ] of inputs) champ.checked = autorises.includes(id);
+          }
+        })();
+      });
+      const libelle = typeof bot.nom === "string" && bot.nom !== "" ? bot.nom : bot.id;
+      fieldset.append(
+        h("label", { class: "agent-bots__label", for: inputId }, [
+          input,
+          h("span", { text: libelle === bot.id ? bot.id : `${libelle} (${bot.id})` }),
+        ]),
+      );
+    }
+
+    fieldset.append(
+      h("p", {
+        class: "config-helper",
+        text:
+          "Décochez tous les bots pour NEUTRALISER l'agent : il reste listé ici (on garde " +
+          "sa trace) mais plus aucun bot ne peut le voir ni l'utiliser.",
+      }),
+    );
+    return fieldset;
+  }
+
+  /** Marque VISIBLE l'agent neutralisé (aucun bot autorisé) — jamais un état muet. */
+  function neutralise(agent) {
+    const bots = Array.isArray(agent.bots) ? agent.bots : [];
+    return bots.length === 0;
+  }
+
   function renderAgent(agent) {
     const card = h("article", {
       class: agent.revoked ? "agent-card agent-card--revoked" : "agent-card",
@@ -393,7 +485,25 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
       identityNode(agent.agentId, displayName(agent)),
       stateBadge(agent),
     ]);
+    // ⚠️ Un agent sans aucun bot autorisé reste LISTÉ (trace conservée) mais il
+    // est signalé en clair : « pourquoi ne fait-il plus rien ? » doit se lire.
+    if (!agent.revoked && neutralise(agent)) {
+      head.append(
+        h("span", { class: "agent-badge agent-badge--danger", text: "Neutralisé" }),
+      );
+    }
     card.append(head);
+    if (!agent.revoked && neutralise(agent)) {
+      card.append(
+        h("p", {
+          class: "config-helper",
+          text:
+            "⚠️ Agent NEUTRALISÉ : aucun bot n'est autorisé à l'utiliser. Il n'apparaît " +
+            "plus aux autres bots et aucune commande ne peut lui être adressée. Cochez au " +
+            "moins un bot ci-dessous pour le réactiver.",
+        }),
+      );
+    }
     card.append(
       h("p", { class: "config-helper", text: `Dernière connexion : ${formatDate(agent.lastSeen)}` }),
     );
@@ -525,6 +635,12 @@ export function initAgentsPanel({ root, HolafFetch, HolafModal }) {
         sensitiveStatus,
       ]),
     );
+
+    // ─── Bots autorisés : VISIBILITÉ de l'agent (lot 35g) ───────────────────
+    // ⚠️ Champ de l'ENREGISTREMENT de l'agent (comme « matériel sensible »), pas
+    // du schéma de configuration : il se règle sur `PATCH /api/agents/<id>`.
+    const botsStatus = h("span", { class: "config-save-status", role: "status" });
+    card.append(renderBotsField(agent, botsStatus), botsStatus);
 
     // État VERROUILLÉ/DÉVERROUILLÉ (en mémoire côté serveur) + action humaine.
     if (agent.sensitive === true) {

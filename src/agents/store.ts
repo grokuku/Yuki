@@ -12,10 +12,13 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+import { BOT_YUKI, ID_BOT_PATTERN, MAX_BOTS } from "../bots/registry.js";
 import { AgentError } from "./errors.js";
 import {
+  AGENT_BOT_PAR_DEFAUT,
   AGENT_NAME_MAX_LENGTH,
   AGENT_SCHEMA_VERSION,
+  agentAutorisePourBot,
   isAgentLevel,
   isAgentPrivilege,
   isValidAgentName,
@@ -52,6 +55,15 @@ export interface AgentStoreOptions {
    * `InstancePasswordStore.isConfigured()`.
    */
   canMarkSensitive?: () => boolean;
+  /**
+   * BOT COURANT du RUN (lot 35g) — c'est LUI qui décide de la visibilité des
+   * agents (`AgentRecord.bots`).
+   *
+   * ⚠️ La valeur vient du DÉMARRAGE (`bots.bot?.id ?? "yuki"`, `src/index.ts`),
+   * JAMAIS d'un paramètre de requête : sinon un appelant choisirait ses propres
+   * pouvoirs. Par défaut : le bot historique `yuki` (mode mono-bot).
+   */
+  botCourant?: () => string;
 }
 
 interface ProjectionState {
@@ -92,6 +104,10 @@ function newRecord(agentId: string, defaults: AgentDefaults): AgentRecord {
     revoked: false,
     // Rétrocompatible : un journal ANTÉRIEUR à ce champ rejoue ici à `false`.
     sensitive: false,
+    // ⚠️ VISIBILITÉ (lot 35g) : défaut `["yuki"]`, JAMAIS `[]`. Un journal
+    // antérieur au champ rejoue donc avec le bot historique, exactement comme
+    // avant (aucune coupure d'une installation existante).
+    bots: [AGENT_BOT_PAR_DEFAUT],
     schemaVersion: AGENT_SCHEMA_VERSION,
   };
 }
@@ -115,6 +131,37 @@ function assertPrivilege(privilege: AgentPrivilege): void {
       `Privilège d'agent invalide : ${String(privilege)}.`,
     );
   }
+}
+
+/**
+ * Normalise et VALIDE une liste de bots autorisés (lot 35g) : identifiants
+ * conformes (`ID_BOT_PATTERN`), sans doublon, bornée à `MAX_BOTS`. Lève
+ * `INVALID_BOTS` sinon.
+ *
+ * ⚠️ `[]` est ACCEPTÉ : c'est l'état « neutralisé » (agent listé mais
+ * injoignable), pas une erreur de saisie.
+ */
+export function normaliserBotsAgent(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    throw new AgentError("INVALID_BOTS", "Liste de bots autorisés : tableau attendu.");
+  }
+  const bots: string[] = [];
+  for (const valeur of raw) {
+    if (typeof valeur !== "string" || !ID_BOT_PATTERN.test(valeur)) {
+      throw new AgentError(
+        "INVALID_BOTS",
+        `Identifiant de bot invalide : ${String(valeur)}.`,
+      );
+    }
+    if (!bots.includes(valeur)) bots.push(valeur);
+  }
+  if (bots.length > MAX_BOTS) {
+    throw new AgentError(
+      "INVALID_BOTS",
+      `Trop de bots autorisés (${bots.length}, maximum ${MAX_BOTS}).`,
+    );
+  }
+  return bots;
 }
 
 /**
@@ -198,6 +245,19 @@ export function applyAgentEvent(
   if (patch.sensitive !== undefined && typeof patch.sensitive !== "boolean") {
     return skip(`indicateur « matériel sensible » invalide ${String(patch.sensitive)}`);
   }
+  // ⚠️ VISIBILITÉ (lot 35g) : une liste illisible ne doit JAMAIS être ignorée
+  // en silence (un agent deviendrait visible de tous). La validation est la
+  // MÊME qu'à l'écriture ; au rejeu, une ligne fautive est ignorée + avertie.
+  let patchBots: string[] | undefined;
+  if (patch.bots !== undefined) {
+    try {
+      patchBots = normaliserBotsAgent(patch.bots);
+    } catch (error) {
+      return skip(
+        error instanceof Error ? error.message : `liste de bots invalide ${String(patch.bots)}`,
+      );
+    }
+  }
 
   switch (event.kind) {
     case "upsert": {
@@ -208,6 +268,7 @@ export function applyAgentEvent(
       if (patch.privilege !== undefined) next.privilege = patch.privilege;
       if (patch.lastSeen !== undefined) next.lastSeen = patch.lastSeen;
       if (patch.sensitive !== undefined) next.sensitive = patch.sensitive === true;
+      if (patchBots !== undefined) next.bots = [...patchBots];
       state.byId.set(event.agentId, next);
       // Mémoire du on/off : tout niveau effectif non `disabled` devient le
       // niveau à restaurer si l'agent est ensuite désactivé.
@@ -249,6 +310,8 @@ export class AgentStore {
   private readonly now: () => number;
   private readonly idFactory: () => string;
   private readonly canMarkSensitive: () => boolean;
+  /** Bot du RUN (visibilité des agents) — jamais une valeur reçue de l'extérieur. */
+  private readonly botCourant: () => string;
 
   private readonly byId = new Map<string, AgentRecord>();
   private readonly appliedEventIds = new Set<string>();
@@ -266,6 +329,7 @@ export class AgentStore {
     // Sans prédicat fourni, la coche « matériel sensible » est REFUSÉE (un agent
     // sensible sans mot de passe d'instance serait définitivement inutilisable).
     this.canMarkSensitive = options.canMarkSensitive ?? (() => false);
+    this.botCourant = options.botCourant ?? (() => BOT_YUKI);
   }
 
   /** Ouvre (ou crée) le journal et reconstruit la projection en le rejouant. */
@@ -293,6 +357,14 @@ export class AgentStore {
     return this.byId.size;
   }
 
+  /**
+   * Bot COURANT du run (identifiant). Utile aux services qui doivent filtrer
+   * sur la même valeur que le store.
+   */
+  get botActif(): string {
+    return this.botCourant();
+  }
+
   get(id: string): AgentRecord | undefined {
     return this.byId.get(id);
   }
@@ -307,6 +379,16 @@ export class AgentStore {
 
   list(): AgentRecord[] {
     return [...this.byId.values()];
+  }
+
+  /**
+   * Agents VISIBLES par le bot courant (lot 35g) — même liste que `list()`,
+   * restreinte aux agents dont `bots` contient le bot du run (ou qui n'ont pas
+   * encore été filtrés). Pour l'ADMINISTRATION, `list()` reste la vérité
+   * complète : un agent neutralisé doit rester listé pour ne pas perdre sa trace.
+   */
+  listPourBot(botId: string = this.botCourant()): AgentRecord[] {
+    return this.list().filter((record) => agentAutorisePourBot(record, botId));
   }
 
   /**
@@ -326,8 +408,27 @@ export class AgentStore {
    * Résout un identifiant fourni par le modèle ou l'humain : d'abord l'ID
    * exact (compatibilité garantie), puis, à défaut, le NOM (insensible à la
    * casse). Renvoie `undefined` si ni l'un ni l'autre ne correspond.
+   *
+   * ⚠️ VISIBILITÉ (lot 35g) : un agent absent de la liste `bots` du BOT DU RUN
+   * n'est PAS résolu. C'est le DEUXIÈME point de filtrage : cacher un agent de
+   * la liste ne suffirait pas, un identifiant forgé doit être refusé ici.
+   * Les chemins qui doivent distinguer « inconnu » de « non autorisé » (pour
+   * rendre `agent_not_allowed` et non « introuvable ») passent par
+   * `resolveBrut`, et le refus est prononcé par `authorize`.
    */
   resolve(identifier: string): AgentRecord | undefined {
+    const record = this.resolveBrut(identifier);
+    if (!record) return undefined;
+    return agentAutorisePourBot(record, this.botCourant()) ? record : undefined;
+  }
+
+  /**
+   * Résolution SANS filtre de visibilité (usage interne : garde-fou d'exécution
+   * et de transfert, qui doivent dire « pas autorisé » plutôt qu'« inconnu »).
+   * ⚠️ N'ouvre AUCUN droit : tout ce qui exécute passe ensuite par
+   * `AgentExecutionService.authorize`.
+   */
+  resolveBrut(identifier: string): AgentRecord | undefined {
     if (typeof identifier !== "string") return undefined;
     const exact = this.byId.get(identifier);
     if (exact) return exact;
@@ -372,6 +473,7 @@ export class AgentStore {
       privilege?: AgentPrivilege;
       name?: string;
       sensitive?: boolean;
+      bots?: string[];
     },
   ): AgentRecord {
     assertAgentId(agentId);
@@ -384,6 +486,7 @@ export class AgentStore {
       privilege?: AgentPrivilege;
       name?: string;
       sensitive?: boolean;
+      bots?: string[];
     } = {};
     if (patch.level !== undefined) {
       assertLevel(patch.level);
@@ -426,6 +529,10 @@ export class AgentStore {
         );
       }
       next.sensitive = patch.sensitive;
+    }
+    if (patch.bots !== undefined) {
+      // ⚠️ `[]` est ACCEPTÉ (neutralisation) ; une valeur illisible LÈVE.
+      next.bots = normaliserBotsAgent(patch.bots);
     }
     if (Object.keys(next).length === 0) {
       return this.byId.get(agentId) as AgentRecord;
@@ -482,6 +589,40 @@ export class AgentStore {
    */
   setSensitive(agentId: string, sensitive: boolean): AgentRecord {
     return this.configure(agentId, { sensitive });
+  }
+
+  /**
+   * Règle la LISTE des bots autorisés à utiliser cet agent (lot 35g).
+   *
+   * ⚠️ `[]` NEUTRALISE l'agent : il reste dans le store (donc listé par
+   * l'administration), mais plus aucun bot ne le résout ni ne l'exécute.
+   */
+  setBots(agentId: string, bots: string[]): AgentRecord {
+    return this.configure(agentId, { bots });
+  }
+
+  /**
+   * DÉTACHE un bot de TOUTES les listes d'agents (lot 35g) — appelé à la
+   * suppression d'un bot.
+   *
+   * ⚠️ Les agents ne sont JAMAIS supprimés : seul l'identifiant disparaît des
+   * listes (un agent qui n'en garde aucune devient « neutralisé »).
+   *
+   * Renvoie les identifiants des agents effectivement modifiés (le nombre est
+   * journalisé `bot.agents.detached` par l'appelant).
+   */
+  retirerBotDesListes(botId: string): string[] {
+    if (typeof botId !== "string" || botId.trim() === "") {
+      throw new AgentError("INVALID_BOT_ID", "Identifiant de bot vide : retrait impossible.");
+    }
+    const modifies: string[] = [];
+    for (const record of this.list()) {
+      const bots = Array.isArray(record.bots) ? record.bots : [AGENT_BOT_PAR_DEFAUT];
+      if (!bots.includes(botId)) continue;
+      this.configure(record.agentId, { bots: bots.filter((id) => id !== botId) });
+      modifies.push(record.agentId);
+    }
+    return modifies;
   }
 
   /**

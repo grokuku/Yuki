@@ -69,8 +69,14 @@ export const WS_PATH = "/ws";
  * Découplé du domaine `agents` : le transport ne connaît que ce contrat.
  */
 export interface AgentsGatewayPort {
-  /** Résumé des agents appairés (actifs ET révoqués). */
+  /** Résumé des agents appairés (actifs ET révoqués), VISIBLES par le bot du run. */
   list(): WireAgent[];
+  /**
+   * Bot DU RUN qui produit la trame `agents` (lot 35g). Absent ⇒ la trame n'en
+   * porte pas : l'interface n'applique alors aucun filtre local (le serveur a
+   * déjà filtré). Ce n'est JAMAIS une valeur fournie par le client.
+   */
+  botActif?(): string;
   /**
    * Applique on/off : `false` ⇒ niveau `disabled`, `true` ⇒ niveau précédent
    * mémorisé (ou défaut). Lève si l'agent est inconnu.
@@ -862,14 +868,29 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   /** Diffuse l'état des agents (trame de CONTRÔLE, aucun `seq` consommé). */
   function broadcastAgents(): void {
     if (!agentPort) return;
-    const agents = agentPort.list();
-    for (const client of clients) sendDirect(client, { type: "agents", agents });
+    const frame = agentsFrame();
+    for (const client of clients) sendDirect(client, frame);
+  }
+
+  /**
+   * Contenu COMMUN des trames `agents` (connexion et diffusion) : la liste est
+   * DÉJÀ filtrée par le port (visibilité du bot du run, lot 35g) ; le bot est
+   * joint pour que l'interface applique la même règle. Une seule fabrique ⇒
+   * jamais une trame qui divergerait de l'autre.
+   */
+  function agentsFrame(): { type: "agents"; agents: WireAgent[]; botActif?: string } {
+    const bot = agentPort?.botActif?.();
+    return {
+      type: "agents",
+      agents: agentPort ? agentPort.list() : [],
+      ...(bot !== undefined ? { botActif: bot } : {}),
+    };
   }
 
   /** Envoie l'état des agents au seul client (connexion / reprise). */
   function sendAgents(client: ClientState): void {
     if (!agentPort) return;
-    sendDirect(client, { type: "agents", agents: agentPort.list() });
+    sendDirect(client, agentsFrame());
   }
 
   /** Décision humaine (Valider / Refuser) reçue depuis la conversation. */

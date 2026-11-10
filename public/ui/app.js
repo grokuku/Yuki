@@ -1941,7 +1941,7 @@ function handleFrame(frame) {
         .filter((agent) => agent && typeof agent.agentId === "string")
         .map((agent) => [agent.agentId, agent]),
     );
-    sidebarAgents.update(frame.agents);
+    sidebarAgents.update(frame.agents, frame.botActif);
     return;
   }
   if (type === "snapshot") {

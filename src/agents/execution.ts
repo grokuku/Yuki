@@ -39,6 +39,7 @@ import { buildSecretStoredPrompt, ORIGIN_SECRET_STORED } from "./secret-report.j
 import type { AuditLog } from "./audit.js";
 import type { AgentStore } from "./store.js";
 import type { AgentRecord } from "./types.js";
+import { agentAutorisePourBot } from "./types.js";
 import { redactText } from "../observability/logger.js";
 import { resolveSecretReferences } from "../secrets/references.js";
 import type {
@@ -115,6 +116,12 @@ export interface ExecutionOutcome {
   timedOut?: boolean;
   /** Code applicatif de l'agent (si `failed`). */
   agentCode?: string;
+  /**
+   * Motif MACHINE du refus (jamais renseigné hors `status: "refused"`).
+   * `agent_not_allowed` = l'agent existe mais n'est pas autorisé pour le bot du
+   * run (visibilité, lot 35g) — distinct d'un agent inconnu.
+   */
+  code?: AgentRefusalCode;
 }
 
 /** Port consommé par l'outil `run_command`. */
@@ -494,6 +501,15 @@ export interface ExecutionServiceOptions {
    * dépend du journal des déclencheurs, créé plus tard au démarrage.
    */
   preAutorisations?: PreAutorisationPort;
+  /**
+   * BOT DU RUN (lot 35g) — l'agent doit figurer dans sa liste `bots`, sinon
+   * TOUTE action (commande, capture, transfert) est refusée `agent_not_allowed`.
+   *
+   * ⚠️ La valeur vient du DÉMARRAGE, jamais d'une demande : c'est ce qui empêche
+   * un identifiant forgé de contourner la visibilité. Défaut : `"yuki"` (mode
+   * mono-bot ⇒ comportement inchangé).
+   */
+  botCourant?: () => string;
 }
 
 /** Timeout par défaut d'une commande (ms). */
@@ -599,8 +615,35 @@ export function timeoutWithoutResultMessage(timeoutMs: number): string {
  */
 type GuardDecision =
   | { kind: "proceed" }
-  | { kind: "refuse"; message: string }
+  /** `code` : motif MACHINE du refus (`agent_not_allowed` quand la visibilité
+   * du bot courant est en cause), pour que l'appelant le journalise et le rende
+   * sans avoir à analyser le texte. */
+  | { kind: "refuse"; message: string; code?: AgentRefusalCode }
   | { kind: "awaiting"; approval: PendingApproval };
+
+/** Motifs MACHINE d'un refus AVANT envoi (aucun n'est une panne). */
+export type AgentRefusalCode =
+  | "agent_not_allowed"
+  | "agent_revoked"
+  | "agent_disabled"
+  | "agent_locked";
+
+/**
+ * Message de refus quand l'agent existe mais n'est pas autorisé pour CE bot.
+ *
+ * ⚠️ Volontairement DIFFÉRENT d'un« agent introuvable » : l'agent existe et
+ * fonctionne — c'est sa VISIBILITÉ qui le cache. Dire « introuvable » ferait
+ * croire à une panne (ou ferait réessayer indéfiniment le modèle).
+ */
+export function agentNonAutoriseMessage(agentName: string, botId: string): string {
+  const qui = agentName !== "" ? `« ${escapeOutputText(agentName)} »` : "cet agent";
+  return (
+    `Agent non autorisé : ${qui} n'est pas autorisé pour ce bot (${escapeOutputText(botId)}). ` +
+    "Ce n'est pas une panne : la liste des bots autorisés de cet agent ne contient " +
+    "pas ce bot. Demandez à l'administrateur de l'y ajouter (onglet « Agents » de " +
+    "/config) si cette machine doit être pilotée depuis ce bot."
+  );
+}
 
 /**
  * Message rendu au modèle quand une validation humaine est demandée.
@@ -654,6 +697,8 @@ export class AgentExecutionService implements ExecutionServicePort {
    * le journal des déclencheurs existe). `undefined` ⇒ aucune autorisation.
    */
   private preAutorisations?: PreAutorisationPort;
+  /** Bot du RUN : décide de la visibilité des agents (jamais une valeur cliente). */
+  private readonly botCourant: () => string;
 
   constructor(options: ExecutionServiceOptions) {
     this.store = options.store;
@@ -668,6 +713,7 @@ export class AgentExecutionService implements ExecutionServicePort {
     this.secretRequests = options.secretRequests;
     this.lock = options.lock;
     this.preAutorisations = options.preAutorisations;
+    this.botCourant = options.botCourant ?? (() => this.store.botActif);
   }
 
   /**
@@ -707,7 +753,10 @@ export class AgentExecutionService implements ExecutionServicePort {
 
     // 0. Résolution : le modèle peut désigner l'agent par son ID OU par son NOM
     // (alias lisible). ⚠️ L'ID reste PRIORITAIRE et toujours accepté.
-    const record = this.store.resolve(requested);
+    // ⚠️ `resolveBrut` À DESSEIN : la VISIBILITÉ n'est pas un « agent inconnu ».
+    // On résout, puis `authorize` refuse explicitement `agent_not_allowed` — un
+    // identifiant forgé ne passe donc pas, et la cause dite est la VRAIE.
+    const record = this.store.resolveBrut(requested);
     if (!record) {
       return this.refuse(
         requested,
@@ -726,7 +775,14 @@ export class AgentExecutionService implements ExecutionServicePort {
     if (!guardAlreadySatisfied) {
       const decision = this.authorize(record, command, verdict, request);
       if (decision.kind === "refuse") {
-        return this.refuse(agentId, agentName, command, verdict, decision.message);
+        return this.refuse(
+          agentId,
+          agentName,
+          command,
+          verdict,
+          decision.message,
+          decision.code,
+        );
       }
       if (decision.kind === "awaiting") {
         return {
@@ -1260,7 +1316,7 @@ export class AgentExecutionService implements ExecutionServicePort {
     request: { origin: string; sessionId?: string },
   ):
     | { kind: "proceed" }
-    | { kind: "refuse"; message: string }
+    | { kind: "refuse"; message: string; code?: AgentRefusalCode }
     | { kind: "awaiting"; approvalId: string } {
     const record = this.store.get(agentId);
     if (!record) {
@@ -1300,10 +1356,33 @@ export class AgentExecutionService implements ExecutionServicePort {
     },
   ): GuardDecision {
     if (record.revoked) {
-      return { kind: "refuse", message: "Agent révoqué : exécution refusée." };
+      return { kind: "refuse", code: "agent_revoked", message: "Agent révoqué : exécution refusée." };
+    }
+    // ⚠️ VISIBILITÉ (lot 35g) — TROISIÈME et DERNIER point de filtrage : l'agent
+    // doit être dans la liste `bots` du BOT DU RUN. Placé APRÈS la révocation
+    // (un agent révoqué est une cause plus précise) et AVANT le niveau et le
+    // verrou (inutile de faire valider une commande qui ne partira pas).
+    // C'est ce contrôle qui rend un identifiant FORGÉ inopérant, même si
+    // l'appelant a contourné la liste et la résolution.
+    const bot = this.botCourant();
+    if (!agentAutorisePourBot(record, bot)) {
+      this.logger.info("agents.exec.agent_not_allowed", {
+        agent_id: record.agentId,
+        agent_name: record.name || null,
+        bot,
+      });
+      return {
+        kind: "refuse",
+        code: "agent_not_allowed",
+        message: agentNonAutoriseMessage(record.name, bot),
+      };
     }
     if (record.level === "disabled") {
-      return { kind: "refuse", message: "Agent désactivé (niveau 1) : exécution refusée." };
+      return {
+        kind: "refuse",
+        code: "agent_disabled",
+        message: "Agent désactivé (niveau 1) : exécution refusée.",
+      };
     }
     // ⚠️ VERROU « matériel sensible » — état SÉPARÉ du niveau : il est évalué
     // APRÈS la révocation et le niveau `disabled` (si l'utilisateur a désactivé
@@ -1315,7 +1394,7 @@ export class AgentExecutionService implements ExecutionServicePort {
         agent_name: record.name || null,
         level: record.level,
       });
-      return { kind: "refuse", message: lockedAgentMessage(record.name) };
+      return { kind: "refuse", code: "agent_locked", message: lockedAgentMessage(record.name) };
     }
     const needsApproval =
       record.level === "always" || (record.level === "destructive" && verdict.destructive);
@@ -1451,7 +1530,9 @@ export class AgentExecutionService implements ExecutionServicePort {
    */
   async capture(request: ScreenshotRequest): Promise<ScreenshotOutcome> {
     const requested = request.agentId;
-    const record = this.store.resolve(requested);
+    // ⚠️ `resolveBrut` : la visibilité est refusée EXPLICITEMENT plus bas (par
+    // `authorize`, qui porte le MÊME garde-fou que les commandes).
+    const record = this.store.resolveBrut(requested);
     if (!record) {
       return this.screenshotRefused(requested, undefined, this.unknownAgentMessage(requested));
     }
@@ -1854,9 +1935,13 @@ export class AgentExecutionService implements ExecutionServicePort {
    * les agents disponibles dans un bloc DONNÉE (balisage anti-injection).
    */
   private unknownAgentMessage(requested: string): string {
+    // ⚠️ VISIBILITÉ (lot 35g) : la liste des agents « disponibles » ne doit
+    // citer QUE ceux que ce bot voit, sinon le message révélerait l'existence
+    // d'agents auxquels il n'a pas droit.
+    const bot = this.botCourant();
     const entries = this.store
       .list()
-      .filter((record) => !record.revoked)
+      .filter((record) => !record.revoked && agentAutorisePourBot(record, bot))
       .map((record) => ({ name: record.name, agentId: record.agentId }));
     return (
       `Agent inconnu : « ${escapeOutputText(requested)} ». ` +
@@ -1935,11 +2020,13 @@ export class AgentExecutionService implements ExecutionServicePort {
     command: string,
     verdict: { destructive: boolean; ids: string[] },
     message: string,
+    code?: AgentRefusalCode,
   ): ExecutionOutcome {
     this.logger.info("agents.exec.refused", {
       agent_id: agentId,
       ...(agentName ? { agent_name: agentName } : {}),
       reason: message,
+      ...(code !== undefined ? { code } : {}),
     });
     return {
       status: "refused",
@@ -1950,6 +2037,7 @@ export class AgentExecutionService implements ExecutionServicePort {
       destructiveIds: verdict.ids,
       exitCode: null,
       message,
+      ...(code !== undefined ? { code } : {}),
     };
   }
 }

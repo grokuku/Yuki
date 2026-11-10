@@ -240,6 +240,14 @@ export interface WireAgent {
   locked?: boolean;
   /** Temps restant (ms) avant le reverrouillage automatique, si déverrouillé. */
   unlockRemainingMs?: number;
+  /**
+   * VISIBILITÉ (lot 35g) — bots autorisés à utiliser cet agent. `[]` = agent
+   * NEUTRALISÉ (aucun bot ne le voit).
+   *
+   * ⚠️ Le serveur FILTRE DÉJÀ la liste envoyée : ce champ permet à l'interface
+   * d'appliquer la même règle (défense supplémentaire) sans la deviner.
+   */
+  bots?: string[];
 }
 
 /** Corps d'une trame serveur → client. */
@@ -462,6 +470,12 @@ export type ServerMessage =
        */
       type: "agents";
       agents: WireAgent[];
+      /**
+       * Bot DU RUN qui a produit cette trame (lot 35g). L'interface s'en sert
+       * pour ne rien afficher qu'il ne pourrait pas utiliser. ⚠️ Il ne vient
+       * JAMAIS du client : la trame est fabriquée côté serveur.
+       */
+      botActif?: string;
     }
   | {
       /**
