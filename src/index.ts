@@ -51,7 +51,14 @@ import { SecretRequestRegistry } from "./secrets/requests.js";
 import { SecretStore } from "./secrets/store.js";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
-import { BOT_YUKI, preparerMultiBot } from "./bots/index.js";
+import {
+  BOT_YUKI,
+  construireWorkerLourdSiAutorise,
+  preparerMultiBot,
+  purgerArchivesBots,
+  workerLourdAutorise,
+} from "./bots/index.js";
+import type { ProfilBot } from "./bots/registry.js";
 import {
   ComfyClient,
   ComfyWorkflowStore,
@@ -317,6 +324,19 @@ async function main(): Promise<void> {
   } else {
     logger.info("bots.mono", { migration: bots.migration });
   }
+
+  // --- PROFIL DE CAPACITÉS DU BOT ACTIF (lot 35f) ---------------------------
+  // ⚠️ Le profil qui RESTREINT les outils est celui du BOT ACTIF, lu UNE fois ici
+  // dans le registre `state/bots.json` — JAMAIS une valeur reçue d'un client (corps
+  // de requête ou message) : sinon un appelant choisirait ses propres pouvoirs.
+  // Mono-bot historique (`bots.bot` nul) ⇒ `complet` : comportement inchangé.
+  const profilBot: ProfilBot = bots.bot?.profil ?? "complet";
+  logger.info("bots.profil", {
+    profil: profilBot,
+    // ⚠️ Un profil restreint n'a AUCUN worker lourd (voir plus bas) : c'est ce qui
+    // rend le retrait de `run_command` structurel et non déclaratif.
+    worker_lourd: workerLourdAutorise(profilBot),
+  });
 
   // --- Détection précoce des volumes `rw` non inscriptibles ------------------
   // Une cause système (montage `ro`, permissions, volume absent) ne se
@@ -1404,7 +1424,14 @@ async function main(): Promise<void> {
    * approbation humaine (impossible à donner depuis un canal).
    */
   const lightToolOptions = (): ToolAllowlistOptions => ({
-    delegationEnabled: heavyAvailableAtStart,
+    // ⚠️ PROFIL DU BOT ACTIF (lot 35f) : il INTERSECTE l'allowlist ci-dessous dans
+    // `toolAllowlist`/`toolAllowlistForChat` (`filtrerSelonProfil`). Placé ICI, il
+    // vaut pour le host LOCAL **et** pour chaque run de CANAL : il n'y a pas de
+    // seconde liste à filtrer. `complet` n'enlève rien.
+    profil: profilBot,
+    // ⚠️ Délégation : il faut un worker lourd (donc le profil `complet`) ET le
+    // modèle lourd disponible. Sans worker, rien ne peut être délégué.
+    delegationEnabled: heavyAvailableAtStart && workerLourdAutorise(profilBot),
     // ⚠️ INVERSION DES RÔLES : le LÉGER n'a AUCUN outil d'action. Il garde
     // la lecture, la conversation, la délégation, l'annuaire des agents,
     // l'archive et le libraire (consultation). `run_command` et
@@ -2172,88 +2199,106 @@ async function main(): Promise<void> {
       maxConcurrent: config.getNumber("delegation.maxConcurrent"),
       maxQueue: config.getNumber("delegation.maxQueue"),
     });
-    const heavyWorker = createSdkHeavyWorker({
-      cwd: env.piCwd,
-      agentDir: env.piAgentDir,
-      authPath: join(env.piAgentDir, "auth.json"),
-      modelsPath,
-      systemPrompt: config.getString("prompts.heavy"),
-      modelReference: liveHeavyReference,
-      thinking: liveHeavyThinking,
-      // ⚠️ INVERSION DES RÔLES : le worker LOURD porte les outils d'ACTION
-      // (`run_command`, `capturer_ecran`). Ceux-ci ne sont activés que si le
-      // service d'exécution existe (mêmes garde-fous par agent, hors ligne =
-      // refus, audit, plafond de sortie).
-      tools: toolAllowlist("heavy", {
-        executionEnabled: agentExecution !== undefined,
-        screenshotsEnabled: agentExecution !== undefined,
-        // ⚠️ TRANSFERT de fichiers : exposé seulement si le service existe.
-        fileTransferEnabled: agentTransfers !== undefined,
-        // ⚠️ LISTAGE des pièces jointes (lecture seule, identifiants compris) :
-        // le worker doit pouvoir retrouver l'identifiant qu'exige `deposer_fichier`.
-        fileListEnabled: filesService !== undefined,
-        // ⚠️ LECTURE du CONTENU (image vue, texte décodé et borné, binaire
-        // refusé) : sans elle, le worker savait qu'une image existait sans
-        // pouvoir la voir — la boucle « lister → lire → déposer » restait ouverte.
-        fileReadEnabled: filesService !== undefined,
-        secretsEnabled: secretStore !== undefined,
-        // ⚠️ IMAGES (lot 23) : `generer_image` + `consulter_workflow`. La valeur
-        // suit l'EXISTENCE du générateur ComfyUI, câblé juste en dessous : sans
-        // lui, l'outil ne serait construit que pour REFUSER, et la politique
-        // annoncerait une capacité absente.
-        imagesEnabled: comfyGenerator !== undefined,
-        // ⚠️ AUCUN OUTIL DE PUBLICATION ICI, et c'est STRUCTUREL : le worker REND un
-        // résultat, il ne parle pas (`docs/lot18-chat.md`, invariant « un seul
-        // rédacteur »). `publier_dans_canal` reste au contraire disponible dans le RUN
-        // DE CANAL (`REMOTE_SAFE_TOOLS`) : là, c'est Yuki qui écrit, et c'est légitime.
-      }),
-      ...(agentExecution ? { execution: agentExecution } : {}),
-      ...(agentExecution ? { screenshots: agentExecution } : {}),
-      ...(agentTransfers ? { transfers: agentTransfers } : {}),
-      // ⚠️ IMAGES : MÊMES ports que le host local (générateur ComfyUI + copie dans
-      // le store des fichiers). La conversation est FORCÉE par le worker à celle
-      // de sa conversation propriétaire (le canal), et l'identifiant du fichier
-      // produit remonte dans `HeavyRunResult.fichiers` ⇒ il est publié avec le
-      // rapport. ⚠️ Pas d'`onImage` : un job n'alimente aucune interface web ;
-      // c'est le RAPPORT qui est le canal de sortie.
-      images: {
-        generate: comfyGenerator.generate,
-        archive: generatedImageFiles,
-        workflows: {
-          candidates: () => comfyWorkflows.candidates(),
-          documentationOf: (name: string) => comfyWorkflows.get(name)?.documentation ?? "",
+    // ⚠️ PROFIL DE CAPACITÉS (lot 35f) — STRUCTUREL, pas une permission : un bot
+    // dont le profil n'est pas `complet` n'INSTANCIE PAS le worker lourd. Aucun
+    // `run_command` ne peut donc exister, même par un job importé ou une tâche
+    // planifiée : le worker qui les exécuterait n'a jamais été construit.
+    // ⚠️ La garde elle-même vit dans `construireWorkerLourdSiAutorise`
+    // (`src/bots/profils.ts`) : isolée, elle est TESTABLE avec un ESPION, ce que ce
+    // point de composition ne permet pas (il exécute `main()` au chargement).
+    const heavyWorker = construireWorkerLourdSiAutorise(profilBot, () =>
+      createSdkHeavyWorker({
+        cwd: env.piCwd,
+        agentDir: env.piAgentDir,
+        authPath: join(env.piAgentDir, "auth.json"),
+        modelsPath,
+        systemPrompt: config.getString("prompts.heavy"),
+        modelReference: liveHeavyReference,
+        thinking: liveHeavyThinking,
+        // ⚠️ INVERSION DES RÔLES : le worker LOURD porte les outils d'ACTION
+        // (`run_command`, `capturer_ecran`). Ceux-ci ne sont activés que si le
+        // service d'exécution existe (mêmes garde-fous par agent, hors ligne =
+        // refus, audit, plafond de sortie).
+        tools: toolAllowlist("heavy", {
+          // ⚠️ PROFIL (lot 35f) : redondance VOULUE. Ce bloc n'est atteint que si
+          // `workerLourdAutorise(profilBot)` est vrai (le worker n'est pas construit
+          // sinon), donc l'intersection ne retire rien aujourd'hui — mais si quelqu'un
+          // déplaçait la garde, le profil resterait le dernier mot.
+          profil: profilBot,
+          executionEnabled: agentExecution !== undefined,
+          screenshotsEnabled: agentExecution !== undefined,
+          // ⚠️ TRANSFERT de fichiers : exposé seulement si le service existe.
+          fileTransferEnabled: agentTransfers !== undefined,
+          // ⚠️ LISTAGE des pièces jointes (lecture seule, identifiants compris) :
+          // le worker doit pouvoir retrouver l'identifiant qu'exige `deposer_fichier`.
+          fileListEnabled: filesService !== undefined,
+          // ⚠️ LECTURE du CONTENU (image vue, texte décodé et borné, binaire
+          // refusé) : sans elle, le worker savait qu'une image existait sans
+          // pouvoir la voir — la boucle « lister → lire → déposer » restait ouverte.
+          fileReadEnabled: filesService !== undefined,
+          secretsEnabled: secretStore !== undefined,
+          // ⚠️ IMAGES (lot 23) : `generer_image` + `consulter_workflow`. La valeur
+          // suit l'EXISTENCE du générateur ComfyUI, câblé juste en dessous : sans
+          // lui, l'outil ne serait construit que pour REFUSER, et la politique
+          // annoncerait une capacité absente.
+          imagesEnabled: comfyGenerator !== undefined,
+          // ⚠️ AUCUN OUTIL DE PUBLICATION ICI, et c'est STRUCTUREL : le worker REND un
+          // résultat, il ne parle pas (`docs/lot18-chat.md`, invariant « un seul
+          // rédacteur »). `publier_dans_canal` reste au contraire disponible dans le RUN
+          // DE CANAL (`REMOTE_SAFE_TOOLS`) : là, c'est Yuki qui écrit, et c'est légitime.
+        }),
+        ...(agentExecution ? { execution: agentExecution } : {}),
+        ...(agentExecution ? { screenshots: agentExecution } : {}),
+        ...(agentTransfers ? { transfers: agentTransfers } : {}),
+        // ⚠️ IMAGES : MÊMES ports que le host local (générateur ComfyUI + copie dans
+        // le store des fichiers). La conversation est FORCÉE par le worker à celle
+        // de sa conversation propriétaire (le canal), et l'identifiant du fichier
+        // produit remonte dans `HeavyRunResult.fichiers` ⇒ il est publié avec le
+        // rapport. ⚠️ Pas d'`onImage` : un job n'alimente aucune interface web ;
+        // c'est le RAPPORT qui est le canal de sortie.
+        images: {
+          generate: comfyGenerator.generate,
+          archive: generatedImageFiles,
+          workflows: {
+            candidates: () => comfyWorkflows.candidates(),
+            documentationOf: (name: string) => comfyWorkflows.get(name)?.documentation ?? "",
+          },
         },
-      },
-      // ⚠️ FICHIERS : la liste des pièces jointes de la conversation est jointe
-      // AUTOMATIQUEMENT au premier message du worker (métadonnées seules).
-      files: filesService,
-      ...(secretStore ? { secrets: secretStore } : {}),
-      // ⚠️ BORNE DES IMAGES SUR LE FIL : une tâche peut lire plusieurs images,
-      // et chacune repartirait sinon dans CHAQUE appel modèle de sa boucle
-      // d'outils (`500 request entity too large`). Relue à chaque job.
-      imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes"),
-      idleTimeoutMs,
-      totalTimeoutMs,
-      // ⚠️ CHIEN DE GARDE DÉRIVÉ du plafond de génération RÉEL (relu à chaque job) :
-      // une génération peut durer `images.timeoutMs` (1 h par défaut) pendant
-      // laquelle la session n'émet AUCUN événement. Un chien de garde fixe à 16 min
-      // deviendrait plus COURT que le plafond dès que celui-ci est relevé (vidéo) :
-      // il tuerait alors le job AVANT la fin de la génération, sans explication.
-      // `resolveToolWatchdogMs` garantit « plafond de génération + marge », sans
-      // dépendre de la vigilance de qui règle les valeurs.
-      toolWatchdogMs: () => resolveToolWatchdogMs(config.getNumber("images.timeoutMs")),
-      logger,
-    });
-    delegation = createDelegationService({
-      store: jobStore,
-      queue,
-      heavy: heavyWorker,
-      availability: availabilityPort,
-      idleTimeoutMs,
-      totalTimeoutMs,
-      defaultDeadlineMs: () => config.getNumber("delegation.defaultDeadlineMs"),
-      logger,
-    });
+        // ⚠️ FICHIERS : la liste des pièces jointes de la conversation est jointe
+        // AUTOMATIQUEMENT au premier message du worker (métadonnées seules).
+        files: filesService,
+        ...(secretStore ? { secrets: secretStore } : {}),
+        // ⚠️ BORNE DES IMAGES SUR LE FIL : une tâche peut lire plusieurs images,
+        // et chacune repartirait sinon dans CHAQUE appel modèle de sa boucle
+        // d'outils (`500 request entity too large`). Relue à chaque job.
+        imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes"),
+        idleTimeoutMs,
+        totalTimeoutMs,
+        // ⚠️ CHIEN DE GARDE DÉRIVÉ du plafond de génération RÉEL (relu à chaque job) :
+        // une génération peut durer `images.timeoutMs` (1 h par défaut) pendant
+        // laquelle la session n'émet AUCUN événement. Un chien de garde fixe à 16 min
+        // deviendrait plus COURT que le plafond dès que celui-ci est relevé (vidéo) :
+        // il tuerait alors le job AVANT la fin de la génération, sans explication.
+        // `resolveToolWatchdogMs` garantit « plafond de génération + marge », sans
+        // dépendre de la vigilance de qui règle les valeurs.
+        toolWatchdogMs: () => resolveToolWatchdogMs(config.getNumber("images.timeoutMs")),
+        logger,
+      }),
+    );
+    // ⚠️ Sans worker lourd, il n'y a RIEN à déléguer : le service de délégation
+    // n'est pas construit (sinon `delegate` annoncerait une capacité inexistante).
+    if (heavyWorker !== undefined) {
+      delegation = createDelegationService({
+        store: jobStore,
+        queue,
+        heavy: heavyWorker,
+        availability: availabilityPort,
+        idleTimeoutMs,
+        totalTimeoutMs,
+        defaultDeadlineMs: () => config.getNumber("delegation.defaultDeadlineMs"),
+        logger,
+      });
+    }
 
     const memoryStore = MemoryStore.open({ path: env.memoryStorePath, logger });
     const memoryIndex = new MemoryIndex({ path: env.memoryIndexPath, logger });
@@ -2611,7 +2656,9 @@ async function main(): Promise<void> {
         remoteAgents: false,
         remoteTools: false,
       }),
-      ...(heavyAvailableAtStart ? { delegation } : {}),
+      // ⚠️ Sans worker lourd (profil restreint), `delegation` est ABSENT : le host n'a
+      // donc ni port de délégation, ni outil `delegate` (retiré aussi par le profil).
+      ...(delegation ? { delegation } : {}),
       ...(agentDirectory ? { directory: agentDirectory } : {}),
       ...(secretStore ? { secrets: secretStore } : {}),
       // DEMANDE de secret : la fenêtre s'affiche dans SA conversation (session
@@ -2742,7 +2789,9 @@ async function main(): Promise<void> {
         envoyerDansCanal(conversationId, text, fichiers),
       logger,
     });
-    delegation.setWaker(jobReportWaker);
+    // ⚠️ `delegation` peut manquer (profil restreint ⇒ aucun worker lourd) : le
+    // réveil est alors inutile, puisque rien ne peut être délégué.
+    delegation?.setWaker(jobReportWaker);
     // ⚠️ Même réveil pour l'ARCHIVAGE du libraire : `archive_libraire` rend la
     // main tout de suite et son issue est rapportée plus tard — dans le canal
     // quand l'archivage a été demandé depuis un canal.
@@ -2829,6 +2878,14 @@ async function main(): Promise<void> {
       });
     }
 
+    /**
+     * Lot 35e — RÉTENTION des archives de bots supprimés : la purge est faite
+     * par le balayeur, JAMAIS par un minuteur dédié. On la limite à une passe
+     * par heure : parcourir `bots-supprimes/` à chaque tick de 30 s serait du
+     * travail inutile pour un dossier qui ne change qu'à une suppression.
+     */
+    let dernierePurgeArchives = 0;
+    const INTERVALLE_PURGE_ARCHIVES_MS = 3_600_000;
     declencheursBalayeur = new DeclencheurBalayeur({
       store: sourcesStore,
       journal: declencheursJournal,
@@ -2844,6 +2901,22 @@ async function main(): Promise<void> {
       // rendez-vous planifié, pas une source.
       passeHebdo: {
         executerSiDu: (maintenant) => consolidationHebdo?.executerSiDu(maintenant) ?? Promise.resolve(),
+      },
+      // ⚠️ RÉTENTION DES ARCHIVES DE BOTS SUPPRIMÉS (lot 35e) : 3 mois, purgés
+      // par CE balayeur — aucun minuteur nouveau. Un dossier de plus de 90 jours
+      // est effacé (journal `bot.archive.purged`) ; 89 jours survit. La purge ne
+      // tourne qu'une fois par heure (elle parcourt un dossier, inutile de le
+      // faire à chaque tick de 30 s).
+      archivesBots: {
+        purger: (maintenant) => {
+          if (maintenant - dernierePurgeArchives < INTERVALLE_PURGE_ARCHIVES_MS) return 0;
+          dernierePurgeArchives = maintenant;
+          return purgerArchivesBots({
+            stateDir: env.mountPoints.state,
+            maintenant,
+            logger,
+          }).purges.length;
+        },
       },
       logger,
       now: () => Date.now(),
@@ -3167,7 +3240,12 @@ async function main(): Promise<void> {
         // BOTS (lot 35b, sous-lot 1b-3) : `GET /api/bots` et
         // `/api/bots/<id>/config`. Le registre lu au démarrage dit QUELS bots
         // existent (`null` en mode mono-bot historique ⇒ « yuki » seul).
-        bots: { registre: bots.registre },
+        // ⚠️ LOT 35e : les mêmes routes servent l'ADMINISTRATION (créer,
+        // cloner, supprimer) — `stateDir` est le volume `state` et le registre
+        // en mémoire est REMPLACÉ après chaque écriture (deps mutables).
+        // POINT D'EXTENSION : `retirerDesListesDAgents` sera branché quand les
+        // agents porteront la liste de leurs bots autorisés (rien n'est inventé ici).
+        bots: { registre: bots.registre, stateDir: env.mountPoints.state },
       },
       personality: { store: personalityStore, logger },
       rules: { store: rulesStore, logger },

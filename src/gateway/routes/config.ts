@@ -32,6 +32,13 @@ import {
   type RegistreBots,
 } from "../../bots/registry.js";
 import {
+  AdminBotError,
+  RETENTION_ARCHIVES_JOURS,
+  compterDonneesBot,
+  creerBot,
+  supprimerBot,
+} from "../../bots/admin.js";
+import {
   LibrarianClient,
   LIBRARIAN_ERROR_MESSAGES,
   isLibrarianError,
@@ -95,12 +102,23 @@ export interface ConfigApiDeps {
    */
   onSecretSeen?: (value: string) => void;
   /**
-   * BOTS de l'instance (lot 35b, sous-lot 1b-3) : registre lu au démarrage.
+   * BOTS de l'instance : registre lu au démarrage + ADMINISTRATION (lot 35e).
    * `registre: null` = mode mono-bot historique (aucun `bots.json`) ⇒ la seule
-   * route `/api/bots` répond la liste `yuki` et `/api/bots/yuki/config`
-   * fonctionne. Absent (tests, gateway dégradé) ⇒ même repli.
+   * route `/api/bots` répond la liste `yuki`, `/api/bots/yuki/config` fonctionne,
+   * et la CRÉATION est refusée (`409 registre_absent`).
+   * `stateDir` = volume `state` : racine de `bots/` et `bots-supprimes/` ; absent
+   * ⇒ les routes d'administration répondent `503 bots_admin_indisponible`.
    */
-  bots?: { registre?: RegistreBots | null };
+  bots?: {
+    registre?: RegistreBots | null;
+    stateDir?: string;
+    /**
+     * POINT D'EXTENSION « agents autorisés » (`src/bots/admin.ts`) : appelé avec
+     * l'identifiant d'un bot SUPPRIMÉ, pour le retirer des listes d'agents. Le
+     * champ n'existe pas encore ⇒ rien n'est branché ici.
+     */
+    retirerDesListesDAgents?: (botId: string) => void;
+  };
 }
 
 export interface ConfigHttpResponse {
@@ -710,6 +728,227 @@ function botIdOfPath(path: string): string | null {
   }
 }
 
+// ── BOTS : administration (lot 35e — ajouter / cloner / supprimer) ──────────
+
+/** Corps JSON d'une requête d'administration : objet attendu, jamais un tableau. */
+function lireCorpsObjet(
+  body: string,
+): { ok: true; value: Record<string, unknown> } | { ok: false; response: ConfigHttpResponse } {
+  let parsed: unknown;
+  try {
+    parsed = body.trim() === "" ? {} : JSON.parse(body);
+  } catch {
+    return {
+      ok: false,
+      response: json(400, {
+        error: "invalid_json",
+        code: "invalid_json",
+        message: "Corps JSON invalide.",
+      }),
+    };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      response: json(400, {
+        error: "invalid_body",
+        code: "invalid_body",
+        message: "Objet JSON attendu.",
+      }),
+    };
+  }
+  return { ok: true, value: parsed as Record<string, unknown> };
+}
+
+/** Refus d'administration → réponse HTTP (code stable + message français). */
+function adminBotError(deps: ConfigApiDeps, error: unknown): ConfigHttpResponse {
+  if (error instanceof AdminBotError) {
+    deps.logger.info("bot.admin.refuse", { code: error.code, message: error.message });
+    return json(error.status, { error: error.code, code: error.code, message: error.message });
+  }
+  throw error;
+}
+
+/**
+ * `POST /api/bots` — CRÉE un bot (de zéro, ou par CLONE d'un bot existant).
+ *
+ * Corps : `{ nom, slug, profil?, avatar?, cloneDe?, elements? }`.
+ * ⚠️ Le slug est IMMUABLE (il nomme un dossier) et `409 max_bots` au-delà de
+ * `MAX_BOTS` bots. ⚠️ La création exige `X-Yuki-Config: 1` et la même origine
+ * (`requireWriteGuards`), comme toute écriture de configuration.
+ */
+function handleBotsCreate(input: ConfigRequestInput): ConfigHttpResponse {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+  const deps = input.deps;
+  const registre = deps.bots?.registre ?? null;
+  if (!registre) {
+    return json(409, {
+      error: "registre_absent",
+      code: "registre_absent",
+      message:
+        "L'instance n'est pas en mode multi-bot (aucun `state/bots.json`) : " +
+        "la création d'un bot est impossible tant que le registre n'existe pas.",
+    });
+  }
+  const stateDir = deps.bots?.stateDir;
+  if (!stateDir) {
+    return json(503, {
+      error: "bots_admin_indisponible",
+      code: "bots_admin_indisponible",
+      message: "Administration des bots indisponible : volume `state` inconnu.",
+    });
+  }
+  const corps = lireCorpsObjet(input.body);
+  if (!corps.ok) return corps.response;
+  try {
+    const resultat = creerBot({
+      stateDir,
+      registre,
+      nom: corps.value["nom"],
+      slug: corps.value["slug"],
+      profil: corps.value["profil"],
+      cloneDe: corps.value["cloneDe"],
+      avatar: corps.value["avatar"],
+      ...(corps.value["elements"] !== undefined
+        ? { elements: corps.value["elements"] as Record<string, unknown> }
+        : {}),
+    });
+    // ⚠️ Le registre EN MÉMOIRE suit l'écriture : sans cela, `GET /api/bots`
+    // continuerait d'ignorer le bot qu'on vient de créer.
+    if (deps.bots) deps.bots.registre = resultat.registre;
+    deps.logger.info("bot.cree", {
+      bot: resultat.bot.id,
+      nom: resultat.bot.nom,
+      profil: resultat.bot.profil,
+      clone_de: corps.value["cloneDe"] ?? null,
+      elements: resultat.copies.join(","),
+      flow: configWriteFlow(input.headers),
+    });
+    return json(201, { bot: listingDe(resultat.bot), bots: botsConnus(deps) });
+  } catch (error) {
+    return adminBotError(deps, error);
+  }
+}
+
+/**
+ * `DELETE /api/bots/<id>` — SUPPRIME un bot (⚠️ **n'efface rien** : son dossier
+ * est DÉPLACÉ dans `bots-supprimes/<slug>-<date>/`, même volume).
+ *
+ * ⚠️ Refus `409 last_bot` sur le dernier bot. ⚠️ Si le bot supprimé était le bot
+ * ACTIF, le premier bot restant est promu et `rechargementRequis` est vrai : le
+ * gateway en cours applique encore ses chemins. Les données restent 90 jours
+ * (`bot.archive.purged` à l'échéance, par le balayeur existant).
+ */
+function handleBotsDelete(
+  input: ConfigRequestInput,
+  botId: string,
+): ConfigHttpResponse {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+  const deps = input.deps;
+  const registre = deps.bots?.registre ?? null;
+  if (!registre) {
+    return json(409, {
+      error: "registre_absent",
+      code: "registre_absent",
+      message:
+        "L'instance n'est pas en mode multi-bot (aucun `state/bots.json`) : " +
+        "aucun bot ne peut être supprimé.",
+    });
+  }
+  const stateDir = deps.bots?.stateDir;
+  if (!stateDir) {
+    return json(503, {
+      error: "bots_admin_indisponible",
+      code: "bots_admin_indisponible",
+      message: "Administration des bots indisponible : volume `state` inconnu.",
+    });
+  }
+  try {
+    const resultat = supprimerBot({
+      stateDir,
+      registre,
+      botId,
+      ...(deps.bots?.retirerDesListesDAgents
+        ? { retirerDesListesDAgents: deps.bots.retirerDesListesDAgents }
+        : {}),
+    });
+    if (deps.bots) deps.bots.registre = resultat.registre;
+    deps.logger.info("bot.supprime", {
+      bot: resultat.bot.id,
+      archive: resultat.archive,
+      bot_actif_suivant: resultat.botActifSuivant,
+      retention_jours: RETENTION_ARCHIVES_JOURS,
+      flow: configWriteFlow(input.headers),
+    });
+    if (resultat.rechargementRequis) {
+      // ⚠️ Le processus en cours applique ENCORE les chemins du bot supprimé :
+      // c'est dit au journal (et renvoyé à l'UI), jamais passé sous silence.
+      deps.logger.warn("bot.supprime.redemarrage_requis", {
+        bot: resultat.bot.id,
+        bot_actif_suivant: resultat.botActifSuivant,
+      });
+    }
+    return json(200, {
+      bots: botsConnus(deps),
+      archive: resultat.archive,
+      botActifSuivant: resultat.botActifSuivant,
+      rechargementRequis: resultat.rechargementRequis,
+      retentionJours: RETENTION_ARCHIVES_JOURS,
+    });
+  } catch (error) {
+    return adminBotError(deps, error);
+  }
+}
+
+/**
+ * `GET /api/bots/<id>/donnees` — COMPTEURS RÉELS du bot (conversations,
+ * souvenirs, déclencheurs, taille du dossier) : ce que montre la confirmation
+ * de suppression. Aucun contenu n'est renvoyé, seulement des nombres.
+ */
+function handleBotDonnees(deps: ConfigApiDeps, botId: string): ConfigHttpResponse {
+  const stateDir = deps.bots?.stateDir;
+  if (!stateDir) {
+    return json(503, {
+      error: "bots_admin_indisponible",
+      code: "bots_admin_indisponible",
+      message: "Compteurs indisponibles : volume `state` inconnu.",
+    });
+  }
+  return json(200, {
+    bot: { id: botId },
+    compteurs: compterDonneesBot(stateDir, botId),
+    retentionJours: RETENTION_ARCHIVES_JOURS,
+  });
+}
+
+/** Vue d'un bot pour les réponses d'administration (même forme que la liste). */
+function listingDe(bot: BotRecord): BotListing {
+  return {
+    id: bot.id,
+    nom: bot.nom,
+    profil: bot.profil,
+    actif: bot.actif,
+    ordre: bot.ordre,
+  };
+}
+
+/** Chemin `/api/bots/<id>[/donnees]` → identifiant + suffixe, ou `null`. */
+function botRacineOfPath(
+  path: string,
+): { botId: string; suffixe: "" | "donnees" } | null {
+  const match = /^\/api\/bots\/([^/]+)(\/donnees)?$/.exec(path);
+  if (!match) return null;
+  let botId: string;
+  try {
+    botId = decodeURIComponent(match[1] as string);
+  } catch {
+    return null;
+  }
+  return { botId, suffixe: match[2] === undefined ? "" : "donnees" };
+}
+
 // ── Mot de passe d'INSTANCE (déverrouillage des agents sensibles) ───────────
 
 /**
@@ -876,6 +1115,21 @@ export async function handleConfigRequest(
   // ── BOTS (lot 35b, sous-lot 1b-3) ────────────────────────────────────────
   if (path === "/api/bots") {
     if (method === "GET" || method === "HEAD") return handleBotsList(input.deps);
+    // ⚠️ CRÉATION (lot 35e) : dossier + entrée du registre (+ clone éventuel).
+    if (method === "POST") return handleBotsCreate(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  const racine = botRacineOfPath(path);
+  if (racine !== null) {
+    if (!botDemande(input.deps, racine.botId)) return botInconnu(racine.botId);
+    if (racine.suffixe === "donnees") {
+      if (method === "GET" || method === "HEAD") {
+        return handleBotDonnees(input.deps, racine.botId);
+      }
+      return json(405, { error: "method_not_allowed", method });
+    }
+    // ⚠️ SUPPRESSION : n'efface rien, DÉPLACE le dossier dans `bots-supprimes/`.
+    if (method === "DELETE") return handleBotsDelete(input, racine.botId);
     return json(405, { error: "method_not_allowed", method });
   }
   const botId = botIdOfPath(path);

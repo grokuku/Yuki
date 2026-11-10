@@ -598,6 +598,61 @@ describe("balayeur — garde-fou quotidien (maxToursParJour)", () => {
 
 // ── ⑦ La tâche transmise au worker lourd ───────────────────────────────────
 
+describe("balayeur — RÉTENTION des archives de bots supprimés (lot 35e)", () => {
+  /**
+   * ⚠️ La purge des archives de bots (90 jours) passe par CE balayeur, jamais
+   * par un `setInterval` dédié : c'est le même tick que les déclencheurs.
+   */
+  it("appelle le port `archivesBots` à chaque tick, avec l'instant du balayeur", async () => {
+    const h = harnais();
+    const appels: number[] = [];
+    const balayeur = new DeclencheurBalayeur({
+      store: h.store,
+      logger: { info: () => {}, warn: () => {} },
+      now: () => Date.parse("2026-06-01T06:00:00Z"),
+      run: async () => ({ status: "completed" }) as never,
+      archivesBots: {
+        purger: (maintenant) => {
+          appels.push(maintenant);
+          return 1;
+        },
+      },
+    });
+    await balayeur.tick();
+    expect(appels).toEqual([Date.parse("2026-06-01T06:00:00Z")]);
+  });
+
+  it("un port en ÉCHEC ne casse pas le balayage (les déclencheurs passent quand même)", async () => {
+    const h = harnais();
+    declarePlanning(h, "matin", "0 7 * * *");
+    const avertissements: string[] = [];
+    const balayeur = new DeclencheurBalayeur({
+      store: h.store,
+      journal: h.journal,
+      logger: {
+        info: () => {},
+        warn: (message) => avertissements.push(message),
+      },
+      now: () => Date.parse("2026-06-01T07:00:00Z"),
+      run: (nom, opts) =>
+        h.service.declencher(nom, {
+          origine: ORIGINE_HORLOGE,
+          ...(opts.planifie !== undefined ? { planifie: opts.planifie } : {}),
+          plafondMs: opts.plafondMs,
+          signal: opts.signal,
+        }),
+      archivesBots: {
+        purger: () => {
+          throw new Error("disque en lecture seule");
+        },
+      },
+    });
+    // Le tick NE LÈVE PAS : la purge en échec est journalisée, le balayage continue.
+    await expect(balayeur.tick()).resolves.toBeUndefined();
+    expect(avertissements).toContain("sources.balayeur.archives_bots_failed");
+  });
+});
+
 describe("tâche du déclelencheur — règles écrites une seule fois", () => {
   it("porte la consigne, RIEN, DÉSACTIVER et la limite des approbations", () => {
     const tache = tacheDeDeclencheur({

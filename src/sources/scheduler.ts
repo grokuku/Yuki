@@ -121,6 +121,22 @@ export interface PasseHebdoRunner {
   executerSiDu(maintenant: number): Promise<void>;
 }
 
+/**
+ * Port de la RÉTENTION des archives de bots supprimés (lot 35e).
+ *
+ * ⚠️ MÊME RÈGLE QUE LES DEUX PORTS PRÉCÉDENTS : la purge est un rendez-vous
+ * planifié (trois mois), pas une source. Elle passe donc par CE balayeur —
+ * **aucun `setInterval` nouveau** dans le processus.
+ *
+ * ⚠️ Le port décide lui-même de sa fréquence (l'appelant réel ne purge qu'une
+ * fois par heure) : le tick de 30 s ne doit pas transformer une rétention en
+ * parcours de dossier permanent.
+ */
+export interface ArchivesBotsRunner {
+  /** Purge les archives trop anciennes. Rend le nombre d'archives supprimées. */
+  purger(maintenant: number): Promise<number> | number;
+}
+
 export interface DeclencheurBalayeurOptions {
   store: BalayeurStore;
   run: DeclencheurRunner;
@@ -131,6 +147,11 @@ export interface DeclencheurBalayeurOptions {
   envoisProgrammes?: EnvoisProgrammesRunner;
   /** Consolidation hebdomadaire de la mémoire (lot 29). Absent ⇒ rien n'est planifié. */
   passeHebdo?: PasseHebdoRunner;
+  /**
+   * Rétention des archives de bots supprimés (lot 35e). Absent ⇒ aucune purge
+   * n'est faite par ce balayeur (les archives restent, rien n'est effacé).
+   */
+  archivesBots?: ArchivesBotsRunner;
   /** Horloge injectable (tests). */
   now?: () => number;
   /** Planificateur périodique injectable (tests). */
@@ -299,6 +320,19 @@ export class DeclencheurBalayeur {
         } catch (error) {
           // ⚠️ Un envoi en échec ne doit pas empêcher les déclencheurs d'être balayés.
           this.options.logger.warn("sources.balayeur.envois_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      // ⚠️ RÉTENTION DES ARCHIVES DE BOTS SUPPRIMÉS (lot 35e) : purge RÉELLE des
+      // dossiers de plus de 90 jours, décidée par CE tick. Attendre est sans
+      // risque : le parcours porte sur un dossier qui ne change qu'à une
+      // suppression, et le port limite lui-même sa fréquence.
+      if (this.options.archivesBots) {
+        try {
+          await this.options.archivesBots.purger(maintenant);
+        } catch (error) {
+          this.options.logger.warn("sources.balayeur.archives_bots_failed", {
             error: error instanceof Error ? error.message : String(error),
           });
         }

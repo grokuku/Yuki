@@ -41,6 +41,10 @@ import {
 export * from "./registry.js";
 export * from "./paths.js";
 export * from "./migrate.js";
+export * from "./admin.js";
+// ⚠️ PROFILS DE CAPACITÉS RÉELS (lot 35f) : la garde STRUCTURELLE du worker lourd
+// (`workerLourdAutorise`, `construireWorkerLourdSiAutorise`).
+export * from "./profils.js";
 
 /** Mode de résolution retenu au démarrage. */
 export type ModeBots = "mono" | "multi";

@@ -56,6 +56,7 @@ import {
   splitConfigPatchByScope,
 } from './config-patch.js';
 import { cheminConfigBot, listerBots } from './bots-api.js';
+import { ouvrirCreationBot, ouvrirSuppressionBot } from './bots-admin.js';
 import {
   ANCRES_PROFONDES as ANCRES_PROFONDES_PAR_PAGE,
   champsDePage,
@@ -63,10 +64,11 @@ import {
   groupesDePage,
   groupesParOnglet,
   ligneDePage,
-  modaleAjoutBot,
+  modaleCreationBot,
   ongletDuHash,
   ongletsDePage,
   pageConnue,
+  profilDePage,
 } from './config-pages.js';
 import { ALL_FIELDS, FIELD_DEFAULTS, GROUPS, LABELS } from './config-fields.js';
 import { initTheme } from './theme.js';
@@ -235,7 +237,7 @@ const chatRoot = document.getElementById("chat-root");
 const personalityRoot = document.getElementById("personality-root");
 /** Ligne d'explication SOUS le titre (④ : où est allé ce qui a déménagé). */
 const pageLigneEl = document.getElementById("page-ligne");
-/** Bouton « ＋ » d'ajout de bot (page Bot) : modale « bientôt disponible ». */
+/** Bouton « + » d'ajout de bot (page Bot) : ouvre la modale de CRÉATION. */
 const botAddButton = document.getElementById("bot-add");
 /** Sélecteur de bot (page Bot) — état porté par `?b=<slug>`. */
 const botSelect = document.getElementById("bot-select");
@@ -1394,10 +1396,11 @@ function ligneLecture(texte, valeur) {
 /**
  * Zone « Général » d'un bot : nom, slug, profil, avatar et zone de danger.
  *
- * ⚠️ LECTURE SEULE et AUCUN bouton de suppression : renommer ou supprimer un
- * bot doit déplacer ses dossiers, ses chemins et ses conversations. Le faire à
- * moitié laisserait une instance incohérente — c'est un lot ultérieur, et la
- * zone de danger le DIT au lieu de proposer un bouton inerte.
+ * ⚠️ L'identité reste en LECTURE SEULE (le slug est immuable : il nomme un
+ * dossier), mais la ZONE DE DANGER porte désormais la VRAIE suppression
+ * (lot 35e) : elle n'efface rien — le serveur déplace le dossier du bot dans
+ * `bots-supprimes/` — et la confirmation affiche les compteurs réels avec une
+ * case à cocher obligatoire (motif du lot 30).
  */
 function renderBotGeneral() {
   if (!botGeneralRoot) return;
@@ -1419,36 +1422,63 @@ function renderBotGeneral() {
     h("p", {
       class: "config-helper",
       text:
-        "Informations en LECTURE SEULE. Renommer un bot, changer son profil ou " +
-        "son avatar depuis cette page arrive dans un lot ultérieur : ces " +
-        "changements déplacent les dossiers et les chemins du bot.",
+        "Informations en LECTURE SEULE : l'identifiant (slug) est IMMUABLE — il " +
+        "nomme le dossier et les chemins du bot. Un autre bot s'ajoute par « ＋ » " +
+        "et se retire par la zone de danger ci-dessous.",
     }),
   );
   identite.append(ligneLecture("Nom", bot.nom ?? bot.id));
   identite.append(ligneLecture("Identifiant (slug)", bot.id));
-  identite.append(ligneLecture("Profil", bot.profil ?? "—"));
+  // ⚠️ PROFIL RÉEL (lot 35f) : le libellé ET ce que le profil autorise VRAIMENT.
+  // Avant ce lot, cette ligne affichait le seul mot « lecture » et laissait croire
+  // qu'il ne restreignait rien — c'était vrai. Aujourd'hui le profil INTERSECTE
+  // l'allowlist d'outils et supprime le worker lourd : la phrase doit le dire.
+  const profil = profilDePage(bot.profil);
+  identite.append(ligneLecture("Profil", profil ? profil.libelle : (bot.profil ?? "—")));
+  identite.append(
+    h("p", {
+      class: "config-helper",
+      text: profil
+        ? `Capacités : ${profil.capacites}`
+        : "Capacités inconnues : ce profil n'est pas reconnu par cette interface.",
+    }),
+  );
   identite.append(ligneLecture("État", bot.actif === true ? "actif" : "inactif"));
   const avatarRow = h("div", { class: "config-row bot-info" });
   avatarRow.append(h("span", { class: "config-label", text: "Avatar" }));
-  const avatar = h("img", {
-    class: "bot-avatar",
-    src: "/avatar",
-    alt: "Avatar de Yuki",
-    width: "64",
-    height: "64",
-  });
-  // Aucun avatar déposé ⇒ `/avatar` répond 404 : on l'annonce en texte plutôt
-  // que de laisser une image cassée (aucun style inline, CSP inchangée).
-  avatar.addEventListener("error", () => {
-    avatar.hidden = true;
-    remplacement.hidden = false;
-  });
-  const remplacement = h("span", {
-    class: "bot-info__valeur",
-    text: "aucun avatar (flocon par défaut)",
-    hidden: "hidden",
-  });
-  avatarRow.append(avatar, remplacement);
+  if (botAfficheEstActif()) {
+    // ⚠️ `/avatar` sert l'avatar du bot ACTIF : c'est le seul cas où cette image
+    // est la sienne. Les autres bots ne l'affichent pas ici (on ne montre pas
+    // l'avatar de quelqu'un d'autre).
+    const avatar = h("img", {
+      class: "bot-avatar",
+      src: "/avatar",
+      alt: `Avatar de ${bot.nom ?? bot.id}`,
+      width: "64",
+      height: "64",
+    });
+    const remplacement = h("span", {
+      class: "bot-info__valeur",
+      text: "aucun avatar (flocon par défaut)",
+      hidden: "hidden",
+    });
+    // Aucun avatar déposé ⇒ `/avatar` répond 404 : on l'annonce en texte plutôt
+    // que de laisser une image cassée (aucun style inline, CSP inchangée).
+    avatar.addEventListener("error", () => {
+      avatar.hidden = true;
+      remplacement.hidden = false;
+    });
+    avatarRow.append(avatar, remplacement);
+  } else {
+    avatarRow.append(
+      h("span", {
+        class: "bot-info__valeur",
+        text:
+          "non affiché ici : l'image servie par /avatar est celle du bot actif. " +
+          "L'avatar de ce bot lui appartient (il est copié lors d'un clonage).",
+      }),
+    );
+  }
   identite.append(avatarRow);
   botGeneralRoot.append(identite);
 
@@ -1462,12 +1492,22 @@ function renderBotGeneral() {
     h("p", {
       class: "config-helper",
       text:
-        "La suppression d'un bot n'est PAS disponible ici : elle doit d'abord " +
-        "archiver ses données et réaffecter ses conversations et ses " +
-        "déclencheurs. Elle arrive dans un lot ultérieur — aucun bouton n'est " +
-        "affiché tant que ce n'est pas vrai.",
+        "La suppression N'EFFACE RIEN : le dossier du bot est DÉPLACÉ dans les " +
+        "archives de l'instance (`bots-supprimes/`, même volume) et ses données " +
+        "sont CONSERVÉES 3 mois (90 jours), puis effacées par le balayeur. La " +
+        "confirmation affiche le nombre réel de conversations, de souvenirs et de " +
+        "déclencheurs, avec une case à cocher obligatoire.",
     }),
   );
+  // ⚠️ `button--danger` (bouton TEXTE) et non `button--stop` : ce dernier est
+  // l'icône carrée de 36 px du bandeau du chat — le texte y serait coupé.
+  const supprimer = h("button", {
+    class: "button button--danger button--small",
+    type: "button",
+    text: "Supprimer ce bot",
+  });
+  supprimer.addEventListener("click", () => void supprimerBotCourant());
+  danger.append(h("div", { class: "config-actions" }, [supprimer]));
   botGeneralRoot.append(danger);
 }
 
@@ -1561,8 +1601,12 @@ async function changerDeBot(cible) {
   location.assign(urlBot(id, location.hash));
 }
 
-/** Remplit le sélecteur de bot et l'ouvre sur le bot affiché. */
-function cablerSelecteurBot() {
+/**
+ * Remplit le sélecteur de bot et l'ouvre sur le bot affiché.
+ * ⚠️ Séparé du câblage de l'événement : après une CRÉATION, la liste change et
+ * le sélecteur est re-rempli SANS empiler un second écouteur.
+ */
+function remplirSelecteurBot() {
   if (!botSelect) return;
   botSelect.textContent = "";
   for (const bot of botsConnus) {
@@ -1572,7 +1616,85 @@ function cablerSelecteurBot() {
     botSelect.append(option);
   }
   botSelect.disabled = botsConnus.length === 0;
+}
+
+/** Remplit le sélecteur ET câble le changement (une seule fois). */
+function cablerSelecteurBot() {
+  remplirSelecteurBot();
+  if (!botSelect) return;
   botSelect.addEventListener("change", () => void changerDeBot(botSelect.value));
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * AJOUTER / SUPPRIMER UN BOT (lot 35e)
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * « ＋ » : ouvre la modale de CRÉATION (nom, slug immuable, profil, avatar
+ * facultatif, de zéro OU clone avec ses cases). ⚠️ Le bot est créé pour de vrai
+ * (`POST /api/bots`) : le sélecteur l'affiche et la page bascule dessus.
+ */
+async function creerBotDepuisModale() {
+  if (!PAGE_BOT) return;
+  if (botsConnus.length >= modaleCreationBot({ bots: botsConnus }).maxBots) {
+    await HolafModal.alert(
+      "Limite de bots atteinte",
+      modaleCreationBot({ bots: botsConnus }).limite,
+      { okText: "Compris" },
+    );
+    return;
+  }
+  const cree = await ouvrirCreationBot({ HolafModal, bots: botsConnus });
+  if (!cree || typeof cree.id !== "string") return;
+  // Le sélecteur montre le nouveau bot AVANT la navigation (retour immédiat),
+  // puis la page bascule dessus : `?b=<slug>` est l'état, et tout est relu.
+  botsConnus = [...botsConnus, cree];
+  botCourant = cree;
+  remplirSelecteurBot();
+  location.assign(urlBot(cree.id));
+}
+
+/**
+ * Zone de danger : SUPPRESSION avec compteurs réels et case à cocher
+ * obligatoire. ⚠️ Le serveur n'efface rien : il déplace le dossier dans
+ * `bots-supprimes/` et le conserve 3 mois.
+ */
+async function supprimerBotCourant() {
+  if (!PAGE_BOT || !botCourant) return;
+  if (botsConnus.length <= 1) {
+    await HolafModal.alert(
+      "Suppression impossible",
+      "C'est le DERNIER bot de l'instance : une instance sans bot ne peut pas " +
+        "démarrer. Créez d'abord un autre bot (bouton « ＋ »).",
+      { okText: "Compris" },
+    );
+    return;
+  }
+  const resultat = await ouvrirSuppressionBot({ HolafModal, bot: botCourant });
+  if (!resultat) return;
+  const bots = Array.isArray(resultat.bots) ? resultat.bots : [];
+  const cible =
+    resultat.botActifSuivant ??
+    bots.find((bot) => bot.actif === true)?.id ??
+    bots[0]?.id ??
+    null;
+  if (resultat.rechargementRequis) {
+    // ⚠️ Le gateway EN COURS applique encore les chemins du bot supprimé : c'est
+    // dit à l'utilisateur, jamais passé sous silence.
+    await HolafModal.alert(
+      "Redémarrage nécessaire",
+      "Le bot ACTIF de l'instance vient d'être supprimé : le gateway en cours " +
+        "applique encore ses anciens chemins. Redémarrez le gateway (onglet " +
+        "« Maintenance » de la page Instance) pour que le bot suivant devienne " +
+        "réellement actif. Ses données sont conservées 3 mois.",
+      { okText: "Compris" },
+    );
+  }
+  if (cible === null || cible === botCourant.id) {
+    location.reload();
+    return;
+  }
+  location.assign(urlBot(cible, location.hash));
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1584,12 +1706,7 @@ saveButton.addEventListener("click", () => void save());
 if (restartButton) restartButton.addEventListener("click", () => void restart());
 
 if (botAddButton) {
-  // ⚠️ « ＋ » : l'écran d'AJOUT est un lot ultérieur. La modale le DIT — elle ne
-  // crée rien et ne promet rien.
-  botAddButton.addEventListener("click", () => {
-    const spec = modaleAjoutBot();
-    void HolafModal.alert(spec.titre, spec.message, { okText: spec.okText });
-  });
+  botAddButton.addEventListener("click", () => void creerBotDepuisModale());
 }
 
 // Navigation par onglets : clic, clavier (flèches + Home/End, activation au

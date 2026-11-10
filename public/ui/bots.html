@@ -52,8 +52,10 @@
         SÉLECTEUR DE BOT (③) — l'état est porté par l'URL (`?b=<slug>`) : elle
         est partageable et un rechargement retombe sur le même bot. Un slug
         inconnu retombe sur `yuki` SANS erreur visible (URL partagée périmée).
-        « ＋ » ouvre une modale « bientôt disponible » : l'écran d'ajout est un
-        lot ultérieur (il doit préparer dossiers, chemins et migration).
+        « + » ouvre la modale d'AJOUT (lot 35e) : nom, slug immuable, profil,
+        avatar facultatif, puis « de zéro » ou CLONE d'un bot existant avec ses
+        cases à cocher. Le bot créé apparaît dans ce sélecteur, qui bascule
+        dessus.
       -->
       <div class="bot-selecteur">
         <label class="bot-selecteur__label" for="bot-select">Bot affiché</label>
@@ -63,7 +65,7 @@
           class="button button--ghost button--small bot-selecteur__add"
           type="button"
           aria-label="Ajouter un bot"
-        >＋</button>
+        >+</button>
       </div>
 
       <!-- Bandeau d'honnêteté : ce qui n'est pas éditable pour un bot NON actif. -->
@@ -155,10 +157,12 @@
 
         <div id="groups" class="config-panels">
           <!-- ═══ GÉNÉRAL ═══════════════════════════════════════════════════
-               Identité du bot (nom, slug LECTURE SEULE, profil, avatar) et ZONE
-               DE DANGER **sans bouton de suppression** : supprimer un bot doit
-               archiver ses données et réaffecter ses conversations — c'est un
-               lot ultérieur, et la zone le dit au lieu de mentir.
+               Identité du bot (nom, slug IMMUABLE, profil, avatar) et ZONE DE
+               DANGER avec la SUPPRESSION réelle (lot 35e) : le dossier du bot
+               est DÉPLACÉ dans `bots-supprimes/` (rien n'est effacé) et
+               conservé 90 jours. La confirmation affiche les compteurs réels
+               (conversations, souvenirs, déclencheurs, taille) et exige une
+               case à cocher.
                `#group-general` porte le côté BOT des notifications (clé mixte). -->
           <section
             class="config-panel"

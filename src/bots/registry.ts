@@ -15,8 +15,9 @@
  *  - `echanges` (paires de bots) est VIDE : le garde-fou d'une paire est
  *    uniquement son bouton `actif` (aucun plafond, aucun frein) — il sera
  *    rempli au lot des canaux, pas ici ;
- *  - ⚠️ AUCUNE limite `MAX_BOTS` : elle n'existe pas encore (lot 1b, écran
- *    d'ajout). Ne pas l'inventer ici.
+ *  - ⚠️ AUCUNE limite `MAX_BOTS` ici : le plafond (6) est appliqué par la
+ *    CRÉATION (`src/bots/admin.ts`), pas par la lecture du registre — un
+ *    registre existant qui en contiendrait davantage reste lisible.
  *
  * Aucun import SDK/typebox.
  */
@@ -48,8 +49,32 @@ export const BOT_YUKI = "yuki";
  */
 export const ID_BOT_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 
-/** Profil d'un bot. Un seul profil à ce jour (« complet »). */
-export type ProfilBot = "complet";
+/**
+ * Forme d'un SLUG de bot CRÉÉ depuis l'interface (lot 35e).
+ *
+ * ⚠️ Plus STRICTE que `ID_BOT_PATTERN` : minuscules, chiffres et `-` seulement
+ * (aucun `_`), de 2 à 31 caractères. Le slug est IMMUABLE (il nomme un dossier
+ * et des chemins) : il n'existe aucune route de renommage, et ce motif est le
+ * seul moyen d'en fabriquer un nouveau.
+ */
+export const SLUG_BOT_PATTERN = /^[a-z0-9][a-z0-9-]{1,30}$/;
+
+/**
+ * Profil d'un bot (lot 35e : le profil se CHOISIT à la création).
+ *  - `complet` : tout est actif (défaut, et seul profil des bots historiques) ;
+ *  - `lecture` : bot de consultation ;
+ *  - `accueil` : bot d'accueil / orientation.
+ *
+ * ⚠️ Depuis le lot 35f le profil n'est PLUS une étiquette : il INTERSECTE
+ * l'allowlist d'outils du bot actif (`PROFIL_OUTILS` / `filtrerSelonProfil`,
+ * `src/llm/tool-policy.ts`). Il ne peut que RETIRER des outils, jamais en
+ * ajouter. Un profil non-`complet` n'a en outre AUCUN worker lourd
+ * (`src/index.ts`), donc aucun `run_command`, même par un job importé.
+ */
+export type ProfilBot = "complet" | "lecture" | "accueil";
+
+/** Profils ACCEPTÉS par le registre (verrou de validation). */
+export const PROFILS_BOT: readonly ProfilBot[] = ["complet", "lecture", "accueil"];
 
 /** Enregistrement d'un bot dans le registre. */
 export interface BotRecord {
@@ -57,7 +82,7 @@ export interface BotRecord {
   id: string;
   /** Nom AFFICHÉ (libre, UTF-8). */
   nom: string;
-  /** Profil fonctionnel (réservé : seul « complet » existe). */
+  /** Profil fonctionnel : il RESTREINT réellement les outils (lot 35f). */
   profil: ProfilBot;
   /** Bot actif : un seul bot aujourd'hui, mais le champ existe dès maintenant. */
   actif: boolean;
@@ -115,6 +140,11 @@ export function cheminRegistreBots(stateDir: string): string {
 /** Vrai si l'identifiant est utilisable comme nom de dossier de bot. */
 export function estIdBot(value: unknown): value is string {
   return typeof value === "string" && ID_BOT_PATTERN.test(value);
+}
+
+/** Vrai si la valeur a la forme d'un slug de bot CRÉÉ depuis l'interface. */
+export function estSlugBot(value: unknown): value is string {
+  return typeof value === "string" && SLUG_BOT_PATTERN.test(value);
 }
 
 /** Registre initial : UN bot (`yuki`), aucune paire d'échanges. */
@@ -268,8 +298,11 @@ function validerRegistre(brut: unknown, path: string): RegistreBots {
       invalide(`bots[${index}].nom doit être une chaîne non vide`);
     }
     const profil = bot["profil"];
-    if (profil !== "complet") {
-      invalide(`bots[${index}].profil inconnu : ${JSON.stringify(profil)}`);
+    if (!PROFILS_BOT.includes(profil as ProfilBot)) {
+      invalide(
+        `bots[${index}].profil inconnu : ${JSON.stringify(profil)} ` +
+          `(attendu : ${PROFILS_BOT.join(" | ")})`,
+      );
     }
     const actif = bot["actif"];
     if (typeof actif !== "boolean") {
@@ -294,7 +327,7 @@ function validerRegistre(brut: unknown, path: string): RegistreBots {
     bots.push({
       id,
       nom,
-      profil: "complet",
+      profil: profil as ProfilBot,
       actif,
       ordre,
       creeLe,

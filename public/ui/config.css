@@ -2067,3 +2067,17 @@
 .bot-danger .config-group__title {
   color: var(--danger);
 }
+
+/* ─── Modale d'ajout d'un bot (lot 35e) ──────────────────────────────────────
+   Contenu de la modale : champs empilés, aucune largeur imposée en dur (le
+   style reste dans la feuille — CSP `style-src 'self'`, aucun style inline). */
+.bot-creation {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.bot-creation fieldset {
+  border: 1px solid var(--bordure, #3a3a44);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}

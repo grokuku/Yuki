@@ -54,6 +54,11 @@ export interface RemoteRunToolsOptions {
   /**
    * Options de politique du rôle LÉGER — LES MÊMES que le host local
    * (`createPiHost`). C'est ce partage qui interdit une seconde liste.
+   *
+   * ⚠️ Elles portent aussi le PROFIL DU BOT ACTIF (`profil`, lot 35f) :
+   * l'intersection `allowlistFinale = allowlist ∩ PROFIL` est appliquée DANS
+   * `toolAllowlistForChat`, donc un run de canal ne peut pas échapper au profil
+   * du bot — il n'y a rien à filtrer ici (une seconde liste divergerait).
    */
   lightOptions: () => ToolAllowlistOptions;
   /** Ports d'image (serveur ComfyUI) : absents ⇒ ni `generer_image` ni `consulter_workflow`. */

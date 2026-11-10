@@ -294,6 +294,29 @@ describe("UI statique servie par le gateway", () => {
     expect(instance).toContain('data-config-page="instance"');
   });
 
+  it("l'administration des bots est servie avec les mêmes gardes (lot 35e)", async () => {
+    const js = await fetch(`${baseUrl}/ui/bots-admin.js`);
+    expect(js.status).toBe(200);
+    expect(js.headers.get("content-type")).toContain("javascript");
+    const source = await js.text();
+
+    // ⚠️ Les gardes CSP/`innerHTML`/`.style.` s'appliquent à TOUT nouveau
+    // fichier d'interface, pas seulement aux deux pages historiques.
+    expect(source).not.toContain("innerHTML");
+    expect(source).not.toContain("window.confirm(");
+    expect(source).not.toContain(".style.");
+    expect(source).not.toContain('setAttribute("style"');
+
+    // Création et suppression passent par les routes d'administration, avec
+    // l'en-tête d'écriture exigé par le serveur.
+    expect(source).toContain('fetch("/api/bots"');
+    expect(source).toContain('method: "DELETE"');
+    expect(source).toContain('"x-yuki-config": "1"');
+    // ⚠️ Confirmation FORTE : la case à cocher ACTIVE le bouton destructeur.
+    expect(source).toContain(".holaf-modal-btn-danger");
+    expect(source).toContain("bouton.disabled = laCase.checked !== true");
+  });
+
   it("HEAD / répond sans corps", async () => {
     const response = await fetch(`${baseUrl}/`, { method: "HEAD" });
     expect(response.status).toBe(200);

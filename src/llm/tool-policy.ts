@@ -15,6 +15,7 @@
  * La table est extensible par simple ajout d'entrées aux lots 4/5.
  */
 
+import type { ProfilBot } from "../bots/registry.js";
 import type { LlmRole } from "./providers.js";
 
 /** Outils builtins exposables (lecture seule au Lot 2). */
@@ -439,6 +440,124 @@ export const FILE_LIST_TOOLS: readonly FileListToolName[] = ["lister_fichiers"];
  */
 export const FILE_READ_TOOLS: readonly FileReadToolName[] = ["lire_fichier"];
 
+/**
+ * PROFILS DE CAPACITÉS RÉELS (lot 35f) — CE QUE CHAQUE PROFIL AUTORISE.
+ *
+ * ⚠️ RÈGLE UNIQUE, ÉCRITE ICI ET NULLE PART AILLEURS :
+ *
+ *     allowlistFinale = toolAllowlist(rôle, options) ∩ PROFIL
+ *
+ * Un profil ne peut que **RETIRER** des outils, JAMAIS en AJOUTER. C'est la
+ * raison d'être de l'intersection : le câblage (`src/index.ts`) décide de ce qui
+ * est POSSIBLE (un port absent ⇒ outil absent, un réglage `desactive` ⇒ groupe
+ * fermé) ; le profil décide seulement de ce qui est PERMIS AU BOT. Sans
+ * l'intersection, un profil « lecture » serait une ÉTIQUETTE mensongère : il
+ * rouvrirait ce que le câblage a fermé (ex. `chat.remoteAgents = desactive` ⇒
+ * `delegate` de retour).
+ *
+ * ⚠️ `complet` = la liste ENTIÈRE (`undefined` ⇒ aucun filtrage) : le
+ * comportement d'aujourd'hui, élément pour élément, sans recopie de liste.
+ * Recopier `TOOL_POLICY.light` ici créerait une seconde source de vérité qui
+ * divergerait au premier ajout d'outil.
+ *
+ * ⚠️ AUCUN BUILTIN À `lecture` NI À `accueil` : `read`, `ls`, `grep`, `find`
+ * donnent accès au VOLUME DE TRAVAIL (arbitraire du système, code, secrets
+ * éventuels) — ce sont des outils d'agent de développement, pas de conversation.
+ * Un bot restreint garde la conversation, les fichiers de SA conversation, la
+ * publication dans un canal suivi, et (pour `lecture`) le libraire et les
+ * images.
+ *
+ * ⚠️ RETIRÉS AUX DEUX PROFILS RESTREINTS, et pourquoi :
+ *  - `run_command`, `capturer_ecran`, `recuperer_fichier`, `deposer_fichier` :
+ *    ce sont des ACTIONS sur une machine appairée (approbation humaine incluse) ;
+ *  - `lister_agents`, `etat_agent` : l'annuaire des machines n'a d'intérêt que
+ *    pour déléguer, et rien ne se délègue ici ;
+ *  - `lister_secrets`, `demander_secret` : le coffre est un moyen d'EXÉCUTER
+ *    (référence `${NOM}` dans une commande) ; sans exécution, il n'est qu'une
+ *    surface d'exposition ;
+ *  - `delegate`, `job_status`, `cancel_job`, `steer_job` : la délégation EST
+ *    l'action déléguée — la garder reviendrait à garder `run_command` par un
+ *    détour ;
+ *  - `archive_vie_anterieure`, `chercher_conversations_archivees`,
+ *    `archive_libraire` : l'ARCHIVAGE est une écriture d'historique de fond, pas
+ *    une consultation ;
+ *  - `programmer_envoi`, `planifier_tache` : actes de RÉDACTEUR DE FOND (« un seul
+ *    rédacteur ») — un bot d'accueil ou de consultation répond, il ne prend pas
+ *    la parole plus tard à la place de Yuki.
+ */
+export interface ProfilOutils {
+  /** Builtins exposés par le profil (allowlist SDK). */
+  readonly builtins: readonly BuiltinToolName[];
+  /** Outils custom autorisés par le profil (sous-ensemble de `CustomToolName`). */
+  readonly custom: readonly CustomToolName[];
+}
+
+/**
+ * TABLE DES PROFILS (⚠️ `Record<ProfilBot, …>` : un profil non décrit ne compile
+ * pas). `complet` vaut `null` : « aucun filtrage », donc la liste du câblage.
+ */
+export const PROFIL_OUTILS: Readonly<Record<ProfilBot, ProfilOutils | null>> = {
+  /** Tout ce que le câblage active — comportement historique, à l'identique. */
+  complet: null,
+  /** Bot de CONSULTATION : converse, lit/écrit les fichiers, libraire, images. */
+  lecture: {
+    builtins: [],
+    custom: [
+      // ── dans la conversation (le socle `toujours`)
+      ...MESSAGE_TOOLS,
+      ...FILES_TOOLS,
+      ...FILE_LIST_TOOLS,
+      ...FILE_READ_TOOLS,
+      ...CHANNEL_POST_TOOLS,
+      // ── consultation : libraire + lecture de page web
+      "recherche_libraire",
+      "liste_libraire",
+      "lire_libraire",
+      "lire_page_web",
+      // ── capture de page web (vérification d'un rendu)
+      ...LIBRARIAN_CAPTURE_TOOLS,
+      // ── images (génération + consignes de workflow)
+      ...IMAGE_TOOLS,
+    ],
+  },
+  /** Bot d'ACCUEIL : oriente et renseigne, sans bibliothèque documentaire. */
+  accueil: {
+    builtins: [],
+    custom: [
+      ...MESSAGE_TOOLS,
+      ...FILES_TOOLS,
+      ...FILE_LIST_TOOLS,
+      ...FILE_READ_TOOLS,
+      ...CHANNEL_POST_TOOLS,
+    ],
+  },
+};
+
+/**
+ * INTERSECTION d'une allowlist avec un profil.
+ *
+ * ⚠️ Le seul point de la règle `allowlistFinale = allowlist ∩ PROFIL` : les
+ * appelants ne filtrent JAMAIS eux-mêmes (deux filtrages divergeraient).
+ * `complet` rend la liste reçue, à l'identique (non-régression garantie).
+ *
+ * ⚠️ L'ordre de la liste reçue est CONSERVÉ (les tests comparent des tableaux).
+ */
+export function filtrerSelonProfil(
+  tools: readonly string[],
+  profil: ProfilBot | undefined,
+): string[] {
+  // `complet` (et l'absence de profil) = la liste reçue, à l'IDENTIQUE.
+  if (profil === undefined || profil === "complet") return [...tools];
+  const table: ProfilOutils | null | undefined = PROFIL_OUTILS[profil];
+  // ⚠️ Une valeur INCONNUE ne peut pas arriver jusqu'ici : le registre REFUSE un
+  // profil hors `PROFILS_BOT` à la lecture (`src/bots/registry.ts:298-302`). Si
+  // elle arrivait quand même, on refuse TOUT (fail-closed) plutôt que de rouvrir
+  // les pouvoirs d'un bot prétendument restreint.
+  if (table === null || table === undefined) return [];
+  const autorises = new Set<string>([...table.builtins, ...table.custom]);
+  return tools.filter((tool) => autorises.has(tool));
+}
+
 export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
   light: {
     role: "light",
@@ -654,6 +773,18 @@ export interface ToolAllowlistOptions {
    * DÉSACTIVÉ par défaut : seul le câblage l'active, quand le générateur existe.
    */
   imagesEnabled?: boolean;
+  /**
+   * PROFIL DU BOT ACTIF (lot 35f) — ⚠️ il ne peut que RETIRER des outils.
+   *
+   * `undefined` ou `complet` ⇒ aucun filtrage (comportement historique).
+   * `lecture`/`accueil` ⇒ intersection avec `PROFIL_OUTILS` (règle unique :
+   * `allowlistFinale = toolAllowlist(…) ∩ PROFIL`).
+   *
+   * ⚠️ La valeur vient TOUJOURS du bot actif du registre
+   * (`bots.bot?.profil ?? "complet"`, `src/index.ts:277`), JAMAIS d'un corps de
+   * requête ou d'un message : un client ne choisit pas son propre profil.
+   */
+  profil?: ProfilBot;
 }
 
 /**
@@ -751,7 +882,11 @@ export function toolAllowlist(
   if (imagesEnabled) {
     tools.push(...entry.images);
   }
-  return tools;
+  // ⚠️ DERNIER mot : le PROFIL. Une seule règle (`allowlistFinale = allowlist ∩
+  // PROFIL`), un seul endroit. Un profil ne peut que RETIRER : tout ce qui n'est
+  // pas explicitement autorisé par `PROFIL_OUTILS` disparaît, y compris ce que le
+  // câblage venait d'activer.
+  return filtrerSelonProfil(tools, options.profil);
 }
 
 /**
@@ -1211,7 +1346,14 @@ export function toolAllowlistForChat(
   // contenu dans son message) alors qu'un run de canal en a besoin pour voir une
   // pièce jointe. Un port absent est signalé par l'appelant, jamais deviné ici.
   for (const tool of REMOTE_ALWAYS_TOOLS) autorises.add(tool);
-  return [...autorises].filter((tool) => !APPROVAL_REQUIRED_TOOLS.includes(tool));
+  // ⚠️ INTERSECTION AVEC LE PROFIL, APRÈS le socle `toujours` : le socle est poussé
+  // SANS passer par les options du rôle, or deux de ses outils (`programmer_envoi`,
+  // `planifier_tache`) sont RETIRÉS aux profils restreints. Filtrer seulement dans
+  // `toolAllowlist` les laisserait passer par cette porte.
+  return filtrerSelonProfil(
+    [...autorises].filter((tool) => !APPROVAL_REQUIRED_TOOLS.includes(tool)),
+    options.profil,
+  );
 }
 
 /** Outils d'écriture/exécution explicitement interdits au Lot 2. */

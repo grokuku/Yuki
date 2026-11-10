@@ -69,6 +69,11 @@ export {
   REMOTE_TOOL_GROUP_OF,
   REMOTE_TOOLS,
   remoteToolGroup,
+  // ⚠️ PROFILS DE CAPACITÉS RÉELS (lot 35f) : la table et l'intersection sont
+  // publiques — c'est la SEULE règle qui rend un profil autre chose qu'une
+  // étiquette, et les tests la vérifient exhaustivement (profil × outil).
+  PROFIL_OUTILS,
+  filtrerSelonProfil,
   toolAllowlist,
   toolAllowlistForChat,
   TOOL_POLICY,
@@ -86,6 +91,7 @@ export type {
   HeritageToolName,
   LibrarianToolName,
   LongRunningTool,
+  ProfilOutils,
   RemoteToolGroup,
   SecretToolName,
   ToolAllowlistOptions,

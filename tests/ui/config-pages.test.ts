@@ -12,9 +12,13 @@
  *    une clé `mixte` est rendue sur LES DEUX ;
  *  ④ les ancres (`#declencheurs`, `#chat-remote-agents`…) tombent sur un onglet
  *    qui EXISTE sur la page visée ;
- *  ⑤ la modale à TROIS CHOIX du changement de bot (jamais `window.confirm(`) et
- *    la modale « bientôt disponible » de l'ajout ;
- *  ⑥ les gardes CSP/`innerHTML`/`.style.` s'appliquent AUX DEUX pages.
+ *  ⑤ la modale à TROIS CHOIX du changement de bot (jamais `window.confirm(`) ;
+ *  ⑤bis ⚠️ LOT 35e : la modale d'AJOUT crée vraiment (plus de « bientôt
+ *    disponible ») et la zone de danger porte la SUPPRESSION — les deux
+ *    assertions de ⑤ qui décrivaient l'ancien report ont été INVERSÉES, avec
+ *    leurs libellés, pas supprimées ;
+ *  ⑥ les gardes CSP/`innerHTML`/`.style.` s'appliquent AUX DEUX pages ET à tout
+ *    nouveau fichier d'interface (`bots-admin.js`).
  *
  * ⚠️ ÉCHOUE SUR LE CODE D'ORIGINE : ni `public/ui/config-pages.js`, ni
  * `public/ui/config-fields.js`, ni `public/ui/bots.html` n'existent (l'import
@@ -35,13 +39,33 @@ import {
   demandeChangementBot,
   groupesParOnglet,
   idsOnglets,
+  CLONE_ELEMENTS,
+  MAX_BOTS_PAGE,
+  NOM_BOT_MAX_PAGE,
+  RETENTION_ARCHIVES_JOURS_PAGE,
+  SLUG_BOT_PATTERN_PAGE,
+  confirmationSuppressionBot,
+  defautsClone,
+  libelleTaille,
   ligneDePage,
-  modaleAjoutBot,
+  PROFILS_BOT_PAGE,
+  profilDePage,
+  modaleCreationBot,
   ongletDuHash,
   ongletsDePage,
   porteeRendue,
   scopeDeCle,
+  texteSuppressionBot,
+  validerCreationBot,
 } from "../../public/ui/config-pages.js";
+import {
+  ELEMENTS_CLONE,
+  MAX_BOTS,
+  NOM_BOT_MAX,
+  RETENTION_ARCHIVES_JOURS,
+} from "../../src/bots/admin.js";
+import { PROFILS_BOT, SLUG_BOT_PATTERN, type ProfilBot } from "../../src/bots/registry.js";
+import { filtrerSelonProfil, type CustomToolName } from "../../src/llm/index.js";
 import { CONFIG_SCHEMA } from "../../src/config/schema.js";
 
 const lire = (nom: string): string =>
@@ -430,30 +454,129 @@ describe("⑤ sélecteur de bot : état dans l'URL, modales HolafModal", () => {
     expect(CONFIG_JS).not.toContain("window.confirm(");
   });
 
-  it("« ＋ » annonce que l'écran d'ajout est un lot ULTÉRIEUR (il ne crée rien)", () => {
-    const spec = modaleAjoutBot();
-    expect(spec.titre).toContain("bientôt disponible");
-    expect(spec.message).toContain("lot ultérieur");
-    expect(CONFIG_JS).toContain("modaleAjoutBot()");
-    // Aucun appel d'écriture de bot n'est fait par ce bouton.
-    expect(CONFIG_JS).not.toContain('post("/api/bots"');
-    expect(CONFIG_JS).not.toContain('put("/api/bots"');
+  // ⚠️ LOT 35e — INVERSION ASSUMÉE de l'assertion précédente (« bientôt
+  // disponible ») : la décision utilisateur est que l'écran d'ajout existe.
+  // Le test garde son rôle : il vérifie ce que fait réellement « ＋ ».
+  it("« ＋ » ouvre la VRAIE modale de création (POST /api/bots, plus de report)", () => {
+    const spec = modaleCreationBot({ bots: [{ id: "yuki", nom: "Yuki" }] });
+    expect(spec.titre).toBe("Ajouter un bot");
+    expect(spec.message).not.toContain("bientôt disponible");
+    expect(spec.message).not.toContain("lot ultérieur");
+    expect(spec.cloneables).toEqual([{ id: "yuki", libelle: "Yuki (yuki)" }]);
+    expect(spec.profils.map((profil) => profil.id)).toEqual(["complet", "lecture", "accueil"]);
+    // Le bouton ouvre la modale (brique HolafModal) et la création est réelle.
+    expect(CONFIG_JS).toContain("ouvrirCreationBot({ HolafModal, bots: botsConnus })");
+    const admin = lire("bots-admin.js");
+    expect(admin).toContain('fetch("/api/bots"');
+    expect(admin).toContain('method: "POST"');
+    expect(admin).toContain('"x-yuki-config": "1"');
+    // Après création, la page bascule sur le nouveau bot.
+    expect(CONFIG_JS).toContain("location.assign(urlBot(cree.id))");
   });
 
-  it("la zone de danger de « Général » n'offre AUCUN bouton de suppression", () => {
+  // ⚠️ LOT 35e — seconde INVERSION ASSUMÉE : la zone de danger porte désormais
+  // la suppression (archivage 90 jours), plus une promesse de lot ultérieur.
+  it("la zone de danger de « Général » propose une VRAIE suppression (archivage)", () => {
     expect(BOTS_HTML).toContain('id="bot-general-root"');
-    // Les informations sont en LECTURE SEULE, et la suppression est annoncée
-    // comme un lot ultérieur — sans bouton inerte.
     expect(CONFIG_JS).toContain("function renderBotGeneral()");
-    expect(CONFIG_JS).toContain("La suppression d'un bot n'est PAS disponible ici");
-    expect(CONFIG_JS).not.toContain("delete(\"/api/bots");
-    expect(CONFIG_JS).not.toContain("Supprimer ce bot");
+    // Le bouton existe et le texte dit que RIEN n'est effacé.
+    expect(CONFIG_JS).toContain('text: "Supprimer ce bot"');
+    expect(CONFIG_JS).toContain("N'EFFACE RIEN");
+    expect(CONFIG_JS).toContain("CONSERVÉES 3 mois");
+    expect(CONFIG_JS).toContain("ouvrirSuppressionBot({ HolafModal, bot: botCourant })");
+    const admin = lire("bots-admin.js");
+    expect(admin).toContain('method: "DELETE"');
+    // Confirmation FORTE (motif du lot 30) : case à cocher qui ACTIVE le bouton.
+    expect(admin).toContain('type: "checkbox"');
+    expect(admin).toContain(".holaf-modal-btn-danger");
+    expect(admin).toContain("bouton.disabled = laCase.checked !== true");
+  });
+});
+
+describe("⑤bis ajout / clone / suppression — les données décidées", () => {
+  it("les défauts de clonage sont ceux décidés : identité+capacités OUI, le reste NON", () => {
+    expect(defautsClone()).toEqual({
+      identite: true,
+      capacites: true,
+      memoire: false,
+      declencheurs: false,
+      agents: false,
+    });
+    // L'interface et le SERVEUR décrivent les mêmes éléments, dans le même ordre.
+    expect(CLONE_ELEMENTS.map((element) => element.id)).toEqual(
+      ELEMENTS_CLONE.map((element) => element.id),
+    );
+    for (const element of ELEMENTS_CLONE) {
+      const pendant = CLONE_ELEMENTS.find((entree) => entree.id === element.id);
+      expect(pendant, element.id).toBeTruthy();
+      expect(pendant?.defaut, element.id).toBe(element.defaut);
+      expect(Boolean(pendant?.indisponible), element.id).toBe(Boolean(element.indisponible));
+    }
+    // « Mémoire » décochée : un clone croirait avoir vécu la même chose.
+    const memoire = CLONE_ELEMENTS.find((element) => element.id === "memoire");
+    expect(memoire?.aide).toContain("croirait avoir vécu la même chose");
+  });
+
+  it("les bornes de l'interface sont celles du serveur (6 / 40 / 90 / slug)", () => {
+    expect(MAX_BOTS_PAGE).toBe(MAX_BOTS);
+    expect(NOM_BOT_MAX_PAGE).toBe(NOM_BOT_MAX);
+    expect(RETENTION_ARCHIVES_JOURS_PAGE).toBe(RETENTION_ARCHIVES_JOURS);
+    expect(SLUG_BOT_PATTERN_PAGE.source).toBe(SLUG_BOT_PATTERN.source);
+  });
+
+  it("`validerCreationBot` refuse un nom vide, un nom trop long et un slug invalide", () => {
+    expect(validerCreationBot({ nom: "", slug: "kohai" }).champs.nom).toContain("obligatoire");
+    expect(
+      validerCreationBot({ nom: "n".repeat(NOM_BOT_MAX_PAGE + 1), slug: "kohai" }).champs.nom,
+    ).toContain("trop long");
+    for (const slug of ["k", "-a", "a_b", "a b", "a".repeat(32)]) {
+      expect(validerCreationBot({ nom: "K", slug }).champs.slug, slug).toBeTruthy();
+    }
+    // Les MAJUSCULES sont normalisées (le slug est toujours en minuscules).
+    expect(validerCreationBot({ nom: "K", slug: "A-b" }).slug).toBe("a-b");
+    // Un slug DÉJÀ utilisé est refusé côté page aussi (message explicite).
+    expect(
+      validerCreationBot({ nom: "K", slug: "yuki", existants: ["yuki"] }).champs.slug,
+    ).toContain("déjà utilisé");
+    // Cas nominal : normalisation en minuscules + slug libre.
+    const ok = validerCreationBot({ nom: "  Kohai  ", slug: "Kohai-2" });
+    expect(ok.ok).toBe(true);
+    expect(ok.slug).toBe("kohai-2");
+  });
+
+  it("la modale de création annonce la limite de 6 bots", () => {
+    const spec = modaleCreationBot({ bots: Array.from({ length: 6 }, (_, i) => ({ id: `b${i}` })) });
+    expect(spec.maxBots).toBe(MAX_BOTS_PAGE);
+    expect(spec.atteint).toBe(true);
+    expect(spec.limite).toContain(String(MAX_BOTS_PAGE));
+    expect(CONFIG_JS).toContain("Limite de bots atteinte");
+  });
+
+  it("la confirmation de suppression affiche les COMPTEURS réels et la rétention", () => {
+    const texte = texteSuppressionBot({
+      bot: { id: "kohai", nom: "Kohai" },
+      compteurs: { conversations: 3, souvenirs: 12, declencheurs: 2, octets: 2048 },
+      retentionJours: RETENTION_ARCHIVES_JOURS,
+    });
+    expect(texte).toContain("Kohai (kohai)");
+    expect(texte).toContain("3 conversation(s)");
+    expect(texte).toContain("12 souvenir(s)");
+    expect(texte).toContain("2 déclencheur(s)");
+    expect(texte).toContain("2,0 ko");
+    expect(texte).toContain("CONSERVÉES 3 mois (90 jours)");
+    expect(texte).toContain("effacées");
+    // La case à cocher est EXPLICITE (pas un simple « OK »).
+    expect(confirmationSuppressionBot()).toContain("conservées 3 mois");
+    // Taille lisible (jamais un nombre d'octets brut).
+    expect(libelleTaille(0)).toBe("0 o");
+    expect(libelleTaille(1024)).toBe("1,0 ko");
+    expect(libelleTaille(3 * 1024 * 1024)).toBe("3,0 Mo");
   });
 });
 
 describe("⑥ gardes CSP : elles s'appliquent AUX DEUX pages", () => {
   it("aucun innerHTML, aucun window.confirm(, aucun style inline dans le code servi", () => {
-    for (const nom of ["config.js", "config-fields.js", "config-pages.js"]) {
+    for (const nom of ["config.js", "config-fields.js", "config-pages.js", "bots-admin.js"]) {
       const source = lire(nom);
       expect(source, nom).not.toContain("innerHTML");
       expect(source, nom).not.toContain("window.confirm(");
@@ -488,5 +611,90 @@ describe("⑥ gardes CSP : elles s'appliquent AUX DEUX pages", () => {
     ]) {
       expect(css, classe).toContain(classe);
     }
+  });
+});
+
+describe("⑦ profils de capacités RÉELS (lot 35f) — la phrase dit ce qui est vrai", () => {
+  /**
+   * Mot-clé attendu dans la phrase du profil ↔ OUTIL qui porte la capacité.
+   *
+   * ⚠️ Ce couplage est le garde-fou anti-divergence : la phrase est une COPIE
+   * rédigée à la main, la table d'outils est l'autorité (`PROFIL_OUTILS`). Si un
+   * profil gagne ou perd une famille d'outils sans que sa phrase bouge, la garde
+   * tombe — c'est exactement le défaut que ce lot corrige (une étiquette qui ne
+   * dit rien de vrai).
+   */
+  const CAPACITES: ReadonlyArray<{ mot: string; outil: CustomToolName }> = [
+    { mot: "commande", outil: "run_command" },
+    { mot: "capture", outil: "capturer_ecran" },
+    { mot: "agents", outil: "lister_agents" },
+    { mot: "secrets", outil: "lister_secrets" },
+    { mot: "délégation", outil: "delegate" },
+    // ⚠️ Radical, pas le mot entier : « planifiée »/« planifiées » selon le profil.
+    { mot: "planifié", outil: "planifier_tache" },
+    { mot: "programmé", outil: "programmer_envoi" },
+    { mot: "libraire", outil: "recherche_libraire" },
+    { mot: "images", outil: "generer_image" },
+  ];
+
+  it("les trois profils de l'interface sont EXACTEMENT ceux du registre", () => {
+    expect(PROFILS_BOT_PAGE.map((profil) => profil.id)).toEqual([...PROFILS_BOT]);
+  });
+
+  it("chaque profil a une phrase non vide (une phrase, pas un mot)", () => {
+    for (const profil of PROFILS_BOT_PAGE) {
+      expect(typeof profil.capacites, profil.id).toBe("string");
+      expect(profil.capacites.trim().length, profil.id).toBeGreaterThan(60);
+      expect(profil.capacites.trim().endsWith("."), profil.id).toBe(true);
+    }
+  });
+
+  it("chaque famille de capacité est NOMMÉE dans la phrase de CHAQUE profil", () => {
+    // Autorisée ou retirée, la capacité doit être DITE : c'est ce qui manquait.
+    for (const profil of PROFILS_BOT_PAGE) {
+      for (const { mot } of CAPACITES) {
+        expect(profil.capacites.toLowerCase(), `${profil.id} / ${mot}`).toContain(mot);
+      }
+    }
+  });
+
+  it("une capacité RETIRÉE est annoncée comme retirée, une gardée comme gardée", () => {
+    for (const profil of PROFILS_BOT_PAGE) {
+      for (const { mot, outil } of CAPACITES) {
+        const autorise = filtrerSelonProfil([outil], profil.id as ProfilBot).length === 1;
+        const phrase = profil.capacites.toLowerCase();
+        // ⚠️ Formulation : « ni X » / « aucun X » pour un retrait, « X » seul sinon.
+        // On vérifie le fait BRUT (mention présente) et, pour un retrait, la
+        // présence d'une négation dans la phrase du profil restreint.
+        expect(phrase, `${profil.id} / ${mot}`).toContain(mot);
+        if (!autorise) {
+          expect(phrase, `${profil.id} ne doit pas promettre ${mot}`).toMatch(
+            /(ni |aucun |aucune |rien d'autre)/,
+          );
+        }
+      }
+    }
+  });
+
+  it("les phrases des trois profils sont DISTINCTES (aucune recopie)", () => {
+    const phrases = PROFILS_BOT_PAGE.map((profil) => profil.capacites);
+    expect(new Set(phrases).size).toBe(phrases.length);
+  });
+
+  it("`profilDePage` rend l'entrée connue, `null` sinon", () => {
+    for (const profil of PROFILS_BOT_PAGE) {
+      expect(profilDePage(profil.id)?.libelle).toBe(profil.libelle);
+      expect(profilDePage(` ${profil.id} `)?.id).toBe(profil.id);
+    }
+    expect(profilDePage("administrateur")).toBeNull();
+    expect(profilDePage(undefined)).toBeNull();
+    expect(profilDePage(42)).toBeNull();
+  });
+
+  it("l'onglet Général de `/bots` affiche la phrase (et pas seulement le mot)", () => {
+    // ⚠️ Garde de RENDU : `config.js` doit passer par `profilDePage` et rendre
+    // `capacites`. Sans cela, la phrase existerait sans être montrée.
+    expect(CONFIG_JS).toContain("profilDePage(");
+    expect(CONFIG_JS).toContain("profil.capacites");
   });
 });

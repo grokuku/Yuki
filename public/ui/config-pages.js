@@ -273,19 +273,216 @@ export function demandeChangementBot(etat = {}) {
 }
 
 /**
- * Modale de l'écran d'AJOUT de bot (« ＋ »).
+ * AJOUTER / SUPPRIMER UN BOT (lot 35e) — données et textes PURS, sans DOM.
  *
- * ⚠️ L'écran d'ajout est un LOT ULTÉRIEUR : la modale le DIT, elle ne promet
- * rien et ne crée rien. Créer un bot à moitié (un nom sans dossiers, sans
- * chemins, sans migration) laisserait une instance incohérente.
+ * ⚠️ Ce module est la SEULE source des libellés, des défauts de clonage et des
+ * messages de confirmation. Les tests les croisent avec le serveur
+ * (`src/bots/admin.ts` : `MAX_BOTS`, `ELEMENTS_CLONE`, `RETENTION_ARCHIVES_JOURS`)
+ * pour qu'interface et serveur ne divergent jamais.
  */
-export function modaleAjoutBot() {
+
+/** Nombre maximal de bots (copie de `MAX_BOTS`, vérifiée par un test). */
+export const MAX_BOTS_PAGE = 6;
+
+/** Longueur maximale du nom affiché (copie de `NOM_BOT_MAX`, vérifiée par test). */
+export const NOM_BOT_MAX_PAGE = 40;
+
+/**
+ * Slug : `^[a-z0-9][a-z0-9-]{1,30}$` (copie de `SLUG_BOT_PATTERN`, vérifiée par
+ * test). ⚠️ IMMUABLE : il nomme un dossier, il n'est jamais modifiable après
+ * création.
+ */
+export const SLUG_BOT_PATTERN_PAGE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+
+/** Rétention des archives d'un bot supprimé (copie serveur, vérifiée par test). */
+export const RETENTION_ARCHIVES_JOURS_PAGE = 90;
+
+/**
+ * Profils proposés à la création (ordre d'affichage) — ⚠️ avec ce que le profil
+ * AUTORISE VRAIMENT (lot 35f).
+ *
+ * ⚠️ Avant ce lot, `profil` n'était qu'une ÉTIQUETTE : un bot `lecture` avait
+ * exactement les mêmes pouvoirs qu'un bot `complet` (commande, capture d'écran,
+ * agents, secrets, délégation). Ces phrases disent donc ce que l'interface ne
+ * disait pas. Elles sont VÉRIFIÉES par test (`tests/ui/config-pages.test.ts`) :
+ * un profil qui gagne un outil sans que sa phrase change fait échouer la garde.
+ *
+ * ⚠️ Aucune phrase ne doit promettre un pouvoir absent, ni taire un pouvoir
+ * présent : c'est la seule règle de rédaction de ce bloc.
+ */
+export const PROFILS_BOT_PAGE = [
+  {
+    id: "complet",
+    libelle: "Complet",
+    capacites:
+      "Tout ce que l'installation permet : lecture des fichiers (read, ls, grep, find), " +
+      "agents et secrets, outils distants, libraire et pages web, images, délégation à un " +
+      "worker lourd (commandes et captures d'écran), envois programmés et tâches planifiées.",
+  },
+  {
+    id: "lecture",
+    libelle: "Lecture",
+    capacites:
+      "Aucune action sur une machine, aucun fichier du système : ni commande, ni capture " +
+      "d'écran, ni agents, ni secrets, ni délégation, ni envoi programmé, ni tâche " +
+      "planifiée, ni archivage. Il lui reste : répondre, envoyer et lire les fichiers de " +
+      "la conversation, publier dans un canal suivi, consulter le libraire et les pages " +
+      "web, générer des images.",
+  },
+  {
+    id: "accueil",
+    libelle: "Accueil",
+    capacites:
+      "Répondre, envoyer et lire les fichiers de la conversation, publier dans un canal " +
+      "suivi. Rien d'autre : ni commande, ni capture d'écran, ni agents, ni secrets, ni " +
+      "délégation, ni libraire, ni images, ni envoi programmé, ni tâche planifiée.",
+  },
+];
+
+/**
+ * Entrée de profil correspondant à un identifiant, ou `null` si inconnu.
+ *
+ * ⚠️ Le serveur REFUSE un profil inconnu au registre (il ne peut donc pas en
+ * arriver un ici) : `null` est le garde-fou d'affichage, pas une valeur métier.
+ */
+export function profilDePage(id) {
+  const cle = typeof id === "string" ? id.trim() : "";
+  return PROFILS_BOT_PAGE.find((profil) => profil.id === cle) ?? null;
+}
+
+/**
+ * Éléments clonables — ⚠️ DÉFAUTS DÉCIDÉS PAR L'UTILISATEUR :
+ * identité et capacités OUI ; mémoire, déclencheurs et agents NON.
+ *
+ * ⚠️ « Mémoire » décochée parce qu'un bot cloné AVEC la mémoire de l'original
+ * croirait avoir vécu la même chose. « Agents » est affiché mais INACTIF : la
+ * liste des bots autorisés par agent n'existe pas encore (rien n'est copié).
+ */
+export const CLONE_ELEMENTS = [
+  {
+    id: "identite",
+    libelle: "Identité",
+    aide: "Personnalité, règles et avatar.",
+    defaut: true,
+  },
+  {
+    id: "capacites",
+    libelle: "Capacités",
+    aide: "Profil du bot et réglages de configuration.",
+    defaut: true,
+  },
+  {
+    id: "memoire",
+    libelle: "Mémoire",
+    aide: "Souvenirs, archives et héritage — décoché : le clone croirait avoir vécu la même chose.",
+    defaut: false,
+  },
+  {
+    id: "declencheurs",
+    libelle: "Déclencheurs",
+    aide: "Sources, boîte de réception et journal — décoché : deux bots ne doivent pas tirer la même tâche.",
+    defaut: false,
+  },
+  {
+    id: "agents",
+    libelle: "Agents autorisés",
+    aide: "Pas encore disponible : la liste des bots autorisés par agent n'existe pas encore (rien n'est copié).",
+    defaut: false,
+    indisponible: true,
+  },
+];
+
+/** Défauts de clonage sous forme d'objet (`{ identite: true, memoire: false, … }`). */
+export function defautsClone() {
+  return Object.fromEntries(CLONE_ELEMENTS.map((element) => [element.id, element.defaut]));
+}
+
+/**
+ * Valide le formulaire de création AVANT l'appel réseau.
+ *
+ * @param {{ nom?: string, slug?: string, existants?: string[] }} [formulaire]
+ * @returns {{ ok: boolean, champs: Record<string, string>, slug: string }}
+ */
+export function validerCreationBot(formulaire = {}) {
+  const champs = {};
+  const nom = String(formulaire.nom ?? "").trim();
+  const slug = String(formulaire.slug ?? "")
+    .trim()
+    .toLowerCase();
+  if (nom === "") champs.nom = "Le nom du bot est obligatoire.";
+  else if (nom.length > NOM_BOT_MAX_PAGE) {
+    champs.nom = `Le nom est trop long (maximum ${NOM_BOT_MAX_PAGE} caractères).`;
+  }
+  if (!SLUG_BOT_PATTERN_PAGE.test(slug)) {
+    champs.slug =
+      "Slug invalide : 2 à 31 caractères, minuscules, chiffres et « - » uniquement " +
+      "(exemple : kohai-2).";
+  } else if ((formulaire.existants ?? []).includes(slug)) {
+    champs.slug = `Le slug « ${slug} » est déjà utilisé par un autre bot.`;
+  }
+  return { ok: Object.keys(champs).length === 0, champs, slug };
+}
+
+/**
+ * Spécification de la modale d'AJOUT (« ＋ ») — remplace l'ancienne modale
+ * « bientôt disponible ». La création est VRAIE : elle appelle `POST /api/bots`.
+ *
+ * @param {{ bots?: Array<{ id: string, nom?: string }>, maxBots?: number }} [etat]
+ */
+export function modaleCreationBot(etat = {}) {
+  const bots = Array.isArray(etat.bots) ? etat.bots : [];
+  const maxBots = etat.maxBots ?? MAX_BOTS_PAGE;
   return {
-    titre: "Ajouter un bot — bientôt disponible",
+    titre: "Ajouter un bot",
     message:
-      "La création d'un bot depuis cette page arrive dans un lot ultérieur : " +
-      "elle doit préparer les dossiers, les chemins et la migration des données " +
-      "du nouveau bot. En attendant, Yuki fonctionne avec ses bots déjà déclarés.",
-    okText: "Compris",
+      "Le bot est créé immédiatement : son dossier et ses chemins sont préparés, " +
+      "et son identifiant (slug) ne pourra plus changer.",
+    maxBots,
+    atteint: bots.length >= maxBots,
+    limite:
+      `Limite de ${maxBots} bots par instance : au-delà, supprimez un bot avant ` +
+      "d'en ajouter un autre.",
+    profils: PROFILS_BOT_PAGE,
+    elements: defautsClone(),
+    cloneables: bots.map((bot) => ({
+      id: bot.id,
+      libelle: bot.nom && bot.nom !== bot.id ? `${bot.nom} (${bot.id})` : bot.id,
+    })),
   };
+}
+
+/** Taille lisible (« 12,3 ko », « 4,1 Mo ») — jamais un nombre d'octets brut. */
+export function libelleTaille(octets) {
+  const valeur = Number.isFinite(Number(octets)) ? Math.max(0, Number(octets)) : 0;
+  if (valeur < 1024) return `${valeur} o`;
+  if (valeur < 1024 * 1024) return `${(valeur / 1024).toFixed(1).replace(".", ",")} ko`;
+  return `${(valeur / (1024 * 1024)).toFixed(1).replace(".", ",")} Mo`;
+}
+
+/** Phrase de la case à cocher EXPLICITE (motif du lot 30). */
+export function confirmationSuppressionBot() {
+  return "Je comprends que ce bot sera retiré et que ses données seront conservées 3 mois avant d'être effacées.";
+}
+
+/**
+ * Texte RÉEL de la confirmation de suppression : compteurs mesurés + rétention.
+ *
+ * @param {{ bot?: { id?: string, nom?: string }, compteurs?: object, retentionJours?: number }} [etat]
+ */
+export function texteSuppressionBot(etat = {}) {
+  const bot = etat.bot ?? {};
+  const nom = bot.nom && bot.nom !== bot.id ? `${bot.nom} (${bot.id})` : bot.id ?? "ce bot";
+  const compteurs = etat.compteurs ?? {};
+  const nombre = (valeur) => (Number.isFinite(Number(valeur)) ? Number(valeur) : 0);
+  const retention = etat.retentionJours ?? RETENTION_ARCHIVES_JOURS_PAGE;
+  return (
+    `« ${nom} » sera retiré de la liste des bots. Rien n'est effacé : son dossier est ` +
+    "DÉPLACÉ dans les archives de l'instance, avec : " +
+    `${nombre(compteurs.conversations)} conversation(s) archivée(s), ` +
+    `${nombre(compteurs.souvenirs)} souvenir(s), ` +
+    `${nombre(compteurs.declencheurs)} déclencheur(s), ` +
+    `${libelleTaille(compteurs.octets)} de données. ` +
+    `Ces données sont CONSERVÉES 3 mois (${retention} jours), puis effacées ` +
+    "définitivement par le balayeur de l'instance."
+  );
 }
