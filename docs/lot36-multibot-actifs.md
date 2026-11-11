@@ -93,8 +93,8 @@ Dans `main()` (`src/index.ts:288`) : `configsBots` est construite une fois, et
 continuent d'utiliser **le principal**. Journal : `bots.config` (bots couverts) +
 `config.bot.fallback` (replis des bots autres que la pile, un par un).
 
-⚠️ La Map **n'est pas encore branchée sur les piles** (L3-b/L3-d). Deux règles
-actées pour la suite :
+⚠️ La Map **n'était pas encore branchée sur les piles** à L3-a (elle l'est depuis
+L3-d, qui l'a branchée sur les hosts). Deux règles actées pour la suite :
 
 1. **un seul rédacteur par overlay** — écrire l'overlay d'un bot passe par SON
    runtime (`update()`), jamais par `updatePour(botId)` depuis un autre runtime
@@ -105,7 +105,8 @@ actées pour la suite :
 ⚠️ Limite connue : le **store commun** est chargé une fois par runtime. Une
 écriture d'INSTANCE faite par un runtime n'est pas répercutée dans le cache des
 autres ; seule la pile écrit l'instance aujourd'hui (`PUT /api/config`), donc
-rien n'est observable — ce sera à traiter quand L3-d branchera les routes par bot.
+rien n'est observable — reste à traiter quand les routes par bot (`/api/bots/<id>/config`)
+seront servies par le runtime du bot (L4 et suite).
 
 ### L3-b — MÉMOIRE, ARCHIVE, AVATAR, PERSONNALITÉ, RÈGLES, PINS, RÉACTIONS (livré)
 
@@ -134,9 +135,9 @@ TOUJOURS `bots.envInstance`, la résolution a lieu une seule fois par bot
 (`creerOutilsBots`, ou reprise de l'`Env` des stores déjà ouverts) et
 `creerOutilsBot` **refuse** un `Env` dérivé deux fois.
 
-⚠️ La Map **n'est pas branchée sur les piles** (c'est L3-d) : elle est
-journalisée et disponible. Elle est construite pour les bots à démarrer **et**
-le bot de la pile, **jamais** pour ceux que le plafond a refusés.
+⚠️ La Map **n'était pas branchée** à L3-b (c'est L3-d qui l'a fait) : elle est
+construite pour les bots à démarrer **et** le bot de la pile, **jamais** pour
+ceux que le plafond a refusés.
 
 ⚠️ Effet de bord assumé : les stores de mémoire des bots à démarrer sont ouverts
 (fichier + index), l'archive/avatar/personnalité/règles/épingles/réactions étant
@@ -185,12 +186,64 @@ dans le registre), plus une par bot du **registre** : un bot `actif: true` mais
 (`===`), même `Env`, mêmes chemins, même `envois` ; `construire` n'est jamais
 appelé pour lui (test à `throw`).
 
+### L3-d — LE `PiHost` PAR BOT (livré, **dernier morceau de L3**)
+
+`src/bots/hosts.ts` (nouveau) — la Map des hosts, et les trois règles qui la
+rendent sûre.
+
+| Symbole | Rôle |
+|---|---|
+| `HostsBots<THost>` (`:269`) | construit **un host par bot à DÉMARRER** (L1) plus le **principal** ; `principal` est construit avec `optionsPile` **tel quel** (objet d'options passé par identité) ; `pourDemarre(botId)` ne rend que les hosts qui ont **démarré** |
+| `portsHostBot(contexte)` (`:120`) | les ports **d'un** bot : `sessionsDir` = `env.piSessionsDir` du bot, `systemPrompt` = `appendVoiceInstruction(prompts.light de SON overlay, tts.enabled de SON overlay)`, plus `sources`/`envoisProgrammes`/`planifierTache` de **sa pile** (L3-c) et `personality`/`rules`/`reactions`/`conversationArchive`/`heritage` de **ses outils** (L3-b) |
+| `optionsHostBot(botId, optionsPile, ports)` (`:187`) | copie **surface** des options du principal + remplacement des ports du bot ; un port **absent** est **retiré** (`delete`), jamais hérité |
+
+Dans `main()` : les options du host du principal sont désormais un **objet
+nommé** (`const optionsHostPile: PiHostOptions`, `src/index.ts:3132`) — **contenu
+inchangé** — passé à `HostsBots({pile, bots: aDemarrer, optionsPile, creer:
+createPiHost, contexte})` (`:3266`), puis `host = hostsBots.principal` (`:3297`).
+Les hosts secondaires démarrent **après** le principal (`await
+hostsBots.demarrerAutres()`, `:3373`) et s'arrêtent avec lui (`await
+hostsBots?.arreter()`, arrêt gracieux) : un échec de `start()` est journalisé
+(`bots.host.start.failed`) et n'empêche ni le principal de servir ni les autres
+bots de démarrer.
+
+⚠️ **Ce qui ne change PAS** : routes d'instance, `getSubsystems` (`:3740`) et
+transport WS gardent `host` **le principal** — aucun appelant ne change, et un
+seul bot actif donne **le host d'aujourd'hui** (mêmes `sessionsDir`,
+`systemPrompt` et ports, par identité). **Aucun message n'est routé** vers un host
+secondaire : c'est L4.
+
+⚠️ **La mémoire n'est pas encore un port par bot** : `PiHostOptions.memory` est
+un **service** (`MemoryPort`), pas un store — L3-b fournit les **stores** d'un
+bot. Le host d'un bot secondaire n'a donc **pas** de port `memory` (il lirait
+sinon la mémoire du principal) : c'est **retiré** et **dit** au journal
+(`bots.host.port_absent`). Même règle pour tout port propre au principal.
+
+⚠️ **Gardes de construction** : deux hosts sur le même `sessionsDir` sont
+**refusés** (`bots.host.sessions_dir_partage` — deux `SessionManager` sur un
+fichier corrompraient les JSONL) ; un bot **sans configuration** n'a pas de host
+(`bots.host.config_absente` — emprunter le prompt du principal ferait parler un
+bot avec le texte d'un autre) ; un bot **refusé par le plafond** n'est pas dans
+`aDemarrer`, donc son contexte n'est **même pas demandé**.
+
+⚠️ **Réveils** : chaque service de sources reçoit le host **de son bot** quand il a
+démarré (`hostsBots.pourDemarre(botId)`), sinon celui de l'instance (repli
+d'avant L3-d) — `src/index.ts:3444`. Journal : `bots.hosts` (nombre + ids,
+**jamais un contenu**), `bots.host.construit`, `bots.hosts.demarres`
+(démarrés/échecs), `bots.hosts.arretes`, et `sources.bots.prets` porte en plus
+`hosts` / `hosts_demarres` / `hosts_echecs`.
+
 ## Ce qui n'est PAS livré (et pourquoi)
 
-**L3-d → L10 ne sont pas commencés.** L3-a (configuration), L3-b (mémoire,
-archive, avatar, personnalité, règles, épingles, réactions) et L3-c (sources,
-envois, pré-autorisations) sont livrés, mais le `PiHost` reste **unique** : la
-pile d'un bot porte sa place d'accueil (`config`, `outils`), pas encore son host.
+**L4 → L10 ne sont pas commencés.** L3 est **entier** : L3-a (configuration),
+L3-b (mémoire, archive, avatar, personnalité, règles, épingles, réactions), L3-c
+(sources, envois, pré-autorisations) et L3-d (`PiHost` par bot) sont livrés. Les
+hosts des bots à démarrer **existent, démarrent et s'arrêtent**, mais **aucun
+message n'est routé** vers eux : la conversation reste servie par le host du
+principal (routes d'instance, `getSubsystems`, transport WS). Il reste donc à
+ouvrir (L4) le routage des messages par conversation/bot, et la contrepartie du
+port `memory` par bot (un `MemoryPort` est un **service** : sa construction par
+bot n'est pas un store, elle appartient à L4).
 ~1 100 lignes de câblage imbriqué (`if (gate.passed)` ligne 2419 → 3518) où le
 `PiHost`, la mémoire, les envois, la bibliothèque, les jobs et les canaux partagent
 des fermetures et des `let` lus plus tard par les routes (`getSubsystems`,
@@ -204,13 +257,14 @@ Découpage retenu (chaque morceau vert et démarrable) :
 | **L3-a** ✅ | la **configuration** par bot (`src/config/bots.ts`, Map construite dans `main()`) |
 | **L3-b** ✅ | la **mémoire**, l'archive, l'avatar, la personnalité, les règles, les pins et les réactions par bot (`src/bots/outils.ts`) |
 | **L3-c** ✅ | les **sources / envois / pré-autos** par bot (`src/sources/pile-bot.ts`) |
-| L3-d | le **`PiHost` par bot** + `getSubsystems` (+ routes `/api/bots/<id>/config` servies par le runtime du bot) |
+| **L3-d** ✅ | le **`PiHost` par bot** (`src/bots/hosts.ts`) ; routes d'instance, `getSubsystems` et transport gardent le host du **principal** ; routage des messages = L4 |
 
-Ce qui **reste vrai** en l'état : une seule **pile de conversation** (le `PiHost`
-de L3-d) est construite (`pile` = principal s'il tourne, sinon premier actif).
-Les piles de **sources/envois/pré-autorisations**, elles, existent déjà par bot à
-démarrer ; allumer un bot écrit le registre et le journal sans construire sa pile
-avant le redémarrage (`demarrageRequis`, L2).
+Ce qui **reste vrai** en l'état : une seule **conversation** est servie par
+l'instance (le host du **principal**, `pile` = principal s'il tourne, sinon
+premier actif). Les autres bots à démarrer ont bien leur host, leur pile de
+sources, leurs envois et leurs pré-autorisations — mais rien ne leur envoie
+encore de message (L4). Allumer un bot écrit le registre et le journal sans
+construire son host avant le redémarrage (`demarrageRequis`, L2).
 
 ## Tests
 
@@ -221,6 +275,7 @@ avant le redémarrage (`demarrageRequis`, L2).
 | `tests/config/schema-scope.test.ts` | compteur 89 → **90** clés et 66 → **67** `instance`, avec la clé nommée (l'ajout est **délibéré**) |
 | `tests/config/config-bots.test.ts` (8, **L3-a**) | deux bots ⇒ deux runtimes/overlays/valeurs · identifiant invalide refusé · **non-régression 1 bot actif : instantané COMPLET identique** (10 clés nommées + `snapshot()` des 90) · la Map couvre `aDemarrer` et **pas** les refusés du plafond · bot de pile toujours présent · écrire l'overlay d'un bot ne touche pas le principal |
 | `tests/sources/piles-par-bot.test.ts` (12, **L3-c**) | **pile du principal identique** (objets `===`, `Env` du démarrage, chemins historiques, `construire` jamais appelé) · `config`/`outils` par identité · deux bots ⇒ deux `Env`/stores/journal/pré-autos/envois/config, fichiers isolés · `envPourBot` **une seule fois** par bot et **même `Env`** que les outils L3-b · une **cible par bot à démarrer** (bot éteint ou sans capacité exclu) · bot **refusé par le plafond** : pas de pile, pas de cible, aucun fichier ouvert · **mode mono-bot** (registre absent, `aDemarrer` vide) : `yuki` reste balayé |
+| `tests/bots/hosts.test.ts` (11, **L3-d**) | **host du principal identique** (l'objet d'options passé à `creer` est `optionsPile` **par identité** ; `sessionsDir`, `systemPrompt` et chaque port `===`) · deux bots ⇒ **deux hosts**, `sessionsDir` distincts et `systemPrompt` du **bon** `configBot` · les ports de la pile/outils du bot (`===`) et **délégation** à son service · la **mémoire est retirée** au bot secondaire (`port_absent`) · un bot **sans configuration** n'a pas de host · deux hosts ne partagent **jamais** `sessionsDir` · un host secondaire qui échoue au `start()` **n'empêche pas** les autres · **refusé par le plafond** ⇒ pas de host et **contexte jamais demandé** · cycle `demarrerAutres`/`arreter` (le principal n'est ni démarré ni arrêté par la fabrique) · garde statique : `host = hostsBots.principal`, `getSubsystems` et `createWsTransport` **ne lisent pas** la Map |
 | `tests/bots/outils.test.ts` (11, **L3-b**) | **non-régression : les 7 chemins du principal identiques** en mono (`<state>/…`) et en multi (`<state>/bots/<id>/…`) · les objets de `main()` **réutilisés** (`===`) et **adoptés** par la fabrique · deux bots ⇒ deux `MemoryStore`/`avatarDir`/`personalityPath` · **isolation de construction** (souvenir d'un bot absent du store, de l'index et du fichier de l'autre) · `envPourBot` **une seule fois** par bot (aucun `<bot>/<bot>`, `Env` doublement dérivé **refusé**) · identifiant invalide refusé · Map = `aDemarrer` + pile, **jamais** les refusés du plafond |
 
 Preuve d'échec sur l'origine (arbre gelé `14f77dd`, `/tmp/preuve-lot36/origine`,
@@ -270,3 +325,39 @@ test qui n'utilise QUE l'API de HEAD : avec `aDemarrer = [yuki, second]` et
 `refuses = [troisieme]`, l'origine rend `['yuki','second','troisieme']` (le bot
 refusé par le plafond est balayé) au lieu de `['yuki','second']` — et
 `pourBot("troisieme")` lui ouvre une pile au lieu de lever.
+
+Preuve L3-d : arbre **propre** au départ (`git status` vide, HEAD `3ad0e07` —
+commits externes « Update N files across… » **signalés, non défaits**), gelé
+**avant toute écriture** dans `/tmp/preuve-lot36l3d/arbre-avant.tar.gz` (vérifié :
+**`src/` présent**, 833 entrées ; `src/bots/hosts.ts` et
+`tests/bots/hosts.test.ts` **absents**, et `PiHostOptions` **sans** `botId`). Sur
+l'origine (`/tmp/preuve-lot36l3d/arbre-avant`), la suite échoue à l'import
+(`Cannot find module '../../src/bots/hosts.js'`) — **11/11** tests non lancés,
+donc en échec.
+
+`tsc` vert sur **les deux** projets. Campagne **complète** (fin de L3) :
+`npm test` **4499/4504** (401 fichiers : 398 verts, 3 ignorés ; 5 tests ignorés),
+et les **11 E2E** : `e2e-sources` 43/43, `e2e-chat-sessions` 36/36,
+`e2e-tts-ui` 116/116, `e2e-memory` 23/23, `e2e-files` 71/71, `e2e-image` 124/124,
+`e2e-timestamp` 49/49, `e2e-mobile-ui` 40/40, `e2e-pins-agents` 59/59,
+`e2e-ack` 44/44, `e2e-secret` 28/28 — **CSP 0 / connexion 0 / exceptions 0**
+partout. Les **36 PNG suivis** réécrits par les harnais ont été restaurés **un par
+un** (`git show "HEAD:<chemin>" > <chemin>`), sans aucune remise globale :
+`git status` est identique avant/après (5 modifiés, 2 ajoutés).
+
+**Instance RÉELLE** (port libre, volumes temporaires, `bots.json` à 2 bots
+actifs) : `bots.config` (yuki,kohai) · `bots.outils` (yuki,kohai) · `bots.hosts`
+(**nombre 2**, `ids: yuki,kohai`) · `bots.host.construit` (kohai,
+`sessions_dir: …/sessions/kohai`) · **deux** `pi.ready` (`bot: yuki` /
+`bot: kohai`, deux `sessions_dir` distincts) · `bots.hosts.demarres` (kohai) ·
+`sources.bots.prets` (`piles: 2`, `hosts: yuki,kohai`) ·
+`sources.balayeur.started` (`bots: 2`) · `gateway.listening` (`pi: "ready"`) ·
+`bots.hosts.arretes` (kohai) · **0 ligne `error`**. Contrôle de non-régression :
+la même instance avec **un** bot actif donne `bots.hosts` **nombre 1**, **un
+seul** `pi.ready` et `sources.balayeur.started` **bots 1** — 0 erreur.
+
+⚠️ **Invérifiable en test unitaire** : `main()` n'est jamais exécuté par la suite
+(`src/index.ts` lance `main()` au chargement). Le câblage de `main()` n'est donc
+couvert que par (a) la **garde statique** de `tests/bots/hosts.test.ts` et de
+`tests/pi/sdk-host-programmer-envoi.test.ts`, et (b) la campagne **E2E** +
+l'instance réelle ci-dessus.

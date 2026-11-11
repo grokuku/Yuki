@@ -60,6 +60,8 @@ import {
   workerLourdAutorise,
 } from "./bots/index.js";
 import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
+// ⚠️ LOT 36 (L3-d) : la Map des `PiHost` PAR BOT (le principal reste `host`).
+import { HostsBots } from "./bots/hosts.js";
 import { CAPACITES_BOT, type CapaciteBot, type RegistreBots } from "./bots/registry.js";
 import {
   ComfyClient,
@@ -207,10 +209,11 @@ import {
   nomsSecretsSource,
   portPreAutorisations,
   type ModeBots,
+  type PileSourcesBot,
   type PlanificationTacheInput,
 } from "./sources/index.js";
 import { FabriquePilesSources, creerResolveurEnvBot } from "./sources/pile-bot.js";
-import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, type PiHost, type PiHostOptions, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -1485,6 +1488,13 @@ async function main(): Promise<void> {
   let sessionsCount = 0;
   let activeRuns = 0;
   let host: PiHost | undefined;
+  /**
+   * ⚠️ LOT 36 (L3-d) : les `PiHost` PAR BOT. `host` reste le PRINCIPAL (routes
+   * d'instance, `getSubsystems`, transport WS) ; cette Map porte en plus les
+   * hosts des autres bots à DÉMARRER (L1), qui démarrent et s'arrêtent avec
+   * l'instance. Aucun message n'y est encore routé (c'est L4).
+   */
+  let hostsBots: HostsBots<PiHost> | undefined;
   let memoryService: MemoryService | undefined;
   let heritageStore: HeritageStore | undefined;
   let conversationArchive: ConversationArchiveStore | undefined;
@@ -1923,14 +1933,21 @@ async function main(): Promise<void> {
     pile: botDePile,
     envPile: env,
   });
-  /** Services des AUTRES bots ouverts avant que le host ne soit prêt. */
-  const servicesSourcesEnAttente: SourcesService[] = [];
+  /** Services des AUTRES bots ouverts avant que les hosts ne soient prêts. */
+  const servicesSourcesEnAttente: { service: SourcesService; botId: string }[] = [];
   /**
    * Branchement TARDIF (host Pi + ports de délégation) des services par bot :
    * une pile ouverte APRÈS `host.start()` est branchée immédiatement, une pile
    * ouverte AVANT (route d'administration) le sera par le vidage de la file.
+   *
+   * ⚠️ LOT 36 (L3-d) : le réveil est celui du host DE CE BOT (`botId`) quand il
+   * a démarré — un déclencheur publie dans les sessions de son bot, pas dans
+   * celles du principal. Repli (bot sans host démarré) : le host de l'instance,
+   * exactement comme avant L3-d.
    */
-  let brancherServiceSources: ((service: SourcesService) => void) | undefined;
+  let brancherServiceSources:
+    | ((service: SourcesService, botId: string) => void)
+    | undefined;
   /**
    * ⚠️ OUTILS PAR BOT (L3-b), construits PLUS BAS (dans le bloc du host) : la
    * fabrique les lit par ce relais, à chaque ouverture de pile. Une variable
@@ -2020,8 +2037,8 @@ async function main(): Promise<void> {
         publier: publierEnvoiProgramme,
         logger,
       });
-      if (brancherServiceSources !== undefined) brancherServiceSources(service);
-      else servicesSourcesEnAttente.push(service);
+      if (brancherServiceSources !== undefined) brancherServiceSources(service, botId);
+      else servicesSourcesEnAttente.push({ service, botId });
       return { store, inbox, journal, preAutorisations, service, envois };
     },
     logger,
@@ -3116,7 +3133,15 @@ async function main(): Promise<void> {
     // l'action sont dans les champs. Deux cas signalés : prompt VIDE (aucune
     // consigne) et prompt enregistré qui CONTREDIT une capacité (`programmer_envoi`).
     avertirSiPromptLegerIncomplet(logger, promptLeger, config.originOf("prompts.light"));
-    host = createPiHost({
+    // ⚠️ LOT 36 (L3-d) — LES `PiHost` PAR BOT.
+    // Les options du host du PRINCIPAL sont désormais un OBJET NOMMÉ, construit
+    // ICI à l'IDENTIQUE : il est passé tel quel à `createPiHost` (identité des
+    // options et des ports), et les hosts des autres bots en DÉRIVENT
+    // (`src/bots/hosts.ts`). Aucune option de ce bloc n'a changé.
+    const optionsHostPile: PiHostOptions = {
+      // ⚠️ SEUL champ AJOUTÉ par L3-d à la façade : chaque host DIT à quel bot il
+      // appartient (`pi.ready` → `bot`). Aucun comportement n'en dépend.
+      botId: botDePile,
       agentDir: env.piAgentDir,
       cwd: env.piCwd,
       home: env.piHome,
@@ -3232,7 +3257,47 @@ async function main(): Promise<void> {
       // sans qu'aucun tour ne soit déclenché. Lecture seule depuis l'extension.
       reactions: reactionStore,
       logger,
+    };
+    // ⚠️ ⚠️ CE QUE CE BLOC GARANTIT : avec UN bot actif, `hostsBots.principal`
+    // EST le host d'aujourd'hui, construit avec `optionsHostPile` tel quel
+    // (`sessionsDir` de l'`Env` du démarrage, prompt de `config`, et les MÊMES
+    // ports — `===`). Les hosts des autres bots ne changent RIEN à `host` :
+    // routes d'instance, `getSubsystems` et transport WS continuent de le lire.
+    // ⚠️ Un bot REFUSÉ par le plafond n'est pas dans `bots.aDemarrer` : il n'a
+    // donc ni pile (L3-c) ni host — rien n'est ouvert en son nom.
+    hostsBots = new HostsBots<PiHost>({
+      pile: botDePile,
+      bots: bots.aDemarrer.map((entree) => entree.id),
+      optionsPile: optionsHostPile,
+      creer: createPiHost,
+      // ⚠️ Contexte d'un AUTRE bot : sa pile (L3-c, ouverte UNE fois ici),
+      // SON `Env` (celui de la pile, par identité), sa configuration (L3-a) et
+      // ses outils (L3-b). Un bot indisponible est journalisé puis ÉCARTÉ —
+      // jamais un host à moitié construit, jamais d'échec du démarrage.
+      contexte: (botId) => {
+        let pile: PileSourcesBot;
+        try {
+          pile = fabriquePiles.ouvrir(botId);
+        } catch (error) {
+          logger.warn("bots.host.pile_indisponible", {
+            bot: botId,
+            error: messageOf(error),
+          });
+          return undefined;
+        }
+        const configBot = configsBots.get(botId);
+        const outils = outilsBots.get(botId);
+        return {
+          botId,
+          env: pile.env,
+          ...(configBot !== undefined ? { config: configBot } : {}),
+          ...(outils !== undefined ? { outils } : {}),
+          pile,
+        };
+      },
+      logger,
     });
+    host = hostsBots.principal;
     // ⚠️ RÉVEIL DES JOBS — INVARIANT : **dans un canal, UN SEUL RÉDACTEUR, le tour de
     // Yuki** (`docs/lot18-chat.md`). Un job terminé doit être ANNONCÉ là où son auteur
     // attend, mais le serveur n'écrit jamais à sa place : le rapport est INJECTÉ comme
@@ -3301,6 +3366,14 @@ async function main(): Promise<void> {
     // SOURCES : le host est prêt ⇒ on branche le réveil (tour `lancer`) et le
     // suivi des réponses (attachées aux entrées de la boîte, jamais dans un fil).
     sourcesService.setWaker(host);
+
+    // ⚠️ LOT 36 (L3-d) : LES HOSTS DES AUTRES BOTS DÉMARRENT APRÈS LE PRINCIPAL.
+    // Chacun a SES sessions (`<pi>/agent/sessions/<bot>`) et SON prompt : leurs
+    // conversations ne peuvent donc pas se mélanger avec celles du principal.
+    // ⚠️ Un échec est JOURNALISÉ (`bots.host.start.failed`) et n'empêche ni le
+    // principal de servir, ni les autres bots de démarrer — le bilan nomme les
+    // deux listes.
+    const demarrageHostsBots = await hostsBots.demarrerAutres();
 
     // MOTEUR HORLOGE (lot 2) — UN SEUL `setInterval` de 30 s (`DeclencheurBalayeur`),
     // démarré SEULEMENT quand un host existe : sans modèle, un passage planifié
@@ -3371,18 +3444,29 @@ async function main(): Promise<void> {
     // pourrait les exécuter. Le host Pi est celui de l'instance (le seul ouvert) ;
     // les ports de délégation sont PARTAGÉS.
     const hoteSources = host;
-    brancherServiceSources = (service) => {
-      if (hoteSources === undefined) return;
-      service.setWaker(hoteSources);
+    brancherServiceSources = (service, botId) => {
+      // ⚠️ L3-d : le host du bot S'IL A DÉMARRÉ, sinon celui de l'instance (le
+      // comportement d'avant L3-d, conservé comme repli — jamais un réveil muet).
+      const hote = hostsBots?.pourDemarre(botId) ?? hoteSources;
+      if (hote === undefined) return;
+      service.setWaker(hote);
       if (portsDeclencheurSources !== undefined) {
         service.setDeclencheurPorts(portsDeclencheurSources);
       }
     };
-    for (const service of servicesSourcesEnAttente.splice(0)) brancherServiceSources(service);
+    for (const enAttente of servicesSourcesEnAttente.splice(0)) {
+      brancherServiceSources(enAttente.service, enAttente.botId);
+    }
     logger.info("sources.bots.prets", {
       bot_actif: botDuRun,
       piles: fabriquePiles.ouvertes().length,
       autres: fabriquePiles.ouvertes().filter((pile) => pile.botId !== botDuRun).length,
+      // ⚠️ LOT 36 (L3-d) : QUELS hosts existent et lesquels ont démarré — des
+      // identifiants seulement, jamais un contenu. C'est ce que vérifie le
+      // démarrage réel (`bots.hosts`, `bots.hosts.demarres` en amont).
+      hosts: hostsBots?.ids().join(",") ?? "",
+      hosts_demarres: demarrageHostsBots.demarres.join(","),
+      hosts_echecs: demarrageHostsBots.echecs.join(","),
     });
 
     /**
@@ -3911,6 +3995,10 @@ async function main(): Promise<void> {
       if (agentsServer) await closeAgentsServer(agentsServer);
       await transport?.close();
       await host?.stop();
+      // ⚠️ LOT 36 (L3-d) : les hosts des AUTRES bots s'arrêtent ici (le principal
+      // vient d'être arrêté ci-dessus : un seul `stop` par host).
+      await hostsBots?.arreter();
+      hostsBots = undefined;
       if (memoryService) {
         await memoryService.drain();
         memoryService.close();

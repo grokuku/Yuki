@@ -86,6 +86,15 @@ export interface ApplyLlmConfigOptions {
 
 /** Options de construction du host embarqué. */
 export interface PiHostOptions {
+  /**
+   * Bot PROPRIÉTAIRE de ce host (lot 36, L3-d).
+   *
+   * ⚠️ Un `PiHost` par bot : chacun a SES sessions (`sessionsDir`), SON prompt
+   * système et SES ports. Cet identifiant ne sert qu'à DIRE au journal à quel
+   * bot appartient un host (`pi.ready`) — jamais à router un message (c'est L4).
+   * Absent ⇒ host nu (tests, doubles) : rien ne prétend appartenir à un bot.
+   */
+  botId?: string;
   /** Répertoire d'état du SDK (settings.json, auth.json, models.json…). */
   agentDir: string;
   /** Répertoire de travail effectif (nomme le dossier de sessions). */

@@ -2135,6 +2135,9 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       sessions_dir: paths.sessionsDir,
       session_id: currentRecord.sessionId,
       model: options.model ?? null,
+      // ⚠️ LOT 36 (L3-d) : un host par bot ⇒ le journal doit DIRE lequel. Absent
+      // (host nu, tests) ⇒ `null`, comme avant ce morceau.
+      bot: options.botId ?? null,
       tools: options.tools ? [...options.tools] : null,
       delegation: Boolean(options.delegation),
       llm_available: llmAvailable(),

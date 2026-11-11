@@ -1,0 +1,429 @@
+/**
+ * LE `PiHost` PAR BOT (lot 36, morceau L3-d) — dernier morceau de L3.
+ *
+ * ⚠️ POURQUOI CE MODULE : jusqu'à L3-c, `main()` construisait UN seul `PiHost`,
+ * avec l'`Env`, le prompt et les ports du bot de la PILE. Les bots à démarrer
+ * (L1) avaient donc leur configuration (L3-a), leurs outils (L3-b) et leur pile
+ * de sources (L3-c) — mais aucun host : leurs conversations n'existaient pas.
+ *
+ * Ce module construit la **Map `botId → PiHost`** des bots à DÉMARRER, avec
+ * trois règles, et elles suffisent :
+ *
+ *  1. **Le host du PRINCIPAL est EXACTEMENT celui d'aujourd'hui.** Ses options
+ *     sont l'objet que `main()` construisait déjà, passé TEL QUEL (`===`) : un
+ *     seul bot ⇒ aucune option ne change (garde de non-régression : `tests/
+ *     bots/hosts.test.ts` compare `sessionsDir`, `systemPrompt` et chaque port
+ *     par IDENTITÉ avec les valeurs d'avant ce morceau).
+ *  2. **Les hosts des AUTRES bots DÉRIVENT de ces options** : seuls ce qui est
+ *     PROPRE à un bot est remplacé (`sessionsDir`, `systemPrompt`, les ports de
+ *     SA pile / de SES outils, son `botId`). Tout le reste (modèles, outils,
+ *     délégation, fichiers, images, libraire, secrets, logger…) est celui de
+ *     l'INSTANCE — un second jeu d'objets serait un second écrivain.
+ *  3. **Un port qui n'existe pas pour un bot est RETIRÉ, jamais emprunté.**
+ *     ⚠️ Le cas qui compte : la MÉMOIRE est un *service* (`MemoryPort`), pas un
+ *     store — L3-b fournit les STORES d'un bot, pas son service. Un host de bot
+ *     non principal n'a donc pas de port `memory` (il lirait sinon la mémoire du
+ *     principal). C'est dit au journal (`bots.host.port_absent`), jamais tu.
+ *
+ * ⚠️ CE QUE CE MODULE NE FAIT PAS (L4) : router les messages vers le host d'un
+ * bot non principal. Les routes d'instance, `getSubsystems` et le transport WS
+ * gardent le host du PRINCIPAL (`hosts.principal`) : aucun appelant ne change.
+ * Les autres hosts EXISTENT, DÉMARRENT et S'ARRÊTENT — c'est tout ce que L3-d
+ * promet.
+ *
+ * ⚠️ `main()` n'est jamais exécuté par les tests (`src/index.ts` lance `main()`
+ * au chargement) : tout ce qui décide de la forme d'un host vit donc ICI, et
+ * `creer` est une couture (défaut : `createPiHost`). Le seul filet du câblage
+ * lui-même reste la campagne E2E.
+ *
+ * Aucun import SDK/typebox.
+ */
+
+import { appendVoiceInstruction } from "../llm/prompts.js";
+import { HeritageStore } from "../memory/heritage-store.js";
+import type { PiHostOptions } from "../pi/types.js";
+import { isTtsEnabled } from "../tts/options.js";
+
+import type { OutilsBot } from "./outils.js";
+import type { Env } from "../config/env.js";
+import type { ConfigRuntime } from "../config/runtime.js";
+import type { PileSourcesBot } from "../sources/par-bot.js";
+
+// ⚠️ Les DEMANDES sont dérivées de la façade (`PiHostOptions`) : ce module
+// n'importe RIEN de `src/pi/sdk/**` (invariant 3 de `tests/pi/boundary.test.ts`).
+type DemandeEnvoiProgramme = Parameters<
+  NonNullable<PiHostOptions["envoisProgrammes"]>["programmer"]
+>[0];
+type DemandePlanification = Parameters<
+  NonNullable<PiHostOptions["planifierTache"]>["planifier"]
+>[0];
+
+/** Journal minimal attendu (le `Logger` de l'application le satisfait). */
+export interface HostsBotLogger {
+  debug(message: string, fields?: Record<string, unknown>): void;
+  info(message: string, fields?: Record<string, unknown>): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
+  error(message: string, fields?: Record<string, unknown>): void;
+}
+
+/**
+ * Ce qu'il faut d'un host pour le cycle de vie : rien de plus.
+ *
+ * ⚠️ Contrainte VOLONTAIREMENT étroite (et non `PiHost`) : les tests injectent
+ * un host factice sans reconstruire la façade entière, et ce module ne peut pas
+ * appeler autre chose que `start`/`stop` sur un host secondaire (L4 ouvrira le
+ * reste).
+ */
+export interface HostDemarrable {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+/**
+ * Les ports PROPRES à un bot. Chaque type est repris de `PiHostOptions` (jamais
+ * recopié) : un port qui changerait de forme dans la façade casserait ici.
+ */export interface PortsHostBot {
+  /** Répertoire des sessions JSONL de CE bot (`<pi>/agent/sessions/<id>`). */
+  readonly sessionsDir: string;
+  /** Prompt système de CE bot (`prompts.light` de SON overlay + consigne de voix). */
+  readonly systemPrompt: string;
+  /** Drain des notifications de SA pile de sources (L3-c). */
+  readonly sources?: PiHostOptions["sources"];
+  /** Envois programmés de CE bot (son `envois-programmes.json`). */
+  readonly envoisProgrammes?: PiHostOptions["envoisProgrammes"];
+  /** Tâches planifiées de CE bot (son `sources.json`). */
+  readonly planifierTache?: PiHostOptions["planifierTache"];
+  readonly personality?: PiHostOptions["personality"];
+  readonly rules?: PiHostOptions["rules"];
+  readonly reactions?: PiHostOptions["reactions"];
+  /** Archive des conversations de CE bot (L3-b). */
+  readonly conversationArchive?: PiHostOptions["conversationArchive"];
+  /** Archive « vie antérieure » de CE bot (lecture seule). */
+  readonly heritage?: PiHostOptions["heritage"];
+}
+
+/** Ce qu'un bot apporte à la construction de son host (jamais celui d'un autre). */
+export interface ContexteHostBot {
+  readonly botId: string;
+  /** `Env` RÉSOLU de ce bot (une seule résolution, L3-b/L3-c). */
+  readonly env: Env;
+  /** Configuration DE CE BOT (L3-a). Absente ⇒ pas de prompt ⇒ pas de host. */
+  readonly config?: ConfigRuntime;
+  /** Outils DE CE BOT (L3-b). Absents ⇒ les ports correspondants sont retirés. */
+  readonly outils?: OutilsBot;
+  /** Pile sources DE CE BOT (L3-c). Absente ⇒ pas de drain, pas de tâches. */
+  readonly pile?: PileSourcesBot;
+}
+
+/**
+ * Les ports d'UN bot, dérivés de son contexte.
+ *
+ * Rend `undefined` quand la configuration du bot manque : sans elle, il n'y a
+ * pas de prompt système, donc pas de host honnête (emprunter celui du principal
+ * ferait parler un bot avec le prompt d'un autre). L'appelant le DIT au journal.
+ */
+export function portsHostBot(
+  contexte: ContexteHostBot,
+  logger?: HostsBotLogger,
+): PortsHostBot | undefined {
+  const config = contexte.config;
+  if (config === undefined) return undefined;
+
+  const outils = contexte.outils;
+  const pile = contexte.pile;
+  const envois = pile?.envois;
+  const absent: string[] = [];
+  if (outils === undefined) absent.push("outils");
+  if (pile === undefined) absent.push("sources");
+  // ⚠️ La MÉMOIRE n'est pas un store mais un service (`MemoryPort`) : L3-b
+  // n'en fournit pas par bot. On le DIT (une ligne) au lieu de laisser croire
+  // que le host d'un bot secondaire a une mémoire.
+  absent.push("memory");
+  if (absent.length > 0) {
+    logger?.info("bots.host.port_absent", { bot: contexte.botId, ports: absent.join(",") });
+  }
+
+  return {
+    sessionsDir: contexte.env.piSessionsDir,
+    // ⚠️ MÊME calcul que `main()` pour la pile (`promptLeger` + consigne de voix),
+    // mais avec la configuration DE CE BOT : `prompts.light` et `tts.enabled` sont
+    // des réglages MIXTES — la surcharge du bot l'emporte, sinon l'instance.
+    systemPrompt: appendVoiceInstruction(
+      config.getString("prompts.light"),
+      isTtsEnabled(config),
+    ),
+    ...(pile !== undefined ? { sources: pile.service } : {}),
+    ...(envois !== undefined
+      ? {
+          // ⚠️ `async` : le port rend une PROMESSE (le service, lui, répond en
+          // synchrone) — même forme que le port de `main()` pour la pile.
+          envoisProgrammes: {
+            programmer: async (request: DemandeEnvoiProgramme) => envois.programmer(request),
+          },
+        }
+      : {}),
+    ...(pile !== undefined
+      ? {
+          planifierTache: {
+            planifier: async (request: DemandePlanification) =>
+              pile.service.planifierTache(request),
+          },
+        }
+      : {}),
+    ...(outils !== undefined
+      ? {
+          personality: outils.personnalite,
+          rules: outils.regles,
+          reactions: outils.reactions,
+          conversationArchive: outils.archive,
+          // Archive « vie antérieure » : le dossier est celui du bot. La
+          // construction est PURE (aucune écriture — `ensureLayout` n'est pas
+          // appelé) et l'outil qui la lit est en LECTURE SEULE.
+          heritage: new HeritageStore({
+            dir: outils.env.heritageDir,
+            ...(logger !== undefined ? { logger } : {}),
+          }),
+        }
+      : {}),
+  };
+}
+
+/**
+ * Options du host d'un AUTRE bot : celles du principal, moins ce qui appartient
+ * au principal.
+ *
+ * ⚠️ Le retrait est aussi important que le remplacement : `memory`, `heritage`,
+ * `conversationArchive`, `personality`, `rules`, `reactions`, `sources`,
+ * `envoisProgrammes` et `planifierTache` désignent des FICHIERS. Hériter de
+ * ceux du principal ferait lire/écrire les fichiers d'un autre bot — exactement
+ * ce que « un seul rédacteur » interdit.
+ */
+export function optionsHostBot(
+  botId: string,
+  optionsPile: PiHostOptions,
+  ports: PortsHostBot,
+): PiHostOptions {
+  // Copie SURFACE : les valeurs partagées (modèles, outils, délégation, logger…)
+  // restent les MÊMES objets (`===`), donc les mêmes services.
+  const options: PiHostOptions = {
+    ...optionsPile,
+    sessionsDir: ports.sessionsDir,
+    systemPrompt: ports.systemPrompt,
+    // ⚠️ Chaque host SAIT à quel bot il appartient (journalisation, diagnostic) :
+    // c'est le seul champ ajouté par ce morceau à la façade.
+    botId,
+  };
+  poserSinonRetirer(options, "sources", ports.sources);
+  poserSinonRetirer(options, "envoisProgrammes", ports.envoisProgrammes);
+  poserSinonRetirer(options, "planifierTache", ports.planifierTache);
+  poserSinonRetirer(options, "personality", ports.personality);
+  poserSinonRetirer(options, "rules", ports.rules);
+  poserSinonRetirer(options, "reactions", ports.reactions);
+  poserSinonRetirer(options, "conversationArchive", ports.conversationArchive);
+  poserSinonRetirer(options, "heritage", ports.heritage);
+  // ⚠️ La mémoire n'a PAS de port par bot (voir `portsHostBot`) : on la retire au
+  // lieu de laisser le host d'un bot lire celle du principal.
+  delete options.memory;
+  return options;
+}
+
+/** Pose le port s'il existe, sinon RETIRE la valeur héritée du principal. */
+function poserSinonRetirer<K extends keyof PiHostOptions>(
+  options: PiHostOptions,
+  cle: K,
+  port: PiHostOptions[K] | undefined,
+): void {
+  if (port !== undefined) {
+    options[cle] = port;
+    return;
+  }
+  delete options[cle];
+}
+
+export interface OptionsHostsBots<THost extends HostDemarrable> {
+  /** Bot de la PILE (`main()`) : son host est le PRINCIPAL, jamais reconstruit. */
+  readonly pile: string;
+  /** Bots à DÉMARRER (L1, `ResolutionDemarrageBots.aDemarrer`) — les refusés n'y sont pas. */
+  readonly bots: readonly string[];
+  /** Options EXACTES du host du principal (celles d'avant L3-d). */
+  readonly optionsPile: PiHostOptions;
+  /** Fabrique de host (défaut côté `main()` : `createPiHost`). */
+  readonly creer: (options: PiHostOptions) => THost;
+  /** Contexte d'un bot (son `Env`, sa configuration, ses outils, sa pile). */
+  readonly contexte: (botId: string) => ContexteHostBot | undefined;
+  readonly logger: HostsBotLogger;
+}
+
+/** Ce que le démarrage a réellement fait (journal + diagnostic). */
+export interface BilanDemarrageHosts {
+  /** Bots dont le host a démarré. */
+  readonly demarres: readonly string[];
+  /** Bots dont le host a REFUSÉ de démarrer (nommés, jamais tus). */
+  readonly echecs: readonly string[];
+}
+
+/**
+ * Map `botId → PiHost` des bots à démarrer, le PRINCIPAL compris.
+ *
+ * ⚠️ Deux invariants :
+ *  1. **un seul host par bot** (une Map, un identifiant construit une fois) ;
+ *  2. **le principal n'est jamais dérivé** : il est construit avec
+ *     `optionsPile`, tel quel, et rendu par `principal` — c'est le host que
+ *     `main()` garde sous le nom `host` (routes d'instance, `getSubsystems`,
+ *     transport WS).
+ */
+export class HostsBots<THost extends HostDemarrable> {
+  private readonly options: OptionsHostsBots<THost>;
+  private readonly map = new Map<string, THost>();
+  private readonly demarres = new Set<string>();
+  /** Le host du bot de la PILE — EXACTEMENT celui d'avant L3-d. */
+  readonly principal: THost;
+
+  constructor(options: OptionsHostsBots<THost>) {
+    this.options = options;
+    this.principal = options.creer(options.optionsPile);
+    this.map.set(options.pile, this.principal);
+
+    for (const botId of options.bots) {
+      if (this.map.has(botId)) continue;
+      this.construire(botId);
+    }
+
+    // ⚠️ Diagnostic SANS CONTENU : des identifiants et un compte, jamais un
+    // prompt, un souvenir ou un texte de personnalité.
+    options.logger.info("bots.hosts", {
+      pile: options.pile,
+      nombre: this.map.size,
+      ids: [...this.map.keys()].join(","),
+      secondaires: this.map.size - 1,
+    });
+  }
+
+  /** Construit (ou refuse, en le DISANT) le host d'un bot non principal. */
+  private construire(botId: string): void {
+    const options = this.options;
+    const contexte = options.contexte(botId);
+    if (contexte === undefined) {
+      options.logger.warn("bots.host.contexte_absent", { bot: botId });
+      return;
+    }
+    const ports = portsHostBot(contexte, options.logger);
+    if (ports === undefined) {
+      options.logger.warn("bots.host.config_absente", { bot: botId });
+      return;
+    }
+    // ⚠️ DEUX hosts sur le même `sessionsDir` se disputeraient les mêmes JSONL
+    // (deux `SessionManager` sur un fichier) : on REFUSE le second host plutôt
+    // que de corrompre les sessions. Symptôme d'un `Env` mal résolu, pas d'une
+    // configuration utilisateur.
+    if (ports.sessionsDir === options.optionsPile.sessionsDir) {
+      options.logger.warn("bots.host.sessions_dir_partage", {
+        bot: botId,
+        sessions_dir: ports.sessionsDir,
+      });
+      return;
+    }
+    this.map.set(botId, options.creer(optionsHostBot(botId, options.optionsPile, ports)));
+    options.logger.info("bots.host.construit", {
+      bot: botId,
+      sessions_dir: ports.sessionsDir,
+    });
+  }
+
+  /** Tous les hosts, dans l'ordre de construction (principal d'abord). */
+  hosts(): ReadonlyMap<string, THost> {
+    return this.map;
+  }
+
+  /** Identifiants des bots qui ont un host (principal d'abord). */
+  ids(): string[] {
+    return [...this.map.keys()];
+  }
+
+  /** Nombre de hosts (le principal compte). */
+  get taille(): number {
+    return this.map.size;
+  }
+
+  /** Host d'un bot (principal inclus), ou `undefined`. */
+  pour(botId: string): THost | undefined {
+    return this.map.get(botId);
+  }
+
+  /**
+   * Host d'un bot SEULEMENT s'il a démarré.
+   *
+   * ⚠️ C'est ce que doivent utiliser les réveils (sources, déclencheurs) : un
+   * host construit mais dont `start()` a échoué ne peut rien exécuter. Le bot
+   * du principal est toujours rendu (son démarrage est géré par `main()`).
+   */
+  pourDemarre(botId: string): THost | undefined {
+    if (botId === this.options.pile) return this.principal;
+    return this.demarres.has(botId) ? this.map.get(botId) : undefined;
+  }
+
+  /** Le bot a-t-il un host DÉMARRÉ ? */
+  estDemarre(botId: string): boolean {
+    return this.demarres.has(botId);
+  }
+
+  /**
+   * Démarre les hosts des bots AUTRES que le principal.
+   *
+   * ⚠️ Le principal n'est pas démarré ici : `main()` garde son `try/catch` (il
+   * en tire `piStatus` et le compte de sessions). Chaque host secondaire a le
+   * sien : un échec est JOURNALISÉ et n'empêche ni le principal de servir, ni
+   * les autres bots de démarrer.
+   */
+  async demarrerAutres(): Promise<BilanDemarrageHosts> {
+    const demarres: string[] = [];
+    const echecs: string[] = [];
+    for (const [botId, host] of this.map) {
+      if (botId === this.options.pile) continue;
+      try {
+        await host.start();
+        this.demarres.add(botId);
+        demarres.push(botId);
+      } catch (error) {
+        echecs.push(botId);
+        this.options.logger.error("bots.host.start.failed", {
+          bot: botId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    this.options.logger.info("bots.hosts.demarres", {
+      demarres: demarres.join(","),
+      echecs: echecs.join(","),
+      nombre: demarres.length,
+    });
+    return { demarres, echecs };
+  }
+
+  /**
+   * Arrête les hosts des bots AUTRES que le principal.
+   *
+   * ⚠️ Le principal est arrêté par `main()` (`await host?.stop()`), comme
+   * avant : deux appels concurrents sur le même host seraient un arrêt double.
+   */
+  async arreter(): Promise<void> {
+    const arretes: string[] = [];
+    for (const botId of [...this.demarres]) {
+      const host = this.map.get(botId);
+      if (host === undefined) continue;
+      try {
+        await host.stop();
+        arretes.push(botId);
+      } catch (error) {
+        this.options.logger.warn("bots.host.stop.failed", {
+          bot: botId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    this.demarres.clear();
+    if (arretes.length > 0) {
+      this.options.logger.info("bots.hosts.arretes", { bots: arretes.join(",") });
+    }
+  }
+}

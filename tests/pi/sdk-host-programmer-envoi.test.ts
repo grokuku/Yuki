@@ -153,11 +153,24 @@ describe("① câblage de PRODUCTION — le host LOCAL reçoit réellement le po
   const index = readFileSync(join(process.cwd(), "src", "index.ts"), "utf8");
   const sdkHost = readFileSync(join(process.cwd(), "src", "pi", "sdk-host.ts"), "utf8");
 
-  /** Bloc d'options de l'appel `createPiHost({ … })` (équilibrage d'accolades). */
+  /**
+   * Bloc d'options du host LOCAL (équilibrage d'accolades).
+   *
+   * ⚠️ LOT 36 (L3-d) : ces options sont désormais un OBJET NOMMÉ
+   * (`const optionsHostPile: PiHostOptions = { … }`) passé à la fabrique des hosts
+   * (`creer: createPiHost`), et non plus un littéral inline dans
+   * `createPiHost({ … })` — un seul host par bot, mais UN SEUL chemin de
+   * construction. Le CONTRÔLE est inchangé (le bloc doit porter le port) ; on
+   * vérifie EN PLUS que ce bloc est bien celui que reçoit `createPiHost`.
+   */
   function optionsDuHostLocal(): string {
+    const nomme = index.indexOf("const optionsHostPile: PiHostOptions = {");
     const appel = index.indexOf("createPiHost({");
-    expect(appel, "appel `createPiHost` introuvable dans `src/index.ts`").toBeGreaterThan(-1);
-    const debut = index.indexOf("{", appel);
+    const debut = nomme > -1 ? index.indexOf("{", nomme) : index.indexOf("{", appel);
+    expect(
+      debut,
+      "bloc d'options du host local introuvable dans `src/index.ts`",
+    ).toBeGreaterThan(-1);
     let profondeur = 0;
     for (let i = debut; i < index.length; i += 1) {
       const c = index[i];
@@ -172,6 +185,11 @@ describe("① câblage de PRODUCTION — le host LOCAL reçoit réellement le po
 
   it("le host de la conversation LOCALE reçoit `envoisProgrammes`", () => {
     expect(optionsDuHostLocal()).toContain("envoisProgrammes: portEnvoisProgrammes");
+    // ⚠️ LOT 36 (L3-d) : ce bloc est bien celui que la fabrique passe à
+    // `createPiHost` pour le bot de la PILE (le principal), tel quel.
+    expect(index).toContain("optionsPile: optionsHostPile,");
+    expect(index).toContain("creer: createPiHost,");
+    expect(index).toContain("host = hostsBots.principal;");
   });
 
   it("`createSdkPiHost` CONSTRUIT l'outil quand le port est fourni", () => {
