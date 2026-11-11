@@ -49,6 +49,8 @@ import {
 } from "../bots/registry.js";
 import { workerLourdAutorise } from "../bots/profils.js";
 import type { PreAutorisationStore } from "../agents/preautorisations.js";
+import type { OutilsBot } from "../bots/outils.js";
+import type { ConfigRuntime } from "../config/runtime.js";
 import type { EnvoisProgrammesService } from "../chat/envois/index.js";
 import type { DeclencheurJournal } from "./journal.js";
 import type { SourcesInbox } from "./inbox.js";
@@ -128,11 +130,27 @@ function botMono(): BotRecord {
 export class SourcesParBotError extends Error {
   override readonly name = "SourcesParBotError";
   constructor(
-    readonly code: "bot_inconnu" | "bot_non_construit" | "id_invalide",
+    readonly code: "bot_inconnu" | "bot_non_construit" | "id_invalide" | "bot_refuse",
     message: string,
   ) {
     super(message);
   }
+}
+
+/**
+ * Ce que le DÉMARRAGE a décidé (lot 36, L1) : qui doit tourner, et qui le
+ * plafond a refusé.
+ *
+ * ⚠️ C'est la SEULE source de vérité du balayeur : un bot `actif: true` mais
+ * REFUSÉ par `bots.maxActifs` n'a ni pile ni déclencheur — allumer un bot dans
+ * l'interface ne le fait pas tourner avant le redémarrage (`demarrageRequis`,
+ * `src/bots/admin.ts`).
+ */
+export interface ResolutionDemarrage {
+  /** Bots à DÉMARRER, dans l'ordre du démarrage. */
+  readonly aDemarrer: readonly string[];
+  /** Bots `actif: true` REFUSÉS par le plafond (aucune pile, aucun tir). */
+  readonly refuses: readonly string[];
 }
 
 /**
@@ -144,6 +162,21 @@ export interface PileSourcesBot {
   readonly botId: string;
   /** `Env` résolu du bot (ses chemins pointent sous SA racine). */
   readonly env: Env;
+  /**
+   * Configuration DE CE BOT (lot 36, L3-a). `undefined` pour une pile construite
+   * à la main (tests, mode mono sans runtime par bot) : la pile lit alors les
+   * bornes de la configuration d'instance, exactement comme avant L3-c.
+   */
+  readonly config?: ConfigRuntime;
+  /**
+   * Outils DE CE BOT (lot 36, L3-b : mémoire, archive, avatar, personnalité,
+   * règles, épingles, réactions).
+   *
+   * ⚠️ Lecture PARESSEUSE assumée : la Map des outils est construite APRÈS la
+   * pile du bot actif (elle réutilise ses objets). L3-d y branchera le `PiHost`
+   * du bot ; d'ici là ce champ n'est qu'un point d'accroche.
+   */
+  readonly outils?: OutilsBot;
   /** `sources.json` DU BOT (satisfait le port `BalayeurStore`). */
   readonly store: BalayeurStore;
   readonly inbox: SourcesInbox;
@@ -168,6 +201,14 @@ export interface OptionsSourcesParBot {
   /** Coffre des jetons. Absent ⇒ aucune authentification possible (401). */
   coffre?: SourcesTokenVault;
   logger: SourcesLogger;
+  /**
+   * Décision de DÉMARRAGE (L1) : qui doit tourner, qui le plafond a refusé.
+   *
+   * ⚠️ Omise (tests, mode mono-bot) ⇒ comportement du lot 35j : tous les bots
+   * `actif: true` du registre sont balayés. Fournie (démarrage réel), le balayeur
+   * ne voit QUE les bots à démarrer — jamais un bot du registre refusé.
+   */
+  demarrage?: () => ResolutionDemarrage;
   /** Horloge injectable (tests). */
   now?: () => number;
 }
@@ -199,7 +240,7 @@ export interface JetonResolu {
  */
 export class SourcesParBot {
   private readonly options: OptionsSourcesParBot;
-  private readonly piles = new Map<string, PileSourcesBot>();
+  private readonly pilesOuvertes = new Map<string, PileSourcesBot>();
   private ouvrir?: (input: { botId: string; env: Env }) => PileSourcesBot;
   private pileActive?: PileSourcesBot;
 
@@ -218,12 +259,20 @@ export class SourcesParBot {
    */
   setPileActive(pile: PileSourcesBot): void {
     this.pileActive = pile;
-    this.piles.set(pile.botId, pile);
+    this.pilesOuvertes.set(pile.botId, pile);
   }
 
   /** Bot actif enregistré (`undefined` avant le démarrage). */
   get actif(): PileSourcesBot | undefined {
     return this.pileActive;
+  }
+
+  /**
+   * Piles DÉJÀ ouvertes, dans l'ordre d'ouverture — l'endroit où L3-d attachera le
+   * `PiHost` de chaque bot. Ne construit rien (un bot jamais touché n'y figure pas).
+   */
+  piles(): PileSourcesBot[] {
+    return [...this.pilesOuvertes.values()];
   }
 
   /** Registre courant (`null` en mode mono-bot historique). */
@@ -247,6 +296,44 @@ export class SourcesParBot {
     return this.bots().find((bot) => bot.id === botId);
   }
 
+  /** Décision de démarrage (L1), relue à chaque appel (elle est figée au boot). */
+  private resolutionDemarrage(): ResolutionDemarrage | undefined {
+    try {
+      return this.options.demarrage?.();
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Ce bot a-t-il été REFUSÉ par le plafond au démarrage ? */
+  estRefuse(botId: string): boolean {
+    const demarrage = this.resolutionDemarrage();
+    return demarrage?.refuses.includes(botId) ?? false;
+  }
+
+  /**
+   * Les bots qui TOURNENT : ceux que le démarrage a retenus, encore `actif: true`.
+   *
+   * ⚠️ Sans décision de démarrage (tests, mode mono-bot historique), c'est
+   * l'ancienne règle du lot 35j : tout bot `actif: true` du registre.
+   * ⚠️ Un bot `actif: true` mais REFUSÉ par le plafond n'y figure JAMAIS : il n'a
+   * pas de pile, donc ses déclencheurs ne peuvent pas tirer.
+   */
+  botsActifs(): BotRecord[] {
+    const tous = this.bots().filter((bot) => bot.actif === true);
+    const demarrage = this.resolutionDemarrage();
+    const registre = this.registre();
+    // ⚠️ MODE MONO-BOT historique (aucun `state/bots.json`) : il n'y a rien à
+    // filtrer — le bot synthétique `yuki` tourne, comme avant le lot 35a. Sans ce
+    // garde, une décision de démarrage vide (`aDemarrer` = []) éteindrait le
+    // balayeur d'une installation mono-bot.
+    if (demarrage === undefined || registre === null || registre.bots.length === 0) {
+      return tous;
+    }
+    const voulus = new Set(demarrage.aDemarrer);
+    return tous.filter((bot) => voulus.has(bot.id));
+  }
+
   /**
    * Pile d'un bot (ouverte à la demande puis gardée).
    *
@@ -260,8 +347,18 @@ export class SourcesParBot {
         `Identifiant de bot invalide : « ${String(botId)} » (aucune source ouverte).`,
       );
     }
-    const connu = this.piles.get(botId);
+    const connu = this.pilesOuvertes.get(botId);
     if (connu) return connu;
+    if (this.estRefuse(botId)) {
+      // ⚠️ Un bot REFUSÉ par le plafond (`bots.maxActifs`) n'a pas de pile : il ne
+      // tourne pas, rien ne doit ouvrir ses fichiers en son nom (ni le webhook, ni
+      // le balayeur, ni une route d'administration).
+      throw new SourcesParBotError(
+        "bot_refuse",
+        `Le bot « ${botId} » a été refusé au démarrage par le plafond de bots ` +
+          "simultanés : il n'a pas de sources ouvertes. Éteignez un autre bot, puis redémarrez.",
+      );
+    }
     if (this.bot(botId) === undefined) {
       throw new SourcesParBotError(
         "bot_inconnu",
@@ -275,7 +372,7 @@ export class SourcesParBot {
       );
     }
     const pile = this.ouvrir({ botId, env: this.options.envInstance });
-    this.piles.set(botId, pile);
+    this.pilesOuvertes.set(botId, pile);
     return pile;
   }
 
@@ -396,8 +493,11 @@ export class SourcesParBot {
   }
 
   /**
-   * Les bots à balayer MAINTENANT — un bot inactif ou sans capacité pertinente
-   * n'y figure pas.
+   * Les bots à balayer MAINTENANT — un bot INACTIF, REFUSÉ par le plafond, ou
+   * sans capacité pertinente n'y figure pas.
+   *
+   * ⚠️ UNE cible par bot qui TOURNE (décision de démarrage, L1), jamais une par
+   * bot du registre : un bot refusé n'a pas de pile, donc rien à balayer.
    *
    * ⚠️ Aucun minuteur n'est créé ici : le balayeur (`BalayeurBots`) possède
    * l'UNIQUE `setInterval` et appelle cette liste à chaque tick.
@@ -405,8 +505,7 @@ export class SourcesParBot {
   ciblesBalayage(): CibleBalayage[] {
     const cibles: CibleBalayage[] = [];
     const sansCapacite: string[] = [];
-    for (const bot of this.bots()) {
-      if (bot.actif !== true) continue;
+    for (const bot of this.botsActifs()) {
       if (!workerLourdAutorise(bot.capacites)) {
         sansCapacite.push(bot.id);
         continue;
@@ -464,14 +563,14 @@ export class SourcesParBot {
 
   /** Ferme toutes les piles ouvertes (arrêt gracieux). */
   fermer(): void {
-    for (const pile of this.piles.values()) {
+    for (const pile of this.pilesOuvertes.values()) {
       try {
         pile.fermer();
       } catch {
         // Un arrêt gracieux ne lève jamais.
       }
     }
-    this.piles.clear();
+    this.pilesOuvertes.clear();
   }
 }
 

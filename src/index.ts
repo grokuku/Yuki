@@ -51,7 +51,7 @@ import { InstancePasswordStore } from "./security/instance-password.js";
 import { SecretRequestRegistry } from "./secrets/requests.js";
 import { SecretStore } from "./secrets/store.js";
 
-import { loadEnv, type CompatMode, type Env, type LlmMissingKeyMode } from "./config/env.js";
+import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
 import {
   BOT_YUKI,
   construireWorkerLourdSiAutorise,
@@ -59,7 +59,7 @@ import {
   purgerArchivesBots,
   workerLourdAutorise,
 } from "./bots/index.js";
-import { creerOutilsBots } from "./bots/outils.js";
+import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
 import { CAPACITES_BOT, type CapaciteBot, type RegistreBots } from "./bots/registry.js";
 import {
   ComfyClient,
@@ -179,7 +179,6 @@ import {
   REACTIONS_SOURCE,
   contexteModeleDepuisFichier,
   memoryWriteModelReference,
-  envPourBot,
   ouvrirStoresMemoireBot,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
@@ -208,9 +207,9 @@ import {
   nomsSecretsSource,
   portPreAutorisations,
   type ModeBots,
-  type PileSourcesBot,
   type PlanificationTacheInput,
 } from "./sources/index.js";
+import { FabriquePilesSources, creerResolveurEnvBot } from "./sources/pile-bot.js";
 import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
@@ -1154,6 +1153,14 @@ async function main(): Promise<void> {
     mode: bots.mode as ModeBots,
     registre: () => botsAdmin.registre,
     ...(secretStore ? { coffre: secretStore } : {}),
+    // ⚠️ LOT 36 (L3-c) — QUI TOURNE, décidé au démarrage (L1) : le balayeur ne voit
+    // qu'UNE cible par bot à démarrer, jamais une par bot du REGISTRE. Un bot
+    // `actif: true` mais REFUSÉ par `bots.maxActifs` n'a ni pile ni déclencheur (et
+    // l'allumer dans l'interface exige un redémarrage, `demarrageRequis`).
+    demarrage: () => ({
+      aDemarrer: bots.aDemarrer.map((entree) => entree.id),
+      refuses: bots.refusesActifs.map((entree) => entree.id),
+    }),
     logger,
   });
 
@@ -1884,7 +1891,7 @@ async function main(): Promise<void> {
     connus: envoisProgrammes.lister().length,
   });
 
-  // ── LOT 35j : PILES SOURCES PAR BOT (chemin de construction UNIQUE) ────────
+  // ── LOT 35j / LOT 36 (L3-c) : PILES SOURCES PAR BOT (chemin UNIQUE) ───────
   /**
    * ⚠️ POURQUOI UNE FABRIQUE, ET PAS UNE SECONDE CONSTRUCTION DANS `index.ts` :
    * chaque bot a SON `sources.json`, SA boîte, SON journal, SES pré-autorisations
@@ -1900,7 +1907,22 @@ async function main(): Promise<void> {
    * `pathsForBot` y ajoute `<pi>/sessions/<botId>`, donc lui repasser un `Env`
    * déjà résolu empilerait `<botId>/<botId>`.
    */
-  const pilesSources = new Map<string, PileSourcesBot>();
+  /**
+   * ⚠️ LOT 36 (L3-c) — UN SEUL RÉSOLVEUR D'`Env` PAR BOT, PARTAGÉ.
+   * `envPourBot` n'est PAS idempotent (`pathsForBot` surcharge `piSessionsDir` en
+   * `<pi>/sessions/<botId>` : le réappliquer empile `<bot>/<bot>`). Il est donc
+   * résolu UNE fois par bot, ici, et servi au même objet à ses deux consommateurs :
+   *  - cette fabrique de piles (sources / envois / pré-autorisations) ;
+   *  - la fabrique d'outils (L3-b, `creerOutilsBots({ resoudreEnvBot })`).
+   * ⚠️ La pile de l'`Env` du bot ACTIF est SEMÉE au démarrage : son `Env` vient de
+   * `preparerMultiBot` et n'est jamais recalculé (identité du champ `env` de sa pile).
+   */
+  const envsBots = creerResolveurEnvBot({
+    envInstance: bots.envInstance,
+    mode: bots.mode,
+    pile: botDePile,
+    envPile: env,
+  });
   /** Services des AUTRES bots ouverts avant que le host ne soit prêt. */
   const servicesSourcesEnAttente: SourcesService[] = [];
   /**
@@ -1909,106 +1931,108 @@ async function main(): Promise<void> {
    * ouverte AVANT (route d'administration) le sera par le vidage de la file.
    */
   let brancherServiceSources: ((service: SourcesService) => void) | undefined;
-  const ouvrirPileSources = (botId: string, envBot: Env): PileSourcesBot => {
-    const existante = pilesSources.get(botId);
-    if (existante !== undefined) return existante;
-    const actif = botId === botDuRun;
-    const store = actif
-      ? sourcesStore
-      : new SourcesStore({ path: envBot.sourcesStorePath, logger });
-    const inbox = actif
-      ? sourcesInbox
-      : new SourcesInbox({ path: envBot.sourcesInboxPath, logger });
-    const journal = actif
-      ? declencheursJournal
-      : DeclencheurJournal.open({ path: envBot.declencheursJournalPath, logger });
-    const preAutorisations = actif
-      ? preAutorisationsStore
-      : new PreAutorisationStore({
-          path: envBot.preAutorisationsPath,
-          logger,
-          journal,
-          // ⚠️ Le registre SAIT à quel bot il appartient (le fichier l'est déjà, par
-          // son chemin) et refuse de consommer pour un agent que ce bot ne voit pas
-          // (`AgentRecord.bots`). Le bot vient du DÉMARRAGE, jamais d'une demande.
-          botId,
-          agentAutorise: filtreAgentVisible(agentStoreRef, botId, agentAutorisePourBot),
-        });
-    const service = actif
-      ? sourcesService
-      : new SourcesService({
-          store,
-          inbox,
-          journal,
-          logger,
-          ...(secretStore ? { tokens: secretStore } : {}),
-          // ⚠️ Nom de secret PROPRE AU BOT (`YUKI_SOURCE_<BOT>__<NOM>`) : c'est lui
-          // qui dit à quel bot appartient le jeton (voir `nomSecretSource`). Pour
-          // `yuki`, l'ancien nom reste accepté — aucun secret n'est réécrit.
-          secretNames: (nom) => nomsSecretsSource(botId, nom),
-          promptTotalChars: () => config.getNumber("sources.promptTotalChars"),
-          notify: (event) => {
-            if (!pushService) return;
-            void pushService
-              .notify({ kind: "source", ...(event.titre ? { detail: event.titre } : {}) })
-              .catch((error: unknown) => {
-                logger.warn("sources.notify.failed", {
-                  source: event.source,
-                  error: messageOf(error),
-                });
+  /**
+   * ⚠️ OUTILS PAR BOT (L3-b), construits PLUS BAS (dans le bloc du host) : la
+   * fabrique les lit par ce relais, à chaque ouverture de pile. Une variable
+   * (et non une valeur) parce que la pile du bot actif est ouverte AVANT eux.
+   */
+  let outilsBotsParId: Map<string, OutilsBot> | undefined;
+  /**
+   * CONSTRUCTION DES OBJETS D'UN AUTRE BOT — le SEUL endroit qui ouvre ses
+   * fichiers de sources (`pathsForBot`, `src/bots/paths.ts`). Le bot ACTIF ne
+   * passe jamais par ici : ses objets sont rendus par identité (voir
+   * `existantsPile`), parce que deux instances écriraient le même `sources.json`
+   * — « un seul rédacteur » vaut aussi pour les sources.
+   */
+  const fabriquePiles = new FabriquePilesSources({
+    pile: botDePile,
+    envPile: env,
+    envs: envsBots,
+    configPour: (botId) => configsBots.get(botId),
+    outilsPour: (botId) => outilsBotsParId?.get(botId),
+    existantsPile: {
+      store: sourcesStore,
+      inbox: sourcesInbox,
+      journal: declencheursJournal,
+      preAutorisations: preAutorisationsStore,
+      service: sourcesService,
+      envois: envoisProgrammes,
+    },
+    construire: ({ botId, envBot, config: configBot }) => {
+      const store = new SourcesStore({ path: envBot.sourcesStorePath, logger });
+      const inbox = new SourcesInbox({ path: envBot.sourcesInboxPath, logger });
+      const journal = DeclencheurJournal.open({ path: envBot.declencheursJournalPath, logger });
+      const preAutorisations = new PreAutorisationStore({
+        path: envBot.preAutorisationsPath,
+        logger,
+        journal,
+        // ⚠️ Le registre SAIT à quel bot il appartient (le fichier l'est déjà, par
+        // son chemin) et refuse de consommer pour un agent que ce bot ne voit pas
+        // (`AgentRecord.bots`). Le bot vient du DÉMARRAGE, jamais d'une demande.
+        botId,
+        agentAutorise: filtreAgentVisible(agentStoreRef, botId, agentAutorisePourBot),
+      });
+      // ⚠️ LES BORNES SONT CELLES DE CE BOT (L3-a). Un bot sans runtime de
+      // configuration (créé APRÈS le démarrage depuis l'interface) ne peut pas en
+      // avoir : on le DIT, et on retombe sur celles de la pile — jamais un silence.
+      const bornes = configBot ?? config;
+      if (configBot === undefined) {
+        logger.warn("sources.pile.config_absente", { bot: botId, repli: botDePile });
+      }
+      const service = new SourcesService({
+        store,
+        inbox,
+        journal,
+        logger,
+        ...(secretStore ? { tokens: secretStore } : {}),
+        // ⚠️ Nom de secret PROPRE AU BOT (`YUKI_SOURCE_<BOT>__<NOM>`) : c'est lui
+        // qui dit à quel bot appartient le jeton (voir `nomSecretSource`). Pour
+        // `yuki`, l'ancien nom reste accepté — aucun secret n'est réécrit.
+        secretNames: (nom) => nomsSecretsSource(botId, nom),
+        promptTotalChars: () => bornes.getNumber("sources.promptTotalChars"),
+        notify: (event) => {
+          if (!pushService) return;
+          void pushService
+            .notify({ kind: "source", ...(event.titre ? { detail: event.titre } : {}) })
+            .catch((error: unknown) => {
+              logger.warn("sources.notify.failed", {
+                source: event.source,
+                error: messageOf(error),
               });
-          },
-        });
-    const envois = actif
-      ? envoisProgrammes
-      : new EnvoisProgrammesService({
-          store: EnvoisProgrammesStore.open({ path: envBot.envoisProgrammesPath, logger }),
-          journal,
-          canaux: () =>
-            chatMirror.conversations().map((conversation) => ({
-              conversationId: conversation.id,
-              titre: conversation.title,
-              plateforme: conversation.platform,
-            })),
-          fichier: (fichierId) => filesStore.get(fichierId),
-          maxFichierBytes: () => config.getNumber("files.maxFileBytes"),
-          // ⚠️ UN SEUL chemin de publication : celui de l'instance. Une cible LOCALE
-          // d'un bot non actif n'est pas ouverte par le host Pi courant — l'envoi est
-          // alors marqué ÉCHOUÉ avec sa raison (jamais publié dans un autre fil).
-          publier: publierEnvoiProgramme,
-          logger,
-        });
-    const pile: PileSourcesBot = {
-      botId,
-      env: envBot,
-      store,
-      inbox,
-      journal,
-      preAutorisations,
-      service,
-      envois,
-      // ⚠️ Un arrêt gracieux ne laisse aucun suivi de run derrière lui.
-      fermer: () => {
-        service.detach();
-      },
-    };
-    pilesSources.set(botId, pile);
-    if (!actif) {
+            });
+        },
+      });
+      const envois = new EnvoisProgrammesService({
+        store: EnvoisProgrammesStore.open({ path: envBot.envoisProgrammesPath, logger }),
+        journal,
+        canaux: () =>
+          chatMirror.conversations().map((conversation) => ({
+            conversationId: conversation.id,
+            titre: conversation.title,
+            plateforme: conversation.platform,
+          })),
+        fichier: (fichierId) => filesStore.get(fichierId),
+        // Borne de taille PAR BOT (L3-a) : elle suit sa configuration.
+        maxFichierBytes: () => bornes.getNumber("files.maxFileBytes"),
+        // ⚠️ UN SEUL chemin de publication : celui de l'instance. Une cible LOCALE
+        // d'un bot non actif n'est pas ouverte par le host Pi courant — l'envoi est
+        // alors marqué ÉCHOUÉ avec sa raison (jamais publié dans un autre fil).
+        publier: publierEnvoiProgramme,
+        logger,
+      });
       if (brancherServiceSources !== undefined) brancherServiceSources(service);
       else servicesSourcesEnAttente.push(service);
-    }
-    return pile;
-  };
+      return { store, inbox, journal, preAutorisations, service, envois };
+    },
+    logger,
+  });
   // ⚠️ LA PILE DU BOT ACTIF est enregistrée TOUT DE SUITE : elle est construite
   // bien avant le host (les autres services s'y branchent), et c'est elle que
-  // `?bot=` sans argument continue de servir.
-  sourcesParBot.setPileActive(ouvrirPileSources(botDuRun, env));
-  sourcesParBot.setOuvrir((input) =>
-    ouvrirPileSources(
-      input.botId,
-      envPourBot({ envInstance: input.env, botId: input.botId, mode: bots.mode }),
-    ),
-  );
+  // `?bot=` sans argument continue de servir. ⚠️ Avec UN bot actif, elle reçoit
+  // EXACTEMENT les objets ci-dessus (`===`) et l'`Env` du démarrage : c'est la
+  // garde de non-régression de L3-c.
+  sourcesParBot.setPileActive(fabriquePiles.ouvrir(botDePile));
+  sourcesParBot.setOuvrir((input) => fabriquePiles.ouvrir(input.botId));
 
   /**
    * RÉDACTEUR d'une réponse distante — **COMMUN aux plateformes** (lot 21).
@@ -2836,8 +2860,10 @@ async function main(): Promise<void> {
     // store, donc un seul écrivain par fichier.
     // ⚠️ `envPourBot` n'est résolu qu'UNE fois par bot, à partir de l'`Env`
     // d'INSTANCE (`bots.envInstance`) : il n'est pas idempotent.
-    // ⚠️ La Map n'est PAS branchée sur une pile (c'est L3-d) : elle est
-    // journalisée et disponible. Les bots REFUSÉS par le plafond n'y sont pas.
+    // ⚠️ LOT 36 (L3-c) : la Map est désormais LUE PAR LA FABRIQUE DE PILES
+    // (`outilsPour`), qui la consulte à chaque ouverture — c'est le point
+    // d'accroche préparé pour L3-d (le `PiHost` d'un bot). Les bots REFUSÉS par le
+    // plafond n'y sont pas, donc un bot refusé n'a ni pile ni outils.
     const outilsBots = creerOutilsBots({
       envInstance: bots.envInstance,
       mode: bots.mode,
@@ -2845,6 +2871,9 @@ async function main(): Promise<void> {
       pile: botDePile,
       configs: configsBots,
       fabrique: fabriqueMemoireBots,
+      // ⚠️ LOT 36 (L3-c) : LE MÊME résolveur que les piles de sources — l'`Env` d'un
+      // bot n'est résolu qu'UNE fois, et les deux fabriques reçoivent le MÊME objet.
+      resoudreEnvBot: (botId) => envsBots.pour(botId),
       existantsPile: {
         memoire: storesMemoire,
         archive: conversationArchive,
@@ -2855,6 +2884,9 @@ async function main(): Promise<void> {
       },
       logger,
     });
+    // ⚠️ La fabrique de piles lit cette Map par relais : elle est construite AVANT
+    // (la pile du bot actif existe déjà) et ses lectures sont PARESSEUSES.
+    outilsBotsParId = outilsBots;
     const outilsPile = outilsBots.get(botDePile);
     if (!outilsPile) {
       // Impossible : `creerOutilsBots` garantit la présence du bot de la pile.
@@ -3349,8 +3381,8 @@ async function main(): Promise<void> {
     for (const service of servicesSourcesEnAttente.splice(0)) brancherServiceSources(service);
     logger.info("sources.bots.prets", {
       bot_actif: botDuRun,
-      piles: pilesSources.size,
-      autres: [...pilesSources.keys()].filter((id) => id !== botDuRun).length,
+      piles: fabriquePiles.ouvertes().length,
+      autres: fabriquePiles.ouvertes().filter((pile) => pile.botId !== botDuRun).length,
     });
 
     /**

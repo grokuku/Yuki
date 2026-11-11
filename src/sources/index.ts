@@ -147,7 +147,21 @@ export type {
   ModeBots,
   OptionsSourcesParBot,
   PileSourcesBot,
+  ResolutionDemarrage,
 } from "./par-bot.js";
+
+export {
+  FabriquePilesSources,
+  creerResolveurEnvBot,
+} from "./pile-bot.js";
+export type {
+  ContextePileBot,
+  ObjetsPileSources,
+  OptionsFabriquePilesSources,
+  OptionsResolveurEnvBot,
+  ResolutionEnvBot,
+  ResolveurEnvBots,
+} from "./pile-bot.js";
 
 export {
   ORIGIN_DECLENCHEUR,
