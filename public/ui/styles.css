@@ -48,6 +48,9 @@ body {
 }
 
 .topbar {
+  /* LOT 37 : le panneau des bots s'ancre SOUS la barre (position absolue) sans
+   * qu'aucun script n'ait à mesurer quoi que ce soit (aucun style inline). */
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -90,6 +93,311 @@ body {
 .avatar--logo {
   width: 100%;
   height: 100%;
+}
+
+/* ─── LOT 37 : SÉLECTEUR DE BOTS DE LA BARRE DU HAUT ───────────────────────
+ *
+ * L'avatar de la barre du haut est un BOUTON (`#bot-switcher-btn`) qui ouvre la
+ * LISTE des bots — c'est la demande INITIALE du multi-bot, jamais livrée
+ * jusqu'ici (un `<select>` dans `/bots` en tenait lieu).
+ *
+ * ⚠️ Aucun style inline : le panneau est positionné ICI, pas par JavaScript
+ * (CSP `style-src 'self'`, et aucun `.style.` dans `bot-switcher.js`).
+ * ⚠️ Sans avatar, le glyphe ❄️ occupe le bouton : la bascule existe donc aussi
+ * sur une instance qui n'a jamais déposé d'avatar.
+ */
+.brand__bot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.brand__bot:hover {
+  background: var(--panel-hover);
+}
+
+.brand__bot:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.brand__bot-glyphe {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.bot-switcher {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 16px;
+  z-index: 1150;
+  width: min(380px, calc(100vw - 32px));
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 18px 40px color-mix(in srgb, #000 45%, transparent);
+}
+
+.bot-switcher[hidden] {
+  display: none;
+}
+
+.bot-switcher__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bot-switcher__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.bot-switcher__plafond {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bot-switcher__aide {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.bot-switcher__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.bot-switcher__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+
+/* Le bot de la conversation COURANTE est démarqué : on voit où l'on est. */
+.bot-switcher__item--courant {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.bot-switcher__choix {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bot-switcher__choix:hover {
+  background: var(--panel-hover);
+}
+
+.bot-switcher__choix:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Avatar d'une entrée : 26 px, cercle. Image du bot PRINCIPAL quand elle existe
+ * (`/avatar` ne sert que l'avatar de l'instance), sinon MONOGRAMME — un bot n'a
+ * pas encore d'image servie par le gateway (limite dite dans la documentation). */
+.bot-switcher__avatar {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--panel-3);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.bot-switcher__avatar .avatar--brand {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Six teintes DÉTERMINISTES (aucun style inline), tirées des variables de thème. */
+.bot-switcher__avatar--c1 {
+  background: color-mix(in srgb, var(--accent) 35%, var(--panel-3));
+}
+
+.bot-switcher__avatar--c2 {
+  background: color-mix(in srgb, var(--ok) 35%, var(--panel-3));
+}
+
+.bot-switcher__avatar--c3 {
+  background: color-mix(in srgb, var(--danger) 35%, var(--panel-3));
+}
+
+.bot-switcher__avatar--c4 {
+  background: color-mix(in srgb, var(--accent) 62%, var(--panel-3));
+}
+
+.bot-switcher__avatar--c5 {
+  background: color-mix(in srgb, var(--ok) 62%, var(--panel-3));
+}
+
+.bot-switcher__avatar--c6 {
+  background: color-mix(in srgb, var(--danger) 62%, var(--panel-3));
+}
+
+.bot-switcher__textes {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+
+.bot-switcher__nom {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* État RÉEL (exécution), jamais le drapeau `actif` seul. */
+.bot-switcher__etat {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.bot-switcher__etat--demarre,
+.bot-switcher__etat--principal {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--border));
+}
+
+.bot-switcher__etat--erreur {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+
+.bot-switcher__etat--arrete {
+  color: var(--muted);
+}
+
+.bot-switcher__demarrer {
+  flex: 0 0 auto;
+}
+
+.bot-switcher__menu {
+  flex: 1 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 2px 2px;
+  border-top: 1px dashed var(--border);
+}
+
+.bot-switcher__menu-titre {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bot-switcher__menu-aide {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.bot-switcher__menu-item {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bot-switcher__menu-item:hover {
+  background: var(--panel-hover);
+}
+
+/* RETRAIT d'un bot : même famille de couleur que la zone de danger de `/bots`,
+ * dans le MENU (jamais au même niveau que « Démarrer »). */
+.bot-switcher__menu-item--danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.bot-switcher__status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.bot-switcher__status--erreur {
+  color: var(--danger);
+}
+
+.bot-switcher__status[hidden] {
+  display: none;
+}
+
+.bot-switcher__foot {
+  display: flex;
+  justify-content: flex-start;
 }
 
 .status {
@@ -2987,9 +3295,34 @@ h6.md-heading {
     display: flex;
   }
 
+  /* LOT 37 — une instance à PLUSIEURS bots révèle aussi la marque en
+   * téléphone : la barre du haut est le SEUL endroit toujours visible, c'est
+   * donc là que la bascule doit vivre. Une instance MONO-bot sans avatar garde
+   * exactement la barre d'avant (aucun contrôle ajouté). */
+  body.has-bot-switcher .brand {
+    display: flex;
+  }
+
   .avatar--brand {
     width: 22px;
     height: 22px;
+  }
+
+  .brand__bot {
+    width: 22px;
+    height: 22px;
+  }
+
+  /* Le panneau remonte du BAS de l'écran (feuille) : sur 390 px de large, un
+   * panneau ancré sous la barre sortirait de l'écran. */
+  .bot-switcher {
+    position: fixed;
+    top: auto;
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-height: 76vh;
   }
 
   /* Le lien « Configuration » de la barre du haut est REDONDANT sur téléphone :

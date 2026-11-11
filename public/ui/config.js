@@ -55,7 +55,8 @@ import {
   resetValueFor,
   splitConfigPatchByScope,
 } from './config-patch.js';
-import { cheminConfigBot, listerBots } from './bots-api.js';
+import { cheminConfigBot, lireListeBots } from './bots-api.js';
+import { messageBandeauBot } from './bot-switcher-modele.js';
 import { ouvrirCreationBot, ouvrirSuppressionBot } from './bots-admin.js';
 import {
   ANCRES_PROFONDES as ANCRES_PROFONDES_PAR_PAGE,
@@ -168,6 +169,14 @@ const PAGE_BOT = PAGE === "bot";
 let botCourant = null;
 /** Liste `{ id, nom, capacites, actif, ordre }` des bots connus. */
 let botsConnus = [];
+
+/**
+ * Plafond RÉEL des bots simultanés (`bots.maxActifs`, 3 par défaut) et bot de la
+ * PILE (`runtime.botId`), tels que `GET /api/bots` les rend (lot 37). Servent au
+ * bandeau d'honnêteté : jamais « un seul bot » quand trois peuvent tourner.
+ */
+let plafondActifs = 3;
+let botPrincipal = null;
 
 /**
  * Message d'une action de CYCLE DE VIE (démarrer/arrêter), gardé le temps d'un
@@ -1364,7 +1373,13 @@ async function pollHealth() {
  * (c'est lui que l'instance utilise réellement).
  */
 async function resoudreBot() {
-  botsConnus = await listerBots();
+  // ⚠️ LOT 37 — la réponse COMPLÈTE : `plafond` (bots.maxActifs) et `principal`
+  // sont nécessaires pour que le bandeau d'honnêteté dise le VRAI nombre de bots
+  // actifs (« 1 sur 3 maximum »), au lieu de laisser croire « un seul ».
+  const infos = await lireListeBots();
+  botsConnus = infos.bots;
+  plafondActifs = infos.plafond;
+  botPrincipal = infos.principal;
   const demande = new URLSearchParams(location.search).get("b");
   const parId = (id) => botsConnus.find((bot) => bot.id === id) ?? null;
   const actif = botsConnus.find((bot) => bot.actif === true) ?? null;
@@ -1768,19 +1783,18 @@ function appliquerBotMisAJour(bot) {
  */
 function afficherBandeauBot() {
   if (!botNoticeEl) return;
-  if (!botCourant || botAfficheEstActif()) {
-    botNoticeEl.hidden = true;
-    botNoticeEl.textContent = "";
-    return;
-  }
-  const actif = botsConnus.find((bot) => bot.actif === true);
-  botNoticeEl.hidden = false;
-  botNoticeEl.textContent =
-    `Ce bot n'est pas le bot ACTIF de l'instance (${actif?.id ?? "aucun"}). ` +
-    "Ses réglages de configuration s'affichent et s'enregistrent bien sur LUI, " +
-    "mais la personnalité, la voix, les plateformes et les déclencheurs restent " +
-    "ceux du bot actif : ils ne sont donc pas modifiables ici (leur édition par " +
-    "bot est un lot ultérieur).";
+  // ⚠️ LOT 37 — le texte vient du MODÈLE partagé (`bot-switcher-modele.js`) : il
+  // dit le nombre RÉEL de bots actifs et le plafond réel. L'ancien message
+  // (« Ce bot n'est pas le bot ACTIF de l'instance (yuki) ») se lisait « il n'y
+  // a qu'un seul bot actif » alors que `bots.maxActifs` en autorise trois.
+  const texte = messageBandeauBot({
+    bot: botCourant,
+    bots: botsConnus,
+    plafond: plafondActifs,
+    principal: botPrincipal,
+  });
+  botNoticeEl.hidden = texte === "";
+  botNoticeEl.textContent = texte;
 }
 
 /**

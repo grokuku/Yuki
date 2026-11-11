@@ -28,6 +28,21 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { initBotSwitcher } from "../../public/ui/bot-switcher.js";
+
+/**
+ * ⚠️ Les DEUX modales d'administration sont REMPLACÉES par des espions : la
+ * suppression réutilise `ouvrirSuppressionBot` (compteurs + case à cocher), et
+ * ce fichier vérifie qu'elle est APPELÉE — pas comment elle dessine ses cases.
+ */
+const mocks = vi.hoisted(() => ({ suppression: vi.fn(), creation: vi.fn() }));
+vi.mock("../../public/ui/bots-admin.js", () => ({
+  ouvrirCreationBot: mocks.creation,
+  ouvrirSuppressionBot: mocks.suppression,
+}));
+import {
+  confirmationSuppressionBot,
+  texteSuppressionBot,
+} from "../../public/ui/config-pages.js";
 import {
   PLAFOND_ACTIFS_DEFAUT,
   entreeListe,
@@ -243,6 +258,7 @@ interface Banc {
   nav: string[];
   patchs: Array<{ url: string; body: any }>;
   appels: string[];
+  alertes: Array<{ titre: string; texte: string }>;
 }
 
 function banc(
@@ -268,7 +284,21 @@ function banc(
   const patchs: Array<{ url: string; body: any }> = [];
   const appels: string[] = [];
   const principal = options.principal ?? "yuki";
-  const bots = options.bots ?? BOTS;
+  // Liste MUTABLE : après suppression, `GET /api/bots` rend la liste amputée.
+  const bots = [...(options.bots ?? BOTS)];
+  mocks.suppression.mockReset();
+  mocks.suppression.mockImplementation(async ({ bot }: { bot: { id: string } }) => {
+    const index = bots.findIndex((entree) => entree.id === bot.id);
+    if (index < 0) return null;
+    bots.splice(index, 1);
+    return {
+      bots,
+      archive: `bots-supprimes/${bot.id}`,
+      botActifSuivant: bots[0]?.id ?? null,
+      rechargementRequis: false,
+      sessionsPi: { etat: "ok" },
+    };
+  });
 
   const fetchImpl = async (url: string, init?: { method?: string; body?: string }) => {
     appels.push(`${init?.method ?? "GET"} ${url}`);
@@ -317,12 +347,22 @@ function banc(
     return reponse(404, { message: "route inconnue" });
   };
 
+  // Modale FACTICE : on n'ouvre aucune vraie fenêtre, on enregistre seulement
+  // les alertes (refus du dernier bot, etc.).
+  const alertes: Array<{ titre: string; texte: string }> = [];
+  const HolafModal = {
+    alert: async (titre: string, texte: string) => {
+      alertes.push({ titre, texte });
+    },
+  };
+
   const switcher = initBotSwitcher({
     button,
     panel,
     list,
     plafondEl: plafond,
     statusEl: status,
+    HolafModal,
     fetchImpl: fetchImpl as never,
     naviguer: (url: string) => nav.push(url),
     recherche: () => options.recherche ?? "",
@@ -330,7 +370,7 @@ function banc(
     statutMs: 0,
   });
 
-  return { switcher, button, panel, list, status, plafond, nav, patchs, appels };
+  return { switcher, button, panel, list, status, plafond, nav, patchs, appels, alertes };
 }
 
 function itemDe(list: Noeud, botId: string): Noeud {
@@ -622,9 +662,9 @@ describe("⑦ boucle entre bots : un seul interrupteur, orienté", () => {
       noeud.classes.has("bot-switcher__menu"),
     );
     expect(menu).toBeDefined();
-    const entrees = (menu?.children ?? []).filter(
-      (noeud) => noeud.tag === "button",
-    );
+    const entrees = (menu?.children ?? [])
+      .filter((noeud) => noeud.tag === "button")
+      .filter((noeud) => !noeud.classes.has("bot-switcher__menu-item--danger"));
     // Deux cibles possibles : « Yuki » et « Nova » (jamais soi-même).
     expect(entrees).toHaveLength(2);
     expect(entrees[0].textContent).toContain("vers « Yuki »");
@@ -649,6 +689,129 @@ describe("⑦ boucle entre bots : un seul interrupteur, orienté", () => {
       noeud.classes.has("bot-switcher__menu"),
     );
     expect(menu?.textContent).toContain("Aucun autre bot");
+  });
+});
+
+// ─── ⑦ bis SUPPRIMER un bot depuis le panneau ─────────────────────────────
+
+/** Ouvre le menu d'une entrée (clic droit sur son avatar) et cherche un bouton. */
+function boutonDuMenu(list: Noeud, botId: string, texte: string): Noeud | null {
+  const item = itemDe(list, botId);
+  const avatar = descendants(item).find((noeud) => noeud.classes.has("bot-switcher__avatar"));
+  avatar?.dispatch("contextmenu");
+  const menu = descendants(itemDe(list, botId)).find((noeud) =>
+    noeud.classes.has("bot-switcher__menu"),
+  );
+  return (
+    (menu?.children ?? []).find(
+      (noeud) => noeud.tag === "button" && noeud.textContent === texte,
+    ) ?? null
+  );
+}
+
+describe("⑦ bis le panneau donne accès à la SUPPRESSION (sans la réinventer)", () => {
+  it("le menu d'une entrée porte « Retirer ce bot… », réutilise `ouvrirSuppressionBot`", async () => {
+    const b = banc();
+    await b.switcher.rafraichir();
+    b.switcher.ouvrir();
+    const bouton = boutonDuMenu(b.list, "kohai", "Retirer ce bot…");
+    expect(bouton).not.toBeNull();
+    // ⚠️ Jamais à côté de « Démarrer » : deux boutons de même poids, dont un
+    // destructeur, finissent cliqués par erreur.
+    const item = itemDe(b.list, "kohai");
+    expect(
+      descendants(item).some((noeud) => noeud.classes.has("bot-switcher__menu-item--danger")),
+    ).toBe(true);
+    // La modale EXISTANTE est appelée : aucune seconde confirmation dans ce module.
+    const source = ui("bot-switcher.js");
+    expect(source).toContain('from "./bots-admin.js"');
+    expect(source).toContain("ouvrirSuppressionBot({");
+    expect(source).not.toMatch(/method:\s*"DELETE"/u);
+  });
+
+  it("le libellé évite « Supprimer » (les E2E cliquent ce texte au mot près)", () => {
+    const source = ui("bot-switcher.js");
+    expect(source).toContain("Retirer ce bot…");
+    expect(source).not.toContain("Supprimer ce bot");
+    // Le bouton de fermeture ne contient pas « Fermer » : un doublon masqué
+    // détournerait `clickButton("Fermer")` de `e2e-sources`.
+    const html = ui("index.html");
+    expect(html).toMatch(/id="bot-switcher-close"[\s\S]{0,200}>Masquer</);
+  });
+
+  it("la modale de confirmation dit les COMPTEURS et la rétention de 90 jours", () => {
+    const texte = texteSuppressionBot({
+      bot: { id: "kohai", nom: "Kohai" },
+      compteurs: { conversations: 4, souvenirs: 128, declencheurs: 3, octets: 184320 },
+      retentionJours: 90,
+    });
+    expect(texte).toContain("4 conversation(s)");
+    expect(texte).toContain("128 souvenir(s)");
+    expect(texte).toContain("3 déclencheur(s)");
+    expect(texte).toContain("CONSERVÉES 3 mois (90 jours)");
+    // La case à cocher est OBLIGATOIRE : son libellé nomme l'archivage.
+    expect(confirmationSuppressionBot()).toContain("conservées 3 mois");
+  });
+
+  it("un bot RETIRÉ qui était celui de la page ⇒ bascule sur un AUTRE bot", async () => {
+    const b = banc({ recherche: "?b=kohai" });
+    await b.switcher.rafraichir();
+    b.switcher.ouvrir();
+    boutonDuMenu(b.list, "kohai", "Retirer ce bot…")?.dispatch("click");
+    await vi.waitFor(() => expect(b.nav).toEqual(["/"]));
+    // La modale existante a bien été appelée avec le bot et les MÊMES appels HTTP.
+    expect(mocks.suppression).toHaveBeenCalledTimes(1);
+    expect(mocks.suppression.mock.calls[0][0].bot).toEqual({ id: "kohai", nom: "Kohai" });
+    // Le panneau ne reste pas sur un bot qui n'existe plus.
+    const noms = descendants(b.list)
+      .filter((noeud) => noeud.classes.has("bot-switcher__nom"))
+      .map((noeud) => noeud.textContent);
+    expect(noms).not.toContain("Kohai");
+  });
+
+  it("un bot retiré qui n'était PAS celui de la page ⇒ aucune navigation, 90 jours dits", async () => {
+    const b = banc({ recherche: "?b=yuki" });
+    await b.switcher.rafraichir();
+    b.switcher.ouvrir();
+    boutonDuMenu(b.list, "kohai", "Retirer ce bot…")?.dispatch("click");
+    await vi.waitFor(() => expect(b.status.textContent).toContain("90 jours"));
+    expect(b.nav).toEqual([]);
+    expect(b.status.textContent).toContain("archivé");
+  });
+
+  it("renoncer dans la modale ne retire RIEN (liste intacte)", async () => {
+    mocks.suppression.mockResolvedValueOnce(null);
+    const b = banc();
+    await b.switcher.rafraichir();
+    b.switcher.ouvrir();
+    boutonDuMenu(b.list, "kohai", "Retirer ce bot…")?.dispatch("click");
+    await vi.waitFor(() => expect(mocks.suppression).toHaveBeenCalledTimes(1));
+    const noms = descendants(b.list)
+      .filter((noeud) => noeud.classes.has("bot-switcher__nom"))
+      .map((noeud) => noeud.textContent);
+    expect(noms).toEqual(["Yuki", "Kohai", "Nova"]);
+  });
+
+  it("le DERNIER bot est refusé en FRANÇAIS, avant tout appel destructeur", async () => {
+    const b = banc({ bots: [BOTS[0]] });
+    await b.switcher.rafraichir();
+    b.switcher.ouvrir();
+    boutonDuMenu(b.list, "yuki", "Retirer ce bot…")?.dispatch("click");
+    await vi.waitFor(() => expect(b.alertes).toHaveLength(1));
+    expect(b.alertes[0].titre).toBe("Suppression impossible");
+    expect(b.alertes[0].texte).toContain("DERNIER bot");
+    expect(b.alertes[0].texte).toContain("ne peut pas démarrer");
+    expect(mocks.suppression).not.toHaveBeenCalled();
+    expect(b.nav).toEqual([]);
+  });
+
+  it("le refus 409 `dernier_bot` du SERVEUR existe et dit la même chose", () => {
+    // ⚠️ Défense en PROFONDEUR : l'UI refuse sans aller-retour, le domaine refuse
+    // aussi (une autre page pourrait appeler la route). Même message, même cause.
+    const admin = readFileSync(join(ROOT, "src", "bots", "admin.ts"), "utf8");
+    expect(admin).toContain('"dernier_bot"');
+    expect(admin).toContain("Impossible de supprimer le DERNIER bot");
+    expect(admin).toContain("ne peut pas démarrer");
   });
 });
 

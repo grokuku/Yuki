@@ -35,9 +35,60 @@
         l'avatar RESTE visible (22 px) : c'est le seul endroit où il apparaît
         dans la coquille mobile.
       -->
+      <!--
+        LOT 37 — LE SÉLECTEUR DE BOTS DANS LA BARRE DU HAUT (la demande INITIALE
+        du multi-bot). L'avatar n'est plus une image décorative : c'est un BOUTON
+        qui ouvre la LISTE des bots (`bot-switcher.js`) — pas la page des
+        paramètres. Chaque entrée porte l'état RÉEL du bot (`execution.demarre`)
+        et un bouton « Démarrer » pour un bot arrêté.
+        ⚠️ Sans avatar, le glyphe ❄️ (repli du lot 34) occupe le bouton : la barre
+        du haut est le SEUL élément toujours visible en téléphone, c'est donc là
+        que la bascule doit vivre. Aucun style inline (CSP).
+      -->
       <div class="brand">
-        <img id="brand-avatar" class="avatar avatar--brand" alt="" data-avatar-image hidden />
+        <button id="bot-switcher-btn" class="brand__bot" type="button" aria-label="Changer de bot" aria-haspopup="dialog" aria-expanded="false" aria-controls="bot-switcher-panel"><img id="brand-avatar" class="avatar avatar--brand" alt="" data-avatar-image hidden /><span class="brand__bot-glyphe" data-avatar-fallback aria-hidden="true">❄️</span></button>
         <span class="brand__name">Yuki</span>
+      </div>
+      <!--
+        PANNEAU DES BOTS — liste construite par `bot-switcher.js` (jamais écrite
+        en HTML : elle vient du serveur). Positionné par `styles.css` (aucun
+        `.style.`), `role="dialog"` NON modal : la discussion reste utilisable
+        derrière, un clic à l'extérieur referme.
+      -->
+      <div
+        id="bot-switcher-panel"
+        class="bot-switcher"
+        role="dialog"
+        aria-modal="false"
+        aria-label="Bots de cette instance"
+        hidden
+      >
+        <!-- ⚠️ Pas d'élément d'en-tête ICI : la barre du haut en est déjà un, et
+             un test lit son contenu jusqu'à sa PREMIÈRE balise de fermeture. -->
+        <div class="bot-switcher__head">
+          <h2 class="bot-switcher__title">Bots</h2>
+          <button
+            id="bot-switcher-close"
+            class="button button--ghost button--small"
+            type="button"
+            aria-label="Fermer la liste des bots"
+          >Masquer</button>
+        </div>
+        <p id="bot-switcher-plafond" class="bot-switcher__plafond" role="status"></p>
+        <p class="bot-switcher__aide">
+          Cliquez un bot pour ouvrir SA conversation ; un bot arrêté se démarre ici,
+          en un clic. Clic droit (ou appui long) sur son avatar : la boucle entre
+          bots, et le retrait du bot (archivé 3 mois).
+        </p>
+        <ul id="bot-switcher-list" class="bot-switcher__list"></ul>
+        <p id="bot-switcher-status" class="bot-switcher__status" role="status" hidden></p>
+        <div class="bot-switcher__foot">
+          <button
+            id="bot-switcher-add"
+            class="button button--ghost button--small"
+            type="button"
+          >+ Ajouter un bot</button>
+        </div>
       </div>
       <div class="status">
         <a class="pill topbar__config" href="/config">Configuration</a>

@@ -35,14 +35,23 @@ export function cheminConfigBot(botId) {
   return `/api/bots/${encodeURIComponent(String(botId))}/config`;
 }
 
+/** Plafond des bots simultanés (copie du défaut serveur `bots.maxActifs`). */
+export const PLAFOND_ACTIFS = 3;
+
 /**
- * Liste des bots connus de l'instance.
+ * Réponse COMPLÈTE de `GET /api/bots` : les bots, ET les trois informations que
+ * l'interface doit dire VRAIE (lot 37).
  *
- * ⚠️ Ne lève jamais : une liste illisible rend le SEUL bot de repli. Un écran
- * qui ne peut pas lister les bots doit quand même pouvoir enregistrer un
- * réglage sur le bot historique.
+ *  - `plafond`   : `bots.maxActifs` (3 par défaut) — c'est ce qui interdit de
+ *                  dire « un seul bot actif » alors que trois peuvent tourner ;
+ *  - `principal` : le bot de la PILE (`runtime.botId`), seul à tourner avec le
+ *                  gateway : sa conversation s'ouvre SANS `?b=` ;
+ *  - `echanges`  : les boucles on/off entre bots (`{"a->b": {actif}}`).
+ *
+ * ⚠️ Ne lève jamais : une réponse illisible rend le bot de repli, le plafond par
+ * défaut et aucune boucle — jamais un écran mort.
  */
-export async function listerBots(fetchImpl) {
+export async function lireListeBots(fetchImpl) {
   const doFetch = fetchImpl ?? ((url, init) => fetch(url, init));
   try {
     const response = await doFetch("/api/bots", {
@@ -56,9 +65,14 @@ export async function listerBots(fetchImpl) {
       (bot) => bot && typeof bot.id === "string" && bot.id.length > 0,
     );
     if (bots.length === 0) throw new Error("liste vide");
-    return bots;
+    const plafond =
+      Number.isInteger(body?.plafond) && body.plafond > 0 ? body.plafond : PLAFOND_ACTIFS;
+    const principal = typeof body?.principal === "string" ? body.principal : bots[0].id;
+    const echanges =
+      body?.echanges !== null && typeof body?.echanges === "object" ? body.echanges : {};
+    return { bots, plafond, principal, echanges };
   } catch {
-    return [
+    const bots = [
       {
         id: BOT_PAR_DEFAUT,
         nom: BOT_PAR_DEFAUT,
@@ -71,7 +85,21 @@ export async function listerBots(fetchImpl) {
         ordre: 0,
       },
     ];
+    return { bots, plafond: PLAFOND_ACTIFS, principal: BOT_PAR_DEFAUT, echanges: {} };
   }
+}
+
+/**
+ * Liste des bots connus de l'instance (le strict nécessaire des écrivains de
+ * configuration : `id`, `nom`, `capacites`, `actif`, `ordre`).
+ *
+ * ⚠️ Ne lève jamais : une liste illisible rend le SEUL bot de repli. Un écran
+ * qui ne peut pas lister les bots doit quand même pouvoir enregistrer un
+ * réglage sur le bot historique.
+ */
+export async function listerBots(fetchImpl) {
+  const { bots } = await lireListeBots(fetchImpl);
+  return bots;
 }
 
 /**

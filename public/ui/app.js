@@ -19,6 +19,7 @@ import {
 } from "./push.js";
 import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
 import { botDeLaPage, champBot, texteBot } from "./bot-conversation.js";
+import { initBotSwitcher } from "./bot-switcher.js";
 import {
   creationRefusal,
   fetchChatStatus,
@@ -79,6 +80,32 @@ initTheme();
  * aux emplacements de la coquille (barre du haut, état vide) ainsi qu'au
  * favicon. Sans avatar, rien ne change : le flocon ❄️ reste affiché. */
 void initAvatar({ HolafFetch });
+
+/* SÉLECTEUR DE BOTS DE LA BARRE DU HAUT (lot 37) — la demande INITIALE du
+ * multi-bot : l'avatar devient un bouton qui liste les bots (état réel, bouton
+ * « Démarrer »), bascule la conversation (`?b=<slug>`) et ajoute un bot.
+ *
+ * ⚠️ Une lecture au chargement, pour savoir si l'instance a PLUSIEURS bots : en
+ * téléphone, c'est ce qui décide de révéler la marque (`body.has-bot-switcher`).
+ * Une instance mono-bot sans avatar garde exactement la barre d'avant. */
+const botSwitcher = initBotSwitcher({
+  button: document.getElementById("bot-switcher-btn"),
+  panel: document.getElementById("bot-switcher-panel"),
+  list: document.getElementById("bot-switcher-list"),
+  plafondEl: document.getElementById("bot-switcher-plafond"),
+  statusEl: document.getElementById("bot-switcher-status"),
+  addButton: document.getElementById("bot-switcher-add"),
+  closeButton: document.getElementById("bot-switcher-close"),
+  HolafModal,
+  // ⚠️ `/avatar` ne sert QUE l'avatar du bot principal (celui du runtime) :
+  // l'image est reprise telle quelle, jamais inventée pour un autre bot.
+  avatarPrincipal: () => {
+    const image = document.getElementById("brand-avatar");
+    if (!image || image.hidden) return null;
+    return image.getAttribute("src");
+  },
+});
+void botSwitcher.rafraichir();
 
 const CLIENT_VERSION = "1";
 const MAX_RECONNECT_DELAY_MS = 8000;
