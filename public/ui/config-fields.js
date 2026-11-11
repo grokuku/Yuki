@@ -324,6 +324,29 @@ export const GROUPS = [
         advanced: true,
         helper: "Hors chemin de réponse : n'affecte jamais le temps de réponse visible.",
       },
+      // ⚠️ LOT 35i : les deux bornes de la passe de MISE DE CÔTÉ manquaient à cet
+      // onglet (clés `bot` du schéma, réglables nulle part). Ce sont elles qui
+      // bornent la relecture d'une conversation mise de côté.
+      {
+        path: "memory.setAside.maxChars",
+        label: "Mise de côté — taille relue (caractères)",
+        kind: "number",
+        min: 1000,
+        max: 120000,
+        advanced: true,
+        helper:
+          "Une conversation mise de côté est RELUE EN ENTIER pour en extraire des souvenirs : ce plafond borne la taille d'un appel (découpé au-delà).",
+      },
+      {
+        path: "memory.setAside.maxChunks",
+        label: "Mise de côté — nombre d'appels",
+        kind: "number",
+        min: 1,
+        max: 6,
+        advanced: true,
+        helper:
+          "Nombre maximal d'appels au modèle pour relire une conversation mise de côté (une longue conversation coûte plusieurs appels, jamais un nombre illimité).",
+      },
       {
         path: "memory.consolidation.enabled",
         label: "Consolidation hebdomadaire",

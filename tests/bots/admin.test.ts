@@ -2,9 +2,11 @@
  * ADMINISTRATION DES BOTS (lot 35e) : CRÉATION, CLONE, SUPPRESSION, RÉTENTION.
  *
  * Ce que ce fichier verrouille :
- *  - `creerBot` crée le DOSSIER, l'entrée du registre et l'overlay ; refuse un
- *    slug invalide, un slug en double, un nom hors bornes et un 7ᵉ bot
- *    (`max_bots`) ;
+ *  - `creerBot` crée le DOSSIER, l'entrée du registre et l'overlay ; DÉRIVE le
+ *    slug du nom (dédupliqué), part avec des CAPACITÉS VIDES, refuse un nom hors
+ *    bornes et un 7ᵉ bot (`max_bots`) ;
+ *  - ⚠️ LOT 35h : `validerCapacitesBot` REFUSE une capacité inconnue et
+ *    `modifierBot` change le nom et/ou les capacités d'un bot existant ;
  *  - un CLONE copie l'identité et les capacités PAR DÉFAUT, ne copie NI la
  *    mémoire NI les déclencheurs par défaut, et ne copie JAMAIS ce qui
  *    n'appartient qu'à un bot (garde `JAMAIS_COPIES`) ;
@@ -46,10 +48,14 @@ import {
   elementsDemandes,
   estJamaisCopie,
   horodatageArchive,
+  modifierBot,
   purgerArchivesBots,
+  slugLibrePour,
   supprimerBot,
+  validerCapacitesBot,
 } from "../../src/bots/admin.js";
 import type { BotRecord, RegistreBots } from "../../src/bots/registry.js";
+import { CAPACITES_BOT, SLUG_BOT_PATTERN } from "../../src/bots/registry.js";
 
 const racines: string[] = [];
 
@@ -61,7 +67,10 @@ function bot(id: string, ordre: number, actif = false): BotRecord {
   return {
     id,
     nom: id === "yuki" ? "Yuki" : id,
-    profil: "complet",
+    // ⚠️ Un bot du registre a TOUJOURS une liste de capacités (le registre
+    // normalise : champ absent ⇒ toutes). Les tests de suppression ne portent pas
+    // sur les capacités : on donne la liste complète, état d'un bot hérité.
+    capacites: [...CAPACITES_BOT],
     actif,
     ordre,
     creeLe: "2026-01-01T00:00:00.000Z",
@@ -125,8 +134,6 @@ describe("① création — dossier, registre, overlay", () => {
       stateDir,
       registre,
       nom: "  Kohai  ",
-      slug: "kohai",
-      profil: "lecture",
       maintenant: Date.parse("2026-11-09T10:00:00.000Z"),
     });
     // Dossier.
@@ -136,11 +143,12 @@ describe("① création — dossier, registre, overlay", () => {
       readFileSync(join(dossier(stateDir, "kohai"), "config.overlay.json"), "utf8"),
     ) as Record<string, unknown>;
     expect(overlay).toEqual({});
-    // Entrée du registre : nom nettoyé, profil choisi, ordre suivant, NON actif.
+    // Entrée du registre : slug DÉRIVÉ du nom, capacités VIDES, ordre suivant,
+    // NON actif. ⚠️ « de base un bot ajouté ne peut rien faire ».
     expect(resultat.bot).toEqual({
       id: "kohai",
       nom: "Kohai",
-      profil: "lecture",
+      capacites: [],
       actif: false,
       ordre: 1,
       creeLe: "2026-11-09T10:00:00.000Z",
@@ -155,38 +163,66 @@ describe("① création — dossier, registre, overlay", () => {
     expect(resultat.copies).toEqual([]);
   });
 
-  it("refuse un SLUG invalide (motif strict, dossier jamais créé)", () => {
+  it("DÉRIVE le slug du nom (accents, espaces, casse) et le rend valide", () => {
     const { stateDir, registre } = banc();
-    for (const slug of ["Kohai", "k", "-kohai", "kohai_2", "a".repeat(32)]) {
-      expect(() => creerBot({ stateDir, registre, nom: "K", slug }), slug).toThrowError(
-        AdminBotError,
-      );
-      expect(existsSync(dossier(stateDir, slug))).toBe(false);
+    const cas: ReadonlyArray<readonly [string, string]> = [
+      ["Kohai 2", "kohai-2"],
+      ["  Élodie  ", "elodie"],
+      ["A", "a-bot"],
+      ["!!!", "bot"],
+      // ⚠️ Tronqué à 27 caractères : la place du suffixe de déduplication (`-12`) est
+      // réservée, et le slug doit rester ≤ 31 caractères.
+      ["Une longue phrase pour un nom de bot", "une-longue-phrase-pour-un-n"],
+    ];
+    let courant = registre;
+    for (const [nom, slug] of cas) {
+      const resultat = creerBot({ stateDir, registre: courant, nom });
+      courant = resultat.registre;
+      expect(resultat.bot.id, nom).toBe(slug);
+      // Le slug DÉRIVÉ respecte le motif (2..31, minuscules/chiffres/`-`).
+      expect(resultat.bot.id).toMatch(SLUG_BOT_PATTERN);
+      expect(existsSync(dossier(stateDir, slug)), slug).toBe(true);
     }
   });
 
-  it("refuse un slug DÉJÀ PRIS (registre ou dossier existant)", () => {
+  it("le nom est OBLIGATOIRE et le dossier n'est jamais créé sur un refus", () => {
     const { stateDir, registre } = banc();
-    expect(() => creerBot({ stateDir, registre, nom: "Yuki bis", slug: "yuki" })).toThrowError(
-      /déjà utilisé/,
-    );
-    mkdirSync(dossier(stateDir, "orphelin"), { recursive: true });
-    expect(() => creerBot({ stateDir, registre, nom: "Orphelin", slug: "orphelin" })).toThrowError(
-      /dossier existe déjà/,
-    );
+    for (const nom of ["", "   "]) {
+      expect(() => creerBot({ stateDir, registre, nom })).toThrowError(AdminBotError);
+    }
+    expect(readdirSync(join(stateDir, "bots"))).toEqual([]);
   });
 
-  it("refuse un NOM hors bornes et un PROFIL inconnu", () => {
+  it("DÉDUPLIQUE le slug : deux bots peuvent porter le même nom", () => {
     const { stateDir, registre } = banc();
-    expect(() => creerBot({ stateDir, registre, nom: "   ", slug: "vide" })).toThrowError(
-      /obligatoire/,
-    );
-    expect(() =>
-      creerBot({ stateDir, registre, nom: "n".repeat(41), slug: "long" }),
-    ).toThrowError(/trop long/);
-    expect(() =>
-      creerBot({ stateDir, registre, nom: "K", slug: "kohai", profil: "inconnu" }),
-    ).toThrowError(/Profil inconnu/);
+    // « Yuki » est déjà pris par le bot historique ⇒ `yuki-2`.
+    const premier = creerBot({ stateDir, registre, nom: "Yuki" });
+    expect(premier.bot.id).toBe("yuki-2");
+    expect(premier.bot.nom).toBe("Yuki");
+    const second = creerBot({ stateDir, registre: premier.registre, nom: "Yuki" });
+    expect(second.bot.id).toBe("yuki-3");
+    // Un DOSSIER orphelin (création interrompue) décale aussi le slug.
+    mkdirSync(dossier(stateDir, "nova"), { recursive: true });
+    const troisieme = creerBot({ stateDir, registre: second.registre, nom: "Nova" });
+    expect(troisieme.bot.id).toBe("nova-2");
+    expect(existsSync(dossier(stateDir, "nova-2"))).toBe(true);
+  });
+
+  it("refuse un NOM hors bornes", () => {
+    const { stateDir, registre } = banc();
+    expect(() => creerBot({ stateDir, registre, nom: "   " })).toThrowError(/obligatoire/);
+    expect(() => creerBot({ stateDir, registre, nom: "n".repeat(41) })).toThrowError(/trop long/);
+    // ⚠️ Plus de PROFIL à la création (lot 35h) : une clé `profil` dans le corps
+    // est simplement ignorée par `creerBot` (elle n'existe plus dans les options).
+    const resultat = creerBot({
+      stateDir,
+      registre,
+      nom: "Hérité",
+      ...({ profil: "lecture" } as Record<string, unknown>),
+    });
+    expect(resultat.bot.id).toBe("herite");
+    expect(resultat.bot).not.toHaveProperty("profil");
+    expect(resultat.bot.capacites).toEqual([]);
   });
 
   it(`refuse le ${MAX_BOTS + 1}ᵉ bot (409 max_bots, en nommant la limite)`, () => {
@@ -195,7 +231,7 @@ describe("① création — dossier, registre, overlay", () => {
     const registre = registreDe(bots);
     let erreur: unknown;
     try {
-      creerBot({ stateDir, registre, nom: "Trop", slug: "trop" });
+      creerBot({ stateDir, registre, nom: "Trop" });
     } catch (error) {
       erreur = error;
     }
@@ -208,11 +244,112 @@ describe("① création — dossier, registre, overlay", () => {
   });
 });
 
+describe("①bis capacités (lot 35h) — validation et modification", () => {
+  it("`validerCapacitesBot` : `[]` par défaut, ordre canonique, doublons retirés", () => {
+    expect(validerCapacitesBot(undefined)).toEqual([]);
+    expect(validerCapacitesBot(null)).toEqual([]);
+    expect(validerCapacitesBot([])).toEqual([]);
+    expect(validerCapacitesBot(["envoi", "agents"])).toEqual(["envoi", "agents"]);
+    // L'ordre du REGISTRE gagne (stable d'une écriture à l'autre).
+    expect(validerCapacitesBot(["builtins", "envoi"])).toEqual(["envoi", "builtins"]);
+    expect(validerCapacitesBot(["envoi", "envoi"])).toEqual(["envoi"]);
+    expect(validerCapacitesBot([...CAPACITES_BOT])).toEqual([...CAPACITES_BOT]);
+  });
+
+  it("`validerCapacitesBot` REFUSE une capacité inconnue (jamais ignorée en silence)", () => {
+    for (const inconnue of ["tout", "administrateur", "", 42, null]) {
+      let erreur: unknown;
+      try {
+        validerCapacitesBot([inconnue]);
+      } catch (error) {
+        erreur = error;
+      }
+      expect(erreur, JSON.stringify(inconnue)).toBeInstanceOf(AdminBotError);
+      expect((erreur as AdminBotError).code).toBe("capacite_inconnue");
+      expect((erreur as AdminBotError).status).toBe(400);
+    }
+    // Un NON-tableau est refusé aussi (aucune interprétation devinée).
+    expect(() => validerCapacitesBot("envoi")).toThrowError(/liste/);
+  });
+
+  it("`slugLibrePour` rend un slug libre, dédupliqué et borné", () => {
+    const { stateDir, registre } = banc();
+    expect(slugLibrePour(stateDir, registre, "Nova")).toBe("nova");
+    // Déjà pris par le registre (`yuki`) ⇒ suffixe.
+    expect(slugLibrePour(stateDir, registre, "Yuki")).toBe("yuki-2");
+    // Le slug reste lisible et ≤ 31 caractères, même après suffixe.
+    const long = slugLibrePour(stateDir, registre, "n".repeat(40));
+    expect(long.length).toBeLessThanOrEqual(31);
+    expect(long).toMatch(SLUG_BOT_PATTERN);
+  });
+
+  it("`modifierBot` change le NOM et/ou les CAPACITÉS, et écrit le registre", () => {
+    const { stateDir, registre } = banc();
+    const creation = creerBot({ stateDir, registre, nom: "Nova" });
+    expect(creation.bot.capacites).toEqual([]);
+
+    // Capacités seules.
+    const un = modifierBot({
+      stateDir,
+      registre: creation.registre,
+      botId: "nova",
+      capacites: ["agents", "execution"],
+    });
+    expect(un.bot.capacites).toEqual(["agents", "execution"]);
+    expect(un.bot.nom).toBe("Nova");
+    // Le fichier écrit porte bien les capacités (source = disque).
+    const ecrit = JSON.parse(readFileSync(join(stateDir, "bots.json"), "utf8")) as RegistreBots;
+    expect(ecrit.bots.find((bot) => bot.id === "nova")?.capacites).toEqual([
+      "agents",
+      "execution",
+    ]);
+    expect(ecrit.bots.find((bot) => bot.id === "nova")).not.toHaveProperty("profil");
+
+    // Nom seul : les capacités restent.
+    const deux = modifierBot({ stateDir, registre: un.registre, botId: "nova", nom: " Nova 2 " });
+    expect(deux.bot.nom).toBe("Nova 2");
+    expect(deux.bot.capacites).toEqual(["agents", "execution"]);
+    // ⚠️ Le SLUG ne bouge JAMAIS (il nomme un dossier).
+    expect(deux.bot.id).toBe("nova");
+
+    // Tout retirer est un acte EXPLICITE (`[]`), pas un oubli.
+    const trois = modifierBot({ stateDir, registre: deux.registre, botId: "nova", capacites: [] });
+    expect(trois.bot.capacites).toEqual([]);
+  });
+
+  it("`modifierBot` refuse un nom invalide, une capacité inconnue et un bot inconnu", () => {
+    const { stateDir, registre } = banc();
+    const creation = creerBot({ stateDir, registre, nom: "Nova" });
+    expect(() =>
+      modifierBot({ stateDir, registre: creation.registre, botId: "nova", nom: "  " }),
+    ).toThrowError(/obligatoire/);
+    expect(() =>
+      modifierBot({
+        stateDir,
+        registre: creation.registre,
+        botId: "nova",
+        capacites: ["tout"],
+      }),
+    ).toThrowError(/Capacité inconnue/);
+    let erreur: unknown;
+    try {
+      modifierBot({ stateDir, registre: creation.registre, botId: "fantome", nom: "X" });
+    } catch (error) {
+      erreur = error;
+    }
+    expect((erreur as AdminBotError).code).toBe("bot_inconnu");
+    expect((erreur as AdminBotError).status).toBe(404);
+    // Un refus n'écrit RIEN : le registre du disque est inchangé.
+    const ecrit = JSON.parse(readFileSync(join(stateDir, "bots.json"), "utf8")) as RegistreBots;
+    expect(ecrit).toEqual(creation.registre);
+  });
+});
+
 describe("② clone — les BONNES cases, les bons fichiers", () => {
   it("copie l'IDENTITÉ et les CAPACITÉS par défaut, PAS la mémoire ni les déclencheurs", () => {
     const { stateDir, registre } = banc();
     botSourceComplet(stateDir);
-    const resultat = creerBot({ stateDir, registre, nom: "Clone", slug: "clone", cloneDe: "yuki" });
+    const resultat = creerBot({ stateDir, registre, nom: "Clone", cloneDe: "yuki" });
     expect(resultat.copies.sort()).toEqual(["capacites", "identite"]);
 
     const clone = dossier(stateDir, "clone");
@@ -245,7 +382,6 @@ describe("② clone — les BONNES cases, les bons fichiers", () => {
       stateDir,
       registre,
       nom: "Clone",
-      slug: "clone",
       cloneDe: "yuki",
       elements,
     });
@@ -262,6 +398,26 @@ describe("② clone — les BONNES cases, les bons fichiers", () => {
     }
   });
 
+  it("un CLONE reprend les CAPACITÉS de son modèle si la case est cochée", () => {
+    const { stateDir, registre } = banc();
+    botSourceComplet(stateDir);
+    // Le modèle hérité a TOUTES les capacités (registre du banc : `yuki`).
+    const source = registre.bots.find((entree) => entree.id === "yuki");
+    expect(source?.capacites).toEqual([...CAPACITES_BOT]);
+    const avec = creerBot({ stateDir, registre, nom: "Clone", cloneDe: "yuki" });
+    expect(avec.bot.capacites).toEqual([...CAPACITES_BOT]);
+
+    // Case « Capacités et réglages » DÉCOCHÉE ⇒ le clone est un bot neuf.
+    const sans = creerBot({
+      stateDir,
+      registre,
+      nom: "Sans capacités",
+      cloneDe: "yuki",
+      elements: { capacites: false },
+    });
+    expect(sans.bot.capacites).toEqual([]);
+  });
+
   it("cases DÉCOCHÉES ⇒ rien n'est copié (l'overlay vide est seul écrit)", () => {
     const { stateDir, registre } = banc();
     botSourceComplet(stateDir);
@@ -270,7 +426,6 @@ describe("② clone — les BONNES cases, les bons fichiers", () => {
       stateDir,
       registre,
       nom: "Vierge",
-      slug: "vierge",
       cloneDe: "yuki",
       elements,
     });
@@ -285,7 +440,6 @@ describe("② clone — les BONNES cases, les bons fichiers", () => {
       stateDir,
       registre,
       nom: "Clone",
-      slug: "clone",
       cloneDe: "yuki",
       elements: { identite: false, capacites: false, memoire: false, declencheurs: false, agents: true },
     });
@@ -300,13 +454,12 @@ describe("② clone — les BONNES cases, les bons fichiers", () => {
         stateDir,
         registre,
         nom: "Clone",
-        slug: "clone",
         cloneDe: "yuki",
         elements: { tout: true },
       }),
     ).toThrowError(/Élément de clone inconnu/);
     expect(() =>
-      creerBot({ stateDir, registre, nom: "Clone", slug: "clone", cloneDe: "fantome" }),
+      creerBot({ stateDir, registre, nom: "Clone", cloneDe: "fantome" }),
     ).toThrowError(/n'existe pas/);
   });
 
@@ -462,6 +615,8 @@ describe("④ rétention — 90 jours", () => {
     expect(purgerArchivesBots({ stateDir, maintenant: Date.now() })).toEqual({
       purges: [],
       conservees: [],
+      // ⚠️ LOT 35i : la purge couvre AUSSI les sessions Pi restées en place.
+      sessionsPurgees: [],
     });
   });
 

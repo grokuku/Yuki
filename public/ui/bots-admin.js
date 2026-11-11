@@ -4,9 +4,12 @@
  * Deux modales, une seule brique (`HolafModal`), aucun style inline, aucun
  * nœud construit à partir d'une chaîne HTML :
  *
- *  - `ouvrirCreationBot` : nom, slug (immuable), profil, avatar facultatif, puis
- *    « de zéro » OU « cloner <bot> » avec ses cases à cocher. Appelle
- *    `POST /api/bots` et rend le bot créé (le sélecteur bascule dessus).
+ *  - `ouvrirCreationBot` : LE NOM (et, facultativement, un avatar). Le slug est
+ *    dérivé par le serveur ; les capacités partent VIDES et se règlent ensuite
+ *    dans l'onglet « Général ». Le clonage reste accessible mais REPLIÉ (un
+ *    second choix, « partir d'un bot existant »), jamais dans le premier écran :
+ *    par défaut on crée un bot vide. Appelle `POST /api/bots` et rend le bot créé
+ *    (le sélecteur bascule dessus).
  *  - `ouvrirSuppressionBot` : lit d'abord les COMPTEURS réels
  *    (`GET /api/bots/<id>/donnees`), puis demande une confirmation FORTE —
  *    compteurs affichés, case à cocher obligatoire (motif du lot 30) — et
@@ -64,17 +67,6 @@ function messageErreur(error, defaut) {
   return donnees.message ?? donnees.error ?? error?.message ?? defaut;
 }
 
-/** Slug proposé à partir d'un nom libre (« Kohai 2 » → « kohai-2 »). */
-export function slugDepuisNom(nom) {
-  return String(nom ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 31);
-}
-
 /**
  * Prépare l'avatar choisi : recadrage CARRÉ CENTRÉ à `TAILLE_SORTIE` px, encodé
  * en JPEG (compact : le corps de `POST /api/bots` reste petit).
@@ -118,12 +110,11 @@ async function preparerAvatar(fichier) {
 /**
  * Ouvre la modale d'AJOUT et crée le bot.
  *
- * @returns le bot créé (`{ id, nom, profil, actif, ordre }`) ou `null` si
+ * @returns le bot créé (`{ id, nom, capacites, actif, ordre }`) ou `null` si
  * l'utilisateur annule.
  */
 export function ouvrirCreationBot({ HolafModal, bots = [] }) {
   const spec = modaleCreationBot({ bots, maxBots: MAX_BOTS_PAGE });
-  const existants = bots.map((bot) => bot.id);
 
   const erreur = h("p", { class: "config-error", role: "alert", hidden: true });
   const champNom = h("input", {
@@ -134,20 +125,6 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
     autocomplete: "off",
     required: true,
   });
-  const champSlug = h("input", {
-    class: "config-input",
-    type: "text",
-    id: "bot-creation-slug",
-    maxlength: "31",
-    autocomplete: "off",
-    spellcheck: "false",
-    required: true,
-  });
-  const champProfil = h(
-    "select",
-    { class: "config-select", id: "bot-creation-profil" },
-    spec.profils.map((profil) => h("option", { value: profil.id, text: profil.libelle })),
-  );
   const champAvatar = h("input", {
     class: "config-input",
     type: "file",
@@ -184,14 +161,19 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
     })();
   });
 
-  // « De zéro » OU « cloner » : le choix pilote l'affichage des cases.
+  // ⚠️ SECOND ÉCRAN : « partir d'un bot existant » est REPLIÉ et décoché par
+  // défaut (bot vide). La création ne demande que le nom.
+  const partirExistant = h("input", {
+    type: "checkbox",
+    id: "bot-creation-partir-existant",
+  });
   const choixDepart = h(
     "select",
-    { class: "config-select", id: "bot-creation-depart" },
+    { class: "config-select", id: "bot-creation-depart", disabled: true },
     [
       h("option", { value: "", text: "De zéro (aucune donnée copiée)" }),
       ...spec.cloneables.map((bot) =>
-        h("option", { value: bot.id, text: `Cloner ${bot.libelle}` }),
+        h("option", { value: bot.id, text: `Copier les éléments de ${bot.libelle}` }),
       ),
     ],
   );
@@ -216,9 +198,16 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
     );
   }
   blocClone.hidden = true;
-  choixDepart.addEventListener("change", () => {
-    blocClone.hidden = choixDepart.value === "";
+  const majBlocClone = () => {
+    const actif = partirExistant.checked === true && choixDepart.value !== "";
+    blocClone.hidden = !actif;
+  };
+  partirExistant.addEventListener("change", () => {
+    choixDepart.disabled = partirExistant.checked !== true;
+    if (partirExistant.checked !== true) choixDepart.value = "";
+    majBlocClone();
   });
+  choixDepart.addEventListener("change", majBlocClone);
 
   const corps = h("div", { class: "bot-creation" }, [
     h("p", { class: "holaf-modal-message", text: spec.message }),
@@ -227,41 +216,28 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
       champNom,
     ]),
     h("div", { class: "config-row" }, [
-      h("label", { class: "config-label", for: "bot-creation-slug", text: "Identifiant (slug)" }),
-      champSlug,
-      h("span", {
-        class: "config-helper",
-        text:
-          "2 à 31 caractères : minuscules, chiffres et « - ». ⚠️ IMMUABLE après création " +
-          "(il nomme le dossier du bot).",
-      }),
-    ]),
-    h("div", { class: "config-row" }, [
-      h("label", { class: "config-label", for: "bot-creation-profil", text: "Profil" }),
-      champProfil,
-    ]),
-    h("div", { class: "config-row" }, [
       h("label", { class: "config-label", for: "bot-creation-avatar", text: "Avatar (facultatif)" }),
       champAvatar,
       apercuAvatar,
     ]),
     h("div", { class: "config-row" }, [
-      h("label", { class: "config-label", for: "bot-creation-depart", text: "Point de départ" }),
+      h(
+        "label",
+        { class: "config-label", for: "bot-creation-partir-existant" },
+        [partirExistant, " Partir d'un bot existant (facultatif)"],
+      ),
       choixDepart,
+      h("span", {
+        class: "config-helper",
+        text:
+          "Par défaut, le nouveau bot est VIDE : ni mémoire, ni déclencheurs, et " +
+          "aucune capacité. Cochez cette case pour copier tout ou partie d'un bot existant.",
+      }),
     ]),
     blocClone,
     h("p", { class: "config-helper", text: spec.limite }),
     erreur,
   ]);
-
-  // Pré-remplit le slug à partir du nom (sans jamais écraser une saisie).
-  let slugTouche = false;
-  champSlug.addEventListener("input", () => {
-    slugTouche = true;
-  });
-  champNom.addEventListener("input", () => {
-    if (!slugTouche) champSlug.value = slugDepuisNom(champNom.value);
-  });
 
   return new Promise((resolve) => {
     let ctrl = null;
@@ -285,11 +261,7 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
           onClick: () => {
             void (async () => {
               erreur.hidden = true;
-              const validation = validerCreationBot({
-                nom: champNom.value,
-                slug: champSlug.value,
-                existants,
-              });
+              const validation = validerCreationBot({ nom: champNom.value });
               if (!validation.ok) {
                 erreur.textContent = Object.values(validation.champs).join(" ");
                 erreur.hidden = false;
@@ -304,8 +276,6 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
                   headers: ENTETES_ECRITURE,
                   body: JSON.stringify({
                     nom: champNom.value.trim(),
-                    slug: validation.slug,
-                    profil: champProfil.value,
                     ...(avatar === "" ? {} : { avatar }),
                     ...(choixDepart.value === ""
                       ? {}
@@ -320,7 +290,7 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
                 }
                 ctrl.setBusy(false);
                 ctrl.close();
-                resolve(donnees.bot ?? { id: validation.slug, nom: champNom.value.trim() });
+                resolve(donnees.bot ?? { nom: champNom.value.trim(), capacites: [] });
               } catch (error) {
                 ctrl.setBusy(false);
                 erreur.textContent = messageErreur(error, "Le bot n'a pas pu être créé.");

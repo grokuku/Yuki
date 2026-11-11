@@ -2088,6 +2088,32 @@
   background: var(--panel-2);
 }
 
+/* ─── Capacités d'un bot (lot 35h) — une case par famille d'outils ────────
+ * TOUTES DÉCOCHÉES pour un bot neuf : il peut toujours répondre, rien d'autre.
+ * Le libellé porte la case, l'aide dit ce que la case ouvre. */
+.bot-capacites {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.bot-capacites input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.bot-capacites .config-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
 /* Zone de danger : dit ce qui n'est PAS possible, sans bouton inerte. */
 .bot-danger {
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));

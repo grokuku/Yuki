@@ -183,6 +183,77 @@ describe("API sources — preuve d'échec initiale (404 sur le code d'origine)",
   });
 });
 
+describe("API sources — paramètres de requête à travers le ROUTEUR (lot 35j)", () => {
+  /**
+   * ⚠️ POURQUOI CE TEST VIT ICI : le routeur normalise le chemin
+   * (`normalizePath`, `src/gateway/app.ts`) — il en retire la CHAÎNE DE REQUÊTE.
+   * Les routes des sources en dépendent pourtant entièrement (`?bot=<id>`,
+   * `?expression=`, `?limite=`). Un test qui appelle `handleSourcesRequest`
+   * directement ne voit pas ce défaut : il faut passer par `createApp`.
+   */
+  async function appAvecSources(): Promise<number> {
+    const { service } = makeRig();
+    const server = createServer(
+      createApp({
+        env: { version: "test" } as Env,
+        report: {} as GpuReport,
+        gatePassed: true,
+        startedAt: Date.now(),
+        volumes: [],
+        sources: {
+          service,
+          logger,
+          // Un seul bot connu : `?bot=inconnu` doit donc être REFUSÉ (404), et
+          // `?bot=yuki` doit être SERVI (le nom du bot est rendu).
+          bots: { lister: () => [{ id: "yuki", nom: "Yuki", actif: true }] },
+          pourBot: () => ({ service }),
+        },
+      }),
+    );
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    return (server.address() as AddressInfo).port;
+  }
+
+  it("`?bot=<inconnu>` ⇒ 404 qui le nomme (le paramètre arrive jusqu'au gestionnaire)", async () => {
+    const port = await appAvecSources();
+    const response = await fetch(`http://127.0.0.1:${port}/api/sources?bot=inconnu`, {
+      headers: { "x-yuki-config": "1" },
+    });
+    expect(response.status).toBe(404);
+    const body = (await response.json()) as { code?: string; bot?: string };
+    expect(body.code).toBe("unknown_bot");
+    expect(body.bot).toBe("inconnu");
+  });
+
+  it("`?bot=<connu>` ⇒ 200 et le bot est NOMMÉ dans la réponse", async () => {
+    const port = await appAvecSources();
+    const response = await fetch(`http://127.0.0.1:${port}/api/sources?bot=yuki`, {
+      headers: { "x-yuki-config": "1" },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      bot?: { id: string; nom: string };
+      bots?: Array<{ id: string }>;
+    };
+    expect(body.bot).toEqual({ id: "yuki", nom: "Yuki" });
+    expect(body.bots?.map((bot) => bot.id)).toEqual(["yuki"]);
+  });
+
+  it("`?expression=` de l'aperçu cron N'EST PAS perdu en route", async () => {
+    const port = await appAvecSources();
+    const params = new URLSearchParams({ expression: "0 8 * * *", fuseau: "Europe/Paris" });
+    const response = await fetch(`http://127.0.0.1:${port}/api/sources/apercu?${params}`, {
+      headers: { "x-yuki-config": "1" },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { expression?: string; passages?: string[] };
+    // Sans le paramètre, la route répond `expression_absente` (aucun passage).
+    expect(body.expression).toBe("0 8 * * *");
+    expect(body.passages?.length).toBeGreaterThan(0);
+  });
+});
+
 describe("API sources — authentification et erreurs", () => {
   it("401 sans jeton", async () => {
     const { service } = makeRig();

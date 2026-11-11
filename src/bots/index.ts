@@ -54,6 +54,14 @@ export interface ResultatPreparationBots {
   mode: ModeBots;
   /** `Env` à utiliser partout ailleurs (surchargé en mode `multi`). */
   env: Env;
+  /**
+   * `Env` de l'**INSTANCE**, jamais surchargé (lot 35i).
+   *
+   * ⚠️ C'est LUI qu'attend `pathsForBot` (et donc la fabrique des stores de
+   * mémoire par bot, `src/memory/stores-bot.ts`) : le réappliquer à `env`
+   * empilerait les chemins (`<pi>/sessions/<botId>/<botId>`).
+   */
+  envInstance: Env;
   /** Bot actif (`null` en mode mono-bot historique). */
   bot: BotRecord | null;
   /** Registre lu (`null` en mode mono-bot historique). */
@@ -130,6 +138,7 @@ export function preparerMultiBot(
       return {
         mode: "mono",
         env,
+        envInstance: env,
         bot: null,
         registre: null,
         chemins: null,
@@ -146,6 +155,7 @@ export function preparerMultiBot(
         return {
           mode: "mono",
           env,
+          envInstance: env,
           bot: null,
           registre: null,
           chemins: null,
@@ -222,6 +232,7 @@ export function preparerMultiBot(
   return {
     mode: "multi",
     env: resolution.env,
+    envInstance: env,
     bot,
     registre,
     chemins: resolution.chemins,

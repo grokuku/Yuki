@@ -10,7 +10,7 @@
  *
  * ## Ce que ce lot pose (et ce qu'il ne fait PAS)
  *  - `bots` contient EXACTEMENT un bot (`yuki`) à la fin du lot 35a ;
- *  - les champs `profil`, `actif`, `ordre`, `plateformes` sont écrits DÈS
+ *  - les champs `capacites`, `actif`, `ordre`, `plateformes` sont écrits DÈS
  *    MAINTENANT pour ne pas avoir à re-migrer le fichier plus tard ;
  *  - `echanges` (paires de bots) est VIDE : le garde-fou d'une paire est
  *    uniquement son bouton `actif` (aucun plafond, aucun frein) — il sera
@@ -65,21 +65,56 @@ export const ID_BOT_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 export const SLUG_BOT_PATTERN = /^[a-z0-9][a-z0-9-]{1,30}$/;
 
 /**
- * Profil d'un bot (lot 35e : le profil se CHOISIT à la création).
- *  - `complet` : tout est actif (défaut, et seul profil des bots historiques) ;
- *  - `lecture` : bot de consultation ;
- *  - `accueil` : bot d'accueil / orientation.
+ * CAPACITÉS D'UN BOT (lot 35h) — une entrée par FAMILLE D'OUTILS.
  *
- * ⚠️ Depuis le lot 35f le profil n'est PLUS une étiquette : il INTERSECTE
- * l'allowlist d'outils du bot actif (`PROFIL_OUTILS` / `filtrerSelonProfil`,
- * `src/llm/tool-policy.ts`). Il ne peut que RETIRER des outils, jamais en
- * ajouter. Un profil non-`complet` n'a en outre AUCUN worker lourd
- * (`src/index.ts`), donc aucun `run_command`, même par un job importé.
+ * ⚠️ Un bot neuf n'a AUCUNE capacité (`[]`) : il peut toujours répondre (c'est
+ * le socle de la conversation, porté par le rôle), mais il ne peut RIEN faire
+ * d'autre tant que l'utilisateur ne l'autorise pas explicitement.
+ *
+ * ⚠️ Ce tableau est la SOURCE UNIQUE des clés connues : le registre REFUSE à
+ * l'écriture une capacité qui n'y figure pas (jamais ignorée en silence). La
+ * correspondance capacité → outils vit dans `OUTILS_DES_CAPACITES`
+ * (`src/llm/tool-policy.ts`) et est typée `Record<CapaciteBot, …>` : ajouter une
+ * clé ici sans l'y décrire ne compile pas.
+ *
+ * ⚠️ `execution` et `delegation` sont STRUCTURELLES : sans l'une des deux, le
+ * worker lourd n'est jamais instancié (`src/bots/profils.ts`), donc `run_command`
+ * ne peut pas exister — même par un job importé ou une tâche planifiée.
  */
-export type ProfilBot = "complet" | "lecture" | "accueil";
+export type CapaciteBot =
+  | "fichiers"
+  | "envoi"
+  | "libraire"
+  | "web"
+  | "images"
+  | "agents"
+  | "execution"
+  | "delegation"
+  | "secrets"
+  | "programmation"
+  | "memoire"
+  | "builtins";
 
-/** Profils ACCEPTÉS par le registre (verrou de validation). */
-export const PROFILS_BOT: readonly ProfilBot[] = ["complet", "lecture", "accueil"];
+/** Capacités ACCEPTÉES par le registre (ordre canonique d'affichage). */
+export const CAPACITES_BOT: readonly CapaciteBot[] = [
+  "fichiers",
+  "envoi",
+  "libraire",
+  "web",
+  "images",
+  "agents",
+  "execution",
+  "delegation",
+  "secrets",
+  "programmation",
+  "memoire",
+  "builtins",
+];
+
+/** Vrai si la valeur est une capacité connue. */
+export function estCapaciteBot(valeur: unknown): valeur is CapaciteBot {
+  return typeof valeur === "string" && (CAPACITES_BOT as readonly string[]).includes(valeur);
+}
 
 /** Enregistrement d'un bot dans le registre. */
 export interface BotRecord {
@@ -87,8 +122,12 @@ export interface BotRecord {
   id: string;
   /** Nom AFFICHÉ (libre, UTF-8). */
   nom: string;
-  /** Profil fonctionnel : il RESTREINT réellement les outils (lot 35f). */
-  profil: ProfilBot;
+  /**
+   * CAPACITÉS autorisées (familles d'outils). `[]` = un bot neuf qui ne peut que
+   * répondre. ⚠️ Chaque capacité ne fait qu'OUVRIR un sous-ensemble d'outils :
+   * l'allowlist finale reste une INTERSECTION avec ce que le câblage autorise.
+   */
+  capacites: CapaciteBot[];
   /** Bot actif : un seul bot aujourd'hui, mais le champ existe dès maintenant. */
   actif: boolean;
   /** Ordre d'affichage (entier ≥ 0), stable entre redémarrages. */
@@ -170,7 +209,10 @@ export function creerRegistreInitial(
       {
         id: botId,
         nom: options.nom ?? "Yuki",
-        profil: "complet",
+        // ⚠️ Le bot HISTORIQUE reçoit TOUTES les capacités : sans cela, Yuki
+        // perdrait `run_command`, la délégation et la mémoire au premier
+        // démarrage après ce lot (régression inacceptable).
+        capacites: [...CAPACITES_BOT],
         actif: true,
         ordre: 0,
         creeLe: options.creeLe ?? new Date().toISOString(),
@@ -302,12 +344,29 @@ function validerRegistre(brut: unknown, path: string): RegistreBots {
     if (typeof nom !== "string" || nom.trim() === "") {
       invalide(`bots[${index}].nom doit être une chaîne non vide`);
     }
-    const profil = bot["profil"];
-    if (!PROFILS_BOT.includes(profil as ProfilBot)) {
-      invalide(
-        `bots[${index}].profil inconnu : ${JSON.stringify(profil)} ` +
-          `(attendu : ${PROFILS_BOT.join(" | ")})`,
-      );
+    // ⚠️ TOLÉRANCE DE LECTURE : un registre écrit AVANT les capacités (champ
+    // absent, ou ancien champ `profil`) reçoit TOUTES les capacités. Un bot
+    // existant ne doit rien perdre du jour au lendemain ; l'ancien `profil`, s'il
+    // est encore là, est simplement ignoré et disparaît à la première écriture.
+    const capacitesBrutes = bot["capacites"];
+    let capacites: CapaciteBot[];
+    if (capacitesBrutes === undefined) {
+      capacites = [...CAPACITES_BOT];
+    } else if (!Array.isArray(capacitesBrutes)) {
+      invalide(`bots[${index}].capacites doit être une liste`);
+    } else {
+      const vues = new Set<CapaciteBot>();
+      for (const capacite of capacitesBrutes as unknown[]) {
+        if (!estCapaciteBot(capacite)) {
+          invalide(
+            `bots[${index}].capacites : capacité inconnue ${JSON.stringify(capacite)} ` +
+              `(attendu : ${CAPACITES_BOT.join(" | ")})`,
+          );
+        }
+        vues.add(capacite);
+      }
+      // Ordre CANONIQUE et sans doublon : le fichier reste stable et lisible.
+      capacites = CAPACITES_BOT.filter((capacite) => vues.has(capacite));
     }
     const actif = bot["actif"];
     if (typeof actif !== "boolean") {
@@ -332,7 +391,7 @@ function validerRegistre(brut: unknown, path: string): RegistreBots {
     bots.push({
       id,
       nom,
-      profil: profil as ProfilBot,
+      capacites,
       actif,
       ordre,
       creeLe,

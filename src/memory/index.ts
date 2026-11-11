@@ -250,3 +250,30 @@ export {
   type EtatConsolidationVue,
   type RapportConsolidation,
 } from "./consolidation-hebdo.js";
+
+// --- LOT 35i : MÉMOIRE PAR BOT -------------------------------------------
+// ⚠️ CHEMIN DE CONSTRUCTION UNIQUE des stores d'un bot (`ouvrirStoresMemoireBot`)
+// et résolution de son `Env` (`envPourBot`) : aucun autre module n'ouvre un
+// `memory.jsonl`. L'ordonnanceur de consolidation multi-bots passe par eux.
+export {
+  FICHIER_ETAT_CONSOLIDATION_BOTS,
+  ConsolidationBots,
+  type BotConsolidable,
+  type EtatConsolidationBotsVue,
+  type OptionsConsolidationBots,
+  type PasseConsolidationBot,
+  type ReglagesConsolidationInstance,
+  type SequenceConsolidation,
+} from "./consolidation-multi.js";
+
+export {
+  FabriqueMemoireBots,
+  StoresMemoireError,
+  envPourBot,
+  ouvrirStoresMemoireBot,
+  type ModeResolutionBot,
+  type OptionsEnvPourBot,
+  type OptionsFabriqueMemoire,
+  type OptionsOuvertureStoresMemoire,
+  type StoresMemoireBot,
+} from "./stores-bot.js";

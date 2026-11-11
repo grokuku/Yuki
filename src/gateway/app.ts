@@ -213,6 +213,21 @@ function normalizePath(rawUrl: string | undefined): string {
   return path === "" ? "/" : path;
 }
 
+/**
+ * Chaîne de requête BRUTE d'une URL (`"?a=1&b=2"`, ou `""`).
+ *
+ * ⚠️ `normalizePath` rend le CHEMIN : la chaîne de requête y est donc perdue. Or
+ * les routes des sources en dépendent ENTIÈREMENT (`?bot=<id>` du lot 35j,
+ * `?expression=` de l'aperçu cron, `?limite=` / `?type=` / `?source=` du journal).
+ * Sans cette restitution, le paramètre n'arrivait jamais au gestionnaire et la
+ * page retombait silencieusement sur le bot actif et sur les valeurs par défaut.
+ */
+function chaineDeRequete(rawUrl: string | undefined): string {
+  if (typeof rawUrl !== "string") return "";
+  const at = rawUrl.indexOf("?");
+  return at < 0 ? "" : rawUrl.slice(at);
+}
+
 function writeResponse(
   res: ServerResponse,
   response: RouteResponse,
@@ -296,7 +311,7 @@ async function handleConfigHttp(
   deps: ConfigApiDeps,
 ): Promise<void> {
   let body = "";
-  if (method === "PUT" || method === "POST") {
+  if (method === "PUT" || method === "POST" || method === "PATCH") {
     body = await readBody(req).catch(() => "");
   }
   const response = await handleConfigRequest({
@@ -454,7 +469,9 @@ async function handleSourcesHttp(
   }
   const response = await handleSourcesRequest({
     method,
-    path,
+    // ⚠️ CHEMIN NORMALISÉ + CHAÎNE DE REQUÊTE : `path` seul a perdu les paramètres
+    // (`?bot=`, `?limite=`…), et les routes des sources les lisent.
+    path: `${path}${chaineDeRequete(req.url)}`,
     headers: req.headers,
     body,
     deps,

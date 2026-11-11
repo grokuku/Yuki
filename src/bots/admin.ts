@@ -7,9 +7,12 @@
  *    (+ copie des éléments choisis quand on clone un bot existant) ;
  *  - `supprimerBot`  : ⚠️ **n'efface RIEN** — `rename` du dossier vers
  *    `<state>/bots-supprimes/<slug>-<AAAAMMJJ-HHMM>/` (même volume, donc
- *    atomique) puis retrait de l'entrée du registre ;
- *  - `purgerArchivesBots` : purge RÉELLE des archives de plus de 90 jours,
- *    appelée par le BALAYEUR EXISTANT (`src/sources/scheduler.ts`) ;
+ *    atomique) puis retrait de l'entrée du registre ; ⚠️ LOT 35i : il déplace
+ *    AUSSI les **sessions Pi** du bot (`<pi>/agent/sessions/<id>`), qui vivent
+ *    sur un AUTRE volume (copie + suppression, jamais `rename`) ;
+ *  - `purgerArchivesBots` : purge RÉELLE des archives de plus de 90 jours
+ *    (sessions Pi comprises), appelée par le BALAYEUR EXISTANT
+ *    (`src/sources/scheduler.ts`) ;
  *  - `compterDonneesBot` : compteurs RÉELS de la confirmation de suppression.
  *
  * ## ⚠️ Ce qu'un clone ne copie JAMAIS
@@ -24,8 +27,11 @@
  *   `librarian-*`, et l'index de recherche (`memory-index.sqlite`, DÉRIVÉ et
  *   reconstruit au démarrage : une copie à chaud serait déchirée).
  *
- * ⚠️ Les SESSIONS Pi ne sont jamais copiées non plus : elles vivent sur un
- * AUTRE volume (`<pi>/agent/sessions/<slug>`), hors de ce module.
+ * ⚠️ Les SESSIONS Pi ne sont jamais copiées non plus par un CLONE : elles
+ * vivent sur un AUTRE volume (`<pi>/agent/sessions/<slug>`), et un clone n'a
+ * pas à hériter des conversations vécues de l'original. ⚠️ En revanche une
+ * SUPPRESSION les ARCHIVE (voir `ResultatSessionsPi`) : jamais de conversation
+ * perdue en silence.
  *
  * ## Agents autorisés (lot 35g)
  * La décision utilisateur est que les agents sont GLOBAUX et que chaque agent
@@ -47,21 +53,23 @@ import {
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 import { AvatarRefusal, AvatarStore } from "../identity/avatar.js";
 import { ConfigOverlayStore } from "../config/overlay.js";
 import { resolveConfigOverlayPath } from "../config/paths.js";
 
 import {
+  CAPACITES_BOT,
   MAX_BOTS,
-  PROFILS_BOT,
   ecrireRegistreBots,
+  estCapaciteBot,
   estSlugBot,
   cheminRegistreBots,
   type BotRecord,
-  type ProfilBot,
+  type CapaciteBot,
   type RegistreBots,
 } from "./registry.js";
 import { SOUS_DOSSIER_BOTS } from "./paths.js";
@@ -79,6 +87,22 @@ export const NOM_BOT_MAX = 40;
 /** Sous-dossier des bots SUPPRIMÉS (même volume `state`, donc `rename`). */
 export const SOUS_DOSSIER_SUPPRIMES = "bots-supprimes";
 
+/**
+ * Sous-dossier des SESSIONS Pi DÉPLACÉES, dans l'archive d'un bot supprimé
+ * (lot 35i). C'est ce dossier que la purge des 90 jours efface avec le reste.
+ */
+export const SOUS_DOSSIER_SESSIONS_PI = "sessions-pi";
+
+/**
+ * Marqueur des sessions Pi qui n'ont PAS pu être archivées (lot 35i).
+ *
+ * ⚠️ Écrit dans l'archive : il nomme le dossier RESTÉ sur le volume `pi`, pour
+ * que la purge des 90 jours sache quoi effacer — et pour que personne ne croie
+ * que les conversations ont disparu. Une perte silencieuse est le seul
+ * interdit absolu de cette opération.
+ */
+export const MARQUEUR_SESSIONS_RESTANTES = "sessions-pi-restantes.json";
+
 /** Rétention des archives de bots supprimés : 3 mois (décision utilisateur). */
 export const RETENTION_ARCHIVES_JOURS = 90;
 
@@ -94,7 +118,7 @@ export type CodeAdminBot =
   | "slug_invalide"
   | "slug_deja_pris"
   | "max_bots"
-  | "profil_inconnu"
+  | "capacite_inconnue"
   | "bot_inconnu"
   | "dernier_bot"
   | "avatar_invalide"
@@ -151,8 +175,10 @@ export const ELEMENTS_CLONE: readonly ElementClone[] = [
   },
   {
     id: "capacites",
-    libelle: "Capacités",
-    aide: "Profil du bot et réglages de configuration (config.overlay.json).",
+    libelle: "Capacités et réglages",
+    aide:
+      "Capacités autorisées (onglet « Général ») et réglages de configuration du " +
+      "bot (config.overlay.json).",
     defaut: true,
     chemins: [OVERLAY_FICHIER],
   },
@@ -224,9 +250,13 @@ export interface OptionsCreationBot {
   stateDir: string;
   /** Registre courant (déjà lu : la création ne relit pas le disque). */
   registre: RegistreBots;
+  /**
+   * Nom AFFICHÉ (obligatoire, 1..40 caractères).
+   *
+   * ⚠️ Le SLUG n'est plus demandé : il est DÉRIVÉ du nom et dédupliqué
+   * (`slugLibrePour`). L'utilisateur ne saisit plus d'identifiant technique.
+   */
   nom: unknown;
-  slug: unknown;
-  profil?: unknown;
   /**
    * Éléments à copier quand on clone. Absent/`undefined` ⇒ DÉFAUTS de
    * `ELEMENTS_CLONE`. Une case cochée inconnue lève (`echec_fichier`).
@@ -283,17 +313,88 @@ export function validerSlugBot(slug: unknown): string {
   return slug;
 }
 
-/** Profil : `complet | lecture | accueil` (défaut `complet`). */
-export function validerProfilBot(profil: unknown): ProfilBot {
-  if (profil === undefined || profil === null || profil === "") return "complet";
-  if (!PROFILS_BOT.includes(profil as ProfilBot)) {
+/**
+ * CAPACITÉS demandées : tableau de clés CONNUES, `[]` par défaut.
+ *
+ * ⚠️ Une capacité inconnue est REFUSÉE (`400 capacite_inconnue`) — jamais ignorée
+ * en silence : un client qui envoie `{"capacites": ["tout"]}` doit apprendre que
+ * ce n'est pas une capacité, pas croire qu'elle a été prise en compte.
+ *
+ * ⚠️ L'ordre canonique (`CAPACITES_BOT`) est rétabli et les doublons disparaissent :
+ * le fichier du registre reste stable d'une écriture à l'autre.
+ */
+export function validerCapacitesBot(capacites: unknown): CapaciteBot[] {
+  if (capacites === undefined || capacites === null) return [];
+  if (!Array.isArray(capacites)) {
     throw new AdminBotError(
-      "profil_inconnu",
+      "capacite_inconnue",
       400,
-      `Profil inconnu : ${JSON.stringify(profil)} (attendu : ${PROFILS_BOT.join(" | ")}).`,
+      "Les capacités doivent être une liste (exemple : [\"envoi\", \"libraire\"]).",
     );
   }
-  return profil as ProfilBot;
+  const demandees = new Set<CapaciteBot>();
+  for (const capacite of capacites as unknown[]) {
+    if (!estCapaciteBot(capacite)) {
+      throw new AdminBotError(
+        "capacite_inconnue",
+        400,
+        `Capacité inconnue : ${JSON.stringify(capacite)} ` +
+          `(connues : ${CAPACITES_BOT.join(", ")}).`,
+      );
+    }
+    demandees.add(capacite);
+  }
+  return CAPACITES_BOT.filter((capacite) => demandees.has(capacite));
+}
+
+/**
+ * SLUG libre dérivé d'un NOM : `Kohai 2` ⇒ `kohai-2`, puis `kohai-2-2`, `-3`…
+ *
+ * ⚠️ Le slug est IMMUABLE (il nomme un dossier et des chemins) mais il n'est plus
+ * demandé à l'utilisateur : il est calculé ici, de façon lisible et dédupliquée.
+ * Deux bots peuvent porter le même NOM ; seuls les slugs sont uniques.
+ *
+ * ⚠️ On évite aussi un DOSSIER déjà présent (`bots/<slug>/`), pas seulement une
+ * entrée du registre : un dossier orphelin (création interrompue) rendrait la
+ * création impossible avec un message incompréhensible.
+ */
+export function slugLibrePour(
+  stateDir: string,
+  registre: RegistreBots,
+  nom: string,
+): string {
+  const base = slugifier(nom);
+  const pris = new Set(registre.bots.map((bot) => bot.id));
+  const libre = (candidat: string) =>
+    !pris.has(candidat) &&
+    !existsSync(join(stateDir, SOUS_DOSSIER_BOTS, candidat));
+  if (libre(base)) return base;
+  for (let rang = 2; rang < 1_000; rang += 1) {
+    const suffixe = `-${rang}`;
+    const candidat = `${base.slice(0, 31 - suffixe.length).replace(/-+$/g, "")}${suffixe}`;
+    if (libre(candidat)) return candidat;
+  }
+  // ⚠️ Inatteignable en pratique (plafond `MAX_BOTS`), mais on ne rend jamais un
+  // slug déjà pris : un slug horodaté est toujours libre.
+  return `bot-${Date.now().toString(36)}`.slice(0, 31);
+}
+
+/** Slug technique d'un nom libre (2..31 caractères, motif `SLUG_BOT_PATTERN`). */
+function slugifier(nom: string): string {
+  const base = String(nom ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    // ⚠️ 27 caractères : il doit rester la place du suffixe de déduplication (`-12`).
+    .slice(0, 27)
+    .replace(/-+$/g, "");
+  // Un nom sans lettre ni chiffre (« !!! ») ou d'un seul caractère donnerait un
+  // slug refusé par le motif : on retombe sur un identifiant TOUJOURS valide.
+  if (base === "") return "bot";
+  if (base.length < 2) return `${base}-bot`;
+  return base;
 }
 
 /** Éléments demandés : les inconnus sont REFUSÉS (jamais ignorés en silence). */
@@ -325,6 +426,11 @@ export function elementsDemandes(
 /**
  * CRÉE un bot : dossiers, overlay, avatar puis entrée du registre.
  *
+ * ⚠️ CRÉATION SIMPLE (décision utilisateur du 2026-11-10) : on ne demande QUE le
+ * nom (et, facultativement, un avatar). Le slug est DÉRIVÉ et dédupliqué
+ * (`slugLibrePour`), les capacités sont VIDES — le bot ne peut que répondre tant
+ * que l'utilisateur ne l'a pas autorisé, dans l'onglet « Général » de `/bots`.
+ *
  * ⚠️ Ordre : le DOSSIER d'abord, le REGISTRE en dernier. Une coupure entre les
  * deux laisse un dossier orphelin (inoffensif, jamais listé) plutôt qu'un bot
  * déclaré dont les chemins n'existent pas. Si l'écriture du registre échoue, la
@@ -332,8 +438,6 @@ export function elementsDemandes(
  */
 export function creerBot(options: OptionsCreationBot): ResultatCreationBot {
   const nom = validerNomBot(options.nom);
-  const slug = validerSlugBot(options.slug);
-  const profil = validerProfilBot(options.profil);
   const registre = options.registre;
   const stateDir = options.stateDir;
   const maintenant = options.maintenant ?? Date.now();
@@ -345,9 +449,7 @@ export function creerBot(options: OptionsCreationBot): ResultatCreationBot {
       `Limite de ${MAX_BOTS} bots atteinte : supprimez un bot avant d'en ajouter un autre.`,
     );
   }
-  if (registre.bots.some((bot) => bot.id === slug)) {
-    throw new AdminBotError("slug_deja_pris", 409, `Le slug « ${slug} » est déjà utilisé.`);
-  }
+  const slug = slugLibrePour(stateDir, registre, nom);
 
   const source =
     options.cloneDe === undefined || options.cloneDe === null || options.cloneDe === ""
@@ -369,10 +471,12 @@ export function creerBot(options: OptionsCreationBot): ResultatCreationBot {
 
   const racine = join(stateDir, SOUS_DOSSIER_BOTS, slug);
   if (existsSync(racine)) {
+    // ⚠️ `slugLibrePour` évite déjà un dossier existant : cette garde protège d'une
+    // course entre le calcul du slug et la création (deux requêtes simultanées).
     throw new AdminBotError(
       "slug_deja_pris",
       409,
-      `Un dossier existe déjà pour « ${slug} » (${racine}) : choisissez un autre slug.`,
+      `Un dossier existe déjà pour « ${slug} » (${racine}).`,
     );
   }
 
@@ -392,10 +496,19 @@ export function creerBot(options: OptionsCreationBot): ResultatCreationBot {
   }
 
   const ordre = registre.bots.reduce((max, bot) => Math.max(max, bot.ordre), -1) + 1;
+  // ⚠️ AUCUNE capacité à la création : « de base un bot ajouté ne peut rien
+  // faire » (décision utilisateur). Elles s'ouvrent dans l'onglet « Général ».
+  // ⚠️ EXCEPTION explicite : un CLONE dont la case « Capacités et réglages » est
+  // cochée reprend les capacités de son modèle — l'utilisateur les avait déjà
+  // autorisées là-bas. Case décochée ⇒ `[]`, comme un bot neuf.
+  const sourceRecord =
+    source === null ? null : (registre.bots.find((bot) => bot.id === source) ?? null);
+  const capacites =
+    sourceRecord !== null && copies.has("capacites") ? [...sourceRecord.capacites] : [];
   const bot: BotRecord = {
     id: slug,
     nom,
-    profil,
+    capacites,
     // ⚠️ Le bot CRÉÉ n'est pas le bot ACTIF : le gateway en cours applique le
     // bot résolu à son démarrage. Le drapeau ne bougera qu'à une promotion
     // explicite (suppression du bot actif) — jamais à la création.
@@ -412,6 +525,58 @@ export function creerBot(options: OptionsCreationBot): ResultatCreationBot {
     throw traduireErreurFichier(error, "L'enregistrement du bot a échoué");
   }
   return { registre: suivant, bot, copies: [...copies] };
+}
+
+// ── Modification (nom, capacités) ───────────────────────────────────────────
+
+export interface OptionsModificationBot {
+  /** Volume `state` (le registre vit à sa racine). */
+  stateDir: string;
+  /** Registre courant (déjà lu). */
+  registre: RegistreBots;
+  botId: string;
+  /** Nouveau nom affiché. Absent ⇒ inchangé. */
+  nom?: unknown;
+  /** Nouvelles capacités (liste de clés connues). Absent ⇒ inchangées. */
+  capacites?: unknown;
+}
+
+export interface ResultatModificationBot {
+  registre: RegistreBots;
+  bot: BotRecord;
+}
+
+/**
+ * MODIFIE un bot existant : son NOM et/ou ses CAPACITÉS.
+ *
+ * ⚠️ Le SLUG n'est jamais modifiable : il nomme un dossier et des chemins. C'est
+ * pour cela qu'il n'apparaît pas ici (aucune route de renommage technique).
+ *
+ * ⚠️ Une capacité inconnue est REFUSÉE (`400 capacite_inconnue`) : le registre ne
+ * contient jamais une clé que le produit n'interprète pas.
+ */
+export function modifierBot(options: OptionsModificationBot): ResultatModificationBot {
+  const registre = options.registre;
+  const index = registre.bots.findIndex((bot) => bot.id === options.botId);
+  if (index < 0) {
+    throw new AdminBotError("bot_inconnu", 404, `Bot inconnu : « ${options.botId} ».`);
+  }
+  const actuel = registre.bots[index] as BotRecord;
+  const nom = options.nom === undefined ? actuel.nom : validerNomBot(options.nom);
+  const capacites =
+    options.capacites === undefined
+      ? [...actuel.capacites]
+      : validerCapacitesBot(options.capacites);
+  const bot: BotRecord = { ...actuel, nom, capacites };
+  const bots = [...registre.bots];
+  bots[index] = bot;
+  const suivant: RegistreBots = { ...registre, bots };
+  try {
+    ecrireRegistreBots(cheminRegistreBots(options.stateDir), suivant);
+  } catch (error) {
+    throw traduireErreurFichier(error, "L'enregistrement du bot a échoué");
+  }
+  return { registre: suivant, bot };
 }
 
 /** Copie les éléments demandés d'un bot existant (aucune écriture hors du clone). */
@@ -485,6 +650,26 @@ export interface OptionsSuppressionBot {
   botId: string;
   maintenant?: number;
   /**
+   * Volume `pi` (ses SESSIONS sont sous `<piSessionsDir>/<botId>`, lot 35i).
+   *
+   * ⚠️ Ce dossier vit sur un AUTRE volume que `<state>/bots/<id>` : il ne peut
+   * pas être déplacé par `rename` (EXDEV). Il est donc COPIÉ dans l'archive
+   * (`sessions-pi/`) puis supprimé — et si la copie échoue, RIEN n'est
+   * supprimé : l'échec est journalisé (`bot.sessions.echec`), remonté à
+   * l'appelant et DIT dans l'interface (jamais une perte silencieuse).
+   *
+   * Absent ⇒ les sessions ne sont pas touchées (le volume `pi` est inconnu de
+   * cet appel) : le résultat le dit (`etat: "inconnu"`).
+   */
+  piSessionsDir?: string;
+  /**
+   * Couture de test : remplace la COPIE des sessions (défaut `cpSync` récursif).
+   * ⚠️ Sert uniquement à prouver le comportement d'ÉCHEC (l'origine reste
+   * intacte, l'erreur est journalisée et marquée) sans dépendre des permissions
+   * du système de fichiers — un `chmod` ne retient pas `root`.
+   */
+  copierSessions?: (origine: string, cible: string) => void;
+  /**
    * DÉTACHEMENT DES AGENTS (lot 35g). Appelé avec l'identifiant supprimé pour
    * le RETIRER de la liste `bots` de chaque agent (`AgentStore.retirerBotDesListes`).
    *
@@ -517,6 +702,29 @@ export interface ResultatSuppressionBot {
    * cours applique encore ses chemins ⇒ REDÉMARRAGE nécessaire.
    */
   rechargementRequis: boolean;
+  /** Ce qu'il est advenu des SESSIONS Pi du bot (lot 35i). */
+  sessionsPi: ResultatSessionsPi;
+}
+
+/**
+ * Sort des SESSIONS Pi d'un bot supprimé (lot 35i).
+ *
+ *  - `deplace` : copiées dans `<archive>/sessions-pi/` puis supprimées de leur
+ *    volume d'origine — rien n'est perdu ;
+ *  - `absent` : il n'y avait aucune session (cas normal d'un bot jamais utilisé) ;
+ *  - `echec`  : la copie a échoué ; ⚠️ l'origine est INTACTE, l'erreur est
+ *    remontée et journalisée, et un marqueur dans l'archive la fait purger à
+ *    l'échéance ;
+ *  - `inconnu` : le volume `pi` n'a pas été fourni à la suppression.
+ */
+export interface ResultatSessionsPi {
+  readonly etat: "deplace" | "absent" | "echec" | "inconnu";
+  /** Dossier d'origine (`<pi>/agent/sessions/<id>`), `null` si volume inconnu. */
+  readonly origine: string | null;
+  /** Destination dans l'archive, `null` si rien n'a été déplacé. */
+  readonly archive: string | null;
+  /** Motif de l'échec (DIT à l'utilisateur), `null` sinon. */
+  readonly erreur: string | null;
 }
 
 /** Horodatage de dossier d'archive : `AAAAMMJJ-HHMM` (UTC). */
@@ -590,13 +798,24 @@ export function supprimerBot(options: OptionsSuppressionBot): ResultatSuppressio
 
   const racine = join(stateDir, SOUS_DOSSIER_BOTS, botId);
   const archives = join(stateDir, SOUS_DOSSIER_SUPPRIMES);
+  // ⚠️ SESSIONS Pi (lot 35i) : `<pi>/agent/sessions/<botId>`, sur un AUTRE volume.
+  const origineSessions = dossierSessionsPi(options.piSessionsDir, botId);
+  const sessionsPresentes = origineSessions !== null && existsSync(origineSessions);
   let archive: string | null = null;
   let dossierCree = false;
-  if (existsSync(racine)) {
+  let archiveCreee = false;
+  if (existsSync(racine) || sessionsPresentes) {
     mkdirSync(archives, { recursive: true, mode: 0o700 });
     archive = cheminArchiveLibre(archives, botId, maintenant);
-    renameSync(racine, archive);
-    dossierCree = true;
+    if (existsSync(racine)) {
+      renameSync(racine, archive);
+      dossierCree = true;
+    } else {
+      // Le bot n'a pas de dossier `state` mais a des conversations : l'archive
+      // est créée quand même (elles ne doivent pas rester orphelines).
+      mkdirSync(archive, { recursive: true, mode: 0o700 });
+      archiveCreee = true;
+    }
   }
   try {
     ecrireRegistreBots(cheminRegistreBots(stateDir), suivant);
@@ -608,9 +827,24 @@ export function supprimerBot(options: OptionsSuppressionBot): ResultatSuppressio
       } catch {
         // Meilleur effort : l'archive reste inspectable dans `bots-supprimes/`.
       }
+    } else if (archive !== null && archiveCreee) {
+      try {
+        rmSync(archive, { recursive: true, force: true });
+      } catch {
+        // Meilleur effort : une archive vide est inoffensive.
+      }
     }
     throw traduireErreurFichier(error, "La suppression du bot a échoué");
   }
+  // SESSIONS Pi (lot 35i) — APRÈS le registre : un échec de copie ne doit pas
+  // annuler une suppression déjà écrite, et l'origine n'est jamais supprimée
+  // sans une copie réussie.
+  const sessionsPi = archiverSessionsPi({
+    origine: origineSessions,
+    archive,
+    ...(options.copierSessions ? { copier: options.copierSessions } : {}),
+    ...(options.logger ? { logger: options.logger } : {}),
+  });
   // DÉTACHEMENT DES AGENTS (voir `OptionsSuppressionBot.retirerDesListesDAgents`).
   // ⚠️ Jamais bloquant : le bot est DÉJÀ supprimé (dossier déplacé, registre
   // écrit) ; un échec de nettoyage serait un mensonge si on le renvoyait en
@@ -635,7 +869,100 @@ export function supprimerBot(options: OptionsSuppressionBot): ResultatSuppressio
     bot,
     botActifSuivant,
     rechargementRequis: bot.actif,
+    sessionsPi,
   };
+}
+
+/** Dossier des sessions Pi d'un bot, ou `null` si le volume `pi` est inconnu. */
+export function dossierSessionsPi(
+  piSessionsDir: string | undefined,
+  botId: string,
+): string | null {
+  if (typeof piSessionsDir !== "string" || piSessionsDir.trim() === "") return null;
+  if (!estSlugBot(botId) && !/^[a-z][a-z0-9_-]{0,31}$/.test(botId)) {
+    throw new AdminBotError("bot_inconnu", 404, `Identifiant de bot invalide : « ${botId} ».`);
+  }
+  return join(piSessionsDir, botId);
+}
+
+/**
+ * ARCHIVE les sessions Pi d'un bot supprimé (lot 35i).
+ *
+ * ⚠️ Volumes DIFFÉRENTS (`state` ≠ `pi`) : `rename` échouerait en `EXDEV`, donc
+ * COPIE puis suppression — et la suppression n'a lieu qu'après une copie dont on
+ * a vérifié qu'elle existe. Une copie partielle est RETIRÉE (jamais un
+ * demi-archivage) et un marqueur nomme le dossier resté en place, pour que la
+ * purge des 90 jours l'efface à l'échéance.
+ */
+function archiverSessionsPi(options: {
+  origine: string | null;
+  archive: string | null;
+  copier?: (origine: string, cible: string) => void;
+  logger?: {
+    info(message: string, fields?: Record<string, unknown>): void;
+    warn(message: string, fields?: Record<string, unknown>): void;
+  };
+}): ResultatSessionsPi {
+  if (options.origine === null) {
+    return { etat: "inconnu", origine: null, archive: null, erreur: null };
+  }
+  if (!existsSync(options.origine)) {
+    return { etat: "absent", origine: options.origine, archive: null, erreur: null };
+  }
+  const cible =
+    options.archive === null ? null : join(options.archive, SOUS_DOSSIER_SESSIONS_PI);
+  try {
+    if (cible === null || options.archive === null) {
+      throw new Error("aucune archive de bot n'a pu être créée");
+    }
+    mkdirSync(options.archive, { recursive: true, mode: 0o700 });
+    if (options.copier) {
+      options.copier(options.origine, cible);
+    } else {
+      cpSync(options.origine, cible, {
+        recursive: true,
+        force: true,
+        preserveTimestamps: true,
+      });
+    }
+    if (!existsSync(cible)) {
+      throw new Error("la copie des sessions est introuvable après copie");
+    }
+    rmSync(options.origine, { recursive: true, force: true });
+    options.logger?.info("bot.sessions.deplacees", {
+      origine: options.origine,
+      archive: cible,
+    });
+    return { etat: "deplace", origine: options.origine, archive: cible, erreur: null };
+  } catch (error) {
+    const erreur = error instanceof Error ? error.message : String(error);
+    // ⚠️ Jamais un demi-archivage : la copie partielle est retirée, l'ORIGINE reste.
+    if (cible !== null && existsSync(cible)) {
+      try {
+        rmSync(cible, { recursive: true, force: true });
+      } catch {
+        // Meilleur effort : le marqueur ci-dessous dit où sont les sessions.
+      }
+    }
+    if (options.archive !== null) {
+      try {
+        mkdirSync(options.archive, { recursive: true, mode: 0o700 });
+        writeFileSync(
+          join(options.archive, MARQUEUR_SESSIONS_RESTANTES),
+          `${JSON.stringify({ origine: options.origine, erreur }, null, 2)}\n`,
+          { encoding: "utf8", mode: 0o600 },
+        );
+      } catch {
+        // Meilleur effort : le journal ci-dessous est la trace minimale.
+      }
+    }
+    options.logger?.warn("bot.sessions.echec", {
+      origine: options.origine,
+      archive: options.archive,
+      error: erreur,
+    });
+    return { etat: "echec", origine: options.origine, archive: null, erreur };
+  }
 }
 
 /** Chemin d'archive libre (deux suppressions dans la même minute ⇒ suffixe). */
@@ -686,6 +1013,42 @@ function compterFichiers(dir: string, extension: string): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Nombre de fichiers (récursif) sous un dossier : compteur des SESSIONS Pi d'un
+ * bot (lot 35i), qui vivent hors du volume `state`.
+ *
+ * ⚠️ Ces conversations ne sont PAS dans `CompteursBot` (qui ne décrit que le
+ * dossier `<state>/bots/<id>` et dont la forme est verrouillée) : la route de
+ * confirmation les ajoute sous la clé `sessions`.
+ */
+export function compterSessionsPi(
+  piSessionsDir: string | undefined,
+  botId: string,
+): number {
+  const dossier = dossierSessionsPi(piSessionsDir, botId);
+  if (dossier === null) return 0;
+  return compterFichiersRecursif(dossier);
+}
+
+function compterFichiersRecursif(dir: string): number {
+  let entrees: string[];
+  try {
+    entrees = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entree of entrees) {
+    const complet = join(dir, entree);
+    try {
+      total += statSync(complet).isDirectory() ? compterFichiersRecursif(complet) : 1;
+    } catch {
+      // Entrée disparue pendant le parcours : ignorée (un compteur ne bloque rien).
+    }
+  }
+  return total;
 }
 
 function compterLignes(path: string): number {
@@ -741,6 +1104,17 @@ export interface OptionsPurgeArchives {
   maintenant: number;
   /** Rétention en jours (défaut `RETENTION_ARCHIVES_JOURS`, soit 3 mois). */
   retentionJours?: number;
+  /**
+   * Volume `pi` (lot 35i) : une archive qui n'a pas pu recevoir les sessions
+   * d'un bot garde un marqueur (`MARQUEUR_SESSIONS_RESTANTES`) nommant le
+   * dossier resté sur ce volume. À l'échéance de la rétention, ce dossier est
+   * effacé AUSSI — une conversation ne survit pas en silence à son archive.
+   *
+   * ⚠️ Le chemin lu dans le marqueur n'est suivi que s'il désigne exactement
+   * `<piSessionsDir>/<identifiant valide>` : jamais une suppression arbitraire
+   * dictée par le contenu d'un fichier.
+   */
+  piSessionsDir?: string;
   logger?: AdminBotLogger;
 }
 
@@ -749,6 +1123,8 @@ export interface ResultatPurgeArchives {
   purges: string[];
   /** Noms des archives conservées (âge ≤ rétention, ou nom non datable). */
   conservees: string[];
+  /** Dossiers de SESSIONS Pi effacés à l'échéance (lot 35i). */
+  sessionsPurgees: string[];
 }
 
 /**
@@ -762,7 +1138,7 @@ export function purgerArchivesBots(options: OptionsPurgeArchives): ResultatPurge
   const retention = options.retentionJours ?? RETENTION_ARCHIVES_JOURS;
   const limite = retention * MS_PAR_JOUR;
   const dir = join(options.stateDir, SOUS_DOSSIER_SUPPRIMES);
-  const resultat: ResultatPurgeArchives = { purges: [], conservees: [] };
+  const resultat: ResultatPurgeArchives = { purges: [], conservees: [], sessionsPurgees: [] };
   let noms: string[];
   try {
     noms = readdirSync(dir);
@@ -781,6 +1157,14 @@ export function purgerArchivesBots(options: OptionsPurgeArchives): ResultatPurge
       resultat.conservees.push(nom);
       continue;
     }
+    // ⚠️ SESSIONS Pi restées sur leur volume (copie impossible) : l'échéance de
+    // la rétention vaut aussi pour elles (jamais une survie silencieuse).
+    purgerSessionsRestantes({
+      archive: chemin,
+      piSessionsDir: options.piSessionsDir,
+      resultat,
+      ...(options.logger ? { logger: options.logger } : {}),
+    });
     try {
       rmSync(chemin, { recursive: true, force: true });
     } catch (error) {
@@ -802,6 +1186,66 @@ export function purgerArchivesBots(options: OptionsPurgeArchives): ResultatPurge
 }
 
 // ── Utilitaires ────────────────────────────────────────────────────────────
+
+/**
+ * Efface le dossier de sessions Pi qu'une archive EXPIRÉE n'avait pas pu
+ * recevoir (lot 35i).
+ *
+ * ⚠️ Le marqueur n'est qu'une INDICATION : le chemin n'est suivi que s'il
+ * désigne exactement `<piSessionsDir>/<identifiant valide>`. Un marqueur
+ * incohérent (volume inconnu, chemin ailleurs, JSON illisible) est CONSERVÉ et
+ * journalisé — on ne supprime jamais un dossier sur la foi d'un fichier.
+ */
+function purgerSessionsRestantes(options: {
+  archive: string;
+  piSessionsDir: string | undefined;
+  resultat: ResultatPurgeArchives;
+  logger?: AdminBotLogger;
+}): void {
+  const marqueur = join(options.archive, MARQUEUR_SESSIONS_RESTANTES);
+  if (!existsSync(marqueur)) return;
+  let origine: unknown;
+  try {
+    origine = (JSON.parse(readFileSync(marqueur, "utf8")) as { origine?: unknown }).origine;
+  } catch (error) {
+    options.logger?.warn?.("bot.sessions.marqueur_invalide", {
+      archive: basename(options.archive),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  if (typeof origine !== "string" || origine.trim() === "") return;
+  if (typeof options.piSessionsDir !== "string" || options.piSessionsDir.trim() === "") {
+    options.logger?.warn?.("bot.sessions.volume_inconnu", {
+      archive: basename(options.archive),
+      origine,
+    });
+    return;
+  }
+  const cible = resolve(origine);
+  const attendu = dossierSessionsPi(options.piSessionsDir, basename(cible));
+  if (attendu === null || resolve(attendu) !== cible) {
+    options.logger?.warn?.("bot.sessions.marqueur_incoherent", {
+      archive: basename(options.archive),
+      origine,
+    });
+    return;
+  }
+  try {
+    rmSync(cible, { recursive: true, force: true });
+  } catch (error) {
+    options.logger?.warn?.("bot.sessions.purge_failed", {
+      origine: cible,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  options.resultat.sessionsPurgees.push(basename(cible));
+  options.logger?.info?.("bot.sessions.purges", {
+    origine: cible,
+    archive: basename(options.archive),
+  });
+}
 
 /** Traduit une erreur de fichier/registre en refus d'administration. */
 function traduireErreurFichier(error: unknown, prefixe: string): AdminBotError {

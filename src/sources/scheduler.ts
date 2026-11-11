@@ -712,3 +712,202 @@ export class DeclencheurBalayeur {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * PORT des BOTS À BALAYER (lot 35j).
+ *
+ * ⚠️ POURQUOI UN PORT, ET PAS UNE BOUCLE DANS `index.ts` : la liste des bots à
+ * balayer dépend des CAPACITÉS (un bot sans `execution` ni `delegation` ne peut
+ * rien faire d'un déclencheur, donc ses sources ne tirent pas) et de l'état
+ * `actif`. Isolée derrière ce port, la règle est TESTABLE sans démarrer le
+ * gateway, et le balayeur n'a aucune connaissance du registre des bots.
+ */
+export interface BalayeurBotsPort {
+  /** Bots à balayer à CET instant (vide ⇒ rien ne tire, sans erreur). */
+  cibles(): readonly CibleBalayage[];
+}
+
+/** Une cible de balayage : UN bot, avec SES ports (store, run, envois). */
+export interface CibleBalayage {
+  /** Identifiant du bot (journal, diagnostic ; jamais utilisé pour résoudre un chemin). */
+  botId: string;
+  store: BalayeurStore;
+  run: DeclencheurRunner;
+  /** Envois programmés de CE bot (absent ⇒ aucun envoi exécuté pour lui). */
+  envoisProgrammes?: EnvoisProgrammesRunner;
+}
+
+export interface BalayeurBotsOptions {
+  bots: BalayeurBotsPort;
+  logger: BalayeurLogger;
+  journal?: Pick<DeclencheurJournal, "append">;
+  /** Consolidation hebdomadaire (lot 29) — exécutée UNE fois par tick, pas par bot. */
+  passeHebdo?: PasseHebdoRunner;
+  /** Rétention des archives de bots supprimés (lot 35e) — idem. */
+  archivesBots?: ArchivesBotsRunner;
+  /** Horloge injectable (tests). */
+  now?: () => number;
+  /** Planificateur périodique injectable (tests) — ⚠️ UN SEUL appel par démarrage. */
+  setInterval?: (callback: () => void, delayMs: number) => unknown;
+  clearInterval?: (handle: unknown) => void;
+  intervalMs?: number;
+}
+
+/**
+ * BALAYEUR MULTI-BOTS — ⚠️ **UN SEUL `setInterval` DANS TOUT LE PROCESSUS**.
+ *
+ * Il ne remplace pas `DeclencheurBalayeur` (qui garde ses règles : rattrapage,
+ * chevauchement, plafond, garde-fou quotidien, tâches ponctuelles) : il possède
+ * l'horloge, et il demande à chaque tick la liste des bots à balayer. Chaque bot a
+ * son `DeclencheurBalayeur` interne — dont on n'appelle JAMAIS `start()` — donc
+ * aucun minuteur supplémentaire, et les tours en vol d'un bot ne bloquent pas les
+ * autres.
+ *
+ * ⚠️ RÈGLES CONSERVÉES, déplacées ici parce qu'elles ne sont PAS par bot :
+ * rétention des archives de bots supprimés et consolidation hebdomadaire de la
+ * mémoire (une passe à la fois, dans l'ordre des bots) — une seule exécution par
+ * tick, jamais une par bot.
+ */
+export class BalayeurBots {
+  private readonly options: BalayeurBotsOptions;
+  private readonly now: () => number;
+  private readonly intervalMs: number;
+  private readonly setIntervalFn: (callback: () => void, delayMs: number) => unknown;
+  private readonly clearIntervalFn: (handle: unknown) => void;
+  /** Un `DeclencheurBalayeur` par bot (jamais démarré : seul `tick()` est appelé). */
+  private readonly internes = new Map<string, { balayeur: DeclencheurBalayeur; store: BalayeurStore }>();
+  private timer: unknown = null;
+  private arrete = true;
+  private tickEnCours = false;
+
+  constructor(options: BalayeurBotsOptions) {
+    this.options = options;
+    this.now = options.now ?? Date.now;
+    this.intervalMs = Math.max(1_000, options.intervalMs ?? BALAYAGE_INTERVAL_MS);
+    this.setIntervalFn =
+      options.setInterval ??
+      ((callback, delayMs) => {
+        const handle = setInterval(callback, delayMs);
+        (handle as { unref?: () => void }).unref?.();
+        return handle;
+      });
+    this.clearIntervalFn =
+      options.clearInterval ??
+      ((handle) => clearInterval(handle as ReturnType<typeof setInterval>));
+  }
+
+  /** Démarre LE balayage (idempotent) : ⚠️ un tick immédiat a lieu (reprise). */
+  start(): void {
+    if (!this.arrete) return;
+    this.arrete = false;
+    this.timer = this.setIntervalFn(() => {
+      void this.tick();
+    }, this.intervalMs);
+    void this.tick();
+  }
+
+  /** Arrête le balayage : l'intervalle ET les tours en vol de tous les bots. */
+  stop(): void {
+    this.arrete = true;
+    if (this.timer !== null) {
+      this.clearIntervalFn(this.timer);
+      this.timer = null;
+    }
+    for (const interne of this.internes.values()) interne.balayeur.stop();
+    this.internes.clear();
+  }
+
+  /** Nombre de bots réellement balayés au dernier tick (diagnostic, tests). */
+  get ciblesConnues(): number {
+    return this.internes.size;
+  }
+
+  /**
+   * UN tick : les rendez-vous d'instance d'abord (archives, consolidation), puis
+   * CHAQUE bot, l'un après l'autre.
+   *
+   * ⚠️ `await` sur chaque bot : deux ticks ne se chevauchent pas et un bot ne voit
+   * pas ses passages doublés. Un bot en erreur n'empêche pas les suivants.
+   */
+  async tick(): Promise<void> {
+    if (this.tickEnCours) return;
+    this.tickEnCours = true;
+    try {
+      const maintenant = this.now();
+      if (this.options.archivesBots) {
+        try {
+          await this.options.archivesBots.purger(maintenant);
+        } catch (error) {
+          this.options.logger.warn("sources.balayeur.archives_bots_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (this.options.passeHebdo) {
+        void this.options.passeHebdo.executerSiDu(maintenant).catch((error: unknown) => {
+          this.options.logger.warn("sources.balayeur.passe_hebdo_failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      const cibles = this.ciblesDuTick();
+      for (const cible of cibles) {
+        try {
+          await this.balayeurDe(cible).tick();
+        } catch (error) {
+          // ⚠️ Un bot en erreur ne prive pas les autres de leur tick.
+          this.options.logger.warn("sources.balayeur.bot_failed", {
+            bot: cible.botId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      // ⚠️ Un bot RETIRÉ (supprimé, désactivé, sans capacité) ne garde ni balayeur
+      // ni minuteur : on oublie son état interne.
+      const vivants = new Set(cibles.map((cible) => cible.botId));
+      for (const [botId, interne] of [...this.internes]) {
+        if (vivants.has(botId)) continue;
+        interne.balayeur.stop();
+        this.internes.delete(botId);
+      }
+    } catch (error) {
+      this.options.logger.warn("sources.balayeur.tick_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.tickEnCours = false;
+    }
+  }
+
+  /** Liste des cibles, protégée : un port en erreur rend une liste VIDE. */
+  private ciblesDuTick(): CibleBalayage[] {
+    try {
+      return [...this.options.bots.cibles()];
+    } catch (error) {
+      this.options.logger.warn("sources.balayeur.cibles_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Balayeur interne du bot (créé à la demande, réutilisé tant que son `store`
+   * est le même objet — une pile reconstruite repart proprement).
+   */
+  private balayeurDe(cible: CibleBalayage): DeclencheurBalayeur {
+    const existant = this.internes.get(cible.botId);
+    if (existant !== undefined && existant.store === cible.store) return existant.balayeur;
+    existant?.balayeur.stop();
+    const balayeur = new DeclencheurBalayeur({
+      store: cible.store,
+      run: cible.run,
+      logger: this.options.logger,
+      ...(this.options.journal ? { journal: this.options.journal } : {}),
+      ...(cible.envoisProgrammes ? { envoisProgrammes: cible.envoisProgrammes } : {}),
+      now: this.now,
+    });
+    this.internes.set(cible.botId, { balayeur, store: cible.store });
+    return balayeur;
+  }
+}

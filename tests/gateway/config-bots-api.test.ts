@@ -29,7 +29,7 @@ import { loadEnv } from "../../src/config/env.js";
 import { ConfigStore } from "../../src/config/store.js";
 import { createConfigRuntime } from "../../src/config/runtime.js";
 import { handleConfigRequest } from "../../src/gateway/routes/config.js";
-import type { RegistreBots } from "../../src/bots/registry.js";
+import { CAPACITES_BOT, type RegistreBots } from "../../src/bots/registry.js";
 import { createLogger } from "../../src/observability/logger.js";
 // ⚠️ Le VRAI module de l'interface (garde du lot 30) : c'est lui qui écrit
 // `chat.mode`, et il doit viser la route du bot actif.
@@ -58,7 +58,8 @@ function registreDeuxBots(): RegistreBots {
       {
         id: "yuki",
         nom: "Yuki",
-        profil: "complet",
+        // Bot HISTORIQUE : toutes les capacités (état d'un bot hérité).
+        capacites: [...CAPACITES_BOT],
         actif: true,
         ordre: 0,
         creeLe: "2026-01-01T00:00:00.000Z",
@@ -67,7 +68,8 @@ function registreDeuxBots(): RegistreBots {
       {
         id: "kohai",
         nom: "Kohai",
-        profil: "complet",
+        // Bot CRÉÉ depuis l'interface : aucune capacité, il ne peut que répondre.
+        capacites: [],
         actif: false,
         ordre: 1,
         creeLe: "2026-01-01T00:00:00.000Z",
@@ -123,11 +125,18 @@ describe("① `GET /api/bots`", () => {
     const { status, body } = await appel(b, "GET", "/api/bots");
     expect(status).toBe(200);
     expect(body.bots).toEqual([
-      { id: "yuki", nom: "Yuki", profil: "complet", actif: true, ordre: 0 },
+      {
+        id: "yuki",
+        nom: "Yuki",
+        // Mono-bot historique : le bot porte le produit entier ⇒ toutes.
+        capacites: [...CAPACITES_BOT],
+        actif: true,
+        ordre: 0,
+      },
     ]);
   });
 
-  it("liste le registre, trié par `ordre`, avec `id`/`nom`/`profil`/`actif`/`ordre`", async () => {
+  it("liste le registre, trié par `ordre`, avec `id`/`nom`/`capacites`/`actif`/`ordre`", async () => {
     const b = banc({ registre: registreDeuxBots() });
     const { status, body } = await appel(b, "GET", "/api/bots");
     expect(status).toBe(200);
@@ -135,7 +144,9 @@ describe("① `GET /api/bots`", () => {
     expect(body.bots[1]).toEqual({
       id: "kohai",
       nom: "Kohai",
-      profil: "complet",
+      // ⚠️ `capacites: []` est RENVOYÉ tel quel : c'est ce qui fait afficher
+      // toutes les cases décochées dans l'onglet « Général ».
+      capacites: [],
       actif: false,
       ordre: 1,
     });
@@ -297,5 +308,69 @@ describe("⑥ bot NON actif — overlay séparé, état du bot actif intact", ()
 
     const relu = await appel(b, "GET", "/api/bots/kohai/config");
     expect(relu.body.fields["tts.voice"]).toMatchObject({ value: "voix-de-kohai" });
+  });
+});
+
+/**
+ * ⚠️ LOT 35i — ONGLET « MÉMOIRE » DE LA PAGE BOT : les 8 clés `bot` du schéma
+ * (mémoire durable) + l'interrupteur `memory.consolidation.enabled` (MIXTE)
+ * doivent s'ENREGISTRER par la route du bot, dans l'overlay de CE bot.
+ *
+ * Sur le code d'origine, deux des huit clés (`memory.setAside.*`) n'étaient
+ * proposées par AUCUN onglet : elles n'étaient réglables nulle part.
+ */
+describe("⑦ onglet « Mémoire » d'un bot — les 8 clés `bot` s'enregistrent", () => {
+  const CLES_MEMOIRE_BOT = [
+    "memory.enabled",
+    "memory.recall.topK",
+    "memory.recall.budgetChars",
+    "memory.recall.timeoutMs",
+    "memory.extract.maxItems",
+    "memory.extract.timeoutMs",
+    "memory.setAside.maxChars",
+    "memory.setAside.maxChunks",
+  ] as const;
+
+  it("les 8 clés sont `bot` au schéma et s'écrivent dans l'overlay du bot", async () => {
+    const b = banc({ registre: registreDeuxBots() });
+    const patch: Record<string, unknown> = {
+      "memory.enabled": "off",
+      "memory.recall.topK": 7,
+      "memory.recall.budgetChars": 1234,
+      "memory.recall.timeoutMs": 800,
+      "memory.extract.maxItems": 5,
+      "memory.extract.timeoutMs": 45000,
+      "memory.setAside.maxChars": 30000,
+      "memory.setAside.maxChunks": 3,
+    };
+    const ecriture = await appel(b, "PUT", "/api/bots/yuki/config", patch);
+    expect(ecriture.status).toBe(200);
+    for (const cle of CLES_MEMOIRE_BOT) {
+      expect(ecriture.body.fields[cle], cle).toMatchObject({ scope: "bot" });
+      expect(ecriture.body.fields[cle].value, cle).toBe(patch[cle]);
+    }
+    const overlay = JSON.parse(readFileSync(b.runtime.overlayPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    for (const cle of CLES_MEMOIRE_BOT) expect(overlay[cle], cle).toBe(patch[cle]);
+  });
+
+  it("l'interrupteur de consolidation est MIXTE et s'écrit des DEUX côtés", async () => {
+    const b = banc({ registre: registreDeuxBots() });
+    const bot = await appel(b, "PUT", "/api/bots/yuki/config", {
+      "memory.consolidation.enabled": "off",
+    });
+    expect(bot.status).toBe(200);
+    expect(bot.body.fields["memory.consolidation.enabled"]).toMatchObject({
+      scope: "mixte",
+      value: "off",
+    });
+    const instance = await appel(b, "PUT", "/api/config", {
+      "memory.consolidation.enabled": "on",
+    });
+    expect(instance.status).toBe(200);
+    // Conjonction `et` : instance `on` + bot `off` ⇒ `off` (le bot ne consolide pas).
+    expect(b.runtime.getString("memory.consolidation.enabled")).toBe("off");
   });
 });

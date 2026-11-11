@@ -39,7 +39,7 @@ import {
 import type { ExecutionRequest } from "../../src/agents/index.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { MAX_BOTS, supprimerBot } from "../../src/bots/admin.js";
-import { BOT_YUKI, type RegistreBots } from "../../src/bots/registry.js";
+import { BOT_YUKI, CAPACITES_BOT, type RegistreBots } from "../../src/bots/registry.js";
 
 const dirs: string[] = [];
 
@@ -296,8 +296,10 @@ describe("suppression d'un bot — les agents RESTENT, la liste est nettoyée", 
     return {
       schemaVersion: 1,
       bots: [
-        { id: "yuki", nom: "Yuki", profil: "complet", actif: true, ordre: 0, creeLe: "2026-01-01T00:00:00.000Z", plateformes: {} },
-        { id: "kohai", nom: "Kohai", profil: "complet", actif: false, ordre: 1, creeLe: "2026-01-01T00:00:00.000Z", plateformes: {} },
+        // ⚠️ `capacites` (lot 35h) : le registre n'a plus de `profil`. Ces bots
+        // sont hérités ⇒ toutes les capacités.
+        { id: "yuki", nom: "Yuki", capacites: [...CAPACITES_BOT], actif: true, ordre: 0, creeLe: "2026-01-01T00:00:00.000Z", plateformes: {} },
+        { id: "kohai", nom: "Kohai", capacites: [...CAPACITES_BOT], actif: false, ordre: 1, creeLe: "2026-01-01T00:00:00.000Z", plateformes: {} },
       ],
       echanges: {},
     };

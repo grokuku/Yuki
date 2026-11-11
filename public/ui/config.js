@@ -59,6 +59,8 @@ import { cheminConfigBot, listerBots } from './bots-api.js';
 import { ouvrirCreationBot, ouvrirSuppressionBot } from './bots-admin.js';
 import {
   ANCRES_PROFONDES as ANCRES_PROFONDES_PAR_PAGE,
+  CAPACITES_PAGE,
+  PHRASE_CAPACITES,
   champsDePage,
   demandeChangementBot,
   groupesDePage,
@@ -68,7 +70,6 @@ import {
   ongletDuHash,
   ongletsDePage,
   pageConnue,
-  profilDePage,
 } from './config-pages.js';
 import { ALL_FIELDS, FIELD_DEFAULTS, GROUPS, LABELS } from './config-fields.js';
 import { initTheme } from './theme.js';
@@ -165,7 +166,7 @@ const PAGE_BOT = PAGE === "bot";
  * premier chargement. Sert à lire ET à écrire la configuration de CE bot.
  */
 let botCourant = null;
-/** Liste `{ id, nom, profil, actif, ordre }` des bots connus. */
+/** Liste `{ id, nom, capacites, actif, ordre }` des bots connus. */
 let botsConnus = [];
 
 /** Slug de bot par défaut quand l'URL en désigne un inconnu (repli silencieux). */
@@ -243,7 +244,7 @@ const botAddButton = document.getElementById("bot-add");
 const botSelect = document.getElementById("bot-select");
 /** Bandeau d'honnêteté (page Bot) : ce qui n'est pas éditable pour ce bot. */
 const botNoticeEl = document.getElementById("bot-notice");
-/** Zone « Général » d'un bot (nom, slug, profil, avatar, zone de danger). */
+/** Zone « Général » d'un bot (nom, slug, avatar, capacités, zone de danger). */
 const botGeneralRoot = document.getElementById("bot-general-root");
 /** Panneau des voix (Lot 7) — instancié après le premier chargement. */
 let voicesPanel = null;
@@ -1394,13 +1395,16 @@ function ligneLecture(texte, valeur) {
 }
 
 /**
- * Zone « Général » d'un bot : nom, slug, profil, avatar et zone de danger.
+ * Zone « Général » d'un bot : NOM (modifiable), slug (lecture seule), avatar,
+ * CAPACITÉS (cases à cocher) et zone de danger.
  *
- * ⚠️ L'identité reste en LECTURE SEULE (le slug est immuable : il nomme un
- * dossier), mais la ZONE DE DANGER porte désormais la VRAIE suppression
- * (lot 35e) : elle n'efface rien — le serveur déplace le dossier du bot dans
- * `bots-supprimes/` — et la confirmation affiche les compteurs réels avec une
- * case à cocher obligatoire (motif du lot 30).
+ * ⚠️ Les capacités sont la SEULE chose qui décide de ce qu'un bot peut faire
+ * (`OUTILS_DES_CAPACITES`, `src/llm/tool-policy.ts`) : elles vivent ICI, par bot,
+ * et nulle part dans `/config` (qui décrit l'instance). Le slug, lui, est
+ * IMMUABLE (il nomme un dossier) et reste en lecture seule.
+ *
+ * ⚠️ Un bot neuf n'a AUCUNE capacité : « Un bot peut toujours répondre. Tout le
+ * reste s'autorise ici. » — la phrase est affichée telle quelle.
  */
 function renderBotGeneral() {
   if (!botGeneralRoot) return;
@@ -1422,27 +1426,25 @@ function renderBotGeneral() {
     h("p", {
       class: "config-helper",
       text:
-        "Informations en LECTURE SEULE : l'identifiant (slug) est IMMUABLE — il " +
-        "nomme le dossier et les chemins du bot. Un autre bot s'ajoute par « ＋ » " +
-        "et se retire par la zone de danger ci-dessous.",
+        "Le nom se modifie ici ; l'identifiant (slug) est IMMUABLE — il nomme le " +
+        "dossier et les chemins du bot. Un autre bot s'ajoute par « ＋ » et se " +
+        "retire par la zone de danger ci-dessous.",
     }),
   );
-  identite.append(ligneLecture("Nom", bot.nom ?? bot.id));
+  const champNom = h("input", {
+    class: "config-input",
+    type: "text",
+    id: "bot-general-nom",
+    maxlength: "40",
+    autocomplete: "off",
+    value: bot.nom ?? bot.id,
+  });
+  const ligneNom = h("div", { class: "config-row" }, [
+    h("label", { class: "config-label", for: "bot-general-nom", text: "Nom" }),
+    champNom,
+  ]);
+  identite.append(ligneNom);
   identite.append(ligneLecture("Identifiant (slug)", bot.id));
-  // ⚠️ PROFIL RÉEL (lot 35f) : le libellé ET ce que le profil autorise VRAIMENT.
-  // Avant ce lot, cette ligne affichait le seul mot « lecture » et laissait croire
-  // qu'il ne restreignait rien — c'était vrai. Aujourd'hui le profil INTERSECTE
-  // l'allowlist d'outils et supprime le worker lourd : la phrase doit le dire.
-  const profil = profilDePage(bot.profil);
-  identite.append(ligneLecture("Profil", profil ? profil.libelle : (bot.profil ?? "—")));
-  identite.append(
-    h("p", {
-      class: "config-helper",
-      text: profil
-        ? `Capacités : ${profil.capacites}`
-        : "Capacités inconnues : ce profil n'est pas reconnu par cette interface.",
-    }),
-  );
   identite.append(ligneLecture("État", bot.actif === true ? "actif" : "inactif"));
   const avatarRow = h("div", { class: "config-row bot-info" });
   avatarRow.append(h("span", { class: "config-label", text: "Avatar" }));
@@ -1482,6 +1484,8 @@ function renderBotGeneral() {
   identite.append(avatarRow);
   botGeneralRoot.append(identite);
 
+  botGeneralRoot.append(sectionCapacites(bot, champNom));
+
   const danger = h("section", { class: "config-group bot-danger" });
   danger.append(
     h("div", { class: "config-group__head" }, [
@@ -1509,6 +1513,105 @@ function renderBotGeneral() {
   supprimer.addEventListener("click", () => void supprimerBotCourant());
   danger.append(h("div", { class: "config-actions" }, [supprimer]));
   botGeneralRoot.append(danger);
+}
+
+/**
+ * SECTION « CAPACITÉS » — une case à cocher par famille d'outils, puis un bouton
+ * d'enregistrement.
+ *
+ * ⚠️ TOUTES DÉCOCHÉES pour un bot neuf (`capacites: []`) : c'est l'état réel
+ * renvoyé par `GET /api/bots`, jamais un défaut inventé par l'interface. La
+ * phrase fixe dit ce que l'état vide signifie : le bot répond quand même.
+ *
+ * ⚠️ L'écriture passe par `PATCH /api/bots/<id>` (`{ nom, capacites }`) et le
+ * serveur VALIDE chaque clé : une case inconnue serait refusée, jamais ignorée.
+ * Les cases reprennent l'état RÉEL en cas d'échec (aucune case qui mente).
+ */
+function sectionCapacites(bot, champNom) {
+  const section = h("section", { class: "config-group" });
+  section.append(
+    h("div", { class: "config-group__head" }, [
+      h("h2", { class: "config-group__title", text: "Capacités" }),
+    ]),
+  );
+  section.append(h("p", { class: "config-helper", text: PHRASE_CAPACITES }));
+
+  const cochees = new Set(Array.isArray(bot.capacites) ? bot.capacites : []);
+  const cases = new Map();
+  // ⚠️ Un `div` (pas un `fieldset`) : le regroupement Flex d'un `fieldset`
+  // déborde de son contenu et ferait passer les boutons au MILIEU de la liste.
+  const fieldset = h("div", { class: "bot-capacites" });
+  for (const capacite of CAPACITES_PAGE) {
+    const id = `bot-capacite-${bot.id}-${capacite.id}`;
+    const laCase = h("input", { type: "checkbox", id });
+    laCase.checked = cochees.has(capacite.id);
+    cases.set(capacite.id, laCase);
+    const ligne = h("div", { class: "config-row" }, [
+      h("label", { class: "config-label", for: id }, [laCase, ` ${capacite.libelle}`]),
+      h("span", { class: "config-helper", text: capacite.aide }),
+    ]);
+    fieldset.append(ligne);
+  }
+  section.append(fieldset);
+
+  const status = h("p", { class: "config-helper", role: "status", hidden: true });
+  const enregistrer = h("button", {
+    class: "button button--primary button--small",
+    type: "button",
+    text: "Enregistrer les capacités",
+  });
+  enregistrer.addEventListener("click", () => {
+    void (async () => {
+      status.hidden = true;
+      const demandees = CAPACITES_PAGE.map((capacite) => capacite.id).filter(
+        (id) => cases.get(id)?.checked === true,
+      );
+      enregistrer.disabled = true;
+      try {
+        const reponse = await fetch(`/api/bots/${encodeURIComponent(bot.id)}`, {
+          method: "PATCH",
+          headers: writeHeaders("bot-capacites"),
+          body: JSON.stringify({ nom: botNomSaisi(bot, champNom), capacites: demandees }),
+        });
+        const donnees = await reponse.json().catch(() => ({}));
+        if (!reponse.ok) {
+          throw Object.assign(new Error(donnees.message ?? "Enregistrement impossible."), {
+            data: donnees,
+          });
+        }
+        appliquerBotMisAJour(donnees.bot);
+        status.textContent = donnees.rechargementRequis
+          ? "Enregistré. Redémarrez le gateway pour que ce bot applique ses nouvelles capacités."
+          : "Enregistré.";
+        status.hidden = false;
+      } catch (error) {
+        // Échec : les cases reprennent l'état RÉEL (aucune case qui mente).
+        for (const [id, laCase] of cases) laCase.checked = cochees.has(id);
+        const donnees = error?.data ?? {};
+        status.textContent =
+          donnees.message ?? (error instanceof Error ? error.message : String(error));
+        status.hidden = false;
+      } finally {
+        enregistrer.disabled = false;
+      }
+    })();
+  });
+  section.append(h("div", { class: "config-actions" }, [enregistrer]), status);
+  return section;
+}
+
+/** Nom saisi (nettoyé) — le nom courant si le champ n'existe pas. */
+function botNomSaisi(bot, champ) {
+  const valeur = typeof champ?.value === "string" ? champ.value.trim() : "";
+  return valeur === "" ? (bot.nom ?? bot.id) : valeur;
+}
+
+/** Applique la réponse de `PATCH /api/bots/<id>` à l'état local (source = serveur). */
+function appliquerBotMisAJour(bot) {
+  if (!bot || typeof bot.id !== "string") return;
+  botsConnus = botsConnus.map((entree) => (entree.id === bot.id ? bot : entree));
+  if (botCourant && botCourant.id === bot.id) botCourant = bot;
+  remplirSelecteurBot();
 }
 
 /**
@@ -1630,9 +1733,12 @@ function cablerSelecteurBot() {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * « ＋ » : ouvre la modale de CRÉATION (nom, slug immuable, profil, avatar
- * facultatif, de zéro OU clone avec ses cases). ⚠️ Le bot est créé pour de vrai
- * (`POST /api/bots`) : le sélecteur l'affiche et la page bascule dessus.
+ * « ＋ » : ouvre la modale de CRÉATION (NOM, avatar facultatif ; le clonage est
+ * un second choix replié). ⚠️ Le bot est créé pour de vrai (`POST /api/bots`) :
+ * le sélecteur l'affiche et la page bascule dessus.
+ *
+ * ⚠️ Un bot neuf n'a AUCUNE capacité : le message de succès le dit, sinon
+ * l'utilisateur croirait à une panne (« il ne répond pas comme Yuki »).
  */
 async function creerBotDepuisModale() {
   if (!PAGE_BOT) return;
@@ -1651,6 +1757,11 @@ async function creerBotDepuisModale() {
   botsConnus = [...botsConnus, cree];
   botCourant = cree;
   remplirSelecteurBot();
+  await HolafModal.alert(
+    "Bot créé",
+    "Bot créé. Il ne peut rien faire tant que tu ne l'autorises pas.",
+    { okText: "Compris" },
+  );
   location.assign(urlBot(cree.id));
 }
 
@@ -1687,6 +1798,20 @@ async function supprimerBotCourant() {
         "applique encore ses anciens chemins. Redémarrez le gateway (onglet " +
         "« Maintenance » de la page Instance) pour que le bot suivant devienne " +
         "réellement actif. Ses données sont conservées 3 mois.",
+      { okText: "Compris" },
+    );
+  }
+  if (resultat.sessionsPi?.etat === "echec") {
+    // ⚠️ LOT 35i : la copie des sessions Pi a échoué. Les conversations sont
+    // INTACTES sur leur volume, mais elles ne sont plus visibles par le bot
+    // supprimé : l'utilisateur doit le SAVOIR, jamais une perte silencieuse.
+    await HolafModal.alert(
+      "Conversations conservées à part",
+      "Les conversations (sessions Pi) de ce bot n'ont pas pu être copiées dans " +
+        "l'archive : elles restent INTACTES à leur emplacement d'origine" +
+        (resultat.sessionsPi.origine ? ` (${resultat.sessionsPi.origine})` : "") +
+        ". Rien n'a été effacé. Elles seront purgées à l'échéance de la rétention " +
+        "(3 mois) avec le reste de l'archive.",
       { okText: "Compris" },
     );
   }
@@ -1776,10 +1901,12 @@ void (async () => {
     // nécessite un geste utilisateur, on `resume()` le contexte au clic.
     const player = createTtsPlayer();
     // ⚠️ Les composants autonomes qui lisent le bot ACTIF (personnalité, voix,
-    // plateformes, déclencheurs) ne sont montés que si le bot affiché EST le bot
-    // actif : sinon ils afficheraient les données d'un autre bot et
-    // enregistreraient chez lui (`bots-api.js` : `idBotActif`). Le bandeau
-    // `#bot-notice` explique l'absence.
+    // plateformes) ne sont montés que si le bot affiché EST le bot actif : sinon
+    // ils afficheraient les données d'un autre bot et enregistreraient chez lui
+    // (`bots-api.js` : `idBotActif`). Le bandeau `#bot-notice` explique l'absence.
+    // ⚠️ LOT 35j — EXCEPTION : le panneau des DÉCLENCHEURS est monté pour TOUT bot
+    // affiché (voir plus bas), parce que ses routes sont désormais PAR BOT
+    // (`?bot=<id>`) : il n'a plus besoin d'être le bot actif pour être juste.
     const panneauxDuBotActif = !PAGE_BOT || botAfficheEstActif();
     if (voicesRoot && panneauxDuBotActif) {
       voicesPanel = initVoicesPanel({
@@ -1844,8 +1971,19 @@ void (async () => {
     // Panneau des SOURCES : programmes extérieurs autorisés à réveiller Yuki
     // (nom + jeton du coffre + trois réglages indépendants + consigne libre).
     // ⚠️ Le jeton n'est affiché qu'UNE fois, à sa création.
-    if (panneauxDuBotActif && sourcesRoot) {
-      sourcesPanel = initSourcesPanel({ root: sourcesRoot, HolafFetch, HolafModal });
+    // ⚠️ LOT 35j : monté pour TOUT bot AFFICHÉ (pas seulement l'actif) et avec SON
+    // identifiant — chaque bot a SES déclencheurs, ses pré-autorisations et ses
+    // envois (`?bot=<id>`), et le panneau les nomme. Sans bot résolu (page des bots
+    // sans registre), on ne monte rien : on n'affiche jamais « ceux du bot actif »
+    // en laissant croire qu'ils sont à lui.
+    const botDesSources = PAGE_BOT ? (botCourant?.id ?? "") : "";
+    if ((!PAGE_BOT || botDesSources !== "") && sourcesRoot) {
+      sourcesPanel = initSourcesPanel({
+        root: sourcesRoot,
+        HolafFetch,
+        HolafModal,
+        botId: botDesSources,
+      });
     }
     // Panneau « Discussions » (Mattermost, Discord) : jeton saisi une fois, état de la
     // connexion, backfill 2 semaines, canaux suivis. Composant autonome monté par id.

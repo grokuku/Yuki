@@ -231,6 +231,19 @@ export interface SourcesServiceOptions {
    */
   fichier?: (fichierId: string) => { name: string; bytes: number } | null;
   now?: () => number;
+  /**
+   * ⚠️ LOT 35j — NOMS de secret ACCEPTÉS pour une source (le premier est celui
+   * dans lequel un NOUVEAU jeton est écrit).
+   *
+   * Par défaut : l'unique nom historique `YUKI_SOURCE_<NOM>`
+   * (`sourceTokenName`) — comportement d'avant, à l'identique (mono-bot, tests).
+   *
+   * En multi-bot, le démarrage branche `YUKI_SOURCE_<BOT>__<NOM>` **et**, pour le
+   * bot historique `yuki` seulement, l'ancien nom : un jeton déjà distribué
+   * continue de fonctionner (aucune migration de coffre), et le nom du secret dit
+   * à QUEL bot il appartient (jamais de collision entre deux bots).
+   */
+  secretNames?: (nom: string) => readonly string[];
 }
 
 /** Réponse de `openConversation`. */
@@ -545,6 +558,8 @@ export class SourcesService {
   private readonly notify?: SourcesServiceOptions["notify"];
   private readonly journal?: Pick<DeclencheurJournal, "append">;
   private readonly now: () => number;
+  /** Noms de secret acceptés pour une source (`secretNames`, défaut historique). */
+  private readonly secretNames: (nom: string) => readonly string[];
   /** Port des tâches de fond (job lourd) — lot 2. */
   private jobs?: DeclencheurJobsPort;
   /** Port de publication dans le fil local (lot 2). */
@@ -589,6 +604,26 @@ export class SourcesService {
     this.publication = options.publication;
     this.fichierPort = options.fichier;
     this.now = options.now ?? Date.now;
+    this.secretNames = options.secretNames ?? ((nom) => [sourceTokenName(nom)]);
+  }
+
+  /**
+   * Noms de secret de CETTE source, SANS doublon (le premier reçoit un nouveau
+   * jeton). Une liste vide est impossible : le repli historique est toujours là.
+   */
+  private nomsSecrets(nom: string): string[] {
+    let noms: readonly string[];
+    try {
+      noms = this.secretNames(nom);
+    } catch {
+      noms = [sourceTokenName(nom)];
+    }
+    const vus = new Set<string>();
+    for (const candidat of noms) {
+      if (typeof candidat === "string" && candidat !== "") vus.add(candidat);
+    }
+    if (vus.size === 0) vus.add(sourceTokenName(nom));
+    return [...vus];
   }
 
   /**
@@ -698,14 +733,16 @@ export class SourcesService {
     }
   }
 
-  /** Supprime une source ET son jeton de coffre. */
+  /** Supprime une source ET ses jetons de coffre (tous les noms acceptés). */
   remove(nom: string): boolean {
     const removed = this.store.remove(nom);
     if (!removed) return false;
-    try {
-      this.tokens?.delete(sourceTokenName(nom));
-    } catch (error) {
-      this.logger.warn("sources.token.delete_failed", { source: nom, error: messageOf(error) });
+    for (const secret of this.nomsSecrets(nom)) {
+      try {
+        this.tokens?.delete(secret);
+      } catch (error) {
+        this.logger.warn("sources.token.delete_failed", { source: nom, error: messageOf(error) });
+      }
     }
     this.calls.delete(nom);
     this.logger.info("sources.removed", { source: nom });
@@ -729,41 +766,67 @@ export class SourcesService {
       );
     }
     const token = randomBytes(32).toString("base64url");
-    vault.set(sourceTokenName(nom), token, `Jeton de la source « ${nom} »`);
+    // ⚠️ Le PREMIER nom de la liste est celui du format COURANT (nommant le bot en
+    // multi-bot). Les jetons déjà distribués sous l'autre nom restent valides : on
+    // n'efface rien (aucune migration de coffre).
+    const secret = this.nomsSecrets(nom)[0] ?? sourceTokenName(nom);
+    vault.set(secret, token, `Jeton de la source « ${nom} »`);
     this.store.markTokenCreated(nom);
     this.logger.info("sources.token.created", { source: nom });
     return token;
   }
 
   private hasToken(nom: string): boolean {
-    try {
-      return this.tokens?.has(sourceTokenName(nom)) === true;
-    } catch {
-      return false;
+    for (const secret of this.nomsSecrets(nom)) {
+      try {
+        if (this.tokens?.has(secret) === true) return true;
+      } catch {
+        // Coffre verrouillé : on continue sur les autres noms, jamais d'exception.
+      }
     }
+    return false;
   }
 
   // ── Réception d'un message ────────────────────────────────────────────────
 
   /**
-   * Reçoit un message de source. Lève `SourceApiError` (401/404/400/429) ou
+   * Reçoit un message de source. Lève `SourceApiError` (401/403/404/400/429) ou
    * renvoie la livraison (`started` / `stored` / `duplicate` / `failed`).
+   *
+   * ⚠️ LOT 35j — `secret` : nom d'entrée de coffre DÉJÀ identifié par l'appelant
+   * (`SourcesParBot`, qui a résolu le bot par le JETON). Il n'est jamais fourni par
+   * un client : la route ne le transmet pas. Le service revérifie malgré tout le
+   * jeton contre CETTE entrée (défense en profondeur) — et sans ce paramètre, il
+   * essaie tous les noms acceptés (format courant puis historique).
    */
-  async receive(nom: string, token: string, body: unknown): Promise<SourceDelivery> {
+  async receive(
+    nom: string,
+    token: string,
+    body: unknown,
+    secret?: string,
+  ): Promise<SourceDelivery> {
     const record = this.store.get(nom);
     if (!record) {
       // ⚠️ La source est vérifiée AVANT le jeton : une source inconnue est un 404
       // explicite (aucun jeton ne peut exister pour elle).
       throw new SourceApiError(404, "unknown_source", `Source inconnue : « ${nom} ».`);
     }
-    let expected: string | undefined;
-    try {
-      expected = this.tokens?.lookup(sourceTokenName(nom));
-    } catch (error) {
-      this.logger.warn("sources.token.lookup_failed", { source: nom, error: messageOf(error) });
-      expected = undefined;
+    const secrets = secret !== undefined && secret !== "" ? [secret] : this.nomsSecrets(nom);
+    let authorized = false;
+    for (const candidat of secrets) {
+      let expected: string | undefined;
+      try {
+        expected = this.tokens?.lookup(candidat);
+      } catch (error) {
+        this.logger.warn("sources.token.lookup_failed", { source: nom, error: messageOf(error) });
+        expected = undefined;
+      }
+      if (tokensMatch(expected, token)) {
+        authorized = true;
+        break;
+      }
     }
-    if (!tokensMatch(expected, token)) {
+    if (!authorized) {
       this.logger.warn("sources.message.unauthorized", { source: nom });
       throw new SourceApiError(
         401,

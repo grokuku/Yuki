@@ -15,7 +15,7 @@
  * La table est extensible par simple ajout d'entrées aux lots 4/5.
  */
 
-import type { ProfilBot } from "../bots/registry.js";
+import type { CapaciteBot } from "../bots/registry.js";
 import type { LlmRole } from "./providers.js";
 
 /** Outils builtins exposables (lecture seule au Lot 2). */
@@ -441,120 +441,145 @@ export const FILE_LIST_TOOLS: readonly FileListToolName[] = ["lister_fichiers"];
 export const FILE_READ_TOOLS: readonly FileReadToolName[] = ["lire_fichier"];
 
 /**
- * PROFILS DE CAPACITÉS RÉELS (lot 35f) — CE QUE CHAQUE PROFIL AUTORISE.
+ * CAPACITÉS D'UN BOT (lot 35h) — CE QUE CHAQUE FAMILLE D'OUTILS OUVRE.
  *
  * ⚠️ RÈGLE UNIQUE, ÉCRITE ICI ET NULLE PART AILLEURS :
  *
- *     allowlistFinale = toolAllowlist(rôle, options) ∩ PROFIL
+ *     allowlistFinale = toolAllowlist(rôle, options) ∩ OUTILS_DES_CAPACITES(capacites)
  *
- * Un profil ne peut que **RETIRER** des outils, JAMAIS en AJOUTER. C'est la
+ * Une capacité ne peut que **RETIRER** des outils, JAMAIS en AJOUTER. C'est la
  * raison d'être de l'intersection : le câblage (`src/index.ts`) décide de ce qui
  * est POSSIBLE (un port absent ⇒ outil absent, un réglage `desactive` ⇒ groupe
- * fermé) ; le profil décide seulement de ce qui est PERMIS AU BOT. Sans
- * l'intersection, un profil « lecture » serait une ÉTIQUETTE mensongère : il
- * rouvrirait ce que le câblage a fermé (ex. `chat.remoteAgents = desactive` ⇒
- * `delegate` de retour).
+ * fermé) ; les capacités décident seulement de ce qui est PERMIS AU BOT. Sans
+ * l'intersection, une capacité rouvrirait ce que le câblage a fermé (ex.
+ * `chat.remoteAgents = desactive` ⇒ `delegate` de retour).
  *
- * ⚠️ `complet` = la liste ENTIÈRE (`undefined` ⇒ aucun filtrage) : le
- * comportement d'aujourd'hui, élément pour élément, sans recopie de liste.
- * Recopier `TOOL_POLICY.light` ici créerait une seconde source de vérité qui
- * divergerait au premier ajout d'outil.
+ * ⚠️ UN BOT NEUF N'A AUCUNE CAPACITÉ (`[]`) : son allowlist est VIDE — aucun
+ * builtin, aucun outil custom. Il peut toujours RÉPONDRE (ce n'est pas un outil :
+ * c'est le tour de conversation lui-même), et c'est tout.
  *
- * ⚠️ AUCUN BUILTIN À `lecture` NI À `accueil` : `read`, `ls`, `grep`, `find`
- * donnent accès au VOLUME DE TRAVAIL (arbitraire du système, code, secrets
- * éventuels) — ce sont des outils d'agent de développement, pas de conversation.
- * Un bot restreint garde la conversation, les fichiers de SA conversation, la
- * publication dans un canal suivi, et (pour `lecture`) le libraire et les
- * images.
+ * ⚠️ `undefined` = « aucun filtrage » : c'est le cas d'un appel qui ne connaît pas
+ * de bot (mono-bot historique, tests de la politique du rôle). Un bot du registre
+ * a TOUJOURS une liste (le registre normalise : champ absent ⇒ toutes les
+ * capacités).
  *
- * ⚠️ RETIRÉS AUX DEUX PROFILS RESTREINTS, et pourquoi :
- *  - `run_command`, `capturer_ecran`, `recuperer_fichier`, `deposer_fichier` :
- *    ce sont des ACTIONS sur une machine appairée (approbation humaine incluse) ;
- *  - `lister_agents`, `etat_agent` : l'annuaire des machines n'a d'intérêt que
- *    pour déléguer, et rien ne se délègue ici ;
- *  - `lister_secrets`, `demander_secret` : le coffre est un moyen d'EXÉCUTER
- *    (référence `${NOM}` dans une commande) ; sans exécution, il n'est qu'une
- *    surface d'exposition ;
- *  - `delegate`, `job_status`, `cancel_job`, `steer_job` : la délégation EST
- *    l'action déléguée — la garder reviendrait à garder `run_command` par un
- *    détour ;
- *  - `archive_vie_anterieure`, `chercher_conversations_archivees`,
- *    `archive_libraire` : l'ARCHIVAGE est une écriture d'historique de fond, pas
- *    une consultation ;
- *  - `programmer_envoi`, `planifier_tache` : actes de RÉDACTEUR DE FOND (« un seul
- *    rédacteur ») — un bot d'accueil ou de consultation répond, il ne prend pas
- *    la parole plus tard à la place de Yuki.
+ * ⚠️ `execution` et `delegation` sont les DEUX capacités STRUCTURELLES : sans
+ * l'une des deux, le worker lourd n'est pas instancié (`src/bots/profils.ts`) et
+ * `run_command` ne peut donc pas exister, même par un job importé ou une tâche
+ * planifiée. Les autoriser ici ne suffit pas à les obtenir : il faut le worker.
+ *
+ * ⚠️ Chaque outil custom appartient à UNE SEULE capacité (partition vérifiée par
+ * test) : deux capacités qui se recouvriraient rendraient le réglage ambigu.
  */
-export interface ProfilOutils {
-  /** Builtins exposés par le profil (allowlist SDK). */
+export interface CapaciteOutils {
+  /** Builtins exposés par la capacité (allowlist SDK). */
   readonly builtins: readonly BuiltinToolName[];
-  /** Outils custom autorisés par le profil (sous-ensemble de `CustomToolName`). */
+  /** Outils custom ouverts par la capacité (sous-ensemble de `CustomToolName`). */
   readonly custom: readonly CustomToolName[];
 }
 
 /**
- * TABLE DES PROFILS (⚠️ `Record<ProfilBot, …>` : un profil non décrit ne compile
- * pas). `complet` vaut `null` : « aucun filtrage », donc la liste du câblage.
+ * TABLE DES CAPACITÉS (⚠️ `Record<CapaciteBot, …>` : une capacité qui n'est pas
+ * décrite ici ne compile pas — la liste des clés vit dans le registre,
+ * `CAPACITES_BOT`, `src/bots/registry.ts`).
  */
-export const PROFIL_OUTILS: Readonly<Record<ProfilBot, ProfilOutils | null>> = {
-  /** Tout ce que le câblage active — comportement historique, à l'identique. */
-  complet: null,
-  /** Bot de CONSULTATION : converse, lit/écrit les fichiers, libraire, images. */
-  lecture: {
+export const OUTILS_DES_CAPACITES: Readonly<Record<CapaciteBot, CapaciteOutils>> = {
+  /** Pièces jointes de la conversation : lister, lire, récupérer, déposer. */
+  fichiers: {
+    builtins: [],
+    custom: [...FILE_LIST_TOOLS, ...FILE_READ_TOOLS, ...FILE_TRANSFER_TOOLS],
+  },
+  /** Parler : message dans la conversation, fichier envoyé, publication en canal. */
+  envoi: {
+    builtins: [],
+    custom: [...MESSAGE_TOOLS, ...FILES_TOOLS, ...CHANNEL_POST_TOOLS],
+  },
+  /** Bibliothèque documentaire (recherche, lecture, archivage, capture). */
+  libraire: {
     builtins: [],
     custom: [
-      // ── dans la conversation (le socle `toujours`)
-      ...MESSAGE_TOOLS,
-      ...FILES_TOOLS,
-      ...FILE_LIST_TOOLS,
-      ...FILE_READ_TOOLS,
-      ...CHANNEL_POST_TOOLS,
-      // ── consultation : libraire + lecture de page web
       "recherche_libraire",
       "liste_libraire",
       "lire_libraire",
-      "lire_page_web",
-      // ── capture de page web (vérification d'un rendu)
+      "archive_libraire",
       ...LIBRARIAN_CAPTURE_TOOLS,
-      // ── images (génération + consignes de workflow)
-      ...IMAGE_TOOLS,
     ],
   },
-  /** Bot d'ACCUEIL : oriente et renseigne, sans bibliothèque documentaire. */
-  accueil: {
+  /** Lecture d'une page web par le libraire (`lire_page_web`). */
+  web: {
     builtins: [],
-    custom: [
-      ...MESSAGE_TOOLS,
-      ...FILES_TOOLS,
-      ...FILE_LIST_TOOLS,
-      ...FILE_READ_TOOLS,
-      ...CHANNEL_POST_TOOLS,
-    ],
+    custom: ["lire_page_web"],
+  },
+  /** Images générées (ComfyUI) et consignes de workflow. */
+  images: {
+    builtins: [],
+    custom: [...IMAGE_TOOLS],
+  },
+  /** Annuaire des machines appairées (lecture seule). */
+  agents: {
+    builtins: [],
+    custom: [...AGENT_DIRECTORY_TOOLS],
+  },
+  /** Exécution sur une machine appairée : commande et capture d'écran. */
+  execution: {
+    builtins: [],
+    custom: [...EXECUTION_TOOLS, ...SCREENSHOT_TOOLS],
+  },
+  /** Délégation au worker lourd : déléguer et suivre le job. */
+  delegation: {
+    builtins: [],
+    custom: [...DELEGATE_TOOLS],
+  },
+  /** Coffre de secrets : lister les NOMS, demander une saisie. */
+  secrets: {
+    builtins: [],
+    custom: [...SECRET_DIRECTORY_TOOLS, ...SECRET_REQUEST_TOOLS],
+  },
+  /** Prendre la parole plus tard : envoi programmé et tâche planifiée. */
+  programmation: {
+    builtins: [],
+    custom: [...ENVOI_PROGRAMME_TOOLS, ...PLANIFIER_TACHE_TOOLS],
+  },
+  /** Archives consultables : vie antérieure et conversations mises de côté. */
+  memoire: {
+    builtins: [],
+    custom: [...HERITAGE_TOOLS, ...CONVERSATION_ARCHIVE_TOOLS],
+  },
+  /**
+   * Builtins de l'agent de développement (`read`, `ls`, `grep`, `find`).
+   * ⚠️ Ils donnent accès au VOLUME DE TRAVAIL (code, secrets éventuels) : c'est
+   * pourquoi ils forment une capacité À PART, décochée comme les autres.
+   */
+  builtins: {
+    builtins: [...READ_ONLY_TOOLS],
+    custom: [],
   },
 };
 
 /**
- * INTERSECTION d'une allowlist avec un profil.
+ * INTERSECTION d'une allowlist avec les capacités d'un bot.
  *
- * ⚠️ Le seul point de la règle `allowlistFinale = allowlist ∩ PROFIL` : les
+ * ⚠️ Le seul point de la règle `allowlistFinale = allowlist ∩ CAPACITÉS` : les
  * appelants ne filtrent JAMAIS eux-mêmes (deux filtrages divergeraient).
- * `complet` rend la liste reçue, à l'identique (non-régression garantie).
+ * `undefined` rend la liste reçue, à l'identique (aucun bot en jeu).
  *
  * ⚠️ L'ordre de la liste reçue est CONSERVÉ (les tests comparent des tableaux).
  */
-export function filtrerSelonProfil(
+export function filtrerSelonCapacites(
   tools: readonly string[],
-  profil: ProfilBot | undefined,
+  capacites: readonly CapaciteBot[] | undefined,
 ): string[] {
-  // `complet` (et l'absence de profil) = la liste reçue, à l'IDENTIQUE.
-  if (profil === undefined || profil === "complet") return [...tools];
-  const table: ProfilOutils | null | undefined = PROFIL_OUTILS[profil];
-  // ⚠️ Une valeur INCONNUE ne peut pas arriver jusqu'ici : le registre REFUSE un
-  // profil hors `PROFILS_BOT` à la lecture (`src/bots/registry.ts:298-302`). Si
-  // elle arrivait quand même, on refuse TOUT (fail-closed) plutôt que de rouvrir
-  // les pouvoirs d'un bot prétendument restreint.
-  if (table === null || table === undefined) return [];
-  const autorises = new Set<string>([...table.builtins, ...table.custom]);
+  if (capacites === undefined) return [...tools];
+  const autorises = new Set<string>();
+  for (const capacite of capacites) {
+    const entree: CapaciteOutils | undefined = OUTILS_DES_CAPACITES[capacite];
+    // ⚠️ Une capacité inconnue n'ouvre RIEN (fail-closed) : le registre la refuse
+    // à l'écriture (`src/bots/registry.ts`), elle ne peut donc pas venir d'un
+    // fichier valide — mais on ne l'interprète jamais comme « tout ».
+    if (entree === undefined) continue;
+    for (const outil of entree.builtins) autorises.add(outil);
+    for (const outil of entree.custom) autorises.add(outil);
+  }
   return tools.filter((tool) => autorises.has(tool));
 }
 
@@ -774,17 +799,20 @@ export interface ToolAllowlistOptions {
    */
   imagesEnabled?: boolean;
   /**
-   * PROFIL DU BOT ACTIF (lot 35f) — ⚠️ il ne peut que RETIRER des outils.
+   * CAPACITÉS DU BOT ACTIF (lot 35h) — ⚠️ elles ne peuvent que RETIRER des outils.
    *
-   * `undefined` ou `complet` ⇒ aucun filtrage (comportement historique).
-   * `lecture`/`accueil` ⇒ intersection avec `PROFIL_OUTILS` (règle unique :
-   * `allowlistFinale = toolAllowlist(…) ∩ PROFIL`).
+   * `undefined` ⇒ aucun filtrage (appel qui ne connaît pas de bot : mono-bot
+   * historique, tests de la politique du rôle). Un bot du registre a TOUJOURS une
+   * liste : `[]` pour un bot neuf (allowlist VIDE), la liste complète pour un bot
+   * hérité (champ absent ⇒ toutes, normalisé à la lecture du registre).
    *
-   * ⚠️ La valeur vient TOUJOURS du bot actif du registre
-   * (`bots.bot?.profil ?? "complet"`, `src/index.ts:277`), JAMAIS d'un corps de
-   * requête ou d'un message : un client ne choisit pas son propre profil.
+   * Règle unique : `allowlistFinale = toolAllowlist(…) ∩ OUTILS_DES_CAPACITES`.
+   *
+   * ⚠️ La valeur vient TOUJOURS du bot du registre (`bots.bot?.capacites`,
+   * `src/index.ts`), JAMAIS d'un corps de requête ou d'un message : un client ne
+   * choisit pas ses propres pouvoirs.
    */
-  profil?: ProfilBot;
+  capacites?: readonly CapaciteBot[];
 }
 
 /**
@@ -882,11 +910,11 @@ export function toolAllowlist(
   if (imagesEnabled) {
     tools.push(...entry.images);
   }
-  // ⚠️ DERNIER mot : le PROFIL. Une seule règle (`allowlistFinale = allowlist ∩
-  // PROFIL`), un seul endroit. Un profil ne peut que RETIRER : tout ce qui n'est
-  // pas explicitement autorisé par `PROFIL_OUTILS` disparaît, y compris ce que le
-  // câblage venait d'activer.
-  return filtrerSelonProfil(tools, options.profil);
+  // ⚠️ DERNIER mot : les CAPACITÉS. Une seule règle (`allowlistFinale = allowlist
+  // ∩ OUTILS_DES_CAPACITES`), un seul endroit. Une capacité ne peut que RETIRER :
+  // tout ce qui n'est pas ouvert par les capacités du bot disparaît, y compris ce
+  // que le câblage venait d'activer. `[]` (bot neuf) ⇒ liste VIDE.
+  return filtrerSelonCapacites(tools, options.capacites);
 }
 
 /**
@@ -1346,13 +1374,14 @@ export function toolAllowlistForChat(
   // contenu dans son message) alors qu'un run de canal en a besoin pour voir une
   // pièce jointe. Un port absent est signalé par l'appelant, jamais deviné ici.
   for (const tool of REMOTE_ALWAYS_TOOLS) autorises.add(tool);
-  // ⚠️ INTERSECTION AVEC LE PROFIL, APRÈS le socle `toujours` : le socle est poussé
-  // SANS passer par les options du rôle, or deux de ses outils (`programmer_envoi`,
-  // `planifier_tache`) sont RETIRÉS aux profils restreints. Filtrer seulement dans
-  // `toolAllowlist` les laisserait passer par cette porte.
-  return filtrerSelonProfil(
+  // ⚠️ INTERSECTION AVEC LES CAPACITÉS, APRÈS le socle `toujours` : le socle est
+  // poussé SANS passer par les options du rôle, or deux de ses outils
+  // (`programmer_envoi`, `planifier_tache`) ne sont ouverts que par la capacité
+  // `programmation`. Filtrer seulement dans `toolAllowlist` les laisserait passer
+  // par cette porte.
+  return filtrerSelonCapacites(
     [...autorises].filter((tool) => !APPROVAL_REQUIRED_TOOLS.includes(tool)),
-    options.profil,
+    options.capacites,
   );
 }
 

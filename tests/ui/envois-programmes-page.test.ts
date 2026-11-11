@@ -130,7 +130,10 @@ describe("volet « Envois programmés » — câblage de la page", () => {
   it("déclare le volet, l'affiche et le recharge à l'ouverture", () => {
     expect(panneau).toContain("ANCRE_ENVOIS_PROGRAMMES");
     expect(panneau).toContain("Envois programmés (messages qui partiront à une heure précise)");
-    expect(panneau).toContain('HolafFetch.get("/api/sources/envois"');
+    // ⚠️ LOT 35j : la route passe par `urlApi` (ajout de `?bot=<id>` pour la page
+    // d'un bot) — la vérification porte donc sur la route ET sur le passage par
+    // `urlApi`, pas sur l'URL nue.
+    expect(panneau).toContain('HolafFetch.get(urlApi("/api/sources/envois")');
     expect(panneau).toContain("await chargerEnvois();");
     // ⚠️ MONTÉ dans la page, pas seulement défini : un volet construit mais absent de
     // l'arbre ne serait ni visible ni annulable — exactement la bombe à retardement

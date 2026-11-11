@@ -112,6 +112,7 @@ export type {
 
 export {
   BALAYAGE_INTERVAL_MS,
+  BalayeurBots,
   DeclencheurBalayeur,
   GRACE_APRES_ABORT_MS,
   RAISON_TACHE_EN_COURS,
@@ -120,13 +121,33 @@ export {
   raisonGardeFouQuotidien,
 } from "./scheduler.js";
 export type {
+  BalayeurBotsOptions,
+  BalayeurBotsPort,
   BalayeurLogger,
   BalayeurStore,
+  CibleBalayage,
   DeclencheurBalayeurOptions,
   DeclencheurRunner,
   EnvoisProgrammesRunner,
   PasseHebdoRunner,
 } from "./scheduler.js";
+
+export {
+  SEPARATEUR_SECRET_BOT,
+  SourcesParBot,
+  SourcesParBotError,
+  filtreAgentVisible,
+  nomSecretSource,
+  nomsSecretsSource,
+  portPreAutorisations,
+} from "./par-bot.js";
+export type {
+  DepsSourcesBot,
+  JetonResolu,
+  ModeBots,
+  OptionsSourcesParBot,
+  PileSourcesBot,
+} from "./par-bot.js";
 
 export {
   ORIGIN_DECLENCHEUR,

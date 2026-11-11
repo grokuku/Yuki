@@ -39,17 +39,16 @@ import {
   demandeChangementBot,
   groupesParOnglet,
   idsOnglets,
+  CAPACITES_PAGE,
   CLONE_ELEMENTS,
   MAX_BOTS_PAGE,
   NOM_BOT_MAX_PAGE,
+  PHRASE_CAPACITES,
   RETENTION_ARCHIVES_JOURS_PAGE,
-  SLUG_BOT_PATTERN_PAGE,
   confirmationSuppressionBot,
   defautsClone,
   libelleTaille,
   ligneDePage,
-  PROFILS_BOT_PAGE,
-  profilDePage,
   modaleCreationBot,
   ongletDuHash,
   ongletsDePage,
@@ -64,8 +63,8 @@ import {
   NOM_BOT_MAX,
   RETENTION_ARCHIVES_JOURS,
 } from "../../src/bots/admin.js";
-import { PROFILS_BOT, SLUG_BOT_PATTERN, type ProfilBot } from "../../src/bots/registry.js";
-import { filtrerSelonProfil, type CustomToolName } from "../../src/llm/index.js";
+import { CAPACITES_BOT } from "../../src/bots/registry.js";
+import { OUTILS_DES_CAPACITES } from "../../src/llm/index.js";
 import { CONFIG_SCHEMA } from "../../src/config/schema.js";
 
 const lire = (nom: string): string =>
@@ -463,7 +462,10 @@ describe("⑤ sélecteur de bot : état dans l'URL, modales HolafModal", () => {
     expect(spec.message).not.toContain("bientôt disponible");
     expect(spec.message).not.toContain("lot ultérieur");
     expect(spec.cloneables).toEqual([{ id: "yuki", libelle: "Yuki (yuki)" }]);
-    expect(spec.profils.map((profil) => profil.id)).toEqual(["complet", "lecture", "accueil"]);
+    // ⚠️ LOT 35h — CRÉATION SIMPLE : plus aucun choix de profil dans la modale
+    // (ni capacités, ni slug : le serveur les dérive). La clé `profils` a disparu.
+    expect(spec).not.toHaveProperty("profils");
+    expect(CONFIG_JS).not.toContain("bot-creation-profil");
     // Le bouton ouvre la modale (brique HolafModal) et la création est réelle.
     expect(CONFIG_JS).toContain("ouvrirCreationBot({ HolafModal, bots: botsConnus })");
     const admin = lire("bots-admin.js");
@@ -517,31 +519,28 @@ describe("⑤bis ajout / clone / suppression — les données décidées", () =>
     expect(memoire?.aide).toContain("croirait avoir vécu la même chose");
   });
 
-  it("les bornes de l'interface sont celles du serveur (6 / 40 / 90 / slug)", () => {
+  it("les bornes de l'interface sont celles du serveur (6 / 40 / 90)", () => {
     expect(MAX_BOTS_PAGE).toBe(MAX_BOTS);
     expect(NOM_BOT_MAX_PAGE).toBe(NOM_BOT_MAX);
     expect(RETENTION_ARCHIVES_JOURS_PAGE).toBe(RETENTION_ARCHIVES_JOURS);
-    expect(SLUG_BOT_PATTERN_PAGE.source).toBe(SLUG_BOT_PATTERN.source);
+    // ⚠️ Le slug n'est plus saisi : aucune copie de motif côté interface à garder
+    // synchronisée (il est dérivé et validé par le serveur).
+    expect(CONFIG_JS).not.toContain("bot-creation-slug");
   });
 
-  it("`validerCreationBot` refuse un nom vide, un nom trop long et un slug invalide", () => {
-    expect(validerCreationBot({ nom: "", slug: "kohai" }).champs.nom).toContain("obligatoire");
+  it("`validerCreationBot` ne demande QUE le nom (vide et trop long refusés)", () => {
+    expect(validerCreationBot({ nom: "" }).champs.nom).toContain("obligatoire");
+    expect(validerCreationBot({ nom: "   " }).champs.nom).toContain("obligatoire");
+    expect(validerCreationBot({}).champs.nom).toContain("obligatoire");
     expect(
-      validerCreationBot({ nom: "n".repeat(NOM_BOT_MAX_PAGE + 1), slug: "kohai" }).champs.nom,
+      validerCreationBot({ nom: "n".repeat(NOM_BOT_MAX_PAGE + 1) }).champs.nom,
     ).toContain("trop long");
-    for (const slug of ["k", "-a", "a_b", "a b", "a".repeat(32)]) {
-      expect(validerCreationBot({ nom: "K", slug }).champs.slug, slug).toBeTruthy();
-    }
-    // Les MAJUSCULES sont normalisées (le slug est toujours en minuscules).
-    expect(validerCreationBot({ nom: "K", slug: "A-b" }).slug).toBe("a-b");
-    // Un slug DÉJÀ utilisé est refusé côté page aussi (message explicite).
-    expect(
-      validerCreationBot({ nom: "K", slug: "yuki", existants: ["yuki"] }).champs.slug,
-    ).toContain("déjà utilisé");
-    // Cas nominal : normalisation en minuscules + slug libre.
-    const ok = validerCreationBot({ nom: "  Kohai  ", slug: "Kohai-2" });
+    // Cas nominal : un nom suffit, rien d'autre n'est demandé.
+    const ok = validerCreationBot({ nom: "  Kohai  " });
     expect(ok.ok).toBe(true);
-    expect(ok.slug).toBe("kohai-2");
+    expect(ok.champs).toEqual({});
+    // Le formulaire ne produit plus de slug : c'est le SERVEUR qui le dérive.
+    expect(ok).not.toHaveProperty("slug");
   });
 
   it("la modale de création annonce la limite de 6 bots", () => {
@@ -614,87 +613,180 @@ describe("⑥ gardes CSP : elles s'appliquent AUX DEUX pages", () => {
   });
 });
 
-describe("⑦ profils de capacités RÉELS (lot 35f) — la phrase dit ce qui est vrai", () => {
+describe("⑦ CAPACITÉS d'un bot (lot 35h) — une case par famille, décochées au départ", () => {
   /**
-   * Mot-clé attendu dans la phrase du profil ↔ OUTIL qui porte la capacité.
+   * Mot-clé attendu dans l'aide d'une capacité ↔ OUTIL qui porte cette capacité.
    *
-   * ⚠️ Ce couplage est le garde-fou anti-divergence : la phrase est une COPIE
-   * rédigée à la main, la table d'outils est l'autorité (`PROFIL_OUTILS`). Si un
-   * profil gagne ou perd une famille d'outils sans que sa phrase bouge, la garde
-   * tombe — c'est exactement le défaut que ce lot corrige (une étiquette qui ne
-   * dit rien de vrai).
+   * ⚠️ Ce couplage est le garde-fou anti-divergence : le libellé et l'aide sont une
+   * COPIE rédigée à la main, la table d'outils est l'autorité
+   * (`OUTILS_DES_CAPACITES`). Si une capacité gagne une famille d'outils sans que
+   * son aide bouge, la garde tombe.
    */
-  const CAPACITES: ReadonlyArray<{ mot: string; outil: CustomToolName }> = [
-    { mot: "commande", outil: "run_command" },
-    { mot: "capture", outil: "capturer_ecran" },
-    { mot: "agents", outil: "lister_agents" },
-    { mot: "secrets", outil: "lister_secrets" },
-    { mot: "délégation", outil: "delegate" },
-    // ⚠️ Radical, pas le mot entier : « planifiée »/« planifiées » selon le profil.
-    { mot: "planifié", outil: "planifier_tache" },
-    { mot: "programmé", outil: "programmer_envoi" },
-    { mot: "libraire", outil: "recherche_libraire" },
-    { mot: "images", outil: "generer_image" },
+  const MOTS: ReadonlyArray<{ capacite: string; mots: readonly string[] }> = [
+    { capacite: "fichiers", mots: ["fichier"] },
+    { capacite: "envoi", mots: ["conversation"] },
+    { capacite: "libraire", mots: ["bibliothèque"] },
+    { capacite: "web", mots: ["page web"] },
+    { capacite: "images", mots: ["image"] },
+    { capacite: "agents", mots: ["machine"] },
+    { capacite: "execution", mots: ["commande"] },
+    { capacite: "delegation", mots: ["travail"] },
+    { capacite: "secrets", mots: ["coffre"] },
+    { capacite: "programmation", mots: ["programmer"] },
+    { capacite: "memoire", mots: ["vie antérieure"] },
+    { capacite: "builtins", mots: ["read", "grep"] },
   ];
 
-  it("les trois profils de l'interface sont EXACTEMENT ceux du registre", () => {
-    expect(PROFILS_BOT_PAGE.map((profil) => profil.id)).toEqual([...PROFILS_BOT]);
+  it("les cases de l'interface sont EXACTEMENT les capacités du registre", () => {
+    expect(CAPACITES_PAGE.map((capacite) => capacite.id)).toEqual([...CAPACITES_BOT]);
   });
 
-  it("chaque profil a une phrase non vide (une phrase, pas un mot)", () => {
-    for (const profil of PROFILS_BOT_PAGE) {
-      expect(typeof profil.capacites, profil.id).toBe("string");
-      expect(profil.capacites.trim().length, profil.id).toBeGreaterThan(60);
-      expect(profil.capacites.trim().endsWith("."), profil.id).toBe(true);
+  it("chaque capacité a un libellé court et une ligne d'explication", () => {
+    for (const capacite of CAPACITES_PAGE) {
+      expect(typeof capacite.libelle, capacite.id).toBe("string");
+      expect(capacite.libelle.trim().length, capacite.id).toBeGreaterThan(2);
+      expect(capacite.libelle.length, capacite.id).toBeLessThanOrEqual(30);
+      expect(capacite.aide.trim().length, capacite.id).toBeGreaterThan(20);
+      expect(capacite.aide.trim().endsWith("."), capacite.id).toBe(true);
     }
   });
 
-  it("chaque famille de capacité est NOMMÉE dans la phrase de CHAQUE profil", () => {
-    // Autorisée ou retirée, la capacité doit être DITE : c'est ce qui manquait.
-    for (const profil of PROFILS_BOT_PAGE) {
-      for (const { mot } of CAPACITES) {
-        expect(profil.capacites.toLowerCase(), `${profil.id} / ${mot}`).toContain(mot);
+  it("l'aide de chaque case nomme ce que la capacité ouvre VRAIMENT", () => {
+    for (const { capacite, mots } of MOTS) {
+      const entree = CAPACITES_PAGE.find((candidat) => candidat.id === capacite);
+      expect(entree, capacite).toBeTruthy();
+      // Garde croisée : la capacité existe bien dans la table serveur.
+      expect(Object.keys(OUTILS_DES_CAPACITES), capacite).toContain(capacite);
+      for (const mot of mots) {
+        expect(entree?.aide.toLowerCase(), `${capacite} / ${mot}`).toContain(mot);
       }
     }
   });
 
-  it("une capacité RETIRÉE est annoncée comme retirée, une gardée comme gardée", () => {
-    for (const profil of PROFILS_BOT_PAGE) {
-      for (const { mot, outil } of CAPACITES) {
-        const autorise = filtrerSelonProfil([outil], profil.id as ProfilBot).length === 1;
-        const phrase = profil.capacites.toLowerCase();
-        // ⚠️ Formulation : « ni X » / « aucun X » pour un retrait, « X » seul sinon.
-        // On vérifie le fait BRUT (mention présente) et, pour un retrait, la
-        // présence d'une négation dans la phrase du profil restreint.
-        expect(phrase, `${profil.id} / ${mot}`).toContain(mot);
-        if (!autorise) {
-          expect(phrase, `${profil.id} ne doit pas promettre ${mot}`).toMatch(
-            /(ni |aucun |aucune |rien d'autre)/,
-          );
-        }
-      }
+  it("la phrase fixe de l'onglet Général est celle décidée", () => {
+    expect(PHRASE_CAPACITES).toBe(
+      "Un bot peut toujours répondre. Tout le reste s'autorise ici.",
+    );
+    // ⚠️ Garde de RENDU : la phrase doit être AFFICHÉE (pas seulement définie).
+    expect(CONFIG_JS).toContain("PHRASE_CAPACITES");
+    expect(CONFIG_JS).toContain("CAPACITES_PAGE");
+    expect(CONFIG_JS).toContain("bot-capacite-");
+    // Aucun champ « Profil » ne subsiste sur la page du bot.
+    expect(CONFIG_JS).not.toContain("profilDePage");
+    expect(CONFIG_JS).not.toContain("ligneLecture(\"Profil\"");
+  });
+
+  it("l'enregistrement passe par PATCH /api/bots/<id> (les cases reprennent l'état réel en cas d'échec)", () => {
+    expect(CONFIG_JS).toContain("method: \"PATCH\"");
+    expect(CONFIG_JS).toContain("capacites: demandees");
+    // Échec ⇒ on REMET l'état réel (aucune case qui mente).
+    expect(CONFIG_JS).toContain("laCase.checked = cochees.has(id)");
+  });
+
+  it("la création ne porte AUCUNE case de capacité (elles vivent dans Général)", () => {
+    const admin = lire("bots-admin.js");
+    const creation = admin.slice(
+      admin.indexOf("export function ouvrirCreationBot"),
+      admin.indexOf("export async function ouvrirSuppressionBot"),
+    );
+    // Aucune case de capacité dans la création (l'identifiant des cases vit dans
+    // la section « Général » : `bot-capacite-<bot>-<capacité>`).
+    expect(creation).not.toContain("bot-capacite");
+    expect(creation).not.toContain("CAPACITES_PAGE");
+    expect(creation).not.toContain("profil");
+    expect(creation).toContain('fetch("/api/bots"');
+    // Le corps envoyé est le NOM (et l'avatar/clone facultatifs), rien d'autre.
+    expect(creation).toContain("nom: champNom.value.trim()");
+    expect(creation).not.toContain("slug:");
+  });
+});
+
+
+/**
+ * ⚠️ LOT 35i — ONGLET « MÉMOIRE » DE LA PAGE BOT, ET SESSIONS Pi DANS LA
+ * PHRASE DE SUPPRESSION.
+ *
+ * Ce que ce bloc verrouille :
+ *  - les **8 clés `bot`** de la mémoire durable sont TOUTES dans l'onglet
+ *    « Mémoire » de `/bots` (les deux bornes de mise de côté y manquaient), avec
+ *    l'interrupteur MIXTE `memory.consolidation.enabled` ;
+ *  - la phrase de suppression NOMME les sessions Pi et dit qu'elles sont
+ *    copiées dans l'archive — ou qu'elles restent en place si la copie échoue ;
+ *  - l'interface PRÉVIENT quand l'API remonte `sessionsPi.etat === "echec"`.
+ */
+describe("⑧ LOT 35i — onglet « Mémoire » d'un bot et sessions Pi", () => {
+  const CLES_MEMOIRE_BOT = [
+    "memory.enabled",
+    "memory.recall.topK",
+    "memory.recall.budgetChars",
+    "memory.recall.timeoutMs",
+    "memory.extract.maxItems",
+    "memory.extract.timeoutMs",
+    "memory.setAside.maxChars",
+    "memory.setAside.maxChunks",
+  ];
+
+  it("les 8 clés `bot` + l'interrupteur de consolidation sont dans l'onglet Mémoire du bot", () => {
+    const onglets = groupesParOnglet("bot", GROUPS);
+    const memoire = onglets.memoire ?? [];
+    const cles = new Set(
+      memoire.flatMap((entree) => champsDePage("bot", entree, SCOPES).map((f) => f.path)),
+    );
+    for (const cle of CLES_MEMOIRE_BOT) {
+      expect(cles.has(cle), cle).toBe(true);
+      // Ce sont bien des clés `bot` au schéma (aucune clé d'instance glissée ici).
+      expect(SCOPES[cle], cle).toBe("bot");
+    }
+    expect(cles.has("memory.consolidation.enabled")).toBe(true);
+    expect(SCOPES["memory.consolidation.enabled"]).toBe("mixte");
+    // ⚠️ Aucune clé d'INSTANCE de la planification ne fuit dans l'onglet du bot.
+    for (const cle of [
+      "memory.consolidation.cron",
+      "memory.consolidation.timeZone",
+      "memory.consolidation.budgetTokens",
+      "memory.consolidation.retention",
+    ]) {
+      expect(cles.has(cle), cle).toBe(false);
     }
   });
 
-  it("les phrases des trois profils sont DISTINCTES (aucune recopie)", () => {
-    const phrases = PROFILS_BOT_PAGE.map((profil) => profil.capacites);
-    expect(new Set(phrases).size).toBe(phrases.length);
-  });
-
-  it("`profilDePage` rend l'entrée connue, `null` sinon", () => {
-    for (const profil of PROFILS_BOT_PAGE) {
-      expect(profilDePage(profil.id)?.libelle).toBe(profil.libelle);
-      expect(profilDePage(` ${profil.id} `)?.id).toBe(profil.id);
+  it("chaque clé de l'onglet a un libellé et une explication (aucun champ muet)", () => {
+    const memoire = (groupesParOnglet("bot", GROUPS).memoire ?? []).flatMap((entree) =>
+      champsDePage("bot", entree, SCOPES),
+    );
+    for (const champ of memoire) {
+      expect(champ.label, champ.path).toBeTruthy();
+      expect(String(champ.helper ?? "").length, champ.path).toBeGreaterThan(10);
     }
-    expect(profilDePage("administrateur")).toBeNull();
-    expect(profilDePage(undefined)).toBeNull();
-    expect(profilDePage(42)).toBeNull();
   });
 
-  it("l'onglet Général de `/bots` affiche la phrase (et pas seulement le mot)", () => {
-    // ⚠️ Garde de RENDU : `config.js` doit passer par `profilDePage` et rendre
-    // `capacites`. Sans cela, la phrase existerait sans être montrée.
-    expect(CONFIG_JS).toContain("profilDePage(");
-    expect(CONFIG_JS).toContain("profil.capacites");
+  it("la phrase de suppression NOMME les sessions Pi et leur sort", () => {
+    const texte = texteSuppressionBot({
+      bot: { id: "kohai", nom: "Kohai" },
+      compteurs: { conversations: 1, souvenirs: 2, declencheurs: 0, octets: 0, sessions: 4 },
+      retentionJours: RETENTION_ARCHIVES_JOURS,
+    });
+    expect(texte).toContain("sessions Pi");
+    expect(texte).toContain("4 fichier(s) de conversation");
+    expect(texte).toContain("COPIÉES dans la même archive");
+    expect(texte).toContain("restent en place");
+    expect(texte).toContain("avertissement");
+    expect(texte).toContain("CONSERVÉES 3 mois (90 jours)");
+  });
+
+  it("volume `pi` inconnu ⇒ la phrase ne prétend pas qu'il n'y a aucune session", () => {
+    const texte = texteSuppressionBot({
+      bot: { id: "kohai", nom: "Kohai" },
+      compteurs: { conversations: 0, souvenirs: 0, declencheurs: 0, octets: 0, sessions: null },
+    });
+    expect(texte).toContain("sessions Pi");
+    expect(texte).not.toContain("0 fichier(s) de conversation");
+  });
+
+  it("l'interface PRÉVIENT quand les sessions n'ont pas pu être archivées", () => {
+    // Garde de source : la réponse de `DELETE /api/bots/<id>` porte `sessionsPi`
+    // et l'interface affiche une alerte sur l'état `echec` (jamais un silence).
+    expect(CONFIG_JS).toContain("resultat.sessionsPi?.etat === \"echec\"");
+    expect(CONFIG_JS).toContain("Conversations conservées à part");
   });
 });

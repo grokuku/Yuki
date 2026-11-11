@@ -3,7 +3,7 @@
  * (lot 35b, sous-lot 1b-3). Logique PURE, sans DOM : testable sans navigateur.
  *
  * Deux routes, deux usages :
- *  - `GET /api/bots` : la liste (`id`, `nom`, `profil`, `actif`, `ordre`) ;
+ *  - `GET /api/bots` : la liste (`id`, `nom`, `capacites`, `actif`, `ordre`) ;
  *  - `GET/PUT /api/bots/<id>/config` : la configuration d'UN bot.
  *
  * ⚠️ POURQUOI CE MODULE : depuis le découpage Instance/Bot, un réglage propre à
@@ -14,6 +14,8 @@
  *
  * Aucun `innerHTML`, aucun style inline : le module ne touche pas au DOM.
  */
+
+import { CAPACITES_PAGE } from "./config-pages.js";
 
 /**
  * Identifiant du bot historique. Sert de REPLI quand la liste est illisible :
@@ -60,7 +62,11 @@ export async function listerBots(fetchImpl) {
       {
         id: BOT_PAR_DEFAUT,
         nom: BOT_PAR_DEFAUT,
-        profil: "complet",
+        // ⚠️ Repli : le bot historique porte le produit entier, donc TOUTES les
+        // capacités (même choix que le repli serveur, `GET /api/bots`). Un repli à
+        // `[]` ferait afficher un bot vide et un enregistrement les retirerait
+        // vraiment.
+        capacites: CAPACITES_PAGE.map((capacite) => capacite.id),
         actif: true,
         ordre: 0,
       },

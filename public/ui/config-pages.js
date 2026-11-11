@@ -27,7 +27,7 @@
 /**
  * @typedef {{ id: string, libelle: string }} Onglet
  * @typedef {{ instance?: string, bot?: string }} OngletsDuGroupe
- * @typedef {{ path: string, label: string }} ChampCatalogue
+ * @typedef {{ path: string, label: string, helper?: string, advanced?: boolean }} ChampCatalogue
  * @typedef {{ texte: string, lien: { href: string, libelle: string } }} Renvoi
  * @typedef {{
  *   id: string,
@@ -287,68 +287,91 @@ export const MAX_BOTS_PAGE = 6;
 /** Longueur maximale du nom affiché (copie de `NOM_BOT_MAX`, vérifiée par test). */
 export const NOM_BOT_MAX_PAGE = 40;
 
-/**
- * Slug : `^[a-z0-9][a-z0-9-]{1,30}$` (copie de `SLUG_BOT_PATTERN`, vérifiée par
- * test). ⚠️ IMMUABLE : il nomme un dossier, il n'est jamais modifiable après
- * création.
- */
-export const SLUG_BOT_PATTERN_PAGE = /^[a-z0-9][a-z0-9-]{1,30}$/;
-
 /** Rétention des archives d'un bot supprimé (copie serveur, vérifiée par test). */
 export const RETENTION_ARCHIVES_JOURS_PAGE = 90;
 
 /**
- * Profils proposés à la création (ordre d'affichage) — ⚠️ avec ce que le profil
- * AUTORISE VRAIMENT (lot 35f).
+ * CAPACITÉS D'UN BOT (lot 35h) — une case à cocher par FAMILLE D'OUTILS, dans
+ * l'onglet « Général » de `/bots`.
  *
- * ⚠️ Avant ce lot, `profil` n'était qu'une ÉTIQUETTE : un bot `lecture` avait
- * exactement les mêmes pouvoirs qu'un bot `complet` (commande, capture d'écran,
- * agents, secrets, délégation). Ces phrases disent donc ce que l'interface ne
- * disait pas. Elles sont VÉRIFIÉES par test (`tests/ui/config-pages.test.ts`) :
- * un profil qui gagne un outil sans que sa phrase change fait échouer la garde.
+ * ⚠️ Les identifiants sont EXACTEMENT ceux du registre serveur (`CAPACITES_BOT`,
+ * `src/bots/registry.ts`), et chaque `libelle`/`aide` est vérifié par test : une
+ * capacité ajoutée côté serveur sans case ici fait échouer la garde.
  *
- * ⚠️ Aucune phrase ne doit promettre un pouvoir absent, ni taire un pouvoir
- * présent : c'est la seule règle de rédaction de ce bloc.
+ * ⚠️ TOUTES DÉCOCHÉES pour un bot neuf (`capacites: []`) : « de base un bot
+ * ajouté ne peut rien faire ». Un bot peut toujours RÉPONDRE — ce n'est pas une
+ * capacité, c'est le tour de conversation lui-même.
  */
-export const PROFILS_BOT_PAGE = [
+export const CAPACITES_PAGE = [
   {
-    id: "complet",
-    libelle: "Complet",
-    capacites:
-      "Tout ce que l'installation permet : lecture des fichiers (read, ls, grep, find), " +
-      "agents et secrets, outils distants, libraire et pages web, images, délégation à un " +
-      "worker lourd (commandes et captures d'écran), envois programmés et tâches planifiées.",
+    id: "fichiers",
+    libelle: "Fichiers",
+    aide: "Lister, lire, récupérer et déposer les fichiers d'une conversation.",
   },
   {
-    id: "lecture",
-    libelle: "Lecture",
-    capacites:
-      "Aucune action sur une machine, aucun fichier du système : ni commande, ni capture " +
-      "d'écran, ni agents, ni secrets, ni délégation, ni envoi programmé, ni tâche " +
-      "planifiée, ni archivage. Il lui reste : répondre, envoyer et lire les fichiers de " +
-      "la conversation, publier dans un canal suivi, consulter le libraire et les pages " +
-      "web, générer des images.",
+    id: "envoi",
+    libelle: "Envoi",
+    aide: "Écrire dans la conversation, envoyer un fichier, publier dans un canal suivi.",
   },
   {
-    id: "accueil",
-    libelle: "Accueil",
-    capacites:
-      "Répondre, envoyer et lire les fichiers de la conversation, publier dans un canal " +
-      "suivi. Rien d'autre : ni commande, ni capture d'écran, ni agents, ni secrets, ni " +
-      "délégation, ni libraire, ni images, ni envoi programmé, ni tâche planifiée.",
+    id: "libraire",
+    libelle: "Libraire",
+    aide: "Chercher et lire dans la bibliothèque documentaire ; y archiver une source.",
+  },
+  {
+    id: "web",
+    libelle: "Pages web",
+    aide: "Lire le texte d'une page web (via le libraire).",
+  },
+  {
+    id: "images",
+    libelle: "Images",
+    aide: "Générer une image (ComfyUI) et consulter les consignes d'un workflow.",
+  },
+  {
+    id: "agents",
+    libelle: "Machines appairées",
+    aide: "Lister les machines appairées et consulter leur état (lecture seule).",
+  },
+  {
+    id: "execution",
+    libelle: "Exécution",
+    aide: "Lancer une commande et demander une capture d'écran sur une machine appairée.",
+  },
+  {
+    id: "delegation",
+    libelle: "Délégation",
+    aide: "Confier un travail long à l'agent d'exécution et suivre son avancement.",
+  },
+  {
+    id: "secrets",
+    libelle: "Secrets",
+    aide: "Lister les noms du coffre et demander une valeur à l'utilisateur.",
+  },
+  {
+    id: "programmation",
+    libelle: "Programmation",
+    aide: "Programmer un envoi et planifier une tâche qui se réveillera plus tard.",
+  },
+  {
+    id: "memoire",
+    libelle: "Mémoire",
+    aide: "Consulter la vie antérieure et les conversations mises de côté.",
+  },
+  {
+    id: "builtins",
+    libelle: "Outils de développement",
+    aide: "Ouvrir read, ls, grep et find sur le volume de travail.",
   },
 ];
 
 /**
- * Entrée de profil correspondant à un identifiant, ou `null` si inconnu.
- *
- * ⚠️ Le serveur REFUSE un profil inconnu au registre (il ne peut donc pas en
- * arriver un ici) : `null` est le garde-fou d'affichage, pas une valeur métier.
+ * Phrase FIXE de l'onglet « Général » : elle dit ce qui ne se règle pas ici.
+ * ⚠️ C'est la seule promesse du produit sur un bot neuf — elle est affichée telle
+ * quelle, et vérifiée par test.
  */
-export function profilDePage(id) {
-  const cle = typeof id === "string" ? id.trim() : "";
-  return PROFILS_BOT_PAGE.find((profil) => profil.id === cle) ?? null;
-}
+export const PHRASE_CAPACITES =
+  "Un bot peut toujours répondre. Tout le reste s'autorise ici.";
 
 /**
  * Éléments clonables — ⚠️ DÉFAUTS DÉCIDÉS PAR L'UTILISATEUR :
@@ -367,8 +390,8 @@ export const CLONE_ELEMENTS = [
   },
   {
     id: "capacites",
-    libelle: "Capacités",
-    aide: "Profil du bot et réglages de configuration.",
+    libelle: "Capacités et réglages",
+    aide: "Capacités autorisées (onglet « Général ») et réglages de configuration du bot.",
     defaut: true,
   },
   {
@@ -400,27 +423,21 @@ export function defautsClone() {
 /**
  * Valide le formulaire de création AVANT l'appel réseau.
  *
- * @param {{ nom?: string, slug?: string, existants?: string[] }} [formulaire]
- * @returns {{ ok: boolean, champs: Record<string, string>, slug: string }}
+ * ⚠️ CRÉATION SIMPLE (décision utilisateur du 2026-11-10) : SEUL LE NOM est
+ * demandé. Le slug est dérivé et dédupliqué par le serveur (l'utilisateur ne le
+ * saisit ni ne le voit à la création), et les capacités partent vides.
+ *
+ * @param {{ nom?: string }} [formulaire]
+ * @returns {{ ok: boolean, champs: Record<string, string> }}
  */
 export function validerCreationBot(formulaire = {}) {
   const champs = {};
   const nom = String(formulaire.nom ?? "").trim();
-  const slug = String(formulaire.slug ?? "")
-    .trim()
-    .toLowerCase();
   if (nom === "") champs.nom = "Le nom du bot est obligatoire.";
   else if (nom.length > NOM_BOT_MAX_PAGE) {
     champs.nom = `Le nom est trop long (maximum ${NOM_BOT_MAX_PAGE} caractères).`;
   }
-  if (!SLUG_BOT_PATTERN_PAGE.test(slug)) {
-    champs.slug =
-      "Slug invalide : 2 à 31 caractères, minuscules, chiffres et « - » uniquement " +
-      "(exemple : kohai-2).";
-  } else if ((formulaire.existants ?? []).includes(slug)) {
-    champs.slug = `Le slug « ${slug} » est déjà utilisé par un autre bot.`;
-  }
-  return { ok: Object.keys(champs).length === 0, champs, slug };
+  return { ok: Object.keys(champs).length === 0, champs };
 }
 
 /**
@@ -435,14 +452,14 @@ export function modaleCreationBot(etat = {}) {
   return {
     titre: "Ajouter un bot",
     message:
-      "Le bot est créé immédiatement : son dossier et ses chemins sont préparés, " +
-      "et son identifiant (slug) ne pourra plus changer.",
+      "Donnez-lui un nom : le bot est créé immédiatement, avec un identifiant " +
+      "technique dérivé du nom. Il ne pourra rien faire tant que vous ne " +
+      "l'autoriserez pas, dans l'onglet « Général » de sa page.",
     maxBots,
     atteint: bots.length >= maxBots,
     limite:
       `Limite de ${maxBots} bots par instance : au-delà, supprimez un bot avant ` +
       "d'en ajouter un autre.",
-    profils: PROFILS_BOT_PAGE,
     elements: defautsClone(),
     cloneables: bots.map((bot) => ({
       id: bot.id,
@@ -469,12 +486,27 @@ export function confirmationSuppressionBot() {
  *
  * @param {{ bot?: { id?: string, nom?: string }, compteurs?: object, retentionJours?: number }} [etat]
  */
+/**
+ * Phrase de CONFIRMATION d'une suppression de bot.
+ *
+ * ⚠️ LOT 35i : elle nomme les SESSIONS Pi (« conversations »). Ces fichiers
+ * vivent sur un AUTRE volume que le dossier du bot ; la suppression les copie
+ * dans l'archive puis les efface de leur volume. Si la copie échoue, ils
+ * RESTENT en place et la phrase le dit — jamais une perte silencieuse.
+ *
+ * `compteurs.sessions === null` ⇒ le volume `pi` est inconnu : on ne prétend
+ * pas qu'il n'y a aucune conversation.
+ */
 export function texteSuppressionBot(etat = {}) {
   const bot = etat.bot ?? {};
   const nom = bot.nom && bot.nom !== bot.id ? `${bot.nom} (${bot.id})` : bot.id ?? "ce bot";
   const compteurs = etat.compteurs ?? {};
   const nombre = (valeur) => (Number.isFinite(Number(valeur)) ? Number(valeur) : 0);
   const retention = etat.retentionJours ?? RETENTION_ARCHIVES_JOURS_PAGE;
+  const sessions =
+    compteurs.sessions === null || compteurs.sessions === undefined
+      ? "ses conversations (sessions Pi)"
+      : `${nombre(compteurs.sessions)} fichier(s) de conversation (sessions Pi)`;
   return (
     `« ${nom} » sera retiré de la liste des bots. Rien n'est effacé : son dossier est ` +
     "DÉPLACÉ dans les archives de l'instance, avec : " +
@@ -482,6 +514,9 @@ export function texteSuppressionBot(etat = {}) {
     `${nombre(compteurs.souvenirs)} souvenir(s), ` +
     `${nombre(compteurs.declencheurs)} déclencheur(s), ` +
     `${libelleTaille(compteurs.octets)} de données. ` +
+    `Ses conversations (sessions Pi) — ${sessions} — sont COPIÉES dans la même archive ` +
+    "puis retirées de leur volume : si cette copie échoue, elles restent en place et " +
+    "un avertissement vous le dit. " +
     `Ces données sont CONSERVÉES 3 mois (${retention} jours), puis effacées ` +
     "définitivement par le balayeur de l'instance."
   );

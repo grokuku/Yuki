@@ -40,6 +40,7 @@ import {
   maxSizeBytesFromMb,
   PairingManager,
   PreAutorisationStore,
+  agentAutorisePourBot,
   serverCertificateNames,
   startAgentsServer,
   uncoveredLocalAddresses,
@@ -50,7 +51,7 @@ import { InstancePasswordStore } from "./security/instance-password.js";
 import { SecretRequestRegistry } from "./secrets/requests.js";
 import { SecretStore } from "./secrets/store.js";
 
-import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
+import { loadEnv, type CompatMode, type Env, type LlmMissingKeyMode } from "./config/env.js";
 import {
   BOT_YUKI,
   construireWorkerLourdSiAutorise,
@@ -58,7 +59,7 @@ import {
   purgerArchivesBots,
   workerLourdAutorise,
 } from "./bots/index.js";
-import type { ProfilBot } from "./bots/registry.js";
+import { CAPACITES_BOT, type CapaciteBot, type RegistreBots } from "./bots/registry.js";
 import {
   ComfyClient,
   ComfyWorkflowStore,
@@ -165,16 +166,19 @@ import {
 import { collectSecretValues, createLogger } from "./observability/logger.js";
 import {
   ConsolidationArchiveStore,
+  ConsolidationBots,
   ConsolidationHebdo,
   ConversationArchiveStore,
+  FICHIER_ETAT_CONSOLIDATION_BOTS,
+  FabriqueMemoireBots,
   HeritageAdminService,
   HeritageStore,
-  MemoryIndex,
   MemoryService,
-  MemoryStore,
   REACTIONS_SOURCE,
   contexteModeleDepuisFichier,
   memoryWriteModelReference,
+  envPourBot,
+  ouvrirStoresMemoireBot,
 } from "./memory/index.js";
 import { PersonalityStore } from "./personality/index.js";
 import {
@@ -192,12 +196,17 @@ import {
 } from "./reactions/index.js";
 import { RulesStore } from "./rules/index.js";
 import {
-  DeclencheurBalayeur,
+  BalayeurBots,
   DeclencheurJournal,
-  ORIGINE_HORLOGE,
   SourcesInbox,
+  SourcesParBot,
   SourcesService,
   SourcesStore,
+  filtreAgentVisible,
+  nomsSecretsSource,
+  portPreAutorisations,
+  type ModeBots,
+  type PileSourcesBot,
   type PlanificationTacheInput,
 } from "./sources/index.js";
 import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
@@ -325,17 +334,19 @@ async function main(): Promise<void> {
     logger.info("bots.mono", { migration: bots.migration });
   }
 
-  // --- PROFIL DE CAPACITÉS DU BOT ACTIF (lot 35f) ---------------------------
-  // ⚠️ Le profil qui RESTREINT les outils est celui du BOT ACTIF, lu UNE fois ici
-  // dans le registre `state/bots.json` — JAMAIS une valeur reçue d'un client (corps
-  // de requête ou message) : sinon un appelant choisirait ses propres pouvoirs.
-  // Mono-bot historique (`bots.bot` nul) ⇒ `complet` : comportement inchangé.
-  const profilBot: ProfilBot = bots.bot?.profil ?? "complet";
-  logger.info("bots.profil", {
-    profil: profilBot,
-    // ⚠️ Un profil restreint n'a AUCUN worker lourd (voir plus bas) : c'est ce qui
-    // rend le retrait de `run_command` structurel et non déclaratif.
-    worker_lourd: workerLourdAutorise(profilBot),
+  // --- CAPACITÉS DU BOT ACTIF (lot 35h) -------------------------------------
+  // ⚠️ Les capacités qui OUVRENT les outils sont celles du BOT ACTIF, lues UNE
+  // fois ici dans le registre `state/bots.json` — JAMAIS une valeur reçue d'un
+  // client (corps de requête ou message) : sinon un appelant choisirait ses
+  // propres pouvoirs. Mono-bot historique (`bots.bot` nul) ⇒ toutes les
+  // capacités : comportement inchangé.
+  const capacitesBot: readonly CapaciteBot[] = bots.bot?.capacites ?? CAPACITES_BOT;
+  logger.info("bots.capacites", {
+    bot: bots.bot?.id ?? null,
+    capacites: capacitesBot.join(","),
+    // ⚠️ Sans `execution` ni `delegation`, il n'y a AUCUN worker lourd (voir plus
+    // bas) : c'est ce qui rend l'absence de `run_command` structurelle.
+    worker_lourd: workerLourdAutorise(capacitesBot),
   });
 
   // --- VISIBILITÉ DES AGENTS (lot 35g) : le BOT DU RUN ----------------------
@@ -1052,6 +1063,42 @@ async function main(): Promise<void> {
     chars: rulesStore.read().chars,
   });
 
+  /**
+   * ⚠️ LOT 35j — REGISTRE DES BOTS, suivi VIVANT.
+   *
+   * C'est LE MÊME objet que celui passé aux routes d'administration
+   * (`config.bots`) : quand une route crée, renomme ou supprime un bot, elle
+   * remplace `registre` ici. La résolution des déclencheurs (`SourcesParBot`) le
+   * relit donc à chaque webhook — un bot désactivé ne réveille plus rien, sans
+   * redémarrage.
+   */
+  const botsAdmin: {
+    registre: RegistreBots | null;
+    stateDir: string;
+    piSessionsDir: string;
+    retirerDesListesDAgents: (botId: string) => number;
+  } = {
+    registre: bots.registre,
+    stateDir: env.mountPoints.state,
+    piSessionsDir: env.piSessionsDir,
+    retirerDesListesDAgents: (botId: string) =>
+      agentStoreRef ? agentStoreRef.retirerBotDesListes(botId).length : 0,
+  };
+
+  /**
+   * ⚠️ LOT 35j — SOURCES PAR BOT : résolution `jeton → bot propriétaire → ses
+   * sources` (voir `src/sources/par-bot.ts`). Construit TÔT (avant les routes),
+   * mais ses piles ne s'ouvrent qu'à la demande : la pile du bot ACTIF est
+   * enregistrée juste après sa construction, les autres le sont au premier accès.
+   */
+  const sourcesParBot = new SourcesParBot({
+    envInstance: bots.envInstance,
+    mode: bots.mode as ModeBots,
+    registre: () => botsAdmin.registre,
+    ...(secretStore ? { coffre: secretStore } : {}),
+    logger,
+  });
+
   // --- SOURCES : programmes extérieurs qui réveillent Yuki -------------------
   // ⚠️ Deux fichiers JSON DÉDIÉS du volume `state`, JAMAIS dans `config.json`
   // (la configuration n'accepte qu'un patch PLAT de scalaires) :
@@ -1080,8 +1127,16 @@ async function main(): Promise<void> {
     path: env.preAutorisationsPath,
     logger,
     journal: declencheursJournal,
+    // ⚠️ LOT 35j — le registre SAIT à quel bot il appartient (le fichier l'est déjà,
+    // par son chemin) et refuse de consommer pour un agent que ce bot ne voit pas
+    // (`AgentRecord.bots`). Le bot vient du DÉMARRAGE, jamais d'une demande.
+    botId: botDuRun,
+    agentAutorise: filtreAgentVisible(agentStoreRef, botDuRun, agentAutorisePourBot),
   });
-  agentExecution?.setPreAutorisations(preAutorisationsStore);
+  // ⚠️ LOT 35j — la consommation suit le BOT DU RUN : chaque bot a SON registre
+  // (`preautorisations.json` sous sa racine). Le port ne consulte donc JAMAIS le
+  // fichier d'un autre bot, et le bot ne vient pas du client.
+  agentExecution?.setPreAutorisations(portPreAutorisations(sourcesParBot, botCourant));
   logger.info("agents.preautorisations.ready", {
     path: env.preAutorisationsPath,
     preautorisations: preAutorisationsStore.size,
@@ -1092,8 +1147,13 @@ async function main(): Promise<void> {
     inbox: sourcesInbox,
     journal: declencheursJournal,
     logger,
-    // Le coffre porte les JETONS (`YUKI_SOURCE_<NOM>`), jamais le fichier JSON.
+    // Le coffre porte les JETONS, jamais le fichier JSON.
+    // ⚠️ LOT 35j — nom PROPRE AU BOT (`YUKI_SOURCE_<BOT>__<NOM>`) : c'est lui qui
+    // dit à quel bot appartient le jeton. Pour `yuki`, l'ancien nom
+    // (`YUKI_SOURCE_<NOM>`) reste accepté — les webhooks déjà distribués continuent
+    // de fonctionner, et aucun secret existant n'est réécrit.
     ...(secretStore ? { tokens: secretStore } : {}),
+    secretNames: (nom) => nomsSecretsSource(botDuRun, nom),
     // Borne d'injection du bloc `<sources>` : relue à chaud (`apply: hot`).
     promptTotalChars: () => config.getNumber("sources.promptTotalChars"),
     // « notifier » : Web Push à l'appareil. Le CONTENU n'est jamais recopié dans
@@ -1121,13 +1181,26 @@ async function main(): Promise<void> {
   /**
    * ⚠️ MOTEUR HORLOGE (lot 2) : le balayeur des déclencheurs `planning`.
    * Créé quand le host est prêt (voir plus bas), arrêté à l'arrêt gracieux.
+   * ⚠️ LOT 35j : c'est `BalayeurBots` (UN SEUL `setInterval`, un
+   * `DeclencheurBalayeur` interne par bot jamais démarré) — pas un balayeur par
+   * bot, encore moins un minuteur par bot.
    */
-  let declencheursBalayeur: DeclencheurBalayeur | undefined;
+  let declencheursBalayeur: BalayeurBots | undefined;
   /**
    * Consolidation HEBDOMADAIRE de la mémoire (lot 29) : déclenchée par le
    * balayeur existant, jamais par un second `setInterval`.
+   * ⚠️ LOT 35i : c'est la passe du bot ACTIF (celle qu'affiche `/api/memory`) ;
+   * l'ordonnanceur `consolidationBots` la déclenche AVEC celles des autres bots,
+   * une par une.
    */
   let consolidationHebdo: ConsolidationHebdo | undefined;
+  /**
+   * ⚠️ LOT 35i — ORDONNANCEUR multi-bots : une passe à la fois, curseur persisté
+   * (`dernierBotConsolide`), reprise au tick suivant. Aucun minuteur nouveau.
+   */
+  let consolidationBots: ConsolidationBots | undefined;
+  /** Stores mémoire des bots consolidés (fermés à l'arrêt gracieux). */
+  let fabriqueMemoireBots: FabriqueMemoireBots | undefined;
 
   // --- Fichiers échangés (l'utilisateur → Yuki, Yuki → l'utilisateur) -------
   // ⚠️ Créé AVANT la porte GPU : le dépôt et le téléchargement restent
@@ -1450,14 +1523,15 @@ async function main(): Promise<void> {
    * approbation humaine (impossible à donner depuis un canal).
    */
   const lightToolOptions = (): ToolAllowlistOptions => ({
-    // ⚠️ PROFIL DU BOT ACTIF (lot 35f) : il INTERSECTE l'allowlist ci-dessous dans
-    // `toolAllowlist`/`toolAllowlistForChat` (`filtrerSelonProfil`). Placé ICI, il
-    // vaut pour le host LOCAL **et** pour chaque run de CANAL : il n'y a pas de
-    // seconde liste à filtrer. `complet` n'enlève rien.
-    profil: profilBot,
-    // ⚠️ Délégation : il faut un worker lourd (donc le profil `complet`) ET le
-    // modèle lourd disponible. Sans worker, rien ne peut être délégué.
-    delegationEnabled: heavyAvailableAtStart && workerLourdAutorise(profilBot),
+    // ⚠️ CAPACITÉS DU BOT ACTIF (lot 35h) : elles INTERSECTENT l'allowlist
+    // ci-dessous dans `toolAllowlist`/`toolAllowlistForChat`
+    // (`filtrerSelonCapacites`). Placées ICI, elles valent pour le host LOCAL **et**
+    // pour chaque run de CANAL : il n'y a pas de seconde liste à filtrer. `[]`
+    // (bot neuf) ⇒ allowlist VIDE.
+    capacites: capacitesBot,
+    // ⚠️ Délégation : il faut un worker lourd (donc `execution` ou `delegation`)
+    // ET le modèle lourd disponible. Sans worker, rien ne peut être délégué.
+    delegationEnabled: heavyAvailableAtStart && workerLourdAutorise(capacitesBot),
     // ⚠️ INVERSION DES RÔLES : le LÉGER n'a AUCUN outil d'action. Il garde
     // la lecture, la conversation, la délégation, l'annuaire des agents,
     // l'archive et le libraire (consultation). `run_command` et
@@ -1751,6 +1825,132 @@ async function main(): Promise<void> {
     en_attente: envoisProgrammes.enAttente,
     connus: envoisProgrammes.lister().length,
   });
+
+  // ── LOT 35j : PILES SOURCES PAR BOT (chemin de construction UNIQUE) ────────
+  /**
+   * ⚠️ POURQUOI UNE FABRIQUE, ET PAS UNE SECONDE CONSTRUCTION DANS `index.ts` :
+   * chaque bot a SON `sources.json`, SA boîte, SON journal, SES pré-autorisations
+   * et SES envois (chemins résolus par `pathsForBot`, `src/bots/paths.ts`). Cette
+   * fabrique est le SEUL endroit qui les ouvre : aucun appelant ne peut atteindre
+   * les fichiers d'un bot en contournant `SourcesParBot`.
+   *
+   * ⚠️ Le bot ACTIF réutilise les objets DÉJÀ construits plus haut (ceux qu'affiche
+   * `/config`) : deux instances écriraient le même `sources.json` — la règle « un
+   * seul rédacteur » vaut aussi ici.
+   *
+   * ⚠️ `envPourBot` attend l'`Env` de l'INSTANCE (`bots.envInstance`) :
+   * `pathsForBot` y ajoute `<pi>/sessions/<botId>`, donc lui repasser un `Env`
+   * déjà résolu empilerait `<botId>/<botId>`.
+   */
+  const pilesSources = new Map<string, PileSourcesBot>();
+  /** Services des AUTRES bots ouverts avant que le host ne soit prêt. */
+  const servicesSourcesEnAttente: SourcesService[] = [];
+  /**
+   * Branchement TARDIF (host Pi + ports de délégation) des services par bot :
+   * une pile ouverte APRÈS `host.start()` est branchée immédiatement, une pile
+   * ouverte AVANT (route d'administration) le sera par le vidage de la file.
+   */
+  let brancherServiceSources: ((service: SourcesService) => void) | undefined;
+  const ouvrirPileSources = (botId: string, envBot: Env): PileSourcesBot => {
+    const existante = pilesSources.get(botId);
+    if (existante !== undefined) return existante;
+    const actif = botId === botDuRun;
+    const store = actif
+      ? sourcesStore
+      : new SourcesStore({ path: envBot.sourcesStorePath, logger });
+    const inbox = actif
+      ? sourcesInbox
+      : new SourcesInbox({ path: envBot.sourcesInboxPath, logger });
+    const journal = actif
+      ? declencheursJournal
+      : DeclencheurJournal.open({ path: envBot.declencheursJournalPath, logger });
+    const preAutorisations = actif
+      ? preAutorisationsStore
+      : new PreAutorisationStore({
+          path: envBot.preAutorisationsPath,
+          logger,
+          journal,
+          // ⚠️ Le registre SAIT à quel bot il appartient (le fichier l'est déjà, par
+          // son chemin) et refuse de consommer pour un agent que ce bot ne voit pas
+          // (`AgentRecord.bots`). Le bot vient du DÉMARRAGE, jamais d'une demande.
+          botId,
+          agentAutorise: filtreAgentVisible(agentStoreRef, botId, agentAutorisePourBot),
+        });
+    const service = actif
+      ? sourcesService
+      : new SourcesService({
+          store,
+          inbox,
+          journal,
+          logger,
+          ...(secretStore ? { tokens: secretStore } : {}),
+          // ⚠️ Nom de secret PROPRE AU BOT (`YUKI_SOURCE_<BOT>__<NOM>`) : c'est lui
+          // qui dit à quel bot appartient le jeton (voir `nomSecretSource`). Pour
+          // `yuki`, l'ancien nom reste accepté — aucun secret n'est réécrit.
+          secretNames: (nom) => nomsSecretsSource(botId, nom),
+          promptTotalChars: () => config.getNumber("sources.promptTotalChars"),
+          notify: (event) => {
+            if (!pushService) return;
+            void pushService
+              .notify({ kind: "source", ...(event.titre ? { detail: event.titre } : {}) })
+              .catch((error: unknown) => {
+                logger.warn("sources.notify.failed", {
+                  source: event.source,
+                  error: messageOf(error),
+                });
+              });
+          },
+        });
+    const envois = actif
+      ? envoisProgrammes
+      : new EnvoisProgrammesService({
+          store: EnvoisProgrammesStore.open({ path: envBot.envoisProgrammesPath, logger }),
+          journal,
+          canaux: () =>
+            chatMirror.conversations().map((conversation) => ({
+              conversationId: conversation.id,
+              titre: conversation.title,
+              plateforme: conversation.platform,
+            })),
+          fichier: (fichierId) => filesStore.get(fichierId),
+          maxFichierBytes: () => config.getNumber("files.maxFileBytes"),
+          // ⚠️ UN SEUL chemin de publication : celui de l'instance. Une cible LOCALE
+          // d'un bot non actif n'est pas ouverte par le host Pi courant — l'envoi est
+          // alors marqué ÉCHOUÉ avec sa raison (jamais publié dans un autre fil).
+          publier: publierEnvoiProgramme,
+          logger,
+        });
+    const pile: PileSourcesBot = {
+      botId,
+      env: envBot,
+      store,
+      inbox,
+      journal,
+      preAutorisations,
+      service,
+      envois,
+      // ⚠️ Un arrêt gracieux ne laisse aucun suivi de run derrière lui.
+      fermer: () => {
+        service.detach();
+      },
+    };
+    pilesSources.set(botId, pile);
+    if (!actif) {
+      if (brancherServiceSources !== undefined) brancherServiceSources(service);
+      else servicesSourcesEnAttente.push(service);
+    }
+    return pile;
+  };
+  // ⚠️ LA PILE DU BOT ACTIF est enregistrée TOUT DE SUITE : elle est construite
+  // bien avant le host (les autres services s'y branchent), et c'est elle que
+  // `?bot=` sans argument continue de servir.
+  sourcesParBot.setPileActive(ouvrirPileSources(botDuRun, env));
+  sourcesParBot.setOuvrir((input) =>
+    ouvrirPileSources(
+      input.botId,
+      envPourBot({ envInstance: input.env, botId: input.botId, mode: bots.mode }),
+    ),
+  );
 
   /**
    * RÉDACTEUR d'une réponse distante — **COMMUN aux plateformes** (lot 21).
@@ -2225,14 +2425,14 @@ async function main(): Promise<void> {
       maxConcurrent: config.getNumber("delegation.maxConcurrent"),
       maxQueue: config.getNumber("delegation.maxQueue"),
     });
-    // ⚠️ PROFIL DE CAPACITÉS (lot 35f) — STRUCTUREL, pas une permission : un bot
-    // dont le profil n'est pas `complet` n'INSTANCIE PAS le worker lourd. Aucun
+    // ⚠️ CAPACITÉS STRUCTURELLES (lot 35h) — pas une permission : un bot sans
+    // `execution` NI `delegation` n'INSTANCIE PAS le worker lourd. Aucun
     // `run_command` ne peut donc exister, même par un job importé ou une tâche
     // planifiée : le worker qui les exécuterait n'a jamais été construit.
     // ⚠️ La garde elle-même vit dans `construireWorkerLourdSiAutorise`
     // (`src/bots/profils.ts`) : isolée, elle est TESTABLE avec un ESPION, ce que ce
     // point de composition ne permet pas (il exécute `main()` au chargement).
-    const heavyWorker = construireWorkerLourdSiAutorise(profilBot, () =>
+    const heavyWorker = construireWorkerLourdSiAutorise(capacitesBot, () =>
       createSdkHeavyWorker({
         cwd: env.piCwd,
         agentDir: env.piAgentDir,
@@ -2246,11 +2446,11 @@ async function main(): Promise<void> {
         // service d'exécution existe (mêmes garde-fous par agent, hors ligne =
         // refus, audit, plafond de sortie).
         tools: toolAllowlist("heavy", {
-          // ⚠️ PROFIL (lot 35f) : redondance VOULUE. Ce bloc n'est atteint que si
-          // `workerLourdAutorise(profilBot)` est vrai (le worker n'est pas construit
-          // sinon), donc l'intersection ne retire rien aujourd'hui — mais si quelqu'un
-          // déplaçait la garde, le profil resterait le dernier mot.
-          profil: profilBot,
+          // ⚠️ CAPACITÉS (lot 35h) : redondance VOULUE. Ce bloc n'est atteint que si
+          // `workerLourdAutorise(capacitesBot)` est vrai (le worker n'est pas
+          // construit sinon), donc l'intersection ne retire rien aujourd'hui — mais si
+          // quelqu'un déplaçait la garde, les capacités resteraient le dernier mot.
+          capacites: capacitesBot,
           executionEnabled: agentExecution !== undefined,
           screenshotsEnabled: agentExecution !== undefined,
           // ⚠️ TRANSFERT de fichiers : exposé seulement si le service existe.
@@ -2326,8 +2526,18 @@ async function main(): Promise<void> {
       });
     }
 
-    const memoryStore = MemoryStore.open({ path: env.memoryStorePath, logger });
-    const memoryIndex = new MemoryIndex({ path: env.memoryIndexPath, logger });
+    // ⚠️ LOT 35i — CHEMIN DE CONSTRUCTION UNIQUE des stores de mémoire :
+    // `ouvrirStoresMemoireBot` n'accepte qu'un `Env` RÉSOLU pour UN bot
+    // (`pathsForBot`, `src/bots/paths.ts`). Ici, `env` est exactement cet `Env`
+    // (rendu par `preparerMultiBot`), et le journal nomme le fichier ouvert :
+    // aucune mémoire d'un autre bot ne peut être lue par cette instance.
+    const storesMemoire = ouvrirStoresMemoireBot({
+      env,
+      botId: bots.bot?.id ?? BOT_YUKI,
+      logger,
+    });
+    const memoryStore = storesMemoire.store;
+    const memoryIndex = storesMemoire.index;
     // Écriture de fond (extraction + consolidation) sur le compte LOURD quand
     // il est disponible : libère le compte léger (déclaré mono-slot) pour le
     // run de conversation suivant. Repli sur le léger sinon. La référence est
@@ -2375,8 +2585,9 @@ async function main(): Promise<void> {
     logger.info("memory.ready", {
       enabled: config.getString("memory.enabled") === "on",
       entries: memoryStore.size,
-      store: env.memoryStorePath,
-      index: env.memoryIndexPath,
+      store: storesMemoire.fichier,
+      index: storesMemoire.fichierIndex,
+      bot: storesMemoire.botId,
       write_role: heavyAvailableAtStart ? "heavy" : "light",
     });
 
@@ -2385,7 +2596,7 @@ async function main(): Promise<void> {
     // passe est REFUSÉE (et le dit dans son rapport), elle n'est jamais confiée au
     // léger. Session éphémère SANS OUTIL (`tools: []`) : anti-récursion.
     const consolidationArchive = new ConsolidationArchiveStore({
-      dir: env.memoryConsolidationDir,
+      dir: storesMemoire.env.memoryConsolidationDir,
       logger,
     });
     consolidationHebdo = new ConsolidationHebdo({
@@ -2393,7 +2604,7 @@ async function main(): Promise<void> {
       index: memoryIndex,
       logger,
       archive: consolidationArchive,
-      statePath: env.memoryConsolidationStatePath,
+      statePath: storesMemoire.env.memoryConsolidationStatePath,
       settings: () => ({
         enabled: config.getString("memory.consolidation.enabled") === "on",
         cron: config.getString("memory.consolidation.cron"),
@@ -2436,10 +2647,102 @@ async function main(): Promise<void> {
       modele: liveHeavyReference(),
     });
 
+    // ── LOT 35i : CONSOLIDATION DE TOUS LES BOTS, ORDONNANCÉE ──────────────
+    // ⚠️ Chaque bot a SON `memory.jsonl` (lot 35a). Les passes sont exécutées
+    // UNE PAR UNE, dans l'ordre du registre, en commençant APRÈS le dernier bot
+    // consolidé (curseur persisté) : jamais deux fois de suite le même bot, et
+    // une séquence interrompue reprend au tick suivant.
+    // ⚠️ Les réglages de PLANIFICATION restent d'INSTANCE (un seul calendrier) ;
+    // seul `memory.consolidation.enabled` se décide AUSSI par bot (« ce bot
+    // consolide ou non », clé MIXTE lue dans l'overlay de CE bot).
+    // ⚠️ Aucun store n'est ouvert tant qu'aucune passe n'est demandée : un bot
+    // qui ne consolide pas ne coûte rien.
+    fabriqueMemoireBots = new FabriqueMemoireBots({
+      envInstance: bots.envInstance,
+      mode: bots.mode,
+      logger,
+    });
+    const passeDuBot = (botId: string): ConsolidationHebdo | undefined => {
+      // ⚠️ Côté BOT : la valeur EFFECTIVE de `memory.consolidation.enabled` pour
+      // CE bot (conjonction avec le côté instance, `mixteMerge: "et"`).
+      const snapshot = config.snapshotPour(botId);
+      const cote = snapshot.fields["memory.consolidation.enabled"];
+      const actif = cote && "value" in cote ? cote.value : "on";
+      if (String(actif) !== "on") return undefined;
+      const stores = fabriqueMemoireBots?.storesDe(botId);
+      if (!stores) return undefined;
+      const archive = new ConsolidationArchiveStore({
+        dir: stores.env.memoryConsolidationDir,
+        logger,
+      });
+      return new ConsolidationHebdo({
+        // ⚠️ Le journal, l'extracteur et le contexte sont PARTAGÉS ; les stores,
+        // l'archive et le fichier d'état sont CEUX DU BOT.
+        store: stores.store,
+        index: stores.index,
+        logger,
+        archive,
+        statePath: stores.env.memoryConsolidationStatePath,
+        settings: () => ({
+          enabled: true,
+          cron: config.getString("memory.consolidation.cron"),
+          fuseau: config.getString("memory.consolidation.timeZone"),
+          budgetTokens: config.getNumber("memory.consolidation.budgetTokens"),
+          retention: config.getNumber("memory.consolidation.retention"),
+        }),
+        extractor: () =>
+          createSdkConsolidationHebdoExtractor({
+            cwd: env.piCwd,
+            agentDir: env.piAgentDir,
+            authPath: join(env.piAgentDir, "auth.json"),
+            modelsPath,
+            modelReference: liveHeavyReference,
+            thinking: liveHeavyThinking,
+            timeoutMs: () => Math.max(180_000, config.getNumber("memory.extract.timeoutMs")),
+            logger,
+          }),
+        contexteModele: () =>
+          contexteModeleDepuisFichier(modelsPath, liveHeavyReference()) ??
+          resolveModelsFrom(effectiveLlmConfig(config)).heavy.contextWindow,
+      });
+    };
+    consolidationBots = new ConsolidationBots({
+      bots: () => {
+        const liste = bots.registre?.bots;
+        if (!liste || liste.length === 0) {
+          // Mode mono-bot historique : le bot unique a toutes les capacités.
+          return [
+            { id: bots.bot?.id ?? BOT_YUKI, capacites: [...CAPACITES_BOT] as readonly string[] },
+          ];
+        }
+        return liste
+          .slice()
+          .sort((a, b) => a.ordre - b.ordre)
+          .map((bot) => ({ id: bot.id, capacites: bot.capacites as readonly string[] }));
+      },
+      passeDe: (botId) => {
+        // ⚠️ Le bot ACTIF réutilise l'instance déjà construite (celle qu'affiche
+        // `/api/memory`) : deux instances écriraient le même `memory.jsonl`.
+        if (botId === storesMemoire.botId && consolidationHebdo) return consolidationHebdo;
+        return passeDuBot(botId);
+      },
+      statePath: join(env.mountPoints.state, FICHIER_ETAT_CONSOLIDATION_BOTS),
+      settings: () => ({
+        enabled: config.getString("memory.consolidation.enabled") === "on",
+        cron: config.getString("memory.consolidation.cron"),
+        fuseau: config.getString("memory.consolidation.timeZone"),
+      }),
+      logger,
+    });
+    logger.info("memory.consolidation.multi.ready", {
+      etat: join(env.mountPoints.state, FICHIER_ETAT_CONSOLIDATION_BOTS),
+      bots: bots.registre?.bots.length ?? 1,
+    });
+
     // Lot 13 : archive « vie antérieure » — dossier SÉPARÉ du store de mémoire,
     // jamais fusionné. On met en place la structure (notice + manifeste) si elle
     // manque, puis on la rend consultable à la demande (outil + signal).
-    heritageStore = new HeritageStore({ dir: env.heritageDir, logger });
+    heritageStore = new HeritageStore({ dir: storesMemoire.env.heritageDir, logger });
     heritageStore.ensureLayout();
     logger.info("memory.heritage.ready", {
       dir: heritageStore.dirPath,
@@ -2451,8 +2754,8 @@ async function main(): Promise<void> {
     // DÉRIVÉ. ⚠️ JAMAIS injectée dans le prompt : consultable uniquement sur
     // demande explicite via l'outil `chercher_conversations_archivees`.
     conversationArchive = new ConversationArchiveStore({
-      dir: env.conversationArchiveDir,
-      indexPath: env.conversationArchiveIndexPath,
+      dir: storesMemoire.env.conversationArchiveDir,
+      indexPath: storesMemoire.env.conversationArchiveIndexPath,
       logger,
     });
     conversationArchive.ensureLayout();
@@ -2862,9 +3165,15 @@ async function main(): Promise<void> {
     // `host.publierMessage` (message assistant persisté, sans tour de modèle).
     // ⚠️ Un job ne peut PAS créer de déclencheur : le worker lourd n'a aucun outil
     // pour cela (anti-enchaînement structurel).
+    /**
+     * Ports du moteur horloge, PARTAGÉS par les services de TOUS les bots (une
+     * seule délégation, un seul store de fichiers) — seul le `sources.json` lu et
+     * écrit change d'un bot à l'autre.
+     */
+    let portsDeclencheurSources: Parameters<SourcesService["setDeclencheurPorts"]>[0] | undefined;
     if (delegation) {
       const serviceDelegation = delegation;
-      sourcesService.setDeclencheurPorts({
+      portsDeclencheurSources = {
         jobs: {
           delegate: (request) =>
             serviceDelegation.delegate({
@@ -2896,13 +3205,35 @@ async function main(): Promise<void> {
         // ⚠️ LOT 31 — MÉTADONNÉES des fichiers du résultat : c'est le service qui rend les
         // marqueurs `[fichier] <id> <nom> (<n> octets)`, donc la carte cliquable.
         fichier: (fichierId) => filesStore.get(fichierId),
-      });
+      };
+      sourcesService.setDeclencheurPorts(portsDeclencheurSources);
       // Le RÉSULTAT d'un job de déclencheur ne réveille PAS le léger : il part
       // par le port des déclencheurs (publier / se taire / éteindre).
       serviceDelegation.setDeclencheurs({
         recevoirResultat: (record) => sourcesService.recevoirResultat(record),
       });
     }
+
+    // ⚠️ LOT 35j — BRANCHEMENT DES SERVICES DES AUTRES BOTS : une pile ouverte à
+    // la demande (webhook, `?bot=` de la page des bots) doit elle aussi pouvoir
+    // réveiller un tour et lancer un job. Sans cela, ses déclencheurs seraient
+    // « en veille » pour toujours : le balayeur les verrait, mais personne ne
+    // pourrait les exécuter. Le host Pi est celui de l'instance (le seul ouvert) ;
+    // les ports de délégation sont PARTAGÉS.
+    const hoteSources = host;
+    brancherServiceSources = (service) => {
+      if (hoteSources === undefined) return;
+      service.setWaker(hoteSources);
+      if (portsDeclencheurSources !== undefined) {
+        service.setDeclencheurPorts(portsDeclencheurSources);
+      }
+    };
+    for (const service of servicesSourcesEnAttente.splice(0)) brancherServiceSources(service);
+    logger.info("sources.bots.prets", {
+      bot_actif: botDuRun,
+      piles: pilesSources.size,
+      autres: [...pilesSources.keys()].filter((id) => id !== botDuRun).length,
+    });
 
     /**
      * Lot 35e — RÉTENTION des archives de bots supprimés : la purge est faite
@@ -2912,21 +3243,30 @@ async function main(): Promise<void> {
      */
     let dernierePurgeArchives = 0;
     const INTERVALLE_PURGE_ARCHIVES_MS = 3_600_000;
-    declencheursBalayeur = new DeclencheurBalayeur({
-      store: sourcesStore,
-      journal: declencheursJournal,
-      // ⚠️ ENVOIS PROGRAMMÉS (lot 28) : exécutés par CE balayeur, jamais par un second
-      // `setInterval` — un seul ordonnanceur dans le processus, donc un seul rythme et
-      // un seul endroit à arrêter. Le retard est rattrapé une fois si < 1 h, sinon
-      // l'envoi est marqué ÉCHOUÉ avec sa raison (jamais publié en retard en silence).
-      envoisProgrammes: {
-        executerDus: (maintenant) => envoisProgrammes.executerDus(maintenant),
-      },
+    /**
+     * ⚠️ LOT 35j — UN SEUL BALAYEUR POUR TOUS LES BOTS (`BalayeurBots`) : il
+     * possède l'UNIQUE `setInterval` et demande à chaque tick la liste des bots à
+     * balayer (`sourcesParBot.ciblesBalayage`). Un bot inactif, ou sans la capacité
+     * d'exécuter quoi que ce soit (`workerLourdAutorise`, `src/bots/profils.ts`),
+     * n'y figure pas : ses sources ne tirent donc pas, sans minuteur par bot.
+     * Les règles qui ne sont PAS par bot (rétention des archives de bots
+     * supprimés, consolidation hebdomadaire) restent ici, exécutées UNE fois par
+     * tick.
+     */
+    declencheursBalayeur = new BalayeurBots({
+      bots: { cibles: () => sourcesParBot.ciblesBalayage() },
+      // ⚠️ Les ENVOIS PROGRAMMÉS (lot 28) sont désormais exécutés PAR LE BALAYEUR
+      // DU BOT (`CibleBalayage.envoisProgrammes`) : chaque bot a SON
+      // `envois-programmes.json`, et un bot ne peut pas publier l'envoi d'un autre.
       // ⚠️ CONSOLIDATION HEBDOMADAIRE (lot 29) : port branché sur CE balayeur.
       // Aucun second `setInterval`, aucune `SourceRecord` : la passe est un
       // rendez-vous planifié, pas une source.
+      // ⚠️ LOT 35i : le port pilote l'ORDONNANCEUR multi-bots (une passe à la
+      // fois, curseur persisté, reprise au tick suivant) — pas seulement le bot
+      // actif.
       passeHebdo: {
-        executerSiDu: (maintenant) => consolidationHebdo?.executerSiDu(maintenant) ?? Promise.resolve(),
+        executerSiDu: (maintenant) =>
+          consolidationBots?.executerSiDu(maintenant) ?? Promise.resolve(),
       },
       // ⚠️ RÉTENTION DES ARCHIVES DE BOTS SUPPRIMÉS (lot 35e) : 3 mois, purgés
       // par CE balayeur — aucun minuteur nouveau. Un dossier de plus de 90 jours
@@ -2940,26 +3280,23 @@ async function main(): Promise<void> {
           return purgerArchivesBots({
             stateDir: env.mountPoints.state,
             maintenant,
+            // ⚠️ LOT 35i : les sessions Pi archivées (`sessions-pi/`) partent avec
+            // l'archive, et un marqueur fait purger celles qui n'avaient pas pu
+            // être copiées (jamais une conversation survivante en silence).
+            piSessionsDir: env.piSessionsDir,
             logger,
           }).purges.length;
         },
       },
       logger,
       now: () => Date.now(),
-      run: (nom, options) =>
-        sourcesService.declencher(nom, {
-          origine: ORIGINE_HORLOGE,
-          ...(options.planifie !== undefined ? { planifie: options.planifie } : {}),
-          plafondMs: options.plafondMs,
-          signal: options.signal,
-          // ⚠️ LOT 31 : le balayeur a DÉJÀ désarmé la tâche ponctuelle (un plantage ne la
-          // rejoue pas) — sans ce drapeau, `declencher` la refuserait comme « en veille ».
-          ...(options.desarmementPrealable === true ? { desarmementPrealable: true } : {}),
-        }),
     });
     declencheursBalayeur.start();
     logger.info("sources.balayeur.started", {
       interval_ms: 30_000,
+      // ⚠️ Une seule horloge, N bots : le nombre de bots balayés est un
+      // diagnostic (un bot sans capacité n'y est pas).
+      bots: sourcesParBot.ciblesBalayage().length,
       planifies: sourcesStore
         .list()
         .filter((record) => record.declencheur.type === "planning").length,
@@ -3273,12 +3610,10 @@ async function main(): Promise<void> {
         // liste `bots` de chaque agent (les agents, eux, restent configurés).
         // ⚠️ Le compteur renvoyé est journalisé `bot.agents.detached` par
         // `supprimerBot` ; un échec n'annule PAS la suppression.
-        bots: {
-          registre: bots.registre,
-          stateDir: env.mountPoints.state,
-          retirerDesListesDAgents: (botId: string) =>
-            agentStoreRef ? agentStoreRef.retirerBotDesListes(botId).length : 0,
-        },
+        // ⚠️ LOT 35j : c'est LE MÊME objet `botsAdmin` que celui lu par
+        // `SourcesParBot` (`registre`) — un bot créé, renommé ou supprimé est donc
+        // pris en compte par les webhooks et le balayeur sans redémarrage.
+        bots: botsAdmin,
       },
       personality: { store: personalityStore, logger },
       rules: { store: rulesStore, logger },
@@ -3299,6 +3634,17 @@ async function main(): Promise<void> {
         // rend la fonction utilisable par une personne, pas seulement par le modèle.
         envois: envoisProgrammes,
         ...(agentStoreRef ? { agents: agentStoreRef } : {}),
+        // ⚠️ LOT 35j — RÉCEPTION PAR LE JETON : `POST /api/sources/<nom>/messages`
+        // ne réveille plus « le premier bot portant ce nom », mais le bot
+        // PROPRIÉTAIRE du jeton (`SourcesParBot.resoudreJeton`). C'est le seul
+        // endroit qui décide quel bot travaille.
+        reception: sourcesParBot,
+        // ⚠️ LOT 35j — DÉCLENCHEURS PAR BOT : la page `/bots?b=<id>#declencheurs`
+        // vise le bot affiché (`?bot=<id>`). Un identifiant inconnu est un refus
+        // 404 qui le nomme (jamais un repli silencieux sur le bot actif).
+        pourBot: (botId: string) => sourcesParBot.depsPourBot(botId),
+        // Bots connus : valide `?bot=` et permet à la page de NOMMER le bot concerné.
+        bots: { lister: () => sourcesParBot.bots() },
       },
       // DISCUSSIONS : `GET /api/chat/status` (lecture GARDÉE par l'en-tête
       // `X-Yuki-Config: 1`) — mode, état de la plateforme, état Mattermost, motif de
@@ -3406,7 +3752,10 @@ async function main(): Promise<void> {
       await discord.disconnect();
       // SOURCES : plus aucun suivi de run après l'arrêt (aucune écriture tardive
       // dans la boîte de notifications).
+      // ⚠️ LOT 35j : les piles des AUTRES bots sont fermées ici aussi (aucun
+      // suivi de run orphelin après l'arrêt).
       sourcesService.detach();
+      sourcesParBot.fermer();
       if (agentsServer) await closeAgentsServer(agentsServer);
       await transport?.close();
       await host?.stop();
@@ -3415,6 +3764,12 @@ async function main(): Promise<void> {
         memoryService.close();
         memoryService = undefined;
       }
+      // ⚠️ LOT 35i : plus aucune passe de consolidation en vol, puis fermeture des
+      // index ouverts pour les autres bots (aucune écriture tardive).
+      await consolidationBots?.drain();
+      consolidationBots = undefined;
+      fabriqueMemoireBots?.fermerTout();
+      fabriqueMemoireBots = undefined;
       conversationArchive?.close();
       conversationArchive = undefined;
     },

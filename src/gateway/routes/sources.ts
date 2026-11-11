@@ -62,9 +62,11 @@ import {
   SourceApiError,
   SourceValidationError,
   SourcesFullError,
+  SourcesParBotError,
   type DeclencheurEvent,
   type DeclencheurJournalFilter,
   type DeclencheurJournalRecord,
+  type SourceDelivery,
   type SourceOpenResult,
   type SourceChaineInput,
   type SourceSettingsInput,
@@ -171,6 +173,35 @@ export interface SourcesApiDeps {
   agents?: {
     list(): Array<{ agentId: string; name?: string; level?: string; revoked?: boolean }>;
   };
+  /**
+   * ⚠️ LOT 35j — RÉCEPTION PAR LE JETON (`POST /api/sources/<nom>/messages`).
+   *
+   * Absent ⇒ la route utilise `service.receive` (comportement d'avant : le nom du
+   * secret désigne la source, sans notion de bot). Présent ⇒ la résolution
+   * `jeton → bot propriétaire → sources.json de CE bot` est faite par
+   * `SourcesParBot` (`src/sources/par-bot.ts`), et elle seule décide.
+   */
+  reception?: {
+    recevoir(nom: string, jeton: string, body: unknown): Promise<SourceDelivery>;
+  };
+  /**
+   * ⚠️ LOT 35j — DÉCLENCHEURS PAR BOT : les routes d'administration visent le bot
+   * nommé par `?bot=<id>` (page `/bots?b=<id>#declencheurs`). Absent ⇒ le bot actif
+   * (pile historique), comportement d'avant.
+   */
+  pourBot?: (botId: string) => {
+    service: SourcesService;
+    journal?: SourcesApiDeps["journal"];
+    preAutorisations?: SourcesApiDeps["preAutorisations"];
+    envois?: SourcesApiDeps["envois"];
+  };
+  /**
+   * Bots connus : sert à VALIDER `?bot=` et à NOMMER le bot concerné dans la page
+   * (sans quoi on ne sait pas pour qui on crée un déclencheur).
+   */
+  bots?: {
+    lister(): Array<{ id: string; nom?: string; actif?: boolean }>;
+  };
 }
 
 export interface SourcesHttpResponse {
@@ -216,6 +247,13 @@ function errorBody(error: unknown): SourcesHttpResponse {
     // ⚠️ Motif/déclencheur/agent/durée refusés : 400 avec le CODE stable et la
     // raison en français (joker interdit, préfixe trop court, durée hors bornes…).
     return json(400, { error: error.code, code: error.code, message: error.message });
+  }
+  if (error instanceof SourcesParBotError) {
+    // ⚠️ LOT 35j — la pile d'un bot qui n'a pas pu être ouverte (démarrage en cours)
+    // est un refus EXPLICITE, jamais un repli silencieux sur le bot actif. Un
+    // identifiant invalide ou un bot inconnu du registre est un 404.
+    const status = error.code === "bot_non_construit" ? 503 : 404;
+    return json(status, { error: error.code, code: error.code, message: error.message });
   }
   if (error instanceof SourcesFullError) {
     return json(429, {
@@ -267,6 +305,47 @@ function segments(path: string): string[] {
   const at = path.indexOf("?");
   const chemin = at < 0 ? path : path.slice(0, at);
   return chemin.slice("/api/sources".length).split("/").filter((part) => part !== "");
+}
+
+/**
+ * Dépendances EFFECTIVES d'une requête — celles du BOT demandé quand `?bot=<id>`
+ * est présent (`/bots?b=<id>#declencheurs`), sinon celles de l'instance.
+ *
+ * ⚠️ Un bot INCONNU est un refus EXPLICITE répondant à la route (404 qui nomme le
+ * bot) : il ne retombe jamais silencieusement sur le bot actif — sinon on créerait
+ * un déclencheur chez un bot qu'on n'a pas demandé.
+ */
+function depsDe(input: SourcesRequestInput): SourcesApiDeps {
+  const deps = input.deps;
+  const demande = queryOf(input.path).get("bot");
+  if (demande === null || demande === "" || deps.pourBot === undefined) return deps;
+  const botId = demande.trim();
+  const connu = deps.bots?.lister().find((bot) => bot.id === botId);
+  if (deps.bots !== undefined && connu === undefined) {
+    throw new SourceApiError(404, "unknown_bot", `Bot inconnu : « ${botId} ».`, { bot: botId });
+  }
+  const parBot = deps.pourBot(botId);
+  return {
+    ...deps,
+    service: parBot.service,
+    ...(parBot.journal !== undefined ? { journal: parBot.journal } : {}),
+    ...(parBot.preAutorisations !== undefined
+      ? { preAutorisations: parBot.preAutorisations }
+      : {}),
+    ...(parBot.envois !== undefined ? { envois: parBot.envois } : {}),
+  };
+}
+
+/** Le bot visé par `?bot=<id>` (`undefined` ⇒ instance, c'est-à-dire bot actif). */
+function botConcerne(
+  input: SourcesRequestInput,
+  deps: SourcesApiDeps,
+): { id: string; nom: string } | undefined {
+  const demande = queryOf(input.path).get("bot");
+  if (demande === null || demande === "") return undefined;
+  const botId = demande.trim();
+  const connu = deps.bots?.lister().find((bot) => bot.id === botId);
+  return { id: botId, nom: connu?.nom ?? botId };
 }
 
 /** Vue renvoyée pour une entrée (aucune donnée interne inutile). */
@@ -391,10 +470,13 @@ function settingsFrom(body: unknown): SourceSettingsInput {
 export async function handleSourcesRequest(
   input: SourcesRequestInput,
 ): Promise<SourcesHttpResponse> {
-  const { method, path, deps } = input;
+  const { method, path } = input;
   const parts = segments(path);
 
   try {
+    // ⚠️ LOT 35j — les dépendances sont celles du BOT demandé (`?bot=<id>`), sinon
+    // celles de l'instance. La résolution peut REFUSER (bot inconnu ⇒ 404).
+    const deps = depsDe(input);
     // ── Journal des déclencheurs silencieux ────────────────────────────────
     // ⚠️ Lecture GARDÉE (comme la boîte) : le journal porte le CONTENU reçu par
     // les déclencheurs silencieux. Il n'est jamais affiché dans l'interface de
@@ -513,7 +595,15 @@ export async function handleSourcesRequest(
             "seul du TEXTE est pris en charge).",
         });
       }
-      const delivery = await deps.service.receive(parts[0], bearerToken(input.headers), parseJsonBody(input.body));
+      // ⚠️ LOT 35j — LA RÉSOLUTION PAR LE JETON : c'est `reception` (SourcesParBot)
+      // qui décide QUEL bot est réveillé, à partir de l'entrée de coffre du jeton.
+      // Sans lui (mono-bot, tests), on retombe sur le service de l'instance.
+      const jeton = bearerToken(input.headers);
+      const corps = parseJsonBody(input.body);
+      const delivery =
+        deps.reception !== undefined
+          ? await deps.reception.recevoir(parts[0], jeton, corps)
+          : await deps.service.receive(parts[0], jeton, corps);
       if (delivery.outcome === "duplicate") {
         return json(200, {
           duplicate: true,
@@ -582,6 +672,20 @@ export async function handleSourcesRequest(
               : {}),
           })),
           conversations,
+          // ⚠️ LOT 35j — LA PAGE INDIQUE LE BOT CONCERNÉ : sans cela, on ne sait pas
+          // POUR QUI on vient de créer un déclencheur (chaque bot a SON `sources.json`).
+          ...(botConcerne(input, deps) !== undefined
+            ? { bot: botConcerne(input, deps) }
+            : {}),
+          ...(deps.bots !== undefined
+            ? {
+                bots: deps.bots.lister().map((bot) => ({
+                  id: bot.id,
+                  nom: bot.nom ?? bot.id,
+                  actif: bot.actif === true,
+                })),
+              }
+            : {}),
         });
       }
       if (method === "POST") {
@@ -593,7 +697,12 @@ export async function handleSourcesRequest(
             ? String((body as Record<string, unknown>)["nom"] ?? "")
             : "";
         const view = deps.service.create(nom, settingsFrom(body));
-        return json(201, { source: view });
+        return json(201, {
+          source: view,
+          ...(botConcerne(input, deps) !== undefined
+            ? { bot: botConcerne(input, deps) }
+            : {}),
+        });
       }
       return json(405, { error: "method_not_allowed", method });
     }
@@ -690,7 +799,8 @@ function envoiBody(envoi: EnvoiProgramme): Record<string, unknown> {
  * envoi programmé modifie ce qui sera publié dans un canal.
  */
 function handleEnvois(input: SourcesRequestInput, parts: string[]): SourcesHttpResponse {
-  const { method, deps } = input;
+  const { method } = input;
+  const deps = depsDe(input);
   const guard = requireWriteGuards(input.headers);
   if (guard) return { status: guard.status, body: guard.body, headers: guard.headers };
 
@@ -755,7 +865,8 @@ function handlePreAutorisations(
   input: SourcesRequestInput,
   parts: string[],
 ): SourcesHttpResponse {
-  const { method, deps } = input;
+  const { method } = input;
+  const deps = depsDe(input);
   const guard = requireWriteGuards(input.headers);
   if (guard) return { status: guard.status, body: guard.body, headers: guard.headers };
 
@@ -968,7 +1079,10 @@ async function handleInbox(
   input: SourcesRequestInput,
   parts: string[],
 ): Promise<SourcesHttpResponse> {
-  const { method, deps } = input;
+  // ⚠️ LOT 35j — la boîte est CELLE DU BOT demandé (`?bot=<id>`) : `sources-inbox.json`
+  // est un fichier par bot. Sans le paramètre, la boîte de l'instance (bot actif).
+  const deps = depsDe(input);
+  const { method } = input;
   // ⚠️ TOUTE la boîte est gardée — y compris la LECTURE : les entrées portent le
   // CONTENU des messages de sources et les réponses de Yuki. Une page tierce ne doit
   // ni les lire, ni les marquer lues, ni créer une conversation.

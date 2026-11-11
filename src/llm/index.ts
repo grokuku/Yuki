@@ -69,11 +69,11 @@ export {
   REMOTE_TOOL_GROUP_OF,
   REMOTE_TOOLS,
   remoteToolGroup,
-  // ⚠️ PROFILS DE CAPACITÉS RÉELS (lot 35f) : la table et l'intersection sont
-  // publiques — c'est la SEULE règle qui rend un profil autre chose qu'une
-  // étiquette, et les tests la vérifient exhaustivement (profil × outil).
-  PROFIL_OUTILS,
-  filtrerSelonProfil,
+  // ⚠️ CAPACITÉS D'UN BOT (lot 35h) : la table capacité → outils et l'intersection
+  // sont publiques — c'est la SEULE règle qui décide de ce qu'un bot peut faire, et
+  // les tests la vérifient exhaustivement (capacité × outil).
+  OUTILS_DES_CAPACITES,
+  filtrerSelonCapacites,
   toolAllowlist,
   toolAllowlistForChat,
   TOOL_POLICY,
@@ -90,8 +90,8 @@ export type {
   FileListToolName,
   HeritageToolName,
   LibrarianToolName,
+  CapaciteOutils,
   LongRunningTool,
-  ProfilOutils,
   RemoteToolGroup,
   SecretToolName,
   ToolAllowlistOptions,

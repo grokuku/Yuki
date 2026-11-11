@@ -30,7 +30,7 @@ jamais d'une requête : un identifiant forgé ne change rien.
    `resolveBrut()` reste disponible pour les garde-fous qui doivent DISTINGUER
    « inconnu » de « non autorisé »).
 3. **`authorize()`** — `src/agents/execution.ts:1351`, et `authorizeTransfer`
-   qui l'appelle (`:1275`). Refus `agent_not_allowed` (`ExecutionOutcome.code`),
+   qui l'appelle (`:1313`). Refus `agent_not_allowed` (`ExecutionOutcome.code`),
    message explicite « … n'est pas autorisé pour ce bot … » — jamais « agent
    introuvable », qui ferait croire à une panne. Rien n'est transmis à la machine.
 

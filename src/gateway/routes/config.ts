@@ -28,14 +28,18 @@ import {
 } from "../../config/runtime.js";
 import {
   BOT_YUKI,
+  CAPACITES_BOT,
   type BotRecord,
+  type CapaciteBot,
   type RegistreBots,
 } from "../../bots/registry.js";
 import {
   AdminBotError,
   RETENTION_ARCHIVES_JOURS,
   compterDonneesBot,
+  compterSessionsPi,
   creerBot,
+  modifierBot,
   supprimerBot,
 } from "../../bots/admin.js";
 import {
@@ -112,6 +116,13 @@ export interface ConfigApiDeps {
   bots?: {
     registre?: RegistreBots | null;
     stateDir?: string;
+    /**
+     * Volume `pi` (lot 35i) : les SESSIONS d'un bot vivent sous
+     * `<piSessionsDir>/<id>`. La suppression les ARCHIVE (copie + suppression)
+     * et la confirmation les COMPTE — sans ce chemin, la route le dit
+     * (`sessions: null` au lieu d'un zéro trompeur).
+     */
+    piSessionsDir?: string;
     /**
      * DÉTACHEMENT DES AGENTS (lot 35g, `src/bots/admin.ts`) : appelé avec
      * l'identifiant d'un bot SUPPRIMÉ, pour le retirer de la liste `bots` de
@@ -594,7 +605,8 @@ export function isConfigPath(path: string): boolean {
 export interface BotListing {
   id: string;
   nom: string;
-  profil: string;
+  /** CAPACITÉS du bot (familles d'outils) : `[]` = il ne peut que répondre. */
+  capacites: CapaciteBot[];
   actif: boolean;
   ordre: number;
 }
@@ -611,7 +623,9 @@ function botsConnus(deps: ConfigApiDeps): BotListing[] {
       {
         id: deps.runtime.botId,
         nom: deps.runtime.botId === BOT_YUKI ? "Yuki" : deps.runtime.botId,
-        profil: "complet",
+        // Mono-bot historique : le bot porte le produit entier, donc toutes les
+        // capacités (aucune restriction n'a jamais existé dans ce mode).
+        capacites: [...CAPACITES_BOT],
         actif: true,
         ordre: 0,
       },
@@ -622,7 +636,7 @@ function botsConnus(deps: ConfigApiDeps): BotListing[] {
     .map((bot) => ({
       id: bot.id,
       nom: bot.nom,
-      profil: bot.profil,
+      capacites: [...bot.capacites],
       actif: bot.actif,
       ordre: bot.ordre,
     }));
@@ -644,8 +658,8 @@ function botInconnu(botId: string): ConfigHttpResponse {
 }
 
 /**
- * `GET /api/bots` — liste des bots (`id`, `nom`, `profil`, `actif`, `ordre`).
- * Sert au sélecteur de la page d'un bot.
+ * `GET /api/bots` — liste des bots (`id`, `nom`, `capacites`, `actif`, `ordre`).
+ * Sert au sélecteur de la page d'un bot et à la liste des cases de capacités.
  */
 function handleBotsList(deps: ConfigApiDeps): ConfigHttpResponse {
   return json(200, { bots: botsConnus(deps) });
@@ -773,10 +787,16 @@ function adminBotError(deps: ConfigApiDeps, error: unknown): ConfigHttpResponse 
 /**
  * `POST /api/bots` — CRÉE un bot (de zéro, ou par CLONE d'un bot existant).
  *
- * Corps : `{ nom, slug, profil?, avatar?, cloneDe?, elements? }`.
- * ⚠️ Le slug est IMMUABLE (il nomme un dossier) et `409 max_bots` au-delà de
- * `MAX_BOTS` bots. ⚠️ La création exige `X-Yuki-Config: 1` et la même origine
- * (`requireWriteGuards`), comme toute écriture de configuration.
+ * Corps : `{ nom, avatar?, cloneDe?, elements? }`.
+ *
+ * ⚠️ CRÉATION SIMPLE (décision utilisateur du 2026-11-10) : le corps ne porte que
+ * le NOM (l'avatar est facultatif). Le SLUG est dérivé et dédupliqué par le
+ * serveur, et les CAPACITÉS sont VIDES : un bot neuf ne peut que répondre tant
+ * que l'utilisateur ne l'autorise pas dans l'onglet « Général » de `/bots`.
+ *
+ * ⚠️ `409 max_bots` au-delà de `MAX_BOTS` bots. ⚠️ La création exige
+ * `X-Yuki-Config: 1` et la même origine (`requireWriteGuards`), comme toute
+ * écriture de configuration.
  */
 function handleBotsCreate(input: ConfigRequestInput): ConfigHttpResponse {
   const guard = guardWrite(input);
@@ -807,8 +827,6 @@ function handleBotsCreate(input: ConfigRequestInput): ConfigHttpResponse {
       stateDir,
       registre,
       nom: corps.value["nom"],
-      slug: corps.value["slug"],
-      profil: corps.value["profil"],
       cloneDe: corps.value["cloneDe"],
       avatar: corps.value["avatar"],
       ...(corps.value["elements"] !== undefined
@@ -821,12 +839,81 @@ function handleBotsCreate(input: ConfigRequestInput): ConfigHttpResponse {
     deps.logger.info("bot.cree", {
       bot: resultat.bot.id,
       nom: resultat.bot.nom,
-      profil: resultat.bot.profil,
+      capacites: resultat.bot.capacites.join(","),
       clone_de: corps.value["cloneDe"] ?? null,
       elements: resultat.copies.join(","),
       flow: configWriteFlow(input.headers),
     });
     return json(201, { bot: listingDe(resultat.bot), bots: botsConnus(deps) });
+  } catch (error) {
+    return adminBotError(deps, error);
+  }
+}
+
+/**
+ * `PATCH /api/bots/<id>` — MODIFIE le NOM et/ou les CAPACITÉS d'un bot.
+ *
+ * Corps : `{ nom?, capacites? }`. Un champ ABSENT reste inchangé (c'est un
+ * patch, pas un remplacement).
+ *
+ * ⚠️ Le SLUG n'est jamais modifiable : il nomme un dossier et des chemins.
+ * ⚠️ Une capacité INCONNUE est refusée (`400 capacite_inconnue`) — jamais ignorée.
+ * ⚠️ Le changement de capacités ne prend effet qu'au REDÉMARRAGE du gateway : le
+ * processus en cours a lu les capacités du bot actif à son démarrage. La réponse
+ * le dit (`rechargementRequis`) plutôt que de laisser croire à une application
+ * immédiate.
+ */
+function handleBotPatch(input: ConfigRequestInput, botId: string): ConfigHttpResponse {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+  const deps = input.deps;
+  const registre = deps.bots?.registre ?? null;
+  if (!registre) {
+    return json(409, {
+      error: "registre_absent",
+      code: "registre_absent",
+      message:
+        "L'instance n'est pas en mode multi-bot (aucun `state/bots.json`) : " +
+        "les capacités d'un bot ne peuvent pas être enregistrées.",
+    });
+  }
+  const stateDir = deps.bots?.stateDir;
+  if (!stateDir) {
+    return json(503, {
+      error: "bots_admin_indisponible",
+      code: "bots_admin_indisponible",
+      message: "Administration des bots indisponible : volume `state` inconnu.",
+    });
+  }
+  const corps = lireCorpsObjet(input.body);
+  if (!corps.ok) return corps.response;
+  try {
+    const resultat = modifierBot({
+      stateDir,
+      registre,
+      botId,
+      ...(corps.value["nom"] !== undefined ? { nom: corps.value["nom"] } : {}),
+      ...(corps.value["capacites"] !== undefined
+        ? { capacites: corps.value["capacites"] }
+        : {}),
+    });
+    if (deps.bots) deps.bots.registre = resultat.registre;
+    const actif = registre.bots.find((bot) => bot.actif === true)?.id ?? null;
+    const concerneBotActif = actif === null || actif === resultat.bot.id;
+    deps.logger.info("bot.modifie", {
+      bot: resultat.bot.id,
+      nom: resultat.bot.nom,
+      capacites: resultat.bot.capacites.join(","),
+      bot_actif: concerneBotActif,
+      flow: configWriteFlow(input.headers),
+    });
+    return json(200, {
+      bot: listingDe(resultat.bot),
+      bots: botsConnus(deps),
+      // ⚠️ Le gateway en cours a lu les capacités du bot actif à son démarrage :
+      // les changer pour CE bot exige un redémarrage pour être réellement actif.
+      rechargementRequis: concerneBotActif,
+    });
   } catch (error) {
     return adminBotError(deps, error);
   }
@@ -840,6 +927,12 @@ function handleBotsCreate(input: ConfigRequestInput): ConfigHttpResponse {
  * ACTIF, le premier bot restant est promu et `rechargementRequis` est vrai : le
  * gateway en cours applique encore ses chemins. Les données restent 90 jours
  * (`bot.archive.purged` à l'échéance, par le balayeur existant).
+ *
+ * ⚠️ LOT 35i : les SESSIONS Pi du bot (`<pi>/agent/sessions/<id>`, AUTRE volume)
+ * sont COPIÉES dans `<archive>/sessions-pi/` puis retirées de leur volume. Un
+ * échec de copie ne supprime rien : `sessionsPi.etat = "echec"`, l'origine est
+ * intacte, l'événement est journalisé (`bot.supprime.sessions_conservees`) et
+ * l'interface le DIT — jamais une conversation perdue en silence.
  */
 function handleBotsDelete(
   input: ConfigRequestInput,
@@ -872,6 +965,7 @@ function handleBotsDelete(
       registre,
       botId,
       logger: deps.logger,
+      ...(deps.bots?.piSessionsDir ? { piSessionsDir: deps.bots.piSessionsDir } : {}),
       ...(deps.bots?.retirerDesListesDAgents
         ? { retirerDesListesDAgents: deps.bots.retirerDesListesDAgents }
         : {}),
@@ -882,8 +976,18 @@ function handleBotsDelete(
       archive: resultat.archive,
       bot_actif_suivant: resultat.botActifSuivant,
       retention_jours: RETENTION_ARCHIVES_JOURS,
+      sessions_pi: resultat.sessionsPi.etat,
       flow: configWriteFlow(input.headers),
     });
+    if (resultat.sessionsPi.etat === "echec") {
+      // ⚠️ Une conversation qui n'a pas pu être archivée ne se tait pas :
+      // l'utilisateur doit SAVOIR qu'elle survit sur le volume `pi`.
+      deps.logger.warn("bot.supprime.sessions_conservees", {
+        bot: resultat.bot.id,
+        origine: resultat.sessionsPi.origine,
+        erreur: resultat.sessionsPi.erreur,
+      });
+    }
     if (resultat.rechargementRequis) {
       // ⚠️ Le processus en cours applique ENCORE les chemins du bot supprimé :
       // c'est dit au journal (et renvoyé à l'UI), jamais passé sous silence.
@@ -898,6 +1002,9 @@ function handleBotsDelete(
       botActifSuivant: resultat.botActifSuivant,
       rechargementRequis: resultat.rechargementRequis,
       retentionJours: RETENTION_ARCHIVES_JOURS,
+      // ⚠️ SESSIONS Pi (lot 35i) : l'interface DIT ce qu'il est advenu des
+      // conversations. `echec` ⇒ elles sont restées sur le volume `pi`.
+      sessionsPi: resultat.sessionsPi,
     });
   } catch (error) {
     return adminBotError(deps, error);
@@ -918,9 +1025,15 @@ function handleBotDonnees(deps: ConfigApiDeps, botId: string): ConfigHttpRespons
       message: "Compteurs indisponibles : volume `state` inconnu.",
     });
   }
+  const piSessionsDir = deps.bots?.piSessionsDir;
   return json(200, {
     bot: { id: botId },
-    compteurs: compterDonneesBot(stateDir, botId),
+    compteurs: {
+      ...compterDonneesBot(stateDir, botId),
+      // ⚠️ `null` quand le volume `pi` est inconnu : un 0 laisserait croire
+      // qu'il n'y a aucune conversation, alors qu'on ne sait pas les compter.
+      sessions: piSessionsDir ? compterSessionsPi(piSessionsDir, botId) : null,
+    },
     retentionJours: RETENTION_ARCHIVES_JOURS,
   });
 }
@@ -930,7 +1043,7 @@ function listingDe(bot: BotRecord): BotListing {
   return {
     id: bot.id,
     nom: bot.nom,
-    profil: bot.profil,
+    capacites: [...bot.capacites],
     actif: bot.actif,
     ordre: bot.ordre,
   };
@@ -1130,6 +1243,8 @@ export async function handleConfigRequest(
       }
       return json(405, { error: "method_not_allowed", method });
     }
+    // ⚠️ MODIFICATION du nom et/ou des capacités (PATCH = champs absents intacts).
+    if (method === "PATCH") return handleBotPatch(input, racine.botId);
     // ⚠️ SUPPRESSION : n'efface rien, DÉPLACE le dossier dans `bots-supprimes/`.
     if (method === "DELETE") return handleBotsDelete(input, racine.botId);
     return json(405, { error: "method_not_allowed", method });

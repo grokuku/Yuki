@@ -755,13 +755,27 @@ function sourceForm({
   };
 }
 
-export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
+/**
+ * Panneau « Déclencheurs » d'un bot.
+ *
+ * @param {object} options
+ * @param {string} [options.botId] ⚠️ LOT 35j — bot CONCERNÉ : quand il est fourni,
+ *   toutes les routes d'administration portent `?bot=<id>` et le panneau DIT à qui
+ *   appartiennent les déclencheurs affichés. Chaque bot a SON `sources.json`, SA
+ *   boîte, SON journal, SES pré-autorisations et SES envois : sans ce paramètre, on
+ *   afficherait ceux du bot actif en croyant créer chez un autre.
+ */
+export function initSourcesPanel({ root, HolafFetch, HolafModal, botId = "" }) {
   const state = {
     sources: [],
     conversations: [],
     error: "",
     status: "",
     busy: false,
+    /** Bot réellement servi par l'API (`?bot=`), tel que le SERVEUR le nomme. */
+    bot: null,
+    /** Bots connus (bandeau « bot concerné », état actif/inactif). */
+    bots: [],
     /** Journal BORNÉ : jamais tout le fichier (limite ≤ `JOURNAL_LIMITE_MAX`). */
     journal: [],
     journalLimite: JOURNAL_LIMITE,
@@ -778,8 +792,39 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     envoisErreur: "",
   };
 
+  /**
+   * ⚠️ LOT 35j — LE BOT CONCERNÉ est porté par l'URL (`?bot=<id>`).
+   *
+   * Le serveur résout ce paramètre AVANT toute lecture ou écriture (`depsDe`,
+   * `src/gateway/routes/sources.ts`) : un identifiant inconnu est un 404 qui le
+   * nomme, jamais un repli sur le bot actif. Vide ⇒ routes de l'instance (bot actif).
+   */
+  const botCible = typeof botId === "string" ? botId.trim() : "";
+  /** Ajoute `bot=<id>` à une route d'administration des sources. */
+  const urlApi = (chemin) => {
+    if (botCible === "") return chemin;
+    const separateur = chemin.includes("?") ? "&" : "?";
+    return `${chemin}${separateur}bot=${encodeURIComponent(botCible)}`;
+  };
+
   const errorEl = h("p", { class: "config-error", hidden: true, role: "alert" });
   const statusEl = h("p", { class: "config-save-status", role: "status" });
+  /**
+   * Bandeau « bot concerné » : visible SEULEMENT quand le panneau vise un bot nommé
+   * (`/bots?b=<id>#declencheurs`). Il dit à qui appartiennent ces déclencheurs, et
+   * signale un bot INACTIF (ses déclencheurs ne seront pas réveillés).
+   */
+  const botEl = h("p", { class: "config-helper", role: "status", hidden: botCible === "" });
+  const rendreBotConcerne = () => {
+    if (botCible === "") return;
+    const connu = state.bots.find((bot) => bot.id === botCible);
+    const nom = state.bot?.nom ?? connu?.nom ?? botCible;
+    const actif = connu !== undefined ? connu.actif === true : true;
+    botEl.textContent = actif
+      ? `Bot concerné : « ${nom} » — ces déclencheurs, pré-autorisations et envois sont les SIENS.`
+      : `⚠️ Bot concerné : « ${nom} » — INACTIF : ses déclencheurs ne sont pas réveillés ` +
+        "tant que le bot n'est pas activé.";
+  };
   /** Les TROIS sections (permanents / temporaires / sommeil). */
   const sectionsEl = h("div", { class: "declencheurs-sections" });
   /** Le 4ᵉ volet : le journal des déclencheurs, REPLIÉ par défaut. */
@@ -797,7 +842,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
       expression: String(expression ?? ""),
       fuseau: String(fuseau ?? ""),
     });
-    return HolafFetch.get(`/api/sources/apercu?${params.toString()}`, { headers: JSON_HEADERS });
+    return HolafFetch.get(urlApi(`/api/sources/apercu?${params.toString()}`), { headers: JSON_HEADERS });
   }
 
   /** Affiche le jeton UNE seule fois (jamais relu ensuite par l'API). */
@@ -884,7 +929,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
         return;
       }
       void act(`Source « ${values.nom} » créée. Créez maintenant son jeton.`, async () => {
-        await HolafFetch.post("/api/sources", { headers: WRITE_HEADERS, body: values });
+        await HolafFetch.post(urlApi("/api/sources"), { headers: WRITE_HEADERS, body: values });
         ctrl.close();
       });
     });
@@ -927,7 +972,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
       event.preventDefault();
       const values = fields.values();
       void act(`Source « ${source.nom} » mise à jour.`, async () => {
-        await HolafFetch.patch(`/api/sources/${encodeURIComponent(source.nom)}`, {
+        await HolafFetch.patch(urlApi(`/api/sources/${encodeURIComponent(source.nom)}`), {
           headers: WRITE_HEADERS,
           body: {
             consigne: values.consigne,
@@ -962,7 +1007,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     );
     if (!confirmed) return;
     await act("Nouveau jeton créé — il n'est affiché qu'une fois.", async () => {
-      const data = await HolafFetch.post(`/api/sources/${encodeURIComponent(nom)}/jeton`, {
+      const data = await HolafFetch.post(urlApi(`/api/sources/${encodeURIComponent(nom)}/jeton`), {
         headers: WRITE_HEADERS,
       });
       if (typeof data?.jeton === "string") showToken(nom, data.jeton);
@@ -978,7 +1023,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     );
     if (!confirmed) return;
     await act(`Source « ${nom} » supprimée.`, () =>
-      HolafFetch.delete(`/api/sources/${encodeURIComponent(nom)}`, { headers: WRITE_HEADERS }),
+      HolafFetch.delete(urlApi(`/api/sources/${encodeURIComponent(nom)}`), { headers: WRITE_HEADERS }),
     );
   }
 
@@ -1228,7 +1273,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     if (state.journalFiltre.source !== "") params.set("source", state.journalFiltre.source);
     journalEtatEl.textContent = "Lecture du journal…";
     try {
-      const data = await HolafFetch.get(`/api/sources/journal?${params.toString()}`, {
+      const data = await HolafFetch.get(urlApi(`/api/sources/journal?${params.toString()}`), {
         headers: JSON_HEADERS,
       });
       state.journal = Array.isArray(data?.evenements) ? data.evenements : [];
@@ -1242,18 +1287,24 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
 
   async function load() {
     try {
-      const data = await HolafFetch.get("/api/sources", { headers: JSON_HEADERS });
+      const data = await HolafFetch.get(urlApi("/api/sources"), { headers: JSON_HEADERS });
       state.sources = Array.isArray(data?.sources) ? data.sources : [];
       // Conversations proposables comme destination (vide en mode dégradé : le
       // sélecteur n'offre alors que les modes — on n'invente aucune conversation).
       state.conversations = Array.isArray(data?.conversations) ? data.conversations : [];
+      // ⚠️ LOT 35j — LE SERVEUR NOMME LE BOT qu'il vient de servir : on préfère son
+      // nom à celui du registre local (il peut avoir été renommé entre-temps).
+      state.bot = data?.bot && typeof data.bot === "object" ? data.bot : null;
+      state.bots = Array.isArray(data?.bots) ? data.bots : [];
       state.error = "";
     } catch (error) {
       state.sources = [];
+      state.bot = null;
       state.error = apiMessage(error, "Impossible de lire les sources.");
     }
     errorEl.textContent = state.error;
     errorEl.hidden = state.error === "";
+    rendreBotConcerne();
     renderSections();
     // Le volet journal ne se charge QUE s'il est ouvert (aucune requête inutile).
     if (journalDetails.open) await loadJournal();
@@ -1277,7 +1328,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
 
   async function chargerPreAutorisations() {
     try {
-      const data = await HolafFetch.get("/api/sources/preautorisations", {
+      const data = await HolafFetch.get(urlApi("/api/sources/preautorisations"), {
         headers: JSON_HEADERS,
       });
       state.preAutorisations = Array.isArray(data?.preAutorisations) ? data.preAutorisations : [];
@@ -1385,7 +1436,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     );
     if (!confirme) return;
     await act("Pré-autorisation révoquée.", async () => {
-      await HolafFetch.delete(`/api/sources/preautorisations/${encodeURIComponent(pre.id)}`, {
+      await HolafFetch.delete(urlApi(`/api/sources/preautorisations/${encodeURIComponent(pre.id)}`), {
         headers: WRITE_HEADERS,
       });
     });
@@ -1571,7 +1622,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
         return;
       }
       void act("Pré-autorisation créée.", async () => {
-        await HolafFetch.post("/api/sources/preautorisations", {
+        await HolafFetch.post(urlApi("/api/sources/preautorisations"), {
           headers: WRITE_HEADERS,
           body: {
             declencheur: declencheurSelect.value,
@@ -1638,7 +1689,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
 
   async function chargerEnvois() {
     try {
-      const data = await HolafFetch.get("/api/sources/envois", { headers: JSON_HEADERS });
+      const data = await HolafFetch.get(urlApi("/api/sources/envois"), { headers: JSON_HEADERS });
       state.envois = Array.isArray(data?.envois) ? data.envois : [];
       state.envoisBornes = {
         enAttente: data?.enAttente,
@@ -1752,7 +1803,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
     );
     if (!confirme) return;
     await act("Envoi annulé : il ne partira pas.", async () => {
-      await HolafFetch.delete(`/api/sources/envois/${encodeURIComponent(envoi.id)}`, {
+      await HolafFetch.delete(urlApi(`/api/sources/envois/${encodeURIComponent(envoi.id)}`), {
         headers: WRITE_HEADERS,
       });
     });
@@ -1898,6 +1949,7 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal }) {
           "réponse de Yuki à côté).",
       }),
       errorEl,
+      botEl,
       sectionsEl,
       envoisDetails,
       preauthDetails,

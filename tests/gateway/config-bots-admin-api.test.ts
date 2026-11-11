@@ -25,7 +25,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { MAX_BOTS, SOUS_DOSSIER_SUPPRIMES } from "../../src/bots/admin.js";
-import type { BotRecord, RegistreBots } from "../../src/bots/registry.js";
+import { CAPACITES_BOT, type BotRecord, type RegistreBots } from "../../src/bots/registry.js";
 import { loadEnv } from "../../src/config/env.js";
 import { ConfigStore } from "../../src/config/store.js";
 import { createConfigRuntime } from "../../src/config/runtime.js";
@@ -49,7 +49,8 @@ function bot(id: string, ordre: number, actif = false): BotRecord {
   return {
     id,
     nom: id === "yuki" ? "Yuki" : id,
-    profil: "complet",
+    // Bot du registre : liste normalisée (un bot hérité a toutes les capacités).
+    capacites: [...CAPACITES_BOT],
     actif,
     ordre,
     creeLe: "2026-01-01T00:00:00.000Z",
@@ -110,13 +111,18 @@ function deposer(stateDir: string, id: string, relatif: string, contenu = "x"): 
 describe("① `POST /api/bots`", () => {
   it("crée le dossier, l'entrée du registre et l'overlay, puis la liste le montre", async () => {
     const b = banc();
-    const creation = await appel(b, "POST", "/api/bots", {
-      nom: "Kohai",
-      slug: "kohai",
-      profil: "accueil",
-    });
+    const creation = await appel(b, "POST", "/api/bots", { nom: "Kohai" });
     expect(creation.status).toBe(201);
-    expect(creation.body.bot).toMatchObject({ id: "kohai", nom: "Kohai", profil: "accueil" });
+    // ⚠️ CRÉATION SIMPLE : le slug est DÉRIVÉ, les capacités sont VIDES, et aucun
+    // `profil` n'est renvoyé.
+    expect(creation.body.bot).toEqual({
+      id: "kohai",
+      nom: "Kohai",
+      capacites: [],
+      actif: false,
+      ordre: 1,
+    });
+    expect(creation.body.bot).not.toHaveProperty("profil");
     // Dossier + overlay explicite.
     expect(existsSync(join(b.stateDir, "bots", "kohai", "config.overlay.json"))).toBe(true);
     // ⚠️ Le registre EN MÉMOIRE suit (sinon `GET /api/bots` ignorerait le bot).
@@ -129,29 +135,34 @@ describe("① `POST /api/bots`", () => {
 
   it("exige `X-Yuki-Config: 1` (403) et ne crée RIEN", async () => {
     const b = banc();
-    const refus = await appel(b, "POST", "/api/bots", { nom: "Kohai", slug: "kohai" }, {
+    const refus = await appel(b, "POST", "/api/bots", { nom: "Kohai" }, {
       "content-type": "application/json",
     });
     expect(refus.status).toBe(403);
     expect(existsSync(join(b.stateDir, "bots", "kohai"))).toBe(false);
   });
 
-  it("refuse un slug INVALIDE (400) et un slug en DOUBLE (409)", async () => {
+  it("DÉRIVE le slug du nom : un nom déjà pris reçoit un slug suffixé (pas de 409)", async () => {
     const b = banc();
-    const invalide = await appel(b, "POST", "/api/bots", { nom: "K", slug: "Kohai!" });
-    expect(invalide.status).toBe(400);
-    expect(invalide.body.code).toBe("slug_invalide");
-    expect(existsSync(join(b.stateDir, "bots", "Kohai!"))).toBe(false);
-
-    const double = await appel(b, "POST", "/api/bots", { nom: "Yuki bis", slug: "yuki" });
-    expect(double.status).toBe(409);
-    expect(double.body.code).toBe("slug_deja_pris");
+    // ⚠️ Deux bots peuvent porter le même NOM : seul le slug est unique.
+    const creation = await appel(b, "POST", "/api/bots", { nom: "Yuki" });
+    expect(creation.status).toBe(201);
+    expect(creation.body.bot.id).toBe("yuki-2");
+    expect(creation.body.bot.nom).toBe("Yuki");
+    // Un nom vide est REFUSÉ (400), et rien n'est créé.
+    const vide = await appel(b, "POST", "/api/bots", { nom: "   " });
+    expect(vide.status).toBe(400);
+    expect(vide.body.code).toBe("nom_invalide");
+    // ⚠️ Un `slug` dans le corps est IGNORÉ (le champ n'existe plus côté serveur).
+    const ignore = await appel(b, "POST", "/api/bots", { nom: "Nova", slug: "autre" });
+    expect(ignore.status).toBe(201);
+    expect(ignore.body.bot.id).toBe("nova");
   });
 
   it(`refuse le 7ᵉ bot : 409 max_bots en NOMMANT la limite (${MAX_BOTS})`, async () => {
     const bots = Array.from({ length: MAX_BOTS }, (_, index) => bot(`bot${index}`, index));
     const b = banc(bots);
-    const refus = await appel(b, "POST", "/api/bots", { nom: "Trop", slug: "trop" });
+    const refus = await appel(b, "POST", "/api/bots", { nom: "Trop" });
     expect(refus.status).toBe(409);
     expect(refus.body.code).toBe("max_bots");
     expect(String(refus.body.message)).toContain(String(MAX_BOTS));
@@ -171,11 +182,7 @@ describe("① `POST /api/bots`", () => {
     deposer(b.stateDir, "yuki", "preautorisations.json", "{}");
     deposer(b.stateDir, "yuki", "envois-programmes.json", "{}");
 
-    const creation = await appel(b, "POST", "/api/bots", {
-      nom: "Clone",
-      slug: "clone",
-      cloneDe: "yuki",
-    });
+    const creation = await appel(b, "POST", "/api/bots", { nom: "Clone", cloneDe: "yuki" });
     expect(creation.status).toBe(201);
     const clone = join(b.stateDir, "bots", "clone");
     expect(readFileSync(join(clone, "personality.md"), "utf8")).toBe("# Yuki\n");
@@ -193,7 +200,7 @@ describe("① `POST /api/bots`", () => {
   it("refuse la création quand le registre n'existe pas (mode mono-bot)", async () => {
     const b = banc();
     b.deps.bots!.registre = null;
-    const refus = await appel(b, "POST", "/api/bots", { nom: "Kohai", slug: "kohai" });
+    const refus = await appel(b, "POST", "/api/bots", { nom: "Kohai" });
     expect(refus.status).toBe(409);
     expect(refus.body.code).toBe("registre_absent");
   });
@@ -247,6 +254,86 @@ describe("② `DELETE /api/bots/<id>`", () => {
     const inconnu = await appel(b, "DELETE", "/api/bots/fantome");
     expect(inconnu.status).toBe(404);
     expect(inconnu.body.code).toBe("bot_not_found");
+  });
+});
+
+describe("②bis `PATCH /api/bots/<id>` — nom et capacités (lot 35h)", () => {
+  it("enregistre les CAPACITÉS cochées et les renvoie dans la liste", async () => {
+    const b = banc([bot("yuki", 0, true), { ...bot("kohai", 1), capacites: [] }]);
+    const reponse = await appel(b, "PATCH", "/api/bots/kohai", {
+      capacites: ["agents", "execution"],
+    });
+    expect(reponse.status).toBe(200);
+    expect(reponse.body.bot).toEqual({
+      id: "kohai",
+      nom: "kohai",
+      capacites: ["agents", "execution"],
+      actif: false,
+      ordre: 1,
+    });
+    // ⚠️ Le bot n'est PAS le bot actif : aucun redémarrage nécessaire.
+    expect(reponse.body.rechargementRequis).toBe(false);
+    // Le FICHIER porte les capacités (source = disque), et la liste suit.
+    const ecrit = JSON.parse(readFileSync(join(b.stateDir, "bots.json"), "utf8")) as RegistreBots;
+    expect(ecrit.bots.find((entree) => entree.id === "kohai")?.capacites).toEqual([
+      "agents",
+      "execution",
+    ]);
+    const liste = await appel(b, "GET", "/api/bots");
+    expect(liste.body.bots[1].capacites).toEqual(["agents", "execution"]);
+  });
+
+  it("changer les capacités du bot ACTIF annonce un REDÉMARRAGE requis", async () => {
+    const b = banc([bot("yuki", 0, true), bot("kohai", 1)]);
+    const reponse = await appel(b, "PATCH", "/api/bots/yuki", { capacites: [] });
+    expect(reponse.status).toBe(200);
+    // ⚠️ Le gateway en cours a lu les capacités de `yuki` à son démarrage : le
+    // dire, plutôt que de laisser croire à une application immédiate.
+    expect(reponse.body.rechargementRequis).toBe(true);
+  });
+
+  it("`nom` et `capacites` dans le même appel : les deux sont écrits", async () => {
+    const b = banc([bot("yuki", 0, true), bot("kohai", 1)]);
+    const reponse = await appel(b, "PATCH", "/api/bots/kohai", {
+      nom: "  Nébula  ",
+      capacites: ["envoi"],
+    });
+    expect(reponse.status).toBe(200);
+    expect(reponse.body.bot.nom).toBe("Nébula");
+    expect(reponse.body.bot.capacites).toEqual(["envoi"]);
+    // ⚠️ Le slug ne bouge JAMAIS.
+    expect(reponse.body.bot.id).toBe("kohai");
+  });
+
+  it("une CAPACITÉ INCONNUE est refusée (400) et n'écrit RIEN", async () => {
+    const b = banc([bot("yuki", 0, true), { ...bot("kohai", 1), capacites: ["envoi"] }]);
+    const refus = await appel(b, "PATCH", "/api/bots/kohai", { capacites: ["tout"] });
+    expect(refus.status).toBe(400);
+    expect(refus.body.code).toBe("capacite_inconnue");
+    expect(String(refus.body.message)).toContain("tout");
+    const liste = await appel(b, "GET", "/api/bots");
+    expect(liste.body.bots[1].capacites).toEqual(["envoi"]);
+  });
+
+  it("exige `X-Yuki-Config: 1`, refuse un corps non-objet et un bot inconnu", async () => {
+    const b = banc([bot("yuki", 0, true), bot("kohai", 1)]);
+    const sansEntete = await appel(b, "PATCH", "/api/bots/kohai", { capacites: [] }, {
+      "content-type": "application/json",
+    });
+    expect(sansEntete.status).toBe(403);
+    const liste = await appel(b, "PATCH", "/api/bots/kohai", []);
+    expect(liste.status).toBe(400);
+    const inconnu = await appel(b, "PATCH", "/api/bots/fantome", { capacites: [] });
+    expect(inconnu.status).toBe(404);
+    expect(inconnu.body.code).toBe("bot_not_found");
+  });
+
+  it("`PATCH` sans champ : rien ne change (patch, pas remplacement)", async () => {
+    const b = banc([bot("yuki", 0, true), { ...bot("kohai", 1), capacites: ["images"] }]);
+    const reponse = await appel(b, "PATCH", "/api/bots/kohai", {});
+    expect(reponse.status).toBe(200);
+    expect(reponse.body.bot.capacites).toEqual(["images"]);
+    expect(reponse.body.bot.nom).toBe("kohai");
   });
 });
 

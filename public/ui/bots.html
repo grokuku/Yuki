@@ -52,7 +52,8 @@
         SÉLECTEUR DE BOT (③) — l'état est porté par l'URL (`?b=<slug>`) : elle
         est partageable et un rechargement retombe sur le même bot. Un slug
         inconnu retombe sur `yuki` SANS erreur visible (URL partagée périmée).
-        « + » ouvre la modale d'AJOUT (lot 35e) : nom, slug immuable, profil,
+        « + » ouvre la modale d'AJOUT (lot 35h) : nom seulement (le slug est
+        dérivé, les capacités partent vides),
         avatar facultatif, puis « de zéro » ou CLONE d'un bot existant avec ses
         cases à cocher. Le bot créé apparaît dans ce sélecteur, qui bascule
         dessus.
@@ -157,7 +158,8 @@
 
         <div id="groups" class="config-panels">
           <!-- ═══ GÉNÉRAL ═══════════════════════════════════════════════════
-               Identité du bot (nom, slug IMMUABLE, profil, avatar) et ZONE DE
+               Identité du bot (nom MODIFIABLE, slug IMMUABLE, avatar), CAPACITÉS
+               (une case par famille d'outils, décochées par défaut) et ZONE DE
                DANGER avec la SUPPRESSION réelle (lot 35e) : le dossier du bot
                est DÉPLACÉ dans `bots-supprimes/` (rien n'est effacé) et
                conservé 90 jours. La confirmation affiche les compteurs réels

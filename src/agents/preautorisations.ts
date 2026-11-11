@@ -407,6 +407,23 @@ export interface PreAutorisationStoreOptions {
   journal?: PreAutorisationJournal;
   /** Rétention des autorisations terminées (jours). Défaut : 90. */
   retentionJours?: number;
+  /**
+   * ⚠️ LOT 35j — BOT PROPRIÉTAIRE de ce registre.
+   *
+   * Le FICHIER est déjà par bot (`paths.ts` : `preautorisations.json` sous
+   * `<state>/bots/<botId>/`), donc la clé `(bot, déclencheur)` est STRUCTURELLE.
+   * Le champ ne sert qu'à deux choses : le journal et le filtre de visibilité des
+   * agents. Il vient du DÉMARRAGE (bot de la pile), jamais d'une demande.
+   */
+  botId?: string;
+  /**
+   * ⚠️ LOT 35j — PORTÉE AGENT filtrée par `AgentRecord.bots` : un agent que CE bot
+   * ne voit pas ne peut pas consommer l'autorisation, même si elle porte son
+   * `agentId` (elle a pu être créée quand l'agent était encore visible).
+   *
+   * Absent ⇒ aucun filtrage (comportement historique, mono-bot et tests).
+   */
+  agentAutorise?: (agentId: string) => boolean;
 }
 
 /** Rétention par défaut des autorisations terminées (consommées/révoquées/expirées). */
@@ -473,6 +490,10 @@ export class PreAutorisationStore implements PreAutorisationPort {
   private readonly idFactory: () => string;
   private readonly journal?: PreAutorisationJournal;
   private readonly retentionJours: number;
+  /** Bot propriétaire (diagnostic/journal) — jamais utilisé pour choisir un chemin. */
+  private readonly botId?: string;
+  /** Filtre de visibilité des agents pour CE bot (`AgentRecord.bots`). */
+  private readonly agentAutorise?: (agentId: string) => boolean;
   private entries: PreAutorisation[] = [];
   /** Entrées d'un fichier antérieur qu'on n'a pas su lire (jamais jetées). */
   private invalides: unknown[] = [];
@@ -485,6 +506,8 @@ export class PreAutorisationStore implements PreAutorisationPort {
       options.idFactory ?? (() => `pre_${randomBytes(6).toString("hex")}`);
     this.journal = options.journal;
     this.retentionJours = Math.max(1, Math.trunc(options.retentionJours ?? RETENTION_JOURS));
+    this.botId = options.botId;
+    this.agentAutorise = options.agentAutorise;
     this.entries = this.charger();
   }
 
@@ -691,6 +714,15 @@ export class PreAutorisationStore implements PreAutorisationPort {
           `autorisation pour cet agent (${
             [...new Set(candidates.map((entry) => entry.agentId))].join(", ") || "aucun"
           }). Rien n'a été exécuté.`,
+      );
+    }
+    // ⚠️ LOT 35j — PORTÉE AGENT : une autorisation destinée à un agent que CE bot ne
+    // voit pas (`AgentRecord.bots`) ne s'applique pas ici. Le refus le DIT, sinon la
+    // personne chercherait pourquoi une autorisation « active » ne sert à rien.
+    if (this.agentAutorise !== undefined && !this.agentAutorise(agentId)) {
+      return refus(
+        `Pré-autorisation REFUSÉE : l'agent ${agentId} n'est pas autorisé pour ce bot` +
+          `${this.botId !== undefined ? ` (${this.botId})` : ""}. Rien n'a été exécuté.`,
       );
     }
     const nonRevoquees = deLAgent.filter((entry) => entry.revoqueeLe === undefined);

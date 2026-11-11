@@ -48,6 +48,7 @@ import {
   migrerVersMultiBot,
   preparerMultiBot,
 } from "../../src/bots/index.js";
+import { CAPACITES_BOT } from "../../src/bots/registry.js";
 
 const racines: string[] = [];
 
@@ -189,7 +190,9 @@ describe("Migration mono-bot → multi-bot (lot 35a)", () => {
     expect(registre?.bots).toHaveLength(1);
     expect(registre?.bots[0]?.id).toBe("yuki");
     expect(registre?.bots[0]?.nom).toBe("Yuki");
-    expect(registre?.bots[0]?.profil).toBe("complet");
+    // ⚠️ Le bot historique reçoit TOUTES les capacités (lot 35h) : sans cela, Yuki
+    // perdrait `run_command`, la délégation et la mémoire au premier démarrage.
+    expect(registre?.bots[0]?.capacites).toEqual([...CAPACITES_BOT]);
     expect(registre?.bots[0]?.actif).toBe(true);
     expect(registre?.bots[0]?.ordre).toBe(0);
     expect(registre?.bots[0]?.plateformes).toEqual({});
