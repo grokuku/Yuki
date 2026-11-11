@@ -71,25 +71,28 @@ body {
   letter-spacing: 0.02em;
 }
 
-/* ─── LOT 38 : RANGÉE D'AVATARS INLINE DE LA BARRE DU HAUT ────────────────
+/* ─── LOT 38/39 : ONGLETS DE BOTS DE LA BARRE DU HAUT ──────────────────────
  *
- * Un avatar par bot, côte à côte, À GAUCHE du nom. Le clic bascule
- * immédiatement (aucun panneau intermédiaire).
+ * Un ONGLET par bot, côte à côte : AVATAR + NOM groupés DANS le même bouton,
+ * pour TOUS les bots (comme des onglets de navigateur) — et non plus une rangée
+ * d'avatars suivie d'un nom isolé à droite. Le clic bascule immédiatement
+ * (aucun panneau intermédiaire).
  *
- * ⚠️ DÉBORDEMENT : l'instance est plafonnée à 6 bots (`MAX_BOTS`, registre) ;
- * 6 × 24 px + les écarts tiennent dans une barre de téléphone. Malgré cela la
- * rangée est un cadre DÉFILANT (`overflow-x: auto`, largeur bornée en mobile) :
- * si un jour il y en avait plus, RIEN ne déborderait et AUCUN bot ne serait
- * caché derrière une troncature (un « … » imposerait un second clic, contraire
- * au but « un clic = un bot »). Aucun style inline : CSP `style-src 'self'`. */
+ * ⚠️ DÉBORDEMENT : l'instance est plafonnée à 6 bots (`MAX_BOTS`, registre),
+ * mais « avatar 24 px + nom » fait ~90-110 px par bot : 4 bots déborderaient.
+ * Le cadre est donc DÉFILANT (`overflow-x: auto`) et chaque nom est TRONQUÉ
+ * (`max-width` + `text-overflow: ellipsis`) : 40 caractères ne cassent rien.
+ * En TÉLÉPHONE, seul l'onglet AFFICHÉ garde son nom (voir la requête média) :
+ * « tête + nom » pour l'onglet actif, « tête seule » pour les autres — jamais de
+ * débordement, quel que soit le nombre de bots.
+ * Aucun style inline : CSP `style-src 'self'`. */
 .bot-bar {
   display: flex;
   align-items: center;
   gap: 6px;
-  /* ⚠️ La rangée GARDE sa largeur naturelle (sinon `min-width: 0` la laisse
-   * s'écraser à un seul avatar dans une barre chargée). Elle est bornée par
-   * `max-width` et défile au-delà. */
-  flex: 0 0 auto;
+  /* ⚠️ La rangée peut SE RÉTRÉCIR (sinon elle pousse le « … » hors de la
+   * barre) et défile au-delà de sa largeur disponible. */
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
@@ -97,20 +100,21 @@ body {
   scrollbar-width: thin;
 }
 
+/* UN ONGLET = AVATAR + NOM groupés. La pilule entière est le bouton. */
 .bot-bar__item {
   position: relative;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
+  gap: 7px;
+  height: 30px;
+  padding: 0 11px 0 3px;
   border: 1px solid var(--border);
-  border-radius: 50%;
+  border-radius: 999px;
   background: var(--panel-3);
   color: var(--text);
   font: inherit;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -123,10 +127,16 @@ body {
   outline-offset: 2px;
 }
 
-/* Le bot AFFICHÉ est démarqué par une CLASSE (jamais un style inline). */
+/* L'onglet AFFICHÉ est démarqué par une CLASSE (jamais un style inline) :
+ * bordure d'accent + fond teinté, visibles même sans le nom (téléphone). */
 .bot-bar__item--courant {
   border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--panel-3));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.bot-bar__item--courant .bot-bar__nom {
+  font-weight: 700;
 }
 
 /* Un bot ARRÊTÉ reste VISIBLE : contour en pointillé + pastille d'état. */
@@ -139,13 +149,24 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  height: 100%;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   overflow: hidden;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+/* Le nom de l'onglet est BORNÉ et tronqué : 40 caractères ne cassent pas la
+ * barre (le nom complet reste dans l'infobulle et l'`aria-label`). */
+.bot-bar__nom {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
 }
 
 .bot-bar__avatar .avatar--brand {
@@ -156,11 +177,12 @@ body {
   border: 0;
 }
 
-/* Marqueur d'état DISCRET (couleur portée par la classe du parent). */
+/* Marqueur d'état DISCRET, ANCRÉ SUR L'AVATAR (à gauche de la pilule depuis le
+ * lot 39 : la pastille ne doit pas atterrir au bout du nom). */
 .bot-bar__etat {
   position: absolute;
-  right: -1px;
-  bottom: -1px;
+  left: 18px;
+  bottom: 0;
   width: 8px;
   height: 8px;
   border: 1.5px solid var(--panel);
@@ -178,11 +200,12 @@ body {
   background: var(--danger);
 }
 
-/* Badge de NON-LUS par bot : un point pour 1, le nombre au-delà. */
+/* Badge de NON-LUS par bot : un point pour 1, le nombre au-delà. Ancré sur le
+ * coin supérieur droit de l'AVATAR (premier élément de l'onglet). */
 .bot-bar__badge {
   position: absolute;
   top: -3px;
-  right: -3px;
+  left: 15px;
   min-width: 12px;
   height: 12px;
   padding: 0 2px;
@@ -3454,9 +3477,13 @@ h6.md-heading {
   /* Barre du haut compacte : une seule rangée de taille réduite (les
      informations — connexion, état, badge anti-mensonge, file, notifications,
      thème, voix — restent TOUTES présentes ; rien n'est retiré). */
-  /* B — LOT 38 : la RANGÉE d'avatars reste visible en téléphone (22 px), avec
-     le nom à sa droite. C'est le seul endroit où la bascule est toujours
-     atteignable au doigt ; le panneau remonte du bas comme avant. */
+  /* B — LOT 39 : les ONGLETS de bots restent visibles en téléphone. Décision de
+     place : AVATAR + NOM pour le seul onglet AFFICHÉ, avatar SEUL pour les
+     autres. Motif : la barre fait 390 px ; « avatar + nom » coûte ~90-110 px par
+     bot, donc 3 bots avec leur nom déborderaient déjà (et 6, le plafond, deux
+     fois). L'onglet actif garde la « tête suivie du nom » demandée ; les autres
+     restent reconnaissables à leur tête, avec un état marqué (contour d'accent,
+     fond teinté, nom en gras) et leur nom complet dans le panneau « … ». */
   .brand {
     display: none;
     gap: 6px;
@@ -3489,7 +3516,7 @@ h6.md-heading {
   }
 
   .bot-bar {
-    /* Cadre DÉFILANT borné : la rangée ne pousse ni le nom ni les pilules. */
+    /* Cadre DÉFILANT borné : les onglets ne poussent jamais les pilules. */
     max-width: 52vw;
     gap: 5px;
   }
@@ -3499,11 +3526,34 @@ h6.md-heading {
   }
 
   .bot-bar__item {
+    height: 26px;
+    gap: 6px;
+    padding: 0 9px 0 2px;
+  }
+
+  .bot-bar__avatar {
     width: 22px;
     height: 22px;
   }
 
+  /* ⚠️ TÉLÉPHONE : le nom n'est affiché QUE pour l'onglet AFFICHÉ (justification
+   * dans le commentaire du bloc `.brand` ci-dessus). Les autres onglets sont des
+   * têtes seules : aucun débordement, même au plafond de 6 bots. */
+  .bot-bar__nom {
+    display: none;
+  }
+
+  .bot-bar__item--courant .bot-bar__nom {
+    display: inline-block;
+    max-width: 72px;
+  }
+
+  .bot-bar__etat {
+    left: 16px;
+  }
+
   .bot-bar__badge {
+    left: 13px;
     min-width: 11px;
     height: 11px;
     font-size: 8px;
@@ -3512,10 +3562,6 @@ h6.md-heading {
 
   .brand__bot {
     padding: 2px 2px;
-  }
-
-  .brand__plus {
-    display: none;
   }
 
   /* Le panneau remonte du BAS de l'écran (feuille) : sur 390 px de large, un

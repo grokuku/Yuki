@@ -5,11 +5,12 @@
  * y a écrit Yuki avec son avatar, on pourrait disposer de plusieurs bots à cet
  * endroit ». 
  *
- * ⚠️ LOT 38 — LES BOTS SONT CÔTE À CÔTE : une RANGÉE d'avatars inline dans
- * `header.topbar` (`#bot-bar`), un avatar par bot, À GAUCHE du nom. Un clic
- * bascule IMMÉDIATEMENT (aucun panneau intermédiaire). Le panneau du lot 37
- * n'est PAS supprimé : il reste le lieu d'« Ajouter » et de « Retirer »
- * (clic droit / appui long / bouton nom+« … »).
+ * ⚠️ LOT 38/39 — LES BOTS EN ONGLETS : une rangée d'ONGLETS dans
+ * `header.topbar` (`#bot-bar`), chacun = AVATAR + NOM groupés, pour TOUS les
+ * bots (y compris celui qui n'est pas affiché). Un clic bascule IMMÉDIATEMENT
+ * (aucun panneau intermédiaire). Plus de nom isolé à droite de la rangée. Le
+ * panneau du lot 37 n'est PAS supprimé : il reste le lieu d'« Ajouter » et de
+ * « Retirer » (clic droit / appui long / bouton « … »).
  *
  * Ce que le panneau fait, et rien d'autre :
  *  ① il LISTE **tous** les bots (`GET /api/bots`), avec leur état d'EXÉCUTION
@@ -121,16 +122,16 @@ function persisterAttribution(table) {
  * @param {HTMLElement} options.button bouton de la barre du haut (nom + « … »).
  * @param {HTMLElement} options.panel le panneau (`role="dialog"`, `hidden`).
  * @param {HTMLElement} options.list la liste (`<ul>`).
- * @param {HTMLElement} [options.barEl] la RANGÉE d'avatars inline (`#bot-bar`) :
- *   un bouton par bot, à GAUCHE du nom. Absente ⇒ aucune rangée (repli : le
- *   panneau reste la seule bascule, comportement du lot 37).
+ * @param {HTMLElement} [options.barEl] les ONGLETS de bots de la barre du haut
+ *   (`#bot-bar`) : un bouton AVATAR + NOM par bot. Absents ⇒ aucune rangée
+ *   (repli : le panneau reste la seule bascule, comportement du lot 37).
  * @param {HTMLElement} [options.plafondEl] la ligne de synthèse du panneau.
  * @param {HTMLElement} [options.statusEl] la zone de message (`role="status"`).
  * @param {HTMLElement} [options.addButton] « Ajouter un bot ».
  * @param {HTMLElement} [options.closeButton] « Fermer ».
- * @param {HTMLElement} [options.nomEl] nom affiché DANS le bouton de la barre du
- *   haut (`#bot-switcher-nom`) : il suit le bot AFFICHÉ, avec le slug entre
- *   parenthèses si deux bots portent le même nom.
+ * @param {HTMLElement} [options.nomEl] nom isolé de la barre du haut — PLUS
+ *   utilisé par la discussion (lot 39 : chaque nom vit DANS son onglet) ; la
+ *   page `/bots` s'en sert encore (bouton « avatar + nom » + suffixe).
  * @param {Function} [options.avantNaviguer] garde exécutée AVANT d'ouvrir une
  *   conversation (`async (id) => boolean`). `false` = ne pas naviguer (page de
  *   configuration : modifications non enregistrées).
@@ -163,7 +164,7 @@ export function initBotSwitcher(options) {
   const button = options.button;
   const panel = options.panel;
   const list = options.list;
-  /** Rangée d'avatars inline de la barre du haut (lot 38). */
+  /** Onglets de bots de la barre du haut (lot 38/39). */
   const bar = options.barEl ?? null;
   const plafondEl = options.plafondEl ?? null;
   const statusEl = options.statusEl ?? null;
@@ -337,11 +338,13 @@ export function initBotSwitcher(options) {
   }
 
   /**
-   * Construit la RANGÉE d'avatars inline (`header.topbar`, lot 38).
+   * Construit les ONGLETS de bots de la barre du haut (`header.topbar`, lot 39).
    *
-   * ⚠️ UN avatar par bot, dans l'ordre du registre, À GAUCHE du nom. Cliquer un
-   * avatar BASCULE immédiatement (aucun panneau intermédiaire) : un bot arrêté
-   * est d'abord démarré, sinon son WebSocket refuserait la connexion.
+   * ⚠️ UN ONGLET par bot, dans l'ordre du registre, et chaque onglet est
+   * AVATAR + NOM groupés — y compris pour un bot qui n'est pas affiché (comme
+   * des onglets : « la tête suivie du nom »). Plus AUCUN nom isolé à droite.
+   * Cliquer un onglet BASCULE immédiatement (aucun panneau intermédiaire) : un
+   * bot arrêté est d'abord démarré, sinon son WebSocket refuserait la connexion.
    * ⚠️ L'état est porté par des CLASSES (jamais un style inline) :
    * `--courant` (bot affiché), `--arrete` (pas en marche), `--erreur` (échec dit).
    * ⚠️ Le badge de non-lus est PAR BOT (somme de SES conversations non lues
@@ -377,6 +380,11 @@ export function initBotSwitcher(options) {
         ...(entree.courant ? { "aria-current": "true" } : {}),
       });
       bouton.append(avatarDe(entree, { rangee: true }));
+      // LOT 39 — LE NOM EST DANS L'ONGLET (à droite de sa tête), pour CHAQUE bot :
+      // la barre se lit « tête + nom », plus « des têtes puis un nom détaché ».
+      // Il est borné et tronqué par `styles.css` (`.bot-bar__nom`) ; le nom
+      // complet reste dans l'infobulle et l'`aria-label`, jamais perdu.
+      bouton.append(h("span", { class: "bot-bar__nom", text: entree.nomAffiche }));
       // Marqueur DISCRET d'état (la couleur/forme vient de la classe du parent).
       bouton.append(h("span", { class: "bot-bar__etat", "aria-hidden": "true" }));
       const badge = h("span", {

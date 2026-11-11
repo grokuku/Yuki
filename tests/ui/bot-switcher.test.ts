@@ -407,17 +407,18 @@ function itemDe(list: Noeud, botId: string): Noeud {
 
 // ─── ① l'avatar de la barre du haut est un BOUTON ─────────────────────────
 
-describe("① la barre du haut liste les avatars et ouvre le panneau", () => {
-  it("le markup porte la RANGÉE d'avatars ET le bouton du panneau", () => {
+describe("① les onglets de bots de la barre du haut ouvrent le panneau", () => {
+  it("le markup porte les ONGLETS et le bouton « … » du panneau", () => {
     const html = ui("index.html");
-    // ⚠️ LOT 38 : la rangée d'avatars est le point de bascule IMMÉDIAT ; elle est
-    // À GAUCHE du nom (`#bot-switcher-nom`), qui reste affiché à sa droite.
+    // ⚠️ LOT 39 : les onglets (`#bot-bar`) sont le point de bascule IMMÉDIAT ;
+    // chaque onglet porte son propre nom, il n'y a PLUS de nom isolé à droite.
     expect(html).toMatch(/<div\s+id="bot-bar"[^>]*class="bot-bar"/);
-    expect(html).toMatch(/id="bot-bar"[\s\S]{0,800}?id="bot-switcher-nom"/);
-    // Le panneau existant reste câblé (Ajouter / Retirer).
+    expect(html).not.toContain('id="bot-switcher-nom"');
+    // Le panneau existant reste câblé (Ajouter / Retirer) — bouton « … » seul.
     expect(html).toMatch(
       /<button[^>]*id="bot-switcher-btn"[^>]*aria-controls="bot-switcher-panel"/,
     );
+    expect(html).toMatch(/id="bot-switcher-btn"[\s\S]{0,400}?class="brand__plus"/);
     expect(html).toContain('id="bot-switcher-panel"');
     expect(html).toContain('id="bot-switcher-list"');
     expect(html).toContain('id="bot-switcher-add"');
@@ -862,21 +863,37 @@ describe("⑧ « Ajouter un bot » réutilise la modale existante", () => {
   });
 });
 
-// ─── ⑩ le NOM de la barre du haut suit le bot AFFICHÉ ─────────────────────
+// ─── ⑩ chaque onglet porte SON nom (plus de « Yuki » détaché) ────────────
 
-describe("⑩ « je n'ai toujours que Yuki en haut » corrigé", () => {
-  it("le nom du bouton est celui du bot affiché, jamais un « Yuki » en dur", async () => {
-    // ⚠️ LE DÉFAUT : `<span class="brand__name">Yuki</span>` était écrit en dur,
-    // donc trois bots en base et la barre annonçait « Yuki » quoi qu'il arrive.
-    const html = ui("index.html");
-    expect(html).toMatch(/id="bot-switcher-btn"[\s\S]{0,600}?id="bot-switcher-nom"/);
-    expect(html).not.toMatch(/<span class="brand__name">Yuki<\/span>\s*<\/div>/u);
+describe("⑩ « j'ai la tête à Yuki, puis la tête à Grolaf, puis écrit Yuki » corrigé", () => {
+  it("chaque onglet = avatar + nom, y compris pour un bot NON affiché", async () => {
+    const b = banc({ recherche: "?b=kohai" });
+    await b.switcher.rafraichir();
+    const nomDe = (botId: string) =>
+      descendants(avatarDe(b, botId)).find((noeud) => noeud.classes.has("bot-bar__nom"))
+        ?.textContent;
+    // ⚠️ LE DÉFAUT : un avatar par bot, puis UN nom isolé à droite — on lisait
+    // « tête à Yuki, tête à Grolaf, puis Yuki ». Chaque onglet porte le sien.
+    expect(["yuki", "kohai", "nova"].map(nomDe)).toEqual(["Yuki", "Kohai", "Nova"]);
+    // Le nom est DANS le bouton qui bascule, pas à côté.
+    for (const botId of ["yuki", "kohai", "nova"]) {
+      const item = avatarDe(b, botId);
+      const nom = descendants(item).find((noeud) => noeud.classes.has("bot-bar__nom"));
+      expect(nom).toBeDefined();
+      // L'avatar précède le nom dans l'ordre du DOM.
+      expect(descendants(item).indexOf(nom!)).toBeGreaterThan(
+        descendants(item).findIndex((noeud) => noeud.classes.has("bot-bar__avatar")),
+      );
+    }
+  });
+
+  it("le panneau /bots garde son nom dans le bouton (aucun nom en dur)", async () => {
+    const html = ui("bots.html");
+    expect(html).toMatch(/<span id="bot-switcher-nom" class="brand__name">/);
+    expect(html).not.toMatch(/<span class="brand__name">Yuki<\/span>/u);
     const b = banc({ recherche: "?b=kohai" });
     await b.switcher.rafraichir();
     expect(b.nom.textContent).toBe("Kohai");
-    const b2 = banc({ recherche: "" });
-    await b2.switcher.rafraichir();
-    expect(b2.nom.textContent).toBe("Yuki");
   });
 
   it("DEUX bots de même nom restent écrits PAREIL : aucun slug à l'écran", () => {
@@ -1080,18 +1097,36 @@ describe("⑫ les bots CÔTE À CÔTE dans la barre du haut", () => {
     expect(b.patchs).toEqual([]);
   });
 
-  it("pas de débordement : rangée bornée et DÉFILANTE, 24 px / 22 px en téléphone", () => {
+  it("pas de débordement : cadre DÉFILANT, onglets bornés, noms tronqués", () => {
     const css = ui("styles.css");
     expect(css).toMatch(/\.bot-bar\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/s);
     expect(css).toMatch(/\.bot-bar\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*100%/s);
-    expect(css).toMatch(/\.bot-bar__item\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s);
-    // ⚠️ Le nom reste À DROITE de la rangée (dans l'ordre du DOM).
+    // Un onglet = pilule AVATAR + NOM : plus de cercle de 24 px.
+    expect(css).toMatch(/\.bot-bar__item\s*\{[^}]*display:\s*inline-flex[^}]*border-radius:\s*999px/s);
+    expect(css).toMatch(/\.bot-bar__item\s*\{[^}]*gap:\s*7px/s);
+    // Les 24 px sont portés par l'AVATAR de l'onglet (22 px en téléphone).
+    expect(css).toMatch(/\.bot-bar__avatar\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s);
+    expect(css).toMatch(/body\.has-bot-switcher \.brand\s*\{[^}]*display:\s*flex/s);
+    // ⚠️ 40 caractères ne cassent pas la barre : largeur bornée + ellipse.
+    expect(css).toMatch(
+      /\.bot-bar__nom\s*\{[^}]*max-width:[^}]*overflow:\s*hidden[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s,
+    );
+    // L'onglet AFFICHÉ est démarqué par une CLASSE (jamais un style inline).
+    expect(ui("bot-switcher.js")).toContain('"bot-bar__item--courant"');
+    expect(css).toMatch(/\.bot-bar__item--courant\s*\{[^}]*border-color:\s*var\(--accent\)/s);
+    // Plus de nom isolé à droite de la rangée.
     const html = ui("index.html");
-    expect(html.indexOf('id="bot-bar"')).toBeLessThan(html.indexOf('id="bot-switcher-nom"'));
+    expect(html).not.toContain('id="bot-switcher-nom"');
     const media = css.slice(css.indexOf("@media (max-width: 767px)"));
     expect(media).toMatch(/\.bot-bar\s*\{[^}]*max-width:\s*52vw/s);
-    expect(media).toMatch(/\.bot-bar__item\s*\{[^}]*width:\s*22px[^}]*height:\s*22px/s);
-    expect(media).toMatch(/body\.has-bot-switcher \.brand\s*\{[^}]*display:\s*flex/s);
+    expect(media).toMatch(/\.bot-bar__avatar\s*\{[^}]*width:\s*22px[^}]*height:\s*22px/s);
+    // Téléphone : le nom n'est affiché QUE pour l'onglet AFFICHÉ (justifié en CSS).
+    expect(media).toMatch(/\.bot-bar__nom\s*\{[^}]*display:\s*none/s);
+    expect(media).toMatch(
+      /\.bot-bar__item--courant \.bot-bar__nom\s*\{[^}]*display:\s*inline-block[^}]*max-width:\s*72px/s,
+    );
+    // Le bouton « … » n'est jamais masqué (seule porte d'Ajouter / Retirer).
+    expect(media).not.toMatch(/\.brand__plus\s*\{[^}]*display:\s*none/s);
   });
 
   it("le panneau reste accessible (clic droit / appui long sur un avatar)", async () => {

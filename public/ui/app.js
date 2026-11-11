@@ -95,15 +95,15 @@ const botSwitcher = initBotSwitcher({
   button: document.getElementById("bot-switcher-btn"),
   panel: document.getElementById("bot-switcher-panel"),
   list: document.getElementById("bot-switcher-list"),
-  // LOT 38 — la RANGÉE d'avatars inline de la barre du haut (un clic = bascule).
+  // LOT 38/39 — les ONGLETS de bots de la barre du haut (un clic = bascule).
   barEl: document.getElementById("bot-bar"),
   plafondEl: document.getElementById("bot-switcher-plafond"),
   statusEl: document.getElementById("bot-switcher-status"),
   addButton: document.getElementById("bot-switcher-add"),
   closeButton: document.getElementById("bot-switcher-close"),
-  // ⚠️ Le NOM de la barre du haut suit le bot affiché. Il était écrit en dur
-  // (« Yuki ») : avec trois bots en base, la barre annonçait « Yuki » toujours.
-  nomEl: document.getElementById("bot-switcher-nom"),
+  // ⚠️ LOT 39 — PLUS DE NOM ISOLÉ : chaque nom vit DANS son onglet
+  // (`.bot-bar__nom`), à droite de sa tête. L'ancien `#bot-switcher-nom`
+  // produisait « Yuki » détaché après les têtes des autres bots.
   HolafModal,
   // ⚠️ `/avatar` ne sert QUE l'avatar du bot principal (celui du runtime) :
   // l'image est reprise telle quelle, jamais inventée pour un autre bot.

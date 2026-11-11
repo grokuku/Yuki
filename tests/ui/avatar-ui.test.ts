@@ -48,33 +48,42 @@ describe("A — état vide : l'avatar remplace le flocon, qui reste le repli", (
   });
 });
 
-describe("B — barre du haut : avatar 24 px avant le nom, visible en téléphone", () => {
+describe("B — barre du haut : onglets avatar + nom (lot 39)", () => {
   const html = ui("index.html");
   const css = ui("styles.css");
 
-  it("le markup place la RANGÉE d'avatars AVANT le nom du bot", () => {
-    // ⚠️ LOT 38 — chaque avatar de la rangée (`#bot-bar`) est un BOUTON ; le nom
-    // suit le bot affiché (`#bot-switcher-nom`) et reste À SA DROITE.
-    expect(html).toMatch(/id="bot-bar"[\s\S]{0,900}?id="bot-switcher-nom"/);
-    expect(html).toMatch(/id="bot-switcher-nom"[^>]*class="brand__name"/);
+  it("le markup ne pose AUCUN nom isolé à droite des avatars", () => {
+    // ⚠️ LOT 39 — chaque ONGLET de `#bot-bar` porte son avatar ET son nom
+    // (`.bot-bar__nom`, produit par `bot-switcher.js`) ; l'ancien
+    // `#bot-switcher-nom` produisait « Yuki » détaché après les têtes.
+    expect(html).toMatch(/<div\s+id="bot-bar"[^>]*class="bot-bar"/);
+    expect(html).not.toContain('id="bot-switcher-nom"');
+    expect(html).not.toMatch(/class="brand__name"/);
+    // Le bouton « … » reste la porte du panneau (Ajouter / Retirer).
+    expect(html).toMatch(/id="bot-switcher-btn"[\s\S]{0,400}?class="brand__plus"/);
     // L'image d'avatar du bot principal est produite par `bot-switcher.js` avec
     // les mêmes marqueurs que les autres emplacements (`data-avatar-image`).
     expect(ui("bot-switcher.js")).toContain('"data-avatar-image"');
+    expect(ui("bot-switcher.js")).toContain('class: "bot-bar__nom"');
   });
 
   it("24 px en bureau, et le bloc n'est plus un simple texte", () => {
     expect(css).toMatch(/\.avatar--brand\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s);
-    expect(css).toMatch(/\.bot-bar__item\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s);
+    expect(css).toMatch(/\.bot-bar__avatar\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s);
+    expect(css).toMatch(/\.bot-bar__item\s*\{[^}]*border-radius:\s*999px/s);
     expect(css).toMatch(/\.brand\s*\{[^}]*display:\s*flex/s);
   });
 
-  it("en téléphone : rangée visible (22 px), nom borné, marque révélée avec un avatar", () => {
-    const media = css.slice(css.indexOf("@media (max-width: 767px), (max-height: 480px)"));
-    expect(media).toMatch(/\.brand__name\s*\{[^}]*display:\s*inline-block/s);
+  it("en téléphone : onglets visibles (avatar 22 px), nom du seul onglet affiché", () => {
+    const media = css.slice(css.indexOf("@media (max-width: 767px), (max-height: 480px) and (pointer: coarse)"));
     expect(media).toMatch(/body\.has-avatar \.brand\s*\{[^}]*display:\s*flex/s);
     expect(media).toMatch(/body\.has-bot-switcher \.brand\s*\{[^}]*display:\s*flex/s);
     expect(media).toMatch(/\.avatar--brand\s*\{[^}]*width:\s*22px[^}]*height:\s*22px/s);
-    expect(media).toMatch(/\.bot-bar__item\s*\{[^}]*width:\s*22px[^}]*height:\s*22px/s);
+    expect(media).toMatch(/\.bot-bar__avatar\s*\{[^}]*width:\s*22px[^}]*height:\s*22px/s);
+    // Décision de PLACE : le nom ne reste que sur l'onglet AFFICHÉ.
+    expect(media).toMatch(
+      /\.bot-bar__item--courant \.bot-bar__nom\s*\{[^}]*display:\s*inline-block/s,
+    );
   });
 });
 

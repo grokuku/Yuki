@@ -29,12 +29,15 @@
   <body>
     <header class="topbar">
       <!--
-        LOT 38 — LES BOTS CÔTE À CÔTE DANS LA BARRE DU HAUT.
-        `#bot-bar` est une RANGÉE d'avatars inline, remplie par `bot-switcher.js`
-        (un bouton par bot, 24 px, 22 px en téléphone). Cliquer un avatar
-        BASCULE immédiatement : aucun panneau intermédiaire. Le bot affiché est
-        démarqué par une CLASSE (`.bot-bar__item--courant`), un bot arrêté reste
-        visible avec un marqueur discret (`.bot-bar__item--arrete`).
+        LOT 39 — LES BOTS EN ONGLETS DANS LA BARRE DU HAUT.
+        `#bot-bar` est remplie par `bot-switcher.js` : UN ONGLET PAR BOT, chacune
+        = AVATAR + NOM groupés (même pour un bot non affiché), 24 px d'avatar
+        (22 px en téléphone). Cliquer un onglet BASCULE immédiatement : aucun
+        panneau intermédiaire. L'onglet affiché est démarqué par une CLASSE
+        (`.bot-bar__item--courant`), un bot arrêté reste visible avec un marqueur
+        discret (`.bot-bar__item--arrete`).
+        ⚠️ PLUS DE NOM ISOLÉ À DROITE : `#bot-switcher-nom` est supprimé (c'est
+        lui qui laissait « Yuki » détaché, après les têtes des autres bots).
         ⚠️ Aucun style inline (CSP `style-src 'self'`) : tout vit dans `styles.css`.
       -->
       <!--
@@ -51,12 +54,12 @@
           aria-label="Bots de cette instance"
         ></div>
         <!--
-          LOT 38 — LE NOM RESTE À DROITE DE LA RANGÉE (il suit le bot affiché,
-          `?b=<slug>`). Le bouton ouvre le PANNEAU existant (Ajouter / Retirer) :
-          la rangée bascule, le panneau administre. Clic droit et appui long sur
-          les avatars du panneau font de même.
+          LOT 39 — CE BOUTON N'EST PLUS QU'UN « … » : chaque nom est DANS son
+          onglet. Il ouvre le PANNEAU existant (Ajouter / Retirer) : les onglets
+          basculent, le panneau administre. Clic droit et appui long sur les
+          onglets font de même.
         -->
-        <button id="bot-switcher-btn" class="brand__bot" type="button" aria-label="Tous les bots : ajouter ou retirer" aria-haspopup="dialog" aria-expanded="false" aria-controls="bot-switcher-panel"><span id="bot-switcher-nom" class="brand__name">Yuki</span><span class="brand__plus" aria-hidden="true">…</span></button>
+        <button id="bot-switcher-btn" class="brand__bot brand__bot--plus" type="button" aria-label="Tous les bots : ajouter ou retirer" aria-haspopup="dialog" aria-expanded="false" aria-controls="bot-switcher-panel"><span class="brand__plus" aria-hidden="true">…</span></button>
       </div>
       <!--
         PANNEAU DES BOTS — liste construite par `bot-switcher.js` (jamais écrite
