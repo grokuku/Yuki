@@ -34,7 +34,7 @@ export type ModeResolutionBot = "mono" | "multi";
 export class StoresMemoireError extends Error {
   override readonly name = "StoresMemoireError";
   constructor(
-    readonly code: "bot_invalide" | "ouverture_impossible",
+    readonly code: "bot_invalide" | "ouverture_impossible" | "deja_ouvert",
     message: string,
   ) {
     super(message);
@@ -178,6 +178,38 @@ export class FabriqueMemoireBots {
   /** Bots dont les stores sont ouverts. */
   get botsOuverts(): string[] {
     return [...this.cache.keys()];
+  }
+
+  /**
+   * Vrai si les stores de ce bot sont DÉJÀ ouverts (lecture seule, aucune
+   * ouverture). Permet à un appelant de ne pas re-résoudre l'`Env` pour rien.
+   */
+  estOuvert(botId: string): boolean {
+    return this.cache.has(botId);
+  }
+
+  /**
+   * ADOPTE des stores ouverts ailleurs (lot 36, L3-b).
+   *
+   * ⚠️ `main()` ouvre les stores du bot de la pile AVANT de construire la
+   * fabrique (lot 35i) : sans adoption, une passe de consolidation appellerait
+   * `storesDe(pile)` et ouvrirait un SECOND `MemoryStore` sur le même
+   * `memory.jsonl` — deux écrivains. Adopter les enregistre dans le cache.
+   *
+   * Idempotent pour le MÊME objet ; refuse un AUTRE jeu de stores pour le même
+   * bot (ce serait précisément le second écrivain qu'on veut interdire).
+   */
+  adopter(stores: StoresMemoireBot): void {
+    const existant = this.cache.get(stores.botId);
+    if (existant === stores) return;
+    if (existant) {
+      throw new StoresMemoireError(
+        "deja_ouvert",
+        `Stores déjà ouverts pour le bot « ${stores.botId} » (${existant.fichier}) : ` +
+          `un second jeu (${stores.fichier}) créerait deux écrivains.`,
+      );
+    }
+    this.cache.set(stores.botId, stores);
   }
 
   /** Ferme tous les index ouverts (arrêt gracieux). */

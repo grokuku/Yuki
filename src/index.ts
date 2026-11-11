@@ -59,6 +59,7 @@ import {
   purgerArchivesBots,
   workerLourdAutorise,
 } from "./bots/index.js";
+import { creerOutilsBots } from "./bots/outils.js";
 import { CAPACITES_BOT, type CapaciteBot, type RegistreBots } from "./bots/registry.js";
 import {
   ComfyClient,
@@ -108,7 +109,8 @@ import { prepareMessageImages } from "./chat/mattermost/attachments.js";
 import { DISCORD_TOKEN_SECRET_NAME, MATTERMOST_TOKEN_SECRET_NAME } from "./secrets/references.js";
 import type { ChatDiscordPort, ChatMattermostPort } from "./gateway/routes/chat.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
-import { createConfigRuntime, type ConfigRuntime } from "./config/runtime.js";
+import { creerConfigsBots } from "./config/bots.js";
+import type { ConfigRuntime } from "./config/runtime.js";
 import { createDelegationService, type DelegationService } from "./delegation/index.js";
 import {
   createServer,
@@ -209,7 +211,7 @@ import {
   type PileSourcesBot,
   type PlanificationTacheInput,
 } from "./sources/index.js";
-import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, SessionPinStore, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, type PiHost, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -284,18 +286,39 @@ async function main(): Promise<void> {
   // migré. Rien de VISIBLE ne change : seuls les chemins changent.
   const bots = preparerMultiBot(envBrut);
   const env = bots.env;
-  const config = createConfigRuntime({
+  // --- LOT 36 (L3-a) : LA CONFIGURATION PAR BOT ----------------------------
+  // Un `ConfigRuntime` PAR BOT : même store COMMUN (l'INSTANCE, fichier unique),
+  // overlay PROPRE à chaque bot (`<state>/bots/<id>/config.overlay.json`).
+  // ⚠️ MULTI-BOT (lot 35b), inchangé : la configuration d'un bot vit dans son
+  // overlay ; le store commun reste la configuration d'INSTANCE. En mode mono-bot
+  // historique (`bots.bot` nul), le bot de la pile est `yuki` — même chemin, donc
+  // aucun changement de comportement.
+  // ⚠️ La Map couvre les bots À DÉMARRER (L1) — ceux que le plafond a REFUSÉS
+  // n'y sont pas — plus le bot de la PILE (toujours indispensable, mode mono
+  // inclus). Elle n'est PAS encore branchée sur les piles (L3-b/L3-d).
+  const promptsLivres = {
+    light: loadTextFile(env.piSystemPromptPath, FALLBACK_SYSTEM_PROMPT),
+    heavy: loadTextFile(env.piHeavySystemPromptPath, HEAVY_SYSTEM_PROMPT_FALLBACK),
+  };
+  const botDePile: string = bots.bot?.id ?? BOT_YUKI;
+  const configsBots = creerConfigsBots({
     env,
-    // MULTI-BOT (lot 35b) : la configuration du BOT ACTIF vit dans son overlay
-    // (`<state>/bots/<id>/config.overlay.json`) ; le store commun reste la
-    // configuration d'INSTANCE. En mode mono-bot historique (`bots.bot` nul), le
-    // bot actif est `yuki` — même chemin, donc aucun changement de comportement.
-    botId: bots.bot?.id ?? BOT_YUKI,
-    promptDefaults: {
-      light: loadTextFile(env.piSystemPromptPath, FALLBACK_SYSTEM_PROMPT),
-      heavy: loadTextFile(env.piHeavySystemPromptPath, HEAVY_SYSTEM_PROMPT_FALLBACK),
-    },
+    bots: bots.aDemarrer.map((entree) => entree.id),
+    pile: botDePile,
+    promptDefaults: promptsLivres,
   });
+  // ⚠️ NON-RÉGRESSION : `config` EST l'entrée de la Map pour le bot de la pile —
+  // jamais un second runtime pour le même bot (deux caches de son overlay
+  // divergeraient). Les appelants existants (routes d'instance, `getSubsystems`,
+  // ~225 références) continuent d'utiliser CETTE configuration-là.
+  const configBotPrincipal = configsBots.get(botDePile);
+  if (!configBotPrincipal) {
+    // Impossible : `creerConfigsBots` garantit la présence du bot de la pile.
+    throw new Error(
+      `Configuration introuvable pour le bot « ${botDePile} » : démarrage impossible.`,
+    );
+  }
+  const config = configBotPrincipal;
 
   // --- (2) Pont des clés du store vers `process.env` ------------------------
   // `models.json` référence `$YUKI_LLM_<ROLE>_API_KEY` : le SDK les résout dans
@@ -346,6 +369,23 @@ async function main(): Promise<void> {
     refuses: bots.refusesActifs.map((entree) => entree.id).join(","),
     plafond: bots.plafondActifs,
   });
+
+  // --- LOT 36 (L3-a) : les configurations PAR BOT construites ----------------
+  // ⚠️ Ce que le démarrage doit DIRE : pour quels bots une configuration existe
+  // (bots à démarrer + bot de la pile). Les replis d'un bot AUTRE que la pile
+  // sont journalisés un par un — sans quoi un overlay illisible (EACCES, JSON
+  // cassé) ferait tourner ce bot avec les défauts en silence. Ceux de la pile
+  // sont journalisés plus bas (`config.store.fallback`, section (4)).
+  logger.info("bots.config", {
+    bots: [...configsBots.keys()].join(","),
+    pile: botDePile,
+  });
+  for (const [botId, runtime] of configsBots) {
+    if (botId === botDePile) continue;
+    for (const warning of runtime.warnings) {
+      logger.warn("config.bot.fallback", { bot: botId, detail: warning });
+    }
+  }
 
   // --- CAPACITÉS DU BOT ACTIF (lot 35h) -------------------------------------
   // ⚠️ Les capacités qui OUVRENT les outils sont celles du BOT ACTIF, lues UNE
@@ -2680,6 +2720,11 @@ async function main(): Promise<void> {
       mode: bots.mode,
       logger,
     });
+    // ⚠️ LOT 36 (L3-b) : la fabrique ADOPTE les stores du bot de la pile, ouverts
+    // juste au-dessus (`ouvrirStoresMemoireBot`). Sans cette adoption, une passe
+    // de consolidation appellerait `storesDe(pile)` et ouvrirait un SECOND
+    // `MemoryStore` sur le même `memory.jsonl` — deux écrivains.
+    fabriqueMemoireBots.adopter(storesMemoire);
     const passeDuBot = (botId: string): ConsolidationHebdo | undefined => {
       // ⚠️ Côté BOT : la valeur EFFECTIVE de `memory.consolidation.enabled` pour
       // CE bot (conjonction avec le côté instance, `mixteMerge: "et"`).
@@ -2782,6 +2827,61 @@ async function main(): Promise<void> {
       index: conversationArchive.indexFilePath,
       conversations: conversationArchive.info().conversations,
     });
+
+    // --- LOT 36 (L3-b) : LES OUTILS PAR BOT ----------------------------------
+    // Une Map `<botId, OutilsBot>` À CÔTÉ des objets déjà construits (mémoire,
+    // archive, avatar, personnalité, règles, épingles, réactions), MÊME PRINCIPE
+    // que L3-a : aucun appelant changé. Le bot de la PILE RÉUTILISE exactement
+    // les objets d'aujourd'hui (`existantsPile`) — une seule instance de chaque
+    // store, donc un seul écrivain par fichier.
+    // ⚠️ `envPourBot` n'est résolu qu'UNE fois par bot, à partir de l'`Env`
+    // d'INSTANCE (`bots.envInstance`) : il n'est pas idempotent.
+    // ⚠️ La Map n'est PAS branchée sur une pile (c'est L3-d) : elle est
+    // journalisée et disponible. Les bots REFUSÉS par le plafond n'y sont pas.
+    const outilsBots = creerOutilsBots({
+      envInstance: bots.envInstance,
+      mode: bots.mode,
+      bots: bots.aDemarrer.map((entree) => entree.id),
+      pile: botDePile,
+      configs: configsBots,
+      fabrique: fabriqueMemoireBots,
+      existantsPile: {
+        memoire: storesMemoire,
+        archive: conversationArchive,
+        avatar: avatarStore,
+        personnalite: personalityStore,
+        regles: rulesStore,
+        reactions: reactionStore,
+      },
+      logger,
+    });
+    const outilsPile = outilsBots.get(botDePile);
+    if (!outilsPile) {
+      // Impossible : `creerOutilsBots` garantit la présence du bot de la pile.
+      throw new Error(
+        `Outils introuvables pour le bot « ${botDePile} » : démarrage impossible.`,
+      );
+    }
+    // ⚠️ Ce que le démarrage doit DIRE : pour quels bots un jeu d'outils existe,
+    // et sur QUELS CHEMINS (jamais un contenu : une personnalité, une règle ou un
+    // souvenir ne vont pas au journal).
+    logger.info("bots.outils", {
+      bots: [...outilsBots.keys()].join(","),
+      pile: botDePile,
+    });
+    for (const [botId, outils] of outilsBots) {
+      if (botId === botDePile) continue;
+      logger.info("bots.outils.bot", {
+        bot: botId,
+        memoire: outils.chemins.memoryStorePath,
+        archive: outils.chemins.conversationsArchiveDir,
+        avatar: outils.chemins.avatarDir,
+        personnalite: outils.chemins.personalityPath,
+        regles: outils.chemins.rulesPath,
+        epingles: outils.chemins.sessionPinsPath,
+        reactions: outils.chemins.reactionsPath,
+      });
+    }
 
     // --- Libraire de Pi-Web : client HTTP + archivage EN TÂCHE DE FOND --------
     // ⚠️ Le libraire est un service EXTERNE. Le client relit la configuration à
@@ -3452,7 +3552,9 @@ async function main(): Promise<void> {
       // sinon l'utilisateur ignore que le fichier est sur le disque de Yuki.
       ...(agentTransfers ? { agentTransfers } : {}),
       // Épinglage des conversations : store hôte SÉPARÉ du JSONL du SDK Pi.
-      pins: SessionPinStore.open({ path: env.sessionPinsPath, logger }),
+      // ⚠️ LOT 36 (L3-b) : c'est celui du bot de la PILE, déjà construit par la
+      // Map des outils (`outilsPile.pins`) — jamais une seconde instance.
+      pins: outilsPile.pins,
       // SOURCES : la trame `sessions` dit quelles sources postent dans chaque fil
       // (modale de suppression) et la suppression d'un fil RÉAFFECTE les sources
       // qui y postaient (« nouvelle conversation à chaque fois ») au lieu de les
