@@ -196,45 +196,166 @@ export function planifierMigration(
 }
 
 /**
+ * État de la RACINE des sessions Pi (`<pi>/agent/sessions`) au regard de la
+ * migration d'un bot.
+ *
+ * ⚠️ Ce dossier d'origine EXISTE TOUJOURS après migration : il est le PARENT du
+ * dossier du bot (`<origine>/<botId>`). Sa simple présence ne prouve donc rien.
+ * Ce qui distingue les deux états, c'est le CONTENU de la racine :
+ *  - un dossier de bot CONNU (`<origine>/<autreBot>`) ⇒ normal, jamais touché ;
+ *  - d'autres entrées (dossiers de projet Pi, fichiers) ⇒ sessions restées À
+ *    PLAT, donc NON migrées — sauf si le journal atteste le déplacement fait
+ *    (`statut: "faite"`) : dans ce cas la racine ne porte plus les sessions de
+ *    CE bot et ses entrées ne sont pas des doublons (autres bots, résidus).
+ */
+export interface EtatSessionsOrigine {
+  /** Racine des sessions (`env.piSessionsDir`, volume `pi`). */
+  readonly origine: string;
+  /** Dossier de sessions du bot (`<origine>/<botId>`). */
+  readonly cible: string;
+  /** Vrai si le dossier de sessions du bot existe déjà. */
+  readonly ciblePresente: boolean;
+  /** Entrées de la racine qui n'appartiennent à aucun bot connu. */
+  readonly restes: string[];
+  /**
+   * Vrai si ces entrées SONT les sessions du bot restées à plat : la reprise
+   * (`reparerSessionsBot`) les déplace sous `<origine>/<botId>`.
+   */
+  readonly nonMigrees: boolean;
+}
+
+/** Options communes aux contrôles du dossier de sessions. */
+export interface OptionsSessions {
+  /**
+   * Identifiants de bots CONNUS (registre). Leur dossier à la racine est
+   * légitime : il n'est ni un doublon, ni une session à plat.
+   */
+  botIds?: Iterable<string>;
+  /** Déplacement bas niveau (défaut : `renameSync`). Injecté pour les tests. */
+  deplacer?: (origine: string, cible: string) => void;
+}
+
+/** Décrit l'état de la racine des sessions pour `botId`. */
+export function etatSessionsOrigine(
+  env: Env,
+  botId: string = BOT_YUKI,
+  options: OptionsSessions = {},
+): EtatSessionsOrigine {
+  const origine = env.piSessionsDir;
+  const cible = join(origine, botId);
+  const connus = new Set<string>([...(options.botIds ?? []), botId]);
+  const ciblePresente = estRepertoire(cible);
+
+  let restes: string[] = [];
+  if (existsSync(origine) && estRepertoire(origine)) {
+    let noms: string[];
+    try {
+      noms = readdirSync(origine);
+    } catch {
+      // Racine illisible : on ne conclut RIEN (jamais de refus sur un doute).
+      noms = [];
+    }
+    restes = noms.filter((nom) => !(connus.has(nom) && estRepertoire(join(origine, nom))));
+  }
+
+  return {
+    origine,
+    cible,
+    ciblePresente,
+    restes,
+    nonMigrees: restes.length > 0 && !(ciblePresente && sessionsDejaDeplacees(env)),
+  };
+}
+
+/** Vrai si le journal de migration atteste que les sessions du bot sont rangées. */
+function sessionsDejaDeplacees(env: Env): boolean {
+  const journal = lireJournalMigration(cheminJournalMigration(env.mountPoints.state));
+  if (!journal) return false;
+  return journal.entrees.some(
+    (entree) => entree.cle === "piSessionsDir" && entree.statut === "faite",
+  );
+}
+
+/** Résultat d'une reprise du dossier de sessions. */
+export type ResultatReparationSessions =
+  /** Rien à déplacer : sessions déjà rangées, ou entrées étrangères au bot. */
+  | { etat: "rien_a_faire"; etatSessions: EtatSessionsOrigine }
+  /** Entrées déplacées sous le dossier du bot (aucun contenu transformé). */
+  | { etat: "repare"; cible: string; deplaces: string[] }
+  /** Noms déjà présents dans la cible : refus, RIEN n'a été déplacé. */
+  | { etat: "conflit"; cible: string; conflits: string[] }
+  /** Déplacement impossible (droits, volume…) : rien de perdu, rien de fini. */
+  | { etat: "impossible"; cause: string };
+
+/**
+ * REPRISE de la migration des sessions : quand `bots.json` existe alors que des
+ * sessions sont restées À PLAT, on ne refuse pas — on les range sous
+ * `<origine>/<botId>` (`rename` dans le MÊME volume : atomique, contenu
+ * IDENTIQUE). ⚠️ Aucun écrasement : un nom déjà présent dans la cible fait
+ * échouer la reprise AVANT tout déplacement.
+ *
+ * Idempotent : rappelée après une reprise réussie, elle ne fait rien.
+ */
+export function reparerSessionsBot(
+  env: Env,
+  botId: string = BOT_YUKI,
+  options: OptionsSessions = {},
+): ResultatReparationSessions {
+  const etatSessions = etatSessionsOrigine(env, botId, options);
+  if (etatSessions.restes.length === 0) return { etat: "rien_a_faire", etatSessions };
+  // Entrées étrangères au bot (autre bot, résidus) : on ne touche à RIEN.
+  if (!etatSessions.nonMigrees) return { etat: "rien_a_faire", etatSessions };
+
+  const conflits = etatSessions.restes.filter((nom) =>
+    existsSync(join(etatSessions.cible, nom)),
+  );
+  if (conflits.length > 0) {
+    return { etat: "conflit", cible: etatSessions.cible, conflits };
+  }
+
+  const deplacer = options.deplacer ?? deplacerParRenommage;
+  const deplaces: string[] = [];
+  try {
+    mkdirSync(etatSessions.cible, { recursive: true });
+    for (const nom of etatSessions.restes) {
+      deplacer(join(etatSessions.origine, nom), join(etatSessions.cible, nom));
+      deplaces.push(nom);
+    }
+  } catch (error) {
+    // ⚠️ Une coupure en cours de reprise laisse un état REPRENABLE : les entrées
+    // déjà déplacées sont dans la cible, les autres encore à plat.
+    return { etat: "impossible", cause: messageOf(error) };
+  }
+  return { etat: "repare", cible: etatSessions.cible, deplaces };
+}
+
+/**
  * Liste les chemins d'ORIGINE encore présents alors que `bots.json` existe.
  * ⚠️ Un démarrage dans cet état est REFUSÉ (`MIGRATION_PARTIELLE`) : jamais de
  * fonctionnement à moitié migré.
  *
  * Cas particulier des sessions (`/data/pi/agent/sessions`) : le dossier
- * d'origine EXISTE TOUJOURS après migration (il contient `<botId>`) ; il n'est
- * donc signalé que s'il reste des entrées autres que le dossier du bot.
+ * d'origine EXISTE TOUJOURS après migration (il CONTIENT `<botId>`) ; il n'est
+ * donc signalé que si des sessions y sont restées À PLAT (voir
+ * `etatSessionsOrigine`) — un dossier de bot connu n'est jamais un doublon.
  */
 export function cheminsOrigineEncorePresents(
   env: Env,
   botId: string = BOT_YUKI,
   processEnv: NodeJS.ProcessEnv = process.env,
+  options: OptionsSessions = {},
 ): string[] {
   const plan = planifierMigration(env, botId, processEnv);
   const presents: string[] = [];
   for (const entree of plan.entrees) {
     if (entree.volume === "pi") {
-      if (sessionsNonDeplacees(entree.origine, entree.cible)) {
-        presents.push(entree.origine);
-      }
+      const etat = etatSessionsOrigine(env, botId, options);
+      if (etat.nonMigrees) presents.push(etat.origine);
       continue;
     }
     if (existsSync(entree.origine)) presents.push(entree.origine);
   }
   return presents;
-}
-
-/** Vrai s'il reste, à la racine des sessions, autre chose que le dossier du bot. */
-function sessionsNonDeplacees(origine: string, cible: string): boolean {
-  if (!existsSync(origine)) return false;
-  if (!estRepertoire(origine)) return true;
-  const nomBot = basename(cible);
-  let noms: string[];
-  try {
-    noms = readdirSync(origine);
-  } catch {
-    return true;
-  }
-  return noms.some((nom) => nom !== nomBot);
 }
 
 function estRepertoire(chemin: string): boolean {

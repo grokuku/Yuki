@@ -90,10 +90,17 @@ volume `state` → ④ **sessions Pi** (dossier de transit
   bot `actif` par `ordre`).
 - **Refus de démarrer** (`DemarrageRefuseError`, `:73`) : `MIGRATION_PARTIELLE`
   (`bots.json` + un chemin d'origine encore présent — `cheminsOrigineEncorePresents`
-  `migrate.ts:207`, liste exacte des chemins), `MIGRATION_ECHOUEE`,
-  `REGISTRE_INVALIDE`, `AUCUN_BOT_ACTIF`. Jamais de fonctionnement à moitié
-  migré. Le contrôle des sessions tolère le dossier `sessions` (il contient
-  `<botId>`) et ne regarde que ce qui y reste.
+  `migrate.ts`, liste exacte des chemins), `MIGRATION_ECHOUEE`,
+  `REGISTRE_INVALIDE`, `AUCUN_BOT_ACTIF`, `SESSIONS_NON_MIGREES`. Jamais de
+  fonctionnement à moitié migré.
+- **Sessions Pi** (`/data/pi/agent/sessions`) : le dossier d'origine est le
+  PARENT de `<botId>` — sa présence ne prouve rien. `etatSessionsOrigine`
+  distingue trois cas : dossier d'un **bot connu** ⇒ normal (ni doublon, ni
+  déplacé) ; entrées restées **À PLAT** (dossier du bot absent, ou journal sans
+  `piSessionsDir: faite`) ⇒ `reparerSessionsBot` les range sous
+  `<origine>/<botId>` par `rename` (reprise automatique, aucun écrasement : un
+  conflit de nom refuse net avec `SESSIONS_NON_MIGREES`) ; entrées étrangères
+  alors que le journal atteste le déplacement ⇒ laissées EN PLACE et signalées.
 - ⚠️ **Pas de `MAX_BOTS`** (lot 1b, écran d'ajout).
 
 ## 5. Vérification
@@ -104,6 +111,12 @@ octet**, sessions comprises), idempotence, **coupure au milieu ⇒ reprise**,
 avant lue après, surcharge hors volume sautée + avertie, mode mono-bot intact,
 et **surcharge apparue pendant une migration interrompue ⇒ entrée abandonnée
 sans déplacement sauvage**.
+
+`tests/bots/migration-sessions.test.ts` (9 cas) : `bots.json` +
+`sessions/<botId>/` ⇒ **démarre** (1 bot **et** plusieurs bots connus), sessions
+**à plat** ⇒ **reprise automatique** (octets identiques, avertissement) ou refus
+« sessions non migrées » si `reparationSessions: false` / conflit de nom (rien
+n'est écrasé), vrai fichier d'origine en double ⇒ `MIGRATION_PARTIELLE` conservé.
 
 ⚠️ **Preuve d'échec sur l'origine** : `git show HEAD:` ne suffit pas (l'arbre est
 un empilement de lots) ⇒ **copie `/tmp` + neutralisation** : `src/bots` retiré ⇒

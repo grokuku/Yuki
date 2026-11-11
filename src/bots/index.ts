@@ -15,6 +15,8 @@
  * Aucun import SDK/typebox.
  */
 
+import { join } from "node:path";
+
 import type { Env } from "../config/env.js";
 
 import {
@@ -32,7 +34,10 @@ import {
 } from "./registry.js";
 import {
   cheminsOrigineEncorePresents,
+  etatSessionsOrigine,
   migrerVersMultiBot,
+  reparerSessionsBot,
+  type EtatSessionsOrigine,
   type JournalisationMigration,
 } from "./migrate.js";
 import {
@@ -89,7 +94,7 @@ export interface ResultatPreparationBots {
   /** Chemins effectifs du bot (`null` en mode mono-bot historique). */
   chemins: CheminsBot | null;
   /** Migration effectuée pendant CETTE préparation ? */
-  migration: "aucune" | "effectuee" | "deja_faite" | "impossible";
+  migration: "aucune" | "effectuee" | "deja_faite" | "sessions_reprises" | "impossible";
   /** Avertissements À JOURNALISER au démarrage (surcharges ignorées…). */
   avertissements: string[];
 }
@@ -98,6 +103,7 @@ export interface ResultatPreparationBots {
 export type CodeRefusDemarrage =
   | "MIGRATION_PARTIELLE"
   | "MIGRATION_ECHOUEE"
+  | "SESSIONS_NON_MIGREES"
   | "REGISTRE_INVALIDE"
   | "AUCUN_BOT_ACTIF";
 
@@ -129,6 +135,12 @@ export interface OptionsPreparationBots {
    * `bots.maxActifs` (environnement, puis store, puis défaut 3).
    */
   maxActifs?: number;
+  /**
+   * Reprise AUTOMATIQUE des sessions restées à plat quand `bots.json` existe
+   * (défaut : `true`). `false` ⇒ refus explicite `SESSIONS_NON_MIGREES`, sans
+   * aucun déplacement (démarrage en lecture seule).
+   */
+  reparationSessions?: boolean;
 }
 
 /**
@@ -276,8 +288,52 @@ export function preparerMultiBot(
     );
   }
 
-  // ⚠️ GARDE : `bots.json` présent MAIS un chemin d'origine encore là ⇒ refus.
-  const restants = cheminsOrigineEncorePresents(env, bot.id, processEnv);
+  // ⚠️ GARDE ① (volume `pi`) : les SESSIONS du bot. La racine
+  // (`/data/pi/agent/sessions`) EXISTE TOUJOURS après migration — elle contient
+  // les dossiers des bots. Elle n'est donc un problème que si des sessions y
+  // sont restées À PLAT : dans ce cas on REPREND la migration (au lieu de
+  // refuser), et on ne refuse que si la reprise est impossible (conflit de nom,
+  // volume en lecture seule).
+  const botIds = registre.bots.map((entree) => entree.id);
+  const botSessions = botIds.includes(BOT_YUKI) ? BOT_YUKI : bot.id;
+  const etatSessions = etatSessionsOrigine(env, botSessions, { botIds });
+  if (etatSessions.nonMigrees) {
+    if (options.reparationSessions === false) {
+      throw refusSessionsNonMigrees(etatSessions, null);
+    }
+    const reparation = reparerSessionsBot(env, botSessions, { botIds });
+    switch (reparation.etat) {
+      case "repare":
+        migration = "sessions_reprises";
+        avertissements.push(
+          `Sessions Pi NON migrées : ${reparation.deplaces.length} entrée(s) rangée(s) ` +
+            `sous ${reparation.cible} (reprise automatique, contenus inchangés).`,
+        );
+        break;
+      case "conflit":
+        throw refusSessionsNonMigrees(etatSessions, reparation);
+      case "impossible":
+        throw refusSessionsNonMigrees(etatSessions, reparation);
+      case "rien_a_faire":
+        // Incohérence (l'état dit « à plat », la reprise ne trouve rien) : on
+        // refuse plutôt que de démarrer sur un doute.
+        throw refusSessionsNonMigrees(etatSessions, {
+          etat: "impossible",
+          cause: "aucune entrée n'a pu être reprise",
+        });
+    }
+  } else if (etatSessions.restes.length > 0) {
+    // Sessions rangées (journal `faite`) : ces entrées ne sont pas les siennes
+    // (dossier d'un autre bot, résidus). Aucun refus — mais on le DIT.
+    avertissements.push(
+      `Dossier de sessions ${etatSessions.origine} : entrées sans dossier de bot ` +
+        `connu (${etatSessions.restes.join(", ")}) — laissées EN PLACE.`,
+    );
+  }
+
+  // ⚠️ GARDE ② (volume `state`) : `bots.json` présent MAIS un chemin d'origine
+  // encore là ⇒ refus.
+  const restants = cheminsOrigineEncorePresents(env, bot.id, processEnv, { botIds });
   if (restants.length > 0) {
     throw new DemarrageRefuseError(
       "MIGRATION_PARTIELLE",
@@ -308,6 +364,36 @@ export function preparerMultiBot(
     migration,
     avertissements,
   };
+}
+
+/** Refus : sessions restées à plat et reprise impossible. Message DISTINCT du
+ * « chemins en double » (ce n'est pas la même cause ni le même remède). */
+function refusSessionsNonMigrees(
+  etat: EtatSessionsOrigine,
+  reparation: { etat: "conflit"; conflits: string[] } | { etat: "impossible"; cause: string } | null,
+): DemarrageRefuseError {
+  const details = etat.restes.map((nom) => join(etat.origine, nom));
+  let remede: string;
+  if (reparation === null) {
+    remede =
+      "Reprise AUTOMATIQUE désactivée (`reparationSessions: false`) : relancez sans la désactiver.";
+  } else if (reparation.etat === "conflit") {
+    remede =
+      `Un dossier de bot existe déjà (${etat.cible}) et contient les mêmes noms : ` +
+      `rien n'est écrasé. Rangez ou renommez ${reparation.conflits.join(", ")} à la main, puis redémarrez.`;
+  } else {
+    remede = `Reprise impossible (${reparation.cause}) : la migration reprendra au redémarrage.`;
+  }
+  return new DemarrageRefuseError(
+    "SESSIONS_NON_MIGREES",
+    "SESSIONS_NON_MIGREES : `bots.json` existe mais les sessions Pi ne sont pas rangées " +
+      `sous le dossier du bot (${etat.cible}).\n` +
+      "Démarrage REFUSÉ : lancer Yuki maintenant ferait lire les sessions au mauvais endroit " +
+      "(l'historique serait vu comme vide).\n" +
+      `Sessions non migrées :${listeEnClair(details)}\n` +
+      `Remède : ${remede}`,
+    details,
+  );
 }
 
 /** Liste lisible (`\n  - chemin`) — le message doit NOMMER les chemins en cause. */
