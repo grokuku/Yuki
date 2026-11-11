@@ -124,6 +124,14 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
             pourDemarre: (botId: string) =>
               arretes.has(botId) ? undefined : autres[botId],
             ids: () => ["principal", ...Object.keys(autres)].filter((id) => !arretes.has(id)),
+            // ⚠️ LOT 36 (L11) : le transport nomme le bot PROPRIÉTAIRE d'un host
+            // (c'est ce qui choisit la configuration du run qui parle — et donc
+            // sa voix). Le principal n'est jamais nommé : il garde la
+            // configuration d'instance, à l'identique.
+            botDe: (candidat) =>
+              candidat === host
+                ? undefined
+                : Object.keys(autres).find((id) => autres[id] === candidat),
           },
         }
       : {}),

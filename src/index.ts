@@ -132,8 +132,11 @@ import { creerConfigsBots } from "./config/bots.js";
 import type { ConfigRuntime } from "./config/runtime.js";
 import {
   createDelegationService,
+  evenementsDuBot,
+  portDelegationBot,
   type DelegationService,
   type HeavyWorker,
+  type LightWaker,
 } from "./delegation/index.js";
 import {
   createServer,
@@ -200,6 +203,7 @@ import {
   HeritageStore,
   MemoryService,
   REACTIONS_SOURCE,
+  ServicesMemoireBots,
   contexteModeleDepuisFichier,
   memoryWriteModelReference,
   ouvrirStoresMemoireBot,
@@ -228,6 +232,7 @@ import {
   SourcesStore,
   filtreAgentVisible,
   nomsSecretsSource,
+  brancherPreAutorisationsParBot,
   portPreAutorisations,
   type ModeBots,
   type PileSourcesBot,
@@ -1296,8 +1301,17 @@ async function main(): Promise<void> {
   // pré-autorisations d'un bot secondaire ne seraient jamais consommées (ses
   // déclencheurs refuseraient leurs propres pré-autorisations).
   const portPreAutos = portPreAutorisations(sourcesParBot, botCourant);
-  agentExecution?.setPreAutorisations(portPreAutos);
-  executionsAgents?.pourChacun((execution) => execution.setPreAutorisations(portPreAutos));
+  if (executionsAgents !== undefined) {
+    // ⚠️ LOT 36 (L11) — UN PORT PAR BOT : chaque service d'exécution consomme
+    // dans le registre de SON bot (`<state>/bots/<bot>/preautorisations.json`).
+    // Le bot de la PILE garde le port historique, par identité.
+    brancherPreAutorisationsParBot(executionsAgents, (botId) =>
+      botId === botDePile ? portPreAutos : portPreAutorisations(sourcesParBot, () => botId),
+    );
+  } else {
+    // Mode dégradé (le service d'exécution n'a pas démarré) : rien à brancher.
+    agentExecution?.setPreAutorisations(portPreAutos);
+  }
   logger.info("agents.preautorisations.ready", {
     path: env.preAutorisationsPath,
     preautorisations: preAutorisationsStore.size,
@@ -1362,6 +1376,11 @@ async function main(): Promise<void> {
   let consolidationBots: ConsolidationBots | undefined;
   /** Stores mémoire des bots consolidés (fermés à l'arrêt gracieux). */
   let fabriqueMemoireBots: FabriqueMemoireBots | undefined;
+  /**
+   * ⚠️ LOT 36 (L11) — les SERVICES de mémoire PAR BOT (`botId → MemoryService`),
+   * adossés aux stores de chaque bot. `memoryService` reste celui de la PILE.
+   */
+  let servicesMemoire: ServicesMemoireBots<MemoryService> | undefined;
 
   // --- Fichiers échangés (l'utilisateur → Yuki, Yuki → l'utilisateur) -------
   // ⚠️ Créé AVANT la porte GPU : le dépôt et le téléchargement restent
@@ -1614,6 +1633,46 @@ async function main(): Promise<void> {
   let imagesGateway: ImagesGatewayPort | undefined;
   let transport: Transport | undefined;
   let delegation: DelegationService | undefined;
+  /**
+   * ⚠️ LOT 36 (L11) — LES PORTS DE DÉLÉGATION PAR BOT.
+   *
+   * Un seul service, une seule file (`delegation.maxConcurrent`/`maxQueue`), un
+   * seul `JobStore` — mais un PORT par bot : c'est lui qui pose
+   * `JobRecord.botId`, donc le worker, le réveil et les pré-autorisations.
+   *
+   * ⚠️ Mémoïsé : deux appels pour le même bot rendent le MÊME objet (identité
+   * stable, host non reconstruit). Le bot de la PILE garde le service BRUT
+   * (`optionsHostPile.delegation`, `===`) : un job historique sans `botId` reste
+   * traité exactement comme avant L11.
+   *
+   * ⚠️ Pourquoi ICI et pas dans la porte GPU : le run DISTANT (`chatReplyGenerator`,
+   * construit plus haut) en a besoin à chaque réponse, et il lit ce porteur au
+   * moment de la réponse — jamais à sa construction.
+   */
+  const portsDelegationBots = new Map<
+    string,
+    NonNullable<PiHostOptions["delegation"]>
+  >();
+  const sourcesEvenementsBots = new Map<
+    string,
+    NonNullable<PiHostOptions["eventSource"]>
+  >();
+  const delegationPourBot = (botId: string): PiHostOptions["delegation"] => {
+    if (delegation === undefined) return undefined;
+    const existant = portsDelegationBots.get(botId);
+    if (existant !== undefined) return existant;
+    const port = portDelegationBot(delegation, botId);
+    portsDelegationBots.set(botId, port);
+    return port;
+  };
+  const evenementsDuBotPour = (botId: string): PiHostOptions["eventSource"] => {
+    if (delegation === undefined) return undefined;
+    const existant = sourcesEvenementsBots.get(botId);
+    if (existant !== undefined) return existant;
+    const source = evenementsDuBot(delegation, delegation, botId);
+    sourcesEvenementsBots.set(botId, source);
+    return source;
+  };
   /** Désabonnement du rechargement À CHAUD des modèles LLM (voir plus bas). */
   let stopLlmHotReload: (() => void) | undefined;
   /** Désabonnement de l'annonce du FUSEAU des horodatages (voir plus bas). */
@@ -2360,7 +2419,15 @@ async function main(): Promise<void> {
         // (`channelScopedDelegation`, `src/pi/sdk/remote-run-tools.ts`) et leur
         // rapport RÉVEILLE Yuki dans ce canal (`createChannelAwareWaker`, plus bas) :
         // ce n'est pas le serveur qui publie, c'est SON tour.
-        ...(delegation ? { delegation } : {}),
+        // ⚠️ LOT 36 (L11) : le port est celui du bot PROPRIÉTAIRE du canal (L5) —
+        // un job né dans un canal de `kohai` lui appartient, et son rapport le
+        // réveille LUI (pas le principal).
+        ...(() => {
+          if (delegation === undefined) return {};
+          const proprietaire = proprietairesCanaux.proprietaire(conversationId) ?? botDePile;
+          const port = delegationPourBot(proprietaire) ?? delegation;
+          return port !== undefined ? { delegation: port } : {};
+        })(),
         ...(heritageStore ? { heritage: heritageStore } : {}),
         ...(conversationArchive ? { conversationArchive } : {}),
         ...(remoteLibrarian ? { librarian: remoteLibrarian } : {}),
@@ -2976,6 +3043,14 @@ async function main(): Promise<void> {
         store: jobStore,
         queue,
         heavy: heavyWorker,
+        // ⚠️ LOT 36 (L11) — LE WORKER EST CELUI DU BOT DU JOB : celui de la pile
+        // est `heavyWorker` (identité `===`), un bot secondaire reçoit le sien
+        // (`WorkersLourdsBots`, paresseux, plafonné, selon SES capacités). Un
+        // bot muet n'a aucun worker ⇒ `delegate` répond `heavy_unavailable`.
+        heavyPour: (botId) =>
+          botId === undefined || botId === botDePile
+            ? heavyWorker
+            : workersLourds?.pour(botId),
         availability: availabilityPort,
         idleTimeoutMs,
         totalTimeoutMs,
@@ -3008,36 +3083,48 @@ async function main(): Promise<void> {
         logger,
         usage: "extraction memoire",
       });
+    /**
+     * ⚠️ EXTRACTEUR LLM PARTAGÉ (instance) : il ne dépend que du MODÈLE et du
+     * volume `pi`, jamais d'un bot. Le store, lui, est celui du bot.
+     */
+    const memoryExtractor = createSdkMemoryExtractor({
+      cwd: env.piCwd,
+      agentDir: env.piAgentDir,
+      authPath: join(env.piAgentDir, "auth.json"),
+      modelsPath,
+      modelReference: memoryWriteRef,
+      thinking: () =>
+        resolveAvail().isAvailable("heavy") ? liveHeavyThinking() : liveLightThinking(),
+      timeoutMs: () => config.getNumber("memory.extract.timeoutMs"),
+      logger,
+    });
+    /**
+     * ⚠️ LOT 36 (L11) — RÉGLAGES DE MÉMOIRE D'UN BOT : toutes les clés
+     * `memory.*` sont de portée `bot` (`src/config/schema.ts`) : un bot peut donc
+     * avoir une mémoire plus large, plus petite, ou coupée. Lues à CHAQUE appel
+     * (`apply: hot`), depuis la configuration DE CE BOT.
+     */
+    const reglagesMemoire = (cfg: ConfigRuntime) => ({
+      enabled: () => cfg.getString("memory.enabled") === "on",
+      bounds: () => ({
+        topK: cfg.getNumber("memory.recall.topK"),
+        budgetChars: cfg.getNumber("memory.recall.budgetChars"),
+        timeoutMs: cfg.getNumber("memory.recall.timeoutMs"),
+      }),
+      maxItemsPerPass: () => cfg.getNumber("memory.extract.maxItems"),
+      // Passe de SOLIDIFICATION à la mise de côté d'une conversation : relecture
+      // ENTIÈRE mais BORNÉE (taille d'un appel + nombre d'appels).
+      setAsideBounds: () => ({
+        maxChars: cfg.getNumber("memory.setAside.maxChars"),
+        maxChunks: cfg.getNumber("memory.setAside.maxChunks"),
+      }),
+    });
     memoryService = new MemoryService({
       store: memoryStore,
       index: memoryIndex,
       logger,
-      enabled: () => config.getString("memory.enabled") === "on",
-      bounds: () => ({
-        topK: config.getNumber("memory.recall.topK"),
-        budgetChars: config.getNumber("memory.recall.budgetChars"),
-        timeoutMs: config.getNumber("memory.recall.timeoutMs"),
-      }),
-      extractor: createSdkMemoryExtractor({
-        cwd: env.piCwd,
-        agentDir: env.piAgentDir,
-        authPath: join(env.piAgentDir, "auth.json"),
-        modelsPath,
-        modelReference: memoryWriteRef,
-        thinking: () =>
-          resolveAvail().isAvailable("heavy")
-            ? liveHeavyThinking()
-            : liveLightThinking(),
-        timeoutMs: () => config.getNumber("memory.extract.timeoutMs"),
-        logger,
-      }),
-      maxItemsPerPass: () => config.getNumber("memory.extract.maxItems"),
-      // Passe de SOLIDIFICATION à la mise de côté d'une conversation : relecture
-      // ENTIÈRE mais BORNÉE (taille d'un appel + nombre d'appels).
-      setAsideBounds: () => ({
-        maxChars: config.getNumber("memory.setAside.maxChars"),
-        maxChunks: config.getNumber("memory.setAside.maxChunks"),
-      }),
+      ...reglagesMemoire(config),
+      extractor: memoryExtractor,
     });
     memoryService.start();
     logger.info("memory.ready", {
@@ -3125,6 +3212,34 @@ async function main(): Promise<void> {
     // de consolidation appellerait `storesDe(pile)` et ouvrirait un SECOND
     // `MemoryStore` sur le même `memory.jsonl` — deux écrivains.
     fabriqueMemoireBots.adopter(storesMemoire);
+    /**
+     * ⚠️ LOT 36 (L11) — UN SERVICE DE MÉMOIRE PAR BOT.
+     *
+     * Le service du bot de la PILE est celui de `main()` (identité `===`, donc
+     * `/api/memory` et la consolidation gardent leur objet). Un bot secondaire
+     * reçoit le SIEN, adossé à SES stores (`FabriqueMemoireBots`) : sa mémoire
+     * n'est ni celle de `yuki`, ni vide.
+     *
+     * ⚠️ Paresseux : un bot dont le host n'est pas construit ne coûte rien ; son
+     * `memory.jsonl` n'est ouvert qu'à sa première demande.
+     */
+    servicesMemoire = new ServicesMemoireBots<MemoryService>({
+      pile: botDePile,
+      principal: memoryService,
+      storesDe: (botId) => fabriqueMemoireBots?.storesDe(botId) as NonNullable<
+        ReturnType<FabriqueMemoireBots["storesDe"]>
+      >,
+      creer: (botId, stores) =>
+        new MemoryService({
+          store: stores.store,
+          index: stores.index,
+          logger,
+          // ⚠️ Les réglages sont ceux du BOT (clés `memory.*` = portée `bot`).
+          ...reglagesMemoire(configsBots.get(botId) ?? config),
+          extractor: memoryExtractor,
+        }),
+      logger,
+    });
     const passeDuBot = (botId: string): ConsolidationHebdo | undefined => {
       // ⚠️ Côté BOT : la valeur EFFECTIVE de `memory.consolidation.enabled` pour
       // CE bot (conjonction avec le côté instance, `mixteMerge: "et"`).
@@ -3646,12 +3761,20 @@ async function main(): Promise<void> {
         }
         const configBot = configsBots.get(botId);
         const outils = outilsBots.get(botId);
+        // ⚠️ LOT 36 (L11) : la MÉMOIRE de CE bot (son service, ses stores) —
+        // jamais celle du principal. Le port est retiré si elle manque.
+        const memoire = servicesMemoire?.pour(botId);
+        const portDelegation = delegationPourBot(botId);
+        const sourceEvenements = evenementsDuBotPour(botId);
         return {
           botId,
           env: pile.env,
           ...(configBot !== undefined ? { config: configBot } : {}),
           ...(outils !== undefined ? { outils } : {}),
           pile,
+          ...(memoire !== undefined ? { memoire } : {}),
+          ...(portDelegation !== undefined ? { delegation: portDelegation } : {}),
+          ...(sourceEvenements !== undefined ? { eventSource: sourceEvenements } : {}),
           // ⚠️ LOT 36 (L6) : le service d'exécution DE CE BOT (même store, même
           // hub, même TLS 9443 — seule la visibilité `AgentRecord.bots` change).
           // ⚠️ Le port n'est posé que si l'INSTANCE en donne un au principal
@@ -3719,7 +3842,15 @@ async function main(): Promise<void> {
         // drain d'un service mémoire par bot n'existe pas encore (L3-b fournit
         // les stores) : on ne prétend donc pas drainer un service absent.
         ...(fabriqueMemoirePourArret?.estOuvert(botId) === true
-          ? { memory: () => void fabriqueMemoirePourArret?.fermerBot(botId) }
+          ? {
+              memory: () => {
+                // ⚠️ LOT 36 (L11) : le SERVICE du bot est oublié en même temps que
+                // ses stores (un redémarrage reconstruit un service NEUF, adossé
+                // aux stores réouverts — jamais un service sur un index fermé).
+                servicesMemoire?.oublier(botId);
+                fabriqueMemoirePourArret?.fermerBot(botId);
+              },
+            }
           : {}),
       }),
       logger,
@@ -3737,35 +3868,76 @@ async function main(): Promise<void> {
     //    n'a pas ouverte, `src/pi/sdk-host.ts` : un canal n'est pas une session Pi) ;
     //  - conversation de CANAL ⇒ `wake`, et le texte publié n'est qu'un REPLI dit
     //    quand le tour n'a pas pu avoir lieu (`createChannelAwareWaker`).
-    const jobReportWaker = createChannelAwareWaker({
-      fallback: host,
-      // ⚠️ RÉVEIL : le rapport entre dans la conversation du canal comme message
-      // SYSTÈME (`frameRapportSysteme`) ; les fichiers du job y sont rattachés pour que
-      // Yuki puisse les publier. Le tour est borné par l'adaptateur (`ReplyLimiter`).
-      wake: async (request) => {
-        const plateforme = mirrorPlatformOf(request.conversationId);
-        if (!plateforme) {
-          throw new Error(
-            `Conversation « ${request.conversationId} » : la plateforme du canal est inconnue.`,
-          );
-        }
-        const adapter = getAdapter(plateforme);
-        if (!adapter.wakeReport) {
-          throw new Error(
-            `La plateforme « ${plateforme} » ne sait pas réveiller Yuki dans un canal.`,
-          );
-        }
-        await adapter.wakeReport(request);
-      },
-      // ⚠️ REPLI (SEUL cas où le serveur parle) : MÊME chemin que `envoyer_fichier`
-      // (`envoyerDansCanal`), donc aucun second mécanisme de publication.
-      post: (conversationId, text, fichiers) =>
-        envoyerDansCanal(conversationId, text, fichiers),
-      logger,
-    });
+    /**
+     * ⚠️ LOT 36 (L11) — LE RÉVEIL EST CELUI DU BOT QUI A DÉLÉGUÉ.
+     *
+     * Un rapport réveille LE bot qui l'attend : le host de `kohai` pour un job de
+     * `kohai`, et le canal est publié avec SON jeton (`L10`). Le bot de la PILE
+     * garde exactement le réveil d'avant L11 (`fallback: host`, identité `===`).
+     */
+    const creerReveilJob = (botId: string, local: LightWaker): LightWaker =>
+      createChannelAwareWaker({
+        fallback: local,
+        // ⚠️ RÉVEIL : le rapport entre dans la conversation du canal comme message
+        // SYSTÈME (`frameRapportSysteme`) ; les fichiers du job y sont rattachés pour
+        // que Yuki puisse les publier. Le tour est borné par l'adaptateur (`ReplyLimiter`).
+        wake: async (request) => {
+          const plateforme = mirrorPlatformOf(request.conversationId);
+          if (!plateforme) {
+            throw new Error(
+              `Conversation « ${request.conversationId} » : la plateforme du canal est inconnue.`,
+            );
+          }
+          // ⚠️ L'adaptateur du BOT (son jeton) : un rapport de `kohai` ne peut pas
+          // être publié sous l'identité de `yuki`.
+          const adapter =
+            botId === botDePile ? getAdapter(plateforme) : adaptateursChat.pour(botId, plateforme);
+          if (!adapter?.wakeReport) {
+            throw new Error(
+              `La plateforme « ${plateforme} » ne sait pas réveiller Yuki dans un canal.`,
+            );
+          }
+          await adapter.wakeReport(request);
+        },
+        // ⚠️ REPLI (SEUL cas où le serveur parle) : MÊME chemin que `envoyer_fichier`
+        // (`envoyerDansCanal`), donc aucun second mécanisme de publication — avec le
+        // bot demandeur, donc son jeton.
+        post: (conversationId, text, fichiers) =>
+          envoyerDansCanal(conversationId, text, fichiers, undefined, botId),
+        logger,
+      });
+    const jobReportWaker = creerReveilJob(botDePile, host);
+    /**
+     * Réveil d'un bot, résolu À CHAQUE usage :
+     *  - le bot de la PILE rend le réveil d'avant L11 (identité `===`) ;
+     *  - un bot secondaire rend le sien, avec SON host — et le host est relu à
+     *    chaque `send` (un bot arrêté puis redémarré a un host NEUF, `L8/L9`).
+     *
+     * ⚠️ Les réveils sont mémoïsés pour garder l'ORDRE des rapports d'un même
+     * canal (file par conversation, `createChannelAwareWaker`).
+     */
+    const reveilsParBot = new Map<string, LightWaker>([[botDePile, jobReportWaker]]);
+    const reveilDuBot = (botId: string | undefined): LightWaker | undefined => {
+      if (botId === undefined || botId === botDePile) return jobReportWaker;
+      const existant = reveilsParBot.get(botId);
+      if (existant !== undefined) return existant;
+      const hoteDuBot: LightWaker = {
+        send: (sessionId, text, opts) => {
+          const courant = hostsBots?.pourDemarre(botId) ?? hostsBots?.pour(botId);
+          if (courant === undefined) {
+            throw new Error(`Le host du bot « ${botId} » n'est pas disponible.`);
+          }
+          return courant.send(sessionId, text, opts);
+        },
+      };
+      const reveil = creerReveilJob(botId, hoteDuBot);
+      reveilsParBot.set(botId, reveil);
+      return reveil;
+    };
     // ⚠️ `delegation` peut manquer (profil restreint ⇒ aucun worker lourd) : le
     // réveil est alors inutile, puisque rien ne peut être délégué.
     delegation?.setWaker(jobReportWaker);
+    delegation?.setWakerPour(reveilDuBot);
     // ⚠️ Même réveil pour l'ARCHIVAGE du libraire : `archive_libraire` rend la
     // main tout de suite et son issue est rapportée plus tard — dans le canal
     // quand l'archivage a été demandé depuis un canal.
@@ -3827,10 +3999,20 @@ async function main(): Promise<void> {
      * seule délégation, un seul store de fichiers) — seul le `sources.json` lu et
      * écrit change d'un bot à l'autre.
      */
-    let portsDeclencheurSources: Parameters<SourcesService["setDeclencheurPorts"]>[0] | undefined;
-    if (delegation) {
+    /**
+     * ⚠️ LOT 36 (L11) — LES PORTS DES DÉCLENCHEURS SONT CEUX DU BOT.
+     *
+     * Un déclencheur de `kohai` crée un job attribué à `kohai` (`botId` du job)
+     * et publie son résultat dans le fil « Déclencheurs » DE `kohai` (son
+     * `sources.json`, son host). Un seul contrat : la fonction est appelée par
+     * service de bot, avec l'identifiant de ce bot.
+     */
+    const portsDeclencheurPour = (
+      botId: string,
+    ): Parameters<SourcesService["setDeclencheurPorts"]>[0] | undefined => {
+      if (delegation === undefined) return undefined;
       const serviceDelegation = delegation;
-      portsDeclencheurSources = {
+      return {
         jobs: {
           delegate: (request) =>
             serviceDelegation.delegate({
@@ -3838,6 +4020,8 @@ async function main(): Promise<void> {
               ...(request.context !== undefined ? { context: request.context } : {}),
               background: request.background !== false,
               lightSessionId: request.lightSessionId,
+              // ⚠️ L11 : le job d'un déclencheur appartient au BOT DU DÉCLENCHEUR.
+              botId,
               ...(request.origin !== undefined ? { origin: request.origin } : {}),
             }),
           cancelJob: (jobId) => serviceDelegation.cancelJob(jobId),
@@ -3849,25 +4033,49 @@ async function main(): Promise<void> {
           // porte la même information sous forme structurée, pour un rendu natif futur ;
           // `publierMessage` n'en a pas besoin (il persiste le texte tel quel).
           publier: async (sessionId, texte, fichiers) => {
-            if (!host) throw new Error("Le host Pi n'est pas disponible.");
-            if (typeof host.publierMessage !== "function") {
+            // ⚠️ L11 : le host DU BOT (son JSONL, ses sessions). Le principal
+            // reste `host`, par identité.
+            const cible =
+              botId === botDePile ? host : (hostsBots?.pourDemarre(botId) ?? hostsBots?.pour(botId));
+            if (!cible) throw new Error("Le host Pi n'est pas disponible.");
+            if (typeof cible.publierMessage !== "function") {
               throw new Error(
                 "Ce host ne sait pas publier dans une conversation sans tour de modèle.",
               );
             }
             void fichiers;
-            await host.publierMessage(sessionId, texte);
+            await cible.publierMessage(sessionId, texte);
           },
         },
         // ⚠️ LOT 31 — MÉTADONNÉES des fichiers du résultat : c'est le service qui rend les
         // marqueurs `[fichier] <id> <nom> (<n> octets)`, donc la carte cliquable.
         fichier: (fichierId) => filesStore.get(fichierId),
       };
+    };
+    const portsDeclencheurSources = portsDeclencheurPour(botDePile);
+    if (portsDeclencheurSources !== undefined) {
       sourcesService.setDeclencheurPorts(portsDeclencheurSources);
       // Le RÉSULTAT d'un job de déclencheur ne réveille PAS le léger : il part
-      // par le port des déclencheurs (publier / se taire / éteindre).
-      serviceDelegation.setDeclencheurs({
+      // par le port des déclencheurs (publier / se taire / éteindre) DU BOT.
+      delegation?.setDeclencheurs({
         recevoirResultat: (record) => sourcesService.recevoirResultat(record),
+      });
+      delegation?.setDeclencheursPour((botId) => {
+        if (botId === undefined || botId === botDePile) {
+          return { recevoirResultat: (record) => sourcesService.recevoirResultat(record) };
+        }
+        try {
+          // ⚠️ La pile du bot porte SON service (`sources.json` du bot) : le
+          // résultat se publie donc dans SON fil « Déclencheurs ».
+          const pile = sourcesParBot.pourBot(botId);
+          return { recevoirResultat: (record) => pile.service.recevoirResultat(record) };
+        } catch (error) {
+          logger.warn("delegation.declencheur.bot_indisponible", {
+            bot: botId,
+            error: messageOf(error),
+          });
+          return undefined;
+        }
       });
     }
 
@@ -3884,9 +4092,10 @@ async function main(): Promise<void> {
       const hote = hostsBots?.pourDemarre(botId) ?? hoteSources;
       if (hote === undefined) return;
       service.setWaker(hote);
-      if (portsDeclencheurSources !== undefined) {
-        service.setDeclencheurPorts(portsDeclencheurSources);
-      }
+      // ⚠️ LOT 36 (L11) : les ports sont ceux DU BOT (job attribué à ce bot,
+      // résultat publié chez lui) — jamais ceux du principal.
+      const ports = portsDeclencheurPour(botId);
+      if (ports !== undefined) service.setDeclencheurPorts(ports);
     };
     for (const enAttente of servicesSourcesEnAttente.splice(0)) {
       brancherServiceSources(enAttente.service, enAttente.botId);
@@ -4161,6 +4370,18 @@ async function main(): Promise<void> {
         config: {
           getString: (path) => config.getString(path),
           getNumber: (path) => config.getNumber(path),
+        },
+        // ⚠️ LOT 36 (L11) — LA VOIX EST CELLE DU BOT QUI PARLE : `tts.voice`,
+        // `tts.emotion`, `tts.speed`, `tts.exaggeration` et `tts.cfg` sont des
+        // clés `bot`. La vue d'un bot est FUSIONNÉE (surcharge + instance), donc
+        // les clés d'instance (`tts.engine`, `baseUrl`, prefetch, bornes) gardent
+        // leur valeur : le MOTEUR et sa connexion restent partagés.
+        configPour: (botId) => {
+          const cfg = botId === undefined ? config : (configsBots.get(botId) ?? config);
+          return {
+            getString: (path) => cfg.getString(path),
+            getNumber: (path) => cfg.getNumber(path),
+          };
         },
         synthesizer: segmentSynthesizer,
         resolveVoice: (id) => voiceStore.resolveVoice(id).voice,

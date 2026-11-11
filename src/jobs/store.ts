@@ -87,6 +87,7 @@ function mergePatch(record: JobRecord, patch: JobPatch): JobRecord {
   if (patch.context !== undefined) next.context = patch.context;
   if (patch.deadlineMs !== undefined) next.deadlineMs = patch.deadlineMs;
   if (patch.lightSessionId !== undefined) next.lightSessionId = patch.lightSessionId;
+  if (patch.botId !== undefined) next.botId = patch.botId;
   if (patch.parentRunId !== undefined) next.parentRunId = patch.parentRunId;
   if (patch.heavySessionId !== undefined) next.heavySessionId = patch.heavySessionId;
   if (patch.error !== undefined) next.error = patch.error;
@@ -113,6 +114,7 @@ function recordFromCreated(
     ...(patch.context !== undefined ? { context: patch.context } : {}),
     deadlineMs: patch.deadlineMs ?? 0,
     lightSessionId: patch.lightSessionId ?? "",
+    ...(patch.botId !== undefined ? { botId: patch.botId } : {}),
     ...(patch.parentRunId !== undefined ? { parentRunId: patch.parentRunId } : {}),
     ...(patch.heavySessionId !== undefined
       ? { heavySessionId: patch.heavySessionId }

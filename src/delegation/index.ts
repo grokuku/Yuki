@@ -21,6 +21,7 @@ export {
   clampDeadline,
   createDelegationService,
   excerptForActivity,
+  grouperParBot,
   truncateToBytes,
 } from "./service.js";
 export type { DelegationLogger, DelegationServiceOptions } from "./service.js";
@@ -45,6 +46,8 @@ export {
   orchestratorSteerBlock,
 } from "./steer.js";
 export type { FirstPromptExtras } from "./steer.js";
+
+export { evenementsDuBot, portDelegationBot } from "./par-bot.js";
 
 export { DelegationError } from "./errors.js";
 export type { DelegationErrorCode } from "./errors.js";

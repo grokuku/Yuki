@@ -68,6 +68,25 @@ export function estJobDeclencheur(origine: string | undefined): boolean {
   return origine === ORIGIN_DECLENCHEUR || origine.startsWith(`${ORIGIN_DECLENCHEUR}:`);
 }
 /**
+ * ⚠️ LOT 36 (L11) — Regroupe des jobs TERMINÉS par bot demandeur.
+ *
+ * L'ordre d'apparition est conservé (les rapports se lisent dans l'ordre des
+ * fins), et un job SANS `botId` (historique, mono-bot) forme le groupe
+ * `undefined` — celui que le réveil du bot de la pile sert.
+ */
+export function grouperParBot(
+  records: readonly JobRecord[],
+): Array<[string | undefined, JobRecord[]]> {
+  const groupes = new Map<string | undefined, JobRecord[]>();
+  for (const record of records) {
+    const groupe = groupes.get(record.botId);
+    if (groupe === undefined) groupes.set(record.botId, [record]);
+    else groupe.push(record);
+  }
+  return [...groupes];
+}
+
+/**
  * E4 — Fenêtre de LOTISSEMENT des résultats (ms). FIXE : déclenchée par le
  * PREMIER résultat et NON repoussée (≠ debounce) ⇒ la latence est bornée.
  */
@@ -150,6 +169,18 @@ export interface DelegationServiceOptions {
   logger: DelegationLogger;
   /** Réveil du léger (renseigné après création du host via `setWaker`). */
   waker?: LightWaker;
+  /**
+   * ⚠️ LOT 36 (L11) — RÉVEIL PAR BOT : le rapport d'un job réveille LE bot qui
+   * a délégué, jamais un autre. `waker` reste le réveil du bot de la PILE
+   * (identité `===` quand la résolution n'a pas de réponse).
+   */
+  wakerPour?: (botId: string | undefined) => LightWaker | undefined;
+  /**
+   * ⚠️ LOT 36 (L11) — WORKER LOURD PAR BOT : `heavy` reste celui du bot de la
+   * pile ; un job d'un bot secondaire s'exécute avec SON worker (`botId` du
+   * job), donc avec SES capacités, SON prompt et SON service d'exécution.
+   */
+  heavyPour?: (botId: string | undefined) => HeavyWorker | undefined;
   /** Réservé Lot 10 : canal de notification sortant. */
   reporter?: JobReporter;
   /**
@@ -158,6 +189,12 @@ export interface DelegationServiceOptions {
    * dans le fil local « Déclencheurs » (`SourcesService.recevoirResultat`).
    */
   declencheurs?: DeclencheursPort;
+  /**
+   * ⚠️ LOT 36 (L11) — PORT DES DÉCLENCHEURS PAR BOT : un job de déclencheur
+   * s'exécute pour UN bot, et son résultat se publie dans le fil
+   * « Déclencheurs » de CE bot (`sources.json` du bot).
+   */
+  declencheursPour?: (botId: string | undefined) => DeclencheursPort | undefined;
   idleTimeoutMs: number;
   totalTimeoutMs: number;
   inlineMaxBytes?: number;
@@ -204,7 +241,13 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   private readonly clearTimeoutFn: (timer: unknown) => void;
 
   private waker?: LightWaker;
+  /** ⚠️ Renseignable après construction (`setWakerPour`), comme `waker`. */
+  private wakerPour?: (botId: string | undefined) => LightWaker | undefined;
+  private readonly heavyPour?: (botId: string | undefined) => HeavyWorker | undefined;
   private declencheurs?: DeclencheursPort;
+  private declencheursPourPort?: (
+    botId: string | undefined,
+  ) => DeclencheursPort | undefined;
   private readonly listeners = new Set<(event: PiEvent) => void>();
   private readonly completions = new Map<string, Completion>();
   private readonly handles = new Map<string, HeavyRunHandle>();
@@ -245,6 +288,8 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       options.idFactory ??
       (() => `job-${this.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
     if (options.waker) this.waker = options.waker;
+    if (options.wakerPour) this.wakerPour = options.wakerPour;
+    if (options.heavyPour) this.heavyPour = options.heavyPour;
   }
 
   /** Renseigne le réveil du léger une fois le host construit. */
@@ -253,11 +298,64 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   }
 
   /**
+   * ⚠️ LOT 36 (L11) — Renseigne le réveil PAR BOT (le rapport réveille le bot
+   * qui a délégué). `setWaker` reste le réveil du bot de la PILE.
+   */
+  setWakerPour(
+    port: (botId: string | undefined) => LightWaker | undefined,
+  ): void {
+    this.wakerPour = port;
+  }
+
+  /**
    * Renseigne le port des DÉCLENCHEURS (résultat d'un job planifié publié sans
    * tour de conversation).
    */
   setDeclencheurs(port: DeclencheursPort): void {
     this.declencheurs = port;
+  }
+
+  /**
+   * ⚠️ LOT 36 (L11) — Renseigne le port des déclencheurs PAR BOT (le résultat
+   * d'un job planifié se publie chez SON bot, jamais chez un autre).
+   */
+  setDeclencheursPour(
+    port: (botId: string | undefined) => DeclencheursPort | undefined,
+  ): void {
+    this.declencheursPourPort = port;
+  }
+
+  /**
+   * Réveil EFFECTIF d'un job : celui de SON bot, sinon celui du bot de la pile.
+   *
+   * ⚠️ Le repli sur `waker` est aussi ce qui garde le comportement historique :
+   * sans `wakerPour` (ou sans réponse pour ce bot), le réveil est exactement
+   * celui d'avant L11.
+   */
+  private wakerDe(botId: string | undefined): LightWaker | undefined {
+    if (botId !== undefined) {
+      const propre = this.wakerPour?.(botId);
+      if (propre !== undefined) return propre;
+    }
+    return this.waker;
+  }
+
+  /** Worker lourd EFFECTIF d'un job : celui de SON bot, sinon celui de la pile. */
+  private heavyDe(botId: string | undefined): HeavyWorker | undefined {
+    if (botId !== undefined) {
+      const propre = this.heavyPour?.(botId);
+      if (propre !== undefined) return propre;
+    }
+    return this.heavy;
+  }
+
+  /** Port des déclencheurs EFFECTIF d'un job (même règle que le réveil). */
+  private declencheursDe(botId: string | undefined): DeclencheursPort | undefined {
+    if (botId !== undefined) {
+      const propre = this.declencheursPourPort?.(botId);
+      if (propre !== undefined) return propre;
+    }
+    return this.declencheurs;
   }
 
   /** Publie tous les événements (phases + lifecycle) sur le bus Pi. */
@@ -305,6 +403,17 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       this.logger.warn("delegation.unavailable", { session_id: sessionId });
       return { status: "unavailable", reason: "heavy_unavailable" };
     }
+    // ⚠️ LOT 36 (L11) — le worker du BOT DEMANDEUR : un bot sans worker (capacités
+    // absentes, ou plafond de workers atteint) ne peut pas déléguer. On le DIT au
+    // modèle (`heavy_unavailable`) AVANT de créer un job que personne n'exécuterait.
+    const heavy = this.heavyDe(request.botId);
+    if (heavy === undefined) {
+      this.logger.warn("delegation.unavailable.bot", {
+        session_id: sessionId,
+        bot: request.botId ?? null,
+      });
+      return { status: "unavailable", reason: "heavy_unavailable" };
+    }
 
     const jobId = this.idFactory();
     const admission = this.queue.admit(jobId);
@@ -321,6 +430,9 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       ...(request.context !== undefined ? { context: request.context } : {}),
       deadlineMs,
       lightSessionId: sessionId,
+      // ⚠️ LOT 36 (L11) : l'identité du DEMANDEUR voyage avec le job (elle seule
+      // décidera du worker, du réveil, des fichiers et des pré-autorisations).
+      ...(request.botId !== undefined ? { botId: request.botId } : {}),
       ...(request.parentRunId !== undefined
         ? { parentRunId: request.parentRunId }
         : {}),
@@ -650,8 +762,23 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     });
   }
 
+  /**
+   * ⚠️ LOT 36 (L11) — CHAQUE ÉVÉNEMENT DE JOB PORTE SON BOT : c'est ce qui permet
+   * au host d'un bot de ne relayer QUE ses jobs (`evenementsDuBot`).
+   */
+  private botDuJob(jobId: string): string | undefined {
+    return this.store.get(jobId)?.botId;
+  }
+
   private emitJobStarted(sessionId: string, jobId: string, task: string): void {
-    this.emitEvent({ type: "job_started", sessionId, jobId, task });
+    const botId = this.botDuJob(jobId);
+    this.emitEvent({
+      type: "job_started",
+      sessionId,
+      jobId,
+      task,
+      ...(botId !== undefined ? { botId } : {}),
+    });
   }
 
   /**
@@ -665,6 +792,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     stage: string,
     extra: { task?: string; detail?: string; status?: PiJobTerminalStatus } = {},
   ): void {
+    const botId = this.botDuJob(jobId);
     this.emitEvent({
       type: "job_activity",
       sessionId,
@@ -673,6 +801,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       ...(extra.task !== undefined ? { task: extra.task } : {}),
       ...(extra.detail !== undefined ? { detail: extra.detail } : {}),
       ...(extra.status !== undefined ? { status: extra.status } : {}),
+      ...(botId !== undefined ? { botId } : {}),
       at: new Date(this.now()).toISOString(),
     });
   }
@@ -682,7 +811,14 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     jobId: string,
     status: "completed" | "failed" | "cancelled" | "interrupted",
   ): void {
-    this.emitEvent({ type: "job_finished", sessionId, jobId, status });
+    const botId = this.botDuJob(jobId);
+    this.emitEvent({
+      type: "job_finished",
+      sessionId,
+      jobId,
+      status,
+      ...(botId !== undefined ? { botId } : {}),
+    });
   }
 
   private startJob(jobId: string): void {
@@ -744,9 +880,21 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       },
     };
 
+    // ⚠️ LOT 36 (L11) : le worker est celui du BOT DU JOB. Absent (capacités
+    // retirées entre-temps, plafond atteint) ⇒ échec HONNÊTE du job, jamais une
+    // exécution par le worker d'un autre bot.
+    const heavy = this.heavyDe(record.botId);
+    if (heavy === undefined) {
+      this.finishJob(jobId, {
+        status: "failed",
+        error: "heavy_unavailable",
+      });
+      return;
+    }
+
     let handle: HeavyRunHandle;
     try {
-      handle = this.heavy.run(request);
+      handle = heavy.run(request);
     } catch (error) {
       this.finishJob(jobId, {
         status: "failed",
@@ -921,27 +1069,37 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     // le chemin historique ci-dessous.
     const planifies = records.filter((record) => estJobDeclencheur(record.origin));
     const autres = records.filter((record) => !estJobDeclencheur(record.origin));
-    if (planifies.length > 0 && !this.declencheurs) {
+    const planifiesSansPort = planifies.filter(
+      (record) => this.declencheursDe(record.botId) === undefined,
+    );
+    if (planifiesSansPort.length > 0) {
       // ⚠️ Aucun port : le résultat d'un déclencheur ne peut être publié nulle part.
       // On le DIT (jamais de perte silencieuse) — le chemin est câblé au démarrage
       // (`src/index.ts`, `SourcesService.setDeclencheurPorts`).
-      this.logger.warn("delegation.declencheur.no_port", { jobs: planifies.length });
+      this.logger.warn("delegation.declencheur.no_port", {
+        jobs: planifiesSansPort.length,
+      });
     }
-    if (planifies.length > 0 && this.declencheurs) {
-      for (const record of planifies) {
-        void Promise.resolve(this.declencheurs.recevoirResultat(record)).catch(
-          (error: unknown) => {
-            this.logger.warn("delegation.declencheur.publish_failed", {
-              job_id: record.id,
-              error: sanitizeErrorText(
-                error instanceof Error ? error.message : String(error),
-              ),
-            });
-          },
-        );
-      }
+    // ⚠️ LOT 36 (L11) : le port est celui du BOT DU JOB — sa déclaration, son
+    // `sources.json`, son fil « Déclencheurs ».
+    for (const record of planifies) {
+      const port = this.declencheursDe(record.botId);
+      if (port === undefined) continue;
+      void Promise.resolve(port.recevoirResultat(record)).catch((error: unknown) => {
+        this.logger.warn("delegation.declencheur.publish_failed", {
+          job_id: record.id,
+          error: sanitizeErrorText(
+            error instanceof Error ? error.message : String(error),
+          ),
+        });
+      });
     }
-    if (this.waker && autres.length > 0) {
+    // ⚠️ LOT 36 (L11) — LE RAPPORT RÉVEILLE LE BOT QUI A DÉLÉGUÉ, ET LUI SEUL.
+    // Un lot est groupé par bot : deux bots ne partagent jamais un réveil (ce
+    // serait le tour d'un bot qui lirait le travail d'un autre).
+    for (const [botId, groupe] of grouperParBot(autres)) {
+      const waker = this.wakerDe(botId);
+      if (waker === undefined || groupe.length === 0) continue;
       // ⚠️ FICHIERS DU LOT : réunis dans l'ordre des jobs et dédupliqués. Le
       // réveil de CANAL les joint au message publié ; sans eux, une image
       // déléguée ne serait jamais visible (le rapport ne porte que du texte).
@@ -950,7 +1108,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
       // le rapport d'un canal est RÉSUMÉ avant publication, et un repli perdu au
       // résumé serait un repli silencieux. Le réveil de canal les ajoute APRÈS.
       const replis: string[] = [];
-      for (const record of autres) {
+      for (const record of groupe) {
         for (const id of record.result.fichiers ?? []) {
           if (!fichiers.includes(id)) fichiers.push(id);
         }
@@ -960,9 +1118,9 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
         }
       }
       try {
-        const handle = this.waker.send(
+        const handle = waker.send(
           sessionId,
-          buildBatchReportPrompt(autres),
+          buildBatchReportPrompt(groupe),
           {
             origin: ORIGIN_JOB_REPORT,
             jobId: head.id,
@@ -991,6 +1149,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
         sessionId,
         jobId: record.id,
         ...(runId ? { runId } : {}),
+        ...(record.botId !== undefined ? { botId: record.botId } : {}),
       });
     }
     this.emitPhase(

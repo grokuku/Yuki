@@ -277,3 +277,10 @@ export {
   type OptionsOuvertureStoresMemoire,
   type StoresMemoireBot,
 } from "./stores-bot.js";
+
+export {
+  ServicesMemoireBots,
+  type OptionsServicesMemoire,
+  type ServiceMemoireDemarrable,
+  type ServicesMemoireLogger,
+} from "./services-bot.js";

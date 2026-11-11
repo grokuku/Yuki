@@ -238,7 +238,13 @@ function contexteDe(
   b: Banc,
   botId: string,
   configs: Map<string, ConfigRuntime>,
-  fakes: { pile?: PileFactice; outils?: OutilsBot } = {},
+  fakes: {
+    pile?: PileFactice;
+    outils?: OutilsBot;
+    memoire?: NonNullable<PiHostOptions["memory"]>;
+    delegation?: PiHostOptions["delegation"];
+    eventSource?: PiHostOptions["eventSource"];
+  } = {},
 ): ContexteHostBot {
   const env = envPourBot({
     envInstance: b.env,
@@ -253,6 +259,9 @@ function contexteDe(
     ...(config !== undefined ? { config } : {}),
     outils: fakes.outils ?? outilsFactices(env, botId),
     pile: fakes.pile?.pile ?? pileFactice(env, botId).pile,
+    ...(fakes.memoire !== undefined ? { memoire: fakes.memoire } : {}),
+    ...(fakes.delegation !== undefined ? { delegation: fakes.delegation } : {}),
+    ...(fakes.eventSource !== undefined ? { eventSource: fakes.eventSource } : {}),
   };
 }
 
@@ -583,7 +592,7 @@ describe("bots refusés par le plafond (lot 36, L1 + L3-d)", () => {
 // ── ④ La mémoire n'est jamais empruntée au principal ───────────────────────
 
 describe("ports d'un bot secondaire (lot 36, L3-d)", () => {
-  it("la MÉMOIRE (un service, pas un store) est RETIRÉE, et les autres ports remplacés", () => {
+  it("sans SERVICE de mémoire pour ce bot, le port `memory` est RETIRÉ (jamais emprunté)", () => {
     const b = avecRegistre([bot("yuki", 0, true), bot("kohai", 1, true)]);
     const configs = configsDeTest(b, ["yuki", "kohai"], "yuki");
     const optionsPile = optionsPileDe(b, configs.get("yuki") as ConfigRuntime);
@@ -611,6 +620,81 @@ describe("ports d'un bot secondaire (lot 36, L3-d)", () => {
     expect(options.sources).toBe(contexte.pile?.service);
     expect(options.personality).toBe(contexte.outils?.personnalite);
     expect(options.botId).toBe("kohai");
+  });
+
+  it("avec SON service de mémoire (L11), le host du bot lit SA mémoire — jamais celle du principal", () => {
+    const b = avecRegistre([bot("yuki", 0, true), bot("kohai", 1, true)]);
+    const configs = configsDeTest(b, ["yuki", "kohai"], "yuki");
+    const optionsPile = optionsPileDe(b, configs.get("yuki") as ConfigRuntime);
+    const journal = journalFactice();
+
+    // Le service « de kohai » : un objet distinct de celui du principal.
+    const memoireKohai = {
+      recall: async () => ({ entries: [], truncated: false, bytes: 0 }),
+      onTurnEnd: () => undefined,
+      onBeforeCompact: () => undefined,
+    } as unknown as NonNullable<PiHostOptions["memory"]>;
+
+    const contexte = contexteDe(b, "kohai", configs, { memoire: memoireKohai });
+    const ports = portsHostBot(contexte, journal) as PortsHostBot;
+    const options = optionsHostBot("kohai", optionsPile, ports);
+
+    // ⚠️ C'est CE service-là, par identité — jamais celui du principal.
+    expect(options.memory).toBe(memoireKohai);
+    expect(options.memory).not.toBe(optionsPile.memory);
+    // Et l'absence n'est plus annoncée : le port existe.
+    expect(
+      journal.lignes.some(
+        (ligne) =>
+          ligne.message === "bots.host.port_absent" &&
+          ligne.champs.bot === "kohai" &&
+          String(ligne.champs.ports).split(",").includes("memory"),
+      ),
+    ).toBe(false);
+  });
+
+  it("la DÉLÉGATION et ses ÉVÉNEMENTS sont ceux du bot (L11), jamais ceux du principal", () => {
+    const b = avecRegistre([bot("yuki", 0, true), bot("kohai", 1, true)]);
+    const configs = configsDeTest(b, ["yuki", "kohai"], "yuki");
+    const optionsPile = optionsPileDe(b, configs.get("yuki") as ConfigRuntime);
+    // Le principal porte un port de délégation (comme `main()`).
+    const portPile = { delegate: async () => ({ status: "dispatched" }) } as unknown as NonNullable<
+      PiHostOptions["delegation"]
+    >;
+    const sourcePile = { subscribe: () => () => undefined } as unknown as NonNullable<
+      PiHostOptions["eventSource"]
+    >;
+    optionsPile.delegation = portPile;
+    optionsPile.eventSource = sourcePile;
+
+    const portKohai = { delegate: async () => ({ status: "dispatched" }) } as unknown as NonNullable<
+      PiHostOptions["delegation"]
+    >;
+    const sourceKohai = { subscribe: () => () => undefined } as unknown as NonNullable<
+      PiHostOptions["eventSource"]
+    >;
+    const contexte = contexteDe(b, "kohai", configs, {
+      delegation: portKohai,
+      eventSource: sourceKohai,
+    });
+    const ports = portsHostBot(contexte) as PortsHostBot;
+    const options = optionsHostBot("kohai", optionsPile, ports);
+
+    // ⚠️ Un host secondaire ne reçoit JAMAIS le port du principal : il créerait
+    // des jobs sans `botId`, donc attribués au mauvais bot.
+    expect(options.delegation).toBe(portKohai);
+    expect(options.delegation).not.toBe(portPile);
+    expect(options.eventSource).toBe(sourceKohai);
+    expect(options.eventSource).not.toBe(sourcePile);
+
+    // Sans contexte, les deux ports sont RETIRÉS (aucun outil `delegate`).
+    const sans = optionsHostBot(
+      "kohai",
+      optionsPile,
+      portsHostBot(contexteDe(b, "kohai", configs)) as PortsHostBot,
+    );
+    expect(sans.delegation).toBeUndefined();
+    expect(sans.eventSource).toBeUndefined();
   });
 
   it("un bot sans configuration n'a pas de host (jamais le prompt d'un autre)", () => {

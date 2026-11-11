@@ -40,7 +40,10 @@ describe("garde-fou statique — câblage de l'extracteur de mémoire", () => {
 
   it("l'extracteur de mémoire utilise la référence d'écriture résolue (lourd si dispo)", () => {
     expect(index).toContain("memoryWriteModelReference({");
-    const start = index.indexOf("extractor: createSdkMemoryExtractor({");
+    // ⚠️ LOT 36 (L11) : l'extracteur est construit UNE fois (il est PARTAGÉ par
+    // les services de mémoire de tous les bots) — la garde vise désormais la
+    // déclaration nommée, plus l'ancien inline `extractor: createSdkMemoryExtractor(`.
+    const start = index.indexOf("const memoryExtractor = createSdkMemoryExtractor({");
     expect(start).toBeGreaterThan(-1);
     // Bloc de l'extracteur seul (jusqu'à la fin du `createSdkMemoryExtractor`).
     const block = index.slice(start, start + 600);

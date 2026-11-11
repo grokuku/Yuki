@@ -136,6 +136,7 @@ export {
   SEPARATEUR_SECRET_BOT,
   SourcesParBot,
   SourcesParBotError,
+  brancherPreAutorisationsParBot,
   filtreAgentVisible,
   nomSecretSource,
   nomsSecretsSource,
@@ -143,11 +144,13 @@ export {
 } from "./par-bot.js";
 export type {
   DepsSourcesBot,
+  ExecutionsABrancher,
   JetonResolu,
   ModeBots,
   OptionsSourcesParBot,
   PileSourcesBot,
   ResolutionDemarrage,
+  ServicePreAutorisable,
 } from "./par-bot.js";
 
 export {

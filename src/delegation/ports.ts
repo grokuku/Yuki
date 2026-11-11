@@ -173,6 +173,15 @@ export interface DelegateRequest {
   context?: string;
   deadlineMs?: number;
   /**
+   * ⚠️ LOT 36 (L11) — BOT QUI DÉLÈGUE.
+   *
+   * Posé par `portDelegationBot` (`src/delegation/par-bot.ts`), jamais par le
+   * modèle : c'est lui qui choisit le worker, le réveil et le registre de
+   * pré-autorisations. Absent ⇒ job historique, traité comme celui du bot de la
+   * pile.
+   */
+  botId?: string;
+  /**
    * E4 — `true` (DÉFAUT) : tâche de fond NON BLOQUANTE. On rend la main
    * IMMÉDIATEMENT avec un ticket ; le résultat sera réinjecté plus tard.
    * `false` : attente inline bornée par `deadlineMs` (enchaînement explicite).

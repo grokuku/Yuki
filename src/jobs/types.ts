@@ -87,6 +87,17 @@ export interface JobRecord {
   deadlineMs: number;
   /** Session légère propriétaire (celle qui a émis le `delegate`). */
   lightSessionId: string;
+  /**
+   * ⚠️ LOT 36 (L11) — BOT QUI A DÉLÉGUÉ ce job.
+   *
+   * La file et le pool de workers restent des réglages d'INSTANCE, mais chaque
+   * job porte son bot : c'est lui qui décide QUEL worker exécute la tâche, QUEL
+   * host est réveillé à la fin, dans QUELLE conversation ses fichiers sont
+   * rattachés et SOUS QUEL NOM ses pré-autorisations sont consommées.
+   *
+   * Absent ⇒ job historique (mono-bot), traité comme celui du bot de la pile.
+   */
+  botId?: string;
   /** Run léger déclencheur (corrélation), si connu. */
   parentRunId?: string;
   /** Session éphémère du worker lourd, si démarrée. */
@@ -109,6 +120,7 @@ export interface JobPatch {
   context?: string;
   deadlineMs?: number;
   lightSessionId?: string;
+  botId?: string;
   parentRunId?: string;
   heavySessionId?: string;
   result?: JobResult;

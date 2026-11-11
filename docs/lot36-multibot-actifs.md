@@ -1,4 +1,4 @@
-# Lot 36 — multi-bot : quels bots TOURNENT (L1 → L10)
+# Lot 36 — multi-bot : quels bots TOURNENT (L1 → L11)
 
 Approche **B** (décision utilisateur) : **un seul processus**, N `PiHost`.
 Ce document couvre L1 (résolution au démarrage), L2 (on/off réel), **L3-a**
@@ -7,8 +7,9 @@ règles, épingles, réactions par bot), **L3-c** (sources, envois et
 pré-autorisations par bot), **L3-d** (`PiHost` par bot), **L4** (transport WS
 multi-host : un second bot est JOIGNABLE), **L5** (canaux et publication par
 bot), **L6** (agents multi-bot), **L7** (worker lourd par bot), **L8** (état
-réel + démarrage/arrêt par bot), **L9** (arrêt ciblé) et **L10** (jetons et
-adaptateurs de plateforme par bot) ; les limites connues sont listées en fin.
+réel + démarrage/arrêt par bot), **L9** (arrêt ciblé), **L10** (jetons et
+adaptateurs de plateforme par bot) et **L11** (délégation/jobs, mémoire et voix
+par bot) ; les limites connues sont listées en fin.
 
 ## Ce qui est livré
 
@@ -397,13 +398,62 @@ plateforme ; **un bot sans jeton reste en local** (aucun adaptateur construit).
 `/config → Conversation` reçoit `jetonsBots` (nom du secret + posé/absent,
 jamais une valeur) et l'affiche.
 
+### L11 — DÉLÉGATION, MÉMOIRE ET VOIX PAR BOT (livré)
+
+⚠️ Ce morceau ferme les **deux derniers trous mono-instance** déclarés en fin de
+L10 : (①) un job délégué appartenait à l'instance, (②) un bot secondaire n'avait
+ni mémoire ni voix propre.
+
+**① Délégation / jobs** — `src/delegation/par-bot.ts` (nouveau) :
+
+| Symbole | Rôle |
+|---|---|
+| `portDelegationBot(service, botId)` (`:47`) | le MÊME service, mais **chaque job porte `JobRecord.botId`** (posé par le port, jamais par le modèle) |
+| `evenementsDuBot(source, service, botId)` (`:79`) | ne relaie que les événements des jobs **de ce bot** (sinon le flux d'un bot atterrirait dans le registre d'un autre) |
+| `grouperParBot(records)` (`src/delegation/service.ts:79`) | un lot de résultats se livre **par bot** : deux bots ne partagent jamais un réveil |
+
+`DelegationService` porte désormais `wakerPour` / `heavyPour` /
+`declencheursPour` (`src/delegation/service.ts:177-200`, `setWakerPour`/`setDeclencheursPour`)
+et pose `botId` sur ses événements de job (`src/pi/types.ts:637`). Dans
+`main()` : le port de chaque host (`delegationPourBot`), le réveil
+(`reveilDuBot` → `envoyerDansCanal(..., botId)` et l'adaptateur **du bot**), le
+worker (`workersLourds.pour(botId)`, L7) et les ports de déclencheur par bot
+(`portsDeclencheurPour`, donc `delegation.queued` puis publication dans **SON**
+fil « Déclencheurs »). Le run DISTANT d'un canal utilise le port du bot
+**propriétaire du canal** (L5).
+
+⚠️ **Ce qui ne change pas** : `JobStore`, `JobQueue` et
+`delegation.maxConcurrent`/`maxQueue` restent des réglages d'**INSTANCE** ; le
+bot de la PILE garde le service BRUT (`optionsHostPile.delegation`, `===`), donc
+un job historique sans `botId` est traité exactement comme avant.
+
+**② `MemoryPort`** — `src/memory/services-bot.ts` (nouveau),
+`ServicesMemoireBots` (`:84`) : un `MemoryService` par bot, adossé à **SES**
+stores (`FabriqueMemoireBots`), avec les clés `memory.*` **de son** overlay ; le
+service du principal est celui de `main()` (identité `===`). `HostsBots` pose
+`memory` par bot et ne le retire plus que s'il manque vraiment
+(`src/bots/hosts.ts:141,257`).
+
+**③ TTS** — `TtsPipelineDeps.configPour` (`src/tts/pipeline.ts:110`) : la
+configuration est **figée au démarrage du run** avec celle du bot qui parle
+(`tts.voice`, `tts.emotion`, `tts.speed`, `tts.exaggeration`, `tts.cfg` sont des
+clés `bot`) ; le **moteur**, la connexion, le prefetch et les bornes restent
+d'INSTANCE. `BotHostsPort.botDe(host)` (`src/gateway/ws/server.ts:239`,
+`HostsBots.botDe`) nomme le bot PROPRIÉTAIRE du host émetteur : `routeTtsEvent`
+passe la config du bon bot, et le principal reste `undefined` (config
+d'instance, à l'identique).
+
+**Pré-autorisations** — `brancherPreAutorisationsParBot`
+(`src/sources/par-bot.ts:625`) branche un port **par** service d'exécution : la
+consommation suit le bot du run (son `preautorisations.json`), au lieu d'un port
+unique lié au bot de la pile.
+
 ## Ce qui reste à faire (limites connues, dites)
 
 | Limite | Pourquoi |
 |---|---|
-| Le **service de délégation** (jobs) reste celui du principal : `WorkersLourdsBots` construit le worker d'un bot **à la demande**, mais aucune file de jobs n'est encore instanciée par bot | un `JobStore` + `JobQueue` + `DelegationService` par bot est un lot à part entière ; le worker d'un bot secondaire n'est donc créé que si un appelant le demande explicitement (`pour(botId)`) |
-| Un bot secondaire n'a **pas de port `memory`** (service) : L3-b fournit ses **stores**, L9 ferme son **index** | construire un `MemoryService` par bot (extraction, consolidation, drain) reste à faire ; le port est **retiré**, jamais emprunté au principal |
-| **TTS** et la file de téléchargement sont des objets d'INSTANCE : l'arrêt d'un bot ne les ferme pas | la synthèse vocale n'est pas encore instanciée par bot |
+| La **voix d'un bot** dépend d'une clé `bot` mais le moteur reste PARTAGÉ : deux bots qui parlent en même temps sont sérialisés par le `BusyGuard` du moteur | décision : un moteur, N voix — un moteur par bot multiplierait la RAM GPU |
+| La file de téléchargement TTS reste un objet d'INSTANCE | ce sont des fichiers de modèles partagés, pas une voix |
 | Le host d'un bot secondaire hérite des **outils et de la délégation** du principal (L3-d) | la politique d'outils par bot (capacités) est appliquée au **worker** et aux runs de canal, pas encore au host local |
 | `/api/bots/<id>/actif` n'expose pas de route « Démarrer » distincte | c'est le MÊME état que `actif` (une seule vérité, deux commandes) |
 
@@ -430,6 +480,7 @@ Découpage livré (chaque morceau est vert et démarrable) :
 | **L8** ✅ | **état réel + démarrer/arrêter** (`src/bots/execution.ts`) |
 | **L9** ✅ | **arrêt ciblé** (`src/bots/arret.ts`) |
 | **L10** ✅ | **jetons et adaptateurs de plateforme par bot** (`src/chat/jetons-bot.ts`, `src/chat/adaptateurs-bots.ts`) |
+| **L11** ✅ | **délégation/jobs, mémoire et voix par bot** (`src/delegation/par-bot.ts`, `src/memory/services-bot.ts`) |
 
 ## Tests
 
@@ -636,3 +687,45 @@ l'instance réelle ci-dessus.
   `main()` au chargement) : le câblage est couvert par les **gardes statiques**,
   les **11 E2E** et l'**instance réelle** ci-dessus.
 
+### Campagne L11 (mesurée)
+
+- `tsc` vert sur **les deux** projets (`tsconfig.json` **et** `tsconfig.test.json`).
+- `npm test` **complet** : **412** fichiers verts (+ 3 ignorés), **4 623** tests
+  verts, **5** ignorés, **0** échec.
+- **11 E2E** verts, CSP **0**, connexion **0**, exceptions **0** :
+  `e2e-sources` 43/43, `e2e-chat-sessions` 36/36, `e2e-tts-ui` 116/116,
+  `e2e-memory` 23/23, `e2e-files` 71/71, `e2e-image` 124/124, `e2e-timestamp`
+  49/49, `e2e-mobile-ui` 40/40, `e2e-pins-agents` 59/59, `e2e-ack` 44/44,
+  `e2e-secret` 28/28. **Aucun PNG suivi** réécrit (les harnais écrivent dans des
+  dossiers temporaires) : `git status` final identique au départ, hors fichiers
+  du lot.
+- **Preuve d'échec sur l'origine** : arbre **propre** au départ (`git status`
+  vide, HEAD `847d136` — **aucun** commit externe pendant le lot), gelé **avant
+  toute écriture** dans `/tmp/preuve-lot36-L11/arbre-avant.tar.gz` (vérifié :
+  **`src/` présent**, 337 entrées ; les 2 modules et les 4 fichiers de tests du
+  lot **absents**). Sur `/tmp/preuve-lot36-L11/origine` (arbre HEAD + les 8
+  fichiers de tests du lot), **19 échecs / 14 réussites** sur 6 fichiers ; les 14
+  verts sont les gardes de **non-régression** du principal (identité, voix
+  d'instance), et c'est attendu.
+- **Instance RÉELLE à deux bots** (`yuki` + `kohai` actifs, fournisseur
+  OpenAI-compatible **simulé** local, volumes temporaires) — 12/12 mesures :
+
+| Mesure | Résultat |
+|---|---|
+| démarrage | `bots.hosts` (`nombre: 2`, `ids: yuki,kohai`) · `bots.hosts.demarres` (`kohai`) · `memory.service.bot` (**kohai**, `…/state/bots/kohai/memory.jsonl`) · `bots.worker.construit` (**kohai**) · **0** `bots.host.port_absent` · **0** ligne `error` |
+| job délégué par `kohai` | `jobs.jsonl` : événement `created` avec **`patch.botId: "kohai"`** et `lightSessionId` = la session de `kohai` ; premier tour + **run de rapport reçu par `kohai`** |
+| rapport publié chez son auteur | la session de `kohai` contient `RÉSULTAT-TACHE-KOHAI` **et** `compter les pommes` ; celle de `yuki` **ni l'un ni l'autre** |
+| `kohai` lit SA mémoire | requête légère de `kohai` : contient « derrière la serre » (sa mémoire) et **pas** « fond du jardin » (celle de `yuki`) |
+| `yuki` inchangé | sa requête contient « fond du jardin » et **pas** celle de `kohai` |
+
+**Gardes de test NOMMÉES (adaptées, jamais retirées)** :
+`tests/bots/hosts.test.ts` « la MÉMOIRE … est RETIRÉE » devient « **sans SERVICE de
+mémoire** … le port est RETIRÉ » (le cas d'absence reste vérifié) ;
+`tests/memory/write-model.test.ts` vise désormais la déclaration
+`const memoryExtractor = createSdkMemoryExtractor(` (l'extracteur est PARTAGÉ par
+les services de tous les bots).
+
+⚠️ **Invérifiable ici** : une vraie plateforme (Mattermost/Discord) pour le
+réveil d'un rapport DANS un canal avec le jeton du bot — couvert par les fixtures
+et par les gardes statiques, jamais par une connexion réelle (aucun jeton dans
+l'instance de vérification).

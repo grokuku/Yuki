@@ -245,6 +245,17 @@ export interface BotHostsPort {
   pourDemarre(botId: string): PiHost | undefined;
   /** Identifiants des bots connus (diagnostic/journal), si le port les connaît. */
   ids?(): string[];
+  /**
+   * ⚠️ LOT 36 (L11) — BOT PROPRIÉTAIRE d'un host.
+   *
+   * C'est ce qui permet au transport de choisir la CONFIGURATION du run qui
+   * parle (donc la voix, `tts.voice` étant une clé `bot`) : la source de
+   * l'événement est le host émetteur, jamais un bot deviné.
+   *
+   * Absent ⇒ aucun bot n'est nommé et le pipeline TTS garde la configuration
+   * d'instance (comportement d'avant L11).
+   */
+  botDe?(host: PiHost): string | undefined;
 }
 
 /**
@@ -888,7 +899,14 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         }
         return;
       case "run_started":
-        tts.onRunStarted(event.sessionId, event.runId, runT0.get(event.runId));
+        // ⚠️ LOT 36 (L11) : le run parle avec la VOIX de SON bot. Le principal
+        // reste `undefined` (donc configuration d'instance, à l'identique).
+        tts.onRunStarted(
+          event.sessionId,
+          event.runId,
+          runT0.get(event.runId),
+          source === host ? undefined : bots?.botDe?.(source),
+        );
         return;
       case "delta":
         if (event.channel === "content") {

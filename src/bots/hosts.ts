@@ -20,10 +20,11 @@
  *     délégation, fichiers, images, libraire, secrets, logger…) est celui de
  *     l'INSTANCE — un second jeu d'objets serait un second écrivain.
  *  3. **Un port qui n'existe pas pour un bot est RETIRÉ, jamais emprunté.**
- *     ⚠️ Le cas qui compte : la MÉMOIRE est un *service* (`MemoryPort`), pas un
- *     store — L3-b fournit les STORES d'un bot, pas son service. Un host de bot
- *     non principal n'a donc pas de port `memory` (il lirait sinon la mémoire du
- *     principal). C'est dit au journal (`bots.host.port_absent`), jamais tu.
+ *     ⚠️ LOT 36 (L11) : la MÉMOIRE est un *service* (`MemoryPort`), pas un store.
+ *     Depuis L11, `main()` en fournit un PAR BOT (`ServicesMemoireBots`, adossé
+ *     aux stores du bot) et il arrive par `ContexteHostBot.memoire`. S'il manque
+ *     (bot sans stores, double de test), le port est RETIRÉ et l'absence est dite
+ *     au journal (`bots.host.port_absent`) — jamais d'emprunt au principal.
  *
  * ⚠️ CE QUE CE MODULE NE FAIT PAS (L4) : router les messages vers le host d'un
  * bot non principal. Les routes d'instance, `getSubsystems` et le transport WS
@@ -85,6 +86,12 @@ export interface HostDemarrable {
  */export interface PortsHostBot {
   /** Répertoire des sessions JSONL de CE bot (`<pi>/agent/sessions/<id>`). */
   readonly sessionsDir: string;
+  /**
+   * ⚠️ LOT 36 (L11) : la MÉMOIRE de CE bot — un service adossé à SON
+   * `memory.jsonl` (`ServicesMemoireBots`). Absent ⇒ port RETIRÉ (le host du bot
+   * n'aurait aucune mémoire, ce qui est dit au journal).
+   */
+  readonly memory?: PiHostOptions["memory"];
   /** Prompt système de CE bot (`prompts.light` de SON overlay + consigne de voix). */
   readonly systemPrompt: string;
   /** Drain des notifications de SA pile de sources (L3-c). */
@@ -110,6 +117,16 @@ export interface HostDemarrable {
   readonly execution?: PiHostOptions["execution"];
   /** Capture d'écran DE CE BOT (même service que `execution`, port distinct). */
   readonly screenshots?: PiHostOptions["screenshots"];
+  /**
+   * ⚠️ LOT 36 (L11) : le port de DÉLÉGATION de CE BOT (`portDelegationBot`).
+   * Absent ⇒ aucun outil `delegate` pour ce host (jamais celui du principal).
+   */
+  readonly delegation?: PiHostOptions["delegation"];
+  /**
+   * ⚠️ LOT 36 (L11) : la source d'ÉVÉNEMENTS de CE BOT (`evenementsDuBot`) —
+   * seuls les jobs de ce bot sont relayés sur son bus.
+   */
+  readonly eventSource?: PiHostOptions["eventSource"];
 }
 
 /** Ce qu'un bot apporte à la construction de son host (jamais celui d'un autre). */
@@ -123,6 +140,23 @@ export interface ContexteHostBot {
   readonly outils?: OutilsBot;
   /** Pile sources DE CE BOT (L3-c). Absente ⇒ pas de drain, pas de tâches. */
   readonly pile?: PileSourcesBot;
+  /**
+   * ⚠️ LOT 36 (L11) : le SERVICE de mémoire de CE BOT (`ServicesMemoireBots`),
+   * adossé à ses stores (L3-b). Absent ⇒ le port `memory` est retiré du host.
+   */
+  readonly memoire?: PiHostOptions["memory"];
+  /**
+   * ⚠️ LOT 36 (L11) : le port de DÉLÉGATION de CE BOT (`portDelegationBot`) —
+   * le même service, mais chaque job créé porte SON `botId`. Absent ⇒ aucun
+   * outil `delegate` pour ce host (jamais celui du principal : un job sans
+   * `botId` serait attribué au mauvais bot).
+   */
+  readonly delegation?: PiHostOptions["delegation"];
+  /**
+   * ⚠️ LOT 36 (L11) : la source d'événements de CE BOT (`evenementsDuBot`) —
+   * seuls les jobs de ce bot sont relayés. Absente ⇒ aucun événement de job.
+   */
+  readonly eventSource?: PiHostOptions["eventSource"];
   /** Service d'exécution DE CE BOT (L6). Absent ⇒ port `execution` retiré. */
   readonly execution?: PiHostOptions["execution"];
   /** Capture d'écran DE CE BOT (L6). Absent ⇒ port `screenshots` retiré. */
@@ -149,16 +183,17 @@ export function portsHostBot(
   const absent: string[] = [];
   if (outils === undefined) absent.push("outils");
   if (pile === undefined) absent.push("sources");
-  // ⚠️ La MÉMOIRE n'est pas un store mais un service (`MemoryPort`) : L3-b
-  // n'en fournit pas par bot. On le DIT (une ligne) au lieu de laisser croire
-  // que le host d'un bot secondaire a une mémoire.
-  absent.push("memory");
+  // ⚠️ La MÉMOIRE est un service (`MemoryPort`), pas un store : depuis L11 il
+  // arrive par le contexte (`ServicesMemoireBots`). S'il manque, on le DIT (une
+  // ligne) au lieu de laisser croire que le host a une mémoire.
+  if (contexte.memoire === undefined) absent.push("memory");
   if (absent.length > 0) {
     logger?.info("bots.host.port_absent", { bot: contexte.botId, ports: absent.join(",") });
   }
 
   return {
     sessionsDir: contexte.env.piSessionsDir,
+    ...(contexte.memoire !== undefined ? { memory: contexte.memoire } : {}),
     // ⚠️ MÊME calcul que `main()` pour la pile (`promptLeger` + consigne de voix),
     // mais avec la configuration DE CE BOT : `prompts.light` et `tts.enabled` sont
     // des réglages MIXTES — la surcharge du bot l'emporte, sinon l'instance.
@@ -186,6 +221,8 @@ export function portsHostBot(
       : {}),
     ...(contexte.execution !== undefined ? { execution: contexte.execution } : {}),
     ...(contexte.screenshots !== undefined ? { screenshots: contexte.screenshots } : {}),
+    ...(contexte.delegation !== undefined ? { delegation: contexte.delegation } : {}),
+    ...(contexte.eventSource !== undefined ? { eventSource: contexte.eventSource } : {}),
     ...(outils !== undefined
       ? {
           personality: outils.personnalite,
@@ -241,9 +278,15 @@ export function optionsHostBot(
   // visibilité des agents y est figée) — posée si elle existe, retirée sinon.
   poserSinonRetirer(options, "execution", ports.execution);
   poserSinonRetirer(options, "screenshots", ports.screenshots);
-  // ⚠️ La mémoire n'a PAS de port par bot (voir `portsHostBot`) : on la retire au
-  // lieu de laisser le host d'un bot lire celle du principal.
-  delete options.memory;
+  // ⚠️ LOT 36 (L11) : la mémoire est CELLE DU BOT (son service, ses stores) ; si
+  // le contexte n'en fournit pas, elle est RETIRÉE plutôt qu'empruntée au
+  // principal (`delete` explicite : la copie de surface l'a héritée).
+  poserSinonRetirer(options, "memory", ports.memory);
+  // ⚠️ LOT 36 (L11) — LA DÉLÉGATION AUSSI EST PAR BOT : le port du principal crée
+  // des jobs SANS `botId` (donc attribués à lui). Un host secondaire reçoit le
+  // sien, ou aucun outil `delegate` — jamais celui d'un autre.
+  poserSinonRetirer(options, "delegation", ports.delegation);
+  poserSinonRetirer(options, "eventSource", ports.eventSource);
   return options;
 }
 
@@ -369,6 +412,21 @@ export class HostsBots<THost extends HostDemarrable> {
   /** Host d'un bot (principal inclus), ou `undefined`. */
   pour(botId: string): THost | undefined {
     return this.map.get(botId);
+  }
+
+  /**
+   * ⚠️ LOT 36 (L11) — BOT PROPRIÉTAIRE d'un host (`BotHostsPort.botDe`).
+   *
+   * Parcours de la Map par IDENTITÉ : c'est le seul moyen sûr de nommer le bot
+   * qui parle quand le transport ne reçoit qu'un host (TTS, journal). Un host
+   * inconnu (double de test, host arrêté) rend `undefined` — jamais le principal
+   * par défaut.
+   */
+  botDe(host: THost): string | undefined {
+    for (const [botId, candidat] of this.map) {
+      if (candidat === host) return botId;
+    }
+    return undefined;
   }
 
   /**

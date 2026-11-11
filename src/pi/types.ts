@@ -629,16 +629,33 @@ export type PiJobTerminalStatus =
 /**
  * Événements de vie d'un job relayés sur le bus de la façade. Ils sont produits
  * par la couche délégation et rattachés à la session LÉGÈRE propriétaire.
+ *
+ * ⚠️ LOT 36 (L11) — CHAQUE ÉVÉNEMENT PORTE SON `botId` : c'est ce qui permet au
+ * host d'un bot de ne relayer QUE les jobs de CE bot (`evenementsDuBot`,
+ * `src/delegation/par-bot.ts`). Absent ⇒ événement historique (mono-bot).
  */
 export type PiJobEvent =
-  | { type: "job_started"; sessionId: string; jobId: string; task?: string }
+  | {
+      type: "job_started";
+      sessionId: string;
+      jobId: string;
+      task?: string;
+      botId?: string;
+    }
   | {
       type: "job_finished";
       sessionId: string;
       jobId: string;
       status: PiJobTerminalStatus;
+      botId?: string;
     }
-  | { type: "job_report"; sessionId: string; jobId: string; runId?: string }
+  | {
+      type: "job_report";
+      sessionId: string;
+      jobId: string;
+      runId?: string;
+      botId?: string;
+    }
   /**
    * E3 — ACTIVITÉ d'un sous-agent (job d'arrière-plan) : progression et étapes,
    * pour le bloc REPLIÉ affiché DANS le fil de la conversation qui l'a lancé.
@@ -662,6 +679,8 @@ export type PiJobEvent =
       status?: PiJobTerminalStatus;
       /** Instant ISO de l'étape. */
       at: string;
+      /** ⚠️ LOT 36 (L11) : bot qui a délégué le job (voir `PiJobEvent`). */
+      botId?: string;
     };
 
 /** Événements normalisés émis par la façade. */

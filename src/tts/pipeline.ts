@@ -104,6 +104,21 @@ export interface TtsPipelineDeps {
   /** `tts.enabled === "on"`. Sinon, le pipeline est un no-op total. */
   enabled: boolean;
   config: TtsPipelineConfig;
+  /**
+   * ⚠️ LOT 36 (L11) — CONFIGURATION PAR BOT : `tts.voice`, `tts.emotion`,
+   * `tts.speed`, `tts.exaggeration` et `tts.cfg` sont des clés `bot` (voir
+   * `src/config/schema.ts`). Le run d'un bot doit donc parler avec SA voix, pas
+   * avec celle du principal.
+   *
+   * ⚠️ Le MOTEUR et la CONNEXION restent d'INSTANCE (`tts.engine`,
+   * `tts.baseUrl`, `tts.timeoutMs`, prefetch, bornes de segmentation) : le
+   * moteur est un processus partagé, pas un par bot. Un `configPour` rendu par
+   * `main()` est la vue FUSIONNÉE du bot (surcharge + instance), donc les clés
+   * d'instance y gardent leur valeur.
+   *
+   * Absent ⇒ `config` pour tous les runs (comportement d'avant L11).
+   */
+  configPour?: (botId: string | undefined) => TtsPipelineConfig;
   synthesizer: SegmentSynthesizer;
   /**
    * Résout l'id de voix configuré (`tts.voice`) en voix à utiliser : un id
@@ -132,6 +147,8 @@ export interface TtsPipelineCallbacks {
 interface TtsRun {
   sessionId: string;
   runId: string;
+  /** ⚠️ LOT 36 (L11) : la configuration du BOT de ce run (voix, émotion, débit). */
+  config: TtsPipelineConfig;
   t0: number;
   segmenter: SentenceSegmenter;
   queue: TtsQueue;
@@ -198,17 +215,30 @@ export class TtsPipeline {
    * précédents (spec §7 : « la voix de la réponse précédente ne survit jamais à
    * un nouveau tour »).
    */
-  onRunStarted(sessionId: string, runId: string, t0?: number): void {
+  onRunStarted(
+    sessionId: string,
+    runId: string,
+    t0?: number,
+    /**
+     * ⚠️ LOT 36 (L11) : le bot qui parle. Il choisit la configuration du run
+     * (donc SA voix) ; absent ⇒ la configuration d'instance (principal).
+     */
+    botId?: string,
+  ): void {
     if (!this.deps.enabled) return;
     for (const other of [...this.runs.values()]) {
       if (other.sessionId === sessionId && other.runId !== runId) {
         this.cancelRun(other, "superseded");
       }
     }
+    // ⚠️ La configuration est FIGÉE au démarrage du run : une voix ne change pas
+    // au milieu d'une réponse, même si le réglage est modifié entre-temps.
+    const config = this.configDe(botId);
     const prefetch = Math.max(0, Math.floor(this.deps.config.getNumber("tts.prefetchDepth")));
     this.runs.set(runId, {
       sessionId,
       runId,
+      config,
       t0: t0 ?? this.now(),
       segmenter: new SentenceSegmenter({
         minChars: this.deps.config.getNumber("tts.minSentenceChars"),
@@ -328,9 +358,9 @@ export class TtsPipeline {
       try {
         this.stage(run, PHASE.ttsRequested);
         const stream = await this.deps.synthesizer({
-          voice: this.resolveVoice(),
+          voice: this.resolveVoice(run.config),
           text: segment.text,
-          options: readTtsOptions(this.deps.config),
+          options: readTtsOptions(run.config),
           engine: this.deps.config.getString("tts.engine"),
           signal: controller.signal,
         });
@@ -404,12 +434,21 @@ export class TtsPipeline {
     run.synthMs += Math.max(0, this.now() - requestedAt);
   }
 
-  private resolveVoice(): Voice | null {
+  /**
+   * Configuration EFFECTIVE d'un run : celle du bot quand elle est connue,
+   * sinon celle d'instance (comportement d'avant L11, à l'identique).
+   */
+  private configDe(botId: string | undefined): TtsPipelineConfig {
+    if (botId === undefined) return this.deps.config;
+    return this.deps.configPour?.(botId) ?? this.deps.config;
+  }
+
+  private resolveVoice(config: TtsPipelineConfig): Voice | null {
     // On DÉLÈGUE toujours, y compris pour un id vide : le résolveur applique la
     // voix par défaut du registre (premier preset). Auparavant, un `tts.voice`
     // vide court-circuitait en `null` → aucun `voice_ref` envoyé au moteur
     // (Chatterbox refusait alors « requires speaker reference audio »).
-    const id = this.deps.config.getString("tts.voice").trim();
+    const id = config.getString("tts.voice").trim();
     const voice = this.deps.resolveVoice(id);
     if (!voice) {
       this.deps.logger.warn("tts.voice.unresolved", { id });

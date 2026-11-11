@@ -620,6 +620,38 @@ export function portPreAutorisations(
 }
 
 /**
+ * ⚠️ LOT 36 (L11) — BRANCHEMENT DES PRÉ-AUTORISATIONS, UN PORT PAR BOT.
+ *
+ * Ce que ce module ferme : le démarrage branchait le MÊME port sur TOUS les
+ * services d'exécution (`executionsAgents.pourChacun(setPreAutorisations)`). Or
+ * ce port était lié à la fermeture `botDuRun` — figée sur le bot de la pile. Un
+ * job de `kohai` consommait donc l'autorisation de `yuki` : ou rien (refus
+ * silencieux), ou l'autorisation d'un autre nom.
+ *
+ * ⚠️ La consommation suit désormais le BOT DU SERVICE : chaque service reçoit le
+ * port de SON registre (`portPour(botId)`), donc son fichier
+ * `preautorisations.json` et son journal.
+ */
+export interface ExecutionsABrancher<T> {
+  pourChacun(action: (execution: T, botId: string) => void): void;
+}
+
+/** Service qui accepte un port de pré-autorisations (`AgentExecutionService`). */
+export interface ServicePreAutorisable {
+  setPreAutorisations?(port: { consommer(demande: DemandeConsommation): ResultatConsommation }): void;
+}
+
+export function brancherPreAutorisationsParBot<T extends ServicePreAutorisable>(
+  executions: ExecutionsABrancher<T>,
+  portPour: (botId: string) => { consommer(demande: DemandeConsommation): ResultatConsommation },
+): void {
+  executions.pourChacun((execution, botId) => {
+    if (typeof execution.setPreAutorisations !== "function") return;
+    execution.setPreAutorisations(portPour(botId));
+  });
+}
+
+/**
  * Prédicat « cet agent est-il visible pour CE bot ? » (`AgentRecord.bots`, lot 35g).
  *
  * ⚠️ Un enregistrement ABSENT de l'annuaire n'est pas filtré : il n'y a pas de
