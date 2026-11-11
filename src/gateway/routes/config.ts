@@ -34,6 +34,7 @@ import {
   type RegistreBots,
 } from "../../bots/registry.js";
 import type { EtatExecutionBot, ExecutionBots } from "../../bots/execution.js";
+import { normaliserPlafond } from "../../bots/actifs.js";
 import {
   AdminBotError,
   RETENTION_ARCHIVES_JOURS,
@@ -41,6 +42,7 @@ import {
   compterSessionsPi,
   creerBot,
   definirActif,
+  definirEchange,
   modifierBot,
   supprimerBot,
 } from "../../bots/admin.js";
@@ -694,9 +696,87 @@ function botInconnu(botId: string): ConfigHttpResponse {
 /**
  * `GET /api/bots` — liste des bots (`id`, `nom`, `capacites`, `actif`, `ordre`).
  * Sert au sélecteur de la page d'un bot et à la liste des cases de capacités.
+ *
+ * ⚠️ LOT 37 — la réponse porte AUSSI ce que le sélecteur de la barre du haut doit
+ * dire VRAI : `plafond` (`bots.maxActifs`, 3 par défaut), `principal` (le bot de
+ * la PILE, seul à tourner avec le gateway) et `echanges` (les boucles on/off
+ * entre bots). Le `plafond` est là pour qu'un refus ou un bandeau ne prétende
+ * jamais « un seul bot » alors que trois peuvent tourner.
  */
 function handleBotsList(deps: ConfigApiDeps): ConfigHttpResponse {
-  return json(200, { bots: botsConnus(deps) });
+  return json(200, {
+    bots: botsConnus(deps),
+    plafond: normaliserPlafond(deps.bots?.maxActifs),
+    principal: deps.runtime.botId,
+    echanges: { ...(deps.bots?.registre?.echanges ?? {}) },
+  });
+}
+
+/**
+ * `PATCH /api/bots/echanges` — ALLUME ou ÉTEINT la BOUCLE entre deux bots.
+ *
+ * Corps : `{ de, vers, actif }` — `echanges["de->vers"] = { actif }`.
+ * ⚠️ Aucun frein par paire (décision utilisateur) : ce booléen est le SEUL
+ * garde-fou, et la paire est ORIENTÉE.
+ */
+function handleBotEchange(input: ConfigRequestInput): ConfigHttpResponse {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+  const deps = input.deps;
+  const registre = deps.bots?.registre ?? null;
+  if (!registre) {
+    return json(409, {
+      error: "registre_absent",
+      code: "registre_absent",
+      message:
+        "L'instance n'est pas en mode multi-bot (aucun `state/bots.json`) : " +
+        "aucune boucle entre bots ne peut être réglée.",
+    });
+  }
+  const stateDir = deps.bots?.stateDir;
+  if (!stateDir) {
+    return json(503, {
+      error: "bots_admin_indisponible",
+      code: "bots_admin_indisponible",
+      message: "Administration des bots indisponible : volume `state` inconnu.",
+    });
+  }
+  const corps = lireCorpsObjet(input.body);
+  if (!corps.ok) return corps.response;
+  const de = corps.value["de"];
+  const vers = corps.value["vers"];
+  if (typeof de !== "string" || typeof vers !== "string") {
+    return json(400, {
+      error: "echange_invalide",
+      code: "echange_invalide",
+      message: "Les champs « de » et « vers » doivent nommer deux bots.",
+    });
+  }
+  try {
+    const resultat = definirEchange({
+      stateDir,
+      registre,
+      de,
+      vers,
+      actif: corps.value["actif"],
+    });
+    // ⚠️ Le registre EN MÉMOIRE suit l'écriture (c'est lui que lit `GET /api/bots`).
+    if (deps.bots && !resultat.inchange) deps.bots.registre = resultat.registre;
+    deps.logger.info("bots.echange", {
+      cle: resultat.cle,
+      actif: resultat.actif,
+      inchange: resultat.inchange,
+      flow: configWriteFlow(input.headers),
+    });
+    return json(200, {
+      cle: resultat.cle,
+      actif: resultat.actif,
+      inchange: resultat.inchange,
+      echanges: resultat.echanges,
+    });
+  } catch (error) {
+    return adminBotError(deps, error);
+  }
 }
 
 /** `GET /api/bots/<id>/config` — valeurs effectives du bot demandé. */
@@ -1370,6 +1450,12 @@ export async function handleConfigRequest(
     if (method === "GET" || method === "HEAD") return handleBotsList(input.deps);
     // ⚠️ CRÉATION (lot 35e) : dossier + entrée du registre (+ clone éventuel).
     if (method === "POST") return handleBotsCreate(input);
+    return json(405, { error: "method_not_allowed", method });
+  }
+  // ⚠️ LOT 37 — ON/OFF DE LA BOUCLE ENTRE DEUX BOTS. Traité AVANT le routage
+  // par bot : sinon `echanges` serait pris pour un IDENTIFIANT de bot (404).
+  if (path === "/api/bots/echanges") {
+    if (method === "PATCH" || method === "POST") return handleBotEchange(input);
     return json(405, { error: "method_not_allowed", method });
   }
   const racine = botRacineOfPath(path);

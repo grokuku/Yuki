@@ -70,6 +70,7 @@ import {
   cheminRegistreBots,
   type BotRecord,
   type CapaciteBot,
+  type EchangeBots,
   type RegistreBots,
 } from "./registry.js";
 import { MAX_ACTIFS_DEFAUT, botsAActiver, normaliserPlafond } from "./actifs.js";
@@ -127,7 +128,9 @@ export type CodeAdminBot =
   // LOT 36 (L2) — on/off d'un bot.
   | "actif_invalide"
   | "plafond_actifs"
-  | "dernier_bot_actif";
+  | "dernier_bot_actif"
+  // LOT 37 — on/off de la BOUCLE entre deux bots (`echanges["a->b"].actif`).
+  | "echange_invalide";
 
 /** Refus EXPLICITE (code stable + message français actionnable). */
 export class AdminBotError extends Error {
@@ -706,6 +709,98 @@ export function definirActif(options: OptionsDefinirActif): ResultatDefinirActif
     demarrageRequis: actif,
     arretRequis: !actif,
   };
+}
+
+/** Clé de registre d'une paire d'échanges : `"<source>-><cible>"`. */
+export function cleEchange(source: string, cible: string): string {
+  return `${source}->${cible}`;
+}
+
+export interface OptionsDefinirEchange {
+  /** Volume `state` (le registre vit à sa racine). */
+  stateDir: string;
+  /** Registre courant (déjà lu : aucun accès disque en lecture). */
+  registre: RegistreBots;
+  /** Bot SOURCE de la boucle. */
+  de: string;
+  /** Bot CIBLE de la boucle. */
+  vers: string;
+  /** `true` = la boucle entre ces deux bots est autorisée. Tout autre type est refusé. */
+  actif: unknown;
+}
+
+export interface ResultatDefinirEchange {
+  registre: RegistreBots;
+  /** Clé écrite (`"<source>-><cible>"`). */
+  cle: string;
+  /** État ÉCRIT. */
+  actif: boolean;
+  /** `true` ⇒ la paire était DÉJÀ dans l'état demandé : AUCUNE écriture. */
+  inchange: boolean;
+  /** Paires APRÈS l'appel (le registre entier : l'UI n'a rien à recalculer). */
+  echanges: Record<string, EchangeBots>;
+}
+
+/**
+ * ALLUME ou ÉTEINT la BOUCLE entre deux bots (lot 37, décision utilisateur).
+ *
+ * ⚠️ C'est le SEUL garde-fou d'une paire, et il n'y a **aucun frein par paire** :
+ * `echanges["a->b"] = { actif }`, rien d'autre (le schéma REFUSE tout autre champ,
+ * `src/bots/registry.ts:419-430`). Un compteur éventuel restera informatif.
+ *
+ * ⚠️ La paire est ORIENTÉE : `a->b` (a peut joindre b) n'est pas `b->a`.
+ * ⚠️ `de === vers` est REFUSÉ : un bot ne se délègue pas à lui-même.
+ */
+export function definirEchange(options: OptionsDefinirEchange): ResultatDefinirEchange {
+  const registre = options.registre;
+  const de = options.de;
+  const vers = options.vers;
+  for (const [cote, botId] of [
+    ["source", de],
+    ["cible", vers],
+  ] as const) {
+    if (!registre.bots.some((bot) => bot.id === botId)) {
+      throw new AdminBotError(
+        "bot_inconnu",
+        404,
+        `Bot ${cote} inconnu : « ${botId} ».`,
+      );
+    }
+  }
+  if (de === vers) {
+    throw new AdminBotError(
+      "echange_invalide",
+      400,
+      `Un bot ne peut pas échanger avec lui-même : « ${de} ».`,
+    );
+  }
+  if (typeof options.actif !== "boolean") {
+    throw new AdminBotError(
+      "echange_invalide",
+      400,
+      "Le champ « actif » doit être un BOOLÉEN (`true` = la boucle est autorisée).",
+    );
+  }
+  const actif = options.actif;
+  const cle = cleEchange(de, vers);
+  const existant = registre.echanges[cle];
+  if (existant !== undefined && existant.actif === actif) {
+    return {
+      registre,
+      cle,
+      actif,
+      inchange: true,
+      echanges: { ...registre.echanges },
+    };
+  }
+  const echanges: Record<string, EchangeBots> = { ...registre.echanges, [cle]: { actif } };
+  const suivant: RegistreBots = { ...registre, echanges };
+  try {
+    ecrireRegistreBots(cheminRegistreBots(options.stateDir), suivant);
+  } catch (error) {
+    throw traduireErreurFichier(error, "L'enregistrement de la boucle a échoué");
+  }
+  return { registre: suivant, cle, actif, inchange: false, echanges };
 }
 
 /** Copie les éléments demandés d'un bot existant (aucune écriture hors du clone). */

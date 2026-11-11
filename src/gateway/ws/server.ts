@@ -1468,14 +1468,30 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
     const target = hostPourBot(botId);
     if (!target) {
+      /**
+       * ⚠️ LOT 37 — LE MESSAGE DIT LA VÉRITÉ UTILE : *arrêté* ou *inexistant*,
+       * la LISTE réelle des bots connus, et LE GESTE qui répare (le sélecteur
+       * de la barre du haut). Avant, « inconnu ou arrêté » laissait croire que
+       * l'instance n'avait qu'un bot et aucun moyen d'en démarrer un autre.
+       */
+      const connus = bots?.ids?.();
+      const liste = Array.isArray(connus) ? [...connus].sort() : [];
+      const existe = liste.includes(botId);
+      const noms = liste.length > 0 ? liste.join(", ") : "aucun bot lisible";
       sendDirect(client, {
         type: "error",
         code: "bot_inconnu",
-        message:
-          `Le bot « ${botId} » est inconnu ou arrêté : aucun host ne peut lui ` +
-          "répondre. Aucune conversation n'a été ouverte.",
+        botId,
+        existe,
+        bots: liste,
+        message: existe
+          ? `Le bot « ${botId} » est ARRÊTÉ : aucun host ne peut lui répondre. ` +
+            "Démarrez-le depuis la barre du haut (avatar → « Démarrer »), puis " +
+            `rouvrez cette conversation. Bots connus : ${noms}.`
+          : `Le bot « ${botId} » n'existe pas sur cette instance. Bots connus : ` +
+            `${noms} — choisissez-en un dans la barre du haut (avatar).`,
       });
-      logger.warn("ws.bot.refuse", { bot: botId });
+      logger.warn("ws.bot.refuse", { bot: botId, existe });
       return false;
     }
     client.botId = botId;

@@ -388,7 +388,22 @@ export type ServerMessage =
       jobs?: SessionJobInfo[];
       transcript: TranscriptEntry[];
     }
-  | { type: "error"; code: string; message: string; runId?: string; requestId?: string }
+  | {
+      type: "error";
+      code: string;
+      message: string;
+      runId?: string;
+      requestId?: string;
+      /**
+       * LOT 37 — REFUS D'UN BOT (`bot_inconnu`) : le bot demandé, s'il EXISTE
+       * vraiment sur l'instance, et la LISTE des bots connus. C'est ce qui
+       * permet au message de dire « arrêté » plutôt qu'« inconnu », et
+       * d'indiquer le geste qui répare (barre du haut → avatar → Démarrer).
+       */
+      botId?: string;
+      existe?: boolean;
+      bots?: string[];
+    }
   | {
       /**
        * PROGRESSION d'une COMPACTION FORCÉE (trame de CONTRÔLE : aucun `seq`
