@@ -537,6 +537,9 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     const bilan = await hosts.demarrerAutres();
     expect(bilan.demarres).toEqual(["kohai"]);
     expect(bilan.echecs).toEqual(["senpai"]);
+    // ⚠️ LOT 38 : la RAISON de l'échec est rendue (pas seulement journalisée) —
+    // c'est elle que `GET /api/bots` expose et que l'interface affiche.
+    expect(bilan.raisons.senpai).toBe("modèle indisponible");
     expect(hosts.pourDemarre("kohai")).toBeDefined();
     expect(hosts.pourDemarre("senpai")).toBeUndefined();
     expect(hosts.estDemarre("senpai")).toBe(false);
@@ -697,7 +700,7 @@ describe("ports d'un bot secondaire (lot 36, L3-d)", () => {
     expect(sans.eventSource).toBeUndefined();
   });
 
-  it("un bot sans configuration n'a pas de host (jamais le prompt d'un autre)", () => {
+  it("un bot sans configuration n'a pas de host (jamais le prompt d'un autre)", async () => {
     const b = avecRegistre([bot("yuki", 0, true), bot("kohai", 1, true)]);
     const configs = configsDeTest(b, ["yuki", "kohai"], "yuki");
     const journal = journalFactice();
@@ -722,9 +725,14 @@ describe("ports d'un bot secondaire (lot 36, L3-d)", () => {
         (ligne) => ligne.message === "bots.host.config_absente" && ligne.champs.bot === "kohai",
       ),
     ).toBe(true);
+    // ⚠️ LOT 38 : le démarrage rend la CAUSE (la configuration manque), au lieu
+    // d'un identifiant nu que l'utilisateur ne peut pas interpréter.
+    const bilan = await hosts.demarrerAutres();
+    expect(bilan.echecs).toEqual(["kohai"]);
+    expect(bilan.raisons.kohai).toContain("configuration est incomplète");
   });
 
-  it("deux hosts ne partagent JAMAIS un `sessionsDir` (garde de corruption)", () => {
+  it("deux hosts ne partagent JAMAIS un `sessionsDir` (garde de corruption)", async () => {
     const b = avecRegistre([bot("yuki", 0, true), bot("kohai", 1, true)]);
     const configs = configsDeTest(b, ["yuki", "kohai"], "yuki");
     const journal = journalFactice();
@@ -749,6 +757,10 @@ describe("ports d'un bot secondaire (lot 36, L3-d)", () => {
           ligne.message === "bots.host.sessions_dir_partage" && ligne.champs.bot === "kohai",
       ),
     ).toBe(true);
+    // ⚠️ LOT 38 : la raison NOMME le dossier partagé (le symptôme dit).
+    const bilan = await hosts.demarrerAutres();
+    expect(bilan.echecs).toEqual(["kohai"]);
+    expect(bilan.raisons.kohai).toContain("dossier de sessions est celui du bot de l'instance");
   });
 });
 

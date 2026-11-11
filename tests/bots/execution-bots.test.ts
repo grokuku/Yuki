@@ -198,7 +198,7 @@ describe("DÉMARRER — crée la pile puis le host", () => {
     expect(issue.ok).toBe(true);
     expect(issue.inchange).toBe(true);
     expect(b.pilesOuvertes).toEqual([]);
-    expect(issue.raison).toContain("principal");
+    expect(issue.raison).toContain("instance");
   });
 });
 
@@ -245,7 +245,7 @@ describe("ARRÊTER — détruit host et pile", () => {
     const b = banc();
     const issue = await b.execution.arreter("yuki");
     expect(issue.ok).toBe(false);
-    expect(issue.raison).toContain("principal");
+    expect(issue.raison).toContain("instance");
     expect(b.appels).toEqual([]);
   });
 
@@ -272,5 +272,36 @@ describe("ARRÊTER — détruit host et pile", () => {
     expect(issue.ok).toBe(false);
     expect(issue.raison).toContain("memory");
     expect(execution.etat("kohai").erreur).toContain("memory");
+  });
+});
+
+// ─── ⑦ LOT 38 — LA RAISON D'UN ÉCHEC DE DÉMARRAGE EST AFFICHABLE ──────────
+
+describe("⑦ une raison d'échec constatée au démarrage est MÉMORISÉE", () => {
+  it("`noterErreurs` rend la cause réelle dans `etat()`, puis un succès l'efface", async () => {
+    const hosts = hostsFactices();
+    const execution = new ExecutionBots({
+      botDePile: "yuki",
+      hosts: hosts.port,
+      ouvrirPile: () => undefined,
+      sessions: () => 0,
+      workers: { a: () => false },
+      logger: journalEspion(),
+    });
+
+    execution.noterErreurs({
+      kohai: "« kohai » n'a pas pu démarrer : son dossier de sessions est celui du bot de l'instance.",
+    });
+
+    const etat = execution.etat("kohai");
+    expect(etat.demarre).toBe(false);
+    expect(etat.erreur).toContain("dossier de sessions");
+    // Une raison vide n'écrase rien (jamais une erreur muette).
+    execution.noterErreurs({ kohai: "   " });
+    expect(execution.etat("kohai").erreur).toContain("dossier de sessions");
+    // Démarrer avec succès efface la raison (l'état ne ment pas dans l'autre sens).
+    await execution.demarrer("kohai");
+    expect(execution.etat("kohai").demarre).toBe(true);
+    expect(execution.etat("kohai").erreur).toBeUndefined();
   });
 });

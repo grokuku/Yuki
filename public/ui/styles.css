@@ -64,8 +64,140 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* LOT 38 : la rangée d'avatars peut défiler dans son cadre plutôt que de
+   * pousser le nom et les pilules hors de la barre. */
+  min-width: 0;
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+
+/* ─── LOT 38 : RANGÉE D'AVATARS INLINE DE LA BARRE DU HAUT ────────────────
+ *
+ * Un avatar par bot, côte à côte, À GAUCHE du nom. Le clic bascule
+ * immédiatement (aucun panneau intermédiaire).
+ *
+ * ⚠️ DÉBORDEMENT : l'instance est plafonnée à 6 bots (`MAX_BOTS`, registre) ;
+ * 6 × 24 px + les écarts tiennent dans une barre de téléphone. Malgré cela la
+ * rangée est un cadre DÉFILANT (`overflow-x: auto`, largeur bornée en mobile) :
+ * si un jour il y en avait plus, RIEN ne déborderait et AUCUN bot ne serait
+ * caché derrière une troncature (un « … » imposerait un second clic, contraire
+ * au but « un clic = un bot »). Aucun style inline : CSP `style-src 'self'`. */
+.bot-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* ⚠️ La rangée GARDE sa largeur naturelle (sinon `min-width: 0` la laisse
+   * s'écraser à un seul avatar dans une barre chargée). Elle est bornée par
+   * `max-width` et défile au-delà. */
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.bot-bar__item {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel-3);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.bot-bar__item:hover {
+  background: var(--panel-hover);
+}
+
+.bot-bar__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Le bot AFFICHÉ est démarqué par une CLASSE (jamais un style inline). */
+.bot-bar__item--courant {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Un bot ARRÊTÉ reste VISIBLE : contour en pointillé + pastille d'état. */
+.bot-bar__item--arrete {
+  border-style: dashed;
+}
+
+.bot-bar__avatar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.bot-bar__avatar .avatar--brand {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* Marqueur d'état DISCRET (couleur portée par la classe du parent). */
+.bot-bar__etat {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--panel);
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.bot-bar__item--arrete .bot-bar__etat,
+.bot-bar__item--inconnu .bot-bar__etat {
+  background: var(--muted);
+}
+
+.bot-bar__item--erreur .bot-bar__etat,
+.bot-bar__item--refuse .bot-bar__etat {
+  background: var(--danger);
+}
+
+/* Badge de NON-LUS par bot : un point pour 1, le nombre au-delà. */
+.bot-bar__badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border: 1px solid var(--panel);
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 8.5px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+}
+
+.bot-bar__badge[hidden] {
+  display: none;
 }
 
 /* ─── AVATAR de Yuki ──────────────────────────────────────────────────────
@@ -140,6 +272,17 @@ body {
 .brand__bot-glyphe {
   font-size: 17px;
   line-height: 1;
+}
+
+/* « … » : le panneau (Ajouter / Retirer) reste toujours à portée de clic. */
+.brand__plus {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+}
+
+.brand__bot:hover .brand__plus {
+  color: var(--text);
 }
 
 .bot-switcher {
@@ -248,6 +391,7 @@ body {
  * pas encore d'image servie par le gateway (limite dite dans la documentation). */
 .bot-switcher__avatar {
   flex: 0 0 auto;
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -263,6 +407,8 @@ body {
 }
 
 .bot-switcher__avatar .avatar--brand {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   border: 0;
@@ -310,18 +456,21 @@ body {
   font-weight: 600;
 }
 
-/* État RÉEL (exécution), jamais le drapeau `actif` seul. */
+/* État RÉEL (exécution), jamais le drapeau `actif` seul.
+ * ⚠️ LOT 38 : le libellé porte désormais la RAISON réelle d'un échec (message
+ * du serveur), qui peut être longue ⇒ il passe à la ligne au lieu d'être
+ * tronqué par une ellipse (un « … » cacherait justement ce qu'on veut lire). */
 .bot-switcher__etat {
   flex: 0 0 auto;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 8px;
   font-size: 11px;
+  line-height: 1.35;
   color: var(--muted);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .bot-switcher__etat--demarre,
@@ -3305,25 +3454,31 @@ h6.md-heading {
   /* Barre du haut compacte : une seule rangée de taille réduite (les
      informations — connexion, état, badge anti-mensonge, file, notifications,
      thème, voix — restent TOUTES présentes ; rien n'est retiré). */
-  /* B — en téléphone le NOM disparaît (barre compacte) mais l'AVATAR reste :
-     c'est le seul endroit où il est visible sur le téléphone de l'utilisateur.
-     Sans avatar, toute la marque est masquée : aucun trou dans la barre. */
+  /* B — LOT 38 : la RANGÉE d'avatars reste visible en téléphone (22 px), avec
+     le nom à sa droite. C'est le seul endroit où la bascule est toujours
+     atteignable au doigt ; le panneau remonte du bas comme avant. */
   .brand {
     display: none;
-  }
+    gap: 6px;
+    min-width: 0;
+ }
 
   .brand__name {
-    display: none;
+    /* Le nom reste affiché, mais borné : il ne pousse jamais les pilules. */
+    display: inline-block;
+    max-width: 74px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   body.has-avatar .brand {
     display: flex;
   }
 
-  /* LOT 37 — une instance à PLUSIEURS bots révèle aussi la marque en
-   * téléphone : la barre du haut est le SEUL endroit toujours visible, c'est
-   * donc là que la bascule doit vivre. Une instance MONO-bot sans avatar garde
-   * exactement la barre d'avant (aucun contrôle ajouté). */
+  /* LOT 37/38 — dès que l'instance a des bots, la rangée (et le nom) reste
+   * visible : la barre du haut est le SEUL endroit toujours visible, c'est
+   * donc là que la bascule doit vivre. */
   body.has-bot-switcher .brand {
     display: flex;
   }
@@ -3333,9 +3488,34 @@ h6.md-heading {
     height: 22px;
   }
 
-  .brand__bot {
+  .bot-bar {
+    /* Cadre DÉFILANT borné : la rangée ne pousse ni le nom ni les pilules. */
+    max-width: 52vw;
+    gap: 5px;
+  }
+
+  .brand {
+    flex: 0 0 auto;
+  }
+
+  .bot-bar__item {
     width: 22px;
     height: 22px;
+  }
+
+  .bot-bar__badge {
+    min-width: 11px;
+    height: 11px;
+    font-size: 8px;
+    line-height: 11px;
+  }
+
+  .brand__bot {
+    padding: 2px 2px;
+  }
+
+  .brand__plus {
+    display: none;
   }
 
   /* Le panneau remonte du BAS de l'écran (feuille) : sur 390 px de large, un

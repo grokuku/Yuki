@@ -323,6 +323,13 @@ export interface BilanDemarrageHosts {
   readonly demarres: readonly string[];
   /** Bots dont le host a REFUSÉ de démarrer (nommés, jamais tus). */
   readonly echecs: readonly string[];
+  /**
+   * ⚠️ POURQUOI CHAQUE ÉCHEC (lot 38) : un identifiant dans `echecs` ne dit pas
+   * à l'utilisateur quoi corriger. Cette table porte le message RÉEL (config
+   * absente, dossier de sessions partagé, exception de `host.start()`), que
+   * `main()` confie à `ExecutionBots` pour que `GET /api/bots` l'affiche.
+   */
+  readonly raisons: Readonly<Record<string, string>>;
 }
 
 /**
@@ -339,6 +346,13 @@ export class HostsBots<THost extends HostDemarrable> {
   private readonly options: OptionsHostsBots<THost>;
   private readonly map = new Map<string, THost>();
   private readonly demarres = new Set<string>();
+  /**
+   * Raisons des hosts qui n'ont PAS pu être construits (lot 38) : elles sont
+   * rendues au démarrage pour être affichées, au lieu de ne vivre que dans le
+   * journal — c'est ce qui laissait « arrêtée (erreur au démarrage) » sans
+   * explication.
+   */
+  private readonly refus = new Map<string, string>();
   /** Le host du bot de la PILE — EXACTEMENT celui d'avant L3-d. */
   readonly principal: THost;
 
@@ -362,24 +376,49 @@ export class HostsBots<THost extends HostDemarrable> {
     });
   }
 
-  /** Construit (ou refuse, en le DISANT) le host d'un bot non principal. */
+  /** Construit (ou refuse, en le DISANT et en le RETENANT) le host d'un bot non principal. */
   private construire(botId: string): boolean {
     const options = this.options;
-    const contexte = options.contexte(botId);
+    let contexte: ContexteHostBot | undefined;
+    try {
+      contexte = options.contexte(botId);
+    } catch (error) {
+      // ⚠️ Le contexte peut LEVER (pile du bot illisible) : sa raison est plus
+      // précise que tout message générique — on la garde telle quelle.
+      this.refus.set(botId, `« ${botId} » n'a pas pu être préparé : ${messageOf(error)}`);
+      options.logger.warn("bots.host.contexte_echec", { bot: botId, error: messageOf(error) });
+      return false;
+    }
     if (contexte === undefined) {
+      this.refus.set(
+        botId,
+        `« ${botId} » n'a pas pu être préparé : ses fichiers ou sa configuration ` +
+          "sont incomplets (voir le journal du gateway).",
+      );
       options.logger.warn("bots.host.contexte_absent", { bot: botId });
       return false;
     }
     const ports = portsHostBot(contexte, options.logger);
     if (ports === undefined) {
+      this.refus.set(
+        botId,
+        `« ${botId} » n'a pas pu démarrer : sa configuration est incomplète ` +
+          "(le prompt du bot est absent).",
+      );
       options.logger.warn("bots.host.config_absente", { bot: botId });
       return false;
     }
     // ⚠️ DEUX hosts sur le même `sessionsDir` se disputeraient les mêmes JSONL
     // (deux `SessionManager` sur un fichier) : on REFUSE le second host plutôt
     // que de corrompre les sessions. Symptôme d'un `Env` mal résolu, pas d'une
-    // configuration utilisateur.
+    // configuration utilisateur — mais la raison est DITE, avec le dossier.
     if (ports.sessionsDir === options.optionsPile.sessionsDir) {
+      this.refus.set(
+        botId,
+        `« ${botId} » n'a pas pu démarrer : son dossier de sessions est celui du ` +
+          `bot de l'instance (${ports.sessionsDir}). Deux bots ne peuvent pas ` +
+          "partager ce dossier.",
+      );
       options.logger.warn("bots.host.sessions_dir_partage", {
         bot: botId,
         sessions_dir: ports.sessionsDir,
@@ -387,11 +426,17 @@ export class HostsBots<THost extends HostDemarrable> {
       return false;
     }
     this.map.set(botId, options.creer(optionsHostBot(botId, options.optionsPile, ports)));
+    this.refus.delete(botId);
     options.logger.info("bots.host.construit", {
       bot: botId,
       sessions_dir: ports.sessionsDir,
     });
     return true;
+  }
+
+  /** Raison pour laquelle ce bot n'a pas de host, ou `undefined`. */
+  raisonRefus(botId: string): string | undefined {
+    return this.refus.get(botId);
   }
 
   /** Tous les hosts, dans l'ordre de construction (principal d'abord). */
@@ -466,6 +511,17 @@ export class HostsBots<THost extends HostDemarrable> {
   async demarrerAutres(): Promise<BilanDemarrageHosts> {
     const demarres: string[] = [];
     const echecs: string[] = [];
+    const raisons: Record<string, string> = {};
+    // ⚠️ Les bots dont le host a été REFUSÉ à la construction (config absente,
+    // sessions partagées) ne sont pas dans `map` : sans ce report, leur échec
+    // n'aurait AUCUNE raison affichable.
+    for (const botId of this.options.bots) {
+      if (botId === this.options.pile || this.map.has(botId)) continue;
+      echecs.push(botId);
+      raisons[botId] =
+        this.refus.get(botId) ??
+        `Le bot « ${botId} » n'a pas pu préparer sa conversation.`;
+    }
     for (const [botId, host] of this.map) {
       if (botId === this.options.pile) continue;
       try {
@@ -473,10 +529,12 @@ export class HostsBots<THost extends HostDemarrable> {
         this.demarres.add(botId);
         demarres.push(botId);
       } catch (error) {
+        const raison = messageOf(error);
         echecs.push(botId);
+        raisons[botId] = raison;
         this.options.logger.error("bots.host.start.failed", {
           bot: botId,
-          error: error instanceof Error ? error.message : String(error),
+          error: raison,
         });
       }
     }
@@ -485,7 +543,7 @@ export class HostsBots<THost extends HostDemarrable> {
       echecs: echecs.join(","),
       nombre: demarres.length,
     });
-    return { demarres, echecs };
+    return { demarres, echecs, raisons };
   }
 
   /** Le bot a-t-il un host CONSTRUIT (démarré ou non) ? */
@@ -516,8 +574,8 @@ export class HostsBots<THost extends HostDemarrable> {
           ok: false,
           inchange: false,
           erreur:
-            `Le host du bot « ${botId} » n'a pas pu être construit ` +
-            "(configuration absente, ou dossier de sessions partagé).",
+            this.refus.get(botId) ??
+            `Le bot « ${botId} » n'a pas pu préparer sa conversation.`,
         };
       }
     }
@@ -558,7 +616,7 @@ export class HostsBots<THost extends HostDemarrable> {
         ok: false,
         inchange: false,
         erreur:
-          `Le bot « ${botId} » est le bot principal de l'instance : il ne s'arrête ` +
+          `Le bot « ${botId} » est celui de l'instance : il ne s'arrête ` +
           "qu'avec le gateway.",
       };
     }
@@ -606,4 +664,9 @@ export class HostsBots<THost extends HostDemarrable> {
       this.options.logger.info("bots.hosts.arretes", { bots: arretes.join(",") });
     }
   }
+}
+
+/** Message d'une exception, sans jamais perdre l'information (lot 38). */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -3,34 +3,42 @@
  *
  * ⚠️ LA DEMANDE INITIALE DU MULTI-BOT, ENFIN LIVRÉE : « dans la barre de titre il
  * y a écrit Yuki avec son avatar, on pourrait disposer de plusieurs bots à cet
- * endroit ». L'avatar de la barre du haut devient un BOUTON qui ouvre la LISTE
- * des bots — pas une page de paramètres.
+ * endroit ». 
+ *
+ * ⚠️ LOT 38 — LES BOTS SONT CÔTE À CÔTE : une RANGÉE d'avatars inline dans
+ * `header.topbar` (`#bot-bar`), un avatar par bot, À GAUCHE du nom. Un clic
+ * bascule IMMÉDIATEMENT (aucun panneau intermédiaire). Le panneau du lot 37
+ * n'est PAS supprimé : il reste le lieu d'« Ajouter » et de « Retirer »
+ * (clic droit / appui long / bouton nom+« … »).
  *
  * Ce que le panneau fait, et rien d'autre :
  *  ① il LISTE **tous** les bots (`GET /api/bots`), avec leur état d'EXÉCUTION
- *    réel (`execution.demarre` / `execution.erreur`) — un bot ARRÊTÉ est visible,
- *    avec un bouton « Démarrer » (c'était le blocage : impossible d'allumer un
- *    bot neuf sans passer par les paramètres) ;
- *  ② cliquer un bot DÉMARRÉ ouvre SA conversation (`?b=<slug>` : l'URL, le fil et
- *    le WebSocket suivent) ; cliquer un bot ARRÊTÉ le DÉMARRE d'abord, puis
- *    ouvre sa conversation ;
+ *    réel (`execution.demarre` / `execution.erreur`) et la RAISON réelle d'un
+ *    échec — plus jamais un « arrêté (erreur au démarrage) » muet ;
+ *  ② cliquer un bot DÉMARRÉ ouvre SA conversation (`?b=<slug>`) ; cliquer un bot
+ *    ARRÊTÉ le DÉMARRE d'abord, puis ouvre sa conversation ;
  *  ③ « Ajouter un bot » ouvre la modale EXISTANTE (`bots-admin.js`) ;
- *  ④ clic droit / appui long sur l'avatar d'une entrée : la BOUCLE entre bots
- *    (`echanges["a->b"].actif`), on/off, sans frein par paire.
+ *  ④ clic droit / appui long : la BOUCLE entre bots, le démarrage/arrêt et le
+ *    retrait (archivé 3 mois).
  *
  * ⚠️ CSP INCHANGÉE : `textContent` partout, jamais `innerHTML`, aucun `.style.`
- * (le panneau est positionné par `styles.css`), aucune URL distante.
- * ⚠️ TÉLÉPHONE : la barre du haut est le SEUL endroit toujours visible ; le tap
- * ET l'appui long ouvrent le panneau (`long-press.js`, motif des listes).
+ * (la rangée et le panneau sont positionnés par `styles.css`).
+ * ⚠️ TÉLÉPHONE : la barre du haut est le SEUL endroit toujours visible ; la
+ * rangée d'avatars y reste (22 px par avatar) et peut défiler horizontalement.
  */
 
 import { attachLongPress } from "./long-press.js";
 import { ouvrirCreationBot, ouvrirSuppressionBot } from "./bots-admin.js";
 import {
   PLAFOND_ACTIFS_DEFAUT,
+  SESSION_BOT_STORAGE_KEY,
+  attribuerSessions,
+  badgeNonLus,
   entreeListe,
+  libelleNonLus,
   messageBandeauBot,
   nomBarreHaut,
+  nonLusParBot,
   pairesEchange,
   resumeBots,
   urlConversationBot,
@@ -76,12 +84,46 @@ function contient(racine, noeud) {
 }
 
 /**
+ * Table « session → bot » persistée (best-effort : stockage indisponible ⇒ {}).
+ * Aucune donnée sensible : des identifiants de conversation et de bot.
+ */
+function chargerAttribution() {
+  try {
+    const brut = globalThis.localStorage?.getItem(SESSION_BOT_STORAGE_KEY);
+    if (typeof brut !== "string" || brut === "") return {};
+    const parsed = JSON.parse(brut);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const table = {};
+    for (const [session, bot] of Object.entries(parsed)) {
+      if (typeof session === "string" && typeof bot === "string" && bot !== "") {
+        table[session] = bot;
+      }
+    }
+    return table;
+  } catch {
+    return {};
+  }
+}
+
+/** Persiste la table (best-effort, jamais bloquant). */
+function persisterAttribution(table) {
+  try {
+    globalThis.localStorage?.setItem(SESSION_BOT_STORAGE_KEY, JSON.stringify(table));
+  } catch {
+    // Stockage indisponible : l'attribution reste en mémoire pour la session.
+  }
+}
+
+/**
  * Monte le sélecteur de bots de la barre du haut.
  *
  * @param {object} options
- * @param {HTMLElement} options.button bouton de la barre du haut (l'avatar).
+ * @param {HTMLElement} options.button bouton de la barre du haut (nom + « … »).
  * @param {HTMLElement} options.panel le panneau (`role="dialog"`, `hidden`).
  * @param {HTMLElement} options.list la liste (`<ul>`).
+ * @param {HTMLElement} [options.barEl] la RANGÉE d'avatars inline (`#bot-bar`) :
+ *   un bouton par bot, à GAUCHE du nom. Absente ⇒ aucune rangée (repli : le
+ *   panneau reste la seule bascule, comportement du lot 37).
  * @param {HTMLElement} [options.plafondEl] la ligne de synthèse du panneau.
  * @param {HTMLElement} [options.statusEl] la zone de message (`role="status"`).
  * @param {HTMLElement} [options.addButton] « Ajouter un bot ».
@@ -100,7 +142,8 @@ function contient(racine, noeud) {
  * @param {number} [options.statutMs] durée d'affichage d'un message (0 = collant,
  *   utilisé par les tests pour ne laisser aucun minuteur derrière eux).
  * @returns {{rafraichir: Function, ouvrir: Function, fermer: Function,
- *   basculer: Function, etat: Function, demarrer: Function}}
+ *   basculer: Function, etat: Function, demarrer: Function,
+ *   majSessions: Function, majNonLus: Function}}
  */
 export function initBotSwitcher(options) {
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -120,6 +163,8 @@ export function initBotSwitcher(options) {
   const button = options.button;
   const panel = options.panel;
   const list = options.list;
+  /** Rangée d'avatars inline de la barre du haut (lot 38). */
+  const bar = options.barEl ?? null;
   const plafondEl = options.plafondEl ?? null;
   const statusEl = options.statusEl ?? null;
   const addButton = options.addButton ?? null;
@@ -147,6 +192,21 @@ export function initBotSwitcher(options) {
   let echanges = {};
   /** Bots `actif` REFUSÉS au démarrage par le plafond (`bots.maxActifs`). */
   let refuses = [];
+  /** Non-lus par conversation (état local de CET appareil, `unread.js`). */
+  let nonLus = {};
+  /**
+   * Attribution « session → bot », PERSISTÉE : le compteur de non-lus existant
+   * est par conversation, or une conversation ne dit pas à quel bot elle
+   * appartient. On l'apprend en recevant la liste des sessions d'une connexion
+   * (une connexion = un bot), et on s'en souvient pour badger la rangée.
+   */
+  let attribution = chargerAttribution();
+  /** Dernier bot dont on a reçu une liste de sessions (null tant qu'aucune). */
+  let dernierBotConnecte = null;
+  /** Dernières conversations connues de la connexion courante. */
+  let sessionsConnues = [];
+  /** Dernières entrées calculées, pour rafraîchir les badges sans tout rendre. */
+  let dernieresEntrees = [];
   /** Identifiant du bot dont le menu de boucle est ouvert, ou `null`. */
   let menuBotId = null;
   let ouvert = false;
@@ -210,10 +270,14 @@ export function initBotSwitcher(options) {
         donnees?.echanges !== null && typeof donnees?.echanges === "object"
           ? donnees.echanges
           : {};
-      // ⚠️ TÉLÉPHONE : la marque n'est révélée que si l'instance a PLUSIEURS
-      // bots (`body.has-bot-switcher`) — une instance mono-bot sans avatar garde
-      // exactement la barre du haut d'avant, comme le veut la garde du lot 34.
-      document.body?.classList?.toggle?.("has-bot-switcher", bots.length > 1);
+      // ⚠️ TÉLÉPHONE : la rangée d'avatars (et le nom) reste VISIBLE dès que
+      // l'instance a des bots — c'est la barre du haut qui doit permettre la
+      // bascule au doigt (demande utilisateur). Sans aucun bot lisible, la
+      // marque garde son comportement d'avant.
+      document.body?.classList?.toggle?.("has-bot-switcher", bots.length > 0);
+      // Les sessions reçues AVANT que le bot principal soit connu (première
+      // lecture réseau) sont attribuées maintenant qu'on le connaît.
+      attribuer();
       rendre();
       return bots;
     } catch {
@@ -228,19 +292,143 @@ export function initBotSwitcher(options) {
     }
   }
 
-  /** Construit l'avatar d'une entrée : image du principal, sinon monogramme. */
-  function avatarDe(entree) {
+  /**
+   * Avatar d'une entrée : image du bot principal (la seule servie par le
+   * gateway), sinon MONOGRAMME. `rangee` choisit la classe de conteneur (rangée
+   * de la barre du haut ou liste du panneau) — le monogramme reste TOUJOURS
+   * derrière l'image : sans avatar, il est le repli visible.
+   */
+  function avatarDe(entree, { rangee = false } = {}) {
+    const conteneur = rangee ? "bot-bar__avatar" : "bot-switcher__avatar";
     const avatar = h("span", {
-      class: `bot-switcher__avatar ${entree.avatarClasse}`,
+      class: `${conteneur} ${entree.avatarClasse}`,
       "aria-hidden": "true",
+      text: entree.monogramme,
     });
-    const src = entree.principal ? avatarPrincipal() : null;
-    if (typeof src === "string" && src !== "") {
-      avatar.append(h("img", { class: "avatar avatar--brand", src, alt: "" }));
-    } else {
-      avatar.textContent = entree.monogramme;
+    if (entree.principal) {
+      const src = avatarPrincipal();
+      const image = h("img", {
+        class: "avatar avatar--brand",
+        alt: "",
+        "data-avatar-image": true,
+        ...(typeof src === "string" && src !== "" ? { src } : {}),
+      });
+      // ⚠️ L'image existe MÊME sans src : `avatar.js` la remplira si l'avatar
+      // arrive après coup (`data-avatar-image`). Masquée, elle laisse le
+      // monogramme seul à l'écran.
+      if (!(typeof src === "string" && src !== "")) image.hidden = true;
+      avatar.append(image);
     }
     return avatar;
+  }
+
+  /**
+   * Attribue les conversations connues au bot de la connexion (ou au principal
+   * si le serveur ne l'a pas nommé). Sans bot connu, on n'invente RIEN.
+   */
+  function attribuer() {
+    const botId = dernierBotConnecte ?? principal;
+    if (typeof botId !== "string" || botId === "" || sessionsConnues.length === 0) return;
+    const suivante = attribuerSessions(attribution, sessionsConnues, botId);
+    if (suivante !== attribution) {
+      attribution = suivante;
+      persisterAttribution(suivante);
+    }
+  }
+
+  /**
+   * Construit la RANGÉE d'avatars inline (`header.topbar`, lot 38).
+   *
+   * ⚠️ UN avatar par bot, dans l'ordre du registre, À GAUCHE du nom. Cliquer un
+   * avatar BASCULE immédiatement (aucun panneau intermédiaire) : un bot arrêté
+   * est d'abord démarré, sinon son WebSocket refuserait la connexion.
+   * ⚠️ L'état est porté par des CLASSES (jamais un style inline) :
+   * `--courant` (bot affiché), `--arrete` (pas en marche), `--erreur` (échec dit).
+   * ⚠️ Le badge de non-lus est PAR BOT (somme de SES conversations non lues
+   * connues de cet appareil) — jamais le total de l'instance.
+   */
+  function rendreRangee(entrees) {
+    if (!bar) return;
+    const compteurs = nonLusParBot(nonLus, attribution);
+    bar.replaceChildren();
+    for (const entree of entrees) {
+      const arrete = entree.etat !== "demarre" && entree.etat !== "principal";
+      const classes = [
+        "bot-bar__item",
+        `bot-bar__item--${classeEtatRangee(entree.etat)}`,
+        entree.courant ? "bot-bar__item--courant" : "",
+        arrete ? "bot-bar__item--arrete" : "",
+        entree.etat === "erreur" ? "bot-bar__item--erreur" : "",
+        entree.etat === "refuse" ? "bot-bar__item--refuse" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const nombre = compteurs[entree.id] ?? 0;
+      const infobulle = libelleNonLus(nombre);
+      const bouton = h("button", {
+        class: classes,
+        type: "button",
+        "data-bot-id": entree.id,
+        title: infobulle === "" ? entree.nomAffiche : `${entree.nomAffiche} — ${infobulle}`,
+        "aria-label":
+          `${entree.nomAffiche} — ${entree.libelleEtat}` +
+          (infobulle === "" ? "" : `. ${infobulle}`) +
+          (entree.courant ? ". Bot affiché" : ""),
+        ...(entree.courant ? { "aria-current": "true" } : {}),
+      });
+      bouton.append(avatarDe(entree, { rangee: true }));
+      // Marqueur DISCRET d'état (la couleur/forme vient de la classe du parent).
+      bouton.append(h("span", { class: "bot-bar__etat", "aria-hidden": "true" }));
+      const badge = h("span", {
+        class: "bot-bar__badge",
+        "aria-hidden": "true",
+        text: badgeNonLus(nombre),
+      });
+      badge.hidden = nombre <= 0;
+      bouton.append(badge);
+      bouton.addEventListener("click", () => {
+        void selectionnerBot(entree);
+      });
+      bouton.addEventListener("contextmenu", (event) => {
+        event.preventDefault?.();
+        ouvrirMenuDe(entree);
+      });
+      attachLongPress(bouton, () => ouvrirMenuDe(entree));
+      bar.append(bouton);
+    }
+  }
+
+  /** Suffixe de classe d'état d'un avatar de rangée (aucun style inline). */
+  function classeEtatRangee(etat) {
+    if (etat === "principal" || etat === "demarre") return "marche";
+    if (etat === "erreur") return "erreur";
+    if (etat === "refuse") return "refuse";
+    if (etat === "arrete") return "arrete";
+    return "inconnu";
+  }
+
+  /**
+   * Clic sur un avatar de la rangée : bascule IMMÉDIATE. Le bot affiché ne
+   * recharge rien (on est déjà dedans) ; un autre bot ouvre SA conversation —
+   * et le démarre d'abord s'il est arrêté (même règle que le panneau).
+   */
+  async function selectionnerBot(entree) {
+    if (entree.courant || occupe) return;
+    await ouvrirConversation(entree);
+  }
+
+  /** Ouvre le panneau SUR le menu d'un bot (clic droit / appui long). */
+  function ouvrirMenuDe(entree) {
+    ouvrir();
+    direStatut("");
+    menuBotId = entree.id;
+    rendre();
+    void rafraichir();
+  }
+
+  /** Non-lus PAR BOT de la dernière liste (pour les tests et `etat()`). */
+  function compteursNonLus() {
+    return nonLusParBot(nonLus, attribution);
   }
 
   /**
@@ -271,7 +459,7 @@ export function initBotSwitcher(options) {
         h("button", {
           class: "bot-switcher__menu-item",
           type: "button",
-          text: "Démarrer / Arrêter — bot principal : il suit le gateway",
+          text: "Démarrer / Arrêter — ce bot suit le gateway : il ne s'arrête pas seul",
           disabled: true,
         }),
       );
@@ -358,11 +546,14 @@ export function initBotSwitcher(options) {
   }
 
   function rendre() {
-    if (!list) return;
     const courant = botCourant();
     const entrees = bots.map((bot) =>
       entreeListe(bot, { principal, courant, bots, refuses, plafond }),
     );
+    dernieresEntrees = entrees;
+    // La RANGÉE de la barre du haut se rend avec la même vérité que le panneau.
+    rendreRangee(entrees);
+    if (!list) return;
     list.replaceChildren();
     for (const entree of entrees) {
       const item = h("li", {
@@ -406,16 +597,22 @@ export function initBotSwitcher(options) {
       item.append(choix);
 
       if (entree.demarrable) {
-        const demarrer = h("button", {
+        // ⚠️ Un bot en ERREUR reçoit « Réessayer » (même action que « Démarrer »,
+        // mais le verbe dit qu'on a compris l'échec précédent) — la raison est
+        // déjà affichée au-dessus, dans l'état.
+        const reessayer = entree.etat === "erreur";
+        const action = h("button", {
           class: "button button--small bot-switcher__demarrer",
           type: "button",
-          text: "Démarrer",
-          "aria-label": `Démarrer « ${entree.nomAffiche} »`,
+          text: reessayer ? "Réessayer" : "Démarrer",
+          "aria-label": reessayer
+            ? `Réessayer de démarrer « ${entree.nomAffiche} »`
+            : `Démarrer « ${entree.nomAffiche} »`,
         });
-        demarrer.addEventListener("click", () => {
+        action.addEventListener("click", () => {
           void ouvrirConversation({ ...entree, demarrable: true, demarre: false });
         });
-        item.append(demarrer);
+        item.append(action);
       }
 
       if (menuBotId === entree.id) item.append(menuEntree(entree));
@@ -714,6 +911,36 @@ export function initBotSwitcher(options) {
     rendre();
   }
 
+  /**
+   * Reçoit la liste des conversations de la connexion courante et l'état des
+   * non-lus (par conversation) : c'est ce qui permet de badger CHAQUE avatar.
+   *
+   * ⚠️ `botId` est le bot de la connexion (annoncé par `welcome.bot`, sinon
+   * celui de l'URL, sinon le principal). Les conversations reçues lui sont
+   * attribuées ; l'attribution est persistée pour survivre à un rechargement
+   * (le compteur de non-lus, lui, vit déjà dans `localStorage`).
+   */
+  function majSessions(sessionIds, unread, botId) {
+    if (Array.isArray(sessionIds) && sessionIds.length > 0) {
+      sessionsConnues = sessionIds.filter((id) => typeof id === "string" && id !== "");
+    }
+    if (typeof botId === "string" && botId !== "") dernierBotConnecte = botId;
+    if (unread && typeof unread === "object") nonLus = { ...unread };
+    attribuer();
+    rendreRangee(dernieresEntrees);
+  }
+
+  /**
+   * Met à jour les non-lus SANS attendre une liste de sessions : ouvrir une
+   * conversation éteint son compteur (`app.js`), et le badge doit disparaître
+   * tout de suite — sinon il ment.
+   */
+  function majNonLus(unread) {
+    nonLus = unread && typeof unread === "object" ? { ...unread } : {};
+    attribuer();
+    rendreRangee(dernieresEntrees);
+  }
+
   // ─── Câblage (une seule fois, à l'init) ─────────────────────────────────
   button?.addEventListener?.("click", (event) => {
     event.preventDefault?.();
@@ -765,7 +992,20 @@ export function initBotSwitcher(options) {
     basculer,
     demarrer,
     arreter: arreterBot,
-    etat: () => ({ bots, plafond, principal, echanges, refuses, ouvert }),
+    majSessions,
+    majNonLus,
+    etat: () => ({
+      bots,
+      plafond,
+      principal,
+      echanges,
+      refuses,
+      ouvert,
+      /** Non-lus connus PAR BOT (mêmes chiffres que les badges de la rangée). */
+      nonLus: compteursNonLus(),
+      /** Attribution « session → bot » courante (diagnostic/tests). */
+      attribution: { ...attribution },
+    }),
   };
 }
 

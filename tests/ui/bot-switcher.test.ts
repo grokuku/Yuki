@@ -45,10 +45,13 @@ import {
 } from "../../public/ui/config-pages.js";
 import {
   PLAFOND_ACTIFS_DEFAUT,
+  attribuerSessions,
+  badgeNonLus,
   entreeListe,
   etatBot,
   messageBandeauBot,
   nomBarreHaut,
+  nonLusParBot,
   resumeBots,
   urlConversationBot,
 } from "../../public/ui/bot-switcher-modele.js";
@@ -254,6 +257,8 @@ interface Banc {
   button: Noeud;
   panel: Noeud;
   list: Noeud;
+  /** RANGÉE d'avatars inline de la barre du haut (lot 38). */
+  bar: Noeud;
   status: Noeud;
   plafond: Noeud;
   /** Nom affiché DANS le bouton de la barre du haut (`#bot-switcher-nom`). */
@@ -286,6 +291,7 @@ function banc(
   const plafond = new Noeud("p");
   const nom = new Noeud("span");
   nom.textContent = "Yuki";
+  const bar = new Noeud("div");
   const nav: string[] = [];
   const patchs: Array<{ url: string; body: any }> = [];
   const appels: string[] = [];
@@ -367,6 +373,7 @@ function banc(
     button,
     panel,
     list,
+    barEl: bar,
     plafondEl: plafond,
     statusEl: status,
     nomEl: nom,
@@ -378,7 +385,16 @@ function banc(
     statutMs: 0,
   });
 
-  return { switcher, button, panel, list, status, plafond, nom, nav, patchs, appels, alertes };
+  return { switcher, button, panel, list, bar, status, plafond, nom, nav, patchs, appels, alertes };
+}
+
+/** Bouton d'avatar de la rangée pour un bot donné. */
+function avatarDe(b: Banc, botId: string): Noeud {
+  const item = descendants(b.bar).find(
+    (noeud) => noeud.tag === "button" && noeud.getAttribute("data-bot-id") === botId,
+  );
+  if (!item) throw new Error(`avatar « ${botId} » absent de la rangée`);
+  return item;
 }
 
 function itemDe(list: Noeud, botId: string): Noeud {
@@ -391,19 +407,21 @@ function itemDe(list: Noeud, botId: string): Noeud {
 
 // ─── ① l'avatar de la barre du haut est un BOUTON ─────────────────────────
 
-describe("① l'avatar de la barre du haut ouvre la LISTE des bots", () => {
-  it("le markup fait de l'avatar un bouton qui pilote le panneau", () => {
+describe("① la barre du haut liste les avatars et ouvre le panneau", () => {
+  it("le markup porte la RANGÉE d'avatars ET le bouton du panneau", () => {
     const html = ui("index.html");
-    // ⚠️ Le défaut d'origine : `#brand-avatar` était une image morte.
+    // ⚠️ LOT 38 : la rangée d'avatars est le point de bascule IMMÉDIAT ; elle est
+    // À GAUCHE du nom (`#bot-switcher-nom`), qui reste affiché à sa droite.
+    expect(html).toMatch(/<div\s+id="bot-bar"[^>]*class="bot-bar"/);
+    expect(html).toMatch(/id="bot-bar"[\s\S]{0,800}?id="bot-switcher-nom"/);
+    // Le panneau existant reste câblé (Ajouter / Retirer).
     expect(html).toMatch(
-      /<button[^>]*id="bot-switcher-btn"[^>]*aria-controls="bot-switcher-panel"[\s\S]{0,400}?id="brand-avatar"/,
+      /<button[^>]*id="bot-switcher-btn"[^>]*aria-controls="bot-switcher-panel"/,
     );
-    expect(html).toMatch(/<button[^>]*id="bot-switcher-btn"[^>]*aria-haspopup="dialog"/);
     expect(html).toContain('id="bot-switcher-panel"');
     expect(html).toContain('id="bot-switcher-list"');
     expect(html).toContain('id="bot-switcher-add"');
-    // Le glyphe de repli occupe le bouton quand aucun avatar n'est déposé.
-    expect(html).toMatch(/data-avatar-fallback[^>]*>❄️</);
+    expect(html).toMatch(/<button[^>]*id="bot-switcher-btn"[^>]*aria-haspopup="dialog"/);
   });
 
   it("un clic ouvre le panneau et met `aria-expanded` à `true`", async () => {
@@ -446,14 +464,14 @@ describe("② tous les bots sont listés, avec leur état RÉEL", () => {
       .filter((noeud) => noeud.classes.has("bot-switcher__etat"))
       .map((noeud) => noeud.textContent);
     expect(etats).toEqual([
-      "démarré (bot principal)",
+      "en marche",
       "arrêté",
-      "arrêté (erreur au démarrage)",
+      "arrêté — clé du modèle absente",
     ]);
     // ⚠️ Aucun état ne recopie le drapeau `actif` : Nova est `actif: true` mais
-    // ARRÊTÉE (son démarrage a échoué) — l'afficher « démarré » serait le
-    // mensonge corrigé au lot 36 (L8).
-    expect(etats).not.toContain("démarré");
+    // ARRÊTÉE (son démarrage a échoué) — l'afficher « en marche » serait le
+    // mensonge corrigé au lot 36 (L8). Et la RAISON du refus est écrite.
+    expect(etats[2]).not.toBe("en marche");
   });
 
   it("un bot ARRÊTÉ porte un bouton « Démarrer » ; un bot démarré n'en a pas", async () => {
@@ -465,16 +483,23 @@ describe("② tous les bots sont listés, avec leur état RÉEL", () => {
         .filter((noeud) => noeud.tag === "button")
         .map((noeud) => noeud.textContent);
     expect(boutons("kohai")).toContain("Démarrer");
-    expect(boutons("nova")).toContain("Démarrer");
+    // ⚠️ Un bot EN ERREUR reçoit « Réessayer » : même action, mais le verbe dit
+    // qu'on a compris l'échec précédent (la raison est affichée juste à côté).
+    expect(boutons("nova")).toContain("Réessayer");
     expect(boutons("yuki")).not.toContain("Démarrer");
   });
 
-  it("la synthèse donne le VRAI nombre et le plafond (jamais « un seul »)", async () => {
+  it("la synthèse est en FRANÇAIS LISIBLE et nomme la raison réelle", async () => {
     const b = banc();
     await b.switcher.rafraichir();
-    expect(b.plafond.textContent).toContain("3 bot(s)");
-    expect(b.plafond.textContent).toContain("2 actif(s) sur 3 maximum");
-    expect(b.plafond.textContent).not.toContain("un seul");
+    // ⚠️ L'ancien bandeau disait « 3 bot(s) · 2 actif(s) sur 3 maximum ·
+    // 1 démarré(s) » : du jargon de registre. On dit « en marche » / « arrêté ».
+    expect(b.plafond.textContent).toContain("3 bots.");
+    expect(b.plafond.textContent).toContain("1 en marche");
+    expect(b.plafond.textContent).toContain("2 arrêtés");
+    expect(b.plafond.textContent).toContain("Nova : clé du modèle absente");
+    expect(b.plafond.textContent).not.toContain("actif");
+    expect(b.plafond.textContent).not.toContain("démarré");
     const b2 = banc({ panneListe: true });
     await b2.switcher.rafraichir();
     // Gateway injoignable : on le DIT, et le panneau reste utilisable.
@@ -507,12 +532,12 @@ describe("③ cliquer un bot arrêté le DÉMARRE, puis ouvre sa conversation", 
     const b = banc();
     await b.switcher.rafraichir();
     b.switcher.ouvrir();
-    const demarrer = descendants(itemDe(b.list, "nova")).find(
+    const demarrer = descendants(itemDe(b.list, "kohai")).find(
       (noeud) => noeud.textContent === "Démarrer",
     );
     demarrer?.dispatch("click");
-    await vi.waitFor(() => expect(b.nav).toEqual(["/?b=nova"]));
-    expect(b.patchs.some((entree) => entree.url === "/api/bots/nova/actif")).toBe(true);
+    await vi.waitFor(() => expect(b.nav).toEqual(["/?b=kohai"]));
+    expect(b.patchs.some((entree) => entree.url === "/api/bots/kohai/actif")).toBe(true);
   });
 
   it("un REFUS du serveur (plafond) n'entraîne AUCUNE navigation et dit le vrai plafond", async () => {
@@ -587,7 +612,7 @@ describe("⑤ téléphone : la barre du haut reste le point de bascule", () => {
     expect(media).toMatch(/\.bot-switcher\s*\{[^}]*position:\s*fixed/s);
     const source = readFileSync(join(ROOT, "public", "ui", "bot-switcher.js"), "utf8");
     expect(source).toContain('"has-bot-switcher"');
-    expect(source).toContain("bots.length > 1");
+    expect(source).toContain("bots.length > 0");
   });
 
   it("un APPUI LONG sur l'avatar ouvre le panneau (aucun clic droit au doigt)", async () => {
@@ -605,24 +630,24 @@ describe("⑤ téléphone : la barre du haut reste le point de bascule", () => {
 // ─── ⑥ « il me dit que je n'ai qu'un seul bot actif » ─────────────────────
 
 describe("⑥ le message « un seul bot actif » est corrigé (vrai nombre)", () => {
-  it("le bandeau de `/bots` dit le NOMBRE RÉEL (ici 1 sur 3), pas « un seul »", () => {
+  it("le bandeau de `/bots` dit le NOMBRE RÉEL (ici 1 en marche sur 2), pas « un seul »", () => {
     const texte = messageBandeauBot({
       bot: BOTS[1],
       bots: [BOTS[0], BOTS[1]],
       plafond: 3,
       principal: "yuki",
     });
-    expect(texte).toContain("1 bot(s) actif(s) sur 3 maximum");
-    expect(texte).toContain("Il n'est pas démarré non plus.");
+    expect(texte).toContain("1 bot en marche sur 3 au maximum");
     expect(texte).toContain("Démarrer");
     expect(texte.toLowerCase()).not.toContain("un seul");
     // ⚠️ L'ancien message, qui se lisait « il n'y a qu'un seul bot actif ».
     expect(texte).not.toContain("n'est pas le bot ACTIF de l'instance");
+    expect(texte).not.toContain("ACTIF");
   });
 
-  it("le nombre affiché est celui des bots VRAIMENT actifs (ici 2 sur 3)", () => {
+  it("le nombre affiché est celui des bots VRAIMENT en marche (ici 2 sur 3)", () => {
     const texte = messageBandeauBot({ bot: BOTS[1], bots: BOTS, plafond: 3 });
-    expect(texte).toContain("2 bot(s) actif(s) sur 3 maximum");
+    expect(texte).toContain("2 bots en marche sur 3 au maximum");
     expect(texte).toContain("(yuki, nova)");
   });
 
@@ -648,10 +673,10 @@ describe("⑥ le message « un seul bot actif » est corrigé (vrai nombre)", ()
     expect(serveur).not.toContain("est inconnu ou arrêté : aucun host");
   });
 
-  it("le plafond affiché par défaut est bien 3 (aucun « 1 » codé en dur)", () => {
+  it("la limite par défaut est bien 3 (aucun « 1 » codé en dur)", () => {
     expect(PLAFOND_ACTIFS_DEFAUT).toBe(3);
-    expect(resumeBots(BOTS)).toContain("sur 3 maximum");
-    expect(resumeBots(BOTS, 5)).toContain("sur 5 maximum");
+    expect(resumeBots(BOTS, 5, ["nova"])).toContain("limite de 5 bots en marche");
+    expect(resumeBots(BOTS, 3, ["nova"])).toContain("limite de 3 bots en marche");
   });
 });
 
@@ -878,8 +903,8 @@ describe("⑩ « je n'ai toujours que Yuki en haut » corrigé", () => {
     expect(etats).toHaveLength(3);
     // ⚠️ Sans la liste `refuses`, Nova s'afficherait « état inconnu » : la cause
     // (le plafond) serait invisible.
-    expect(etats[2]).toContain("plafond de 3 atteint");
-    expect(b.plafond.textContent).toContain("REFUSÉ(S) par le plafond");
+    expect(etats[2]).toContain("3 bots en marche au maximum");
+    expect(b.plafond.textContent).toContain("limite de 3 bots en marche est atteinte");
   });
 });
 
@@ -899,8 +924,8 @@ describe("⑪ clic droit / appui long sur le nom+avatar : les TROIS gestes", () 
     });
     const menu = descendants(b.list).find((noeud) => noeud.classes.has("bot-switcher__menu"));
     expect(menu?.textContent).toContain("Bot « Yuki »");
-    // Le bot principal suit le gateway : la ligne existe et n'agit pas.
-    expect(menu?.textContent).toContain("bot principal : il suit le gateway");
+    // Le bot de l'instance suit le gateway : la ligne existe et n'agit pas.
+    expect(menu?.textContent).toContain("ce bot suit le gateway");
     expect(menu?.textContent).toContain("Retirer ce bot…");
   });
 
@@ -988,6 +1013,9 @@ describe("⑨ modèle pur", () => {
     // Un bot arrêté est démariable ; un bot principal, non.
     expect(etatBot(BOTS[1], "yuki").demarrable).toBe(true);
     expect(etatBot(BOTS[0], "yuki").demarrable).toBe(false);
+    // ⚠️ LOT 38 : la RAISON réelle est rendue, jamais un code muet.
+    expect(etatBot(BOTS[2], "yuki").libelle).toBe("arrêté — clé du modèle absente");
+    expect(etatBot(BOTS[2], "yuki").raison).toBe("clé du modèle absente");
   });
 
   it("`entreeListe` produit le monogramme et l'URL de conversation", () => {
@@ -1009,5 +1037,113 @@ describe("⑨ modèle pur", () => {
       ),
     );
     expect(coupables).toEqual([]);
+  });
+});
+
+// ─── ⑫ LOT 38 — RANGÉE D'AVATARS INLINE + BADGES DE NON-LUS ───────────────
+
+describe("⑫ les bots CÔTE À CÔTE dans la barre du haut", () => {
+  it("un avatar par bot, le bot affiché démarqué, un bot arrêté marqué", async () => {
+    const b = banc({ recherche: "?b=kohai" });
+    await b.switcher.rafraichir();
+    const ids = descendants(b.bar)
+      .filter((noeud) => noeud.tag === "button")
+      .map((noeud) => noeud.getAttribute("data-bot-id"));
+    expect(ids).toEqual(["yuki", "kohai", "nova"]);
+    // Le bot AFFICHÉ : classe (jamais un style inline) + `aria-current`.
+    expect(avatarDe(b, "kohai").classes.has("bot-bar__item--courant")).toBe(true);
+    expect(avatarDe(b, "kohai").getAttribute("aria-current")).toBe("true");
+    // Un bot ARRÊTÉ reste VISIBLE et marqué ; une erreur est distinguée.
+    expect(avatarDe(b, "kohai").classes.has("bot-bar__item--arrete")).toBe(true);
+    expect(avatarDe(b, "nova").classes.has("bot-bar__item--arrete")).toBe(true);
+    expect(avatarDe(b, "nova").classes.has("bot-bar__item--erreur")).toBe(true);
+    expect(avatarDe(b, "yuki").classes.has("bot-bar__item--marche")).toBe(true);
+  });
+
+  it("cliquer un avatar bascule IMMÉDIATEMENT (aucun panneau intermédiaire)", async () => {
+    const b = banc();
+    await b.switcher.rafraichir();
+    expect(b.panel.hidden).toBe(true);
+    avatarDe(b, "kohai").dispatch("click");
+    await vi.waitFor(() => expect(b.nav).toEqual(["/?b=kohai"]));
+    // ⚠️ Le panneau ne s'est PAS ouvert : la bascule est directe.
+    expect(b.panel.hidden).toBe(true);
+    // Un bot arrêté est démarré AVANT la navigation (sinon WS refusé).
+    expect(b.patchs.some((entree) => entree.url === "/api/bots/kohai/actif")).toBe(true);
+  });
+
+  it("cliquer l'avatar du bot AFFICHÉ ne recharge rien", async () => {
+    const b = banc({ recherche: "?b=kohai" });
+    await b.switcher.rafraichir();
+    avatarDe(b, "kohai").dispatch("click");
+    await vi.waitFor(() => expect(b.nav).toEqual([]));
+    expect(b.patchs).toEqual([]);
+  });
+
+  it("pas de débordement : rangée bornée et DÉFILANTE, 24 px / 22 px en téléphone", () => {
+    const css = ui("styles.css");
+    expect(css).toMatch(/\.bot-bar\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/s);
+    expect(css).toMatch(/\.bot-bar\s*\{[^}]*min-width:\s*0[^}]*max-width:\s*100%/s);
+    expect(css).toMatch(/\.bot-bar__item\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s);
+    // ⚠️ Le nom reste À DROITE de la rangée (dans l'ordre du DOM).
+    const html = ui("index.html");
+    expect(html.indexOf('id="bot-bar"')).toBeLessThan(html.indexOf('id="bot-switcher-nom"'));
+    const media = css.slice(css.indexOf("@media (max-width: 767px)"));
+    expect(media).toMatch(/\.bot-bar\s*\{[^}]*max-width:\s*52vw/s);
+    expect(media).toMatch(/\.bot-bar__item\s*\{[^}]*width:\s*22px[^}]*height:\s*22px/s);
+    expect(media).toMatch(/body\.has-bot-switcher \.brand\s*\{[^}]*display:\s*flex/s);
+  });
+
+  it("le panneau reste accessible (clic droit / appui long sur un avatar)", async () => {
+    vi.useFakeTimers();
+    const b = banc();
+    await b.switcher.rafraichir();
+    avatarDe(b, "nova").dispatch("contextmenu");
+    expect(b.panel.hidden).toBe(false);
+    // Le menu du bot visé est ouvert (Démarrer/Arrêter, boucles, retrait).
+    expect(b.list.textContent).toContain("Retirer ce bot…");
+    b.switcher.fermer();
+    avatarDe(b, "kohai").dispatch("pointerdown", { pointerType: "touch", clientX: 5, clientY: 5 });
+    vi.advanceTimersByTime(700);
+    expect(b.panel.hidden).toBe(false);
+  });
+});
+
+describe("⑬ badges de non-lus PAR BOT (lot 38)", () => {
+  it("un point pour 1 message, le nombre au-delà, rien pour 0", () => {
+    expect(badgeNonLus(0)).toBe("");
+    expect(badgeNonLus(1)).toBe("•");
+    expect(badgeNonLus(4)).toBe("4");
+    expect(badgeNonLus(12)).toBe("9+");
+  });
+
+  it("le décompte est PAR BOT (jamais le total de l'instance)", () => {
+    const attribution = attribuerSessions({}, ["s-yuki", "s-kohai"], "yuki");
+    const table = attribuerSessions(attribution, ["s-grolaf"], "grolaf");
+    const compteurs = nonLusParBot(
+      { "s-yuki": 1, "s-kohai": 2, "s-grolaf": 3 },
+      table,
+    );
+    expect(compteurs).toEqual({ yuki: 3, grolaf: 3 });
+  });
+
+  it("le badge s'affiche par bot, et disparaît quand le compteur est éteint", async () => {
+    const b = banc();
+    await b.switcher.rafraichir();
+    b.switcher.majSessions(["s-yuki"], { "s-yuki": 1 }, "yuki");
+    const badge = (botId: string) =>
+      descendants(avatarDe(b, botId)).find((noeud) => noeud.classes.has("bot-bar__badge"));
+    expect(badge("yuki")?.textContent).toBe("•");
+    expect(badge("yuki")?.hidden).toBe(false);
+    // Aucun non-lu sur Kohai : badge MASQUÉ.
+    expect(badge("kohai")?.hidden).toBe(true);
+    // Plusieurs messages ⇒ le nombre.
+    b.switcher.majNonLus({ "s-yuki": 3 });
+    expect(badge("yuki")?.textContent).toBe("3");
+    // Ouvrir la conversation éteint le compteur (`app.js`) ⇒ badge effacé.
+    b.switcher.majNonLus({});
+    expect(badge("yuki")?.textContent).toBe("");
+    expect(badge("yuki")?.hidden).toBe(true);
+    expect(b.switcher.etat().nonLus).toEqual({});
   });
 });

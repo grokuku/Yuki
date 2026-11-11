@@ -6,7 +6,7 @@
 
 import { getTheme, initTheme, setTheme } from "./theme.js";
 import { HolafFetch } from "./vendor/holaf/holaf-fetch.js";
-import { initAvatar } from "./avatar.js";
+import { avatarSrc, initAvatar } from "./avatar.js";
 import { createMarkdownRenderer } from "./markdown.js";
 import { decodeTtsFrame } from "./tts-frames.js";
 import { createTtsPlayer } from "./tts-player.js";
@@ -78,8 +78,11 @@ initTheme();
 
 /* AVATAR de Yuki : l'état vient du serveur (`GET /api/avatar`) et s'applique
  * aux emplacements de la coquille (barre du haut, état vide) ainsi qu'au
- * favicon. Sans avatar, rien ne change : le flocon ❄️ reste affiché. */
-void initAvatar({ HolafFetch });
+ * favicon. Sans avatar, rien ne change : le monogramme du bot reste affiché. */
+let avatarBotPrincipal = null;
+void initAvatar({ HolafFetch }).then(({ meta }) => {
+  avatarBotPrincipal = avatarSrc(meta);
+});
 
 /* SÉLECTEUR DE BOTS DE LA BARRE DU HAUT (lot 37) — la demande INITIALE du
  * multi-bot : l'avatar devient un bouton qui liste les bots (état réel, bouton
@@ -92,6 +95,8 @@ const botSwitcher = initBotSwitcher({
   button: document.getElementById("bot-switcher-btn"),
   panel: document.getElementById("bot-switcher-panel"),
   list: document.getElementById("bot-switcher-list"),
+  // LOT 38 — la RANGÉE d'avatars inline de la barre du haut (un clic = bascule).
+  barEl: document.getElementById("bot-bar"),
   plafondEl: document.getElementById("bot-switcher-plafond"),
   statusEl: document.getElementById("bot-switcher-status"),
   addButton: document.getElementById("bot-switcher-add"),
@@ -102,11 +107,7 @@ const botSwitcher = initBotSwitcher({
   HolafModal,
   // ⚠️ `/avatar` ne sert QUE l'avatar du bot principal (celui du runtime) :
   // l'image est reprise telle quelle, jamais inventée pour un autre bot.
-  avatarPrincipal: () => {
-    const image = document.getElementById("brand-avatar");
-    if (!image || image.hidden) return null;
-    return image.getAttribute("src");
-  },
+  avatarPrincipal: () => avatarBotPrincipal,
 });
 void botSwitcher.rafraichir();
 
@@ -207,6 +208,12 @@ const deepLinkSession = new URLSearchParams(window.location.search).get("session
  * connexion sont alors celles d'avant L4 (`botId` absent ⇒ principal).
  */
 const botPage = botDeLaPage(window.location.search);
+/**
+ * LOT 38 — bot de la CONNEXION en cours (annoncé par `welcome.bot`), ou `null`
+ * tant qu'il n'est pas connu. Sert à attribuer les conversations — et donc
+ * leurs non-lus — au bon avatar de la rangée (une connexion = un bot).
+ */
+let botConnecte = null;
 let deepLinkHandled = false;
 
 /* ─── E2 — STORES PAR CONVERSATION (transport multiplexé) ──────────────────
@@ -252,6 +259,10 @@ function persistUnread(counts) {
 }
 
 let unreadBySession = loadUnread();
+// LOT 38 — les badges de non-lus de la rangée lisent le MÊME état local : on le
+// donne tout de suite, pour que les compteurs déjà enregistrés s'affichent dès
+// le premier rendu (sans attendre une trame `sessions`).
+botSwitcher.majNonLus(unreadBySession);
 
 /** Remplace l'état non lu, le persiste et rafraîchit la barre. */
 function commitUnread(next, refresh = true) {
@@ -259,6 +270,9 @@ function commitUnread(next, refresh = true) {
   unreadBySession = next;
   persistUnread(next);
   if (refresh) sessionsPanel.setUnread(next);
+  // LOT 38 — le badge de la rangée d'avatars suit IMMÉDIATEMENT : ouvrir une
+  // conversation éteint son compteur, donc le badge du bot disparaît sans mentir.
+  botSwitcher.majNonLus(next);
 }
 
 /** Allume/compte un non-lu sur un fil NON focalisé (la conversation regardée ne s'allume jamais). */
@@ -1869,6 +1883,9 @@ function handleFrame(frame) {
     // `ui.timeZone`, défaut UTC). Absent (serveur ancien) ⇒ `UTC` par défaut du
     // module — jamais le fuseau du navigateur.
     if (typeof frame.timeZone === "string") setTimeZone(frame.timeZone);
+    // LOT 38 — à qui parle cette connexion : c'est ce qui permet d'attribuer
+    // les conversations (et leurs non-lus) au BON bot dans la rangée d'avatars.
+    botConnecte = typeof frame.bot === "string" && frame.bot !== "" ? frame.bot : botPage;
     // ⚠️ LOT 36 (L4) — À QUI PARLE-T-ON : le serveur l'annonce (`welcome.bot`).
     // Sans bot demandé ni annoncé, aucun badge n'apparaît (écran inchangé).
     const libelleBot = texteBot(frame.bot, botPage);
@@ -1964,6 +1981,13 @@ function handleFrame(frame) {
     // E2 : la liste porte l'ensemble des conversations SUIVIES ; on y joint
     // l'état « en cours » ET « non lu » de chacune (indicateurs de la barre).
     sessionsPanel.update(lastSessions, activeId, busyIdList(), unreadBySession);
+    // LOT 38 — la rangée d'avatars doit badger CHAQUE bot : on lui dit à qui
+    // appartiennent les conversations reçues et où en sont les non-lus.
+    botSwitcher.majSessions(
+      lastSessions.map((entree) => entree.id),
+      unreadBySession,
+      botConnecte ?? botPage ?? botSwitcher.etat().principal,
+    );
     setEmptyState(activeId === null);
     // Bascule demandée depuis « Conversation dédiée… » : le serveur vient de
     // confirmer que cette conversation est ouverte ⇒ le parcours peut partir.

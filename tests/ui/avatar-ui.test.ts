@@ -52,26 +52,29 @@ describe("B — barre du haut : avatar 24 px avant le nom, visible en téléphon
   const html = ui("index.html");
   const css = ui("styles.css");
 
-  it("le markup place l'avatar AVANT le nom du bot, dans le MÊME bouton", () => {
-    // ⚠️ LOT 37 — le nom+avatar sont le bouton du sélecteur : le nom suit le bot
-    // affiché (`#bot-switcher-nom`), il n'est plus écrit « Yuki » en dur.
-    expect(html).toMatch(
-      /id="bot-switcher-btn"[\s\S]{0,600}?id="brand-avatar"[\s\S]{0,600}?id="bot-switcher-nom"/,
-    );
-    expect(html).toMatch(/id="brand-avatar"[^>]*class="avatar avatar--brand"/);
-    expect(html).toMatch(/id="brand-avatar"[^>]*hidden/);
+  it("le markup place la RANGÉE d'avatars AVANT le nom du bot", () => {
+    // ⚠️ LOT 38 — chaque avatar de la rangée (`#bot-bar`) est un BOUTON ; le nom
+    // suit le bot affiché (`#bot-switcher-nom`) et reste À SA DROITE.
+    expect(html).toMatch(/id="bot-bar"[\s\S]{0,900}?id="bot-switcher-nom"/);
+    expect(html).toMatch(/id="bot-switcher-nom"[^>]*class="brand__name"/);
+    // L'image d'avatar du bot principal est produite par `bot-switcher.js` avec
+    // les mêmes marqueurs que les autres emplacements (`data-avatar-image`).
+    expect(ui("bot-switcher.js")).toContain('"data-avatar-image"');
   });
 
   it("24 px en bureau, et le bloc n'est plus un simple texte", () => {
     expect(css).toMatch(/\.avatar--brand\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s);
+    expect(css).toMatch(/\.bot-bar__item\s*\{[^}]*width:\s*24px[^}]*height:\s*24px/s);
     expect(css).toMatch(/\.brand\s*\{[^}]*display:\s*flex/s);
   });
 
-  it("en téléphone : nom masqué, avatar 22 px, marque révélée SEULEMENT avec un avatar", () => {
+  it("en téléphone : rangée visible (22 px), nom borné, marque révélée avec un avatar", () => {
     const media = css.slice(css.indexOf("@media (max-width: 767px), (max-height: 480px)"));
-    expect(media).toMatch(/\.brand__name\s*\{[^}]*display:\s*none/s);
+    expect(media).toMatch(/\.brand__name\s*\{[^}]*display:\s*inline-block/s);
     expect(media).toMatch(/body\.has-avatar \.brand\s*\{[^}]*display:\s*flex/s);
+    expect(media).toMatch(/body\.has-bot-switcher \.brand\s*\{[^}]*display:\s*flex/s);
     expect(media).toMatch(/\.avatar--brand\s*\{[^}]*width:\s*22px[^}]*height:\s*22px/s);
+    expect(media).toMatch(/\.bot-bar__item\s*\{[^}]*width:\s*22px[^}]*height:\s*22px/s);
   });
 });
 

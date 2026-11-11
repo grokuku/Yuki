@@ -122,6 +122,23 @@ export class ExecutionBots {
   }
 
   /**
+   * Enregistre les raisons d'échecs constatées au DÉMARRAGE de l'instance (lot 38).
+   *
+   * ⚠️ Sans cela, `hosts.demarrerAutres()` journalisait ses échecs mais l'état
+   * d'exécution n'en savait rien : l'interface affichait « arrêté (erreur au
+   * démarrage) » sans pouvoir dire POURQUOI. On garde le message RÉEL, tel quel.
+   * Un succès ultérieur l'efface (comme `demarrer()`).
+   */
+  noterErreurs(raisons: Readonly<Record<string, string>> | undefined): void {
+    if (raisons === undefined) return;
+    for (const [botId, raison] of Object.entries(raisons)) {
+      if (typeof raison === "string" && raison.trim() !== "") {
+        this.erreurs.set(botId, raison);
+      }
+    }
+  }
+
+  /**
    * DÉMARRE un bot : ouvre sa pile (si absente) puis démarre son host (créé au
    * besoin). ⚠️ La pile AVANT le host : un host démarré sans pile n'aurait ni
    * sources ni envois programmés.
@@ -133,7 +150,7 @@ export class ExecutionBots {
         inchange: true,
         botId,
         etat: this.etat(botId),
-        raison: "C'est le bot principal de l'instance : il tourne avec le gateway.",
+        raison: "C'est le bot de l'instance : il tourne avec le gateway et ne s'arrête pas seul.",
       };
     }
     try {
@@ -180,7 +197,7 @@ export class ExecutionBots {
         botId,
         etat: this.etat(botId),
         raison:
-          `Le bot « ${botId} » est le bot principal de l'instance : il ne s'arrête ` +
+          `Le bot « ${botId} » est celui de l'instance : il ne s'arrête ` +
           "qu'avec le gateway.",
       };
     }

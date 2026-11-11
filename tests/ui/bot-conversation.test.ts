@@ -51,9 +51,9 @@ describe("texteBot", () => {
     expect(texteBot("kohai", null)).toBe("kohai");
   });
 
-  it("un bot demandé mais NON confirmé s'affiche « bot principal » (vérité)", () => {
-    expect(texteBot(undefined, "kohai")).toBe("bot principal");
-    expect(texteBot("", "kohai")).toBe("bot principal");
+  it("un bot demandé mais NON confirmé s'affiche « conversation principale » (vérité)", () => {
+    expect(texteBot(undefined, "kohai")).toBe("conversation principale");
+    expect(texteBot("", "kohai")).toBe("conversation principale");
   });
 
   it("rien demandé, rien annoncé : aucun badge (écran inchangé)", () => {

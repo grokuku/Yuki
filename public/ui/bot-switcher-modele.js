@@ -40,7 +40,8 @@ export const MAX_BOTS_SELECTEUR = 6;
  *   refusé s'afficherait « état inconnu » : l'utilisateur ne saurait pas que son
  *   bot ne tourne pas PARCE QU'un plafond l'a écarté.
  * @returns {{code: "principal"|"refuse"|"demarre"|"erreur"|"arrete"|"inconnu",
- *   libelle: string, demarrable: boolean, demarre: boolean, doitTourner: boolean}}
+ *   libelle: string, raison: string, demarrable: boolean, demarre: boolean,
+ *   doitTourner: boolean}}
  */
 export function etatBot(bot, principal = null, options = {}) {
   const doitTourner = bot?.actif === true;
@@ -52,7 +53,9 @@ export function etatBot(bot, principal = null, options = {}) {
     // (c'est `main()` qui l'a démarré). On l'affiche comme tel, sans bouton.
     return {
       code: "principal",
-      libelle: "démarré (bot principal)",
+      // ⚠️ FRANÇAIS SIMPLE (demande utilisateur) : jamais « bot principal ».
+      libelle: "en marche",
+      raison: "",
       demarrable: false,
       demarre: true,
       doitTourner,
@@ -67,7 +70,9 @@ export function etatBot(bot, principal = null, options = {}) {
   if (doitTourner && execution?.demarre !== true && refuses.includes(String(bot?.id ?? ""))) {
     return {
       code: "refuse",
-      libelle: `actif mais NON démarré : plafond de ${plafond} atteint`,
+      // ⚠️ Pas « actif », pas « plafond autorisé » : la cause et le geste, en clair.
+      libelle: `pas démarré — ${plafond} bots en marche au maximum`,
+      raison: `La limite de ${plafond} bots en marche est atteinte : éteignez-en un, puis réessayez.`,
       demarrable: true,
       demarre: false,
       doitTourner,
@@ -77,7 +82,8 @@ export function etatBot(bot, principal = null, options = {}) {
     // Mode dégradé : aucun port d'exécution ⇒ on ne sait pas. On ne ment pas.
     return {
       code: "inconnu",
-      libelle: doitTourner ? "état inconnu (doit tourner)" : "état inconnu",
+      libelle: doitTourner ? "état inconnu (devrait tourner)" : "état inconnu",
+      raison: "",
       demarrable: doitTourner !== true,
       demarre: false,
       doitTourner,
@@ -86,16 +92,25 @@ export function etatBot(bot, principal = null, options = {}) {
   if (execution.demarre === true) {
     return {
       code: "demarre",
-      libelle: "démarré",
+      libelle: "en marche",
+      raison: "",
       demarrable: false,
       demarre: true,
       doitTourner,
     };
   }
-  const erreur = typeof execution.erreur === "string" && execution.erreur.trim() !== "";
+  /**
+   * ⚠️ LA RAISON, PAS UN CODE. `execution.erreur` porte le message RÉEL du
+   * serveur (« dossier de sessions partagé », « configuration absente », erreur
+   * de `host.start()`…). L'ancien libellé fixe « arrêté (erreur au démarrage) »
+   * disait QUELQUE CHOSE A ÉCHOUÉ sans jamais dire POURQUOI : c'est le défaut
+   * rapporté. On l'affiche tel quel, préfixé pour rester lisible.
+   */
+  const raison = typeof execution.erreur === "string" ? execution.erreur.trim() : "";
   return {
-    code: erreur ? "erreur" : "arrete",
-    libelle: erreur ? "arrêté (erreur au démarrage)" : "arrêté",
+    code: raison !== "" ? "erreur" : "arrete",
+    libelle: raison !== "" ? `arrêté — ${raison}` : "arrêté",
+    raison,
     demarrable: true,
     demarre: false,
     doitTourner,
@@ -144,19 +159,33 @@ export function botsActifs(bots) {
  */
 export function resumeBots(bots, plafond = PLAFOND_ACTIFS_DEFAUT, refuses = []) {
   const liste = Array.isArray(bots) ? bots : [];
-  const actifs = botsActifs(liste).length;
   const demarres = liste.filter((bot) => bot?.execution?.demarre === true).length;
   const borne = normaliserPlafondModele(plafond);
   const ecartes = Array.isArray(refuses) ? refuses.length : 0;
   if (liste.length === 0) return "Aucun bot lisible sur cette instance.";
-  return (
-    `${liste.length} bot(s) · ${actifs} actif(s) sur ${borne} maximum · ` +
-    `${demarres} démarré(s)` +
-    (ecartes === 0
-      ? ""
-      : ` · ${ecartes} REFUSÉ(S) par le plafond : éteignez un bot ou relevez ` +
-        "`bots.maxActifs`")
-  );
+  /**
+   * ⚠️ FRANÇAIS LISIBLE (demande utilisateur) : l'ancienne phrase
+   * « 2 bot(s) - 2 actif(s) sur 3 maximum - 1 démarré(s) » était du jargon de
+   * registre. On dit maintenant l'état RÉEL, en clair, et la RAISON de chaque
+   * échec — jamais un code.
+   */
+  const arretes = liste.length - demarres;
+  const debut = `${liste.length} bot${liste.length > 1 ? "s" : ""}.`;
+  const etats = [`${demarres} en marche`];
+  if (arretes > 0) etats.push(`${arretes} arrêté${arretes > 1 ? "s" : ""}`);
+  let texte = `${debut} ${etats.join(", ")}.`;
+  const problemes = liste
+    .filter(
+      (bot) =>
+        typeof bot?.execution?.erreur === "string" && bot.execution.erreur.trim() !== "",
+    )
+    .map((bot) => `${nomAfficheBot(bot)} : ${bot.execution.erreur.trim()}`);
+  if (problemes.length > 0) texte += ` ${problemes.join(" ; ")}.`;
+  if (ecartes > 0) {
+    texte += ` ${ecartes} bot${ecartes > 1 ? "s" : ""} pas démarré${ecartes > 1 ? "s" : ""} :`;
+    texte += ` la limite de ${borne} bots en marche est atteinte.`;
+  }
+  return texte;
 }
 
 /**
@@ -181,6 +210,8 @@ export function entreeListe(bot, options = {}) {
     nomAffiche: nomAfficheBot(bot),
     etat: etat.code,
     libelleEtat: etat.libelle,
+    /** Raison RÉELLE de l'échec (message du serveur), "" s'il n'y en a pas. */
+    raison: etat.raison,
     demarrable: etat.demarrable,
     demarre: etat.demarre,
     doitTourner: etat.doitTourner,
@@ -276,14 +307,89 @@ export function messageBandeauBot(options) {
   const nomsActifs = actifs.map((entree) => entree.id).join(", ");
   const etat = etatBot(bot, options.principal ?? null);
   return (
-    `Ce bot n'est pas ACTIF : ${actifs.length} bot(s) actif(s) sur ${plafond} ` +
-    `maximum autorisé(s)${nomsActifs === "" ? "" : ` (${nomsActifs})`}.` +
-    (etat.demarre ? "" : " Il n'est pas démarré non plus.") +
-    " « Démarrer » (ci-dessous, ou barre du haut → avatar → « Démarrer ») " +
-    "l'allume sans redémarrage. Ses réglages de configuration s'enregistrent bien " +
-    "sur LUI ; la personnalité, la voix, les plateformes et les déclencheurs " +
-    "restent, eux, ceux du bot actif."
+    `Ce bot n'est pas en marche : ${actifs.length} bot${actifs.length > 1 ? "s" : ""} ` +
+    `en marche sur ${plafond} au maximum` +
+    `${nomsActifs === "" ? "" : ` (${nomsActifs})`}.` +
+    " « Démarrer » (ci-dessous, ou dans la barre du haut) l'allume sans redémarrer " +
+    "l'instance. Ses réglages s'enregistrent bien sur LUI ; la personnalité, la " +
+    "voix, les plateformes et les déclencheurs restent, eux, ceux du bot en marche."
   );
+}
+
+/** Clé `localStorage` de l'attribution « session → bot » (badges de non-lus). */
+export const SESSION_BOT_STORAGE_KEY = "yuki-session-bot";
+
+/** Compteur exploitable (entier ≥ 0), sinon 0. */
+function normaliserCompteur(valeur) {
+  const n = Number(valeur);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * Attribue des conversations à un bot (retourne le MÊME objet si rien ne change).
+ *
+ * ⚠️ POURQUOI : le compteur de non-lus existant (`unread.js`) est PAR
+ * CONVERSATION ; une conversation ne dit pas à quel bot elle appartient. Le
+ * client l'apprend quand il reçoit la liste des sessions de SA connexion (une
+ * connexion = un bot). Cette table, persistée, permet ensuite d'additionner
+ * par bot sans jamais confondre deux bots qui auraient des identifiants de
+ * session proches.
+ */
+export function attribuerSessions(attribution, sessions, botId) {
+  const table = attribution && typeof attribution === "object" ? attribution : {};
+  if (typeof botId !== "string" || botId === "") return table;
+  const ids = Array.isArray(sessions) ? sessions : [];
+  let change = false;
+  const next = { ...table };
+  for (const id of ids) {
+    if (typeof id !== "string" || id === "") continue;
+    if (next[id] !== botId) {
+      next[id] = botId;
+      change = true;
+    }
+  }
+  return change ? next : table;
+}
+
+/**
+ * Non-lus PAR BOT : somme des compteurs des conversations attribuées à ce bot.
+ *
+ * ⚠️ LIMITE DITE : ce sont les non-lus CONNUS DE CET APPAREIL (l'état vit dans
+ * le navigateur, `unread.js`). Une conversation d'un bot jamais ouvert ici n'a
+ * pas de compteur — on ne l'invente pas.
+ */
+export function nonLusParBot(unread, attribution) {
+  const compteurs = {};
+  const parSession = unread && typeof unread === "object" ? unread : {};
+  const table = attribution && typeof attribution === "object" ? attribution : {};
+  for (const [sessionId, valeur] of Object.entries(parSession)) {
+    const n = normaliserCompteur(valeur);
+    if (n <= 0) continue;
+    const botId = table[sessionId];
+    if (typeof botId !== "string" || botId === "") continue;
+    compteurs[botId] = (compteurs[botId] ?? 0) + n;
+  }
+  return compteurs;
+}
+
+/**
+ * Texte du badge : « • » pour UN message, le nombre au-delà (« 9+ » borné).
+ *
+ * ⚠️ Un point unique est plus discret qu'un « 1 » sur un avatar de 24 px ; dès
+ * qu'il y en a plusieurs, le nombre est l'information utile. Vide = aucun badge.
+ */
+export function badgeNonLus(nombre) {
+  const n = normaliserCompteur(nombre);
+  if (n <= 0) return "";
+  if (n === 1) return "•";
+  return n > 9 ? "9+" : String(n);
+}
+
+/** Libellé accessible du badge (lecteur d'écran + infobulle). */
+export function libelleNonLus(nombre) {
+  const n = normaliserCompteur(nombre);
+  if (n <= 0) return "";
+  return `${n} message${n > 1 ? "s" : ""} non lu${n > 1 ? "s" : ""} sur cet appareil`;
 }
 
 /** Clé de registre d'une paire d'échanges (`"<source>-><cible>"`). */

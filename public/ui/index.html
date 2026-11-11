@@ -29,31 +29,34 @@
   <body>
     <header class="topbar">
       <!--
-        B — l'avatar de Yuki dans la barre du haut, AVANT son nom (24 px).
-        `hidden` par défaut : `avatar.js` le révèle quand un avatar existe (le
-        flocon/le nom restent le repli). Sur TÉLÉPHONE le nom est masqué mais
-        l'avatar RESTE visible (22 px) : c'est le seul endroit où il apparaît
-        dans la coquille mobile.
+        LOT 38 — LES BOTS CÔTE À CÔTE DANS LA BARRE DU HAUT.
+        `#bot-bar` est une RANGÉE d'avatars inline, remplie par `bot-switcher.js`
+        (un bouton par bot, 24 px, 22 px en téléphone). Cliquer un avatar
+        BASCULE immédiatement : aucun panneau intermédiaire. Le bot affiché est
+        démarqué par une CLASSE (`.bot-bar__item--courant`), un bot arrêté reste
+        visible avec un marqueur discret (`.bot-bar__item--arrete`).
+        ⚠️ Aucun style inline (CSP `style-src 'self'`) : tout vit dans `styles.css`.
       -->
       <!--
-        LOT 37 — LE SÉLECTEUR DE BOTS DANS LA BARRE DU HAUT (la demande INITIALE
-        du multi-bot). L'avatar n'est plus une image décorative : c'est un BOUTON
-        qui ouvre la LISTE des bots (`bot-switcher.js`) — pas la page des
-        paramètres. Chaque entrée porte l'état RÉEL du bot (`execution.demarre`)
-        et un bouton « Démarrer » pour un bot arrêté.
-        ⚠️ Sans avatar, le glyphe ❄️ (repli du lot 34) occupe le bouton : la barre
-        du haut est le SEUL élément toujours visible en téléphone, c'est donc là
-        que la bascule doit vivre. Aucun style inline (CSP).
+        B — l'avatar du bot principal reste le SEUL servi par le gateway
+        (`/avatar`, 24 px / 22 px en téléphone) ; il est posé dans son bouton de
+        la rangée par `bot-switcher.js`. Sans avatar, le MONOGRAMME du bot est le
+        repli visible — jamais un cercle vide.
       -->
       <div class="brand">
+        <div
+          id="bot-bar"
+          class="bot-bar"
+          role="group"
+          aria-label="Bots de cette instance"
+        ></div>
         <!--
-          LOT 37 — NOM + AVATAR dans le MÊME bouton : c'est ce que l'utilisateur
-          désigne par « le nom+avatar du bot » (demande de clic droit / appui
-          long). Le nom suit le bot AFFICHÉ (`?b=<slug>`) : il n'est plus écrit
-          en dur, sinon la barre annonçait « Yuki » alors que trois bots
-          existaient (le défaut rapporté).
+          LOT 38 — LE NOM RESTE À DROITE DE LA RANGÉE (il suit le bot affiché,
+          `?b=<slug>`). Le bouton ouvre le PANNEAU existant (Ajouter / Retirer) :
+          la rangée bascule, le panneau administre. Clic droit et appui long sur
+          les avatars du panneau font de même.
         -->
-        <button id="bot-switcher-btn" class="brand__bot" type="button" aria-label="Changer de bot" aria-haspopup="dialog" aria-expanded="false" aria-controls="bot-switcher-panel"><img id="brand-avatar" class="avatar avatar--brand" alt="" data-avatar-image hidden /><span class="brand__bot-glyphe" data-avatar-fallback aria-hidden="true">❄️</span><span id="bot-switcher-nom" class="brand__name">Yuki</span></button>
+        <button id="bot-switcher-btn" class="brand__bot" type="button" aria-label="Tous les bots : ajouter ou retirer" aria-haspopup="dialog" aria-expanded="false" aria-controls="bot-switcher-panel"><span id="bot-switcher-nom" class="brand__name">Yuki</span><span class="brand__plus" aria-hidden="true">…</span></button>
       </div>
       <!--
         PANNEAU DES BOTS — liste construite par `bot-switcher.js` (jamais écrite

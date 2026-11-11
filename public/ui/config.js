@@ -1449,10 +1449,11 @@ function sectionExecution(bot) {
     h("p", {
       class: "config-helper",
       text:
-        "Ce qui TOURNE maintenant, et non ce qui est enregistré : un bot peut être " +
-        "« actif » (il doit tourner) et arrêté (son démarrage a échoué — la cause " +
-        "est affichée). « Démarrer » ouvre ses sources puis son host ; « Arrêter » " +
-        "les ferme. Le bot principal de l'instance suit le gateway.",
+        "Ce qui TOURNE maintenant, et non ce qui est enregistré : un bot peut " +
+        "devoir tourner et être arrêté parce que son démarrage a échoué (la raison " +
+        "est affichée). « Démarrer » ouvre ses sources puis sa conversation ; " +
+        "« Arrêter » les ferme. Le bot de l'instance (celui qui suit le gateway) " +
+        "ne s'arrête pas tout seul.",
     }),
   );
   const execution = bot.execution ?? null;
@@ -1640,8 +1641,9 @@ function renderBotGeneral() {
       h("span", {
         class: "bot-info__valeur",
         text:
-          "non affiché ici : l'image servie par /avatar est celle du bot actif. " +
-          "L'avatar de ce bot lui appartient (il est copié lors d'un clonage).",
+          "non affiché ici : l'image servie par /avatar est celle du bot en marche " +
+          "(celui de l'instance). L'avatar de ce bot lui appartient (il est copié " +
+          "lors d'un clonage).",
       }),
     );
   }

@@ -46,11 +46,12 @@ export function champBot(botId) {
  *     qui sait quel host a répondu) ;
  *  2. à défaut, `demande` (le slug de l'URL) : la page a demandé un bot et le
  *     serveur ne l'a pas confirmé (serveur d'avant L4) — on affiche donc
- *     « bot principal », la VÉRITÉ, plutôt que de laisser croire au slug ;
+ *     « conversation principale », la VÉRITÉ, plutôt que de laisser croire au
+ *     slug ;
  *  3. sans demande ni annonce : `null` (aucun badge, écran inchangé).
  */
 export function texteBot(annonce, demande) {
   if (typeof annonce === "string" && annonce.trim().length > 0) return annonce.trim();
-  if (typeof demande === "string" && demande.trim().length > 0) return "bot principal";
+  if (typeof demande === "string" && demande.trim().length > 0) return "conversation principale";
   return null;
 }

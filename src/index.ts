@@ -3765,7 +3765,10 @@ async function main(): Promise<void> {
             bot: botId,
             error: messageOf(error),
           });
-          return undefined;
+          // ⚠️ LOT 38 : on ne rend plus `undefined` (qui ne laisse qu'un message
+          // générique). La CAUSE réelle remonte à `HostsBots`, qui la RETIENT et
+          // la rend dans `GET /api/bots` — c'est elle que lit l'utilisateur.
+          throw new Error(`sa pile de sources n'a pas pu être ouverte : ${messageOf(error)}`);
         }
         const configBot = configsBots.get(botId);
         const outils = outilsBots.get(botId);
@@ -3988,6 +3991,10 @@ async function main(): Promise<void> {
     // principal de servir, ni les autres bots de démarrer — le bilan nomme les
     // deux listes.
     const demarrageHostsBots = await hostsBots.demarrerAutres();
+    // ⚠️ LOT 38 — LA RAISON DES ÉCHECS VA DANS L'ÉTAT D'EXÉCUTION. Un échec
+    // seulement journalisé laissait l'interface dire « erreur au démarrage »
+    // sans jamais dire pourquoi (bouton « Réessayer » à l'aveugle).
+    executionBots?.noterErreurs(demarrageHostsBots.raisons);
 
     // MOTEUR HORLOGE (lot 2) — UN SEUL `setInterval` de 30 s (`DeclencheurBalayeur`),
     // démarré SEULEMENT quand un host existe : sans modèle, un passage planifié

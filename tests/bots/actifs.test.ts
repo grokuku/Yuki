@@ -211,7 +211,9 @@ describe("③ `preparerMultiBot` : liste, principal et plafond", () => {
     expect(preparation.refusesActifs.map((entree) => entree.id)).toEqual(["b4"]);
     const avertissements = preparation.avertissements.join("\n");
     expect(avertissements).toContain("« b4 »");
-    expect(avertissements).toContain("plafond");
+    // ⚠️ LOT 38 : l'avertissement est en français lisible (« limite »), plus
+    // « marqué ACTIF / plafond ». Le réglage reste nommé (il est actionnable).
+    expect(avertissements).toContain("la limite de 3 bot(s) en marche");
     expect(avertissements).toContain("bots.maxActifs");
   });
 

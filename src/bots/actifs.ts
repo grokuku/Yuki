@@ -123,8 +123,8 @@ export function resoudreDemarrageBots(
 /** Message d'avertissement (français) d'un bot REFUSÉ par le plafond. */
 export function messageRefusPlafond(bot: BotRecord, plafond: number): string {
   return (
-    `Le bot « ${bot.id} » est marqué ACTIF mais NE DÉMARRE PAS : le plafond de ` +
-    `${plafond} bot(s) simultané(s) est atteint (\`bots.maxActifs\`). ` +
-    "Éteignez un autre bot ou relevez le plafond (redémarrage requis)."
+    `Le bot « ${bot.id} » devrait tourner mais n'a PAS démarré : la limite de ` +
+    `${plafond} bot(s) en marche en même temps est atteinte (réglage ` +
+    "`bots.maxActifs`). Éteignez un autre bot, puis réessayez."
   );
 }
