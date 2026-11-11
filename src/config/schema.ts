@@ -801,6 +801,25 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_PUSH_CONTACT",
   },
 
+  // --- Bots : combien TOURNENT en même temps (lot 36, L1) -------------------
+  // ⚠️ Nombre MAXIMAL de bots dont la pile est construite au démarrage
+  // (approche B : UN processus, N `PiHost`). Un bot `actif` au-delà de ce
+  // plafond ne démarre PAS ; le refus est EXPLICITE (journal + `GET /api/bots`),
+  // jamais un bot silencieusement absent.
+  //
+  // ⚠️ `6` est la borne du REGISTRE (`MAX_BOTS`, `src/bots/registry.ts`) ; la
+  // table de configuration ne l'importe pas (données pures, aucun import).
+  // `apply: "restart"` : la résolution des bots a lieu UNE fois au démarrage.
+  "bots.maxActifs": {
+    scope: "instance",
+    type: "int",
+    default: 3,
+    min: 1,
+    max: 6,
+    apply: "restart",
+    env: "YUKI_BOTS_MAX_ACTIFS",
+  },
+
   // --- Agents d'exécution (Lot 4) -----------------------------------------
   // ⚠️ `FieldType` = `string | int | enum` : AUCUN booléen, aucun tableau. Le
   // niveau de garde-fou est donc un ENUM (D118) et le privilège un ENUM (D120).

@@ -216,6 +216,31 @@ interface CibleBot {
   readonly store: ConfigOverlayStore;
 }
 
+/**
+ * VALEUR d'une clé d'INSTANCE, lue SANS construire de runtime (lot 36, L1).
+ *
+ * ⚠️ POURQUOI ICI : `ConfigStore` et `CONFIG_SCHEMA` n'ont qu'UN propriétaire
+ * (`src/config/`), verrouillé par `tests/config/schema-scope.test.ts` — un second
+ * lecteur du store commun ignorerait l'overlay en silence. Ce point d'entrée
+ * applique donc la MÊME précédence que le runtime :
+ * `défauts (code) < store (page web) < environnement`.
+ *
+ * ⚠️ Sert au DÉMARRAGE, avant que le runtime n'existe : `preparerMultiBot` doit
+ * connaître le plafond `bots.maxActifs` pour décider quels bots tournent.
+ * `ConfigStore.load()` ne lève jamais : un store illisible retombe sur le défaut.
+ */
+export function lireValeurInstance(
+  env: Env,
+  path: string,
+  processEnv: NodeJS.ProcessEnv = process.env,
+): string | number | undefined {
+  const surcharge = readConfigEnvOverrides(processEnv)[path];
+  if (surcharge !== undefined) return surcharge;
+  const brute = new ConfigStore(env.configStorePath).load().values[path];
+  if (typeof brute === "string" || typeof brute === "number") return brute;
+  return CONFIG_SCHEMA[path]?.default;
+}
+
 /** Masque une valeur secrète : 4 derniers caractères précédés de `••••`. */
 export function maskSecret(value: string): string {
   const trimmed = value.trim();

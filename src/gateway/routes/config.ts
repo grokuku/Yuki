@@ -39,6 +39,7 @@ import {
   compterDonneesBot,
   compterSessionsPi,
   creerBot,
+  definirActif,
   modifierBot,
   supprimerBot,
 } from "../../bots/admin.js";
@@ -130,6 +131,12 @@ export interface ConfigApiDeps {
      * `bot.agents.detached`). Les agents eux-mêmes ne sont jamais supprimés.
      */
     retirerDesListesDAgents?: (botId: string) => number | void;
+    /**
+     * Plafond des bots SIMULTANÉS (lot 36, L2), lu au démarrage depuis
+     * `bots.maxActifs`. Absent ⇒ défaut 3. C'est lui qui refuse d'allumer un bot
+     * de plus (`409 plafond_actifs`) — la route ne redécide pas la règle.
+     */
+    maxActifs?: number;
   };
 }
 
@@ -1012,6 +1019,79 @@ function handleBotsDelete(
 }
 
 /**
+ * `PATCH /api/bots/<id>/actif` — ALLUME ou ÉTEINT un bot (lot 36, L2).
+ *
+ * Corps : `{ actif: true | false }` — « `actif` = ce bot DOIT tourner ».
+ *
+ * ⚠️ DEUX REFUS, tous deux rendus tels quels (`code` stable + message français) :
+ * `409 plafond_actifs` (plus de `bots.maxActifs` bots allumés) et
+ * `409 dernier_bot_actif` (éteindre le dernier rendrait le démarrage suivant
+ * impossible). Un troisième cas n'est PAS une erreur : `inchange`.
+ *
+ * ⚠️ L'effet est au REDÉMARRAGE du gateway (`redemarrageRequis`) : le processus en
+ * cours a résolu ses bots à son démarrage. La réponse le DIT au lieu de laisser
+ * croire à une application immédiate.
+ */
+function handleBotActif(input: ConfigRequestInput, botId: string): ConfigHttpResponse {
+  const guard = guardWrite(input);
+  if (guard) return guard;
+  const deps = input.deps;
+  const registre = deps.bots?.registre ?? null;
+  if (!registre) {
+    return json(409, {
+      error: "registre_absent",
+      code: "registre_absent",
+      message:
+        "L'instance n'est pas en mode multi-bot (aucun `state/bots.json`) : " +
+        "l'état d'un bot ne peut pas être changé.",
+    });
+  }
+  const stateDir = deps.bots?.stateDir;
+  if (!stateDir) {
+    return json(503, {
+      error: "bots_admin_indisponible",
+      code: "bots_admin_indisponible",
+      message: "Administration des bots indisponible : volume `state` inconnu.",
+    });
+  }
+  const corps = lireCorpsObjet(input.body);
+  if (!corps.ok) return corps.response;
+  try {
+    const resultat = definirActif({
+      stateDir,
+      registre,
+      botId,
+      actif: corps.value["actif"],
+      ...(deps.bots?.maxActifs !== undefined ? { maxActifs: deps.bots.maxActifs } : {}),
+    });
+    // ⚠️ Le registre EN MÉMOIRE suit l'écriture : `GET /api/bots` et la
+    // résolution des déclencheurs lisent CET objet, pas le fichier.
+    if (deps.bots && !resultat.inchange) deps.bots.registre = resultat.registre;
+    deps.logger.info("bot.actif", {
+      bot: resultat.bot.id,
+      actif: resultat.actif,
+      inchange: resultat.inchange,
+      actifs: resultat.actifs.join(","),
+      plafond: resultat.plafond,
+      flow: configWriteFlow(input.headers),
+    });
+    return json(200, {
+      bot: listingDe(resultat.bot),
+      bots: botsConnus(deps),
+      actif: resultat.actif,
+      inchange: resultat.inchange,
+      actifs: resultat.actifs,
+      plafond: resultat.plafond,
+      // ⚠️ Le gateway en cours ne change pas de configuration de bots :
+      // l'effet (démarrage ou arrêt de la pile) est au prochain démarrage.
+      redemarrageRequis: !resultat.inchange,
+    });
+  } catch (error) {
+    return adminBotError(deps, error);
+  }
+}
+
+/**
  * `GET /api/bots/<id>/donnees` — COMPTEURS RÉELS du bot (conversations,
  * souvenirs, déclencheurs, taille du dossier) : ce que montre la confirmation
  * de suppression. Aucun contenu n'est renvoyé, seulement des nombres.
@@ -1049,11 +1129,11 @@ function listingDe(bot: BotRecord): BotListing {
   };
 }
 
-/** Chemin `/api/bots/<id>[/donnees]` → identifiant + suffixe, ou `null`. */
+/** Chemin `/api/bots/<id>[/donnees|/actif]` → identifiant + suffixe, ou `null`. */
 function botRacineOfPath(
   path: string,
-): { botId: string; suffixe: "" | "donnees" } | null {
-  const match = /^\/api\/bots\/([^/]+)(\/donnees)?$/.exec(path);
+): { botId: string; suffixe: "" | "donnees" | "actif" } | null {
+  const match = /^\/api\/bots\/([^/]+)(\/(donnees|actif))?$/.exec(path);
   if (!match) return null;
   let botId: string;
   try {
@@ -1061,7 +1141,11 @@ function botRacineOfPath(
   } catch {
     return null;
   }
-  return { botId, suffixe: match[2] === undefined ? "" : "donnees" };
+  const suffixe = match[3];
+  return {
+    botId,
+    suffixe: suffixe === "donnees" ? "donnees" : suffixe === "actif" ? "actif" : "",
+  };
 }
 
 // ── Mot de passe d'INSTANCE (déverrouillage des agents sensibles) ───────────
@@ -1240,6 +1324,13 @@ export async function handleConfigRequest(
     if (racine.suffixe === "donnees") {
       if (method === "GET" || method === "HEAD") {
         return handleBotDonnees(input.deps, racine.botId);
+      }
+      return json(405, { error: "method_not_allowed", method });
+    }
+    // ⚠️ ON/OFF d'un bot (lot 36, L2) : `actif` = « doit tourner ».
+    if (racine.suffixe === "actif") {
+      if (method === "PATCH" || method === "POST") {
+        return handleBotActif(input, racine.botId);
       }
       return json(405, { error: "method_not_allowed", method });
     }

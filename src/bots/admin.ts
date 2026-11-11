@@ -72,6 +72,7 @@ import {
   type CapaciteBot,
   type RegistreBots,
 } from "./registry.js";
+import { MAX_ACTIFS_DEFAUT, botsAActiver, normaliserPlafond } from "./actifs.js";
 import { SOUS_DOSSIER_BOTS } from "./paths.js";
 
 /**
@@ -122,7 +123,11 @@ export type CodeAdminBot =
   | "bot_inconnu"
   | "dernier_bot"
   | "avatar_invalide"
-  | "echec_fichier";
+  | "echec_fichier"
+  // LOT 36 (L2) — on/off d'un bot.
+  | "actif_invalide"
+  | "plafond_actifs"
+  | "dernier_bot_actif";
 
 /** Refus EXPLICITE (code stable + message français actionnable). */
 export class AdminBotError extends Error {
@@ -577,6 +582,130 @@ export function modifierBot(options: OptionsModificationBot): ResultatModificati
     throw traduireErreurFichier(error, "L'enregistrement du bot a échoué");
   }
   return { registre: suivant, bot };
+}
+
+// ── On/off d'un bot (lot 36, L2) ─────────────────────────────────────────
+
+export interface OptionsDefinirActif {
+  /** Volume `state` (le registre vit à sa racine). */
+  stateDir: string;
+  /** Registre courant (déjà lu : aucun accès disque en lecture). */
+  registre: RegistreBots;
+  botId: string;
+  /** `true` = doit tourner, `false` = ne doit pas tourner. Tout autre type est refusé. */
+  actif: unknown;
+  /** Plafond des bots simultanés (défaut `bots.maxActifs` = 3). */
+  maxActifs?: unknown;
+}
+
+export interface ResultatDefinirActif {
+  registre: RegistreBots;
+  bot: BotRecord;
+  /** État ÉCRIT (identique à la demande quand `inchange` est faux). */
+  actif: boolean;
+  /** `true` ⇒ le bot était DÉJÀ dans l'état demandé : AUCUNE écriture. */
+  inchange: boolean;
+  /** Bots marqués actifs APRÈS l'appel (ordre de démarrage). */
+  actifs: string[];
+  /** Plafond appliqué à cet appel. */
+  plafond: number;
+  /** Le bot vient de passer à `true` : il ne tourne pas encore. */
+  demarrageRequis: boolean;
+  /** Le bot vient de passer à `false` : sa pile tourne jusqu'au redémarrage. */
+  arretRequis: boolean;
+}
+
+/**
+ * ALLUME ou ÉTEINT un bot — « `actif` = doit tourner » (lot 36, L2).
+ *
+ * ⚠️ C'est la PREMIÈRE route qui écrit `actif` : jusque-là le drapeau n'était
+ * posé qu'à la création (`false`) et à la promotion après suppression.
+ *
+ * DEUX refus, tous deux EXPLICITES (jamais un état incohérent écrit) :
+ *  - `plafond_actifs` : allumer un bot de plus dépasserait `bots.maxActifs` ;
+ *    le message nomme le plafond ET les bots déjà allumés (il faut en éteindre
+ *    un). `MAX_BOTS` reste la borne de CRÉATION du registre, pas celle-ci ;
+ *  - `dernier_bot_actif` : éteindre le DERNIER bot actif laisserait une instance
+ *    qui refuse de démarrer (`AUCUN_BOT_ACTIF`). On refuse plutôt que de créer
+ *    un état dont on sait qu'il ne redémarrera pas.
+ *
+ * ⚠️ `inchange` est un vrai cas : renvoyer une écriture inutile ferait croire à
+ * un changement d'état (et réveillerait les observateurs pour rien).
+ */
+export function definirActif(options: OptionsDefinirActif): ResultatDefinirActif {
+  const registre = options.registre;
+  const botId = options.botId;
+  const index = registre.bots.findIndex((bot) => bot.id === botId);
+  if (index < 0) {
+    throw new AdminBotError("bot_inconnu", 404, `Bot inconnu : « ${botId} ».`);
+  }
+  if (typeof options.actif !== "boolean") {
+    throw new AdminBotError(
+      "actif_invalide",
+      400,
+      "Le champ « actif » doit être un BOOLÉEN (`true` = doit tourner, `false` = arrêté).",
+    );
+  }
+  const actif = options.actif;
+  const plafond = normaliserPlafond(options.maxActifs ?? MAX_ACTIFS_DEFAUT);
+  const actuel = registre.bots[index] as BotRecord;
+  const allumes = botsAActiver(registre);
+
+  if (actuel.actif === actif) {
+    return {
+      registre,
+      bot: actuel,
+      actif,
+      inchange: true,
+      actifs: allumes.map((bot) => bot.id),
+      plafond,
+      demarrageRequis: false,
+      arretRequis: false,
+    };
+  }
+
+  if (actif) {
+    if (allumes.length >= plafond) {
+      throw new AdminBotError(
+        "plafond_actifs",
+        409,
+        `Plafond de ${plafond} bot(s) simultané(s) atteint ` +
+          `(\`bots.maxActifs\`) : éteignez d'abord l'un des bots actifs ` +
+          `(${allumes.map((bot) => bot.id).join(", ")}) avant d'allumer « ${botId} ».`,
+      );
+    }
+  } else if (allumes.length <= 1) {
+    // ⚠️ Éteindre le dernier bot actif rendrait le prochain démarrage IMPOSSIBLE
+    // (`AUCUN_BOT_ACTIF`) : le refus nomme l'action à faire (allumer un autre bot).
+    throw new AdminBotError(
+      "dernier_bot_actif",
+      409,
+      `Impossible d'éteindre « ${botId} » : c'est le DERNIER bot actif. ` +
+        "Allumez d'abord un autre bot, sinon le gateway ne pourrait plus démarrer.",
+    );
+  }
+
+  const bot: BotRecord = { ...actuel, actif };
+  const bots = [...registre.bots];
+  bots[index] = bot;
+  const suivant: RegistreBots = { ...registre, bots };
+  try {
+    ecrireRegistreBots(cheminRegistreBots(options.stateDir), suivant);
+  } catch (error) {
+    throw traduireErreurFichier(error, "L'enregistrement du bot a échoué");
+  }
+  return {
+    registre: suivant,
+    bot,
+    actif,
+    inchange: false,
+    actifs: botsAActiver(suivant).map((entree) => entree.id),
+    plafond,
+    // ⚠️ L'application est au REDÉMARRAGE (L1/L2 ne construisent qu'une pile) :
+    // le drapeau décrit ce qui DOIT tourner, pas ce qui tourne déjà.
+    demarrageRequis: actif,
+    arretRequis: !actif,
+  };
 }
 
 /** Copie les éléments demandés d'un bot existant (aucune écriture hors du clone). */

@@ -333,6 +333,19 @@ async function main(): Promise<void> {
   } else {
     logger.info("bots.mono", { migration: bots.migration });
   }
+  // --- LOT 36 (L1) : QUI DOIT TOURNER, et le bot PRINCIPAL -----------------
+  // ⚠️ Deux listes distinctes : `principal` (identité, `yuki` prioritaire) et
+  // `a_demarrer` (tous les `actif:true`, plafonnés à `bots.maxActifs`). Ce qui
+  // est REFUSÉ par le plafond a déjà été dit un par un (`bots.avertissement`) :
+  // aucun bot ne disparaît en silence.
+  logger.info("bots.demarrage", {
+    mode: bots.mode,
+    principal: bots.principal?.id ?? null,
+    pile: bots.bot?.id ?? null,
+    a_demarrer: bots.aDemarrer.map((entree) => entree.id).join(","),
+    refuses: bots.refusesActifs.map((entree) => entree.id).join(","),
+    plafond: bots.plafondActifs,
+  });
 
   // --- CAPACITÉS DU BOT ACTIF (lot 35h) -------------------------------------
   // ⚠️ Les capacités qui OUVRENT les outils sont celles du BOT ACTIF, lues UNE
@@ -1076,11 +1089,16 @@ async function main(): Promise<void> {
     registre: RegistreBots | null;
     stateDir: string;
     piSessionsDir: string;
+    maxActifs: number;
     retirerDesListesDAgents: (botId: string) => number;
   } = {
     registre: bots.registre,
     stateDir: env.mountPoints.state,
     piSessionsDir: env.piSessionsDir,
+    // ⚠️ LOT 36 (L2) : le plafond résolu au démarrage est celui que la route
+    // on/off applique. Une seule source : `bots.maxActifs`, lu par
+    // `preparerMultiBot` (environnement > store > défaut 3).
+    maxActifs: bots.plafondActifs,
     retirerDesListesDAgents: (botId: string) =>
       agentStoreRef ? agentStoreRef.retirerBotDesListes(botId).length : 0,
   };

@@ -18,9 +18,13 @@
 import type { Env } from "../config/env.js";
 
 import {
+  lirePlafondActifs,
+  messageRefusPlafond,
+  resoudreDemarrageBots,
+} from "./actifs.js";
+import {
   BOT_YUKI,
   RegistreBotsError,
-  botActif,
   cheminRegistreBots,
   lireRegistreBots,
   type BotRecord,
@@ -39,6 +43,7 @@ import {
 } from "./paths.js";
 
 export * from "./registry.js";
+export * from "./actifs.js";
 export * from "./paths.js";
 export * from "./migrate.js";
 export * from "./admin.js";
@@ -62,8 +67,23 @@ export interface ResultatPreparationBots {
    * empilerait les chemins (`<pi>/sessions/<botId>/<botId>`).
    */
   envInstance: Env;
-  /** Bot actif (`null` en mode mono-bot historique). */
+  /** Bot dont la PILE tourne (`null` en mode mono-bot historique). */
   bot: BotRecord | null;
+  /**
+   * Bot d'IDENTITÉ (lot 36, L1) : `botActif` privilégie TOUJOURS `yuki`. Il peut
+   * donc DIFFÉRER de `bot` (le bot qui tourne) — c'est le cas quand « yuki » a
+   * été éteint alors qu'un autre bot reste actif.
+   */
+  principal: BotRecord | null;
+  /**
+   * Bots qui DOIVENT TOURNER (`actif: true`), triés et PLAFONNÉS à
+   * `bots.maxActifs`. En mode mono-bot historique : liste vide.
+   */
+  aDemarrer: BotRecord[];
+  /** Bots `actif` REFUSÉS par le plafond (nommés dans `avertissements`). */
+  refusesActifs: BotRecord[];
+  /** Plafond appliqué (entier dans `[1, MAX_BOTS]`). */
+  plafondActifs: number;
   /** Registre lu (`null` en mode mono-bot historique). */
   registre: RegistreBots | null;
   /** Chemins effectifs du bot (`null` en mode mono-bot historique). */
@@ -104,6 +124,11 @@ export interface OptionsPreparationBots {
    * déplacement (utilisé par les tests et par un démarrage en lecture seule).
    */
   migrationAutomatique?: boolean;
+  /**
+   * Plafond des bots simultanés (lot 36, L1). Absent ⇒ lu depuis
+   * `bots.maxActifs` (environnement, puis store, puis défaut 3).
+   */
+  maxActifs?: number;
 }
 
 /**
@@ -122,6 +147,7 @@ export function preparerMultiBot(
   const stateDir = env.mountPoints.state;
   const registrePath = cheminRegistreBots(stateDir);
   const avertissements: string[] = [];
+  const plafondActifs = lirePlafondActifs(env, processEnv);
 
   let registre: RegistreBots | null;
   try {
@@ -140,6 +166,10 @@ export function preparerMultiBot(
         env,
         envInstance: env,
         bot: null,
+        principal: null,
+        aDemarrer: [],
+        refusesActifs: [],
+        plafondActifs,
         registre: null,
         chemins: null,
         migration,
@@ -157,6 +187,10 @@ export function preparerMultiBot(
           env,
           envInstance: env,
           bot: null,
+          principal: null,
+          aDemarrer: [],
+          refusesActifs: [],
+          plafondActifs,
           registre: null,
           chemins: null,
           migration,
@@ -195,12 +229,43 @@ export function preparerMultiBot(
     }
   }
 
-  const bot = botActif(registre);
-  if (!bot) {
+  // ⚠️ LOT 36 (L1) : la LISTE des bots à démarrer et le bot PRINCIPAL sont deux
+  // choses distinctes (voir `src/bots/actifs.ts`). Le plafond `bots.maxActifs`
+  // écarte explicitement les bots en trop — jamais en silence.
+  const demarrage = resoudreDemarrageBots(registre, {
+    maxActifs: options.maxActifs ?? plafondActifs,
+  });
+  for (const refuse of demarrage.refuses) {
+    avertissements.push(messageRefusPlafond(refuse, demarrage.plafond));
+  }
+  const principal = demarrage.principal;
+  if (!principal) {
     throw new DemarrageRefuseError(
       "AUCUN_BOT_ACTIF",
       "Le registre des bots ne contient aucun bot actif : démarrage refusé.",
       registre.bots.map((entree) => `${entree.id} (actif=${entree.actif})`),
+    );
+  }
+  if (demarrage.aDemarrer.length === 0) {
+    // ⚠️ Tous les bots sont ÉTEINTS : il n'y a rien à faire tourner. Le refus
+    // nomme l'état exact — mieux vaut ne pas démarrer qu'inventer un bot.
+    throw new DemarrageRefuseError(
+      "AUCUN_BOT_ACTIF",
+      "Aucun bot n'est marqué actif (« doit tourner ») : démarrage refusé.",
+      registre.bots.map((entree) => `${entree.id} (actif=${entree.actif})`),
+    );
+  }
+  // ⚠️ UNE SEULE PILE est construite à ce jour (L1) : c'est le bot PRINCIPAL s'il
+  // doit tourner, sinon le premier bot à démarrer. Cette règle garantit la
+  // non-régression : avec un seul bot actif (`yuki`, cas par défaut), le bot
+  // effectif est EXACTEMENT celui d'avant.
+  const bot =
+    demarrage.aDemarrer.find((entree) => entree.id === principal.id) ??
+    (demarrage.aDemarrer[0] as BotRecord);
+  if (bot.id !== principal.id) {
+    avertissements.push(
+      `Le bot PRINCIPAL est « ${principal.id} » mais il est ÉTEINT : la pile ` +
+        `construite est celle de « ${bot.id} » (le premier bot actif).`,
     );
   }
   if (bot.id !== BOT_YUKI) {
@@ -234,6 +299,10 @@ export function preparerMultiBot(
     env: resolution.env,
     envInstance: env,
     bot,
+    principal,
+    aDemarrer: [...demarrage.aDemarrer],
+    refusesActifs: [...demarrage.refuses],
+    plafondActifs: demarrage.plafond,
     registre,
     chemins: resolution.chemins,
     migration,

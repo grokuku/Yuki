@@ -2,8 +2,10 @@
  * VERROU DE CLASSIFICATION de la configuration (lot 35b, sous-lot 1b-2).
  *
  * Ce que ce fichier verrouille :
- *  - `CONFIG_PATHS.length === 89` (aucune clé ajoutée ni perdue par accident) ;
- *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 66 / 18 / 5 ;
+ *  - `CONFIG_PATHS.length === 90` (aucune clé ajoutée ni perdue par accident) ;
+ *    ⚠️ 89 → 90 au lot 36 (L1) : `bots.maxActifs` (plafond des bots simultanés).
+ *    Le compteur est mis à jour EXPRÈS : c'est lui qui rend l'ajout délibéré.
+ *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 67 / 18 / 5 ;
  *  - `env` INTERDIT hors `scope: "instance"` (garde de compilation, doublée ici
  *    d'un contrôle à l'exécution : la table est une donnée, pas un type) ;
  *  - `mixte` ⇒ `mixteMerge` DÉCLARÉ, et `et` uniquement sur des enums `off|on` ;
@@ -40,9 +42,20 @@ function descriptor(path: string): FieldDescriptor {
 }
 
 describe("① la table des clés", () => {
-  it("déclare EXACTEMENT 89 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(89);
+  it("déclare EXACTEMENT 90 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(90);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
+    // ⚠️ La clé du lot 36 (L1) est NOMMÉE ici : le plafond des bots simultanés
+    // est un réglage d'INSTANCE (il ne dépend d'aucun bot).
+    expect(descriptor("bots.maxActifs")).toMatchObject({
+      scope: "instance",
+      type: "int",
+      default: 3,
+      min: 1,
+      max: 6,
+      apply: "restart",
+      env: "YUKI_BOTS_MAX_ACTIFS",
+    });
   });
 
   it("chaque clé porte une portée VALIDE", () => {
@@ -51,10 +64,10 @@ describe("① la table des clés", () => {
     }
   });
 
-  it("répartition : 66 `instance` / 18 `bot` / 5 `mixte`", () => {
+  it("répartition : 67 `instance` / 18 `bot` / 5 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 66, bot: 18, mixte: 5 });
+    expect(compte).toEqual({ instance: 67, bot: 18, mixte: 5 });
   });
 });
 
