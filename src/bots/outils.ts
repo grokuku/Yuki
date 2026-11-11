@@ -45,7 +45,6 @@ import {
   type ModeResolutionBot,
   type StoresMemoireBot,
 } from "../memory/stores-bot.js";
-import type { Logger } from "../observability/logger.js";
 import { SessionPinStore } from "../pi/session-pins.js";
 import { PersonalityStore } from "../personality/index.js";
 import { ReactionStore } from "../reactions/index.js";
@@ -53,6 +52,14 @@ import { RulesStore } from "../rules/index.js";
 
 import { pathsForBot } from "./paths.js";
 import { estIdBot } from "./registry.js";
+
+/** Journal minimal attendu (le `Logger` de l'application le satisfait). */
+export interface OutilsBotLogger {
+  debug(message: string, fields?: Record<string, unknown>): void;
+  info(message: string, fields?: Record<string, unknown>): void;
+  warn(message: string, fields?: Record<string, unknown>): void;
+  error(message: string, fields?: Record<string, unknown>): void;
+}
 
 /**
  * Erreurs de la fabrique — chacune NOMME le refus (jamais un `throw` muet).
@@ -145,11 +152,13 @@ export interface OptionsOutilsBot {
   envInstance: Env;
   mode: ModeResolutionBot;
   configBot?: ConfigRuntime;
-  logger?: Logger;
+  logger?: OutilsBotLogger;
   /** Stores mémoire déjà ouverts (sinon ils sont ouverts ici). */
   memoire?: StoresMemoireBot;
   /** Objets déjà construits (bot de la pile) : réutilisés, jamais reconstruits. */
   existants?: OutilsBotExistants;
+  /** Environnement source des surcharges de chemins (tests ; défaut `process.env`). */
+  processEnv?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -163,8 +172,13 @@ function verifierEnvNonDouble(options: {
   botId: string;
   envBot: Env;
   envInstance: Env;
+  processEnv?: NodeJS.ProcessEnv;
 }): void {
-  const canonique = pathsForBot(options.envInstance, options.botId).env;
+  const canonique = pathsForBot(
+    options.envInstance,
+    options.botId,
+    options.processEnv ? { processEnv: options.processEnv } : {},
+  ).env;
   const double = join(canonique.piSessionsDir, options.botId);
   if (options.envBot.piSessionsDir === double) {
     throw new OutilsBotError(
@@ -193,7 +207,12 @@ export function creerOutilsBot(options: OptionsOutilsBot): OutilsBot {
         "(attendu : minuscules, chiffres, « _ » ou « - », commençant par une lettre).",
     );
   }
-  verifierEnvNonDouble({ botId, envBot, envInstance: options.envInstance });
+  verifierEnvNonDouble({
+    botId,
+    envBot,
+    envInstance: options.envInstance,
+    ...(options.processEnv ? { processEnv: options.processEnv } : {}),
+  });
 
   const existants = options.existants ?? {};
   const memoire =
@@ -276,7 +295,9 @@ export interface OptionsOutilsBots {
    * tout autre bot : un objet de la pile n'est pas l'objet d'un autre bot.
    */
   existantsPile?: OutilsBotExistants;
-  logger?: Logger;
+  logger?: OutilsBotLogger;
+  /** Environnement source des surcharges de chemins (tests ; défaut `process.env`). */
+  processEnv?: NodeJS.ProcessEnv;
   /** Couture de test : comptage des résolutions d'`Env` (défaut `envPourBot`). */
   resoudreEnvBot?: (botId: string) => Env;
 }
@@ -296,7 +317,7 @@ function storesMemoireDe(options: {
   envBot: Env;
   fabrique: FabriqueMemoireBots;
   existant?: StoresMemoireBot;
-  logger?: Logger;
+  logger?: OutilsBotLogger;
 }): StoresMemoireBot {
   const { botId, envBot, fabrique, existant } = options;
   if (existant) {
@@ -342,6 +363,7 @@ export function creerOutilsBots(options: OptionsOutilsBots): Map<string, OutilsB
         envInstance: options.envInstance,
         botId,
         mode: options.mode,
+        ...(options.processEnv ? { processEnv: options.processEnv } : {}),
       }));
 
   const outils = new Map<string, OutilsBot>();
@@ -372,6 +394,7 @@ export function creerOutilsBots(options: OptionsOutilsBots): Map<string, OutilsB
         mode: options.mode,
         ...(configBot ? { configBot } : {}),
         ...(options.logger ? { logger: options.logger } : {}),
+        ...(options.processEnv ? { processEnv: options.processEnv } : {}),
         memoire,
         ...(existants ? { existants } : {}),
       }),

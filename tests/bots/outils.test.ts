@@ -76,7 +76,7 @@ interface Banc {
 }
 
 /** Volumes vides (état + montage Pi) : `Env` d'INSTANCE. */
-function banc(options: { processEnv?: NodeJS.ProcessEnv } = {}): Banc {
+function banc(): Banc {
   const racine = mkdtempSync(join(tmpdir(), "yuki-outils-bots-"));
   racines.push(racine);
   const state = join(racine, "state");
@@ -132,7 +132,12 @@ function fabrique(b: Banc, mode: "mono" | "multi"): FabriqueMemoireBots {
 describe("① garde de non-régression : 1 bot ⇒ les SEPT chemins IDENTIQUES", () => {
   it("mode MONO historique : le principal garde les chemins d'aujourd'hui", () => {
     const b = banc();
-    const preparation = preparerMultiBot(b.env, { processEnv: {} });
+    // Mono-bot historique STRICT : aucun registre, aucune migration (`main()` y
+    // tombe quand le volume est en lecture seule, cf. `src/bots/index.ts`).
+    const preparation = preparerMultiBot(b.env, {
+      processEnv: {},
+      migrationAutomatique: false,
+    });
     expect(preparation.mode).toBe("mono");
     expect(preparation.aDemarrer).toEqual([]);
 
@@ -143,6 +148,7 @@ describe("① garde de non-régression : 1 bot ⇒ les SEPT chemins IDENTIQUES",
       pile: "yuki",
       fabrique: fabrique(b, preparation.mode),
       logger: journal,
+      processEnv: {},
     });
 
     // La Map ne contient QUE le bot de la pile (aucun bot à démarrer).
@@ -175,6 +181,7 @@ describe("① garde de non-régression : 1 bot ⇒ les SEPT chemins IDENTIQUES",
       pile: "yuki",
       fabrique: fabrique(b, preparation.mode),
       logger: journal,
+      processEnv: {},
     });
 
     // ⚠️ `preparation.env` est EXACTEMENT l'`Env` que `main()` passe aujourd'hui
@@ -281,6 +288,7 @@ describe("③ isolation de CONSTRUCTION (le filtrage est couvert par 35i)", () =
       pile: "yuki",
       fabrique: fabrique(b, preparation.mode),
       logger: journal,
+      processEnv: {},
     });
     const yuki = outils.get("yuki");
     const kohai = outils.get("kohai");
@@ -313,6 +321,7 @@ describe("④ `envPourBot` n'est appliqué qu'UNE fois par bot", () => {
       pile: "yuki",
       fabrique: fabrique(b, preparation.mode),
       logger: journal,
+      processEnv: {},
       resoudreEnvBot: (botId) => {
         appels.push(botId);
         return envPourBot({
@@ -409,6 +418,7 @@ describe("⑤ la Map = bots à DÉMARRER + bot de pile, jamais les refusés", ()
       pile: "yuki",
       fabrique: fabrique(b, preparation.mode),
       logger: journal,
+      processEnv: {},
     });
 
     expect([...outils.keys()]).toEqual(["yuki", "kohai", "senpai"]);
@@ -427,6 +437,7 @@ describe("⑤ la Map = bots à DÉMARRER + bot de pile, jamais les refusés", ()
       pile: "kohai",
       fabrique: fabrique(b, preparation.mode),
       logger: journal,
+      processEnv: {},
     });
 
     expect([...outils.keys()]).toEqual(["yuki", "kohai"]);
@@ -445,6 +456,7 @@ describe("⑤ la Map = bots à DÉMARRER + bot de pile, jamais les refusés", ()
       pile: "yuki",
       fabrique: fabrique(b, preparation.mode),
       logger: journal,
+      processEnv: {},
     });
     expect([...outils.keys()]).toEqual(["yuki"]);
   });

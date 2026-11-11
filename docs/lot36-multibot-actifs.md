@@ -1,9 +1,10 @@
-# Lot 36 — multi-bot : quels bots TOURNENT (L1 + L2 + L3-a)
+# Lot 36 — multi-bot : quels bots TOURNENT (L1 + L2 + L3-a + L3-b)
 
 Approche **B** (décision utilisateur) : **un seul processus**, N `PiHost`.
-Ce document couvre L1 (résolution au démarrage), L2 (on/off réel) et **L3-a**
-(la configuration par bot) ; les morceaux suivants sont listés en fin, avec ce
-qui reste à faire.
+Ce document couvre L1 (résolution au démarrage), L2 (on/off réel), **L3-a**
+(la configuration par bot) et **L3-b** (mémoire, archive, avatar, personnalité,
+règles, épingles, réactions par bot) ; les morceaux suivants sont listés en fin,
+avec ce qui reste à faire.
 
 ## Ce qui est livré
 
@@ -105,10 +106,48 @@ actées pour la suite :
 autres ; seule la pile écrit l'instance aujourd'hui (`PUT /api/config`), donc
 rien n'est observable — ce sera à traiter quand L3-d branchera les routes par bot.
 
+### L3-b — MÉMOIRE, ARCHIVE, AVATAR, PERSONNALITÉ, RÈGLES, PINS, RÉACTIONS (livré)
+
+`src/bots/outils.ts` (nouveau) — même principe que L3-a : une Map **à côté** des
+singletons, **aucun appelant changé**, le principal **= les mêmes objets**.
+
+| Symbole | Rôle |
+|---|---|
+| `creerOutilsBot({botId, envBot, configBot, …})` (`:201`) | les 7 objets d'UN bot : `memoire` (`StoresMemoireBot`), `archive` (`ConversationArchiveStore`), `avatar`, `personnalite`, `regles`, `pins`, `reactions` + ses 7 chemins |
+| `creerOutilsBots({envInstance, mode, bots, pile, fabrique, existantsPile})` (`:358`) | `Map<botId, OutilsBot>` = bots **à démarrer** (L1) **+ le bot de la pile**, un identifiant répété construit **une** fois |
+| `cheminsOutils(env)` (`:103`) | les **sept** chemins d'un `Env` (garde de non-régression : ce sont ceux que `main()` lisait) |
+| `OutilsBotError` (`:74`) | `bot_invalide` · `env_double_resolution` · `env_incoherent` |
+| `FabriqueMemoireBots.estOuvert/adopter` (`src/memory/stores-bot.ts:187`/`:202`) | la fabrique des stores (35i) **adopte** ceux que `main()` a ouverts pour la pile : une passe de consolidation ne peut plus rouvrir un second `MemoryStore` |
+
+Dans `main()` : `fabriqueMemoireBots.adopter(storesMemoire)` (`src/index.ts:2727`,
+les stores du bot de la pile étaient ouverts **avant** la fabrique) ; la Map est
+construite **dans la porte GPU** (`src/index.ts:2841`), juste après l'archive des
+conversations, avec `existantsPile` = les objets déjà construits ; `pins` vient
+désormais de la Map (`src/index.ts:3557`), plus d'un `SessionPinStore.open` local.
+Journaux : `bots.outils` (bots couverts) puis `bots.outils.bot` par bot **autre
+que la pile** — des **chemins** seulement, jamais un contenu.
+
+⚠️ **`envPourBot` n'est PAS idempotent** (`pathsForBot` surcharge `piSessionsDir`
+en `<pi>/sessions/<botId>` ; le réappliquer empile `<bot>/<bot>`). La base est
+TOUJOURS `bots.envInstance`, la résolution a lieu une seule fois par bot
+(`creerOutilsBots`, ou reprise de l'`Env` des stores déjà ouverts) et
+`creerOutilsBot` **refuse** un `Env` dérivé deux fois.
+
+⚠️ La Map **n'est pas branchée sur les piles** (c'est L3-d) : elle est
+journalisée et disponible. Elle est construite pour les bots à démarrer **et**
+le bot de la pile, **jamais** pour ceux que le plafond a refusés.
+
+⚠️ Effet de bord assumé : les stores de mémoire des bots à démarrer sont ouverts
+(fichier + index), l'archive/avatar/personnalité/règles/épingles/réactions étant
+seulement **construits** (aucun `ensureLayout`, aucun `read`). En mode mono-bot ou
+à un seul bot actif, la Map ne contient que la pile et **réutilise ses objets** :
+zéro écriture supplémentaire.
+
 ## Ce qui n'est PAS livré (et pourquoi)
 
-**L3-b → L10 ne sont pas commencés.** L3-a (la configuration par bot) est livré,
-mais `creerPileBot(botId)` reste à extraire de `main()` (`src/index.ts:278-3890`) :
+**L3-c → L10 ne sont pas commencés.** L3-a (configuration) et L3-b (mémoire,
+archive, avatar, personnalité, règles, épingles, réactions) sont livrés, mais
+`creerPileBot(botId)` reste à extraire de `main()` (`src/index.ts:278-3890`).
 ~1 100 lignes de câblage imbriqué (`if (gate.passed)` ligne 2419 → 3518) où le
 `PiHost`, la mémoire, les envois, la bibliothèque, les jobs et les canaux partagent
 des fermetures et des `let` lus plus tard par les routes (`getSubsystems`,
@@ -120,7 +159,7 @@ Découpage retenu (chaque morceau vert et démarrable) :
 | Morceau | Contenu |
 |---|---|
 | **L3-a** ✅ | la **configuration** par bot (`src/config/bots.ts`, Map construite dans `main()`) |
-| L3-b | la **mémoire** par bot (stores, archive, avatar, personality, pins) — consomme `configsBots` |
+| **L3-b** ✅ | la **mémoire**, l'archive, l'avatar, la personnalité, les règles, les pins et les réactions par bot (`src/bots/outils.ts`) |
 | L3-c | les **sources / envois / pré-autos** par bot |
 | L3-d | le **`PiHost` par bot** + `getSubsystems` (+ routes `/api/bots/<id>/config` servies par le runtime du bot) |
 
@@ -136,6 +175,7 @@ registre et le journal, sans construire sa pile.
 | `tests/bots/actif.test.ts` (13) | `definirActif` (écriture, `inchange`, plafond, dernier actif, types) + route (403 sans en-tête, registre mémoire, 409, 405/404/400, mode mono) |
 | `tests/config/schema-scope.test.ts` | compteur 89 → **90** clés et 66 → **67** `instance`, avec la clé nommée (l'ajout est **délibéré**) |
 | `tests/config/config-bots.test.ts` (8, **L3-a**) | deux bots ⇒ deux runtimes/overlays/valeurs · identifiant invalide refusé · **non-régression 1 bot actif : instantané COMPLET identique** (10 clés nommées + `snapshot()` des 90) · la Map couvre `aDemarrer` et **pas** les refusés du plafond · bot de pile toujours présent · écrire l'overlay d'un bot ne touche pas le principal |
+| `tests/bots/outils.test.ts` (11, **L3-b**) | **non-régression : les 7 chemins du principal identiques** en mono (`<state>/…`) et en multi (`<state>/bots/<id>/…`) · les objets de `main()` **réutilisés** (`===`) et **adoptés** par la fabrique · deux bots ⇒ deux `MemoryStore`/`avatarDir`/`personalityPath` · **isolation de construction** (souvenir d'un bot absent du store, de l'index et du fichier de l'autre) · `envPourBot` **une seule fois** par bot (aucun `<bot>/<bot>`, `Env` doublement dérivé **refusé**) · identifiant invalide refusé · Map = `aDemarrer` + pile, **jamais** les refusés du plafond |
 
 Preuve d'échec sur l'origine (arbre gelé `14f77dd`, `/tmp/preuve-lot36/origine`,
 contenu `src/` vérifié : 325 entrées, `tests/` : 451) : **12/12** et **13/13**
@@ -154,3 +194,22 @@ sont la garde de non-régression et deux invariants de la Map.
 Suites de campagne : `tests/config` + `tests/bots` **257/257**, `tests/gateway` +
 `tests/integration` **658/658** (5 ignorés). `git status` : `src/index.ts` modifié,
 2 fichiers ajoutés — **aucun PNG touché**.
+
+Preuve L3-b : arbre de départ **sale** (L3-a non commité) ⇒ pas de gel « propre » :
+l'arbre a été gelé quand même **avant toute écriture** dans
+`/tmp/preuve-lot36-l3b/arbre-avant.tar.gz` (vérifié : **`src/` présent**, 327
+entrées ; `src/bots/outils.ts` et `tests/bots/outils.test.ts` **absents**), et la
+preuve est faite par **neutralisation** sur `/tmp/preuve-lot36-l3b/origine` :
+(a) sans le module, le fichier de tests échoue à l'import ; (b) avec une fabrique
+**naïve** (le comportement d'origine : un seul jeu d'objets, aux chemins de
+l'instance, sans réutilisation), **8/11** tests échouent — les 3 restants sont la
+garde mono-bot et deux invariants structurels de la Map que l'ancien code
+respectait déjà.
+
+`tsc` vert sur **les deux** projets après L3-b. Suites de campagne L3-b :
+`tests/memory` + `tests/pi` + `tests/bots` **795/795** (93 fichiers),
+`tests/config` + `tests/gateway` + `tests/integration` **819/819** (5 ignorés).
+`git status` : `src/index.ts`, `src/memory/stores-bot.ts` et
+docs modifiés, `src/bots/outils.ts` + `tests/bots/outils.test.ts` ajoutés —
+**aucun PNG touché**.
+
