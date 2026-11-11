@@ -18,6 +18,7 @@ import {
   registerServiceWorker,
 } from "./push.js";
 import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
+import { botDeLaPage, champBot, texteBot } from "./bot-conversation.js";
 import {
   creationRefusal,
   fetchChatStatus,
@@ -92,6 +93,11 @@ const els = {
   /** Phrase d'aide de l'état vide (réécrite quand le mode distant n'a rien à montrer). */
   emptyHint: document.querySelector("#empty-state .empty-state__hint"),
   connection: document.getElementById("connection"),
+  /**
+   * LOT 36 (L4) — bot de CETTE conversation (`/?b=<slug>`). Masqué tant que la
+   * page ne parle pas à un bot désigné : l'en-tête reste celui d'avant L4.
+   */
+  botName: document.getElementById("bot-name"),
   sessionState: document.getElementById("session-state"),
   pendingBadge: document.getElementById("pending-badge"),
   queued: document.getElementById("queued"),
@@ -164,6 +170,13 @@ const sourcesNotifications = initSourcesNotifications({
 
 /** Conversation visée par un clic de notification (`?session=<id>`). */
 const deepLinkSession = new URLSearchParams(window.location.search).get("session");
+
+/**
+ * LOT 36 (L4) — BOT de cette conversation, lu dans l'URL (`?b=<slug>`, même
+ * convention que `/bots`). `null` ⇒ aucun bot demandé : toutes les trames de
+ * connexion sont alors celles d'avant L4 (`botId` absent ⇒ principal).
+ */
+const botPage = botDeLaPage(window.location.search);
 let deepLinkHandled = false;
 
 /* ─── E2 — STORES PAR CONVERSATION (transport multiplexé) ──────────────────
@@ -1826,6 +1839,18 @@ function handleFrame(frame) {
     // `ui.timeZone`, défaut UTC). Absent (serveur ancien) ⇒ `UTC` par défaut du
     // module — jamais le fuseau du navigateur.
     if (typeof frame.timeZone === "string") setTimeZone(frame.timeZone);
+    // ⚠️ LOT 36 (L4) — À QUI PARLE-T-ON : le serveur l'annonce (`welcome.bot`).
+    // Sans bot demandé ni annoncé, aucun badge n'apparaît (écran inchangé).
+    const libelleBot = texteBot(frame.bot, botPage);
+    if (els.botName) {
+      if (libelleBot === null) {
+        els.botName.hidden = true;
+        els.botName.textContent = "";
+      } else {
+        els.botName.textContent = libelleBot;
+        els.botName.hidden = false;
+      }
+    }
     if (frame.sessionId) sessionId = frame.sessionId;
     // Un `welcome { resumed: true }` acquitte notre `resume` : le rejeu (ou le
     // snapshot) suit, on autorise une nouvelle demande si un trou apparaissait.
@@ -2758,7 +2783,7 @@ function connect() {
       // Reconnexion : on redemande le rejeu STRICTEMENT depuis le dernier `seq`
       // appliqué (le serveur rejoue `seq > fromSeq`, ou renvoie un snapshot).
       resumePending = true;
-      if (!sendRaw({ type: "resume", sessionId, fromSeq: lastSeq })) {
+      if (!sendRaw({ type: "resume", sessionId, fromSeq: lastSeq, ...champBot(botPage) })) {
         resumePending = false;
       }
     } else {
@@ -2768,6 +2793,7 @@ function connect() {
         type: "hello",
         clientVersion: CLIENT_VERSION,
         ...(sessionId ? { sessionId } : {}),
+        ...champBot(botPage),
       });
     }
   });

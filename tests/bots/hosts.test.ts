@@ -682,7 +682,7 @@ describe("routes d'instance (garde statique sur `src/index.ts`)", () => {
     expect(source).toContain("await hostsBots?.arreter();");
   });
 
-  it("`getSubsystems` et le transport ne lisent PAS la Map des hosts", () => {
+  it("`getSubsystems` garde le principal ; le transport reçoit `host` ET les hosts par bot (L4)", () => {
     const debut = source.indexOf("const getSubsystems = (): SubsystemsSnapshot => {");
     expect(debut).toBeGreaterThan(0);
     const fin = source.indexOf("\n  };", debut);
@@ -694,5 +694,9 @@ describe("routes d'instance (garde statique sur `src/index.ts`)", () => {
     expect(corps).toContain("sessionsDir: env.piSessionsDir");
     // Le transport WS reçoit toujours `host` (le principal).
     expect(source).toContain("transport = createWsTransport({\n      host,");
+    // ⚠️ L4 : il reçoit EN PLUS les hosts par bot (`hosts: hostsBots`). `host`
+    // restant le principal, une trame SANS `botId` est servie exactement comme
+    // avant L4 ; c'est cette ligne qui rend un second bot joignable.
+    expect(source).toContain("...(hostsBots ? { hosts: hostsBots } : {}),");
   });
 });

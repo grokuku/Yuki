@@ -3609,6 +3609,12 @@ async function main(): Promise<void> {
 
     transport = createWsTransport({
       host,
+      // ⚠️ LOT 36 (L4) — LES HOSTS PAR BOT : c'est ce qui rend un second bot
+      // JOIGNABLE depuis l'interface. Une trame SANS `botId` reste servie par
+      // `host` (le principal, objet inchangé) ; une trame qui en porte un est
+      // servie par `pourDemarre(botId)` — un bot inconnu ou arrêté est REFUSÉ en
+      // le nommant, jamais remplacé par le principal.
+      ...(hostsBots ? { hosts: hostsBots } : {}),
       logger,
       serverVersion: env.version,
       replayBufferSize: config.getNumber("transport.replayBuffer"),

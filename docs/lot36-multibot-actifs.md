@@ -1,11 +1,12 @@
-# Lot 36 — multi-bot : quels bots TOURNENT (L1 + L2 + L3-a + L3-b + L3-c)
+# Lot 36 — multi-bot : quels bots TOURNENT (L1 + L2 + L3-a→d + L4)
 
 Approche **B** (décision utilisateur) : **un seul processus**, N `PiHost`.
 Ce document couvre L1 (résolution au démarrage), L2 (on/off réel), **L3-a**
 (la configuration par bot), **L3-b** (mémoire, archive, avatar, personnalité,
-règles, épingles, réactions par bot) et **L3-c** (sources, envois et
-pré-autorisations par bot) ; les morceaux suivants sont listés en fin, avec ce
-qui reste à faire.
+règles, épingles, réactions par bot), **L3-c** (sources, envois et
+pré-autorisations par bot), **L3-d** (`PiHost` par bot) et **L4** (transport WS
+multi-host : un second bot est JOIGNABLE) ; les morceaux suivants sont listés en
+fin, avec ce qui reste à faire.
 
 ## Ce qui est livré
 
@@ -233,9 +234,49 @@ d'avant L3-d) — `src/index.ts:3444`. Journal : `bots.hosts` (nombre + ids,
 (démarrés/échecs), `bots.hosts.arretes`, et `sources.bots.prets` porte en plus
 `hosts` / `hosts_demarres` / `hosts_echecs`.
 
+### L4 — transport WS multi-host (un second bot JOIGNABLE)
+
+| Symbole | Rôle |
+|---|---|
+| `ClientMessage` (`src/gateway/ws/protocol.ts:43,44`) | `hello` et `resume` portent un `botId?` **optionnel** (`BotTargeted`, `:37`) — **absent = principal** |
+| `parseBotId` (`:730`) | `undefined` = absent (principal) ; valeur nettoyée ; **vide ⇒ `invalid_bot_id`** (jamais le principal par défaut) |
+| `welcome.bot` (`:280`) | le bot qui répond — **émis UNIQUEMENT** si le client en a demandé un (trame identique à avant L4 sinon) |
+| `BotHostsPort` (`src/gateway/ws/server.ts:236`) | `principal` + `pourDemarre(botId)` (+ `ids?()`) : le **seul** chemin vers un host secondaire |
+| `hostFor` (`:609`) / `hostPourBot` (`:619`) | host du client (principal si aucun `botId`) / host d'un bot **démarré**, sinon `undefined` |
+| `storeForHost` (`:630`) / `storeFor` (`:646`) | **un `SessionStreamStore` PAR BOT** — celui du principal est **le même objet qu'avant L4** (`===`) |
+| `subscribeHost` (`:696`) / `onHostEvent` (`:711`) | un abonnement **par bus** ; un événement entre dans le registre du bus **émetteur** |
+| `rattacherBot` (`:1439`) | résout `botId` **avant tout traitement** (`hello`/`resume`) ; inconnu/arrêté ⇒ trame `error` `bot_inconnu` **nommant le bot**, aucun service rendu |
+| `resoudreBotDeRequete` (`:2573`) / `onUpgrade` (`:2636`) | `?bot=<id>` sur `/ws` : la connexion est rattachée **avant** la première trame ; bot inconnu ⇒ **404**, pas de connexion |
+| `?bot=` côté UI | `public/ui/bot-conversation.js` (`botDeLaPage:26`, `champBot:38`, `texteBot:52`) · `public/ui/app.js:179,2786,2796` (`?b=<slug>` → `botId` de `hello`/`resume`) · badge `#bot-name` (`public/ui/index.html`) · lien `/bots` → `/?b=<slug>` (`config.js:249,1729`) |
+
+⚠️ **La convention `?bot=` existait déjà** sur les routes des sources et des
+déclencheurs (lot 35j, `GET/PUT /api/sources/…?bot=<id>`) : c'est la même règle
+qui est reprise ici, avec **défaut = principal**.
+
+⚠️ **`?bot=` sur les routes HTTP de sessions : il n'y en a PAS.** Les sessions
+n'ont aucune route HTTP (`/api/sessions` n'existe pas : la liste vient de la
+trame WS `sessions`, cf. `src/gateway/app.ts` — le seul chemin HTTP lié à une
+session est `?session=` de `/api/files`). Le « `?bot=` » demandé est donc porté
+par (a) le **champ de trame** `botId` et (b) **l'URL du WebSocket**
+(`/ws?bot=<id>`) — les deux sont testés, défaut = principal dans les deux cas.
+
+⚠️ **Garde de non-régression** : sans `botId` **ni** `?bot=`, le comportement est
+**exactement** celui d'avant L4 — `client.host` reste `undefined`, donc
+`hostFor(client) === host` (le principal), `storeFor(client) === streams` (le
+même `SessionStreamStore`, `===`), et `welcome` ne porte **aucun** champ `bot`.
+
+⚠️ **Isolation** : deux bots qui porteraient le **même** identifiant de session ne
+partagent ni compteur `seq`, ni tampon de rejeu, ni snapshot, ni liste. Un flux
+de `kohai` n'est **jamais** lisible par `yuki` (test central).
+
+⚠️ **TTS / instrumentations** : `routeTtsEvent(source, event)` compare la session
+émise à la session focalisée **du bot émetteur** ; `recordRunStage` /
+`recordRunTtsMetrics` s'adressent au host qui **possède** la session
+(`hostForSession`, `:657`). Canaux (L5) et agents (L6) **non touchés**.
+
 ## Ce qui n'est PAS livré (et pourquoi)
 
-**L4 → L10 ne sont pas commencés.** L3 est **entier** : L3-a (configuration),
+**L5 → L10 ne sont pas commencés.** L3 est **entier** : L3-a (configuration),
 L3-b (mémoire, archive, avatar, personnalité, règles, épingles, réactions), L3-c
 (sources, envois, pré-autorisations) et L3-d (`PiHost` par bot) sont livrés. Les
 hosts des bots à démarrer **existent, démarrent et s'arrêtent**, mais **aucun
@@ -257,14 +298,16 @@ Découpage retenu (chaque morceau vert et démarrable) :
 | **L3-a** ✅ | la **configuration** par bot (`src/config/bots.ts`, Map construite dans `main()`) |
 | **L3-b** ✅ | la **mémoire**, l'archive, l'avatar, la personnalité, les règles, les pins et les réactions par bot (`src/bots/outils.ts`) |
 | **L3-c** ✅ | les **sources / envois / pré-autos** par bot (`src/sources/pile-bot.ts`) |
-| **L3-d** ✅ | le **`PiHost` par bot** (`src/bots/hosts.ts`) ; routes d'instance, `getSubsystems` et transport gardent le host du **principal** ; routage des messages = L4 |
+| **L3-d** ✅ | le **`PiHost` par bot** (`src/bots/hosts.ts`) |
+| **L4** ✅ | le **transport WS multi-host** (`botId` de trame, `?bot=` sur `/ws`, **un registre de flux par bot**, UI qui suit le bot affiché) |
 
-Ce qui **reste vrai** en l'état : une seule **conversation** est servie par
-l'instance (le host du **principal**, `pile` = principal s'il tourne, sinon
-premier actif). Les autres bots à démarrer ont bien leur host, leur pile de
-sources, leurs envois et leurs pré-autorisations — mais rien ne leur envoie
-encore de message (L4). Allumer un bot écrit le registre et le journal sans
-construire son host avant le redémarrage (`demarrageRequis`, L2).
+Ce qui **reste vrai** : les **routes d'instance** et `getSubsystems` gardent le
+host du **principal** (`pile` = principal s'il tourne, sinon premier actif) — une
+trame **sans** `botId` et une page **sans** `?b=` se comportent donc exactement
+comme avant L4. Ce qui **change** : une trame (ou une connexion `/ws?bot=`) qui
+nomme un bot est servie par **SON** host, avec **son** registre de flux. Allumer
+un bot écrit le registre et le journal sans construire son host avant le
+redémarrage (`demarrageRequis`, L2) : c'est toujours vrai et ce n'est pas L4.
 
 ## Tests
 
@@ -275,8 +318,20 @@ construire son host avant le redémarrage (`demarrageRequis`, L2).
 | `tests/config/schema-scope.test.ts` | compteur 89 → **90** clés et 66 → **67** `instance`, avec la clé nommée (l'ajout est **délibéré**) |
 | `tests/config/config-bots.test.ts` (8, **L3-a**) | deux bots ⇒ deux runtimes/overlays/valeurs · identifiant invalide refusé · **non-régression 1 bot actif : instantané COMPLET identique** (10 clés nommées + `snapshot()` des 90) · la Map couvre `aDemarrer` et **pas** les refusés du plafond · bot de pile toujours présent · écrire l'overlay d'un bot ne touche pas le principal |
 | `tests/sources/piles-par-bot.test.ts` (12, **L3-c**) | **pile du principal identique** (objets `===`, `Env` du démarrage, chemins historiques, `construire` jamais appelé) · `config`/`outils` par identité · deux bots ⇒ deux `Env`/stores/journal/pré-autos/envois/config, fichiers isolés · `envPourBot` **une seule fois** par bot et **même `Env`** que les outils L3-b · une **cible par bot à démarrer** (bot éteint ou sans capacité exclu) · bot **refusé par le plafond** : pas de pile, pas de cible, aucun fichier ouvert · **mode mono-bot** (registre absent, `aDemarrer` vide) : `yuki` reste balayé |
-| `tests/bots/hosts.test.ts` (11, **L3-d**) | **host du principal identique** (l'objet d'options passé à `creer` est `optionsPile` **par identité** ; `sessionsDir`, `systemPrompt` et chaque port `===`) · deux bots ⇒ **deux hosts**, `sessionsDir` distincts et `systemPrompt` du **bon** `configBot` · les ports de la pile/outils du bot (`===`) et **délégation** à son service · la **mémoire est retirée** au bot secondaire (`port_absent`) · un bot **sans configuration** n'a pas de host · deux hosts ne partagent **jamais** `sessionsDir` · un host secondaire qui échoue au `start()` **n'empêche pas** les autres · **refusé par le plafond** ⇒ pas de host et **contexte jamais demandé** · cycle `demarrerAutres`/`arreter` (le principal n'est ni démarré ni arrêté par la fabrique) · garde statique : `host = hostsBots.principal`, `getSubsystems` et `createWsTransport` **ne lisent pas** la Map |
+| `tests/bots/hosts.test.ts` (11, **L3-d**) | **host du principal identique** (l'objet d'options passé à `creer` est `optionsPile` **par identité** ; `sessionsDir`, `systemPrompt` et chaque port `===`) · deux bots ⇒ **deux hosts**, `sessionsDir` distincts et `systemPrompt` du **bon** `configBot` · les ports de la pile/outils du bot (`===`) et **délégation** à son service · la **mémoire est retirée** au bot secondaire (`port_absent`) · un bot **sans configuration** n'a pas de host · deux hosts ne partagent **jamais** `sessionsDir` · un host secondaire qui échoue au `start()` **n'empêche pas** les autres · **refusé par le plafond** ⇒ pas de host et **contexte jamais demandé** · cycle `demarrerAutres`/`arreter` (le principal n'est ni démarré ni arrêté par la fabrique) · garde statique : `host = hostsBots.principal`, `getSubsystems` **ne lit pas** la Map, et `createWsTransport` reçoit `host` (principal) **et** `hosts: hostsBots` (L4) |
+| `tests/gateway/ws/multibot.test.ts` (13, **L4**) | sans `botId` ⇒ **principal** (`welcome` sans champ `bot`, aucun échec de non-régression) · `botId=kohai` ⇒ **SON** host répond (sa liste, son run ; le principal n'est **pas** sollicité) · bot **inconnu** ⇒ `bot_inconnu` **nommant le bot**, aucune trame `welcome`/`sessions` · bot **arrêté** ⇒ idem · `resume` porte le `botId` · **une session de `kohai` n'est jamais lisible par `yuki`** (rejeu et snapshot, avec le **même** identifiant de session chez les deux) · conversation privée de `kohai` introuvable (`session_inconnue`) et absente de la liste du principal · `?bot=` sur l'URL du WS (rattachement, **404** si inconnu, principal sans `?bot=`) · validation du champ (`invalid_bot_id`, valeur nettoyée, **aucun** champ quand absent) |
+| `tests/ui/bot-conversation.test.ts` (7, **L4**) | `?b=` absent/vide ⇒ **aucune** clé `botId` (trame d'avant L4) · `botId` joint sinon · badge : le **serveur** fait foi (`welcome.bot`), un bot non confirmé s'affiche « bot principal », rien demandé ⇒ aucun badge |
 | `tests/bots/outils.test.ts` (11, **L3-b**) | **non-régression : les 7 chemins du principal identiques** en mono (`<state>/…`) et en multi (`<state>/bots/<id>/…`) · les objets de `main()` **réutilisés** (`===`) et **adoptés** par la fabrique · deux bots ⇒ deux `MemoryStore`/`avatarDir`/`personalityPath` · **isolation de construction** (souvenir d'un bot absent du store, de l'index et du fichier de l'autre) · `envPourBot` **une seule fois** par bot (aucun `<bot>/<bot>`, `Env` doublement dérivé **refusé**) · identifiant invalide refusé · Map = `aDemarrer` + pile, **jamais** les refusés du plafond |
+
+Preuve d'échec **L4** : arbre **propre** au départ (`b094c61`, `git status`
+**vide**), gelé **avant toute écriture** dans
+`/tmp/preuve-lot36-L4/arbre-avant.tar.gz` (contenu vérifié : **330** entrées
+`src/`, les fichiers du lot **absents** — `BotHostsPort` 0 occurrence,
+`botId` 0 occurrence dans `protocol.ts`, `public/ui/bot-conversation.js`
+inexistant). Sur l'origine (extrait dans `/tmp/preuve-lot36-L4/origine`, mêmes
+fichiers de test et même harnais copiés), **9/13** tests de
+`multibot.test.ts` **échouent** — les 4 restants sont les **gardes de
+non-régression** (sans `botId`, tout se comporte comme avant : c'est voulu).
 
 Preuve d'échec sur l'origine (arbre gelé `14f77dd`, `/tmp/preuve-lot36/origine`,
 contenu `src/` vérifié : 325 entrées, `tests/` : 451) : **12/12** et **13/13**
@@ -355,6 +410,32 @@ actifs) : `bots.config` (yuki,kohai) · `bots.outils` (yuki,kohai) · `bots.host
 `bots.hosts.arretes` (kohai) · **0 ligne `error`**. Contrôle de non-régression :
 la même instance avec **un** bot actif donne `bots.hosts` **nombre 1**, **un
 seul** `pi.ready` et `sources.balayeur.started` **bots 1** — 0 erreur.
+
+### Campagne L4 (mesurée)
+
+- `npm test` **complet** : 400 fichiers, **4519** tests verts, 5 ignorés, 0 échec.
+- **11 E2E** verts, CSP **0**, connexion **0**, exceptions **0** : `e2e-sources`
+  43/43, `e2e-chat-sessions` 36/36, `e2e-tts-ui` 116/116, `e2e-memory` 23/23,
+  `e2e-files` 71/71, `e2e-image` 124/124, `e2e-timestamp` 49/49,
+  `e2e-mobile-ui` 40/40, `e2e-pins-agents` 59/59, `e2e-ack` 44/44,
+  `e2e-secret` 28/28. Les **36 PNG** suivis touchés par deux d'entre eux ont été
+  restaurés **un par un** (`git show HEAD:<chemin>`), `git status` final
+  **identique** à celui du départ (hors fichiers du lot).
+- **Instance RÉELLE à deux bots** (`bots.json` : `yuki` + `kohai` actifs) :
+  **15/15** mesures — trame **sans** `botId` ⇒ `welcome` sans champ `bot` (compat) ;
+  `botId=kohai` ⇒ `welcome.bot = "kohai"`, **sa** conversation créée, **son** host
+  répond à un message (`LLM_UNAVAILABLE` : l'instance n'a pas de clé — c'est bien
+  KHOHAI qui a répondu, `yuki` n'a jamais été sollicité) ; la conversation de
+  `kohai` **n'apparaît pas** dans la liste de `yuki` et son ouverture est refusée
+  (`session_inconnue`) ; `botId=yuki` (le lien `/bots?b=yuki`) ⇒ host du **principal**,
+  sa liste, jamais celle de `kohai` ; bot inconnu ⇒ `bot_inconnu` nommant
+  `fantome`, **aucune** trame `sessions` ; `?bot=kohai` sur `/ws` rattache la
+  connexion ; journal :
+  `bot: yuki` et `bot: kohai` (deux `sessions_dir` distincts), `bots.hosts`
+  `nombre: 2`, `bots.hosts.demarres` (kohai), `bots.hosts.arretes`, **0 ligne
+  `error`**. Vérifié aussi au **rendu** : `/?b=kohai` affiche le badge `kohai`
+  dans l'en-tête (mise en page intacte) et `/bots?b=kohai` propose le lien
+  « Conversation ».
 
 ⚠️ **Invérifiable en test unitaire** : `main()` n'est jamais exécuté par la suite
 (`src/index.ts` lance `main()` au chargement). Le câblage de `main()` n'est donc

@@ -25,10 +25,23 @@ import type {
   PendingSecretView,
 } from "../../agents/execution.js";
 
+/**
+ * Bot VISÉ par une trame de connexion (lot 36, L4).
+ *
+ * ⚠️ Champ OPTIONNEL et ABSENT par défaut : une trame sans `botId` désigne le bot
+ * PRINCIPAL, exactement comme avant L4 (compatibilité totale avec les clients
+ * déjà chargés). Un `botId` inconnu ou arrêté est une ERREUR nommant le bot —
+ * jamais un repli silencieux sur le principal (on parlerait à Yuki en croyant
+ * parler à kohai).
+ */
+export interface BotTargeted {
+  botId?: string;
+}
+
 /** Trame client → serveur. */
 export type ClientMessage =
-  | { type: "hello"; clientVersion?: string; sessionId?: string }
-  | { type: "resume"; sessionId: string; fromSeq: number }
+  | ({ type: "hello"; clientVersion?: string; sessionId?: string } & BotTargeted)
+  | ({ type: "resume"; sessionId: string; fromSeq: number } & BotTargeted)
   | {
       /**
        * Message de l'utilisateur. `files` porte les identifiants des fichiers
@@ -257,6 +270,14 @@ export type ServerMessage =
       serverVersion: string;
       resumed: boolean;
       replayFrom?: number;
+      /**
+       * Bot qui RÉPOND réellement à cette connexion (lot 36, L4).
+       *
+       * ⚠️ ABSENT quand le client n'a pas demandé de bot : c'est le principal, et
+       * la trame est alors identique à celle d'avant L4 (aucun champ ajouté).
+       * L'interface s'en sert pour MONTRER à qui elle parle.
+       */
+      bot?: string;
       /**
        * FUSEAU des horodatages (réglage `ui.timeZone`, défaut `UTC`).
        *
@@ -698,6 +719,21 @@ function optionalString(
   return typeof value === "string" ? value : undefined;
 }
 
+/**
+ * Identifiant de bot reçu d'un client (`botId` d'une trame de connexion).
+ *
+ * Rend `undefined` quand le champ est ABSENT (= bot principal, compat), la valeur
+ * NETTOYÉE quand il est lisible, et `null` quand il est présent mais invalide
+ * (type inattendu ou chaîne vide) : un identifiant vide ne doit jamais désigner
+ * silencieusement le principal.
+ */
+function parseBotId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 /** Nombre maximal d'identifiants de fichiers acceptés dans UNE trame `message`. */
 export const MAX_MESSAGE_FILE_IDS = 20;
 
@@ -740,12 +776,17 @@ export function parseClientMessage(raw: string): ParseResult {
     case "hello": {
       const sessionId = optionalString(parsed, "sessionId");
       const clientVersion = optionalString(parsed, "clientVersion");
+      const botId = parseBotId(parsed.botId);
+      if (botId === null) {
+        return { ok: false, error: "invalid_bot_id" };
+      }
       return {
         ok: true,
         message: {
           type: "hello",
           ...(clientVersion !== undefined ? { clientVersion } : {}),
           ...(sessionId !== undefined ? { sessionId } : {}),
+          ...(botId !== undefined ? { botId } : {}),
         },
       };
     }
@@ -758,7 +799,19 @@ export function parseClientMessage(raw: string): ParseResult {
       if (typeof fromSeq !== "number" || !Number.isInteger(fromSeq) || fromSeq < 0) {
         return { ok: false, error: "resume_invalid_from_seq" };
       }
-      return { ok: true, message: { type: "resume", sessionId, fromSeq } };
+      const botId = parseBotId(parsed.botId);
+      if (botId === null) {
+        return { ok: false, error: "invalid_bot_id" };
+      }
+      return {
+        ok: true,
+        message: {
+          type: "resume",
+          sessionId,
+          fromSeq,
+          ...(botId !== undefined ? { botId } : {}),
+        },
+      };
     }
     case "message": {
       const clientMsgId = optionalString(parsed, "clientMsgId");

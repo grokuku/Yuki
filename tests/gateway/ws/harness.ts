@@ -62,13 +62,29 @@ export interface HarnessOptions extends FakePiHostOptions {
    * (comportement de production par défaut).
    */
   timeZone?: { current: () => string };
+  /**
+   * LOT 36 (L4) — hosts des AUTRES bots, indexés par `botId`.
+   *
+   * ⚠️ Absent ⇒ le transport ne connaît QUE le principal : toute trame portant un
+   * `botId` est refusée en le nommant (cas « bot inconnu »).
+   */
+  autresHosts?: Record<string, FakePiHost>;
+  /**
+   * Bots présents dans la carte mais NON démarrés (`pourDemarre` les refuse) :
+   * le cas « bot arrêté » — un host qui existe ne doit jamais répondre.
+   */
+  botsArretes?: string[];
 }
 
 export interface Harness {
   host: FakePiHost;
+  /** Hosts des bots SECONDAIRES (ceux passés dans `autresHosts`). */
+  autres: Record<string, FakePiHost>;
   transport: Transport;
   server: Server;
   url: string;
+  /** URL du point d'entrée WS pour un bot donné (`/ws?bot=<id>`). */
+  urlBot(botId: string): string;
   close(): Promise<void>;
 }
 
@@ -76,6 +92,8 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
   const host = new FakePiHost({ sessionId: "sess-1", ...options });
   await host.start();
+  const autres = options.autresHosts ?? {};
+  const arretes = new Set(options.botsArretes ?? []);
   const transport = createWsTransport({
     host,
     logger,
@@ -96,6 +114,19 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.chat ? { chat: options.chat } : {}),
     ...(options.vision ? { vision: options.vision } : {}),
     ...(options.timeZone ? { timeZone: options.timeZone } : {}),
+    ...(options.autresHosts !== undefined || options.botsArretes !== undefined
+      ? {
+          // Port NARROW : `pourDemarre` rend `undefined` pour un bot inconnu comme
+          // pour un bot non démarré — c'est exactement ce que le transport doit
+          // refuser en le nommant.
+          hosts: {
+            principal: host,
+            pourDemarre: (botId: string) =>
+              arretes.has(botId) ? undefined : autres[botId],
+            ids: () => ["principal", ...Object.keys(autres)].filter((id) => !arretes.has(id)),
+          },
+        }
+      : {}),
   });
   const server = createHttpServer((_req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });
@@ -106,9 +137,13 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
   const address = server.address() as AddressInfo;
   return {
     host,
+    autres,
     transport,
     server,
     url: `ws://127.0.0.1:${address.port}/ws`,
+    urlBot(botId: string) {
+      return `ws://127.0.0.1:${address.port}/ws?bot=${encodeURIComponent(botId)}`;
+    },
     async close() {
       await transport.close();
       await new Promise<void>((resolve) => {

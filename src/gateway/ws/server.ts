@@ -216,6 +216,35 @@ export interface WsTransportOptions {
    * Absent ⇒ `UTC` : aucun chemin ne retombe sur le fuseau du process.
    */
   timeZone?: { current: () => string };
+  /**
+   * LOT 36 (L4) — les hosts des AUTRES bots (Map `botId → PiHost` de L3-d).
+   *
+   * ⚠️ Absent ⇒ le transport ne sert QUE le principal et toute trame portant un
+   * `botId` est REFUSÉE en le nommant (jamais un repli silencieux). Présent ⇒ une
+   * trame sans `botId` désigne toujours le principal (`host`, inchangé).
+   */
+  hosts?: BotHostsPort;
+}
+
+/**
+ * Ce que le transport a besoin de savoir des hosts PAR BOT (lot 36, L4).
+ *
+ * ⚠️ Contrat VOLONTAIREMENT étroit : `pourDemarre` est le SEUL chemin autorisé
+ * vers un host secondaire, et il refuse un bot inconnu comme un bot arrêté. Un
+ * host construit mais dont `start()` a échoué ne peut donc jamais répondre.
+ */
+export interface BotHostsPort {
+  /** Le host du bot PRINCIPAL (celui que l'option `host` porte déjà). */
+  readonly principal: PiHost;
+  /**
+   * Host d'un bot SEULEMENT s'il est démarré (principal inclus), ou `undefined`.
+   *
+   * ⚠️ `undefined` n'est JAMAIS remplacé par le principal : l'appelant doit
+   * refuser la demande en nommant le bot.
+   */
+  pourDemarre(botId: string): PiHost | undefined;
+  /** Identifiants des bots connus (diagnostic/journal), si le port les connaît. */
+  ids?(): string[];
 }
 
 /**
@@ -275,6 +304,16 @@ export interface SourcesGatewayPort {
 
 interface ClientState {
   ws: WebSocket;
+  /**
+   * BOT auquel cette connexion est rattachée (lot 36, L4).
+   *
+   * ⚠️ `undefined` = bot PRINCIPAL : c'est l'état de toute connexion d'avant L4
+   * (aucune trame ne portait de `botId`), donc le comportement historique est
+   * conservé à l'identique.
+   */
+  botId?: string;
+  /** Host résolu pour `botId` (jamais le principal par repli). */
+  host?: PiHost;
   /** Session FOCALISÉE (cible des envois, de l'abort et des validations). */
   sessionId?: string;
   /**
@@ -489,6 +528,7 @@ export function toApprovalResultFrame(
 /** Crée le transport WebSocket et l'abonne au PiHost. */
 export function createWsTransport(options: WsTransportOptions): Transport {
   const { host, logger, serverVersion } = options;
+  const bots = options.hosts;
   const streams = new SessionStreamStore({
     bufferSize: options.replayBufferSize,
     bufferBytes: options.replayBufferBytes,
@@ -499,6 +539,17 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // RECONNEXION, rattachée à l'`entryId` du message qu'elle vise.
     snapshotSource: (sessionId) => withReactions(sessionId, host.getState(sessionId)),
   });
+  /**
+   * LOT 36 (L4) — UN REGISTRE DE FLUX PAR BOT.
+   *
+   * ⚠️ `streams` (ci-dessus) reste celui du PRINCIPAL, avec exactement les mêmes
+   * options qu'avant L4 : le flux du principal est le MÊME objet qu'avant
+   * (identité `===`). Un bot supplémentaire a le sien, créé à sa première
+   * demande. Deux bots qui porteraient le MÊME identifiant de session ne
+   * partagent donc ni compteur `seq`, ni tampon de rejeu, ni snapshot : une
+   * session de `kohai` n'est JAMAIS lisible depuis `yuki`.
+   */
+  const streamsParHost = new Map<PiHost, SessionStreamStore>();
   const clients = new Set<ClientState>();
   const approvals = options.approvals;
   const pins = options.pins;
@@ -548,6 +599,69 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   /**
+   * Host qui répond aux trames de CE client.
+   *
+   * ⚠️ Aucun repli : `client.host` n'est posé QUE si le bot a été résolu avec
+   * succès (`pourDemarre`), sinon la connexion a déjà reçu son erreur. Une
+   * connexion sans `botId` rend le host du principal — objet IDENTIQUE à celui
+   * d'avant L4.
+   */
+  function hostFor(client: ClientState): PiHost {
+    return client.host ?? host;
+  }
+
+  /**
+   * Host d'un bot DÉCLARÉ par un client, ou `undefined` s'il est inconnu/arrêté.
+   *
+   * ⚠️ C'est le SEUL chemin vers un host secondaire (`pourDemarre`), et il ne
+   * rend jamais le principal en repli.
+   */
+  function hostPourBot(botId: string): PiHost | undefined {
+    return bots?.pourDemarre(botId);
+  }
+
+  /**
+   * Registre de flux du host donné (principal : celui d'avant L4, `===`).
+   *
+   * Le premier accès à un bot secondaire crée son registre (buffer, `seq`,
+   * snapshots) et l'abonne à SON bus : sans cet abonnement, ses événements ne
+   * seraient jamais bufferisés, donc jamais rejoués.
+   */
+  function storeForHost(target: PiHost): SessionStreamStore {
+    if (target === host) return streams;
+    const existing = streamsParHost.get(target);
+    if (existing) return existing;
+    const store = new SessionStreamStore({
+      bufferSize: options.replayBufferSize,
+      bufferBytes: options.replayBufferBytes,
+      ...(options.now ? { now: options.now } : {}),
+      snapshotSource: (sessionId) => withReactions(sessionId, target.getState(sessionId)),
+    });
+    streamsParHost.set(target, store);
+    subscribeHost(target);
+    return store;
+  }
+
+  /** Registre de flux du host qui sert ce client. */
+  function storeFor(client: ClientState): SessionStreamStore {
+    return storeForHost(hostFor(client));
+  }
+
+  /**
+   * Host qui POSSÈDE une session (traces d'instrumentation du TTS).
+   *
+   * Un identifiant de session est unique dans une instance : on cherche le
+   * registre qui le connaît, et on retombe sur le principal quand aucun ne le
+   * connaît encore (session d'un bot jamais demandé).
+   */
+  function hostForSession(sessionId: string): PiHost {
+    for (const [candidat, store] of streamsParHost) {
+      if (store.has(sessionId)) return candidat;
+    }
+    return host;
+  }
+
+  /**
    * APERÇUS de récapitulatif en attente de validation humaine, indexés par
    * `requestId`. C'est la SOURCE DE VÉRITÉ du texte : `recap_create` ne
    * réutilise pas un texte arbitraire arrivé du client, il reprend l'aperçu
@@ -571,7 +685,30 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   const runT0 = new Map<string, number>();
-  const unsubscribeHost = host.subscribeAll((event) => {
+  /**
+   * Abonnements aux bus des hosts, PAR HOST (lot 36, L4). Le principal y entre
+   * dès la construction ; un bot secondaire à son premier usage. Un host
+   * secondaire JAMAIS demandé ne consomme rien (aucun flux, aucun abonnement).
+   */
+  const unsubscribeParHost = new Map<PiHost, () => void>();
+
+  /** Abonne (une seule fois) le bus d'un host au bufferissement des flux. */
+  function subscribeHost(source: PiHost): void {
+    if (unsubscribeParHost.has(source)) return;
+    unsubscribeParHost.set(
+      source,
+      source.subscribeAll((event) => onHostEvent(source, event)),
+    );
+  }
+
+  /**
+   * UN événement d'un host : direction du flux (registre du BON bot) et TTS.
+   *
+   * ⚠️ `source` est le host ÉMETTEUR, jamais un host deviné : un delta de
+   * `kohai` entre dans le registre de `kohai` (donc avec SON `seq`, SON rejeu
+   * et SON snapshot) et ne peut pas atterrir dans celui de `yuki`.
+   */
+  function onHostEvent(source: PiHost, event: PiEvent): void {
     // ⚠️ E3 — L'ACTIVITÉ D'UN SOUS-AGENT est ÉPHÉMÈRE et MUETTE. Elle ne doit
     // NI entrer dans le flux bufferisé (rejeu/snapshot/transcript) NI atteindre
     // le moteur TTS. On la déroute AVANT `streams.append` et AVANT
@@ -597,22 +734,25 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       broadcastControl(event.sessionId, toServerMessage(event));
       return;
     }
-    streams.get(event.sessionId).append(toServerMessage(event));
-    routeTtsEvent(event);
-  });
+    storeForHost(source).get(event.sessionId).append(toServerMessage(event));
+    routeTtsEvent(source, event);
+  }
+
+  // Le principal est abonné dès la construction, comme avant L4.
+  subscribeHost(host);
 
   let wss: WebSocketServer | undefined;
   let httpServer: Server | undefined;
   let closed = false;
 
   function sessionIdFor(client: ClientState): string | undefined {
-    return client.sessionId ?? host.currentSessionId();
+    return client.sessionId ?? hostFor(client).currentSessionId();
   }
 
   /** Abonne le client au flux d'UNE session (idempotent). */
   function subscribeTo(client: ClientState, sessionId: string): void {
     if (client.subscriptions.has(sessionId)) return;
-    const stream = streams.get(sessionId);
+    const stream = storeFor(client).get(sessionId);
     client.subscriptions.set(
       sessionId,
       stream.subscribe((frame) => sendFrame(client, frame)),
@@ -654,7 +794,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   async function syncSubscriptionsFromHost(client: ClientState): Promise<void> {
     let ids: string[] = [];
     try {
-      ids = (await host.listSessions()).map((info) => info.sessionId);
+      ids = (await hostFor(client).listSessions()).map((info) => info.sessionId);
     } catch (error) {
       logger.warn("ws.subscriptions.list_failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -665,7 +805,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     syncSubscriptions(client, ids);
   }
 
-  function envelopeFor(sessionId: string | undefined): ServerEnvelope {
+  function envelopeFor(client: ClientState, sessionId: string | undefined): ServerEnvelope {
     if (!sessionId) {
       return {
         seq: 0,
@@ -673,7 +813,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         sessionId: "",
       };
     }
-    return streams.get(sessionId).envelope();
+    return storeFor(client).get(sessionId).envelope();
   }
 
   function sendFrame(client: ClientState, frame: ServerFrame): void {
@@ -711,10 +851,13 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         emitAudio: (sessionId, frame) => broadcastBinary(sessionId, frame),
         emitControl: (sessionId, frame) => broadcastBinary(sessionId, frame),
         onStage: (sessionId, runId, stage) => {
-          host.recordRunStage?.(sessionId, runId, stage);
+          // ⚠️ La trace d'instrumentation suit le host QUI POSSÈDE la session
+          // (lot 36, L4) : `recordRunStage` d'un bot sur le run d'un autre ne
+          // trouverait rien et laisserait le run sans état de phase.
+          hostForSession(sessionId).recordRunStage?.(sessionId, runId, stage);
         },
         onMetrics: (sessionId, runId, metrics) => {
-          host.recordRunTtsMetrics?.(sessionId, runId, metrics);
+          hostForSession(sessionId).recordRunTtsMetrics?.(sessionId, runId, metrics);
         },
       })
     : undefined;
@@ -722,15 +865,19 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   /**
    * Achemine un événement Pi vers le pipeline TTS (hors chemin critique).
    * `t0` est reconstruit depuis le premier `phase` corrélé du run.
+   *
+   * ⚠️ `source` (lot 36, L4) est le host ÉMETTEUR : la conversation focalisée
+   * qui « parle » est la SIENNE (celle de `kohai` n'est jamais comparée à celle
+   * de `yuki`).
    */
-  function routeTtsEvent(event: PiEvent): void {
+  function routeTtsEvent(source: PiHost, event: PiEvent): void {
     if (!tts) return;
     // ⚠️ E0 : plusieurs conversations peuvent avoir un run EN VOL simultanément
     // (registre de sessions). La VOIX ne suit QUE la conversation FOCALISÉE :
     // les runs d'arrière-plan continuent d'émettre pour LEUR flux (rejeu au
     // retour) mais restent MUETS. Sans ce garde, deux runs simultanés
     // alimenteraient la TTS d'un fil avec la sortie d'un autre (double voix).
-    if (event.sessionId !== host.currentSessionId()) return;
+    if (event.sessionId !== source.currentSessionId()) return;
     switch (event.type) {
       case "phase":
         if (!runT0.has(event.runId)) {
@@ -763,9 +910,12 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    * quitté, encore en file, seraient livrés (via `broadcastBinary` par
    * abonnement) alors que l'utilisateur regarde un AUTRE fil — double voix.
    */
-  function cancelTtsOnFocusChange(previousSessionId: string | undefined): void {
+  function cancelTtsOnFocusChange(
+    client: ClientState,
+    previousSessionId: string | undefined,
+  ): void {
     if (!tts || !previousSessionId) return;
-    if (previousSessionId === host.currentSessionId()) return;
+    if (previousSessionId === hostFor(client).currentSessionId()) return;
     tts.cancel(previousSessionId);
   }
 
@@ -1006,7 +1156,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   /** Trame de contrôle : réutilise le `seq` courant sans le consommer. */
   function sendDirect(client: ClientState, message: ServerMessage): ServerFrame {
     const frame = {
-      ...envelopeFor(sessionIdFor(client)),
+      ...envelopeFor(client, sessionIdFor(client)),
       ...message,
     } as ServerFrame;
     sendFrame(client, frame);
@@ -1022,7 +1172,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     sessionId: string,
     message: ServerMessage,
   ): void {
-    sendFrame(client, { ...envelopeFor(sessionId), ...message } as ServerFrame);
+    sendFrame(client, { ...envelopeFor(client, sessionId), ...message } as ServerFrame);
   }
 
   /**
@@ -1108,6 +1258,10 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
   /** Liste des conversations + conversation active, envoyée au client. */
   async function sendSessions(client: ClientState): Promise<void> {
+    // ⚠️ LOT 36 (L4) : la liste est celle du BOT DE CE CLIENT (principal quand
+    // la connexion n'a déclaré aucun `botId`). Aucune conversation d'un autre bot
+    // ne peut donc apparaître dans la barre latérale.
+    const host = hostFor(client);
     let sessions: WireSession[] = [];
     let listed = false;
     // Mode DISTANT : la liste ne contient QUE les canaux de la plateforme (vide
@@ -1209,7 +1363,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       sendDirect(client, { type: "snapshot", state: "idle", transcript: [] });
       return;
     }
-    const snapshot = streams.get(sessionId).snapshot();
+    const snapshot = storeFor(client).get(sessionId).snapshot();
     const frame = sendDirect(client, snapshotMessage(snapshot));
     client.lastSeq = frame.seq;
     restoreMedia(client, sessionId);
@@ -1267,7 +1421,65 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     for (const item of items) sendControl(client, sessionId, item.message);
   }
 
+  /**
+   * RÉSOUT le bot d'une trame de connexion (`hello`/`resume`) et le FIXE sur le
+   * client.
+   *
+   * Trois règles, et il n'y en a pas d'autre :
+   *  1. **`botId` absent** ⇒ principal : rien ne change par rapport à avant L4
+   *     (`client.host` reste `undefined`, donc `hostFor(client) === host`).
+   *  2. **`botId` connu ET démarré** ⇒ c'est SON host, et le registre de flux de
+   *     ce bot est créé (son bus est abonné) à cet instant.
+   *  3. **`botId` inconnu ou arrêté** ⇒ trame `error` qui NOMME le bot, et aucun
+   *     service rendu : jamais de repli silencieux sur le principal (on parlerait
+   *     à Yuki en croyant parler à kohai).
+   *
+   * @returns `false` quand la trame a été REFUSÉE (l'appelant s'arrête).
+   */
+  function rattacherBot(client: ClientState, botId: string | undefined): boolean {
+    if (botId === undefined) return true;
+    if (client.botId !== undefined && client.botId !== botId) {
+      sendDirect(client, {
+        type: "error",
+        code: "bot_change_refuse",
+        message:
+          `Cette connexion suit déjà le bot « ${client.botId} » : ouvrez une ` +
+          `nouvelle connexion pour parler à « ${botId} ».`,
+      });
+      return false;
+    }
+    const target = hostPourBot(botId);
+    if (!target) {
+      sendDirect(client, {
+        type: "error",
+        code: "bot_inconnu",
+        message:
+          `Le bot « ${botId} » est inconnu ou arrêté : aucun host ne peut lui ` +
+          "répondre. Aucune conversation n'a été ouverte.",
+      });
+      logger.warn("ws.bot.refuse", { bot: botId });
+      return false;
+    }
+    client.botId = botId;
+    client.host = target;
+    // Le registre de flux du bot (et l'abonnement à SON bus) naît ici, à la
+    // première connexion qui le demande.
+    storeForHost(target);
+    return true;
+  }
+
+  /**
+   * Réponse de `welcome` : le bot qui répond, UNIQUEMENT quand le client en a
+   * demandé un. Absent ⇒ trame strictement identique à celle d'avant L4.
+   */
+  function botDuWelcome(client: ClientState): { bot?: string } {
+    return client.botId !== undefined ? { bot: client.botId } : {};
+  }
+
   async function handleHello(client: ClientState, message: ClientMessage): Promise<void> {
+    // ⚠️ `botId` est RÉSOLU avant tout le reste (`handleClientMessage`) : ici, le
+    // host est celui du bot demandé, ou celui du principal si aucun ne l'a été.
+    const host = hostFor(client);
     if (message.type !== "hello") return;
     const current = host.currentSessionId();
     const resumed = Boolean(
@@ -1286,6 +1498,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       serverVersion,
       resumed,
       timeZone: currentTimeZone(),
+      ...botDuWelcome(client),
     });
     await sendSessions(client);
     // État initial des agents (encart de la barre latérale), à la connexion.
@@ -1298,6 +1511,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   async function handleResume(client: ClientState, message: ClientMessage): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "resume") return;
     const previousFocus = host.currentSessionId();
     const target = message.sessionId || host.currentSessionId();
@@ -1318,6 +1532,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         serverVersion,
         resumed: false,
         timeZone: currentTimeZone(),
+        ...botDuWelcome(client),
       });
       await handleSelectRemote(client, target);
       sendAgents(client);
@@ -1355,8 +1570,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     client.sessionId = host.currentSessionId() ?? target;
     subscribeFocused(client);
     // La voix du fil quitté s'arrête (E2) : un seul fil parle.
-    cancelTtsOnFocusChange(previousFocus);
-    const stream = streams.get(client.sessionId);
+    cancelTtsOnFocusChange(client, previousFocus);
+    const stream = storeFor(client).get(client.sessionId);
     const result = stream.replay(message.fromSeq);
     sendDirect(client, {
       type: "welcome",
@@ -1364,6 +1579,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       resumed: true,
       replayFrom: message.fromSeq,
       timeZone: currentTimeZone(),
+      ...botDuWelcome(client),
     });
     if (result.mode === "snapshot") {
       const frame = sendDirect(client, snapshotMessage(result.snapshot));
@@ -1486,6 +1702,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
   /** Bascule vers une autre conversation (abort du run en cours par construction). */
   async function handleSwitch(client: ClientState, message: ClientMessage): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "switch") return;
     // Miroir (canal distant) : chemin dédié, focus Pi INTACT.
     if (isMirrorConversationId(message.sessionId)) {
@@ -1521,7 +1738,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     client.sessionId = host.currentSessionId() ?? message.sessionId;
     subscribeFocused(client);
     // E2 : la voix du fil quitté s'arrête net (jamais de double voix).
-    cancelTtsOnFocusChange(previousFocus);
+    cancelTtsOnFocusChange(client, previousFocus);
     await sendSessions(client);
     // ⚠️ Un `snapshot` à CHAQUE bascule : le client reconstruit TOUT son rendu
     // depuis le transcript du nouveau fil → aucun doublon possible.
@@ -1537,6 +1754,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    * désactivée en CSS) : la liste des conversations vient de la plateforme.
    */
   async function handleNew(client: ClientState): Promise<void> {
+    const host = hostFor(client);
     const refusal = chatPort?.creationRefusal() ?? null;
     if (refusal !== null) {
       sendDirect(client, {
@@ -1561,7 +1779,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
     client.sessionId = host.currentSessionId();
     subscribeFocused(client);
-    cancelTtsOnFocusChange(previousFocus);
+    cancelTtsOnFocusChange(client, previousFocus);
     await sendSessions(client);
     sendSnapshotForCurrent(client);
     sendPendingApprovals(client);
@@ -1570,6 +1788,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
   /** Renomme une conversation (doublons refusés côté hôte). */
   async function handleRename(client: ClientState, message: ClientMessage): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "rename") return;
     if (refuseMirrorWrite(client, message.sessionId)) return;
     try {
@@ -1591,6 +1810,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
 
   /** Met une conversation de côté (déplacement horodaté, récupérable). */
   async function handleSetAside(client: ClientState, message: ClientMessage): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "setAside") return;
     if (refuseMirrorWrite(client, message.sessionId)) return;
     const wasCurrent = host.currentSessionId() === message.sessionId;
@@ -1613,7 +1833,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     if (wasCurrent) {
       client.sessionId = undefined;
       // La voix du fil supprimé s'arrête (E2).
-      cancelTtsOnFocusChange(message.sessionId);
+      cancelTtsOnFocusChange(client, message.sessionId);
     }
     // Nettoyage de l'épingle orpheline : la conversation mise de côté disparaît
     // de la liste, son éventuel épinglage n'a plus de sens.
@@ -1636,6 +1856,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    * mêmes nettoyages que la mise de côté (aucun state fantôme).
    */
   async function handleDelete(client: ClientState, message: ClientMessage): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "delete") return;
     if (refuseMirrorWrite(client, message.sessionId)) return;
     const wasCurrent = host.currentSessionId() === message.sessionId;
@@ -1655,7 +1876,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
     if (wasCurrent) {
       client.sessionId = undefined;
-      cancelTtsOnFocusChange(message.sessionId);
+      cancelTtsOnFocusChange(client, message.sessionId);
     }
     pins?.remove(message.sessionId);
     // ⚠️ ③ AUCUNE SUPPRESSION SILENCIEUSE : si des sources postaient dans ce fil,
@@ -1687,9 +1908,10 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    *    succès fabriqué.
    */
   async function handleCompact(client: ClientState, message: ClientMessage): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "compact") return;
     if (refuseMirrorWrite(client, message.sessionId)) return;
-    const title = await titleFor(message.sessionId);
+    const title = await titleFor(client, message.sessionId);
     try {
       const outcome = await host.compactSession(message.sessionId, {
         onProgress: (progress) => {
@@ -1760,6 +1982,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     client: ClientState,
     message: ClientMessage,
   ): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "recap_preview") return;
     const fail = (code: string, text: string): void => {
       sendDirect(client, { type: "error", code, message: text, requestId: message.requestId });
@@ -1781,7 +2004,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       fail("recap_empty", "Cette conversation est vide : il n'y a rien à récapituler.");
       return;
     }
-    const originTitle = await titleFor(message.sessionId);
+    const originTitle = await titleFor(client, message.sessionId);
     const subject = normalizeSubject(message.subject);
     const fromAt = firstTimestampIso(state.transcript);
     try {
@@ -1852,6 +2075,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     client: ClientState,
     message: ClientMessage,
   ): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "recap_create") return;
     const fail = (code: string, text: string): void => {
       sendDirect(client, { type: "error", code, message: text, requestId: message.requestId });
@@ -1889,7 +2113,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     const newSessionId = created.sessionId;
     client.sessionId = newSessionId;
     subscribeFocused(client);
-    cancelTtsOnFocusChange(previousFocus);
+    cancelTtsOnFocusChange(client, previousFocus);
     try {
       await host.renameSession(newSessionId, title);
       host.send(
@@ -1946,9 +2170,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   /** Titre PRÊT À L'EMPLOI d'une conversation (jamais vide). */
-  async function titleFor(sessionId: string): Promise<string> {
+  async function titleFor(client: ClientState, sessionId: string): Promise<string> {
     try {
-      const list = await host.listSessions();
+      const list = await hostFor(client).listSessions();
       const found = list.find((info) => info.sessionId === sessionId);
       return found?.title ?? found?.name ?? "conversation d'origine";
     } catch {
@@ -2060,6 +2284,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   async function handleMessage(client: ClientState, message: ClientMessage): Promise<void> {
+    const host = hostFor(client);
     if (message.type !== "message") return;
     // ⚠️ L'interface affiche un CANAL DISTANT : on n'écrit pas dedans (le focus Pi
     // pointerait sur une autre conversation, la réponse partirait au mauvais
@@ -2195,7 +2420,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       });
       return;
     }
-    streams.get(handle.sessionId).append({
+    storeFor(client).get(handle.sessionId).append({
       type: "accepted",
       clientMsgId: message.clientMsgId,
       runId: handle.runId,
@@ -2214,6 +2439,13 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       return;
     }
     const message = parsed.message;
+    // ⚠️ LOT 36 (L4) — LE BOT SE RÉSOUT AVANT TOUT TRAITEMENT : les trames de
+    // connexion (`hello`, `resume`) sont les seules à porter `botId`. Une trame
+    // sans `botId` (tout client d'avant L4) reste servie par le principal, à
+    // l'identique.
+    if (message.type === "hello" || message.type === "resume") {
+      if (!rattacherBot(client, message.botId)) return;
+    }
     switch (message.type) {
       case "hello":
         await handleHello(client, message);
@@ -2283,7 +2515,10 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         });
         return;
       }
-      case "abort":
+      case "abort": {
+        // ⚠️ L'abort s'adresse au host DU BOT DE CE CLIENT : arrêter le run d'un
+        // bot sur l'host d'un autre ne trouverait rien (et ne dirait rien).
+        const host = hostFor(client);
         if (!client.greeted) client.sessionId = host.currentSessionId();
         tts?.cancel(
           client.sessionId ?? host.currentSessionId() ?? "",
@@ -2297,7 +2532,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
             });
           });
         return;
+      }
       case "playback": {
+        const host = hostFor(client);
         const sessionId = client.sessionId ?? host.currentSessionId();
         if (sessionId) {
           host.recordRunStage?.(
@@ -2326,16 +2563,50 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   }
 
-  function onConnection(ws: WebSocket): void {
+  /**
+   * Bot visé par l'URL d'upgrade (`/ws?bot=<id>`), et son host.
+   *
+   * ⚠️ Champ ABSENT ⇒ principal (comportement d'avant L4). Présent ⇒ `pourDemarre`
+   * décide : un bot inconnu ou arrêté n'obtient AUCUNE connexion, et l'upgrade est
+   * refusé en le nommant (jamais une session muette qui tombe sur le principal).
+   */
+  function resoudreBotDeRequete(request: IncomingMessage): {
+    botId?: string;
+    host?: PiHost;
+    refuse?: boolean;
+  } {
+    const brut = new URL(request.url ?? "/", "http://localhost").searchParams.get("bot");
+    if (brut === null) return {};
+    const botId = brut.trim();
+    if (botId.length === 0) return { refuse: true };
+    const target = hostPourBot(botId);
+    if (!target) {
+      logger.warn("ws.bot.refuse", { bot: botId, source: "upgrade" });
+      return { botId, refuse: true };
+    }
+    return { botId, host: target };
+  }
+
+  function onConnection(ws: WebSocket, request?: IncomingMessage): void {
+    // ⚠️ Le bot vient de l'URL quand elle le nomme (`?bot=`) : la connexion est
+    // rattachée AVANT la première trame, donc même un client qui n'enverrait
+    // jamais `botId` ne parle pas au principal par surprise.
+    const vise = request ? resoudreBotDeRequete(request) : {};
     const client: ClientState = {
       ws,
       lastSeq: 0,
       greeted: false,
       subscriptions: new Map(),
       presence: { visible: false, focused: false },
+      ...(vise.botId !== undefined ? { botId: vise.botId } : {}),
+      ...(vise.host !== undefined ? { host: vise.host } : {}),
     };
+    if (vise.host !== undefined) storeForHost(vise.host);
     clients.add(client);
-    logger.debug("ws.client.connected", { clients: clients.size });
+    logger.debug("ws.client.connected", {
+      clients: clients.size,
+      ...(client.botId !== undefined ? { bot: client.botId } : {}),
+    });
 
     ws.on("message", (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
       if (isBinary) {
@@ -2373,6 +2644,15 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       socket.destroy();
       return;
     }
+    // ⚠️ LOT 36 (L4) — `?bot=<id>` : le bot visé, décidé AVANT la poignée de main.
+    // Un bot inconnu ou arrêté REFUSE la connexion (404) : le client apprend
+    // immédiatement qu'il n'y a personne, plutôt que de parler au principal.
+    const vise = resoudreBotDeRequete(request);
+    if (vise.refuse === true) {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     wss?.handleUpgrade(request, socket, head, (ws) => {
       wss?.emit("connection", ws, request);
     });
@@ -2385,7 +2665,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       if (wss) return;
       httpServer = server;
       wss = new WebSocketServer({ noServer: true });
-      wss.on("connection", (ws: WebSocket) => onConnection(ws));
+      wss.on("connection", (ws: WebSocket, request: IncomingMessage) =>
+        onConnection(ws, request),
+      );
       server.on("upgrade", onUpgrade);
     },
 
@@ -2431,7 +2713,10 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
-      unsubscribeHost();
+      // ⚠️ TOUS les bus abonnés (principal ET bots servis) sont rendus : un host
+      // secondaire laissé abonné retiendrait le transport après l'arrêt.
+      for (const unsubscribe of unsubscribeParHost.values()) unsubscribe();
+      unsubscribeParHost.clear();
       unsubscribeApprovals?.();
       unsubscribeSecrets?.();
       unsubscribeAgents?.();

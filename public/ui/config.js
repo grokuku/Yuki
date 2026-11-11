@@ -242,6 +242,11 @@ const pageLigneEl = document.getElementById("page-ligne");
 const botAddButton = document.getElementById("bot-add");
 /** Sélecteur de bot (page Bot) — état porté par `?b=<slug>`. */
 const botSelect = document.getElementById("bot-select");
+/**
+ * LOT 36 (L4) — lien vers la CONVERSATION du bot affiché (`/?b=<slug>`). Sans
+ * lui, la page de conversation ouvrirait toujours celle du bot principal.
+ */
+const botConversationEl = document.getElementById("bot-conversation");
 /** Bandeau d'honnêteté (page Bot) : ce qui n'est pas éditable pour ce bot. */
 const botNoticeEl = document.getElementById("bot-notice");
 /** Zone « Général » d'un bot (nom, slug, avatar, capacités, zone de danger). */
@@ -1719,6 +1724,16 @@ function remplirSelecteurBot() {
     botSelect.append(option);
   }
   botSelect.disabled = botsConnus.length === 0;
+  // LOT 36 (L4) — le lien mène à la conversation DU BOT AFFICHÉ (aucun bot
+  // affiché ⇒ page de conversation sans `?b=` : le bot principal, comme avant).
+  if (botConversationEl) {
+    const id = botCourant?.id ?? "";
+    botConversationEl.href = id === "" ? "/" : `/?b=${encodeURIComponent(id)}`;
+    botConversationEl.setAttribute(
+      "aria-label",
+      id === "" ? "Ouvrir la conversation" : `Ouvrir la conversation de ${id}`,
+    );
+  }
 }
 
 /** Remplit le sélecteur ET câble le changement (une seule fois). */

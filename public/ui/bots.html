@@ -67,6 +67,17 @@
           type="button"
           aria-label="Ajouter un bot"
         >+</button>
+        <!--
+          LOT 36 (L4) — CONVERSATION DE CE BOT : `/?b=<slug>` ouvre la page de
+          conversation sur le bot affiché (même convention d'URL, partageable).
+          Sans ce lien, on ouvrirait toujours la conversation du bot principal.
+        -->
+        <a
+          id="bot-conversation"
+          class="button button--ghost button--small bot-selecteur__talk"
+          href="/"
+          aria-label="Ouvrir la conversation de ce bot"
+        >Conversation</a>
       </div>
 
       <!-- Bandeau d'honnêteté : ce qui n'est pas éditable pour un bot NON actif. -->
