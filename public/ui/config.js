@@ -56,6 +56,7 @@ import {
   splitConfigPatchByScope,
 } from './config-patch.js';
 import { cheminConfigBot, lireListeBots } from './bots-api.js';
+import { initBotSwitcher } from './bot-switcher.js';
 import { messageBandeauBot } from './bot-switcher-modele.js';
 import { ouvrirCreationBot, ouvrirSuppressionBot } from './bots-admin.js';
 import {
@@ -255,8 +256,11 @@ const personalityRoot = document.getElementById("personality-root");
 const pageLigneEl = document.getElementById("page-ligne");
 /** Bouton « + » d'ajout de bot (page Bot) : ouvre la modale de CRÉATION. */
 const botAddButton = document.getElementById("bot-add");
-/** Sélecteur de bot (page Bot) — état porté par `?b=<slug>`. */
-const botSelect = document.getElementById("bot-select");
+/**
+ * ⚠️ PLUS DE `<select>` SUR CETTE PAGE (lot 37) : le nom+avatar de la barre du
+ * haut est le SEUL sélecteur de bot. Cette page en AFFICHE seulement le nom.
+ */
+const botCourantNomEl = document.getElementById("bot-courant-nom");
 /**
  * LOT 36 (L4) — lien vers la CONVERSATION du bot affiché (`/?b=<slug>`). Sans
  * lui, la page de conversation ouvrirait toujours celle du bot principal.
@@ -1833,30 +1837,20 @@ function ouvrirChoix(spec) {
  * saisie en silence, et on ne change jamais de bot sans le dire.
  */
 async function changerDeBot(cible) {
-  if (!botSelect) return;
   const id = typeof cible === "string" ? cible : "";
-  if (id === "" || id === botCourant?.id) {
-    botSelect.value = botCourant?.id ?? "";
-    return;
-  }
+  if (id === "" || id === botCourant?.id) return;
   const demande = demandeChangementBot({
     sale: estSale(),
     botActuel: botCourant?.id,
     botVise: id,
   });
   if (demande) {
-    // ⚠️ Le sélecteur REVIENT tout de suite sur le bot affiché : tant que la
-    // question n'est pas tranchée, on ne montre pas un bot qu'on n'a pas ouvert.
-    botSelect.value = botCourant?.id ?? "";
     const choix = await ouvrirChoix(demande);
     if (choix === "rester") return;
     if (choix === "enregistrer") {
       const ok = await save("changement-bot");
-      if (!ok) {
-        // L'enregistrement a échoué : on reste, l'erreur est affichée.
-        botSelect.value = botCourant?.id ?? "";
-        return;
-      }
+      // L'enregistrement a échoué : on reste, l'erreur est affichée.
+      if (!ok) return;
     }
     // « abandonner » : rien n'est écrit, la navigation jette les saisies.
   }
@@ -1871,15 +1865,13 @@ async function changerDeBot(cible) {
  * le sélecteur est re-rempli SANS empiler un second écouteur.
  */
 function remplirSelecteurBot() {
-  if (!botSelect) return;
-  botSelect.textContent = "";
-  for (const bot of botsConnus) {
-    const libelle = bot.nom && bot.nom !== bot.id ? `${bot.nom} (${bot.id})` : bot.id;
-    const option = h("option", { value: bot.id, text: libelle });
-    if (bot.id === botCourant?.id) option.selected = true;
-    botSelect.append(option);
+  // ⚠️ Aucun contrôle de sélection ici : le nom du bot édité, en clair. Le slug
+  // n'est jamais affiché (décision utilisateur).
+  if (botCourantNomEl) {
+    botCourantNomEl.textContent = botCourant
+      ? (botCourant.nom ?? botCourant.id)
+      : "aucun bot";
   }
-  botSelect.disabled = botsConnus.length === 0;
   // LOT 36 (L4) — le lien mène à la conversation DU BOT AFFICHÉ (aucun bot
   // affiché ⇒ page de conversation sans `?b=` : le bot principal, comme avant).
   if (botConversationEl) {
@@ -1892,11 +1884,35 @@ function remplirSelecteurBot() {
   }
 }
 
-/** Remplit le sélecteur ET câble le changement (une seule fois). */
+/**
+ * Affiche le bot édité ET monte le SÉLECTEUR DE LA BARRE DU HAUT (le seul).
+ *
+ * ⚠️ Un clic sur un bot de la barre du haut ouvre SES réglages (`/bots?b=…`) et
+ * non sa conversation : c'est la même règle de sélection, une autre destination.
+ * ⚠️ La garde des modifications non enregistrées vit dans `changerDeBot` et passe
+ * par `avantNaviguer` : quitter la page par la barre du haut ne jette rien en
+ * silence (la modale à trois choix reste celle du lot 35).
+ */
 function cablerSelecteurBot() {
   remplirSelecteurBot();
-  if (!botSelect) return;
-  botSelect.addEventListener("change", () => void changerDeBot(botSelect.value));
+  const switcher = initBotSwitcher({
+    button: document.getElementById("bot-switcher-btn"),
+    panel: document.getElementById("bot-switcher-panel"),
+    list: document.getElementById("bot-switcher-list"),
+    plafondEl: document.getElementById("bot-switcher-plafond"),
+    statusEl: document.getElementById("bot-switcher-status"),
+    closeButton: document.getElementById("bot-switcher-close"),
+    nomEl: document.getElementById("bot-switcher-nom"),
+    HolafModal,
+    urlPour: (entree) => urlBot(entree.id, location.hash),
+    avantNaviguer: async (id) => {
+      await changerDeBot(id);
+      // `changerDeBot` navigue lui-même après la garde : on ne navigue pas deux
+      // fois. Il n'a rien fait (bot courant, ou « rester ») ⇒ pas de navigation.
+      return false;
+    },
+  });
+  void switcher.rafraichir();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

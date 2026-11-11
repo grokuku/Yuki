@@ -5,6 +5,12 @@
   text-decoration: none;
 }
 
+/* Suffixe de la barre du haut (« — Configuration d'un bot »), en retrait. */
+.brand__suffix {
+  font-weight: 500;
+  color: var(--muted);
+}
+
 .config {
   flex: 1;
   overflow-y: auto;
@@ -2053,9 +2059,11 @@
   color: var(--muted);
 }
 
-.bot-selecteur__select {
-  min-width: 220px;
-  max-width: 340px;
+/* ⚠️ Le `<select>` est RETIRÉ (lot 37) : la barre du haut choisit le bot. Ici le
+ * nom du bot édité, en clair, sans contrôle de sélection. */
+.bot-selecteur__nom {
+  font-size: 1rem;
+  color: var(--text);
 }
 
 .bot-selecteur__add {

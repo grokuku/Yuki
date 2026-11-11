@@ -35,12 +35,18 @@ export const MAX_BOTS_SELECTEUR = 6;
  * @param {{id?: string, actif?: boolean, execution?: {demarre?: boolean, erreur?: string}}} bot
  * @param {string|null} [principal] identifiant du bot de la PILE (il tourne avec
  *   le gateway : il n'est ni démarrable ni arrêtable).
- * @returns {{code: "principal"|"demarre"|"erreur"|"arrete"|"inconnu", libelle: string,
- *   demarrable: boolean, demarre: boolean, doitTourner: boolean}}
+ * @param {{refuses?: Array<string>, plafond?: number}} [options] bots `actif`
+ *   REFUSÉS au démarrage par le plafond (`bots.maxActifs`). ⚠️ Sans cela, un bot
+ *   refusé s'afficherait « état inconnu » : l'utilisateur ne saurait pas que son
+ *   bot ne tourne pas PARCE QU'un plafond l'a écarté.
+ * @returns {{code: "principal"|"refuse"|"demarre"|"erreur"|"arrete"|"inconnu",
+ *   libelle: string, demarrable: boolean, demarre: boolean, doitTourner: boolean}}
  */
-export function etatBot(bot, principal = null) {
+export function etatBot(bot, principal = null, options = {}) {
   const doitTourner = bot?.actif === true;
   const execution = bot?.execution;
+  const refuses = Array.isArray(options?.refuses) ? options.refuses : [];
+  const plafond = normaliserPlafondModele(options?.plafond);
   if (principal !== null && bot?.id === principal) {
     // ⚠️ Le bot de la pile suit le gateway : `estDemarre` le dit TOUJOURS démarré
     // (c'est `main()` qui l'a démarré). On l'affiche comme tel, sans bouton.
@@ -49,6 +55,21 @@ export function etatBot(bot, principal = null) {
       libelle: "démarré (bot principal)",
       demarrable: false,
       demarre: true,
+      doitTourner,
+    };
+  }
+  /**
+   * ⚠️ REFUS DU PLAFOND — AVANT le mode dégradé : un bot `actif: true` écarté au
+   * démarrage n'a NI pile NI host, donc aucun `execution` ; sans cette branche il
+   * retomberait sur « état inconnu » et l'utilisateur chercherait la panne au
+   * mauvais endroit. Le libellé nomme le plafond et le geste (éteindre un autre).
+   */
+  if (doitTourner && execution?.demarre !== true && refuses.includes(String(bot?.id ?? ""))) {
+    return {
+      code: "refuse",
+      libelle: `actif mais NON démarré : plafond de ${plafond} atteint`,
+      demarrable: true,
+      demarre: false,
       doitTourner,
     };
   }
@@ -98,6 +119,17 @@ export function urlConversationBot(botId, principal = null) {
   return `/?b=${encodeURIComponent(botId)}`;
 }
 
+/**
+ * Plafond utilisable pour l'affichage : entier positif, sinon le défaut.
+ *
+ * @param {unknown} valeur
+ * @returns {number}
+ */
+export function normaliserPlafondModele(valeur) {
+  if (Number.isInteger(valeur) && valeur > 0) return valeur;
+  return PLAFOND_ACTIFS_DEFAUT;
+}
+
 /** Bots marqués ACTIFS (ce qui doit tourner), dans l'ordre du registre. */
 export function botsActifs(bots) {
   return (Array.isArray(bots) ? bots : []).filter((bot) => bot?.actif === true);
@@ -108,16 +140,22 @@ export function botsActifs(bots) {
  *
  * @param {Array<object>} bots
  * @param {number} [plafond]
+ * @param {Array<string>} [refuses] bots `actif` refusés au démarrage par le plafond
  */
-export function resumeBots(bots, plafond = PLAFOND_ACTIFS_DEFAUT) {
+export function resumeBots(bots, plafond = PLAFOND_ACTIFS_DEFAUT, refuses = []) {
   const liste = Array.isArray(bots) ? bots : [];
   const actifs = botsActifs(liste).length;
   const demarres = liste.filter((bot) => bot?.execution?.demarre === true).length;
-  const borne = Number.isInteger(plafond) && plafond > 0 ? plafond : PLAFOND_ACTIFS_DEFAUT;
+  const borne = normaliserPlafondModele(plafond);
+  const ecartes = Array.isArray(refuses) ? refuses.length : 0;
   if (liste.length === 0) return "Aucun bot lisible sur cette instance.";
   return (
     `${liste.length} bot(s) · ${actifs} actif(s) sur ${borne} maximum · ` +
-    `${demarres} démarré(s)`
+    `${demarres} démarré(s)` +
+    (ecartes === 0
+      ? ""
+      : ` · ${ecartes} REFUSÉ(S) par le plafond : éteignez un bot ou relevez ` +
+        "`bots.maxActifs`")
   );
 }
 
@@ -126,16 +164,21 @@ export function resumeBots(bots, plafond = PLAFOND_ACTIFS_DEFAUT) {
  * être testable sans navigateur.
  *
  * @param {object} bot
- * @param {{principal?: string|null, courant?: string|null}} [options]
+ * @param {{principal?: string|null, courant?: string|null, refuses?: Array<string>,
+ *   plafond?: number}} [options]
  */
 export function entreeListe(bot, options = {}) {
   const principal = options.principal ?? null;
   const courant = options.courant ?? null;
-  const etat = etatBot(bot, principal);
+  const refuses = Array.isArray(options.refuses) ? options.refuses : [];
+  const plafond = normaliserPlafondModele(options.plafond);
+  const etat = etatBot(bot, principal, { refuses, plafond });
   const nom = typeof bot?.nom === "string" && bot.nom !== "" ? bot.nom : String(bot?.id ?? "");
   return {
     id: String(bot?.id ?? ""),
     nom,
+    /** Nom AFFICHABLE : `nom` seul, jamais le slug (décision utilisateur). */
+    nomAffiche: nomAfficheBot(bot),
     etat: etat.code,
     libelleEtat: etat.libelle,
     demarrable: etat.demarrable,
@@ -143,15 +186,48 @@ export function entreeListe(bot, options = {}) {
     doitTourner: etat.doitTourner,
     principal: principal !== null && bot?.id === principal,
     courant: courant !== null && bot?.id === courant,
+    /** `true` si le bot est `actif` mais écarté au démarrage par le plafond. */
+    refuse: etat.code === "refuse",
     monogramme: monogramme(nom),
     avatarClasse: classeMonogramme(String(bot?.id ?? "")),
     url: urlConversationBot(String(bot?.id ?? ""), principal),
   };
 }
 
+/**
+ * Nom AFFICHABLE d'un bot : `nom`, ou son identifiant s'il n'a pas de nom.
+ *
+ * ⚠️ AUCUNE DÉSAMBIGUÏSATION À L'ÉCRAN (décision utilisateur) : « le slug on s'en
+ * fout ». Deux bots de même nom ne doivent PAS être distingués par un suffixe —
+ * c'est la CRÉATION qui refuse un nom déjà pris.
+ *
+ * @param {object} bot
+ * @returns {string}
+ */
+export function nomAfficheBot(bot) {
+  const id = String(bot?.id ?? "");
+  return typeof bot?.nom === "string" && bot.nom.trim() !== "" ? bot.nom.trim() : id;
+}
+
+/**
+ * Libellé du bouton de la barre du haut (`nom` + avatar) : le nom du bot AFFICHÉ.
+ *
+ * ⚠️ Vide si le bot courant n'est pas connu : l'appelant ne réécrit alors rien
+ * plutôt que d'inventer un nom (la barre garde son contenu d'origine).
+ *
+ * @param {Array<object>} bots
+ * @param {string|null} courantId
+ * @returns {string}
+ */
+export function nomBarreHaut(bots, courantId) {
+  const liste = Array.isArray(bots) ? bots : [];
+  if (typeof courantId !== "string" || courantId === "") return "";
+  const bot = liste.find((entree) => String(entree?.id ?? "") === courantId);
+  return bot ? nomAfficheBot(bot) : "";
+}
+
 /** Initiales d'un nom (1 à 2 lettres) : repli d'avatar SANS image. */
-export function monogramme(nom) {
-  const texte = typeof nom === "string" ? nom.trim() : "";
+export function monogramme(nom) {  const texte = typeof nom === "string" ? nom.trim() : "";
   if (texte === "") return "?";
   const mots = texte.split(/\s+/u).filter((mot) => mot !== "");
   const lettres = mots

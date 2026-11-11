@@ -214,6 +214,15 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
     h("div", { class: "config-row" }, [
       h("label", { class: "config-label", for: "bot-creation-nom", text: "Nom affiché" }),
       champNom,
+      // ⚠️ L'utilisateur ne voyait pas que « Grolaf » existait déjà : les noms
+      // pris sont affichés AVANT la saisie, et un doublon est refusé net.
+      h("span", {
+        class: "config-helper",
+        text:
+          spec.existants.length === 0
+            ? "Aucun bot pour l'instant."
+            : `Noms déjà pris : ${spec.existants.join(", ")}.`,
+      }),
     ]),
     h("div", { class: "config-row" }, [
       h("label", { class: "config-label", for: "bot-creation-avatar", text: "Avatar (facultatif)" }),
@@ -261,7 +270,7 @@ export function ouvrirCreationBot({ HolafModal, bots = [] }) {
           onClick: () => {
             void (async () => {
               erreur.hidden = true;
-              const validation = validerCreationBot({ nom: champNom.value });
+              const validation = validerCreationBot({ nom: champNom.value, bots });
               if (!validation.ok) {
                 erreur.textContent = Object.values(validation.champs).join(" ");
                 erreur.hidden = false;

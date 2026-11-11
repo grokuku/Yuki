@@ -1220,6 +1220,13 @@ async function main(): Promise<void> {
     stateDir: string;
     piSessionsDir: string;
     maxActifs: number;
+    /**
+     * ⚠️ Bots `actif: true` REFUSÉS au démarrage par le plafond. `GET /api/bots`
+     * les rend pour que la barre du haut dise « actif mais NON démarré : plafond
+     * atteint » au lieu d'un « état inconnu » qui enverrait chercher la panne au
+     * mauvais endroit.
+     */
+    refusesActifs: string[];
     retirerDesListesDAgents: (botId: string) => number;
     /**
      * ⚠️ LOT 36 (L8) : l'état RÉEL et le cycle de vie. Posé APRÈS la
@@ -1234,6 +1241,7 @@ async function main(): Promise<void> {
     // on/off applique. Une seule source : `bots.maxActifs`, lu par
     // `preparerMultiBot` (environnement > store > défaut 3).
     maxActifs: bots.plafondActifs,
+    refusesActifs: bots.refusesActifs.map((entree) => entree.id),
     retirerDesListesDAgents: (botId: string) =>
       agentStoreRef ? agentStoreRef.retirerBotDesListes(botId).length : 0,
   };

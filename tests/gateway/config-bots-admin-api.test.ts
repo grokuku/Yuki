@@ -142,13 +142,23 @@ describe("① `POST /api/bots`", () => {
     expect(existsSync(join(b.stateDir, "bots", "kohai"))).toBe(false);
   });
 
-  it("DÉRIVE le slug du nom : un nom déjà pris reçoit un slug suffixé (pas de 409)", async () => {
+  it("REFUSE un nom DÉJÀ PRIS (409 nom_deja_pris) et dérive le slug sinon", async () => {
     const b = banc();
-    // ⚠️ Deux bots peuvent porter le même NOM : seul le slug est unique.
-    const creation = await appel(b, "POST", "/api/bots", { nom: "Yuki" });
+    // ⚠️ LOT 37 — deux bots de même NOM étaient indistinguables à l'écran
+    // (l'utilisateur ne voyait pas qu'il créait un second « Grolaf »). Le nom est
+    // ce qu'il lit : on refuse le doublon, on ne suffixe plus un slug invisible.
+    const doublon = await appel(b, "POST", "/api/bots", { nom: "Yuki" });
+    expect(doublon.status).toBe(409);
+    expect(doublon.body.code).toBe("nom_deja_pris");
+    expect(doublon.body.message).toBe(
+      "Un bot nommé « Yuki » existe déjà. Choisissez un autre nom.",
+    );
+    expect(existsSync(join(b.stateDir, "bots", "yuki-2"))).toBe(false);
+    // Un nom LIBRE reçoit le slug dérivé de ce nom.
+    const creation = await appel(b, "POST", "/api/bots", { nom: "Kohai" });
     expect(creation.status).toBe(201);
-    expect(creation.body.bot.id).toBe("yuki-2");
-    expect(creation.body.bot.nom).toBe("Yuki");
+    expect(creation.body.bot.id).toBe("kohai");
+    expect(creation.body.bot.nom).toBe("Kohai");
     // Un nom vide est REFUSÉ (400), et rien n'est créé.
     const vide = await appel(b, "POST", "/api/bots", { nom: "   " });
     expect(vide.status).toBe(400);

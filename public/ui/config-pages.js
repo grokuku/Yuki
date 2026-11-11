@@ -421,13 +421,46 @@ export function defautsClone() {
 }
 
 /**
+ * Clé de comparaison d'un NOM de bot : espaces condensés, casse ignorée.
+ *
+ * ⚠️ Deux noms qui ne diffèrent que par la casse ou les espaces sont le MÊME nom
+ * pour l'utilisateur : ils doivent donc être refusés à la création (c'était le
+ * défaut : deux « Grolaf » indistinguables dans la barre du haut).
+ */
+export function cleNomBot(nom) {
+  return String(nom ?? "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase("fr-FR");
+}
+
+/**
+ * Bot du registre portant DÉJÀ ce nom, ou `null`.
+ *
+ * @param {string} nom nom saisi
+ * @param {Array<{id?: string, nom?: string}>} [bots]
+ * @returns {{id?: string, nom?: string}|null}
+ */
+export function botPortantLeNom(nom, bots = []) {
+  const cle = cleNomBot(nom);
+  if (cle === "") return null;
+  return (
+    (Array.isArray(bots) ? bots : []).find((bot) => cleNomBot(bot?.nom) === cle) ?? null
+  );
+}
+
+/**
  * Valide le formulaire de création AVANT l'appel réseau.
  *
  * ⚠️ CRÉATION SIMPLE (décision utilisateur du 2026-11-10) : SEUL LE NOM est
  * demandé. Le slug est dérivé et dédupliqué par le serveur (l'utilisateur ne le
  * saisit ni ne le voit à la création), et les capacités partent vides.
  *
- * @param {{ nom?: string }} [formulaire]
+ * ⚠️ Le NOM est refusé s'il est déjà porté par un bot (`bots` fourni par l'UI) :
+ * deux « Grolaf » à l'écran étaient indistinguables. Le serveur applique la
+ * MÊME règle (`409 nom_deja_pris`).
+ *
+ * @param {{ nom?: string, bots?: Array<{id?: string, nom?: string}> }} [formulaire]
  * @returns {{ ok: boolean, champs: Record<string, string> }}
  */
 export function validerCreationBot(formulaire = {}) {
@@ -436,6 +469,8 @@ export function validerCreationBot(formulaire = {}) {
   if (nom === "") champs.nom = "Le nom du bot est obligatoire.";
   else if (nom.length > NOM_BOT_MAX_PAGE) {
     champs.nom = `Le nom est trop long (maximum ${NOM_BOT_MAX_PAGE} caractères).`;
+  } else if (botPortantLeNom(nom, formulaire.bots) !== null) {
+    champs.nom = `Un bot nommé « ${nom} » existe déjà. Choisissez un autre nom.`;
   }
   return { ok: Object.keys(champs).length === 0, champs };
 }
@@ -461,6 +496,10 @@ export function modaleCreationBot(etat = {}) {
       `Limite de ${maxBots} bots par instance : au-delà, supprimez un bot avant ` +
       "d'en ajouter un autre.",
     elements: defautsClone(),
+    /** Noms DÉJÀ pris : la modale les montre et refuse un doublon. */
+    existants: bots.map((bot) =>
+      typeof bot.nom === "string" && bot.nom.trim() !== "" ? bot.nom.trim() : String(bot.id),
+    ),
     cloneables: bots.map((bot) => ({
       id: bot.id,
       libelle: bot.nom && bot.nom !== bot.id ? `${bot.nom} (${bot.id})` : bot.id,

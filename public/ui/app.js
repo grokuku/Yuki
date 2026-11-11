@@ -96,6 +96,9 @@ const botSwitcher = initBotSwitcher({
   statusEl: document.getElementById("bot-switcher-status"),
   addButton: document.getElementById("bot-switcher-add"),
   closeButton: document.getElementById("bot-switcher-close"),
+  // ⚠️ Le NOM de la barre du haut suit le bot affiché. Il était écrit en dur
+  // (« Yuki ») : avec trois bots en base, la barre annonçait « Yuki » toujours.
+  nomEl: document.getElementById("bot-switcher-nom"),
   HolafModal,
   // ⚠️ `/avatar` ne sert QUE l'avatar du bot principal (celui du runtime) :
   // l'image est reprise telle quelle, jamais inventée pour un autre bot.

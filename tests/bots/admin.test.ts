@@ -193,17 +193,27 @@ describe("① création — dossier, registre, overlay", () => {
     expect(readdirSync(join(stateDir, "bots"))).toEqual([]);
   });
 
-  it("DÉDUPLIQUE le slug : deux bots peuvent porter le même nom", () => {
+  it("REFUSE un nom DÉJÀ PORTÉ (le doublon était indistinguable à l'écran)", () => {
     const { stateDir, registre } = banc();
-    // « Yuki » est déjà pris par le bot historique ⇒ `yuki-2`.
-    const premier = creerBot({ stateDir, registre, nom: "Yuki" });
-    expect(premier.bot.id).toBe("yuki-2");
-    expect(premier.bot.nom).toBe("Yuki");
-    const second = creerBot({ stateDir, registre: premier.registre, nom: "Yuki" });
-    expect(second.bot.id).toBe("yuki-3");
-    // Un DOSSIER orphelin (création interrompue) décale aussi le slug.
+    // ⚠️ « Yuki » est déjà pris par le bot historique : on REFUSE, on ne crée pas
+    // un second « Yuki » que l'utilisateur ne saurait pas distinguer.
+    expect(() => creerBot({ stateDir, registre, nom: "Yuki" })).toThrowError(
+      /Un bot nommé « Yuki » existe déjà/,
+    );
+    try {
+      creerBot({ stateDir, registre, nom: " yuki " });
+      throw new Error("aurait dû être refusé");
+    } catch (error) {
+      const refus = error as AdminBotError;
+      expect(refus.code).toBe("nom_deja_pris");
+      expect(refus.status).toBe(409);
+    }
+    // Aucun dossier n'a été créé par les refus.
+    expect(readdirSync(join(stateDir, "bots")).length).toBeLessThanOrEqual(1);
+    // Un nom LIBRE passe, et un DOSSIER orphelin (création interrompue) décale
+    // le slug sans jamais bloquer la création.
     mkdirSync(dossier(stateDir, "nova"), { recursive: true });
-    const troisieme = creerBot({ stateDir, registre: second.registre, nom: "Nova" });
+    const troisieme = creerBot({ stateDir, registre, nom: "Nova" });
     expect(troisieme.bot.id).toBe("nova-2");
     expect(existsSync(dossier(stateDir, "nova-2"))).toBe(true);
   });

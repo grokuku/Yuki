@@ -52,9 +52,11 @@ describe("B — barre du haut : avatar 24 px avant le nom, visible en téléphon
   const html = ui("index.html");
   const css = ui("styles.css");
 
-  it("le markup place l'avatar AVANT le nom « Yuki »", () => {
+  it("le markup place l'avatar AVANT le nom du bot, dans le MÊME bouton", () => {
+    // ⚠️ LOT 37 — le nom+avatar sont le bouton du sélecteur : le nom suit le bot
+    // affiché (`#bot-switcher-nom`), il n'est plus écrit « Yuki » en dur.
     expect(html).toMatch(
-      /class="brand"[\s\S]{0,300}?id="brand-avatar"[\s\S]{0,300}?class="brand__name">Yuki/,
+      /id="bot-switcher-btn"[\s\S]{0,600}?id="brand-avatar"[\s\S]{0,600}?id="bot-switcher-nom"/,
     );
     expect(html).toMatch(/id="brand-avatar"[^>]*class="avatar avatar--brand"/);
     expect(html).toMatch(/id="brand-avatar"[^>]*hidden/);

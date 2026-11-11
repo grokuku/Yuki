@@ -151,6 +151,28 @@ describe("① `GET /api/bots`", () => {
       ordre: 1,
     });
   });
+
+  it("porte `refuses` : les bots `actif` écartés par le plafond sont NOMMÉS", async () => {
+    // ⚠️ Sans cette liste, un bot `actif: true` refusé au démarrage n'a aucun
+    // `execution` et l'interface afficherait « état inconnu » — la cause (le
+    // plafond) resterait invisible pour l'utilisateur.
+    const b = banc({ registre: registreDeuxBots() });
+    b.deps.bots = {
+      ...(b.deps.bots ?? {}),
+      refusesActifs: ["kohai"],
+      maxActifs: 1,
+    };
+    const { status, body } = await appel(b, "GET", "/api/bots");
+    expect(status).toBe(200);
+    expect(body.refuses).toEqual(["kohai"]);
+    expect(body.plafond).toBe(1);
+  });
+
+  it("`refuses` est une liste VIDE quand rien n'a été écarté (jamais absente)", async () => {
+    const b = banc({ registre: registreDeuxBots() });
+    const { body } = await appel(b, "GET", "/api/bots");
+    expect(body.refuses).toEqual([]);
+  });
 });
 
 describe("② refus croisés — rien n'est écrit", () => {

@@ -141,6 +141,13 @@ export interface ConfigApiDeps {
      */
     maxActifs?: number;
     /**
+     * ⚠️ Bots `actif: true` REFUSÉS au démarrage par le plafond. La liste part
+     * telle quelle dans `GET /api/bots` : sans elle, un bot écarté n'a aucun
+     * `execution` et l'interface afficherait « état inconnu » — l'utilisateur
+     * chercherait une panne au lieu de voir le plafond.
+     */
+    refusesActifs?: string[];
+    /**
      * ⚠️ LOT 36 (L8) — L'ÉTAT RÉEL, ET LE CYCLE DE VIE (`src/bots/execution.ts`).
      *
      * Absent ⇒ `GET /api/bots` n'ajoute AUCUN champ d'exécution et les routes
@@ -709,6 +716,9 @@ function handleBotsList(deps: ConfigApiDeps): ConfigHttpResponse {
     plafond: normaliserPlafond(deps.bots?.maxActifs),
     principal: deps.runtime.botId,
     echanges: { ...(deps.bots?.registre?.echanges ?? {}) },
+    // ⚠️ REFUS DU PLAFOND, nommés : l'interface les affiche (« actif mais NON
+    // démarré »). Journalisés au démarrage un par un (`bots.avertissement`).
+    refuses: [...(deps.bots?.refusesActifs ?? [])],
   });
 }
 

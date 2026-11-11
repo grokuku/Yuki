@@ -48,6 +48,7 @@ import {
   entreeListe,
   etatBot,
   messageBandeauBot,
+  nomBarreHaut,
   resumeBots,
   urlConversationBot,
 } from "../../public/ui/bot-switcher-modele.js";
@@ -255,6 +256,8 @@ interface Banc {
   list: Noeud;
   status: Noeud;
   plafond: Noeud;
+  /** Nom affiché DANS le bouton de la barre du haut (`#bot-switcher-nom`). */
+  nom: Noeud;
   nav: string[];
   patchs: Array<{ url: string; body: any }>;
   appels: string[];
@@ -270,6 +273,7 @@ function banc(
     reponsePanne?: { status: number; body: unknown };
     panneListe?: boolean;
     recherche?: string;
+    refuses?: string[];
   } = {},
 ): Banc {
   installerDom();
@@ -280,6 +284,8 @@ function banc(
   const status = new Noeud("p");
   status.hidden = true;
   const plafond = new Noeud("p");
+  const nom = new Noeud("span");
+  nom.textContent = "Yuki";
   const nav: string[] = [];
   const patchs: Array<{ url: string; body: any }> = [];
   const appels: string[] = [];
@@ -309,6 +315,7 @@ function banc(
         plafond: options.plafond ?? PLAFOND_ACTIFS_DEFAUT,
         principal,
         echanges: options.echanges ?? {},
+        refuses: options.refuses ?? [],
       });
     }
     if (url === "/api/bots/echanges") {
@@ -362,6 +369,7 @@ function banc(
     list,
     plafondEl: plafond,
     statusEl: status,
+    nomEl: nom,
     HolafModal,
     fetchImpl: fetchImpl as never,
     naviguer: (url: string) => nav.push(url),
@@ -370,7 +378,7 @@ function banc(
     statutMs: 0,
   });
 
-  return { switcher, button, panel, list, status, plafond, nav, patchs, appels, alertes };
+  return { switcher, button, panel, list, status, plafond, nom, nav, patchs, appels, alertes };
 }
 
 function itemDe(list: Noeud, botId: string): Noeud {
@@ -662,9 +670,11 @@ describe("⑦ boucle entre bots : un seul interrupteur, orienté", () => {
       noeud.classes.has("bot-switcher__menu"),
     );
     expect(menu).toBeDefined();
+    // ⚠️ Les entrées de BOUCLE portent leur propre classe : le menu contient
+    // aussi Démarrer/Arrêter (première entrée) et le retrait (dernière).
     const entrees = (menu?.children ?? [])
       .filter((noeud) => noeud.tag === "button")
-      .filter((noeud) => !noeud.classes.has("bot-switcher__menu-item--danger"));
+      .filter((noeud) => noeud.classes.has("bot-switcher__menu-item--boucle"));
     // Deux cibles possibles : « Yuki » et « Nova » (jamais soi-même).
     expect(entrees).toHaveLength(2);
     expect(entrees[0].textContent).toContain("vers « Yuki »");
@@ -824,6 +834,145 @@ describe("⑧ « Ajouter un bot » réutilise la modale existante", () => {
     expect(source).toContain("ouvrirCreationBot({ HolafModal, bots })");
     // Un bot neuf est `actif: false` : le message le DIT et donne le geste.
     expect(source).toContain("Il est ARRÊTÉ");
+  });
+});
+
+// ─── ⑩ le NOM de la barre du haut suit le bot AFFICHÉ ─────────────────────
+
+describe("⑩ « je n'ai toujours que Yuki en haut » corrigé", () => {
+  it("le nom du bouton est celui du bot affiché, jamais un « Yuki » en dur", async () => {
+    // ⚠️ LE DÉFAUT : `<span class="brand__name">Yuki</span>` était écrit en dur,
+    // donc trois bots en base et la barre annonçait « Yuki » quoi qu'il arrive.
+    const html = ui("index.html");
+    expect(html).toMatch(/id="bot-switcher-btn"[\s\S]{0,600}?id="bot-switcher-nom"/);
+    expect(html).not.toMatch(/<span class="brand__name">Yuki<\/span>\s*<\/div>/u);
+    const b = banc({ recherche: "?b=kohai" });
+    await b.switcher.rafraichir();
+    expect(b.nom.textContent).toBe("Kohai");
+    const b2 = banc({ recherche: "" });
+    await b2.switcher.rafraichir();
+    expect(b2.nom.textContent).toBe("Yuki");
+  });
+
+  it("DEUX bots de même nom restent écrits PAREIL : aucun slug à l'écran", () => {
+    const bots = [
+      { id: "yuki", nom: "Yuki", actif: true, ordre: 0 },
+      { id: "grolaf", nom: "Grolaf", actif: false, ordre: 1 },
+      { id: "grolaf-2", nom: "Grolaf", actif: false, ordre: 2 },
+    ];
+    // ⚠️ Décision utilisateur : « le slug on s'en fout ». Le doublon est empêché
+    // à la CRÉATION, pas maquillé à l'affichage.
+    expect(entreeListe(bots[1]).nomAffiche).toBe("Grolaf");
+    expect(entreeListe(bots[2]).nomAffiche).toBe("Grolaf");
+    expect(nomBarreHaut(bots, "grolaf-2")).toBe("Grolaf");
+    expect(ui("bot-switcher-modele.js")).not.toContain("} (${id})");
+  });
+
+  it("le panneau liste TOUS les bots, y compris les REFUSÉS du plafond", async () => {
+    const b = banc({ refuses: ["nova"] });
+    await b.switcher.rafraichir();
+    b.switcher.ouvrir();
+    const etats = descendants(b.list)
+      .filter((noeud) => noeud.classes.has("bot-switcher__etat"))
+      .map((noeud) => noeud.textContent);
+    expect(etats).toHaveLength(3);
+    // ⚠️ Sans la liste `refuses`, Nova s'afficherait « état inconnu » : la cause
+    // (le plafond) serait invisible.
+    expect(etats[2]).toContain("plafond de 3 atteint");
+    expect(b.plafond.textContent).toContain("REFUSÉ(S) par le plafond");
+  });
+});
+
+// ─── ⑪ MENU du nom+avatar : Démarrer/Arrêter, boucles, retrait ─────────────
+
+describe("⑪ clic droit / appui long sur le nom+avatar : les TROIS gestes", () => {
+  it("le clic droit sur le BOUTON de la barre du haut ouvre le menu du bot courant", async () => {
+    const b = banc({ recherche: "?b=yuki" });
+    await b.switcher.rafraichir();
+    b.button.dispatch("contextmenu");
+    await vi.waitFor(() => expect(b.panel.hidden).toBe(false));
+    await vi.waitFor(() => {
+      const menu = descendants(b.list).find((noeud) =>
+        noeud.classes.has("bot-switcher__menu"),
+      );
+      expect(menu).toBeDefined();
+    });
+    const menu = descendants(b.list).find((noeud) => noeud.classes.has("bot-switcher__menu"));
+    expect(menu?.textContent).toContain("Bot « Yuki »");
+    // Le bot principal suit le gateway : la ligne existe et n'agit pas.
+    expect(menu?.textContent).toContain("bot principal : il suit le gateway");
+    expect(menu?.textContent).toContain("Retirer ce bot…");
+  });
+
+  it("le menu d'un bot ARRÊTÉ porte « Démarrer » ; démarré, « Arrêter »", async () => {
+    const b = banc({ recherche: "?b=kohai" });
+    await b.switcher.rafraichir();
+    b.switcher.ouvrir();
+    const avatar = descendants(itemDe(b.list, "kohai")).find((noeud) =>
+      noeud.classes.has("bot-switcher__avatar"),
+    );
+    avatar?.dispatch("contextmenu");
+    let menu = descendants(itemDe(b.list, "kohai")).find((noeud) =>
+      noeud.classes.has("bot-switcher__menu"),
+    );
+    expect(menu?.textContent).toContain("Démarrer « Kohai »");
+
+    // Bot DÉMARRÉ (Nova, avec un état d'exécution réel) : c'est « Arrêter ».
+    const b2 = banc({
+      bots: [BOTS[0], { ...BOTS[1], actif: true, execution: { demarre: true } }],
+    });
+    await b2.switcher.rafraichir();
+    b2.switcher.ouvrir();
+    const avatar2 = descendants(itemDe(b2.list, "kohai")).find((noeud) =>
+      noeud.classes.has("bot-switcher__avatar"),
+    );
+    avatar2?.dispatch("contextmenu");
+    menu = descendants(itemDe(b2.list, "kohai")).find((noeud) =>
+      noeud.classes.has("bot-switcher__menu"),
+    );
+    expect(menu?.textContent).toContain("Arrêter « Kohai »");
+  });
+
+  it("« Arrêter » écrit `PATCH { actif: false }` et dit le refus du serveur", async () => {
+    const b = banc({
+      bots: [BOTS[0], { ...BOTS[1], actif: true, execution: { demarre: true } }],
+      reponsePanne: {
+        status: 409,
+        body: { code: "dernier_bot_actif", message: "Éteindre le dernier bot actif est impossible." },
+      },
+    });
+    await b.switcher.rafraichir();
+    b.switcher.ouvrir();
+    const avatar = descendants(itemDe(b.list, "kohai")).find((noeud) =>
+      noeud.classes.has("bot-switcher__avatar"),
+    );
+    avatar?.dispatch("contextmenu");
+    const bouton = descendants(itemDe(b.list, "kohai")).find(
+      (noeud) => noeud.tag === "button" && noeud.textContent === "Arrêter « Kohai »",
+    );
+    bouton?.dispatch("click");
+    await vi.waitFor(() => expect(b.status.textContent).toContain("dernier bot actif"));
+    expect(b.patchs[0]).toEqual({
+      url: "/api/bots/kohai/actif",
+      body: { actif: false },
+    });
+  });
+
+  it("l'APPUI LONG sur le nom+avatar (téléphone) ouvre le menu du bot courant", async () => {
+    vi.useFakeTimers();
+    const b = banc({ recherche: "?b=yuki" });
+    await b.switcher.rafraichir();
+    b.button.dispatch("pointerdown", { pointerType: "touch", clientX: 10, clientY: 10 });
+    vi.advanceTimersByTime(700);
+    expect(b.panel.hidden).toBe(false);
+    // Le panneau est ouvert ET le menu du bot courant est déplié.
+    await vi.waitFor(() => {
+      const menu = descendants(b.list).find((noeud) =>
+        noeud.classes.has("bot-switcher__menu"),
+      );
+      expect(menu).toBeDefined();
+    });
+    b.button.dispatch("pointerup", { pointerType: "touch" });
   });
 });
 

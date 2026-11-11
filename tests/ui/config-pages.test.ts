@@ -422,7 +422,10 @@ describe("⑤ sélecteur de bot : état dans l'URL, modales HolafModal", () => {
     // L'URL est réécrite avec le bot réellement affiché (lien partageable).
     expect(CONFIG_JS).toContain('url.searchParams.set("b", botCourant.id)');
     // Aucune erreur visible pour un slug inconnu : pas de bandeau d'erreur dédié.
-    expect(BOTS_HTML).toContain('id="bot-select"');
+    // ⚠️ LOT 37 — le `<select>` de bot est RETIRÉ : la barre du haut est le seul
+    // sélecteur. La page NOMME le bot édité, sans contrôle de sélection.
+    expect(BOTS_HTML).not.toContain('id="bot-select"');
+    expect(BOTS_HTML).toContain('id="bot-courant-nom"');
     expect(BOTS_HTML).toContain('id="bot-add"');
   });
 
@@ -541,6 +544,26 @@ describe("⑤bis ajout / clone / suppression — les données décidées", () =>
     expect(ok.champs).toEqual({});
     // Le formulaire ne produit plus de slug : c'est le SERVEUR qui le dérive.
     expect(ok).not.toHaveProperty("slug");
+  });
+
+  it("refuse un NOM DÉJÀ PORTÉ par un bot (retour immédiat, sans aller-retour)", () => {
+    const bots = [
+      { id: "yuki", nom: "Yuki" },
+      { id: "grolaf", nom: "Grolaf" },
+    ];
+    const refus = validerCreationBot({ nom: "Grolaf", bots });
+    expect(refus.ok).toBe(false);
+    // ⚠️ Le message nomme LE NOM (« Un bot nommé « Grolaf » existe déjà »), jamais
+    // un « slug déjà pris » que l'utilisateur ne voit nulle part.
+    expect(refus.champs.nom).toBe(
+      "Un bot nommé « Grolaf » existe déjà. Choisissez un autre nom.",
+    );
+    expect(refus.champs.nom).not.toContain("slug");
+    // Casse et espaces ignorés : c'est le MÊME nom pour l'utilisateur.
+    expect(validerCreationBot({ nom: "  grolaf ", bots }).ok).toBe(false);
+    // Un nom libre passe, et l'absence de liste ne bloque jamais (mode dégradé).
+    expect(validerCreationBot({ nom: "Nova", bots }).ok).toBe(true);
+    expect(validerCreationBot({ nom: "Nova" }).ok).toBe(true);
   });
 
   it("la modale de création annonce la limite de 6 bots", () => {

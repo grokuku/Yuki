@@ -130,7 +130,10 @@ export type CodeAdminBot =
   | "plafond_actifs"
   | "dernier_bot_actif"
   // LOT 37 — on/off de la BOUCLE entre deux bots (`echanges["a->b"].actif`).
-  | "echange_invalide";
+  | "echange_invalide"
+  // LOT 37 — un NOM déjà porté par un autre bot : la création refuse le doublon
+  // (« le slug on s'en fout » : c'est le nom que l'utilisateur lit).
+  | "nom_deja_pris";
 
 /** Refus EXPLICITE (code stable + message français actionnable). */
 export class AdminBotError extends Error {
@@ -286,6 +289,19 @@ export interface ResultatCreationBot {
 }
 
 /** Nom affiché : non vide, borné à 40 caractères, sans caractère de contrôle. */
+/**
+ * Clé de comparaison d'un NOM de bot : espaces condensés, casse ignorée.
+ *
+ * ⚠️ Deux noms qui ne diffèrent que par la casse ou les espaces sont le MÊME nom
+ * pour l'utilisateur : `creerBot` les refuse (`409 nom_deja_pris`).
+ */
+export function cleNomBot(nom: unknown): string {
+  return String(nom ?? "")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .toLocaleLowerCase("fr-FR");
+}
+
 export function validerNomBot(nom: unknown): string {
   if (typeof nom !== "string") {
     throw new AdminBotError("nom_invalide", 400, "Le nom du bot est obligatoire.");
@@ -455,6 +471,25 @@ export function creerBot(options: OptionsCreationBot): ResultatCreationBot {
       "max_bots",
       409,
       `Limite de ${MAX_BOTS} bots atteinte : supprimez un bot avant d'en ajouter un autre.`,
+    );
+  }
+  /**
+   * ⚠️ NOM DÉJÀ PRIS — REFUS, pas de doublon silencieux.
+   *
+   * Deux bots nommés « Grolaf » (`grolaf`, `grolaf-2`) étaient indistinguables
+   * dans la barre du haut, et l'utilisateur n'avait aucun moyen de voir qu'il
+   * créait un second « Grolaf ». Le nom est ce qu'il lit : c'est le nom qu'on
+   * compare (casse et espaces ignorés, comme le fait l'UI avant l'appel).
+   *
+   * ⚠️ Les doublons DÉJÀ présents ne sont pas touchés : ils restent lisibles et
+   * supprimables (menu de la barre du haut).
+   */
+  const nomPris = registre.bots.find((bot) => cleNomBot(bot.nom) === cleNomBot(nom));
+  if (nomPris !== undefined) {
+    throw new AdminBotError(
+      "nom_deja_pris",
+      409,
+      `Un bot nommé « ${nom} » existe déjà. Choisissez un autre nom.`,
     );
   }
   const slug = slugLibrePour(stateDir, registre, nom);

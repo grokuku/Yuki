@@ -106,19 +106,26 @@ body {
  * ⚠️ Sans avatar, le glyphe ❄️ occupe le bouton : la bascule existe donc aussi
  * sur une instance qui n'a jamais déposé d'avatar.
  */
+/* NOM + AVATAR = UN SEUL BOUTON : le clic (et le clic droit / appui long) vise
+ * toute la marque, pas seulement les 24 px de l'avatar. Largeur automatique,
+ * hauteur de la ligne : aucun style inline. */
 .brand__bot {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 6px;
   border: 0;
-  border-radius: 50%;
+  border-radius: 999px;
   background: none;
   color: inherit;
   font: inherit;
   cursor: pointer;
+}
+
+.brand__bot .brand__name {
+  font: inherit;
+  letter-spacing: inherit;
 }
 
 .brand__bot:hover {
@@ -332,6 +339,13 @@ body {
   color: var(--muted);
 }
 
+/* ⚠️ REFUS DU PLAFOND : le bot DOIT tourner (`actif: true`) mais a été écarté au
+ * démarrage. Ce n'est ni « arrêté » ni « erreur » : la cause est un réglage. */
+.bot-switcher__etat--refuse {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
 .bot-switcher__demarrer {
   flex: 0 0 auto;
 }
@@ -372,6 +386,17 @@ body {
 
 .bot-switcher__menu-item:hover {
   background: var(--panel-hover);
+}
+
+.bot-switcher__menu-item:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Entrées de BOUCLE (on/off entre deux bots) : même poids visuel que Démarrer
+ * et Arrêter, donc aucune confusion avec le retrait (`--danger`). */
+.bot-switcher__menu-item--boucle {
+  font-size: 12px;
 }
 
 /* RETRAIT d'un bot : même famille de couleur que la zone de danger de `/bots`,

@@ -17,7 +17,42 @@
   </head>
   <body data-config-page="bot">
     <header class="topbar">
-      <div class="brand"><a class="brand__link" href="/">Yuki</a> — Configuration d'un bot</div>
+      <!--
+        LOT 37 — LE MÊME SÉLECTEUR QUE LA DISCUSSION : le nom+avatar de la barre
+        du haut est la SEULE source de vérité pour choisir le bot AFFICHÉ et
+        ÉDITÉ. Le `<select>` « Bot affiché » de cette page est retiré (doublon
+        visuel) ; ici le clic ouvre `/bots?b=<slug>`.
+      -->
+      <div class="brand">
+        <button id="bot-switcher-btn" class="brand__bot" type="button" aria-label="Changer de bot" aria-haspopup="dialog" aria-expanded="false" aria-controls="bot-switcher-panel"><span class="brand__bot-glyphe" data-avatar-fallback aria-hidden="true">❄️</span><span id="bot-switcher-nom" class="brand__name">Yuki</span></button>
+        <span class="brand__suffix">— Configuration d'un bot</span>
+      </div>
+      <div
+        id="bot-switcher-panel"
+        class="bot-switcher"
+        role="dialog"
+        aria-modal="false"
+        aria-label="Bots de cette instance"
+        hidden
+      >
+        <div class="bot-switcher__head">
+          <h2 class="bot-switcher__title">Bots</h2>
+          <button
+            id="bot-switcher-close"
+            class="button button--ghost button--small"
+            type="button"
+            aria-label="Fermer la liste des bots"
+          >Masquer</button>
+        </div>
+        <p id="bot-switcher-plafond" class="bot-switcher__plafond" role="status"></p>
+        <p class="bot-switcher__aide">
+          Cliquez un bot pour ouvrir SES réglages ; un bot arrêté se démarre ici.
+          Clic droit (ou appui long) sur son nom : Démarrer / Arrêter, les boucles
+          entre bots, et son retrait de l'instance.
+        </p>
+        <ul id="bot-switcher-list" class="bot-switcher__list"></ul>
+        <p id="bot-switcher-status" class="bot-switcher__status" role="status" hidden></p>
+      </div>
       <div class="status">
         <!-- Retour à la discussion (même geste que sur /config). -->
         <a class="nav-back" href="/">
@@ -59,8 +94,12 @@
         dessus.
       -->
       <div class="bot-selecteur">
-        <label class="bot-selecteur__label" for="bot-select">Bot affiché</label>
-        <select id="bot-select" class="config-select bot-selecteur__select" aria-label="Choisir le bot affiché"></select>
+        <!--
+          ⚠️ PLUS DE `<select>` ICI (lot 37) : la barre du haut choisit le bot.
+          Cette ligne le NOMME seulement — on édite bien CE bot-là.
+        -->
+        <span class="bot-selecteur__label">Réglages de :</span>
+        <strong id="bot-courant-nom" class="bot-selecteur__nom">—</strong>
         <button
           id="bot-add"
           class="button button--ghost button--small bot-selecteur__add"

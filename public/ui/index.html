@@ -46,8 +46,14 @@
         que la bascule doit vivre. Aucun style inline (CSP).
       -->
       <div class="brand">
-        <button id="bot-switcher-btn" class="brand__bot" type="button" aria-label="Changer de bot" aria-haspopup="dialog" aria-expanded="false" aria-controls="bot-switcher-panel"><img id="brand-avatar" class="avatar avatar--brand" alt="" data-avatar-image hidden /><span class="brand__bot-glyphe" data-avatar-fallback aria-hidden="true">❄️</span></button>
-        <span class="brand__name">Yuki</span>
+        <!--
+          LOT 37 — NOM + AVATAR dans le MÊME bouton : c'est ce que l'utilisateur
+          désigne par « le nom+avatar du bot » (demande de clic droit / appui
+          long). Le nom suit le bot AFFICHÉ (`?b=<slug>`) : il n'est plus écrit
+          en dur, sinon la barre annonçait « Yuki » alors que trois bots
+          existaient (le défaut rapporté).
+        -->
+        <button id="bot-switcher-btn" class="brand__bot" type="button" aria-label="Changer de bot" aria-haspopup="dialog" aria-expanded="false" aria-controls="bot-switcher-panel"><img id="brand-avatar" class="avatar avatar--brand" alt="" data-avatar-image hidden /><span class="brand__bot-glyphe" data-avatar-fallback aria-hidden="true">❄️</span><span id="bot-switcher-nom" class="brand__name">Yuki</span></button>
       </div>
       <!--
         PANNEAU DES BOTS — liste construite par `bot-switcher.js` (jamais écrite

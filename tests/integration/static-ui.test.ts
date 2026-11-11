@@ -271,9 +271,9 @@ describe("UI statique servie par le gateway", () => {
     expect([...body.matchAll(/role="tab"/g)].length).toBe(6);
     expect([...body.matchAll(/role="tabpanel"/g)].length).toBe(6);
 
-    // Sélecteur de bot (③) : `<select>` natif + bouton « ＋ » (modale « bientôt
-    // disponible » — l'écran d'ajout est un lot ultérieur).
-    expect(body).toContain('id="bot-select"');
+    // Sélecteur de bot : plus de `<select>` (lot 37, la barre du haut choisit) ;
+    // le nom du bot édité et le bouton d'ajout restent.
+    expect(body).toContain('id="bot-courant-nom"');
     expect(body).toContain('id="bot-add"');
     // Les composants autonomes qui lisent le bot ACTIF sont montés ici.
     for (const id of ["bot-general-root", "personality-root", "voices-root", "chat-root", "sources-root"]) {
