@@ -212,6 +212,21 @@ export class FabriqueMemoireBots {
     this.cache.set(stores.botId, stores);
   }
 
+  /**
+   * FERME les stores d'UN bot (lot 36, L9) : son index est fermé, aucune
+   * écriture tardive ne peut plus partir. ⚠️ Le bot de la PILE n'est pas fermé
+   * par ici : ses stores sont ceux de `main()`, fermés avec l'instance.
+   *
+   * Rend `true` si des stores existaient pour ce bot.
+   */
+  fermerBot(botId: string): boolean {
+    const stores = this.cache.get(botId);
+    if (stores === undefined) return false;
+    this.cache.delete(botId);
+    stores.fermer();
+    return true;
+  }
+
   /** Ferme tous les index ouverts (arrêt gracieux). */
   fermerTout(): void {
     for (const stores of this.cache.values()) stores.fermer();

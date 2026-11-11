@@ -169,6 +169,12 @@ let botCourant = null;
 /** Liste `{ id, nom, capacites, actif, ordre }` des bots connus. */
 let botsConnus = [];
 
+/**
+ * Message d'une action de CYCLE DE VIE (démarrer/arrêter), gardé le temps d'un
+ * rendu : le rendu reconstruit la zone, donc le texte doit lui survivre.
+ */
+let flashBotExecution = "";
+
 /** Slug de bot par défaut quand l'URL en désigne un inconnu (repli silencieux). */
 const BOT_REPLI = "yuki";
 
@@ -1400,6 +1406,138 @@ function ligneLecture(texte, valeur) {
 }
 
 /**
+ * Zone « EXÉCUTION » d'un bot (lot 36, L8) : ce qui TOURNE, et les deux boutons.
+ *
+ * ⚠️ POURQUOI ELLE EXISTE : le champ `actif` dit ce que le bot **doit** faire
+ * (« doit tourner »), pas ce qu'il fait. Un bot allumé dont le host a échoué
+ * s'affichait donc « actif » — l'interface mentait. Ici, tout vient de
+ * `execution` (`demarre`, `erreur`, `sessions`, `workers`), joint par le serveur
+ * depuis l'EXÉCUTION, jamais recalculé côté navigateur.
+ *
+ * ⚠️ Les deux boutons écrivent le MÊME état que `PATCH /api/bots/<id>/actif`
+ * (`{ actif: true | false }`) : « Démarrer » ouvre la pile et démarre le host
+ * (créé au besoin), « Arrêter » les détruit. La réponse du serveur fait foi :
+ * elle remplace la liste locale (`donnees.bots`).
+ */
+function sectionExecution(bot) {
+  const section = h("section", { class: "config-group" });
+  section.append(
+    h("div", { class: "config-group__head" }, [
+      h("h2", { class: "config-group__title", text: "Exécution" }),
+    ]),
+  );
+  section.append(
+    h("p", {
+      class: "config-helper",
+      text:
+        "Ce qui TOURNE maintenant, et non ce qui est enregistré : un bot peut être " +
+        "« actif » (il doit tourner) et arrêté (son démarrage a échoué — la cause " +
+        "est affichée). « Démarrer » ouvre ses sources puis son host ; « Arrêter » " +
+        "les ferme. Le bot principal de l'instance suit le gateway.",
+    }),
+  );
+  const execution = bot.execution ?? null;
+  if (execution === null) {
+    section.append(
+      h("p", {
+        class: "config-helper",
+        text: "État d'exécution indisponible sur cette instance (mode dégradé).",
+      }),
+    );
+    return section;
+  }
+  section.append(ligneLecture("Démarrage", execution.demarre === true ? "démarré" : "arrêté"));
+  section.append(ligneLecture("Sessions", String(execution.sessions ?? 0)));
+  section.append(
+    ligneLecture("Worker lourd", execution.workers === 1 ? "construit" : "non construit"),
+  );
+  if (typeof execution.erreur === "string" && execution.erreur !== "") {
+    section.append(ligneLecture("Dernière erreur", execution.erreur));
+  }
+
+  const status = h("p", { class: "config-helper", role: "status", hidden: true });
+  if (flashBotExecution !== "") {
+    status.textContent = flashBotExecution;
+    status.hidden = false;
+  }
+  const demarrer = h("button", {
+    class: "button button--primary button--small",
+    type: "button",
+    text: "Démarrer",
+  });
+  const arreter = h("button", {
+    class: "button button--small",
+    type: "button",
+    text: "Arrêter",
+  });
+  // ⚠️ Un bouton inutile est DÉSACTIVÉ (aucun aller-retour qui ne changerait rien).
+  demarrer.disabled = execution.demarre === true;
+  arreter.disabled = execution.demarre !== true;
+
+  const changer = (actif) => {
+    void (async () => {
+      flashBotExecution = "";
+      status.hidden = true;
+      demarrer.disabled = true;
+      arreter.disabled = true;
+      try {
+        const reponse = await fetch(`/api/bots/${encodeURIComponent(bot.id)}/actif`, {
+          method: "PATCH",
+          headers: writeHeaders(actif ? "bot-demarrer" : "bot-arreter"),
+          body: JSON.stringify({ actif }),
+        });
+        const donnees = await reponse.json().catch(() => ({}));
+        if (!reponse.ok) {
+          throw Object.assign(new Error(donnees.message ?? "Changement impossible."), {
+            data: donnees,
+          });
+        }
+        // ⚠️ La LISTE du serveur fait foi (registre en mémoire + état réel).
+        if (Array.isArray(donnees.bots)) botsConnus = donnees.bots;
+        const misAJour =
+          (Array.isArray(donnees.bots)
+            ? donnees.bots.find((entree) => entree.id === bot.id)
+            : null) ?? null;
+        if (misAJour) appliquerBotExecution(misAJour);
+        const raison = donnees.applique?.raison ?? "";
+        flashBotExecution =
+          donnees.applique?.ok === false
+            ? raison
+            : donnees.inchange === true
+              ? raison !== ""
+                ? raison
+                : "Rien à changer : ce bot est déjà dans cet état."
+              : actif
+                ? "Démarrage effectué."
+                : "Arrêt effectué.";
+        renderBotGeneral();
+      } catch (error) {
+        const donnees = error?.data ?? {};
+        flashBotExecution =
+          donnees.message ?? (error instanceof Error ? error.message : String(error));
+        renderBotGeneral();
+      }
+    })();
+  };
+  demarrer.addEventListener("click", () => changer(true));
+  arreter.addEventListener("click", () => changer(false));
+
+  section.append(h("div", { class: "config-actions" }, [demarrer, arreter]), status);
+  return section;
+}
+
+/**
+ * Remplace un bot de la liste locale par la version du SERVEUR (état réel).
+ * ⚠️ Ne touche que l'état d'exécution : les capacités et le nom déjà affichés
+ * viennent de la même réponse et sont repris tels quels.
+ */
+function appliquerBotExecution(bot) {
+  if (!bot || typeof bot.id !== "string") return;
+  botsConnus = botsConnus.map((entree) => (entree.id === bot.id ? bot : entree));
+  if (botCourant && botCourant.id === bot.id) botCourant = bot;
+}
+
+/**
  * Zone « Général » d'un bot : NOM (modifiable), slug (lecture seule), avatar,
  * CAPACITÉS (cases à cocher) et zone de danger.
  *
@@ -1450,7 +1588,9 @@ function renderBotGeneral() {
   ]);
   identite.append(ligneNom);
   identite.append(ligneLecture("Identifiant (slug)", bot.id));
-  identite.append(ligneLecture("État", bot.actif === true ? "actif" : "inactif"));
+  identite.append(
+    ligneLecture("Enregistré", bot.actif === true ? "actif (doit tourner)" : "inactif (ne doit pas tourner)"),
+  );
   const avatarRow = h("div", { class: "config-row bot-info" });
   avatarRow.append(h("span", { class: "config-label", text: "Avatar" }));
   if (botAfficheEstActif()) {
@@ -1488,6 +1628,8 @@ function renderBotGeneral() {
   }
   identite.append(avatarRow);
   botGeneralRoot.append(identite);
+  // ⚠️ LOT 36 (L8) : l'état RÉEL, et les boutons qui le changent.
+  botGeneralRoot.append(sectionExecution(bot));
 
   botGeneralRoot.append(sectionCapacites(bot, champNom));
 

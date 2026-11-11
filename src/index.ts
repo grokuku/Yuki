@@ -25,6 +25,7 @@ import { dirname, join } from "node:path";
 import {
   AgentDirectoryService,
   AgentExecutionService,
+  ExecutionsAgentsBots,
   AgentFileTransferService,
   AgentHub,
   AgentLockService,
@@ -62,6 +63,9 @@ import {
 import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
 // ⚠️ LOT 36 (L3-d) : la Map des `PiHost` PAR BOT (le principal reste `host`).
 import { HostsBots } from "./bots/hosts.js";
+import { ExecutionBots } from "./bots/execution.js";
+import { compterSessionsPi } from "./bots/admin.js";
+import { MAX_WORKERS_LOURDS_DEFAUT, WorkersLourdsBots } from "./bots/workers.js";
 import { CAPACITES_BOT, type CapaciteBot, type RegistreBots } from "./bots/registry.js";
 import {
   ComfyClient,
@@ -104,6 +108,19 @@ import {
   registerAdapterProvider,
 } from "./chat/index.js";
 import { MM_MAX_DOWNLOAD_BYTES } from "./chat/mattermost/types.js";
+import {
+  CanauxBots,
+  ProprietairesCanaux,
+  cheminProprietairesCanaux,
+} from "./chat/canaux-bot.js";
+import {
+  nomSecretChat,
+  nomsSecretsChat,
+  resoudreJetonsChatBots,
+  type PlateformeChat,
+  type ResolutionJetonsChat,
+} from "./chat/jetons-bot.js";
+import { AdaptateursChatBots, cleAdaptateur } from "./chat/adaptateurs-bots.js";
 import { DiscordChatAdapter, discordAttachmentPort } from "./chat/discord/adapter.js";
 import { ChatAttachmentCache } from "./chat/attachments.js";
 import { DISCORD_MAX_DOWNLOAD_BYTES } from "./chat/discord/types.js";
@@ -113,7 +130,11 @@ import type { ChatDiscordPort, ChatMattermostPort } from "./gateway/routes/chat.
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { creerConfigsBots } from "./config/bots.js";
 import type { ConfigRuntime } from "./config/runtime.js";
-import { createDelegationService, type DelegationService } from "./delegation/index.js";
+import {
+  createDelegationService,
+  type DelegationService,
+  type HeavyWorker,
+} from "./delegation/index.js";
 import {
   createServer,
   installGracefulShutdown,
@@ -396,6 +417,33 @@ async function main(): Promise<void> {
   // propres pouvoirs. Mono-bot historique (`bots.bot` nul) ⇒ toutes les
   // capacités : comportement inchangé.
   const capacitesBot: readonly CapaciteBot[] = bots.bot?.capacites ?? CAPACITES_BOT;
+  /**
+   * ⚠️ LOT 36 (L6/L7) — LES CAPACITÉS D'UN BOT DONNÉ.
+   *
+   * Le bot de la pile rend EXACTEMENT `capacitesBot` (mono-bot inclus : registre
+   * absent ⇒ toutes). Un autre bot rend ses capacités d'enregistrement ; un bot
+   * inconnu (supprimé entre-temps) aussi, plutôt que de lui fermer ses outils
+   * par accident : la règle de `registry.ts` est qu'un bot sans `capacites`
+   * reçoit les capacités historiques.
+   */
+  /**
+   * ⚠️ LOT 36 (L6) — LE SERVICE D'EXÉCUTION D'UN BOT.
+   *
+   * Le principal est `agentExecution` (le même objet qu'avant L6) ; un autre bot
+   * reçoit le SIEN, construit dans la Map des services (même store, même hub,
+   * même TLS). Aucun repli vers le service d'un autre bot : sa visibilité serait
+   * celle d'un autre.
+   */
+  const executionDuBot = (botId: string): AgentExecutionService | undefined =>
+    botId === (bots.bot?.id ?? BOT_YUKI)
+      ? agentExecution
+      : executionsAgents?.pour(botId);
+
+  const capacitesDuBot = (botId: string): readonly CapaciteBot[] => {
+    if (botId === (bots.bot?.id ?? BOT_YUKI)) return capacitesBot;
+    const enregistre = bots.registre?.bots.find((entree) => entree.id === botId);
+    return enregistre?.capacites ?? CAPACITES_BOT;
+  };
   logger.info("bots.capacites", {
     bot: bots.bot?.id ?? null,
     capacites: capacitesBot.join(","),
@@ -549,6 +597,23 @@ async function main(): Promise<void> {
   let stopAgentsCertReload: (() => void) | undefined;
   let agentsDeps: AgentsApiDeps | undefined;
   let agentExecution: AgentExecutionService | undefined;
+  /**
+   * ⚠️ LOT 36 (L6) : les services d'exécution PAR BOT (`botId → service`).
+   * `agentExecution` reste le PRINCIPAL (routes, outils du host principal) ;
+   * cette Map porte en plus ceux des autres bots à démarrer.
+   */
+  let executionsAgents: ExecutionsAgentsBots<AgentExecutionService> | undefined;
+  /**
+   * ⚠️ LOT 36 (L7) : les workers lourds PAR BOT, construits à la demande.
+   * Celui du bot de la pile est SEMÉ (réutilisé par identité) : non-régression.
+   */
+  let workersLourds: WorkersLourdsBots<HeavyWorker> | undefined;
+  /**
+   * ⚠️ LOT 36 (L8/L9) : l'ÉTAT RÉEL des bots et leur cycle de vie (démarrer /
+   * arrêter UN bot). Construit après les hosts, lu par `GET /api/bots` et
+   * `PATCH /api/bots/<id>/actif`.
+   */
+  let executionBots: ExecutionBots | undefined;
   let agentDirectory: AgentDirectoryService | undefined;
   /**
    * TRANSFERT de fichiers vers/depuis une machine (capacité `files`).
@@ -749,20 +814,38 @@ async function main(): Promise<void> {
         };
       },
     };
-    agentExecution = new AgentExecutionService({
-      store: agentStore,
-      hub: agentHub,
-      audit: auditLog,
-      approvals,
+    /**
+     * ⚠️ LOT 36 (L6) — UN SERVICE PAR BOT, MÊME STORE / HUB / AUDIT / TLS.
+     *
+     * Ce qui est PARTAGÉ est exactement ce qui doit l'être : un seul journal
+     * d'agents, une seule connexion mTLS par agent, un seul journal d'audit, un
+     * seul registre d'approbations, un seul serveur 9443. Ce qui change est la
+     * VISIBILITÉ : chaque service fige SON bot (`botCourant`), donc le filtre
+     * `AgentRecord.bots` s'applique au bot du RUN, pas à une constante.
+     */
+    const creerExecution = (botId: string): AgentExecutionService =>
+      new AgentExecutionService({
+        store: agentStore,
+        hub: agentHub,
+        audit: auditLog,
+        approvals,
+        logger,
+        // ⚠️ VISIBILITÉ (lot 35g) : 3ᵉ point de filtrage — un agent hors de la
+        // liste du bot du run est refusé `agent_not_allowed`, même par un
+        // identifiant forgé. ⚠️ LOT 36 (L6) : `botId` vient du service demandé
+        // (un par bot), plus d'une constante figée au démarrage.
+        botCourant: () => botId,
+        ...(secretStore ? { secrets: secretStore } : {}),
+        secretRequests,
+        ...(agentLock ? { lock: agentLock } : {}),
+      });
+    executionsAgents = new ExecutionsAgentsBots<AgentExecutionService>({
+      botDePile,
+      bots: bots.aDemarrer.map((entree) => entree.id),
+      creer: creerExecution,
       logger,
-      // ⚠️ VISIBILITÉ (lot 35g) : 3ᵉ point de filtrage — un agent hors de la
-      // liste du bot du run est refusé `agent_not_allowed`, même par un
-      // identifiant forgé.
-      botCourant,
-      ...(secretStore ? { secrets: secretStore } : {}),
-      secretRequests,
-      ...(agentLock ? { lock: agentLock } : {}),
     });
+    agentExecution = executionsAgents.principal;
     // Consultation des agents (extension) : LECTURE SEULE. Réutilise le même
     // store/hub/audit ; les outils sont exposés même quand l'exécution est
     // désactivée (consulter n'est pas exécuter). Le VERROU est lu ici aussi :
@@ -1133,6 +1216,11 @@ async function main(): Promise<void> {
     piSessionsDir: string;
     maxActifs: number;
     retirerDesListesDAgents: (botId: string) => number;
+    /**
+     * ⚠️ LOT 36 (L8) : l'état RÉEL et le cycle de vie. Posé APRÈS la
+     * construction des hosts (deps MUTABLES, comme le registre).
+     */
+    execution?: ExecutionBots;
   } = {
     registre: bots.registre,
     stateDir: env.mountPoints.state,
@@ -1204,7 +1292,12 @@ async function main(): Promise<void> {
   // ⚠️ LOT 35j — la consommation suit le BOT DU RUN : chaque bot a SON registre
   // (`preautorisations.json` sous sa racine). Le port ne consulte donc JAMAIS le
   // fichier d'un autre bot, et le bot ne vient pas du client.
-  agentExecution?.setPreAutorisations(portPreAutorisations(sourcesParBot, botCourant));
+  // ⚠️ LOT 36 (L6) : le port est branché sur CHAQUE service de bot — sinon les
+  // pré-autorisations d'un bot secondaire ne seraient jamais consommées (ses
+  // déclencheurs refuseraient leurs propres pré-autorisations).
+  const portPreAutos = portPreAutorisations(sourcesParBot, botCourant);
+  agentExecution?.setPreAutorisations(portPreAutos);
+  executionsAgents?.pourChacun((execution) => execution.setPreAutorisations(portPreAutos));
   logger.info("agents.preautorisations.ready", {
     path: env.preAutorisationsPath,
     preautorisations: preAutorisationsStore.size,
@@ -1495,6 +1588,15 @@ async function main(): Promise<void> {
    * l'instance. Aucun message n'y est encore routé (c'est L4).
    */
   let hostsBots: HostsBots<PiHost> | undefined;
+  /**
+   * Host d'un bot, pour la PUBLICATION d'un envoi programmé (lot 36, L5).
+   *
+   * ⚠️ Aucun repli vers le principal pour un bot secondaire : publier dans les
+   * sessions d'un autre bot serait pire qu'un échec dit. Le bot de la pile garde
+   * `host` (mode mono inclus).
+   */
+  const hostDuBot = (botId: string): PiHost | undefined =>
+    botId === botDePile ? host : hostsBots?.pourDemarre(botId);
   let memoryService: MemoryService | undefined;
   let heritageStore: HeritageStore | undefined;
   let conversationArchive: ConversationArchiveStore | undefined;
@@ -1571,6 +1673,31 @@ async function main(): Promise<void> {
   const chatMirror = ChatMirrorStore.open({
     indexPath: env.chatMirrorPath,
     messagesDir: env.chatMirrorDir,
+    logger,
+  });
+
+  /**
+   * LOT 36 (L5) — LES CANAUX PAR BOT.
+   *
+   * ⚠️ POURQUOI CE BLOC EXISTE : le miroir ci-dessus est celui du bot de la
+   * PILE. Jusqu'à L4, `canaux()` du port de publication le servait à TOUS les
+   * bots : un bot secondaire proposait donc les canaux d'un autre, et pouvait y
+   * écrire. `canauxBots` rend à chaque bot SON miroir (`chatMirrorPath` /
+   * `chatMirrorDir` sont des chemins PAR BOT, `src/bots/paths.ts`) et tient la
+   * règle « un canal = un bot » AVANT toute publication.
+   *
+   * ⚠️ Déclaré AVANT le port de publication (qui le lit dans une fermeture),
+   * rempli APRÈS le résolveur d'`Env` des bots (il a besoin de leur miroir).
+   */
+  let canauxBots: CanauxBots<ChatMirrorStore> | undefined;
+
+  /**
+   * Propriété des canaux (`state/chat-canaux-proprietaires.json`) : c'est une
+   * propriété de l'INSTANCE (un canal n'appartient qu'à un bot), elle ne vit
+   * donc pas sous `<state>/bots/<id>/`.
+   */
+  const proprietairesCanaux = ProprietairesCanaux.open({
+    path: cheminProprietairesCanaux(env.mountPoints.state),
     logger,
   });
 
@@ -1736,6 +1863,12 @@ async function main(): Promise<void> {
     text: string,
     fichiers?: readonly string[],
     filDe?: string,
+    /**
+     * ⚠️ LOT 36 (L10) : le bot qui publie. Son adaptateur, donc SON jeton — un
+     * bot secondaire qui publierait avec le jeton du principal écrirait sous une
+     * autre identité (ou échouerait sur un canal où il n'est pas).
+     */
+    botId: string = botDePile,
   ): Promise<void> => {
     const plateforme = mirrorPlatformOf(conversationId);
     if (!plateforme) {
@@ -1743,7 +1876,15 @@ async function main(): Promise<void> {
         `Conversation « ${conversationId} » : la plateforme du canal est inconnue.`,
       );
     }
-    const adapter = getAdapter(plateforme);
+    const adapter =
+      botId === botDePile ? getAdapter(plateforme) : adaptateursChat.pour(botId, plateforme);
+    if (adapter === undefined) {
+      throw new Error(
+        `Le bot « ${botId} » n'a aucun compte ${plateforme} connecté : ` +
+          `enregistrez son jeton (YUKI_CHAT_${botId.toUpperCase().replace(/-/g, "_")}` +
+          `__${plateforme.toUpperCase()}) dans Configuration → Conversation.`,
+      );
+    }
     if (!adapter.send) {
       throw new Error(
         `La plateforme « ${plateforme} » n'accepte aucun envoi de message.`,
@@ -1787,20 +1928,24 @@ async function main(): Promise<void> {
      */
     conversationSource: string | undefined,
     plateforme: RemotePlatform,
+    /** Bot qui PUBLIE : ses canaux, et le refus s'il ne possède pas la cible. */
+    botId: string,
   ) =>
     createChannelPostPort({
       plateforme,
       ...(conversationSource !== undefined ? { conversationSource } : {}),
-      canaux: () =>
-        chatMirror.conversations().map((conversation) => ({
-          conversationId: conversation.id,
-          titre: conversation.title,
-          plateforme: conversation.platform,
-        })),
+      // ⚠️ SES canaux, jamais ceux de l'instance : un bot sans miroir ne propose
+      // RIEN plutôt que les canaux d'un autre (garde de L5).
+      canaux: () => canauxBots?.canaux(botId) ?? [],
+      // ⚠️ APPARTENANCE AVANT PUBLICATION : le canal est revendiqué au premier
+      // envoi réussi ; s'il appartient à un AUTRE bot, rien ne part et le refus
+      // le NOMME (sinon deux réponses au même message).
+      autoriser: (cible) =>
+        canauxBots?.revendiquerEtAutoriser(botId, cible) ?? { ok: true },
       // ⚠️ UN SEUL mécanisme d'envoi : `envoyerDansCanal` (téléversement +
       // `file_ids` + échec VISIBLE). Aucun second chemin de fichiers.
       envoyer: ({ conversationId: cible, texte, filDe, fichierIds }) =>
-        envoyerDansCanal(cible, texte, fichierIds, filDe),
+        envoyerDansCanal(cible, texte, fichierIds, filDe, botId),
       // ⚠️ RÉSOLUTION CÔTÉ SERVEUR des identifiants du store : propriété
       // (`sessionId`) et taille, jamais un chemin disque. Un identifiant
       // inconnu/expiré est refusé, jamais ignoré en silence.
@@ -1833,30 +1978,41 @@ async function main(): Promise<void> {
    *    (`src/pi/sdk-host.ts:2489`).
    * Elle LÈVE en cas d'échec : le service en fait un échec PERSISTÉ et JOURNALISÉ,
    * jamais une perte silencieuse (canal quitté, fil supprimé, session disparue).
+   *
+   * ⚠️ LOT 36 (L5) : elle publie avec le host et les canaux du BOT DE L'ENVOI
+   * (`botId`), jamais ceux de l'instance. Une cible LOCALE d'un bot dont le host
+   * n'a pas démarré ÉCHOUE avec sa raison (plutôt que de publier dans un fil du
+   * principal).
    */
-  const publierEnvoiProgramme = async (input: {
-    cible: CibleEnvoi;
-    texte: string;
-    fichierIds?: readonly string[];
-  }): Promise<void> => {
+  const publierEnvoiProgramme = async (
+    input: {
+      cible: CibleEnvoi;
+      texte: string;
+      fichierIds?: readonly string[];
+    },
+    botId: string = botDePile,
+  ): Promise<void> => {
     if (input.cible.type === "local") {
-      if (!host) {
+      // ⚠️ Le host DU BOT : un envoi programmé par un bot secondaire part dans SES
+      // sessions, jamais dans celles du principal.
+      const hostCible = hostDuBot(botId);
+      if (hostCible === undefined) {
         throw new Error("Le host Pi n'est pas disponible : l'envoi n'a pas pu être publié.");
       }
-      if (typeof host.publierMessage !== "function") {
+      if (typeof hostCible.publierMessage !== "function") {
         throw new Error(
           "Ce host ne sait pas publier dans une conversation sans tour de modèle : " +
             "l'envoi programmé n'a pas pu partir.",
         );
       }
-      await host.publierMessage(input.cible.sessionId, input.texte);
+      await hostCible.publierMessage(input.cible.sessionId, input.texte);
       return;
     }
     // ⚠️ `conversationSource: undefined` : l'appartenance des fichiers a été vérifiée à
     // la PROGRAMMATION. Revalider ici contre la cible refuserait tout fichier produit
     // dans la conversation d'origine (le cas d'usage : une image générée ici, publiée
     // dans « L'Imagerie »).
-    const port = portDePublication(undefined, input.cible.plateforme);
+    const port = portDePublication(undefined, input.cible.plateforme, botId);
     const issue = await port.publier({
       canal: input.cible.conversationId,
       texte: input.texte,
@@ -1871,12 +2027,8 @@ async function main(): Promise<void> {
     journal: declencheursJournal,
     // Canaux SUIVIS relus à chaque programmation (`apply: hot`) : le périmètre est le
     // même que `publier_dans_canal`, et il est tenu côté serveur.
-    canaux: () =>
-      chatMirror.conversations().map((conversation) => ({
-        conversationId: conversation.id,
-        titre: conversation.title,
-        plateforme: conversation.platform,
-      })),
+    // ⚠️ LOT 36 (L5) : ceux du BOT DE LA PILE — ce service est le sien.
+    canaux: () => canauxBots?.canaux(botDePile) ?? [],
     fichier: (fichierId) => filesStore.get(fichierId),
     maxFichierBytes: () => config.getNumber("files.maxFileBytes"),
     publier: publierEnvoiProgramme,
@@ -1932,6 +2084,33 @@ async function main(): Promise<void> {
     mode: bots.mode,
     pile: botDePile,
     envPile: env,
+  });
+  /**
+   * ⚠️ LOT 36 (L5) — UN MIROIR PAR BOT, ET « UN CANAL = UN BOT ».
+   *
+   *  - le bot de la PILE reçoit le miroir DÉJÀ ouvert (`chatMirror`, `===`) :
+   *    non-régression exacte du chemin d'avant L5 ;
+   *  - un autre bot reçoit SON miroir, ouvert à la première demande
+   *    (`ChatMirrorStore.open` sur SES chemins, construits par `envsBots`), puis
+   *    mémorisé (aucune relecture à chaque publication).
+   */
+  canauxBots = new CanauxBots({
+    botDePile,
+    miroir: (botId) => {
+      if (botId === botDePile) return chatMirror;
+      const envBot = envsBots.pour(botId);
+      return ChatMirrorStore.open({
+        indexPath: envBot.chatMirrorPath,
+        messagesDir: envBot.chatMirrorDir,
+        logger,
+      });
+    },
+    proprietaires: proprietairesCanaux,
+    logger,
+  });
+  logger.info("chat.canaux.bots", {
+    pile: botDePile,
+    proprietaires: Object.keys(proprietairesCanaux.tout()).length,
   });
   /** Services des AUTRES bots ouverts avant que les hosts ne soient prêts. */
   const servicesSourcesEnAttente: { service: SourcesService; botId: string }[] = [];
@@ -2022,19 +2201,16 @@ async function main(): Promise<void> {
       const envois = new EnvoisProgrammesService({
         store: EnvoisProgrammesStore.open({ path: envBot.envoisProgrammesPath, logger }),
         journal,
-        canaux: () =>
-          chatMirror.conversations().map((conversation) => ({
-            conversationId: conversation.id,
-            titre: conversation.title,
-            plateforme: conversation.platform,
-          })),
+        // ⚠️ LOT 36 (L5) : SES canaux (son miroir), et la publication se fait
+        // avec SON host. Les canaux de l'instance seraient ceux d'un autre bot.
+        canaux: () => canauxBots?.canaux(botId) ?? [],
         fichier: (fichierId) => filesStore.get(fichierId),
         // Borne de taille PAR BOT (L3-a) : elle suit sa configuration.
         maxFichierBytes: () => bornes.getNumber("files.maxFileBytes"),
-        // ⚠️ UN SEUL chemin de publication : celui de l'instance. Une cible LOCALE
-        // d'un bot non actif n'est pas ouverte par le host Pi courant — l'envoi est
-        // alors marqué ÉCHOUÉ avec sa raison (jamais publié dans un autre fil).
-        publier: publierEnvoiProgramme,
+        // ⚠️ UN SEUL chemin de publication, mais CELUI DU BOT : une cible LOCALE
+        // est publiée par SON host ; si son host n'a pas démarré, l'envoi est
+        // marqué ÉCHOUÉ avec sa raison (jamais publié dans un autre fil).
+        publier: (input) => publierEnvoiProgramme(input, botId),
         logger,
       });
       if (brancherServiceSources !== undefined) brancherServiceSources(service, botId);
@@ -2112,6 +2288,10 @@ async function main(): Promise<void> {
             conversationId,
             mirrorPlatformOf(conversationId) ??
               (config.getString("chat.mode") === "discord" ? "discord" : "mattermost"),
+            // ⚠️ LOT 36 (L5) : le bot qui PUBLIE est le PROPRIÉTAIRE du canal où le
+            // run est né (à défaut, celui de la pile) — jamais une constante : une
+            // conversation de `kohai` publie avec les canaux de `kohai`.
+            proprietairesCanaux.proprietaire(conversationId) ?? botDePile,
           ),
         ),
         // ⚠️ ENVOI DE MESSAGE DANS CE CANAL (`envoyer_message`, 2026-11-04) : même
@@ -2349,7 +2529,8 @@ async function main(): Promise<void> {
 
   const mattermostPort: ChatMattermostPort = {
     baseUrl: () => chatMirror.baseUrl(),
-    tokenConfigured: () => secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true,
+    tokenConfigured: () =>
+      nomsSecretsChat(botDePile, "mattermost").some((nom) => secretStore?.has(nom) === true),
     saveBaseUrl: (url) => chatMirror.setBaseUrl(url),
     saveToken: (token) => {
       if (!secretStore) {
@@ -2390,7 +2571,12 @@ async function main(): Promise<void> {
         }));
       return {
         url: chatMirror.baseUrl(),
-        jetonEnregistre: secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true,
+        // ⚠️ LOT 36 (L10) : le nom PAR BOT est accepté (`YUKI_CHAT_YUKI__MATTERMOST`),
+        // l'ancien nom restant valable pour `yuki`.
+        jetonEnregistre: nomsSecretsChat(botDePile, "mattermost").some(
+          (nom) => secretStore?.has(nom) === true,
+        ),
+        jetonsBots: jetonsParBot("mattermost"),
         plateforme: mattermost.status(),
         synchronisation: mattermost.syncStatus(),
         miroir: chatMirror.statsOf("mattermost"),
@@ -2453,7 +2639,8 @@ async function main(): Promise<void> {
     saveMaxUploadBytes: (bytes) => {
       config.update({ "chat.discord.maxUploadBytes": Math.trunc(bytes) });
     },
-    tokenConfigured: () => secretStore?.has(DISCORD_TOKEN_SECRET_NAME) === true,
+    tokenConfigured: () =>
+      nomsSecretsChat(botDePile, "discord").some((nom) => secretStore?.has(nom) === true),
     saveToken: (token) => {
       if (!secretStore) {
         throw new Error(
@@ -2492,7 +2679,10 @@ async function main(): Promise<void> {
         guildId: config.getString("chat.discord.guildId"),
         maxUploadBytes: config.getNumber("chat.discord.maxUploadBytes"),
         intentMessageContent: intent === undefined ? null : intent,
-        jetonEnregistre: secretStore?.has(DISCORD_TOKEN_SECRET_NAME) === true,
+        jetonEnregistre: nomsSecretsChat(botDePile, "discord").some(
+          (nom) => secretStore?.has(nom) === true,
+        ),
+        jetonsBots: jetonsParBot("discord"),
         plateforme: discord.status(),
         synchronisation: discord.syncStatus(),
         miroir: chatMirror.statsOf("discord"),
@@ -2503,6 +2693,127 @@ async function main(): Promise<void> {
     applyReplySettings: (conversationId, patch) =>
       chatMirror.setReplySettings(conversationId, patch),
   };
+
+  // ── LOT 36 (L10) : UN JETON ET UN ADAPTATEUR DE PLATEFORME PAR BOT ────────
+  /**
+   * ⚠️ CE QUE CE BLOC FERME : jusqu'ici le jeton (`YUKI_CHAT_MATTERMOST`) et
+   * l'adaptateur étaient UNIQUES. Deux bots ne pouvaient donc pas être connectés
+   * à la même plateforme, et deux bots qui recopiaient le même jeton auraient
+   * répondu DEUX FOIS au même message.
+   *
+   * Trois choses, dans cet ordre :
+   *  1. RÉSOLUTION des jetons par bot (`YUKI_CHAT_<BOT>__<PLATEFORME>`, l'ancien
+   *     nom restant accepté pour `yuki`) — un conflit de VALEUR écarte les deux
+   *     bots et le dit ;
+   *  2. un ADAPTATEUR par (bot, plateforme), avec SON miroir et SON jeton ;
+   *     celui du bot de la pile reste l'objet construit plus haut (`===`) ;
+   *  3. connexion des bots secondaires (`connecterTout`, la pile est connectée
+   *     juste après par le code d'avant, inchangé).
+   *
+   * ⚠️ Sans jeton, un bot n'a AUCUN adaptateur : il reste en local (`chat.mode`
+   * est une clé PAR BOT) — c'est le cas « un bot mattermost et un bot local ».
+   */
+  const jetonsChat: ResolutionJetonsChat = resoudreJetonsChatBots({
+    bots: [botDePile, ...bots.aDemarrer.map((entree) => entree.id)],
+    lookup: (nom) => secretStore?.lookup(nom),
+    logger,
+  });
+  /**
+   * État des jetons PAR BOT pour l'interface (`/config → Conversation`) : le NOM
+   * du secret et « posé / absent ». ⚠️ Jamais une valeur, jamais un préfixe.
+   */
+  const jetonsParBot = (
+    plateforme: PlateformeChat,
+  ): { botId: string; nom: string; configure: boolean }[] => {
+    const ids = new Set<string>([botDePile, ...bots.aDemarrer.map((entree) => entree.id)]);
+    for (const botId of jetonsChat.jetons.keys()) ids.add(botId);
+    return [...ids].map((botId) => ({
+      botId,
+      nom: nomSecretChat(botId, plateforme),
+      configure: jetonsChat.jetons.get(botId)?.has(plateforme) === true,
+    }));
+  };
+  for (const conflit of jetonsChat.conflits) {
+    logger.warn("chat.jetons.refus", { plateforme: conflit.plateforme, raison: conflit.raison });
+  }
+
+  /** Construit l'adaptateur D'UN bot : son miroir, son jeton, ses pièces jointes. */
+  const creerAdaptateurChat = (
+    jeton: { botId: string; plateforme: string; nom: string },
+  ): MattermostChatAdapter | DiscordChatAdapter => {
+    const miroir = canauxBots?.miroirDe(jeton.botId);
+    if (miroir === undefined) {
+      // ⚠️ Sans miroir, publier reviendrait à écrire chez un autre bot : on refuse.
+      throw new Error(
+        `Le miroir de discussion du bot « ${jeton.botId} » est indisponible : ` +
+          "aucun adaptateur n'a été construit pour lui.",
+      );
+    }
+    const configBot = (): ConfigRuntime => configsBots.get(jeton.botId) ?? config;
+    const token = (): string | undefined => secretStore?.lookup(jeton.nom);
+    if (jeton.plateforme === "mattermost") {
+      // ⚠️ Cache de pièces jointes PAR BOT : il réutilise le client REST de CET
+      // adaptateur (donc SON jeton), jamais celui d'un autre bot.
+      const porte: { cache?: MattermostAttachmentCache } = {};
+      const adaptateur = new MattermostChatAdapter({
+        baseUrl: () => miroir.baseUrl(),
+        token,
+        store: miroir,
+        logger,
+        files: filesStore,
+        judge: chatJudge,
+        generateReply: chatReplyGenerator,
+        readImages: (input) => {
+          const cache = porte.cache;
+          if (cache === undefined) throw new Error("Cache des pièces jointes non initialisé.");
+          return readChatImages(cache, input);
+        },
+      });
+      porte.cache = new MattermostAttachmentCache({
+        client: adaptateur.rest,
+        store: miroir,
+        logger,
+        maxBytes: () => MM_MAX_DOWNLOAD_BYTES,
+      });
+      return adaptateur;
+    }
+    const porte: { cache?: ChatAttachmentCache } = {};
+    const adaptateur = new DiscordChatAdapter({
+      token,
+      store: miroir,
+      logger,
+      guildId: () => configBot().getString("chat.discord.guildId"),
+      maxUploadBytes: () => configBot().getNumber("chat.discord.maxUploadBytes"),
+      judge: chatJudge,
+      generateReply: chatReplyGenerator,
+      files: filesStore,
+      readImages: (input) => {
+        const cache = porte.cache;
+        if (cache === undefined) throw new Error("Cache des pièces jointes non initialisé.");
+        return readChatImages(cache, input);
+      },
+    });
+    porte.cache = new ChatAttachmentCache({
+      port: discordAttachmentPort(adaptateur.rest),
+      store: miroir,
+      logger,
+      maxBytes: () => DISCORD_MAX_DOWNLOAD_BYTES,
+    });
+    return adaptateur;
+  };
+
+  const adaptateursChat = new AdaptateursChatBots<MattermostChatAdapter | DiscordChatAdapter>({
+    botDePile,
+    resolution: jetonsChat,
+    // ⚠️ Le bot de la PILE garde les adaptateurs d'avant, par IDENTITÉ : les
+    // routes d'instance, `getAdapter` et `getSubsystems` les servent inchangés.
+    existants: new Map<string, MattermostChatAdapter | DiscordChatAdapter>([
+      [cleAdaptateur(botDePile, "mattermost"), mattermost],
+      [cleAdaptateur(botDePile, "discord"), discord],
+    ]),
+    creer: creerAdaptateurChat,
+    logger,
+  });
 
   // Service de DISCUSSION : lit le mode (`chat.mode`, apply hot) et sert le miroir en
   // LECTURE seule. ⚠️ `chat.mode` ne filtre que la VUE : la synchronisation démarre
@@ -2531,13 +2842,27 @@ async function main(): Promise<void> {
     // ⚠️ La garde elle-même vit dans `construireWorkerLourdSiAutorise`
     // (`src/bots/profils.ts`) : isolée, elle est TESTABLE avec un ESPION, ce que ce
     // point de composition ne permet pas (il exécute `main()` au chargement).
-    const heavyWorker = construireWorkerLourdSiAutorise(capacitesBot, () =>
-      createSdkHeavyWorker({
+    /**
+     * ⚠️ LOT 36 (L7) — LA FABRIQUE DEVIENT PAR BOT.
+     *
+     * Ce qui suit ne change pas d'un iota pour le bot de la PILE (`botId` =
+     * `botDePile` ⇒ mêmes capacités, même prompt, même service d'exécution). Ce
+     * qui change : un bot SECONDAIRE peut recevoir le SIEN, avec SON prompt
+     * (`prompts.heavy` de son overlay), SES capacités (`execution`/`delegation`
+     * de son enregistrement) et SON service d'exécution d'agents (L6).
+     *
+     * ⚠️ Rien n'est construit ici pour les autres bots : `WorkersLourdsBots`
+     * n'appelle cette fabrique qu'à la PREMIÈRE demande du bot (L7).
+     */
+    const creerWorkerLourd = (botId: string): HeavyWorker | undefined =>
+      construireWorkerLourdSiAutorise(capacitesDuBot(botId), () =>
+        createSdkHeavyWorker({
         cwd: env.piCwd,
         agentDir: env.piAgentDir,
         authPath: join(env.piAgentDir, "auth.json"),
         modelsPath,
-        systemPrompt: config.getString("prompts.heavy"),
+        // ⚠️ Le prompt LOURD du BOT (son overlay), jamais celui d'un autre.
+        systemPrompt: (configsBots.get(botId) ?? config).getString("prompts.heavy"),
         modelReference: liveHeavyReference,
         thinking: liveHeavyThinking,
         // ⚠️ INVERSION DES RÔLES : le worker LOURD porte les outils d'ACTION
@@ -2549,9 +2874,11 @@ async function main(): Promise<void> {
           // `workerLourdAutorise(capacitesBot)` est vrai (le worker n'est pas
           // construit sinon), donc l'intersection ne retire rien aujourd'hui — mais si
           // quelqu'un déplaçait la garde, les capacités resteraient le dernier mot.
-          capacites: capacitesBot,
-          executionEnabled: agentExecution !== undefined,
-          screenshotsEnabled: agentExecution !== undefined,
+          capacites: capacitesDuBot(botId),
+          // ⚠️ LOT 36 (L6) : le service d'exécution DU BOT (même store, même hub,
+          // même TLS) — la visibilité `AgentRecord.bots` suit le bot du run.
+          executionEnabled: executionDuBot(botId) !== undefined,
+          screenshotsEnabled: executionDuBot(botId) !== undefined,
           // ⚠️ TRANSFERT de fichiers : exposé seulement si le service existe.
           fileTransferEnabled: agentTransfers !== undefined,
           // ⚠️ LISTAGE des pièces jointes (lecture seule, identifiants compris) :
@@ -2572,8 +2899,8 @@ async function main(): Promise<void> {
           // rédacteur »). `publier_dans_canal` reste au contraire disponible dans le RUN
           // DE CANAL (`REMOTE_SAFE_TOOLS`) : là, c'est Yuki qui écrit, et c'est légitime.
         }),
-        ...(agentExecution ? { execution: agentExecution } : {}),
-        ...(agentExecution ? { screenshots: agentExecution } : {}),
+        ...(executionDuBot(botId) ? { execution: executionDuBot(botId) as AgentExecutionService } : {}),
+        ...(executionDuBot(botId) ? { screenshots: executionDuBot(botId) as AgentExecutionService } : {}),
         ...(agentTransfers ? { transfers: agentTransfers } : {}),
         // ⚠️ IMAGES : MÊMES ports que le host local (générateur ComfyUI + copie dans
         // le store des fichiers). La conversation est FORCÉE par le worker à celle
@@ -2596,7 +2923,8 @@ async function main(): Promise<void> {
         // ⚠️ BORNE DES IMAGES SUR LE FIL : une tâche peut lire plusieurs images,
         // et chacune repartirait sinon dans CHAQUE appel modèle de sa boucle
         // d'outils (`500 request entity too large`). Relue à chaque job.
-        imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes"),
+        imageRequestBudgetBytes: () =>
+          (configsBots.get(botId) ?? config).getNumber("files.imageRequestBudgetBytes"),
         idleTimeoutMs,
         totalTimeoutMs,
         // ⚠️ CHIEN DE GARDE DÉRIVÉ du plafond de génération RÉEL (relu à chaque job) :
@@ -2606,10 +2934,41 @@ async function main(): Promise<void> {
         // il tuerait alors le job AVANT la fin de la génération, sans explication.
         // `resolveToolWatchdogMs` garantit « plafond de génération + marge », sans
         // dépendre de la vigilance de qui règle les valeurs.
-        toolWatchdogMs: () => resolveToolWatchdogMs(config.getNumber("images.timeoutMs")),
+        toolWatchdogMs: () =>
+          resolveToolWatchdogMs((configsBots.get(botId) ?? config).getNumber("images.timeoutMs")),
         logger,
-      }),
-    );
+        }),
+      );
+    /**
+     * ⚠️ LOT 36 (L7) — LE WORKER DU PRINCIPAL EST EXACTEMENT CELUI D'AVANT :
+     * même garde (`construireWorkerLourdSiAutorise`), même fabrique, mêmes
+     * options. Les autres bots n'en ont pas encore : `WorkersLourdsBots.pour()`
+     * les construira à leur première demande, sous plafond et selon LEURS
+     * capacités (un bot muet n'aura jamais de worker).
+     */
+    const heavyWorker = creerWorkerLourd(botDePile);
+    workersLourds = new WorkersLourdsBots<HeavyWorker>({
+      botDePile,
+      ...(heavyWorker !== undefined
+        ? { existants: new Map<string, HeavyWorker>([[botDePile, heavyWorker]]) }
+        : {}),
+      capacites: (botId) => capacitesDuBot(botId),
+      creer: (botId) => {
+        const worker = creerWorkerLourd(botId);
+        if (worker === undefined) {
+          // Les capacités ont changé entre-temps (registre édité) : on le DIT.
+          throw new Error(
+            `Le bot « ${botId} » n'a pas le droit à un worker lourd ` +
+              "(capacités `execution`/`delegation` absentes).",
+          );
+        }
+        return worker;
+      },
+      plafond: MAX_WORKERS_LOURDS_DEFAUT,
+      logger,
+    });
+    // ⚠️ MESURE au démarrage : ce que coûte RÉELLEMENT le worker du principal.
+    workersLourds.journaliserRss();
     // ⚠️ Sans worker lourd, il n'y a RIEN à déléguer : le service de délégation
     // n'est pas construit (sinon `delegate` annoncerait une capacité inexistante).
     if (heavyWorker !== undefined) {
@@ -3293,11 +3652,82 @@ async function main(): Promise<void> {
           ...(configBot !== undefined ? { config: configBot } : {}),
           ...(outils !== undefined ? { outils } : {}),
           pile,
+          // ⚠️ LOT 36 (L6) : le service d'exécution DE CE BOT (même store, même
+          // hub, même TLS 9443 — seule la visibilité `AgentRecord.bots` change).
+          // ⚠️ Le port n'est posé que si l'INSTANCE en donne un au principal
+          // (`optionsHostPile.execution`) : sinon un bot secondaire gagnerait un
+          // outil que le principal n'a pas. Un bot n'hérite JAMAIS celui d'un
+          // autre (la visibilité y est figée sur un autre bot).
+          ...(optionsHostPile.execution !== undefined &&
+          executionsAgents?.pour(botId) !== undefined
+            ? { execution: executionsAgents.pour(botId) as NonNullable<PiHostOptions["execution"]> }
+            : {}),
         };
       },
       logger,
     });
     host = hostsBots.principal;
+    /**
+     * ⚠️ LOT 36 (L8/L9) — L'ÉTAT RÉEL DES BOTS, ET LEUR CYCLE DE VIE.
+     *
+     *  - `etat()` lit ce qui TOURNE (host démarré, sessions comptées, worker
+     *    construit) — jamais le champ `actif` du registre, qui décrit seulement
+     *    ce que le bot DOIT faire ;
+     *  - `demarrer()` OUVRE la pile puis DÉMARRE le host (construit au besoin) :
+     *    sans la pile, un host n'aurait ni sources ni envois, et allumer un bot
+     *    créé après le démarrage ne produirait rien ;
+     *  - `arreter()` fait l'inverse en fermant tout ce qui tourne pour CE bot
+     *    (`src/bots/arret.ts` : run, sources, host, mémoire, pile).
+     *
+     * ⚠️ Le bot PRINCIPAL est refusé par les deux : c'est l'instance elle-même.
+     */
+    const hostsPourCycle = hostsBots;
+    const fabriqueMemoirePourArret = fabriqueMemoireBots;
+    executionBots = new ExecutionBots({
+      botDePile,
+      hosts: hostsPourCycle,
+      // ⚠️ `autoriser` AVANT d'ouvrir : un bot refusé au démarrage par le plafond
+      // n'a pas de pile (`bot_refuse`) ; le démarrer à la main lève ce refus (le
+      // plafond vient d'être vérifié par `definirActif`).
+      ouvrirPile: (botId) => {
+        sourcesParBot.autoriser(botId);
+        return sourcesParBot.pourBot(botId);
+      },
+      fermerPile: (botId) => {
+        fabriquePiles.fermerBot(botId);
+        sourcesParBot.oublier(botId);
+        canauxBots?.oublier(botId);
+        workersLourds?.oublier(botId);
+      },
+      sessions: (botId) =>
+        botId === botDePile
+          ? sessionsCount
+          : compterSessionsPi(bots.envInstance.piSessionsDir, botId),
+      workers: { a: (botId) => workersLourds?.a(botId) ?? false },
+      // ⚠️ L10 : démarrer un bot REBRANCHE ses plateformes (ses jetons) ; un échec
+      // est journalisé et n'annule pas le démarrage de son host.
+      connecterPlateformes: async (botId) => {
+        await adaptateursChat.connecterBot(botId);
+      },
+      etapesArret: (botId) => ({
+        // ⚠️ L10 : la connexion de plateforme DU BOT s'arrête avec lui (ses
+        // sockets, son balayeur de miroir) — sans toucher celles des autres.
+        plateforme: async () => {
+          await adaptateursChat.deconnecterBot(botId);
+        },
+        // Mémoire : les INDEX du bot sont fermés (aucune écriture tardive). Le
+        // drain d'un service mémoire par bot n'existe pas encore (L3-b fournit
+        // les stores) : on ne prétend donc pas drainer un service absent.
+        ...(fabriqueMemoirePourArret?.estOuvert(botId) === true
+          ? { memory: () => void fabriqueMemoirePourArret?.fermerBot(botId) }
+          : {}),
+      }),
+      logger,
+    });
+    // ⚠️ Les routes lisent CE port : `GET /api/bots` joint l'état réel et
+    // `PATCH /api/bots/<id>/actif` démarre/arrête pour de vrai.
+    botsAdmin.execution = executionBots;
+    logger.info("bots.execution.pret", { pile: botDePile });
     // ⚠️ RÉVEIL DES JOBS — INVARIANT : **dans un canal, UN SEUL RÉDACTEUR, le tour de
     // Yuki** (`docs/lot18-chat.md`). Un job terminé doit être ANNONCÉ là où son auteur
     // attend, mais le serveur n'écrit jamais à sa place : le rapport est INJECTÉ comme
@@ -3347,6 +3777,10 @@ async function main(): Promise<void> {
     // approbation sont retirés de la politique distante), donc ce réveil ne
     // concerne en pratique que les conversations locales.
     agentExecution?.setWaker(jobReportWaker);
+    // ⚠️ LOT 36 (L6) : le réveil de fin de commande est posé sur TOUS les bots
+    // (sans lui, une commande validée dans un bot secondaire ne serait jamais
+    // rapportée à son modèle).
+    executionsAgents?.pourChacun((execution) => execution.setWaker(jobReportWaker));
 
     host.subscribeAll((event) => {
       if (event.type === "state") {
@@ -3992,6 +4426,10 @@ async function main(): Promise<void> {
       // écriture tardive dans le miroir, aucune socket orpheline).
       await mattermost.disconnect();
       await discord.disconnect();
+      // ⚠️ LOT 36 (L10) : les connexions des AUTRES bots (leurs jetons, leurs
+      // sockets) s'arrêtent ici aussi — sinon des sockets orphelines survivraient
+      // au gateway et continueraient d'ingérer dans leurs miroirs.
+      await adaptateursChat?.deconnecterTout({ sansPile: true });
       // SOURCES : plus aucun suivi de run après l'arrêt (aucune écriture tardive
       // dans la boîte de notifications).
       // ⚠️ LOT 35j : les piles des AUTRES bots sont fermées ici aussi (aucun
@@ -4005,6 +4443,13 @@ async function main(): Promise<void> {
       // vient d'être arrêté ci-dessus : un seul `stop` par host).
       await hostsBots?.arreter();
       hostsBots = undefined;
+      // ⚠️ LOT 36 (L7) : relevé de mémoire FINAL (avant de lâcher les workers) —
+      // c'est la mesure qui dit ce que l'instance a réellement tenu.
+      workersLourds?.journaliserRss();
+      workersLourds = undefined;
+      // ⚠️ LOT 36 (L8) : plus aucun pilotage de bot après l'arrêt (l'état
+      // d'exécution n'a plus de sens : les hosts sont détruits).
+      executionBots = undefined;
       if (memoryService) {
         await memoryService.drain();
         memoryService.close();
@@ -4037,7 +4482,14 @@ async function main(): Promise<void> {
   // CONFIGURÉE (URL du serveur + jeton du bot dans le coffre), et cela INDÉPENDAMMENT
   // du mode affiché : `chat.mode` ne filtre que la VUE (décision du lot 1). Un échec est
   // journalisé ET remonté par le statut ; il ne bloque jamais le démarrage du gateway.
-  if (chatMirror.baseUrl() !== "" && secretStore?.has(MATTERMOST_TOKEN_SECRET_NAME) === true) {
+  /**
+   * ⚠️ LOT 36 (L10) : la condition de connexion du principal passe par la
+   * RÉSOLUTION des jetons (nom par bot, plus l'ancien nom historique). Le
+   * comportement d'une installation existante est identique : son jeton
+   * `YUKI_CHAT_MATTERMOST` est résolu pour `yuki`.
+   */
+  const jetonPile = jetonsChat.jetons.get(botDePile);
+  if (chatMirror.baseUrl() !== "" && jetonPile?.has("mattermost") === true) {
     void mattermost.connect().catch((error: unknown) => {
       logger.warn("chat.mattermost.connect_failed", { error: messageOf(error) });
     });
@@ -4046,11 +4498,18 @@ async function main(): Promise<void> {
   // DISCORD (lot 21) — même règle : la synchronisation démarre dès que le JETON est au
   // coffre, indépendamment du mode affiché. ⚠️ Aucune condition sur `guildId` : vide
   // signifie « tous les serveurs du bot » (voir `DiscordAdapterDeps.guildId`).
-  if (secretStore?.has(DISCORD_TOKEN_SECRET_NAME) === true) {
+  if (jetonPile?.has("discord") === true) {
     void discord.connect().catch((error: unknown) => {
       logger.warn("chat.discord.connect_failed", { error: messageOf(error) });
     });
   }
+
+  // ⚠️ LOT 36 (L10) : les plateformes des AUTRES bots se connectent avec LEURS
+  // jetons. Un échec est journalisé par paire et n'empêche pas les autres (le
+  // gateway humain reste debout).
+  void adaptateursChat.connecterTout({ sansPile: true }).catch((error: unknown) => {
+    logger.warn("chat.adaptateurs.connect_failed", { error: messageOf(error) });
+  });
 
   // Port machines (Lot 4) : écoute LAN mTLS. Un échec d'écoute est journalisé
   // mais NE fait PAS tomber le gateway humain.

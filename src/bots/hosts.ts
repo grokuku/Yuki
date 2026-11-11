@@ -100,6 +100,16 @@ export interface HostDemarrable {
   readonly conversationArchive?: PiHostOptions["conversationArchive"];
   /** Archive « vie antérieure » de CE bot (lecture seule). */
   readonly heritage?: PiHostOptions["heritage"];
+  /**
+   * ⚠️ LOT 36 (L6) : le service d'EXÉCUTION DE CE BOT. Même `AgentStore`, même
+   * `AgentHub`, même TLS 9443 que les autres — seule la VISIBILITÉ des agents
+   * change (`AgentRecord.bots` est contrôlé par commande avec le bot du run).
+   * Absent ⇒ le port est RETIRÉ du host du bot : hériter celui du principal
+   * ferait exécuter une commande avec la visibilité d'un autre bot.
+   */
+  readonly execution?: PiHostOptions["execution"];
+  /** Capture d'écran DE CE BOT (même service que `execution`, port distinct). */
+  readonly screenshots?: PiHostOptions["screenshots"];
 }
 
 /** Ce qu'un bot apporte à la construction de son host (jamais celui d'un autre). */
@@ -113,6 +123,10 @@ export interface ContexteHostBot {
   readonly outils?: OutilsBot;
   /** Pile sources DE CE BOT (L3-c). Absente ⇒ pas de drain, pas de tâches. */
   readonly pile?: PileSourcesBot;
+  /** Service d'exécution DE CE BOT (L6). Absent ⇒ port `execution` retiré. */
+  readonly execution?: PiHostOptions["execution"];
+  /** Capture d'écran DE CE BOT (L6). Absent ⇒ port `screenshots` retiré. */
+  readonly screenshots?: PiHostOptions["screenshots"];
 }
 
 /**
@@ -170,6 +184,8 @@ export function portsHostBot(
           },
         }
       : {}),
+    ...(contexte.execution !== undefined ? { execution: contexte.execution } : {}),
+    ...(contexte.screenshots !== undefined ? { screenshots: contexte.screenshots } : {}),
     ...(outils !== undefined
       ? {
           personality: outils.personnalite,
@@ -221,6 +237,10 @@ export function optionsHostBot(
   poserSinonRetirer(options, "reactions", ports.reactions);
   poserSinonRetirer(options, "conversationArchive", ports.conversationArchive);
   poserSinonRetirer(options, "heritage", ports.heritage);
+  // ⚠️ LOT 36 (L6) : l'exécution d'un bot n'est JAMAIS celle du principal (la
+  // visibilité des agents y est figée) — posée si elle existe, retirée sinon.
+  poserSinonRetirer(options, "execution", ports.execution);
+  poserSinonRetirer(options, "screenshots", ports.screenshots);
   // ⚠️ La mémoire n'a PAS de port par bot (voir `portsHostBot`) : on la retire au
   // lieu de laisser le host d'un bot lire celle du principal.
   delete options.memory;
@@ -300,17 +320,17 @@ export class HostsBots<THost extends HostDemarrable> {
   }
 
   /** Construit (ou refuse, en le DISANT) le host d'un bot non principal. */
-  private construire(botId: string): void {
+  private construire(botId: string): boolean {
     const options = this.options;
     const contexte = options.contexte(botId);
     if (contexte === undefined) {
       options.logger.warn("bots.host.contexte_absent", { bot: botId });
-      return;
+      return false;
     }
     const ports = portsHostBot(contexte, options.logger);
     if (ports === undefined) {
       options.logger.warn("bots.host.config_absente", { bot: botId });
-      return;
+      return false;
     }
     // ⚠️ DEUX hosts sur le même `sessionsDir` se disputeraient les mêmes JSONL
     // (deux `SessionManager` sur un fichier) : on REFUSE le second host plutôt
@@ -321,13 +341,14 @@ export class HostsBots<THost extends HostDemarrable> {
         bot: botId,
         sessions_dir: ports.sessionsDir,
       });
-      return;
+      return false;
     }
     this.map.set(botId, options.creer(optionsHostBot(botId, options.optionsPile, ports)));
     options.logger.info("bots.host.construit", {
       bot: botId,
       sessions_dir: ports.sessionsDir,
     });
+    return true;
   }
 
   /** Tous les hosts, dans l'ordre de construction (principal d'abord). */
@@ -362,8 +383,17 @@ export class HostsBots<THost extends HostDemarrable> {
     return this.demarres.has(botId) ? this.map.get(botId) : undefined;
   }
 
-  /** Le bot a-t-il un host DÉMARRÉ ? */
+  /**
+   * Le bot a-t-il un host DÉMARRÉ ?
+   *
+   * ⚠️ Le bot de la PILE est toujours dit démarré : c'est `main()` qui l'a
+   * démarré, pas cette fabrique (« un seul `stop` par host »). Un échec de SON
+   * démarrage est journalisé (`pi.start.failed`) et porté par le statut `pi`,
+   * pas par cette Map — sinon `GET /api/bots` annoncerait le bot principal
+   * arrêté alors que l'instance tourne.
+   */
   estDemarre(botId: string): boolean {
+    if (botId === this.options.pile) return true;
     return this.demarres.has(botId);
   }
 
@@ -398,6 +428,98 @@ export class HostsBots<THost extends HostDemarrable> {
       nombre: demarres.length,
     });
     return { demarres, echecs };
+  }
+
+  /** Le bot a-t-il un host CONSTRUIT (démarré ou non) ? */
+  estConstruit(botId: string): boolean {
+    return this.map.has(botId);
+  }
+
+  /**
+   * DÉMARRE un bot — et le CONSTRUIT s'il n'a pas encore de host (lot 36, L8).
+   *
+   * ⚠️ C'est ce qui fait qu'un bouton « Démarrer » fait quelque chose : sans
+   * construction à la demande, allumer un bot créé APRÈS le démarrage du gateway
+   * ne produirait qu'un `host` absent. La pile, elle, est ouverte par l'appelant
+   * (`FabriquePilesSources.ouvrir`, idempotent) : un host sans pile n'aurait ni
+   * sources ni envois.
+   *
+   * ⚠️ Le bot de la PILE n'est jamais démarré ici : `main()` l'a fait, et un
+   * second `start()` sur le même host serait un double démarrage.
+   */
+  async demarrerBot(
+    botId: string,
+  ): Promise<{ ok: boolean; inchange: boolean; erreur?: string }> {
+    if (botId === this.options.pile) return { ok: true, inchange: true };
+    if (!this.map.has(botId)) {
+      const construit = this.construire(botId);
+      if (!construit) {
+        return {
+          ok: false,
+          inchange: false,
+          erreur:
+            `Le host du bot « ${botId} » n'a pas pu être construit ` +
+            "(configuration absente, ou dossier de sessions partagé).",
+        };
+      }
+    }
+    if (this.demarres.has(botId)) return { ok: true, inchange: true };
+    const host = this.map.get(botId);
+    if (host === undefined) {
+      return { ok: false, inchange: false, erreur: `Le bot « ${botId} » n'a pas de host.` };
+    }
+    try {
+      await host.start();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.options.logger.error("bots.host.start.failed", { bot: botId, error: message });
+      return { ok: false, inchange: false, erreur: message };
+    }
+    this.demarres.add(botId);
+    this.options.logger.info("bots.host.demarre", { bot: botId });
+    return { ok: true, inchange: false };
+  }
+
+  /**
+   * ARRÊTE un bot ET DÉTRUIT son host (lot 36, L8/L9).
+   *
+   * ⚠️ Le host est RETIRÉ de la Map : un « Démarrer » ultérieur reconstruit un
+   * host NEUF (options re-dérivées de la configuration du moment). Le rendre
+   * simplement « non démarré » laisserait un `PiHost` dont on ne sait pas s'il
+   * est réutilisable — et l'état affiché mentirait sur ce qui existe.
+   *
+   * ⚠️ Le bot de la PILE est REFUSÉ : c'est l'instance elle-même (routes,
+   * transport, `getSubsystems`). L'arrêter laisserait le gateway debout sans
+   * conversation principale — l'arrêt de l'instance est `shutdown`, pas ceci.
+   */
+  async arreterBot(
+    botId: string,
+  ): Promise<{ ok: boolean; inchange: boolean; erreur?: string }> {
+    if (botId === this.options.pile) {
+      return {
+        ok: false,
+        inchange: false,
+        erreur:
+          `Le bot « ${botId} » est le bot principal de l'instance : il ne s'arrête ` +
+          "qu'avec le gateway.",
+      };
+    }
+    const host = this.map.get(botId);
+    if (host === undefined) return { ok: true, inchange: true };
+    const demarre = this.demarres.delete(botId);
+    if (demarre) {
+      try {
+        await host.stop();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.options.logger.warn("bots.host.stop.failed", { bot: botId, error: message });
+        this.map.delete(botId);
+        return { ok: false, inchange: false, erreur: message };
+      }
+    }
+    this.map.delete(botId);
+    this.options.logger.info("bots.host.detruit", { bot: botId, demarre });
+    return { ok: true, inchange: !demarre };
   }
 
   /**

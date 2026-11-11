@@ -93,6 +93,16 @@ export interface ChannelPostPortOptions {
   maxChars?: (plateforme: RemotePlatform) => number;
   /** Un message RACINE existe-t-il dans ce canal ? (garde sur `fil_de`). */
   filConnu?: (conversationId: string, remoteId: string) => boolean;
+  /**
+   * APPARTENANCE du canal au bot qui publie (lot 36, L5).
+   *
+   * ⚠️ Appelée AVANT tout appel réseau, juste après la résolution du canal :
+   * un canal déjà possédé par un AUTRE bot est refusé en le NOMMANT, et rien
+   * n'est publié. Sans cette garde, deux bots abonnés au même canal
+   * répondraient deux fois au même message. Absente ⇒ aucune restriction
+   * (mono-bot historique, où il n'y a qu'un bot).
+   */
+  autoriser?: (conversationId: string) => { ok: true } | { ok: false; raison: string };
   logger?: { warn(message: string, fields?: Record<string, unknown>): void };
 }
 
@@ -231,6 +241,17 @@ export function createChannelPostPort(options: ChannelPostPortOptions): ChannelP
         };
       }
       const cible = resolution.canal;
+
+      // ⚠️ APPARTENANCE (lot 36, L5) : un canal = un bot. Le contrôle passe AVANT
+      // le fil, les bornes et l'appel réseau — un refus ici ne publie RIEN.
+      const appartenance = options.autoriser?.(cible.conversationId);
+      if (appartenance !== undefined && !appartenance.ok) {
+        return {
+          ok: false,
+          raison: appartenance.raison,
+          canaux: disponibles,
+        };
+      }
 
       if (filDe !== undefined && options.filConnu && !options.filConnu(cible.conversationId, filDe)) {
         return {

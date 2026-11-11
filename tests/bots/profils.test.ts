@@ -120,8 +120,13 @@ describe("35h ③ — le câblage réel passe bien par la garde (test de source)
     expect(occurrences).toHaveLength(1);
     // ⚠️ L'appel est l'ARGUMENT de la garde : si quelqu'un l'extrayait (ou le
     // déplaçait avant la garde), cette assertion tombe.
+    // ⚠️ LOT 36 (L7) — GARDE MISE À JOUR (nommée) : la fabrique est désormais
+    // PAR BOT (`creerWorkerLourd(botId)`), donc la garde reçoit les capacités DU
+    // BOT (`capacitesDuBot(botId)`) et non plus la constante `capacitesBot`. La
+    // règle vérifiée est la même : `createSdkHeavyWorker` n'est appelé QUE comme
+    // argument de `construireWorkerLourdSiAutorise`.
     expect(corps).toMatch(
-      /construireWorkerLourdSiAutorise\(capacitesBot, \(\) =>\s*\n\s*createSdkHeavyWorker\(/,
+      /construireWorkerLourdSiAutorise\(capacitesDuBot\(botId\), \(\) =>\s*\n\s*createSdkHeavyWorker\(/,
     );
   });
 

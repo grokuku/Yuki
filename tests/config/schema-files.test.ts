@@ -104,11 +104,18 @@ describe("configuration des fichiers", () => {
     expect(descriptor.env).toBe("YUKI_FILES_IMAGE_REQUEST_BUDGET_BYTES");
 
     // BRANCHÉ deux fois : session LÉGÈRE (sdk-host) ET worker LOURD (par tâche).
+    // ⚠️ LOT 36 (L7) — GARDE MISE À JOUR (nommée) : le worker lourd est construit
+    // PAR BOT, donc sa borne est lue dans la configuration DU BOT (repli sur
+    // celle de l'instance). La règle vérifiée est la même : DEUX branchements.
     const index = readFileSync(join(process.cwd(), "src", "index.ts"), "utf8");
-    expect(
-      index.split('imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes")')
-        .length - 1,
-    ).toBe(2);
+    const leger = index.split(
+      'imageRequestBudgetBytes: () => config.getNumber("files.imageRequestBudgetBytes")',
+    ).length - 1;
+    const lourd = index.split(
+      'imageRequestBudgetBytes: () =>\n          (configsBots.get(botId) ?? config).getNumber("files.imageRequestBudgetBytes")',
+    ).length - 1;
+    expect(leger).toBe(1);
+    expect(lourd).toBe(1);
   });
 
   it("la rétention vaut 30 jours par défaut", () => {

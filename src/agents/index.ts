@@ -290,6 +290,13 @@ export type {
 } from "./approvals.js";
 
 export {
+  ExecutionsAgentsBots,
+  botDuRun,
+  type ExecutionsBotsLogger,
+  type OptionsExecutionsBots,
+} from "./executions-bots.js";
+
+export {
   AgentExecutionService,
   agentNonAutoriseMessage,
   DEFAULT_COMMAND_TIMEOUT_MS,

@@ -33,6 +33,7 @@ import {
   type CapaciteBot,
   type RegistreBots,
 } from "../../bots/registry.js";
+import type { EtatExecutionBot, ExecutionBots } from "../../bots/execution.js";
 import {
   AdminBotError,
   RETENTION_ARCHIVES_JOURS,
@@ -137,6 +138,14 @@ export interface ConfigApiDeps {
      * de plus (`409 plafond_actifs`) — la route ne redécide pas la règle.
      */
     maxActifs?: number;
+    /**
+     * ⚠️ LOT 36 (L8) — L'ÉTAT RÉEL, ET LE CYCLE DE VIE (`src/bots/execution.ts`).
+     *
+     * Absent ⇒ `GET /api/bots` n'ajoute AUCUN champ d'exécution et les routes
+     * de démarrage/arrêt répondent `409 cycle_indisponible` : une instance qui
+     * ne sait pas piloter ses bots ne prétend pas le faire.
+     */
+    execution?: ExecutionBots;
   };
 }
 
@@ -616,6 +625,12 @@ export interface BotListing {
   capacites: CapaciteBot[];
   actif: boolean;
   ordre: number;
+  /**
+   * ⚠️ LOT 36 (L8) : ce qui TOURNE (`demarre`, `erreur`, `sessions`, `workers`).
+   * `actif` dit ce que le bot DOIT faire ; ce champ dit ce qu'il FAIT. Absent
+   * seulement si l'instance n'a pas de port d'exécution (tests, mode dégradé).
+   */
+  execution?: EtatExecutionBot;
 }
 
 /**
@@ -625,16 +640,27 @@ export interface BotListing {
 function botsConnus(deps: ConfigApiDeps): BotListing[] {
   const registre = deps.bots?.registre;
   const entrees: BotRecord[] = registre ? [...registre.bots] : [];
+  /**
+   * ⚠️ LOT 36 (L8) : l'état d'EXÉCUTION est joint à chaque bot quand l'instance
+   * sait le lire. C'est ce qui empêche `actif` de mentir : `actif` dit ce que le
+   * bot DOIT faire, `execution.demarre` ce qu'il FAIT.
+   */
+  const etat = (botId: string): { execution?: EtatExecutionBot } => {
+    const port = deps.bots?.execution;
+    return port === undefined ? {} : { execution: port.etat(botId) };
+  };
   if (entrees.length === 0) {
+    const botId = deps.runtime.botId;
     return [
       {
-        id: deps.runtime.botId,
-        nom: deps.runtime.botId === BOT_YUKI ? "Yuki" : deps.runtime.botId,
+        id: botId,
+        nom: botId === BOT_YUKI ? "Yuki" : botId,
         // Mono-bot historique : le bot porte le produit entier, donc toutes les
         // capacités (aucune restriction n'a jamais existé dans ce mode).
         capacites: [...CAPACITES_BOT],
         actif: true,
         ordre: 0,
+        ...etat(botId),
       },
     ];
   }
@@ -646,6 +672,7 @@ function botsConnus(deps: ConfigApiDeps): BotListing[] {
       capacites: [...bot.capacites],
       actif: bot.actif,
       ordre: bot.ordre,
+      ...etat(bot.id),
     }));
 }
 
@@ -1032,7 +1059,10 @@ function handleBotsDelete(
  * cours a résolu ses bots à son démarrage. La réponse le DIT au lieu de laisser
  * croire à une application immédiate.
  */
-function handleBotActif(input: ConfigRequestInput, botId: string): ConfigHttpResponse {
+async function handleBotActif(
+  input: ConfigRequestInput,
+  botId: string,
+): Promise<ConfigHttpResponse> {
   const guard = guardWrite(input);
   if (guard) return guard;
   const deps = input.deps;
@@ -1075,6 +1105,20 @@ function handleBotActif(input: ConfigRequestInput, botId: string): ConfigHttpRes
       plafond: resultat.plafond,
       flow: configWriteFlow(input.headers),
     });
+    /**
+     * ⚠️ LOT 36 (L8) — L'EFFET EST IMMÉDIAT QUAND L'INSTANCE SAIT LE FAIRE.
+     * Sans port d'exécution, on retombe sur le comportement de L2 : le drapeau
+     * est écrit, l'effet est au redémarrage (`redemarrageRequis`).
+     */
+    const port = deps.bots?.execution;
+    const applique =
+      port === undefined || resultat.inchange
+        ? undefined
+        : resultat.actif
+          ? await port.demarrer(botId)
+          : await port.arreter(botId);
+    const demarrageRequis =
+      port === undefined ? !resultat.inchange : applique !== undefined && !applique.ok;
     return json(200, {
       bot: listingDe(resultat.bot),
       bots: botsConnus(deps),
@@ -1082,9 +1126,19 @@ function handleBotActif(input: ConfigRequestInput, botId: string): ConfigHttpRes
       inchange: resultat.inchange,
       actifs: resultat.actifs,
       plafond: resultat.plafond,
-      // ⚠️ Le gateway en cours ne change pas de configuration de bots :
-      // l'effet (démarrage ou arrêt de la pile) est au prochain démarrage.
-      redemarrageRequis: !resultat.inchange,
+      // ⚠️ `true` seulement si l'effet n'est PAS appliqué (instance sans port
+      // d'exécution, ou démarrage/arrêt en échec) : le message le dit.
+      redemarrageRequis: demarrageRequis,
+      ...(port !== undefined ? { execution: port.etat(botId) } : {}),
+      ...(applique !== undefined
+        ? {
+            applique: {
+              ok: applique.ok,
+              inchange: applique.inchange,
+              ...(applique.raison !== undefined ? { raison: applique.raison } : {}),
+            },
+          }
+        : {}),
     });
   } catch (error) {
     return adminBotError(deps, error);

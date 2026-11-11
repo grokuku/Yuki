@@ -700,6 +700,13 @@ function renderPlatform({ description, request, report, shared, refresh, modal }
     text: "Enregistrer le jeton",
   });
   const tokenState = h("p", { class: "config-helper" });
+  /**
+   * ⚠️ LOT 36 (L10) : état des jetons PAR BOT (`vue.jetonsBots`, calculé par le
+   * serveur depuis le coffre). Un bot sans jeton reste en local : c'est écrit,
+   * jamais supposé. Aucune valeur de jeton n'est affichée — seulement « posé »
+   * ou « absent » et le NOM du secret à créer.
+   */
+  const jetonsBotsState = h("p", { class: "config-helper" });
   saveToken.addEventListener("click", () => {
     void (async () => {
       const jeton = tokenInput.value.trim();
@@ -733,6 +740,7 @@ function renderPlatform({ description, request, report, shared, refresh, modal }
     h("label", { class: "config-label", for: `chat-${platform}-token`, text: "Jeton du bot" }),
     h("div", { class: "config-actions" }, [tokenInput, saveToken]),
     tokenState,
+    jetonsBotsState,
     h("p", {
       class: "config-helper",
       text:
@@ -965,6 +973,7 @@ function renderPlatform({ description, request, report, shared, refresh, modal }
     tokenState.textContent = vue.jetonEnregistre
       ? "Un jeton est enregistré (il n'est jamais réaffiché)."
       : "Aucun jeton enregistré : la connexion est impossible tant qu'il manque.";
+    jetonsBotsState.textContent = texteJetonsBots(vue.jetonsBots);
     // ⚠️ Une fois enregistré, le champ reste VIDE : on ne pré-remplit jamais un secret.
     tokenInput.value = "";
 
@@ -1039,4 +1048,25 @@ function renderPlatform({ description, request, report, shared, refresh, modal }
     setError,
     refresh: refreshSelf,
   };
+}
+
+/**
+ * Texte de l'état des jetons PAR BOT (lot 36, L10).
+ *
+ * ⚠️ Le NOM du secret (`YUKI_CHAT_<BOT>__<PLATEFORME>`) est affiché, jamais sa
+ * valeur : on explique donc exactement ce qu'il reste à créer, sans jamais
+ * exposer un secret dans la page.
+ *
+ * @param {unknown} jetonsBots liste `{ botId, nom, configure }` du serveur.
+ * @returns {string} une ligne lisible (vide si l'instance n'en fournit pas).
+ */
+export function texteJetonsBots(jetonsBots) {
+  if (!Array.isArray(jetonsBots) || jetonsBots.length === 0) return "";
+  const parts = jetonsBots.map((entree) => {
+    const bot = typeof entree?.botId === "string" ? entree.botId : "?";
+    const nom = typeof entree?.nom === "string" ? entree.nom : "";
+    const pose = entree?.configure === true;
+    return `${bot} : ${pose ? "jeton posé" : `aucun jeton (${nom})`}`;
+  });
+  return `Jetons par bot — ${parts.join(" · ")}`;
 }

@@ -241,4 +241,33 @@ export class FabriquePilesSources {
   ouvertes(): PileSourcesBot[] {
     return [...this.piles.values()];
   }
+
+  /**
+   * FERME la pile d'un bot (lot 36, L8/L9) : suivi des runs détaché, entrée
+   * oubliée. ⚠️ La pile du bot de la PILE n'est jamais fermée ici : elle est
+   * celle de `main()`, fermée avec l'instance.
+   *
+   * Rend `true` si une pile existait (donc si quelque chose a été fermé).
+   */
+  fermerBot(botId: string): boolean {
+    if (botId === this.options.pile) return false;
+    const pile = this.piles.get(botId);
+    if (pile === undefined) return false;
+    this.piles.delete(botId);
+    try {
+      pile.fermer();
+    } catch (error) {
+      this.options.logger.warn("sources.pile.fermeture_echouee", {
+        bot: botId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    this.options.logger.info("sources.pile.fermee", { bot: botId });
+    return true;
+  }
+
+  /** Une pile est-elle ouverte pour ce bot ? */
+  estOuverte(botId: string): boolean {
+    return this.piles.has(botId);
+  }
 }

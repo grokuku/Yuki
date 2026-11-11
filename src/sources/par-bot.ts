@@ -241,6 +241,8 @@ export interface JetonResolu {
 export class SourcesParBot {
   private readonly options: OptionsSourcesParBot;
   private readonly pilesOuvertes = new Map<string, PileSourcesBot>();
+  /** Bots démarrés à la MAIN (L8) : leur refus de démarrage est levé. */
+  private readonly autorisesMaintenant = new Set<string>();
   private ouvrir?: (input: { botId: string; env: Env }) => PileSourcesBot;
   private pileActive?: PileSourcesBot;
 
@@ -307,8 +309,29 @@ export class SourcesParBot {
 
   /** Ce bot a-t-il été REFUSÉ par le plafond au démarrage ? */
   estRefuse(botId: string): boolean {
+    // ⚠️ LOT 36 (L8) : un bot DÉMARRÉ À LA MAIN (bouton « Démarrer ») lève le
+    // refus du démarrage : le plafond a été vérifié par `definirActif`, et
+    // refuser ici rendrait le bouton inopérant sur ses propres sources.
+    if (this.autorisesMaintenant.has(botId)) return false;
     const demarrage = this.resolutionDemarrage();
     return demarrage?.refuses.includes(botId) ?? false;
+  }
+
+  /**
+   * Autorise un bot DÉMARRÉ À LA MAIN (lot 36, L8) — sans toucher au registre ni
+   * à la décision de démarrage (figée). Idempotent.
+   */
+  autoriser(botId: string): void {
+    this.autorisesMaintenant.add(botId);
+  }
+
+  /**
+   * Oublie un bot ARRÊTÉ (lot 36, L8/L9) : sa pile, son autorisation à la main.
+   * ⚠️ La propriété de ses canaux n'est pas touchée (L5) : ils restent les siens.
+   */
+  oublier(botId: string): void {
+    this.autorisesMaintenant.delete(botId);
+    this.pilesOuvertes.delete(botId);
   }
 
   /**
