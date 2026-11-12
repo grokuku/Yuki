@@ -103,7 +103,22 @@
         </div>
       </div>
       <div class="status">
-        <a class="pill topbar__config" href="/config">Configuration</a>
+        <!--
+          LOT 41 — DEUX RÉGLAGES DISTINCTS (retour utilisateur) : un unique
+          bouton « Configuration » mélangeait les réglages de l'INSTANCE et ceux
+          du BOT, et menait toujours à la page de `yuki` sans permettre d'aller
+          sur les autres bots. Deux pastilles DISCRÈTES (la barre est chargée) :
+            ① « Réglages généraux » → `/config` (page Instance, commune) ;
+            ② « Réglages du bot »    → `/bots?b=<bot AFFICHÉ>` (page Bot).
+          ⚠️ L'`href` de ② est RÉÉCRIT par `app.js` (`majLienReglagesBot`) avec
+          le bot affiché — `yuki` ici n'est que le repli statique, la même règle
+          que `urlReglagesBot` (`bot-switcher-modele.js`).
+          ⚠️ TÉLÉPHONE : `.topbar__config` est masqué par `styles.css` ; les deux
+          mêmes destinations restent dans le panneau « Config » ci-dessous (on
+          les déplace, on ne les supprime pas).
+        -->
+        <a id="reglages-generaux" class="pill topbar__config" href="/config">Réglages généraux</a>
+        <a id="reglages-bot" class="pill topbar__config" href="/bots?b=yuki">Réglages du bot</a>
         <span id="connection" class="pill pill--offline">hors ligne</span>
         <!--
           LOT 40 — Le NOM DU BOT n'est plus répété ici : il est déjà porté par
@@ -308,9 +323,14 @@
         >
           <header class="mnav-panel__head">
             <h2 class="mnav-panel__title">Configuration</h2>
-            <a class="mnav-panel__action" href="/config">Ouvrir</a>
+            <a class="mnav-panel__action" href="/config">Réglages généraux</a>
           </header>
           <div class="mnav-panel__body mnav-list">
+            <!-- LOT 41 — les DEUX réglages de la barre du haut sont ici aussi :
+                 sur téléphone les pastilles `.topbar__config` sont masquées, ces
+                 deux entrées sont le seul chemin (mêmes libellés, même règle).
+                 ⚠️ L'`href` de « Réglages du bot » est réécrit par `app.js`. -->
+            <a id="mnav-reglages-bot" class="mnav-item" href="/bots?b=yuki">Réglages du bot affiché</a>
             <a class="mnav-item" href="/bots?b=yuki#personnalite">Personnalité &amp; règles</a>
             <a class="mnav-item" href="/bots?b=yuki#memoire">Mémoire durable</a>
             <a class="mnav-item" href="/config#secrets">Coffre de secrets</a>

@@ -135,6 +135,49 @@ export function urlConversationBot(botId, principal = null) {
 }
 
 /**
+ * Slug de bot vers lequel retombe la page `/bots` quand l'URL en désigne un
+ * inconnu (`resoudreBot` de `config.js`) : le repli est SILENCIEUX et commun aux
+ * deux pages.
+ */
+export const BOT_REGLAGES_REPLI = "yuki";
+
+/**
+ * URL des RÉGLAGES d'un bot (`/bots?b=…`) — destination du bouton « Réglages du
+ * bot » de la barre du haut (lot 41).
+ *
+ * ⚠️ LE DÉFAUT CORRIGÉ ICI : ce bouton menait à `/bots` sans `?b=`, donc
+ * TOUJOURS aux réglages de `yuki`, quel que soit le bot affiché dans la barre
+ * du haut. Il porte maintenant le bot AFFICHÉ (`welcome.bot` de la connexion, à
+ * défaut `?b=` de la page).
+ *
+ * ⚠️ `bots` = liste CONNUE (celle du sélecteur, `/api/bots`). Un bot affiché qui
+ * n'y figure PLUS (retiré de l'instance) ne doit pas produire un `?b=` mort : on
+ * retombe sur `yuki`, exactement comme la page `/bots`. Liste VIDE (pas encore
+ * lue) : on garde le bot affiché — l'URL n'est qu'une intention et le serveur
+ * fait le repli lui-même.
+ *
+ * @param {string|null} botAffiche
+ * @param {Array<{id?: string}|string>} [bots]
+ * @param {string} [repli]
+ * @returns {string}
+ */
+export function urlReglagesBot(
+  botAffiche,
+  bots = [],
+  repli = BOT_REGLAGES_REPLI,
+) {
+  const connus = (Array.isArray(bots) ? bots : [])
+    .map((bot) => (typeof bot === "string" ? bot.trim() : String(bot?.id ?? "")))
+    .filter((id) => id !== "");
+  const affiche = typeof botAffiche === "string" ? botAffiche.trim() : "";
+  const retenu =
+    affiche !== "" && (connus.length === 0 || connus.includes(affiche))
+      ? affiche
+      : repli;
+  return `/bots?b=${encodeURIComponent(retenu)}`;
+}
+
+/**
  * Plafond utilisable pour l'affichage : entier positif, sinon le défaut.
  *
  * @param {unknown} valeur

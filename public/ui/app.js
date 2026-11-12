@@ -20,6 +20,7 @@ import {
 import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
 import { botDeLaPage, champBot } from "./bot-conversation.js";
 import { initBotSwitcher } from "./bot-switcher.js";
+import { urlReglagesBot } from "./bot-switcher-modele.js";
 import {
   creationRefusal,
   fetchChatStatus,
@@ -109,7 +110,7 @@ const botSwitcher = initBotSwitcher({
   // l'image est reprise telle quelle, jamais inventée pour un autre bot.
   avatarPrincipal: () => avatarBotPrincipal,
 });
-void botSwitcher.rafraichir();
+void botSwitcher.rafraichir().then(() => majLienReglagesBot());
 
 const CLIENT_VERSION = "1";
 const MAX_RECONNECT_DELAY_MS = 8000;
@@ -214,6 +215,33 @@ const botPage = botDeLaPage(window.location.search);
  */
 let botConnecte = null;
 let deepLinkHandled = false;
+
+/* ─── LOT 41 — « RÉGLAGES DU BOT » PORTE LE BOT AFFICHÉ ────────────────────
+ * Le bandeau a DEUX boutons de réglages : « Réglages généraux » (lien mort vers
+ * `/config`, aucune logique) et « Réglages du bot », dont l'`href` dépend du bot
+ * AFFICHÉ — sinon il ouvrait toujours les réglages de `yuki`.
+ *
+ * ⚠️ Source du bot affiché, dans cet ordre : `botConnecte` (`welcome.bot`, le
+ * bot RÉELLEMENT connecté), puis `?b=` de la page. Le repli (`yuki`) et le
+ * rejet d'un bot retiré de l'instance vivent dans `urlReglagesBot` (testé sans
+ * navigateur). On réécrit l'`href` des DEUX liens (barre du haut + panneau
+ * téléphone) : `textContent`/libellés intacts, aucun HTML réinjecté.
+ */
+const liensReglagesBot = [
+  document.getElementById("reglages-bot"),
+  document.getElementById("mnav-reglages-bot"),
+].filter((lien) => lien !== null);
+
+function majLienReglagesBot() {
+  const url = urlReglagesBot(
+    botConnecte ?? botPage,
+    botSwitcher.etat().bots,
+  );
+  for (const lien of liensReglagesBot) lien.setAttribute("href", url);
+}
+
+// Tout de suite : `?b=` de la page (ou repli `yuki`), sans attendre le réseau.
+majLienReglagesBot();
 
 /* ─── E2 — STORES PAR CONVERSATION (transport multiplexé) ──────────────────
  * Le serveur diffuse, PAR ABONNEMENT, les trames de TOUTES les conversations
@@ -1895,6 +1923,9 @@ function handleFrame(frame) {
     // LOT 38 — à qui parle cette connexion : c'est ce qui permet d'attribuer
     // les conversations (et leurs non-lus) au BON bot dans la rangée d'avatars.
     botConnecte = typeof frame.bot === "string" && frame.bot !== "" ? frame.bot : botPage;
+    // LOT 41 — c'est LE bot de cette conversation : le bouton « Réglages du bot »
+    // doit mener à SES réglages, pas à ceux de `yuki`.
+    majLienReglagesBot();
     if (frame.sessionId) sessionId = frame.sessionId;
     // Un `welcome { resumed: true }` acquitte notre `resume` : le rejeu (ou le
     // snapshot) suit, on autorise une nouvelle demande si un trou apparaissait.

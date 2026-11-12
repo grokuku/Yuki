@@ -14,7 +14,8 @@
  *  ② la pastille d'état ne dit plus jamais `idle`/`streaming` : elle parle
  *    français (« en train de travailler ») ou se MASQUE au repos ;
  *  ③ le reste du bandeau est intact : connexion, notifications, thème, lune,
- *    sourdine ;
+ *    sourdine — et, depuis le lot 41, les DEUX réglages (« Réglages généraux »
+ *    et « Réglages du bot ») à la place de l'unique « Configuration ».
  *  ④ garde-fous : pas d'`innerHTML`, pas de `.style.` (CSP inchangée).
  */
 
@@ -66,8 +67,13 @@ describe("bandeau — l'état de session est LISIBLE (plus de jargon `idle`)", (
 });
 
 describe("bandeau — ce qui devait rester est resté", () => {
-  it("Configuration (orthographe française), connexion, notifications, thème, lune, sourdine", () => {
-    expect(bandeau).toContain(">Configuration</a>");
+  it("les deux réglages (français), connexion, notifications, thème, lune, sourdine", () => {
+    // LOT 41 : l'unique pastille « Configuration » est remplacée par DEUX
+    // destinations distinctes — instance (`/config`) et bot affiché
+    // (`/bots?b=…`). Voir `tests/ui/reglages-barre-haut.test.ts`.
+    expect(bandeau).toContain(">Réglages généraux</a>");
+    expect(bandeau).toContain(">Réglages du bot</a>");
+    expect(bandeau).not.toMatch(/>\s*Configuration\s*</);
     expect(bandeau).not.toContain("Configuración");
     expect(bandeau).toContain('id="connection"');
     expect(bandeau).toContain('id="notif-toggle"');
