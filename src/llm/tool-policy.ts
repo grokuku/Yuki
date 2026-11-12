@@ -1225,19 +1225,20 @@ export function humanToolDuration(seconds: number): string {
 
 /**
  * RÉGLAGE qui ouvre la délégation en canal — nommé EXACTEMENT comme dans
- * l'interface : ONGLET « Conversation » (`public/ui/config.html`, `#tab-conversation`),
- * contrôle « Agents distants » (`public/ui/chat-panel.js`) tout en bas de cet onglet.
+ * l'interface : page INSTANCE de la configuration (`/config`), ONGLET « Agents »,
+ * contrôle « Agents distants » (`public/ui/config-fields.js`, groupe `acces-distant`).
  *
  * ⚠️ Le texte du refus pointe ce chemin : un message de refus qui dit « la
  * délégation est désactivée » sans dire OÙ l'activer ne laisse que la recherche
  * dans un fichier de configuration (défaut `desactive`, `src/config/schema.ts`).
  *
- * ⚠️ DÉFAUT DE PRODUCTION CORRIGÉ (2026-11-02) : ce chemin nommait un onglet
- * « Discussions » qui N'EXISTE PAS — l'onglet s'appelle « Conversation », et le
- * message envoyait donc l'utilisateur chercher un onglet absent.
+ * ⚠️ DÉFAUTS DE PRODUCTION CORRIGÉS SUCCESSIVEMENT (2026-11-02, puis classement des
+ * réglages) : ce chemin a nommé un onglet « Discussions » qui n'existe pas, puis un
+ * onglet « Conversation » disparu à la scission Instance/Bot. Le réglage est
+ * maintenant une clé d'INSTANCE, à côté des réglages d'agents.
  */
 export const REMOTE_AGENTS_SETTING_PATH =
-  "Configuration → Conversation → Agents distants (tout en bas de la page)";
+  "Configuration → Agents → Agents distants";
 
 /**
  * Texte de REFUS d'un appel INLINE d'un outil long dans un run de CANAL.

@@ -507,9 +507,11 @@ export type ServerMessage =
       type: "agents";
       agents: WireAgent[];
       /**
-       * Bot DU RUN qui a produit cette trame (lot 35g). L'interface s'en sert
-       * pour ne rien afficher qu'il ne pourrait pas utiliser. ⚠️ Il ne vient
-       * JAMAIS du client : la trame est fabriquée côté serveur.
+       * Bot DE CETTE CONNEXION (lot 40) : celui de la conversation ouverte
+       * (`?b=<slug>` → `botId` de `hello`/`resume`). L'interface s'en sert pour
+       * ne rien afficher qu'il ne pourrait pas utiliser. ⚠️ Il ne vient JAMAIS
+       * d'une valeur brute du client : le serveur ne le renseigne qu'après
+       * avoir RÉSOLU ce bot (existant et démarré).
        */
       botActif?: string;
     }

@@ -253,7 +253,9 @@ describe("refus de l'appel INLINE dans un run de CANAL", () => {
     expect(texte).toContain("delegate");
     // ⚠️ Le chemin EXACT de configuration est nommé (libellé de l'interface).
     expect(texte).toContain(REMOTE_AGENTS_SETTING_PATH);
-    expect(texte).toContain("Configuration → Conversation → Agents distants");
+    // ⚠️ Chemin remplacé par le CLASSEMENT VALIDÉ : les deux interrupteurs d'accès
+    // distant sont des clés d'INSTANCE, à côté des réglages d'agents.
+    expect(texte).toContain("Configuration → Agents → Agents distants");
     expect((resultat.details as { status?: string }).status).toBe("refused");
   });
 

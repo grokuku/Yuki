@@ -296,6 +296,14 @@ export {
   type OptionsExecutionsBots,
 } from "./executions-bots.js";
 
+// Lot 40 — un ANNUAIRE par bot : `lister_agents`/`etat_agent` ne citent que les
+// agents autorisés pour le bot du RUN (jamais ceux du bot de la pile par défaut).
+export {
+  DirectoriesAgentsBots,
+  type DirectoriesBotsLogger,
+  type OptionsDirectoriesAgentsBots,
+} from "./directories-bots.js";
+
 export {
   AgentExecutionService,
   agentNonAutoriseMessage,

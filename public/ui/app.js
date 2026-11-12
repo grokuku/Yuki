@@ -18,7 +18,7 @@ import {
   registerServiceWorker,
 } from "./push.js";
 import { conversationTitle, initSessionsPanel } from "./sessions-panel.js";
-import { botDeLaPage, champBot, texteBot } from "./bot-conversation.js";
+import { botDeLaPage, champBot } from "./bot-conversation.js";
 import { initBotSwitcher } from "./bot-switcher.js";
 import {
   creationRefusal,
@@ -125,10 +125,9 @@ const els = {
   emptyHint: document.querySelector("#empty-state .empty-state__hint"),
   connection: document.getElementById("connection"),
   /**
-   * LOT 36 (L4) — bot de CETTE conversation (`/?b=<slug>`). Masqué tant que la
-   * page ne parle pas à un bot désigné : l'en-tête reste celui d'avant L4.
+   * ÉTAT de la conversation (libellé en français LISIBLE). Le NOM du bot n'est
+   * plus dans l'en-tête (lot 40) : il vit dans l'onglet de son bot, à gauche.
    */
-  botName: document.getElementById("bot-name"),
   sessionState: document.getElementById("session-state"),
   pendingBadge: document.getElementById("pending-badge"),
   queued: document.getElementById("queued"),
@@ -1080,21 +1079,31 @@ function setConnection(online) {
   els.connection.classList.toggle("pill--offline", !online);
 }
 
+/**
+ * ÉTAT de la conversation dans le bandeau : des mots LISIBLES, jamais le jargon
+ * du serveur (`idle`, `streaming`). Au repos, la pastille est MASQUÉE : il n'y a
+ * rien à dire, et une pastille « idle » ne veut rien dire pour l'utilisateur.
+ */
 function setSessionState(state) {
   if (state === "streaming") {
-    els.sessionState.textContent = "streaming";
+    els.sessionState.textContent = "en train de travailler";
+    els.sessionState.hidden = false;
     els.stop.disabled = false;
   } else if (state === "waiting") {
     // E5 — travail en cours (lu dans le JobStore) : l'état « en attente » est
     // affiché quoi que dise le texte du modèle.
-    els.sessionState.textContent = "en attente";
+    els.sessionState.textContent = "en attente de vos décisions";
+    els.sessionState.hidden = false;
     els.stop.disabled = true;
   } else if (state === "error") {
     els.sessionState.textContent = "erreur";
+    els.sessionState.hidden = false;
     els.stop.disabled = true;
     hideThinking();
   } else {
-    els.sessionState.textContent = "idle";
+    // Au repos : rien à signaler, aucune pastille (jamais le mot « idle »).
+    els.sessionState.textContent = "";
+    els.sessionState.hidden = true;
     els.stop.disabled = true;
     hideThinking();
   }
@@ -1886,18 +1895,6 @@ function handleFrame(frame) {
     // LOT 38 — à qui parle cette connexion : c'est ce qui permet d'attribuer
     // les conversations (et leurs non-lus) au BON bot dans la rangée d'avatars.
     botConnecte = typeof frame.bot === "string" && frame.bot !== "" ? frame.bot : botPage;
-    // ⚠️ LOT 36 (L4) — À QUI PARLE-T-ON : le serveur l'annonce (`welcome.bot`).
-    // Sans bot demandé ni annoncé, aucun badge n'apparaît (écran inchangé).
-    const libelleBot = texteBot(frame.bot, botPage);
-    if (els.botName) {
-      if (libelleBot === null) {
-        els.botName.hidden = true;
-        els.botName.textContent = "";
-      } else {
-        els.botName.textContent = libelleBot;
-        els.botName.hidden = false;
-      }
-    }
     if (frame.sessionId) sessionId = frame.sessionId;
     // Un `welcome { resumed: true }` acquitte notre `resume` : le rejeu (ou le
     // snapshot) suit, on autorise une nouvelle demande si un trou apparaissait.
@@ -2020,7 +2017,10 @@ function handleFrame(frame) {
         .filter((agent) => agent && typeof agent.agentId === "string")
         .map((agent) => [agent.agentId, agent]),
     );
-    sidebarAgents.update(frame.agents, frame.botActif);
+    // ⚠️ VISIBILITÉ (lot 40) : le filtre porte sur le bot de CETTE conversation
+    // (`botActif` de la trame, = `botId` de la connexion ; à défaut `?b=`). Le
+    // serveur filtre DÉJÀ — ceci est la défense supplémentaire côté interface.
+    sidebarAgents.update(frame.agents, frame.botActif ?? botPage);
     return;
   }
   if (type === "snapshot") {

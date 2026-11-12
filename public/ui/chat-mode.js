@@ -26,8 +26,9 @@ import { cheminConfigBot, idBotActif } from "./bots-api.js";
  * ⚠️ Depuis le sous-lot 1b-4 (deux pages), ce réglage vit sur la page du BOT :
  * `/bots?b=<slug>`, onglet « Plateformes », SECTION « Discussions — Mattermost »
  * / « Discussions — Discord » (`public/ui/chat-panel.js`, titres des panneaux).
- * C'est vérifiable par ancre : `#chat-remote-agents` ouvre cet onglet puis
- * défile jusqu'au réglage (`ANCRES_PROFONDES`, `public/ui/config-pages.js`).
+ * C'est vérifiable par ancre : `#plateformes` ouvre cet onglet ; les deux
+ * interrupteurs d'accès distant, eux, sont communs à l'installation et vivent
+ * sur `/config#chat-remote-agents` (`ANCRES_PROFONDES`, `public/ui/config-pages.js`).
  *
  * ⚠️ Un chemin approximatif (« … → « Discussions » ») envoie l'utilisateur
  * chercher une section qui n'existe pas : c'est le défaut corrigé le 2026-11-02.

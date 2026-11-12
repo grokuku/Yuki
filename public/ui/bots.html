@@ -272,10 +272,11 @@
           </section>
           <!-- ═══ PLATEFORMES ════════════════════════════════════════════════
                Mattermost et Discord : jetons saisis une fois, état des connexions,
-               backfill, canaux suivis, agents/outils distants et mode du chat.
+               backfill, canaux suivis et mode du chat.
                Composant autonome monté par id (`chat-panel.js`).
-               ⚠️ Ancre `#chat-remote-agents` / `#chat-remote-tools` : c'est ici
-               que vivent les contrôles nommés par les messages de refus. -->
+               ⚠️ Les DEUX interrupteurs d'accès distant (`chat.remoteAgents`,
+               `chat.remoteTools`) ne sont PLUS ici : clés d'INSTANCE, ils vivent
+               dans l'onglet « Agents » de `/config` (`#chat-remote-agents`). -->
           <section
             class="config-panel"
             role="tabpanel"

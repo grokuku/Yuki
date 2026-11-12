@@ -503,6 +503,11 @@ function resetField(field, control, entry) {
 function renderField(field) {
   const entry = state.fields[field.path] ?? { value: "", origin: "default", apply: "restart" };
   const row = h("div", { class: "config-row" });
+  // ⚠️ ANCRE PROFONDE : un champ peut déclarer `anchor` (ex. `chat-remote-agents`) —
+  // c'est ce que vise un lien `/config#<ancre>` (`ANCRES_PROFONDES`, `config-pages.js`)
+  // et ce que nomment les messages de refus du serveur. Sans cet identifiant, le
+  // défilement tomberait à côté et le réglage resterait introuvable.
+  if (typeof field.anchor === "string" && field.anchor !== "") row.id = field.anchor;
   state.rows.set(field.path, row);
 
   const label = h("label", { class: "config-label" }, [field.label]);
@@ -816,8 +821,8 @@ function refreshVisibility() {
  * ANCRES PROFONDES de la page — table déclarée dans `config-pages.js` (module
  * pur, testé) : id d'un CONTRÔLE → onglet qui le contient.
  *
- * ⚠️ Depuis le sous-lot 1b-4, `/bots?b=<slug>#chat-remote-agents` doit ouvrir
- * « Plateformes » (le panneau des discussions y vit) et `#declencheurs` ouvre la
+ * ⚠️ `/config#chat-remote-agents` (clé d'INSTANCE) doit ouvrir « Agents » et
+ * défiler jusqu'au réglage « Agents distants », et `/bots?b=<slug>#declencheurs` ouvre la
  * page de gestion des sources. La correspondance se fait par ID D'ÉLÉMENT,
  * jamais par GROUPE de champs. Une ancre inconnue retombe sur le premier onglet.
  */
@@ -2180,11 +2185,10 @@ void (async () => {
       initChatPanel({
         root: chatRoot,
         HolafModal,
-        // ⚠️ Ancre `/config#chat-remote-agents` : le contrôle « Agents distants » n'existe
-        // qu'APRÈS ce montage, et la hauteur de l'onglet n'est DÉFINITIVE qu'après la
-        // première lecture d'état (les sections de plateforme se remplissent alors). On
-        // refait donc le défilement une fois, puis plus jamais (l'utilisateur est maître
-        // de son défilement ensuite).
+        // ⚠️ Ancre `#declencheurs` / `#plateformes` : les sections de plateforme ne sont
+        // remplies qu'APRÈS la première lecture d'état, et la hauteur de l'onglet n'est
+        // DÉFINITIVE qu'à ce moment-là. On refait donc le défilement une fois, puis plus
+        // jamais (l'utilisateur est maître de son défilement ensuite).
         onFirstRender: () => revealHashTarget(),
       });
       revealHashTarget();

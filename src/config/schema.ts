@@ -577,12 +577,21 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // planification hebdomadaire vise une heure de PARIS (« 3 h du matin »),
   // l'affichage des horodatages reste corrélable à Mattermost.
   "memory.consolidation.enabled": {
-    scope: "mixte",
-    mixteMerge: "et",
+    // ⚠️ `instance` (classement validé, `docs/classement-des-reglages.md`) : la
+    // consolidation est un INTERRUPTEUR D'INSTALLATION, plus une clé à deux côtés.
+    // ⚠️ Ce qui reste par bot n'est PAS un réglage : un bot sans capacité
+    // `memoire` (ou sans volume) est SAUTÉ par l'ordonnanceur
+    // (`src/memory/consolidation-multi.ts`, `passeDe` → `undefined`).
+    scope: "instance",
     type: "enum",
     enum: ["off", "on"],
     default: "on",
     apply: "hot",
+    // ⚠️ Variable RESTAURÉE : elle avait été retirée au lot 35b (la clé était
+    // `mixte`, donc surchargeable par bot). Devenue clé d'INSTANCE, elle peut de
+    // nouveau verrouiller une installation (`VARIABLES_ENV_RETIREES` ne la liste
+    // plus : une variable retirée qui agirait serait un mensonge).
+    env: "YUKI_MEMORY_CONSOLIDATION_ENABLED",
   },
   "memory.consolidation.cron": {
     // ⚠️ Portée SANS DOMICILE ÉVIDENT : classée `instance` (voir
@@ -665,6 +674,14 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   //    ATTEINT une machine appairée ;
   //  - `chat.remoteTools` (juste après) : image, libraire, archives — les capacités
   //    de Yuki qui ne touchent à aucune machine.
+  //
+  // ⚠️ PORTÉE `instance` (classement validé, `docs/classement-des-reglages.md`) :
+  // ces deux interrupteurs décident de l'accès depuis un CANAL, et un canal suivit
+  // (`chat.mode`, qui reste `bot`) n'appartient qu'à un bot — mais la DÉCISION de
+  // sécurité, elle, engage l'INSTALLATION (machines appairées et coffre communs).
+  // ⚠️ La portée est LUE : `ConfigRuntime.get()` prend la valeur COMMUNE pour une
+  // clé `instance` (l'overlay du bot est ignoré, `runtime.ts`), et `update()` la
+  // refuse depuis `PUT /api/bots/<id>/config` (`instance_scoped_field`).
   // Le classement outil par outil vit dans `REMOTE_TOOL_GROUP_OF`
   // (`src/llm/tool-policy.ts`) : un outil = un groupe, sans exception (garde de
   // compilation + test de garde).
@@ -698,11 +715,15 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // donc `generer_image` s'exécuter inline, avec la borne relevée à 1 h
   // (`images.timeoutMs`, 3 600 000 ms).
   "chat.remoteAgents": {
-    scope: "bot",
+    // ⚠️ `instance` : une seule décision pour TOUS les canaux de l'installation
+    // (voir le commentaire ci-dessus). Écran : Instance · Agents.
+    scope: "instance",
     type: "enum",
     enum: ["desactive", "actives"],
     default: "desactive",
     apply: "hot",
+    // Variable RESTAURÉE (voir `memory.consolidation.enabled`).
+    env: "YUKI_CHAT_REMOTE_AGENTS",
   },
   // ⚠️ SECOND RÉGLAGE, INDÉPENDANT (demande utilisateur du 2026-11-02 : « images oui,
   // agents non » était impossible avec un seul interrupteur).
@@ -720,11 +741,15 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // générer des images, d'interroger le libraire et de lire les archives. Aucune
   // machine n'est atteinte, mais cela consomme du GPU et du temps de Yuki.
   "chat.remoteTools": {
-    scope: "bot",
+    // ⚠️ `instance`, INDÉPENDANT de `chat.remoteAgents` : « images oui, agents
+    // non » reste possible, mais pour toute l'installation.
+    scope: "instance",
     type: "enum",
     enum: ["desactive", "actives"],
     default: "desactive",
     apply: "hot",
+    // Variable RESTAURÉE (voir `memory.consolidation.enabled`).
+    env: "YUKI_CHAT_REMOTE_TOOLS",
   },
   // ⚠️ MÉMOIRE DURABLE : elle n'est PAS branchée sur les conversations
   // distantes, et il n'y a donc AUCUN réglage. `chat.remoteMemory` a existé au
@@ -1239,13 +1264,18 @@ export const CONFIG_PATHS: readonly string[] = Object.keys(CONFIG_SCHEMA);
 /**
  * Variables d'environnement RETIRÉES au lot 35b : `variable` → chemin du champ.
  *
- * ⚠️ RUPTURE DE DÉPLOIEMENT ASSUMÉE : ces 21 variables portaient des clés
+ * ⚠️ RUPTURE DE DÉPLOIEMENT ASSUMÉE : ces 18 variables portaient des clés
  * `bot`/`mixte`. Une variable d'environnement est une valeur d'INSTALLATION —
  * elle ne peut pas désigner « le bot actif » : la garde de compilation interdit
  * désormais `env` sur ces portées (`schema.ts:BotFieldDescriptor`). Un
  * déploiement qui les définit encore ne doit pas croire qu'elles agissent :
  * elles sont ANNONCÉES au démarrage (`ConfigRuntime.warnings`), jamais
  * supprimées en silence.
+ *
+ * ⚠️ 21 → 18 (classement validé) : `YUKI_MEMORY_CONSOLIDATION_ENABLED`,
+ * `YUKI_CHAT_REMOTE_AGENTS` et `YUKI_CHAT_REMOTE_TOOLS` sont RESTAURÉES parce que
+ * leurs clés sont redevenues `instance`. Une variable ne figure ici que si elle
+ * n'agit PLUS : la laisser listée alors qu'elle surcharge à nouveau serait faux.
  *
  * Le remplacement est le réglage lui-même (page `/config` pour les clés
  * d'instance et de bot à ce stade), ou `config.overlay.json` du bot.
@@ -1265,10 +1295,7 @@ export const VARIABLES_ENV_RETIREES: Readonly<Record<string, string>> = {
   YUKI_MEMORY_EXTRACT_TIMEOUT_MS: "memory.extract.timeoutMs",
   YUKI_MEMORY_SET_ASIDE_MAX_CHARS: "memory.setAside.maxChars",
   YUKI_MEMORY_SET_ASIDE_MAX_CHUNKS: "memory.setAside.maxChunks",
-  YUKI_MEMORY_CONSOLIDATION_ENABLED: "memory.consolidation.enabled",
   YUKI_CHAT_MODE: "chat.mode",
-  YUKI_CHAT_REMOTE_AGENTS: "chat.remoteAgents",
-  YUKI_CHAT_REMOTE_TOOLS: "chat.remoteTools",
   YUKI_CHAT_DISCORD_GUILD_ID: "chat.discord.guildId",
   YUKI_CHAT_DISCORD_MAX_UPLOAD_BYTES: "chat.discord.maxUploadBytes",
   YUKI_PUSH_ENABLED: "push.enabled",

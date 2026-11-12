@@ -106,13 +106,17 @@
         <a class="pill topbar__config" href="/config">Configuration</a>
         <span id="connection" class="pill pill--offline">hors ligne</span>
         <!--
-          LOT 36 (L4) — BOT DE CETTE CONVERSATION. `hidden` par défaut : il n'est
-          révélé que si la page parle à un bot DÉSIGNÉ (`/?b=<slug>`) et que le
-          serveur le confirme (`welcome.bot`). Sans bot demandé, l'en-tête est
-          exactement celui d'avant L4.
+          LOT 40 — Le NOM DU BOT n'est plus répété ici : il est déjà porté par
+          l'onglet du bot dans la barre du haut (rangée d'onglets, à gauche).
+          ⚠️ Une pastille dupliquée en haut à droite n'apportait rien et
+          encombrait l'en-tête (retour utilisateur du 2026-11-12).
         -->
-        <span id="bot-name" class="pill pill--bot" hidden></span>
-        <span id="session-state" class="pill">idle</span>
+        <!--
+          ÉTAT DE LA CONVERSATION en français LISIBLE (jamais le jargon serveur
+          `idle`/`streaming`). Masqué au repos : quand rien ne se passe, il n'y a
+          rien à dire.
+        -->
+        <span id="session-state" class="pill" hidden></span>
         <!-- E5 — VERROU ANTI-MENSONGE : badge NON MASQUABLE affiché tant que la
              session a du travail non achevé (état serveur `waiting`, lu dans le
              JobStore). Le texte du modèle ne peut JAMAIS le cacher : seul l'état

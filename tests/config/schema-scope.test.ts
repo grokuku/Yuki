@@ -5,16 +5,21 @@
  *  - `CONFIG_PATHS.length === 90` (aucune clé ajoutée ni perdue par accident) ;
  *    ⚠️ 89 → 90 au lot 36 (L1) : `bots.maxActifs` (plafond des bots simultanés).
  *    Le compteur est mis à jour EXPRÈS : c'est lui qui rend l'ajout délibéré.
- *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 67 / 18 / 5 ;
+ *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 70 / 16 / 4 ;
+ *    ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) : trois clés ont
+ *    changé de portée SANS changer de nombre — `chat.remoteAgents` et
+ *    `chat.remoteTools` (`bot` → `instance`) et `memory.consolidation.enabled`
+ *    (`mixte` → `instance`). Comptes : 67/18/5 → 70/16/4.
  *  - `env` INTERDIT hors `scope: "instance"` (garde de compilation, doublée ici
  *    d'un contrôle à l'exécution : la table est une donnée, pas un type) ;
  *  - `mixte` ⇒ `mixteMerge` DÉCLARÉ, et `et` uniquement sur des enums `off|on` ;
- *  - les 21 variables d'environnement RETIRÉES sont annoncées et réellement
- *    inactives ;
+ *  - les 18 variables d'environnement RETIRÉES sont annoncées et réellement
+ *    inactives (21 → 18 : trois sont RESTAURÉES, leurs clés étant redevenues
+ *    `instance`) ;
  *  - `BOT_ID_DEFAUT` reste égal à `BOT_YUKI` (le bot actif du registre).
  *
  * ⚠️ Échoue sur le code d'origine : `FieldDescriptor` n'y porte aucun `scope`,
- * et les 21 variables y sont encore actives.
+ * et les 21 variables y sont encore actives (dont les trois reclassées).
  */
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -64,10 +69,41 @@ describe("① la table des clés", () => {
     }
   });
 
-  it("répartition : 67 `instance` / 18 `bot` / 5 `mixte`", () => {
+  it("répartition : 70 `instance` / 16 `bot` / 4 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 67, bot: 18, mixte: 5 });
+    expect(compte).toEqual({ instance: 70, bot: 16, mixte: 4 });
+  });
+
+  it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {
+    // ⚠️ Aucune ne doit rester `bot`/`mixte` : sur l'origine, ces trois
+    // assertions échouent (« bot » / « bot » / « mixte »).
+    expect(descriptor("chat.remoteAgents").scope).toBe("instance");
+    expect(descriptor("chat.remoteTools").scope).toBe("instance");
+    expect(descriptor("memory.consolidation.enabled").scope).toBe("instance");
+    // ⚠️ Plus de fusion déclarée : une clé d'instance n'a pas de côté bot.
+    expect(descriptor("memory.consolidation.enabled").mixteMerge).toBeUndefined();
+    // Les défauts et le caractère « à chaud » ne changent pas.
+    expect(descriptor("chat.remoteAgents")).toMatchObject({
+      type: "enum",
+      enum: ["desactive", "actives"],
+      default: "desactive",
+      apply: "hot",
+    });
+    expect(descriptor("chat.remoteTools")).toMatchObject({
+      type: "enum",
+      enum: ["desactive", "actives"],
+      default: "desactive",
+      apply: "hot",
+    });
+    expect(descriptor("memory.consolidation.enabled")).toMatchObject({
+      type: "enum",
+      enum: ["off", "on"],
+      default: "on",
+      apply: "hot",
+    });
+    // ⚠️ `chat.mode` N'A PAS bougé : chaque bot a SON canal (`scope: "bot"`).
+    expect(descriptor("chat.mode").scope).toBe("bot");
   });
 });
 
@@ -80,8 +116,8 @@ describe("② `scope` ≠ `instance` ⇒ AUCUNE variable d'environnement", () =>
     expect(fautives).toEqual([]);
   });
 
-  it("les 21 variables retirées ne surchargent PLUS rien", () => {
-    expect(Object.keys(VARIABLES_ENV_RETIREES).length).toBe(21);
+  it("les 18 variables retirées ne surchargent PLUS rien", () => {
+    expect(Object.keys(VARIABLES_ENV_RETIREES).length).toBe(18);
     const processEnv: NodeJS.ProcessEnv = {};
     for (const [variable, path] of Object.entries(VARIABLES_ENV_RETIREES)) {
       expect(descriptor(path).scope, `${variable} → ${path}`).not.toBe("instance");
@@ -98,6 +134,26 @@ describe("② `scope` ≠ `instance` ⇒ AUCUNE variable d'environnement", () =>
     expect(CONFIG_SCHEMA["llm.light.model"]?.env).toBe("YUKI_LLM_LIGHT_MODEL");
     expect(CONFIG_SCHEMA["llm.light.apiKey"]?.env).toBe("YUKI_LLM_LIGHT_API_KEY");
   });
+
+  it("les TROIS variables RESTAURÉES surchargent à nouveau (clés redevenues `instance`)", () => {
+    // ⚠️ Une variable retirée qui agirait (ou l'inverse) serait un mensonge : les
+    // trois clés reclassées ont leur variable DÉCLARÉE et plus listée comme retirée.
+    const overrides = readConfigEnvOverrides({
+      YUKI_CHAT_REMOTE_AGENTS: "actives",
+      YUKI_CHAT_REMOTE_TOOLS: "actives",
+      YUKI_MEMORY_CONSOLIDATION_ENABLED: "off",
+    });
+    expect(overrides["chat.remoteAgents"]).toBe("actives");
+    expect(overrides["chat.remoteTools"]).toBe("actives");
+    expect(overrides["memory.consolidation.enabled"]).toBe("off");
+    for (const variable of [
+      "YUKI_CHAT_REMOTE_AGENTS",
+      "YUKI_CHAT_REMOTE_TOOLS",
+      "YUKI_MEMORY_CONSOLIDATION_ENABLED",
+    ]) {
+      expect(VARIABLES_ENV_RETIREES[variable], variable).toBeUndefined();
+    }
+  });
 });
 
 describe("③ la fusion d'une clé `mixte` est DÉCLARÉE, jamais devinée", () => {
@@ -112,24 +168,14 @@ describe("③ la fusion d'une clé `mixte` est DÉCLARÉE, jamais devinée", () 
     }
   });
 
-  it("les 5 clés `mixte` sont celles établies (3 `et`, 2 `surcharge`)", () => {
+  it("les 4 clés `mixte` sont celles établies (2 `et`, 2 `surcharge`)", () => {
     const mixte = CONFIG_PATHS.filter((path) => descriptor(path).scope === "mixte");
     expect(mixte.sort()).toEqual(
-      [
-        "memory.consolidation.enabled",
-        "prompts.heavy",
-        "prompts.light",
-        "push.enabled",
-        "tts.enabled",
-      ].sort(),
+      ["prompts.heavy", "prompts.light", "push.enabled", "tts.enabled"].sort(),
     );
     const parFusion = (fusion: string) =>
       mixte.filter((path) => descriptor(path).mixteMerge === fusion).sort();
-    expect(parFusion("et")).toEqual([
-      "memory.consolidation.enabled",
-      "push.enabled",
-      "tts.enabled",
-    ]);
+    expect(parFusion("et")).toEqual(["push.enabled", "tts.enabled"]);
     expect(parFusion("surcharge")).toEqual(["prompts.heavy", "prompts.light"]);
   });
 
@@ -202,15 +248,13 @@ describe("⑤ le bot actif de l'overlay", () => {
     expect(BOT_ID_DEFAUT).toBe(BOT_YUKI);
   });
 
-  it("les 18 clés `bot` sont celles établies (conversation, voix, mémoire du bot)", () => {
+  it("les 16 clés `bot` sont celles établies (conversation, voix, mémoire du bot)", () => {
     const bot = CONFIG_PATHS.filter((path) => descriptor(path).scope === "bot");
     expect(bot.sort()).toEqual(
       [
         "chat.discord.guildId",
         "chat.discord.maxUploadBytes",
         "chat.mode",
-        "chat.remoteAgents",
-        "chat.remoteTools",
         "memory.enabled",
         "memory.extract.maxItems",
         "memory.extract.timeoutMs",

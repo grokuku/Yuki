@@ -30,8 +30,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { REMOTE_AGENTS_ANCHOR, REMOTE_TOOLS_ANCHOR } from "../../public/ui/chat-panel.js";
-import { ALL_FIELDS, GROUPS } from "../../public/ui/config-fields.js";
+import { ALL_FIELDS, FIELD_DEFAULTS, GROUPS } from "../../public/ui/config-fields.js";
 import {
   ANCRES_PROFONDES,
   PAGES,
@@ -65,6 +64,7 @@ import {
 } from "../../src/bots/admin.js";
 import { CAPACITES_BOT } from "../../src/bots/registry.js";
 import { OUTILS_DES_CAPACITES } from "../../src/llm/index.js";
+import { REMOTE_AGENTS_SETTING_PATH } from "../../src/llm/tool-policy.js";
 import { CONFIG_SCHEMA } from "../../src/config/schema.js";
 
 const lire = (nom: string): string =>
@@ -245,7 +245,7 @@ describe("②③ la PORTÉE décide de ce qui est rendu, une seule fois par page
     expect(bot.size).toBe(clesBot.length + mixtes.length);
   });
 
-  it("les 5 clés MIXTES sont bien celles du schéma (aucune dérive)", () => {
+  it("les 4 clés MIXTES sont bien celles du schéma (aucune dérive)", () => {
     const mixtesSchema = Object.entries(SCOPES)
       .filter(([, scope]) => scope === "mixte")
       .map(([path]) => path)
@@ -254,8 +254,9 @@ describe("②③ la PORTÉE décide de ce qui est rendu, une seule fois par page
       .filter((path) => scopeDeCle(SCOPES, path) === "mixte")
       .sort();
     expect(mixtesCatalogue).toEqual(mixtesSchema);
+    // ⚠️ 5 → 4 : `memory.consolidation.enabled` est devenue une clé d'INSTANCE
+    // (interrupteur d'installation) — elle n'est donc PLUS rendue sur la page Bot.
     expect(mixtesSchema).toEqual([
-      "memory.consolidation.enabled",
       "prompts.heavy",
       "prompts.light",
       "push.enabled",
@@ -268,11 +269,11 @@ describe("②③ la PORTÉE décide de ce qui est rendu, une seule fois par page
     // panneau des plateformes et le sélecteur de mode. Ces clés ne sont pas des
     // champs de formulaire : elles ne doivent PAS être dans le catalogue (sinon
     // deux contrôles écriraient la même clé), mais leur propriétaire doit exister.
+    // ⚠️ `chat.remoteAgents` / `chat.remoteTools` ont QUITTÉ cette liste : ce sont
+    // des champs du catalogue (clés d'instance depuis le classement validé).
     const ailleurs: Record<string, string> = {
       "tts.voice": "voices-panel.js",
       "chat.mode": "chat-mode.js",
-      "chat.remoteAgents": "chat-panel.js",
-      "chat.remoteTools": "chat-panel.js",
     };
     for (const [path, fichier] of Object.entries(ailleurs)) {
       expect(ALL_FIELDS.some((field) => field.path === path), path).toBe(false);
@@ -292,12 +293,12 @@ describe("②③ la PORTÉE décide de ce qui est rendu, une seule fois par page
 });
 
 describe("④ ancres : elles tombent sur un onglet qui EXISTE", () => {
-  it("la page Bot porte les ancres des réglages qui y ont déménagé", () => {
+  it("la page BOT ne porte PLUS les ancres des deux interrupteurs d'accès distant", () => {
     const ancres = new Map(ANCRES_PROFONDES.bot);
-    // ⚠️ Les deux ancres du panneau des discussions sont EXACTEMENT celles que
-    // `chat-panel.js` exporte (aucune chaîne recopiée qui dérive).
-    expect(ancres.get(REMOTE_AGENTS_ANCHOR)).toBe("plateformes");
-    expect(ancres.get(REMOTE_TOOLS_ANCHOR)).toBe("plateformes");
+    // ⚠️ Clés d'INSTANCE : leurs ancres ont déménagé (voir le test suivant), sinon
+    // `/bots?b=x#chat-remote-agents` ouvrirait un onglet sans cible.
+    expect(ancres.has("chat-remote-agents")).toBe(false);
+    expect(ancres.has("chat-remote-tools")).toBe(false);
     expect(ancres.get("declencheurs")).toBe("declencheurs");
     expect(ancres.get("sources")).toBe("declencheurs");
     expect(ancres.get("journal-declencheurs")).toBe("declencheurs");
@@ -340,6 +341,143 @@ describe("④ ancres : elles tombent sur un onglet qui EXISTE", () => {
   it("chaque page renvoie vers l'autre (on ne cherche pas un réglage disparu)", () => {
     expect(CONFIG_HTML).toContain('href="/bots"');
     expect(BOTS_HTML).toContain('href="/config"');
+  });
+});
+
+/**
+ * ⑨ CLASSEMENT VALIDÉ DES RÉGLAGES (`docs/classement-des-reglages.md`).
+ *
+ * Trois clés ont changé de portée et sept réglages n'avaient AUCUN écran. Ce bloc
+ * verrouille les deux conséquences visibles :
+ *  - les trois clés sont rendues sur la page INSTANCE seulement (jamais en double) ;
+ *  - les sept réglages ont un champ RÉELLEMENT rendu, dans le bon onglet, avec un
+ *    libellé français et une explication ;
+ *  - ⚠️ AUCUNE des 90 clés du schéma n'est sans écran : le compte des orphelines
+ *    doit être ZÉRO (une clé réglable nulle part est un réglage mort).
+ */
+describe("⑨ classement validé — portées changées et réglages sans écran", () => {
+  /**
+   * Clés dont le contrôle vit dans un AUTRE composant (hors catalogue) :
+   *  - `tts.voice` : bibliothèque des voix (`voices-panel.js`) ;
+   *  - `chat.mode` : sélecteur de mode (`chat-mode.js`) ;
+   *  - `chat.discord.*` : champs propres à la plateforme, rendus par la fabrique
+   *    de `chat-panel.js` (`description.extraFields === "discord"`), qui les écrit
+   *    sur les routes `PUT /api/chat/...` — ce sont bien des réglages DE BOT.
+   */
+  const CONTROLES_AILLEURS = [
+    "tts.voice",
+    "chat.mode",
+    "chat.discord.guildId",
+    "chat.discord.maxUploadBytes",
+  ];
+
+  /** Clés rendues par une page, sans doublon. */
+  const rendues = (page: string): string[] => [...clesRendues(page).keys()];
+
+  it("les TROIS clés reclassées sont d'INSTANCE et rendues sur la page Instance", () => {
+    for (const cle of ["chat.remoteAgents", "chat.remoteTools", "memory.consolidation.enabled"]) {
+      expect(SCOPES[cle], cle).toBe("instance");
+      expect(rendues("instance"), cle).toContain(cle);
+      // ⚠️ Jamais sur la page Bot : ce sont des interrupteurs d'INSTALLATION.
+      expect(rendues("bot"), cle).not.toContain(cle);
+      expect(clesRendues("instance").get(cle), `${cle} en double`).toBe(1);
+    }
+    // ⚠️ `chat.mode` N'A PAS bougé : chaque bot choisit SON canal. Son contrôle
+    // n'est pas un champ du catalogue (`chat-mode.js`) — il reste donc hors des
+    // deux listes de champs, mais sa portée est bien `bot`.
+    expect(SCOPES["chat.mode"]).toBe("bot");
+    expect(rendues("bot")).not.toContain("chat.mode");
+    expect(lire("chat-mode.js")).toContain("chat.mode");
+  });
+
+  it("les SEPT réglages sans écran ont un champ, dans le bon onglet, avec libellé et aide", () => {
+    const attendus: Record<string, string> = {
+      "agents.bindHost": "agents",
+      "agents.port": "agents",
+      "agents.defaultLevel": "agents",
+      "audit.retentionDays": "systeme",
+      "audit.maxSizeMb": "systeme",
+      "recap.timeoutMs": "systeme",
+      "bots.maxActifs": "systeme",
+    };
+    const parOnglet = groupesParOnglet("instance", GROUPS);
+    for (const [cle, onglet] of Object.entries(attendus)) {
+      expect(SCOPES[cle], cle).toBe("instance");
+      const champs = (parOnglet[onglet] ?? []).flatMap((entree) =>
+        champsDePage("instance", entree, SCOPES),
+      );
+      const champ = champs.find((entree) => entree.path === cle);
+      expect(champ, `${cle} (onglet ${onglet})`).toBeTruthy();
+      // ⚠️ Libellé FRANÇAIS lisible : pas la clé technique recopiée.
+      expect(champ?.label, cle).toBeTruthy();
+      expect(champ?.label, cle).not.toBe(cle);
+      expect(String(champ?.label), cle).not.toContain(".");
+      expect(String(champ?.helper ?? "").length, `${cle} sans aide`).toBeGreaterThan(30);
+      // Un contrôle qui ÉCRIT : texte, nombre ou sélection.
+      expect(["text", "number", "select"], cle).toContain(
+        (champ as { kind?: string } | undefined)?.kind,
+      );
+      // Et le miroir des défauts suit (sinon « Réinitialiser » afficherait vide).
+      expect(FIELD_DEFAULTS, cle).toHaveProperty([cle]);
+    }
+  });
+
+  it("⚠️ AUCUNE clé du schéma n'est sans écran (compte des orphelines : 0)", () => {
+    const couvertes = new Set([...rendues("instance"), ...rendues("bot"), ...CONTROLES_AILLEURS]);
+    const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
+    expect(orphelines).toEqual([]);
+    // ⚠️ Et le compte doit être EXACT : 90 clés, aucune oubliée par ce contrôle.
+    expect(Object.keys(SCOPES).length).toBe(90);
+    expect(couvertes.size).toBe(90);
+    // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
+    for (const [cle, fichier] of [
+      ["tts.voice", "voices-panel.js"],
+      ["chat.mode", "chat-mode.js"],
+    ] as const) {
+      expect(lire(fichier), `${cle} dans ${fichier}`).toContain(cle);
+    }
+  });
+
+  it("les deux interrupteurs d'accès distant ont une ANCRE qui tombe dans l'onglet Agents", () => {
+    const ancres = new Map(ANCRES_PROFONDES.instance);
+    expect(ancres.get("chat-remote-agents")).toBe("agents");
+    expect(ancres.get("chat-remote-tools")).toBe("agents");
+    // ⚠️ L'ancre est portée par le CHAMP (`anchor`), donc l'id existe au rendu.
+    const champs = ALL_FIELDS.filter((field) => field.anchor !== undefined);
+    expect(champs.map((field) => field.path).sort()).toEqual([
+      "chat.remoteAgents",
+      "chat.remoteTools",
+    ]);
+    for (const champ of champs) {
+      expect(anchresDuCatalogue(), champ.path).toContain(champ.anchor);
+    }
+    function anchresDuCatalogue(): string[] {
+      return [...ancres.keys()];
+    }
+    // Le rendu POSE l'identifiant (sans quoi le défilement tomberait à côté).
+    expect(CONFIG_JS).toContain('if (typeof field.anchor === "string"');
+    expect(CONFIG_JS).toContain("row.id = field.anchor;");
+  });
+
+  it("le libellé du champ « Agents distants » est CELUI du chemin de refus du serveur", () => {
+    // ⚠️ Le message de refus d'un outil long envoie vers un chemin qui doit
+    // désigner un contrôle EXISTANT : page Instance → onglet « Agents » → libellé.
+    const champ = ALL_FIELDS.find((field) => field.path === "chat.remoteAgents");
+    expect(champ?.label).toBe("Agents distants");
+    expect(REMOTE_AGENTS_SETTING_PATH).toBe(`Configuration → Agents → ${champ?.label}`);
+    expect(REMOTE_AGENTS_SETTING_PATH).not.toContain("Discussions");
+    expect(REMOTE_AGENTS_SETTING_PATH).not.toContain("Conversation");
+    // ⚠️ Et le panneau de la page Bot ne les rend PLUS (un seul contrôle par clé).
+    expect(lire("chat-panel.js")).not.toContain('cle: "chat.remoteAgents"');
+    expect(lire("chat-panel.js")).not.toContain('cle: "chat.remoteTools"');
+  });
+
+  it("la page Bot en garde un RENVOI (on ne cherche pas un réglage disparu)", () => {
+    const distant = groupe("acces-distant");
+    expect(distant?.renvoi?.instance?.lien).toEqual({
+      href: "/bots#plateformes",
+      libelle: "Bot · Plateformes",
+    });
   });
 });
 
@@ -749,7 +887,7 @@ describe("⑧ LOT 35i — onglet « Mémoire » d'un bot et sessions Pi", () => 
     "memory.setAside.maxChunks",
   ];
 
-  it("les 8 clés `bot` + l'interrupteur de consolidation sont dans l'onglet Mémoire du bot", () => {
+  it("les 8 clés `bot` sont dans l'onglet Mémoire du bot (la consolidation n'y est plus)", () => {
     const onglets = groupesParOnglet("bot", GROUPS);
     const memoire = onglets.memoire ?? [];
     const cles = new Set(
@@ -760,10 +898,13 @@ describe("⑧ LOT 35i — onglet « Mémoire » d'un bot et sessions Pi", () => 
       // Ce sont bien des clés `bot` au schéma (aucune clé d'instance glissée ici).
       expect(SCOPES[cle], cle).toBe("bot");
     }
-    expect(cles.has("memory.consolidation.enabled")).toBe(true);
-    expect(SCOPES["memory.consolidation.enabled"]).toBe("mixte");
-    // ⚠️ Aucune clé d'INSTANCE de la planification ne fuit dans l'onglet du bot.
+    // ⚠️ CLASSEMENT VALIDÉ : l'interrupteur de consolidation est passé `mixte` →
+    // `instance`. Il n'est donc PLUS dans l'onglet Mémoire d'un bot.
+    expect(cles.has("memory.consolidation.enabled")).toBe(false);
+    expect(SCOPES["memory.consolidation.enabled"]).toBe("instance");
+    // ⚠️ Aucune clé d'INSTANCE (ni la planification, ni l'interrupteur) ne fuit ici.
     for (const cle of [
+      "memory.consolidation.enabled",
       "memory.consolidation.cron",
       "memory.consolidation.timeZone",
       "memory.consolidation.budgetTokens",

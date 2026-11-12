@@ -25,10 +25,15 @@
  *
  * ⚠️ LIMITES AFFICHÉES, pas cachées : les demandes d'APPROBATION ne sont pas relayées dans
  * un canal et la MÉMOIRE durable n'est pas branchée en mode distant.
+ *
+ * ⚠️ CE PANNEAU NE PORTE PLUS LES DEUX INTERRUPTEURS D'ACCÈS DISTANT : « Agents
+ * distants » (`chat.remoteAgents`) et « Outils distants » (`chat.remoteTools`) sont
+ * des clés d'INSTANCE (classement validé) et vivent désormais dans le catalogue de
+ * la page Instance, onglet « Agents » (`config-fields.js`, groupe `acces-distant`).
+ * Seul `chat.mode` — le choix de plateforme d'UN bot — reste ici.
  */
 
 import { badgeFor } from "./chat-mode.js";
-import { cheminConfigBot, idBotActif } from "./bots-api.js";
 import { formatDateTimeFr } from "./horodatage.js";
 
 /** En-tête exigé par les routes de discussion (lecture ET écriture). */
@@ -181,243 +186,6 @@ const PLATFORMS = [
   },
 ];
 
-/**
- * Libellés du réglage « Agents distants » (`chat.remoteAgents`).
- *
- * ⚠️ CE SONT LES MOTS EMPLOYÉS PAR LE MESSAGE DE REFUS d'un outil long
- * (`REMOTE_AGENTS_SETTING_PATH`, `src/llm/tool-policy.ts`) : « Configuration →
- * Conversation → Agents distants (tout en bas de la page) ». L'onglet s'appelle
- * « Conversation » — ⚠️ PAS « Discussions », qui n'existe pas comme onglet
- * (défaut de production corrigé le 2026-11-02). Renommer ce libellé sans renommer
- * le chemin rendrait le refus inutilisable — un test statique verrouille l'égalité.
- */
-export const REMOTE_AGENTS_LABEL = "Agents distants";
-
-/**
- * Id STABLE du contrôle : c'est AUSSI l'ancre de la page (`/config#chat-remote-agents`),
- * reconnue par `tabFromHash` (`public/ui/config.js`) pour ouvrir l'onglet
- * « Conversation » puis défiler jusqu'ici.
- */
-export const REMOTE_AGENTS_ANCHOR = "chat-remote-agents";
-
-/**
- * SECOND réglage, INDÉPENDANT (demande utilisateur du 2026-11-02 : « images oui,
- * agents non » était impossible avec un seul interrupteur).
- *
- * ⚠️ Les deux contrôles sont côte à côte et NE partagent AUCUNE option : changer
- * l'un ne touche pas l'autre. C'est la seule façon de répondre à « est-ce que je
- * peux différencier l'accès aux agents de l'accès aux outils ? ».
- */
-export const REMOTE_TOOLS_LABEL = "Outils distants";
-
-/** Ancre de page du contrôle « Outils distants » (`/config#chat-remote-tools`). */
-export const REMOTE_TOOLS_ANCHOR = "chat-remote-tools";
-
-/**
- * Texte affiché quand l'état effectif n'a PAS pu être lu (`GET /api/chat/status`).
- *
- * ⚠️ On n'affiche JAMAIS « Désactivé » dans ce cas : ce serait un état effectif
- * INVENTÉ, et l'utilisateur croirait la délégation coupée alors qu'elle ne l'est
- * peut-être pas (défaut de production constaté le 2026-11-02).
- */
-export const REMOTE_AGENTS_UNKNOWN = "Valeur inconnue (impossible de joindre le serveur)";
-
-/** Texte d'aide du réglage « Agents distants ». */
-export const REMOTE_AGENTS_HELP =
-  "Ouvre l'accès aux MACHINES que vous avez appairées : déléguer une tâche à un agent, " +
-  "lister les agents, consulter le coffre de secrets (noms seulement). Activé : Yuki peut " +
-  "DÉLÉGUER un travail long (il part en arrière-plan, son résultat revient dans le canal). " +
-  "Désactivé (défaut) : aucune délégation, aucune commande, aucun transfert de fichier. " +
-  "⚠️ La GÉNÉRATION D'IMAGE ne dépend PAS de ce réglage : elle est ouverte par « " +
-  "Outils distants » ci-dessous. ⚠️ Réglage GLOBAL : il vaut pour TOUS les canaux " +
-  "suivis, et n'importe quel membre d'un canal peut alors faire exécuter du travail sur " +
-  "vos machines.";
-
-/** Texte d'aide du réglage « Outils distants ». */
-export const REMOTE_TOOLS_HELP =
-  "Ouvre les capacités qui ne touchent à AUCUNE machine : génération d'image, libraire " +
-  "(recherche, lecture, archivage, capture de page), archive « vie antérieure » et " +
-  "recherche dans les conversations archivées. Activé : ces outils fonctionnent dans un " +
-  "canal sans ouvrir la délégation. Désactivé (défaut) : Yuki converse, lit les pièces " +
-  "jointes et publie des messages, mais ne génère rien et n'interroge aucune archive. " +
-  "⚠️ Restent TOUJOURS ouverts : lister/lire une pièce jointe, publier dans un canal " +
-  "suivi, envoyer un fichier déjà rattaché à la conversation. ⚠️ Restent TOUJOURS " +
-  "fermés : les outils qui demandent une approbation humaine (commande, capture " +
-  "d'écran, transfert de fichier, demande de secret).";
-
-/**
- * MONTE une section de réglage d'accès distant.
- *
- * ⚠️ DEUX contrôles, DEUX réglages (2026-11-02) : ce n'est pas cosmétique —
- * chacun écrit SA clé de configuration et lit SA valeur effective (`distant.agents`
- * ou `distant.outils`). Aucun des deux ne devine l'autre.
- *
- * ⚠️ Ce réglage n'avait AUCUNE interface au départ : le message de refus renvoyait
- * vers un chemin qui n'existait pas, et l'activer demandait d'éditer `config.json`.
- * La valeur effective vient du serveur (`GET /api/chat/status`), jamais d'une
- * supposition locale.
- *
- * ⚠️ ÉTAT INCONNU ASSUMÉ : si `GET /api/chat/status` échoue, le `<select>` affiche
- * « Valeur inconnue (impossible de joindre le serveur) » et les DEUX contrôles sont
- * désactivés — on ne modifie pas un état qu'on ne connaît pas, et on n'affiche pas
- * un « Désactivés (défaut) » qui serait un mensonge.
- */
-function renderRemoteSwitch({
-  label,
-  anchor,
-  aide: texteAide,
-  cle,
-  flux,
-  lire,
-  textes,
-  request,
-  report,
-  shared,
-  refresh,
-}) {
-  const section = h("section", { class: "config-group" });
-  const title = h("h2", { class: "config-group__title", text: label });
-  const aide = h("p", { class: "config-helper", text: texteAide });
-  const select = h("select", {
-    class: "config-input",
-    id: anchor,
-    "aria-label": label,
-  });
-  for (const [valeur, libelle] of textes.options) {
-    select.append(h("option", { value: valeur, text: libelle }));
-  }
-  /** ⚠️ Option d'ÉTAT INCONNU : présente SEULEMENT quand le statut manque. */
-  const optionInconnue = h("option", { value: "inconnue", text: REMOTE_AGENTS_UNKNOWN });
-  let inconnueAffichee = false;
-  const save = h("button", {
-    class: "button button--small",
-    type: "button",
-    text: "Enregistrer le réglage",
-  });
-  const etat = h("p", { class: "config-helper" });
-  save.addEventListener("click", () => {
-    void (async () => {
-      // ⚠️ Garde supplémentaire : un clic ne doit jamais écrire une valeur dont on
-      // n'a pas lu l'état courant (`shared.state` absent).
-      if (lire(shared.state) === undefined) {
-        render();
-        return;
-      }
-      try {
-        // ⚠️ RÉGLAGE PROPRE AU BOT ACTIF (`chat.remoteAgents`/`chat.remoteTools`) :
-        // il s'écrit sur la route DE CE BOT, jamais sur `/api/config` (qui le
-        // refuse : `bot_scoped_field`). La valeur est validée par le schéma
-        // serveur et appliquée à chaud (`apply: hot`). L'en-tête de FLUX est le
-        // même diagnostic que la page Configuration.
-        const botId = await idBotActif();
-        await request(cheminConfigBot(botId), {
-          method: "PUT",
-          headers: {
-            "content-type": "application/json",
-            "x-yuki-config": "1",
-            "x-yuki-config-flow": flux,
-          },
-          body: JSON.stringify({ [cle]: select.value }),
-        });
-        await refresh();
-      } catch (error) {
-        await report(etat, "Réglage non enregistré", error);
-      }
-    })();
-  });
-  section.append(
-    title,
-    aide,
-    h("div", { class: "config-actions" }, [select, save]),
-    etat,
-  );
-
-  function render() {
-    const valeur = lire(shared.state);
-    if (valeur === undefined) {
-      // ⚠️ État NON LU (statut indisponible, ou pas encore arrivé) : on le DIT, et on
-      // n'offre pas d'écriture.
-      if (!inconnueAffichee) {
-        select.append(optionInconnue);
-        inconnueAffichee = true;
-      }
-      select.value = "inconnue";
-      select.disabled = true;
-      save.disabled = true;
-      // La RAISON de l'échec n'est pas recopiée dans le texte (elle peut être longue) :
-      // elle est disponible au survol, et JOURNALISÉE côté client.
-      etat.title = typeof shared.error === "string" ? shared.error : "";
-      etat.textContent =
-        "Valeur effective : inconnue (impossible de joindre le serveur) — rechargez la page " +
-        "pour réessayer.";
-      return;
-    }
-    if (inconnueAffichee) {
-      select.removeChild(optionInconnue);
-      inconnueAffichee = false;
-    }
-    select.disabled = false;
-    save.disabled = false;
-    select.value = valeur === "actives" ? "actives" : "desactive";
-    etat.textContent = valeur === "actives" ? textes.actives : textes.desactives;
-  }
-
-  return { element: section, render };
-}
-
-/**
- * Section « Agents distants » (`chat.remoteAgents`) : les MACHINES appairées.
- *
- * ⚠️ Montée EN PREMIER dans le panneau : c'est la section que cherche la personne
- * qui lit le chemin d'un refus (« Configuration → Conversation → Agents distants »),
- * et l'ordre ne change rien à l'independent des deux réglages.
- */
-function renderRemoteAgents(deps) {
-  return renderRemoteSwitch({
-    label: REMOTE_AGENTS_LABEL,
-    anchor: REMOTE_AGENTS_ANCHOR,
-    aide: REMOTE_AGENTS_HELP,
-    cle: "chat.remoteAgents",
-    flux: "chat-remote-agents",
-    lire: (state) => state?.distant?.agents,
-    textes: {
-      options: [
-        ["desactive", "Désactivés (défaut)"],
-        ["actives", "Activés (délégation possible)"],
-      ],
-      actives: "Valeur effective : agents ACTIVÉS (délégation disponible dans les canaux).",
-      desactives:
-        "Valeur effective : agents DÉSACTIVÉS (aucune délégation, aucune commande, " +
-        "aucun transfert de fichier depuis un canal).",
-    },
-    ...deps,
-  });
-}
-
-/** Section « Outils distants » (`chat.remoteTools`) : image, libraire, archives. */
-function renderRemoteTools(deps) {
-  return renderRemoteSwitch({
-    label: REMOTE_TOOLS_LABEL,
-    anchor: REMOTE_TOOLS_ANCHOR,
-    aide: REMOTE_TOOLS_HELP,
-    cle: "chat.remoteTools",
-    flux: "chat-remote-tools",
-    lire: (state) => state?.distant?.outils,
-    textes: {
-      options: [
-        ["desactive", "Désactivés (défaut)"],
-        ["actives", "Activés (images, libraire, archives)"],
-      ],
-      actives:
-        "Valeur effective : outils ACTIVÉS (génération d'image, libraire, archives " +
-        "disponibles dans les canaux).",
-      desactives:
-        "Valeur effective : outils DÉSACTIVÉS (pas de génération d'image, pas de " +
-        "libraire, pas d'archive depuis un canal).",
-    },
-    ...deps,
-  });
-}
 
 /**
  * Monte le panneau (une section par plateforme câblée côté serveur).
@@ -474,8 +242,6 @@ export function initChatPanel(deps) {
       shared.error = undefined;
       mount();
       for (const platform of platforms) platform.render();
-      remoteAgents.render();
-      remoteTools.render();
       signalerPremierRendu();
     } catch (error) {
       // ⚠️ ON N'INVENTE RIEN : l'état précédent est OUBLIÉ (un état périmé serait un
@@ -490,8 +256,6 @@ export function initChatPanel(deps) {
       for (const platform of platforms) {
         platform.setError(`Impossible de lire l'état des discussions : ${message}`);
       }
-      remoteAgents.render();
-      remoteTools.render();
       signalerPremierRendu();
     }
   }
@@ -508,27 +272,25 @@ export function initChatPanel(deps) {
   );
 
   /**
-   * ⚠️ DEUX RÉGLAGES D'ACCÈS DISTANT, INDÉPENDANTS : « Agents distants » (les
-   * machines appairées) et « Outils distants » (image, libraire, archives). Ils
-   * décident des outils de TOUS les canaux, donc ils n'appartiennent à aucune
-   * plateforme — chacun est monté UNE fois.
+   * ⚠️ LES DEUX INTERRUPTEURS D'ACCÈS DISTANT NE SONT PLUS ICI. « Agents distants »
+   * et « Outils distants » (`chat.remoteAgents`, `chat.remoteTools`) sont des clés
+   * d'INSTANCE depuis le classement validé (`docs/classement-des-reglages.md`) :
+   * ils sont rendus par le CATALOGUE de la page Instance (onglet « Agents »,
+   * `config-fields.js` groupe `acces-distant`, `#chat-remote-agents` /
+   * `#chat-remote-tools`). Ce panneau-ci ne rend plus que les PLATEFORMES et les
+   * canaux suivis de CE bot (`chat.mode` reste une clé de bot).
    *
-   * ⚠️ ORDRE : les AGENTS d'abord — c'est ce chemin que nomme le message de refus
-   * d'un outil long (`REMOTE_AGENTS_SETTING_PATH`).
+   * ⚠️ Les garder ici en double aurait créé DEUX contrôles écrivant la même clé,
+   * dont un sur une route qui la refuse (`instance_scoped_field`).
    */
-  const remoteAgents = renderRemoteAgents({ request, report, shared, refresh });
-  const remoteTools = renderRemoteTools({ request, report, shared, refresh });
-
-  const limits = h("p", {
+  const limites = h("p", {
     class: "config-helper",
     text:
       "Limites assumées : les demandes d'APPROBATION ne sont pas relayées dans un canal " +
       "(une approbation se donne dans l'interface web), et la MÉMOIRE durable n'est pas " +
-      "branchée en mode distant — il n'existe donc AUCUN réglage pour l'activer. Seuls « " +
-      REMOTE_AGENTS_LABEL +
-      " » et « " +
-      REMOTE_TOOLS_LABEL +
-      " » décident des outils d'un canal, et chacun n'ouvre QUE sa famille.",
+      "branchée en mode distant — il n'existe donc AUCUN réglage pour l'activer. Les deux " +
+      "interrupteurs qui décident des outils d'un canal (« Agents distants », « Outils " +
+      "distants ») sont communs à l'installation : voir Configuration → Agents.",
   });
 
   /**
@@ -544,19 +306,9 @@ export function initChatPanel(deps) {
       shared.state === null
         ? platforms
         : platforms.filter((platform) => shared.state?.[platform.platform] !== undefined);
-    root.replaceChildren(
-      ...visibles.map((platform) => platform.element),
-      remoteAgents.element,
-      remoteTools.element,
-      limits,
-    );
+    root.replaceChildren(...visibles.map((platform) => platform.element), limites);
   }
   mount();
-  // ⚠️ Avant la première lecture, l'état effectif est INCONNU : on l'affiche comme tel
-  // au lieu de laisser les `<select>` sur « Désactivés (défaut) », une valeur que
-  // personne n'a lue (défaut de production corrigé le 2026-11-02).
-  remoteAgents.render();
-  remoteTools.render();
 
   void refresh();
   return { element: root, refresh };

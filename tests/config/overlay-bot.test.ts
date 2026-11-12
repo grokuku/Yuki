@@ -200,6 +200,73 @@ describe("④ précédence : env > overlay > store commun > défaut", () => {
   });
 });
 
+/**
+ * ⚠️ CLASSEMENT VALIDÉ — TROIS CLÉS RECLASSÉES `instance` : `chat.remoteAgents`,
+ * `chat.remoteTools` (avant `bot`) et `memory.consolidation.enabled` (avant
+ * `mixte`). Ce bloc verrouille la CONSÉQUENCE DE LECTURE : la valeur effective est
+ * la COMMUNE, jamais celle de l'overlay du bot (sinon la valeur d'instance ne
+ * serait plus jamais lue), et l'écriture par la route du bot est REFUSÉE.
+ */
+describe("⑤ter clés reclassées `instance` : lecture COMMUNE, écriture de bot refusée", () => {
+  /** Clé → valeur VALIDE de son enum (les deux familles n'ont pas le même vocabulaire). */
+  const RECLASSEES: ReadonlyArray<readonly [string, string]> = [
+    ["chat.remoteAgents", "actives"],
+    ["chat.remoteTools", "actives"],
+    ["memory.consolidation.enabled", "off"],
+  ];
+
+  it("la valeur de l'INSTANCE est lue (aucun chemin ne lit l'overlay du bot)", () => {
+    const b = banc();
+    const runtime = b.runtime();
+    runtime.update({ "chat.remoteAgents": "actives" }, { portee: "instance" });
+    runtime.update({ "chat.remoteTools": "actives" }, { portee: "instance" });
+    runtime.update({ "memory.consolidation.enabled": "off" }, { portee: "instance" });
+    expect(runtime.getString("chat.remoteAgents")).toBe("actives");
+    expect(runtime.getString("chat.remoteTools")).toBe("actives");
+    expect(runtime.getString("memory.consolidation.enabled")).toBe("off");
+    // Un overlay de bot qui porterait encore l'ancienne portée est IGNORÉ
+    // (averti, jamais appliqué) : la valeur d'instance reste la seule lue.
+    for (const [cle] of RECLASSEES) {
+      expect(runtime.snapshotPour("yuki").fields[cle].scope).toBe("instance");
+    }
+  });
+
+  it("une valeur d'OVERLAY périmée ne reprend pas la main (précédence)", () => {
+    const b = banc();
+    mkdirSync(join(b.racine, "state", "bots", "yuki"), { recursive: true });
+    writeFileSync(
+      b.overlayPath,
+      JSON.stringify({
+        "chat.remoteTools": "actives",
+        "memory.consolidation.enabled": "off",
+      }),
+      "utf8",
+    );
+    const runtime = b.runtime();
+    // ⚠️ Valeurs d'INSTANCE (défauts) : l'overlay ne les surcharge plus.
+    expect(runtime.getString("chat.remoteTools")).toBe("desactive");
+    expect(runtime.getString("memory.consolidation.enabled")).toBe("on");
+    expect(runtime.warnings.join("\n")).toContain("chat.remoteTools");
+  });
+
+  it("aucune des trois ne s'écrit par la route du bot (`instance_scoped_field`)", () => {
+    for (const [cle, valeur] of RECLASSEES) {
+      const runtime = banc().runtime();
+      // Le REFUS est porté par le runtime (`ConfigUpdateOptions.refuser`), avec
+      // `instance_scoped_field` en `code` et une phrase actionnable en message.
+      expect(() =>
+        runtime.update({ [cle]: valeur }, { portee: "bot", refuser: "instance" }),
+      ).toThrow(/page de l'instance/);
+      // Et la route d'instance l'accepte (jamais de clé sans écran NI sans route).
+      const runtime2 = banc().runtime();
+      expect(() =>
+        runtime2.update({ [cle]: valeur }, { portee: "instance", refuser: "bot" }),
+      ).not.toThrow();
+      expect(runtime2.getString(cle)).toBe(valeur);
+    }
+  });
+});
+
 describe("⑤ `mixte` + `et` : CONJONCTION (le bot ne peut que RESTREINDRE)", () => {
   it("instance OFF ⇒ OFF même si le bot est ON", () => {
     const runtime = banc().runtime();
@@ -217,9 +284,9 @@ describe("⑤ `mixte` + `et` : CONJONCTION (le bot ne peut que RESTREINDRE)", ()
 
   it("bot OFF ⇒ OFF même si l'instance est ON", () => {
     const runtime = banc().runtime();
-    runtime.update({ "memory.consolidation.enabled": "on" }, { portee: "instance" });
-    runtime.update({ "memory.consolidation.enabled": "off" }, { portee: "bot" });
-    expect(runtime.getString("memory.consolidation.enabled")).toBe("off");
+    runtime.update({ "push.enabled": "on" }, { portee: "instance" });
+    runtime.update({ "push.enabled": "off" }, { portee: "bot" });
+    expect(runtime.getString("push.enabled")).toBe("off");
   });
 
   it("les DEUX côtés absents ⇒ défaut du schéma (aucun changement de comportement)", () => {

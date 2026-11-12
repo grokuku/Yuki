@@ -68,6 +68,21 @@ export const OPTIONS = {
     ["on", "activées"],
     ["off", "désactivées"],
   ],
+  // Niveau de confirmation des commandes exécutées sur une machine appairée.
+  // ⚠️ Mêmes mots que le serveur (`AGENT_LEVEL_LABELS`, `src/agents/directory.ts`) :
+  // l'interface et les messages d'erreur doivent dire la même chose.
+  agentLevel: [
+    ["disabled", "désactivé (exécution refusée)"],
+    ["always", "validation humaine à chaque commande"],
+    ["destructive", "validation humaine des commandes destructrices"],
+    ["never", "envoi direct (aucune validation)"],
+  ],
+  // Accès depuis un CANAL suivi (Mattermost / Discord) — deux interrupteurs
+  // INDÉPENDANTS (`chat.remoteAgents` / `chat.remoteTools`).
+  accesDistant: [
+    ["desactive", "désactivé (défaut)"],
+    ["actives", "activé"],
+  ],
 };
 
 export const GROUPS = [
@@ -357,7 +372,9 @@ export const GROUPS = [
         ],
         helper:
           "Une passe relit TOUTE la mémoire avec le modèle LOURD : elle fusionne les doublons, corrige et " +
-          "supprime ce qui est transitoire. Chaque passe est archivée (versions restaurables ci-dessous).",
+          "supprime ce qui est transitoire. Chaque passe est archivée (versions restaurables ci-dessous). " +
+          "⚠️ Interrupteur d'INSTALLATION : il vaut pour tous les bots. Un bot sans mémoire reste sauté " +
+          "(il n'a rien à consolider).",
       },
       {
         path: "memory.consolidation.cron",
@@ -550,6 +567,64 @@ export const GROUPS = [
     ],
   },
   {
+    id: "exploitation",
+    // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
+    tabs: { instance: "systeme" },
+    title: "Exploitation de l'installation",
+    // ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) — ces quatre
+    // réglages n'avaient AUCUN écran (modifiables seulement dans le fichier de
+    // configuration). Ils sont d'INSTANCE : ils bornent l'installation entière
+    // (nombre de bots en marche, durée d'un récapitulatif, journal d'audit).
+    fields: [
+      {
+        path: "bots.maxActifs",
+        label: "Bots qui tournent en même temps",
+        kind: "number",
+        min: 1,
+        max: 6,
+        helper:
+          "Plafond des bots dont le gateway est en marche simultanément (défaut 3, maximum " +
+          "6). Au-delà, les bots supplémentaires restent arrêtés et le disent — leurs " +
+          "réglages et leur mémoire sont conservés. Appliqué au redémarrage.",
+      },
+      {
+        path: "recap.timeoutMs",
+        label: "Délai maximal d'un récapitulatif de conversation (ms)",
+        kind: "number",
+        min: 5000,
+        max: 600000,
+        advanced: true,
+        helper:
+          "Appel LLM LONG (récapitulatif exhaustif d'une conversation) : délai GÉNÉREUX à " +
+          "dessein, 180 000 ms (3 min) par défaut. Au-delà, la rédaction est interrompue et " +
+          "l'échec est annoncé — aucune conversation n'est créée.",
+      },
+      {
+        path: "audit.retentionDays",
+        label: "Rétention du journal d'audit (jours)",
+        kind: "number",
+        min: 1,
+        max: 3650,
+        advanced: true,
+        helper:
+          "Durée de conservation des exécutions auditées (commande, machine, horodatage, " +
+          "code de sortie — jamais la sortie complète). Défaut 30 jours ; 3 650 = jamais " +
+          "purgé en pratique.",
+      },
+      {
+        path: "audit.maxSizeMb",
+        label: "Taille maximale d'un fichier d'audit (Mo)",
+        kind: "number",
+        min: 1,
+        max: 4096,
+        advanced: true,
+        helper:
+          "Au-delà, le journal d'audit est ROTÉ (nouveau fichier, l'ancien est conservé " +
+          "jusqu'à la rétention ci-dessus). Défaut 16 Mo.",
+      },
+    ],
+  },
+  {
     id: "affichage",
     // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
     tabs: { instance: "systeme" },
@@ -589,6 +664,96 @@ export const GROUPS = [
           "séparées par des virgules. ⚠️ Yuki tourne dans un conteneur : elle ne " +
           "peut pas deviner l'adresse de l'hôte, il faut la déclarer ici. " +
           "Modification appliquée à chaud (certificat régénéré sans redémarrage).",
+      },
+      // ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) — ces trois
+      // réglages n'avaient AUCUN écran : ils se changeaient uniquement dans le
+      // fichier de configuration. Ils sont d'INSTANCE (réseau et garde-fou de la
+      // machine qui héberge Yuki, pas d'un bot).
+      {
+        path: "agents.bindHost",
+        label: "Interface d'écoute du canal machines",
+        kind: "text",
+        helper:
+          "Adresse locale sur laquelle Yuki écoute les agents appairés. Défaut « 0.0.0.0 » " +
+          "(toutes les interfaces — nécessaire dans un conteneur). « 127.0.0.1 » n'accepte " +
+          "que la boucle locale : aucun agent du réseau ne pourra plus se connecter.",
+      },
+      {
+        path: "agents.port",
+        label: "Port du canal machines",
+        kind: "number",
+        min: 1,
+        max: 65535,
+        helper:
+          "Port d'écoute des agents appairés (défaut 9443). À changer seulement si ce port " +
+          "est déjà pris sur la machine : les agents devront être reconfigurés avec le même.",
+      },
+      {
+        path: "agents.defaultLevel",
+        label: "Confirmation demandée aux agents",
+        kind: "select",
+        options: OPTIONS.agentLevel,
+        helper:
+          "Niveau appliqué à un agent qui n'a pas le sien. Défaut : validation humaine des " +
+          "commandes DESTRUCTRICES (suppressions, formatages). « désactivé » refuse toute " +
+          "exécution ; « envoi direct » n'en valide aucune — le plus permissif.",
+      },
+    ],
+  },
+  {
+    id: "acces-distant",
+    // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
+    tabs: { instance: "agents" },
+    title: "Depuis un canal (Mattermost / Discord)",
+    // ⚠️ DÉPLACÉ de la page Bot (onglet « Plateformes ») vers la page Instance :
+    // ces deux clés sont désormais d'INSTANCE (`docs/classement-des-reglages.md`).
+    // Le MODE de conversation (`chat.mode`), lui, reste propre à chaque bot.
+    renvoi: {
+      instance: {
+        texte:
+          "Le choix de la plateforme et le jeton de connexion d'un bot se règlent " +
+          "sur SA page :",
+        lien: { href: "/bots#plateformes", libelle: "Bot · Plateformes" },
+      },
+    },
+    fields: [
+      {
+        path: "chat.remoteAgents",
+        // ⚠️ Libellé EXACT du chemin d'activation écrit dans le message de refus
+        // (`REMOTE_AGENTS_SETTING_PATH`, `src/llm/tool-policy.ts`) : le renommer
+        // ici sans le renommer là-bas rendrait le refus inutilisable.
+        label: "Agents distants",
+        anchor: "chat-remote-agents",
+        kind: "select",
+        options: OPTIONS.accesDistant,
+        helper:
+          "Ouvre l'accès aux MACHINES que vous avez appairées : déléguer une tâche à un " +
+          "agent, lister les agents, consulter le coffre de secrets (noms seulement). " +
+          "Activé : Yuki peut DÉLÉGUER un travail long (il part en arrière-plan, son " +
+          "résultat revient dans le canal). Désactivé (défaut) : aucune délégation, aucune " +
+          "commande, aucun transfert de fichier. ⚠️ La GÉNÉRATION D'IMAGE ne dépend PAS de " +
+          "ce réglage : elle est ouverte par « Outils distants » ci-dessous. ⚠️ Réglage " +
+          "GLOBAL à toute l'installation : il vaut pour TOUS les canaux suivis, et " +
+          "n'importe quel membre d'un canal peut alors faire exécuter du travail sur vos " +
+          "machines.",
+      },
+      {
+        path: "chat.remoteTools",
+        label: "Outils distants",
+        anchor: "chat-remote-tools",
+        kind: "select",
+        options: OPTIONS.accesDistant,
+        helper:
+          "Ouvre les capacités qui ne touchent à AUCUNE machine : génération d'image, " +
+          "libraire (recherche, lecture, archivage, capture de page), archive « vie " +
+          "antérieure » et recherche dans les conversations archivées. Activé : ces outils " +
+          "fonctionnent dans un canal sans ouvrir la délégation. Désactivé (défaut) : Yuki " +
+          "converse, lit les pièces jointes et publie des messages, mais ne génère rien et " +
+          "n'interroge aucune archive. ⚠️ Restent TOUJOURS ouverts : lister/lire une pièce " +
+          "jointe, publier dans un canal suivi, envoyer un fichier déjà rattaché à la " +
+          "conversation. ⚠️ Restent TOUJOURS fermés : les outils qui demandent une " +
+          "approbation humaine (commande, capture d'écran, transfert de fichier, demande de " +
+          "secret).",
       },
     ],
   },
@@ -977,6 +1142,17 @@ export const FIELD_DEFAULTS = {
   "push.enabled": "on",
   "push.contact": "mailto:yuki@localhost",
   "agents.serverName": "",
+  "agents.bindHost": "0.0.0.0",
+  "agents.port": 9443,
+  "agents.defaultLevel": "destructive",
+  "bots.maxActifs": 3,
+  "recap.timeoutMs": 180000,
+  "audit.retentionDays": 30,
+  "audit.maxSizeMb": 16,
+  // Accès depuis un canal : DEUX interrupteurs INDÉPENDANTS, désactivés par défaut
+  // (clés d'INSTANCE depuis le classement validé).
+  "chat.remoteAgents": "desactive",
+  "chat.remoteTools": "desactive",
   "librarian.baseUrl": "",
   "librarian.screenshot": "on",
   "librarian.archiveTimeoutMs": 30000,

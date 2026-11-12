@@ -335,8 +335,9 @@ describe("⑥ bot NON actif — overlay séparé, état du bot actif intact", ()
 
 /**
  * ⚠️ LOT 35i — ONGLET « MÉMOIRE » DE LA PAGE BOT : les 8 clés `bot` du schéma
- * (mémoire durable) + l'interrupteur `memory.consolidation.enabled` (MIXTE)
- * doivent s'ENREGISTRER par la route du bot, dans l'overlay de CE bot.
+ * (mémoire durable) doivent s'ENREGISTRER par la route du bot, dans l'overlay de
+ * CE bot. ⚠️ L'interrupteur `memory.consolidation.enabled` n'en fait plus partie :
+ * il est d'INSTANCE (classement validé) et la route du bot le REFUSE.
  *
  * Sur le code d'origine, deux des huit clés (`memory.setAside.*`) n'étaient
  * proposées par AUCUN onglet : elles n'étaient réglables nulle part.
@@ -378,21 +379,25 @@ describe("⑦ onglet « Mémoire » d'un bot — les 8 clés `bot` s'enregistren
     for (const cle of CLES_MEMOIRE_BOT) expect(overlay[cle], cle).toBe(patch[cle]);
   });
 
-  it("l'interrupteur de consolidation est MIXTE et s'écrit des DEUX côtés", async () => {
+  it("l'interrupteur de consolidation est d'INSTANCE : refusé par la route du bot", async () => {
+    // ⚠️ CLASSEMENT VALIDÉ : `memory.consolidation.enabled` est passée de `mixte`
+    // à `instance`. La route du bot le REFUSE (`instance_scoped_field`) au lieu de
+    // l'écrire dans l'overlay — sinon la valeur ne serait plus jamais lue.
     const b = banc({ registre: registreDeuxBots() });
     const bot = await appel(b, "PUT", "/api/bots/yuki/config", {
       "memory.consolidation.enabled": "off",
     });
-    expect(bot.status).toBe(200);
-    expect(bot.body.fields["memory.consolidation.enabled"]).toMatchObject({
-      scope: "mixte",
-      value: "off",
-    });
+    expect(bot.status).toBe(400);
+    expect(JSON.stringify(bot.body)).toContain("instance_scoped_field");
+    // La route d'instance, elle, l'écrit et la valeur est RELUE.
     const instance = await appel(b, "PUT", "/api/config", {
-      "memory.consolidation.enabled": "on",
+      "memory.consolidation.enabled": "off",
     });
     expect(instance.status).toBe(200);
-    // Conjonction `et` : instance `on` + bot `off` ⇒ `off` (le bot ne consolide pas).
+    expect(instance.body.fields["memory.consolidation.enabled"]).toMatchObject({
+      scope: "instance",
+      value: "off",
+    });
     expect(b.runtime.getString("memory.consolidation.enabled")).toBe("off");
   });
 });

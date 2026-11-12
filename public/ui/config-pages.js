@@ -195,22 +195,27 @@ export function groupesParOnglet(pageId, groups) {
 /**
  * ANCRES PROFONDES : id d'un CONTRÔLE → onglet qui le contient, PAR PAGE.
  *
- * ⚠️ `/bots?b=<slug>#chat-remote-agents` doit ouvrir « Plateformes » et défiler
- * jusqu'au réglage « Agents distants » ; `/bots?b=<slug>#declencheurs` ouvre la
- * page de gestion des sources. Ces ancres sont celles que nomment les messages
- * de refus et les liens de l'interface : sans elles, on ne trouve pas le
- * réglage.
+ * ⚠️ `/config#chat-remote-agents` doit ouvrir « Agents » et défiler jusqu'au
+ * réglage « Agents distants » (page INSTANCE : la clé est d'instance) ;
+ * `/bots?b=<slug>#declencheurs` ouvre la page de gestion des sources. Ces ancres
+ * sont celles que nomment les messages de refus et les liens de l'interface :
+ * sans elles, on ne trouve pas le réglage.
  *
  * ⚠️ La correspondance se fait par ID D'ÉLÉMENT, jamais par GROUPE de champs.
  * Une ancre inconnue retombe sur le premier onglet de la page.
  */
 /** @type {Record<string, Array<[string, string]>>} */
 export const ANCRES_PROFONDES = {
-  instance: [],
+  instance: [
+    // ⚠️ « Agents distants » / « Outils distants » ont été DÉPLACÉS de la page Bot
+    // (onglet « Plateformes ») vers la page Instance (onglet « Agents ») : leurs
+    // clés sont d'INSTANCE depuis le classement validé. Ce sont des champs du
+    // catalogue (`config-fields.js`, groupe `acces-distant`), dont l'id d'élément
+    // est porté par le champ (`anchor`).
+    ["chat-remote-agents", "agents"],
+    ["chat-remote-tools", "agents"],
+  ],
   bot: [
-    // « Agents distants » / « Outils distants » (contrôles de `chat-panel.js`).
-    ["chat-remote-agents", "plateformes"],
-    ["chat-remote-tools", "plateformes"],
     // Page de gestion des déclencheurs : `#declencheurs` (lien de la boîte de
     // notifications), `#sources` (ancien lien, conservé) et
     // `#journal-declencheurs` (colonne « dernier résultat »).

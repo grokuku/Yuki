@@ -18,8 +18,9 @@
  *  ③ **reprise au tick suivant** : une séquence interrompue (échec, arrêt) est
  *     reprise pour les bots qui ne sont pas encore faits, sans refaire les
  *     précédents ;
- *  ④ un bot aux **capacités VIDES** ne consolide pas (il ne mémorise rien) et
- *     un bot dont la consolidation est éteinte de SON côté est sauté ;
+ *  ④ un bot aux **capacités VIDES** ne consolide pas (il ne mémorise rien) : c'est
+ *     là que se décide « ce bot participe ou non », plus par un côté bot de
+ *     l'interrupteur (portée `instance` depuis le classement validé) ;
  *  ⑤ les réglages de PLANIFICATION (cron, fuseau, budget, rétention) restent
  *     d'**INSTANCE** : il n'y a qu'un calendrier, donc qu'un rendez-vous.
  *
@@ -61,7 +62,7 @@ export interface BotConsolidable {
 
 /** Réglages de PLANIFICATION — d'INSTANCE (un seul calendrier). */
 export interface ReglagesConsolidationInstance {
-  /** `memory.consolidation.enabled` côté instance (le côté bot est par bot). */
+  /** `memory.consolidation.enabled` — interrupteur d'INSTALLATION (portée `instance`). */
   enabled: boolean;
   cron: string;
   fuseau: string;

@@ -69,11 +69,19 @@ export const WS_PATH = "/ws";
  * Découplé du domaine `agents` : le transport ne connaît que ce contrat.
  */
 export interface AgentsGatewayPort {
-  /** Résumé des agents appairés (actifs ET révoqués), VISIBLES par le bot du run. */
-  list(): WireAgent[];
   /**
-   * Bot DU RUN qui produit la trame `agents` (lot 35g). Absent ⇒ la trame n'en
-   * porte pas : l'interface n'applique alors aucun filtre local (le serveur a
+   * Résumé des agents appairés (actifs ET révoqués), VISIBLES par `botId`.
+   *
+   * ⚠️ LOT 40 — le bot est celui de la CONNEXION (`client.botId`, résolu par
+   * `rattacherBot`, jamais une valeur brute du client) : une page ouverte sur
+   * `/?b=kohai` ne doit voir QUE les agents de `kohai`. Absent ⇒ bot par défaut
+   * du port (`botActif`), comportement d'avant (mono-bot).
+   */
+  list(botId?: string): WireAgent[];
+  /**
+   * Bot par DÉFAUT du port (lot 35g), utilisé quand la connexion n'a déclaré
+   * aucun `botId` (client d'avant L4, mono-bot). Absent ⇒ la trame `agents` ne
+   * porte pas de bot et l'interface n'applique aucun filtre local (le serveur a
    * déjà filtré). Ce n'est JAMAIS une valeur fournie par le client.
    */
   botActif?(): string;
@@ -1033,24 +1041,35 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     broadcastAgents();
   });
 
-  /** Diffuse l'état des agents (trame de CONTRÔLE, aucun `seq` consommé). */
+  /**
+   * Diffuse l'état des agents (trame de CONTRÔLE, aucun `seq` consommé).
+   *
+   * ⚠️ LOT 40 — UNE TRAME PAR CLIENT : la visibilité dépend du bot DE LA
+   * CONNEXION (une page = un bot), pas du bot du processus. Diffuser une trame
+   * unique ferait voir à la page de `kohai` les agents de `yuki`.
+   */
   function broadcastAgents(): void {
     if (!agentPort) return;
-    const frame = agentsFrame();
-    for (const client of clients) sendDirect(client, frame);
+    for (const client of clients) sendDirect(client, agentsFrame(client));
   }
 
   /**
-   * Contenu COMMUN des trames `agents` (connexion et diffusion) : la liste est
-   * DÉJÀ filtrée par le port (visibilité du bot du run, lot 35g) ; le bot est
-   * joint pour que l'interface applique la même règle. Une seule fabrique ⇒
-   * jamais une trame qui divergerait de l'autre.
+   * Contenu d'une trame `agents` pour UN client : la liste est filtrée par le
+   * port sur le bot de ce client (validé au rattachement) ; le bot est joint
+   * pour que l'interface applique la même règle. Une seule fabrique ⇒ jamais
+   * une trame qui divergerait de l'autre.
    */
-  function agentsFrame(): { type: "agents"; agents: WireAgent[]; botActif?: string } {
-    const bot = agentPort?.botActif?.();
+  function agentsFrame(client?: ClientState): {
+    type: "agents";
+    agents: WireAgent[];
+    botActif?: string;
+  } {
+    // ⚠️ `client.botId` n'est renseigné QUE par `rattacherBot` (bot existant ET
+    // démarré) : aucune valeur forgée par le navigateur n'arrive ici.
+    const bot = client?.botId ?? agentPort?.botActif?.();
     return {
       type: "agents",
-      agents: agentPort ? agentPort.list() : [],
+      agents: agentPort ? agentPort.list(bot) : [],
       ...(bot !== undefined ? { botActif: bot } : {}),
     };
   }
@@ -1058,7 +1077,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   /** Envoie l'état des agents au seul client (connexion / reprise). */
   function sendAgents(client: ClientState): void {
     if (!agentPort) return;
-    sendDirect(client, agentsFrame());
+    sendDirect(client, agentsFrame(client));
   }
 
   /** Décision humaine (Valider / Refuser) reçue depuis la conversation. */

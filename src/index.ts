@@ -36,6 +36,7 @@ import {
   CertificateAuthority,
   closeAgentsServer,
   createAgentsServer,
+  DirectoriesAgentsBots,
   installServerCertificateReload,
   localIpAddresses,
   maxSizeBytesFromMb,
@@ -621,6 +622,12 @@ async function main(): Promise<void> {
   let executionBots: ExecutionBots | undefined;
   let agentDirectory: AgentDirectoryService | undefined;
   /**
+   * ⚠️ LOT 40 — UN ANNUAIRE PAR BOT (`lister_agents`/`etat_agent`). Construit
+   * avec le bloc agents ; `undefined` si l'init agents a échoué (aucun outil de
+   * consultation n'existe alors).
+   */
+  let directoriesAgents: DirectoriesAgentsBots<AgentDirectoryService> | undefined;
+  /**
    * TRANSFERT de fichiers vers/depuis une machine (capacité `files`).
    * ⚠️ Créé APRÈS le stockage des fichiers (`filesStore`) : il en a besoin pour
    * déposer sur le disque de Yuki les octets récupérés.
@@ -772,12 +779,15 @@ async function main(): Promise<void> {
     // (`disabled` ⇄ niveau précédent) + abonnement aux changements. On ne
     // diffuse JAMAIS le secret : ici, un simple résumé.
     agentsGateway = {
-      // ⚠️ VISIBILITÉ (lot 35g) : la barre latérale ne reçoit QUE les agents
-      // autorisés pour le bot du run (le filtre est SERVEUR : une trame ne peut
-      // pas être gonflée côté navigateur). `bots` est joint pour que l'interface
-      // puisse appliquer la même règle en défense supplémentaire.
-      list: () =>
-        agentStore.listPourBot(botDuRun).map((record) => {
+      // ⚠️ VISIBILITÉ (lot 35g, PAR CONNEXION depuis le lot 40) : la barre
+      // latérale ne reçoit QUE les agents autorisés pour le bot DE LA
+      // CONVERSATION (`?b=` de la page, validé au rattachement WS) — jamais ceux
+      // du bot du processus. `bots` est joint pour que l'interface applique la
+      // même règle en défense supplémentaire.
+      list: (botId) => {
+        const bot =
+          typeof botId === "string" && botId.trim() !== "" ? botId.trim() : botDuRun;
+        return agentStore.listPourBot(bot).map((record) => {
           const lockStatus = agentLock?.status(record.agentId);
           return {
             agentId: record.agentId,
@@ -794,7 +804,8 @@ async function main(): Promise<void> {
               ? { unlockRemainingMs: lockStatus.remainingMs }
               : {}),
           };
-        }),
+        });
+      },
       botActif: () => botDuRun,
       setEnabled: (agentId, enabled) => {
         agentStore.setEnabled(agentId, enabled);
@@ -856,16 +867,34 @@ async function main(): Promise<void> {
     // désactivée (consulter n'est pas exécuter). Le VERROU est lu ici aussi :
     // c'est ce qui fait apparaître `locked` dans `lister_agents`/`etat_agent` et
     // dans l'annuaire injecté au modèle à chaque tour.
-    agentDirectory = new AgentDirectoryService({
-      store: agentStore,
-      hub: agentHub,
-      audit: auditLog,
-      // ⚠️ VISIBILITÉ (lot 35g) : `lister_agents`/`etat_agent` ne citent QUE les
-      // agents autorisés pour le bot du run.
-      botCourant,
-      ...(agentLock ? { lock: agentLock } : {}),
+    //
+    // ⚠️ LOT 40 — UN ANNUAIRE PAR BOT. Avant, un SEUL annuaire portait
+    // `botCourant = () => botDuRun` : le modèle de n'importe quel bot voyait
+    // donc, via `lister_agents`/`etat_agent`, les machines autorisées pour le
+    // bot de la PILE — celles qu'il n'a pas le droit d'utiliser. Le filtre
+    // porte désormais sur le bot DU RUN (propriétaire du canal, bot de la
+    // conversation locale). ⚠️ Le refus d'exécution (`agent_not_allowed`) est
+    // INCHANGÉ : cacher ne protège rien, refuser protège.
+    directoriesAgents = new DirectoriesAgentsBots<AgentDirectoryService>({
+      botDePile,
+      bots: bots.aDemarrer.map((entree) => entree.id),
+      creer: (botId) =>
+        new AgentDirectoryService({
+          store: agentStore,
+          hub: agentHub,
+          audit: auditLog,
+          // ⚠️ VISIBILITÉ (lot 35g, par bot depuis le lot 40) :
+          // `lister_agents`/`etat_agent` ne citent QUE les agents autorisés pour
+          // CE bot.
+          botCourant: () => botId,
+          ...(agentLock ? { lock: agentLock } : {}),
+          logger,
+        }),
       logger,
     });
+    // NON-RÉGRESSION : `agentDirectory` EST l'annuaire du bot de la pile (jamais
+    // un second annuaire pour le même bot).
+    agentDirectory = directoriesAgents.principal;
     if (agentsBindHost === "0.0.0.0") {
       // ⚠️ `0.0.0.0` écoute sur TOUTES les interfaces (y compris une interface
       // publique éventuelle). Le port machines n'étant protégé que par mTLS, il
@@ -2421,7 +2450,16 @@ async function main(): Promise<void> {
         // `outils` que sous `chat.remoteTools = actives` (l'image comprise). Les ports
         // sont fournis dans les deux cas — aucune seconde implémentation, donc aucun
         // garde-fou parallèle à maintenir.
-        ...(agentDirectory ? { agents: agentDirectory } : {}),
+        // ⚠️ LOT 40 : l'annuaire est celui du bot PROPRIÉTAIRE du canal (le même
+        // que la délégation ci-dessous). Un agent autorisé pour un autre bot ne
+        // doit pas apparaître dans `lister_agents` de ce run-là.
+        ...(directoriesAgents
+          ? {
+              agents: directoriesAgents.pour(
+                proprietairesCanaux.proprietaire(conversationId) ?? botDePile,
+              ),
+            }
+          : {}),
         ...(secretStore ? { secrets: secretStore } : {}),
         // ⚠️ DÉLÉGATION : les jobs créés depuis un canal sont rattachés au CANAL
         // (`channelScopedDelegation`, `src/pi/sdk/remote-run-tools.ts`) et leur
@@ -3205,9 +3243,12 @@ async function main(): Promise<void> {
     // UNE PAR UNE, dans l'ordre du registre, en commençant APRÈS le dernier bot
     // consolidé (curseur persisté) : jamais deux fois de suite le même bot, et
     // une séquence interrompue reprend au tick suivant.
-    // ⚠️ Les réglages de PLANIFICATION restent d'INSTANCE (un seul calendrier) ;
-    // seul `memory.consolidation.enabled` se décide AUSSI par bot (« ce bot
-    // consolide ou non », clé MIXTE lue dans l'overlay de CE bot).
+    // ⚠️ Les réglages de PLANIFICATION sont d'INSTANCE (un seul calendrier) ;
+    // `memory.consolidation.enabled` AUSSI depuis le classement validé
+    // (`docs/classement-des-reglages.md`) : c'est un interrupteur d'INSTALLATION,
+    // il n'a plus de côté « par bot ».
+    // ⚠️ Ce qui reste PAR BOT n'est pas un réglage : un bot sans capacité `memoire`
+    // (ou sans volume) est SAUTÉ par l'ordonnanceur — on ne régresse pas là-dessus.
     // ⚠️ Aucun store n'est ouvert tant qu'aucune passe n'est demandée : un bot
     // qui ne consolide pas ne coûte rien.
     fabriqueMemoireBots = new FabriqueMemoireBots({
@@ -3249,12 +3290,13 @@ async function main(): Promise<void> {
       logger,
     });
     const passeDuBot = (botId: string): ConsolidationHebdo | undefined => {
-      // ⚠️ Côté BOT : la valeur EFFECTIVE de `memory.consolidation.enabled` pour
-      // CE bot (conjonction avec le côté instance, `mixteMerge: "et"`).
-      const snapshot = config.snapshotPour(botId);
-      const cote = snapshot.fields["memory.consolidation.enabled"];
-      const actif = cote && "value" in cote ? cote.value : "on";
-      if (String(actif) !== "on") return undefined;
+      // ⚠️ `memory.consolidation.enabled` est une clé d'INSTANCE : on lit la valeur
+      // COMMUNE (`config.getString`), jamais l'overlay du bot — une clé `instance`
+      // y serait ignorée de toute façon (`runtime.ts`).
+      // ⚠️ Un bot sans mémoire est déjà sauté (capacités vides ⇒ aucun bot retenu par
+      // l'ordonnanceur ; stores absents ⇒ `undefined` ci-dessous) : ce n'est pas
+      // l'interrupteur qui doit le faire.
+      if (config.getString("memory.consolidation.enabled") !== "on") return undefined;
       const stores = fabriqueMemoireBots?.storesDe(botId);
       if (!stores) return undefined;
       const archive = new ConsolidationArchiveStore({
