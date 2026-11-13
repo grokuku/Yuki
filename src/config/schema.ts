@@ -69,6 +69,16 @@ interface DescripteurCommun {
    * heure FAUSSE sans le dire.
    */
   readonly ianaTimeZone?: true;
+  /**
+   * Le texte doit être une URL `http://` ou `https://` VALIDE, hôte compris
+   * (`invalid_url` sinon). Sans ce drapeau, une adresse de service inventée
+   * passerait le PUT et n'échouerait qu'à la connexion — c'est-à-dire plus tard,
+   * dans un journal que personne ne lit.
+   *
+   * ⚠️ La validation vit ICI (côté serveur) : `type="url"` dans le navigateur ne
+   * protège de rien, un `PUT` direct contourne le formulaire.
+   */
+  readonly httpUrl?: true;
 }
 
 /** Portée d'un réglage (lot 35b) : OBLIGATOIRE sur chaque clé. */
@@ -690,6 +700,35 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     type: "enum",
     enum: ["on", "off"],
     default: "off",
+    apply: "hot",
+  },
+  // ⚠️ ADRESSE DU SERVEUR (exigence utilisateur du 2026-11-13 : « il y a pas
+  // d'option pour rentrer l'adresse du serveur mattermost »). Discord a une URL
+  // IMPLICITE (`discord.com`) ; Mattermost est AUTO-HÉBERGÉ : chaque
+  // installation a la sienne, et deux bots peuvent viser DEUX serveurs
+  // différents ⇒ portée `bot` (un seul bot ne peut pas porter deux adresses,
+  // mais deux bots si).
+  //
+  // ⚠️ SURCHARGE, PAS UN NOUVEAU MONDE : l'ANCIEN paramètre — l'URL de
+  // `chat-mirror.json` → `baseUrl`, réglée depuis le lot 18 par
+  // `PUT /api/chat/mattermost` et par le champ « URL du serveur » de
+  // `/config → Conversation` — reste lu ET écrit. Cette clé ne fait que le
+  // SURCHARGER par bot.
+  // ⚠️ DÉFAUT VIDE, et c'est volontaire : aucune URL inventée. Vide = « pas
+  // d'adresse propre à ce bot » ⇒ l'ancienne valeur s'applique (une instance
+  // déjà configurée se connecte sans rien ressaisir) ; vide des deux côtés =
+  // « adresse non configurée » (état affiché, pas une erreur). Dès que cette clé
+  // est renseignée, elle PRIME (voir `resoudreUrlMattermost`,
+  // `src/chat/mattermost/url-bot.ts`).
+  //
+  // ⚠️ `httpUrl` : une adresse invalide est REFUSÉE au PUT (`PUT /api/bots/<id>/config`),
+  // pas au moment de la connexion.
+  "chat.mattermost.url": {
+    scope: "bot",
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    httpUrl: true,
     apply: "hot",
   },
   "chat.discord.enabled": {
@@ -1432,6 +1471,15 @@ export function validateDescriptor(
         "Ce champ ne peut pas être vide. Utilisez null pour rétablir la valeur par défaut.",
     };
   }
+  if (descriptor.httpUrl === true && !isHttpUrl(trimmed)) {
+    return {
+      ok: false,
+      code: "invalid_url",
+      message:
+        `Adresse invalide : « ${trimmed} ». Attendu une URL complète en http:// ou ` +
+        "https://, par exemple https://mattermost.exemple.fr (sans barre finale).",
+    };
+  }
   if (descriptor.ianaTimeZone === true && !isKnownTimeZone(trimmed)) {
     return {
       ok: false,
@@ -1442,6 +1490,23 @@ export function validateDescriptor(
     };
   }
   return { ok: true, value: trimmed };
+}
+
+/**
+ * `true` si la valeur est une URL `http`/`https` complète (hôte non vide).
+ *
+ * ⚠️ Aucune dépendance : `URL` fait partie de la plateforme. Une chaîne vide
+ * n'arrive jamais ici (`allowEmpty` la fait accepter plus haut).
+ */
+function isHttpUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  return parsed.hostname !== "";
 }
 
 /**

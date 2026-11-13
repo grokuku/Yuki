@@ -130,6 +130,7 @@ import { DiscordChatAdapter, discordAttachmentPort } from "./chat/discord/adapte
 import { ChatAttachmentCache } from "./chat/attachments.js";
 import { DISCORD_MAX_DOWNLOAD_BYTES } from "./chat/discord/types.js";
 import { prepareMessageImages } from "./chat/mattermost/attachments.js";
+import { resoudreUrlMattermost } from "./chat/mattermost/url-bot.js";
 import { DISCORD_TOKEN_SECRET_NAME, MATTERMOST_TOKEN_SECRET_NAME } from "./secrets/references.js";
 import type { ChatDiscordPort, ChatMattermostPort } from "./gateway/routes/chat.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
@@ -2557,11 +2558,31 @@ async function main(): Promise<void> {
     return parseJudgeAnswer(answer);
   };
 
+  /**
+   * URL MATTERMOST EFFECTIVE d'un bot : la clé PAR BOT prime, l'ancienne valeur
+   * du miroir sert de REPLI.
+   *
+   * ⚠️ CE QUE CE HELPER FERME (demande utilisateur du 2026-11-13 : « il y a pas
+   * d'option pour rentrer l'adresse du serveur mattermost ») : jusqu'ici l'URL
+   * venait d'UNE seule valeur GLOBALE, `ChatMirrorStore.baseUrl()`
+   * (`src/chat/mirror/store.ts:393`, persistée dans `<state>/chat-mirror.json`,
+   * écrite par `PUT /api/chat/mattermost` → `setBaseUrl`, store.ts:494). Deux
+   * bots visant deux instances auto-hébergées n'avaient donc AUCUN moyen d'être
+   * distingués — et le panneau « Plateformes » d'un bot n'exposait même pas le
+   * champ. La règle de précédence elle-même vit dans
+   * `src/chat/mattermost/url-bot.ts` (testable sans SDK).
+   */
+  const urlMattermost = (lireConfig: () => ConfigRuntime, miroir: ChatMirrorStore): string =>
+    resoudreUrlMattermost(
+      () => lireConfig().getString("chat.mattermost.url"),
+      () => miroir.baseUrl(),
+    );
+
   // Client MATTERMOST (lot 2) : REST + temps réel + miroir. ⚠️ Le JETON ne sort
   // JAMAIS d'ici (coffre `YUKI_CHAT_MATTERMOST`, lu à chaque appel) et il n'est ni
   // journalisé ni renvoyé par une route.
   const mattermost: MattermostChatAdapter = new MattermostChatAdapter({
-    baseUrl: () => chatMirror.baseUrl(),
+    baseUrl: () => urlMattermost(() => config, chatMirror),
     token: () => secretStore?.lookup(MATTERMOST_TOKEN_SECRET_NAME),
     store: chatMirror,
     logger,
@@ -2630,9 +2651,24 @@ async function main(): Promise<void> {
   };
 
   const mattermostPort: ChatMattermostPort = {
-    baseUrl: () => chatMirror.baseUrl(),
+    baseUrl: () => urlMattermost(() => config, chatMirror),
     tokenConfigured: () =>
       nomsSecretsChat(botDuRun, "mattermost").some((nom) => secretStore?.has(nom) === true),
+    /**
+     * ⚠️ L'ANCIEN PARAMÈTRE RESTE, TEL QUEL — C'EST LUI QUI SERT DE DÉFAUT.
+     *
+     * C'est la route `PUT /api/chat/mattermost` (bot de la pile) et le bouton
+     * « Enregistrer l'URL » de `/config → Conversation → Discussions — Mattermost` :
+     * depuis le lot 18 ils écrivent `chat-mirror.json` → `baseUrl`, et c'est ce
+     * chemin de lecture que la connexion utilise. Le changer aurait fait perdre
+     * la valeur d'une instance déjà configurée (elle serait devenue inopérante
+     * sans que personne ne l'ait demandé).
+     *
+     * Ce qui est AJOUTÉ, et seulement ajouté : la clé PAR BOT `chat.mattermost.url`
+     * (overlay du bot, panneau « Plateformes » de `/bots?b=<bot>`), qui PRIME sur
+     * cette valeur commune. Elle n'est écrite QUE là : deux écritures pour une
+     * même adresse finiraient par diverger.
+     */
     saveBaseUrl: (url) => chatMirror.setBaseUrl(url),
     saveToken: (token) => {
       if (!secretStore) {
@@ -2672,7 +2708,7 @@ async function main(): Promise<void> {
             record.historiqueAnterieur === true || record.borneAtteinte === true,
         }));
       return {
-        url: chatMirror.baseUrl(),
+        url: urlMattermost(() => config, chatMirror),
         // ⚠️ INTERRUPTEUR de l'instance (`chat.mattermost.enabled`, réglage du bot
         // de la pile) : c'est lui qui autorise — ou non — la connexion.
         active: config.getString("chat.mattermost.enabled") === "on",
@@ -2881,7 +2917,7 @@ async function main(): Promise<void> {
       // adaptateur (donc SON jeton), jamais celui d'un autre bot.
       const porte: { cache?: MattermostAttachmentCache } = {};
       const adaptateur = new MattermostChatAdapter({
-        baseUrl: () => miroir.baseUrl(),
+        baseUrl: () => urlMattermost(configBot, miroir),
         token,
         store: miroir,
         logger,

@@ -236,8 +236,7 @@ describe("connexion — refus explicite quand il manque quelque chose", () => {
     expect(JSON.stringify(response.body)).not.toContain("jeton-1");
   });
 
-  it("un échec de connexion est un 502 lisible (jamais un succès supposé)", async () => {
-    const { port, state } = spyPort({
+  it("un échec de connexion est un 502 lisible (jamais un succès supposé)", async () => {    const { port, state } = spyPort({
       connect: async () => {
         throw new Error("le serveur refuse l'authentification");
       },
@@ -247,6 +246,27 @@ describe("connexion — refus explicite quand il manque quelque chose", () => {
     const response = await call("POST", "/api/chat/mattermost/connexion", {}, port);
     expect(response.status).toBe(502);
     expect(JSON.stringify(response.body)).toContain("refuse l'authentification");
+  });
+
+  /**
+   * ⚠️ GARDE AJOUTÉE (2026-11-13) : l'URL fournie avec le bouton « Se connecter »
+   * est désormais écrite dans la clé PAR BOT `chat.mattermost.url`, dont le schéma
+   * refuse une adresse non http(s). Sans contrôle ici, le corps
+   * `{ baseUrl: "pas une url" }` aurait levé une erreur de configuration (500)
+   * au lieu d'un refus explicite — et n'aurait rien dit à l'utilisateur.
+   */
+  it("refuse une URL invalide fournie avec la connexion (400, pas un 500)", async () => {
+    const { port, state } = spyPort();
+    state.token = true;
+    const response = await call(
+      "POST",
+      "/api/chat/mattermost/connexion",
+      { baseUrl: "pas une url" },
+      port,
+    );
+    expect(response.status).toBe(400);
+    expect(state.baseUrl).toBe("");
+    expect(state.connected).toBe(0);
   });
 });
 

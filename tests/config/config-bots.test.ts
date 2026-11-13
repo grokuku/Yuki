@@ -8,7 +8,7 @@
  *    la PILE, et **pas** ceux que le plafond a refusés ;
  *  - ⚠️ GARDE DE NON-RÉGRESSION : avec UN bot actif, la Map rend EXACTEMENT la
  *    configuration que `main()` construisait avant ce morceau (instantané
- *    complet : 90 clés, origines, défauts, portées, verrou d'environnement) ;
+ *    complet : 92 clés, origines, défauts, portées, verrou d'environnement) ;
  *  - écrire l'overlay d'un bot ne change NI la valeur du principal, NI le store
  *    commun, NI l'overlay du principal ;
  *  - un identifiant invalide est REFUSÉ (il devient un nom de dossier).
@@ -231,7 +231,7 @@ describe("② GARDE DE NON-RÉGRESSION : 1 bot actif ⇒ valeurs IDENTIQUES", ()
     expect(principal?.originOf("llm.light.model")).toBe("env");
     expect(principal?.isLockedByEnv("llm.light.model")).toBe(true);
     expect(principal?.getString("prompts.light")).toBe("prompt du store");
-    // ⚠️ L'instantané COMPLET (91 clés : valeurs, origines, défauts, portées,
+    // ⚠️ L'instantané COMPLET (92 clés : valeurs, origines, défauts, portées,
     // verrous) doit être rigoureusement le même.
     expect(principal?.snapshot()).toEqual(avant.snapshot());
   });

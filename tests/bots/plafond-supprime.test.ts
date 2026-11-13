@@ -125,11 +125,14 @@ describe("① 4 bots `actif` ⇒ 4 DÉMARRAGES (le cas de l'utilisateur)", () =>
 });
 
 describe("② `bots.maxActifs` n'est PLUS une clé de configuration", () => {
-  it("la clé, sa variable et sa portée ont disparu (compte : 91)", () => {
+  // ⚠️ GARDE RÉVISÉE (compte 91 → 92) : `chat.mattermost.url` est ajoutée le
+  // 2026-11-13 (adresse du serveur Mattermost par bot). Ce que cette garde
+  // protège reste inchangé : `bots.maxActifs` n'est PAS revenue.
+  it("la clé, sa variable et sa portée ont disparu (compte : 92)", () => {
     expect(CONFIG_SCHEMA["bots.maxActifs"]).toBeUndefined();
     expect(CONFIG_PATHS).not.toContain("bots.maxActifs");
     expect(envNameOf("bots.maxActifs")).toBeUndefined();
-    expect(CONFIG_PATHS.length).toBe(91);
+    expect(CONFIG_PATHS.length).toBe(92);
   });
 
   it("⚠️ `MAX_BOTS = 6` reste : bots CRÉABLES ≠ bots qui tournent", () => {

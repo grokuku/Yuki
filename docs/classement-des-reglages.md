@@ -71,11 +71,12 @@ Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est 
 | Budget de jetons par passe | `memory.consolidation.budgetTokens` | global | global — coût GPU commun | |
 | Nombre d'archives conservées | `memory.consolidation.retention` | global | global — archives d'installation | |
 
-## 4 · Canaux & notifications (7 clés)
+## 4 · Canaux & notifications (8 clés)
 
 | Réglage | Clé technique | Aujourd'hui | Avis | Décision |
 |---|---|---|---|---|
-| Mode de conversation | `chat.mode` | bot | bot — chaque bot a son canal | |
+| Mode de conversation | `chat.mode` | bot | bot — chaque bot a son canal |
+| Adresse du serveur Mattermost | `chat.mattermost.url` | bot | bot — Mattermost est AUTO-HÉBERGÉ : chaque bot peut viser son instance. **Ajoutée le 2026-11-13** comme **SURCHARGE par bot** de l'ancien paramètre (l'URL de `chat-mirror.json` → `baseUrl`, réglée depuis le lot 18 par `/config → Conversation` et `PUT /api/chat/mattermost`, **toujours lue et toujours écrite**). Défaut VIDE ⇒ l'ancienne valeur s'applique : une instance déjà configurée se connecte sans rien ressaisir. Vide des deux côtés = « adresse non configurée » (état, pas une erreur). | |
 | Agents distants autorisés | `chat.remoteAgents` | bot | bot — sécurité décidée par bot | |
 | Outils autorisés depuis un canal | `chat.remoteTools` | bot | bot — sécurité décidée par bot | |
 | Serveur Discord suivi | `chat.discord.guildId` | bot | bot — serveur du bot | |

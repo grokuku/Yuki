@@ -88,8 +88,11 @@ effectif ») et par `e2e-tts-ui`.
 - `mixte` ⇒ `mixteMerge` **déclaré** (`surcharge` | `et`), jamais deviné ;
   `et` n'est utilisé que sur des enums `off|on` (la conjonction n'a pas d'autre
   sens) ;
-- les 18 clés `bot` : `chat.mode`, `chat.remoteAgents`, `chat.remoteTools`,
-  `chat.discord.guildId`, `chat.discord.maxUploadBytes`, `tts.voice`,
+- les 19 clés `bot` : `chat.mode`, `chat.mattermost.enabled`,
+  `chat.mattermost.url` (ajoutée le 2026-11-13 : SURCHARGE par bot de l'ancien
+  paramètre `chat-mirror.json` → `baseUrl`, Mattermost étant auto-hébergé), `chat.discord.enabled`, `chat.remoteAgents`,
+  `chat.remoteTools`, `chat.discord.guildId`, `chat.discord.maxUploadBytes`,
+  `tts.voice`,
   `tts.emotion`, `tts.speed`, `tts.exaggeration`, `tts.cfg`, `memory.enabled`,
   `memory.recall.{topK,budgetChars,timeoutMs}`,
   `memory.extract.{maxItems,timeoutMs}`,

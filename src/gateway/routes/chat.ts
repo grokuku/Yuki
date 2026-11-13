@@ -4,7 +4,8 @@
  * Routes (TOUTES gardées par l'en-tête maison `X-Yuki-Config: 1`, comme `/api/config` :
  * `requireWriteGuards`, qui contrôle aussi `Origin`/`Host` quand ils sont présents) :
  *   GET   /api/chat/status                  → mode, état, capacités, état des plateformes
- *   PUT   /api/chat/mattermost             → { baseUrl } : URL du serveur
+ *   PUT   /api/chat/mattermost             → { baseUrl } : URL du serveur (ANCIEN paramètre,
+ *                                            `chat-mirror.json` → `baseUrl`, surchargé par bot)
  *   PUT   /api/chat/discord                → { guildId?, maxUploadBytes? } : réglages scalaires
  *   POST  /api/chat/<plateforme>/jeton     → { jeton } : écrit le jeton dans le coffre,
  *                                            ⚠️ affiché UNE SEULE FOIS, jamais relu
@@ -167,9 +168,9 @@ export interface ChatPlatformPort {
 
 /** Port Mattermost (URL de serveur en plus du contrat commun). */
 export interface ChatMattermostPort extends ChatPlatformPort {
-  /** URL enregistrée. */
+  /** URL EFFECTIVE (surcharge par bot `chat.mattermost.url`, sinon ANCIEN paramètre). */
   baseUrl(): string;
-  /** Enregistre l'URL (déjà validée par l'appelant). */
+  /** Enregistre l'ANCIEN paramètre (`chat-mirror.json` → `baseUrl`, déjà validé). */
   saveBaseUrl(url: string): void;
   view(): ChatMattermostView;
 }
@@ -498,13 +499,19 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
     }
     const body = parseBody(input.body);
     // L'URL (Mattermost) peut être fournie dans le même geste (bouton « Se connecter »).
+    // ⚠️ Elle est VALIDÉE ici aussi : elle part dans l'ANCIEN paramètre
+    // (`chat-mirror.json` → `baseUrl`), et un `ftp://` ou un texte libre y aurait
+    // dormi jusqu'à l'échec de connexion, sans dire pourquoi. Refus explicite (400).
     if (
       platform === "mattermost" &&
       body &&
       typeof body.baseUrl === "string" &&
       body.baseUrl.trim() !== ""
     ) {
-      (port as ChatMattermostPort).saveBaseUrl(body.baseUrl.trim());
+      const raw = body.baseUrl.trim();
+      const invalid = validateHttpUrl(raw, "l'URL du serveur Mattermost");
+      if (invalid !== null) return invalid;
+      (port as ChatMattermostPort).saveBaseUrl(raw);
     }
     if (body && typeof body.jeton === "string" && body.jeton.trim() !== "") {
       port.saveToken(body.jeton.trim());

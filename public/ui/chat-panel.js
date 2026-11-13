@@ -948,6 +948,9 @@ export function initChatPanelBot(deps) {
     active: { mattermost: false, discord: false },
     guildId: "",
     maxUploadBytes: "",
+    // ⚠️ ADRESSE DU SERVEUR MATTERMOST DE CE BOT (`chat.mattermost.url`, portée
+    // `bot`). Vide = « non configurée » : un fait affiché, jamais une erreur.
+    url: "",
     noms: new Set(),
     coffreConfigure: true,
     erreur: "",
@@ -1139,7 +1142,88 @@ export function initChatPanelBot(deps) {
     // Options PROPRES au bot (Discord) : serveur suivi et borne d'envoi.
     let guildInput = null;
     let uploadInput = null;
+    // Options PROPRES au bot (Mattermost) : ADRESSE DU SERVEUR. Mattermost est
+    // auto-hébergé — sans ce champ, aucun bot ne pouvait viser son instance
+    // (l'URL globale du miroir ne distinguait pas deux bots).
+    let urlInput = null;
     const optionsStatut = h("p", { class: "config-helper", role: "status" });
+    // ⚠️ ÉTAT de l'adresse, pas une erreur : vide = « non configurée » (ce bot
+    // reprend alors l'adresse commune, et si elle est vide aussi, la connexion
+    // est refusée explicitement — jamais une URL devinée).
+    const urlEtat = h("p", { class: "config-helper" });
+    if (plateforme.id === "mattermost") {
+      urlInput = h("input", {
+        class: "config-input",
+        type: "url",
+        id: "chat-bot-mattermost-url",
+        autocomplete: "off",
+        spellcheck: "false",
+        placeholder: "https://mattermost.exemple.fr",
+        "aria-label": `Adresse du serveur Mattermost de ${botNom}`,
+      });
+      const saveUrl = h("button", {
+        class: "button button--small",
+        type: "button",
+        text: "Enregistrer l'adresse",
+      });
+      saveUrl.addEventListener("click", () => {
+        void (async () => {
+          // ⚠️ La validation qui COMPTE est côté serveur (`httpUrl` du schéma) :
+          // ce refus-ci n'est qu'un confort, un PUT direct la contournerait.
+          const adresse = urlInput.value.trim();
+          if (adresse !== "" && !/^https?:\/\/[^\s/]+/.test(adresse)) {
+            optionsStatut.textContent =
+              "L'adresse doit être complète et commencer par http:// ou https:// " +
+              "(par exemple https://mattermost.exemple.fr, sans barre finale).";
+            return;
+          }
+          saveUrl.disabled = true;
+          optionsStatut.textContent = "Enregistrement…";
+          try {
+            await request(chemin, {
+              method: "PUT",
+              headers: BOT_WRITE_HEADERS,
+              body: JSON.stringify({ "chat.mattermost.url": adresse }),
+            });
+            optionsStatut.textContent =
+              adresse === ""
+                ? "Adresse effacée : ce bot reprend l'adresse commune (celle de " +
+                  "/config → Conversation)."
+                : "Adresse du serveur Mattermost enregistrée pour ce bot.";
+            await refresh();
+          } catch (error) {
+            optionsStatut.textContent = "";
+            await report("Adresse non enregistrée", error);
+          } finally {
+            saveUrl.disabled = false;
+          }
+        })();
+      });
+      enfants.push(
+        h("div", { class: "chat-panel__field" }, [
+          h("h3", { class: "config-group__title", text: "Options de ce bot" }),
+          h("div", { class: "config-row" }, [
+            h("label", {
+              class: "config-label",
+              for: "chat-bot-mattermost-url",
+              text: "Adresse du serveur Mattermost",
+            }),
+            urlInput,
+          ]),
+          h("div", { class: "config-actions" }, [saveUrl]),
+          h("p", {
+            class: "config-helper",
+            text:
+              "https://mattermost.exemple.fr — sans barre finale. Mattermost est " +
+              "auto-hébergé : chaque bot peut viser SON instance. Vide = pas d'adresse " +
+              "propre à ce bot : l'adresse commune de /config → Conversation s'applique " +
+              "(aucune URL n'est devinée).",
+          }),
+          urlEtat,
+          optionsStatut,
+        ]),
+      );
+    }
     if (plateforme.id === "discord") {
       guildInput = h("input", {
         class: "config-input",
@@ -1223,6 +1307,8 @@ export function initChatPanelBot(deps) {
       jetonEtat,
       guildInput,
       uploadInput,
+      urlInput,
+      urlEtat,
     };
   });
 
@@ -1234,9 +1320,10 @@ export function initChatPanelBot(deps) {
   const limites = h("p", {
     class: "config-helper",
     text:
-      "Limites assumées : l'URL du serveur Mattermost se règle depuis le panneau du bot " +
-      "de la pile (aucune route ne l'expose pour un autre bot), et les demandes " +
-      "d'APPROBATION ne sont pas relayées dans un canal.",
+      "Limites assumées : l'adresse du serveur Mattermost se règle ICI, pour ce bot " +
+      "(`chat.mattermost.url`) ; une adresse invalide est refusée par le serveur, pas " +
+      "seulement par le navigateur. Les demandes d'APPROBATION ne sont pas relayées " +
+      "dans un canal.",
   });
 
   /**
@@ -1288,6 +1375,16 @@ export function initChatPanelBot(deps) {
       if (section.uploadInput !== null && document.activeElement !== section.uploadInput) {
         section.uploadInput.value = etat.maxUploadBytes;
       }
+      if (section.urlInput !== null && document.activeElement !== section.urlInput) {
+        section.urlInput.value = etat.url;
+      }
+      if (section.urlEtat !== null) {
+        section.urlEtat.textContent =
+          etat.url === ""
+            ? "Adresse du serveur : NON CONFIGURÉE pour ce bot — l'adresse commune de " +
+              "/config → Conversation s'applique si elle est renseignée."
+            : `Adresse du serveur de ce bot : ${etat.url}`;
+      }
     }
     const messages = [etat.erreur, etat.statut].filter((texte) => texte !== "");
     erreurLecture.hidden = messages.length === 0;
@@ -1307,6 +1404,8 @@ export function initChatPanelBot(deps) {
       };
       etat.guildId = String(champs["chat.discord.guildId"]?.value ?? "");
       etat.maxUploadBytes = String(champs["chat.discord.maxUploadBytes"]?.value ?? "");
+      // ⚠️ Adresse Mattermost de CE bot : valeur EFFECTIVE (défaut vide du schéma).
+      etat.url = String(champs["chat.mattermost.url"]?.value ?? "");
     } catch (error) {
       erreurs.push(`configuration de ce bot illisible : ${apiMessage(error, "erreur inconnue")}`);
     }

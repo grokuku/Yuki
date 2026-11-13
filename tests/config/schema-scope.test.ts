@@ -53,8 +53,13 @@ function descriptor(path: string): FieldDescriptor {
 }
 
 describe("① la table des clés", () => {
-  it("déclare EXACTEMENT 91 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(91);
+  /**
+   * ⚠️ GARDE RÉVISÉE (« 91 → 92 clés ») : `chat.mattermost.url` est AJOUTÉE
+   * (adresse du serveur Mattermost par bot, exigence utilisateur du 2026-11-13).
+   * Le compte reste EXACT : aucune autre clé n'a bougé.
+   */
+  it("déclare EXACTEMENT 92 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(92);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
   });
 
@@ -72,10 +77,14 @@ describe("① la table des clés", () => {
     }
   });
 
-  it("répartition : 69 `instance` / 18 `bot` / 4 `mixte`", () => {
+  /**
+   * ⚠️ GARDE RÉVISÉE (« bot 18 → 19 ») : + `chat.mattermost.url` (2026-11-13).
+   * Instance et mixte inchangés : 69 / 19 / 4 = 92.
+   */
+  it("répartition : 69 `instance` / 19 `bot` / 4 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 69, bot: 18, mixte: 4 });
+    expect(compte).toEqual({ instance: 69, bot: 19, mixte: 4 });
   });
 
   it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {
@@ -259,13 +268,20 @@ describe("⑤ le bot actif de l'overlay", () => {
     expect(BOT_ID_DEFAUT).toBe(BOT_YUKI);
   });
 
-  it("les 18 clés `bot` sont celles établies (plateformes, voix, mémoire du bot)", () => {
+  /**
+   * ⚠️ GARDE RÉVISÉE (« 18 → 19 clés `bot` ») : `chat.mattermost.url` rejoint les
+   * clés de bot — Mattermost est auto-hébergé, chaque bot peut viser SON serveur.
+   */
+  it("les 19 clés `bot` sont celles établies (plateformes, voix, mémoire du bot)", () => {
     const bot = CONFIG_PATHS.filter((path) => descriptor(path).scope === "bot");
     expect(bot.sort()).toEqual(
       [
         // ⚠️ DEUX interrupteurs de plateforme (2026-11-10) : la plateforme
         // distante n'est plus un choix exclusif (`chat.mode` reste, LEGACY).
         "chat.mattermost.enabled",
+        // ⚠️ ADRESSE du serveur Mattermost, PAR BOT (2026-11-13) : Mattermost est
+        // auto-hébergé, deux bots peuvent viser deux instances différentes.
+        "chat.mattermost.url",
         "chat.discord.enabled",
         "chat.discord.guildId",
         "chat.discord.maxUploadBytes",

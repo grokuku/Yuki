@@ -371,11 +371,16 @@ describe("⑨ classement validé — portées changées et réglages sans écran
    *  - `chat.discord.*` : champs propres à la plateforme, rendus par la fabrique
    *    de `chat-panel.js` (`description.extraFields === "discord"`), qui les écrit
    *    sur les routes `PUT /api/chat/...` — ce sont bien des réglages DE BOT.
+   *  - `chat.mattermost.url` : ADRESSE du serveur Mattermost d'un bot (2026-11-13),
+   *    rendue par le panneau « Plateformes » d'un bot (`initChatPanelBot`, champ
+   *    `chat-bot-mattermost-url` → `PUT /api/bots/<id>/config`). Mattermost est
+   *    auto-hébergé : c'est une valeur DE BOT, jamais d'installation.
    */
   const CONTROLES_AILLEURS = [
     "tts.voice",
     "chat.mode",
     "chat.mattermost.enabled",
+    "chat.mattermost.url",
     "chat.discord.enabled",
     "chat.discord.guildId",
     "chat.discord.maxUploadBytes",
@@ -439,14 +444,16 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     const couvertes = new Set([...rendues("instance"), ...rendues("bot"), ...CONTROLES_AILLEURS]);
     const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
     expect(orphelines).toEqual([]);
-    // ⚠️ Et le compte doit être EXACT : 91 clés (92 − `bots.maxActifs`, supprimé
-    // avec le plafond de bots en marche), aucune oubliée par ce contrôle.
-    expect(Object.keys(SCOPES).length).toBe(91);
-    expect(couvertes.size).toBe(91);
+    // ⚠️ Et le compte doit être EXACT : 92 clés (91 + `chat.mattermost.url`,
+    // ajoutée le 2026-11-13 — adresse du serveur Mattermost PAR BOT), aucune
+    // oubliée par ce contrôle.
+    expect(Object.keys(SCOPES).length).toBe(92);
+    expect(couvertes.size).toBe(92);
     // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
     for (const [cle, fichier] of [
       ["tts.voice", "voices-panel.js"],
       ["chat.mattermost.enabled", "chat-panel.js"],
+      ["chat.mattermost.url", "chat-panel.js"],
       ["chat.discord.enabled", "chat-panel.js"],
     ] as const) {
       expect(lire(fichier), `${cle} dans ${fichier}`).toContain(cle);
