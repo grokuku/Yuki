@@ -60,7 +60,7 @@ const coffre =
 /** Résolution + adaptateurs, comme `main()` les construit pour ses bots. */
 function construireBots(options: {
   bots: string[];
-  botDePile: string;
+  botDuRun: string;
   jetons: Record<string, string>;
   actifs: { botId: string; plateforme: string }[];
   connecte?: (cle: string) => void;
@@ -77,7 +77,7 @@ function construireBots(options: {
     logger,
   });
   const adaptateurs = new AdaptateursChatBots<AdaptateurChatDemarrable & { jeton?: string }>({
-    botDePile: options.botDePile,
+    botDuRun: options.botDuRun,
     resolution,
     creer: (jeton) => {
       const cle = cleAdaptateur(jeton.botId, jeton.plateforme);
@@ -99,7 +99,7 @@ describe("① un bot SECONDAIRE dont le jeton existe et la plateforme est activ�
   it("l'adaptateur Discord de `granolaf` EST construit (et son jeton est le sien)", () => {
     const { adaptateurs, crees, resolution } = construireBots({
       bots: ["yuki", "granolaf"],
-      botDePile: "yuki",
+      botDuRun: "yuki",
       jetons: { YUKI_CHAT_GRANOLAF__DISCORD: "dc-granolaf" },
       actifs: [{ botId: "granolaf", plateforme: "discord" }],
     });
@@ -119,7 +119,7 @@ describe("① un bot SECONDAIRE dont le jeton existe et la plateforme est activ�
     const connectes: string[] = [];
     const { adaptateurs } = construireBots({
       bots: ["yuki", "granolaf"],
-      botDePile: "yuki",
+      botDuRun: "yuki",
       jetons: { YUKI_CHAT_GRANOLAF__DISCORD: "dc-granolaf" },
       actifs: [{ botId: "granolaf", plateforme: "discord" }],
       connecte: (cle) => void connectes.push(cle),
@@ -143,7 +143,7 @@ describe("① un bot SECONDAIRE dont le jeton existe et la plateforme est activ�
   it("un bot dont la plateforme est ÉTEINTE n'a aucun adaptateur (le local reste)", () => {
     const { adaptateurs, crees } = construireBots({
       bots: ["yuki", "granolaf"],
-      botDePile: "yuki",
+      botDuRun: "yuki",
       jetons: { YUKI_CHAT_GRANOLAF__DISCORD: "dc-granolaf" },
       actifs: [],
     });
@@ -170,7 +170,7 @@ describe("④ ⚠️ plus de plafond : TOUS les bots actifs ont leur adaptateur"
     expect(demarrage.aDemarrer.map((bot) => bot.id)).toEqual(["yuki", "grolaf", "granolaf"]);
     const { crees } = construireBots({
       bots: demarrage.aDemarrer.map((bot) => bot.id),
-      botDePile: "yuki",
+      botDuRun: "yuki",
       jetons: { YUKI_CHAT_GRANOLAF__DISCORD: "dc-granolaf" },
       actifs: [{ botId: "granolaf", plateforme: "discord" }],
     });
@@ -189,7 +189,7 @@ describe("⑤ un échec de connexion n'est jamais silencieux", () => {
       logger,
     });
     const adaptateurs = new AdaptateursChatBots<AdaptateurChatDemarrable>({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       resolution,
       creer: () => ({
         connect: async () => {

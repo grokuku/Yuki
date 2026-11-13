@@ -24,10 +24,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  BOT_REGLAGES_REPLI,
-  urlReglagesBot,
-} from "../../public/ui/bot-switcher-modele.js";
+import { urlReglagesBot } from "../../public/ui/bot-switcher-modele.js";
 
 const ui = (name: string): string =>
   readFileSync(join(process.cwd(), "public", "ui", name), "utf8");
@@ -48,17 +45,28 @@ describe("urlReglagesBot — le bouton porte le bot AFFICHÉ", () => {
     expect(urlReglagesBot("yuki", bots)).toBe("/bots?b=yuki");
   });
 
-  it("aucun bot affiché (`null`, vide, espaces) ⇒ repli `yuki`", () => {
-    expect(urlReglagesBot(null, [{ id: "kohai" }])).toBe("/bots?b=yuki");
-    expect(urlReglagesBot("", [{ id: "kohai" }])).toBe("/bots?b=yuki");
-    expect(urlReglagesBot("   ", [{ id: "kohai" }])).toBe("/bots?b=yuki");
-    expect(BOT_REGLAGES_REPLI).toBe("yuki");
+  // ⚠️ RÉÉCRIT (lot 45) : le repli n'est plus « yuki » (constante
+  // `BOT_REGLAGES_REPLI` SUPPRIMÉE), mais le PREMIER bot de la liste — celle du
+  // serveur, triée par `ordre`. Yuki est supprimable comme n'importe quel bot :
+  // un repli en dur la ferait réapparaître, ou pointerait dans le vide.
+  it("aucun bot affiché (`null`, vide, espaces) ⇒ PREMIER bot de la liste", () => {
+    // ⚠️ La liste est celle du serveur (ordre d'affichage) : `kohai` y est seul.
+    expect(urlReglagesBot(null, [{ id: "kohai" }])).toBe("/bots?b=kohai");
+    expect(urlReglagesBot("", [{ id: "kohai" }])).toBe("/bots?b=kohai");
+    expect(urlReglagesBot("   ", [{ id: "kohai" }])).toBe("/bots?b=kohai");
   });
 
-  it("bot RETIRÉ de l'instance (absent de la liste connue) ⇒ repli `yuki`", () => {
-    expect(urlReglagesBot("fantome", [{ id: "yuki" }, { id: "kohai" }])).toBe(
-      "/bots?b=yuki",
+  it("bot RETIRÉ de l'instance (absent de la liste connue) ⇒ PREMIER bot, jamais `yuki`", () => {
+    expect(urlReglagesBot("fantome", [{ id: "kohai" }, { id: "nova" }])).toBe(
+      "/bots?b=kohai",
     );
+    // ⚠️ Yuki SUPPRIMÉE : l'ancien repli en dur aurait fabriqué `/bots?b=yuki`.
+    expect(urlReglagesBot("fantome", [{ id: "kohai" }])).not.toContain("yuki");
+  });
+
+  it("aucune liste et aucun bot affiché ⇒ AUCUN `?b=` (le serveur résout)", () => {
+    expect(urlReglagesBot(null, [])).toBe("/bots");
+    expect(urlReglagesBot(null, undefined)).toBe("/bots");
   });
 
   it("liste pas encore lue (vide) ⇒ on garde le bot affiché", () => {

@@ -189,7 +189,9 @@ describe("① câblage de PRODUCTION — le host LOCAL reçoit réellement le po
     // `createPiHost` pour le bot de la PILE (le principal), tel quel.
     expect(index).toContain("optionsPile: optionsHostPile,");
     expect(index).toContain("creer: createPiHost,");
-    expect(index).toContain("host = hostsBots.principal;");
+    // ⚠️ GARDE MISE À JOUR (lot 45) : `hostsBots.principal` → `hostsBots.duRun`
+    // (même valeur : le host du bot qui tourne, désormais le premier par `ordre`).
+    expect(index).toContain("host = hostsBots.duRun;");
   });
 
   it("`createSdkPiHost` CONSTRUIT l'outil quand le port est fourni", () => {

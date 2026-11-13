@@ -57,7 +57,7 @@ describe("pré-autorisations par bot (lot 36, L11)", () => {
     const parBot = parBotFactice(consommations);
 
     const executions = new ExecutionsAgentsBots<FauxService>({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       bots: ["kohai"],
       creer: () => new FauxService(),
       logger: journal,
@@ -81,7 +81,7 @@ describe("pré-autorisations par bot (lot 36, L11)", () => {
   it("un bot sans service d'exécution n'est pas branché (aucun port fabriqué)", () => {
     const fabriques: string[] = [];
     const executions = new ExecutionsAgentsBots<FauxService>({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       bots: ["kohai"],
       creer: () => new FauxService(),
       logger: journal,

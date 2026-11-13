@@ -41,7 +41,17 @@ export const REGISTRE_BOTS_SCHEMA_VERSION = 1;
 /** Nom du fichier, sous le volume `state`. */
 export const REGISTRE_BOTS_FICHIER = "bots.json";
 
-/** Identifiant du bot historique : c'est LUI qui est actif à la fin du lot 35a. */
+/**
+ * Identifiant du bot HISTORIQUE (lot 35a).
+ *
+ * ⚠️ LOT 45 : ce n'est PLUS un statut. Il ne sert plus qu'à DEUX choses, et
+ * jamais de valeur par défaut du multi-bot :
+ *  1. la MIGRATION de la disposition mono-bot du lot 35a (`migrate.ts`,
+ *     `creerRegistreInitial` : l'ancien dossier s'appelait `yuki`) ;
+ *  2. le nom des secrets HISTORIQUES acceptés en plus des noms par bot
+ *     (`YUKI_SOURCE_<NOM>`, `YUKI_CHAT_MATTERMOST`… — compatibilité 35j).
+ * Aucun bot n'est privilégié à la résolution : voir `src/bots/courant.ts`.
+ */
 export const BOT_YUKI = "yuki";
 
 /** Nombre MAXIMAL de bots d'une instance (`409 max_bots` au-delà). */
@@ -191,7 +201,14 @@ export function estSlugBot(value: unknown): value is string {
   return typeof value === "string" && SLUG_BOT_PATTERN.test(value);
 }
 
-/** Registre initial : UN bot (`yuki`), aucune paire d'échanges. */
+/**
+ * Registre initial : UN bot (celui de la disposition migrée), aucune paire
+ * d'échanges.
+ *
+ * ⚠️ `botId` par défaut = `BOT_YUKI` : c'est la MIGRATION du lot 35a (l'ancien
+ * dossier mono-bot s'appelait `yuki`). Ce n'est pas un défaut de runtime : en
+ * multi-bot, l'identité ne vient que du registre.
+ */
 export function creerRegistreInitial(
   options: { botId?: string; nom?: string; creeLe?: string } = {},
 ): RegistreBots {
@@ -291,16 +308,6 @@ export function ecrireRegistreBots(path: string, registre: RegistreBots): void {
       `Écriture du registre des bots impossible (${path}) : ${messageOf(error)}`,
     );
   }
-}
-
-/** Bot à activer : `yuki` s'il existe, sinon le premier ACTIF par `ordre`. */
-export function botActif(registre: RegistreBots): BotRecord | null {
-  const yuki = registre.bots.find((bot) => bot.id === BOT_YUKI);
-  if (yuki) return yuki;
-  const actifs = registre.bots
-    .filter((bot) => bot.actif)
-    .sort((a, b) => a.ordre - b.ordre);
-  return actifs[0] ?? null;
 }
 
 // --- Validation -----------------------------------------------------------

@@ -179,7 +179,7 @@ describe("③ adaptateurs par bot — connectés et arrêtés PAR BOT", () => {
       );
     }
     const adaptateurs = new AdaptateursChatBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       resolution,
       ...(existants.size > 0 ? { existants } : {}),
       creer,
@@ -208,7 +208,7 @@ describe("③ adaptateurs par bot — connectés et arrêtés PAR BOT", () => {
     const creer = vi.fn(() => adaptateurFactice("yuki", "mattermost", journal));
 
     const adaptateurs = new AdaptateursChatBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       resolution,
       existants: new Map([[cleAdaptateur("yuki", "mattermost"), existant]]),
       creer,
@@ -253,7 +253,7 @@ describe("③ adaptateurs par bot — connectés et arrêtés PAR BOT", () => {
       logger: log,
     });
     const adaptateurs = new AdaptateursChatBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       resolution,
       creer: (jeton) =>
         jeton.botId === "kohai"

@@ -9,7 +9,7 @@
  * Ce module construit la **Map `botId → PiHost`** des bots à DÉMARRER, avec
  * trois règles, et elles suffisent :
  *
- *  1. **Le host du PRINCIPAL est EXACTEMENT celui d'aujourd'hui.** Ses options
+ *  1. **Le host du BOT DU RUN est EXACTEMENT celui d'aujourd'hui.** Ses options
  *     sont l'objet que `main()` construisait déjà, passé TEL QUEL (`===`) : un
  *     seul bot ⇒ aucune option ne change (garde de non-régression : `tests/
  *     bots/hosts.test.ts` compare `sessionsDir`, `systemPrompt` et chaque port
@@ -24,11 +24,11 @@
  *     Depuis L11, `main()` en fournit un PAR BOT (`ServicesMemoireBots`, adossé
  *     aux stores du bot) et il arrive par `ContexteHostBot.memoire`. S'il manque
  *     (bot sans stores, double de test), le port est RETIRÉ et l'absence est dite
- *     au journal (`bots.host.port_absent`) — jamais d'emprunt au principal.
+ *     au journal (`bots.host.port_absent`) — jamais d'emprunt au bot du run.
  *
  * ⚠️ CE QUE CE MODULE NE FAIT PAS (L4) : router les messages vers le host d'un
- * bot non principal. Les routes d'instance, `getSubsystems` et le transport WS
- * gardent le host du PRINCIPAL (`hosts.principal`) : aucun appelant ne change.
+ * bot secondaire. Les routes d'instance, `getSubsystems` et le transport WS
+ * gardent le host du BOT DU RUN (`hosts.duRun`) : aucun appelant ne change.
  * Les autres hosts EXISTENT, DÉMARRENT et S'ARRÊTENT — c'est tout ce que L3-d
  * promet.
  *
@@ -111,7 +111,7 @@ export interface HostDemarrable {
    * ⚠️ LOT 36 (L6) : le service d'EXÉCUTION DE CE BOT. Même `AgentStore`, même
    * `AgentHub`, même TLS 9443 que les autres — seule la VISIBILITÉ des agents
    * change (`AgentRecord.bots` est contrôlé par commande avec le bot du run).
-   * Absent ⇒ le port est RETIRÉ du host du bot : hériter celui du principal
+   * Absent ⇒ le port est RETIRÉ du host du bot : hériter celui du bot du run
    * ferait exécuter une commande avec la visibilité d'un autre bot.
    */
   readonly execution?: PiHostOptions["execution"];
@@ -119,7 +119,7 @@ export interface HostDemarrable {
   readonly screenshots?: PiHostOptions["screenshots"];
   /**
    * ⚠️ LOT 36 (L11) : le port de DÉLÉGATION de CE BOT (`portDelegationBot`).
-   * Absent ⇒ aucun outil `delegate` pour ce host (jamais celui du principal).
+   * Absent ⇒ aucun outil `delegate` pour ce host (jamais celui du bot du run).
    */
   readonly delegation?: PiHostOptions["delegation"];
   /**
@@ -148,7 +148,7 @@ export interface ContexteHostBot {
   /**
    * ⚠️ LOT 36 (L11) : le port de DÉLÉGATION de CE BOT (`portDelegationBot`) —
    * le même service, mais chaque job créé porte SON `botId`. Absent ⇒ aucun
-   * outil `delegate` pour ce host (jamais celui du principal : un job sans
+   * outil `delegate` pour ce host (jamais celui du bot du run : un job sans
    * `botId` serait attribué au mauvais bot).
    */
   readonly delegation?: PiHostOptions["delegation"];
@@ -167,7 +167,7 @@ export interface ContexteHostBot {
  * Les ports d'UN bot, dérivés de son contexte.
  *
  * Rend `undefined` quand la configuration du bot manque : sans elle, il n'y a
- * pas de prompt système, donc pas de host honnête (emprunter celui du principal
+ * pas de prompt système, donc pas de host honnête (emprunter celui du bot du run
  * ferait parler un bot avec le prompt d'un autre). L'appelant le DIT au journal.
  */
 export function portsHostBot(
@@ -242,13 +242,13 @@ export function portsHostBot(
 }
 
 /**
- * Options du host d'un AUTRE bot : celles du principal, moins ce qui appartient
- * au principal.
+ * Options du host d'un AUTRE bot : celles du bot du run, moins ce qui appartient
+ * au bot du run.
  *
  * ⚠️ Le retrait est aussi important que le remplacement : `memory`, `heritage`,
  * `conversationArchive`, `personality`, `rules`, `reactions`, `sources`,
  * `envoisProgrammes` et `planifierTache` désignent des FICHIERS. Hériter de
- * ceux du principal ferait lire/écrire les fichiers d'un autre bot — exactement
+ * ceux du bot du run ferait lire/écrire les fichiers d'un autre bot — exactement
  * ce que « un seul rédacteur » interdit.
  */
 export function optionsHostBot(
@@ -274,15 +274,15 @@ export function optionsHostBot(
   poserSinonRetirer(options, "reactions", ports.reactions);
   poserSinonRetirer(options, "conversationArchive", ports.conversationArchive);
   poserSinonRetirer(options, "heritage", ports.heritage);
-  // ⚠️ LOT 36 (L6) : l'exécution d'un bot n'est JAMAIS celle du principal (la
+  // ⚠️ LOT 36 (L6) : l'exécution d'un bot n'est JAMAIS celle du bot du run (la
   // visibilité des agents y est figée) — posée si elle existe, retirée sinon.
   poserSinonRetirer(options, "execution", ports.execution);
   poserSinonRetirer(options, "screenshots", ports.screenshots);
   // ⚠️ LOT 36 (L11) : la mémoire est CELLE DU BOT (son service, ses stores) ; si
   // le contexte n'en fournit pas, elle est RETIRÉE plutôt qu'empruntée au
-  // principal (`delete` explicite : la copie de surface l'a héritée).
+  // bot du run (`delete` explicite : la copie de surface l'a héritée).
   poserSinonRetirer(options, "memory", ports.memory);
-  // ⚠️ LOT 36 (L11) — LA DÉLÉGATION AUSSI EST PAR BOT : le port du principal crée
+  // ⚠️ LOT 36 (L11) — LA DÉLÉGATION AUSSI EST PAR BOT : le port du bot du run crée
   // des jobs SANS `botId` (donc attribués à lui). Un host secondaire reçoit le
   // sien, ou aucun outil `delegate` — jamais celui d'un autre.
   poserSinonRetirer(options, "delegation", ports.delegation);
@@ -290,7 +290,7 @@ export function optionsHostBot(
   return options;
 }
 
-/** Pose le port s'il existe, sinon RETIRE la valeur héritée du principal. */
+/** Pose le port s'il existe, sinon RETIRE la valeur héritée du bot du run. */
 function poserSinonRetirer<K extends keyof PiHostOptions>(
   options: PiHostOptions,
   cle: K,
@@ -308,7 +308,7 @@ export interface OptionsHostsBots<THost extends HostDemarrable> {
   readonly pile: string;
   /** Bots à DÉMARRER (L1, `ResolutionDemarrageBots.aDemarrer`) — les refusés n'y sont pas. */
   readonly bots: readonly string[];
-  /** Options EXACTES du host du principal (celles d'avant L3-d). */
+  /** Options EXACTES du host du bot du run (celles d'avant L3-d). */
   readonly optionsPile: PiHostOptions;
   /** Fabrique de host (défaut côté `main()` : `createPiHost`). */
   readonly creer: (options: PiHostOptions) => THost;
@@ -337,8 +337,8 @@ export interface BilanDemarrageHosts {
  *
  * ⚠️ Deux invariants :
  *  1. **un seul host par bot** (une Map, un identifiant construit une fois) ;
- *  2. **le principal n'est jamais dérivé** : il est construit avec
- *     `optionsPile`, tel quel, et rendu par `principal` — c'est le host que
+ *  2. **le bot du run n'est jamais dérivé** : il est construit avec
+ *     `optionsPile`, tel quel, et rendu par `duRun` — c'est le host que
  *     `main()` garde sous le nom `host` (routes d'instance, `getSubsystems`,
  *     transport WS).
  */
@@ -354,12 +354,12 @@ export class HostsBots<THost extends HostDemarrable> {
    */
   private readonly refus = new Map<string, string>();
   /** Le host du bot de la PILE — EXACTEMENT celui d'avant L3-d. */
-  readonly principal: THost;
+  readonly duRun: THost;
 
   constructor(options: OptionsHostsBots<THost>) {
     this.options = options;
-    this.principal = options.creer(options.optionsPile);
-    this.map.set(options.pile, this.principal);
+    this.duRun = options.creer(options.optionsPile);
+    this.map.set(options.pile, this.duRun);
 
     for (const botId of options.bots) {
       if (this.map.has(botId)) continue;
@@ -376,7 +376,7 @@ export class HostsBots<THost extends HostDemarrable> {
     });
   }
 
-  /** Construit (ou refuse, en le DISANT et en le RETENANT) le host d'un bot non principal. */
+  /** Construit (ou refuse, en le DISANT et en le RETENANT) le host d'un bot secondaire. */
   private construire(botId: string): boolean {
     const options = this.options;
     let contexte: ContexteHostBot | undefined;
@@ -439,22 +439,22 @@ export class HostsBots<THost extends HostDemarrable> {
     return this.refus.get(botId);
   }
 
-  /** Tous les hosts, dans l'ordre de construction (principal d'abord). */
+  /** Tous les hosts, dans l'ordre de construction (bot du run d'abord). */
   hosts(): ReadonlyMap<string, THost> {
     return this.map;
   }
 
-  /** Identifiants des bots qui ont un host (principal d'abord). */
+  /** Identifiants des bots qui ont un host (bot du run d'abord). */
   ids(): string[] {
     return [...this.map.keys()];
   }
 
-  /** Nombre de hosts (le principal compte). */
+  /** Nombre de hosts (le bot du run compte). */
   get taille(): number {
     return this.map.size;
   }
 
-  /** Host d'un bot (principal inclus), ou `undefined`. */
+  /** Host d'un bot (bot du run inclus), ou `undefined`. */
   pour(botId: string): THost | undefined {
     return this.map.get(botId);
   }
@@ -464,7 +464,7 @@ export class HostsBots<THost extends HostDemarrable> {
    *
    * Parcours de la Map par IDENTITÉ : c'est le seul moyen sûr de nommer le bot
    * qui parle quand le transport ne reçoit qu'un host (TTS, journal). Un host
-   * inconnu (double de test, host arrêté) rend `undefined` — jamais le principal
+   * inconnu (double de test, host arrêté) rend `undefined` — jamais le bot du run
    * par défaut.
    */
   botDe(host: THost): string | undefined {
@@ -479,10 +479,10 @@ export class HostsBots<THost extends HostDemarrable> {
    *
    * ⚠️ C'est ce que doivent utiliser les réveils (sources, déclencheurs) : un
    * host construit mais dont `start()` a échoué ne peut rien exécuter. Le bot
-   * du principal est toujours rendu (son démarrage est géré par `main()`).
+   * du bot du run est toujours rendu (son démarrage est géré par `main()`).
    */
   pourDemarre(botId: string): THost | undefined {
-    if (botId === this.options.pile) return this.principal;
+    if (botId === this.options.pile) return this.duRun;
     return this.demarres.has(botId) ? this.map.get(botId) : undefined;
   }
 
@@ -492,7 +492,7 @@ export class HostsBots<THost extends HostDemarrable> {
    * ⚠️ Le bot de la PILE est toujours dit démarré : c'est `main()` qui l'a
    * démarré, pas cette fabrique (« un seul `stop` par host »). Un échec de SON
    * démarrage est journalisé (`pi.start.failed`) et porté par le statut `pi`,
-   * pas par cette Map — sinon `GET /api/bots` annoncerait le bot principal
+   * pas par cette Map — sinon `GET /api/bots` annoncerait le bot du run
    * arrêté alors que l'instance tourne.
    */
   estDemarre(botId: string): boolean {
@@ -501,11 +501,11 @@ export class HostsBots<THost extends HostDemarrable> {
   }
 
   /**
-   * Démarre les hosts des bots AUTRES que le principal.
+   * Démarre les hosts des bots AUTRES que le bot du run.
    *
-   * ⚠️ Le principal n'est pas démarré ici : `main()` garde son `try/catch` (il
+   * ⚠️ Le bot du run n'est pas démarré ici : `main()` garde son `try/catch` (il
    * en tire `piStatus` et le compte de sessions). Chaque host secondaire a le
-   * sien : un échec est JOURNALISÉ et n'empêche ni le principal de servir, ni
+   * sien : un échec est JOURNALISÉ et n'empêche ni le bot du run de servir, ni
    * les autres bots de démarrer.
    */
   async demarrerAutres(): Promise<BilanDemarrageHosts> {
@@ -639,9 +639,9 @@ export class HostsBots<THost extends HostDemarrable> {
   }
 
   /**
-   * Arrête les hosts des bots AUTRES que le principal.
+   * Arrête les hosts des bots AUTRES que le bot du run.
    *
-   * ⚠️ Le principal est arrêté par `main()` (`await host?.stop()`), comme
+   * ⚠️ Le bot du run est arrêté par `main()` (`await host?.stop()`), comme
    * avant : deux appels concurrents sur le même host seraient un arrêt double.
    */
   async arreter(): Promise<void> {

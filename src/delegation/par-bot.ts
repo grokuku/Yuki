@@ -3,10 +3,10 @@
  *
  * ⚠️ LE DÉFAUT QUE CE MODULE FERME : le service de délégation, la file et le
  * réveil étaient UNIQUES. Un job délégué par un bot secondaire était donc
- * indiscernable d'un job du principal :
- *  - son rapport réveillait le host du PRINCIPAL (le léger de `yuki` lisait le
+ * indiscernable d'un job du bot du run :
+ *  - son rapport réveillait le host du BOT DU RUN (le léger de `yuki` lisait le
  *    résultat de `kohai`, et `kohai` n'était jamais réveillé) ;
- *  - la publication d'un rapport de canal partait avec le jeton du principal ;
+ *  - la publication d'un rapport de canal partait avec le jeton du bot du run ;
  *  - les pré-autorisations étaient consommées au nom du bot de la pile.
  *
  * ⚠️ CE QUI RESTE D'INSTANCE, ET NE DOIT PAS CHANGER : le `JobStore` (un seul

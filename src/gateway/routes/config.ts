@@ -26,8 +26,8 @@ import {
   ScopedFieldError,
   type ConfigRuntime,
 } from "../../config/runtime.js";
+import { botHistoriqueMono } from "../../bots/courant.js";
 import {
-  BOT_YUKI,
   CAPACITES_BOT,
   type BotRecord,
   type CapaciteBot,
@@ -646,10 +646,15 @@ function botsConnus(deps: ConfigApiDeps): BotListing[] {
   };
   if (entrees.length === 0) {
     const botId = deps.runtime.botId;
+    // ⚠️ LOT 45 : plus de nom en dur pour un identifiant donné. En mode mono-bot,
+    // il n'y a pas de registre : l'identité de cette disposition EST le bot
+    // historique (`botHistoriqueMono`, seule source de son nom affiché). Un
+    // identifiant inattendu garde son identifiant pour nom — rien n'est inventé.
+    const mono = botHistoriqueMono();
     return [
       {
         id: botId,
-        nom: botId === BOT_YUKI ? "Yuki" : botId,
+        nom: botId === mono.id ? mono.nom : botId,
         // Mono-bot historique : le bot porte le produit entier, donc toutes les
         // capacités (aucune restriction n'a jamais existé dans ce mode).
         capacites: [...CAPACITES_BOT],
@@ -690,9 +695,10 @@ function botInconnu(botId: string): ConfigHttpResponse {
  * `GET /api/bots` — liste des bots (`id`, `nom`, `capacites`, `actif`, `ordre`).
  * Sert au sélecteur de la page d'un bot et à la liste des cases de capacités.
  *
- * ⚠️ LOT 37 — la réponse porte AUSSI ce que le sélecteur de la barre du haut doit
- * dire VRAI : `principal` (le bot de la PILE, seul à tourner avec le gateway) et
- * `echanges` (les boucles on/off entre bots).
+ * ⚠️ La réponse porte AUSSI ce que le sélecteur de la barre du haut doit dire
+ * VRAI : `botDuRun` (le bot du RUN — son host sert les clients qui ne nomment
+ * aucun bot ; ⚠️ LOT 45 : c'est le PREMIER par `ordre`, plus un « bot
+ * principal » élu) et `echanges` (les boucles on/off entre bots).
  *
  * ⚠️ PLUS DE PLAFOND (décision utilisateur du 2026-11-13 : « retire le plafond ») :
  * la réponse ne porte plus `plafond` ni `refuses`. Un bot `actif` démarre toujours ;
@@ -701,7 +707,10 @@ function botInconnu(botId: string): ConfigHttpResponse {
 function handleBotsList(deps: ConfigApiDeps): ConfigHttpResponse {
   return json(200, {
     bots: botsConnus(deps),
-    principal: deps.runtime.botId,
+    // ⚠️ LOT 45 : plus de « bot principal ». Ce champ nomme le bot du RUN (celui
+    // dont le host sert une connexion SANS `?bot=`), résolu au démarrage comme le
+    // premier bot par `ordre` — aucun identifiant n'est privilégié.
+    botDuRun: deps.runtime.botId,
     echanges: { ...(deps.bots?.registre?.echanges ?? {}) },
   });
 }

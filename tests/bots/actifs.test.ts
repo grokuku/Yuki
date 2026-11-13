@@ -4,8 +4,9 @@
  * Ce que ce fichier verrouille :
  *  - la LISTE des bots qui doivent tourner (`actif: true`), triée par `ordre` puis
  *    par identifiant (ordre déterministe, pas l'ordre du fichier) ;
- *  - « PRINCIPAL » ≠ « DOIT TOURNER » : `botActif` privilégie TOUJOURS `yuki`,
- *    même éteint, alors que la liste ne contient que les bots actifs ;
+ *  - ⚠️ LOT 45 : PLUS DE « PRINCIPAL ». `botActif` ne privilégie AUCUN
+ *    identifiant (il rend le premier par `ordre`), et `botCourant` est le premier
+ *    bot à démarrer. `yuki` n'a donc aucun statut particulier ;
  *  - ⚠️ AUCUN PLAFOND (décision utilisateur du 2026-11-13 : « retire le plafond.
  *    Chacun fait comme il a envie en fonction de ses ressources, limiter c'est
  *    mal à mon sens ») : `bots.maxActifs` n'existe PLUS, `resoudreDemarrageBots`
@@ -139,31 +140,36 @@ describe("② la LISTE des bots à démarrer", () => {
     expect(botsAActiver(r).map((entree) => entree.id)).toEqual(["beta", "alpha", "zeta"]);
   });
 
-  it("⚠️ PRINCIPAL ≠ DOIT TOURNER : `yuki` reste principal même ÉTEINT", () => {
+  it("⚠️ RÉÉCRIT : le bot du RUN est le premier à DÉMARRER (`yuki` éteinte)", () => {
+    // ⚠️ RÉÉCRIT (n'était « PRINCIPAL ≠ DOIT TOURNER : `yuki` reste principal
+    // même ÉTEINT ») : le privilège d'identité de `yuki` est SUPPRIMÉ. Le bot du
+    // run ne peut plus différer de la liste : c'est son premier élément.
     const r = registre([bot("yuki", 0, false), bot("kohai", 1, true)]);
     const resolution = resoudreDemarrageBots(r);
-    expect(resolution.principal?.id).toBe("yuki");
+    expect(resolution.botCourant?.id).toBe("kohai");
     expect(resolution.aDemarrer.map((entree) => entree.id)).toEqual(["kohai"]);
-    // Le principal n'est PAS dans la liste : les deux notions sont distinctes.
-    expect(resolution.aDemarrer.some((entree) => entree.id === "yuki")).toBe(false);
+    // `yuki` éteinte n'est PAS rendue : plus d'identité élue à côté du run.
+    expect("principal" in resolution).toBe(false);
+    // `botActif` applique la même règle (premier par `ordre`), sans privilège.
     expect(botActif(r)?.id).toBe("yuki");
   });
 
-  it("tous les bots éteints ⇒ liste VIDE (l'appelant refuse le démarrage)", () => {
+  it("tous les bots éteints ⇒ liste VIDE et AUCUN bot du run", () => {
     const resolution = resoudreDemarrageBots(registre([bot("yuki", 0, false)]));
     expect(resolution.aDemarrer).toEqual([]);
-    // Le principal existe quand même : c'est une IDENTITÉ, pas un état d'exécution.
-    expect(resolution.principal?.id).toBe("yuki");
+    // Plus d'identité à côté du run : rien ne tourne, donc aucun bot courant.
+    expect(resolution.botCourant).toBeNull();
   });
 });
 
-describe("③ `preparerMultiBot` : liste et principal, sans plafond", () => {
+describe("③ `preparerMultiBot` : liste et bot du run, sans plafond", () => {
   it("⚠️ GARDE DE NON-RÉGRESSION : 1 bot actif ⇒ comportement IDENTIQUE", () => {
     const f = fixture([creerRegistreInitial().bots[0] as BotRecord]);
     const preparation = preparerMultiBot(f.env, { processEnv: {} });
     expect(preparation.mode).toBe("multi");
-    expect(preparation.bot?.id).toBe("yuki");
-    expect(preparation.principal?.id).toBe("yuki");
+    expect(preparation.bot.id).toBe("yuki");
+    // ⚠️ LOT 45 : plus de « principal » — le bot du run EST le premier à démarrer.
+    expect("principal" in preparation).toBe(false);
     expect(preparation.aDemarrer.map((entree) => entree.id)).toEqual(["yuki"]);
     expect(preparation.avertissements).toEqual([]);
     // Les chemins restent EXACTEMENT ceux du bot `yuki`.
@@ -173,24 +179,25 @@ describe("③ `preparerMultiBot` : liste et principal, sans plafond", () => {
     expect(preparation.chemins?.racine).toBe(chemins.racine);
   });
 
-  it("deux bots actifs ⇒ liste de DEUX, une seule pile (le principal)", () => {
+  it("deux bots actifs ⇒ liste de DEUX, bot du run = le premier par `ordre`", () => {
     const f = fixture([bot("yuki", 0, true), bot("kohai", 1, true)]);
     const preparation = preparerMultiBot(f.env, { processEnv: {} });
     expect(preparation.aDemarrer.map((entree) => entree.id)).toEqual(["yuki", "kohai"]);
-    // L1 ne construit qu'UNE pile : c'est le principal.
-    expect(preparation.bot?.id).toBe("yuki");
+    expect(preparation.bot.id).toBe("yuki");
   });
 
-  it("principal ÉTEINT ⇒ la pile construite est celle du premier bot actif, et c'est DIT", () => {
+  it("⚠️ RÉÉCRIT : `yuki` ÉTEINTE ⇒ bot du run = premier ACTIF, et RIEN à signaler", () => {
+    // ⚠️ RÉÉCRIT (n'était « principal ÉTEINT ⇒ … et c'est DIT ») : il n'y a plus
+    // deux listes (identité élue vs bots à démarrer), donc plus d'avertissement à
+    // donner. Le premier bot actif EST le bot du run, sans commentaire spécial.
     const f = fixture([bot("yuki", 0, false), bot("kohai", 1, true)]);
     const preparation = preparerMultiBot(f.env, { processEnv: {} });
-    expect(preparation.principal?.id).toBe("yuki");
-    expect(preparation.bot?.id).toBe("kohai");
-    // Les chemins suivent le bot qui tourne, pas le principal.
+    expect(preparation.bot.id).toBe("kohai");
+    // Les chemins suivent le bot qui tourne.
     expect(preparation.env.memoryStorePath).toBe(
       cheminsBot(f.env, "kohai").fichiers.memoryStorePath,
     );
-    expect(preparation.avertissements.join(" ")).toContain("PRINCIPAL");
+    expect(preparation.avertissements).toEqual([]);
   });
 
   it("⚠️ 4 bots actifs ⇒ les QUATRE démarrent, aucun avertissement de limite", () => {

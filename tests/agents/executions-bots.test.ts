@@ -37,6 +37,9 @@ import {
 import type { OutboundCommand, ResultFrame } from "../../src/agents/protocol.js";
 import { createLogger } from "../../src/observability/logger.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -124,6 +127,7 @@ function banc(bots: readonly string[] = ["kohai"]): Banc {
   const dir = tempDir();
   const store = AgentStore.open({
     path: join(dir, "agents.jsonl"),
+    botCourant: () => BOT_TEST,
     defaults: { level: "never", privilege: "normal" },
     logger,
   });
@@ -135,7 +139,7 @@ function banc(bots: readonly string[] = ["kohai"]): Banc {
   });
   const hub = new RecordingHub();
   const executions = new ExecutionsAgentsBots<AgentExecutionService>({
-    botDePile: "yuki",
+    botDuRun: "yuki",
     bots,
     // ⚠️ C'est CE paramètre qui décide de la visibilité, et il est PAR BOT.
     creer: (botId) =>
@@ -163,7 +167,7 @@ function agentEnLigne(banc: Banc, agentId: string, bots?: string[]): void {
 describe("ExecutionsAgentsBots — un service par bot", () => {
   it("le principal est le service du bot de la pile, et il est rendu par identité", () => {
     const b = banc();
-    expect(b.executions.pour("yuki")).toBe(b.executions.principal);
+    expect(b.executions.pour("yuki")).toBe(b.executions.duRun);
     expect(b.executions.ids()).toEqual(["yuki", "kohai"]);
     expect(b.executions.taille).toBe(2);
   });
@@ -175,7 +179,7 @@ describe("ExecutionsAgentsBots — un service par bot", () => {
 
   it("un identifiant répété n'est construit qu'une fois", () => {
     const creer = vi.fn(() => ({}));
-    new ExecutionsAgentsBots({ botDePile: "yuki", bots: ["yuki", "kohai"], creer, logger: journalEspion() });
+    new ExecutionsAgentsBots({ botDuRun: "yuki", bots: ["yuki", "kohai"], creer, logger: journalEspion() });
     expect(creer.mock.calls).toEqual([["yuki"], ["kohai"]]);
   });
 });
@@ -243,7 +247,7 @@ describe("branchements tardifs — TOUS les bots", () => {
     const vus: string[] = [];
     const b = banc(["kohai", "autre"]);
     b.executions.pourChacun((execution, botId) => {
-      vus.push(`${botId}:${execution === b.executions.principal ? "principal" : "autre"}`);
+      vus.push(`${botId}:${execution === b.executions.duRun ? "principal" : "autre"}`);
     });
     expect(vus).toEqual(["yuki:principal", "kohai:autre", "autre:autre"]);
   });

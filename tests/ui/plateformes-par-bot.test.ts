@@ -289,7 +289,7 @@ describe("panneau « Plateformes » d'un bot non-pile", () => {
       fetchImpl: fetchImpl as never,
       botId: "granolaf",
       botNom: "Granolaf",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       botDemarre: true,
     });
 
@@ -322,7 +322,7 @@ describe("panneau « Plateformes » d'un bot non-pile", () => {
       fetchImpl: fetchImpl as never,
       botId: "granolaf",
       botNom: "Granolaf",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       botDemarre: true,
     });
     const interrupteur = parId(racine, "chat-bot-discord-enabled")!;
@@ -352,7 +352,7 @@ describe("jeton de plateforme d'un bot non-pile", () => {
       fetchImpl: fetchImpl as never,
       botId: "granolaf",
       botNom: "Granolaf",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       botDemarre: true,
     });
     const champ = parId(racine, "chat-bot-discord-jeton")!;
@@ -385,7 +385,7 @@ describe("jeton de plateforme d'un bot non-pile", () => {
       root: racine as never,
       fetchImpl: fetchImpl as never,
       botId: "granolaf",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       botDemarre: false,
     });
     const champ = parId(racine, "chat-bot-mattermost-jeton")!;
@@ -405,7 +405,7 @@ describe("jeton de plateforme d'un bot non-pile", () => {
       fetchImpl: fetchImpl as never,
       botId: "granolaf",
       botNom: "Granolaf",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       botDemarre: true,
     });
     const champ = parId(racine, "chat-bot-discord-jeton")!;
@@ -429,7 +429,7 @@ describe("bot arrêté", () => {
       fetchImpl: fetchImpl as never,
       botId: "granolaf",
       botNom: "Granolaf",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       botDemarre: false,
     });
     // ⚠️ Aucun contrôle n'est désactivé par l'état d'arrêt.
@@ -481,7 +481,7 @@ describe("bot de la pile", () => {
       root: racine as never,
       fetchImpl: fetchImpl as never,
       botId: "yuki",
-      botDePile: "yuki",
+      botDuRun: "yuki",
     });
     await laisserTourner(() => appels.includes("/api/chat/status"));
     expect(appels).toContain("/api/chat/status");
@@ -505,7 +505,10 @@ describe("montage du panneau dans la page Bot (`config.js`)", () => {
     // Le bot AFFICHÉ est passé au panneau, avec le bot de la PILE comme référence.
     expect(source).toContain('const botDuChat = PAGE_BOT ? (botCourant?.id ?? "") : "";');
     expect(source).toContain("botId: botDuChat");
-    expect(source).toContain("botDePile: botPrincipal ?? BOT_REPLI");
+    // ⚠️ GARDE MISE À JOUR (lot 45) : `botPrincipal` et `BOT_REPLI` sont
+    // SUPPRIMÉS (plus de « bot principal », plus de repli `yuki`). Le bot du run
+    // vient de `GET /api/bots` (`botDuRun`), à défaut le PREMIER de la liste.
+    expect(source).toContain("botDuRun: botDuRun ?? botsConnus[0]?.id ?? null");
     // ⚠️ `actif` ne dit pas « tourne » : c'est `execution.demarre` qui le dit.
     expect(source).toContain("botDemarre: botCourant?.execution?.demarre === true");
   });

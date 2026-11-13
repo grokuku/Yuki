@@ -3,11 +3,11 @@
  *
  * ⚠️ LE DÉFAUT QUE CE MODULE FERME : `AgentExecutionService` porte le filtre de
  * visibilité `AgentRecord.bots` par une FERMETURE figée au démarrage
- * (`botCourant`, `src/index.ts` : `const botDuRun = bots.bot?.id ?? "yuki"`).
+ * (`botCourant`, `src/index.ts` : `const botDuRun = bots.bot.id`).
  * En multi-bot, cette constante est fausse dès le deuxième bot : un run de
  * `kohai` filtrerait les agents avec l'identité de `yuki` — soit en refusant un
  * agent autorisé pour `kohai`, soit, pire, en ACCEPTANT un agent qui ne l'est
- * que pour le principal.
+ * que pour le bot du run.
  *
  * La correction tient en une phrase : **un service par bot**, chacun avec SON
  * `botCourant`, et l'on choisit le service selon le bot du RUN.
@@ -37,7 +37,7 @@ export interface ExecutionsBotsLogger {
 
 export interface OptionsExecutionsBots<T> {
   /** Bot de la PILE (`main()`) : son service est le PRINCIPAL, conservé tel quel. */
-  readonly botDePile: string;
+  readonly botDuRun: string;
   /** Bots à DÉMARRER (L1) — les refusés du plafond n'ont pas de service. */
   readonly bots: readonly string[];
   /** Fabrique : reçoit le bot dont le service portera la visibilité. */
@@ -50,25 +50,25 @@ export interface OptionsExecutionsBots<T> {
  *
  * ⚠️ Deux invariants :
  *  1. **un seul service par bot** (une Map, un identifiant construit une fois) ;
- *  2. **le principal n'est pas dérivé** : `principal` est le service rendu par
- *     `creer(botDePile)` et c'est celui que `main()` garde sous le nom
- *     `agentExecution` (outils du host principal, routes, `getSubsystems`).
+ *  2. **le bot du run n'est pas dérivé** : `duRun` est le service rendu par
+ *     `creer(botDuRun)` et c'est celui que `main()` garde sous le nom
+ *     `agentExecution` (outils du host du bot du run, routes, `getSubsystems`).
  */
 export class ExecutionsAgentsBots<T> {
   private readonly map = new Map<string, T>();
   /** Le service du bot de la PILE — EXACTEMENT celui d'avant L6. */
-  readonly principal: T;
+  readonly duRun: T;
 
   constructor(options: OptionsExecutionsBots<T>) {
-    this.principal = options.creer(options.botDePile);
-    this.map.set(options.botDePile, this.principal);
+    this.duRun = options.creer(options.botDuRun);
+    this.map.set(options.botDuRun, this.duRun);
     for (const botId of options.bots) {
       if (this.map.has(botId)) continue;
       this.map.set(botId, options.creer(botId));
     }
     // ⚠️ Diagnostic SANS contenu : des identifiants, jamais un nom d'agent.
     options.logger.info("agents.executions.bots", {
-      pile: options.botDePile,
+      pile: options.botDuRun,
       nombre: this.map.size,
       ids: [...this.map.keys()].join(","),
     });
@@ -79,7 +79,7 @@ export class ExecutionsAgentsBots<T> {
     return this.map.get(botId);
   }
 
-  /** Identifiants couverts (principal d'abord). */
+  /** Identifiants couverts (bot du run d'abord). */
   ids(): string[] {
     return [...this.map.keys()];
   }
@@ -107,7 +107,7 @@ export class ExecutionsAgentsBots<T> {
  * mono-bot historique (aucune trame ne nomme de bot), et c'est le seul repli
  * autorisé : il ne change rien au comportement d'avant L6.
  */
-export function botDuRun(botId: string | undefined, botDePile: string): string {
+export function botDuRun(botId: string | undefined, botDuRun: string): string {
   const valeur = typeof botId === "string" ? botId.trim() : "";
-  return valeur === "" ? botDePile : valeur;
+  return valeur === "" ? botDuRun : valeur;
 }

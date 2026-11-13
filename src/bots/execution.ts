@@ -14,7 +14,7 @@
  * ARRÊTER les **DÉTRUIT** (host retiré de la Map, pile fermée, mémoire drainée,
  * TTS arrêté, run interrompu — `src/bots/arret.ts`).
  *
- * ⚠️ Le bot principal de l'instance n'est ni démarré ni arrêté par ces routes :
+ * ⚠️ Le bot du run de l'instance n'est ni démarré ni arrêté par ces routes :
  * il tourne avec le gateway. Le refus le DIT (il n'est pas silencieux).
  *
  * Aucun import SDK/typebox : tout passe par des PORTS injectés, donc testable
@@ -45,7 +45,7 @@ export interface HostsCyclePort {
 
 export interface OptionsExecutionBots {
   /** Bot de la PILE : l'instance. Ni démarrable ni arrêtable par ces routes. */
-  readonly botDePile: string;
+  readonly botDuRun: string;
   readonly hosts: HostsCyclePort;
   /** Ouvre (ou crée) la pile de sources d'un bot — idempotent. */
   readonly ouvrirPile: (botId: string) => unknown;
@@ -144,7 +144,7 @@ export class ExecutionBots {
    * sources ni envois programmés.
    */
   async demarrer(botId: string): Promise<IssueDemarrageBot> {
-    if (botId === this.options.botDePile) {
+    if (botId === this.options.botDuRun) {
       return {
         ok: true,
         inchange: true,
@@ -190,7 +190,7 @@ export class ExecutionBots {
    * (aucune étape, aucun `stop` sur un host inexistant).
    */
   async arreter(botId: string): Promise<IssueArretBot> {
-    if (botId === this.options.botDePile) {
+    if (botId === this.options.botDuRun) {
       return {
         ok: false,
         inchange: false,

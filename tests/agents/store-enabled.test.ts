@@ -16,6 +16,9 @@ import { AgentError, AgentStore, DEFAULT_ENABLED_LEVEL } from "../../src/agents/
 import type { AgentLevel } from "../../src/agents/index.js";
 import { createLogger } from "../../src/observability/logger.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const tempDirs: string[] = [];
 const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
 
@@ -28,6 +31,7 @@ function tempStorePath(): string {
 function open(defaultLevel: AgentLevel = "destructive") {
   return AgentStore.open({
     path: tempStorePath(),
+    botCourant: () => BOT_TEST,
     defaults: { level: defaultLevel, privilege: "normal" },
     logger,
   });
@@ -99,7 +103,8 @@ describe("AgentStore.setEnabled — on/off par le niveau, sans second drapeau", 
     const path = tempStorePath();
     const store = AgentStore.open({
       path,
-      defaults: { level: "destructive", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "destructive", privilege: "normal" },
       logger,
     });
     store.markSeen("a1");
@@ -108,7 +113,8 @@ describe("AgentStore.setEnabled — on/off par le niveau, sans second drapeau", 
     // Réouverture : la projection rejoue le journal et reconstruit la mémoire.
     const reopened = AgentStore.open({
       path,
-      defaults: { level: "destructive", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "destructive", privilege: "normal" },
       logger,
     });
     expect(reopened.get("a1")?.level).toBe("disabled");

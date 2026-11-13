@@ -272,7 +272,8 @@ interface Banc {
 function banc(
   options: {
     bots?: BotFactice[];
-    principal?: string;
+    /** Bot du RUN (`GET /api/bots` → `botDuRun`) : plus de « bot principal ». */
+    duRun?: string;
     echanges?: Record<string, { actif: boolean }>;
     reponsePanne?: { status: number; body: unknown };
     panneListe?: boolean;
@@ -293,7 +294,7 @@ function banc(
   const nav: string[] = [];
   const patchs: Array<{ url: string; body: any }> = [];
   const appels: string[] = [];
-  const principal = options.principal ?? "yuki";
+  const duRun = options.duRun ?? "yuki";
   // Liste MUTABLE : après suppression, `GET /api/bots` rend la liste amputée.
   const bots = [...(options.bots ?? BOTS)];
   mocks.suppression.mockReset();
@@ -318,7 +319,7 @@ function banc(
       // de bots en marche (décision utilisateur du 2026-11-13).
       return reponse(200, {
         bots,
-        principal,
+        botDuRun: duRun,
         echanges: options.echanges ?? {},
       });
     }
@@ -638,7 +639,7 @@ describe("⑥ le message « un seul bot actif » est corrigé (vrai nombre)", ()
     const texte = messageBandeauBot({
       bot: BOTS[1],
       bots: [BOTS[0], BOTS[1]],
-      principal: "yuki",
+      duRun: "yuki",
     });
     expect(texte).toContain("1 bot en marche");
     expect(texte).not.toContain("maximum");
@@ -1037,12 +1038,12 @@ describe("⑪ clic droit / appui long sur le nom+avatar : les TROIS gestes", () 
 
 describe("⑨ modèle pur", () => {
   it("`etatBot` ne confond jamais `actif` (registre) et `demarre` (exécution)", () => {
-    expect(etatBot(BOTS[0], "yuki").code).toBe("principal");
+    expect(etatBot(BOTS[0], "yuki").code).toBe("duRun");
     expect(etatBot(BOTS[1], "yuki").code).toBe("arrete");
     expect(etatBot(BOTS[2], "yuki").code).toBe("erreur");
     // Mode dégradé (aucun port d'exécution) : on ne SAIT pas, on ne ment pas.
     expect(etatBot({ id: "kohai", actif: true }, "yuki").code).toBe("inconnu");
-    // Un bot arrêté est démariable ; un bot principal, non.
+    // Un bot arrêté est démariable ; un bot du run, non.
     expect(etatBot(BOTS[1], "yuki").demarrable).toBe(true);
     expect(etatBot(BOTS[0], "yuki").demarrable).toBe(false);
     // ⚠️ LOT 38 : la RAISON réelle est rendue, jamais un code muet.
@@ -1051,7 +1052,7 @@ describe("⑨ modèle pur", () => {
   });
 
   it("`entreeListe` produit le monogramme et l'URL de conversation", () => {
-    const entree = entreeListe(BOTS[1], { principal: "yuki", courant: "kohai" });
+    const entree = entreeListe(BOTS[1], { duRun: "yuki", courant: "kohai" });
     expect(entree.monogramme).toBe("K");
     expect(entree.url).toBe("/?b=kohai");
     expect(entree.courant).toBe(true);

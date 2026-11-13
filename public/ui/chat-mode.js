@@ -23,7 +23,7 @@
  * ⚠️ Aucune injection HTML, aucun style en ligne : la CSP reste inchangée.
  */
 
-import { cheminConfigBot, idBotActif, BOT_PAR_DEFAUT } from "./bots-api.js";
+import { cheminConfigBot, idBotActif } from "./bots-api.js";
 
 /**
  * CHEMIN EXACT du réglage d'une plateforme, **pour LE BOT AFFICHÉ**.
@@ -46,16 +46,17 @@ import { cheminConfigBot, idBotActif, BOT_PAR_DEFAUT } from "./bots-api.js";
  * plateforme — un test verrouille l'égalité.
  *
  * @param {"mattermost"|"discord"} plateforme
- * @param {string} [botId] bot dont on montre l'état (à défaut, le bot historique :
- *   c'est le seul identifiant qui ne puisse pas désigner un bot inexistant).
+ * @param {string} [botId] bot dont on montre l'état. ⚠️ LOT 45 : sans bot, le
+ *   chemin ne porte AUCUN `?b=` (le serveur résout vers le premier par `ordre`) —
+ *   plus de repli sur un identifiant en dur, qui nommerait un bot supprimé.
  * @returns {string}
  */
 export function cheminPlateforme(plateforme, botId) {
-  const id =
-    typeof botId === "string" && botId.trim() !== "" ? botId.trim() : BOT_PAR_DEFAUT;
+  const id = typeof botId === "string" ? botId.trim() : "";
   const section =
     plateforme === "discord" ? "Discussions — Discord" : "Discussions — Mattermost";
-  return `/bots?b=${encodeURIComponent(id)} → Plateformes → « ${section} »`;
+  const page = id === "" ? "/bots" : `/bots?b=${encodeURIComponent(id)}`;
+  return `${page} → Plateformes → « ${section} »`;
 }
 
 /**

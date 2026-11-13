@@ -81,7 +81,7 @@ function banc(
   const sessions = new Map<string, number>([["yuki", 3], ["kohai", 7]]);
   const log = journalEspion();
   const execution = new ExecutionBots({
-    botDePile: "yuki",
+    botDuRun: "yuki",
     hosts: hosts.port,
     ouvrirPile: (botId) => pilesOuvertes.push(botId),
     fermerPile: (botId) => pilesFermees.push(botId),
@@ -167,7 +167,7 @@ describe("DÉMARRER — crée la pile puis le host", () => {
     const hosts = hostsFactices();
     const log = journalEspion();
     const execution = new ExecutionBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       hosts: hosts.port,
       ouvrirPile: () => {
         throw new Error("sources.json illisible");
@@ -253,7 +253,7 @@ describe("ARRÊTER — détruit host et pile", () => {
     const hosts = hostsFactices();
     const log = journalEspion();
     const execution = new ExecutionBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       hosts: hosts.port,
       ouvrirPile: () => undefined,
       sessions: () => 0,
@@ -281,7 +281,7 @@ describe("⑦ une raison d'échec constatée au démarrage est MÉMORISÉE", () 
   it("`noterErreurs` rend la cause réelle dans `etat()`, puis un succès l'efface", async () => {
     const hosts = hostsFactices();
     const execution = new ExecutionBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       hosts: hosts.port,
       ouvrirPile: () => undefined,
       sessions: () => 0,

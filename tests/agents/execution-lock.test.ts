@@ -34,6 +34,9 @@ import type { OutboundCommand, ResultFrame } from "../../src/agents/protocol.js"
 import { InstancePasswordStore } from "../../src/security/instance-password.js";
 import { createLogger } from "../../src/observability/logger.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -138,6 +141,7 @@ function fixture(): Fixture {
   password.set(PASSWORD);
   const store = AgentStore.open({
     path: join(dir, "agents.jsonl"),
+    botCourant: () => BOT_TEST,
     defaults: { level: "destructive", privilege: "normal" },
     logger,
     now: () => clock.now,

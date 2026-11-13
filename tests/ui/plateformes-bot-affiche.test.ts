@@ -67,7 +67,7 @@ interface VuePlateforme {
 }
 interface EtatPlateformes {
   bot: string;
-  botDePile: string | null;
+  botDuRun: string | null;
   connexionConnue: boolean;
   plateformes: Record<string, boolean>;
   mattermost: VuePlateforme;
@@ -79,7 +79,7 @@ interface EtatPlateformes {
 function etatGranolaf(): EtatPlateformes {
   return etatPlateformesDepuisFaits({
     botId: "granolaf",
-    botDePile: "yuki",
+    botDuRun: "yuki",
     champs: {
       "chat.mattermost.enabled": champ("off"),
       "chat.discord.enabled": champ("on"),
@@ -144,7 +144,7 @@ describe("③ bot affiché SANS jeton ⇒ « aucun jeton » (le cas honnête res
   it("Discord activé, aucun jeton de CE bot au coffre", () => {
     const etat = etatPlateformesDepuisFaits({
       botId: "logora",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       champs: { "chat.discord.enabled": champ("on") },
       noms: NOMS_GRANOLAF,
       coffreConfigure: true,
@@ -160,7 +160,7 @@ describe("③ bot affiché SANS jeton ⇒ « aucun jeton » (le cas honnête res
   it("un jeton posé avec l'interrupteur éteint est dit tel quel", () => {
     const etat = etatPlateformesDepuisFaits({
       botId: "granolaf",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       champs: { "chat.discord.enabled": champ("off") },
       noms: NOMS_GRANOLAF,
       coffreConfigure: true,
@@ -175,7 +175,7 @@ describe("④ coffre illisible ⇒ jeton INCONNU, jamais « aucun jeton »", () 
   it("la lecture ratée ne produit pas une affirmation fausse", () => {
     const etat = etatPlateformesDepuisFaits({
       botId: "granolaf",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       champs: { "chat.discord.enabled": champ("on") },
       noms: null,
       coffreConfigure: false,
@@ -191,7 +191,7 @@ describe("⑤ l'état de connexion n'est en direct que pour le bot de la pile", 
   it("bot de la pile : l'état du serveur est repris tel quel", () => {
     const etat = etatPlateformesDepuisFaits({
       botId: "yuki",
-      botDePile: "yuki",
+      botDuRun: "yuki",
       statutPile: {
         plateformes: { mattermost: false, discord: true },
         discord: {

@@ -41,6 +41,9 @@ import { createLogger } from "../../src/observability/logger.js";
 import { MAX_BOTS, supprimerBot } from "../../src/bots/admin.js";
 import { BOT_YUKI, CAPACITES_BOT, type RegistreBots } from "../../src/bots/registry.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -154,7 +157,8 @@ describe("visibilité des agents — le champ `bots` (lot 35g)", () => {
     );
     const store = AgentStore.open({
       path,
-      defaults: { level: "destructive", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "destructive", privilege: "normal" },
       logger,
     });
     const record = store.get("ancien");
@@ -340,7 +344,8 @@ describe("suppression d'un bot — les agents RESTENT, la liste est nettoyée", 
     // La modification survit à une relecture du journal.
     const reopened = AgentStore.open({
       path: join(f.dir, "agents.jsonl"),
-      defaults: { level: "destructive", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "destructive", privilege: "normal" },
       logger,
     });
     expect(reopened.get("a2")?.bots).toEqual([]);

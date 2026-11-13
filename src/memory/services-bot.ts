@@ -43,7 +43,7 @@ export interface OptionsServicesMemoire<T extends ServiceMemoireDemarrable> {
   /** Bot de la PILE (`main()`) : son service est le PRINCIPAL, jamais reconstruit. */
   readonly pile: string;
   /** Service du bot de la pile — celui que `main()` garde pour `/api/memory`. */
-  readonly principal: T;
+  readonly duRun: T;
   /** Stores d'un bot (ouverte paresseuse, jamais deux jeux pour un bot). */
   readonly storesDe: (botId: string) => StoresMemoireBot;
   /** Fabrique : reçoit le bot et SES stores. Appelée une seule fois par bot. */
@@ -63,17 +63,17 @@ export class ServicesMemoireBots<T extends ServiceMemoireDemarrable> {
 
   constructor(options: OptionsServicesMemoire<T>) {
     this.options = options;
-    this.map.set(options.pile, options.principal);
+    this.map.set(options.pile, options.duRun);
   }
 
   /**
    * Service de mémoire d'un bot.
    *
    * ⚠️ Le bot de la PILE rend le service de `main()` (identité `===`) : c'est ce
-   * qui garantit que le bot principal se comporte EXACTEMENT comme avant L11.
+   * qui garantit que le bot du run se comporte EXACTEMENT comme avant L11.
    */
   pour(botId: string): T {
-    if (botId === this.options.pile) return this.options.principal;
+    if (botId === this.options.pile) return this.options.duRun;
     const existant = this.map.get(botId);
     if (existant !== undefined) return existant;
     // ⚠️ Le service est adossé aux stores DU BOT : un seul `memory.jsonl` par
@@ -90,12 +90,12 @@ export class ServicesMemoireBots<T extends ServiceMemoireDemarrable> {
     return service;
   }
 
-  /** Le bot a-t-il un service CONSTRUIT (le principal compte) ? */
+  /** Le bot a-t-il un service CONSTRUIT (le bot du run compte) ? */
   a(botId: string): boolean {
     return this.map.has(botId);
   }
 
-  /** Identifiants couverts (le principal d'abord). */
+  /** Identifiants couverts (le bot du run d'abord). */
   ids(): string[] {
     return [...this.map.keys()];
   }

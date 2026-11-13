@@ -28,7 +28,7 @@ export interface DirectoriesBotsLogger {
 
 export interface OptionsDirectoriesAgentsBots<T> {
   /** Bot de la PILE (`main()`) : son annuaire est le PRINCIPAL, conservé tel quel. */
-  readonly botDePile: string;
+  readonly botDuRun: string;
   /** Bots à DÉMARRER (L1) : leurs annuaires sont construits d'emblée. */
   readonly bots?: readonly string[];
   /** Fabrique : reçoit le bot dont l'annuaire portera la visibilité. */
@@ -43,27 +43,27 @@ export interface OptionsDirectoriesAgentsBots<T> {
  *  1. **un seul annuaire par bot** (une Map, un identifiant construit une fois) ;
  *  2. **`pour()` ne rend JAMAIS l'annuaire d'un autre bot** : un bot inconnu du
  *     démarrage (créé depuis l'interface) obtient le SIEN, à la demande — jamais
- *     un repli sur le principal, qui afficherait les agents d'un autre.
+ *     un repli sur le bot du run, qui afficherait les agents d'un autre.
  */
 export class DirectoriesAgentsBots<T> {
   private readonly map = new Map<string, T>();
-  private readonly botDePile: string;
+  private readonly botDuRun: string;
   private readonly creer: (botId: string) => T;
   /** L'annuaire du bot de la PILE — EXACTEMENT celui d'avant le lot 40. */
-  readonly principal: T;
+  readonly duRun: T;
 
   constructor(options: OptionsDirectoriesAgentsBots<T>) {
-    this.botDePile = options.botDePile;
+    this.botDuRun = options.botDuRun;
     this.creer = options.creer;
-    this.principal = options.creer(options.botDePile);
-    this.map.set(options.botDePile, this.principal);
+    this.duRun = options.creer(options.botDuRun);
+    this.map.set(options.botDuRun, this.duRun);
     for (const botId of options.bots ?? []) {
       if (this.map.has(botId)) continue;
       this.map.set(botId, options.creer(botId));
     }
     // ⚠️ Diagnostic SANS contenu : des identifiants de bot, jamais un nom d'agent.
     options.logger?.info("agents.annuaires.bots", {
-      pile: options.botDePile,
+      pile: options.botDuRun,
       nombre: this.map.size,
       ids: [...this.map.keys()].join(","),
     });
@@ -76,7 +76,7 @@ export class DirectoriesAgentsBots<T> {
    */
   pour(botId: string): T {
     const valeur = typeof botId === "string" ? botId.trim() : "";
-    const cle = valeur === "" ? this.botDePile : valeur;
+    const cle = valeur === "" ? this.botDuRun : valeur;
     const connu = this.map.get(cle);
     if (connu !== undefined) return connu;
     const cree = this.creer(cle);
@@ -84,7 +84,7 @@ export class DirectoriesAgentsBots<T> {
     return cree;
   }
 
-  /** Identifiants couverts (principal d'abord). */
+  /** Identifiants couverts (bot du run d'abord). */
   ids(): string[] {
     return [...this.map.keys()];
   }

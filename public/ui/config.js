@@ -55,7 +55,11 @@ import {
   resetValueFor,
   splitConfigPatchByScope,
 } from './config-patch.js';
-import { cheminConfigBot, lireListeBots } from './bots-api.js';
+import {
+  cheminConfigBot,
+  lireListeBots,
+  resoudreBotCourantListe,
+} from './bots-api.js';
 import { initBotSwitcher } from './bot-switcher.js';
 import { messageBandeauBot } from './bot-switcher-modele.js';
 import { ouvrirCreationBot, ouvrirSuppressionBot } from './bots-admin.js';
@@ -178,16 +182,13 @@ let botsConnus = [];
  * ⚠️ Il n'y a PLUS de plafond de bots en marche (décision utilisateur du
  * 2026-11-13) : le bandeau ne parle donc plus de « N au maximum ».
  */
-let botPrincipal = null;
+let botDuRun = null;
 
 /**
  * Message d'une action de CYCLE DE VIE (démarrer/arrêter), gardé le temps d'un
  * rendu : le rendu reconstruit la zone, donc le texte doit lui survivre.
  */
 let flashBotExecution = "";
-
-/** Slug de bot par défaut quand l'URL en désigne un inconnu (repli silencieux). */
-const BOT_REPLI = "yuki";
 
 const state = {
   fields: {},
@@ -264,7 +265,7 @@ const botAddButton = document.getElementById("bot-add");
 const botCourantNomEl = document.getElementById("bot-courant-nom");
 /**
  * LOT 36 (L4) — lien vers la CONVERSATION du bot affiché (`/?b=<slug>`). Sans
- * lui, la page de conversation ouvrirait toujours celle du bot principal.
+ * lui, la page de conversation ouvrirait toujours celle du bot du RUN.
  */
 const botConversationEl = document.getElementById("bot-conversation");
 /** Bandeau d'honnêteté (page Bot) : ce qui n'est pas éditable pour ce bot. */
@@ -987,7 +988,7 @@ function scopesOfState() {
  */
 async function load() {
   const url = PAGE_BOT
-    ? cheminConfigBot(botCourant?.id ?? BOT_REPLI)
+    ? cheminConfigBot(botCourant?.id ?? botsConnus[0]?.id ?? "")
     : "/api/config";
   const body = await HolafFetch.get(url, {
     headers: { accept: "application/json" },
@@ -1042,7 +1043,7 @@ async function save(flow = "config-save") {
     const ecritures = [];
     if (PAGE_BOT) {
       ecritures.push({
-        url: cheminConfigBot(botCourant?.id ?? BOT_REPLI),
+        url: cheminConfigBot(botCourant?.id ?? botsConnus[0]?.id ?? ""),
         body: patch,
       });
     } else {
@@ -1378,25 +1379,24 @@ async function pollHealth() {
  * Résout le bot AFFICHÉ depuis `?b=<slug>`.
  *
  * ⚠️ Un slug INCONNU retombe sur `yuki` SANS erreur visible : une URL partagée
- * qui désigne un bot supprimé doit rester utilisable (elle ouvre le bot
- * historique), pas afficher un écran mort. Sans `?b=`, on prend le bot ACTIF
- * (c'est lui que l'instance utilise réellement).
+ * qui désigne un bot supprimé doit rester utilisable, pas afficher un écran
+ * mort : on retombe sur le PREMIER bot de la liste — la liste du serveur est
+ * triée par `ordre`, donc c'est le premier par `ordre`, exactement la règle de
+ * résolution du serveur (`resoudreBotCourant`).
+ *
+ * ⚠️ LOT 45 : plus de repli sur « yuki ». Yuki est supprimable comme n'importe
+ * quel bot ; un repli en dur la ferait réapparaître (ou pointerait dans le vide).
  */
 async function resoudreBot() {
-  // ⚠️ LOT 37 — la réponse porte `principal` (le bot de la PILE), nécessaire pour
-  // que le bandeau d'honnêteté nomme le bot qui tourne réellement.
+  // ⚠️ La réponse porte `botDuRun` (le bot du RUN, premier par `ordre`) : le
+  // bandeau d'honnêteté nomme ainsi le bot qui tourne réellement.
   const infos = await lireListeBots();
   botsConnus = infos.bots;
-  botPrincipal = infos.principal;
+  botDuRun = infos.botDuRun;
   const demande = new URLSearchParams(location.search).get("b");
-  const parId = (id) => botsConnus.find((bot) => bot.id === id) ?? null;
-  const actif = botsConnus.find((bot) => bot.actif === true) ?? null;
-  let choisi;
-  if (typeof demande === "string" && demande !== "") {
-    choisi = parId(demande) ?? parId(BOT_REPLI) ?? actif ?? botsConnus[0] ?? null;
-  } else {
-    choisi = actif ?? parId(BOT_REPLI) ?? botsConnus[0] ?? null;
-  }
+  // ⚠️ LA règle de résolution est celle du serveur, pas une seconde : bot demandé
+  // s'il existe, sinon premier par `ordre`, sinon rien.
+  const choisi = resoudreBotCourantListe(botsConnus, demande);
   botCourant = choisi;
   if (botCourant) {
     // ⚠️ L'URL est RÉÉCRITE avec le bot effectivement affiché : elle reste
@@ -1799,7 +1799,7 @@ function afficherBandeauBot() {
   const texte = messageBandeauBot({
     bot: botCourant,
     bots: botsConnus,
-    principal: botPrincipal,
+    duRun: botDuRun,
   });
   botNoticeEl.hidden = texte === "";
   botNoticeEl.textContent = texte;
@@ -1877,7 +1877,7 @@ function remplirSelecteurBot() {
       : "aucun bot";
   }
   // LOT 36 (L4) — le lien mène à la conversation DU BOT AFFICHÉ (aucun bot
-  // affiché ⇒ page de conversation sans `?b=` : le bot principal, comme avant).
+  // affiché ⇒ page de conversation sans `?b=` : le bot du RUN).
   if (botConversationEl) {
     const id = botCourant?.id ?? "";
     botConversationEl.href = id === "" ? "/" : `/?b=${encodeURIComponent(id)}`;
@@ -2197,10 +2197,10 @@ void (async () => {
         HolafModal,
         botId: botDuChat,
         botNom: botCourant?.nom ?? botDuChat,
-        // ⚠️ Bot de la PILE (`GET /api/bots` → `principal`) : c'est LUI que servent les
+        // ⚠️ Bot du RUN (`GET /api/bots` → `botDuRun`) : c'est LUI que servent les
         // routes d'instance `/api/chat/**`. Pour tout autre bot, le panneau passe par
         // les routes de ce bot (aucune écriture croisée possible).
-        botDePile: botPrincipal ?? BOT_REPLI,
+        botDuRun: botDuRun ?? botsConnus[0]?.id ?? null,
         // ⚠️ `actif` ≠ « tourne » : c'est `execution.demarre` qui le dit (lot 36 L8).
         botDemarre: botCourant?.execution?.demarre === true,
         // ⚠️ Ancre `#declencheurs` / `#plateformes` : les sections de plateforme ne sont

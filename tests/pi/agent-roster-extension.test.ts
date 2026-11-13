@@ -21,6 +21,9 @@ import { AgentDirectoryService, AgentStore, AGENT_LIST_TAG } from "../../src/age
 import type { AgentSummary } from "../../src/agents/index.js";
 import { createAgentRosterExtensionFactory } from "../../src/pi/sdk/agent-roster-extension.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 type Handler = (event: unknown) => unknown;
 
 function capture(
@@ -151,7 +154,8 @@ describe("annuaire d'agents — injection dans le prompt système (non persisté
     dirs.push(dir);
     const store = AgentStore.open({
       path: join(dir, "agents.jsonl"),
-      defaults: { level: "destructive", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "destructive", privilege: "normal" },
     });
     store.markSeen("a1");
     store.configure("a1", { name: "nuc00" });

@@ -34,6 +34,9 @@ import { createLogger } from "../../src/observability/logger.js";
 import type { SecretLookupPort } from "../../src/agents/execution.js";
 import type { SecretRequestRegistry } from "../../src/secrets/requests.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
 
 export interface StackOptions {
@@ -84,6 +87,7 @@ export async function startTestStack(options: StackOptions = {}): Promise<TestSt
   const dir = mkdtempSync(join(tmpdir(), "yuki-agents-stack-"));
   const store = AgentStore.open({
     path: join(dir, "agents.jsonl"),
+    botCourant: () => BOT_TEST,
     defaults: { level: "destructive", privilege: "normal" },
     logger,
   });

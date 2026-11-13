@@ -117,7 +117,7 @@ function banc(bots: BotRecord[]): Banc {
     },
   };
   const execution = new ExecutionBots({
-    botDePile: "yuki",
+    botDuRun: "yuki",
     hosts,
     ouvrirPile: (id) => pilesOuvertes.push(id),
     fermerPile: (id) => pilesFermees.push(id),

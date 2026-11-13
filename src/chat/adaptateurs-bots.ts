@@ -18,7 +18,7 @@
  *     l'objet que les routes d'instance et `getAdapter` servent, par identité.
  *
  * ⚠️ `connect()` est idempotent par paire, et `arreter(botId)` ne touche QUE ce
- * bot (arrêt ciblé, L9) : le bot principal n'est jamais déconnecté par là (son
+ * bot (arrêt ciblé, L9) : le bot du run n'est jamais déconnecté par là (son
  * adaptateur suit l'instance).
  *
  * Aucun import SDK/typebox : `T` est l'adaptateur réel, `creer` la seule couture
@@ -46,7 +46,7 @@ export function cleAdaptateur(botId: string, plateforme: PlateformeChat): string
 
 export interface OptionsAdaptateursChatBots<T extends AdaptateurChatDemarrable> {
   /** Bot de la PILE : son adaptateur est celui d'avant (`existants`). */
-  readonly botDePile: string;
+  readonly botDuRun: string;
   /** Jetons résolus (`resoudreJetonsChatBots`) : la SEULE source des connexions. */
   readonly resolution: ResolutionJetonsChat;
   /** Adaptateurs DÉJÀ construits (ceux de `main()`), réutilisés par identité. */
@@ -131,7 +131,7 @@ export class AdaptateursChatBots<T extends AdaptateurChatDemarrable> {
     const connectes: string[] = [];
     const echecs: { cle: string; error: string }[] = [];
     for (const [cle, { jeton, adaptateur }] of this.map) {
-      if (options.sansPile === true && jeton.botId === this.options.botDePile) continue;
+      if (options.sansPile === true && jeton.botId === this.options.botDuRun) continue;
       try {
         await adaptateur.connect();
         this.connectes.add(cle);
@@ -174,7 +174,7 @@ export class AdaptateursChatBots<T extends AdaptateurChatDemarrable> {
    * ⚠️ Refuse le bot de la PILE : son adaptateur est celui de l'instance.
    */
   async deconnecterBot(botId: string): Promise<boolean> {
-    if (botId === this.options.botDePile) return false;
+    if (botId === this.options.botDuRun) return false;
     let fait = false;
     for (const [cle, { jeton, adaptateur }] of this.map) {
       if (jeton.botId !== botId) continue;
@@ -200,7 +200,7 @@ export class AdaptateursChatBots<T extends AdaptateurChatDemarrable> {
    */
   async deconnecterTout(options: { sansPile?: boolean } = {}): Promise<void> {
     for (const [cle, { jeton, adaptateur }] of this.map) {
-      if (options.sansPile === true && jeton.botId === this.options.botDePile) continue;
+      if (options.sansPile === true && jeton.botId === this.options.botDuRun) continue;
       if (!this.connectes.has(cle)) continue;
       try {
         await adaptateur.disconnect();

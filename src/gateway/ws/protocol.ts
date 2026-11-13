@@ -31,7 +31,7 @@ import type {
  * ⚠️ Champ OPTIONNEL et ABSENT par défaut : une trame sans `botId` désigne le bot
  * PRINCIPAL, exactement comme avant L4 (compatibilité totale avec les clients
  * déjà chargés). Un `botId` inconnu ou arrêté est une ERREUR nommant le bot —
- * jamais un repli silencieux sur le principal (on parlerait à Yuki en croyant
+ * jamais un repli silencieux sur le bot du run (on parlerait à Yuki en croyant
  * parler à kohai).
  */
 export interface BotTargeted {
@@ -273,7 +273,7 @@ export type ServerMessage =
       /**
        * Bot qui RÉPOND réellement à cette connexion (lot 36, L4).
        *
-       * ⚠️ ABSENT quand le client n'a pas demandé de bot : c'est le principal, et
+       * ⚠️ ABSENT quand le client n'a pas demandé de bot : c'est le bot du run, et
        * la trame est alors identique à celle d'avant L4 (aucun champ ajouté).
        * L'interface s'en sert pour MONTRER à qui elle parle.
        */
@@ -739,10 +739,10 @@ function optionalString(
 /**
  * Identifiant de bot reçu d'un client (`botId` d'une trame de connexion).
  *
- * Rend `undefined` quand le champ est ABSENT (= bot principal, compat), la valeur
+ * Rend `undefined` quand le champ est ABSENT (= bot du run, compat), la valeur
  * NETTOYÉE quand il est lisible, et `null` quand il est présent mais invalide
  * (type inattendu ou chaîne vide) : un identifiant vide ne doit jamais désigner
- * silencieusement le principal.
+ * silencieusement le bot du run.
  */
 function parseBotId(value: unknown): string | null | undefined {
   if (value === undefined) return undefined;

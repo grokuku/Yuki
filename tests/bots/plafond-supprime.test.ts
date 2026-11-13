@@ -105,7 +105,9 @@ describe("① 4 bots `actif` ⇒ 4 DÉMARRAGES (le cas de l'utilisateur)", () =>
       "b4",
     ]);
     // ⚠️ Les notions `refuses` / `plafond` n'existent plus DU TOUT.
-    expect(Object.keys(resolution).sort()).toEqual(["aDemarrer", "principal"]);
+    // ⚠️ GARDE MISE À JOUR (lot 45) : `principal` est devenu `botCourant` — la
+    // liste reste la SEULE autre clé (aucun plafond, aucun refus).
+    expect(Object.keys(resolution).sort()).toEqual(["aDemarrer", "botCourant"]);
   });
 
   it("`preparerMultiBot` démarre les QUATRE, sans aucun avertissement de limite", () => {

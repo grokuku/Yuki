@@ -31,6 +31,9 @@ import {
 } from "../../src/security/instance-password.js";
 import { createLogger } from "../../src/observability/logger.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -65,6 +68,7 @@ function fixture(options: { idleTimeoutMs?: number } = {}): Fixture {
   const password = InstancePasswordStore.open({ path: join(dir, "instance-password.json") });
   const store = AgentStore.open({
     path: join(dir, "agents.jsonl"),
+    botCourant: () => BOT_TEST,
     defaults: { level: "destructive", privilege: "normal" },
     logger,
     now: () => clock.now,
@@ -122,7 +126,8 @@ describe("AgentLockService — coche « matériel sensible »", () => {
     rmSync(path, { force: true });
     const store = AgentStore.open({
       path,
-      defaults: { level: "destructive", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "destructive", privilege: "normal" },
       logger,
     });
     store.markSeen("agent-legacy");

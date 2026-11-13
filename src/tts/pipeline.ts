@@ -108,7 +108,7 @@ export interface TtsPipelineDeps {
    * ⚠️ LOT 36 (L11) — CONFIGURATION PAR BOT : `tts.voice`, `tts.emotion`,
    * `tts.speed`, `tts.exaggeration` et `tts.cfg` sont des clés `bot` (voir
    * `src/config/schema.ts`). Le run d'un bot doit donc parler avec SA voix, pas
-   * avec celle du principal.
+   * avec celle du bot du run.
    *
    * ⚠️ Le MOTEUR et la CONNEXION restent d'INSTANCE (`tts.engine`,
    * `tts.baseUrl`, `tts.timeoutMs`, prefetch, bornes de segmentation) : le

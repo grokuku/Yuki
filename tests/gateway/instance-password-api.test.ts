@@ -33,6 +33,9 @@ import { handleConfigRequest } from "../../src/gateway/routes/config.js";
 import { InstancePasswordStore } from "../../src/security/instance-password.js";
 import { createLogger } from "../../src/observability/logger.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -82,6 +85,7 @@ function harness(): Harness {
   const password = InstancePasswordStore.open({ path: join(dir, "instance-password.json") });
   const store = AgentStore.open({
     path: join(dir, "agents.jsonl"),
+    botCourant: () => BOT_TEST,
     defaults: { level: "destructive", privilege: "normal" },
     logger,
     canMarkSensitive: () => password.isConfigured(),

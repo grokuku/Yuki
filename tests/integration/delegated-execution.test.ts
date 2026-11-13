@@ -37,6 +37,9 @@ import { resolvePiPaths, seedSettingsFile, writeModelsFile } from "../../src/pi/
 import type { EphemeralSession } from "../../src/pi/sdk/session-factory.js";
 import { FakePiHost } from "../pi/host-double.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -112,7 +115,8 @@ describe("intégration — la tâche d'exécution est DÉLÉGUÉE (inversion des
     // --- Service d'exécution RÉEL (store + audit + approbations) -------------
     const store = AgentStore.open({
       path: join(root, "agents.jsonl"),
-      defaults: { level: "destructive", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "destructive", privilege: "normal" },
       logger,
     });
     store.markSeen("agent-nuc00");
@@ -276,7 +280,8 @@ describe("intégration — la tâche d'exécution est DÉLÉGUÉE (inversion des
 
     const store = AgentStore.open({
       path: join(root, "agents.jsonl"),
-      defaults: { level: "always", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "always", privilege: "normal" },
       logger,
     });
     store.markSeen("agent-nuc00");

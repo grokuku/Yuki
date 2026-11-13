@@ -132,9 +132,11 @@ describe("35h ③ — le câblage réel passe bien par la garde (test de source)
 
   it("les capacités viennent du BOT du registre, jamais d'une requête", () => {
     // ⚠️ Une seule dérivation, à partir du registre lu au démarrage.
-    expect(corps).toMatch(
-      /const capacitesBot: readonly CapaciteBot\[\] = bots\.bot\?\.capacites \?\? CAPACITES_BOT/,
-    );
+    // ⚠️ GARDE MISE À JOUR (lot 45) : plus de repli `?? CAPACITES_BOT` — le bot
+    // du run porte TOUJOURS un enregistrement (`preparerMultiBot` en rend un,
+    // mono-bot historique inclus). La règle vérifiée est la même : une seule
+    // dérivation, depuis le registre lu au démarrage.
+    expect(corps).toMatch(/const capacitesBot: readonly CapaciteBot\[\] = bots\.bot\.capacites;/);
     // ⚠️ Aucune lecture de capacités depuis un corps/une requête/un message.
     expect(corps).not.toMatch(/capacites\s*[:=]\s*(?:corps|body|query|req)\b/);
     expect(corps).not.toMatch(/(?:corps|body|query|req)\.[A-Za-z]*capacites/);

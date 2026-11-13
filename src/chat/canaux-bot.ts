@@ -233,7 +233,7 @@ export type VerdictCanal = { ok: true } | { ok: false; raison: string };
 
 export interface OptionsCanauxBots<M extends MiroirCanaux> {
   /** Bot de la PILE : son miroir est celui que `main()` a déjà ouvert. */
-  readonly botDePile: string;
+  readonly botDuRun: string;
   /** Miroir d'un bot (mémoïsé par CETTE classe : la fabrique peut être coûteuse). */
   readonly miroir: (botId: string) => M | undefined;
   readonly proprietaires: ProprietairesCanaux;
@@ -330,7 +330,7 @@ export class CanauxBots<M extends MiroirCanaux = MiroirCanaux> {
    * ⚠️ Les propriétés ne sont pas touchées : les canaux du bot restent les siens.
    */
   oublier(botId: string): boolean {
-    if (botId === this.options.botDePile) return false;
+    if (botId === this.options.botDuRun) return false;
     return this.miroirs.delete(botId);
   }
 }

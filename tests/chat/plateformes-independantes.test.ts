@@ -61,7 +61,7 @@ function construire(options: {
     logger,
   });
   const adaptateurs = new AdaptateursChatBots<AdaptateurChatDemarrable>({
-    botDePile: "yuki",
+    botDuRun: "yuki",
     resolution,
     // ⚠️ Aucun adaptateur « existant » : tout ce qui est construit ici l'est par
     // la règle testée (une paire = un interrupteur + un jeton).

@@ -126,7 +126,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
           // pour un bot non démarré — c'est exactement ce que le transport doit
           // refuser en le nommant.
           hosts: {
-            principal: host,
+            duRun: host,
             pourDemarre: (botId: string) =>
               arretes.has(botId) ? undefined : autres[botId],
             ids: () => ["principal", ...Object.keys(autres)].filter((id) => !arretes.has(id)),

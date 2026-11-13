@@ -32,6 +32,9 @@ import { createLogger } from "../../src/observability/logger.js";
 import type { GpuReport } from "../../src/types/gpu.js";
 import { agentBegin } from "./stack.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const logger = createLogger({ level: "error", sink: () => {}, secretValues: [] });
 const dirs: string[] = [];
 const servers: Array<ReturnType<typeof createHttpServer>> = [];
@@ -58,6 +61,7 @@ function fixture(): Fixture {
   dirs.push(dir);
   const store = AgentStore.open({
     path: join(dir, "agents.jsonl"),
+    botCourant: () => BOT_TEST,
     defaults: { level: "destructive", privilege: "normal" },
     logger,
   });

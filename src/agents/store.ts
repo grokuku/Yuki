@@ -12,7 +12,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { BOT_YUKI, ID_BOT_PATTERN, MAX_BOTS } from "../bots/registry.js";
+import { botCourantRequis } from "../bots/courant.js";
+import { ID_BOT_PATTERN, MAX_BOTS } from "../bots/registry.js";
 import { AgentError } from "./errors.js";
 import {
   AGENT_BOT_PAR_DEFAUT,
@@ -59,9 +60,13 @@ export interface AgentStoreOptions {
    * BOT COURANT du RUN (lot 35g) — c'est LUI qui décide de la visibilité des
    * agents (`AgentRecord.bots`).
    *
-   * ⚠️ La valeur vient du DÉMARRAGE (`bots.bot?.id ?? "yuki"`, `src/index.ts`),
-   * JAMAIS d'un paramètre de requête : sinon un appelant choisirait ses propres
-   * pouvoirs. Par défaut : le bot historique `yuki` (mode mono-bot).
+   * ⚠️ La valeur vient du DÉMARRAGE (`bots.bot.id`, le bot du RUN,
+   * `src/index.ts`), JAMAIS d'un paramètre de requête : sinon un appelant
+   * choisirait ses propres pouvoirs.
+   *
+   * ⚠️ LOT 45 : AUCUNE valeur par défaut. Le `yuki` implicite d'avant ce lot
+   * faisait réapparaître un bot supprimé ; l'absence d'appelant explicite LÈVE
+   * désormais (`botCourantRequis`).
    */
   botCourant?: () => string;
 }
@@ -329,7 +334,7 @@ export class AgentStore {
     // Sans prédicat fourni, la coche « matériel sensible » est REFUSÉE (un agent
     // sensible sans mot de passe d'instance serait définitivement inutilisable).
     this.canMarkSensitive = options.canMarkSensitive ?? (() => false);
-    this.botCourant = options.botCourant ?? (() => BOT_YUKI);
+    this.botCourant = options.botCourant ?? (() => botCourantRequis("AgentStore"));
   }
 
   /** Ouvre (ou crée) le journal et reconstruit la projection en le rejouant. */

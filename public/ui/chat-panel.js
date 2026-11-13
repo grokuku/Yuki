@@ -36,7 +36,7 @@
  */
 
 import { badgeFor } from "./chat-mode.js";
-import { BOT_PAR_DEFAUT, BOT_WRITE_HEADERS, cheminConfigBot } from "./bots-api.js";
+import { BOT_WRITE_HEADERS, cheminConfigBot } from "./bots-api.js";
 import {
   nomSecretChatBot,
   nomsSecretsChatBot,
@@ -203,9 +203,9 @@ const PLATFORMS = [
  * @param {object} [deps.HolafModal] modale de la brique (`alert`).
  * @param {(url: string, init?: RequestInit) => Promise<Response>} [deps.fetchImpl] `fetch` injectable (tests).
  * @param {string} [deps.botId] bot AFFICHÉ (`/bots?b=<id>`). Absent ou égal à
- *   `botDePile` ⇒ panneau d'INSTANCE (`/api/chat/**`) ; sinon le panneau vise SES
+ *   `botDuRun` ⇒ panneau d'INSTANCE (`/api/chat/**`) ; sinon le panneau vise SES
  *   routes et SON jeton (`initChatPanelBot`).
- * @param {string} [deps.botDePile] bot de la PILE (`GET /api/bots` → `principal`) :
+ * @param {string} [deps.botDuRun] bot du RUN (`GET /api/bots` → `botDuRun`) :
  *   le seul que servent les routes d'instance `/api/chat/**`.
  * @param {string} [deps.botNom] nom lisible du bot affiché.
  * @param {boolean} [deps.botDemarre] ce qui TOURNE (`execution.demarre`), distinct
@@ -221,7 +221,7 @@ export function initChatPanel(deps) {
   const modal = deps.HolafModal ?? null;
   const doFetch = deps.fetchImpl ?? ((url, init) => fetch(url, init));
   /**
-   * Bot AFFICHÉ (`/bots?b=<id>`) et bot de la PILE (`GET /api/bots` → `principal`).
+   * Bot AFFICHÉ (`/bots?b=<id>`) et bot du RUN (`GET /api/bots` → `botDuRun`).
    *
    * ⚠️ LOT 42 — POURQUOI CE PANNEAU SAIT VISER UN AUTRE BOT QUE CELUI DE LA PILE :
    * les routes d'instance `/api/chat/**` sont liées au bot de la PILE (elles lisent et
@@ -231,12 +231,12 @@ export function initChatPanel(deps) {
    * et le coffre (`POST /api/secrets`, nom `YUKI_CHAT_<BOT>__<PLATEFORME>`).
    */
   const botId = typeof deps.botId === "string" ? deps.botId : "";
-  const botDePile =
-    typeof deps.botDePile === "string" && deps.botDePile !== ""
-      ? deps.botDePile
-      : BOT_PAR_DEFAUT;
-  if (botId !== "" && botId !== botDePile) {
-    return initChatPanelBot({ ...deps, botId, botDePile });
+  // ⚠️ LOT 45 : aucun bot du run connu (liste vide, API injoignable) ⇒ `""`.
+  // Le panneau retombe alors sur les routes d'INSTANCE, jamais sur un « yuki »
+  // inventé qui écrirait chez un bot supprimé.
+  const botDuRun = typeof deps.botDuRun === "string" ? deps.botDuRun : "";
+  if (botId !== "" && botId !== botDuRun) {
+    return initChatPanelBot({ ...deps, botId, botDuRun });
   }
   const onFirstRender = typeof deps.onFirstRender === "function" ? deps.onFirstRender : null;
   let premiereLectureTerminee = false;
@@ -929,7 +929,7 @@ export function texteEtatConnexionBot(demarre) {
  * ce panneau pouvait causer, et la raison d'être de cette branche.
  *
  * @param {object} deps mêmes dépendances que `initChatPanel`, plus `botId`,
- *   `botDePile`, `botNom` et `botDemarre` (`GET /api/bots` → `execution.demarre`).
+ *   `botDuRun`, `botNom` et `botDemarre` (`GET /api/bots` → `execution.demarre`).
  */
 export function initChatPanelBot(deps) {
   const root = deps.root;

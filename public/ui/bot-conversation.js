@@ -12,13 +12,13 @@
  *
  * ⚠️ L'état vient de l'URL (`?b=<slug>`), exactement comme `/bots` : elle est
  * partageable et un rechargement retombe sur le même bot. Sans `?b=`, la page ne
- * demande AUCUN bot — c'est le principal, comportement d'avant L4.
+ * demande AUCUN bot — c'est le bot du RUN (premier par `ordre`), comportement d'avant L4.
  *
  * Aucun `innerHTML`, aucun style inline : le module ne touche pas au DOM.
  */
 
 /**
- * Bot demandé par la page de conversation, ou `null` (= principal).
+ * Bot demandé par la page de conversation, ou `null` (= bot du RUN).
  *
  * Une valeur vide ou faite d'espaces vaut « aucun bot » : on ne transmet jamais
  * un identifiant vide au serveur (il le refuserait, à juste titre).

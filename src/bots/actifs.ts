@@ -1,23 +1,27 @@
 /**
- * RÉSOLUTION DES BOTS AU DÉMARRAGE — QUI DOIT TOURNER.
+ * RÉSOLUTION DES BOTS AU DÉMARRAGE — QUI DOIT TOURNER, ET AVEC LEQUEL LE
+ * PROCESSUS TRAVAILLE.
  *
- * ⚠️ DEUX NOTIONS DISTINCTES, et c'est TOUT l'objet de ce module :
- *  - le bot **PRINCIPAL** (`principal`) : celui dont l'identité sert de référence
- *    (c'est `botActif`, qui privilégie TOUJOURS `yuki`, `registry.ts:297-306`) ;
- *  - les bots qui **DOIVENT TOURNER** (`aDemarrer`) : TOUS ceux dont `actif` vaut
- *    `true`, triés par `ordre` puis par identifiant.
+ * ⚠️ LOT 45 — PLUS DE « BOT PRINCIPAL ». Jusqu'ici ce module élisait un
+ * `principal` (= `botActif`, qui privilégiait TOUJOURS `yuki`, même éteinte) :
+ * une identité spéciale survivait donc dans le registre, et supprimer `yuki`
+ * n'avait pas le même sens que supprimer un autre bot. Ce privilège est
+ * SUPPRIMÉ : les bots sont ÉGAUX.
  *
- * Un bot principal peut donc ne pas tourner (l'utilisateur a éteint « yuki ») ;
- * et un bot qui tourne n'est pas forcément le principal. Les deux listes sont
- * rendues séparément plutôt que confondues : confondre les deux ferait d'un
- * bouton on/off un changement d'identité.
+ * Ce qui reste, et ce sont DEUX choses distinctes :
+ *  - `aDemarrer` : TOUS les bots `actif: true`, triés par `ordre` puis par
+ *    identifiant. Aucun plafond (décision utilisateur du 2026-11-13 : « retire
+ *    le plafond. Chacun fait comme il a envie en fonction de ses ressources ») ;
+ *  - `botCourant` : le PREMIER de cette liste. C'est le **bot du RUN** — celui
+ *    dont le processus tient les objets d'instance (configuration d'instance,
+ *    `agentExecution`, mémoire, host par défaut du transport). Il n'est plus élu
+ *    par IDENTITÉ (aucun identifiant privilégié) : c'est le premier par `ordre`,
+ *    et c'est exactement ce que `resoudreBotCourant` rend sans demande.
  *
- * ⚠️ AUCUN PLAFOND (décision utilisateur du 2026-11-13 : « retire le plafond.
- * Chacun fait comme il a envie en fonction de ses ressources, limiter c'est mal
- * à mon sens »). L'ancien réglage `bots.maxActifs` (défaut 3) a été SUPPRIMÉ :
- * `aDemarrer` n'est plus tronqué et aucun bot `actif` n'est écarté. Le coût réel
- * (autant de piles que de bots) n'est pas caché pour autant : le démarrage
- * JOURNALISE le nombre de bots démarrés (`bots.demarrage`).
+ * ⚠️ « Bot du RUN » ≠ « bot DEMANDÉ » (`?b=`, `?bot=`, trame WS) : la demande se
+ * résout dans `src/bots/courant.ts`, à chaque requête, et peut désigner
+ * n'importe quel bot du registre — jamais un bot absent de `aDemarrer` pour
+ * autant : son host n'existe pas.
  *
  * ⚠️ `MAX_BOTS` (`registry.ts`) n'a rien à voir : c'est le nombre de bots
  * CRÉABLES, pas le nombre qui tournent.
@@ -28,40 +32,48 @@
  * Aucun import SDK/typebox.
  */
 
-import { botActif, type BotRecord, type RegistreBots } from "./registry.js";
+import { botsParOrdre } from "./courant.js";
+import type { BotRecord, RegistreBots } from "./registry.js";
 
 /**
- * Bots qui DOIVENT TOURNER : `actif === true`, triés par `ordre` puis par
- * identifiant (l'ordre doit être DÉTERMINISTE : deux redémarrages ne peuvent pas
- * élire deux bots différents selon l'ordre du fichier).
+ * Bots qui DOIVENT TOURNER : `actif === true`, dans l'ordre DÉTERMINISTE de
+ * `botsParOrdre` (`ordre`, puis `id` — deux redémarrages ne peuvent pas élire
+ * deux bots différents selon l'ordre du fichier).
+ *
+ * ⚠️ L'ordre n'est PAS réimplémenté ici : `botsParOrdre` (`courant.ts`) est la
+ * seule définition de l'ordre d'affichage/d'exécution, donc le bot du run et le
+ * bot courant sans demande sont forcément le MÊME.
  *
  * ⚠️ Aucune troncature : la liste rend TOUS les bots actifs, sans exception.
  */
 export function botsAActiver(registre: RegistreBots): BotRecord[] {
-  return registre.bots
-    .filter((bot) => bot.actif === true)
-    .sort((a, b) => (a.ordre === b.ordre ? a.id.localeCompare(b.id) : a.ordre - b.ordre));
+  return botsParOrdre(registre).filter((bot) => bot.actif === true);
 }
 
 /** Ce que le démarrage doit faire, calculé sans rien écrire. */
 export interface ResolutionDemarrageBots {
-  /** Bot d'IDENTITÉ (`botActif` privilégie `yuki`) — peut ne pas tourner. */
-  readonly principal: BotRecord | null;
+  /**
+   * Bot du RUN : le PREMIER bot à démarrer (par `ordre`, puis par `id`), donc
+   * `null` quand aucun bot n'est actif. ⚠️ Aucun identifiant n'est privilégié, et
+   * c'est exactement ce que `resoudreBotCourant(registre)` rend sans demande.
+   */
+  readonly botCourant: BotRecord | null;
   /** TOUS les bots marqués `actif`, dans l'ordre de démarrage. */
   readonly aDemarrer: readonly BotRecord[];
 }
 
 /**
- * Résout le démarrage : le principal (identité) et la liste COMPLÈTE des bots à
- * faire tourner.
+ * Résout le démarrage : le bot du run et la liste COMPLÈTE des bots à faire
+ * tourner.
  *
  * ⚠️ `aDemarrer` peut être VIDE (tous les bots éteints) : c'est un ÉTAT valide de
  * ce calcul, et c'est l'appelant qui refuse le démarrage avec un message clair
  * (`AUCUN_BOT_ACTIF`). Une fonction pure ne lève pas pour une configuration.
  */
 export function resoudreDemarrageBots(registre: RegistreBots): ResolutionDemarrageBots {
+  const aDemarrer = botsAActiver(registre);
   return {
-    principal: botActif(registre),
-    aDemarrer: botsAActiver(registre),
+    botCourant: aDemarrer[0] ?? null,
+    aDemarrer,
   };
 }

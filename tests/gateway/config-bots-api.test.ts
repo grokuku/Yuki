@@ -164,8 +164,10 @@ describe("① `GET /api/bots`", () => {
     expect(status).toBe(200);
     expect(body.refuses).toBeUndefined();
     expect(body.plafond).toBeUndefined();
-    // La réponse garde ce qu'elle doit dire vrai : le principal et les boucles.
-    expect(body.principal).toBe(b.deps.runtime.botId);
+    // ⚠️ LOT 45 : plus de « principal ». La réponse dit ce qu'elle doit dire
+    // vrai — le bot du RUN (`botDuRun`) et les boucles.
+    expect(body.botDuRun).toBe(b.deps.runtime.botId);
+    expect(body.principal).toBeUndefined();
     expect(body.echanges).toEqual({});
   });
 });

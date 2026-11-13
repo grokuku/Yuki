@@ -27,6 +27,9 @@ import { createAgentRosterExtensionFactory } from "../../src/pi/sdk/agent-roster
 import { InstancePasswordStore } from "../../src/security/instance-password.js";
 import { createLogger } from "../../src/observability/logger.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -72,7 +75,8 @@ describe("Annuaire injecté — état VERROUILLÉ", () => {
     password.set(PASSWORD);
     const store = AgentStore.open({
       path: join(dir, "agents.jsonl"),
-      defaults: { level: "destructive", privilege: "normal" },
+      botCourant: () => BOT_TEST,
+    defaults: { level: "destructive", privilege: "normal" },
       logger,
       canMarkSensitive: () => password.isConfigured(),
     });

@@ -24,6 +24,8 @@ afterEach(() => {
 function open(path: string, overrides: Partial<Parameters<typeof AgentStore.open>[0]> = {}) {
   return AgentStore.open({
     path,
+    // ⚠️ LOT 45 : aucun bot par défaut en PRODUCTION. Le test NOMME le sien.
+    botCourant: () => "yuki",
     defaults: { level: "destructive", privilege: "normal" },
     logger: createLogger({ level: "error", sink: () => {}, secretValues: [] }),
     ...overrides,
@@ -210,6 +212,7 @@ describe("AgentStore — persistance & rejeu", () => {
     };
     const store = AgentStore.fromEvents([event, event], {
       path: tempStorePath(),
+      botCourant: () => "yuki",
       defaults: { level: "destructive", privilege: "normal" },
     });
     expect(store.size).toBe(1);
@@ -222,7 +225,11 @@ describe("AgentStore — persistance & rejeu", () => {
         { seq: 5, eventId: "e5", kind: "upsert", patch: { level: "never" }, ...base },
         { seq: 3, eventId: "e3", kind: "upsert", patch: { level: "always" }, ...base },
       ],
-      { path: tempStorePath(), defaults: { level: "destructive", privilege: "normal" } },
+      {
+        path: tempStorePath(),
+        botCourant: () => "yuki",
+        defaults: { level: "destructive", privilege: "normal" },
+      },
     );
     expect(store.get("agent-1")?.level).toBe("never");
   });

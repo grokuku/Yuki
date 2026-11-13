@@ -20,6 +20,7 @@ import { join } from "node:path";
 import type { Env } from "../config/env.js";
 
 import { resoudreDemarrageBots } from "./actifs.js";
+import { botHistoriqueMono } from "./courant.js";
 import {
   BOT_YUKI,
   RegistreBotsError,
@@ -44,6 +45,7 @@ import {
 } from "./paths.js";
 
 export * from "./registry.js";
+export * from "./courant.js";
 export * from "./actifs.js";
 export * from "./paths.js";
 export * from "./migrate.js";
@@ -68,14 +70,18 @@ export interface ResultatPreparationBots {
    * empilerait les chemins (`<pi>/sessions/<botId>/<botId>`).
    */
   envInstance: Env;
-  /** Bot dont la PILE tourne (`null` en mode mono-bot historique). */
-  bot: BotRecord | null;
   /**
-   * Bot d'IDENTITÉ (lot 36, L1) : `botActif` privilégie TOUJOURS `yuki`. Il peut
-   * donc DIFFÉRER de `bot` (le bot qui tourne) — c'est le cas quand « yuki » a
-   * été éteint alors qu'un autre bot reste actif.
+   * Bot du RUN — celui dont le processus tient les objets d'instance
+   * (configuration d'instance, `agentExecution`, mémoire, host par défaut).
+   *
+   * ⚠️ LOT 45 : il n'y a PLUS de « bot principal ». Ce bot est simplement le
+   * PREMIER à démarrer (par `ordre`, puis par `id`) : aucun identifiant n'est
+   * privilégié, et supprimer `yuki` ne change rien à la règle.
+   *
+   * ⚠️ Il n'est JAMAIS `null` : en mode mono-bot historique, c'est le bot
+   * historique (`botHistoriqueMono`), dont les chemins sont ceux d'avant 35a.
    */
-  principal: BotRecord | null;
+  bot: BotRecord;
   /**
    * Bots qui DOIVENT TOURNER (`actif: true`), TOUS, dans l'ordre de démarrage.
    * En mode mono-bot historique : liste vide.
@@ -165,8 +171,7 @@ export function preparerMultiBot(
         mode: "mono",
         env,
         envInstance: env,
-        bot: null,
-        principal: null,
+        bot: botHistoriqueMono(),
         aDemarrer: [],
         registre: null,
         chemins: null,
@@ -184,8 +189,7 @@ export function preparerMultiBot(
           mode: "mono",
           env,
           envInstance: env,
-          bot: null,
-          principal: null,
+          bot: botHistoriqueMono(),
           aDemarrer: [],
           registre: null,
           chemins: null,
@@ -225,45 +229,19 @@ export function preparerMultiBot(
     }
   }
 
-  // ⚠️ La LISTE des bots à démarrer et le bot PRINCIPAL sont deux choses
-  // distinctes (voir `src/bots/actifs.ts`). AUCUN plafond : tous les bots
-  // `actif: true` démarrent (décision utilisateur du 2026-11-13).
+  // ⚠️ LOT 45 — AUCUN « BOT PRINCIPAL » : plus d'élection par identité. Le bot du
+  // RUN est le premier à démarrer (par `ordre`, puis `id`) ; les autres sont ses
+  // ÉGAUX. AUCUN plafond non plus : tous les bots `actif: true` démarrent
+  // (décision utilisateur du 2026-11-13).
   const demarrage = resoudreDemarrageBots(registre);
-  const principal = demarrage.principal;
-  if (!principal) {
-    throw new DemarrageRefuseError(
-      "AUCUN_BOT_ACTIF",
-      "Le registre des bots ne contient aucun bot actif : démarrage refusé.",
-      registre.bots.map((entree) => `${entree.id} (actif=${entree.actif})`),
-    );
-  }
-  if (demarrage.aDemarrer.length === 0) {
-    // ⚠️ Tous les bots sont ÉTEINTS : il n'y a rien à faire tourner. Le refus
-    // nomme l'état exact — mieux vaut ne pas démarrer qu'inventer un bot.
+  const bot = demarrage.botCourant;
+  if (!bot || demarrage.aDemarrer.length === 0) {
+    // ⚠️ Aucun bot ACTIF : il n'y a rien à faire tourner. Le refus nomme l'état
+    // exact — mieux vaut ne pas démarrer qu'inventer un bot.
     throw new DemarrageRefuseError(
       "AUCUN_BOT_ACTIF",
       "Aucun bot n'est marqué actif (« doit tourner ») : démarrage refusé.",
       registre.bots.map((entree) => `${entree.id} (actif=${entree.actif})`),
-    );
-  }
-  // ⚠️ UNE SEULE PILE est construite à ce jour (L1) : c'est le bot PRINCIPAL s'il
-  // doit tourner, sinon le premier bot à démarrer. Cette règle garantit la
-  // non-régression : avec un seul bot actif (`yuki`, cas par défaut), le bot
-  // effectif est EXACTEMENT celui d'avant.
-  const bot =
-    demarrage.aDemarrer.find((entree) => entree.id === principal.id) ??
-    (demarrage.aDemarrer[0] as BotRecord);
-  if (bot.id !== principal.id) {
-    avertissements.push(
-      `Le bot PRINCIPAL est « ${principal.id} » mais il est ÉTEINT : la pile ` +
-        `construite est celle de « ${bot.id} » (le premier bot actif).`,
-    );
-  }
-  if (bot.id !== BOT_YUKI) {
-    // ⚠️ Seul `yuki` est attendu à la fin du lot 35a ; un autre identifiant
-    // n'est pas une erreur de schéma mais il doit être DIT (pas de surprise).
-    avertissements.push(
-      `Le bot actif est « ${bot.id} » et non « ${BOT_YUKI} » : résolution par bot appliquée.`,
     );
   }
 
@@ -274,6 +252,9 @@ export function preparerMultiBot(
   // refuser), et on ne refuse que si la reprise est impossible (conflit de nom,
   // volume en lecture seule).
   const botIds = registre.bots.map((entree) => entree.id);
+  // ⚠️ Le dossier d'ORIGINE des sessions est celui du bot historique quand il
+  // existe encore (c'est SON dossier qui a été mis à plat avant 35a). Sinon,
+  // c'est celui du bot du run : aucun identifiant n'est inventé.
   const botSessions = botIds.includes(BOT_YUKI) ? BOT_YUKI : bot.id;
   const etatSessions = etatSessionsOrigine(env, botSessions, { botIds });
   if (etatSessions.nonMigrees) {
@@ -317,7 +298,7 @@ export function preparerMultiBot(
     throw new DemarrageRefuseError(
       "MIGRATION_PARTIELLE",
       "MIGRATION_PARTIELLE : `bots.json` existe mais des chemins d'origine sont encore présents.\n" +
-        "Démarrage REFUSÉ pour ne pas faire tourner Yuki sur deux dispositions à la fois.\n" +
+        "Démarrage REFUSÉ pour ne pas faire tourner un bot sur deux dispositions à la fois.\n" +
         `Chemins en double :${listeEnClair(restants)}`,
       restants,
     );
@@ -334,7 +315,6 @@ export function preparerMultiBot(
     env: resolution.env,
     envInstance: env,
     bot,
-    principal,
     aDemarrer: [...demarrage.aDemarrer],
     registre,
     chemins: resolution.chemins,

@@ -105,7 +105,7 @@ const botSwitcher = initBotSwitcher({
   // (`.bot-bar__nom`), à droite de sa tête. L'ancien `#bot-switcher-nom`
   // produisait « Yuki » détaché après les têtes des autres bots.
   HolafModal,
-  // ⚠️ `/avatar` ne sert QUE l'avatar du bot principal (celui du runtime) :
+  // ⚠️ `/avatar` ne sert QUE l'avatar du bot du RUN (celui du runtime) :
   // l'image est reprise telle quelle, jamais inventée pour un autre bot.
   avatarPrincipal: () => avatarBotPrincipal,
 });
@@ -204,7 +204,7 @@ const deepLinkSession = new URLSearchParams(window.location.search).get("session
 /**
  * LOT 36 (L4) — BOT de cette conversation, lu dans l'URL (`?b=<slug>`, même
  * convention que `/bots`). `null` ⇒ aucun bot demandé : toutes les trames de
- * connexion sont alors celles d'avant L4 (`botId` absent ⇒ principal).
+ * connexion sont alors celles d'avant L4 (`botId` absent ⇒ bot du run).
  */
 const botPage = botDeLaPage(window.location.search);
 /**
@@ -1999,7 +1999,7 @@ function handleFrame(frame) {
     botSwitcher.majSessions(
       lastSessions.map((entree) => entree.id),
       unreadBySession,
-      botConnecte ?? botPage ?? botSwitcher.etat().principal,
+      botConnecte ?? botPage ?? botSwitcher.etat().duRun,
     );
     setEmptyState(activeId === null);
     // Bascule demandée depuis « Conversation dédiée… » : le serveur vient de

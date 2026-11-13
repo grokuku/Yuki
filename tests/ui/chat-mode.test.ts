@@ -38,7 +38,6 @@ import {
   savePlatformEnabled,
   titrePlateforme,
 } from "../../public/ui/chat-mode.js";
-import { BOT_PAR_DEFAUT } from "../../public/ui/bots-api.js";
 
 const read = (name: string): string =>
   readFileSync(join(process.cwd(), "public", "ui", name), "utf8");
@@ -217,7 +216,9 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
     expect(avis?.titre).toBe("Aucun canal visible par ce bot.");
     // ⚠️ Les MOTS de l'interface : page du BOT, onglet « Plateformes », SECTION
     // « Discussions — Mattermost » (jamais « Discussions » seul).
-    expect(avis?.detail).toContain("/bots?b=yuki → Plateformes → « Discussions — Mattermost »");
+    // ⚠️ GARDE MISE À JOUR (lot 45) : sans bot connu, le chemin ne porte AUCUN
+    // `?b=` — plus de `?b=yuki` gravé (yuki est supprimable).
+    expect(avis?.detail).toContain("/bots → Plateformes → « Discussions — Mattermost »");
     // ⚠️ Jamais la SECTION SEULE (« Discussions »), qui n'existe pas dans l'UI.
     expect(avis?.detail).not.toContain("« Discussions »");
     // Et le chemin Discord, lui, nomme la section Discord.
@@ -228,7 +229,7 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
       },
       { nombre: 0, connue: true },
     );
-    expect(salons?.detail).toContain("/bots?b=yuki → Plateformes → « Discussions — Discord »");
+    expect(salons?.detail).toContain("/bots → Plateformes → « Discussions — Discord »");
     expect(salons?.detail).not.toContain("« Discussions »");
     // ⚠️ GARDE CHANGÉE (2026-11-13) : SANS plateforme activée ET liste VIDE, on dit
     // désormais OÙ activer — une liste vide ne doit jamais être muette (sans canal,
@@ -249,11 +250,12 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
   });
 
   it("le chemin est celui de l'UI RÉELLE (onglet « Plateformes », sections nommées)", () => {
-    // ⚠️ GARDE CHANGÉE (capture utilisateur) : le chemin n'est plus une CONSTANTE
-    // gravée `?b=yuki` — c'est le bot dont on parle qui le porte, sinon le bandeau
-    // renvoie aux réglages d'un autre bot que celui qu'il décrit.
+    // ⚠️ GARDE CHANGÉE (capture utilisateur, puis lot 45) : le chemin n'est pas
+    // une CONSTANTE gravée `?b=yuki` — c'est le bot dont on parle qui le porte.
+    // ⚠️ LOT 45 : sans bot, AUCUN `?b=` (le serveur résout le premier par
+    // `ordre`) — un identifiant en dur nommerait un bot supprimé.
     expect(cheminPlateforme("mattermost")).toBe(
-      `${cheminPlateforme("mattermost", BOT_PAR_DEFAUT)}`,
+      "/bots → Plateformes → « Discussions — Mattermost »",
     );
     expect(cheminPlateforme("mattermost", "granolaf")).toBe(
       "/bots?b=granolaf → Plateformes → « Discussions — Mattermost »",

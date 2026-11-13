@@ -51,7 +51,7 @@ function banc(options: {
   const log = journalEspion();
   const creer = vi.fn((botId: string): WorkerFactice => ({ botId }));
   const workers = new WorkersLourdsBots<WorkerFactice>({
-    botDePile: "yuki",
+    botDuRun: "yuki",
     capacites: options.capacites ?? (() => TOUTES),
     creer,
     ...(options.existants !== undefined ? { existants: options.existants } : {}),

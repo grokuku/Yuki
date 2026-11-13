@@ -11,7 +11,7 @@
  * Trois règles, et elles suffisent :
  *  1. **PARESSEUX** : un worker n'est construit qu'à la PREMIÈRE demande de son
  *     bot (`pour`). Le constructeur ne construit RIEN — seule exception : les
- *     workers DÉJÀ construits par `main()` (le principal), qui sont réutilisés
+ *     workers DÉJÀ construits par `main()` (le bot du run), qui sont réutilisés
  *     par identité.
  *  2. **STRUCTUREL** : un bot sans capacité `execution` ni `delegation` n'a
  *     jamais de worker (`workerLourdAutorise`, `src/bots/profils.ts`). Ce n'est
@@ -53,8 +53,8 @@ export type RefusWorker = "capacites" | "plafond";
 
 export interface OptionsWorkersLourds<T> {
   /** Bot de la PILE : son worker est celui que `main()` a déjà construit. */
-  readonly botDePile: string;
-  /** Workers DÉJÀ construits (le principal), réutilisés par identité. */
+  readonly botDuRun: string;
+  /** Workers DÉJÀ construits (le bot du run), réutilisés par identité. */
   readonly existants?: ReadonlyMap<string, T>;
   /** Capacités d'un bot (`undefined` = mono-bot historique ⇒ autorisé). */
   readonly capacites: (botId: string) => readonly CapaciteBot[] | undefined;

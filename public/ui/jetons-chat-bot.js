@@ -17,7 +17,7 @@
  * Aucun `innerHTML`, aucun style : ce module ne touche pas au DOM.
  */
 
-import { BOT_PAR_DEFAUT } from "./bots-api.js";
+import { BOT_HISTORIQUE } from "./bots-api.js";
 
 /** Préfixe commun des jetons de discussion (`src/chat/jetons-bot.ts`). */
 export const PREFIXE_SECRET_CHAT = "YUKI_CHAT";
@@ -33,11 +33,12 @@ export function nomSecretChatBot(botId, plateforme) {
 
 /**
  * Noms ACCEPTÉS pour le jeton d'un bot (le premier est celui d'un nouveau jeton).
- * Seul `yuki` garde droit à l'ancien nom d'instance (installations existantes).
+ * Seul le bot HISTORIQUE garde droit à l'ancien nom d'instance (installations
+ * existantes) : c'est une compatibilité de NOM de secret, jamais un choix de bot.
  */
 export function nomsSecretsChatBot(botId, plateforme) {
   const noms = [nomSecretChatBot(botId, plateforme)];
-  if (botId === BOT_PAR_DEFAUT) {
+  if (botId === BOT_HISTORIQUE) {
     const historique = `${PREFIXE_SECRET_CHAT}_${String(plateforme).toUpperCase()}`;
     if (!noms.includes(historique)) noms.push(historique);
   }

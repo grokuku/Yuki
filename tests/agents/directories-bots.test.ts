@@ -33,6 +33,9 @@ import {
 } from "../../src/agents/index.js";
 import { createLogger } from "../../src/observability/logger.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const dirs: string[] = [];
 
 afterEach(() => {
@@ -63,6 +66,7 @@ function fixture(): Fixture {
   const dir = tempDir();
   const store = AgentStore.open({
     path: join(dir, "agents.jsonl"),
+    botCourant: () => BOT_TEST,
     defaults: { level: "destructive", privilege: "normal" },
     logger,
   });
@@ -73,7 +77,7 @@ function fixture(): Fixture {
     logger,
   });
   const annuaires = new DirectoriesAgentsBots<AgentDirectoryService>({
-    botDePile: "yuki",
+    botDuRun: "yuki",
     bots: ["kohai"],
     creer: (botId) =>
       new AgentDirectoryService({
@@ -117,13 +121,13 @@ describe("LOT 40 — annuaire par bot", () => {
 
   it("le principal est l'annuaire du bot de la pile, réutilisé tel quel", () => {
     const { annuaires } = fixture();
-    expect(annuaires.principal).toBe(annuaires.pour("yuki"));
+    expect(annuaires.duRun).toBe(annuaires.pour("yuki"));
     expect(annuaires.ids()).toEqual(["yuki", "kohai"]);
   });
 
   it("identifiant absent ou vide ⇒ annuaire du bot de la pile (mono-bot inchangé)", () => {
     const { annuaires } = fixture();
-    expect(annuaires.pour("")).toBe(annuaires.principal);
-    expect(annuaires.pour("   ")).toBe(annuaires.principal);
+    expect(annuaires.pour("")).toBe(annuaires.duRun);
+    expect(annuaires.pour("   ")).toBe(annuaires.duRun);
   });
 });

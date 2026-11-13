@@ -19,6 +19,9 @@ import {
   AGENT_PRIVILEGE_LABELS,
 } from "../../src/agents/index.js";
 
+/** Bot EXPLICITE des constructions de store (aucun défaut implicite). */
+const BOT_TEST = "yuki";
+
 const dirs: string[] = [];
 
 function makeStore(): AgentStore {
@@ -26,6 +29,7 @@ function makeStore(): AgentStore {
   dirs.push(dir);
   return AgentStore.open({
     path: join(dir, "agents.jsonl"),
+    botCourant: () => BOT_TEST,
     defaults: { level: "destructive", privilege: "normal" },
   });
 }

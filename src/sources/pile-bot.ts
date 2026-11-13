@@ -8,12 +8,12 @@
  *
  *  1. elle ne connaissait ni la configuration PAR BOT (L3-a) ni les outils PAR
  *     BOT (L3-b) : la pile d'un bot lisait les bornes (`sources.promptTotalChars`,
- *     `files.maxFileBytes`) de la configuration du PRINCIPAL ;
+ *     `files.maxFileBytes`) de la configuration du BOT DU RUN ;
  *  2. elle rappelait `envPourBot` à chaque ouverture, alors que L3-b le résout
  *     déjà pour les mêmes bots — deux résolutions pour un bot, c'est-à-dire deux
  *     `Env` qui peuvent diverger (et le symptôme `<bot>/<bot>` si l'un dérive de
  *     l'autre) ;
- *  3. elle n'était pas testable : la garde « la pile du principal est EXACTEMENT
+ *  3. elle n'était pas testable : la garde « la pile du bot du run est EXACTEMENT
  *     celle d'avant » ne pouvait s'écrire qu'en démarrant tout `main()`.
  *
  * Ce module rend ces trois points structurels :

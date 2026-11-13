@@ -18,11 +18,14 @@
 import { CAPACITES_PAGE } from "./config-pages.js";
 
 /**
- * Identifiant du bot historique. Sert de REPLI quand la liste est illisible :
- * c'est le nom que l'instance mono-bot utilise toujours, donc le seul qui ne
- * puisse pas désigner un bot inexistant.
+ * Identifiant du bot HISTORIQUE — uniquement pour la COMPATIBILITÉ des noms de
+ * secrets (`YUKI_CHAT_MATTERMOST` accepté en plus de
+ * `YUKI_CHAT_YUKI__MATTERMOST`). ⚠️ LOT 45 : ce n'est PAS un bot par défaut.
+ * Aucun écran ne choisit « yuki » parce qu'il ne sait pas quel bot viser : la
+ * liste du serveur est triée par `ordre` et c'est son PREMIER bot qui sert de
+ * repli — yuki peut avoir été supprimée comme n'importe quel bot.
  */
-export const BOT_PAR_DEFAUT = "yuki";
+export const BOT_HISTORIQUE = "yuki";
 
 /** En-têtes d'écriture de configuration (mêmes que la page `/config`). */
 export const BOT_WRITE_HEADERS = {
@@ -39,8 +42,9 @@ export function cheminConfigBot(botId) {
  * Réponse COMPLÈTE de `GET /api/bots` : les bots, ET les deux informations que
  * l'interface doit dire VRAIE (lot 37).
  *
- *  - `principal` : le bot de la PILE (`runtime.botId`), seul à tourner avec le
- *                  gateway : sa conversation s'ouvre SANS `?b=` ;
+ *  - `botDuRun` : le bot du RUN (`runtime.botId`) — sa conversation s'ouvre
+ *                  SANS `?b=`. ⚠️ LOT 45 : c'est le PREMIER bot par `ordre`,
+ *                  plus un « bot principal » élu ;
  *  - `echanges`  : les boucles on/off entre bots (`{"a->b": {actif}}`).
  *
  * ⚠️ PLUS DE `plafond` : il n'y a plus de limite au nombre de bots en marche
@@ -63,26 +67,46 @@ export async function lireListeBots(fetchImpl) {
       (bot) => bot && typeof bot.id === "string" && bot.id.length > 0,
     );
     if (bots.length === 0) throw new Error("liste vide");
-    const principal = typeof body?.principal === "string" ? body.principal : bots[0].id;
+    // ⚠️ Le repli est `bots[0]` : la liste est triée par le SERVEUR (`ordre`),
+    // donc premier par `ordre` — jamais un identifiant en dur.
+    const botDuRun = typeof body?.botDuRun === "string" ? body.botDuRun : bots[0].id;
     const echanges =
       body?.echanges !== null && typeof body?.echanges === "object" ? body.echanges : {};
-    return { bots, principal, echanges };
+    return { bots, botDuRun, echanges };
   } catch {
-    const bots = [
-      {
-        id: BOT_PAR_DEFAUT,
-        nom: BOT_PAR_DEFAUT,
-        // ⚠️ Repli : le bot historique porte le produit entier, donc TOUTES les
-        // capacités (même choix que le repli serveur, `GET /api/bots`). Un repli à
-        // `[]` ferait afficher un bot vide et un enregistrement les retirerait
-        // vraiment.
-        capacites: CAPACITES_PAGE.map((capacite) => capacite.id),
-        actif: true,
-        ordre: 0,
-      },
-    ];
-    return { bots, principal: BOT_PAR_DEFAUT, echanges: {} };
+    // ⚠️ LOT 45 : l'API est INJOIGNABLE (serveur arrêté, page servie par un
+    // cache) : on ne fabrique PLUS un bot « yuki » de toutes pièces — il aurait
+    // l'air d'exister alors qu'il a pu être supprimé. Liste VIDE et aucun bot du
+    // run : les appelants disent l'absence au lieu d'écrire chez un fantôme.
+    return { bots: [], botDuRun: "", echanges: {} };
   }
+}
+
+/**
+ * RÉSOLUTION UNIQUE du « bot courant » côté interface — miroir exact de
+ * `resoudreBotCourant` (`src/bots/courant.ts`) :
+ *
+ *  ① le bot DEMANDÉ (`?b=`) **s'il existe** ;
+ *  ② sinon le **PREMIER de la liste** — `GET /api/bots` la trie par `ordre`, donc
+ *     c'est le premier par `ordre`, puis par `id` ;
+ *  ③ sinon `null` (aucun bot : l'écran dit l'absence).
+ *
+ * ⚠️ LOT 45 : AUCUN identifiant en dur. `yuki` est supprimable comme n'importe
+ * quel bot ; un repli sur « yuki » la ferait réapparaître, ou pointerait dans le
+ * vide. Une demande INCONNUE (bot supprimé, favori partagé) suit la règle ②.
+ *
+ * @param {Array<{id?: string}>} bots liste du serveur (ordre d'affichage)
+ * @param {string|null|undefined} [demande] identifiant demandé par l'URL
+ * @returns {{id?: string}|null}
+ */
+export function resoudreBotCourantListe(bots, demande) {
+  const liste = Array.isArray(bots) ? bots : [];
+  const voulu = typeof demande === "string" ? demande.trim() : "";
+  if (voulu !== "") {
+    const trouve = liste.find((bot) => String(bot?.id ?? "") === voulu);
+    if (trouve) return trouve;
+  }
+  return liste[0] ?? null;
 }
 
 /**
@@ -101,10 +125,11 @@ export async function listerBots(fetchImpl) {
 /**
  * Identifiant du bot ACTIF — celui dont la configuration est réellement
  * appliquée par le gateway, donc celui qu'un réglage de bot doit viser.
- * Repli : premier bot de la liste, puis `BOT_PAR_DEFAUT`.
+ * Repli : premier bot de la liste (triée par `ordre` par le serveur), puis `""`
+ * — ⚠️ LOT 45 : plus de `yuki` en dur, un bot supprimé ne doit pas revivre.
  */
 export async function idBotActif(fetchImpl) {
   const bots = await listerBots(fetchImpl);
   const actif = bots.find((bot) => bot.actif === true);
-  return (actif ?? bots[0])?.id ?? BOT_PAR_DEFAUT;
+  return (actif ?? bots[0])?.id ?? "";
 }

@@ -58,24 +58,24 @@ interface Banc {
   crees: Array<{ botId: string; fichier: string }>;
 }
 
-/** Banc : le service du principal est un objet DISTINCT (comme `main()`). */
+/** Banc : le service du bot du run est un objet DISTINCT (comme `main()`). */
 function banc(): Banc {
   const env = envDeTest();
   const fabrique = new FabriqueMemoireBots({ envInstance: env, mode: "multi", logger: journal });
   const storesPile = fabrique.storesDe("yuki");
-  const principal = new MemoryService({
+  const duRun = new MemoryService({
     store: storesPile.store,
     index: storesPile.index,
     logger: journal,
     enabled: () => true,
     bounds: () => ({ topK: 5, budgetChars: 8_000, timeoutMs: 1_000 }),
   });
-  // Comme `main()` : le service du principal est démarré à la construction.
-  principal.start();
+  // Comme `main()` : le service du bot du run est démarré à la construction.
+  duRun.start();
   const crees: Banc["crees"] = [];
   const services = new ServicesMemoireBots<MemoryService>({
     pile: "yuki",
-    principal,
+    duRun,
     storesDe: (botId) => fabrique.storesDe(botId),
     creer: (botId: string, stores: StoresMemoireBot) => {
       crees.push({ botId, fichier: stores.fichier });

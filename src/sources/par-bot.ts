@@ -40,9 +40,9 @@
  */
 
 import type { Env } from "../config/env.js";
+import { botHistoriqueMono } from "../bots/courant.js";
 import {
   BOT_YUKI,
-  CAPACITES_BOT,
   estIdBot,
   type BotRecord,
   type RegistreBots,
@@ -107,23 +107,6 @@ export function nomsSecretsSource(botId: string, nom: string): string[] {
     if (!noms.includes(historique)) noms.push(historique);
   }
   return noms;
-}
-
-/**
- * Bot SYNTHÉTIQUE du mode mono-bot historique (`state/bots.json` absent) : un seul
- * bot `yuki`, actif, avec toutes les capacités — exactement le comportement
- * d'avant le lot 35a.
- */
-function botMono(): BotRecord {
-  return {
-    id: BOT_YUKI,
-    nom: BOT_YUKI,
-    capacites: [...CAPACITES_BOT],
-    actif: true,
-    ordre: 0,
-    creeLe: "",
-    plateformes: {},
-  };
 }
 
 /** Erreur de résolution PAR BOT (code stable, message français). */
@@ -286,7 +269,7 @@ export class SourcesParBot {
   /** Bots connus : le registre, ou le bot synthétique `yuki` en mode mono-bot. */
   bots(): BotRecord[] {
     const registre = this.registre();
-    if (registre === null || registre.bots.length === 0) return [botMono()];
+    if (registre === null || registre.bots.length === 0) return [botHistoriqueMono()];
     return [...registre.bots];
   }
 

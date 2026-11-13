@@ -120,9 +120,11 @@ export interface AgentDirectoryServiceOptions {
    * BOT DU RUN (lot 35g) — les agents qu'il ne voit pas n'apparaissent NI dans
    * `list()` NI dans `find()`.
    *
-   * ⚠️ La valeur vient du démarrage (`bots.bot?.id ?? "yuki"`), JAMAIS d'une
-   * demande du modèle ou d'un corps de requête. Par défaut : `"yuki"` (mode
-   * mono-bot historique ⇒ comportement d'avant, à l'identique).
+   * ⚠️ La valeur vient du démarrage (`bots.bot.id`, le bot du RUN), JAMAIS d'une
+   * demande du modèle ou d'un corps de requête.
+   *
+   * ⚠️ LOT 45 : aucune valeur par défaut en dur — sans explicite, c'est celle du
+   * STORE (une seule règle, jamais deux), qui lève si elle n'en a pas.
    */
   botCourant?: () => string;
   logger?: DirectoryLogger;
@@ -171,7 +173,7 @@ export class AgentDirectoryService implements AgentDirectoryPort {
     this.hub = options.hub;
     this.audit = options.audit;
     this.lock = options.lock;
-    this.botCourant = options.botCourant ?? (() => "yuki");
+    this.botCourant = options.botCourant ?? (() => this.store.botActif);
     this.logger = options.logger;
   }
 

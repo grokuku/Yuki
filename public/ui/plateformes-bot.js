@@ -21,7 +21,7 @@
  * Aucun `innerHTML`, aucun style : ce module ne touche pas au DOM.
  */
 
-import { BOT_PAR_DEFAUT, cheminConfigBot, lireListeBots } from "./bots-api.js";
+import { cheminConfigBot, lireListeBots } from "./bots-api.js";
 import { jetonPosePour } from "./jetons-chat-bot.js";
 import { PLATEFORME_OPTIONS } from "./chat-mode.js";
 
@@ -62,31 +62,30 @@ function interrupteurLu(champs, plateforme) {
  * @param {boolean} [faits.coffreConfigure] faux ⇒ coffre verrouillé (jeton inconnu).
  * @param {unknown} [faits.statutPile] corps de `GET /api/chat/status`, utilisé
  *   UNIQUEMENT si `botId` est le bot de la pile (c'est le seul état en direct).
- * @param {string} [faits.botDePile] identifiant du bot de la pile (`GET /api/bots`
- *   → `principal`).
- * @returns {{bot: string, botDePile: string|null, connexionConnue: boolean,
+ * @param {string} [faits.botDuRun] identifiant du bot du RUN (`GET /api/bots`
+ *   → `botDuRun`).
+ * @returns {{bot: string, botDuRun: string|null, connexionConnue: boolean,
  *   plateformes: Record<string, boolean>,
  *   mattermost: object, discord: object}}
  */
 export function etatPlateformesDepuisFaits(faits = {}) {
-  const botId =
-    typeof faits.botId === "string" && faits.botId.trim() !== ""
-      ? faits.botId.trim()
-      : BOT_PAR_DEFAUT;
-  const botDePile =
-    typeof faits.botDePile === "string" && faits.botDePile.trim() !== ""
-      ? faits.botDePile.trim()
+  // ⚠️ LOT 45 : plus de repli sur un identifiant en dur (`yuki` peut être
+  // supprimée). Sans bot affiché, la valeur est VIDE et l'appelant le dit.
+  const botId = typeof faits.botId === "string" ? faits.botId.trim() : "";
+  const botDuRun =
+    typeof faits.botDuRun === "string" && faits.botDuRun.trim() !== ""
+      ? faits.botDuRun.trim()
       : null;
   const statutPile =
     faits.statutPile !== null && typeof faits.statutPile === "object"
       ? faits.statutPile
       : null;
   /** L'état en direct n'existe QUE pour le bot de la pile, et s'il a été reçu. */
-  const depuisPile = botDePile !== null && botId === botDePile && statutPile !== null;
+  const depuisPile = botDuRun !== null && botId === botDuRun && statutPile !== null;
 
   const etat = {
     bot: botId,
-    botDePile,
+    botDuRun,
     connexionConnue: depuisPile,
     plateformes: {},
   };
@@ -147,19 +146,26 @@ export async function fetchEtatPlateformes(botId, options = {}) {
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
   const erreurs = [];
   const liste = await lireListeBots(doFetch);
-  const principal =
-    typeof liste.principal === "string" && liste.principal !== ""
-      ? liste.principal
-      : BOT_PAR_DEFAUT;
+  // ⚠️ LOT 45 : repli sur le PREMIER bot de la liste par `ordre` (celle du
+  // serveur), jamais sur un identifiant en dur.
+  const botDuRun =
+    typeof liste.botDuRun === "string" && liste.botDuRun !== ""
+      ? liste.botDuRun
+      : (liste.bots[0]?.id ?? "");
   const affiche =
-    typeof botId === "string" && botId.trim() !== "" ? botId.trim() : principal;
+    typeof botId === "string" && botId.trim() !== "" ? botId.trim() : botDuRun;
 
   // Bot de la PILE : l'état en direct du serveur décrit CE bot — rien de plus à lire.
-  if (affiche === principal && options.statutPile !== null && typeof options.statutPile === "object") {
+  if (
+    affiche !== "" &&
+    affiche === botDuRun &&
+    options.statutPile !== null &&
+    typeof options.statutPile === "object"
+  ) {
     return {
       ...etatPlateformesDepuisFaits({
         botId: affiche,
-        botDePile: principal,
+        botDuRun,
         statutPile: options.statutPile,
       }),
       erreur: "",
@@ -205,7 +211,7 @@ export async function fetchEtatPlateformes(botId, options = {}) {
   return {
     ...etatPlateformesDepuisFaits({
       botId: affiche,
-      botDePile: principal,
+      botDuRun,
       champs,
       noms,
       coffreConfigure,

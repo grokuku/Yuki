@@ -314,10 +314,10 @@ describe("host du PRINCIPAL (lot 36, L3-d)", () => {
     // `main()` — pas une copie, pas une reconstruction.
     expect(construits).toHaveLength(1);
     expect(construits[0]?.options).toBe(optionsPile);
-    expect(hosts.principal).toBe(construits[0]);
+    expect(hosts.duRun).toBe(construits[0]);
     expect(hosts.ids()).toEqual(["yuki"]);
     expect(hosts.taille).toBe(1);
-    expect(hosts.pour("yuki")).toBe(hosts.principal);
+    expect(hosts.pour("yuki")).toBe(hosts.duRun);
 
     // Les valeurs restent celles d'aujourd'hui, à l'identique.
     expect(construits[0]?.options.sessionsDir).toBe(b.env.piSessionsDir);
@@ -366,7 +366,7 @@ describe("host du PRINCIPAL (lot 36, L3-d)", () => {
     });
 
     expect(hosts.ids()).toEqual(["yuki"]);
-    expect(hosts.principal.options.sessionsDir).toBe(preparation.env.piSessionsDir);
+    expect(hosts.duRun.options.sessionsDir).toBe(preparation.env.piSessionsDir);
     // En mode multi, le principal vit déjà sous `<pi>/agent/sessions/<bot>`.
     expect(preparation.env.piSessionsDir).toBe(
       envPourBot({ envInstance: b.env, botId: "yuki", mode: "multi", processEnv: b.processEnv })
@@ -432,10 +432,10 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     expect(hosts.taille).toBe(2);
     const hostKohai = hosts.pour("kohai") as FauxHost;
     expect(hostKohai).toBeDefined();
-    expect(hostKohai).not.toBe(hosts.principal);
+    expect(hostKohai).not.toBe(hosts.duRun);
 
     // ⚠️ Deux répertoires de sessions, jamais le même (isolation des JSONL).
-    expect(hostKohai.options.sessionsDir).not.toBe(hosts.principal.options.sessionsDir);
+    expect(hostKohai.options.sessionsDir).not.toBe(hosts.duRun.options.sessionsDir);
     expect(hostKohai.options.sessionsDir).toBe(
       envPourBot({ envInstance: b.env, botId: "kohai", mode: "multi", processEnv: b.processEnv })
         .piSessionsDir,
@@ -444,8 +444,8 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
 
     // ⚠️ Le prompt de SON overlay, pas celui du principal.
     expect(hostKohai.options.systemPrompt).toBe("Tu es Kohai, pas Yuki.");
-    expect(hostKohai.options.systemPrompt).not.toBe(hosts.principal.options.systemPrompt);
-    expect(hosts.principal.options.systemPrompt).not.toContain("Kohai");
+    expect(hostKohai.options.systemPrompt).not.toBe(hosts.duRun.options.systemPrompt);
+    expect(hosts.duRun.options.systemPrompt).not.toContain("Kohai");
 
     // ⚠️ Et son `botId` : chaque host SAIT à quel bot il appartient.
     expect(hostKohai.options.botId).toBe("kohai");
@@ -478,7 +478,7 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     expect(piles.get("yuki")).toBeUndefined();
 
     // Le host du principal reste celui d'avant (aucune option dérivée).
-    expect(hosts.principal.options).toBe(optionsPile);
+    expect(hosts.duRun.options).toBe(optionsPile);
   });
 
   it("les hosts secondaires DÉMARRENT et S'ARRÊTENT (le principal est géré par `main()`)", async () => {
@@ -504,7 +504,7 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     // Avant `demarrerAutres`, un host secondaire n'est PAS utilisable comme réveil.
     expect(hosts.pour("kohai")).toBeDefined();
     expect(hosts.pourDemarre("kohai")).toBeUndefined();
-    expect(hosts.principal.demarrages).toBe(0);
+    expect(hosts.duRun.demarrages).toBe(0);
 
     const bilan = await hosts.demarrerAutres();
     expect(bilan.demarres).toEqual(["kohai"]);
@@ -512,11 +512,11 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     expect(hosts.pourDemarre("kohai")).toBe(construits.get("kohai"));
     expect(hosts.estDemarre("kohai")).toBe(true);
     // ⚠️ Le principal n'est PAS démarré par la fabrique (main() le fait).
-    expect(hosts.principal.demarrages).toBe(0);
+    expect(hosts.duRun.demarrages).toBe(0);
 
     await hosts.arreter();
     expect(construits.get("kohai")?.arrets).toBe(1);
-    expect(hosts.principal.arrets).toBe(0);
+    expect(hosts.duRun.arrets).toBe(0);
     expect(hosts.pourDemarre("kohai")).toBeUndefined();
   });
 
@@ -772,15 +772,19 @@ describe("ports d'un bot secondaire (lot 36, L3-d)", () => {
   });
 });
 
-// ── ⑤ `getSubsystems` et le transport gardent le host du PRINCIPAL ─────────
+// ── ⑤ `getSubsystems` et le transport gardent le host du BOT DU RUN ────────
 
 describe("routes d'instance (garde statique sur `src/index.ts`)", () => {
   const source = readFileSync(new URL("../../src/index.ts", import.meta.url), "utf8");
 
-  it("`host` EST le host du principal", () => {
+  it("`host` EST le host du bot du RUN (⚠️ LOT 45 : plus de « principal »)", () => {
     // ⚠️ `main()` n'est jamais exécuté par les tests : la seule garde possible est
     // la FORME du câblage. Elle échoue sur l'origine (`hostsBots` inexistant).
-    expect(source).toContain("host = hostsBots.principal;");
+    // ⚠️ GARDE MISE À JOUR (nommée) : `hostsBots.principal` est devenu
+    // `hostsBots.duRun` — la valeur est la même (le host du bot qui tourne),
+    // mais plus aucun identifiant n'est élu : c'est le PREMIER par `ordre`.
+    expect(source).toContain("host = hostsBots.duRun;");
+    expect(source).not.toContain("hostsBots.principal");
     expect(source).toContain("optionsPile: optionsHostPile,");
     expect(source).toContain("await hostsBots.demarrerAutres();");
     expect(source).toContain("await hostsBots?.arreter();");

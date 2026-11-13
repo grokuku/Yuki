@@ -1031,13 +1031,22 @@ export function supprimerBot(options: OptionsSuppressionBot): ResultatSuppressio
   const restants = registre.bots
     .filter((entree) => entree.id !== botId)
     .sort((a, b) => a.ordre - b.ordre);
-  // ⚠️ PROMOTION : si le bot supprimé était ACTIF, le premier bot restant le
-  // devient. Sans cela, le prochain démarrage refuserait (« aucun bot actif »).
+  // ⚠️ PROMOTION : si le bot supprimé était ACTIF et qu'AUCUN bot restant ne
+  // l'est, le premier bot restant devient actif. Sans cela, le prochain démarrage
+  // refuserait (« aucun bot actif »).
+  //
+  // ⚠️ LOT 45 : on n'ÉTEINT plus les autres au passage. L'ancienne règle
+  // (`actif: index === 0`) forçait TOUS les bots restants sauf le premier à
+  // `actif: false` : supprimer un bot actif — `yuki` par exemple — arrêtait donc
+  // silencieusement les bots qui tournaient. Exigence utilisateur du 2026-11-13 :
+  // « il n'est pas impossible qu'un jour je supprime Yuki et ne garde que les
+  // autres » ⇒ les autres doivent CONTINUER de tourner.
+  const resteUnActif = restants.some((entree) => entree.actif === true);
   const suivant: RegistreBots = {
     ...registre,
     bots: restants.map((entree, index) => ({
       ...entree,
-      actif: bot.actif ? index === 0 : entree.actif,
+      actif: resteUnActif ? entree.actif : index === 0,
     })),
   };
   const botActifSuivant = bot.actif ? (restants[0]?.id ?? null) : null;

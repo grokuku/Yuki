@@ -269,7 +269,7 @@ describe("② `PATCH /api/bots/echanges`", () => {
 
 // ─── ③ ce que `GET /api/bots` doit dire ───────────────────────────────────
 
-describe("③ `GET /api/bots` porte le principal et les échanges", () => {
+describe("③ `GET /api/bots` porte le bot du RUN et les échanges", () => {
   it("⚠️ ne porte PLUS de plafond (il n'y en a plus)", async () => {
     // ⚠️ RÉÉCRIT (n'était « renvoie `plafond: 3` ») : la décision utilisateur du
     // 2026-11-13 a supprimé le plafond de bots en marche.
@@ -278,8 +278,10 @@ describe("③ `GET /api/bots` porte le principal et les échanges", () => {
     expect(status).toBe(200);
     expect(body.plafond).toBeUndefined();
     expect(body.refuses).toBeUndefined();
-    // Le bot de la PILE : sa conversation s'ouvre SANS `?b=`.
-    expect(body.principal).toBe(b.runtime.botId);
+    // ⚠️ LOT 45 : plus de « principal ». `botDuRun` nomme le bot du RUN (celui
+    // dont le host sert une connexion SANS `?b=`) — le premier par `ordre`.
+    expect(body.botDuRun).toBe(b.runtime.botId);
+    expect(body.principal).toBeUndefined();
     expect(body.echanges).toEqual({});
     // Les bots eux-mêmes restent EXACTEMENT la même forme qu'avant (lot 35b).
     expect(body.bots.map((entree: { id: string }) => entree.id)).toEqual([

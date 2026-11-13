@@ -55,14 +55,13 @@ import { SecretStore } from "./secrets/store.js";
 
 import { loadEnv, type CompatMode, type LlmMissingKeyMode } from "./config/env.js";
 import {
-  BOT_YUKI,
   construireWorkerLourdSiAutorise,
   preparerMultiBot,
   purgerArchivesBots,
   workerLourdAutorise,
 } from "./bots/index.js";
 import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
-// ⚠️ LOT 36 (L3-d) : la Map des `PiHost` PAR BOT (le principal reste `host`).
+// ⚠️ LOT 36 (L3-d) : la Map des `PiHost` PAR BOT (`host` reste celui du bot du run).
 import { HostsBots } from "./bots/hosts.js";
 import { ExecutionBots } from "./bots/execution.js";
 import { compterSessionsPi } from "./bots/admin.js";
@@ -334,25 +333,29 @@ async function main(): Promise<void> {
     light: loadTextFile(env.piSystemPromptPath, FALLBACK_SYSTEM_PROMPT),
     heavy: loadTextFile(env.piHeavySystemPromptPath, HEAVY_SYSTEM_PROMPT_FALLBACK),
   };
-  const botDePile: string = bots.bot?.id ?? BOT_YUKI;
+  // ⚠️ LOT 45 : le bot du RUN est le PREMIER à démarrer (par `ordre`, puis `id`)
+  // — plus de « bot du run », plus aucun identifiant privilégié. En mode
+  // mono-bot historique, `preparerMultiBot` rend le bot historique : il n'y a
+  // donc JAMAIS de valeur en dur ici.
+  const botDuRun: string = bots.bot.id;
   const configsBots = creerConfigsBots({
     env,
     bots: bots.aDemarrer.map((entree) => entree.id),
-    pile: botDePile,
+    pile: botDuRun,
     promptDefaults: promptsLivres,
   });
   // ⚠️ NON-RÉGRESSION : `config` EST l'entrée de la Map pour le bot de la pile —
   // jamais un second runtime pour le même bot (deux caches de son overlay
   // divergeraient). Les appelants existants (routes d'instance, `getSubsystems`,
   // ~225 références) continuent d'utiliser CETTE configuration-là.
-  const configBotPrincipal = configsBots.get(botDePile);
-  if (!configBotPrincipal) {
+  const configDuRun = configsBots.get(botDuRun);
+  if (!configDuRun) {
     // Impossible : `creerConfigsBots` garantit la présence du bot de la pile.
     throw new Error(
-      `Configuration introuvable pour le bot « ${botDePile} » : démarrage impossible.`,
+      `Configuration introuvable pour le bot « ${botDuRun} » : démarrage impossible.`,
     );
   }
-  const config = configBotPrincipal;
+  const config = configDuRun;
 
   // --- (2) Pont des clés du store vers `process.env` ------------------------
   // `models.json` référence `$YUKI_LLM_<ROLE>_API_KEY` : le SDK les résout dans
@@ -390,15 +393,14 @@ async function main(): Promise<void> {
   } else {
     logger.info("bots.mono", { migration: bots.migration });
   }
-  // --- LOT 36 (L1) : QUI DOIT TOURNER, et le bot PRINCIPAL -----------------
-  // ⚠️ Deux listes distinctes : `principal` (identité, `yuki` prioritaire) et
-  // `a_demarrer` (TOUS les `actif:true` — plus aucun plafond). Le NOMBRE est
-  // journalisé exprès : si chaque bot démarre, la RAM monte, et l'utilisateur
-  // doit voir ce qu'il a lancé.
+  // --- LOT 45 : QUI DOIT TOURNER, et le bot du RUN --------------------------
+  // ⚠️ Plus de « bot du run » : `bot_courant` est le PREMIER à démarrer (par
+  // `ordre`), aucun identifiant privilégié. `a_demarrer` porte TOUS les
+  // `actif:true` (plus aucun plafond). Le NOMBRE est journalisé exprès : si
+  // chaque bot démarre, la RAM monte, et l'utilisateur doit voir ce qu'il a lancé.
   logger.info("bots.demarrage", {
     mode: bots.mode,
-    principal: bots.principal?.id ?? null,
-    pile: bots.bot?.id ?? null,
+    bot_courant: bots.bot.id,
     nombre: bots.aDemarrer.length,
     a_demarrer: bots.aDemarrer.map((entree) => entree.id).join(","),
   });
@@ -411,10 +413,10 @@ async function main(): Promise<void> {
   // sont journalisés plus bas (`config.store.fallback`, section (4)).
   logger.info("bots.config", {
     bots: [...configsBots.keys()].join(","),
-    pile: botDePile,
+    pile: botDuRun,
   });
   for (const [botId, runtime] of configsBots) {
-    if (botId === botDePile) continue;
+    if (botId === botDuRun) continue;
     for (const warning of runtime.warnings) {
       logger.warn("config.bot.fallback", { bot: botId, detail: warning });
     }
@@ -424,9 +426,9 @@ async function main(): Promise<void> {
   // ⚠️ Les capacités qui OUVRENT les outils sont celles du BOT ACTIF, lues UNE
   // fois ici dans le registre `state/bots.json` — JAMAIS une valeur reçue d'un
   // client (corps de requête ou message) : sinon un appelant choisirait ses
-  // propres pouvoirs. Mono-bot historique (`bots.bot` nul) ⇒ toutes les
-  // capacités : comportement inchangé.
-  const capacitesBot: readonly CapaciteBot[] = bots.bot?.capacites ?? CAPACITES_BOT;
+  // propres pouvoirs. Le bot du run porte TOUJOURS un enregistrement
+  // (`preparerMultiBot` en rend un, mono-bot historique inclus).
+  const capacitesBot: readonly CapaciteBot[] = bots.bot.capacites;
   /**
    * ⚠️ LOT 36 (L6/L7) — LES CAPACITÉS D'UN BOT DONNÉ.
    *
@@ -439,23 +441,21 @@ async function main(): Promise<void> {
   /**
    * ⚠️ LOT 36 (L6) — LE SERVICE D'EXÉCUTION D'UN BOT.
    *
-   * Le principal est `agentExecution` (le même objet qu'avant L6) ; un autre bot
-   * reçoit le SIEN, construit dans la Map des services (même store, même hub,
-   * même TLS). Aucun repli vers le service d'un autre bot : sa visibilité serait
-   * celle d'un autre.
+   * Le bot du RUN rend `agentExecution` (le même objet qu'avant L6) ; un autre
+   * bot reçoit le SIEN, construit dans la Map des services (même store, même
+   * hub, même TLS). Aucun repli vers le service d'un autre bot : sa visibilité
+   * serait celle d'un autre.
    */
   const executionDuBot = (botId: string): AgentExecutionService | undefined =>
-    botId === (bots.bot?.id ?? BOT_YUKI)
-      ? agentExecution
-      : executionsAgents?.pour(botId);
+    botId === botDuRun ? agentExecution : executionsAgents?.pour(botId);
 
   const capacitesDuBot = (botId: string): readonly CapaciteBot[] => {
-    if (botId === (bots.bot?.id ?? BOT_YUKI)) return capacitesBot;
+    if (botId === botDuRun) return capacitesBot;
     const enregistre = bots.registre?.bots.find((entree) => entree.id === botId);
     return enregistre?.capacites ?? CAPACITES_BOT;
   };
   logger.info("bots.capacites", {
-    bot: bots.bot?.id ?? null,
+    bot: botDuRun,
     capacites: capacitesBot.join(","),
     // ⚠️ Sans `execution` ni `delegation`, il n'y a AUCUN worker lourd (voir plus
     // bas) : c'est ce qui rend l'absence de `run_command` structurelle.
@@ -466,8 +466,8 @@ async function main(): Promise<void> {
   // ⚠️ L'identité du bot qui décide de la visibilité des agents vient d'ICI,
   // UNE fois au démarrage (`state/bots.json`), JAMAIS d'un corps de requête, d'un
   // argument d'outil ou d'un message : sinon un appelant choisirait son identité
-  // et verrait les agents des autres bots. Mono-bot historique ⇒ `yuki`.
-  const botDuRun: string = bots.bot?.id ?? BOT_YUKI;
+  // et verrait les agents des autres bots. C'est le bot du RUN (premier par
+  // `ordre`), jamais un identifiant en dur.
   const botCourant = (): string => botDuRun;
   logger.info("agents.visibilite.bot", { bot: botDuRun });
 
@@ -609,7 +609,7 @@ async function main(): Promise<void> {
   let agentExecution: AgentExecutionService | undefined;
   /**
    * ⚠️ LOT 36 (L6) : les services d'exécution PAR BOT (`botId → service`).
-   * `agentExecution` reste le PRINCIPAL (routes, outils du host principal) ;
+   * `agentExecution` reste celui du BOT DU RUN (routes, outils du host du bot du run) ;
    * cette Map porte en plus ceux des autres bots à démarrer.
    */
   let executionsAgents: ExecutionsAgentsBots<AgentExecutionService> | undefined;
@@ -803,7 +803,7 @@ async function main(): Promise<void> {
             // État SÉPARÉ du niveau : `sensitive` = réglage, `locked` = éphémère.
             sensitive: record.sensitive === true,
             locked: lockStatus ? lockStatus.locked : false,
-            bots: Array.isArray(record.bots) ? [...record.bots] : [BOT_YUKI],
+            bots: Array.isArray(record.bots) ? [...record.bots] : [botDuRun],
             ...(lockStatus?.remainingMs !== undefined
               ? { unlockRemainingMs: lockStatus.remainingMs }
               : {}),
@@ -860,12 +860,12 @@ async function main(): Promise<void> {
         ...(agentLock ? { lock: agentLock } : {}),
       });
     executionsAgents = new ExecutionsAgentsBots<AgentExecutionService>({
-      botDePile,
+      botDuRun,
       bots: bots.aDemarrer.map((entree) => entree.id),
       creer: creerExecution,
       logger,
     });
-    agentExecution = executionsAgents.principal;
+    agentExecution = executionsAgents.duRun;
     // Consultation des agents (extension) : LECTURE SEULE. Réutilise le même
     // store/hub/audit ; les outils sont exposés même quand l'exécution est
     // désactivée (consulter n'est pas exécuter). Le VERROU est lu ici aussi :
@@ -880,7 +880,7 @@ async function main(): Promise<void> {
     // conversation locale). ⚠️ Le refus d'exécution (`agent_not_allowed`) est
     // INCHANGÉ : cacher ne protège rien, refuser protège.
     directoriesAgents = new DirectoriesAgentsBots<AgentDirectoryService>({
-      botDePile,
+      botDuRun,
       bots: bots.aDemarrer.map((entree) => entree.id),
       creer: (botId) =>
         new AgentDirectoryService({
@@ -898,7 +898,7 @@ async function main(): Promise<void> {
     });
     // NON-RÉGRESSION : `agentDirectory` EST l'annuaire du bot de la pile (jamais
     // un second annuaire pour le même bot).
-    agentDirectory = directoriesAgents.principal;
+    agentDirectory = directoriesAgents.duRun;
     if (agentsBindHost === "0.0.0.0") {
       // ⚠️ `0.0.0.0` écoute sur TOUTES les interfaces (y compris une interface
       // publique éventuelle). Le port machines n'étant protégé que par mTLS, il
@@ -1332,7 +1332,7 @@ async function main(): Promise<void> {
     // dans le registre de SON bot (`<state>/bots/<bot>/preautorisations.json`).
     // Le bot de la PILE garde le port historique, par identité.
     brancherPreAutorisationsParBot(executionsAgents, (botId) =>
-      botId === botDePile ? portPreAutos : portPreAutorisations(sourcesParBot, () => botId),
+      botId === botDuRun ? portPreAutos : portPreAutorisations(sourcesParBot, () => botId),
     );
   } else {
     // Mode dégradé (le service d'exécution n'a pas démarré) : rien à brancher.
@@ -1636,12 +1636,12 @@ async function main(): Promise<void> {
   /**
    * Host d'un bot, pour la PUBLICATION d'un envoi programmé (lot 36, L5).
    *
-   * ⚠️ Aucun repli vers le principal pour un bot secondaire : publier dans les
+   * ⚠️ Aucun repli vers le bot du run pour un bot secondaire : publier dans les
    * sessions d'un autre bot serait pire qu'un échec dit. Le bot de la pile garde
    * `host` (mode mono inclus).
    */
   const hostDuBot = (botId: string): PiHost | undefined =>
-    botId === botDePile ? host : hostsBots?.pourDemarre(botId);
+    botId === botDuRun ? host : hostsBots?.pourDemarre(botId);
   let memoryService: MemoryService | undefined;
   let heritageStore: HeritageStore | undefined;
   let conversationArchive: ConversationArchiveStore | undefined;
@@ -1950,10 +1950,10 @@ async function main(): Promise<void> {
     filDe?: string,
     /**
      * ⚠️ LOT 36 (L10) : le bot qui publie. Son adaptateur, donc SON jeton — un
-     * bot secondaire qui publierait avec le jeton du principal écrirait sous une
+     * bot secondaire qui publierait avec le jeton du bot du run écrirait sous une
      * autre identité (ou échouerait sur un canal où il n'est pas).
      */
-    botId: string = botDePile,
+    botId: string = botDuRun,
   ): Promise<void> => {
     const plateforme = mirrorPlatformOf(conversationId);
     if (!plateforme) {
@@ -1962,7 +1962,7 @@ async function main(): Promise<void> {
       );
     }
     const adapter =
-      botId === botDePile ? getAdapter(plateforme) : adaptateursChat.pour(botId, plateforme);
+      botId === botDuRun ? getAdapter(plateforme) : adaptateursChat.pour(botId, plateforme);
     if (adapter === undefined) {
       throw new Error(
         `Le bot « ${botId} » n'a aucun compte ${plateforme} connecté : ` +
@@ -2067,7 +2067,7 @@ async function main(): Promise<void> {
    * ⚠️ LOT 36 (L5) : elle publie avec le host et les canaux du BOT DE L'ENVOI
    * (`botId`), jamais ceux de l'instance. Une cible LOCALE d'un bot dont le host
    * n'a pas démarré ÉCHOUE avec sa raison (plutôt que de publier dans un fil du
-   * principal).
+   * bot du run).
    */
   const publierEnvoiProgramme = async (
     input: {
@@ -2075,11 +2075,11 @@ async function main(): Promise<void> {
       texte: string;
       fichierIds?: readonly string[];
     },
-    botId: string = botDePile,
+    botId: string = botDuRun,
   ): Promise<void> => {
     if (input.cible.type === "local") {
       // ⚠️ Le host DU BOT : un envoi programmé par un bot secondaire part dans SES
-      // sessions, jamais dans celles du principal.
+      // sessions, jamais dans celles du bot du run.
       const hostCible = hostDuBot(botId);
       if (hostCible === undefined) {
         throw new Error("Le host Pi n'est pas disponible : l'envoi n'a pas pu être publié.");
@@ -2113,7 +2113,7 @@ async function main(): Promise<void> {
     // Canaux SUIVIS relus à chaque programmation (`apply: hot`) : le périmètre est le
     // même que `publier_dans_canal`, et il est tenu côté serveur.
     // ⚠️ LOT 36 (L5) : ceux du BOT DE LA PILE — ce service est le sien.
-    canaux: () => canauxBots?.canaux(botDePile) ?? [],
+    canaux: () => canauxBots?.canaux(botDuRun) ?? [],
     fichier: (fichierId) => filesStore.get(fichierId),
     maxFichierBytes: () => config.getNumber("files.maxFileBytes"),
     publier: publierEnvoiProgramme,
@@ -2167,7 +2167,7 @@ async function main(): Promise<void> {
   const envsBots = creerResolveurEnvBot({
     envInstance: bots.envInstance,
     mode: bots.mode,
-    pile: botDePile,
+    pile: botDuRun,
     envPile: env,
   });
   /**
@@ -2180,9 +2180,9 @@ async function main(): Promise<void> {
    *    mémorisé (aucune relecture à chaque publication).
    */
   canauxBots = new CanauxBots({
-    botDePile,
+    botDuRun,
     miroir: (botId) => {
-      if (botId === botDePile) return chatMirror;
+      if (botId === botDuRun) return chatMirror;
       const envBot = envsBots.pour(botId);
       return ChatMirrorStore.open({
         indexPath: envBot.chatMirrorPath,
@@ -2194,7 +2194,7 @@ async function main(): Promise<void> {
     logger,
   });
   logger.info("chat.canaux.bots", {
-    pile: botDePile,
+    pile: botDuRun,
     proprietaires: Object.keys(proprietairesCanaux.tout()).length,
   });
   /** Services des AUTRES bots ouverts avant que les hosts ne soient prêts. */
@@ -2206,7 +2206,7 @@ async function main(): Promise<void> {
    *
    * ⚠️ LOT 36 (L3-d) : le réveil est celui du host DE CE BOT (`botId`) quand il
    * a démarré — un déclencheur publie dans les sessions de son bot, pas dans
-   * celles du principal. Repli (bot sans host démarré) : le host de l'instance,
+   * celles du bot du run. Repli (bot sans host démarré) : le host de l'instance,
    * exactement comme avant L3-d.
    */
   let brancherServiceSources:
@@ -2226,7 +2226,7 @@ async function main(): Promise<void> {
    * — « un seul rédacteur » vaut aussi pour les sources.
    */
   const fabriquePiles = new FabriquePilesSources({
-    pile: botDePile,
+    pile: botDuRun,
     envPile: env,
     envs: envsBots,
     configPour: (botId) => configsBots.get(botId),
@@ -2258,7 +2258,7 @@ async function main(): Promise<void> {
       // avoir : on le DIT, et on retombe sur celles de la pile — jamais un silence.
       const bornes = configBot ?? config;
       if (configBot === undefined) {
-        logger.warn("sources.pile.config_absente", { bot: botId, repli: botDePile });
+        logger.warn("sources.pile.config_absente", { bot: botId, repli: botDuRun });
       }
       const service = new SourcesService({
         store,
@@ -2309,7 +2309,7 @@ async function main(): Promise<void> {
   // `?bot=` sans argument continue de servir. ⚠️ Avec UN bot actif, elle reçoit
   // EXACTEMENT les objets ci-dessus (`===`) et l'`Env` du démarrage : c'est la
   // garde de non-régression de L3-c.
-  sourcesParBot.setPileActive(fabriquePiles.ouvrir(botDePile));
+  sourcesParBot.setPileActive(fabriquePiles.ouvrir(botDuRun));
   sourcesParBot.setOuvrir((input) => fabriquePiles.ouvrir(input.botId));
 
   /**
@@ -2376,7 +2376,7 @@ async function main(): Promise<void> {
             // ⚠️ LOT 36 (L5) : le bot qui PUBLIE est le PROPRIÉTAIRE du canal où le
             // run est né (à défaut, celui de la pile) — jamais une constante : une
             // conversation de `kohai` publie avec les canaux de `kohai`.
-            proprietairesCanaux.proprietaire(conversationId) ?? botDePile,
+            proprietairesCanaux.proprietaire(conversationId) ?? botDuRun,
           ),
         ),
         // ⚠️ ENVOI DE MESSAGE DANS CE CANAL (`envoyer_message`, 2026-11-04) : même
@@ -2445,7 +2445,7 @@ async function main(): Promise<void> {
         ...(directoriesAgents
           ? {
               agents: directoriesAgents.pour(
-                proprietairesCanaux.proprietaire(conversationId) ?? botDePile,
+                proprietairesCanaux.proprietaire(conversationId) ?? botDuRun,
               ),
             }
           : {}),
@@ -2456,10 +2456,10 @@ async function main(): Promise<void> {
         // ce n'est pas le serveur qui publie, c'est SON tour.
         // ⚠️ LOT 36 (L11) : le port est celui du bot PROPRIÉTAIRE du canal (L5) —
         // un job né dans un canal de `kohai` lui appartient, et son rapport le
-        // réveille LUI (pas le principal).
+        // réveille LUI (pas le bot du run).
         ...(() => {
           if (delegation === undefined) return {};
-          const proprietaire = proprietairesCanaux.proprietaire(conversationId) ?? botDePile;
+          const proprietaire = proprietairesCanaux.proprietaire(conversationId) ?? botDuRun;
           const port = delegationPourBot(proprietaire) ?? delegation;
           return port !== undefined ? { delegation: port } : {};
         })(),
@@ -2632,7 +2632,7 @@ async function main(): Promise<void> {
   const mattermostPort: ChatMattermostPort = {
     baseUrl: () => chatMirror.baseUrl(),
     tokenConfigured: () =>
-      nomsSecretsChat(botDePile, "mattermost").some((nom) => secretStore?.has(nom) === true),
+      nomsSecretsChat(botDuRun, "mattermost").some((nom) => secretStore?.has(nom) === true),
     saveBaseUrl: (url) => chatMirror.setBaseUrl(url),
     saveToken: (token) => {
       if (!secretStore) {
@@ -2678,7 +2678,7 @@ async function main(): Promise<void> {
         active: config.getString("chat.mattermost.enabled") === "on",
         // ⚠️ LOT 36 (L10) : le nom PAR BOT est accepté (`YUKI_CHAT_YUKI__MATTERMOST`),
         // l'ancien nom restant valable pour `yuki`.
-        jetonEnregistre: nomsSecretsChat(botDePile, "mattermost").some(
+        jetonEnregistre: nomsSecretsChat(botDuRun, "mattermost").some(
           (nom) => secretStore?.has(nom) === true,
         ),
         jetonsBots: jetonsParBot("mattermost"),
@@ -2745,7 +2745,7 @@ async function main(): Promise<void> {
       config.update({ "chat.discord.maxUploadBytes": Math.trunc(bytes) });
     },
     tokenConfigured: () =>
-      nomsSecretsChat(botDePile, "discord").some((nom) => secretStore?.has(nom) === true),
+      nomsSecretsChat(botDuRun, "discord").some((nom) => secretStore?.has(nom) === true),
     saveToken: (token) => {
       if (!secretStore) {
         throw new Error(
@@ -2785,7 +2785,7 @@ async function main(): Promise<void> {
         maxUploadBytes: config.getNumber("chat.discord.maxUploadBytes"),
         intentMessageContent: intent === undefined ? null : intent,
         active: config.getString("chat.discord.enabled") === "on",
-        jetonEnregistre: nomsSecretsChat(botDePile, "discord").some(
+        jetonEnregistre: nomsSecretsChat(botDuRun, "discord").some(
           (nom) => secretStore?.has(nom) === true,
         ),
         jetonsBots: jetonsParBot("discord"),
@@ -2821,7 +2821,7 @@ async function main(): Promise<void> {
    * un réglage. C'est le cas « un bot mattermost et un bot local ».
    */
   const jetonsChat: ResolutionJetonsChat = resoudreJetonsChatBots({
-    bots: [botDePile, ...bots.aDemarrer.map((entree) => entree.id)],
+    bots: [botDuRun, ...bots.aDemarrer.map((entree) => entree.id)],
     lookup: (nom) => secretStore?.lookup(nom),
     /**
      * ⚠️ INTERRUPTEUR PAR (bot, plateforme) — `chat.<plateforme>.enabled` du bot.
@@ -2848,7 +2848,7 @@ async function main(): Promise<void> {
   const jetonsParBot = (
     plateforme: PlateformeChat,
   ): { botId: string; nom: string; configure: boolean }[] => {
-    const ids = new Set<string>([botDePile, ...bots.aDemarrer.map((entree) => entree.id)]);
+    const ids = new Set<string>([botDuRun, ...bots.aDemarrer.map((entree) => entree.id)]);
     for (const botId of jetonsChat.jetons.keys()) ids.add(botId);
     return [...ids].map((botId) => ({
       botId,
@@ -2928,13 +2928,13 @@ async function main(): Promise<void> {
   };
 
   const adaptateursChat = new AdaptateursChatBots<MattermostChatAdapter | DiscordChatAdapter>({
-    botDePile,
+    botDuRun,
     resolution: jetonsChat,
     // ⚠️ Le bot de la PILE garde les adaptateurs d'avant, par IDENTITÉ : les
     // routes d'instance, `getAdapter` et `getSubsystems` les servent inchangés.
     existants: new Map<string, MattermostChatAdapter | DiscordChatAdapter>([
-      [cleAdaptateur(botDePile, "mattermost"), mattermost],
-      [cleAdaptateur(botDePile, "discord"), discord],
+      [cleAdaptateur(botDuRun, "mattermost"), mattermost],
+      [cleAdaptateur(botDuRun, "discord"), discord],
     ]),
     creer: creerAdaptateurChat,
     logger,
@@ -2975,7 +2975,7 @@ async function main(): Promise<void> {
    */
   const servicesChatParBot = new Map<string, ChatService>();
   const serviceChatPourBot = (botId: string): ChatService | undefined => {
-    if (botId === "" || botId === botDePile) return chatService;
+    if (botId === "" || botId === botDuRun) return chatService;
     const deja = servicesChatParBot.get(botId);
     if (deja !== undefined) return deja;
     const configBot = configsBots.get(botId);
@@ -3044,7 +3044,7 @@ async function main(): Promise<void> {
      * ⚠️ LOT 36 (L7) — LA FABRIQUE DEVIENT PAR BOT.
      *
      * Ce qui suit ne change pas d'un iota pour le bot de la PILE (`botId` =
-     * `botDePile` ⇒ mêmes capacités, même prompt, même service d'exécution). Ce
+     * `botDuRun` ⇒ mêmes capacités, même prompt, même service d'exécution). Ce
      * qui change : un bot SECONDAIRE peut recevoir le SIEN, avec SON prompt
      * (`prompts.heavy` de son overlay), SES capacités (`execution`/`delegation`
      * de son enregistrement) et SON service d'exécution d'agents (L6).
@@ -3144,11 +3144,11 @@ async function main(): Promise<void> {
      * les construira à leur première demande, sous plafond et selon LEURS
      * capacités (un bot muet n'aura jamais de worker).
      */
-    const heavyWorker = creerWorkerLourd(botDePile);
+    const heavyWorker = creerWorkerLourd(botDuRun);
     workersLourds = new WorkersLourdsBots<HeavyWorker>({
-      botDePile,
+      botDuRun,
       ...(heavyWorker !== undefined
-        ? { existants: new Map<string, HeavyWorker>([[botDePile, heavyWorker]]) }
+        ? { existants: new Map<string, HeavyWorker>([[botDuRun, heavyWorker]]) }
         : {}),
       capacites: (botId) => capacitesDuBot(botId),
       creer: (botId) => {
@@ -3165,7 +3165,7 @@ async function main(): Promise<void> {
       plafond: MAX_WORKERS_LOURDS_DEFAUT,
       logger,
     });
-    // ⚠️ MESURE au démarrage : ce que coûte RÉELLEMENT le worker du principal.
+    // ⚠️ MESURE au démarrage : ce que coûte RÉELLEMENT le worker du bot du run.
     workersLourds.journaliserRss();
     // ⚠️ Sans worker lourd, il n'y a RIEN à déléguer : le service de délégation
     // n'est pas construit (sinon `delegate` annoncerait une capacité inexistante).
@@ -3179,7 +3179,7 @@ async function main(): Promise<void> {
         // (`WorkersLourdsBots`, paresseux, plafonné, selon SES capacités). Un
         // bot muet n'a aucun worker ⇒ `delegate` répond `heavy_unavailable`.
         heavyPour: (botId) =>
-          botId === undefined || botId === botDePile
+          botId === undefined || botId === botDuRun
             ? heavyWorker
             : workersLourds?.pour(botId),
         availability: availabilityPort,
@@ -3197,7 +3197,7 @@ async function main(): Promise<void> {
     // aucune mémoire d'un autre bot ne peut être lue par cette instance.
     const storesMemoire = ouvrirStoresMemoireBot({
       env,
-      botId: bots.bot?.id ?? BOT_YUKI,
+      botId: bots.bot.id,
       logger,
     });
     const memoryStore = storesMemoire.store;
@@ -3358,8 +3358,8 @@ async function main(): Promise<void> {
      * `memory.jsonl` n'est ouvert qu'à sa première demande.
      */
     servicesMemoire = new ServicesMemoireBots<MemoryService>({
-      pile: botDePile,
-      principal: memoryService,
+      pile: botDuRun,
+      duRun: memoryService,
       storesDe: (botId) => fabriqueMemoireBots?.storesDe(botId) as NonNullable<
         ReturnType<FabriqueMemoireBots["storesDe"]>
       >,
@@ -3425,7 +3425,7 @@ async function main(): Promise<void> {
         if (!liste || liste.length === 0) {
           // Mode mono-bot historique : le bot unique a toutes les capacités.
           return [
-            { id: bots.bot?.id ?? BOT_YUKI, capacites: [...CAPACITES_BOT] as readonly string[] },
+            { id: bots.bot.id, capacites: [...CAPACITES_BOT] as readonly string[] },
           ];
         }
         return liste
@@ -3493,7 +3493,7 @@ async function main(): Promise<void> {
       envInstance: bots.envInstance,
       mode: bots.mode,
       bots: bots.aDemarrer.map((entree) => entree.id),
-      pile: botDePile,
+      pile: botDuRun,
       configs: configsBots,
       fabrique: fabriqueMemoireBots,
       // ⚠️ LOT 36 (L3-c) : LE MÊME résolveur que les piles de sources — l'`Env` d'un
@@ -3512,11 +3512,11 @@ async function main(): Promise<void> {
     // ⚠️ La fabrique de piles lit cette Map par relais : elle est construite AVANT
     // (la pile du bot actif existe déjà) et ses lectures sont PARESSEUSES.
     outilsBotsParId = outilsBots;
-    const outilsPile = outilsBots.get(botDePile);
+    const outilsPile = outilsBots.get(botDuRun);
     if (!outilsPile) {
       // Impossible : `creerOutilsBots` garantit la présence du bot de la pile.
       throw new Error(
-        `Outils introuvables pour le bot « ${botDePile} » : démarrage impossible.`,
+        `Outils introuvables pour le bot « ${botDuRun} » : démarrage impossible.`,
       );
     }
     // ⚠️ Ce que le démarrage doit DIRE : pour quels bots un jeu d'outils existe,
@@ -3524,10 +3524,10 @@ async function main(): Promise<void> {
     // souvenir ne vont pas au journal).
     logger.info("bots.outils", {
       bots: [...outilsBots.keys()].join(","),
-      pile: botDePile,
+      pile: botDuRun,
     });
     for (const [botId, outils] of outilsBots) {
-      if (botId === botDePile) continue;
+      if (botId === botDuRun) continue;
       logger.info("bots.outils.bot", {
         bot: botId,
         memoire: outils.chemins.memoryStorePath,
@@ -3742,14 +3742,14 @@ async function main(): Promise<void> {
     // consigne) et prompt enregistré qui CONTREDIT une capacité (`programmer_envoi`).
     avertirSiPromptLegerIncomplet(logger, promptLeger, config.originOf("prompts.light"));
     // ⚠️ LOT 36 (L3-d) — LES `PiHost` PAR BOT.
-    // Les options du host du PRINCIPAL sont désormais un OBJET NOMMÉ, construit
+    // Les options du host du BOT DU RUN sont désormais un OBJET NOMMÉ, construit
     // ICI à l'IDENTIQUE : il est passé tel quel à `createPiHost` (identité des
     // options et des ports), et les hosts des autres bots en DÉRIVENT
     // (`src/bots/hosts.ts`). Aucune option de ce bloc n'a changé.
     const optionsHostPile: PiHostOptions = {
       // ⚠️ SEUL champ AJOUTÉ par L3-d à la façade : chaque host DIT à quel bot il
       // appartient (`pi.ready` → `bot`). Aucun comportement n'en dépend.
-      botId: botDePile,
+      botId: botDuRun,
       agentDir: env.piAgentDir,
       cwd: env.piCwd,
       home: env.piHome,
@@ -3866,7 +3866,7 @@ async function main(): Promise<void> {
       reactions: reactionStore,
       logger,
     };
-    // ⚠️ ⚠️ CE QUE CE BLOC GARANTIT : avec UN bot actif, `hostsBots.principal`
+    // ⚠️ ⚠️ CE QUE CE BLOC GARANTIT : avec UN bot actif, `hostsBots.duRun`
     // EST le host d'aujourd'hui, construit avec `optionsHostPile` tel quel
     // (`sessionsDir` de l'`Env` du démarrage, prompt de `config`, et les MÊMES
     // ports — `===`). Les hosts des autres bots ne changent RIEN à `host` :
@@ -3874,7 +3874,7 @@ async function main(): Promise<void> {
     // ⚠️ Un bot ÉTEINT n'est pas dans `bots.aDemarrer` : il n'a donc ni pile
     // (L3-c) ni host — rien n'est ouvert en son nom.
     hostsBots = new HostsBots<PiHost>({
-      pile: botDePile,
+      pile: botDuRun,
       bots: bots.aDemarrer.map((entree) => entree.id),
       optionsPile: optionsHostPile,
       creer: createPiHost,
@@ -3899,7 +3899,7 @@ async function main(): Promise<void> {
         const configBot = configsBots.get(botId);
         const outils = outilsBots.get(botId);
         // ⚠️ LOT 36 (L11) : la MÉMOIRE de CE bot (son service, ses stores) —
-        // jamais celle du principal. Le port est retiré si elle manque.
+        // jamais celle du bot du run. Le port est retiré si elle manque.
         const memoire = servicesMemoire?.pour(botId);
         const portDelegation = delegationPourBot(botId);
         const sourceEvenements = evenementsDuBotPour(botId);
@@ -3914,9 +3914,9 @@ async function main(): Promise<void> {
           ...(sourceEvenements !== undefined ? { eventSource: sourceEvenements } : {}),
           // ⚠️ LOT 36 (L6) : le service d'exécution DE CE BOT (même store, même
           // hub, même TLS 9443 — seule la visibilité `AgentRecord.bots` change).
-          // ⚠️ Le port n'est posé que si l'INSTANCE en donne un au principal
+          // ⚠️ Le port n'est posé que si l'INSTANCE en donne un au bot du run
           // (`optionsHostPile.execution`) : sinon un bot secondaire gagnerait un
-          // outil que le principal n'a pas. Un bot n'hérite JAMAIS celui d'un
+          // outil que le bot du run n'a pas. Un bot n'hérite JAMAIS celui d'un
           // autre (la visibilité y est figée sur un autre bot).
           ...(optionsHostPile.execution !== undefined &&
           executionsAgents?.pour(botId) !== undefined
@@ -3926,7 +3926,7 @@ async function main(): Promise<void> {
       },
       logger,
     });
-    host = hostsBots.principal;
+    host = hostsBots.duRun;
     /**
      * ⚠️ LOT 36 (L8/L9) — L'ÉTAT RÉEL DES BOTS, ET LEUR CYCLE DE VIE.
      *
@@ -3944,7 +3944,7 @@ async function main(): Promise<void> {
     const hostsPourCycle = hostsBots;
     const fabriqueMemoirePourArret = fabriqueMemoireBots;
     executionBots = new ExecutionBots({
-      botDePile,
+      botDuRun,
       hosts: hostsPourCycle,
       // ⚠️ Ouvre la pile du bot : plus AUCUN refus de plafond depuis la décision
       // utilisateur du 2026-11-13 (tous les bots `actif` démarrent).
@@ -3956,7 +3956,7 @@ async function main(): Promise<void> {
         workersLourds?.oublier(botId);
       },
       sessions: (botId) =>
-        botId === botDePile
+        botId === botDuRun
           ? sessionsCount
           : compterSessionsPi(bots.envInstance.piSessionsDir, botId),
       workers: { a: (botId) => workersLourds?.a(botId) ?? false },
@@ -3991,7 +3991,7 @@ async function main(): Promise<void> {
     // ⚠️ Les routes lisent CE port : `GET /api/bots` joint l'état réel et
     // `PATCH /api/bots/<id>/actif` démarre/arrête pour de vrai.
     botsAdmin.execution = executionBots;
-    logger.info("bots.execution.pret", { pile: botDePile });
+    logger.info("bots.execution.pret", { pile: botDuRun });
     // ⚠️ RÉVEIL DES JOBS — INVARIANT : **dans un canal, UN SEUL RÉDACTEUR, le tour de
     // Yuki** (`docs/lot18-chat.md`). Un job terminé doit être ANNONCÉ là où son auteur
     // attend, mais le serveur n'écrit jamais à sa place : le rapport est INJECTÉ comme
@@ -4024,7 +4024,7 @@ async function main(): Promise<void> {
           // ⚠️ L'adaptateur du BOT (son jeton) : un rapport de `kohai` ne peut pas
           // être publié sous l'identité de `yuki`.
           const adapter =
-            botId === botDePile ? getAdapter(plateforme) : adaptateursChat.pour(botId, plateforme);
+            botId === botDuRun ? getAdapter(plateforme) : adaptateursChat.pour(botId, plateforme);
           if (!adapter?.wakeReport) {
             throw new Error(
               `La plateforme « ${plateforme} » ne sait pas réveiller Yuki dans un canal.`,
@@ -4039,7 +4039,7 @@ async function main(): Promise<void> {
           envoyerDansCanal(conversationId, text, fichiers, undefined, botId),
         logger,
       });
-    const jobReportWaker = creerReveilJob(botDePile, host);
+    const jobReportWaker = creerReveilJob(botDuRun, host);
     /**
      * Réveil d'un bot, résolu À CHAQUE usage :
      *  - le bot de la PILE rend le réveil d'avant L11 (identité `===`) ;
@@ -4049,9 +4049,9 @@ async function main(): Promise<void> {
      * ⚠️ Les réveils sont mémoïsés pour garder l'ORDRE des rapports d'un même
      * canal (file par conversation, `createChannelAwareWaker`).
      */
-    const reveilsParBot = new Map<string, LightWaker>([[botDePile, jobReportWaker]]);
+    const reveilsParBot = new Map<string, LightWaker>([[botDuRun, jobReportWaker]]);
     const reveilDuBot = (botId: string | undefined): LightWaker | undefined => {
-      if (botId === undefined || botId === botDePile) return jobReportWaker;
+      if (botId === undefined || botId === botDuRun) return jobReportWaker;
       const existant = reveilsParBot.get(botId);
       if (existant !== undefined) return existant;
       const hoteDuBot: LightWaker = {
@@ -4108,9 +4108,9 @@ async function main(): Promise<void> {
 
     // ⚠️ LOT 36 (L3-d) : LES HOSTS DES AUTRES BOTS DÉMARRENT APRÈS LE PRINCIPAL.
     // Chacun a SES sessions (`<pi>/agent/sessions/<bot>`) et SON prompt : leurs
-    // conversations ne peuvent donc pas se mélanger avec celles du principal.
+    // conversations ne peuvent donc pas se mélanger avec celles du bot du run.
     // ⚠️ Un échec est JOURNALISÉ (`bots.host.start.failed`) et n'empêche ni le
-    // principal de servir, ni les autres bots de démarrer — le bilan nomme les
+    // bot du run de servir, ni les autres bots de démarrer — le bilan nomme les
     // deux listes.
     const demarrageHostsBots = await hostsBots.demarrerAutres();
     // ⚠️ LOT 38 — LA RAISON DES ÉCHECS VA DANS L'ÉTAT D'EXÉCUTION. Un échec
@@ -4170,10 +4170,10 @@ async function main(): Promise<void> {
           // porte la même information sous forme structurée, pour un rendu natif futur ;
           // `publierMessage` n'en a pas besoin (il persiste le texte tel quel).
           publier: async (sessionId, texte, fichiers) => {
-            // ⚠️ L11 : le host DU BOT (son JSONL, ses sessions). Le principal
+            // ⚠️ L11 : le host DU BOT (son JSONL, ses sessions). Le bot du run
             // reste `host`, par identité.
             const cible =
-              botId === botDePile ? host : (hostsBots?.pourDemarre(botId) ?? hostsBots?.pour(botId));
+              botId === botDuRun ? host : (hostsBots?.pourDemarre(botId) ?? hostsBots?.pour(botId));
             if (!cible) throw new Error("Le host Pi n'est pas disponible.");
             if (typeof cible.publierMessage !== "function") {
               throw new Error(
@@ -4189,7 +4189,7 @@ async function main(): Promise<void> {
         fichier: (fichierId) => filesStore.get(fichierId),
       };
     };
-    const portsDeclencheurSources = portsDeclencheurPour(botDePile);
+    const portsDeclencheurSources = portsDeclencheurPour(botDuRun);
     if (portsDeclencheurSources !== undefined) {
       sourcesService.setDeclencheurPorts(portsDeclencheurSources);
       // Le RÉSULTAT d'un job de déclencheur ne réveille PAS le léger : il part
@@ -4198,7 +4198,7 @@ async function main(): Promise<void> {
         recevoirResultat: (record) => sourcesService.recevoirResultat(record),
       });
       delegation?.setDeclencheursPour((botId) => {
-        if (botId === undefined || botId === botDePile) {
+        if (botId === undefined || botId === botDuRun) {
           return { recevoirResultat: (record) => sourcesService.recevoirResultat(record) };
         }
         try {
@@ -4230,7 +4230,7 @@ async function main(): Promise<void> {
       if (hote === undefined) return;
       service.setWaker(hote);
       // ⚠️ LOT 36 (L11) : les ports sont ceux DU BOT (job attribué à ce bot,
-      // résultat publié chez lui) — jamais ceux du principal.
+      // résultat publié chez lui) — jamais ceux du bot du run.
       const ports = portsDeclencheurPour(botId);
       if (ports !== undefined) service.setDeclencheurPorts(ports);
     };
@@ -4391,9 +4391,9 @@ async function main(): Promise<void> {
       host,
       // ⚠️ LOT 36 (L4) — LES HOSTS PAR BOT : c'est ce qui rend un second bot
       // JOIGNABLE depuis l'interface. Une trame SANS `botId` reste servie par
-      // `host` (le principal, objet inchangé) ; une trame qui en porte un est
+      // `host` (le bot du run, objet inchangé) ; une trame qui en porte un est
       // servie par `pourDemarre(botId)` — un bot inconnu ou arrêté est REFUSÉ en
-      // le nommant, jamais remplacé par le principal.
+      // le nommant, jamais remplacé par le bot du run.
       ...(hostsBots ? { hosts: hostsBots } : {}),
       logger,
       serverVersion: env.version,
@@ -4806,7 +4806,7 @@ async function main(): Promise<void> {
       if (agentsServer) await closeAgentsServer(agentsServer);
       await transport?.close();
       await host?.stop();
-      // ⚠️ LOT 36 (L3-d) : les hosts des AUTRES bots s'arrêtent ici (le principal
+      // ⚠️ LOT 36 (L3-d) : les hosts des AUTRES bots s'arrêtent ici (le bot du run
       // vient d'être arrêté ci-dessus : un seul `stop` par host).
       await hostsBots?.arreter();
       hostsBots = undefined;
@@ -4850,12 +4850,12 @@ async function main(): Promise<void> {
   // de l'interrupteur de la plateforme (`chat.<plateforme>.enabled`). Un échec est
   // journalisé ET remonté par le statut ; il ne bloque jamais le démarrage du gateway.
   /**
-   * ⚠️ LOT 36 (L10) : la condition de connexion du principal passe par la
+   * ⚠️ LOT 36 (L10) : la condition de connexion du bot du run passe par la
    * RÉSOLUTION des jetons (nom par bot, plus l'ancien nom historique). Le
    * comportement d'une installation existante est identique : son jeton
    * `YUKI_CHAT_MATTERMOST` est résolu pour `yuki`.
    */
-  const jetonPile = jetonsChat.jetons.get(botDePile);
+  const jetonPile = jetonsChat.jetons.get(botDuRun);
   if (chatMirror.baseUrl() !== "" && jetonPile?.has("mattermost") === true) {
     void mattermost.connect().catch((error: unknown) => {
       logger.warn("chat.mattermost.connect_failed", { error: messageOf(error) });

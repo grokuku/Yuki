@@ -14,7 +14,7 @@
  * n'est modifié — `main()` garde ses objets et ses variables.
  *
  * ⚠️ RÈGLES (les mêmes que `src/config/bots.ts`, L3-a) :
- *  1. **Le principal reste le même objet.** `main()` a déjà construit la
+ *  1. **Le bot du run reste le même objet.** `main()` a déjà construit la
  *     personnalité, les règles, l'avatar, les réactions, l'archive et les stores
  *     de mémoire du bot de la pile : ils sont REÇUS (`existantsPile`) et
  *     réutilisés tels quels, jamais reconstruits — deux `MemoryStore` sur le

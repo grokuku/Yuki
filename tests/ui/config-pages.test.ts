@@ -283,7 +283,10 @@ describe("②③ la PORTÉE décide de ce qui est rendu, une seule fois par page
 
   it("`config.js` filtre par portée à l'ÉCRITURE aussi (jamais deux routes à la fois)", () => {
     // Page Bot : tout le patch part sur la route du bot (portée `bot`).
-    expect(CONFIG_JS).toContain("cheminConfigBot(botCourant?.id ?? BOT_REPLI)");
+    // ⚠️ GARDE MISE À JOUR (lot 45) : `BOT_REPLI = "yuki"` est SUPPRIMÉ (yuki est
+    // supprimable). Le repli est le PREMIER bot de la liste du serveur (`ordre`).
+    expect(CONFIG_JS).toContain('cheminConfigBot(botCourant?.id ?? botsConnus[0]?.id ?? "")');
+    expect(CONFIG_JS).not.toContain("BOT_REPLI");
     // Page Instance : découpage de la portée, comme depuis le sous-lot 1b-3.
     expect(CONFIG_JS).toContain("splitConfigPatchByScope(patch, scopesOfState())");
     // La lecture suit la même règle.
@@ -564,11 +567,17 @@ describe("④ encarts de renvoi : un groupe déplacé DIT où il est allé", () 
 });
 
 describe("⑤ sélecteur de bot : état dans l'URL, modales HolafModal", () => {
-  it("`?b=` est respecté et un slug INCONNU retombe sur `yuki`, sans erreur", () => {
+  // ⚠️ RÉÉCRIT (lot 45) : « un slug INCONNU retombe sur `yuki` » n'est plus la
+  // règle. Plus de constante `BOT_REPLI`, plus de `parId("yuki")` : un slug
+  // inconnu retombe sur le bot ACTIF, sinon le PREMIER de la liste (ordre du
+  // serveur). Yuki supprimée, rien ne la ressuscite.
+  it("`?b=` est respecté et un slug INCONNU retombe sur le premier bot, sans erreur", () => {
     expect(CONFIG_JS).toContain('new URLSearchParams(location.search).get("b")');
-    expect(CONFIG_JS).toContain('const BOT_REPLI = "yuki"');
-    // Repli : le bot demandé, sinon `yuki`, sinon le bot actif, sinon le premier.
-    expect(CONFIG_JS).toContain("parId(demande) ?? parId(BOT_REPLI) ?? actif ?? botsConnus[0]");
+    expect(CONFIG_JS).not.toContain('const BOT_REPLI = "yuki"');
+    // ⚠️ La règle est CELLE DU SERVEUR, une seule fonction partagée : bot demandé
+    // s'il existe, sinon premier par `ordre` (liste triée par le serveur).
+    expect(CONFIG_JS).toContain("resoudreBotCourantListe(botsConnus, demande)");
+    expect(CONFIG_JS).not.toContain("parId(BOT_REPLI)");
     // L'URL est réécrite avec le bot réellement affiché (lien partageable).
     expect(CONFIG_JS).toContain('url.searchParams.set("b", botCourant.id)');
     // Aucune erreur visible pour un slug inconnu : pas de bandeau d'erreur dédié.

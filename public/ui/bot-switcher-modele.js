@@ -30,20 +30,21 @@ export const MAX_BOTS_SELECTEUR = 6;
  * État LISIBLE d'un bot, pour le sélecteur.
  *
  * @param {{id?: string, actif?: boolean, execution?: {demarre?: boolean, erreur?: string}}} bot
- * @param {string|null} [principal] identifiant du bot de la PILE (il tourne avec
- *   le gateway : il n'est ni démarrable ni arrêtable).
- * @returns {{code: "principal"|"demarre"|"erreur"|"arrete"|"inconnu",
+ * @param {string|null} [duRun] identifiant du bot du RUN (il tourne avec le
+ *   gateway : il n'est ni démarrable ni arrêtable). ⚠️ LOT 45 : c'est le PREMIER
+ *   bot par `ordre` — aucun identifiant n'est privilégié.
+ * @returns {{code: "duRun"|"demarre"|"erreur"|"arrete"|"inconnu",
  *   libelle: string, raison: string, demarrable: boolean, demarre: boolean,
  *   doitTourner: boolean}}
  */
-export function etatBot(bot, principal = null) {
+export function etatBot(bot, duRun = null) {
   const doitTourner = bot?.actif === true;
   const execution = bot?.execution;
-  if (principal !== null && bot?.id === principal) {
+  if (duRun !== null && bot?.id === duRun) {
     // ⚠️ Le bot de la pile suit le gateway : `estDemarre` le dit TOUJOURS démarré
     // (c'est `main()` qui l'a démarré). On l'affiche comme tel, sans bouton.
     return {
-      code: "principal",
+      code: "duRun",
       // ⚠️ FRANÇAIS SIMPLE (demande utilisateur) : jamais « bot principal ».
       libelle: "en marche",
       raison: "",
@@ -100,26 +101,20 @@ export function etatBot(bot, principal = null) {
 /**
  * URL de conversation d'un bot.
  *
- * ⚠️ LE BOT PRINCIPAL N'A PAS DE `?b=` : sans ce paramètre, la page ne demande
- * aucun bot et parle au principal — c'est la convention de L4, et c'est le SEUL
- * moyen de fonctionner sur une instance MONO-BOT (sans `state/bots.json`, le
- * transport WebSocket refuse tout `botId`, y compris celui du principal).
+ * ⚠️ LE BOT DU RUN N'A PAS DE `?b=` : sans ce paramètre, la page ne demande
+ * aucun bot et parle au bot du run (premier par `ordre`) — c'est la convention de
+ * L4, et c'est le SEUL moyen de fonctionner sur une instance MONO-BOT (sans
+ * `state/bots.json`, le transport WebSocket refuse tout `botId`, y compris celui
+ * du bot du run).
  *
  * @param {string} botId
- * @param {string|null} [principal]
+ * @param {string|null} [duRun]
  */
-export function urlConversationBot(botId, principal = null) {
+export function urlConversationBot(botId, duRun = null) {
   if (typeof botId !== "string" || botId === "") return "/";
-  if (principal !== null && botId === principal) return "/";
+  if (duRun !== null && botId === duRun) return "/";
   return `/?b=${encodeURIComponent(botId)}`;
 }
-
-/**
- * Slug de bot vers lequel retombe la page `/bots` quand l'URL en désigne un
- * inconnu (`resoudreBot` de `config.js`) : le repli est SILENCIEUX et commun aux
- * deux pages.
- */
-export const BOT_REGLAGES_REPLI = "yuki";
 
 /**
  * URL des RÉGLAGES d'un bot (`/bots?b=…`) — destination du bouton « Réglages du
@@ -130,31 +125,32 @@ export const BOT_REGLAGES_REPLI = "yuki";
  * du haut. Il porte maintenant le bot AFFICHÉ (`welcome.bot` de la connexion, à
  * défaut `?b=` de la page).
  *
- * ⚠️ `bots` = liste CONNUE (celle du sélecteur, `/api/bots`). Un bot affiché qui
- * n'y figure PLUS (retiré de l'instance) ne doit pas produire un `?b=` mort : on
- * retombe sur `yuki`, exactement comme la page `/bots`. Liste VIDE (pas encore
- * lue) : on garde le bot affiché — l'URL n'est qu'une intention et le serveur
- * fait le repli lui-même.
+ * ⚠️ `bots` = liste CONNUE (celle du sélecteur, `/api/bots`, triée par le
+ * SERVEUR : `ordre`). Un bot affiché qui n'y figure PLUS (supprimé de
+ * l'instance) ne doit pas produire un `?b=` mort : on retombe sur le PREMIER de
+ * la liste, c'est-à-dire le premier par `ordre` — ⚠️ LOT 45 : plus de repli sur
+ * « yuki », qui peut avoir été supprimée comme n'importe quel bot. Liste VIDE
+ * (pas encore lue, ou instance injoignable) : on garde le bot affiché s'il y en
+ * a un, sinon l'URL ne porte AUCUN `?b=` et le serveur résout (premier par
+ * `ordre`) — une intention, jamais un identifiant inventé.
  *
  * @param {string|null} botAffiche
  * @param {Array<{id?: string}|string>} [bots]
- * @param {string} [repli]
  * @returns {string}
  */
-export function urlReglagesBot(
-  botAffiche,
-  bots = [],
-  repli = BOT_REGLAGES_REPLI,
-) {
+export function urlReglagesBot(botAffiche, bots = []) {
   const connus = (Array.isArray(bots) ? bots : [])
     .map((bot) => (typeof bot === "string" ? bot.trim() : String(bot?.id ?? "")))
     .filter((id) => id !== "");
   const affiche = typeof botAffiche === "string" ? botAffiche.trim() : "";
-  const retenu =
-    affiche !== "" && (connus.length === 0 || connus.includes(affiche))
-      ? affiche
-      : repli;
-  return `/bots?b=${encodeURIComponent(retenu)}`;
+  if (affiche !== "" && (connus.length === 0 || connus.includes(affiche))) {
+    return `/bots?b=${encodeURIComponent(affiche)}`;
+  }
+  const premier = connus[0];
+  if (typeof premier === "string" && premier !== "") {
+    return `/bots?b=${encodeURIComponent(premier)}`;
+  }
+  return "/bots";
 }
 
 /** Bots marqués ACTIFS (ce qui doit tourner), dans l'ordre du registre. */
@@ -199,12 +195,12 @@ export function resumeBots(bots) {
  * être testable sans navigateur.
  *
  * @param {object} bot
- * @param {{principal?: string|null, courant?: string|null}} [options]
+ * @param {{duRun?: string|null, courant?: string|null}} [options]
  */
 export function entreeListe(bot, options = {}) {
-  const principal = options.principal ?? null;
+  const duRun = options.duRun ?? null;
   const courant = options.courant ?? null;
-  const etat = etatBot(bot, principal);
+  const etat = etatBot(bot, duRun);
   const nom = typeof bot?.nom === "string" && bot.nom !== "" ? bot.nom : String(bot?.id ?? "");
   return {
     id: String(bot?.id ?? ""),
@@ -218,11 +214,11 @@ export function entreeListe(bot, options = {}) {
     demarrable: etat.demarrable,
     demarre: etat.demarre,
     doitTourner: etat.doitTourner,
-    principal: principal !== null && bot?.id === principal,
+    duRun: duRun !== null && bot?.id === duRun,
     courant: courant !== null && bot?.id === courant,
     monogramme: monogramme(nom),
     avatarClasse: classeMonogramme(String(bot?.id ?? "")),
-    url: urlConversationBot(String(bot?.id ?? ""), principal),
+    url: urlConversationBot(String(bot?.id ?? ""), duRun),
   };
 }
 
@@ -294,7 +290,7 @@ export function classeMonogramme(botId) {
  * (décision utilisateur du 2026-11-13).
  *
  * @param {{bot: object|null, bots?: Array<object>,
- *   principal?: string|null}} options
+ *   duRun?: string|null}} options
  * @returns {string} texte ("" ⇒ aucun bandeau à afficher)
  */
 export function messageBandeauBot(options) {

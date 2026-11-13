@@ -66,7 +66,7 @@ const DC_C: ConversationMiroir = { id: "dc-c", title: "Salon", platform: "discor
 describe("CanauxBots — un bot ne voit que SON miroir", () => {
   it("deux bots ⇒ deux listes disjointes (central)", () => {
     const canaux = new CanauxBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       miroir: (botId) => (botId === "yuki" ? miroir([MM_A]) : miroir([DC_C])),
       proprietaires: ProprietairesCanaux.enMemoire(),
     });
@@ -79,7 +79,7 @@ describe("CanauxBots — un bot ne voit que SON miroir", () => {
     const log = journalEspion();
     const proprietaires = ProprietairesCanaux.enMemoire({ "mm-a": "yuki" }, { logger: log });
     const canaux = new CanauxBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       // Les DEUX miroirs prétendent voir `mm-a` (adaptateur mal configuré, copie).
       miroir: () => miroir([MM_A, DC_C]),
       proprietaires,
@@ -92,7 +92,7 @@ describe("CanauxBots — un bot ne voit que SON miroir", () => {
 
   it("un bot SANS miroir ne propose RIEN (jamais ceux de l'instance)", () => {
     const canaux = new CanauxBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       miroir: (botId) => (botId === "yuki" ? miroir([MM_A]) : undefined),
       proprietaires: ProprietairesCanaux.enMemoire(),
     });
@@ -104,7 +104,7 @@ describe("CanauxBots — un bot ne voit que SON miroir", () => {
   it("la fabrique de miroirs n'est appelée qu'UNE fois par bot", () => {
     const fabrique = vi.fn(() => miroir([MM_A]));
     const canaux = new CanauxBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       miroir: fabrique,
       proprietaires: ProprietairesCanaux.enMemoire(),
     });
@@ -122,7 +122,7 @@ describe("« un canal = un bot »", () => {
   it("la première publication d'un bot revendique le canal, la seconde est refusée", () => {
     const log = journalEspion();
     const canaux = new CanauxBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       miroir: () => miroir([MM_A]),
       proprietaires: ProprietairesCanaux.enMemoire({}, { logger: log }),
       logger: log,
@@ -146,7 +146,7 @@ describe("« un canal = un bot »", () => {
   it("autoriser() ne réclame RIEN (contrôle en lecture seule)", () => {
     const proprietaires = ProprietairesCanaux.enMemoire();
     const canaux = new CanauxBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       miroir: () => miroir([MM_A]),
       proprietaires,
     });
@@ -174,7 +174,7 @@ describe("« un canal = un bot »", () => {
   it("oublier() le miroir d'un bot ne lui retire PAS ses canaux", () => {
     const proprietaires = ProprietairesCanaux.enMemoire({ "dc-c": "kohai" });
     const canaux = new CanauxBots({
-      botDePile: "yuki",
+      botDuRun: "yuki",
       miroir: () => miroir([DC_C]),
       proprietaires,
     });
@@ -286,12 +286,12 @@ describe("câblage de main() (garde statique — main() n'est jamais exécuté p
     expect(source).toContain("const hostDuBot = (botId: string): PiHost | undefined =>");
     expect(source).toContain("publier: (input) => publierEnvoiProgramme(input, botId)");
     // Le host d'un bot secondaire n'a AUCUN repli vers le principal.
-    expect(source).toContain("botId === botDePile ? host : hostsBots?.pourDemarre(botId)");
+    expect(source).toContain("botId === botDuRun ? host : hostsBots?.pourDemarre(botId)");
   });
 
   it("chaque bot ouvre SON miroir ; celui de la pile est réutilisé", () => {
     expect(source).toContain("canauxBots = new CanauxBots({");
     expect(source).toContain("indexPath: envBot.chatMirrorPath");
-    expect(source).toContain("if (botId === botDePile) return chatMirror;");
+    expect(source).toContain("if (botId === botDuRun) return chatMirror;");
   });
 });

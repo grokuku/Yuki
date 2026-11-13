@@ -260,7 +260,7 @@ describe("③ la Map couvre TOUS les bots À DÉMARRER (plus de plafond)", () =>
     const configs = creerConfigsBots({
       env: b.env,
       bots: resolution.aDemarrer.map((entree) => entree.id),
-      pile: resolution.principal?.id ?? "",
+      pile: resolution.botCourant?.id ?? "",
       promptDefaults: PROMPTS,
       processEnv: {},
     });

@@ -138,7 +138,7 @@ function persisterAttribution(table) {
  * @param {Function} [options.fetchImpl] remplaçant de `fetch` (tests).
  * @param {Function} [options.naviguer] remplaçant de `location.assign` (tests).
  * @param {Function} [options.recherche] remplaçant de `location.search` (tests).
- * @param {Function} [options.avatarPrincipal] src de l'avatar du bot principal.
+ * @param {Function} [options.avatarPrincipal] src de l'avatar du bot du RUN.
  * @param {number} [options.statutMs] durée d'affichage d'un message (0 = collant,
  *   utilisé par les tests pour ne laisser aucun minuteur derrière eux).
  * @returns {{rafraichir: Function, ouvrir: Function, fermer: Function,
@@ -192,7 +192,8 @@ export function initBotSwitcher(options) {
    * Un bot `actif` qui ne tourne pas porte une VRAIE erreur (`execution.erreur`).
    */
   let bots = [];
-  let principal = null;
+  /** Bot du RUN (`GET /api/bots` → `botDuRun`) : plus de « bot principal » élu. */
+  let duRun = null;
   let echanges = {};
   /** Non-lus par conversation (état local de CET appareil, `unread.js`). */
   let nonLus = {};
@@ -218,7 +219,7 @@ export function initBotSwitcher(options) {
 
   function botCourant() {
     const valeur = new URLSearchParams(recherche()).get("b");
-    return typeof valeur === "string" && valeur.trim() !== "" ? valeur.trim() : principal;
+    return typeof valeur === "string" && valeur.trim() !== "" ? valeur.trim() : duRun;
   }
 
   function direStatut(texte, { erreur = false } = {}) {
@@ -260,7 +261,7 @@ export function initBotSwitcher(options) {
       const liste = Array.isArray(donnees?.bots) ? donnees.bots : [];
       if (liste.length === 0) throw new Error("liste vide");
       bots = liste;
-      principal = typeof donnees?.principal === "string" ? donnees.principal : null;
+      duRun = typeof donnees?.botDuRun === "string" ? donnees.botDuRun : null;
       echanges =
         donnees?.echanges !== null && typeof donnees?.echanges === "object"
           ? donnees.echanges
@@ -270,7 +271,7 @@ export function initBotSwitcher(options) {
       // bascule au doigt (demande utilisateur). Sans aucun bot lisible, la
       // marque garde son comportement d'avant.
       document.body?.classList?.toggle?.("has-bot-switcher", bots.length > 0);
-      // Les sessions reçues AVANT que le bot principal soit connu (première
+      // Les sessions reçues AVANT que le bot du RUN soit connu (première
       // lecture réseau) sont attribuées maintenant qu'on le connaît.
       attribuer();
       rendre();
@@ -288,7 +289,7 @@ export function initBotSwitcher(options) {
   }
 
   /**
-   * Avatar d'une entrée : image du bot principal (la seule servie par le
+   * Avatar d'une entrée : image du bot du RUN (la seule servie par le
    * gateway), sinon MONOGRAMME. `rangee` choisit la classe de conteneur (rangée
    * de la barre du haut ou liste du panneau) — le monogramme reste TOUJOURS
    * derrière l'image : sans avatar, il est le repli visible.
@@ -300,7 +301,7 @@ export function initBotSwitcher(options) {
       "aria-hidden": "true",
       text: entree.monogramme,
     });
-    if (entree.principal) {
+    if (entree.duRun) {
       const src = avatarPrincipal();
       const image = h("img", {
         class: "avatar avatar--brand",
@@ -318,11 +319,11 @@ export function initBotSwitcher(options) {
   }
 
   /**
-   * Attribue les conversations connues au bot de la connexion (ou au principal
+   * Attribue les conversations connues au bot de la connexion (ou au bot du RUN
    * si le serveur ne l'a pas nommé). Sans bot connu, on n'invente RIEN.
    */
   function attribuer() {
-    const botId = dernierBotConnecte ?? principal;
+    const botId = dernierBotConnecte ?? duRun;
     if (typeof botId !== "string" || botId === "" || sessionsConnues.length === 0) return;
     const suivante = attribuerSessions(attribution, sessionsConnues, botId);
     if (suivante !== attribution) {
@@ -349,7 +350,7 @@ export function initBotSwitcher(options) {
     const compteurs = nonLusParBot(nonLus, attribution);
     bar.replaceChildren();
     for (const entree of entrees) {
-      const arrete = entree.etat !== "demarre" && entree.etat !== "principal";
+      const arrete = entree.etat !== "demarre" && entree.etat !== "duRun";
       const classes = [
         "bot-bar__item",
         `bot-bar__item--${classeEtatRangee(entree.etat)}`,
@@ -401,7 +402,7 @@ export function initBotSwitcher(options) {
 
   /** Suffixe de classe d'état d'un avatar de rangée (aucun style inline). */
   function classeEtatRangee(etat) {
-    if (etat === "principal" || etat === "demarre") return "marche";
+    if (etat === "duRun" || etat === "demarre") return "marche";
     if (etat === "erreur") return "erreur";
     if (etat === "arrete") return "arrete";
     return "inconnu";
@@ -454,7 +455,7 @@ export function initBotSwitcher(options) {
     );
     // ① DÉMARRER / ARRÊTER — le bot PRINCIPAL suit le gateway : la ligne le dit
     // et reste inerte (le serveur refuserait), plutôt que de faire semblant.
-    if (entree.principal) {
+    if (entree.duRun) {
       bloc.append(
         h("button", {
           class: "bot-switcher__menu-item",
@@ -548,7 +549,7 @@ export function initBotSwitcher(options) {
   function rendre() {
     const courant = botCourant();
     const entrees = bots.map((bot) =>
-      entreeListe(bot, { principal, courant }),
+      entreeListe(bot, { duRun, courant }),
     );
     dernieresEntrees = entrees;
     // La RANGÉE de la barre du haut se rend avec la même vérité que le panneau.
@@ -863,7 +864,7 @@ export function initBotSwitcher(options) {
       if (courantAvant === entree.id && cible !== null) {
         // ⚠️ Le bot de la page n'existe plus : on QUITTE sa conversation (sinon le
         // WebSocket refuserait chaque trame et l'écran resterait mort).
-        naviguer(urlConversationBot(cible, principal));
+        naviguer(urlConversationBot(cible, duRun));
         return;
       }
       direStatut(
@@ -913,7 +914,7 @@ export function initBotSwitcher(options) {
    * non-lus (par conversation) : c'est ce qui permet de badger CHAQUE avatar.
    *
    * ⚠️ `botId` est le bot de la connexion (annoncé par `welcome.bot`, sinon
-   * celui de l'URL, sinon le principal). Les conversations reçues lui sont
+   * celui de l'URL, sinon le bot du RUN). Les conversations reçues lui sont
    * attribuées ; l'attribution est persistée pour survivre à un rechargement
    * (le compteur de non-lus, lui, vit déjà dans `localStorage`).
    */
@@ -993,7 +994,7 @@ export function initBotSwitcher(options) {
     majNonLus,
     etat: () => ({
       bots,
-      principal,
+      duRun,
       echanges,
       ouvert,
       /** Non-lus connus PAR BOT (mêmes chiffres que les badges de la rangée). */
