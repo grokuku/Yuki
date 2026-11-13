@@ -155,12 +155,16 @@ describe("création désactivée — décision du SERVEUR, relayée", () => {
     const listeVide = { nombre: 0, connue: true };
     const mattermostConnecte = remoteStatus("mattermost", "on", "Mode Mattermost connecté.");
     expect(platformsNotice(mattermostConnecte, listeVide)).toMatchObject({ kind: "vide" });
-    expect(platformsNotice(mattermostConnecte, listeVide)?.titre).toContain("Aucun canal synchronisé");
+    // ⚠️ GARDE CHANGÉE (2026-11-13) : « visible par ce bot » — une liste vide peut
+    // être une question de PERMISSION, pas de synchronisation.
+    expect(platformsNotice(mattermostConnecte, listeVide)?.titre).toContain(
+      "Aucun canal visible",
+    );
     // ⚠️ Lot 21 : Discord est LIVRÉ. Le bandeau « ne fait rien pour l'instant » serait
     // faux ; l'état vide DIT quoi faire (jeton + intent MESSAGE_CONTENT).
     const discordConnecte = remoteStatus("discord", "on", "Mode Discord connecté.");
     expect(platformsNotice(discordConnecte, listeVide)).toMatchObject({ kind: "vide" });
-    expect(platformsNotice(discordConnecte, listeVide)?.titre).toContain("Aucun salon synchronisé");
+    expect(platformsNotice(discordConnecte, listeVide)?.titre).toContain("Aucun salon visible");
     expect(platformsNotice(discordConnecte, listeVide)?.detail).toContain("MESSAGE_CONTENT");
     // Mode local : AUCUN état vide ajouté (comportement strictement inchangé).
     expect(platformsNotice({ mode: "local", creation: { autorisee: true } }, listeVide)).toBeNull();
@@ -207,7 +211,10 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
   it("liste VIDE + synchro réussie ⇒ encart d'état vide, avec le chemin EXACT", () => {
     const avis = platformsNotice(MATTERMOST_CINQ_CANAUX, { nombre: 0, connue: true });
     expect(avis).toMatchObject({ kind: "vide" });
-    expect(avis?.titre).toBe("Aucun canal synchronisé.");
+    // ⚠️ GARDE CHANGÉE (2026-11-13) : le titre dit « VISIBLE PAR CE BOT » —
+    // une liste vide peut venir d'une PERMISSION (salons invisibles), pas d'une
+    // synchronisation ratée : « synchronisé » laissait chercher la panne ailleurs.
+    expect(avis?.titre).toBe("Aucun canal visible par ce bot.");
     // ⚠️ Les MOTS de l'interface : page du BOT, onglet « Plateformes », SECTION
     // « Discussions — Mattermost » (jamais « Discussions » seul).
     expect(avis?.detail).toContain("/bots?b=yuki → Plateformes → « Discussions — Mattermost »");
@@ -223,8 +230,22 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
     );
     expect(salons?.detail).toContain("/bots?b=yuki → Plateformes → « Discussions — Discord »");
     expect(salons?.detail).not.toContain("« Discussions »");
-    // Et SANS plateforme activée, rien n'est ajouté : le local seul est normal.
-    expect(platformsNotice({ plateformes: { mattermost: false, discord: false } }, { nombre: 0, connue: true })).toBeNull();
+    // ⚠️ GARDE CHANGÉE (2026-11-13) : SANS plateforme activée ET liste VIDE, on dit
+    // désormais OÙ activer — une liste vide ne doit jamais être muette (sans canal,
+    // aucun réglage par canal n'est atteignable). Avec des conversations locales, en
+    // revanche, on n'ajoute rien : le local seul est un état normal.
+    const sansPlateforme = platformsNotice(
+      { plateformes: { mattermost: false, discord: false }, bot: "granolaf" },
+      { nombre: 0, connue: true },
+    );
+    expect(sansPlateforme).toMatchObject({ kind: "vide" });
+    expect(sansPlateforme?.detail).toContain("/bots?b=granolaf → Plateformes");
+    expect(
+      platformsNotice(
+        { plateformes: { mattermost: false, discord: false } },
+        { nombre: 3, connue: true },
+      ),
+    ).toBeNull();
   });
 
   it("le chemin est celui de l'UI RÉELLE (onglet « Plateformes », sections nommées)", () => {
@@ -383,10 +404,14 @@ describe("persistance CÔTÉ SERVEUR", () => {
 });
 
 describe("garde-fous de la source — CSP et chemins de clic", () => {
-  it("construit le DOM sans injection HTML directe (sélecteur et panneau)", () => {
+  it("construit le DOM sans injection HTML directe (panneau)", () => {
+    // ⚠️ GARDE CHANGÉE (2026-11-13) : `chat-mode.js` ne construit plus AUCUN nœud
+    // (les interrupteurs de plateforme sont partis) — la garde « createElement »
+    // ne porte donc plus que sur le panneau, qui reste le seul à monter du DOM.
     expect(read("chat-mode.js")).not.toContain("innerHTML");
     expect(read("sessions-panel.js")).not.toContain("innerHTML");
-    expect(read("chat-mode.js")).toContain("createElement");
+    expect(read("chat-mode.js")).not.toContain("createElement");
+    expect(read("sessions-panel.js")).toContain("createElement");
   });
 
   it("les TROIS chemins de clic passent par `requestNew()` (un seul `{ type: \"new\" }`)", () => {
@@ -405,9 +430,20 @@ describe("garde-fous de la source — CSP et chemins de clic", () => {
     expect(panel).toContain("creationRefusal");
   });
 
-  it("les interrupteurs sont montés dans l'EN-TÊTE, avant « + Nouvelle conversation »", () => {
+  it("AUCUN interrupteur de plateforme dans la barre latérale (retirés le 2026-11-13)", () => {
+    // ⚠️ GARDE CHANGÉE (retour utilisateur : « pourquoi il y a des boutons a priori
+    // on/off à cet endroit ? je crois pas l'avoir demandé »). La barre latérale ne
+    // monte plus AUCUN bouton de plateforme : elle LISTE les conversations (locales
+    // + canaux des plateformes actives, ensemble), l'activation se réglant dans
+    // `/bots → Plateformes`.
     const panel = read("sessions-panel.js");
-    expect(panel).toContain("inner.append(top, modeSlot, newBtn, notice, list)");
+    expect(panel).not.toContain("initPlatformToggles");
+    expect(panel).not.toContain("sidebar__mode");
+    expect(panel).toContain("inner.append(top, newBtn, notice, list)");
+    // Le module ne monte plus rien du tout (la fonction est supprimée, pas cachée).
+    expect(read("chat-mode.js")).not.toContain("export function initPlatformToggles");
+    // La persistance de l'interrupteur reste disponible (page du bot) et testée.
+    expect(read("chat-mode.js")).toContain("export async function savePlatformEnabled");
   });
 
   it("les styles du sélecteur sont dans la feuille servie (CSP : aucun style en ligne)", () => {

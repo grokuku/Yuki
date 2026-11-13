@@ -212,6 +212,34 @@ export interface ChatApiDeps {
    * héritée ne pointe pas sur une plateforme vidée.
    */
   saveMode?: (mode: ChatMode) => void;
+  /**
+   * ⚠️ LOT 45 — RÉGLAGES D'UN CANAL DU BOT AFFICHÉ.
+   *
+   * DÉFAUT CORRIGÉ : `PATCH /api/chat/conversations/<id>` écrivait toujours dans le
+   * miroir du bot COURANT du gateway (`chatMirror`, `<state>/chat-mirror.json`).
+   * Un canal d'un autre bot (`<state>/bots/<id>/chat-mirror.json`) était donc réglé
+   * dans le mauvais fichier : le réglage disparaissait au rafraîchissement de la
+   * liste, et le bot continuait de répondre selon son ancien mode.
+   *
+   * Le client joint le bot AFFICHÉ (`bot` dans le corps PATCH) ; cette fabrique rend
+   * son miroir, ou `undefined` si le bot est inconnu — auquel cas la route REFUSE
+   * (`bot_inconnu`) au lieu de retomber sur un autre bot.
+   */
+  reglagesCanalDeBot?: (botId: string) => ChatCanalReglages | undefined;
+}
+
+/**
+ * Réglages par canal d'UN bot (son miroir, jamais celui d'un autre).
+ *
+ * ⚠️ Contrat VOLONTAIREMENT étroit : deux opérations, aucune vue d'ensemble — la
+ * route PATCH n'a besoin que de ça, et un contrat large ferait du miroir d'un bot
+ * une seconde source de vérité pour l'API.
+ */
+export interface ChatCanalReglages {
+  /** Réglages EFFECTIFS du canal, ou `null` s'il n'est pas dans ce miroir. */
+  reglages(conversationId: string): ChatReplySettings | null;
+  /** `true` quand le canal appartient à ce miroir (écriture effectuée). */
+  ecrire(conversationId: string, patch: ChatReplySettingsPatch): boolean;
 }
 
 export interface ChatHttpResponse {
@@ -593,8 +621,6 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
     }
     const conversationId = decodeURIComponent(conversationMatch[1] ?? "");
     const platform = platformOfConversation(conversationId);
-    const port = platform === undefined ? undefined : portOf(deps, platform);
-    if (!port) return notWired(platform);
     const body = parseBody(input.body);
     const patch = body === null ? null : parseReplySettings(body);
     if (patch === null) {
@@ -607,7 +633,28 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
           "`quoteAuthor` (« oui », « non », ou `null`).",
       });
     }
-    const applied = port.applyReplySettings(conversationId, patch);
+    // ⚠️ BOT AFFICHÉ : un canal appartient à UN bot, ses réglages vont dans SON
+    // miroir. Un bot annoncé mais inconnu est REFUSÉ (jamais un repli silencieux
+    // vers un autre bot : on écrirait un réglage qui ne s'applique à rien).
+    const bot = typeof body?.bot === "string" ? body.bot.trim() : "";
+    let cible: ChatCanalReglages | undefined;
+    if (bot !== "") {
+      cible = deps.reglagesCanalDeBot?.(bot);
+      if (cible === undefined) {
+        return json(400, {
+          error: "bot_inconnu",
+          message: `Le bot « ${bot} » est inconnu : ses canaux ne peuvent pas être réglés depuis ici.`,
+        });
+      }
+    }
+    // ⚠️ Le port de la plateforme n'est REQUIS que pour le miroir d'instance : un
+    // canal du bot affiché se règle par SON miroir (`cible`), sans passer par
+    // l'adaptateur du bot courant.
+    const port = platform === undefined ? undefined : portOf(deps, platform);
+    if (!port && !cible) return notWired(platform);
+    const applied = cible
+      ? cible.ecrire(conversationId, patch)
+      : port!.applyReplySettings(conversationId, patch);
     if (!applied) {
       return json(404, {
         error: "conversation_inconnue",
@@ -618,10 +665,15 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
     return json(200, {
       ok: true,
       conversationId,
-      reglages: port.replySettings(conversationId),
-      ...(platform === "discord"
-        ? { discord: (port as ChatDiscordPort).view() }
-        : { mattermost: (port as ChatMattermostPort).view() }),
+      ...(bot !== "" ? { bot } : {}),
+      reglages: cible ? cible.reglages(conversationId) : port!.replySettings(conversationId),
+      // La vue d'instance n'est ajoutée que si son port existe : un canal du bot
+      // affiché n'en dépend pas.
+      ...(port
+        ? platform === "discord"
+          ? { discord: (port as ChatDiscordPort).view() }
+          : { mattermost: (port as ChatMattermostPort).view() }
+        : {}),
     });
   }
 

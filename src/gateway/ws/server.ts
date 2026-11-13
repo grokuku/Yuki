@@ -214,6 +214,19 @@ export interface WsTransportOptions {
    */
   chat?: ChatGatewayPort;
   /**
+   * ⚠️ LOT 45 — LE MIROIR DU BOT AFFICHÉ.
+   *
+   * DÉFAUT CORRIGÉ (capture utilisateur : « je suis censé voir les canaux
+   * auxquels il a accès, là ça reste vide ») : `chat` ci-dessus est construit
+   * UNE fois, sur le miroir du bot COURANT du gateway. Un client qui regarde un
+   * AUTRE bot listait donc les canaux d'un autre (`<state>/chat-mirror.json` au
+   * lieu de `<state>/bots/<id>/chat-mirror.json`), et n'en voyait aucun.
+   *
+   * Présent ⇒ la liste, le snapshot d'un canal et le refus de création passent
+   * par le port DE CE BOT. Absent ⇒ `chat` (comportement d'avant).
+   */
+  chatPour?: (botId: string) => ChatGatewayPort | undefined;
+  /**
    * FUSEAU des horodatages (réglage `/config` `ui.timeZone`, défaut `UTC`).
    *
    * ⚠️ Il remplace le fuseau du NAVIGATEUR que la trame `message` transportait
@@ -591,6 +604,15 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   const agentTransfers = options.agentTransfers;
   const sourcesPort = options.sources;
   const chatPort = options.chat;
+  const chatPour = options.chatPour;
+  /**
+   * Abonnements aux miroirs, PAR BOT (défaut : celui de `chat`).
+   *
+   * ⚠️ Un abonnement par miroir : un canal découvert par le bot `granolaf` ne
+   * notifie que si SON miroir a un abonné. Sans cela, les canaux du bot affiché
+   * n'apparaîtraient qu'au rechargement.
+   */
+  const abonnementsChat = new Map<ChatGatewayPort, () => void>();
   const timeZonePort = options.timeZone;
 
   /**
@@ -636,6 +658,39 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   function hostFor(client: ClientState): PiHost {
     return client.host ?? host;
+  }
+
+  /**
+   * Port de DISCUSSION du BOT de ce client (miroir du bot affiché).
+   *
+   * ⚠️ DÉFAUT CORRIGÉ (lot 45) : la liste des canaux distants et les snapshots
+   * de canal passaient par `chatPort` — le miroir du bot COURANT du gateway —,
+   * quel que soit le bot de la connexion. Un bot secondaire n'avait donc jamais
+   * de canaux à l'écran, alors que son adaptateur les avait bien importés dans
+   * SON miroir. Aucun repli silencieux d'un bot à l'autre pour autant : sans
+   * `chatPour`, on garde `chat` (mono-bot d'avant).
+   */
+  function chatFor(client: ClientState): ChatGatewayPort | undefined {
+    const botId = client.botId;
+    if (botId === undefined || chatPour === undefined) return chatPort;
+    return chatPour(botId) ?? chatPort;
+  }
+
+  /**
+   * Abonne le miroir de CE bot aux changements (une seule fois par bot).
+   *
+   * ⚠️ Sans abonnement, un canal nouvellement synchronisé ne remonterait qu'à la
+   * prochaine demande explicite (`chat_refresh`, reconnexion).
+   */
+  function assurerAbonnementChat(port: ChatGatewayPort | undefined): void {
+    if (!port?.subscribe) return;
+    // ⚠️ Clé d'IDENTITÉ (le port), jamais un nom : le port du bot courant EST
+    // `chatPort`, déjà abonné plus bas — sans cette comparaison son miroir serait
+    // abonné deux fois. `chatPour` doit donc rendre le MÊME objet par bot
+    // (mémoïsé côté composition), sinon chaque appel créerait un abonnement.
+    if (abonnementsChat.has(port)) return;
+    const off = port.subscribe((conversationId) => onMirrorChange(conversationId));
+    if (off !== undefined) abonnementsChat.set(port, off);
   }
 
   /**
@@ -1272,21 +1327,18 @@ export function createWsTransport(options: WsTransportOptions): Transport {
   }
 
   /**
-   * Conversations MIROIR du mode courant (`sessions` distantes).
-   *
-   * ⚠️ Aucune n'existe au lot 1 (pas de synchronisation) : la liste est VIDE et
-   * l'interface affiche son état vide explicite. La mécanique est là pour que le
-   * lot 2 n'ait qu'à remplir le miroir.
-   */
-  /**
-   * Conversations MIROIR (canaux distants) — TOUTES plateformes activées.
+   * Conversations MIROIR (canaux distants) DU BOT DE CE CLIENT — toutes
+   * plateformes activées.
    *
    * ⚠️ Aucun filtre par plateforme ni par mode : la liste locale et les canaux
    * distants COEXISTENT (un bot joignable en local ET sur deux plateformes).
+   * ⚠️ Le miroir est celui du BOT AFFICHÉ (`chatFor`) : un canal appartient à UN
+   * bot, et c'est le sien qui doit le montrer.
    */
-  function mirrorSessions(): WireSession[] {
-    if (!chatPort) return [];
-    return chatPort
+  function mirrorSessions(client: ClientState): WireSession[] {
+    const port = chatFor(client);
+    if (!port) return [];
+    return port
       .conversations()
       .map((conversation) => ({
         id: conversation.id,
@@ -1311,6 +1363,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // la connexion n'a déclaré aucun `botId`). Aucune conversation d'un autre bot
     // ne peut donc apparaître dans la barre latérale.
     const host = hostFor(client);
+    // ⚠️ Abonnement au miroir de CE bot, posé dès la première liste : c'est ce qui
+    // fait apparaître un canal nouvellement synchronisé sans rechargement.
+    assurerAbonnementChat(chatFor(client));
     let sessions: WireSession[] = [];
     let listed = false;
     // ⚠️ PLUS de « mode distant » : la liste contient TOUJOURS les conversations
@@ -1348,7 +1403,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       // Épinglées d'abord, puis date décroissante (ordre autoritatif, poussé au
       // client : la barre latérale se contente de refléter cette liste). Les
       // canaux miroir suivent la même règle (ils n'ont pas d'épingle).
-      sessions = orderSessions([...sessions, ...mirrorSessions()]);
+      sessions = orderSessions([...sessions, ...mirrorSessions(client)]);
       listed = true;
     } catch (error) {
       logger.warn("ws.sessions.list_failed", {
@@ -1681,7 +1736,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     client: ClientState,
     conversationId: string,
   ): Promise<void> {
-    const conversation = chatPort?.conversation(conversationId) ?? null;
+    const conversation = chatFor(client)?.conversation(conversationId) ?? null;
     if (!conversation) {
       sendDirect(client, {
         type: "error",
@@ -1713,7 +1768,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       type: "snapshot",
       state: "idle",
       readOnly: true,
-      transcript: chatPort?.messages(conversationId).map(remoteMessageToTranscript) ?? [],
+      transcript: chatFor(client)?.messages(conversationId).map(remoteMessageToTranscript) ?? [],
     });
   }
 
@@ -1733,10 +1788,16 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     }
   }
 
-  // Abonnement aux changements du miroir (facultatif : absent ⇒ comportement inchangé).
+  // Abonnement aux changements du miroir DU BOT COURANT (facultatif : absent ⇒
+  // comportement inchangé). ⚠️ Mémorisé sous la clé du bot courant pour que
+  // `assurerAbonnementChat` ne l'abonne pas une SECONDE fois (chaque changement
+  // ferait alors deux `sessions`).
   const unsubscribeChat = chatPort?.subscribe?.((conversationId) =>
     onMirrorChange(conversationId),
   );
+  if (chatPort !== undefined && unsubscribeChat !== undefined) {
+    abonnementsChat.set(chatPort, unsubscribeChat);
+  }
 
   /**
    * Refus EXPLICITE d'une écriture visant une conversation miroir.
@@ -1815,7 +1876,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   async function handleNew(client: ClientState): Promise<void> {
     const host = hostFor(client);
-    const refusal = chatPort?.creationRefusal() ?? null;
+    const refusal = chatFor(client)?.creationRefusal() ?? null;
     if (refusal !== null) {
       sendDirect(client, {
         type: "error",
@@ -2769,6 +2830,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       unsubscribeSecrets?.();
       unsubscribeAgents?.();
       unsubscribeChat?.();
+      // ⚠️ Un abonnement PAR BOT (lot 45) : tous sont rendus à l'arrêt.
+      for (const off of abonnementsChat.values()) off?.();
+      abonnementsChat.clear();
       unsubscribeScreenshots?.();
       unsubscribeImages?.();
       unsubscribeImageFinalPrompts?.();

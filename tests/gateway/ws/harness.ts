@@ -53,6 +53,11 @@ export interface HarnessOptions extends FakePiHostOptions {
   /** DISCUSSIONS : canaux MIROIR + mode + refus de création (optionnel). */
   chat?: ChatGatewayPort;
   /**
+   * ⚠️ LOT 45 — miroir du BOT AFFICHÉ (`chatPour` du transport).
+   * Absent ⇒ seul `chat` est servi (comportement d'avant).
+   */
+  chatPour?: (botId: string) => ChatGatewayPort | undefined;
+  /**
    * CAPACITÉ VISION du modèle de conversation (optionnel). Absent ⇒ comportement
    * historique (les images partent).
    */
@@ -112,6 +117,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     ...(options.images ? { images: options.images } : {}),
     ...(options.sources ? { sources: options.sources } : {}),
     ...(options.chat ? { chat: options.chat } : {}),
+    ...(options.chatPour ? { chatPour: options.chatPour } : {}),
     ...(options.vision ? { vision: options.vision } : {}),
     ...(options.timeZone ? { timeZone: options.timeZone } : {}),
     ...(options.autresHosts !== undefined || options.botsArretes !== undefined

@@ -24,7 +24,6 @@ import { urlReglagesBot } from "./bot-switcher-modele.js";
 import {
   creationRefusal,
   fetchChatStatus,
-  savePlatformEnabled,
 } from "./chat-mode.js";
 import { fetchEtatPlateformes } from "./plateformes-bot.js";
 import {
@@ -732,30 +731,16 @@ async function refreshChatStatus() {
 }
 
 /**
- * Interrupteur de plateforme demandé par la barre latérale : persisté CÔTÉ
- * SERVEUR (`chat.<plateforme>.enabled`) SUR LE BOT AFFICHÉ.
+ * ⚠️ PLUS D'INTERRUPTEUR DE PLATEFORME DANS LA BARRE LATÉRALE (2026-11-13).
  *
- * ⚠️ Ce n'est PAS un choix exclusif : allumer Discord laisse Mattermost tel
- * quel, et ne touche jamais au local (il n'est pas un réglage).
- * ⚠️ Le bot visé est celui dont on MONTRE l'état (`etatPlateformes.bot`), jamais
- * le « bot actif » de l'instance : sinon un clic sur `granolaf` modifiait `yuki`.
+ * Retour utilisateur : « pourquoi il y a des boutons on/off à cet endroit ? Je
+ * crois pas l'avoir demandé. » Deux boutons qui ressemblaient à des onglets
+ * n'étaient pas une navigation : ce sont des RÉGLAGES DE BOT, et ils se règlent
+ * sur la page du bot (`/bots?b=<id>` → onglet « Plateformes »).
+ * `savePlatformEnabled` (chat-mode.js) RESTE : c'est l'écriture de
+ * `chat.<plateforme>.enabled` sur la route du bot, et elle est testée — seule
+ * la barre latérale a cessé de la solliciter.
  */
-async function onChatModeChange(plateforme, actif) {
-  try {
-    await savePlatformEnabled(plateforme, actif, { botId: etatPlateformes?.bot });
-    await refreshChatStatus();
-  } catch (error) {
-    void HolafModal.alert(
-      "Plateforme non enregistrée",
-      error instanceof Error && error.message
-        ? error.message
-        : "Le gateway n'a pas accepté le changement d'interrupteur.",
-      { okText: "Compris" },
-    );
-    // On réaffiche l'état RÉEL (le choix n'a pas été retenu).
-    void refreshChatStatus();
-  }
-}
 
 /** Conversation à OUVRIR avant de déclencher « conversation dédiée » (menu). */
 let pendingRecapId = null;
@@ -805,14 +790,15 @@ const sessionsPanel = initSessionsPanel({
   onPin: (id, pinned) => {
     sendRaw({ type: "pin", sessionId: id, pinned });
   },
-  // Mode de DISCUSSION : persisté côté serveur (`PUT /api/config`).
-  onChatModeChange,
   // Mode de RÉPONSE d'un CANAL (clic droit sur un canal distant) : déjà enregistré par
   // le panneau (`PATCH /api/chat/conversations/<id>`) ; on demande seulement la liste à
   // jour, qui est AUTORITAIRE côté serveur.
   onReplyMode: () => {
     sendRaw({ type: "chat_refresh" });
   },
+  // ⚠️ BOT AFFICHÉ : joint aux réglages d'un canal distant pour que le serveur
+  // écrive dans le miroir de CE bot (un canal = un bot).
+  botId: () => botAffiche(),
   // Entrée « Conversation dédiée… » du MENU DU TITRE (téléphone ET bureau).
   // Le parcours n'est pas réécrit : on ouvre celui de `recap-dedicated.js`.
   // Sur une AUTRE conversation, on l'ouvre d'abord : le parcours repart quand

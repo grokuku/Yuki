@@ -1,23 +1,26 @@
 /**
- * Yuki — INTERRUPTEURS DE PLATEFORMES (barre latérale).
+ * Yuki — ÉTAT DES PLATEFORMES, LIBELLÉS ET RÉGLAGES D'UN CANAL.
  *
- * ⚠️ Ce n'est plus un sélecteur exclusif de mode : **deux interrupteurs
- * indépendants** (Mattermost, Discord). Le **Local** n'est pas un choix — il est
- * TOUJOURS disponible (les conversations de Yuki restent dans la liste).
+ * Ce module ne monte PLUS de boutons on/off : les interrupteurs de plateforme ont
+ * été RETIRÉS de la barre latérale (demande utilisateur du 2026-11-13 — « pourquoi
+ * il y a des boutons a priori on/off à cet endroit ? je crois pas l'avoir
+ * demandé »). L'activation se règle dans `/bots → Plateformes`, où sont les
+ * réglages d'un bot.
  *
- * ⚠️ Ce module ne parle à AUCUNE plateforme : il lit `GET /api/chat/status` par
- * le gateway (CSP stricte : aucun appel navigateur vers un service distant) et
- * écrit le mode choisi par `PUT /api/bots/<id>/config` (en-tête
- * `X-Yuki-Config: 1`). L'état est donc **persisté côté serveur**, pas dans le
- * navigateur.
+ * Ce qui reste ici, et qui est partagé :
+ *  - les libellés/options (plateformes, modes de réponse, style, citation) ;
+ *  - `cheminPlateforme` / `titrePlateforme` : le chemin EXACT d'un réglage, pour
+ *    le bot dont on parle ;
+ *  - `platformsNotice` : l'encart de la barre latérale qui DIT pourquoi la liste
+ *    est vide (jamais un cadre muet) ;
+ *  - `savePlatformEnabled` : l'écriture de `chat.<plateforme>.enabled` sur la
+ *    route DU BOT (`PUT /api/bots/<id>/config`) ;
+ *  - `saveReplySettings` / `saveReplyMode` : les réglages d'un canal distant.
  *
- * ⚠️ MULTI-BOT (lot 35b, sous-lot 1b-3) : l'interrupteur est un réglage PROPRE
- * AU BOT ACTIF (`chat.<plateforme>.enabled`). `PUT /api/config` le REFUSE
- * (`bot_scoped_field`) : il s'écrit sur la route du bot actif, résolue par
- * `GET /api/bots`.
- *
- * ⚠️ Rendu PUREMENT DOM (`createElement`), aucune injection HTML directe, aucun
- * style en ligne : la CSP `style-src 'self'` reste inchangée.
+ * ⚠️ Ce module ne parle à AUCUNE plateforme : il passe par le gateway (CSP
+ * stricte : aucun appel navigateur vers un service distant) et par l'en-tête
+ * `X-Yuki-Config: 1`. L'état est PERSISTÉ côté serveur, pas dans le navigateur.
+ * ⚠️ Aucune injection HTML, aucun style en ligne : la CSP reste inchangée.
  */
 
 import { cheminConfigBot, idBotActif, BOT_PAR_DEFAUT } from "./bots-api.js";
@@ -352,6 +355,33 @@ function noticeEtatInconnu(mode, botId) {
   };
 }
 
+/** Page où se règlent les plateformes d'un bot (une seule adresse, jamais un id en dur). */
+function pagePlateformes(botId) {
+  const id = typeof botId === "string" ? botId.trim() : "";
+  return id !== "" ? `/bots?b=${encodeURIComponent(id)} → Plateformes` : "/bots → Plateformes";
+}
+
+/**
+ * Encart quand AUCUNE plateforme n'est activée pour ce bot ET que la liste est vide.
+ *
+ * ⚠️ Une liste vide ne doit JAMAIS être muette (exigence du 2026-11-13) : sans
+ * canal, l'utilisateur ne peut régler AUCUN canal (mode de réponse, style,
+ * mention) — c'est son point d'entrée. L'encart dit donc où activer une
+ * plateforme, au lieu de laisser un cadre vide qu'on prendrait pour une panne.
+ */
+function noticeAucunePlateforme(botId) {
+  const nom = typeof botId === "string" && botId.trim() !== "" ? `« ${botId.trim()} »` : "ce bot";
+  return {
+    kind: "vide",
+    titre: "Aucune conversation distante : aucune plateforme n'est activée.",
+    detail:
+      `Les canaux et salons listés ici sont ceux des plateformes ACTIVES de ${nom} : ` +
+      `aucune ne l'est. Activez Mattermost ou Discord dans ${pagePlateformes(botId)}, ` +
+      "puis cliquez sur « Se connecter » : les canaux apparaîtront ici, avec leurs " +
+      "réglages de réponse (clic droit sur la conversation).",
+  };
+}
+
 /** Encart d'état VIDE : la synchro est faite, il n'y a sincèrement rien à lister. */
 function noticeVide(plateformes, botId) {
   const liste = Array.isArray(plateformes) ? plateformes : [plateformes];
@@ -360,8 +390,8 @@ function noticeVide(plateformes, botId) {
   const details = liste.map((plateforme) =>
     plateforme === "discord"
       ? `Enregistrez le jeton du bot Discord dans ${cheminDe("discord")} (et activez ` +
-        "l'intent MESSAGE_CONTENT dans le portail développeur), puis cliquez sur " +
-        "« Se connecter » : les salons texte du serveur seront importés."
+        "l'intent MESSAGE_CONTENT et l'accès aux salons dans le portail développeur), " +
+        "puis cliquez sur « Se connecter » : les salons texte du serveur seront importés."
       : `Renseignez l'URL du serveur et le jeton du bot dans ${cheminDe("mattermost")}, puis ` +
         "cliquez sur « Se connecter » : les canaux et deux semaines d'historique seront " +
         "alors importés.",
@@ -370,11 +400,15 @@ function noticeVide(plateformes, botId) {
     kind: "vide",
     titre:
       liste.length === 2
-        ? "Aucun canal synchronisé (Mattermost et Discord)."
+        ? "Aucun canal visible (Mattermost et Discord)."
         : liste[0] === "discord"
-          ? "Aucun salon synchronisé."
-          : "Aucun canal synchronisé.",
-    detail: plusieurs ? details.join(" ") : (details[0] ?? ""),
+          ? "Aucun salon visible par ce bot."
+          : "Aucun canal visible par ce bot.",
+    detail:
+      (plusieurs ? details.join(" ") : (details[0] ?? "")) +
+      " Réglages des plateformes : " +
+      pagePlateformes(botId) +
+      ".",
   };
 }
 
@@ -391,7 +425,10 @@ function noticeVide(plateformes, botId) {
  * est un état normal, pas une panne : il n'y a rien à signaler).
  *
  * Règles, dans cet ordre (UNE SEULE vérité affichée à la fois) :
- *  ① aucune plateforme activée, ou état inconnu ⇒ aucun encart ;
+ *  ⓪ AUCUNE plateforme activée et liste VIDE ⇒ encart d'état vide qui DIT où
+ *    activer une plateforme (`/bots → Plateformes`) : un cadre vide ne doit
+ *    jamais être muet (`noticeAucunePlateforme`) ;
+ *  ① état inconnu (statut pas encore reçu) ⇒ « chargement » discret ;
  *  ② liste NON VIDE ⇒ aucun encart (la liste dit la vérité, l'état vide la
  *    contredirait) — même si la synchronisation signale une erreur, la raison
  *    reste lisible sur la pastille (`badgeFor`) ;
@@ -415,11 +452,25 @@ function noticeVide(plateformes, botId) {
  */
 export function platformsNotice(status, etatListe, options = {}) {
   const actives = plateformesActives(status);
-  if (actives.length === 0) return null;
+  const botIdStatus = botDeLEtat(status, options);
+  const nombre0 = Number(etatListe?.nombre ?? 0);
+  const connue0 = etatListe?.connue === true;
+  // ⓪ AUCUNE plateforme activée ET liste vide ⇒ on DIT où l'activer.
+  //   ⚠️ Avant, on ne disait rien : un cadre vide, qu'on prenait pour une panne
+  //   muette. Or sans canal, aucun réglage par canal n'est atteignable.
+  if (actives.length === 0) {
+    // ⚠️ On ne peut parler d'« aucune plateforme activée » QUE si l'état des
+    // plateformes a été reçu (`status.plateformes`) : sans lui, on ne sait rien et
+    // on n'affirme rien (statut absent, ou client d'avant les interrupteurs).
+    const drapeaux = status?.plateformes;
+    if (!drapeaux || typeof drapeaux !== "object") return null;
+    if (!connue0) return noticeChargement("mattermost");
+    return nombre0 > 0 ? null : noticeAucunePlateforme(botIdStatus);
+  }
 
-  const botId = botDeLEtat(status, options);
-  const nombre = Number(etatListe?.nombre ?? 0);
-  const listeConnue = etatListe?.connue === true;
+  const botId = botIdStatus;
+  const nombre = nombre0;
+  const listeConnue = connue0;
   const vueDe = (plateforme) => status?.[plateforme] ?? {};
   const etatDe = (plateforme) => vueDe(plateforme).plateforme ?? {};
   const raisonDe = (plateforme) => {
@@ -601,90 +652,16 @@ export async function savePlatformEnabled(plateforme, actif, options) {
   return fetchChatStatus(fetchImpl);
 }
 
-/** Crée un élément DOM (jamais d'injection HTML). */
-function el(tag, attrs = {}, text) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (value === undefined || value === null) continue;
-    if (key === "class") node.className = value;
-    else node.setAttribute(key, value);
-  }
-  if (typeof text === "string") node.textContent = text;
-  return node;
-}
-
 /**
- * Monte les DEUX INTERRUPTEURS de plateforme (Mattermost, Discord) + leur pastille.
+ * ⚠️ PLUS DE MONTAGE D'INTERRUPTEURS ICI (2026-11-13).
  *
- * ⚠️ Ce n'est PLUS un sélecteur exclusif : chaque bouton est un interrupteur
- * indépendant (`aria-pressed` = activé). Allumer l'un n'éteint pas l'autre, et le
- * LOCAL n'a pas de bouton — il n'est pas un choix, il est toujours disponible.
- *
- * ⚠️ Les deux boutons sont TOUJOURS visibles (aucun masquage) : une plateforme
- * éteinte doit pouvoir être allumée, et la voir éteinte est l'information. Seul
- * l'état INCONNU (statut pas encore reçu) laisse les boutons à `aria-pressed=false`
- * sans rien affirmer d'autre.
- *
- * @param {object} deps
- * @param {HTMLElement} deps.root conteneur (créé par l'appelant).
- * @param {(plateforme: string, actif: boolean) => void} deps.onChange appelé au
- *   clic, avec l'état À DEMANDER (l'inverse de l'état affiché).
- * @returns {{ element: HTMLElement, update(status: unknown): void }}
+ * `initPlatformToggles` est SUPPRIMÉ : la barre latérale n'affiche plus de
+ * boutons on/off de plateforme (« je crois pas l'avoir demandé »). Ce sont des
+ * RÉGLAGES DE BOT : leur unique emplacement est la page du bot
+ * (`/bots?b=<id>` → onglet « Plateformes », `chat-panel.js`).
+ * Ce qui RESTE ici : les libellés et options partagés, `titrePlateforme`,
+ * `plateformesActives`, `platformsNotice` (l'encart qui DIT pourquoi une liste
+ * est vide) et `savePlatformEnabled` (l'écriture de `chat.<p>.enabled` sur la
+ * route du bot).
  */
-export function initPlatformToggles(deps) {
-  const root = deps.root;
-  if (!root) throw new Error("initPlatformToggles : racine absente");
-  const onChange = deps.onChange ?? (() => undefined);
 
-  const group = el("div", {
-    class: "chat-mode",
-    role: "group",
-    "aria-label": "Plateformes de discussion",
-  });
-  /** `plateforme` → { button, badge } */
-  const entrees = new Map();
-  for (const option of PLATEFORME_OPTIONS) {
-    const badge = el(
-      "span",
-      { class: "chat-mode__badge", role: "img", "aria-label": CHAT_BADGES.off.label },
-      CHAT_BADGES.off.glyph,
-    );
-    const button = el(
-      "button",
-      {
-        class: "chat-mode__btn",
-        type: "button",
-        "data-plateforme": option.plateforme,
-        "aria-pressed": "false",
-      },
-      option.label,
-    );
-    button.append(badge);
-    button.addEventListener("click", () => {
-      const actif = button.getAttribute("aria-pressed") === "true";
-      onChange(option.plateforme, !actif);
-    });
-    entrees.set(option.plateforme, { button, badge });
-    group.append(button);
-  }
-  root.replaceChildren(group);
-
-  function update(status) {
-    // ⚠️ La remédiation porte le bot dont on MONTRE l'état (`status.bot`), jamais
-    // un bot gravé : c'est le défaut corrigé (le lien renvoyait toujours à `yuki`).
-    const botId = typeof status?.bot === "string" ? status.bot : "";
-    for (const [plateforme, entree] of entrees) {
-      const active = status?.plateformes?.[plateforme] === true;
-      entree.button.setAttribute("aria-pressed", active ? "true" : "false");
-      entree.button.classList.toggle("chat-mode__btn--active", active);
-      entree.button.title = titrePlateforme(plateforme, botId);
-      const state = badgeFor(status?.[plateforme]);
-      entree.badge.textContent = state.glyph;
-      entree.badge.title = state.title;
-      entree.badge.setAttribute("aria-label", `${state.label} — ${state.title}`);
-      entree.badge.setAttribute("data-etat", state.etat);
-    }
-  }
-
-  return { element: group, update };
-}

@@ -16,7 +16,13 @@
 import { describe, expect, it } from "vitest";
 
 import { ChatService } from "../../src/chat/index.js";
-import type { ChatQuoteAuthor, ChatReplyMode, ChatReplyStyle } from "../../src/chat/types.js";
+import type {
+  ChatQuoteAuthor,
+  ChatReplyMode,
+  ChatReplySettings,
+  ChatReplySettingsPatch,
+  ChatReplyStyle,
+} from "../../src/chat/types.js";
 import {
   handleChatRequest,
   type ChatMattermostPort,
@@ -335,6 +341,109 @@ describe("comment répondre — style et citation, par canal (même route)", () 
     // Un corps VIDE n'applique rien non plus (il n'y aurait rien à faire).
     const vide = await call("PATCH", "/api/chat/conversations/mm-canal-1", {}, port);
     expect(vide.status).toBe(400);
+  });
+});
+
+describe("réglages par canal — MIROIR DU BOT AFFICHÉ (lot 45)", () => {
+  /**
+   * Port de réglages d'un bot : un miroir DISTINCT de celui du port d'instance.
+   *
+   * ⚠️ C'est le défaut corrigé : `PATCH /api/chat/conversations/<id>` écrivait
+   * toujours dans le miroir du bot COURANT (`<state>/chat-mirror.json`). Un canal
+   * d'un autre bot (dans `<state>/bots/<id>/chat-mirror.json`) était donc réglé
+   * dans le mauvais fichier : réglage sans effet, et menu qui recoche l'ancienne
+   * valeur au rafraîchissement (la liste est autoritaire côté serveur).
+   */
+  function miroirBot(canaux: string[]) {
+    const ecritures: { conversationId: string; patch: Record<string, unknown> }[] = [];
+    const valeurs = new Map<string, ChatReplySettingsPatch>();
+    const reglages = (conversationId: string): ChatReplySettings | null => {
+      if (!canaux.includes(conversationId)) return null;
+      const v = valeurs.get(conversationId) ?? {};
+      return {
+        ...(typeof v.replyMode === "string" ? { replyMode: v.replyMode } : {}),
+        replyStyle: v.replyStyle ?? "fil",
+        quoteAuthor: v.quoteAuthor ?? "non",
+      };
+    };
+    return {
+      ecritures,
+      miroir: {
+        reglages,
+        ecrire: (conversationId: string, patch: Record<string, unknown>) => {
+          if (!canaux.includes(conversationId)) return false;
+          ecritures.push({ conversationId, patch });
+          valeurs.set(conversationId, { ...(valeurs.get(conversationId) ?? {}), ...patch });
+          return true;
+        },
+      },
+    };
+  }
+
+  it("`bot` dans le corps ⇒ l'écriture va dans SON miroir, jamais dans celui du port d'instance", async () => {
+    const { port, state } = spyPort();
+    const granolaf = miroirBot(["dc-salon-1"]);
+    const response = await handleChatRequest({
+      method: "PATCH",
+      path: "/api/chat/conversations/dc-salon-1",
+      headers: HEADERS,
+      body: JSON.stringify({ replyMode: "tout", bot: "granolaf" }),
+      deps: {
+        ...deps(port),
+        reglagesCanalDeBot: (botId: string) =>
+          botId === "granolaf" ? granolaf.miroir : undefined,
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(granolaf.ecritures).toEqual([{ conversationId: "dc-salon-1", patch: { replyMode: "tout" } }]);
+    expect(response.body).toMatchObject({
+      ok: true,
+      bot: "granolaf",
+      reglages: { replyMode: "tout", replyStyle: "fil", quoteAuthor: "non" },
+    });
+    // Le miroir du bot courant n'a rien reçu (c'était l'écriture perdue).
+    expect(state.modes.size).toBe(0);
+  });
+
+  it("un bot INCONNU est REFUSÉ (400) — jamais de repli sur un autre miroir", async () => {
+    const { port, state } = spyPort();
+    const response = await handleChatRequest({
+      method: "PATCH",
+      path: "/api/chat/conversations/mm-canal-1",
+      headers: HEADERS,
+      body: JSON.stringify({ replyMode: "tout", bot: "fantome" }),
+      deps: { ...deps(port), reglagesCanalDeBot: () => undefined },
+    });
+    expect(response.status).toBe(400);
+    expect(JSON.stringify(response.body)).toContain("fantome");
+    expect(state.modes.size).toBe(0);
+  });
+
+  it("canal absent du miroir de CE bot ⇒ 404 (le réglage serait sans objet)", async () => {
+    const { port } = spyPort();
+    const granolaf = miroirBot(["dc-salon-1"]);
+    const response = await handleChatRequest({
+      method: "PATCH",
+      path: "/api/chat/conversations/dc-autre",
+      headers: HEADERS,
+      body: JSON.stringify({ replyStyle: "nouveau", bot: "granolaf" }),
+      deps: { ...deps(port), reglagesCanalDeBot: () => granolaf.miroir },
+    });
+    expect(response.status).toBe(404);
+    expect(granolaf.ecritures).toHaveLength(0);
+  });
+
+  it("SANS `bot`, le comportement d'avant est conservé (port d'instance)", async () => {
+    const { port, state } = spyPort();
+    const response = await handleChatRequest({
+      method: "PATCH",
+      path: "/api/chat/conversations/mm-canal-1",
+      headers: HEADERS,
+      body: JSON.stringify({ replyMode: "mention" }),
+      deps: { ...deps(port), reglagesCanalDeBot: () => undefined },
+    });
+    expect(response.status).toBe(200);
+    expect(state.modes.get("mm-canal-1")).toBe("mention");
   });
 });
 

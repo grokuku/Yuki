@@ -35,7 +35,6 @@ import {
   REPLY_MODE_OPTIONS,
   REPLY_STYLE_OPTIONS,
   creationRefusal,
-  initPlatformToggles,
   plateformesAvertissements,
   platformsNotice,
   quoteAuthorLabel,
@@ -264,9 +263,10 @@ function el(tag, attrs = {}, text) {
  * @param {(id: string, pinned: boolean) => void} deps.onPin
  * @param {(id: string) => void} [deps.onRecapDedicated] entrée « Conversation
  *   dédiée… » du menu du titre (parcours `recap-dedicated.js`).
- * @param {(plateforme: string, actif: boolean) => void} [deps.onChatModeChange]
- *   interrupteur de plateforme demandé (Mattermost / Discord)
- *   choisi dans le sélecteur segmenté (Local · Mattermost · Discord).
+ * @param {() => string} [deps.botId] bot AFFICHÉ (celui dont on liste les
+ *   conversations). Transmis avec les réglages d'un canal distant : sans lui, le
+ *   serveur écrirait dans le miroir du bot courant, et le réglage serait perdu
+ *   pour tout autre bot.
  * @param {HTMLElement} [deps.footer] encart fixe en bas de la barre (agents).
  * @param {Array<{list: HTMLElement, empty?: HTMLElement}>} [deps.extraLists]
  *   cibles SUPPLÉMENTAIRES (menu téléphone) : même rendu, classe de ligne
@@ -285,8 +285,14 @@ export function initSessionsPanel(deps) {
   const onCompact = deps.onCompact ?? (() => undefined);
   const onPin = deps.onPin ?? (() => undefined);
   const onRecapDedicated = deps.onRecapDedicated ?? (() => undefined);
-  const onChatModeChange = deps.onChatModeChange ?? (() => undefined);
   const onReplyMode = deps.onReplyMode ?? (() => undefined);
+  /**
+   * Bot AFFICHÉ — joint aux réglages d'un canal (`PATCH …/conversations/<id>`).
+   *
+   * ⚠️ Un canal appartient à UN bot : ses réglages doivent être écrits dans SON
+   * miroir. Le serveur refuse un bot inconnu (jamais de repli silencieux).
+   */
+  const botId = typeof deps.botId === "function" ? deps.botId : () => "";
   /** `fetch` injectable (tests) : la modale de suppression réaffecte les sources. */
   const doFetch = deps.fetchImpl ?? ((url, init) => fetch(url, init));
 
@@ -355,31 +361,32 @@ export function initSessionsPanel(deps) {
     "aria-label": "Liste des conversations",
   });
 
-  // ─── PLATEFORMES de discussion (Mattermost · Discord, interrupteurs) ────
-  // ⚠️ Placé EN TÊTE, au-dessus de « + Nouvelle conversation » : ces deux
-  // interrupteurs décident de ce que le bot peut rejoindre EN PLUS du local.
-  // ⚠️ Ce n'est PAS un choix exclusif : le local n'est pas un bouton, il est
-  // toujours disponible (les conversations de Yuki restent dans la liste).
-  // L'état est PERSISTÉ CÔTÉ SERVEUR (`chat.<plateforme>.enabled`) : le panneau
-  // ne fait qu'afficher et demander.
-  const modeSlot = el("div", { class: "sidebar__mode" });
+  // ─── ⚠️ AUCUN INTERRUPTEUR DE PLATEFORME ICI ─────────────────────────────
+  // Retiré (retour utilisateur du 2026-11-13) : « pourquoi il y a des boutons
+  // on/off à cet endroit ? Je crois pas l'avoir demandé. » Deux boutons qui
+  // ressemblaient à des onglets n'étaient pas une navigation : ce sont des
+  // RÉGLAGES DE BOT, et ils se règlent là où sont les réglages d'un bot
+  // (`/bots?b=<id>` → onglet « Plateformes »).
+  // ⚠️ La barre latérale ne fait plus qu'une chose : LISTER les conversations —
+  // locales ET canaux des plateformes activées, ENSEMBLE, sans filtre ni onglet.
+  // Le seul écho d'état restant est l'encart (`notice`), qui DIT pourquoi une
+  // liste est vide au lieu d'afficher un cadre muet.
   let chatStatus = null;
   /**
    * État des plateformes DU BOT AFFICHÉ (`plateformes-bot.js`) — `null` tant qu'il
    * n'est pas lu.
    *
-   * ⚠️ DÉFAUT CORRIGÉ (capture utilisateur) : les interrupteurs, les pastilles et
-   * l'encart lisaient `chatStatus` (`GET /api/chat/status`), qui décrit le bot de la
-   * PILE. Sur une conversation `granolaf`, ils parlaient donc de `yuki` : « aucun
-   * jeton » alors que celui de `granolaf` existe, et un lien de remédiation vers
-   * les réglages de `yuki`. L'état affiché est maintenant celui du bot AFFICHÉ.
+   * ⚠️ DÉFAUT CORRIGÉ (capture utilisateur) : l'encart lisait `chatStatus`
+   * (`GET /api/chat/status`), qui décrit le bot COURANT du gateway. Sur une
+   * conversation `granolaf`, il parlait donc de `yuki` : « aucun jeton » alors que
+   * celui de `granolaf` existe, et un lien de remédiation vers les réglages de
+   * `yuki`. L'état affiché est maintenant celui du bot AFFICHÉ.
    */
   let etatPlateformes = null;
   // ⚠️ La liste des conversations a-t-elle été REÇUE du serveur (trame `sessions`) ?
   // Tant que non, `sessions` est vide parce qu'on ne sait pas encore — pas parce
   // qu'il n'y a rien. L'encart ne doit donc RIEN affirmer avant ce moment-là.
   let listeConnue = false;
-  const selector = initPlatformToggles({ root: modeSlot, onChange: onChatModeChange });
 
   // Bandeau/état vide du mode distant + raison VISIBLE du refus de création.
   const notice = el("div", { class: "sidebar__notice" });
@@ -388,7 +395,7 @@ export function initSessionsPanel(deps) {
   const noticeDetail = el("p", { class: "sidebar__notice-detail" });
   notice.append(noticeTitle, noticeDetail);
 
-  inner.append(top, modeSlot, newBtn, notice, list);
+  inner.append(top, newBtn, notice, list);
   // Encart FIXE en bas de la barre (agents), fourni par l'appelant : monté DANS
   // la colonne interne pour profiter du repli/dépli et rester lisible en rail.
   if (deps.footer instanceof Node) inner.append(deps.footer);
@@ -717,8 +724,14 @@ export function initSessionsPanel(deps) {
    * est AUTORITAIRE. Aucun rechargement de page, aucun HTML interprété.
    */
   async function applyReplySettings(id, patch) {
+    // ⚠️ Le BOT AFFICHÉ accompagne le réglage : le serveur écrit dans le miroir de
+    // CE bot (un canal = un bot). Sans lui, un canal de `granolaf` serait réglé
+    // dans le miroir de `yuki` — écriture perdue, et le menu recocherait l'ancienne
+    // valeur au rafraîchissement suivant.
+    const bot = String(botId() ?? "").trim();
+    const corps = bot !== "" ? { ...patch, bot } : patch;
     try {
-      await saveReplySettings(id, patch, doFetch);
+      await saveReplySettings(id, corps, doFetch);
     } catch (error) {
       await modal.alert(
         "Réglage non enregistré",
@@ -1151,7 +1164,6 @@ export function initSessionsPanel(deps) {
    */
   function setEtatPlateformes(etat) {
     etatPlateformes = etat && typeof etat === "object" ? etat : null;
-    selector.update(etatPlateformes);
     applyNotice();
   }
 

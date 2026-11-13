@@ -282,15 +282,18 @@ describe("⑥ lecture et écriture visent le bot AFFICHÉ", () => {
     expect(JSON.parse(ecritures[0]?.body ?? "{}")).toEqual({ "chat.discord.enabled": "on" });
   });
 
-  it("la barre latérale passe l'état du bot affiché aux interrupteurs et à l'encart", () => {
+  it("la barre latérale passe l'état du bot affiché à l'ENCART (les interrupteurs sont partis)", () => {
+    // ⚠️ GARDE CHANGÉE (2026-11-13) : les interrupteurs de plateforme ont été
+    // RETIRÉS de la barre latérale (jamais demandés : « pourquoi il y a des boutons
+    // on/off à cet endroit ? »). L'état du bot affiché reste lu — pour l'encart, qui
+    // DIT pourquoi une liste est vide — et le bot affiché est joint aux réglages
+    // d'un canal (`botId`, écriture dans SON miroir).
     const panel = read("sessions-panel.js");
     expect(panel).toContain("setEtatPlateformes");
-    expect(panel).toContain("selector.update(etatPlateformes)");
-    // ⚠️ `setChatMode` ne touche plus aux interrupteurs : ils ne décrivent pas
-    // le mode d'instance mais le bot affiché.
+    expect(panel).not.toContain("selector.update(etatPlateformes)");
     const app = read("app.js");
     expect(app).toContain("fetchEtatPlateformes(botAffiche(), { statutPile: status })");
-    expect(app).toContain("savePlatformEnabled(plateforme, actif, { botId: etatPlateformes?.bot })");
+    expect(app).toContain("botId: () => botAffiche()");
   });
 });
 

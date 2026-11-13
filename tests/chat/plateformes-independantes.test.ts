@@ -159,9 +159,13 @@ describe("⑥ l'interface ne propose plus de choix exclusif", () => {
     expect(source).toContain("chat.${plateforme}.enabled");
   });
 
-  it("la barre latérale monte des INTERRUPTEURS (plus de sélecteur exclusif)", () => {
+  it("la barre latérale ne monte AUCUN interrupteur (retirés le 2026-11-13)", () => {
+    // ⚠️ GARDE CHANGÉE : les interrupteurs existaient (`initPlatformToggles`) et ont
+    // été RETIRÉS de la barre latérale à la demande de l'utilisateur. L'activation
+    // d'une plateforme se règle dans `/bots → Plateformes`, pas dans la navigation.
     const source = lire("public/ui/chat-mode.js");
-    expect(source).toContain("export function initPlatformToggles");
+    expect(source).not.toContain("export function initPlatformToggles");
+    expect(lire("public/ui/sessions-panel.js")).not.toContain("initPlatformToggles");
     expect(source).not.toContain("initChatModeSelector");
     // Aucun mode exclusif : la liste des choix n'existe plus.
     expect(source).not.toContain("CHAT_MODE_OPTIONS");

@@ -89,6 +89,10 @@ import {
   MattermostAttachmentCache,
   MattermostChatAdapter,
   type ChatReplyJudge,
+  type ChatReplyMode,
+  type ChatReplySettingsPatch,
+  type ChatReplyStyle,
+  type ChatQuoteAuthor,
   type CibleEnvoi,
   type ProgrammationInput,
   type RemoteMessage,
@@ -104,6 +108,7 @@ import {
   effectiveReplyStyle,
   parseJudgeAnswer,
   mirrorPlatformOf,
+  normalizeReplyMode,
   getAdapter,
   runPlatformOf,
   registerAdapterProvider,
@@ -2950,6 +2955,75 @@ async function main(): Promise<void> {
     mirror: chatMirror,
   });
 
+  /**
+   * ⚠️ LOT 45 — UN SERVICE DE DISCUSSION PAR BOT, MÉMOÏSÉ.
+   *
+   * DÉFAUT CORRIGÉ (capture utilisateur : « je suis censé voir les canaux auxquels
+   * il a accès, là ça reste vide ») : `chatService` ci-dessus porte le miroir
+   * `chatMirror`, c'est-à-dire `<state>/chat-mirror.json` — celui du bot COURANT du
+   * gateway. La trame `sessions` le servait à TOUS les clients : une conversation
+   * ouverte sur `granolaf` ne voyait donc aucun de SES canaux (ils sont dans
+   * `<state>/bots/granolaf/chat-mirror.json`, écrits par SON adaptateur via
+   * `creerAdaptateurChat` → `canauxBots.miroirDe(botId)`).
+   *
+   * ⚠️ Chaque bot a donc SON service : son miroir ET ses interrupteurs
+   * (`chat.<plateforme>.enabled` est une clé `bot`). La mémoïsation est
+   * indispensable : le transport compare les ports par IDENTITÉ pour n'abonner
+   * chaque miroir qu'une fois (`assurerAbonnementChat`).
+   * ⚠️ Un bot inconnu rend `undefined` : le transport garde alors `chat` (jamais
+   * les canaux d'un bot présentés comme ceux d'un autre).
+   */
+  const servicesChatParBot = new Map<string, ChatService>();
+  const serviceChatPourBot = (botId: string): ChatService | undefined => {
+    if (botId === "" || botId === botDePile) return chatService;
+    const deja = servicesChatParBot.get(botId);
+    if (deja !== undefined) return deja;
+    const configBot = configsBots.get(botId);
+    const miroir = canauxBots?.miroirDe(botId);
+    if (configBot === undefined || miroir === undefined) return undefined;
+    const service = new ChatService({
+      mode: () => configBot.getString("chat.mode"),
+      enabled: (plateforme) => configBot.getString(`chat.${plateforme}.enabled`) === "on",
+      remoteAgents: () => configBot.getString("chat.remoteAgents"),
+      remoteTools: () => configBot.getString("chat.remoteTools"),
+      mirror: miroir,
+    });
+    servicesChatParBot.set(botId, service);
+    return service;
+  };
+
+  /**
+   * RÉGLAGES PAR CANAL DU BOT AFFICHÉ (`PATCH /api/chat/conversations/<id>`).
+   *
+   * ⚠️ MÊME défaut que ci-dessus, autre conséquence : la route écrivait dans
+   * `chatMirror` (bot courant) quel que soit le canal. Un canal de `granolaf`
+   * réglé depuis l'interface web voyait donc son mode de réponse écrit dans le
+   * fichier d'un AUTRE bot — réglage sans effet, et menu qui recoche l'ancienne
+   * valeur au rafraîchissement (la liste est autoritaire côté serveur).
+   *
+   * ⚠️ Les valeurs rendues sont les valeurs EFFECTIVES (même calcul que
+   * `adapter.replySettings`) : l'interface coche l'option réellement active.
+   */
+  const reglagesCanalDeBot = (botId: string) => {
+    const service = serviceChatPourBot(botId);
+    const miroir = canauxBots?.miroirDe(botId);
+    if (service === undefined || miroir === undefined) return undefined;
+    return {
+      reglages: (conversationId: string): { replyMode?: ChatReplyMode; replyStyle: ChatReplyStyle; quoteAuthor: ChatQuoteAuthor } | null => {
+        const record = miroir.record(conversationId);
+        if (record === undefined) return null;
+        const mode = normalizeReplyMode(record.replyMode);
+        return {
+          ...(mode !== undefined ? { replyMode: mode } : {}),
+          replyStyle: effectiveReplyStyle(record),
+          quoteAuthor: effectiveQuoteAuthor(record),
+        };
+      },
+      ecrire: (conversationId: string, patch: ChatReplySettingsPatch): boolean =>
+        miroir.setReplySettings(conversationId, patch),
+    };
+  };
+
   if (gate.passed) {
     const idleTimeoutMs = config.getNumber("delegation.idleTimeoutMs");
     const totalTimeoutMs = config.getNumber("delegation.totalTimeoutMs");
@@ -4393,6 +4467,11 @@ async function main(): Promise<void> {
       // d'écriture (`conversation_lecture_seule`) / de création
       // (`creation_desactivee`) tant que le mode est distant.
       chat: chatService,
+      // ⚠️ LOT 45 — LE MIROIR DU BOT AFFICHÉ : la liste des canaux distants et les
+      // snapshots d'un canal passent par le service de CE bot (son miroir, ses
+      // interrupteurs). Sans cette option, la trame `sessions` servait le miroir du
+      // bot courant à tous les clients — d'où une barre latérale vide sur `granolaf`.
+      chatPour: (botId: string) => serviceChatPourBot(botId),
       // RÉACTIONS : écrire une réaction ne déclenche AUCUN tour et n'alimente
       // jamais la synthèse vocale. Seules les RÉGULARITÉS (le même jugement sur
       // plusieurs messages) sont proposées à la mémoire — avec son filtre, son
@@ -4615,6 +4694,10 @@ async function main(): Promise<void> {
         mattermost: mattermostPort,
         discord: discordPort,
         logger,
+        // ⚠️ LOT 45 — les réglages d'un canal (`PATCH /api/chat/conversations/<id>`)
+        // vont dans le MIROIR DU BOT AFFICHÉ (corps `bot`), jamais dans celui du bot
+        // courant : un réglage écrit chez un autre bot ne s'applique à rien.
+        reglagesCanalDeBot,
         // ⚠️ RETOMBÉE LEGACY après suppression d'un miroir : `chat.mode` est un
         // réglage PROPRE AU BOT ACTIF (`scope: "bot"`, `apply: hot`) — il s'écrit
         // donc dans l'overlay du bot actif, jamais dans `config.json` d'instance.
