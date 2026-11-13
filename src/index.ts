@@ -2684,6 +2684,9 @@ async function main(): Promise<void> {
         }));
       return {
         url: chatMirror.baseUrl(),
+        // ⚠️ INTERRUPTEUR de l'instance (`chat.mattermost.enabled`, réglage du bot
+        // de la pile) : c'est lui qui autorise — ou non — la connexion.
+        active: config.getString("chat.mattermost.enabled") === "on",
         // ⚠️ LOT 36 (L10) : le nom PAR BOT est accepté (`YUKI_CHAT_YUKI__MATTERMOST`),
         // l'ancien nom restant valable pour `yuki`.
         jetonEnregistre: nomsSecretsChat(botDePile, "mattermost").some(
@@ -2792,6 +2795,7 @@ async function main(): Promise<void> {
         guildId: config.getString("chat.discord.guildId"),
         maxUploadBytes: config.getNumber("chat.discord.maxUploadBytes"),
         intentMessageContent: intent === undefined ? null : intent,
+        active: config.getString("chat.discord.enabled") === "on",
         jetonEnregistre: nomsSecretsChat(botDePile, "discord").some(
           (nom) => secretStore?.has(nom) === true,
         ),
@@ -2823,17 +2827,34 @@ async function main(): Promise<void> {
    *  3. connexion des bots secondaires (`connecterTout`, la pile est connectée
    *     juste après par le code d'avant, inchangé).
    *
-   * ⚠️ Sans jeton, un bot n'a AUCUN adaptateur : il reste en local (`chat.mode`
-   * est une clé PAR BOT) — c'est le cas « un bot mattermost et un bot local ».
+   * ⚠️ Sans JETON ou sans INTERRUPTEUR (`chat.<plateforme>.enabled = on`), un bot
+   * n'a AUCUN adaptateur pour cette plateforme : il reste en local, qui n'est pas
+   * un réglage. C'est le cas « un bot mattermost et un bot local ».
    */
   const jetonsChat: ResolutionJetonsChat = resoudreJetonsChatBots({
     bots: [botDePile, ...bots.aDemarrer.map((entree) => entree.id)],
     lookup: (nom) => secretStore?.lookup(nom),
+    /**
+     * ⚠️ INTERRUPTEUR PAR (bot, plateforme) — `chat.<plateforme>.enabled` du bot.
+     *
+     * C'est ICI que se joue « un jeton posé n'active pas la plateforme à lui
+     * seul » : une plateforme `off` ne résout aucun jeton, donc `AdaptateursChatBots`
+     * ne construit aucun adaptateur pour elle et aucune connexion n'est ouverte.
+     * ⚠️ Le LOCAL ne passe pas par là : il n'est pas un adaptateur distant, il
+     * est toujours disponible.
+     */
+    active: (botId, plateforme) =>
+      (configsBots.get(botId) ?? config).getString(`chat.${plateforme}.enabled`) === "on",
     logger,
   });
   /**
    * État des jetons PAR BOT pour l'interface (`/config → Conversation`) : le NOM
    * du secret et « posé / absent ». ⚠️ Jamais une valeur, jamais un préfixe.
+   *
+   * ⚠️ « posé » se lit dans le COFFRE, pas dans la résolution : depuis 2026-11-10
+   * une plateforme désactivée (`chat.<plateforme>.enabled = off`) ne résout plus
+   * son jeton. Confondre les deux ferait afficher « aucun jeton » alors que le
+   * secret existe — exactement le cas « jeton posé, plateforme désactivée ».
    */
   const jetonsParBot = (
     plateforme: PlateformeChat,
@@ -2843,7 +2864,9 @@ async function main(): Promise<void> {
     return [...ids].map((botId) => ({
       botId,
       nom: nomSecretChat(botId, plateforme),
-      configure: jetonsChat.jetons.get(botId)?.has(plateforme) === true,
+      configure: nomsSecretsChat(botId, plateforme).some(
+        (nom) => secretStore?.has(nom) === true,
+      ),
     }));
   };
   for (const conflit of jetonsChat.conflits) {
@@ -2928,11 +2951,15 @@ async function main(): Promise<void> {
     logger,
   });
 
-  // Service de DISCUSSION : lit le mode (`chat.mode`, apply hot) et sert le miroir en
-  // LECTURE seule. ⚠️ `chat.mode` ne filtre que la VUE : la synchronisation démarre
-  // dès que la plateforme est configurée (décision du lot 1, tenue ici).
+  // Service de DISCUSSION : lit les INTERRUPTEURS (`chat.<plateforme>.enabled`,
+  // apply hot) et sert le miroir en LECTURE seule. ⚠️ Plus aucun filtrage par
+  // « mode » : le local est TOUJOURS listé, et les canaux des plateformes activées
+  // le sont en même temps.
   const chatService = new ChatService({
     mode: () => config.getString("chat.mode"),
+    // ⚠️ INTERRUPTEURS des plateformes distantes (`chat.<plateforme>.enabled`) :
+    // ils sont INDÉPENDANTS entre eux et n'enlèvent jamais le local.
+    enabled: (plateforme) => config.getString(`chat.${plateforme}.enabled`) === "on",
     remoteAgents: () => config.getString("chat.remoteAgents"),
     // ⚠️ SECOND réglage, INDÉPENDANT : image/libraire/archives sans délégation.
     remoteTools: () => config.getString("chat.remoteTools"),
@@ -4609,7 +4636,7 @@ async function main(): Promise<void> {
         mattermost: mattermostPort,
         discord: discordPort,
         logger,
-        // ⚠️ RETOMBÉE DU MODE après suppression d'un miroir : `chat.mode` est un
+        // ⚠️ RETOMBÉE LEGACY après suppression d'un miroir : `chat.mode` est un
         // réglage PROPRE AU BOT ACTIF (`scope: "bot"`, `apply: hot`) — il s'écrit
         // donc dans l'overlay du bot actif, jamais dans `config.json` d'instance.
         saveMode: (mode: string) => {
@@ -4758,7 +4785,7 @@ async function main(): Promise<void> {
 
   // DISCUSSIONS (lot 18, lot 2) — la SYNCHRONISATION démarre dès que la plateforme est
   // CONFIGURÉE (URL du serveur + jeton du bot dans le coffre), et cela INDÉPENDAMMENT
-  // du mode affiché : `chat.mode` ne filtre que la VUE (décision du lot 1). Un échec est
+  // de l'interrupteur de la plateforme (`chat.<plateforme>.enabled`). Un échec est
   // journalisé ET remonté par le statut ; il ne bloque jamais le démarrage du gateway.
   /**
    * ⚠️ LOT 36 (L10) : la condition de connexion du principal passe par la

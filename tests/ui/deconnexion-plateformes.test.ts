@@ -2,11 +2,12 @@
  * LOT 30 — INTERFACE de la déconnexion des plateformes + sélecteur de mode conditionnel.
  *
  * Ce que ce fichier prouve :
- *  ① le sélecteur Local · Mattermost · Discord n'est AFFICHÉ qu'à partir de DEUX types de
- *    discussion actifs, et un mode inactif n'apparaît pas non plus DEDANS ;
- *  ② il se met à jour À CHAUD (le statut change ⇒ il apparaît/disparaît sans recharger) ;
- *  ③ un mode courant devenu inactif est BASCULÉ automatiquement (`resolveActiveMode`) ;
- *  ④ `/config` présente DEUX actions distinctes — « Débrancher » (miroir conservé) et
+ *  ① ⚠️ RETIRÉ le 2026-11-10 : le sélecteur EXCLUSIF et la bascule automatique de
+ *    mode (`resolveActiveMode`) n'existent plus — les plateformes sont devenues
+ *    des interrupteurs INDÉPENDANTS (`chat.mattermost.enabled` /
+ *    `chat.discord.enabled`) et le local n'est plus un choix. Leur remplacement
+ *    est vérifié dans `tests/ui/chat-mode.test.ts` et `tests/ui/plateformes-par-bot.test.ts`.
+ *  ② `/config` présente DEUX actions distinctes — « Débrancher » (miroir conservé) et
  *    « Supprimer la connexion » (destructif) — et la suppression exige une CASE À COCHER
  *    explicite, avec le décompte de ce qui sera perdu.
  *
@@ -28,12 +29,6 @@ import {
   texteDebranchement,
   texteSuppression,
 } from "../../public/ui/chat-panel.js";
-import {
-  initChatModeSelector,
-  modesActifs,
-  resolveActiveMode,
-  selectorVisible,
-} from "../../public/ui/chat-mode.js";
 
 const ROOT = process.cwd();
 
@@ -261,140 +256,6 @@ function statut(options: {
       : {}),
   };
 }
-
-// ─── ② Sélecteur masqué tant qu'il n'y a pas DEUX types actifs ─────────────
-
-describe("définition d'« actif » et visibilité du sélecteur", () => {
-  it("`local` est TOUJOURS actif, même à zéro conversation", () => {
-    expect(modesActifs(statut({}))).toEqual(["local"]);
-    expect(selectorVisible(statut({}))).toBe(false);
-  });
-
-  it("une plateforme est active si un jeton est au coffre, MÊME déconnectée", () => {
-    // ⚠️ « configurée mais en erreur » est précisément le moment où l'on veut garder
-    // l'onglet : c'est là qu'on lit la raison et qu'on répare.
-    const etat = statut({
-      mode: "mattermost",
-      mattermost: { jetonEnregistre: true, canaux: 0 },
-      discord: {},
-    });
-    (etat.mattermost as { plateforme: { etat: string } }).plateforme.etat = "off";
-    expect(modesActifs(etat)).toContain("mattermost");
-    expect(selectorVisible(etat)).toBe(true);
-  });
-
-  it("une plateforme débranchée dont le miroir garde des conversations reste active", () => {
-    const etat = statut({ mattermost: { jetonEnregistre: false, canaux: 2 } });
-    expect(modesActifs(etat)).toEqual(["local", "mattermost"]);
-    expect(selectorVisible(etat)).toBe(true);
-  });
-
-  it("un seul type actif ⇒ sélecteur MASQUÉ ; deux ⇒ visible", () => {
-    expect(selectorVisible(statut({ mattermost: {}, discord: {} }))).toBe(false);
-    expect(
-      selectorVisible(statut({ mattermost: { jetonEnregistre: true }, discord: {} })),
-    ).toBe(true);
-    expect(
-      selectorVisible(
-        statut({ mattermost: { jetonEnregistre: true }, discord: { jetonEnregistre: true } }),
-      ),
-    ).toBe(true);
-  });
-
-  it("état INCONNU (gateway injoignable) ⇒ visible (on ne retire pas un contrôle à l'aveugle)", () => {
-    expect(selectorVisible(null)).toBe(true);
-    expect(selectorVisible(undefined)).toBe(true);
-  });
-
-  it("le sélecteur est MASQUÉ (attribut `hidden`), pas seulement désactivé", () => {
-    const source = readFileSync(join(ROOT, "public", "ui", "chat-mode.js"), "utf8");
-    expect(source).toContain("root.hidden = !visible");
-    expect(source).toContain("group.hidden = !visible");
-  });
-});
-
-describe("sélecteur monté — masquage, boutons inactifs, mise à jour À CHAUD", () => {
-  function monter() {
-    const racine = new Noeud("div");
-    const selecteur = initChatModeSelector({ root: racine, onChange: () => undefined });
-    return { racine, groupe: racine.children[0] as Noeud, selecteur };
-  }
-
-  function boutons(groupe: Noeud): Noeud[] {
-    return groupe.children.filter((noeud) => noeud.tag === "button");
-  }
-
-  it("1 type actif ⇒ conteneur MASQUÉ (aucun espace, aucun bouton inutile)", () => {
-    const { racine, groupe, selecteur } = monter();
-    selecteur.update(statut({ mattermost: {}, discord: {} }));
-    expect(racine.hidden).toBe(true);
-    expect(groupe.hidden).toBe(true);
-  });
-
-  it("2 types actifs ⇒ conteneur VISIBLE, et Discord INACTIF n'apparaît plus", () => {
-    const { racine, groupe, selecteur } = monter();
-    selecteur.update(
-      statut({ mattermost: { jetonEnregistre: true }, discord: { jetonEnregistre: false } }),
-    );
-    expect(racine.hidden).toBe(false);
-    expect(groupe.hidden).toBe(false);
-    const visibles = boutons(groupe)
-      .filter((bouton) => bouton.hidden !== true)
-      .map((bouton) => bouton.getAttribute("data-mode"));
-    expect(visibles).toEqual(["local", "mattermost"]);
-  });
-
-  it("MISE À JOUR À CHAUD : le statut change, le sélecteur apparaît puis disparaît", () => {
-    const { racine, selecteur } = monter();
-    selecteur.update(statut({ mattermost: {}, discord: {} }));
-    expect(racine.hidden).toBe(true);
-    // Seconde lecture du statut, sans recharger la page : Mattermost vient d'être configuré.
-    selecteur.update(statut({ mattermost: { jetonEnregistre: true }, discord: {} }));
-    expect(racine.hidden).toBe(false);
-    // Puis supprimé : retour à un seul type actif.
-    selecteur.update(statut({ mattermost: {}, discord: {} }));
-    expect(racine.hidden).toBe(true);
-  });
-
-  it("le mode courant reste marqué actif (`aria-pressed`) quand il est affiché", () => {
-    const { groupe, selecteur } = monter();
-    selecteur.update(
-      statut({ mode: "mattermost", mattermost: { jetonEnregistre: true }, discord: {} }),
-    );
-    const mattermost = boutons(groupe).find(
-      (bouton) => bouton.getAttribute("data-mode") === "mattermost",
-    );
-    expect(mattermost?.getAttribute("aria-pressed")).toBe("true");
-  });
-});
-
-describe("bascule AUTOMATIQUE quand le mode courant n'est plus actif", () => {
-  it("mode = mattermost et Mattermost n'est plus actif ⇒ bascule sur `local`", () => {
-    expect(
-      resolveActiveMode(statut({ mode: "mattermost", mattermost: {}, discord: {} })),
-    ).toBe("local");
-  });
-
-  it("mode actif ⇒ aucune bascule", () => {
-    expect(
-      resolveActiveMode(
-        statut({ mode: "mattermost", mattermost: { jetonEnregistre: true }, discord: {} }),
-      ),
-    ).toBeNull();
-    expect(resolveActiveMode(statut({ mode: "local", mattermost: {}, discord: {} }))).toBeNull();
-  });
-
-  it("aucune bascule quand l'état est INCONNU (on ne change pas un mode à l'aveugle)", () => {
-    expect(resolveActiveMode(null)).toBeNull();
-  });
-
-  it("`app.js` applique la bascule par `saveChatMode` et redemande la trame `sessions`", () => {
-    const source = readFileSync(join(ROOT, "public", "ui", "app.js"), "utf8");
-    expect(source).toContain("resolveActiveMode");
-    expect(source).toContain("basculeModeEnCours");
-    expect(source).toContain('sendRaw({ type: "chat_refresh" })');
-  });
-});
 
 // ─── ④ Débrancher / Supprimer dans /config ─────────────────────────────────
 

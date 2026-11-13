@@ -7,7 +7,7 @@
  *  - `GET/PUT /api/bots/<id>/config` : la configuration d'UN bot.
  *
  * ⚠️ POURQUOI CE MODULE : depuis le découpage Instance/Bot, un réglage propre à
- * un bot (`chat.mode`, `tts.voice`, `chat.remoteAgents`…) s'écrit sur la route
+ * un bot (`chat.mattermost.enabled`, `tts.voice`, `chat.remoteAgents`…) s'écrit sur la route
  * du bot, JAMAIS sur `PUT /api/config` (qui le refuse : `bot_scoped_field`).
  * Trois écrivains de l'interface ont besoin de la même règle ; la dupliquer
  * ferait diverger la règle.

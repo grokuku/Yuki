@@ -7,7 +7,8 @@
  * l'implémente dans `src/chat/mattermost/adapter.ts`.
  *
  * ⚠️ DÉCISION DU LOT 1, TENUE ICI : c'est la CONFIGURATION qui déclenche la
- * synchronisation, pas le mode. `chat.mode` ne filtre que la VUE (l'interface) ; un
+ * synchronisation, pas un mode. Il n'y a plus de « mode courant » (les plateformes
+ * sont des interrupteurs indépendants) : un
  * canal doit continuer d'être ingéré même quand l'utilisateur regarde le mode local —
  * sinon les messages reçus pendant ce temps seraient perdus.
  *

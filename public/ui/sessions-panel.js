@@ -35,8 +35,9 @@ import {
   REPLY_MODE_OPTIONS,
   REPLY_STYLE_OPTIONS,
   creationRefusal,
-  initChatModeSelector,
-  modeNotice,
+  initPlatformToggles,
+  plateformesAvertissements,
+  platformsNotice,
   quoteAuthorLabel,
   replyModeLabel,
   replyStyleLabel,
@@ -263,7 +264,8 @@ function el(tag, attrs = {}, text) {
  * @param {(id: string, pinned: boolean) => void} deps.onPin
  * @param {(id: string) => void} [deps.onRecapDedicated] entrée « Conversation
  *   dédiée… » du menu du titre (parcours `recap-dedicated.js`).
- * @param {(mode: string) => void} [deps.onChatModeChange] mode de DISCUSSION
+ * @param {(plateforme: string, actif: boolean) => void} [deps.onChatModeChange]
+ *   interrupteur de plateforme demandé (Mattermost / Discord)
  *   choisi dans le sélecteur segmenté (Local · Mattermost · Discord).
  * @param {HTMLElement} [deps.footer] encart fixe en bas de la barre (agents).
  * @param {Array<{list: HTMLElement, empty?: HTMLElement}>} [deps.extraLists]
@@ -353,18 +355,20 @@ export function initSessionsPanel(deps) {
     "aria-label": "Liste des conversations",
   });
 
-  // ─── Mode de DISCUSSION (Local · Mattermost · Discord) ──────────────────
-  // ⚠️ Placé EN TÊTE, au-dessus de « + Nouvelle conversation » : le mode décide
-  // de ce que la liste contient (conversations de Yuki, canaux d'une
-  // plateforme). L'état est PERSISTÉ CÔTÉ SERVEUR (`chat.mode`) : le panneau ne
-  // fait qu'afficher et demander.
+  // ─── PLATEFORMES de discussion (Mattermost · Discord, interrupteurs) ────
+  // ⚠️ Placé EN TÊTE, au-dessus de « + Nouvelle conversation » : ces deux
+  // interrupteurs décident de ce que le bot peut rejoindre EN PLUS du local.
+  // ⚠️ Ce n'est PAS un choix exclusif : le local n'est pas un bouton, il est
+  // toujours disponible (les conversations de Yuki restent dans la liste).
+  // L'état est PERSISTÉ CÔTÉ SERVEUR (`chat.<plateforme>.enabled`) : le panneau
+  // ne fait qu'afficher et demander.
   const modeSlot = el("div", { class: "sidebar__mode" });
   let chatStatus = null;
   // ⚠️ La liste des conversations a-t-elle été REÇUE du serveur (trame `sessions`) ?
   // Tant que non, `sessions` est vide parce qu'on ne sait pas encore — pas parce
   // qu'il n'y a rien. L'encart ne doit donc RIEN affirmer avant ce moment-là.
   let listeConnue = false;
-  const selector = initChatModeSelector({ root: modeSlot, onChange: onChatModeChange });
+  const selector = initPlatformToggles({ root: modeSlot, onChange: onChatModeChange });
 
   // Bandeau/état vide du mode distant + raison VISIBLE du refus de création.
   const notice = el("div", { class: "sidebar__notice" });
@@ -1134,20 +1138,40 @@ export function initSessionsPanel(deps) {
    * rendu avant l'arrivée de la liste, puis jamais recalculé) — deux vérités
    * contradictoires à l'écran, l'utilisateur croyant à une panne de synchro.
    *
-   * ⚠️ La décision est UNIQUE (`modeNotice`, `chat-mode.js`) et rejouée à CHAQUE
-   * changement de l'une des deux sources : l'état du mode (`setChatMode`) ET la
-   * liste affichée (`update`). L'ordre d'arrivée n'a donc plus d'importance, et
-   * une liste non vide ne peut JAMAIS être contredite par un état vide.
+   * ⚠️ La décision est UNIQUE (`platformsNotice`, `chat-mode.js`) et rejouée à
+   * CHAQUE changement de l'une des deux sources : l'état des interrupteurs
+   * (`setChatMode`) ET la liste affichée (`update`). L'ordre d'arrivée n'a donc
+   * plus d'importance, et une liste non vide ne peut JAMAIS être contredite par
+   * un état vide.
+   *
+   * ⚠️ S'y AJOUTENT les AVERTISSEMENTS d'incohérence (« activé sans jeton » /
+   * « jeton posé, désactivé ») : un interrupteur allumé sans jeton n'ouvre aucune
+   * connexion, le taire ferait chercher une panne ailleurs.
    */
   function applyNotice() {
-    const avis = modeNotice(chatStatus, { nombre: sessions.length, connue: listeConnue });
+    const avis = platformsNotice(chatStatus, { nombre: sessions.length, connue: listeConnue });
     const refusal = creationRefusal(chatStatus);
-    const titre = avis ? avis.titre : refusal !== null ? "Création désactivée" : "";
-    noticeTitle.textContent = titre;
-    noticeDetail.textContent = avis ? avis.detail : refusal ?? "";
-    notice.hidden = titre === "";
+    const avertissements = plateformesAvertissements(chatStatus);
+    const titres = [];
+    const details = [];
+    if (avis) {
+      titres.push(avis.titre);
+      details.push(avis.detail);
+    }
+    if (refusal !== null) {
+      titres.push("Création désactivée");
+      details.push(refusal);
+    }
+    if (avertissements.length > 0) {
+      titres.push("Plateformes");
+      details.push(...avertissements);
+    }
+    noticeTitle.textContent = titres.join(" · ");
+    noticeDetail.textContent = details.join(" ");
+    notice.hidden = titres.length === 0;
     if (avis) notice.setAttribute("data-kind", avis.kind);
     else if (refusal !== null) notice.setAttribute("data-kind", "refus");
+    else if (avertissements.length > 0) notice.setAttribute("data-kind", "avertissement");
     else notice.removeAttribute("data-kind");
   }
 

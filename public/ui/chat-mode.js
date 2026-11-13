@@ -1,8 +1,9 @@
 /**
- * Yuki — SÉLECTEUR DE MODE DE DISCUSSION (barre latérale).
+ * Yuki — INTERRUPTEURS DE PLATEFORMES (barre latérale).
  *
- * Trois modes, comme demandé : **Local** (les conversations de Yuki, mode
- * historique), **Mattermost** et **Discord**.
+ * ⚠️ Ce n'est plus un sélecteur exclusif de mode : **deux interrupteurs
+ * indépendants** (Mattermost, Discord). Le **Local** n'est pas un choix — il est
+ * TOUJOURS disponible (les conversations de Yuki restent dans la liste).
  *
  * ⚠️ Ce module ne parle à AUCUNE plateforme : il lit `GET /api/chat/status` par
  * le gateway (CSP stricte : aucun appel navigateur vers un service distant) et
@@ -10,9 +11,10 @@
  * `X-Yuki-Config: 1`). L'état est donc **persisté côté serveur**, pas dans le
  * navigateur.
  *
- * ⚠️ MULTI-BOT (lot 35b, sous-lot 1b-3) : `chat.mode` est un réglage PROPRE AU
- * BOT ACTIF. `PUT /api/config` le REFUSE désormais (`bot_scoped_field`) : le
- * mode s'écrit sur la route du bot actif, résolue par `GET /api/bots`.
+ * ⚠️ MULTI-BOT (lot 35b, sous-lot 1b-3) : l'interrupteur est un réglage PROPRE
+ * AU BOT ACTIF (`chat.<plateforme>.enabled`). `PUT /api/config` le REFUSE
+ * (`bot_scoped_field`) : il s'écrit sur la route du bot actif, résolue par
+ * `GET /api/bots`.
  *
  * ⚠️ Rendu PUREMENT DOM (`createElement`), aucune injection HTML directe, aucun
  * style en ligne : la CSP `style-src 'self'` reste inchangée.
@@ -40,23 +42,27 @@ export const CHEMIN_MATTERMOST = "/bots?b=yuki → Plateformes → « Discussion
 /** Chemin exact de la section Discord (page du bot, onglet « Plateformes »). */
 export const CHEMIN_DISCORD = "/bots?b=yuki → Plateformes → « Discussions — Discord »";
 
-/** Les trois modes proposés, dans l'ordre d'affichage. */
-export const CHAT_MODE_OPTIONS = [
+/**
+ * PLATEFORMES DISTANTES proposées à un bot : des INTERRUPTEURS, plus un choix.
+ *
+ * ⚠️ AVANT (régression) : `chat.mode` était un enum EXCLUSIF (`local` /
+ * `mattermost` / `discord`) rendu par un sélecteur « un seul à la fois » —
+ * choisir « Local » COUPAIT Mattermost et Discord. Un bot doit pouvoir être
+ * joignable sur PLUSIEURS plateformes EN MÊME TEMPS.
+ * ⚠️ Le LOCAL n'est donc PAS dans cette liste : ce n'est pas un choix, il est
+ * toujours disponible (comme avant la régression).
+ */
+export const PLATEFORME_OPTIONS = [
   {
-    mode: "local",
-    label: "Local",
-    title: "Conversations de Yuki (mode actuel).",
-  },
-  {
-    mode: "mattermost",
+    plateforme: "mattermost",
     label: "Mattermost",
-    title: `Canaux Mattermost du bot : configuration, jeton et état dans ${CHEMIN_MATTERMOST}.`,
+    title: `Canaux Mattermost du bot : interrupteur, jeton et état dans ${CHEMIN_MATTERMOST}.`,
   },
   {
-    mode: "discord",
+    plateforme: "discord",
     label: "Discord",
     title:
-      `Salons Discord du bot : configuration, jeton et état dans ${CHEMIN_DISCORD}. ` +
+      `Salons Discord du bot : interrupteur, jeton et état dans ${CHEMIN_DISCORD}. ` +
       "L'intent MESSAGE_CONTENT doit être activé dans le portail développeur.",
   },
 ];
@@ -212,10 +218,10 @@ export const CHAT_BADGES = {
   off: { glyph: "○", label: "non configuré" },
 };
 
-/** Libellé d'un mode (`mode` inconnu ⇒ la valeur brute, jamais un vide). */
-export function chatModeLabel(mode) {
-  const option = CHAT_MODE_OPTIONS.find((item) => item.mode === mode);
-  return option ? option.label : String(mode ?? "");
+/** Libellé d'une plateforme distante (`plateforme` inconnue ⇒ la valeur brute). */
+export function platformLabel(plateforme) {
+  const option = PLATEFORME_OPTIONS.find((item) => item.plateforme === plateforme);
+  return option ? option.label : String(plateforme ?? "");
 }
 
 /**
@@ -289,43 +295,49 @@ function noticeEchec(mode, raison, forme) {
 }
 
 /** Encart d'état VIDE : la synchro est faite, il n'y a sincèrement rien à lister. */
-function noticeVide(mode) {
-  if (mode === "discord") {
-    return {
-      kind: "vide",
-      titre: "Aucun salon synchronisé.",
-      detail:
-        `Enregistrez le jeton du bot Discord dans ${CHEMIN_DISCORD} (et activez ` +
+function noticeVide(plateformes) {
+  const liste = Array.isArray(plateformes) ? plateformes : [plateformes];
+  const plusieurs = liste.length > 1;
+  const details = liste.map((plateforme) =>
+    plateforme === "discord"
+      ? `Enregistrez le jeton du bot Discord dans ${CHEMIN_DISCORD} (et activez ` +
         "l'intent MESSAGE_CONTENT dans le portail développeur), puis cliquez sur " +
-        "« Se connecter » : les salons texte du serveur seront importés.",
-    };
-  }
+        "« Se connecter » : les salons texte du serveur seront importés."
+      : `Renseignez l'URL du serveur et le jeton du bot dans ${CHEMIN_MATTERMOST}, puis ` +
+        "cliquez sur « Se connecter » : les canaux et deux semaines d'historique seront " +
+        "alors importés.",
+  );
   return {
     kind: "vide",
-    titre: "Aucun canal synchronisé.",
-    detail:
-      `Renseignez l'URL du serveur et le jeton du bot dans ${CHEMIN_MATTERMOST}, puis ` +
-      "cliquez sur « Se connecter » : les canaux et deux semaines d'historique seront " +
-      "alors importés.",
+    titre:
+      liste.length === 2
+        ? "Aucun canal synchronisé (Mattermost et Discord)."
+        : liste[0] === "discord"
+          ? "Aucun salon synchronisé."
+          : "Aucun canal synchronisé.",
+    detail: plusieurs ? details.join(" ") : (details[0] ?? ""),
   };
 }
 
 /**
- * Encart de la barre latérale — DÉCISION UNIQUE, à partir de l'état du mode ET
+ * Encart de la barre latérale — DÉCISION UNIQUE, à partir des INTERRUPTEURS et
  * de ce que la liste montre VRAIMENT.
  *
- * ⚠️ DÉFAUT DE PRODUCTION corrigé ici (2026-11-02) : la décision ne regardait que
- * `status.mode`. En mode Mattermost, l'encart « Aucun canal synchronisé »
- * s'affichait donc AUSSI quand 5 canaux étaient listés — deux informations
- * contradictoires, l'utilisateur croyait à une panne de synchronisation.
+ * ⚠️ La règle de 2026-11-02 tient toujours : la décision ne peut pas se fonder
+ * sur un état seul, sinon « Aucun canal synchronisé » s'affiche AU-DESSUS de cinq
+ * canaux listés (deux vérités contradictoires à l'écran).
+ * ⚠️ Ce qui a changé (2026-11-10) : il n'y a plus UN mode mais 0, 1 ou 2
+ * plateformes ACTIVÉES. L'encart décrit donc la PREMIÈRE plateforme activée qui a
+ * quelque chose à dire — et rien du tout si aucune n'est activée (le local seul
+ * est un état normal, pas une panne : il n'y a rien à signaler).
  *
  * Règles, dans cet ordre (UNE SEULE vérité affichée à la fois) :
- *  ① mode local ou inconnu ⇒ aucun encart ;
+ *  ① aucune plateforme activée, ou état inconnu ⇒ aucun encart ;
  *  ② liste NON VIDE ⇒ aucun encart (la liste dit la vérité, l'état vide la
  *    contredirait) — même si la synchronisation signale une erreur, la raison
- *    reste lisible sur le badge (`badgeFor`) ;
- *  ③ état du mode ou liste pas encore REÇUS ⇒ « chargement » discret (jamais
- *    « aucun canal », jamais une liste vide présentée comme définitive) ;
+ *    reste lisible sur la pastille (`badgeFor`) ;
+ *  ③ liste pas encore REÇUE ⇒ « chargement » discret (jamais « aucun canal »,
+ *    jamais une liste vide présentée comme définitive) ;
  *  ④ synchronisation inaboutie (`plateforme.etat` ≠ `on` AVEC raison serveur, ou
  *    `off`) ⇒ encart d'ÉCHEC avec la raison — ce n'est pas « aucun canal » ;
  *  ⑤ connexion EN COURS sans raison d'échec (`connexion`) ⇒ « chargement » :
@@ -339,97 +351,99 @@ function noticeVide(mode) {
  * @returns `null` (rien à dire), ou `{ kind: "chargement" | "echec" | "vide",
  *   titre, detail }`.
  */
-export function modeNotice(status, etatListe) {
-  const mode = status?.mode;
-  if (mode !== "mattermost" && mode !== "discord") return null;
+export function platformsNotice(status, etatListe) {
+  const actives = plateformesActives(status);
+  if (actives.length === 0) return null;
 
   const nombre = Number(etatListe?.nombre ?? 0);
   const listeConnue = etatListe?.connue === true;
-  const plateforme = status?.plateforme ?? {};
-  const raison = typeof plateforme.raison === "string" ? plateforme.raison.trim() : "";
+  const vueDe = (plateforme) => status?.[plateforme] ?? {};
+  const etatDe = (plateforme) => vueDe(plateforme).plateforme ?? {};
+  const raisonDe = (plateforme) => {
+    const raison = etatDe(plateforme).raison;
+    return typeof raison === "string" ? raison.trim() : "";
+  };
 
-  // ② La LISTE est la première vérité : tant qu'elle a du contenu, aucun encart
-  //    d'état vide ni de chargement ne vient la contredire.
+  // ② La LISTE est la première vérité.
   if (Number.isFinite(nombre) && nombre > 0) return null;
-  // ③ Rien n'est encore affirmable : ni l'état du mode, ni la liste.
-  if (!listeConnue) return noticeChargement(mode);
-  // ④ La synchro n'a pas abouti : la raison du SERVEUR, jamais « aucun canal ».
-  if (plateforme.etat === "off") return noticeEchec(mode, raison, "impossible");
-  if (plateforme.etat !== "on" && raison !== "") return noticeEchec(mode, raison, "interrompue");
-  // ⑤ Connexion EN COURS (`connexion` sans raison) : l'import peut encore remplir la
-  //    liste, donc on ne prétend pas qu'elle est vide.
-  if (plateforme.etat !== "on") return noticeChargement(mode);
+  // ③ Rien n'est encore affirmable : la liste n'est pas arrivée.
+  if (!listeConnue) return noticeChargement(actives[0]);
+  // ④ Une plateforme ACTIVÉE qui n'a pas abouti : sa raison, jamais « aucun canal ».
+  for (const plateforme of actives) {
+    if (etatDe(plateforme).etat === "off") {
+      return noticeEchec(plateforme, raisonDe(plateforme), "impossible");
+    }
+    const raison = raisonDe(plateforme);
+    if (etatDe(plateforme).etat !== "on" && raison !== "") {
+      return noticeEchec(plateforme, raison, "interrompue");
+    }
+  }
+  // ⑤ Connexion EN COURS : l'import peut encore remplir la liste.
+  for (const plateforme of actives) {
+    if (etatDe(plateforme).etat !== "on") return noticeChargement(plateforme);
+  }
   // ⑥ Synchro faite et rien à lister.
-  return noticeVide(mode);
+  return noticeVide(actives);
 }
 
 /**
- * MODES DE DISCUSSION RÉELLEMENT ACTIFS, dans l'ordre du sélecteur.
+ * PLATEFORMES DISTANTES ACTIVÉES (`chat.<plateforme>.enabled === "on"`).
  *
- * ⚠️ DÉFINITION TRANCHÉE (2026-11-05) — **un type de discussion est actif quand il y a
- * quelque chose à y faire ou à y lire** :
- *  - `local` est TOUJOURS actif (les conversations de Yuki existent même à zéro) ;
- *  - une plateforme est active si un **jeton est enregistré au coffre**
- *    (`jetonEnregistre === true` : on peut s'y connecter, ou il ne manque que l'URL) **ou
- *    si son miroir contient au moins une conversation** (`canaux.length > 0` : même
- *    débranchée, les conversations importées restent lisibles).
- *
- * ⚠️ POURQUOI PAS « `plateforme.etat === "on"` » (connectée seulement) : une plateforme
- * configurée mais momentanément en erreur (jeton refusé, serveur injoignable, redémarrage)
- * est exactement le moment où l'on veut GARDER son onglet pour y lire la raison et la
- * réparer. Inversement, « configurée mais déconnectée » garde ses conversations miroir :
- * les masquer rendrait ces conversations inaccessibles depuis l'interface.
+ * ⚠️ AVANT (régression) : la fonction rendait les « modes actifs » dont `local`
+ * était TOUJOURS le premier — et un « type de discussion actif » se déduisait de
+ * l'existence d'un jeton. Deux défauts : le local cessait d'être listé dès qu'on
+ * passait en mode distant (liste locale vide), et un jeton posé suffisait à
+ * présenter une plateforme comme active. Ici, UN SEUL fait compte : l'interrupteur.
+ * ⚠️ Le LOCAL n'est pas une plateforme : il n'y a rien à activer, il est toujours
+ * disponible.
  *
  * @param {unknown} status corps de `GET /api/chat/status`.
- * @returns {string[]} modes actifs (au moins `["local"]`).
+ * @returns {string[]} plateformes activées (0, 1 ou 2), dans l'ordre d'affichage.
  */
-export function modesActifs(status) {
-  const actifs = ["local"];
-  for (const platform of ["mattermost", "discord"]) {
-    const vue = status?.[platform];
-    if (!vue || typeof vue !== "object") continue;
-    const jeton = vue.jetonEnregistre === true;
-    const canaux = Array.isArray(vue.canaux) ? vue.canaux.length : 0;
-    if (jeton || canaux > 0) actifs.push(platform);
+export function plateformesActives(status) {
+  if (!status || typeof status !== "object") return [];
+  const drapeaux = status.plateformes;
+  if (!drapeaux || typeof drapeaux !== "object") return [];
+  const actives = [];
+  for (const option of PLATEFORME_OPTIONS) {
+    if (drapeaux[option.plateforme] === true) actives.push(option.plateforme);
   }
-  return actifs;
+  return actives;
 }
 
 /**
- * Le SÉLECTEUR DE MODE doit-il être visible ?
+ * Phrase d'HONNÊTETÉ sur une plateforme activée dont le jeton manque, ou `null`.
  *
- * ⚠️ Règle demandée le 2026-11-05 : il ne s'affiche que s'il y a **au moins DEUX types de
- * discussion actifs**. Avec un seul, il n'y a aucun choix à faire : le sélecteur est
- * MASQUÉ (pas « désactivé » — un bouton grisé serait un espace perdu et une question
- * sans réponse).
+ * ⚠️ Cas à DIRE (exigence 2026-11-10) : « interrupteur allumé, jeton absent » ⇒
+ * aucune connexion n'est possible. Le contraire est aussi à dire : « jeton posé,
+ * plateforme désactivée » — un jeton seul n'active RIEN.
  *
- * ⚠️ État INCONNU (`status` absent : gateway injoignable) ⇒ visible. Ne rien savoir n'est
- * pas une raison de retirer un contrôle : le masquer affirmerait « un seul type actif »,
- * ce qu'on ne sait pas.
+ * @param {unknown} status corps de `GET /api/chat/status`.
+ * @returns {string[]} une phrase par situation, dans l'ordre d'affichage.
  */
-export function selectorVisible(status) {
-  if (!status || typeof status !== "object") return true;
-  return modesActifs(status).length >= 2;
-}
-
-/**
- * Mode sur lequel BASCULER quand le mode courant n'est plus actif, ou `null`.
- *
- * ⚠️ Cas réel : `chat.mode = mattermost` et la connexion est supprimée ⇒ sans bascule,
- * l'interface afficherait un mode MORT (aucune conversation à lister). On retombe sur
- * `local`, qui est toujours actif ; sinon sur le premier mode encore actif.
- *
- * ⚠️ Cette fonction ne DÉCIDE rien côté serveur : elle rend le mode à demander, et
- * l'appelant l'écrit par `saveChatMode` (`PUT /api/bots/<id>/config`). Le serveur
- * reste l'autorité.
- */
-export function resolveActiveMode(status) {
-  if (!status || typeof status !== "object") return null;
-  const actifs = modesActifs(status);
-  const courant = status.mode;
-  if (typeof courant === "string" && actifs.includes(courant)) return null;
-  if (actifs.includes("local")) return "local";
-  return actifs[0] ?? null;
+export function plateformesAvertissements(status) {
+  if (!status || typeof status !== "object") return [];
+  const phrases = [];
+  for (const option of PLATEFORME_OPTIONS) {
+    const plateforme = option.plateforme;
+    const vue = status[plateforme];
+    if (!vue || typeof vue !== "object") continue;
+    const active = status?.plateformes?.[plateforme] === true;
+    const jeton = vue.jetonEnregistre === true;
+    if (active && !jeton) {
+      phrases.push(
+        `${option.label} est ACTIVÉ mais aucun jeton n'est enregistré : ` +
+          `aucune connexion ne sera ouverte (${plateforme === "discord" ? CHEMIN_DISCORD : CHEMIN_MATTERMOST}).`,
+      );
+    }
+    if (!active && jeton) {
+      phrases.push(
+        `${option.label} : jeton posé, plateforme DÉSACTIVÉE — elle ne se connecte pas ` +
+          "tant que l'interrupteur n'est pas allumé.",
+      );
+    }
+  }
+  return phrases;
 }
 
 /** En-têtes d'écriture de configuration (mêmes que la page `/config`). */
@@ -453,22 +467,25 @@ export async function fetchChatStatus(fetchImpl) {
 }
 
 /**
- * Enregistre le mode choisi (`PUT /api/bots/<id>/config`) puis rend l'état relu.
+ * Allume ou éteint UNE plateforme (`PUT /api/bots/<id>/config`) puis rend l'état
+ * relu.
  *
- * ⚠️ Le mode est un réglage du serveur (`chat.mode`, `apply: hot`) et il est
- * PROPRE AU BOT ACTIF : la route est donc celle de ce bot, jamais `/api/config`
- * (qui répondrait `bot_scoped_field`).
- *
- * ⚠️ Un autre onglet voit le changement au rechargement, et le serveur refuse
- * de son côté toute création en mode distant.
+ * ⚠️ `chat.<plateforme>.enabled` (`on` | `off`) est un réglage PROPRE AU BOT
+ * ACTIF : la route est donc celle de ce bot, jamais `/api/config` (qui répondrait
+ * `bot_scoped_field`).
+ * ⚠️ Ce n'est PLUS un choix exclusif : allumer Discord n'éteint pas Mattermost,
+ * et RIEN n'éteint le local (il n'est pas un réglage).
+ * ⚠️ Le JETON n'est pas touché ici : désactiver une plateforme ne détruit pas son
+ * secret (on peut la rallumer), et poser un jeton n'active rien — l'interrupteur
+ * est la seule intention.
  */
-export async function saveChatMode(mode, fetchImpl) {
+export async function savePlatformEnabled(plateforme, actif, fetchImpl) {
   const doFetch = fetchImpl ?? ((url, init) => fetch(url, init));
   const botId = await idBotActif(fetchImpl);
   const response = await doFetch(cheminConfigBot(botId), {
     method: "PUT",
     headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "chat-mode" },
-    body: JSON.stringify({ "chat.mode": mode }),
+    body: JSON.stringify({ [`chat.${plateforme}.enabled`]: actif === true ? "on" : "off" }),
   });
   if (!response.ok) {
     let detail = "";
@@ -496,70 +513,73 @@ function el(tag, attrs = {}, text) {
 }
 
 /**
- * Monte le sélecteur segmenté + son badge.
+ * Monte les DEUX INTERRUPTEURS de plateforme (Mattermost, Discord) + leur pastille.
+ *
+ * ⚠️ Ce n'est PLUS un sélecteur exclusif : chaque bouton est un interrupteur
+ * indépendant (`aria-pressed` = activé). Allumer l'un n'éteint pas l'autre, et le
+ * LOCAL n'a pas de bouton — il n'est pas un choix, il est toujours disponible.
+ *
+ * ⚠️ Les deux boutons sont TOUJOURS visibles (aucun masquage) : une plateforme
+ * éteinte doit pouvoir être allumée, et la voir éteinte est l'information. Seul
+ * l'état INCONNU (statut pas encore reçu) laisse les boutons à `aria-pressed=false`
+ * sans rien affirmer d'autre.
  *
  * @param {object} deps
  * @param {HTMLElement} deps.root conteneur (créé par l'appelant).
- * @param {(mode: string) => void} deps.onChange appelé au clic sur un mode.
+ * @param {(plateforme: string, actif: boolean) => void} deps.onChange appelé au
+ *   clic, avec l'état À DEMANDER (l'inverse de l'état affiché).
  * @returns {{ element: HTMLElement, update(status: unknown): void }}
  */
-export function initChatModeSelector(deps) {
+export function initPlatformToggles(deps) {
   const root = deps.root;
-  if (!root) throw new Error("initChatModeSelector : racine absente");
+  if (!root) throw new Error("initPlatformToggles : racine absente");
   const onChange = deps.onChange ?? (() => undefined);
 
   const group = el("div", {
     class: "chat-mode",
     role: "group",
-    "aria-label": "Mode de discussion",
+    "aria-label": "Plateformes de discussion",
   });
-  const buttons = new Map();
-  for (const option of CHAT_MODE_OPTIONS) {
+  /** `plateforme` → { button, badge } */
+  const entrees = new Map();
+  for (const option of PLATEFORME_OPTIONS) {
+    const badge = el(
+      "span",
+      { class: "chat-mode__badge", role: "img", "aria-label": CHAT_BADGES.off.label },
+      CHAT_BADGES.off.glyph,
+    );
     const button = el(
       "button",
       {
         class: "chat-mode__btn",
         type: "button",
-        "data-mode": option.mode,
+        "data-plateforme": option.plateforme,
         title: option.title,
         "aria-pressed": "false",
       },
       option.label,
     );
-    button.addEventListener("click", () => onChange(option.mode));
-    buttons.set(option.mode, button);
+    button.append(badge);
+    button.addEventListener("click", () => {
+      const actif = button.getAttribute("aria-pressed") === "true";
+      onChange(option.plateforme, !actif);
+    });
+    entrees.set(option.plateforme, { button, badge });
     group.append(button);
   }
-  const badge = el("span", {
-    class: "chat-mode__badge",
-    role: "img",
-    "aria-label": CHAT_BADGES.off.label,
-  }, CHAT_BADGES.off.glyph);
-  group.append(badge);
   root.replaceChildren(group);
 
   function update(status) {
-    const mode = status?.mode;
-    const actifs = modesActifs(status);
-    const visible = selectorVisible(status);
-    // ⚠️ MASQUÉ, pas désactivé : aucun espace vide, aucun bouton inutile. Le conteneur
-    // entier (`root` = `.sidebar__mode`) est retiré du flux, pas seulement grisé.
-    root.hidden = !visible;
-    group.hidden = !visible;
-    for (const [value, button] of buttons) {
-      const pressed = value === mode;
-      // ⚠️ Un mode INACTIF n'apparaît pas non plus DANS le sélecteur : c'est le but
-      // (« s'il n'y a que 2 types actifs dont aucun Discord, Discord n'apparaît plus »).
-      button.hidden = !actifs.includes(value);
-      button.setAttribute("aria-pressed", pressed ? "true" : "false");
-      button.classList.toggle("chat-mode__btn--active", pressed);
+    for (const [plateforme, entree] of entrees) {
+      const active = status?.plateformes?.[plateforme] === true;
+      entree.button.setAttribute("aria-pressed", active ? "true" : "false");
+      entree.button.classList.toggle("chat-mode__btn--active", active);
+      const state = badgeFor(status?.[plateforme]);
+      entree.badge.textContent = state.glyph;
+      entree.badge.title = state.title;
+      entree.badge.setAttribute("aria-label", `${state.label} — ${state.title}`);
+      entree.badge.setAttribute("data-etat", state.etat);
     }
-    const state = badgeFor(status);
-    badge.textContent = state.glyph;
-    badge.title = state.title;
-    badge.setAttribute("aria-label", `${state.label} — ${state.title}`);
-    badge.setAttribute("data-etat", state.etat);
-    return state;
   }
 
   return { element: group, update };

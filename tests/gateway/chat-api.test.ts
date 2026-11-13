@@ -4,11 +4,11 @@
  * Ce que ce fichier prouve :
  *  - la LECTURE est GARDÉE (en-tête `X-Yuki-Config: 1`), comme `/api/config` et
  *    `/api/sources` : sans lui, 403 ;
- *  - le mode vient de la CONFIGURATION (`chat.mode`), pas d'une constante :
- *    changer le réglage change la réponse (`apply: hot`) ;
+ *  - les INTERRUPTEURS viennent de la CONFIGURATION (`chat.mattermost.enabled`,
+ *    `chat.discord.enabled`), pas d'une constante : changer le réglage change la
+ *    réponse (`apply: hot`), et les deux sont INDÉPENDANTS ;
  *  - la réponse ne porte NI secret NI URL avec jeton ;
- *  - en mode distant, la création est refusée AVEC son motif (le même que
- *    celui opposé par le transport).
+ *  - le LOCAL n'est jamais coupé : la création locale reste toujours autorisée.
  *
  * ⚠️ Échoue sur le code d'origine : la route n'existe pas (`404`).
  */
@@ -63,6 +63,9 @@ async function startHarness(processEnv: Record<string, string> = {}): Promise<Ha
   });
   const service = new ChatService({
     mode: () => runtime.getString("chat.mode"),
+    // ⚠️ Les INTERRUPTEURS sont lus dans la configuration réelle du runtime
+    // (`apply: hot`) : c'est ce qui rend ce banc capable de prouver le câblage.
+    enabled: (plateforme) => runtime.getString(`chat.${plateforme}.enabled`) === "on",
     remoteAgents: () => runtime.getString("chat.remoteAgents"),
     remoteTools: () => runtime.getString("chat.remoteTools"),
   });
@@ -100,7 +103,7 @@ describe("GET /api/chat/status", () => {
     expect(allowed.status).toBe(200);
   });
 
-  it("défaut `local` : plateforme `on`, création autorisée", async () => {
+  it("défaut : aucune plateforme activée, local seul, création autorisée", async () => {
     const { baseUrl } = await startHarness();
     const response = await fetch(`${baseUrl}/api/chat/status`, { headers: READ_HEADERS });
     const body = (await response.json()) as {
@@ -110,6 +113,10 @@ describe("GET /api/chat/status", () => {
       distant: { agents: string; outils: string };
     };
     expect(body.mode).toBe("local");
+    expect((body as unknown as { plateformes: unknown }).plateformes).toEqual({
+      mattermost: false,
+      discord: false,
+    });
     expect(body.plateforme.etat).toBe("on");
     expect(body.creation).toEqual({ autorisee: true });
     // ⚠️ LES DEUX valeurs sont exposées : l'interface ne peut pas deviner l'une à
@@ -117,19 +124,31 @@ describe("GET /api/chat/status", () => {
     expect(body.distant).toEqual({ agents: "desactive", outils: "desactive" });
   });
 
-  it("est CÂBLÉE sur `chat.mode` : un changement du réglage change la réponse", async () => {
+  it("est CÂBLÉE sur les INTERRUPTEURS : un changement change la réponse", async () => {
     const { baseUrl, runtime } = await startHarness();
-    runtime.update({ "chat.mode": "mattermost" });
+    // ⚠️ Adapté le 2026-11-10 : ce n'est plus `chat.mode` (choix exclusif retiré,
+    // il coupait les plateformes non choisies) mais les deux interrupteurs.
+    runtime.update({ "chat.mattermost.enabled": "on" });
     const response = await fetch(`${baseUrl}/api/chat/status`, { headers: READ_HEADERS });
     const body = (await response.json()) as {
-      mode: string;
+      plateformes: { mattermost: boolean; discord: boolean };
       plateforme: { etat: string; raison?: string };
       creation: { autorisee: boolean; raison?: string };
     };
-    expect(body.mode).toBe("mattermost");
+    expect(body.plateformes).toEqual({ mattermost: true, discord: false });
+    // Plateforme ACTIVÉE mais aucun adaptateur câblé dans ce banc : `off`, avec un
+    // motif qui dit quoi faire.
     expect(body.plateforme.etat).toBe("off");
-    expect(body.creation.autorisee).toBe(false);
-    expect(body.creation.raison).toContain("désactivée");
+    // ⚠️ Le LOCAL reste disponible : la création n'est JAMAIS refusée.
+    expect(body.creation).toEqual({ autorisee: true });
+  });
+
+  it("les deux interrupteurs sont INDÉPENDANTS (les deux `on` en même temps)", async () => {
+    const { baseUrl, runtime } = await startHarness();
+    runtime.update({ "chat.mattermost.enabled": "on", "chat.discord.enabled": "on" });
+    const response = await fetch(`${baseUrl}/api/chat/status`, { headers: READ_HEADERS });
+    const body = (await response.json()) as { plateformes: { mattermost: boolean; discord: boolean } };
+    expect(body.plateformes).toEqual({ mattermost: true, discord: true });
   });
 
   it("ne porte JAMAIS de secret ni d'URL avec jeton", async () => {

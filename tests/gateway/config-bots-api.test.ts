@@ -31,9 +31,11 @@ import { createConfigRuntime } from "../../src/config/runtime.js";
 import { handleConfigRequest } from "../../src/gateway/routes/config.js";
 import { CAPACITES_BOT, type RegistreBots } from "../../src/bots/registry.js";
 import { createLogger } from "../../src/observability/logger.js";
-// ⚠️ Le VRAI module de l'interface (garde du lot 30) : c'est lui qui écrit
-// `chat.mode`, et il doit viser la route du bot actif.
-import { saveChatMode } from "../../public/ui/chat-mode.js";
+// ⚠️ Le VRAI module de l'interface (garde du lot 30, adaptée le 2026-11-10) :
+// c'est lui qui écrit les INTERRUPTEURS de plateforme, et il doit viser la route
+// du bot actif. ⚠️ Ce n'est plus `chat.mode` (choix exclusif retiré : il coupait
+// les plateformes non choisies) mais `chat.<plateforme>.enabled`.
+import { savePlatformEnabled } from "../../public/ui/chat-mode.js";
 
 const tempDirs: string[] = [];
 
@@ -263,8 +265,8 @@ describe("④ bot inconnu", () => {
   });
 });
 
-describe("⑤ garde du LOT 30 — le sélecteur de mode écrit toujours", () => {
-  it("`saveChatMode` passe par la route du bot actif et le serveur l'accepte", async () => {
+describe("⑤ garde du LOT 30 — l'interrupteur de plateforme écrit toujours", () => {
+  it("`savePlatformEnabled` passe par la route du bot actif et le serveur l'accepte", async () => {
     const b = banc({ registre: registreDeuxBots() });
     const urls: string[] = [];
     const fetchImpl = async (url: string, init?: RequestInit) => {
@@ -297,7 +299,7 @@ describe("⑤ garde du LOT 30 — le sélecteur de mode écrit toujours", () => 
       };
     };
 
-    const status = await saveChatMode("discord", fetchImpl as never);
+    const status = await savePlatformEnabled("discord", true, fetchImpl as never);
     expect(status.mode).toBe("discord");
     // Aucune écriture sur `/api/config` : il l'aurait refusée.
     expect(urls).toContain("/api/bots/yuki/config");
@@ -307,7 +309,7 @@ describe("⑤ garde du LOT 30 — le sélecteur de mode écrit toujours", () => 
       string,
       unknown
     >;
-    expect(overlay["chat.mode"]).toBe("discord");
+    expect(overlay["chat.discord.enabled"]).toBe("on");
   });
 });
 

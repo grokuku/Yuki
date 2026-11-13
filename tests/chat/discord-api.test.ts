@@ -46,6 +46,7 @@ function spyDiscord(overrides: Partial<ChatDiscordPort> = {}) {
     maxUploadBytes: state.maxUploadBytes,
     // ⚠️ `null` = pas encore lu : l'interface ne doit jamais prétendre qu'il est actif.
     intentMessageContent: null,
+    active: true,
     jetonEnregistre: state.token,
     plateforme: { etat: state.token ? "connexion" : "off" },
     synchronisation: {
@@ -118,6 +119,7 @@ function spyDiscord(overrides: Partial<ChatDiscordPort> = {}) {
 function spyMattermost(): ChatMattermostPort {
   const view = (): ChatMattermostView => ({
     url: "",
+    active: true,
     jetonEnregistre: false,
     plateforme: { etat: "off" },
     synchronisation: {

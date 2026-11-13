@@ -39,6 +39,7 @@ function spyPort(overrides: Partial<ChatMattermostPort> = {}) {
   };
   const view = (): ChatMattermostView => ({
     url: state.baseUrl,
+    active: true,
     jetonEnregistre: state.token,
     plateforme: { etat: state.token ? "connexion" : "off" },
     synchronisation: {
@@ -349,6 +350,9 @@ describe("état — jamais un jeton", () => {
     // une fuite. On vérifie donc qu'aucune valeur ne ressemble à un jeton Mattermost
     // (26 caractères alphanumériques).
     expect(Object.keys(body.mattermost).sort()).toEqual([
+      // Interrupteur de la plateforme (`chat.mattermost.enabled`) : un BOOLÉEN, lu
+      // par l'interface. Un jeton posé sans lui n'ouvre aucune connexion.
+      "active",
       "canaux",
       "jetonEnregistre",
       // Lot 30 : empreinte du miroir (conversations, messages, octets) — affichée

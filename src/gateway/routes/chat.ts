@@ -70,6 +70,14 @@ export interface ChatPlatformChannelView {
 
 /** État d'une plateforme exposé à la page `/config` (jamais un jeton). */
 export interface ChatPlatformView {
+  /**
+   * INTERRUPTEUR de la plateforme (`chat.<plateforme>.enabled === "on"`).
+   *
+   * ⚠️ Indépendant de `jetonEnregistre` : un jeton posé avec `active: false`
+   * n'ouvre AUCUNE connexion (« jeton posé, plateforme désactivée »). Et `true`
+   * sans jeton ne se connecte pas non plus : les deux sont nécessaires.
+   */
+  active: boolean;
   /** `true` si un jeton est au coffre. ⚠️ Jamais la valeur, jamais un préfixe. */
   jetonEnregistre: boolean;
   /** État de la plateforme (badge ●/◐/○ et raison lisible). */
@@ -196,11 +204,12 @@ export interface ChatApiDeps {
   /** Journal des échecs d'écriture HTTP (jamais un jeton, jamais une URL complète). */
   logger?: ChatApiLogger;
   /**
-   * Écrit `chat.mode` (réglage `apply: hot`).
+   * Écrit `chat.mode` (clé LEGACY, `apply: hot`).
    *
-   * ⚠️ Appelé APRÈS la suppression d'un miroir quand le mode courant désignait la
-   * plateforme supprimée : sans cette retombée sur `local`, l'interface afficherait un
-   * mode MORT (plus aucune conversation à lister).
+   * ⚠️ Appelé APRÈS la suppression d'un miroir quand la valeur legacy désignait la
+   * plateforme supprimée. ⚠️ Depuis 2026-11-10 cette retombée n'a plus d'effet
+   * d'AFFICHAGE (aucun mode n'est filtré) : elle est conservée pour que la valeur
+   * héritée ne pointe pas sur une plateforme vidée.
    */
   saveMode?: (mode: ChatMode) => void;
 }
@@ -550,8 +559,8 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
           `a échoué : ${error instanceof Error ? error.message : String(error)}`,
       });
     }
-    // ⚠️ RETOMBÉE DU MODE : si `chat.mode` désignait la plateforme qu'on vient de vider,
-    // le laisser tel quel afficherait un mode MORT (aucune conversation à lister).
+    // ⚠️ RETOMBÉE LEGACY : si `chat.mode` désignait la plateforme qu'on vient de vider,
+    // la valeur héritée ne doit pas pointer sur une plateforme morte.
     const modeCourant = deps.service.status().mode;
     const bascule = modeCourant === platform && deps.saveMode !== undefined;
     if (bascule) deps.saveMode?.("local");

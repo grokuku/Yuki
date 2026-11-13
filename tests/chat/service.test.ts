@@ -2,11 +2,12 @@
  * Service de DISCUSSION (lot 18, lot 1).
  *
  * Ce que ce fichier verrouille :
- *  - le mode est LU à chaque appel (`apply: hot`), replié sur `local` si la
- *    valeur n'est pas un mode connu (jamais une exception dans une route) ;
+ *  - les INTERRUPTEURS de plateforme (`chat.<plateforme>.enabled`) sont LUS à
+ *    chaque appel : 0, 1 ou 2 plateformes actives, INDÉPENDAMMENT ;
+ *  - ⚠️ le LOCAL n'est jamais coupé : la CRÉATION d'une conversation locale
+ *    n'est plus refusée (l'ancien refus `CREATION_REFUSALS` est retiré avec le
+ *    mode exclusif) ;
  *  - le statut ne porte NI secret NI URL, seulement un état et une raison ;
- *  - en mode distant, la CRÉATION est refusée avec un motif lisible — le même
- *    que celui opposé au transport ;
  *  - `chat.remoteAgents` est LU (défaut `desactive`) : c'est un réglage, pas une
  *    constante cachée ; `chat.remoteMemory` a été RETIRÉ (aucun consommateur).
  *
@@ -22,25 +23,45 @@ import {
   type RemoteConversation,
 } from "../../src/chat/index.js";
 
-/** Service construit sur un mode PILOTABLE (aucun fichier, aucune config). */
-function serviceWith(mode: string, extra: Partial<ChatServiceOptions> = {}) {
+/**
+ * Service construit sur des INTERRUPTEURS pilotables (aucun fichier, aucune config).
+ *
+ * ⚠️ `mode` reste une valeur de compatibilité ; ce qui décide, c'est `actifs`.
+ */
+function serviceWith(
+  mode: string,
+  actifs: readonly ("mattermost" | "discord")[] = [],
+  extra: Partial<ChatServiceOptions> = {},
+) {
   let current = mode;
-  const service = new ChatService({ mode: () => current, ...extra });
+  let allumes = new Set(actifs);
+  const service = new ChatService({
+    mode: () => current,
+    enabled: (plateforme) => allumes.has(plateforme),
+    ...extra,
+  });
   return {
     service,
     setMode(next: string) {
       current = next;
     },
+    setActifs(next: readonly ("mattermost" | "discord")[]) {
+      allumes = new Set(next);
+    },
   };
 }
 
-describe("mode de discussion — lu à chaud, jamais deviné", () => {
-  it("le mode par défaut du service est `local` et la création y est permise", () => {
+describe("interrupteurs de plateforme — lus à chaud, jamais devinés", () => {
+  it("aucune plateforme activée ⇒ le LOCAL seul, et la création est permise", () => {
     const { service } = serviceWith("local");
     expect(service.mode()).toBe("local");
+    expect(service.plateformesActives()).toEqual([]);
     expect(service.isRemote()).toBe(false);
     expect(service.creationRefusal()).toBeNull();
     expect(service.status().creation).toEqual({ autorisee: true });
+    expect(service.status().plateformes).toEqual({ mattermost: false, discord: false });
+    // Sans plateforme activée, l'état décrit le LOCAL — ce n'est pas une panne.
+    expect(service.status().plateforme.etat).toBe("on");
   });
 
   it("un mode inconnu retombe sur `local` (aucune exception dans une route)", () => {
@@ -49,43 +70,38 @@ describe("mode de discussion — lu à chaud, jamais deviné", () => {
     expect(service.adapter()).not.toBeNull();
   });
 
-  it("le statut SUIT le mode sans redémarrage (apply: hot)", () => {
-    const { service, setMode } = serviceWith("local");
-    expect(service.status().plateforme.etat).toBe("on");
-    setMode("mattermost");
-    const status = service.status();
-    expect(status.mode).toBe("mattermost");
-    // ⚠️ Depuis le lot 2, Mattermost est LIVRÉ mais son fournisseur d'adaptateur est
-    // enregistré au démarrage du serveur : ici, aucun n'est câblé, donc l'état est `off`
-    // et le motif DIT QUOI FAIRE (URL + jeton dans /config → Conversation).
-    expect(status.plateforme.etat).toBe("off");
-    expect(status.plateforme.raison).toContain("/config → Conversation");
-    setMode("discord");
-    // ⚠️ Lot 21 : Discord est LIVRÉ, mais comme Mattermost son fournisseur d'adaptateur
-    // est enregistré au démarrage du serveur. Sans lui, l'état est `off` et le motif DIT
-    // QUOI FAIRE (jeton + intent MESSAGE_CONTENT).
-    expect(service.status().plateforme.etat).toBe("off");
-    expect(service.status().plateforme.raison).toContain("/config → Conversation");
+  it("le statut SUIT les interrupteurs sans redémarrage (apply: hot)", () => {
+    const { service, setActifs } = serviceWith("local");
+    setActifs(["mattermost"]);
+    expect(service.plateformesActives()).toEqual(["mattermost"]);
+    // ⚠️ Mattermost est LIVRÉ mais son fournisseur d'adaptateur est enregistré au
+    // démarrage du serveur : ici, aucun n'est câblé, donc l'état est `off` et le motif
+    // DIT QUOI FAIRE (URL + jeton dans /config → Conversation).
+    expect(service.platformStatus("mattermost").etat).toBe("off");
+    expect(service.platformStatus("mattermost").raison).toContain("/config → Conversation");
+    // ⚠️ LES DEUX peuvent être allumées EN MÊME TEMPS (c'était la régression).
+    setActifs(["mattermost", "discord"]);
+    expect(service.status().plateformes).toEqual({ mattermost: true, discord: true });
+    expect(service.platformStatus("discord").raison).toContain("/config → Conversation");
   });
 });
 
-describe("mode distant — création refusée avec un motif lisible", () => {
-  it("Mattermost : refus explicite (la liste vient des canaux synchronisés)", () => {
-    const { service } = serviceWith("mattermost");
-    const refusal = service.creationRefusal();
-    expect(refusal).toContain("création d'une conversation locale est désactivée");
-    expect(service.status().creation).toEqual({ autorisee: false, raison: refusal });
-    expect(service.isRemote()).toBe(true);
+describe("le LOCAL n'est jamais coupé par une plateforme activée", () => {
+  it("deux plateformes actives ⇒ création locale TOUJOURS permise", () => {
+    const { service } = serviceWith("mattermost", ["mattermost", "discord"]);
+    // ⚠️ C'ÉTAIT LA RÉGRESSION : dès qu'un mode distant était choisi, la création
+    // locale et la liste locale disparaissaient.
+    expect(service.creationRefusal()).toBeNull();
+    expect(service.status().creation).toEqual({ autorisee: true });
+    expect(service.isRemote()).toBe(false);
   });
 
-  it("Discord : refus explicite (la liste vient des salons synchronisés)", () => {
-    const { service } = serviceWith("discord");
-    // ⚠️ Lot 21 : le motif ne dit plus « pas encore configuré » (ce serait faux) mais
-    // POURQUOI la création locale n'a pas de sens, et ce qu'il faut faire à la place.
-    const refusal = service.creationRefusal();
-    expect(refusal).toContain("création d'une conversation locale est désactivée");
-    expect(refusal).toContain("seulement si elle est citée");
-    expect(service.status().creation).toEqual({ autorisee: false, raison: refusal });
+  it("un `chat.mode` distant ne change rien à la disponibilité du local", () => {
+    // La clé existe encore (compatibilité) mais ne décide plus de rien.
+    const { service } = serviceWith("discord", []);
+    expect(service.mode()).toBe("discord");
+    expect(service.plateformesActives()).toEqual([]);
+    expect(service.creationRefusal()).toBeNull();
   });
 });
 
@@ -104,11 +120,11 @@ describe("capacités distantes — DEUX réglages lus, défaut SÉCURISÉ", () =
   it("les deux réglages sont réellement LUS, et INDÉPENDANTS", () => {
     // « agents non + outils oui » : la configuration que l'utilisateur demandait
     // (génération d'image dans un canal, aucune délégation).
-    const outilsSeuls = serviceWith("mattermost", { remoteTools: () => "actives" }).service;
+    const outilsSeuls = serviceWith("mattermost", ["mattermost"], { remoteTools: () => "actives" }).service;
     expect(outilsSeuls.status().distant).toEqual({ agents: "desactive", outils: "actives" });
-    const agentsSeuls = serviceWith("mattermost", { remoteAgents: () => "actives" }).service;
+    const agentsSeuls = serviceWith("mattermost", ["mattermost"], { remoteAgents: () => "actives" }).service;
     expect(agentsSeuls.status().distant).toEqual({ agents: "actives", outils: "desactive" });
-    const lesDeux = serviceWith("mattermost", {
+    const lesDeux = serviceWith("mattermost", ["mattermost"], {
       remoteAgents: () => "actives",
       remoteTools: () => "actives",
     }).service;
@@ -116,7 +132,7 @@ describe("capacités distantes — DEUX réglages lus, défaut SÉCURISÉ", () =
   });
 
   it("une valeur inattendue retombe sur `desactive` (jamais une activation par accident)", () => {
-    const { service } = serviceWith("mattermost", {
+    const { service } = serviceWith("mattermost", ["mattermost"], {
       remoteAgents: () => "oui",
       remoteTools: () => "ACTIVES",
     });
@@ -127,7 +143,7 @@ describe("capacités distantes — DEUX réglages lus, défaut SÉCURISÉ", () =
 
 describe("miroir — lecture seule, vide au lot 1", () => {
   it("aucune conversation distillée quand le miroir est vide", () => {
-    const { service } = serviceWith("mattermost");
+    const { service } = serviceWith("mattermost", ["mattermost"]);
     expect(service.conversations()).toEqual([]);
     expect(service.conversation("mm-canal")).toBeNull();
     expect(service.status().plateforme.dernierContact).toBeUndefined();
@@ -157,7 +173,11 @@ describe("miroir — lecture seule, vide au lot 1", () => {
       },
     ];
     const mirror: ChatMirror = { conversations: () => conversations, messages: () => [] };
-    const service = new ChatService({ mode: () => "mattermost", mirror });
+    const service = new ChatService({
+      mode: () => "mattermost",
+      enabled: (plateforme) => plateforme === "mattermost",
+      mirror,
+    });
     expect(service.conversation("mm-b")?.title).toBe("Canal B");
     expect(service.status().plateforme.dernierContact).toBe("2026-10-31T09:00:00.000Z");
   });

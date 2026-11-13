@@ -99,6 +99,7 @@ function portMattermost(
     supprimerMiroir: () => store.purgePlatform("mattermost"),
     view: () => ({
       url,
+      active: true,
       jetonEnregistre: coffre.has(MATTERMOST_TOKEN_SECRET_NAME),
       plateforme: adapter.status(),
       synchronisation: adapter.syncStatus(),
@@ -129,6 +130,7 @@ function portDiscord(store: ChatMirrorStore, coffre: SecretStore): ChatDiscordPo
       guildId: "",
       maxUploadBytes: 8 * 1024 * 1024,
       intentMessageContent: null,
+      active: true,
       jetonEnregistre: coffre.has(DISCORD_TOKEN_SECRET_NAME),
       plateforme: { etat: "off" },
       synchronisation: {

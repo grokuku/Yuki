@@ -30,7 +30,9 @@
  * distants » (`chat.remoteAgents`) et « Outils distants » (`chat.remoteTools`) sont
  * des clés d'INSTANCE (classement validé) et vivent désormais dans le catalogue de
  * la page Instance, onglet « Agents » (`config-fields.js`, groupe `acces-distant`).
- * Seul `chat.mode` — le choix de plateforme d'UN bot — reste ici.
+ * Seuls les INTERRUPTEURS de plateforme d'UN bot (`chat.mattermost.enabled`,
+ * `chat.discord.enabled`) et ses jetons restent ici — plus de menu exclusif :
+ * le LOCAL n'est pas un choix, il est toujours disponible.
  */
 
 import { badgeFor } from "./chat-mode.js";
@@ -218,7 +220,7 @@ export function initChatPanel(deps) {
    *
    * ⚠️ LOT 42 — POURQUOI CE PANNEAU SAIT VISER UN AUTRE BOT QUE CELUI DE LA PILE :
    * les routes d'instance `/api/chat/**` sont liées au bot de la PILE (elles lisent et
-   * écrivent SON miroir, SON jeton, SON `chat.mode`). Les monter pour un autre bot
+   * écrivent SON miroir, SON jeton, SES interrupteurs). Les monter pour un autre bot
    * afficherait les réglages de `yuki` et écrirait CHEZ LUI. Pour tout autre bot, le
    * panneau passe donc par SES routes : `PUT /api/bots/<id>/config` (réglages propres)
    * et le coffre (`POST /api/secrets`, nom `YUKI_CHAT_<BOT>__<PLATEFORME>`).
@@ -305,7 +307,7 @@ export function initChatPanel(deps) {
    * ils sont rendus par le CATALOGUE de la page Instance (onglet « Agents »,
    * `config-fields.js` groupe `acces-distant`, `#chat-remote-agents` /
    * `#chat-remote-tools`). Ce panneau-ci ne rend plus que les PLATEFORMES et les
-   * canaux suivis de CE bot (`chat.mode` reste une clé de bot).
+   * canaux suivis de CE bot (ses interrupteurs de plateforme restent des clés de bot).
    *
    * ⚠️ Les garder ici en double aurait créé DEUX contrôles écrivant la même clé,
    * dont un sur une route qui la refuse (`instance_scoped_field`).
@@ -900,7 +902,7 @@ export function texteEtatJetonBot(botId, plateforme, noms, coffreConfigure = tru
   return `Aucun jeton pour ce bot : enregistrez-le ci-dessus (nom du coffre : ${attendus[0]}).`;
 }
 
-/** Plateformes de discussion proposées à un bot (mêmes identifiants que `chat.mode`). */
+/** Plateformes DISTANTES d'un bot — chacune avec SON interrupteur et SON jeton. */
 const PLATEFORMES_BOT = [
   {
     id: "mattermost",
@@ -916,13 +918,6 @@ const PLATEFORMES_BOT = [
       "Le bot se connecte à Discord avec SON jeton : il lit les salons TEXTE des " +
       "serveurs où il est présent (deux semaines d'historique, 1 000 messages au plus).",
   },
-];
-
-/** Choix de plateforme (`chat.mode`) : libellé lisible pour chaque valeur du schéma. */
-const MODES_BOT = [
-  { valeur: "local", libelle: "Local — aucune plateforme" },
-  { valeur: "mattermost", libelle: "Mattermost" },
-  { valeur: "discord", libelle: "Discord" },
 ];
 
 /**
@@ -953,8 +948,10 @@ export function texteEtatConnexionBot(demarre) {
  * Panneau « Plateformes » d'un bot AUTRE que celui de la pile (`/bots?b=<id>`).
  *
  * ⚠️ ÉCRITURES, toutes vers CE bot :
- *  - `chat.mode`, `chat.discord.guildId`, `chat.discord.maxUploadBytes` →
- *    `PUT /api/bots/<id>/config` (ce sont des clés `scope: bot`) ;
+ *  - `chat.mattermost.enabled`, `chat.discord.enabled`, `chat.discord.guildId`,
+ *    `chat.discord.maxUploadBytes` → `PUT /api/bots/<id>/config` (clés `scope:
+ *    bot`). ⚠️ `chat.mode` n'est PLUS écrit ici : c'est un choix exclusif retiré
+ *    (il coupait les plateformes non choisies) ;
  *  - le jeton → `POST /api/secrets` au nom `YUKI_CHAT_<BOT>__<PLATEFORME>`.
  * ⚠️ AUCUNE route d'instance `/api/chat/**` n'est appelée ici : elles écrivent dans
  * l'overlay et le jeton du bot de la PILE (`yuki`). C'est le bug le plus grave que
@@ -977,7 +974,7 @@ export function initChatPanelBot(deps) {
 
   /** État LU (jamais deviné) : valeurs effectives du bot + noms du coffre. */
   const etat = {
-    mode: "local",
+    active: { mattermost: false, discord: false },
     guildId: "",
     maxUploadBytes: "",
     noms: new Set(),
@@ -1026,60 +1023,61 @@ export function initChatPanelBot(deps) {
       "enregistrés pour ce bot, jamais pour celui de la pile.",
   });
 
-  // ─── ① Choix de la plateforme (`chat.mode`) ─────────────────────────────
-  const modeSelect = h("select", {
-    class: "config-input",
-    id: "chat-bot-mode",
-    "aria-label": `Plateforme de discussion de ${botNom}`,
+  // ─── ① Plateformes : DEUX INTERRUPTEURS INDÉPENDANTS ─────────────────────
+  // ⚠️ Ce n'est PLUS un menu déroulant exclusif (`chat.mode`) : choisir « Local »
+  // COUPAIT Mattermost et Discord (régression signalée). Un bot est joignable
+  // sur PLUSIEURS plateformes EN MÊME TEMPS.
+  // ⚠️ Le LOCAL n'est pas un choix : il est TOUJOURS disponible, donc il n'a pas
+  // d'interrupteur — un interrupteur « local » laisserait croire qu'on peut le
+  // couper, ce qui était précisément le bug.
+  const localToujours = h("p", {
+    class: "config-helper",
+    text:
+      "Le LOCAL n'est pas une option : ce bot répond toujours dans ses conversations " +
+      "Yuki. Les deux interrupteurs ci-dessous AJOUTENT une plateforme, ils ne " +
+      "remplacent rien.",
   });
-  for (const mode of MODES_BOT) {
-    modeSelect.append(h("option", { value: mode.valeur, text: mode.libelle }));
+
+  /** Interrupteur d'une plateforme : bouton + état lisible + statut d'écriture. */
+  function interrupteurPlateforme(plateforme) {
+    const bouton = h("button", {
+      class: "button button--small",
+      type: "button",
+      id: `chat-bot-${plateforme}-enabled`,
+      "aria-pressed": "false",
+      text: "Désactivée",
+    });
+    const etatTexte = h("p", { class: "config-helper" });
+    const statut = h("p", { class: "config-helper", role: "status" });
+    bouton.addEventListener("click", () => {
+      void (async () => {
+        const actif = bouton.getAttribute("aria-pressed") === "true";
+        bouton.disabled = true;
+        statut.textContent = "Enregistrement…";
+        try {
+          await request(chemin, {
+            method: "PUT",
+            headers: BOT_WRITE_HEADERS,
+            body: JSON.stringify({ [`chat.${plateforme}.enabled`]: actif ? "off" : "on" }),
+          });
+          statut.textContent = actif
+            ? `${plateforme === "discord" ? "Discord" : "Mattermost"} désactivée pour ${botNom}.`
+            : `${plateforme === "discord" ? "Discord" : "Mattermost"} activée pour ${botNom}.`;
+          await refresh();
+        } catch (error) {
+          statut.textContent = "";
+          await report("Plateforme non enregistrée", error);
+        } finally {
+          bouton.disabled = false;
+        }
+      })();
+    });
+    return { bouton, etatTexte, statut };
   }
-  const saveMode = h("button", {
-    class: "button button--small",
-    type: "button",
-    text: "Enregistrer la plateforme",
-  });
-  const modeStatut = h("p", { class: "config-helper", role: "status" });
-  saveMode.addEventListener("click", () => {
-    void (async () => {
-      const valeur = String(modeSelect.value ?? "");
-      if (!MODES_BOT.some((mode) => mode.valeur === valeur)) {
-        modeStatut.textContent = "Choisissez Local, Mattermost ou Discord.";
-        return;
-      }
-      saveMode.disabled = true;
-      modeStatut.textContent = "Enregistrement…";
-      try {
-        await request(chemin, {
-          method: "PUT",
-          headers: BOT_WRITE_HEADERS,
-          body: JSON.stringify({ "chat.mode": valeur }),
-        });
-        modeStatut.textContent = `Plateforme de ${botNom} enregistrée : ${libelleMode(valeur)}.`;
-        await refresh();
-      } catch (error) {
-        modeStatut.textContent = "";
-        await report("Plateforme non enregistrée", error);
-      } finally {
-        saveMode.disabled = false;
-      }
-    })();
-  });
-  const modeSection = h("section", { class: "config-group" }, [
-    h("h2", { class: "config-group__title", text: "Plateforme de discussion" }),
-    h("p", {
-      class: "config-helper",
-      text:
-        "Quelle plateforme ce bot utilise comme discussion PRINCIPALE. La " +
-        "synchronisation, elle, démarre dès qu'un jeton est présent.",
-    }),
-    h("div", { class: "config-row" }, [
-      h("label", { class: "config-label", for: "chat-bot-mode", text: "Plateforme" }),
-      h("div", { class: "config-actions" }, [modeSelect, saveMode]),
-    ]),
-    modeStatut,
-  ]);
+  const interrupteurs = {
+    mattermost: interrupteurPlateforme("mattermost"),
+    discord: interrupteurPlateforme("discord"),
+  };
 
   // ─── ② Jeton + réglages propres, une section par plateforme ─────────────
   const sections = PLATEFORMES_BOT.map((plateforme) => {
@@ -1132,9 +1130,23 @@ export function initChatPanelBot(deps) {
       })();
     });
 
+    const inter = interrupteurs[plateforme.id];
+
     const enfants = [
       h("h2", { class: "config-group__title", text: plateforme.titre }),
       h("p", { class: "config-helper", text: plateforme.intro }),
+      // ① L'INTERRUPTEUR d'abord : un jeton sans interrupteur allumé ne se
+      // connecte pas, c'est donc la première chose à décider.
+      h("div", { class: "chat-panel__field" }, [
+        h("label", {
+          class: "config-label",
+          for: `chat-bot-${plateforme.id}-enabled`,
+          text: "Plateforme activée",
+        }),
+        h("div", { class: "config-actions" }, [inter.bouton]),
+        inter.etatTexte,
+        inter.statut,
+      ]),
       h("div", { class: "chat-panel__field" }, [
         h("label", {
           class: "config-label",
@@ -1256,13 +1268,42 @@ export function initChatPanelBot(deps) {
       "d'APPROBATION ne sont pas relayées dans un canal.",
   });
 
-  function libelleMode(valeur) {
-    return MODES_BOT.find((mode) => mode.valeur === valeur)?.libelle ?? valeur;
+  /**
+   * Phrase d'HONNÊTETÉ d'un interrupteur, à partir des deux faits LUS.
+   *
+   * ⚠️ Les deux incohérences sont dites, jamais tues : « allumée sans jeton »
+   * n'ouvre aucune connexion, et « jeton posé, plateforme désactivée » est le cas
+   * le plus trompeur — un jeton seul n'active RIEN.
+   */
+  function texteInterrupteur(id, actif, jetonPose) {
+    const nom = id === "discord" ? "Discord" : "Mattermost";
+    if (actif && !jetonPose) {
+      return (
+        `${nom} : ACTIVÉE, mais aucun jeton n'est enregistré pour ce bot — ` +
+        "aucune connexion ne sera ouverte."
+      );
+    }
+    if (!actif && jetonPose) {
+      return `${nom} : jeton posé, plateforme DÉSACTIVÉE — elle ne se connecte pas.`;
+    }
+    return actif
+      ? `${nom} : ACTIVÉE (le bot s'y connecte à son démarrage si le jeton est présent).`
+      : `${nom} : désactivée.`;
+  }
+
+  /** Le bot a-t-il un jeton pour cette plateforme ? (nom par bot, jamais la valeur). */
+  function jetonPose(id) {
+    return nomsSecretsChatBot(botId, id).some((nom) => etat.noms.has(nom));
   }
 
   function render() {
-    // ⚠️ On ne réécrit pas le champ que l'utilisateur est en train de changer.
-    if (document.activeElement !== modeSelect) modeSelect.value = etat.mode;
+    for (const id of ["mattermost", "discord"]) {
+      const inter = interrupteurs[id];
+      const actif = etat.active[id] === true;
+      inter.bouton.setAttribute("aria-pressed", actif ? "true" : "false");
+      inter.bouton.textContent = actif ? "Activée" : "Désactivée";
+      inter.etatTexte.textContent = texteInterrupteur(id, actif, jetonPose(id));
+    }
     for (const section of sections) {
       section.jetonEtat.textContent = texteEtatJetonBot(
         botId,
@@ -1287,8 +1328,12 @@ export function initChatPanelBot(deps) {
     try {
       const config = await request(chemin, { headers: READ_HEADERS, cache: "no-store" });
       const champs = config?.fields ?? {};
-      etat.mode =
-        typeof champs["chat.mode"]?.value === "string" ? champs["chat.mode"].value : "local";
+      // ⚠️ Les INTERRUPTEURS sont lus, jamais devinés : une valeur absente ou
+      // inattendue vaut `off` (le défaut du schéma).
+      etat.active = {
+        mattermost: champs["chat.mattermost.enabled"]?.value === "on",
+        discord: champs["chat.discord.enabled"]?.value === "on",
+      };
       etat.guildId = String(champs["chat.discord.guildId"]?.value ?? "");
       etat.maxUploadBytes = String(champs["chat.discord.maxUploadBytes"]?.value ?? "");
     } catch (error) {
@@ -1310,7 +1355,15 @@ export function initChatPanelBot(deps) {
     signalerPremierRendu();
   }
 
-  root.replaceChildren(titre, identite, modeSection, ...sections.map((s) => s.element), etatConnexion, erreurLecture, limites);
+  root.replaceChildren(
+    titre,
+    identite,
+    localToujours,
+    ...sections.map((s) => s.element),
+    etatConnexion,
+    erreurLecture,
+    limites,
+  );
   render();
   void refresh();
   return { element: root, refresh };

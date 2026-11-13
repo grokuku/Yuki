@@ -1,9 +1,13 @@
 /**
- * Sélecteur de MODE DE DISCUSSION (lot 18, lot 1) — CÔTÉ INTERFACE.
+ * PLATEFORMES DE DISCUSSION — CÔTÉ INTERFACE (adapté le 2026-11-10).
+ *
+ * ⚠️ Ce n'est plus un sélecteur exclusif : les plateformes sont des
+ * INTERRUPTEURS indépendants, et le LOCAL n'est pas un choix (il est toujours
+ * disponible). Les règles de VéRITÉ de l'encart, elles, sont inchangées.
  *
  * Ce que ce fichier prouve :
- *  - les trois modes demandés existent (Local · Mattermost · Discord) et le
- *    badge porte ●/◐/○ avec la RAISON EXACTE en `title` ;
+ *  - les deux plateformes distantes existent (Mattermost · Discord) et la
+ *    pastille porte ●/◐/○ avec la RAISON EXACTE en `title` ;
  *  - le refus de création vient du SERVEUR (`creation.autorisee === false`) :
  *    l'interface ne décide pas, elle relaie ;
  *  - les TROIS chemins de clic (barre latérale, menu téléphone, bouton de l'état
@@ -23,42 +27,80 @@ import { describe, expect, it } from "vitest";
 
 import {
   CHAT_BADGES,
-  CHAT_MODE_OPTIONS,
   CHEMIN_DISCORD,
   CHEMIN_MATTERMOST,
+  PLATEFORME_OPTIONS,
   badgeFor,
-  chatModeLabel,
   creationRefusal,
-  modeNotice,
-  saveChatMode,
+  plateformesActives,
+  plateformesAvertissements,
+  platformLabel,
+  platformsNotice,
+  savePlatformEnabled,
 } from "../../public/ui/chat-mode.js";
 
 const read = (name: string): string =>
   readFileSync(join(process.cwd(), "public", "ui", name), "utf8");
 
-/** Corps de `GET /api/chat/status` en mode distant. */
+/**
+ * Corps de `GET /api/chat/status` avec UNE plateforme ACTIVÉE.
+ *
+ * ⚠️ `plateformes` porte les INTERRUPTEURS (`chat.<plateforme>.enabled`) : c'est
+ * la seule décision d'activation. `creation.autorisee` est toujours vrai (le
+ * local n'est plus un mode qu'on quitte).
+ */
 function remoteStatus(mode: string, etat = "off", raison = "Raison exacte.") {
   return {
     mode,
+    plateformes: {
+      mattermost: mode === "mattermost",
+      discord: mode === "discord",
+    },
     plateforme: { etat, raison },
-    creation: { autorisee: false, raison: "La création est désactivée." },
-    distant: { agents: "desactive", memoire: "desactive" },
+    // ⚠️ La vue PAR PLATEFORME : c'est elle que lit l'encart (plus de « mode
+    // courant » à interroger).
+    ...(mode === "mattermost" || mode === "discord"
+      ? { [mode]: { jetonEnregistre: true, plateforme: { etat, raison }, canaux: [] } }
+      : {}),
+    creation: { autorisee: true },
+    distant: { agents: "desactive", outils: "desactive" },
   };
 }
 
-describe("les TROIS modes demandés", () => {
-  it("Local · Mattermost · Discord, dans cet ordre", () => {
-    expect(CHAT_MODE_OPTIONS.map((option) => option.mode)).toEqual([
-      "local",
+describe("les DEUX plateformes distantes (le local n'est pas un choix)", () => {
+  it("Mattermost · Discord, dans cet ordre — et AUCUN « local » dans la liste", () => {
+    expect(PLATEFORME_OPTIONS.map((option) => option.plateforme)).toEqual([
       "mattermost",
       "discord",
     ]);
-    expect(CHAT_MODE_OPTIONS.map((option) => option.label)).toEqual([
-      "Local",
-      "Mattermost",
-      "Discord",
+    expect(PLATEFORME_OPTIONS.map((option) => option.label)).toEqual(["Mattermost", "Discord"]);
+    expect(platformLabel("mattermost")).toBe("Mattermost");
+    // ⚠️ Régression : `local` était une des trois valeurs EXCLUSIVES du sélecteur.
+    expect(PLATEFORME_OPTIONS.some((option) => option.plateforme === "local")).toBe(false);
+  });
+
+  it("`plateformesActives` ne rend QUE ce qui est allumé (0, 1 ou 2)", () => {
+    expect(plateformesActives({ plateformes: { mattermost: false, discord: false } })).toEqual([]);
+    expect(plateformesActives({ plateformes: { mattermost: true, discord: false } })).toEqual([
+      "mattermost",
     ]);
-    expect(chatModeLabel("mattermost")).toBe("Mattermost");
+    expect(plateformesActives({ plateformes: { mattermost: true, discord: true } })).toEqual([
+      "mattermost",
+      "discord",
+    ]);
+    // État inconnu : rien d'affirmé, et surtout pas un « local » inventé.
+    expect(plateformesActives(null)).toEqual([]);
+    expect(plateformesActives({})).toEqual([]);
+  });
+
+  it("un jeton posé avec l'interrupteur éteint est DIT (« jeton posé, désactivée »)", () => {
+    const phrases = plateformesAvertissements({
+      plateformes: { mattermost: false, discord: true },
+      mattermost: { jetonEnregistre: true },
+      discord: { jetonEnregistre: false },
+    });
+    expect(phrases.join(" ")).toContain("jeton posé, plateforme DÉSACTIVÉE");
+    expect(phrases.join(" ")).toContain("ACTIVÉ mais aucun jeton");
   });
 });
 
@@ -97,8 +139,10 @@ describe("création désactivée — décision du SERVEUR, relayée", () => {
     ).toBeNull();
   });
 
-  it("en mode distant, la raison EXACTE du serveur est rendue", () => {
-    expect(creationRefusal(remoteStatus("mattermost"))).toBe("La création est désactivée.");
+  it("si le serveur refusait, sa raison EXACTE serait relayée (contrat conservé)", () => {
+    expect(
+      creationRefusal({ ...remoteStatus("mattermost"), creation: { autorisee: false, raison: "La création est désactivée." } }),
+    ).toBe("La création est désactivée.");
     // État inconnu (serveur illisible) : on ne prétend pas que c'est permis ?
     // Non : sans réponse du serveur, on n'a pas de refus ⇒ rien à bloquer ici,
     // et le serveur refusera de toute façon (`creation_desactivee`).
@@ -109,16 +153,16 @@ describe("création désactivée — décision du SERVEUR, relayée", () => {
     // ⚠️ La décision exige maintenant l'état de la LISTE : ici « liste reçue et vide ».
     const listeVide = { nombre: 0, connue: true };
     const mattermostConnecte = remoteStatus("mattermost", "on", "Mode Mattermost connecté.");
-    expect(modeNotice(mattermostConnecte, listeVide)).toMatchObject({ kind: "vide" });
-    expect(modeNotice(mattermostConnecte, listeVide)?.titre).toContain("Aucun canal synchronisé");
+    expect(platformsNotice(mattermostConnecte, listeVide)).toMatchObject({ kind: "vide" });
+    expect(platformsNotice(mattermostConnecte, listeVide)?.titre).toContain("Aucun canal synchronisé");
     // ⚠️ Lot 21 : Discord est LIVRÉ. Le bandeau « ne fait rien pour l'instant » serait
     // faux ; l'état vide DIT quoi faire (jeton + intent MESSAGE_CONTENT).
     const discordConnecte = remoteStatus("discord", "on", "Mode Discord connecté.");
-    expect(modeNotice(discordConnecte, listeVide)).toMatchObject({ kind: "vide" });
-    expect(modeNotice(discordConnecte, listeVide)?.titre).toContain("Aucun salon synchronisé");
-    expect(modeNotice(discordConnecte, listeVide)?.detail).toContain("MESSAGE_CONTENT");
+    expect(platformsNotice(discordConnecte, listeVide)).toMatchObject({ kind: "vide" });
+    expect(platformsNotice(discordConnecte, listeVide)?.titre).toContain("Aucun salon synchronisé");
+    expect(platformsNotice(discordConnecte, listeVide)?.detail).toContain("MESSAGE_CONTENT");
     // Mode local : AUCUN état vide ajouté (comportement strictement inchangé).
-    expect(modeNotice({ mode: "local", creation: { autorisee: true } }, listeVide)).toBeNull();
+    expect(platformsNotice({ mode: "local", creation: { autorisee: true } }, listeVide)).toBeNull();
   });
 });
 
@@ -134,27 +178,33 @@ describe("création désactivée — décision du SERVEUR, relayée", () => {
 describe("encart de la barre — UNE SEULE vérité affichée à la fois", () => {
   const MATTERMOST_CINQ_CANAUX = {
     mode: "mattermost",
+    plateformes: { mattermost: true, discord: false },
     plateforme: { etat: "on", raison: "Mode Mattermost : connecté." },
-    creation: { autorisee: false, raison: "La création est désactivée." },
+    mattermost: {
+      jetonEnregistre: true,
+      plateforme: { etat: "on", raison: "Mode Mattermost : connecté." },
+      canaux: [],
+    },
+    creation: { autorisee: true },
   };
 
   it("liste NON VIDE ⇒ AUCUN encart (le défaut de production)", () => {
     // ⚠️ Échoue sur l'origine : `modeNotice` ignorait la liste et rendait « vide ».
-    expect(modeNotice(MATTERMOST_CINQ_CANAUX, { nombre: 5, connue: true })).toBeNull();
+    expect(platformsNotice(MATTERMOST_CINQ_CANAUX, { nombre: 5, connue: true })).toBeNull();
     // Même avec une raison d'échec : la liste reste la vérité affichée.
     expect(
-      modeNotice(
+      platformsNotice(
         { ...MATTERMOST_CINQ_CANAUX, plateforme: { etat: "connexion", raison: "401." } },
         { nombre: 5, connue: true },
       ),
     ).toBeNull();
     expect(
-      modeNotice({ mode: "discord", plateforme: { etat: "on" } }, { nombre: 2, connue: true }),
+      platformsNotice({ mode: "discord", plateforme: { etat: "on" } }, { nombre: 2, connue: true }),
     ).toBeNull();
   });
 
   it("liste VIDE + synchro réussie ⇒ encart d'état vide, avec le chemin EXACT", () => {
-    const avis = modeNotice(MATTERMOST_CINQ_CANAUX, { nombre: 0, connue: true });
+    const avis = platformsNotice(MATTERMOST_CINQ_CANAUX, { nombre: 0, connue: true });
     expect(avis).toMatchObject({ kind: "vide" });
     expect(avis?.titre).toBe("Aucun canal synchronisé.");
     // ⚠️ Les MOTS de l'interface : page du BOT, onglet « Plateformes », SECTION
@@ -163,14 +213,17 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
     // ⚠️ Jamais la SECTION SEULE (« Discussions »), qui n'existe pas dans l'UI.
     expect(avis?.detail).not.toContain("« Discussions »");
     // Et le chemin Discord, lui, nomme la section Discord.
-    const salons = modeNotice(
-      { mode: "discord", plateforme: { etat: "on" }, creation: { autorisee: false, raison: "x" } },
+    const salons = platformsNotice(
+      {
+        plateformes: { mattermost: false, discord: true },
+        discord: { plateforme: { etat: "on" } },
+      },
       { nombre: 0, connue: true },
     );
     expect(salons?.detail).toContain("/bots?b=yuki → Plateformes → « Discussions — Discord »");
     expect(salons?.detail).not.toContain("« Discussions »");
-    // Et le MODE LOCAL n'ajoute toujours rien (comportement inchangé).
-    expect(modeNotice({ mode: "local" }, { nombre: 0, connue: true })).toBeNull();
+    // Et SANS plateforme activée, rien n'est ajouté : le local seul est normal.
+    expect(platformsNotice({ plateformes: { mattermost: false, discord: false } }, { nombre: 0, connue: true })).toBeNull();
   });
 
   it("le chemin est celui de l'UI RÉELLE (onglet « Plateformes », sections nommées)", () => {
@@ -183,24 +236,22 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
     expect(panneau).toContain('titre: "Discussions — Mattermost"');
     expect(panneau).toContain('titre: "Discussions — Discord"');
     // Une SEULE source de vérité : le sélecteur de mode cite le même chemin.
-    expect(CHAT_MODE_OPTIONS[1].title).toContain(CHEMIN_MATTERMOST);
-    expect(CHAT_MODE_OPTIONS[2].title).toContain(CHEMIN_DISCORD);
+    expect(PLATEFORME_OPTIONS[0].title).toContain(CHEMIN_MATTERMOST);
+    expect(PLATEFORME_OPTIONS[1].title).toContain(CHEMIN_DISCORD);
     // Le bouton d'état vide du fil renvoie les mots exacts de l'UI (`app.js`).
     expect(read("app.js")).toContain("Aucune conversation dans ce mode");
   });
 
   it("échec de synchronisation ⇒ message DISTINCT, jamais « aucun canal »", () => {
     // ① Plateforme non configurée : la raison du SERVEUR est recopiée telle quelle.
-    const nonConfigure = modeNotice(
+    const raisonNonConfigure =
+      "Mattermost n'est pas configuré : renseignez l'URL du serveur et le jeton du bot " +
+      "dans /bots?b=yuki → Plateformes → « Discussions — Mattermost ».";
+    const nonConfigure = platformsNotice(
       {
         mode: "mattermost",
-        plateforme: {
-          etat: "off",
-          raison:
-            "Mattermost n'est pas configuré : renseignez l'URL du serveur et le jeton du bot " +
-            "dans /bots?b=yuki → Plateformes → « Discussions — Mattermost ».",
-        },
-        creation: { autorisee: false, raison: "La création est désactivée." },
+        plateformes: { mattermost: true, discord: false },
+        mattermost: { plateforme: { etat: "off", raison: raisonNonConfigure } },
       },
       { nombre: 0, connue: true },
     );
@@ -211,11 +262,10 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
 
     // ② Jeton refusé / URL injoignable : la raison dit QUOI, et le chemin est ajouté
     //    (la raison technique, elle, ne connaît pas la page de réglage).
-    const jetonRefuse = modeNotice(
+    const jetonRefuse = platformsNotice(
       {
-        mode: "mattermost",
-        plateforme: { etat: "connexion", raison: "Connexion temps réel refusée (401 Unauthorized)." },
-        creation: { autorisee: false, raison: "La création est désactivée." },
+        plateformes: { mattermost: true, discord: false },
+        mattermost: { plateforme: { etat: "connexion", raison: "Connexion temps réel refusée (401 Unauthorized)." } },
       },
       { nombre: 0, connue: true },
     );
@@ -228,40 +278,40 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
 
   it("pendant le CHARGEMENT ⇒ aucun encart contradictoire (discret, sans « Aucun »)", () => {
     // Liste pas encore reçue (aucune trame `sessions`) : on n'affirme rien.
-    const avis = modeNotice(MATTERMOST_CINQ_CANAUX, { nombre: 0, connue: false });
+    const avis = platformsNotice(MATTERMOST_CINQ_CANAUX, { nombre: 0, connue: false });
     expect(avis).toMatchObject({ kind: "chargement" });
     expect(avis?.titre).not.toContain("Aucun");
     // Statut du mode pas encore reçu : rien du tout (ni vide, ni échec inventé).
-    expect(modeNotice(null, { nombre: 0, connue: false })).toBeNull();
-    expect(modeNotice(null, { nombre: 0, connue: true })).toBeNull();
+    expect(platformsNotice(null, { nombre: 0, connue: false })).toBeNull();
+    expect(platformsNotice(null, { nombre: 0, connue: true })).toBeNull();
     // Connexion EN COURS sans raison d'échec : l'import peut encore remplir la liste,
     // donc on n'annonce pas « aucun canal » (ce serait une conclusion prématurée).
-    const enCours = modeNotice(
-      { mode: "mattermost", plateforme: { etat: "connexion" }, creation: { autorisee: false, raison: "x" } },
+    const enCours = platformsNotice(
+      { plateformes: { mattermost: true, discord: false }, mattermost: { plateforme: { etat: "connexion" } } },
       { nombre: 0, connue: true },
     );
     expect(enCours).toMatchObject({ kind: "chargement" });
     // Contexte absent (appel historique) : on ne prétend pas que la liste est vide.
-    expect(modeNotice(MATTERMOST_CINQ_CANAUX)).toMatchObject({ kind: "chargement" });
+    expect(platformsNotice(MATTERMOST_CINQ_CANAUX)).toMatchObject({ kind: "chargement" });
   });
 
   it("la barre RECALCULE l'encart à chaque source (statut ET liste)", () => {
     const panel = read("sessions-panel.js");
     // Une seule décision, nourrie par la liste RÉELLEMENT rendue.
-    expect(panel).toContain("modeNotice(chatStatus, { nombre: sessions.length, connue: listeConnue })");
+    expect(panel).toContain("platformsNotice(chatStatus, { nombre: sessions.length, connue: listeConnue })");
     // La liste reçue est marquée comme telle, puis l'encart est recalculé après
     // le rendu (défaut d'origine : rendu avant la liste, jamais retiré).
     expect(panel).toContain("listeConnue = true");
     expect(panel.match(/applyNotice\(\);/g)?.length).toBeGreaterThanOrEqual(2);
     // L'état de l'encart suit UNE seule variable.
-    expect(panel).toContain('notice.hidden = titre === ""');
+    expect(panel).toContain("notice.hidden = titres.length === 0");
     // Le style « chargement » est DISCRET (feuille servie, CSP inchangée).
     expect(read("styles.css")).toContain('.sidebar__notice[data-kind="chargement"]');
   });
 });
 
 describe("persistance CÔTÉ SERVEUR", () => {
-  it("écrit `chat.mode` sur la route du BOT ACTIF puis relit l'état", async () => {
+  it("écrit `chat.<plateforme>.enabled` sur la route du BOT ACTIF puis relit l'état", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
@@ -277,26 +327,30 @@ describe("persistance CÔTÉ SERVEUR", () => {
         };
       }
       if (url === "/api/bots/yuki/config") {
-        return { ok: true, status: 200, json: async () => ({ applied: { hot: ["chat.mode"] } }) };
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ applied: { hot: ["chat.mattermost.enabled"] } }),
+        };
       }
       return { ok: true, status: 200, json: async () => remoteStatus("mattermost") };
     };
-    const status = await saveChatMode("mattermost", fetchImpl);
+    const status = await savePlatformEnabled("mattermost", true, fetchImpl);
     expect(status.mode).toBe("mattermost");
 
-    // ⚠️ `chat.mode` est un réglage PROPRE AU BOT : `PUT /api/config` le refuse
-    // (`bot_scoped_field`). L'unique écriture vise donc la route du bot actif.
+    // ⚠️ L'interrupteur est un réglage PROPRE AU BOT : `PUT /api/config` le
+    // refuse (`bot_scoped_field`). L'unique écriture vise donc la route du bot actif.
     expect(calls.some((call) => call.url === "/api/config")).toBe(false);
     const write = calls.find((call) => call.url === "/api/bots/yuki/config");
     expect(write?.init?.method).toBe("PUT");
     expect((write?.init?.headers as Record<string, string>)["x-yuki-config"]).toBe("1");
-    expect(JSON.parse(String(write?.init?.body))).toEqual({ "chat.mode": "mattermost" });
+    expect(JSON.parse(String(write?.init?.body))).toEqual({ "chat.mattermost.enabled": "on" });
     // La LECTURE aussi est gardée par le même en-tête.
     const readCall = calls.find((call) => call.url === "/api/chat/status");
     expect((readCall?.init?.headers as Record<string, string>)["x-yuki-config"]).toBe("1");
   });
 
-  it("l'interface n'écrit jamais le mode dans `localStorage`", () => {
+  it("l'interface n'écrit jamais l'interrupteur dans `localStorage`", () => {
     const source = read("chat-mode.js");
     expect(source).not.toContain("localStorage");
     // Aucun appel direct à une plateforme distante : tout passe par le gateway.
@@ -327,7 +381,7 @@ describe("garde-fous de la source — CSP et chemins de clic", () => {
     expect(panel).toContain("creationRefusal");
   });
 
-  it("le sélecteur est monté dans l'EN-TÊTE, avant « + Nouvelle conversation »", () => {
+  it("les interrupteurs sont montés dans l'EN-TÊTE, avant « + Nouvelle conversation »", () => {
     const panel = read("sessions-panel.js");
     expect(panel).toContain("inner.append(top, modeSlot, newBtn, notice, list)");
   });

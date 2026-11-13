@@ -24,8 +24,7 @@ import { urlReglagesBot } from "./bot-switcher-modele.js";
 import {
   creationRefusal,
   fetchChatStatus,
-  resolveActiveMode,
-  saveChatMode,
+  savePlatformEnabled,
 } from "./chat-mode.js";
 import {
   UNREAD_STORAGE_KEY,
@@ -635,11 +634,12 @@ const sidebarAgents = initSidebarAgents({
   },
 });
 
-/* ─── MODE DE DISCUSSION (Local · Mattermost · Discord) ────────────────────
- * État AUTORITAIRE lu sur `GET /api/chat/status`. ⚠️ La création d'une
- * conversation locale est décidée par le SERVEUR (`creation.autorisee`) : ici on
- * ne fait qu'empêcher un clic inutile — les trois chemins de clic passent par
- * `requestNew()`, et le serveur refuse de son côté (`creation_desactivee`). */
+/* ─── PLATEFORMES DE DISCUSSION (interrupteurs Mattermost / Discord) ───────
+ * État AUTORITAIRE lu sur `GET /api/chat/status`. ⚠️ Les plateformes distantes
+ * sont INDÉPENDANTES et le LOCAL n'en est pas une : il est toujours disponible.
+ * La création d'une conversation locale reste décidée par le SERVEUR
+ * (`creation.autorisee`) : ici on ne fait qu'empêcher un clic inutile — les trois
+ * chemins de clic passent par `requestNew()`. */
 let chatStatus = null;
 
 /** Raison (serveur) pour laquelle on ne crée pas de conversation ; `null` si permis. */
@@ -649,8 +649,9 @@ function newConversationRefusal() {
 
 /**
  * CHEMIN UNIQUE de création d'une conversation.
- * Les trois déclencheurs (barre latérale, menu téléphone, bouton de l'état vide)
- * passent par ici : en mode distant, aucun ne crée rien et la raison est dite.
+ * ⚠️ Un refus éventuel est décidé par le SERVEUR (`creation.autorisee`) : depuis
+ * que le local n'est plus un mode qu'on quitte, il n'y a plus de refus — le
+ * chemin, lui, reste unique.
  */
 function requestNew() {
   const refusal = newConversationRefusal();
@@ -665,56 +666,17 @@ function requestNew() {
 /** Phrase d'aide par défaut de l'état vide (markup de `index.html`). */
 const EMPTY_HINT_DEFAULT = "Sélectionnez une conversation ou créez-en une.";
 
-/** Une bascule AUTOMATIQUE de mode est-elle en cours ? (jamais deux PUT concurrents) */
-let basculeModeEnCours = false;
-
-/**
- * BASCULE AUTOMATIQUE quand le mode courant n'est plus actif.
- *
- * ⚠️ Cas couvert (demande du 2026-11-05) : `chat.mode = mattermost` et la connexion
- * Mattermost est débranchée/supprimée ⇒ sans bascule, l'interface resterait sur un mode
- * MORT (aucune conversation à lister, sélecteur masqué). On redemande donc le seul mode
- * encore actif (`local` en général), par le MÊME chemin que le clic sur le sélecteur
- * (`PUT /api/config`) : le serveur reste l'autorité.
- *
- * ⚠️ La trame `sessions` n'est pas touchée directement : `chat_refresh` la redemande au
- * serveur, exactement comme après un clic — aucune liste fabriquée localement.
- */
-async function enforceActiveMode(status) {
-  const cible = resolveActiveMode(status);
-  if (cible === null || basculeModeEnCours) return;
-  basculeModeEnCours = true;
-  try {
-    const frais = await saveChatMode(cible);
-    applyChatStatus(frais);
-    sendRaw({ type: "chat_refresh" });
-  } catch (error) {
-    // Refus du serveur : on ne boucle pas et on ne prétend rien (le statut suivant,
-    // relu à la prochaine occasion, redira la vérité).
-    console.warn(
-      "[chat-mode] bascule automatique refusée :",
-      error instanceof Error ? error.message : String(error),
-    );
-  } finally {
-    basculeModeEnCours = false;
-  }
-}
-
 /** Reflète l'état du mode dans le panneau, le bouton de l'état vide et la liste. */
 function applyChatStatus(status) {
   chatStatus = status && typeof status === "object" ? status : null;
   sessionsPanel.setChatMode(chatStatus);
-  // ⚠️ Masquer le sélecteur ne suffit pas : si le mode courant n'est plus actif, on
-  // BASCULE (sinon on afficherait un mode mort sans même son sélecteur).
-  void enforceActiveMode(chatStatus);
   const refusal = newConversationRefusal();
   if (els.emptyNew) {
     els.emptyNew.disabled = refusal !== null;
     els.emptyNew.title = refusal ?? "Nouvelle conversation";
   }
-  // État vide : en mode distant, « créez-en une » serait faux (la création est
-  // désactivée). On dit ce qui est vrai, et on rétablit la phrase d'origine en
-  // mode local (comportement inchangé).
+  // État vide : si le serveur refuse la création (ce n'est plus le cas en
+  // pratique), « créez-en une » serait faux — on dit ce qui est vrai.
   if (els.emptyHint) {
     els.emptyHint.textContent =
       refusal !== null
@@ -723,13 +685,13 @@ function applyChatStatus(status) {
   }
 }
 
-/** Relit l'état du mode puis rafraîchit la LISTE (qui dépend du mode). */
+/** Relit l'état des plateformes puis rafraîchit la LISTE. */
 async function refreshChatStatus() {
   try {
     const status = await fetchChatStatus();
     applyChatStatus(status);
-    // La liste est AUTORITAIRE côté serveur : on la redemande (le mode décide de
-    // son contenu). Aucune trame n'est inventée ici.
+    // La liste est AUTORITAIRE côté serveur : on la redemande (le serveur décide
+    // de son contenu). Aucune trame n'est inventée ici.
     sendRaw({ type: "chat_refresh" });
     return status;
   } catch {
@@ -739,18 +701,24 @@ async function refreshChatStatus() {
   }
 }
 
-/** Changement de mode demandé par le sélecteur : persisté CÔTÉ SERVEUR. */
-async function onChatModeChange(mode) {
+/**
+ * Interrupteur de plateforme demandé par la barre latérale : persisté CÔTÉ
+ * SERVEUR (`chat.<plateforme>.enabled`).
+ *
+ * ⚠️ Ce n'est PAS un choix exclusif : allumer Discord laisse Mattermost tel
+ * quel, et ne touche jamais au local (il n'est pas un réglage).
+ */
+async function onChatModeChange(plateforme, actif) {
   try {
-    const status = await saveChatMode(mode);
+    const status = await savePlatformEnabled(plateforme, actif);
     applyChatStatus(status);
     sendRaw({ type: "chat_refresh" });
   } catch (error) {
     void HolafModal.alert(
-      "Mode non enregistré",
+      "Plateforme non enregistrée",
       error instanceof Error && error.message
         ? error.message
-        : "Le gateway n'a pas accepté le changement de mode.",
+        : "Le gateway n'a pas accepté le changement d'interrupteur.",
       { okText: "Compris" },
     );
     // On réaffiche l'état RÉEL (le choix n'a pas été retenu).

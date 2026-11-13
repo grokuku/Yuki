@@ -707,12 +707,14 @@ export const GROUPS = [
     title: "Depuis un canal (Mattermost / Discord)",
     // ⚠️ DÉPLACÉ de la page Bot (onglet « Plateformes ») vers la page Instance :
     // ces deux clés sont désormais d'INSTANCE (`docs/classement-des-reglages.md`).
-    // Le MODE de conversation (`chat.mode`), lui, reste propre à chaque bot.
+    // Les INTERRUPTEURS de plateforme (`chat.mattermost.enabled`,
+    // `chat.discord.enabled`), eux, restent propres à chaque bot — et le LOCAL n'est
+    // pas un choix : il est toujours disponible.
     renvoi: {
       instance: {
         texte:
-          "Le choix de la plateforme et le jeton de connexion d'un bot se règlent " +
-          "sur SA page :",
+          "Les interrupteurs de plateforme et le jeton de connexion d'un bot se " +
+          "règlent sur SA page :",
         lien: { href: "/bots#plateformes", libelle: "Bot · Plateformes" },
       },
     },

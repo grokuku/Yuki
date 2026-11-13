@@ -359,7 +359,12 @@ describe("⑨ classement validé — portées changées et réglages sans écran
   /**
    * Clés dont le contrôle vit dans un AUTRE composant (hors catalogue) :
    *  - `tts.voice` : bibliothèque des voix (`voices-panel.js`) ;
-   *  - `chat.mode` : sélecteur de mode (`chat-mode.js`) ;
+   *  - `chat.mode` : clé LEGACY (plus aucun écran, elle ne décide plus rien) —
+   *    conservée pour les stores existants et `YUKI_CHAT_MODE` ;
+   *  - `chat.mattermost.enabled` / `chat.discord.enabled` : les deux
+   *    INTERRUPTEURS de plateforme, rendus par le panneau « Plateformes » d'un
+   *    bot (`chat-panel.js`, `initChatPanelBot`) et par la barre latérale
+   *    (`chat-mode.js`, `initPlatformToggles`) — ce sont des réglages DE BOT.
    *  - `chat.discord.*` : champs propres à la plateforme, rendus par la fabrique
    *    de `chat-panel.js` (`description.extraFields === "discord"`), qui les écrit
    *    sur les routes `PUT /api/chat/...` — ce sont bien des réglages DE BOT.
@@ -367,6 +372,8 @@ describe("⑨ classement validé — portées changées et réglages sans écran
   const CONTROLES_AILLEURS = [
     "tts.voice",
     "chat.mode",
+    "chat.mattermost.enabled",
+    "chat.discord.enabled",
     "chat.discord.guildId",
     "chat.discord.maxUploadBytes",
   ];
@@ -382,12 +389,13 @@ describe("⑨ classement validé — portées changées et réglages sans écran
       expect(rendues("bot"), cle).not.toContain(cle);
       expect(clesRendues("instance").get(cle), `${cle} en double`).toBe(1);
     }
-    // ⚠️ `chat.mode` N'A PAS bougé : chaque bot choisit SON canal. Son contrôle
-    // n'est pas un champ du catalogue (`chat-mode.js`) — il reste donc hors des
-    // deux listes de champs, mais sa portée est bien `bot`.
+    // ⚠️ `chat.mode` est LEGACY depuis le 2026-11-10 : plus d'écran (c'était le
+    // choix EXCLUSIF qui coupait les plateformes non choisies), portée `bot`
+    // conservée pour la compatibilité des stores.
     expect(SCOPES["chat.mode"]).toBe("bot");
     expect(rendues("bot")).not.toContain("chat.mode");
-    expect(lire("chat-mode.js")).toContain("chat.mode");
+    // ⚠️ Les deux INTERRUPTEURS, eux, sont bien écrits par l'interface.
+    expect(lire("chat-mode.js")).toContain("chat.${plateforme}.enabled");
   });
 
   it("les SEPT réglages sans écran ont un champ, dans le bon onglet, avec libellé et aide", () => {
@@ -426,13 +434,15 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     const couvertes = new Set([...rendues("instance"), ...rendues("bot"), ...CONTROLES_AILLEURS]);
     const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
     expect(orphelines).toEqual([]);
-    // ⚠️ Et le compte doit être EXACT : 90 clés, aucune oubliée par ce contrôle.
-    expect(Object.keys(SCOPES).length).toBe(90);
-    expect(couvertes.size).toBe(90);
+    // ⚠️ Et le compte doit être EXACT : 92 clés (90 + les DEUX interrupteurs de
+    // plateforme ajoutés le 2026-11-10), aucune oubliée par ce contrôle.
+    expect(Object.keys(SCOPES).length).toBe(92);
+    expect(couvertes.size).toBe(92);
     // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
     for (const [cle, fichier] of [
       ["tts.voice", "voices-panel.js"],
-      ["chat.mode", "chat-mode.js"],
+      ["chat.mattermost.enabled", "chat-panel.js"],
+      ["chat.discord.enabled", "chat-panel.js"],
     ] as const) {
       expect(lire(fichier), `${cle} dans ${fichier}`).toContain(cle);
     }

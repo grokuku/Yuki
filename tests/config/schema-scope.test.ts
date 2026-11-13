@@ -2,10 +2,12 @@
  * VERROU DE CLASSIFICATION de la configuration (lot 35b, sous-lot 1b-2).
  *
  * Ce que ce fichier verrouille :
- *  - `CONFIG_PATHS.length === 90` (aucune clé ajoutée ni perdue par accident) ;
+ *  - `CONFIG_PATHS.length === 92` (aucune clé ajoutée ni perdue par accident) ;
  *    ⚠️ 89 → 90 au lot 36 (L1) : `bots.maxActifs` (plafond des bots simultanés).
- *    Le compteur est mis à jour EXPRÈS : c'est lui qui rend l'ajout délibéré.
- *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 70 / 16 / 4 ;
+ *    ⚠️ 90 → 92 le 2026-11-10 : `chat.mattermost.enabled` et `chat.discord.enabled`
+ *    (plateformes INDÉPENDANTES, `bot`). Le compteur est mis à jour EXPRÈS : c'est
+ *    lui qui rend l'ajout délibéré.
+ *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 70 / 18 / 4 ;
  *    ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) : trois clés ont
  *    changé de portée SANS changer de nombre — `chat.remoteAgents` et
  *    `chat.remoteTools` (`bot` → `instance`) et `memory.consolidation.enabled`
@@ -47,8 +49,8 @@ function descriptor(path: string): FieldDescriptor {
 }
 
 describe("① la table des clés", () => {
-  it("déclare EXACTEMENT 90 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(90);
+  it("déclare EXACTEMENT 92 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(92);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
     // ⚠️ La clé du lot 36 (L1) est NOMMÉE ici : le plafond des bots simultanés
     // est un réglage d'INSTANCE (il ne dépend d'aucun bot).
@@ -69,10 +71,10 @@ describe("① la table des clés", () => {
     }
   });
 
-  it("répartition : 70 `instance` / 16 `bot` / 4 `mixte`", () => {
+  it("répartition : 70 `instance` / 18 `bot` / 4 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 70, bot: 16, mixte: 4 });
+    expect(compte).toEqual({ instance: 70, bot: 18, mixte: 4 });
   });
 
   it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {
@@ -248,10 +250,14 @@ describe("⑤ le bot actif de l'overlay", () => {
     expect(BOT_ID_DEFAUT).toBe(BOT_YUKI);
   });
 
-  it("les 16 clés `bot` sont celles établies (conversation, voix, mémoire du bot)", () => {
+  it("les 18 clés `bot` sont celles établies (plateformes, voix, mémoire du bot)", () => {
     const bot = CONFIG_PATHS.filter((path) => descriptor(path).scope === "bot");
     expect(bot.sort()).toEqual(
       [
+        // ⚠️ DEUX interrupteurs de plateforme (2026-11-10) : la plateforme
+        // distante n'est plus un choix exclusif (`chat.mode` reste, LEGACY).
+        "chat.mattermost.enabled",
+        "chat.discord.enabled",
         "chat.discord.guildId",
         "chat.discord.maxUploadBytes",
         "chat.mode",

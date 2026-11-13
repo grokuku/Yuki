@@ -184,10 +184,17 @@ interface Appel {
 }
 
 /** Ce qu'un bot configuré renvoie pour `GET /api/bots/<id>/config`. */
-function configBot(options: { mode?: string; guildId?: string; maxUploadBytes?: number }) {
+function configBot(options: {
+  mattermost?: boolean;
+  discord?: boolean;
+  guildId?: string;
+  maxUploadBytes?: number;
+}) {
   return {
     fields: {
-      "chat.mode": { value: options.mode ?? "local", scope: "bot" },
+      // ⚠️ Les DEUX INTERRUPTEURS (le choix exclusif `chat.mode` est retiré).
+      "chat.mattermost.enabled": { value: options.mattermost === true ? "on" : "off", scope: "bot" },
+      "chat.discord.enabled": { value: options.discord === true ? "on" : "off", scope: "bot" },
       "chat.discord.guildId": { value: options.guildId ?? "", scope: "bot" },
       "chat.discord.maxUploadBytes": {
         value: options.maxUploadBytes ?? 8 * 1024 * 1024,
@@ -275,7 +282,7 @@ describe("panneau « Plateformes » d'un bot non-pile", () => {
   it("est RENDU (pas vide) et lit la configuration DE CE BOT", async () => {
     const racine = new Noeud("div");
     const { appels, fetchImpl } = serveur({
-      config: configBot({ mode: "discord", guildId: "42", maxUploadBytes: 1_048_576 }),
+      config: configBot({ discord: true, guildId: "42", maxUploadBytes: 1_048_576 }),
     });
     initChatPanel({
       root: racine as never,
@@ -292,20 +299,24 @@ describe("panneau « Plateformes » d'un bot non-pile", () => {
     expect(appels.some((appel) => appel.url.startsWith("/api/chat"))).toBe(false);
     expect(appels.some((appel) => appel.url === "/api/bots/granolaf/config")).toBe(true);
 
-    const selecteur = parId(racine, "chat-bot-mode");
-    expect(selecteur).not.toBeNull();
-    await laisserTourner(() => selecteur!.value === "discord");
-    // Les options de plateforme sont bien les trois du schéma.
-    expect(selecteur!.children.map((option) => option.attrs.get("value"))).toEqual([
-      "local",
-      "mattermost",
-      "discord",
-    ]);
+    // ⚠️ DEUX INTERRUPTEURS, pas de menu déroulant (le choix exclusif est retiré :
+    // il coupait les plateformes non choisies).
+    expect(parId(racine, "chat-bot-mode")).toBeNull();
+    const discord = parId(racine, "chat-bot-discord-enabled");
+    const mattermost = parId(racine, "chat-bot-mattermost-enabled");
+    expect(discord).not.toBeNull();
+    expect(mattermost).not.toBeNull();
+    // L'interrupteur est LU (jamais deviné) : Discord est allumé, Mattermost éteint.
+    await laisserTourner(() => discord!.attrs.get("aria-pressed") === "true");
+    expect(discord!.attrs.get("aria-pressed")).toBe("true");
+    expect(mattermost!.attrs.get("aria-pressed")).toBe("false");
+    // ⚠️ Le LOCAL n'est pas un choix : aucun interrupteur ne le représente.
+    expect(texte(racine)).toContain("n'est pas une option");
   });
 
-  it("enregistre `chat.mode` SUR LA ROUTE DU BOT AFFICHÉ", async () => {
+  it("enregistre `chat.discord.enabled` SUR LA ROUTE DU BOT AFFICHÉ", async () => {
     const racine = new Noeud("div");
-    const { appels, fetchImpl } = serveur({ config: configBot({ mode: "local" }) });
+    const { appels, fetchImpl } = serveur({ config: configBot({}) });
     initChatPanel({
       root: racine as never,
       fetchImpl: fetchImpl as never,
@@ -314,17 +325,17 @@ describe("panneau « Plateformes » d'un bot non-pile", () => {
       botDePile: "yuki",
       botDemarre: true,
     });
-    const selecteur = parId(racine, "chat-bot-mode")!;
-    await laisserTourner(() => selecteur.value === "local");
-    selecteur.value = "mattermost";
-    parTexte(racine, "Enregistrer la plateforme")!.declencher("click");
+    const interrupteur = parId(racine, "chat-bot-discord-enabled")!;
+    await laisserTourner(() => interrupteur.attrs.get("aria-pressed") === "false");
+    interrupteur.declencher("click");
 
     await laisserTourner(() =>
       appels.some((appel) => appel.method === "PUT" && appel.url === "/api/bots/granolaf/config"),
     );
     const ecriture = appels.find((appel) => appel.method === "PUT")!;
     expect(ecriture.url).toBe("/api/bots/granolaf/config");
-    expect(ecriture.body).toEqual({ "chat.mode": "mattermost" });
+    // ⚠️ C'est l'INTERRUPTEUR qui s'écrit (le jeton reste un secret séparé).
+    expect(ecriture.body).toEqual({ "chat.discord.enabled": "on" });
     // Aucune écriture de configuration d'instance.
     expect(appels.some((appel) => appel.url === "/api/config")).toBe(false);
   });
@@ -335,7 +346,7 @@ describe("panneau « Plateformes » d'un bot non-pile", () => {
 describe("jeton de plateforme d'un bot non-pile", () => {
   it("écrit `YUKI_CHAT_<BOT>__DISCORD`, jamais la route d'instance", async () => {
     const racine = new Noeud("div");
-    const { appels, fetchImpl } = serveur({ config: configBot({ mode: "local" }) });
+    const { appels, fetchImpl } = serveur({ config: configBot({}) });
     initChatPanel({
       root: racine as never,
       fetchImpl: fetchImpl as never,
@@ -369,7 +380,7 @@ describe("jeton de plateforme d'un bot non-pile", () => {
 
   it("les deux jetons sont écrits séparément, avec le nom de leur plateforme", async () => {
     const racine = new Noeud("div");
-    const { appels, fetchImpl } = serveur({ config: configBot({ mode: "local" }) });
+    const { appels, fetchImpl } = serveur({ config: configBot({}) });
     initChatPanel({
       root: racine as never,
       fetchImpl: fetchImpl as never,
@@ -388,7 +399,7 @@ describe("jeton de plateforme d'un bot non-pile", () => {
 
   it("aucun jeton en clair dans la page, même après enregistrement", async () => {
     const racine = new Noeud("div");
-    const { fetchImpl } = serveur({ config: configBot({ mode: "discord" }) });
+    const { fetchImpl } = serveur({ config: configBot({ discord: true }) });
     initChatPanel({
       root: racine as never,
       fetchImpl: fetchImpl as never,
@@ -412,7 +423,7 @@ describe("jeton de plateforme d'un bot non-pile", () => {
 describe("bot arrêté", () => {
   it("reste éditable et écrit toujours chez lui", async () => {
     const racine = new Noeud("div");
-    const { appels, fetchImpl } = serveur({ config: configBot({ mode: "local" }) });
+    const { appels, fetchImpl } = serveur({ config: configBot({}) });
     initChatPanel({
       root: racine as never,
       fetchImpl: fetchImpl as never,
@@ -474,8 +485,12 @@ describe("bot de la pile", () => {
     });
     await laisserTourner(() => appels.includes("/api/chat/status"));
     expect(appels).toContain("/api/chat/status");
-    // Le panneau PAR BOT n'est pas monté dans ce cas : pas de sélecteur de bot.
+    // Le panneau PAR BOT n'est pas monté dans ce cas : ni menu exclusif, ni
+    // interrupteurs par bot.
     expect(parId(racine, "chat-bot-mode")).toBeNull();
+    expect(parId(racine, "chat-bot-discord-enabled")).toBeNull();
+    // Le panneau du bot de la pile ne monte pas non plus les interrupteurs par bot.
+    expect(parId(racine, "chat-bot-discord-enabled")).toBeNull();
   });
 });
 

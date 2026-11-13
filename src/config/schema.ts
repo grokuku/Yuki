@@ -656,14 +656,47 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // OBJET (canaux, mapping auteur→rôle, mode de réponse par canal) vit dans un
   // fichier JSON du volume `state`, jamais ici. Seul le MODE est un réglage.
   //
-  // `apply: hot` : le mode est relu à CHAQUE appel (`ChatService.mode()`), donc
-  // `GET /api/chat/status` et le sélecteur de la barre latérale suivent
-  // immédiatement un changement — sans redémarrage, sans reconnexion.
+  // ⚠️ LEGACY — PLUS AUCUN CONSOMMATEUR DE DÉCISION (2026-11-10).
+  // Jusqu'ici cet enum EXCLUSIF (`local | mattermost | discord`) pilotait la
+  // création des adaptateurs et le filtrage de la liste : choisir `local`
+  // COUPAIT Mattermost et Discord — la régression « je devais choisir une des
+  // trois plateformes ». Les plateformes sont désormais INDÉPENDANTES
+  // (`chat.mattermost.enabled` / `chat.discord.enabled` ci-dessous) et `local`
+  // n'est plus un choix : il est TOUJOURS là.
+  // ⚠️ La clé est CONSERVÉE en LECTURE seule pour ne casser ni les stores
+  // existants (une clé retirée devient un « champ inconnu ignoré ») ni
+  // `YUKI_CHAT_MODE`, qui reste mappé. Elle n'est plus écrite par l'interface et
+  // ne décide plus de rien : elle ne sert que de valeur d'affichage héritée.
   "chat.mode": {
     scope: "bot",
     type: "enum",
     enum: ["local", "mattermost", "discord"],
     default: "local",
+    apply: "hot",
+  },
+  // ⚠️ PLATEFORMES INDÉPENDANTES (2026-11-10) — un bot est joignable sur
+  // PLUSIEURS plateformes EN MÊME TEMPS : le LOCAL toujours (ce n'est pas un
+  // réglage), PLUS Mattermost si `on`, PLUS Discord si `on`.
+  // ⚠️ INTERRUPTEUR EXPLICITE plutôt que « un jeton existe » : un jeton posé
+  // peut être périmé, révoqué, ou copié d'un autre bot. L'existence d'un secret
+  // n'est pas une intention d'utilisateur ; l'interrupteur, si. Et il permet de
+  // DÉSACTIVER une plateforme sans détruire son jeton (donc sans perdre les
+  // conversations miroir déjà importées).
+  // ⚠️ Le jeton reste NÉCESSAIRE : `on` sans jeton n'ouvre aucune connexion (le
+  // panneau le dit : « jeton absent »).
+  // `apply: hot` : la valeur est relue à chaque connexion d'adaptateur.
+  "chat.mattermost.enabled": {
+    scope: "bot",
+    type: "enum",
+    enum: ["on", "off"],
+    default: "off",
+    apply: "hot",
+  },
+  "chat.discord.enabled": {
+    scope: "bot",
+    type: "enum",
+    enum: ["on", "off"],
+    default: "off",
     apply: "hot",
   },
   // ⚠️ SÉCURITÉ (exigence utilisateur du 2026-11-01) : en mode DISTANT, l'accès aux

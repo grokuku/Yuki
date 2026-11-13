@@ -52,7 +52,7 @@ import {
   type WireAgent,
   type WireSession,
 } from "./protocol.js";
-import type { ChatMode, RemoteConversation, RemoteMessage } from "../../chat/types.js";
+import type { RemoteConversation, RemoteMessage } from "../../chat/types.js";
 import { isMirrorConversationId, remoteMessageToTranscript } from "../../chat/mirror.js";
 import type { AgentLevel } from "../../agents/types.js";
 import {
@@ -284,14 +284,23 @@ export interface FileTransferGatewayPort {
  * motif de refus de création et les conversations miroir.
  */
 export interface ChatGatewayPort {
-  /** Mode courant (`local` | `mattermost` | `discord`) — relu à chaque message. */
-  mode(): ChatMode;
-  /** `true` si le mode courant est distant (la création locale est alors refusée). */
-  isRemote(): boolean;
-  /** Motif LISIBLE du refus de créer une conversation locale ; `null` en mode local. */
-  creationRefusal(): string | null;
-  /** Conversations miroir disponibles (vide tant qu'aucune synchronisation n'existe). */
+  /**
+   * Conversations miroir disponibles, TOUTES plateformes activées confondues.
+   *
+   * ⚠️ Plus de filtre par mode (2026-11-10) : un bot peut être joignable sur
+   * Mattermost ET Discord en MÊME TEMPS, donc les canaux des deux doivent être
+   * listés ensemble. Le LOCAL, lui, n'est pas ici : il est toujours listé, et
+   * c'est exactement la régression que ce découplage corrige.
+   */
   conversations(): readonly RemoteConversation[];
+  /**
+   * Motif LISIBLE du refus de créer une conversation locale, ou `null`.
+   *
+   * ⚠️ Toujours `null` depuis que le local n'est plus un mode qu'on peut
+   * quitter (`ChatService.creationRefusal`), mais le transport garde ce point
+   * d'autorité : c'est ici, pas dans le CSS, que `new` serait refusé.
+   */
+  creationRefusal(): string | null;
   /** Conversation miroir par identifiant Yuki (`mm-…`), ou `null` si inconnue. */
   conversation(conversationId: string): RemoteConversation | null;
   /** Messages d'une conversation miroir (ordre chronologique). */
@@ -1269,13 +1278,16 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    * l'interface affiche son état vide explicite. La mécanique est là pour que le
    * lot 2 n'ait qu'à remplir le miroir.
    */
+  /**
+   * Conversations MIROIR (canaux distants) — TOUTES plateformes activées.
+   *
+   * ⚠️ Aucun filtre par plateforme ni par mode : la liste locale et les canaux
+   * distants COEXISTENT (un bot joignable en local ET sur deux plateformes).
+   */
   function mirrorSessions(): WireSession[] {
     if (!chatPort) return [];
-    const mode = chatPort.mode();
-    if (mode === "local") return [];
     return chatPort
       .conversations()
-      .filter((conversation) => conversation.platform === mode)
       .map((conversation) => ({
         id: conversation.id,
         kind: "remote",
@@ -1301,16 +1313,15 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     const host = hostFor(client);
     let sessions: WireSession[] = [];
     let listed = false;
-    // Mode DISTANT : la liste ne contient QUE les canaux de la plateforme (vide
-    // tant que rien n'est synchronisé). Les conversations locales reviennent dès
-    // qu'on repasse en mode local — elles ne sont pas supprimées.
-    const remoteMode = chatPort !== undefined && chatPort.mode() !== "local";
+    // ⚠️ PLUS de « mode distant » : la liste contient TOUJOURS les conversations
+    // locales, PLUS les canaux des plateformes activées. C'est le comportement
+    // d'avant la régression (un bot joignable en local ET à distance).
     // Identifiants des sessions Pi : SEULES elles peuvent être « abonnées » (un
     // miroir n'a pas de flux). On les tient à part pour ne jamais créer un flux
     // sur un identifiant `mm-…`.
     let localIds: string[] = [];
     try {
-      const list = remoteMode ? [] : await host.listSessions();
+      const list = await host.listSessions();
       sessions = list.map((info) => {
         // Sources qui postent dans CE fil : la modale de suppression les LISTE
         // (⚠️ aucune suppression silencieuse d'un fil qui reçoit des sources).
@@ -1357,9 +1368,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     sendDirect(client, {
       type: "sessions",
       sessions,
-      // En mode distant, aucune conversation locale n'est « ouverte » : seul un
-      // canal sélectionné l'est (sinon l'interface affiche son état vide).
-      activeId: client.focusedId ?? (remoteMode ? null : host.currentSessionId() ?? null),
+      // Le focus affiché : un canal sélectionné, sinon la conversation locale
+      // courante (toujours disponible).
+      activeId: client.focusedId ?? host.currentSessionId() ?? null,
     });
   }
 
@@ -1389,13 +1400,9 @@ export function createWsTransport(options: WsTransportOptions): Transport {
    */
   function sendSnapshotForCurrent(client: ClientState): void {
     const sessionId = sessionIdFor(client);
-    // Mode DISTANT sans canal sélectionné : on n'affiche PAS la conversation
-    // locale (elle n'est pas dans la liste de ce mode) — snapshot vide, dit
-    // `readOnly`. Un canal, lui, passe par `handleSelectRemote`.
-    if (chatPort !== undefined && chatPort.mode() !== "local" && !isMirrorConversationId(client.focusedId)) {
-      sendDirect(client, { type: "snapshot", state: "idle", readOnly: true, transcript: [] });
-      return;
-    }
+    // ⚠️ Plus de « snapshot vide en mode distant » : la conversation locale est
+    // TOUJOURS servie. Un canal sélectionné, lui, a son snapshot synthétique par
+    // `handleSelectRemote` (`sendMirrorSnapshot`).
     if (!sessionId) {
       sendDirect(client, { type: "snapshot", state: "idle", transcript: [] });
       return;
@@ -2343,18 +2350,6 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     // pointerait sur une autre conversation, la réponse partirait au mauvais
     // endroit — d'où un refus explicite, jamais un envoi silencieux).
     if (refuseMirrorWrite(client, client.focusedId)) return;
-    // Mode DISTANT : l'interface web n'écrit dans AUCUNE conversation (la liste
-    // vient de la plateforme). Refus explicite, même sans canal sélectionné.
-    if (chatPort !== undefined && chatPort.mode() !== "local") {
-      sendDirect(client, {
-        type: "error",
-        code: "conversation_lecture_seule",
-        message:
-          "En mode distant, l'interface web n'écrit dans aucune conversation : " +
-          "les messages viennent de la plateforme.",
-      });
-      return;
-    }
     const sessionId = sessionIdFor(client);
     if (!sessionId) {
       sendDirect(client, {

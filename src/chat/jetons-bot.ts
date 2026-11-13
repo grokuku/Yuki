@@ -17,7 +17,12 @@
  *     valeur sont REFUSÉS ensemble, en les NOMMANT (le second ne se connecte
  *     pas) — jamais deux réponses pour un message ;
  *  3. **résolution du bot par le jeton** : `botDuJetonChat`, comme les webhooks
- *     de sources. Le bot vient du jeton reçu, jamais d'un champ de requête.
+ *     de sources. Le bot vient du jeton reçu, jamais d'un champ de requête ;
+ *  4. **un INTERRUPTEUR par (bot, plateforme)** (`active`) : depuis le
+ *     2026-11-10, un jeton posé n'active RIEN à lui seul. Une plateforme `off`
+ *     (`chat.<plateforme>.enabled`) ne résout pas son jeton ⇒ aucun adaptateur,
+ *     aucune connexion. Le LOCAL n'est pas concerné : il n'est pas une
+ *     plateforme distante, il est toujours disponible.
  *
  * ⚠️ Ce module ne connaît AUCUN adaptateur : il ne fait que nommer et résoudre.
  * La construction d'un adaptateur par bot est le morceau suivant
@@ -110,6 +115,15 @@ export interface OptionsResolutionJetonsChat {
   readonly bots: readonly string[];
   /** Lecture du coffre (valeur ou `undefined`). Jamais journalisée. */
   readonly lookup: (nom: string) => string | undefined;
+  /**
+   * INTERRUPTEUR par (bot, plateforme) : `chat.<plateforme>.enabled === "on"`.
+   *
+   * ⚠️ `false` ⇒ le jeton de cette paire est IGNORÉ : aucun adaptateur n'est
+   * construit, aucune connexion n'est ouverte. C'est la règle « un jeton posé
+   * n'active pas la plateforme à lui seul » — l'existence d'un secret n'est pas
+   * une intention. Absent = tout est actif (compatibilité des appels existants).
+   */
+  readonly active?: (botId: string, plateforme: PlateformeChat) => boolean;
   readonly logger?: {
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
@@ -135,6 +149,9 @@ export function resoudreJetonsChatBots(
     /** Valeur → bots qui l'ont résolue (l'ordre d'itération est déterministe). */
     const parValeur = new Map<string, { bots: string[]; noms: string[] }>();
     for (const botId of options.bots) {
+      // ⚠️ INTERRUPTEUR D'ABORD : une plateforme désactivée ne résout RIEN, donc
+      // un jeton orphelin ne crée ni adaptateur ni conflit.
+      if (options.active !== undefined && options.active(botId, plateforme) !== true) continue;
       for (const nom of nomsSecretsChat(botId, plateforme)) {
         const valeur = options.lookup(nom);
         if (valeur === undefined || valeur.trim() === "") continue;
@@ -168,6 +185,7 @@ export function resoudreJetonsChatBots(
 
     for (const botId of options.bots) {
       if (refuses.has(botId)) continue;
+      if (options.active !== undefined && options.active(botId, plateforme) !== true) continue;
       for (const nom of nomsSecretsChat(botId, plateforme)) {
         const valeur = options.lookup(nom);
         if (valeur === undefined || valeur.trim() === "") continue;

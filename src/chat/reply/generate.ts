@@ -70,7 +70,7 @@ export interface RemoteReplyGeneratorOptions {
    * Nom affiché du bot (préfixe du prompt), **par PLATEFORME DU RUN**.
    *
    * ⚠️ La conversation est passée EXPRÈS : un run né dans un salon Discord doit nommer le
-   * bot Discord même quand `chat.mode` affiche Mattermost (les deux plateformes se
+   * bot Discord même quand l'autre plateforme est aussi active (les deux se
    * synchronisent indépendamment du mode). Un `botName()` sans argument ne pouvait lire que
    * le mode GLOBAL, donc se tromper de plateforme.
    */
@@ -170,7 +170,7 @@ export type RemoteReplyOutcome = string | { text: string; fichiers?: readonly st
  * PLATEFORME d'un run distant.
  *
  * ⚠️ C'est la plateforme de la CONVERSATION qui décide, jamais le mode d'AFFICHAGE
- * (`chat.mode`) : les deux plateformes se synchronisent INDÉPENDAMMENT du mode. Un run né
+ * : les deux plateformes se synchronisent INDÉPENDAMMENT l'une de l'autre. Un run né
  * dans un salon Discord alors que l'interface regarde Mattermost doit se nommer « bot
  * Discord » et recevoir la politique d'outils d'un run Discord.
  *
