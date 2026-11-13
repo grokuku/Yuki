@@ -2095,12 +2095,16 @@ void (async () => {
     // nécessite un geste utilisateur, on `resume()` le contexte au clic.
     const player = createTtsPlayer();
     // ⚠️ Les composants autonomes qui lisent le bot ACTIF (personnalité, voix,
-    // plateformes) ne sont montés que si le bot affiché EST le bot actif : sinon
+    // réglages d'exécution) ne sont montés que si le bot affiché EST le bot actif : sinon
     // ils afficheraient les données d'un autre bot et enregistreraient chez lui
     // (`bots-api.js` : `idBotActif`). Le bandeau `#bot-notice` explique l'absence.
     // ⚠️ LOT 35j — EXCEPTION : le panneau des DÉCLENCHEURS est monté pour TOUT bot
     // affiché (voir plus bas), parce que ses routes sont désormais PAR BOT
     // (`?bot=<id>`) : il n'a plus besoin d'être le bot actif pour être juste.
+    // ⚠️ LOT 42 — MÊME EXCEPTION POUR LE PANNEAU DES DISCUSSIONS (« Plateformes ») :
+    // il était absent de la page d'un bot non actif (onglet vide), donc impossible
+    // d'y brancher un bot ajouté après coup sur Mattermost ou Discord. Il est monté
+    // pour tout bot affiché ET vise SES propres routes (`initChatPanelBot`).
     const panneauxDuBotActif = !PAGE_BOT || botAfficheEstActif();
     if (voicesRoot && panneauxDuBotActif) {
       voicesPanel = initVoicesPanel({
@@ -2181,10 +2185,27 @@ void (async () => {
     }
     // Panneau « Discussions » (Mattermost, Discord) : jeton saisi une fois, état de la
     // connexion, backfill 2 semaines, canaux suivis. Composant autonome monté par id.
-    if (panneauxDuBotActif && chatRoot) {
+    // ⚠️ LOT 42 — LA GARDE CHANGE, ET ELLE EST NOMMÉE : le panneau des discussions ne
+    // dépend PLUS de `panneauxDuBotActif` (il était donc ABSENT de `/bots?b=<autre bot>`,
+    // d'où l'onglet « Plateformes » vide, réduit au bouton « Enregistrer »). Il est monté
+    // pour TOUT bot AFFICHÉ, avec SON identifiant, comme le panneau des déclencheurs :
+    // le panneau vise alors ses routes (`PUT /api/bots/<id>/config`) et SON jeton de
+    // coffre, jamais ceux de `yuki` (`chat-panel.js`, `initChatPanelBot`).
+    // Sans bot résolu (registre illisible), on ne monte rien : on n'affiche jamais les
+    // réglages de plateforme d'un autre bot en laissant croire qu'ils sont à lui.
+    const botDuChat = PAGE_BOT ? (botCourant?.id ?? "") : "";
+    if (botDuChat !== "" && chatRoot) {
       initChatPanel({
         root: chatRoot,
         HolafModal,
+        botId: botDuChat,
+        botNom: botCourant?.nom ?? botDuChat,
+        // ⚠️ Bot de la PILE (`GET /api/bots` → `principal`) : c'est LUI que servent les
+        // routes d'instance `/api/chat/**`. Pour tout autre bot, le panneau passe par
+        // les routes de ce bot (aucune écriture croisée possible).
+        botDePile: botPrincipal ?? BOT_REPLI,
+        // ⚠️ `actif` ≠ « tourne » : c'est `execution.demarre` qui le dit (lot 36 L8).
+        botDemarre: botCourant?.execution?.demarre === true,
         // ⚠️ Ancre `#declencheurs` / `#plateformes` : les sections de plateforme ne sont
         // remplies qu'APRÈS la première lecture d'état, et la hauteur de l'onglet n'est
         // DÉFINITIVE qu'à ce moment-là. On refait donc le défilement une fois, puis plus

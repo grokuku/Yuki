@@ -34,6 +34,7 @@
  */
 
 import { badgeFor } from "./chat-mode.js";
+import { BOT_PAR_DEFAUT, BOT_WRITE_HEADERS, cheminConfigBot } from "./bots-api.js";
 import { formatDateTimeFr } from "./horodatage.js";
 
 /** En-tête exigé par les routes de discussion (lecture ET écriture). */
@@ -193,7 +194,15 @@ const PLATFORMS = [
  * @param {object} deps
  * @param {HTMLElement} deps.root conteneur (`#chat-root`).
  * @param {object} [deps.HolafModal] modale de la brique (`alert`).
- * @param {typeof fetch} [deps.fetchImpl] `fetch` injectable (tests).
+ * @param {(url: string, init?: RequestInit) => Promise<Response>} [deps.fetchImpl] `fetch` injectable (tests).
+ * @param {string} [deps.botId] bot AFFICHÉ (`/bots?b=<id>`). Absent ou égal à
+ *   `botDePile` ⇒ panneau d'INSTANCE (`/api/chat/**`) ; sinon le panneau vise SES
+ *   routes et SON jeton (`initChatPanelBot`).
+ * @param {string} [deps.botDePile] bot de la PILE (`GET /api/bots` → `principal`) :
+ *   le seul que servent les routes d'instance `/api/chat/**`.
+ * @param {string} [deps.botNom] nom lisible du bot affiché.
+ * @param {boolean} [deps.botDemarre] ce qui TOURNE (`execution.demarre`), distinct
+ *   de « actif » : un bot arrêté reste configurable.
  * @param {() => void} [deps.onFirstRender] appelé UNE fois, après la PREMIÈRE
  *   lecture de l'état (succès ou échec) et le rendu qui la suit. Sert aux ancres
  *   (`/config#chat-remote-agents`) : la hauteur de la page n'est définitive qu'à ce
@@ -204,6 +213,24 @@ export function initChatPanel(deps) {
   if (!root) throw new Error("initChatPanel : racine absente");
   const modal = deps.HolafModal ?? null;
   const doFetch = deps.fetchImpl ?? ((url, init) => fetch(url, init));
+  /**
+   * Bot AFFICHÉ (`/bots?b=<id>`) et bot de la PILE (`GET /api/bots` → `principal`).
+   *
+   * ⚠️ LOT 42 — POURQUOI CE PANNEAU SAIT VISER UN AUTRE BOT QUE CELUI DE LA PILE :
+   * les routes d'instance `/api/chat/**` sont liées au bot de la PILE (elles lisent et
+   * écrivent SON miroir, SON jeton, SON `chat.mode`). Les monter pour un autre bot
+   * afficherait les réglages de `yuki` et écrirait CHEZ LUI. Pour tout autre bot, le
+   * panneau passe donc par SES routes : `PUT /api/bots/<id>/config` (réglages propres)
+   * et le coffre (`POST /api/secrets`, nom `YUKI_CHAT_<BOT>__<PLATEFORME>`).
+   */
+  const botId = typeof deps.botId === "string" ? deps.botId : "";
+  const botDePile =
+    typeof deps.botDePile === "string" && deps.botDePile !== ""
+      ? deps.botDePile
+      : BOT_PAR_DEFAUT;
+  if (botId !== "" && botId !== botDePile) {
+    return initChatPanelBot({ ...deps, botId, botDePile });
+  }
   const onFirstRender = typeof deps.onFirstRender === "function" ? deps.onFirstRender : null;
   let premiereLectureTerminee = false;
   /** ⚠️ Une SEULE fois : ensuite l'utilisateur est maître de son défilement. */
@@ -821,4 +848,470 @@ export function texteJetonsBots(jetonsBots) {
     return `${bot} : ${pose ? "jeton posé" : `aucun jeton (${nom})`}`;
   });
   return `Jetons par bot — ${parts.join(" · ")}`;
+}
+
+// ─── JETON D'UN BOT : le NOM du secret (même règle que le serveur) ──────────
+
+/** Préfixe commun des jetons de discussion (`src/secrets/references.ts`). */
+export const PREFIXE_SECRET_CHAT = "YUKI_CHAT";
+
+/**
+ * Nom du secret du jeton d'un bot pour une plateforme :
+ * `YUKI_CHAT_<BOT>__<PLATEFORME>` (séparateur `__`, tirets du slug → `_`).
+ *
+ * ⚠️ COPIE ASSUMÉE de `nomSecretChat` (`src/chat/jetons-bot.ts`) : cette page est
+ * du JavaScript servi tel quel, elle ne peut pas importer un module TypeScript du
+ * serveur. La règle est verrouillée par un test qui COMPARE les deux
+ * (`tests/ui/plateformes-par-bot.test.ts`) : renommer l'un sans l'autre ferait
+ * écrire un jeton que le serveur ne lirait jamais.
+ */
+export function nomSecretChatBot(botId, plateforme) {
+  const proprietaire = String(botId).toUpperCase().replace(/-/g, "_");
+  return `${PREFIXE_SECRET_CHAT}_${proprietaire}__${String(plateforme).toUpperCase()}`;
+}
+
+/**
+ * Noms ACCEPTÉS pour le jeton d'un bot (le premier est celui d'un nouveau jeton).
+ * Seul `yuki` garde droit à l'ancien nom d'instance (installations existantes).
+ */
+export function nomsSecretsChatBot(botId, plateforme) {
+  const noms = [nomSecretChatBot(botId, plateforme)];
+  if (botId === BOT_PAR_DEFAUT) {
+    const historique = `${PREFIXE_SECRET_CHAT}_${String(plateforme).toUpperCase()}`;
+    if (!noms.includes(historique)) noms.push(historique);
+  }
+  return noms;
+}
+
+/** Une ligne d'état du jeton de CE bot (le nom du secret, jamais sa valeur). */
+export function texteEtatJetonBot(botId, plateforme, noms, coffreConfigure = true) {
+  if (!coffreConfigure) {
+    return (
+      "Coffre verrouillé : aucun jeton ne peut être lu ni enregistré " +
+      "(la clé maître `YUKI_VAULT_KEY` manque)."
+    );
+  }
+  const attendus = nomsSecretsChatBot(botId, plateforme);
+  const connu = new Set(Array.isArray(noms) ? noms : [...(noms ?? [])]);
+  const present = attendus.find((nom) => connu.has(nom));
+  if (present !== undefined) {
+    return `Un jeton est enregistré pour ce bot sous « ${present} » (il n'est jamais réaffiché).`;
+  }
+  return `Aucun jeton pour ce bot : enregistrez-le ci-dessus (nom du coffre : ${attendus[0]}).`;
+}
+
+/** Plateformes de discussion proposées à un bot (mêmes identifiants que `chat.mode`). */
+const PLATEFORMES_BOT = [
+  {
+    id: "mattermost",
+    titre: "Discussions — Mattermost",
+    intro:
+      "Le bot se connecte à Mattermost avec SON jeton : il lit les canaux dont il est " +
+      "membre (deux semaines d'historique, 1 000 messages par canal au plus).",
+  },
+  {
+    id: "discord",
+    titre: "Discussions — Discord",
+    intro:
+      "Le bot se connecte à Discord avec SON jeton : il lit les salons TEXTE des " +
+      "serveurs où il est présent (deux semaines d'historique, 1 000 messages au plus).",
+  },
+];
+
+/** Choix de plateforme (`chat.mode`) : libellé lisible pour chaque valeur du schéma. */
+const MODES_BOT = [
+  { valeur: "local", libelle: "Local — aucune plateforme" },
+  { valeur: "mattermost", libelle: "Mattermost" },
+  { valeur: "discord", libelle: "Discord" },
+];
+
+/**
+ * Phrase d'honnêteté sur l'état de CE bot : ce qu'on sait, et ce qu'on ne sait pas.
+ *
+ * ⚠️ L'état de connexion en direct (`connecté` / `erreur`) n'est exposé par le
+ * serveur QUE pour le bot de la pile (`GET /api/chat/status`) : il n'existe aucune
+ * route d'état par bot. On le DIT, au lieu de laisser croire à un état inconnu
+ * présenté comme « non configuré ».
+ */
+export function texteEtatConnexionBot(demarre) {
+  const demarrage =
+    demarre === true
+      ? "Le bot tourne : son jeton est lu à son démarrage, un jeton ajouté maintenant " +
+        "sera pris en compte à son prochain démarrage."
+      : demarre === false
+        ? "Le bot est arrêté : ce panneau reste ÉDITABLE (on configure un bot arrêté), " +
+          "et ces réglages s'appliqueront à son démarrage."
+        : "Ces réglages s'appliquent au démarrage du bot.";
+  return (
+    `${demarrage} L'état de la connexion en direct (connecté / erreur) n'est exposé ` +
+    "que pour le bot de la pile : ici, on sait seulement si le jeton de ce bot est au " +
+    "coffre."
+  );
+}
+
+/**
+ * Panneau « Plateformes » d'un bot AUTRE que celui de la pile (`/bots?b=<id>`).
+ *
+ * ⚠️ ÉCRITURES, toutes vers CE bot :
+ *  - `chat.mode`, `chat.discord.guildId`, `chat.discord.maxUploadBytes` →
+ *    `PUT /api/bots/<id>/config` (ce sont des clés `scope: bot`) ;
+ *  - le jeton → `POST /api/secrets` au nom `YUKI_CHAT_<BOT>__<PLATEFORME>`.
+ * ⚠️ AUCUNE route d'instance `/api/chat/**` n'est appelée ici : elles écrivent dans
+ * l'overlay et le jeton du bot de la PILE (`yuki`). C'est le bug le plus grave que
+ * ce panneau pouvait causer, et la raison d'être de cette branche.
+ *
+ * @param {object} deps mêmes dépendances que `initChatPanel`, plus `botId`,
+ *   `botDePile`, `botNom` et `botDemarre` (`GET /api/bots` → `execution.demarre`).
+ */
+export function initChatPanelBot(deps) {
+  const root = deps.root;
+  if (!root) throw new Error("initChatPanelBot : racine absente");
+  const modal = deps.HolafModal ?? null;
+  const doFetch = deps.fetchImpl ?? ((url, init) => fetch(url, init));
+  const onFirstRender = typeof deps.onFirstRender === "function" ? deps.onFirstRender : null;
+  const botId = String(deps.botId);
+  const botNom =
+    typeof deps.botNom === "string" && deps.botNom !== "" ? deps.botNom : botId;
+  const botDemarre = deps.botDemarre === true;
+  const chemin = cheminConfigBot(botId);
+
+  /** État LU (jamais deviné) : valeurs effectives du bot + noms du coffre. */
+  const etat = {
+    mode: "local",
+    guildId: "",
+    maxUploadBytes: "",
+    noms: new Set(),
+    coffreConfigure: true,
+    erreur: "",
+    statut: "",
+  };
+  let premierRenduFait = false;
+  function signalerPremierRendu() {
+    if (premierRenduFait) return;
+    premierRenduFait = true;
+    onFirstRender?.();
+  }
+
+  async function request(url, init) {
+    const response = await doFetch(url, init);
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+    if (!response.ok) {
+      const error = new Error(data?.message ?? `HTTP ${response.status}`);
+      error.data = data;
+      throw error;
+    }
+    return data;
+  }
+
+  async function report(titre, error) {
+    const message = apiMessage(error, "erreur inconnue");
+    if (modal?.alert) await modal.alert(titre, message, { okText: "Compris" });
+    else etat.statut = `${titre} — ${message}`;
+  }
+
+  // ─── En-tête : à QUI appartient ce panneau ───────────────────────────────
+  const titre = h("h2", {
+    class: "config-group__title",
+    text: `Plateformes de ${botNom}`,
+  });
+  const identite = h("p", {
+    class: "config-helper",
+    text:
+      `Ces réglages appartiennent à « ${botNom} » (identifiant ${botId}) : ils sont ` +
+      "enregistrés pour ce bot, jamais pour celui de la pile.",
+  });
+
+  // ─── ① Choix de la plateforme (`chat.mode`) ─────────────────────────────
+  const modeSelect = h("select", {
+    class: "config-input",
+    id: "chat-bot-mode",
+    "aria-label": `Plateforme de discussion de ${botNom}`,
+  });
+  for (const mode of MODES_BOT) {
+    modeSelect.append(h("option", { value: mode.valeur, text: mode.libelle }));
+  }
+  const saveMode = h("button", {
+    class: "button button--small",
+    type: "button",
+    text: "Enregistrer la plateforme",
+  });
+  const modeStatut = h("p", { class: "config-helper", role: "status" });
+  saveMode.addEventListener("click", () => {
+    void (async () => {
+      const valeur = String(modeSelect.value ?? "");
+      if (!MODES_BOT.some((mode) => mode.valeur === valeur)) {
+        modeStatut.textContent = "Choisissez Local, Mattermost ou Discord.";
+        return;
+      }
+      saveMode.disabled = true;
+      modeStatut.textContent = "Enregistrement…";
+      try {
+        await request(chemin, {
+          method: "PUT",
+          headers: BOT_WRITE_HEADERS,
+          body: JSON.stringify({ "chat.mode": valeur }),
+        });
+        modeStatut.textContent = `Plateforme de ${botNom} enregistrée : ${libelleMode(valeur)}.`;
+        await refresh();
+      } catch (error) {
+        modeStatut.textContent = "";
+        await report("Plateforme non enregistrée", error);
+      } finally {
+        saveMode.disabled = false;
+      }
+    })();
+  });
+  const modeSection = h("section", { class: "config-group" }, [
+    h("h2", { class: "config-group__title", text: "Plateforme de discussion" }),
+    h("p", {
+      class: "config-helper",
+      text:
+        "Quelle plateforme ce bot utilise comme discussion PRINCIPALE. La " +
+        "synchronisation, elle, démarre dès qu'un jeton est présent.",
+    }),
+    h("div", { class: "config-row" }, [
+      h("label", { class: "config-label", for: "chat-bot-mode", text: "Plateforme" }),
+      h("div", { class: "config-actions" }, [modeSelect, saveMode]),
+    ]),
+    modeStatut,
+  ]);
+
+  // ─── ② Jeton + réglages propres, une section par plateforme ─────────────
+  const sections = PLATEFORMES_BOT.map((plateforme) => {
+    const jetonInput = h("input", {
+      class: "config-input",
+      type: "password",
+      id: `chat-bot-${plateforme.id}-jeton`,
+      autocomplete: "new-password",
+      spellcheck: "false",
+      placeholder: "jeton du bot (jamais réaffiché)",
+      "aria-label": `Jeton ${plateforme.id} de ${botNom}`,
+    });
+    const saveJeton = h("button", {
+      class: "button button--small",
+      type: "button",
+      text: "Enregistrer le jeton",
+    });
+    const jetonEtat = h("p", { class: "config-helper" });
+    const jetonStatut = h("p", { class: "config-helper", role: "status" });
+    saveJeton.addEventListener("click", () => {
+      void (async () => {
+        const jeton = jetonInput.value.trim();
+        if (jeton === "") {
+          jetonStatut.textContent =
+            "Collez d'abord le jeton de ce bot (il est chiffré dans le coffre).";
+          return;
+        }
+        saveJeton.disabled = true;
+        jetonStatut.textContent = "Enregistrement…";
+        try {
+          await request("/api/secrets", {
+            method: "POST",
+            headers: BOT_WRITE_HEADERS,
+            body: JSON.stringify({
+              name: nomSecretChatBot(botId, plateforme.id),
+              value: jeton,
+              label: `Jeton ${plateforme.id} du bot ${botId}`,
+            }),
+          });
+          // ⚠️ Le champ est vidé IMMÉDIATEMENT : le jeton ne reste pas dans le DOM.
+          jetonInput.value = "";
+          jetonStatut.textContent = "Jeton enregistré : il ne sera plus jamais affiché.";
+          await refresh();
+        } catch (error) {
+          jetonStatut.textContent = "";
+          await report("Jeton non enregistré", error);
+        } finally {
+          saveJeton.disabled = false;
+        }
+      })();
+    });
+
+    const enfants = [
+      h("h2", { class: "config-group__title", text: plateforme.titre }),
+      h("p", { class: "config-helper", text: plateforme.intro }),
+      h("div", { class: "chat-panel__field" }, [
+        h("label", {
+          class: "config-label",
+          for: `chat-bot-${plateforme.id}-jeton`,
+          text: "Jeton du bot",
+        }),
+        h("div", { class: "config-actions" }, [jetonInput, saveJeton]),
+        jetonEtat,
+        jetonStatut,
+        h("p", {
+          class: "config-helper",
+          text:
+            "Le jeton est chiffré dans le coffre de Yuki sous le nom propre à ce bot : " +
+            "il n'est plus jamais réaffiché.",
+        }),
+      ]),
+    ];
+
+    // Options PROPRES au bot (Discord) : serveur suivi et borne d'envoi.
+    let guildInput = null;
+    let uploadInput = null;
+    const optionsStatut = h("p", { class: "config-helper", role: "status" });
+    if (plateforme.id === "discord") {
+      guildInput = h("input", {
+        class: "config-input",
+        type: "text",
+        id: "chat-bot-discord-guild",
+        autocomplete: "off",
+        spellcheck: "false",
+        placeholder: "identifiant du serveur (vide = tous)",
+        "aria-label": "Serveur Discord suivi",
+      });
+      uploadInput = h("input", {
+        class: "config-input",
+        type: "number",
+        min: "1",
+        id: "chat-bot-discord-upload",
+        autocomplete: "off",
+        "aria-label": "Taille maximale d'un fichier envoyé (octets)",
+      });
+      const saveOptions = h("button", {
+        class: "button button--small",
+        type: "button",
+        text: "Enregistrer les options",
+      });
+      saveOptions.addEventListener("click", () => {
+        void (async () => {
+          const octets = Number(uploadInput.value);
+          if (!Number.isInteger(octets) || octets < 1) {
+            optionsStatut.textContent =
+              "La borne d'envoi doit être un nombre entier d'octets (au moins 1).";
+            return;
+          }
+          saveOptions.disabled = true;
+          optionsStatut.textContent = "Enregistrement…";
+          try {
+            await request(chemin, {
+              method: "PUT",
+              headers: BOT_WRITE_HEADERS,
+              body: JSON.stringify({
+                "chat.discord.guildId": guildInput.value.trim(),
+                "chat.discord.maxUploadBytes": octets,
+              }),
+            });
+            optionsStatut.textContent = "Options Discord de ce bot enregistrées.";
+            await refresh();
+          } catch (error) {
+            optionsStatut.textContent = "";
+            await report("Options non enregistrées", error);
+          } finally {
+            saveOptions.disabled = false;
+          }
+        })();
+      });
+      enfants.push(
+        h("div", { class: "chat-panel__field" }, [
+          h("h3", { class: "config-group__title", text: "Options de ce bot" }),
+          h("div", { class: "config-row" }, [
+            h("label", {
+              class: "config-label",
+              for: "chat-bot-discord-guild",
+              text: "Serveur suivi",
+            }),
+            guildInput,
+          ]),
+          h("div", { class: "config-row" }, [
+            h("label", {
+              class: "config-label",
+              for: "chat-bot-discord-upload",
+              text: "Taille maximale d'un fichier envoyé (octets)",
+            }),
+            uploadInput,
+          ]),
+          h("div", { class: "config-actions" }, [saveOptions]),
+          optionsStatut,
+        ]),
+      );
+    }
+
+    return {
+      id: plateforme.id,
+      element: h("section", { class: "config-group" }, enfants),
+      jetonEtat,
+      guildInput,
+      uploadInput,
+    };
+  });
+
+  // ─── ③ Ce qu'on sait (et ce qu'on ne sait pas) de l'état ────────────────
+  const etatConnexion = h("p", { class: "config-helper", text: texteEtatConnexionBot(botDemarre) });
+  const erreurLecture = h("p", { class: "config-error" });
+  erreurLecture.hidden = true;
+
+  const limites = h("p", {
+    class: "config-helper",
+    text:
+      "Limites assumées : l'URL du serveur Mattermost se règle depuis le panneau du bot " +
+      "de la pile (aucune route ne l'expose pour un autre bot), et les demandes " +
+      "d'APPROBATION ne sont pas relayées dans un canal.",
+  });
+
+  function libelleMode(valeur) {
+    return MODES_BOT.find((mode) => mode.valeur === valeur)?.libelle ?? valeur;
+  }
+
+  function render() {
+    // ⚠️ On ne réécrit pas le champ que l'utilisateur est en train de changer.
+    if (document.activeElement !== modeSelect) modeSelect.value = etat.mode;
+    for (const section of sections) {
+      section.jetonEtat.textContent = texteEtatJetonBot(
+        botId,
+        section.id,
+        etat.noms,
+        etat.coffreConfigure,
+      );
+      if (section.guildInput !== null && document.activeElement !== section.guildInput) {
+        section.guildInput.value = etat.guildId;
+      }
+      if (section.uploadInput !== null && document.activeElement !== section.uploadInput) {
+        section.uploadInput.value = etat.maxUploadBytes;
+      }
+    }
+    const messages = [etat.erreur, etat.statut].filter((texte) => texte !== "");
+    erreurLecture.hidden = messages.length === 0;
+    erreurLecture.textContent = messages.join(" · ");
+  }
+
+  async function refresh() {
+    const erreurs = [];
+    try {
+      const config = await request(chemin, { headers: READ_HEADERS, cache: "no-store" });
+      const champs = config?.fields ?? {};
+      etat.mode =
+        typeof champs["chat.mode"]?.value === "string" ? champs["chat.mode"].value : "local";
+      etat.guildId = String(champs["chat.discord.guildId"]?.value ?? "");
+      etat.maxUploadBytes = String(champs["chat.discord.maxUploadBytes"]?.value ?? "");
+    } catch (error) {
+      erreurs.push(`configuration de ce bot illisible : ${apiMessage(error, "erreur inconnue")}`);
+    }
+    try {
+      const secrets = await request("/api/secrets", { headers: READ_HEADERS, cache: "no-store" });
+      etat.coffreConfigure = secrets?.configured !== false;
+      const entrees = Array.isArray(secrets?.entries) ? secrets.entries : [];
+      etat.noms = new Set(
+        entrees.map((entree) => String(entree?.name ?? "")).filter((nom) => nom !== ""),
+      );
+    } catch (error) {
+      etat.coffreConfigure = false;
+      erreurs.push(`coffre illisible : ${apiMessage(error, "erreur inconnue")}`);
+    }
+    etat.erreur = erreurs.join(" · ");
+    render();
+    signalerPremierRendu();
+  }
+
+  root.replaceChildren(titre, identite, modeSection, ...sections.map((s) => s.element), etatConnexion, erreurLecture, limites);
+  render();
+  void refresh();
+  return { element: root, refresh };
 }
