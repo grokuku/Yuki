@@ -73,6 +73,30 @@ export function nomsSecretsChat(botId: string, plateforme: PlateformeChat): stri
   return noms;
 }
 
+/**
+ * Jeton d'un bot pour une plateforme : le premier nom ACCEPTÉ qui porte une valeur.
+ *
+ * ⚠️ C'EST LA SEULE LECTURE LÉGITIME D'UN JETON À L'EXÉCUTION — jamais un nom
+ * d'instance en dur (`YUKI_CHAT_MATTERMOST`). Un adaptateur qui ne lit que
+ * l'ancien nom ignore un jeton posé sous le nom PROPRE du bot : l'interface dit
+ * « jeton posé » (`tokenConfigured`, qui lit `nomsSecretsChat`) et la connexion
+ * échoue quand même. Pire, en multi-bot, ce jeton d'instance ne dit pas à QUEL
+ * bot il appartient : il ne doit donc jamais servir un bot autre que son porteur.
+ */
+export function jetonChatDeBot(
+  lookup: (nom: string) => string | undefined,
+  botId: string,
+  plateforme: PlateformeChat,
+): string | undefined {
+  const id = String(botId).trim();
+  if (id === "") return undefined;
+  for (const nom of nomsSecretsChat(id, plateforme)) {
+    const valeur = lookup(nom);
+    if (valeur !== undefined && valeur.trim() !== "") return valeur;
+  }
+  return undefined;
+}
+
 /** Jeton RÉSOLU pour un bot et une plateforme. */
 export interface JetonChat {
   readonly botId: string;

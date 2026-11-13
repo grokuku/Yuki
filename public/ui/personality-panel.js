@@ -54,7 +54,11 @@ function codePointLength(text) {
 }
 
 const BOOTSTRAP_HELP = [
-  "La personnalité est un texte Markdown qui décrit QUI est Yuki et COMMENT elle s'exprime.",
+  "⚠️ La PERSONNALITÉ DU PROMPT de ce bot se règle dans le champ « Personnalité » " +
+    "(plus bas, section « Personnalité et prompts système »). Ce panneau-ci édite la " +
+    "personnalité PARTAGÉE de l'instance (fichier personality.md) : ne mettez pas la même " +
+    "chose aux deux endroits.",
+  "La personnalité est un texte Markdown qui décrit QUI est le bot et COMMENT il s'exprime.",
   "Elle est relue à CHAQUE tour : une modification s'applique tout de suite, sans redémarrage.",
   "Pour l'amorcer depuis une ancienne « âme » : déposez le fichier personality.md dans le volume state " +
     "(à côté de memory.jsonl), ou collez ici le contenu d'un ancien SOUL.md puis Enregistrez. " +
@@ -1070,7 +1074,10 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     const wrap = h("section", { class: "config-group personality-panel" });
     wrap.append(
       h("div", { class: "config-group__head" }, [
-        h("h2", { class: "config-group__title", text: "Personnalité de Yuki" }),
+        h("h2", {
+          class: "config-group__title",
+          text: "Personnalité partagée (fichier personality.md)",
+        }),
       ]),
     );
 
@@ -1095,7 +1102,7 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
       spellcheck: "false",
       rows: "16",
       maxlength: String(TEXTAREA_MAXLENGTH),
-      "aria-label": "Personnalité de Yuki",
+      "aria-label": "Personnalité partagée (fichier personality.md)",
     });
     textarea.value = state.text;
     state.editValue = state.text;

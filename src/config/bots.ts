@@ -73,7 +73,7 @@ export interface OptionsConfigBot {
    * lui-même quand ils sont omis ; `main()` les fournit pour que TOUS les bots
    * partagent les mêmes défauts que la pile (et pour garder le repli du code).
    */
-  promptDefaults?: { light: string; heavy: string };
+  promptDefaults?: { light: string; heavy: string; personnalite?: string };
   /** Environnement source (tests). Défaut : `process.env`. */
   processEnv?: NodeJS.ProcessEnv;
   /** Store commun injectable (tests). */

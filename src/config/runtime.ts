@@ -104,7 +104,7 @@ export interface ValueFieldSnapshot {
   scope: FieldScope;
   /**
    * Valeur par DÉFAUT réellement appliquée si aucune surcharge n'était
-   * enregistrée : pour `prompts.light` / `prompts.heavy`, c'est le CONTENU DU
+   * enregistrée : pour `prompts.personnalite` / `prompts.light` / `prompts.heavy`, c'est le CONTENU DU
    * FICHIER LIVRÉ (jamais `""` quand le fichier existe).
    *
    * ⚠️ Sans elle, l'UI ne pouvait deviner le défaut que par un miroir codé en
@@ -172,8 +172,16 @@ export interface ConfigRuntimeOptions {
   botId?: string;
   /** Environnement source (tests). Défaut : `process.env`. */
   processEnv?: NodeJS.ProcessEnv;
-  /** Défauts des prompts (contenu des fichiers livrés). */
-  promptDefaults?: { light: string; heavy: string };
+  /**
+   * Défauts des prompts (contenu des fichiers livrés).
+   *
+   * ⚠️ `personnalite` est OPTIONNEL : quand l'appelant fournit `promptDefaults`
+   * sans elle, la personnalité par défaut est la chaîne VIDE (aucun bloc) plutôt
+   * que le fichier livré — c'est ce qui garde les bancs de test indépendants du
+   * contenu de `config/pi/`. Quand `promptDefaults` est omis, les trois sont lus
+   * depuis les fichiers livrés.
+   */
+  promptDefaults?: { light: string; heavy: string; personnalite?: string };
 }
 
 /**
@@ -273,10 +281,20 @@ export class ConfigRuntime {
     for (const [path, descriptor] of Object.entries(CONFIG_SCHEMA)) {
       this.defaults[path] = descriptor.default;
     }
-    const light = options.promptDefaults?.light ?? readTextFile(options.env.piSystemPromptPath);
-    const heavy = options.promptDefaults?.heavy ?? readTextFile(options.env.piHeavySystemPromptPath);
+    const defaults = options.promptDefaults;
+    const light = defaults?.light ?? readTextFile(options.env.piSystemPromptPath);
+    const heavy = defaults?.heavy ?? readTextFile(options.env.piHeavySystemPromptPath);
+    // ⚠️ PERSONNALITÉ : même règle que les prompts (le fichier livré fait le
+    // défaut), avec une nuance VOULUE — un `promptDefaults` fourni sans
+    // `personnalite` signifie « pas de personnalité » (`""`), jamais « lis le
+    // fichier » : les bancs de test fixent leurs trois textes.
+    const personnalite =
+      defaults !== undefined
+        ? (defaults.personnalite ?? "")
+        : readTextFile(options.env.piPersonnalitePath);
     if (light.length > 0) this.defaults["prompts.light"] = light;
     if (heavy.length > 0) this.defaults["prompts.heavy"] = heavy;
+    if (personnalite.length > 0) this.defaults["prompts.personnalite"] = personnalite;
 
     // Surcharges d'environnement (validées strictement : erreur explicite).
     // ⚠️ Les variables RETIRÉES au lot 35b n'agissent plus : on le DIT (une

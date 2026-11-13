@@ -198,6 +198,12 @@ const state = {
    * Jamais recopiée dans l'UI : le bloc affiché est bien celui injecté.
    */
   voiceInstruction: "",
+  /**
+   * ⚠️ LISTE D'OUTILS RÉELLE du bot (lecture seule), servie par `GET /api/config`
+   * et `GET /api/bots/<id>/config` (`outilsGeneres`). `null` = l'instance ne sait
+   * pas la calculer : on n'affiche alors AUCUNE liste (jamais une liste inventée).
+   */
+  outilsGeneres: null,
   initial: new Map(),
   inputs: new Map(),
   rows: new Map(),
@@ -618,6 +624,58 @@ function renderField(field) {
  * du serveur (`voiceInstruction`), donc l'UI montre bien CELUI injecté, jamais
  * une copie susceptible de diverger. Aucun style inline (CSP stricte).
  */
+/**
+ * Bloc LECTURE SEULE — la LISTE D'OUTILS **réellement générée** pour ce bot
+ * (`outilsGeneres`), donc celle que le prompt annonce au modèle. Elle vient du
+ * serveur (`toolAllowlistForChat`) : l'UI n'en recopie jamais une.
+ * Aucun style inline (CSP stricte), aucun rendu par chaîne de balisage.
+ */
+function renderToolsInstruction() {
+  const block = h("div", { class: "config-voice-instruction" });
+  block.append(
+    h("p", {
+      class: "config-helper",
+      text: "Outils générés à chaque tour (lecture seule)",
+    }),
+  );
+  if (Array.isArray(state.outilsGeneres)) {
+    if (state.outilsGeneres.length === 0) {
+      block.append(
+        h("p", {
+          class: "config-helper",
+          text:
+            "Aucun outil ouvert pour ce bot : il ne peut que répondre. Les capacités " +
+            "se règlent dans l'onglet « Général ».",
+        }),
+      );
+    } else {
+      const liste = h("ul", { class: "config-tools-list" });
+      for (const nom of state.outilsGeneres) {
+        liste.append(h("li", {}, [h("code", { text: nom })]));
+      }
+      block.append(liste);
+    }
+  } else {
+    block.append(
+      h("p", {
+        class: "config-helper",
+        text: "Cette instance ne sait pas exposer la liste des outils.",
+      }),
+    );
+  }
+  block.append(
+    h("p", {
+      class: "config-helper",
+      text:
+        "Cette liste n'est PAS un texte : elle est régénérée depuis les capacités " +
+        "réelles du bot, donc un outil ajouté apparaît et un outil retiré disparaît " +
+        "sans réédition. C'est aussi ce qui empêche d'effacer des outils en éditant " +
+        "la personnalité ou le prompt système.",
+    }),
+  );
+  return block;
+}
+
 function renderVoiceInstruction() {
   const block = h("div", { class: "config-voice-instruction" });
   block.append(
@@ -760,6 +818,9 @@ function renderGroup(group, champs) {
   }
   if (group.voiceInstruction) {
     section.append(renderVoiceInstruction());
+  }
+  if (group.toolsInstruction) {
+    section.append(renderToolsInstruction());
   }
   return section;
 }
@@ -1006,8 +1067,14 @@ function applySnapshot(body) {
   const fuseau = state.fields["ui.timeZone"]?.value;
   setTimeZone(typeof fuseau === "string" ? fuseau : undefined);
   state.status = body.status ?? state.status;
-  // Le champ n'est présent qu'en réponse à `GET/PUT /api/config` : on ne
-  // l'efface pas si une réponse ne le porte pas (robustesse).
+  // Ces deux blocs de LECTURE SEULE viennent des routes de configuration
+  // (`GET/PUT /api/config` et `GET/PUT /api/bots/<id>/config`) : on ne les efface
+  // pas si une réponse ne les porte pas (robustesse).
+  if (Array.isArray(body.outilsGeneres)) {
+    state.outilsGeneres = body.outilsGeneres.filter((nom) => typeof nom === "string");
+  } else if (body.outilsGeneres === null) {
+    state.outilsGeneres = null;
+  }
   if (typeof body.voiceInstruction === "string") {
     state.voiceInstruction = body.voiceInstruction;
   }

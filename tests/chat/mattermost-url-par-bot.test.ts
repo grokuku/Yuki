@@ -227,7 +227,13 @@ describe("⑤ l'adaptateur utilise l'URL DU BOT (l'ANCIEN paramètre reste le d�
     const source = lire(join("src", "index.ts"));
     expect(source).not.toContain("baseUrl: () => chatMirror.baseUrl()");
     expect(source).not.toContain("baseUrl: () => miroir.baseUrl()");
-    expect(source).toContain("resoudreUrlMattermost");
+    // ⚠️ GARDE RÉVISÉE (lot 46) : la précédence ne s'appelle plus
+    // `resoudreUrlMattermost` DANS `index.ts`, elle s'appelle `cablageMattermostBot`
+    // (`url-bot.ts`) — même règle, PLUS le jeton du même bot. L'intention est
+    // inchangée : aucun adaptateur ne lit une URL « globale », et le câblage par
+    // bot est le seul chemin.
+    expect(source).toContain("cablageMattermostBot");
+    expect(source).toContain("baseUrl: () => cablage.url()");
   });
 
   /**
@@ -240,7 +246,13 @@ describe("⑤ l'adaptateur utilise l'URL DU BOT (l'ANCIEN paramètre reste le d�
    */
   it("l'ANCIEN paramètre reste écrit par la route d'instance (aucune migration)", () => {
     const source = lire(join("src", "index.ts"));
-    expect(source).toContain("saveBaseUrl: (url) => chatMirror.setBaseUrl(url)");
+    // ⚠️ GARDE RÉVISÉE (lot 46) : l'écriture passe par le MÊME câblage que la
+    // lecture (celui du bot demandé), au lieu d'appeler `chatMirror.setBaseUrl`
+    // « à côté » — la cible reste le miroir du bot de la pile, donc l'intention
+    // est inchangée : une instance déjà configurée n'a rien à ressaisir.
+    expect(source).toContain(
+      "saveBaseUrl: (url) => cablageMattermostPile.enregistrerUrlHistorique(url)",
+    );
     const panneauInstance = lire(join("public", "ui", "chat-panel.js"));
     // Le champ de `/config → Conversation` n'a pas bougé : même route, même corps.
     expect(panneauInstance).toContain('request("/api/chat/mattermost"');

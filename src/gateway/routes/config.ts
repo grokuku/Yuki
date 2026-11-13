@@ -116,6 +116,12 @@ export interface ConfigApiDeps {
    * `stateDir` = volume `state` : racine de `bots/` et `bots-supprimes/` ; absent
    * ⇒ les routes d'administration répondent `503 bots_admin_indisponible`.
    */
+  /**
+   * ⚠️ OUTILS EFFECTIFS d'un bot (`toolAllowlistForChat`), en LECTURE SEULE : la
+   * page « Personnalité » montre la liste que le prompt annonce réellement au
+   * modèle. Absent ⇒ l'UI n'affiche aucune liste (jamais une liste inventée).
+   */
+  outilsEffectifs?: (botId: string) => readonly string[];
   bots?: {
     registre?: RegistreBots | null;
     stateDir?: string;
@@ -285,6 +291,10 @@ function handleGet(deps: ConfigApiDeps): ConfigHttpResponse {
     // invisible. Le texte est identique quelle que soit la valeur courante du
     // champ — c'est son APPLICATION qui est conditionnelle.
     voiceInstruction: VOICE_SPEECH_INSTRUCTION,
+    // ⚠️ LISTE D'OUTILS RÉELLE du bot de la pile (lecture seule) : elle est GÉNÉRÉE
+    // à chaque composition (`src/llm/prompt-systeme.ts`) et n'est éditable nulle
+    // part. `null` = l'instance ne sait pas la calculer (aucune liste inventée).
+    outilsGeneres: deps.outilsEffectifs?.(deps.runtime.botId) ?? null,
   });
 }
 
@@ -328,6 +338,7 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
       status: result.status,
       applied: result.applied,
       voiceInstruction: VOICE_SPEECH_INSTRUCTION,
+      outilsGeneres: input.deps.outilsEffectifs?.(input.deps.runtime.botId) ?? null,
     });
   } catch (error) {
     return configWriteError(input.deps, error);
@@ -790,6 +801,7 @@ function handleBotGet(deps: ConfigApiDeps, botId: string): ConfigHttpResponse {
     fields: snapshot.fields,
     status: snapshot.status,
     voiceInstruction: VOICE_SPEECH_INSTRUCTION,
+    outilsGeneres: deps.outilsEffectifs?.(botId) ?? null,
   });
 }
 
@@ -843,6 +855,7 @@ function handleBotPut(
       status: result.status,
       applied: result.applied,
       voiceInstruction: VOICE_SPEECH_INSTRUCTION,
+      outilsGeneres: input.deps.outilsEffectifs?.(botId) ?? null,
     });
   } catch (error) {
     return configWriteError(input.deps, error);

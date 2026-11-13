@@ -119,6 +119,7 @@ import {
   cheminProprietairesCanaux,
 } from "./chat/canaux-bot.js";
 import {
+  jetonChatDeBot,
   nomSecretChat,
   nomsSecretsChat,
   resoudreJetonsChatBots,
@@ -130,8 +131,7 @@ import { DiscordChatAdapter, discordAttachmentPort } from "./chat/discord/adapte
 import { ChatAttachmentCache } from "./chat/attachments.js";
 import { DISCORD_MAX_DOWNLOAD_BYTES } from "./chat/discord/types.js";
 import { prepareMessageImages } from "./chat/mattermost/attachments.js";
-import { resoudreUrlMattermost } from "./chat/mattermost/url-bot.js";
-import { DISCORD_TOKEN_SECRET_NAME, MATTERMOST_TOKEN_SECRET_NAME } from "./secrets/references.js";
+import { cablageMattermostBot, type CablageMattermostBot } from "./chat/mattermost/url-bot.js";
 import type { ChatDiscordPort, ChatMattermostPort } from "./gateway/routes/chat.js";
 import { describeWriteFailure, inspectMountPoints, mountPoints, probeWritable } from "./config/paths.js";
 import { creerConfigsBots } from "./config/bots.js";
@@ -175,8 +175,11 @@ import { formatReportConsole } from "./gpu/report.js";
 import { JobQueue, JobStore } from "./jobs/index.js";
 import {
   HEAVY_SYSTEM_PROMPT_FALLBACK,
+  PERSONNALITE_FALLBACK,
   appendVoiceInstruction,
   avertirSiPromptLegerIncomplet,
+  avertirSiPromptsASurveiller,
+  composerPromptSysteme,
   buildModelsConfigFrom,
   evaluateMissingKeyPolicy,
   resolveAvailability,
@@ -333,6 +336,10 @@ async function main(): Promise<void> {
   const promptsLivres = {
     light: loadTextFile(env.piSystemPromptPath, FALLBACK_SYSTEM_PROMPT),
     heavy: loadTextFile(env.piHeavySystemPromptPath, HEAVY_SYSTEM_PROMPT_FALLBACK),
+    // ⚠️ PERSONNALITÉ livrée (2026-11-13) : elle est passée EXPLICITEMENT, sinon
+    // `promptDefaults` fourni sans elle signifierait « aucune personnalité »
+    // (`src/config/runtime.ts`) — et le défaut par défaut serait VIDE.
+    personnalite: loadTextFile(env.piPersonnalitePath, PERSONNALITE_FALLBACK),
   };
   // ⚠️ LOT 45 : le bot du RUN est le PREMIER à démarrer (par `ordre`, puis `id`)
   // — plus de « bot du run », plus aucun identifiant privilégié. En mode
@@ -421,6 +428,24 @@ async function main(): Promise<void> {
     for (const warning of runtime.warnings) {
       logger.warn("config.bot.fallback", { bot: botId, detail: warning });
     }
+    // ⚠️ Mêmes diagnostics de PROMPT que le bot de la pile (nom en dur, personnalité
+    // déjà présente dans le prompt enregistré) : un bot secondaire a SON overlay,
+    // donc ses propres textes — les signaler seulement pour la pile laisserait les
+    // autres mentir en silence.
+    avertirSiPromptsASurveiller(
+      logger,
+      {
+        personnalite: runtime.getString("prompts.personnalite"),
+        light: runtime.getString("prompts.light"),
+        heavy: runtime.getString("prompts.heavy"),
+      },
+      {
+        personnalite: runtime.originOf("prompts.personnalite"),
+        light: runtime.originOf("prompts.light"),
+        heavy: runtime.originOf("prompts.heavy"),
+      },
+      botId,
+    );
   }
 
   // --- CAPACITÉS DU BOT ACTIF (lot 35h) -------------------------------------
@@ -454,6 +479,17 @@ async function main(): Promise<void> {
     if (botId === botDuRun) return capacitesBot;
     const enregistre = bots.registre?.bots.find((entree) => entree.id === botId);
     return enregistre?.capacites ?? CAPACITES_BOT;
+  };
+  /**
+   * ⚠️ NOM AFFICHÉ d'un bot — LA source de l'identité injectée dans le prompt
+   * (`<identite>`, `src/llm/prompt-systeme.ts`). Le bot de la pile rend son
+   * enregistrement (`bots.bot.nom`), un autre le sien ; un bot inconnu rend son
+   * IDENTIFIANT plutôt qu'un nom inventé. Aucun nom en dur n'existe dans le code.
+   */
+  const nomDuBot = (botId: string): string => {
+    if (botId === botDuRun) return bots.bot.nom;
+    const enregistre = bots.registre?.bots.find((entree) => entree.id === botId);
+    return enregistre?.nom ?? botId;
   };
   logger.info("bots.capacites", {
     bot: botDuRun,
@@ -1223,6 +1259,24 @@ async function main(): Promise<void> {
     journal: personalityStore.journalFilePath,
     chars: personalityStore.read().chars,
   });
+  // ⚠️ DEUX PERSONNALITÉS POSSIBLES (2026-11-13) : la clé `prompts.personnalite`
+  // (par bot, composée dans le prompt) et le fichier PARTAGÉ `personality.md`
+  // (injecté à chaque tour). Si les deux sont remplies, on le DIT : deux textes
+  // d'identité qui se contredisent ne doivent pas être un effet de bord silencieux.
+  if (
+    personalityStore.read().chars > 0 &&
+    config.getString("prompts.personnalite").trim() !== ""
+  ) {
+    logger.warn("personality.deux_sources", {
+      fichier: personalityStore.filePath,
+      champ: "prompts.personnalite",
+      origine: config.originOf("prompts.personnalite"),
+      consequence:
+        "deux textes de personnalité sont injectés : celui du bot (prompt) et le fichier PARTAGÉ de l'instance",
+      action:
+        "déplacer le contenu de personality.md dans le champ « Personnalité » du bot, puis vider le fichier",
+    });
+  }
 
   // --- Règles strictes de Yuki (consignes posées par l'utilisateur) ---------
   // Fichier SÉPARÉ (voisin de personality.md), édité UNIQUEMENT par
@@ -1870,6 +1924,22 @@ async function main(): Promise<void> {
     // tâche de fond ne programme pas de tâche de fond.
     planifierTacheEnabled: true,
   });
+
+  /**
+   * ⚠️ ALLOWLIST FINALE du rôle léger pour UN bot (`toolAllowlistForChat`) : elle
+   * sert À LA FOIS de politique d'outils au host et de contenu au bloc `<outils>`
+   * du prompt (point d'assemblage : `src/llm/prompt-systeme.ts`). Une seule
+   * liste ⇒ le prompt ne peut pas annoncer autre chose que ce que le bot a.
+   *
+   * ⚠️ MÊME base que `lightToolOptions()` : seule la clé `capacites` change, pour
+   * que le prompt d'un bot secondaire décrive SES outils, pas ceux d'un autre.
+   */
+  const outilsLegerDuBot = (botId: string): readonly string[] =>
+    toolAllowlistForChat(
+      "light",
+      { ...lightToolOptions(), capacites: capacitesDuBot(botId) },
+      { chatMode: "local", remoteAgents: false, remoteTools: false },
+    );
 
   /**
    * Écrivain d'un canal distant (JUGE du mode `auto`, RÉDACTEUR de la réponse).
@@ -2571,19 +2641,30 @@ async function main(): Promise<void> {
    * distingués — et le panneau « Plateformes » d'un bot n'exposait même pas le
    * champ. La règle de précédence elle-même vit dans
    * `src/chat/mattermost/url-bot.ts` (testable sans SDK).
+   *
+   * ⚠️ LOT 46 — « PAR BOT » VEUT DIRE PAR BOT, JAMAIS « LE BOT COURANT » :
+   * l'adresse ET le jeton sont désormais résolus ENSEMBLE, par
+   * `cablageMattermostBot` (même module), pour UN bot nommé. Deux bots qui
+   * visent deux instances auto-hébergées doivent pouvoir être connectés EN MÊME
+   * TEMPS : un adaptateur qui lirait une adresse résolue au démarrage, ou le
+   * miroir de « la pile », ferait converger les deux bots sur le MÊME serveur.
    */
-  const urlMattermost = (lireConfig: () => ConfigRuntime, miroir: ChatMirrorStore): string =>
-    resoudreUrlMattermost(
-      () => lireConfig().getString("chat.mattermost.url"),
-      () => miroir.baseUrl(),
-    );
+  /** Câblage Mattermost du bot de la PILE : son overlay, son miroir, son jeton. */
+  const cablageMattermostPile: CablageMattermostBot = cablageMattermostBot({
+    botId: botDuRun,
+    urlDuBot: () => config.getString("chat.mattermost.url"),
+    miroir: chatMirror,
+    lookup: (nom) => secretStore?.lookup(nom),
+  });
 
   // Client MATTERMOST (lot 2) : REST + temps réel + miroir. ⚠️ Le JETON ne sort
-  // JAMAIS d'ici (coffre `YUKI_CHAT_MATTERMOST`, lu à chaque appel) et il n'est ni
-  // journalisé ni renvoyé par une route.
+  // JAMAIS d'ici (coffre `YUKI_CHAT_<BOT>__MATTERMOST`, lu à chaque appel) et il
+  // n'est ni journalisé ni renvoyé par une route.
   const mattermost: MattermostChatAdapter = new MattermostChatAdapter({
-    baseUrl: () => urlMattermost(() => config, chatMirror),
-    token: () => secretStore?.lookup(MATTERMOST_TOKEN_SECRET_NAME),
+    // ⚠️ URL ET JETON DU MÊME BOT (câblage ci-dessus) : les résoudre séparément
+    // enverrait le jeton d'un compte au serveur d'un autre.
+    baseUrl: () => cablageMattermostPile.url(),
+    token: () => cablageMattermostPile.jeton(),
     store: chatMirror,
     logger,
     // ⚠️ PIÈCES JOINTES : le store de Yuki est la SEULE source d'octets d'un envoi
@@ -2643,17 +2724,28 @@ async function main(): Promise<void> {
    * aucune extension d'API n'a été nécessaire. L'erreur d'un coffre verrouillé est
    * PROPAGÉE (la route la rend en 502) : on ne prétend jamais avoir effacé un jeton
    * qu'on n'a pas pu effacer.
+   *
+   * ⚠️ LOT 46 — PLUSIEURS NOMS : le jeton d'un bot se lit sous PLUSIEURS noms
+   * (`nomsSecretsChat` : le sien, puis l'ancien nom d'instance pour `yuki`). N'en
+   * effacer qu'un laisserait l'autre lisible : la route dirait « débranché » avec
+   * un jeton toujours posé, et la connexion suivante se referait sans rien dire.
    */
-  const effacerJeton = (nom: string): void => {
+  const effacerJeton = (noms: string | readonly string[]): void => {
     if (!secretStore) return;
-    // `delete` lève si le coffre est verrouillé : c'est voulu, et remonté plus haut.
-    if (secretStore.delete(nom)) refreshSecretValues();
+    let efface = false;
+    for (const nom of typeof noms === "string" ? [noms] : noms) {
+      // `delete` lève si le coffre est verrouillé : c'est voulu, et remonté plus haut.
+      if (secretStore.delete(nom)) efface = true;
+    }
+    if (efface) refreshSecretValues();
   };
 
   const mattermostPort: ChatMattermostPort = {
-    baseUrl: () => urlMattermost(() => config, chatMirror),
+    // ⚠️ L'URL du bot DEMANDÉ (ici : celui de la pile, le seul que servent les
+    // routes d'instance `/api/chat/**`), jamais une valeur résolue au démarrage.
+    baseUrl: () => cablageMattermostPile.url(),
     tokenConfigured: () =>
-      nomsSecretsChat(botDuRun, "mattermost").some((nom) => secretStore?.has(nom) === true),
+      cablageMattermostPile.nomsJeton().some((nom) => secretStore?.has(nom) === true),
     /**
      * ⚠️ L'ANCIEN PARAMÈTRE RESTE, TEL QUEL — C'EST LUI QUI SERT DE DÉFAUT.
      *
@@ -2668,8 +2760,12 @@ async function main(): Promise<void> {
      * (overlay du bot, panneau « Plateformes » de `/bots?b=<bot>`), qui PRIME sur
      * cette valeur commune. Elle n'est écrite QUE là : deux écritures pour une
      * même adresse finiraient par diverger.
+     *
+     * ⚠️ LOT 46 — L'ÉCRITURE VISE LE MIROIR DU BOT DEMANDÉ (son câblage), jamais
+     * « le miroir du run » : c'est cette propriété qui garantit qu'enregistrer
+     * l'ancienne URL d'un bot ne déplace pas un AUTRE bot vers ce serveur.
      */
-    saveBaseUrl: (url) => chatMirror.setBaseUrl(url),
+    saveBaseUrl: (url) => cablageMattermostPile.enregistrerUrlHistorique(url),
     saveToken: (token) => {
       if (!secretStore) {
         throw new Error(
@@ -2677,7 +2773,10 @@ async function main(): Promise<void> {
             "être enregistré (redémarrez avec le volume `state` accessible).",
         );
       }
-      secretStore.set(MATTERMOST_TOKEN_SECRET_NAME, token, "Jeton du bot Mattermost");
+      // ⚠️ Sous le nom PROPRE du bot (celui que lit l'adaptateur en premier, et
+      // celui que l'interface affiche) : écrire sous un nom d'instance quand un nom
+      // par bot existe déjà ferait enregistrer un jeton… jamais utilisé.
+      secretStore.set(nomSecretChat(botDuRun, "mattermost"), token, "Jeton du bot Mattermost");
       // La liste de rédaction du journal est rafraîchie immédiatement : le jeton ne
       // pourra même pas apparaître dans une ligne de journal ultérieure.
       refreshSecretValues();
@@ -2688,7 +2787,7 @@ async function main(): Promise<void> {
     // n'est PAS touché : ses conversations restent lisibles, et remettre le jeton suffit.
     deconnecter: async () => {
       await mattermost.disconnect();
-      effacerJeton(MATTERMOST_TOKEN_SECRET_NAME);
+      effacerJeton(cablageMattermostPile.nomsJeton());
     },
     miroir: () => chatMirror.statsOf("mattermost"),
     supprimerMiroir: () => chatMirror.purgePlatform("mattermost"),
@@ -2708,7 +2807,7 @@ async function main(): Promise<void> {
             record.historiqueAnterieur === true || record.borneAtteinte === true,
         }));
       return {
-        url: urlMattermost(() => config, chatMirror),
+        url: cablageMattermostPile.url(),
         // ⚠️ INTERRUPTEUR de l'instance (`chat.mattermost.enabled`, réglage du bot
         // de la pile) : c'est lui qui autorise — ou non — la connexion.
         active: config.getString("chat.mattermost.enabled") === "on",
@@ -2730,11 +2829,12 @@ async function main(): Promise<void> {
   };
 
   // Client DISCORD (lot 21) : REST + passerelle + miroir, MÊME modèle que Mattermost.
-  // ⚠️ Le JETON ne sort JAMAIS d'ici (coffre `YUKI_CHAT_DISCORD`, lu à chaque appel) : il
-  // n'est ni journalisé, ni renvoyé par une route, ni envoyé au CDN lors d'un
-  // téléchargement de pièce jointe.
+  // ⚠️ Le JETON ne sort JAMAIS d'ici (coffre `YUKI_CHAT_<BOT>__DISCORD`, lu à chaque
+  // appel) : il n'est ni journalisé, ni renvoyé par une route, ni envoyé au CDN lors d'un
+  // téléchargement de pièce jointe. ⚠️ Comme pour Mattermost, il se lit sous TOUS les
+  // noms acceptés pour CE bot — jamais un nom d'instance en dur.
   const discord: DiscordChatAdapter = new DiscordChatAdapter({
-    token: () => secretStore?.lookup(DISCORD_TOKEN_SECRET_NAME),
+    token: () => jetonChatDeBot((nom) => secretStore?.lookup(nom), botDuRun, "discord"),
     store: chatMirror,
     logger,
     // Serveur suivi : `""` = tous les serveurs du bot (défaut, voir le schéma).
@@ -2789,7 +2889,9 @@ async function main(): Promise<void> {
             "enregistré (redémarrez avec le volume `state` accessible).",
         );
       }
-      secretStore.set(DISCORD_TOKEN_SECRET_NAME, token, "Jeton du bot Discord");
+      // ⚠️ Sous le nom PROPRE du bot (cf. Mattermost : un nom d'instance n'est qu'un
+      // REPLI de lecture).
+      secretStore.set(nomSecretChat(botDuRun, "discord"), token, "Jeton du bot Discord");
       refreshSecretValues();
     },
     connect: () => discord.connect(),
@@ -2797,7 +2899,7 @@ async function main(): Promise<void> {
     // arrêté), le jeton est effacé, le miroir reste.
     deconnecter: async () => {
       await discord.disconnect();
-      effacerJeton(DISCORD_TOKEN_SECRET_NAME);
+      effacerJeton(nomsSecretsChat(botDuRun, "discord"));
     },
     miroir: () => chatMirror.statsOf("discord"),
     supprimerMiroir: () => chatMirror.purgePlatform("discord"),
@@ -2913,12 +3015,25 @@ async function main(): Promise<void> {
     const configBot = (): ConfigRuntime => configsBots.get(jeton.botId) ?? config;
     const token = (): string | undefined => secretStore?.lookup(jeton.nom);
     if (jeton.plateforme === "mattermost") {
+      /**
+       * ⚠️ LOT 46 — CÂBLAGE PAR BOT : adresse ET jeton de CE bot, et de lui seul.
+       * L'adresse vient de SON overlay (`chat.mattermost.url`) avec repli sur SON
+       * miroir (`canauxBots.miroirDe(botId)` → `<state>/bots/<id>/chat-mirror.json`),
+       * jamais de la valeur de la pile : deux bots visent alors deux serveurs
+       * Mattermost DIFFÉRENTS, en même temps.
+       */
+      const cablage = cablageMattermostBot({
+        botId: jeton.botId,
+        urlDuBot: () => configBot().getString("chat.mattermost.url"),
+        miroir,
+        lookup: (nom) => secretStore?.lookup(nom),
+      });
       // ⚠️ Cache de pièces jointes PAR BOT : il réutilise le client REST de CET
       // adaptateur (donc SON jeton), jamais celui d'un autre bot.
       const porte: { cache?: MattermostAttachmentCache } = {};
       const adaptateur = new MattermostChatAdapter({
-        baseUrl: () => urlMattermost(configBot, miroir),
-        token,
+        baseUrl: () => cablage.url(),
+        token: () => cablage.jeton(),
         store: miroir,
         logger,
         files: filesStore,
@@ -3089,21 +3204,11 @@ async function main(): Promise<void> {
      * n'appelle cette fabrique qu'à la PREMIÈRE demande du bot (L7).
      */
     const creerWorkerLourd = (botId: string): HeavyWorker | undefined =>
-      construireWorkerLourdSiAutorise(capacitesDuBot(botId), () =>
-        createSdkHeavyWorker({
-        cwd: env.piCwd,
-        agentDir: env.piAgentDir,
-        authPath: join(env.piAgentDir, "auth.json"),
-        modelsPath,
-        // ⚠️ Le prompt LOURD du BOT (son overlay), jamais celui d'un autre.
-        systemPrompt: (configsBots.get(botId) ?? config).getString("prompts.heavy"),
-        modelReference: liveHeavyReference,
-        thinking: liveHeavyThinking,
-        // ⚠️ INVERSION DES RÔLES : le worker LOURD porte les outils d'ACTION
-        // (`run_command`, `capturer_ecran`). Ceux-ci ne sont activés que si le
-        // service d'exécution existe (mêmes garde-fous par agent, hors ligne =
-        // refus, audit, plafond de sortie).
-        tools: toolAllowlist("heavy", {
+      construireWorkerLourdSiAutorise(capacitesDuBot(botId), () => {
+        // ⚠️ ALLOWLIST AVANT LE PROMPT : le bloc `<outils>` du prompt est GÉNÉRÉ
+        // depuis elle (`src/llm/prompt-systeme.ts`) — un outil ajouté ou retiré
+        // apparaît/disparaît sans réédition d'aucun texte.
+        const outilsLourd = toolAllowlist("heavy", {
           // ⚠️ CAPACITÉS (lot 35h) : redondance VOULUE. Ce bloc n'est atteint que si
           // `workerLourdAutorise(capacitesBot)` est vrai (le worker n'est pas
           // construit sinon), donc l'intersection ne retire rien aujourd'hui — mais si
@@ -3132,7 +3237,27 @@ async function main(): Promise<void> {
           // résultat, il ne parle pas (`docs/lot18-chat.md`, invariant « un seul
           // rédacteur »). `publier_dans_canal` reste au contraire disponible dans le RUN
           // DE CANAL (`REMOTE_SAFE_TOOLS`) : là, c'est Yuki qui écrit, et c'est légitime.
+        });
+        return createSdkHeavyWorker({
+        cwd: env.piCwd,
+        agentDir: env.piAgentDir,
+        authPath: join(env.piAgentDir, "auth.json"),
+        modelsPath,
+        // ⚠️ Le prompt LOURD du BOT (son overlay), jamais celui d'un autre —
+        // COMPOSÉ : nom du bot (registre) + son texte + la liste d'outils générée
+        // depuis `outilsLourd`. Point d'assemblage unique : `src/llm/prompt-systeme.ts`.
+        systemPrompt: composerPromptSysteme({
+          nom: nomDuBot(botId),
+          prompt: (configsBots.get(botId) ?? config).getString("prompts.heavy"),
+          outils: outilsLourd,
+          role: "heavy",
         }),
+        modelReference: liveHeavyReference,
+        thinking: liveHeavyThinking,
+        // ⚠️ ALLOWLIST calculée PLUS HAUT (`outilsLourd`) : elle sert À LA FOIS
+        // à la politique du worker et au bloc `<outils>` de son prompt —
+        // une seule liste, donc aucun texte ne peut annoncer autre chose.
+        tools: outilsLourd,
         ...(executionDuBot(botId) ? { execution: executionDuBot(botId) as AgentExecutionService } : {}),
         ...(executionDuBot(botId) ? { screenshots: executionDuBot(botId) as AgentExecutionService } : {}),
         ...(agentTransfers ? { transfers: agentTransfers } : {}),
@@ -3171,8 +3296,8 @@ async function main(): Promise<void> {
         toolWatchdogMs: () =>
           resolveToolWatchdogMs((configsBots.get(botId) ?? config).getNumber("images.timeoutMs")),
         logger,
-        }),
-      );
+        });
+      });
     /**
      * ⚠️ LOT 36 (L7) — LE WORKER DU PRINCIPAL EST EXACTEMENT CELUI D'AVANT :
      * même garde (`construireWorkerLourdSiAutorise`), même fabrique, mêmes
@@ -3777,6 +3902,38 @@ async function main(): Promise<void> {
     // l'action sont dans les champs. Deux cas signalés : prompt VIDE (aucune
     // consigne) et prompt enregistré qui CONTREDIT une capacité (`programmer_envoi`).
     avertirSiPromptLegerIncomplet(logger, promptLeger, config.originOf("prompts.light"));
+    // ⚠️ PERSONNALITÉ SÉPARÉE (2026-11-13) : elle est sa propre clé (`scope: mixte`),
+    // composée AVANT le prompt léger. Deux cas restent à SIGNALER, jamais à réécrire :
+    // un texte qui nomme encore le bot en dur, et une personnalité DÉJÀ présente dans
+    // le prompt enregistré (config d'avant la séparation : on ne la duplique pas).
+    const personnalite = config.getString("prompts.personnalite");
+    const promptLourd = config.getString("prompts.heavy");
+    avertirSiPromptsASurveiller(
+      logger,
+      { personnalite, light: promptLeger, heavy: promptLourd },
+      {
+        personnalite: config.originOf("prompts.personnalite"),
+        light: config.originOf("prompts.light"),
+        heavy: config.originOf("prompts.heavy"),
+      },
+    );
+    const outilsLegerPile = outilsLegerDuBot(botDuRun);
+    /**
+     * PROMPT SYSTÈME EFFECTIF du bot de la pile — point d'assemblage UNIQUE :
+     * identité (`nomDuBot`) + personnalité (`prompts.personnalite`) + prompt léger
+     * (`prompts.light`) + liste d'outils GÉNÉRÉE (`outilsLegerPile`), puis la
+     * consigne de voix. Éditer la personnalité ne touche donc jamais la liste
+     * d'outils, et un outil ajouté/retiré apparaît/disparaît sans réédition.
+     */
+    const promptSystemePile = appendVoiceInstruction(
+      composerPromptSysteme({
+        nom: nomDuBot(botDuRun),
+        personnalite,
+        prompt: promptLeger,
+        outils: outilsLegerPile,
+      }),
+      isTtsEnabled(config),
+    );
     // ⚠️ LOT 36 (L3-d) — LES `PiHost` PAR BOT.
     // Les options du host du BOT DU RUN sont désormais un OBJET NOMMÉ, construit
     // ICI à l'IDENTIQUE : il est passé tel quel à `createPiHost` (identité des
@@ -3790,7 +3947,7 @@ async function main(): Promise<void> {
       cwd: env.piCwd,
       home: env.piHome,
       sessionsDir: env.piSessionsDir,
-      systemPrompt: appendVoiceInstruction(promptLeger, isTtsEnabled(config)),
+      systemPrompt: promptSystemePile,
       settingsSeedPath: env.piSettingsSeedPath,
       modelsConfig: buildModelsConfigFrom(effective),
       model: lightRef,
@@ -3798,12 +3955,9 @@ async function main(): Promise<void> {
       // ⚠️ MÊME CALCUL QUE LE RUN DISTANT (`createRemoteRunTools`) : une seule
       // fonction d'options (`lightToolOptions`) et une seule politique
       // (`toolAllowlistForChat`). Le host est la conversation LOCALE : il passe
-      // donc `local`, et sa liste est, élément pour élément, celle d'avant.
-      tools: toolAllowlistForChat("light", lightToolOptions(), {
-        chatMode: "local",
-        remoteAgents: false,
-        remoteTools: false,
-      }),
+      // donc `local`, et sa liste est EXACTEMENT celle que le prompt annonce
+      // (`outilsLegerPile`) — une seule liste, aucun texte divergent.
+      tools: outilsLegerPile,
       // ⚠️ Sans worker lourd (profil restreint), `delegation` est ABSENT : le host n'a
       // donc ni port de délégation, ni outil `delegate` (retiré aussi par le profil).
       ...(delegation ? { delegation } : {}),
@@ -3942,6 +4096,12 @@ async function main(): Promise<void> {
         return {
           botId,
           env: pile.env,
+          // ⚠️ NOM du bot : c'est l'identité injectée dans SON prompt
+          // (`<identite>`) — jamais un nom en dur, jamais celui d'un autre bot.
+          nom: nomDuBot(botId),
+          // ⚠️ ALLOWLIST FINALE de CE bot : le prompt de son host annonce
+          // exactement ce qu'il a, et son `tools` est cette même liste.
+          outilsAutorises: outilsLegerDuBot(botId),
           ...(configBot !== undefined ? { config: configBot } : {}),
           ...(outils !== undefined ? { outils } : {}),
           pile,
@@ -4666,6 +4826,11 @@ async function main(): Promise<void> {
       config: {
         runtime: config,
         logger,
+        // ⚠️ OUTILS EFFECTIFS d'un bot (lecture seule dans l'interface) : la MÊME
+        // allowlist que celle qui part au host (`outilsLegerDuBot`), donc la page
+        // « Personnalité » montre la liste réellement annoncée au modèle — jamais
+        // une copie susceptible de diverger.
+        outilsEffectifs: (botId: string) => [...outilsLegerDuBot(botId ?? config.botId)],
         // Mot de passe d'INSTANCE : section dédiée de /config (définir / changer).
         ...(instancePassword ? { password: instancePassword } : {}),
         // Retirer le mot de passe est REFUSÉ tant qu'un agent sensible existe.
@@ -4892,7 +5057,15 @@ async function main(): Promise<void> {
    * `YUKI_CHAT_MATTERMOST` est résolu pour `yuki`.
    */
   const jetonPile = jetonsChat.jetons.get(botDuRun);
-  if (chatMirror.baseUrl() !== "" && jetonPile?.has("mattermost") === true) {
+  /**
+   * ⚠️ LOT 46 — LA CONDITION EST L'URL **EFFECTIVE** DU BOT, pas seulement
+   * l'ancien `chat-mirror.json` → `baseUrl`. Un bot dont l'adresse vient de SA
+   * clé (`chat.mattermost.url`, panneau « Plateformes ») est configuré : sans
+   * ceci, il ne se connectait jamais au démarrage (la clé par bot n'y était pas
+   * lue), alors que son adaptateur, lui, la lisait. C'est le même câblage qui
+   * répond : une seule vérité, donc aucun « configuré ici, pas là ».
+   */
+  if (cablageMattermostPile.configuree() && jetonPile?.has("mattermost") === true) {
     void mattermost.connect().catch((error: unknown) => {
       logger.warn("chat.mattermost.connect_failed", { error: messageOf(error) });
     });

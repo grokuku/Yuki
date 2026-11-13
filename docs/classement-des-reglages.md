@@ -4,7 +4,7 @@
 Si tu ne changes rien, laisse la valeur de la colonne **Avis** (elle sera appliquée).
 Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est vraiment nécessaire.
 
-*Note : `personality` et `rules` ne sont pas des clés — ce sont deux fichiers (`personality.md`, `rules.md`), un par bot.*
+*Note : `rules` n'est pas une clé (fichier `rules.md`). La personnalité du prompt est, elle, la clé `prompts.personnalite` ; le fichier `personality.md` reste la personnalité PARTAGÉE de l'instance (compatibilité).*
 
 ## 1 · Modèles & IA (21 clés)
 
@@ -32,10 +32,11 @@ Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est 
 | Profil GPU forcé | `gpu.profile` | global | global — matériel commun | |
 | Version minimale du pilote NVIDIA | `gpu.minDriver` | global | global — matériel commun | |
 
-## 2 · Conversation & voix (16 clés)
+## 2 · Conversation & voix (17 clés)
 
 | Réglage | Clé technique | Aujourd'hui | Avis | Décision |
 |---|---|---|---|---|
+| Personnalité (qui parle, son ton) | `prompts.personnalite` | MIXTE | bot — le global sert de défaut | |
 | Prompt système — discussion | `prompts.light` | MIXTE | bot — le global sert de défaut | |
 | Prompt système — travail | `prompts.heavy` | MIXTE | bot — le global sert de défaut | |
 | Activer la voix | `tts.enabled` | MIXTE | global — interrupteur maître, le bot se retire | |
@@ -154,10 +155,11 @@ réglage « combien de bots tournent en même temps ».
 
 ---
 
-## Les 5 réglages MIXTES — que fait chaque côté ?
+## Les 6 réglages MIXTES — que fait chaque côté ?
 
 | Réglage | Partie GLOBALE | Partie PAR BOT | Avis |
 |---|---|---|---|
+| `prompts.personnalite` | la personnalité par défaut | la sienne remplace | garder mixte |
 | `prompts.light` | le texte par défaut | le sien remplace | garder mixte |
 | `prompts.heavy` | le texte par défaut | le sien remplace | garder mixte |
 | `tts.enabled` | interrupteur maître (off ⇒ tous off) | le bot peut seulement se couper | garder mixte |

@@ -125,8 +125,12 @@ describe("35h ③ — le câblage réel passe bien par la garde (test de source)
     // BOT (`capacitesDuBot(botId)`) et non plus la constante `capacitesBot`. La
     // règle vérifiée est la même : `createSdkHeavyWorker` n'est appelé QUE comme
     // argument de `construireWorkerLourdSiAutorise`.
+    // ⚠️ GARDE RÉVISÉE (2026-11-13) : l'argument de la garde est devenu un BLOC
+    // (`() => { … return createSdkHeavyWorker( …) }`) parce que l'ALLOWLIST du
+    // worker est calculée AVANT le prompt (le bloc `<outils>` en est généré). La
+    // règle vérifiée est la même : la fabrique n'est appelée QUE là.
     expect(corps).toMatch(
-      /construireWorkerLourdSiAutorise\(capacitesDuBot\(botId\), \(\) =>\s*\n\s*createSdkHeavyWorker\(/,
+      /construireWorkerLourdSiAutorise\(capacitesDuBot\(botId\), \(\) => \{[\s\S]{0,4000}?return createSdkHeavyWorker\(/,
     );
   });
 

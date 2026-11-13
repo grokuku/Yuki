@@ -47,6 +47,7 @@ import { creerConfigsBots } from "../../src/config/bots.js";
 import { loadEnv, type Env } from "../../src/config/env.js";
 import type { ConfigRuntime } from "../../src/config/runtime.js";
 import { appendVoiceInstruction } from "../../src/llm/prompts.js";
+import { composerPromptSysteme } from "../../src/llm/prompt-systeme.js";
 import { HeritageStore } from "../../src/memory/heritage-store.js";
 import { envPourBot } from "../../src/memory/stores-bot.js";
 import type { OutilsBot } from "../../src/bots/outils.js";
@@ -442,8 +443,19 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     );
     expect(hostKohai.options.sessionsDir).toContain("kohai");
 
-    // ⚠️ Le prompt de SON overlay, pas celui du principal.
-    expect(hostKohai.options.systemPrompt).toBe("Tu es Kohai, pas Yuki.");
+    // ⚠️ GARDE RÉVISÉE (2026-11-13) : le prompt d'un bot secondaire est désormais
+    // COMPOSÉ (identité + personnalité + prompt + `<outils>`), point d'assemblage
+    // unique `src/llm/prompt-systeme.ts`. Ce qui reste vérifié ici est inchangé :
+    // c'est le prompt de SON overlay, jamais celui du principal.
+    // ⚠️ Sans `nom` ni `outilsAutorises` dans le contexte, le repli est
+    // l'identifiant du bot et AUCUN bloc d'outils (jamais une liste inventée).
+    expect(hostKohai.options.systemPrompt).toBe(
+      appendVoiceInstruction(
+        composerPromptSysteme({ nom: "kohai", prompt: "Tu es Kohai, pas Yuki." }),
+        isTtsEnabled(configKohai),
+      ),
+    );
+    expect(hostKohai.options.systemPrompt).toContain("Tu es Kohai, pas Yuki.");
     expect(hostKohai.options.systemPrompt).not.toBe(hosts.duRun.options.systemPrompt);
     expect(hosts.duRun.options.systemPrompt).not.toContain("Kohai");
 
@@ -806,5 +818,52 @@ describe("routes d'instance (garde statique sur `src/index.ts`)", () => {
     // restant le principal, une trame SANS `botId` est servie exactement comme
     // avant L4 ; c'est cette ligne qui rend un second bot joignable.
     expect(source).toContain("...(hostsBots ? { hosts: hostsBots } : {}),");
+  });
+});
+
+// ── ⑦ prompt d'un bot secondaire : identité, personnalité, outils GÉNÉRÉS ───
+
+describe("prompt système par bot (2026-11-13)", () => {
+  it("le contexte fournit NOM et ALLOWLIST : identité, personnalité et outils suivent", () => {
+    const b = avecRegistre([bot("yuki", 0, true), bot("kohai", 1, true)]);
+    const preparation = preparerMultiBot(b.env, { processEnv: b.processEnv });
+    const configs = configsDeTest(b, ["yuki", "kohai"], "yuki");
+    const configKohai = configs.get("kohai") as ConfigRuntime;
+    configKohai.update(
+      {
+        "prompts.personnalite": "Tu parles comme un vieux sage.",
+        "prompts.light": "Cadre d'exécution de Kohai.",
+      },
+      { portee: "bot" },
+    );
+
+    const hosts = new HostsBots<FauxHost>({
+      pile: "yuki",
+      bots: preparation.aDemarrer.map((entree) => entree.id),
+      optionsPile: optionsPileDe(b, configs.get("yuki") as ConfigRuntime),
+      creer: (options) => new FauxHost(options),
+      contexte: (botId) => ({
+        ...contexteDe(b, botId, configs),
+        nom: "Kohai",
+        outilsAutorises: botId === "kohai" ? ["read", "delegate"] : ["read"],
+      }),
+      logger: journalFactice(),
+    });
+
+    const promptKohai = hosts.pour("kohai")?.options.systemPrompt ?? "";
+    // Identité injectée : le NOM du bot, jamais un nom en dur.
+    expect(promptKohai).toContain("Ton nom est Kohai.");
+    // Personnalité : bloc SÉPARÉ, avant le prompt système.
+    expect(promptKohai).toContain("<personnalite>");
+    expect(promptKohai).toContain("Tu parles comme un vieux sage.");
+    expect(promptKohai.indexOf("</personnalite>")).toBeLessThan(
+      promptKohai.indexOf("Cadre d'exécution de Kohai."),
+    );
+    // Liste d'outils GÉNÉRÉE depuis SON allowlist : les deux outils, et eux seuls.
+    expect(promptKohai).toContain("`read` —");
+    expect(promptKohai).toContain("`delegate` —");
+    expect(promptKohai).not.toContain("`run_command`");
+    // Et la politique du host EST cette liste (prompt et outils : une seule liste).
+    expect(hosts.pour("kohai")?.options.tools).toEqual(["read", "delegate"]);
   });
 });

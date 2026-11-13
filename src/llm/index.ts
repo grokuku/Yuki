@@ -115,6 +115,11 @@ export type {
 export {
   appendVoiceInstruction,
   avertirSiPromptLegerIncomplet,
+  avertirSiPromptsASurveiller,
+  NOM_HISTORIQUE_EN_DUR,
+  promptNommeEnDur,
+  type OriginesPrompts,
+  type PromptsEffectifs,
   consigneEnvoiProgrammeAbsente,
   DELEGATION_INSTRUCTION,
   diagnostiquerPromptLeger,
@@ -123,9 +128,26 @@ export {
   HEAVY_NO_USER_MARKER,
   HEAVY_SECRET_MARKER,
   HEAVY_SYSTEM_PROMPT_FALLBACK,
+  PERSONNALITE_FALLBACK,
   PROMPT_LIGHT_RESET_HINT,
   SCHEDULED_SEND_MARKER,
   SCHEDULED_SEND_REMINDER_MARKER,
   SECRET_REQUEST_MARKER,
   VOICE_SPEECH_INSTRUCTION,
 } from "./prompts.js";
+
+export {
+  blocIdentite,
+  blocOutils,
+  blocPersonnalite,
+  composerPromptSysteme,
+  IDENTITY_TAG,
+  PERSONALITY_TAG,
+  personnaliteDejaDansPrompt,
+  PHRASE_OUTIL_INCONNU,
+  PHRASES_OUTILS,
+  phraseOutil,
+  TOOLS_TAG,
+  type CompositionPromptSysteme,
+  type RolePromptSysteme,
+} from "./prompt-systeme.js";

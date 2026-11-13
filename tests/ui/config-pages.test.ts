@@ -245,7 +245,7 @@ describe("②③ la PORTÉE décide de ce qui est rendu, une seule fois par page
     expect(bot.size).toBe(clesBot.length + mixtes.length);
   });
 
-  it("les 4 clés MIXTES sont bien celles du schéma (aucune dérive)", () => {
+  it("les 5 clés MIXTES sont bien celles du schéma (aucune dérive)", () => {
     const mixtesSchema = Object.entries(SCOPES)
       .filter(([, scope]) => scope === "mixte")
       .map(([path]) => path)
@@ -254,11 +254,13 @@ describe("②③ la PORTÉE décide de ce qui est rendu, une seule fois par page
       .filter((path) => scopeDeCle(SCOPES, path) === "mixte")
       .sort();
     expect(mixtesCatalogue).toEqual(mixtesSchema);
-    // ⚠️ 5 → 4 : `memory.consolidation.enabled` est devenue une clé d'INSTANCE
-    // (interrupteur d'installation) — elle n'est donc PLUS rendue sur la page Bot.
+    // ⚠️ GARDE RÉVISÉE (« 4 → 5 clés mixtes ») : `memory.consolidation.enabled` a
+    // quitté les mixtes (clé d'INSTANCE), mais `prompts.personnalite` les rejoint
+    // (2026-11-13) — la personnalité est un texte PAR BOT avec défaut d'instance.
     expect(mixtesSchema).toEqual([
       "prompts.heavy",
       "prompts.light",
+      "prompts.personnalite",
       "push.enabled",
       "tts.enabled",
     ]);
@@ -444,11 +446,11 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     const couvertes = new Set([...rendues("instance"), ...rendues("bot"), ...CONTROLES_AILLEURS]);
     const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
     expect(orphelines).toEqual([]);
-    // ⚠️ Et le compte doit être EXACT : 92 clés (91 + `chat.mattermost.url`,
-    // ajoutée le 2026-11-13 — adresse du serveur Mattermost PAR BOT), aucune
-    // oubliée par ce contrôle.
-    expect(Object.keys(SCOPES).length).toBe(92);
-    expect(couvertes.size).toBe(92);
+    // ⚠️ Et le compte doit être EXACT : 93 clés (92 + `prompts.personnalite`,
+    // ajoutée le 2026-11-13 — la personnalité devient une entrée SÉPARÉE du
+    // prompt système), aucune oubliée par ce contrôle.
+    expect(Object.keys(SCOPES).length).toBe(93);
+    expect(couvertes.size).toBe(93);
     // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
     for (const [cle, fichier] of [
       ["tts.voice", "voices-panel.js"],

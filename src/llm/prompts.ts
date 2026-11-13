@@ -8,6 +8,7 @@
  */
 
 import { MUTE_BLOCK_LABEL } from "../tts/mute.js";
+import { personnaliteDejaDansPrompt } from "./prompt-systeme.js";
 
 /**
  * Marqueurs canoniques. Un test vérifie que les fichiers de config les
@@ -92,20 +93,27 @@ export function diagnostiquerPromptLeger(prompt: string): PromptLegerDiagnostic 
   return null;
 }
 
-/** Prompt système du lourd, utilisé si le fichier est absent/vide. */
-export const HEAVY_SYSTEM_PROMPT_FALLBACK = `# Yuki — worker lourd
+/**
+ * Prompt système du lourd, utilisé si le fichier est absent/vide.
+ *
+ * ⚠️ Deux règles de forme, les mêmes que les fichiers livrés : AUCUN nom de bot
+ * en dur (`<identite>` est injecté à la composition) et AUCUNE liste d'outils
+ * figée (le bloc `<outils>` est GÉNÉRÉ depuis l'allowlist réelle).
+ */
+export const HEAVY_SYSTEM_PROMPT_FALLBACK = `# Worker lourd (arrière-plan)
 
-Tu exécutes une tâche technique complexe en arrière-plan pour un autre agent.
-Ta sortie est un RAPPORT INTERMÉDIAIRE destiné à être résumé, pas une réponse
-utilisateur.
+Tu exécutes une tâche technique complexe en arrière-plan pour l'agent qui t'a
+délégué la tâche. Ta sortie est un RAPPORT INTERMÉDIAIRE destiné à être résumé,
+pas une réponse utilisateur.
 
 ## Règles
 
 - NE T'ADRESSE JAMAIS À L'UTILISATEUR : tu ne parles pas à l'utilisateur final.
+- Les outils disponibles à ce tour figurent dans le bloc \`<outils>\` de ce prompt :
+  c'est lui qui fait foi, et il est régénéré à chaque tour. N'annonce jamais
+  avoir modifié ou exécuté quoi que ce soit que le résultat ne confirme.
 - Produis un rapport factuel : ce que tu as trouvé, ce que tu as fait, les
   limites, et une conclusion actionnable.
-- Tu ne disposes que d'outils de LECTURE (read, ls, grep, find) : n'annonce
-  jamais avoir modifié ou exécuté quoi que ce soit.
 - Si la tâche est impossible ou ambiguë, explique-le explicitement dans le
   rapport plutôt que d'inventer.
 - N'expose pas ta réflexion : seule la conclusion compte.
@@ -175,7 +183,7 @@ export interface PromptWarnerLike {
 
 /** Remède affiché dans l'avertissement : où cliquer, en français. */
 export const PROMPT_LIGHT_RESET_HINT =
-  "Configuration → onglet Conversation → Prompt système — léger → « Réinitialiser au défaut »";
+  "Bot · Personnalité → Prompt système — léger → « Réinitialiser au défaut »";
 
 /**
  * Signale au DÉMARRAGE que le prompt léger effectif est inutilisable ou qu'il
@@ -213,3 +221,115 @@ export function avertirSiPromptLegerIncomplet(
   }
   return null;
 }
+
+/**
+ * Nom HISTORIQUE du bot de la disposition mono-bot.
+ *
+ * ⚠️ Sert UNIQUEMENT à la DÉTECTION : un prompt enregistré qui nomme encore le
+ * bot en dur (« tu es Yuki ») est FAUX pour tout autre bot, et il est signalé au
+ * démarrage. Ce nom n'est JAMAIS injecté : l'identité vient du registre, dans un
+ * bloc dédié (`<identite>`, `src/llm/prompt-systeme.ts`).
+ *
+ * ⚠️ Comparaison SENSIBLE À LA CASSE : `YUKI_SECRET_NAS` (une référence de
+ * secret, légitime) ne doit pas déclencher l'avertissement.
+ */
+export const NOM_HISTORIQUE_EN_DUR = "Yuki";
+
+/** Le texte nomme-t-il le bot en dur ? (détection, jamais une réécriture) */
+export function promptNommeEnDur(
+  texte: string,
+  nom: string = NOM_HISTORIQUE_EN_DUR,
+): boolean {
+  return texte.includes(nom);
+}
+
+/** Les trois textes effectifs du prompt système (clés `mixte`, surcharge par bot). */
+export interface PromptsEffectifs {
+  readonly personnalite: string;
+  readonly light: string;
+  readonly heavy: string;
+}
+
+/** Origine de chaque texte (`config.originOf(…)`). */
+export interface OriginesPrompts {
+  readonly personnalite: string;
+  readonly light: string;
+  readonly heavy: string;
+}
+
+/**
+ * Signale au DÉMARRAGE les prompts à surveiller — **aucune réécriture** du texte
+ * de l'utilisateur, seulement un diagnostic actionnable :
+ *
+ *  1. **nom en dur** : le texte nomme encore le bot (`NOM_HISTORIQUE_EN_DUR`). Un
+ *     prompt stocké avant la composition par blocs le fait, et il mentirait sur
+ *     tout autre bot ;
+ *  2. **personnalité dupliquée** : la personnalité est DÉJÀ dans `prompts.light`
+ *     (configuration enregistrée avant la séparation). Elle n'est alors pas
+ *     composée une seconde fois (`personnaliteDejaDansPrompt`) — on le dit, sinon
+ *     l'utilisateur croirait que son champ Personnalité est ignoré.
+ *
+ * @param bot identifiant du bot concerné (mode multi-bot), omis pour la pile.
+ * @returns les champs signalés (tableau vide = rien à signaler).
+ */
+export function avertirSiPromptsASurveiller(
+  logger: PromptWarnerLike,
+  prompts: PromptsEffectifs,
+  origines: OriginesPrompts,
+  bot?: string,
+): string[] {
+  const signales: string[] = [];
+  const champs: ReadonlyArray<[keyof PromptsEffectifs, string]> = [
+    ["personnalite", "prompts.personnalite"],
+    ["light", "prompts.light"],
+    ["heavy", "prompts.heavy"],
+  ];
+  for (const [cle, champ] of champs) {
+    if (!promptNommeEnDur(prompts[cle])) continue;
+    signales.push(champ);
+    logger.warn("pi.prompt.nom_en_dur", {
+      ...(bot !== undefined ? { bot } : {}),
+      champ,
+      origine: origines[cle],
+      nom: NOM_HISTORIQUE_EN_DUR,
+      consequence:
+        "le prompt nomme le bot en dur ; il est faux pour tout autre bot (le nom est injecté depuis le registre)",
+      action: `retirer « ${NOM_HISTORIQUE_EN_DUR} » de ce texte : le nom réel est fourni par la composition (bloc <identite>), ou cliquer sur « Réinitialiser au défaut »`,
+    });
+  }
+  if (personnaliteDejaDansPrompt(prompts.light, prompts.personnalite)) {
+    signales.push("prompts.light");
+    logger.warn("pi.prompt.personnalite_dupliquee", {
+      ...(bot !== undefined ? { bot } : {}),
+      champ: "prompts.light",
+      origine: origines.light,
+      origine_personnalite: origines.personnalite,
+      consequence:
+        "la personnalité est déjà dans le prompt système : elle n'est PAS composée une seconde fois (aucun doublon silencieux)",
+      action: `retirer ce paragraphe de « Prompt système — léger » (il vit dans le champ « Personnalité », ${PROMPT_LIGHT_RESET_HINT})`,
+    });
+  }
+  return signales;
+}
+
+/**
+ * PERSONNALITÉ de repli, utilisée si `config/pi/personnalite.md` est
+ * absent/illisible (même rôle que `HEAVY_SYSTEM_PROMPT_FALLBACK`).
+ *
+ * ⚠️ Aucun nom de bot : l'identité est injectée à la composition
+ * (`<identite>`, `src/llm/prompt-systeme.ts`), et aucune liste d'outils n'y est
+ * figée non plus.
+ */
+export const PERSONNALITE_FALLBACK = `Tu es un assistant conversationnel généraliste. Tu aides avec des questions, des
+explications, de la rédaction, de la synthèse et de la réflexion — pas uniquement
+avec du code.
+
+## Comportement
+
+- Réponds dans la langue de l'utilisateur.
+- Sois clair, direct et utile. Va à l'essentiel sans être sec.
+- Si une question est ambiguë, pose une question de clarification courte.
+- Si tu ne sais pas, dis-le. N'invente pas de faits, de sources ni de résultats.
+- N'expose pas ta réflexion interne comme réponse : seule la réponse finale est
+  destinée à l'utilisateur.
+`;

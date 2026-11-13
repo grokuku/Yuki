@@ -358,11 +358,30 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   },
 
   // --- Prompts système (défaut affiné depuis les fichiers livrés) ----------
-  // ⚠️ Ces deux champs n'ont PAS `allowEmpty` : un prompt VIDE est refusé. Un
+  // ⚠️ Ces champs n'ont PAS `allowEmpty` : un prompt VIDE est refusé. Un
   // prompt vide = aucune consigne pour le modèle, donc un comportement qui se
   // dégrade silencieusement alors que l'utilisateur croit avoir « remis le
   // défaut ». `null` (bouton « Réinitialiser au défaut ») efface la surcharge
   // enregistrée et le fichier livré redevient effectif (`src/config/runtime.ts`).
+  /**
+   * PERSONNALITÉ du bot : bloc SÉPARÉ du prompt système (décision utilisateur du
+   * 2026-11-13). Elle est composée AVANT `prompts.light`, si bien qu'éditer l'une
+   * ne touche jamais l'autre (et notamment jamais la liste d'outils, qui est
+   * GÉNÉRÉE à la composition, `src/llm/prompt-systeme.ts`).
+   *
+   * ⚠️ Même portée que `prompts.light`/`prompts.heavy` : défaut d'instance +
+   * surcharge par bot. Le défaut est le CONTENU DU FICHIER LIVRÉ
+   * (`config/pi/personnalite.md`), comme pour les prompts.
+   */
+  "prompts.personnalite": {
+    scope: "mixte",
+    mixteMerge: "surcharge",
+    type: "string",
+    default: "",
+    apply: "restart",
+    emptyMessage:
+      "La personnalité ne peut pas être vide. Cliquez sur « Réinitialiser au défaut » pour revenir à la personnalité livrée (config/pi/personnalite.md).",
+  },
   "prompts.light": {
     scope: "mixte",
     mixteMerge: "surcharge",

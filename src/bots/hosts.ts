@@ -41,6 +41,7 @@
  */
 
 import { appendVoiceInstruction } from "../llm/prompts.js";
+import { composerPromptSysteme } from "../llm/prompt-systeme.js";
 import { HeritageStore } from "../memory/heritage-store.js";
 import type { PiHostOptions } from "../pi/types.js";
 import { isTtsEnabled } from "../tts/options.js";
@@ -92,8 +93,19 @@ export interface HostDemarrable {
    * n'aurait aucune mémoire, ce qui est dit au journal).
    */
   readonly memory?: PiHostOptions["memory"];
-  /** Prompt système de CE bot (`prompts.light` de SON overlay + consigne de voix). */
+  /**
+   * Prompt système de CE bot : identité (son NOM) + personnalité + `prompts.light`
+   * de SON overlay + liste d'outils GÉNÉRÉE depuis SON allowlist
+   * (`src/llm/prompt-systeme.ts`), puis la consigne de voix.
+   */
   readonly systemPrompt: string;
+  /**
+   * ALLOWLIST FINALE de CE bot (`toolAllowlistForChat`). Elle est posée telle
+   * quelle sur le host : le prompt et la politique d'outils sont donc la MÊME
+   * liste (aucun texte ne peut annoncer un outil absent). Absente ⇒ la politique
+   * héritée du bot du run est conservée (jamais inventée).
+   */
+  readonly tools?: readonly string[];
   /** Drain des notifications de SA pile de sources (L3-c). */
   readonly sources?: PiHostOptions["sources"];
   /** Envois programmés de CE bot (son `envois-programmes.json`). */
@@ -132,6 +144,17 @@ export interface HostDemarrable {
 /** Ce qu'un bot apporte à la construction de son host (jamais celui d'un autre). */
 export interface ContexteHostBot {
   readonly botId: string;
+  /**
+   * ⚠️ NOM AFFICHÉ du bot (registre) : c'est l'identité injectée dans SON prompt.
+   * Absent ⇒ l'identifiant sert de nom (jamais un nom d'un autre bot).
+   */
+  readonly nom?: string;
+  /**
+   * ⚠️ ALLOWLIST FINALE de ce bot : contenu du bloc `<outils>` de son prompt ET
+   * politique d'outils de son host. Absente ⇒ aucun bloc d'outils (un appelant
+   * qui ne connaît pas sa politique n'annonce rien plutôt que de mentir).
+   */
+  readonly outilsAutorises?: readonly string[];
   /** `Env` RÉSOLU de ce bot (une seule résolution, L3-b/L3-c). */
   readonly env: Env;
   /** Configuration DE CE BOT (L3-a). Absente ⇒ pas de prompt ⇒ pas de host. */
@@ -197,10 +220,24 @@ export function portsHostBot(
     // ⚠️ MÊME calcul que `main()` pour la pile (`promptLeger` + consigne de voix),
     // mais avec la configuration DE CE BOT : `prompts.light` et `tts.enabled` sont
     // des réglages MIXTES — la surcharge du bot l'emporte, sinon l'instance.
+    // ⚠️ POINT D'ASSEMBLAGE UNIQUE (`src/llm/prompt-systeme.ts`) : identité (nom du
+    // bot) + personnalité (`prompts.personnalite` de SON overlay) + prompt léger +
+    // liste d'outils GÉNÉRÉE depuis SON allowlist. Éditer l'un ne touche jamais
+    // l'autre, et un outil ajouté/retiré suit sans réédition.
     systemPrompt: appendVoiceInstruction(
-      config.getString("prompts.light"),
+      composerPromptSysteme({
+        nom: contexte.nom ?? contexte.botId,
+        personnalite: config.getString("prompts.personnalite"),
+        prompt: config.getString("prompts.light"),
+        ...(contexte.outilsAutorises !== undefined
+          ? { outils: contexte.outilsAutorises }
+          : {}),
+      }),
       isTtsEnabled(config),
     ),
+    ...(contexte.outilsAutorises !== undefined
+      ? { tools: contexte.outilsAutorises }
+      : {}),
     ...(pile !== undefined ? { sources: pile.service } : {}),
     ...(envois !== undefined
       ? {
@@ -266,6 +303,10 @@ export function optionsHostBot(
     // c'est le seul champ ajouté par ce morceau à la façade.
     botId,
   };
+  // ⚠️ POLITIQUE D'OUTILS PAR BOT : quand le contexte a fourni SON allowlist, elle
+  // remplace celle du bot du run — sinon le host d'un bot secondaire tournerait
+  // avec les outils d'un autre (et son prompt, lui, annoncerait les siens).
+  if (ports.tools !== undefined) options.tools = [...ports.tools];
   poserSinonRetirer(options, "sources", ports.sources);
   poserSinonRetirer(options, "envoisProgrammes", ports.envoisProgrammes);
   poserSinonRetirer(options, "planifierTache", ports.planifierTache);

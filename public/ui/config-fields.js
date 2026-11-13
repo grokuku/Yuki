@@ -234,21 +234,30 @@ export const GROUPS = [
         lien: { href: "/config#modeles", libelle: "Configuration · Modèles" },
       },
     },
-    title: "Prompts système",
+    title: "Personnalité et prompts système",
     // Bloc LECTURE SEULE : l'instruction vocale réellement injectée (volet 1).
     voiceInstruction: true,
+    // Bloc LECTURE SEULE : la LISTE D'OUTILS réellement générée pour ce bot.
+    toolsInstruction: true,
     // ⚠️ DIT explicitement ce qui n'est PAS réglable ici : sans cette phrase,
     // l'utilisateur cherche à régler aussi le prompt des réponses publiées dans
     // un canal (Mattermost / Discord) et croit qu'il a été ignoré.
     note:
-      "Ces deux prompts sont ceux du chat LOCAL (et du worker lourd). Le prompt des réponses PUBLIÉES DANS UN CANAL (Mattermost, Discord) n'est PAS réglable ici : c'est une constante du code (src/chat/reply/prompt.ts), pour que le mode « auto » reste borné.",
+      "Trois ZONES DISTINCTES, composées dans cet ordre : la PERSONNALITÉ (qui parle, son ton), le PROMPT SYSTÈME — LÉGER (ce cadre d'exécution), puis la LISTE D'OUTILS, qui est GÉNÉRÉE à chaque tour depuis les capacités réelles du bot (onglet Général) et n'est donc pas éditable ici. Éditer l'une ne modifie jamais l'autre. Le prompt des réponses PUBLIÉES DANS UN CANAL (Mattermost, Discord) n'est PAS réglable ici : c'est une constante du code (src/chat/reply/prompt.ts), pour que le mode « auto » reste borné.",
     fields: [
+      {
+        path: "prompts.personnalite",
+        label: "Personnalité",
+        kind: "textarea",
+        helper:
+          "QUI est ce bot et COMMENT il s'exprime (ton, langue, style). Bloc SÉPARÉ du prompt système : l'éditer ne touche ni les consignes d'exécution ni la liste d'outils. Un champ vide est REFUSÉ ; « Réinitialiser au défaut » réécrit la personnalité LIVRÉE (config/pi/personnalite.md).",
+      },
       {
         path: "prompts.light",
         label: "Prompt système — léger",
         kind: "textarea",
         helper:
-          "Un champ vide est REFUSÉ : sans consigne, le modèle n'a plus de cadre. « Réinitialiser au défaut » réécrit le prompt LIVRÉ (config/pi/system-prompt.md).",
+          "CONSIGNES D'EXÉCUTION de la conversation (délégation, secrets, envois programmés) — pas l'identité : le nom du bot et sa personnalité sont composés AVANT, depuis le registre et le champ « Personnalité ». Un champ vide est REFUSÉ ; « Réinitialiser au défaut » réécrit le prompt LIVRÉ (config/pi/system-prompt.md).",
       },
       {
         path: "prompts.heavy",

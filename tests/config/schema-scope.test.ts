@@ -8,11 +8,11 @@
  *    ⚠️ 90 → 92 le 2026-11-10 : `chat.mattermost.enabled` et `chat.discord.enabled`
  *    (plateformes INDÉPENDANTES, `bot`). Le compteur est mis à jour EXPRÈS : c'est
  *    lui qui rend l'ajout délibéré.
- *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 69 / 18 / 4 ;
+ *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 69 / 19 / 5 ;
  *    ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) : trois clés ont
  *    changé de portée SANS changer de nombre — `chat.remoteAgents` et
  *    `chat.remoteTools` (`bot` → `instance`) et `memory.consolidation.enabled`
- *    (`mixte` → `instance`). Comptes : 67/18/5 → 70/16/4, puis 69/18/4 après la
+ *    (`mixte` → `instance`). Comptes : 67/18/5 → 70/16/4, puis 69/18/5 après la
  *    suppression de `bots.maxActifs`.
  *  - `env` INTERDIT hors `scope: "instance"` (garde de compilation, doublée ici
  *    d'un contrôle à l'exécution : la table est une donnée, pas un type) ;
@@ -58,8 +58,11 @@ describe("① la table des clés", () => {
    * (adresse du serveur Mattermost par bot, exigence utilisateur du 2026-11-13).
    * Le compte reste EXACT : aucune autre clé n'a bougé.
    */
-  it("déclare EXACTEMENT 92 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(92);
+  // ⚠️ GARDE RÉVISÉE (« 92 → 93 clés ») : `prompts.personnalite` est AJOUTÉE
+  // (2026-11-13 : la personnalité devient une entrée SÉPARÉE du prompt système,
+  // portée `mixte` comme `prompts.light`/`prompts.heavy`).
+  it("déclare EXACTEMENT 93 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(93);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
   });
 
@@ -79,12 +82,13 @@ describe("① la table des clés", () => {
 
   /**
    * ⚠️ GARDE RÉVISÉE (« bot 18 → 19 ») : + `chat.mattermost.url` (2026-11-13).
-   * Instance et mixte inchangés : 69 / 19 / 4 = 92.
+   * ⚠️ GARDE RÉVISÉE (« mixte 4 → 5 ») : `prompts.personnalite` (2026-11-13).
+   * Instance et bot inchangés : 69 / 19 / 5 = 93.
    */
-  it("répartition : 69 `instance` / 19 `bot` / 4 `mixte`", () => {
+  it("répartition : 69 `instance` / 19 `bot` / 5 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 69, bot: 19, mixte: 4 });
+    expect(compte).toEqual({ instance: 69, bot: 19, mixte: 5 });
   });
 
   it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {
@@ -188,15 +192,21 @@ describe("③ la fusion d'une clé `mixte` est DÉCLARÉE, jamais devinée", () 
     }
   });
 
-  it("les 4 clés `mixte` sont celles établies (2 `et`, 2 `surcharge`)", () => {
+  it("les 5 clés `mixte` sont celles établies (2 `et`, 3 `surcharge`)", () => {
+    // ⚠️ GARDE RÉVISÉE (« 4 → 5 clés mixte ») : `prompts.personnalite` rejoint les
+    // textes du prompt (2026-11-13), avec la MÊME fusion que `prompts.light`/`heavy`.
     const mixte = CONFIG_PATHS.filter((path) => descriptor(path).scope === "mixte");
     expect(mixte.sort()).toEqual(
-      ["prompts.heavy", "prompts.light", "push.enabled", "tts.enabled"].sort(),
+      ["prompts.heavy", "prompts.light", "prompts.personnalite", "push.enabled", "tts.enabled"].sort(),
     );
     const parFusion = (fusion: string) =>
       mixte.filter((path) => descriptor(path).mixteMerge === fusion).sort();
     expect(parFusion("et")).toEqual(["push.enabled", "tts.enabled"]);
-    expect(parFusion("surcharge")).toEqual(["prompts.heavy", "prompts.light"]);
+    expect(parFusion("surcharge")).toEqual([
+      "prompts.heavy",
+      "prompts.light",
+      "prompts.personnalite",
+    ]);
   });
 
   it("`et` n'est utilisé que sur un enum `off|on` (la conjonction n'a pas d'autre sens)", () => {

@@ -262,6 +262,12 @@ export interface Env {
   piSettingsSeedPath: string;
   /** Prompt système dédié au worker lourd. */
   piHeavySystemPromptPath: string;
+  /**
+   * PERSONNALITÉ livrée (bloc séparé du prompt système). Le défaut de la clé
+   * `prompts.personnalite` est le CONTENU de ce fichier, comme pour les prompts :
+   * code et config ne peuvent pas diverger silencieusement.
+   */
+  piPersonnalitePath: string;
 }
 
 export class EnvError extends Error {
@@ -586,6 +592,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_PI_HEAVY_SYSTEM_PROMPT",
       `${configDir}/pi/system-prompt-heavy.md`,
+    ),
+    piPersonnalitePath: getString(
+      env,
+      "YUKI_PI_PERSONNALITE",
+      `${configDir}/pi/personnalite.md`,
     ),
   };
 }
