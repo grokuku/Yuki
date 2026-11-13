@@ -44,7 +44,6 @@ import {
   texteSuppressionBot,
 } from "../../public/ui/config-pages.js";
 import {
-  PLAFOND_ACTIFS_DEFAUT,
   attribuerSessions,
   badgeNonLus,
   entreeListe,
@@ -260,7 +259,8 @@ interface Banc {
   /** RANGÉE d'avatars inline de la barre du haut (lot 38). */
   bar: Noeud;
   status: Noeud;
-  plafond: Noeud;
+  /** Ligne de SYNTHÈSE du panneau (`resumeEl`) : « 3 bots. 1 en marche… ». */
+  resume: Noeud;
   /** Nom affiché DANS le bouton de la barre du haut (`#bot-switcher-nom`). */
   nom: Noeud;
   nav: string[];
@@ -273,12 +273,10 @@ function banc(
   options: {
     bots?: BotFactice[];
     principal?: string;
-    plafond?: number;
     echanges?: Record<string, { actif: boolean }>;
     reponsePanne?: { status: number; body: unknown };
     panneListe?: boolean;
     recherche?: string;
-    refuses?: string[];
   } = {},
 ): Banc {
   installerDom();
@@ -288,7 +286,7 @@ function banc(
   const list = new Noeud("ul");
   const status = new Noeud("p");
   status.hidden = true;
-  const plafond = new Noeud("p");
+  const resume = new Noeud("p");
   const nom = new Noeud("span");
   nom.textContent = "Yuki";
   const bar = new Noeud("div");
@@ -316,12 +314,12 @@ function banc(
     appels.push(`${init?.method ?? "GET"} ${url}`);
     if (url === "/api/bots" && (init?.method ?? "GET") === "GET") {
       if (options.panneListe) return reponse(503, { message: "gateway indisponible" });
+      // ⚠️ Plus de `plafond` ni de `refuses` : il n'y a plus de limite au nombre
+      // de bots en marche (décision utilisateur du 2026-11-13).
       return reponse(200, {
         bots,
-        plafond: options.plafond ?? PLAFOND_ACTIFS_DEFAUT,
         principal,
         echanges: options.echanges ?? {},
-        refuses: options.refuses ?? [],
       });
     }
     if (url === "/api/bots/echanges") {
@@ -374,7 +372,7 @@ function banc(
     panel,
     list,
     barEl: bar,
-    plafondEl: plafond,
+    resumeEl: resume,
     statusEl: status,
     nomEl: nom,
     HolafModal,
@@ -385,7 +383,7 @@ function banc(
     statutMs: 0,
   });
 
-  return { switcher, button, panel, list, bar, status, plafond, nom, nav, patchs, appels, alertes };
+  return { switcher, button, panel, list, bar, status, resume, nom, nav, patchs, appels, alertes };
 }
 
 /** Bouton d'avatar de la rangée pour un bot donné. */
@@ -495,12 +493,14 @@ describe("② tous les bots sont listés, avec leur état RÉEL", () => {
     await b.switcher.rafraichir();
     // ⚠️ L'ancien bandeau disait « 3 bot(s) · 2 actif(s) sur 3 maximum ·
     // 1 démarré(s) » : du jargon de registre. On dit « en marche » / « arrêté ».
-    expect(b.plafond.textContent).toContain("3 bots.");
-    expect(b.plafond.textContent).toContain("1 en marche");
-    expect(b.plafond.textContent).toContain("2 arrêtés");
-    expect(b.plafond.textContent).toContain("Nova : clé du modèle absente");
-    expect(b.plafond.textContent).not.toContain("actif");
-    expect(b.plafond.textContent).not.toContain("démarré");
+    expect(b.resume.textContent).toContain("3 bots.");
+    expect(b.resume.textContent).toContain("1 en marche");
+    expect(b.resume.textContent).toContain("2 arrêtés");
+    expect(b.resume.textContent).toContain("Nova : clé du modèle absente");
+    expect(b.resume.textContent).not.toContain("actif");
+    expect(b.resume.textContent).not.toContain("démarré");
+    // ⚠️ Plus AUCUN « au maximum » : il n'y a plus de plafond.
+    expect(b.resume.textContent).not.toContain("maximum");
     const b2 = banc({ panneListe: true });
     await b2.switcher.rafraichir();
     // Gateway injoignable : on le DIT, et le panneau reste utilisable.
@@ -541,15 +541,17 @@ describe("③ cliquer un bot arrêté le DÉMARRE, puis ouvre sa conversation", 
     expect(b.patchs.some((entree) => entree.url === "/api/bots/kohai/actif")).toBe(true);
   });
 
-  it("un REFUS du serveur (plafond) n'entraîne AUCUNE navigation et dit le vrai plafond", async () => {
+  it("un REFUS du serveur (dernier bot actif) : AUCUNE navigation, message repris tel quel", async () => {
+    // ⚠️ RÉÉCRIT (n'était « un REFUS du serveur (plafond)… ») : le plafond est
+    // supprimé, le SEUL refus qui reste sur cette route est `dernier_bot_actif`.
     const b = banc({
       reponsePanne: {
         status: 409,
         body: {
-          code: "plafond_actifs",
+          code: "dernier_bot_actif",
           message:
-            "Plafond de 3 bot(s) simultané(s) atteint (`bots.maxActifs`) : éteignez " +
-            "d'abord l'un des bots actifs (yuki, nova) avant d'allumer « kohai ».",
+            "Impossible d'éteindre « kohai » : c'est le DERNIER bot actif. " +
+            "Allumez d'abord un autre bot, sinon le gateway ne pourrait plus démarrer.",
         },
       },
     });
@@ -559,10 +561,10 @@ describe("③ cliquer un bot arrêté le DÉMARRE, puis ouvre sa conversation", 
       noeud.classes.has("bot-switcher__choix"),
     );
     choix?.dispatch("click");
-    await vi.waitFor(() => expect(b.status.textContent).toContain("Plafond de 3"));
+    await vi.waitFor(() => expect(b.status.textContent).toContain("DERNIER bot actif"));
     expect(b.nav).toEqual([]);
     expect(b.status.hidden).toBe(false);
-    // Le message du serveur est repris TEL QUEL : il nomme le plafond réel.
+    // Le message du serveur est repris TEL QUEL (aucun « échec » anonyme).
     expect(b.status.textContent).not.toContain("un seul bot");
   });
 });
@@ -631,14 +633,15 @@ describe("⑤ téléphone : la barre du haut reste le point de bascule", () => {
 // ─── ⑥ « il me dit que je n'ai qu'un seul bot actif » ─────────────────────
 
 describe("⑥ le message « un seul bot actif » est corrigé (vrai nombre)", () => {
-  it("le bandeau de `/bots` dit le NOMBRE RÉEL (ici 1 en marche sur 2), pas « un seul »", () => {
+  it("le bandeau de `/bots` dit le NOMBRE RÉEL (ici 1 en marche), pas « un seul »", () => {
+    // ⚠️ RÉÉCRIT : plus de « sur 3 au maximum » (le plafond n'existe plus).
     const texte = messageBandeauBot({
       bot: BOTS[1],
       bots: [BOTS[0], BOTS[1]],
-      plafond: 3,
       principal: "yuki",
     });
-    expect(texte).toContain("1 bot en marche sur 3 au maximum");
+    expect(texte).toContain("1 bot en marche");
+    expect(texte).not.toContain("maximum");
     expect(texte).toContain("Démarrer");
     expect(texte.toLowerCase()).not.toContain("un seul");
     // ⚠️ L'ancien message, qui se lisait « il n'y a qu'un seul bot actif ».
@@ -646,14 +649,14 @@ describe("⑥ le message « un seul bot actif » est corrigé (vrai nombre)", ()
     expect(texte).not.toContain("ACTIF");
   });
 
-  it("le nombre affiché est celui des bots VRAIMENT en marche (ici 2 sur 3)", () => {
-    const texte = messageBandeauBot({ bot: BOTS[1], bots: BOTS, plafond: 3 });
-    expect(texte).toContain("2 bots en marche sur 3 au maximum");
+  it("le nombre affiché est celui des bots VRAIMENT en marche (ici 2)", () => {
+    const texte = messageBandeauBot({ bot: BOTS[1], bots: BOTS });
+    expect(texte).toContain("2 bots en marche");
     expect(texte).toContain("(yuki, nova)");
   });
 
   it("aucun bandeau pour un bot ACTIF (on n'affiche pas un avertissement inutile)", () => {
-    expect(messageBandeauBot({ bot: BOTS[0], bots: BOTS, plafond: 3 })).toBe("");
+    expect(messageBandeauBot({ bot: BOTS[0], bots: BOTS })).toBe("");
   });
 
   it("`config.js` n'écrit plus le message d'origine (il délègue au modèle)", () => {
@@ -674,10 +677,14 @@ describe("⑥ le message « un seul bot actif » est corrigé (vrai nombre)", ()
     expect(serveur).not.toContain("est inconnu ou arrêté : aucun host");
   });
 
-  it("la limite par défaut est bien 3 (aucun « 1 » codé en dur)", () => {
-    expect(PLAFOND_ACTIFS_DEFAUT).toBe(3);
-    expect(resumeBots(BOTS, 5, ["nova"])).toContain("limite de 5 bots en marche");
-    expect(resumeBots(BOTS, 3, ["nova"])).toContain("limite de 3 bots en marche");
+  it("⚠️ la synthèse ne parle JAMAIS de limite ni de maximum", () => {
+    // ⚠️ RÉÉCRIT (n'était « la limite par défaut est bien 3 ») : `PLAFOND_ACTIFS_DEFAUT`
+    // et la notion de plafond ont été SUPPRIMÉS (décision utilisateur).
+    for (const texte of [resumeBots(BOTS), resumeBots([])]) {
+      expect(texte.toLowerCase()).not.toContain("limite");
+      expect(texte.toLowerCase()).not.toContain("maximum");
+    }
+    expect(resumeBots(BOTS)).toContain("1 en marche");
   });
 });
 
@@ -910,18 +917,26 @@ describe("⑩ « j'ai la tête à Yuki, puis la tête à Grolaf, puis écrit Yuk
     expect(ui("bot-switcher-modele.js")).not.toContain("} (${id})");
   });
 
-  it("le panneau liste TOUS les bots, y compris les REFUSÉS du plafond", async () => {
-    const b = banc({ refuses: ["nova"] });
+  it("⚠️ un bot `actif` qui ne démarre pas dit son ERREUR, jamais un plafond", async () => {
+    // ⚠️ RÉÉCRIT (n'était « le panneau liste TOUS les bots, y compris les REFUSÉS
+    // du plafond ») : sans plafond, la seule cause possible d'un « pas démarré »
+    // est une VRAIE erreur (`execution.erreur`), affichée telle quelle.
+    const b = banc({
+      bots: [
+        BOTS[0],
+        BOTS[1],
+        { ...BOTS[2], actif: true, execution: { demarre: false, erreur: "port occupé" } },
+      ],
+    });
     await b.switcher.rafraichir();
     b.switcher.ouvrir();
     const etats = descendants(b.list)
       .filter((noeud) => noeud.classes.has("bot-switcher__etat"))
       .map((noeud) => noeud.textContent);
     expect(etats).toHaveLength(3);
-    // ⚠️ Sans la liste `refuses`, Nova s'afficherait « état inconnu » : la cause
-    // (le plafond) serait invisible.
-    expect(etats[2]).toContain("3 bots en marche au maximum");
-    expect(b.plafond.textContent).toContain("limite de 3 bots en marche est atteinte");
+    expect(etats[2]).toContain("port occupé");
+    expect(etats[2]).not.toContain("maximum");
+    expect(b.resume.textContent).toContain("Nova : port occupé");
   });
 });
 

@@ -23,9 +23,6 @@
  * Aucun `innerHTML`, aucun style inline : ce module ne produit que des données.
  */
 
-/** Plafond des bots simultanés (copie du défaut serveur `bots.maxActifs`). */
-export const PLAFOND_ACTIFS_DEFAUT = 3;
-
 /** Nombre maximal de bots d'une instance (copie de `MAX_BOTS`, `registry.ts`). */
 export const MAX_BOTS_SELECTEUR = 6;
 
@@ -35,19 +32,13 @@ export const MAX_BOTS_SELECTEUR = 6;
  * @param {{id?: string, actif?: boolean, execution?: {demarre?: boolean, erreur?: string}}} bot
  * @param {string|null} [principal] identifiant du bot de la PILE (il tourne avec
  *   le gateway : il n'est ni démarrable ni arrêtable).
- * @param {{refuses?: Array<string>, plafond?: number}} [options] bots `actif`
- *   REFUSÉS au démarrage par le plafond (`bots.maxActifs`). ⚠️ Sans cela, un bot
- *   refusé s'afficherait « état inconnu » : l'utilisateur ne saurait pas que son
- *   bot ne tourne pas PARCE QU'un plafond l'a écarté.
- * @returns {{code: "principal"|"refuse"|"demarre"|"erreur"|"arrete"|"inconnu",
+ * @returns {{code: "principal"|"demarre"|"erreur"|"arrete"|"inconnu",
  *   libelle: string, raison: string, demarrable: boolean, demarre: boolean,
  *   doitTourner: boolean}}
  */
-export function etatBot(bot, principal = null, options = {}) {
+export function etatBot(bot, principal = null) {
   const doitTourner = bot?.actif === true;
   const execution = bot?.execution;
-  const refuses = Array.isArray(options?.refuses) ? options.refuses : [];
-  const plafond = normaliserPlafondModele(options?.plafond);
   if (principal !== null && bot?.id === principal) {
     // ⚠️ Le bot de la pile suit le gateway : `estDemarre` le dit TOUJOURS démarré
     // (c'est `main()` qui l'a démarré). On l'affiche comme tel, sans bouton.
@@ -62,22 +53,11 @@ export function etatBot(bot, principal = null, options = {}) {
     };
   }
   /**
-   * ⚠️ REFUS DU PLAFOND — AVANT le mode dégradé : un bot `actif: true` écarté au
-   * démarrage n'a NI pile NI host, donc aucun `execution` ; sans cette branche il
-   * retomberait sur « état inconnu » et l'utilisateur chercherait la panne au
-   * mauvais endroit. Le libellé nomme le plafond et le geste (éteindre un autre).
+   * ⚠️ PLUS DE BRANCHE « REFUSÉ PAR LE PLAFOND » (décision utilisateur du
+   * 2026-11-13) : un bot `actif` démarre toujours. S'il ne tourne pas, la cause
+   * est une VRAIE erreur (`execution.erreur`, affichée plus bas) — jamais une
+   * limite d'installation.
    */
-  if (doitTourner && execution?.demarre !== true && refuses.includes(String(bot?.id ?? ""))) {
-    return {
-      code: "refuse",
-      // ⚠️ Pas « actif », pas « plafond autorisé » : la cause et le geste, en clair.
-      libelle: `pas démarré — ${plafond} bots en marche au maximum`,
-      raison: `La limite de ${plafond} bots en marche est atteinte : éteignez-en un, puis réessayez.`,
-      demarrable: true,
-      demarre: false,
-      doitTourner,
-    };
-  }
   if (execution === undefined || execution === null) {
     // Mode dégradé : aucun port d'exécution ⇒ on ne sait pas. On ne ment pas.
     return {
@@ -177,17 +157,6 @@ export function urlReglagesBot(
   return `/bots?b=${encodeURIComponent(retenu)}`;
 }
 
-/**
- * Plafond utilisable pour l'affichage : entier positif, sinon le défaut.
- *
- * @param {unknown} valeur
- * @returns {number}
- */
-export function normaliserPlafondModele(valeur) {
-  if (Number.isInteger(valeur) && valeur > 0) return valeur;
-  return PLAFOND_ACTIFS_DEFAUT;
-}
-
 /** Bots marqués ACTIFS (ce qui doit tourner), dans l'ordre du registre. */
 export function botsActifs(bots) {
   return (Array.isArray(bots) ? bots : []).filter((bot) => bot?.actif === true);
@@ -196,15 +165,13 @@ export function botsActifs(bots) {
 /**
  * Phrase de SYNTHÈSE du panneau : le VRAI nombre, jamais « un seul bot ».
  *
+ * ⚠️ Aucun « maximum » : il n'y a plus de plafond de bots en marche.
+ *
  * @param {Array<object>} bots
- * @param {number} [plafond]
- * @param {Array<string>} [refuses] bots `actif` refusés au démarrage par le plafond
  */
-export function resumeBots(bots, plafond = PLAFOND_ACTIFS_DEFAUT, refuses = []) {
+export function resumeBots(bots) {
   const liste = Array.isArray(bots) ? bots : [];
   const demarres = liste.filter((bot) => bot?.execution?.demarre === true).length;
-  const borne = normaliserPlafondModele(plafond);
-  const ecartes = Array.isArray(refuses) ? refuses.length : 0;
   if (liste.length === 0) return "Aucun bot lisible sur cette instance.";
   /**
    * ⚠️ FRANÇAIS LISIBLE (demande utilisateur) : l'ancienne phrase
@@ -224,10 +191,6 @@ export function resumeBots(bots, plafond = PLAFOND_ACTIFS_DEFAUT, refuses = []) 
     )
     .map((bot) => `${nomAfficheBot(bot)} : ${bot.execution.erreur.trim()}`);
   if (problemes.length > 0) texte += ` ${problemes.join(" ; ")}.`;
-  if (ecartes > 0) {
-    texte += ` ${ecartes} bot${ecartes > 1 ? "s" : ""} pas démarré${ecartes > 1 ? "s" : ""} :`;
-    texte += ` la limite de ${borne} bots en marche est atteinte.`;
-  }
   return texte;
 }
 
@@ -236,15 +199,12 @@ export function resumeBots(bots, plafond = PLAFOND_ACTIFS_DEFAUT, refuses = []) 
  * être testable sans navigateur.
  *
  * @param {object} bot
- * @param {{principal?: string|null, courant?: string|null, refuses?: Array<string>,
- *   plafond?: number}} [options]
+ * @param {{principal?: string|null, courant?: string|null}} [options]
  */
 export function entreeListe(bot, options = {}) {
   const principal = options.principal ?? null;
   const courant = options.courant ?? null;
-  const refuses = Array.isArray(options.refuses) ? options.refuses : [];
-  const plafond = normaliserPlafondModele(options.plafond);
-  const etat = etatBot(bot, principal, { refuses, plafond });
+  const etat = etatBot(bot, principal);
   const nom = typeof bot?.nom === "string" && bot.nom !== "" ? bot.nom : String(bot?.id ?? "");
   return {
     id: String(bot?.id ?? ""),
@@ -260,8 +220,6 @@ export function entreeListe(bot, options = {}) {
     doitTourner: etat.doitTourner,
     principal: principal !== null && bot?.id === principal,
     courant: courant !== null && bot?.id === courant,
-    /** `true` si le bot est `actif` mais écarté au démarrage par le plafond. */
-    refuse: etat.code === "refuse",
     monogramme: monogramme(nom),
     avatarClasse: classeMonogramme(String(bot?.id ?? "")),
     url: urlConversationBot(String(bot?.id ?? ""), principal),
@@ -328,12 +286,14 @@ export function classeMonogramme(botId) {
  * Bandeau d'HONNÊTETÉ de la page `/bots` pour un bot NON actif.
  *
  * ⚠️ LE MESSAGE D'ORIGINE MENTAIT : « Ce bot n'est pas le bot ACTIF de
- * l'instance (yuki) » se lisait « il n'y a qu'un seul bot actif », alors que
- * `bots.maxActifs` en autorise TROIS. Ici le nombre est le vrai, la liste est
- * réelle, et le GESTE qui répare est nommé (démarrer, depuis la barre du haut
- * ou depuis la zone « Exécution » de cette page).
+ * l'instance (yuki) » se lisait « il n'y a qu'un seul bot actif ». Ici le nombre
+ * est le vrai, la liste est réelle, et le GESTE qui répare est nommé (démarrer,
+ * depuis la barre du haut ou depuis la zone « Exécution » de cette page).
  *
- * @param {{bot: object|null, bots?: Array<object>, plafond?: number,
+ * ⚠️ PLUS DE « sur N au maximum » : le plafond de bots en marche n'existe plus
+ * (décision utilisateur du 2026-11-13).
+ *
+ * @param {{bot: object|null, bots?: Array<object>,
  *   principal?: string|null}} options
  * @returns {string} texte ("" ⇒ aucun bandeau à afficher)
  */
@@ -343,15 +303,10 @@ export function messageBandeauBot(options) {
   const bots = Array.isArray(options.bots) ? options.bots : [];
   const actifs = botsActifs(bots);
   if (actifs.some((entree) => entree.id === bot.id)) return "";
-  const plafond =
-    Number.isInteger(options.plafond) && options.plafond > 0
-      ? options.plafond
-      : PLAFOND_ACTIFS_DEFAUT;
   const nomsActifs = actifs.map((entree) => entree.id).join(", ");
-  const etat = etatBot(bot, options.principal ?? null);
   return (
     `Ce bot n'est pas en marche : ${actifs.length} bot${actifs.length > 1 ? "s" : ""} ` +
-    `en marche sur ${plafond} au maximum` +
+    `en marche` +
     `${nomsActifs === "" ? "" : ` (${nomsActifs})`}.` +
     " « Démarrer » (ci-dessous, ou dans la barre du haut) l'allume sans redémarrer " +
     "l'instance. Ses réglages s'enregistrent bien sur LUI ; la personnalité, la " +

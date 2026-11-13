@@ -154,26 +154,19 @@ describe("① `GET /api/bots`", () => {
     });
   });
 
-  it("porte `refuses` : les bots `actif` écartés par le plafond sont NOMMÉS", async () => {
-    // ⚠️ Sans cette liste, un bot `actif: true` refusé au démarrage n'a aucun
-    // `execution` et l'interface afficherait « état inconnu » — la cause (le
-    // plafond) resterait invisible pour l'utilisateur.
+  it("⚠️ ne porte NI `refuses` NI `plafond` : plus aucun bot n'est écarté", async () => {
+    // ⚠️ RÉÉCRIT (n'était « porte `refuses` : les bots `actif` écartés par le
+    // plafond sont NOMMÉS ») : depuis la décision utilisateur du 2026-11-13, tous
+    // les bots `actif` démarrent — il n'y a donc plus rien à écarter, et un bot
+    // qui ne tourne pas porte une VRAIE erreur (`execution.erreur`).
     const b = banc({ registre: registreDeuxBots() });
-    b.deps.bots = {
-      ...(b.deps.bots ?? {}),
-      refusesActifs: ["kohai"],
-      maxActifs: 1,
-    };
     const { status, body } = await appel(b, "GET", "/api/bots");
     expect(status).toBe(200);
-    expect(body.refuses).toEqual(["kohai"]);
-    expect(body.plafond).toBe(1);
-  });
-
-  it("`refuses` est une liste VIDE quand rien n'a été écarté (jamais absente)", async () => {
-    const b = banc({ registre: registreDeuxBots() });
-    const { body } = await appel(b, "GET", "/api/bots");
-    expect(body.refuses).toEqual([]);
+    expect(body.refuses).toBeUndefined();
+    expect(body.plafond).toBeUndefined();
+    // La réponse garde ce qu'elle doit dire vrai : le principal et les boucles.
+    expect(body.principal).toBe(b.deps.runtime.botId);
+    expect(body.echanges).toEqual({});
   });
 });
 

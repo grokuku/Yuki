@@ -397,19 +397,25 @@ describe("④ `envPourBot` n'est appliqué qu'UNE fois par bot", () => {
   });
 });
 
-describe("⑤ la Map = bots à DÉMARRER + bot de pile, jamais les refusés", () => {
-  it("le plafond refuse un bot : il n'a pas de jeu d'outils", () => {
+describe("⑤ la Map = TOUS les bots à DÉMARRER + bot de pile, jamais un bot éteint", () => {
+  it("⚠️ quatre bots actifs ⇒ quatre jeux d'outils (plus de plafond)", () => {
+    // ⚠️ RÉÉCRIT (n'était « le plafond refuse un bot : il n'a pas de jeu
+    // d'outils ») : le plafond est supprimé, donc les quatre bots ACTIFS ont
+    // leurs outils ; seul le bot ÉTEINT n'en a pas.
     const b = avecRegistre([
       bot("yuki", 0, true),
       bot("kohai", 1, true),
       bot("senpai", 2, true),
       bot("sensei", 3, true),
+      bot("eteint", 4, false),
     ]);
     const preparation = preparerMultiBot(b.env, { processEnv: {} });
-    // Plafond par défaut : 3 bots qui tournent.
-    expect(preparation.plafondActifs).toBe(3);
-    expect(preparation.aDemarrer.map((entree) => entree.id)).toEqual(["yuki", "kohai", "senpai"]);
-    expect(preparation.refusesActifs.map((entree) => entree.id)).toEqual(["sensei"]);
+    expect(preparation.aDemarrer.map((entree) => entree.id)).toEqual([
+      "yuki",
+      "kohai",
+      "senpai",
+      "sensei",
+    ]);
 
     const outils = creerOutilsBots({
       envInstance: preparation.envInstance,
@@ -421,9 +427,9 @@ describe("⑤ la Map = bots à DÉMARRER + bot de pile, jamais les refusés", ()
       processEnv: {},
     });
 
-    expect([...outils.keys()]).toEqual(["yuki", "kohai", "senpai"]);
-    expect(outils.has("sensei")).toBe(false);
-    expect(existsSync(join(b.state, "bots", "sensei", "memory.jsonl"))).toBe(false);
+    expect([...outils.keys()]).toEqual(["yuki", "kohai", "senpai", "sensei"]);
+    expect(outils.has("eteint")).toBe(false);
+    expect(existsSync(join(b.state, "bots", "eteint", "memory.jsonl"))).toBe(false);
   });
 
   it("le bot de pile est TOUJOURS présent, même absent de la liste à démarrer", () => {

@@ -130,7 +130,7 @@ function botMono(): BotRecord {
 export class SourcesParBotError extends Error {
   override readonly name = "SourcesParBotError";
   constructor(
-    readonly code: "bot_inconnu" | "bot_non_construit" | "id_invalide" | "bot_refuse",
+    readonly code: "bot_inconnu" | "bot_non_construit" | "id_invalide",
     message: string,
   ) {
     super(message);
@@ -138,19 +138,17 @@ export class SourcesParBotError extends Error {
 }
 
 /**
- * Ce que le DÉMARRAGE a décidé (lot 36, L1) : qui doit tourner, et qui le
- * plafond a refusé.
+ * Ce que le DÉMARRAGE a décidé : qui doit tourner.
  *
- * ⚠️ C'est la SEULE source de vérité du balayeur : un bot `actif: true` mais
- * REFUSÉ par `bots.maxActifs` n'a ni pile ni déclencheur — allumer un bot dans
- * l'interface ne le fait pas tourner avant le redémarrage (`demarrageRequis`,
- * `src/bots/admin.ts`).
+ * ⚠️ C'est la SEULE source de vérité du balayeur. Plus AUCUN plafond (décision
+ * utilisateur du 2026-11-13) : `aDemarrer` contient TOUS les bots `actif: true`,
+ * il n'existe donc plus de bot « écarté au démarrage ». La raison pour laquelle
+ * un bot ne tourne pas est désormais une VRAIE erreur (`PiHost`), jamais un
+ * plafond.
  */
 export interface ResolutionDemarrage {
   /** Bots à DÉMARRER, dans l'ordre du démarrage. */
   readonly aDemarrer: readonly string[];
-  /** Bots `actif: true` REFUSÉS par le plafond (aucune pile, aucun tir). */
-  readonly refuses: readonly string[];
 }
 
 /**
@@ -202,11 +200,12 @@ export interface OptionsSourcesParBot {
   coffre?: SourcesTokenVault;
   logger: SourcesLogger;
   /**
-   * Décision de DÉMARRAGE (L1) : qui doit tourner, qui le plafond a refusé.
+   * Décision de DÉMARRAGE : qui doit tourner (TOUS les `actif: true`, aucun
+   * plafond depuis la décision utilisateur du 2026-11-13).
    *
    * ⚠️ Omise (tests, mode mono-bot) ⇒ comportement du lot 35j : tous les bots
    * `actif: true` du registre sont balayés. Fournie (démarrage réel), le balayeur
-   * ne voit QUE les bots à démarrer — jamais un bot du registre refusé.
+   * ne voit QUE les bots à démarrer.
    */
   demarrage?: () => ResolutionDemarrage;
   /** Horloge injectable (tests). */
@@ -241,8 +240,6 @@ export interface JetonResolu {
 export class SourcesParBot {
   private readonly options: OptionsSourcesParBot;
   private readonly pilesOuvertes = new Map<string, PileSourcesBot>();
-  /** Bots démarrés à la MAIN (L8) : leur refus de démarrage est levé. */
-  private readonly autorisesMaintenant = new Set<string>();
   private ouvrir?: (input: { botId: string; env: Env }) => PileSourcesBot;
   private pileActive?: PileSourcesBot;
 
@@ -307,30 +304,11 @@ export class SourcesParBot {
     }
   }
 
-  /** Ce bot a-t-il été REFUSÉ par le plafond au démarrage ? */
-  estRefuse(botId: string): boolean {
-    // ⚠️ LOT 36 (L8) : un bot DÉMARRÉ À LA MAIN (bouton « Démarrer ») lève le
-    // refus du démarrage : le plafond a été vérifié par `definirActif`, et
-    // refuser ici rendrait le bouton inopérant sur ses propres sources.
-    if (this.autorisesMaintenant.has(botId)) return false;
-    const demarrage = this.resolutionDemarrage();
-    return demarrage?.refuses.includes(botId) ?? false;
-  }
-
   /**
-   * Autorise un bot DÉMARRÉ À LA MAIN (lot 36, L8) — sans toucher au registre ni
-   * à la décision de démarrage (figée). Idempotent.
-   */
-  autoriser(botId: string): void {
-    this.autorisesMaintenant.add(botId);
-  }
-
-  /**
-   * Oublie un bot ARRÊTÉ (lot 36, L8/L9) : sa pile, son autorisation à la main.
+   * Oublie un bot ARRÊTÉ (lot 36, L8/L9) : sa pile.
    * ⚠️ La propriété de ses canaux n'est pas touchée (L5) : ils restent les siens.
    */
   oublier(botId: string): void {
-    this.autorisesMaintenant.delete(botId);
     this.pilesOuvertes.delete(botId);
   }
 
@@ -339,8 +317,6 @@ export class SourcesParBot {
    *
    * ⚠️ Sans décision de démarrage (tests, mode mono-bot historique), c'est
    * l'ancienne règle du lot 35j : tout bot `actif: true` du registre.
-   * ⚠️ Un bot `actif: true` mais REFUSÉ par le plafond n'y figure JAMAIS : il n'a
-   * pas de pile, donc ses déclencheurs ne peuvent pas tirer.
    */
   botsActifs(): BotRecord[] {
     const tous = this.bots().filter((bot) => bot.actif === true);
@@ -372,16 +348,6 @@ export class SourcesParBot {
     }
     const connu = this.pilesOuvertes.get(botId);
     if (connu) return connu;
-    if (this.estRefuse(botId)) {
-      // ⚠️ Un bot REFUSÉ par le plafond (`bots.maxActifs`) n'a pas de pile : il ne
-      // tourne pas, rien ne doit ouvrir ses fichiers en son nom (ni le webhook, ni
-      // le balayeur, ni une route d'administration).
-      throw new SourcesParBotError(
-        "bot_refuse",
-        `Le bot « ${botId} » a été refusé au démarrage par le plafond de bots ` +
-          "simultanés : il n'a pas de sources ouvertes. Éteignez un autre bot, puis redémarrez.",
-      );
-    }
     if (this.bot(botId) === undefined) {
       throw new SourcesParBotError(
         "bot_inconnu",
@@ -516,11 +482,11 @@ export class SourcesParBot {
   }
 
   /**
-   * Les bots à balayer MAINTENANT — un bot INACTIF, REFUSÉ par le plafond, ou
-   * sans capacité pertinente n'y figure pas.
+   * Les bots à balayer MAINTENANT — un bot INACTIF ou sans capacité pertinente
+   * n'y figure pas.
    *
-   * ⚠️ UNE cible par bot qui TOURNE (décision de démarrage, L1), jamais une par
-   * bot du registre : un bot refusé n'a pas de pile, donc rien à balayer.
+   * ⚠️ UNE cible par bot qui TOURNE (décision de démarrage), jamais une par bot
+   * du registre.
    *
    * ⚠️ Aucun minuteur n'est créé ici : le balayeur (`BalayeurBots`) possède
    * l'UNIQUE `setInterval` et appelle cette liste à chaque tick.

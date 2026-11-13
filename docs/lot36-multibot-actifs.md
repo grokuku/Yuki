@@ -20,36 +20,35 @@ par bot) ; les limites connues sont listées en fin.
 | Symbole | Rôle |
 |---|---|
 | `botsAActiver(registre)` (`:84`) | tous les bots `actif: true`, triés `ordre` puis `id` (ordre déterministe) |
-| `resoudreDemarrageBots(registre, {maxActifs})` (`:109`) | rend `{principal, aDemarrer, refuses, plafond}` |
-| `normaliserPlafond(valeur)` (`:50`) | entier borné `[1, MAX_BOTS]`, défaut 3, jamais `NaN` |
-| `lirePlafondActifs(env, processEnv)` (`:72`) | précédence `défaut (3) < store < environnement` |
-| `messageRefusPlafond(bot, plafond)` (`:124`) | message français nommant le bot refusé |
+| `resoudreDemarrageBots(registre)` | rend `{principal, aDemarrer}` |
+
+⚠️ **Le plafond `bots.maxActifs` est SUPPRIMÉ** (décision utilisateur du
+2026-11-13 : « retire le plafond. Chacun fait comme il a envie en fonction de ses
+ressources, limiter c'est mal à mon sens »). `normaliserPlafond`,
+`lirePlafondActifs`, `messageRefusPlafond` et le refus `409 plafond_actifs`
+n'existent plus ; `YUKI_BOTS_MAX_ACTIFS` est annoncée sans effet
+(`VARIABLES_ENV_SUPPRIMEES`). ⚠️ `MAX_BOTS = 6` reste : c'est le nombre de bots
+**créables**, pas le nombre qui tournent.
 
 ⚠️ **« Principal » ≠ « doit tourner ».** `principal` vient de `botActif`
 (`src/bots/registry.ts:297`) qui privilégie **toujours** `yuki` ; `aDemarrer` ne
 contient que les `actif: true`. Éteindre `yuki` ne change donc pas l'identité de
 l'instance, seulement ce qui tourne.
 
-`preparerMultiBot` (`src/bots/index.ts:235`) rend désormais `principal`,
-`aDemarrer`, `refusesActifs`, `plafondActifs` :
+`preparerMultiBot` (`src/bots/index.ts`) rend désormais `principal` et
+`aDemarrer` (TOUS les `actif: true`, sans exception) :
 
-- plafond dépassé ⇒ les bots en trop **ne démarrent pas** et sont nommés un par
-  un dans `avertissements` (journalisés `bots.avertissement`) ;
+- 4 bots actifs ⇒ **4 démarrages** (aucun bot n'est écarté) ;
 - **aucun** bot actif ⇒ `DemarrageRefuseError("AUCUN_BOT_ACTIF")` ;
 - principal éteint ⇒ la pile construite est celle du **premier bot actif**, et
   c'est dit (`avertissements`) ;
 - **garde de non-régression** : un seul bot actif (`yuki`) ⇒ `bot`, `env` et
   chemins **identiques** à avant (test dédié).
 
-Réglage : `bots.maxActifs` (`src/config/schema.ts:813`), portée `instance`,
-`int` 1..6, défaut **3**, `apply: restart`, surchargeable par
-`YUKI_BOTS_MAX_ACTIFS`. Lecture au démarrage via `lireValeurInstance`
-(`src/config/runtime.ts`), pour ne pas créer un second lecteur du store commun
-(`ConfigStore` reste la propriété de `src/config/`, verrouillé par
-`tests/config/schema-scope.test.ts`).
-
-Journal de démarrage : `bots.demarrage` (`src/index.ts:341`) →
-`{mode, principal, pile, a_demarrer, refuses, plafond}`.
+Journal de démarrage : `bots.demarrage` (`src/index.ts`) →
+`{mode, principal, pile, nombre, a_demarrer}`. ⚠️ Le **nombre** est journalisé
+exprès : si chaque bot démarre, la RAM monte — l'utilisateur doit voir ce qu'il a
+lancé.
 
 ### L2 — On/off réel du bot
 
@@ -60,8 +59,7 @@ suppression).
 | Cas | Effet |
 |---|---|
 | déjà dans l'état demandé | `inchange: true`, **aucune écriture** |
-| allumer sous le plafond | écrit `actif: true`, `demarrageRequis: true` |
-| allumer au-delà du plafond | `409 plafond_actifs` — message nommant le plafond **et** les bots allumés |
+| allumer un bot (quel qu'il soit) | écrit `actif: true`, `demarrageRequis: true` — **jamais refusé** (plus de plafond) |
 | éteindre s'il reste ≥ 2 actifs | écrit `actif: false`, `arretRequis: true` |
 | éteindre le **dernier** actif | `409 dernier_bot_actif` (sinon plus de démarrage possible) |
 | `actif` non booléen | `400 actif_invalide` |

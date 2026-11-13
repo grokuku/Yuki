@@ -34,7 +34,6 @@ import {
   type RegistreBots,
 } from "../../bots/registry.js";
 import type { EtatExecutionBot, ExecutionBots } from "../../bots/execution.js";
-import { normaliserPlafond } from "../../bots/actifs.js";
 import {
   AdminBotError,
   RETENTION_ARCHIVES_JOURS,
@@ -134,19 +133,6 @@ export interface ConfigApiDeps {
      * `bot.agents.detached`). Les agents eux-mêmes ne sont jamais supprimés.
      */
     retirerDesListesDAgents?: (botId: string) => number | void;
-    /**
-     * Plafond des bots SIMULTANÉS (lot 36, L2), lu au démarrage depuis
-     * `bots.maxActifs`. Absent ⇒ défaut 3. C'est lui qui refuse d'allumer un bot
-     * de plus (`409 plafond_actifs`) — la route ne redécide pas la règle.
-     */
-    maxActifs?: number;
-    /**
-     * ⚠️ Bots `actif: true` REFUSÉS au démarrage par le plafond. La liste part
-     * telle quelle dans `GET /api/bots` : sans elle, un bot écarté n'a aucun
-     * `execution` et l'interface afficherait « état inconnu » — l'utilisateur
-     * chercherait une panne au lieu de voir le plafond.
-     */
-    refusesActifs?: string[];
     /**
      * ⚠️ LOT 36 (L8) — L'ÉTAT RÉEL, ET LE CYCLE DE VIE (`src/bots/execution.ts`).
      *
@@ -705,20 +691,18 @@ function botInconnu(botId: string): ConfigHttpResponse {
  * Sert au sélecteur de la page d'un bot et à la liste des cases de capacités.
  *
  * ⚠️ LOT 37 — la réponse porte AUSSI ce que le sélecteur de la barre du haut doit
- * dire VRAI : `plafond` (`bots.maxActifs`, 3 par défaut), `principal` (le bot de
- * la PILE, seul à tourner avec le gateway) et `echanges` (les boucles on/off
- * entre bots). Le `plafond` est là pour qu'un refus ou un bandeau ne prétende
- * jamais « un seul bot » alors que trois peuvent tourner.
+ * dire VRAI : `principal` (le bot de la PILE, seul à tourner avec le gateway) et
+ * `echanges` (les boucles on/off entre bots).
+ *
+ * ⚠️ PLUS DE PLAFOND (décision utilisateur du 2026-11-13 : « retire le plafond ») :
+ * la réponse ne porte plus `plafond` ni `refuses`. Un bot `actif` démarre toujours ;
+ * s'il ne tourne pas, la cause est son `execution.erreur` (une VRAIE erreur).
  */
 function handleBotsList(deps: ConfigApiDeps): ConfigHttpResponse {
   return json(200, {
     bots: botsConnus(deps),
-    plafond: normaliserPlafond(deps.bots?.maxActifs),
     principal: deps.runtime.botId,
     echanges: { ...(deps.bots?.registre?.echanges ?? {}) },
-    // ⚠️ REFUS DU PLAFOND, nommés : l'interface les affiche (« actif mais NON
-    // démarré »). Journalisés au démarrage un par un (`bots.avertissement`).
-    refuses: [...(deps.bots?.refusesActifs ?? [])],
   });
 }
 
@@ -1140,10 +1124,12 @@ function handleBotsDelete(
  *
  * Corps : `{ actif: true | false }` — « `actif` = ce bot DOIT tourner ».
  *
- * ⚠️ DEUX REFUS, tous deux rendus tels quels (`code` stable + message français) :
- * `409 plafond_actifs` (plus de `bots.maxActifs` bots allumés) et
+ * ⚠️ UN SEUL REFUS, rendu tel quel (`code` stable + message français) :
  * `409 dernier_bot_actif` (éteindre le dernier rendrait le démarrage suivant
- * impossible). Un troisième cas n'est PAS une erreur : `inchange`.
+ * impossible). ALLUMER n'est plus jamais refusé : le plafond `bots.maxActifs` et
+ * son `409 plafond_actifs` ont été SUPPRIMÉS (décision utilisateur du
+ * 2026-11-13 : « limiter c'est mal à mon sens »). Un autre cas n'est PAS une
+ * erreur : `inchange`.
  *
  * ⚠️ L'effet est au REDÉMARRAGE du gateway (`redemarrageRequis`) : le processus en
  * cours a résolu ses bots à son démarrage. La réponse le DIT au lieu de laisser
@@ -1182,7 +1168,6 @@ async function handleBotActif(
       registre,
       botId,
       actif: corps.value["actif"],
-      ...(deps.bots?.maxActifs !== undefined ? { maxActifs: deps.bots.maxActifs } : {}),
     });
     // ⚠️ Le registre EN MÉMOIRE suit l'écriture : `GET /api/bots` et la
     // résolution des déclencheurs lisent CET objet, pas le fichier.
@@ -1192,7 +1177,6 @@ async function handleBotActif(
       actif: resultat.actif,
       inchange: resultat.inchange,
       actifs: resultat.actifs.join(","),
-      plafond: resultat.plafond,
       flow: configWriteFlow(input.headers),
     });
     /**
@@ -1215,7 +1199,6 @@ async function handleBotActif(
       actif: resultat.actif,
       inchange: resultat.inchange,
       actifs: resultat.actifs,
-      plafond: resultat.plafond,
       // ⚠️ `true` seulement si l'effet n'est PAS appliqué (instance sans port
       // d'exécution, ou démarrage/arrêt en échec) : le message le dit.
       redemarrageRequis: demarrageRequis,

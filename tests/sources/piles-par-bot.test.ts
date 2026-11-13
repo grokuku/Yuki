@@ -4,8 +4,8 @@
  * ⚠️ Ces tests ÉCHOUENT sur le code d'origine : `src/sources/pile-bot.ts`
  * n'existe pas (ni `FabriquePilesSources`, ni `creerResolveurEnvBot`), la pile
  * d'un bot ne portait ni `config` (L3-a) ni `outils` (L3-b), et le balayeur
- * itérait sur TOUS les bots `actif: true` du registre — un bot REFUSÉ par le
- * plafond ouvrait donc une pile et pouvait tirer.
+ * itérait sur TOUS les bots `actif: true` du registre au lieu de la décision de
+ * démarrage.
  *
  * Ce qui est VERROUILLÉ ici :
  *  ① GARDE DE NON-RÉGRESSION FORTE : avec UN bot, la pile du principal est
@@ -17,8 +17,9 @@
  *    (piles L3-c, outils L3-b) reçoivent le MÊME objet `Env` ;
  *  ④ le balayeur voit UNE cible par bot à DÉMARRER (décision L1), jamais une par
  *    bot du registre ;
- *  ⑤ un bot REFUSÉ par le plafond n'a PAS de pile (et ses déclencheurs ne tirent
- *    pas) ; un bot éteint non plus.
+ *  ⑤ un bot ÉTEINT n'a PAS de pile (et ses déclencheurs ne tirent pas) ; un bot
+ *    ABSENT du registre est refusé (`bot_inconnu`), jamais ouvert. ⚠️ Plus aucun
+ *    « bot refusé par le plafond » : le plafond n'existe plus (2026-11-13).
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -389,7 +390,6 @@ interface HarnaisBalayeur {
 function harnaisBalayeur(options: {
   bots: BotRecord[];
   aDemarrer: string[];
-  refuses: string[];
 }): HarnaisBalayeur {
   const b = banc();
   const registre: RegistreBots = {
@@ -405,7 +405,7 @@ function harnaisBalayeur(options: {
     mode: "multi",
     registre: () => registre,
     coffre: vault,
-    demarrage: () => ({ aDemarrer: options.aDemarrer, refuses: options.refuses }),
+    demarrage: () => ({ aDemarrer: options.aDemarrer }),
     logger: journal,
   });
   const fabrique = new FabriquePilesSources({
@@ -432,7 +432,6 @@ describe("balayeur : ce que le démarrage a retenu (lot 36, L3-c)", () => {
     const h = harnaisBalayeur({
       bots: [bot("yuki", 0, true), bot("second", 1, true), bot("troisieme", 2, true)],
       aDemarrer: ["yuki", "second"],
-      refuses: ["troisieme"],
     });
 
     const cibles = h.parBot.ciblesBalayage();
@@ -445,7 +444,6 @@ describe("balayeur : ce que le démarrage a retenu (lot 36, L3-c)", () => {
     const h = harnaisBalayeur({
       bots: [bot("yuki", 0, true), bot("second", 1, false)],
       aDemarrer: ["yuki", "second"],
-      refuses: [],
     });
     expect(h.parBot.ciblesBalayage().map((cible) => cible.botId)).toEqual(["yuki"]);
   });
@@ -457,24 +455,25 @@ describe("balayeur : ce que le démarrage a retenu (lot 36, L3-c)", () => {
         bot("second", 1, true, ["accueil"] as unknown as BotRecord["capacites"]),
       ],
       aDemarrer: ["yuki", "second"],
-      refuses: [],
     });
     expect(h.parBot.ciblesBalayage().map((cible) => cible.botId)).toEqual(["yuki"]);
   });
 
-  it("un bot REFUSÉ par le plafond n'a ni pile ni cible, ni fichier ouvert", () => {
+  it("⚠️ un bot ABSENT du registre n'a ni pile ni cible, ni fichier ouvert", () => {
+    // ⚠️ RÉÉCRIT (n'était « un bot REFUSÉ par le plafond… ») : le plafond et son
+    // refus `bot_refuse` ont été SUPPRIMÉS (décision utilisateur du 2026-11-13).
+    // La garde qui reste est celle de LECTURE : on n'ouvre jamais le dossier d'un
+    // bot qui n'existe pas (`bot_inconnu`).
     const h = harnaisBalayeur({
-      bots: [bot("yuki", 0, true), bot("second", 1, true), bot("troisieme", 2, true)],
+      bots: [bot("yuki", 0, true), bot("second", 1, true)],
       aDemarrer: ["yuki", "second"],
-      refuses: ["troisieme"],
     });
 
-    expect(h.parBot.estRefuse("troisieme")).toBe(true);
-    expect(() => h.parBot.pourBot("troisieme")).toThrow(/refusé au démarrage/);
-    expect(() => h.parBot.depsPourBot("troisieme")).toThrow(/refusé au démarrage/);
+    expect(() => h.parBot.pourBot("fantome")).toThrow(/Bot inconnu/);
+    expect(() => h.parBot.depsPourBot("fantome")).toThrow(/Bot inconnu/);
     expect(h.fabrique.ouvertes().map((pile) => pile.botId)).toEqual(["yuki"]);
     // Sa racine n'a AUCUN fichier de sources ouvert par cette instance.
-    const racine = cheminsBot(h.envInstance, "troisieme").racine;
+    const racine = cheminsBot(h.envInstance, "fantome").racine;
     expect(existsSync(join(racine, "sources.json"))).toBe(false);
     expect(existsSync(join(racine, "sources-inbox.json"))).toBe(false);
   });
@@ -486,8 +485,8 @@ describe("balayeur : ce que le démarrage a retenu (lot 36, L3-c)", () => {
       mode: "mono",
       // Aucun `state/bots.json` : le registre est absent (mono-bot historique).
       registre: () => null,
-      // Ce que `preparerMultiBot` rend en mono : AUCUN bot à démarrer, aucun refus.
-      demarrage: () => ({ aDemarrer: [], refuses: [] }),
+      // Ce que `preparerMultiBot` rend en mono : AUCUN bot à démarrer.
+      demarrage: () => ({ aDemarrer: [] }),
       logger: journal,
     });
     const fabrique = new FabriquePilesSources({

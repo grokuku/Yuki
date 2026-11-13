@@ -133,7 +133,6 @@ function banc(bots: BotRecord[]): Banc {
       registre,
       stateDir,
       piSessionsDir: join(racine, "pi", "agent", "sessions"),
-      maxActifs: 3,
       retirerDesListesDAgents: () => 0,
       execution,
     },

@@ -158,7 +158,6 @@ describe("① `creerConfigBot` : un runtime PAR BOT", () => {
 /** Clés REPRÉSENTATIVES : `instance` (+ `env`), `bot`, `mixte` (`et` et `surcharge`). */
 const CLES_REPRESENTATIVES = [
   "llm.light.model", // instance, verrouillable par l'environnement
-  "bots.maxActifs", // instance (lot 36, L1)
   "transport.replayBuffer", // instance
   "chat.mode", // bot
   "tts.voice", // bot
@@ -232,14 +231,16 @@ describe("② GARDE DE NON-RÉGRESSION : 1 bot actif ⇒ valeurs IDENTIQUES", ()
     expect(principal?.originOf("llm.light.model")).toBe("env");
     expect(principal?.isLockedByEnv("llm.light.model")).toBe(true);
     expect(principal?.getString("prompts.light")).toBe("prompt du store");
-    // ⚠️ L'instantané COMPLET (90 clés : valeurs, origines, défauts, portées,
+    // ⚠️ L'instantané COMPLET (91 clés : valeurs, origines, défauts, portées,
     // verrous) doit être rigoureusement le même.
     expect(principal?.snapshot()).toEqual(avant.snapshot());
   });
 });
 
-describe("③ la Map couvre les bots À DÉMARRER, pas ceux REFUSÉS", () => {
-  it("plafond 3 avec 4 bots actifs ⇒ 3 runtimes, le refusé ABSENT", () => {
+describe("③ la Map couvre TOUS les bots À DÉMARRER (plus de plafond)", () => {
+  it("⚠️ 4 bots actifs ⇒ 4 runtimes (aucun bot écarté)", () => {
+    // ⚠️ RÉÉCRIT (n'était « plafond 3 avec 4 bots actifs ⇒ 3 runtimes, le refusé
+    // ABSENT ») : le plafond est supprimé, les quatre bots ont leur configuration.
     const b = banc();
     const resolution = resoudreDemarrageBots(
       registre([
@@ -248,10 +249,13 @@ describe("③ la Map couvre les bots À DÉMARRER, pas ceux REFUSÉS", () => {
         bot("b3", 2, true),
         bot("b4", 3, true),
       ]),
-      { maxActifs: 3 },
     );
-    expect(resolution.aDemarrer.map((entree) => entree.id)).toEqual(["yuki", "b2", "b3"]);
-    expect(resolution.refuses.map((entree) => entree.id)).toEqual(["b4"]);
+    expect(resolution.aDemarrer.map((entree) => entree.id)).toEqual([
+      "yuki",
+      "b2",
+      "b3",
+      "b4",
+    ]);
 
     const configs = creerConfigsBots({
       env: b.env,
@@ -261,9 +265,8 @@ describe("③ la Map couvre les bots À DÉMARRER, pas ceux REFUSÉS", () => {
       processEnv: {},
     });
 
-    expect([...configs.keys()]).toEqual(["yuki", "b2", "b3"]);
-    expect(configs.has("b4")).toBe(false); // refusé par le plafond
-    expect(configs.size).toBe(3);
+    expect([...configs.keys()]).toEqual(["yuki", "b2", "b3", "b4"]);
+    expect(configs.size).toBe(4);
     for (const entree of resolution.aDemarrer) {
       expect(configs.get(entree.id)?.botId).toBe(entree.id);
     }

@@ -24,8 +24,8 @@
  *     réappliquer empile `<bot>/<bot>`). La base est TOUJOURS l'`Env` d'INSTANCE
  *     (`bots.envInstance`), la résolution a lieu ICI une seule fois par bot, et
  *     `creerOutilsBot` REFUSE un `Env` déjà dérivé deux fois.
- *  3. **La Map ne contient que les bots concernés** : ceux qui DOIVENT tourner
- *     (L1) plus le bot de la pile — jamais ceux que le plafond a refusés.
+ *  3. **La Map ne contient que les bots concernés** : TOUS ceux qui DOIVENT
+ *     tourner (L1, plus aucun plafond) plus le bot de la pile.
  *  4. **Aucun contenu journalisé** : on journalise des CHEMINS et un identifiant,
  *     jamais le texte d'une personnalité, d'une règle ou d'un souvenir.
  *
@@ -345,7 +345,7 @@ function storesMemoireDe(options: {
  *
  * Ordre : celui du démarrage (déterministe, `src/bots/actifs.ts`), puis la pile
  * si elle n'y figure pas. Un identifiant répété n'est construit qu'UNE fois.
- * Les bots REFUSÉS par le plafond (`refusesActifs`) n'y sont jamais.
+ * Un bot ÉTEINT (`actif: false`) n'y est jamais.
  *
  * ⚠️ Un seul `envPourBot` par bot : la résolution a lieu ici (ou est reprise de
  * l'`Env` des stores de la pile, déjà résolu), puis circule dans tout le jeu.

@@ -398,7 +398,10 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     expect(lire("chat-mode.js")).toContain("chat.${plateforme}.enabled");
   });
 
-  it("les SEPT réglages sans écran ont un champ, dans le bon onglet, avec libellé et aide", () => {
+  it("les SIX réglages sans écran ont un champ, dans le bon onglet, avec libellé et aide", () => {
+    // ⚠️ SEPT → SIX : `bots.maxActifs` est SUPPRIMÉ du schéma (décision
+    // utilisateur du 2026-11-13 : « retire le plafond »). Il n'a donc plus de
+    // champ — et plus aucune valeur par défaut à réinitialiser.
     const attendus: Record<string, string> = {
       "agents.bindHost": "agents",
       "agents.port": "agents",
@@ -406,7 +409,6 @@ describe("⑨ classement validé — portées changées et réglages sans écran
       "audit.retentionDays": "systeme",
       "audit.maxSizeMb": "systeme",
       "recap.timeoutMs": "systeme",
-      "bots.maxActifs": "systeme",
     };
     const parOnglet = groupesParOnglet("instance", GROUPS);
     for (const [cle, onglet] of Object.entries(attendus)) {
@@ -434,10 +436,10 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     const couvertes = new Set([...rendues("instance"), ...rendues("bot"), ...CONTROLES_AILLEURS]);
     const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
     expect(orphelines).toEqual([]);
-    // ⚠️ Et le compte doit être EXACT : 92 clés (90 + les DEUX interrupteurs de
-    // plateforme ajoutés le 2026-11-10), aucune oubliée par ce contrôle.
-    expect(Object.keys(SCOPES).length).toBe(92);
-    expect(couvertes.size).toBe(92);
+    // ⚠️ Et le compte doit être EXACT : 91 clés (92 − `bots.maxActifs`, supprimé
+    // avec le plafond de bots en marche), aucune oubliée par ce contrôle.
+    expect(Object.keys(SCOPES).length).toBe(91);
+    expect(couvertes.size).toBe(91);
     // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
     for (const [cle, fichier] of [
       ["tts.voice", "voices-panel.js"],

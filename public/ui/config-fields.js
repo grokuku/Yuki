@@ -571,22 +571,13 @@ export const GROUPS = [
     // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
     tabs: { instance: "systeme" },
     title: "Exploitation de l'installation",
-    // ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) — ces quatre
-    // réglages n'avaient AUCUN écran (modifiables seulement dans le fichier de
+    // ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) — ces réglages
+    // n'avaient AUCUN écran (modifiables seulement dans le fichier de
     // configuration). Ils sont d'INSTANCE : ils bornent l'installation entière
-    // (nombre de bots en marche, durée d'un récapitulatif, journal d'audit).
+    // (durée d'un récapitulatif, journal d'audit).
+    // ⚠️ `bots.maxActifs` (nombre de bots en marche) est RETIRÉ : plus de plafond
+    // (décision utilisateur du 2026-11-13) — tous les bots `actif` démarrent.
     fields: [
-      {
-        path: "bots.maxActifs",
-        label: "Bots qui tournent en même temps",
-        kind: "number",
-        min: 1,
-        max: 6,
-        helper:
-          "Plafond des bots dont le gateway est en marche simultanément (défaut 3, maximum " +
-          "6). Au-delà, les bots supplémentaires restent arrêtés et le disent — leurs " +
-          "réglages et leur mémoire sont conservés. Appliqué au redémarrage.",
-      },
       {
         path: "recap.timeoutMs",
         label: "Délai maximal d'un récapitulatif de conversation (ms)",
@@ -1147,7 +1138,6 @@ export const FIELD_DEFAULTS = {
   "agents.bindHost": "0.0.0.0",
   "agents.port": 9443,
   "agents.defaultLevel": "destructive",
-  "bots.maxActifs": 3,
   "recap.timeoutMs": 180000,
   "audit.retentionDays": 30,
   "audit.maxSizeMb": 16,

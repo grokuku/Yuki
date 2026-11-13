@@ -37,6 +37,11 @@
 
 import { badgeFor } from "./chat-mode.js";
 import { BOT_PAR_DEFAUT, BOT_WRITE_HEADERS, cheminConfigBot } from "./bots-api.js";
+import {
+  nomSecretChatBot,
+  nomsSecretsChatBot,
+  texteEtatJetonBot,
+} from "./jetons-chat-bot.js";
 import { formatDateTimeFr } from "./horodatage.js";
 
 /** En-tête exigé par les routes de discussion (lecture ET écriture). */
@@ -854,53 +859,19 @@ export function texteJetonsBots(jetonsBots) {
 
 // ─── JETON D'UN BOT : le NOM du secret (même règle que le serveur) ──────────
 
-/** Préfixe commun des jetons de discussion (`src/secrets/references.ts`). */
-export const PREFIXE_SECRET_CHAT = "YUKI_CHAT";
-
 /**
- * Nom du secret du jeton d'un bot pour une plateforme :
- * `YUKI_CHAT_<BOT>__<PLATEFORME>` (séparateur `__`, tirets du slug → `_`).
- *
- * ⚠️ COPIE ASSUMÉE de `nomSecretChat` (`src/chat/jetons-bot.ts`) : cette page est
- * du JavaScript servi tel quel, elle ne peut pas importer un module TypeScript du
- * serveur. La règle est verrouillée par un test qui COMPARE les deux
- * (`tests/ui/plateformes-par-bot.test.ts`) : renommer l'un sans l'autre ferait
- * écrire un jeton que le serveur ne lirait jamais.
+ * ⚠️ La RÈGLE de nommage vit dans `jetons-chat-bot.js` (module PUR, sans DOM) :
+ * la barre latérale de `/` en a besoin SANS charger ce panneau entier. Elle est
+ * ré-exportée ici pour ne pas casser les appelants historiques (et le test qui
+ * compare la règle de la page à celle du serveur).
  */
-export function nomSecretChatBot(botId, plateforme) {
-  const proprietaire = String(botId).toUpperCase().replace(/-/g, "_");
-  return `${PREFIXE_SECRET_CHAT}_${proprietaire}__${String(plateforme).toUpperCase()}`;
-}
+export {
+  PREFIXE_SECRET_CHAT,
+  nomSecretChatBot,
+  nomsSecretsChatBot,
+  texteEtatJetonBot,
+} from "./jetons-chat-bot.js"
 
-/**
- * Noms ACCEPTÉS pour le jeton d'un bot (le premier est celui d'un nouveau jeton).
- * Seul `yuki` garde droit à l'ancien nom d'instance (installations existantes).
- */
-export function nomsSecretsChatBot(botId, plateforme) {
-  const noms = [nomSecretChatBot(botId, plateforme)];
-  if (botId === BOT_PAR_DEFAUT) {
-    const historique = `${PREFIXE_SECRET_CHAT}_${String(plateforme).toUpperCase()}`;
-    if (!noms.includes(historique)) noms.push(historique);
-  }
-  return noms;
-}
-
-/** Une ligne d'état du jeton de CE bot (le nom du secret, jamais sa valeur). */
-export function texteEtatJetonBot(botId, plateforme, noms, coffreConfigure = true) {
-  if (!coffreConfigure) {
-    return (
-      "Coffre verrouillé : aucun jeton ne peut être lu ni enregistré " +
-      "(la clé maître `YUKI_VAULT_KEY` manque)."
-    );
-  }
-  const attendus = nomsSecretsChatBot(botId, plateforme);
-  const connu = new Set(Array.isArray(noms) ? noms : [...(noms ?? [])]);
-  const present = attendus.find((nom) => connu.has(nom));
-  if (present !== undefined) {
-    return `Un jeton est enregistré pour ce bot sous « ${present} » (il n'est jamais réaffiché).`;
-  }
-  return `Aucun jeton pour ce bot : enregistrez-le ci-dessus (nom du coffre : ${attendus[0]}).`;
-}
 
 /** Plateformes DISTANTES d'un bot — chacune avec SON interrupteur et SON jeton. */
 const PLATEFORMES_BOT = [

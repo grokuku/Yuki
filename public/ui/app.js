@@ -26,6 +26,7 @@ import {
   fetchChatStatus,
   savePlatformEnabled,
 } from "./chat-mode.js";
+import { fetchEtatPlateformes } from "./plateformes-bot.js";
 import {
   UNREAD_STORAGE_KEY,
   addUnread,
@@ -97,7 +98,7 @@ const botSwitcher = initBotSwitcher({
   list: document.getElementById("bot-switcher-list"),
   // LOT 38/39 — les ONGLETS de bots de la barre du haut (un clic = bascule).
   barEl: document.getElementById("bot-bar"),
-  plafondEl: document.getElementById("bot-switcher-plafond"),
+  resumeEl: document.getElementById("bot-switcher-resume"),
   statusEl: document.getElementById("bot-switcher-status"),
   addButton: document.getElementById("bot-switcher-add"),
   closeButton: document.getElementById("bot-switcher-close"),
@@ -666,6 +667,20 @@ function requestNew() {
 /** Phrase d'aide par défaut de l'état vide (markup de `index.html`). */
 const EMPTY_HINT_DEFAULT = "Sélectionnez une conversation ou créez-en une.";
 
+/**
+ * État des plateformes DU BOT AFFICHÉ (interrupteurs, jetons, connexion).
+ *
+ * ⚠️ DISTINCT de `chatStatus` (`GET /api/chat/status`), qui décrit le bot de la
+ * PILE : c'est ce qui faisait dire « aucun jeton » à la barre latérale pour un bot
+ * qui en avait un, avec un lien de remédiation vers `/bots?b=yuki`.
+ */
+let etatPlateformes = null;
+
+/** Bot AFFICHÉ : celui de la connexion (`welcome.bot`), à défaut `?b=` de la page. */
+function botAffiche() {
+  return botConnecte ?? botPage;
+}
+
 /** Reflète l'état du mode dans le panneau, le bouton de l'état vide et la liste. */
 function applyChatStatus(status) {
   chatStatus = status && typeof status === "object" ? status : null;
@@ -685,34 +700,50 @@ function applyChatStatus(status) {
   }
 }
 
-/** Relit l'état des plateformes puis rafraîchit la LISTE. */
+/**
+ * Relit l'état de la discussion (instance) PUIS celui des plateformes du bot affiché.
+ *
+ * ⚠️ Le second est indispensable : `GET /api/chat/status` ne parle QUE du bot de la
+ * pile. Sans lui, la barre latérale affirme des faits qui ne portent pas sur le bot
+ * qu'on regarde (défaut signalé par 3 captures).
+ */
 async function refreshChatStatus() {
+  let status = null;
   try {
-    const status = await fetchChatStatus();
-    applyChatStatus(status);
+    status = await fetchChatStatus();
+  } catch {
+    // État illisible : on ne prétend RIEN (pas de badge « connecté » inventé).
+    status = null;
+  }
+  applyChatStatus(status);
+  try {
+    etatPlateformes = await fetchEtatPlateformes(botAffiche(), { statutPile: status });
+  } catch {
+    // Lecture ratée : état INCONNU (jamais « aucun jeton »).
+    etatPlateformes = null;
+  }
+  sessionsPanel.setEtatPlateformes(etatPlateformes);
+  if (status !== null) {
     // La liste est AUTORITAIRE côté serveur : on la redemande (le serveur décide
     // de son contenu). Aucune trame n'est inventée ici.
     sendRaw({ type: "chat_refresh" });
-    return status;
-  } catch {
-    // État illisible : on ne prétend RIEN (pas de badge « connecté » inventé).
-    applyChatStatus(null);
-    return null;
   }
+  return status;
 }
 
 /**
  * Interrupteur de plateforme demandé par la barre latérale : persisté CÔTÉ
- * SERVEUR (`chat.<plateforme>.enabled`).
+ * SERVEUR (`chat.<plateforme>.enabled`) SUR LE BOT AFFICHÉ.
  *
  * ⚠️ Ce n'est PAS un choix exclusif : allumer Discord laisse Mattermost tel
  * quel, et ne touche jamais au local (il n'est pas un réglage).
+ * ⚠️ Le bot visé est celui dont on MONTRE l'état (`etatPlateformes.bot`), jamais
+ * le « bot actif » de l'instance : sinon un clic sur `granolaf` modifiait `yuki`.
  */
 async function onChatModeChange(plateforme, actif) {
   try {
-    const status = await savePlatformEnabled(plateforme, actif);
-    applyChatStatus(status);
-    sendRaw({ type: "chat_refresh" });
+    await savePlatformEnabled(plateforme, actif, { botId: etatPlateformes?.bot });
+    await refreshChatStatus();
   } catch (error) {
     void HolafModal.alert(
       "Plateforme non enregistrée",

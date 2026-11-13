@@ -145,11 +145,11 @@ Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est 
 | Rétention du journal d'audit | `audit.retentionDays` | global | ⚠️ à trancher — un seul journal | |
 | Taille maximale d'un fichier d'audit | `audit.maxSizeMb` | global | global — rotation du même journal | |
 
-## 11 · Bots (1 clé)
+## 11 · Bots (0 clé)
 
-| Réglage | Clé technique | Aujourd'hui | Avis | Décision |
-|---|---|---|---|---|
-| Bots qui tournent en même temps | `bots.maxActifs` | global | global — plafond de l'installation | |
+⚠️ **`bots.maxActifs` est SUPPRIMÉ** (décision utilisateur du 2026-11-13 :
+« retire le plafond »). Tous les bots `actif: true` démarrent : il n'y a plus de
+réglage « combien de bots tournent en même temps ».
 
 ---
 
@@ -167,4 +167,4 @@ Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est 
 
 ## Réglages qui n'ont AUCUN écran aujourd'hui
 
-`agents.bindHost` · `agents.port` · `agents.defaultLevel` · `audit.retentionDays` · `audit.maxSizeMb` · `recap.timeoutMs` · `bots.maxActifs` — **non modifiables depuis l'interface.**
+`agents.bindHost` · `agents.port` · `agents.defaultLevel` · `audit.retentionDays` · `audit.maxSizeMb` · `recap.timeoutMs` — **non modifiables depuis l'interface.**

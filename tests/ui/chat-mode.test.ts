@@ -27,17 +27,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   CHAT_BADGES,
-  CHEMIN_DISCORD,
-  CHEMIN_MATTERMOST,
   PLATEFORME_OPTIONS,
   badgeFor,
+  cheminPlateforme,
   creationRefusal,
   plateformesActives,
   plateformesAvertissements,
   platformLabel,
   platformsNotice,
   savePlatformEnabled,
+  titrePlateforme,
 } from "../../public/ui/chat-mode.js";
+import { BOT_PAR_DEFAUT } from "../../public/ui/bots-api.js";
 
 const read = (name: string): string =>
   readFileSync(join(process.cwd(), "public", "ui", name), "utf8");
@@ -227,17 +228,33 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
   });
 
   it("le chemin est celui de l'UI RÉELLE (onglet « Plateformes », sections nommées)", () => {
-    expect(CHEMIN_MATTERMOST).toBe("/bots?b=yuki → Plateformes → « Discussions — Mattermost »");
-    expect(CHEMIN_DISCORD).toBe("/bots?b=yuki → Plateformes → « Discussions — Discord »");
+    // ⚠️ GARDE CHANGÉE (capture utilisateur) : le chemin n'est plus une CONSTANTE
+    // gravée `?b=yuki` — c'est le bot dont on parle qui le porte, sinon le bandeau
+    // renvoie aux réglages d'un autre bot que celui qu'il décrit.
+    expect(cheminPlateforme("mattermost")).toBe(
+      `${cheminPlateforme("mattermost", BOT_PAR_DEFAUT)}`,
+    );
+    expect(cheminPlateforme("mattermost", "granolaf")).toBe(
+      "/bots?b=granolaf → Plateformes → « Discussions — Mattermost »",
+    );
+    expect(cheminPlateforme("discord", "granolaf")).toBe(
+      "/bots?b=granolaf → Plateformes → « Discussions — Discord »",
+    );
+    // ⚠️ Aucun bot gravé dans les textes de plateforme (le défaut d'origine).
+    expect(read("chat-mode.js")).not.toContain("b=yuki");
     // ⚠️ L'onglet nommé EXISTE : la page du bot le déclare (sous-lot 1b-4).
     expect(read("bots.html")).toContain('id="tab-plateformes"');
     // Les deux sections existent VRAIMENT sous ces noms (`public/ui/chat-panel.js`).
     const panneau = read("chat-panel.js");
     expect(panneau).toContain('titre: "Discussions — Mattermost"');
     expect(panneau).toContain('titre: "Discussions — Discord"');
-    // Une SEULE source de vérité : le sélecteur de mode cite le même chemin.
-    expect(PLATEFORME_OPTIONS[0].title).toContain(CHEMIN_MATTERMOST);
-    expect(PLATEFORME_OPTIONS[1].title).toContain(CHEMIN_DISCORD);
+    // Une SEULE source de vérité : l'info-bulle du sélecteur cite le même chemin.
+    expect(titrePlateforme("mattermost", "granolaf")).toContain(
+      cheminPlateforme("mattermost", "granolaf"),
+    );
+    expect(titrePlateforme("discord", "granolaf")).toContain(
+      cheminPlateforme("discord", "granolaf"),
+    );
     // Le bouton d'état vide du fil renvoie les mots exacts de l'UI (`app.js`).
     expect(read("app.js")).toContain("Aucune conversation dans ce mode");
   });
@@ -268,11 +285,15 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
         mattermost: { plateforme: { etat: "connexion", raison: "Connexion temps réel refusée (401 Unauthorized)." } },
       },
       { nombre: 0, connue: true },
+      { botId: "granolaf" },
     );
     expect(jetonRefuse).toMatchObject({ kind: "echec" });
     expect(jetonRefuse?.titre).toBe("Synchronisation des canaux interrompue.");
     expect(jetonRefuse?.detail).toContain("401 Unauthorized");
-    expect(jetonRefuse?.detail).toContain(CHEMIN_MATTERMOST);
+    // ⚠️ GARDE CHANGÉE : le chemin est celui du bot dont on parle (`granolaf`),
+    // jamais `yuki` en dur.
+    expect(jetonRefuse?.detail).toContain(cheminPlateforme("mattermost", "granolaf"));
+    expect(jetonRefuse?.detail).not.toContain("b=yuki");
     expect(jetonRefuse?.titre).not.toBe(nonConfigure?.titre);
   });
 
@@ -295,10 +316,13 @@ describe("encart de la barre — UNE SEULE vérité affichée à la fois", () =>
     expect(platformsNotice(MATTERMOST_CINQ_CANAUX)).toMatchObject({ kind: "chargement" });
   });
 
-  it("la barre RECALCULE l'encart à chaque source (statut ET liste)", () => {
+  it("la barre RECALCULE l'encart à chaque source (état du bot affiché ET liste)", () => {
     const panel = read("sessions-panel.js");
-    // Une seule décision, nourrie par la liste RÉELLEMENT rendue.
-    expect(panel).toContain("platformsNotice(chatStatus, { nombre: sessions.length, connue: listeConnue })");
+    // Une seule décision, nourrie par la liste RÉELLEMENT rendue et par l'état du
+    // BOT AFFICHÉ (`etatPlateformes`) — plus le statut d'instance, qui décrit `yuki`.
+    expect(panel).toContain("platformsNotice(");
+    expect(panel).toContain("etatPlateformes,");
+    expect(panel).toContain("{ botId: etatPlateformes?.bot }");
     // La liste reçue est marquée comme telle, puis l'encart est recalculé après
     // le rendu (défaut d'origine : rendu avant la liste, jamais retiré).
     expect(panel).toContain("listeConnue = true");
@@ -335,7 +359,7 @@ describe("persistance CÔTÉ SERVEUR", () => {
       }
       return { ok: true, status: 200, json: async () => remoteStatus("mattermost") };
     };
-    const status = await savePlatformEnabled("mattermost", true, fetchImpl);
+    const status = await savePlatformEnabled("mattermost", true, fetchImpl as never);
     expect(status.mode).toBe("mattermost");
 
     // ⚠️ L'interrupteur est un réglage PROPRE AU BOT : `PUT /api/config` le

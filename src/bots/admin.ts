@@ -73,7 +73,7 @@ import {
   type EchangeBots,
   type RegistreBots,
 } from "./registry.js";
-import { MAX_ACTIFS_DEFAUT, botsAActiver, normaliserPlafond } from "./actifs.js";
+import { botsAActiver } from "./actifs.js";
 import { SOUS_DOSSIER_BOTS } from "./paths.js";
 
 /**
@@ -127,7 +127,6 @@ export type CodeAdminBot =
   | "echec_fichier"
   // LOT 36 (L2) — on/off d'un bot.
   | "actif_invalide"
-  | "plafond_actifs"
   | "dernier_bot_actif"
   // LOT 37 — on/off de la BOUCLE entre deux bots (`echanges["a->b"].actif`).
   | "echange_invalide"
@@ -632,8 +631,6 @@ export interface OptionsDefinirActif {
   botId: string;
   /** `true` = doit tourner, `false` = ne doit pas tourner. Tout autre type est refusé. */
   actif: unknown;
-  /** Plafond des bots simultanés (défaut `bots.maxActifs` = 3). */
-  maxActifs?: unknown;
 }
 
 export interface ResultatDefinirActif {
@@ -645,8 +642,6 @@ export interface ResultatDefinirActif {
   inchange: boolean;
   /** Bots marqués actifs APRÈS l'appel (ordre de démarrage). */
   actifs: string[];
-  /** Plafond appliqué à cet appel. */
-  plafond: number;
   /** Le bot vient de passer à `true` : il ne tourne pas encore. */
   demarrageRequis: boolean;
   /** Le bot vient de passer à `false` : sa pile tourne jusqu'au redémarrage. */
@@ -659,13 +654,18 @@ export interface ResultatDefinirActif {
  * ⚠️ C'est la PREMIÈRE route qui écrit `actif` : jusque-là le drapeau n'était
  * posé qu'à la création (`false`) et à la promotion après suppression.
  *
- * DEUX refus, tous deux EXPLICITES (jamais un état incohérent écrit) :
- *  - `plafond_actifs` : allumer un bot de plus dépasserait `bots.maxActifs` ;
- *    le message nomme le plafond ET les bots déjà allumés (il faut en éteindre
- *    un). `MAX_BOTS` reste la borne de CRÉATION du registre, pas celle-ci ;
+ * UN refus, EXPLICITE (jamais un état incohérent écrit) :
  *  - `dernier_bot_actif` : éteindre le DERNIER bot actif laisserait une instance
  *    qui refuse de démarrer (`AUCUN_BOT_ACTIF`). On refuse plutôt que de créer
  *    un état dont on sait qu'il ne redémarrera pas.
+ *
+ * ⚠️ ALLUMER un bot n'est JAMAIS refusé (décision utilisateur du 2026-11-13 :
+ * « retire le plafond… limiter c'est mal à mon sens »). L'ancien refus
+ * `409 plafond_actifs` et le réglage `bots.maxActifs` ont été SUPPRIMÉS : tous
+ * les bots `actif: true` démarrent au redémarrage suivant.
+ *
+ * ⚠️ `MAX_BOTS` reste la borne de CRÉATION du registre : c'est le nombre de bots
+ * créables, PAS le nombre qui tournent.
  *
  * ⚠️ `inchange` est un vrai cas : renvoyer une écriture inutile ferait croire à
  * un changement d'état (et réveillerait les observateurs pour rien).
@@ -685,7 +685,6 @@ export function definirActif(options: OptionsDefinirActif): ResultatDefinirActif
     );
   }
   const actif = options.actif;
-  const plafond = normaliserPlafond(options.maxActifs ?? MAX_ACTIFS_DEFAUT);
   const actuel = registre.bots[index] as BotRecord;
   const allumes = botsAActiver(registre);
 
@@ -696,23 +695,12 @@ export function definirActif(options: OptionsDefinirActif): ResultatDefinirActif
       actif,
       inchange: true,
       actifs: allumes.map((bot) => bot.id),
-      plafond,
       demarrageRequis: false,
       arretRequis: false,
     };
   }
 
-  if (actif) {
-    if (allumes.length >= plafond) {
-      throw new AdminBotError(
-        "plafond_actifs",
-        409,
-        `Plafond de ${plafond} bot(s) simultané(s) atteint ` +
-          `(\`bots.maxActifs\`) : éteignez d'abord l'un des bots actifs ` +
-          `(${allumes.map((bot) => bot.id).join(", ")}) avant d'allumer « ${botId} ».`,
-      );
-    }
-  } else if (allumes.length <= 1) {
+  if (!actif && allumes.length <= 1) {
     // ⚠️ Éteindre le dernier bot actif rendrait le prochain démarrage IMPOSSIBLE
     // (`AUCUN_BOT_ACTIF`) : le refus nomme l'action à faire (allumer un autre bot).
     throw new AdminBotError(
@@ -738,7 +726,6 @@ export function definirActif(options: OptionsDefinirActif): ResultatDefinirActif
     actif,
     inchange: false,
     actifs: botsAActiver(suivant).map((entree) => entree.id),
-    plafond,
     // ⚠️ L'application est au REDÉMARRAGE (L1/L2 ne construisent qu'une pile) :
     // le drapeau décrit ce qui DOIT tourner, pas ce qui tourne déjà.
     demarrageRequis: actif,

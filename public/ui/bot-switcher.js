@@ -31,7 +31,6 @@
 import { attachLongPress } from "./long-press.js";
 import { ouvrirCreationBot, ouvrirSuppressionBot } from "./bots-admin.js";
 import {
-  PLAFOND_ACTIFS_DEFAUT,
   SESSION_BOT_STORAGE_KEY,
   attribuerSessions,
   badgeNonLus,
@@ -125,7 +124,7 @@ function persisterAttribution(table) {
  * @param {HTMLElement} [options.barEl] les ONGLETS de bots de la barre du haut
  *   (`#bot-bar`) : un bouton AVATAR + NOM par bot. Absents ⇒ aucune rangée
  *   (repli : le panneau reste la seule bascule, comportement du lot 37).
- * @param {HTMLElement} [options.plafondEl] la ligne de synthèse du panneau.
+ * @param {HTMLElement} [options.resumeEl] la ligne de synthèse du panneau.
  * @param {HTMLElement} [options.statusEl] la zone de message (`role="status"`).
  * @param {HTMLElement} [options.addButton] « Ajouter un bot ».
  * @param {HTMLElement} [options.closeButton] « Fermer ».
@@ -166,7 +165,7 @@ export function initBotSwitcher(options) {
   const list = options.list;
   /** Onglets de bots de la barre du haut (lot 38/39). */
   const bar = options.barEl ?? null;
-  const plafondEl = options.plafondEl ?? null;
+  const resumeEl = options.resumeEl ?? null;
   const statusEl = options.statusEl ?? null;
   const addButton = options.addButton ?? null;
   const closeButton = options.closeButton ?? null;
@@ -186,13 +185,15 @@ export function initBotSwitcher(options) {
       ? options.statutMs
       : STATUT_MS;
 
-  /** Liste de bots telle que le SERVEUR l'a rendue (source unique). */
+  /**
+   * Liste de bots telle que le SERVEUR l'a rendue (source unique).
+   * ⚠️ Plus de `plafond` ni de `refuses` : il n'y a PLUS de plafond de bots en
+   * marche (décision utilisateur du 2026-11-13), donc plus aucun bot écarté.
+   * Un bot `actif` qui ne tourne pas porte une VRAIE erreur (`execution.erreur`).
+   */
   let bots = [];
-  let plafond = PLAFOND_ACTIFS_DEFAUT;
   let principal = null;
   let echanges = {};
-  /** Bots `actif` REFUSÉS au démarrage par le plafond (`bots.maxActifs`). */
-  let refuses = [];
   /** Non-lus par conversation (état local de CET appareil, `unread.js`). */
   let nonLus = {};
   /**
@@ -239,8 +240,8 @@ export function initBotSwitcher(options) {
   }
 
   function messageErreur(donnees, defaut) {
-    // ⚠️ Le message du SERVEUR est repris tel quel : il nomme le plafond réel
-    // (`bots.maxActifs`), les bots déjà allumés, ou l'erreur de démarrage.
+    // ⚠️ Le message du SERVEUR est repris tel quel : il nomme le DERNIER bot actif
+    // (seul refus restant) ou l'erreur de démarrage.
     if (donnees && typeof donnees.message === "string" && donnees.message !== "") {
       return donnees.message;
     }
@@ -259,14 +260,7 @@ export function initBotSwitcher(options) {
       const liste = Array.isArray(donnees?.bots) ? donnees.bots : [];
       if (liste.length === 0) throw new Error("liste vide");
       bots = liste;
-      plafond =
-        Number.isInteger(donnees?.plafond) && donnees.plafond > 0
-          ? donnees.plafond
-          : PLAFOND_ACTIFS_DEFAUT;
       principal = typeof donnees?.principal === "string" ? donnees.principal : null;
-      refuses = Array.isArray(donnees?.refuses)
-        ? donnees.refuses.filter((id) => typeof id === "string")
-        : [];
       echanges =
         donnees?.echanges !== null && typeof donnees?.echanges === "object"
           ? donnees.echanges
@@ -362,7 +356,6 @@ export function initBotSwitcher(options) {
         entree.courant ? "bot-bar__item--courant" : "",
         arrete ? "bot-bar__item--arrete" : "",
         entree.etat === "erreur" ? "bot-bar__item--erreur" : "",
-        entree.etat === "refuse" ? "bot-bar__item--refuse" : "",
       ]
         .filter(Boolean)
         .join(" ");
@@ -410,7 +403,6 @@ export function initBotSwitcher(options) {
   function classeEtatRangee(etat) {
     if (etat === "principal" || etat === "demarre") return "marche";
     if (etat === "erreur") return "erreur";
-    if (etat === "refuse") return "refuse";
     if (etat === "arrete") return "arrete";
     return "inconnu";
   }
@@ -556,7 +548,7 @@ export function initBotSwitcher(options) {
   function rendre() {
     const courant = botCourant();
     const entrees = bots.map((bot) =>
-      entreeListe(bot, { principal, courant, bots, refuses, plafond }),
+      entreeListe(bot, { principal, courant }),
     );
     dernieresEntrees = entrees;
     // La RANGÉE de la barre du haut se rend avec la même vérité que le panneau.
@@ -626,7 +618,7 @@ export function initBotSwitcher(options) {
       if (menuBotId === entree.id) item.append(menuEntree(entree));
       list.append(item);
     }
-    if (plafondEl) plafondEl.textContent = resumeBots(bots, plafond, refuses);
+    if (resumeEl) resumeEl.textContent = resumeBots(bots);
     /**
      * ⚠️ LE NOM DE LA BARRE DU HAUT SUIT LE BOT AFFICHÉ. Il était écrit en dur
      * (« Yuki ») : avec trois bots en base, la barre annonçait « Yuki » quoi
@@ -703,8 +695,6 @@ export function initBotSwitcher(options) {
       if (donnees.echanges !== null && typeof donnees.echanges === "object") {
         echanges = donnees.echanges;
       }
-      // Il n'est plus « refusé par le plafond » : il est allumé (ou en erreur).
-      refuses = refuses.filter((id) => id !== entree.id);
       const ok = donnees?.applique?.ok !== false;
       if (!ok) {
         direStatut(
@@ -764,7 +754,6 @@ export function initBotSwitcher(options) {
         return false;
       }
       if (Array.isArray(donnees.bots)) bots = donnees.bots;
-      refuses = refuses.filter((id) => id !== entree.id);
       const ok = donnees?.applique?.ok !== false;
       if (!ok) {
         direStatut(
@@ -1004,10 +993,8 @@ export function initBotSwitcher(options) {
     majNonLus,
     etat: () => ({
       bots,
-      plafond,
       principal,
       echanges,
-      refuses,
       ouvert,
       /** Non-lus connus PAR BOT (mêmes chiffres que les badges de la rangée). */
       nonLus: compteursNonLus(),

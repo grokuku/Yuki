@@ -20,10 +20,10 @@
  * style en ligne : la CSP `style-src 'self'` reste inchangée.
  */
 
-import { cheminConfigBot, idBotActif } from "./bots-api.js";
+import { cheminConfigBot, idBotActif, BOT_PAR_DEFAUT } from "./bots-api.js";
 
 /**
- * CHEMIN EXACT du réglage de chaque plateforme.
+ * CHEMIN EXACT du réglage d'une plateforme, **pour LE BOT AFFICHÉ**.
  *
  * ⚠️ Depuis le sous-lot 1b-4 (deux pages), ce réglage vit sur la page du BOT :
  * `/bots?b=<slug>`, onglet « Plateformes », SECTION « Discussions — Mattermost »
@@ -32,15 +32,28 @@ import { cheminConfigBot, idBotActif } from "./bots-api.js";
  * interrupteurs d'accès distant, eux, sont communs à l'installation et vivent
  * sur `/config#chat-remote-agents` (`ANCRES_PROFONDES`, `public/ui/config-pages.js`).
  *
+ * ⚠️ DÉFAUT CORRIGÉ (capture utilisateur) : le chemin était GRAVÉ sur `yuki`
+ * donc le bandeau de la barre latérale renvoyait vers les réglages de `yuki`
+ * alors qu'il parlait d'un autre bot (et affirmait « aucun jeton » sur la foi de
+ * l'état de `yuki`). Le bot est maintenant un ARGUMENT, jamais une constante.
+ *
  * ⚠️ Un chemin approximatif (« … → « Discussions » ») envoie l'utilisateur
  * chercher une section qui n'existe pas : c'est le défaut corrigé le 2026-11-02.
  * Les textes ci-dessous n'écrivent donc JAMAIS « Discussions » sans la
  * plateforme — un test verrouille l'égalité.
+ *
+ * @param {"mattermost"|"discord"} plateforme
+ * @param {string} [botId] bot dont on montre l'état (à défaut, le bot historique :
+ *   c'est le seul identifiant qui ne puisse pas désigner un bot inexistant).
+ * @returns {string}
  */
-export const CHEMIN_MATTERMOST = "/bots?b=yuki → Plateformes → « Discussions — Mattermost »";
-
-/** Chemin exact de la section Discord (page du bot, onglet « Plateformes »). */
-export const CHEMIN_DISCORD = "/bots?b=yuki → Plateformes → « Discussions — Discord »";
+export function cheminPlateforme(plateforme, botId) {
+  const id =
+    typeof botId === "string" && botId.trim() !== "" ? botId.trim() : BOT_PAR_DEFAUT;
+  const section =
+    plateforme === "discord" ? "Discussions — Discord" : "Discussions — Mattermost";
+  return `/bots?b=${encodeURIComponent(id)} → Plateformes → « ${section} »`;
+}
 
 /**
  * PLATEFORMES DISTANTES proposées à un bot : des INTERRUPTEURS, plus un choix.
@@ -53,19 +66,30 @@ export const CHEMIN_DISCORD = "/bots?b=yuki → Plateformes → « Discussions �
  * toujours disponible (comme avant la régression).
  */
 export const PLATEFORME_OPTIONS = [
-  {
-    plateforme: "mattermost",
-    label: "Mattermost",
-    title: `Canaux Mattermost du bot : interrupteur, jeton et état dans ${CHEMIN_MATTERMOST}.`,
-  },
-  {
-    plateforme: "discord",
-    label: "Discord",
-    title:
-      `Salons Discord du bot : interrupteur, jeton et état dans ${CHEMIN_DISCORD}. ` +
-      "L'intent MESSAGE_CONTENT doit être activé dans le portail développeur.",
-  },
+  { plateforme: "mattermost", label: "Mattermost" },
+  { plateforme: "discord", label: "Discord" },
 ];
+
+/**
+ * Info-bulle d'une plateforme, pour le BOT AFFICHÉ (`/bots?b=<bot>`).
+ *
+ * ⚠️ Calculée à l'affichage, jamais figée dans `PLATEFORME_OPTIONS` : un titre
+ * gravé ne peut pas désigner le bot qu'on regarde.
+ *
+ * @param {"mattermost"|"discord"} plateforme
+ * @param {string} [botId]
+ * @returns {string}
+ */
+export function titrePlateforme(plateforme, botId) {
+  const chemin = cheminPlateforme(plateforme, botId);
+  if (plateforme === "discord") {
+    return (
+      `Salons Discord du bot : interrupteur, jeton et état dans ${chemin}. ` +
+      "L'intent MESSAGE_CONTENT doit être activé dans le portail développeur."
+    );
+  }
+  return `Canaux Mattermost du bot : interrupteur, jeton et état dans ${chemin}.`;
+}
 
 /**
  * MODES DE RÉPONSE d'un canal distant, dans l'ordre d'affichage du menu contextuel.
@@ -216,6 +240,12 @@ export const CHAT_BADGES = {
   on: { glyph: "●", label: "connecté" },
   connexion: { glyph: "◐", label: "connexion en cours" },
   off: { glyph: "○", label: "non configuré" },
+  /**
+   * ⚠️ État NON EXPOSÉ pour ce bot : le gateway ne dit l'état de connexion que
+   * pour le bot de la pile. On l'affiche comme tel — jamais « non configuré »,
+   * qui serait une affirmation fausse sur un bot simplement non observable.
+   */
+  inconnu: { glyph: "?", label: "état inconnu" },
 };
 
 /** Libellé d'une plateforme distante (`plateforme` inconnue ⇒ la valeur brute). */
@@ -257,9 +287,17 @@ export function creationRefusal(status) {
 /** Mot du serveur pour « ce que la plateforme liste », au PLURIEL (canaux / salons). */
 const MOTS_LISTE = { mattermost: "canaux", discord: "salons" };
 
-/** Chemin du réglage pour un mode distant (jamais vide). */
-function cheminDeReglage(mode) {
-  return mode === "discord" ? CHEMIN_DISCORD : CHEMIN_MATTERMOST;
+/** Chemin du réglage pour un mode distant (jamais vide), POUR CE BOT. */
+function cheminDeReglage(mode, botId) {
+  return cheminPlateforme(mode === "discord" ? "discord" : "mattermost", botId);
+}
+
+/** Bot dont on parle : argument explicite, sinon celui porté par l'état. */
+function botDeLEtat(status, options) {
+  const demande = typeof options?.botId === "string" ? options.botId.trim() : "";
+  if (demande !== "") return demande;
+  const porte = typeof status?.bot === "string" ? status.bot.trim() : "";
+  return porte;
 }
 
 /** Encart « on n'affirme encore RIEN » (état ou liste pas encore reçus). */
@@ -279,8 +317,8 @@ function noticeChargement(mode) {
  * @param {"impossible" | "interrompue"} forme « rien n'a pu démarrer » (adapter
  *   absent ou non configuré) vs « la connexion s'est arrêtée » (raison d'erreur).
  */
-function noticeEchec(mode, raison, forme) {
-  const chemin = cheminDeReglage(mode);
+function noticeEchec(mode, raison, forme, botId) {
+  const chemin = cheminDeReglage(mode, botId);
   const motif =
     raison !== ""
       ? raison.includes("« Discussions") // la raison du serveur cite déjà la section
@@ -294,16 +332,37 @@ function noticeEchec(mode, raison, forme) {
   };
 }
 
+/**
+ * Encart d'état INCONNU : la synchronisation n'est pas observable pour ce bot.
+ *
+ * ⚠️ Le gateway n'expose `etat` / `raison` que pour le bot de la PILE
+ * (`GET /api/chat/status`). Pour tout autre bot, seuls l'interrupteur et le
+ * jeton sont lisibles : on le DIT, au lieu de présenter « aucun canal » ou
+ * « chargement » qui laisseraient croire à une mesure en cours.
+ */
+function noticeEtatInconnu(mode, botId) {
+  const nom = botId !== "" ? `« ${botId} »` : "ce bot";
+  return {
+    kind: "inconnu",
+    titre: `Synchronisation des ${MOTS_LISTE[mode]} : état inconnu.`,
+    detail:
+      `Le gateway n'expose l'état de connexion que pour le bot de la pile : ` +
+      `pour ${nom}, on sait seulement que la plateforme est activée. ` +
+      `Réglage : ${cheminDeReglage(mode, botId)}.`,
+  };
+}
+
 /** Encart d'état VIDE : la synchro est faite, il n'y a sincèrement rien à lister. */
-function noticeVide(plateformes) {
+function noticeVide(plateformes, botId) {
   const liste = Array.isArray(plateformes) ? plateformes : [plateformes];
   const plusieurs = liste.length > 1;
+  const cheminDe = (plateforme) => cheminDeReglage(plateforme, botId);
   const details = liste.map((plateforme) =>
     plateforme === "discord"
-      ? `Enregistrez le jeton du bot Discord dans ${CHEMIN_DISCORD} (et activez ` +
+      ? `Enregistrez le jeton du bot Discord dans ${cheminDe("discord")} (et activez ` +
         "l'intent MESSAGE_CONTENT dans le portail développeur), puis cliquez sur " +
         "« Se connecter » : les salons texte du serveur seront importés."
-      : `Renseignez l'URL du serveur et le jeton du bot dans ${CHEMIN_MATTERMOST}, puis ` +
+      : `Renseignez l'URL du serveur et le jeton du bot dans ${cheminDe("mattermost")}, puis ` +
         "cliquez sur « Se connecter » : les canaux et deux semaines d'historique seront " +
         "alors importés.",
   );
@@ -345,16 +404,20 @@ function noticeVide(plateformes) {
  *  ⑥ synchro faite (`on`) et aucun élément ⇒ encart d'état vide, avec le chemin
  *    EXACT du réglage.
  *
- * @param {unknown} status corps de `GET /api/chat/status` (`null` = pas encore reçu).
+ * @param {unknown} status état des plateformes du BOT AFFICHÉ (forme de
+ *   `GET /api/chat/status`, ou état par bot de `plateformes-bot.js`).
  * @param {{nombre?: number, connue?: boolean}} [etatListe] ce que la barre sait de
  *   SA liste : nombre d'éléments rendus, et fait de l'avoir REÇUE du serveur.
- * @returns `null` (rien à dire), ou `{ kind: "chargement" | "echec" | "vide",
- *   titre, detail }`.
+ * @param {{botId?: string}} [options] bot dont on parle (défaut : `status.bot`) :
+ *   c'est LUI qui apparaît dans le chemin de remédiation.
+ * @returns `null` (rien à dire), ou `{ kind: "chargement" | "echec" | "vide" |
+ *   "inconnu", titre, detail }`.
  */
-export function platformsNotice(status, etatListe) {
+export function platformsNotice(status, etatListe, options = {}) {
   const actives = plateformesActives(status);
   if (actives.length === 0) return null;
 
+  const botId = botDeLEtat(status, options);
   const nombre = Number(etatListe?.nombre ?? 0);
   const listeConnue = etatListe?.connue === true;
   const vueDe = (plateforme) => status?.[plateforme] ?? {};
@@ -368,22 +431,25 @@ export function platformsNotice(status, etatListe) {
   if (Number.isFinite(nombre) && nombre > 0) return null;
   // ③ Rien n'est encore affirmable : la liste n'est pas arrivée.
   if (!listeConnue) return noticeChargement(actives[0]);
-  // ④ Une plateforme ACTIVÉE qui n'a pas abouti : sa raison, jamais « aucun canal ».
+  // ④ L'état de connexion n'est PAS observable pour ce bot : on le dit, au lieu
+  //   de laisser croire à une mesure en cours (ou à une liste définitivement vide).
+  if (status?.connexionConnue === false) return noticeEtatInconnu(actives[0], botId);
+  // ⑤ Une plateforme ACTIVÉE qui n'a pas abouti : sa raison, jamais « aucun canal ».
   for (const plateforme of actives) {
     if (etatDe(plateforme).etat === "off") {
-      return noticeEchec(plateforme, raisonDe(plateforme), "impossible");
+      return noticeEchec(plateforme, raisonDe(plateforme), "impossible", botId);
     }
     const raison = raisonDe(plateforme);
     if (etatDe(plateforme).etat !== "on" && raison !== "") {
-      return noticeEchec(plateforme, raison, "interrompue");
+      return noticeEchec(plateforme, raison, "interrompue", botId);
     }
   }
-  // ⑤ Connexion EN COURS : l'import peut encore remplir la liste.
+  // ⑥ Connexion EN COURS : l'import peut encore remplir la liste.
   for (const plateforme of actives) {
     if (etatDe(plateforme).etat !== "on") return noticeChargement(plateforme);
   }
-  // ⑥ Synchro faite et rien à lister.
-  return noticeVide(actives);
+  // ⑦ Synchro faite et rien à lister.
+  return noticeVide(actives, botId);
 }
 
 /**
@@ -412,31 +478,51 @@ export function plateformesActives(status) {
 }
 
 /**
- * Phrase d'HONNÊTETÉ sur une plateforme activée dont le jeton manque, ou `null`.
+ * Phrase d'HONNÊTETÉ sur une plateforme d'un bot, ou `null`.
  *
  * ⚠️ Cas à DIRE (exigence 2026-11-10) : « interrupteur allumé, jeton absent » ⇒
  * aucune connexion n'est possible. Le contraire est aussi à dire : « jeton posé,
  * plateforme désactivée » — un jeton seul n'active RIEN.
  *
- * @param {unknown} status corps de `GET /api/chat/status`.
+ * ⚠️ TROIS ÉTATS DE JETON (défaut corrigé) : `jetonEnregistre` peut valoir
+ * `true`, `false` **ou `null` (inconnu : coffre verrouillé / noms illisibles)**.
+ * Un `null` pris pour `false` produisait le mensonge signalé — « aucun jeton »
+ * alors que le coffre n'était simplement pas lisible.
+ *
+ * @param {unknown} status état des plateformes du BOT AFFICHÉ.
+ * @param {{botId?: string}} [options] bot dont on parle (défaut : `status.bot`).
  * @returns {string[]} une phrase par situation, dans l'ordre d'affichage.
  */
-export function plateformesAvertissements(status) {
+export function plateformesAvertissements(status, options = {}) {
   if (!status || typeof status !== "object") return [];
+  const botId = botDeLEtat(status, options);
   const phrases = [];
   for (const option of PLATEFORME_OPTIONS) {
     const plateforme = option.plateforme;
     const vue = status[plateforme];
     if (!vue || typeof vue !== "object") continue;
     const active = status?.plateformes?.[plateforme] === true;
-    const jeton = vue.jetonEnregistre === true;
-    if (active && !jeton) {
+    const jeton = vue.jetonEnregistre;
+    const chemin = cheminPlateforme(plateforme, botId);
+    if (active && jeton === true) {
       phrases.push(
-        `${option.label} est ACTIVÉ mais aucun jeton n'est enregistré : ` +
-          `aucune connexion ne sera ouverte (${plateforme === "discord" ? CHEMIN_DISCORD : CHEMIN_MATTERMOST}).`,
+        `${option.label} est activé et son jeton est enregistré pour ce bot ` +
+          `(il n'est jamais réaffiché). Réglage : ${chemin}.`,
       );
     }
-    if (!active && jeton) {
+    if (active && jeton === false) {
+      phrases.push(
+        `${option.label} est ACTIVÉ mais aucun jeton n'est enregistré : ` +
+          `aucune connexion ne sera ouverte (${chemin}).`,
+      );
+    }
+    if (active && jeton === null) {
+      phrases.push(
+        `${option.label} est ACTIVÉ mais l'état de son jeton est INCONNU ` +
+          `(coffre illisible) : on ne peut pas affirmer qu'il manque (${chemin}).`,
+      );
+    }
+    if (!active && jeton === true) {
       phrases.push(
         `${option.label} : jeton posé, plateforme DÉSACTIVÉE — elle ne se connecte pas ` +
           "tant que l'interrupteur n'est pas allumé.",
@@ -470,18 +556,33 @@ export async function fetchChatStatus(fetchImpl) {
  * Allume ou éteint UNE plateforme (`PUT /api/bots/<id>/config`) puis rend l'état
  * relu.
  *
- * ⚠️ `chat.<plateforme>.enabled` (`on` | `off`) est un réglage PROPRE AU BOT
- * ACTIF : la route est donc celle de ce bot, jamais `/api/config` (qui répondrait
+ * ⚠️ `chat.<plateforme>.enabled` (`on` | `off`) est un réglage PROPRE AU BOT : la
+ * route est donc celle de CE bot, jamais `/api/config` (qui répondrait
  * `bot_scoped_field`).
+ * ⚠️ DÉFAUT CORRIGÉ (capture utilisateur) : la route visait le « bot actif »
+ * (`idBotActif`), pas le bot AFFICHÉ. Sur `/bots?b=granolaf` ou dans la barre
+ * latérale de `/?b=granolaf`, l'interrupteur écrivait donc chez `yuki`. L'appelant
+ * passe maintenant `options.botId` (le bot dont il montre l'état) ; à défaut, on
+ * retombe sur le comportement historique (bot actif), qui reste juste en mono-bot.
  * ⚠️ Ce n'est PLUS un choix exclusif : allumer Discord n'éteint pas Mattermost,
  * et RIEN n'éteint le local (il n'est pas un réglage).
  * ⚠️ Le JETON n'est pas touché ici : désactiver une plateforme ne détruit pas son
  * secret (on peut la rallumer), et poser un jeton n'active rien — l'interrupteur
  * est la seule intention.
+ *
+ * @param {"mattermost"|"discord"} plateforme
+ * @param {boolean} actif état À DEMANDER.
+ * @param {((url: string, init?: RequestInit) => Promise<Response>)
+ *   | {fetchImpl?: Function, botId?: string}} [options] `fetch` injectable
+ *   (signature historique) ou `{ fetchImpl, botId }`.
  */
-export async function savePlatformEnabled(plateforme, actif, fetchImpl) {
+export async function savePlatformEnabled(plateforme, actif, options) {
+  const opts = typeof options === "function" ? { fetchImpl: options } : (options ?? {});
+  const fetchImpl = opts.fetchImpl;
   const doFetch = fetchImpl ?? ((url, init) => fetch(url, init));
-  const botId = await idBotActif(fetchImpl);
+  const demande =
+    typeof opts.botId === "string" && opts.botId.trim() !== "" ? opts.botId.trim() : null;
+  const botId = demande ?? (await idBotActif(fetchImpl));
   const response = await doFetch(cheminConfigBot(botId), {
     method: "PUT",
     headers: { ...WRITE_HEADERS, "x-yuki-config-flow": "chat-mode" },
@@ -554,7 +655,6 @@ export function initPlatformToggles(deps) {
         class: "chat-mode__btn",
         type: "button",
         "data-plateforme": option.plateforme,
-        title: option.title,
         "aria-pressed": "false",
       },
       option.label,
@@ -570,10 +670,14 @@ export function initPlatformToggles(deps) {
   root.replaceChildren(group);
 
   function update(status) {
+    // ⚠️ La remédiation porte le bot dont on MONTRE l'état (`status.bot`), jamais
+    // un bot gravé : c'est le défaut corrigé (le lien renvoyait toujours à `yuki`).
+    const botId = typeof status?.bot === "string" ? status.bot : "";
     for (const [plateforme, entree] of entrees) {
       const active = status?.plateformes?.[plateforme] === true;
       entree.button.setAttribute("aria-pressed", active ? "true" : "false");
       entree.button.classList.toggle("chat-mode__btn--active", active);
+      entree.button.title = titrePlateforme(plateforme, botId);
       const state = badgeFor(status?.[plateforme]);
       entree.badge.textContent = state.glyph;
       entree.badge.title = state.title;

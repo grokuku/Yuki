@@ -859,24 +859,12 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     env: "YUKI_PUSH_CONTACT",
   },
 
-  // --- Bots : combien TOURNENT en même temps (lot 36, L1) -------------------
-  // ⚠️ Nombre MAXIMAL de bots dont la pile est construite au démarrage
-  // (approche B : UN processus, N `PiHost`). Un bot `actif` au-delà de ce
-  // plafond ne démarre PAS ; le refus est EXPLICITE (journal + `GET /api/bots`),
-  // jamais un bot silencieusement absent.
-  //
-  // ⚠️ `6` est la borne du REGISTRE (`MAX_BOTS`, `src/bots/registry.ts`) ; la
-  // table de configuration ne l'importe pas (données pures, aucun import).
-  // `apply: "restart"` : la résolution des bots a lieu UNE fois au démarrage.
-  "bots.maxActifs": {
-    scope: "instance",
-    type: "int",
-    default: 3,
-    min: 1,
-    max: 6,
-    apply: "restart",
-    env: "YUKI_BOTS_MAX_ACTIFS",
-  },
+  // ⚠️ IL N'Y A PLUS DE PLAFOND DE BOTS EN MARCHE (décision utilisateur du
+  // 2026-11-13 : « retire le plafond. Chacun fait comme il a envie en fonction
+  // de ses ressources, limiter c'est mal à mon sens »). La clé `bots.maxActifs`
+  // du lot 36 (L1) est SUPPRIMÉE : TOUS les bots `actif: true` démarrent.
+  // ⚠️ `MAX_BOTS` (`src/bots/registry.ts`) reste la borne de CRÉATION du
+  // registre : c'est le nombre de bots créables, PAS le nombre qui tournent.
 
   // --- Agents d'exécution (Lot 4) -----------------------------------------
   // ⚠️ `FieldType` = `string | int | enum` : AUCUN booléen, aucun tableau. Le
@@ -1332,6 +1320,22 @@ export const VARIABLES_ENV_RETIREES: Readonly<Record<string, string>> = {
   YUKI_CHAT_DISCORD_GUILD_ID: "chat.discord.guildId",
   YUKI_CHAT_DISCORD_MAX_UPLOAD_BYTES: "chat.discord.maxUploadBytes",
   YUKI_PUSH_ENABLED: "push.enabled",
+};
+
+/**
+ * Variables d'environnement dont la CLÉ DE CONFIGURATION N'EXISTE PLUS.
+ *
+ * ⚠️ DISTINCT de `VARIABLES_ENV_RETIREES` : là-bas la clé existe encore mais
+ * n'accepte plus d'environnement (portée `bot`/`mixte`) ; ici la clé elle-même a
+ * été SUPPRIMÉE du schéma, donc la variable ne peut plus rien surcharger. Une
+ * variable qui n'agit plus doit être DITE (jamais supprimée en silence) : elle
+ * est annoncée au démarrage par `ConfigRuntime.warnings`.
+ *
+ * `YUKI_BOTS_MAX_ACTIFS` (lot 36, L1 → retirée) : le plafond des bots en marche
+ * n'existe plus (décision utilisateur), donc la variable non plus.
+ */
+export const VARIABLES_ENV_SUPPRIMEES: Readonly<Record<string, string>> = {
+  YUKI_BOTS_MAX_ACTIFS: "bots.maxActifs",
 };
 
 export function descriptorOf(path: string): FieldDescriptor | undefined {

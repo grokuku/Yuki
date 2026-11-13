@@ -35,21 +35,19 @@ export function cheminConfigBot(botId) {
   return `/api/bots/${encodeURIComponent(String(botId))}/config`;
 }
 
-/** Plafond des bots simultanés (copie du défaut serveur `bots.maxActifs`). */
-export const PLAFOND_ACTIFS = 3;
-
 /**
- * Réponse COMPLÈTE de `GET /api/bots` : les bots, ET les trois informations que
+ * Réponse COMPLÈTE de `GET /api/bots` : les bots, ET les deux informations que
  * l'interface doit dire VRAIE (lot 37).
  *
- *  - `plafond`   : `bots.maxActifs` (3 par défaut) — c'est ce qui interdit de
- *                  dire « un seul bot actif » alors que trois peuvent tourner ;
  *  - `principal` : le bot de la PILE (`runtime.botId`), seul à tourner avec le
  *                  gateway : sa conversation s'ouvre SANS `?b=` ;
  *  - `echanges`  : les boucles on/off entre bots (`{"a->b": {actif}}`).
  *
- * ⚠️ Ne lève jamais : une réponse illisible rend le bot de repli, le plafond par
- * défaut et aucune boucle — jamais un écran mort.
+ * ⚠️ PLUS DE `plafond` : il n'y a plus de limite au nombre de bots en marche
+ * (décision utilisateur du 2026-11-13) — tous les bots `actif` démarrent.
+ *
+ * ⚠️ Ne lève jamais : une réponse illisible rend le bot de repli et aucune
+ * boucle — jamais un écran mort.
  */
 export async function lireListeBots(fetchImpl) {
   const doFetch = fetchImpl ?? ((url, init) => fetch(url, init));
@@ -65,12 +63,10 @@ export async function lireListeBots(fetchImpl) {
       (bot) => bot && typeof bot.id === "string" && bot.id.length > 0,
     );
     if (bots.length === 0) throw new Error("liste vide");
-    const plafond =
-      Number.isInteger(body?.plafond) && body.plafond > 0 ? body.plafond : PLAFOND_ACTIFS;
     const principal = typeof body?.principal === "string" ? body.principal : bots[0].id;
     const echanges =
       body?.echanges !== null && typeof body?.echanges === "object" ? body.echanges : {};
-    return { bots, plafond, principal, echanges };
+    return { bots, principal, echanges };
   } catch {
     const bots = [
       {
@@ -85,7 +81,7 @@ export async function lireListeBots(fetchImpl) {
         ordre: 0,
       },
     ];
-    return { bots, plafond: PLAFOND_ACTIFS, principal: BOT_PAR_DEFAUT, echanges: {} };
+    return { bots, principal: BOT_PAR_DEFAUT, echanges: {} };
   }
 }
 

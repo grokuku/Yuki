@@ -195,8 +195,7 @@ body {
   background: var(--muted);
 }
 
-.bot-bar__item--erreur .bot-bar__etat,
-.bot-bar__item--refuse .bot-bar__etat {
+.bot-bar__item--erreur .bot-bar__etat {
   background: var(--danger);
 }
 
@@ -343,7 +342,7 @@ body {
   letter-spacing: 0.02em;
 }
 
-.bot-switcher__plafond {
+.bot-switcher__resume {
   margin: 0;
   font-size: 11.5px;
   color: var(--muted);
@@ -509,13 +508,6 @@ body {
 
 .bot-switcher__etat--arrete {
   color: var(--muted);
-}
-
-/* ⚠️ REFUS DU PLAFOND : le bot DOIT tourner (`actif: true`) mais a été écarté au
- * démarrage. Ce n'est ni « arrêté » ni « erreur » : la cause est un réglage. */
-.bot-switcher__etat--refuse {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
 
 .bot-switcher__demarrer {
@@ -891,9 +883,16 @@ a.pill:hover {
   color: var(--muted);
 }
 
-/* ● connecté · ◐ connexion en cours · ○ non configuré. */
+/* ● connecté · ◐ connexion en cours · ○ non configuré · ? état inconnu
+ * (le gateway n'expose la connexion que pour le bot de la pile : on ne prétend
+ * pas « non configuré » pour un bot simplement non observable). */
 .chat-mode__badge[data-etat="on"] {
   color: var(--accent);
+}
+
+.chat-mode__badge[data-etat="inconnu"] {
+  color: var(--muted);
+  opacity: 0.65;
 }
 
 .sidebar:not([data-expanded="true"]) .chat-mode__btn {

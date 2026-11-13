@@ -29,6 +29,7 @@ import {
   CONFIG_PATHS,
   CONFIG_SCHEMA,
   VARIABLES_ENV_RETIREES,
+  VARIABLES_ENV_SUPPRIMEES,
   descriptorOf,
   envNameOf,
   isSecretPath,
@@ -216,31 +217,6 @@ interface CibleBot {
   readonly store: ConfigOverlayStore;
 }
 
-/**
- * VALEUR d'une clé d'INSTANCE, lue SANS construire de runtime (lot 36, L1).
- *
- * ⚠️ POURQUOI ICI : `ConfigStore` et `CONFIG_SCHEMA` n'ont qu'UN propriétaire
- * (`src/config/`), verrouillé par `tests/config/schema-scope.test.ts` — un second
- * lecteur du store commun ignorerait l'overlay en silence. Ce point d'entrée
- * applique donc la MÊME précédence que le runtime :
- * `défauts (code) < store (page web) < environnement`.
- *
- * ⚠️ Sert au DÉMARRAGE, avant que le runtime n'existe : `preparerMultiBot` doit
- * connaître le plafond `bots.maxActifs` pour décider quels bots tournent.
- * `ConfigStore.load()` ne lève jamais : un store illisible retombe sur le défaut.
- */
-export function lireValeurInstance(
-  env: Env,
-  path: string,
-  processEnv: NodeJS.ProcessEnv = process.env,
-): string | number | undefined {
-  const surcharge = readConfigEnvOverrides(processEnv)[path];
-  if (surcharge !== undefined) return surcharge;
-  const brute = new ConfigStore(env.configStorePath).load().values[path];
-  if (typeof brute === "string" || typeof brute === "number") return brute;
-  return CONFIG_SCHEMA[path]?.default;
-}
-
 /** Masque une valeur secrète : 4 derniers caractères précédés de `••••`. */
 export function maskSecret(value: string): string {
   const trimmed = value.trim();
@@ -313,6 +289,16 @@ export class ConfigRuntime {
         `variable d'environnement RETIRÉE (lot 35b, sans effet) : ${variable} ` +
           `— réglez « ${path} » depuis la page /config (ou l'overlay du bot) : ` +
           "une clé de bot ne peut pas être fixée par l'environnement.",
+      );
+    }
+    // ⚠️ Les variables dont la CLÉ a été SUPPRIMÉE du schéma (plafond de bots) :
+    // elles ne surchargent plus RIEN — on le dit, sans lever.
+    for (const variable of Object.keys(VARIABLES_ENV_SUPPRIMEES)) {
+      const raw = this.processEnv[variable];
+      if (typeof raw !== "string" || raw.trim() === "") continue;
+      this.warnings.push(
+        `variable d'environnement SANS EFFET (réglage supprimé) : ${variable} ` +
+          "— ignorée : il n'y a plus de plafond, tous les bots marqués actifs démarrent.",
       );
     }
     const rawEnv = readConfigEnvOverrides(this.processEnv);

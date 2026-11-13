@@ -172,11 +172,12 @@ let botCourant = null;
 let botsConnus = [];
 
 /**
- * Plafond RÉEL des bots simultanés (`bots.maxActifs`, 3 par défaut) et bot de la
- * PILE (`runtime.botId`), tels que `GET /api/bots` les rend (lot 37). Servent au
- * bandeau d'honnêteté : jamais « un seul bot » quand trois peuvent tourner.
+ * Bot de la PILE (`runtime.botId`), tel que `GET /api/bots` le rend (lot 37).
+ * Sert au bandeau d'honnêteté.
+ *
+ * ⚠️ Il n'y a PLUS de plafond de bots en marche (décision utilisateur du
+ * 2026-11-13) : le bandeau ne parle donc plus de « N au maximum ».
  */
-let plafondActifs = 3;
 let botPrincipal = null;
 
 /**
@@ -1382,12 +1383,10 @@ async function pollHealth() {
  * (c'est lui que l'instance utilise réellement).
  */
 async function resoudreBot() {
-  // ⚠️ LOT 37 — la réponse COMPLÈTE : `plafond` (bots.maxActifs) et `principal`
-  // sont nécessaires pour que le bandeau d'honnêteté dise le VRAI nombre de bots
-  // actifs (« 1 sur 3 maximum »), au lieu de laisser croire « un seul ».
+  // ⚠️ LOT 37 — la réponse porte `principal` (le bot de la PILE), nécessaire pour
+  // que le bandeau d'honnêteté nomme le bot qui tourne réellement.
   const infos = await lireListeBots();
   botsConnus = infos.bots;
-  plafondActifs = infos.plafond;
   botPrincipal = infos.principal;
   const demande = new URLSearchParams(location.search).get("b");
   const parId = (id) => botsConnus.find((bot) => bot.id === id) ?? null;
@@ -1795,13 +1794,11 @@ function appliquerBotMisAJour(bot) {
 function afficherBandeauBot() {
   if (!botNoticeEl) return;
   // ⚠️ LOT 37 — le texte vient du MODÈLE partagé (`bot-switcher-modele.js`) : il
-  // dit le nombre RÉEL de bots actifs et le plafond réel. L'ancien message
-  // (« Ce bot n'est pas le bot ACTIF de l'instance (yuki) ») se lisait « il n'y
-  // a qu'un seul bot actif » alors que `bots.maxActifs` en autorise trois.
+  // dit le nombre RÉEL de bots actifs. L'ancien message (« Ce bot n'est pas le bot
+  // ACTIF de l'instance (yuki) ») se lisait « il n'y a qu'un seul bot actif ».
   const texte = messageBandeauBot({
     bot: botCourant,
     bots: botsConnus,
-    plafond: plafondActifs,
     principal: botPrincipal,
   });
   botNoticeEl.hidden = texte === "";
@@ -1906,7 +1903,7 @@ function cablerSelecteurBot() {
     button: document.getElementById("bot-switcher-btn"),
     panel: document.getElementById("bot-switcher-panel"),
     list: document.getElementById("bot-switcher-list"),
-    plafondEl: document.getElementById("bot-switcher-plafond"),
+    resumeEl: document.getElementById("bot-switcher-resume"),
     statusEl: document.getElementById("bot-switcher-status"),
     closeButton: document.getElementById("bot-switcher-close"),
     nomEl: document.getElementById("bot-switcher-nom"),

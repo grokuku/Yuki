@@ -551,19 +551,28 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
   });
 });
 
-// ── ③ Un bot REFUSÉ par le plafond n'a PAS de host ─────────────────────────
+// ── ③ Un bot ÉTEINT n'a PAS de host ────────────────────────────────────────
 
-describe("bots refusés par le plafond (lot 36, L1 + L3-d)", () => {
-  it("aucun host pour le bot refusé, et son contexte n'est même pas demandé", () => {
+describe("bots éteints (lot 36, L1 + L3-d)", () => {
+  it("⚠️ quatre bots ACTIFS ⇒ quatre hosts (plus de plafond), le bot ÉTEINT n'en a pas", () => {
+    // ⚠️ RÉÉCRIT (n'était « bots refusés par le plafond ») : depuis la décision
+    // utilisateur du 2026-11-13 il n'y a plus de plafond. Quatre bots actifs (le
+    // cas de l'utilisateur) ont donc QUATRE hosts ; seul un bot ÉTEINT n'en a
+    // pas, et son contexte n'est même pas demandé.
     const b = avecRegistre([
       bot("yuki", 0, true),
       bot("kohai", 1, true),
       bot("senpai", 2, true),
       bot("sensei", 3, true),
+      bot("eteint", 4, false),
     ]);
-    const preparation = preparerMultiBot(b.env, { processEnv: b.processEnv, maxActifs: 2 });
-    expect(preparation.aDemarrer.map((entree) => entree.id)).toEqual(["yuki", "kohai"]);
-    expect(preparation.refusesActifs.map((entree) => entree.id)).toEqual(["senpai", "sensei"]);
+    const preparation = preparerMultiBot(b.env, { processEnv: b.processEnv });
+    expect(preparation.aDemarrer.map((entree) => entree.id)).toEqual([
+      "yuki",
+      "kohai",
+      "senpai",
+      "sensei",
+    ]);
 
     const configs = configsDeTest(
       b,
@@ -583,12 +592,11 @@ describe("bots refusés par le plafond (lot 36, L1 + L3-d)", () => {
       logger: journalFactice(),
     });
 
-    expect(hosts.ids()).toEqual(["yuki", "kohai"]);
-    expect(hosts.pour("senpai")).toBeUndefined();
-    expect(hosts.pour("sensei")).toBeUndefined();
-    // ⚠️ Le refusé ne reçoit RIEN : même pas une demande de contexte (donc
+    expect(hosts.ids()).toEqual(["yuki", "kohai", "senpai", "sensei"]);
+    expect(hosts.pour("eteint")).toBeUndefined();
+    // ⚠️ Le bot ÉTEINT ne reçoit RIEN : même pas une demande de contexte (donc
     // aucun `Env`, aucun store, aucun fichier ouvert en son nom).
-    expect(demandes).toEqual(["kohai"]);
+    expect(demandes).toEqual(["kohai", "senpai", "sensei"]);
   });
 });
 

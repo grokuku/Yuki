@@ -19,11 +19,7 @@ import { join } from "node:path";
 
 import type { Env } from "../config/env.js";
 
-import {
-  lirePlafondActifs,
-  messageRefusPlafond,
-  resoudreDemarrageBots,
-} from "./actifs.js";
+import { resoudreDemarrageBots } from "./actifs.js";
 import {
   BOT_YUKI,
   RegistreBotsError,
@@ -81,14 +77,12 @@ export interface ResultatPreparationBots {
    */
   principal: BotRecord | null;
   /**
-   * Bots qui DOIVENT TOURNER (`actif: true`), triés et PLAFONNÉS à
-   * `bots.maxActifs`. En mode mono-bot historique : liste vide.
+   * Bots qui DOIVENT TOURNER (`actif: true`), TOUS, dans l'ordre de démarrage.
+   * En mode mono-bot historique : liste vide.
+   *
+   * ⚠️ Aucun plafond (décision utilisateur) : la liste n'est jamais tronquée.
    */
   aDemarrer: BotRecord[];
-  /** Bots `actif` REFUSÉS par le plafond (nommés dans `avertissements`). */
-  refusesActifs: BotRecord[];
-  /** Plafond appliqué (entier dans `[1, MAX_BOTS]`). */
-  plafondActifs: number;
   /** Registre lu (`null` en mode mono-bot historique). */
   registre: RegistreBots | null;
   /** Chemins effectifs du bot (`null` en mode mono-bot historique). */
@@ -131,11 +125,6 @@ export interface OptionsPreparationBots {
    */
   migrationAutomatique?: boolean;
   /**
-   * Plafond des bots simultanés (lot 36, L1). Absent ⇒ lu depuis
-   * `bots.maxActifs` (environnement, puis store, puis défaut 3).
-   */
-  maxActifs?: number;
-  /**
    * Reprise AUTOMATIQUE des sessions restées à plat quand `bots.json` existe
    * (défaut : `true`). `false` ⇒ refus explicite `SESSIONS_NON_MIGREES`, sans
    * aucun déplacement (démarrage en lecture seule).
@@ -159,7 +148,6 @@ export function preparerMultiBot(
   const stateDir = env.mountPoints.state;
   const registrePath = cheminRegistreBots(stateDir);
   const avertissements: string[] = [];
-  const plafondActifs = lirePlafondActifs(env, processEnv);
 
   let registre: RegistreBots | null;
   try {
@@ -180,8 +168,6 @@ export function preparerMultiBot(
         bot: null,
         principal: null,
         aDemarrer: [],
-        refusesActifs: [],
-        plafondActifs,
         registre: null,
         chemins: null,
         migration,
@@ -201,8 +187,6 @@ export function preparerMultiBot(
           bot: null,
           principal: null,
           aDemarrer: [],
-          refusesActifs: [],
-          plafondActifs,
           registre: null,
           chemins: null,
           migration,
@@ -241,15 +225,10 @@ export function preparerMultiBot(
     }
   }
 
-  // ⚠️ LOT 36 (L1) : la LISTE des bots à démarrer et le bot PRINCIPAL sont deux
-  // choses distinctes (voir `src/bots/actifs.ts`). Le plafond `bots.maxActifs`
-  // écarte explicitement les bots en trop — jamais en silence.
-  const demarrage = resoudreDemarrageBots(registre, {
-    maxActifs: options.maxActifs ?? plafondActifs,
-  });
-  for (const refuse of demarrage.refuses) {
-    avertissements.push(messageRefusPlafond(refuse, demarrage.plafond));
-  }
+  // ⚠️ La LISTE des bots à démarrer et le bot PRINCIPAL sont deux choses
+  // distinctes (voir `src/bots/actifs.ts`). AUCUN plafond : tous les bots
+  // `actif: true` démarrent (décision utilisateur du 2026-11-13).
+  const demarrage = resoudreDemarrageBots(registre);
   const principal = demarrage.principal;
   if (!principal) {
     throw new DemarrageRefuseError(
@@ -357,8 +336,6 @@ export function preparerMultiBot(
     bot,
     principal,
     aDemarrer: [...demarrage.aDemarrer],
-    refusesActifs: [...demarrage.refuses],
-    plafondActifs: demarrage.plafond,
     registre,
     chemins: resolution.chemins,
     migration,

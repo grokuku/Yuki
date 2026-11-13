@@ -4,8 +4,10 @@
  * Ce que ce fichier verrouille :
  *  - `definirActif` écrit `actif` (jusque-là AUCUNE route ne le faisait) et rend
  *    la liste des bots qui DOIVENT tourner ;
- *  - le PLAFOND `bots.maxActifs` refuse d'allumer un bot de plus
- *    (`409 plafond_actifs`, message nommant le plafond ET les bots allumés) ;
+ *  - ⚠️ ALLUMER n'est JAMAIS refusé : le plafond `bots.maxActifs` et son
+ *    `409 plafond_actifs` ont été SUPPRIMÉS (décision utilisateur du
+ *    2026-11-13 : « retire le plafond… limiter c'est mal à mon sens »). Le test
+ *    qui l'a remplacé est NOMMÉ « plus de plafond : le N-ième bot s'allume » ;
  *  - éteindre le DERNIER bot actif est REFUSÉ (`409 dernier_bot_actif`) : une
  *    instance sans bot actif ne redémarrerait pas ;
  *  - `inchange` n'écrit RIEN (aucune écriture inutile, aucun faux changement) ;
@@ -134,37 +136,28 @@ describe("① `definirActif` — le domaine", () => {
     expect(resultat.arretRequis).toBe(false);
   });
 
-  it("⚠️ PLAFOND : allumer un bot de plus est REFUSÉ, en nommant plafond et actifs", () => {
-    const b = bac([bot("yuki", 0, true), bot("b2", 1, true), bot("b3", 2, true), bot("b4", 3)]);
-    const refus = refusDe(() =>
-      definirActif({ stateDir: b.stateDir, registre: b.registre, botId: "b4", actif: true }),
-    );
-    expect(refus.code).toBe("plafond_actifs");
-    expect(refus.status).toBe(409);
-    expect(refus.message).toContain("3");
-    expect(refus.message).toContain("yuki, b2, b3");
-    // Rien n'a été écrit : les trois bots restent les seuls actifs.
-    expect(actifsDuFichier(b.stateDir)).toEqual(["yuki", "b2", "b3"]);
-  });
-
-  it("le plafond se règle à l'appel (défaut 3)", () => {
-    const b = bac([bot("yuki", 0, true), bot("b2", 1, true), bot("b3", 2)]);
-    // Défaut 3 ⇒ il reste une place.
-    expect(() =>
-      definirActif({ stateDir: b.stateDir, registre: b.registre, botId: "b3", actif: true }),
-    ).not.toThrow();
-    const b2 = bac([bot("yuki", 0, true), bot("b2", 1, true), bot("b3", 2)]);
-    const refus = refusDe(() =>
-      definirActif({
-        stateDir: b2.stateDir,
-        registre: b2.registre,
-        botId: "b3",
-        actif: true,
-        maxActifs: 2,
-      }),
-    );
-    expect(refus.code).toBe("plafond_actifs");
-    expect(refus.message).toContain("2");
+  it("⚠️ PLUS DE PLAFOND : allumer le N-ième bot n'est JAMAIS refusé", () => {
+    // ⚠️ RÉÉCRIT (n'était « le plafond se règle à l'appel ») : la décision
+    // utilisateur a supprimé le plafond. Quatre bots actifs, puis un cinquième :
+    // chacun s'allume, sans borne.
+    const b = bac([
+      bot("yuki", 0, true),
+      bot("b2", 1, true),
+      bot("b3", 2, true),
+      bot("b4", 3, true),
+      bot("b5", 4),
+    ]);
+    const resultat = definirActif({
+      stateDir: b.stateDir,
+      registre: b.registre,
+      botId: "b5",
+      actif: true,
+    });
+    expect(resultat.actif).toBe(true);
+    expect(resultat.inchange).toBe(false);
+    expect(resultat.actifs).toEqual(["yuki", "b2", "b3", "b4", "b5"]);
+    // Le fichier suit : cinq bots actifs, aucun écarté.
+    expect(actifsDuFichier(b.stateDir)).toEqual(["yuki", "b2", "b3", "b4", "b5"]);
   });
 
   it("⚠️ DERNIER bot actif : l'éteindre est REFUSÉ (sinon plus de démarrage possible)", () => {
@@ -200,7 +193,7 @@ interface BancRoute {
   deps: Parameters<typeof handleConfigRequest>[0]["deps"];
 }
 
-function bancRoute(bots: BotRecord[], options: { maxActifs?: number } = {}): BancRoute {
+function bancRoute(bots: BotRecord[]): BancRoute {
   const b = bac(bots);
   const env = loadEnv({
     YUKI_LOG_LEVEL: "error",
@@ -220,7 +213,6 @@ function bancRoute(bots: BotRecord[], options: { maxActifs?: number } = {}): Ban
     bots: {
       registre: b.registre,
       stateDir: b.stateDir,
-      ...(options.maxActifs !== undefined ? { maxActifs: options.maxActifs } : {}),
     },
   } as BancRoute["deps"];
   return { stateDir: b.stateDir, deps };
@@ -269,15 +261,15 @@ describe("② `PATCH /api/bots/<id>/actif` — la route", () => {
     expect(actifsDuFichier(b.stateDir)).toEqual(["yuki"]);
   });
 
-  it("rend le refus du PLAFOND tel quel (409 plafond_actifs)", async () => {
-    const b = bancRoute(
-      [bot("yuki", 0, true), bot("b2", 1, true), bot("b3", 2, true), bot("b4", 3)],
-      { maxActifs: 3 },
-    );
-    const refus = await appel(b, "PATCH", "/api/bots/b4/actif", { actif: true });
-    expect(refus.status).toBe(409);
-    expect(refus.body.code).toBe("plafond_actifs");
-    expect(String(refus.body.message)).toContain("bots.maxActifs");
+  it("⚠️ plus de refus de plafond : le quatrième bot s'allume (200)", async () => {
+    // ⚠️ RÉÉCRIT (n'était « rend le refus du PLAFOND tel quel ») : la route ne
+    // peut plus répondre `409 plafond_actifs`, le réglage n'existe plus.
+    const b = bancRoute([bot("yuki", 0, true), bot("b2", 1, true), bot("b3", 2, true), bot("b4", 3)]);
+    const reponse = await appel(b, "PATCH", "/api/bots/b4/actif", { actif: true });
+    expect(reponse.status).toBe(200);
+    expect(reponse.body.actifs).toEqual(["yuki", "b2", "b3", "b4"]);
+    expect(reponse.body.plafond).toBeUndefined();
+    expect(actifsDuFichier(b.stateDir)).toEqual(["yuki", "b2", "b3", "b4"]);
   });
 
   it("rend le refus du DERNIER bot actif (409 dernier_bot_actif)", async () => {

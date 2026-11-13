@@ -364,6 +364,17 @@ export function initSessionsPanel(deps) {
   // ne fait qu'afficher et demander.
   const modeSlot = el("div", { class: "sidebar__mode" });
   let chatStatus = null;
+  /**
+   * État des plateformes DU BOT AFFICHÉ (`plateformes-bot.js`) — `null` tant qu'il
+   * n'est pas lu.
+   *
+   * ⚠️ DÉFAUT CORRIGÉ (capture utilisateur) : les interrupteurs, les pastilles et
+   * l'encart lisaient `chatStatus` (`GET /api/chat/status`), qui décrit le bot de la
+   * PILE. Sur une conversation `granolaf`, ils parlaient donc de `yuki` : « aucun
+   * jeton » alors que celui de `granolaf` existe, et un lien de remédiation vers
+   * les réglages de `yuki`. L'état affiché est maintenant celui du bot AFFICHÉ.
+   */
+  let etatPlateformes = null;
   // ⚠️ La liste des conversations a-t-elle été REÇUE du serveur (trame `sessions`) ?
   // Tant que non, `sessions` est vide parce qu'on ne sait pas encore — pas parce
   // qu'il n'y a rien. L'encart ne doit donc RIEN affirmer avant ce moment-là.
@@ -1103,19 +1114,19 @@ export function initSessionsPanel(deps) {
   }
 
   /**
-   * Applique l'état du MODE DE DISCUSSION (server-authoritative).
+   * Applique l'état d'INSTANCE de la discussion (server-authoritative).
    *
-   * - sélecteur segmenté + badge ●/◐/○ (raison exacte en `title`) ;
    * - `+ Nouvelle conversation` DÉSACTIVÉE avec la raison du serveur quand la
-   *   création est refusée (mode distant) — le serveur refuse de son côté ;
-   * - encart de la barre, recalculé par `applyNotice` (état vide / chargement /
-   *   échec de synchronisation / refus de création).
+   *   création est refusée — le serveur refuse de son côté ;
+   * - encart de la barre, recalculé par `applyNotice`.
+   *
+   * ⚠️ Les INTERRUPTEURS et leur pastille ne sont PLUS mis à jour ici : ils
+   * dépendent du bot AFFICHÉ (`setEtatPlateformes`), pas du bot de la pile.
    *
    * @param {unknown} status corps de `GET /api/chat/status`.
    */
   function setChatMode(status) {
     chatStatus = status && typeof status === "object" ? status : null;
-    selector.update(chatStatus);
     const refusal = creationRefusal(chatStatus);
     newBtn.disabled = refusal !== null;
     if (refusal !== null) {
@@ -1125,6 +1136,22 @@ export function initSessionsPanel(deps) {
       newBtn.removeAttribute("aria-disabled");
       newBtn.title = "Nouvelle conversation";
     }
+    applyNotice();
+  }
+
+  /**
+   * Applique l'état des plateformes DU BOT AFFICHÉ (interrupteurs, pastilles, encart).
+   *
+   * ⚠️ Séparé de `setChatMode` À DESSEIN : `GET /api/chat/status` reste la source de
+   * la POLITIQUE d'instance (refus de création), tandis que l'état des plateformes
+   * vient du bot qu'on regarde (`plateformes-bot.js`). Les deux arrivent de requêtes
+   * différentes et ne doivent pas se confondre.
+   *
+   * @param {unknown} etat état de `fetchEtatPlateformes` (`null` = pas encore lu).
+   */
+  function setEtatPlateformes(etat) {
+    etatPlateformes = etat && typeof etat === "object" ? etat : null;
+    selector.update(etatPlateformes);
     applyNotice();
   }
 
@@ -1139,19 +1166,25 @@ export function initSessionsPanel(deps) {
    * contradictoires à l'écran, l'utilisateur croyant à une panne de synchro.
    *
    * ⚠️ La décision est UNIQUE (`platformsNotice`, `chat-mode.js`) et rejouée à
-   * CHAQUE changement de l'une des deux sources : l'état des interrupteurs
-   * (`setChatMode`) ET la liste affichée (`update`). L'ordre d'arrivée n'a donc
-   * plus d'importance, et une liste non vide ne peut JAMAIS être contredite par
-   * un état vide.
+   * CHAQUE changement de l'une des deux sources : l'état des plateformes du bot
+   * affiché (`setEtatPlateformes`) ET la liste affichée (`update`). L'ordre
+   * d'arrivée n'a donc plus d'importance, et une liste non vide ne peut JAMAIS
+   * être contredite par un état vide.
    *
    * ⚠️ S'y AJOUTENT les AVERTISSEMENTS d'incohérence (« activé sans jeton » /
    * « jeton posé, désactivé ») : un interrupteur allumé sans jeton n'ouvre aucune
    * connexion, le taire ferait chercher une panne ailleurs.
    */
   function applyNotice() {
-    const avis = platformsNotice(chatStatus, { nombre: sessions.length, connue: listeConnue });
+    const avis = platformsNotice(
+      etatPlateformes,
+      { nombre: sessions.length, connue: listeConnue },
+      { botId: etatPlateformes?.bot },
+    );
     const refusal = creationRefusal(chatStatus);
-    const avertissements = plateformesAvertissements(chatStatus);
+    const avertissements = plateformesAvertissements(etatPlateformes, {
+      botId: etatPlateformes?.bot,
+    });
     const titres = [];
     const details = [];
     if (avis) {
@@ -1215,6 +1248,7 @@ export function initSessionsPanel(deps) {
       return chatStatus;
     },
     setChatMode,
+    setEtatPlateformes,
     closeMenu,
   };
 }

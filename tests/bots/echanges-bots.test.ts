@@ -3,10 +3,9 @@
  * que `GET /api/bots` doit dire VRAI au sélecteur de la barre du haut.
  *
  * ⚠️ CES TESTS ÉCHOUENT SUR LE CODE D'ORIGINE :
- *  - `GET /api/bots` ne renvoyait QUE `{ bots }` : ni `plafond`
- *    (`bots.maxActifs`), ni `principal`, ni `echanges` — le sélecteur ne pouvait
- *    donc pas dire « 1 actif sur 3 maximum » (d'où le « il n'y a qu'un seul bot
- *    actif » rapporté par l'utilisateur) ;
+ *  - `GET /api/bots` ne renvoyait QUE `{ bots }` : ni `principal`, ni `echanges`
+ *    — le sélecteur ne pouvait donc pas dire quel bot tourne (d'où le « il n'y a
+ *    qu'un seul bot actif » rapporté par l'utilisateur) ;
  *  - aucune route n'écrivait `echanges` : la décision « un seul interrupteur par
  *    paire, aucun frein » n'existait que dans le SCHÉMA du registre.
  *
@@ -15,7 +14,7 @@
  *    un bot inconnu, une paire réflexive et un `actif` non booléen ;
  *  ② `PATCH /api/bots/echanges` l'expose à l'interface (200 + `echanges` à jour) ;
  *  ③ la paire n'a AUCUN autre champ que `actif` (pas de frein par paire) ;
- *  ④ `GET /api/bots` porte `plafond`, `principal` et `echanges`.
+ *  ④ `GET /api/bots` porte `principal` et `echanges` (plus de `plafond`).
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -189,7 +188,7 @@ function banc(options: { registre?: RegistreBots | null } = {}): Banc {
   const deps = {
     runtime,
     logger,
-    bots: { registre: registreCourant, stateDir, maxActifs: 3 },
+    bots: { registre: registreCourant, stateDir },
   } as Parameters<typeof handleConfigRequest>[0]["deps"];
   return { runtime, deps, stateDir };
 }
@@ -270,12 +269,15 @@ describe("② `PATCH /api/bots/echanges`", () => {
 
 // ─── ③ ce que `GET /api/bots` doit dire ───────────────────────────────────
 
-describe("③ `GET /api/bots` porte le plafond, le principal et les échanges", () => {
-  it("renvoie `plafond: 3` — le vrai maximum, jamais « un seul »", async () => {
+describe("③ `GET /api/bots` porte le principal et les échanges", () => {
+  it("⚠️ ne porte PLUS de plafond (il n'y en a plus)", async () => {
+    // ⚠️ RÉÉCRIT (n'était « renvoie `plafond: 3` ») : la décision utilisateur du
+    // 2026-11-13 a supprimé le plafond de bots en marche.
     const b = banc({ registre: registre() });
     const { status, body } = await appel(b, "GET", "/api/bots");
     expect(status).toBe(200);
-    expect(body.plafond).toBe(3);
+    expect(body.plafond).toBeUndefined();
+    expect(body.refuses).toBeUndefined();
     // Le bot de la PILE : sa conversation s'ouvre SANS `?b=`.
     expect(body.principal).toBe(b.runtime.botId);
     expect(body.echanges).toEqual({});
@@ -303,6 +305,6 @@ describe("③ `GET /api/bots` porte le plafond, le principal et les échanges", 
     const { body } = await appel(b, "GET", "/api/bots");
     expect(body.bots).toHaveLength(1);
     expect(body.echanges).toEqual({});
-    expect(body.plafond).toBe(3);
+    expect(body.plafond).toBeUndefined();
   });
 });

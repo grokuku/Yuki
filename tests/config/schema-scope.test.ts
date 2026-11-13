@@ -2,16 +2,18 @@
  * VERROU DE CLASSIFICATION de la configuration (lot 35b, sous-lot 1b-2).
  *
  * Ce que ce fichier verrouille :
- *  - `CONFIG_PATHS.length === 92` (aucune clé ajoutée ni perdue par accident) ;
- *    ⚠️ 89 → 90 au lot 36 (L1) : `bots.maxActifs` (plafond des bots simultanés).
+ *  - `CONFIG_PATHS.length === 91` (aucune clé ajoutée ni perdue par accident) ;
+ *    ⚠️ 90 → 91 : `bots.maxActifs` (plafond des bots simultanés, lot 36 L1) est
+ *    SUPPRIMÉE (décision utilisateur du 2026-11-13 : « retire le plafond »).
  *    ⚠️ 90 → 92 le 2026-11-10 : `chat.mattermost.enabled` et `chat.discord.enabled`
  *    (plateformes INDÉPENDANTES, `bot`). Le compteur est mis à jour EXPRÈS : c'est
  *    lui qui rend l'ajout délibéré.
- *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 70 / 18 / 4 ;
+ *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 69 / 18 / 4 ;
  *    ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) : trois clés ont
  *    changé de portée SANS changer de nombre — `chat.remoteAgents` et
  *    `chat.remoteTools` (`bot` → `instance`) et `memory.consolidation.enabled`
- *    (`mixte` → `instance`). Comptes : 67/18/5 → 70/16/4.
+ *    (`mixte` → `instance`). Comptes : 67/18/5 → 70/16/4, puis 69/18/4 après la
+ *    suppression de `bots.maxActifs`.
  *  - `env` INTERDIT hors `scope: "instance"` (garde de compilation, doublée ici
  *    d'un contrôle à l'exécution : la table est une donnée, pas un type) ;
  *  - `mixte` ⇒ `mixteMerge` DÉCLARÉ, et `et` uniquement sur des enums `off|on` ;
@@ -36,6 +38,8 @@ import {
   CONFIG_PATHS,
   CONFIG_SCHEMA,
   VARIABLES_ENV_RETIREES,
+  VARIABLES_ENV_SUPPRIMEES,
+  envNameOf,
   type FieldDescriptor,
   type FieldScope,
 } from "../../src/config/schema.js";
@@ -49,20 +53,17 @@ function descriptor(path: string): FieldDescriptor {
 }
 
 describe("① la table des clés", () => {
-  it("déclare EXACTEMENT 92 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(92);
+  it("déclare EXACTEMENT 91 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(91);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
-    // ⚠️ La clé du lot 36 (L1) est NOMMÉE ici : le plafond des bots simultanés
-    // est un réglage d'INSTANCE (il ne dépend d'aucun bot).
-    expect(descriptor("bots.maxActifs")).toMatchObject({
-      scope: "instance",
-      type: "int",
-      default: 3,
-      min: 1,
-      max: 6,
-      apply: "restart",
-      env: "YUKI_BOTS_MAX_ACTIFS",
-    });
+  });
+
+  it("⚠️ `bots.maxActifs` a DISPARU (plus de plafond de bots en marche)", () => {
+    // ⚠️ Décision utilisateur du 2026-11-13 : « retire le plafond ». La clé n'est
+    // ni une clé d'instance, ni une clé retirée : elle N'EXISTE PLUS.
+    expect(CONFIG_SCHEMA["bots.maxActifs"]).toBeUndefined();
+    expect(CONFIG_PATHS).not.toContain("bots.maxActifs");
+    expect(envNameOf("bots.maxActifs")).toBeUndefined();
   });
 
   it("chaque clé porte une portée VALIDE", () => {
@@ -71,10 +72,10 @@ describe("① la table des clés", () => {
     }
   });
 
-  it("répartition : 70 `instance` / 18 `bot` / 4 `mixte`", () => {
+  it("répartition : 69 `instance` / 18 `bot` / 4 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 70, bot: 18, mixte: 4 });
+    expect(compte).toEqual({ instance: 69, bot: 18, mixte: 4 });
   });
 
   it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {
@@ -130,6 +131,14 @@ describe("② `scope` ≠ `instance` ⇒ AUCUNE variable d'environnement", () =>
     for (const path of Object.values(VARIABLES_ENV_RETIREES)) {
       expect(overrides[path], path).toBeUndefined();
     }
+  });
+
+  it("⚠️ `YUKI_BOTS_MAX_ACTIFS` est ANNONCÉE comme sans effet (clé supprimée)", () => {
+    // ⚠️ Une variable qui n'agit plus doit être DITE. Elle est listée à part des
+    // 18 « retirées » : sa clé n'existe plus du tout (pas de `descriptor`).
+    expect(VARIABLES_ENV_SUPPRIMEES["YUKI_BOTS_MAX_ACTIFS"]).toBe("bots.maxActifs");
+    expect(VARIABLES_ENV_RETIREES["YUKI_BOTS_MAX_ACTIFS"]).toBeUndefined();
+    expect(readConfigEnvOverrides({ YUKI_BOTS_MAX_ACTIFS: "2" })).toEqual({});
   });
 
   it("une clé `instance` PEUT toujours être verrouillée par l'environnement", () => {

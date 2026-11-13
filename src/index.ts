@@ -322,8 +322,8 @@ async function main(): Promise<void> {
   // overlay ; le store commun reste la configuration d'INSTANCE. En mode mono-bot
   // historique (`bots.bot` nul), le bot de la pile est `yuki` — même chemin, donc
   // aucun changement de comportement.
-  // ⚠️ La Map couvre les bots À DÉMARRER (L1) — ceux que le plafond a REFUSÉS
-  // n'y sont pas — plus le bot de la PILE (toujours indispensable, mode mono
+  // ⚠️ La Map couvre les bots À DÉMARRER (L1) — TOUS les `actif: true`, plus
+  // aucun plafond — et le bot de la PILE (toujours indispensable, mode mono
   // inclus). Elle n'est PAS encore branchée sur les piles (L3-b/L3-d).
   const promptsLivres = {
     light: loadTextFile(env.piSystemPromptPath, FALLBACK_SYSTEM_PROMPT),
@@ -387,16 +387,15 @@ async function main(): Promise<void> {
   }
   // --- LOT 36 (L1) : QUI DOIT TOURNER, et le bot PRINCIPAL -----------------
   // ⚠️ Deux listes distinctes : `principal` (identité, `yuki` prioritaire) et
-  // `a_demarrer` (tous les `actif:true`, plafonnés à `bots.maxActifs`). Ce qui
-  // est REFUSÉ par le plafond a déjà été dit un par un (`bots.avertissement`) :
-  // aucun bot ne disparaît en silence.
+  // `a_demarrer` (TOUS les `actif:true` — plus aucun plafond). Le NOMBRE est
+  // journalisé exprès : si chaque bot démarre, la RAM monte, et l'utilisateur
+  // doit voir ce qu'il a lancé.
   logger.info("bots.demarrage", {
     mode: bots.mode,
     principal: bots.principal?.id ?? null,
     pile: bots.bot?.id ?? null,
+    nombre: bots.aDemarrer.length,
     a_demarrer: bots.aDemarrer.map((entree) => entree.id).join(","),
-    refuses: bots.refusesActifs.map((entree) => entree.id).join(","),
-    plafond: bots.plafondActifs,
   });
 
   // --- LOT 36 (L3-a) : les configurations PAR BOT construites ----------------
@@ -1248,14 +1247,6 @@ async function main(): Promise<void> {
     registre: RegistreBots | null;
     stateDir: string;
     piSessionsDir: string;
-    maxActifs: number;
-    /**
-     * ⚠️ Bots `actif: true` REFUSÉS au démarrage par le plafond. `GET /api/bots`
-     * les rend pour que la barre du haut dise « actif mais NON démarré : plafond
-     * atteint » au lieu d'un « état inconnu » qui enverrait chercher la panne au
-     * mauvais endroit.
-     */
-    refusesActifs: string[];
     retirerDesListesDAgents: (botId: string) => number;
     /**
      * ⚠️ LOT 36 (L8) : l'état RÉEL et le cycle de vie. Posé APRÈS la
@@ -1266,11 +1257,6 @@ async function main(): Promise<void> {
     registre: bots.registre,
     stateDir: env.mountPoints.state,
     piSessionsDir: env.piSessionsDir,
-    // ⚠️ LOT 36 (L2) : le plafond résolu au démarrage est celui que la route
-    // on/off applique. Une seule source : `bots.maxActifs`, lu par
-    // `preparerMultiBot` (environnement > store > défaut 3).
-    maxActifs: bots.plafondActifs,
-    refusesActifs: bots.refusesActifs.map((entree) => entree.id),
     retirerDesListesDAgents: (botId: string) =>
       agentStoreRef ? agentStoreRef.retirerBotDesListes(botId).length : 0,
   };
@@ -1287,12 +1273,10 @@ async function main(): Promise<void> {
     registre: () => botsAdmin.registre,
     ...(secretStore ? { coffre: secretStore } : {}),
     // ⚠️ LOT 36 (L3-c) — QUI TOURNE, décidé au démarrage (L1) : le balayeur ne voit
-    // qu'UNE cible par bot à démarrer, jamais une par bot du REGISTRE. Un bot
-    // `actif: true` mais REFUSÉ par `bots.maxActifs` n'a ni pile ni déclencheur (et
-    // l'allumer dans l'interface exige un redémarrage, `demarrageRequis`).
+    // qu'UNE cible par bot à démarrer, jamais une par bot du REGISTRE. Tous les
+    // bots `actif: true` démarrent (plus de plafond).
     demarrage: () => ({
       aDemarrer: bots.aDemarrer.map((entree) => entree.id),
-      refuses: bots.refusesActifs.map((entree) => entree.id),
     }),
     logger,
   });
@@ -3430,8 +3414,7 @@ async function main(): Promise<void> {
     // d'INSTANCE (`bots.envInstance`) : il n'est pas idempotent.
     // ⚠️ LOT 36 (L3-c) : la Map est désormais LUE PAR LA FABRIQUE DE PILES
     // (`outilsPour`), qui la consulte à chaque ouverture — c'est le point
-    // d'accroche préparé pour L3-d (le `PiHost` d'un bot). Les bots REFUSÉS par le
-    // plafond n'y sont pas, donc un bot refusé n'a ni pile ni outils.
+    // d'accroche préparé pour L3-d (le `PiHost` d'un bot).
     const outilsBots = creerOutilsBots({
       envInstance: bots.envInstance,
       mode: bots.mode,
@@ -3814,8 +3797,8 @@ async function main(): Promise<void> {
     // (`sessionsDir` de l'`Env` du démarrage, prompt de `config`, et les MÊMES
     // ports — `===`). Les hosts des autres bots ne changent RIEN à `host` :
     // routes d'instance, `getSubsystems` et transport WS continuent de le lire.
-    // ⚠️ Un bot REFUSÉ par le plafond n'est pas dans `bots.aDemarrer` : il n'a
-    // donc ni pile (L3-c) ni host — rien n'est ouvert en son nom.
+    // ⚠️ Un bot ÉTEINT n'est pas dans `bots.aDemarrer` : il n'a donc ni pile
+    // (L3-c) ni host — rien n'est ouvert en son nom.
     hostsBots = new HostsBots<PiHost>({
       pile: botDePile,
       bots: bots.aDemarrer.map((entree) => entree.id),
@@ -3889,13 +3872,9 @@ async function main(): Promise<void> {
     executionBots = new ExecutionBots({
       botDePile,
       hosts: hostsPourCycle,
-      // ⚠️ `autoriser` AVANT d'ouvrir : un bot refusé au démarrage par le plafond
-      // n'a pas de pile (`bot_refuse`) ; le démarrer à la main lève ce refus (le
-      // plafond vient d'être vérifié par `definirActif`).
-      ouvrirPile: (botId) => {
-        sourcesParBot.autoriser(botId);
-        return sourcesParBot.pourBot(botId);
-      },
+      // ⚠️ Ouvre la pile du bot : plus AUCUN refus de plafond depuis la décision
+      // utilisateur du 2026-11-13 (tous les bots `actif` démarrent).
+      ouvrirPile: (botId) => sourcesParBot.pourBot(botId),
       fermerPile: (botId) => {
         fabriquePiles.fermerBot(botId);
         sourcesParBot.oublier(botId);
@@ -4812,9 +4791,26 @@ async function main(): Promise<void> {
   // ⚠️ LOT 36 (L10) : les plateformes des AUTRES bots se connectent avec LEURS
   // jetons. Un échec est journalisé par paire et n'empêche pas les autres (le
   // gateway humain reste debout).
-  void adaptateursChat.connecterTout({ sansPile: true }).catch((error: unknown) => {
-    logger.warn("chat.adaptateurs.connect_failed", { error: messageOf(error) });
-  });
+  //
+  // ⚠️ LOT 43 : le BILAN n'est plus jeté. Jusqu'ici `connecterTout` était appelé
+  // en « fire and forget » : un bot dont le jeton existe et dont la plateforme est
+  // activée pouvait rester HORS LIGNE sans qu'aucune trace agrégée ne le dise
+  // (seul un `warn` par paire, noyé dans le journal). On nomme donc les paires en
+  // échec ET les paires qui n'ont même pas d'adaptateur.
+  void adaptateursChat
+    .connecterTout({ sansPile: true })
+    .then((bilanChat) => {
+      if (bilanChat.echecs.length > 0) {
+        logger.error("chat.adaptateurs.echecs", {
+          echecs: bilanChat.echecs
+            .map((echec) => `${echec.cle} : ${echec.error}`)
+            .join(" | "),
+        });
+      }
+    })
+    .catch((error: unknown) => {
+      logger.warn("chat.adaptateurs.connect_failed", { error: messageOf(error) });
+    });
 
   // Port machines (Lot 4) : écoute LAN mTLS. Un échec d'écoute est journalisé
   // mais NE fait PAS tomber le gateway humain.
