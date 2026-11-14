@@ -529,7 +529,7 @@ async function handleSecretsHttp(
   if (method === "POST" || method === "PUT") {
     body = await readBody(req).catch(() => "");
   }
-  const response = handleSecretsRequest({ method, path, headers: req.headers, body, deps });
+  const response = await handleSecretsRequest({ method, path, headers: req.headers, body, deps });
   writeResponse(
     res,
     { status: response.status, body: response.body, headers: response.headers },

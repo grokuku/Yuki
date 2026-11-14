@@ -28,6 +28,7 @@ import {
   type ConfigSnapshot,
 } from "../../config/runtime.js";
 import { botHistoriqueMono } from "../../bots/courant.js";
+import type { PlateformesAChaudPort } from "../../chat/plateformes-a-chaud.js";
 import {
   CAPACITES_BOT,
   type BotRecord,
@@ -108,6 +109,17 @@ export interface PersonnaliteEffectiveVue {
 export interface ConfigApiDeps {
   runtime: ConfigRuntime;
   logger: Logger;
+  /**
+   * ⚠️ LOT 48 — APPLICATION À CHAUD DES PLATEFORMES : réconciliation des
+   * adaptateurs de discussion après une écriture. Absent ⇒ une écriture est
+   * enregistrée sans ouvrir de connexion (et l'interface le DIT).
+   */
+  plateformes?: PlateformesAChaudPort;
+  /**
+   * Bot de la PILE : cible d'un `PUT /api/config` (une clé `bot` y désigne ce
+   * bot-là). Absent ⇒ déduit de `runtime.botId`.
+   */
+  botDuRun?: string;
   /** Injectable pour les tests. Défaut : `fetch` global. */
   fetchImpl?: typeof fetch;
   now?: () => number;
@@ -331,7 +343,7 @@ function handleGet(deps: ConfigApiDeps): ConfigHttpResponse {
   });
 }
 
-function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
+function handlePut(input: ConfigRequestInput): ConfigHttpResponse | Promise<ConfigHttpResponse> {
   const guard = guardWrite(input);
   if (guard) return guard;
   const flow = configWriteFlow(input.headers);
@@ -366,7 +378,7 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
       refuser: "bot",
     });
     audit(input.deps, result.changes, flow);
-    return json(200, {
+    return appliquerPlateformes(input.deps, input.deps.botDuRun ?? input.deps.runtime.botId, result.changes, () => ({
       fields: result.fields,
       status: result.status,
       applied: result.applied,
@@ -374,10 +386,81 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
       outilsGeneres: input.deps.outilsEffectifs?.(input.deps.runtime.botId) ?? null,
       personnaliteEffective:
         input.deps.personnaliteEffective?.(input.deps.runtime.botId) ?? null,
-    });
+    }));
   } catch (error) {
     return configWriteError(input.deps, error);
   }
+}
+
+/**
+ * Clés dont l'écriture peut OUVRIR, FERMER ou DÉPLACER une connexion.
+ * ⚠️ Restreindre la réconciliation à ces préfixes évite de rouvrir les sockets à
+ * chaque modification d'un prompt.
+ */
+const CLES_PLATEFORME = ["chat.mattermost.", "chat.discord."] as const;
+
+/** L'écriture touche-t-elle une plateforme de discussion ? */
+export function changePlateforme(changes: readonly { path: string }[]): boolean {
+  return changes.some((change) =>
+    CLES_PLATEFORME.some((prefixe) => change.path.startsWith(prefixe)),
+  );
+}
+
+/**
+ * ⚠️ LOT 48 — RÉPONDRE L'ÉCRITURE PUIS APPLIQUER : la configuration est déjà
+ * enregistrée sur disque, donc un échec de connexion ne doit PAS transformer
+ * l'écriture en erreur (elle a réussi). Il devient un RÉSULTAT nommé :
+ *  - `plateformesApplication.echecs` = paires non connectées, avec leur raison ;
+ *  - `plateformes` = l'ÉTAT relu, que l'interface affiche ("jeton refusé", "URL
+ *    injoignable", "aucun canal"…), au lieu de laisser l'utilisateur deviner ;
+ *  - `plateformesApplication.reconnexionIndisponible` = l'instance ne sait pas
+ *    reconnecter à chaud (port absent) : le redémarrage nécessaire est DIT.
+ */
+async function appliquerPlateformes(
+  deps: ConfigApiDeps,
+  botId: string,
+  changes: readonly { path: string }[],
+  vue: () => unknown,
+): Promise<ConfigHttpResponse> {
+  const body: Record<string, unknown> = { ...(vue() as Record<string, unknown>) };
+  if (!changePlateforme(changes)) {
+    body.plateformes = deps.plateformes?.etat(botId) ?? null;
+    return json(200, body);
+  }
+  if (deps.plateformes === undefined) {
+    body.plateformes = null;
+    body.plateformesApplication = {
+      reconnexionIndisponible:
+        "Cette instance ne sait pas reconnecter une plateforme à chaud : un " +
+        "redémarrage est nécessaire pour que ce réglage prenne effet.",
+    };
+    deps.logger.warn("chat.plateformes.port_absent", { bot: botId });
+    return json(200, body);
+  }
+  try {
+    const bilan = await deps.plateformes.rafraichir(botId);
+    if (bilan.echecs.length > 0) {
+      deps.logger.error("chat.plateformes.echecs", {
+        bot: botId,
+        echecs: bilan.echecs.map((echec) => `${echec.cle} : ${echec.error}`).join(" | "),
+      });
+    }
+    body.plateformesApplication = bilan;
+  } catch (error) {
+    // ⚠️ Une réconciliation qui leve est un défaut : on le JOURNALISE en erreur et
+    // on le DIT dans la réponse, plutôt que de laisser croire à une connexion.
+    deps.logger.error("chat.plateformes.rafraichissement_impossible", {
+      bot: botId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    body.plateformesApplication = {
+      reconnexionIndisponible:
+        "La reconnexion à chaud a échoué : un redémarrage est nécessaire. " +
+        (error instanceof Error ? error.message : String(error)),
+    };
+  }
+  body.plateformes = deps.plateformes.etat(botId) ?? null;
+  return json(200, body);
 }
 
 /**
@@ -875,6 +958,10 @@ function handleBotGet(deps: ConfigApiDeps, botId: string): ConfigHttpResponse {
     bot: { id: botId },
     fields: champsAvecPersonnaliteEffective(snapshot.fields, botId, deps),
     status: snapshot.status,
+    // ⚠️ ÉTAT DE CONNEXION PAR BOT (lot 48) : sans lui l'interface ne pouvait que
+    // dire « état inconnu » pour tout bot autre que celui de la pile — et le
+    // journal seul savait pourquoi un bot restait ABSENT.
+    plateformes: deps.plateformes?.etat(botId) ?? null,
     voiceInstruction: VOICE_SPEECH_INSTRUCTION,
     outilsGeneres: deps.outilsEffectifs?.(botId) ?? null,
     personnaliteEffective: deps.personnaliteEffective?.(botId) ?? null,
@@ -891,7 +978,7 @@ function handleBotGet(deps: ConfigApiDeps, botId: string): ConfigHttpResponse {
 function handleBotPut(
   input: ConfigRequestInput,
   botId: string,
-): ConfigHttpResponse {
+): ConfigHttpResponse | Promise<ConfigHttpResponse> {
   const guard = guardWrite(input);
   if (guard) return guard;
   const flow = configWriteFlow(input.headers);
@@ -925,7 +1012,7 @@ function handleBotPut(
       { portee: "bot", refuser: "instance" },
     );
     audit(input.deps, result.changes, flow);
-    return json(200, {
+    const vue = () => ({
       bot: { id: botId },
       fields: champsAvecPersonnaliteEffective(result.fields, botId, input.deps),
       status: result.status,
@@ -934,6 +1021,10 @@ function handleBotPut(
       outilsGeneres: input.deps.outilsEffectifs?.(botId) ?? null,
       personnaliteEffective: input.deps.personnaliteEffective?.(botId) ?? null,
     });
+    // ⚠️ ÉCRITURE ⇒ RÉCONCILIATION : c'est ICI que « j'active Mattermost » devient
+    // une connexion réelle (adaptateur créé + `connect()`), et que changer l'URL ou
+    // le jeton ROUVRE la connexion vers la nouvelle destination.
+    return appliquerPlateformes(input.deps, botId, result.changes, vue);
   } catch (error) {
     return configWriteError(input.deps, error);
   }
@@ -1358,8 +1449,8 @@ function listingDe(bot: BotRecord): BotListing {
 /** Chemin `/api/bots/<id>[/donnees|/actif]` → identifiant + suffixe, ou `null`. */
 function botRacineOfPath(
   path: string,
-): { botId: string; suffixe: "" | "donnees" | "actif" } | null {
-  const match = /^\/api\/bots\/([^/]+)(\/(donnees|actif))?$/.exec(path);
+): { botId: string; suffixe: "" | "donnees" | "actif" | "plateformes" } | null {
+  const match = /^\/api\/bots\/([^/]+)(\/(donnees|actif|plateformes))?$/.exec(path);
   if (!match) return null;
   let botId: string;
   try {
@@ -1370,8 +1461,47 @@ function botRacineOfPath(
   const suffixe = match[3];
   return {
     botId,
-    suffixe: suffixe === "donnees" ? "donnees" : suffixe === "actif" ? "actif" : "",
+    suffixe:
+      suffixe === "donnees"
+        ? "donnees"
+        : suffixe === "actif"
+          ? "actif"
+          : suffixe === "plateformes"
+            ? "plateformes"
+            : "",
   };
+}
+
+/**
+ * `POST /api/bots/<id>/plateformes` — RESYNCHRONISE la découverte des canaux.
+ *
+ * ⚠️ CAS COUVERT : le bot vient d'être ajouté à un canal. Le temps réel signale
+ * l'adhésion (`added_to_channel`) et une ré-énumération périodique existe, mais
+ * l'utilisateur doit pouvoir le DEMANDER — sinon il ne lui reste que le
+ * redémarrage, c'est-à-dire exactement le symptôme signalé.
+ */
+async function handleBotPlateformes(
+  deps: ConfigApiDeps,
+  botId: string,
+): Promise<ConfigHttpResponse> {
+  if (deps.plateformes === undefined) {
+    return json(200, {
+      bot: { id: botId },
+      resynchronisation: null,
+      raison:
+        "Cette instance ne sait pas resynchroniser les plateformes à chaud : un " +
+        "redémarrage est nécessaire.",
+    });
+  }
+  const resultat = await deps.plateformes.resynchroniser(botId);
+  return json(200, {
+    bot: { id: botId },
+    resynchronisation: resultat,
+    plateformes: deps.plateformes.etat(botId),
+    ...(resultat === null
+      ? { raison: "Aucune plateforme connectée pour ce bot : rien à resynchroniser." }
+      : {}),
+  });
 }
 
 // ── Mot de passe d'INSTANCE (déverrouillage des agents sensibles) ───────────
@@ -1557,6 +1687,12 @@ export async function handleConfigRequest(
       if (method === "GET" || method === "HEAD") {
         return handleBotDonnees(input.deps, racine.botId);
       }
+      return json(405, { error: "method_not_allowed", method });
+    }
+    // ⚠️ RESYNCHRONISATION DES CANAUX (lot 48) : `POST`, jamais `GET` (elle
+    // interroge la plateforme et écrit dans le miroir).
+    if (racine.suffixe === "plateformes") {
+      if (method === "POST") return handleBotPlateformes(input.deps, racine.botId);
       return json(405, { error: "method_not_allowed", method });
     }
     // ⚠️ ON/OFF d'un bot (lot 36, L2) : `actif` = « doit tourner ».

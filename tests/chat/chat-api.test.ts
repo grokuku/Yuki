@@ -192,7 +192,10 @@ describe("jeton — écrit une fois, jamais relu", () => {
     const texte = JSON.stringify(response.body);
     expect(texte).not.toContain(jeton);
     expect(texte).not.toContain("jeton-bot");
-    expect(response.body).toEqual({ ok: true, jetonEnregistre: true });
+    // ⚠️ GARDE ADAPTÉE (lot 48) : la réponse porte EN PLUS le bilan de reconnexion
+    // (`plateformesApplication`) — coller un jeton ouvre désormais la connexion.
+    // L'assertion reste stricte sur ce qui compte : aucun jeton dans la réponse.
+    expect(response.body).toMatchObject({ ok: true, jetonEnregistre: true });
   });
 
   it("refuse un jeton vide (jamais un enregistrement silencieux)", async () => {

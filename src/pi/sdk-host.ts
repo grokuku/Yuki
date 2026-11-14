@@ -93,6 +93,7 @@ import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
 import { createReactionsExtensionFactory } from "./sdk/reactions-extension.js";
 import { createRulesExtensionFactory } from "./sdk/rules-extension.js";
 import { createConsignesExtensionFactory } from "./sdk/consignes-extension.js";
+import { createPromptDuTourExtensionFactory } from "./sdk/prompt-du-tour-extension.js";
 import { createConsignesTools } from "./sdk/consignes-tools.js";
 import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
 import { createHeritageTools } from "./sdk/heritage-tools.js";
@@ -424,19 +425,25 @@ function makeRunItem(
 /**
  * Construit la liste ORDONNÉE des extensions INLINE injectées à chaque tour.
  *
- * L'ORDRE est le contrat : **consignes durables du bot → règles (règles communes)
- * → mémoire → annuaire des agents → heritage**. Le SDK chaîne les extensions qui renvoient
- * `systemPrompt` ; chacune CONCATÈNE au prompt courant, donc un ordre inversé
- * ferait passer un bloc APRÈS un autre sans l'écraser (mais changerait le sens
- * donné au modèle). Cette fonction est extraite pour être VERROUILLÉE par un
- * test d'ordre (voir `tests/pi/prompt-regles-et-ordre.test.ts`).
+ * L'ORDRE est le contrat : **prompt du tour → consignes durables du bot → règles
+ * (règles communes) → mémoire → annuaire des agents → heritage**. Le SDK chaîne
+ * les extensions qui renvoient `systemPrompt` ; chacune CONCATÈNE au prompt
+ * courant (sauf le prompt du tour, qui le REMPLACE en premier, et les consignes,
+ * qui s'INSÈRENT après `</personnalite>`), donc un ordre inversé ferait passer un
+ * bloc APRÈS un autre sans l'écraser (mais changerait le sens donné au modèle).
+ * Cette fonction est extraite pour être VERROUILLÉE par un test d'ordre (voir
+ * `tests/pi/prompt-regles-et-ordre.test.ts`).
  *
- * ⚠️ IL N'Y A PLUS D'EXTENSION DE PERSONNALITÉ (décision utilisateur du
- * 2026-11-14). La personnalité a UNE seule source, `prompts.personnalite`,
- * composée une fois par le point d'assemblage unique
- * (`src/llm/prompt-systeme.ts`, appelé par `src/bots/hosts.ts` et `main()`).
- * Le fichier `personality.md` n'est plus concaténé ici : c'était la seconde
- * source, et elle passait APRÈS — donc elle GAGNAIT sur la personnalité du bot.
+ * ⚠️ PROMPT DU TOUR EN PREMIER (2026-11-14) : identité, personnalité, prompt du
+ * rôle et liste d'outils sont RELUS à chaque tour et reposés comme BASE. Le
+ * prompt du host n'est plus figé : éditer la personnalité prend effet au message
+ * suivant, sans redémarrage (bug « grolaf répond je suis Yuki »).
+ *
+ * ⚠️ IL N'Y A TOUJOURS PAS D'EXTENSION DE PERSONNALITÉ séparée (décision
+ * utilisateur du 2026-11-14) : la personnalité a UNE seule source,
+ * `prompts.personnalite`, et c'est le prompt du tour qui la compose à partir du
+ * point d'assemblage unique (`src/llm/prompt-systeme.ts`). Le fichier
+ * `personality.md` n'est jamais concaténé ici : il n'amorce que la clé.
  *
  * ⚠️ Les RÈGLES restent une extension (relues à CHAQUE tour, à chaud) : elles
  * sont donc concaténées en DERNIER, dans un bloc balisé `<regles>` dont l'en-tête
@@ -447,6 +454,7 @@ function makeRunItem(
 export function buildInlineExtensions(
   options: Pick<
     PiHostOptions,
+    | "promptDuTour"
     | "rules"
     | "consignes"
     | "memory"
@@ -459,6 +467,19 @@ export function buildInlineExtensions(
   >,
 ): InlineExtension[] {
   const extensionFactories: InlineExtension[] = [];
+  if (options.promptDuTour) {
+    // ⚠️ EN PREMIER DE TOUT : cette extension REMPLACE le prompt de base du tour
+    // (identité → personnalité → prompt du rôle → `<outils>`, plus la consigne de
+    // voix) par la composition RELUE à cet instant. Elle doit donc passer AVANT
+    // les extensions qui s'y INSÈRENT (consignes) ou le concatènent (règles) :
+    // l'ordre des blocs reste identité → personnalité → consignes/faits → prompt
+    // système → outils → règles (les règles toujours en dernier).
+    extensionFactories.push(
+      createPromptDuTourExtensionFactory(options.promptDuTour, {
+        logger: options.logger,
+      }),
+    );
+  }
   if (options.consignes) {
     // ⚠️ EN PREMIER dans la CHAÎNE : l'extension INSÈRE ses blocs APRÈS
     // `</personnalite>` (elle ne se contente pas de concaténer), donc l'ordre

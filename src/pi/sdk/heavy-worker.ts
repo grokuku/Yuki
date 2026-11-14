@@ -170,7 +170,15 @@ export interface SdkHeavyWorkerConfig {
   agentDir: string;
   authPath: string;
   modelsPath: string;
-  systemPrompt: string;
+  /**
+   * Prompt système du worker lourd.
+   *
+   * ⚠️ Une FONCTION est relue à CHAQUE job (même mécanique que `modelReference`
+   * et `thinking`) : éditer « Prompt système — lourd » prend donc effet au job
+   * SUIVANT, sans redémarrage. Un worker construit au premier `delegate` ne peut
+   * plus figer le texte pour toute la vie du gateway.
+   */
+  systemPrompt: string | (() => string);
   /**
    * Référence `provider/modelId` du modèle lourd. Une FONCTION est relue à
    * CHAQUE job : un changement de modèle (`apply: hot`) s'applique donc aux
@@ -618,6 +626,9 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     }
 
     const modelReference = liveValue(config.modelReference);
+    // ⚠️ PROMPT RECOMPOSÉ À CHAQUE JOB (une fonction est relue ici, comme le modèle) :
+    // une modification du prompt système lourd s'applique donc sans redémarrage.
+    const systemPrompt = liveValue(config.systemPrompt);
     const model = resolveSdkModel(runtime, modelReference);
     if (!model) {
       config.logger.warn("heavy.model.unresolved", {
@@ -662,7 +673,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
       ephemeral = await (config.createSession ?? createEphemeralSession)({
         cwd: config.cwd,
         agentDir: config.agentDir,
-        systemPrompt: config.systemPrompt,
+        systemPrompt,
         modelRuntime: runtime,
         model,
         thinkingLevel: liveValue(config.thinking),

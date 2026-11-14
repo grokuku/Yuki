@@ -403,6 +403,45 @@ export class ConfigRuntime {
   }
 
   /**
+   * RELIT le store commun et l'overlay du bot depuis le DISQUE.
+   *
+   * ⚠️ POURQUOI (bug « plateforme activée, bot absent », 2026-11-14) : les routes
+   * écrivent l'overlay d'un bot AUTRE que celui de la pile avec
+   * `runtime.updatePour(botId)` — règle « un seul rédacteur par overlay », le cache
+   * mémoire de SON runtime n'est donc pas rafraîchi. Une reconnexion à chaud qui
+   * lirait ce cache verrait l'ANCIEN interrupteur et l'ANCIENNE URL, donc : rien
+   * ne se connecterait, ou la connexion viserait le serveur précédent.
+   *
+   * Ce n'est qu'une RELECTURE : ni le pont `process.env` (réservé au runtime de
+   * la pile), ni les auditeurs ne sont touchés — une écriture, elle, passe par
+   * `update()`.
+   */
+  reload(): void {
+    const loaded = this.store.load();
+    if (loaded.source !== "invalid") {
+      const values: Record<string, string | number> = {};
+      for (const [path, raw] of Object.entries(loaded.values)) {
+        if (descriptorOf(path) === undefined) continue;
+        const result = validateField(path, raw);
+        if (!result.ok) continue;
+        values[path] = result.value;
+      }
+      this.values = values;
+    }
+    const overlaid = this.overlay.load();
+    if (overlaid.source === "invalid") return;
+    const overlayValues: Record<string, string | number> = {};
+    for (const [path, raw] of Object.entries(overlaid.values)) {
+      const descriptor = descriptorOf(path);
+      if (descriptor === undefined || descriptor.scope === "instance") continue;
+      const result = validateField(path, raw);
+      if (!result.ok) continue;
+      overlayValues[path] = result.value;
+    }
+    this.overlayValues = overlayValues;
+  }
+
+  /**
    * Valeur effective d'un champ — ⚠️ CHEMIN DE LECTURE UNIQUE du produit.
    *
    * Précédence : `env > overlay du bot > store commun > défaut`.

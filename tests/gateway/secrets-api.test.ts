@@ -36,10 +36,10 @@ function storeIn(dir: string): SecretStore {
 const WRITE_HEADERS = { "x-yuki-config": "1" };
 
 describe("API secrets — la valeur ne sort JAMAIS", () => {
-  it("ajoute puis liste : noms seulement, aucune valeur dans les réponses", () => {
+  it("ajoute puis liste : noms seulement, aucune valeur dans les réponses", async () => {
     const store = storeIn(tempDir());
     const deps = { store, logger };
-    const added = handleSecretsRequest({
+    const added = await handleSecretsRequest({
       method: "POST",
       path: "/api/secrets",
       headers: WRITE_HEADERS,
@@ -49,7 +49,7 @@ describe("API secrets — la valeur ne sort JAMAIS", () => {
     expect(added.status).toBe(200);
     expect(JSON.stringify(added.body)).not.toContain(SECRET_VALUE);
 
-    const listed = handleSecretsRequest({
+    const listed = await handleSecretsRequest({
       method: "GET",
       path: "/api/secrets",
       headers: {},
@@ -66,11 +66,11 @@ describe("API secrets — la valeur ne sort JAMAIS", () => {
     expect(JSON.stringify(listed.body)).not.toContain(SECRET_VALUE);
   });
 
-  it("supprime un secret (DELETE /api/secrets/<nom>)", () => {
+  it("supprime un secret (DELETE /api/secrets/<nom>)", async () => {
     const store = storeIn(tempDir());
     store.set("YUKI_SECRET_A", "valeur-secrete-A");
     const deps = { store, logger };
-    const removed = handleSecretsRequest({
+    const removed = await handleSecretsRequest({
       method: "DELETE",
       path: "/api/secrets/YUKI_SECRET_A",
       headers: WRITE_HEADERS,
@@ -81,10 +81,10 @@ describe("API secrets — la valeur ne sort JAMAIS", () => {
     expect(store.has("YUKI_SECRET_A")).toBe(false);
   });
 
-  it("refuse une écriture sans l'en-tête d'écriture (CSRF)", () => {
+  it("refuse une écriture sans l'en-tête d'écriture (CSRF)", async () => {
     const store = storeIn(tempDir());
     const deps = { store, logger };
-    const res = handleSecretsRequest({
+    const res = await handleSecretsRequest({
       method: "POST",
       path: "/api/secrets",
       headers: {},
@@ -97,11 +97,11 @@ describe("API secrets — la valeur ne sort JAMAIS", () => {
 });
 
 describe("API secrets — coffre verrouillé (jamais de repli en clair)", () => {
-  it("GET répond configured:false ; POST répond 503", () => {
+  it("GET répond configured:false ; POST répond 503", async () => {
     const path = join(tempDir(), "secrets.vault.json");
     const store = new SecretStore({ path, key: "", env: {} });
     const deps = { store, logger };
-    const listed = handleSecretsRequest({
+    const listed = await handleSecretsRequest({
       method: "GET",
       path: "/api/secrets",
       headers: {},
@@ -111,7 +111,7 @@ describe("API secrets — coffre verrouillé (jamais de repli en clair)", () => 
     expect(listed.status).toBe(200);
     expect(listed.body).toMatchObject({ configured: false, entries: [] });
 
-    const added = handleSecretsRequest({
+    const added = await handleSecretsRequest({
       method: "POST",
       path: "/api/secrets",
       headers: WRITE_HEADERS,

@@ -180,6 +180,22 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   private derniereAvertissement: string | undefined;
   private identite: { id: string; username?: string; displayName?: string } | null = null;
   /**
+   * ⚠️ AVERTISSEMENT DE DÉCOUVERTE ("ce bot ne voit aucun canal"), distinct d'une
+   * erreur : la connexion a réussi, mais l'équipe ne contient aucun canal où le
+   * bot soit membre. Sans ce champ, la liste restait VIDE et MUETTE (symptôme
+   * signalé le 2026-11-14 : « le canal n'apparaît pas dans l'interface web »).
+   */
+  private avertissementCanaux: string | undefined;
+  /**
+   * ⚠️ RESYNCHRONISATION DEMANDÉE PAR LE TEMPS RÉEL (adhésion à un canal).
+   *
+   * Coalescée : Mattermost émet plusieurs événements d'affilée quand un bot rejoint
+   * un canal, et `backfillAll` interroge l'API. On regroupe donc dans une fenêtre
+   * courte, et on ne superpose jamais deux résynchronisations.
+   */
+  private resynchronisationPlanifiee: ReturnType<typeof setTimeout> | null = null;
+  private resynchronisationEnCours = false;
+  /**
    * Identifiants d'auteurs DÉJÀ demandés à `POST /users/ids` (succès comme « inconnu »).
    *
    * ⚠️ C'est le CACHE de résolution : un second message du même auteur ne doit produire
@@ -225,6 +241,9 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       baseUrl: deps.baseUrl,
       token: deps.token,
       onEvent: (event) => void this.onSocketEvent(event.kind, event.post),
+      // ⚠️ ADHÉSION : le bot rejoint un canal (ou une équipe) ⇒ la liste des canaux
+      // a changé. On ré-énumère, sinon le canal reste invisible jusqu'au redémarrage.
+      onMembership: () => this.planifierResynchronisation(),
       ...(deps.logger ? { logger: deps.logger } : {}),
       ...(deps.createSocket ? { createSocket: deps.createSocket } : {}),
       ...(deps.random ? { random: deps.random } : {}),
@@ -266,6 +285,10 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   }
 
   async disconnect(): Promise<void> {
+    if (this.resynchronisationPlanifiee !== null) {
+      clearTimeout(this.resynchronisationPlanifiee);
+      this.resynchronisationPlanifiee = null;
+    }
     await this.socket.stop();
     await this.sync.stop();
   }
@@ -281,6 +304,7 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     if (socketStatus.derniereErreur !== undefined) raisons.push(socketStatus.derniereErreur);
     if (this.derniereErreur !== undefined) raisons.push(this.derniereErreur);
     if (this.derniereAvertissement !== undefined) raisons.push(this.derniereAvertissement);
+    if (this.avertissementCanaux !== undefined) raisons.push(this.avertissementCanaux);
     const synchro = this.sync.status();
     // ⚠️ « Connecté » exige l'authentification temps réel ET une synchronisation
     // démarrée : un canal suivi sans temps réel reste ◐ (« connexion »), pas ●.
@@ -509,7 +533,14 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   async channels(): Promise<ChatSyncChannel[]> {
     const max = this.deps.maxChannels ?? MAX_MIRRORED_CONVERSATIONS;
     const teams = await this.client.teams();
-    const out: ChatSyncChannel[] = [];
+    if (teams.length === 0) {
+      // ⚠️ UN FAIT DIT, JAMAIS UNE LISTE VIDE MUETTE : un compte sans équipe ne
+      // verra aucun canal, et l'utilisateur doit pouvoir le constater.
+      this.avertissementCanaux =
+        "Ce bot n'appartient à AUCUNE équipe sur ce serveur : il ne peut voir aucun canal.";
+    }
+    const out: ChatSyncChannel[] =
+      [];
     const seen = new Set<string>();
     for (const team of teams) {
       if (out.length >= max) break;
@@ -538,7 +569,62 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         });
       }
     }
+    // ⚠️ ZÉRO CANAL APRÈS AVOIR INTERROGÉ LES ÉQUIPES : ce n'est pas « rien à
+    // importer », c'est « ce bot n'est membre d'aucun canal » — on le DIT (et le
+    // message est remonté par `status().raison`, donc visible dans l'interface).
+    if (out.length === 0 && this.avertissementCanaux === undefined) {
+      this.avertissementCanaux =
+        "Ce bot ne voit aucun canal : vérifiez qu'il a bien été ajouté à un canal " +
+        "de l'équipe (Mattermost → équipe → Ajouter des membres).";
+      this.deps.logger?.warn("chat.mattermost.aucun_canal", {
+        equipes: teams.length,
+        bot: this.deps.store.bot().username ?? this.deps.store.bot().id ?? "inconnu",
+      });
+    }
+    if (out.length > 0) this.avertissementCanaux = undefined;
     return out;
+  }
+
+  /**
+   * RESYNCHRONISE la découverte des canaux SANS fermer le temps réel.
+   *
+   * ⚠️ CAS COUVERT : un canal où le bot vient d'être ajouté. Le backfill initial
+   * n'énumère les canaux qu'une fois ; sans ce point d'entrée, le canal restait
+   * absent tant que le processus n'avait pas redémarré. `sync.start()` est
+   * idempotent (`backfillAll` saute les canaux déjà importés : coût nul pour les
+   * autres) et c'est lui qui crée les conversations manquantes dans le miroir.
+   */
+  async resynchroniser(): Promise<void> {
+    if (!this.client.isConfigured()) return;
+    if (this.resynchronisationEnCours) return;
+    this.resynchronisationEnCours = true;
+    try {
+      await this.sync.start();
+      this.deps.logger?.info("chat.mattermost.resynchronisee", {
+        canaux: this.deps.store.conversations().length,
+      });
+    } finally {
+      this.resynchronisationEnCours = false;
+    }
+  }
+
+  /**
+   * Resynchronisation DIFFÉRÉE et COALESCÉE, déclenchée par le temps réel (adhésion).
+   * ⚠️ Elle ne ferme ni le WebSocket ni la synchronisation : `backfillAll` saute les
+   * canaux déjà importés, seuls les nouveaux sont ajoutés au miroir.
+   */
+  planifierResynchronisation(delaiMs = RESYNC_DEBOUNCE_MS): void {
+    if (this.resynchronisationPlanifiee !== null) return;
+    const handle = setTimeout(() => {
+      this.resynchronisationPlanifiee = null;
+      void this.resynchroniser().catch((error: unknown) => {
+        this.deps.logger?.warn("chat.mattermost.resynchronisation_echec", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, delaiMs);
+    (handle as { unref?: () => void }).unref?.();
+    this.resynchronisationPlanifiee = handle;
   }
 
   /**
@@ -1029,6 +1115,13 @@ export function isMattermostConversation(conversationId: string): boolean {
  * donc SOUS la limite par défaut, et on l'annonce quand on coupe.
  */
 export const MM_DEFAULT_MAX_POST_CHARS = 16_383;
+
+/**
+ * Fenêtre de coalescence d'une resynchronisation déclenchée par l'adhésion du bot
+ * à un canal : plusieurs événements Mattermost arrivent d'affilée, un seul
+ * `backfillAll` suffit.
+ */
+export const RESYNC_DEBOUNCE_MS = 3_000;
 
 /**
  * Tronque un texte à la limite de Mattermost **en le DISANT**.

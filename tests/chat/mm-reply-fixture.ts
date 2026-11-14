@@ -40,6 +40,16 @@ export interface MmFixture {
   requetes: Array<{ at: number; fin?: number; method: string; chemin: string }>;
   /** Diffuse un événement comme le ferait le serveur. */
   broadcast(event: string, post: Record<string, unknown>): void;
+  /**
+   * Diffuse un événement SANS charge `post` (`added_to_channel`, `channel_created`…).
+   * ⚠️ C'est le signal d'ADHÉSION : le bot rejoint un canal, sa liste change.
+   */
+  broadcastMembership(event: string): void;
+  /**
+   * Ajoute un canal à l'équipe (comme le ferait un administrateur Mattermost) :
+   * la prochaine énumération `/users/me/teams/<id>/channels` le rendra.
+   */
+  ajouterCanal(id: string, displayName: string): void;
   /** Nombre de clients WebSocket ouverts (attente de connexion). */
   readonly open: number;
 }
@@ -65,6 +75,10 @@ export async function startMmFixture(
   const created: Array<Record<string, unknown>> = [];
   const requetes: Array<{ at: number; fin?: number; method: string; chemin: string }> = [];
   const backlog = [...(options.backlog ?? [])];
+  /** Canaux de l'équipe — MODIFIABLE : un canal ajouté après coup doit être vu. */
+  const canaux: Array<Record<string, unknown>> = [
+    { id: MM_CHANNEL, display_name: "Général", type: "O" },
+  ];
   let open = 0;
 
   const server: Server = createServer((req, res) => {
@@ -92,7 +106,7 @@ export async function startMmFixture(
       return;
     }
     if (url.pathname === "/api/v4/users/me/teams/equipe-1/channels") {
-      send([{ id: MM_CHANNEL, display_name: "Général", type: "O" }]);
+      send(canaux);
       return;
     }
     if (url.pathname === `/api/v4/channels/${MM_CHANNEL}/posts`) {
@@ -184,6 +198,15 @@ export async function startMmFixture(
       for (const client of wss.clients) {
         if (client.readyState === client.OPEN) client.send(payload);
       }
+    },
+    broadcastMembership(event) {
+      const payload = JSON.stringify({ event, data: { channel_id: "canal-2" }, seq: 3 });
+      for (const client of wss.clients) {
+        if (client.readyState === client.OPEN) client.send(payload);
+      }
+    },
+    ajouterCanal(id, displayName) {
+      canaux.push({ id, display_name: displayName, type: "O" });
     },
   };
 }

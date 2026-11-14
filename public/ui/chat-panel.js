@@ -900,18 +900,70 @@ const PLATEFORMES_BOT = [
  * présenté comme « non configuré ».
  */
 export function texteEtatConnexionBot(demarre) {
+  // ⚠️ TEXTE CORRIGÉ (lot 48) : l'ancien disait « un jeton ajouté maintenant sera
+  // pris en compte à son prochain démarrage » — c'était le mensonge qui a produit
+  // le bug « j'active Mattermost, le bot reste absent ». Activer, désactiver,
+  // changer l'URL ou le jeton sont désormais appliqués IMMÉDIATEMENT, et l'état
+  // réel (connecté / hors ligne + raison) est affiché plus bas dans ce panneau.
   const demarrage =
     demarre === true
-      ? "Le bot tourne : son jeton est lu à son démarrage, un jeton ajouté maintenant " +
-        "sera pris en compte à son prochain démarrage."
+      ? "Le bot tourne : activer une plateforme, changer son adresse ou son jeton " +
+        "ouvre (ou rouvre) la connexion IMMÉDIATEMENT — aucun redémarrage."
       : demarre === false
         ? "Le bot est arrêté : ce panneau reste ÉDITABLE (on configure un bot arrêté), " +
           "et ces réglages s'appliqueront à son démarrage."
-        : "Ces réglages s'appliquent au démarrage du bot.";
+        : "Ces réglages sont appliqués dès leur enregistrement.";
   return (
-    `${demarrage} L'état de la connexion en direct (connecté / erreur) n'est exposé ` +
-    "que pour le bot de la pile : ici, on sait seulement si le jeton de ce bot est au " +
-    "coffre."
+    `${demarrage} L'état réel de la connexion (connecté / hors ligne, et POURQUOI) ` +
+    "est affiché ci-dessous, tel que le serveur le mesure."
+  );
+}
+
+/**
+ * Phrase d'ÉTAT RÉEL d'une plateforme d'un bot — ce que le serveur mesure.
+ *
+ * ⚠️ « HORS LIGNE » N'EST PAS « désactivée » : dans Mattermost, la présence du bot
+ * suit la connexion WebSocket. Un bot ACTIVÉ mais hors ligne est donc le signe
+ * qu'aucune connexion n'est ouverte — c'est exactement le symptôme signalé
+ * (« on aurait dit qu'il était aux chiottes »). On le dit, et on dit POURQUOI.
+ *
+ * @param {string} id `mattermost` | `discord`.
+ * @param {object|null} vue état serveur de cette plateforme (`plateformes[id]`).
+ * @returns {string} phrase à afficher (jamais vide).
+ */
+export function texteConnexionPlateforme(id, vue) {
+  const nom = id === "discord" ? "Discord" : "Mattermost";
+  if (vue === null || typeof vue !== "object") {
+    return `${nom} : état de connexion inconnu (cette instance ne l'expose pas).`;
+  }
+  const etat = typeof vue.etat === "string" ? vue.etat : "inconnu";
+  const raison = typeof vue.raison === "string" ? vue.raison.trim() : "";
+  const canaux = Number.isFinite(vue.canaux) ? vue.canaux : null;
+  if (vue.active !== true) {
+    return `${nom} : DÉSACTIVÉE pour ce bot — aucune connexion n'est ouverte (état de l'interrupteur, pas une panne).`;
+  }
+  if (etat === "on") {
+    if (canaux === 0) {
+      return (
+        `${nom} : connectée, mais ce bot ne voit AUCUN canal. Vérifiez qu'il a bien ` +
+        "été ajouté à un canal (Mattermost → équipe → Ajouter des membres), puis " +
+        "utilisez « Resynchroniser les canaux »."
+      );
+    }
+    return `${nom} : connectée${canaux === null ? "" : ` — ${canaux} canal(aux) suivi(s)`}.`;
+  }
+  if (etat === "connexion") {
+    return (
+      `${nom} : connexion EN COURS${raison === "" ? "" : ` — ${raison}`}. ` +
+      "La liste des canaux se remplit après la connexion."
+    );
+  }
+  // `off` alors que l'interrupteur est allumé : la connexion n'a pas pu s'ouvrir.
+  return (
+    `${nom} : activée mais HORS LIGNE (aucune connexion ouverte). ` +
+    (raison === ""
+      ? "Aucune raison rapportée : vérifiez l'adresse du serveur et le jeton de ce bot."
+      : `Raison : ${raison}`)
   );
 }
 
@@ -946,6 +998,8 @@ export function initChatPanelBot(deps) {
   /** État LU (jamais deviné) : valeurs effectives du bot + noms du coffre. */
   const etat = {
     active: { mattermost: false, discord: false },
+    /** État de connexion RÉEL par plateforme (`plateformes` du serveur, ou `null`). */
+    plateformes: null,
     guildId: "",
     maxUploadBytes: "",
     // ⚠️ ADRESSE DU SERVEUR MATTERMOST DE CE BOT (`chat.mattermost.url`, portée
@@ -1312,8 +1366,47 @@ export function initChatPanelBot(deps) {
     };
   });
 
-  // ─── ③ Ce qu'on sait (et ce qu'on ne sait pas) de l'état ────────────────
+  // ─── ③ Ce qu'on sait de l'état RÉEL (mesuré par le serveur) ─────────────
   const etatConnexion = h("p", { class: "config-helper", text: texteEtatConnexionBot(botDemarre) });
+  /**
+   * ⚠️ ÉTAT DE CONNEXION PAR PLATEFORME (`GET /api/bots/<id>/config` →
+   * `plateformes`). Sans ce bloc, un bot « absent » restait indescriptible :
+   * l'utilisateur ne pouvait ni voir l'échec ni savoir qu'il fallait redémarrer.
+   */
+  const etatsConnexion = {
+    mattermost: h("p", { class: "config-helper", id: "chat-bot-mattermost-connexion" }),
+    discord: h("p", { class: "config-helper", id: "chat-bot-discord-connexion" }),
+  };
+  const resyncStatut = h("p", { class: "config-helper", role: "status" });
+  const resyncButton = h("button", {
+    class: "button button--small",
+    type: "button",
+    id: "chat-bot-resynchroniser",
+    text: "Resynchroniser les canaux",
+  });
+  resyncButton.addEventListener("click", () => {
+    void (async () => {
+      resyncButton.disabled = true;
+      resyncStatut.textContent = "Resynchronisation en cours…";
+      try {
+        const reponse = await request(`/api/bots/${encodeURIComponent(botId)}/plateformes`, {
+          method: "POST",
+          headers: BOT_WRITE_HEADERS,
+        });
+        const canaux = reponse?.resynchronisation?.canaux;
+        resyncStatut.textContent =
+          typeof reponse?.raison === "string"
+            ? reponse.raison
+            : `Resynchronisé : ${Number.isFinite(canaux) ? canaux : 0} canal(aux) dans le miroir de ce bot.`;
+        await refresh();
+      } catch (error) {
+        resyncStatut.textContent = "";
+        await report("Resynchronisation impossible", error);
+      } finally {
+        resyncButton.disabled = false;
+      }
+    })();
+  });
   const erreurLecture = h("p", { class: "config-error" });
   erreurLecture.hidden = true;
 
@@ -1344,8 +1437,10 @@ export function initChatPanelBot(deps) {
     if (!actif && jetonPose) {
       return `${nom} : jeton posé, plateforme DÉSACTIVÉE — elle ne se connecte pas.`;
     }
+    // ⚠️ « à son démarrage » était faux depuis toujours côté utilisateur : la
+    // connexion s'ouvre MAINTENANT (lot 48). On ne promet que ce qui est vrai.
     return actif
-      ? `${nom} : ACTIVÉE (le bot s'y connecte à son démarrage si le jeton est présent).`
+      ? `${nom} : ACTIVÉE — la connexion s'ouvre dès l'enregistrement (état ci-dessous).`
       : `${nom} : désactivée.`;
   }
 
@@ -1386,6 +1481,12 @@ export function initChatPanelBot(deps) {
             : `Adresse du serveur de ce bot : ${etat.url}`;
       }
     }
+    for (const id of ["mattermost", "discord"]) {
+      etatsConnexion[id].textContent = texteConnexionPlateforme(
+        id,
+        etat.plateformes === null ? null : etat.plateformes[id],
+      );
+    }
     const messages = [etat.erreur, etat.statut].filter((texte) => texte !== "");
     erreurLecture.hidden = messages.length === 0;
     erreurLecture.textContent = messages.join(" · ");
@@ -1406,6 +1507,11 @@ export function initChatPanelBot(deps) {
       etat.maxUploadBytes = String(champs["chat.discord.maxUploadBytes"]?.value ?? "");
       // ⚠️ Adresse Mattermost de CE bot : valeur EFFECTIVE (défaut vide du schéma).
       etat.url = String(champs["chat.mattermost.url"]?.value ?? "");
+      // ⚠️ ÉTAT RÉEL : le serveur mesure la connexion (adaptateur présent, socket
+      // ouvert, canaux suivis). `null` = cette instance ne l'expose pas — on ne
+      // prétend alors RIEN (aucun « connecté » inventé).
+      etat.plateformes =
+        config !== null && typeof config === "object" ? (config.plateformes ?? null) : null;
     } catch (error) {
       erreurs.push(`configuration de ce bot illisible : ${apiMessage(error, "erreur inconnue")}`);
     }
@@ -1430,7 +1536,20 @@ export function initChatPanelBot(deps) {
     identite,
     localToujours,
     ...sections.map((s) => s.element),
-    etatConnexion,
+    h("div", { class: "config-group" }, [
+      h("h2", { class: "config-group__title", text: "État réel des connexions" }),
+      etatConnexion,
+      etatsConnexion.mattermost,
+      etatsConnexion.discord,
+      h("div", { class: "config-actions" }, [resyncButton]),
+      h("p", {
+        class: "config-helper",
+        text:
+          "Un canal où le bot vient d'être ajouté apparaît après cette resynchronisation " +
+          "(ou automatiquement, dès que Mattermost signale son adhésion).",
+      }),
+      resyncStatut,
+    ]),
     erreurLecture,
     limites,
   );

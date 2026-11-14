@@ -52,6 +52,7 @@ import {
   resoudrePersonnaliteBot,
   type CandidatFichierPersonnalite,
 } from "./personnalite-bot.js";
+import { creerPortPromptDuTour } from "./prompt-du-tour.js";
 import { portReglesDuBot, type CandidatFichierRegles } from "../rules/regles-bot.js";
 import { portConsignes } from "../consignes/index.js";
 import type { Env } from "../config/env.js";
@@ -106,6 +107,14 @@ export interface HostDemarrable {
    * (`src/llm/prompt-systeme.ts`), puis la consigne de voix.
    */
   readonly systemPrompt: string;
+  /**
+   * ⚠️ PROMPT DU TOUR de CE bot (identité, personnalité, prompt léger, outils,
+   * voix) RELU À CHAQUE TOUR — même composition que `systemPrompt`, mais fraîche.
+   * C'est ce qui fait qu'éditer la personnalité prend effet au MESSAGE SUIVANT,
+   * sans redémarrage (bug du 2026-11-14). `systemPrompt` reste la valeur de
+   * départ et le secours.
+   */
+  readonly promptDuTour: PiHostOptions["promptDuTour"];
   /**
    * ALLOWLIST FINALE de CE bot (`toolAllowlistForChat`). Elle est posée telle
    * quelle sur le host : le prompt et la politique d'outils sont donc la MÊME
@@ -167,6 +176,13 @@ export interface ContexteHostBot {
    * qui ne connaît pas sa politique n'annonce rien plutôt que de mentir).
    */
   readonly outilsAutorises?: readonly string[];
+  /**
+   * ⚠️ NOMS des AUTRES bots de l'instance (registre, capturés au démarrage) :
+   * une personnalité qui cite un autre bot est SIGNALÉE
+   * (`personnalite.nom_autre_bot`). Avertissement, jamais blocage — citer un
+   * autre bot peut être légitime.
+   */
+  readonly autresBots?: readonly string[];
   /** `Env` RÉSOLU de ce bot (une seule résolution, L3-b/L3-c). */
   readonly env: Env;
   /** Configuration DE CE BOT (L3-a). Absente ⇒ pas de prompt ⇒ pas de host. */
@@ -241,6 +257,43 @@ export function portsHostBot(
     logger?.info("bots.host.port_absent", { bot: contexte.botId, ports: absent.join(",") });
   }
 
+  // ⚠️ NOM AFFICHÉ du bot : l'identité injectée dans SON prompt. Absent ⇒ son
+  // identifiant (jamais le nom d'un autre bot).
+  const nom = contexte.nom ?? contexte.botId;
+  // ⚠️ DEUX fichiers candidats, du PLUS SPÉCIFIQUE au plus général : le fichier
+  // DU BOT (`outils.personnalite`, chemin du bot), puis le fichier HISTORIQUE de
+  // l'instance. Aucun `botId` n'est traité à part.
+  const fichiersPersonnalite = candidatsPersonnalite(
+    contexte.outils !== undefined
+      ? {
+          portee: "bot",
+          chemin: contexte.outils.chemins.personalityPath,
+          store: contexte.outils.personnalite,
+        }
+      : undefined,
+    contexte.personnaliteInstance,
+  );
+  // ⚠️ VALEUR INITIALE du prompt : la composition d'aujourd'hui, faite UNE fois.
+  // Elle n'est plus la source du tour (le port la recompose à chaque tour) mais
+  // elle reste le secours du premier tour si la relecture échoue, et c'est elle
+  // que la façade expose (`systemPrompt`).
+  const systemPrompt = appendVoiceInstruction(
+    composerPromptSysteme({
+      nom,
+      personnalite: resoudrePersonnaliteBot({
+        botId: contexte.botId,
+        config,
+        fichiers: fichiersPersonnalite,
+        ...(logger !== undefined ? { logger } : {}),
+      }).texte,
+      prompt: config.getString("prompts.light"),
+      ...(contexte.outilsAutorises !== undefined
+        ? { outils: contexte.outilsAutorises }
+        : {}),
+    }),
+    isTtsEnabled(config),
+  );
+
   return {
     sessionsDir: contexte.env.piSessionsDir,
     ...(contexte.memoire !== undefined ? { memory: contexte.memoire } : {}),
@@ -255,34 +308,26 @@ export function portsHostBot(
     // `resoudrePersonnaliteBot` (champ renseigné > fichier d'amorçage > défaut
     // livré), et composée UNE fois. Le fichier `personality.md` n'est plus
     // concaténé à la fin du prompt par une extension (c'était la seconde source).
-    systemPrompt: appendVoiceInstruction(
-      composerPromptSysteme({
-        nom: contexte.nom ?? contexte.botId,
-        personnalite: resoudrePersonnaliteBot({
-          botId: contexte.botId,
-          config,
-          // ⚠️ DEUX fichiers candidats, du PLUS SPÉCIFIQUE au plus général :
-          // le fichier DU BOT (`outils.personnalite`, chemin du bot), puis le
-          // fichier HISTORIQUE de l'instance. Aucun `botId` n'est à part.
-          fichiers: candidatsPersonnalite(
-            contexte.outils !== undefined
-              ? {
-                  portee: "bot",
-                  chemin: contexte.outils.chemins.personalityPath,
-                  store: contexte.outils.personnalite,
-                }
-              : undefined,
-            contexte.personnaliteInstance,
-          ),
-          ...(logger !== undefined ? { logger } : {}),
-        }).texte,
-        prompt: config.getString("prompts.light"),
-        ...(contexte.outilsAutorises !== undefined
-          ? { outils: contexte.outilsAutorises }
-          : {}),
-      }),
-      isTtsEnabled(config),
-    ),
+    systemPrompt,
+    // ⚠️ PROMPT DU TOUR (2026-11-14) : le MÊME assemblage, mais RELU À CHAQUE
+    // TOUR par l'extension (`prompt-du-tour-extension.ts`) — configuration du
+    // bot (rechargée du disque) + fichier de personnalité. C'est ce qui fait
+    // qu'éditer la personnalité, un prompt ou les règles prend effet au MESSAGE
+    // SUIVANT, sans redémarrage. Le NOM, la liste d'outils et la consigne de voix
+    // restent FIGÉS (renommer ou changer la politique d'outils redémarre le host).
+    promptDuTour: creerPortPromptDuTour({
+      botId: contexte.botId,
+      nom,
+      config,
+      fichiersPersonnalite,
+      voix: isTtsEnabled(config),
+      valeurInitiale: systemPrompt,
+      ...(contexte.outilsAutorises !== undefined
+        ? { outils: contexte.outilsAutorises }
+        : {}),
+      ...(contexte.autresBots !== undefined ? { autresBots: contexte.autresBots } : {}),
+      ...(logger !== undefined ? { logger } : {}),
+    }),
     ...(contexte.outilsAutorises !== undefined
       ? { tools: contexte.outilsAutorises }
       : {}),
@@ -373,6 +418,10 @@ export function optionsHostBot(
     ...optionsPile,
     sessionsDir: ports.sessionsDir,
     systemPrompt: ports.systemPrompt,
+    // ⚠️ Le prompt du tour est RELU À CHAQUE TOUR : il se pose (ou se retire) avec
+    // le port du bot, jamais hérité de celui du bot du run (ce serait son
+    // identité, sa personnalité et ses outils qui parleraient).
+    promptDuTour: ports.promptDuTour,
     // ⚠️ Chaque host SAIT à quel bot il appartient (journalisation, diagnostic) :
     // c'est le seul champ ajouté par ce morceau à la façade.
     botId,

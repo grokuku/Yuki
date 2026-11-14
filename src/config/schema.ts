@@ -372,13 +372,17 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
    * ⚠️ Même portée que `prompts.light`/`prompts.heavy` : défaut d'instance +
    * surcharge par bot. Le défaut est le CONTENU DU FICHIER LIVRÉ
    * (`config/pi/personnalite.md`), comme pour les prompts.
+   *
+   * ⚠️ `apply: "hot"` (2026-11-14) : la personnalité est recomposée À CHAQUE TOUR
+   * par l'extension du prompt du tour — elle est donc effective au MESSAGE
+   * SUIVANT, sans redémarrage. Le badge « redémarrage » mentait.
    */
   "prompts.personnalite": {
     scope: "mixte",
     mixteMerge: "surcharge",
     type: "string",
     default: "",
-    apply: "restart",
+    apply: "hot",
     emptyMessage:
       "La personnalité ne peut pas être vide. Cliquez sur « Réinitialiser au défaut » pour revenir à la personnalité livrée (config/pi/personnalite.md).",
   },
@@ -387,7 +391,9 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     mixteMerge: "surcharge",
     type: "string",
     default: "",
-    apply: "restart",
+    // ⚠️ `apply: "hot"` (2026-11-14) : le prompt léger est recomposé À CHAQUE
+    // TOUR par l'extension du prompt du tour (message suivant, sans redémarrage).
+    apply: "hot",
     emptyMessage:
       "Le prompt système ne peut pas être vide. Cliquez sur « Réinitialiser au défaut » pour revenir au prompt livré (config/pi/system-prompt.md).",
   },
@@ -396,7 +402,10 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     mixteMerge: "surcharge",
     type: "string",
     default: "",
-    apply: "restart",
+    // ⚠️ `apply: "hot"` (2026-11-14) : le prompt lourd est RECOMPOSÉ À CHAQUE JOB
+    // du worker (`SdkHeavyWorkerConfig.systemPrompt` accepte une fonction) — le job
+    // suivant prend le nouveau texte, sans redémarrage.
+    apply: "hot",
     emptyMessage:
       "Le prompt système ne peut pas être vide. Cliquez sur « Réinitialiser au défaut » pour revenir au prompt livré (config/pi/system-prompt-heavy.md).",
   },

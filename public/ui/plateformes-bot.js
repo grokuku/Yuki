@@ -13,10 +13,11 @@
  *  - les INTERRUPTEURS : `GET /api/bots/<id>/config` (`chat.<p>.enabled`) ;
  *  - la présence d'un JETON : `GET /api/secrets` (noms seulement, jamais de
  *    valeur) + la règle de nom `YUKI_CHAT_<BOT>__<PLATEFORME>` ;
- *  - l'ÉTAT DE CONNEXION (connecté / en cours / erreur) : **non exposé par bot**.
- *    Seul le bot de la pile le donne (`GET /api/chat/status`) : pour un autre bot,
- *    on rend `connexionConnue: false` et l'interface DIT « état inconnu » — elle
- *    n'affirme jamais « aucun jeton » ni « aucun canal » à sa place.
+ *  - l'ÉTAT DE CONNEXION : `GET /api/bots/<id>/config` → `plateformes` (lot 48).
+ *    ⚠️ Avant ce champ, seul le bot de la pile le donnait (`GET /api/chat/status`)
+ *    et l'interface disait « état inconnu » pour tout autre bot — un bot ABSENT
+ *    (aucune connexion WebSocket, donc « hors ligne » dans Mattermost) restait
+ *    indescriptible. On préfère `null` (inconnu) à une affirmation inventée.
  *
  * Aucun `innerHTML`, aucun style : ce module ne touche pas au DOM.
  */
@@ -61,7 +62,9 @@ function interrupteurLu(champs, plateforme) {
  *   (`GET /api/secrets` → `entries[].name`) ; `null` = illisible/inconnu.
  * @param {boolean} [faits.coffreConfigure] faux ⇒ coffre verrouillé (jeton inconnu).
  * @param {unknown} [faits.statutPile] corps de `GET /api/chat/status`, utilisé
- *   UNIQUEMENT si `botId` est le bot de la pile (c'est le seul état en direct).
+ *   UNIQUEMENT si `botId` est le bot de la pile (état le plus direct).
+ * @param {Record<string, object>|null} [faits.etatServeur] champ `plateformes` de
+ *   `GET /api/bots/<id>/config` : l'état de connexion RÉEL du bot demandé.
  * @param {string} [faits.botDuRun] identifiant du bot du RUN (`GET /api/bots`
  *   → `botDuRun`).
  * @returns {{bot: string, botDuRun: string|null, connexionConnue: boolean,
@@ -80,43 +83,78 @@ export function etatPlateformesDepuisFaits(faits = {}) {
     faits.statutPile !== null && typeof faits.statutPile === "object"
       ? faits.statutPile
       : null;
-  /** L'état en direct n'existe QUE pour le bot de la pile, et s'il a été reçu. */
+  /** L'état en direct n'existe que pour le bot de la pile, et s'il a été reçu. */
   const depuisPile = botDuRun !== null && botId === botDuRun && statutPile !== null;
+  /**
+   * ⚠️ ÉTAT PAR BOT (lot 48) : `plateformes` de `GET /api/bots/<id>/config`. Il
+   * décrit CE bot (adaptateur présent, connecté ou non, raison de l'échec) — c'est
+   * ce qui permet de DIRE « hors ligne parce que le jeton est refusé ».
+   */
+  const serveur =
+    faits.etatServeur !== null && typeof faits.etatServeur === "object"
+      ? faits.etatServeur
+      : null;
+  const etatConnu = depuisPile || serveur !== null;
 
   const etat = {
     bot: botId,
     botDuRun,
-    connexionConnue: depuisPile,
+    connexionConnue: etatConnu,
     plateformes: {},
   };
   for (const option of PLATEFORME_OPTIONS) {
     const plateforme = option.plateforme;
     const vuePile = depuisPile ? statutPile[plateforme] : null;
+    const vueServeur = serveur !== null ? serveur[plateforme] : null;
     const active = depuisPile
       ? statutPile.plateformes?.[plateforme] === true
-      : interrupteurLu(faits.champs, plateforme);
+      : vueServeur !== null && typeof vueServeur === "object"
+        ? vueServeur.active === true
+        : interrupteurLu(faits.champs, plateforme);
     const jetonEnregistre = depuisPile
       ? vuePile?.jetonEnregistre === true
         ? true
         : vuePile?.jetonEnregistre === false
           ? false
           : null
-      : jetonPosePour(botId, plateforme, faits.noms ?? null, faits.coffreConfigure !== false);
+      : vueServeur !== null && typeof vueServeur === "object"
+        ? vueServeur.jetonEnregistre === true
+          ? true
+          : vueServeur.jetonEnregistre === false
+            ? false
+            : null
+        : jetonPosePour(botId, plateforme, faits.noms ?? null, faits.coffreConfigure !== false);
     const etatConnexion = depuisPile
       ? typeof vuePile?.plateforme?.etat === "string"
         ? vuePile.plateforme.etat
         : "off"
-      : "inconnu";
+      : vueServeur !== null && typeof vueServeur === "object"
+        ? typeof vueServeur.etat === "string"
+          ? vueServeur.etat
+          : "inconnu"
+        : "inconnu";
     const raison = depuisPile
       ? typeof vuePile?.plateforme?.raison === "string"
         ? vuePile.plateforme.raison
         : ""
-      : RAISON_CONNEXION_NON_EXPOSEE;
+      : vueServeur !== null && typeof vueServeur === "object"
+        ? typeof vueServeur.raison === "string"
+          ? vueServeur.raison
+          : ""
+        : RAISON_CONNEXION_NON_EXPOSEE;
     etat.plateformes[plateforme] = active;
     etat[plateforme] = {
       active,
       jetonEnregistre,
       plateforme: { etat: etatConnexion, raison },
+      // ⚠️ CANAUX SUIVIS : zéro canal avec une connexion « on » n'est pas un
+      // défaut du miroir, c'est « ce bot ne voit aucun canal » — dit par le serveur.
+      ...(vueServeur !== null && typeof vueServeur === "object"
+        ? {
+            canaux: Number.isFinite(vueServeur.canaux) ? vueServeur.canaux : null,
+            adaptateur: vueServeur.adaptateur === true,
+          }
+        : {}),
     };
   }
   return etat;
@@ -173,6 +211,7 @@ export async function fetchEtatPlateformes(botId, options = {}) {
   }
 
   let champs = {};
+  let etatServeur = null;
   try {
     const response = await doFetch(cheminConfigBot(affiche), {
       headers: READ_HEADERS,
@@ -181,6 +220,10 @@ export async function fetchEtatPlateformes(botId, options = {}) {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const corps = await response.json();
     champs = corps?.fields ?? {};
+    // ⚠️ `plateformes` décrit CE bot : sans lui, l'interface ne pouvait que dire
+    // « état inconnu » et l'utilisateur devait redémarrer pour comprendre.
+    etatServeur =
+      corps !== null && typeof corps === "object" ? (corps.plateformes ?? null) : null;
   } catch (error) {
     champs = {};
     erreurs.push(
@@ -215,6 +258,7 @@ export async function fetchEtatPlateformes(botId, options = {}) {
       champs,
       noms,
       coffreConfigure,
+      etatServeur,
       // L'état en direct du bot de la pile ne décrit PAS ce bot : on ne le passe pas.
       statutPile: null,
     }),

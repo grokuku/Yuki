@@ -65,6 +65,9 @@ import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
 // HISTORIQUE d'instance → défaut livré (`candidatsPersonnalite` ordonne les deux
 // fichiers, du plus spécifique au plus général).
 import { candidatsPersonnalite, resoudrePersonnaliteBot } from "./bots/personnalite-bot.js";
+// ⚠️ PROMPT DU TOUR : recomposition à CHAQUE tour (identité, personnalité,
+// prompt léger/lourd, outils, voix) — éditer l'un prend effet au message suivant.
+import { creerPortPromptDuTour } from "./bots/prompt-du-tour.js";
 // ⚠️ LOT 36 (L3-d) : la Map des `PiHost` PAR BOT (`host` reste celui du bot du run).
 import { HostsBots } from "./bots/hosts.js";
 import { ExecutionBots } from "./bots/execution.js";
@@ -126,11 +129,19 @@ import {
   jetonChatDeBot,
   nomSecretChat,
   nomsSecretsChat,
+  PLATEFORMES_CHAT,
   resoudreJetonsChatBots,
+  type JetonChat,
   type PlateformeChat,
   type ResolutionJetonsChat,
 } from "./chat/jetons-bot.js";
 import { AdaptateursChatBots, cleAdaptateur } from "./chat/adaptateurs-bots.js";
+import {
+  botDeSecretChat as botSecretDeChat,
+  type BilanPlateformesAChaud,
+  type EtatPlateformeAChaud,
+  type PlateformesAChaudPort,
+} from "./chat/plateformes-a-chaud.js";
 import { DiscordChatAdapter, discordAttachmentPort } from "./chat/discord/adapter.js";
 import { ChatAttachmentCache } from "./chat/attachments.js";
 import { DISCORD_MAX_DOWNLOAD_BYTES } from "./chat/discord/types.js";
@@ -499,6 +510,21 @@ async function main(): Promise<void> {
     if (botId === botDuRun) return bots.bot.nom;
     const enregistre = bots.registre?.bots.find((entree) => entree.id === botId);
     return enregistre?.nom ?? botId;
+  };
+  /**
+   * ⚠️ GARDE DE FOND : les NOMS des AUTRES bots de l'instance, capturés AU
+   * DÉMARRAGE (le registre n'est jamais relu à chaque tour). Ils servent à
+   * SIGNALER (`personnalite.nom_autre_bot`) une personnalité qui cite un autre
+   * bot — avertissement, jamais blocage : citer un autre bot peut être légitime.
+   */
+  const autresBotsDuBot = (botId: string): string[] => {
+    const noms: string[] = [];
+    for (const entree of bots.registre?.bots ?? []) {
+      if (entree.id === botId) continue;
+      const nom = (entree.nom ?? "").trim();
+      if (nom !== "") noms.push(nom);
+    }
+    return noms;
   };
   logger.info("bots.capacites", {
     bot: botDuRun,
@@ -3098,8 +3124,175 @@ async function main(): Promise<void> {
       [cleAdaptateur(botDuRun, "discord"), discord],
     ]),
     creer: creerAdaptateurChat,
+    // ⚠️ Empreinte de connexion (URL + jeton) lue dès la CONSTRUCTION : sans elle,
+    // le premier rafraîchissement ne saurait pas qu'un bot a été déplacé vers un
+    // autre serveur entre-temps, et il resterait branché à l'ancien.
+    empreinte: (jeton) => empreinteConnexion(jeton.botId, jeton.plateforme),
     logger,
   });
+
+  // ── LOT 48 : LES PLATEFORMES S'APPLIQUENT (VRAIMENT) À CHAUD ──────────────
+  /**
+   * ⚠️ BUG CORRIGÉ (signalement du 2026-11-14 : « j'ai activé Mattermost sur un bot,
+   * il apparaît absent et aucun canal n'apparaît ») : les adaptateurs n'étaient
+   * construits qu'UNE fois, au démarrage. `chat.<plateforme>.enabled` et
+   * `chat.mattermost.url` portent pourtant `apply: "hot"` — l'interface affichait
+   * donc « à chaud » alors que rien ne se connectait avant un redémarrage.
+   *
+   * Ce port est LA couture unique : les routes de configuration et de secrets
+   * (`PUT /api/config`, `PUT /api/bots/<id>/config`, `POST /api/secrets`) l'appellent
+   * APRÈS l'écriture. Il crée l'adaptateur, ouvre la connexion, ferme ce qui vient
+   * d'être éteint, et RECONNECTE quand l'URL ou le jeton change.
+   */
+  /** Miroir de discussion d'un bot (celui du run est construit plus haut). */
+  const miroirDuBot = (botId: string) =>
+    botId === botDuRun ? chatMirror : canauxBots?.miroirDe(botId);
+
+  /**
+   * Empreinte de connexion d'une paire : `URL` + `JETON` (+ serveur Discord).
+   * ⚠️ Elle est COMPARÉE, jamais journalisée ni renvoyée : elle contient le jeton.
+   */
+  function empreinteConnexion(botId: string, plateforme: PlateformeChat): string {
+    const configBot = configsBots.get(botId) ?? config;
+    const miroir = miroirDuBot(botId) ?? chatMirror;
+    if (plateforme === "mattermost") {
+      const cablage = cablageMattermostBot({
+        botId,
+        urlDuBot: () => configBot.getString("chat.mattermost.url"),
+        miroir,
+        lookup: (nom) => secretStore?.lookup(nom),
+      });
+      return `mattermost\n${cablage.url()}\n${cablage.jeton() ?? ""}`;
+    }
+    return (
+      `discord\n${configBot.getString("chat.discord.guildId")}\n` +
+      `${jetonChatDeBot((nom) => secretStore?.lookup(nom), botId, "discord") ?? ""}`
+    );
+  }
+
+  /**
+   * Réconcilie les plateformes d'UN bot avec sa configuration FRAÎCHE.
+   *
+   * ⚠️ RELECTURE AVANT LECTURE : pour un bot AUTRE que celui de la pile, l'overlay
+   * vient d'être écrit par `updatePour` et le cache de SON runtime ne l'a pas vu
+   * (« un seul rédacteur par overlay »). Sans `reload()`, on relirait l'ancien
+   * interrupteur et l'ancienne URL.
+   */
+  const rafraichirPlateformes = async (botId: string): Promise<BilanPlateformesAChaud> => {
+    const miroir = miroirDuBot(botId);
+    if (miroir === undefined) {
+      logger.warn("chat.plateformes.bot_inconnu", { bot: botId });
+      return { bot: botId, connectes: [], reconnectes: [], deconnectes: [], echecs: [] };
+    }
+    configsBots.get(botId)?.reload();
+    // ⚠️ MÊME règle qu'au démarrage : interrupteur PAR (bot, plateforme) + jeton au
+    // coffre. Une plateforme éteinte n'a aucun jeton résolu, donc aucun adaptateur.
+    const resolution = resoudreJetonsChatBots({
+      bots: [botId],
+      lookup: (nom) => secretStore?.lookup(nom),
+      active: (id, plateforme) =>
+        (configsBots.get(id) ?? config).getString(`chat.${plateforme}.enabled`) === "on",
+      logger,
+    });
+    const jetons = resolution.jetons.get(botId) ?? new Map<PlateformeChat, JetonChat>();
+    const bilan = await adaptateursChat.rafraichirBot({
+      botId,
+      jetons,
+      empreinte: (plateforme) => empreinteConnexion(botId, plateforme),
+    });
+    return { bot: botId, ...bilan };
+  };
+
+  /** État LISIBLE des plateformes d'un bot — ce que l'interface peut afficher. */
+  const etatPlateformes = (
+    botId: string,
+  ): Record<PlateformeChat, EtatPlateformeAChaud> | null => {
+    if (botId !== botDuRun && configsBots.get(botId) === undefined) return null;
+    const configBot = configsBots.get(botId) ?? config;
+    const sortie = {} as Record<PlateformeChat, EtatPlateformeAChaud>;
+    for (const plateforme of PLATEFORMES_CHAT) {
+      const adaptateur = adaptateursChat.pour(botId, plateforme);
+      const active = configBot.getString(`chat.${plateforme}.enabled`) === "on";
+      const jetonEnregistre = nomsSecretsChat(botId, plateforme).some(
+        (nom) => secretStore?.has(nom) === true,
+      );
+      const statut = adaptateur?.status();
+      const synchro = adaptateur?.syncStatus();
+      // ⚠️ Nombre de canaux DU BOT DEMANDÉ (son miroir), jamais une valeur globale :
+      // zéro canal avec une connexion « on » est un FAIT à montrer, pas un défaut.
+      const miroir = miroirDuBot(botId);
+      const canauxBot =
+        miroir === undefined
+          ? 0
+          : Object.values(miroir.records()).filter((record) => record.platform === plateforme)
+              .length;
+      sortie[plateforme] = {
+        active,
+        jetonEnregistre,
+        adaptateur: adaptateur !== undefined,
+        etat: statut?.etat ?? "off",
+        ...(statut?.raison !== undefined ? { raison: statut.raison } : {}),
+        canaux: canauxBot,
+        ...(synchro?.backfill.borneAtteinte === true ? { historiqueAnterieur: true } : {}),
+        ...(synchro?.dernierContact !== undefined
+          ? { dernierContact: synchro.dernierContact }
+          : {}),
+      };
+    }
+    return sortie;
+  };
+
+  /** Resynchronise la DÉCOUVERTE des canaux (`/users/me/teams` → canaux). */
+  const resynchroniserPlateformes = async (
+    botId: string,
+  ): Promise<{ canaux: number } | null> => {
+    let trouve = false;
+    for (const plateforme of PLATEFORMES_CHAT) {
+      const adaptateur = adaptateursChat.pour(botId, plateforme);
+      // Toutes les plateformes ne savent pas ré-énumérer leurs canaux : on ne
+      // prétend rien à leur place (Discord n'expose pas encore ce point d'entrée).
+      if (adaptateur === undefined) continue;
+      if (typeof (adaptateur as { resynchroniser?: unknown }).resynchroniser !== "function") {
+        continue;
+      }
+      trouve = true;
+      try {
+        await (adaptateur as { resynchroniser(): Promise<void> }).resynchroniser();
+      } catch (error) {
+        logger.warn("chat.plateformes.resynchronisation_failed", {
+          bot: botId,
+          plateforme,
+          error: messageOf(error),
+        });
+      }
+    }
+    if (!trouve) return null;
+    const miroir = miroirDuBot(botId);
+    const canaux =
+      miroir === undefined ? 0 : Object.keys(miroir.records()).length;
+    logger.info("chat.plateformes.resynchronisees", { bot: botId, canaux });
+    return { canaux };
+  };
+
+  const plateformesAChaud: PlateformesAChaudPort = {
+    rafraichir: rafraichirPlateformes,
+    etat: etatPlateformes,
+    resynchroniser: resynchroniserPlateformes,
+    /**
+     * Un jeton vient d'être écrit ou supprimé : on réconcilie le bot qu'il désigne.
+     * ⚠️ Les anciens noms d'instance (`YUKI_CHAT_MATTERMOST`) ne désignent personne :
+     * on réconcilie alors le bot de la PILE, seul propriétaire possible de ce nom.
+     */
+    rafraichirPourSecret: async (nom: string) => {
+      const cible = botSecretDeChat(nom);
+      const botId = cible?.botId ?? botDuRun;
+      if (botId !== botDuRun && configsBots.get(botId) === undefined) {
+        logger.warn("chat.plateformes.bot_inconnu", { bot: botId, secret: nom });
+        return null;
+      }
+      return rafraichirPlateformes(botId);
+    },
+  };
 
   // Service de DISCUSSION : lit les INTERRUPTEURS (`chat.<plateforme>.enabled`,
   // apply hot) et sert le miroir en LECTURE seule. ⚠️ Plus aucun filtrage par
@@ -3256,12 +3449,22 @@ async function main(): Promise<void> {
         // ⚠️ Le prompt LOURD du BOT (son overlay), jamais celui d'un autre —
         // COMPOSÉ : nom du bot (registre) + son texte + la liste d'outils générée
         // depuis `outilsLourd`. Point d'assemblage unique : `src/llm/prompt-systeme.ts`.
-        systemPrompt: composerPromptSysteme({
-          nom: nomDuBot(botId),
-          prompt: (configsBots.get(botId) ?? config).getString("prompts.heavy"),
-          outils: outilsLourd,
-          role: "heavy",
-        }),
+        // ⚠️ UNE FONCTION : le prompt est RECOMPOSÉ À CHAQUE JOB (même mécanisme que
+        // `modelReference`/`thinking`). Éditer « Prompt système — lourd » prend donc
+        // effet au job SUIVANT, sans redémarrage : un worker construit au premier
+        // `delegate` ne peut plus geler le texte pour toute la vie du gateway.
+        systemPrompt: () => {
+          const configBot = configsBots.get(botId) ?? config;
+          // ⚠️ RELECTURE DISQUE : le cache d'un `ConfigRuntime` de bot NON-pile est
+          // figé au démarrage (l'overlay est écrit par la route d'un autre bot).
+          configBot.reload();
+          return composerPromptSysteme({
+            nom: nomDuBot(botId),
+            prompt: configBot.getString("prompts.heavy"),
+            outils: outilsLourd,
+            role: "heavy",
+          });
+        },
         modelReference: liveHeavyReference,
         thinking: liveHeavyThinking,
         // ⚠️ ALLOWLIST calculée PLUS HAUT (`outilsLourd`) : elle sert À LA FOIS
@@ -4021,6 +4224,32 @@ async function main(): Promise<void> {
       }),
       isTtsEnabled(config),
     );
+    /**
+     * ⚠️ PROMPT DU TOUR du bot de la pile — LA correction du bug du 2026-11-14.
+     *
+     * Même assemblage que `promptSystemePile`, mais RELU À CHAQUE TOUR par une
+     * extension : `prompts.personnalite`, `prompts.light`, le fichier de
+     * personnalité et les règles sont donc effectifs au MESSAGE SUIVANT, sans
+     * redémarrage. Avant, le `systemPrompt` était figé au démarrage : `grolaf`
+     * avait sa personnalité saisie et répondait « je suis là — Yuki ».
+     *
+     * ⚠️ FIGÉS VOLONTAIREMENT : le NOM (registre), la liste d'outils (politique du
+     * host) et la consigne de voix (`tts.enabled`, réglage `apply: restart`).
+     */
+    const portPromptDuTourPile = creerPortPromptDuTour({
+      botId: botDuRun,
+      nom: nomDuBot(botDuRun),
+      config,
+      fichiersPersonnalite: candidatsPersonnalite(
+        { portee: "bot", chemin: outilsPile.chemins.personalityPath },
+        { portee: "instance", chemin: personalityStore.filePath, store: personalityStore },
+      ),
+      outils: outilsLegerPile,
+      voix: isTtsEnabled(config),
+      valeurInitiale: promptSystemePile,
+      autresBots: autresBotsDuBot(botDuRun),
+      logger,
+    });
     // ⚠️ LOT 36 (L3-d) — LES `PiHost` PAR BOT.
     // Les options du host du BOT DU RUN sont désormais un OBJET NOMMÉ, construit
     // ICI à l'IDENTIQUE : il est passé tel quel à `createPiHost` (identité des
@@ -4035,6 +4264,10 @@ async function main(): Promise<void> {
       home: env.piHome,
       sessionsDir: env.piSessionsDir,
       systemPrompt: promptSystemePile,
+      // ⚠️ PROMPT DU TOUR : la composition est RELUE à chaque tour (identité,
+      // personnalité, prompt léger, outils, voix). Le host n'est donc plus figé :
+      // éditer la personnalité ou un prompt prend effet au message suivant.
+      promptDuTour: portPromptDuTourPile,
       settingsSeedPath: env.piSettingsSeedPath,
       modelsConfig: buildModelsConfigFrom(effective),
       model: lightRef,
@@ -4193,6 +4426,9 @@ async function main(): Promise<void> {
         return {
           botId,
           env: pile.env,
+          // ⚠️ NOMS des AUTRES bots (capturés au démarrage) : sert à SIGNALER une
+          // personnalité qui cite un autre bot, jamais à la bloquer.
+          autresBots: autresBotsDuBot(botId),
           // ⚠️ NOM du bot : c'est l'identité injectée dans SON prompt
           // (`<identite>`) — jamais un nom en dur, jamais celui d'un autre bot.
           nom: nomDuBot(botId),
@@ -5118,7 +5354,9 @@ async function main(): Promise<void> {
       voices: voicesDeps,
       tts: ttsDeps,
       ...(agentsDeps ? { agents: agentsDeps } : {}),
-      ...(secretStore ? { secrets: { store: secretStore, logger } } : {}),
+      ...(secretStore
+        ? { secrets: { store: secretStore, logger, plateformes: plateformesAChaud } }
+        : {}),
       ...(pushDeps ? { push: pushDeps } : {}),
       admin: {
         logger,

@@ -151,3 +151,9 @@ export {
   type CompositionPromptSysteme,
   type RolePromptSysteme,
 } from "./prompt-systeme.js";
+
+export {
+  promptDuTour,
+  type PortPromptDuTour,
+  type SourcesPromptDuTour,
+} from "./prompt-du-tour.js";

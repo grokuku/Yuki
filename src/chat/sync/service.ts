@@ -52,6 +52,14 @@ export const BACKFILL_MAX_MESSAGES = 1_000;
 export const DEFAULT_POLL_INTERVAL_MS = 60_000;
 
 /**
+ * Passe de rattrapage sur combien avant de RÉ-ÉNUMÉRER les canaux.
+ * ⚠️ 5 passes ≈ 5 minutes : c'est le délai maximal avant qu'un canal ajouté
+ * (sans événement temps réel reçu) n'apparaisse. Le coût est de deux appels
+ * (`/users/me/teams` puis les canaux par équipe) — pas un par canal.
+ */
+export const DEFAULT_RESCAN_EVERY_POLLS = 5;
+
+/**
  * PROVENANCE d'une livraison.
  *
  * ⚠️ `historique` n'est pas décoratif : c'est la seule chose qui distingue une mention
@@ -70,6 +78,14 @@ export interface ChatSyncOptions {
   now?: () => number;
   /** Période du rattrapage REST. */
   pollIntervalMs?: number;
+  /**
+   * ⚠️ RÉ-ÉNUMÉRATION PÉRIODIQUE DES CANAUX (en nombre de passes de rattrapage) :
+   * un canal où le bot vient d'être ajouté doit apparaître même si l'événement
+   * temps réel a été manqué (reconnexion, redémarrage du serveur). Défaut 5 passes
+   * (≈ 5 min). `0` désactive — le temps réel et la resynchronisation explicite
+   * restent les déclencheurs.
+   */
+  rescanEveryPolls?: number;
   /** Fenêtre du backfill initial (jours, défaut 14). */
   backfillDays?: number;
   /** Borne dure de messages par canal (défaut 1 000). */
@@ -121,6 +137,8 @@ export class ChatSyncService {
   private readonly store: ChatMirrorStore;
   private readonly now: () => number;
   private readonly pollIntervalMs: number;
+  private readonly rescanEveryPolls: number;
+  private passes = 0;
   private readonly backfillDays: number;
   private readonly backfillMaxMessages: number;
   private readonly schedule: (callback: () => void, delayMs: number) => unknown;
@@ -138,6 +156,7 @@ export class ChatSyncService {
     this.store = options.store;
     this.now = options.now ?? (() => Date.now());
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.rescanEveryPolls = options.rescanEveryPolls ?? DEFAULT_RESCAN_EVERY_POLLS;
     this.backfillDays = options.backfillDays ?? BACKFILL_DAYS;
     this.backfillMaxMessages = options.backfillMaxMessages ?? BACKFILL_MAX_MESSAGES;
     this.schedule =
@@ -320,12 +339,36 @@ export class ChatSyncService {
       if (!this.rattrapageActif) return;
       void this.pollOnce()
         .catch((error: unknown) => this.fail(error))
+        .then(() => this.redecouvrirSiNecessaire())
         .finally(() => {
           if (!this.rattrapageActif) return;
           this.timer = this.schedule(tick, this.pollIntervalMs);
         });
     };
     this.timer = this.schedule(tick, this.pollIntervalMs);
+  }
+
+  /**
+   * Ré-énumère les canaux toutes les `rescanEveryPolls` passes.
+   *
+   * ⚠️ FILE DE SÉCURITÉ DE LA DÉCOUVERTE : le temps réel signale une adhésion
+   * (`added_to_channel`), mais un événement manqué pendant une coupure laisserait
+   * le canal absent pour toujours. `backfillAll` recrée alors les conversations
+   * manquantes (les autres sont SAUTÉES : coût quasi nul).
+   */
+  private async redecouvrirSiNecessaire(): Promise<void> {
+    if (this.rescanEveryPolls <= 0) return;
+    this.passes += 1;
+    if (this.passes % this.rescanEveryPolls !== 0) return;
+    try {
+      await this.backfillAll();
+      this.options.logger?.info("chat.sync.canaux_redecouverts", {
+        canaux: Object.keys(this.store.records()).length,
+      });
+    } catch (error) {
+      // Une découverte en échec n'arrête pas le rattrapage : il retentera.
+      this.fail(error, { etape: "decouverte" });
+    }
   }
 
   /**

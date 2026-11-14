@@ -15,6 +15,7 @@
 
 import type { IncomingHttpHeaders } from "node:http";
 
+import type { PlateformesAChaudPort } from "../../chat/plateformes-a-chaud.js";
 import { requireWriteGuards } from "./config.js";
 import type { Logger } from "../../observability/logger.js";
 import type { SecretDirectoryPort, SecretEntryView } from "../../secrets/directory.js";
@@ -41,6 +42,13 @@ export interface SecretMutatorPort extends SecretDirectoryPort {
 export interface SecretsApiDeps {
   store: SecretMutatorPort;
   logger: Logger;
+  /**
+   * ⚠️ LOT 48 — RECONNEXION APRÈS UN JETON : coller un jeton de discussion doit
+   * ouvrir la connexion TOUT DE SUITE. Sans ce port, l'interface annonçait « jeton
+   * enregistré » alors que le bot restait absent jusqu'au redémarrage.
+   * Absent ⇒ aucune reconnexion (et le journal le dit).
+   */
+  plateformes?: PlateformesAChaudPort;
 }
 
 export interface SecretsHttpResponse {
@@ -107,7 +115,7 @@ function handleGet(deps: SecretsApiDeps): SecretsHttpResponse {
   }
 }
 
-function handlePost(input: SecretsRequestInput): SecretsHttpResponse {
+async function handlePost(input: SecretsRequestInput): Promise<SecretsHttpResponse> {
   const guard = requireWriteGuards(input.headers);
   if (guard) return json(guard.status, guard.body);
 
@@ -139,13 +147,13 @@ function handlePost(input: SecretsRequestInput): SecretsHttpResponse {
     const view = input.deps.store.set(name, value, label);
     // ⚠️ Journal SANS la valeur : uniquement le nom.
     input.deps.logger.info("secrets.api.saved", { name });
-    return json(200, { entry: view });
+    return json(200, { entry: view, plateformesApplication: await appliquerJeton(input, name) });
   } catch (error) {
     return vaultErrorResponse(error) ?? json(500, { error: "internal_error" });
   }
 }
 
-function handleDelete(input: SecretsRequestInput): SecretsHttpResponse {
+async function handleDelete(input: SecretsRequestInput): Promise<SecretsHttpResponse> {
   const guard = requireWriteGuards(input.headers);
   if (guard) return json(guard.status, guard.body);
   const name = decodeURIComponent(input.path.slice(SECRETS_PREFIX.length));
@@ -158,22 +166,53 @@ function handleDelete(input: SecretsRequestInput): SecretsHttpResponse {
     if (!deleted) {
       return json(404, { error: "not_found", code: "not_found", message: `Secret « ${name} » inconnu.` });
     }
-    return json(200, { deleted: true, name });
+    // ⚠️ Jeton EFFACÉ ⇒ `disconnect()` : le bot ne doit pas rester connecté avec un
+    // secret qui n'existe plus (et l'interface le voit tout de suite).
+    return json(200, { deleted: true, name, plateformesApplication: await appliquerJeton(input, name) });
   } catch (error) {
     return vaultErrorResponse(error) ?? json(500, { error: "internal_error" });
   }
 }
 
+/**
+ * ⚠️ RÉCONCILIER LE BOT PROPRIÉTAIRE D'UN JETON DE DISCUSSION, après écriture.
+ * Réservé aux noms de discussion (`YUKI_CHAT_…`) : un jeton d'API quelconque ne
+ * reconnecte évidemment aucune plateforme de chat. Ne lève jamais : le secret est
+ * déjà enregistré, un échec de connexion est un RÉSULTAT.
+ */
+async function appliquerJeton(
+  input: SecretsRequestInput,
+  name: string,
+): Promise<unknown> {
+  if (input.deps.plateformes === undefined) return null;
+  try {
+    return await input.deps.plateformes.rafraichirPourSecret(name);
+  } catch (error) {
+    input.deps.logger.error("secrets.api.reconnexion_impossible", {
+      name,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      reconnexionIndisponible:
+        "Le jeton est enregistré, mais la reconnexion à chaud a échoué : un " +
+        "redémarrage est nécessaire. " +
+        (error instanceof Error ? error.message : String(error)),
+    };
+  }
+}
+
 /** Traite une requête de l'API des secrets. Ne lève jamais. */
-export function handleSecretsRequest(input: SecretsRequestInput): SecretsHttpResponse {
+export async function handleSecretsRequest(
+  input: SecretsRequestInput,
+): Promise<SecretsHttpResponse> {
   const { method, path } = input;
   if (path === SECRETS_PATH) {
     if (method === "GET" || method === "HEAD") return handleGet(input.deps);
-    if (method === "POST") return handlePost(input);
-    if (method === "PUT") return handlePost(input);
+    if (method === "POST") return await handlePost(input);
+    if (method === "PUT") return await handlePost(input);
     return json(405, { error: "method_not_allowed", method });
   }
   // Route de suppression : `/api/secrets/<nom>`.
-  if (method === "DELETE") return handleDelete(input);
+  if (method === "DELETE") return await handleDelete(input);
   return json(405, { error: "method_not_allowed", method });
 }

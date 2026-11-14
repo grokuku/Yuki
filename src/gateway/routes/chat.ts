@@ -49,6 +49,7 @@ import type {
 import type { ChatMirrorStats } from "../../chat/mirror/store.js";
 import { CHAT_QUOTE_AUTHORS, CHAT_REPLY_MODES, CHAT_REPLY_STYLES } from "../../chat/types.js";
 import type { ChatMode, RemotePlatform } from "../../chat/types.js";
+import type { PlateformesAChaudPort } from "../../chat/plateformes-a-chaud.js";
 import { requireWriteGuards } from "./config.js";
 
 /** Canal suivi, tel que la page `/config` doit le montrer. */
@@ -227,6 +228,15 @@ export interface ChatApiDeps {
    * (`bot_inconnu`) au lieu de retomber sur un autre bot.
    */
   reglagesCanalDeBot?: (botId: string) => ChatCanalReglages | undefined;
+  /**
+   * ⚠️ LOT 48 — CHANGER L'URL OU LE JETON DOIT RECONNECTER. Ces routes d'instance
+   * écrivent l'ancien paramètre (URL du miroir) et le secret : sans réconciliation,
+   * le bot restait branché sur l'ANCIEN serveur (ou restait absent) jusqu'au
+   * redémarrage.
+   */
+  plateformes?: PlateformesAChaudPort;
+  /** Bot de la PILE : cible des routes d'instance (`/api/chat/**`). */
+  botDuRun?: string;
 }
 
 /**
@@ -291,6 +301,43 @@ export interface ChatStatusResponse extends ChatStatusView {
   mattermost?: ChatMattermostView;
   /** État Discord (absent quand la plateforme n'est pas câblée). */
   discord?: ChatDiscordView;
+}
+
+/**
+ * ⚠️ RÉCONCILIER APRÈS UNE ÉCRITURE D'INSTANCE (URL ou jeton).
+ *
+ * Le bot visé est celui de la PILE : ces routes écrivent SON ancien paramètre
+ * (`chat-mirror.json` → `baseUrl`) et SON secret. On rend le bilan pour que
+ * l'interface puisse DIRE pourquoi la connexion a échoué (jeton refusé, URL
+ * injoignable) — jamais un succès muet suivi d'un bot absent.
+ */
+async function reconcilier(
+  deps: ChatApiDeps,
+  platform: RemotePlatform,
+): Promise<unknown> {
+  if (deps.plateformes === undefined) return null;
+  const botId = deps.botDuRun ?? "";
+  if (botId === "") return null;
+  try {
+    const bilan = await deps.plateformes.rafraichir(botId);
+    if (bilan.echecs.length > 0) {
+      deps.logger?.error("chat.platformes.echecs", {
+        plateforme: platform,
+        echecs: bilan.echecs.map((echec) => `${echec.cle} : ${echec.error}`).join(" | "),
+      });
+    }
+    return bilan;
+  } catch (error) {
+    deps.logger?.error("chat.platformes.rafraichissement_impossible", {
+      plateforme: platform,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      reconnexionIndisponible:
+        "La reconnexion à chaud a échoué : un redémarrage est nécessaire. " +
+        (error instanceof Error ? error.message : String(error)),
+    };
+  }
 }
 
 /** Port d'une plateforme, ou `undefined` si elle n'est pas câblée ici. */
@@ -369,7 +416,14 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
         if (invalid !== null) return invalid;
       }
       mattermost.saveBaseUrl(raw);
-      return json(200, { ok: true, mattermost: mattermost.view() });
+      // ⚠️ URL CHANGÉE ⇒ RECONNEXION IMMÉDIATE vers la nouvelle destination (sinon
+      // la connexion resterait établie avec l'ancien serveur — cas typique : deux
+      // bots, deux serveurs).
+      return json(200, {
+        ok: true,
+        mattermost: mattermost.view(),
+        plateformesApplication: await reconcilier(deps, "mattermost"),
+      });
     }
     const discord = port as ChatDiscordPort;
     if (body.guildId !== undefined && typeof body.guildId !== "string") {
@@ -420,7 +474,11 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
         });
       }
     }
-    return json(200, { ok: true, discord: discord.view() });
+    return json(200, {
+      ok: true,
+      discord: discord.view(),
+      plateformesApplication: await reconcilier(deps, "discord"),
+    });
   }
 
   const tokenMatch = /^\/api\/chat\/(mattermost|discord)\/jeton$/.exec(path);
@@ -448,7 +506,13 @@ export async function handleChatRequest(input: ChatRequestInput): Promise<ChatHt
     port.saveToken(token);
     // ⚠️ La réponse ne renvoie JAMAIS le jeton : il est enregistré, c'est tout. La page
     // affiche « jeton enregistré » et n'a plus aucun moyen de le relire.
-    return json(200, { ok: true, jetonEnregistre: true });
+    // ⚠️ RECONNEXION : un jeton changé doit rouvrir la connexion (l'ancienne est
+    // authentifiée avec l'ancien jeton, donc invalide si celui-ci a été révoqué).
+    return json(200, {
+      ok: true,
+      jetonEnregistre: true,
+      plateformesApplication: await reconcilier(deps, platform),
+    });
   }
 
   const connectMatch = /^\/api\/chat\/(mattermost|discord)\/connexion$/.exec(path);

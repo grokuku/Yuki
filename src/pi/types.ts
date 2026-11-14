@@ -27,6 +27,7 @@ import type { ConversationArchivePort } from "../memory/conversation-archive.js"
 import type { MemoryPort } from "../memory/types.js";
 import type { RulesPort } from "../rules/types.js";
 import type { PortConsignes } from "../consignes/index.js";
+import type { PortPromptDuTour } from "../llm/prompt-du-tour.js";
 import type { ReactionsPort } from "../reactions/types.js";
 import type {
   ComfyImageFinalPromptView,
@@ -101,6 +102,22 @@ export interface PiHostOptions {
   cwd: string;
   /** Contenu du prompt système généraliste (remplace celui du SDK). */
   systemPrompt: string;
+  /**
+   * PROMPT DU TOUR : identité, personnalité, prompt léger/lourd et liste
+   * d'outils RELUS À CHAQUE TOUR (`PortPromptDuTour`).
+   *
+   * ⚠️ Présent ⇒ une extension SDK est enregistrée EN PREMIER dans la chaîne :
+   * elle REMPLACE le prompt de base du tour par la composition fraîche. C'est ce
+   * qui fait qu'éditer une personnalité, un prompt ou les règles prend effet au
+   * MESSAGE SUIVANT, sans redémarrage (bug du 2026-11-14 : le prompt du host
+   * était figé, `grolaf` répondait « je suis là — Yuki »).
+   *
+   * `systemPrompt` reste la valeur de DÉPART et le secours : si la relecture
+   * échoue dès le premier tour, c'est elle qui est utilisée.
+   *
+   * Absent ⇒ comportement d'avant (prompt figé au démarrage ; host nu, tests).
+   */
+  promptDuTour?: PortPromptDuTour;
   /** Répertoire de stockage des sessions (JSONL). */
   sessionsDir?: string;
   /** Répertoire HOME inscriptible (replis du SDK via `os.homedir()`). */

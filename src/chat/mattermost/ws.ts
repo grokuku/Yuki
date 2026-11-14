@@ -56,6 +56,12 @@ export interface MattermostSocketOptions {
   token: () => string | undefined;
   /** Reçoit chaque événement de post RETENU (`posted`, `post_edited`, `post_deleted`). */
   onEvent: (event: MattermostPostEvent) => void;
+  /**
+   * ⚠️ Le BOT a rejoint un canal, ou un canal a été créé : sa liste de canaux a
+   * changé. Sans ce signal, un canal ajouté APRÈS la synchronisation initiale
+   * restait invisible jusqu'au redémarrage (cas exact signalé le 2026-11-14).
+   */
+  onMembership?: (kind: MattermostMembershipEvent) => void;
   /** Prévient d'un changement d'état (connexion perdue, reprise…). */
   onStateChange?: (status: MattermostSocketStatus) => void;
   logger?: MattermostSocketLogger;
@@ -91,6 +97,23 @@ export interface MattermostSocketStatus {
 }
 
 const POST_EVENTS = new Set(["posted", "post_edited", "post_deleted"]);
+
+/**
+ * Événements d'ADHÉSION retenus : ils changent la liste des canaux visibles.
+ * ⚠️ `added_to_channel` = le bot vient d'être ajouté (le cas de l'utilisateur) ;
+ * `channel_created` = un canal neuf dans une équipe dont il est membre ;
+ * `user_added_to_team` = il rejoint une équipe entière.
+ */
+export type MattermostMembershipEvent =
+  | "added_to_channel"
+  | "channel_created"
+  | "user_added_to_team";
+
+const MEMBERSHIP_EVENTS = new Set<string>([
+  "added_to_channel",
+  "channel_created",
+  "user_added_to_team",
+]);
 
 export class MattermostSocket {
   private readonly options: MattermostSocketOptions;
@@ -258,8 +281,22 @@ export class MattermostSocket {
       return;
     }
 
+    // 2 bis. Événements d'ADHÉSION : la liste des canaux a changé.
+    const nom = typeof frame.event === "string" ? frame.event : "";
+    if (MEMBERSHIP_EVENTS.has(nom)) {
+      try {
+        this.options.onMembership?.(nom as MattermostMembershipEvent);
+      } catch (error) {
+        // Un consommateur fautif ne doit pas tuer la connexion.
+        this.options.logger?.warn("chat.mattermost.ws.consumer_failed", {
+          error: messageOf(error),
+        });
+      }
+      return;
+    }
+
     // 3. Événements de POST.
-    const event = typeof frame.event === "string" ? frame.event : "";
+    const event = nom;
     if (!POST_EVENTS.has(event)) return;
     const post = postOfEventData(frame.data);
     if (!post) {

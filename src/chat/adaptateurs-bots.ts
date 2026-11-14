@@ -44,6 +44,31 @@ export function cleAdaptateur(botId: string, plateforme: PlateformeChat): string
   return `${botId}:${plateforme}`;
 }
 
+/** Entrée du registre : le jeton, l'adaptateur, et l'empreinte de connexion connue. */
+interface EntreeAdaptateur<T> {
+  readonly jeton: JetonChat;
+  readonly adaptateur: T;
+  /** Empreinte de la connexion (URL + jeton) — comparée, jamais journalisée. */
+  empreinte?: string;
+}
+
+/** Message d'une erreur, sans jamais exposer autre chose que son texte. */
+function messageDe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Empreinte demandée pour une plateforme, ou `undefined` si l'appelant n'en fournit pas. */
+function empreinteDe(
+  demande: DemandeRafraichissementBot,
+  plateforme: PlateformeChat,
+): string | undefined {
+  try {
+    return demande.empreinte?.(plateforme);
+  } catch {
+    return undefined;
+  }
+}
+
 export interface OptionsAdaptateursChatBots<T extends AdaptateurChatDemarrable> {
   /** Bot de la PILE : son adaptateur est celui d'avant (`existants`). */
   readonly botDuRun: string;
@@ -53,12 +78,47 @@ export interface OptionsAdaptateursChatBots<T extends AdaptateurChatDemarrable> 
   readonly existants?: ReadonlyMap<string, T>;
   /** Fabrique : appelée UNIQUEMENT pour une paire qui a un jeton. */
   readonly creer: (jeton: JetonChat) => T;
+  /**
+   * Empreinte de connexion d'une paire, lue à la CONSTRUCTION (jamais journalisée).
+   * ⚠️ Sans elle, le PREMIER rafraîchissement d'une paire préexistante ne saurait
+   * pas si son URL/jeton a changé depuis le démarrage — et une plateforme déplacée
+   * vers un autre serveur resterait connectée à l'ancien.
+   */
+  readonly empreinte?: (jeton: JetonChat) => string;
   readonly logger: AdaptateursChatLogger;
 }
 
 /** Bilan d'une connexion en masse. */
 export interface BilanConnexionsChat {
   readonly connectes: string[];
+  readonly echecs: { cle: string; error: string }[];
+}
+
+/**
+ * Ce qu'il faut pour RECONCILIER à chaud les paires d'UN bot avec sa config.
+ *
+ * ⚠️ C'EST LA RÉPONSE AU BUG « plateforme activée, bot absent » : jusqu'ici la
+ * seule création d'adaptateur avait lieu au démarrage (`main()`), donc allumer
+ * `chat.mattermost.enabled` ensuite n'ouvrait AUCUNE connexion.
+ */
+export interface DemandeRafraichissementBot {
+  /** Bot dont on réconcilie les plateformes. */
+  readonly botId: string;
+  /** Jetons résolus MAINTENANT pour ce bot (`resoudreJetonsChatBots`). */
+  readonly jetons: ReadonlyMap<PlateformeChat, JetonChat>;
+  /**
+   * Empreinte de connexion d'une plateforme (URL + jeton) : une valeur DIFFÉRENTE
+   * de celle enregistrée ⇒ la connexion est ROUVERTE (autre serveur, autre jeton).
+   * ⚠️ Comparée seulement, JAMAIS journalisée : elle contient le jeton.
+   */
+  readonly empreinte?: (plateforme: PlateformeChat) => string;
+}
+
+/** Bilan d'une réconciliation : ce qui a été ouvert, rouvert, fermé — et refusé. */
+export interface BilanRafraichissementChat {
+  readonly connectes: string[];
+  readonly reconnectes: string[];
+  readonly deconnectes: string[];
   readonly echecs: { cle: string; error: string }[];
 }
 
@@ -71,7 +131,7 @@ export interface BilanConnexionsChat {
  */
 export class AdaptateursChatBots<T extends AdaptateurChatDemarrable> {
   private readonly options: OptionsAdaptateursChatBots<T>;
-  private readonly map = new Map<string, { jeton: JetonChat; adaptateur: T }>();
+  private readonly map = new Map<string, EntreeAdaptateur<T>>();
   private readonly connectes = new Set<string>();
 
   constructor(options: OptionsAdaptateursChatBots<T>) {
@@ -81,16 +141,17 @@ export class AdaptateursChatBots<T extends AdaptateurChatDemarrable> {
       // `pour()` et `connecterBot()` se comportent comme pour les autres bots.
       const [botId, plateforme] = cle.split(":");
       if (botId === undefined || plateforme === undefined) continue;
-      this.map.set(cle, {
-        jeton: { botId, plateforme: plateforme as PlateformeChat, nom: "" },
-        adaptateur,
-      });
+      this.enregistrer(cle, {
+        botId,
+        plateforme: plateforme as PlateformeChat,
+        nom: "",
+      }, adaptateur);
     }
     for (const [botId, parPlateforme] of options.resolution.jetons) {
       for (const [plateforme, jeton] of parPlateforme) {
         const cle = cleAdaptateur(botId, plateforme);
         if (this.map.has(cle)) continue;
-        this.map.set(cle, { jeton, adaptateur: options.creer(jeton) });
+        this.enregistrer(cle, jeton, options.creer(jeton));
       }
     }
     options.logger.info("chat.adaptateurs.bots", {
@@ -103,6 +164,19 @@ export class AdaptateursChatBots<T extends AdaptateurChatDemarrable> {
   /** Adaptateur d'un bot pour une plateforme, ou `undefined`. */
   pour(botId: string, plateforme: PlateformeChat): T | undefined {
     return this.map.get(cleAdaptateur(botId, plateforme))?.adaptateur;
+  }
+
+  /** Enregistre une paire en LISANT son empreinte à la construction (voir `empreinte`). */
+  private enregistrer(cle: string, jeton: JetonChat, adaptateur: T): void {
+    let empreinte: string | undefined;
+    try {
+      empreinte = this.options.empreinte?.(jeton);
+    } catch {
+      // Une empreinte indisponible n'empêche aucune connexion : elle rend
+      // seulement la comparaison impossible pour cette paire.
+      empreinte = undefined;
+    }
+    this.map.set(cle, { jeton, adaptateur, ...(empreinte !== undefined ? { empreinte } : {}) });
   }
 
   /** Paires (bot, plateforme) qui ont un adaptateur. */
@@ -192,6 +266,125 @@ export class AdaptateursChatBots<T extends AdaptateurChatDemarrable> {
     }
     if (fait) this.options.logger.info("chat.adaptateurs.deconnectes", { bot: botId });
     return fait;
+  }
+
+  /**
+   * RÉCONCILIE À CHAUD les plateformes d'UN bot avec une résolution FRAÎCHE.
+   *
+   * Trois cas, et trois seulement :
+   *  1. une paire DEMANDÉE qui n'existait pas ⇒ l'adaptateur est CRÉÉ et CONNECTÉ
+   *     (c'est « j'active Mattermost et le bot se connecte, sans redémarrage ») ;
+   *  2. une paire connue dont l'EMPREINTE a changé (URL ou jeton) ⇒ l'ancienne
+   *     connexion est FERMÉE puis rouverte : deux bots, deux serveurs — un bot
+   *     déplacé ne reste jamais branché à l'ancien ;
+   *  3. une paire connue qui n'est PLUS demandée (interrupteur éteint, jeton
+   *     effacé) ⇒ `disconnect()` puis oubli de l'adaptateur.
+   *
+   * ⚠️ Aucune exception ne remonte : chaque paire a son échec nommé (journal +
+   * bilan), pour que l'interface puisse DIRE pourquoi le bot est absent.
+   * ⚠️ Le bot de la PILE est traité comme les autres : allumer ou éteindre sa
+   * plateforme depuis l'interface est exactement le même geste.
+   */
+  async rafraichirBot(demande: DemandeRafraichissementBot): Promise<BilanRafraichissementChat> {
+    const { botId } = demande;
+    const connectes: string[] = [];
+    const reconnectes: string[] = [];
+    const deconnectes: string[] = [];
+    const echecs: { cle: string; error: string }[] = [];
+
+    // ① ÉTEINDRE ce que la résolution fraîche ne contient plus.
+    for (const [cle, entree] of [...this.map]) {
+      if (entree.jeton.botId !== botId) continue;
+      if (demande.jetons.has(entree.jeton.plateforme)) continue;
+      if (this.connectes.has(cle)) {
+        try {
+          await entree.adaptateur.disconnect();
+        } catch (error) {
+          echecs.push({ cle, error: messageDe(error) });
+          this.options.logger.warn("chat.adaptateur.disconnect_failed", {
+            paire: cle,
+            error: messageDe(error),
+          });
+        }
+        this.connectes.delete(cle);
+        deconnectes.push(cle);
+      }
+      this.map.delete(cle);
+      this.options.logger.info("chat.adaptateur.eteint", { paire: cle });
+    }
+
+    // ② ALLUMER ou RECONNECTER ce qui est demandé.
+    for (const [plateforme, jeton] of demande.jetons) {
+      const cle = cleAdaptateur(botId, plateforme);
+      const voulue = empreinteDe(demande, plateforme);
+      const connue = this.map.get(cle);
+
+      if (connue === undefined) {
+        let adaptateur: T;
+        try {
+          adaptateur = this.options.creer(jeton);
+        } catch (error) {
+          const message = messageDe(error);
+          echecs.push({ cle, error: message });
+          this.options.logger.warn("chat.adaptateur.creation_failed", { paire: cle, error: message });
+          continue;
+        }
+        this.map.set(cle, { jeton, adaptateur, ...(voulue !== undefined ? { empreinte: voulue } : {}) });
+        try {
+          await adaptateur.connect();
+          this.connectes.add(cle);
+          connectes.push(cle);
+          this.options.logger.info("chat.adaptateur.cree", { paire: cle });
+        } catch (error) {
+          const message = messageDe(error);
+          echecs.push({ cle, error: message });
+          this.options.logger.warn("chat.adaptateur.connect_failed", { paire: cle, error: message });
+        }
+        continue;
+      }
+
+      // ② bis La connexion a-t-elle changé de DESTINATION (URL) ou de JETON ?
+      const deplacee =
+        voulue !== undefined && connue.empreinte !== undefined && connue.empreinte !== voulue;
+      if (voulue !== undefined) connue.empreinte = voulue;
+      if (deplacee) {
+        try {
+          if (this.connectes.has(cle)) await connue.adaptateur.disconnect();
+          await connue.adaptateur.connect();
+          this.connectes.add(cle);
+          reconnectes.push(cle);
+          this.options.logger.info("chat.adaptateur.reconnecte", { paire: cle });
+        } catch (error) {
+          const message = messageDe(error);
+          this.connectes.delete(cle);
+          echecs.push({ cle, error: message });
+          this.options.logger.warn("chat.adaptateur.connect_failed", { paire: cle, error: message });
+        }
+        continue;
+      }
+
+      // ② ter Paire inchangée mais DÉCONNECTÉE (échec précédent) : on retente.
+      if (this.connectes.has(cle)) continue;
+      try {
+        await connue.adaptateur.connect();
+        this.connectes.add(cle);
+        connectes.push(cle);
+        this.options.logger.info("chat.adaptateur.cree", { paire: cle });
+      } catch (error) {
+        const message = messageDe(error);
+        echecs.push({ cle, error: message });
+        this.options.logger.warn("chat.adaptateur.connect_failed", { paire: cle, error: message });
+      }
+    }
+
+    this.options.logger.info("chat.adaptateurs.rafraichis", {
+      bot: botId,
+      connectes: connectes.join(","),
+      reconnectes: reconnectes.join(","),
+      deconnectes: deconnectes.join(","),
+      echecs: echecs.length,
+    });
+    return { connectes, reconnectes, deconnectes, echecs };
   }
 
   /**
