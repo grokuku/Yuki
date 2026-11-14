@@ -26,6 +26,7 @@ import type { HeritagePort } from "../memory/heritage.js";
 import type { ConversationArchivePort } from "../memory/conversation-archive.js";
 import type { MemoryPort } from "../memory/types.js";
 import type { RulesPort } from "../rules/types.js";
+import type { PortConsignes } from "../consignes/index.js";
 import type { ReactionsPort } from "../reactions/types.js";
 import type {
   ComfyImageFinalPromptView,
@@ -312,6 +313,19 @@ export interface PiHostOptions {
    * (défaut d'amorçage seulement, voir `src/bots/personnalite-bot.ts`).
    */
   rules?: RulesPort;
+  /**
+   * CONSIGNES DURABLES du bot (fichier `consignes.md` : deux listes, consignes
+   * impératives et faits déclaratifs). Présent ⇒ (a) une extension SDK est
+   * enregistrée : les blocs `<consignes>` et `<faits>` sont INSÉRÉS à chaque
+   * tour APRÈS la personnalité et AVANT le prompt système (`<regles>` reste en
+   * dernier), relus à chaud ; et (b) les quatre outils (`memoriser_consigne`,
+   * `ajouter_fait`, `lister_consignes`, `oublier_consigne`) sont exposés.
+   * Absent ⇒ ni blocs ni outils (host nu, tests).
+   *
+   * ⚠️ Ce n'est PAS `memory` : la mémoire est RECHERCHÉE (rappel pertinent), les
+   * consignes et les faits sont TOUJOURS injectés.
+   */
+  consignes?: PortConsignes;
   /**
    * Lot 12 : mémoire durable. Présent ⇒ une extension SDK est enregistrée sur la
    * session légère (rappel borné avant tour, écriture automatique en fin de tour

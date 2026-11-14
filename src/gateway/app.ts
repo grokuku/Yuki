@@ -42,6 +42,11 @@ import {
   type RulesApiDeps,
 } from "./routes/rules.js";
 import {
+  handleConsignesRequest,
+  isConsignesPath,
+  type ConsignesApiDeps,
+} from "./routes/consignes.js";
+import {
   handleMemoryRequest,
   isMemoryPath,
   type MemoryApiDeps,
@@ -166,6 +171,12 @@ export interface AppContext {
    * uniquement (réservée à l'utilisateur ; le modèle ne peut pas les écrire).
    */
   rules?: RulesApiDeps;
+  /**
+   * API des CONSIGNES DURABLES, PAR BOT (`/api/bots/<id>/consignes`). Absente ⇒
+   * ces routes → 404. ⚠️ Le fichier édité est celui du BOT demandé
+   * (`<state>/bots/<id>/consignes.md`) : un identifiant inconnu est un 404.
+   */
+  consignes?: ConsignesApiDeps;
   /** API d'administration de la mémoire. Absente ⇒ `/api/memory*` → 404. */
   memory?: MemoryApiDeps;
   /**
@@ -719,6 +730,7 @@ export function createApp(context: AppContext): RequestListener {
     secrets,
     personality,
     rules,
+    consignes,
     memory,
     heritage,
     captures,
@@ -731,6 +743,40 @@ export function createApp(context: AppContext): RequestListener {
     const path = normalizePath(req.url);
     const method = (req.method ?? "GET").toUpperCase();
     const headOnly = method === "HEAD";
+
+    // ⚠️ AVANT le bloc `/api/config` : `isConfigPath` réclame TOUT
+    // `/api/bots/**` (c'est l'API de configuration d'un bot). Les consignes
+    // durables sont un fichier PAR BOT servi par sa propre route : elles doivent
+    // donc être aiguillées d'abord, sinon elles tomberaient en 404 générique.
+    if (consignes && isConsignesPath(path)) {
+      void (async () => {
+        let body = "";
+        if (method === "PUT") body = await readBody(req).catch(() => "");
+        const response = handleConsignesRequest({
+          method,
+          path,
+          headers: req.headers,
+          body,
+          deps: consignes,
+        });
+        writeResponse(
+          res,
+          { status: response.status, body: response.body, headers: response.headers },
+          headOnly,
+        );
+      })().catch((error: unknown) => {
+        consignes.logger.error("consignes.request.failed", {
+          error: error instanceof Error ? error.message : String(error),
+          path,
+        });
+        if (!res.headersSent) {
+          writeResponse(res, { status: 500, body: { error: "internal_error" } }, headOnly);
+        } else {
+          res.end();
+        }
+      });
+      return;
+    }
 
     if (config && isConfigPath(path)) {
       void handleConfigHttp(req, res, path, method, headOnly, config).catch(

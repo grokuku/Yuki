@@ -215,26 +215,69 @@ export const GROUPS = [
     ],
   },
   {
-    id: "prompts",
+    id: "personnalite",
     // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
-    tabs: { instance: "modeles", bot: "personnalite" },
-    // ⚠️ ENCART DE RENVOI : une clé `mixte` a une valeur COMMUNE (ici) et une
-    // surcharge PAR BOT (page Bot · Personnalité). Le dire évite de croire que
-    // régler un prompt ici écrase la surcharge d'un bot.
+    // ⚠️ DÉCISION UTILISATEUR (2026-11-14) : la personnalité (ce que l'utilisateur
+    // DEMANDE) vit dans l'onglet « Personnalité » d'un bot ; la valeur COMMUNE
+    // (personnalité par défaut de l'instance) est dans « Prompts » de `/config`.
+    tabs: { instance: "prompts", bot: "personnalite" },
+    // ⚠️ ENCART DE RENVOI : une clé `mixte` a une valeur COMMUNE d'un côté et une
+    // surcharge PAR BOT de l'autre. Le dire évite de croire que régler ici écrase
+    // la surcharge d'un bot.
     renvoi: {
       instance: {
         texte:
-          "Ces prompts sont la valeur COMMUNE. Chaque bot peut les surcharger " +
-          "depuis sa page :",
+          "C'est la personnalité PAR DÉFAUT. Chaque bot a la sienne, sur sa page :",
         lien: { href: "/bots#personnalite", libelle: "Bot · Personnalité" },
       },
       bot: {
         texte:
-          "La valeur COMMUNE (celle qui s'applique sans surcharge) se règle sur :",
-        lien: { href: "/config#modeles", libelle: "Configuration · Modèles" },
+          "La personnalité PAR DÉFAUT (celle qui s'applique sans valeur propre) se " +
+          "règle sur :",
+        lien: { href: "/config#prompts", libelle: "Configuration · Prompts" },
       },
     },
-    title: "Personnalité et prompts système",
+    title: "Personnalité",
+    // ⚠️ DIT ce que cet onglet ne contient PAS : les prompts système et la liste
+    // d'outils sont dans l'onglet « Prompts » (mécanique), et la mémoire est
+    // ailleurs — sinon l'utilisateur écrit une instruction durable dans la
+    // personnalité et croit qu'elle sera toujours injectée.
+    note:
+      "QUI est ce bot et COMMENT il s'exprime. Ses CONSIGNES DURABLES et ses FAITS vivent aussi dans cet onglet, juste en dessous : ils sont TOUJOURS injectés à chaque tour (ce n'est pas la mémoire, qui est recherchée). Les prompts système, la liste d'outils générée et les règles communes sont dans l'onglet « Prompts ».",
+    fields: [
+      {
+        path: "prompts.personnalite",
+        label: "Personnalité",
+        kind: "textarea",
+        helper:
+          "QUI est ce bot et COMMENT il s'exprime (ton, langue, style). Bloc SÉPARÉ du prompt système : l'éditer ne touche ni les consignes d'exécution ni la liste d'outils. Le champ affiche la valeur EFFECTIVE (celle qui est réellement composée) et son origine : une valeur de ce bot, ou la reprise du fichier d'amorçage (fichier du bot, sinon fichier HISTORIQUE de l'instance). L'enregistrer en fait votre valeur. Un champ vide est REFUSÉ ; « Réinitialiser au défaut » réécrit la personnalité LIVRÉE (config/pi/personnalite.md).",
+      },
+    ],
+  },
+  {
+    id: "prompts-systeme",
+    // ⚠️ ONGLET « Prompts » — la MÉCANIQUE, séparée de ce que l'utilisateur
+    // demande (personnalité, consignes, faits). Décision utilisateur du
+    // 2026-11-14 : « mettre personnalité et ces nouvelles choses dans le même
+    // onglet, et mettre dans un onglet séparé les prompts systèmes léger/lourd +
+    // les règles valables pour les deux ».
+    tabs: { instance: "prompts", bot: "prompts" },
+    renvoi: {
+      instance: {
+        texte:
+          "Ces prompts sont la valeur COMMUNE. Chaque bot peut les surcharger, et " +
+          "les RÈGLES COMMUNES (juste en dessous) s'appliquent à TOUS les bots :",
+        lien: { href: "/bots#prompts", libelle: "Bot · Prompts" },
+      },
+      bot: {
+        texte:
+          "La valeur COMMUNE se règle sur Configuration · Prompts ; les RÈGLES " +
+          "COMMUNES (elles priment sur la personnalité et sur les consignes du bot) " +
+          "aussi :",
+        lien: { href: "/config#prompts", libelle: "Configuration · Prompts (règles communes)" },
+      },
+    },
+    title: "Prompts système",
     // Bloc LECTURE SEULE : l'instruction vocale réellement injectée (volet 1).
     voiceInstruction: true,
     // Bloc LECTURE SEULE : la LISTE D'OUTILS réellement générée pour ce bot.
@@ -243,15 +286,8 @@ export const GROUPS = [
     // l'utilisateur cherche à régler aussi le prompt des réponses publiées dans
     // un canal (Mattermost / Discord) et croit qu'il a été ignoré.
     note:
-      "Trois ZONES DISTINCTES, composées dans cet ordre : la PERSONNALITÉ (qui parle, son ton), le PROMPT SYSTÈME — LÉGER (ce cadre d'exécution), puis la LISTE D'OUTILS, qui est GÉNÉRÉE à chaque tour depuis les capacités réelles du bot (onglet Général) et n'est donc pas éditable ici. Éditer l'une ne modifie jamais l'autre. Le prompt des réponses PUBLIÉES DANS UN CANAL (Mattermost, Discord) n'est PAS réglable ici : c'est une constante du code (src/chat/reply/prompt.ts), pour que le mode « auto » reste borné.",
+      "La MÉCANIQUE du prompt : le PROMPT SYSTÈME — LÉGER (ce cadre d'exécution), le PROMPT SYSTÈME — LOURD (worker délégué), puis la LISTE D'OUTILS, qui est GÉNÉRÉE à chaque tour depuis les capacités réelles du bot (onglet Général) et n'est donc pas éditable ici. La PERSONNALITÉ, les CONSIGNES et les FAITS sont dans l'onglet « Personnalité » ; les RÈGLES COMMUNES (communes à tous les bots, prioritaires) sont sur Configuration · Prompts. Le prompt des réponses PUBLIÉES DANS UN CANAL (Mattermost, Discord) n'est PAS réglable ici : c'est une constante du code (src/chat/reply/prompt.ts), pour que le mode « auto » reste borné.",
     fields: [
-      {
-        path: "prompts.personnalite",
-        label: "Personnalité",
-        kind: "textarea",
-        helper:
-          "QUI est ce bot et COMMENT il s'exprime (ton, langue, style). Bloc SÉPARÉ du prompt système : l'éditer ne touche ni les consignes d'exécution ni la liste d'outils. Un champ vide est REFUSÉ ; « Réinitialiser au défaut » réécrit la personnalité LIVRÉE (config/pi/personnalite.md).",
-      },
       {
         path: "prompts.light",
         label: "Prompt système — léger",

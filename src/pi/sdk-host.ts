@@ -92,6 +92,8 @@ import { createAgentRosterExtensionFactory } from "./sdk/agent-roster-extension.
 import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
 import { createReactionsExtensionFactory } from "./sdk/reactions-extension.js";
 import { createRulesExtensionFactory } from "./sdk/rules-extension.js";
+import { createConsignesExtensionFactory } from "./sdk/consignes-extension.js";
+import { createConsignesTools } from "./sdk/consignes-tools.js";
 import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
 import { createHeritageTools } from "./sdk/heritage-tools.js";
 import { createConversationArchiveTools } from "./sdk/conversation-archive-tools.js";
@@ -422,8 +424,8 @@ function makeRunItem(
 /**
  * Construit la liste ORDONNÉE des extensions INLINE injectées à chaque tour.
  *
- * L'ORDRE est le contrat : **règles (consignes de l'utilisateur) → mémoire →
- * annuaire des agents → heritage**. Le SDK chaîne les extensions qui renvoient
+ * L'ORDRE est le contrat : **consignes durables du bot → règles (règles communes)
+ * → mémoire → annuaire des agents → heritage**. Le SDK chaîne les extensions qui renvoient
  * `systemPrompt` ; chacune CONCATÈNE au prompt courant, donc un ordre inversé
  * ferait passer un bloc APRÈS un autre sans l'écraser (mais changerait le sens
  * donné au modèle). Cette fonction est extraite pour être VERROUILLÉE par un
@@ -446,6 +448,7 @@ export function buildInlineExtensions(
   options: Pick<
     PiHostOptions,
     | "rules"
+    | "consignes"
     | "memory"
     | "directory"
     | "heritage"
@@ -456,6 +459,18 @@ export function buildInlineExtensions(
   >,
 ): InlineExtension[] {
   const extensionFactories: InlineExtension[] = [];
+  if (options.consignes) {
+    // ⚠️ EN PREMIER dans la CHAÎNE : l'extension INSÈRE ses blocs APRÈS
+    // `</personnalite>` (elle ne se contente pas de concaténer), donc l'ordre
+    // voulu est identité → personnalité → consignes/faits → prompt système →
+    // outils. Les RÈGLES passent ensuite et restent donc EN DERNIER : elles
+    // priment sur les consignes d'un bot.
+    extensionFactories.push(
+      createConsignesExtensionFactory(options.consignes, {
+        logger: options.logger,
+      }),
+    );
+  }
   if (options.rules) {
     // EN PREMIER dans la CHAÎNE : les règles strictes de l'utilisateur sont donc
     // le PREMIER bloc concaténé après le prompt composé. Leur en-tête déclare
@@ -1972,6 +1987,14 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
       // SEULE). L'archive n'est jamais injectée ; on la consulte à la demande.
       customTools.push(...createHeritageTools(options.heritage));
     }
+    if (options.consignes) {
+      // ⚠️ CONSIGNES DURABLES : quatre outils d'ÉCRITURE DIRECTE
+      // (`memoriser_consigne`, `ajouter_fait`, `lister_consignes`,
+      // `oublier_consigne`). Le port porte LE fichier du bot : aucun outil ne
+      // peut viser celui d'un autre. L'humain voit et supprime tout depuis la
+      // page du bot (et le fichier reste éditable à la main).
+      customTools.push(...createConsignesTools(options.consignes));
+    }
     if (options.conversationArchive) {
       // Archive des conversations MISES DE CÔTÉ : RECHERCHE PLEIN TEXTE en
       // LECTURE SEULE, utilisable UNIQUEMENT sur demande explicite de
@@ -2100,9 +2123,10 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
     }
 
     // Extensions INLINE, dans l'ORDRE D'APPLICATION voulu du prompt du tour :
-    // RÈGLES (consignes de l'utilisateur) → PERSONNALITÉ (base) → MÉMOIRE →
-    // ANNUAIRE des agents → HERITAGE (voir `buildInlineExtensions`, verrouillé
-    // par un test d'ordre). Rejoué à l'identique pour CHAQUE runtime : chaque
+    // CONSIGNES DURABLES du bot (insérées après la personnalité) → RÈGLES
+    // (règles communes, en dernier et prioritaires) → MÉMOIRE → ANNUAIRE des
+    // agents → HERITAGE (voir `buildInlineExtensions`, verrouillé par un test
+    // d'ordre). Rejoué à l'identique pour CHAQUE runtime : chaque
     // conversation applique l'ordre verrouillé.
     extensionFactories = buildInlineExtensions(options);
     // ⚠️ CONSIGNE D'ACCUSÉ DE RÉCEPTION (ton de Yuki) : ENREGISTRÉE TOUJOURS, même

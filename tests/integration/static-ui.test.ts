@@ -43,8 +43,13 @@ const comfyDir = mkdtempSync(join(tmpdir(), "yuki-static-ui-comfy-"));
 
 /**
  * ⚠️ DEUX PAGES depuis le sous-lot 1b-4 (scission Instance / Bot) :
- *   - `/config` = les réglages COMMUNS (7 onglets) ;
- *   - `/bots`   = les réglages d'UN bot (6 onglets, `?b=<slug>`).
+ *   - `/config` = les réglages COMMUNS (8 onglets) ;
+ *   - `/bots`   = les réglages d'UN bot (7 onglets, `?b=<slug>`).
+ *
+ * ⚠️ GARDE MODIFIÉE (2026-11-14, « consignes durables ») : l'onglet « Prompts »
+ * a été AJOUTÉ aux DEUX pages (8 et 7 onglets). Les comptes ci-dessous sont
+ * nommés : ils ne sont pas « 7/6 » par tradition, ils disent le découpage voulu
+ * par l'utilisateur (ce qu'il demande vs la mécanique du prompt).
  * Le CATALOGUE des champs a quitté `config.js` pour `config-fields.js` (module
  * pur, testable sans navigateur) : les assertions de libellé le visent là-bas.
  */
@@ -177,20 +182,23 @@ describe("UI statique servie par le gateway", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
-  it("la page INSTANCE organise /config en 7 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
+  it("la page INSTANCE organise /config en 8 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
 
     // Barre d'onglets accessible.
     expect(body).toContain('role="tablist"');
     expect(body).toMatch(/role="tablist"[^>]*aria-label="/);
 
-    // Les 7 libellés de la page INSTANCE, dans l'ordre, portés par des role="tab".
+    // Les 8 libellés de la page INSTANCE, dans l'ordre, portés par des role="tab".
+    // ⚠️ « Prompts » est NOUVEAU (2026-11-14) : prompts par défaut + règles
+    // communes + personnalité par défaut, séparés de « Modèles ».
     // ⚠️ « Conversation », « Déclencheurs », « Personnalité » et « Voix » ont
     // QUITTÉ cette page (sous-lot 1b-4) : « Conversation » a éclaté en
     // « Exécution » (délégation + fichiers), le reste vit sur `/bots`.
     const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
     expect(tabLabels).toEqual([
       "Modèles",
+      "Prompts",
       "Exécution",
       "Images",
       "Agents",
@@ -204,8 +212,8 @@ describe("UI statique servie par le gateway", () => {
     // (aria-labelledby).
     const tabTags = [...body.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
     const panelTags = [...body.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((m) => m[0]);
-    expect(tabTags.length).toBe(7);
-    expect(panelTags.length).toBe(7);
+    expect(tabTags.length).toBe(8);
+    expect(panelTags.length).toBe(8);
     for (const tag of tabTags) {
       const id = tag.match(/id="([^"]+)"/)?.[1];
       const controls = tag.match(/aria-controls="([^"]+)"/)?.[1];
@@ -226,7 +234,7 @@ describe("UI statique servie par le gateway", () => {
     // la page du bot) ; `personality-root`, lui, est REVENU ici — le fichier
     // PARTAGÉ `personality.md` et les RÈGLES STRICTES `rules.md` sont des
     // réglages d'INSTANCE (onglet « Modèles » de `/config`).
-    for (const id of ["group-modeles", "group-execution", "group-images", "images-root", "group-systeme", "agents-root", "secrets-root", "tts-assistant-root", "personality-root"]) {
+    for (const id of ["group-modeles", "group-prompts", "group-execution", "group-images", "images-root", "group-systeme", "agents-root", "secrets-root", "tts-assistant-root", "personality-root"]) {
       expect(body).toContain(`id="${id}"`);
     }
     // La page Instance ne porte AUCUN avatar éditable : l'avatar est PAR BOT.
@@ -248,7 +256,7 @@ describe("UI statique servie par le gateway", () => {
     expect(body).not.toMatch(/\sstyle=/);
   });
 
-  it("la page BOT (/bots) est servie avec les mêmes gardes et 6 onglets", async () => {
+  it("la page BOT (/bots) est servie avec les mêmes gardes et 7 onglets", async () => {
     const response = await fetch(`${baseUrl}/bots`);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/html");
@@ -262,18 +270,21 @@ describe("UI statique servie par le gateway", () => {
     expect(body).toContain('data-config-page="bot"');
     expect(body).toContain("/ui/config.js");
 
-    // Les 6 libellés de la page BOT, dans l'ordre.
+    // Les 7 libellés de la page BOT, dans l'ordre.
+    // ⚠️ « Prompts » est NOUVEAU (2026-11-14) : la mécanique du prompt est
+    // SÉPARÉE de ce que l'utilisateur demande (personnalité, consignes, faits).
     const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
     expect(tabLabels).toEqual([
       "Général",
       "Personnalité",
+      "Prompts",
       "Voix",
       "Mémoire",
       "Plateformes",
       "Déclencheurs",
     ]);
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(6);
-    expect([...body.matchAll(/role="tabpanel"/g)].length).toBe(6);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    expect([...body.matchAll(/role="tabpanel"/g)].length).toBe(7);
 
     // Sélecteur de bot : plus de `<select>` (lot 37, la barre du haut choisit) ;
     // le nom du bot édité et le bouton d'ajout restent.
@@ -291,7 +302,14 @@ describe("UI statique servie par le gateway", () => {
     // Aucun panneau `personality.md` / `rules.md` sur la page d'un bot.
     expect(body).not.toContain("Règles strictes");
     // Conteneurs des groupes (rendu EAGER).
-    for (const id of ["group-general", "group-personnalite", "group-voix", "group-memoire"]) {
+    for (const id of [
+      "group-general",
+      "group-personnalite",
+      "consignes-root",
+      "group-prompts",
+      "group-voix",
+      "group-memoire",
+    ]) {
       expect(body, id).toContain(`id="${id}"`);
     }
     // Un SEUL enregistrement global, la même barre persistante.
@@ -849,12 +867,13 @@ describe("Instruction de voix visible dans /config (volet 1 — chat oral)", () 
     expect(js).toContain("renderVoiceInstruction");
     expect(js).toContain("voiceInstruction");
     expect(js).toContain("config-voice-instruction__text");
-    // Placé dans le groupe des prompts. ⚠️ Depuis le sous-lot 1b-4 ce groupe est
-    // rendu sur l'onglet « Modèles » de la page INSTANCE (valeur COMMUNE) et sur
-    // l'onglet « Personnalité » de la page du BOT (surcharge).
+    // Placé dans le groupe des prompts. ⚠️ GARDE MODIFIÉE (2026-11-14,
+    // « consignes durables ») : le groupe a été SCINDÉ — l'instruction vocale
+    // suit les prompts système, dans le groupe `prompts-systeme`, rendu sur
+    // l'onglet « Prompts » des DEUX pages (mécanique du prompt).
     const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
-    expect(champs).toContain('id: "prompts"');
-    expect(champs).toContain('tabs: { instance: "modeles", bot: "personnalite" }');
+    expect(champs).toContain('id: "prompts-systeme"');
+    expect(champs).toContain('tabs: { instance: "prompts", bot: "prompts" }');
     // Explicitement conditionné à la voix active.
     expect(js).toContain("tts.enabled = on");
   });
@@ -946,12 +965,19 @@ describe("Panneau Personnalité — section « Vie antérieure » (édition de l
   });
 });
 
-describe("Panneau Personnalité — section « Règles strictes » (éditées par l'utilisateur)", () => {
+describe("Panneau Personnalité — section « Règles communes » (éditées par l'utilisateur)", () => {
   it("le panneau édite les règles via leur API dédiée et dit que Yuki ne peut pas les modifier", async () => {
     const panel = await (await fetch(`${baseUrl}/ui/personality-panel.js`)).text();
     // Section DISTINCTE dans le même panneau (aucun nouvel onglet).
     expect(panel).toContain("renderRulesSection");
-    expect(panel).toContain("Règles strictes");
+    // ⚠️ GARDE MODIFIÉE (2026-11-14) : le fichier garde son nom (`rules.md`) mais
+    // l'interface l'appelle « Règles communes » — le nom le plus compréhensible
+    // pour un humain, avec le sous-titre exact qui dit sur quoi elles priment.
+    expect(panel).toContain("Règles communes");
+    expect(panel).not.toContain("Règles strictes");
+    expect(panel).toContain(
+      'S\'appliquent à ",\n  "tous",\n  " les bots et ",\n  "priment",\n  " sur la personnalité et sur les consignes du bot."',
+    );
     // Écriture par l'API gardée des règles (+ historique + retour arrière).
     expect(panel).toContain("/api/self/rules");
     expect(panel).toContain("/api/self/rules/revert");
@@ -978,10 +1004,12 @@ describe("Panneau Personnalité — section « Règles strictes » (éditées pa
     }
   });
 
-  it("le markup de la page Instance garde exactement 7 onglets (aucun onglet Règles ajouté)", async () => {
+  it("le markup de la page Instance compte exactement 8 onglets (Prompts ajouté, aucun onglet Règles)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    // ⚠️ 7 onglets depuis la scission Instance / Bot (sous-lot 1b-4) : aucun autre.
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    // ⚠️ 8 onglets : 7 depuis la scission Instance / Bot (sous-lot 1b-4), plus
+    // « Prompts » (2026-11-14). Les RÈGLES COMMUNES vivent DANS « Prompts » : il
+    // n'y a toujours aucun onglet « Règles ».
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
     // ⚠️ GARDE MODIFIÉE : le panneau de la personnalité PARTAGÉE (règles
     // strictes, `personality.md`, archive, mémoire) est un réglage d'INSTANCE —
     // il vit dans `/config` (onglet « Modèles ») et NON sur la page d'un bot, où
@@ -995,7 +1023,7 @@ describe("Panneau Personnalité — section « Règles strictes » (éditées pa
 });
 
 describe("Libraire de Pi-Web — section /config et test de connexion (sans nouvel onglet)", () => {
-  it("ajoute la section « Libraire » à l'onglet Système existant (7 onglets, aucun ajouté)", async () => {
+  it("ajoute la section « Libraire » à l'onglet Système existant (8 onglets, aucun ajouté)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
     // Groupe de champs dans l'onglet Système (aucun nouvel onglet). ⚠️ Le
@@ -1005,7 +1033,7 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     // ⚠️ Le groupe « notifications » (PWA + Web Push) et le groupe « affichage »
     // (fuseau des horodatages, `ui.timeZone`) ont rejoint l'onglet Système ; la
     // section « Images » (ComfyUI) a son ONGLET PROPRE. Le rattachement se lit
-    // désormais dans `config-pages.js` (7 onglets de la page Instance).
+    // désormais dans `config-pages.js` (8 onglets de la page Instance).
     expect(js).toContain("groupesParOnglet(PAGE, GROUPS)");
     for (const path of ["librarian.baseUrl", "librarian.agentToken", "librarian.apiKey"]) {
       expect(champs, path).toContain(`path: "${path}"`);
@@ -1022,9 +1050,9 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     expect(js).not.toContain("innerHTML");
     expect(js).not.toContain(".style.");
     expect(js).not.toContain('setAttribute("style"');
-    // Le markup garde exactement 7 onglets (verrou de la page Instance).
+    // Le markup garde exactement 8 onglets (verrou de la page Instance).
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
     expect(body).toContain('id="group-systeme"');
     // La borne d'injection des sources est un réglage COMMUN (portée instance) :
     // elle vit dans « Système », avec un renvoi vers la page du bot.
@@ -1048,7 +1076,7 @@ describe("Images générées (ComfyUI) — onglet dédié « Images » et servic
     const images = body.slice(body.indexOf('id="panel-images"'), body.indexOf('id="panel-agents"'));
     expect(images).toContain('id="group-images"');
     expect(images).toContain('id="images-root"');
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
     // CSP : aucun style inline dans le markup.
     expect(body).not.toMatch(/\sstyle=/);
   });

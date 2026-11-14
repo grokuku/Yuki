@@ -68,6 +68,9 @@ const LIGHT_OPTIONS = {
   librarianCaptureEnabled: true,
   filesEnabled: true,
   imagesEnabled: true,
+  // ⚠️ AJOUTÉ (2026-11-14) : « tout activé » inclut les CONSIGNES DURABLES —
+  // sans cette option, le socle distant ne pousse pas leurs outils.
+  consignesEnabled: true,
 } as const;
 
 /** Ce que la session éphémère a RÉELLEMENT reçu. */

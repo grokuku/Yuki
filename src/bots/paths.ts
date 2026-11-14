@@ -43,6 +43,7 @@ export type CleCheminBot =
   | "conversationArchiveIndexPath"
   | "personalityPath"
   | "rulesPath"
+  | "consignesPath"
   | "sessionPinsPath"
   | "reactionsStorePath"
   | "jobsStorePath"
@@ -112,6 +113,7 @@ export const CHEMINS_BOT: readonly DefinitionCheminBot[] = [
   { cle: "conversationArchiveIndexPath", variable: "YUKI_CONVERSATION_ARCHIVE_INDEX_PATH", volume: "state", relatif: "conversations-archive-index.sqlite", nature: "fichier" },
   { cle: "personalityPath", variable: "YUKI_PERSONALITY_PATH", volume: "state", relatif: "personality.md", nature: "fichier" },
   { cle: "rulesPath", variable: "YUKI_RULES_PATH", volume: "state", relatif: "rules.md", nature: "fichier" },
+  { cle: "consignesPath", variable: "YUKI_CONSIGNES_PATH", volume: "state", relatif: "consignes.md", nature: "fichier" },
   { cle: "sessionPinsPath", variable: "YUKI_SESSION_PINS_PATH", volume: "state", relatif: "session-pins.json", nature: "fichier" },
   { cle: "reactionsStorePath", variable: "YUKI_REACTIONS_STORE_PATH", volume: "state", relatif: "reactions.jsonl", nature: "fichier" },
   { cle: "jobsStorePath", variable: "YUKI_JOBS_STORE_PATH", volume: "state", relatif: "jobs.jsonl", nature: "fichier" },

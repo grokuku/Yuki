@@ -42,6 +42,7 @@ import { initAgentsPanel } from './agents-panel.js';
 import { initImagesPanel } from './images-panel.js';
 import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
+import { initConsignesPanel } from './consignes-panel.js';
 import { creerSectionAvatar } from './avatar.js';
 import { initSecretsPanel } from './secrets-panel.js';
 import { initSourcesPanel } from './sources-panel.js';
@@ -53,6 +54,7 @@ import {
   originLabel,
   presentConfigSaveError,
   presentRestartRefusal,
+  provenanceNote,
   resetValueFor,
   splitConfigPatchByScope,
 } from './config-patch.js';
@@ -270,6 +272,13 @@ const chatRoot = document.getElementById("chat-root");
  * personnalité enregistrée. La personnalité d'un bot est `prompts.personnalite`.
  */
 const personalityRoot = document.getElementById("personality-root");
+/**
+ * Panneau des CONSIGNES DURABLES d'un bot (consignes + faits, onglet
+ * « Personnalité » de SA page) — monté par id, POUR TOUT BOT AFFICHÉ, avec SON
+ * identifiant. ⚠️ Ce n'est PAS la mémoire : ces listes sont TOUJOURS injectées.
+ * ⚠️ Aucune condition sur un bot particulier : la page est identique pour tous.
+ */
+const consignesRoot = document.getElementById("consignes-root");
 /** Ligne d'explication SOUS le titre (④ : où est allé ce qui a déménagé). */
 const pageLigneEl = document.getElementById("page-ligne");
 /** Bouton « + » d'ajout de bot (page Bot) : ouvre la modale de CRÉATION. */
@@ -589,6 +598,15 @@ function renderField(field) {
       row.append(h("p", { class: "config-helper", text: field.helper }));
     }
 
+    // ⚠️ PROVENANCE DE LA VALEUR EFFECTIVE : quand le texte affiché vient d'un
+    // FICHIER (reprise) et non d'une valeur enregistrée, on le DIT — avec le
+    // chemin. Sans cette phrase, le champ semble être une « valeur par défaut »
+    // et l'utilisateur croit que sa personnalité a disparu.
+    const provenance = provenanceNote(entry);
+    if (provenance) {
+      row.append(h("p", { class: "config-helper config-helper--provenance", text: provenance }));
+    }
+
     // Note « sans effet avec ce moteur » (masquée jusqu'à `refreshEngineFields`).
     const engineNote = h("p", {
       class: "config-helper config-engine-note",
@@ -615,7 +633,7 @@ function renderField(field) {
                 : "Valeur personnalisée enregistrée (surcharge le défaut).",
           }),
         );
-      } else if (entry.origin === "default") {
+      } else if (entry.origin === "default" && !provenance) {
         defaults.append(
           h("p", {
             class: "config-helper",
@@ -2298,6 +2316,21 @@ void (async () => {
     // `/config`, donc JAMAIS sur `/bots?b=<slug>`, quel que soit le bot.
     if (!PAGE_BOT && personalityRoot) {
       initPersonalityPanel({ root: personalityRoot, HolafFetch, HolafModal });
+    }
+    // CONSIGNES DURABLES + FAITS du bot affiché (onglet « Personnalité »). Monté
+    // pour TOUT bot résolu, jamais conditionné à « actif » : un bot éteint garde
+    // ses consignes éditables. Sans bot résolu (registre illisible), rien n'est
+    // monté — on n'affiche jamais les consignes d'un autre en laissant croire
+    // qu'elles sont à lui.
+    const botDesConsignes = PAGE_BOT ? (botCourant?.id ?? "") : "";
+    if (botDesConsignes !== "" && consignesRoot) {
+      initConsignesPanel({
+        root: consignesRoot,
+        HolafFetch,
+        HolafModal,
+        botId: botDesConsignes,
+        botNom: botCourant?.nom ?? botDesConsignes,
+      });
     }
     setInterval(() => void pollHealth(), 5000);
   } catch (error) {

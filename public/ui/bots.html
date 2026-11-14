@@ -168,6 +168,17 @@
             class="config-tab"
             type="button"
             role="tab"
+            id="tab-prompts"
+            aria-selected="false"
+            aria-controls="panel-prompts"
+            tabindex="-1"
+          >
+            Prompts<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
             id="tab-voix"
             aria-selected="false"
             aria-controls="panel-voix"
@@ -254,6 +265,33 @@
             hidden
           >
             <div id="group-personnalite" class="config-groups"></div>
+            <!-- ═══ CONSIGNES DURABLES + FAITS (par bot) ═══════════════════════
+                 Zone d'édition de `<state>/bots/<id>/consignes.md` : deux listes
+                 (consignes impératives, faits déclaratifs), compteurs et aide.
+                 ⚠️ Ce n'est PAS la mémoire : ces entrées sont TOUJOURS injectées
+                 à chaque tour, alors qu'un souvenir est RECHERCHÉ.
+                 ⚠️ Composant monté POUR TOUT BOT AFFICHÉ, avec SON identifiant
+                 (aucune condition sur un bot particulier) : la page est identique
+                 pour tous les bots. -->
+            <div id="consignes-root"></div>
+          </section>
+          <!-- ═══ PROMPTS ═════════════════════════════════════════════════════
+               La MÉCANIQUE du prompt, séparée de ce que l'utilisateur demande
+               (onglet « Personnalité ») : prompts système léger et lourd, LISTE
+               D'OUTILS générée (lecture seule, rendue par le groupe) et renvoi
+               vers les RÈGLES COMMUNES (`/config#prompts`), qui s'appliquent à
+               tous les bots et priment.
+               ⚠️ Identique pour TOUS les bots : seuls des champs du catalogue y
+               sont rendus. -->
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-prompts"
+            aria-labelledby="tab-prompts"
+            tabindex="0"
+            hidden
+          >
+            <div id="group-prompts" class="config-groups"></div>
           </section>
           <!-- ═══ VOIX ═══════════════════════════════════════════════════════
                La VOIX de ce bot : bibliothèque des voix (zone ②, composant

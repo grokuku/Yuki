@@ -82,8 +82,9 @@ export class OutilsBotError extends Error {
 }
 
 /**
- * Les SEPT chemins par bot (ceux dont dépendent la mémoire, l'archive, l'avatar,
- * la personnalité, les règles, les épingles et les réactions).
+ * Les HUIT chemins par bot (ceux dont dépendent la mémoire, l'archive, l'avatar,
+ * la personnalité, les règles, les CONSIGNES DURABLES, les épingles et les
+ * réactions).
  *
  * ⚠️ Les noms suivent `Env` (`reactionsStorePath`, `conversationArchiveDir`) :
  * ce sont EXACTEMENT les valeurs que `main()` lit aujourd'hui pour construire
@@ -95,11 +96,12 @@ export interface CheminsOutilsBot {
   readonly avatarDir: string;
   readonly personalityPath: string;
   readonly rulesPath: string;
+  readonly consignesPath: string;
   readonly sessionPinsPath: string;
   readonly reactionsPath: string;
 }
 
-/** Les sept chemins d'un `Env` (résolu pour un bot, ou d'instance en mono-bot). */
+/** Les huit chemins d'un `Env` (résolu pour un bot, ou d'instance en mono-bot). */
 export function cheminsOutils(env: Env): CheminsOutilsBot {
   return {
     memoryStorePath: env.memoryStorePath,
@@ -107,6 +109,7 @@ export function cheminsOutils(env: Env): CheminsOutilsBot {
     avatarDir: env.avatarDir,
     personalityPath: env.personalityPath,
     rulesPath: env.rulesPath,
+    consignesPath: env.consignesPath,
     sessionPinsPath: env.sessionPinsPath,
     reactionsPath: env.reactionsStorePath,
   };

@@ -985,9 +985,10 @@
   overflow: auto;
 }
 
-/* Bloc « Règles strictes » : VISUELLEMENT DISTINCT du reste du panneau (encadré
-   dédié + liseré d'accent), pour marquer que ce sont des consignes posées par
-   l'utilisateur, injectées AVANT la personnalité. */
+/* Bloc « Règles communes » : VISUELLEMENT DISTINCT du reste du panneau (encadré
+   dédié + liseré d'accent), pour marquer que ce sont des consignes qui valent
+   pour TOUS les bots et qui PRIMENT sur la personnalité et sur les consignes du
+   bot — elles sont injectées AVANT la personnalité. */
 .personality-rules {
   margin-bottom: 20px;
   padding: 14px 16px;
@@ -1005,6 +1006,27 @@
   font-size: 15px;
   font-weight: 600;
   color: var(--accent);
+}
+
+/* Sous-titre de la section : une phrase, la plus compréhensible possible. */
+.personality-rules__subtitle {
+  margin: -6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.personality-rules__subtitle strong {
+  color: var(--text);
+}
+
+.personality-rules__path {
+  margin: 0;
+  word-break: break-all;
+}
+
+.personality-rules__path code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 
 .personality-rules__editor {
@@ -2143,4 +2165,31 @@
   border: 1px solid var(--bordure, #3a3a44);
   border-radius: 6px;
   padding: 0.5rem 0.75rem;
+}
+
+/* ─── Consignes durables (onglet « Personnalité » d'un bot) ──────────────────
+   Deux zones d'édition (consignes, faits) + compteurs + aide. Aucun style
+   inline (CSP `style-src 'self'`), aucun `style=` : tout est ici. */
+.config-consignes__bloc {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.config-consignes__entete {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.config-consignes__titre {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.config-consignes__chemin {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
 }

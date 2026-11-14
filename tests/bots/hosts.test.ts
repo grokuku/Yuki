@@ -21,7 +21,7 @@
  *    statique sur `src/index.ts` : `main()` n'est jamais exécuté par les tests).
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -224,10 +224,18 @@ function pileFactice(envBot: Env, botId: string): PileFactice {
 
 /** Outils FACTICES (L3-b est verrouillée par `tests/bots/outils.test.ts`). */
 function outilsFactices(envBot: Env, botId: string): OutilsBot {
+  // ⚠️ Le fichier de RÈGLES du bot existe RÉELLEMENT : le port `rules` du host le
+  // lit (résolution fichier du bot → fichier d'instance), il ne reçoit plus un
+  // store déjà ouvert (un store d'instance n'est pas le fichier du bot).
+  const rulesPath = join(envBot.mountPoints.state, `${botId}-rules.md`);
+  writeFileSync(rulesPath, `règles de ${botId}`, "utf8");
   return {
     botId,
     env: envBot,
-    chemins: { personalityPath: join(envBot.mountPoints.state, `${botId}-personality.md`) },
+    chemins: {
+      personalityPath: join(envBot.mountPoints.state, `${botId}-personality.md`),
+      rulesPath,
+    },
     // ⚠️ Port `PersonalityPort` (LECTURE) : le fichier `personality.md` ne sert
     // plus qu'à AMORCER `prompts.personnalite` quand elle n'est pas renseignée.
     personnalite: {
@@ -486,7 +494,16 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     expect(hostKohai.options.envoisProgrammes).toBeDefined();
     // ⚠️ `personality` n'est plus un port du host : la personnalité du bot est
     // COMPOSÉE dans son `systemPrompt` (une seule source, `prompts.personnalite`).
-    expect(hostKohai.options.rules).toBe(outils.get("kohai")?.regles);
+    // ⚠️ GARDE MODIFIÉE (2026-11-14) : le port `rules` du host secondaire n'est
+    // plus le store brut (`outils.regles`) — c'est la RÉSOLUTION fichier du bot →
+    // fichier d'instance. Un store ouvert sur le fichier d'INSTANCE n'est pas le
+    // fichier du bot : c'est exactement le bug « règles jamais injectées ».
+    const portReglesKohai = hostKohai.options.rules as unknown as {
+      read: () => { text: string };
+    };
+    expect(portReglesKohai).not.toBe(outils.get("kohai")?.regles);
+    expect(portReglesKohai.read().text).toBe("règles de kohai");
+    expect(hosts.duRun.options.rules).not.toBe(portReglesKohai);
     expect(hostKohai.options.reactions).toBe(outils.get("kohai")?.reactions);
     expect(hostKohai.options.conversationArchive).toBe(outils.get("kohai")?.archive);
     expect(hostKohai.options.sources).not.toBe(optionsPile.sources);

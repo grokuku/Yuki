@@ -19,8 +19,11 @@ export {
   framePersonality,
   personnaliteEffective,
   type ClampedPersonality,
+  type FichierPersonnalite,
   type OriginePersonnaliteEffective,
   type PersonnaliteEffective,
+  type PorteeFichierPersonnalite,
+  type ProvenancePersonnalite,
   type SourcesPersonnalite,
 } from "./personality.js";
 

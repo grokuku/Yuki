@@ -61,6 +61,10 @@ function rulesView(deps: RulesApiDeps): Record<string, unknown> {
     chars: entry.chars,
     preview: entry.text.slice(0, HISTORY_PREVIEW_CHARS),
   }));
+  // ⚠️ L'interface doit pouvoir DIRE où l'enregistrement atterrit : c'est le
+  // fichier RÉELLEMENT LU (fichier du bot, sinon fichier d'instance). Sans lui,
+  // un enregistrement dans un fichier ignoré resterait invisible.
+  const emplacement = deps.store.emplacement?.();
   return {
     text: doc.text,
     chars: doc.chars,
@@ -68,6 +72,9 @@ function rulesView(deps: RulesApiDeps): Record<string, unknown> {
     truncated: doc.truncated,
     exists: doc.exists,
     history,
+    ...(emplacement !== undefined
+      ? { path: emplacement.chemin, source: emplacement.portee, pathExists: emplacement.existe }
+      : {}),
   };
 }
 

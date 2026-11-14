@@ -141,11 +141,47 @@ export function resetValueFor(field, entry, mirror = {}) {
  *
  * `null` = rien à affirmer (verrouillé par l'environnement : la valeur ne vient
  * ni du défaut ni d'une surcharge enregistrée ; ou origine inconnue).
+ *
+ * ⚠️ PROVENANCE EFFECTIVE (régression « personnalité disparue » du 2026-11-14) :
+ * quand le serveur dit que la valeur affichée est REPRISE d'un fichier
+ * (`entry.provenance`), le libellé le dit — annoncer « valeur par défaut » un
+ * texte qui vient du fichier de l'utilisateur est exactement ce qui lui a fait
+ * croire que sa personnalité avait disparu.
  */
 export function originLabel(entry) {
   if (!entry || entry.lockedByEnv) return null;
+  if (entry.provenance === "fichier-instance") return "reprise du fichier historique";
+  if (entry.provenance === "fichier-bot") return "reprise du fichier du bot";
   if (entry.origin === "store") return "personnalisé";
   if (entry.origin === "default") return "valeur par défaut";
+  return null;
+}
+
+/**
+ * Phrase qui dit D'OÙ vient la valeur EFFECTIVE d'un champ (provenance servie par
+ * le gateway), ou `null` si la valeur est bien celle de l'utilisateur / le défaut.
+ *
+ * Aucune invention : le chemin et la provenance viennent du serveur.
+ */
+export function provenanceNote(entry) {
+  if (!entry || entry.lockedByEnv) return null;
+  const fichier = typeof entry.fichier === "string" && entry.fichier !== "" ? entry.fichier : null;
+  if (entry.provenance === "fichier-instance") {
+    return (
+      "Valeur EFFECTIVE reprise du fichier HISTORIQUE de l'instance" +
+      (fichier ? ` (${fichier})` : "") +
+      " : aucune personnalité n'a été enregistrée pour ce bot. L'enregistrer en fera " +
+      "votre valeur (elle ne dépendra plus du fichier)."
+    );
+  }
+  if (entry.provenance === "fichier-bot") {
+    return (
+      "Valeur EFFECTIVE reprise du fichier de CE BOT" +
+      (fichier ? ` (${fichier})` : "") +
+      " : aucune personnalité n'a été enregistrée. L'enregistrer en fera votre " +
+      "valeur (elle ne dépendra plus du fichier)."
+    );
+  }
   return null;
 }
 

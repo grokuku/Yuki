@@ -86,6 +86,14 @@ export const PHRASES_OUTILS: Readonly<Record<string, string>> = {
   deposer_fichier: "Déposer un fichier sur une machine appairée.",
   lister_fichiers: "Lister les pièces jointes de la conversation (identifiants compris).",
   lire_fichier: "Lire le contenu d'une pièce jointe.",
+  // Consignes durables (elles s'appliquent à CHAQUE tour, ce n'est pas la mémoire)
+  memoriser_consigne:
+    "Enregistrer une CONSIGNE durable (instruction impérative, ex. « ne refais plus jamais ça ») : elle sera injectée à chaque tour.",
+  ajouter_fait:
+    "Enregistrer un FAIT durable (information déclarative, ex. « mon NAS est à 10.0.0.5 ») : il sera injecté à chaque tour.",
+  lister_consignes: "Relire les consignes et les faits durables enregistrés pour ce bot.",
+  oublier_consigne:
+    "Supprimer une consigne ou un fait durable (refusé si plusieurs entrées correspondent).",
 };
 
 /** Phrase de repli d'un outil sans description enregistrée (jamais muet). */

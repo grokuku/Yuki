@@ -40,9 +40,17 @@
 /**
  * Onglets de chaque page, dans l'ordre d'affichage.
  *
- * ⚠️ L'ordre et les libellés sont VERROUILLÉS par des tests (7 onglets pour
- * l'Instance, 6 pour un Bot) : ce sont eux que lisent les utilisateurs et les
+ * ⚠️ L'ordre et les libellés sont VERROUILLÉS par des tests (8 onglets pour
+ * l'Instance, 7 pour un Bot) : ce sont eux que lisent les utilisateurs et les
  * harnais E2E.
+ *
+ * ⚠️ DÉCISION UTILISATEUR (2026-11-14) — SÉPARER CE QUE DEMANDE L'UTILISATEUR DE
+ * LA MÉCANIQUE : l'onglet « Personnalité » d'un bot porte la personnalité, les
+ * CONSIGNES et les FAITS (ce que l'utilisateur demande) ; l'onglet « Prompts »
+ * porte les prompts système léger/lourd, la liste d'outils générée et le renvoi
+ * vers les règles communes (la mécanique). Sur `/config`, un onglet « Prompts »
+ * séparé de « Modèles » porte les prompts par défaut, les règles communes et la
+ * personnalité par défaut.
  */
 /** @type {Record<string, { id: string, nom: string, scopes: string[], ligne: string, onglets: Onglet[] }>} */
 export const PAGES = {
@@ -54,10 +62,14 @@ export const PAGES = {
     scopes: ["instance", "mixte"],
     /** Phrase affichée SOUS le titre : dit où est allé ce qui a déménagé. */
     ligne:
-      "Restent communs : Modèles, Exécution, Images, Agents, Secrets, Système, " +
-      "Maintenance. Ce qui est propre à un bot est dans Bot.",
+      "Restent communs : Modèles, Prompts, Exécution, Images, Agents, Secrets, " +
+      "Système, Maintenance. Ce qui est propre à un bot est dans Bot.",
     onglets: [
       { id: "modeles", libelle: "Modèles" },
+      // ⚠️ Nouvel onglet (décision utilisateur du 2026-11-14) : les PROMPTS par
+      // défaut, les RÈGLES COMMUNES et la PERSONNALITÉ PAR DÉFAUT ne sont plus
+      // noyés dans « Modèles » — c'est de la mécanique, pas un choix de modèle.
+      { id: "prompts", libelle: "Prompts" },
       { id: "execution", libelle: "Exécution" },
       { id: "images", libelle: "Images" },
       { id: "agents", libelle: "Agents" },
@@ -75,7 +87,11 @@ export const PAGES = {
       "l'instance sont dans Configuration.",
     onglets: [
       { id: "general", libelle: "Général" },
+      // ⚠️ « Personnalité » = ce que l'utilisateur DEMANDE (personnalité,
+      // consignes durables, faits) ; « Prompts » = la MÉCANIQUE (prompts
+      // système, liste d'outils générée, renvoi vers les règles communes).
       { id: "personnalite", libelle: "Personnalité" },
+      { id: "prompts", libelle: "Prompts" },
       { id: "voix", libelle: "Voix" },
       { id: "memoire", libelle: "Mémoire" },
       { id: "plateformes", libelle: "Plateformes" },
@@ -390,7 +406,7 @@ export const CLONE_ELEMENTS = [
   {
     id: "identite",
     libelle: "Identité",
-    aide: "Personnalité, règles et avatar.",
+    aide: "Personnalité, règles communes et avatar.",
     defaut: true,
   },
   {

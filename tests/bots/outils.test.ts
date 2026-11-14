@@ -129,7 +129,9 @@ function fabrique(b: Banc, mode: "mono" | "multi"): FabriqueMemoireBots {
   return new FabriqueMemoireBots({ envInstance: b.env, mode, logger: journal });
 }
 
-describe("① garde de non-régression : 1 bot ⇒ les SEPT chemins IDENTIQUES", () => {
+// ⚠️ GARDE MODIFIÉE (2026-11-14, « consignes durables ») : les SEPT chemins
+// deviennent HUIT — `consignesPath` (`<state>/bots/<id>/consignes.md`).
+describe("① garde de non-régression : 1 bot ⇒ les HUIT chemins IDENTIQUES", () => {
   it("mode MONO historique : le principal garde les chemins d'aujourd'hui", () => {
     const b = banc();
     // Mono-bot historique STRICT : aucun registre, aucune migration (`main()` y
@@ -161,6 +163,9 @@ describe("① garde de non-régression : 1 bot ⇒ les SEPT chemins IDENTIQUES",
       avatarDir: join(b.state, "avatar"),
       personalityPath: join(b.state, "personality.md"),
       rulesPath: join(b.state, "rules.md"),
+      // ⚠️ AJOUTÉ (2026-11-14) : consignes durables du bot — en mono-bot, le
+      // fichier est celui de l'`Env` (`<state>/consignes.md`).
+      consignesPath: join(b.state, "consignes.md"),
       sessionPinsPath: join(b.state, "session-pins.json"),
       reactionsPath: join(b.state, "reactions.jsonl"),
     });
@@ -194,6 +199,7 @@ describe("① garde de non-régression : 1 bot ⇒ les SEPT chemins IDENTIQUES",
       avatarDir: join(racineBot, "avatar"),
       personalityPath: join(racineBot, "personality.md"),
       rulesPath: join(racineBot, "rules.md"),
+      consignesPath: join(racineBot, "consignes.md"),
       sessionPinsPath: join(racineBot, "session-pins.json"),
       reactionsPath: join(racineBot, "reactions.jsonl"),
     });

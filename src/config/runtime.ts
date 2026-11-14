@@ -92,6 +92,9 @@ export class ScopedFieldError extends Error {
   }
 }
 
+/** Provenance d'une valeur REPRISE d'un fichier d'amorçage (jamais enregistrée). */
+export type ProvenanceEffective = "fichier-bot" | "fichier-instance";
+
 /** Feuille « valeur » (non secrète). */
 export interface ValueFieldSnapshot {
   value: string | number;
@@ -115,6 +118,16 @@ export interface ValueFieldSnapshot {
   origin: Origin;
   apply: ApplyKind;
   lockedByEnv?: string;
+  /**
+   * ⚠️ PROVENANCE EFFECTIVE (lecture seule) : présent UNIQUEMENT quand `value`
+   * n'est pas une valeur enregistrée mais une REPRISE de fichier d'amorçage
+   * (`fichier-bot` / `fichier-instance`). L'interface dit alors d'où vient le
+   * texte affiché au lieu de le présenter comme « valeur par défaut » — c'est
+   * ce libellé faux qui a fait croire à une disparition de personnalité.
+   */
+  provenance?: ProvenanceEffective;
+  /** Chemin du fichier repris (avec `provenance`). */
+  fichier?: string;
 }
 
 /** Feuille « secret » : JAMAIS de valeur complète (uniquement un masque). */

@@ -1,5 +1,5 @@
 /**
- * Panneau « Personnalité par défaut + Règles strictes » de la page `/config`
+ * Panneau « Personnalité par défaut + Règles communes » de la page `/config`
  * (Réglages généraux).
  *
  * ⚠️ UNE SEULE PERSONNALITÉ (décision utilisateur du 2026-11-14) : la
@@ -9,8 +9,10 @@
  * lu une fois pour un bot qui n'a AUCUNE personnalité enregistrée. Il n'est
  * jamais ajouté à la personnalité du bot.
  *
- * ⚠️ `rules.md` n'est PAS de la personnalité : ce sont des RÈGLES DURES
- * (consignes immuables de l'utilisateur, prioritaires sur la personnalité).
+ * ⚠️ `rules.md` n'est PAS de la personnalité : ce sont des RÈGLES COMMUNES —
+ * elles s'appliquent à TOUS les bots et PRIMENT sur la personnalité et sur les
+ * consignes du bot. Le fichier garde son nom (`rules.md`), l'interface l'appelle
+ * « Règles communes » (le nom le plus compréhensible pour un humain).
  *
  * Panneau d'INSTANCE (fichiers de l'installation), jamais monté sur la page d'un
  * bot ; l'avatar d'un bot se règle dans l'onglet « Général » de cette page-là.
@@ -21,7 +23,7 @@
  *   - ENREGISTRER (`PUT /api/self/personality`, en-tête X-Yuki-Config) ;
  *   - REVENIR À LA VERSION PRÉCÉDENTE (`POST /api/self/personality/revert`) ;
  *   - CONSULTER l'historique des versions (aperçus) ;
- *   - éditer les RÈGLES STRICTES (`/api/self/rules`, éditées par l'utilisateur
+ *   - éditer les RÈGLES COMMUNES (`/api/self/rules`, éditées par l'utilisateur
  *     seul) et la mémoire durable (archive récupérable, versions).
  *
  * CSP stricte (`style-src 'self'`) : aucun `<style>` injecté, aucun `style=` —
@@ -111,18 +113,28 @@ const HERITAGE_HELP = [
 ];
 
 /**
- * Rappel VISIBLE du statut des règles strictes : elles sont écrites par
- * l'utilisateur, Yuki ne peut pas les modifier, et elles priment sur le reste.
- * Aucun style inline (CSP stricte).
+ * Rappel VISIBLE du statut des règles communes : elles valent pour TOUS les bots,
+ * l'utilisateur seul les écrit, Yuki ne peut pas les modifier, et elles priment
+ * sur la personnalité comme sur les consignes du bot. Aucun style inline (CSP).
  */
 const RULES_HELP = [
-  "Règles strictes : consignes IMMUABLES que vous posez sur le bot, PRIORITAIRES sur sa personnalité. " +
-    "Elles sont injectées à chaque tour dans un bloc dont l'en-tête déclare cette priorité : en cas de " +
-    "conflit, ce sont elles qui gagnent.",
+  "Règles communes : elles s'appliquent à TOUS les bots et PRIMENT sur la personnalité et sur " +
+    "les consignes du bot. Leur bloc est injecté à chaque tour et son en-tête déclare cette " +
+    "priorité : en cas de conflit, ce sont elles qui gagnent.",
   "⚠️ Yuki NE PEUT PAS les modifier : elle ne dispose d'aucun outil pour écrire ce fichier, et rien " +
     "dans l'interface ne lui permet de le faire. Vous seul les éditez ici.",
-  "Le fichier reste lisible à la main (rules.md, à côté de personality.md dans le volume state). " +
+  "Le fichier garde son nom (rules.md, à côté de personality.md dans le volume state) : il est " +
+    "lisible à la main. Le chemin affiché sous l'éditeur est le fichier RÉELLEMENT lu et écrit. " +
     "Chaque version enregistrée est conservée (20 dernières).",
+];
+
+/** Sous-titre EXACT de la section « Règles communes » (formulation humaine). */
+const RULES_SUBTITLE = [
+  "S'appliquent à ",
+  "tous",
+  " les bots et ",
+  "priment",
+  " sur la personnalité et sur les consignes du bot.",
 ];
 
 export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
@@ -143,13 +155,15 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     memoryLoaded: false,
     // Consolidation hebdomadaire (lot 29) : état, dernier rapport et VERSIONS.
     memoryConsolidation: null,
-    // Règles strictes (éditées UNIQUEMENT par l'utilisateur) — séparées.
+    // Règles communes (éditées UNIQUEMENT par l'utilisateur) — séparées.
     rules: {
       text: "",
       chars: 0,
       maxChars: 8000,
       truncated: false,
       history: [],
+      /** Fichier RÉELLEMENT lu et écrit (dit par le serveur, jamais deviné). */
+      path: "",
       error: "",
       status: "",
       loaded: false,
@@ -240,7 +254,7 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     render();
   }
 
-  /** Charge les RÈGLES STRICTES (contenu + historique). */
+  /** Charge les RÈGLES COMMUNES (contenu + historique + fichier édité). */
   async function loadRules() {
     state.rules.error = "";
     try {
@@ -252,6 +266,9 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
         typeof body?.maxChars === "number" ? body.maxChars : state.rules.maxChars;
       state.rules.truncated = Boolean(body?.truncated);
       state.rules.history = Array.isArray(body?.history) ? body.history : [];
+      // Le serveur DIT quel fichier est lu et écrit (fichier du bot, sinon
+      // fichier d'instance) : l'interface ne le devine jamais.
+      state.rules.path = typeof body?.path === "string" ? body.path : "";
       state.rules.loaded = true;
     } catch (error) {
       state.rules.error = apiMessage(error, "Impossible de charger les règles.");
@@ -567,17 +584,27 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
   }
 
   /**
-   * Bloc « Règles strictes » — DISTINCT de la personnalité (nature différente :
-   * ce sont des consignes posées sur Yuki, pas son identité). Le libellé dit
-   * explicitement que Yuki ne peut pas les modifier. Aucun style inline (CSP).
+   * Bloc « Règles communes » — DISTINCT de la personnalité (nature différente :
+   * ce sont des consignes qui portent sur TOUS les bots, pas une identité). Le
+   * libellé dit la primauté et le fait que Yuki ne peut pas les modifier.
+   * Aucun style inline (CSP).
    */
   function renderRulesSection() {
     const block = h("section", { class: "personality-rules" });
     block.append(
       h("h3", {
         class: "personality-rules__title",
-        text: "Règles strictes : consignes immuables, prioritaires sur la personnalité",
+        text: "Règles communes",
       }),
+      // Sous-titre EXACT : ce que ces règles sont, et sur QUOI elles priment —
+      // c'est la formulation la plus compréhensible pour un humain.
+      h("p", { class: "personality-rules__subtitle" }, [
+        h("span", { text: RULES_SUBTITLE[0] }),
+        h("strong", { text: RULES_SUBTITLE[1] }),
+        h("span", { text: RULES_SUBTITLE[2] }),
+        h("strong", { text: RULES_SUBTITLE[3] }),
+        h("span", { text: RULES_SUBTITLE[4] }),
+      ]),
     );
 
     const help = h("ul", { class: "personality-help personality-rules__help" });
@@ -595,7 +622,7 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
       spellcheck: "false",
       rows: "12",
       maxlength: String(TEXTAREA_MAXLENGTH),
-      "aria-label": "Règles strictes de l'utilisateur",
+      "aria-label": "Règles communes (tous les bots)",
     });
     textarea.value = state.rules.text;
     state.rules.editValue = state.rules.text;
@@ -629,6 +656,17 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     actions.append(state.rulesStatusEl);
 
     block.append(textarea, actions, renderRulesHistory());
+
+    // ⚠️ Fichier RÉELLEMENT lu et écrit (dit par le serveur) : c'est la preuve
+    // visible que l'enregistrement n'atterrit pas dans un fichier ignoré.
+    if (state.rules.path) {
+      block.append(
+        h("p", { class: "config-helper personality-rules__path" }, [
+          h("span", { text: "Fichier lu et écrit : " }),
+          h("code", { text: state.rules.path }),
+        ]),
+      );
+    }
 
     if (state.rules.truncated) {
       block.append(
@@ -1093,7 +1131,7 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
       h("div", { class: "config-group__head" }, [
         h("h2", {
           class: "config-group__title",
-          text: "Personnalité par défaut et règles strictes (réglages d'instance)",
+          text: "Personnalité par défaut et règles communes (réglages d'instance)",
         }),
       ]),
     );
@@ -1101,8 +1139,8 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
     // ⚠️ PAS d'avatar ici : il est PAR BOT (lot 34) et se règle dans l'onglet
     // « Général » de la page du bot.
 
-    // Les règles strictes précèdent la personnalité (nature différente : des
-    // consignes posées par l'utilisateur, injectées AVANT l'identité).
+    // Les règles communes précèdent la personnalité (nature différente : des
+    // consignes qui portent sur TOUS les bots, injectées AVANT l'identité).
     wrap.append(renderRulesSection());
 
     // ⚠️ `personality.md` n'est plus « la » personnalité : le titre le dit.

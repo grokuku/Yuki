@@ -57,6 +57,12 @@ const SDK_ALLOWLIST = [
   // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : définition d'outil seulement — même
   // périmètre étroit que `scheduled-send-tool.ts` (aucun type du SDK hors de `src/pi/**`).
   "src/pi/sdk/planifier-tache-tool.ts",
+  // ⚠️ AJOUTÉ (2026-11-14) : CONSIGNES DURABLES du bot — une extension qui
+  // insère ses blocs dans le prompt du tour, et quatre définitions d'outils.
+  // Même périmètre étroit que les autres : aucun type du SDK ni de typebox ne
+  // sort de `src/pi/**` (la façade n'expose que ses propres types).
+  "src/pi/sdk/consignes-extension.ts",
+  "src/pi/sdk/consignes-tools.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =

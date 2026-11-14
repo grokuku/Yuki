@@ -7,7 +7,10 @@
  * était vérifié outil par outil l'est encore, mais capacité par capacité.
  *
  * ⚠️ Ce qu'il prouve :
- *  ① les 12 capacités forment une PARTITION des 29 outils custom + 4 builtins ;
+ *  ① les 12 capacités forment une PARTITION des 33 outils custom + 4 builtins ;
+ *    ⚠️ GARDE MODIFIÉE (2026-11-14) : 29 → 33, les quatre outils des CONSIGNES
+ *    DURABLES (`memoriser_consigne`, `ajouter_fait`, `lister_consignes`,
+ *    `oublier_consigne`) rejoignent la capacité `memoire`.
  *  ② ⚠️ UN BOT NEUF (`capacites: []`) A UNE ALLOWLIST VIDE — aucun builtin, aucun
  *    outil custom, pour les DEUX rôles ; c'est le test central du lot ;
  *  ③ chaque capacité ouvre EXACTEMENT la liste annoncée ;
@@ -98,13 +101,20 @@ const ATTENDUS: Readonly<Record<CapaciteBot, readonly string[]>> = {
   delegation: ["cancel_job", "delegate", "job_status", "steer_job"],
   secrets: ["demander_secret", "lister_secrets"],
   programmation: ["planifier_tache", "programmer_envoi"],
-  memoire: ["archive_vie_anterieure", "chercher_conversations_archivees"],
+  memoire: [
+    "archive_vie_anterieure",
+    "ajouter_fait",
+    "chercher_conversations_archivees",
+    "lister_consignes",
+    "memoriser_consigne",
+    "oublier_consigne",
+  ],
   builtins: ["find", "grep", "ls", "read"],
 };
 
 describe("35h ① — l'univers des outils est exhaustif et PARTITIONNÉ", () => {
-  it("la table de groupes couvre EXACTEMENT les outils custom (29)", () => {
-    expect(TOUS_LES_OUTILS_CUSTOM).toHaveLength(29);
+  it("la table de groupes couvre EXACTEMENT les outils custom (33)", () => {
+    expect(TOUS_LES_OUTILS_CUSTOM).toHaveLength(33);
     expect(new Set(TOUS_LES_OUTILS_CUSTOM).size).toBe(TOUS_LES_OUTILS_CUSTOM.length);
   });
 

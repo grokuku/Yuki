@@ -62,6 +62,10 @@ const OPTIONS_TOUT = {
   filesEnabled: true,
   filesListEnabled: true,
   imagesEnabled: true,
+  // ⚠️ AJOUTÉ (2026-11-14) : les CONSIGNES DURABLES sont un groupe de la
+  // politique ; sans cette option, leurs outils ne sont pas ouverts (le socle
+  // `toujours` ne les pousse que si le port existe).
+  consignesEnabled: true,
 } as const;
 
 const CTX = {
@@ -185,6 +189,10 @@ describe("① classement des outils distants — aucun orphelin, aucun doublon",
         entry.secretRequests,
         entry.heritage,
         entry.conversationArchive,
+        // ⚠️ AJOUTÉ (2026-11-14) : les consignes durables sont un groupe de la
+        // politique d'outils ; sans cette ligne, la garde « aucun outil non
+        // classé » passerait à côté d'elles.
+        entry.consignes,
         entry.librarian,
         entry.librarianCapture,
         entry.files,

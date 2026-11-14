@@ -86,34 +86,30 @@ function champsPersonnaliteBot(): string[] {
 }
 
 describe("① la page « Personnalité » est IDENTIQUE pour tous les bots", () => {
-  it("les trois zones du catalogue, dans l'ordre, quel que soit le bot", () => {
-    expect(champsPersonnaliteBot()).toEqual([
-      "prompts.personnalite",
-      "prompts.light",
-      "prompts.heavy",
-    ]);
+  it("la personnalité SEULE (consignes et faits sont un composant, pas un champ)", () => {
+    // ⚠️ GARDE MODIFIÉE (2026-11-14, « consignes durables ») : les prompts
+    // système ont QUITTÉ cet onglet pour « Prompts » (la mécanique), et les
+    // CONSIGNES/FAITS sont éditées par un composant dédié (`consignes-root`).
+    expect(champsPersonnaliteBot()).toEqual(["prompts.personnalite"]);
     // Le calcul ne prend AUCUN identifiant de bot : deux bots (yuki, grolaf)
     // rendent forcément la MÊME liste, les MÊMES libellés.
     const groupe = (groupesParOnglet("bot", GROUPS).personnalite ?? [])[0];
-    if (!groupe) throw new Error("groupe « prompts » absent de l'onglet Personnalité");
+    if (!groupe) throw new Error("groupe « personnalite » absent de l'onglet Personnalité");
     // Le titre vient du CATALOGUE (aucun miroir côté test).
     const titre = (groupe as { title?: string }).title;
-    expect(titre).toBe("Personnalité et prompts système");
+    expect(titre).toBe("Personnalité");
     const libelles = champsDePage("bot", groupe, SCOPES).map((field) => field.label);
-    expect(libelles).toEqual([
-      "Personnalité",
-      "Prompt système — léger",
-      "Prompt système — lourd",
-    ]);
+    expect(libelles).toEqual(["Personnalité"]);
   });
 
-  it("l'onglet ne monte AUCUN composant : un seul conteneur de champs", () => {
+  it("l'onglet monte les CHAMPS et le panneau des CONSIGNES (`consignes-root`)", () => {
     const contenu = panneau(BOTS_HTML, "personnalite");
-    // Le panneau ne contient QUE le conteneur des champs rendus par `config.js`.
+    // Le panneau contient le conteneur des champs rendus par `config.js`…
     expect(contenu).toContain('id="group-personnalite"');
-    // Aucun autre point de montage (`<id>-root`) : rien qui puisse apparaître
-    // pour un bot et pas pour un autre.
-    expect(contenu.match(/id="[^"]*-root"/g) ?? []).toEqual([]);
+    // …et UN SEUL point de montage : les consignes durables du bot. Il est monté
+    // pour TOUT bot affiché (aucune condition sur un bot particulier), donc la
+    // page reste identique pour tous.
+    expect(contenu.match(/id="[^"]*-root"/g) ?? []).toEqual(["id=\"consignes-root\""]);
   });
 
   it("la page du bot déclare TOUJOURS le même onglet Personnalité", () => {
@@ -156,12 +152,15 @@ describe("② aucun panneau personality.md / rules.md sur la page d'un bot", () 
 });
 
 describe("③ les deux blocs vivent dans /config et restent ÉDITABLES", () => {
-  it("`/config` monte le panneau dans l'onglet « Modèles » (mêmes onglets)", () => {
-    // Aucun onglet ajouté : les réglages communs restent dans un onglet existant.
-    expect(idsOnglets("instance")).toHaveLength(7);
-    expect(panneau(CONFIG_HTML, "modeles")).toContain('id="personality-root"');
-    // L'onglet « Modèles » porte déjà la valeur COMMUNE des prompts : la
-    // personnalité partagée de l'instance y est à sa place.
+  it("`/config` monte le panneau dans l'onglet « Prompts » (nouvel onglet)", () => {
+    // ⚠️ GARDE MODIFIÉE (2026-11-14) : l'onglet « Prompts » est NOUVEAU et sépare
+    // la mécanique du prompt du choix du modèle. Les règles communes et la
+    // personnalité par défaut y vivent, avec les prompts par défaut.
+    expect(idsOnglets("instance")).toHaveLength(8);
+    expect(panneau(CONFIG_HTML, "prompts")).toContain('id="personality-root"');
+    expect(panneau(CONFIG_HTML, "prompts")).toContain('id="group-prompts"');
+    // « Modèles » ne porte plus ni les prompts ni les règles communes.
+    expect(panneau(CONFIG_HTML, "modeles")).not.toContain('id="personality-root"');
     expect(panneau(CONFIG_HTML, "modeles")).toContain('id="group-modeles"');
   });
 

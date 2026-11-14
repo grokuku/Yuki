@@ -184,14 +184,16 @@ describe("page du BOT — section « Sources »", () => {
   it("le conteneur est monté dans l'onglet DÉDIÉ « Déclencheurs » de /bots (lot 3, déplacé en 1b-4)", () => {
     // ⚠️ Les déclencheurs appartiennent à UN bot (`sources.json` par bot) : la
     // page de gestion a suivi la scission Instance / Bot et vit désormais sur
-    // `/bots`. Les six onglets sont verrouillés par
-    // `tests/ui/config-pages.test.ts`.
+    // `/bots`. Les onglets sont verrouillés par `tests/ui/config-pages.test.ts`.
+    // ⚠️ GARDE MODIFIÉE (2026-11-14) : ils sont SEPT — l'onglet « Prompts » a été
+    // ajouté (mécanique du prompt), sans déplacer « Déclencheurs ».
     const tabLabels = [...BOTS_HTML.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) =>
       m[1].trim(),
     );
     expect(tabLabels).toEqual([
       "Général",
       "Personnalité",
+      "Prompts",
       "Voix",
       "Mémoire",
       "Plateformes",

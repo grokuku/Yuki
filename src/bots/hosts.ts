@@ -47,7 +47,13 @@ import type { PiHostOptions } from "../pi/types.js";
 import { isTtsEnabled } from "../tts/options.js";
 
 import type { OutilsBot } from "./outils.js";
-import { resoudrePersonnaliteBot } from "./personnalite-bot.js";
+import {
+  candidatsPersonnalite,
+  resoudrePersonnaliteBot,
+  type CandidatFichierPersonnalite,
+} from "./personnalite-bot.js";
+import { portReglesDuBot, type CandidatFichierRegles } from "../rules/regles-bot.js";
+import { portConsignes } from "../consignes/index.js";
 import type { Env } from "../config/env.js";
 import type { ConfigRuntime } from "../config/runtime.js";
 import type { PileSourcesBot } from "../sources/par-bot.js";
@@ -114,6 +120,12 @@ export interface HostDemarrable {
   /** Tâches planifiées de CE bot (son `sources.json`). */
   readonly planifierTache?: PiHostOptions["planifierTache"];
   readonly rules?: PiHostOptions["rules"];
+  /**
+   * ⚠️ CONSIGNES DURABLES de CE bot (`<state>/bots/<id>/consignes.md`) : le port
+   * est construit avec SON chemin, donc les blocs injectés et les outils
+   * d'écriture ne peuvent pas viser le fichier d'un autre bot.
+   */
+  readonly consignes?: PiHostOptions["consignes"];
   readonly reactions?: PiHostOptions["reactions"];
   /** Archive des conversations de CE bot (L3-b). */
   readonly conversationArchive?: PiHostOptions["conversationArchive"];
@@ -161,6 +173,21 @@ export interface ContexteHostBot {
   readonly config?: ConfigRuntime;
   /** Outils DE CE BOT (L3-b). Absents ⇒ les ports correspondants sont retirés. */
   readonly outils?: OutilsBot;
+  /**
+   * ⚠️ FICHIER D'AMORÇAGE HISTORIQUE DE L'INSTANCE (`<state>/personality.md`) :
+   * l'ancien emplacement mono-bot. Il n'est PAS lu à la place du fichier du bot,
+   * il vient APRÈS (le plus spécifique gagne) — mais s'il est absent de la
+   * résolution, une instance dont le texte vit encore là retombe sur le DÉFAUT
+   * LIVRÉ (régression du 2026-11-14). Absent ⇒ seul le fichier du bot est lu.
+   */
+  readonly personnaliteInstance?: CandidatFichierPersonnalite;
+  /**
+   * ⚠️ FICHIER D'INSTANCE HISTORIQUE DES RÈGLES (`<state>/rules.md`). Les règles
+   * sont résolues comme la personnalité : fichier DU BOT
+   * (`<state>/bots/<id>/rules.md`) puis ce fichier-ci, puis RIEN. Absent ⇒ seul
+   * le fichier du bot est lu.
+   */
+  readonly reglesInstance?: CandidatFichierRegles;
   /** Pile sources DE CE BOT (L3-c). Absente ⇒ pas de drain, pas de tâches. */
   readonly pile?: PileSourcesBot;
   /**
@@ -234,8 +261,19 @@ export function portsHostBot(
         personnalite: resoudrePersonnaliteBot({
           botId: contexte.botId,
           config,
-          store: outils?.personnalite,
-          cheminFichier: outils?.chemins.personalityPath,
+          // ⚠️ DEUX fichiers candidats, du PLUS SPÉCIFIQUE au plus général :
+          // le fichier DU BOT (`outils.personnalite`, chemin du bot), puis le
+          // fichier HISTORIQUE de l'instance. Aucun `botId` n'est à part.
+          fichiers: candidatsPersonnalite(
+            contexte.outils !== undefined
+              ? {
+                  portee: "bot",
+                  chemin: contexte.outils.chemins.personalityPath,
+                  store: contexte.outils.personnalite,
+                }
+              : undefined,
+            contexte.personnaliteInstance,
+          ),
           ...(logger !== undefined ? { logger } : {}),
         }).texte,
         prompt: config.getString("prompts.light"),
@@ -248,6 +286,28 @@ export function portsHostBot(
     ...(contexte.outilsAutorises !== undefined
       ? { tools: contexte.outilsAutorises }
       : {}),
+    // ⚠️ RÈGLES : MÊME résolution que la personnalité — fichier DU BOT, puis
+    // fichier d'INSTANCE, puis rien. Le port relit à CHAQUE tour (à chaud) : il
+    // n'y a donc pas de copie figée. Le fichier du bot manquait pour le bot de la
+    // pile (il lisait le fichier d'instance, déplacé par la migration) : les
+    // règles n'étaient jamais injectées.
+    rules: portReglesDuBot({
+      botId: contexte.botId,
+      cheminBot: outils?.chemins.rulesPath ?? contexte.env.rulesPath,
+      ...(contexte.reglesInstance !== undefined
+        ? { cheminInstance: contexte.reglesInstance.chemin }
+        : {}),
+      ...(logger !== undefined ? { logger } : {}),
+    }),
+    // ⚠️ CONSIGNES DURABLES : UN fichier par bot (`consignes.md`), relu à CHAQUE
+    // tour par l'extension et écrit par les quatre outils. Aucune résolution en
+    // cascade (contrairement aux règles) : ce fichier n'a jamais existé ailleurs,
+    // et un bot ne doit pas hériter des consignes d'un autre.
+    consignes: portConsignes({
+      botId: contexte.botId,
+      chemin: outils?.chemins.consignesPath ?? contexte.env.consignesPath,
+      ...(logger !== undefined ? { logger } : {}),
+    }),
     ...(pile !== undefined ? { sources: pile.service } : {}),
     ...(envois !== undefined
       ? {
@@ -272,11 +332,12 @@ export function portsHostBot(
     ...(contexte.eventSource !== undefined ? { eventSource: contexte.eventSource } : {}),
     ...(outils !== undefined
       ? {
-          // ⚠️ PAS de `personality` : la personnalité du bot est composée dans
-          // `systemPrompt` (une seule source, `prompts.personnalite`). Le store
-          // `outils.personnalite` ne sert plus qu'à AMORCER cette clé quand elle
-          // n'est pas renseignée — il n'est plus injecté à chaque tour.
-          rules: outils.regles,
+          // ⚠️ PAS de `personality` ni de `rules` ICI : la personnalité est
+          // composée dans `systemPrompt` et les règles passent par le port
+          // résolu ci-dessus (fichier du bot → fichier d'instance). Les stores
+          // `outils.personnalite` / `outils.regles` ne sont donc plus injectés
+          // tels quels : un store ouvert sur le fichier d'INSTANCE n'est PAS le
+          // fichier du bot (c'est la panne corrigée ici).
           reactions: outils.reactions,
           conversationArchive: outils.archive,
           // Archive « vie antérieure » : le dossier est celui du bot. La
@@ -324,6 +385,9 @@ export function optionsHostBot(
   poserSinonRetirer(options, "envoisProgrammes", ports.envoisProgrammes);
   poserSinonRetirer(options, "planifierTache", ports.planifierTache);
   poserSinonRetirer(options, "rules", ports.rules);
+  // ⚠️ Les consignes sont un FICHIER PAR BOT : hériter de celles du bot du run
+  // ferait écrire le bot secondaire dans le fichier d'un autre.
+  poserSinonRetirer(options, "consignes", ports.consignes);
   poserSinonRetirer(options, "reactions", ports.reactions);
   poserSinonRetirer(options, "conversationArchive", ports.conversationArchive);
   poserSinonRetirer(options, "heritage", ports.heritage);

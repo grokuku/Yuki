@@ -189,10 +189,14 @@ function occurrences(texte: string, motif: string): number {
 // ── 0. La résolution PURE, sans plomberie ─────────────────────────────────
 
 describe("résolution sans concaténation (personnaliteEffective)", () => {
+  // ⚠️ GARDE RÉVISÉE (2026-11-14) : la résolution rend désormais aussi la
+  // PROVENANCE fine (`bot` / `fichier-bot` / `fichier-instance` / `defaut` /
+  // `aucune`) — c'est elle que l'interface affiche. Les valeurs attendues sont
+  // donc PLUS PRÉCISES, jamais moins.
   it("champ RENSEIGNÉ ⇒ c'est lui, même quand le fichier porte un autre texte", () => {
     expect(
       personnaliteEffective({ champ: "Texte du champ.", champRenseigne: true, fichier: "Texte du fichier." }),
-    ).toEqual({ texte: "Texte du champ.", origine: "champ" });
+    ).toEqual({ texte: "Texte du champ.", origine: "champ", provenance: "bot" });
   });
 
   it("champ NON renseigné + fichier rempli ⇒ le FICHIER est repris (pas de perte)", () => {
@@ -202,19 +206,20 @@ describe("résolution sans concaténation (personnaliteEffective)", () => {
         champRenseigne: false,
         fichier: "Texte du fichier.",
       }),
-    ).toEqual({ texte: "Texte du fichier.", origine: "fichier" });
+    ).toEqual({ texte: "Texte du fichier.", origine: "fichier", provenance: "fichier-bot" });
   });
 
   it("champ non renseigné + fichier vide ⇒ le défaut LIVRÉ (bot neuf non vide)", () => {
     expect(
       personnaliteEffective({ champ: "Personnalité LIVRÉE.", champRenseigne: false, fichier: "" }),
-    ).toEqual({ texte: "Personnalité LIVRÉE.", origine: "champ" });
+    ).toEqual({ texte: "Personnalité LIVRÉE.", origine: "champ", provenance: "defaut" });
   });
 
   it("ni champ ni fichier ⇒ aucune personnalité (aucun bloc vide)", () => {
     expect(personnaliteEffective({ champ: "", champRenseigne: true, fichier: "  " })).toEqual({
       texte: "",
       origine: "aucune",
+      provenance: "aucune",
     });
   });
 });

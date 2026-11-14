@@ -61,8 +61,10 @@ import {
   workerLourdAutorise,
 } from "./bots/index.js";
 import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
-// ⚠️ UNE SEULE PERSONNALITÉ : résolution champ → fichier d'amorçage → défaut livré.
-import { resoudrePersonnaliteBot } from "./bots/personnalite-bot.js";
+// ⚠️ UNE SEULE PERSONNALITÉ : résolution champ → fichier du bot → fichier
+// HISTORIQUE d'instance → défaut livré (`candidatsPersonnalite` ordonne les deux
+// fichiers, du plus spécifique au plus général).
+import { candidatsPersonnalite, resoudrePersonnaliteBot } from "./bots/personnalite-bot.js";
 // ⚠️ LOT 36 (L3-d) : la Map des `PiHost` PAR BOT (`host` reste celui du bot du run).
 import { HostsBots } from "./bots/hosts.js";
 import { ExecutionBots } from "./bots/execution.js";
@@ -233,7 +235,12 @@ import {
   regularityMemory,
   type ReactionRegularity,
 } from "./reactions/index.js";
-import { RulesStore } from "./rules/index.js";
+import {
+  ReglesAdminEffectives,
+  RulesStore,
+  portReglesDuBot,
+} from "./rules/index.js";
+import { portConsignes } from "./consignes/index.js";
 import {
   BalayeurBots,
   DeclencheurJournal,
@@ -1885,6 +1892,11 @@ async function main(): Promise<void> {
     // Archive des conversations mises de côté : recherche PLEIN TEXTE en
     // LECTURE SEULE, sur demande EXPLICITE de l'utilisateur.
     conversationArchiveEnabled: conversationArchive !== undefined,
+    // ⚠️ CONSIGNES DURABLES (`memoriser_consigne`, `ajouter_fait`,
+    // `lister_consignes`, `oublier_consigne`) : TOUJOURS actives — le fichier est
+    // celui du bot, et l'humain peut tout supprimer (interface ou édition à la
+    // main). La capacité `memoire` les filtre ensuite, comme les archives.
+    consignesEnabled: true,
     // Libraire : quatre outils + capture (selon l'URL et le réglage au
     // démarrage ; décision prise à la création du host).
     librarianEnabled: librarianConfiguredNow(),
@@ -2281,6 +2293,12 @@ async function main(): Promise<void> {
    * (et non une valeur) parce que la pile du bot actif est ouverte AVANT eux.
    */
   let outilsBotsParId: Map<string, OutilsBot> | undefined;
+  /**
+   * ⚠️ ÉDITION des règles communes (`GET/PUT /api/self/rules`) : construite avec
+   * les outils du bot de la pile, consommée par les routes du gateway. Elle écrit
+   * LE FICHIER LU (mêmes candidats que l'injection).
+   */
+  let reglesAdminEffectives: ReglesAdminEffectives | undefined;
   /**
    * CONSTRUCTION DES OBJETS D'UN AUTRE BOT — le SEUL endroit qui ouvre ses
    * fichiers de sources (`pathsForBot`, `src/bots/paths.ts`). Le bot ACTIF ne
@@ -3693,6 +3711,61 @@ async function main(): Promise<void> {
       });
     }
 
+    /**
+     * ⚠️ RÈGLES DU BOT DE LA PILE — MÊME résolution que la personnalité :
+     * fichier DU BOT (`<state>/bots/<id>/rules.md`) → fichier HISTORIQUE de
+     * l'instance (`<state>/rules.md`) → rien.
+     *
+     * Bug corrigé : le host de la pile recevait `rulesStore`, ouvert sur le
+     * fichier d'INSTANCE — or la migration multi-bot a DÉPLACÉ ce fichier sous
+     * le dossier du bot. Les règles du bot de la pile n'étaient donc jamais
+     * injectées (seuls les bots secondaires lisaient leur fichier). Aucun
+     * `botId` n'est traité à part : les deux emplacements sont candidats.
+     */
+    const portReglesPile = portReglesDuBot({
+      botId: botDuRun,
+      cheminBot: outilsPile.chemins.rulesPath,
+      cheminInstance: rulesStore.filePath,
+      logger,
+    });
+    /**
+     * ⚠️ ÉDITION des règles (`GET/PUT /api/self/rules`) : le MÊME ordre de
+     * candidats que l'injection, pour que l'interface écrive LE FICHIER LU.
+     * Sinon un enregistrement réussit dans un fichier que plus personne ne lit
+     * (panne silencieuse).
+     */
+    const reglesAdmin = new ReglesAdminEffectives({
+      instancePath: rulesStore.filePath,
+      cheminBot: outilsPile.chemins.rulesPath,
+      logger,
+    });
+    reglesAdminEffectives = reglesAdmin;
+    const reglesPile = portReglesPile.read();
+    logger.info("rules.source", {
+      bot: botDuRun,
+      portee: portReglesPile.provenance(),
+      fichier: portReglesPile.chemin() ?? "",
+      chars: reglesPile.chars,
+    });
+    /**
+     * ⚠️ CONSIGNES DURABLES DU BOT DE LA PILE — `<state>/bots/<id>/consignes.md`.
+     * Une seule résolution (le fichier du bot), relue à CHAQUE tour par
+     * l'extension et écrite par les quatre outils. Ce n'est PAS la mémoire :
+     * consignes et faits sont TOUJOURS injectés.
+     */
+    const portConsignesPile = portConsignes({
+      botId: botDuRun,
+      chemin: outilsPile.chemins.consignesPath,
+      logger,
+    });
+    const consignesPile = portConsignesPile.lire();
+    logger.info("consignes.source", {
+      bot: botDuRun,
+      fichier: portConsignesPile.chemin(),
+      consignes: consignesPile.consignes.length,
+      faits: consignesPile.faits.length,
+    });
+
     // --- Libraire de Pi-Web : client HTTP + archivage EN TÂCHE DE FOND --------
     // ⚠️ Le libraire est un service EXTERNE. Le client relit la configuration à
     // CHAQUE appel (`apply: hot`) ; l'archivage est soumis à un service de fond
@@ -3895,15 +3968,30 @@ async function main(): Promise<void> {
     // consigne) et prompt enregistré qui CONTREDIT une capacité (`programmer_envoi`).
     avertirSiPromptLegerIncomplet(logger, promptLeger, config.originOf("prompts.light"));
     // ⚠️ PERSONNALITÉ : UNE SEULE SOURCE (`prompts.personnalite`), résolue par
-    // `resoudrePersonnaliteBot` — champ renseigné → fichier d'amorçage → défaut
-    // livré. C'est ce TEXTE-LÀ qui est composé, et il l'est UNE fois : le fichier
-    // `personality.md` n'est plus concaténé à la fin du prompt (la seconde source
-    // qui gagnait est supprimée).
+    // `resoudrePersonnaliteBot` — champ renseigné → fichier DU BOT → fichier
+    // HISTORIQUE d'instance (`<state>/personality.md`) → défaut livré. C'est ce
+    // TEXTE-LÀ qui est composé, et il l'est UNE fois : aucune personnalité n'est
+    // plus concaténée à la fin du prompt (la seconde source qui gagnait est
+    // supprimée).
+    // ⚠️ RÉGRESSION 2026-11-14 : pour le bot de la PILE, `personalityStore` est le
+    // store d'INSTANCE ; son fichier de bot (`<state>/bots/<id>/personality.md`)
+    // n'était donc JAMAIS lu, et le fichier historique n'était lu que par ce
+    // store. Les DEUX chemins sont désormais candidats, dans cet ordre.
     const personnalite = resoudrePersonnaliteBot({
       botId: botDuRun,
       config,
-      store: personalityStore,
-      cheminFichier: personalityStore.filePath,
+      fichiers: candidatsPersonnalite(
+        {
+          portee: "bot",
+          chemin: outilsPile.chemins.personalityPath,
+          // ⚠️ PAS de `store` ici : pour le bot de la PILE, `outilsPile.personnalite`
+          // EST le store d'instance (`<state>/personality.md`), donc son contenu
+          // n'est pas celui du fichier du bot. Le module lit le CHEMIN demandé.
+          // En mono-bot, les deux chemins sont identiques : `candidatsPersonnalite`
+          // dédoublonne et garde la portée la plus spécifique.
+        },
+        { portee: "instance", chemin: personalityStore.filePath, store: personalityStore },
+      ),
       logger,
     }).texte;
     const promptLourd = config.getString("prompts.heavy");
@@ -4032,7 +4120,14 @@ async function main(): Promise<void> {
       // `promptSystemePile` (une seule source, `prompts.personnalite`). Le store
       // `personalityStore` n'est plus injecté à chaque tour : il ne sert plus qu'à
       // amorcer la clé quand elle n'est pas renseignée.
-      rules: rulesStore,
+      // ⚠️ RÈGLES : port RÉSOLU (fichier du bot → fichier d'instance), relu à
+      // chaque tour. C'est CE port — et non `rulesStore` (fichier d'instance) —
+      // qui fait que les règles du bot de la pile sont réellement injectées.
+      rules: portReglesPile,
+      // ⚠️ CONSIGNES DURABLES (`<consignes>` / `<faits>` insérés à chaque tour
+      // après la personnalité, plus les quatre outils d'écriture directe). Le
+      // fichier est CELUI DE CE BOT : aucun autre bot ne peut l'écrire.
+      consignes: portConsignesPile,
       // DRAIN GROUPÉ des notifications de sources : le host demande le bloc
       // `<sources>` au DÉBUT de chaque tour (jamais pendant) et le fusionne dans
       // l'envoi de ce tour — un seul `send`, donc pas de rafale de tours.
@@ -4106,6 +4201,20 @@ async function main(): Promise<void> {
           outilsAutorises: outilsLegerDuBot(botId),
           ...(configBot !== undefined ? { config: configBot } : {}),
           ...(outils !== undefined ? { outils } : {}),
+          // ⚠️ FICHIER D'AMORÇAGE HISTORIQUE (`<state>/personality.md`) : sans lui,
+          // un bot dont le texte vit encore là (instance migrée à moitié ou
+          // surchargée) retombe sur le DÉFAUT LIVRÉ — c'est la régression du
+          // 2026-11-14. Même fichier pour TOUS les bots, aucun cas particulier.
+          personnaliteInstance: {
+            portee: "instance",
+            chemin: personalityStore.filePath,
+            store: personalityStore,
+          },
+          // ⚠️ FICHIER D'INSTANCE HISTORIQUE DES RÈGLES (`<state>/rules.md`) :
+          // même résolution que la personnalité — fichier DU BOT d'abord, puis
+          // ce fichier, puis rien. Même fichier pour TOUS les bots, aucun cas
+          // particulier (lecture seule : on ne déplace ni n'écrase rien).
+          reglesInstance: { portee: "instance", chemin: rulesStore.filePath },
           pile,
           ...(memoire !== undefined ? { memoire } : {}),
           ...(portDelegation !== undefined ? { delegation: portDelegation } : {}),
@@ -4833,6 +4942,33 @@ async function main(): Promise<void> {
         // « Personnalité » montre la liste réellement annoncée au modèle — jamais
         // une copie susceptible de diverger.
         outilsEffectifs: (botId: string) => [...outilsLegerDuBot(botId ?? config.botId)],
+        // ⚠️ PERSONNALITÉ EFFECTIVE d'un bot (lecture seule) : le texte RÉELLEMENT
+        // composé, avec sa provenance. Sans elle, la page d'un bot ne pouvait que
+        // montrer le défaut LIVRÉ — l'utilisateur en concluait que sa personnalité
+        // avait disparu (régression du 2026-11-14).
+        personnaliteEffective: (botId: string) => {
+          const cible = botId === "" ? config.botId : botId;
+          const outilsBot = outilsBotsParId?.get(cible);
+          const resolu = resoudrePersonnaliteBot({
+            botId: cible,
+            config: configsBots.get(cible) ?? config,
+            // Mêmes candidats que la composition du prompt : fichier DU BOT puis
+            // fichier HISTORIQUE d'instance. On lit des CHEMINS (un store peut
+            // appartenir à un autre fichier), donc aucun contenu inventé.
+            fichiers: candidatsPersonnalite(
+              outilsBot !== undefined
+                ? { portee: "bot", chemin: outilsBot.chemins.personalityPath }
+                : undefined,
+              { portee: "instance", chemin: personalityStore.filePath },
+            ),
+          });
+          return {
+            texte: resolu.texte,
+            chars: Array.from(resolu.texte).length,
+            provenance: resolu.provenance,
+            chemin: resolu.fichier,
+          };
+        },
         // Mot de passe d'INSTANCE : section dédiée de /config (définir / changer).
         ...(instancePassword ? { password: instancePassword } : {}),
         // Retirer le mot de passe est REFUSÉ tant qu'un agent sensible existe.
@@ -4858,7 +4994,33 @@ async function main(): Promise<void> {
         bots: botsAdmin,
       },
       personality: { store: personalityStore, logger },
-      rules: { store: rulesStore, logger },
+      // CONSIGNES DURABLES, PAR BOT : `GET/PUT /api/bots/<id>/consignes`. Le
+      // port est construit avec le chemin du bot demandé ; un identifiant
+      // inconnu rend `undefined` (404), jamais le fichier d'un autre.
+      consignes: {
+        logger,
+        pourBot: (botId: string) => {
+          const outilsBot = outilsBotsParId?.get(botId);
+          if (outilsBot === undefined) return undefined;
+          return {
+            port: portConsignes({
+              botId,
+              chemin: outilsBot.chemins.consignesPath,
+              logger,
+            }),
+            nom: nomDuBot(botId),
+          };
+        },
+      },
+      rules: {
+        // ⚠️ Le port d'administration écrit LE FICHIER LU (mêmes candidats que
+        // l'injection). Sans lui, l'interface enregistrait dans un fichier que
+        // plus personne ne lisait après la migration multi-bot.
+        store:
+          reglesAdminEffectives ??
+          new ReglesAdminEffectives({ instancePath: rulesStore.filePath, logger }),
+        logger,
+      },
       // SOURCES : API générique de réveil (`POST /api/sources/<nom>/messages`)
       // + boîte « Notifications ». Mêmes garde-fous que `/api/config` pour les
       // écritures d'administration ; le jeton de chaque source authentifie les

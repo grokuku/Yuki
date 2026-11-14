@@ -25,6 +25,7 @@ import {
   LockedByEnvError,
   ScopedFieldError,
   type ConfigRuntime,
+  type ConfigSnapshot,
 } from "../../config/runtime.js";
 import { botHistoriqueMono } from "../../bots/courant.js";
 import {
@@ -63,6 +64,7 @@ import {
   type InstancePasswordStore,
 } from "../../security/instance-password.js";
 import { SENSITIVE_IDLE_TIMEOUT_MS } from "../../agents/lock.js";
+import { CLE_PERSONNALITE } from "../../bots/personnalite-bot.js";
 
 export const CONFIG_WRITE_HEADER = "x-yuki-config";
 export const CONFIG_HEADER_VALUE = "1";
@@ -83,6 +85,25 @@ export const LLM_TEST_TIMEOUT_MS = 5_000;
 export const LIBRARIAN_TEST_TIMEOUT_MS = 8_000;
 /** Taille maximale acceptée pour un corps de requête. */
 export const MAX_CONFIG_BODY_BYTES = 1_000_000;
+
+/**
+ * Vue (LECTURE SEULE) de la personnalité EFFECTIVE d'un bot : ce que l'interface
+ * peut AFFIRMER sans mentir.
+ *
+ * ⚠️ `provenance` est la même notion que `ProvenancePersonnalite`
+ * (`src/personality/personality.ts`) : reprise ici en texte pour que l'API ne
+ * dépende pas du domaine.
+ */
+export interface PersonnaliteEffectiveVue {
+  /** Texte réellement composé dans le prompt du bot. */
+  readonly texte: string;
+  /** Nombre de points de code (le client ne recompte pas à sa façon). */
+  readonly chars: number;
+  /** `bot` | `fichier-bot` | `fichier-instance` | `defaut` | `aucune`. */
+  readonly provenance: "bot" | "fichier-bot" | "fichier-instance" | "defaut" | "aucune";
+  /** Chemin du fichier qui a servi, sinon `null`. */
+  readonly chemin: string | null;
+}
 
 export interface ConfigApiDeps {
   runtime: ConfigRuntime;
@@ -122,6 +143,14 @@ export interface ConfigApiDeps {
    * modèle. Absent ⇒ l'UI n'affiche aucune liste (jamais une liste inventée).
    */
   outilsEffectifs?: (botId: string) => readonly string[];
+  /**
+   * ⚠️ PERSONNALITÉ EFFECTIVE d'un bot (LECTURE SEULE) : le texte RÉELLEMENT
+   * composé dans son prompt, avec sa PROVENANCE (`bot` = valeur enregistrée,
+   * `fichier-bot` / `fichier-instance` = reprise d'un fichier d'amorçage,
+   * `defaut` = défaut livré, `aucune`). Absent ⇒ l'interface n'affirme rien
+   * (jamais un texte ni une origine inventés).
+   */
+  personnaliteEffective?: (botId: string) => PersonnaliteEffectiveVue | null;
   bots?: {
     registre?: RegistreBots | null;
     stateDir?: string;
@@ -295,6 +324,10 @@ function handleGet(deps: ConfigApiDeps): ConfigHttpResponse {
     // à chaque composition (`src/llm/prompt-systeme.ts`) et n'est éditable nulle
     // part. `null` = l'instance ne sait pas la calculer (aucune liste inventée).
     outilsGeneres: deps.outilsEffectifs?.(deps.runtime.botId) ?? null,
+    // ⚠️ Personnalité EFFECTIVE du bot de la pile, avec sa provenance : l'écran
+    // d'instance dit ainsi ce qui est RÉELLEMENT composé (le champ ci-dessus est la
+    // valeur COMMUNE, qui n'est pas forcément celle d'un bot).
+    personnaliteEffective: deps.personnaliteEffective?.(deps.runtime.botId) ?? null,
   });
 }
 
@@ -339,6 +372,8 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse {
       applied: result.applied,
       voiceInstruction: VOICE_SPEECH_INSTRUCTION,
       outilsGeneres: input.deps.outilsEffectifs?.(input.deps.runtime.botId) ?? null,
+      personnaliteEffective:
+        input.deps.personnaliteEffective?.(input.deps.runtime.botId) ?? null,
     });
   } catch (error) {
     return configWriteError(input.deps, error);
@@ -793,15 +828,56 @@ function handleBotEchange(input: ConfigRequestInput): ConfigHttpResponse {
   }
 }
 
+/**
+ * ⚠️ VÉRITÉ DE L'INTERFACE (régression « personnalité disparue » du 2026-11-14) :
+ * sur la page d'un BOT, le champ « Personnalité » montrait le défaut LIVRÉ alors
+ * que le texte de l'utilisateur vivait dans un fichier d'amorçage.
+ *
+ * Quand aucune valeur n'a été enregistrée mais qu'un fichier porte le texte
+ * (fichier DU BOT, ou fichier HISTORIQUE de l'instance), le champ affiche CE
+ * texte avec sa provenance : l'utilisateur voit la personnalité réellement
+ * composée, et s'il enregistre, la valeur devient la sienne (elle ne dépend plus
+ * du fichier). Une valeur ENREGISTRÉE n'est jamais remplacée.
+ */
+function champsAvecPersonnaliteEffective(
+  fields: ConfigSnapshot["fields"],
+  botId: string,
+  deps: ConfigApiDeps,
+): ConfigSnapshot["fields"] {
+  const effective = deps.personnaliteEffective?.(botId);
+  if (effective === undefined || effective === null) return fields;
+  if (effective.texte.trim() === "") return fields;
+  if (
+    effective.provenance !== "fichier-bot" &&
+    effective.provenance !== "fichier-instance"
+  ) {
+    return fields;
+  }
+  const entree = fields[CLE_PERSONNALITE];
+  if (entree === undefined || !("value" in entree) || entree.origin !== "default") {
+    return fields;
+  }
+  return {
+    ...fields,
+    [CLE_PERSONNALITE]: {
+      ...entree,
+      value: effective.texte,
+      provenance: effective.provenance,
+      ...(effective.chemin !== null ? { fichier: effective.chemin } : {}),
+    },
+  };
+}
+
 /** `GET /api/bots/<id>/config` — valeurs effectives du bot demandé. */
 function handleBotGet(deps: ConfigApiDeps, botId: string): ConfigHttpResponse {
   const snapshot = deps.runtime.snapshotPour(botId);
   return json(200, {
     bot: { id: botId },
-    fields: snapshot.fields,
+    fields: champsAvecPersonnaliteEffective(snapshot.fields, botId, deps),
     status: snapshot.status,
     voiceInstruction: VOICE_SPEECH_INSTRUCTION,
     outilsGeneres: deps.outilsEffectifs?.(botId) ?? null,
+    personnaliteEffective: deps.personnaliteEffective?.(botId) ?? null,
   });
 }
 
@@ -851,11 +927,12 @@ function handleBotPut(
     audit(input.deps, result.changes, flow);
     return json(200, {
       bot: { id: botId },
-      fields: result.fields,
+      fields: champsAvecPersonnaliteEffective(result.fields, botId, input.deps),
       status: result.status,
       applied: result.applied,
       voiceInstruction: VOICE_SPEECH_INSTRUCTION,
       outilsGeneres: input.deps.outilsEffectifs?.(botId) ?? null,
+      personnaliteEffective: input.deps.personnaliteEffective?.(botId) ?? null,
     });
   } catch (error) {
     return configWriteError(input.deps, error);

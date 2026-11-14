@@ -204,6 +204,27 @@ export type FileListToolName = "lister_fichiers";
  */
 export type FileReadToolName = "lire_fichier";
 
+/**
+ * Outils des CONSIGNES DURABLES du bot (`memoriser_consigne`, `ajouter_fait`,
+ * `lister_consignes`, `oublier_consigne`).
+ *
+ * ⚠️ ÉCRITURE DIRECTE par le bot (décision utilisateur du 2026-11-14) : le bot
+ * enregistre lui-même une consigne (« ne refais plus jamais ça ») ou un fait.
+ * Le fichier reste LISIBLE et SUPPRIMABLE par l'humain (interface de la page du
+ * bot, ou édition à la main) : ce n'est pas un canal caché.
+ *
+ * ⚠️ Le port est PAR BOT (le chemin est capturé à la construction) : ces outils
+ * ne peuvent pas écrire dans le fichier d'un autre bot.
+ *
+ * ⚠️ Capacité `memoire` (ce sont des archives durables du bot, pas des
+ * souvenirs recherchés).
+ */
+export type ConsigneToolName =
+  | "memoriser_consigne"
+  | "ajouter_fait"
+  | "lister_consignes"
+  | "oublier_consigne";
+
 /** Tous les noms d'outils custom, par catégorie (garde-fou testable). */
 export type CustomToolName =
   | DelegateToolName
@@ -222,7 +243,8 @@ export type CustomToolName =
   | FileTransferToolName
   | FileListToolName
   | FileReadToolName
-  | ImageToolName;
+  | ImageToolName
+  | ConsigneToolName;
 
 export interface ToolPolicyEntry {
   readonly role: LlmRole;
@@ -244,6 +266,8 @@ export interface ToolPolicyEntry {
   readonly heritage: readonly HeritageToolName[];
   /** Outil de recherche dans l'archive des conversations mises de côté. */
   readonly conversationArchive: readonly ConversationArchiveToolName[];
+  /** Outils des CONSIGNES DURABLES du bot (consignes + faits, écriture directe). */
+  readonly consignes: readonly ConsigneToolName[];
   /** Outils du libraire de Pi-Web (recherche documentaire + web). */
   readonly librarian: readonly LibrarianToolName[];
   /** Outil de CAPTURE de page web via Libry (`capture_libraire`). */
@@ -335,6 +359,18 @@ export const HERITAGE_TOOLS: readonly HeritageToolName[] = [
  */
 export const CONVERSATION_ARCHIVE_TOOLS: readonly ConversationArchiveToolName[] = [
   "chercher_conversations_archivees",
+];
+
+/**
+ * Outils des CONSIGNES DURABLES (écriture directe par le bot, fichier du bot).
+ * ⚠️ Ils n'ont de sens qu'avec un port de consignes : le câblage les active
+ * (`consignesEnabled`), et la capacité `memoire` les filtre ensuite.
+ */
+export const CONSIGNE_TOOLS: readonly ConsigneToolName[] = [
+  "memoriser_consigne",
+  "ajouter_fait",
+  "lister_consignes",
+  "oublier_consigne",
 ];
 
 /**
@@ -543,7 +579,7 @@ export const OUTILS_DES_CAPACITES: Readonly<Record<CapaciteBot, CapaciteOutils>>
   /** Archives consultables : vie antérieure et conversations mises de côté. */
   memoire: {
     builtins: [],
-    custom: [...HERITAGE_TOOLS, ...CONVERSATION_ARCHIVE_TOOLS],
+    custom: [...HERITAGE_TOOLS, ...CONVERSATION_ARCHIVE_TOOLS, ...CONSIGNE_TOOLS],
   },
   /**
    * Builtins de l'agent de développement (`read`, `ls`, `grep`, `find`).
@@ -598,6 +634,10 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     secretRequests: SECRET_REQUEST_TOOLS,
     heritage: HERITAGE_TOOLS,
     conversationArchive: CONVERSATION_ARCHIVE_TOOLS,
+    // ⚠️ CONSIGNES DURABLES : le léger (celui qui converse) porte l'écriture —
+    // c'est lui qui reçoit « ne refais plus jamais ça ». Le fichier est celui
+    // du bot, et l'humain peut tout supprimer.
+    consignes: CONSIGNE_TOOLS,
     librarian: LIBRARIAN_TOOLS,
     librarianCapture: LIBRARIAN_CAPTURE_TOOLS,
     // Fichiers : Yuki peut RENVOYER un fichier de la conversation (le lourd
@@ -655,6 +695,8 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     secretRequests: [],
     heritage: [],
     conversationArchive: [],
+    // ⚠️ Le worker lourd ne converse pas : il n'écrit pas de consignes.
+    consignes: [],
     librarian: [],
     librarianCapture: [],
     files: [],
@@ -735,6 +777,12 @@ export interface ToolAllowlistOptions {
    * l'active, quand un port d'archive existe.
    */
   heritageEnabled?: boolean;
+  /**
+   * Active les quatre outils des CONSIGNES DURABLES (`memoriser_consigne`,
+   * `ajouter_fait`, `lister_consignes`, `oublier_consigne`). DÉSACTIVÉ par
+   * défaut : seul le câblage l'active, quand un port de consignes existe.
+   */
+  consignesEnabled?: boolean;
   /**
    * Active l'outil de RECHERCHE dans l'archive des conversations mises de côté
    * (`chercher_conversations_archivees`). DÉSACTIVÉ par défaut : seul le câblage
@@ -837,6 +885,8 @@ export function toolAllowlist(
   const heritageEnabled = (options.heritageEnabled ?? false) && entry.heritage.length > 0;
   const conversationArchiveEnabled =
     (options.conversationArchiveEnabled ?? false) && entry.conversationArchive.length > 0;
+  const consignesEnabled =
+    (options.consignesEnabled ?? false) && entry.consignes.length > 0;
   const librarianEnabled = (options.librarianEnabled ?? false) && entry.librarian.length > 0;
   const librarianCaptureEnabled =
     librarianEnabled &&
@@ -879,6 +929,9 @@ export function toolAllowlist(
   }
   if (conversationArchiveEnabled) {
     tools.push(...entry.conversationArchive);
+  }
+  if (consignesEnabled) {
+    tools.push(...entry.consignes);
   }
   if (librarianEnabled) {
     tools.push(...entry.librarian);
@@ -1002,6 +1055,13 @@ export const REMOTE_TOOL_GROUP_OF: Readonly<Record<CustomToolName, RemoteToolGro
   capture_libraire: "outils",
   archive_vie_anterieure: "outils",
   chercher_conversations_archivees: "outils",
+  // ⚠️ CONSIGNES DURABLES : elles n'ouvrent AUCUNE machine et n'écrivent que
+  // dans le fichier du bot — un run de canal peut donc les porter sans réglage
+  // d'accès distant (le fichier reste visible et supprimable par l'humain).
+  memoriser_consigne: "toujours",
+  ajouter_fait: "toujours",
+  lister_consignes: "toujours",
+  oublier_consigne: "toujours",
   // ── groupe TOUJOURS (aucun réglage) ───────────────────────────────────
   lister_fichiers: "toujours",
   lire_fichier: "toujours",
@@ -1374,7 +1434,19 @@ export function toolAllowlistForChat(
   // léger LOCAL ne porte ni `lister_fichiers` ni `lire_fichier` (il reçoit le
   // contenu dans son message) alors qu'un run de canal en a besoin pour voir une
   // pièce jointe. Un port absent est signalé par l'appelant, jamais deviné ici.
-  for (const tool of REMOTE_ALWAYS_TOOLS) autorises.add(tool);
+  for (const tool of REMOTE_ALWAYS_TOOLS) {
+    // ⚠️ CONSIGNES DURABLES : le socle `toujours` ne garantit pas le PORT. Sans
+    // `consignesEnabled` (aucun fichier de consignes pour ce run), l'outil serait
+    // ANNONCÉ sans définition — le modèle l'appellerait pour rien. On ne pousse
+    // donc que ce que la politique du rôle a réellement ouvert.
+    if (
+      !(options.consignesEnabled ?? false) &&
+      (CONSIGNE_TOOLS as readonly string[]).includes(tool)
+    ) {
+      continue;
+    }
+    autorises.add(tool);
+  }
   // ⚠️ INTERSECTION AVEC LES CAPACITÉS, APRÈS le socle `toujours` : le socle est
   // poussé SANS passer par les options du rôle, or deux de ses outils
   // (`programmer_envoi`, `planifier_tache`) ne sont ouverts que par la capacité

@@ -326,6 +326,10 @@ describe("llm — politique d'outils d'un run DISTANT (branchée par `toolAllowl
     librarianCaptureEnabled: true,
     filesEnabled: true,
     imagesEnabled: true,
+    // ⚠️ AJOUTÉ (2026-11-14) : « tout activé » inclut les CONSIGNES DURABLES —
+    // sans cette option, leurs outils ne sont pas ouverts (le socle distant ne les
+    // pousse que si le port existe).
+    consignesEnabled: true,
   } as const;
 
   it("mode LOCAL : la liste est, élément pour élément, celle d'avant", () => {

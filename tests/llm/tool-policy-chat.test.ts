@@ -52,6 +52,9 @@ const FULL_OPTIONS = {
   fileListEnabled: true,
   fileReadEnabled: true,
   imagesEnabled: true,
+  // ⚠️ AJOUTÉ (2026-11-14) : les CONSIGNES DURABLES font partie de « tout
+  // activé » ; le socle `toujours` ne pousse leurs outils que si le port existe.
+  consignesEnabled: true,
 };
 
 describe("mode local — politique INCHANGÉE", () => {

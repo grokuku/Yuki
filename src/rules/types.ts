@@ -58,6 +58,20 @@ export type RulesWriteResult = TextDocumentWriteResult;
 export interface RulesAdminPort extends RulesPort {
   /** Borne de caractères (points de code) appliquée aux écritures et lectures. */
   readonly maxChars: number;
+  /**
+   * Emplacement RÉEL de l'édition : le fichier lu ET écrit (facultatif).
+   *
+   * ⚠️ Les règles peuvent vivre à DEUX endroits (fichier du bot, puis fichier
+   * d'instance). Sans cette information, l'interface ne peut pas dire où
+   * l'enregistrement a atterri — et c'est exactement ce qui a produit la panne
+   * silencieuse « j'enregistre, rien ne change » (écriture dans un fichier que
+   * plus personne ne lit). Un port qui n'a qu'un fichier peut l'omettre.
+   */
+  emplacement?(): {
+    readonly chemin: string;
+    readonly portee: "bot" | "instance";
+    readonly existe: boolean;
+  };
   /** Écrit (atomique) + snapshot + journal. Tronque à la borne (signalé). */
   write(text: string, source: RulesSource): RulesWriteResult;
   /** Restaure la version précédente (la plus récente différente de l'actuelle). */

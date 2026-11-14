@@ -2,8 +2,11 @@
  * DEUX PAGES DE CONFIGURATION (lot 35d, sous-lot 1b-4) — ce que ce fichier
  * VERROUILLE :
  *
- *  ① **7 onglets** sur la page Instance (`config.html`), **6** sur la page Bot
+ *  ① **8 onglets** sur la page Instance (`config.html`), **7** sur la page Bot
  *    (`bots.html`), avec les libellés EXACTS et dans l'ordre ;
+ *    ⚠️ GARDE MODIFIÉE (2026-11-14, « consignes durables ») : l'onglet
+ *    « Prompts » a été AJOUTÉ aux deux pages (ce que l'utilisateur demande dans
+ *    « Personnalité », la mécanique du prompt dans « Prompts ») ;
  *  ② la règle de PORTÉE : la page Instance ne rend que les clés `instance` /
  *    `mixte`, la page Bot que `bot` / `mixte` — croisée avec `CONFIG_SCHEMA`
  *    (l'autorité), pas avec un miroir ;
@@ -106,10 +109,11 @@ function libellesHtml(html: string): string[] {
 }
 
 describe("① deux pages, deux jeux d'onglets", () => {
-  it("la page INSTANCE déclare 7 onglets, libellés exacts et dans l'ordre", () => {
+  it("la page INSTANCE déclare 8 onglets, libellés exacts et dans l'ordre", () => {
     expect(PAGES.instance.scopes).toEqual(["instance", "mixte"]);
     expect(libellesHtml(CONFIG_HTML)).toEqual([
       "Modèles",
+      "Prompts",
       "Exécution",
       "Images",
       "Agents",
@@ -121,15 +125,16 @@ describe("① deux pages, deux jeux d'onglets", () => {
     expect(libellesHtml(CONFIG_HTML)).toEqual(
       ongletsDePage("instance").map((onglet) => onglet.libelle),
     );
-    expect([...CONFIG_HTML.matchAll(/role="tab"/g)].length).toBe(7);
-    expect([...CONFIG_HTML.matchAll(/role="tabpanel"/g)].length).toBe(7);
+    expect([...CONFIG_HTML.matchAll(/role="tab"/g)].length).toBe(8);
+    expect([...CONFIG_HTML.matchAll(/role="tabpanel"/g)].length).toBe(8);
   });
 
-  it("la page BOT déclare 6 onglets, libellés exacts et dans l'ordre", () => {
+  it("la page BOT déclare 7 onglets, libellés exacts et dans l'ordre", () => {
     expect(PAGES.bot.scopes).toEqual(["bot", "mixte"]);
     expect(libellesHtml(BOTS_HTML)).toEqual([
       "Général",
       "Personnalité",
+      "Prompts",
       "Voix",
       "Mémoire",
       "Plateformes",
@@ -138,8 +143,8 @@ describe("① deux pages, deux jeux d'onglets", () => {
     expect(libellesHtml(BOTS_HTML)).toEqual(
       ongletsDePage("bot").map((onglet) => onglet.libelle),
     );
-    expect([...BOTS_HTML.matchAll(/role="tab"/g)].length).toBe(6);
-    expect([...BOTS_HTML.matchAll(/role="tabpanel"/g)].length).toBe(6);
+    expect([...BOTS_HTML.matchAll(/role="tab"/g)].length).toBe(7);
+    expect([...BOTS_HTML.matchAll(/role="tabpanel"/g)].length).toBe(7);
     // La page se DÉCLARE comme page de bot (c'est ce que lit `config.js`).
     expect(BOTS_HTML).toContain('data-config-page="bot"');
     expect(CONFIG_HTML).toContain('data-config-page="instance"');
@@ -510,7 +515,10 @@ describe("④ encarts de renvoi : un groupe déplacé DIT où il est allé", () 
 
   it("les groupes éclatés portent un renvoi sur AU MOINS une page", () => {
     const ids = avecRenvoi.map((group) => group.id);
-    for (const id of ["prompts", "memoire", "tts", "notifications", "sources"]) {
+    // ⚠️ GARDE MODIFIÉE (2026-11-14) : le groupe `prompts` a été SCINDÉ en
+    // `personnalite` (ce que l'utilisateur demande) et `prompts-systeme` (la
+    // mécanique) — les deux portent désormais un renvoi.
+    for (const id of ["personnalite", "prompts-systeme", "memoire", "tts", "notifications", "sources"]) {
       expect(ids, id).toContain(id);
     }
   });

@@ -188,6 +188,15 @@ export interface Env {
    * Surcharge : `YUKI_RULES_PATH`.
    */
   rulesPath: string;
+  // --- Consignes durables du bot (Markdown, éditable à la main) ---
+  /**
+   * Fichier Markdown des CONSIGNES DURABLES du bot (volume `state`,
+   * `bots/<id>/consignes.md`) : deux sections, `## Consignes` (instructions
+   * impératives) et `## Faits` (informations déclaratives). ⚠️ Il est TOUJOURS
+   * injecté dans le prompt (blocs `<consignes>` / `<faits>`) — ce n'est PAS la
+   * mémoire, qui est recherchée. Surcharge : `YUKI_CONSIGNES_PATH`.
+   */
+  consignesPath: string;
   /**
    * Registre des SOURCES — programmes extérieurs autorisés à réveiller Yuki
    * (volume `state`). ⚠️ Séparé de `config.json` : la configuration n'accepte
@@ -534,6 +543,11 @@ export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
       env,
       "YUKI_RULES_PATH",
       `${mountPoints.state}/rules.md`,
+    ),
+    consignesPath: getString(
+      env,
+      "YUKI_CONSIGNES_PATH",
+      `${mountPoints.state}/consignes.md`,
     ),
     sourcesStorePath: getString(
       env,
