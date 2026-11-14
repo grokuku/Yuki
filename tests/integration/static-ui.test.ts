@@ -222,11 +222,15 @@ describe("UI statique servie par le gateway", () => {
     // Rendu EAGER : les conteneurs de groupes des onglets existent dans le
     // markup (les lignes sont construites côté JS au chargement). Le panneau
     // Agents monte son composant dans `agents-root`.
-    // ⚠️ `personality-root` et `voices-root` ont QUITTÉ cette page : ils vivent
-    // dans `bots.html` (onglets « Personnalité » et « Voix » de la page du bot).
-    for (const id of ["group-modeles", "group-execution", "group-images", "images-root", "group-systeme", "agents-root", "secrets-root", "tts-assistant-root"]) {
+    // ⚠️ GARDE MODIFIÉE : `voices-root` vit dans `bots.html` (onglet « Voix » de
+    // la page du bot) ; `personality-root`, lui, est REVENU ici — le fichier
+    // PARTAGÉ `personality.md` et les RÈGLES STRICTES `rules.md` sont des
+    // réglages d'INSTANCE (onglet « Modèles » de `/config`).
+    for (const id of ["group-modeles", "group-execution", "group-images", "images-root", "group-systeme", "agents-root", "secrets-root", "tts-assistant-root", "personality-root"]) {
       expect(body).toContain(`id="${id}"`);
     }
+    // La page Instance ne porte AUCUN avatar éditable : l'avatar est PAR BOT.
+    expect(body).not.toContain("Changer l'avatar");
 
     // Un SEUL enregistrement global, dans une barre persistante (sticky), avec
     // un indicateur « modifications non enregistrées ».
@@ -276,9 +280,16 @@ describe("UI statique servie par le gateway", () => {
     expect(body).toContain('id="bot-courant-nom"');
     expect(body).toContain('id="bot-add"');
     // Les composants autonomes qui lisent le bot ACTIF sont montés ici.
-    for (const id of ["bot-general-root", "personality-root", "voices-root", "chat-root", "sources-root"]) {
+    // ⚠️ GARDE MODIFIÉE : `personality-root` a QUITTÉ cette page (réglage
+    // d'INSTANCE, il vit dans `config.html`). L'onglet « Personnalité » d'un bot
+    // ne porte QUE le conteneur de champs `group-personnalite` : il est donc
+    // identique pour TOUS les bots.
+    for (const id of ["bot-general-root", "voices-root", "chat-root", "sources-root"]) {
       expect(body, id).toContain(`id="${id}"`);
     }
+    expect(body).not.toContain('id="personality-root"');
+    // Aucun panneau `personality.md` / `rules.md` sur la page d'un bot.
+    expect(body).not.toContain("Règles strictes");
     // Conteneurs des groupes (rendu EAGER).
     for (const id of ["group-general", "group-personnalite", "group-voix", "group-memoire"]) {
       expect(body, id).toContain(`id="${id}"`);
@@ -971,10 +982,13 @@ describe("Panneau Personnalité — section « Règles strictes » (éditées pa
     const body = await (await fetch(`${baseUrl}/config`)).text();
     // ⚠️ 7 onglets depuis la scission Instance / Bot (sous-lot 1b-4) : aucun autre.
     expect([...body.matchAll(/role="tab"/g)].length).toBe(7);
-    // Le panneau de la personnalité a quitté /config pour la page du BOT : le
-    // contenu (règles, archive, mémoire) reste livré, mais sur `/bots`.
+    // ⚠️ GARDE MODIFIÉE : le panneau de la personnalité PARTAGÉE (règles
+    // strictes, `personality.md`, archive, mémoire) est un réglage d'INSTANCE —
+    // il vit dans `/config` (onglet « Modèles ») et NON sur la page d'un bot, où
+    // il n'apparaissait que pour le bot ACTIF.
+    expect(body).toContain('id="personality-root"');
     const bots = await (await fetch(`${baseUrl}/bots`)).text();
-    expect(bots).toContain('id="personality-root"');
+    expect(bots).not.toContain('id="personality-root"');
     expect(bots).toContain('id="tab-personnalite"');
     expect(body).not.toMatch(/\sstyle=/);
   });

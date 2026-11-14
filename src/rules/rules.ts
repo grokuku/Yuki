@@ -5,7 +5,14 @@
  * `rules.md` démarre VIDE et c'est l'UTILISATEUR qui le rédige. Ces règles sont
  * des CONSIGNES (posées sur Yuki), pas des garanties : AUCUN câblage
  * d'interdiction ne les accompagne — on ne bloque aucun outil, on n'ajoute
- * aucun refus. Elles sont injectées EN PREMIER, AVANT la personnalité.
+ * aucun refus.
+ *
+ * ⚠️ Ce ne sont PAS des personnalités (décision utilisateur du 2026-11-14) : ce
+ * sont des RÈGLES DURES, immuables et non modifiables par le modèle. Elles sont
+ * concaténées au prompt système du tour par une extension (`<regles>`), donc en
+ * DERNIER — et c'est leur EN-TÊTE qui porte la priorité : « ces règles PRIMENT
+ * sur votre personnalité ». La primauté est DÉCLARÉE, pas déduite d'un ordre de
+ * concaténation implicite.
  */
 
 import { clampText } from "../state/text-document-store.js";

@@ -1,34 +1,38 @@
 /**
- * Extension SDK de personnalité + VERROU DE L'ORDRE D'INJECTION.
+ * PROMPT SYSTÈME — ORDRE DES EXTENSIONS, RÈGLES STRICTES, et ABSENCE d'extension
+ * de personnalité.
  *
- * Prouve :
- *  - la personnalité est injectée dans le PROMPT SYSTÈME du tour (mécanisme NON
- *    PERSISTÉ) et JAMAIS comme `message` (`Object.keys(result) === ["systemPrompt"]`) ;
- *  - fichier absent/vide ⇒ AUCUNE injection ;
- *  - l'ORDRE d'application est **règles → personnalité → mémoire → annuaire →
- *    heritage**, et chaque bloc est CONCATÉNÉ (aucun n'écrase un autre).
+ * ⚠️ CE FICHIER REMPLACE `tests/pi/personality-extension.test.ts` (2026-11-14) :
+ * l'extension de personnalité n'existe PLUS. Elle était la SECONDE source de
+ * personnalité (le fichier `personality.md`), concaténée APRÈS le prompt composé
+ * — donc elle GAGNAIT sur `prompts.personnalite`. La personnalité a maintenant
+ * une seule source, composée une fois par `src/llm/prompt-systeme.ts`.
  *
- * ⚠️ Point délicat : quatre autres extensions modifient déjà le prompt du tour.
- * L'ordre est verrouillé en testant directement `buildInlineExtensions`
- * (`src/pi/sdk-host.ts`), source de vérité de l'enregistrement. Ordre attendu :
- * **règles → personnalité → mémoire → annuaire → heritage**.
+ * Ce qui est VERROUILLÉ ici :
+ *  ① aucune extension de personnalité n'est enregistrée, et aucun fichier de
+ *    `src/pi/**` ne lit plus `PersonalityPort` (le fichier n'est plus concaténé
+ *    à la fin du `systemPrompt`) ;
+ *  ② l'ORDRE d'application est **règles → mémoire → annuaire → heritage**, chaque
+ *    bloc étant CONCATÉNÉ (aucun n'écrase un autre) ;
+ *  ③ les RÈGLES restent une extension (relues à chaud, en dernier) et leur bloc
+ *    balisé DÉCLARE qu'elles priment sur la personnalité ;
+ *  ④ l'extension de règles n'enregistre AUCUN outil (le modèle ne peut pas
+ *    écrire ses règles).
  */
+
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { AGENT_LIST_TAG } from "../../src/agents/output.js";
 import { HERITAGE_NOTICE } from "../../src/pi/sdk/heritage-extension.js";
 import {
-  PERSONALITY_EXTENSION_NAME,
-  createPersonalityExtensionFactory,
-} from "../../src/pi/sdk/personality-extension.js";
-import {
   RULES_EXTENSION_NAME,
   createRulesExtensionFactory,
 } from "../../src/pi/sdk/rules-extension.js";
 import { buildInlineExtensions } from "../../src/pi/sdk-host.js";
 import type { MemoryPort, MemoryRecallResult } from "../../src/memory/types.js";
-import type { PersonalityDocument, PersonalityPort } from "../../src/personality/types.js";
 import type { RulesDocument, RulesPort } from "../../src/rules/types.js";
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 
@@ -44,17 +48,6 @@ function handlersOf(extension: InlineExtension): Handler[] {
     },
   } as never);
   return handlers;
-}
-
-function fakePersonality(text: string): PersonalityPort {
-  return {
-    read: (): PersonalityDocument => ({
-      text,
-      chars: Array.from(text).length,
-      truncated: false,
-      exists: text.length > 0,
-    }),
-  };
 }
 
 function fakeRules(text: string): RulesPort {
@@ -82,10 +75,6 @@ function fakeMemory(block: string | null): MemoryPort {
   };
 }
 
-const personality = {
-  read: () => ({ text: "Je suis Yuki, calme et précise.", chars: 32, truncated: false, exists: true }),
-};
-
 const rules = {
   read: () => ({
     text: "Ne jamais divulguer mes secrets.",
@@ -94,6 +83,8 @@ const rules = {
     exists: true,
   }),
 };
+
+const logger = { debug() {}, info() {}, warn() {}, error() {} };
 
 /** Réplique du chaînage du SDK : chaque handler reçoit le prompt COURANT. */
 async function runChain(
@@ -113,124 +104,103 @@ async function runChain(
   return current;
 }
 
-describe("extension de personnalité — injection (before_agent_start)", () => {
-  it("injecte le bloc dans le PROMPT SYSTÈME, jamais comme message (non persisté)", async () => {
-    const [handler] = handlersOf(
-      createPersonalityExtensionFactory(fakePersonality("Je suis Yuki.")),
-    );
-    const result = (await handler!({
-      prompt: "Bonjour",
-      systemPrompt: "PROMPT DE BASE",
-    })) as { message?: unknown; systemPrompt?: string };
-
-    expect(Object.keys(result)).toEqual(["systemPrompt"]);
-    expect(result.message).toBeUndefined();
-    expect(result.systemPrompt).toContain("PROMPT DE BASE");
-    expect(result.systemPrompt).toContain("<personnalite>");
-    expect(result.systemPrompt).toContain("Je suis Yuki.");
-  });
-
-  it("fichier ABSENT ou VIDE : aucune injection (aucun bloc vide)", async () => {
-    for (const text of ["", "   ", "\n"]) {
-      const [handler] = handlersOf(createPersonalityExtensionFactory(fakePersonality(text)));
-      const result = await handler!({ prompt: "Bonjour", systemPrompt: "BASE" });
-      expect(result).toBeUndefined();
-    }
-  });
-
-  it("lecture qui ÉCHOUE : aucune exception, tour omis", async () => {
-    const [handler] = handlersOf(
-      createPersonalityExtensionFactory({
-        read: () => {
-          throw new Error("disque illisible");
-        },
-      }),
-    );
-    expect(await handler!({ prompt: "x", systemPrompt: "BASE" })).toBeUndefined();
-  });
-});
-
-describe("ORDRE d'injection des extensions (verrou)", () => {
-  it("enregistre dans l'ordre règles → personnalité → mémoire → annuaire → heritage", () => {
+describe("① plus d'extension de personnalité (une seule source)", () => {
+  it("`buildInlineExtensions` n'enregistre AUCUNE extension de personnalité", () => {
     const extensions = buildInlineExtensions({
       rules,
-      personality,
       memory: fakeMemory("MEM"),
       directory: { list: () => [{ name: "nuc00", agentId: "a1" }] },
       heritage: { info: () => ({ present: true, entries: 1, manifest: null }) },
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      logger,
+    } as never);
+    const noms = extensions.map((extension) => (extension as { name: string }).name);
+    expect(noms).not.toContain("yuki-personality");
+    expect(noms.some((nom) => /personal|personnal/i.test(nom))).toBe(false);
+  });
+
+  it("aucun fichier de `src/pi/**` ne lit le port de personnalité (plus de concaténation)", () => {
+    // Garde STRUCTURELLE : le fichier `personality.md` n'est plus injecté dans le
+    // prompt. S'il revenait par un import, ce test le dirait.
+    const coupables: string[] = [];
+    const parcourir = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const complet = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          parcourir(complet);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+        const source = readFileSync(complet, "utf8");
+        if (/PersonalityPort|PersonalityExtension|personality-extension/.test(source)) {
+          coupables.push(complet.replace(`${process.cwd()}/`, ""));
+        }
+      }
+    };
+    parcourir(join(process.cwd(), "src", "pi"));
+    expect(coupables).toEqual([]);
+  });
+});
+
+describe("② ORDRE d'injection des extensions (verrou)", () => {
+  it("enregistre dans l'ordre règles → mémoire → annuaire → heritage", () => {
+    const extensions = buildInlineExtensions({
+      rules,
+      memory: fakeMemory("MEM"),
+      directory: { list: () => [{ name: "nuc00", agentId: "a1" }] },
+      heritage: { info: () => ({ present: true, entries: 1, manifest: null }) },
+      logger,
     } as never);
     expect(extensions.map((extension) => (extension as { name: string }).name)).toEqual([
       RULES_EXTENSION_NAME,
-      PERSONALITY_EXTENSION_NAME,
       "yuki-memory",
       "yuki-agent-roster",
       "yuki-heritage",
     ]);
   });
 
-  it("les cinq blocs sont présents, CONCATÉNÉS dans le bon ordre (règles AVANT personnalité)", async () => {
+  it("les quatre blocs sont présents, CONCATÉNÉS dans le bon ordre, sans écraser la base", async () => {
     const extensions = buildInlineExtensions({
       rules,
-      personality,
       memory: fakeMemory("## Mémoire durable de Yuki\n- [fait] un souvenir"),
       directory: { list: () => [{ name: "nuc00", agentId: "a1" }] },
       heritage: { info: () => ({ present: true, entries: 1, manifest: null }) },
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      logger,
     } as never);
 
     const prompt = await runChain(extensions);
 
     const indexRules = prompt.indexOf("<regles>");
-    const indexPersonality = prompt.indexOf("<personnalite>");
     const indexMemory = prompt.indexOf("## Mémoire durable de Yuki");
     const indexRoster = prompt.indexOf(`<${AGENT_LIST_TAG}>`);
     const indexHeritage = prompt.indexOf(HERITAGE_NOTICE);
 
-    // Les cinq blocs sont présents…
     expect(indexRules).toBeGreaterThan(-1);
-    expect(indexPersonality).toBeGreaterThan(-1);
     expect(indexMemory).toBeGreaterThan(-1);
     expect(indexRoster).toBeGreaterThan(-1);
     expect(indexHeritage).toBeGreaterThan(-1);
-    // …et dans l'ORDRE attendu : les RÈGLES viennent EN PREMIER.
-    expect(indexRules).toBeLessThan(indexPersonality);
-    expect(indexPersonality).toBeLessThan(indexMemory);
+    expect(indexRules).toBeLessThan(indexMemory);
     expect(indexMemory).toBeLessThan(indexRoster);
     expect(indexRoster).toBeLessThan(indexHeritage);
-    // Le prompt de base est toujours là (aucun écrasement).
     expect(prompt.startsWith("PROMPT DE BASE")).toBe(true);
   });
 
-  it("sans personnalité : les autres blocs restent présents (pas de régression)", async () => {
+  it("sans règles : les autres blocs restent présents (pas de régression)", async () => {
     const extensions = buildInlineExtensions({
       memory: fakeMemory("## Mémoire durable de Yuki\n- [fait] x"),
       directory: { list: () => [{ name: "nuc00", agentId: "a1" }] },
       heritage: { info: () => ({ present: true, entries: 1, manifest: null }) },
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      logger,
     } as never);
     expect(extensions).toHaveLength(3);
     const prompt = await runChain(extensions);
     expect(prompt).toContain("## Mémoire durable de Yuki");
     expect(prompt).toContain(`<${AGENT_LIST_TAG}>`);
     expect(prompt).toContain(HERITAGE_NOTICE);
-    expect(prompt).not.toContain("<personnalite>");
-    expect(prompt).not.toContain("<regles>");
-  });
-
-  it("sans règles : la personnalité et le reste restent présents (pas de régression)", async () => {
-    const extensions = buildInlineExtensions({
-      personality,
-      memory: fakeMemory("## Mémoire durable de Yuki\n- [fait] x"),
-      logger: { debug() {}, info() {}, warn() {}, error() {} },
-    } as never);
-    const prompt = await runChain(extensions);
-    expect(prompt).toContain("<personnalite>");
     expect(prompt).not.toContain("<regles>");
   });
 });
 
-describe("extension de RÈGLES strictes — injection (before_agent_start)", () => {
+describe("③ extension de RÈGLES strictes — injection et PRIORITÉ", () => {
   it("injecte le bloc dans le PROMPT SYSTÈME, jamais comme message (non persisté)", async () => {
     const [handler] = handlersOf(createRulesExtensionFactory(fakeRules("Ne jamais mentir.")));
     const result = (await handler!({
@@ -274,9 +244,7 @@ describe("extension de RÈGLES strictes — injection (before_agent_start)", () 
     expect(await handler!({ prompt: "x", systemPrompt: "BASE" })).toBeUndefined();
   });
 
-  it("n'enregistre AUCUN outil : Yuki ne peut pas écrire ses règles via l'extension", () => {
-    // L'extension ne s'abonne QU'à `before_agent_start` (injection) : aucun
-    // outil n'est déclaré, donc le modèle ne peut pas écrire `rules.md`.
+  it("n'enregistre AUCUN outil : le modèle ne peut pas écrire ses règles", () => {
     const events: string[] = [];
     const extension = createRulesExtensionFactory(fakeRules("x"));
     const run = typeof extension === "function" ? extension : extension.factory;

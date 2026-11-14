@@ -28,7 +28,9 @@ const SDK_ALLOWLIST = [
   "src/pi/sdk/execution-tools.ts",
   "src/pi/sdk/memory-extension.ts",
   "src/pi/sdk/reactions-extension.ts",
-  "src/pi/sdk/personality-extension.ts",
+  // ⚠️ SUPPRIMÉ ici : `src/pi/sdk/personality-extension.ts` n'existe plus — il
+  // était la SECONDE source de personnalité (concaténée à la fin du prompt, donc
+  // gagnante). Une seule source : `prompts.personnalite`.
   "src/pi/sdk/rules-extension.ts",
   "src/pi/sdk/agent-roster-extension.ts",
   "src/pi/sdk/delegation-extension.ts",

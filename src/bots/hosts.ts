@@ -47,6 +47,7 @@ import type { PiHostOptions } from "../pi/types.js";
 import { isTtsEnabled } from "../tts/options.js";
 
 import type { OutilsBot } from "./outils.js";
+import { resoudrePersonnaliteBot } from "./personnalite-bot.js";
 import type { Env } from "../config/env.js";
 import type { ConfigRuntime } from "../config/runtime.js";
 import type { PileSourcesBot } from "../sources/par-bot.js";
@@ -112,7 +113,6 @@ export interface HostDemarrable {
   readonly envoisProgrammes?: PiHostOptions["envoisProgrammes"];
   /** Tâches planifiées de CE bot (son `sources.json`). */
   readonly planifierTache?: PiHostOptions["planifierTache"];
-  readonly personality?: PiHostOptions["personality"];
   readonly rules?: PiHostOptions["rules"];
   readonly reactions?: PiHostOptions["reactions"];
   /** Archive des conversations de CE bot (L3-b). */
@@ -224,10 +224,20 @@ export function portsHostBot(
     // bot) + personnalité (`prompts.personnalite` de SON overlay) + prompt léger +
     // liste d'outils GÉNÉRÉE depuis SON allowlist. Éditer l'un ne touche jamais
     // l'autre, et un outil ajouté/retiré suit sans réédition.
+    // ⚠️ UNE SEULE PERSONNALITÉ (2026-11-14) : elle est RÉSOLUE ici par
+    // `resoudrePersonnaliteBot` (champ renseigné > fichier d'amorçage > défaut
+    // livré), et composée UNE fois. Le fichier `personality.md` n'est plus
+    // concaténé à la fin du prompt par une extension (c'était la seconde source).
     systemPrompt: appendVoiceInstruction(
       composerPromptSysteme({
         nom: contexte.nom ?? contexte.botId,
-        personnalite: config.getString("prompts.personnalite"),
+        personnalite: resoudrePersonnaliteBot({
+          botId: contexte.botId,
+          config,
+          store: outils?.personnalite,
+          cheminFichier: outils?.chemins.personalityPath,
+          ...(logger !== undefined ? { logger } : {}),
+        }).texte,
         prompt: config.getString("prompts.light"),
         ...(contexte.outilsAutorises !== undefined
           ? { outils: contexte.outilsAutorises }
@@ -262,7 +272,10 @@ export function portsHostBot(
     ...(contexte.eventSource !== undefined ? { eventSource: contexte.eventSource } : {}),
     ...(outils !== undefined
       ? {
-          personality: outils.personnalite,
+          // ⚠️ PAS de `personality` : la personnalité du bot est composée dans
+          // `systemPrompt` (une seule source, `prompts.personnalite`). Le store
+          // `outils.personnalite` ne sert plus qu'à AMORCER cette clé quand elle
+          // n'est pas renseignée — il n'est plus injecté à chaque tour.
           rules: outils.regles,
           reactions: outils.reactions,
           conversationArchive: outils.archive,
@@ -283,10 +296,10 @@ export function portsHostBot(
  * au bot du run.
  *
  * ⚠️ Le retrait est aussi important que le remplacement : `memory`, `heritage`,
- * `conversationArchive`, `personality`, `rules`, `reactions`, `sources`,
- * `envoisProgrammes` et `planifierTache` désignent des FICHIERS. Hériter de
- * ceux du bot du run ferait lire/écrire les fichiers d'un autre bot — exactement
- * ce que « un seul rédacteur » interdit.
+ * `conversationArchive`, `rules`, `reactions`, `sources`, `envoisProgrammes` et
+ * `planifierTache` désignent des FICHIERS. Hériter de ceux du bot du run ferait
+ * lire/écrire les fichiers d'un autre bot — exactement ce que « un seul
+ * rédacteur » interdit.
  */
 export function optionsHostBot(
   botId: string,
@@ -310,7 +323,6 @@ export function optionsHostBot(
   poserSinonRetirer(options, "sources", ports.sources);
   poserSinonRetirer(options, "envoisProgrammes", ports.envoisProgrammes);
   poserSinonRetirer(options, "planifierTache", ports.planifierTache);
-  poserSinonRetirer(options, "personality", ports.personality);
   poserSinonRetirer(options, "rules", ports.rules);
   poserSinonRetirer(options, "reactions", ports.reactions);
   poserSinonRetirer(options, "conversationArchive", ports.conversationArchive);

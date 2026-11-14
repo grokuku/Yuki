@@ -7,6 +7,8 @@
  *   - A : `.empty-state__logo` affiche l'avatar, le flocon ❄️ reste le REPLI ;
  *   - B : `header .brand` porte l'avatar 24 px AVANT le nom, et il RESTE
  *     visible en téléphone (22 px) alors que le nom est masqué ;
+ *   - l'ÉDITEUR d'avatar est monté dans l'onglet « Général » de la page du bot
+ *     (l'avatar est PAR BOT ; la personnalité PARTAGÉE, elle, est sur `/config`) ;
  *   - ⚠️ AUCUN avatar dans les bulles (`.message__head`) ;
  *   - l'éditeur n'utilise NI `createObjectURL` (CSP `img-src 'self' data:`) NI
  *     `innerHTML` (XSS) NI `window.confirm` (HolafModal) ;
@@ -148,17 +150,30 @@ describe("éditeur de recadrage : CSP stricte et géométrie pure", () => {
   });
 });
 
-describe("réglage dans /config → Personnalité", () => {
+describe("réglage sur la page du bot → onglet Général (GARDE MODIFIÉE)", () => {
+  // ⚠️ GARDE MODIFIÉE : l'avatar était monté dans le panneau « personnalité » de
+  // la page du bot (`personality-panel.js`) ; ce panneau est un réglage
+  // d'INSTANCE et a rejoint `/config`. L'AVATAR, lui, est PAR BOT : il est
+  // désormais monté par `config.js` dans l'onglet « Général » de la page du bot.
   const panel = ui("personality-panel.js");
+  const configJs = ui("config.js");
   const source = ui("avatar.js");
 
-  it("la section Avatar est montée dans l'onglet Personnalité", () => {
-    expect(panel).toContain('import { creerSectionAvatar } from "./avatar.js"');
-    expect(panel).toContain("creerSectionAvatar({ HolafFetch, HolafModal })");
-    expect(panel).toContain("avatarSection.element");
+  it("la section Avatar est montée dans l'onglet « Général » de la page du bot", () => {
+    expect(configJs).toContain('import { creerSectionAvatar } from \'./avatar.js\'');
+    expect(configJs).toContain("creerSectionAvatar({ HolafFetch, HolafModal })");
+    expect(configJs).toContain("avatar.element");
+    // Elle vit dans le rendu de l'onglet Général, jamais sur `/config`.
+    expect(configJs).toMatch(/function renderBotGeneral\(\)[\s\S]*sectionAvatarDuBot\(\)/);
     expect(source).toContain('text: "Avatar"');
     expect(source).toContain('text: "Changer l\'avatar"');
     expect(source).toContain('text: "Retirer"');
+  });
+
+  it("le panneau de la personnalité PARTAGÉE ne monte plus l'avatar", () => {
+    // Réglage d'INSTANCE ⇒ aucun avatar (donnée PAR BOT) dans ce panneau.
+    expect(panel).not.toContain("creerSectionAvatar");
+    expect(panel).not.toContain("avatar.js");
   });
 
   it("« Retirer » passe par une CONFIRMATION HolafModal (jamais window.confirm)", () => {

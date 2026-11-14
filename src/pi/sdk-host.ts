@@ -91,7 +91,6 @@ import { createLightRuntime } from "./sdk/session-factory.js";
 import { createAgentRosterExtensionFactory } from "./sdk/agent-roster-extension.js";
 import { createMemoryExtensionFactory } from "./sdk/memory-extension.js";
 import { createReactionsExtensionFactory } from "./sdk/reactions-extension.js";
-import { createPersonalityExtensionFactory } from "./sdk/personality-extension.js";
 import { createRulesExtensionFactory } from "./sdk/rules-extension.js";
 import { createHeritageExtensionFactory } from "./sdk/heritage-extension.js";
 import { createHeritageTools } from "./sdk/heritage-tools.js";
@@ -423,19 +422,30 @@ function makeRunItem(
 /**
  * Construit la liste ORDONNÉE des extensions INLINE injectées à chaque tour.
  *
- * L'ORDRE est le contrat : **règles (consignes de l'utilisateur) → personnalité
- * (base) → mémoire → annuaire des agents → heritage**. Le SDK chaîne les
- * extensions qui renvoient `systemPrompt` ; chacune CONCATÈNE au prompt courant,
- * donc un ordre inversé ferait passer un bloc APRÈS un autre sans l'écraser
- * (mais changerait le sens donné au modèle). Cette fonction est extraite pour
- * être VERROUILLÉE par un test d'ordre (voir
- * `tests/pi/personality-extension.test.ts`).
+ * L'ORDRE est le contrat : **règles (consignes de l'utilisateur) → mémoire →
+ * annuaire des agents → heritage**. Le SDK chaîne les extensions qui renvoient
+ * `systemPrompt` ; chacune CONCATÈNE au prompt courant, donc un ordre inversé
+ * ferait passer un bloc APRÈS un autre sans l'écraser (mais changerait le sens
+ * donné au modèle). Cette fonction est extraite pour être VERROUILLÉE par un
+ * test d'ordre (voir `tests/pi/prompt-regles-et-ordre.test.ts`).
+ *
+ * ⚠️ IL N'Y A PLUS D'EXTENSION DE PERSONNALITÉ (décision utilisateur du
+ * 2026-11-14). La personnalité a UNE seule source, `prompts.personnalite`,
+ * composée une fois par le point d'assemblage unique
+ * (`src/llm/prompt-systeme.ts`, appelé par `src/bots/hosts.ts` et `main()`).
+ * Le fichier `personality.md` n'est plus concaténé ici : c'était la seconde
+ * source, et elle passait APRÈS — donc elle GAGNAIT sur la personnalité du bot.
+ *
+ * ⚠️ Les RÈGLES restent une extension (relues à CHAQUE tour, à chaud) : elles
+ * sont donc concaténées en DERNIER, dans un bloc balisé `<regles>` dont l'en-tête
+ * déclare explicitement qu'elles PRIMENT sur la personnalité en cas de conflit
+ * (`src/rules/rules.ts`). C'est le choix retenu pour la priorité : primauté
+ * DÉCLARÉE dans le prompt, plutôt qu'un ordre de concaténation implicite.
  */
 export function buildInlineExtensions(
   options: Pick<
     PiHostOptions,
     | "rules"
-    | "personality"
     | "memory"
     | "directory"
     | "heritage"
@@ -447,17 +457,12 @@ export function buildInlineExtensions(
 ): InlineExtension[] {
   const extensionFactories: InlineExtension[] = [];
   if (options.rules) {
-    // EN PREMIER : les règles strictes de l'utilisateur précèdent tout le reste
-    // (priorité règles > personnalité > mémoire).
+    // EN PREMIER dans la CHAÎNE : les règles strictes de l'utilisateur sont donc
+    // le PREMIER bloc concaténé après le prompt composé. Leur en-tête déclare
+    // qu'elles priment sur la personnalité (priorité règles > personnalité >
+    // mémoire), que le texte soit placé avant ou après.
     extensionFactories.push(
       createRulesExtensionFactory(options.rules, {
-        logger: options.logger,
-      }),
-    );
-  }
-  if (options.personality) {
-    extensionFactories.push(
-      createPersonalityExtensionFactory(options.personality, {
         logger: options.logger,
       }),
     );

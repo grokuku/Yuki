@@ -1,13 +1,19 @@
 /**
- * Personnalité de Yuki — RÈGLES PURES (bornes, format du bloc injecté).
+ * Personnalité d'un bot — RÈGLES PURES (bornes, résolution de la source).
+ *
+ * ⚠️ UNE SEULE SOURCE DE PERSONNALITÉ (décision utilisateur du 2026-11-14) :
+ * la clé de configuration **`prompts.personnalite`** (portée `mixte` : défaut
+ * d'instance + surcharge par bot). Elle seule compose le prompt du tour, via le
+ * point d'assemblage unique (`src/llm/prompt-systeme.ts`).
+ *
+ * Le fichier `personality.md` n'est PLUS une source de personnalité : c'est un
+ * simple **défaut d'amorçage**, lu une fois par bot quand aucune personnalité
+ * n'a été RENSEIGNÉE (`personnaliteEffective` ci-dessous). Il n'est JAMAIS
+ * concaténé au prompt : sinon deux textes d'identité se contrediraient, et
+ * c'était le fichier qui gagnait (bug corrigé par ce lot).
  *
  * La borne et le format du bloc sont PROPRES à la personnalité ; le mécanisme
  * de bornage lui-même est partagé (`clampText`, `src/state/`).
- *
- * La personnalité est la **BASE** du prompt de chaque tour : elle vit dans un
- * fichier SÉPARÉ (jamais dans `prompts.light`, la base de sûreté) et est
- * encadrée par un délimiteur explicite avant d'être concaténée au prompt du
- * tour.
  */
 
 import { clampText } from "../state/text-document-store.js";
@@ -63,6 +69,11 @@ export function clampPersonalityText(
  * Renvoie une chaîne VIDE si le contenu est vide (⇒ RIEN n'est injecté : pas de
  * bloc vide). Le contenu est du Markdown de CONFIANCE (l'utilisateur l'édite),
  * donc NON échappé — le balisage Markdown doit rester interprétable.
+ *
+ * ⚠️ Plus AUCUNE extension ne concatène ce bloc (il n'y a plus d'extension de
+ * personnalité) : le bloc du prompt est `blocPersonnalite`
+ * (`src/llm/prompt-systeme.ts`), qui n'écrit pas de nom en dur. Cette fonction
+ * reste le format du domaine (et son test).
  */
 export function framePersonality(text: string): string {
   if (text.trim().length === 0) return "";
@@ -73,4 +84,58 @@ export function framePersonality(text: string): string {
     text,
     `</${PERSONALITY_TAG}>`,
   ].join("\n");
+}
+
+/** Origine de la personnalité EFFECTIVE d'un bot (une seule valeur retenue). */
+export type OriginePersonnaliteEffective = "champ" | "fichier" | "aucune";
+
+/**
+ * Les DEUX candidats d'un bot. Aucun autre texte n'est consulté.
+ *
+ * ⚠️ `champRenseigne` n'est pas `champ !== ""` : le champ a un défaut LIVRÉ
+ * (`config/pi/personnalite.md`) qui n'est PAS un texte de l'utilisateur. Un
+ * défaut livré ne doit donc pas masquer un `personality.md` déjà écrit (ce
+ * serait une perte silencieuse) ; une valeur ENREGISTRÉE, elle, est un choix et
+ * l'emporte toujours.
+ */
+export interface SourcesPersonnalite {
+  /** Valeur effective de `prompts.personnalite` (bot > instance > défaut livré). */
+  readonly champ: string;
+  /** `true` si l'utilisateur a ENREGISTRÉ une valeur (origine ≠ `default`). */
+  readonly champRenseigne: boolean;
+  /** Contenu du fichier d'amorçage (`personality.md`), lu UNE fois par bot. */
+  readonly fichier: string;
+}
+
+/** Personnalité retenue pour un bot, avec l'origine de la valeur. */
+export interface PersonnaliteEffective {
+  /** Texte retenu (vide ⇒ aucune personnalité : aucun bloc composé). */
+  readonly texte: string;
+  /** D'où vient ce texte — jamais deux à la fois. */
+  readonly origine: OriginePersonnaliteEffective;
+}
+
+/**
+ * Résout LA personnalité d'un bot : une seule valeur, jamais une concaténation.
+ *
+ * Ordre de priorité :
+ *  1. `prompts.personnalite` **renseigné** (par l'utilisateur) — c'est LUI ;
+ *  2. le fichier `personality.md` (défaut d'amorçage) — reprise, pas perte ;
+ *  3. le défaut livré de `prompts.personnalite` (jamais vide en pratique :
+ *     un bot neuf a donc une personnalité) ;
+ *  4. rien (aucun bloc composé).
+ */
+export function personnaliteEffective(
+  sources: SourcesPersonnalite,
+): PersonnaliteEffective {
+  if (sources.champ.trim() !== "" && sources.champRenseigne) {
+    return { texte: sources.champ, origine: "champ" };
+  }
+  if (sources.fichier.trim() !== "") {
+    return { texte: sources.fichier, origine: "fichier" };
+  }
+  if (sources.champ.trim() !== "") {
+    return { texte: sources.champ, origine: "champ" };
+  }
+  return { texte: "", origine: "aucune" };
 }

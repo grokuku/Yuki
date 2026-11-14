@@ -61,6 +61,8 @@ import {
   workerLourdAutorise,
 } from "./bots/index.js";
 import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
+// ⚠️ UNE SEULE PERSONNALITÉ : résolution champ → fichier d'amorçage → défaut livré.
+import { resoudrePersonnaliteBot } from "./bots/personnalite-bot.js";
 // ⚠️ LOT 36 (L3-d) : la Map des `PiHost` PAR BOT (`host` reste celui du bot du run).
 import { HostsBots } from "./bots/hosts.js";
 import { ExecutionBots } from "./bots/execution.js";
@@ -1259,24 +1261,14 @@ async function main(): Promise<void> {
     journal: personalityStore.journalFilePath,
     chars: personalityStore.read().chars,
   });
-  // ⚠️ DEUX PERSONNALITÉS POSSIBLES (2026-11-13) : la clé `prompts.personnalite`
-  // (par bot, composée dans le prompt) et le fichier PARTAGÉ `personality.md`
-  // (injecté à chaque tour). Si les deux sont remplies, on le DIT : deux textes
-  // d'identité qui se contredisent ne doivent pas être un effet de bord silencieux.
-  if (
-    personalityStore.read().chars > 0 &&
-    config.getString("prompts.personnalite").trim() !== ""
-  ) {
-    logger.warn("personality.deux_sources", {
-      fichier: personalityStore.filePath,
-      champ: "prompts.personnalite",
-      origine: config.originOf("prompts.personnalite"),
-      consequence:
-        "deux textes de personnalité sont injectés : celui du bot (prompt) et le fichier PARTAGÉ de l'instance",
-      action:
-        "déplacer le contenu de personality.md dans le champ « Personnalité » du bot, puis vider le fichier",
-    });
-  }
+  // ⚠️ UNE SEULE PERSONNALITÉ (décision utilisateur du 2026-11-14) : la clé
+  // `prompts.personnalite` est LA source ; le fichier `personality.md` n'est plus
+  // injecté dans le prompt, il ne sert qu'à AMORCER cette clé quand elle n'a pas
+  // été renseignée. La garde d'antan « deux sources » (qui se contentait de
+  // journaliser la contradiction) est donc RETIRÉE : il n'y a plus deux sources.
+  // La reprise du fichier et son éventuel « ignoré » sont dits PAR BOT au moment
+  // de la composition (`src/bots/personnalite-bot.ts` :
+  // `personality.amorcee_depuis_fichier` / `personality.fichier_ignore`).
 
   // --- Règles strictes de Yuki (consignes posées par l'utilisateur) ---------
   // Fichier SÉPARÉ (voisin de personality.md), édité UNIQUEMENT par
@@ -3902,11 +3894,18 @@ async function main(): Promise<void> {
     // l'action sont dans les champs. Deux cas signalés : prompt VIDE (aucune
     // consigne) et prompt enregistré qui CONTREDIT une capacité (`programmer_envoi`).
     avertirSiPromptLegerIncomplet(logger, promptLeger, config.originOf("prompts.light"));
-    // ⚠️ PERSONNALITÉ SÉPARÉE (2026-11-13) : elle est sa propre clé (`scope: mixte`),
-    // composée AVANT le prompt léger. Deux cas restent à SIGNALER, jamais à réécrire :
-    // un texte qui nomme encore le bot en dur, et une personnalité DÉJÀ présente dans
-    // le prompt enregistré (config d'avant la séparation : on ne la duplique pas).
-    const personnalite = config.getString("prompts.personnalite");
+    // ⚠️ PERSONNALITÉ : UNE SEULE SOURCE (`prompts.personnalite`), résolue par
+    // `resoudrePersonnaliteBot` — champ renseigné → fichier d'amorçage → défaut
+    // livré. C'est ce TEXTE-LÀ qui est composé, et il l'est UNE fois : le fichier
+    // `personality.md` n'est plus concaténé à la fin du prompt (la seconde source
+    // qui gagnait est supprimée).
+    const personnalite = resoudrePersonnaliteBot({
+      botId: botDuRun,
+      config,
+      store: personalityStore,
+      cheminFichier: personalityStore.filePath,
+      logger,
+    }).texte;
     const promptLourd = config.getString("prompts.heavy");
     avertirSiPromptsASurveiller(
       logger,
@@ -3920,10 +3919,10 @@ async function main(): Promise<void> {
     const outilsLegerPile = outilsLegerDuBot(botDuRun);
     /**
      * PROMPT SYSTÈME EFFECTIF du bot de la pile — point d'assemblage UNIQUE :
-     * identité (`nomDuBot`) + personnalité (`prompts.personnalite`) + prompt léger
-     * (`prompts.light`) + liste d'outils GÉNÉRÉE (`outilsLegerPile`), puis la
-     * consigne de voix. Éditer la personnalité ne touche donc jamais la liste
-     * d'outils, et un outil ajouté/retiré apparaît/disparaît sans réédition.
+     * identité (`nomDuBot`) + personnalité RÉSOLUE (`prompts.personnalite`) +
+     * prompt léger (`prompts.light`) + liste d'outils GÉNÉRÉE (`outilsLegerPile`),
+     * puis la consigne de voix. Éditer la personnalité ne touche donc jamais la
+     * liste d'outils, et un outil ajouté/retiré apparaît/disparaît sans réédition.
      */
     const promptSystemePile = appendVoiceInstruction(
       composerPromptSysteme({
@@ -4029,7 +4028,10 @@ async function main(): Promise<void> {
           documentationOf: (name: string) => comfyWorkflows.get(name)?.documentation ?? "",
         },
       },
-      personality: personalityStore,
+      // ⚠️ PAS de `personality` : la personnalité du bot est déjà COMPOSÉE dans
+      // `promptSystemePile` (une seule source, `prompts.personnalite`). Le store
+      // `personalityStore` n'est plus injecté à chaque tour : il ne sert plus qu'à
+      // amorcer la clé quand elle n'est pas renseignée.
       rules: rulesStore,
       // DRAIN GROUPÉ des notifications de sources : le host demande le bloc
       // `<sources>` au DÉBUT de chaque tour (jamais pendant) et le fusionne dans

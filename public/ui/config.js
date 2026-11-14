@@ -42,6 +42,7 @@ import { initAgentsPanel } from './agents-panel.js';
 import { initImagesPanel } from './images-panel.js';
 import { initInstancePasswordPanel } from './instance-password-panel.js';
 import { initPersonalityPanel } from './personality-panel.js';
+import { creerSectionAvatar } from './avatar.js';
 import { initSecretsPanel } from './secrets-panel.js';
 import { initSourcesPanel } from './sources-panel.js';
 import { initChatPanel } from './chat-panel.js';
@@ -258,7 +259,16 @@ const imagesRoot = document.getElementById("images-root");
 const sourcesRoot = document.getElementById("sources-root");
 /** Conteneur du panneau « Discussions » (Mattermost ET Discord), onglet Conversation. */
 const chatRoot = document.getElementById("chat-root");
-/** Panneau de la personnalité — monté par id. */
+/**
+ * Panneau de la PERSONNALITÉ PAR DÉFAUT (fichier `personality.md`) et des RÈGLES
+ * STRICTES (`rules.md`) — monté par id, sur la page INSTANCE seulement
+ * (onglet « Modèles » de `/config`). ⚠️ Ce sont des réglages d'INSTANCE : la page
+ * d'un bot n'en monte AUCUN panneau.
+ *
+ * ⚠️ UNE SEULE PERSONNALITÉ (2026-11-14) : `personality.md` n'est PLUS une
+ * seconde personnalité — c'est un DÉFAUT D'AMORÇAGE pour un bot sans
+ * personnalité enregistrée. La personnalité d'un bot est `prompts.personnalite`.
+ */
 const personalityRoot = document.getElementById("personality-root");
 /** Ligne d'explication SOUS le titre (④ : où est allé ce qui a déménagé). */
 const pageLigneEl = document.getElementById("page-ligne");
@@ -284,6 +294,19 @@ let voicesPanel = null;
 let imagesPanel = null;
 /** Page de gestion des DÉCLENCHEURS — onglet « Déclencheurs » (page Bot). */
 let sourcesPanel = null;
+/**
+ * Section ÉDITABLE de l'AVATAR du bot affiché — créée UNE fois (son état :
+ * aperçu, modale de recadrage) pour survivre aux re-rendus de l'onglet.
+ * ⚠️ L'avatar est PAR BOT (lot 34) : la section vit dans l'onglet « Général »
+ * de la page du bot, jamais sur `/config`.
+ */
+let sectionAvatarBot = null;
+
+/** Section « Avatar » (mémoïsée) — voir `creerSectionAvatar` (`avatar.js`). */
+function sectionAvatarDuBot() {
+  sectionAvatarBot ??= creerSectionAvatar({ HolafFetch, HolafModal });
+  return sectionAvatarBot;
+}
 
 /**
  * Onglet qui porte chaque groupe SUR CETTE PAGE (page → groupe → onglet).
@@ -1682,32 +1705,16 @@ function renderBotGeneral() {
   identite.append(
     ligneLecture("Enregistré", bot.actif === true ? "actif (doit tourner)" : "inactif (ne doit pas tourner)"),
   );
-  const avatarRow = h("div", { class: "config-row bot-info" });
-  avatarRow.append(h("span", { class: "config-label", text: "Avatar" }));
   if (botAfficheEstActif()) {
     // ⚠️ `/avatar` sert l'avatar du bot ACTIF : c'est le seul cas où cette image
-    // est la sienne. Les autres bots ne l'affichent pas ici (on ne montre pas
-    // l'avatar de quelqu'un d'autre).
-    const avatar = h("img", {
-      class: "bot-avatar",
-      src: "/avatar",
-      alt: `Avatar de ${bot.nom ?? bot.id}`,
-      width: "64",
-      height: "64",
-    });
-    const remplacement = h("span", {
-      class: "bot-info__valeur",
-      text: "aucun avatar (flocon par défaut)",
-      hidden: "hidden",
-    });
-    // Aucun avatar déposé ⇒ `/avatar` répond 404 : on l'annonce en texte plutôt
-    // que de laisser une image cassée (aucun style inline, CSP inchangée).
-    avatar.addEventListener("error", () => {
-      avatar.hidden = true;
-      remplacement.hidden = false;
-    });
-    avatarRow.append(avatar, remplacement);
+    // est la sienne ET où l'écriture vise le bon magasin (`POST /api/avatar`).
+    // La section porte déjà son titre « Avatar » : aucune ligne en double.
+    const avatar = sectionAvatarDuBot();
+    identite.append(avatar.element);
+    void avatar.rafraichir();
   } else {
+    const avatarRow = h("div", { class: "config-row bot-info" });
+    avatarRow.append(h("span", { class: "config-label", text: "Avatar" }));
     avatarRow.append(
       h("span", {
         class: "bot-info__valeur",
@@ -1717,8 +1724,8 @@ function renderBotGeneral() {
           "lors d'un clonage).",
       }),
     );
+    identite.append(avatarRow);
   }
-  identite.append(avatarRow);
   botGeneralRoot.append(identite);
   // ⚠️ LOT 36 (L8) : l'état RÉEL, et les boutons qui le changent.
   botGeneralRoot.append(sectionExecution(bot));
@@ -2278,9 +2285,18 @@ void (async () => {
       });
       revealHashTarget();
     }
-    // Panneau de la personnalité : édition, enregistrement, retour arrière,
-    // historique. Composant autonome monté par id.
-    if (panneauxDuBotActif && personalityRoot) {
+    // ⚠️ PERSONNALITÉ PAR DÉFAUT (`personality.md`) ET RÈGLES STRICTES (`rules.md`) :
+    // composant autonome monté par id, sur la page INSTANCE SEULEMENT. Ces deux
+    // fichiers sont des réglages d'INSTANCE ; `personality.md` n'est plus injecté
+    // dans le prompt (défaut d'amorçage d'un bot sans personnalité), `rules.md`
+    // reste injecté à chaque tour dans un bloc prioritaire.
+    // ⚠️ LA GARDE CHANGE, ET ELLE EST NOMMÉE : c'était
+    // `panneauxDuBotActif && personalityRoot` — sur la page d'un bot, le panneau
+    // n'apparaissait donc QUE si le bot affiché était le bot ACTIF (l'avatar, les
+    // règles et `personality.md` apparaissaient pour « yuki » et pas pour les
+    // autres). Ce panneau a QUITTÉ la page du bot : il ne se monte plus que sur
+    // `/config`, donc JAMAIS sur `/bots?b=<slug>`, quel que soit le bot.
+    if (!PAGE_BOT && personalityRoot) {
       initPersonalityPanel({ root: personalityRoot, HolafFetch, HolafModal });
     }
     setInterval(() => void pollHealth(), 5000);

@@ -172,9 +172,9 @@ function optionsPileDe(b: Banc, config: ConfigRuntime): PiHostOptions {
     tools: ["lire_fichier"],
     sources: { takePending: () => undefined },
     memory: portMemoire,
-    personality: {
-      get: () => "",
-    } as unknown as NonNullable<PiHostOptions["personality"]>,
+    // ⚠️ PLUS D'OPTION `personality` (2026-11-14) : la personnalité du bot est
+    // composée dans `systemPrompt` (une seule source, `prompts.personnalite`). Le
+    // store du fichier `personality.md` ne sert plus qu'à amorcer cette clé.
     rules: { get: () => "" } as unknown as NonNullable<PiHostOptions["rules"]>,
     reactions: {
       recent: () => [],
@@ -227,7 +227,17 @@ function outilsFactices(envBot: Env, botId: string): OutilsBot {
   return {
     botId,
     env: envBot,
-    personnalite: { get: () => `personnalité de ${botId}` },
+    chemins: { personalityPath: join(envBot.mountPoints.state, `${botId}-personality.md`) },
+    // ⚠️ Port `PersonalityPort` (LECTURE) : le fichier `personality.md` ne sert
+    // plus qu'à AMORCER `prompts.personnalite` quand elle n'est pas renseignée.
+    personnalite: {
+      read: () => ({
+        text: `personnalité de ${botId}`,
+        chars: 0,
+        truncated: false,
+        exists: true,
+      }),
+    },
     regles: { get: () => `règles de ${botId}` },
     reactions: { recent: () => [] },
     archive: { search: async () => [] },
@@ -329,7 +339,8 @@ describe("host du PRINCIPAL (lot 36, L3-d)", () => {
     );
     expect(construits[0]?.options.sources).toBe(optionsPile.sources);
     expect(construits[0]?.options.memory).toBe(optionsPile.memory);
-    expect(construits[0]?.options.personality).toBe(optionsPile.personality);
+    // ⚠️ `personality` n'existe plus dans les options (une seule source composée
+    // dans `systemPrompt`) : on vérifie les AUTRES ports, par identité.
     expect(construits[0]?.options.rules).toBe(optionsPile.rules);
     expect(construits[0]?.options.reactions).toBe(optionsPile.reactions);
     expect(construits[0]?.options.conversationArchive).toBe(optionsPile.conversationArchive);
@@ -443,15 +454,22 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     );
     expect(hostKohai.options.sessionsDir).toContain("kohai");
 
-    // ⚠️ GARDE RÉVISÉE (2026-11-13) : le prompt d'un bot secondaire est désormais
-    // COMPOSÉ (identité + personnalité + prompt + `<outils>`), point d'assemblage
+    // ⚠️ GARDE RÉVISÉE (2026-11-13, puis 2026-11-14) : le prompt d'un bot secondaire
+    // est COMPOSÉ (identité + personnalité + prompt + `<outils>`), point d'assemblage
     // unique `src/llm/prompt-systeme.ts`. Ce qui reste vérifié ici est inchangé :
     // c'est le prompt de SON overlay, jamais celui du principal.
     // ⚠️ Sans `nom` ni `outilsAutorises` dans le contexte, le repli est
     // l'identifiant du bot et AUCUN bloc d'outils (jamais une liste inventée).
+    // ⚠️ La personnalité vient de `resoudrePersonnaliteBot` : aucune personnalité
+    // n'est ENREGISTRÉE ici, donc c'est le fichier d'amorçage du bot qui est repris
+    // (les outils factices en fournissent un) — une source, jamais deux.
     expect(hostKohai.options.systemPrompt).toBe(
       appendVoiceInstruction(
-        composerPromptSysteme({ nom: "kohai", prompt: "Tu es Kohai, pas Yuki." }),
+        composerPromptSysteme({
+          nom: "kohai",
+          personnalite: "personnalité de kohai",
+          prompt: "Tu es Kohai, pas Yuki.",
+        }),
         isTtsEnabled(configKohai),
       ),
     );
@@ -466,7 +484,8 @@ describe("deux bots à démarrer (lot 36, L3-d)", () => {
     expect(hostKohai.options.sources).toBe(piles.get("kohai")?.pile.service);
     expect(hostKohai.options.planifierTache).toBeDefined();
     expect(hostKohai.options.envoisProgrammes).toBeDefined();
-    expect(hostKohai.options.personality).toBe(outils.get("kohai")?.personnalite);
+    // ⚠️ `personality` n'est plus un port du host : la personnalité du bot est
+    // COMPOSÉE dans son `systemPrompt` (une seule source, `prompts.personnalite`).
     expect(hostKohai.options.rules).toBe(outils.get("kohai")?.regles);
     expect(hostKohai.options.reactions).toBe(outils.get("kohai")?.reactions);
     expect(hostKohai.options.conversationArchive).toBe(outils.get("kohai")?.archive);
@@ -641,7 +660,7 @@ describe("ports d'un bot secondaire (lot 36, L3-d)", () => {
     expect(options.model).toBe(optionsPile.model);
     // Ce qui est propre au bot est remplacé.
     expect(options.sources).toBe(contexte.pile?.service);
-    expect(options.personality).toBe(contexte.outils?.personnalite);
+    // ⚠️ `personality` n'est plus un port du host (composée dans `systemPrompt`).
     expect(options.botId).toBe("kohai");
   });
 

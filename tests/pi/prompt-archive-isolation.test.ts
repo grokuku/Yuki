@@ -4,8 +4,10 @@
  * Deux assertions STRUCTURELLES, pas des promesses :
  *  1. `buildInlineExtensions` (le SEUL chemin par lequel un contenu entre dans le
  *     prompt système, hors outils) ne contient AUCUNE extension d'archive : les
- *     extensions enregistrées sont exactement règles → personnalité → mémoire →
- *     annuaire → heritage, et aucune ne lit le port d'archive ;
+ *     extensions enregistrées sont exactement règles → mémoire → annuaire →
+ *     heritage, et aucune ne lit le port d'archive.
+ *     ⚠️ La personnalité n'est plus une extension (2026-11-14) : elle a une seule
+ *     source, `prompts.personnalite`, composée par `composerPromptSysteme`.
  *  2. même en exécutant TOUS les handlers `before_agent_start` des extensions
  *     avec une archive PLEINE, aucun prompt système produit ne contient le texte
  *     archivé.
@@ -28,7 +30,6 @@ import {
 import { ConversationArchiveStore } from "../../src/memory/index.js";
 import type { HeritagePort } from "../../src/memory/index.js";
 import type { MemoryPort } from "../../src/memory/types.js";
-import type { PersonalityPort } from "../../src/personality/types.js";
 import type { RulesPort } from "../../src/rules/types.js";
 import { createLogger } from "../../src/observability/logger.js";
 
@@ -90,10 +91,6 @@ const HERITAGE: HeritagePort = {
   read: () => undefined,
 };
 
-const PERSONALITY: PersonalityPort = {
-  read: () => ({ text: "Je suis Yuki.", chars: 15, truncated: false, exists: true }),
-};
-
 const RULES: RulesPort = {
   read: () => ({ text: "Règles strictes.", chars: 16, truncated: false, exists: true }),
 };
@@ -127,11 +124,10 @@ async function runBeforeAgentStart(
 }
 
 describe("PIÈGE ③ — aucune fuite de l'archive dans le prompt", () => {
-  it("AUCUNE extension d'archive n'est enregistrée (règles → personnalité → mémoire → annuaire → heritage)", async () => {
+  it("AUCUNE extension d'archive n'est enregistrée (règles → mémoire → annuaire → heritage)", async () => {
     const archive = populatedArchive();
     const factories = buildInlineExtensions({
       rules: RULES,
-      personality: PERSONALITY,
       memory: memoryWithBlock(),
       heritage: HERITAGE,
       logger: logger(),
@@ -139,12 +135,7 @@ describe("PIÈGE ③ — aucune fuite de l'archive dans le prompt", () => {
     // Le port d'archive n'est même pas une option de `buildInlineExtensions` :
     // rien ne peut l'injecter. On vérifie les NOMS réellement enregistrés.
     const { names } = await runBeforeAgentStart(factories);
-    expect(names).toEqual([
-      "yuki-rules",
-      "yuki-personality",
-      "yuki-memory",
-      "yuki-heritage",
-    ]);
+    expect(names).toEqual(["yuki-rules", "yuki-memory", "yuki-heritage"]);
     expect(names.some((name) => /archive/i.test(name))).toBe(false);
     archive.close();
   });
@@ -153,7 +144,6 @@ describe("PIÈGE ③ — aucune fuite de l'archive dans le prompt", () => {
     const archive = populatedArchive();
     const factories = buildInlineExtensions({
       rules: RULES,
-      personality: PERSONALITY,
       memory: memoryWithBlock(),
       heritage: HERITAGE,
       logger: logger(),

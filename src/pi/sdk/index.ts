@@ -46,19 +46,16 @@ export {
   type AgentRosterExtensionOptions,
 } from "./agent-roster-extension.js";
 
-// Règles strictes de l'utilisateur — PREMIÈRE base du prompt (enregistrée AVANT la personnalité).
+// Règles strictes de l'utilisateur — bloc balisé qui PRIME sur la personnalité.
 export {
   RULES_EXTENSION_NAME,
   createRulesExtensionFactory,
   type RulesExtensionOptions,
 } from "./rules-extension.js";
 
-// Personnalité de Yuki — base du prompt injectée à chaque tour (après les règles).
-export {
-  PERSONALITY_EXTENSION_NAME,
-  createPersonalityExtensionFactory,
-  type PersonalityExtensionOptions,
-} from "./personality-extension.js";
+// ⚠️ Pas d'extension de personnalité (décision utilisateur du 2026-11-14) : la
+// personnalité a UNE source, `prompts.personnalite`, composée par
+// `src/llm/prompt-systeme.ts`. Le fichier `personality.md` n'est plus injecté.
 export {
   CONSOLIDATION_HEBDO_SYSTEM_PROMPT,
   CONSOLIDATION_HEBDO_TOOLS,

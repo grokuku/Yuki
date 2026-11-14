@@ -169,9 +169,8 @@ describe("chaîne d'extensions — place des RÉACTIONS", () => {
   function names(reactions?: ReactionsPort): string[] {
     const extensions = buildInlineExtensions({
       rules: { read: () => ({ text: "Règle.", chars: 6, truncated: false, exists: true }) },
-      personality: {
-        read: () => ({ text: "Je suis Yuki.", chars: 13, truncated: false, exists: true }),
-      },
+      // ⚠️ PLUS d'option `personality` (2026-11-14) : la personnalité n'est plus
+      // une extension, elle est composée par `src/llm/prompt-systeme.ts`.
       memory: {
         recall: async () => ({ block: null, enabled: true, entries: 0, chars: 0, durationMs: 0 }),
         onTurnEnd: () => undefined,
@@ -185,10 +184,9 @@ describe("chaîne d'extensions — place des RÉACTIONS", () => {
     return extensions.map((extension) => (extension as { name: string }).name);
   }
 
-  it("s'ajoute EN DERNIER (règles → personnalité → mémoire → annuaire → heritage → réactions)", () => {
+  it("s'ajoute EN DERNIER (règles → mémoire → annuaire → heritage → réactions)", () => {
     expect(names(port)).toEqual([
       "yuki-rules",
-      "yuki-personality",
       "yuki-memory",
       "yuki-agent-roster",
       "yuki-heritage",

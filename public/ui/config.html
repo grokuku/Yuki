@@ -188,6 +188,22 @@
               hidden
             ></p>
             <div id="group-modeles" class="config-groups"></div>
+            <!-- ═══ PERSONNALITÉ PAR DÉFAUT + RÈGLES STRICTES (INSTANCE) ═════
+                 ⚠️ DÉPLACÉ ICI (page du bot → Réglages généraux) : `personality.md`
+                 et `rules.md` sont des réglages d'INSTANCE — ils n'avaient rien à
+                 faire sur la page d'un bot, où ils n'apparaissaient d'ailleurs que
+                 pour le bot ACTIF (`config.js`).
+                 ⚠️ UNE SEULE PERSONNALITÉ (2026-11-14) : `personality.md` n'est
+                 PLUS « la » personnalité — c'est un DÉFAUT D'AMORÇAGE, utilisé
+                 seulement pour un bot qui n'a pas de personnalité enregistrée. Il
+                 n'est jamais concaténé à celle du bot.
+                 `rules.md` n'est PAS une personnalité : ce sont des règles dures,
+                 immuables, prioritaires sur la personnalité.
+                 Composant autonome `personality-panel.js` monté par id : édition,
+                 enregistrement, retour arrière et historique des versions (les 20
+                 dernières). La personnalité PROPRE à un bot (`prompts.personnalite`)
+                 et son avatar se règlent sur SA page (`/bots?b=<slug>`). -->
+            <div id="personality-root"></div>
           </section>
           <section
             class="config-panel"

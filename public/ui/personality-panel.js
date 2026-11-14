@@ -1,22 +1,35 @@
 /**
- * Panneau « Personnalité » de la page `/config`.
+ * Panneau « Personnalité par défaut + Règles strictes » de la page `/config`
+ * (Réglages généraux).
+ *
+ * ⚠️ UNE SEULE PERSONNALITÉ (décision utilisateur du 2026-11-14) : la
+ * personnalité d'un bot est la clé `prompts.personnalite` (onglet
+ * « Personnalité » de `/bots?b=<slug>`). Le fichier `personality.md` édité ICI
+ * n'est PLUS une seconde personnalité : c'est un simple **défaut d'amorçage**,
+ * lu une fois pour un bot qui n'a AUCUNE personnalité enregistrée. Il n'est
+ * jamais ajouté à la personnalité du bot.
+ *
+ * ⚠️ `rules.md` n'est PAS de la personnalité : ce sont des RÈGLES DURES
+ * (consignes immuables de l'utilisateur, prioritaires sur la personnalité).
+ *
+ * Panneau d'INSTANCE (fichiers de l'installation), jamais monté sur la page d'un
+ * bot ; l'avatar d'un bot se règle dans l'onglet « Général » de cette page-là.
  *
  * Composant autonome monté par id (comme `agents-panel.js`). Il permet de :
- *   - LIRE et ÉDITER la personnalité de Yuki (textarea), avec la taille et une
- *     alerte quand on approche de la borne ;
+ *   - LIRE et ÉDITER la personnalité partagée de l'instance (textarea), avec la
+ *     taille et une alerte quand on approche de la borne ;
  *   - ENREGISTRER (`PUT /api/self/personality`, en-tête X-Yuki-Config) ;
  *   - REVENIR À LA VERSION PRÉCÉDENTE (`POST /api/self/personality/revert`) ;
- *   - CONSULTER l'historique des versions (aperçus).
+ *   - CONSULTER l'historique des versions (aperçus) ;
+ *   - éditer les RÈGLES STRICTES (`/api/self/rules`, éditées par l'utilisateur
+ *     seul) et la mémoire durable (archive récupérable, versions).
  *
  * CSP stricte (`style-src 'self'`) : aucun `<style>` injecté, aucun `style=` —
  * tout le CSS vit dans `config.css`.
  *
- * ⚠️ La personnalité vit dans un fichier SÉPARÉ du prompt système de sûreté
- * (`personality.md`, volume `state`) : elle est relue à CHAQUE tour, donc une
- * modification s'applique à chaud, sans redémarrage.
+ * ⚠️ Le fichier est SÉPARÉ du prompt système de sûreté et de la personnalité du
+ * bot : relu à CHAQUE tour, donc une modification s'applique à chaud.
  */
-
-import { creerSectionAvatar } from "./avatar.js";
 
 const JSON_HEADERS = { accept: "application/json" };
 const WRITE_HEADERS = { "content-type": "application/json", "x-yuki-config": "1" };
@@ -54,15 +67,16 @@ function codePointLength(text) {
 }
 
 const BOOTSTRAP_HELP = [
-  "⚠️ La PERSONNALITÉ DU PROMPT de ce bot se règle dans le champ « Personnalité » " +
-    "(plus bas, section « Personnalité et prompts système »). Ce panneau-ci édite la " +
-    "personnalité PARTAGÉE de l'instance (fichier personality.md) : ne mettez pas la même " +
-    "chose aux deux endroits.",
-  "La personnalité est un texte Markdown qui décrit QUI est le bot et COMMENT il s'exprime.",
-  "Elle est relue à CHAQUE tour : une modification s'applique tout de suite, sans redémarrage.",
-  "Pour l'amorcer depuis une ancienne « âme » : déposez le fichier personality.md dans le volume state " +
-    "(à côté de memory.jsonl), ou collez ici le contenu d'un ancien SOUL.md puis Enregistrez. " +
-    "Il sera relu au tour suivant.",
+  "Ce texte est la PERSONNALITÉ PAR DÉFAUT de l'installation : il sert uniquement à AMORCER un bot " +
+    "qui n'a AUCUNE personnalité enregistrée. La personnalité d'un bot se règle sur SA page " +
+    "(onglet « Personnalité ») — c'est elle, et elle seule, qui est utilisée pour ce bot.",
+  "Il n'y a donc qu'UNE personnalité : le champ « Personnalité » (ci-dessus, réglage d'instance, et " +
+    "par bot). Ce fichier n'est qu'un secours pour un bot qui n'en a pas encore.",
+  "Il n'est JAMAIS ajouté à la personnalité d'un bot : si le bot a une personnalité, ce texte est " +
+    "ignoré (aucune concaténation, aucun doublon).",
+  "Quand un bot n'a pas de personnalité enregistrée, ce texte est repris au DÉMARRAGE : pour le " +
+    "garder durablement, collez-le dans « Personnalité » de ce bot.",
+  "C'est un texte Markdown qui décrit QUI est le bot et COMMENT il s'exprime.",
   "Chaque version enregistrée est conservée (20 dernières) : le bouton « Revenir à la version " +
     "précédente » restaure l'état d'avant le dernier enregistrement.",
 ];
@@ -77,7 +91,7 @@ const MEMORY_WARNING = [
     "pouvez le restaurer à la main.",
   "La mémoire repart ensuite VIDE (l'index de recherche est vidé et se reconstruit tout seul) ; les " +
     "prochaines conversations produiront de nouveaux souvenirs.",
-  "Ne sont PAS touchés : la personnalité de Yuki (personality.md et son historique) ni l'archive " +
+  "Ne sont PAS touchés : la personnalité par défaut (personality.md et son historique) ni l'archive " +
     "« vie antérieure ».",
 ];
 
@@ -102,8 +116,9 @@ const HERITAGE_HELP = [
  * Aucun style inline (CSP stricte).
  */
 const RULES_HELP = [
-  "Ce sont des CONSIGNES que vous posez sur Yuki. Elles sont injectées AVANT sa personnalité et " +
-    "priment en cas de conflit.",
+  "Règles strictes : consignes IMMUABLES que vous posez sur le bot, PRIORITAIRES sur sa personnalité. " +
+    "Elles sont injectées à chaque tour dans un bloc dont l'en-tête déclare cette priorité : en cas de " +
+    "conflit, ce sont elles qui gagnent.",
   "⚠️ Yuki NE PEUT PAS les modifier : elle ne dispose d'aucun outil pour écrire ce fichier, et rien " +
     "dans l'interface ne lui permet de le faire. Vous seul les éditez ici.",
   "Le fichier reste lisible à la main (rules.md, à côté de personality.md dans le volume state). " +
@@ -111,9 +126,6 @@ const RULES_HELP = [
 ];
 
 export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
-  // Section AVATAR : montée UNE fois (son état — aperçu, boutons — survit aux
-  // re-rendus du panneau), réinsérée à chaque `render()`.
-  const avatarSection = creerSectionAvatar({ HolafFetch, HolafModal });
   const state = {
     text: "",
     chars: 0,
@@ -561,7 +573,12 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
    */
   function renderRulesSection() {
     const block = h("section", { class: "personality-rules" });
-    block.append(h("h3", { class: "personality-rules__title", text: "Règles strictes" }));
+    block.append(
+      h("h3", {
+        class: "personality-rules__title",
+        text: "Règles strictes : consignes immuables, prioritaires sur la personnalité",
+      }),
+    );
 
     const help = h("ul", { class: "personality-help personality-rules__help" });
     for (const line of RULES_HELP) help.append(h("li", { text: line }));
@@ -1076,18 +1093,25 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
       h("div", { class: "config-group__head" }, [
         h("h2", {
           class: "config-group__title",
-          text: "Personnalité partagée (fichier personality.md)",
+          text: "Personnalité par défaut et règles strictes (réglages d'instance)",
         }),
       ]),
     );
 
-    // L'avatar est une DONNÉE D'IDENTITÉ : il ouvre l'onglet, avant les
-    // textes. C'est aussi le seul endroit où il se règle.
-    wrap.append(avatarSection.element);
+    // ⚠️ PAS d'avatar ici : il est PAR BOT (lot 34) et se règle dans l'onglet
+    // « Général » de la page du bot.
 
     // Les règles strictes précèdent la personnalité (nature différente : des
     // consignes posées par l'utilisateur, injectées AVANT l'identité).
     wrap.append(renderRulesSection());
+
+    // ⚠️ `personality.md` n'est plus « la » personnalité : le titre le dit.
+    wrap.append(
+      h("h3", {
+        class: "personality-rules__title",
+        text: "Personnalité par défaut (utilisée quand un bot n'a pas de personnalité)",
+      }),
+    );
 
     const help = h("ul", { class: "personality-help" });
     for (const line of BOOTSTRAP_HELP) help.append(h("li", { text: line }));
@@ -1102,7 +1126,7 @@ export function initPersonalityPanel({ root, HolafFetch, HolafModal }) {
       spellcheck: "false",
       rows: "16",
       maxlength: String(TEXTAREA_MAXLENGTH),
-      "aria-label": "Personnalité partagée (fichier personality.md)",
+      "aria-label": "Personnalité par défaut (utilisée quand un bot n'a pas de personnalité)",
     });
     textarea.value = state.text;
     state.editValue = state.text;

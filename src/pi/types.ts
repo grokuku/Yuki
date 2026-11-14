@@ -25,9 +25,8 @@ import type { LibrarianShotView, LibrarianShotsPort } from "../librarian/shots.j
 import type { HeritagePort } from "../memory/heritage.js";
 import type { ConversationArchivePort } from "../memory/conversation-archive.js";
 import type { MemoryPort } from "../memory/types.js";
-import type { PersonalityPort } from "../personality/types.js";
-import type { ReactionsPort } from "../reactions/types.js";
 import type { RulesPort } from "../rules/types.js";
+import type { ReactionsPort } from "../reactions/types.js";
 import type {
   ComfyImageFinalPromptView,
   ComfyImageGenerationPort,
@@ -302,19 +301,17 @@ export interface PiHostOptions {
    */
   llmAvailable?: boolean | (() => boolean);
   /**
-   * RÈGLES STRICTES de Yuki (première base du prompt de chaque tour). Présent ⇒
-   * une extension SDK est enregistrée AVANT la personnalité : le bloc de règles
-   * est concaténé au prompt AVANT la personnalité, la mémoire, l'annuaire des
-   * agents et le signal d'archive. Absent ⇒ aucune règle (host nu, tests).
+   * RÈGLES STRICTES de Yuki (consignes de l'utilisateur). Présent ⇒ une
+   * extension SDK est enregistrée : le bloc `<regles>` est concaténé au prompt
+   * système du tour, et son en-tête déclare qu'il PRIME sur la personnalité, la
+   * mémoire, l'annuaire et l'archive. Absent ⇒ aucune règle (host nu, tests).
+   *
+   * ⚠️ Il n'y a PAS d'option `personality` : la personnalité a une seule source,
+   * `prompts.personnalite`, composée une fois par `composerPromptSysteme`
+   * (`src/llm/prompt-systeme.ts`). Le fichier `personality.md` n'est plus injecté
+   * (défaut d'amorçage seulement, voir `src/bots/personnalite-bot.ts`).
    */
   rules?: RulesPort;
-  /**
-   * Personnalité de Yuki (base du prompt de chaque tour). Présent ⇒ une
-   * extension SDK est enregistrée EN PREMIER sur la session légère : le bloc de
-   * personnalité est concaténé au prompt AVANT la mémoire, l'annuaire des agents
-   * et le signal d'archive. Absent ⇒ aucune personnalité (host nu, tests).
-   */
-  personality?: PersonalityPort;
   /**
    * Lot 12 : mémoire durable. Présent ⇒ une extension SDK est enregistrée sur la
    * session légère (rappel borné avant tour, écriture automatique en fin de tour

@@ -212,7 +212,8 @@
 
         <div id="groups" class="config-panels">
           <!-- ═══ GÉNÉRAL ═══════════════════════════════════════════════════
-               Identité du bot (nom MODIFIABLE, slug IMMUABLE, avatar), CAPACITÉS
+               Identité du bot (nom MODIFIABLE, slug IMMUABLE, avatar PAR BOT avec
+               son éditeur de recadrage — monté par `renderBotGeneral`), CAPACITÉS
                (une case par famille d'outils, décochées par défaut) et ZONE DE
                DANGER avec la SUPPRESSION réelle (lot 35e) : le dossier du bot
                est DÉPLACÉ dans `bots-supprimes/` (rien n'est effacé) et
@@ -231,9 +232,19 @@
             <div id="group-general" class="config-groups"></div>
           </section>
           <!-- ═══ PERSONNALITÉ ═══════════════════════════════════════════════
-               Le texte Markdown éditable (composant autonome `personality-panel.js`)
-               ET la SURCHARGE des prompts système du bot (clé `mixte` : la valeur
-               commune se règle sur « Modèles » de la page Instance). -->
+               UNIQUEMENT les TROIS zones du bot, rendues depuis le catalogue
+               (`prompts.personnalite`, `prompts.light`, `prompts.heavy`).
+               ⚠️ CET ONGLET EST IDENTIQUE POUR TOUS LES BOTS : rien ici ne dépend
+               du bot affiché (aucun composant monté par condition, aucun
+               identifiant de bot dans le markup).
+               ⚠️ La PERSONNALITÉ PAR DÉFAUT (`personality.md`) et les RÈGLES
+               STRICTES (`rules.md`) sont des réglages d'INSTANCE : ils ont quitté
+               cette page pour l'onglet « Modèles » de `/config`
+               (`#personality-root`). ⚠️ `personality.md` n'est PAS la personnalité
+               du bot : c'est un défaut d'amorçage, utilisé seulement si le bot n'a
+               aucune personnalité enregistrée.
+               ⚠️ L'AVATAR, lui, est PAR BOT : il est monté dans l'onglet
+               « Général » (`renderBotGeneral`, `avatar.js`). -->
           <section
             class="config-panel"
             role="tabpanel"
@@ -242,7 +253,6 @@
             tabindex="0"
             hidden
           >
-            <div id="personality-root"></div>
             <div id="group-personnalite" class="config-groups"></div>
           </section>
           <!-- ═══ VOIX ═══════════════════════════════════════════════════════

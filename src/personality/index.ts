@@ -2,8 +2,9 @@
  * Domaine « personnalité » de Yuki — surface publique.
  *
  * Types PURS + implémentation locale (store fichier + historique + journal).
- * Aucun import SDK/typebox : l'injection dans la conversation est confinée à
- * `src/pi/sdk/**`.
+ * Aucun import SDK/typebox : la composition du prompt est confinée à
+ * `src/llm/prompt-systeme.ts` (la personnalité n'est plus injectée par une
+ * extension SDK).
  */
 
 export {
@@ -16,7 +17,11 @@ export {
   PERSONALITY_TAG,
   clampPersonalityText,
   framePersonality,
+  personnaliteEffective,
   type ClampedPersonality,
+  type OriginePersonnaliteEffective,
+  type PersonnaliteEffective,
+  type SourcesPersonnalite,
 } from "./personality.js";
 
 export { PersonalityStore, type PersonalityStoreOptions } from "./store.js";
