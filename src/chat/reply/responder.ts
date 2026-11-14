@@ -4,9 +4,16 @@
  * Trois modes, PAR CANAL (`ChatReplyMode`) :
  *  - `tout`    → Yuki répond à CHAQUE message HUMAIN ;
  *  - `mention` → elle ne répond que si elle est CITÉE (`@Yuki`, `@<pseudo du bot>`,
- *                ou son identifiant) — détection EXPLICITE, jamais une heuristique
- *                de texte (« est-ce que ça a l'air adressé à Yuki ? » n'existe pas) ;
- *  - `auto`    → un appel modèle LÉGER juge si le message lui est adressé.
+ *                son identifiant, son NOM dans le texte, ou une réponse de fil à un
+ *                de ses messages) — détection EXPLICITE, jamais une heuristique ;
+ *  - `auto`    → un appel modèle LÉGER juge si le message lui est adressé… mais
+ *                SEULEMENT quand aucune PREUVE D'ADRESSE n'existe (décision
+ *                utilisateur du 2026-11-14 : « s'il est cité, on considère qu'on
+ *                s'adresse à lui, et on économise un appel LLM »).
+ *
+ * ⚠️ PREUVE D'ADRESSE (avant le juge, dans `auto`) : mention native, NOM du bot
+ * comme mot du texte, réponse de fil à un message du bot. Aucune de ces trois
+ * preuves n'appelle le modèle : elles sont déterministes.
  *
  * ⚠️ ANTI-BOUCLE (la règle qui prime sur les trois autres) : un message dont
  * l'auteur est `botUserId` — ou déjà classé `assistant` — ne déclenche JAMAIS de
@@ -16,7 +23,8 @@
  * ⚠️ BORNES DU JUGE (`auto`) :
  *  1. jamais sur un message du bot ;
  *  2. jamais deux fois pour le même identifiant de message (`dejaJuge`) ;
- *  3. jamais si le canal n'est PAS en `auto` (le juge n'est même pas appelé).
+ *  3. jamais si le canal n'est PAS en `auto` (le juge n'est même pas appelé) ;
+ *  4. jamais quand le message CITE le bot (preuve d'adresse ⇒ réponse directe).
  */
 
 import type {
@@ -28,6 +36,11 @@ import type {
   RemotePlatform,
 } from "../types.js";
 import { isOwnMessage } from "../mirror/ingest.js";
+// ⚠️ RÉUTILISATION (leçon « ne pas réinventer ») : la détection « ce nom apparaît
+// comme un MOT » existe déjà, bornée par des frontières de lettres/chiffres
+// (« grolaf » ne matche pas « grolafette »). Écrite pour la garde de personnalité,
+// elle sert ici à la même chose : reconnaître un nom propre dans du texte.
+import { mentionneNom } from "../../bots/prompt-du-tour.js";
 
 /**
  * Mode de réponse par DÉFAUT quand le canal n'en a pas choisi.
@@ -247,10 +260,17 @@ export function composeReply(input: {
   };
 }
 
-/** Juge `auto` : rend `true` si le message s'adresse à Yuki. */
+/**
+ * Juge `auto` : rend `true` si le message s'adresse au bot qui a reçu le canal.
+ *
+ * ⚠️ `botId` vient de l'ADAPTATEUR (celui qui a reçu le message) : le juge pose sa
+ * question au nom de CE bot (« s'adresse-t-il à grolaf ? ») et lit SES outils. Sans
+ * lui, le juge du bot du run répondait pour un autre bot.
+ */
 export type ChatReplyJudge = (input: {
   message: RemoteMessage;
   channelTitle: string;
+  botId?: string;
 }) => Promise<boolean>;
 
 /** Décision rendue : un booléen ET sa raison (jamais un booléen nu). */
@@ -268,11 +288,69 @@ export type ReplyReason =
   | "message_supprime"
   | "mode_tout"
   | "mention"
+  | "nom"
+  | "reponse_au_bot"
   | "pas_de_mention"
   | "juge_oui"
   | "juge_non"
   | "juge_indisponible"
   | "deja_juge";
+
+/**
+ * PREUVE D'ADRESSE reconnue sans aucun appel modèle.
+ *
+ * ⚠️ `mention` = mention NATIVE (`@pseudo`, `<@id>`, identifiant brut) ; `nom` =
+ * le nom du bot apparaît comme un MOT dans le texte ; `reponse` = le message
+ * répond à un message DU BOT (fil).
+ */
+export type AdresseBot = "mention" | "nom" | "reponse";
+
+/**
+ * Détecte une PREUVE D'ADRESSE — déterministe, sans modèle (décision utilisateur
+ * du 2026-11-14 : « avant de faire juger, vérifie si le bot est cité »).
+ *
+ * ⚠️ L'ORDRE est celui de la force de la preuve : une mention native vaut mieux
+ * qu'un nom dans le texte, qui vaut mieux qu'une réponse de fil. Le premier trouvé
+ * est rendu (un seul code dans le journal).
+ *
+ * ⚠️ Un nom de bot qui serait un MOT COURANT peut produire un faux positif — c'est
+ * ACCEPTÉ (mieux vaut une réponse de trop qu'un silence quand on parle au bot) et
+ * le journal le signale.
+ */
+export function detecterAdresseBot(input: {
+  message: RemoteMessage;
+  aliases: readonly string[];
+  /** Noms NUS du bot (`username`, nom affiché) cherchés comme des mots. */
+  botNames?: readonly string[];
+  /** `true` quand le message répond à un message DU BOT (`threadRootId`). */
+  repondAuBot?: (message: RemoteMessage) => boolean;
+}): AdresseBot | undefined {
+  const texte = input.message.text ?? "";
+  if (isBotMentioned(texte, input.aliases)) return "mention";
+  for (const nom of input.botNames ?? []) {
+    if (mentionneNom(texte, nom)) return "nom";
+  }
+  if (input.repondAuBot?.(input.message) === true) return "reponse";
+  return undefined;
+}
+
+/** Raison STABLE d'une décision prise sur PREUVE D'ADRESSE. */
+function raisonAdresse(adresse: AdresseBot): ReplyReason {
+  if (adresse === "mention") return "mention";
+  return adresse === "nom" ? "nom" : "reponse_au_bot";
+}
+
+/** Phrase lisible d'une décision prise sur preuve d'adresse. */
+function detailAdresse(adresse: AdresseBot): string {
+  if (adresse === "mention") return "Le bot est CITÉ (mention native) : il répond.";
+  if (adresse === "nom") {
+    return (
+      "Le NOM du bot apparaît dans le message : adresse reconnue sans juge " +
+      "(un nom courant peut produire un faux positif, le journal le signale)."
+    );
+  }
+  return "Le message répond à un message DU BOT : adresse reconnue sans juge.";
+}
 
 /**
  * Échappe une chaîne pour l'utiliser dans une expression régulière.
@@ -349,6 +427,21 @@ export interface DecideReplyInput {
   judge?: ChatReplyJudge;
   /** `true` si ce message a DÉJÀ été jugé (borne n°2 : jamais deux fois). */
   dejaJuge?: (remoteId: string) => boolean;
+  /** Noms NUS du bot : cherchés comme des mots avant tout appel au juge. */
+  botNames?: readonly string[];
+  /** Bot qui a REÇU le message (son adaptateur) — transmis tel quel au juge. */
+  botId?: string;
+  /** `true` quand le message répond à un message DU BOT (calculé par la plateforme). */
+  repondAuBot?: (message: RemoteMessage) => boolean;
+  /**
+   * Journal des DÉCISIONS d'adresse (`chat.adresse.*`) — jamais le texte du message.
+   * Absent ⇒ aucune ligne (comportement inchangé).
+   */
+  logger?: {
+    info(message: string, fields?: Record<string, unknown>): void;
+    /** ⚠️ Facultatif : un juge qui LÈVE est journalisé, jamais avalé en silence. */
+    warn?(message: string, fields?: Record<string, unknown>): void;
+  };
 }
 
 /**
@@ -395,16 +488,30 @@ export async function decideReply(input: DecideReplyInput): Promise<ReplyDecisio
     };
   }
   if (replyMode === "mention") {
-    const cited = isBotMentioned(message.text, input.aliases);
-    return cited
-      ? { repondre: true, raison: "mention", detail: "Yuki est citée dans le message." }
-      : {
-          repondre: false,
-          raison: "pas_de_mention",
-          detail: "Yuki n'est pas citée : aucune réponse (mode « mention »).",
-        };
+    // ⚠️ MÊME détection que le mode `auto` (une seule vérité) : mention native,
+    // nom du bot comme mot, ou réponse de fil à un de ses messages. Aucun juge.
+    const adresse = detecterAdresseBot(input);
+    if (adresse !== undefined) {
+      journaliserAdresse(input, adresse);
+      return { repondre: true, raison: raisonAdresse(adresse), detail: detailAdresse(adresse) };
+    }
+    return {
+      repondre: false,
+      raison: "pas_de_mention",
+      detail: "Yuki n'est pas citée : aucune réponse (mode « mention »).",
+    };
   }
-  // 2. Mode `auto` : le juge tranche, une seule fois par message.
+  // 2. Mode `auto` — PREUVE D'ADRESSE D'ABORD (décision utilisateur du 2026-11-14) :
+  // une mention native, son nom dans le texte ou une réponse à un de ses messages
+  // sont des faits, pas des opinions. On répond donc DIRECTEMENT, sans appeler le
+  // modèle juge (un appel LLM et un aller-retour économisés, et plus de silence sur
+  // une citation explicite).
+  const adresse = detecterAdresseBot(input);
+  if (adresse !== undefined) {
+    journaliserAdresse(input, adresse);
+    return { repondre: true, raison: raisonAdresse(adresse), detail: detailAdresse(adresse) };
+  }
+  // 2 bis. Aucune preuve : le juge tranche, une seule fois par message.
   if (input.dejaJuge?.(message.remoteId) === true) {
     return {
       repondre: false,
@@ -413,6 +520,11 @@ export async function decideReply(input: DecideReplyInput): Promise<ReplyDecisio
     };
   }
   if (!input.judge) {
+    input.logger?.info("chat.adresse.juge_indisponible", {
+      conversation: message.conversationId,
+      consequence:
+        "aucune preuve d'adresse et aucun juge : le message reste sans réponse (mode « auto »)",
+    });
     return {
       repondre: false,
       raison: "juge_indisponible",
@@ -421,11 +533,63 @@ export async function decideReply(input: DecideReplyInput): Promise<ReplyDecisio
         "aucune réponse n'est envoyée plutôt que de répondre au hasard.",
     };
   }
-  const repondre = await input.judge({
-    message,
-    channelTitle: input.channelTitle ?? "",
+  // ⚠️ Le journal DIT que c'est bien le JUGE qui a décidé (et jamais le texte du
+  // message) : sans cette ligne, impossible de distinguer une preuve d'adresse d'un
+  // verdict du modèle.
+  input.logger?.info("chat.adresse.juge", {
+    conversation: message.conversationId,
+    raison: "aucune mention, aucun nom du bot, aucune réponse à un de ses messages",
   });
+  let repondre: boolean;
+  try {
+    repondre = await input.judge({
+      message,
+      channelTitle: input.channelTitle ?? "",
+      ...(input.botId !== undefined ? { botId: input.botId } : {}),
+    });
+  } catch (error) {
+    // ⚠️ JAMAIS UN SILENCE MUET : un juge qui lève (modèle injoignable, délai,
+    // réponse vide) est DIT. Sans preuve d'adresse, le message reste sans réponse —
+    // mais l'utilisateur peut lire pourquoi (et une mention, elle, a déjà répondu
+    // AVANT le juge : `auto` ne dépend plus du modèle pour une citation).
+    input.logger?.warn?.("chat.adresse.juge_echec", {
+      conversation: message.conversationId,
+      error: error instanceof Error ? error.message : String(error),
+      consequence:
+        "aucune preuve d'adresse et le juge a échoué : le message reste sans réponse (mode « auto »)",
+      action:
+        "vérifiez le modèle léger ; une mention ou le nom du bot dans le texte suffit à déclencher une réponse",
+    });
+    return {
+      repondre: false,
+      raison: "juge_indisponible",
+      detail:
+        "Le modèle qui juge les messages (mode « auto ») a échoué : aucune réponse " +
+        "n'est envoyée plutôt que de répondre au hasard.",
+    };
+  }
   return repondre
     ? { repondre: true, raison: "juge_oui", detail: "Le message s'adresse à Yuki." }
     : { repondre: false, raison: "juge_non", detail: "Le message ne s'adresse pas à Yuki." };
+}
+
+/**
+ * Journalise une décision prise sur PREUVE D'ADRESSE (`chat.adresse.par_*`).
+ *
+ * ⚠️ Jamais le texte du message : seulement le canal et la nature de la preuve.
+ * ⚠️ Le cas `nom` porte un AVERTISSEMENT explicite : un nom de bot qui serait un mot
+ * courant peut produire un faux positif — accepté, mais diagnosticable.
+ */
+function journaliserAdresse(input: DecideReplyInput, adresse: AdresseBot): void {
+  const message = `chat.adresse.par_${adresse}`;
+  input.logger?.info(message, {
+    conversation: input.message.conversationId,
+    mode: input.replyMode,
+    ...(adresse === "nom"
+      ? {
+          avertissement:
+            "adresse reconnue par le NOM du bot dans le texte : un nom courant peut produire un faux positif",
+        }
+      : {}),
+  });
 }

@@ -134,6 +134,7 @@ export {
 export type { ChatSyncChannel, ChatSyncPlatform } from "./sync/platform.js";
 export {
   CHAT_JOB_REPORT_INSTRUCTION,
+  CHAT_DEFAULT_BOT_NAME,
   CHAT_JUDGE_SYSTEM_PROMPT,
   CHAT_REPLY_SYSTEM_PROMPT,
   CHAT_JUDGE_TIMEOUT_MS,
@@ -142,9 +143,18 @@ export {
   CHAT_PARTIAL_HISTORY_NOTICE,
   buildJudgePrompt,
   buildReplyPrompt,
+  chatJudgeSystemPrompt,
+  chatReplySystemPrompt,
   formatLineTimestamp,
+  nomDeBotPourPrompt,
   parseJudgeAnswer,
 } from "./reply/prompt.js";
+export {
+  promptRedacteurDuBot,
+  type LoggerPromptRedacteur,
+  type OptionsPromptRedacteurBot,
+  type PersonnaliteDuBot,
+} from "./reply/prompt-bot.js";
 export {
   createRemoteReplyGenerator,
   runPlatformOf,

@@ -444,6 +444,16 @@ export type ChatReplyGenerator = (input: {
   transcript: readonly RemoteMessage[];
   message: RemoteMessage;
   /**
+   * ⚠️ BOT QUI A REÇU LE MESSAGE (son adaptateur, donc son `botId`).
+   *
+   * C'est LUI qui décide du nom, de la personnalité, de la mémoire, des consignes,
+   * des règles et des outils du tour. Il n'est JAMAIS déduit de la conversation :
+   * la table de propriété des canaux est remplie à la PREMIÈRE publication, donc
+   * un canal qui n'a encore rien publié retombait sur le bot du run — un bot
+   * répondait alors avec l'identité de Yuki (bug du 2026-11-14, Discord compris).
+   */
+  botId?: string;
+  /**
    * IMAGES de pièces jointes du message (déjà bornées par la politique de vision).
    * ⚠️ Absent = message sans image, ou vision indisponible : le prompt reste du texte.
    */

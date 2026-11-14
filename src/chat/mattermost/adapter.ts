@@ -44,6 +44,7 @@ import { ConversationSendQueue } from "../reply/send-queue.js";
 // ⚠️ RAPPORT SYSTÈME (un seul rédacteur dans un canal) : mise en forme du message
 // injecté et reconnaissance de l'auteur synthétique.
 import { estRapportSysteme, messageRapportSysteme } from "../reply/job-report.js";
+import { isOwnMessage } from "../mirror/ingest.js";
 import {
   DEFAULT_REPLY_MODE,
   botAliases,
@@ -127,6 +128,15 @@ export interface MattermostAdapterDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Générateur de réponse (`undefined` ⇒ réponse NON générée, et c'est DIT). */
   generateReply?: MattermostReplyGenerator;
+  /**
+   * ⚠️ BOT DE CET ADAPTATEUR — celui qui a reçu le message.
+   *
+   * C'est la SEULE source fiable : un adaptateur est construit PAR BOT
+   * (`AdaptateursChatBots.creer(jeton)`), donc il sait à qui il appartient. Déduire
+   * le bot de la conversation retombait sur le bot du run tant qu'aucun canal n'avait
+   * publié (bug du 2026-11-14 : Mattermost ET Discord répondaient « je suis Yuki »).
+   */
+  botId?: string;
   /** Juge du mode `auto` (`undefined` ⇒ mode `auto` indisponible, et c'est DIT). */
   judge?: ChatReplyJudge;
   /**
@@ -881,6 +891,24 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       channelTitle: record.title,
       ...(this.deps.judge ? { judge: this.deps.judge } : {}),
       dejaJuge: (remoteId) => this.jugees.has(`${message.conversationId}:${remoteId}`),
+      // ⚠️ Le bot qui a REÇU ce message : il sert au juge (sa question nomme CE bot).
+      ...(this.deps.botId !== undefined ? { botId: this.deps.botId } : {}),
+      // ⚠️ PREUVE D'ADRESSE AVANT LE JUGE (2026-11-14) : les noms NUS du bot
+      // (pseudo, nom affiché) sont cherchés comme des MOTS dans le texte, et une
+      // réponse de fil à un de ses messages compte comme une adresse. Dans les deux
+      // cas on répond DIRECTEMENT, sans appel au modèle juge.
+      botNames: this.nomsNusDuBot(bot.username),
+      repondAuBot: (candidat) => this.repondAUnMessageDuBot(candidat, bot.id),
+      ...(this.deps.logger
+        ? {
+            logger: {
+              info: (evenement: string, champs?: Record<string, unknown>) =>
+                this.deps.logger?.info(evenement, champs),
+              warn: (evenement: string, champs?: Record<string, unknown>) =>
+                this.deps.logger?.warn(evenement, champs),
+            },
+          }
+        : {}),
     });
     if (mode === "auto") {
       // ⚠️ Borne n°2 : un message n'est jugé qu'UNE fois, qu'il ait été retenu ou non.
@@ -991,6 +1019,9 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
         channelTitle,
         transcript,
         message,
+        // ⚠️ LE BOT DE CET ADAPTATEUR : nom, personnalité, outils, délégation et
+        // canaux du tour sont LES SIENS. Jamais le bot du run (bug du 2026-11-14).
+        ...(this.deps.botId !== undefined ? { botId: this.deps.botId } : {}),
         ...(joints.images.length > 0 ? { images: joints.images } : {}),
         ...(joints.notes.length > 0 ? { notes: joints.notes } : {}),
         publier,
@@ -1049,6 +1080,40 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
   }
 
   /** Mémorise un identifiant jugé (mémoire bornée : on ne garde que les derniers). */
+  /**
+   * Noms NUS du bot, pour la détection d'adresse PAR LE NOM (avant le juge).
+   *
+   * ⚠️ Uniquement des formes EXPLICITES : pseudo du miroir, pseudo et nom affiché
+   * renvoyés par le serveur. Aucun nom inventé, aucun alias déduit.
+   */
+  private nomsNusDuBot(botUsername: string | undefined): string[] {
+    const noms = new Set<string>();
+    for (const valeur of [botUsername, this.identite?.username, this.identite?.displayName]) {
+      const nom = (valeur ?? "").trim();
+      if (nom !== "") noms.add(nom);
+    }
+    return [...noms];
+  }
+
+  /**
+   * `true` quand le message répond à un message DU BOT (racine de son fil).
+   *
+   * ⚠️ Une réponse de fil EST une adresse quand la racine est un message du bot :
+   * c'est ainsi qu'on lui répond dans Mattermost. La racine est lue dans SON miroir
+   * (déjà synchronisé) — aucun appel réseau supplémentaire.
+   */
+  private repondAUnMessageDuBot(
+    message: RemoteMessage,
+    botUserId: string | undefined,
+  ): boolean {
+    const racine = message.threadRootId;
+    if (racine === undefined || racine === "") return false;
+    const parent = this.deps.store
+      .messages(message.conversationId)
+      .find((item) => item.remoteId === racine);
+    return parent !== undefined && isOwnMessage(parent, botUserId);
+  }
+
   private rememberJudged(conversationId: string, remoteId: string): void {
     this.jugees.add(`${conversationId}:${remoteId}`);
     if (this.jugees.size > 5_000) {

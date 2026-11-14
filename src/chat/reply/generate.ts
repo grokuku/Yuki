@@ -74,7 +74,7 @@ export interface RemoteReplyGeneratorOptions {
    * synchronisent indépendamment du mode). Un `botName()` sans argument ne pouvait lire que
    * le mode GLOBAL, donc se tromper de plateforme.
    */
-  botName: (conversationId: string) => string;
+  botName: (conversationId: string, botId?: string) => string;
   /**
    * Politique + outils du canal, recalculés à CHAQUE réponse (`apply: hot`).
    *
@@ -87,8 +87,15 @@ export interface RemoteReplyGeneratorOptions {
     onFileProduced: (fileId: string) => void,
     contexte: ReplyRunContext,
   ) => RemoteRunTools;
-  /** Écrivain SDK, construit avec le run (la politique y entre). */
-  createWriter: (run: ReplyRun) => SdkPromptWriter;
+  /**
+   * Écrivain SDK, construit avec le run (la politique y entre).
+   *
+   * ⚠️ La CONVERSATION lui est passée (2026-11-14) : le prompt système dépend du bot
+   * PROPRIÉTAIRE du canal (son nom, sa personnalité). Sans elle, le rédacteur ne
+   * pouvait composer qu'un prompt commun — celui qui disait « Tu es Yuki » dans le
+   * canal de `grolaf`.
+   */
+  createWriter: (run: ReplyRun, conversationId: string, botId?: string) => SdkPromptWriter;
   /**
    * FUSEAU des horodatages du prompt (réglage `/config` `ui.timeZone`, défaut
    * `UTC`), relu à CHAQUE réponse (`apply: hot`).
@@ -115,6 +122,8 @@ export interface RemoteReplyInput {
   channelTitle: string;
   transcript: readonly RemoteMessage[];
   message: RemoteMessage;
+  /** ⚠️ Bot qui a REÇU le message (son adaptateur) — voir `ChatReplyGenerator`. */
+  botId?: string;
   images?: readonly FileImageContent[];
   notes?: readonly string[];
   /**
@@ -151,6 +160,11 @@ export interface RemoteReplyInput {
  */
 export interface ReplyRunContext {
   origine: "message" | "job";
+  /**
+   * ⚠️ BOT QUI A REÇU LE MESSAGE (son adaptateur). Les outils, la délégation, les
+   * agents et les canaux de ce tour sont LES SIENS — jamais ceux du bot du run.
+   */
+  botId?: string;
   channelPosts: ChannelPostRecorder;
   /**
    * PUBLIE un message DANS la conversation de ce tour (`envoyer_message`).
@@ -230,6 +244,7 @@ export function createRemoteReplyGenerator(
       },
       {
         origine,
+        ...(input.botId !== undefined ? { botId: input.botId } : {}),
         channelPosts,
         // ⚠️ ENVOI DE MESSAGE (`envoyer_message`, 2026-11-04) : la publication passe
         // par la `ReplyProgress` de CE tour (créée juste après — d'où la fermeture
@@ -264,8 +279,9 @@ export function createRemoteReplyGenerator(
       });
     }
     const progression = progress;
-    const writer = options.createWriter({
-      tools: () => run.tools,
+    const writer = options.createWriter(
+      {
+        tools: () => run.tools,
       customTools: () => run.customTools,
       // ⚠️ BORNE DU TOUR : les outils longs autorisés INLINE (sous `desactive`)
       // doivent tenir dans le délai de l'écrivain. Sans ce report, l'appel serait
@@ -299,13 +315,18 @@ export function createRemoteReplyGenerator(
             },
           }
         : {}),
-    });
+    },
+      // ⚠️ Bot PROPRIÉTAIRE de la conversation : le prompt système (identité +
+      // personnalité) est composé POUR LUI, pas pour le bot du démarrage.
+      input.message.conversationId,
+      input.botId,
+    );
 
     const prompt = buildReplyPrompt({
       channelTitle: input.channelTitle,
       transcript: input.transcript,
       message: input.message,
-      botName: options.botName(input.message.conversationId),
+      botName: options.botName(input.message.conversationId, input.botId),
       // ⚠️ Fuseau EXPLICITE (`ui.timeZone`, défaut UTC) : le prompt ne dépend
       // jamais du fuseau du process.
       ...(options.timeZone !== undefined ? { timeZone: options.timeZone() } : {}),

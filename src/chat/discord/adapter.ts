@@ -72,6 +72,7 @@ import { ConversationSendQueue } from "../reply/send-queue.js";
 // ⚠️ RAPPORT SYSTÈME (un seul rédacteur dans un canal) : mise en forme du message
 // injecté et reconnaissance de l'auteur synthétique.
 import { estRapportSysteme, messageRapportSysteme } from "../reply/job-report.js";
+import { isOwnMessage } from "../mirror/ingest.js";
 import type { ChatSyncChannel, ChatSyncPlatform } from "../sync/platform.js";
 import {
   CHAT_REPLY_MODES,
@@ -141,6 +142,15 @@ export interface DiscordAdapterDeps {
   random?: () => number;
   /** Générateur de réponse (`undefined` ⇒ réponse NON générée, et c'est DIT). */
   generateReply?: ChatReplyGenerator;
+  /**
+   * ⚠️ BOT DE CET ADAPTATEUR — celui qui a reçu le message.
+   *
+   * C'est la SEULE source fiable : un adaptateur est construit PAR BOT
+   * (`AdaptateursChatBots.creer(jeton)`), donc il sait à qui il appartient. Déduire
+   * le bot de la conversation retombait sur le bot du run tant qu'aucun canal n'avait
+   * publié (bug du 2026-11-14 : Mattermost ET Discord répondaient « je suis Yuki »).
+   */
+  botId?: string;
   /** Juge du mode `auto` (`undefined` ⇒ mode `auto` indisponible, et c'est DIT). */
   judge?: ChatReplyJudge;
   /** STORE DES FICHIERS de Yuki (images générées à joindre). Aucun accès disque direct. */
@@ -774,6 +784,23 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
       channelTitle: record.title,
       ...(this.deps.judge ? { judge: this.deps.judge } : {}),
       dejaJuge: (remoteId) => this.jugees.has(`${message.conversationId}:${remoteId}`),
+      // ⚠️ Le bot qui a REÇU ce message : il sert au juge (sa question nomme CE bot).
+      ...(this.deps.botId !== undefined ? { botId: this.deps.botId } : {}),
+      // ⚠️ PREUVE D'ADRESSE AVANT LE JUGE (2026-11-14) : les noms NUS du bot sont
+      // cherchés comme des MOTS dans le texte, et une réponse de fil à un de ses
+      // messages compte comme une adresse. On répond alors DIRECTEMENT, sans juge.
+      botNames: this.nomsNusDuBot(bot.username),
+      repondAuBot: (candidat) => this.repondAUnMessageDuBot(candidat, bot.id),
+      ...(this.deps.logger
+        ? {
+            logger: {
+              info: (evenement: string, champs?: Record<string, unknown>) =>
+                this.deps.logger?.info(evenement, champs),
+              warn: (evenement: string, champs?: Record<string, unknown>) =>
+                this.deps.logger?.warn(evenement, champs),
+            },
+          }
+        : {}),
     });
     if (mode === "auto") {
       // ⚠️ Borne n°2 : un message n'est jugé qu'UNE fois, qu'il ait été retenu ou non.
@@ -910,6 +937,9 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
         channelTitle,
         transcript,
         message,
+        // ⚠️ LE BOT DE CET ADAPTATEUR : nom, personnalité, outils, délégation et
+        // canaux du tour sont LES SIENS. Jamais le bot du run (bug du 2026-11-14).
+        ...(this.deps.botId !== undefined ? { botId: this.deps.botId } : {}),
         ...(joints.images.length > 0 ? { images: joints.images } : {}),
         ...(joints.notes.length > 0 ? { notes: joints.notes } : {}),
         publier,
@@ -966,6 +996,38 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
       });
       return false;
     }
+  }
+
+  /**
+   * Noms NUS du bot pour la détection d'adresse PAR LE NOM (avant le juge).
+   *
+   * ⚠️ Formes EXPLICITES seulement : pseudo du miroir, pseudo et nom affiché du
+   * serveur. Un nom inventé ferait répondre le bot à des messages qui ne le visent
+   * pas — le journal signale déjà le risque de faux positif.
+   */
+  private nomsNusDuBot(botUsername: string | undefined): string[] {
+    const noms = new Set<string>();
+    for (const valeur of [botUsername, this.identite?.username, this.identite?.displayName]) {
+      const nom = (valeur ?? "").trim();
+      if (nom !== "") noms.add(nom);
+    }
+    return [...noms];
+  }
+
+  /**
+   * `true` quand le message répond à un message DU BOT (racine de son fil).
+   * ⚠️ Lu dans le miroir déjà synchronisé : aucun appel réseau.
+   */
+  private repondAUnMessageDuBot(
+    message: RemoteMessage,
+    botUserId: string | undefined,
+  ): boolean {
+    const racine = message.threadRootId;
+    if (racine === undefined || racine === "") return false;
+    const parent = this.deps.store
+      .messages(message.conversationId)
+      .find((item) => item.remoteId === racine);
+    return parent !== undefined && isOwnMessage(parent, botUserId);
   }
 
   /** Mémorise un identifiant jugé (mémoire bornée : on ne garde que les derniers). */

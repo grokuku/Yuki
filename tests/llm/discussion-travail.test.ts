@@ -128,8 +128,13 @@ describe("juge du mode `auto` — réflexion `off` FIGÉE, l'exception assumée"
   });
 
   it("le juge ET le rédacteur de canal passent bien par cette fabrique", () => {
-    expect(INDEX_TS).toContain('chatWriter(CHAT_JUDGE_SYSTEM_PROMPT');
-    expect(INDEX_TS).toContain('chatWriter(\n        CHAT_REPLY_SYSTEM_PROMPT');
+    // ⚠️ GARDE RENOMMÉE (2026-11-14) : la constante commune a été remplacée par un
+    // prompt COMPOSÉ PAR BOT (le « Tu es Yuki » figé faisait répondre « je suis
+    // Yuki » à `grolaf` dans son canal). C'est la fabrique `chatWriter` qui est
+    // vérifiée ici, pas le texte du prompt.
+    expect(INDEX_TS).toContain("chatWriter(\n      chatJudgeSystemPrompt({ botName: nomDuBot(botId) })");
+    expect(INDEX_TS).toContain("chatWriter(\n        // ⚠️ IDENTITÉ + PERSONNALITÉ du bot PROPRIÉTAIRE du canal.");
+    expect(INDEX_TS).toContain("promptSystemeDuCanal(conversationId, botRecu)");
   });
 
   it("l'appel du juge ne transmet AUCUNE réflexion : il hérite du `off` figé", () => {
@@ -138,7 +143,8 @@ describe("juge du mode `auto` — réflexion `off` FIGÉE, l'exception assumée"
     const fin = INDEX_TS.indexOf("// Client MATTERMOST", debut);
     expect(fin).toBeGreaterThan(debut);
     const bloc = INDEX_TS.slice(debut, fin);
-    expect(bloc).toContain('chatWriter(CHAT_JUDGE_SYSTEM_PROMPT');
+    expect(bloc).toContain("chatWriter(");
+    expect(bloc).toContain("chatJudgeSystemPrompt({ botName: nomDuBot(botId) })");
     // ⚠️ Même quand `llm.heavy.thinking = "high"`, le juge ne le lit pas.
     expect(bloc).not.toContain("thinking:");
     expect(bloc).not.toContain("liveHeavyThinking");

@@ -3,12 +3,17 @@
  *
  * Deux usages, deux prompts SYSTEME distincts :
  *  1. le JUGE du mode `auto` — il ne rédige rien, il répond `oui` ou `non` à une seule
- *     question : « ce message s'adresse-t-il à Yuki ? » ;
+ *     question : « ce message s'adresse-t-il à CE bot ? » ;
  *  2. le RÉDACTEUR de la réponse publiée dans le canal.
  *
- * ⚠️ Les prompts sont des CONSTANTES de code, pas des champs de configuration : ils
- * font partie du contrat de comportement (et le mode `auto` doit rester borné : une
- * question, une réponse de deux lettres).
+ * ⚠️ IDENTITÉ (2026-11-14) : le nom du bot et sa PERSONNALITÉ sont des PARAMÈTRES
+ * (`chatReplySystemPrompt`, `chatJudgeSystemPrompt`). Un « Tu es Yuki » écrit en
+ * dur faisait répondre « je suis Yuki » à `grolaf` dans son propre canal : le
+ * rédacteur distant ignorait entièrement `prompts.personnalite`.
+ *
+ * ⚠️ Les RÈGLES, elles, restent des CONSTANTES de code : elles font partie du
+ * contrat de comportement (et le mode `auto` doit rester borné : une question, une
+ * réponse de deux lettres).
  *
  * ⚠️ Le transcript envoyé au rédacteur est BORNÉ (`maxChars`) et **exclut** le message
  * déclencheur du corps du prompt (il est présenté à part, à la fin) : sans cette borne,
@@ -23,31 +28,63 @@
  *   - quand la fenêtre coupe, une mention DIT que l'historique est partiel.
  *
  * ⚠️ Pourquoi l'heure courante est en TÊTE DE FIL et non dans le prompt système :
- * `CHAT_REPLY_SYSTEM_PROMPT` est une CONSTANTE du contrat de comportement (elle ne peut
- * pas changer d'un run à l'autre), et le repère n'a de sens qu'à côté des horodatages
- * qu'il permet d'interpréter.
+ * les RÈGLES du rédacteur (`REGLES_REDACTION_CANAL`) ne peuvent pas changer d'un run
+ * à l'autre, et le repère n'a de sens qu'à côté des horodatages qu'il permet
+ * d'interpréter.
  */
 
 import { buildTimestampPrefix, formatCompactDateTime } from "../../pi/timestamp.js";
+import { PERSONALITY_TAG } from "../../llm/prompt-systeme.js";
 import type { RemoteMessage } from "../types.js";
 import { auteurAffichable } from "../mirror/names.js";
 
-/** Entrée `auto` : une seule question, réponse `oui`/`non`. */
-export const CHAT_JUDGE_SYSTEM_PROMPT = [
-  "Tu es un filtre. On te donne le dernier message d'un canal de discussion et tu dis",
-  "si ce message s'adresse à Yuki (l'assistante qui lit le canal) ou non.",
-  "",
-  "Réponds UNIQUEMENT par « oui » ou « non ». Aucune explication, aucune ponctuation.",
-  "",
-  "Réponds « oui » si le message pose une question à l'assistante, lui demande une action,",
-  "la cite, ou poursuit clairement un échange avec elle.",
-  "Réponds « non » si les humains se parlent entre eux, si le message est une annonce",
-  "générale, une politesse adressée à quelqu'un d'autre, ou du bruit.",
-].join("\n");
+/**
+ * Nom de repli quand l'appelant ne connaît PAS le bot : c'est la seule valeur
+ * écrite en dur qui reste, et elle n'est jamais présentée comme une identité de
+ * bot (`chatReplySystemPrompt()` sans nom garde le comportement d'avant).
+ */
+export const CHAT_DEFAULT_BOT_NAME = "Yuki";
 
-/** Prompt système du rédacteur de réponse. */
-export const CHAT_REPLY_SYSTEM_PROMPT = [
-  "Tu es Yuki, une assistante qui participe à un canal de discussion d'équipe.",
+/** Nom AFFICHABLE retenu pour un prompt (jamais vide, jamais `undefined`). */
+export function nomDeBotPourPrompt(nom: string | undefined): string {
+  const valeur = (nom ?? "").trim();
+  return valeur === "" ? CHAT_DEFAULT_BOT_NAME : valeur;
+}
+
+/**
+ * Prompt système du JUGE du mode `auto`, nommant le bot qui lit CE canal.
+ *
+ * ⚠️ Le nom est un PARAMÈTRE (2026-11-14) : « s'adresse-t-il à Yuki ? » est faux
+ * dans le canal de `grolaf`. Un juge qui se trompe de destinataire répond « non »
+ * à une citation explicite du bot.
+ */
+export function chatJudgeSystemPrompt(input: { botName?: string } = {}): string {
+  const nom = nomDeBotPourPrompt(input.botName);
+  return [
+    "Tu es un filtre. On te donne le dernier message d'un canal de discussion et tu dis",
+    `si ce message s'adresse à ${nom} (l'assistante qui lit le canal) ou non.`,
+    "",
+    "Réponds UNIQUEMENT par « oui » ou « non ». Aucune explication, aucune ponctuation.",
+    "",
+    "Réponds « oui » si le message pose une question à l'assistante, lui demande une action,",
+    "la cite, ou poursuit clairement un échange avec elle.",
+    "Réponds « non » si les humains se parlent entre eux, si le message est une annonce",
+    "générale, une politesse adressée à quelqu'un d'autre, ou du bruit.",
+  ].join("\n");
+}
+
+/** Prompt du juge SANS nom de bot (repli documenté : le comportement d'avant). */
+export const CHAT_JUDGE_SYSTEM_PROMPT = chatJudgeSystemPrompt();
+
+/**
+ * RÈGLES de rédaction d'un canal — le CONTRAT, identique pour TOUS les bots.
+ *
+ * ⚠️ L'identité (« Tu es … ») n'en fait plus partie : elle est composée à part
+ * (`chatReplySystemPrompt`). Un « Tu es Yuki » figé ici faisait répondre
+ * « je suis Yuki » à `grolaf` dans SON canal (bug du 2026-11-14), puisque le
+ * rédacteur distant ne lisait pas du tout `prompts.personnalite`.
+ */
+const REGLES_REDACTION_CANAL: readonly string[] = [
   "Tu réponds en FRANÇAIS, de façon concise et utile, comme un message de chat :",
   "pas de titre, pas de liste à puces interminable, pas de formule de politesse creuse.",
   "",
@@ -122,7 +159,34 @@ export const CHAT_REPLY_SYSTEM_PROMPT = [
   "toi-même (cela coûte une génération de plus et produit une image que personne n'a",
   "demandée). Si tu n'as pas pu voir l'image (trop lourde, modèle sans vision), tu le",
   "dis et tu demandes si la personne veut une nouvelle génération.",
-].join("\n");
+];
+
+/**
+ * Prompt système du RÉDACTEUR d'un canal, pour UN bot donné.
+ *
+ * Ordre : identité (nom du bot) → personnalité (`prompts.personnalite`, le même
+ * texte que le host local) → règles de rédaction du canal (inchangées).
+ *
+ * ⚠️ Une personnalité vide n'ajoute AUCUN bloc (jamais un `<personnalite>` vide),
+ * et l'appel sans argument rend exactement le prompt d'avant.
+ */
+export function chatReplySystemPrompt(
+  input: { botName?: string; personnalite?: string } = {},
+): string {
+  const nom = nomDeBotPourPrompt(input.botName);
+  const personnalite = (input.personnalite ?? "").trim();
+  const lignes: string[] = [
+    `Tu es ${nom}, une assistante qui participe à un canal de discussion d'équipe.`,
+  ];
+  if (personnalite !== "") {
+    lignes.push("", `<${PERSONALITY_TAG}>`, personnalite, `</${PERSONALITY_TAG}>`, "");
+  }
+  lignes.push(...REGLES_REDACTION_CANAL);
+  return lignes.join("\n");
+}
+
+/** Prompt par DÉFAUT du rédacteur (aucun bot nommé : comportement d'avant). */
+export const CHAT_REPLY_SYSTEM_PROMPT = chatReplySystemPrompt();
 
 /**
  * Délai maximal du JUGE (ms) : court à dessein — un juge lent retarde la réponse au
@@ -217,11 +281,14 @@ export function formatLineTimestamp(sentAt: string, timeZone?: string): string {
  * Prompt du JUGE : le contexte récent, puis le message à juger, puis la question.
  *
  * ⚠️ Aucune consigne de rédaction : le juge n'écrit pas de message, il rend un verdict.
+ * ⚠️ `botName` : la question nomme le bot qui LIT CE CANAL (« s'adresse-t-il à
+ * grolaf ? »), jamais un nom figé.
  */
 export function buildJudgePrompt(input: {
   channelTitle: string;
   message: RemoteMessage;
   recent?: readonly RemoteMessage[];
+  botName?: string;
 }): string {
   const lines: string[] = [];
   if (input.channelTitle !== "") lines.push(`Canal : ${input.channelTitle}`);
@@ -236,7 +303,10 @@ export function buildJudgePrompt(input: {
   lines.push(`Message à juger :`);
   lines.push(bodyOf(input.message));
   lines.push("");
-  lines.push("Ce message s'adresse-t-il à Yuki ? Réponds « oui » ou « non ».");
+  lines.push(
+    `Ce message s'adresse-t-il à ${nomDeBotPourPrompt(input.botName)} ? ` +
+      "Réponds « oui » ou « non ».",
+  );
   return lines.join("\n");
 }
 

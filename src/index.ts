@@ -65,6 +65,9 @@ import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
 // HISTORIQUE d'instance → défaut livré (`candidatsPersonnalite` ordonne les deux
 // fichiers, du plus spécifique au plus général).
 import { candidatsPersonnalite, resoudrePersonnaliteBot } from "./bots/personnalite-bot.js";
+import {
+  type PersonnaliteConnue,
+} from "./bots/personnalite-garde.js";
 // ⚠️ PROMPT DU TOUR : recomposition à CHAQUE tour (identité, personnalité,
 // prompt léger/lourd, outils, voix) — éditer l'un prend effet au message suivant.
 import { creerPortPromptDuTour } from "./bots/prompt-du-tour.js";
@@ -86,9 +89,7 @@ import {
 import { createFilesService, createGeneratedImageFiles, FilesStore } from "./files/index.js";
 import { AvatarStore } from "./identity/avatar.js";
 import {
-  CHAT_JUDGE_SYSTEM_PROMPT,
   CHAT_JUDGE_TIMEOUT_MS,
-  CHAT_REPLY_SYSTEM_PROMPT,
   CHAT_REPLY_TIMEOUT_MS,
   ChatMirrorStore,
   ChatService,
@@ -103,7 +104,9 @@ import {
   type ProgrammationInput,
   type RemoteMessage,
   type RemotePlatform,
+  type PersonnaliteDuBot,
   buildJudgePrompt,
+  chatJudgeSystemPrompt,
   createChannelAwareWaker,
   createChannelPostPort,
   createRemoteReplyGenerator,
@@ -116,6 +119,7 @@ import {
   mirrorPlatformOf,
   normalizeReplyMode,
   getAdapter,
+  promptRedacteurDuBot,
   runPlatformOf,
   registerAdapterProvider,
 } from "./chat/index.js";
@@ -2420,6 +2424,96 @@ async function main(): Promise<void> {
   sourcesParBot.setOuvrir((input) => fabriquePiles.ouvrir(input.botId));
 
   /**
+   * Bot PROPRIÉTAIRE d'une conversation — LE SEUL qui doive parler dedans.
+   *
+   * ⚠️ FAMILLE DE BUG « bot du run ≠ bot affiché » (2026-11-14) : les réponses aux
+   * canaux distants étaient rédigées par le générateur du BOT DU RUN. Dans le canal
+   * de `grolaf`, c'est donc Yuki qui répondait (« je suis là, mais je suis Yuki »),
+   * alors que la même question posée dans l'interface web — qui passe par le host du
+   * bot affiché (`?bot=`) — recevait la bonne personnalité.
+   */
+  const botDuCanal = (conversationId: string, botId?: string): string =>
+    botId ?? proprietairesCanaux.proprietaire(conversationId) ?? botDuRun;
+
+  /**
+   * PERSONNALITÉ EFFECTIVE d'un bot, AVEC sa provenance (même résolution que le
+   * host local : champ renseigné → fichier DU BOT → fichier HISTORIQUE → défaut).
+   *
+   * ⚠️ AUCUN REPLI sur la configuration de la PILE : pour un bot sans overlay,
+   * lire `config` lirait `prompts.personnalite` de Yuki — c'est exactement la
+   * source d'identité étrangère que `refuserPersonnaliteEtrangere` refuse ensuite.
+   */
+  const personnaliteDuBot = (botId: string): PersonnaliteDuBot => {
+    const configBot = botId === botDuRun ? config : configsBots.get(botId);
+    // ⚠️ RELECTURE DISQUE : le cache d'un `ConfigRuntime` de bot NON-pile est figé
+    // au démarrage (« un seul rédacteur par overlay »). Sans elle, éditer la
+    // personnalité d'un bot n'aurait aucun effet sur ses réponses de canal.
+    configBot?.reload();
+    const outils = outilsBotsParId?.get(botId);
+    const candidats = candidatsPersonnalite(
+      outils !== undefined
+        ? {
+            portee: "bot",
+            chemin: outils.chemins.personalityPath,
+            // ⚠️ Pour le bot de la PILE, ce store EST le store d'instance : le
+            // module lit alors le CHEMIN demandé (jamais le fichier d'un autre).
+            ...(botId === botDuRun ? {} : { store: outils.personnalite }),
+          }
+        : undefined,
+      { portee: "instance", chemin: personalityStore.filePath, store: personalityStore },
+    );
+    const resolue = resoudrePersonnaliteBot({ botId, config: configBot, fichiers: candidats });
+    return {
+      texte: resolue.texte,
+      origine: resolue.origine,
+      provenance: resolue.provenance,
+      fichier: resolue.fichier,
+    };
+  };
+
+  /**
+   * Personnalités connues des AUTRES bots (garde de la composition).
+   *
+   * ⚠️ Coût borné : un fichier Markdown par bot (et son petit overlay), pas le
+   * registre ni le catalogue de configuration.
+   */
+  const personnalitesDesAutresBots = (botId: string): PersonnaliteConnue[] => {
+    const out: PersonnaliteConnue[] = [];
+    for (const entree of bots.registre?.bots ?? []) {
+      if (entree.id === botId) continue;
+      const texte = personnaliteDuBot(entree.id).texte;
+      if (texte.trim() === "") continue;
+      out.push({ botId: entree.id, texte });
+    }
+    return out;
+  };
+
+  /**
+   * Mémoire du journal `chat.reponse.prompt_bot` : une ligne par CHANGEMENT de
+   * source, jamais une par réponse (un canal actif noierait le journal).
+   */
+  const memoirePromptRedacteur = new Map<string, string>();
+
+  /**
+   * PROMPT SYSTÈME du rédacteur pour le bot PROPRIÉTAIRE de la conversation.
+   *
+   * ⚠️ C'est LE point qui manquait : le rédacteur distant ne lisait ni le nom ni
+   * `prompts.personnalite` du bot, et répondait donc avec l'identité écrite en dur
+   * dans `CHAT_REPLY_SYSTEM_PROMPT` (« Tu es Yuki »).
+   */
+  const promptSystemeDuCanal = (conversationId: string, botRecu?: string): string => {
+    const botId = botDuCanal(conversationId, botRecu);
+    return promptRedacteurDuBot({
+      botId,
+      nom: nomDuBot(botId),
+      personnalite: personnaliteDuBot(botId),
+      autres: personnalitesDesAutresBots(botId),
+      logger,
+      memoire: memoirePromptRedacteur,
+    });
+  };
+
+  /**
    * RÉDACTEUR d'une réponse distante — **COMMUN aux plateformes** (lot 21).
    *
    * ⚠️ Mêmes PORTES que le run local (`createRemoteRunTools` recalculé à chaque réponse),
@@ -2427,6 +2521,13 @@ async function main(): Promise<void> {
    * dupliqué la politique d'outils, c'est-à-dire la seule chose qui décide de ce qu'un run
    * distant a le droit d'appeler.
    */
+  /**
+   * ⚠️ BOT DU TOUR d'une réponse distante : celui de l'ADAPTATEUR qui a reçu le
+   * message (source fiable), sinon la propriété du canal, sinon le bot du run.
+   */
+  const botDuTourDistant = (conversationId: string, botRecu?: string): string =>
+    botDuCanal(conversationId, botRecu);
+
   const chatReplyGenerator = createRemoteReplyGenerator({
     available: () => resolveAvail().isAvailable("light"),
     // ⚠️ FUSEAU des horodatages du fil de canal (`ui.timeZone`, défaut UTC),
@@ -2436,8 +2537,15 @@ async function main(): Promise<void> {
     // ⚠️ Le nom du bot dépend de la PLATEFORME DU RUN (celle de la conversation), pas de
     // `chat.mode` : un salon Discord doit s'entendre appeler par le pseudo du bot Discord
     // même quand l'interface regarde Mattermost (`runPlatformOf`, `src/chat/reply/generate.ts`).
-    botName: (conversationId) =>
-      chatMirror.bot(mirrorPlatformOf(conversationId) ?? "mattermost").username ?? "Yuki",
+    // ⚠️ Et il dépend du bot PROPRIÉTAIRE de la CONVERSATION : un canal de `grolaf`
+    // doit s'entendre appeler par SON pseudo, jamais par celui du bot du run.
+    botName: (conversationId, botRecu) => {
+      const botId = botDuCanal(conversationId, botRecu);
+      const miroir = botId === botDuRun ? chatMirror : canauxBots?.miroirDe(botId);
+      const pseudo = miroir?.bot().username;
+      const retenu = (pseudo ?? "").trim();
+      return retenu === "" ? nomDuBot(botId) : retenu;
+    },
     // ⚠️ POLITIQUE PAR PLATEFORME : `toolAllowlistForChat` selon la plateforme DU RUN et
     // les DEUX réglages d'accès distant (`chat.remoteAgents`, `chat.remoteTools`), à
     // partir des MÊMES options que le host local. Ce n'est pas `chat.mode` qui décide :
@@ -2481,9 +2589,11 @@ async function main(): Promise<void> {
             mirrorPlatformOf(conversationId) ??
               (config.getString("chat.mode") === "discord" ? "discord" : "mattermost"),
             // ⚠️ LOT 36 (L5) : le bot qui PUBLIE est le PROPRIÉTAIRE du canal où le
-            // run est né (à défaut, celui de la pile) — jamais une constante : une
-            // conversation de `kohai` publie avec les canaux de `kohai`.
-            proprietairesCanaux.proprietaire(conversationId) ?? botDuRun,
+            // run est né — jamais une constante : une conversation de `kohai` publie
+            // avec les canaux de `kohai`. ⚠️ 2026-11-14 : l'adaptateur qui a reçu le
+            // message DÉSIGNE ce bot (`contexte.botId`), avant la table de propriété
+            // (remplie seulement à la première publication).
+            botDuTourDistant(conversationId, contexte.botId),
           ),
         ),
         // ⚠️ ENVOI DE MESSAGE DANS CE CANAL (`envoyer_message`, 2026-11-04) : même
@@ -2552,7 +2662,7 @@ async function main(): Promise<void> {
         ...(directoriesAgents
           ? {
               agents: directoriesAgents.pour(
-                proprietairesCanaux.proprietaire(conversationId) ?? botDuRun,
+                botDuTourDistant(conversationId, contexte.botId),
               ),
             }
           : {}),
@@ -2566,7 +2676,7 @@ async function main(): Promise<void> {
         // réveille LUI (pas le bot du run).
         ...(() => {
           if (delegation === undefined) return {};
-          const proprietaire = proprietairesCanaux.proprietaire(conversationId) ?? botDuRun;
+          const proprietaire = botDuTourDistant(conversationId, contexte.botId);
           const port = delegationPourBot(proprietaire) ?? delegation;
           return port !== undefined ? { delegation: port } : {};
         })(),
@@ -2590,9 +2700,12 @@ async function main(): Promise<void> {
         },
         logger,
       }),
-    createWriter: (run) =>
+    createWriter: (run, conversationId, botRecu) =>
       chatWriter(
-        CHAT_REPLY_SYSTEM_PROMPT,
+        // ⚠️ IDENTITÉ + PERSONNALITÉ du bot PROPRIÉTAIRE du canal. La constante
+        // commune (« Tu es Yuki ») a été retirée : c'est elle qui faisait répondre
+        // « je suis Yuki » à `grolaf` dans son propre canal (2026-11-14).
+        promptSystemeDuCanal(conversationId, botRecu),
         // ⚠️ BORNE DU TOUR, dérivée de la POLITIQUE du run (relue à chaque réponse) :
         //  - base = « rédaction (`CHAT_REPLY_TIMEOUT_MS`) + une génération
         //    (`images.timeoutMs`, plafond de sécurité relu à chaque réponse) », comme
@@ -2648,14 +2761,34 @@ async function main(): Promise<void> {
    * ⚠️ Un seul juge pour Mattermost ET Discord : la décision « ce message s'adresse-t-il à
    * Yuki ? » est la même, et en écrire deux aurait fait diverger le prompt et le modèle.
    */
-  const chatJudge: ChatReplyJudge = async ({ message, channelTitle }) => {
-    if (!resolveAvail().isAvailable("light")) return false;
-    const writer = chatWriter(CHAT_JUDGE_SYSTEM_PROMPT, CHAT_JUDGE_TIMEOUT_MS, "juge");
+  const chatJudge: ChatReplyJudge = async ({ message, channelTitle, botId: botRecu }) => {
+    if (!resolveAvail().isAvailable("light")) {
+      // ⚠️ Jamais muet : un juge indisponible est DIT (et la décision `auto`
+      // retombe sur la CITATION explicite, `decideReply`).
+      logger.warn("chat.juge.indisponible", {
+        conversation: message.conversationId,
+        consequence:
+          "le mode « auto » ne peut pas juger : seuls les messages qui CITENT le bot sont traités",
+      });
+      return false;
+    }
+    // ⚠️ Le JUGE appartient au bot PROPRIÉTAIRE du canal : sa question nomme CE bot
+    // (« s'adresse-t-il à grolaf ? ») et son contexte récent vient de SON miroir.
+    // Un juge du bot du run répondait à la question d'un autre bot, dans le fil d'un
+    // autre : même famille de bug que le rédacteur (2026-11-14).
+    const botId = botDuCanal(message.conversationId, botRecu);
+    const miroir = botId === botDuRun ? chatMirror : canauxBots?.miroirDe(botId);
+    const writer = chatWriter(
+      chatJudgeSystemPrompt({ botName: nomDuBot(botId) }),
+      CHAT_JUDGE_TIMEOUT_MS,
+      "juge",
+    );
     const answer = await writer(
       buildJudgePrompt({
         channelTitle,
         message,
-        recent: chatMirror
+        botName: nomDuBot(botId),
+        recent: (miroir ?? chatMirror)
           .messages(message.conversationId)
           .filter((item) => item.remoteId !== message.remoteId)
           .slice(-4),
@@ -2697,6 +2830,8 @@ async function main(): Promise<void> {
   // JAMAIS d'ici (coffre `YUKI_CHAT_<BOT>__MATTERMOST`, lu à chaque appel) et il
   // n'est ni journalisé ni renvoyé par une route.
   const mattermost: MattermostChatAdapter = new MattermostChatAdapter({
+    // ⚠️ LE BOT DE CE MOTEUR (bot de la pile) : ses réponses portent SON identité.
+    botId: botDuRun,
     // ⚠️ URL ET JETON DU MÊME BOT (câblage ci-dessus) : les résoudre séparément
     // enverrait le jeton d'un compte au serveur d'un autre.
     baseUrl: () => cablageMattermostPile.url(),
@@ -2870,6 +3005,8 @@ async function main(): Promise<void> {
   // téléchargement de pièce jointe. ⚠️ Comme pour Mattermost, il se lit sous TOUS les
   // noms acceptés pour CE bot — jamais un nom d'instance en dur.
   const discord: DiscordChatAdapter = new DiscordChatAdapter({
+    // ⚠️ LE BOT DE LA PILE : l'adaptateur dit à qui il appartient (voir `botId`).
+    botId: botDuRun,
     token: () => jetonChatDeBot((nom) => secretStore?.lookup(nom), botDuRun, "discord"),
     store: chatMirror,
     logger,
@@ -3073,6 +3210,10 @@ async function main(): Promise<void> {
         store: miroir,
         logger,
         files: filesStore,
+        // ⚠️ LE BOT DE CET ADAPTATEUR : ses réponses sont rédigées, jugées et
+        // outillées POUR LUI (personnalité, canaux, délégation, agents). Sans ce
+        // champ, un canal sans propriétaire enregistré répondait avec Yuki.
+        botId: jeton.botId,
         judge: chatJudge,
         generateReply: chatReplyGenerator,
         readImages: (input) => {
@@ -3096,6 +3237,9 @@ async function main(): Promise<void> {
       logger,
       guildId: () => configBot().getString("chat.discord.guildId"),
       maxUploadBytes: () => configBot().getNumber("chat.discord.maxUploadBytes"),
+      // ⚠️ LE BOT DE CET ADAPTATEUR — même raison que pour Mattermost : ses
+      // réponses (identité, personnalité, outils, délégation) sont les SIENNES.
+      botId: jeton.botId,
       judge: chatJudge,
       generateReply: chatReplyGenerator,
       files: filesStore,
