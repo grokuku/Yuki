@@ -63,6 +63,12 @@ const SDK_ALLOWLIST = [
   // sort de `src/pi/**` (la façade n'expose que ses propres types).
   "src/pi/sdk/consignes-extension.ts",
   "src/pi/sdk/consignes-tools.ts",
+  // ⚠️ AJOUTÉ (2026-11-14) : PROMPT DU TOUR — l'extension qui repose le prompt
+  // système à chaque tour (identité, personnalité, prompt du rôle, outils) : c'est
+  // ce qui rend une édition de personnalité effective au message suivant, sans
+  // redémarrage (bug `grolaf`). Elle ne reçoit que `PortPromptDuTour`
+  // (`src/llm/prompt-du-tour.ts`) : aucun type du SDK ne sort de `src/pi/**`.
+  "src/pi/sdk/prompt-du-tour-extension.ts",
 ].map((path) => path.split("/").join(sep));
 
 const SDK_IMPORT =

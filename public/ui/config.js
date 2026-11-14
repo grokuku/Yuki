@@ -341,10 +341,19 @@ function h(tag, props = {}, children = []) {
   return el;
 }
 
+/**
+ * Badge d'APPLICATION d'un champ — il doit dire la VÉRITÉ dans les deux sens.
+ *
+ * ⚠️ Un badge d'un seul mot (« redémarrage ») ne dit pas ce qu'il faut faire : on
+ * écrit la conséquence en toutes lettres. Et un champ devenu à chaud (personnalité,
+ * prompts, règles, consignes, faits — recomposés à chaque tour) ne doit plus
+ * afficher « redémarrage » : un badge mensonger est pire que pas de badge.
+ */
 function applyBadge(apply) {
+  const hot = apply === "hot";
   return h("span", {
-    class: `badge badge--${apply === "hot" ? "hot" : "restart"}`,
-    text: apply === "hot" ? "à chaud" : "redémarrage",
+    class: `badge badge--${hot ? "hot" : "restart"}`,
+    text: hot ? "à chaud" : "nécessite un redémarrage pour s'appliquer",
   });
 }
 
