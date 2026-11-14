@@ -69,6 +69,14 @@ import { ChatSyncService } from "../sync/service.js";
 import type { ChatSyncDelivery } from "../sync/service.js";
 import { ReplyLimiter } from "../reply/limiter.js";
 import { ConversationSendQueue } from "../reply/send-queue.js";
+// ⚠️ INDICATEUR « en train d'écrire » : signal propre à Discord
+// (`POST /channels/{id}/typing`, expire au bout de ~10 s).
+import {
+  INDICATEUR_INTERVALLE_DISCORD_MS,
+  INDICATEUR_PLAFOND_MS,
+  IndicateursEcriture,
+  type IndicateurEcriture,
+} from "../reply/indicateur.js";
 // ⚠️ RAPPORT SYSTÈME (un seul rédacteur dans un canal) : mise en forme du message
 // injecté et reconnaissance de l'auteur synthétique.
 import { estRapportSysteme, messageRapportSysteme } from "../reply/job-report.js";
@@ -166,6 +174,18 @@ export interface DiscordAdapterDeps {
   maxChannels?: number;
   /** Période du rattrapage REST (défaut 60 s). */
   pollIntervalMs?: number;
+  /**
+   * INDICATEUR « en train d'écrire » — réglable pour les TESTS uniquement.
+   *
+   * ⚠️ En production, aucun réglage n'est fourni : l'émission réelle est
+   * `POST /channels/{id}/typing`, réémise toutes les 8 s, avec un plafond dur de 2 min.
+   */
+  indicateur?: {
+    /** Remplace l'émission réelle (mesure de l'ORDRE des appels en test). */
+    emettre?: (conversationId: string, channelId: string) => void | Promise<void>;
+    intervalMs?: number;
+    plafondMs?: number;
+  };
 }
 
 /**
@@ -271,6 +291,13 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
   private readonly envois = new ConversationSendQueue();
 
   private readonly reponses: ReplyLimiter;
+  /**
+   * INDICATEUR « en train d'écrire », UNE boucle par salon.
+   *
+   * ⚠️ Créé dans le constructeur (le client REST doit exister) et arrêté à la
+   * déconnexion : aucun minuteur orphelin ne survit à un arrêt de la plateforme.
+   */
+  private readonly indicateurs: IndicateursEcriture;
   /** État de l'intent privilégié, lu sur `GET /applications/@me` (jamais deviné). */
   private intentContentActif: boolean | undefined;
 
@@ -315,6 +342,19 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
       ...(deps.pollIntervalMs !== undefined ? { pollIntervalMs: deps.pollIntervalMs } : {}),
       onMessage: (message, delivery) => this.onNewMessage(message, delivery),
     });
+    // ⚠️ INDICATEUR : une émission par SALON, jamais par canal de l'univers : c'est le
+    // `channel_id` de la conversation (`dc-<id>`) — donc celui du FIL quand le message
+    // vient d'un fil — qui reçoit le signal.
+    this.indicateurs = new IndicateursEcriture({
+      emettre: (canal, conversationId) => {
+        const remplacement = deps.indicateur?.emettre;
+        if (remplacement !== undefined) return remplacement(conversationId, canal);
+        return this.client.triggerTyping(canal);
+      },
+      intervalMs: deps.indicateur?.intervalMs ?? INDICATEUR_INTERVALLE_DISCORD_MS,
+      plafondMs: deps.indicateur?.plafondMs ?? INDICATEUR_PLAFOND_MS,
+      ...(deps.logger ? { logger: deps.logger } : {}),
+    });
   }
 
   /**
@@ -337,6 +377,8 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
   }
 
   async disconnect(): Promise<void> {
+    // ⚠️ Aucun minuteur orphelin : un indicateur en cours est arrêté avec la connexion.
+    this.indicateurs.arreterTout("erreur");
     await this.socket.stop();
     await this.sync.stop();
   }
@@ -770,44 +812,64 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
     const bot = this.deps.store.bot(DISCORD_PLATFORM);
     // ⚠️ DÉFAUT PAR PLATEFORME : `mention` pour Discord (`defaultReplyModeFor`).
     const mode = normalizeReplyMode(record.replyMode) ?? defaultReplyModeFor(DISCORD_PLATFORM);
-    const decision = await decideReply({
-      message,
-      replyMode: mode,
-      ...(bot.id !== undefined ? { botUserId: bot.id } : {}),
-      aliases: botAliases({
+    // ⚠️ L'INDICATEUR DÉMARRE À LA RÉCEPTION — avant le juge, avant le modèle, avant
+    // tout appel lent. C'est la demande utilisateur du 2026-11-14 : « de la réception
+    // du message jusqu'à l'envoi de la dernière réponse ».
+    // ⚠️ Le CANAL est celui du message : pour un message de FIL, c'est le salon du fil
+    // (`salonDuMessage`), jamais le salon parent.
+    const indicateur = this.indicateurs.demarrer(
+      salonDuMessage(message),
+      message.conversationId,
+    );
+    try {
+      const decision = await decideReply({
+        message,
+        replyMode: mode,
         ...(bot.id !== undefined ? { botUserId: bot.id } : {}),
-        ...(bot.username !== undefined ? { botUsername: bot.username } : {}),
-        ...(this.identite?.displayName !== undefined
-          ? { displayName: this.identite.displayName }
+        aliases: botAliases({
+          ...(bot.id !== undefined ? { botUserId: bot.id } : {}),
+          ...(bot.username !== undefined ? { botUsername: bot.username } : {}),
+          ...(this.identite?.displayName !== undefined
+            ? { displayName: this.identite.displayName }
+            : {}),
+        }),
+        channelTitle: record.title,
+        ...(this.deps.judge ? { judge: this.deps.judge } : {}),
+        dejaJuge: (remoteId) => this.jugees.has(`${message.conversationId}:${remoteId}`),
+        // ⚠️ Le bot qui a REÇU ce message : il sert au juge (sa question nomme CE bot).
+        ...(this.deps.botId !== undefined ? { botId: this.deps.botId } : {}),
+        // ⚠️ PREUVE D'ADRESSE AVANT LE JUGE (2026-11-14) : les noms NUS du bot sont
+        // cherchés comme des MOTS dans le texte, et une réponse de fil à un de ses
+        // messages compte comme une adresse. On répond alors DIRECTEMENT, sans juge.
+        botNames: this.nomsNusDuBot(bot.username),
+        repondAuBot: (candidat) => this.repondAUnMessageDuBot(candidat, bot.id),
+        ...(this.deps.logger
+          ? {
+              logger: {
+                info: (evenement: string, champs?: Record<string, unknown>) =>
+                  this.deps.logger?.info(evenement, champs),
+                warn: (evenement: string, champs?: Record<string, unknown>) =>
+                  this.deps.logger?.warn(evenement, champs),
+              },
+            }
           : {}),
-      }),
-      channelTitle: record.title,
-      ...(this.deps.judge ? { judge: this.deps.judge } : {}),
-      dejaJuge: (remoteId) => this.jugees.has(`${message.conversationId}:${remoteId}`),
-      // ⚠️ Le bot qui a REÇU ce message : il sert au juge (sa question nomme CE bot).
-      ...(this.deps.botId !== undefined ? { botId: this.deps.botId } : {}),
-      // ⚠️ PREUVE D'ADRESSE AVANT LE JUGE (2026-11-14) : les noms NUS du bot sont
-      // cherchés comme des MOTS dans le texte, et une réponse de fil à un de ses
-      // messages compte comme une adresse. On répond alors DIRECTEMENT, sans juge.
-      botNames: this.nomsNusDuBot(bot.username),
-      repondAuBot: (candidat) => this.repondAUnMessageDuBot(candidat, bot.id),
-      ...(this.deps.logger
-        ? {
-            logger: {
-              info: (evenement: string, champs?: Record<string, unknown>) =>
-                this.deps.logger?.info(evenement, champs),
-              warn: (evenement: string, champs?: Record<string, unknown>) =>
-                this.deps.logger?.warn(evenement, champs),
-            },
-          }
-        : {}),
-    });
-    if (mode === "auto") {
-      // ⚠️ Borne n°2 : un message n'est jugé qu'UNE fois, qu'il ait été retenu ou non.
-      this.rememberJudged(message.conversationId, message.remoteId);
+      });
+      if (mode === "auto") {
+        // ⚠️ Borne n°2 : un message n'est jugé qu'UNE fois, qu'il ait été retenu ou non.
+        this.rememberJudged(message.conversationId, message.remoteId);
+      }
+      if (!decision.repondre) {
+        // ⚠️ JUGE = NON : le bot ne réfléchit plus, l'indicateur s'arrête IMMÉDIATEMENT
+        // (il ne doit jamais rester « en train d'écrire » sans réponse à venir).
+        indicateur.arreter("refus");
+        return;
+      }
+      await this.produceReply(message, record.title, { indicateur });
+    } finally {
+      // ⚠️ NETTOYAGE GARANTI : succès (« envoye »), refus, erreur, annulation — toute
+      // sortie passe ici. Idempotent : un arrêt déjà fait n'est pas rejoué.
+      indicateur.arreter("erreur");
     }
-    if (!decision.repondre) return;
-    await this.produceReply(message, record.title);
   }
 
   /**
@@ -835,9 +897,21 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
       texte: input.texte,
       ...(input.jobId !== undefined ? { jobId: input.jobId } : {}),
     });
-    const publie = await this.produceReply(message, record.title, {
-      fichiersDuJob: input.fichiers ?? [],
-    });
+    // ⚠️ Un réveil est aussi un tour de rédaction : l'indicateur couvre le run, et
+    // s'arrête quoi qu'il arrive (le rapport n'est pas une réponse comme les autres).
+    const indicateur = this.indicateurs.demarrer(
+      conversationChannelOf(input.conversationId),
+      input.conversationId,
+    );
+    let publie: boolean;
+    try {
+      publie = await this.produceReply(message, record.title, {
+        fichiersDuJob: input.fichiers ?? [],
+        indicateur,
+      });
+    } finally {
+      indicateur.arreter("erreur");
+    }
     if (!publie) {
       throw new Error(
         this.derniereErreur ?? "le tour de rédaction n'a rien publié dans ce salon.",
@@ -859,7 +933,7 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
   private async produceReply(
     message: RemoteMessage,
     channelTitle: string,
-    options?: { fichiersDuJob?: readonly string[] },
+    options?: { fichiersDuJob?: readonly string[]; indicateur?: IndicateurEcriture },
   ): Promise<boolean> {
     if (!this.deps.generateReply) {
       this.derniereErreur =
@@ -891,7 +965,7 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
   private async redigerEtPublier(
     message: RemoteMessage,
     channelTitle: string,
-    options?: { fichiersDuJob?: readonly string[] },
+    options?: { fichiersDuJob?: readonly string[]; indicateur?: IndicateurEcriture },
   ): Promise<boolean> {
     if (!this.deps.generateReply) return false;
     // ⚠️ RAPPORT SYSTÈME : son identifiant distant n'existe PAS chez la plateforme.
@@ -956,6 +1030,9 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
         // ⚠️ Un tour qui n'a fait qu'accuser et produire une image n'a RIEN de plus à
         // dire : ce n'est pas une erreur, c'est un silence voulu.
         if (publies > 0) {
+          // ⚠️ Tout a déjà été publié par `envoyer_message` / les accusés : c'est la
+          // FIN du tour, l'indicateur s'arrête ici (aucun message final à venir).
+          options?.indicateur?.arreter("envoye");
           this.derniereErreur = undefined;
           return true;
         }
@@ -975,6 +1052,9 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
       });
       const texte = compose.text;
       const fichiers = reponse.fichiers ?? [];
+      // ⚠️ ARRÊT AVANT L'ENVOI DU DERNIER MESSAGE : sinon le salon verrait encore
+      // « Yuki est en train d'écrire… » sous la réponse qui vient de partir.
+      options?.indicateur?.arreter("envoye");
       await this.send(message.conversationId, {
         kind: "texte",
         text: texte,

@@ -41,6 +41,11 @@ export interface MmFixture {
   /** Diffuse un événement comme le ferait le serveur. */
   broadcast(event: string, post: Record<string, unknown>): void;
   /**
+   * Trames `user_typing` REÇUES du bot (indicateur « en train d'écrire »), dans l'ordre.
+   * ⚠️ Un vrai serveur ne répond PAS à cette action : le serveur fixture non plus.
+   */
+  readonly typingFrames: Array<{ channel_id: string; seq: number; at: number }>;
+  /**
    * Diffuse un événement SANS charge `post` (`added_to_channel`, `channel_created`…).
    * ⚠️ C'est le signal d'ADHÉSION : le bot rejoint un canal, sa liste change.
    */
@@ -80,6 +85,7 @@ export async function startMmFixture(
     { id: MM_CHANNEL, display_name: "Général", type: "O" },
   ];
   let open = 0;
+  const typingFrames: Array<{ channel_id: string; seq: number; at: number }> = [];
 
   const server: Server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -166,7 +172,21 @@ export async function startMmFixture(
       open -= 1;
     });
     socket.on("message", (raw) => {
-      const frame = JSON.parse(String(raw)) as { action?: string; data?: { token?: string } };
+      const frame = JSON.parse(String(raw)) as {
+        action?: string;
+        seq?: number;
+        data?: { token?: string; channel_id?: string };
+      };
+      if (frame.action === "user_typing") {
+        // ⚠️ Contrat de l'API : `{"action":"user_typing","seq":N,
+        // "data":{"channel_id":"…"}}` — et AUCUNE réponse du serveur.
+        typingFrames.push({
+          channel_id: String(frame.data?.channel_id ?? ""),
+          seq: Number(frame.seq ?? 0),
+          at: Date.now(),
+        });
+        return;
+      }
       if (frame.action !== "authentication_challenge" || frame.data?.token !== MM_TOKEN) {
         socket.send(JSON.stringify({ status: "FAIL", seq_reply: 1 }));
         return;
@@ -190,6 +210,7 @@ export async function startMmFixture(
     baseUrl: `http://127.0.0.1:${address.port}`,
     created,
     requetes,
+    typingFrames,
     get open() {
       return open;
     },

@@ -262,6 +262,17 @@ export {
   type ReplyReason,
 } from "./reply/responder.js";
 export {
+  INDICATEUR_INACTIF,
+  INDICATEUR_INTERVALLE_DISCORD_MS,
+  INDICATEUR_INTERVALLE_MATTERMOST_MS,
+  INDICATEUR_PLAFOND_MS,
+  IndicateursEcriture,
+  type IndicateurEcriture,
+  type IndicateurLogger,
+  type IndicateursEcritureOptions,
+  type RaisonArretIndicateur,
+} from "./reply/indicateur.js";
+export {
   CANAL_AUTRE_PLATEFORME_RAISON,
   CANAL_NON_SUIVI_RAISON,
   CHANNEL_POST_MAX_FILES,

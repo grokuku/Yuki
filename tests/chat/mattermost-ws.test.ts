@@ -46,6 +46,8 @@ interface Fixture {
   baseUrl: string;
   /** Trames d'authentification reçues (texte brut). */
   authFrames: string[];
+  /** Trames `user_typing` reçues (`channel_id`, `seq`), dans l'ordre. */
+  typingFrames: Array<{ channel_id: string; seq: number }>;
   /** Posts envoyés par Yuki (`POST /api/v4/posts`). */
   created: Array<Record<string, unknown>>;
   /** Diffuse un événement à toutes les sockets ouvertes. */
@@ -59,6 +61,7 @@ interface Fixture {
 /** Serveur fixture : HTTP minimal (v4) + WebSocket au même port. */
 async function startFixture(options: { posts?: Record<string, unknown>[] } = {}): Promise<Fixture> {
   const authFrames: string[] = [];
+  const typingFrames: Array<{ channel_id: string; seq: number }> = [];
   const created: Array<Record<string, unknown>> = [];
   const backlog = [...(options.posts ?? [])];
 
@@ -133,7 +136,21 @@ async function startFixture(options: { posts?: Record<string, unknown>[] } = {})
     socket.on("message", (raw) => {
       const text = String(raw);
       authFrames.push(text);
-      const frame = JSON.parse(text) as { action?: string; data?: { token?: string } };
+      const frame = JSON.parse(text) as {
+        action?: string;
+        seq?: number;
+        data?: { token?: string; channel_id?: string };
+      };
+      if (frame.action === "user_typing") {
+        typingFrames.push({
+          channel_id: String(frame.data?.channel_id ?? ""),
+          seq: Number(frame.seq ?? 0),
+        });
+        // ⚠️ Serveur HOSTILE simulé : il répond `FAIL` avec le `seq` de l'action. Une
+        // réponse de frappe ne doit JAMAIS être confondue avec un refus de jeton.
+        socket.send(JSON.stringify({ status: "FAIL", seq_reply: frame.seq }));
+        return;
+      }
       if (frame.action !== "authentication_challenge" || frame.data?.token !== TOKEN) {
         socket.send(JSON.stringify({ status: "FAIL", seq_reply: 1, error: { id: "denied" } }));
         return;
@@ -157,6 +174,7 @@ async function startFixture(options: { posts?: Record<string, unknown>[] } = {})
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     authFrames,
+    typingFrames,
     created,
     get open() {
       return open;
@@ -224,6 +242,36 @@ describe("WebSocket — authentification et événements", () => {
     await waitFor(() => events.length === 1, "l'événement `posted`");
     expect(events[0]?.kind).toBe("posted");
     expect(events[0]?.post.id).toBe("p1");
+  });
+
+  it("émettre `user_typing` puis recevoir un `FAIL` ne fait PAS croire à un jeton refusé", async () => {
+    const fixture = await startFixture();
+    const socket = new MattermostSocket({
+      baseUrl: () => fixture.baseUrl,
+      token: () => TOKEN,
+      onEvent: () => undefined,
+      baseDelayMs: 20,
+      maxDelayMs: 40,
+    });
+    cleanups.push(() => socket.stop());
+
+    await socket.start();
+    await waitFor(() => socket.status().connecte, "l'authentification");
+    // Contrat de la trame (`websocket.yaml`, action `user_typing`).
+    expect(socket.envoyerFrappe(CHANNEL)).toBe(true);
+    await waitFor(() => fixture.typingFrames.length === 1, "la trame `user_typing`");
+    expect(fixture.typingFrames[0]?.channel_id).toBe(CHANNEL);
+    expect(fixture.typingFrames[0]?.seq).not.toBe(1);
+
+    // ⚠️ GARDE : la réponse `FAIL` porte `seq_reply > 1`, elle ne concerne PAS
+    // l'authentification — la connexion reste ouverte, aucun abandon.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(socket.status().connecte).toBe(true);
+    expect(socket.status().abandonne).toBe(false);
+    // Aucune réauthentification : la socket n'a jamais été fermée.
+    expect(
+      (JSON.parse(fixture.authFrames[0] ?? "{}") as { action?: string }).action,
+    ).toBe("authentication_challenge");
   });
 
   it("une coupure déclenche une RECONNEXION (compteur visible) et la reprise", async () => {

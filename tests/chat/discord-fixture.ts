@@ -170,6 +170,12 @@ export async function startDiscordFixture(
         send({ id: THREAD, type: 11, parent_id: CHANNEL, name: "fil-du-message" });
         return;
       }
+      if (/^\/channels\/[^/]+\/typing$/.test(record.path) && record.method === "POST") {
+        // ⚠️ Indicateur « en train d'écrire » : Discord répond `204 No Content`.
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       if (/^\/channels\/[^/]+\/messages\/[^/]+$/.test(record.path)) {
         send(
           messageFixture({

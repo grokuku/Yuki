@@ -60,6 +60,8 @@ export type DiscordApiErrorCode =
   | "not_found"
   | "rate_limited"
   | "bad_response"
+  /** Requête inutilisable AVANT tout appel réseau (identifiant de salon vide). */
+  | "bad_request"
   /** Fichier trop lourd pour NOTRE borne (avant tout appel réseau), ou refusé (413). */
   | "too_large"
   /** URL de pièce jointe hors des hôtes autorisés (jamais suivie). */
@@ -371,6 +373,25 @@ export class DiscordClient {
       before = oldest;
     }
     return { messages: [...collected].reverse(), hasNext: true, requests };
+  }
+
+  /**
+   * `POST /channels/{id}/typing` — signale au salon que le bot écrit.
+   *
+   * ⚠️ L'indicateur EXPIRE au bout de ~10 s côté Discord : c'est l'appelant
+   * (`IndicateursEcriture`, `src/chat/reply/indicateur.ts`) qui le réémet.
+   * Réponse attendue : `204 No Content`. Ne lève que sur échec réel (le client REST
+   * reste le même : jeton, débit, `429`).
+   */
+  async triggerTyping(channelId: string): Promise<void> {
+    const id = channelId.trim();
+    if (id === "") {
+      throw new DiscordApiError(
+        "bad_request",
+        "Salon inconnu : l'indicateur d'écriture est ignoré.",
+      );
+    }
+    await this.requestJson<undefined>("POST", `/channels/${encodeURIComponent(id)}/typing`);
   }
 
   /**

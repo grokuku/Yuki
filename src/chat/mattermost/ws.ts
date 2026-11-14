@@ -128,6 +128,14 @@ export class MattermostSocket {
   private abandonne = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private authTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Compteur `seq` des actions SANS réponse (`user_typing`).
+   *
+   * ⚠️ Il ne repart JAMAIS de 1 : cette valeur est réservée à l'authentification
+   * (`seq_reply === 1`), et confondre les deux ferait passer une réponse de frappe pour
+   * un refus de jeton.
+   */
+  private seqAction = 1;
 
   constructor(options: MattermostSocketOptions) {
     this.options = options;
@@ -248,8 +256,17 @@ export class MattermostSocket {
     }
     if (!frame || typeof frame !== "object") return;
 
-    // 1. Réponse à notre `authentication_challenge`.
-    if (frame.seq_reply === 1 || frame.status !== undefined) {
+    // 1. Réponse à notre `authentication_challenge` — UNIQUEMENT tant que la connexion
+    // n'est pas authentifiée.
+    // ⚠️ GARDE : une fois authentifié, aucune trame `status` ne concerne le jeton. Une
+    // réponse `FAIL` à une autre action (`user_typing` — certains serveurs répondent
+    // `seq_reply: 1` à toute action inconnue) ne doit JAMAIS faire croire à un jeton
+    // refusé : cela fermerait le temps réel pour de bon. Les trames `status` sans
+    // `seq_reply` reçues avant l'authentification restent traitées comme avant.
+    if (
+      !this.authentifie &&
+      (frame.seq_reply === 1 || (frame.seq_reply === undefined && frame.status !== undefined))
+    ) {
       if (frame.status === "OK") {
         this.authentifie = true;
         this.tentatives = 0;
@@ -310,6 +327,36 @@ export class MattermostSocket {
       this.options.logger?.warn("chat.mattermost.ws.consumer_failed", {
         error: messageOf(error),
       });
+    }
+  }
+
+  /**
+   * Émet un événement `user_typing` (indicateur « en train d'écrire »).
+   *
+   * Trame vérifiée dans la spécification (`api/v4/source/websocket.yaml`, action
+   * `user_typing`) : `{"action":"user_typing","seq":N,"data":{"channel_id":"…"}}`.
+   * ⚠️ L'indicateur EXPIRE au bout de ~5 s côté Mattermost : c'est l'appelant
+   * (`IndicateursEcriture`, `src/chat/reply/indicateur.ts`) qui le réémet.
+   *
+   * Rend `false` quand le temps réel n'est pas authentifié (aucune trame envoyée) :
+   * l'appelant peut alors journaliser l'échec — jamais bloquer.
+   */
+  envoyerFrappe(channelId: string): boolean {
+    const id = channelId.trim();
+    if (id === "" || !this.authentifie || this.socket === null) return false;
+    this.seqAction += 1;
+    try {
+      this.socket.send(
+        JSON.stringify({
+          action: "user_typing",
+          seq: this.seqAction,
+          data: { channel_id: id },
+        }),
+      );
+      return true;
+    } catch (error) {
+      this.derniereErreur = `Émission de l'indicateur de frappe impossible (${messageOf(error)}).`;
+      return false;
     }
   }
 
