@@ -74,7 +74,7 @@ export {
   totalTimeoutError,
   truncateCause,
 } from "./sdk/heavy-worker.js";
-export type { SdkHeavyWorkerConfig } from "./sdk/heavy-worker.js";
+export type { HeavyLibrarianPorts, SdkHeavyWorkerConfig } from "./sdk/heavy-worker.js";
 export { createDelegateTools, createRunContextTracker } from "./sdk/delegate-tools.js";
 export type {
   DelegateToolsConfig,

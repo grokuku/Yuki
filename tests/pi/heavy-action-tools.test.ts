@@ -26,6 +26,11 @@ import {
 } from "../../src/pi/sdk/execution-tools.js";
 import { buildHeavyActionTools } from "../../src/pi/sdk/heavy-worker.js";
 import type {
+  LibrarianArchivePort,
+  LibrarianPort,
+  LibrarianReadPort,
+} from "../../src/librarian/types.js";
+import type {
   FileGetRequest,
   FilePutRequest,
   TransferOutcome,
@@ -67,6 +72,39 @@ function stubTransfers(): { service: TransferServicePort; gets: FileGetRequest[]
     },
   };
   return { service, gets, puts };
+}
+
+
+/** Ports du libraire pour un job (client + archivage), avec journal d'appels. */
+function stubLibrarian(): {
+  client: LibrarianPort;
+  archive: LibrarianArchivePort;
+  read: LibrarianReadPort;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  const client: LibrarianPort = {
+    status: async () => ({}),
+    search: async () => {
+      calls.push("search");
+      return { results: [] } as never;
+    },
+    library: async () => ({ library: [] }) as never,
+    doc: async () => ({}) as never,
+    archive: async () => ({ name: "x", version: "1", status: 201 }),
+  };
+  const archive: LibrarianArchivePort = {
+    schedule: () => ({ status: "launched", job_id: "j1" }),
+  };
+  // ⚠️ PORT DE LECTURE D'UNE PAGE (`POST /read`) : c'est LUI qui donne
+  // `lire_page_web` — celui qui manquait à la tâche planifiée du 2026-11-16.
+  const read: LibrarianReadPort = {
+    read: async (url: string) => {
+      calls.push("read");
+      return { url, text: "texte de la page", truncated: false } as never;
+    },
+  };
+  return { client, archive, read, calls };
 }
 
 /** Session ÉPHÉMÈRE du worker : un ID DIFFÉRENT de la conversation. */
@@ -198,6 +236,39 @@ describe("outils d'action du worker lourd — rattachement de la validation", ()
 
   it("buildHeavyActionTools n'expose RIEN sans service (worker sans exécution)", () => {
     expect(buildHeavyActionTools({}, CONVERSATION)).toEqual([]);
+  });
+
+  it("⚠️ buildHeavyActionTools expose le LIBRAIRE (une tâche différée peut vérifier le web)", () => {
+    // ⚠️ Bug du 2026-11-16 : une tâche planifiée se réveillait SANS
+    // `recherche_libraire` ni `lire_page_web` — elle rendait un échec muet.
+    // Les outils du libraire sont désormais construits pour le run DIFFÉRÉ, avec
+    // les MÊMES ports que la conversation, et JAMAIS la capture.
+    const tools = buildHeavyActionTools({ librarian: () => stubLibrarian() }, CONVERSATION);
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "archive_libraire",
+      "lire_libraire",
+      "lire_page_web",
+      "liste_libraire",
+      "recherche_libraire",
+    ]);
+  });
+
+  it("⚠️ les ports du libraire sont RELUS à chaque job (une capacité ajoutée profite aux tâches existantes)", () => {
+    let ports: ReturnType<typeof stubLibrarian> | undefined;
+    const config = { librarian: () => ports };
+    expect(buildHeavyActionTools(config, CONVERSATION)).toEqual([]);
+    ports = stubLibrarian();
+    expect(buildHeavyActionTools(config, CONVERSATION).map((tool) => tool.name)).toContain(
+      "recherche_libraire",
+    );
+  });
+
+  it("le libraire du worker CHERCHE pour de vrai (port câblé, pas seulement annoncé)", async () => {
+    const librarian = stubLibrarian();
+    const tools = buildHeavyActionTools({ librarian: () => librarian }, CONVERSATION);
+    const recherche = tools.find((tool) => tool.name === "recherche_libraire") as unknown as AnyTool;
+    await recherche.execute("call", { query: "prix amazon" }, undefined, undefined, ephemeralCtx);
+    expect(librarian.calls).toContain("search");
   });
 
   it("buildHeavyActionTools expose lister_fichiers ET lire_fichier (le worker LIT le contenu)", () => {

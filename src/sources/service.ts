@@ -50,6 +50,12 @@ import {
 import { formatFileMarker } from "../files/frame.js";
 import { parseCron, prochainPassage } from "./cron.js";
 import { InboxFullError, SourcesInbox } from "./inbox.js";
+import {
+  blocOutilsManquants,
+  diagnostiquerOutilsDifferes,
+  suffixeOutilsManquants,
+  type DiagnosticOutilsDifferes,
+} from "./outils-differes.js";
 import type { DeclencheurJournal } from "./journal.js";
 import { ChainesFullError, SourcesStore } from "./store.js";
 import {
@@ -244,6 +250,28 @@ export interface SourcesServiceOptions {
    * à QUEL bot il appartient (jamais de collision entre deux bots).
    */
   secretNames?: (nom: string) => readonly string[];
+  /**
+   * PROPRIÉTAIRE de ce service (le bot dont c'est la pile). Il ne sert qu'à
+   * NOMMER le bot dans les messages qui disent ce qui lui manque — jamais à
+   * décider quoi que ce soit (le fichier, lui, est déjà par bot).
+   */
+  botId?: string;
+  /**
+   * ⚠️ ALLOWLIST RÉELLE d'un run DIFFÉRÉ de ce bot (`recherche_libraire`,
+   * `lire_page_web`…), CALCULÉE AU MOMENT DE L'EXÉCUTION par le câblage
+   * (`toolAllowlist("heavy", …)` avec SES capacités d'aujourd'hui).
+   *
+   * Elle ne sert qu'au DIAGNOSTIC (`diagnostiquerOutilsDifferes`) : un échec de
+   * tâche différée doit NOMMER l'outil manquant (« outils manquants :
+   * recherche_libraire »), et le contexte du job doit dire au worker ce qu'il n'a
+   * pas — sinon il invente (« la page est inaccessible », « le prix n'est pas
+   * affiché ») exactement comme le 2026-11-16.
+   *
+   * ⚠️ Jamais la liste figée au jour de la création de la tâche : un ajout de
+   * capacité profite donc aux tâches DÉJÀ programmées. Absente ⇒ le service ne
+   * diagnostique rien (aucun message inventé).
+   */
+  outilsDifferes?: () => readonly string[];
 }
 
 /** Réponse de `openConversation`. */
@@ -560,6 +588,10 @@ export class SourcesService {
   private readonly now: () => number;
   /** Noms de secret acceptés pour une source (`secretNames`, défaut historique). */
   private readonly secretNames: (nom: string) => readonly string[];
+  /** Propriétaire de la pile (uniquement pour NOMMER le bot dans les messages). */
+  private readonly botId?: string;
+  /** Allowlist d'un run DIFFÉRÉ, relue à chaque exécution (`diagnostic des outils`). */
+  private readonly outilsDifferes?: () => readonly string[];
   /** Port des tâches de fond (job lourd) — lot 2. */
   private jobs?: DeclencheurJobsPort;
   /** Port de publication dans le fil local (lot 2). */
@@ -576,6 +608,12 @@ export class SourcesService {
       /** ⚠️ LOT 31 : cible = conversation DEMANDEUSE ⇒ jamais renommée, jamais « Déclencheurs ». */
       perso: boolean;
       planifie?: number;
+      /**
+       * Outils de VÉRIFICATION absents au moment du lancement (2026-11-16).
+       * ⚠️ Retenu pour l'ÉCHEC : une raison générique (« la tâche de fond n'a pas
+       * abouti ») obligeait à DEVINER la cause ; elle est désormais nommée.
+       */
+      diagnosticOutils?: DiagnosticOutilsDifferes;
       resolve: (fin: DeclenchementFin) => void;
     }
   >();
@@ -605,6 +643,26 @@ export class SourcesService {
     this.fichierPort = options.fichier;
     this.now = options.now ?? Date.now;
     this.secretNames = options.secretNames ?? ((nom) => [sourceTokenName(nom)]);
+    this.botId = options.botId;
+    this.outilsDifferes = options.outilsDifferes;
+  }
+
+  /**
+   * DIAGNOSTIC des outils de VÉRIFICATION du run différé (`undefined` si le
+   * câblage ne fournit pas d'allowlist : on n'invente alors aucun manque).
+   *
+   * ⚠️ Appelé À L'EXÉCUTION, jamais mis en cache : une capacité accordée entre
+   * deux passages change le verdict du passage suivant.
+   */
+  private diagnosticOutils(): DiagnosticOutilsDifferes | undefined {
+    const lire = this.outilsDifferes;
+    if (lire === undefined) return undefined;
+    try {
+      return diagnostiquerOutilsDifferes(lire(), this.botId);
+    } catch (error) {
+      this.logger.warn("sources.outils.diagnostic_impossible", { error: messageOf(error) });
+      return undefined;
+    }
   }
 
   /**
@@ -1342,6 +1400,22 @@ export class SourcesService {
       this.journal?.append({ event: "echec", source: nom, raison });
       return { outcome: "failed", raison, fin: Promise.resolve({ reason: "error", texte: "" }) };
     }
+    // ⚠️ OUTILS MANQUANTS (2026-11-16) : la tâche différée s'exécute avec
+    // l'allowlist du bot CALCULÉE MAINTENANT. Si les outils de vérification
+    // (libraire, lecture de page) n'y sont pas, on le DIT au worker AVANT qu'il
+    // ne travaille : sans ça, il présente une absence d'outil comme un fait
+    // observé (« la page est inaccessible ») et rend un rapport d'échec muet.
+    const diagnosticOutils = this.diagnosticOutils();
+    const blocManquants = diagnosticOutils !== undefined ? blocOutilsManquants(diagnosticOutils) : undefined;
+    const contexteJob = blocManquants === undefined ? contexte : `${contexte}\n\n${blocManquants}`;
+    if (diagnosticOutils?.phrase !== undefined) {
+      this.logger.warn("sources.tache.outils_manquants", {
+        source: nom,
+        bot: this.botId ?? "",
+        outils: diagnosticOutils.manquants.join(","),
+      });
+      this.journal?.append({ event: "refus", source: nom, raison: diagnosticOutils.phrase });
+    }
 
     const plafondMs = resoudrePlafond(options.plafondMs ?? record.plafondMs);
     let resoudre: (fin: DeclenchementFin) => void = () => undefined;
@@ -1365,7 +1439,8 @@ export class SourcesService {
     try {
       const issue = await jobs.delegate({
         task: tache,
-        context: contexte,
+        // ⚠️ Le CONTEXTE porte le diagnostic des outils manquants (voir plus haut).
+        context: contexteJob,
         // ⚠️ TÂCHE DE FOND : personne n'attend la réponse, et le worker lourd est
         // plus lent — ce n'est pas un problème pour un réveil planifié.
         background: true,
@@ -1383,7 +1458,8 @@ export class SourcesService {
         const raison =
           `La tâche de fond n'a pas été lancée (${issue.status}` +
           `${issue.reason ? ` : ${issue.reason}` : ""}). Le passage est perdu et sera ` +
-          "réarmé au prochain tour d'horloge.";
+          "réarmé au prochain tour d'horloge." +
+          suffixeOutilsManquants(diagnosticOutils);
         this.journal?.append({ event: "echec", source: nom, raison });
         await this.publierEchec(nom, raison, {
           sessionId: target.sessionId,
@@ -1399,6 +1475,9 @@ export class SourcesService {
         candidat: target.candidate === true,
         perso: cible.perso,
         ...(planifie !== undefined ? { planifie } : {}),
+        ...(diagnosticOutils !== undefined && diagnosticOutils.phrase !== undefined
+          ? { diagnosticOutils }
+          : {}),
         resolve: resoudre,
       });
       if (options.signal !== undefined) {
@@ -1418,7 +1497,9 @@ export class SourcesService {
       });
       return { outcome: "started", runId: jobId, sessionId: target.sessionId, fin };
     } catch (error) {
-      const raison = `La tâche de fond n'a pas pu être lancée : ${messageOf(error)}`;
+      const raison =
+        `La tâche de fond n'a pas pu être lancée : ${messageOf(error)}` +
+        suffixeOutilsManquants(diagnosticOutils);
       this.journal?.append({ event: "echec", source: nom, raison });
       await this.publierEchec(nom, raison, {
         sessionId: target.sessionId,
@@ -1599,10 +1680,10 @@ export class SourcesService {
     if (job.status !== "completed") {
       const raison =
         job.status === "cancelled"
-          ? "La tâche de fond a été annulée."
+          ? "La tâche de fond a été annulée." + suffixeOutilsManquants(suivi.diagnosticOutils)
           : `La tâche de fond a échoué${
               job.error?.message ? ` : ${job.error.message}` : ` (statut « ${job.status} »)`
-            }.`;
+            }.` + suffixeOutilsManquants(suivi.diagnosticOutils);
       this.journal?.append({ event: "echec", source: nom, raison });
       // ⚠️ LOT 33 — ÉCHEC DANS UNE CHAÎNE : CASCADE, et **UN SEUL** message.
       // Décision utilisateur (A) : l'étape 1 en échec ⇒ les suivantes ne partent PAS.
@@ -1610,9 +1691,10 @@ export class SourcesService {
       // PAS été envoyé.
       if (record?.chaine !== undefined) {
         const courte =
-          job.status === "cancelled"
+          (job.status === "cancelled"
             ? "la tâche de fond a été annulée"
-            : (job.error?.message ?? `statut « ${job.status} »`);
+            : (job.error?.message ?? `statut « ${job.status} »`)) +
+          suffixeOutilsManquants(suivi.diagnosticOutils);
         await this.arreterChaine(record, suivi, { raison: courte, echec: true });
       } else {
         await this.publierEchec(nom, raison, suivi);
@@ -1670,7 +1752,15 @@ export class SourcesService {
         ? avecFichiers
         : `${avecFichiers}\n\n⚠️ ${manquants} fichier(s) produit(s) n'ont pas pu être joint(s) : ` +
           "leur fiche est introuvable dans le store de cette conversation.";
-    const publie = await this.publierDansSuivi(suivi, nom, final, fichiers);
+    // ⚠️ OUTILS MANQUANTS (2026-11-16) : le rapport porte la CAUSE, même quand le
+    // worker a conclu (`completed`). Sans cette ligne, une tâche qui n'a rien pu
+    // vérifier rendait un texte trompeur (« le prix n'est pas affiché ») et
+    // personne — ni la personne, ni le bot — ne savait que l'outil manquait.
+    const finalAvecCause =
+      suivi.diagnosticOutils?.phrase !== undefined
+        ? `${final}\n\n⚠️ ${suivi.diagnosticOutils.phrase}`
+        : final;
+    const publie = await this.publierDansSuivi(suivi, nom, finalAvecCause, fichiers);
     if (!publie) {
       suivi.resolve({ reason: "error", texte: "" });
       return;
@@ -1680,7 +1770,7 @@ export class SourcesService {
     // pour ne pas repartir de zéro. Écrit après publication : on ne transmet que ce que
     // la personne a réellement lu.
     this.noterResultatEtape(nom, record, job.id, corps, job.result?.fichiers ?? []);
-    suivi.resolve({ reason: "done", texte: final, ...(desactive ? { desactive: true } : {}) });
+    suivi.resolve({ reason: "done", texte: finalAvecCause, ...(desactive ? { desactive: true } : {}) });
   }
 
   /**

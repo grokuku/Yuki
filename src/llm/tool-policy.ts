@@ -601,6 +601,21 @@ export const OUTILS_DES_CAPACITES: Readonly<Record<CapaciteBot, CapaciteOutils>>
  *
  * ⚠️ L'ordre de la liste reçue est CONSERVÉ (les tests comparent des tableaux).
  */
+/**
+ * CAPACITÉ qui ouvre un outil custom (`undefined` si aucune ne le décrit).
+ *
+ * ⚠️ Lecture INVERSE de {@link OUTILS_DES_CAPACITES} : elle sert aux messages qui
+ * doivent NOMMER la capacité manquante (« le bot n'a pas la capacité « libraire » »)
+ * sans écrire une seconde table outil → capacité, qui divergerait.
+ */
+export function capaciteDeLOutil(outil: string): CapaciteBot | undefined {
+  for (const capacite of Object.keys(OUTILS_DES_CAPACITES) as CapaciteBot[]) {
+    const entree = OUTILS_DES_CAPACITES[capacite];
+    if (entree.custom.includes(outil as CustomToolName)) return capacite;
+  }
+  return undefined;
+}
+
 export function filtrerSelonCapacites(
   tools: readonly string[],
   capacites: readonly CapaciteBot[] | undefined,
@@ -697,7 +712,18 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     conversationArchive: [],
     // ⚠️ Le worker lourd ne converse pas : il n'écrit pas de consignes.
     consignes: [],
-    librarian: [],
+    // ⚠️ LIBRAIRE + LECTURE DE PAGE WEB (bug du 2026-11-16) : le worker lourd
+    // EXÉCUTE les runs DIFFÉRÉS (tâche planifiée de `planifier_tache`, étape de
+    // chaîne, déclencheur, job de `delegate`). Sans ces outils, une tâche du type
+    // « relève les prix de ces trois pages » se réveillait SANS pouvoir RIEN
+    // vérifier : elle rendait un rapport d'échec (et le modèle devait DEVINER
+    // pourquoi). Une tâche différée a donc les mêmes outils de vérification que
+    // la conversation du bot — c'est la même capacité `libraire`/`web` qui les
+    // ouvre (`OUTILS_DES_CAPACITES`), donc le même réglage pour les deux.
+    librarian: LIBRARIAN_TOOLS,
+    // ⚠️ Mais PAS la capture : « le rôle lourd n'a JAMAIS `capture_libraire` »
+    // (garde conservée, `tests/llm/tool-policy-librarian-capture.test.ts`). Une
+    // tâche de fond a besoin de LIRE du texte, pas de vérifier un rendu.
     librarianCapture: [],
     files: [],
     messages: [],

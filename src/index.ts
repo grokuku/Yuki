@@ -272,7 +272,7 @@ import {
   type PlanificationTacheInput,
 } from "./sources/index.js";
 import { FabriquePilesSources, creerResolveurEnvBot } from "./sources/pile-bot.js";
-import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, type PiHost, type PiHostOptions, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, type HeavyLibrarianPorts, type PiHost, type PiHostOptions, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -1432,6 +1432,14 @@ async function main(): Promise<void> {
     inbox: sourcesInbox,
     journal: declencheursJournal,
     logger,
+    // ⚠️ Propriétaire de ce service : sert à NOMMER le bot dans un message
+    // d'outils manquants (« le bot « yuki » n'a pas la capacité « libraire » »).
+    botId: botDuRun,
+    // ⚠️ ALLOWLIST du run DIFFÉRÉ, relue À CHAQUE EXÉCUTION : si les outils du
+    // libraire manquent, la tâche le SAIT avant de travailler et son échec NOMME
+    // l'outil manquant (2026-11-16). Flèche (et non valeur) : `outilsDifferesDuBot`
+    // est définie plus bas — elle lit le registre et les ports du démarrage.
+    outilsDifferes: () => outilsDifferesDuBot(botDuRun),
     // Le coffre porte les JETONS, jamais le fichier JSON.
     // ⚠️ LOT 35j — nom PROPRE AU BOT (`YUKI_SOURCE_<BOT>__<NOM>`) : c'est lui qui
     // dit à quel bot appartient le jeton. Pour `yuki`, l'ancien nom
@@ -1739,6 +1747,19 @@ async function main(): Promise<void> {
    * au moment de la réponse, jamais à la construction du générateur.
    */
   let remoteLibrarian: RemoteRunLibrarianPorts | undefined;
+  /**
+   * Ports du LIBRAIRE pour un run DIFFÉRÉ (job lourd : tâche planifiée, étape de
+   * chaîne, déclencheur, `delegate`).
+   *
+   * ⚠️ MÊMES ports que le host local, SANS la capture (`capture_libraire` reste
+   * au rôle léger) et sans émission vers l'interface : un job n'alimente aucune
+   * UI, son rapport est son canal de sortie.
+   *
+   * ⚠️ Mutable pour la même raison que `remoteLibrarian` : le client et
+   * l'archivage sont créés DANS le bloc de la porte GPU, donc APRÈS la fabrique
+   * des workers lourds. Le worker lit ce porteur À CHAQUE JOB.
+   */
+  let librarianDifferes: HeavyLibrarianPorts | undefined;
   /** Bus de diffusion des images générées (posé quand le transport démarre). */
   let imagesGateway: ImagesGatewayPort | undefined;
   let transport: Transport | undefined;
@@ -1974,6 +1995,52 @@ async function main(): Promise<void> {
       { ...lightToolOptions(), capacites: capacitesDuBot(botId) },
       { chatMode: "local", remoteAgents: false, remoteTools: false },
     );
+
+  /**
+   * ⚠️ OPTIONS DE POLITIQUE DU RÔLE LOURD — **UNE SEULE SOURCE** pour les runs
+   * DIFFÉRÉS (tâche planifiée de `planifier_tache`, étape de chaîne, déclencheur,
+   * job de `delegate`).
+   *
+   * Elle est utilisée à l'IDENTIQUE par :
+   *  - la fabrique du worker lourd (`creerWorkerLourd`, plus bas) — donc les
+   *    outils que la tâche REÇOIT ;
+   *  - {@link outilsDifferesDuBot} — donc le bloc `<outils>` de son prompt et le
+   *    DIAGNOSTIC des outils manquants (`src/sources/outils-differes.ts`).
+   * Une seule liste ⇒ le prompt ne peut pas annoncer autre chose que ce que la
+   * tâche a, et un échec ne peut pas nommer un outil qui était disponible.
+   *
+   * ⚠️ RELUE À CHAQUE EXÉCUTION (le worker reçoit une FONCTION) : une capacité
+   * accordée à un bot, ou un libraire configuré entre-temps, profite aux tâches
+   * DÉJÀ programmées — jamais seulement aux nouvelles.
+   */
+  const heavyToolOptions = (botId: string): ToolAllowlistOptions => ({
+    capacites: capacitesDuBot(botId),
+    executionEnabled: executionDuBot(botId) !== undefined,
+    screenshotsEnabled: executionDuBot(botId) !== undefined,
+    fileTransferEnabled: agentTransfers !== undefined,
+    fileListEnabled: filesService !== undefined,
+    fileReadEnabled: filesService !== undefined,
+    secretsEnabled: secretStore !== undefined,
+    imagesEnabled: comfyGenerator !== undefined,
+    // ⚠️ LIBRAIRE + LECTURE DE PAGE WEB (bug du 2026-11-16) : une tâche différée
+    // qui « relève les prix de ces pages » doit pouvoir les LIRE. Sans cette
+    // ligne, elle se réveillait sans `recherche_libraire` ni `lire_page_web` et
+    // rendait un échec muet. MÊME source de vérité que la conversation : les
+    // ports (`librarianDifferes`) et les capacités `libraire`/`web` du bot.
+    librarianEnabled: librarianDifferes !== undefined,
+    // ⚠️ PAS de capture : `TOOL_POLICY.heavy.librarianCapture` est vide (garde
+    // « le rôle lourd n'a JAMAIS `capture_libraire` », conservée).
+  });
+
+  /**
+   * ALLOWLIST RÉELLE d'un run DIFFÉRÉ pour UN bot, calculée MAINTENANT.
+   *
+   * ⚠️ C'est elle que `SourcesService` diagnostique (`outilsDifferes`) pour
+   * NOMMER un outil manquant (« outils manquants : recherche_libraire ») au lieu
+   * de publier « la tâche de fond n'a pas abouti ».
+   */
+  const outilsDifferesDuBot = (botId: string): readonly string[] =>
+    toolAllowlist("heavy", heavyToolOptions(botId));
 
   /**
    * Écrivain d'un canal distant (JUGE du mode `auto`, RÉDACTEUR de la réponse).
@@ -2376,6 +2443,10 @@ async function main(): Promise<void> {
         inbox,
         journal,
         logger,
+        // ⚠️ Le bot de CETTE pile est nommé dans les messages d'outils manquants.
+        botId,
+        // ⚠️ MÊME diagnostic que la pile du bot actif, avec SES capacités.
+        outilsDifferes: () => outilsDifferesDuBot(botId),
         ...(secretStore ? { tokens: secretStore } : {}),
         // ⚠️ Nom de secret PROPRE AU BOT (`YUKI_SOURCE_<BOT>__<NOM>`) : c'est lui
         // qui dit à quel bot appartient le jeton (voir `nomSecretSource`). Pour
@@ -3555,36 +3626,13 @@ async function main(): Promise<void> {
         // ⚠️ ALLOWLIST AVANT LE PROMPT : le bloc `<outils>` du prompt est GÉNÉRÉ
         // depuis elle (`src/llm/prompt-systeme.ts`) — un outil ajouté ou retiré
         // apparaît/disparaît sans réédition d'aucun texte.
-        const outilsLourd = toolAllowlist("heavy", {
-          // ⚠️ CAPACITÉS (lot 35h) : redondance VOULUE. Ce bloc n'est atteint que si
-          // `workerLourdAutorise(capacitesBot)` est vrai (le worker n'est pas
-          // construit sinon), donc l'intersection ne retire rien aujourd'hui — mais si
-          // quelqu'un déplaçait la garde, les capacités resteraient le dernier mot.
-          capacites: capacitesDuBot(botId),
-          // ⚠️ LOT 36 (L6) : le service d'exécution DU BOT (même store, même hub,
-          // même TLS) — la visibilité `AgentRecord.bots` suit le bot du run.
-          executionEnabled: executionDuBot(botId) !== undefined,
-          screenshotsEnabled: executionDuBot(botId) !== undefined,
-          // ⚠️ TRANSFERT de fichiers : exposé seulement si le service existe.
-          fileTransferEnabled: agentTransfers !== undefined,
-          // ⚠️ LISTAGE des pièces jointes (lecture seule, identifiants compris) :
-          // le worker doit pouvoir retrouver l'identifiant qu'exige `deposer_fichier`.
-          fileListEnabled: filesService !== undefined,
-          // ⚠️ LECTURE du CONTENU (image vue, texte décodé et borné, binaire
-          // refusé) : sans elle, le worker savait qu'une image existait sans
-          // pouvoir la voir — la boucle « lister → lire → déposer » restait ouverte.
-          fileReadEnabled: filesService !== undefined,
-          secretsEnabled: secretStore !== undefined,
-          // ⚠️ IMAGES (lot 23) : `generer_image` + `consulter_workflow`. La valeur
-          // suit l'EXISTENCE du générateur ComfyUI, câblé juste en dessous : sans
-          // lui, l'outil ne serait construit que pour REFUSER, et la politique
-          // annoncerait une capacité absente.
-          imagesEnabled: comfyGenerator !== undefined,
-          // ⚠️ AUCUN OUTIL DE PUBLICATION ICI, et c'est STRUCTUREL : le worker REND un
-          // résultat, il ne parle pas (`docs/lot18-chat.md`, invariant « un seul
-          // rédacteur »). `publier_dans_canal` reste au contraire disponible dans le RUN
-          // DE CANAL (`REMOTE_SAFE_TOOLS`) : là, c'est Yuki qui écrit, et c'est légitime.
-        });
+        // ⚠️ UNE FONCTION, pas une liste : elle est relue à CHAQUE JOB par le
+        // worker (`SdkHeavyWorkerConfig.tools`) ET par le prompt ci-dessous, donc
+        // une capacité accordée à ce bot profite à sa tâche différée SUIVANTE.
+        // Une seule source : `heavyToolOptions(botId)` (aussi utilisée par
+        // `outilsDifferesDuBot`, donc par le diagnostic des outils manquants).
+        const outilsLourd = (): readonly string[] =>
+          toolAllowlist("heavy", heavyToolOptions(botId));
         return createSdkHeavyWorker({
         cwd: env.piCwd,
         agentDir: env.piAgentDir,
@@ -3605,16 +3653,24 @@ async function main(): Promise<void> {
           return composerPromptSysteme({
             nom: nomDuBot(botId),
             prompt: configBot.getString("prompts.heavy"),
-            outils: outilsLourd,
+            outils: outilsLourd(),
             role: "heavy",
           });
         },
         modelReference: liveHeavyReference,
         thinking: liveHeavyThinking,
-        // ⚠️ ALLOWLIST calculée PLUS HAUT (`outilsLourd`) : elle sert À LA FOIS
-        // à la politique du worker et au bloc `<outils>` de son prompt —
-        // une seule liste, donc aucun texte ne peut annoncer autre chose.
+        // ⚠️ ALLOWLIST (FONCTION, cf. plus haut) : elle sert À LA FOIS à la
+        // politique du worker et au bloc `<outils>` de son prompt — une seule
+        // liste, donc aucun texte ne peut annoncer autre chose.
         tools: outilsLourd,
+        // ⚠️ LIBRAIRE du run DIFFÉRÉ (bug du 2026-11-16) : MÊMES ports de LECTURE
+        // que la conversation (recherche, bibliothèque, document, LECTURE d'une
+        // page web). Une FONCTION : les ports n'existent qu'après le démarrage
+        // (client + archivage créés dans le bloc de la porte GPU) et un worker
+        // construit tôt ne doit pas figer leur ABSENCE pour toute sa vie.
+        // ⚠️ Sans capture (`capture_libraire` reste au rôle léger) et sans
+        // `onShot` (un job n'alimente aucune interface web).
+        librarian: () => librarianDifferes,
         ...(executionDuBot(botId) ? { execution: executionDuBot(botId) as AgentExecutionService } : {}),
         ...(executionDuBot(botId) ? { screenshots: executionDuBot(botId) as AgentExecutionService } : {}),
         ...(agentTransfers ? { transfers: agentTransfers } : {}),
@@ -4256,6 +4312,17 @@ async function main(): Promise<void> {
           // ⚠️ Capacité VISION relue à chaque capture (le modèle peut changer à chaud).
           receivesImages: () => effectiveLlmConfig(config).light.vision,
         }
+      : undefined;
+
+    // ⚠️ LIBRAIRE D'UN RUN DIFFÉRÉ (job lourd) : le MÊME client et le MÊME
+    // archivage que la conversation, donc les MÊMES bornes, la MÊME configuration
+    // relue à chaud et les MÊMES erreurs typées. On n'y met PAS `screenshot` /
+    // `shots` : `capture_libraire` reste au rôle léger (garde conservée), et un
+    // job n'a pas d'interface à alimenter.
+    // ⚠️ Sans URL de base, aucune de ces trois fonctions n'est utilisable : on
+    // n'annonce donc pas les outils (politique : `librarianDifferes !== undefined`).
+    librarianDifferes = librarianConfigured
+      ? { client: librarianClient, archive: librarianArchive, read: librarianClient }
       : undefined;
 
     // Diffusion des IMAGES GÉNÉRÉES vers l'UI (trame de contrôle `image`). Les

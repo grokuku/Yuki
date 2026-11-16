@@ -307,9 +307,21 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
       expect(allTools, forbidden).not.toContain(forbidden);
     }
 
-    // Le lourd n'a JAMAIS les outils du libraire.
-    const heavyLibrarian = toolAllowlist("heavy", { librarianEnabled: true });
-    for (const name of LIBRARIAN_TOOLS) expect(heavyLibrarian).not.toContain(name);
+    // ⚠️ GARDE CHANGÉE (2026-11-16) : « Le lourd n'a JAMAIS les outils du
+    // libraire » a été REMPLACÉE par « le lourd les a, mais JAMAIS la capture ».
+    // Raison : une tâche PLANIFIÉE est un run LOURD — sans ces outils, elle se
+    // réveillait incapable de vérifier quoi que ce soit (bug du 2026-11-16 :
+    // rapport d'échec muet, cause devinée par le modèle). Le lourd continue de
+    // n'AVOIR AUCUN outil de conversation (ni `delegate`, ni `envoyer_message`).
+    const heavyLibrarian = toolAllowlist("heavy", {
+      librarianEnabled: true,
+      librarianCaptureEnabled: true,
+    });
+    for (const name of LIBRARIAN_TOOLS) expect(heavyLibrarian).toContain(name);
+    expect(heavyLibrarian).not.toContain("capture_libraire");
+    for (const forbidden of ["delegate", "envoyer_message", "planifier_tache", "programmer_envoi"]) {
+      expect(heavyLibrarian, forbidden).not.toContain(forbidden);
+    }
   });
 });
 

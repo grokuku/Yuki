@@ -55,6 +55,7 @@ import { getSharedModelRuntime, liveValue, resolveSdkModel, sdkModelSupportsImag
 import { createListFilesTool } from "./list-files-tool.js";
 import { createImageTools, type ImageToolPort } from "./image-tools.js";
 import { createImageBudgetExtensionFactory } from "./image-budget-extension.js";
+import { createLibrarianTools, type LibrarianToolsConfig } from "./librarian-tools.js";
 import { createReadFileTool } from "./read-file-tool.js";
 import { createEphemeralSession } from "./session-factory.js";
 
@@ -187,8 +188,18 @@ export interface SdkHeavyWorkerConfig {
   modelReference: string | (() => string);
   /** Niveau de réflexion du lourd (une fonction est relue à chaque job). */
   thinking: PiThinkingLevel | (() => PiThinkingLevel);
-  /** Allowlist d'outils du lourd (lecture + outils d'action). */
-  tools: readonly string[];
+  /**
+   * Allowlist d'outils du lourd (lecture + outils d'action + libraire).
+   *
+   * ⚠️ Une FONCTION est relue à CHAQUE job, comme `systemPrompt` et
+   * `modelReference` : une CAPACITÉ accordée (ou retirée) à un bot, ou un
+   * libraire configuré entre-temps, s'applique donc à la tâche différée
+   * SUIVANTE — jamais une liste figée à la création du worker (le worker d'un
+   * bot est construit UNE fois et gardé, `WorkersLourdsBots`). C'est ce qui fait
+   * qu'une tâche planifiée a, au moment où elle se réveille, les outils que le
+   * bot a MAINTENANT.
+   */
+  tools: readonly string[] | (() => readonly string[]);
   /**
    * Service d'exécution déléguée (agents appairés). Présent ⇒ le worker porte
    * `run_command` (outil d'ACTION). ⚠️ Le garde-fou par agent (D118) reste
@@ -236,6 +247,26 @@ export interface SdkHeavyWorkerConfig {
    * remonte jusqu'au rapport (`HeavyRunResult.fichiers`) qui la publie.
    */
   images?: HeavyImagePorts;
+  /**
+   * Ports du LIBRAIRE (recherche, bibliothèque, document, LECTURE d'une page web)
+   * — présents ⇒ le worker porte `recherche_libraire`, `liste_libraire`,
+   * `lire_libraire`, `lire_page_web`, `archive_libraire` (politique :
+   * `TOOL_POLICY.heavy.librarian`).
+   *
+   * ⚠️ POURQUOI LE LOURD LES PORTE (bug du 2026-11-16) : une tâche PLANIFIÉE
+   * s'exécute par un job lourd. Sans ces ports, elle se réveillait sans AUCUN
+   * moyen de vérifier quoi que ce soit (le bot en conversation les avait, pas
+   * elle) et rendait un rapport d'échec — en DEVINANT la cause.
+   *
+   * ⚠️ Une FONCTION est relue à CHAQUE job, pour la même raison que `tools` : les
+   * ports n'existent qu'après le démarrage (client, archivage), et un worker
+   * construit tôt ne doit pas figer leur ABSENCE.
+   *
+   * ⚠️ La CAPTURE (`capture_libraire`) n'est pas ici : elle reste au rôle léger
+   * (« le rôle lourd n'a JAMAIS la capture »), et l'allowlist du lourd ne la
+   * contient pas (`TOOL_POLICY.heavy.librarianCapture`).
+   */
+  librarian?: () => HeavyLibrarianPorts | undefined;
   /**
    * Fabrique de session éphémère. Injectable pour les TESTS (défaut :
    * `createEphemeralSession`). Permet d'exercer le câblage des outils d'action
@@ -293,6 +324,20 @@ export type HeavyImagePorts = Omit<
 >;
 
 /**
+ * Ports du LIBRAIRE pour un job lourd : MÊMES ports que le host local, à ceci
+ * près que la conversation (indispensable aux captures et à l'archivage de fond)
+ * est FORCÉE par le worker à celle de sa conversation propriétaire, et que
+ * l'émission d'une capture vers l'interface est impossible (aucune interface).
+ */
+export type HeavyLibrarianPorts = Omit<
+  LibrarianToolsConfig,
+  "sessionId" | "onShot" | "receivesImages"
+> & {
+  /** Le modèle du job reçoit-il les images ? (relu à chaque job). */
+  receivesImages?: () => boolean;
+};
+
+/**
  * Vision du MODÈLE RÉSOLU pour un job — lue à l'exécution (`model.input`), jamais
  * supposée. Passée aux outils de transfert pour qu'ils disent la vérité quand une
  * image n'est pas jointe.
@@ -316,7 +361,7 @@ export interface HeavyActionToolVision {
 export function buildHeavyActionTools(
   config: Pick<
     SdkHeavyWorkerConfig,
-    "execution" | "screenshots" | "secrets" | "transfers" | "files" | "images"
+    "execution" | "screenshots" | "secrets" | "transfers" | "files" | "images" | "librarian"
   > & {
     /** Journal d'AUDIT des lectures de fichiers (facultatif : métadonnées seules). */
     logger?: PiLogger;
@@ -344,6 +389,24 @@ export function buildHeavyActionTools(
     ...(origine !== undefined ? { origine: () => origine } : {}),
   };
   const tools: ToolDefinition[] = [];
+  // ⚠️ LIBRAIRE + LECTURE DE PAGE WEB : le job EXÉCUTE une demande (tâche
+  // planifiée, déclencheur, délégation) — il doit pouvoir VÉRIFIER au lieu de
+  // deviner. MÊMES fabriques et mêmes ports que le host local et le run distant
+  // (`createLibrarianTools`), avec la conversation FORCÉE à celle du léger (la
+  // session du job est éphémère : sans ce forçage, une capture ou un archivage
+  // serait rattaché à une conversation fantôme).
+  const librarian = config.librarian?.();
+  if (librarian) {
+    tools.push(
+      ...createLibrarianTools({
+        ...librarian,
+        sessionId: () => lightSessionId,
+        receivesImages:
+          librarian.receivesImages ??
+          (() => vision?.imagesSupported ?? true),
+      }),
+    );
+  }
   if (config.execution) tools.push(...createExecutionTools(config.execution, options));
   if (config.screenshots) tools.push(...createScreenshotTool(config.screenshots, options));
   // ⚠️ TRANSFERT : c'est le lourd qui AGIT sur une machine (récupérer/déposer).
@@ -629,6 +692,11 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
     // ⚠️ PROMPT RECOMPOSÉ À CHAQUE JOB (une fonction est relue ici, comme le modèle) :
     // une modification du prompt système lourd s'applique donc sans redémarrage.
     const systemPrompt = liveValue(config.systemPrompt);
+    // ⚠️ ALLOWLIST RELUE À CHAQUE JOB (même mécanique) : une capacité accordée ou
+    // retirée au bot, ou un libraire configuré entre-temps, s'applique à CETTE
+    // tâche — une tâche différée n'exécute pas la liste figée du jour de la
+    // construction du worker (`WorkersLourdsBots` le garde toute la vie du bot).
+    const tools = liveValue(config.tools);
     const model = resolveSdkModel(runtime, modelReference);
     if (!model) {
       config.logger.warn("heavy.model.unresolved", {
@@ -677,7 +745,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         modelRuntime: runtime,
         model,
         thinkingLevel: liveValue(config.thinking),
-        tools: config.tools,
+        tools,
         ...(actionTools.length > 0 ? { customTools: actionTools } : {}),
         // ⚠️ MÊME BORNE D'IMAGES QUE LA SESSION LÉGÈRE (`sdk-host.ts`) : une
         // tâche qui lit trois images les ferait sinon repartir toutes les trois

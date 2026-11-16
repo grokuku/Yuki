@@ -25,7 +25,7 @@ export type {
 } from "./session-factory.js";
 
 export { createSdkHeavyWorker } from "./heavy-worker.js";
-export type { SdkHeavyWorkerConfig } from "./heavy-worker.js";
+export type { HeavyLibrarianPorts, SdkHeavyWorkerConfig } from "./heavy-worker.js";
 
 export { createDelegateTools, createRunContextTracker } from "./delegate-tools.js";
 export type {
