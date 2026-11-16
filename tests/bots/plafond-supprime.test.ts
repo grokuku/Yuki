@@ -125,14 +125,15 @@ describe("① 4 bots `actif` ⇒ 4 DÉMARRAGES (le cas de l'utilisateur)", () =>
 });
 
 describe("② `bots.maxActifs` n'est PLUS une clé de configuration", () => {
-  // ⚠️ GARDE RÉVISÉE (compte 92 → 93 → 94) : `prompts.personnalite` (2026-11-13)
-  // puis `vision.fallback.model` (2026-11-16, modèle de vision de repli). Ce que
-  // cette garde protège reste inchangé : `bots.maxActifs` n'est PAS revenue.
-  it("la clé, sa variable et sa portée ont disparu (compte : 94)", () => {
+  // ⚠️ GARDE RÉVISÉE (compte 92 → 93 → 94 → 97) : `prompts.personnalite`
+  // (2026-11-13), puis le modèle de vision DÉDIÉ (2026-11-16 : `llm.vision.*`
+  // remplace `vision.fallback.model`, soit -1 +4). Ce que cette garde protège
+  // reste inchangé : `bots.maxActifs` n'est PAS revenue.
+  it("la clé, sa variable et sa portée ont disparu (compte : 97)", () => {
     expect(CONFIG_SCHEMA["bots.maxActifs"]).toBeUndefined();
     expect(CONFIG_PATHS).not.toContain("bots.maxActifs");
     expect(envNameOf("bots.maxActifs")).toBeUndefined();
-    expect(CONFIG_PATHS.length).toBe(94);
+    expect(CONFIG_PATHS.length).toBe(97);
   });
 
   it("⚠️ `MAX_BOTS = 6` reste : bots CRÉABLES ≠ bots qui tournent", () => {

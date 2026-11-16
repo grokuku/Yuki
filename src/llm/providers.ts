@@ -20,7 +20,14 @@
  * DONNÉES (endpoint, identifiants de modèle), pas des identifiants de code.
  */
 
-/** Rôles LLM du système. Extensible aux lots suivants (ex. `vision`). */
+/**
+ * Rôles LLM de CONVERSATION / TRAVAIL.
+ *
+ * ⚠️ Le modèle de VISION DE REPLI n'est PAS un rôle de cette table : il ne mène
+ * aucune conversation et n'exécute aucun travail (il ne fait que DÉCRIRE une
+ * image). Il a son propre emplacement (`VISION_PROVIDER`, `llm.vision.*`) pour
+ * qu'il ne puisse JAMAIS être choisi comme modèle de discussion ou de travail.
+ */
 export type LlmRole = "light" | "heavy";
 
 export const LLM_ROLES: readonly LlmRole[] = ["light", "heavy"];
@@ -69,6 +76,26 @@ export const LLM_ENV: Readonly<Record<LlmRole, RoleEnvNames>> = {
   },
 };
 
+/**
+ * Variables d'environnement du modèle de VISION DÉDIÉ (`llm.vision.*`).
+ *
+ * ⚠️ Mêmes noms que les deux rôles, avec le suffixe du rôle (`_VISION_`) : la
+ * clé se règle donc exactement comme les autres (`YUKI_LLM_VISION_API_KEY`),
+ * et `ConfigRuntime.bridgeSecrets` la reflète dans `process.env` pour que
+ * `models.json` la référence (`$YUKI_LLM_VISION_API_KEY`).
+ *
+ * ⚠️ Pas de `api` : le dialecte du repli n'est pas un choix (une seule valeur
+ * possible, `openai-completions`, portée par `VISION_PROVIDER.api`). Un réglage
+ * à une seule valeur n'est pas un réglage.
+ */
+export const LLM_ENV_VISION: RoleEnvNames = {
+  api: "YUKI_LLM_VISION_API",
+  baseUrl: "YUKI_LLM_VISION_BASE_URL",
+  apiKey: "YUKI_LLM_VISION_API_KEY",
+  model: "YUKI_LLM_VISION_MODEL",
+  thinking: "YUKI_LLM_VISION_THINKING",
+};
+
 /** Alias DÉPRÉCIÉS (lecture seule) — utilisés si le canonique manque. */
 export const LLM_ENV_ALIAS: Readonly<Record<LlmRole, string>> = {
   light: "YUKI_LLM_DISCUSSION_API_KEY",
@@ -91,6 +118,28 @@ export const HEAVY_PROVIDER: ProviderSpec = {
   api: "openai-completions",
   keyEnv: LLM_ENV.heavy.apiKey,
   maxConcurrentRequests: 3,
+};
+
+/**
+ * Provider du modèle de VISION DE REPLI — TROISIÈME emplacement, distinct des
+ * deux rôles de conversation/travail.
+ *
+ * ⚠️ `baseUrl` VIDE par défaut : il n'existe aucun fournisseur de vision par
+ * défaut (le choisir à la place de l'utilisateur reviendrait à inventer un
+ * modèle). `baseUrl` ET `model` vides ⇒ le provider n'est PAS écrit dans
+ * `models.json`, donc aucun repli (`not_configured`) : c'est le seul
+ * interrupteur, il n'y a pas de booléen `enabled` à tenir cohérent.
+ *
+ * ⚠️ Une seule requête concurrente : décrire une image ne doit pas faire la
+ * queue derrière les jobs de fond ni retarder la conversation.
+ */
+export const VISION_PROVIDER: ProviderSpec = {
+  id: "llm-vision",
+  name: "LLM vision (repli)",
+  baseUrl: "",
+  api: "openai-completions",
+  keyEnv: LLM_ENV_VISION.apiKey,
+  maxConcurrentRequests: 1,
 };
 
 /** Table rôle → provider. Les deux rôles pointent des providers DISTINCTS. */

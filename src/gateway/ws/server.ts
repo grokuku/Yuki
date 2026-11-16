@@ -194,7 +194,8 @@ export interface WsTransportOptions {
    * croirait que le modèle a vu son image. Jamais de silence.
    *
    * ⚠️ EXCEPTION (2026-11-16) : si un MODÈLE DE VISION DE REPLI est configuré
-   * (`vision.fallback.model`), le message n'est plus refusé — l'image est
+   * (`llm.vision.baseUrl` + `llm.vision.model`), le message n'est plus refusé —
+   * l'image est
    * DÉCRITE par ce modèle et la description, clairement identifiée, remplace
    * l'image dans le message (l'utilisateur voit donc ce que le modèle reçoit).
    * Les deux ports ci-dessous sont ABSENTS ⇒ refus (comportement d'origine).
@@ -203,7 +204,7 @@ export interface WsTransportOptions {
     conversationReceivesImages: () => boolean;
     /** Un modèle de vision de repli est-il configuré ? (relu à chaque message) */
     repliConfigure?: () => boolean;
-    /** Décrit des images avec le modèle de repli (`vision.fallback.model`). */
+    /** Décrit des images avec le modèle de vision DÉDIÉ (`llm.vision.*`). */
     decrireImages?: VisionDescriber;
   };
   /**
@@ -2509,7 +2510,8 @@ export function createWsTransport(options: WsTransportOptions): Transport {
               "Le modèle de conversation est déclaré SANS vision : l'image n'est " +
               "pas envoyée et le message n'a pas été expédié. Activez « Reçoit les " +
               "images (vision) » pour ce modèle dans /config (onglet « Modèles »), " +
-              "ou choisissez un « Modèle de vision de repli » dans ce même onglet, " +
+              "ou renseignez le bloc « Vision de repli » de ce même onglet " +
+              "(URL de base + Modèle), " +
               "ou retirez l'image du message.",
           });
           return;

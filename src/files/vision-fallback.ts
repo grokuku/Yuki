@@ -6,9 +6,10 @@
  * modèle déclaré texte seul ne reçoit AUCUNE image (le SDK remplace la partie
  * image par « tool image omitted »). Jusqu'ici le seul comportement possible
  * était donc de refuser l'image et de le dire. Ce module ouvre la seule autre
- * issue honnête : faire DÉCRIRE l'image par un modèle de vision de repli
- * (`vision.fallback.model`), puis donner cette DESCRIPTION au modèle actif — à
- * la place de l'image, et clairement identifiée comme telle.
+ * issue honnête : faire DÉCRIRE l'image par un MODÈLE DE VISION DÉDIÉ
+ * (`llm.vision.baseUrl`/`model`/`apiKey` — son adresse, son nom et sa clé, pas
+ * un choix parmi les deux modèles existants), puis donner cette DESCRIPTION au
+ * modèle actif — à la place de l'image, et clairement identifiée comme telle.
  *
  * ⚠️ Aucun SDK ici (données + texte purs, testables sans modèle) : l'appel au
  * modèle de repli vit dans `src/pi/sdk/vision-fallback.ts`. Ce fichier porte ce
@@ -137,10 +138,11 @@ export function blocEchecVisionRepli(message: string): string {
 /** Message HONNÊTE quand aucun repli n'est configuré (comportement d'origine). */
 export function messageSansVisionSansRepli(modele: string): string {
   return (
-    `Le modèle « ${modele} » ne voit pas les images et aucun modèle de vision de ` +
-    "repli n'est configuré : l'image n'est pas transmise et elle n'est pas décrite. " +
+    `Le modèle « ${modele} » ne voit pas les images et aucun modèle de vision ` +
+    "n'est configuré : l'image n'est pas transmise et elle n'est pas décrite. " +
     "Pour la voir : activer la vision du modèle dans /config (onglet « Modèles », " +
-    "réglage « Reçoit les images »), ou choisir un « Modèle de vision de repli »."
+    "réglage « Reçoit les images »), ou renseigner un modèle de vision dédié " +
+    "(onglet « Modèles », bloc « Vision de repli » : URL de base, Modèle, Clé d'API)."
   );
 }
 
@@ -157,7 +159,7 @@ export interface PlanVisionInput {
   readonly modeleVoitLesImages: boolean;
   /** Nombre d'images prêtes à partir. */
   readonly nombreImages: number;
-  /** Un modèle de repli est-il configuré ? (`vision.fallback.model` non vide) */
+  /** Un modèle de vision dédié est-il configuré ? (`llm.vision.baseUrl`+`model`) */
   readonly repliConfigure: boolean;
 }
 

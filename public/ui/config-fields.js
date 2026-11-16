@@ -142,26 +142,59 @@ export const GROUPS = [
   {
     id: "vision-repli",
     // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
-    // ⚠️ INSTANCE SEULEMENT : le modèle de vision de repli est une capacité de
-    // MODÈLE, partagée par tous les bots de l'installation — jamais un trait de
-    // bot (voir `src/config/schema.ts`, portée `instance`).
+    // ⚠️ INSTANCE SEULEMENT : le modèle de vision est une capacité de MODÈLE,
+    // partagée par tous les bots de l'installation — jamais un trait de bot
+    // (voir `src/config/schema.ts`, portée `instance`).
+    //
+    // ⚠️ MODÈLE DÉDIÉ, pas un choix parmi les deux modèles existants : si ni le
+    // léger ni le lourd ne voit les images, un sélecteur entre ces deux-là ne
+    // sert à rien. D'où une ADRESSE, un NOM et une CLÉ qui lui sont propres,
+    // exactement comme les deux autres rôles.
     tabs: { instance: "modeles" },
     title: "Vision de repli",
     fields: [
       {
-        path: "vision.fallback.model",
-        label: "Modèle de vision de repli",
-        // ⚠️ LISTE DÉROULANTE alimentée par le SERVEUR (`GET /api/config` →
-        // `modelesDisponibles`) : uniquement des modèles réellement présents
-        // dans `models.json`. Un champ texte libre laisserait écrire une
-        // référence inexistante, découverte seulement au moment où une image
-        // arrive — c'est-à-dire trop tard.
-        kind: "select",
-        optionsSource: "modelesDisponibles",
-        options: [["", "∅ (aucun repli)"]],
+        path: "llm.vision.baseUrl",
+        label: "URL de base",
+        kind: "text",
         helper:
-          "Utilisé seulement quand le modèle de discussion ou de travail ne voit " +
-          "pas les images.",
+          "Adresse du serveur qui héberge VOTRE modèle de vision (compatible " +
+          "OpenAI, ex. « https://openrouter.ai/api/v1 »). Laisser vide (avec le " +
+          "champ « Modèle ») ⇒ aucun repli : une image qui ne peut pas être vue " +
+          "est refusée et c'est DIT. Appliqué à chaud.",
+      },
+      {
+        path: "llm.vision.apiKey",
+        label: "Clé d'API",
+        // ⚠️ MÊME CONTRÔLE que « Clé d'API » du léger et du lourd : champ
+        // `secret` (masqué, jamais relu en clair, « Remplacer » / « Effacer »),
+        // enregistré par `PUT /api/config` dans state/config.json (droits 0600).
+        // Aucun réglage dégradé : la clé du modèle de vision s'entre dans
+        // l'INTERFACE, exactement comme les deux autres.
+        kind: "secret",
+        helper:
+          "Clé du serveur de vision, saisie ici comme pour les deux autres " +
+          "modèles : elle est enregistrée masquée, jamais relue en clair, " +
+          "remplaçable et effaçable. Appliqué à chaud.",
+      },
+      {
+        path: "llm.vision.model",
+        label: "Modèle",
+        kind: "text",
+        helper:
+          "Nom du modèle de vision à utiliser (ex. « qwen2.5-vl-7b »). Ce modèle " +
+          "sert UNIQUEMENT à décrire les images : il n'apparaît jamais comme " +
+          "modèle de discussion ou de travail. Appliqué à chaud (image suivante).",
+      },
+      {
+        path: "llm.vision.thinking",
+        label: "Réflexion (thinking)",
+        kind: "select",
+        options: OPTIONS.thinking,
+        helper:
+          "Niveau de réflexion du modèle de vision. « off » par défaut : décrire " +
+          "une image n'est pas raisonner, et une réflexion longue doublerait le " +
+          "délai d'un tour pour un gain nul. Appliqué à chaud.",
       },
     ],
   },
@@ -1158,7 +1191,9 @@ export const FIELD_DEFAULTS = {
   "llm.heavy.vision": "oui",
   "llm.heavy.api": "openai-completions",
   "llm.heavy.thinking": "high",
-  "vision.fallback.model": "",
+  "llm.vision.baseUrl": "",
+  "llm.vision.model": "",
+  "llm.vision.thinking": "off",
   "llm.missingKeyMode": "degrade",
   "delegation.defaultDeadlineMs": 1500,
   "delegation.maxConcurrent": 3,

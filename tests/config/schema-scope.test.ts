@@ -37,6 +37,7 @@ import { BOT_ID_DEFAUT } from "../../src/config/overlay.js";
 import {
   CONFIG_PATHS,
   CONFIG_SCHEMA,
+  CLES_CONFIG_RETIREES,
   VARIABLES_ENV_RETIREES,
   VARIABLES_ENV_SUPPRIMEES,
   envNameOf,
@@ -61,12 +62,37 @@ describe("① la table des clés", () => {
   // ⚠️ GARDE RÉVISÉE (« 92 → 93 clés ») : `prompts.personnalite` est AJOUTÉE
   // (2026-11-13 : la personnalité devient une entrée SÉPARÉE du prompt système,
   // portée `mixte` comme `prompts.light`/`prompts.heavy`).
-  // ⚠️ GARDE RÉVISÉE (« 93 → 94 clés ») : `vision.fallback.model` est AJOUTÉE
-  // (2026-11-16 : modèle de vision de repli, utilisé quand le modèle actif ne
-  // voit pas les images). Portée `instance` : c'est une capacité de MODÈLE.
-  it("déclare EXACTEMENT 94 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(94);
+  // ⚠️ GARDE RÉVISÉE (« 94 → 97 clés ») : `vision.fallback.model` est RETIRÉE
+  // (2026-11-16 : un sélecteur parmi les deux modèles existants ne servait à rien
+  // quand aucun des deux ne voit d'image) et le modèle de vision DÉDIÉ ajoute
+  // `llm.vision.baseUrl`, `llm.vision.model`, `llm.vision.thinking` et
+  // `llm.vision.apiKey` (-1 +4 = 97). Portée `instance` : capacité de MODÈLE.
+  it("déclare EXACTEMENT 97 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(97);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
+  });
+
+  it("⚠️ `vision.fallback.model` a DISPARU (remplacée par le modèle DÉDIÉ)", () => {
+    // Un `config.json` qui la contient encore est IGNORÉ avec un avertissement
+    // au démarrage (`CLES_CONFIG_RETIREES`, jamais un échec) — mais la clé
+    // elle-même n'existe plus : un sélecteur parmi les deux modèles existants ne
+    // peut pas décrire une image qu'aucun des deux ne voit.
+    expect(CONFIG_SCHEMA["vision.fallback.model"]).toBeUndefined();
+    expect(CONFIG_PATHS).not.toContain("vision.fallback.model");
+    expect(CLES_CONFIG_RETIREES["vision.fallback.model"]).toBeDefined();
+    for (const cle of [
+      "llm.vision.baseUrl",
+      "llm.vision.model",
+      "llm.vision.thinking",
+      "llm.vision.apiKey",
+    ]) {
+      expect(CONFIG_PATHS, cle).toContain(cle);
+    }
+    // ⚠️ Aucun booléen `enabled` : `baseUrl`/`model` vides = pas de repli.
+    expect(CONFIG_SCHEMA["llm.vision.enabled"]).toBeUndefined();
+    // ⚠️ Pas de `llm.vision.api` non plus : une seule valeur possible
+    // (`openai-completions`), portée par `VISION_PROVIDER.api`.
+    expect(CONFIG_SCHEMA["llm.vision.api"]).toBeUndefined();
   });
 
   it("⚠️ `bots.maxActifs` a DISPARU (plus de plafond de bots en marche)", () => {
@@ -86,14 +112,14 @@ describe("① la table des clés", () => {
   /**
    * ⚠️ GARDE RÉVISÉE (« bot 18 → 19 ») : + `chat.mattermost.url` (2026-11-13).
    * ⚠️ GARDE RÉVISÉE (« mixte 4 → 5 ») : `prompts.personnalite` (2026-11-13).
-   * ⚠️ GARDE RÉVISÉE (« instance 69 → 70 ») : + `vision.fallback.model`
-   * (2026-11-16, réglage GÉNÉRAL : la vision est une capacité du modèle).
-   * Bot et mixte inchangés : 70 / 19 / 5 = 94.
+   * ⚠️ GARDE RÉVISÉE (« instance 69 → 70 → 73 ») : + `vision.fallback.model`
+   * (2026-11-16), puis le modèle de vision DÉDIÉ `llm.vision.*` la REMPLACE
+   * (-1 +4). Bot et mixte inchangés : 73 / 19 / 5 = 97.
    */
-  it("répartition : 70 `instance` / 19 `bot` / 5 `mixte`", () => {
+  it("répartition : 73 `instance` / 19 `bot` / 5 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 70, bot: 19, mixte: 5 });
+    expect(compte).toEqual({ instance: 73, bot: 19, mixte: 5 });
   });
 
   it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {

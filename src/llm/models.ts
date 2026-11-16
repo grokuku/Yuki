@@ -26,6 +26,7 @@ import {
   LIGHT_PROVIDER,
   LLM_ENV,
   PROVIDERS,
+  VISION_PROVIDER,
   readEnvString,
   type LlmApi,
   type LlmRole,
@@ -62,7 +63,12 @@ export const HEAVY_THINKING_LEVEL_MAP: ThinkingLevelMap = {
 };
 
 export interface ModelSpec {
-  readonly role: LlmRole;
+  /**
+   * Rôle du modèle. `vision` = le modèle de VISION DÉDIÉ (`llm.vision.*`) :
+   * il ne mène aucune conversation et n'exécute aucun travail, il DÉCRIT des
+   * images pour un autre modèle.
+   */
+  readonly role: LlmRole | "vision";
   readonly providerId: string;
   /** Identifiant passé à l'API. */
   readonly id: string;
@@ -118,10 +124,38 @@ export const MODELS: Readonly<Record<LlmRole, ModelSpec>> = {
   light: LIGHT_MODEL,
   heavy: HEAVY_MODEL,
 };
-
 export function modelForRole(role: LlmRole): ModelSpec {
   return MODELS[role];
 }
+
+/**
+ * Modèle de VISION DÉDIÉ (repli) — squelette de données.
+ *
+ * ⚠️ AUCUN identifiant de modèle par défaut : `llm.vision.model` et
+ * `llm.vision.baseUrl` sont VIDES au départ (voir `src/config/schema.ts`), donc
+ * aucun appel n'est fait tant que l'utilisateur n'a pas nommé SON modèle. Un
+ * défaut inventé ferait échouer une description au premier envoi d'image.
+ *
+ * ⚠️ `input` contient TOUJOURS `"image"`, par construction : ce modèle existe
+ * POUR voir l'image (c'est le seul sens du repli). C'est pourquoi l'appelant ne
+ * consulte PAS `sdkModelSupportsImages` pour lui — la capacité n'est pas une
+ * déclaration d'utilisateur ici, c'est la définition même de l'emplacement.
+ */
+export const VISION_MODEL: ModelSpec = {
+  role: "vision",
+  providerId: VISION_PROVIDER.id,
+  id: "",
+  name: "Modèle de vision (repli)",
+  reasoning: false,
+  input: ["text", "image"],
+  contextWindow: 131_072,
+  maxTokens: 8_192,
+  // ⚠️ Décrire n'est pas raisonner : un modèle à réflexion longue doublerait le
+  // délai d'un tour sans rien apporter sur une image. Réglable quand même
+  // (`llm.vision.thinking`), mais `off` par défaut.
+  defaultThinking: "off",
+  reference: "",
+};
 
 /** Valeurs effectives d'un rôle (store + env), sans secret. */
 export interface EffectiveLlmRole {
@@ -137,7 +171,24 @@ export interface EffectiveLlmRole {
   vision: boolean;
 }
 
-export type EffectiveLlmConfig = Readonly<Record<LlmRole, EffectiveLlmRole>>;
+export type EffectiveLlmConfig = Readonly<Record<LlmRole, EffectiveLlmRole>> & {
+  /**
+   * Modèle de VISION DÉDIÉ (`llm.vision.*`).
+   *
+   * ⚠️ FACULTATIF : absent (ou vide) ⇒ AUCUN repli, comportement inchangé.
+   * `baseUrl` ET `model` non vides ⇒ ce modèle est écrit dans `models.json`
+   * (provider `llm-vision`) et devient la source du repli. Pas de booléen
+   * `enabled` : deux champs vides disent déjà « pas de repli ».
+   */
+  readonly vision?: EffectiveVisionConfig;
+};
+
+/** Valeurs effectives du modèle de vision dédié (aucun secret : la clé est à part). */
+export interface EffectiveVisionConfig {
+  baseUrl: string;
+  model: string;
+  thinking: ThinkingLevelName;
+}
 
 /** Configuration effective par défaut (alignée sur `config/pi/models.json`). */
 export const DEFAULT_EFFECTIVE_LLM_CONFIG: EffectiveLlmConfig = {
@@ -154,6 +205,13 @@ export const DEFAULT_EFFECTIVE_LLM_CONFIG: EffectiveLlmConfig = {
     model: HEAVY_MODEL.id,
     thinking: HEAVY_MODEL.defaultThinking,
     vision: HEAVY_MODEL.input.includes("image"),
+  },
+  // ⚠️ Aucun modèle de vision par défaut : le repli n'existe QUE si
+  // l'utilisateur a nommé une adresse et un modèle (`llm.vision.*`).
+  vision: {
+    baseUrl: VISION_PROVIDER.baseUrl,
+    model: VISION_MODEL.id,
+    thinking: VISION_MODEL.defaultThinking,
   },
 };
 
@@ -175,7 +233,7 @@ export function resolveProvidersFrom(
 /** Modèles effectifs dérivés d'une config effective (données pures). */
 export function resolveModelsFrom(
   config: EffectiveLlmConfig,
-): Record<LlmRole, ModelSpec> {
+): Record<LlmRole, ModelSpec> & { vision: ModelSpec } {
   const build = (role: LlmRole, base: ModelSpec, providerId: string): ModelSpec => ({
     ...base,
     providerId,
@@ -190,6 +248,36 @@ export function resolveModelsFrom(
   return {
     light: build("light", LIGHT_MODEL, LIGHT_PROVIDER.id),
     heavy: build("heavy", HEAVY_MODEL, HEAVY_PROVIDER.id),
+    vision: resolveVisionFrom(config.vision),
+  };
+}
+
+/**
+ * Un modèle de vision DÉDIÉ est-il configuré ?
+ *
+ * ⚠️ `baseUrl` ET `model` non vides (rognés). Pas de booléen `enabled` : deux
+ * champs vides disent déjà « aucun repli », et un booléen pourrait les
+ * contredire (activé mais sans modèle ⇒ un échec au premier envoi d'image).
+ */
+export function visionConfigured(vision: EffectiveVisionConfig | undefined): boolean {
+  if (vision === undefined) return false;
+  return vision.baseUrl.trim() !== "" && vision.model.trim() !== "";
+}
+
+/**
+ * Modèle de vision effectif dérivé de son réglage (`llm.vision.*`).
+ *
+ * ⚠️ `input` reste `["text", "image"]` quel que soit le réglage : ce modèle
+ * n'existe QUE pour regarder l'image. La référence est `llm-vision/<modèle>` —
+ * donc jamais une référence des deux rôles de conversation/travail.
+ */
+export function resolveVisionFrom(vision: EffectiveVisionConfig | undefined): ModelSpec {
+  const model = vision?.model.trim() ?? "";
+  return {
+    ...VISION_MODEL,
+    id: model,
+    defaultThinking: vision?.thinking ?? VISION_MODEL.defaultThinking,
+    reference: model === "" ? "" : `${VISION_PROVIDER.id}/${model}`,
   };
 }
 
@@ -295,7 +383,7 @@ export function buildModelsConfigFrom(config: EffectiveLlmConfig): ModelsConfig 
   const provider = (
     spec: ProviderSpec,
     model: ModelSpec,
-    effective: EffectiveLlmRole,
+    effective: { baseUrl: string; api: string },
   ): ModelsConfigProvider => ({
     name: spec.name,
     baseUrl: effective.baseUrl,
@@ -322,20 +410,41 @@ export function buildModelsConfigFrom(config: EffectiveLlmConfig): ModelsConfig 
     compat: { supportsDeveloperRole: false, requiresAssistantAfterToolResult: true },
     models: [toModelConfig(model)],
   });
-  return {
-    providers: {
-      [LIGHT_PROVIDER.id]: provider(
-        LIGHT_PROVIDER,
-        resolveModelsFrom(config).light,
-        config.light,
-      ),
-      [HEAVY_PROVIDER.id]: provider(
-        HEAVY_PROVIDER,
-        resolveModelsFrom(config).heavy,
-        config.heavy,
-      ),
-    },
+  const providers: Record<string, ModelsConfigProvider> = {
+    [LIGHT_PROVIDER.id]: provider(
+      LIGHT_PROVIDER,
+      resolveModelsFrom(config).light,
+      config.light,
+    ),
+    [HEAVY_PROVIDER.id]: provider(
+      HEAVY_PROVIDER,
+      resolveModelsFrom(config).heavy,
+      config.heavy,
+    ),
   };
+  // ⚠️ TROISIÈME PROVIDER (`llm-vision`) — écrit UNIQUEMENT s'il est configuré.
+  // C'est ce qui rend le modèle de vision INSTANCIABLE sans que l'utilisateur
+  // ait à l'ajouter lui-même à `models.json` (fichier dérivé, réécrit à chaque
+  // démarrage et à chaque changement à chaud) : le SDK le résout comme les
+  // autres, par la référence `llm-vision/<modèle>`.
+  //
+  // ⚠️ VIDE (défaut) ⇒ AUCUN provider : ni modèle sélectionnable, ni provider
+  // sans clé à traîner. C'est aussi ce qui garantit que ce modèle ne peut pas
+  // devenir un modèle de discussion/travail (`llm.light.*`/`llm.heavy.*` sont
+  // les seuls lus par les rôles).
+  if (visionConfigured(config.vision)) {
+    providers[VISION_PROVIDER.id] = provider(
+      VISION_PROVIDER,
+      resolveVisionFrom(config.vision),
+      {
+        baseUrl: config.vision?.baseUrl.trim() ?? "",
+        // ⚠️ Dialecte FIXE : il n'y a pas de clé `llm.vision.api` (une seule
+        // valeur possible). Le fournisseur du repli est compatible OpenAI.
+        api: VISION_PROVIDER.api,
+      },
+    );
+  }
+  return { providers };
 }
 
 /** Contenu par défaut de `config/pi/models.json` (testé contre le fichier livré). */

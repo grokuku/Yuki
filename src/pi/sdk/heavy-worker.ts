@@ -190,7 +190,7 @@ export interface SdkHeavyWorkerConfig {
   /** Niveau de réflexion du lourd (une fonction est relue à chaque job). */
   thinking: PiThinkingLevel | (() => PiThinkingLevel);
   /**
-   * ⚠️ VISION DE REPLI (`vision.fallback.model`) : quand le modèle du job ne
+   * ⚠️ VISION DE REPLI (`llm.vision.*`) : quand le modèle du job ne
    * reçoit pas les images, ce describer fait DÉCRIRE l'image par un autre modèle
    * et la description remplace le bloc image (`lire_fichier`,
    * `recuperer_fichier`). La même instance qu'en conversation : une seule

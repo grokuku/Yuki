@@ -270,30 +270,75 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     secret: true,
     env: "YUKI_LLM_HEAVY_API_KEY",
   },
-  // --- Vision de repli ------------------------------------------------------
+  // --- Vision de repli (modèle DÉDIÉ) --------------------------------------
+  // ⚠️ TROISIÈME emplacement de modèle, calqué sur `llm.heavy.*` : une ADRESSE,
+  // un MODÈLE, un niveau de réflexion et une CLÉ qui lui sont PROPRES. Il ne
+  // s'agit PAS de choisir parmi les deux modèles existants : si ni le léger ni
+  // le lourd ne voit les images, ce sélecteur-là ne servait à rien, d'où ce
+  // modèle indépendant (demande utilisateur du 2026-11-16).
+  //
   // ⚠️ PORTÉE `instance` (et non par bot) : la capacité de voir les images est
-  // une propriété du MODÈLE, pas d'un bot — deux bots d'une même installation
-  // partagent les mêmes modèles (`llm.light.*` / `llm.heavy.*`). C'est donc un
-  // réglage GÉNÉRAL, à côté des modèles, pas une personnalité de bot.
+  // une propriété d'un MODÈLE, partagée par tous les bots de l'installation.
   //
-  // ⚠️ CE QUE ÇA RÉPARE : un modèle déclaré sans vision (voir ci-dessus) ne
-  // reçoit aucune image ; jusqu'ici la seule issue était de refuser l'image.
-  // Avec un modèle de repli, l'image est DÉCRITE par lui et la DESCRIPTION est
-  // donnée au modèle actif (clairement identifiée, voir
-  // `src/files/vision-fallback.ts`).
+  // ⚠️ CE QUE ÇA RÉPARE : un modèle déclaré sans vision (`llm.<rôle>.vision =
+  // non`) ne reçoit aucune image ; l'image est alors DÉCRITE par ce modèle de
+  // vision et la DESCRIPTION est donnée au modèle actif (clairement identifiée,
+  // voir `src/files/vision-fallback.ts`).
   //
-  // Valeur = référence `provider/modelId` d'un modèle présent dans `models.json`
-  // (liste réellement disponible servie par `GET /api/config`,
-  // `modelesDisponibles` ⇒ la liste déroulante ne propose jamais un modèle
-  // inexistant). VIDE (défaut) ⇒ AUCUN repli : comportement inchangé (l'image
-  // n'est pas envoyée et le message le DIT).
+  // ⚠️ PAS de booléen `enabled` : `baseUrl` ET `model` vides (défaut) ⇒ aucun
+  // repli, comportement inchangé (l'image n'est pas envoyée et le message le
+  // DIT). Deux champs vides disent déjà « pas de repli » — moins de réglages,
+  // moins d'ambiguïté (un booléen activé sans modèle échouerait au premier
+  // envoi d'image).
   //
-  // `apply: hot` : la référence est relue à CHAQUE image, sans redémarrage.
-  "vision.fallback.model": {
+  // ⚠️ `apply: hot` : le modèle est relu à CHAQUE image, et `models.json` est
+  // réécrit (provider `llm-vision`) + le runtime partagé rafraîchi, sans
+  // redémarrage (même mécanique que `llm.<rôle>.model`).
+  //
+  // ⚠️ Ce modèle N'EST PAS sélectionnable comme modèle de discussion ou de
+  // travail : les rôles ne lisent QUE `llm.light.*` / `llm.heavy.*`.
+  // ⚠️ `allowEmpty` : la chaîne VIDE est l'état « pas de repli ». Sans ce
+  // drapeau, vider le champ serait REFUSÉ et il n'y aurait aucun moyen de
+  // désactiver un repli déjà configuré (sinon « null », qui restaure… le vide :
+  // la même chose dite autrement, mais refusée à la saisie).
+  "llm.vision.baseUrl": {
+    scope: "instance",
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    apply: "hot",
+    env: "YUKI_LLM_VISION_BASE_URL",
+  },
+  "llm.vision.model": {
+    scope: "instance",
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    apply: "hot",
+    env: "YUKI_LLM_VISION_MODEL",
+  },
+  // ⚠️ `off` par DÉFAUT : décrire n'est pas raisonner. Un modèle à réflexion
+  // longue doublerait le délai d'un tour pour un gain nul sur une image ; le
+  // réglage reste là pour un modèle qui en aurait besoin.
+  "llm.vision.thinking": {
+    scope: "instance",
+    type: "enum",
+    enum: THINKING_LEVELS,
+    default: "off",
+    apply: "hot",
+    env: "YUKI_LLM_VISION_THINKING",
+  },
+  // Clé du modèle de vision : SECRÈTE, comme les deux autres rôles. Saisie dans
+  // `/config` (store `state/config.json`, 0600) OU fournie par l'environnement
+  // `YUKI_LLM_VISION_API_KEY` (qui écrase le store). `bridgeSecrets` la reflète
+  // dans `process.env` pour que `models.json` la référence (`$…_API_KEY`).
+  "llm.vision.apiKey": {
     scope: "instance",
     type: "string",
     default: "",
     apply: "hot",
+    secret: true,
+    env: "YUKI_LLM_VISION_API_KEY",
   },
   "llm.missingKeyMode": {
     scope: "instance",
@@ -1429,6 +1474,30 @@ export const VARIABLES_ENV_RETIREES: Readonly<Record<string, string>> = {
 export const VARIABLES_ENV_SUPPRIMEES: Readonly<Record<string, string>> = {
   YUKI_BOTS_MAX_ACTIFS: "bots.maxActifs",
 };
+
+/**
+ * Clés de CONFIGURATION supprimées du schéma, avec le réglage qui les remplace.
+ *
+ * ⚠️ Un `config.json` ANTÉRIEUR peut encore les contenir : elles sont IGNORÉES
+ * (jamais un échec de démarrage), mais DITES — un réglage qui n'agit plus et
+ * dont personne n'est averti est le pire des deux mondes.
+ *
+ * `vision.fallback.model` (lot 50, 2026-11-16) : le sélecteur « parmi les deux
+ * modèles existants » est REMPLACÉ par un modèle de vision DÉDIÉ
+ * (`llm.vision.baseUrl` / `llm.vision.model` / `llm.vision.apiKey`) — un
+ * sélecteur ne servait à rien quand aucun des deux modèles ne voit d'image.
+ */
+export const CLES_CONFIG_RETIREES: Readonly<Record<string, string>> = {
+  "vision.fallback.model":
+    "remplacé par le modèle de vision DÉDIÉ : renseignez `llm.vision.baseUrl`, " +
+    "`llm.vision.model` et `llm.vision.apiKey` (/config → onglet « Modèles », " +
+    "bloc « Vision de repli »)",
+};
+
+/** Message d'avertissement d'une clé de config supprimée (ou `undefined`). */
+export function remplacementCleRetiree(path: string): string | undefined {
+  return CLES_CONFIG_RETIREES[path];
+}
 
 export function descriptorOf(path: string): FieldDescriptor | undefined {
   return CONFIG_SCHEMA[path];

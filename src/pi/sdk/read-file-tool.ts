@@ -89,7 +89,7 @@ export interface ReadFileToolOptions {
   /** Référence `provider/modelId` du modèle (message honnête en cas de refus). */
   modelLabel?: string;
   /**
-   * ⚠️ VISION DE REPLI (`vision.fallback.model`) : quand le modèle du job ne
+   * ⚠️ VISION DE REPLI (`llm.vision.*`) : quand le modèle du job ne
    * reçoit pas les images, l'image est DÉCRITE par ce modèle et la description
    * remplace le bloc image. Absent ⇒ refus explicite (comportement d'origine).
    */

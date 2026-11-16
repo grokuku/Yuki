@@ -451,11 +451,12 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     const couvertes = new Set([...rendues("instance"), ...rendues("bot"), ...CONTROLES_AILLEURS]);
     const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
     expect(orphelines).toEqual([]);
-    // ⚠️ Et le compte doit être EXACT : 94 clés (93 + `vision.fallback.model`,
-    // ajoutée le 2026-11-16 — modèle de vision de repli, réglage GÉNÉRAL de
-    // l'onglet « Modèles »), aucune oubliée par ce contrôle.
-    expect(Object.keys(SCOPES).length).toBe(94);
-    expect(couvertes.size).toBe(94);
+    // ⚠️ Et le compte doit être EXACT : 97 clés (94 - `vision.fallback.model`
+    // + les quatre clés du modèle de vision DÉDIÉ `llm.vision.*` — réglage
+    // GÉNÉRAL de l'onglet « Modèles », ajouté le 2026-11-16), aucune oubliée
+    // par ce contrôle.
+    expect(Object.keys(SCOPES).length).toBe(97);
+    expect(couvertes.size).toBe(97);
     // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
     for (const [cle, fichier] of [
       ["tts.voice", "voices-panel.js"],
@@ -990,5 +991,63 @@ describe("⑧ LOT 35i — onglet « Mémoire » d'un bot et sessions Pi", () => 
     // et l'interface affiche une alerte sur l'état `echec` (jamais un silence).
     expect(CONFIG_JS).toContain("resultat.sessionsPi?.etat === \"echec\"");
     expect(CONFIG_JS).toContain("Conversations conservées à part");
+  });
+});
+
+/**
+ * ⚠️ MODÈLE DE VISION DÉDIÉ (2026-11-16) — GARDE DE L'INTERFACE.
+ *
+ * Demande utilisateur : « pour les deux autres j'ai de quoi entrer la clef dans
+ * l'interface. Va pas me faire des paramètres dégradés. » Le bloc « Vision de
+ * repli » doit donc porter le MÊME contrôle « Clé d'API » que le léger et le
+ * lourd (`kind: "secret"` → `renderSecret` : masqué, jamais relu, remplaçable,
+ * effaçable, enregistré par `PUT /api/config`) — et son aide ne doit pas
+ * renvoyer l'utilisateur à une variable d'environnement.
+ */
+describe("⑩ le bloc « Vision de repli » a le MÊME confort que les deux modèles", () => {
+  const groupe = GROUPS.find((entree) => entree.title === "Vision de repli");
+  const champs = groupe?.fields ?? [];
+  const champDe = (path: string) =>
+    ALL_FIELDS.find((field) => field.path === path) as
+      | { path: string; label: string; kind?: string; helper?: string }
+      | undefined;
+
+  it("porte les quatre réglages du modèle DÉDIÉ (adresse, modèle, réflexion, clé)", () => {
+    expect(champs.map((field) => field.path).sort()).toEqual([
+      "llm.vision.apiKey",
+      "llm.vision.baseUrl",
+      "llm.vision.model",
+      "llm.vision.thinking",
+    ]);
+    // Réglages d'INSTALLATION, sur l'onglet « Modèles ».
+    expect(groupe?.tabs).toEqual({ instance: "modeles" });
+    // ⚠️ Aucune trace de l'ancien sélecteur (pas de cohabitation).
+    expect(ALL_FIELDS.some((field) => field.path === "vision.fallback.model")).toBe(false);
+  });
+
+  it("⚠️ « Clé d'API » est un champ SECRET, identique à celui du léger et du lourd", () => {
+    const vision = champDe("llm.vision.apiKey");
+    const legere = champDe("llm.light.apiKey");
+    const lourde = champDe("llm.heavy.apiKey");
+    expect(vision).toBeTruthy();
+    expect(vision?.kind).toBe("secret");
+    // Même libellé, mot pour mot : l'utilisateur retrouve le même contrôle.
+    expect(vision?.label).toBe(legere?.label);
+    expect(vision?.label).toBe(lourde?.label);
+    // Une aide existe (le champ ne dit pas où la clé est saisie, sinon).
+    expect(String(vision?.helper).length).toBeGreaterThan(30);
+  });
+
+  it("⚠️ l'aide ne renvoie PAS l'utilisateur à une variable d'environnement", () => {
+    for (const path of [
+      "llm.vision.baseUrl",
+      "llm.vision.model",
+      "llm.vision.thinking",
+      "llm.vision.apiKey",
+    ]) {
+      const aide = String(champDe(path)?.helper ?? "");
+      expect(aide, path).not.toContain("YUKI_LLM_VISION_API_KEY");
+      expect(aide, path).not.toContain("variable d'environnement");
+    }
   });
 });

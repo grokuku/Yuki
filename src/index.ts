@@ -212,6 +212,8 @@ import {
   resolveAvailability,
   resolveModelsFrom,
   resolveProvidersFrom,
+  resolveVisionFrom,
+  visionConfigured,
   toolAllowlist,
   toolAllowlistForChat,
   type ChatOriginMode,
@@ -324,7 +326,14 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Lit la config effective des deux rôles LLM (store + env + défauts). */
+/**
+ * Lit la config effective des deux rôles LLM **et du modèle de vision dédié**
+ * (store + env + défauts).
+ *
+ * ⚠️ Le modèle de vision (`llm.vision.*`) est un TROISIÈME emplacement, pas un
+ * choix parmi les deux rôles : il ne mène aucune conversation et n'exécute aucun
+ * travail.
+ */
 function effectiveLlmConfig(config: ConfigRuntime): EffectiveLlmConfig {
   return {
     light: {
@@ -342,7 +351,24 @@ function effectiveLlmConfig(config: ConfigRuntime): EffectiveLlmConfig {
       thinking: config.getString("llm.heavy.thinking") as ThinkingLevelName,
       vision: config.getString("llm.heavy.vision") === "oui",
     },
+    vision: {
+      baseUrl: config.getString("llm.vision.baseUrl"),
+      model: config.getString("llm.vision.model"),
+      thinking: config.getString("llm.vision.thinking") as ThinkingLevelName,
+    },
   };
+}
+
+/**
+ * Référence `llm-vision/<modèle>` du modèle de vision dédié, ou `""` quand il
+ * n'est pas configuré (`baseUrl`/`model` vides ⇒ aucun repli).
+ *
+ * ⚠️ Relue à CHAQUE usage (`apply: hot`) : changer le modèle dans `/config`
+ * prend effet sans redémarrage.
+ */
+function referenceVision(config: ConfigRuntime): string {
+  const vision = effectiveLlmConfig(config).vision;
+  return visionConfigured(vision) ? resolveVisionFrom(vision).reference : "";
 }
 
 async function main(): Promise<void> {
@@ -673,26 +699,30 @@ async function main(): Promise<void> {
     effectiveLlmConfig(config).light.thinking;
 
   /**
-   * ⚠️ VISION DE REPLI (`vision.fallback.model`) — UNE seule instance pour toute
-   * l'installation : le cache « une seule description par image » est donc
-   * partagé par la conversation, les canaux et le worker lourd.
+   * ⚠️ VISION DE REPLI — modèle DÉDIÉ (`llm.vision.baseUrl` + `llm.vision.model`
+   * + `llm.vision.apiKey`) : UNE seule instance pour toute l'installation, donc
+   * le cache « une seule description par image » est partagé par la
+   * conversation, les canaux et le worker lourd.
    *
-   * La référence est relue à CHAQUE usage (`apply: hot`) : choisir un autre
-   * modèle de repli dans `/config` prend effet sans redémarrage. Référence vide
-   * (défaut) ⇒ `not_configured`, donc comportement INCHANGÉ (l'image n'est pas
-   * envoyée et c'est DIT).
+   * La référence est relue à CHAQUE usage (`apply: hot`) : changer le modèle de
+   * vision dans `/config` prend effet sans redémarrage (le provider
+   * `llm-vision` de `models.json` est réécrit par l'abonnement à la config).
+   * Référence vide (défaut) ⇒ `not_configured`, donc comportement INCHANGÉ
+   * (l'image n'est pas envoyée et c'est DIT).
    */
   const visionDescriber = createSdkVisionDescriber({
     cwd: env.piCwd,
     agentDir: env.piAgentDir,
     authPath: join(env.piAgentDir, "auth.json"),
     modelsPath,
-    modelReference: () => config.getString("vision.fallback.model"),
+    modelReference: () => referenceVision(config),
+    // ⚠️ Réflexion du modèle de vision, RELUE À CHAUD (`llm.vision.thinking`).
+    thinking: () => effectiveLlmConfig(config).vision?.thinking ?? "off",
     logger,
   });
-  /** Un repli est-il configuré ? (relu à chaud, jamais figé au démarrage) */
+  /** Un modèle de vision est-il configuré ? (relu à chaud, jamais figé) */
   const visionRepliConfigure = (): boolean =>
-    config.getString("vision.fallback.model").trim() !== "";
+    visionConfigured(effectiveLlmConfig(config).vision);
   const heavyAvailableAtStart = availabilityAtStart.isAvailable("heavy");
 
   const volumes = inspectMountPoints(mountPoints(env));
@@ -5172,6 +5202,13 @@ async function main(): Promise<void> {
       heavyModel: effective.heavy.model,
       heavyThinking: effective.heavy.thinking,
       heavyVision: effective.heavy.vision,
+      // ⚠️ Le modèle de VISION DÉDIÉ fait partie du rechargement : le provider
+      // `llm-vision` de `models.json` doit être réécrit quand on change son
+      // adresse, son modèle ou sa réflexion (sinon le describer pointerait un
+      // modèle absent — « introuvable dans models.json » — jusqu'au redémarrage).
+      visionBaseUrl: effective.vision?.baseUrl ?? "",
+      visionModel: effective.vision?.model ?? "",
+      visionThinking: effective.vision?.thinking ?? "off",
     };
     const sameLlm = (a: typeof llmHot, b: EffectiveLlmConfig): boolean =>
       a.lightApi === b.light.api &&
@@ -5183,7 +5220,10 @@ async function main(): Promise<void> {
       a.heavyBaseUrl === b.heavy.baseUrl &&
       a.heavyModel === b.heavy.model &&
       a.heavyThinking === b.heavy.thinking &&
-      a.heavyVision === b.heavy.vision;
+      a.heavyVision === b.heavy.vision &&
+      a.visionBaseUrl === (b.vision?.baseUrl ?? "") &&
+      a.visionModel === (b.vision?.model ?? "") &&
+      a.visionThinking === (b.vision?.thinking ?? "off");
     stopLlmHotReload = config.subscribe(() => {
       // Rafraîchit d'abord la liste des secrets masqués (clé saisie à chaud) —
       // clés d'env, clés de /config ET secrets du coffre (source unique).
@@ -5201,6 +5241,9 @@ async function main(): Promise<void> {
         heavyModel: next.heavy.model,
         heavyThinking: next.heavy.thinking,
         heavyVision: next.heavy.vision,
+        visionBaseUrl: next.vision?.baseUrl ?? "",
+        visionModel: next.vision?.model ?? "",
+        visionThinking: next.vision?.thinking ?? "off",
       };
       logger.info("llm.model.reload.requested", {
         light: next.light.model,
@@ -5209,6 +5252,7 @@ async function main(): Promise<void> {
         heavy: next.heavy.model,
         heavyBaseUrl: next.heavy.baseUrl,
         heavyVision: next.heavy.vision,
+        vision: referenceVision(config),
       });
       const apply = host?.applyLlmConfig;
       if (host && apply) {
@@ -5477,23 +5521,6 @@ async function main(): Promise<void> {
         // « Personnalité » montre la liste réellement annoncée au modèle — jamais
         // une copie susceptible de diverger.
         outilsEffectifs: (botId: string) => [...outilsLegerDuBot(botId ?? config.botId)],
-        // ⚠️ MODÈLES DISPONIBLES (lecture seule) : la liste déroulante « Modèle
-        // de vision de repli » ne doit proposer QUE des modèles réellement
-        // présents dans `models.json` — donc les deux références résolues depuis
-        // la config courante (relues à chaud, comme le reste des modèles).
-        modelesDisponibles: () => {
-          const modeles = resolveModelsFrom(effectiveLlmConfig(config));
-          return [
-            {
-              value: modeles.light.reference,
-              label: `${modeles.light.reference} — modèle de discussion`,
-            },
-            {
-              value: modeles.heavy.reference,
-              label: `${modeles.heavy.reference} — modèle de travail`,
-            },
-          ];
-        },
         // ⚠️ PERSONNALITÉ EFFECTIVE d'un bot (lecture seule) : le texte RÉELLEMENT
         // composé, avec sa provenance. Sans elle, la page d'un bot ne pouvait que
         // montrer le défaut LIVRÉ — l'utilisateur en concluait que sa personnalité

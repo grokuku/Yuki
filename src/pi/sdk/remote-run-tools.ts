@@ -102,7 +102,7 @@ export interface RemoteRunVision {
   /** Le modèle accepte-t-il les images ? (`llm.light.vision`). */
   imagesSupported: () => boolean;
   /**
-   * ⚠️ VISION DE REPLI (`vision.fallback.model`) : quand le modèle du run ne
+   * ⚠️ VISION DE REPLI (`llm.vision.*`) : quand le modèle du run ne
    * reçoit pas les images, l'image lue via `lire_fichier` est DÉCRITE et la
    * description remplace le bloc image. Absent ⇒ refus explicite.
    */

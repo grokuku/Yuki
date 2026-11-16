@@ -31,6 +31,7 @@ import {
   VARIABLES_ENV_RETIREES,
   VARIABLES_ENV_SUPPRIMEES,
   descriptorOf,
+  remplacementCleRetiree,
   envNameOf,
   isSecretPath,
   validateField,
@@ -352,7 +353,15 @@ export class ConfigRuntime {
     for (const [path, raw] of Object.entries(loaded.values)) {
       const descriptor = descriptorOf(path);
       if (!descriptor) {
-        this.warnings.push(`champ de configuration inconnu ignoré : ${path}`);
+        // ⚠️ Une clé SUPPRIMÉE du schéma est ignorée, jamais un échec de
+        // démarrage — mais elle est DITE avec son remplacement (un réglage qui
+        // n'agit plus en silence est le pire des deux mondes).
+        const remplacement = remplacementCleRetiree(path);
+        this.warnings.push(
+          remplacement === undefined
+            ? `champ de configuration inconnu ignoré : ${path}`
+            : `réglage SUPPRIMÉ ignoré : ${path} — ${remplacement}`,
+        );
         continue;
       }
       const result = validateField(path, raw);
@@ -376,7 +385,12 @@ export class ConfigRuntime {
     for (const [path, raw] of Object.entries(overlaid.values)) {
       const descriptor = descriptorOf(path);
       if (!descriptor) {
-        this.warnings.push(`champ d'overlay inconnu ignoré : ${path}`);
+        const remplacement = remplacementCleRetiree(path);
+        this.warnings.push(
+          remplacement === undefined
+            ? `champ d'overlay inconnu ignoré : ${path}`
+            : `réglage d'overlay SUPPRIMÉ ignoré : ${path} — ${remplacement}`,
+        );
         continue;
       }
       if (descriptor.scope === "instance") {

@@ -3,9 +3,23 @@
  *
  * ⚠️ CE QUE CE MODULE FERME : un modèle déclaré texte seul (`llm.<rôle>.vision =
  * non`) ne reçoit aucune image ; jusqu'ici la seule issue était de la refuser.
- * Ici, un SECOND modèle — choisi dans `/config` (`vision.fallback.model`) —
- * REGARDE l'image et rend une DESCRIPTION, que le modèle actif reçoit à la place
- * de l'image (bloc balisé, `src/files/vision-fallback.ts`).
+ * Ici, un MODÈLE DE VISION DÉDIÉ — le sien, avec SON adresse, SON nom et SA clé
+ * (`/config` → onglet « Modèles », bloc « Vision de repli », soit
+ * `llm.vision.baseUrl` / `llm.vision.model` / `llm.vision.apiKey`) — REGARDE
+ * l'image et rend une DESCRIPTION, que le modèle actif reçoit à la place de
+ * l'image (bloc balisé, `src/files/vision-fallback.ts`).
+ *
+ * ⚠️ POURQUOI UN MODÈLE DÉDIÉ ET NON UN CHOIX PARMI LES DEUX EXISTANTS : si ni
+ * le léger ni le lourd ne voit les images, un sélecteur entre ces deux-là ne
+ * sert à rien (demande utilisateur du 2026-11-16). Ce modèle n'est donc PAS un
+ * rôle de conversation/travail : il n'existe que pour décrire.
+ *
+ * ⚠️ INSTANCIÉ SANS RIEN AJOUTER À LA MAIN : `models.json` est DÉRIVÉ de la
+ * configuration (`buildModelsConfigFrom`, `src/llm/models.ts`) et contient, dès
+ * que `llm.vision.baseUrl` ET `llm.vision.model` sont renseignés, un provider
+ * `llm-vision` avec ce modèle. Le SDK le résout comme les autres, par la
+ * référence `llm-vision/<modèle>` — aucun fichier à éditer, et vider les deux
+ * champs le retire.
  *
  * ⚠️ COÛT NUL QUAND TOUT VA BIEN : aucune requête n'est émise vers le repli
  * quand le modèle actif voit déjà les images — c'est l'APPELANT qui décide
@@ -23,7 +37,7 @@
 
 import { createHash } from "node:crypto";
 
-import type { PiLogger } from "../types.js";
+import type { PiLogger, PiThinkingLevel } from "../types.js";
 import {
   VISION_DESCRIPTION_MAX_IMAGES,
   VISION_DESCRIPTION_PROMPT,
@@ -32,7 +46,7 @@ import {
   type VisionDescriber,
 } from "../../files/vision-fallback.js";
 import type { FileImageContent } from "../../files/types.js";
-import { getSharedModelRuntime, resolveSdkModel, sdkModelSupportsImages } from "./model-runtime.js";
+import { getSharedModelRuntime, resolveSdkModel } from "./model-runtime.js";
 import { createSdkPromptWriter } from "./prompt-writer.js";
 import type { createEphemeralSession } from "./session-factory.js";
 
@@ -42,11 +56,17 @@ export interface SdkVisionDescriberConfig {
   authPath: string;
   modelsPath: string;
   /**
-   * Référence `provider/modelId` du modèle de repli, RELUE À CHAQUE USAGE
-   * (`vision.fallback.model`) : un changement s'applique sans redémarrage.
-   * Chaîne vide ⇒ aucun repli configuré (`not_configured`), comportement actuel.
+   * Référence `provider/modelId` du modèle de vision DÉDIÉ, RELUE À CHAQUE
+   * USAGE (`llm.vision.baseUrl` + `llm.vision.model`) : un changement s'applique
+   * sans redémarrage. Chaîne vide ⇒ aucun repli configuré (`not_configured`),
+   * comportement actuel (l'image n'est pas envoyée et c'est DIT).
    */
   modelReference: () => string;
+  /**
+   * Niveau de réflexion du modèle de vision (`llm.vision.thinking`), relu à
+   * chaque usage. Défaut `off` : décrire n'est pas raisonner.
+   */
+  thinking?: () => PiThinkingLevel;
   /** Délai maximal d'une description (ms), relu à chaud. */
   timeoutMs?: () => number;
   logger: PiLogger;
@@ -86,9 +106,10 @@ export function createSdkVisionDescriber(config: SdkVisionDescriberConfig): Visi
     modelsPath: config.modelsPath,
     systemPrompt: VISION_DESCRIPTION_PROMPT,
     modelReference: config.modelReference,
-    // ⚠️ Réflexion COUPÉE : décrire n'est pas raisonner. Un modèle à réflexion
-    // longue doublerait le délai d'un tour pour un gain nul sur une image.
-    thinking: "off",
+    // ⚠️ Réflexion RELUE À CHAQUE APPEL (`llm.vision.thinking`), `off` par
+    // défaut : décrire n'est pas raisonner, et un modèle à réflexion longue
+    // doublerait le délai d'un tour pour un gain nul sur une image.
+    thinking: config.thinking ?? (() => "off"),
     timeoutMs: config.timeoutMs ?? (() => VISION_DESCRIPTION_TIMEOUT_MS),
     logger: config.logger,
     label: "vision de repli",
@@ -136,7 +157,10 @@ export function createSdkVisionDescriber(config: SdkVisionDescriberConfig): Visi
         raison: "runtime_indisponible",
         error: cause,
       });
-      return { kind: "failed", message: `le modèle de repli « ${reference} » est introuvable (${cause})` };
+      return {
+        kind: "failed",
+        message: `le modèle de vision « ${reference} » est introuvable (${cause})`,
+      };
     }
     if (!modele) {
       config.logger.warn("vision.repli.echec", {
@@ -146,25 +170,17 @@ export function createSdkVisionDescriber(config: SdkVisionDescriberConfig): Visi
       return {
         kind: "failed",
         message:
-          `le modèle de vision de repli « ${reference} » est introuvable dans ` +
-          "models.json — vérifiez le réglage « Modèle de vision de repli »",
+          `le modèle de vision « ${reference} » est introuvable dans models.json — ` +
+          "vérifiez « URL de base » et « Modèle » du bloc « Vision de repli » " +
+          "(/config → onglet « Modèles »)",
       };
     }
-    // ⚠️ Un repli qui ne voit pas les images n'est pas un repli : le dire plutôt
-    // que d'envoyer l'image à un modèle qui la jettera (le SDK écrirait
-    // « (tool image omitted…) » et le modèle décrirait le vide).
-    if (!sdkModelSupportsImages(modele)) {
-      config.logger.warn("vision.repli.echec", {
-        modele: reference,
-        raison: "modele_sans_vision",
-      });
-      return {
-        kind: "failed",
-        message:
-          `le modèle de vision de repli « ${reference} » est lui aussi déclaré ` +
-          "SANS vision (réglage « Reçoit les images » de son rôle)",
-      };
-    }
+    // ⚠️ PAS de contrôle de capacité ici (`sdkModelSupportsImages`) : ce modèle
+    // n'est pas un modèle de chat dont la vision serait une DÉCLARATION
+    // d'utilisateur, c'est l'emplacement même de la description. Son entrée
+    // `models.json` porte TOUJOURS `input: ["text", "image"]` par construction
+    // (`resolveVisionFrom`, `src/llm/models.ts`) : il voit l'image, sinon il
+    // n'existerait pas.
 
     // ⚠️ ORDRE DES IMAGES PRÉSERVÉ : le résultat est indexé comme l'entrée, sinon
     // l'appelant associerait le nom d'un fichier à la description d'un autre.
@@ -185,7 +201,7 @@ export function createSdkVisionDescriber(config: SdkVisionDescriberConfig): Visi
       const octets = aDecrire.reduce((total, image) => total + image.data.length, 0);
       config.logger.info("vision.repli.utilise", {
         modele: reference,
-        raison: "modele_sans_vision",
+        raison: "modele_actif_sans_vision",
         images: aDecrire.length,
         // Base64 : c'est ce qui pèse réellement sur le fil (cf. `src/files/vision.ts`).
         bytes: octets,
@@ -219,7 +235,7 @@ export function createSdkVisionDescriber(config: SdkVisionDescriberConfig): Visi
         });
         return {
           kind: "failed",
-          message: `le modèle de vision de repli « ${reference} » n'a rien décrit (réponse vide)`,
+          message: `le modèle de vision « ${reference} » n'a rien décrit (réponse vide)`,
         };
       }
       // Une description par image : le modèle les sépare par « --- » quand il y
@@ -259,7 +275,7 @@ export function createSdkVisionDescriber(config: SdkVisionDescriberConfig): Visi
     if (descriptions.length === 0) {
       return {
         kind: "failed",
-        message: `le modèle de vision de repli « ${reference} » n'a produit aucune description`,
+        message: `le modèle de vision « ${reference} » n'a produit aucune description`,
       };
     }
     return { kind: "described", modele: reference, descriptions, ignorees };

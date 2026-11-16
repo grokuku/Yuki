@@ -163,14 +163,6 @@ export interface ConfigApiDeps {
    * (jamais un texte ni une origine inventés).
    */
   personnaliteEffective?: (botId: string) => PersonnaliteEffectiveVue | null;
-  /**
-   * ⚠️ MODÈLES RÉELLEMENT DISPONIBLES (lecture seule) : référence
-   * `provider/modelId` + libellé des modèles que `models.json` contient
-   * (`resolveModelsFrom`, `src/llm/models.ts`). Alimente la liste déroulante
-   * « Modèle de vision de repli » (`vision.fallback.model`) : on ne propose
-   * JAMAIS un modèle qui n'existe pas. Absent ⇒ `null` (aucune liste inventée).
-   */
-  modelesDisponibles?: () => readonly { value: string; label: string }[];
   bots?: {
     registre?: RegistreBots | null;
     stateDir?: string;
@@ -348,8 +340,6 @@ function handleGet(deps: ConfigApiDeps): ConfigHttpResponse {
     // d'instance dit ainsi ce qui est RÉELLEMENT composé (le champ ci-dessus est la
     // valeur COMMUNE, qui n'est pas forcément celle d'un bot).
     personnaliteEffective: deps.personnaliteEffective?.(deps.runtime.botId) ?? null,
-    // ⚠️ Liste des modèles disponibles pour le repli de vision (`models.json`).
-    modelesDisponibles: deps.modelesDisponibles?.() ?? null,
   });
 }
 
@@ -396,7 +386,6 @@ function handlePut(input: ConfigRequestInput): ConfigHttpResponse | Promise<Conf
       outilsGeneres: input.deps.outilsEffectifs?.(input.deps.runtime.botId) ?? null,
       personnaliteEffective:
         input.deps.personnaliteEffective?.(input.deps.runtime.botId) ?? null,
-      modelesDisponibles: input.deps.modelesDisponibles?.() ?? null,
     }));
   } catch (error) {
     return configWriteError(input.deps, error);

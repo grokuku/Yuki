@@ -22,7 +22,10 @@ Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est 
 | Niveau de réflexion — travail | `llm.heavy.thinking` | global | global — coût, pas personnalité | |
 | Reçoit les images — travail | `llm.heavy.vision` | global | global — capacité du modèle | |
 | Clé d'API — travail | `llm.heavy.apiKey` | global | global — secret d'installation | |
-| Modèle de vision de repli | `vision.fallback.model` | global | global — capacité du modèle, utilisée quand le modèle actif ne voit pas les images | |
+| Adresse du service — vision de repli | `llm.vision.baseUrl` | global | global — un seul modèle de vision pour l'installation | |
+| Modèle de vision de repli | `llm.vision.model` | global | global — capacité du modèle, utilisée quand le modèle actif ne voit pas les images | |
+| Niveau de réflexion — vision de repli | `llm.vision.thinking` | global | global — coût, pas personnalité | |
+| Clé d'API — vision de repli | `llm.vision.apiKey` | global | global — secret d'installation | |
 | Politique si clé manquante | `llm.missingKeyMode` | global | global — comportement d'installation | |
 | Attente avant délégation (ms) | `delegation.defaultDeadlineMs` | global | global — latence du tour commun | |
 | Travaux lourds simultanés | `delegation.maxConcurrent` | global | global — GPU et file partagés | |

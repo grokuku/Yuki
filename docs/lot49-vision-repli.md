@@ -18,14 +18,16 @@ seule issue était de **refuser** l'image en le disant.
 
 | Élément | Où |
 |---|---|
-| Clé `vision.fallback.model` (portée `instance`, défaut **vide**, `apply: hot`) | `src/config/schema.ts` |
+| Réglages `llm.vision.baseUrl` / `llm.vision.model` / `llm.vision.thinking` / `llm.vision.apiKey` (portée `instance`, défauts **vides** sauf `thinking` = `off`, `apply: hot`) — modèle de vision DÉDIÉ | `src/config/schema.ts` |
+| Provider `llm-vision` de `models.json` (écrit seulement si le modèle est configuré) | `buildModelsConfigFrom`, `src/llm/models.ts` |
 | Décision pure « garder / décrire / refuser » | `planVision`, `src/files/vision-fallback.ts` |
 | Textes injectés (description, échec, absence de repli) | `src/files/vision-fallback.ts` |
 | Appel du modèle de repli (session éphémère, aucun outil) | `createSdkVisionDescriber`, `src/pi/sdk/vision-fallback.ts` |
-| Réglage (liste déroulante des modèles réels) | `/config` → onglet **Modèles** → groupe **Vision de repli** |
-| Liste servie | `GET /api/config` → `modelesDisponibles` |
+| Saisie (bloc de quatre champs, clé secrète identique aux deux autres modèles) | `/config` → onglet **Modèles** → groupe **Vision de repli** |
 
-Compte des clés : **93 → 94** (instance **69 → 70**, bot 19, mixte 5).
+Compte des clés : **94 → 97** (instance **70 → 73**, bot 19, mixte 5) : `vision.fallback.model`
+(le sélecteur parmi les deux modèles existants) est RETIRÉE, les quatre clés `llm.vision.*`
+la remplacent — un sélecteur ne servait à rien quand aucun des deux modèles ne voit d'image.
 
 ## Comportement
 

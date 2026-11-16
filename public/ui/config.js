@@ -207,13 +207,6 @@ const state = {
    * pas la calculer : on n'affiche alors AUCUNE liste (jamais une liste inventée).
    */
   outilsGeneres: null,
-  /**
-   * ⚠️ MODÈLES RÉELLEMENT DISPONIBLES (`GET /api/config` → `modelesDisponibles`) :
-   * références `provider/modelId` de `models.json`, avec un libellé lisible.
-   * Alimente la liste déroulante « Modèle de vision de repli » — jamais une liste
-   * écrite à la main dans le navigateur.
-   */
-  modelesDisponibles: [],
   initial: new Map(),
   inputs: new Map(),
   rows: new Map(),
@@ -390,38 +383,9 @@ function originBadge(entry) {
   return h("span", { class: `badge badge--origin-${modifier}`, text: label });
 }
 
-/**
- * OPTIONS DYNAMIQUES d'un `<select>` : certaines listes ne peuvent pas être
- * écrites dans le catalogue, parce qu'elles dépendent de l'INSTALLATION.
- *
- * ⚠️ `modelesDisponibles` = les modèles réellement présents dans `models.json`
- * (servis par `GET /api/config`). Une valeur enregistrée qui n'existe PLUS
- * (modèle renommé, fournisseur retiré) est AJOUTÉE à la liste avec la mention
- * « introuvable » : un `<select>` qui retomberait silencieusement sur « aucun
- * repli » ferait croire que le réglage est vide alors qu'il pointe un modèle
- * disparu.
- *
- * @param {any} field
- * @returns {Array<[string, string]>}
- */
-function optionsDeChamp(field) {
-  const base = Array.isArray(field.options) ? field.options : [];
-  if (field.optionsSource !== "modelesDisponibles") return base;
-  const modeles = Array.isArray(state.modelesDisponibles) ? state.modelesDisponibles : [];
-  const vus = new Set(base.map(([value]) => String(value)));
-  const options = [...base];
-  for (const modele of modeles) {
-    const value = String(modele?.value ?? "");
-    if (value === "" || vus.has(value)) continue;
-    vus.add(value);
-    options.push([value, String(modele?.label ?? value)]);
-  }
-  return options;
-}
-
 function renderSelect(field, entry) {
   const select = h("select", { class: "config-select" });
-  const options = optionsDeChamp(field);
+  const options = Array.isArray(field.options) ? field.options : [];
   const valeur = String(entry.value ?? "");
   let presente = false;
   for (const [value, label] of options) {
@@ -1173,14 +1137,6 @@ function applySnapshot(body) {
   }
   if (typeof body.voiceInstruction === "string") {
     state.voiceInstruction = body.voiceInstruction;
-  }
-  // ⚠️ Liste des MODÈLES disponibles : lue à chaque chargement (`apply: hot`).
-  // Absente (gateway ancien) ⇒ liste vide, et le `<select>` garde la valeur
-  // enregistrée marquée « introuvable » plutôt que d'inventer un modèle.
-  if (Array.isArray(body.modelesDisponibles)) {
-    state.modelesDisponibles = body.modelesDisponibles.filter(
-      (modele) => typeof modele?.value === "string" && modele.value !== "",
-    );
   }
   state.initial.clear();
   state.inputs.clear();
