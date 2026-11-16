@@ -129,6 +129,90 @@ describe("WS — capacité vision de la conversation", () => {
     expect(started.type).toBe("run_started");
   });
 
+  it("⚠️ REPLI : modèle sans vision + image + repli configuré ⇒ DESCRIPTION fournie", async () => {
+    // ⚠️ LE TEST CENTRAL du repli de vision : le modèle actif ne voit pas
+    // l'image, un modèle de repli la DÉCRIT, et la description (clairement
+    // identifiée) remplace l'image dans le message. AUCUNE image ne part au
+    // modèle qui ne la verrait pas, et l'utilisateur lit ce que le modèle reçoit.
+    const service = makeService();
+    const stored = await service.saveUpload(
+      (async function* () {
+        yield new Uint8Array(PNG);
+      })(),
+      { name: "capture.png", mimeType: "image/png", origin: "user" },
+    );
+    expect(stored.ok).toBe(true);
+    if (!stored.ok) return;
+
+    const decrites: unknown[] = [];
+    const h = await startHarness({
+      files: service,
+      vision: {
+        conversationReceivesImages: () => false,
+        repliConfigure: () => true,
+        decrireImages: async (images) => {
+          decrites.push(images.length);
+          return {
+            kind: "described",
+            modele: "llm-heavy/vision-modele",
+            descriptions: [{ texte: "Une capture : bouton « Enregistrer » en haut à droite." }],
+            ignorees: [],
+          };
+        },
+      },
+    });
+    harnesses.push(h);
+    const sends = spySends(h);
+    const client = await connect(h);
+    client.send({ type: "message", clientMsgId: "m1", text: "regarde", files: [stored.file.id] });
+    await client.waitFor("run_started");
+
+    // Le repli a été appelé UNE fois, avec l'image préparée.
+    expect(decrites).toEqual([1]);
+    expect(sends).toHaveLength(1);
+    // ⚠️ Aucune image n'est envoyée au modèle qui ne la voit pas…
+    expect(sends[0]?.opts?.images).toBeUndefined();
+    // …et la description est DANS le texte, donc VISIBLE dans la conversation.
+    expect(sends[0]?.text).toContain("Description d'image par le modèle de vision de repli");
+    expect(sends[0]?.text).toContain("llm-heavy/vision-modele");
+    expect(sends[0]?.text).toContain("bouton « Enregistrer »");
+    expect(sends[0]?.text).toContain("regarde");
+  });
+
+  it("⚠️ REPLI EN ÉCHEC : message explicite, le tour CONTINUE sans l'image", async () => {
+    const service = makeService();
+    const stored = await service.saveUpload(
+      (async function* () {
+        yield new Uint8Array(PNG);
+      })(),
+      { name: "capture.png", mimeType: "image/png", origin: "user" },
+    );
+    expect(stored.ok).toBe(true);
+    if (!stored.ok) return;
+
+    const h = await startHarness({
+      files: service,
+      vision: {
+        conversationReceivesImages: () => false,
+        repliConfigure: () => true,
+        decrireImages: async () => ({
+          kind: "failed",
+          message: "le modèle de vision de repli « llm-heavy/x » n'a pas répondu",
+        }),
+      },
+    });
+    harnesses.push(h);
+    const sends = spySends(h);
+    const client = await connect(h);
+    client.send({ type: "message", clientMsgId: "m1", text: "regarde", files: [stored.file.id] });
+    await client.waitFor("run_started");
+
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.opts?.images).toBeUndefined();
+    expect(sends[0]?.text).toContain("Impossible d'analyser l'image");
+    expect(sends[0]?.text).toContain("n'a pas répondu");
+  });
+
   it("capacité déclarée « oui » : l'image part comme avant (non-régression)", async () => {
     const service = makeService();
     const stored = await service.saveUpload(

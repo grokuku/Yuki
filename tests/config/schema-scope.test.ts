@@ -8,7 +8,7 @@
  *    ⚠️ 90 → 92 le 2026-11-10 : `chat.mattermost.enabled` et `chat.discord.enabled`
  *    (plateformes INDÉPENDANTES, `bot`). Le compteur est mis à jour EXPRÈS : c'est
  *    lui qui rend l'ajout délibéré.
- *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 69 / 19 / 5 ;
+ *  - `scope` PRÉSENT et VALIDE sur chaque clé, avec les comptes 70 / 19 / 5 ;
  *    ⚠️ CLASSEMENT VALIDÉ (`docs/classement-des-reglages.md`) : trois clés ont
  *    changé de portée SANS changer de nombre — `chat.remoteAgents` et
  *    `chat.remoteTools` (`bot` → `instance`) et `memory.consolidation.enabled`
@@ -61,8 +61,11 @@ describe("① la table des clés", () => {
   // ⚠️ GARDE RÉVISÉE (« 92 → 93 clés ») : `prompts.personnalite` est AJOUTÉE
   // (2026-11-13 : la personnalité devient une entrée SÉPARÉE du prompt système,
   // portée `mixte` comme `prompts.light`/`prompts.heavy`).
-  it("déclare EXACTEMENT 93 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(93);
+  // ⚠️ GARDE RÉVISÉE (« 93 → 94 clés ») : `vision.fallback.model` est AJOUTÉE
+  // (2026-11-16 : modèle de vision de repli, utilisé quand le modèle actif ne
+  // voit pas les images). Portée `instance` : c'est une capacité de MODÈLE.
+  it("déclare EXACTEMENT 94 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(94);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
   });
 
@@ -83,12 +86,14 @@ describe("① la table des clés", () => {
   /**
    * ⚠️ GARDE RÉVISÉE (« bot 18 → 19 ») : + `chat.mattermost.url` (2026-11-13).
    * ⚠️ GARDE RÉVISÉE (« mixte 4 → 5 ») : `prompts.personnalite` (2026-11-13).
-   * Instance et bot inchangés : 69 / 19 / 5 = 93.
+   * ⚠️ GARDE RÉVISÉE (« instance 69 → 70 ») : + `vision.fallback.model`
+   * (2026-11-16, réglage GÉNÉRAL : la vision est une capacité du modèle).
+   * Bot et mixte inchangés : 70 / 19 / 5 = 94.
    */
-  it("répartition : 69 `instance` / 19 `bot` / 5 `mixte`", () => {
+  it("répartition : 70 `instance` / 19 `bot` / 5 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 69, bot: 19, mixte: 5 });
+    expect(compte).toEqual({ instance: 70, bot: 19, mixte: 5 });
   });
 
   it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {

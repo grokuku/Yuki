@@ -158,6 +158,8 @@ function stubScreenshot(): {
  * d'autre. Sert à prouver que le worker LIT le contenu de la bonne conversation.
  */
 const FILE_ID = "b".repeat(32);
+/** Identifiant d'une pièce jointe IMAGE (repli de vision). */
+const FILE_IMAGE_ID = "c".repeat(32);
 
 function stubFiles(): FilesReadPort {
   const wire: WireFile = {
@@ -286,6 +288,76 @@ describe("outils d'action du worker lourd — rattachement de la validation", ()
       content: { type: string; text?: string }[];
     };
     expect(result.content.map((block) => block.text ?? "").join("")).toContain("coucou toi");
+  });
+
+  it("⚠️ VISION DE REPLI : le worker lourd (donc une TÂCHE PLANIFIÉE) fait DÉCRIRE l'image", async () => {
+    // ⚠️ Une tâche planifiée / un déclencheur passe par CES outils
+    // (`buildHeavyActionTools`). Quand le modèle lourd est déclaré sans vision,
+    // `lire_fichier` ne refuse plus : le modèle de repli décrit l'image, et la
+    // description remplace le bloc image (le worker voit une DESCRIPTION).
+    const described: number[] = [];
+    const tools = buildHeavyActionTools(
+      {
+        files: {
+          listForSession: () => [
+            {
+              id: FILE_IMAGE_ID,
+              name: "capture.png",
+              mimeType: "image/png",
+              bytes: 70,
+              createdAt: "2026-11-16T00:00:00.000Z",
+              expiresAt: "2026-12-16T00:00:00.000Z",
+              url: `/api/files/${FILE_IMAGE_ID}`,
+            } as unknown as WireFile,
+          ],
+          get: (id: string) =>
+            id === FILE_IMAGE_ID
+              ? ({
+                  id: FILE_IMAGE_ID,
+                  name: "capture.png",
+                  mimeType: "image/png",
+                  bytes: 70,
+                  sha256: "a".repeat(64),
+                  createdAt: "2026-11-16T00:00:00.000Z",
+                  expiresAt: "2026-12-16T00:00:00.000Z",
+                  origin: "user",
+                  sessionId: CONVERSATION,
+                  analysis: { kind: "image", readable: false },
+                } as unknown as StoredFileRecord)
+              : null,
+          readBytes: () => null,
+          prepareImages: async () => ({
+            ok: true as const,
+            images: [{ data: "AAAA", mimeType: "image/png" }],
+          }),
+        },
+        visionFallback: async (images) => {
+          described.push(images.length);
+          return {
+            kind: "described",
+            modele: "llm-light/vision",
+            descriptions: [{ texte: "Une capture avec un bouton « OK »." }],
+            ignorees: [],
+          };
+        },
+      },
+      CONVERSATION,
+      { modelLabel: "llm-heavy/texte-seul", imagesSupported: false },
+    );
+    const read = tools.find((tool) => tool.name === "lire_fichier") as unknown as AnyTool;
+    const result = (await read.execute(
+      "call",
+      { identifiant: FILE_IMAGE_ID },
+      undefined,
+      undefined,
+      ephemeralCtx,
+    )) as { content: { type: string; text?: string }[] };
+
+    expect(described).toEqual([1]);
+    const texte = result.content.map((block) => block.text ?? "").join("");
+    expect(result.content.every((block) => block.type === "text")).toBe(true);
+    expect(texte).toContain("Description d'image par le modèle de vision de repli");
+    expect(texte).toContain("bouton « OK »");
   });
 
   it("run_command RATTACHE la validation à la CONVERSATION, pas à la session éphémère", async () => {

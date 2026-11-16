@@ -86,7 +86,15 @@ import {
   type ComfyImageView,
   type ImagesGatewayPort,
 } from "./comfy/index.js";
-import { createFilesService, createGeneratedImageFiles, FilesStore } from "./files/index.js";
+import {
+  blocDescriptionVision,
+  blocEchecVisionRepli,
+  createFilesService,
+  createGeneratedImageFiles,
+  FilesStore,
+  messageSansVisionSansRepli,
+  planVision,
+} from "./files/index.js";
 import { AvatarStore } from "./identity/avatar.js";
 import {
   CHAT_JUDGE_TIMEOUT_MS,
@@ -272,7 +280,7 @@ import {
   type PlanificationTacheInput,
 } from "./sources/index.js";
 import { FabriquePilesSources, creerResolveurEnvBot } from "./sources/pile-bot.js";
-import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, sdkVisionImageResizer, type HeavyLibrarianPorts, type PiHost, type PiHostOptions, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
+import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, createSdkVisionDescriber, sdkVisionImageResizer, type HeavyLibrarianPorts, type PiHost, type PiHostOptions, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
   AudioCppClient,
@@ -663,6 +671,28 @@ async function main(): Promise<void> {
     effectiveLlmConfig(config).heavy.thinking;
   const liveLightThinking = (): PiThinkingLevel =>
     effectiveLlmConfig(config).light.thinking;
+
+  /**
+   * ⚠️ VISION DE REPLI (`vision.fallback.model`) — UNE seule instance pour toute
+   * l'installation : le cache « une seule description par image » est donc
+   * partagé par la conversation, les canaux et le worker lourd.
+   *
+   * La référence est relue à CHAQUE usage (`apply: hot`) : choisir un autre
+   * modèle de repli dans `/config` prend effet sans redémarrage. Référence vide
+   * (défaut) ⇒ `not_configured`, donc comportement INCHANGÉ (l'image n'est pas
+   * envoyée et c'est DIT).
+   */
+  const visionDescriber = createSdkVisionDescriber({
+    cwd: env.piCwd,
+    agentDir: env.piAgentDir,
+    authPath: join(env.piAgentDir, "auth.json"),
+    modelsPath,
+    modelReference: () => config.getString("vision.fallback.model"),
+    logger,
+  });
+  /** Un repli est-il configuré ? (relu à chaud, jamais figé au démarrage) */
+  const visionRepliConfigure = (): boolean =>
+    config.getString("vision.fallback.model").trim() !== "";
   const heavyAvailableAtStart = availabilityAtStart.isAvailable("heavy");
 
   const volumes = inspectMountPoints(mountPoints(env));
@@ -2720,6 +2750,9 @@ async function main(): Promise<void> {
           // Référence RELUE à chaud (le modèle peut changer sans redémarrage).
           modelLabel: liveLightReference,
           imagesSupported: () => effectiveLlmConfig(config).light.vision,
+          // ⚠️ REPLI : `lire_fichier` d'un run distant DÉCRIT l'image quand le
+          // modèle du run ne la voit pas (même describer qu'en conversation).
+          describer: () => visionDescriber,
         },
         onFileProduced,
         // ⚠️ OUTILS DES DEUX GROUPES : `createRemoteRunTools` ne construit les outils du
@@ -2823,7 +2856,52 @@ async function main(): Promise<void> {
         notes: prepared.notes.length,
       });
     }
-    return prepared;
+    // ⚠️ VISION DE REPLI (2026-11-16) — MÊME décision que la conversation
+    // locale (`planVision`) : si le modèle de discussion VOIT les images, rien
+    // ne change (aucun appel, aucun coût). S'il ne les voit pas et qu'un repli
+    // est configuré, l'image est DÉCRITE par le modèle de repli et la
+    // description rejoint les `notes` du prompt — le rédacteur ne reçoit jamais
+    // un bloc image qu'il ne verrait pas.
+    const decision = planVision({
+      modeleVoitLesImages: effectiveLlmConfig(config).light.vision,
+      nombreImages: prepared.images.length,
+      repliConfigure: visionRepliConfigure(),
+    });
+    if (decision === "garder") return prepared;
+    if (decision === "refuser") {
+      // Aucun repli : comportement d'origine, mais DIT (jamais une image
+      // silencieusement jetée par le SDK).
+      const modele = resolveModelsFrom(effectiveLlmConfig(config)).light.reference;
+      return {
+        images: [],
+        notes: [...prepared.notes, messageSansVisionSansRepli(modele)],
+      };
+    }
+    const description = await visionDescriber(prepared.images);
+    if (description.kind === "described") {
+      return {
+        images: [],
+        notes: [
+          ...prepared.notes,
+          blocDescriptionVision({
+            modele: description.modele,
+            descriptions: description.descriptions,
+            ignorees: description.ignorees,
+          }),
+        ],
+      };
+    }
+    return {
+      images: [],
+      notes: [
+        ...prepared.notes,
+        blocEchecVisionRepli(
+          description.kind === "failed"
+            ? description.message
+            : "aucun modèle de vision de repli n'est configuré",
+        ),
+      ],
+    };
   };
 
   /**
@@ -3659,6 +3737,11 @@ async function main(): Promise<void> {
         },
         modelReference: liveHeavyReference,
         thinking: liveHeavyThinking,
+        // ⚠️ VISION DE REPLI (2026-11-16) : le worker lourd ne voit pas les
+        // images d'un modèle déclaré texte seul — `lire_fichier`/`recuperer_fichier`
+        // les font alors DÉCRIRE, au lieu de refuser (même instance qu'en
+        // conversation : une seule description par image).
+        visionFallback: visionDescriber,
         // ⚠️ ALLOWLIST (FONCTION, cf. plus haut) : elle sert À LA FOIS à la
         // politique du worker et au bloc `<outils>` de son prompt — une seule
         // liste, donc aucun texte ne peut annoncer autre chose.
@@ -5202,6 +5285,11 @@ async function main(): Promise<void> {
       // lieu d'être silencieusement remplacée par « (tool image omitted…) ».
       vision: {
         conversationReceivesImages: () => effectiveLlmConfig(config).light.vision,
+        // ⚠️ REPLI (2026-11-16) : la description est relue à CHAQUE message
+        // (`apply: hot`). Sans repli configuré, la garde `file_image_vision_disabled`
+        // refuse comme avant — le comportement d'origine est INCHANGÉ.
+        repliConfigure: visionRepliConfigure,
+        decrireImages: visionDescriber,
       },
       // TRANSFERT depuis une machine : trame de contrôle `file_received` (carte
       // cliquable « Inclure dans la discussion ») — signalement indispensable,
@@ -5389,6 +5477,23 @@ async function main(): Promise<void> {
         // « Personnalité » montre la liste réellement annoncée au modèle — jamais
         // une copie susceptible de diverger.
         outilsEffectifs: (botId: string) => [...outilsLegerDuBot(botId ?? config.botId)],
+        // ⚠️ MODÈLES DISPONIBLES (lecture seule) : la liste déroulante « Modèle
+        // de vision de repli » ne doit proposer QUE des modèles réellement
+        // présents dans `models.json` — donc les deux références résolues depuis
+        // la config courante (relues à chaud, comme le reste des modèles).
+        modelesDisponibles: () => {
+          const modeles = resolveModelsFrom(effectiveLlmConfig(config));
+          return [
+            {
+              value: modeles.light.reference,
+              label: `${modeles.light.reference} — modèle de discussion`,
+            },
+            {
+              value: modeles.heavy.reference,
+              label: `${modeles.heavy.reference} — modèle de travail`,
+            },
+          ];
+        },
         // ⚠️ PERSONNALITÉ EFFECTIVE d'un bot (lecture seule) : le texte RÉELLEMENT
         // composé, avec sa provenance. Sans elle, la page d'un bot ne pouvait que
         // montrer le défaut LIVRÉ — l'utilisateur en concluait que sa personnalité

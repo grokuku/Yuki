@@ -96,6 +96,12 @@ export type { SdkMemoryExtractorConfig } from "./sdk/memory-extractor.js";
 // `src/files/**` reste sans dépendance au SDK.
 export { sdkVisionImageResizer } from "./sdk/vision-resize.js";
 
+// VISION DE REPLI — modèle qui DÉCRIT l'image quand le modèle actif ne la voit
+// pas (`vision.fallback.model`). Port PUR (`VisionDescriber`) : le texte injecté
+// vit dans `src/files/vision-fallback.ts`, jamais ici.
+export { createSdkVisionDescriber } from "./sdk/vision-fallback.js";
+export type { SdkVisionDescriberConfig } from "./sdk/vision-fallback.js";
+
 // Récapitulatif « conversation dédiée » : écrivain SDK (session éphémère isolée).
 // Le port renvoyé (`RecapWriter`) est PUR : aucun type du SDK ne traverse la façade.
 export { createSdkRecapWriter } from "./sdk/recap-writer.js";

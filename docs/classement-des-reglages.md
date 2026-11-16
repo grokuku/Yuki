@@ -6,7 +6,7 @@ Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est 
 
 *Note : `rules` n'est pas une clé (fichier `rules.md`). La personnalité du prompt est, elle, la clé `prompts.personnalite` ; le fichier `personality.md` reste la personnalité PARTAGÉE de l'instance (compatibilité).*
 
-## 1 · Modèles & IA (21 clés)
+## 1 · Modèles & IA (22 clés)
 
 | Réglage | Clé technique | Aujourd'hui | Avis | Décision |
 |---|---|---|---|---|
@@ -22,6 +22,7 @@ Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est 
 | Niveau de réflexion — travail | `llm.heavy.thinking` | global | global — coût, pas personnalité | |
 | Reçoit les images — travail | `llm.heavy.vision` | global | global — capacité du modèle | |
 | Clé d'API — travail | `llm.heavy.apiKey` | global | global — secret d'installation | |
+| Modèle de vision de repli | `vision.fallback.model` | global | global — capacité du modèle, utilisée quand le modèle actif ne voit pas les images | |
 | Politique si clé manquante | `llm.missingKeyMode` | global | global — comportement d'installation | |
 | Attente avant délégation (ms) | `delegation.defaultDeadlineMs` | global | global — latence du tour commun | |
 | Travaux lourds simultanés | `delegation.maxConcurrent` | global | global — GPU et file partagés | |

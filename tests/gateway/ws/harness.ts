@@ -15,6 +15,7 @@ import {
   type SourcesGatewayPort,
 } from "../../../src/gateway/ws/server.js";
 import type { ServerFrame } from "../../../src/gateway/ws/protocol.js";
+import type { VisionDescriber } from "../../../src/files/vision-fallback.js";
 import type { Transport } from "../../../src/gateway/ws/transport.js";
 import type { ApprovalGatewayPort, ScreenshotGatewayPort, SecretRequestGatewayPort } from "../../../src/agents/execution.js";
 import type { SessionPinStore } from "../../../src/pi/session-pins.js";
@@ -60,8 +61,16 @@ export interface HarnessOptions extends FakePiHostOptions {
   /**
    * CAPACITÉ VISION du modèle de conversation (optionnel). Absent ⇒ comportement
    * historique (les images partent).
+   *
+   * ⚠️ `repliConfigure` / `decrireImages` (2026-11-16) : modèle de vision de
+   * repli (`vision.fallback.model`). Fournis ⇒ une image, quand le modèle ne la
+   * voit pas, est DÉCRITE au lieu d'être refusée.
    */
-  vision?: { conversationReceivesImages: () => boolean };
+  vision?: {
+    conversationReceivesImages: () => boolean;
+    repliConfigure?: () => boolean;
+    decrireImages?: VisionDescriber;
+  };
   /**
    * FUSEAU des horodatages (réglage `/config` `ui.timeZone`). Absent ⇒ `UTC`
    * (comportement de production par défaut).

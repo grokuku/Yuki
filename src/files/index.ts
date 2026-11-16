@@ -10,6 +10,7 @@ export * from "./analyze.js";
 export * from "./frame.js";
 export * from "./attachments.js";
 export * from "./vision.js";
+export * from "./vision-fallback.js";
 export * from "./retention.js";
 export * from "./store.js";
 export * from "./service.js";

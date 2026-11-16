@@ -140,6 +140,32 @@ export const GROUPS = [
     ],
   },
   {
+    id: "vision-repli",
+    // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
+    // ⚠️ INSTANCE SEULEMENT : le modèle de vision de repli est une capacité de
+    // MODÈLE, partagée par tous les bots de l'installation — jamais un trait de
+    // bot (voir `src/config/schema.ts`, portée `instance`).
+    tabs: { instance: "modeles" },
+    title: "Vision de repli",
+    fields: [
+      {
+        path: "vision.fallback.model",
+        label: "Modèle de vision de repli",
+        // ⚠️ LISTE DÉROULANTE alimentée par le SERVEUR (`GET /api/config` →
+        // `modelesDisponibles`) : uniquement des modèles réellement présents
+        // dans `models.json`. Un champ texte libre laisserait écrire une
+        // référence inexistante, découverte seulement au moment où une image
+        // arrive — c'est-à-dire trop tard.
+        kind: "select",
+        optionsSource: "modelesDisponibles",
+        options: [["", "∅ (aucun repli)"]],
+        helper:
+          "Utilisé seulement quand le modèle de discussion ou de travail ne voit " +
+          "pas les images.",
+      },
+    ],
+  },
+  {
     id: "delegation",
     // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
     tabs: { instance: "execution" },
@@ -1132,6 +1158,7 @@ export const FIELD_DEFAULTS = {
   "llm.heavy.vision": "oui",
   "llm.heavy.api": "openai-completions",
   "llm.heavy.thinking": "high",
+  "vision.fallback.model": "",
   "llm.missingKeyMode": "degrade",
   "delegation.defaultDeadlineMs": 1500,
   "delegation.maxConcurrent": 3,

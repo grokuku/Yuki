@@ -451,11 +451,11 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     const couvertes = new Set([...rendues("instance"), ...rendues("bot"), ...CONTROLES_AILLEURS]);
     const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
     expect(orphelines).toEqual([]);
-    // ⚠️ Et le compte doit être EXACT : 93 clés (92 + `prompts.personnalite`,
-    // ajoutée le 2026-11-13 — la personnalité devient une entrée SÉPARÉE du
-    // prompt système), aucune oubliée par ce contrôle.
-    expect(Object.keys(SCOPES).length).toBe(93);
-    expect(couvertes.size).toBe(93);
+    // ⚠️ Et le compte doit être EXACT : 94 clés (93 + `vision.fallback.model`,
+    // ajoutée le 2026-11-16 — modèle de vision de repli, réglage GÉNÉRAL de
+    // l'onglet « Modèles »), aucune oubliée par ce contrôle.
+    expect(Object.keys(SCOPES).length).toBe(94);
+    expect(couvertes.size).toBe(94);
     // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
     for (const [cle, fichier] of [
       ["tts.voice", "voices-panel.js"],

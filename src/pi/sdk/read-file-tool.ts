@@ -53,6 +53,11 @@ import {
   type FilesReadPort,
   type WireFile,
 } from "../../files/index.js";
+import {
+  blocDescriptionVision,
+  blocEchecVisionRepli,
+  type VisionDescriber,
+} from "../../files/vision-fallback.js";
 
 /**
  * Plafond de caractères rendus par APPEL pour un fichier texte.
@@ -83,6 +88,12 @@ export interface ReadFileToolOptions {
   imagesSupported?: boolean;
   /** Référence `provider/modelId` du modèle (message honnête en cas de refus). */
   modelLabel?: string;
+  /**
+   * ⚠️ VISION DE REPLI (`vision.fallback.model`) : quand le modèle du job ne
+   * reçoit pas les images, l'image est DÉCRITE par ce modèle et la description
+   * remplace le bloc image. Absent ⇒ refus explicite (comportement d'origine).
+   */
+  describer?: VisionDescriber;
   /** Journal d'AUDIT (métadonnées seules, jamais le contenu). */
   logger?: { info(message: string, fields?: Record<string, unknown>): void };
 }
@@ -107,6 +118,8 @@ interface ReadFileDetails {
   image_attached?: boolean;
   /** Code exact d'un refus d'image (`file_image_illegible`, …) ou `model_without_vision`. */
   image_error?: string;
+  /** `true` ⇒ l'image a été remplacée par une DESCRIPTION (modèle de vision de repli). */
+  vision_fallback?: boolean;
   /** Code exact d'un refus de lecture (`file_content_binary`, …). */
   code?: string;
 }
@@ -256,6 +269,77 @@ export function createReadFileTool(
       // ── IMAGE : la politique de VISION partagée décide (réduction éphémère,
       // refus explicite). Le modèle qui ne reçoit pas les images n'en reçoit pas.
       if (kind === "image") {
+        if (options.imagesSupported === false && options.describer !== undefined) {
+          // ⚠️ REPLI DE VISION : le modèle du job ne voit pas l'image, un modèle
+          // de repli la DÉCRIT et la description remplace le bloc image. Un échec
+          // du repli ne casse RIEN : il est dit et le job continue.
+          let prepared;
+          try {
+            prepared = await files.prepareImages([wire]);
+          } catch {
+            prepared = undefined;
+          }
+          const images = prepared !== undefined && prepared.ok ? prepared.images : [];
+          const description =
+            images.length > 0
+              ? await options.describer(images)
+              : ({ kind: "failed", message: "l'image n'a pas pu être relue" } as const);
+          options.logger?.info("files.read.opened", {
+            sessionId,
+            id: wire.id,
+            kind,
+            bytes: record.bytes,
+            mode: "image",
+            attached: false,
+            reason: "vision_fallback",
+            fallback: description.kind,
+          });
+          if (description.kind === "described") {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    blocDescriptionVision({
+                      modele: description.modele,
+                      descriptions: description.descriptions.map((entree) => ({
+                        nom: wire.name,
+                        texte: entree.texte,
+                      })),
+                      ignorees: description.ignorees,
+                    }) +
+                    "\nTu ne vois PAS l'image elle-même : la description ci-dessus " +
+                    "est la seule information dont tu disposes. Ne prétends pas " +
+                    "l'avoir vue.",
+                },
+              ],
+              details: {
+                ...base,
+                status: "read",
+                mode: "image",
+                image_attached: false,
+                vision_fallback: true,
+              },
+            };
+          }
+          const motif =
+            description.kind === "failed"
+              ? description.message
+              : "aucun modèle de vision de repli n'est configuré";
+          return refused(
+            blocEchecVisionRepli(motif) +
+              " Pour la voir directement : activer la vision du modèle dans " +
+              "/config (onglet « Modèles », réglage « Reçoit les images »).",
+            {
+              ...base,
+              status: "refused",
+              mode: "image",
+              image_attached: false,
+              image_error: "model_without_vision",
+              code: "model_without_vision",
+            },
+          );
+        }
         if (options.imagesSupported === false) {
           options.logger?.info("files.read.opened", {
             sessionId,

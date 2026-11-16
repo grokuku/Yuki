@@ -52,6 +52,7 @@ import {
   type ActionToolOptions,
 } from "./execution-tools.js";
 import { getSharedModelRuntime, liveValue, resolveSdkModel, sdkModelSupportsImages } from "./model-runtime.js";
+import type { VisionDescriber } from "../../files/vision-fallback.js";
 import { createListFilesTool } from "./list-files-tool.js";
 import { createImageTools, type ImageToolPort } from "./image-tools.js";
 import { createImageBudgetExtensionFactory } from "./image-budget-extension.js";
@@ -188,6 +189,14 @@ export interface SdkHeavyWorkerConfig {
   modelReference: string | (() => string);
   /** Niveau de réflexion du lourd (une fonction est relue à chaque job). */
   thinking: PiThinkingLevel | (() => PiThinkingLevel);
+  /**
+   * ⚠️ VISION DE REPLI (`vision.fallback.model`) : quand le modèle du job ne
+   * reçoit pas les images, ce describer fait DÉCRIRE l'image par un autre modèle
+   * et la description remplace le bloc image (`lire_fichier`,
+   * `recuperer_fichier`). La même instance qu'en conversation : une seule
+   * description par image, tous chemins confondus. Absent ⇒ refus explicite.
+   */
+  visionFallback?: VisionDescriber;
   /**
    * Allowlist d'outils du lourd (lecture + outils d'action + libraire).
    *
@@ -361,7 +370,14 @@ export interface HeavyActionToolVision {
 export function buildHeavyActionTools(
   config: Pick<
     SdkHeavyWorkerConfig,
-    "execution" | "screenshots" | "secrets" | "transfers" | "files" | "images" | "librarian"
+    | "execution"
+    | "screenshots"
+    | "secrets"
+    | "transfers"
+    | "files"
+    | "images"
+    | "librarian"
+    | "visionFallback"
   > & {
     /** Journal d'AUDIT des lectures de fichiers (facultatif : métadonnées seules). */
     logger?: PiLogger;
@@ -421,6 +437,9 @@ export function buildHeavyActionTools(
           ? {
               imagesSupported: vision.imagesSupported,
               modelLabel: vision.modelLabel,
+              ...(config.visionFallback !== undefined
+                ? { describer: config.visionFallback }
+                : {}),
             }
           : undefined,
       ),
@@ -447,7 +466,13 @@ export function buildHeavyActionTools(
         sessionId: () => lightSessionId,
         logger: config.logger,
         ...(vision !== undefined
-          ? { imagesSupported: vision.imagesSupported, modelLabel: vision.modelLabel }
+          ? {
+              imagesSupported: vision.imagesSupported,
+              modelLabel: vision.modelLabel,
+              ...(config.visionFallback !== undefined
+                ? { describer: config.visionFallback }
+                : {}),
+            }
           : {}),
       }),
     );

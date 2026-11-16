@@ -58,6 +58,11 @@ import {
   type AgentDirectoryEntry,
   type AgentHistoryEntry,
 } from "../../agents/output.js";
+import {
+  blocDescriptionVision,
+  blocEchecVisionRepli,
+  type VisionDescriber,
+} from "../../files/vision-fallback.js";
 import { frameSecretList, type SecretDirectoryPort } from "../../secrets/directory.js";
 import { isValidSecretName } from "../../secrets/references.js";
 
@@ -698,6 +703,12 @@ export interface FileTransferVision {
   imagesSupported: boolean;
   /** Référence `provider/modelId` du modèle (message honnête en cas de refus). */
   modelLabel?: string;
+  /**
+   * ⚠️ VISION DE REPLI (`vision.fallback.model`) : quand le modèle du job ne
+   * reçoit pas les images, l'image RÉCUPÉRÉE est DÉCRITE et la description
+   * remplace le bloc image. Absent ⇒ refus explicite (comportement d'origine).
+   */
+  describer?: VisionDescriber;
 }
 
 /**
@@ -742,7 +753,11 @@ function transferSummary(outcome: TransferOutcome, vision?: TransferVision): str
 type TransferVision = { kind: "attached" } | { kind: "not_an_image" } | {
   kind: "unsupported";
   modelLabel: string;
-} | { kind: "refused"; code: string; message: string } | { kind: "unavailable" };
+} | { kind: "refused"; code: string; message: string } | { kind: "unavailable" } | {
+  /** Image non transmise mais DÉCRITE par le modèle de vision de repli. */
+  kind: "described";
+  texte: string;
+};
 
 /** Note de fin du résumé : ce que le modèle voit RÉELLEMENT du fichier. */
 function fileNote(vision: TransferVision | undefined): string {
@@ -766,6 +781,14 @@ function fileNote(vision: TransferVision | undefined): string {
       return (
         `L'image de ce fichier n'est PAS transmise au modèle : ${vision.message} ` +
         `(code ${vision.code}). Tu ne la vois pas — ne prétends pas le contraire.`
+      );
+    case "described":
+      // ⚠️ La description N'EST PAS l'image : on le dit au modèle, sinon il
+      // répondrait comme s'il l'avait vue (« la capture montre… »).
+      return (
+        vision.texte +
+        " Tu ne vois PAS l'image elle-même : cette description est la seule " +
+        "information dont tu disposes. Ne prétends pas l'avoir vue."
       );
     case "unavailable":
       return (
@@ -864,8 +887,56 @@ export function createFileTransferTools(
       if (isImage && file !== undefined) {
         if (vision !== undefined && !vision.imagesSupported) {
           // ⚠️ On NE JOINT PAS l'image : le SDK la remplacerait par un
-          // « (tool image omitted…) » et le modèle croirait l'avoir vue.
-          visionNote = { kind: "unsupported", modelLabel: vision.modelLabel ?? "configuré" };
+          // « (tool image omitted…) » et le modèle croirait l'avoir vue. Un
+          // modèle de vision de repli peut la DÉCRIRE (la description remplace
+          // alors l'image dans le résultat).
+          const motifSansVision: TransferVision = {
+            kind: "unsupported",
+            modelLabel: vision.modelLabel ?? "configuré",
+          };
+          if (vision.describer !== undefined && service.prepareImage) {
+            try {
+              const prepared = await service.prepareImage(file);
+              const aDecrire = prepared.ok ? prepared.images : [];
+              if (aDecrire.length > 0) {
+                const description = await vision.describer(aDecrire);
+                visionNote =
+                  description.kind === "described"
+                    ? {
+                        kind: "described",
+                        texte: blocDescriptionVision({
+                          modele: description.modele,
+                          descriptions: description.descriptions.map((entree) => ({
+                            nom: file.name,
+                            texte: entree.texte,
+                          })),
+                          ignorees: description.ignorees,
+                        }),
+                      }
+                    : {
+                        kind: "described",
+                        texte: blocEchecVisionRepli(
+                          description.kind === "failed"
+                            ? description.message
+                            : "aucun modèle de vision de repli n'est configuré",
+                        ),
+                      };
+              } else {
+                visionNote = motifSansVision;
+              }
+            } catch (error) {
+              visionNote = {
+                kind: "described",
+                texte: blocEchecVisionRepli(
+                  `l'image n'a pas pu être relue (${
+                    error instanceof Error ? error.message : String(error)
+                  })`,
+                ),
+              };
+            }
+          } else {
+            visionNote = motifSansVision;
+          }
         } else if (!service.prepareImage) {
           visionNote = { kind: "unavailable" };
         } else {
@@ -905,6 +976,7 @@ export function createFileTransferTools(
                 ...(image !== undefined ? { image_mime_type: image.mimeType } : {}),
                 ...(visionNote.kind === "refused" ? { image_error: visionNote.code } : {}),
                 ...(visionNote.kind === "unsupported" ? { image_error: "model_without_vision" } : {}),
+                ...(visionNote.kind === "described" ? { vision_fallback: true } : {}),
               }
             : {}),
         },

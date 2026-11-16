@@ -97,3 +97,9 @@ export {
   createSdkLibrarianSynthesizer,
   type SdkLibrarianSynthesizerConfig,
 } from "./librarian-synthesizer.js";
+
+// VISION DE REPLI — un modèle DÉCLARÉ sans vision fait décrire l'image par un
+// autre modèle (`vision.fallback.model`) et reçoit la description. Le port
+// rendu (`VisionDescriber`, `src/files/vision-fallback.ts`) est PUR : aucun type
+// du SDK ne traverse cette façade.
+export { createSdkVisionDescriber, type SdkVisionDescriberConfig } from "./vision-fallback.js";

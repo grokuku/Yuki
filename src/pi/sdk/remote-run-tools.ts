@@ -74,6 +74,7 @@ import { createHeritageTools } from "./heritage-tools.js";
 import { createImageTools, type ImageToolPort } from "./image-tools.js";
 import { createLibrarianTools, type LibrarianToolsConfig } from "./librarian-tools.js";
 import { createListFilesTool } from "./list-files-tool.js";
+import type { VisionDescriber } from "../../files/vision-fallback.js";
 import { createReadFileTool } from "./read-file-tool.js";
 import { createSendFileTools } from "./send-file-tool.js";
 
@@ -100,6 +101,12 @@ export interface RemoteRunVision {
   modelLabel: () => string;
   /** Le modèle accepte-t-il les images ? (`llm.light.vision`). */
   imagesSupported: () => boolean;
+  /**
+   * ⚠️ VISION DE REPLI (`vision.fallback.model`) : quand le modèle du run ne
+   * reçoit pas les images, l'image lue via `lire_fichier` est DÉCRITE et la
+   * description remplace le bloc image. Absent ⇒ refus explicite.
+   */
+  describer?: () => VisionDescriber | undefined;
 }
 
 export interface RemoteRunToolPorts {
@@ -281,6 +288,9 @@ export function buildRemoteRunTools(ports: RemoteRunToolPorts): ToolDefinition[]
           ? {
               imagesSupported: ports.vision.imagesSupported(),
               modelLabel: ports.vision.modelLabel(),
+              ...(ports.vision.describer?.() !== undefined
+                ? { describer: ports.vision.describer?.() as VisionDescriber }
+                : {}),
             }
           : {}),
       }),

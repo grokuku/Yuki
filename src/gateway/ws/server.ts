@@ -39,6 +39,11 @@ import type {
 } from "../../agents/execution.js";
 import type { ComfyImageView, ImagesGatewayPort } from "../../comfy/types.js";
 import type { FilesGatewayPort, FileImageContent } from "../../files/types.js";
+import {
+  blocDescriptionVision,
+  blocEchecVisionRepli,
+  type VisionDescriber,
+} from "../../files/vision-fallback.js";
 import type { FileReceivedView } from "../../agents/transfer.js";
 import type { Logger } from "../../observability/logger.js";
 import { TtsPipeline, type TtsPipelineDeps } from "../../tts/index.js";
@@ -187,8 +192,20 @@ export interface WsTransportOptions {
    * `"image"` dans `input`, le SDK remplace la pièce jointe par
    * « (tool image omitted: model does not support images) », et l'utilisateur
    * croirait que le modèle a vu son image. Jamais de silence.
+   *
+   * ⚠️ EXCEPTION (2026-11-16) : si un MODÈLE DE VISION DE REPLI est configuré
+   * (`vision.fallback.model`), le message n'est plus refusé — l'image est
+   * DÉCRITE par ce modèle et la description, clairement identifiée, remplace
+   * l'image dans le message (l'utilisateur voit donc ce que le modèle reçoit).
+   * Les deux ports ci-dessous sont ABSENTS ⇒ refus (comportement d'origine).
    */
-  vision?: { conversationReceivesImages: () => boolean };
+  vision?: {
+    conversationReceivesImages: () => boolean;
+    /** Un modèle de vision de repli est-il configuré ? (relu à chaque message) */
+    repliConfigure?: () => boolean;
+    /** Décrit des images avec le modèle de repli (`vision.fallback.model`). */
+    decrireImages?: VisionDescriber;
+  };
   /**
    * TRANSFERT de fichiers depuis une machine appairée : la trame de CONTRÔLE
    * `file_received` signale à l'utilisateur qu'un fichier est désormais sur le
@@ -2478,8 +2495,13 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       // remplacerait par « (tool image omitted…) ») : on REFUSE le message et on
       // dit quoi activer — jamais une image « envoyée » qui n'arrive nulle part.
       const attachedImages = outcome.files.filter((file) => file.kind === "image");
+      // ⚠️ VISION DE REPLI : le repli ne compte que s'il est RÉELLEMENT câblé ET
+      // configuré ; sinon on retombe exactement sur la garde d'origine.
+      const decrireImages = options.vision?.decrireImages;
+      const repliActif =
+        decrireImages !== undefined && options.vision?.repliConfigure?.() === true;
       if (attachedImages.length > 0 && options.vision !== undefined) {
-        if (!options.vision.conversationReceivesImages()) {
+        if (!options.vision.conversationReceivesImages() && !repliActif) {
           sendDirect(client, {
             type: "error",
             code: "file_image_vision_disabled",
@@ -2487,6 +2509,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
               "Le modèle de conversation est déclaré SANS vision : l'image n'est " +
               "pas envoyée et le message n'a pas été expédié. Activez « Reçoit les " +
               "images (vision) » pour ce modèle dans /config (onglet « Modèles »), " +
+              "ou choisissez un « Modèle de vision de repli » dans ce même onglet, " +
               "ou retirez l'image du message.",
           });
           return;
@@ -2501,10 +2524,42 @@ export function createWsTransport(options: WsTransportOptions): Transport {
         });
         return;
       }
-      if (preparedImages.images.length > 0) images = preparedImages.images;
+      // ⚠️ MODÈLE SANS VISION + IMAGE + REPLI CONFIGURÉ : l'image ne part PAS
+      // (le SDK la jetterait), elle est DÉCRITE par le modèle de repli et la
+      // description est AJOUTÉE AU TEXTE du message — donc visible dans la
+      // conversation (l'utilisateur lit ce que le modèle a reçu) et lue par le
+      // modèle à la place de l'image. Un échec du repli ne perd JAMAIS le tour :
+      // il est dit, et le message part sans l'image.
+      let blocVision: string | undefined;
+      if (preparedImages.images.length > 0) {
+        const recoitLesImages =
+          options.vision === undefined || options.vision.conversationReceivesImages();
+        if (recoitLesImages) {
+          images = preparedImages.images;
+        } else if (repliActif && decrireImages !== undefined) {
+          const description = await decrireImages(preparedImages.images);
+          blocVision =
+            description.kind === "described"
+              ? blocDescriptionVision({
+                  modele: description.modele,
+                  descriptions: description.descriptions,
+                  ignorees: description.ignorees,
+                })
+              : blocEchecVisionRepli(
+                  description.kind === "failed"
+                    ? description.message
+                    : "aucun modèle de vision de repli n'est configuré",
+                );
+        } else {
+          blocVision = blocEchecVisionRepli(
+            "aucun modèle de vision de repli n'est configuré",
+          );
+        }
+      }
       const parts = [text.trim(), ...outcome.markers].filter((part) => part.length > 0);
       text = parts.join("\n\n");
       if (outcome.block !== undefined) text = `${text}\n\n${outcome.block}`;
+      if (blocVision !== undefined) text = `${text}\n\n${blocVision}`;
     }
     let handle;
     try {

@@ -278,6 +278,61 @@ describe("outil `lire_fichier`", () => {
     });
   });
 
+  it("⚠️ MODÈLE TEXTE SEUL + REPLI de vision ⇒ l'image est DÉCRITE (pas refusée)", async () => {
+    // ⚠️ LE TEST DU LOURD : quand le modèle du job ne voit pas les images, un
+    // modèle de vision de repli (`vision.fallback.model`) décrit l'image ; la
+    // description remplace le bloc image, et le texte dit que ce n'est PAS l'image.
+    const harness = makeHarness();
+    const wire = save(harness, PNG, { name: "photo.png", mimeType: "image/png" });
+    const [tool] = createReadFileTool(harness.service, {
+      imagesSupported: false,
+      modelLabel: "llm-heavy/texte-seul",
+      describer: async () => ({
+        kind: "described",
+        modele: "llm-light/vision",
+        descriptions: [{ texte: "Un carré blanc sur fond transparent." }],
+        ignorees: [],
+      }),
+    });
+
+    const { blocks, text, details } = await call(tool!, { identifiant: wire.id });
+    expect(blocks.some((block) => block.type === "image")).toBe(false);
+    expect(text).toContain("Description d'image par le modèle de vision de repli");
+    expect(text).toContain("llm-light/vision");
+    expect(text).toContain("Un carré blanc sur fond transparent.");
+    expect(text).toContain("photo.png");
+    // ⚠️ Le modèle apprend qu'il ne voit PAS l'image (aucun mensonge possible).
+    expect(text).toContain("Tu ne vois PAS l'image");
+    expect(details).toMatchObject({
+      status: "read",
+      image_attached: false,
+      vision_fallback: true,
+    });
+  });
+
+  it("⚠️ REPLI en ÉCHEC ⇒ refus explicite (le job continue, rien n'est inventé)", async () => {
+    const harness = makeHarness();
+    const wire = save(harness, PNG, { name: "photo.png", mimeType: "image/png" });
+    const [tool] = createReadFileTool(harness.service, {
+      imagesSupported: false,
+      modelLabel: "llm-heavy/texte-seul",
+      describer: async () => ({
+        kind: "failed",
+        message: "le modèle de vision de repli « llm-light/x » n'a pas répondu",
+      }),
+    });
+
+    const { blocks, text, details } = await call(tool!, { identifiant: wire.id });
+    expect(blocks).toHaveLength(1);
+    expect(text).toContain("Impossible d'analyser l'image");
+    expect(text).toContain("n'a pas répondu");
+    expect(details).toMatchObject({
+      status: "refused",
+      image_attached: false,
+      image_error: "model_without_vision",
+    });
+  });
+
   it("image REFUSÉE par la politique de vision ⇒ pas de bloc image, cause exacte", async () => {
     const harness = makeHarness({ imageMaxBytes: 2_000 });
     // Image 3 000 px : elle devrait être réduite ; le réducteur est ABSENT (aucun

@@ -270,6 +270,31 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
     secret: true,
     env: "YUKI_LLM_HEAVY_API_KEY",
   },
+  // --- Vision de repli ------------------------------------------------------
+  // ⚠️ PORTÉE `instance` (et non par bot) : la capacité de voir les images est
+  // une propriété du MODÈLE, pas d'un bot — deux bots d'une même installation
+  // partagent les mêmes modèles (`llm.light.*` / `llm.heavy.*`). C'est donc un
+  // réglage GÉNÉRAL, à côté des modèles, pas une personnalité de bot.
+  //
+  // ⚠️ CE QUE ÇA RÉPARE : un modèle déclaré sans vision (voir ci-dessus) ne
+  // reçoit aucune image ; jusqu'ici la seule issue était de refuser l'image.
+  // Avec un modèle de repli, l'image est DÉCRITE par lui et la DESCRIPTION est
+  // donnée au modèle actif (clairement identifiée, voir
+  // `src/files/vision-fallback.ts`).
+  //
+  // Valeur = référence `provider/modelId` d'un modèle présent dans `models.json`
+  // (liste réellement disponible servie par `GET /api/config`,
+  // `modelesDisponibles` ⇒ la liste déroulante ne propose jamais un modèle
+  // inexistant). VIDE (défaut) ⇒ AUCUN repli : comportement inchangé (l'image
+  // n'est pas envoyée et le message le DIT).
+  //
+  // `apply: hot` : la référence est relue à CHAQUE image, sans redémarrage.
+  "vision.fallback.model": {
+    scope: "instance",
+    type: "string",
+    default: "",
+    apply: "hot",
+  },
   "llm.missingKeyMode": {
     scope: "instance",
     type: "enum",
