@@ -57,6 +57,11 @@ export interface MmFixture {
   ajouterCanal(id: string, displayName: string): void;
   /** Nombre de clients WebSocket ouverts (attente de connexion). */
   readonly open: number;
+  /**
+   * Ferme BRUTALEMENT les sockets ouvertes (coupure réseau, NAT expiré, redémarrage du
+   * serveur) : le client doit se reconnecter TOUT SEUL, sans redémarrage du processus.
+   */
+  couperConnexions(): void;
 }
 
 export interface MmFixtureOptions {
@@ -228,6 +233,11 @@ export async function startMmFixture(
     },
     ajouterCanal(id, displayName) {
       canaux.push({ id, display_name: displayName, type: "O" });
+    },
+    couperConnexions() {
+      // ⚠️ `terminate` (pas `close`) : c'est une COUPURE, pas une fermeture négociée —
+      // exactement ce que produit un NAT expiré ou un serveur qui redémarre.
+      for (const client of wss.clients) client.terminate();
     },
   };
 }

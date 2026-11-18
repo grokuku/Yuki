@@ -22,6 +22,7 @@
 
 import { MattermostClient, type MattermostClientLogger } from "./client.js";
 import { MattermostSocket, type MattermostSocketLogger } from "./ws.js";
+import { SuiviConnexion, libelleReconnexion } from "../reconnexion.js";
 import {
   authorNameOf,
   conversationIdOfChannel,
@@ -129,11 +130,22 @@ export interface MattermostAdapterDeps {
     on(event: string, listener: (...args: unknown[]) => void): unknown;
     send(data: string): void;
     close(code?: number, reason?: string): void;
+    ping?(data?: unknown): void;
     terminate?(): void;
     removeAllListeners?(): unknown;
   };
   random?: () => number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Cadence de la SONDE DE VIE du temps réel (défaut 25 s) — réglable pour les tests
+   * uniquement : en production, la valeur par défaut est celle du serveur Mattermost.
+   */
+  battementMs?: number;
+  /**
+   * Inactivité TOLÉRÉE avant de déclarer la socket morte (défaut 90 s) — réglable pour
+   * les tests uniquement.
+   */
+  inactiviteMs?: number;
   /** Générateur de réponse (`undefined` ⇒ réponse NON générée, et c'est DIT). */
   generateReply?: MattermostReplyGenerator;
   /**
@@ -249,6 +261,14 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
    */
   private readonly envois = new ConversationSendQueue();
 
+  /**
+   * Suit les transitions de connexion du temps réel (jamais les notifications banales).
+   * ⚠️ Une REPRISE déclenche la resynchronisation du miroir : les messages publiés
+   * pendant la coupure ne sont arrivés par aucune socket (bug du 2026-11-18 : le bot
+   * passait « absent » puis revenait sans jamais rattraper son retard).
+   */
+  private readonly suiviConnexion = new SuiviConnexion();
+
   private readonly reponses: ReplyLimiter;
   /**
    * INDICATEUR « en train d'écrire », UNE boucle par canal.
@@ -281,9 +301,16 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
       // ⚠️ ADHÉSION : le bot rejoint un canal (ou une équipe) ⇒ la liste des canaux
       // a changé. On ré-énumère, sinon le canal reste invisible jusqu'au redémarrage.
       onMembership: () => this.planifierResynchronisation(),
+      // ⚠️ REPRISE APRÈS COUPURE : la ré-authentification du temps réel n'apporte QUE
+      // les événements suivants — les messages publiés pendant la panne n'arrivent par
+      // aucune socket. On relance donc la synchronisation du miroir à chaque reprise
+      // (coalescée, `backfillAll` saute les canaux déjà importés).
+      onStateChange: (status) => this.onSocketState(status.connecte),
       ...(deps.logger ? { logger: deps.logger } : {}),
       ...(deps.createSocket ? { createSocket: deps.createSocket } : {}),
       ...(deps.random ? { random: deps.random } : {}),
+      ...(deps.battementMs !== undefined ? { battementMs: deps.battementMs } : {}),
+      ...(deps.inactiviteMs !== undefined ? { inactiviteMs: deps.inactiviteMs } : {}),
     });
     this.sync = new ChatSyncService({
       platform: this,
@@ -358,7 +385,15 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     const rate = this.client.rateState();
     if (rate.ralenti) raisons.push(rate.raison ?? "Le serveur Mattermost limite le débit (429).");
     const socketStatus = this.socket.status();
+    // ⚠️ Une reconnexion EN COURS doit se lire telle quelle (« essai N » + motif), sinon
+    // l'interface ne montre qu'un « absent » muet et l'utilisateur ne peut rien en faire.
+    if (socketStatus.reconnexion !== undefined) {
+      raisons.push(libelleReconnexion(socketStatus.reconnexion));
+    }
     if (socketStatus.derniereErreur !== undefined) raisons.push(socketStatus.derniereErreur);
+    if (socketStatus.derniereCoupure !== undefined && socketStatus.reconnexion === undefined) {
+      raisons.push(`Dernière coupure : ${socketStatus.derniereCoupure}`);
+    }
     if (this.derniereErreur !== undefined) raisons.push(this.derniereErreur);
     if (this.derniereAvertissement !== undefined) raisons.push(this.derniereAvertissement);
     if (this.avertissementCanaux !== undefined) raisons.push(this.avertissementCanaux);
@@ -640,6 +675,21 @@ export class MattermostChatAdapter implements ChatAdapter, ChatSyncPlatform {
     }
     if (out.length > 0) this.avertissementCanaux = undefined;
     return out;
+  }
+
+  /**
+   * Réagit à un changement d'état du TEMPS RÉEL.
+   *
+   * ⚠️ Seules les VRAIES transitions comptent : `onStateChange` est appelé à chaque
+   * tentative, à chaque coupure et à chaque authentification. Une `reprise` relance la
+   * synchronisation du miroir (rattrapage de la coupure) — sans quoi le bot reviendrait
+   * « en ligne » en ayant perdu tous les messages publiés pendant la panne.
+   */
+  private onSocketState(connecte: boolean): void {
+    const transition = this.suiviConnexion.observer(connecte);
+    if (transition !== "reprise") return;
+    this.deps.logger?.info("chat.mattermost.temps_reel_reprise", {});
+    this.planifierResynchronisation();
   }
 
   /**

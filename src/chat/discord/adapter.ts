@@ -34,6 +34,7 @@
 import type { ChatAttachmentPort } from "../attachments.js";
 import { DiscordClient, type DiscordClientLogger } from "./client.js";
 import { DISCORD_INTENT_CONTENT_REASON, DiscordSocket, type DiscordSocketLogger } from "./ws.js";
+import { SuiviConnexion, libelleReconnexion } from "../reconnexion.js";
 import {
   conversationIdOfDiscordChannel,
   discordMessageToRemoteMessage,
@@ -116,6 +117,13 @@ export const DISCORD_NOT_CONFIGURED_REASON =
  */
 export const DISCORD_MESSAGE_CONTENT_MISSING = DISCORD_INTENT_CONTENT_REASON;
 
+/**
+ * Fenêtre de COALESCENCE d'une resynchronisation demandée par le temps réel (reprise).
+ * ⚠️ Une reprise peut produire plusieurs notifications d'état d'affilée : `backfillAll`
+ * interroge l'API, on ne le lance donc jamais deux fois pour la même reprise.
+ */
+export const DISCORD_RESYNC_DEBOUNCE_MS = 3_000;
+
 /** Ce dont l'adaptateur a besoin du reste du programme (aucun secret en dur). */
 export interface DiscordAdapterDeps {
   /** Jeton du bot, lu dans le coffre à chaud. ⚠️ Jamais journalisé. */
@@ -148,6 +156,11 @@ export interface DiscordAdapterDeps {
     removeAllListeners?(): unknown;
   };
   random?: () => number;
+  /**
+   * Délai maximal d'attente de `HELLO` après l'ouverture (défaut 15 s) — réglable pour
+   * les tests uniquement : une socket muette doit être déclarée morte, pas attendue.
+   */
+  helloTimeoutMs?: number;
   /** Générateur de réponse (`undefined` ⇒ réponse NON générée, et c'est DIT). */
   generateReply?: ChatReplyGenerator;
   /**
@@ -292,6 +305,18 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
 
   private readonly reponses: ReplyLimiter;
   /**
+   * Suit les transitions de connexion de la passerelle (jamais les notifications banales).
+   * ⚠️ Une REPRISE déclenche la resynchronisation du miroir : les messages publiés pendant
+   * la coupure ne sont arrivés par aucune socket (bug du 2026-11-18).
+   */
+  private readonly suiviConnexion = new SuiviConnexion();
+  /**
+   * RESYNCHRONISATION DEMANDÉE PAR LE TEMPS RÉEL (reprise après coupure).
+   * Coalescée : `backfillAll` interroge l'API, on ne superpose jamais deux passages.
+   */
+  private resynchronisationPlanifiee: ReturnType<typeof setTimeout> | null = null;
+  private resynchronisationEnCours = false;
+  /**
    * INDICATEUR « en train d'écrire », UNE boucle par salon.
    *
    * ⚠️ Créé dans le constructeur (le client REST doit exister) et arrêté à la
@@ -333,6 +358,11 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
           );
         }
       },
+      // ⚠️ REPRISE APRÈS COUPURE : la session reprise ne rapporte que les événements
+      // suivants — on relance donc la synchronisation du miroir (coalescée) à chaque
+      // reprise, sinon le bot reviendrait en ligne en ayant perdu la panne entière.
+      onStateChange: (status) => this.onSocketState(status.connecte),
+      ...(deps.helloTimeoutMs !== undefined ? { helloTimeoutMs: deps.helloTimeoutMs } : {}),
     });
     this.sync = new ChatSyncService({
       platform: this,
@@ -379,8 +409,61 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
   async disconnect(): Promise<void> {
     // ⚠️ Aucun minuteur orphelin : un indicateur en cours est arrêté avec la connexion.
     this.indicateurs.arreterTout("erreur");
+    if (this.resynchronisationPlanifiee !== null) {
+      clearTimeout(this.resynchronisationPlanifiee);
+      this.resynchronisationPlanifiee = null;
+    }
     await this.socket.stop();
     await this.sync.stop();
+  }
+
+  /**
+   * Réagit à un changement d'état de la PASSERELLE.
+   *
+   * ⚠️ Seules les VRAIES transitions comptent : `onStateChange` est appelé à chaque
+   * tentative, coupure, `READY` et `RESUMED`. Une `reprise` relance la synchronisation du
+   * miroir (rattrapage de la coupure).
+   */
+  private onSocketState(connecte: boolean): void {
+    const transition = this.suiviConnexion.observer(connecte);
+    if (transition !== "reprise") return;
+    this.deps.logger?.info("chat.discord.temps_reel_reprise", {});
+    this.planifierResynchronisation();
+  }
+
+  /**
+   * RESYNCHRONISE le miroir SANS fermer la passerelle (idempotent côté `ChatSyncService`).
+   *
+   * ⚠️ `sync.start()` refait identité + énumération + `backfillAll`, qui saute les canaux
+   * déjà importés : seuls les messages manqués sont ajoutés, sans doublon.
+   */
+  async resynchroniser(): Promise<void> {
+    if (!this.client.isConfigured()) return;
+    if (this.resynchronisationEnCours) return;
+    this.resynchronisationEnCours = true;
+    try {
+      await this.sync.start();
+      this.deps.logger?.info("chat.discord.resynchronisee", {
+        canaux: this.deps.store.conversations().length,
+      });
+    } finally {
+      this.resynchronisationEnCours = false;
+    }
+  }
+
+  /** Resynchronisation DIFFÉRÉE et COALESCÉE (reprise du temps réel). */
+  planifierResynchronisation(delaiMs = DISCORD_RESYNC_DEBOUNCE_MS): void {
+    if (this.resynchronisationPlanifiee !== null) return;
+    const handle = setTimeout(() => {
+      this.resynchronisationPlanifiee = null;
+      void this.resynchroniser().catch((error: unknown) => {
+        this.deps.logger?.warn("chat.discord.resynchronisation_echec", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }, delaiMs);
+    (handle as { unref?: () => void }).unref?.();
+    this.resynchronisationPlanifiee = handle;
   }
 
   status(): ChatAdapterStatus {
@@ -396,7 +479,15 @@ export class DiscordChatAdapter implements ChatAdapter, ChatSyncPlatform {
     const rate = this.client.rateState();
     if (rate.ralenti) raisons.push(rate.raison ?? "Discord limite le débit (429).");
     const socketStatus = this.socket.status();
+    // ⚠️ Une reconnexion EN COURS doit se lire telle quelle (« essai N » + motif), sinon
+    // l'interface ne montre qu'un « absent » muet et l'utilisateur ne peut rien en faire.
+    if (socketStatus.reconnexion !== undefined) {
+      raisons.push(libelleReconnexion(socketStatus.reconnexion));
+    }
     if (socketStatus.derniereErreur !== undefined) raisons.push(socketStatus.derniereErreur);
+    if (socketStatus.derniereCoupure !== undefined && socketStatus.reconnexion === undefined) {
+      raisons.push(`Dernière coupure : ${socketStatus.derniereCoupure}`);
+    }
     if (this.derniereErreur !== undefined) raisons.push(this.derniereErreur);
     if (this.derniereAvertissement !== undefined) raisons.push(this.derniereAvertissement);
     const synchro = this.sync.status();

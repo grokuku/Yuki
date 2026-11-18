@@ -19,9 +19,16 @@
  *    `MESSAGE_CONTENT` et on DIT pourquoi les contenus seront vides ;
  *  - `7` (`RECONNECT`) et `9` (`INVALID_SESSION`) : reprise ou nouvelle session.
  *
- * ⚠️ Backoff BORNÉ (1 s → 60 s) avec gigue et compteur VISIBLE (`tentatives`) : jamais de
- * reconnexion silencieuse à l'infini. Le rattrapage REST périodique reste la ceinture de
- * sécurité.
+ * ⚠️ Backoff PLAFONNÉ EN DÉLAI (1 s → 60 s) avec gigue et compteur VISIBLE (`tentatives`)
+ * et JAMAIS d'abandon définitif (corrigé le 2026-11-18 : l'ancienne version s'arrêtait
+ * après `maxAttempts` essais, donc une coupure prolongée laissait le bot hors ligne pour
+ * de bon — même symptôme que Mattermost). Le rattrapage REST périodique reste la
+ * ceinture de sécurité.
+ *
+ * ⚠️ MORT DÉTECTÉE : sans `HEARTBEAT_ACK` (op 11) au battement suivant, la connexion est
+ * « zombifiée » (half-open) ⇒ on la coupe et on reprend, comme la doc l'exige. Sans
+ * `HELLO` (op 10) dans le délai imparti, la même conclusion s'impose : la socket est
+ * ouverte mais la passerelle ne répond pas.
  *
  * ⚠️ Le jeton ne circule QUE dans les trames `IDENTIFY`/`RESUME`, qui vont au serveur de
  * Discord. Il n'est jamais journalisé et n'apparaît dans aucun message d'état.
@@ -29,6 +36,15 @@
 
 import { WebSocket } from "ws";
 
+import {
+  PHRASE_SERVEUR_INJOIGNABLE,
+  classifierMotif,
+  delaiRelance,
+  motifAffiche,
+  texteRaisonFermeture,
+  type MotifCoupure,
+  type ReconnexionEnCours,
+} from "../reconnexion.js";
 import {
   DISCORD_GATEWAY_URL,
   DISCORD_INTENTS_STANDARD,
@@ -77,10 +93,20 @@ export interface DiscordSocketOptions {
   baseDelayMs?: number;
   /** Délai MAXIMAL entre deux tentatives (défaut 60 s). */
   maxDelayMs?: number;
-  /** Nombre maximal de tentatives consécutives avant arrêt (défaut 20). */
+  /**
+   * ⚠️ PLUS UTILISÉ : la reconnexion ne s'arrête JAMAIS (correctif du 2026-11-18).
+   * Conservé pour ne pas casser les appelants existants ; `status().abandonne` ne vaut
+   * plus `true` que pour un ARRÊT NET voulu par Discord (jeton refusé, intent interdit).
+   */
   maxAttempts?: number;
   /** Gigue ajoutée au backoff (défaut 250 ms). */
   jitterMs?: number;
+  /**
+   * Délai maximal pour recevoir `HELLO` après l'ouverture (défaut 15 s).
+   * ⚠️ Sans cette borne, une socket ouverte mais muette resterait en `connexion` pour
+   * toujours : aucun battement n'est encore programmé avant `HELLO`.
+   */
+  helloTimeoutMs?: number;
   /**
    * Demander l'intent PRIVILÉGIÉ `MESSAGE_CONTENT` (défaut `true`).
    *
@@ -114,6 +140,13 @@ export interface DiscordSocketStatus {
   prochainEssaiMs?: number;
   /** Dernière erreur, en français (jamais un jeton, jamais une URL complète). */
   derniereErreur?: string;
+  /** Motif de la DERNIÈRE coupure (conservé après une reprise réussie), en français. */
+  derniereCoupure?: string;
+  /**
+   * Reconnexion PROGRAMMÉE : essai + motif, pour que l'interface dise « Reconnexion en
+   * cours (essai N) » au lieu d'un « absent » muet.
+   */
+  reconnexion?: ReconnexionEnCours;
   /** `true` quand le nombre maximal de tentatives est atteint ou un arrêt net demandé. */
   abandonne: boolean;
   /** `true` quand l'intent `MESSAGE_CONTENT` n'a PAS pu être demandé (4014). */
@@ -143,7 +176,17 @@ export class DiscordSocket {
   private tentatives = 0;
   private prochainEssaiMs: number | undefined;
   private derniereErreur: string | undefined;
+  private derniereCoupure: string | undefined;
+  private reconnexion: ReconnexionEnCours | undefined;
   private abandonne = false;
+  /**
+   * Début de la panne EN COURS (première coupure non encore réparée).
+   * ⚠️ Sert à afficher « depuis 8 h 12 min » au lieu d'« essai 480 » quand la passerelle
+   * reste injoignable des heures. Remis à `undefined` dès qu'une session est prête.
+   */
+  private debutPanneMs: number | undefined;
+  /** Dernière classe de motif JOURNALISÉE (évite un journal identique à chaque essai). */
+  private derniereClasseMotif: MotifCoupure | undefined;
   private intentContentManquant = false;
   private reprise = false;
   /** Intent privilégié effectivement demandé (bascule à `false` après un 4014). */
@@ -151,6 +194,8 @@ export class DiscordSocket {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private firstBeatTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** ⚠️ Attente de `HELLO` : sans elle, une socket muette resterait « en connexion » à vie. */
+  private helloTimer: ReturnType<typeof setTimeout> | null = null;
   private awaitingAck = false;
   /** Dernier numéro de séquence reçu (`s`), pour les battements et la reprise. */
   private sequence: number | null = null;
@@ -172,6 +217,8 @@ export class DiscordSocket {
       tentatives: this.tentatives,
       ...(this.prochainEssaiMs !== undefined ? { prochainEssaiMs: this.prochainEssaiMs } : {}),
       ...(this.derniereErreur !== undefined ? { derniereErreur: this.derniereErreur } : {}),
+      ...(this.derniereCoupure !== undefined ? { derniereCoupure: this.derniereCoupure } : {}),
+      ...(this.reconnexion !== undefined ? { reconnexion: { ...this.reconnexion } } : {}),
       abandonne: this.abandonne,
       intentContentManquant: this.intentContentManquant,
       reprise: this.reprise,
@@ -185,19 +232,32 @@ export class DiscordSocket {
     this.abandonne = false;
     this.tentatives = 0;
     this.derniereErreur = undefined;
+    this.derniereCoupure = undefined;
+    this.reconnexion = undefined;
     this.sessionId = undefined;
     this.sequence = null;
     this.resumeUrl = undefined;
+    this.debutPanneMs = undefined;
+    this.derniereClasseMotif = undefined;
     this.open();
   }
 
-  /** Ferme la connexion et ANNULE toute reconnexion (idempotent). */
+  /**
+   * Ferme la connexion et ANNULE toute reconnexion (idempotent).
+   *
+   * ⚠️ `running = false` est ce qui distingue un arrêt VOLONTAIRE (bouton Stop, plateforme
+   * désactivée, `rafraichirBot` qui détruit l'adaptateur) d'une panne : plus aucune
+   * branche ne reprogramme quoi que ce soit.
+   */
   async stop(): Promise<void> {
     this.running = false;
     this.clearTimers();
     this.closeSocket(1000, "arret");
     this.sessionReady = false;
     this.prochainEssaiMs = undefined;
+    this.reconnexion = undefined;
+    this.debutPanneMs = undefined;
+    this.derniereClasseMotif = undefined;
     this.notify();
   }
 
@@ -205,12 +265,16 @@ export class DiscordSocket {
 
   private open(): void {
     this.prochainEssaiMs = undefined;
+    this.reconnexion = undefined;
     const token = this.options.token()?.trim() ?? "";
     if (token === "") {
-      this.derniereErreur =
-        "Le jeton du bot Discord n'est pas enregistré : le temps réel est arrêté " +
-        "(la synchronisation périodique reste active).";
-      this.notify();
+      // ⚠️ Le jeton est RELU à chaque tentative : un jeton enregistré pendant la panne se
+      // raccroche tout seul. On ne s'arrête pas pour autant.
+      this.derniereCoupure =
+        "Le jeton du bot Discord n'est pas enregistré : le temps réel ne peut pas se " +
+        "connecter (la synchronisation périodique reste active).";
+      this.derniereErreur = this.derniereCoupure;
+      this.scheduleReconnect();
       return;
     }
     // ⚠️ Reprise : on utilise `resume_gateway_url` (doc : sinon « disconnects at a higher
@@ -236,6 +300,9 @@ export class DiscordSocket {
     socket.on("open", () => {
       if (this.socket !== socket) return;
       // La session s'établit à `HELLO` : on n'identifie pas avant de l'avoir reçu.
+      // ⚠️ Mais on ne l'attend pas INDÉFINIMENT : une socket ouverte et muette est morte
+      // pour l'usage (aucun battement n'est programmé avant `HELLO`).
+      this.surveillerHello(socket);
     });
 
     socket.on("message", (raw: unknown) => {
@@ -250,7 +317,10 @@ export class DiscordSocket {
 
     socket.on("close", (code: unknown, reason: unknown) => {
       if (this.socket !== socket) return;
-      this.onClose(typeof code === "number" ? code : undefined, typeof reason === "string" ? reason : undefined);
+      this.onClose(
+        typeof code === "number" ? code : undefined,
+        texteRaisonFermeture(reason),
+      );
     });
   }
 
@@ -269,6 +339,7 @@ export class DiscordSocket {
       case 10: {
         const interval = Number((frame.d as { heartbeat_interval?: unknown })?.heartbeat_interval);
         const cadence = Number.isFinite(interval) && interval > 0 ? interval : 41_250;
+        this.clearHelloTimer();
         this.startHeartbeat(cadence);
         if (this.sessionId !== undefined && this.sequence !== null) {
           this.sendResume();
@@ -285,26 +356,31 @@ export class DiscordSocket {
         // Le serveur DEMANDE un battement immédiat (doc : « send back immediately »).
         this.sendHeartbeat();
         return;
-      case 7:
+      case 7: {
         // `RECONNECT` : on reprend la session, sans nouvel `IDENTIFY`.
-        this.derniereErreur = "Discord a demandé une reconnexion : reprise de la session.";
-        this.reconnectNow();
+        // ⚠️ C'est une coupure DEMANDÉE par Discord : elle est mémorisée comme motif, donc
+        // lisible ensuite dans l'état (l'utilisateur voit pourquoi le bot a repris).
+        this.derniereCoupure = "Discord a demandé une reconnexion : reprise de la session.";
+        this.derniereErreur = this.derniereCoupure;
+        this.reconnectNow({ motif: this.derniereCoupure });
         return;
+      }
       case 9: {
         // `INVALID_SESSION` : `d === true` ⇒ reprise possible, sinon session neuve.
         const resumable = (frame.d as boolean | undefined) === true;
-        this.sessionReady = false;
         if (!resumable) {
           this.sessionId = undefined;
           this.sequence = null;
           this.resumeUrl = undefined;
           this.reprise = false;
         }
-        this.derniereErreur = resumable
+        this.derniereCoupure = resumable
           ? "Discord a invalidé la session (reprise possible) : reprise en cours."
           : "Discord a invalidé la session : nouvelle session (les événements manqués " +
             "seront rattrapés par la synchronisation périodique).";
-        this.reconnectNow();
+        this.derniereErreur = this.derniereCoupure;
+        this.sessionReady = false;
+        this.reconnectNow({ motif: this.derniereCoupure });
         return;
       }
       case 0:
@@ -329,11 +405,20 @@ export class DiscordSocket {
       }
       this.sessionReady = true;
       this.reprise = false;
+      const essais = this.tentatives;
       this.tentatives = 0;
+      this.reconnexion = undefined;
+      this.prochainEssaiMs = undefined;
+      // ⚠️ La panne est FINIE : la prochaine mesurera sa propre durée depuis zéro.
+      this.debutPanneMs = undefined;
+      this.derniereClasseMotif = undefined;
       // ⚠️ Un intent manquant reste DIT après une reconnexion réussie : sinon la cause du
       // « bot muet » disparaîtrait de l'écran au moment précis où elle explique tout.
       this.derniereErreur = this.intentContentManquant ? DISCORD_INTENT_CONTENT_REASON : undefined;
       this.notify();
+      if (essais > 0) {
+        this.options.logger?.info("chat.discord.ws.reconnecte", { essais });
+      }
       try {
         this.options.onReady?.({
           ...(typeof ready.user?.id === "string" ? { userId: ready.user.id } : {}),
@@ -349,10 +434,15 @@ export class DiscordSocket {
     if (type === "RESUMED") {
       this.sessionReady = true;
       this.reprise = true;
+      const essais = this.tentatives;
       this.tentatives = 0;
+      this.reconnexion = undefined;
+      this.prochainEssaiMs = undefined;
+      this.debutPanneMs = undefined;
+      this.derniereClasseMotif = undefined;
       this.derniereErreur = this.intentContentManquant ? DISCORD_INTENT_CONTENT_REASON : undefined;
       this.notify();
-      this.options.logger?.info("chat.discord.ws.reprise", {});
+      this.options.logger?.info("chat.discord.ws.reprise", { essais });
       return;
     }
     if (!MESSAGE_EVENTS.has(type as DiscordMessageEventKind)) return;
@@ -392,12 +482,17 @@ export class DiscordSocket {
 
   private sendHeartbeat(): void {
     if (this.awaitingAck) {
-      // ⚠️ Aucun ACK reçu depuis le dernier battement : connexion « zombifiée ». La doc
-      // demande de terminer la connexion (code ≠ 1000/1001) puis de reprendre.
-      this.derniereErreur =
+      // ⚠️ Aucun ACK reçu depuis le dernier battement : connexion « zombifiée » (half-open).
+      // La doc demande de terminer la connexion (code ≠ 1000/1001) puis de reprendre.
+      // ⚠️ On passe par le BACKOFF normal (`reconnectNow` sans forçage) : un `ack` manquant
+      // qui se répète ne doit pas produire une boucle de reconnexions immédiates.
+      const motif =
         "Discord n'a pas acquitté le dernier battement : connexion interrompue, " +
         "reprise en cours.";
-      this.reconnectNow(4000);
+      this.derniereCoupure = motif;
+      this.derniereErreur = motif;
+      this.options.logger?.warn("chat.discord.ws.battement_perdu", {});
+      this.reconnectNow({ motif, code: 4000 });
       return;
     }
     this.awaitingAck = true;
@@ -446,6 +541,7 @@ export class DiscordSocket {
   /** Fermeture reçue : décide ARRÊT NET, nouvelle session ou reprise. */
   private onClose(code: number | undefined, reason: string | undefined): void {
     this.clearHeartbeat();
+    this.clearHelloTimer();
     this.clearReconnectTimer();
     this.sessionReady = false;
     if (this.socket !== null) {
@@ -464,6 +560,8 @@ export class DiscordSocket {
       this.running = false;
       this.sessionId = undefined;
       this.sequence = null;
+      this.reconnexion = undefined;
+      this.prochainEssaiMs = undefined;
       this.derniereErreur =
         code === 4004
           ? "Discord a refusé le jeton du bot (fermeture 4004) : le temps réel est arrêté. " +
@@ -471,7 +569,13 @@ export class DiscordSocket {
             "puis relancez la connexion."
           : `Discord a fermé la connexion (code ${code}${reason !== undefined && reason !== "" ? `, ${reason}` : ""}) : ` +
             "le temps réel est arrêté, aucun nouvel essai.";
+      this.derniereCoupure = this.derniereErreur;
       this.options.logger?.warn("chat.discord.ws.fermeture_definitive", { code });
+      // ⚠️ Journal DÉDIÉ pour un JETON refusé : la cause est l'authentification, pas le
+      // réseau. Ce texte ne doit jamais être confondu avec « serveur injoignable ».
+      if (code === 4004) {
+        this.options.logger?.warn("chat.discord.ws.authentification_refusee", { detail: reason });
+      }
       this.notify();
       return;
     }
@@ -487,6 +591,9 @@ export class DiscordSocket {
       this.sessionId = undefined;
       this.sequence = null;
       this.resumeUrl = undefined;
+      this.derniereCoupure =
+        "Discord a refusé l'intent privilégié MESSAGE_CONTENT (fermeture 4014) : " +
+        "reconnexion SANS cet intent.";
       this.derniereErreur =
         `${DISCORD_INTENT_CONTENT_REASON} (Discord a fermé la connexion avec le code 4014 : ` +
         "Yuki se reconnecte SANS cet intent.)";
@@ -496,6 +603,17 @@ export class DiscordSocket {
       return;
     }
 
+    // ⚠️ Motif de la DERNIÈRE coupure : code + raison du serveur. C'est ce que l'interface
+    // affiche à côté de « Reconnexion en cours », sinon l'utilisateur ne peut rien en faire.
+    const motif = this.motifDeFermeture(code, reason);
+    if (motif !== undefined) {
+      this.derniereCoupure = motif;
+      this.derniereErreur = motif;
+    }
+    this.options.logger?.warn("chat.discord.ws.coupure", {
+      ...(code !== undefined ? { code } : {}),
+      motif: motif ?? "cause inconnue",
+    });
     this.derniereErreur ??= "Connexion temps réel interrompue : reconnexion planifiée.";
     if (!this.running) {
       this.notify();
@@ -504,8 +622,21 @@ export class DiscordSocket {
     this.scheduleReconnect();
   }
 
-  /** Coupe court : la prochaine tentative part tout de suite (reprise). */
-  private reconnectNow(code = 4000): void {
+  /** Phrase française décrivant la fermeture reçue (jamais un jeton, jamais une URL). */
+  private motifDeFermeture(code: number | undefined, reason: string | undefined): string | undefined {
+    if (code === undefined) return undefined;
+    const raison = reason !== undefined && reason !== "" ? `, ${reason}` : "";
+    return `Discord a fermé la connexion temps réel (code ${code}${raison}).`;
+  }
+
+  /**
+   * Coupe court : la prochaine tentative part au DÉLAI DE BASE (pas au bout du backoff).
+   *
+   * ⚠️ Le délai n'est jamais nul : une passerelle qui redemanderait une reconnexion en
+   * boucle ne doit pas produire une rafale de connexions (le compteur, lui, continue de
+   * monter, donc le backoff normal reprend la main à la coupure suivante).
+   */
+  private reconnectNow(options: { motif?: string; code?: number } = {}): void {
     const socket = this.socket;
     this.socket = null;
     if (socket) {
@@ -515,7 +646,7 @@ export class DiscordSocket {
         // Meilleur effort.
       }
       try {
-        socket.close(code, "reprise");
+        socket.close(options.code ?? 4000, "reprise");
       } catch {
         try {
           socket.terminate?.();
@@ -526,34 +657,58 @@ export class DiscordSocket {
     }
     this.sessionReady = false;
     this.clearHeartbeat();
+    this.clearHelloTimer();
+    if (options.motif !== undefined) {
+      this.derniereCoupure = options.motif;
+      this.derniereErreur = options.motif;
+    }
     if (!this.running) {
+      this.reconnexion = undefined;
+      this.prochainEssaiMs = undefined;
       this.notify();
       return;
     }
-    this.scheduleReconnect(0);
+    this.scheduleReconnect({ immediat: true });
   }
 
-  /** Planifie une reconnexion avec backoff borné + gigue ; s'arrête au plafond. */
-  private scheduleReconnect(forceDelayMs?: number): void {
-    const maxAttempts = this.options.maxAttempts ?? 20;
-    if (this.tentatives >= maxAttempts) {
-      this.abandonne = true;
+  /**
+   * Planifie une reconnexion : backoff PLAFONNÉ EN DÉLAI + GIGUE, sans jamais abandonner.
+   *
+   * ⚠️ LE correctif du 2026-11-18 : l'ancienne version s'arrêtait après `maxAttempts`
+   * (20) essais. Une coupure plus longue que la somme des 20 délais laissait le bot hors
+   * ligne DÉFINITIVEMENT. Seul le DÉLAI est plafonné (60 s), jamais le nombre d'essais.
+   */
+  private scheduleReconnect(options: { immediat?: boolean } = {}): void {
+    if (!this.running) {
+      // Arrêt VOLONTAIRE pendant une tentative : aucune reconnexion ne doit survivre.
+      this.reconnexion = undefined;
       this.prochainEssaiMs = undefined;
-      this.derniereErreur =
-        `Le temps réel Discord est arrêté après ${maxAttempts} tentatives : ` +
-        "la synchronisation périodique continue de rattraper les messages.";
-      this.options.logger?.warn("chat.discord.ws.abandon", { tentatives: this.tentatives });
       this.notify();
       return;
     }
-    const base = this.options.baseDelayMs ?? 1_000;
-    const max = this.options.maxDelayMs ?? 60_000;
-    const jitter = this.options.jitterMs ?? 250;
-    const delay =
-      forceDelayMs ??
-      Math.min(max, base * 2 ** this.tentatives) + Math.round(this.random() * jitter);
+    const delay = delaiRelance({
+      essai: options.immediat === true ? 0 : this.tentatives,
+      ...(this.options.baseDelayMs !== undefined ? { baseDelayMs: this.options.baseDelayMs } : {}),
+      ...(this.options.maxDelayMs !== undefined ? { maxDelayMs: this.options.maxDelayMs } : {}),
+      ...(this.options.jitterMs !== undefined ? { jitterMs: this.options.jitterMs } : {}),
+      random: this.random,
+    });
     this.tentatives += 1;
     this.prochainEssaiMs = delay;
+    // ⚠️ DEPUIS QUAND ça dure : la première coupure de la panne en cours.
+    this.debutPanneMs ??= Date.now();
+    const motif = this.motifDePanne();
+    this.journaliserMotif(this.tentatives);
+    this.reconnexion = {
+      essai: this.tentatives,
+      motif,
+      dansMs: delay,
+      depuisMs: Math.max(0, Date.now() - this.debutPanneMs),
+    };
+    this.options.logger?.warn("chat.discord.ws.reconnexion_planifiee", {
+      essai: this.tentatives,
+      dansMs: delay,
+    });
     this.notify();
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -561,6 +716,73 @@ export class DiscordSocket {
       this.open();
     }, delay);
     unref(this.reconnectTimer);
+  }
+
+  /**
+   * Surveille l'arrivée de `HELLO` après l'ouverture.
+   * ⚠️ Une socket ouverte mais muette (proxy qui avale les trames) resterait sinon en
+   * « connexion » POUR TOUJOURS : aucun battement n'existe avant `HELLO`.
+   */
+  private surveillerHello(socket: WebSocketLike): void {
+    this.clearHelloTimer();
+    const delai = Math.max(1_000, this.options.helloTimeoutMs ?? 15_000);
+    this.helloTimer = setTimeout(() => {
+      this.helloTimer = null;
+      if (this.socket !== socket || this.sessionReady) return;
+      const motif =
+        "Discord n'a pas envoyé HELLO dans le délai imparti : la connexion est " +
+        "considérée morte, nouvelle tentative.";
+      this.derniereCoupure = motif;
+      this.derniereErreur = motif;
+      this.options.logger?.warn("chat.discord.ws.hello_absent", { delaiMs: delai });
+      this.reconnectNow({ motif, code: 4000 });
+    }, delai);
+    unref(this.helloTimer);
+  }
+
+  /**
+   * Motif AFFICHABLE de la panne, honnête sur la cause.
+   *
+   * ⚠️ Une passerelle injoignable (erreur réseau, `close` 1006 consécutif) est DITE comme
+   * telle : c'est un cas normal (serveur éteint, réseau coupé) qui se répare seul, pas une
+   * panne du bot.
+   */
+  private motifDePanne(): string {
+    const coupure = this.derniereCoupure;
+    const erreur = this.derniereErreur;
+    const contexte = [coupure, erreur].filter((texte) => texte !== undefined).join(" ");
+    if (classifierMotif(contexte) === "serveur_injoignable") return PHRASE_SERVEUR_INJOIGNABLE;
+    return motifAffiche(coupure ?? erreur);
+  }
+
+  /**
+   * Journalise la CLASSE du motif — une fois par changement, pas à chaque essai.
+   *
+   * ⚠️ Deux journaux distincts et deux niveaux distincts : passerelle injoignable =
+   * NORMAL (`info`), jeton refusé = ANOMALIE À CORRIGER (`warn`).
+   */
+  private journaliserMotif(essai: number): void {
+    const contexte = [this.derniereCoupure, this.derniereErreur]
+      .filter((texte) => texte !== undefined)
+      .join(" ");
+    const classe = classifierMotif(contexte);
+    if (classe === this.derniereClasseMotif) return;
+    this.derniereClasseMotif = classe;
+    if (classe === "serveur_injoignable") {
+      this.options.logger?.info("chat.discord.ws.serveur_injoignable", { essai, detail: contexte });
+    } else if (classe === "authentification_refusee") {
+      this.options.logger?.warn("chat.discord.ws.authentification_refusee", {
+        essai,
+        detail: contexte,
+      });
+    }
+  }
+
+  private clearHelloTimer(): void {
+    if (this.helloTimer !== null) {
+      clearTimeout(this.helloTimer);
+      this.helloTimer = null;
+    }
   }
 
   private clearHeartbeat(): void {
@@ -585,6 +807,7 @@ export class DiscordSocket {
   private clearTimers(): void {
     this.clearHeartbeat();
     this.clearReconnectTimer();
+    this.clearHelloTimer();
   }
 
   private closeSocket(code: number, reason: string): void {
