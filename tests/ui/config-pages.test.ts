@@ -393,6 +393,21 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     "chat.discord.maxUploadBytes",
   ];
 
+  /**
+   * Clés du CATALOGUE DE MODÈLES (commit externe `134a313` « split LLM config »,
+   * 2026-11-19), rendues par le module dédié `public/ui/llm-catalog.js`.
+   *
+   * ⚠️ POURQUOI ELLES NE SONT PAS DANS `GROUPS` : le catalogue est un ÉDITEUR
+   * DYNAMIQUE (liste de fournisseurs / de modèles, sélections par rôle) que le
+   * catalogue déclaratif `config-fields.js` ne sait pas décrire. `config.js`
+   * monte `renderCatalog` sur l'onglet « Modèles » (page Instance) et
+   * « Général » (page Bot), et SAUTE les groupes `llm-light` / `llm-heavy`
+   * qu'il remplace. Le chemin de sélection y est CONSTRUIT (`"llm.selection."
+   * + role`), donc un simple littéral ne suffirait pas : le rendu RÉEL est
+   * vérifié plus bas, dans le fichier.
+   */
+  const CATALOGUE_MODELES = ["llm.catalog", "llm.selection.light", "llm.selection.heavy"];
+
   /** Clés rendues par une page, sans doublon. */
   const rendues = (page: string): string[] => [...clesRendues(page).keys()];
 
@@ -448,15 +463,37 @@ describe("⑨ classement validé — portées changées et réglages sans écran
   });
 
   it("⚠️ AUCUNE clé du schéma n'est sans écran (compte des orphelines : 0)", () => {
-    const couvertes = new Set([...rendues("instance"), ...rendues("bot"), ...CONTROLES_AILLEURS]);
+    const couvertes = new Set([
+      ...rendues("instance"),
+      ...rendues("bot"),
+      ...CONTROLES_AILLEURS,
+      ...CATALOGUE_MODELES,
+    ]);
     const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
     expect(orphelines).toEqual([]);
-    // ⚠️ Et le compte doit être EXACT : 97 clés (94 - `vision.fallback.model`
+    // ⚠️ Et le compte doit être EXACT : 100 clés (94 - `vision.fallback.model`
     // + les quatre clés du modèle de vision DÉDIÉ `llm.vision.*` — réglage
-    // GÉNÉRAL de l'onglet « Modèles », ajouté le 2026-11-16), aucune oubliée
+    // GÉNÉRAL de l'onglet « Modèles », ajouté le 2026-11-16 — + les trois clés
+    // du catalogue de modèles `llm.catalog` / `llm.selection.*`), aucune oubliée
     // par ce contrôle.
-    expect(Object.keys(SCOPES).length).toBe(97);
-    expect(couvertes.size).toBe(97);
+    expect(Object.keys(SCOPES).length).toBe(100);
+    expect(couvertes.size).toBe(100);
+    // ⚠️ Portée des trois clés du catalogue : le CATALOGUE est un réglage
+    // D'INSTALLATION (« Modèles » sur la page Instance), les SÉLECTIONS sont
+    // par BOT (« Général » sur la page Bot) — c'est exactement ce que fait
+    // `config.js` (`containers.get(PAGE_BOT ? "general" : "modeles")`).
+    expect(SCOPES["llm.catalog"]).toBe("instance");
+    expect(SCOPES["llm.selection.light"]).toBe("bot");
+    expect(SCOPES["llm.selection.heavy"]).toBe("bot");
+    // ⚠️ Rendu RÉEL dans le module dédié (aucun fantôme) : le catalogue est lu
+    // depuis `fields["llm.catalog"]` et les deux sélections sont construites.
+    const catalogue = lire("llm-catalog.js");
+    expect(catalogue).toContain('fields["llm.catalog"]');
+    expect(catalogue).toContain('"llm.selection." + role');
+    expect(catalogue).toContain('patch["llm.catalog"]');
+    // Et c'est bien `config.js` qui le monte, sur l'onglet de la page.
+    expect(CONFIG_JS).toContain("renderCatalog({");
+    expect(CONFIG_JS).toContain('PAGE_BOT ? "general" : "modeles"');
     // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
     for (const [cle, fichier] of [
       ["tts.voice", "voices-panel.js"],
@@ -775,7 +812,17 @@ describe("⑤bis ajout / clone / suppression — les données décidées", () =>
 
 describe("⑥ gardes CSP : elles s'appliquent AUX DEUX pages", () => {
   it("aucun innerHTML, aucun window.confirm(, aucun style inline dans le code servi", () => {
-    for (const nom of ["config.js", "config-fields.js", "config-pages.js", "bots-admin.js"]) {
+    // ⚠️ GARDE ÉTENDUE (commit externe `134a313` « split LLM config », 2026-11-19) :
+    // `llm-catalog.js` est un NOUVEAU fichier d'interface, monté par `config.js`
+    // sur les DEUX pages — il doit donc porter les mêmes interdits. Ajouté à la
+    // liste APRÈS vérification qu'il les respecte déjà (aucun assouplissement).
+    for (const nom of [
+      "config.js",
+      "config-fields.js",
+      "config-pages.js",
+      "bots-admin.js",
+      "llm-catalog.js",
+    ]) {
       const source = lire(nom);
       expect(source, nom).not.toContain("innerHTML");
       expect(source, nom).not.toContain("window.confirm(");

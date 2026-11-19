@@ -158,10 +158,10 @@ describe("① câblage de PRODUCTION — le host LOCAL reçoit réellement le po
    *
    * ⚠️ LOT 36 (L3-d) : ces options sont désormais un OBJET NOMMÉ
    * (`const optionsHostPile: PiHostOptions = { … }`) passé à la fabrique des hosts
-   * (`creer: createPiHost`), et non plus un littéral inline dans
-   * `createPiHost({ … })` — un seul host par bot, mais UN SEUL chemin de
-   * construction. Le CONTRÔLE est inchangé (le bloc doit porter le port) ; on
-   * vérifie EN PLUS que ce bloc est bien celui que reçoit `createPiHost`.
+   * (`creer:`), et non plus un littéral inline dans `createPiHost({ … })` — un
+   * seul host par bot, mais UN SEUL chemin de construction. Le CONTRÔLE est
+   * inchangé (le bloc doit porter le port) ; on vérifie EN PLUS que ce bloc est
+   * bien celui que reçoit `createPiHost` (voir `appelDeLaFabrique`).
    */
   function optionsDuHostLocal(): string {
     const nomme = index.indexOf("const optionsHostPile: PiHostOptions = {");
@@ -183,12 +183,49 @@ describe("① câblage de PRODUCTION — le host LOCAL reçoit réellement le po
     throw new Error("bloc d'options de `createPiHost` non refermé");
   }
 
+  /**
+   * Fabrique des hosts — l'appel à `createPiHost` TEL QU'IL EST ÉCRIT aujourd'hui.
+   *
+   * ⚠️ GARDE RÉVISÉE (commit externe `134a313` « split LLM config », 2026-11-19) :
+   * la fabrique n'est plus la RÉFÉRENCE `createPiHost` (`creer: createPiHost,`) mais
+   * une FLÈCHE qui INJECTE le routage LLM du bot (`llmRouting(config, botId)` :
+   * fichier de modèles, modèle léger, réflexion) avant de déléguer à
+   * `createPiHost`. Le CONTRÔLE est inchangé dans son intention — ce que la
+   * fabrique reçoit (les options de la pile) doit être FORWARDÉ (`...options`),
+   * jamais reconstruit — et il est même plus strict : l'appel ne doit PAS
+   * réécrire `envoisProgrammes`, sinon le port de la conversation locale serait
+   * silencieusement perdu.
+   */
+  function appelDeLaFabrique(): string {
+    const fabrique = index.indexOf("creer: options =>");
+    expect(
+      fabrique,
+      "fabrique `creer: options =>` introuvable dans `src/index.ts`",
+    ).toBeGreaterThan(-1);
+    const debut = index.indexOf("createPiHost({", fabrique);
+    expect(debut, "`createPiHost({` absent de la fabrique des hosts").toBeGreaterThan(-1);
+    // Équilibrage d'accolades : on isole l'appel SEUL (jamais le fichier entier).
+    let profondeur = 0;
+    for (let i = index.indexOf("{", debut); i < index.length; i += 1) {
+      if (index[i] === "{") profondeur += 1;
+      if (index[i] === "}") {
+        profondeur -= 1;
+        if (profondeur === 0) return index.slice(debut, i + 1);
+      }
+    }
+    throw new Error("appel `createPiHost` non refermé");
+  }
+
   it("le host de la conversation LOCALE reçoit `envoisProgrammes`", () => {
     expect(optionsDuHostLocal()).toContain("envoisProgrammes: portEnvoisProgrammes");
     // ⚠️ LOT 36 (L3-d) : ce bloc est bien celui que la fabrique passe à
     // `createPiHost` pour le bot de la PILE (le principal), tel quel.
     expect(index).toContain("optionsPile: optionsHostPile,");
-    expect(index).toContain("creer: createPiHost,");
+    // ⚠️ Et la fabrique transmet ces options TELLES QUELLES à `createPiHost`.
+    const appel = appelDeLaFabrique();
+    expect(appel).toContain("...options");
+    // ⚠️ Sans écraser le port : le host local garde `portEnvoisProgrammes`.
+    expect(appel).not.toContain("envoisProgrammes");
     // ⚠️ GARDE MISE À JOUR (lot 45) : `hostsBots.principal` → `hostsBots.duRun`
     // (même valeur : le host du bot qui tourne, désormais le premier par `ordre`).
     expect(index).toContain("host = hostsBots.duRun;");
