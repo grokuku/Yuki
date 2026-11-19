@@ -157,16 +157,18 @@ describe("GET /api/config en mode dégradé", () => {
     // injecté quand la voix est active), et référence la convention unique.
     expect(body.voiceInstruction).toBe(VOICE_SPEECH_INSTRUCTION);
     expect(body.voiceInstruction).toContain(MUTE_BLOCK_LABEL);
-    expect(body.fields["llm.light.apiKey"]).toMatchObject({
-      configured: false,
-      masked: null,
-      source: "default",
-    });
-    expect(body.fields["llm.light.model"]).toMatchObject({
-      value: "gemma4:31b",
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : les réglages par rôle sont RETIRÉS
+    // au profit du catalogue. Ce qui est vérifié est inchangé sur le fond — un
+    // champ de sélection est servi avec sa valeur, son origine, sa portée et son
+    // application, et aucune clé n'est « configurée » par défaut.
+    expect(body.fields["llm.defaut.light"]).toMatchObject({
+      value: "",
       origin: "default",
       apply: "hot",
+      scope: "instance",
     });
+    expect(body.fields["llm.fournisseurs"]).toMatchObject({ value: "", origin: "default" });
+    expect(body.fields["llm.light.apiKey"]).toBeUndefined();
     expect(body.fields["prompts.light"]).toMatchObject({ value: "P", origin: "default" });
   });
 });
@@ -192,13 +194,24 @@ describe("PUT /api/config", () => {
   it("pose les clés, masque, bascule lightKey, journalise l'audit sans valeur", async () => {
     const { baseUrl, lines } = await startHarness();
     const secret = "fake-light-key-000000000000";
+    // ⚠️ GARDE RÉVISÉE (lot B) : les clés sont celles des FOURNISSEURS du
+    // catalogue (`llm.fournisseur.<id>.apiKey`) et « clé présente » se déduit du
+    // modèle RÉSOLU de chaque rôle — il faut donc un catalogue et deux défauts.
+    const catalogue = {
+      "llm.fournisseurs": JSON.stringify([
+        { id: "local", nom: "Local", baseUrl: "https://local.example/v1", api: "openai-completions" },
+      ]),
+      "llm.modeles": JSON.stringify([
+        { id: "chat", nom: "chat", fournisseurId: "local", contexte: 4096, vision: true, thinking: "off" },
+      ]),
+      "llm.defaut.light": "chat",
+      "llm.defaut.heavy": "chat",
+      "llm.fournisseur.local.apiKey": secret,
+    };
     const response = await fetch(`${baseUrl}/api/config`, {
       method: "PUT",
       headers: WRITE_HEADERS,
-      body: JSON.stringify({
-        "llm.light.apiKey": secret,
-        "llm.heavy.apiKey": "fake-heavy-key-111111",
-      }),
+      body: JSON.stringify(catalogue),
     });
     expect(response.status).toBe(200);
     const raw = await response.text();
@@ -212,8 +225,8 @@ describe("PUT /api/config", () => {
     expect(body.status.lightKey).toBe(true);
     expect(body.status.heavyKey).toBe(true);
     expect(body.status.ready).toBe(true);
-    expect(body.applied.hot).toContain("llm.light.apiKey");
-    expect(body.fields["llm.light.apiKey"]?.masked).toBe("••••0000");
+    expect(body.applied.hot).toContain("llm.fournisseur.local.apiKey");
+    expect(body.fields["llm.fournisseur.local.apiKey"]?.masked).toBe("••••0000");
 
     // Audit : lignes config.changed, jamais la clé.
     const audit = lines.filter((line) => line.includes("config.changed"));
@@ -226,11 +239,16 @@ describe("PUT /api/config", () => {
     const empty = await fetch(`${baseUrl}/api/config`, {
       method: "PUT",
       headers: WRITE_HEADERS,
-      body: JSON.stringify({ "llm.light.apiKey": "   " }),
+      body: JSON.stringify({ "llm.defaut.light": "inconnu" }),
     });
     expect(empty.status).toBe(400);
-    const emptyBody = (await empty.json()) as { fields: Array<{ path: string; message: string }> };
-    expect(emptyBody.fields[0]?.path).toBe("llm.light.apiKey");
+    const emptyBody = (await empty.json()) as {
+      fields: Array<{ path: string; code: string; message: string }>;
+    };
+    // ⚠️ Refus NOMMÉ d'une sélection : un `modeleId` absent du catalogue n'est
+    // jamais enregistré (et l'ancienne clé de rôle n'existe plus).
+    expect(emptyBody.fields[0]?.path).toBe("llm.defaut.light");
+    expect(emptyBody.fields[0]?.code).toBe("modele_inconnu");
 
     const bad = await fetch(`${baseUrl}/api/config`, {
       method: "PUT",
@@ -272,24 +290,36 @@ describe("PUT /api/config", () => {
     expect(body.variable).toBe("YUKI_COMPAT_MODE");
   });
 
-  it("efface une clé avec null", async () => {
+  it("efface une clé de fournisseur avec null", async () => {
     const { baseUrl } = await startHarness();
+    // ⚠️ GARDE RÉVISÉE (lot B) : la clé effaçable est celle d'un FOURNISSEUR du
+    // catalogue. `status.lightKey` retombe à `false` parce que le rôle résolu
+    // n'a plus de clé — la même preuve qu'avant, sur le nouveau chemin.
     await fetch(`${baseUrl}/api/config`, {
       method: "PUT",
       headers: WRITE_HEADERS,
-      body: JSON.stringify({ "llm.light.apiKey": "key-abcdefgh" }),
+      body: JSON.stringify({
+        "llm.fournisseurs": JSON.stringify([
+          { id: "local", nom: "Local", baseUrl: "https://local.example/v1", api: "openai-completions" },
+        ]),
+        "llm.modeles": JSON.stringify([
+          { id: "chat", nom: "chat", fournisseurId: "local", contexte: 4096, vision: true, thinking: "off" },
+        ]),
+        "llm.defaut.light": "chat",
+        "llm.fournisseur.local.apiKey": "key-abcdefgh",
+      }),
     });
     const cleared = await fetch(`${baseUrl}/api/config`, {
       method: "PUT",
       headers: WRITE_HEADERS,
-      body: JSON.stringify({ "llm.light.apiKey": null }),
+      body: JSON.stringify({ "llm.fournisseur.local.apiKey": null }),
     });
     const body = (await cleared.json()) as {
       status: { lightKey: boolean };
       fields: Record<string, { configured: boolean }>;
     };
     expect(body.status.lightKey).toBe(false);
-    expect(body.fields["llm.light.apiKey"]?.configured).toBe(false);
+    expect(body.fields["llm.fournisseur.local.apiKey"]?.configured).toBe(false);
   });
 
   it("store NON inscriptible → 500 EXPLOITABLE (cause journalisée, jamais un 500 muet)", async () => {
@@ -414,7 +444,18 @@ describe("PUT /api/config — contrôle Origin/Host (accès réseau local)", () 
 describe("POST /api/config/llm/test", () => {
   it("teste via fetch hors SDK et renvoie les modèles", async () => {
     const { runtime } = await startHarness();
-    runtime.update({ "llm.light.apiKey": "key-test-000000" });
+    // ⚠️ GARDE RÉVISÉE (lot B) : le test d'un RÔLE passe par le fournisseur du
+    // modèle RÉSOLU (`llm.defaut.light` → son fournisseur → sa clé secrète).
+    runtime.update({
+      "llm.fournisseurs": JSON.stringify([
+        { id: "local", nom: "Local", baseUrl: "https://local.example/v1", api: "openai-completions" },
+      ]),
+      "llm.modeles": JSON.stringify([
+        { id: "chat", nom: "chat", fournisseurId: "local", contexte: 4096, vision: true, thinking: "off" },
+      ]),
+      "llm.defaut.light": "chat",
+      "llm.fournisseur.local.apiKey": "key-test-000000",
+    });
     const calls: string[] = [];
     const fakeFetch = (async (url: string) => {
       calls.push(url);

@@ -1,5 +1,18 @@
 /**
- * Modèles LLM par rôle (données pures, AUCUN import SDK/typebox).
+ * GABARITS de modèles (données pures, AUCUN import SDK/typebox).
+ *
+ * ⚠️ DEPUIS LE LOT B (2026-11-19), CE MODULE N'EST PLUS LA SOURCE DE L'EXÉCUTION :
+ * `models.json` est construit depuis le CATALOGUE (`llm.fournisseurs` +
+ * `llm.modeles`, voir `src/llm/execution.ts`), et chaque rôle d'exécution ne
+ * référence qu'un `modeleId` (`llm.defaut.*` / `llm.bot.*`). Les valeurs ci-dessous
+ * restent utilisées pour deux choses seulement :
+ *  ① les DÉFAUTS DE REPRISE d'une installation neuve (`HERITAGE_DEFAUT`,
+ *    `src/llm/catalogue.ts`) : l'installation démarre donc avec deux modèles
+ *    déclarés, sans rien saisir ;
+ *  ② les GABARITS d'outillage de test (fixtures de `models.json`).
+ * Un nouveau réglage d'exécution ne s'ajoute PAS ici.
+ *
+ * Historique conservé (il explique les valeurs) :
  *
  * - Léger : `gemma4:31b` — mène la conversation, SEUL à parler, thinking
  *   DÉSACTIVÉ (`reasoning: false`, aucun paramètre de raisonnement envoyé).
@@ -64,11 +77,15 @@ export const HEAVY_THINKING_LEVEL_MAP: ThinkingLevelMap = {
 
 export interface ModelSpec {
   /**
-   * Rôle du modèle. `vision` = le modèle de VISION DÉDIÉ (`llm.vision.*`) :
-   * il ne mène aucune conversation et n'exécute aucun travail, il DÉCRIT des
-   * images pour un autre modèle.
+   * Rôle du modèle, QUAND il est connu.
+   *
+   * ⚠️ FACULTATIF depuis le lot B : un modèle du CATALOGUE n'a pas de rôle — il
+   * est choisi par un ou plusieurs rôles (`llm.defaut.*` / `llm.bot.*`) et porte
+   * ses propres propriétés (contexte, vision, réflexion). Le champ ne survit que
+   * pour les gabarits historiques (`LIGHT_MODEL`/`HEAVY_MODEL`) et n'est lu par
+   * AUCUN code d'exécution.
    */
-  readonly role: LlmRole | "vision";
+  readonly role?: LlmRole | "vision";
   readonly providerId: string;
   /** Identifiant passé à l'API. */
   readonly id: string;
@@ -129,12 +146,13 @@ export function modelForRole(role: LlmRole): ModelSpec {
 }
 
 /**
- * Modèle de VISION DÉDIÉ (repli) — squelette de données.
+ * Modèle de VISION DÉDIÉ (repli) — squelette de données historique.
  *
- * ⚠️ AUCUN identifiant de modèle par défaut : `llm.vision.model` et
- * `llm.vision.baseUrl` sont VIDES au départ (voir `src/config/schema.ts`), donc
- * aucun appel n'est fait tant que l'utilisateur n'a pas nommé SON modèle. Un
- * défaut inventé ferait échouer une description au premier envoi d'image.
+ * ⚠️ Le repli se choisit désormais dans le CATALOGUE (`llm.defaut.vision` /
+ * `llm.bot.vision`, un modèle déclaré « Reçoit les images »). Ce squelette ne sert
+ * plus qu'à la REPRISE (fenêtre de contexte d'un ancien `llm.vision.model`) et aux
+ * gabarits de test. ⚠️ AUCUN identifiant par défaut : un modèle de vision inventé
+ * ferait échouer la première description d'image.
  *
  * ⚠️ `input` contient TOUJOURS `"image"`, par construction : ce modèle existe
  * POUR voir l'image (c'est le seul sens du repli). C'est pourquoi l'appelant ne
@@ -327,7 +345,7 @@ export function resolveModels(
   };
 }
 
-interface ModelsConfigModel {
+export interface ModelsConfigModel {
   id: string;
   name: string;
   reasoning: boolean;
@@ -338,7 +356,7 @@ interface ModelsConfigModel {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 }
 
-interface ModelsConfigProvider {
+export interface ModelsConfigProvider {
   name: string;
   baseUrl: string;
   api: string;
@@ -360,7 +378,7 @@ export interface ModelsConfig {
   providers: Record<string, ModelsConfigProvider>;
 }
 
-function toModelConfig(model: ModelSpec): ModelsConfigModel {
+export function toModelConfig(model: ModelSpec): ModelsConfigModel {
   const config: ModelsConfigModel = {
     id: model.id,
     name: model.name,

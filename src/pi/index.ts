@@ -97,7 +97,7 @@ export type { SdkMemoryExtractorConfig } from "./sdk/memory-extractor.js";
 export { sdkVisionImageResizer } from "./sdk/vision-resize.js";
 
 // VISION DE REPLI — modèle qui DÉCRIT l'image quand le modèle actif ne la voit
-// pas (`llm.vision.*`, modèle dédié). Port PUR (`VisionDescriber`) : le texte injecté
+// pas (rôle « vision » du catalogue). Port PUR (`VisionDescriber`) : le texte injecté
 // vit dans `src/files/vision-fallback.ts`, jamais ici.
 export { createSdkVisionDescriber } from "./sdk/vision-fallback.js";
 export type { SdkVisionDescriberConfig } from "./sdk/vision-fallback.js";

@@ -42,33 +42,27 @@ const EFFECTIVE: EffectiveLlmConfig = {
   },
 };
 
-describe("réglage `llm.<role>.vision` — exposé, à chaud, et DÉCLARATIF", () => {
-  it("existe dans le schéma de configuration pour les deux rôles", () => {
+describe("déclaration de VISION — propriété du MODÈLE (lot B)", () => {
+  it("⚠️ la capacité n'est plus un réglage de RÔLE mais du MODÈLE du catalogue", () => {
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : `llm.<rôle>.vision` est RETIRÉE. La
+    // déclaration vit dans `llm.modeles[].vision` (booléen d'un élément de liste) et
+    // suit le modèle quel que soit le rôle qui le sélectionne.
     for (const role of ["light", "heavy"] as const) {
-      const field = CONFIG_SCHEMA[`llm.${role}.vision`];
-      expect(field).toBeDefined();
-      expect(field?.type).toBe("enum");
-      // ⚠️ Deux états seulement : « oui » ou « non ». Pas de « peut-être » qui
-      // laisserait croire à une mesure — la capacité est une DÉCLARATION.
-      expect(field?.enum).toEqual(["oui", "non"]);
-      expect(field?.default).toBe("oui");
-      // Un changement doit s'appliquer au job/message suivant, sans redémarrage.
-      expect(field?.apply).toBe("hot");
+      expect(CONFIG_SCHEMA[`llm.${role}.vision`]).toBeUndefined();
     }
+    const champ = CONFIG_SCHEMA["llm.modeles"]?.items?.find((item) => item.cle === "vision");
+    expect(champ).toBeDefined();
+    expect(champ?.type).toBe("bool");
   });
 
-  it("est proposé dans l'interface /config de l'onglet « Modèles »", () => {
-    // ⚠️ Le CATALOGUE des champs (libellés compris) a quitté `config.js` pour
-    // `config-fields.js` au sous-lot 1b-4 : les deux fichiers sont servis à la
-    // page Instance, on les lit donc tous les deux (garde inchangée).
-    const ui =
-      readFileSync("public/ui/config.js", "utf8") +
-      readFileSync("public/ui/config-fields.js", "utf8");
-    expect(ui).toContain("llm.light.vision");
-    expect(ui).toContain("llm.heavy.vision");
-    expect(ui).toContain("Reçoit les images (vision)");
-    // Et le groupe concerné est bien rendu sur l'onglet « Modèles ».
-    expect(ui).toContain('tabs: { instance: "modeles" }');
+  it("est proposé dans l'interface : catalogue (modèle) et menus (sélection)", () => {
+    // Le booléen se déclare dans l'éditeur du catalogue ; le repli vision se choisit
+    // dans la troisième liste déroulante des menus de modèles.
+    const catalogue = readFileSync("public/ui/catalogue-llm.js", "utf8");
+    expect(catalogue).toContain("Reçoit les images");
+    const choix = readFileSync("public/ui/llm-choix.js", "utf8");
+    expect(choix).toContain("Modèle de vision (repli)");
+    expect(choix).toContain("modele.vision === true");
   });
 
   it("produit `input` dans models.json : « non » ⇒ texte seul", () => {

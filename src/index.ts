@@ -19,7 +19,8 @@
  * le `PiHost`. ⚠️ Aucun import direct de `src/pi/sdk/**` ici.
  */
 
-import { llmRouting } from "./llm/routing.js";
+import { llmRouting, signatureRouting } from "./llm/routing.js";
+import { migrerCatalogue, reprendreDefautsDepuisRoles } from "./llm/catalogue.js";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -210,8 +211,6 @@ import {
   composerPromptSysteme,
   evaluateMissingKeyPolicy,
   resolveAvailability,
-  resolveVisionFrom,
-  visionConfigured,
   toolAllowlist,
   toolAllowlistForChat,
   type ChatOriginMode,
@@ -327,15 +326,15 @@ function effectiveLlmConfig(config: ConfigRuntime): EffectiveLlmConfig {
 }
 
 /**
- * Référence `llm-vision/<modèle>` du modèle de vision dédié, ou `""` quand il
- * n'est pas configuré (`baseUrl`/`model` vides ⇒ aucun repli).
+ * Référence `<fournisseur>/<modèle>` du modèle de vision du CATALOGUE, ou `""`
+ * quand aucun modèle de vision n'est sélectionné (`llm.defaut.vision` /
+ * `llm.bot.vision` vides ⇒ aucun repli).
  *
- * ⚠️ Relue à CHAQUE usage (`apply: hot`) : changer le modèle dans `/config`
- * prend effet sans redémarrage.
+ * ⚠️ Relue à CHAQUE usage (`apply: hot`) : changer la sélection dans `/config`
+ * prend effet sans redémarrage (la sélection du bot ACTIF est celle de la pile).
  */
 function referenceVision(config: ConfigRuntime): string {
-  const vision = effectiveLlmConfig(config).vision;
-  return visionConfigured(vision) ? resolveVisionFrom(vision).reference : "";
+  return llmRouting(config).visionReference;
 }
 
 async function main(): Promise<void> {
@@ -592,6 +591,29 @@ async function main(): Promise<void> {
     }
   }
 
+  // --- CATALOGUE de fournisseurs et de modèles : reprise ----------------------
+  // ⚠️ ORDRE CRITIQUE — deux reprises, dans CET ordre :
+  //  ① `reprendreDefautsDepuisRoles` : si le catalogue est DÉJÀ rempli (installation
+  //    passée par le lot A) mais que `llm.defaut.*` est vide, les modèles réglés par
+  //    `llm.light.model` / `llm.heavy.model` / `llm.vision.model` sont REPORTÉS sur
+  //    le `modeleId` correspondant. C'est le filet qui empêche TOUS les bots de
+  //    perdre leur modèle ;
+  //  ② `migrerCatalogue` : au PREMIER démarrage seulement (`llm.catalogueMigre`),
+  //    les fournisseurs et les modèles sont créés depuis ces mêmes réglages, et
+  //    les défauts de rôle sont posés dans le même appel.
+  // ⚠️ L'ordre n'est pas cosmétique : ① lit les valeurs historiques du FICHIER,
+  // et ② réécrit ce fichier (les clés retirées du schéma n'y survivent pas).
+  // Best-effort dans les deux cas : un échec est journalisé, jamais bloquant.
+  reprendreDefautsDepuisRoles(config, (evenement, donnees) => {
+    if (evenement === "llm.anciennes_cles_ignorees" || evenement.endsWith(".echec") ||
+        evenement === "llm.role.defaut_non_repris") {
+      logger.warn(evenement, donnees);
+      return;
+    }
+    logger.info(evenement, donnees);
+  });
+  migrerCatalogue(config, (evenement, donnees) => logger.info(evenement, donnees));
+
   const profiles = loadProfiles(env.configDir);
   const manifest = loadCompatManifest(env.configDir);
 
@@ -621,6 +643,26 @@ async function main(): Promise<void> {
 
   // --- LLM : config effective + disponibilité (aucun appel réseau) ----------
   const initialRouting = llmRouting(config);
+  // ⚠️ LOT B : l'état des RÔLES est DIT au démarrage — modèle retenu, provenance
+  // (`bot` / `defaut` / `aucun`) et DÉGRADÉS. Un rôle sans modèle utilisable ne
+  // bloque pas le démarrage (le gateway doit rester joignable pour corriger dans
+  // `/config`) : il est nommé, avec la raison.
+  logger.info("llm.roles.resolus", {
+    light: initialRouting.models.light.reference || null,
+    heavy: initialRouting.models.heavy.reference || null,
+    vision: initialRouting.visionReference || null,
+    provenance: initialRouting.provenance,
+  });
+  for (const degrade of initialRouting.degrade) {
+    logger.warn("llm.role.modele_introuvable", {
+      role: degrade.role,
+      code: degrade.code,
+      modele: degrade.modeleId,
+      remede:
+        "choisissez un modèle existant dans /config → onglet « Modèles » (défaut " +
+        "d'instance) ou sur la page du bot",
+    });
+  }
   const resolveAvail = (botId = config.botId) => resolveAvailability(process.env, llmRouting(config, botId));
   const availabilityPort: ModelAvailability = {
     isAvailable: (role, botId) => resolveAvail(botId).isAvailable(role),
@@ -679,13 +721,13 @@ async function main(): Promise<void> {
     authPath: join(env.piAgentDir, "auth.json"),
     modelsPath,
     modelReference: () => referenceVision(config),
-    // ⚠️ Réflexion du modèle de vision, RELUE À CHAUD (`llm.vision.thinking`).
-    thinking: () => effectiveLlmConfig(config).vision?.thinking ?? "off",
+    // ⚠️ Réflexion du modèle de vision : propriété du MODÈLE du catalogue
+    // (`llm.modeles[].thinking`), RELUE À CHAUD comme le reste.
+    thinking: () => llmRouting(config).effective.vision?.thinking ?? "off",
     logger,
   });
-  /** Un modèle de vision est-il configuré ? (relu à chaud, jamais figé) */
-  const visionRepliConfigure = (): boolean =>
-    visionConfigured(effectiveLlmConfig(config).vision);
+  /** Un modèle de vision est-il sélectionné ? (relu à chaud, jamais figé) */
+  const visionRepliConfigure = (): boolean => llmRouting(config).visionConfiguree;
   const heavyAvailableAtStart = availabilityAtStart.isAvailable("heavy");
 
   const volumes = inspectMountPoints(mountPoints(env));
@@ -5162,18 +5204,30 @@ async function main(): Promise<void> {
     // modèle de conversation. Les runs EN COURS se terminent avec leur
     // fournisseur/modèle d'origine ; le changement s'applique au PROCHAIN run /
     // au prochain job de fond (toutes les références sont relues « vivantes »).
-    const signature = (routing: ReturnType<typeof llmRouting>) =>
-      JSON.stringify([routing.file, routing.models.light.reference, routing.effective.light.thinking]);
-    const signatures = new Map((hostsBots?.ids() ?? [config.botId]).map(id => [id, signature(llmRouting(config, id))]));
+    // ⚠️ La signature porte le FICHIER ENTIER (`models.json`) et les rôles résolus
+    // DU BOT : modifier un modèle du catalogue (réflexion, vision, nom, contexte)
+    // change la signature de TOUS les bots, donc `models.json` est réécrit et le
+    // runtime rafraîchi pour chacun — y compris le bot de la pile.
+    const signatures = new Map(
+      (hostsBots?.ids() ?? [config.botId]).map(id => [id, signatureRouting(llmRouting(config, id))]),
+    );
     let pending = Promise.resolve();
     stopLlmHotReload = config.subscribe(() => {
       refreshSecretValues();
       for (const id of hostsBots?.ids() ?? [config.botId]) {
         const target = hostsBots?.pour(id) ?? host;
         const routing = llmRouting(config, id);
-        const next = signature(routing);
+        const next = signatureRouting(routing);
         if (!target?.applyLlmConfig || signatures.get(id) === next) continue;
         signatures.set(id, next);
+        for (const degrade of routing.degrade) {
+          logger.warn("llm.role.modele_introuvable", {
+            bot: id,
+            role: degrade.role,
+            code: degrade.code,
+            modele: degrade.modeleId,
+          });
+        }
         pending = pending.then(async () => {
           await target.applyLlmConfig?.({ modelsConfig: routing.file, conversationModel: routing.models.light.reference,
             conversationThinking: routing.effective.light.thinking });

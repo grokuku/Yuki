@@ -20,7 +20,21 @@
  * Aucun import SDK/typebox.
  */
 
-import { keyEnv, keyPath, providerSecretId, readCatalog, roles } from "../llm/catalog.js";
+import {
+  catalogueDepuisModelsJson,
+  cheminCleFournisseur,
+  defautsInstance,
+  ecartsCatalogue,
+  ENV_HISTORIQUES,
+  ENV_HISTORIQUES_ALIAS,
+  idCleFournisseur,
+  lireFournisseurs,
+  lireModeles,
+  modeleParId,
+  nomEnvCleFournisseur,
+  ROLES_HERITES,
+} from "../llm/catalogue.js";
+import { planifierExecution } from "../llm/execution.js";
 import { readFileSync } from "node:fs";
 
 import { EnvError, type Env, readConfigEnvOverrides } from "./env.js";
@@ -490,12 +504,51 @@ export class ConfigRuntime {
     return this.valeurBot(path, overlay);
   }
 
-  selections(botId = this.botId) {
-    const overlay = this.cible(botId).values;
-    return {
-      light: String(this.effectif("llm.selection.light", overlay)),
-      heavy: String(this.effectif("llm.selection.heavy", overlay)),
-    };
+  /**
+   * Valeur EFFECTIVE d'un champ POUR UN BOT DONNÉ (`get()` lit le bot ACTIF).
+   *
+   * ⚠️ Sert aux hosts des autres bots : chacun a SES surcharges (`llm.bot.*`),
+   * et `get()` ne peut pas les voir. La fusion est la même (`effectif`), seule la
+   * source de l'overlay change.
+   */
+  valeurPour(botId: string, path: string): string | number {
+    return this.effectif(path, this.cible(botId).values);
+  }
+
+  /**
+   * FOURNISSEURS du catalogue (lot A) — portée `instance`, donc store COMMUN.
+   *
+   * ⚠️ Lecture TOLÉRANTE (`lireFournisseurs`) : un store à moitié écrit ne doit
+   * jamais empêcher le démarrage ; l'écriture, elle, est validée strictement.
+   */
+  fournisseurs() {
+    return lireFournisseurs(String(this.valeurCommune("llm.fournisseurs")));
+  }
+
+  /**
+   * Valeur HISTORIQUE d'une clé RETIRÉE du schéma (migration seulement).
+   *
+   * ⚠️ Ces clés ne sont plus validées ni servies : elles ne vivent plus dans les
+   * valeurs du runtime, seulement dans le FICHIER du store et dans les variables
+   * d'environnement historiques (`ENV_HISTORIQUES`). Sans cette lecture, la
+   * reprise du catalogue et la reprise des défauts de rôle liraient du vide — et
+   * tous les bots perdraient leur modèle à la bascule.
+   */
+  historique(path: string): string | undefined {
+    const brut = this.store.load().values[path];
+    if (typeof brut === "string") return brut;
+    if (typeof brut === "number") return String(brut);
+    for (const variable of [ENV_HISTORIQUES[path], ...(ENV_HISTORIQUES_ALIAS[path] ?? [])]) {
+      if (variable === undefined) continue;
+      const env = this.processEnv[variable];
+      if (typeof env === "string" && env.trim() !== "") return env;
+    }
+    return undefined;
+  }
+
+  /** MODÈLES du catalogue (lot A), même portée et même tolérance de lecture. */
+  modeles() {
+    return lireModeles(String(this.valeurCommune("llm.modeles")));
   }
 
   getString(path: string): string {
@@ -561,7 +614,13 @@ export class ConfigRuntime {
   /** Valeurs secrètes effectives (pour la redaction du logger). */
   secretValues(): string[] {
     const out: string[] = [];
-    for (const path of [...CONFIG_PATHS, ...Object.keys(this.values).filter(providerSecretId)]) {
+    // ⚠️ Clés des FOURNISSEURS du catalogue : sans elles ici, une clé saisie
+    // dans `/config` pourrait atterrir en clair dans un journal (audit, erreur
+    // de fournisseur).
+    const dynamiques = this.fournisseurs().map((fournisseur) =>
+      cheminCleFournisseur(fournisseur.id),
+    );
+    for (const path of [...CONFIG_PATHS, ...dynamiques]) {
       if (!isSecretPath(path)) continue;
       const value = this.get(path);
       if (typeof value === "string" && value.trim().length >= 6) out.push(value.trim());
@@ -575,10 +634,14 @@ export class ConfigRuntime {
   bridgeSecrets(): void {
     for (const name of this.bridgedProviders) delete this.processEnv[name];
     this.bridgedProviders.clear();
-    for (const provider of readCatalog(this.getString("llm.catalog")).providers) {
-      const value = this.getString(keyPath(provider.id));
+    // ⚠️ FOURNISSEURS DU CATALOGUE : c'est CETTE variable que `models.json`
+    // référence (`$YUKI_LLM_FOURNISSEUR_<ID>_API_KEY`). Une variable
+    // d'environnement est la SEULE forme sous laquelle une clé peut être utilisée
+    // sans jamais être écrite dans un fichier dérivé.
+    for (const fournisseur of this.fournisseurs()) {
+      const value = this.getString(cheminCleFournisseur(fournisseur.id));
       if (!value) continue;
-      const name = keyEnv(provider.id);
+      const name = nomEnvCleFournisseur(fournisseur.id);
       this.processEnv[name] = value;
       this.bridgedProviders.add(name);
     }
@@ -678,8 +741,14 @@ export class ConfigRuntime {
     overlay: Readonly<Record<string, string | number>>,
   ): ConfigSnapshot {
     const fields: Record<string, ConfigFieldSnapshot> = {};
-    const catalog = readCatalog(this.getString("llm.catalog"));
-    for (const path of [...CONFIG_PATHS, ...catalog.providers.map(p => keyPath(p.id))]) {
+    // ⚠️ Les clés des FOURNISSEURS du catalogue sont exposées comme des champs
+    // SECRETS ordinaires (`configured` + `masked`, jamais la valeur) : l'interface a
+    // besoin de savoir qu'une clé existe pour proposer « Remplacer » / « Effacer »,
+    // et n'a jamais le droit de la relire en clair.
+    const clesFournisseurs = this.fournisseurs().map((fournisseur) =>
+      cheminCleFournisseur(fournisseur.id),
+    );
+    for (const path of [...CONFIG_PATHS, ...clesFournisseurs]) {
       const descriptor = descriptorOf(path) as FieldDescriptor;
       const origin = this.origine(path, overlay);
       const lockedByEnv = this.isLockedByEnv(path) ? envNameOf(path) : undefined;
@@ -703,14 +772,28 @@ export class ConfigRuntime {
         };
       }
     }
-    const configured = (role: "light" | "heavy") => {
-      const selection = String(this.effectif(`llm.selection.${role}`, overlay));
-      const model = catalog.models.find(m => m.id === selection) ?? catalog.models.find(m => m.id === catalog[role]);
-      const provider = roles.some(r => r === selection) ? selection : model?.provider ?? catalog[role];
-      return Boolean((fields[keyPath(provider)] as SecretFieldSnapshot | undefined)?.configured);
+    // ⚠️ « Clé présente » se déduit du MODÈLE RÉSOLU de chaque rôle : le
+    // fournisseur vient du catalogue, plus d'un rôle codé en dur. Un rôle en
+    // dégradé (aucun modèle) n'a pas de clé — l'interface le dit déjà par
+    // ailleurs (« modèle introuvable »).
+    const plan = planifierExecution({
+      fournisseurs: this.fournisseurs(),
+      modeles: this.modeles(),
+      defauts: defautsInstance(this),
+      bot: {
+        light: String(this.effectif("llm.bot.light", overlay)),
+        heavy: String(this.effectif("llm.bot.heavy", overlay)),
+        vision: String(this.effectif("llm.bot.vision", overlay)),
+      },
+    });
+    const cleConfiguree = (role: "light" | "heavy"): boolean => {
+      const fournisseur = plan.roles[role].fournisseur;
+      if (fournisseur === undefined) return false;
+      const chemin = cheminCleFournisseur(fournisseur.id);
+      return Boolean((fields[chemin] as SecretFieldSnapshot | undefined)?.configured);
     };
-    const lightKey = configured("light");
-    const heavyKey = configured("heavy");
+    const lightKey = cleConfiguree("light");
+    const heavyKey = cleConfiguree("heavy");
     return { fields, status: { lightKey, heavyKey, ready: lightKey } };
   }
 
@@ -843,33 +926,64 @@ export class ConfigRuntime {
         scoped,
       );
     }
+    // ⚠️ SÉLECTIONS DE RÔLE (lot B) : un `modeleId` écrit doit EXISTER dans le
+    // catalogue RÉSULTANT. La vérification ne porte que sur les chemins PRÉSENTS
+    // DANS LE PATCH — c'est ce qui permet de SUPPRIMER un modèle encore référencé
+    // (le rôle passe alors en mode dégradé explicite, signalé à l'interface et au
+    // journal) tout en refusant d'ENREGISTRER une référence morte par saisie.
+    const modelesApres = lireModeles(String(nextCommon["llm.modeles"] ?? ""));
+    for (const [prefixe, magasin] of [
+      ["llm.defaut", nextCommon],
+      ["llm.bot", nextOverlay],
+    ] as const) {
+      for (const role of ROLES_HERITES) {
+        const path = `${prefixe}.${role}`;
+        if (!(path in patch)) continue;
+        const valeur = String(magasin[path] ?? "").trim();
+        if (valeur === "" || modeleParId(modelesApres, valeur) !== undefined) continue;
+        errors.push({
+          path,
+          code: "modele_inconnu",
+          message: `Modèle inconnu du catalogue : « ${valeur} ».`,
+        });
+      }
+    }
     if (locked.length > 0) throw new LockedByEnvError(locked);
     if (errors.length > 0) throw new ConfigValidationError(errors);
-
-    const catalog = readCatalog(String(nextCommon["llm.catalog"] ?? ""));
-    for (const role of roles) {
-      const path = `llm.${role}.model`;
-      const legacyModel = this.envValues[path] ?? nextCommon[path] ?? this.defaults[path];
-      if (catalog.models.some(m => m.provider === role && m.model === legacyModel)) {
-        throw new ConfigValidationError([{ path: "llm.catalog", code: "duplicate_model", message: "Ce modèle existe déjà chez ce fournisseur." }]);
-      }
-    }
-    for (const role of roles) {
-      const path = `llm.selection.${role}`;
-      const id = patch[path];
-      if (id && !roles.some(r => r === id) && !catalog.models.some(m => m.id === id)) {
-        throw new ConfigValidationError([{ path, code: "unknown_model", message: "Modèle inconnu." }]);
-      }
-    }
-    for (const path of Object.keys(patch)) {
-      const id = providerSecretId(path);
-      if (id && patch[path] !== null && !catalog.providers.some(p => p.id === id)) {
-        throw new ConfigValidationError([{ path, code: "unknown_provider", message: "Fournisseur inconnu." }]);
+    // ⚠️ CATALOGUE (lot A) : deux invariants vérifiés sur le RÉSULTAT, pas sur le
+    // patch — c'est le seul moyen d'attraper « on supprime un fournisseur encore
+    // utilisé » (le patch ne parle que de `llm.fournisseurs`) et « ce modèle
+    // pointe un fournisseur qui n'existe pas » (le patch peut ne toucher que
+    // `llm.modeles`). Refus NOMMÉS : le message dit le fournisseur, le nombre de
+    // modèles et leurs noms.
+    const fournisseursApres = lireFournisseurs(String(nextCommon["llm.fournisseurs"] ?? ""));
+    const ecarts = ecartsCatalogue(
+      { fournisseurs: lireFournisseurs(String(this.valeurCommune("llm.fournisseurs"))) },
+      {
+        fournisseurs: fournisseursApres,
+        modeles: lireModeles(String(nextCommon["llm.modeles"] ?? "")),
+      },
+    );
+    if (ecarts.length > 0) throw new ConfigValidationError(ecarts.map((ecart) => ({ ...ecart })));
+    // Une clé de fournisseur dont le fournisseur a disparu n'a plus de sens :
+    // elle est retirée du store (même mécanique que `llm.provider.<id>.apiKey`).
+    const fournisseursRestants = new Set(
+      fournisseursApres.map((fournisseur) => fournisseur.id),
+    );
+    for (const [path, valeur] of Object.entries(patch)) {
+      const id = idCleFournisseur(path);
+      // Une VALEUR pour un fournisseur qui n'existe pas est un refus explicite
+      // (l'interface se trompe de route ou de catalogue) ; `null` (effacement)
+      // reste toujours accepté, sinon on ne pourrait jamais nettoyer.
+      if (id && valeur !== null && !fournisseursRestants.has(id)) {
+        throw new ConfigValidationError([
+          { path, code: "unknown_provider", message: `Fournisseur inconnu : « ${id} ».` },
+        ]);
       }
     }
     for (const path of Object.keys(nextCommon)) {
-      const id = providerSecretId(path);
-      if (id && !catalog.providers.some(p => p.id === id)) delete nextCommon[path];
+      const id = idCleFournisseur(path);
+      if (id && !fournisseursRestants.has(id)) delete nextCommon[path];
     }
     if (changes.length > 0) {
       // Chaque store n'est réécrit QUE s'il a changé : un patch de clés `bot`
@@ -884,8 +998,6 @@ export class ConfigRuntime {
       if (overlayChange && cible.actif) this.overlayValues = nextOverlay;
       if (communChange || (overlayChange && cible.actif)) {
         this.bridgeSecrets();
-        this.emit();
-      } else if (changes.some(change => change.path.startsWith("llm.selection."))) {
         this.emit();
       }
     }
@@ -908,41 +1020,38 @@ export class ConfigRuntime {
 
   /**
    * Import UNIQUE (premier démarrage) : si le store est vide et qu'un
-   * `models.json` existe sur le volume, récupère « au mieux » `baseUrl`/`api`/
-   * modèle par provider. N'échoue jamais ; renvoie les champs importés.
+   * `models.json` existe sur le volume, en déduit le CATALOGUE (fournisseurs,
+   * modèles, défauts de rôle). N'échoue jamais ; renvoie les champs importés.
+   *
+   * ⚠️ DEPUIS LE LOT B, l'import vise le CATALOGUE (`llm.fournisseurs` /
+   * `llm.modeles` / `llm.defaut.*`) : les réglages par rôle n'existent plus. Le
+   * mapping « au mieux » est celui de `catalogueDepuisModelsJson`.
    */
   importLegacyModels(parsed: unknown): string[] {
     if (!this.isStoreEmpty()) return [];
-    const providers = (parsed as { providers?: unknown } | null)?.providers;
-    if (!providers || typeof providers !== "object") return [];
-
-    const mapping: Array<[providerId: string, prefix: string]> = [
-      ["llm-light", "llm.light"],
-      ["llm-heavy", "llm.heavy"],
-    ];
+    const catalogue = catalogueDepuisModelsJson(parsed);
+    if (catalogue === undefined) return [];
     const next = { ...this.values };
     const imported: string[] = [];
-
-    for (const [providerId, prefix] of mapping) {
-      const provider = (providers as Record<string, unknown>)[providerId];
-      if (!provider || typeof provider !== "object") continue;
-      const record = provider as Record<string, unknown>;
-      const candidates: Array<[string, unknown]> = [
-        [`${prefix}.baseUrl`, record.baseUrl],
-        [`${prefix}.api`, record.api],
-        [`${prefix}.model`, Array.isArray(record.models)
-          ? (record.models[0] as { id?: unknown } | undefined)?.id
-          : undefined],
-      ];
-      for (const [path, value] of candidates) {
-        if (typeof value !== "string") continue;
-        if (this.isLockedByEnv(path)) continue;
-        if (path in next) continue;
-        const result = validateField(path, value);
-        if (!result.ok) continue;
-        next[path] = result.value;
-        imported.push(path);
-      }
+    const poser = (path: string, value: string): void => {
+      if (this.isLockedByEnv(path)) return;
+      if (path in next) return;
+      const result = validateField(path, value);
+      if (!result.ok) return;
+      next[path] = result.value;
+      imported.push(path);
+    };
+    if (!("llm.fournisseurs" in next)) {
+      poser("llm.fournisseurs", JSON.stringify(catalogue.fournisseurs));
+    }
+    if (!("llm.modeles" in next)) {
+      poser("llm.modeles", JSON.stringify(catalogue.modeles));
+    }
+    // ⚠️ Les défauts APRÈS les listes : ils référencent des identifiants qui
+    // viennent d'être repris (la validation croisée les exige connus).
+    for (const role of ROLES_HERITES) {
+      const modeleId = catalogue.defauts[role];
+      if (typeof modeleId === "string" && modeleId !== "") poser(`llm.defaut.${role}`, modeleId);
     }
 
     if (imported.length === 0) return [];

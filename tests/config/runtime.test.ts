@@ -22,6 +22,30 @@ import { ConfigStore } from "../../src/config/store.js";
 
 const tempDirs: string[] = [];
 
+/** Fournisseur et modèle du catalogue, base de presque tous les cas ci-dessous. */
+const FOURNISSEUR_LOCAL = {
+  id: "local",
+  nom: "Local",
+  baseUrl: "https://local.example/v1",
+  api: "openai-completions",
+};
+const MODELE_ALPHA = {
+  id: "alpha",
+  nom: "chat",
+  fournisseurId: "local",
+  contexte: 131072,
+  vision: true,
+  thinking: "off",
+};
+
+/** Catalogue minimal (un fournisseur, un modèle) déjà enregistré. */
+function avecCatalogue(runtime: ConfigRuntime): void {
+  runtime.update({
+    "llm.fournisseurs": JSON.stringify([FOURNISSEUR_LOCAL]),
+    "llm.modeles": JSON.stringify([MODELE_ALPHA]),
+  });
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -56,34 +80,41 @@ function makeRuntime(processEnv: NodeJS.ProcessEnv = {}): {
 describe("précédence défauts < store < env", () => {
   it("sans store ni env : valeurs par défaut", () => {
     const { runtime } = makeRuntime();
-    expect(runtime.get("llm.light.model")).toBe("gemma4:31b");
+    // ⚠️ GARDE RÉVISÉE (lot B) : la clé témoin n'est plus `llm.light.model`
+    // (retirée au profit du catalogue) mais `llm.missingKeyMode`, qui reste un
+    // réglage d'INSTANCE verrouillable par l'environnement.
+    expect(runtime.get("llm.missingKeyMode")).toBe("degrade");
     expect(runtime.get("gpu.compatMode")).toBe("strict");
     expect(runtime.get("prompts.light")).toBe("prompt léger");
-    expect(runtime.originOf("llm.light.model")).toBe("default");
+    expect(runtime.originOf("llm.missingKeyMode")).toBe("default");
+    // Les sélections de rôle démarrent VIDES : aucun défaut décidé à la place de
+    // l'utilisateur (le bot doit choisir).
+    expect(runtime.get("llm.defaut.light")).toBe("");
+    expect(runtime.originOf("llm.defaut.light")).toBe("default");
   });
 
   it("le store surcharge le défaut", () => {
     const { runtime } = makeRuntime();
-    runtime.update({ "llm.light.model": "from-store" });
-    expect(runtime.getString("llm.light.model")).toBe("from-store");
-    expect(runtime.originOf("llm.light.model")).toBe("store");
+    runtime.update({ "llm.missingKeyMode": "refuse" });
+    expect(runtime.getString("llm.missingKeyMode")).toBe("refuse");
+    expect(runtime.originOf("llm.missingKeyMode")).toBe("store");
   });
 
   it("l'environnement surcharge le store ET verrouille le champ", () => {
-    const { runtime } = makeRuntime({ YUKI_LLM_LIGHT_MODEL: "from-env" });
-    expect(runtime.getString("llm.light.model")).toBe("from-env");
-    expect(runtime.originOf("llm.light.model")).toBe("env");
-    expect(runtime.isLockedByEnv("llm.light.model")).toBe(true);
+    const { runtime } = makeRuntime({ YUKI_LLM_MISSING_KEY_MODE: "refuse" });
+    expect(runtime.getString("llm.missingKeyMode")).toBe("refuse");
+    expect(runtime.originOf("llm.missingKeyMode")).toBe("env");
+    expect(runtime.isLockedByEnv("llm.missingKeyMode")).toBe(true);
     // Le store ne peut pas prendre le pas : un PUT visant le champ est refusé.
-    expect(() => runtime.update({ "llm.light.model": "from-store" })).toThrowError(
+    expect(() => runtime.update({ "llm.missingKeyMode": "degrade" })).toThrowError(
       LockedByEnvError,
     );
   });
 
   it("un env vide n'est PAS une surcharge", () => {
-    const { runtime } = makeRuntime({ YUKI_LLM_LIGHT_MODEL: "   " });
-    expect(runtime.originOf("llm.light.model")).toBe("default");
-    expect(runtime.isLockedByEnv("llm.light.model")).toBe(false);
+    const { runtime } = makeRuntime({ YUKI_LLM_MISSING_KEY_MODE: "   " });
+    expect(runtime.originOf("llm.missingKeyMode")).toBe("default");
+    expect(runtime.isLockedByEnv("llm.missingKeyMode")).toBe(false);
   });
 
   it("env invalide → EnvError au chargement", () => {
@@ -111,11 +142,14 @@ describe("update — patch fusionnant", () => {
 
   it("clé vide/espaces → empty_api_key", () => {
     const { runtime } = makeRuntime();
-    expect(() => runtime.update({ "llm.light.apiKey": "   " })).toThrowError(
+    // ⚠️ GARDE RÉVISÉE (lot B) : la clé d'un fournisseur est un chemin SECRET
+    // dynamique (`llm.fournisseur.<id>.apiKey`), plus `llm.light.apiKey`.
+    avecCatalogue(runtime);
+    expect(() => runtime.update({ "llm.fournisseur.local.apiKey": "   " })).toThrowError(
       ConfigValidationError,
     );
     try {
-      runtime.update({ "llm.light.apiKey": "  " });
+      runtime.update({ "llm.fournisseur.local.apiKey": "  " });
     } catch (error) {
       const fields = (error as ConfigValidationError).fields;
       expect(fields[0]?.code).toBe("empty_api_key");
@@ -153,36 +187,37 @@ describe("update — patch fusionnant", () => {
 
   it("applied.hot / applied.restart suivent le schéma", () => {
     const { runtime } = makeRuntime();
+    avecCatalogue(runtime);
     const result = runtime.update({
-      "llm.light.apiKey": "fake-key-123456",
-      "llm.light.model": "small-model",
+      "llm.fournisseur.local.apiKey": "fake-key-123456",
+      "llm.defaut.light": "alpha",
     });
-    expect(result.applied.hot).toContain("llm.light.apiKey");
+    expect(result.applied.hot).toContain("llm.fournisseur.local.apiKey");
     // Le modèle est rechargé À CHAUD (re-résolu au prochain run, sans redémarrage).
-    expect(result.applied.hot).toContain("llm.light.model");
+    expect(result.applied.hot).toContain("llm.defaut.light");
   });
 
   it("un changement de FOURNISSEUR (baseUrl/api) est appliqué À CHAUD", () => {
     const { runtime } = makeRuntime();
     const result = runtime.update({
-      "llm.light.baseUrl": "https://passerelle.example/v1",
-      "llm.heavy.baseUrl": "https://passerelle.example/v1",
+      "llm.fournisseurs": JSON.stringify([
+        { ...FOURNISSEUR_LOCAL, baseUrl: "https://passerelle.example/v1" },
+      ]),
     });
-    // Ni l'un ni l'autre ne doit exiger de redémarrage : la bascule se fait entre
-    // deux runs via le runtime de modèles PARTAGÉ rafraîchi EN PLACE.
-    expect(result.applied.hot).toContain("llm.light.baseUrl");
-    expect(result.applied.hot).toContain("llm.heavy.baseUrl");
-    expect(result.applied.restart).not.toContain("llm.light.baseUrl");
-    expect(result.applied.restart).not.toContain("llm.heavy.baseUrl");
+    // Le catalogue n'exige aucun redémarrage : la bascule se fait entre deux runs
+    // via le runtime de modèles PARTAGÉ rafraîchi EN PLACE.
+    expect(result.applied.hot).toContain("llm.fournisseurs");
+    expect(result.applied.restart).not.toContain("llm.fournisseurs");
   });
 });
 
 describe("secrets", () => {
   it("l'instantané ne contient JAMAIS la valeur en clair", () => {
     const { runtime } = makeRuntime();
-    runtime.update({ "llm.light.apiKey": "sk-super-secret-1234" });
+    avecCatalogue(runtime);
+    runtime.update({ "llm.fournisseur.local.apiKey": "sk-super-secret-1234" });
     const snapshot = runtime.snapshot();
-    const leaf = snapshot.fields["llm.light.apiKey"] as {
+    const leaf = snapshot.fields["llm.fournisseur.local.apiKey"] as {
       configured: boolean;
       masked: string | null;
       source: string;
@@ -200,58 +235,73 @@ describe("secrets", () => {
 
   it("bridgeSecrets reflète les clés du store dans process.env", () => {
     const { runtime, processEnv } = makeRuntime();
-    expect(processEnv["YUKI_LLM_LIGHT_API_KEY"]).toBeUndefined();
-    runtime.update({ "llm.light.apiKey": "store-key-000000" });
-    expect(processEnv["YUKI_LLM_LIGHT_API_KEY"]).toBe("store-key-000000");
+    avecCatalogue(runtime);
+    // ⚠️ Le nom reflète le FOURNISSEUR du catalogue : c'est CETTE variable que
+    // `models.json` référence (`apiKey: "$…_API_KEY"`).
+    expect(processEnv["YUKI_LLM_FOURNISSEUR_LOCAL_API_KEY"]).toBeUndefined();
+    runtime.update({ "llm.fournisseur.local.apiKey": "store-key-000000" });
+    expect(processEnv["YUKI_LLM_FOURNISSEUR_LOCAL_API_KEY"]).toBe("store-key-000000");
     // Effacer la clé la retire de process.env.
-    runtime.update({ "llm.light.apiKey": null });
-    expect(processEnv["YUKI_LLM_LIGHT_API_KEY"]).toBeUndefined();
+    runtime.update({ "llm.fournisseur.local.apiKey": null });
+    expect(processEnv["YUKI_LLM_FOURNISSEUR_LOCAL_API_KEY"]).toBeUndefined();
   });
 
-  it("le bridge ne remplace PAS une clé fournie par l'environnement", () => {
-    const { runtime, processEnv } = makeRuntime({
-      YUKI_LLM_LIGHT_API_KEY: "env-key-111111",
-    });
-    processEnv["YUKI_LLM_LIGHT_API_KEY"] = "env-key-111111";
-    // Le store ne peut pas écraser un champ verrouillé, mais le bridge
-    // conserve la valeur d'env telle quelle.
-    expect(() => runtime.update({ "llm.light.apiKey": "other" })).toThrowError(
-      LockedByEnvError,
+  it("une clé de fournisseur qui n'existe plus est REFUSÉE (et purgée du store)", () => {
+    const { runtime } = makeRuntime();
+    avecCatalogue(runtime);
+    runtime.update({ "llm.fournisseur.local.apiKey": "store-key-000000" });
+    // Retirer le fournisseur (après ses modèles) doit retirer sa clé : elle ne
+    // peut pas rester « configurée » pour un fournisseur absent.
+    runtime.update({ "llm.modeles": JSON.stringify([]), "llm.fournisseurs": JSON.stringify([]) });
+    expect(runtime.snapshot().fields["llm.fournisseur.local.apiKey"]).toBeUndefined();
+    // Une VALEUR pour un fournisseur inconnu est un refus explicite.
+    expect(() => runtime.update({ "llm.fournisseur.inconnu.apiKey": "x-123456" })).toThrowError(
+      ConfigValidationError,
     );
-    runtime.bridgeSecrets();
-    expect(processEnv["YUKI_LLM_LIGHT_API_KEY"]).toBe("env-key-111111");
   });
 
   it("secretValues fournit les clés non vides pour la redaction du logger", () => {
     const { runtime } = makeRuntime();
-    runtime.update({ "llm.heavy.apiKey": "heavy-secret-9999" });
+    avecCatalogue(runtime);
+    runtime.update({ "llm.fournisseur.local.apiKey": "heavy-secret-9999" });
     expect(runtime.secretValues()).toContain("heavy-secret-9999");
   });
 });
 
 describe("import unique de models.json", () => {
-  it("importe baseUrl/api/modèle par provider quand le store est vide", () => {
+  it("importe le CATALOGUE (fournisseurs, modèles, défauts) quand le store est vide", () => {
     const { runtime, store } = makeRuntime();
+    // ⚠️ GARDE RÉVISÉE (lot B) : l'import ne remplit plus des réglages de rôle
+    // (retirés du schéma) mais le CATALOGUE — sans quoi un premier démarrage sur
+    // un `models.json` existant repartirait sur les défauts du code.
     const imported = runtime.importLegacyModels({
       providers: {
         "llm-light": {
           baseUrl: "https://light.example/v1",
           api: "openai-completions",
-          models: [{ id: "small" }],
+          models: [{ id: "small", input: ["text", "image"], contextWindow: 4096 }],
         },
         "llm-heavy": {
           baseUrl: "https://heavy.example/v1",
-          models: [{ id: "big" }],
+          models: [{ id: "big", contextWindow: 8192 }],
         },
       },
     });
-    expect(imported).toContain("llm.light.baseUrl");
-    expect(imported).toContain("llm.light.model");
-    expect(imported).toContain("llm.heavy.model");
-    expect(runtime.getString("llm.light.baseUrl")).toBe("https://light.example/v1");
-    expect(runtime.getString("llm.heavy.model")).toBe("big");
+    expect(imported).toContain("llm.fournisseurs");
+    expect(imported).toContain("llm.modeles");
+    expect(imported).toContain("llm.defaut.light");
+    expect(imported).toContain("llm.defaut.heavy");
+    expect(runtime.fournisseurs().map((fournisseur) => fournisseur.baseUrl)).toEqual([
+      "https://light.example/v1",
+      "https://heavy.example/v1",
+    ]);
+    expect(runtime.modeles().map((modele) => modele.nom)).toEqual(["small", "big"]);
+    expect(runtime.modeles()[0]).toMatchObject({ vision: true, contexte: 4096 });
+    // Les défauts désignent les modèles repris, rôle par rôle.
+    expect(runtime.getString("llm.defaut.light")).toBe(runtime.modeles()[0]?.id);
+    expect(runtime.getString("llm.defaut.heavy")).toBe(runtime.modeles()[1]?.id);
     // Persisté.
-    expect(store.load().values["llm.light.model"]).toBe("small");
+    expect(store.load().values["llm.modeles"]).toContain("small");
   });
 
   it("ne fait rien si le store n'est pas vide", () => {
@@ -280,37 +330,63 @@ describe("subscribe", () => {
 });
 
 describe("catalogue LLM partagé et sélections par bot", () => {
-  it("isole les deux rôles, conserve les clés au rechargement et hérite après suppression", () => {
+  /**
+   * ⚠️ GARDE RÉVISÉE (lot B) : le catalogue JSON du commit externe
+   * (`llm.catalog` + `llm.selection.*`) est RETIRÉ au profit de
+   * `llm.fournisseurs` / `llm.modeles` / `llm.defaut.*` / `llm.bot.*`. Ce que ce
+   * cas vérifie est inchangé : DEUX bots peuvent viser DEUX modèles différents
+   * avec UN SEUL `models.json`, les clés restent masquées, et une sélection
+   * inconnue est refusée.
+   */
+  it("deux bots, deux modèles : un seul models.json, clés masquées, sélection inconnue refusée", () => {
     const { runtime, processEnv } = makeRuntime();
-    const catalog = {
-      providers: [{ id: "local", name: "Local", baseUrl: "https://local.example/v1" }],
-      models: [
-        { id: "alpha", model: "chat", provider: "local", thinking: "off", vision: true },
-        { id: "beta", model: "code", provider: "local", thinking: "high", vision: false },
-      ],
-      light: "alpha", heavy: "heavy",
-    };
-    const changes = runtime.update({ "llm.catalog": JSON.stringify(catalog), "llm.provider.local.apiKey": "secret-local-token" });
-    expect(JSON.stringify(changes)).not.toContain("secret-local-token");
-    expect(runtime.secretValues()).toContain("secret-local-token");
-    runtime.updatePour("autre", { "llm.selection.heavy": "beta", "llm.selection.light": "heavy" }, { portee: "bot" });
-    runtime.reload();
+    runtime.update({
+      "llm.fournisseurs": JSON.stringify([FOURNISSEUR_LOCAL]),
+      "llm.modeles": JSON.stringify([
+        MODELE_ALPHA,
+        { ...MODELE_ALPHA, id: "beta", nom: "code", thinking: "high", vision: false },
+      ]),
+      "llm.fournisseur.local.apiKey": "secret-local-token",
+      "llm.defaut.light": "alpha",
+      "llm.defaut.heavy": "beta",
+    });
+    // Surcharge du SECOND bot : il inverse les deux rôles.
+    runtime.updatePour(
+      "autre",
+      { "llm.bot.light": "beta", "llm.bot.heavy": "alpha" },
+      { portee: "bot" },
+    );
     const primary = llmRouting(runtime);
     const second = llmRouting(runtime, "autre");
-    expect(primary.models.light.reference).toBe("catalog-local/chat");
-    expect(second.models.light.reference).toBe(primary.models.heavy.reference);
-    expect(second.models.heavy.reference).toBe("catalog-local/code");
-    expect(second.effective.heavy.vision).toBe(false);
-    expect(primary.file).toEqual(second.file);
-    expect(primary.file.providers["catalog-local"]?.models.map(m => m.id)).toEqual(["chat", "code"]);
-    expect(primary.file.providers["catalog-local"]?.apiKey).toBe("$YUKI_LLM_PROVIDER_local_API_KEY");
-    expect(processEnv.YUKI_LLM_PROVIDER_local_API_KEY).toBe("secret-local-token");
+    expect(primary.models.light.reference).toBe("local/chat");
+    expect(primary.models.heavy.reference).toBe("local/code");
+    expect(second.models.light.reference).toBe("local/code");
+    expect(second.models.heavy.reference).toBe("local/chat");
+    // ⚠️ La VISION et la RÉFLEXION suivent le MODÈLE, pas le rôle : le bot qui a
+    // « code » en discussion perd la vision, sans que le défaut soit écrasé.
+    expect(second.effective.light.vision).toBe(false);
+    expect(second.effective.light.thinking).toBe("high");
+    expect(primary.effective.light.vision).toBe(true);
+    expect(runtime.getString("llm.defaut.light")).toBe("alpha");
+    // UN SEUL fichier, partagé : tous les modèles du catalogue y sont écrits.
+    expect(second.file).toEqual(primary.file);
+    expect(primary.file.providers["local"]?.models.map((modele) => modele.id)).toEqual([
+      "chat",
+      "code",
+    ]);
+    // La clé du fournisseur n'est JAMAIS écrite : `models.json` ne référence
+    // qu'une variable d'environnement, que le pont alimente.
+    expect(primary.file.providers["local"]?.apiKey).toBe("$YUKI_LLM_FOURNISSEUR_LOCAL_API_KEY");
+    expect(JSON.stringify(primary.file)).not.toContain("secret-local-token");
+    expect(processEnv.YUKI_LLM_FOURNISSEUR_LOCAL_API_KEY).toBe("secret-local-token");
+    // « clé présente » se déduit du fournisseur RÉSOLU de chaque rôle.
     expect(runtime.snapshotPour("autre").status.heavyKey).toBe(true);
-    expect(() => runtime.updatePour("autre", { "llm.selection.heavy": "unknown" })).toThrow(ConfigValidationError);
-    expect(() => runtime.update({ "llm.catalog": JSON.stringify({ ...catalog, providers: [] }) })).toThrow(ConfigValidationError);
-    runtime.update({ "llm.catalog": JSON.stringify({ providers: [], models: [], light: "light", heavy: "light" }) });
-    expect(llmRouting(runtime, "autre").models.heavy.reference).toBe(llmRouting(runtime).models.light.reference);
-    expect(processEnv.YUKI_LLM_PROVIDER_local_API_KEY).toBeUndefined();
-    expect(runtime.secretValues()).not.toContain("secret-local-token");
+    // Un `modeleId` inconnu est refusé à l'écriture (jamais enregistré).
+    expect(() =>
+      runtime.updatePour("autre", { "llm.bot.heavy": "inconnu" }, { portee: "bot" }),
+    ).toThrow(ConfigValidationError);
+    // La valeur du bot « autre » est restée celle qui avait été acceptée (le
+    // refus n'a rien écrit) — lue AVEC SON overlay, pas celui du bot actif.
+    expect(runtime.valeurPour("autre", "llm.bot.heavy")).toBe("alpha");
   });
 });

@@ -96,6 +96,17 @@
           >
             Modèles<span class="config-tab__dot" aria-hidden="true"></span>
           </button>
+          <button
+            class="config-tab"
+            type="button"
+            role="tab"
+            id="tab-catalogue"
+            aria-selected="false"
+            aria-controls="panel-catalogue"
+            tabindex="-1"
+          >
+            Catalogue<span class="config-tab__dot" aria-hidden="true"></span>
+          </button>
           <!--
             EXÉCUTION (ancien « Conversation ») : ce qui concerne l'EXÉCUTION des
             tours — délégation au worker lourd (`delegation`), politique de clé
@@ -199,6 +210,22 @@
               hidden
             ></p>
             <div id="group-modeles" class="config-groups"></div>
+          </section>
+          <!-- ═══ CATALOGUE (INSTANCE) ═════════════════════════════════════════
+               ⚠️ ONGLET DÉDIÉ (lot A du 2026-11-19) : FOURNISSEURS et MODÈLES,
+               deux listes persistées (`llm.fournisseurs`, `llm.modeles`).
+               Le contenu est monté par `catalogue-llm.js` (modales `HolafModal`,
+               aucun appel réseau vers un fournisseur) dans `#group-catalogue`.
+               Aucun groupe déclaratif : ces listes n'ont pas de champ fixe. -->
+          <section
+            class="config-panel"
+            role="tabpanel"
+            id="panel-catalogue"
+            aria-labelledby="tab-catalogue"
+            tabindex="0"
+            hidden
+          >
+            <div id="group-catalogue" class="config-groups"></div>
           </section>
           <!-- ═══ PROMPTS (INSTANCE) ══════════════════════════════════════════
                ⚠️ ONGLET SÉPARÉ DE « MODÈLES » (décision utilisateur du

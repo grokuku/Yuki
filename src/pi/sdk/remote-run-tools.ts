@@ -99,10 +99,10 @@ export type RemoteRunLibrarianPorts = Omit<LibrarianToolsConfig, "sessionId" | "
 export interface RemoteRunVision {
   /** Référence `provider/modelId` effectivement résolue. */
   modelLabel: () => string;
-  /** Le modèle accepte-t-il les images ? (`llm.light.vision`). */
+  /** Le modèle accepte-t-il les images ? (déclaration de vision du modèle). */
   imagesSupported: () => boolean;
   /**
-   * ⚠️ VISION DE REPLI (`llm.vision.*`) : quand le modèle du run ne
+   * ⚠️ VISION DE REPLI (rôle « vision » du catalogue) : quand le modèle du run ne
    * reçoit pas les images, l'image lue via `lire_fichier` est DÉCRITE et la
    * description remplace le bloc image. Absent ⇒ refus explicite.
    */

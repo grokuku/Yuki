@@ -5,7 +5,7 @@
  * non`) ne reçoit aucune image ; jusqu'ici la seule issue était de la refuser.
  * Ici, un MODÈLE DE VISION DÉDIÉ — le sien, avec SON adresse, SON nom et SA clé
  * (`/config` → onglet « Modèles », bloc « Vision de repli », soit
- * `llm.vision.baseUrl` / `llm.vision.model` / `llm.vision.apiKey`) — REGARDE
+ * le rôle « vision » du CATALOGUE — un modèle déclaré « Reçoit les images ») — REGARDE
  * l'image et rend une DESCRIPTION, que le modèle actif reçoit à la place de
  * l'image (bloc balisé, `src/files/vision-fallback.ts`).
  *
@@ -16,7 +16,7 @@
  *
  * ⚠️ INSTANCIÉ SANS RIEN AJOUTER À LA MAIN : `models.json` est DÉRIVÉ de la
  * configuration (`buildModelsConfigFrom`, `src/llm/models.ts`) et contient, dès
- * que `llm.vision.baseUrl` ET `llm.vision.model` sont renseignés, un provider
+ * qu'un modèle de vision est SÉLECTIONNÉ (`llm.defaut.vision` / `llm.bot.vision`), un provider
  * `llm-vision` avec ce modèle. Le SDK le résout comme les autres, par la
  * référence `llm-vision/<modèle>` — aucun fichier à éditer, et vider les deux
  * champs le retire.
@@ -57,13 +57,13 @@ export interface SdkVisionDescriberConfig {
   modelsPath: string;
   /**
    * Référence `provider/modelId` du modèle de vision DÉDIÉ, RELUE À CHAQUE
-   * USAGE (`llm.vision.baseUrl` + `llm.vision.model`) : un changement s'applique
+   * USAGE (sélection du catalogue) : un changement s'applique
    * sans redémarrage. Chaîne vide ⇒ aucun repli configuré (`not_configured`),
    * comportement actuel (l'image n'est pas envoyée et c'est DIT).
    */
   modelReference: () => string;
   /**
-   * Niveau de réflexion du modèle de vision (`llm.vision.thinking`), relu à
+   * Niveau de réflexion du MODÈLE de vision (`llm.modeles[].thinking`), relu à
    * chaque usage. Défaut `off` : décrire n'est pas raisonner.
    */
   thinking?: () => PiThinkingLevel;
@@ -106,7 +106,7 @@ export function createSdkVisionDescriber(config: SdkVisionDescriberConfig): Visi
     modelsPath: config.modelsPath,
     systemPrompt: VISION_DESCRIPTION_PROMPT,
     modelReference: config.modelReference,
-    // ⚠️ Réflexion RELUE À CHAQUE APPEL (`llm.vision.thinking`), `off` par
+    // ⚠️ Réflexion RELUE À CHAQUE APPEL (propriété du MODÈLE), `off` par
     // défaut : décrire n'est pas raisonner, et un modèle à réflexion longue
     // doublerait le délai d'un tour pour un gain nul sur une image.
     thinking: config.thinking ?? (() => "off"),

@@ -116,8 +116,10 @@ describe("② aiguillage des écritures : une clé de bot ne fuit pas dans confi
 
   it("`update()` d'une clé `instance` continue d'écrire dans le store commun", () => {
     const b = banc();
-    b.runtime().update({ "llm.light.model": "autre-modele" });
-    expect(communSurDisque(b.storePath)).toEqual({ "llm.light.model": "autre-modele" });
+    // ⚠️ GARDE RÉVISÉE (lot B) : `llm.light.model` n'existe plus ; la clé
+    // d'instance témoin est `llm.catalogueMigre` (drapeau du catalogue).
+    b.runtime().update({ "llm.catalogueMigre": "oui" });
+    expect(communSurDisque(b.storePath)).toEqual({ "llm.catalogueMigre": "oui" });
     expect(() => statSync(b.overlayPath)).toThrow();
   });
 
@@ -155,12 +157,14 @@ describe("③ l'overlay est relu au REDÉMARRAGE", () => {
   it("un champ d'INSTANCE trouvé dans l'overlay est ignoré et DIT", () => {
     const b = banc();
     mkdirSync(join(b.racine, "state", "bots", "yuki"), { recursive: true });
+    // ⚠️ GARDE RÉVISÉE (lot B) : la clé d'instance témoin est
+    // `llm.defaut.light` (sélection d'un modèle par défaut).
     writeFileSync(
       b.overlayPath,
-      JSON.stringify({ "llm.light.model": "depuis-overlay", "chat.mode": "discord" }),
+      JSON.stringify({ "llm.defaut.light": "depuis-overlay", "chat.mode": "discord" }),
     );
     const apres = b.runtime();
-    expect(apres.getString("llm.light.model")).toBe("gemma4:31b");
+    expect(apres.getString("llm.defaut.light")).toBe("");
     expect(apres.getString("chat.mode")).toBe("discord");
     expect(apres.warnings.join("\n")).toContain("champ d'INSTANCE présent dans l'overlay");
   });
@@ -182,14 +186,16 @@ describe("④ précédence : env > overlay > store commun > défaut", () => {
   });
 
   it("l'environnement reste PRIORITAIRE sur le store (clé d'instance)", () => {
-    const b = banc({ YUKI_LLM_LIGHT_MODEL: "modele-env" });
+    // ⚠️ GARDE RÉVISÉE (lot B) : `llm.light.model` (verrouillable) est retirée ;
+    // `llm.missingKeyMode` reste un réglage d'instance verrouillable.
+    const b = banc({ YUKI_LLM_MISSING_KEY_MODE: "refuse" });
     // Le store est écrit AVANT la construction : le champ est verrouillé par
-    // l'environnement, donc un `PUT` le viserait serait refusé (`locked_by_env`).
-    new ConfigStore(b.storePath).write({ "llm.light.model": "modele-store" });
+    // l'environnement, donc un `PUT` le visant serait refusé (`locked_by_env`).
+    new ConfigStore(b.storePath).write({ "llm.missingKeyMode": "degrade" });
     const runtime = b.runtime();
-    expect(runtime.getString("llm.light.model")).toBe("modele-env");
-    expect(runtime.originOf("llm.light.model")).toBe("env");
-    expect(() => runtime.update({ "llm.light.model": "autre" })).toThrowError();
+    expect(runtime.getString("llm.missingKeyMode")).toBe("refuse");
+    expect(runtime.originOf("llm.missingKeyMode")).toBe("env");
+    expect(() => runtime.update({ "llm.missingKeyMode": "degrade" })).toThrowError();
   });
 
   it("une clé de bot ne peut PAS être fixée par l'environnement (lot 35b) : la variable est annoncée", () => {

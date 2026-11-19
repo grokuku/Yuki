@@ -79,8 +79,11 @@ describe("① onglets IDENTIQUES pour tous les bots (aucun bot dans le calcul)",
       "plateformes",
       "declencheurs",
     ]);
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT A) : l'onglet « catalogue » est AJOUTÉ
+    // à la page Instance (fournisseurs + modèles, `catalogue-llm.js`).
     expect(idsOnglets("instance")).toEqual([
       "modeles",
+      "catalogue",
       "prompts",
       "execution",
       "images",

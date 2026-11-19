@@ -43,11 +43,13 @@ const comfyDir = mkdtempSync(join(tmpdir(), "yuki-static-ui-comfy-"));
 
 /**
  * ⚠️ DEUX PAGES depuis le sous-lot 1b-4 (scission Instance / Bot) :
- *   - `/config` = les réglages COMMUNS (8 onglets) ;
+ *   - `/config` = les réglages COMMUNS (9 onglets depuis le catalogue du lot A) ;
  *   - `/bots`   = les réglages d'UN bot (7 onglets, `?b=<slug>`).
  *
- * ⚠️ GARDE MODIFIÉE (2026-11-14, « consignes durables ») : l'onglet « Prompts »
- * a été AJOUTÉ aux DEUX pages (8 et 7 onglets). Les comptes ci-dessous sont
+ * ⚠️ GARDE MODIFIÉE (2026-11-19, LOT A « catalogue de fournisseurs et de
+ * modèles ») : l'onglet « Catalogue » a été AJOUTÉ à la page Instance (9 et 7
+ * onglets). ⚠️ GARDE MODIFIÉE (2026-11-14, « consignes durables ») : l'onglet
+ * « Prompts » a été AJOUTÉ aux DEUX pages (8 et 7 onglets). Les comptes ci-dessous sont
  * nommés : ils ne sont pas « 7/6 » par tradition, ils disent le découpage voulu
  * par l'utilisateur (ce qu'il demande vs la mécanique du prompt).
  * Le CATALOGUE des champs a quitté `config.js` pour `config-fields.js` (module
@@ -182,14 +184,16 @@ describe("UI statique servie par le gateway", () => {
     expect(css.headers.get("content-type")).toContain("text/css");
   });
 
-  it("la page INSTANCE organise /config en 8 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
+  it("la page INSTANCE organise /config en 9 onglets accessibles (tablist ↔ tabpanels appariés)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
 
     // Barre d'onglets accessible.
     expect(body).toContain('role="tablist"');
     expect(body).toMatch(/role="tablist"[^>]*aria-label="/);
 
-    // Les 8 libellés de la page INSTANCE, dans l'ordre, portés par des role="tab".
+    // Les 9 libellés de la page INSTANCE, dans l'ordre, portés par des role="tab".
+    // ⚠️ « Catalogue » est NOUVEAU (2026-11-19, lot A) : FOURNISSEURS + MODÈLES,
+    // deux listes éditées par `catalogue-llm.js` (modales).
     // ⚠️ « Prompts » est NOUVEAU (2026-11-14) : prompts par défaut + règles
     // communes + personnalité par défaut, séparés de « Modèles ».
     // ⚠️ « Conversation », « Déclencheurs », « Personnalité » et « Voix » ont
@@ -198,6 +202,7 @@ describe("UI statique servie par le gateway", () => {
     const tabLabels = [...body.matchAll(/<button[^>]*role="tab"[^>]*>\s*([^<]+)/g)].map((m) => m[1].trim());
     expect(tabLabels).toEqual([
       "Modèles",
+      "Catalogue",
       "Prompts",
       "Exécution",
       "Images",
@@ -212,8 +217,8 @@ describe("UI statique servie par le gateway", () => {
     // (aria-labelledby).
     const tabTags = [...body.matchAll(/<button[^>]*role="tab"[^>]*>/g)].map((m) => m[0]);
     const panelTags = [...body.matchAll(/<section[^>]*role="tabpanel"[^>]*>/g)].map((m) => m[0]);
-    expect(tabTags.length).toBe(8);
-    expect(panelTags.length).toBe(8);
+    expect(tabTags.length).toBe(9);
+    expect(panelTags.length).toBe(9);
     for (const tag of tabTags) {
       const id = tag.match(/id="([^"]+)"/)?.[1];
       const controls = tag.match(/aria-controls="([^"]+)"/)?.[1];
@@ -1004,12 +1009,12 @@ describe("Panneau Personnalité — section « Règles communes » (éditées pa
     }
   });
 
-  it("le markup de la page Instance compte exactement 8 onglets (Prompts ajouté, aucun onglet Règles)", async () => {
+  it("le markup de la page Instance compte exactement 9 onglets (Catalogue et Prompts ajoutés, aucun onglet Règles)", async () => {
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    // ⚠️ 8 onglets : 7 depuis la scission Instance / Bot (sous-lot 1b-4), plus
-    // « Prompts » (2026-11-14). Les RÈGLES COMMUNES vivent DANS « Prompts » : il
-    // n'y a toujours aucun onglet « Règles ».
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
+    // ⚠️ 9 onglets : 7 depuis la scission Instance / Bot (sous-lot 1b-4), plus
+    // « Prompts » (2026-11-14) et « Catalogue » (lot A, 2026-11-19). Les RÈGLES
+    // COMMUNES vivent DANS « Prompts » : il n'y a toujours aucun onglet « Règles ».
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
     // ⚠️ GARDE MODIFIÉE : le panneau de la personnalité PARTAGÉE (règles
     // strictes, `personality.md`, archive, mémoire) est un réglage d'INSTANCE —
     // il vit dans `/config` (onglet « Modèles ») et NON sur la page d'un bot, où
@@ -1023,7 +1028,7 @@ describe("Panneau Personnalité — section « Règles communes » (éditées pa
 });
 
 describe("Libraire de Pi-Web — section /config et test de connexion (sans nouvel onglet)", () => {
-  it("ajoute la section « Libraire » à l'onglet Système existant (8 onglets, aucun ajouté)", async () => {
+  it("ajoute la section « Libraire » à l'onglet Système existant (9 onglets, aucun ajouté)", async () => {
     const js = await (await fetch(`${baseUrl}/ui/config.js`)).text();
     const champs = await (await fetch(`${baseUrl}${CATALOGUE}`)).text();
     // Groupe de champs dans l'onglet Système (aucun nouvel onglet). ⚠️ Le
@@ -1033,7 +1038,7 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     // ⚠️ Le groupe « notifications » (PWA + Web Push) et le groupe « affichage »
     // (fuseau des horodatages, `ui.timeZone`) ont rejoint l'onglet Système ; la
     // section « Images » (ComfyUI) a son ONGLET PROPRE. Le rattachement se lit
-    // désormais dans `config-pages.js` (8 onglets de la page Instance).
+    // désormais dans `config-pages.js` (9 onglets de la page Instance).
     expect(js).toContain("groupesParOnglet(PAGE, GROUPS)");
     for (const path of ["librarian.baseUrl", "librarian.agentToken", "librarian.apiKey"]) {
       expect(champs, path).toContain(`path: "${path}"`);
@@ -1050,9 +1055,10 @@ describe("Libraire de Pi-Web — section /config et test de connexion (sans nouv
     expect(js).not.toContain("innerHTML");
     expect(js).not.toContain(".style.");
     expect(js).not.toContain('setAttribute("style"');
-    // Le markup garde exactement 8 onglets (verrou de la page Instance).
+    // Le markup garde exactement 9 onglets (verrou de la page Instance).
+    // ⚠️ GARDE MODIFIÉE (2026-11-19, lot A) : 8 → 9 avec l'onglet « Catalogue ».
     const body = await (await fetch(`${baseUrl}/config`)).text();
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
     expect(body).toContain('id="group-systeme"');
     // La borne d'injection des sources est un réglage COMMUN (portée instance) :
     // elle vit dans « Système », avec un renvoi vers la page du bot.
@@ -1076,7 +1082,8 @@ describe("Images générées (ComfyUI) — onglet dédié « Images » et servic
     const images = body.slice(body.indexOf('id="panel-images"'), body.indexOf('id="panel-agents"'));
     expect(images).toContain('id="group-images"');
     expect(images).toContain('id="images-root"');
-    expect([...body.matchAll(/role="tab"/g)].length).toBe(8);
+    // ⚠️ GARDE MODIFIÉE (2026-11-19, LOT A) : 8 → 9 avec l'onglet « Catalogue ».
+    expect([...body.matchAll(/role="tab"/g)].length).toBe(9);
     // CSP : aucun style inline dans le markup.
     expect(body).not.toMatch(/\sstyle=/);
   });

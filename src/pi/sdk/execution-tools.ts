@@ -704,7 +704,7 @@ export interface FileTransferVision {
   /** Référence `provider/modelId` du modèle (message honnête en cas de refus). */
   modelLabel?: string;
   /**
-   * ⚠️ VISION DE REPLI (`llm.vision.*`) : quand le modèle du job ne
+   * ⚠️ VISION DE REPLI (rôle « vision » du catalogue) : quand le modèle du job ne
    * reçoit pas les images, l'image RÉCUPÉRÉE est DÉCRITE et la description
    * remplace le bloc image. Absent ⇒ refus explicite (comportement d'origine).
    */

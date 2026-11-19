@@ -112,7 +112,7 @@ export interface LibrarianToolsConfig {
   captureEnabled?: () => boolean;
   /**
    * Le MODÈLE de conversation reçoit-il les IMAGES ? (`model.input` de
-   * `models.json`, produit par `/config` `llm.light.vision`). Absent ⇒ oui.
+   * `models.json`, d'après la déclaration de VISION du modèle). Absent ⇒ oui.
    * ⚠️ `false` ⇒ la capture n'est PAS jointe : le SDK la remplacerait par
    * « (tool image omitted…) » et le modèle croirait l'avoir vue. La capture
    * reste affichée à l'humain, et le motif est écrit dans le résultat.

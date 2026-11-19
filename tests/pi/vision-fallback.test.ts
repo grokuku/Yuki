@@ -42,7 +42,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { CONFIG_SCHEMA } from "../../src/config/schema.js";
+import { CONFIG_SCHEMA, descriptorOf } from "../../src/config/schema.js";
 import {
   blocDescriptionVision,
   blocEchecVisionRepli,
@@ -209,45 +209,42 @@ function capture(): Capture {
   return { prompted: [], images: [], appels: 0 };
 }
 
-describe("① les réglages `llm.vision.*` (modèle DÉDIÉ, pas un choix)", () => {
-  it("adresse et modèle : portée `instance`, défaut VIDE, à chaud", () => {
-    for (const [path, env] of [
-      ["llm.vision.baseUrl", "YUKI_LLM_VISION_BASE_URL"],
-      ["llm.vision.model", "YUKI_LLM_VISION_MODEL"],
-    ] as const) {
+describe("① la SÉLECTION du modèle de vision (catalogue, plus de champs dédiés)", () => {
+  /**
+   * ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : les quatre réglages `llm.vision.*`
+   * (adresse, modèle, réflexion, clé) sont RETIRÉS au profit du CATALOGUE. Ce qui
+   * est vérifié est inchangé sur le fond : « aucun modèle de vision sélectionné »
+   * est le SEUL interrupteur (défaut VIDE), la sélection est à chaud, et la clé
+   * reste SECRÈTE (celle du fournisseur du modèle choisi).
+   */
+  it("la sélection est un `modeleId` VIDE par défaut, à chaud, par instance et par bot", () => {
+    for (const path of ["llm.defaut.vision", "llm.bot.vision"]) {
       const descripteur = CONFIG_SCHEMA[path];
       expect(descripteur, path).toBeDefined();
-      // ⚠️ VIDE = pas de repli : c'est le SEUL interrupteur (pas de `enabled`).
       expect(descripteur).toMatchObject({
-        scope: "instance",
         type: "string",
         default: "",
+        allowEmpty: true,
         apply: "hot",
-        env,
       });
     }
+    expect(CONFIG_SCHEMA["llm.defaut.vision"]?.scope).toBe("instance");
+    expect(CONFIG_SCHEMA["llm.bot.vision"]?.scope).toBe("bot");
+    // ⚠️ Aucun booléen `enabled` : la sélection vide EST l'interrupteur.
     expect(CONFIG_SCHEMA["llm.vision.enabled"]).toBeUndefined();
+    for (const chemin of [
+      "llm.vision.baseUrl",
+      "llm.vision.model",
+      "llm.vision.thinking",
+      "llm.vision.apiKey",
+    ]) {
+      expect(CONFIG_SCHEMA[chemin], chemin).toBeUndefined();
+    }
   });
 
-  it("réflexion : `off` par défaut (décrire n'est pas raisonner)", () => {
-    expect(CONFIG_SCHEMA["llm.vision.thinking"]).toMatchObject({
-      scope: "instance",
-      type: "enum",
-      default: "off",
-      apply: "hot",
-      env: "YUKI_LLM_VISION_THINKING",
-    });
-  });
-
-  it("clé : SECRÈTE, variable `YUKI_LLM_VISION_API_KEY` (comme les deux autres rôles)", () => {
-    expect(CONFIG_SCHEMA["llm.vision.apiKey"]).toMatchObject({
-      scope: "instance",
-      type: "string",
-      default: "",
-      apply: "hot",
-      secret: true,
-      env: "YUKI_LLM_VISION_API_KEY",
-    });
+  it("la clé est celle du FOURNISSEUR du modèle de vision (chemin SECRET)", () => {
+    const descripteur = descriptorOf("llm.fournisseur.local.apiKey");
+    expect(descripteur).toMatchObject({ scope: "instance", secret: true, apply: "hot" });
   });
 
   it("⚠️ `vision.fallback.model` N'EXISTE PLUS (pas de cohabitation)", () => {

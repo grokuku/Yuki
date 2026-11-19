@@ -25,7 +25,8 @@ import {
 // sous-lot 1b-4 : on lit les DEUX (aucune assertion relâchée).
 const CONFIG_JS =
   readFileSync(join(process.cwd(), "public", "ui", "config.js"), "utf8") +
-  readFileSync(join(process.cwd(), "public", "ui", "config-fields.js"), "utf8");
+  readFileSync(join(process.cwd(), "public", "ui", "config-fields.js"), "utf8") +
+  readFileSync(join(process.cwd(), "public", "ui", "llm-choix.js"), "utf8");
 const CONFIG_HTML = readFileSync(
   join(process.cwd(), "public", "ui", "config.html"),
   "utf8",
@@ -40,12 +41,16 @@ describe("aide des rôles dans l'onglet Modèles", () => {
     );
   });
 
-  it("elle est portée par le groupe « Modèle de discussion » et RENDUE", () => {
-    const groupe = /id: "llm-light",[\s\S]*?fields: \[/.exec(CONFIG_JS)?.[0] ?? "";
-    expect(groupe).toContain('title: "Modèle de discussion"');
-    expect(groupe).toContain("intro: MODELE_DISCUSSION_INTRO");
+  it("elle est portée par le MENU « Modèle de discussion » et RENDUE", () => {
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : le groupe de champs `llm-light`
+    // (URL / clé / modèle / réflexion saisis à la main) est SUPPRIMÉ ; l'aide est
+    // portée par la première des trois listes déroulantes du catalogue
+    // (`public/ui/llm-choix.js`), sous le libellé « Modèle de discussion ».
+    const choix = readFileSync(join(process.cwd(), "public", "ui", "llm-choix.js"), "utf8");
+    const role = /libelle: "Modèle de discussion",[\s\S]*?visionSeulement: false/.exec(choix)?.[0] ?? "";
+    expect(role).toContain("aide: MODELE_DISCUSSION_INTRO");
     // Le rendu utilise `text` (textContent) — jamais du markup.
-    expect(CONFIG_JS).toMatch(/class: "config-helper config-group__intro", text: group\.intro/);
+    expect(choix).toContain('class: "config-helper", text: role.aide');
   });
 });
 

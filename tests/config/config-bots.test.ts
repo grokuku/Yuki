@@ -157,7 +157,9 @@ describe("① `creerConfigBot` : un runtime PAR BOT", () => {
 
 /** Clés REPRÉSENTATIVES : `instance` (+ `env`), `bot`, `mixte` (`et` et `surcharge`). */
 const CLES_REPRESENTATIVES = [
-  "llm.light.model", // instance, verrouillable par l'environnement
+  // ⚠️ GARDE RÉVISÉE (lot B) : `llm.light.model` est retirée au profit du
+  // catalogue ; la clé d'instance VERROUILLABLE témoin est `llm.missingKeyMode`.
+  "llm.missingKeyMode", // instance, verrouillable par l'environnement
   "transport.replayBuffer", // instance
   "chat.mode", // bot
   "tts.voice", // bot
@@ -187,7 +189,7 @@ describe("② GARDE DE NON-RÉGRESSION : 1 bot actif ⇒ valeurs IDENTIQUES", ()
       "tts.enabled": "on",
     });
     // Le principal est verrouillé par l'environnement sur une clé d'instance.
-    const processEnv: NodeJS.ProcessEnv = { YUKI_LLM_LIGHT_MODEL: "modele-verrouille" };
+    const processEnv: NodeJS.ProcessEnv = { YUKI_LLM_MISSING_KEY_MODE: "refuse" };
 
     const preparation = preparerMultiBot(b.env, { processEnv });
     expect(preparation.bot?.id).toBe("yuki");
@@ -227,11 +229,11 @@ describe("② GARDE DE NON-RÉGRESSION : 1 bot actif ⇒ valeurs IDENTIQUES", ()
     expect(principal?.getNumber("transport.replayBuffer")).toBe(250);
     expect(principal?.getString("tts.enabled")).toBe("off"); // conjonction : instance `off`
     expect(principal?.getString("push.enabled")).toBe("on");
-    expect(principal?.getString("llm.light.model")).toBe("modele-verrouille");
-    expect(principal?.originOf("llm.light.model")).toBe("env");
-    expect(principal?.isLockedByEnv("llm.light.model")).toBe(true);
+    expect(principal?.getString("llm.missingKeyMode")).toBe("refuse");
+    expect(principal?.originOf("llm.missingKeyMode")).toBe("env");
+    expect(principal?.isLockedByEnv("llm.missingKeyMode")).toBe(true);
     expect(principal?.getString("prompts.light")).toBe("prompt du store");
-    // ⚠️ L'instantané COMPLET (92 clés : valeurs, origines, défauts, portées,
+    // ⚠️ L'instantané COMPLET (90 clés : valeurs, origines, défauts, portées,
     // verrous) doit être rigoureusement le même.
     expect(principal?.snapshot()).toEqual(avant.snapshot());
   });

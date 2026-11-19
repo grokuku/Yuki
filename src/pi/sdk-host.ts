@@ -588,7 +588,7 @@ export function createSdkPiHost(options: PiHostOptions): PiHost {
   /**
    * CAPACITÉ VISION du modèle de conversation, relue à CHAQUE appel :
    * `resolvedModel` est re-résolu à chaud (`applyLlmConfig`) et sa déclaration
-   * `input` vient de `models.json` (produit par `/config` `llm.light.vision`).
+   * `input` vient de `models.json` (déclaration de VISION du modèle).
    * ⚠️ Sans `"image"`, aucune image n'est jointe par les outils (`generer_image`,
    * `capture_libraire`) ni par un message : le SDK remplacerait la partie image
    * par « (tool image omitted: model does not support images) » et le modèle

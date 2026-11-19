@@ -156,7 +156,8 @@ describe("③ les deux blocs vivent dans /config et restent ÉDITABLES", () => {
     // ⚠️ GARDE MODIFIÉE (2026-11-14) : l'onglet « Prompts » est NOUVEAU et sépare
     // la mécanique du prompt du choix du modèle. Les règles communes et la
     // personnalité par défaut y vivent, avec les prompts par défaut.
-    expect(idsOnglets("instance")).toHaveLength(8);
+    // ⚠️ GARDE MODIFIÉE (2026-11-19, LOT A) : 8 → 9 avec l'onglet « Catalogue ».
+    expect(idsOnglets("instance")).toHaveLength(9);
     expect(panneau(CONFIG_HTML, "prompts")).toContain('id="personality-root"');
     expect(panneau(CONFIG_HTML, "prompts")).toContain('id="group-prompts"');
     // « Modèles » ne porte plus ni les prompts ni les règles communes.

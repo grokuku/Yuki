@@ -40,9 +40,9 @@
 /**
  * Onglets de chaque page, dans l'ordre d'affichage.
  *
- * ⚠️ L'ordre et les libellés sont VERROUILLÉS par des tests (8 onglets pour
- * l'Instance, 7 pour un Bot) : ce sont eux que lisent les utilisateurs et les
- * harnais E2E.
+ * ⚠️ L'ordre et les libellés sont VERROUILLÉS par des tests (9 onglets pour
+ * l'Instance depuis le catalogue du lot A, 7 pour un Bot) : ce sont eux que
+ * lisent les utilisateurs et les harnais E2E.
  *
  * ⚠️ DÉCISION UTILISATEUR (2026-11-14) — SÉPARER CE QUE DEMANDE L'UTILISATEUR DE
  * LA MÉCANIQUE : l'onglet « Personnalité » d'un bot porte la personnalité, les
@@ -66,6 +66,13 @@ export const PAGES = {
       "Système, Maintenance. Ce qui est propre à un bot est dans Bot.",
     onglets: [
       { id: "modeles", libelle: "Modèles" },
+      // ⚠️ ONGLET DÉDIÉ au CATALOGUE (lot A du 2026-11-19) : les listes de
+      // FOURNISSEURS et de MODÈLES sont un éditeur à modales
+      // (`public/ui/catalogue-llm.js`), séparé de « Modèles » (qui porte les
+      // réglages par rôle et l'éditeur historique du catalogue `llm.catalog` du
+      // commit externe `134a313`). Les mélanger dans un même onglet aurait donné
+      // DEUX listes de fournisseurs concurrentes à l'écran.
+      { id: "catalogue", libelle: "Catalogue" },
       // ⚠️ Nouvel onglet (décision utilisateur du 2026-11-14) : les PROMPTS par
       // défaut, les RÈGLES COMMUNES et la PERSONNALITÉ PAR DÉFAUT ne sont plus
       // noyés dans « Modèles » — c'est de la mécanique, pas un choix de modèle.

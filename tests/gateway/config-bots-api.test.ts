@@ -189,15 +189,18 @@ describe("② refus croisés — rien n'est écrit", () => {
 
   it("`PUT /api/bots/yuki/config` refuse une clé d'INSTANCE (`instance_scoped_field`)", async () => {
     const b = banc({ registre: registreDeuxBots() });
+    // ⚠️ GARDE RÉVISÉE (lot B) : `llm.light.model` est retirée du schéma (elle
+    // serait « champ inconnu ») ; la clé d'INSTANCE témoin est `llm.defaut.light`,
+    // qui est bien un réglage de la page Instance.
     const { status, body } = await appel(b, "PUT", "/api/bots/yuki/config", {
-      "llm.light.model": "autre-modele",
+      "llm.defaut.light": "autre-modele",
     });
     expect(status).toBe(400);
     expect(body.error).toBe("instance_scoped_field");
     expect(body.fields).toEqual([
-      expect.objectContaining({ path: "llm.light.model", code: "instance_scoped_field" }),
+      expect.objectContaining({ path: "llm.defaut.light", code: "instance_scoped_field" }),
     ]);
-    expect(b.runtime.getString("llm.light.model")).not.toBe("autre-modele");
+    expect(b.runtime.getString("llm.defaut.light")).not.toBe("autre-modele");
   });
 
   it("les gardes d'écriture s'appliquent AUSSI à la route du bot", async () => {

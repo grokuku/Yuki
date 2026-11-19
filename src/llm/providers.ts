@@ -25,8 +25,9 @@
  *
  * ⚠️ Le modèle de VISION DE REPLI n'est PAS un rôle de cette table : il ne mène
  * aucune conversation et n'exécute aucun travail (il ne fait que DÉCRIRE une
- * image). Il a son propre emplacement (`VISION_PROVIDER`, `llm.vision.*`) pour
- * qu'il ne puisse JAMAIS être choisi comme modèle de discussion ou de travail.
+ * image). Depuis le lot B il se choisit dans le CATALOGUE (`llm.defaut.vision` /
+ * `llm.bot.vision`), restreint aux modèles déclarés `vision: true` — il ne peut
+ * donc jamais être confondu avec un modèle de discussion ou de travail.
  */
 export type LlmRole = "light" | "heavy";
 
@@ -77,7 +78,11 @@ export const LLM_ENV: Readonly<Record<LlmRole, RoleEnvNames>> = {
 };
 
 /**
- * Variables d'environnement du modèle de VISION DÉDIÉ (`llm.vision.*`).
+ * Variables d'environnement HISTORIQUES du modèle de vision (retirées du schéma).
+ *
+ * ⚠️ Elles ne servent plus qu'à la REPRISE (`ENV_HISTORIQUES`,
+ * `src/llm/catalogue.ts`) : un déploiement réglé par `YUKI_LLM_VISION_MODEL` ne perd
+ * pas son modèle de vision à la bascule sur le catalogue.
  *
  * ⚠️ Mêmes noms que les deux rôles, avec le suffixe du rôle (`_VISION_`) : la
  * clé se règle donc exactement comme les autres (`YUKI_LLM_VISION_API_KEY`),

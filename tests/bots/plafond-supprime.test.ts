@@ -131,14 +131,20 @@ describe("② `bots.maxActifs` n'est PLUS une clé de configuration", () => {
   // (commit externe `134a313` « split LLM config », 2026-11-19 : +3 —
   // `llm.catalog` et les deux sélections `llm.selection.light|heavy`, qui
   // remplacent les anciens groupes `llm-light`/`llm-heavy` côté interface).
+  // ⚠️ GARDE RÉVISÉE (compte 100 → 103) le 2026-11-19 — LOT A du catalogue :
+  // `llm.fournisseurs`, `llm.modeles` (collections typées) et `llm.catalogueMigre`
+  // (drapeau de reprise) sont AJOUTÉS (+3).
+  // ⚠️ GARDE RÉVISÉE (compte 103 → 90) le 2026-11-19 — LOT B du catalogue : les
+  // SEIZE réglages par rôle et le catalogue JSON du commit externe sont RETIRÉS,
+  // six sélections de rôle (`llm.defaut.*` / `llm.bot.*`) sont AJOUTÉES.
   // Ce que cette garde protège reste inchangé : `bots.maxActifs` n'est PAS revenue.
-  it("la clé, sa variable et sa portée ont disparu (compte : 100)", () => {
+  it("la clé, sa variable et sa portée ont disparu (compte : 90)", () => {
     expect(CONFIG_SCHEMA["bots.maxActifs"]).toBeUndefined();
     expect(CONFIG_PATHS).not.toContain("bots.maxActifs");
     expect(envNameOf("bots.maxActifs")).toBeUndefined();
     // Le compte exact : la seule chose qu'ajoute ce chiffre, c'est d'obliger à
     // RELIRE cette garde quand le schéma bouge (aucune clé oubliée en silence).
-    expect(CONFIG_PATHS.length).toBe(100);
+    expect(CONFIG_PATHS.length).toBe(90);
   });
 
   it("⚠️ `MAX_BOTS = 6` reste : bots CRÉABLES ≠ bots qui tournent", () => {

@@ -67,32 +67,68 @@ describe("① la table des clés", () => {
   // quand aucun des deux ne voit d'image) et le modèle de vision DÉDIÉ ajoute
   // `llm.vision.baseUrl`, `llm.vision.model`, `llm.vision.thinking` et
   // `llm.vision.apiKey` (-1 +4 = 97). Portée `instance` : capacité de MODÈLE.
-  it("déclare EXACTEMENT 100 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(100);
+  it("déclare EXACTEMENT 90 clés (aucune ajoutée ni perdue en silence)", () => {
+    // ⚠️ GARDE RÉVISÉE (« 103 → 90 clés ») le 2026-11-19 — LOT B du catalogue :
+    //  - les SEIZE réglages par rôle (`llm.light.*` ×6, `llm.heavy.*` ×6,
+    //    `llm.vision.*` ×4) sont RETIRÉS : un modèle est une entrée du catalogue,
+    //    la réflexion et la vision sont des propriétés du MODÈLE ;
+    //  - le catalogue JSON du commit externe `134a313` (`llm.catalog`,
+    //    `llm.selection.light`, `llm.selection.heavy`) est RETIRÉ : double emploi
+    //    avec `llm.fournisseurs` / `llm.modeles` ;
+    //  - SIX clés de SÉLECTION sont AJOUTÉES : `llm.defaut.light|heavy|vision`
+    //    (instance) et `llm.bot.light|heavy|vision` (bot).
+    // 103 − 19 + 6 = 90.
+    expect(CONFIG_PATHS.length).toBe(90);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
   });
 
-  it("⚠️ `vision.fallback.model` a DISPARU (remplacée par le modèle DÉDIÉ)", () => {
-    // Un `config.json` qui la contient encore est IGNORÉ avec un avertissement
-    // au démarrage (`CLES_CONFIG_RETIREES`, jamais un échec) — mais la clé
-    // elle-même n'existe plus : un sélecteur parmi les deux modèles existants ne
-    // peut pas décrire une image qu'aucun des deux ne voit.
-    expect(CONFIG_SCHEMA["vision.fallback.model"]).toBeUndefined();
-    expect(CONFIG_PATHS).not.toContain("vision.fallback.model");
-    expect(CLES_CONFIG_RETIREES["vision.fallback.model"]).toBeDefined();
+  it("⚠️ les réglages PAR RÔLE ont DISPARU (remplacés par le CATALOGUE)", () => {
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B). Un `config.json` qui les contient
+    // encore est REPRIS au démarrage (défauts de rôle) puis signalé
+    // (`CLES_CONFIG_RETIREES` → `llm.anciennes_cles_ignorees`) — jamais un échec,
+    // jamais un silence.
     for (const cle of [
+      "vision.fallback.model",
+      "llm.light.api",
+      "llm.light.baseUrl",
+      "llm.light.model",
+      "llm.light.thinking",
+      "llm.light.vision",
+      "llm.light.apiKey",
+      "llm.heavy.api",
+      "llm.heavy.baseUrl",
+      "llm.heavy.model",
+      "llm.heavy.thinking",
+      "llm.heavy.vision",
+      "llm.heavy.apiKey",
       "llm.vision.baseUrl",
       "llm.vision.model",
       "llm.vision.thinking",
       "llm.vision.apiKey",
+      // Catalogue JSON du commit externe `134a313` : double emploi, retiré.
+      "llm.catalog",
+      "llm.selection.light",
+      "llm.selection.heavy",
+    ]) {
+      expect(CONFIG_SCHEMA[cle], cle).toBeUndefined();
+      expect(CONFIG_PATHS, cle).not.toContain(cle);
+      expect(CLES_CONFIG_RETIREES[cle], cle).toBeDefined();
+    }
+    // ⚠️ Les remplacements existent, tous en sélection de `modeleId`.
+    for (const cle of [
+      "llm.fournisseurs",
+      "llm.modeles",
+      "llm.defaut.light",
+      "llm.defaut.heavy",
+      "llm.defaut.vision",
+      "llm.bot.light",
+      "llm.bot.heavy",
+      "llm.bot.vision",
     ]) {
       expect(CONFIG_PATHS, cle).toContain(cle);
     }
-    // ⚠️ Aucun booléen `enabled` : `baseUrl`/`model` vides = pas de repli.
+    // Aucun booléen `enabled` : vide = aucun défaut, c'est le bot qui choisit.
     expect(CONFIG_SCHEMA["llm.vision.enabled"]).toBeUndefined();
-    // ⚠️ Pas de `llm.vision.api` non plus : une seule valeur possible
-    // (`openai-completions`), portée par `VISION_PROVIDER.api`.
-    expect(CONFIG_SCHEMA["llm.vision.api"]).toBeUndefined();
   });
 
   it("⚠️ `bots.maxActifs` a DISPARU (plus de plafond de bots en marche)", () => {
@@ -116,10 +152,13 @@ describe("① la table des clés", () => {
    * (2026-11-16), puis le modèle de vision DÉDIÉ `llm.vision.*` la REMPLACE
    * (-1 +4). Bot et mixte inchangés : 73 / 19 / 5 = 97.
    */
-  it("répartition : 74 `instance` / 21 `bot` / 5 `mixte`", () => {
+  it("répartition : 63 `instance` / 22 `bot` / 5 `mixte`", () => {
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : instance 77 − 17 (16 réglages de
+    // rôle + `llm.catalog`) + 3 (`llm.defaut.*`) = 63 ; bot 21 − 2
+    // (`llm.selection.*`) + 3 (`llm.bot.*`) = 22 ; mixte inchangé (5).
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 74, bot: 21, mixte: 5 });
+    expect(compte).toEqual({ instance: 63, bot: 22, mixte: 5 });
   });
 
   it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {
@@ -186,8 +225,11 @@ describe("② `scope` ≠ `instance` ⇒ AUCUNE variable d'environnement", () =>
   });
 
   it("une clé `instance` PEUT toujours être verrouillée par l'environnement", () => {
-    expect(CONFIG_SCHEMA["llm.light.model"]?.env).toBe("YUKI_LLM_LIGHT_MODEL");
-    expect(CONFIG_SCHEMA["llm.light.apiKey"]?.env).toBe("YUKI_LLM_LIGHT_API_KEY");
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : les modèles par rôle n'ont plus de
+    // variable (`llm.light.model` est retirée) — la preuve d'instance verrouillable
+    // se prend sur `llm.missingKeyMode`, qui reste un réglage d'installation.
+    expect(CONFIG_SCHEMA["llm.missingKeyMode"]?.env).toBe("YUKI_LLM_MISSING_KEY_MODE");
+    expect(CONFIG_SCHEMA["llm.missingKeyMode"]?.scope).toBe("instance");
   });
 
   it("les TROIS variables RESTAURÉES surchargent à nouveau (clés redevenues `instance`)", () => {
@@ -310,10 +352,11 @@ describe("⑤ le bot actif de l'overlay", () => {
   });
 
   /**
-   * ⚠️ GARDE RÉVISÉE (« 18 → 19 clés `bot` ») : `chat.mattermost.url` rejoint les
-   * clés de bot — Mattermost est auto-hébergé, chaque bot peut viser SON serveur.
+   * ⚠️ GARDE RÉVISÉE (« 19 → 22 clés `bot` », lot B) : les trois SÉLECTIONS DE
+   * MODÈLE par bot (`llm.bot.light|heavy|vision`) remplacent les deux sélections
+   * du catalogue externe (`llm.selection.*`).
    */
-  it("les 21 clés `bot` sont celles établies (plateformes, voix, mémoire du bot)", () => {
+  it("les 22 clés `bot` sont celles établies (plateformes, voix, mémoire, modèles du bot)", () => {
     const bot = CONFIG_PATHS.filter((path) => descriptor(path).scope === "bot");
     expect(bot.sort()).toEqual(
       [
@@ -327,8 +370,11 @@ describe("⑤ le bot actif de l'overlay", () => {
         "chat.discord.guildId",
         "chat.discord.maxUploadBytes",
         "chat.mode",
-        "llm.selection.light",
-        "llm.selection.heavy",
+        // ⚠️ LOT B (2026-11-19) : les modèles du bot sont des `modeleId` du
+        // CATALOGUE (vide = défaut de l'instance) ; `llm.selection.*` disparaît.
+        "llm.bot.light",
+        "llm.bot.heavy",
+        "llm.bot.vision",
         "memory.enabled",
         "memory.extract.maxItems",
         "memory.extract.timeoutMs",

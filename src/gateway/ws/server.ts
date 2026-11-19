@@ -185,7 +185,7 @@ export interface WsTransportOptions {
   files?: FilesGatewayPort;
   /**
    * CAPACITÉ VISION du modèle de conversation (réglage `/config`
-   * `llm.light.vision`, qui produit `input` dans `models.json`).
+   * le modèle de discussion, qui produit `input` dans `models.json`).
    *
    * Absent ⇒ comportement historique (les images jointes partent). `false` ⇒ un
    * message porteur d'une IMAGE est REFUSÉ avec un motif explicite : sans
@@ -194,7 +194,7 @@ export interface WsTransportOptions {
    * croirait que le modèle a vu son image. Jamais de silence.
    *
    * ⚠️ EXCEPTION (2026-11-16) : si un MODÈLE DE VISION DE REPLI est configuré
-   * (`llm.vision.baseUrl` + `llm.vision.model`), le message n'est plus refusé —
+   * (rôle « vision » du catalogue), le message n'est plus refusé —
    * l'image est
    * DÉCRITE par ce modèle et la description, clairement identifiée, remplace
    * l'image dans le message (l'utilisateur voit donc ce que le modèle reçoit).
@@ -204,7 +204,7 @@ export interface WsTransportOptions {
     conversationReceivesImages: (botId?: string) => boolean;
     /** Un modèle de vision de repli est-il configuré ? (relu à chaque message) */
     repliConfigure?: () => boolean;
-    /** Décrit des images avec le modèle de vision DÉDIÉ (`llm.vision.*`). */
+    /** Décrit des images avec le modèle de vision du catalogue. */
     decrireImages?: VisionDescriber;
   };
   /**
@@ -2493,7 +2493,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       // REFUSÉ et RIEN n'est envoyé : jamais de troncature silencieuse.
       //
       // ⚠️ CAPACITÉ VISION : si le modèle de conversation est DÉCLARÉ sans vision
-      // (`llm.light.vision` = « non »), l'image ne serait pas vue (le SDK la
+      // (modèle déclaré sans vision), l'image ne serait pas vue (le SDK la
       // remplacerait par « (tool image omitted…) ») : on REFUSE le message et on
       // dit quoi activer — jamais une image « envoyée » qui n'arrive nulle part.
       const attachedImages = outcome.files.filter((file) => file.kind === "image");

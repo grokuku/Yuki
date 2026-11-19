@@ -6,26 +6,19 @@ Les lignes marquées **⚠️ à trancher** sont les seules où ta réponse est 
 
 *Note : `rules` n'est pas une clé (fichier `rules.md`). La personnalité du prompt est, elle, la clé `prompts.personnalite` ; le fichier `personality.md` reste la personnalité PARTAGÉE de l'instance (compatibilité).*
 
-## 1 · Modèles & IA (22 clés)
+## 1 · Modèles & IA (13 clés)
 
 | Réglage | Clé technique | Aujourd'hui | Avis | Décision |
 |---|---|---|---|---|
-| Dialecte d'API — discussion | `llm.light.api` | global | global — fournisseur unique | |
-| Adresse du service — discussion | `llm.light.baseUrl` | global | global — un seul service | |
-| Modèle de discussion | `llm.light.model` | global | global — un modèle pour tous | |
-| Niveau de réflexion — discussion | `llm.light.thinking` | global | global — coût, pas personnalité | |
-| Reçoit les images — discussion | `llm.light.vision` | global | global — capacité du modèle | |
-| Clé d'API — discussion | `llm.light.apiKey` | global | global — secret d'installation | |
-| Dialecte d'API — travail | `llm.heavy.api` | global | global — un seul worker | |
-| Adresse du service — travail | `llm.heavy.baseUrl` | global | global — un seul service | |
-| Modèle de travail | `llm.heavy.model` | global | global — jobs de fond communs | |
-| Niveau de réflexion — travail | `llm.heavy.thinking` | global | global — coût, pas personnalité | |
-| Reçoit les images — travail | `llm.heavy.vision` | global | global — capacité du modèle | |
-| Clé d'API — travail | `llm.heavy.apiKey` | global | global — secret d'installation | |
-| Adresse du service — vision de repli | `llm.vision.baseUrl` | global | global — un seul modèle de vision pour l'installation | |
-| Modèle de vision de repli | `llm.vision.model` | global | global — capacité du modèle, utilisée quand le modèle actif ne voit pas les images | |
-| Niveau de réflexion — vision de repli | `llm.vision.thinking` | global | global — coût, pas personnalité | |
-| Clé d'API — vision de repli | `llm.vision.apiKey` | global | global — secret d'installation | |
+| Fournisseurs du catalogue | `llm.fournisseurs` | global | global — une installation, un parc de fournisseurs | |
+| Modèles du catalogue | `llm.modeles` | global | global — un modèle est une capacité (contexte, vision, réflexion), partagée | |
+| Reprise du catalogue faite | `llm.catalogueMigre` | global | global — drapeau d'une reprise unique | |
+| Modèle de discussion par défaut | `llm.defaut.light` | global | global — défaut de l'installation, le bot peut surcharger | |
+| Modèle d'exécution par défaut | `llm.defaut.heavy` | global | global — défaut de l'installation, le bot peut surcharger | |
+| Modèle de vision par défaut (repli) | `llm.defaut.vision` | global | global — capacité du MODÈLE, partagée | |
+| Modèle de discussion du bot | `llm.bot.light` | bot | bot — chaque bot peut parler avec SON modèle | |
+| Modèle d'exécution du bot | `llm.bot.heavy` | bot | bot — charge et coût par bot | |
+| Modèle de vision du bot | `llm.bot.vision` | bot | bot — repli propre au bot | |
 | Politique si clé manquante | `llm.missingKeyMode` | global | global — comportement d'installation | |
 | Attente avant délégation (ms) | `delegation.defaultDeadlineMs` | global | global — latence du tour commun | |
 | Travaux lourds simultanés | `delegation.maxConcurrent` | global | global — GPU et file partagés | |

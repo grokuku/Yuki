@@ -18,7 +18,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { readConfigEnvOverrides } from "../../src/config/env.js";
-import { CONFIG_SCHEMA } from "../../src/config/schema.js";
+import {
+  ENV_HISTORIQUES,
+  ENV_HISTORIQUES_ALIAS,
+  HERITAGE_DEFAUT,
+} from "../../src/llm/catalogue.js";
 import {
   LLM_ENV_ALIAS,
   resolveAvailability,
@@ -81,34 +85,27 @@ describe("alias de clé (lecture seule) — le canonique reste prioritaire", () 
     expect(providers.heavy.keyEnv).toBe("YUKI_LLM_HEAVY_API_KEY");
   });
 
-  it("`readConfigEnvOverrides` propage l'alias au store, canonique prioritaire", () => {
+  it("⚠️ l'alias ne surcharge PLUS un champ : il est repris par la MIGRATION", () => {
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : `llm.light.apiKey` est retirée du
+    // schéma, donc `readConfigEnvOverrides` ne peut plus la produire (l'alias
+    // ferait échouer la validation : « champ inconnu »). L'alias reste LU, mais par
+    // la seule reprise du catalogue — sinon un déploiement réglé par
+    // `YUKI_LLM_DISCUSSION_API_KEY` perdrait sa clé.
+    expect(readConfigEnvOverrides({ YUKI_LLM_DISCUSSION_API_KEY: "alias-light" })).toEqual({});
     expect(
-      readConfigEnvOverrides({ YUKI_LLM_DISCUSSION_API_KEY: "alias-light" })[
-        "llm.light.apiKey"
-      ],
-    ).toBe("alias-light");
-    expect(
-      readConfigEnvOverrides({
-        YUKI_LLM_TRAVAIL_API_KEY: "alias-heavy",
-      })["llm.heavy.apiKey"],
-    ).toBe("alias-heavy");
-    expect(
-      readConfigEnvOverrides({
-        YUKI_LLM_LIGHT_API_KEY: "canonique-light",
-        YUKI_LLM_DISCUSSION_API_KEY: "alias-light",
-      })["llm.light.apiKey"],
-    ).toBe("canonique-light");
-    expect(
-      readConfigEnvOverrides({ YUKI_LLM_DISCUSSION_API_KEY: "  " })[
-        "llm.light.apiKey"
-      ],
-    ).toBeUndefined();
+      readConfigEnvOverrides({ YUKI_LLM_TRAVAIL_API_KEY: "alias-heavy" }),
+    ).toEqual({});
+    expect(ENV_HISTORIQUES_ALIAS["llm.light.apiKey"]).toContain("YUKI_LLM_DISCUSSION_API_KEY");
+    expect(ENV_HISTORIQUES_ALIAS["llm.heavy.apiKey"]).toContain("YUKI_LLM_TRAVAIL_API_KEY");
   });
 });
 
 describe("juge du mode `auto` — réflexion `off` FIGÉE, l'exception assumée", () => {
-  it("la prémisse est réelle : le défaut du rôle travail est `high`", () => {
-    expect(CONFIG_SCHEMA["llm.heavy.thinking"]?.default).toBe("high");
+  it("la prémisse est réelle : la réflexion du modèle de travail est `high`", () => {
+    // ⚠️ GARDE RÉVISÉE (lot B) : la réflexion n'est plus un défaut de SCHÉMA
+    // (`llm.heavy.thinking`), c'est un défaut du MODÈLE repris par le catalogue.
+    expect(ENV_HISTORIQUES["llm.heavy.thinking"]).toBe("YUKI_LLM_HEAVY_THINKING");
+    expect(HERITAGE_DEFAUT.heavy.thinking).toBe("high");
   });
 
   it("la fabrique `chatWriter` (juge ET rédacteur de canal) force `off`", () => {

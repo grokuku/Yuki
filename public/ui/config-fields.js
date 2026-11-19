@@ -86,118 +86,13 @@ export const OPTIONS = {
 };
 
 export const GROUPS = [
-  {
-    id: "llm-light",
-    // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
-    tabs: { instance: "modeles" },
-    title: "Modèle de discussion",
-    role: "light",
-    // ⚠️ Texte d'AIDE de l'onglet, pas un libellé de clé : il n'explique que
-    // la RÉPARTITION des rôles. Une phrase, sous le titre du premier groupe.
-    intro: MODELE_DISCUSSION_INTRO,
-    fields: [
-      { path: "llm.light.baseUrl", label: "URL de base", kind: "text" },
-      { path: "llm.light.apiKey", label: "Clé d'API", kind: "secret" },
-      { path: "llm.light.model", label: "Modèle", kind: "text" },
-      {
-        path: "llm.light.vision",
-        label: "Reçoit les images (vision)",
-        kind: "select",
-        options: OPTIONS.vision,
-        helper:
-          "Déclaration, pas une mesure : aucun fournisseur ne publie si un modèle " +
-          "voit les images. « non » ⇒ Yuki n'envoie AUCUNE image à ce modèle " +
-          "(pièces jointes comme captures) ; « oui » ⇒ les images partent en pièce " +
-          "jointe. Appliqué à chaud.",
-      },
-      { path: "llm.light.api", label: "Dialecte d'API", kind: "select", options: OPTIONS.api },
-      { path: "llm.light.thinking", label: "Réflexion (thinking)", kind: "select", options: OPTIONS.thinking },
-    ],
-  },
-  {
-    id: "llm-heavy",
-    // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
-    tabs: { instance: "modeles" },
-    title: "Modèle de travail",
-    role: "heavy",
-    fields: [
-      { path: "llm.heavy.baseUrl", label: "URL de base", kind: "text" },
-      { path: "llm.heavy.apiKey", label: "Clé d'API", kind: "secret" },
-      { path: "llm.heavy.model", label: "Modèle", kind: "text" },
-      {
-        path: "llm.heavy.vision",
-        label: "Reçoit les images (vision)",
-        kind: "select",
-        options: OPTIONS.vision,
-        helper:
-          "Déclaration, pas une mesure : aucun fournisseur ne publie si un modèle " +
-          "voit les images. « oui » ⇒ une image récupérée d'une machine " +
-          "(`recuperer_fichier`) est jointe au worker ; « non » ⇒ elle n'est PAS " +
-          "envoyée et le résultat de l'outil le dit. Appliqué à chaud (job suivant).",
-      },
-      { path: "llm.heavy.api", label: "Dialecte d'API", kind: "select", options: OPTIONS.api },
-      { path: "llm.heavy.thinking", label: "Réflexion (thinking)", kind: "select", options: OPTIONS.thinking },
-    ],
-  },
-  {
-    id: "vision-repli",
-    // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).
-    // ⚠️ INSTANCE SEULEMENT : le modèle de vision est une capacité de MODÈLE,
-    // partagée par tous les bots de l'installation — jamais un trait de bot
-    // (voir `src/config/schema.ts`, portée `instance`).
-    //
-    // ⚠️ MODÈLE DÉDIÉ, pas un choix parmi les deux modèles existants : si ni le
-    // léger ni le lourd ne voit les images, un sélecteur entre ces deux-là ne
-    // sert à rien. D'où une ADRESSE, un NOM et une CLÉ qui lui sont propres,
-    // exactement comme les deux autres rôles.
-    tabs: { instance: "modeles" },
-    title: "Vision de repli",
-    fields: [
-      {
-        path: "llm.vision.baseUrl",
-        label: "URL de base",
-        kind: "text",
-        helper:
-          "Adresse du serveur qui héberge VOTRE modèle de vision (compatible " +
-          "OpenAI, ex. « https://openrouter.ai/api/v1 »). Laisser vide (avec le " +
-          "champ « Modèle ») ⇒ aucun repli : une image qui ne peut pas être vue " +
-          "est refusée et c'est DIT. Appliqué à chaud.",
-      },
-      {
-        path: "llm.vision.apiKey",
-        label: "Clé d'API",
-        // ⚠️ MÊME CONTRÔLE que « Clé d'API » du léger et du lourd : champ
-        // `secret` (masqué, jamais relu en clair, « Remplacer » / « Effacer »),
-        // enregistré par `PUT /api/config` dans state/config.json (droits 0600).
-        // Aucun réglage dégradé : la clé du modèle de vision s'entre dans
-        // l'INTERFACE, exactement comme les deux autres.
-        kind: "secret",
-        helper:
-          "Clé du serveur de vision, saisie ici comme pour les deux autres " +
-          "modèles : elle est enregistrée masquée, jamais relue en clair, " +
-          "remplaçable et effaçable. Appliqué à chaud.",
-      },
-      {
-        path: "llm.vision.model",
-        label: "Modèle",
-        kind: "text",
-        helper:
-          "Nom du modèle de vision à utiliser (ex. « qwen2.5-vl-7b »). Ce modèle " +
-          "sert UNIQUEMENT à décrire les images : il n'apparaît jamais comme " +
-          "modèle de discussion ou de travail. Appliqué à chaud (image suivante).",
-      },
-      {
-        path: "llm.vision.thinking",
-        label: "Réflexion (thinking)",
-        kind: "select",
-        options: OPTIONS.thinking,
-        helper:
-          "Niveau de réflexion du modèle de vision. « off » par défaut : décrire " +
-          "une image n'est pas raisonner, et une réflexion longue doublerait le " +
-          "délai d'un tour pour un gain nul. Appliqué à chaud.",
-      },
-    ],
-  },
+  // ⚠️ LOT B (2026-11-19) : les groupes `llm-light`, `llm-heavy` et
+  // `vision-repli` (URL / clé / modèle / dialecte / réflexion / vision PAR RÔLE)
+  // sont SUPPRIMÉS. Un modèle est une ENTRÉE du CATALOGUE (`llm.modeles`, édité
+  // dans l'onglet « Catalogue »), et la sélection d'un rôle est un `modeleId`
+  // rendu par les listes déroulantes (`public/ui/llm-choix.js`) — onglet
+  // « Modèles » pour les défauts d'instance, onglet « Général » d'un bot pour ses
+  // surcharges. Il n'y a plus de champ de modèle saisi à la main.
   {
     id: "delegation",
     // Onglet(s) qui portent ce groupe sur chaque page (voir `config-pages.js`).

@@ -14,11 +14,22 @@
  * Précédence : `défauts (code) < store (page web) < environnement`.
  */
 
-import { providerSecretId, readCatalog } from "../llm/catalog.js";
+import { API_FOURNISSEUR, idCleFournisseur } from "../llm/catalogue.js";
 
 export type ApplyKind = "hot" | "restart";
 export type Origin = "default" | "store" | "env";
-export type FieldType = "string" | "int" | "enum";
+/**
+ * Type d'un champ.
+ *
+ * ⚠️ `liste` (lot A du 2026-11-19) : la valeur est un TABLEAU D'OBJETS TYPÉS
+ * (fournisseurs, modèles). C'est un type de champ à part entière — il décrit la
+ * forme de chaque élément (`items`) et la validation qui va avec ; il n'est pas
+ * une chaîne libre où l'interface écrirait ce qu'elle veut. La valeur STOCKÉE
+ * reste du JSON canonique (le store est plat : `string | number`), mais l'API
+ * accepte aussi un vrai tableau JSON et n'expose jamais autre chose que la forme
+ * validée.
+ */
+export type FieldType = "string" | "int" | "enum" | "liste";
 
 /** Niveaux de raisonnement acceptés (alignés sur le SDK Pi). */
 export const THINKING_LEVELS = [
@@ -38,9 +49,46 @@ export type CompatMode = "strict" | "auto-degrade";
 /** Politique en cas de clé LLM manquante (aligné sur `src/llm/availability`). */
 export type LlmMissingKeyMode = "degrade" | "refuse";
 
+/**
+ * Champ d'un ÉLÉMENT de liste (`type: "liste"`) — description TYPÉE, validée par
+ * le serveur.
+ *
+ * ⚠️ Un champ `liste` sans `items` est un BUG de déclaration (aucune valeur ne
+ * pourrait être validée) : la validation le refuse (`invalid_descriptor`), elle
+ * ne se rabat jamais sur « tout accepter ».
+ */
+export interface ChampListe {
+  /** Nom de la propriété dans l'objet (`id`, `nom`, `baseUrl`…). */
+  readonly cle: string;
+  readonly type: "string" | "int" | "bool" | "enum";
+  /** Valeurs autorisées (`type: "enum"`). */
+  readonly enum?: readonly string[];
+  readonly min?: number;
+  readonly max?: number;
+  /** `string` : une URL `http`/`https` complète, hôte compris. */
+  readonly httpUrl?: true;
+  /** Obligatoire et non vide (`string`/`enum`/`int`). */
+  readonly requis?: true;
+  /** `string` : identifiant stable `[a-z0-9-]` (format seulement). */
+  readonly identifiant?: true;
+  /**
+   * `string` : valeur UNIQUE dans la liste, pour CE champ. À n'utiliser que sur
+   * la clé qui identifie l'élément (`id`) : une RÉFÉRENCE (`fournisseurId`) est
+   * par nature partagée par plusieurs éléments.
+   */
+  readonly unique?: true;
+}
+
 /** Champs COMMUNS aux trois portées (aucun ne dépend de la portée). */
 interface DescripteurCommun {
   readonly type: FieldType;
+  /**
+   * Éléments de la liste (`type: "liste"` uniquement, OBLIGATOIRE alors).
+   * Chaque élément est validé, normalisé puis stocké — un objet qui porte une
+   * propriété NON DÉCLARÉE est refusé (sinon un champ poussé par l'interface
+   * passerait sans validation et sans jamais être relu).
+   */
+  readonly items?: readonly ChampListe[];
   /** Valeur par défaut (code). Les prompts sont affinés depuis les fichiers. */
   readonly default: string | number;
   /** Valeurs autorisées (type `enum` uniquement). `""` = valeur vide admise. */
@@ -145,206 +193,153 @@ export const GPU_PROFILES = ["", "confort", "compact", "repli", "texte-seul"] as
  * Un champ possédant `env` peut être verrouillé par l'environnement.
  */
 export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
-  // --- LLM léger -----------------------------------------------------------
-  // ⚠️ `baseUrl` + `api` = changement de FOURNISSEUR : `apply: hot`, avec la
-  // MÊME mécanique que le modèle (pas un second chemin). Ces deux champs vivent
-  // dans `models.json` (généré par `buildModelsConfigFrom`) : un changement
-  // réécrit le fichier puis `refreshSharedModelRuntime` reconstruit les
-  // providers EN PLACE (même instance partagée) — voir `PiHost.applyLlmConfig`
-  // + l'abonnement `config.subscribe` de `src/index.ts`. La bascule a lieu
-  // ENTRE deux runs : un run EN VOL garde son fournisseur d'origine.
-  "llm.catalog": { type: "string", scope: "instance", default: "", apply: "hot" },
-  "llm.selection.light": { type: "string", scope: "bot", default: "", apply: "hot" },
-  "llm.selection.heavy": { type: "string", scope: "bot", default: "", apply: "hot" },
-  "llm.light.api": {
-    scope: "instance",
-    type: "enum",
-    enum: ["openai-completions"],
-    default: "openai-completions",
-    apply: "hot",
-    env: "YUKI_LLM_LIGHT_API",
-  },
-  "llm.light.baseUrl": {
-    scope: "instance",
-    type: "string",
-    default: "https://ollama.com/v1",
-    apply: "hot",
-    env: "YUKI_LLM_LIGHT_BASE_URL",
-  },
-  // Modèle / réflexion du léger : `apply: hot`. Un changement de modèle est
-  // re-évalué et appliqué au PROCHAIN run de chaque conversation, sans
-  // redémarrage (voir `PiHost.applyLlmConfig` + l'abonnement `config.subscribe`
-  // dans `src/index.ts`). Les runs EN COURS gardent leur modèle d'origine
-  // (la bascule n'a lieu qu'entre deux runs).
-  "llm.light.model": {
-    scope: "instance",
-    type: "string",
-    default: "gemma4:31b",
-    apply: "hot",
-    env: "YUKI_LLM_LIGHT_MODEL",
-  },
-  "llm.light.thinking": {
-    scope: "instance",
-    type: "enum",
-    enum: THINKING_LEVELS,
-    default: "off",
-    apply: "hot",
-    env: "YUKI_LLM_LIGHT_THINKING",
-  },
-  // ⚠️ CAPACITÉ VISION — déclaration, JAMAIS une mesure.
-  // Aucune API de fournisseur ne publie « ce modèle voit les images » : c'est
-  // donc à l'utilisateur de le DIRE, et le réglage produit `input` dans
-  // `models.json` (`resolveModelsFrom`). `non` ⇒ `input: ["text"]` : le SDK
-  // remplace alors toute pièce jointe image par « (tool image omitted: model
-  // does not support images) » — l'image est JETÉE en silence. `apply: hot` :
-  // un changement réécrit `models.json` et rafraîchit le runtime partagé, sans
-  // redémarrage (même mécanique que `llm.<role>.model`).
-  "llm.light.vision": {
-    scope: "instance",
-    type: "enum",
-    enum: ["oui", "non"],
-    default: "oui",
-    apply: "hot",
-  },
-  "llm.light.apiKey": {
+  // --- CATALOGUE : MODÈLES PAR DÉFAUT DE L'INSTALLATION (lot B, 2026-11-19) --
+  // ⚠️ TROIS SÉLECTIONS, pas des définitions de fournisseur : la valeur est un
+  // `modeleId` du catalogue (`llm.modeles[].id`), le fournisseur (adresse, type
+  // d'API, clé) est DÉRIVÉ du modèle choisi. Un champ libre n'aurait aucun sens
+  // ici : `models.json` ne peut référencer qu'un modèle déclaré.
+  //
+  // ⚠️ PORTÉE `instance` : ce sont les DÉFAUTS de l'installation, partagés par
+  // tous les bots. Un bot peut les surcharger (`llm.bot.<rôle>`) ; une valeur
+  // vide (`allowEmpty`) dit « aucun défaut » — c'est alors au bot de choisir.
+  //
+  // ⚠️ `apply: hot` : changer un défaut réécrit `models.json` et rafraîchit le
+  // runtime des modèles EN PLACE (voir `PiHost.applyLlmConfig` + l'abonnement
+  // `config.subscribe` de `src/index.ts`). La bascule a lieu ENTRE deux runs :
+  // un run EN VOL garde son modèle d'origine.
+  //
+  // ⚠️ Un `modeleId` INCONNU (modèle supprimé du catalogue, `config.json` édité
+  // à la main) n'est PAS refusé à l'écriture d'un autre champ : il produit un
+  // MODE DÉGRADÉ EXPLICITE (journal `llm.role.modele_introuvable`, état lisible
+  // dans l'interface) — jamais un plantage, jamais un modèle inventé. Le refus
+  // n'existe qu'au moment où l'on ÉCRIT la sélection elle-même
+  // (`ConfigRuntime.ecrire` : `modele_inconnu`).
+  "llm.defaut.light": {
     scope: "instance",
     type: "string",
     default: "",
+    allowEmpty: true,
     apply: "hot",
-    secret: true,
-    env: "YUKI_LLM_LIGHT_API_KEY",
+  },
+  "llm.defaut.heavy": {
+    scope: "instance",
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    apply: "hot",
+  },
+  // ⚠️ Le rôle `vision` n'est PAS un rôle de conversation : il DÉCRIT les images
+  // pour un autre modèle (`src/files/vision-fallback.ts`). Vide = aucun repli,
+  // comportement d'avant le catalogue. Il ne peut désigner qu'un modèle déclaré
+  // `vision: true` (refus côté interface, dégradé côté serveur).
+  "llm.defaut.vision": {
+    scope: "instance",
+    type: "string",
+    default: "",
+    allowEmpty: true,
+    apply: "hot",
   },
 
-  // --- LLM lourd -----------------------------------------------------------
-  // ⚠️ `baseUrl` + `api` du lourd : `apply: hot` (même mécanique que le modèle).
-  // Les jobs de fond sont des sessions ÉPHÉMÈRES qui re-résolvent le provider
-  // partagé (rafraîchi en place) au démarrage de chaque job ; un job EN VOL
-  // garde son fournisseur d'origine.
-  "llm.heavy.api": {
-    scope: "instance",
-    type: "enum",
-    enum: ["openai-completions"],
-    default: "openai-completions",
-    apply: "hot",
-    env: "YUKI_LLM_HEAVY_API",
-  },
-  "llm.heavy.baseUrl": {
-    scope: "instance",
-    type: "string",
-    default: "https://ollama.com/v1",
-    apply: "hot",
-    env: "YUKI_LLM_HEAVY_BASE_URL",
-  },
-  // Modèle / réflexion du lourd : `apply: hot`. Les jobs de fond sont des
-  // sessions ÉPHÉMÈRES créées à chaque tâche : elles relisent la référence
-  // courante au démarrage du job (voir `SdkHeavyWorkerConfig.modelReference`),
-  // donc un changement s'applique aux NOUVEAUX jobs sans redémarrage.
-  "llm.heavy.model": {
-    scope: "instance",
-    type: "string",
-    default: "deepseek-v4.1-flash",
-    apply: "hot",
-    env: "YUKI_LLM_HEAVY_MODEL",
-  },
-  "llm.heavy.thinking": {
-    scope: "instance",
-    type: "enum",
-    enum: THINKING_LEVELS,
-    default: "high",
-    apply: "hot",
-    env: "YUKI_LLM_HEAVY_THINKING",
-  },
-  // ⚠️ MÊME DÉCLARATION que le léger, pour le worker lourd : c'est elle qui
-  // autorise `recuperer_fichier` à joindre l'image d'un fichier récupéré. Faux
-  // ⇒ l'outil REFUSE d'envoyer l'image et le DIT (aucun `(tool image omitted…)`
-  // silencieux). Défaut « oui » : l'utilisateur a déclaré son modèle lourd
-  // multimodal ; si le fournisseur le refuse, la réponse est une ERREUR de
-  // modèle visible, pas un silence.
-  "llm.heavy.vision": {
-    scope: "instance",
-    type: "enum",
-    enum: ["oui", "non"],
-    default: "oui",
-    apply: "hot",
-  },
-  "llm.heavy.apiKey": {
-    scope: "instance",
-    type: "string",
-    default: "",
-    apply: "hot",
-    secret: true,
-    env: "YUKI_LLM_HEAVY_API_KEY",
-  },
-  // --- Vision de repli (modèle DÉDIÉ) --------------------------------------
-  // ⚠️ TROISIÈME emplacement de modèle, calqué sur `llm.heavy.*` : une ADRESSE,
-  // un MODÈLE, un niveau de réflexion et une CLÉ qui lui sont PROPRES. Il ne
-  // s'agit PAS de choisir parmi les deux modèles existants : si ni le léger ni
-  // le lourd ne voit les images, ce sélecteur-là ne servait à rien, d'où ce
-  // modèle indépendant (demande utilisateur du 2026-11-16).
+  // --- CATALOGUE : SURCHARGES PAR BOT (lot B, 2026-11-19) -------------------
+  // ⚠️ PORTÉE `bot` : le choix d'un modèle pour la discussion/l'exécution est
+  // propre à UN bot (`<state>/bots/<id>/config.overlay.json`). Valeur vide =
+  // « (défaut de l'instance) », c'est-à-dire `llm.defaut.<rôle>`.
   //
-  // ⚠️ PORTÉE `instance` (et non par bot) : la capacité de voir les images est
-  // une propriété d'un MODÈLE, partagée par tous les bots de l'installation.
-  //
-  // ⚠️ CE QUE ÇA RÉPARE : un modèle déclaré sans vision (`llm.<rôle>.vision =
-  // non`) ne reçoit aucune image ; l'image est alors DÉCRITE par ce modèle de
-  // vision et la DESCRIPTION est donnée au modèle actif (clairement identifiée,
-  // voir `src/files/vision-fallback.ts`).
-  //
-  // ⚠️ PAS de booléen `enabled` : `baseUrl` ET `model` vides (défaut) ⇒ aucun
-  // repli, comportement inchangé (l'image n'est pas envoyée et le message le
-  // DIT). Deux champs vides disent déjà « pas de repli » — moins de réglages,
-  // moins d'ambiguïté (un booléen activé sans modèle échouerait au premier
-  // envoi d'image).
-  //
-  // ⚠️ `apply: hot` : le modèle est relu à CHAQUE image, et `models.json` est
-  // réécrit (provider `llm-vision`) + le runtime partagé rafraîchi, sans
-  // redémarrage (même mécanique que `llm.<rôle>.model`).
-  //
-  // ⚠️ Ce modèle N'EST PAS sélectionnable comme modèle de discussion ou de
-  // travail : les rôles ne lisent QUE `llm.light.*` / `llm.heavy.*`.
-  // ⚠️ `allowEmpty` : la chaîne VIDE est l'état « pas de repli ». Sans ce
-  // drapeau, vider le champ serait REFUSÉ et il n'y aurait aucun moyen de
-  // désactiver un repli déjà configuré (sinon « null », qui restaure… le vide :
-  // la même chose dite autrement, mais refusée à la saisie).
-  "llm.vision.baseUrl": {
-    scope: "instance",
+  // ⚠️ RÉSOLUTION (une seule règle, `src/llm/execution.ts`) :
+  // bot → défaut d'instance → MODE DÉGRADÉ EXPLICITE. Un `modeleId` renseigné
+  // mais INTROUVABLE ne retombe PAS silencieusement sur le défaut : le bot est
+  // en dégradé et l'interface le DIT (« modèle introuvable »), sinon une
+  // sélection cassée resterait invisible.
+  "llm.bot.light": {
+    scope: "bot",
     type: "string",
     default: "",
     allowEmpty: true,
     apply: "hot",
-    env: "YUKI_LLM_VISION_BASE_URL",
   },
-  "llm.vision.model": {
-    scope: "instance",
+  "llm.bot.heavy": {
+    scope: "bot",
     type: "string",
     default: "",
     allowEmpty: true,
     apply: "hot",
-    env: "YUKI_LLM_VISION_MODEL",
   },
-  // ⚠️ `off` par DÉFAUT : décrire n'est pas raisonner. Un modèle à réflexion
-  // longue doublerait le délai d'un tour pour un gain nul sur une image ; le
-  // réglage reste là pour un modèle qui en aurait besoin.
-  "llm.vision.thinking": {
-    scope: "instance",
-    type: "enum",
-    enum: THINKING_LEVELS,
-    default: "off",
-    apply: "hot",
-    env: "YUKI_LLM_VISION_THINKING",
-  },
-  // Clé du modèle de vision : SECRÈTE, comme les deux autres rôles. Saisie dans
-  // `/config` (store `state/config.json`, 0600) OU fournie par l'environnement
-  // `YUKI_LLM_VISION_API_KEY` (qui écrase le store). `bridgeSecrets` la reflète
-  // dans `process.env` pour que `models.json` la référence (`$…_API_KEY`).
-  "llm.vision.apiKey": {
-    scope: "instance",
+  "llm.bot.vision": {
+    scope: "bot",
     type: "string",
     default: "",
+    allowEmpty: true,
     apply: "hot",
-    secret: true,
-    env: "YUKI_LLM_VISION_API_KEY",
   },
+
+  // --- CATALOGUE de fournisseurs et de modèles (lot A, 2026-11-19) ----------
+  // ⚠️ DEUX COLLECTIONS D'OBJETS TYPÉS, en portée `instance` : un fournisseur et
+  // un modèle appartiennent à l'INSTALLATION (la capacité de voir les images est
+  // une propriété du MODÈLE, partagée par tous les bots). Défaut VIDE : au premier
+  // démarrage, la reprise additive (voir `src/llm/catalogue.ts`) pré-remplit ces
+  // listes depuis les réglages historiques `llm.light.*` / `llm.heavy.*` /
+  // `llm.vision.*` (aujourd'hui RETIRÉS du schéma) — l'utilisateur n'a rien à
+  // ressaisir.
+  //
+  // ⚠️ DEPUIS LE LOT B, C'EST LA SOURCE UNIQUE DE L'EXÉCUTION : `models.json` est
+  // construit depuis ces deux listes (`src/llm/execution.ts`), les rôles `light` /
+  // `heavy` / `vision` ne référencent plus que des `modeleId` (`llm.defaut.<rôle>`
+  // pour l'installation, `llm.bot.<rôle>` pour un bot).
+  //
+  // ⚠️ `apply: hot` : modifier un fournisseur ou un modèle réécrit `models.json`
+  // et rafraîchit le runtime des modèles EN PLACE, pour TOUS les bots (la
+  // signature de rechargement porte le fichier entier).
+  //
+  // ⚠️ LA CLÉ D'API N'EST PAS DANS L'OBJET : elle vit dans le chemin SECRET
+  // `llm.fournisseur.<id>.apiKey` (masqué dans l'API, effacé au `null`, reflété
+  // dans `process.env`). La mettre ici la publierait en clair dans
+  // `GET /api/config`, qui sert la liste entière pour l'édition.
+  "llm.fournisseurs": {
+    scope: "instance",
+    type: "liste",
+    default: "",
+    apply: "hot",
+    items: [
+      { cle: "id", type: "string", identifiant: true, unique: true, requis: true },
+      { cle: "nom", type: "string", requis: true },
+      { cle: "baseUrl", type: "string", httpUrl: true, requis: true },
+      { cle: "api", type: "enum", enum: API_FOURNISSEUR, requis: true },
+    ],
+  },
+  // ⚠️ `fournisseurId` DOIT désigner un fournisseur existant : la validation
+  // d'élément ne peut pas le savoir (elle ne voit qu'une valeur), c'est le
+  // runtime qui refuse l'ensemble incohérent (`provider_in_use` /
+  // `unknown_provider`, voir `ecartsCatalogue`).
+  //
+  // ⚠️ `nom` EST l'identifiant envoyé à l'API du fournisseur (`models.json`),
+  // `id` n'est que la référence interne utilisée par `llm.defaut.*` /
+  // `llm.bot.*`. Renommer un modèle ne casse donc aucune sélection ; le
+  // SUPPRIMER met les rôles qui le référencent en dégradé explicite.
+  "llm.modeles": {
+    scope: "instance",
+    type: "liste",
+    default: "",
+    apply: "hot",
+    items: [
+      { cle: "id", type: "string", identifiant: true, unique: true, requis: true },
+      { cle: "nom", type: "string", requis: true },
+      { cle: "fournisseurId", type: "string", identifiant: true, requis: true },
+      { cle: "contexte", type: "int", min: 1, max: 100_000_000, requis: true },
+      { cle: "vision", type: "bool" },
+      { cle: "thinking", type: "enum", enum: THINKING_LEVELS },
+    ],
+  },
+  // ⚠️ DRAPEAU de reprise, à part : il dit « la reprise depuis les réglages
+  // historiques a eu lieu », pas « le catalogue est rempli ». Sans lui, vider la
+  // liste volontairement la ferait repeupler au démarrage suivant.
+  "llm.catalogueMigre": {
+    scope: "instance",
+    type: "enum",
+    enum: ["non", "oui"],
+    default: "non",
+    apply: "hot",
+  },
+
   "llm.missingKeyMode": {
     scope: "instance",
     type: "enum",
@@ -1481,22 +1476,66 @@ export const VARIABLES_ENV_SUPPRIMEES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Message COMMUN des réglages remplacés par le CATALOGUE (lot B).
+ *
+ * ⚠️ Il dit OÙ aller et QUOI faire : un ancien réglage qui n'agit plus sans que
+ * personne ne sache où le retrouver est le pire des deux mondes.
+ */
+const REMPLACEMENT_CATALOGUE =
+  "remplacé par le CATALOGUE de modèles : le fournisseur, le modèle, la réflexion " +
+  "et la vision sont désormais des propriétés du MODÈLE (onglet « Catalogue ») ; " +
+  "le modèle par défaut de chaque rôle se choisit dans l'onglet « Modèles », et " +
+  "par bot sur la page du bot. La valeur existante a été reprise au démarrage.";
+
+/**
  * Clés de CONFIGURATION supprimées du schéma, avec le réglage qui les remplace.
  *
  * ⚠️ Un `config.json` ANTÉRIEUR peut encore les contenir : elles sont IGNORÉES
  * (jamais un échec de démarrage), mais DITES — un réglage qui n'agit plus et
  * dont personne n'est averti est le pire des deux mondes.
  *
- * `vision.fallback.model` (lot 50, 2026-11-16) : le sélecteur « parmi les deux
- * modèles existants » est REMPLACÉ par un modèle de vision DÉDIÉ
- * (`llm.vision.baseUrl` / `llm.vision.model` / `llm.vision.apiKey`) — un
- * sélecteur ne servait à rien quand aucun des deux modèles ne voit d'image.
+ * LOT B (2026-11-19) : les SEIZE réglages par rôle (`llm.light.*`,
+ * `llm.heavy.*`, `llm.vision.*`) et le catalogue JSON du commit externe
+ * (`llm.catalog`, `llm.selection.light`, `llm.selection.heavy`) sont RETIRÉS.
+ * Un modèle est désormais une ENTRÉE du catalogue (`llm.modeles`), avec son
+ * fournisseur, sa fenêtre de contexte, sa VISION et sa RÉFLEXION ; les rôles ne
+ * référencent plus qu'un `modeleId` (`llm.defaut.<rôle>` pour l'installation,
+ * `llm.bot.<rôle>` pour un bot). Une valeur présente dans `config.json` est
+ * REPRISE au démarrage (voir `reprendreDefautsDepuisRoles`,
+ * `src/llm/catalogue.ts`) : rien à ressaisir, mais plus rien de silencieux.
  */
 export const CLES_CONFIG_RETIREES: Readonly<Record<string, string>> = {
   "vision.fallback.model":
-    "remplacé par le modèle de vision DÉDIÉ : renseignez `llm.vision.baseUrl`, " +
-    "`llm.vision.model` et `llm.vision.apiKey` (/config → onglet « Modèles », " +
-    "bloc « Vision de repli »)",
+    "remplacé par le rôle « vision » du CATALOGUE : choisissez un modèle déclaré " +
+    "« Reçoit les images » dans /config → onglet « Modèles » (modèle de vision par " +
+    "défaut), ou sur la page du bot",
+  // ⚠️ LOT B (2026-11-19) : les réglages PAR RÔLE disparaissent au profit du
+  // CATALOGUE. Les valeurs d'un `config.json` antérieur sont REPRISES au
+  // démarrage (voir `reprendreDefautsDepuisRoles`, `src/llm/catalogue.ts`) puis
+  // signalées — jamais un échec, jamais un silence.
+  "llm.light.api": REMPLACEMENT_CATALOGUE,
+  "llm.light.baseUrl": REMPLACEMENT_CATALOGUE,
+  "llm.light.model": REMPLACEMENT_CATALOGUE,
+  "llm.light.thinking": REMPLACEMENT_CATALOGUE,
+  "llm.light.vision": REMPLACEMENT_CATALOGUE,
+  "llm.light.apiKey": REMPLACEMENT_CATALOGUE,
+  "llm.heavy.api": REMPLACEMENT_CATALOGUE,
+  "llm.heavy.baseUrl": REMPLACEMENT_CATALOGUE,
+  "llm.heavy.model": REMPLACEMENT_CATALOGUE,
+  "llm.heavy.thinking": REMPLACEMENT_CATALOGUE,
+  "llm.heavy.vision": REMPLACEMENT_CATALOGUE,
+  "llm.heavy.apiKey": REMPLACEMENT_CATALOGUE,
+  "llm.vision.baseUrl": REMPLACEMENT_CATALOGUE,
+  "llm.vision.model": REMPLACEMENT_CATALOGUE,
+  "llm.vision.thinking": REMPLACEMENT_CATALOGUE,
+  "llm.vision.apiKey": REMPLACEMENT_CATALOGUE,
+  // ⚠️ Le CATALOGUE du commit externe `134a313` (`llm.catalog` + les deux
+  // sélections `llm.selection.*`) est RETIRÉ : il faisait DOUBLE EMPLOI avec
+  // `llm.fournisseurs` / `llm.modeles` (deux listes de fournisseurs, deux notions
+  // de modèle par défaut). Une seule vérité désormais : le catalogue typé.
+  "llm.catalog": REMPLACEMENT_CATALOGUE,
+  "llm.selection.light": REMPLACEMENT_CATALOGUE,
+  "llm.selection.heavy": REMPLACEMENT_CATALOGUE,
 };
 
 /** Message d'avertissement d'une clé de config supprimée (ou `undefined`). */
@@ -1505,7 +1544,11 @@ export function remplacementCleRetiree(path: string): string | undefined {
 }
 
 export function descriptorOf(path: string): FieldDescriptor | undefined {
-  if (providerSecretId(path)) return { type: "string", scope: "instance", default: "", apply: "hot", secret: true };
+  // ⚠️ CLÉ D'UN FOURNISSEUR DU CATALOGUE (`llm.fournisseur.<id>.apiKey`) : chemin
+  // SECRET dynamique (un chemin par fournisseur déclaré, il ne peut donc pas être
+  // listé dans la table). Même mécanique que les autres secrets : masqué dans
+  // l'API, effacé au `null`, reflété dans `process.env` par `bridgeSecrets`.
+  if (idCleFournisseur(path)) return { type: "string", scope: "instance", default: "", apply: "hot", secret: true };
   return Object.hasOwn(CONFIG_SCHEMA, path) ? CONFIG_SCHEMA[path] : undefined;
 }
 
@@ -1527,11 +1570,199 @@ export type FieldValidation =
   | { ok: true; value: string | number }
   | { ok: false; code: string; message: string };
 
+/** Identifiant stable accepté dans un élément de liste (`id`, `fournisseurId`). */
+const MOTIF_IDENTIFIANT = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * Valide une LISTE D'OBJETS TYPÉS (`type: "liste"`) et la rend sous sa forme
+ * CANONIQUE (chaîne JSON, propriétés dans l'ordre déclaré).
+ *
+ * Accepte un vrai tableau JSON (corps `PUT`) ou la chaîne JSON du store : les
+ * deux chemins d'écriture produisent EXACTEMENT la même valeur stockée, donc le
+ * même contenu relu.
+ *
+ * Refus explicites : élément non objet, propriété non déclarée, valeur vide là
+ * où elle est obligatoire, URL invalide, entier hors bornes, identifiant
+ * malformé ou EN DOUBLE. Aucun repli silencieux : une faute de saisie ne doit
+ * jamais devenir une valeur enregistrée que personne ne comprend.
+ */
+function validateListe(
+  descriptor: FieldDescriptor,
+  raw: unknown,
+): FieldValidation {
+  const champs = descriptor.items;
+  if (!champs || champs.length === 0) {
+    return {
+      ok: false,
+      code: "invalid_descriptor",
+      message: `Champ « liste » sans éléments déclarés (${descriptor.type}).`,
+    };
+  }
+  let brut: unknown = raw;
+  if (typeof raw === "string") {
+    if (raw.trim() === "") return { ok: true, value: "[]" };
+    try {
+      brut = JSON.parse(raw);
+    } catch {
+      return { ok: false, code: "invalid_liste", message: "Liste attendue (JSON invalide)." };
+    }
+  }
+  if (!Array.isArray(brut)) {
+    return { ok: false, code: "invalid_liste", message: "Liste attendue (tableau d'objets)." };
+  }
+
+  const connues = new Set(champs.map((champ) => champ.cle));
+  // ⚠️ Unicité par CHAMP d'identifiant, pas globalement : `fournisseurId` peut
+  // légitimement valoir le même texte que l'`id` du modèle (un identifiant de
+  // fournisseur est réutilisé par plusieurs modèles). Ce qui doit être unique,
+  // c'est l'`id` DANS la collection.
+  const identifiants = new Map<string, Set<string>>();
+  const normalises: Array<Record<string, string | number | boolean>> = [];
+
+  for (const [index, element] of brut.entries()) {
+    const rang = `élément ${index + 1}`;
+    if (!element || typeof element !== "object" || Array.isArray(element)) {
+      return { ok: false, code: "invalid_item", message: `Objet attendu (${rang}).` };
+    }
+    const objet = element as Record<string, unknown>;
+    for (const cle of Object.keys(objet)) {
+      if (!connues.has(cle)) {
+        return {
+          ok: false,
+          code: "unknown_item_field",
+          message: `Propriété inconnue « ${cle} » (${rang}).`,
+        };
+      }
+    }
+    const sortie: Record<string, string | number | boolean> = {};
+    for (const champ of champs) {
+      const valeur = objet[champ.cle];
+      const absent = valeur === undefined || valeur === null || valeur === "";
+      if (absent) {
+        if (champ.requis) {
+          return {
+            ok: false,
+            code: "empty_value",
+            message: `« ${champ.cle} » est obligatoire (${rang}).`,
+          };
+        }
+        // Normalisation des ABSENTS : `false` pour un booléen, `""` sinon (la
+        // forme écrite ne dépend pas de la façon dont l'interface a omis une
+        // propriété facultative).
+        sortie[champ.cle] = champ.type === "bool" ? false : "";
+        continue;
+      }
+      if (champ.type === "bool") {
+        if (typeof valeur !== "boolean") {
+          return {
+            ok: false,
+            code: "invalid_bool",
+            message: `« ${champ.cle} » doit être vrai ou faux (${rang}).`,
+          };
+        }
+        sortie[champ.cle] = valeur;
+        continue;
+      }
+      if (champ.type === "int") {
+        const entier =
+          typeof valeur === "number"
+            ? valeur
+            : /^-?\d+$/.test(String(valeur).trim())
+              ? Number.parseInt(String(valeur).trim(), 10)
+              : Number.NaN;
+        if (!Number.isInteger(entier)) {
+          return {
+            ok: false,
+            code: "invalid_int",
+            message: `« ${champ.cle} » doit être un entier (${rang}).`,
+          };
+        }
+        if (champ.min !== undefined && entier < champ.min) {
+          return {
+            ok: false,
+            code: "below_min",
+            message: `« ${champ.cle} » trop petit (minimum ${champ.min}).`,
+          };
+        }
+        if (champ.max !== undefined && entier > champ.max) {
+          return {
+            ok: false,
+            code: "above_max",
+            message: `« ${champ.cle} » trop grand (maximum ${champ.max}).`,
+          };
+        }
+        sortie[champ.cle] = entier;
+        continue;
+      }
+      if (typeof valeur !== "string") {
+        return {
+          ok: false,
+          code: "invalid_string",
+          message: `« ${champ.cle} » doit être du texte (${rang}).`,
+        };
+      }
+      const texte = valeur.trim();
+      if (texte === "" && champ.requis) {
+        return {
+          ok: false,
+          code: "empty_value",
+          message: `« ${champ.cle} » est obligatoire (${rang}).`,
+        };
+      }
+      if (champ.type === "enum" && !(champ.enum ?? []).includes(texte)) {
+        return {
+          ok: false,
+          code: "invalid_enum",
+          message: `Valeurs autorisées pour « ${champ.cle} » : ${(champ.enum ?? []).join(" | ")}.`,
+        };
+      }
+      if (champ.httpUrl === true && !isHttpUrl(texte)) {
+        return {
+          ok: false,
+          code: "invalid_url",
+          message:
+            `Adresse invalide pour « ${champ.cle} » : « ${texte} ». Attendu une URL ` +
+            "complète en http:// ou https:// (par exemple https://api.exemple.fr/v1).",
+        };
+      }
+      if (champ.identifiant === true) {
+        if (!MOTIF_IDENTIFIANT.test(texte)) {
+          return {
+            ok: false,
+            code: "invalid_id",
+            message:
+              `Identifiant invalide pour « ${champ.cle} » : « ${texte} ». ` +
+              "Attendu minuscules, chiffres et tirets (ex. mon-fournisseur).",
+          };
+        }
+        if (champ.unique === true) {
+          const vus = identifiants.get(champ.cle) ?? new Set<string>();
+          identifiants.set(champ.cle, vus);
+          if (vus.has(texte)) {
+            return {
+              ok: false,
+              code: "duplicate_id",
+              message: `Identifiant en double pour « ${champ.cle} » : « ${texte} ».`,
+            };
+          }
+          vus.add(texte);
+        }
+      }
+      sortie[champ.cle] = texte;
+    }
+    normalises.push(sortie);
+  }
+
+  // Forme CANONIQUE : l'ordre des clés suit la DÉCLARATION, pas la saisie.
+  return { ok: true, value: JSON.stringify(normalises) };
+}
+
 /** Valide et normalise une valeur brute (env, store ou patch API). */
 export function validateDescriptor(
   descriptor: FieldDescriptor,
   raw: unknown,
 ): FieldValidation {
+  if (descriptor.type === "liste") return validateListe(descriptor, raw);
   if (descriptor.type === "int") {
     let value: number;
     if (typeof raw === "number") {
@@ -1656,14 +1887,6 @@ export function validateField(path: string, raw: unknown): FieldValidation {
   const descriptor = descriptorOf(path);
   if (!descriptor) {
     return { ok: false, code: "unknown_field", message: `Champ inconnu : ${path}.` };
-  }
-  if (path === "llm.catalog") {
-    try {
-      if (typeof raw !== "string") throw Error("Catalogue invalide.");
-      return { ok: true, value: JSON.stringify(readCatalog(raw)) };
-    } catch (error) {
-      return { ok: false, code: "invalid_catalog", message: error instanceof SyntaxError ? "Catalogue invalide." : String(error) };
-    }
   }
   return validateDescriptor(descriptor, raw);
 }

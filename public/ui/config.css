@@ -1293,6 +1293,18 @@
   font-size: 12px;
 }
 
+/* ─── Badges d'un CHOIX DE MODÈLE (lot B, `llm-choix.js`) ────────────────── *
+ * « ne voit pas les images », « réflexion off »… : une RANGÉE, jamais une
+ * colonne — le conteneur `.config-secret` est en colonne (coffre des secrets),
+ * ce qui empilerait les badges un par ligne. Aucun style inline (CSP stricte). */
+.config-badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 2px 0 0;
+}
+
 /* ─── Onglet « Secrets » : gestion du coffre chiffré ───────────────────── *
  * Noms seulement, jamais les valeurs. Aucun style inline (CSP stricte). */
 .config-secret {

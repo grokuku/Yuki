@@ -7,7 +7,7 @@
  * image par « tool image omitted »). Jusqu'ici le seul comportement possible
  * était donc de refuser l'image et de le dire. Ce module ouvre la seule autre
  * issue honnête : faire DÉCRIRE l'image par un MODÈLE DE VISION DÉDIÉ
- * (`llm.vision.baseUrl`/`model`/`apiKey` — son adresse, son nom et sa clé, pas
+ * (le rôle « vision » du CATALOGUE : son fournisseur, son nom, sa clé — pas
  * un choix parmi les deux modèles existants), puis donner cette DESCRIPTION au
  * modèle actif — à la place de l'image, et clairement identifiée comme telle.
  *
@@ -159,7 +159,7 @@ export interface PlanVisionInput {
   readonly modeleVoitLesImages: boolean;
   /** Nombre d'images prêtes à partir. */
   readonly nombreImages: number;
-  /** Un modèle de vision dédié est-il configuré ? (`llm.vision.baseUrl`+`model`) */
+  /** Un modèle de vision est-il sélectionné ? (rôle « vision » du catalogue) */
   readonly repliConfigure: boolean;
 }
 

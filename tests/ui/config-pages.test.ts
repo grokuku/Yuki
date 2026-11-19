@@ -2,7 +2,8 @@
  * DEUX PAGES DE CONFIGURATION (lot 35d, sous-lot 1b-4) — ce que ce fichier
  * VERROUILLE :
  *
- *  ① **8 onglets** sur la page Instance (`config.html`), **7** sur la page Bot
+ *  ① **9 onglets** sur la page Instance (`config.html`, 8 avant le catalogue du
+ *    lot A), **7** sur la page Bot
  *    (`bots.html`), avec les libellés EXACTS et dans l'ordre ;
  *    ⚠️ GARDE MODIFIÉE (2026-11-14, « consignes durables ») : l'onglet
  *    « Prompts » a été AJOUTÉ aux deux pages (ce que l'utilisateur demande dans
@@ -109,10 +110,14 @@ function libellesHtml(html: string): string[] {
 }
 
 describe("① deux pages, deux jeux d'onglets", () => {
-  it("la page INSTANCE déclare 8 onglets, libellés exacts et dans l'ordre", () => {
+  it("la page INSTANCE déclare 9 onglets, libellés exacts et dans l'ordre", () => {
     expect(PAGES.instance.scopes).toEqual(["instance", "mixte"]);
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT A) : 8 → 9 avec l'onglet DÉDIÉ
+    // « Catalogue » (fournisseurs + modèles), placé juste après « Modèles » —
+    // c'est ce qui évite d'avoir DEUX listes de fournisseurs dans un même onglet.
     expect(libellesHtml(CONFIG_HTML)).toEqual([
       "Modèles",
+      "Catalogue",
       "Prompts",
       "Exécution",
       "Images",
@@ -125,8 +130,8 @@ describe("① deux pages, deux jeux d'onglets", () => {
     expect(libellesHtml(CONFIG_HTML)).toEqual(
       ongletsDePage("instance").map((onglet) => onglet.libelle),
     );
-    expect([...CONFIG_HTML.matchAll(/role="tab"/g)].length).toBe(8);
-    expect([...CONFIG_HTML.matchAll(/role="tabpanel"/g)].length).toBe(8);
+    expect([...CONFIG_HTML.matchAll(/role="tab"/g)].length).toBe(9);
+    expect([...CONFIG_HTML.matchAll(/role="tabpanel"/g)].length).toBe(9);
   });
 
   it("la page BOT déclare 7 onglets, libellés exacts et dans l'ordre", () => {
@@ -394,19 +399,30 @@ describe("⑨ classement validé — portées changées et réglages sans écran
   ];
 
   /**
-   * Clés du CATALOGUE DE MODÈLES (commit externe `134a313` « split LLM config »,
-   * 2026-11-19), rendues par le module dédié `public/ui/llm-catalog.js`.
+   * Clés du CATALOGUE DE MODÈLES, rendues par deux modules dédiés.
    *
    * ⚠️ POURQUOI ELLES NE SONT PAS DANS `GROUPS` : le catalogue est un ÉDITEUR
-   * DYNAMIQUE (liste de fournisseurs / de modèles, sélections par rôle) que le
-   * catalogue déclaratif `config-fields.js` ne sait pas décrire. `config.js`
-   * monte `renderCatalog` sur l'onglet « Modèles » (page Instance) et
-   * « Général » (page Bot), et SAUTE les groupes `llm-light` / `llm-heavy`
-   * qu'il remplace. Le chemin de sélection y est CONSTRUIT (`"llm.selection."
-   * + role`), donc un simple littéral ne suffirait pas : le rendu RÉEL est
-   * vérifié plus bas, dans le fichier.
+   * DYNAMIQUE (liste de fournisseurs / de modèles) et les sélections de rôle sont
+   * des LISTES DÉROULANTES alimentées par ce catalogue — le catalogue déclaratif
+   * `config-fields.js` ne sait décrire ni l'un ni l'autre.
+   *
+   * ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : `llm.catalog` et `llm.selection.*`
+   * (catalogue JSON du commit externe) sont RETIRÉS, remplacés par les trois
+   * DÉFAUTS d'instance et les trois SURCHARGES par bot. Le chemin de sélection est
+   * CONSTRUIT (`"llm.bot."` / `"llm.defaut."` + rôle) dans `llm-choix.js`, donc un
+   * simple littéral ne suffirait pas : le rendu RÉEL est vérifié plus bas.
    */
-  const CATALOGUE_MODELES = ["llm.catalog", "llm.selection.light", "llm.selection.heavy"];
+  const CATALOGUE_MODELES = [
+    "llm.fournisseurs",
+    "llm.modeles",
+    "llm.catalogueMigre",
+    "llm.defaut.light",
+    "llm.defaut.heavy",
+    "llm.defaut.vision",
+    "llm.bot.light",
+    "llm.bot.heavy",
+    "llm.bot.vision",
+  ];
 
   /** Clés rendues par une page, sans doublon. */
   const rendues = (page: string): string[] => [...clesRendues(page).keys()];
@@ -471,29 +487,46 @@ describe("⑨ classement validé — portées changées et réglages sans écran
     ]);
     const orphelines = Object.keys(SCOPES).filter((cle) => !couvertes.has(cle));
     expect(orphelines).toEqual([]);
-    // ⚠️ Et le compte doit être EXACT : 100 clés (94 - `vision.fallback.model`
-    // + les quatre clés du modèle de vision DÉDIÉ `llm.vision.*` — réglage
-    // GÉNÉRAL de l'onglet « Modèles », ajouté le 2026-11-16 — + les trois clés
-    // du catalogue de modèles `llm.catalog` / `llm.selection.*`), aucune oubliée
-    // par ce contrôle.
-    expect(Object.keys(SCOPES).length).toBe(100);
-    expect(couvertes.size).toBe(100);
-    // ⚠️ Portée des trois clés du catalogue : le CATALOGUE est un réglage
-    // D'INSTALLATION (« Modèles » sur la page Instance), les SÉLECTIONS sont
-    // par BOT (« Général » sur la page Bot) — c'est exactement ce que fait
-    // `config.js` (`containers.get(PAGE_BOT ? "general" : "modeles")`).
-    expect(SCOPES["llm.catalog"]).toBe("instance");
-    expect(SCOPES["llm.selection.light"]).toBe("bot");
-    expect(SCOPES["llm.selection.heavy"]).toBe("bot");
-    // ⚠️ Rendu RÉEL dans le module dédié (aucun fantôme) : le catalogue est lu
-    // depuis `fields["llm.catalog"]` et les deux sélections sont construites.
-    const catalogue = lire("llm-catalog.js");
-    expect(catalogue).toContain('fields["llm.catalog"]');
-    expect(catalogue).toContain('"llm.selection." + role');
-    expect(catalogue).toContain('patch["llm.catalog"]');
+    // ⚠️ Et le compte doit être EXACT : 90 clés (103 − les 16 réglages par rôle
+    // − le catalogue JSON du commit externe + les 6 sélections de rôle du lot B),
+    // aucune oubliée par ce contrôle.
+    expect(Object.keys(SCOPES).length).toBe(90);
+    expect(couvertes.size).toBe(90);
+    // ⚠️ Portée : le CATALOGUE (contenu) et les DÉFAUTS sont des réglages
+    // d'INSTALLATION (onglet « Catalogue » / « Modèles »), les SURCHARGES sont par
+    // BOT (onglet « Général ») — c'est exactement ce que fait `config.js`
+    // (`containers.get(PAGE_BOT ? "general" : "modeles")`).
+    expect(SCOPES["llm.fournisseurs"]).toBe("instance");
+    expect(SCOPES["llm.defaut.light"]).toBe("instance");
+    expect(SCOPES["llm.bot.light"]).toBe("bot");
+    expect(SCOPES["llm.bot.heavy"]).toBe("bot");
+    expect(SCOPES["llm.bot.vision"]).toBe("bot");
+    // ⚠️ Le catalogue du lot A est d'INSTALLATION (fournisseurs et modèles sont
+    // partagés par tous les bots) : ses trois clés sont rendues sur la page
+    // Instance, dans l'onglet « Catalogue ».
+    // ⚠️ `llm.catalogueMigre` n'est PAS édité par l'interface (c'est le drapeau
+    // de reprise, posé par `migrerCatalogue` au démarrage) : il est donc couvert
+    // par la liste des clés du catalogue, pas par une chaîne dans un module.
+    for (const cle of ["llm.fournisseurs", "llm.modeles", "llm.catalogueMigre"]) {
+      expect(SCOPES[cle], cle).toBe("instance");
+    }
+    const moduleCatalogue = lire("catalogue-llm.js");
+    for (const cle of ["llm.fournisseurs", "llm.modeles"]) {
+      expect(moduleCatalogue, cle).toContain(cle);
+    }
+    // ⚠️ Rendu RÉEL dans le module dédié (aucun fantôme) : les TROIS menus sont
+    // construits depuis le chemin de rôle (`llm.bot.<rôle>` / `llm.defaut.<rôle>`).
+    const choix = lire("llm-choix.js");
+    expect(choix).toContain("llm.bot.");
+    expect(choix).toContain("llm.defaut.");
+    expect(choix).toContain("llm.modeles");
+    expect(choix).toContain("llm.fournisseurs");
     // Et c'est bien `config.js` qui le monte, sur l'onglet de la page.
-    expect(CONFIG_JS).toContain("renderCatalog({");
+    expect(CONFIG_JS).toContain("renderChoixModeles({");
     expect(CONFIG_JS).toContain('PAGE_BOT ? "general" : "modeles"');
+    // ⚠️ LOT A : le catalogue typé est monté dans SON onglet (page Instance).
+    expect(CONFIG_JS).toContain("initCatalogueLlm({");
+    expect(CONFIG_JS).toContain('containers.get("catalogue")');
     // Les contrôles hors catalogue EXISTENT bien dans leur fichier (aucun fantôme).
     for (const [cle, fichier] of [
       ["tts.voice", "voices-panel.js"],
@@ -812,16 +845,19 @@ describe("⑤bis ajout / clone / suppression — les données décidées", () =>
 
 describe("⑥ gardes CSP : elles s'appliquent AUX DEUX pages", () => {
   it("aucun innerHTML, aucun window.confirm(, aucun style inline dans le code servi", () => {
-    // ⚠️ GARDE ÉTENDUE (commit externe `134a313` « split LLM config », 2026-11-19) :
-    // `llm-catalog.js` est un NOUVEAU fichier d'interface, monté par `config.js`
-    // sur les DEUX pages — il doit donc porter les mêmes interdits. Ajouté à la
-    // liste APRÈS vérification qu'il les respecte déjà (aucun assouplissement).
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : `llm-catalog.js` est SUPPRIMÉ (le
+    // catalogue JSON du commit externe n'existe plus) ; `llm-choix.js` est le
+    // NOUVEAU fichier d'interface, monté par `config.js` sur les DEUX pages — il
+    // doit donc porter les mêmes interdits. Ajouté à la liste APRÈS vérification
+    // qu'il les respecte (aucun assouplissement).
     for (const nom of [
       "config.js",
       "config-fields.js",
       "config-pages.js",
       "bots-admin.js",
-      "llm-catalog.js",
+      "llm-choix.js",
+      // `catalogue-llm.js` : éditeur du catalogue (onglet « Catalogue »).
+      "catalogue-llm.js",
     ]) {
       const source = lire(nom);
       expect(source, nom).not.toContain("innerHTML");
@@ -1051,50 +1087,59 @@ describe("⑧ LOT 35i — onglet « Mémoire » d'un bot et sessions Pi", () => 
  * effaçable, enregistré par `PUT /api/config`) — et son aide ne doit pas
  * renvoyer l'utilisateur à une variable d'environnement.
  */
-describe("⑩ le bloc « Vision de repli » a le MÊME confort que les deux modèles", () => {
-  const groupe = GROUPS.find((entree) => entree.title === "Vision de repli");
-  const champs = groupe?.fields ?? [];
-  const champDe = (path: string) =>
-    ALL_FIELDS.find((field) => field.path === path) as
-      | { path: string; label: string; kind?: string; helper?: string }
-      | undefined;
-
-  it("porte les quatre réglages du modèle DÉDIÉ (adresse, modèle, réflexion, clé)", () => {
-    expect(champs.map((field) => field.path).sort()).toEqual([
-      "llm.vision.apiKey",
-      "llm.vision.baseUrl",
-      "llm.vision.model",
-      "llm.vision.thinking",
-    ]);
-    // Réglages d'INSTALLATION, sur l'onglet « Modèles ».
-    expect(groupe?.tabs).toEqual({ instance: "modeles" });
-    // ⚠️ Aucune trace de l'ancien sélecteur (pas de cohabitation).
-    expect(ALL_FIELDS.some((field) => field.path === "vision.fallback.model")).toBe(false);
-  });
-
-  it("⚠️ « Clé d'API » est un champ SECRET, identique à celui du léger et du lourd", () => {
-    const vision = champDe("llm.vision.apiKey");
-    const legere = champDe("llm.light.apiKey");
-    const lourde = champDe("llm.heavy.apiKey");
-    expect(vision).toBeTruthy();
-    expect(vision?.kind).toBe("secret");
-    // Même libellé, mot pour mot : l'utilisateur retrouve le même contrôle.
-    expect(vision?.label).toBe(legere?.label);
-    expect(vision?.label).toBe(lourde?.label);
-    // Une aide existe (le champ ne dit pas où la clé est saisie, sinon).
-    expect(String(vision?.helper).length).toBeGreaterThan(30);
-  });
-
-  it("⚠️ l'aide ne renvoie PAS l'utilisateur à une variable d'environnement", () => {
-    for (const path of [
+describe("⑩ le rôle VISION est un MENU du catalogue (fini les champs par modèle)", () => {
+  /**
+   * ⚠️ GARDE RÉVISÉE (2026-11-19, LOT B) : le bloc « Vision de repli » (adresse,
+   * modèle, réflexion, clé saisis à la main) est REMPLACÉ par la troisième liste
+   * déroulante de `public/ui/llm-choix.js`, alimentée par le CATALOGUE.
+   *
+   * Ce qui reste vérifié, en plus fort :
+   *  - il n'y a PLUS de champ de modèle saisi à la main (aucun `llm.vision.*`) ;
+   *  - la liste de vision ne propose QUE les modèles déclarés `vision: true` ;
+   *  - sous chaque menu, ce qui est RÉELLEMENT utilisé est affiché ;
+   *  - un modèle sans vision choisi pour la discussion est SIGNALÉ, pas refusé ;
+   *  - aucun appel réseau, aucun champ libre.
+   */
+  it("aucun réglage de modèle n'est plus saisi à la main", () => {
+    for (const chemin of [
+      "llm.light.api",
+      "llm.light.baseUrl",
+      "llm.light.model",
+      "llm.light.thinking",
+      "llm.light.vision",
+      "llm.light.apiKey",
+      "llm.heavy.model",
       "llm.vision.baseUrl",
       "llm.vision.model",
       "llm.vision.thinking",
       "llm.vision.apiKey",
     ]) {
-      const aide = String(champDe(path)?.helper ?? "");
-      expect(aide, path).not.toContain("YUKI_LLM_VISION_API_KEY");
-      expect(aide, path).not.toContain("variable d'environnement");
+      expect(ALL_FIELDS.some((field) => field.path === chemin), chemin).toBe(false);
     }
+  });
+
+  it("la liste de VISION ne propose QUE les modèles qui voient les images", () => {
+    const source = lire("llm-choix.js");
+    // Le filtre est EXPLICITE (`vision === true`), pas implicite.
+    expect(source).toContain("modele.vision === true");
+    // Les trois rôles sont proposés, le troisième est le repli.
+    expect(source).toContain('id: "light"');
+    expect(source).toContain('id: "heavy"');
+    expect(source).toContain('id: "vision"');
+    expect(source).toContain("visionSeulement: true");
+    // ⚠️ Aucun champ libre : on ne peut choisir qu'un `modeleId` du catalogue.
+    expect(source).not.toContain('type: "text"');
+    // Ce qui est RÉELLEMENT utilisé est affiché sous chaque menu.
+    expect(source).toContain("effectif :");
+    expect(source).toContain("modèle introuvable");
+    // Un modèle sans vision n'est PAS une erreur : il est signalé.
+    expect(source).toContain("ne voit pas les images");
+  });
+
+  it("aucun appel réseau dans les menus de modèles (pas de test de connexion)", () => {
+    const source = lire("llm-choix.js");
+    expect(source).not.toContain("fetch(");
+    expect(source).not.toContain("HolafFetch");
+    expect(source).not.toContain("/api/config/llm/test");
   });
 });

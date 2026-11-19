@@ -354,19 +354,12 @@ export function readConfigEnvOverrides(
       out[path] = raw;
     }
   }
-  // Alias dépréciés (lecture seule) pour les clés d'API LLM. Le canonique
-  // (`CONFIG_SCHEMA[path].env`, ex. `YUKI_LLM_LIGHT_API_KEY`) reste PRIORITAIRE :
-  // `out[path]` n'a été posé ci-dessus que si la variable canonique est définie
-  // ET non vide (une variable vide n'est jamais une surcharge).
-  const aliasMap: Record<string, string> = {
-    "llm.light.apiKey": "YUKI_LLM_DISCUSSION_API_KEY",
-    "llm.heavy.apiKey": "YUKI_LLM_TRAVAIL_API_KEY",
-  };
-  for (const [path, aliasEnv] of Object.entries(aliasMap)) {
-    if (path in out) continue;
-    const raw = processEnv[aliasEnv];
-    if (typeof raw === "string" && raw.trim() !== "") out[path] = raw;
-  }
+  // ⚠️ LOT B (2026-11-19) : les ALIAS dépréciés des clés d'API LLM
+  // (`YUKI_LLM_DISCUSSION_API_KEY`, `YUKI_LLM_TRAVAIL_API_KEY`) ne désignent plus
+  // de champ — les réglages par rôle sont retirés du schéma. Ils sont REPRIS au
+  // démarrage par la migration du catalogue (`ENV_HISTORIQUES_ALIAS`,
+  // `src/llm/catalogue.ts`) : les laisser ici ferait échouer la validation
+  // (`champ inconnu`) dès que la variable est posée.
   return out;
 }
 

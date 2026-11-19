@@ -20,7 +20,8 @@
 
 import type { IncomingHttpHeaders } from "node:http";
 
-import { keyPath, readCatalog } from "../../llm/catalog.js";
+import { cheminCleFournisseur } from "../../llm/catalogue.js";
+import { fournisseurDuCatalogue, llmRouting } from "../../llm/routing.js";
 import {
   ConfigValidationError,
   LockedByEnvError,
@@ -543,10 +544,16 @@ async function handleLlmTest(input: ConfigRequestInput): Promise<ConfigHttpRespo
     });
   }
 
+  // ⚠️ DEUX FORMES acceptées (contrat d'API existant) :
+  //  - `{ provider: "<id fournisseur du catalogue>" }` : test d'un fournisseur
+  //    AVANT enregistrement (l'adresse vient du catalogue) ;
+  //  - `{ role: "light" | "heavy" }` : test du fournisseur RÉSOLU du rôle
+  //    (surcharge du bot → défaut d'instance, via le catalogue).
+  const provider =
+    typeof body.provider === "string"
+      ? fournisseurDuCatalogue(input.deps.runtime, body.provider)
+      : undefined;
   const role = body.role;
-  const provider = typeof body.provider === "string"
-    ? readCatalog(input.deps.runtime.getString("llm.catalog")).providers.find(p => p.id === body.provider)
-    : undefined;
   if (!provider && role !== "light" && role !== "heavy") {
     return json(400, {
       error: "invalid_role",
@@ -554,19 +561,28 @@ async function handleLlmTest(input: ConfigRequestInput): Promise<ConfigHttpRespo
         {
           path: "role",
           code: "invalid_role",
-          message: 'Rôle attendu : "light" ou "heavy".',
+          message: 'Rôle attendu : "light" ou "heavy" (ou un fournisseur du catalogue).',
         },
       ],
     });
   }
 
-  const prefix = `llm.${role}`;
-  const baseUrl = (provider?.baseUrl ?? input.deps.runtime.getString(`${prefix}.baseUrl`)).replace(/\/+$/, "");
+  const roleResolu = provider === undefined && (role === "light" || role === "heavy")
+    ? llmRouting(input.deps.runtime).plan.roles[role]
+    : undefined;
+  const baseUrl = (provider?.baseUrl
+    ?? roleResolu?.fournisseur?.baseUrl
+    ?? "").replace(/\/+$/, "");
+  const cheminCle = provider !== undefined
+    ? cheminCleFournisseur(provider.id)
+    : roleResolu?.fournisseur !== undefined
+      ? cheminCleFournisseur(roleResolu.fournisseur.id)
+      : "";
   const provided =
     typeof body.apiKey === "string" && body.apiKey.trim() !== ""
       ? body.apiKey.trim()
       : undefined;
-  const key = provided ?? input.deps.runtime.getString(provider ? keyPath(provider.id) : `${prefix}.apiKey`).trim();
+  const key = provided ?? (cheminCle === "" ? "" : input.deps.runtime.getString(cheminCle).trim());
   if (key.length === 0) {
     return json(200, {
       ok: false,

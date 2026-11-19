@@ -44,9 +44,14 @@ describe("schéma tts.*", () => {
     }
   });
 
-  it("aucun champ n'utilise de booléen (FieldType = string|int|enum)", () => {
+  it("aucun champ n'utilise de booléen (FieldType = string|int|enum|liste)", () => {
+    // ⚠️ GARDE RÉVISÉE (2026-11-19, LOT A) : le type `liste` (tableau d'objets
+    // typés du catalogue de fournisseurs/modèles) est AJOUTÉ. Ce que la garde
+    // protège ne change pas : il n'existe AUCUN type `bool` au niveau d'un champ
+    // (un booléen ne s'exprime que dans un élément de liste, où il est déclaré
+    // `type: "bool"` dans `items`).
     for (const [path, descriptor] of Object.entries(CONFIG_SCHEMA)) {
-      expect(["string", "int", "enum"], path).toContain(descriptor.type);
+      expect(["string", "int", "enum", "liste"], path).toContain(descriptor.type);
     }
   });
 

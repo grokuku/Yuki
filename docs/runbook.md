@@ -453,19 +453,20 @@ arrière-plan. Le léger peut déléguer via l'outil `delegate`. Le nommage est
 ### Les huit usages des deux modèles (Lot 33)
 
 ⚠️ Une seule table fait foi. « Réflexion » = niveau RÉELLEMENT transmis au
-modèle pour cet appel, jamais une supposition : il est lu à chaud dans
-`llm.<role>.thinking` (défaut `off` pour `light`, `high` pour `heavy`).
+modèle pour cet appel, jamais une supposition : il est lu à chaud dans le
+CATALOGUE (`llm.modeles[].thinking` du modèle résolu du rôle — depuis le lot B la
+réflexion est une propriété du MODÈLE, plus du rôle).
 
 | # | usage | rôle | réflexion | repli | fichier:ligne |
 | --- | --- | --- | --- | --- | --- |
-| 1 | conversation (interface) | discussion | `llm.light.thinking` | aucun — le léger est requis | `src/index.ts:2565` |
+| 1 | conversation (interface) | discussion | réflexion du modèle du rôle léger | aucun — le léger est requis | `src/index.ts:2565` |
 | 2 | juge du mode `auto` | discussion | **`off` figé — exception assumée** (exécuté à chaque message) | aucun — léger indisponible ⇒ ne répond pas | `src/index.ts:1464` · appel `:1875` |
 | 3 | rédacteur de canal | discussion | **`off` figé** (même fabrique que le juge) | aucun — modèle introuvable ⇒ refus explicite | `src/index.ts:1816` · fabrique `:1464` |
-| 4 | worker (tâche déléguée) | travail | `llm.heavy.thinking` | aucun — `delegate` refuse (`heavy_unavailable`) quand le lourd manque | `src/index.ts:2144-2145` · `src/delegation/service.ts:305-307` |
-| 5 | extraction mémoire | travail | `llm.heavy.thinking`, sinon `llm.light.thinking` | **léger** (`memoryWriteModelReference`) | `src/index.ts:2227-2237` · `:2251-2254` · `src/memory/write-model.ts:36-48` |
-| 6 | consolidation hebdo de la mémoire | travail | `llm.heavy.thinking` | **aucun — lourd imposé** (passe REFUSÉE si le lourd manque) | `src/index.ts:2303-2305` · `src/memory/consolidation-hebdo.ts:437` |
-| 7 | synthèse du libraire | travail | `llm.heavy.thinking`, sinon `llm.light.thinking` | **léger** (`memoryWriteModelReference`) | `src/index.ts:2380-2391` |
-| 8 | récapitulatif | travail | `llm.heavy.thinking`, sinon `llm.light.thinking` | **léger** (`memoryWriteModelReference`) | `src/index.ts:2925-2938` |
+| 4 | worker (tâche déléguée) | travail | réflexion du modèle du rôle travail | aucun — `delegate` refuse (`heavy_unavailable`) quand le lourd manque | `src/index.ts:2144-2145` · `src/delegation/service.ts:305-307` |
+| 5 | extraction mémoire | travail | réflexion du modèle (travail, sinon léger) | **léger** (`memoryWriteModelReference`) | `src/index.ts:2227-2237` · `:2251-2254` · `src/memory/write-model.ts:36-48` |
+| 6 | consolidation hebdo de la mémoire | travail | réflexion du modèle du rôle travail | **aucun — lourd imposé** (passe REFUSÉE si le lourd manque) | `src/index.ts:2303-2305` · `src/memory/consolidation-hebdo.ts:437` |
+| 7 | synthèse du libraire | travail | réflexion du modèle (travail, sinon léger) | **léger** (`memoryWriteModelReference`) | `src/index.ts:2380-2391` |
+| 8 | récapitulatif | travail | réflexion du modèle (travail, sinon léger) | **léger** (`memoryWriteModelReference`) | `src/index.ts:2925-2938` |
 
 Chaque repli vers le léger journalise **`llm.fallback { usage, de, vers, raison }`**
 (`src/memory/write-model.ts:36-48`) — jamais un contenu ni une clé.
@@ -495,12 +496,17 @@ une clé existe) et sont stockées dans `/data/state/config.json` (`0600`). Un
 
 ```bash
 curl -s -X PUT -H 'content-type: application/json' -H 'X-Yuki-Config: 1' \
-  --data '{"llm.light.apiKey":"<clé légère>"}' \
+  --data '{"llm.fournisseur.<id>.apiKey":"<clé du fournisseur>"}' \
   http://127.0.0.1:8083/api/config
 ```
 
+⚠️ Depuis le lot B, une clé appartient à un **FOURNISSEUR du catalogue**
+(`llm.fournisseurs`, onglet « Catalogue »), plus à un rôle : le modèle choisi pour
+un rôle en hérite.
+
 Les clés sont **à chaud** : dès l'enregistrement, elles sont poussées dans
-`process.env` (référencées par `models.json` via `$YUKI_LLM_<ROLE>_API_KEY`), la
+`process.env` (référencées par `models.json` via
+`$YUKI_LLM_FOURNISSEUR_<ID>_API_KEY`), la
 disponibilité (`/health/ready`) bascule **sans redémarrage** et **sans réseau**
 (présence de clé). L'API ne renvoie **jamais** la valeur : uniquement
 `configured` + un masque (`••••c0de`) ; l'action possible est **remplacer** ou
@@ -805,10 +811,11 @@ le message est injecté dans un tour en cours.
 #### ⚠️ La capacité VISION est une DÉCLARATION (le piège qui coûte une soirée)
 
 Aucune API de fournisseur ne publie « ce modèle voit les images » : Yuki **ne
-peut pas la mesurer**. La capacité est donc une **déclaration**, réglée dans
-`/config` → onglet **Modèles** → **« Reçoit les images (vision) »**
-(`llm.light.vision` pour la conversation, `llm.heavy.vision` pour le worker),
-valeurs `oui` / `non`, appliquée à chaud.
+peut pas la mesurer**. La capacité est donc une **déclaration**, portée par le
+MODÈLE lui-même : `/config` → onglet **Catalogue** → **« Reçoit les images
+(vision) »** (`llm.modeles[].vision`). Elle suit le modèle quel que soit le rôle
+qui le sélectionne, et s'applique à chaud. Le modèle de **repli** se choisit dans
+les menus de modèles (`llm.defaut.vision` par défaut, `llm.bot.vision` par bot).
 
 Ce réglage produit le champ `input` du modèle dans `models.json` :
 
@@ -917,7 +924,7 @@ qui converse) :
 | --- | --- |
 | fichier **non image** (texte, PDF, binaire) | un **résumé JSON** (statut, `file_id`, nom, taille, SHA-256, `kind`) + la note « tu ne vois pas son contenu ici ». **Aucune** image, aucun binaire dans le prompt. |
 | **image** (PNG, JPEG, GIF, WebP) **et** worker déclaré avec vision | le **même résumé**, **plus** un bloc `{ type: "image", data (base64), mimeType }` — le worker **voit** l'image. `details.image_attached = true`. |
-| **image** mais worker déclaré **texte seul** (`llm.heavy.vision` = « non ») | **aucune** image jointe ; le texte dit « ce modèle ne reçoit pas les images » et **où activer la vision**. `details.image_error = "model_without_vision"`. |
+| **image** mais modèle du worker déclaré **texte seul** (`llm.modeles[].vision = false`) | **aucune** image jointe ; le texte dit « ce modèle ne reçoit pas les images » et **où activer la vision**. `details.image_error = "model_without_vision"`. |
 | **image refusée** par la politique de vision (trop petite pour rester lisible) | **aucune** image ; le code (`file_image_illegible`, `file_image_too_large`, `file_image_unsupported`) et la raison sont dans le texte. `details.image_error = <code>`. |
 
 ⚠️ **La politique de vision est la MÊME que celle des pièces jointes**
