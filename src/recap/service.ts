@@ -45,6 +45,7 @@ export interface RecapProgress {
 
 /** Entrée du générateur (portion choisie dans la conversation d'origine). */
 export interface RecapInput {
+  botId?: string;
   originSessionId: string;
   originTitle: string;
   /**

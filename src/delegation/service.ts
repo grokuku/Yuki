@@ -399,7 +399,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
 
     this.emitPhase(PHASE.delegateReceived, sessionId, runId, undefined, t0);
 
-    if (!this.availability.isAvailable("heavy" as AvailabilityRole)) {
+    if (!this.availability.isAvailable("heavy" as AvailabilityRole, request.botId)) {
       this.logger.warn("delegation.unavailable", { session_id: sessionId });
       return { status: "unavailable", reason: "heavy_unavailable" };
     }

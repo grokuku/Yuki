@@ -9,6 +9,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { llmRouting } from "../../src/llm/routing.js";
 import { loadEnv } from "../../src/config/env.js";
 import {
   ConfigRuntime,
@@ -275,5 +276,41 @@ describe("subscribe", () => {
     // Un patch vide n'émet rien.
     runtime.update({});
     expect(count).toBe(1);
+  });
+});
+
+describe("catalogue LLM partagé et sélections par bot", () => {
+  it("isole les deux rôles, conserve les clés au rechargement et hérite après suppression", () => {
+    const { runtime, processEnv } = makeRuntime();
+    const catalog = {
+      providers: [{ id: "local", name: "Local", baseUrl: "https://local.example/v1" }],
+      models: [
+        { id: "alpha", model: "chat", provider: "local", thinking: "off", vision: true },
+        { id: "beta", model: "code", provider: "local", thinking: "high", vision: false },
+      ],
+      light: "alpha", heavy: "heavy",
+    };
+    const changes = runtime.update({ "llm.catalog": JSON.stringify(catalog), "llm.provider.local.apiKey": "secret-local-token" });
+    expect(JSON.stringify(changes)).not.toContain("secret-local-token");
+    expect(runtime.secretValues()).toContain("secret-local-token");
+    runtime.updatePour("autre", { "llm.selection.heavy": "beta", "llm.selection.light": "heavy" }, { portee: "bot" });
+    runtime.reload();
+    const primary = llmRouting(runtime);
+    const second = llmRouting(runtime, "autre");
+    expect(primary.models.light.reference).toBe("catalog-local/chat");
+    expect(second.models.light.reference).toBe(primary.models.heavy.reference);
+    expect(second.models.heavy.reference).toBe("catalog-local/code");
+    expect(second.effective.heavy.vision).toBe(false);
+    expect(primary.file).toEqual(second.file);
+    expect(primary.file.providers["catalog-local"]?.models.map(m => m.id)).toEqual(["chat", "code"]);
+    expect(primary.file.providers["catalog-local"]?.apiKey).toBe("$YUKI_LLM_PROVIDER_local_API_KEY");
+    expect(processEnv.YUKI_LLM_PROVIDER_local_API_KEY).toBe("secret-local-token");
+    expect(runtime.snapshotPour("autre").status.heavyKey).toBe(true);
+    expect(() => runtime.updatePour("autre", { "llm.selection.heavy": "unknown" })).toThrow(ConfigValidationError);
+    expect(() => runtime.update({ "llm.catalog": JSON.stringify({ ...catalog, providers: [] }) })).toThrow(ConfigValidationError);
+    runtime.update({ "llm.catalog": JSON.stringify({ providers: [], models: [], light: "light", heavy: "light" }) });
+    expect(llmRouting(runtime, "autre").models.heavy.reference).toBe(llmRouting(runtime).models.light.reference);
+    expect(processEnv.YUKI_LLM_PROVIDER_local_API_KEY).toBeUndefined();
+    expect(runtime.secretValues()).not.toContain("secret-local-token");
   });
 });

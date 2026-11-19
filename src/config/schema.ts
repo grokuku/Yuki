@@ -14,6 +14,8 @@
  * Précédence : `défauts (code) < store (page web) < environnement`.
  */
 
+import { providerSecretId, readCatalog } from "../llm/catalog.js";
+
 export type ApplyKind = "hot" | "restart";
 export type Origin = "default" | "store" | "env";
 export type FieldType = "string" | "int" | "enum";
@@ -151,6 +153,9 @@ export const CONFIG_SCHEMA: Readonly<Record<string, FieldDescriptor>> = {
   // providers EN PLACE (même instance partagée) — voir `PiHost.applyLlmConfig`
   // + l'abonnement `config.subscribe` de `src/index.ts`. La bascule a lieu
   // ENTRE deux runs : un run EN VOL garde son fournisseur d'origine.
+  "llm.catalog": { type: "string", scope: "instance", default: "", apply: "hot" },
+  "llm.selection.light": { type: "string", scope: "bot", default: "", apply: "hot" },
+  "llm.selection.heavy": { type: "string", scope: "bot", default: "", apply: "hot" },
   "llm.light.api": {
     scope: "instance",
     type: "enum",
@@ -1500,11 +1505,12 @@ export function remplacementCleRetiree(path: string): string | undefined {
 }
 
 export function descriptorOf(path: string): FieldDescriptor | undefined {
-  return CONFIG_SCHEMA[path];
+  if (providerSecretId(path)) return { type: "string", scope: "instance", default: "", apply: "hot", secret: true };
+  return Object.hasOwn(CONFIG_SCHEMA, path) ? CONFIG_SCHEMA[path] : undefined;
 }
 
 export function isSecretPath(path: string): boolean {
-  return CONFIG_SCHEMA[path]?.secret === true;
+  return descriptorOf(path)?.secret === true;
 }
 
 export function envNameOf(path: string): string | undefined {
@@ -1647,9 +1653,17 @@ function isKnownTimeZone(value: string): boolean {
 
 /** Valide une valeur brute par chemin ; `unknown_field` si le chemin est inconnu. */
 export function validateField(path: string, raw: unknown): FieldValidation {
-  const descriptor = CONFIG_SCHEMA[path];
+  const descriptor = descriptorOf(path);
   if (!descriptor) {
     return { ok: false, code: "unknown_field", message: `Champ inconnu : ${path}.` };
+  }
+  if (path === "llm.catalog") {
+    try {
+      if (typeof raw !== "string") throw Error("Catalogue invalide.");
+      return { ok: true, value: JSON.stringify(readCatalog(raw)) };
+    } catch (error) {
+      return { ok: false, code: "invalid_catalog", message: error instanceof SyntaxError ? "Catalogue invalide." : String(error) };
+    }
   }
   return validateDescriptor(descriptor, raw);
 }

@@ -19,6 +19,17 @@ délégation, GPU, prompts, transport) se fait depuis la page **`/config`** : le
 démarrage depuis la configuration effective. Plus besoin d'éditer un fichier
 dans un volume ni de terminal sur le serveur.
 
+Dans **Configuration → Modèles**, la section **Fournisseurs** regroupe les
+adresses et les clés API. Dans **Modèles**, associez chaque identifiant de modèle
+à son fournisseur, puis choisissez le léger et le lourd par défaut. Plusieurs
+modèles peuvent partager le même compte. Les deux comptes historiques et leurs
+réglages restent disponibles dans ces listes.
+
+Dans **Bot → Général → LLM**, chaque rôle peut suivre le défaut de l’instance
+ou utiliser un modèle précis. Un bot qui suit le défaut adopte aussi les futurs
+changements de ce défaut. Supprimer un modèle personnalisé fait revenir les bots
+qui l'utilisaient au défaut du rôle.
+
 ## Démarrage rapide
 
 ```bash

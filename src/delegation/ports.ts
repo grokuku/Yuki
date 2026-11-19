@@ -18,7 +18,7 @@ export type AvailabilityRole = "light" | "heavy";
 
 /** Vérifie la présence d'une clé configurée — sans aucun appel réseau. */
 export interface ModelAvailability {
-  isAvailable(role: AvailabilityRole): boolean;
+  isAvailable(role: AvailabilityRole, botId?: string): boolean;
 }
 
 /* -------------------------------------------------------------------------- */

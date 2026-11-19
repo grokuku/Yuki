@@ -201,7 +201,7 @@ export interface WsTransportOptions {
    * Les deux ports ci-dessous sont ABSENTS ⇒ refus (comportement d'origine).
    */
   vision?: {
-    conversationReceivesImages: () => boolean;
+    conversationReceivesImages: (botId?: string) => boolean;
     /** Un modèle de vision de repli est-il configuré ? (relu à chaque message) */
     repliConfigure?: () => boolean;
     /** Décrit des images avec le modèle de vision DÉDIÉ (`llm.vision.*`). */
@@ -2148,6 +2148,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
     const fromAt = firstTimestampIso(state.transcript);
     try {
       const result = await recap({
+        ...(client.botId ? { botId: client.botId } : {}),
         originSessionId: message.sessionId,
         originTitle,
         ...(subject.length > 0 ? { subject } : {}),
@@ -2502,7 +2503,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       const repliActif =
         decrireImages !== undefined && options.vision?.repliConfigure?.() === true;
       if (attachedImages.length > 0 && options.vision !== undefined) {
-        if (!options.vision.conversationReceivesImages() && !repliActif) {
+        if (!options.vision.conversationReceivesImages(client.botId) && !repliActif) {
           sendDirect(client, {
             type: "error",
             code: "file_image_vision_disabled",
@@ -2535,7 +2536,7 @@ export function createWsTransport(options: WsTransportOptions): Transport {
       let blocVision: string | undefined;
       if (preparedImages.images.length > 0) {
         const recoitLesImages =
-          options.vision === undefined || options.vision.conversationReceivesImages();
+          options.vision === undefined || options.vision.conversationReceivesImages(client.botId);
         if (recoitLesImages) {
           images = preparedImages.images;
         } else if (repliActif && decrireImages !== undefined) {

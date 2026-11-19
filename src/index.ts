@@ -19,6 +19,7 @@
  * le `PiHost`. ⚠️ Aucun import direct de `src/pi/sdk/**` ici.
  */
 
+import { llmRouting } from "./llm/routing.js";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -207,19 +208,14 @@ import {
   avertirSiPromptLegerIncomplet,
   avertirSiPromptsASurveiller,
   composerPromptSysteme,
-  buildModelsConfigFrom,
   evaluateMissingKeyPolicy,
   resolveAvailability,
-  resolveModelsFrom,
-  resolveProvidersFrom,
   resolveVisionFrom,
   visionConfigured,
   toolAllowlist,
   toolAllowlistForChat,
   type ChatOriginMode,
   type EffectiveLlmConfig,
-  type LlmConfig,
-  type ThinkingLevelName,
   type ToolAllowlistOptions,
 } from "./llm/index.js";
 import {
@@ -326,37 +322,8 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * Lit la config effective des deux rôles LLM **et du modèle de vision dédié**
- * (store + env + défauts).
- *
- * ⚠️ Le modèle de vision (`llm.vision.*`) est un TROISIÈME emplacement, pas un
- * choix parmi les deux rôles : il ne mène aucune conversation et n'exécute aucun
- * travail.
- */
 function effectiveLlmConfig(config: ConfigRuntime): EffectiveLlmConfig {
-  return {
-    light: {
-      api: config.getString("llm.light.api"),
-      baseUrl: config.getString("llm.light.baseUrl"),
-      model: config.getString("llm.light.model"),
-      thinking: config.getString("llm.light.thinking") as ThinkingLevelName,
-      // ⚠️ Déclaration VISION : produit `input` dans `models.json`.
-      vision: config.getString("llm.light.vision") === "oui",
-    },
-    heavy: {
-      api: config.getString("llm.heavy.api"),
-      baseUrl: config.getString("llm.heavy.baseUrl"),
-      model: config.getString("llm.heavy.model"),
-      thinking: config.getString("llm.heavy.thinking") as ThinkingLevelName,
-      vision: config.getString("llm.heavy.vision") === "oui",
-    },
-    vision: {
-      baseUrl: config.getString("llm.vision.baseUrl"),
-      model: config.getString("llm.vision.model"),
-      thinking: config.getString("llm.vision.thinking") as ThinkingLevelName,
-    },
-  };
+  return llmRouting(config).effective;
 }
 
 /**
@@ -653,14 +620,10 @@ async function main(): Promise<void> {
   }
 
   // --- LLM : config effective + disponibilité (aucun appel réseau) ----------
-  const effective = effectiveLlmConfig(config);
-  const llmConfig: LlmConfig = {
-    providers: resolveProvidersFrom(effective),
-    models: resolveModelsFrom(effective),
-  };
-  const resolveAvail = () => resolveAvailability(process.env, llmConfig);
+  const initialRouting = llmRouting(config);
+  const resolveAvail = (botId = config.botId) => resolveAvailability(process.env, llmRouting(config, botId));
   const availabilityPort: ModelAvailability = {
-    isAvailable: (role) => resolveAvail().isAvailable(role),
+    isAvailable: (role, botId) => resolveAvail(botId).isAvailable(role),
   };
 
   const missingKeyMode = config.getString("llm.missingKeyMode") as LlmMissingKeyMode;
@@ -683,20 +646,20 @@ async function main(): Promise<void> {
     return;
   }
 
-  const lightRef = llmConfig.models.light.reference;
-  const lightThinking = llmConfig.models.light.defaultThinking;
+  const lightRef = initialRouting.models.light.reference;
+  const lightThinking = initialRouting.models.light.defaultThinking;
   // Références « vivantes » (relues à chaque appel) : un changement de modèle
   // (`apply: hot`) profite aux NOUVELLES utilisations (jobs de fond, prochain
   // run de conversation) sans redémarrage. Les valeurs ci-dessus ne servent
   // qu'à l'initialisation (création du host, libellés de démarrage).
-  const liveLightReference = (): string =>
-    resolveModelsFrom(effectiveLlmConfig(config)).light.reference;
-  const liveHeavyReference = (): string =>
-    resolveModelsFrom(effectiveLlmConfig(config)).heavy.reference;
-  const liveHeavyThinking = (): PiThinkingLevel =>
-    effectiveLlmConfig(config).heavy.thinking;
-  const liveLightThinking = (): PiThinkingLevel =>
-    effectiveLlmConfig(config).light.thinking;
+  const liveLightReference = (botId = config.botId): string =>
+    llmRouting(config, botId).models.light.reference;
+  const liveHeavyReference = (botId = config.botId): string =>
+    llmRouting(config, botId).models.heavy.reference;
+  const liveHeavyThinking = (botId = config.botId): PiThinkingLevel =>
+    llmRouting(config, botId).effective.heavy.thinking;
+  const liveLightThinking = (botId = config.botId): PiThinkingLevel =>
+    llmRouting(config, botId).effective.light.thinking;
 
   /**
    * ⚠️ VISION DE REPLI — modèle DÉDIÉ (`llm.vision.baseUrl` + `llm.vision.model`
@@ -2136,6 +2099,7 @@ async function main(): Promise<void> {
       extensionFactories?: () => readonly unknown[];
       onTool?: (event: SdkToolEvent) => void;
     },
+    botId = config.botId,
   ) =>
     createSdkPromptWriter({
       cwd: env.piCwd,
@@ -2143,7 +2107,7 @@ async function main(): Promise<void> {
       authPath: join(env.piAgentDir, "auth.json"),
       modelsPath,
       systemPrompt,
-      modelReference: liveLightReference,
+      modelReference: () => liveLightReference(botId),
       thinking: "off",
       timeoutMs: typeof timeoutMs === "function" ? timeoutMs : () => timeoutMs,
       logger,
@@ -2660,7 +2624,7 @@ async function main(): Promise<void> {
     botDuCanal(conversationId, botRecu);
 
   const chatReplyGenerator = createRemoteReplyGenerator({
-    available: () => resolveAvail().isAvailable("light"),
+    available: (conversationId, botId) => resolveAvail(botDuCanal(conversationId, botId)).isAvailable("light"),
     // ⚠️ FUSEAU des horodatages du fil de canal (`ui.timeZone`, défaut UTC),
     // relu à chaque réponse : le prompt ne dépend pas du fuseau du process et
     // reste comparable à Mattermost.
@@ -2770,7 +2734,7 @@ async function main(): Promise<void> {
           // ⚠️ Capacité VISION relue à CHAQUE appel : sans « image » dans `input`, le
           // SDK remplacerait l'image jointe par « (tool image omitted…) » et le modèle
           // croirait l'avoir vue.
-          receivesImages: () => effectiveLlmConfig(config).light.vision,
+          receivesImages: () => llmRouting(config, botDuTourDistant(conversationId, contexte.botId)).effective.light.vision,
         },
         // MÊME port de fichiers que le host local : `lister_fichiers`/`lire_fichier`
         // travaillent sur la conversation FORCÉE (le canal), jamais sur la session
@@ -2778,8 +2742,8 @@ async function main(): Promise<void> {
         files: filesService,
         vision: {
           // Référence RELUE à chaud (le modèle peut changer sans redémarrage).
-          modelLabel: liveLightReference,
-          imagesSupported: () => effectiveLlmConfig(config).light.vision,
+          modelLabel: () => liveLightReference(botDuTourDistant(conversationId, contexte.botId)),
+          imagesSupported: () => llmRouting(config, botDuTourDistant(conversationId, contexte.botId)).effective.light.vision,
           // ⚠️ REPLI : `lire_fichier` d'un run distant DÉCRIT l'image quand le
           // modèle du run ne la voit pas (même describer qu'en conversation).
           describer: () => visionDescriber,
@@ -2856,6 +2820,7 @@ async function main(): Promise<void> {
           ),
         "réponse",
         run,
+        botDuCanal(conversationId, botRecu),
       ),
     // ⚠️ MESURE de l'accusé : `chat.progress.ack` porte sa SOURCE (`modele`/`repli`),
     // jamais son texte (voir `src/chat/reply/progress.ts`).
@@ -2871,6 +2836,7 @@ async function main(): Promise<void> {
   const readChatImages = async (
     cache: ChatAttachmentCache,
     input: { conversationId: string; message: RemoteMessage },
+    botId = botDuCanal(input.conversationId),
   ) => {
     const prepared = await prepareMessageImages({
       cache,
@@ -2893,7 +2859,7 @@ async function main(): Promise<void> {
     // description rejoint les `notes` du prompt — le rédacteur ne reçoit jamais
     // un bloc image qu'il ne verrait pas.
     const decision = planVision({
-      modeleVoitLesImages: effectiveLlmConfig(config).light.vision,
+      modeleVoitLesImages: llmRouting(config, botId).effective.light.vision,
       nombreImages: prepared.images.length,
       repliConfigure: visionRepliConfigure(),
     });
@@ -2901,7 +2867,7 @@ async function main(): Promise<void> {
     if (decision === "refuser") {
       // Aucun repli : comportement d'origine, mais DIT (jamais une image
       // silencieusement jetée par le SDK).
-      const modele = resolveModelsFrom(effectiveLlmConfig(config)).light.reference;
+      const modele = liveLightReference(botId);
       return {
         images: [],
         notes: [...prepared.notes, messageSansVisionSansRepli(modele)],
@@ -2941,7 +2907,7 @@ async function main(): Promise<void> {
    * Yuki ? » est la même, et en écrire deux aurait fait diverger le prompt et le modèle.
    */
   const chatJudge: ChatReplyJudge = async ({ message, channelTitle, botId: botRecu }) => {
-    if (!resolveAvail().isAvailable("light")) {
+    if (!resolveAvail(botDuCanal(message.conversationId, botRecu)).isAvailable("light")) {
       // ⚠️ Jamais muet : un juge indisponible est DIT (et la décision `auto`
       // retombe sur la CITATION explicite, `decideReply`).
       logger.warn("chat.juge.indisponible", {
@@ -2960,7 +2926,7 @@ async function main(): Promise<void> {
     const writer = chatWriter(
       chatJudgeSystemPrompt({ botName: nomDuBot(botId) }),
       CHAT_JUDGE_TIMEOUT_MS,
-      "juge",
+      "juge", undefined, botId,
     );
     const answer = await writer(
       buildJudgePrompt({
@@ -3398,7 +3364,7 @@ async function main(): Promise<void> {
         readImages: (input) => {
           const cache = porte.cache;
           if (cache === undefined) throw new Error("Cache des pièces jointes non initialisé.");
-          return readChatImages(cache, input);
+          return readChatImages(cache, input, jeton.botId);
         },
       });
       porte.cache = new MattermostAttachmentCache({
@@ -3425,7 +3391,7 @@ async function main(): Promise<void> {
       readImages: (input) => {
         const cache = porte.cache;
         if (cache === undefined) throw new Error("Cache des pièces jointes non initialisé.");
-        return readChatImages(cache, input);
+        return readChatImages(cache, input, jeton.botId);
       },
     });
     porte.cache = new ChatAttachmentCache({
@@ -3765,8 +3731,8 @@ async function main(): Promise<void> {
             role: "heavy",
           });
         },
-        modelReference: liveHeavyReference,
-        thinking: liveHeavyThinking,
+        modelReference: () => liveHeavyReference(botId),
+        thinking: () => llmRouting(config, botId).effective.heavy.thinking,
         // ⚠️ VISION DE REPLI (2026-11-16) : le worker lourd ne voit pas les
         // images d'un modèle déclaré texte seul — `lire_fichier`/`recuperer_fichier`
         // les font alors DÉCRIRE, au lieu de refuser (même instance qu'en
@@ -3893,11 +3859,11 @@ async function main(): Promise<void> {
     // il est disponible : libère le compte léger (déclaré mono-slot) pour le
     // run de conversation suivant. Repli sur le léger sinon. La référence est
     // RELUE à chaque passe ⇒ un changement de modèle s'applique sans redémarrage.
-    const memoryWriteRef = (): string =>
+    const memoryWriteRef = (botId: string): string =>
       memoryWriteModelReference({
-        heavyAvailable: resolveAvail().isAvailable("heavy"),
-        heavyRef: liveHeavyReference(),
-        lightRef: liveLightReference(),
+        heavyAvailable: resolveAvail(botId).isAvailable("heavy"),
+        heavyRef: liveHeavyReference(botId),
+        lightRef: liveLightReference(botId),
         logger,
         usage: "extraction memoire",
       });
@@ -3905,14 +3871,14 @@ async function main(): Promise<void> {
      * ⚠️ EXTRACTEUR LLM PARTAGÉ (instance) : il ne dépend que du MODÈLE et du
      * volume `pi`, jamais d'un bot. Le store, lui, est celui du bot.
      */
-    const memoryExtractor = createSdkMemoryExtractor({
+    const memoryExtractor = (botId: string) => createSdkMemoryExtractor({
       cwd: env.piCwd,
       agentDir: env.piAgentDir,
       authPath: join(env.piAgentDir, "auth.json"),
       modelsPath,
-      modelReference: memoryWriteRef,
+      modelReference: () => memoryWriteRef(botId),
       thinking: () =>
-        resolveAvail().isAvailable("heavy") ? liveHeavyThinking() : liveLightThinking(),
+        resolveAvail(botId).isAvailable("heavy") ? liveHeavyThinking(botId) : liveLightThinking(botId),
       timeoutMs: () => config.getNumber("memory.extract.timeoutMs"),
       logger,
     });
@@ -3942,7 +3908,7 @@ async function main(): Promise<void> {
       index: memoryIndex,
       logger,
       ...reglagesMemoire(config),
-      extractor: memoryExtractor,
+      extractor: memoryExtractor(botDuRun),
     });
     memoryService.start();
     logger.info("memory.ready", {
@@ -3996,7 +3962,7 @@ async function main(): Promise<void> {
       // illisible — jamais un 1 M codé en dur.
       contexteModele: () =>
         contexteModeleDepuisFichier(modelsPath, liveHeavyReference()) ??
-        resolveModelsFrom(effectiveLlmConfig(config)).heavy.contextWindow,
+        llmRouting(config).models.heavy.contextWindow,
     });
     logger.info("memory.consolidation.ready", {
       cron: config.getString("memory.consolidation.cron"),
@@ -4005,7 +3971,7 @@ async function main(): Promise<void> {
       retention: config.getNumber("memory.consolidation.retention"),
       contexte_modele:
         contexteModeleDepuisFichier(modelsPath, liveHeavyReference()) ??
-        resolveModelsFrom(effectiveLlmConfig(config)).heavy.contextWindow,
+        llmRouting(config).models.heavy.contextWindow,
       archive_dir: consolidationArchive.dirPath,
       modele: liveHeavyReference(),
     });
@@ -4057,7 +4023,7 @@ async function main(): Promise<void> {
           logger,
           // ⚠️ Les réglages sont ceux du BOT (clés `memory.*` = portée `bot`).
           ...reglagesMemoire(configsBots.get(botId) ?? config),
-          extractor: memoryExtractor,
+          extractor: memoryExtractor(botId),
         }),
       logger,
     });
@@ -4096,14 +4062,14 @@ async function main(): Promise<void> {
             agentDir: env.piAgentDir,
             authPath: join(env.piAgentDir, "auth.json"),
             modelsPath,
-            modelReference: liveHeavyReference,
-            thinking: liveHeavyThinking,
+            modelReference: () => liveHeavyReference(botId),
+            thinking: () => liveHeavyThinking(botId),
             timeoutMs: () => Math.max(180_000, config.getNumber("memory.extract.timeoutMs")),
             logger,
           }),
         contexteModele: () =>
-          contexteModeleDepuisFichier(modelsPath, liveHeavyReference()) ??
-          resolveModelsFrom(effectiveLlmConfig(config)).heavy.contextWindow,
+          contexteModeleDepuisFichier(modelsPath, liveHeavyReference(botId)) ??
+          llmRouting(config, botId).models.heavy.contextWindow,
       });
     };
     consolidationBots = new ConsolidationBots({
@@ -4593,7 +4559,7 @@ async function main(): Promise<void> {
       // éditer la personnalité ou un prompt prend effet au message suivant.
       promptDuTour: portPromptDuTourPile,
       settingsSeedPath: env.piSettingsSeedPath,
-      modelsConfig: buildModelsConfigFrom(effective),
+      modelsConfig: initialRouting.file,
       model: lightRef,
       thinking: lightThinking,
       // ⚠️ MÊME CALCUL QUE LE RUN DISTANT (`createRemoteRunTools`) : une seule
@@ -4721,7 +4687,12 @@ async function main(): Promise<void> {
       pile: botDuRun,
       bots: bots.aDemarrer.map((entree) => entree.id),
       optionsPile: optionsHostPile,
-      creer: createPiHost,
+      creer: options => {
+        const botId = options.botId ?? config.botId;
+        const routing = llmRouting(config, botId);
+        return createPiHost({ ...options, modelsConfig: routing.file, model: routing.models.light.reference,
+          thinking: routing.effective.light.thinking, llmAvailable: () => resolveAvail(botId).isAvailable("light") });
+      },
       // ⚠️ Contexte d'un AUTRE bot : sa pile (L3-c, ouverte UNE fois ici),
       // SON `Env` (celui de la pile, par identité), sa configuration (L3-a) et
       // ses outils (L3-b). Un bot indisponible est journalisé puis ÉCARTÉ —
@@ -5191,80 +5162,25 @@ async function main(): Promise<void> {
     // modèle de conversation. Les runs EN COURS se terminent avec leur
     // fournisseur/modèle d'origine ; le changement s'applique au PROCHAIN run /
     // au prochain job de fond (toutes les références sont relues « vivantes »).
-    let llmHot = {
-      lightApi: effective.light.api,
-      lightBaseUrl: effective.light.baseUrl,
-      lightModel: effective.light.model,
-      lightThinking: effective.light.thinking,
-      lightVision: effective.light.vision,
-      heavyApi: effective.heavy.api,
-      heavyBaseUrl: effective.heavy.baseUrl,
-      heavyModel: effective.heavy.model,
-      heavyThinking: effective.heavy.thinking,
-      heavyVision: effective.heavy.vision,
-      // ⚠️ Le modèle de VISION DÉDIÉ fait partie du rechargement : le provider
-      // `llm-vision` de `models.json` doit être réécrit quand on change son
-      // adresse, son modèle ou sa réflexion (sinon le describer pointerait un
-      // modèle absent — « introuvable dans models.json » — jusqu'au redémarrage).
-      visionBaseUrl: effective.vision?.baseUrl ?? "",
-      visionModel: effective.vision?.model ?? "",
-      visionThinking: effective.vision?.thinking ?? "off",
-    };
-    const sameLlm = (a: typeof llmHot, b: EffectiveLlmConfig): boolean =>
-      a.lightApi === b.light.api &&
-      a.lightBaseUrl === b.light.baseUrl &&
-      a.lightModel === b.light.model &&
-      a.lightThinking === b.light.thinking &&
-      a.lightVision === b.light.vision &&
-      a.heavyApi === b.heavy.api &&
-      a.heavyBaseUrl === b.heavy.baseUrl &&
-      a.heavyModel === b.heavy.model &&
-      a.heavyThinking === b.heavy.thinking &&
-      a.heavyVision === b.heavy.vision &&
-      a.visionBaseUrl === (b.vision?.baseUrl ?? "") &&
-      a.visionModel === (b.vision?.model ?? "") &&
-      a.visionThinking === (b.vision?.thinking ?? "off");
+    const signature = (routing: ReturnType<typeof llmRouting>) =>
+      JSON.stringify([routing.file, routing.models.light.reference, routing.effective.light.thinking]);
+    const signatures = new Map((hostsBots?.ids() ?? [config.botId]).map(id => [id, signature(llmRouting(config, id))]));
+    let pending = Promise.resolve();
     stopLlmHotReload = config.subscribe(() => {
-      // Rafraîchit d'abord la liste des secrets masqués (clé saisie à chaud) —
-      // clés d'env, clés de /config ET secrets du coffre (source unique).
       refreshSecretValues();
-      const next = effectiveLlmConfig(config);
-      if (sameLlm(llmHot, next)) return;
-      llmHot = {
-        lightApi: next.light.api,
-        lightBaseUrl: next.light.baseUrl,
-        lightModel: next.light.model,
-        lightThinking: next.light.thinking,
-        lightVision: next.light.vision,
-        heavyApi: next.heavy.api,
-        heavyBaseUrl: next.heavy.baseUrl,
-        heavyModel: next.heavy.model,
-        heavyThinking: next.heavy.thinking,
-        heavyVision: next.heavy.vision,
-        visionBaseUrl: next.vision?.baseUrl ?? "",
-        visionModel: next.vision?.model ?? "",
-        visionThinking: next.vision?.thinking ?? "off",
-      };
-      logger.info("llm.model.reload.requested", {
-        light: next.light.model,
-        lightBaseUrl: next.light.baseUrl,
-        lightVision: next.light.vision,
-        heavy: next.heavy.model,
-        heavyBaseUrl: next.heavy.baseUrl,
-        heavyVision: next.heavy.vision,
-        vision: referenceVision(config),
-      });
-      const apply = host?.applyLlmConfig;
-      if (host && apply) {
-        void apply
-          .call(host, {
-            modelsConfig: buildModelsConfigFrom(next),
-            conversationModel: resolveModelsFrom(next).light.reference,
-            conversationThinking: next.light.thinking,
-          })
-          .catch((error: unknown) => {
-            logger.error("llm.model.reload.failed", { error: messageOf(error) });
-          });
+      for (const id of hostsBots?.ids() ?? [config.botId]) {
+        const target = hostsBots?.pour(id) ?? host;
+        const routing = llmRouting(config, id);
+        const next = signature(routing);
+        if (!target?.applyLlmConfig || signatures.get(id) === next) continue;
+        signatures.set(id, next);
+        pending = pending.then(async () => {
+          await target.applyLlmConfig?.({ modelsConfig: routing.file, conversationModel: routing.models.light.reference,
+            conversationThinking: routing.effective.light.thinking });
+        }).catch((error: unknown) => {
+          signatures.delete(id);
+          logger.error("llm.model.reload.failed", { bot: id, error: messageOf(error) });
+        });
       }
     });
 
@@ -5291,7 +5207,7 @@ async function main(): Promise<void> {
       // sur le léger. La référence est RELUE à chaque appel ⇒ un changement de
       // modèle s'applique sans redémarrage. Aucun tour n'est exécuté dans la
       // conversation d'origine : elle n'est jamais polluée ni modifiée.
-      recap: createRecapService(
+      recap: input => createRecapService(
         createSdkRecapWriter({
           cwd: env.piCwd,
           agentDir: env.piAgentDir,
@@ -5299,9 +5215,9 @@ async function main(): Promise<void> {
           modelsPath,
           modelReference: () =>
             memoryWriteModelReference({
-              heavyAvailable: resolveAvail().isAvailable("heavy"),
-              heavyRef: liveHeavyReference(),
-              lightRef: liveLightReference(),
+              heavyAvailable: resolveAvail(input.botId).isAvailable("heavy"),
+              heavyRef: liveHeavyReference(input.botId),
+              lightRef: liveLightReference(input.botId),
               logger,
               usage: "recapitulatif",
             }),
@@ -5309,13 +5225,13 @@ async function main(): Promise<void> {
           // suit `llm.<role>.thinking` du modèle RÉELLEMENT retenu (lourd, ou
           // léger en repli) — jamais un `off` figé.
           thinking: () =>
-            resolveAvail().isAvailable("heavy")
-              ? liveHeavyThinking()
-              : liveLightThinking(),
+            resolveAvail(input.botId).isAvailable("heavy")
+              ? liveHeavyThinking(input.botId)
+              : liveLightThinking(input.botId),
           timeoutMs: () => config.getNumber("recap.timeoutMs"),
           logger,
         }),
-      ),
+      )(input),
       // IMAGES générées : trame de contrôle `image` (aucun `seq` consommé, jamais
       // bufferisée), routée vers la SEULE conversation demandeuse. L'image est
       // servie en same-origin : la CSP n'est jamais élargie.
@@ -5328,7 +5244,7 @@ async function main(): Promise<void> {
       // sans vision ⇒ une image jointe est REFUSÉE avec un motif explicite au
       // lieu d'être silencieusement remplacée par « (tool image omitted…) ».
       vision: {
-        conversationReceivesImages: () => effectiveLlmConfig(config).light.vision,
+        conversationReceivesImages: botId => llmRouting(config, botId).effective.light.vision,
         // ⚠️ REPLI (2026-11-16) : la description est relue à CHAQUE message
         // (`apply: hot`). Sans repli configuré, la garde `file_image_vision_disabled`
         // refuse comme avant — le comportement d'origine est INCHANGÉ.
@@ -5454,7 +5370,7 @@ async function main(): Promise<void> {
         cwd: env.piCwd,
         agentDir: env.piAgentDir,
         sessionsDir: env.piSessionsDir,
-        model: resolveModelsFrom(live).light.reference,
+        model: liveLightReference(),
         sessionsCount,
         activeRuns,
       },
@@ -5467,13 +5383,13 @@ async function main(): Promise<void> {
       },
       llm: {
         light: {
-          provider: llmConfig.providers.light.id,
+          provider: availability.light.provider,
           model: live.light.model,
           status: availability.light.status,
           keyPresent: availability.light.keyPresent,
         },
         heavy: {
-          provider: llmConfig.providers.heavy.id,
+          provider: availability.heavy.provider,
           model: live.heavy.model,
           status: availability.heavy.status,
           keyPresent: availability.heavy.keyPresent,

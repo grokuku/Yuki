@@ -67,8 +67,8 @@ describe("① la table des clés", () => {
   // quand aucun des deux ne voit d'image) et le modèle de vision DÉDIÉ ajoute
   // `llm.vision.baseUrl`, `llm.vision.model`, `llm.vision.thinking` et
   // `llm.vision.apiKey` (-1 +4 = 97). Portée `instance` : capacité de MODÈLE.
-  it("déclare EXACTEMENT 97 clés (aucune ajoutée ni perdue en silence)", () => {
-    expect(CONFIG_PATHS.length).toBe(97);
+  it("déclare EXACTEMENT 100 clés (aucune ajoutée ni perdue en silence)", () => {
+    expect(CONFIG_PATHS.length).toBe(100);
     expect(CONFIG_PATHS.length).toBe(Object.keys(CONFIG_SCHEMA).length);
   });
 
@@ -116,10 +116,10 @@ describe("① la table des clés", () => {
    * (2026-11-16), puis le modèle de vision DÉDIÉ `llm.vision.*` la REMPLACE
    * (-1 +4). Bot et mixte inchangés : 73 / 19 / 5 = 97.
    */
-  it("répartition : 73 `instance` / 19 `bot` / 5 `mixte`", () => {
+  it("répartition : 74 `instance` / 21 `bot` / 5 `mixte`", () => {
     const compte = { instance: 0, bot: 0, mixte: 0 };
     for (const path of CONFIG_PATHS) compte[descriptor(path).scope] += 1;
-    expect(compte).toEqual({ instance: 73, bot: 19, mixte: 5 });
+    expect(compte).toEqual({ instance: 74, bot: 21, mixte: 5 });
   });
 
   it("les TROIS clés reclassées sont d'INSTANCE (classement validé)", () => {
@@ -313,7 +313,7 @@ describe("⑤ le bot actif de l'overlay", () => {
    * ⚠️ GARDE RÉVISÉE (« 18 → 19 clés `bot` ») : `chat.mattermost.url` rejoint les
    * clés de bot — Mattermost est auto-hébergé, chaque bot peut viser SON serveur.
    */
-  it("les 19 clés `bot` sont celles établies (plateformes, voix, mémoire du bot)", () => {
+  it("les 21 clés `bot` sont celles établies (plateformes, voix, mémoire du bot)", () => {
     const bot = CONFIG_PATHS.filter((path) => descriptor(path).scope === "bot");
     expect(bot.sort()).toEqual(
       [
@@ -327,6 +327,8 @@ describe("⑤ le bot actif de l'overlay", () => {
         "chat.discord.guildId",
         "chat.discord.maxUploadBytes",
         "chat.mode",
+        "llm.selection.light",
+        "llm.selection.heavy",
         "memory.enabled",
         "memory.extract.maxItems",
         "memory.extract.timeoutMs",

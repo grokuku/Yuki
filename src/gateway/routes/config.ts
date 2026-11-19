@@ -20,6 +20,7 @@
 
 import type { IncomingHttpHeaders } from "node:http";
 
+import { keyPath, readCatalog } from "../../llm/catalog.js";
 import {
   ConfigValidationError,
   LockedByEnvError,
@@ -543,7 +544,10 @@ async function handleLlmTest(input: ConfigRequestInput): Promise<ConfigHttpRespo
   }
 
   const role = body.role;
-  if (role !== "light" && role !== "heavy") {
+  const provider = typeof body.provider === "string"
+    ? readCatalog(input.deps.runtime.getString("llm.catalog")).providers.find(p => p.id === body.provider)
+    : undefined;
+  if (!provider && role !== "light" && role !== "heavy") {
     return json(400, {
       error: "invalid_role",
       fields: [
@@ -557,12 +561,12 @@ async function handleLlmTest(input: ConfigRequestInput): Promise<ConfigHttpRespo
   }
 
   const prefix = `llm.${role}`;
-  const baseUrl = input.deps.runtime.getString(`${prefix}.baseUrl`).replace(/\/+$/, "");
+  const baseUrl = (provider?.baseUrl ?? input.deps.runtime.getString(`${prefix}.baseUrl`)).replace(/\/+$/, "");
   const provided =
     typeof body.apiKey === "string" && body.apiKey.trim() !== ""
       ? body.apiKey.trim()
       : undefined;
-  const key = provided ?? input.deps.runtime.getString(`${prefix}.apiKey`).trim();
+  const key = provided ?? input.deps.runtime.getString(provider ? keyPath(provider.id) : `${prefix}.apiKey`).trim();
   if (key.length === 0) {
     return json(200, {
       ok: false,

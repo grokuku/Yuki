@@ -80,6 +80,7 @@ import {
   ongletsDePage,
   pageConnue,
 } from './config-pages.js';
+import { renderCatalog } from "./llm-catalog.js";
 import { ALL_FIELDS, FIELD_DEFAULTS, GROUPS, LABELS } from './config-fields.js';
 import { initTheme } from './theme.js';
 import { setTimeZone } from './horodatage.js';
@@ -794,6 +795,7 @@ function renderRenvoi(renvoi) {
  * `instance`/`mixte`, la page Bot que `bot`/`mixte`. Une clé `mixte` apparaît
  * donc UNE fois par page, jamais deux.
  */
+let catalogPatch = () => ({});
 function render() {
   const scopes = scopesOfState();
   const parOnglet = groupesParOnglet(PAGE, GROUPS);
@@ -804,12 +806,21 @@ function render() {
     container.textContent = "";
     containers.set(onglet.id, container);
   }
+  const catalogContainer = containers.get(PAGE_BOT ? "general" : "modeles");
+  if (catalogContainer) {
+    const catalog = h("div", { class: "config-groups" });
+    catalogContainer.append(catalog);
+    catalogPatch = renderCatalog({ container: catalog, fields: state.fields, bot: PAGE_BOT,
+      legacyGroups: GROUPS.filter(group => ["llm-light", "llm-heavy"].includes(group.id)),
+      renderField, testConnection, changed: updateDirtyIndicators });
+  }
   for (const [ongletId, groupes] of Object.entries(parOnglet)) {
     const container = containers.get(ongletId);
     // Pas de conteneur = l'onglet ne porte que des composants autonomes
     // (Secrets, Maintenance, Plateformes…) : rien à rendre ici.
     if (!container) continue;
     for (const group of groupes) {
+      if (group.id === "llm-light" || group.id === "llm-heavy") continue;
       const champs = champsDePage(PAGE, group, scopes);
       if (champs.length === 0) continue;
       container.append(renderGroup(group, champs));
@@ -1034,7 +1045,8 @@ function isFieldDirty(field) {
  */
 function updateDirtyIndicators() {
   const dirtyTabs = new Set();
-  let anyDirty = false;
+  let anyDirty = Object.keys(catalogPatch()).length > 0;
+  if (anyDirty) dirtyTabs.add(PAGE_BOT ? "general" : "modeles");
   // ⚠️ Seuls les groupes RENDUS sur cette page comptent : les champs de l'autre
   // page n'ont pas de contrôle ici (`isFieldDirty` renverrait `false`, mais le
   // parcours serait trompeur si un groupe était un jour déplacé).
@@ -1083,7 +1095,7 @@ function showFieldErrors(fields) {
 }
 
 function buildPatch() {
-  return buildConfigPatch({ allFields: ALL_FIELDS, state });
+  return { ...buildConfigPatch({ allFields: ALL_FIELDS, state }), ...catalogPatch() };
 }
 
 /**
@@ -1261,14 +1273,14 @@ function showApplied(applied) {
   appliedEl.hidden = false;
 }
 
-async function testConnection(role, statusEl) {
+async function testConnection(role, statusEl, provider, pendingKey) {
   statusEl.textContent = "Test en cours…";
   try {
     const secret = state.secretState.get(`llm.${role}.apiKey`);
     const apiKey = secret?.input && secret.input.value.trim() !== "" ? secret.input.value.trim() : undefined;
     const body = await HolafFetch.post("/api/config/llm/test", {
       headers: WRITE_HEADERS,
-      body: { role, ...(apiKey ? { apiKey } : {}) },
+      body: provider ? { provider, apiKey: pendingKey } : { role, ...(apiKey ? { apiKey } : {}) },
     });
     if (body.ok) {
       const count = Array.isArray(body.models) ? body.models.length : null;

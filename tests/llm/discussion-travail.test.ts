@@ -160,8 +160,8 @@ describe("juge du mode `auto` — réflexion `off` FIGÉE, l'exception assumée"
     const relus = INDEX_TS.match(/thinking: \(\) =>/g) ?? [];
     expect(relus.length).toBeGreaterThanOrEqual(3);
     // Les fonctions choisissent bien lourd/léger selon la disponibilité.
-    const lourds = INDEX_TS.match(/liveHeavyThinking\(\)/g) ?? [];
-    const legers = INDEX_TS.match(/liveLightThinking\(\)/g) ?? [];
+    const lourds = INDEX_TS.match(/liveHeavyThinking\((?:botId|input\.botId)?\)/g) ?? [];
+    const legers = INDEX_TS.match(/liveLightThinking\((?:botId|input\.botId)?\)/g) ?? [];
     expect(lourds.length).toBeGreaterThanOrEqual(3);
     expect(legers.length).toBeGreaterThanOrEqual(3);
   });

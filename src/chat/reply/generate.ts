@@ -65,7 +65,7 @@ export interface ReplyRun {
 
 export interface RemoteReplyGeneratorOptions {
   /** Le modèle léger est-il disponible ? Sinon le run REFUSE explicitement. */
-  available: () => boolean;
+  available: (conversationId: string, botId?: string) => boolean;
   /**
    * Nom affiché du bot (préfixe du prompt), **par PLATEFORME DU RUN**.
    *
@@ -215,7 +215,7 @@ export function createRemoteReplyGenerator(
    */
   const replisAck = new Map<string, number>();
   return async (input: RemoteReplyInput): Promise<RemoteReplyOutcome> => {
-    if (!options.available()) {
+    if (!options.available(input.message.conversationId, input.botId)) {
       // Jamais une réponse inventée : l'adaptateur traduit ce refus en message.
       throw new Error("Aucun modèle léger disponible : Yuki ne peut pas rédiger de réponse.");
     }

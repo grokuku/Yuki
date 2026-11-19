@@ -20,6 +20,7 @@
  * Aucun import SDK/typebox.
  */
 
+import { keyEnv, keyPath, providerSecretId, readCatalog, roles } from "../llm/catalog.js";
 import { readFileSync } from "node:fs";
 
 import { EnvError, type Env, readConfigEnvOverrides } from "./env.js";
@@ -489,6 +490,14 @@ export class ConfigRuntime {
     return this.valeurBot(path, overlay);
   }
 
+  selections(botId = this.botId) {
+    const overlay = this.cible(botId).values;
+    return {
+      light: String(this.effectif("llm.selection.light", overlay)),
+      heavy: String(this.effectif("llm.selection.heavy", overlay)),
+    };
+  }
+
   getString(path: string): string {
     return String(this.get(path));
   }
@@ -552,7 +561,7 @@ export class ConfigRuntime {
   /** Valeurs secrètes effectives (pour la redaction du logger). */
   secretValues(): string[] {
     const out: string[] = [];
-    for (const path of CONFIG_PATHS) {
+    for (const path of [...CONFIG_PATHS, ...Object.keys(this.values).filter(providerSecretId)]) {
       if (!isSecretPath(path)) continue;
       const value = this.get(path);
       if (typeof value === "string" && value.trim().length >= 6) out.push(value.trim());
@@ -561,7 +570,18 @@ export class ConfigRuntime {
   }
 
   /** Reflète les clés effectives dans `process.env` (références `$VAR` du SDK). */
+  private readonly bridgedProviders = new Set<string>();
+
   bridgeSecrets(): void {
+    for (const name of this.bridgedProviders) delete this.processEnv[name];
+    this.bridgedProviders.clear();
+    for (const provider of readCatalog(this.getString("llm.catalog")).providers) {
+      const value = this.getString(keyPath(provider.id));
+      if (!value) continue;
+      const name = keyEnv(provider.id);
+      this.processEnv[name] = value;
+      this.bridgedProviders.add(name);
+    }
     for (const path of CONFIG_PATHS) {
       const descriptor = descriptorOf(path);
       if (!descriptor?.secret || !descriptor.env) continue;
@@ -658,8 +678,9 @@ export class ConfigRuntime {
     overlay: Readonly<Record<string, string | number>>,
   ): ConfigSnapshot {
     const fields: Record<string, ConfigFieldSnapshot> = {};
-    for (const path of CONFIG_PATHS) {
-      const descriptor = CONFIG_SCHEMA[path] as FieldDescriptor;
+    const catalog = readCatalog(this.getString("llm.catalog"));
+    for (const path of [...CONFIG_PATHS, ...catalog.providers.map(p => keyPath(p.id))]) {
+      const descriptor = descriptorOf(path) as FieldDescriptor;
       const origin = this.origine(path, overlay);
       const lockedByEnv = this.isLockedByEnv(path) ? envNameOf(path) : undefined;
       if (descriptor.secret) {
@@ -682,8 +703,14 @@ export class ConfigRuntime {
         };
       }
     }
-    const lightKey = (fields["llm.light.apiKey"] as SecretFieldSnapshot).configured;
-    const heavyKey = (fields["llm.heavy.apiKey"] as SecretFieldSnapshot).configured;
+    const configured = (role: "light" | "heavy") => {
+      const selection = String(this.effectif(`llm.selection.${role}`, overlay));
+      const model = catalog.models.find(m => m.id === selection) ?? catalog.models.find(m => m.id === catalog[role]);
+      const provider = roles.some(r => r === selection) ? selection : model?.provider ?? catalog[role];
+      return Boolean((fields[keyPath(provider)] as SecretFieldSnapshot | undefined)?.configured);
+    };
+    const lightKey = configured("light");
+    const heavyKey = configured("heavy");
     return { fields, status: { lightKey, heavyKey, ready: lightKey } };
   }
 
@@ -819,6 +846,31 @@ export class ConfigRuntime {
     if (locked.length > 0) throw new LockedByEnvError(locked);
     if (errors.length > 0) throw new ConfigValidationError(errors);
 
+    const catalog = readCatalog(String(nextCommon["llm.catalog"] ?? ""));
+    for (const role of roles) {
+      const path = `llm.${role}.model`;
+      const legacyModel = this.envValues[path] ?? nextCommon[path] ?? this.defaults[path];
+      if (catalog.models.some(m => m.provider === role && m.model === legacyModel)) {
+        throw new ConfigValidationError([{ path: "llm.catalog", code: "duplicate_model", message: "Ce modèle existe déjà chez ce fournisseur." }]);
+      }
+    }
+    for (const role of roles) {
+      const path = `llm.selection.${role}`;
+      const id = patch[path];
+      if (id && !roles.some(r => r === id) && !catalog.models.some(m => m.id === id)) {
+        throw new ConfigValidationError([{ path, code: "unknown_model", message: "Modèle inconnu." }]);
+      }
+    }
+    for (const path of Object.keys(patch)) {
+      const id = providerSecretId(path);
+      if (id && patch[path] !== null && !catalog.providers.some(p => p.id === id)) {
+        throw new ConfigValidationError([{ path, code: "unknown_provider", message: "Fournisseur inconnu." }]);
+      }
+    }
+    for (const path of Object.keys(nextCommon)) {
+      const id = providerSecretId(path);
+      if (id && !catalog.providers.some(p => p.id === id)) delete nextCommon[path];
+    }
     if (changes.length > 0) {
       // Chaque store n'est réécrit QUE s'il a changé : un patch de clés `bot`
       // ne fait pas clignoter `config.json`, et réciproquement.
@@ -832,6 +884,8 @@ export class ConfigRuntime {
       if (overlayChange && cible.actif) this.overlayValues = nextOverlay;
       if (communChange || (overlayChange && cible.actif)) {
         this.bridgeSecrets();
+        this.emit();
+      } else if (changes.some(change => change.path.startsWith("llm.selection."))) {
         this.emit();
       }
     }
