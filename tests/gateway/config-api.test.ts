@@ -16,11 +16,15 @@ import { inspectMountPoints, mountPoints } from "../../src/config/paths.js";
 import { createConfigRuntime } from "../../src/config/runtime.js";
 import { ConfigStore } from "../../src/config/store.js";
 import { createServer, startServer } from "../../src/gateway/server.js";
+import { emptySubsystems, type SubsystemsSnapshot } from "../../src/gateway/routes/health.js";
 import { detectGpus } from "../../src/gpu/detect.js";
 import { runGate } from "../../src/gpu/gate.js";
 import { loadCompatManifest, loadProfiles } from "../../src/gpu/profiles.js";
 import { createLogger } from "../../src/observability/logger.js";
 import { VOICE_SPEECH_INSTRUCTION } from "../../src/llm/prompts.js";
+import { resolveAvailability } from "../../src/llm/availability.js";
+import { cheminCleFournisseur, migrerCatalogue } from "../../src/llm/catalogue.js";
+import { llmRouting } from "../../src/llm/routing.js";
 import { MUTE_BLOCK_LABEL } from "../../src/tts/mute.js";
 
 // Le patch est produit par la VRAIE fonction de l'UI (`buildConfigPatch`),
@@ -50,6 +54,10 @@ interface Harness {
   baseUrl: string;
   runtime: ReturnType<typeof createConfigRuntime>;
   lines: string[];
+  /** Environnement effectif du runtime (pont des clés, disponibilité des rôles). */
+  processEnv: NodeJS.ProcessEnv;
+  env: ReturnType<typeof loadEnv>;
+  report: ReturnType<typeof runGate>["report"];
 }
 
 async function startHarness(
@@ -70,10 +78,11 @@ async function startHarness(
     sink: (line) => lines.push(line),
     secretValues: [],
   });
+  const processEnv: NodeJS.ProcessEnv = { ...envOverrides };
   const runtime = createConfigRuntime({
     env,
     store: new ConfigStore(env.configStorePath),
-    processEnv: { ...envOverrides },
+    processEnv,
     promptDefaults: { light: "P", heavy: "H" },
   });
   const detection = detectGpus({
@@ -96,7 +105,14 @@ async function startHarness(
   });
   servers.push(server);
   const address = await startServer(server, "127.0.0.1", 0);
-  return { baseUrl: `http://127.0.0.1:${(address as AddressInfo).port}`, runtime, lines };
+  return {
+    baseUrl: `http://127.0.0.1:${(address as AddressInfo).port}`,
+    runtime,
+    lines,
+    processEnv,
+    env,
+    report: gate.report,
+  };
 }
 
 const WRITE_HEADERS = { "x-yuki-config": "1", "content-type": "application/json" };
@@ -575,5 +591,130 @@ describe("PUT /api/bots/yuki/config — patch produit par l'UI (`buildConfigPatc
     expect(body.fields[0]?.path).toBe("tts.speed");
     expect(body.fields[0]?.code).toBe("above_max");
     expect(body.fields[0]?.message).toContain("maximum 200");
+  });
+});
+
+/**
+ * CE QUE `scripts/ci-smoke.sh` DOIT PROUVER — vérifié ici, en unitaire.
+ *
+ * ⚠️ Le script tourne dans un runner Docker : il ne peut pas être lancé depuis ce
+ * dépôt. Ses assertions sont donc reproduites sur la VRAIE API.
+ *
+ * Séquence (modèle du lot B) :
+ *  ① installation NEUVE : la reprise du démarrage pose le catalogue
+ *    (`llm.fournisseurs` / `llm.modeles` / `llm.defaut.*`) et AUCUNE clé ;
+ *  ② `status.lightKey` est `false`, la clé du FOURNISSEUR du rôle
+ *    (`llm.fournisseur.<id>.apiKey`) est `configured: false` ;
+ *  ③ la même clé fictive posée au chemin du fournisseur RÉSOLU (lu dans la
+ *    réponse — aucun identifiant en dur, un renommage ne casse rien) ⇒ 200,
+ *    `configured: true`, masquée ;
+ *  ④ conséquence RÉELLE : le rôle léger a une clé, donc il est « ready » et
+ *    `/health/ready` passe de 503 à 200. Si ④ échouait alors que ③ réussit, ce
+ *    serait un DÉFAUT DE DISPONIBILITÉ, pas un problème de script.
+ */
+interface ConfigBody {
+  fields: Record<
+    string,
+    { value?: unknown; configured?: boolean; masked?: string | null }
+  >;
+  status: { lightKey: boolean; heavyKey: boolean; ready: boolean };
+}
+
+/** Fournisseur RÉSOLU d'un rôle, exactement comme le fait le script (jq). */
+function fournisseurDuRole(
+  body: ConfigBody,
+  role: "light" | "heavy",
+): string {
+  const fournisseurs = JSON.parse(
+    String(body.fields["llm.fournisseurs"]?.value ?? "[]"),
+  ) as Array<{ id: string }>;
+  const modeles = JSON.parse(String(body.fields["llm.modeles"]?.value ?? "[]")) as Array<{
+    id: string;
+    fournisseurId: string;
+  }>;
+  const modeleId = String(body.fields[`llm.defaut.${role}`]?.value ?? "");
+  const fournisseurId =
+    modeles.find((modele) => modele.id === modeleId)?.fournisseurId ?? "";
+  return (
+    fournisseurs.find((fournisseur) => fournisseur.id === fournisseurId)?.id ??
+    fournisseurs[0]?.id ??
+    ""
+  );
+}
+
+describe("ci-smoke — clé du fournisseur du catalogue (lot B)", () => {
+  it("PUT au chemin secret du fournisseur ⇒ 200, clé masquée, rôle disponible, /health/ready 200", async () => {
+    const { baseUrl, runtime, processEnv, env, report } = await startHarness();
+    // ① reprise du démarrage, comme `src/index.ts` (le banc ne démarre pas le gateway).
+    migrerCatalogue(runtime, () => {});
+
+    // Serveur SUPPLÉMENTAIRE branché sur la disponibilité RÉELLE des rôles : c'est
+    // elle que `/health/ready` consulte (voir `getSubsystems` dans `src/index.ts`).
+    const subsystems = (): SubsystemsSnapshot => {
+      const dispo = resolveAvailability(processEnv, llmRouting(runtime));
+      const base = emptySubsystems();
+      return {
+        ...base,
+        pi: { ...base.pi, status: "ready" },
+        llm: {
+          light: {
+            provider: dispo.light.provider,
+            model: dispo.light.model,
+            status: dispo.light.status,
+            keyPresent: dispo.light.keyPresent,
+          },
+          heavy: {
+            provider: dispo.heavy.provider,
+            model: dispo.heavy.model,
+            status: dispo.heavy.status,
+            keyPresent: dispo.heavy.keyPresent,
+          },
+        },
+      };
+    };
+    const server = createServer({
+      env,
+      report,
+      gatePassed: true,
+      startedAt: Date.now(),
+      volumes: inspectMountPoints(mountPoints(env)),
+      getSubsystems: subsystems,
+    });
+    servers.push(server);
+    const readyAddress = await startServer(server, "127.0.0.1", 0);
+    const readyUrl = `http://127.0.0.1:${(readyAddress as AddressInfo).port}/health/ready`;
+
+    // ①+② aucun fournisseur n'a de clé ⇒ pas prêt, et la réponse le DIT.
+    expect((await fetch(readyUrl)).status).toBe(503);
+
+    const avant = (await (await fetch(`${baseUrl}/api/config`)).json()) as ConfigBody;
+    expect(avant.status.lightKey).toBe(false);
+    expect(avant.status.heavyKey).toBe(false);
+    const fournisseurId = fournisseurDuRole(avant, "light");
+    // La reprise a posé un fournisseur : sans lui, il n'y aurait RIEN à configurer.
+    expect(fournisseurId).not.toBe("");
+    const chemin = cheminCleFournisseur(fournisseurId);
+    expect(avant.fields[chemin]).toMatchObject({ configured: false, masked: null });
+
+    // ③ la clé se pose au chemin SECRET du fournisseur du rôle.
+    const secret = "fake-provider-key-222222222222";
+    const reponse = await fetch(`${baseUrl}/api/config`, {
+      method: "PUT",
+      headers: WRITE_HEADERS,
+      body: JSON.stringify({ [chemin]: secret }),
+    });
+    const brut = await reponse.text();
+    expect(reponse.status, brut).toBe(200);
+    // Jamais de valeur en clair, ni dans la réponse, ni dans l'audit.
+    expect(brut).not.toContain(secret);
+    const apres = JSON.parse(brut) as ConfigBody;
+    expect(apres.fields[chemin]).toMatchObject({ configured: true, masked: "••••2222" });
+    expect(apres.status.lightKey).toBe(true);
+
+    // ④ disponibilité du rôle, puis `/health/ready` (aucun appel réseau : seule la
+    // présence de la clé compte).
+    expect(resolveAvailability(processEnv, llmRouting(runtime)).light.status).toBe("ready");
+    const pret = await fetch(readyUrl);
+    expect(pret.status, JSON.stringify(await pret.clone().json())).toBe(200);
   });
 });

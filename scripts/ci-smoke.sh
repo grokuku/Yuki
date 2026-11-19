@@ -89,6 +89,46 @@ assert_jq() { # <json> <filtre jq> <message>
   printf '%s' "$1" | jq -e "$2" >/dev/null 2>&1 || fail "$3 (jq: $2)"
 }
 
+# Chemin SECRET de la clé d'API d'un FOURNISSEUR du catalogue.
+#
+# ⚠️ Lot B (2026-11-19) : la clé n'est plus un RÉGLAGE DE RÔLE (ces chemins ont été
+# retirés du schéma), elle vit au chemin secret du fournisseur
+# (`llm.fournisseur.<id>.apiKey`), masqué dans l'API (`configured` + `masked`). Le
+# format est celui de `cheminCleFournisseur` (`src/llm/catalogue.ts`).
+chemin_cle_fournisseur() { # <identifiant de fournisseur>
+  printf 'llm.fournisseur.%s.apiKey' "$1"
+}
+
+# Identifiant du fournisseur RÉSOLU d'un rôle, lu dans `GET /api/config`.
+#
+# ⚠️ Résolution IDENTIQUE à celle du serveur (`src/llm/execution.ts`) : le
+# `modeleId` du rôle (`llm.defaut.<rôle>`) désigne une entrée de `llm.modeles`, et
+# c'est SON `fournisseurId` qui porte la clé. Repli : le PREMIER fournisseur du
+# catalogue (installation sans défaut de rôle choisi).
+#
+# ⚠️ AUCUN identifiant n'est écrit en dur ici : `ollama-com` est une DONNÉE de
+# l'installation (posée par la reprise du démarrage, renommable par l'utilisateur).
+fournisseur_du_role() { # <json de GET /api/config> <rôle>
+  printf '%s' "$1" | jq -r --arg role "$2" '
+    (.fields // {}) as $fields
+    | ($fields["llm.fournisseurs"].value // "") as $fBrut
+    | ($fields["llm.modeles"].value // "") as $mBrut
+    | (($fBrut | fromjson?) // []) as $fournisseurs
+    | (($mBrut | fromjson?) // []) as $modeles
+    | ($fields["llm.defaut." + $role].value // "") as $modeleId
+    | (($modeles | map(select(.id == $modeleId)) | .[0].fournisseurId) // "") as $fournisseurId
+    | (($fournisseurs | map(select(.id == $fournisseurId)) | .[0].id) // ($fournisseurs[0].id) // "")
+  '
+}
+
+# Assertion sur un champ de `fields` dont le CHEMIN EST DYNAMIQUE (clé d'un
+# fournisseur) : le chemin est passé en `--arg`, jamais concaténé dans le filtre
+# (un identifiant malencontreux ne doit pas pouvoir changer le sens du filtre).
+assert_jq_path() { # <json> <chemin> <filtre sur fields[$p]> <message>
+  printf '%s' "$1" | jq -e --arg p "$2" "$3" >/dev/null 2>&1 \
+    || fail "$4 (jq: $3 sur fields[\$p] = $2)"
+}
+
 prepare() {
   need docker
   need curl
@@ -171,7 +211,7 @@ run_smoke() {
   log "Assertions Lot 11 — démarrage sans clé : /health/ready=503 et config 200"
   local ready_code
   ready_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/health/ready")"
-  [ "$ready_code" = "503" ] || fail "/health/ready a renvoyé $ready_code (attendu 503 sans clé légère)"
+  [ "$ready_code" = "503" ] || fail "/health/ready a renvoyé $ready_code (attendu 503 sans clé du fournisseur du rôle léger)"
 
   local config_code config_before
   config_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/api/config")"
@@ -179,18 +219,58 @@ run_smoke() {
   config_before="$(curl -fsS "http://127.0.0.1:${PORT}/api/config")"
   assert_jq "$config_before" '.status.lightKey == false' "lightKey doit être false sans clé"
   assert_jq "$config_before" '.status.heavyKey == false' "heavyKey doit être false sans clé"
-  assert_jq "$config_before" '.fields["llm.light.apiKey"].configured == false' "clé légère non configurée attendue"
+
+  # ⚠️ LOT B (2026-11-19) — CE QUE LE SCRIPT ÉCRIT A CHANGÉ, PAS CE QU'IL PROUVE.
+  # La clé d'un LLM vit désormais au chemin SECRET DU FOURNISSEUR du catalogue
+  # (`llm.fournisseur.<id>.apiKey`) ; « clé présente » se déduit du MODÈLE RÉSOLU de
+  # chaque rôle. Le fournisseur est donc LU dans `GET /api/config` (aucun
+  # identifiant en dur) : renommer le fournisseur ne casse pas la CI.
+  local light_provider heavy_provider light_path heavy_path
+  light_provider="$(fournisseur_du_role "$config_before" light)"
+  heavy_provider="$(fournisseur_du_role "$config_before" heavy)"
+  # Sans fournisseur résolu, il n'y a RIEN à configurer : c'est un défaut de
+  # DÉMARRAGE (la reprise du catalogue n'a rien posé), pas une assertion de plus —
+  # tout ce qui suit en dépendrait.
+  [ -n "$light_provider" ] || die "aucun fournisseur résolu pour le rôle « light » dans GET /api/config (catalogue vide : la reprise du démarrage n'a posé ni fournisseur ni modèle)"
+  [ -n "$heavy_provider" ] || die "aucun fournisseur résolu pour le rôle « heavy » dans GET /api/config (catalogue vide)"
+  light_path="$(chemin_cle_fournisseur "$light_provider")"
+  heavy_path="$(chemin_cle_fournisseur "$heavy_provider")"
+  log "Fournisseurs résolus : light=$light_provider heavy=$heavy_provider"
+
+  # Même preuve qu'avant (« la clé du rôle n'est pas configurée »), sur le NOUVEAU
+  # chemin.
+  assert_jq_path "$config_before" "$light_path" '.fields[$p].configured == false' \
+    "clé du fournisseur « $light_provider » non configurée attendue"
 
   log "Assertions Lot 11 — PUT des clés FICTIVES via l'API puis bascule à chaud"
   local light_key="fake-light-key-000000000000" heavy_key="fake-heavy-key-111111111111"
-  local put_code
+  # Corps construit par `jq` : les chemins portent l'identifiant du fournisseur, qui
+  # n'est pas un littéral du script.
+  local patch
+  patch="$(jq -cn --arg lp "$light_path" --arg lk "$light_key" \
+    --arg hp "$heavy_path" --arg hk "$heavy_key" \
+    '{($lp): $lk} + {($hp): $hk}')"
+  if [ -z "$patch" ]; then
+    die "corps du PUT impossible à construire (chemins : $light_path / $heavy_path)"
+  fi
+
+  local put_out put_code put_body
   # `Origin` = `Host` : reproduit un envoi depuis le navigateur (accès par IP/hôte).
-  put_code="$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+  put_out="$(curl -sS -w '\n%{http_code}' -X PUT \
     -H 'content-type: application/json' -H 'X-Yuki-Config: 1' \
     -H "Origin: http://127.0.0.1:${PORT}" \
-    --data "$(printf '{"llm.light.apiKey":"%s","llm.heavy.apiKey":"%s"}' "$light_key" "$heavy_key")" \
+    --data "$patch" \
     "http://127.0.0.1:${PORT}/api/config")"
-  [ "$put_code" = "200" ] || fail "PUT /api/config a renvoyé $put_code (attendu 200)"
+  put_code="${put_out##*$'\n'}"
+  put_body="${put_out%$'\n'*}"
+  if [ "$put_code" != "200" ]; then
+    # ⚠️ On DUMPE la réponse d'erreur : `fields[]` y porte le chemin fautif et le
+    # code (`unknown_field`, `unknown_provider`…). Le prochain rouge doit être
+    # lisible sans relancer le conteneur à la main.
+    printf '\033[31m[ci-smoke] PUT /api/config (%s / %s) → %s\n[ci-smoke] corps de la réponse :\n%s\033[0m\n' \
+      "$light_path" "$heavy_path" "$put_code" "$put_body" >&2
+  fi
+  [ "$put_code" = "200" ] || fail "PUT /api/config ($light_path) a renvoyé $put_code (attendu 200)"
 
   # Une origine étrangère doit rester refusée (403), même avec l'en-tête exigé.
   local bad_origin_code
@@ -201,17 +281,32 @@ run_smoke() {
 
   local config_after
   config_after="$(curl -fsS "http://127.0.0.1:${PORT}/api/config")"
+  # ⚠️ ASSERTIONS CONSERVÉES : `status.lightKey` / `status.heavyKey` EXISTENT
+  # TOUJOURS (`ConfigRuntime.snapshot` les déduit du modèle résolu ET de la clé de
+  # son fournisseur). Elles restent donc la preuve « le rôle a une clé » — rien à
+  # remplacer, seulement le chemin de la clé qui, lui, a changé.
   assert_jq "$config_after" '.status.lightKey == true' "lightKey doit passer à true après PUT"
   assert_jq "$config_after" '.status.heavyKey == true' "heavyKey doit passer à true après PUT"
-  assert_jq "$config_after" '.fields["llm.light.apiKey"].configured == true' "clé légère configurée attendue"
+  assert_jq_path "$config_after" "$light_path" '.fields[$p].configured == true' \
+    "clé du fournisseur « $light_provider » configurée attendue"
   # Aucune valeur en clair dans le corps brut de la réponse.
   case "$config_after" in
     *"$light_key"*|*"$heavy_key"*) fail "GET /api/config expose une clé en clair" ;;
   esac
 
   log "Assertions Lot 11 — /health/ready passe à 200 (présence de clé, aucun réseau)"
-  ready_code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/health/ready")"
-  [ "$ready_code" = "200" ] || fail "/health/ready a renvoyé $ready_code (attendu 200 après saisie des clés)"
+  # `/health/ready` = porte GPU + PiHost + rôle léger du snapshot des sous-systèmes
+  # à l'état « ready » — cet état se déduit de la PRÉSENCE DE LA CLÉ du fournisseur
+  # résolu du rôle (`src/llm/availability.ts`, aucun appel réseau). Corps dumpé en
+  # cas d'échec.
+  local ready_out ready_body
+  ready_out="$(curl -sS -w '\n%{http_code}' "http://127.0.0.1:${PORT}/health/ready")"
+  ready_code="${ready_out##*$'\n'}"
+  ready_body="${ready_out%$'\n'*}"
+  if [ "$ready_code" != "200" ]; then
+    printf '\033[31m[ci-smoke] /health/ready → %s\n[ci-smoke] corps : %s\033[0m\n' "$ready_code" "$ready_body" >&2
+    fail "/health/ready a renvoyé $ready_code (attendu 200 après saisie de la clé du fournisseur « $light_provider ») — si la clé est bien configurée ci-dessus, c'est un DÉFAUT DE DISPONIBILITÉ (clé non reflétée dans l'environnement / rôle résolu sans modèle), PAS un problème de script"
+  fi
 
   log "Assertion Lot 11 — page /config servie avec des en-têtes sûrs"
   local config_headers
