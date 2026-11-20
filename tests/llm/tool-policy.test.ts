@@ -217,10 +217,14 @@ describe("llm — politique d'outils (garantie structurelle)", () => {
     const withHeritage = toolAllowlist("light", { heritageEnabled: true });
     expect(withHeritage).toContain("archive_vie_anterieure");
     expect(containsForbiddenTool(withHeritage)).toBe(false);
-    // Le lourd n'a JAMAIS d'outil de consultation d'archive.
-    expect(toolAllowlist("heavy", { heritageEnabled: true })).not.toContain(
+    // ⚠️ GARDE RÉVISÉE (audit 2026-11-20) : le lourd PEUT désormais CONSULTER
+    // l'archive de SON bot (un run planifié est un run du bot ; il ne pouvait pas
+    // retrouver ce que son bot savait). L'outil reste en LECTURE SEULE — le test
+    // suivant vérifie qu'aucun outil d'ÉCRITURE n'existe.
+    expect(toolAllowlist("heavy", { heritageEnabled: true })).toContain(
       "archive_vie_anterieure",
     );
+    expect(toolAllowlist("heavy")).not.toContain("archive_vie_anterieure");
   });
 
   it("l'archive « vie antérieure » n'a AUCUN outil d'ÉCRITURE exposé au modèle", () => {

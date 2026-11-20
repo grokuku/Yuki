@@ -181,6 +181,13 @@ export interface DelegationServiceOptions {
    * job), donc avec SES capacités, SON prompt et SON service d'exécution.
    */
   heavyPour?: (botId: string | undefined) => HeavyWorker | undefined;
+  /**
+   * ⚠️ RAISON LISIBLE d'un worker manquant (audit 2026-11-20) : `heavy_unavailable`
+   * seul ne dit RIEN au modèle. Le câblage y branche le refus du registre de
+   * workers (`WorkersLourdsBots.refusLisible`) : capacité absente ou plafond
+   * imposé atteint, avec les bots qui l'occupent.
+   */
+  workerRefus?: (botId: string | undefined) => string | undefined;
   /** Réservé Lot 10 : canal de notification sortant. */
   reporter?: JobReporter;
   /**
@@ -244,6 +251,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
   /** ⚠️ Renseignable après construction (`setWakerPour`), comme `waker`. */
   private wakerPour?: (botId: string | undefined) => LightWaker | undefined;
   private readonly heavyPour?: (botId: string | undefined) => HeavyWorker | undefined;
+  private readonly workerRefus?: (botId: string | undefined) => string | undefined;
   private declencheurs?: DeclencheursPort;
   private declencheursPourPort?: (
     botId: string | undefined,
@@ -290,6 +298,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     if (options.waker) this.waker = options.waker;
     if (options.wakerPour) this.wakerPour = options.wakerPour;
     if (options.heavyPour) this.heavyPour = options.heavyPour;
+    if (options.workerRefus) this.workerRefus = options.workerRefus;
   }
 
   /** Renseigne le réveil du léger une fois le host construit. */
@@ -340,13 +349,32 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     return this.waker;
   }
 
-  /** Worker lourd EFFECTIF d'un job : celui de SON bot, sinon celui de la pile. */
+  /**
+   * Worker lourd EFFECTIF d'un job : celui de SON bot.
+   *
+   * ⚠️ CORRECTION 2026-11-20 — UN BOT DEMANDÉ N'EMPRUNTE JAMAIS LE WORKER D'UN
+   * AUTRE. Le repli inconditionnel sur `this.heavy` (worker de la pile) faisait
+   * exécuter la tâche d'un bot secondaire SANS worker par le worker de la pile :
+   * mauvais prompt, mauvaises capacités, mauvaise mémoire. Le repli ne subsiste
+   * QUE si aucun port par bot n'est câblé (mono-bot historique, `heavyPour`
+   * absent) ou si le job ne nomme aucun bot (`botId` absent).
+   */
   private heavyDe(botId: string | undefined): HeavyWorker | undefined {
     if (botId !== undefined) {
       const propre = this.heavyPour?.(botId);
       if (propre !== undefined) return propre;
+      if (this.heavyPour !== undefined) return undefined;
     }
     return this.heavy;
+  }
+
+  /**
+   * Raison LISIBLE d'un worker manquant, jamais une chaîne vide : à défaut de
+   * port, on dit ce que l'on sait.
+   */
+  private workerRefusDe(botId: string | undefined): string {
+    const dit = this.workerRefus?.(botId)?.trim() ?? "";
+    return dit !== "" ? dit : "aucun worker lourd n'est disponible pour ce bot.";
   }
 
   /** Port des déclencheurs EFFECTIF d'un job (même règle que le réveil). */
@@ -408,11 +436,14 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     // modèle (`heavy_unavailable`) AVANT de créer un job que personne n'exécuterait.
     const heavy = this.heavyDe(request.botId);
     if (heavy === undefined) {
+      // ⚠️ Le refus est DIT (journal + réponse au modèle), jamais muet.
+      const note = this.workerRefusDe(request.botId);
       this.logger.warn("delegation.unavailable.bot", {
         session_id: sessionId,
         bot: request.botId ?? null,
+        raison: note,
       });
-      return { status: "unavailable", reason: "heavy_unavailable" };
+      return { status: "unavailable", reason: "heavy_unavailable", note };
     }
 
     const jobId = this.idFactory();
@@ -887,7 +918,7 @@ export class DelegationService implements DelegateServicePort, PiEventSource {
     if (heavy === undefined) {
       this.finishJob(jobId, {
         status: "failed",
-        error: "heavy_unavailable",
+        error: `heavy_unavailable : ${this.workerRefusDe(record.botId)}`,
       });
       return;
     }

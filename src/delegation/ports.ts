@@ -269,6 +269,12 @@ export interface DelegateRejected {
 export interface DelegateUnavailable {
   status: "unavailable";
   reason: "heavy_unavailable";
+  /**
+   * Phrase EXPLICATIVE en français (capacité absente, plafond imposé atteint,
+   * workers occupés). ⚠️ Destinée au MODÈLE : sans elle, il inventait une cause
+   * (« le worker est en panne ») devant un `heavy_unavailable` muet.
+   */
+  note?: string;
 }
 
 export type DelegateOutcome =

@@ -16,6 +16,9 @@ import type {
 } from "../../agents/execution.js";
 import type { TransferServicePort } from "../../agents/transfer.js";
 import { formatAttachmentsForPrompt, type FilesReadPort } from "../../files/index.js";
+import type { ConversationArchivePort } from "../../memory/conversation-archive.js";
+import type { HeritagePort } from "../../memory/heritage.js";
+import type { MemoryPort } from "../../memory/types.js";
 import type { SecretDirectoryPort } from "../../secrets/directory.js";
 import type {
   HeavyRunHandle,
@@ -56,7 +59,10 @@ import type { VisionDescriber } from "../../files/vision-fallback.js";
 import { createListFilesTool } from "./list-files-tool.js";
 import { createImageTools, type ImageToolPort } from "./image-tools.js";
 import { createImageBudgetExtensionFactory } from "./image-budget-extension.js";
+import { createConversationArchiveTools } from "./conversation-archive-tools.js";
+import { createHeritageTools } from "./heritage-tools.js";
 import { createLibrarianTools, type LibrarianToolsConfig } from "./librarian-tools.js";
+import { createMemoryExtensionFactory } from "./memory-extension.js";
 import { createReadFileTool } from "./read-file-tool.js";
 import { createEphemeralSession } from "./session-factory.js";
 
@@ -277,6 +283,32 @@ export interface SdkHeavyWorkerConfig {
    */
   librarian?: () => HeavyLibrarianPorts | undefined;
   /**
+   * MÉMOIRE DURABLE DU BOT PROPRIÉTAIRE (`<state>/bots/<id>/memory.jsonl`).
+   *
+   * ⚠️ POURQUOI LE LOURD L'A (audit 2026-11-20) : un run planifié est un run DU
+   * BOT. Sans ce port, il se réveillait sans AUCUN souvenir — il ne savait pas ce
+   * que son bot avait appris. La MÊME extension qu'en conversation
+   * (`memory-extension.ts`) est branchée sur la session éphémère : rappel borné
+   * avant le premier tour, écriture asynchrone en fin de job.
+   *
+   * ⚠️ UNE FONCTION : le service mémoire est celui DU BOT à l'instant du job
+   * (`servicesMemoire.pour(botId)`) — jamais celui d'un autre bot, et jamais un
+   * service figé à la construction du worker.
+   */
+  memoire?: () => MemoryPort | undefined;
+  /**
+   * ARCHIVE « VIE ANTÉRIEURE » DU BOT PROPRIÉTAIRE (`archive_vie_anterieure`,
+   * LECTURE SEULE). Une FONCTION : le dossier est celui du bot, résolu à chaque
+   * job — jamais celui d'un autre.
+   */
+  heritage?: () => HeritagePort | undefined;
+  /**
+   * ARCHIVE DES CONVERSATIONS MISES DE CÔTÉ du bot propriétaire
+   * (`chercher_conversations_archivees`, LECTURE SEULE). Une FONCTION : le store
+   * est celui du bot, résolu à chaque job.
+   */
+  conversationArchive?: () => ConversationArchivePort | undefined;
+  /**
    * Fabrique de session éphémère. Injectable pour les TESTS (défaut :
    * `createEphemeralSession`). Permet d'exercer le câblage des outils d'action
    * sans modèle ni réseau.
@@ -377,6 +409,8 @@ export function buildHeavyActionTools(
     | "files"
     | "images"
     | "librarian"
+    | "heritage"
+    | "conversationArchive"
     | "visionFallback"
   > & {
     /** Journal d'AUDIT des lectures de fichiers (facultatif : métadonnées seules). */
@@ -422,6 +456,16 @@ export function buildHeavyActionTools(
           (() => vision?.imagesSupported ?? true),
       }),
     );
+  }
+  // ⚠️ MÉMOIRE DU BOT (audit 2026-11-20) : les outils de RECHERCHE (archive « vie
+  // antérieure » et conversations mises de côté) sont LECTURE SEULE et branchés
+  // sur les ports DU BOT. Sans eux, un run planifié ne pouvait pas retrouver ce
+  // que son bot avait déjà appris.
+  const heritage = config.heritage?.();
+  if (heritage) tools.push(...createHeritageTools(heritage));
+  const conversationArchive = config.conversationArchive?.();
+  if (conversationArchive) {
+    tools.push(...createConversationArchiveTools(conversationArchive));
   }
   if (config.execution) tools.push(...createExecutionTools(config.execution, options));
   if (config.screenshots) tools.push(...createScreenshotTool(config.screenshots, options));
@@ -765,6 +809,24 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         onFileProduced,
         request.origine,
       );
+      // ⚠️ MÊME BORNE D'IMAGES QUE LA SESSION LÉGÈRE (`sdk-host.ts`) : une
+      // tâche qui lit trois images les ferait sinon repartir toutes les trois
+      // dans chaque appel modèle de sa boucle d'outils.
+      // ⚠️ MÉMOIRE DU BOT PROPRIÉTAIRE (audit 2026-11-20) : la MÊME extension
+      // qu'en conversation, sur le port DE CE BOT (`config.memoire()`), relu à
+      // CHAQUE job. Sans elle, un run planifié ignorait ce que son bot savait.
+      const memoire = config.memoire?.();
+      const extensions = [
+        ...(config.imageRequestBudgetBytes !== undefined
+          ? [
+              createImageBudgetExtensionFactory({
+                budgetBytes: config.imageRequestBudgetBytes,
+                logger: config.logger,
+              }),
+            ]
+          : []),
+        ...(memoire !== undefined ? [createMemoryExtensionFactory(memoire)] : []),
+      ];
       ephemeral = await (config.createSession ?? createEphemeralSession)({
         cwd: config.cwd,
         agentDir: config.agentDir,
@@ -774,19 +836,7 @@ export function createSdkHeavyWorker(config: SdkHeavyWorkerConfig): HeavyWorker 
         thinkingLevel: liveValue(config.thinking),
         tools,
         ...(actionTools.length > 0 ? { customTools: actionTools } : {}),
-        // ⚠️ MÊME BORNE D'IMAGES QUE LA SESSION LÉGÈRE (`sdk-host.ts`) : une
-        // tâche qui lit trois images les ferait sinon repartir toutes les trois
-        // dans chaque appel modèle de sa boucle d'outils.
-        ...(config.imageRequestBudgetBytes !== undefined
-          ? {
-              extensionFactories: [
-                createImageBudgetExtensionFactory({
-                  budgetBytes: config.imageRequestBudgetBytes,
-                  logger: config.logger,
-                }),
-              ],
-            }
-          : {}),
+        ...(extensions.length > 0 ? { extensionFactories: extensions } : {}),
       });
     } catch (error) {
       const sessionCause = truncateCause(

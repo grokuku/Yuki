@@ -67,6 +67,7 @@ import { creerOutilsBots, type OutilsBot } from "./bots/outils.js";
 // HISTORIQUE d'instance → défaut livré (`candidatsPersonnalite` ordonne les deux
 // fichiers, du plus spécifique au plus général).
 import { candidatsPersonnalite, resoudrePersonnaliteBot } from "./bots/personnalite-bot.js";
+import { composerPromptLourd } from "./bots/prompt-lourd.js";
 import {
   type PersonnaliteConnue,
 } from "./bots/personnalite-garde.js";
@@ -77,7 +78,7 @@ import { creerPortPromptDuTour } from "./bots/prompt-du-tour.js";
 import { HostsBots } from "./bots/hosts.js";
 import { ExecutionBots } from "./bots/execution.js";
 import { compterSessionsPi } from "./bots/admin.js";
-import { MAX_WORKERS_LOURDS_DEFAUT, WorkersLourdsBots } from "./bots/workers.js";
+import { WorkersLourdsBots } from "./bots/workers.js";
 import { CAPACITES_BOT, type CapaciteBot, type RegistreBots } from "./bots/registry.js";
 import {
   ComfyClient,
@@ -2100,24 +2101,42 @@ async function main(): Promise<void> {
    * accordée à un bot, ou un libraire configuré entre-temps, profite aux tâches
    * DÉJÀ programmées — jamais seulement aux nouvelles.
    */
-  const heavyToolOptions = (botId: string): ToolAllowlistOptions => ({
-    capacites: capacitesDuBot(botId),
-    executionEnabled: executionDuBot(botId) !== undefined,
-    screenshotsEnabled: executionDuBot(botId) !== undefined,
-    fileTransferEnabled: agentTransfers !== undefined,
-    fileListEnabled: filesService !== undefined,
-    fileReadEnabled: filesService !== undefined,
-    secretsEnabled: secretStore !== undefined,
-    imagesEnabled: comfyGenerator !== undefined,
-    // ⚠️ LIBRAIRE + LECTURE DE PAGE WEB (bug du 2026-11-16) : une tâche différée
-    // qui « relève les prix de ces pages » doit pouvoir les LIRE. Sans cette
-    // ligne, elle se réveillait sans `recherche_libraire` ni `lire_page_web` et
-    // rendait un échec muet. MÊME source de vérité que la conversation : les
-    // ports (`librarianDifferes`) et les capacités `libraire`/`web` du bot.
-    librarianEnabled: librarianDifferes !== undefined,
-    // ⚠️ PAS de capture : `TOOL_POLICY.heavy.librarianCapture` est vide (garde
-    // « le rôle lourd n'a JAMAIS `capture_libraire` », conservée).
-  });
+  const heavyToolOptions = (botId: string): ToolAllowlistOptions => {
+    // ⚠️ MÉMOIRE DU BOT : les archives de RECHERCHE sont celles de CE bot
+    // (`outils.archive`, `outils.env.heritageDir`) — jamais celles de la pile
+    // pour un bot secondaire. Le repli n'existe que pour le bot du run.
+    const outilsDuBot = outilsBotsParId?.get(botId);
+    const heritageDisponible =
+      (outilsDuBot?.env.heritageDir ??
+        (botId === botDuRun ? heritageStore?.dirPath : undefined)) !== undefined;
+    const archiveDisponible =
+      (outilsDuBot?.archive ?? (botId === botDuRun ? conversationArchive : undefined)) !==
+      undefined;
+    return {
+      capacites: capacitesDuBot(botId),
+      executionEnabled: executionDuBot(botId) !== undefined,
+      screenshotsEnabled: executionDuBot(botId) !== undefined,
+      fileTransferEnabled: agentTransfers !== undefined,
+      fileListEnabled: filesService !== undefined,
+      fileReadEnabled: filesService !== undefined,
+      secretsEnabled: secretStore !== undefined,
+      imagesEnabled: comfyGenerator !== undefined,
+      // ⚠️ LIBRAIRE + LECTURE DE PAGE WEB (bug du 2026-11-16) : une tâche différée
+      // qui « relève les prix de ces pages » doit pouvoir les LIRE. Sans cette
+      // ligne, elle se réveillait sans `recherche_libraire` ni `lire_page_web` et
+      // rendait un échec muet. MÊME source de vérité que la conversation : les
+      // ports (`librarianDifferes`) et les capacités `libraire`/`web` du bot.
+      librarianEnabled: librarianDifferes !== undefined,
+      // ⚠️ PAS de capture : `TOOL_POLICY.heavy.librarianCapture` est vide (garde
+      // « le rôle lourd n'a JAMAIS `capture_libraire` », conservée).
+      // ⚠️ RECHERCHE MÉMOIRE (audit 2026-11-20) : la MÊME capacité `memoire` que la
+      // conversation ouvre `archive_vie_anterieure` et
+      // `chercher_conversations_archivees` sur les stores DU BOT. Un run planifié
+      // peut donc RETROUVER ce que son bot a appris, sans écrire.
+      heritageEnabled: heritageDisponible,
+      conversationArchiveEnabled: archiveDisponible,
+    };
+  };
 
   /**
    * ALLOWLIST RÉELLE d'un run DIFFÉRÉ pour UN bot, calculée MAINTENANT.
@@ -3811,23 +3830,43 @@ async function main(): Promise<void> {
         agentDir: env.piAgentDir,
         authPath: join(env.piAgentDir, "auth.json"),
         modelsPath,
-        // ⚠️ Le prompt LOURD du BOT (son overlay), jamais celui d'un autre —
-        // COMPOSÉ : nom du bot (registre) + son texte + la liste d'outils générée
-        // depuis `outilsLourd`. Point d'assemblage unique : `src/llm/prompt-systeme.ts`.
+        // ⚠️ LE PROMPT LOURD EST CELUI DU BOT PROPRIÉTAIRE (audit 2026-11-20) :
+        // identité → personnalité → consignes/faits → prompt lourd → outils →
+        // RÈGLES EN DERNIER. Assemblage : `src/bots/prompt-lourd.ts` (même ordre
+        // que la conversation, même résolution de personnalité, `consignes.md` et
+        // `rules.md` DU BOT). Avant, un run planifié de `grolaf` ne contenait ni
+        // « Grolaf », ni sa personnalité, ni ses consignes : il exécutait sans
+        // savoir qui il était.
         // ⚠️ UNE FONCTION : le prompt est RECOMPOSÉ À CHAQUE JOB (même mécanisme que
         // `modelReference`/`thinking`). Éditer « Prompt système — lourd » prend donc
         // effet au job SUIVANT, sans redémarrage : un worker construit au premier
         // `delegate` ne peut plus geler le texte pour toute la vie du gateway.
+        // ⚠️ Les ports sont construits POUR CE BOT (son `consignes.md`, ses règles,
+        // sa personnalité) : aucun repli sur les fichiers d'un autre.
         systemPrompt: () => {
           const configBot = configsBots.get(botId) ?? config;
-          // ⚠️ RELECTURE DISQUE : le cache d'un `ConfigRuntime` de bot NON-pile est
-          // figé au démarrage (l'overlay est écrit par la route d'un autre bot).
-          configBot.reload();
-          return composerPromptSysteme({
+          const outilsBot = outilsBotsParId?.get(botId);
+          return composerPromptLourd({
+            botId,
             nom: nomDuBot(botId),
-            prompt: configBot.getString("prompts.heavy"),
+            config: configBot,
+            fichiersPersonnalite: candidatsPersonnalite(
+              { portee: "bot", chemin: outilsBot?.chemins.personalityPath ?? env.personalityPath },
+              { portee: "instance", chemin: personalityStore.filePath, store: personalityStore },
+            ),
+            consignes: portConsignes({
+              botId,
+              chemin: outilsBot?.chemins.consignesPath ?? env.consignesPath,
+              logger,
+            }),
+            regles: portReglesDuBot({
+              botId,
+              cheminBot: outilsBot?.chemins.rulesPath ?? env.rulesPath,
+              cheminInstance: rulesStore.filePath,
+              logger,
+            }),
             outils: outilsLourd(),
-            role: "heavy",
+            logger,
           });
         },
         modelReference: () => liveHeavyReference(botId),
@@ -3837,6 +3876,26 @@ async function main(): Promise<void> {
         // les font alors DÉCRIRE, au lieu de refuser (même instance qu'en
         // conversation : une seule description par image).
         visionFallback: visionDescriber,
+        // ⚠️ MÉMOIRE DU BOT PROPRIÉTAIRE (audit 2026-11-20) : le worker reçoit le
+        // service mémoire DE CE BOT (`servicesMemoire.pour(botId)`), construit sur
+        // SON `memory.jsonl` — jamais celui de la pile ni d'un autre. Une FONCTION :
+        // le service est résolu à chaque job (un bot arrêté/redémarré en obtient un
+        // neuf, adossé à ses stores réouverts).
+        memoire: () => servicesMemoire?.pour(botId),
+        // ⚠️ RECHERCHE MÉMOIRE (archives) DU BOT PROPRIÉTAIRE : les ports sont
+        // construits POUR CE BOT (`outils.archive`, `outils.env.heritageDir`),
+        // jamais empruntés à la pile. Une FONCTION : un bot arrêté/redémarré
+        // rouvre SES stores.
+        heritage: () => {
+          const outilsBot = outilsBotsParId?.get(botId);
+          const dir =
+            outilsBot?.env.heritageDir ??
+            (botId === botDuRun ? heritageStore?.dirPath : undefined);
+          return dir !== undefined ? new HeritageStore({ dir, logger }) : undefined;
+        },
+        conversationArchive: () =>
+          outilsBotsParId?.get(botId)?.archive ??
+          (botId === botDuRun ? conversationArchive : undefined),
         // ⚠️ ALLOWLIST (FONCTION, cf. plus haut) : elle sert À LA FOIS à la
         // politique du worker et au bloc `<outils>` de son prompt — une seule
         // liste, donc aucun texte ne peut annoncer autre chose.
@@ -3914,7 +3973,23 @@ async function main(): Promise<void> {
         }
         return worker;
       },
-      plafond: MAX_WORKERS_LOURDS_DEFAUT,
+      // ⚠️ AUCUN PLAFOND FIGÉ (audit 2026-11-20) : un worker par bot, à la
+      // demande, réutilisé ensuite. Le plafond de 3 faisait échouer d'office la
+      // tâche du 4ᵉ bot demandeur (`heavy_unavailable` muet, à chaque fois).
+      // ⚠️ Si un opérateur impose un plafond (option `plafond`), le dépassement
+      // est DIT : journal `bots.worker.plafond` + `refusLisible` transmis au
+      // modèle par la délégation.
+      // ⚠️ Un bot ARRÊTÉ libère le sien (`ExecutionBots` → `oublier`) : le hook
+      // journalise le RSS et le nombre de workers après libération.
+      liberer: (botId, worker) => {
+        // ⚠️ Les sessions d'un job sont ÉPHÉMÈRES et déjà disposées en fin de
+        // run : le worker ne garde aucune session à vie. On appelle néanmoins un
+        // éventuel `dispose` (contrat optionnel) pour que toute ressource
+        // ajoutée plus tard soit libérée ici, jamais laissée au hasard.
+        const detruire = (worker as { dispose?: () => void }).dispose;
+        if (typeof detruire === "function") detruire.call(worker);
+        logger.info("bots.worker.libere.ressources", { bot: botId });
+      },
       logger,
     });
     // ⚠️ MESURE au démarrage : ce que coûte RÉELLEMENT le worker du bot du run.
@@ -3929,11 +4004,17 @@ async function main(): Promise<void> {
         // ⚠️ LOT 36 (L11) — LE WORKER EST CELUI DU BOT DU JOB : celui de la pile
         // est `heavyWorker` (identité `===`), un bot secondaire reçoit le sien
         // (`WorkersLourdsBots`, paresseux, plafonné, selon SES capacités). Un
-        // bot muet n'a aucun worker ⇒ `delegate` répond `heavy_unavailable`.
+        // bot muet n'a aucun worker ⇒ `delegate` répond `heavy_unavailable`,
+        // désormais avec une RAISON lisible (capacité absente ou plafond imposé
+        // atteint avec les bots qui l'occupent), jamais un refus muet.
         heavyPour: (botId) =>
           botId === undefined || botId === botDuRun
             ? heavyWorker
             : workersLourds?.pour(botId),
+        workerRefus: (botId) =>
+          botId === undefined || botId === botDuRun
+            ? undefined
+            : workersLourds?.refusLisible(botId),
         availability: availabilityPort,
         idleTimeoutMs,
         totalTimeoutMs,

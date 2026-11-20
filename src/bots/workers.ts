@@ -16,9 +16,13 @@
  *  2. **STRUCTUREL** : un bot sans capacité `execution` ni `delegation` n'a
  *     jamais de worker (`workerLourdAutorise`, `src/bots/profils.ts`). Ce n'est
  *     pas une permission vérifiée à l'entrée : la fabrique n'est pas appelée.
- *  3. **PLAFONNÉ** : au-delà de `plafond` workers, la demande est REFUSÉE en le
- *     disant (plafond, workers déjà construits, bot demandeur) — jamais un
- *     worker silencieusement absent.
+ *  3. **SANS PLAFOND PAR DÉFAUT** (décision utilisateur du 2026-11-13, étendue
+ *     le 2026-11-20) : « chacun fait comme il a envie en fonction de ses
+ *     ressources, limiter c'est mal à mon sens ». Un worker par bot, à la
+ *     demande. Si un opérateur IMPOSE un plafond (`plafond`), la demande
+ *     au-delà est REFUSÉE **en le disant** (plafond, workers déjà construits,
+ *     bot demandeur, phrase lisible par le modèle) — jamais un worker
+ *     silencieusement absent.
  *
  * ⚠️ La mémoire est MESURÉE (`rss`) et journalisée à chaque construction ainsi
  * qu'à la demande (`journaliserRss`) : c'est ce qui rend « combien coûte un bot
@@ -36,8 +40,15 @@ export interface WorkersLourdsLogger {
   warn(message: string, fields?: Record<string, unknown>): void;
 }
 
-/** Plafond par DÉFAUT des workers simultanés (le plafond des bots est 6 max). */
-export const MAX_WORKERS_LOURDS_DEFAUT = 3;
+/**
+ * Plafond par DÉFAUT : AUCUN (`Infinity`).
+ *
+ * ⚠️ Le plafond figé à 3 faisait échouer d'office la tâche du 4ᵉ bot demandeur
+ * (`heavy_unavailable` muet, à chaque fois). C'est la même famille que
+ * `bots.maxActifs`, retiré le 2026-11-13 : « limiter c'est mal à mon sens ».
+ * La RAM est le vrai coût, et elle est MESURÉE (`bots.workers.rss`).
+ */
+export const MAX_WORKERS_LOURDS_DEFAUT = Number.POSITIVE_INFINITY;
 
 /** Ramène une valeur quelconque à un plafond entier borné. */
 export function normaliserPlafondWorkers(valeur: unknown): number {
@@ -60,8 +71,14 @@ export interface OptionsWorkersLourds<T> {
   readonly capacites: (botId: string) => readonly CapaciteBot[] | undefined;
   /** Fabrique : n'est appelée que si les capacités l'autorisent et sous le plafond. */
   readonly creer: (botId: string) => T;
-  /** Plafond de workers simultanés (défaut {@link MAX_WORKERS_LOURDS_DEFAUT}). */
+  /** Plafond de workers simultanés (défaut : AUCUN, voir {@link MAX_WORKERS_LOURDS_DEFAUT}). */
   readonly plafond?: unknown;
+  /**
+   * Libère les ressources d'un worker quand son bot s'ARRÊTE (hook optionnel).
+   * ⚠️ Sans lui, `oublier` retire la référence mais un worker qui garderait une
+   * session/des index à vie ferait monter le RSS à chaque cycle activation/arrêt.
+   */
+  readonly liberer?: (botId: string, worker: T) => void;
   /** Mesure de mémoire (défaut `process.memoryUsage().rss`), injectable en test. */
   readonly rss?: () => number;
   readonly logger?: WorkersLourdsLogger;
@@ -105,8 +122,9 @@ export class WorkersLourdsBots<T> {
       this.refuser(botId, "capacites");
       return undefined;
     }
-    // ⚠️ PLAFOND : refus EXPLICITE, nommant le plafond et les workers existants.
-    if (this.map.size >= this.plafond) {
+    // ⚠️ PLAFOND (seulement s'il est IMPOSÉ) : refus EXPLICITE, nommant le
+    // plafond et les workers existants. Par défaut il n'y en a aucun.
+    if (Number.isFinite(this.plafond) && this.map.size >= this.plafond) {
       this.refuser(botId, "plafond");
       return undefined;
     }
@@ -117,7 +135,7 @@ export class WorkersLourdsBots<T> {
     this.options.logger?.info("bots.worker.construit", {
       bot: botId,
       workers: this.map.size,
-      plafond: this.plafond,
+      plafond: Number.isFinite(this.plafond) ? this.plafond : "aucun",
       rss_mb: this.rssMo(),
     });
     return worker;
@@ -143,6 +161,32 @@ export class WorkersLourdsBots<T> {
     return this.refuses.get(botId);
   }
 
+  /**
+   * Phrase LISIBLE d'un refus (journal + réponse au modèle).
+   *
+   * ⚠️ Un `heavy_unavailable` seul ne dit RIEN : le modèle invente une cause.
+   * Ce texte nomme la raison et, pour un plafond, les bots qui l'occupent.
+   */
+  refusLisible(botId: string): string | undefined {
+    const raison = this.refuses.get(botId);
+    if (raison === undefined) return undefined;
+    if (raison === "capacites") {
+      return (
+        `le bot « ${botId} » n'a pas de worker lourd : ses capacités ` +
+        "`execution`/`delegation` sont absentes."
+      );
+    }
+    return (
+      `tous les workers lourds sont occupés : plafond de ${this.plafond} ` +
+      `atteint (${[...this.map.keys()].join(", ")}).`
+    );
+  }
+
+  /** Aucun plafond n'est imposé (défaut). */
+  get sansPlafond(): boolean {
+    return !Number.isFinite(this.plafond);
+  }
+
   /** Relevé mémoire (aucune écriture). */
   releve(): ReleveWorkers {
     return {
@@ -158,16 +202,41 @@ export class WorkersLourdsBots<T> {
     const releve = this.releve();
     this.options.logger?.info("bots.workers.rss", {
       workers: releve.workers,
-      plafond: releve.plafond,
+      // ⚠️ `Infinity` n'est pas du JSON : on écrit « aucun » plutôt que `null`.
+      plafond: Number.isFinite(releve.plafond) ? releve.plafond : "aucun",
       rss_mb: releve.rssMb,
       bots: releve.bots.join(","),
     });
     return releve;
   }
 
-  /** Oublie le worker d'un bot (arrêt ciblé, L9). Rend `true` s'il en avait un. */
+  /**
+   * Oublie le worker d'un bot (arrêt ciblé, L9) et LIBÈRE ses ressources.
+   *
+   * ⚠️ Un worker gardé à vie ferait monter le RSS à chaque cycle
+   * activation/arrêt. Le hook `liberer` est appelé AVANT le retrait de la
+   * référence, et le relevé est journalisé après (`bots.worker.libere`).
+   * Rend `true` s'il en avait un.
+   */
   oublier(botId: string): boolean {
-    return this.map.delete(botId);
+    const worker = this.map.get(botId);
+    if (worker === undefined) return false;
+    try {
+      this.options.liberer?.(botId, worker);
+    } catch (error) {
+      this.options.logger?.warn("bots.worker.liberation_echouee", {
+        bot: botId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    this.map.delete(botId);
+    this.refuses.delete(botId);
+    this.options.logger?.info("bots.worker.libere", {
+      bot: botId,
+      workers: this.map.size,
+      rss_mb: this.rssMo(),
+    });
+    return true;
   }
 
   private refuser(botId: string, raison: RefusWorker): void {
@@ -181,6 +250,7 @@ export class WorkersLourdsBots<T> {
             bot: botId,
             raison: `plafond de ${this.plafond} worker(s) atteint`,
             construits: [...this.map.keys()].join(","),
+            message: this.refusLisible(botId) ?? "",
           },
     );
   }

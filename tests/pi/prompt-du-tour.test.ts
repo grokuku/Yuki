@@ -330,7 +330,16 @@ describe("③ prompt système modifié ⇒ effectif au tour suivant", () => {
     expect(worker).toContain("liveValue(config.systemPrompt)");
     const index = readFileSync(join(process.cwd(), "src", "index.ts"), "utf8");
     expect(index).toContain("systemPrompt: () => {");
-    expect(index).toContain('configBot.getString("prompts.heavy")');
+    // ⚠️ GARDE MISE À JOUR (audit 2026-11-20) : le prompt lourd n'est plus composé
+    // inline par `composerPromptSysteme` ; il passe par `composerPromptLourd`, qui
+    // RELECTURE `prompts.heavy` DU BOT à chaque job (identité, personnalité,
+    // consignes/faits, règles) et reste donc à chaud.
+    expect(index).toContain("composerPromptLourd({");
+    const promptLourd = readFileSync(
+      join(process.cwd(), "src", "bots", "prompt-lourd.ts"),
+      "utf8",
+    );
+    expect(promptLourd).toContain('options.config.getString("prompts.heavy")');
   });
 });
 

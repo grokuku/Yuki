@@ -86,6 +86,27 @@ describe("politique — une tâche différée voit le libraire et la lecture web
     for (const outil of LIBRARIAN_CAPTURE_TOOLS) expect(deferred).not.toContain(outil);
   });
 
+  it("⚠️ mémoire du bot : la capacité `memoire` ouvre les DEUX recherches d'archive", () => {
+    const outils = toolAllowlist("heavy", {
+      capacites: ["memoire"],
+      heritageEnabled: true,
+      conversationArchiveEnabled: true,
+    });
+    expect(outils).toContain("archive_vie_anterieure");
+    expect(outils).toContain("chercher_conversations_archivees");
+    // LECTURE SEULE : un run lourd n'écrit ni consigne ni fait.
+    expect(outils).not.toContain("memoriser_consigne");
+    expect(outils).not.toContain("ajouter_fait");
+    // Sans la capacité, les archives ne sont pas annoncées.
+    const sansMemoire = toolAllowlist("heavy", {
+      capacites: ["execution"],
+      heritageEnabled: true,
+      conversationArchiveEnabled: true,
+    });
+    expect(sansMemoire).not.toContain("archive_vie_anterieure");
+    expect(sansMemoire).not.toContain("chercher_conversations_archivees");
+  });
+
   it("aucune régression : le libraire reste absent par défaut, dans les deux rôles", () => {
     expect(verificationDe(toolAllowlist("heavy"))).toEqual([]);
     expect(verificationDe(toolAllowlist("light"))).toEqual([]);

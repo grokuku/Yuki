@@ -186,20 +186,23 @@ export function blocOutils(outils: readonly string[]): string {
  * Compose le prompt système d'un tour.
  *
  * Blocs NON VIDES joints par une ligne vide, dans l'ordre identité →
- * personnalité → prompt système → outils. La personnalité n'est PAS composée
- * pour le rôle lourd : le worker n'est pas le bot qui converse, sa personnalité
- * n'a rien à y faire.
+ * personnalité → prompt système → outils.
+ *
+ * ⚠️ CORRECTION 2026-11-20 : la personnalité est composée pour les DEUX rôles.
+ * L'exclusion du rôle lourd avait un sens tant que le worker n'exécutait que des
+ * délégations techniques ; un RUN PLANIFIÉ, lui, est un run DU BOT (son nom, sa
+ * personnalité, ses consignes, sa mémoire). Sans ce bloc, `grolaf` exécutait sa
+ * tâche sans savoir qui il était. Le prompt lourd livré n'est pas réécrit : c'est
+ * l'assemblage qui ajoute le bloc.
  */
 export function composerPromptSysteme(options: CompositionPromptSysteme): string {
   const blocs: string[] = [];
   const identite = blocIdentite(options.nom);
   if (identite !== "") blocs.push(identite);
 
-  const role = options.role ?? "light";
   const personnalite = (options.personnalite ?? "").trim();
   const prompt = options.prompt ?? "";
   if (
-    role !== "heavy" &&
     personnalite !== "" &&
     !personnaliteDejaDansPrompt(prompt, personnalite)
   ) {

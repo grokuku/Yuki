@@ -708,8 +708,14 @@ export const TOOL_POLICY: Readonly<Record<LlmRole, ToolPolicyEntry>> = {
     // il obtient la valeur par le flux sur référence manquante.
     secrets: SECRET_DIRECTORY_TOOLS,
     secretRequests: [],
-    heritage: [],
-    conversationArchive: [],
+    // ⚠️ MÉMOIRE DU BOT (audit 2026-11-20) : un run planifié est un run DU BOT.
+    // Il doit pouvoir CHERCHER dans SES archives (vie antérieure, conversations
+    // mises de côté), comme la conversation. Les deux ports sont ceux DU BOT
+    // (`outils.archive`, `outils.env.heritageDir`), jamais ceux d'un autre ; la
+    // capacité `memoire` les filtre comme pour le léger. LECTURE SEULE : le
+    // worker lourd n'écrit ni consignes ni archive.
+    heritage: HERITAGE_TOOLS,
+    conversationArchive: CONVERSATION_ARCHIVE_TOOLS,
     // ⚠️ Le worker lourd ne converse pas : il n'écrit pas de consignes.
     consignes: [],
     // ⚠️ LIBRAIRE + LECTURE DE PAGE WEB (bug du 2026-11-16) : le worker lourd
