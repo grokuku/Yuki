@@ -91,7 +91,13 @@ export type DeclencheurEvent =
    * (`tache_consolidee`, une seule ligne publiée pour N tentatives identiques).
    */
   | "tache_planifiee"
-  | "tache_consolidee";
+  | "tache_consolidee"
+  /**
+   * ⚠️ AUDIT 2026-11-20 (③) — le balayeur n'a PAS pu faire tourner un bot ACTIF
+   * faute de host démarré. Le champ `source` porte l'identifiant du bot (le journal
+   * est déjà le sien) : sans cette ligne, ses passages manquants étaient un silence.
+   */
+  | "bot_sans_host";
 
 /** Tous les événements connus, dans l'ordre d'affichage de la page de gestion. */
 export const DECLENCHEUR_EVENTS: readonly DeclencheurEvent[] = [
@@ -110,6 +116,7 @@ export const DECLENCHEUR_EVENTS: readonly DeclencheurEvent[] = [
   "envoi_echec",
   "tache_planifiee",
   "tache_consolidee",
+  "bot_sans_host",
 ];
 
 /** Filtre de lecture du journal (⚠️ borné : jamais tout le fichier). */
@@ -427,7 +434,10 @@ function parseRecord(line: string): DeclencheurJournalRecord | undefined {
     event !== "envoi_programme" &&
     event !== "envoi_publie" &&
     event !== "envoi_annule" &&
-    event !== "envoi_echec"
+    event !== "envoi_echec" &&
+    event !== "tache_planifiee" &&
+    event !== "tache_consolidee" &&
+    event !== "bot_sans_host"
   ) {
     return undefined;
   }

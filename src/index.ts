@@ -277,6 +277,10 @@ import {
   type PlanificationTacheInput,
 } from "./sources/index.js";
 import { FabriquePilesSources, creerResolveurEnvBot } from "./sources/pile-bot.js";
+import {
+  portEnvoisPourBot,
+  portPlanificationPourBot,
+} from "./sources/ports-bot.js";
 import { createPiHost, createRemoteRunTools, resolveToolWatchdogMs, createSdkConsolidationHebdoExtractor, createSdkHeavyWorker, createSdkLibrarianSynthesizer, createSdkMemoryExtractor, createSdkPromptWriter, createSdkRecapWriter, createSdkVisionDescriber, sdkVisionImageResizer, type HeavyLibrarianPorts, type PiHost, type PiHostOptions, type PiThinkingLevel, type RemoteRunLibrarianPorts, type SdkToolEvent } from "./pi/index.js";
 import { createRecapService } from "./recap/index.js";
 import {
@@ -1421,6 +1425,19 @@ async function main(): Promise<void> {
    * mais ses piles ne s'ouvrent qu'à la demande : la pile du bot ACTIF est
    * enregistrée juste après sa construction, les autres le sont au premier accès.
    */
+  /**
+   * ⚠️ AUDIT 2026-11-20 (③) — ÉTAT RÉEL DES HOSTS, lu par le balayeur.
+   *
+   * Avant ce correctif, `SourcesParBot` filtrait les cibles sur `aDemarrer`, une liste
+   * FIGÉE au démarrage : un bot activé depuis l'interface (`POST /api/bots/<id>/actif`,
+   * `src/gateway/routes/config.ts`) répondait en chat, mais ses tâches planifiées ne
+   * tiraient JAMAIS — jusqu'au redémarrage, en silence.
+   *
+   * ⚠️ La valeur est posée APRÈS la construction des hosts (`HostsBots`) ; d'ici là seul
+   * le bot de la PILE tourne (c'est `main()` qui le démarre).
+   */
+  let hostEstDemarre: (botId: string) => boolean = (botId) => botId === botDuRun;
+
   const sourcesParBot = new SourcesParBot({
     envInstance: bots.envInstance,
     mode: bots.mode as ModeBots,
@@ -1429,9 +1446,14 @@ async function main(): Promise<void> {
     // ⚠️ LOT 36 (L3-c) — QUI TOURNE, décidé au démarrage (L1) : le balayeur ne voit
     // qu'UNE cible par bot à démarrer, jamais une par bot du REGISTRE. Tous les
     // bots `actif: true` démarrent (plus de plafond).
+    // ⚠️ AUDIT 2026-11-20 (③) : cette décision reste la liste de REFUS (un bot éteint
+    // n'y est pas), mais l'état RÉEL (`estDemarre`) la recoupe à chaque tick.
     demarrage: () => ({
       aDemarrer: bots.aDemarrer.map((entree) => entree.id),
     }),
+    // ⚠️ Un bot ACTIVÉ À CHAUD entre dans le balayage au tick suivant ; un bot ARRÊTÉ
+    // en sort au tick suivant (comportement conservé, des deux côtés).
+    estDemarre: (botId) => hostEstDemarre(botId),
     logger,
   });
 
@@ -2370,6 +2392,32 @@ async function main(): Promise<void> {
     planifier: async (request: PlanificationTacheInput) =>
       sourcesService.planifierTache(request),
   };
+  /**
+   * ⚠️ AUDIT 2026-11-20 — PORTS DE PLANIFICATION **PAR BOT** (défaut ①).
+   *
+   * Ce qui était cassé : un tour né dans le canal du bot `grolaf` recevait les ports
+   * de la PILE (`portEnvoisProgrammes` / `portPlanificationTache` ci-dessus).
+   * Conséquences mesurées :
+   *  - `planifier_tache` écrivait la tâche dans `state/bots/<bot du run>/sources.json`
+   *    (`src/index.ts`, `sourcesService` = pile) : elle était donc exécutée ET
+   *    publiée par le bot du run, pas par le bot demandeur ;
+   *  - `programmer_envoi` REFUSAIT le canal de `grolaf` : les miroirs de la pile ne
+   *    le contiennent pas (`EnvoisProgrammesService.resoudreCible`).
+   *
+   * ⚠️ LA RÈGLE : le service est celui du bot QUI A REÇU LE MESSAGE (le `botId` de
+   * l'adaptateur, `botDuTourDistant`), jamais la pile.
+   * ⚠️ Bot NON résolu (ou sans service) ⇒ refus NOMMÉ `bot_inconnu` : jamais de repli
+   * silencieux sur la pile, sinon la tâche d'un bot retomberait chez un autre.
+   * ⚠️ Le run LOCAL (web) ne passe PAS par ici : son host est celui du bot affiché et
+   * reçoit SES ports (`optionsHostBot`, `src/bots/hosts.ts`) — inchangé.
+   *
+   * ⚠️ La CONSTRUCTION de ces ports est dans `src/sources/ports-bot.ts` (testable
+   * sans `main()`, qui n'est jamais exécuté par les tests).
+   */
+  const portsPlanificationPour = (botId: string) => ({
+    envoisProgrammes: portEnvoisPourBot(sourcesParBot, botId),
+    planifierTache: portPlanificationPourBot(sourcesParBot, botId),
+  });
   logger.info("envois.ready", {
     store: env.envoisProgrammesPath,
     en_attente: envoisProgrammes.enAttente,
@@ -2742,12 +2790,21 @@ async function main(): Promise<void> {
         // cible par défaut, et le port borne tout (30 s minimum, 30 jours, 20 en
         // attente, canaux SUIVIS) — le modèle ne peut pas le contourner. Aucun modèle
         // n'est appelé à l'heure dite : le texte est FIGÉ.
-        envoisProgrammes: portEnvoisProgrammes,
+        // ⚠️ AUDIT 2026-11-20 (①) : le port est celui du bot QUI A REÇU LE MESSAGE —
+        // ses canaux suivis sont les SIENS (le canal de `grolaf` n'est pas dans le
+        // miroir de la pile : c'était le refus systématique d'avant ce correctif).
+        envoisProgrammes: portsPlanificationPour(
+          botDuTourDistant(conversationId, contexte.botId),
+        ).envoisProgrammes,
         // ⚠️ TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) : groupe `toujours`. Depuis un
         // CANAL il n'y a pas de conversation locale à qui rendre le résultat ⇒ la tâche
         // est créée sans cible et son résultat tombe dans le fil « Déclencheurs » (le port
         // le DIT au modèle, qui ne peut donc pas promettre une réponse dans le canal).
-        planifierTache: portPlanificationTache,
+        // ⚠️ AUDIT 2026-11-20 (①) : le service est celui du bot DEMANDEUR, donc la tâche
+        // vit dans SON `sources.json` et c'est SON worker qui l'exécutera.
+        planifierTache: portsPlanificationPour(
+          botDuTourDistant(conversationId, contexte.botId),
+        ).planifierTache,
         // ⚠️ Sans `publierMessage` (appelant sans publication intermédiaire), le port
         // n'est pas construit : la politique le signale comme non implémenté au lieu
         // de laisser un outil promettre une publication qui n'existe pas.
@@ -4808,6 +4865,14 @@ async function main(): Promise<void> {
     });
     host = hostsBots.duRun;
     /**
+     * ⚠️ AUDIT 2026-11-20 (③) — le balayeur lit désormais l'état RÉEL des hosts.
+     *
+     * `HostsBots.estDemarre` est relu à CHAQUE tick : un bot démarré (ou arrêté) à
+     * chaud par l'interface est pris en compte au tick suivant, sans redémarrage.
+     * Le bot de la PILE est toujours dit démarré (c'est `main()` qui le démarre).
+     */
+    hostEstDemarre = (botId) => hostsBots?.estDemarre(botId) ?? botId === botDuRun;
+    /**
      * ⚠️ LOT 36 (L8/L9) — L'ÉTAT RÉEL DES BOTS, ET LEUR CYCLE DE VIE.
      *
      *  - `etat()` lit ce qui TOURNE (host démarré, sessions comptées, worker
@@ -5140,15 +5205,23 @@ async function main(): Promise<void> {
     /**
      * ⚠️ LOT 35j — UN SEUL BALAYEUR POUR TOUS LES BOTS (`BalayeurBots`) : il
      * possède l'UNIQUE `setInterval` et demande à chaque tick la liste des bots à
-     * balayer (`sourcesParBot.ciblesBalayage`). Un bot inactif, ou sans la capacité
-     * d'exécuter quoi que ce soit (`workerLourdAutorise`, `src/bots/profils.ts`),
-     * n'y figure pas : ses sources ne tirent donc pas, sans minuteur par bot.
+     * balayer (`sourcesParBot.ciblesBalayage`). Un bot inactif, ARRÊTÉ, ou sans la
+     * capacité d'exécuter quoi que ce soit (`workerLourdAutorise`,
+     * `src/bots/profils.ts`), n'y figure pas : ses sources ne tirent donc pas, sans
+     * minuteur par bot.
+     * ⚠️ AUDIT 2026-11-20 (③) : la liste suit l'état RÉEL (`estDemarre`), pas la
+     * liste figée au boot — un bot activé à chaud tire ses tâches au tick suivant.
      * Les règles qui ne sont PAS par bot (rétention des archives de bots
      * supprimés, consolidation hebdomadaire) restent ici, exécutées UNE fois par
      * tick.
      */
     declencheursBalayeur = new BalayeurBots({
       bots: { cibles: () => sourcesParBot.ciblesBalayage() },
+      // ⚠️ PAS de `journal` ici (audit 2026-11-20, ②) : chaque cible porte le SIEN
+      // (`CibleBalayage.journal`, `state/bots/<id>/declencheurs-journal.jsonl`).
+      // Un journal unique aurait mélangé les `saut` / `plafond` / `desactive` de
+      // tous les bots dans le fichier de la pile — et, avant ce correctif, dans
+      // AUCUN fichier (l'option n'était pas fournie).
       // ⚠️ Les ENVOIS PROGRAMMÉS (lot 28) sont désormais exécutés PAR LE BALAYEUR
       // DU BOT (`CibleBalayage.envoisProgrammes`) : chaque bot a SON
       // `envois-programmes.json`, et un bot ne peut pas publier l'envoi d'un autre.

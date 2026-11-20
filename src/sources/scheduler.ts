@@ -727,7 +727,7 @@ export interface BalayeurBotsPort {
   cibles(): readonly CibleBalayage[];
 }
 
-/** Une cible de balayage : UN bot, avec SES ports (store, run, envois). */
+/** Une cible de balayage : UN bot, avec SES ports (store, run, envois, journal). */
 export interface CibleBalayage {
   /** Identifiant du bot (journal, diagnostic ; jamais utilisé pour résoudre un chemin). */
   botId: string;
@@ -735,11 +735,28 @@ export interface CibleBalayage {
   run: DeclencheurRunner;
   /** Envois programmés de CE bot (absent ⇒ aucun envoi exécuté pour lui). */
   envoisProgrammes?: EnvoisProgrammesRunner;
+  /**
+   * ⚠️ JOURNAL DE CE BOT (audit 2026-11-20, défaut ②).
+   *
+   * `state/bots/<id>/declencheurs-journal.jsonl` — le journal de la PILE ne doit
+   * JAMAIS recevoir les `saut` / `plafond` / `desactive` d'un autre bot : ce serait
+   * attribuer à `yuki` l'extinction d'un déclencheur de `grolaf`. Absent ⇒ repli sur
+   * le journal du balayeur (`BalayeurBotsOptions.journal`), comportement d'avant.
+   */
+  journal?: Pick<DeclencheurJournal, "append">;
 }
 
 export interface BalayeurBotsOptions {
   bots: BalayeurBotsPort;
   logger: BalayeurLogger;
+  /**
+   * Journal de REPLI, utilisé quand une cible ne fournit pas le sien.
+   *
+   * ⚠️ En production, chaque cible porte SON journal (`CibleBalayage.journal`) :
+   * ce champ n'est qu'un filet pour les doubles de test et les cibles construites
+   * avant le lot 35j. Il ne doit jamais servir à écrire chez un bot qui n'est pas
+   * celui de l'événement.
+   */
   journal?: Pick<DeclencheurJournal, "append">;
   /** Consolidation hebdomadaire (lot 29) — exécutée UNE fois par tick, pas par bot. */
   passeHebdo?: PasseHebdoRunner;
@@ -775,7 +792,14 @@ export class BalayeurBots {
   private readonly setIntervalFn: (callback: () => void, delayMs: number) => unknown;
   private readonly clearIntervalFn: (handle: unknown) => void;
   /** Un `DeclencheurBalayeur` par bot (jamais démarré : seul `tick()` est appelé). */
-  private readonly internes = new Map<string, { balayeur: DeclencheurBalayeur; store: BalayeurStore }>();
+  private readonly internes = new Map<
+    string,
+    {
+      balayeur: DeclencheurBalayeur;
+      store: BalayeurStore;
+      journal?: Pick<DeclencheurJournal, "append">;
+    }
+  >();
   private timer: unknown = null;
   private arrete = true;
   private tickEnCours = false;
@@ -896,18 +920,32 @@ export class BalayeurBots {
    * est le même objet — une pile reconstruite repart proprement).
    */
   private balayeurDe(cible: CibleBalayage): DeclencheurBalayeur {
+    // ⚠️ Le JOURNAL fait partie de l'identité du balayeur interne : changer de
+    // journal sans changer de store (pile rouverte sur un autre fichier) doit
+    // reconstruire le balayeur, sinon les événements continueraient de partir
+    // dans l'ancien fichier.
+    const journal = cible.journal ?? this.options.journal;
     const existant = this.internes.get(cible.botId);
-    if (existant !== undefined && existant.store === cible.store) return existant.balayeur;
+    if (
+      existant !== undefined &&
+      existant.store === cible.store &&
+      existant.journal === journal
+    ) {
+      return existant.balayeur;
+    }
     existant?.balayeur.stop();
     const balayeur = new DeclencheurBalayeur({
       store: cible.store,
       run: cible.run,
       logger: this.options.logger,
-      ...(this.options.journal ? { journal: this.options.journal } : {}),
+      // ⚠️ AUDIT 2026-11-20 (②) : le journal est celui de LA CIBLE — le journal du
+      // balayeur n'était jamais branché en production, donc `saut` / `plafond` /
+      // `desactive` n'étaient JAMAIS écrits.
+      ...(journal ? { journal } : {}),
       ...(cible.envoisProgrammes ? { envoisProgrammes: cible.envoisProgrammes } : {}),
       now: this.now,
     });
-    this.internes.set(cible.botId, { balayeur, store: cible.store });
+    this.internes.set(cible.botId, { balayeur, store: cible.store, ...(journal ? { journal } : {}) });
     return balayeur;
   }
 }

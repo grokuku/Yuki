@@ -189,8 +189,29 @@ export interface OptionsSourcesParBot {
    * ⚠️ Omise (tests, mode mono-bot) ⇒ comportement du lot 35j : tous les bots
    * `actif: true` du registre sont balayés. Fournie (démarrage réel), le balayeur
    * ne voit QUE les bots à démarrer.
+   *
+   * ⚠️ AUDIT 2026-11-20 (③) : cette décision est FIGÉE AU BOOT. Elle ne dit donc
+   * pas l'état RÉEL — d'où {@link OptionsSourcesParBot.estDemarre}, qui la
+   * remplace en production (un bot allumé à chaud depuis l'interface est balayé
+   * au tick suivant, sans redémarrage).
    */
   demarrage?: () => ResolutionDemarrage;
+  /**
+   * ⚠️ ÉTAT RÉEL : le host de ce bot est-il DÉMARRÉ à cet instant ? (audit
+   * 2026-11-20, défaut ③)
+   *
+   * POURQUOI « host démarré » et pas seulement « `actif: true` » — un déclencheur
+   * n'exécute rien tout seul : il réveille le HOST du bot (`setWaker`,
+   * `SourcesService.declencher`). Un bot `actif` dont le host n'a pas démarré (échec
+   * de `host.start()`, bot créé après le boot) verrait ses passages échouer à
+   * chaque tick, en silence. La cible de balayage est donc un bot DÉMARRÉ ; un bot
+   * actif SANS host est DIT dans SON journal (`bot_sans_host`), jamais tu.
+   *
+   * ⚠️ Omise (tests, mode mono-bot) ⇒ l'ancienne règle : la décision de démarrage
+   * ci-dessus. Fournie (production) ⇒ elle est la SEULE autorité, relue à chaque
+   * tick : une activation/désactivation à chaud est prise en compte au tick suivant.
+   */
+  estDemarre?: (botId: string) => boolean;
   /** Horloge injectable (tests). */
   now?: () => number;
 }
@@ -223,6 +244,8 @@ export interface JetonResolu {
 export class SourcesParBot {
   private readonly options: OptionsSourcesParBot;
   private readonly pilesOuvertes = new Map<string, PileSourcesBot>();
+  /** Bots dont l'absence de host a DÉJÀ été journalisée (une ligne par transition). */
+  private readonly sansHostSignales = new Set<string>();
   private ouvrir?: (input: { botId: string; env: Env }) => PileSourcesBot;
   private pileActive?: PileSourcesBot;
 
@@ -296,7 +319,9 @@ export class SourcesParBot {
   }
 
   /**
-   * Les bots qui TOURNENT : ceux que le démarrage a retenus, encore `actif: true`.
+   * Les bots qui TOURNENT : ceux que le démarrage a retenus, encore `actif: true`,
+   * et — quand le câblage le sait ({@link OptionsSourcesParBot.estDemarre}) — dont
+   * le HOST est réellement démarré.
    *
    * ⚠️ Sans décision de démarrage (tests, mode mono-bot historique), c'est
    * l'ancienne règle du lot 35j : tout bot `actif: true` du registre.
@@ -309,11 +334,72 @@ export class SourcesParBot {
     // filtrer — le bot synthétique `yuki` tourne, comme avant le lot 35a. Sans ce
     // garde, une décision de démarrage vide (`aDemarrer` = []) éteindrait le
     // balayeur d'une installation mono-bot.
-    if (demarrage === undefined || registre === null || registre.bots.length === 0) {
-      return tous;
+    const retenus =
+      demarrage === undefined || registre === null || registre.bots.length === 0
+        ? tous
+        : tous.filter((bot) => new Set(demarrage.aDemarrer).has(bot.id));
+    const estDemarre = this.options.estDemarre;
+    if (estDemarre === undefined) return retenus;
+    // ⚠️ AUDIT 2026-11-20 (③) : l'état RÉEL l'emporte sur la décision figée au boot.
+    return retenus.filter((bot) => {
+      try {
+        return estDemarre(bot.id) === true;
+      } catch {
+        // Un état illisible n'ouvre pas le balayage : on ne prétend pas qu'un bot
+        // tourne quand on ne sait pas le lire.
+        return false;
+      }
+    });
+  }
+
+  /**
+   * ⚠️ AUDIT 2026-11-20 (③) — UN BOT ACTIF SANS HOST EST DIT, JAMAIS TU.
+   *
+   * Il est `actif: true`, il a la capacité de travailler, mais son host n'a pas
+   * démarré : ses déclencheurs ne tireront pas et ses envois programmés ne partiront
+   * pas. Le fait est écrit dans SON journal (`state/bots/<id>/…`), et seulement au
+   * CHANGEMENT d'état : une ligne toutes les 30 s noierait le fichier.
+   */
+  private signalerBotsSansHost(): void {
+    const estDemarre = this.options.estDemarre;
+    if (estDemarre === undefined) return;
+    const arretes: string[] = [];
+    for (const bot of this.bots()) {
+      if (bot.actif !== true) continue;
+      if (!workerLourdAutorise(bot.capacites)) continue;
+      let demarre = false;
+      try {
+        demarre = estDemarre(bot.id) === true;
+      } catch {
+        demarre = false;
+      }
+      if (!demarre) arretes.push(bot.id);
     }
-    const voulus = new Set(demarrage.aDemarrer);
-    return tous.filter((bot) => voulus.has(bot.id));
+    for (const botId of arretes) {
+      if (this.sansHostSignales.has(botId)) continue;
+      this.sansHostSignales.add(botId);
+      let pile: PileSourcesBot;
+      try {
+        pile = this.pourBot(botId);
+      } catch {
+        // Pile non ouvrable (démarrage inachevé) : rien à écrire, et surtout rien
+        // à inventer chez un autre bot.
+        continue;
+      }
+      pile.journal.append({
+        event: "bot_sans_host",
+        source: botId,
+        raison:
+          `Tâche non exécutée : le bot « ${botId} » est actif mais son host n'est ` +
+          "pas démarré — ses déclencheurs et ses envois programmés ne tournent pas.",
+      });
+      this.options.logger.warn("sources.balayeur.bot_sans_host", { bot: botId });
+    }
+    // Un bot revenu à l'état démarré (ou éteint) repart de zéro : la prochaine
+    // chute sera de nouveau dite.
+    for (const botId of [...this.sansHostSignales]) {
+      if (!arretes.includes(botId)) this.sansHostSignales.delete(botId);
+    }
   }
 
   /**
@@ -468,8 +554,11 @@ export class SourcesParBot {
    * Les bots à balayer MAINTENANT — un bot INACTIF ou sans capacité pertinente
    * n'y figure pas.
    *
-   * ⚠️ UNE cible par bot qui TOURNE (décision de démarrage), jamais une par bot
-   * du registre.
+   * ⚠️ UNE cible par bot qui TOURNE, jamais une par bot du registre.
+   *
+   * ⚠️ AUDIT 2026-11-20 (③) : « qui tourne » = `actif: true` ET host DÉMARRÉ quand
+   * le câblage le sait (`estDemarre`) — un bot activé à chaud entre donc dans la
+   * liste au tick suivant, et un bot arrêté en sort au tick suivant.
    *
    * ⚠️ Aucun minuteur n'est créé ici : le balayeur (`BalayeurBots`) possède
    * l'UNIQUE `setInterval` et appelle cette liste à chaque tick.
@@ -496,6 +585,10 @@ export class SourcesParBot {
       cibles.push({
         botId: bot.id,
         store: pile.store,
+        // ⚠️ AUDIT 2026-11-20 (②) : le journal DE CE BOT. Sans ce champ, le
+        // balayeur n'en avait aucun en production (`BalayeurBots` était construit
+        // sans `journal`) : `saut`, `plafond` et `desactive` n'étaient jamais écrits.
+        journal: pile.journal,
         run: (nom, options) =>
           pile.service.declencher(nom, {
             origine: ORIGINE_HORLOGE,
@@ -516,6 +609,10 @@ export class SourcesParBot {
         bots: sansCapacite.join(","),
       });
     }
+    // ⚠️ AUDIT 2026-11-20 (③) : un bot actif SANS host ne figure pas ci-dessus —
+    // son absence est DITE dans son journal, sinon son silence passerait pour une
+    // absence de rendez-vous.
+    this.signalerBotsSansHost();
     return cibles;
   }
 

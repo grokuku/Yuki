@@ -77,6 +77,10 @@ export const EVENEMENTS_JOURNAL = [
   ["envoi_publie", "Envois publiés"],
   ["envoi_annule", "Envois annulés"],
   ["envoi_echec", "Envois échoués"],
+  // ⚠️ AUDIT 2026-11-20 (③) — un bot ACTIF dont le host n'est pas démarré ne
+  // balaie pas ses tâches : le balayeur écrit une ligne, elle doit être lisible
+  // (sinon la page Déclencheurs ne peut pas expliquer le silence).
+  ["bot_sans_host", "Bots actifs sans host démarré"],
 ];
 
 /** Ancre du volet « journal » (lien depuis la colonne « dernier résultat »). */
