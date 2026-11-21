@@ -40,6 +40,7 @@ import {
   DEFAULT_MAX_TOURS_PAR_JOUR,
   DEFAULT_PLAFOND_MS,
   RATTRAPAGE_MAX_MS,
+  RAISON_TACHE_EN_COURS,
   type SourceRecord,
 } from "./types.js";
 
@@ -163,6 +164,17 @@ export interface DeclencheurBalayeurOptions {
   /** Période de balayage (défaut `BALAYAGE_INTERVAL_MS`). */
   intervalMs?: number;
   /**
+   * ⚠️ AUDIT 2026-11-20 (②) — SIGNALER une tâche ponctuelle NON EXÉCUTÉE.
+   *
+   * Le balayeur SAUTE une ponctuelle dont l'échéance est dépassée de plus de
+   * `RATTRAPAGE_MAX_MS` (1 h). Sans ce port, la décision restait dans le fichier d'état
+   * et dans le journal : la personne qui avait demandé « rappelle-moi à 15 h » ne
+   * recevait RIEN. Le port publie le fait dans SA conversation (ou dans le fil
+   * « Déclencheurs » si elle a disparu). Absent ⇒ aucun message (comportement d'avant,
+   * pour les doubles de test).
+   */
+  annoncerManquee?: (nom: string, raison: string) => Promise<void> | void;
+  /**
    * Origine transmise au port. ⚠️ Défaut `horloge` : c'est la SEULE origine que
    * `SourcesService.declencher` accepte (anti-enchaînement).
    */
@@ -170,13 +182,15 @@ export interface DeclencheurBalayeurOptions {
 }
 
 /**
- * Raison persistée pendant l'exécution d'une tâche ponctuelle.
+ * Raison persistée pendant l'exécution d'une tâche ponctuelle — ⚠️ DÉFINIE dans
+ * `types.ts` (audit 2026-11-20, ③) : le service en a besoin pour RECONNAÎTRE une tâche
+ * interrompue au démarrage, et `service.ts` ne peut pas importer ce module (cycle).
  *
  * ⚠️ C'est le texte que lit la page de gestion si le processus meurt pendant l'exécution
  * (le motif final « terminée : … »/« échouée : … » est écrit à la fin). Il dit ce qui
  * s'est RÉELLEMENT passé, pas « en cours » sans plus.
  */
-export const RAISON_TACHE_EN_COURS = "en cours d'exécution (désarmée avant lancement)";
+export { RAISON_TACHE_EN_COURS };
 
 /**
  * Raison LISIBLE de l'extinction par FIN DE RÉCURRENCE (lot 32).
@@ -540,10 +554,32 @@ export class DeclencheurBalayeur {
       this.journaler("saut", nom, raison);
       this.options.store.setActif(nom, false, raison);
       this.journaler("desactive", nom, raison);
+      // ⚠️ AUDIT 2026-11-20 (②) — ON LE DIT À LA PERSONNE.
+      // DÉCISION : publication de l'ÉCHEC (« rappel de 15 h non exécuté : … »), jamais
+      // une exécution en retard (une tâche dit quelque chose de DATÉ : « le résumé du
+      // journal de 7 h » rejoué à 15 h tromperait) ni un silence (une demande explicite
+      // qui ne produit rien est un bug du point de vue de qui l'a faite).
+      await this.annoncerManquee(nom, raison);
       return;
     }
 
     const resultat = await this.lancer(record, echeance, { desarmementPrealable: true });
+    if (resultat.outcome === "refuse") {
+      // ⚠️ AUDIT 2026-11-20 (④) — REFUS NOMMÉ (ex. `bot_sans_host`) : la tâche n'a pas
+      // été exécutée, mais elle n'a pas ÉCHOUÉ non plus. On la RÉARME : le tick suivant
+      // réessaiera, et la fenêtre de rattrapage (1 h) laisse au host le temps de
+      // démarrer. ⚠️ Aucun repli sur un autre bot n'est possible ici : le refus vient
+      // précisément de ce qu'il n'y a pas de host pour CE bot.
+      // ⚠️ Pas d'événement de journal ici : le SERVICE écrit déjà `refus` avec la raison
+      // exacte (`SourcesService.declencher`) — deux lignes toutes les 30 s noieraient le
+      // fichier pour la même décision.
+      this.options.store.setActif(nom, true);
+      this.options.logger.info("sources.balayeur.tache.rearmee", {
+        source: nom,
+        raison: resultat.raison ?? "",
+      });
+      return;
+    }
     if (resultat.outcome !== "started" || resultat.fin === undefined) {
       const raison = `échouée : ${resultat.raison ?? "elle n'a pas pu démarrer."}`;
       this.options.store.setActif(nom, false, raison);
@@ -568,8 +604,7 @@ export class DeclencheurBalayeur {
       .catch(() => undefined);
   }
 
-  /** Heure lisible (« 4 novembre 2026 à 08:00 ») d'une échéance, dans son fuseau. */
-  private heureLisible(instant: number, fuseau: string | undefined): string {
+  /** Heure lisible (« 4 novembre 2026 à 08:00 ») d'une échéance, dans son fuseau. */  private heureLisible(instant: number, fuseau: string | undefined): string {
     try {
       return new Intl.DateTimeFormat("fr-FR", {
         timeZone: fuseau ?? DEFAULT_FUSEAU,
@@ -700,6 +735,25 @@ export class DeclencheurBalayeur {
     return Number.isFinite(at) ? at : undefined;
   }
 
+  /**
+   * ⚠️ Annonce d'une ponctuelle SAUTÉE (audit 2026-11-20, ②).
+   *
+   * Aucune erreur ne remonte au tick : un port de publication défaillant ne doit pas
+   * empêcher les autres déclencheurs d'être balayés (même règle que `envoisProgrammes`).
+   */
+  private async annoncerManquee(nom: string, raison: string): Promise<void> {
+    const annoncer = this.options.annoncerManquee;
+    if (annoncer === undefined) return;
+    try {
+      await annoncer(nom, raison);
+    } catch (error) {
+      this.options.logger.warn("sources.balayeur.annonce_failed", {
+        source: nom,
+        error: messageOf(error),
+      });
+    }
+  }
+
   private journaler(
     event: "saut" | "plafond" | "desactive" | "echec" | "refus",
     source: string,
@@ -733,8 +787,15 @@ export interface CibleBalayage {
   botId: string;
   store: BalayeurStore;
   run: DeclencheurRunner;
-  /** Envois programmés de CE bot (absent ⇒ aucun envoi exécuté pour lui). */
+  /**
+   * Envois programmés de CE bot (absent ⇒ aucun envoi exécuté pour lui).
+   */
   envoisProgrammes?: EnvoisProgrammesRunner;
+  /**
+   * ⚠️ AUDIT 2026-11-20 (②) — annonce, DANS CE BOT, d'une ponctuelle non exécutée.
+   * Absent ⇒ le saut reste journalisé et persiste (comportement d'avant).
+   */
+  annoncerManquee?: (nom: string, raison: string) => Promise<void> | void;
   /**
    * ⚠️ JOURNAL DE CE BOT (audit 2026-11-20, défaut ②).
    *
@@ -943,6 +1004,7 @@ export class BalayeurBots {
       // `desactive` n'étaient JAMAIS écrits.
       ...(journal ? { journal } : {}),
       ...(cible.envoisProgrammes ? { envoisProgrammes: cible.envoisProgrammes } : {}),
+      ...(cible.annoncerManquee ? { annoncerManquee: cible.annoncerManquee } : {}),
       now: this.now,
     });
     this.internes.set(cible.botId, { balayeur, store: cible.store, ...(journal ? { journal } : {}) });

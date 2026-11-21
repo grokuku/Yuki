@@ -77,4 +77,22 @@ describe("câblage de main() — gardes statiques (audit 2026-11-20)", () => {
       "hostEstDemarre = (botId) => hostsBots?.estDemarre(botId) ?? botId === botDuRun;",
     );
   });
+
+  it("④ un bot sans host démarré n'a AUCUN repli sur le host de l'instance", () => {
+    // ⚠️ Échoue sur l'origine : `const hote = hostsBots?.pourDemarre(botId) ?? hoteSources;`
+    // ⇒ `sessionAlive` interrogeait les sessions d'un AUTRE bot, le `sessionId` de la
+    // tâche était EFFACÉ et un fil « Déclencheurs » naissait chez le bot du run.
+    const debut = index.indexOf("brancherServiceSources = (service, botId) => {");
+    const fin = index.indexOf("const ports = portsDeclencheurPour(botId);", debut);
+    expect(debut).toBeGreaterThan(-1);
+    expect(fin).toBeGreaterThan(debut);
+    const bloc = index.slice(debut, fin);
+    expect(bloc).not.toContain("?? hoteSources");
+    expect(bloc).not.toContain("pourDemarre(botId) ??");
+    // Le refus NOMMÉ est le seul repli autorisé.
+    expect(bloc).toContain("const hote = hostDuBot(botId) ?? hoteSansHost(botId);");
+    // ⚠️ AUDIT (③) : la pile du bot du run n'est jamais « branchée » — son signalement
+    // de tâches interrompues est donc posé à côté de son waker.
+    expect(index).toContain("sourcesService.signalerTachesInterrompues();");
+  });
 });

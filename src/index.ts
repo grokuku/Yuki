@@ -279,6 +279,7 @@ import {
 } from "./sources/index.js";
 import { FabriquePilesSources, creerResolveurEnvBot } from "./sources/pile-bot.js";
 import {
+  hoteSansHost,
   portEnvoisPourBot,
   portPlanificationPourBot,
 } from "./sources/ports-bot.js";
@@ -5131,6 +5132,11 @@ async function main(): Promise<void> {
     // SOURCES : le host est prêt ⇒ on branche le réveil (tour `lancer`) et le
     // suivi des réponses (attachées aux entrées de la boîte, jamais dans un fil).
     sourcesService.setWaker(host);
+    // ⚠️ AUDIT 2026-11-20 (③) — UN REDÉMARRAGE PENDANT L'EXÉCUTION NE DOIT PAS ÊTRE MUET.
+    // Une tâche ponctuelle désarmée avant lancement garde le motif « en cours d'exécution »
+    // si le processus meurt pendant le job : on le remplace par « interrompue : … » et on
+    // écrit un événement `echec` dans le journal DU BOT (jamais un état qui ment à vie).
+    sourcesService.signalerTachesInterrompues();
 
     // ⚠️ LOT 36 (L3-d) : LES HOSTS DES AUTRES BOTS DÉMARRENT APRÈS LE PRINCIPAL.
     // Chacun a SES sessions (`<pi>/agent/sessions/<bot>`) et SON prompt : leurs
@@ -5246,15 +5252,19 @@ async function main(): Promise<void> {
     // la demande (webhook, `?bot=` de la page des bots) doit elle aussi pouvoir
     // réveiller un tour et lancer un job. Sans cela, ses déclencheurs seraient
     // « en veille » pour toujours : le balayeur les verrait, mais personne ne
-    // pourrait les exécuter. Le host Pi est celui de l'instance (le seul ouvert) ;
-    // les ports de délégation sont PARTAGÉS.
-    const hoteSources = host;
+    // pourrait les exécuter. Les ports de délégation sont PARTAGÉS ; le HOST, non
+    // (audit 2026-11-20, ④ : `hostDuBot` ou un refus nommé, jamais celui de l'instance).
     brancherServiceSources = (service, botId) => {
-      // ⚠️ L3-d : le host du bot S'IL A DÉMARRÉ, sinon celui de l'instance (le
-      // comportement d'avant L3-d, conservé comme repli — jamais un réveil muet).
-      const hote = hostsBots?.pourDemarre(botId) ?? hoteSources;
-      if (hote === undefined) return;
+      // ⚠️ AUDIT 2026-11-20 (④) — **AUCUN REPLI** sur le host de l'INSTANCE.
+      // Le repli sur le host de l'INSTANCE faisait interroger les sessions d'un AUTRE bot :
+      // `sessionAlive` répondait `false`, le `sessionId` de la tâche était EFFACÉ, et le
+      // fil « Déclencheurs » était créé chez le bot du run. Un bot sans host démarré
+      // reçoit donc un waker de REFUS nommé (`bot_sans_host`, `hoteSansHost`) : la tâche
+      // est refusée puis RÉARMÉE par le balayeur, et rien n'est publié ailleurs.
+      const hote = hostDuBot(botId) ?? hoteSansHost(botId);
       service.setWaker(hote);
+      // ⚠️ AUDIT 2026-11-20 (③) : tâche interrompue par un arrêt du processus (par bot).
+      service.signalerTachesInterrompues();
       // ⚠️ LOT 36 (L11) : les ports sont ceux DU BOT (job attribué à ce bot,
       // résultat publié chez lui) — jamais ceux du bot du run.
       const ports = portsDeclencheurPour(botId);

@@ -34,7 +34,59 @@
 import type { ProgrammationInput, ProgrammationOutcome } from "../chat/envois/index.js";
 import { SourcesParBotError, type SourcesParBot } from "./par-bot.js";
 import type { PlanificationTacheInput } from "./taches.js";
-import type { PlanificationTacheOutcome } from "./service.js";
+import type { PlanificationTacheOutcome, SourcesWaker } from "./service.js";
+import { CODE_BOT_SANS_HOST } from "./types.js";
+
+/**
+ * Phrase LISIBLE du refus `bot_sans_host` — celle que le modèle et le journal lisent.
+ *
+ * ⚠️ Le CODE est écrit en tête : c'est lui que cherchent les tests et les journaux, et il
+ * dit pourquoi rien n'a été exécuté (un texte générique laisserait croire à une panne
+ * passagère et ferait réessayer à l'infini).
+ */
+export function raisonBotSansHost(botId: string, detail?: string): string {
+  return (
+    `Le host du bot « ${botId} » n'est pas démarré (${CODE_BOT_SANS_HOST}) : aucune tâche, ` +
+    "aucun déclencheur et aucun message de ce bot ne peut être exécuté — et rien ne sera " +
+    "publié chez un autre bot à sa place." +
+    (detail !== undefined && detail !== "" ? ` ${detail}` : "")
+  );
+}
+
+/**
+ * ⚠️ AUDIT 2026-11-20 (④) — WAKER DE REFUS d'un bot SANS host démarré.
+ *
+ * CE QUE CE PORT FERME : `src/index.ts` branchait `service.setWaker(hostsBots?.pourDemarre(botId)
+ * ?? hoteSources)` — le host de l'**INSTANCE** en repli. Conséquences mesurées :
+ *
+ *  - `sessionAlive()` interrogeait les sessions d'un AUTRE bot et répondait `false` : la
+ *    conversation de la tâche était « disparue », donc son `sessionId` était EFFACÉ
+ *    (`SourcesService.cibleDePassage`) — un aller-retour d'activation suffisait à perdre
+ *    la cible d'un rappel ;
+ *  - le fil « Déclencheurs » était CRÉÉ chez l'autre bot, et le résultat y était publié.
+ *
+ * ⚠️ Ce waker ne rend JAMAIS de cible : `send`, `newSession` et `resume` LÈVENT le code
+ * `bot_sans_host` (le service en fait un REFUS nommé et réarme la tâche).
+ * ⚠️ Il n'expose NI `listSessions` NI `sessionFileFor` : `sessionAlive` rend alors
+ * `undefined` (« on ne peut pas conclure ») et le `sessionId` de la tâche n'est **jamais**
+ * effacé — c'est le cœur du test central de ④.
+ */
+export function hoteSansHost(botId: string, detail?: string): SourcesWaker {
+  const message = raisonBotSansHost(botId, detail);
+  const refuser = <T>(): T => {
+    const error = new Error(message) as Error & { code: string };
+    error.code = CODE_BOT_SANS_HOST;
+    throw error;
+  };
+  return {
+    currentSessionId: () => undefined,
+    send: () => refuser(),
+    newSession: () => Promise.reject(refuser<never>()),
+    resume: () => Promise.reject(refuser<never>()),
+    // Aucune session ne peut naître ici : les abonnements ne reçoivent rien.
+    subscribeAll: () => () => undefined,
+  };
+}
 
 /**
  * Message de REFUS quand le bot demandeur ne résout aucun service.

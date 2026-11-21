@@ -345,6 +345,40 @@ export const DEFAULT_SOURCE_RATTRAPAGE: SourceRattrapage = "rattraper";
 /** ⚠️ Retard maximal rattrapable d'un passage manqué : 1 heure. */
 export const RATTRAPAGE_MAX_MS = 60 * 60 * 1000;
 
+/**
+ * Raison PERSISTÉE pendant l'exécution d'une tâche ponctuelle (« désarmée avant
+ * lancement »).
+ *
+ * ⚠️ Elle est écrite par le balayeur AVANT l'appel au runner : si le processus meurt
+ * pendant l'exécution, le redémarrage ne rejoue pas la tâche (aucun double tir).
+ * ⚠️ AUDIT 2026-11-20 (③) : c'est AUSSI la trace qui permet de RECONNAÎTRE, au
+ * démarrage suivant, une tâche interrompue par un arrêt du processus — sans elle, elle
+ * resterait « en cours d'exécution » pour toujours et personne ne le dirait.
+ */
+export const RAISON_TACHE_EN_COURS = "en cours d'exécution (désarmée avant lancement)";
+
+/**
+ * Raison DÉFINITIVE d'une tâche dont le processus est mort PENDANT son exécution.
+ *
+ * ⚠️ DÉCISION (audit 2026-11-20, ③) : le redémarrage ne peut pas savoir si le job a
+ * abouti (son résultat n'est jamais revenu). On ne rejoue donc RIEN (il ferait peut-être
+ * deux fois la même action) et on ne publie RIEN au nom du bot (on n'a rien à dire de
+ * vrai) — mais l'état PERSISTÉ cesse de mentir : il nomme l'interruption, et le journal
+ * reçoit un événement `echec` au démarrage. La page de gestion l'affiche.
+ */
+export const RAISON_TACHE_INTERROMPUE =
+  "interrompue : le processus s'est arrêté pendant son exécution — le résultat est perdu " +
+  "et la tâche n'a pas été rejouée.";
+
+/**
+ * Code du refus « le bot demandeur n'a pas de host démarré » (audit 2026-11-20, ④).
+ *
+ * ⚠️ Ce code est la seule chose qui autorise un REFUS : il ne doit JAMAIS être suivi
+ * d'un repli sur le host d'un autre bot (ce serait exécuter la tâche d'un bot avec les
+ * sessions, le jeton et le fil d'un autre).
+ */
+export const CODE_BOT_SANS_HOST = "bot_sans_host";
+
 /** Vrai si la valeur est une politique de rattrapage connue. */
 export function isSourceRattrapage(value: unknown): value is SourceRattrapage {
   return value === "sauter" || value === "rattraper";

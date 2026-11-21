@@ -600,6 +600,12 @@ export class SourcesParBot {
         ...(envois !== undefined
           ? { envoisProgrammes: { executerDus: (maintenant) => envois.executerDus(maintenant) } }
           : {}),
+        // ⚠️ AUDIT 2026-11-20 (②) : une ponctuelle SAUTÉE (échéance dépassée de plus
+        // d'une heure) est PUBLIÉE dans SON bot — sinon la personne qui avait demandé
+        // « rappelle-moi à 15 h » n'apprend jamais que rien n'a eu lieu.
+        annoncerManquee: async (nom, raison) => {
+          await pile.service.annoncerTacheManquee(nom, raison);
+        },
       });
     }
     // ⚠️ UN SEUL avertissement par tick, jamais un par source : un bot sans

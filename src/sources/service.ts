@@ -64,6 +64,7 @@ import {
   type PlanificationTacheInput,
 } from "./taches.js";
 import {
+  CODE_BOT_SANS_HOST,
   DEFAULT_FUSEAU,
   DEFAULT_PLAFOND_MS,
   DECLENCHEURS_SESSION_TITLE,
@@ -72,6 +73,8 @@ import {
   MAX_REPLY_CHARS,
   MAX_TITRE_CHARS,
   MIN_PLAFOND_MS,
+  RAISON_TACHE_EN_COURS,
+  RAISON_TACHE_INTERROMPUE,
   SILENCE_REPLY,
   SOURCE_MESSAGE_ID_PATTERN,
   SOURCE_RATE_LIMIT_PER_MINUTE,
@@ -1160,6 +1163,106 @@ export class SourcesService {
   }
 
   /**
+   * ⚠️ AUDIT 2026-11-20 (②) — DIRE, DANS LA CONVERSATION, qu'un rappel n'a pas été exécuté.
+   *
+   * ⚠️ DÉCISION : **publication de l'échec**, ni exécution en retard, ni silence.
+   *  - une tâche dit quelque chose de DATÉ (« le résumé du journal de 7 h ») : la rejouer
+   *    trois heures plus tard ferait croire à un contenu frais ;
+   *  - une demande EXPLICITE qui ne produit rien est un bug du point de vue de qui l'a
+   *    faite : « rappelle-moi à 15 h » sans aucun message est indiscernable d'un oubli
+   *    de Yuki.
+   * Le texte nomme le libellé, l'échéance manquée et le retard — donc une EXCUSE
+   * explicite, datée, qui ne prétend pas avoir fait le travail.
+   *
+   * ⚠️ La cible est la conversation demandeuse tant qu'elle existe (`cibleDePassage`),
+   * sinon le fil « Déclencheurs » : le message ne se perd pas. Si AUCUNE cible n'est
+   * disponible (bot sans host, aucun port de publication), le fait reste JOURNALISÉ et
+   * la raison persiste dans l'état — jamais un silence complet.
+   */
+  async annoncerTacheManquee(nom: string, raison: string): Promise<boolean> {
+    const record = this.store.get(nom);
+    if (!record) return false;
+    const publication = this.publication;
+    if (!publication) {
+      this.journal?.append({
+        event: "echec",
+        source: nom,
+        raison: `annonce impossible (aucun port de publication câblé) : ${raison}`,
+      });
+      this.logger.warn("sources.tache.manquee.sans_publication", { source: nom });
+      return false;
+    }
+    const cible = await this.cibleDePassage(record);
+    const target = cible.target;
+    if (target.sessionId === undefined) {
+      const motif = target.raison ?? "aucune conversation disponible";
+      this.journal?.append({
+        event: "echec",
+        source: nom,
+        raison: `annonce impossible (${motif}) : ${raison}`,
+      });
+      this.logger.warn("sources.tache.manquee.cible_introuvable", { source: nom });
+      return false;
+    }
+    const texte =
+      `⏰ Rappel non exécuté — « ${record.libelle ?? nom} » : ${raison} ` +
+      "Rien de ce qui était demandé n'a été fait : reprogramme-le si tu en as encore besoin.";
+    try {
+      await publication.publier(target.sessionId, texte);
+      this.journal?.append({ event: "refus", source: nom, raison: texte });
+      this.logger.info("sources.tache.manquee.annoncee", {
+        source: nom,
+        session_id: target.sessionId,
+      });
+      return true;
+    } catch (error) {
+      this.logger.warn("sources.tache.manquee.annonce_failed", {
+        source: nom,
+        error: messageOf(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * ⚠️ AUDIT 2026-11-20 (③) — TÂCHES INTERROMPUES PAR UN REDÉMARRAGE.
+   *
+   * Une tâche ponctuelle est DÉSARMÉE avant son lancement (`RAISON_TACHE_EN_COURS`,
+   * `scheduler.ts:533`) : si le processus meurt pendant le job, le redémarrage ne le rejoue
+   * pas (bien) — mais l'état persisté restait « en cours d'exécution » POUR TOUJOURS, et
+   * le résultat perdu n'était dit nulle part.
+   *
+   * ⚠️ DÉCISION : **aucune republication, mais un événement de journal et un état qui
+   * cesse de mentir**. On ne rejoue RIEN (le job a peut-être abouti : le rejouer ferait
+   * deux fois une action) et on ne publie RIEN au nom du bot (on n'a aucun fait à dire) ;
+   * en revanche, le motif devient `RAISON_TACHE_INTERROMPUE` (lisible dans `/config`) et le
+   * journal de CE bot reçoit `echec`. Sans cela, la perte serait INVISIBLE.
+   *
+   * Idempotent : après la première passe, le motif n'est plus « en cours » — un second
+   * appel ne rend rien (le branchement peut passer deux fois pour un même service).
+   */
+  signalerTachesInterrompues(): SourceRecord[] {
+    const interrompues: SourceRecord[] = [];
+    for (const record of this.store.list()) {
+      if (record.declencheur.type !== "ponctuel") continue;
+      if (record.actif !== false) continue;
+      if (record.raisonInactive !== RAISON_TACHE_EN_COURS) continue;
+      this.store.setActif(record.nom, false, RAISON_TACHE_INTERROMPUE);
+      this.journal?.append({
+        event: "echec",
+        source: record.nom,
+        raison: RAISON_TACHE_INTERROMPUE,
+      });
+      this.logger.warn("sources.tache.interrompue", {
+        source: record.nom,
+        bot: this.botId ?? "",
+      });
+      interrompues.push({ ...record, raisonInactive: RAISON_TACHE_INTERROMPUE });
+    }
+    return interrompues;
+  }
+
+  /**
    * Crée une CHAÎNE D'ÉTAPES (lot 33) — **ATOMIQUE** : tout ou rien.
    *
    * ⚠️ UN SEUL appel pour la chaîne entière, jamais une boucle d'appels : si la place
@@ -1324,6 +1427,14 @@ export class SourcesService {
       const raison =
         target.raison ?? "Aucune conversation « Déclencheurs » disponible : rien n'a été lancé.";
       this.journal?.append({ event: "echec", source: nom, raison });
+      // ⚠️ AUDIT 2026-11-20 (④) — `bot_sans_host` est un REFUS, pas un échec : rien n'a
+      // été TENTÉ (le host du bot n'est pas démarré), la tâche n'a donc pas à être
+      // marquée « échouée » puis éteinte. Le balayeur la RÉARME (`balayerPonctuel`) pour
+      // la retenter dans la fenêtre de rattrapage. ⚠️ Et surtout : jamais de repli sur le
+      // host d'un autre bot — c'est ce repli qui effaçait le `sessionId` d'un rappel.
+      if (target.code === CODE_BOT_SANS_HOST) {
+        return refus(raison);
+      }
       return { outcome: "failed", raison, fin: Promise.resolve({ reason: "error", texte: "" }) };
     }
     if (options.signal?.aborted === true) {
@@ -1949,7 +2060,7 @@ export class SourcesService {
   private async cibleDePassage(
     record: SourceRecord,
   ): Promise<{
-    target: { sessionId?: string; raison?: string; candidate?: boolean };
+    target: { sessionId?: string; raison?: string; candidate?: boolean; code?: string };
     perso: boolean;
   }> {
     if (record.declencheur.type === "ponctuel" && record.sessionId !== undefined) {
@@ -1980,6 +2091,8 @@ export class SourcesService {
     sessionId?: string;
     raison?: string;
     candidate?: boolean;
+    /** Code du refus du host (ex. `bot_sans_host`) : le service en tire un REFUS nommé. */
+    code?: string;
   }> {
     const waker = this.waker;
     if (!waker) {
@@ -2001,7 +2114,11 @@ export class SourcesService {
     try {
       created = await waker.newSession();
     } catch (error) {
-      return { raison: describeWakeFailure(error) };
+      const code = errorCode(error);
+      return {
+        raison: describeWakeFailure(error),
+        ...(code !== undefined ? { code } : {}),
+      };
     }
     // ⚠️ `newSession()` VOLE le focus : on le rend (mécanique existante,
     // `service.ts` → `restoreFocus`). Le fil n'est PAS caché — il ne sera
