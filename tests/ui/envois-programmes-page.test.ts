@@ -112,10 +112,18 @@ describe("volet « Envois programmés » — règles d'affichage", () => {
     expect(trierEnvois(undefined)).toEqual([]);
   });
 
-  it("affiche TOUJOURS le plafond et l'horizon (le refus du modèle s'explique)", () => {
+  // ⚠️ RÉÉCRITURE (2026-11-22) : l'horizon de 30 jours a été RETIRÉ (« retirer la
+  // limite : oui »). Le compteur affiche donc le plafond et le délai minimal, et
+  // JAMAIS « horizon 30 jours » — sinon l'interface mentirait sur une limite qui n'existe
+  // plus.
+  it("affiche TOUJOURS le plafond et le délai minimal, et PLUS AUCUN horizon", () => {
     expect(
-      texteCompteEnvois({ enAttente: 2, maximumEnAttente: 20, horizonJours: 30, delaiMinSecondes: 30 }),
-    ).toBe("2 en attente · maximum 20 · horizon 30 jours · au moins 30 s d'avance");
+      texteCompteEnvois({ enAttente: 2, maximumEnAttente: 20, delaiMinSecondes: 30 }),
+    ).toBe("2 en attente · maximum 20 · au moins 30 s d'avance");
+    // Un champ `horizonJours` résiduel (ancien serveur) n'est PAS affiché.
+    expect(
+      texteCompteEnvois({ enAttente: 1, maximumEnAttente: 20, horizonJours: 30, delaiMinSecondes: 30 }),
+    ).not.toContain("horizon");
     expect(texteCompteEnvois({})).toBe("0 en attente");
   });
 
@@ -219,12 +227,12 @@ describe("API /api/sources/envois — lecture GARDÉE et annulation", () => {
         envois: Array<Record<string, unknown>>;
         enAttente: number;
         maximumEnAttente: number;
-        horizonJours: number;
         delaiMinSecondes: number;
       };
       expect(corps.enAttente).toBe(1);
       expect(corps.maximumEnAttente).toBe(20);
-      expect(corps.horizonJours).toBe(30);
+      // ⚠️ 2026-11-22 : la route ne rend PLUS d'horizon (il n'existe plus).
+      expect((corps as { horizonJours?: number }).horizonJours).toBeUndefined();
       expect(corps.delaiMinSecondes).toBe(30);
       expect(corps.envois[0]).toMatchObject({
         texte: "Message programmé.",

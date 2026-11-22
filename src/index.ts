@@ -274,6 +274,7 @@ import {
   brancherPreAutorisationsParBot,
   portPreAutorisations,
   type ModeBots,
+  type ModificationTacheInput,
   type PileSourcesBot,
   type PlanificationTacheInput,
 } from "./sources/index.js";
@@ -2404,13 +2405,21 @@ async function main(): Promise<void> {
     programmer: async (request: ProgrammationInput) => envoisProgrammes.programmer(request),
   };
   /**
-   * Port rendu à l'OUTIL `planifier_tache` (lot 31) : programmer une TÂCHE que le worker
-   * lourd exécutera à l'heure dite. Le service tient toutes les bornes (30 s, 30 jours,
-   * quota), le nom slugifié et la cible — l'outil ne décide de rien.
+   * Port rendu aux OUTILS de TÂCHES (lot 31 + 2026-11-22) : programmer une tâche que le
+   * worker lourd exécutera à l'heure dite, la lister, la modifier, la supprimer. Le
+   * service tient toutes les bornes (30 s, quota de 20, 20 sources durables, fin de
+   * récurrence), le nom slugifié et la cible — l'outil ne décide de rien.
+   * ⚠️ AUCUN HORIZON de date (2026-11-22) : une échéance lointaine est acceptée.
    */
   const portPlanificationTache = {
     planifier: async (request: PlanificationTacheInput) =>
       sourcesService.planifierTache(request),
+    // ⚠️ GESTION DES TÂCHES (2026-11-22) : lister/modifier/supprimer — MÊME service,
+    // donc MÊME `sources.json` (celui du bot de la pile) et mêmes bornes. Aucune
+    // capacité nouvelle : les outils restent dans le groupe `planifierTaches`.
+    lister: async () => sourcesService.listerTaches(),
+    modifier: async (request: ModificationTacheInput) => sourcesService.modifierTache(request),
+    supprimer: async (request: { id: string }) => sourcesService.supprimerTache(request.id),
   };
   /**
    * ⚠️ AUDIT 2026-11-20 — PORTS DE PLANIFICATION **PAR BOT** (défaut ①).
@@ -2807,9 +2816,10 @@ async function main(): Promise<void> {
         // ancrage au fil). Ce module ne fait qu'appliquer la BORNE de la plateforme
         // (la même que `publier_dans_canal`, `couperPourPlateforme`) puis publier.
         // ⚠️ ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28) : le canal du run est la
-        // cible par défaut, et le port borne tout (30 s minimum, 30 jours, 20 en
-        // attente, canaux SUIVIS) — le modèle ne peut pas le contourner. Aucun modèle
-        // n'est appelé à l'heure dite : le texte est FIGÉ.
+        // cible par défaut, et le port borne tout (30 s minimum, 20 en attente, canaux
+        // SUIVIS) — le modèle ne peut pas le contourner, et AUCUNE date n'est refusée
+        // pour son éloignement (2026-11-22). Aucun modèle n'est appelé à l'heure dite :
+        // le texte est FIGÉ.
         // ⚠️ AUDIT 2026-11-20 (①) : le port est celui du bot QUI A REÇU LE MESSAGE —
         // ses canaux suivis sont les SIENS (le canal de `grolaf` n'est pas dans le
         // miroir de la pile : c'était le refus systématique d'avant ce correctif).

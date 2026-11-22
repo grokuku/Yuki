@@ -67,6 +67,11 @@ type DemandeEnvoiProgramme = Parameters<
 type DemandePlanification = Parameters<
   NonNullable<PiHostOptions["planifierTache"]>["planifier"]
 >[0];
+// ⚠️ Modification d'une tâche (`modifier_tache`, 2026-11-22) : dérivée de la façade,
+// comme les autres demandes — ce module n'importe rien de `src/pi/sdk/**`.
+type ModificationTache = NonNullable<
+  Parameters<NonNullable<NonNullable<PiHostOptions["planifierTache"]>["modifier"]>>[0]
+>;
 
 /** Journal minimal attendu (le `Logger` de l'application le satisfait). */
 export interface HostsBotLogger {
@@ -365,9 +370,15 @@ export function portsHostBot(
       : {}),
     ...(pile !== undefined
       ? {
+          // ⚠️ LES QUATRE MÉTHODES passent par LE service de CE bot (`pile.service`) :
+          // aucune tâche d'un autre bot ne peut être listée, modifiée ni supprimée ici.
           planifierTache: {
             planifier: async (request: DemandePlanification) =>
               pile.service.planifierTache(request),
+            lister: async () => pile.service.listerTaches(),
+            modifier: async (request: ModificationTache) => pile.service.modifierTache(request),
+            supprimer: async (request: { id: string }) =>
+              pile.service.supprimerTache(request.id),
           },
         }
       : {}),

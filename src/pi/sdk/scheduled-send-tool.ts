@@ -141,8 +141,9 @@ export function createScheduledSendTools(
       "il désigne un canal SUIVI (comme `publier_dans_canal`, qui te donne la liste). " +
       "`fichier_ids` joint des fichiers du store (trois au maximum, seulement des " +
       "fichiers de CETTE conversation, et seulement vers un canal). " +
-      "Bornes : au moins 30 secondes d'avance, 30 jours au plus, 20 envois en attente " +
-      "au total. Un refus dit toujours pourquoi. L'envoi est visible et annulable en " +
+      "Bornes : au moins 30 secondes d'avance et 20 envois en attente au total ; " +
+      "AUCUNE limite de date (une heure lointaine est acceptée). " +
+      "Un refus dit toujours pourquoi. L'envoi est visible et annulable en " +
       "permanence dans Configuration → Déclencheurs → « Envois programmés ».",
     promptSnippet:
       "programmer_envoi(quand, texte, canal?, fichier_ids?) — publie un message PLUS " +

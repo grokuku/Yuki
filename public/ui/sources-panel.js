@@ -82,6 +82,8 @@ import {
   libelleEtatEnvoi,
   texteCibleEnvoi,
   texteCompteEnvois,
+  texteCompteTaches,
+  texteCompteDurables,
   texteQuandEnvoi,
   texteResumeEnvoi,
   trierEnvois,
@@ -790,6 +792,13 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal, botId = "" }) {
     envois: [],
     envoisBornes: {},
     envoisErreur: "",
+    /**
+     * ⚠️ 2026-11-22 — BORNES des quotas (tâches ponctuelles, déclencheurs durables) et
+     * rétention des tâches terminées, rendues par le SERVEUR (`GET /api/sources`).
+     * ⚠️ Elles existent pour être affichées AVANT le refus : le quota ne doit plus
+     * s'apprendre en échouant.
+     */
+    bornes: {},
   };
 
   /**
@@ -1123,6 +1132,21 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal, botId = "" }) {
   /** Les TROIS sections — toujours rendues, même vides (aucune disparition muette). */
   function renderSections() {
     sectionsEl.textContent = "";
+    // ⚠️ 2026-11-22 — LES QUOTAS, AFFICHÉS AVANT TOUT REFUS. Avant ce correctif, on ne
+    // découvrait la borne de 20 tâches ponctuelles qu'en recevant un refus (et ce refus
+    // promettait une place qui ne se libérait jamais). Le compteur est donc permanent,
+    // au-dessus des sections : combien de tâches, combien sont terminées, combien de
+    // temps elles restent, et combien de déclencheurs durables.
+    sectionsEl.append(
+      h("p", {
+        class: "config-helper declencheurs-quotas",
+        role: "status",
+        text: `${texteCompteTaches(state.sources, state.bornes)} · ${texteCompteDurables(
+          state.sources,
+          state.bornes,
+        )}`,
+      }),
+    );
     // ⚠️ LOT 33 — les étapes de chaîne ne sont PAS rendues en lignes isolées : elles ont
     // leur CARTE (une par chaîne, étapes dans l'ordre), où leur nom ET leur état restent
     // visibles. Les trois sections historiques ne décrivent donc que les déclencheurs
@@ -1296,10 +1320,12 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal, botId = "" }) {
       // nom à celui du registre local (il peut avoir été renommé entre-temps).
       state.bot = data?.bot && typeof data.bot === "object" ? data.bot : null;
       state.bots = Array.isArray(data?.bots) ? data.bots : [];
+      state.bornes = data?.bornes && typeof data.bornes === "object" ? data.bornes : {};
       state.error = "";
     } catch (error) {
       state.sources = [];
       state.bot = null;
+      state.bornes = {};
       state.error = apiMessage(error, "Impossible de lire les sources.");
     }
     errorEl.textContent = state.error;
@@ -1694,7 +1720,6 @@ export function initSourcesPanel({ root, HolafFetch, HolafModal, botId = "" }) {
       state.envoisBornes = {
         enAttente: data?.enAttente,
         maximumEnAttente: data?.maximumEnAttente,
-        horizonJours: data?.horizonJours,
         delaiMinSecondes: data?.delaiMinSecondes,
       };
       state.envoisErreur = "";

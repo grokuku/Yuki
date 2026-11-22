@@ -41,6 +41,7 @@ import {
   DEFAULT_PLAFOND_MS,
   RATTRAPAGE_MAX_MS,
   RAISON_TACHE_EN_COURS,
+  RETENTION_TACHES_TERMINEES_JOURS,
   type SourceRecord,
 } from "./types.js";
 
@@ -87,6 +88,14 @@ export interface BalayeurStore {
    * Persisté : c'est ce qui rend « reste 6/14 » vrai après un redémarrage.
    */
   incrementerOccurrence(nom: string): number;
+  /**
+   * ⚠️ 2026-11-22 — PURGE des TÂCHES PONCTUELLES TERMINÉES (7 jours). C'est elle qui
+   * LIBÈRE une place du quota `MAX_TACHES_PONCTUELLES` : le message de refus promettait
+   * cette libération, rien ne la faisait.
+   * ⚠️ Optionnel : un store factice (tests) peut ne pas la porter — dans ce cas rien
+   * n'est purgé, et le balayeur fonctionne exactement comme avant.
+   */
+  purgerTachesTerminees?(jours?: number): SourceRecord[];
 }
 
 /**
@@ -351,6 +360,11 @@ export class DeclencheurBalayeur {
           });
         }
       }
+      // ⚠️ PURGE DES TÂCHES TERMINÉES (2026-11-22) : elle est décidée par CE tick, sur le
+      // `sources.json` de CE bot (le balayeur est par bot, `BalayeurBots`), donc la purge
+      // est PAR BOT et le journal qui la trace est celui du bot. Elle ne touche jamais
+      // une tâche armée ni une étape de chaîne (`SourcesStore.purgerTachesTerminees`).
+      this.purgerTachesTerminees();
       // ⚠️ CONSOLIDATION HEBDOMADAIRE (lot 29) : décidée ici, JAMAIS attendue. Une
       // passe peut durer plusieurs minutes (plusieurs appels au modèle lourd) :
       // l'attendre retarderait tous les déclencheurs planifiés du même tick.
@@ -378,6 +392,40 @@ export class DeclencheurBalayeur {
     } finally {
       this.balayageEnCours = false;
     }
+  }
+
+  /**
+   * Purge les tâches ponctuelles TERMINÉES trop anciennes — et le DIT (journal `purge`).
+   *
+   * ⚠️ Une purge silencieuse serait une disparition : chaque tâche retirée laisse une
+   * ligne dans `declencheurs-journal.jsonl` du bot, avec son nom et la rétention
+   * appliquée. C'est la trace qui explique pourquoi une place s'est libérée.
+   */
+  private purgerTachesTerminees(): void {
+    const store = this.options.store;
+    if (typeof store.purgerTachesTerminees !== "function") return;
+    let retirees: SourceRecord[];
+    try {
+      retirees = store.purgerTachesTerminees();
+    } catch (error) {
+      this.options.logger.warn("sources.balayeur.purge_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    if (retirees.length === 0) return;
+    for (const record of retirees) {
+      this.journaler(
+        "purge",
+        record.nom,
+        `Tâche terminée retirée après ${RETENTION_TACHES_TERMINEES_JOURS} jours : sa ` +
+          "place du quota de tâches ponctuelles est libérée.",
+      );
+    }
+    this.options.logger.info("sources.balayeur.taches.purgees", {
+      taches: retirees.map((record) => record.nom),
+      retention_jours: RETENTION_TACHES_TERMINEES_JOURS,
+    });
   }
 
   private async balayer(record: SourceRecord, maintenant: number): Promise<void> {
@@ -755,7 +803,7 @@ export class DeclencheurBalayeur {
   }
 
   private journaler(
-    event: "saut" | "plafond" | "desactive" | "echec" | "refus",
+    event: "saut" | "plafond" | "desactive" | "echec" | "refus" | "purge",
     source: string,
     raison: string,
   ): void {

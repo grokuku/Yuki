@@ -80,7 +80,10 @@ export const PHRASES_OUTILS: Readonly<Record<string, string>> = {
   envoyer_fichier: "Envoyer un fichier de la conversation à l'utilisateur.",
   envoyer_message: "Publier un message tout de suite, avant la fin de la réponse.",
   programmer_envoi: "Programmer un envoi ou un RAPPEL à une heure dite.",
-  planifier_tache: "Planifier une tâche qui réveillera un agent plus tard.",
+  planifier_tache: "Planifier une tâche qui réveillera un agent plus tard (ponctuelle ou récurrente).",
+  lister_taches: "Lister les tâches planifiées que tu as créées (horaire, état, raison d'extinction).",
+  modifier_tache: "Modifier une tâche planifiée que tu as créée (horaire, récurrence, instruction, fin).",
+  supprimer_tache: "Supprimer définitivement une tâche planifiée que tu as créée.",
   // Fichiers des machines appairées
   recuperer_fichier: "Récupérer un fichier depuis une machine appairée.",
   deposer_fichier: "Déposer un fichier sur une machine appairée.",

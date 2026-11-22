@@ -3,7 +3,9 @@
  *
  * ⚠️ CE QUE CES TESTS FERMENT (et ce qu'ils ne testent pas) :
  *
- *  ① les TROIS bornes de `planifier_tache` (30 s, 30 jours, 4 000 caractères) —
+ *  ① les bornes de `planifier_tache` (30 s, 4 000 caractères) — ⚠️ l'HORIZON de
+ *    30 jours a été RETIRÉ le 2026-11-22 (« retirer la limite : oui ») : les tests de
+ *    refus à 31 jours sont devenus des tests d'ACCEPTATION à 31 jours, 1 an et 5 ans —
  *    ⚠️ elles passent DÉJÀ sur l'origine : le code des bornes était juste, seul le
  *    TEST manquait. Elles verrouillent donc un comportement existant (dont les
  *    limites inclusives/exclusives, désormais DOCUMENTÉES ici) ;
@@ -28,7 +30,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { DELAI_MIN_MS, HORIZON_MAX_MS } from "../../src/chat/envois/types.js";
+import { DELAI_MIN_MS } from "../../src/chat/envois/types.js";
 import { hoteSansHost } from "../../src/sources/ports-bot.js";
 import { SourcesInbox } from "../../src/sources/inbox.js";
 import { DeclencheurJournal, type DeclencheurJournalRecord } from "../../src/sources/journal.js";
@@ -248,22 +250,34 @@ describe("① bornes de `planifier_tache` — refus LISIBLES et limites document
     const ok = valider("dans 30 s");
     expect(ok.ok).toBe(true);
     if (!ok.ok) return;
-    expect(ok.at - T0).toBe(DELAI_MIN_MS);
+    expect((ok.at as number) - T0).toBe(DELAI_MIN_MS);
   });
 
-  it("horizon > 30 jours REFUSÉ, avec le nombre de jours demandé", () => {
-    const refus = valider("dans 31 jours");
+  // ⚠️ RÉÉCRITURE (2026-11-22) : ces deux tests vérifiaient le REFUS au-delà de 30 jours.
+  // La limite a été retirée à la demande de l'utilisateur : ils vérifient désormais
+  // l'ACCEPTATION, en nommant 31 jours, 1 an et 5 ans.
+  it("31 jours, 1 an et 5 ans sont ACCEPTÉS (plus aucun horizon)", () => {
+    for (const [quand, jours] of [
+      ["dans 31 jours", 31],
+      ["dans 365 jours", 365],
+      ["dans 1825 jours", 1825],
+    ] as const) {
+      const ok = valider(quand);
+      expect(ok.ok).toBe(true);
+      if (!ok.ok) return;
+      expect((ok.at as number) - T0).toBe(jours * 86_400_000);
+      // Aucun refus ne parle plus d'horizon : la notion n'existe plus.
+      expect(ok.quandLisible).not.toContain("horizon");
+    }
+  });
+
+  it("⚠️ 30 s reste la SEULE borne de temps (non-régression : 29 s est toujours refusé)", () => {
+    const refus = valider("dans 29 s");
     expect(refus.ok).toBe(false);
     if (refus.ok) return;
-    expect(refus.raison).toContain("30 jours");
-    expect(refus.raison).toContain("31 jours");
-  });
-
-  it("LIMITE INCLUSIVE : exactement 30 jours est ACCEPTÉ (le refus est strictement > 30 j)", () => {
-    const ok = valider("dans 30 jours");
-    expect(ok.ok).toBe(true);
-    if (!ok.ok) return;
-    expect(ok.at - T0).toBe(HORIZON_MAX_MS);
+    expect(refus.raison).toContain("30 secondes");
+    const loin = valider("dans 1825 jours");
+    expect(loin.ok).toBe(true);
   });
 
   it("instruction > 4 000 caractères REFUSÉE, en nommant la longueur ET le maximum", () => {
@@ -282,11 +296,10 @@ describe("① bornes de `planifier_tache` — refus LISIBLES et limites document
     expect(ok.instruction).toHaveLength(MAX_INSTRUCTION_TACHE_CHARS);
   });
 
-  it("⚠️ les trois bornes passent par le PORT (aucune tâche n'est écrite si refusée)", () => {
+  it("⚠️ les bornes passent par le PORT (aucune tâche n'est écrite si refusée)", () => {
     const h = harnais();
     for (const [quand, instruction] of [
       ["dans 29 s", "résume"],
-      ["dans 31 jours", "résume"],
       ["dans 5 min", "a".repeat(MAX_INSTRUCTION_TACHE_CHARS + 1)],
     ] as const) {
       const issue = h.service.planifierTache({
@@ -297,6 +310,14 @@ describe("① bornes de `planifier_tache` — refus LISIBLES et limites document
       expect(issue.ok).toBe(false);
     }
     expect(h.store.tachesPonctuelles).toBe(0);
+    // ⚠️ Et une date TRÈS lointaine, elle, est écrite (plus d'horizon).
+    const loin = h.service.planifierTache({
+      quand: "dans 365 jours",
+      instruction: "résume",
+      conversation: { session: "session-instance" },
+    });
+    expect(loin.ok).toBe(true);
+    expect(h.store.tachesPonctuelles).toBe(1);
   });
 });
 

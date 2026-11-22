@@ -382,6 +382,12 @@ describe("chaîne complète — Mattermost → generer_image → fichier → fil
           // pour une raison de câblage de TEST.
           planifierTache: {
             planifier: async () => ({ ok: false, raison: "test" }),
+            // ⚠️ GESTION DES TÂCHES (2026-11-22) : mêmes outils du socle `toujours`,
+            // donc les mêmes ports à fournir — sinon la parité politique ↔ définitions
+            // serait fausse pour une raison de câblage de TEST.
+            lister: async () => [],
+            modifier: async () => ({ ok: false, raison: "test" }),
+            supprimer: async () => ({ ok: false, raison: "test" }),
           },
           images: {
             // Générateur ComfyUI SIMULÉ : il écrit dans le VRAI store d'images et

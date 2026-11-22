@@ -37,7 +37,6 @@ import { analyserQuand, formaterInstantEnvoi } from "./quand.js";
 import type { EnvoisProgrammesStore } from "./store.js";
 import {
   DELAI_MIN_MS,
-  HORIZON_MAX_MS,
   MAX_ENVOIS_EN_ATTENTE,
   RATTRAPAGE_MAX_ENVOI_MS,
   type CibleEnvoi,
@@ -135,11 +134,6 @@ export const RAISON_DELAI_MIN = (secondes: number): string =>
   `d'avance (demandé : ${secondes} s). Pour publier TOUT DE SUITE, n'utilise pas cet ` +
   "outil : `envoyer_message` (cette conversation) ou `publier_dans_canal`.";
 
-/** Horizon dépassé (30 jours). */
-export const RAISON_HORIZON = (jours: number): string =>
-  `Rien n'a été programmé : l'horizon maximal est de ${Math.round(HORIZON_MAX_MS / 86_400_000)} ` +
-  `jours (demandé : ${jours} jours).`;
-
 /** Date déjà passée. */
 export const RAISON_PASSEE = (lisible: string): string =>
   `Rien n'a été programmé : cette heure est déjà passée (${lisible}). Indique une heure ` +
@@ -221,9 +215,8 @@ export class EnvoisProgrammesService {
     if (delai < DELAI_MIN_MS) {
       return { ok: false, raison: RAISON_DELAI_MIN(Math.floor(delai / 1000)) };
     }
-    if (delai > HORIZON_MAX_MS) {
-      return { ok: false, raison: RAISON_HORIZON(Math.ceil(delai / 86_400_000)) };
-    }
+    // ⚠️ AUCUN HORIZON MAXIMAL (décision du 2026-11-22) : une date lointaine est
+    // ACCEPTÉE — le délai minimal ci-dessus reste la seule borne de temps.
 
     // ④ CIBLE : un canal SUIVI (comme `publier_dans_canal`), ou la conversation
     //    COURANTE. ⚠️ La résolution passe par `resoudreCanal` — la MÊME fonction que

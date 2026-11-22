@@ -77,6 +77,13 @@ export const EVENEMENTS_JOURNAL = [
   ["envoi_publie", "Envois publiés"],
   ["envoi_annule", "Envois annulés"],
   ["envoi_echec", "Envois échoués"],
+  // ⚠️ 2026-11-22 — le modèle MODIFIE et SUPPRIME des tâches : les deux actes sont
+  // tracés (une heure changée, une récurrence supprimée) et donc filtrables ici.
+  ["tache_modifiee", "Tâches modifiées"],
+  ["tache_supprimee", "Tâches supprimées"],
+  // ⚠️ 2026-11-22 — PURGE automatique des tâches terminées (7 jours) : c'est elle qui
+  // libère une place du quota. Une disparition silencieuse serait incompréhensible.
+  ["purge", "Tâches purgées (quota libéré)"],
   // ⚠️ AUDIT 2026-11-20 (③) — un bot ACTIF dont le host n'est pas démarré ne
   // balaie pas ses tâches : le balayeur écrit une ligne, elle doit être lisible
   // (sinon la page Déclencheurs ne peut pas expliquer le silence).
@@ -393,6 +400,50 @@ function texteQuandBase(source) {
   return `planning « ${expression} » (${fuseau}) · prochain passage : ${texteProchainPassage(source)}`;
 }
 
+/**
+ * COMPTES du quota de TÂCHES PONCTUELLES, affichés AVANT tout refus.
+ *
+ * ⚠️ DÉFAUT CORRIGÉ (2026-11-22) : le quota de 20 tâches ne s'apprenait qu'en échouant,
+ * et le message de refus promettait une place qui ne se libérait jamais. Les deux sont
+ * réparés : la purge automatique existe (7 jours), et ce compteur dit en permanence
+ * combien de places sont prises, combien de tâches sont TERMINÉES (donc supprimables),
+ * et au bout de combien de temps elles partent d'elles-mêmes.
+ *
+ * `bornes` vient du serveur (`GET /api/sources` → `bornes`), jamais d'une constante
+ * recopiée ici : si la borne change, l'affichage suit.
+ */
+export function texteCompteTaches(sources, bornes = {}) {
+  const liste = Array.isArray(sources) ? sources : [];
+  const ponctuelles = liste.filter((source) => source?.declencheur?.type === "ponctuel");
+  const maximum = entierPositif(bornes?.maximumTachesPonctuelles);
+  const retention = entierPositif(bornes?.retentionTachesTermineesJours);
+  const armees = ponctuelles.filter((source) => source.actif !== false).length;
+  const terminees = ponctuelles.length - armees;
+  const morceaux = [];
+  morceaux.push(
+    maximum > 0
+      ? `${ponctuelles.length} sur ${maximum} tâches ponctuelles`
+      : `${ponctuelles.length} tâche(s) ponctuelle(s)`,
+  );
+  morceaux.push(`${armees} à venir`);
+  morceaux.push(`${terminees} terminée(s)`);
+  if (retention > 0 && terminees > 0) {
+    morceaux.push(`les terminées sont supprimées après ${retention} jours`);
+  }
+  morceaux.push("supprimer une tâche libère une place tout de suite");
+  return morceaux.join(" · ");
+}
+
+/** COMPTES des DÉCLENCHEURS DURABLES (webhook + planning), même dessein que ci-dessus. */
+export function texteCompteDurables(sources, bornes = {}) {
+  const liste = Array.isArray(sources) ? sources : [];
+  const durables = liste.filter((source) => source?.declencheur?.type !== "ponctuel");
+  const maximum = entierPositif(bornes?.maximumSources);
+  return maximum > 0
+    ? `${durables.length} sur ${maximum} déclencheurs durables`
+    : `${durables.length} déclencheur(s) durable(s)`;
+}
+
 /** Prochain passage (⚠️ « aucun » quand il n'y en a pas, jamais une case vide). */
 export function texteProchainPassage(source) {
   if (source?.declencheur?.type === "ponctuel") {
@@ -615,19 +666,20 @@ export function texteResumeEnvoi(envoi, max = 140) {
 }
 
 /**
- * Compteur affiché en tête du volet : « 2 en attente · maximum 20 · horizon 30 jours ».
+ * Compteur affiché en tête du volet : « 2 en attente · maximum 20 · au moins 30 s
+ * d'avance ».
  *
  * ⚠️ Le plafond est TOUJOURS affiché (même à 0 en attente) : sans lui, une personne qui
  * programme son 20ᵉ envoi ne comprend pas le refus du modèle.
+ * ⚠️ PLUS D'HORIZON à afficher (2026-11-22) : une date lointaine est acceptée, il n'y a
+ * donc plus de limite de jours à annoncer.
  */
 export function texteCompteEnvois(donnees) {
   const enAttente = entierPositif(donnees?.enAttente);
   const maximum = entierPositif(donnees?.maximumEnAttente);
-  const horizon = entierPositif(donnees?.horizonJours);
   const minimum = entierPositif(donnees?.delaiMinSecondes);
   const morceaux = [`${enAttente} en attente`];
   if (maximum > 0) morceaux.push(`maximum ${maximum}`);
-  if (horizon > 0) morceaux.push(`horizon ${horizon} jours`);
   if (minimum > 0) morceaux.push(`au moins ${minimum} s d'avance`);
   return morceaux.join(" · ");
 }

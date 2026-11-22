@@ -22,7 +22,8 @@ import {
   FUSEAU_ENVOIS,
   formaterInstantEnvoi,
 } from "../chat/envois/quand.js";
-import { DELAI_MIN_MS, HORIZON_MAX_MS } from "../chat/envois/types.js";
+import { DELAI_MIN_MS } from "../chat/envois/types.js";
+import { validerRecurrence, type RecurrenceValidee } from "./recurrence.js";
 import { MAX_INSTRUCTION_TACHE_CHARS } from "./types.js";
 
 /** Longueur maximale du LIBELLÉ retenu pour l'affichage (caractères). */
@@ -30,12 +31,29 @@ export const MAX_LIBELLE_TACHE_CHARS = 80;
 
 /** Demande de planification, telle que l'outil la transmet au port. */
 export interface PlanificationTacheInput {
-  /** Délai relatif (`dans 30 min`), heure (`16:10`), jour relatif (`demain à 8 h`), ISO. */
-  quand: string;
+  /**
+   * Délai relatif (`dans 30 min`), heure (`16:10`), jour relatif (`demain à 8 h`), ISO.
+   * ⚠️ ABSENT quand `recurrence` est fourni : les deux voies sont EXCLUSIVES (une
+   * récurrence n'a pas d'instant de départ à interpréter, c'est le cron qui décide).
+   */
+  quand?: string;
   /** Ce que le LLM devra FAIRE à l'heure dite (donnée de prompt, bornée). */
   instruction: string;
   /** Libellé libre choisi par le modèle ; omis ⇒ dérivé de l'instruction. */
   nom?: string;
+  /**
+   * RÉCURRENCE (2026-11-22) : « tous les jours à 8 h », « chaque lundi 9 h », « toutes
+   * les 6 heures », « le 1ᵉʳ du mois 10 h ». ⚠️ Elle devient un DÉCLENCHEUR DURABLE
+   * (`planning` + cron), pas un second mécanisme : mêmes bornes, même balayeur, même
+   * page de gestion (visible ET modifiable par l'humain).
+   * ⚠️ `unknown` À DESSEIN : c'est la valeur BRUTE du modèle, validée à l'exécution par
+   * `validerRecurrence` (aucun cast ne doit pouvoir contourner les bornes).
+   */
+  recurrence?: unknown;
+  /** Fin de récurrence par NOMBRE de passages (1–10 000). Sans fin ⇒ continue. */
+  occurrencesMax?: number;
+  /** Fin de récurrence par DATE (ISO). Sans fin ⇒ continue. */
+  jusquAu?: string;
   /**
    * Conversation DEMANDEUSE — résolue par l'appelant, jamais par le modèle.
    * ⚠️ C'est la cible de publication par défaut, pour que le résultat arrive LÀ où la
@@ -46,8 +64,8 @@ export interface PlanificationTacheInput {
 
 /** Planification VALIDÉE, prête à être persistée. */
 export interface PlanificationValidee {
-  /** Instant voulu (ms epoch). */
-  at: number;
+  /** Instant voulu (ms epoch). Absent d'une RÉCURRENCE (c'est le cron qui décide). */
+  at?: number;
   /** Instant EFFECTIF en français, DATE COMPLÈTE comprise (le modèle le répète). */
   quandLisible: string;
   /** Instruction normalisée (retours à la ligne normalisés, bornée). */
@@ -56,7 +74,23 @@ export interface PlanificationValidee {
   libelle: string;
   /** Fuseau de lecture retenu (`Europe/Paris`). */
   fuseau: string;
+  /**
+   * RÉCURRENCE validée (absente d'une tâche ponctuelle) : le déclencheur durable à
+   * créer — expression cron + fuseau + formulation française.
+   */
+  recurrence?: RecurrenceValidee;
 }
+
+/**
+ * Refus : une seule voie à la fois (tâche PONCTUELLE ou RÉCURRENCE).
+ *
+ * ⚠️ Refuser vaut mieux que choisir : un appel qui porte les deux demanderait au
+ * serveur de deviner laquelle des deux dates compte.
+ */
+export const RAISON_QUAND_ET_RECURRENCE =
+  "Rien n'a été programmé : `quand` (une fois) et `recurrence` (plusieurs fois) sont " +
+  "EXCLUSIFS. Donne `quand` pour une tâche ponctuelle, ou `recurrence` pour une " +
+  "récurrence — pas les deux.";
 
 /** Issue de la validation : une planification, ou une raison LISIBLE du refus. */
 export type ValidationPlanification =
@@ -85,17 +119,16 @@ export const RAISON_TACHE_DELAI_MIN = (secondes: number): string =>
   `Rien n'a été programmé : il faut au moins ${Math.round(DELAI_MIN_MS / 1000)} secondes ` +
   `d'avance (demandé : ${secondes} s).`;
 
-/** Refus : horizon (30 jours). */
-export const RAISON_TACHE_HORIZON = (jours: number): string =>
-  `Rien n'a été programmé : l'horizon maximal est de ` +
-  `${Math.round(HORIZON_MAX_MS / 86_400_000)} jours (demandé : ${jours} jours).`;
-
 /**
  * Valide une demande de tâche planifiée.
  *
  * ⚠️ ORDRE DES CONTRÔLES = ordre du DROIT : le premier refus est celui qu'on lit, il
- * doit donc être le plus utile. Instruction (le fond) → heure (quand) → bornes d'heure
- * → longueur.
+ * doit donc être le plus utile. Instruction (le fond) → voie (ponctuelle OU récurrence)
+ * → heure / récurrence → bornes d'heure → longueur.
+ *
+ * ⚠️ DEUX VOIES, UN SEUL RETOUR : `quand` produit un instant ABSOLU (déclencheur
+ * `ponctuel`), `recurrence` produit une EXPRESSION CRON (déclencheur `planning`). Les
+ * deux deviennent le MÊME objet persisté (`SourceRecord`) : aucune seconde mécanique.
  */
 export function validerPlanificationTache(
   input: PlanificationTacheInput,
@@ -106,24 +139,48 @@ export function validerPlanificationTache(
   const instruction = brut.replace(/\r\n?/g, "\n").trim();
   if (instruction === "") return { ok: false, raison: RAISON_INSTRUCTION_VIDE };
 
-  // ② HEURE : mêmes formes que `programmer_envoi` (même parseur, même fuseau).
-  const heure = analyserQuand(input.quand, maintenant);
+  const quandBrut = typeof input.quand === "string" ? input.quand.trim() : "";
+  const recurrenceBrute = input.recurrence;
+  if (quandBrut !== "" && recurrenceBrute !== undefined && recurrenceBrute !== null) {
+    return { ok: false, raison: RAISON_QUAND_ET_RECURRENCE };
+  }
+
+  // ① bis LONGUEUR : commune aux deux voies (ce qui est persisté est ce qui sera
+  // transmis) ; on refuse AVANT de tronquer.
+  if (instruction.length > MAX_INSTRUCTION_TACHE_CHARS) {
+    return { ok: false, raison: RAISON_INSTRUCTION_TROP_LONGUE(instruction.length) };
+  }
+
+  // ② RÉCURRENCE : traduite en `planning` (cron + fuseau). Aucune borne de délai ici :
+  // le PREMIER passage est calculé par le balayeur.
+  if (recurrenceBrute !== undefined && recurrenceBrute !== null) {
+    const recurrence = validerRecurrence(recurrenceBrute);
+    if (!recurrence.ok) return { ok: false, raison: recurrence.raison };
+    return {
+      ok: true,
+      quandLisible: recurrence.lisible,
+      instruction,
+      libelle: libelleDeTache(input.nom, instruction),
+      fuseau: recurrence.fuseau,
+      recurrence: {
+        expression: recurrence.expression,
+        fuseau: recurrence.fuseau,
+        lisible: recurrence.lisible,
+      },
+    };
+  }
+
+  // ③ HEURE : mêmes formes que `programmer_envoi` (même parseur, même fuseau).
+  const heure = analyserQuand(quandBrut, maintenant);
   if (!heure.ok) return { ok: false, raison: heure.raison };
 
-  // ③ BORNES : passé refusé (une ISO datée), puis 30 s de marge, puis 30 jours.
+  // ④ BORNES : passé refusé (une ISO datée), puis 30 s de marge.
+  // ⚠️ AUCUN HORIZON MAXIMAL (décision du 2026-11-22 : « retirer la limite : oui ») :
+  // une tâche peut viser une date ARBITRAIREMENT lointaine (trois mois, deux ans).
   const delai = heure.at - maintenant;
   if (delai < 0) return { ok: false, raison: RAISON_TACHE_PASSEE(formaterInstantEnvoi(heure.at)) };
   if (delai < DELAI_MIN_MS) {
     return { ok: false, raison: RAISON_TACHE_DELAI_MIN(Math.floor(delai / 1000)) };
-  }
-  if (delai > HORIZON_MAX_MS) {
-    return { ok: false, raison: RAISON_TACHE_HORIZON(Math.ceil(delai / 86_400_000)) };
-  }
-
-  // ④ LONGUEUR : ce qui est persisté est ce qui sera transmis ; on refuse AVANT de
-  // tronquer (une tâche tronquée ferait autre chose que ce qui a été demandé).
-  if (instruction.length > MAX_INSTRUCTION_TACHE_CHARS) {
-    return { ok: false, raison: RAISON_INSTRUCTION_TROP_LONGUE(instruction.length) };
   }
 
   return {

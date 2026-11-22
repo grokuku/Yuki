@@ -17,7 +17,9 @@
  *    sollicité que par `publierMessage`, jamais par `send` (qui démarrerait un run) ;
  *  ④ il SURVIT à un redémarrage (store relu depuis le disque) ;
  *  ⑤ il est ANNULABLE, et un envoi annulé ne part pas ;
- *  ⑥ les BORNES sont des refus EXPLICITES (date passée, texte vide, horizon, plafond) ;
+ *  ⑥ les BORNES sont des refus EXPLICITES (date passée, texte vide, plafond) — et
+ *    ⚠️ AUCUN HORIZON : une date ARBITRAIREMENT lointaine (+1 an, +5 ans) est ACCEPTÉE
+ *    (décision utilisateur du 2026-11-22 : « retirer la limite : oui ») ;
  *  ⑦ une cible DISPARUE est un échec JOURNALISÉ (aucune perte silencieuse) ;
  *  ⑧ ⚠️ le WORKER LOURD n'a pas l'outil (invariant « un seul rédacteur ») ;
  *  ⑨ c'est le BALAYEUR EXISTANT qui les exécute (aucun second `setInterval`).
@@ -35,7 +37,6 @@ import {
   DELAI_MIN_MS,
   EnvoisProgrammesService,
   EnvoisProgrammesStore,
-  HORIZON_MAX_MS,
   MAX_ENVOIS_EN_ATTENTE,
   RATTRAPAGE_MAX_ENVOI_MS,
   analyserQuand,
@@ -452,11 +453,6 @@ describe("envois programmés — bornes (refus explicites)", () => {
     ["texte vide", { quand: "dans 5 min", texte: "   " }, "le message est vide"],
     ["date passée", { quand: "2026-11-04T09:00:00+01:00", texte: "trop tard" }, "déjà passée"],
     ["délai minimal", { quand: "dans 1 s", texte: "trop tôt" }, "au moins 30 secondes"],
-    [
-      "horizon dépassé",
-      { quand: `dans ${Math.round(HORIZON_MAX_MS / 86_400_000) + 1} jours`, texte: "trop loin" },
-      "horizon maximal",
-    ],
   ];
 
   for (const [nom, params, attendu] of cas) {
@@ -669,8 +665,34 @@ describe("envois programmés — bornes exposées et description de l'outil", ()
     expect(tool.description).toContain("n'invente JAMAIS un minuteur");
   });
 
-  it("le délai minimal et l'horizon exportés sont ceux annoncés à l'outil", () => {
+  it("⚠️ PLUS D'HORIZON (2026-11-22) : +1 an et +5 ans sont ACCEPTÉS, la borne de date a disparu", async () => {
+    const rig = makeRig();
+    const tool = toolOf(rig.service, { canal: "mm-general" });
+    for (const [quand, jours] of [
+      ["dans 365 jours", 365],
+      ["dans 1825 jours", 1825],
+    ] as const) {
+      const result = await tool.execute(`loin-${jours}`, { quand, texte: `dans ${jours} jours` });
+      const texte = texteOf(result);
+      expect(texte).not.toContain("Rien n'a été programmé");
+      expect(texte).not.toContain("horizon");
+    }
+    const quand = rig.store.list().map((envoi) => Date.parse(envoi.quand));
+    expect(quand).toHaveLength(2);
+    // ⚠️ L'instant retenu est bien celui demandé (aucun arrondi à 30 jours).
+    expect(quand[1]! - quand[0]!).toBeGreaterThan(365 * 86_400_000);
+  });
+
+  it("NON-RÉGRESSION : le délai minimal de 30 s est TOUJOURS appliqué", () => {
     expect(DELAI_MIN_MS).toBe(30_000);
-    expect(HORIZON_MAX_MS).toBe(30 * 86_400_000);
+    const rig = makeRig();
+    const refus = rig.service.programmer({
+      quand: "dans 29 s",
+      texte: "trop tôt",
+      conversation: {},
+    });
+    expect(refus.ok).toBe(false);
+    if (!refus.ok) expect(refus.raison).toContain("30 secondes");
+    expect(rig.store.list()).toHaveLength(0);
   });
 });

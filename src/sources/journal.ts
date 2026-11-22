@@ -93,6 +93,19 @@ export type DeclencheurEvent =
   | "tache_planifiee"
   | "tache_consolidee"
   /**
+   * ⚠️ 2026-11-22 — GESTION DES TÂCHES PAR LE MODÈLE : `modifier_tache` et
+   * `supprimer_tache`. Une modification d'horaire ou une suppression change ce qui
+   * tournera demain : c'est une trace, pas un détail.
+   */
+  | "tache_modifiee"
+  | "tache_supprimee"
+  /**
+   * ⚠️ 2026-11-22 — PURGE AUTOMATIQUE d'une tâche ponctuelle TERMINÉE, après
+   * `RETENTION_TACHES_TERMINEES_JOURS` jours. C'est elle qui LIBÈRE une place du quota
+   * `MAX_TACHES_PONCTUELLES` : sans cette ligne, une tâche disparaîtrait sans trace.
+   */
+  | "purge"
+  /**
    * ⚠️ AUDIT 2026-11-20 (③) — le balayeur n'a PAS pu faire tourner un bot ACTIF
    * faute de host démarré. Le champ `source` porte l'identifiant du bot (le journal
    * est déjà le sien) : sans cette ligne, ses passages manquants étaient un silence.
@@ -116,6 +129,9 @@ export const DECLENCHEUR_EVENTS: readonly DeclencheurEvent[] = [
   "envoi_echec",
   "tache_planifiee",
   "tache_consolidee",
+  "tache_modifiee",
+  "tache_supprimee",
+  "purge",
   "bot_sans_host",
 ];
 
@@ -420,27 +436,12 @@ function parseRecord(line: string): DeclencheurJournalRecord | undefined {
   const raw = parsed as Record<string, unknown>;
   if (typeof raw["ts"] !== "string" || typeof raw["event"] !== "string") return undefined;
   if (typeof raw["source"] !== "string") return undefined;
+  // ⚠️ UNE SEULE SOURCE DE VÉRITÉ : la liste ci-dessus, recopiée à la main, avait pris
+  // du retard — un événement AJOUTÉ à `DeclencheurEvent` sans être ajouté ici était écrit
+  // puis IGNORÉ à la relecture (une purge ou une suppression de tâche devenait invisible
+  // dans la page Déclencheurs). On réutilise donc `isDeclencheurEvent`.
   const event = raw["event"];
-  if (
-    event !== "recu" &&
-    event !== "silence" &&
-    event !== "publie" &&
-    event !== "echec" &&
-    event !== "saut" &&
-    event !== "plafond" &&
-    event !== "desactive" &&
-    event !== "refus" &&
-    event !== "preautorisation" &&
-    event !== "envoi_programme" &&
-    event !== "envoi_publie" &&
-    event !== "envoi_annule" &&
-    event !== "envoi_echec" &&
-    event !== "tache_planifiee" &&
-    event !== "tache_consolidee" &&
-    event !== "bot_sans_host"
-  ) {
-    return undefined;
-  }
+  if (!isDeclencheurEvent(event)) return undefined;
   return {
     ts: raw["ts"],
     event,

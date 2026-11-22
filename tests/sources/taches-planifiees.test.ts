@@ -670,7 +670,15 @@ describe("outil `planifier_tache` — ce que le modèle lit, et qui y a droit", 
 
   it("⚠️ le WORKER LOURD n'a pas l'outil (invariant « un seul rédacteur »)", () => {
     expect(TOOL_POLICY.heavy.planifierTaches).toEqual([]);
-    expect(TOOL_POLICY.light.planifierTaches).toEqual(["planifier_tache"]);
+    // ⚠️ GARDE MODIFIÉE (2026-11-22) : le léger porte désormais AUSSI les trois outils de
+    // gestion (`lister_taches`, `modifier_tache`, `supprimer_tache`) — même capacité
+    // `programmation`, même groupe `toujours`, et le lourd reste à `[]`.
+    expect(TOOL_POLICY.light.planifierTaches).toEqual([
+      "planifier_tache",
+      "lister_taches",
+      "modifier_tache",
+      "supprimer_tache",
+    ]);
     // Même avec l'option activée, l'allowlist du lourd ne le contient pas.
     expect(toolAllowlist("heavy", { planifierTacheEnabled: true })).not.toContain(
       "planifier_tache",

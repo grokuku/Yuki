@@ -59,6 +59,9 @@ import {
   ChainesFullError,
   DECLENCHEUR_EVENTS,
   isDeclencheurEvent,
+  MAX_SOURCES,
+  MAX_TACHES_PONCTUELLES,
+  RETENTION_TACHES_TERMINEES_JOURS,
   SourceApiError,
   SourceValidationError,
   SourcesFullError,
@@ -75,7 +78,6 @@ import {
 } from "../../sources/index.js";
 import {
   DELAI_MIN_MS,
-  HORIZON_MAX_MS,
   MAX_ENVOIS_EN_ATTENTE,
   formaterInstantEnvoi,
   type EnvoiProgramme,
@@ -672,6 +674,15 @@ export async function handleSourcesRequest(
               : {}),
           })),
           conversations,
+          // ⚠️ 2026-11-22 — LES BORNES SONT RENDUES AVANT TOUT REFUS : le quota de tâches
+          // ponctuelles ne doit plus s'apprendre en échouant (c'était le défaut : la page
+          // n'affichait rien, et le 429 arrivait sans prévenir). La page lit ces valeurs
+          // pour afficher « N sur 20 » en permanence.
+          bornes: {
+            maximumTachesPonctuelles: MAX_TACHES_PONCTUELLES,
+            maximumSources: MAX_SOURCES,
+            retentionTachesTermineesJours: RETENTION_TACHES_TERMINEES_JOURS,
+          },
           // ⚠️ LOT 35j — LA PAGE INDIQUE LE BOT CONCERNÉ : sans cela, on ne sait pas
           // POUR QUI on vient de créer un déclencheur (chaque bot a SON `sources.json`).
           ...(botConcerne(input, deps) !== undefined
@@ -807,7 +818,7 @@ function handleEnvois(input: SourcesRequestInput, parts: string[]): SourcesHttpR
   const service = deps.envois;
   const bornes = {
     maximumEnAttente: MAX_ENVOIS_EN_ATTENTE,
-    horizonJours: Math.round(HORIZON_MAX_MS / 86_400_000),
+    // ⚠️ AUCUN HORIZON (2026-11-22) : la seule borne de temps est le délai minimal.
     delaiMinSecondes: Math.round(DELAI_MIN_MS / 1000),
   };
 

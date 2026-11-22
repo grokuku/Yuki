@@ -98,6 +98,11 @@ describe("createRemoteReplyGenerator — le prompt nomme le bot de SA plateforme
       "generer_image",
       "lire_fichier",
       "lister_fichiers",
+      // ⚠️ GESTION DES TÂCHES (2026-11-22) : même groupe `toujours` que
+      // `planifier_tache` — un run de canal qui CRÉE une tâche doit pouvoir la relire,
+      // la corriger et l'arrêter (le port la borne à SON bot).
+      "lister_taches",
+      "modifier_tache",
       // ⚠️ Tâche PLANIFIÉE (`planifier_tache`, lot 31) : groupe `toujours` — elle ne
       // touche à rien MAINTENANT (le travail se fait à l'heure dite, dans un worker sans
       // pré-autorisation). Depuis un canal, son résultat tombe dans le fil
@@ -110,6 +115,9 @@ describe("createRemoteReplyGenerator — le prompt nomme le bot de SA plateforme
       // ⚠️ Publication inter-canal : un MESSAGE, pas une action sur une machine ⇒
       // aucune approbation, donc présent quel que soit le réglage (décision A).
       "publier_dans_canal",
+      // ⚠️ GESTION DES TÂCHES (2026-11-22), suite : `supprimer_tache` (ordre alphabétique
+      // de la liste attendue, triée).
+      "supprimer_tache",
     ]);
     // Et le mode global, lui, aurait donné exactement la même liste : la différence n'est
     // donc visible que par la plateforme transmise, que ce test verrouille ci-dessus.

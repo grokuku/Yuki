@@ -37,13 +37,15 @@ export const ENVOIS_PROGRAMMES_SCHEMA_VERSION = 1;
 export const MAX_ENVOIS_EN_ATTENTE = 20;
 
 /**
- * HORIZON maximal d'une programmation (30 jours).
+ * ⚠️ AUCUN HORIZON MAXIMAL (décision utilisateur du 2026-11-22 : « retirer la limite :
+ * oui »).
  *
- * ⚠️ Au-delà, ce n'est plus « publie ça à 16h10 » mais un calendrier éditorial : la
- * personne qui a demandé ne se souvient plus du message, et personne ne relit la page
- * de gestion. Le dépassement est REFUSÉ en le disant.
+ * Un envoi programmé peut viser une date ARBITRAIREMENT lointaine (trois mois, deux
+ * ans) : « poste ça le 1ᵉʳ janvier » est une demande légitime, pas une erreur de
+ * saisie. Il ne reste donc que des bornes ADOSSÉES À QUELQUE CHOSE de réel : le délai
+ * minimal (30 s, période du balayeur) et le nombre d'envois en attente (lisibilité de
+ * la page de gestion, qui les rend annulables).
  */
-export const HORIZON_MAX_MS = 30 * 86_400_000;
 
 /**
  * DÉLAI MINIMAL entre la programmation et l'envoi (30 s).

@@ -44,6 +44,7 @@ export {
   MAX_TOURS_PAR_JOUR_LIMITE,
   MIN_PLAFOND_MS,
   RATTRAPAGE_MAX_MS,
+  RETENTION_TACHES_TERMINEES_JOURS,
   SILENCE_REPLY,
   SOURCE_RATE_LIMIT_PER_MINUTE,
   SOURCE_SESSION_ID_PATTERN,
@@ -233,13 +234,20 @@ export {
   validateMessage,
 } from "./service.js";
 export { tacheDeDeclencheur } from "./service.js";
-export type { PlanificationTacheOutcome } from "./service.js";
+export { raisonEtapeDeChaine, raisonTacheInconnue } from "./service.js";
+export type {
+  ModificationTacheInput,
+  ModificationTacheOutcome,
+  PlanificationTacheOutcome,
+  SuppressionTacheOutcome,
+  TacheResume,
+} from "./service.js";
 export {
   MAX_LIBELLE_TACHE_CHARS,
   RAISON_INSTRUCTION_TROP_LONGUE,
   RAISON_INSTRUCTION_VIDE,
+  RAISON_QUAND_ET_RECURRENCE,
   RAISON_TACHE_DELAI_MIN,
-  RAISON_TACHE_HORIZON,
   RAISON_TACHE_PASSEE,
   libelleDeTache,
   tachePonctuelle,
@@ -250,6 +258,17 @@ export type {
   PlanificationValidee,
   ValidationPlanification,
 } from "./taches.js";
+export {
+  MAX_HEURES_RECURRENCE,
+  MIN_HEURES_RECURRENCE,
+  RECURRENCE_FORMES_ATTENDUES,
+  validerRecurrence,
+} from "./recurrence.js";
+export type {
+  RecurrenceDemandee,
+  RecurrenceValidee,
+  ValidationRecurrence,
+} from "./recurrence.js";
 export type {
   DeclenchementFin,
   DeclenchementOptions,

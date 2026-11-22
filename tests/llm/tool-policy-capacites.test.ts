@@ -100,7 +100,17 @@ const ATTENDUS: Readonly<Record<CapaciteBot, readonly string[]>> = {
   execution: ["capturer_ecran", "run_command"],
   delegation: ["cancel_job", "delegate", "job_status", "steer_job"],
   secrets: ["demander_secret", "lister_secrets"],
-  programmation: ["planifier_tache", "programmer_envoi"],
+  // ⚠️ GARDE MODIFIÉE (2026-11-22) : la capacité `programmation` ouvre AUSSI les trois
+  // outils de GESTION des tâches — même décision (programmer) à un autre moment
+  // (corriger, arrêter). Capacité distincte refusée : un bot capable de programmer sans
+  // pouvoir annuler serait un piège.
+  programmation: [
+    "lister_taches",
+    "modifier_tache",
+    "planifier_tache",
+    "programmer_envoi",
+    "supprimer_tache",
+  ],
   memoire: [
     "archive_vie_anterieure",
     "ajouter_fait",
@@ -113,8 +123,9 @@ const ATTENDUS: Readonly<Record<CapaciteBot, readonly string[]>> = {
 };
 
 describe("35h ① — l'univers des outils est exhaustif et PARTITIONNÉ", () => {
-  it("la table de groupes couvre EXACTEMENT les outils custom (33)", () => {
-    expect(TOUS_LES_OUTILS_CUSTOM).toHaveLength(33);
+  it("la table de groupes couvre EXACTEMENT les outils custom (36)", () => {
+    // ⚠️ 33 → 36 le 2026-11-22 (lister_taches, modifier_tache, supprimer_tache).
+    expect(TOUS_LES_OUTILS_CUSTOM).toHaveLength(36);
     expect(new Set(TOUS_LES_OUTILS_CUSTOM).size).toBe(TOUS_LES_OUTILS_CUSTOM.length);
   });
 
@@ -144,7 +155,7 @@ describe("35h ① — l'univers des outils est exhaustif et PARTITIONNÉ", () =>
     }
   });
 
-  it("la table écrite à la main couvre les 12 capacités et les 33 outils", () => {
+  it("la table écrite à la main couvre les 12 capacités et les 36 outils", () => {
     expect(Object.keys(ATTENDUS).sort()).toEqual([...CAPACITES_BOT].sort());
     const total = Object.values(ATTENDUS).reduce((somme, liste) => somme + liste.length, 0);
     expect(total).toBe(TOUS_LES_OUTILS_CUSTOM.length + BUILTINS.length);
@@ -265,7 +276,15 @@ describe("35h ④ — la règle est une INTERSECTION (jamais un remplacement)", 
       { ...TOUT_ACTIVE, capacites: ["programmation"] },
       { chatMode: "mattermost", remoteAgents: false, remoteTools: false },
     );
-    expect([...avec].sort()).toEqual(["planifier_tache", "programmer_envoi"]);
+    // ⚠️ GARDE MODIFIÉE (2026-11-22) : la capacité ouvre AUSSI les trois outils de
+    // gestion des tâches (même décision, autre moment).
+    expect([...avec].sort()).toEqual([
+      "lister_taches",
+      "modifier_tache",
+      "planifier_tache",
+      "programmer_envoi",
+      "supprimer_tache",
+    ]);
   });
 
   it("aucune capacité n'AJOUTE d'outil : finale(capacités) ⊆ finale(tout)", () => {

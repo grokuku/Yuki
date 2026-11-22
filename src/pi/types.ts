@@ -233,8 +233,9 @@ export interface PiHostOptions {
    * texte FIGÉ, dans cette conversation ou dans un canal suivi.
    *
    * ⚠️ Aucun modèle n'est appelé à l'heure dite et aucune machine n'est touchée : c'est
-   * un message, pas une action. Le port porte les BORNES (délai minimal 30 s, horizon
-   * 30 jours, 20 envois en attente) et la persistance — l'outil ne décide de rien.
+   * un message, pas une action. Le port porte les BORNES (délai minimal 30 s, 20 envois
+   * en attente) et la persistance — l'outil ne décide de rien. ⚠️ AUCUN horizon de date
+   * (2026-11-22) : une échéance lointaine est acceptée.
    * Absent ⇒ aucun outil (host nu, tests).
    */
   envoisProgrammes?: ScheduledSendPort;
@@ -245,7 +246,9 @@ export interface PiHostOptions {
    *
    * ⚠️ À ne pas confondre avec `envoisProgrammes` : là-bas le texte est FIGÉ et aucun
    * modèle n'est appelé ; ici la tâche est EXÉCUTÉE. Le port porte les bornes (30 s,
-   * 30 jours, quota), le nom slugifié et la cible — l'outil ne décide de rien.
+   * quotas, fin de récurrence), le nom slugifié, la cible ET le périmètre (les tâches de
+   * CE bot, créées par le modèle) — l'outil ne décide de rien. ⚠️ AUCUN horizon de date
+   * (2026-11-22) : une échéance lointaine est acceptée.
    * Absent ⇒ aucun outil (host nu, tests, runs de canal).
    */
   planifierTache?: PlanifierTachePort;

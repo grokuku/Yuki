@@ -40,6 +40,8 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
+import { formaterInstantEnvoi } from "../chat/envois/quand.js";
+
 import {
   frameSources,
   MARQUEUR_DESACTIVATION,
@@ -59,10 +61,12 @@ import {
 import type { DeclencheurJournal } from "./journal.js";
 import { ChainesFullError, SourcesStore } from "./store.js";
 import {
+  RAISON_QUAND_ET_RECURRENCE,
   tachePonctuelle,
   validerPlanificationTache,
   type PlanificationTacheInput,
 } from "./taches.js";
+import { validerRecurrence } from "./recurrence.js";
 import {
   CODE_BOT_SANS_HOST,
   DEFAULT_FUSEAU,
@@ -71,6 +75,7 @@ import {
   isSourceDestination,
   MAX_PLAFOND_MS,
   MAX_REPLY_CHARS,
+  MAX_SOURCES,
   MAX_TITRE_CHARS,
   MIN_PLAFOND_MS,
   RAISON_TACHE_EN_COURS,
@@ -86,6 +91,7 @@ import {
   type SourceDelivery,
   type SourceMessageInput,
   type SourceRecord,
+  type SourceSettingsInput,
   type SourceView,
 } from "./types.js";
 
@@ -354,8 +360,120 @@ export type PlanificationTacheOutcome =
       quandLisible: string;
       /** Où le résultat sera publié (« cette conversation », « le fil … »). */
       cibleLisible: string;
+      /** `true` si la tâche est une RÉCURRENCE (déclencheur durable). */
+      recurrence?: true;
     }
   | { ok: false; raison: string };
+
+/**
+ * VUE D'UNE TÂCHE rendue au modèle (`lister_taches`, `modifier_tache`).
+ *
+ * ⚠️ Ni jeton, ni chemin, ni identifiant interne : seulement ce qui permet d'AGIR —
+ * l'id (le nom), ce qui tourne, quand, si c'est actif et pourquoi ça ne tourne plus.
+ */
+export interface TacheResume {
+  /** Identifiant stable (le nom slugifié) — celui qu'attendent les deux autres outils. */
+  nom: string;
+  /** Libellé humain. */
+  libelle: string;
+  /** `ponctuelle` (un seul passage) ou `recurrence` (déclencheur durable). */
+  genre: "ponctuelle" | "recurrence";
+  /** Instruction exécutée à l'heure dite. */
+  instruction: string;
+  /** Planification lisible (« le 5 novembre 2026 à 08:00 », « cron « 0 8 * * * » (Europe/Paris) »). */
+  planification: string;
+  /** Prochain passage en français (jamais une case vide). */
+  prochaineLisible: string;
+  /** État persisté : `suspendu` = éteinte (et la `raison` le dit). */
+  etat: "actif" | "suspendu";
+  /** Raison LISIBLE d'une extinction (`DÉSACTIVER`, fin de récurrence, plantage…). */
+  raison?: string;
+  occurrencesMax?: number;
+  occurrencesFaites?: number;
+  jusquAu?: string;
+  /** Où le résultat est publié. */
+  cible: "conversation" | "declencheurs";
+}
+
+/** Demande de MODIFICATION d'une tâche (`modifier_tache`). */
+export interface ModificationTacheInput {
+  /** Identifiant rendu par `lister_taches` (ou par `planifier_tache`). */
+  id: string;
+  /** Nouveau libellé humain. */
+  nom?: string;
+  /** Nouvelle instruction (ce que la tâche devra FAIRE). */
+  instruction?: string;
+  /** Nouvelle date d'une tâche PONCTUELLE (mêmes formes que `planifier_tache`). */
+  quand?: string;
+  /** Nouvelle récurrence (⚠️ incompatible avec `quand`) — valeur BRUTE, validée ici. */
+  recurrence?: unknown;
+  /** Nouvelle fin de récurrence par nombre de passages (`null` = la retirer). */
+  occurrencesMax?: number | null;
+  /** Nouvelle fin de récurrence par date (`null` = la retirer). */
+  jusquAu?: string | null;
+}
+
+/** Issue d'une modification : la tâche à jour, ou une raison LISIBLE du refus. */
+export type ModificationTacheOutcome =
+  | {
+      ok: true;
+      tache: TacheResume;
+      /** Prochain passage APRÈS modification (recalculé si l'horaire a changé). */
+      prochaineLisible: string;
+      /** `true` si le compteur de passages a été invalidé (horaire/récurrence changés). */
+      compteurInvalide: boolean;
+    }
+  | { ok: false; raison: string };
+
+/** Issue d'une suppression : le nom retiré, ou une raison LISIBLE du refus. */
+export type SuppressionTacheOutcome =
+  | { ok: true; nom: string; libelle: string }
+  | { ok: false; raison: string };
+
+/**
+ * Refus : identifiant INCONNU — jamais une opération silencieuse.
+ *
+ * ⚠️ Le message dit AUSSI le périmètre (« je ne vois que les tâches que tu as
+ * créées ») : un id valide d'une tâche créée par l'humain, ou d'une tâche d'un AUTRE
+ * bot, tombe ici et la raison est la MÊME — on ne révèle pas l'existence d'une tâche
+ * d'un autre bot.
+ */
+export const raisonTacheInconnue = (id: unknown): string =>
+  `Rien n'a été fait : aucune tâche « ${typeof id === "string" ? id : ""} » à toi. ` +
+  "Utilise `lister_taches` pour voir les identifiants exacts : je ne vois et ne touche " +
+  "que les tâches que TU as créées (les déclencheurs faits dans l'interface se " +
+  "modifient dans l'interface).";
+
+/**
+ * Refus : étape d'une CHAÎNE — le modèle n'y touche pas.
+ *
+ * ⚠️ DÉCISION : ni suppression silencieuse, ni cascade. Une chaîne est un ensemble
+ * ordonné créé par l'API/UI : supprimer une étape au milieu rendrait les suivantes
+ * orphelines, et les autres étapes ne sont pas au modèle.
+ */
+export const raisonEtapeDeChaine = (nom: string): string =>
+  `Rien n'a été fait : « ${nom} » est une ÉTAPE de chaîne. Une chaîne se modifie et se ` +
+  "supprime en entier dans Configuration → Déclencheurs : supprimer ou déplacer une " +
+  "seule étape romprait les suivantes en silence.";
+
+/**
+ * Planification LISIBLE d'un enregistrement (ponctuel : date + heure ; récurrence :
+ * expression cron + fuseau). ⚠️ Jamais une case vide : un déclencheur sans horaire dit
+ * « webhook » (ce qu'il est).
+ */
+function expressionDe(record: SourceRecord): string {
+  const declencheur = record.declencheur;
+  if (declencheur.type === "ponctuel") {
+    const at = Date.parse(declencheur.a);
+    return Number.isFinite(at)
+      ? formaterInstantEnvoi(at, declencheur.fuseau ?? DEFAULT_FUSEAU)
+      : declencheur.a;
+  }
+  if (declencheur.type === "planning") {
+    return `cron « ${declencheur.expression} » (${declencheur.fuseau})`;
+  }
+  return "webhook (aucun horaire)";
+}
 
 /** Motif persisté quand `DÉSACTIVER` éteint le déclencheur (visible dans `/config`). */
 export const RAISON_DESACTIVATION =
@@ -1118,25 +1236,45 @@ export class SourcesService {
    * ⚠️ La cible est la CONVERSATION DEMANDEUSE (`perso: true`) : son résultat arrive là
    * où la demande a été faite, et le fil n'est JAMAIS renommé « Déclencheurs ». Si elle
    * a disparu entre-temps, le résultat tombe dans « Déclencheurs » (jamais nulle part).
+   * ⚠️ C'est vrai des DEUX voies (ponctuelle ET récurrence) : `cibleDePassage` retient le
+   * fil mémorisé dès que `perso` est posé, quel que soit le type de déclencheur.
+   *
+   * ⚠️ RÉCURRENCE (2026-11-22) : `recurrence` crée un DÉCLENCHEUR DURABLE `planning`
+   * (cron + fuseau), le MÊME objet qu'un déclencheur créé dans l'interface — donc les
+   * mêmes bornes (`MAX_SOURCES`, refus NOMMÉ au 21ᵉ), la même fin de récurrence
+   * (`occurrencesMax` / `jusquAu`), le même plafond (60 s – 2 h), le même garde-fou
+   * quotidien, et la même page de gestion (visible ET modifiable par l'humain).
    */
   planifierTache(input: PlanificationTacheInput): PlanificationTacheOutcome {
     const verdict = validerPlanificationTache(input, this.now());
     if (!verdict.ok) return verdict;
     const session = (input.conversation.session ?? "").trim();
     const nom = this.store.nomLibrePour(verdict.libelle);
+    const recurrente = verdict.recurrence !== undefined;
     try {
       this.store.create(nom, {
-        declencheur: {
-          type: "ponctuel",
-          a: new Date(verdict.at).toISOString(),
-          fuseau: verdict.fuseau,
-        },
+        declencheur: recurrente
+          ? {
+              type: "planning",
+              expression: (verdict.recurrence as NonNullable<typeof verdict.recurrence>).expression,
+              fuseau: verdict.fuseau,
+            }
+          : {
+              type: "ponctuel",
+              a: new Date(verdict.at as number).toISOString(),
+              fuseau: verdict.fuseau,
+            },
         consigne: verdict.instruction,
         // ⚠️ SILENCIEUX : la sortie d'une tâche n'est pas une notification de source ;
         // seule la publication du résultat compte (`destination`/`tour` sans effet).
         visibilite: "silencieux",
         libelle: verdict.libelle,
         perso: true,
+        // ⚠️ Marqueur : `lister_taches`/`modifier_tache`/`supprimer_tache` ne voient QUE
+        // les tâches du modèle (jamais les déclencheurs créés dans l'interface).
+        origineTache: "modele",
+        ...(input.occurrencesMax !== undefined ? { occurrencesMax: input.occurrencesMax } : {}),
+        ...(input.jusquAu !== undefined ? { jusquAu: input.jusquAu } : {}),
       });
     } catch (error) {
       return { ok: false, raison: messageOf(error) };
@@ -1146,11 +1284,14 @@ export class SourcesService {
       event: "tache_planifiee",
       source: nom,
       texte: verdict.instruction,
-      raison: `Tâche demandée pour ${new Date(verdict.at).toISOString()}`,
+      raison: recurrente
+        ? `Récurrence demandée : ${verdict.quandLisible}`
+        : `Tâche demandée pour ${new Date(verdict.at as number).toISOString()}`,
     });
     this.logger.info("sources.tache.planifiee", {
       source: nom,
-      quand: new Date(verdict.at).toISOString(),
+      quand: recurrente ? verdict.quandLisible : new Date(verdict.at as number).toISOString(),
+      recurrente,
       cible: session !== "" ? "conversation" : "declencheurs",
     });
     return {
@@ -1159,6 +1300,223 @@ export class SourcesService {
       libelle: verdict.libelle,
       quandLisible: verdict.quandLisible,
       cibleLisible: session !== "" ? "cette conversation" : "le fil « Déclencheurs »",
+      ...(recurrente ? { recurrence: true as const } : {}),
+    };
+  }
+
+  // ── GESTION DES TÂCHES (2026-11-22) : lister / modifier / supprimer ────────
+
+  /**
+   * Les TÂCHES DU MODÈLE de ce bot (jamais celles d'un autre bot, jamais celles de
+   * l'humain).
+   *
+   * ⚠️ PÉRIMÈTRE « SON BOT » : ce service porte LE `sources.json` d'UN bot
+   * (`src/sources/par-bot.ts`). Les tâches d'un autre bot vivent dans un AUTRE fichier,
+   * lu par un AUTRE service : elles ne peuvent donc pas apparaître ici, et un
+   * identifiant appartenant à un autre bot est un identifiant INCONNU (refus nommé).
+   *
+   * ⚠️ Sont exclues : les déclencheurs créés par l'humain dans l'interface
+   * (`origineTache` absent) et les étapes de chaîne. Le modèle ne défait pas ce qu'une
+   * personne a construit à la main.
+   */
+  listerTaches(): TacheResume[] {
+    return this.store
+      .list()
+      .filter((record) => record.origineTache === "modele" && record.chaine === undefined)
+      .map((record) => this.resumerTache(record));
+  }
+
+  /**
+   * Modifie UNE tâche du modèle — horaire/date, récurrence, instruction, libellé, fin.
+   *
+   * ⚠️ Un id inconnu (ou la tâche d'un AUTRE bot) est un REFUS NOMMÉ : jamais un
+   * « c'est fait » mensonger, jamais une modification silencieuse.
+   * ⚠️ Changer l'horaire ou la récurrence INVALIDE le compteur de passages et le
+   * prochain passage (`SourcesStore.update`) : « 12/14 passages » décrirait l'ancien
+   * programme, pas le nouveau. Le prochain passage est RECALCULÉ par le balayeur.
+   */
+  modifierTache(input: ModificationTacheInput): ModificationTacheOutcome {
+    const record = this.tacheDuModele(input.id);
+    if (record === undefined) return { ok: false, raison: raisonTacheInconnue(input.id) };
+    if (record.chaine !== undefined) {
+      return { ok: false, raison: raisonEtapeDeChaine(record.nom) };
+    }
+
+    const settings: SourceSettingsInput = {};
+    let changementHoraire = false;
+    let prochaineLisible: string | undefined;
+
+    const quandBrut = typeof input.quand === "string" ? input.quand.trim() : "";
+    const recurrence = input.recurrence;
+    if (quandBrut !== "" && recurrence !== undefined && recurrence !== null) {
+      return { ok: false, raison: RAISON_QUAND_ET_RECURRENCE };
+    }
+
+    if (recurrence !== undefined && recurrence !== null) {
+      const valide = validerRecurrence(recurrence);
+      if (!valide.ok) return { ok: false, raison: valide.raison };
+      // ⚠️ Devenir une RÉCURRENCE consomme une place de DÉCLENCHEUR DURABLE : la borne
+      // est celle de l'interface (`MAX_SOURCES`), et son refus est NOMMÉ.
+      if (record.declencheur.type !== "planning" && this.store.sourcesDurables >= MAX_SOURCES) {
+        return {
+          ok: false,
+          raison:
+            `Rien n'a été modifié : ${this.store.sourcesDurables} déclencheurs durables ` +
+            `existent déjà, c'est le maximum (${MAX_SOURCES}). Supprime un déclencheur ` +
+            "dans Configuration → Déclencheurs avant de transformer cette tâche en récurrence.",
+        };
+      }
+      settings.declencheur = {
+        type: "planning",
+        expression: valide.expression,
+        fuseau: valide.fuseau,
+      };
+      changementHoraire = true;
+    } else if (quandBrut !== "") {
+      if (record.declencheur.type !== "ponctuel") {
+        return {
+          ok: false,
+          raison:
+            `Rien n'a été modifié : « ${record.libelle ?? record.nom} » est une RÉCURRENCE. ` +
+            "Donne `recurrence` pour changer son horaire (un instant unique n'a pas de " +
+            "sens pour elle).",
+        };
+      }
+      // ⚠️ MÊMES bornes que la création (30 s d'avance, date passée refusée) : la
+      // validation est REUTILISÉE, pas recopiée.
+      const valide = validerPlanificationTache(
+        { quand: quandBrut, instruction: record.consigne, conversation: {} },
+        this.now(),
+      );
+      if (!valide.ok) return valide;
+      settings.declencheur = {
+        type: "ponctuel",
+        a: new Date(valide.at as number).toISOString(),
+        fuseau: valide.fuseau,
+      };
+      changementHoraire = true;
+      prochaineLisible = valide.quandLisible;
+    }
+
+    if (typeof input.nom === "string" && input.nom.trim() !== "") {
+      settings.libelle = input.nom.trim();
+    }
+    if (typeof input.instruction === "string") {
+      const instruction = input.instruction.replace(/\r\n?/g, "\n").trim();
+      if (instruction === "") {
+        return {
+          ok: false,
+          raison:
+            "Rien n'a été modifié : l'instruction est vide. Donne ce que la tâche devra " +
+            "FAIRE à l'heure dite.",
+        };
+      }
+      settings.consigne = instruction;
+    }
+    // `null` RETIRE la fin de récurrence (même convention que l'API).
+    if (input.occurrencesMax !== undefined) settings.occurrencesMax = input.occurrencesMax;
+    if (input.jusquAu !== undefined) settings.jusquAu = input.jusquAu;
+
+    if (Object.keys(settings).length === 0) {
+      return {
+        ok: false,
+        raison:
+          "Rien n'a été modifié : aucun champ utile n'a été donné (`quand`, `recurrence`, " +
+          "`instruction`, `nom`, `occurrences_max`, `jusqu_au`).",
+      };
+    }
+
+    let maj: SourceRecord;
+    try {
+      maj = this.store.update(record.nom, settings);
+    } catch (error) {
+      return { ok: false, raison: messageOf(error) };
+    }
+
+    this.journal?.append({
+      event: "tache_modifiee",
+      source: maj.nom,
+      ...(settings.consigne !== undefined ? { texte: settings.consigne } : {}),
+      raison: changementHoraire
+        ? `Nouvelle planification : ${prochaineLisible ?? expressionDe(maj)}`
+        : "Réglages modifiés (horaire inchangé)",
+    });
+    this.logger.info("sources.tache.modifiee", {
+      source: maj.nom,
+      horaire: changementHoraire,
+      bot: this.botId ?? "",
+    });
+    return {
+      ok: true,
+      tache: this.resumerTache(maj),
+      prochaineLisible: prochaineLisible ?? this.prochainPassageLisible(maj),
+      compteurInvalide: changementHoraire,
+    };
+  }
+
+  /**
+   * Supprime DÉFINITIVEMENT une tâche du modèle.
+   *
+   * ⚠️ DÉCISION — une étape de CHAÎNE n'est PAS supprimable par le modèle : la cascade
+   * effacerait des étapes que l'HUMAIN a créées (`createChaine` est une voie d'API), et
+   * une suppression partielle romprait la chaîne en silence. Le refus dit où agir.
+   * ⚠️ Envois programmés (`programmer_envoi`) HORS PÉRIMÈTRE : ce sont des messages figés,
+   * pas des tâches ; l'interface humaine sait déjà les annuler.
+   */
+  supprimerTache(id: string): SuppressionTacheOutcome {
+    const record = this.tacheDuModele(id);
+    if (record === undefined) return { ok: false, raison: raisonTacheInconnue(id) };
+    if (record.chaine !== undefined) {
+      return { ok: false, raison: raisonEtapeDeChaine(record.nom) };
+    }
+    if (!this.store.remove(record.nom)) {
+      return { ok: false, raison: raisonTacheInconnue(id) };
+    }
+    this.journal?.append({
+      event: "tache_supprimee",
+      source: record.nom,
+      raison: `Tâche supprimée (${expressionDe(record)})`,
+    });
+    this.logger.info("sources.tache.supprimee", {
+      source: record.nom,
+      bot: this.botId ?? "",
+    });
+    return { ok: true, nom: record.nom, libelle: record.libelle ?? record.nom };
+  }
+
+  /**
+   * Résout une TÂCHE DU MODÈLE par son identifiant, ou `undefined`.
+   *
+   * ⚠️ C'est le SEUL point d'entrée de `modifier_tache`/`supprimer_tache` : un
+   * enregistrement absent, créé par l'humain (`origineTache` absent) ou appartenant à un
+   * autre bot (autre `sources.json`) est donc traité de la MÊME façon — INCONNU.
+   */
+  private tacheDuModele(id: unknown): SourceRecord | undefined {
+    const nom = typeof id === "string" ? id.trim() : "";
+    if (nom === "") return undefined;
+    const record = this.store.get(nom);
+    if (record === undefined) return undefined;
+    return record.origineTache === "modele" ? record : undefined;
+  }
+
+  /** Vue bornée d'une tâche, rendue par `lister_taches` et `modifier_tache`. */
+  private resumerTache(record: SourceRecord): TacheResume {
+    const ponctuelle = record.declencheur.type === "ponctuel";
+    return {
+      nom: record.nom,
+      libelle: record.libelle ?? record.nom,
+      genre: ponctuelle ? "ponctuelle" : "recurrence",
+      instruction: record.consigne,
+      planification: expressionDe(record),
+      prochaineLisible: this.prochainPassageLisible(record),
+      etat: record.actif === false ? "suspendu" : "actif",
+      ...(record.raisonInactive !== undefined ? { raison: record.raisonInactive } : {}),
+      ...(record.occurrencesMax !== undefined ? { occurrencesMax: record.occurrencesMax } : {}),
+      ...(record.occurrencesFaites !== undefined
+        ? { occurrencesFaites: record.occurrencesFaites }
+        : {}),
+      ...(record.jusquAu !== undefined ? { jusquAu: record.jusquAu } : {}),
+      cible: record.perso === true && record.sessionId !== undefined ? "conversation" : "declencheurs",
     };
   }
 
@@ -2046,8 +2404,8 @@ export class SourcesService {
   }
 
   /**
-   * Fil visé par un passage : la CONVERSATION DEMANDEUSE pour une tâche ponctuelle
-   * (tant qu'elle existe), le fil « Déclencheurs » sinon.
+   * Fil visé par un passage : la CONVERSATION DEMANDEUSE pour une TÂCHE (ponctuelle ou
+   * récurrente, `perso`) tant qu'elle existe, le fil « Déclencheurs » sinon.
    *
    * ⚠️ Lot 31 — POURQUOI LA CONVERSATION DEMANDEUSE : « résume le journal pour moi »
    * demandé dans un fil doit revenir DANS ce fil. Publier dans un fil partagé
@@ -2063,10 +2421,18 @@ export class SourcesService {
     target: { sessionId?: string; raison?: string; candidate?: boolean; code?: string };
     perso: boolean;
   }> {
-    if (record.declencheur.type === "ponctuel" && record.sessionId !== undefined) {
-      const alive = await this.sessionAlive(record.sessionId);
+    // ⚠️ TÂCHE (2026-11-22) : la conversation DEMANDEUSE est la cible pour une tâche
+    // PONCTUELLE **et** pour une RÉCURRENCE — `perso` est le seul marqueur (il n'est
+    // posé que par `planifier_tache`). Sans ça, une récurrence créerait un fil
+    // « Déclencheurs » impersonnel au lieu de répondre là où on l'a demandée.
+    const ciblePerso =
+      record.sessionId !== undefined &&
+      (record.declencheur.type === "ponctuel" || record.perso === true);
+    if (ciblePerso) {
+      const sessionId = record.sessionId as string;
+      const alive = await this.sessionAlive(sessionId);
       if (alive === true) {
-        return { target: { sessionId: record.sessionId }, perso: record.perso === true };
+        return { target: { sessionId }, perso: record.perso === true };
       }
       // ⚠️ Disparue : on l'oublie et on le dit — le résultat ira dans « Déclencheurs ».
       if (alive === false) {

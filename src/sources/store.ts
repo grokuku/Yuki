@@ -65,6 +65,7 @@ import {
   MIN_OCCURRENCES,
   MIN_PLAFOND_MS,
   RESERVED_SOURCE_NAMES,
+  RETENTION_TACHES_TERMINEES_JOURS,
   SOURCE_NAME_PATTERN,
   type ResultatEtape,
   type SourceChaine,
@@ -137,14 +138,38 @@ export class SourcesFullError extends Error {
  *
  * ⚠️ Erreur DISTINCTE de `SourcesFullError` : le message doit dire QUELLE borne est
  * atteinte, sinon l'utilisateur supprimerait un déclencheur durable sans effet.
+ *
+ * ⚠️ AUDIT 2026-11-22 — CE MESSAGE A ÉTÉ CORRIGÉ PARCE QU'IL MENTAIT. Il promettait
+ * « attends qu'une tâche s'exécute (elle s'éteint toute seule) », ce qui laissait croire
+ * que la place se libérait d'elle-même : le compteur comptait en réalité TOUS les
+ * enregistrements ponctuels, termes compris, et rien ne les purgeait. Deux corrections
+ * vont ensemble :
+ *   - la purge automatique existe désormais (`purgerTachesTerminees`, 7 jours,
+ *     décidée par le balayeur de CHAQUE bot) ;
+ *   - le message dit ce qui est VRAI : la place se libère au bout de
+ *     `RETENTION_TACHES_TERMINEES_JOURS` jours, ou TOUT DE SUITE si on supprime une
+ *     tâche terminée — et il NOMME celles qui sont terminées, puisque ce sont elles
+ *     qu'on peut supprimer sans rien perdre.
  */
 export class TachesPonctuellesFullError extends Error {
   override readonly name = "TachesPonctuellesFullError";
-  constructor(readonly limit: number) {
+  constructor(
+    readonly limit: number,
+    /** Noms des tâches DÉJÀ TERMINÉES (celles qu'on peut supprimer sans rien perdre). */
+    readonly terminees: readonly string[] = [],
+    /** Rétention appliquée aux tâches terminées (jours). */
+    readonly retentionJours: number = RETENTION_TACHES_TERMINEES_JOURS,
+  ) {
+    const liste =
+      terminees.length === 0
+        ? ""
+        : ` Déjà terminées (leur suppression libère une place tout de suite) : ${terminees
+            .map((nom) => `« ${nom} »`)
+            .join(", ")}.`;
     super(
-      `Le nombre maximal de tâches ponctuelles est atteint (${limit}). Attends qu'une ` +
-        "tâche s'exécute (elle s'éteint toute seule), ou supprime-en une dans " +
-        "Configuration → Déclencheurs.",
+      `Le nombre maximal de tâches ponctuelles est atteint (${limit}). Une place se ` +
+        `libère TOUTE SEULE ${retentionJours} jours après la fin d'une tâche, ou TOUT ` +
+        `DE SUITE si tu en supprimes une dans Configuration → Déclencheurs.${liste}`,
     );
   }
 }
@@ -363,6 +388,9 @@ function normalizeRecord(
       ? { libelle: entry["libelle"].trim() }
       : {}),
     ...(entry["perso"] === true ? { perso: true } : {}),
+    // ⚠️ ORIGINE « MODÈLE » : relue telle quelle (une tâche du modèle reste SA tâche
+    // après un redémarrage, sinon elle deviendrait invisible à `lister_taches`).
+    ...(entry["origineTache"] === "modele" ? { origineTache: "modele" as const } : {}),
     cree: typeof entry["cree"] === "string" ? entry["cree"] : "",
     maj: typeof entry["maj"] === "string" ? entry["maj"] : "",
   });
@@ -993,6 +1021,51 @@ export class SourcesStore {
   }
 
   /**
+   * PURGE AUTOMATIQUE des TÂCHES PONCTUELLES TERMINÉES (`declencheur.type === "ponctuel"`).
+   *
+   * ⚠️ CE QU'ELLE RÉPARE (audit 2026-11-22) : `MAX_TACHES_PONCTUELLES` compte TOUS les
+   * enregistrements ponctuels, terminés compris, et RIEN ne les retirait. Le refus de la
+   * 21ᵉ tâche promettait pourtant qu'« une tâche s'exécute (elle s'éteint toute seule) »,
+   * donc qu'une place se libère : c'était faux. Cette purge rend la promesse VRAIE, avec
+   * `RETENTION_TACHES_TERMINEES_JOURS` (7 jours, la même famille de rétention que les
+   * envois terminés (7 j) et les déclencheurs temporaires éteints (7 j)).
+   *
+   * ⚠️ CE QU'ELLE NE TOUCHE JAMAIS :
+   *  - une tâche ARMÉE (`actif !== false`) : elle doit encore tirer ;
+   *  - une tâche d'une CHAÎNE (`chaine`) : une chaîne se purge en entier
+   *    (`purgerChainesTerminees`) ou pas du tout ;
+   *  - une tâche terminée depuis MOINS de `jours` jours : l'historique reste lisible.
+   *
+   * ⚠️ Elle n'est jamais appelée depuis un minuteur propre : c'est le balayeur existant
+   * (`src/sources/scheduler.ts`) qui la décide, une fois par tick, sur le `sources.json`
+   * de CHAQUE bot (`state/bots/<id>/sources.json`) — la purge est donc PAR BOT, et le
+   * journal qui la trace est celui du bot.
+   */
+  purgerTachesTerminees(jours = RETENTION_TACHES_TERMINEES_JOURS): SourceRecord[] {
+    const retard = Math.max(1, Math.trunc(jours)) * 86_400_000;
+    const maintenant = this.now();
+    const retenues = new Set<string>();
+    for (const record of this.records) {
+      if (record.declencheur.type !== "ponctuel") continue;
+      if (record.actif !== false) continue;
+      if (record.chaine !== undefined) continue;
+      // ⚠️ Date de référence : la MISE EN VEILLE quand elle existe (c'est la fin de la
+      // tâche), sinon la dernière modification. Une date illisible vaut « maintenant » :
+      // on ne purge pas sur une date qu'on ne sait pas lire.
+      const brut = record.desactiveLe ?? record.maj;
+      const at = Date.parse(brut);
+      if (!Number.isFinite(at)) continue;
+      if (maintenant - at < retard) continue;
+      retenues.add(record.nom);
+    }
+    if (retenues.size === 0) return [];
+    const retirees = this.records.filter((record) => retenues.has(record.nom));
+    this.records = this.records.filter((record) => !retenues.has(record.nom));
+    this.persist();
+    return retirees.map((record) => ({ ...record }));
+  }
+
+  /**
    * Purge les chaînes ENTIÈREMENT terminées dont la dernière modification est plus
    * ancienne que `jours` — et **jamais** une étape en attente.
    *
@@ -1057,7 +1130,19 @@ export class SourcesStore {
         : { ...DEFAULT_SOURCE_DECLENCHEUR };
     if (declencheur.type === "ponctuel") {
       if (this.tachesPonctuelles >= MAX_TACHES_PONCTUELLES) {
-        throw new TachesPonctuellesFullError(MAX_TACHES_PONCTUELLES);
+        // ⚠️ On NOMME les tâches terminées : ce sont elles qu'on peut supprimer sans rien
+        // perdre, et sans elles le refus oblige à parcourir la page pour deviner.
+        throw new TachesPonctuellesFullError(
+          MAX_TACHES_PONCTUELLES,
+          this.records
+            .filter(
+              (record) =>
+                record.declencheur.type === "ponctuel" &&
+                record.actif === false &&
+                record.chaine === undefined,
+            )
+            .map((record) => record.nom),
+        );
       }
     } else if (this.sourcesDurables >= MAX_SOURCES) {
       throw new SourcesFullError(MAX_SOURCES);
@@ -1135,6 +1220,9 @@ export class SourcesStore {
         ? { libelle: settings.libelle.trim() }
         : {}),
       ...(settings.perso === true ? { perso: true } : {}),
+      // ⚠️ ORIGINE « MODÈLE » : c'est elle qui rend l'enregistrement visible et
+      // modifiable par `lister_taches`/`modifier_tache`/`supprimer_tache`.
+      ...(settings.origineTache === "modele" ? { origineTache: "modele" as const } : {}),
       ...(settings.occurrencesMax !== undefined && settings.occurrencesMax !== null
         ? { occurrencesMax: validateOccurrencesMax(settings.occurrencesMax) }
         : {}),
@@ -1252,6 +1340,11 @@ export class SourcesStore {
         ? { libelle: settings.libelle.trim() }
         : {}),
       ...(settings.perso !== undefined ? { perso: settings.perso === true } : {}),
+      // ⚠️ ORIGINE « MODÈLE » : posée aussi par `update` — c'est la seule façon de
+      // PROMOUVOIR un enregistrement existant en tâche du modèle (reprise/migration, et
+      // les tests qui vérifient qu'une ÉTAPE de chaîne reste hors de portée même marquée).
+      // L'API ne l'expose pas (`settingsFrom` a une liste blanche).
+      ...(settings.origineTache === "modele" ? { origineTache: "modele" as const } : {}),
       notifier:
         visibilite === "silencieux" ? false : (settings.notifier ?? record.notifier) === true,
       maj: new Date(this.now()).toISOString(),

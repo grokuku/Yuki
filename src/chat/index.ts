@@ -196,7 +196,6 @@ export { ConversationSendQueue } from "./reply/send-queue.js";
 export {
   DELAI_MIN_MS,
   ENVOIS_PROGRAMMES_FILE,
-  HORIZON_MAX_MS,
   MAX_ENVOIS_EN_ATTENTE,
   RATTRAPAGE_MAX_ENVOI_MS,
   EnvoisProgrammesService,

@@ -101,11 +101,33 @@ seule capacité** :
 - `canal` est **facultatif** : omis, le message part dans la conversation courante ;
   fourni, il désigne un canal **suivi**. `fichier_ids` joint des fichiers de cette
   conversation (trois au plus, et seulement vers un canal).
-- Bornes : au moins **30 secondes** d'avance, **30 jours** au plus, **20 envois** en
-  attente au total. Un refus dit toujours **pourquoi**.
+- Bornes : au moins **30 secondes** d'avance et **20 envois** en attente au total.
+  ⚠️ **Aucune limite de date** : une heure lointaine (« le 1ᵉʳ janvier », « dans deux
+  ans ») est acceptée. Un refus dit toujours **pourquoi**.
 - Un envoi programmé est **visible et annulable** dans Configuration → Déclencheurs
   → « Envois programmés ». ⚠️ Tu ne peux pas l'annuler toi-même : dis à la personne
   où le faire si elle change d'avis.
+
+### Faire AGIR un agent plus tard (`planifier_tache`)
+
+⚠️ À la différence de `programmer_envoi` (texte **figé**, aucun modèle appelé),
+`planifier_tache` réveille un agent **à l'heure dite** pour exécuter une
+**instruction** — « à 8 h, résume-moi le journal », « demain 9 h, lance la sauvegarde
+via l'agent ». Le résultat est publié dans la conversation où la demande a été faite.
+
+- `quand` : une heure ponctuelle (mêmes formes que `programmer_envoi`), **sans limite
+  de date** (au moins 30 secondes d'avance).
+- `recurrence` : pour une demande **répétée** (pas « rappelle-moi une fois »).
+  Quatre formes — `tous_les_jours` (+ `heure`), `chaque_semaine` (+ `jour` et
+  `heure`), `toutes_les_heures` (+ `heures`, 1–24), `tous_les_mois` (+ `jourDuMois`
+  et `heure`). Elle devient un **déclencheur durable**, visible et modifiable dans
+  Configuration → Déclencheurs. `occurrences_max` / `jusqu_au` en bornent la fin.
+- `lister_taches()` rend **tes** tâches (id, prochain passage, état, raison d'une
+  extinction). `modifier_tache(id, …)` en change l'heure, la récurrence,
+  l'instruction ou la fin ; `supprimer_tache(id)` la supprime **définitivement**.
+  ⚠️ Ces trois outils ne voient que les tâches **que tu as créées** : un déclencheur
+  fait dans l'interface se modifie dans l'interface. Un id inconnu est refusé, jamais
+  ignoré en silence.
 
 ## Conversation (anti-bot)
 

@@ -161,6 +161,19 @@ export type MessageToolName = "envoyer_message";
 export type PlanifierTacheToolName = "planifier_tache";
 
 /**
+ * Outils custom de GESTION DES TÂCHES (2026-11-22) : lister, modifier, supprimer.
+ *
+ * ⚠️ MÊME CAPACITÉ que `planifier_tache` (`planifierTaches`, capacité `programmation`) :
+ * une personne qui a le droit de programmer une tâche a le droit de la corriger ou de
+ * l'arrêter — c'est la même décision, à un autre moment. Créer une capacité distincte
+ * aurait produit des bots capables de programmer sans pouvoir annuler.
+ *
+ * ⚠️ Le LOURD ne les a pas non plus (`planifierTaches: []`) : un run de fond ne défait
+ * pas les tâches d'une personne (même anti-enchaînement que `planifier_tache`).
+ */
+export type GestionTacheToolName = "lister_taches" | "modifier_tache" | "supprimer_tache";
+
+/**
  * Outil custom d'ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28).
  *
  * ⚠️ « Poste cette image à 16h10 » n'était pas réalisable : Yuki a répondu en
@@ -240,6 +253,7 @@ export type CustomToolName =
   | MessageToolName
   | EnvoiProgrammeToolName
   | PlanifierTacheToolName
+  | GestionTacheToolName
   | FileTransferToolName
   | FileListToolName
   | FileReadToolName
@@ -278,8 +292,8 @@ export interface ToolPolicyEntry {
   readonly messages: readonly MessageToolName[];
   /** Outil d'ENVOI PROGRAMMÉ (`programmer_envoi`, lot 28). */
   readonly envoisProgrammes: readonly EnvoiProgrammeToolName[];
-  /** Outil de TÂCHE PLANIFIÉE (`planifier_tache`, lot 31). */
-  readonly planifierTaches: readonly PlanifierTacheToolName[];
+  /** Outils de TÂCHE PLANIFIÉE (`planifier_tache`, lot 31) ET DE GESTION (2026-11-22). */
+  readonly planifierTaches: readonly (PlanifierTacheToolName | GestionTacheToolName)[];
   /** Outils de TRANSFERT de fichiers vers/depuis une machine (`files`). */
   readonly fileTransfer: readonly FileTransferToolName[];
   // ⚠️ AUCUNE CATÉGORIE DE PUBLICATION INTER-CANAL, À DESSEIN : dans un canal il n'y a
@@ -450,7 +464,10 @@ export const ENVOI_PROGRAMME_TOOLS: readonly EnvoiProgrammeToolName[] = ["progra
  * Outil de TÂCHE PLANIFIÉE (`planifier_tache`, lot 31). Porté par le LÉGER seul — le
  * worker lourd EXÉCUTE, il ne programme rien.
  */
-export const PLANIFIER_TACHE_TOOLS: readonly PlanifierTacheToolName[] = ["planifier_tache"];
+export const PLANIFIER_TACHE_TOOLS: readonly (
+  | PlanifierTacheToolName
+  | GestionTacheToolName
+)[] = ["planifier_tache", "lister_taches", "modifier_tache", "supprimer_tache"];
 
 /**
  * Outils de TRANSFERT de fichiers (capacité `files`). Exposés quand le service
@@ -1108,6 +1125,12 @@ export const REMOTE_TOOL_GROUP_OF: Readonly<Record<CustomToolName, RemoteToolGro
   // dans un worker qui a ses propres garde-fous (et aucune pré-autorisation transmise) ⇒
   // aucun réglage d'accès distant n'a de sens pour elle.
   planifier_tache: "toujours",
+  // ⚠️ GESTION DES TÂCHES (2026-11-22) : mêmes raisons que `planifier_tache` — ces
+  // outils ne touchent aucune machine et n'agissent que sur les tâches DU BOT, dans SON
+  // `sources.json` (le port tient le périmètre) ⇒ aucun réglage d'accès distant.
+  lister_taches: "toujours",
+  modifier_tache: "toujours",
+  supprimer_tache: "toujours",
   envoyer_fichier: "toujours",
   // ── groupe JAMAIS (approbation impossible depuis un canal) ────────────
   run_command: "jamais",

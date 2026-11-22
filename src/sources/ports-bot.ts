@@ -34,7 +34,14 @@
 import type { ProgrammationInput, ProgrammationOutcome } from "../chat/envois/index.js";
 import { SourcesParBotError, type SourcesParBot } from "./par-bot.js";
 import type { PlanificationTacheInput } from "./taches.js";
-import type { PlanificationTacheOutcome, SourcesWaker } from "./service.js";
+import type {
+  ModificationTacheInput,
+  ModificationTacheOutcome,
+  PlanificationTacheOutcome,
+  SourcesWaker,
+  SuppressionTacheOutcome,
+  TacheResume,
+} from "./service.js";
 import { CODE_BOT_SANS_HOST } from "./types.js";
 
 /**
@@ -128,17 +135,52 @@ export function portEnvoisPourBot(
   };
 }
 
-/** Port de `planifier_tache` du bot `botId` (résolu À L'APPEL, jamais à la construction). */
+/**
+ * Port des TÂCHES du bot `botId` (résolu À L'APPEL, jamais à la construction).
+ *
+ * ⚠️ LES QUATRE MÉTHODES PORTENT LE MÊME PÉRIMÈTRE : Le service de CE bot, et donc SON
+ * `state/bots/<id>/sources.json`. Une tâche d'un AUTRE bot est un identifiant inconnu
+ * ici — et le refus est NOMMÉ (`lister_taches` ne la voit pas, `modifier_tache` et
+ * `supprimer_tache` la refusent). Aucun repli sur la pile, jamais.
+ */
 export function portPlanificationPourBot(
   parBot: SourcesParBot,
   botId: string,
-): { planifier: (request: PlanificationTacheInput) => Promise<PlanificationTacheOutcome> } {
+): {
+  planifier: (request: PlanificationTacheInput) => Promise<PlanificationTacheOutcome>;
+  lister: () => Promise<TacheResume[]>;
+  modifier: (request: ModificationTacheInput) => Promise<ModificationTacheOutcome>;
+  supprimer: (request: { id: string }) => Promise<SuppressionTacheOutcome>;
+} {
   return {
     planifier: async (request) => {
       try {
         // ⚠️ `pourBot` lève `bot_inconnu` (bot absent du registre), `id_invalide`
         // ou `bot_non_construit` : les trois sont des REFUS, jamais des replis.
         return parBot.pourBot(botId).service.planifierTache(request);
+      } catch (error) {
+        return { ok: false, raison: refusPlanificationBot(botId, error) };
+      }
+    },
+    lister: async () => {
+      try {
+        return parBot.pourBot(botId).service.listerTaches();
+      } catch {
+        // ⚠️ Aucune tâche n'est visible d'un bot non résolu : une liste VIDE plutôt
+        // qu'un repli sur le `sources.json` d'un autre bot.
+        return [];
+      }
+    },
+    modifier: async (request) => {
+      try {
+        return parBot.pourBot(botId).service.modifierTache(request);
+      } catch (error) {
+        return { ok: false, raison: refusPlanificationBot(botId, error) };
+      }
+    },
+    supprimer: async (request) => {
+      try {
+        return parBot.pourBot(botId).service.supprimerTache(request.id);
       } catch (error) {
         return { ok: false, raison: refusPlanificationBot(botId, error) };
       }

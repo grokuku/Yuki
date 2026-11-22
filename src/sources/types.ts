@@ -414,6 +414,23 @@ export interface SourceJetons {
 export const JOURS_VISIBILITE_TEMPORAIRE = 7;
 
 /**
+ * RÉTENTION d'une TÂCHE PONCTUELLE TERMINÉE avant purge automatique (7 jours).
+ *
+ * ⚠️ POURQUOI CETTE PURGE EXISTE (2026-11-22) : le quota `MAX_TACHES_PONCTUELLES`
+ * comptait TOUS les enregistrements ponctuels, terminés compris, alors que le message de
+ * refus promettait qu'« une tâche s'exécute (elle s'éteint toute seule) » et libère donc
+ * sa place. C'était FAUX : rien ne purgait. La rétention rend le message vrai — une
+ * tâche terminée libère sa place **au bout de 7 jours**, et le message le dit en toutes
+ * lettres.
+ *
+ * ⚠️ 7 JOURS, PAS UN RÉGLAGE : c'est la durée déjà utilisée par les deux autres
+ * rétentions de cette famille (`RETENTION_TERMINES_MS` des envois programmés,
+ * `JOURS_VISIBILITE_TEMPORAIRE` des déclencheurs temporaires éteints). Inventer un
+ * quatrième chiffre ou une clé de configuration de plus n'apporterait rien.
+ */
+export const RETENTION_TACHES_TERMINEES_JOURS = 7;
+
+/**
  * État d'une entrée de la boîte.
  *
  * `alerte` est un AVIS DE YUKI (jamais un message reçu) : par exemple « ce fil a été
@@ -514,6 +531,16 @@ export interface SourceRecord {
    * doit JAMAIS être renommée « Déclencheurs » — ce n'est pas le fil de Yuki.
    */
   perso?: boolean;
+  /**
+   * ⚠️ ORIGINE « MODÈLE » (2026-11-22) : la tâche a été créée par `planifier_tache`
+   * (ponctuelle OU récurrence), et non par un humain dans l'interface.
+   *
+   * Sert à UNE chose : `lister_taches` / `modifier_tache` / `supprimer_tache` ne
+   * voient QUE ces enregistrements-là. Un déclencheur créé dans Configuration →
+   * Déclencheurs reste hors de portée du modèle — il se modifie et se supprime dans
+   * l'interface, par la personne qui l'a créé.
+   */
+  origineTache?: "modele";
   /**
    * Nombre de passages RÉELLEMENT TIRÉS (lot 32) — ⚠️ jamais les sauts.
    * Persisté : un redémarrage ne remet pas le compteur à zéro.
@@ -696,6 +723,12 @@ export interface SourceSettingsInput {
   libelle?: string;
   /** Cible = conversation demandeuse, jamais renommée (tâche ponctuelle). */
   perso?: boolean;
+  /**
+   * ⚠️ ORIGINE « MODÈLE » (`planifier_tache`) : l'enregistrement est une TÂCHE du modèle,
+   * donc visible/modifiable/supprimable par `lister_taches`/`modifier_tache`/
+   * `supprimer_tache`. Posé par le service, jamais par un client HTTP.
+   */
+  origineTache?: "modele";
   /** Nombre de passages déjà tirés (lot 32 — remis à zéro si le déclencheur change). */
   occurrencesFaites?: number;
   /**
